@@ -31,5 +31,5 @@ go.work.sum
 # .idea/
 # .vscode/
 
-# The Dosu-CLI Executable
-dosu-cli
+# The Dosu-CLI Executable (root only)
+/dosu-cli
