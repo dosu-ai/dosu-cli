@@ -50,7 +50,7 @@ func NewSetup() SetupModel {
 
 func defaultSetupStyles() setupStyles {
 	return setupStyles{
-		container:     lipgloss.NewStyle().Padding(1, 2).Width(64),
+		container:     lipgloss.NewStyle().Width(64),
 		title:         lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205")),
 		subtitle:      lipgloss.NewStyle().Foreground(lipgloss.Color("63")),
 		sectionHeader: lipgloss.NewStyle().Bold(true),
@@ -106,7 +106,8 @@ func (m SetupModel) View() string {
 		renderSetupErr(m.err, m.style),
 	)
 
-	return m.style.container.Render(strings.Join(lines, "\n"))
+	body := m.style.container.Render(strings.Join(lines, "\n"))
+	return frameStyle.Render(body)
 }
 
 func renderSetupErr(err error, s setupStyles) string {

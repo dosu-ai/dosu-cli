@@ -15,6 +15,8 @@ type MenuModel struct {
 	list list.Model
 }
 
+const maxListHeight = 12
+
 func (m MenuModel) Init() tea.Cmd {
 	return nil
 }
@@ -22,13 +24,21 @@ func (m MenuModel) Init() tea.Cmd {
 func (m MenuModel) Update(msg tea.Msg) (MenuModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		h, v := appStyle.GetFrameSize()
+		appH, appV := appStyle.GetFrameSize()
+		frameH, frameV := frameStyle.GetFrameSize()
 		headerHeight := lipgloss.Height(headerStyle.Render(logo))
-		listHeight := msg.Height - v - headerHeight
-		if listHeight < 3 {
-			listHeight = 3
+		width := msg.Width - appH - frameH
+		if width < 10 {
+			width = 10
 		}
-		m.list.SetSize(msg.Width-h, listHeight)
+		listHeight := msg.Height - appV - frameV - headerHeight
+		if listHeight < 4 {
+			listHeight = 4
+		}
+		if listHeight > maxListHeight {
+			listHeight = maxListHeight
+		}
+		m.list.SetSize(width, listHeight)
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -49,13 +59,12 @@ func (m MenuModel) Update(msg tea.Msg) (MenuModel, tea.Cmd) {
 }
 
 func (m MenuModel) View() string {
-	return appStyle.Render(
-		lipgloss.JoinVertical(
-			lipgloss.Left,
-			headerStyle.Render(logo),
-			m.list.View(),
-		),
+	inner := lipgloss.JoinVertical(
+		lipgloss.Left,
+		headerStyle.Render(logo),
+		m.list.View(),
 	)
+	return frameStyle.Render(appStyle.Render(inner))
 }
 
 // NewMenu creates a menu with default items. Parent should handle MenuSelected messages.
@@ -76,6 +85,8 @@ func NewMenu() MenuModel {
 	m.SetShowTitle(false)
 	m.SetFilteringEnabled(false)
 	m.DisableQuitKeybindings()
+	m.SetShowStatusBar(false)
+	m.SetShowPagination(false)
 
 	return MenuModel{list: m}
 }
@@ -97,7 +108,10 @@ func selectItem(id string) tea.Cmd {
 }
 
 var (
-	appStyle = lipgloss.NewStyle().Margin(1, 2)
+	appStyle   = lipgloss.NewStyle().Margin(0, 1)
+	frameStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			Padding(0, 1)
 
 	headerStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#7D56F4")).
