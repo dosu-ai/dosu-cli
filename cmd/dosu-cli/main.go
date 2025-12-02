@@ -1,7 +1,13 @@
 package main
 
-import "fmt"
+import (
+	"log"
+
+	"github.com/dosu-ai/dosu-cli/internal/cli"
+)
 
 func main() {
-    fmt.Println("Welcome to the Dosu-CLI!")
+	if _, err := cli.Execute(); err != nil {
+		log.Fatal(err)
+	}
 }
