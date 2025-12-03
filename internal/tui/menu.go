@@ -15,7 +15,7 @@ type MenuModel struct {
 	list list.Model
 }
 
-const maxListHeight = 12
+const maxListHeight = 20
 
 func (m MenuModel) Init() tea.Cmd {
 	return nil
@@ -108,16 +108,20 @@ func selectItem(id string) tea.Cmd {
 	}
 }
 
+const maxWidth = 79
+
 var (
 	appStyle   = lipgloss.NewStyle().Margin(0, 1)
 	frameStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			Padding(0, 1)
+			Padding(0, 1).
+			Width(maxWidth)
 
 	headerStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#7D56F4")).
 			Align(lipgloss.Center).
-			Bold(true)
+			Bold(true).
+			Width(maxWidth - 4) // Account for frame border and padding
 
 	itemStyle = lipgloss.NewStyle().PaddingLeft(2)
 

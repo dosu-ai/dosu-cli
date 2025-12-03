@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/dosu-ai/dosu-cli/internal/config"
@@ -32,13 +31,13 @@ func NewClient(cfg *config.Config) *Client {
 // The access token is automatically included in the Supabase-Access-Token header
 // If the token is expired, it will automatically refresh it
 func (c *Client) DoRequest(method, path string, body interface{}) (*http.Response, error) {
-	// Check if user is authenticated
+	// Check if user is authenticated (has a token)
 	if !c.config.IsAuthenticated() {
 		return nil, fmt.Errorf("not authenticated - please run setup first")
 	}
 
 	// Check if token is expired or about to expire (within 5 minutes)
-	if c.config.ExpiresAt > 0 && time.Now().Unix() > (c.config.ExpiresAt-300) {
+	if c.config.IsTokenExpired() {
 		// Try to refresh the token
 		if err := c.refreshToken(); err != nil {
 			return nil, fmt.Errorf("token expired and refresh failed: %w", err)
@@ -98,10 +97,7 @@ func (c *Client) refreshToken() error {
 	}
 
 	// Get Supabase URL from config
-	supabaseURL := "http://localhost:54321" // TODO: make this configurable
-	if os.Getenv("DOSU_DEV") != "true" {
-		supabaseURL = "https://your-supabase-url.supabase.co" // TODO: update with actual URL
-	}
+	supabaseURL := config.GetSupabaseURL()
 
 	endpoint := fmt.Sprintf("%s/auth/v1/token?grant_type=refresh_token", supabaseURL)
 

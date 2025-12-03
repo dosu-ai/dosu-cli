@@ -105,12 +105,22 @@ func (m DeploymentsModel) Update(msg tea.Msg) (DeploymentsModel, tea.Cmd) {
 		delegate.Styles.SelectedTitle = selectedItemStyle
 		delegate.Styles.SelectedDesc = selectedItemStyle
 
-		m.list = list.New(items, delegate, m.width, m.height)
+		// Use default dimensions if window size not yet received
+		width := m.width
+		height := m.height
+		if width == 0 {
+			width = maxWidth - 4 // Account for frame border and padding
+		}
+		if height == 0 {
+			height = maxListHeight
+		}
+
+		m.list = list.New(items, delegate, width, height)
 		m.list.SetShowTitle(false)
 		m.list.SetFilteringEnabled(false)
 		m.list.DisableQuitKeybindings()
-		m.list.SetShowStatusBar(false)
-		m.list.SetShowPagination(false)
+		m.list.SetShowStatusBar(true)
+		m.list.SetShowPagination(true)
 
 		return m, nil
 
@@ -188,7 +198,6 @@ func (m DeploymentsModel) View() string {
 	return frameStyle.Render(appStyle.Render(inner))
 }
 
-// fetchDeployments fetches the list of deployments from the API
 func fetchDeployments() tea.Cmd {
 	return func() tea.Msg {
 		cfg, err := config.LoadConfig()

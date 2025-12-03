@@ -14,6 +14,13 @@ const (
 
 	// ProdBackendURL is the production backend URL
 	ProdBackendURL = "https://api.dosu.dev"
+
+	// DevSupabaseURL is the local Supabase URL
+	DevSupabaseURL = "http://localhost:54321"
+
+	// ProdSupabaseURL is the production Supabase URL
+	// TODO: Update this with the actual production Supabase URL
+	ProdSupabaseURL = "https://your-project.supabase.co"
 )
 
 // GetWebAppURL returns the appropriate web app URL based on environment
@@ -38,4 +45,16 @@ func GetBackendURL() string {
 		return DevBackendURL
 	}
 	return ProdBackendURL
+}
+
+// GetSupabaseURL returns the appropriate Supabase URL based on environment
+// Defaults to production. Set DOSU_DEV=true for local development.
+func GetSupabaseURL() string {
+	if url := os.Getenv("SUPABASE_URL"); url != "" {
+		return url
+	}
+	if os.Getenv("DOSU_DEV") == "true" {
+		return DevSupabaseURL
+	}
+	return ProdSupabaseURL
 }

@@ -83,16 +83,17 @@ func GetConfigPath() (string, error) {
 }
 
 func (c *Config) IsAuthenticated() bool {
-	if c.AccessToken == "" {
-		return false
-	}
+	// Just check if we have an access token
+	// The client will handle token refresh if it's expired
+	return c.AccessToken != ""
+}
 
-	// Check if token is expired (with 5 minute buffer)
-	if c.ExpiresAt > 0 && time.Now().Unix() > (c.ExpiresAt-300) {
-		return false
+// IsTokenExpired checks if the token is expired or about to expire (within 5 minutes)
+func (c *Config) IsTokenExpired() bool {
+	if c.ExpiresAt == 0 {
+		return false // No expiry set, assume valid
 	}
-
-	return true
+	return time.Now().Unix() > (c.ExpiresAt - 300)
 }
 
 func (c *Config) Clear() {

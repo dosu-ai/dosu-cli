@@ -57,7 +57,7 @@ func NewSetup() SetupModel {
 
 func defaultSetupStyles() setupStyles {
 	return setupStyles{
-		container:     lipgloss.NewStyle().Width(64),
+		container:     lipgloss.NewStyle().Width(maxWidth - 4), // Account for frame border and padding
 		title:         lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205")),
 		subtitle:      lipgloss.NewStyle().Foreground(lipgloss.Color("63")),
 		sectionHeader: lipgloss.NewStyle().Bold(true),
