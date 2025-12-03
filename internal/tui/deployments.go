@@ -169,7 +169,7 @@ func (m DeploymentsModel) View() string {
 	}
 
 	if len(m.deployments) == 0 {
-		content := "\nNo deployments found.\n\nPress Esc to go back"
+		content := "\nNo deployments found.\n\nCreate a deployment at https://app.dosu.dev to get started.\n\nPress Esc to go back"
 		inner := lipgloss.JoinVertical(
 			lipgloss.Left,
 			headerStyle.Render(logo),

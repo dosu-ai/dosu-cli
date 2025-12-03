@@ -10,7 +10,7 @@ const (
 	ProdWebAppURL = "https://app.dosu.dev"
 
 	// DevBackendURL is the local development backend URL
-	DevBackendURL = "http://localhost:8000"
+	DevBackendURL = "http://localhost:7001"
 
 	// ProdBackendURL is the production backend URL
 	ProdBackendURL = "https://api.dosu.dev"
