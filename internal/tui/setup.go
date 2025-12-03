@@ -13,11 +13,13 @@ import (
 
 // SetupModel owns the auth form. It emits SetupComplete or SetupCanceled messages.
 type SetupModel struct {
-	status     string
-	err        error
-	authDone   bool
-	style      setupStyles
-	inProgress bool
+	status           string
+	err              error
+	authDone         bool
+	style            setupStyles
+	inProgress       bool
+	alreadyAuthed    bool
+	confirmOverwrite bool
 }
 
 type (
@@ -43,8 +45,13 @@ type setupStyles struct {
 }
 
 func NewSetup() SetupModel {
+	// Check if already authenticated
+	cfg, err := config.LoadConfig()
+	alreadyAuthed := err == nil && cfg.IsAuthenticated()
+
 	return SetupModel{
-		style: defaultSetupStyles(),
+		style:         defaultSetupStyles(),
+		alreadyAuthed: alreadyAuthed,
 	}
 }
 
@@ -71,7 +78,7 @@ func (m SetupModel) Update(msg tea.Msg) (SetupModel, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
-		case "esc":
+		case "esc", "q":
 			if !m.inProgress {
 				return m, func() tea.Msg { return SetupCanceled{} }
 			}
@@ -80,6 +87,13 @@ func (m SetupModel) Update(msg tea.Msg) (SetupModel, tea.Cmd) {
 				// Auth completed, move to next screen
 				return m, func() tea.Msg { return SetupComplete{} }
 			}
+
+			// If already authenticated and not confirmed, show confirmation
+			if m.alreadyAuthed && !m.confirmOverwrite {
+				m.confirmOverwrite = true
+				return m, nil
+			}
+
 			if !m.inProgress {
 				// Start OAuth flow
 				m.inProgress = true
@@ -150,8 +164,38 @@ func (m SetupModel) View() string {
 		lines = append(lines,
 			m.style.success.Render("✓ "+m.status),
 			"",
+		)
+
+		// Show where config is stored
+		if configPath, err := config.GetConfigPath(); err == nil {
+			lines = append(lines,
+				m.style.help.Render("Credentials saved to:"),
+				m.style.help.Render(configPath),
+				"",
+			)
+		}
+
+		lines = append(lines,
 			m.style.help.Render("Press Enter to continue"),
 		)
+	} else if m.alreadyAuthed && !m.confirmOverwrite {
+		// Already authenticated - show warning
+		lines = append(lines,
+			m.style.sectionHeader.Render("⚠ Already Authenticated"),
+			"",
+			"You are already logged in to Dosu.",
+			"",
+			m.style.status.Render("Press Enter to re-authenticate (will replace current credentials)"),
+			m.style.help.Render("Press esc or q to go back"),
+		)
+
+		// Show where current config is stored
+		if configPath, err := config.GetConfigPath(); err == nil {
+			lines = append(lines,
+				"",
+				m.style.help.Render("Current credentials: "+configPath),
+			)
+		}
 	} else if m.inProgress {
 		// In progress state
 		lines = append(lines,

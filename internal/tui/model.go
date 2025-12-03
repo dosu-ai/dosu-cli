@@ -2,6 +2,7 @@ package tui
 
 import (
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/dosu-ai/dosu-cli/internal/config"
 )
 
 type screen int
@@ -10,13 +11,15 @@ const (
 	screenMenu screen = iota
 	screenSetup
 	screenSync
+	screenDeployments
 )
 
 // model orchestrates which screen is active.
 type model struct {
-	screen screen
-	menu   MenuModel
-	setup  SetupModel
+	screen      screen
+	menu        MenuModel
+	setup       SetupModel
+	deployments DeploymentsModel
 }
 
 // New builds the root model.
@@ -44,6 +47,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SetupCanceled:
 		m.screen = screenMenu
 		return m, nil
+	case DeploymentSelected:
+		// Save selected deployment to config
+		cfg, err := config.LoadConfig()
+		if err == nil {
+			cfg.DeploymentID = msg.ID
+			cfg.DeploymentName = msg.Name
+			config.SaveConfig(cfg)
+		}
+		m.screen = screenMenu
+		return m, nil
+	case DeploymentCanceled:
+		m.screen = screenMenu
+		return m, nil
 	}
 
 	switch m.screen {
@@ -57,6 +73,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case screenSync:
 		// TODO: add sync screen model; for now just go back on Esc handled elsewhere.
+	case screenDeployments:
+		var cmd tea.Cmd
+		m.deployments, cmd = m.deployments.Update(msg)
+		return m, cmd
 	}
 
 	return m, nil
@@ -67,6 +87,17 @@ func (m model) handleMenuSelected(msg MenuSelected) (tea.Model, tea.Cmd) {
 	case "setup":
 		m.screen = screenSetup
 		return m, nil
+	case "deployments":
+		// Check if authenticated before allowing access
+		cfg, err := config.LoadConfig()
+		if err != nil || !cfg.IsAuthenticated() {
+			// TODO: Show error message to user that they need to authenticate first
+			// For now, just stay on menu
+			return m, nil
+		}
+		m.screen = screenDeployments
+		m.deployments = NewDeploymentsSelector()
+		return m, m.deployments.Init()
 	case "sync":
 		// TODO: replace with sync screen; for now just show a message or go back.
 		return m, nil
@@ -86,6 +117,8 @@ func (m model) View() string {
 		return m.setup.View()
 	case screenSync:
 		return "Sync not implemented yet.\n\nPress Esc to go back."
+	case screenDeployments:
+		return m.deployments.View()
 	default:
 		return ""
 	}

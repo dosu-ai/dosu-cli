@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/dosu-ai/dosu-cli/internal/config"
@@ -29,10 +30,19 @@ func NewClient(cfg *config.Config) *Client {
 
 // DoRequest performs an authenticated HTTP request to the backend
 // The access token is automatically included in the Supabase-Access-Token header
+// If the token is expired, it will automatically refresh it
 func (c *Client) DoRequest(method, path string, body interface{}) (*http.Response, error) {
 	// Check if user is authenticated
 	if !c.config.IsAuthenticated() {
 		return nil, fmt.Errorf("not authenticated - please run setup first")
+	}
+
+	// Check if token is expired or about to expire (within 5 minutes)
+	if c.config.ExpiresAt > 0 && time.Now().Unix() > (c.config.ExpiresAt-300) {
+		// Try to refresh the token
+		if err := c.refreshToken(); err != nil {
+			return nil, fmt.Errorf("token expired and refresh failed: %w", err)
+		}
 	}
 
 	// Prepare request body if provided
@@ -65,22 +75,103 @@ func (c *Client) DoRequest(method, path string, body interface{}) (*http.Respons
 	return resp, nil
 }
 
-// Get performs a GET request
 func (c *Client) Get(path string) (*http.Response, error) {
 	return c.DoRequest("GET", path, nil)
 }
 
-// Post performs a POST request with a JSON body
 func (c *Client) Post(path string, body interface{}) (*http.Response, error) {
 	return c.DoRequest("POST", path, body)
 }
 
-// Put performs a PUT request with a JSON body
 func (c *Client) Put(path string, body interface{}) (*http.Response, error) {
 	return c.DoRequest("PUT", path, body)
 }
 
-// Delete performs a DELETE request
 func (c *Client) Delete(path string) (*http.Response, error) {
 	return c.DoRequest("DELETE", path, nil)
+}
+
+// refreshToken attempts to refresh the access token using the refresh token
+func (c *Client) refreshToken() error {
+	if c.config.RefreshToken == "" {
+		return fmt.Errorf("no refresh token available")
+	}
+
+	// Get Supabase URL from config
+	supabaseURL := "http://localhost:54321" // TODO: make this configurable
+	if os.Getenv("DOSU_DEV") != "true" {
+		supabaseURL = "https://your-supabase-url.supabase.co" // TODO: update with actual URL
+	}
+
+	endpoint := fmt.Sprintf("%s/auth/v1/token?grant_type=refresh_token", supabaseURL)
+
+	payload := map[string]string{
+		"refresh_token": c.config.RefreshToken,
+	}
+
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", endpoint, bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("refresh request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("refresh failed with status %d", resp.StatusCode)
+	}
+
+	var tokenResp struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int    `json:"expires_in"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return fmt.Errorf("failed to decode refresh response: %w", err)
+	}
+
+	// Update config with new tokens
+	c.config.AccessToken = tokenResp.AccessToken
+	c.config.RefreshToken = tokenResp.RefreshToken
+	c.config.ExpiresAt = time.Now().Unix() + int64(tokenResp.ExpiresIn)
+
+	// Save updated config
+	if err := config.SaveConfig(c.config); err != nil {
+		return fmt.Errorf("failed to save refreshed token: %w", err)
+	}
+
+	return nil
+}
+
+func (c *Client) GetDeployments() ([]Deployment, error) {
+	resp, err := c.Get("/v1/mcp/deployments")
+	if err != nil {
+		return nil, err
+	}
+
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("Could not retrieve deployments with status: %d", resp.StatusCode)
+	}
+
+	var deployments []Deployment
+	if err := json.NewDecoder(resp.Body).Decode(&deployments); err != nil {
+		return nil, err
+	}
+
+	return deployments, nil
+}
+
+type Deployment struct {
+	DeploymentID string `json:"deployment_id"`
+	Name         string `json:"name"`
+	Description  string `json:"description"`
+	ProviderSlug string `json:"provider_slug"`
+	Enabled      bool   `json:"enabled"`
+	OrgID        string `json:"org_id"`
+	SpaceID      string `json:"space_id"`
 }

@@ -12,12 +12,13 @@ import (
 
 // Config holds the CLI configuration including authentication tokens
 type Config struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresAt    int64  `json:"expires_at"` // Unix timestamp
+	AccessToken    string `json:"access_token"`
+	RefreshToken   string `json:"refresh_token"`
+	ExpiresAt      int64  `json:"expires_at"`
+	DeploymentID   string `json:"deployment_id,omitempty"`
+	DeploymentName string `json:"deployment_name,omitempty"`
 }
 
-// configPath returns the path to the config file
 func configPath() (string, error) {
 	// Use XDG config directory (e.g., ~/.config/dosu-cli/)
 	configDir := filepath.Join(xdg.ConfigHome, "dosu-cli")
@@ -30,8 +31,6 @@ func configPath() (string, error) {
 	return filepath.Join(configDir, "config.json"), nil
 }
 
-// LoadConfig loads the configuration from disk
-// Returns a new empty config if the file doesn't exist
 func LoadConfig() (*Config, error) {
 	path, err := configPath()
 	if err != nil {
@@ -58,7 +57,6 @@ func LoadConfig() (*Config, error) {
 	return &cfg, nil
 }
 
-// SaveConfig saves the configuration to disk
 func SaveConfig(cfg *Config) error {
 	path, err := configPath()
 	if err != nil {
@@ -79,7 +77,11 @@ func SaveConfig(cfg *Config) error {
 	return nil
 }
 
-// IsAuthenticated checks if the user has a valid token
+// GetConfigPath returns the path where config is stored (useful for user feedback)
+func GetConfigPath() (string, error) {
+	return configPath()
+}
+
 func (c *Config) IsAuthenticated() bool {
 	if c.AccessToken == "" {
 		return false
@@ -93,7 +95,6 @@ func (c *Config) IsAuthenticated() bool {
 	return true
 }
 
-// Clear removes all authentication data
 func (c *Config) Clear() {
 	c.AccessToken = ""
 	c.RefreshToken = ""

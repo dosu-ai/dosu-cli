@@ -70,7 +70,8 @@ func (m MenuModel) View() string {
 // NewMenu creates a menu with default items. Parent should handle MenuSelected messages.
 func NewMenu() MenuModel {
 	items := []list.Item{
-		item{id: "setup", title: "Setup", desc: "Configure your environment"},
+		item{id: "setup", title: "Setup", desc: "Login and configure your MCP"},
+		item{id: "deployments", title: "Choose Deployment", desc: "Select active deployment"},
 		item{id: "sync", title: "Sync Documents", desc: "Pull latest files from server"},
 		item{id: "status", title: "Check Status", desc: "View system health"},
 	}

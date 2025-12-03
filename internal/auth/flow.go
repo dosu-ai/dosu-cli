@@ -7,8 +7,8 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/pkg/browser"
 	"github.com/dosu-ai/dosu-cli/internal/config"
+	"github.com/pkg/browser"
 )
 
 // StartOAuthFlow initiates the browser-based OAuth flow

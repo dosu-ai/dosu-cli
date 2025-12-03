@@ -17,17 +17,25 @@ const (
 )
 
 // GetWebAppURL returns the appropriate web app URL based on environment
+// Defaults to production. Set DOSU_DEV=true for local development.
 func GetWebAppURL() string {
-	if os.Getenv("DOSU_ENV") == "production" {
-		return ProdWebAppURL
+	if url := os.Getenv("DOSU_WEB_APP_URL"); url != "" {
+		return url
 	}
-	return DevWebAppURL
+	if os.Getenv("DOSU_DEV") == "true" {
+		return DevWebAppURL
+	}
+	return ProdWebAppURL
 }
 
 // GetBackendURL returns the appropriate backend URL based on environment
+// Defaults to production. Set DOSU_DEV=true for local development.
 func GetBackendURL() string {
-	if os.Getenv("DOSU_ENV") == "production" {
-		return ProdBackendURL
+	if url := os.Getenv("DOSU_BACKEND_URL"); url != "" {
+		return url
 	}
-	return DevBackendURL
+	if os.Getenv("DOSU_DEV") == "true" {
+		return DevBackendURL
+	}
+	return ProdBackendURL
 }
