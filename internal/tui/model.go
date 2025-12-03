@@ -42,7 +42,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMenuSelected(msg)
 	case SetupComplete:
 		m.screen = screenMenu
-		m.menu.list.Select(1) // keep selection where you want; here arbitrarily on Sync
+		m.menu = NewMenu() // Refresh menu to update auth state
+		m.menu.list.Select(1)
 		return m, nil
 	case SetupCanceled:
 		m.screen = screenMenu

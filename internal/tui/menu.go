@@ -4,6 +4,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/dosu-ai/dosu-cli/internal/config"
 )
 
 // MenuSelected is emitted to the parent model when an item is chosen.
@@ -12,7 +13,8 @@ type MenuSelected struct {
 }
 
 type MenuModel struct {
-	list list.Model
+	list            list.Model
+	isAuthenticated bool
 }
 
 const maxListHeight = 20
@@ -49,7 +51,33 @@ func (m MenuModel) Update(msg tea.Msg) (MenuModel, tea.Cmd) {
 			if !ok {
 				return m, nil
 			}
+			// Don't allow selecting disabled items
+			if i.disabled {
+				return m, nil
+			}
 			return m, selectItem(i.id)
+		case "up", "k":
+			// Skip disabled items when moving up
+			m.list.CursorUp()
+			for {
+				i, ok := m.list.SelectedItem().(item)
+				if !ok || !i.disabled || m.list.Index() == 0 {
+					break
+				}
+				m.list.CursorUp()
+			}
+			return m, nil
+		case "down", "j":
+			// Skip disabled items when moving down
+			m.list.CursorDown()
+			for {
+				i, ok := m.list.SelectedItem().(item)
+				if !ok || !i.disabled || m.list.Index() == len(m.list.Items())-1 {
+					break
+				}
+				m.list.CursorDown()
+			}
+			return m, nil
 		}
 	}
 
@@ -69,18 +97,28 @@ func (m MenuModel) View() string {
 
 // NewMenu creates a menu with default items. Parent should handle MenuSelected messages.
 func NewMenu() MenuModel {
+	// Check if user is authenticated
+	cfg, err := config.LoadConfig()
+	isAuthenticated := err == nil && cfg.IsAuthenticated()
+
+	// Build menu items - some are disabled if not authenticated
+	deploymentDesc := "Select active deployment"
+	if !isAuthenticated {
+		deploymentDesc = "Login first to select deployment"
+	}
+
 	items := []list.Item{
 		item{id: "setup", title: "Setup", desc: "Login and configure your MCP"},
-		item{id: "deployments", title: "Choose Deployment", desc: "Select active deployment"},
+		item{id: "deployments", title: "Choose Deployment", desc: deploymentDesc, disabled: !isAuthenticated},
 		item{id: "sync", title: "Sync Documents", desc: "Pull latest files from server"},
 		item{id: "status", title: "Check Status", desc: "View system health"},
 	}
 
 	delegate := list.NewDefaultDelegate()
-	delegate.Styles.NormalTitle = itemStyle
-	delegate.Styles.NormalDesc = itemStyle
-	delegate.Styles.SelectedTitle = selectedItemStyle
-	delegate.Styles.SelectedDesc = selectedItemStyle
+	delegate.Styles.NormalTitle = itemTitleStyle
+	delegate.Styles.NormalDesc = itemDescStyle
+	delegate.Styles.SelectedTitle = selectedItemTitleStyle
+	delegate.Styles.SelectedDesc = selectedItemDescStyle
 
 	m := list.New(items, delegate, 0, 0)
 	m.SetShowTitle(false)
@@ -89,17 +127,30 @@ func NewMenu() MenuModel {
 	m.SetShowStatusBar(false)
 	m.SetShowPagination(false)
 
-	return MenuModel{list: m}
+	return MenuModel{list: m, isAuthenticated: isAuthenticated}
 }
 
 // item implements list.Item and carries an ID for routing.
 type item struct {
 	id          string
 	title, desc string
+	disabled    bool
 }
 
-func (i item) Title() string       { return i.title }
-func (i item) Description() string { return i.desc }
+func (i item) Title() string {
+	if i.disabled {
+		return disabledItemTitleStyle.Render(i.title)
+	}
+	return i.title
+}
+
+func (i item) Description() string {
+	if i.disabled {
+		return disabledItemDescStyle.Render(i.desc)
+	}
+	return i.desc
+}
+
 func (i item) FilterValue() string { return i.title }
 
 func selectItem(id string) tea.Cmd {
@@ -113,7 +164,6 @@ const maxWidth = 79
 var (
 	appStyle   = lipgloss.NewStyle().Margin(0, 1)
 	frameStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
 			Padding(0, 1).
 			Width(maxWidth)
 
@@ -121,11 +171,19 @@ var (
 			Foreground(lipgloss.Color("#7D56F4")).
 			Align(lipgloss.Center).
 			Bold(true).
-			Width(maxWidth - 4) // Account for frame border and padding
+			Width(maxWidth - 2) // Account for padding
 
-	itemStyle = lipgloss.NewStyle().PaddingLeft(2)
+	// Title styles - bold to stand out
+	itemTitleStyle         = lipgloss.NewStyle().PaddingLeft(2).Bold(true)
+	selectedItemTitleStyle = lipgloss.NewStyle().PaddingLeft(2).Foreground(lipgloss.Color("170")).Bold(true)
 
-	selectedItemStyle = lipgloss.NewStyle().PaddingLeft(2).Foreground(lipgloss.Color("170")).Bold(true)
+	// Description styles - dimmed to differentiate from title
+	itemDescStyle         = lipgloss.NewStyle().PaddingLeft(2).Foreground(lipgloss.Color("245"))
+	selectedItemDescStyle = lipgloss.NewStyle().PaddingLeft(2).Foreground(lipgloss.Color("170"))
+
+	// Disabled styles - greyed out
+	disabledItemTitleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	disabledItemDescStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Italic(true)
 )
 
 const logo = `

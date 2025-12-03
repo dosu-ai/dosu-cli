@@ -100,16 +100,16 @@ func (m DeploymentsModel) Update(msg tea.Msg) (DeploymentsModel, tea.Cmd) {
 		}
 
 		delegate := list.NewDefaultDelegate()
-		delegate.Styles.NormalTitle = itemStyle
-		delegate.Styles.NormalDesc = itemStyle
-		delegate.Styles.SelectedTitle = selectedItemStyle
-		delegate.Styles.SelectedDesc = selectedItemStyle
+		delegate.Styles.NormalTitle = itemTitleStyle
+		delegate.Styles.NormalDesc = itemDescStyle
+		delegate.Styles.SelectedTitle = selectedItemTitleStyle
+		delegate.Styles.SelectedDesc = selectedItemDescStyle
 
 		// Use default dimensions if window size not yet received
 		width := m.width
 		height := m.height
 		if width == 0 {
-			width = maxWidth - 4 // Account for frame border and padding
+			width = maxWidth - 2 // Account for padding
 		}
 		if height == 0 {
 			height = maxListHeight
