@@ -72,7 +72,7 @@ func (m MenuModel) Update(msg tea.Msg) (MenuModel, tea.Cmd) {
 			m.list.CursorDown()
 			for {
 				i, ok := m.list.SelectedItem().(item)
-				if !ok || !i.disabled || m.list.Index() == len(m.list.Items())-1 {
+				if !ok || !i.disabled || m.list.Index() == len(m.list.Items()) - 1 {
 					break
 				}
 				m.list.CursorDown()
@@ -97,21 +97,28 @@ func (m MenuModel) View() string {
 
 // NewMenu creates a menu with default items. Parent should handle MenuSelected messages.
 func NewMenu() MenuModel {
-	// Check if user is authenticated
+	// Check if user is authenticated and has a deployment selected
 	cfg, err := config.LoadConfig()
 	isAuthenticated := err == nil && cfg.IsAuthenticated()
+	hasDeployment := isAuthenticated && cfg.DeploymentID != ""
 
-	// Build menu items - some are disabled if not authenticated
+	// Build menu items - some are disabled based on state
 	deploymentDesc := "Select active deployment"
 	if !isAuthenticated {
 		deploymentDesc = "Login first to select deployment"
 	}
 
+	mcpDesc := "Add Dosu MCP to Claude Code"
+	if !isAuthenticated {
+		mcpDesc = "Login first"
+	} else if !hasDeployment {
+		mcpDesc = "Select a deployment first"
+	}
+
 	items := []list.Item{
-		item{id: "setup", title: "Setup", desc: "Login and configure your MCP"},
+		item{id: "setup", title: "Setup", desc: "Login to Dosu"},
 		item{id: "deployments", title: "Choose Deployment", desc: deploymentDesc, disabled: !isAuthenticated},
-		item{id: "sync", title: "Sync Documents", desc: "Pull latest files from server"},
-		item{id: "status", title: "Check Status", desc: "View system health"},
+		item{id: "mcp", title: "Add to Claude Code", desc: mcpDesc, disabled: !hasDeployment},
 	}
 
 	delegate := list.NewDefaultDelegate()
@@ -120,7 +127,7 @@ func NewMenu() MenuModel {
 	delegate.Styles.SelectedTitle = selectedItemTitleStyle
 	delegate.Styles.SelectedDesc = selectedItemDescStyle
 
-	m := list.New(items, delegate, 0, 0)
+	m := list.New(items, delegate, maxWidth-4, maxListHeight)
 	m.SetShowTitle(false)
 	m.SetFilteringEnabled(false)
 	m.DisableQuitKeybindings()

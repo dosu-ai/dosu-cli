@@ -10,8 +10,8 @@ type screen int
 const (
 	screenMenu screen = iota
 	screenSetup
-	screenSync
 	screenDeployments
+	screenMCP
 )
 
 // model orchestrates which screen is active.
@@ -20,6 +20,7 @@ type model struct {
 	menu        MenuModel
 	setup       SetupModel
 	deployments DeploymentsModel
+	mcp         MCPModel
 }
 
 // New builds the root model.
@@ -57,8 +58,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			config.SaveConfig(cfg)
 		}
 		m.screen = screenMenu
+		m.menu = NewMenu() // Refresh menu to enable MCP option
 		return m, nil
 	case DeploymentCanceled:
+		m.screen = screenMenu
+		return m, nil
+	case MCPComplete:
+		m.screen = screenMenu
+		m.menu = NewMenu()
+		return m, nil
+	case MCPCanceled:
 		m.screen = screenMenu
 		return m, nil
 	}
@@ -72,11 +81,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.setup, cmd = m.setup.Update(msg)
 		return m, cmd
-	case screenSync:
-		// TODO: add sync screen model; for now just go back on Esc handled elsewhere.
 	case screenDeployments:
 		var cmd tea.Cmd
 		m.deployments, cmd = m.deployments.Update(msg)
+		return m, cmd
+	case screenMCP:
+		var cmd tea.Cmd
+		m.mcp, cmd = m.mcp.Update(msg)
 		return m, cmd
 	}
 
@@ -89,22 +100,21 @@ func (m model) handleMenuSelected(msg MenuSelected) (tea.Model, tea.Cmd) {
 		m.screen = screenSetup
 		return m, nil
 	case "deployments":
-		// Check if authenticated before allowing access
 		cfg, err := config.LoadConfig()
 		if err != nil || !cfg.IsAuthenticated() {
-			// TODO: Show error message to user that they need to authenticate first
-			// For now, just stay on menu
 			return m, nil
 		}
 		m.screen = screenDeployments
 		m.deployments = NewDeploymentsSelector()
 		return m, m.deployments.Init()
-	case "sync":
-		// TODO: replace with sync screen; for now just show a message or go back.
-		return m, nil
-	case "status":
-		// TODO: add status screen.
-		return m, nil
+	case "mcp":
+		cfg, err := config.LoadConfig()
+		if err != nil || !cfg.IsAuthenticated() || cfg.DeploymentID == "" {
+			return m, nil
+		}
+		m.screen = screenMCP
+		m.mcp = NewMCPSetup()
+		return m, m.mcp.Init()
 	default:
 		return m, nil
 	}
@@ -116,10 +126,10 @@ func (m model) View() string {
 		return m.menu.View()
 	case screenSetup:
 		return m.setup.View()
-	case screenSync:
-		return "Sync not implemented yet.\n\nPress Esc to go back."
 	case screenDeployments:
 		return m.deployments.View()
+	case screenMCP:
+		return m.mcp.View()
 	default:
 		return ""
 	}
