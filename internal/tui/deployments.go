@@ -121,6 +121,7 @@ func (m DeploymentsModel) Update(msg tea.Msg) (DeploymentsModel, tea.Cmd) {
 		m.list.DisableQuitKeybindings()
 		m.list.SetShowStatusBar(true)
 		m.list.SetShowPagination(true)
+		m.list.SetShowHelp(true)
 
 		return m, nil
 

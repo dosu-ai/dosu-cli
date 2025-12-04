@@ -131,12 +131,14 @@ func NewMenu() MenuModel {
 	delegate.Styles.SelectedTitle = selectedItemTitleStyle
 	delegate.Styles.SelectedDesc = selectedItemDescStyle
 
-	m := list.New(items, delegate, maxWidth-4, maxListHeight)
+	// Height needs to accommodate items + help text (about 2 extra lines)
+	m := list.New(items, delegate, maxWidth-4, len(items)*3+4)
 	m.SetShowTitle(false)
 	m.SetFilteringEnabled(false)
 	m.DisableQuitKeybindings()
 	m.SetShowStatusBar(false)
 	m.SetShowPagination(false)
+	m.SetShowHelp(true)
 
 	return MenuModel{list: m, isAuthenticated: isAuthenticated}
 }
