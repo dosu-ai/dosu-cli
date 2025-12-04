@@ -2,7 +2,7 @@ BINARY_NAME=dosu
 BUILD_DIR=bin
 CMD_DIR=cmd/dosu-cli
 
-.PHONY: build run clean fmt lint test install help
+.PHONY: build run clean format lint test install help
 
 build:
 	go build -o $(BUILD_DIR)/$(BINARY_NAME) ./$(CMD_DIR)
@@ -17,7 +17,7 @@ clean:
 	rm -rf $(BUILD_DIR)
 	go clean
 
-fmt:
+format:
 	go fmt ./...
 
 lint:
@@ -39,7 +39,7 @@ help:
 	@echo "  make run      - Build and run"
 	@echo "  make run-dev  - Build and run with DOSU_DEV=true"
 	@echo "  make clean    - Remove build artifacts"
-	@echo "  make fmt      - Format code"
+	@echo "  make format   - Format code"
 	@echo "  make lint     - Run go vet"
 	@echo "  make test     - Run tests"
 	@echo "  make install  - Install binary to GOPATH/bin"

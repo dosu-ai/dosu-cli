@@ -72,7 +72,7 @@ func (m MenuModel) Update(msg tea.Msg) (MenuModel, tea.Cmd) {
 			m.list.CursorDown()
 			for {
 				i, ok := m.list.SelectedItem().(item)
-				if !ok || !i.disabled || m.list.Index() == len(m.list.Items()) - 1 {
+				if !ok || !i.disabled || m.list.Index() == len(m.list.Items())-1 {
 					break
 				}
 				m.list.CursorDown()
@@ -108,17 +108,21 @@ func NewMenu() MenuModel {
 		deploymentDesc = "Login first to select deployment"
 	}
 
-	mcpDesc := "Add Dosu MCP to Claude Code"
+	mcpLocalDesc := "Add Dosu MCP to this project"
+	mcpGlobalDesc := "Add Dosu MCP to all projects"
 	if !isAuthenticated {
-		mcpDesc = "Login first"
+		mcpLocalDesc = "Login first"
+		mcpGlobalDesc = "Login first"
 	} else if !hasDeployment {
-		mcpDesc = "Select a deployment first"
+		mcpLocalDesc = "Select a deployment first"
+		mcpGlobalDesc = "Select a deployment first"
 	}
 
 	items := []list.Item{
 		item{id: "setup", title: "Setup", desc: "Login to Dosu"},
 		item{id: "deployments", title: "Choose Deployment", desc: deploymentDesc, disabled: !isAuthenticated},
-		item{id: "mcp", title: "Add to Claude Code", desc: mcpDesc, disabled: !hasDeployment},
+		item{id: "mcp-local", title: "Add to Project", desc: mcpLocalDesc, disabled: !hasDeployment},
+		item{id: "mcp-global", title: "Add Globally", desc: mcpGlobalDesc, disabled: !hasDeployment},
 	}
 
 	delegate := list.NewDefaultDelegate()

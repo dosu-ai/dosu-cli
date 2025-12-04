@@ -107,13 +107,21 @@ func (m model) handleMenuSelected(msg MenuSelected) (tea.Model, tea.Cmd) {
 		m.screen = screenDeployments
 		m.deployments = NewDeploymentsSelector()
 		return m, m.deployments.Init()
-	case "mcp":
+	case "mcp-local":
 		cfg, err := config.LoadConfig()
 		if err != nil || !cfg.IsAuthenticated() || cfg.DeploymentID == "" {
 			return m, nil
 		}
 		m.screen = screenMCP
-		m.mcp = NewMCPSetup()
+		m.mcp = NewMCPSetup(false)
+		return m, m.mcp.Init()
+	case "mcp-global":
+		cfg, err := config.LoadConfig()
+		if err != nil || !cfg.IsAuthenticated() || cfg.DeploymentID == "" {
+			return m, nil
+		}
+		m.screen = screenMCP
+		m.mcp = NewMCPSetup(true)
 		return m, m.mcp.Init()
 	default:
 		return m, nil
