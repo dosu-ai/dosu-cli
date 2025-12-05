@@ -223,19 +223,16 @@ h1 {
 		return nil, 0
 	}
 
-	// Extract the port number from the listener address
 	port := listener.Addr().(*net.TCPAddr).Port
 
 	server := &http.Server{
 		Handler: mux,
 	}
 
-	// Channel to signal when server is ready
 	ready := make(chan struct{})
 
 	// Start server in a goroutine
 	go func() {
-		// Signal that server is ready to accept connections
 		close(ready)
 
 		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
@@ -243,7 +240,6 @@ h1 {
 		}
 	}()
 
-	// Wait for server to be ready before returning
 	<-ready
 
 	return server, port
