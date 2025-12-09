@@ -34,3 +34,6 @@ go.work.sum
 # The Dosu-CLI Executable (root only)
 /dosu
 /bin
+
+# GoReleaser artifacts
+dist/
