@@ -29,21 +29,17 @@ builds:
       - -s -w
 
 archives:
-  - format: tar.gz
-    name_template: >-
+  - name_template: >-
       {{ .ProjectName }}_
       {{- title .Os }}_
       {{- if eq .Arch "amd64" }}x86_64
       {{- else }}{{ .Arch }}{{ end }}
-    format_overrides:
-      - goos: windows
-        format: zip
 
 checksum:
   name_template: "checksums.txt"
 
 snapshot:
-  name_template: "{{ incpatch .Version }}-next"
+  version_template: "{{ incpatch .Version }}-next"
 
 changelog:
   sort: asc
@@ -69,6 +65,19 @@ changelog:
       order: 2
     - title: Other Changes
       order: 999
+
+# Homebrew tap
+homebrew_casks:
+  - name: dosu
+    repository:
+      owner: dosu-ai
+      name: homebrew-dosu
+    homepage: https://github.com/dosu-ai/dosu-cli
+    description: "Dosu CLI tool"
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    commit_msg_template: "Brew cask update for {{ .ProjectName }} version {{ .Tag }}"
 
 # Release configuration
 release:
