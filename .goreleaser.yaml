@@ -72,6 +72,7 @@ homebrew_casks:
     repository:
       owner: dosu-ai
       name: homebrew-dosu
+      token: "{{ .Env.HOMEBREW_TOKEN }}"
     homepage: https://github.com/dosu-ai/dosu-cli
     description: "Dosu CLI tool"
     commit_author:
