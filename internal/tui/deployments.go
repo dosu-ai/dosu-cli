@@ -231,9 +231,8 @@ func (m DeploymentsModel) View() string {
 		Width(columnWidth).
 		Align(lipgloss.Center)
 
-	// Item styles
+	// Item styles (consistent with menu.go)
 	normalStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("252")).
 		Width(columnWidth).
 		PaddingLeft(1)
 
@@ -244,7 +243,7 @@ func (m DeploymentsModel) View() string {
 		PaddingLeft(1)
 
 	dimStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("240")).
+		Foreground(lipgloss.Color("245")).
 		Width(columnWidth).
 		PaddingLeft(1)
 
