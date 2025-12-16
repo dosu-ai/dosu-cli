@@ -18,6 +18,11 @@ import (
 // 3. Waits for the web app to redirect back with the token
 // 4. Returns the token or an error
 func StartOAuthFlow() (*TokenResponse, error) {
+	return StartOAuthFlowWithContext(context.Background())
+}
+
+// StartOAuthFlowWithContext initiates the browser-based OAuth flow with cancellation support
+func StartOAuthFlowWithContext(ctx context.Context) (*TokenResponse, error) {
 	// Create channels for communication between goroutines
 	// tokenChan receives the token when auth succeeds
 	// errChan receives any errors from the callback server
@@ -33,9 +38,9 @@ func StartOAuthFlow() (*TokenResponse, error) {
 
 	// Ensure the server is shut down when we're done
 	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		server.Shutdown(ctx)
+		server.Shutdown(shutdownCtx)
 	}()
 
 	// Build the callback URL (where the web app will redirect to)
@@ -49,15 +54,18 @@ func StartOAuthFlow() (*TokenResponse, error) {
 		return nil, fmt.Errorf("failed to open browser: %w", err)
 	}
 
-	// Wait for one of three things to happen:
+	// Wait for one of four things to happen:
 	// 1. Token is received (success)
 	// 2. An error occurs
-	// 3. Timeout after 5 minutes
+	// 3. Context is cancelled (user pressed esc/q)
+	// 4. Timeout after 5 minutes
 	select {
 	case token := <-tokenChan:
 		return token, nil
 	case err := <-errChan:
 		return nil, err
+	case <-ctx.Done():
+		return nil, errors.New("authentication cancelled")
 	case <-time.After(5 * time.Minute):
 		return nil, errors.New("authentication timeout - please try again")
 	}

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -20,6 +21,7 @@ type SetupModel struct {
 	inProgress       bool
 	alreadyAuthed    bool
 	confirmOverwrite bool
+	cancelAuth       context.CancelFunc
 }
 
 type (
@@ -79,6 +81,12 @@ func (m SetupModel) Update(msg tea.Msg) (SetupModel, tea.Cmd) {
 		case "ctrl+c":
 			return m, tea.Quit
 		case "esc", "q":
+			if m.inProgress && m.cancelAuth != nil {
+				// Cancel ongoing auth
+				m.cancelAuth()
+				m.cancelAuth = nil
+				return m, nil
+			}
 			if !m.inProgress {
 				return m, func() tea.Msg { return SetupCanceled{} }
 			}
@@ -95,19 +103,28 @@ func (m SetupModel) Update(msg tea.Msg) (SetupModel, tea.Cmd) {
 			}
 
 			if !m.inProgress {
-				// Start OAuth flow
+				// Start OAuth flow with cancellable context
+				ctx, cancel := context.WithCancel(context.Background())
+				m.cancelAuth = cancel
 				m.inProgress = true
 				m.status = "Opening browser..."
-				return m, startOAuthCmd()
+				return m, startOAuthCmd(ctx)
 			}
 		}
 
 	case oauthResultMsg:
 		m.inProgress = false
+		m.cancelAuth = nil
 		if msg.err != nil {
-			// Auth failed
-			m.err = msg.err
-			m.status = ""
+			// Auth failed or cancelled
+			if msg.err.Error() == "authentication cancelled" {
+				// User cancelled, just reset state
+				m.err = nil
+				m.status = ""
+			} else {
+				m.err = msg.err
+				m.status = ""
+			}
 			m.authDone = false
 		} else {
 			// Auth succeeded
@@ -122,7 +139,7 @@ func (m SetupModel) Update(msg tea.Msg) (SetupModel, tea.Cmd) {
 }
 
 // startOAuthCmd runs the OAuth flow in a goroutine and returns the result
-func startOAuthCmd() tea.Cmd {
+func startOAuthCmd(ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
 		// Load existing config
 		cfg, err := config.LoadConfig()
@@ -130,8 +147,8 @@ func startOAuthCmd() tea.Cmd {
 			return oauthResultMsg{err: fmt.Errorf("failed to load config: %w", err)}
 		}
 
-		// Start OAuth flow (this will open the browser)
-		token, err := auth.StartOAuthFlow()
+		// Start OAuth flow with context (this will open the browser)
+		token, err := auth.StartOAuthFlowWithContext(ctx)
 		if err != nil {
 			return oauthResultMsg{err: err}
 		}
@@ -206,7 +223,7 @@ func (m SetupModel) View() string {
 			"A browser window should open to app.dosu.dev",
 			"Log in with your GitHub, Google, or Azure account",
 			"",
-			m.style.help.Render("Waiting for authentication..."),
+			m.style.help.Render("Waiting for authentication... (Press Esc or q to cancel)"),
 		)
 	} else {
 		// Initial state
