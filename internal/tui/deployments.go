@@ -2,8 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 
-	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -25,14 +25,34 @@ type deploymentsMsg struct {
 	err         error
 }
 
+// Column focus state
+type columnFocus int
+
+const (
+	focusOrgs columnFocus = iota
+	focusDeployments
+)
+
+// orgGroup holds an organization and its deployments
+type orgGroup struct {
+	name        string
+	deployments []client.Deployment
+}
+
 type DeploymentsModel struct {
 	loading     bool
 	spinner     spinner.Model
-	list        list.Model
-	deployments []client.Deployment
 	err         error
 	width       int
 	height      int
+
+	// Data
+	orgs []orgGroup
+
+	// Navigation state
+	focus            columnFocus
+	selectedOrgIdx   int
+	selectedDepIdx   int
 }
 
 func NewDeploymentsSelector() DeploymentsModel {
@@ -58,23 +78,6 @@ func (m DeploymentsModel) Update(msg tea.Msg) (DeploymentsModel, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		if !m.loading && len(m.deployments) > 0 {
-			appH, appV := appStyle.GetFrameSize()
-			frameH, frameV := frameStyle.GetFrameSize()
-			headerHeight := lipgloss.Height(headerStyle.Render(logo))
-			width := msg.Width - appH - frameH
-			if width < 10 {
-				width = 10
-			}
-			listHeight := msg.Height - appV - frameV - headerHeight - 2 // -2 for instruction text
-			if listHeight < 4 {
-				listHeight = 4
-			}
-			if listHeight > maxListHeight {
-				listHeight = maxListHeight
-			}
-			m.list.SetSize(width, listHeight)
-		}
 		return m, nil
 
 	case deploymentsMsg:
@@ -84,44 +87,29 @@ func (m DeploymentsModel) Update(msg tea.Msg) (DeploymentsModel, tea.Cmd) {
 			return m, nil
 		}
 
-		m.deployments = msg.deployments
-		if len(m.deployments) == 0 {
-			return m, nil
+		// Group deployments by organization
+		orgMap := make(map[string][]client.Deployment)
+		var orgNames []string
+		for _, dep := range msg.deployments {
+			orgName := dep.OrgName
+			if orgName == "" {
+				orgName = "Unknown Organization"
+			}
+			if _, exists := orgMap[orgName]; !exists {
+				orgNames = append(orgNames, orgName)
+			}
+			orgMap[orgName] = append(orgMap[orgName], dep)
 		}
+		sort.Strings(orgNames)
 
-		// Create list items
-		items := make([]list.Item, len(msg.deployments))
-		for i, dep := range msg.deployments {
-			items[i] = deploymentItem{
-				id:          dep.DeploymentID,
-				name:        dep.Name,
-				description: dep.Description,
+		// Build org groups
+		m.orgs = make([]orgGroup, len(orgNames))
+		for i, name := range orgNames {
+			m.orgs[i] = orgGroup{
+				name:        name,
+				deployments: orgMap[name],
 			}
 		}
-
-		delegate := list.NewDefaultDelegate()
-		delegate.Styles.NormalTitle = itemTitleStyle
-		delegate.Styles.NormalDesc = itemDescStyle
-		delegate.Styles.SelectedTitle = selectedItemTitleStyle
-		delegate.Styles.SelectedDesc = selectedItemDescStyle
-
-		// Use default dimensions if window size not yet received
-		width := m.width
-		height := m.height
-		if width == 0 {
-			width = maxWidth - 2 // Account for padding
-		}
-		if height == 0 {
-			height = maxListHeight
-		}
-
-		m.list = list.New(items, delegate, width, height)
-		m.list.SetShowTitle(false)
-		m.list.SetFilteringEnabled(false)
-		m.list.DisableQuitKeybindings()
-		m.list.SetShowStatusBar(true)
-		m.list.SetShowPagination(true)
-		m.list.SetShowHelp(true)
 
 		return m, nil
 
@@ -129,14 +117,59 @@ func (m DeploymentsModel) Update(msg tea.Msg) (DeploymentsModel, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c", "q", "esc":
 			return m, cancelDeploymentSelection
-		case "enter":
-			if !m.loading && m.err == nil && len(m.deployments) > 0 {
-				i, ok := m.list.SelectedItem().(deploymentItem)
-				if !ok {
-					return m, nil
-				}
-				return m, selectDeployment(i.id, i.name)
+
+		case "tab", "right", "l":
+			if m.focus == focusOrgs && len(m.orgs) > 0 && len(m.orgs[m.selectedOrgIdx].deployments) > 0 {
+				m.focus = focusDeployments
+				m.selectedDepIdx = 0
 			}
+			return m, nil
+
+		case "shift+tab", "left", "h":
+			if m.focus == focusDeployments {
+				m.focus = focusOrgs
+			}
+			return m, nil
+
+		case "up", "k":
+			if m.focus == focusOrgs {
+				if m.selectedOrgIdx > 0 {
+					m.selectedOrgIdx--
+					m.selectedDepIdx = 0 // Reset deployment selection when org changes
+				}
+			} else {
+				if m.selectedDepIdx > 0 {
+					m.selectedDepIdx--
+				}
+			}
+			return m, nil
+
+		case "down", "j":
+			if m.focus == focusOrgs {
+				if m.selectedOrgIdx < len(m.orgs)-1 {
+					m.selectedOrgIdx++
+					m.selectedDepIdx = 0 // Reset deployment selection when org changes
+				}
+			} else {
+				if len(m.orgs) > 0 && m.selectedDepIdx < len(m.orgs[m.selectedOrgIdx].deployments)-1 {
+					m.selectedDepIdx++
+				}
+			}
+			return m, nil
+
+		case "enter":
+			if m.focus == focusDeployments && len(m.orgs) > 0 {
+				deps := m.orgs[m.selectedOrgIdx].deployments
+				if m.selectedDepIdx < len(deps) {
+					dep := deps[m.selectedDepIdx]
+					return m, selectDeployment(dep.DeploymentID, dep.Name)
+				}
+			} else if m.focus == focusOrgs && len(m.orgs) > 0 && len(m.orgs[m.selectedOrgIdx].deployments) > 0 {
+				// Allow enter on org to jump to deployments column
+				m.focus = focusDeployments
+				m.selectedDepIdx = 0
+			}
+			return m, nil
 		}
 
 	case spinner.TickMsg:
@@ -145,13 +178,6 @@ func (m DeploymentsModel) Update(msg tea.Msg) (DeploymentsModel, tea.Cmd) {
 			m.spinner, cmd = m.spinner.Update(msg)
 			return m, cmd
 		}
-	}
-
-	// Update list if not loading
-	if !m.loading && m.err == nil && len(m.deployments) > 0 {
-		var cmd tea.Cmd
-		m.list, cmd = m.list.Update(msg)
-		return m, cmd
 	}
 
 	return m, nil
@@ -179,7 +205,7 @@ func (m DeploymentsModel) View() string {
 		return frameStyle.Render(appStyle.Render(inner))
 	}
 
-	if len(m.deployments) == 0 {
+	if len(m.orgs) == 0 {
 		content := "\nNo deployments found.\n\nCreate a deployment at https://app.dosu.dev to get started.\n\nPress Esc to go back"
 		inner := lipgloss.JoinVertical(
 			lipgloss.Left,
@@ -189,11 +215,116 @@ func (m DeploymentsModel) View() string {
 		return frameStyle.Render(appStyle.Render(inner))
 	}
 
-	instruction := lipgloss.NewStyle().Faint(true).Render("Press Enter to select, Esc to go back")
+	// Styles for the two-column view
+	columnWidth := (maxWidth - 6) / 2
+
+	// Column header styles
+	headerActiveStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("170")).
+		Width(columnWidth).
+		Align(lipgloss.Center)
+
+	headerInactiveStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("245")).
+		Width(columnWidth).
+		Align(lipgloss.Center)
+
+	// Item styles
+	normalStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("252")).
+		Width(columnWidth).
+		PaddingLeft(1)
+
+	selectedStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("170")).
+		Bold(true).
+		Width(columnWidth).
+		PaddingLeft(1)
+
+	dimStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		Width(columnWidth).
+		PaddingLeft(1)
+
+	// Build organizations column
+	var orgHeader string
+	if m.focus == focusOrgs {
+		orgHeader = headerActiveStyle.Render("Organizations")
+	} else {
+		orgHeader = headerInactiveStyle.Render("Organizations")
+	}
+
+	var orgItems []string
+	for i, org := range m.orgs {
+		text := fmt.Sprintf("%s (%d)", org.name, len(org.deployments))
+		if i == m.selectedOrgIdx {
+			if m.focus == focusOrgs {
+				orgItems = append(orgItems, selectedStyle.Render("> "+text))
+			} else {
+				orgItems = append(orgItems, normalStyle.Render("> "+text))
+			}
+		} else {
+			orgItems = append(orgItems, dimStyle.Render("  "+text))
+		}
+	}
+
+	// Build deployments column
+	var depHeader string
+	if m.focus == focusDeployments {
+		depHeader = headerActiveStyle.Render("Deployments")
+	} else {
+		depHeader = headerInactiveStyle.Render("Deployments")
+	}
+
+	var depItems []string
+	if m.selectedOrgIdx < len(m.orgs) {
+		deps := m.orgs[m.selectedOrgIdx].deployments
+		for i, dep := range deps {
+			if i == m.selectedDepIdx {
+				if m.focus == focusDeployments {
+					depItems = append(depItems, selectedStyle.Render("> "+dep.Name))
+				} else {
+					depItems = append(depItems, normalStyle.Render("> "+dep.Name))
+				}
+			} else {
+				depItems = append(depItems, dimStyle.Render("  "+dep.Name))
+			}
+		}
+	}
+
+	// Pad columns to same height
+	maxItems := len(orgItems)
+	if len(depItems) > maxItems {
+		maxItems = len(depItems)
+	}
+	for len(orgItems) < maxItems {
+		orgItems = append(orgItems, normalStyle.Render(""))
+	}
+	for len(depItems) < maxItems {
+		depItems = append(depItems, normalStyle.Render(""))
+	}
+
+	// Combine columns
+	orgColumn := lipgloss.JoinVertical(lipgloss.Left, append([]string{orgHeader, ""}, orgItems...)...)
+	depColumn := lipgloss.JoinVertical(lipgloss.Left, append([]string{depHeader, ""}, depItems...)...)
+
+	separator := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		Render(" │ ")
+
+	table := lipgloss.JoinHorizontal(lipgloss.Top, orgColumn, separator, depColumn)
+
+	// Instructions
+	instruction := lipgloss.NewStyle().Faint(true).Render("←/→ or Tab to switch columns, ↑/↓ to navigate, Enter to select, Esc to go back")
+
 	inner := lipgloss.JoinVertical(
 		lipgloss.Left,
 		headerStyle.Render(logo),
-		m.list.View(),
+		"",
+		table,
+		"",
 		instruction,
 	)
 	return frameStyle.Render(appStyle.Render(inner))
@@ -229,14 +360,3 @@ func selectDeployment(id, name string) tea.Cmd {
 func cancelDeploymentSelection() tea.Msg {
 	return DeploymentCanceled{}
 }
-
-// deploymentItem implements list.Item for deployments
-type deploymentItem struct {
-	id          string
-	name        string
-	description string
-}
-
-func (i deploymentItem) Title() string       { return i.name }
-func (i deploymentItem) Description() string { return i.description }
-func (i deploymentItem) FilterValue() string { return i.name }

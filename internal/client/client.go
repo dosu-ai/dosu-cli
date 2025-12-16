@@ -169,5 +169,6 @@ type Deployment struct {
 	ProviderSlug string `json:"provider_slug"`
 	Enabled      bool   `json:"enabled"`
 	OrgID        string `json:"org_id"`
+	OrgName      string `json:"org_name"`
 	SpaceID      string `json:"space_id"`
 }
