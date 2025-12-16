@@ -40,19 +40,19 @@ type orgGroup struct {
 }
 
 type DeploymentsModel struct {
-	loading     bool
-	spinner     spinner.Model
-	err         error
-	width       int
-	height      int
+	loading bool
+	spinner spinner.Model
+	err     error
+	width   int
+	height  int
 
 	// Data
 	orgs []orgGroup
 
 	// Navigation state
-	focus            columnFocus
-	selectedOrgIdx   int
-	selectedDepIdx   int
+	focus          columnFocus
+	selectedOrgIdx int
+	selectedDepIdx int
 }
 
 func NewDeploymentsSelector() DeploymentsModel {
