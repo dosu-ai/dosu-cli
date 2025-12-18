@@ -43,7 +43,7 @@ func NewMCPToolsSelector(isRemove bool) MCPToolsModel {
 		items = append(items, toolItem{
 			id:   p.ID(),
 			name: p.Name(),
-			desc: action + " Dosu MCP from " + p.Name() + " (" + scope + ")",
+			desc: action + " Dosu MCP to " + p.Name() + " (" + scope + ")",
 		})
 	}
 
