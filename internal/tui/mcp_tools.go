@@ -15,7 +15,8 @@ type MCPToolSelected struct {
 type MCPToolsCanceled struct{}
 
 type MCPToolsModel struct {
-	list list.Model
+	list     list.Model
+	isRemove bool
 }
 
 type toolItem struct {
@@ -28,17 +29,21 @@ func (i toolItem) Title() string       { return i.name }
 func (i toolItem) Description() string { return i.desc }
 func (i toolItem) FilterValue() string { return i.name }
 
-func NewMCPToolsSelector() MCPToolsModel {
+func NewMCPToolsSelector(isRemove bool) MCPToolsModel {
 	var items []list.Item
 	for _, p := range mcp.AllProviders() {
 		scope := "local + global"
 		if !p.SupportsLocal() {
 			scope = "global only"
 		}
+		action := "Add"
+		if isRemove {
+			action = "Remove"
+		}
 		items = append(items, toolItem{
 			id:   p.ID(),
 			name: p.Name(),
-			desc: "Add Dosu MCP to " + p.Name() + " (" + scope + ")",
+			desc: action + " Dosu MCP from " + p.Name() + " (" + scope + ")",
 		})
 	}
 
@@ -48,17 +53,15 @@ func NewMCPToolsSelector() MCPToolsModel {
 	delegate.Styles.SelectedTitle = selectedItemTitleStyle
 	delegate.Styles.SelectedDesc = selectedItemDescStyle
 
-	// Height needs to accommodate items + help text
 	m := list.New(items, delegate, maxWidth-4, len(items)*3+4)
-	m.Title = "Select AI Tool"
-	m.SetShowTitle(false) // We'll render our own title
+	m.SetShowTitle(false)
 	m.SetFilteringEnabled(false)
 	m.DisableQuitKeybindings()
 	m.SetShowStatusBar(false)
 	m.SetShowPagination(false)
 	m.SetShowHelp(true)
 
-	return MCPToolsModel{list: m}
+	return MCPToolsModel{list: m, isRemove: isRemove}
 }
 
 func (m MCPToolsModel) Init() tea.Cmd {
@@ -109,10 +112,15 @@ func (m MCPToolsModel) View() string {
 		Foreground(lipgloss.Color("170")).
 		MarginBottom(1)
 
+	title := "Add Dosu MCP"
+	if m.isRemove {
+		title = "Remove Dosu MCP"
+	}
+
 	inner := lipgloss.JoinVertical(
 		lipgloss.Left,
 		headerStyle.Render(logo),
-		titleStyle.Render("Add Dosu MCP"),
+		titleStyle.Render(title),
 		m.list.View(),
 	)
 	return frameStyle.Render(appStyle.Render(inner))

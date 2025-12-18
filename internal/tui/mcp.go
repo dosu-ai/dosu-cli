@@ -21,6 +21,7 @@ type MCPModel struct {
 	inProgress bool
 	projectDir string
 	global     bool
+	isRemove   bool
 
 	scopeChosen    bool
 	supportsLocal  bool
@@ -36,7 +37,7 @@ type mcpResultMsg struct {
 	err error
 }
 
-func NewMCPSetupWithTool(toolID, toolName string) MCPModel {
+func NewMCPSetupWithTool(toolID, toolName string, isRemove bool) MCPModel {
 	cwd, _ := os.Getwd()
 	projectDir := filepath.Base(cwd)
 	if projectDir == "" || projectDir == "." {
@@ -54,6 +55,7 @@ func NewMCPSetupWithTool(toolID, toolName string) MCPModel {
 		supportsLocal: supportsLocal,
 		scopeChosen:   scopeChosen,
 		global:        !supportsLocal,
+		isRemove:      isRemove,
 	}
 }
 
@@ -95,6 +97,10 @@ func (m MCPModel) Update(msg tea.Msg) (MCPModel, tea.Cmd) {
 			}
 			if !m.inProgress {
 				m.inProgress = true
+				if m.isRemove {
+					m.status = fmt.Sprintf("Removing MCP server from %s...", m.toolName)
+					return m, runMCPRemove(m.toolID, m.global)
+				}
 				m.status = fmt.Sprintf("Adding MCP server to %s...", m.toolName)
 				return m, runMCPInstall(m.toolID, m.global)
 			}
@@ -108,7 +114,11 @@ func (m MCPModel) Update(msg tea.Msg) (MCPModel, tea.Cmd) {
 			m.done = false
 		} else {
 			m.err = nil
-			m.status = fmt.Sprintf("Successfully added Dosu MCP to %s!", m.toolName)
+			if m.isRemove {
+				m.status = fmt.Sprintf("Successfully removed Dosu MCP from %s!", m.toolName)
+			} else {
+				m.status = fmt.Sprintf("Successfully added Dosu MCP to %s!", m.toolName)
+			}
 			m.done = true
 		}
 		return m, nil
@@ -134,6 +144,18 @@ func runMCPInstall(toolID string, global bool) tea.Cmd {
 	}
 }
 
+func runMCPRemove(toolID string, global bool) tea.Cmd {
+	return func() tea.Msg {
+		provider, err := mcp.GetProvider(toolID)
+		if err != nil {
+			return mcpResultMsg{err: fmt.Errorf("unknown tool: %s", toolID)}
+		}
+
+		err = provider.Remove(global)
+		return mcpResultMsg{err: err}
+	}
+}
+
 func (m MCPModel) View() string {
 	containerStyle := lipgloss.NewStyle().Width(maxWidth - 2)
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
@@ -147,21 +169,30 @@ func (m MCPModel) View() string {
 
 	var lines []string
 
+	action := "Add"
+	if m.isRemove {
+		action = "Remove"
+	}
+
 	if !m.scopeChosen {
+		subtitle := "Choose installation scope"
+		if m.isRemove {
+			subtitle = "Choose removal scope"
+		}
 		lines = append(lines,
-			titleStyle.Render(fmt.Sprintf("Add Dosu MCP to %s", m.toolName)),
-			subtitleStyle.Render("Choose installation scope"),
+			titleStyle.Render(fmt.Sprintf("%s Dosu MCP: %s", action, m.toolName)),
+			subtitleStyle.Render(subtitle),
 			"",
 		)
 
-		localText := fmt.Sprintf("Add to Project (%s)", m.projectDir)
+		localText := fmt.Sprintf("%s from Project (%s)", action, m.projectDir)
 		if m.scopeSelection == 0 {
 			lines = append(lines, selectedStyle.Render("> "+localText))
 		} else {
 			lines = append(lines, normalStyle.Render("  "+localText))
 		}
 
-		globalText := "Add Globally (all projects)"
+		globalText := fmt.Sprintf("%s Globally (all projects)", action)
 		if m.scopeSelection == 1 {
 			lines = append(lines, selectedStyle.Render("> "+globalText))
 		} else {
@@ -184,15 +215,23 @@ func (m MCPModel) View() string {
 	projectStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("170"))
 
 	if m.global {
+		subtitle := "Install Dosu MCP for all projects"
+		if m.isRemove {
+			subtitle = "Remove Dosu MCP from all projects"
+		}
 		lines = append(lines,
-			titleStyle.Render(fmt.Sprintf("Add to %s: Global", m.toolName)),
-			subtitleStyle.Render("Install Dosu MCP for all projects"),
+			titleStyle.Render(fmt.Sprintf("%s %s: Global", action, m.toolName)),
+			subtitleStyle.Render(subtitle),
 			"",
 		)
 	} else {
+		subtitle := fmt.Sprintf("Install Dosu MCP for %s", m.projectDir)
+		if m.isRemove {
+			subtitle = fmt.Sprintf("Remove Dosu MCP from %s", m.projectDir)
+		}
 		lines = append(lines,
-			titleStyle.Render(fmt.Sprintf("Add to %s: Project", m.toolName)),
-			subtitleStyle.Render(fmt.Sprintf("Install Dosu MCP for %s", m.projectDir)),
+			titleStyle.Render(fmt.Sprintf("%s %s: Project", action, m.toolName)),
+			subtitleStyle.Render(subtitle),
 			"",
 			fmt.Sprintf("Project: %s", projectStyle.Render(m.projectDir)),
 			"",
@@ -202,11 +241,13 @@ func (m MCPModel) View() string {
 	if m.done {
 		lines = append(lines, successStyle.Render("✓ "+m.status), "")
 
-		successMsg := fmt.Sprintf("Start %s in %s to use the Dosu MCP.", m.toolName, m.projectDir)
-		if m.global {
-			successMsg = fmt.Sprintf("Start %s in any project to use the Dosu MCP.", m.toolName)
+		if !m.isRemove {
+			successMsg := fmt.Sprintf("Start %s in %s to use the Dosu MCP.", m.toolName, m.projectDir)
+			if m.global {
+				successMsg = fmt.Sprintf("Start %s in any project to use the Dosu MCP.", m.toolName)
+			}
+			lines = append(lines, helpStyle.Render(successMsg), "")
 		}
-		lines = append(lines, helpStyle.Render(successMsg), "")
 
 		lines = append(lines, helpStyle.Render("Press Enter to continue"))
 	} else if m.inProgress {
@@ -216,19 +257,32 @@ func (m MCPModel) View() string {
 			helpStyle.Render("Please wait..."),
 		)
 	} else {
+		buttonText := "Press Enter to install, Esc to go back"
+		if m.isRemove {
+			buttonText = "Press Enter to remove, Esc to go back"
+		}
+
 		if m.global {
+			desc := "The MCP server will be available in all projects"
+			if m.isRemove {
+				desc = "The MCP server will be removed from all projects"
+			}
 			lines = append(lines,
-				helpStyle.Render(fmt.Sprintf("The MCP server will be available in all projects")),
+				helpStyle.Render(desc),
 				helpStyle.Render(fmt.Sprintf("when running %s.", m.toolName)),
 				"",
-				helpStyle.Render("Press Enter to install, Esc to go back"),
+				helpStyle.Render(buttonText),
 			)
 		} else {
+			desc := fmt.Sprintf("The MCP server will only be available in %s", m.projectDir)
+			if m.isRemove {
+				desc = fmt.Sprintf("The MCP server will be removed from %s", m.projectDir)
+			}
 			lines = append(lines,
-				helpStyle.Render(fmt.Sprintf("The MCP server will only be available in %s", m.projectDir)),
+				helpStyle.Render(desc),
 				helpStyle.Render(fmt.Sprintf("when running %s.", m.toolName)),
 				"",
-				helpStyle.Render("Press Enter to install, Esc to go back"),
+				helpStyle.Render(buttonText),
 			)
 		}
 	}

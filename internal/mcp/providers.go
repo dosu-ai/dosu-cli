@@ -10,16 +10,12 @@ import (
 	"github.com/dosu-ai/dosu-cli/internal/config"
 )
 
-// Provider defines the interface for MCP server installation
 type Provider interface {
-	// Name returns the display name of the AI tool
 	Name() string
-	// ID returns the identifier used in commands and config
 	ID() string
-	// SupportsLocal returns true if the provider supports project-local installation
 	SupportsLocal() bool
-	// Install adds the Dosu MCP server to this AI tool
 	Install(cfg *config.Config, global bool) error
+	Remove(global bool) error
 }
 
 // GetProvider returns a provider for the given tool ID
@@ -73,6 +69,21 @@ func (p *ClaudeProvider) Install(cfg *config.Config, global bool) error {
 	return nil
 }
 
+func (p *ClaudeProvider) Remove(global bool) error {
+	args := []string{"mcp", "remove"}
+	if global {
+		args = append(args, "--scope", "user")
+	}
+	args = append(args, "dosu")
+
+	cmd := exec.Command("claude", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("claude mcp remove failed: %w: %s", err, string(output))
+	}
+	return nil
+}
+
 type GeminiProvider struct{}
 
 func (p *GeminiProvider) Name() string        { return "Gemini CLI" }
@@ -102,6 +113,22 @@ func (p *GeminiProvider) Install(cfg *config.Config, global bool) error {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("gemini mcp add failed: %w: %s", err, string(output))
+	}
+	return nil
+}
+
+func (p *GeminiProvider) Remove(global bool) error {
+	scope := "project"
+	if global {
+		scope = "user"
+	}
+
+	args := []string{"mcp", "remove", "--scope", scope, "dosu"}
+
+	cmd := exec.Command("gemini", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("gemini mcp remove failed: %w: %s", err, string(output))
 	}
 	return nil
 }
@@ -141,6 +168,30 @@ func (p *CodexProvider) Install(cfg *config.Config, global bool) error {
 			"X-Deployment-ID": cfg.DeploymentID,
 		},
 	}
+
+	if err := p.saveConfig(configPath, codexConfig); err != nil {
+		return fmt.Errorf("failed to save codex config: %w", err)
+	}
+
+	return nil
+}
+
+func (p *CodexProvider) Remove(global bool) error {
+	configPath, err := p.getConfigPath()
+	if err != nil {
+		return fmt.Errorf("failed to get codex config path: %w", err)
+	}
+
+	codexConfig, err := p.loadConfig(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to load codex config: %w", err)
+	}
+
+	if codexConfig.MCPServers == nil {
+		return nil
+	}
+
+	delete(codexConfig.MCPServers, "dosu")
 
 	if err := p.saveConfig(configPath, codexConfig); err != nil {
 		return fmt.Errorf("failed to save codex config: %w", err)

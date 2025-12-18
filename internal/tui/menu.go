@@ -108,17 +108,22 @@ func NewMenu() MenuModel {
 		deploymentDesc = "Login first to select deployment"
 	}
 
-	mcpDesc := "Add Dosu MCP to AI tools"
+	mcpAddDesc := "Add Dosu MCP to AI tools"
+	mcpRemoveDesc := "Remove Dosu MCP from AI tools"
 	if !isAuthenticated {
-		mcpDesc = "Login first"
+		mcpAddDesc = "Login first"
+		mcpRemoveDesc = "Login first"
 	} else if !hasDeployment {
-		mcpDesc = "Select a deployment first"
+		mcpAddDesc = "Select a deployment first"
+		mcpRemoveDesc = "Select a deployment first"
 	}
 
 	items := []list.Item{
 		item{id: "setup", title: "Setup", desc: "Login to Dosu"},
 		item{id: "deployments", title: "Choose Deployment", desc: deploymentDesc, disabled: !isAuthenticated},
-		item{id: "mcp", title: "Add MCP", desc: mcpDesc, disabled: !hasDeployment},
+		item{id: "mcp-add", title: "Add MCP", desc: mcpAddDesc, disabled: !hasDeployment},
+		item{id: "mcp-remove", title: "Remove MCP", desc: mcpRemoveDesc, disabled: !hasDeployment},
+		item{id: "logout", title: "Logout", desc: "Clear saved credentials", disabled: !isAuthenticated},
 	}
 
 	delegate := list.NewDefaultDelegate()

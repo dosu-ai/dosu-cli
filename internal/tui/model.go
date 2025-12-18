@@ -23,6 +23,7 @@ type model struct {
 	deployments DeploymentsModel
 	mcpTools    MCPToolsModel
 	mcp         MCPModel
+	mcpRemove   bool // true when removing MCP instead of adding
 }
 
 // New builds the root model.
@@ -74,7 +75,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case MCPToolSelected:
 		m.screen = screenMCP
-		m.mcp = NewMCPSetupWithTool(msg.ToolID, msg.ToolName)
+		m.mcp = NewMCPSetupWithTool(msg.ToolID, msg.ToolName, m.mcpRemove)
 		return m, m.mcp.Init()
 	case MCPToolsCanceled:
 		m.screen = screenMenu
@@ -120,13 +121,32 @@ func (m model) handleMenuSelected(msg MenuSelected) (tea.Model, tea.Cmd) {
 		m.screen = screenDeployments
 		m.deployments = NewDeploymentsSelector()
 		return m, m.deployments.Init()
-	case "mcp":
+	case "mcp-add":
 		cfg, err := config.LoadConfig()
 		if err != nil || !cfg.IsAuthenticated() || cfg.DeploymentID == "" {
 			return m, nil
 		}
+		m.mcpRemove = false
 		m.screen = screenMCPTools
-		m.mcpTools = NewMCPToolsSelector()
+		m.mcpTools = NewMCPToolsSelector(false)
+		return m, nil
+	case "mcp-remove":
+		cfg, err := config.LoadConfig()
+		if err != nil || !cfg.IsAuthenticated() || cfg.DeploymentID == "" {
+			return m, nil
+		}
+		m.mcpRemove = true
+		m.screen = screenMCPTools
+		m.mcpTools = NewMCPToolsSelector(true)
+		return m, nil
+	case "logout":
+		cfg, err := config.LoadConfig()
+		if err != nil {
+			return m, nil
+		}
+		cfg.Clear()
+		config.SaveConfig(cfg)
+		m.menu = NewMenu()
 		return m, nil
 	default:
 		return m, nil
