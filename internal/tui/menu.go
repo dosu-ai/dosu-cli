@@ -111,15 +111,15 @@ func NewMenu() MenuModel {
 	mcpAddDesc := "Add Dosu MCP to AI tools"
 	mcpRemoveDesc := "Remove Dosu MCP from AI tools"
 	if !isAuthenticated {
-		mcpAddDesc = "Login first"
-		mcpRemoveDesc = "Login first"
+		mcpAddDesc = "Login to the Dosu-CLI first"
+		mcpRemoveDesc = "Login to the Dosu-CLI first"
 	} else if !hasDeployment {
 		mcpAddDesc = "Select a deployment first"
 		mcpRemoveDesc = "Select a deployment first"
 	}
 
 	items := []list.Item{
-		item{id: "setup", title: "Setup", desc: "Login to Dosu"},
+		item{id: "setup", title: "Setup", desc: "Login to Dosu-CLI"},
 		item{id: "deployments", title: "Choose Deployment", desc: deploymentDesc, disabled: !isAuthenticated},
 		item{id: "mcp-add", title: "Add MCP", desc: mcpAddDesc, disabled: !hasDeployment},
 		item{id: "mcp-remove", title: "Remove MCP", desc: mcpRemoveDesc, disabled: !hasDeployment},
