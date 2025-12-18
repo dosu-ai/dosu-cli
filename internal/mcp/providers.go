@@ -254,4 +254,3 @@ type CodexMCPServer struct {
 	BearerTokenEnvVar string            `toml:"bearer_token_env_var,omitempty"`
 	EnvHTTPHeaders    map[string]string `toml:"env_http_headers,omitempty"`
 }
-
