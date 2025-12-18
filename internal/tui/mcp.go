@@ -3,23 +3,29 @@ package tui
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/dosu-ai/dosu-cli/internal/config"
+	"github.com/dosu-ai/dosu-cli/internal/mcp"
 )
 
 type MCPModel struct {
+	toolID     string
+	toolName   string
 	status     string
 	err        error
 	done       bool
 	inProgress bool
-	command    string
 	projectDir string
 	global     bool
+
+	scopeChosen     bool
+	supportsLocal   bool
+	scopeSelection  int
+	codexTokenSetup *mcp.CodexTokenSetupRequired
 }
 
 type (
@@ -31,30 +37,24 @@ type mcpResultMsg struct {
 	err error
 }
 
-func NewMCPSetup(global bool) MCPModel {
-	cfg, _ := config.LoadConfig()
-
-	// Get current working directory for display
+func NewMCPSetupWithTool(toolID, toolName string) MCPModel {
 	cwd, _ := os.Getwd()
 	projectDir := filepath.Base(cwd)
 	if projectDir == "" || projectDir == "." {
 		projectDir = cwd
 	}
 
-	// Build the command that will be run
-	// MCP endpoint is at /v1/mcp (FastMCP handles the path)
-	url := fmt.Sprintf("%s/v1/mcp", config.GetBackendURL())
-	scope := ""
-	if global {
-		scope = "--scope user "
-	}
-	command := fmt.Sprintf("claude mcp add --transport http %sdosu %s --header \"Authorization: Bearer %s\" --header \"X-Deployment-ID: %s\"",
-		scope, url, cfg.AccessToken, cfg.DeploymentID)
+	provider, _ := mcp.GetProvider(toolID)
+	supportsLocal := provider != nil && provider.SupportsLocal()
+	scopeChosen := !supportsLocal
 
 	return MCPModel{
-		command:    command,
-		projectDir: projectDir,
-		global:     global,
+		toolID:        toolID,
+		toolName:      toolName,
+		projectDir:    projectDir,
+		supportsLocal: supportsLocal,
+		scopeChosen:   scopeChosen,
+		global:        !supportsLocal,
 	}
 }
 
@@ -72,26 +72,50 @@ func (m MCPModel) Update(msg tea.Msg) (MCPModel, tea.Cmd) {
 			if !m.inProgress {
 				return m, func() tea.Msg { return MCPCanceled{} }
 			}
+
+		case "up", "k":
+			if !m.scopeChosen && m.supportsLocal {
+				m.scopeSelection = 0
+			}
+			return m, nil
+
+		case "down", "j":
+			if !m.scopeChosen && m.supportsLocal {
+				m.scopeSelection = 1
+			}
+			return m, nil
+
 		case "enter":
 			if m.done {
 				return m, func() tea.Msg { return MCPComplete{} }
 			}
+			if !m.scopeChosen {
+				m.scopeChosen = true
+				m.global = m.scopeSelection == 1
+				return m, nil
+			}
 			if !m.inProgress {
 				m.inProgress = true
-				m.status = "Adding MCP server to Claude Code..."
-				return m, runMCPCommand(m.global)
+				m.status = fmt.Sprintf("Adding MCP server to %s...", m.toolName)
+				return m, runMCPInstall(m.toolID, m.global)
 			}
 		}
 
 	case mcpResultMsg:
 		m.inProgress = false
 		if msg.err != nil {
+			if setup, ok := mcp.IsCodexTokenSetupRequired(msg.err); ok {
+				m.codexTokenSetup = setup
+				m.status = fmt.Sprintf("Successfully configured %s!", m.toolName)
+				m.done = true
+				return m, nil
+			}
 			m.err = msg.err
 			m.status = ""
 			m.done = false
 		} else {
 			m.err = nil
-			m.status = "Successfully added Dosu MCP to Claude Code!"
+			m.status = fmt.Sprintf("Successfully added Dosu MCP to %s!", m.toolName)
 			m.done = true
 		}
 		return m, nil
@@ -100,34 +124,20 @@ func (m MCPModel) Update(msg tea.Msg) (MCPModel, tea.Cmd) {
 	return m, nil
 }
 
-func runMCPCommand(global bool) tea.Cmd {
+func runMCPInstall(toolID string, global bool) tea.Cmd {
 	return func() tea.Msg {
 		cfg, err := config.LoadConfig()
 		if err != nil {
 			return mcpResultMsg{err: fmt.Errorf("failed to load config: %w", err)}
 		}
 
-		url := fmt.Sprintf("%s/v1/mcp", config.GetBackendURL())
-
-		args := []string{"mcp", "add", "--transport", "http"}
-		if global {
-			args = append(args, "--scope", "user")
-		}
-		args = append(args,
-			"dosu",
-			url,
-			"--header", fmt.Sprintf("Authorization: Bearer %s", cfg.AccessToken),
-			"--header", fmt.Sprintf("X-Deployment-ID: %s", cfg.DeploymentID),
-		)
-
-		cmd := exec.Command("claude", args...)
-
-		output, err := cmd.CombinedOutput()
+		provider, err := mcp.GetProvider(toolID)
 		if err != nil {
-			return mcpResultMsg{err: fmt.Errorf("%w: %s", err, string(output))}
+			return mcpResultMsg{err: fmt.Errorf("unknown tool: %s", toolID)}
 		}
 
-		return mcpResultMsg{err: nil}
+		err = provider.Install(cfg, global)
+		return mcpResultMsg{err: err}
 	}
 }
 
@@ -139,20 +149,59 @@ func (m MCPModel) View() string {
 	statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	errStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9"))
 	successStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10"))
+	selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("170")).Bold(true)
+	normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	codeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
 
 	var lines []string
+
+	if !m.scopeChosen {
+		lines = append(lines,
+			titleStyle.Render(fmt.Sprintf("Add Dosu MCP to %s", m.toolName)),
+			subtitleStyle.Render("Choose installation scope"),
+			"",
+		)
+
+		// Local option
+		localText := "Add to Project (this project only)"
+		if m.scopeSelection == 0 {
+			lines = append(lines, selectedStyle.Render("> "+localText))
+		} else {
+			lines = append(lines, normalStyle.Render("  "+localText))
+		}
+
+		// Global option
+		globalText := "Add Globally (all projects)"
+		if m.scopeSelection == 1 {
+			lines = append(lines, selectedStyle.Render("> "+globalText))
+		} else {
+			lines = append(lines, normalStyle.Render("  "+globalText))
+		}
+
+		lines = append(lines,
+			"",
+			helpStyle.Render("↑/↓ to select, Enter to confirm, Esc to go back"),
+		)
+
+		body := containerStyle.Render(strings.Join(lines, "\n"))
+		return frameStyle.Render(appStyle.Render(lipgloss.JoinVertical(
+			lipgloss.Left,
+			headerStyle.Render(logo),
+			body,
+		)))
+	}
 
 	projectStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("170"))
 
 	if m.global {
 		lines = append(lines,
-			titleStyle.Render("Dosu CLI: Add Globally"),
+			titleStyle.Render(fmt.Sprintf("Add to %s: Global", m.toolName)),
 			subtitleStyle.Render("Install Dosu MCP for all projects"),
 			"",
 		)
 	} else {
 		lines = append(lines,
-			titleStyle.Render("Dosu CLI: Add to Project"),
+			titleStyle.Render(fmt.Sprintf("Add to %s: Project", m.toolName)),
 			subtitleStyle.Render("Install Dosu MCP for this project only"),
 			"",
 			fmt.Sprintf("Project: %s", projectStyle.Render(m.projectDir)),
@@ -161,17 +210,26 @@ func (m MCPModel) View() string {
 	}
 
 	if m.done {
-		successMsg := "Start Claude Code in this project to use the Dosu MCP."
-		if m.global {
-			successMsg = "Start Claude Code in any project to use the Dosu MCP."
+		lines = append(lines, successStyle.Render("✓ "+m.status), "")
+
+		if m.codexTokenSetup != nil {
+			lines = append(lines,
+				helpStyle.Render("To complete setup, add this to your shell profile:"),
+				"",
+				codeStyle.Render(fmt.Sprintf("  export DOSU_TOKEN=\"%s\"", m.codexTokenSetup.Token)),
+				"",
+				helpStyle.Render("Then restart your terminal or run: source ~/.zshrc"),
+				"",
+			)
+		} else {
+			successMsg := fmt.Sprintf("Start %s in this project to use the Dosu MCP.", m.toolName)
+			if m.global {
+				successMsg = fmt.Sprintf("Start %s in any project to use the Dosu MCP.", m.toolName)
+			}
+			lines = append(lines, helpStyle.Render(successMsg), "")
 		}
-		lines = append(lines,
-			successStyle.Render("✓ "+m.status),
-			"",
-			helpStyle.Render(successMsg),
-			"",
-			helpStyle.Render("Press Enter to continue"),
-		)
+
+		lines = append(lines, helpStyle.Render("Press Enter to continue"))
 	} else if m.inProgress {
 		lines = append(lines,
 			statusStyle.Render(m.status),
@@ -181,15 +239,15 @@ func (m MCPModel) View() string {
 	} else {
 		if m.global {
 			lines = append(lines,
-				helpStyle.Render("The MCP server will be available in all projects"),
-				helpStyle.Render("when running Claude Code."),
+				helpStyle.Render(fmt.Sprintf("The MCP server will be available in all projects")),
+				helpStyle.Render(fmt.Sprintf("when running %s.", m.toolName)),
 				"",
 				helpStyle.Render("Press Enter to install, Esc to go back"),
 			)
 		} else {
 			lines = append(lines,
 				helpStyle.Render("The MCP server will only be available when running"),
-				helpStyle.Render("Claude Code from this project directory."),
+				helpStyle.Render(fmt.Sprintf("%s from this project directory.", m.toolName)),
 				"",
 				helpStyle.Render("Press Enter to install, Esc to go back"),
 			)
@@ -201,5 +259,9 @@ func (m MCPModel) View() string {
 	}
 
 	body := containerStyle.Render(strings.Join(lines, "\n"))
-	return frameStyle.Render(appStyle.Render(body))
+	return frameStyle.Render(appStyle.Render(lipgloss.JoinVertical(
+		lipgloss.Left,
+		headerStyle.Render(logo),
+		body,
+	)))
 }

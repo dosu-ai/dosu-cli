@@ -11,6 +11,7 @@ const (
 	screenMenu screen = iota
 	screenSetup
 	screenDeployments
+	screenMCPTools
 	screenMCP
 )
 
@@ -20,6 +21,7 @@ type model struct {
 	menu        MenuModel
 	setup       SetupModel
 	deployments DeploymentsModel
+	mcpTools    MCPToolsModel
 	mcp         MCPModel
 }
 
@@ -68,6 +70,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.menu = NewMenu()
 		return m, nil
 	case MCPCanceled:
+		m.screen = screenMCPTools
+		return m, nil
+	case MCPToolSelected:
+		m.screen = screenMCP
+		m.mcp = NewMCPSetupWithTool(msg.ToolID, msg.ToolName)
+		return m, m.mcp.Init()
+	case MCPToolsCanceled:
 		m.screen = screenMenu
 		return m, nil
 	}
@@ -84,6 +93,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case screenDeployments:
 		var cmd tea.Cmd
 		m.deployments, cmd = m.deployments.Update(msg)
+		return m, cmd
+	case screenMCPTools:
+		var cmd tea.Cmd
+		m.mcpTools, cmd = m.mcpTools.Update(msg)
 		return m, cmd
 	case screenMCP:
 		var cmd tea.Cmd
@@ -107,22 +120,14 @@ func (m model) handleMenuSelected(msg MenuSelected) (tea.Model, tea.Cmd) {
 		m.screen = screenDeployments
 		m.deployments = NewDeploymentsSelector()
 		return m, m.deployments.Init()
-	case "mcp-local":
+	case "mcp":
 		cfg, err := config.LoadConfig()
 		if err != nil || !cfg.IsAuthenticated() || cfg.DeploymentID == "" {
 			return m, nil
 		}
-		m.screen = screenMCP
-		m.mcp = NewMCPSetup(false)
-		return m, m.mcp.Init()
-	case "mcp-global":
-		cfg, err := config.LoadConfig()
-		if err != nil || !cfg.IsAuthenticated() || cfg.DeploymentID == "" {
-			return m, nil
-		}
-		m.screen = screenMCP
-		m.mcp = NewMCPSetup(true)
-		return m, m.mcp.Init()
+		m.screen = screenMCPTools
+		m.mcpTools = NewMCPToolsSelector()
+		return m, nil
 	default:
 		return m, nil
 	}
@@ -136,6 +141,8 @@ func (m model) View() string {
 		return m.setup.View()
 	case screenDeployments:
 		return m.deployments.View()
+	case screenMCPTools:
+		return m.mcpTools.View()
 	case screenMCP:
 		return m.mcp.View()
 	default:
