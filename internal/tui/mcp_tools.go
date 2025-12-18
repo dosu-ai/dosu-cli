@@ -7,21 +7,17 @@ import (
 	"github.com/dosu-ai/dosu-cli/internal/mcp"
 )
 
-// MCPToolSelected is emitted when a tool is chosen
 type MCPToolSelected struct {
 	ToolID   string
 	ToolName string
 }
 
-// MCPToolsCanceled is emitted when the user goes back
 type MCPToolsCanceled struct{}
 
-// MCPToolsModel handles the tool selection screen
 type MCPToolsModel struct {
 	list list.Model
 }
 
-// toolItem represents a selectable AI tool
 type toolItem struct {
 	id   string
 	name string
@@ -32,9 +28,7 @@ func (i toolItem) Title() string       { return i.name }
 func (i toolItem) Description() string { return i.desc }
 func (i toolItem) FilterValue() string { return i.name }
 
-// NewMCPToolsSelector creates the tool selection screen
 func NewMCPToolsSelector() MCPToolsModel {
-	// Build items from providers
 	var items []list.Item
 	for _, p := range mcp.AllProviders() {
 		scope := "local + global"
