@@ -45,11 +45,6 @@ func AllProviders() []Provider {
 	}
 }
 
-// =============================================================================
-// Claude Provider
-// =============================================================================
-
-// ClaudeProvider implements Provider for Claude Code CLI
 type ClaudeProvider struct{}
 
 func (p *ClaudeProvider) Name() string        { return "Claude Code" }
@@ -78,11 +73,6 @@ func (p *ClaudeProvider) Install(cfg *config.Config, global bool) error {
 	return nil
 }
 
-// =============================================================================
-// Gemini Provider
-// =============================================================================
-
-// GeminiProvider implements Provider for Gemini CLI
 type GeminiProvider struct{}
 
 func (p *GeminiProvider) Name() string        { return "Gemini CLI" }
@@ -116,11 +106,6 @@ func (p *GeminiProvider) Install(cfg *config.Config, global bool) error {
 	return nil
 }
 
-// =============================================================================
-// Codex Provider
-// =============================================================================
-
-// CodexProvider implements Provider for OpenAI Codex CLI
 type CodexProvider struct{}
 
 func (p *CodexProvider) Name() string        { return "Codex CLI" }
@@ -236,7 +221,6 @@ func (e *CodexTokenSetupRequired) Error() string {
 	return "codex config updated - DOSU_TOKEN environment variable setup required"
 }
 
-// IsCodexTokenSetupRequired checks if an error is a CodexTokenSetupRequired
 func IsCodexTokenSetupRequired(err error) (*CodexTokenSetupRequired, bool) {
 	if setup, ok := err.(*CodexTokenSetupRequired); ok {
 		return setup, true
