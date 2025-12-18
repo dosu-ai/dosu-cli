@@ -162,15 +162,13 @@ func (m MCPModel) View() string {
 			"",
 		)
 
-		// Local option
-		localText := "Add to Project (this project only)"
+		localText := fmt.Sprintf("Add to Project (%s)", m.projectDir)
 		if m.scopeSelection == 0 {
 			lines = append(lines, selectedStyle.Render("> "+localText))
 		} else {
 			lines = append(lines, normalStyle.Render("  "+localText))
 		}
 
-		// Global option
 		globalText := "Add Globally (all projects)"
 		if m.scopeSelection == 1 {
 			lines = append(lines, selectedStyle.Render("> "+globalText))
@@ -202,7 +200,7 @@ func (m MCPModel) View() string {
 	} else {
 		lines = append(lines,
 			titleStyle.Render(fmt.Sprintf("Add to %s: Project", m.toolName)),
-			subtitleStyle.Render("Install Dosu MCP for this project only"),
+			subtitleStyle.Render(fmt.Sprintf("Install Dosu MCP for %s", m.projectDir)),
 			"",
 			fmt.Sprintf("Project: %s", projectStyle.Render(m.projectDir)),
 			"",
@@ -222,7 +220,7 @@ func (m MCPModel) View() string {
 				"",
 			)
 		} else {
-			successMsg := fmt.Sprintf("Start %s in this project to use the Dosu MCP.", m.toolName)
+			successMsg := fmt.Sprintf("Start %s in %s to use the Dosu MCP.", m.toolName, m.projectDir)
 			if m.global {
 				successMsg = fmt.Sprintf("Start %s in any project to use the Dosu MCP.", m.toolName)
 			}
@@ -246,8 +244,8 @@ func (m MCPModel) View() string {
 			)
 		} else {
 			lines = append(lines,
-				helpStyle.Render("The MCP server will only be available when running"),
-				helpStyle.Render(fmt.Sprintf("%s from this project directory.", m.toolName)),
+				helpStyle.Render(fmt.Sprintf("The MCP server will only be available in %s", m.projectDir)),
+				helpStyle.Render(fmt.Sprintf("when running %s.", m.toolName)),
 				"",
 				helpStyle.Render("Press Enter to install, Esc to go back"),
 			)
