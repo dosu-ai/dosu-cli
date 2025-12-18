@@ -57,22 +57,30 @@ func (m MenuModel) Update(msg tea.Msg) (MenuModel, tea.Cmd) {
 			}
 			return m, selectItem(i.id)
 		case "up", "k":
-			// Skip disabled items when moving up
+			startIdx := m.list.Index()
 			m.list.CursorUp()
 			for {
 				i, ok := m.list.SelectedItem().(item)
-				if !ok || !i.disabled || m.list.Index() == 0 {
+				if !ok || !i.disabled {
+					break
+				}
+				if m.list.Index() == 0 {
+					m.list.Select(startIdx)
 					break
 				}
 				m.list.CursorUp()
 			}
 			return m, nil
 		case "down", "j":
-			// Skip disabled items when moving down
+			startIdx := m.list.Index()
 			m.list.CursorDown()
 			for {
 				i, ok := m.list.SelectedItem().(item)
-				if !ok || !i.disabled || m.list.Index() == len(m.list.Items())-1 {
+				if !ok || !i.disabled {
+					break
+				}
+				if m.list.Index() == len(m.list.Items())-1 {
+					m.list.Select(startIdx)
 					break
 				}
 				m.list.CursorDown()
@@ -123,7 +131,7 @@ func NewMenu() MenuModel {
 		item{id: "deployments", title: "Choose Deployment", desc: deploymentDesc, disabled: !isAuthenticated},
 		item{id: "mcp-add", title: "Add MCP", desc: mcpAddDesc, disabled: !hasDeployment},
 		item{id: "mcp-remove", title: "Remove MCP", desc: mcpRemoveDesc, disabled: !hasDeployment},
-		item{id: "logout", title: "Logout", desc: "Clear saved credentials", disabled: !isAuthenticated},
+		item{id: "logout", title: "Clear Credentials", desc: "Remove saved login credentials", disabled: !isAuthenticated},
 	}
 
 	delegate := list.NewDefaultDelegate()

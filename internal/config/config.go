@@ -100,4 +100,6 @@ func (c *Config) Clear() {
 	c.AccessToken = ""
 	c.RefreshToken = ""
 	c.ExpiresAt = 0
+	c.DeploymentID = ""
+	c.DeploymentName = ""
 }

@@ -185,7 +185,7 @@ func (m MCPModel) View() string {
 			"",
 		)
 
-		localText := fmt.Sprintf("%s from Project (%s)", action, m.projectDir)
+		localText := fmt.Sprintf("%s to Project (%s)", action, m.projectDir)
 		if m.scopeSelection == 0 {
 			lines = append(lines, selectedStyle.Render("> "+localText))
 		} else {

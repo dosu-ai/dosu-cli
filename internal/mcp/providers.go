@@ -93,21 +93,18 @@ func (p *GeminiProvider) SupportsLocal() bool { return true }
 func (p *GeminiProvider) Install(cfg *config.Config, global bool) error {
 	url := fmt.Sprintf("%s/v1/mcp", config.GetBackendURL())
 
-	// gemini mcp add --transport http --scope <user|project> -H "Header: value" <name> <url>
-	scope := "project"
+	args := []string{"mcp", "add", "--transport", "http"}
 	if global {
-		scope = "user"
+		args = append(args, "--scope", "user")
+	} else {
+		args = append(args, "--scope", "project")
 	}
-
-	args := []string{
-		"mcp", "add",
-		"--transport", "http",
-		"--scope", scope,
-		"-H", fmt.Sprintf("Authorization: Bearer %s", cfg.AccessToken),
-		"-H", fmt.Sprintf("X-Deployment-ID: %s", cfg.DeploymentID),
+	args = append(args,
+		"--header", fmt.Sprintf("Authorization: Bearer %s", cfg.AccessToken),
+		"--header", fmt.Sprintf("X-Deployment-ID: %s", cfg.DeploymentID),
 		"dosu",
 		url,
-	}
+	)
 
 	cmd := exec.Command("gemini", args...)
 	output, err := cmd.CombinedOutput()
@@ -118,12 +115,13 @@ func (p *GeminiProvider) Install(cfg *config.Config, global bool) error {
 }
 
 func (p *GeminiProvider) Remove(global bool) error {
-	scope := "project"
+	args := []string{"mcp", "remove"}
 	if global {
-		scope = "user"
+		args = append(args, "--scope", "user")
+	} else {
+		args = append(args, "--scope", "project")
 	}
-
-	args := []string{"mcp", "remove", "--scope", scope, "dosu"}
+	args = append(args, "dosu")
 
 	cmd := exec.Command("gemini", args...)
 	output, err := cmd.CombinedOutput()
