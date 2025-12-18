@@ -13,6 +13,7 @@ const (
 	screenDeployments
 	screenMCPTools
 	screenMCP
+	screenLogout
 )
 
 // model orchestrates which screen is active.
@@ -24,6 +25,7 @@ type model struct {
 	mcpTools    MCPToolsModel
 	mcp         MCPModel
 	mcpRemove   bool // true when removing MCP instead of adding
+	logout      LogoutModel
 }
 
 // New builds the root model.
@@ -80,6 +82,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case MCPToolsCanceled:
 		m.screen = screenMenu
 		return m, nil
+	case LogoutComplete:
+		m.screen = screenMenu
+		m.menu = NewMenu()
+		return m, nil
+	case LogoutCanceled:
+		m.screen = screenMenu
+		return m, nil
 	}
 
 	switch m.screen {
@@ -102,6 +111,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case screenMCP:
 		var cmd tea.Cmd
 		m.mcp, cmd = m.mcp.Update(msg)
+		return m, cmd
+	case screenLogout:
+		var cmd tea.Cmd
+		m.logout, cmd = m.logout.Update(msg)
 		return m, cmd
 	}
 
@@ -140,13 +153,8 @@ func (m model) handleMenuSelected(msg MenuSelected) (tea.Model, tea.Cmd) {
 		m.mcpTools = NewMCPToolsSelector(true)
 		return m, nil
 	case "logout":
-		cfg, err := config.LoadConfig()
-		if err != nil {
-			return m, nil
-		}
-		cfg.Clear()
-		config.SaveConfig(cfg)
-		m.menu = NewMenu()
+		m.screen = screenLogout
+		m.logout = NewLogout()
 		return m, nil
 	default:
 		return m, nil
@@ -165,6 +173,8 @@ func (m model) View() string {
 		return m.mcpTools.View()
 	case screenMCP:
 		return m.mcp.View()
+	case screenLogout:
+		return m.logout.View()
 	default:
 		return ""
 	}
