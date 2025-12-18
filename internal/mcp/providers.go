@@ -137,22 +137,16 @@ func (p *CodexProvider) Install(cfg *config.Config, global bool) error {
 	codexConfig.MCPServers["dosu"] = CodexMCPServer{
 		URL: url,
 		HTTPHeaders: map[string]string{
+			"Authorization":   fmt.Sprintf("Bearer %s", cfg.AccessToken),
 			"X-Deployment-ID": cfg.DeploymentID,
 		},
-		BearerTokenEnvVar: "DOSU_TOKEN",
 	}
 
-	// Save the config
 	if err := p.saveConfig(configPath, codexConfig); err != nil {
 		return fmt.Errorf("failed to save codex config: %w", err)
 	}
 
-	// Store the token for the user to add to their environment
-	// We'll return instructions about this in the TUI/CLI
-	return &CodexTokenSetupRequired{
-		Token:      cfg.AccessToken,
-		ConfigPath: configPath,
-	}
+	return nil
 }
 
 func (p *CodexProvider) getConfigPath() (string, error) {
@@ -210,20 +204,3 @@ type CodexMCPServer struct {
 	EnvHTTPHeaders    map[string]string `toml:"env_http_headers,omitempty"`
 }
 
-// CodexTokenSetupRequired is returned when Codex installation succeeds
-// but the user needs to set up their DOSU_TOKEN environment variable
-type CodexTokenSetupRequired struct {
-	Token      string
-	ConfigPath string
-}
-
-func (e *CodexTokenSetupRequired) Error() string {
-	return "codex config updated - DOSU_TOKEN environment variable setup required"
-}
-
-func IsCodexTokenSetupRequired(err error) (*CodexTokenSetupRequired, bool) {
-	if setup, ok := err.(*CodexTokenSetupRequired); ok {
-		return setup, true
-	}
-	return nil, false
-}

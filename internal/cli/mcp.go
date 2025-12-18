@@ -106,26 +106,7 @@ func runMCPAdd(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("Adding Dosu MCP to %s (%s)...\n", provider.Name(), scope)
 
-	// Install
 	err = provider.Install(cfg, global)
-
-	// Handle Codex special case
-	if setup, ok := mcp.IsCodexTokenSetupRequired(err); ok {
-		fmt.Println()
-		fmt.Println("✓ Codex config updated successfully!")
-		fmt.Println()
-		fmt.Println("To complete setup, add this to your shell profile (~/.bashrc, ~/.zshrc, etc.):")
-		fmt.Println()
-		fmt.Printf("  export DOSU_TOKEN=\"%s\"\n", setup.Token)
-		fmt.Println()
-		fmt.Println("Then restart your terminal or run:")
-		fmt.Println()
-		fmt.Println("  source ~/.zshrc  # or ~/.bashrc")
-		fmt.Println()
-		fmt.Printf("Config file: %s\n", setup.ConfigPath)
-		return nil
-	}
-
 	if err != nil {
 		return fmt.Errorf("failed to add MCP: %w", err)
 	}

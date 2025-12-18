@@ -22,10 +22,9 @@ type MCPModel struct {
 	projectDir string
 	global     bool
 
-	scopeChosen     bool
-	supportsLocal   bool
-	scopeSelection  int
-	codexTokenSetup *mcp.CodexTokenSetupRequired
+	scopeChosen    bool
+	supportsLocal  bool
+	scopeSelection int
 }
 
 type (
@@ -104,12 +103,6 @@ func (m MCPModel) Update(msg tea.Msg) (MCPModel, tea.Cmd) {
 	case mcpResultMsg:
 		m.inProgress = false
 		if msg.err != nil {
-			if setup, ok := mcp.IsCodexTokenSetupRequired(msg.err); ok {
-				m.codexTokenSetup = setup
-				m.status = fmt.Sprintf("Successfully configured %s!", m.toolName)
-				m.done = true
-				return m, nil
-			}
 			m.err = msg.err
 			m.status = ""
 			m.done = false
@@ -151,7 +144,6 @@ func (m MCPModel) View() string {
 	successStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10"))
 	selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("170")).Bold(true)
 	normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	codeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
 
 	var lines []string
 
@@ -210,22 +202,11 @@ func (m MCPModel) View() string {
 	if m.done {
 		lines = append(lines, successStyle.Render("✓ "+m.status), "")
 
-		if m.codexTokenSetup != nil {
-			lines = append(lines,
-				helpStyle.Render("To complete setup, add this to your shell profile:"),
-				"",
-				codeStyle.Render(fmt.Sprintf("  export DOSU_TOKEN=\"%s\"", m.codexTokenSetup.Token)),
-				"",
-				helpStyle.Render("Then restart your terminal or run: source ~/.zshrc"),
-				"",
-			)
-		} else {
-			successMsg := fmt.Sprintf("Start %s in %s to use the Dosu MCP.", m.toolName, m.projectDir)
-			if m.global {
-				successMsg = fmt.Sprintf("Start %s in any project to use the Dosu MCP.", m.toolName)
-			}
-			lines = append(lines, helpStyle.Render(successMsg), "")
+		successMsg := fmt.Sprintf("Start %s in %s to use the Dosu MCP.", m.toolName, m.projectDir)
+		if m.global {
+			successMsg = fmt.Sprintf("Start %s in any project to use the Dosu MCP.", m.toolName)
 		}
+		lines = append(lines, helpStyle.Render(successMsg), "")
 
 		lines = append(lines, helpStyle.Render("Press Enter to continue"))
 	} else if m.inProgress {
