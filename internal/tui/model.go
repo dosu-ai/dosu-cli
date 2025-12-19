@@ -125,6 +125,7 @@ func (m model) handleMenuSelected(msg MenuSelected) (tea.Model, tea.Cmd) {
 	switch msg.ID {
 	case "setup":
 		m.screen = screenSetup
+		m.setup = NewSetup()
 		return m, nil
 	case "deployments":
 		cfg, err := config.LoadConfig()
