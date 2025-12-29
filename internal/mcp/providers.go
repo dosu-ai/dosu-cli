@@ -57,7 +57,6 @@ func (p *ClaudeProvider) Install(cfg *config.Config, global bool) error {
 	args = append(args,
 		"dosu",
 		url,
-		"--header", fmt.Sprintf("Authorization: Bearer %s", cfg.AccessToken),
 		"--header", fmt.Sprintf("X-Deployment-ID: %s", cfg.DeploymentID),
 	)
 
@@ -100,7 +99,6 @@ func (p *GeminiProvider) Install(cfg *config.Config, global bool) error {
 		args = append(args, "--scope", "project")
 	}
 	args = append(args,
-		"--header", fmt.Sprintf("Authorization: Bearer %s", cfg.AccessToken),
 		"--header", fmt.Sprintf("X-Deployment-ID: %s", cfg.DeploymentID),
 		"dosu",
 		url,
