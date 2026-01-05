@@ -2,6 +2,9 @@
 
 The Dosu CLI Utility
 
+## ⚠️ Pre-Release:
+The Dosu CLI is still pre-release alpha software and is not yet fully supported. Please check back soon. In the mean time, join our [Discord](https://go.dosu.dev/discord-cli) so you'll be the first to know when it's launched!
+
 ## Installation
 
 ### Homebrew (Recommended)
