@@ -24,14 +24,16 @@ Available tools:
   claude  - Claude Code CLI (Anthropic)
   gemini  - Gemini CLI (Google)
   codex   - Codex CLI (OpenAI)
+  manual  - Show manual configuration details
 
 Examples:
   dosu mcp add claude           # Add to Claude Code (project-local)
   dosu mcp add claude --global  # Add to Claude Code (all projects)
   dosu mcp add gemini --global  # Add to Gemini CLI (all projects)
-  dosu mcp add codex            # Add to Codex CLI (global only)`,
+  dosu mcp add codex            # Add to Codex CLI (global only)
+  dosu mcp add manual           # Show manual configuration details`,
 	Args:      cobra.ExactArgs(1),
-	ValidArgs: []string{"claude", "gemini", "codex"},
+	ValidArgs: []string{"claude", "gemini", "codex", "manual"},
 	RunE:      runMCPAdd,
 }
 
@@ -43,11 +45,14 @@ var mcpListCmd = &cobra.Command{
 		fmt.Println("Available AI tools:")
 		fmt.Println()
 		for _, p := range mcp.AllProviders() {
-			scope := "local + global"
+			scope := "(local + global)"
 			if !p.SupportsLocal() {
-				scope = "global only"
+				scope = "(global only)"
 			}
-			fmt.Printf("  %-10s %s (%s)\n", p.ID(), p.Name(), scope)
+			if p.ID() == "manual" {
+				scope = ""
+			}
+			fmt.Printf("  %-10s %s %s\n", p.ID(), p.Name(), scope)
 		}
 		fmt.Println()
 		fmt.Println("Use 'dosu mcp add <tool>' to add Dosu MCP to a tool.")
@@ -89,6 +94,15 @@ func runMCPAdd(cmd *cobra.Command, args []string) error {
 	// Check deployment selected
 	if cfg.DeploymentID == "" {
 		return fmt.Errorf("no deployment selected. Run 'dosu' to open the TUI and select a deployment")
+	}
+
+	// for manual setup, just print the instructions
+	if provider.ID() == "manual" {
+		err = provider.Install(cfg, false)
+		if err != nil {
+			return fmt.Errorf("failed to add MCP: %w", err)
+		}
+		return nil
 	}
 
 	// Handle scope

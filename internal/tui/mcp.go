@@ -26,6 +26,7 @@ type MCPModel struct {
 	scopeChosen    bool
 	supportsLocal  bool
 	scopeSelection int
+	isManual       bool
 }
 
 type (
@@ -47,6 +48,7 @@ func NewMCPSetupWithTool(toolID, toolName string, isRemove bool) MCPModel {
 	provider, _ := mcp.GetProvider(toolID)
 	supportsLocal := provider != nil && provider.SupportsLocal()
 	scopeChosen := !supportsLocal
+	isManual := toolID == "manual"
 
 	return MCPModel{
 		toolID:        toolID,
@@ -56,6 +58,7 @@ func NewMCPSetupWithTool(toolID, toolName string, isRemove bool) MCPModel {
 		scopeChosen:   scopeChosen,
 		global:        !supportsLocal,
 		isRemove:      isRemove,
+		isManual:      isManual,
 	}
 }
 
@@ -93,6 +96,11 @@ func (m MCPModel) Update(msg tea.Msg) (MCPModel, tea.Cmd) {
 			if !m.scopeChosen {
 				m.scopeChosen = true
 				m.global = m.scopeSelection == 1
+				return m, nil
+			}
+			// For manual provider, we don't actually install anything
+			// The config is just displayed
+			if m.isManual {
 				return m, nil
 			}
 			if !m.inProgress {
@@ -203,6 +211,59 @@ func (m MCPModel) View() string {
 			"",
 			helpStyle.Render("↑/↓ to select, Enter to confirm, Esc to go back"),
 		)
+
+		body := containerStyle.Render(strings.Join(lines, "\n"))
+		return frameStyle.Render(appStyle.Render(lipgloss.JoinVertical(
+			lipgloss.Left,
+			headerStyle.Render(logo),
+			body,
+		)))
+	}
+
+	// Special handling for manual configuration
+	if m.isManual {
+		cfg, err := config.LoadConfig()
+		if err != nil {
+			lines = append(lines,
+				titleStyle.Render("Manual MCP Server Configuration"),
+				"",
+				errStyle.Render("Error: "+err.Error()),
+				"",
+				helpStyle.Render("Press Esc to go back"),
+			)
+		} else {
+			url := fmt.Sprintf("%s/v1/mcp", config.GetBackendURL())
+
+			boxStyle := lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("63")).
+				Padding(1, 2)
+
+			configStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("170"))
+
+			lines = append(lines,
+				titleStyle.Render("Manual MCP Server Configuration"),
+				subtitleStyle.Render("Use these details to configure the Dosu MCP server in your client"),
+				"",
+			)
+
+			configBox := boxStyle.Render(fmt.Sprintf(
+				"Transport:      %s\n"+
+				"Authentication: %s\n"+
+				"Endpoint:       %s\n"+
+				"Custom Headers: %s",
+				configStyle.Render("HTTP"),
+				configStyle.Render("OAuth 2.0 with DCR"),
+				configStyle.Render(url),
+				configStyle.Render(fmt.Sprintf("X-Deployment-ID: %s", cfg.DeploymentID)),
+			))
+
+			lines = append(lines,
+				configBox,
+				"",
+				helpStyle.Render("Press Esc to go back"),
+			)
+		}
 
 		body := containerStyle.Render(strings.Join(lines, "\n"))
 		return frameStyle.Render(appStyle.Render(lipgloss.JoinVertical(

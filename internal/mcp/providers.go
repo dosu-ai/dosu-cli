@@ -27,6 +27,8 @@ func GetProvider(toolID string) (Provider, error) {
 		return &GeminiProvider{}, nil
 	case "codex":
 		return &CodexProvider{}, nil
+	case "manual":
+		return &ManualProvider{}, nil
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", toolID)
 	}
@@ -38,6 +40,7 @@ func AllProviders() []Provider {
 		&ClaudeProvider{},
 		&GeminiProvider{},
 		&CodexProvider{},
+		&ManualProvider{},
 	}
 }
 
@@ -249,4 +252,29 @@ type CodexMCPServer struct {
 	HTTPHeaders       map[string]string `toml:"http_headers,omitempty"`
 	BearerTokenEnvVar string            `toml:"bearer_token_env_var,omitempty"`
 	EnvHTTPHeaders    map[string]string `toml:"env_http_headers,omitempty"`
+}
+
+type ManualProvider struct{}
+
+func (p *ManualProvider) Name() string        { return "Manual Configuration" }
+func (p *ManualProvider) ID() string          { return "manual" }
+func (p *ManualProvider) SupportsLocal() bool { return false }
+
+func (p *ManualProvider) Install(cfg *config.Config, global bool) error {
+	url := fmt.Sprintf("%s/v1/mcp", config.GetBackendURL())
+
+	fmt.Println("Use these details to configure the Dosu MCP server in your client:")
+	fmt.Println()
+	fmt.Printf("  Transport:      HTTP\n")
+	fmt.Printf("  Authentication: OAuth 2.0 with DCR\n")
+	fmt.Printf("  Endpoint:       %s\n", url)
+	fmt.Printf("  Custom Headers: X-Deployment-ID: %s\n", cfg.DeploymentID)
+	fmt.Println()
+
+	return nil
+}
+
+func (p *ManualProvider) Remove(global bool) error {
+	fmt.Println("\nTo remove the Dosu MCP server, manually delete the configuration from your client.")
+	return nil
 }

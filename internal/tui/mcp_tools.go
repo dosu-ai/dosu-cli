@@ -32,18 +32,28 @@ func (i toolItem) FilterValue() string { return i.name }
 func NewMCPToolsSelector(isRemove bool) MCPToolsModel {
 	var items []list.Item
 	for _, p := range mcp.AllProviders() {
-		scope := "local + global"
-		if !p.SupportsLocal() {
-			scope = "global only"
+		if p.ID() == "manual" {
+			if !isRemove {
+				items = append(items, toolItem{
+					id:   p.ID(),
+					name: p.Name(),
+					desc: "Show instructions for manual configuration",
+				})
+			}
+			continue
 		}
-		action := "Add"
+		scope := "(local + global)"
+		if !p.SupportsLocal() {
+			scope = "(global only)"
+		}
+		action := "Add Dosu MCP to "
 		if isRemove {
-			action = "Remove"
+			action = "Remove Dosu MCP from "
 		}
 		items = append(items, toolItem{
 			id:   p.ID(),
 			name: p.Name(),
-			desc: action + " Dosu MCP to " + p.Name() + " (" + scope + ")",
+			desc: action + p.Name() + " " + scope,
 		})
 	}
 
