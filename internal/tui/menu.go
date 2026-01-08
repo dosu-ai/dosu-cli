@@ -113,21 +113,26 @@ func NewMenu() MenuModel {
 	// Build menu items - some are disabled based on state
 	deploymentDesc := "Select active deployment"
 	if !isAuthenticated {
-		deploymentDesc = "Login first to select deployment"
+		deploymentDesc = "Authenticate first to select deployment"
 	}
 
 	mcpAddDesc := "Add Dosu MCP to AI tools"
 	mcpRemoveDesc := "Remove Dosu MCP from AI tools"
 	if !isAuthenticated {
-		mcpAddDesc = "Login to the Dosu-CLI first"
-		mcpRemoveDesc = "Login to the Dosu-CLI first"
+		mcpAddDesc = "Authenticate to the Dosu-CLI first"
+		mcpRemoveDesc = "Authenticate to the Dosu-CLI first"
 	} else if !hasDeployment {
 		mcpAddDesc = "Select a deployment first"
 		mcpRemoveDesc = "Select a deployment first"
 	}
 
+	authDesc := "Authenticate with Dosu"
+	if isAuthenticated {
+		authDesc = "Re-authenticate with Dosu"
+	}
+
 	items := []list.Item{
-		item{id: "setup", title: "Setup", desc: "Login to Dosu-CLI"},
+		item{id: "setup", title: "Authenticate", desc: authDesc},
 		item{id: "deployments", title: "Choose Deployment", desc: deploymentDesc, disabled: !isAuthenticated},
 		item{id: "mcp-add", title: "Add MCP", desc: mcpAddDesc, disabled: !hasDeployment},
 		item{id: "mcp-remove", title: "Remove MCP", desc: mcpRemoveDesc, disabled: !hasDeployment},

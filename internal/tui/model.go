@@ -29,9 +29,17 @@ type model struct {
 }
 
 // New builds the root model.
+// If the user is not authenticated, start directly on the setup screen
+// for a smoother first-run experience.
 func New() tea.Model {
+	cfg, err := config.LoadConfig()
+	initialScreen := screenMenu
+	if err != nil || cfg == nil || !cfg.IsAuthenticated() {
+		initialScreen = screenSetup
+	}
+
 	return model{
-		screen: screenMenu,
+		screen: initialScreen,
 		menu:   NewMenu(),
 		setup:  NewSetup(),
 	}

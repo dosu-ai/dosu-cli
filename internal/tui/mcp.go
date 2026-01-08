@@ -249,9 +249,9 @@ func (m MCPModel) View() string {
 
 			configBox := boxStyle.Render(fmt.Sprintf(
 				"Transport:      %s\n"+
-				"Authentication: %s\n"+
-				"Endpoint:       %s\n"+
-				"Custom Headers: %s",
+					"Authentication: %s\n"+
+					"Endpoint:       %s\n"+
+					"Custom Headers: %s",
 				configStyle.Render("HTTP"),
 				configStyle.Render("OAuth 2.0 with DCR"),
 				configStyle.Render(url),
