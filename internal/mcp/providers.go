@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -50,39 +51,145 @@ func (p *ClaudeProvider) Name() string        { return "Claude Code" }
 func (p *ClaudeProvider) ID() string          { return "claude" }
 func (p *ClaudeProvider) SupportsLocal() bool { return true }
 
+func (p *ClaudeProvider) getConfigPath() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(homeDir, ".claude.json"), nil
+}
+
+func (p *ClaudeProvider) loadConfig(path string) (map[string]any, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return make(map[string]any), nil
+		}
+		return nil, err
+	}
+
+	var cfg map[string]any
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+func (p *ClaudeProvider) saveConfig(path string, cfg map[string]any) error {
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
 func (p *ClaudeProvider) Install(cfg *config.Config, global bool) error {
+	if cfg.DeploymentID == "" {
+		return fmt.Errorf("deployment ID is required")
+	}
+
 	url := fmt.Sprintf("%s/v1/mcp", config.GetBackendURL())
 
-	args := []string{"mcp", "add", "--transport", "http"}
-	if global {
-		args = append(args, "--scope", "user")
-	}
-	args = append(args,
-		"dosu",
-		url,
-		"--header", fmt.Sprintf("X-Deployment-ID: %s", cfg.DeploymentID),
-	)
-
-	cmd := exec.Command("claude", args...)
-	output, err := cmd.CombinedOutput()
+	configPath, err := p.getConfigPath()
 	if err != nil {
-		return fmt.Errorf("claude mcp add failed: %w: %s", err, string(output))
+		return fmt.Errorf("failed to get claude config path: %w", err)
 	}
+
+	claudeConfig, err := p.loadConfig(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to load claude config: %w", err)
+	}
+
+	server := map[string]any{
+		"type": "http",
+		"url":  url,
+		"headers": map[string]string{
+			"X-Deployment-ID": cfg.DeploymentID,
+		},
+	}
+
+	if global {
+		// Add to root-level mcpServers
+		mcpServers, ok := claudeConfig["mcpServers"].(map[string]any)
+		if !ok {
+			mcpServers = make(map[string]any)
+		}
+		mcpServers["dosu"] = server
+		claudeConfig["mcpServers"] = mcpServers
+	} else {
+		// Add to projects.<cwd>.mcpServers
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("failed to get current directory: %w", err)
+		}
+
+		projects, ok := claudeConfig["projects"].(map[string]any)
+		if !ok {
+			projects = make(map[string]any)
+		}
+
+		project, ok := projects[cwd].(map[string]any)
+		if !ok {
+			project = make(map[string]any)
+		}
+
+		mcpServers, ok := project["mcpServers"].(map[string]any)
+		if !ok {
+			mcpServers = make(map[string]any)
+		}
+
+		mcpServers["dosu"] = server
+		project["mcpServers"] = mcpServers
+		projects[cwd] = project
+		claudeConfig["projects"] = projects
+	}
+
+	if err := p.saveConfig(configPath, claudeConfig); err != nil {
+		return fmt.Errorf("failed to save claude config: %w", err)
+	}
+
 	return nil
 }
 
 func (p *ClaudeProvider) Remove(global bool) error {
-	args := []string{"mcp", "remove"}
-	if global {
-		args = append(args, "--scope", "user")
-	}
-	args = append(args, "dosu")
-
-	cmd := exec.Command("claude", args...)
-	output, err := cmd.CombinedOutput()
+	configPath, err := p.getConfigPath()
 	if err != nil {
-		return fmt.Errorf("claude mcp remove failed: %w: %s", err, string(output))
+		return fmt.Errorf("failed to get claude config path: %w", err)
 	}
+
+	// Check if config exists
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		return nil
+	}
+
+	claudeConfig, err := p.loadConfig(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to load claude config: %w", err)
+	}
+
+	if global {
+		if mcpServers, ok := claudeConfig["mcpServers"].(map[string]any); ok {
+			delete(mcpServers, "dosu")
+		}
+	} else {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("failed to get current directory: %w", err)
+		}
+
+		if projects, ok := claudeConfig["projects"].(map[string]any); ok {
+			if project, ok := projects[cwd].(map[string]any); ok {
+				if mcpServers, ok := project["mcpServers"].(map[string]any); ok {
+					delete(mcpServers, "dosu")
+				}
+			}
+		}
+	}
+
+	if err := p.saveConfig(configPath, claudeConfig); err != nil {
+		return fmt.Errorf("failed to save claude config: %w", err)
+	}
+
 	return nil
 }
 
@@ -93,6 +200,10 @@ func (p *GeminiProvider) ID() string          { return "gemini" }
 func (p *GeminiProvider) SupportsLocal() bool { return true }
 
 func (p *GeminiProvider) Install(cfg *config.Config, global bool) error {
+	if cfg.DeploymentID == "" {
+		return fmt.Errorf("deployment ID is required")
+	}
+
 	url := fmt.Sprintf("%s/v1/mcp", config.GetBackendURL())
 
 	args := []string{"mcp", "add", "--transport", "http"}
@@ -139,8 +250,9 @@ func (p *CodexProvider) ID() string          { return "codex" }
 func (p *CodexProvider) SupportsLocal() bool { return false } // Global only
 
 func (p *CodexProvider) Install(cfg *config.Config, global bool) error {
-	// Codex uses ~/.codex/config.toml for configuration
-	// We need to add/update the [mcp_servers.dosu] section
+	if cfg.DeploymentID == "" {
+		return fmt.Errorf("deployment ID is required")
+	}
 
 	configPath, err := p.getConfigPath()
 	if err != nil {
@@ -224,9 +336,7 @@ func (p *CodexProvider) loadConfig(path string) (*CodexConfig, error) {
 }
 
 func (p *CodexProvider) saveConfig(path string, cfg *CodexConfig) error {
-	// Ensure directory exists
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
 
@@ -236,8 +346,7 @@ func (p *CodexProvider) saveConfig(path string, cfg *CodexConfig) error {
 	}
 	defer f.Close()
 
-	encoder := toml.NewEncoder(f)
-	return encoder.Encode(cfg)
+	return toml.NewEncoder(f).Encode(cfg)
 }
 
 // CodexConfig represents the structure of ~/.codex/config.toml
