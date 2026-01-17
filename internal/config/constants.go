@@ -3,6 +3,9 @@ package config
 import "os"
 
 const (
+	// APIKeyEnvVar is the environment variable name for API key authentication
+	APIKeyEnvVar = "DOSU_API_KEY"
+
 	// DevWebAppURL is the local development frontend URL
 	DevWebAppURL = "http://localhost:3001"
 
@@ -57,4 +60,9 @@ func GetSupabaseURL() string {
 		return DevSupabaseURL
 	}
 	return ProdSupabaseURL
+}
+
+// GetAPIKey returns the API key from environment variable, or empty string if not set
+func GetAPIKey() string {
+	return os.Getenv(APIKeyEnvVar)
 }
