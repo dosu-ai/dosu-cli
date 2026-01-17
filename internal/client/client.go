@@ -16,9 +16,10 @@ type Client struct {
 	baseURL    string
 	httpClient *http.Client
 	config     *config.Config
+	apiKey     string
 }
 
-// NewClient creates a new API client
+// NewClient creates a new API client using OAuth authentication
 func NewClient(cfg *config.Config) *Client {
 	return &Client{
 		baseURL:    config.GetBackendURL(),
@@ -27,10 +28,25 @@ func NewClient(cfg *config.Config) *Client {
 	}
 }
 
+// NewClientWithAPIKey creates a new API client using API key authentication
+func NewClientWithAPIKey(apiKey string) *Client {
+	return &Client{
+		baseURL:    config.GetBackendURL(),
+		httpClient: &http.Client{Timeout: 30 * time.Second},
+		apiKey:     apiKey,
+	}
+}
+
 // DoRequest performs an authenticated HTTP request to the backend
-// The access token is automatically included in the Supabase-Access-Token header
-// If the token is expired, it will automatically refresh it
+// If an API key is set, it uses API key authentication.
+// Otherwise, it uses OAuth with automatic token refresh.
 func (c *Client) DoRequest(method, path string, body interface{}) (*http.Response, error) {
+	// Use API key authentication if available
+	if c.apiKey != "" {
+		return c.doRequestWithAPIKey(method, path, body)
+	}
+
+	// Fall back to OAuth authentication
 	// Check if user is authenticated (has a token)
 	if !c.config.IsAuthenticated() {
 		return nil, fmt.Errorf("not authenticated - please run setup first")
@@ -63,7 +79,39 @@ func (c *Client) DoRequest(method, path string, body interface{}) (*http.Respons
 
 	// Set headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Supabase-Access-Token", c.config.AccessToken) // This is the key header!
+	req.Header.Set("Supabase-Access-Token", c.config.AccessToken)
+
+	// Perform request
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+
+	return resp, nil
+}
+
+// doRequestWithAPIKey performs an HTTP request using API key authentication
+func (c *Client) doRequestWithAPIKey(method, path string, body interface{}) (*http.Response, error) {
+	// Prepare request body if provided
+	var reqBody io.Reader
+	if body != nil {
+		jsonBody, err := json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal request body: %w", err)
+		}
+		reqBody = bytes.NewBuffer(jsonBody)
+	}
+
+	// Create HTTP request
+	url := c.baseURL + path
+	req, err := http.NewRequest(method, url, reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Set headers with API key
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", c.apiKey)
 
 	// Perform request
 	resp, err := c.httpClient.Do(req)
