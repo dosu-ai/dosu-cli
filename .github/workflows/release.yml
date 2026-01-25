@@ -31,3 +31,28 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TOKEN: ${{ secrets.HOMEBREW_TOKEN }}
+
+  update-homebrew:
+    needs: goreleaser
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout homebrew-dosu
+        uses: actions/checkout@v6
+        with:
+          repository: dosu-ai/homebrew-dosu
+          token: ${{ secrets.HOMEBREW_TOKEN }}
+          path: homebrew-dosu
+
+      - name: Update Homebrew formula
+        run: |
+          cd homebrew-dosu
+          ./scripts/update-formula.sh ${GITHUB_REF_NAME#v}
+
+      - name: Commit and push
+        run: |
+          cd homebrew-dosu
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/dosu.rb
+          git commit -m "Update dosu to ${{ github.ref_name }}"
+          git push
