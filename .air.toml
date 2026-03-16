@@ -1,0 +1,39 @@
+# Air - Go hot reload configuration for dosu-cli
+# https://github.com/air-verse/air
+
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  # Build command
+  cmd = "go build -o ./bin/dosu ./cmd/dosu-cli"
+  # Don't auto-run the binary (TUI is interactive, run it manually)
+  full_bin = "/usr/bin/true"
+  # Watch these file extensions
+  include_ext = ["go", "mod", "sum"]
+  # Directories to exclude from watching
+  exclude_dir = ["bin", "dist", "tmp", ".git", ".context", ".claude", ".conductor"]
+  # Delay before rebuilding (ms)
+  delay = 500
+  # Stop running old binary before building
+  stop_on_error = true
+  # Send interrupt signal before killing
+  send_interrupt = false
+  # Log build output
+  log = "build-errors.log"
+
+[log]
+  # Show timestamp in logs
+  time = true
+  # Main log only (no separate file needed)
+  main_only = false
+
+[color]
+  main = "cyan"
+  watcher = "magenta"
+  build = "yellow"
+  runner = "green"
+
+[misc]
+  # Clean tmp dir on exit
+  clean_on_exit = true
