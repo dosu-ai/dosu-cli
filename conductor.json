@@ -1,0 +1,7 @@
+{
+  "scripts": {
+    "setup": "$CONDUCTOR_ROOT_PATH/conductor-setup.sh",
+    "run": "$CONDUCTOR_WORKSPACE_PATH/conductor-run.sh"
+  },
+  "runScriptMode": "nonconcurrent"
+}

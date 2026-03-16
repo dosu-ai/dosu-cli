@@ -37,3 +37,7 @@ go.work.sum
 
 # GoReleaser artifacts
 dist/
+
+# Air hot-reload
+tmp/
+build-errors.log
