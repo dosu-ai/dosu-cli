@@ -41,3 +41,6 @@ dist/
 # Air hot-reload
 tmp/
 build-errors.log
+
+# npm platform binaries (injected by CI)
+npm/cli-*/bin/

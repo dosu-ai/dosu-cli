@@ -1,0 +1,19 @@
+{
+  "name": "@dosu/cli-darwin-arm64",
+  "version": "0.0.0",
+  "description": "Dosu CLI binary for macOS ARM64",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dosu-ai/dosu-cli.git"
+  },
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "files": [
+    "bin/dosu"
+  ]
+}
