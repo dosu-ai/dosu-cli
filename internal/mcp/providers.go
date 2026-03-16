@@ -24,10 +24,32 @@ func GetProvider(toolID string) (Provider, error) {
 	switch toolID {
 	case "claude":
 		return &ClaudeProvider{}, nil
+	case "claude-desktop":
+		return &ClaudeDesktopProvider{}, nil
+	case "cursor":
+		return &CursorProvider{}, nil
+	case "vscode":
+		return &VSCodeProvider{}, nil
 	case "gemini":
 		return &GeminiProvider{}, nil
 	case "codex":
 		return &CodexProvider{}, nil
+	case "windsurf":
+		return &WindsurfProvider{}, nil
+	case "zed":
+		return &ZedProvider{}, nil
+	case "cline":
+		return &ClineProvider{}, nil
+	case "cline-cli":
+		return &ClineCliProvider{}, nil
+	case "copilot":
+		return &CopilotProvider{}, nil
+	case "opencode":
+		return &OpenCodeProvider{}, nil
+	case "antigravity":
+		return &AntigravityProvider{}, nil
+	case "mcporter":
+		return &MCPorterProvider{}, nil
 	case "manual":
 		return &ManualProvider{}, nil
 	default:
@@ -35,12 +57,23 @@ func GetProvider(toolID string) (Provider, error) {
 	}
 }
 
-// AllProviders returns all available providers
+// AllProviders returns all available providers (for CLI mcp add/list commands)
 func AllProviders() []Provider {
 	return []Provider{
 		&ClaudeProvider{},
+		&ClaudeDesktopProvider{},
+		&CursorProvider{},
+		&VSCodeProvider{},
 		&GeminiProvider{},
 		&CodexProvider{},
+		&WindsurfProvider{},
+		&ZedProvider{},
+		&ClineProvider{},
+		&ClineCliProvider{},
+		&CopilotProvider{},
+		&OpenCodeProvider{},
+		&AntigravityProvider{},
+		&MCPorterProvider{},
 		&ManualProvider{},
 	}
 }
@@ -50,6 +83,16 @@ type ClaudeProvider struct{}
 func (p *ClaudeProvider) Name() string        { return "Claude Code" }
 func (p *ClaudeProvider) ID() string          { return "claude" }
 func (p *ClaudeProvider) SupportsLocal() bool { return true }
+func (p *ClaudeProvider) Priority() int       { return 1 }
+func (p *ClaudeProvider) DetectPaths() []string {
+	return []string{"~/.claude"}
+}
+func (p *ClaudeProvider) IsInstalled() bool {
+	return isInstalled(p.DetectPaths())
+}
+func (p *ClaudeProvider) GlobalConfigPath() string {
+	return expandHome("~/.claude.json")
+}
 
 func (p *ClaudeProvider) getConfigPath() (string, error) {
 	homeDir, err := os.UserHomeDir()
@@ -151,6 +194,23 @@ func (p *ClaudeProvider) Install(cfg *config.Config, global bool) error {
 	return nil
 }
 
+func (p *ClaudeProvider) IsConfigured() bool {
+	configPath, err := p.getConfigPath()
+	if err != nil {
+		return false
+	}
+	cfg, err := p.loadConfig(configPath)
+	if err != nil {
+		return false
+	}
+	if mcpServers, ok := cfg["mcpServers"].(map[string]any); ok {
+		if _, exists := mcpServers["dosu"]; exists {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *ClaudeProvider) Remove(global bool) error {
 	configPath, err := p.getConfigPath()
 	if err != nil {
@@ -198,6 +258,20 @@ type GeminiProvider struct{}
 func (p *GeminiProvider) Name() string        { return "Gemini CLI" }
 func (p *GeminiProvider) ID() string          { return "gemini" }
 func (p *GeminiProvider) SupportsLocal() bool { return true }
+func (p *GeminiProvider) Priority() int       { return 7 }
+func (p *GeminiProvider) DetectPaths() []string {
+	return []string{"~/.gemini"}
+}
+func (p *GeminiProvider) IsInstalled() bool {
+	if !isInstalled(p.DetectPaths()) {
+		return false
+	}
+	_, err := exec.LookPath("gemini")
+	return err == nil
+}
+func (p *GeminiProvider) GlobalConfigPath() string {
+	return expandHome("~/.gemini/settings.json")
+}
 
 func (p *GeminiProvider) Install(cfg *config.Config, global bool) error {
 	if cfg.DeploymentID == "" {
@@ -226,6 +300,10 @@ func (p *GeminiProvider) Install(cfg *config.Config, global bool) error {
 	return nil
 }
 
+func (p *GeminiProvider) IsConfigured() bool {
+	return false
+}
+
 func (p *GeminiProvider) Remove(global bool) error {
 	args := []string{"mcp", "remove"}
 	if global {
@@ -247,7 +325,17 @@ type CodexProvider struct{}
 
 func (p *CodexProvider) Name() string        { return "Codex CLI" }
 func (p *CodexProvider) ID() string          { return "codex" }
-func (p *CodexProvider) SupportsLocal() bool { return false } // Global only
+func (p *CodexProvider) SupportsLocal() bool { return false }
+func (p *CodexProvider) Priority() int       { return 8 }
+func (p *CodexProvider) DetectPaths() []string {
+	return []string{"~/.codex"}
+}
+func (p *CodexProvider) IsInstalled() bool {
+	return isInstalled(p.DetectPaths())
+}
+func (p *CodexProvider) GlobalConfigPath() string {
+	return expandHome("~/.codex/config.toml")
+}
 
 func (p *CodexProvider) Install(cfg *config.Config, global bool) error {
 	if cfg.DeploymentID == "" {
@@ -285,6 +373,19 @@ func (p *CodexProvider) Install(cfg *config.Config, global bool) error {
 	}
 
 	return nil
+}
+
+func (p *CodexProvider) IsConfigured() bool {
+	configPath, err := p.getConfigPath()
+	if err != nil {
+		return false
+	}
+	cfg, err := p.loadConfig(configPath)
+	if err != nil {
+		return false
+	}
+	_, exists := cfg.MCPServers["dosu"]
+	return exists
 }
 
 func (p *CodexProvider) Remove(global bool) error {

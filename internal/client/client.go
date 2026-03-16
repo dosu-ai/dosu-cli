@@ -3,6 +3,7 @@ package client
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,9 @@ import (
 
 	"github.com/dosu-ai/dosu-cli/internal/config"
 )
+
+// ErrEndpointNotAvailable indicates the backend endpoint does not exist yet.
+var ErrEndpointNotAvailable = errors.New("deployment creation not available via CLI")
 
 // Client is an HTTP client for making authenticated requests to the Dosu backend
 type Client struct {
@@ -171,4 +175,35 @@ type Deployment struct {
 	OrgID        string `json:"org_id"`
 	OrgName      string `json:"org_name"`
 	SpaceID      string `json:"space_id"`
+}
+
+// CreateDeploymentRequest is the payload for creating a new MCP deployment.
+type CreateDeploymentRequest struct {
+	Name string `json:"name"`
+}
+
+// CreateDeployment creates a new MCP deployment via the backend API.
+// Returns ErrEndpointNotAvailable if the backend does not support this yet.
+func (c *Client) CreateDeployment(req CreateDeploymentRequest) (*Deployment, error) {
+	resp, err := c.Post("/v1/mcp/deployments", req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+		return nil, ErrEndpointNotAvailable
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to create deployment (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	var deployment Deployment
+	if err := json.NewDecoder(resp.Body).Decode(&deployment); err != nil {
+		return nil, fmt.Errorf("failed to decode deployment response: %w", err)
+	}
+
+	return &deployment, nil
 }
