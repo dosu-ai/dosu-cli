@@ -1,19 +1,32 @@
 # @dosu/cli
 
-Dosu CLI — Manage MCP servers for AI tools.
+## ⚠️ Pre-Release:
+The Dosu CLI is pre-release alpha software and is not fully supported currently. Please check back soon. Join our [Discord](https://go.dosu.dev/discord-cli) so you'll be the first to know when it's launched!
 
-## Quick Start
+## Installation
+
+### npm
 
 ```bash
 npx @dosu/cli setup
 ```
 
-## Global Install
+Or install globally:
 
 ```bash
 npm install -g @dosu/cli
 dosu setup
 ```
+
+### Homebrew
+
+```bash
+brew install dosu-ai/dosu/dosu
+```
+
+### Manual Download
+
+Download the appropriate archive from the [Releases](https://github.com/dosu-ai/dosu-cli/releases) page.
 
 ## Supported Platforms
 
@@ -24,10 +37,6 @@ dosu setup
 | Linux   | ARM64 |
 | Linux   | x64 |
 | Windows | x64 |
-
-## Alternative Installation
-
-If you prefer not to use npm, install via [Homebrew](https://github.com/dosu-ai/dosu-cli#homebrew-recommended) or download directly from [GitHub Releases](https://github.com/dosu-ai/dosu-cli/releases).
 
 ## Links
 
