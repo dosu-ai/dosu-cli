@@ -18,6 +18,19 @@ brew tap dosu-ai/dosu
 brew install dosu
 ```
 
+### npm
+
+```bash
+npx @dosu/cli setup
+```
+
+Or install globally:
+
+```bash
+npm install -g @dosu/cli
+dosu setup
+```
+
 ### Manual Download
 
 Download the appropriate archive from the [Releases](https://github.com/dosu-ai/dosu-cli/releases) page.
