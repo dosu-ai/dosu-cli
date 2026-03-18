@@ -131,7 +131,7 @@ func (p *ClaudeProvider) Install(cfg *config.Config, global bool) error {
 		return fmt.Errorf("deployment ID is required")
 	}
 
-	url := fmt.Sprintf("%s/v1/mcp", config.GetBackendURL())
+	url := mcpURL(cfg.DeploymentID)
 
 	configPath, err := p.getConfigPath()
 	if err != nil {
@@ -144,11 +144,9 @@ func (p *ClaudeProvider) Install(cfg *config.Config, global bool) error {
 	}
 
 	server := map[string]any{
-		"type": "http",
-		"url":  url,
-		"headers": map[string]string{
-			"X-Deployment-ID": cfg.DeploymentID,
-		},
+		"type":    "http",
+		"url":     url,
+		"headers": mcpHeaders(cfg),
 	}
 
 	if global {
@@ -278,7 +276,7 @@ func (p *GeminiProvider) Install(cfg *config.Config, global bool) error {
 		return fmt.Errorf("deployment ID is required")
 	}
 
-	url := fmt.Sprintf("%s/v1/mcp", config.GetBackendURL())
+	url := mcpURL(cfg.DeploymentID)
 
 	args := []string{"mcp", "add", "--transport", "http"}
 	if global {
@@ -287,7 +285,7 @@ func (p *GeminiProvider) Install(cfg *config.Config, global bool) error {
 		args = append(args, "--scope", "project")
 	}
 	args = append(args,
-		"--header", fmt.Sprintf("X-Deployment-ID: %s", cfg.DeploymentID),
+		"--header", fmt.Sprintf("X-Dosu-API-Key: %s", cfg.APIKey),
 		"dosu",
 		url,
 	)
@@ -354,18 +352,15 @@ func (p *CodexProvider) Install(cfg *config.Config, global bool) error {
 	}
 
 	// Add the Dosu MCP server configuration
-	url := fmt.Sprintf("%s/v1/mcp", config.GetBackendURL())
+	url := mcpURL(cfg.DeploymentID)
 
 	if codexConfig.MCPServers == nil {
 		codexConfig.MCPServers = make(map[string]CodexMCPServer)
 	}
 
 	codexConfig.MCPServers["dosu"] = CodexMCPServer{
-		URL: url,
-		HTTPHeaders: map[string]string{
-			"Authorization":   fmt.Sprintf("Bearer %s", cfg.AccessToken),
-			"X-Deployment-ID": cfg.DeploymentID,
-		},
+		URL:         url,
+		HTTPHeaders: mcpHeaders(cfg),
 	}
 
 	if err := p.saveConfig(configPath, codexConfig); err != nil {
@@ -471,14 +466,13 @@ func (p *ManualProvider) ID() string          { return "manual" }
 func (p *ManualProvider) SupportsLocal() bool { return false }
 
 func (p *ManualProvider) Install(cfg *config.Config, global bool) error {
-	url := fmt.Sprintf("%s/v1/mcp", config.GetBackendURL())
+	url := mcpURL(cfg.DeploymentID)
 
 	fmt.Println("Use these details to configure the Dosu MCP server in your client:")
 	fmt.Println()
 	fmt.Printf("  Transport:      HTTP\n")
-	fmt.Printf("  Authentication: OAuth 2.0 with DCR\n")
 	fmt.Printf("  Endpoint:       %s\n", url)
-	fmt.Printf("  Custom Headers: X-Deployment-ID: %s\n", cfg.DeploymentID)
+	fmt.Printf("  Header:         X-Dosu-API-Key: %s\n", cfg.APIKey)
 	fmt.Println()
 
 	return nil

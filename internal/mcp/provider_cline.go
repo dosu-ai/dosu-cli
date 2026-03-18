@@ -40,7 +40,7 @@ func (p *ClineProvider) Install(cfg *config.Config, global bool) error {
 		return fmt.Errorf("deployment ID is required")
 	}
 
-	url := fmt.Sprintf("%s/v1/mcp", config.GetBackendURL())
+	url := mcpURL(cfg.DeploymentID)
 	configPath := p.GlobalConfigPath()
 
 	clineConfig, err := loadJSONConfig(configPath)
@@ -53,9 +53,7 @@ func (p *ClineProvider) Install(cfg *config.Config, global bool) error {
 		"url":      url,
 		"type":     "streamableHttp",
 		"disabled": false,
-		"headers": map[string]string{
-			"X-Deployment-ID": cfg.DeploymentID,
-		},
+		"headers":  mcpHeaders(cfg),
 	}
 
 	mcpServers, ok := clineConfig["mcpServers"].(map[string]any)

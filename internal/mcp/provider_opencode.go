@@ -34,7 +34,7 @@ func (p *OpenCodeProvider) Install(cfg *config.Config, global bool) error {
 		return fmt.Errorf("deployment ID is required")
 	}
 
-	url := fmt.Sprintf("%s/v1/mcp", config.GetBackendURL())
+	url := mcpURL(cfg.DeploymentID)
 	configPath := p.GlobalConfigPath()
 
 	ocConfig, err := loadJSONConfig(configPath)
@@ -47,9 +47,7 @@ func (p *OpenCodeProvider) Install(cfg *config.Config, global bool) error {
 		"type":    "remote",
 		"url":     url,
 		"enabled": true,
-		"headers": map[string]string{
-			"X-Deployment-ID": cfg.DeploymentID,
-		},
+		"headers": mcpHeaders(cfg),
 	}
 
 	mcpSection, ok := ocConfig["mcp"].(map[string]any)

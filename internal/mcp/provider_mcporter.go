@@ -34,7 +34,7 @@ func (p *MCPorterProvider) Install(cfg *config.Config, global bool) error {
 		return fmt.Errorf("deployment ID is required")
 	}
 
-	url := fmt.Sprintf("%s/v1/mcp", config.GetBackendURL())
+	url := mcpURL(cfg.DeploymentID)
 	configPath := p.GlobalConfigPath()
 
 	mpConfig, err := loadJSONConfig(configPath)
@@ -44,11 +44,9 @@ func (p *MCPorterProvider) Install(cfg *config.Config, global bool) error {
 
 	// Standard mcpServers format, no transform needed
 	server := map[string]any{
-		"type": "http",
-		"url":  url,
-		"headers": map[string]string{
-			"X-Deployment-ID": cfg.DeploymentID,
-		},
+		"type":    "http",
+		"url":     url,
+		"headers": mcpHeaders(cfg),
 	}
 
 	mcpServers, ok := mpConfig["mcpServers"].(map[string]any)

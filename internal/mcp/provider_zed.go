@@ -45,7 +45,7 @@ func (p *ZedProvider) Install(cfg *config.Config, global bool) error {
 		return fmt.Errorf("deployment ID is required")
 	}
 
-	url := fmt.Sprintf("%s/v1/mcp", config.GetBackendURL())
+	url := mcpURL(cfg.DeploymentID)
 	configPath := p.GlobalConfigPath()
 
 	zedConfig, err := loadJSONConfig(configPath)
@@ -55,12 +55,10 @@ func (p *ZedProvider) Install(cfg *config.Config, global bool) error {
 
 	// Zed uses context_servers with a "source: custom" wrapper
 	server := map[string]any{
-		"source": "custom",
-		"type":   "http",
-		"url":    url,
-		"headers": map[string]string{
-			"X-Deployment-ID": cfg.DeploymentID,
-		},
+		"source":  "custom",
+		"type":    "http",
+		"url":     url,
+		"headers": mcpHeaders(cfg),
 	}
 
 	contextServers, ok := zedConfig["context_servers"].(map[string]any)

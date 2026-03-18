@@ -39,7 +39,7 @@ func (p *CopilotProvider) Install(cfg *config.Config, global bool) error {
 		return fmt.Errorf("deployment ID is required")
 	}
 
-	url := fmt.Sprintf("%s/v1/mcp", config.GetBackendURL())
+	url := mcpURL(cfg.DeploymentID)
 
 	var configPath string
 	if global {
@@ -58,14 +58,11 @@ func (p *CopilotProvider) Install(cfg *config.Config, global bool) error {
 	}
 
 	if global {
-		// Global: uses mcpServers key with tools: ["*"]
 		server := map[string]any{
-			"type": "http",
-			"url":  url,
-			"tools": []string{"*"},
-			"headers": map[string]string{
-				"X-Deployment-ID": cfg.DeploymentID,
-			},
+			"type":    "http",
+			"url":     url,
+			"tools":   []string{"*"},
+			"headers": mcpHeaders(cfg),
 		}
 
 		mcpServers, ok := copilotConfig["mcpServers"].(map[string]any)
@@ -75,13 +72,10 @@ func (p *CopilotProvider) Install(cfg *config.Config, global bool) error {
 		mcpServers["dosu"] = server
 		copilotConfig["mcpServers"] = mcpServers
 	} else {
-		// Local: shares VS Code mcp.json schema with "servers" key
 		server := map[string]any{
-			"type": "http",
-			"url":  url,
-			"headers": map[string]string{
-				"X-Deployment-ID": cfg.DeploymentID,
-			},
+			"type":    "http",
+			"url":     url,
+			"headers": mcpHeaders(cfg),
 		}
 
 		servers, ok := copilotConfig["servers"].(map[string]any)

@@ -36,7 +36,7 @@ func (p *VSCodeProvider) Install(cfg *config.Config, global bool) error {
 		return fmt.Errorf("deployment ID is required")
 	}
 
-	url := fmt.Sprintf("%s/v1/mcp", config.GetBackendURL())
+	url := mcpURL(cfg.DeploymentID)
 
 	var configPath string
 	if global {
@@ -56,11 +56,9 @@ func (p *VSCodeProvider) Install(cfg *config.Config, global bool) error {
 
 	// VS Code uses "servers" key (not "mcpServers")
 	server := map[string]any{
-		"type": "http",
-		"url":  url,
-		"headers": map[string]string{
-			"X-Deployment-ID": cfg.DeploymentID,
-		},
+		"type":    "http",
+		"url":     url,
+		"headers": mcpHeaders(cfg),
 	}
 
 	servers, ok := vscodeConfig["servers"].(map[string]any)

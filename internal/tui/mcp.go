@@ -232,7 +232,7 @@ func (m MCPModel) View() string {
 				helpStyle.Render("Press Esc to go back"),
 			)
 		} else {
-			url := fmt.Sprintf("%s/v1/mcp", config.GetBackendURL())
+			url := fmt.Sprintf("%s/v1/mcp/deployments/%s", config.GetBackendURL(), cfg.DeploymentID)
 
 			boxStyle := lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
@@ -247,15 +247,18 @@ func (m MCPModel) View() string {
 				"",
 			)
 
+			headerInfo := "X-Dosu-API-Key: <your-api-key>"
+			if cfg.APIKey != "" {
+				headerInfo = fmt.Sprintf("X-Dosu-API-Key: %s", cfg.APIKey)
+			}
+
 			configBox := boxStyle.Render(fmt.Sprintf(
 				"Transport:      %s\n"+
-					"Authentication: %s\n"+
 					"Endpoint:       %s\n"+
-					"Custom Headers: %s",
+					"Header:         %s",
 				configStyle.Render("HTTP"),
-				configStyle.Render("OAuth 2.0 with DCR"),
 				configStyle.Render(url),
-				configStyle.Render(fmt.Sprintf("X-Deployment-ID: %s", cfg.DeploymentID)),
+				configStyle.Render(headerInfo),
 			))
 
 			lines = append(lines,

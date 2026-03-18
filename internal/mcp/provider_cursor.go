@@ -33,7 +33,7 @@ func (p *CursorProvider) Install(cfg *config.Config, global bool) error {
 		return fmt.Errorf("deployment ID is required")
 	}
 
-	url := fmt.Sprintf("%s/v1/mcp", config.GetBackendURL())
+	url := mcpURL(cfg.DeploymentID)
 
 	var configPath string
 	if global {
@@ -51,12 +51,9 @@ func (p *CursorProvider) Install(cfg *config.Config, global bool) error {
 		return fmt.Errorf("failed to load cursor config: %w", err)
 	}
 
-	// Cursor remote servers omit the "type" field
 	server := map[string]any{
-		"url": url,
-		"headers": map[string]string{
-			"X-Deployment-ID": cfg.DeploymentID,
-		},
+		"url":     url,
+		"headers": mcpHeaders(cfg),
 	}
 
 	mcpServers, ok := cursorConfig["mcpServers"].(map[string]any)
@@ -107,6 +104,18 @@ func (p *CursorProvider) Remove(global bool) error {
 	}
 
 	return nil
+}
+
+// mcpURL returns the MCP endpoint URL with deployment ID encoded in the path.
+func mcpURL(deploymentID string) string {
+	return fmt.Sprintf("%s/v1/mcp/deployments/%s", config.GetBackendURL(), deploymentID)
+}
+
+// mcpHeaders returns the standard MCP headers with API key auth.
+func mcpHeaders(cfg *config.Config) map[string]string {
+	return map[string]string{
+		"X-Dosu-API-Key": cfg.APIKey,
+	}
 }
 
 // Shared JSON config helpers used by multiple providers.

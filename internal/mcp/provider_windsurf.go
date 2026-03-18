@@ -35,7 +35,7 @@ func (p *WindsurfProvider) Install(cfg *config.Config, global bool) error {
 		return fmt.Errorf("deployment ID is required")
 	}
 
-	url := fmt.Sprintf("%s/v1/mcp", config.GetBackendURL())
+	url := mcpURL(cfg.DeploymentID)
 	configPath := p.GlobalConfigPath()
 
 	wsConfig, err := loadJSONConfig(configPath)
@@ -44,11 +44,9 @@ func (p *WindsurfProvider) Install(cfg *config.Config, global bool) error {
 	}
 
 	server := map[string]any{
-		"type": "http",
-		"url":  url,
-		"headers": map[string]string{
-			"X-Deployment-ID": cfg.DeploymentID,
-		},
+		"type":    "http",
+		"url":     url,
+		"headers": mcpHeaders(cfg),
 	}
 
 	mcpServers, ok := wsConfig["mcpServers"].(map[string]any)

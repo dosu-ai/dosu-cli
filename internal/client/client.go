@@ -12,8 +12,8 @@ import (
 	"github.com/dosu-ai/dosu-cli/internal/config"
 )
 
-// ErrEndpointNotAvailable indicates the backend endpoint does not exist yet.
-var ErrEndpointNotAvailable = errors.New("deployment creation not available via CLI")
+// ErrSessionExpired indicates the token is expired and refresh failed.
+var ErrSessionExpired = errors.New("session expired")
 
 // Client is an HTTP client for making authenticated requests to the Dosu backend
 type Client struct {
@@ -31,24 +31,44 @@ func NewClient(cfg *config.Config) *Client {
 	}
 }
 
-// DoRequest performs an authenticated HTTP request to the backend
-// The access token is automatically included in the Supabase-Access-Token header
-// If the token is expired, it will automatically refresh it
+// DoRequest performs an authenticated HTTP request to the backend.
+// Automatically refreshes the token on expiry or 401/403 responses and retries once.
 func (c *Client) DoRequest(method, path string, body interface{}) (*http.Response, error) {
-	// Check if user is authenticated (has a token)
 	if !c.config.IsAuthenticated() {
 		return nil, fmt.Errorf("not authenticated - please run setup first")
 	}
 
-	// Check if token is expired or about to expire (within 5 minutes)
+	// Pre-emptive refresh if locally known to be expired
 	if c.config.IsTokenExpired() {
-		// Try to refresh the token
 		if err := c.refreshToken(); err != nil {
 			return nil, fmt.Errorf("token expired and refresh failed: %w", err)
 		}
 	}
 
-	// Prepare request body if provided
+	resp, err := c.doRequestOnce(method, path, body)
+	if err != nil {
+		return nil, err
+	}
+
+	// If backend says unauthorized, try refresh + retry once
+	if resp.StatusCode == 401 || resp.StatusCode == 403 {
+		resp.Body.Close()
+		if refreshErr := c.refreshToken(); refreshErr != nil {
+			return nil, ErrSessionExpired
+		}
+		return c.doRequestOnce(method, path, body)
+	}
+
+	return resp, nil
+}
+
+// DoRequestRaw performs a single authenticated request without any retry/refresh logic.
+// Used for token verification during auth step.
+func (c *Client) DoRequestRaw(method, path string) (*http.Response, error) {
+	return c.doRequestOnce(method, path, nil)
+}
+
+func (c *Client) doRequestOnce(method, path string, body interface{}) (*http.Response, error) {
 	var reqBody io.Reader
 	if body != nil {
 		jsonBody, err := json.Marshal(body)
@@ -58,18 +78,15 @@ func (c *Client) DoRequest(method, path string, body interface{}) (*http.Respons
 		reqBody = bytes.NewBuffer(jsonBody)
 	}
 
-	// Create HTTP request
 	url := c.baseURL + path
 	req, err := http.NewRequest(method, url, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Set headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Supabase-Access-Token", c.config.AccessToken) // This is the key header!
+	req.Header.Set("Supabase-Access-Token", c.config.AccessToken)
 
-	// Perform request
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
@@ -92,6 +109,11 @@ func (c *Client) Put(path string, body interface{}) (*http.Response, error) {
 
 func (c *Client) Delete(path string) (*http.Response, error) {
 	return c.DoRequest("DELETE", path, nil)
+}
+
+// RefreshToken attempts to refresh the access token using the refresh token.
+func (c *Client) RefreshToken() error {
+	return c.refreshToken()
 }
 
 // refreshToken attempts to refresh the access token using the refresh token
@@ -155,7 +177,12 @@ func (c *Client) GetDeployments() ([]Deployment, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("Could not retrieve deployments with status: %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		detail := string(body)
+		if detail == "" || detail == "Internal Server Error" {
+			detail = "check backend logs for details"
+		}
+		return nil, fmt.Errorf("failed to fetch deployments (status %d): %s", resp.StatusCode, detail)
 	}
 
 	var deployments []Deployment
@@ -164,6 +191,32 @@ func (c *Client) GetDeployments() ([]Deployment, error) {
 	}
 
 	return deployments, nil
+}
+
+// Org represents a user's organization.
+type Org struct {
+	OrgID string `json:"org_id"`
+	Name  string `json:"name"`
+}
+
+// GetOrgs lists organizations the authenticated user belongs to.
+func (c *Client) GetOrgs() ([]Org, error) {
+	resp, err := c.Get("/v1/mcp/orgs")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to fetch orgs (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	var orgs []Org
+	if err := json.NewDecoder(resp.Body).Decode(&orgs); err != nil {
+		return nil, err
+	}
+	return orgs, nil
 }
 
 type Deployment struct {
@@ -177,33 +230,32 @@ type Deployment struct {
 	SpaceID      string `json:"space_id"`
 }
 
-// CreateDeploymentRequest is the payload for creating a new MCP deployment.
-type CreateDeploymentRequest struct {
-	Name string `json:"name"`
+// APIKeyResponse represents the response from creating an API key.
+type APIKeyResponse struct {
+	APIKey    string `json:"api_key"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	KeyPrefix string `json:"key_prefix"`
 }
 
-// CreateDeployment creates a new MCP deployment via the backend API.
-// Returns ErrEndpointNotAvailable if the backend does not support this yet.
-func (c *Client) CreateDeployment(req CreateDeploymentRequest) (*Deployment, error) {
-	resp, err := c.Post("/v1/mcp/deployments", req)
+// CreateAPIKey mints a new API key for the given deployment.
+func (c *Client) CreateAPIKey(deploymentID string, name string) (*APIKeyResponse, error) {
+	path := fmt.Sprintf("/v1/mcp/deployments/%s/api-keys", deploymentID)
+	payload := map[string]string{"name": name}
+	resp, err := c.Post(path, payload)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
-		return nil, ErrEndpointNotAvailable
-	}
-
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("failed to create deployment (status %d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("failed to create API key (status %d): %s", resp.StatusCode, string(body))
 	}
 
-	var deployment Deployment
-	if err := json.NewDecoder(resp.Body).Decode(&deployment); err != nil {
-		return nil, fmt.Errorf("failed to decode deployment response: %w", err)
+	var result APIKeyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode API key response: %w", err)
 	}
-
-	return &deployment, nil
+	return &result, nil
 }

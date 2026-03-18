@@ -6,17 +6,17 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/dosu-ai/dosu-cli/internal/client"
-	"github.com/dosu-ai/dosu-cli/internal/config"
 	"github.com/dosu-ai/dosu-cli/internal/mcp"
 )
 
 // isUserAbort checks if an error is a user-initiated abort (Ctrl+C / Esc).
 func isUserAbort(err error) bool {
-	return errors.Is(err, huh.ErrUserAborted) || errors.Is(err, errUserAbort)
+	return errors.Is(err, huh.ErrUserAborted)
 }
 
-// errUserAbort indicates the user needs to take action externally before continuing.
-var errUserAbort = errors.New("setup paused")
+func isSessionExpired(err error) bool {
+	return errors.Is(err, client.ErrSessionExpired)
+}
 
 type configAction string
 
@@ -40,8 +40,14 @@ type toolSelection struct {
 	Skipped   []mcp.SetupProvider // selected + already configured (no-op)
 }
 
+// Options configures the setup flow behavior.
+type Options struct {
+	// DeploymentID skips org/deployment selection and jumps straight to tool configuration.
+	DeploymentID string
+}
+
 // Run executes the full dosu setup flow.
-func Run() error {
+func Run(opts Options) error {
 	fmt.Println()
 
 	// Step 1: Authenticate
@@ -55,28 +61,80 @@ func Run() error {
 	}
 	fmt.Println()
 
-	// Step 2: Select or create deployment
 	apiClient := client.NewClient(cfg)
-	deployment, err := stepSelectDeployment(cfg, apiClient)
+
+	if opts.DeploymentID != "" {
+		// --deployment flag: skip selection, resolve and save directly
+		deployment, err := stepResolveDeployment(apiClient, opts.DeploymentID)
+		if err != nil {
+			if isSessionExpired(err) {
+				PrintWarning("Session expired. Please run " + Info("dosu setup") + " again to re-authenticate.")
+				return nil
+			}
+			PrintError(fmt.Sprintf("Deployment not found: %v", err))
+			return err
+		}
+		cfg.DeploymentID = deployment.DeploymentID
+		cfg.DeploymentName = deployment.Name
+		if err := saveConfig(cfg); err != nil {
+			return err
+		}
+		PrintSuccess(fmt.Sprintf("Using deployment: %s", Success(deployment.Name)))
+		fmt.Println()
+	} else {
+		// Step 2: Select organization
+		org, err := stepSelectOrg(apiClient)
+		if err != nil {
+			if isUserAbort(err) {
+				return nil
+			}
+			if isSessionExpired(err) {
+				PrintWarning("Session expired. Please run " + Info("dosu setup") + " again to re-authenticate.")
+				return nil
+			}
+			PrintError(fmt.Sprintf("Organization selection failed: %v", err))
+			return err
+		}
+		fmt.Println()
+
+		// Step 3: Select deployment (auto-select if only one, no creation)
+		deployment, err := stepSelectDeployment(apiClient, org)
+		if err != nil {
+			if isUserAbort(err) {
+				return nil
+			}
+			if isSessionExpired(err) {
+				PrintWarning("Session expired. Please run " + Info("dosu setup") + " again to re-authenticate.")
+				return nil
+			}
+			PrintError(fmt.Sprintf("Deployment selection failed: %v", err))
+			return err
+		}
+
+		cfg.DeploymentID = deployment.DeploymentID
+		cfg.DeploymentName = deployment.Name
+		if err := saveConfig(cfg); err != nil {
+			return err
+		}
+		fmt.Println()
+	}
+
+	// Step 4: Mint API key (or reuse existing)
+	apiKey, err := stepMintAPIKey(apiClient, cfg)
 	if err != nil {
 		if isUserAbort(err) {
 			return nil
 		}
-		PrintError(fmt.Sprintf("Deployment selection failed: %v", err))
+		PrintError(fmt.Sprintf("API key creation failed: %v", err))
 		return err
 	}
-
-	// Save deployment to config
-	cfg.DeploymentID = deployment.DeploymentID
-	cfg.DeploymentName = deployment.Name
-	if err := config.SaveConfig(cfg); err != nil {
-		PrintError(fmt.Sprintf("Failed to save config: %v", err))
+	cfg.APIKey = apiKey
+	if err := saveConfig(cfg); err != nil {
 		return err
 	}
-
 	fmt.Println()
 
-	// Step 3: Detect installed tools
+	// Step 5: Detect installed tools
 	detected := stepDetectTools()
 	if len(detected) == 0 {
 		fmt.Println()
@@ -85,7 +143,7 @@ func Run() error {
 		return nil
 	}
 
-	// Step 3b: Let user choose which tools to configure
+	// Step 5b: Let user choose which tools to configure
 	selection, err := stepSelectTools(detected)
 	if err != nil {
 		if isUserAbort(err) {
@@ -99,10 +157,10 @@ func Run() error {
 		return nil
 	}
 
-	// Step 4: Configure/remove tools
+	// Step 6: Configure/remove tools
 	results := stepConfigureTools(cfg, selection)
 
-	// Step 5: Show summary
+	// Step 7: Show summary
 	stepShowSummary(results)
 
 	return nil

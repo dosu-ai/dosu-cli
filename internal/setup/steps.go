@@ -1,12 +1,12 @@
 package setup
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/huh/spinner"
 	"github.com/charmbracelet/lipgloss"
@@ -14,13 +14,7 @@ import (
 	"github.com/dosu-ai/dosu-cli/internal/client"
 	"github.com/dosu-ai/dosu-cli/internal/config"
 	"github.com/dosu-ai/dosu-cli/internal/mcp"
-	"github.com/pkg/browser"
 )
-
-const createNewValue = "__create_new__"
-
-// errGoBack signals the user wants to go back to the previous step.
-var errGoBack = errors.New("go back")
 
 // setupTheme returns a clean huh theme with no borders and accent colors.
 func setupTheme() *huh.Theme {
@@ -40,38 +34,66 @@ func setupTheme() *huh.Theme {
 	return theme
 }
 
-// stepAuthenticate ensures the user is logged in.
+// saveConfig is a helper to save config and format error consistently.
+func saveConfig(cfg *config.Config) error {
+	if err := config.SaveConfig(cfg); err != nil {
+		PrintError(fmt.Sprintf("Failed to save config: %v", err))
+		return err
+	}
+	return nil
+}
+
+// stepAuthenticate ensures the user is logged in with a valid token.
 func stepAuthenticate() (*config.Config, error) {
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// Already authenticated with valid token
-	if cfg.IsAuthenticated() && !cfg.IsTokenExpired() {
-		PrintSuccess("Authenticated")
-		return cfg, nil
-	}
-
-	// Token expired — try refresh
-	if cfg.IsAuthenticated() && cfg.IsTokenExpired() && cfg.RefreshToken != "" {
-		var refreshErr error
+	if cfg.IsAuthenticated() {
+		var valid bool
 		_ = spinner.New().
-			Title("Refreshing authentication...").
+			Title("Verifying session...").
 			Action(func() {
 				apiClient := client.NewClient(cfg)
-				_, refreshErr = apiClient.GetDeployments()
+				resp, err := apiClient.DoRequestRaw("GET", "/v1/mcp/deployments")
+				if err != nil {
+					valid = false
+					return
+				}
+				resp.Body.Close()
+				if resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 500 {
+					if refreshErr := apiClient.RefreshToken(); refreshErr != nil {
+						valid = false
+						return
+					}
+					resp2, err2 := apiClient.DoRequestRaw("GET", "/v1/mcp/deployments")
+					if err2 != nil {
+						valid = false
+						return
+					}
+					resp2.Body.Close()
+					valid = resp2.StatusCode == 200
+				} else {
+					valid = resp.StatusCode == 200
+				}
 			}).
 			Run()
 
-		if refreshErr == nil && cfg.IsAuthenticated() && !cfg.IsTokenExpired() {
+		if valid {
 			PrintSuccess("Authenticated")
 			return cfg, nil
 		}
 	}
 
-	// Need full OAuth flow
-	fmt.Printf("  Opening browser to log in...\n")
+	// Need login
+	fmt.Print("\0337") // save cursor position
+	if cfg.IsAuthenticated() {
+		PrintWarning("Session expired.")
+	}
+
+	fmt.Printf("  Press %s to open browser and log in\n", Info("Enter"))
+	fmt.Scanln()
 
 	var token *auth.TokenResponse
 	var oauthErr error
@@ -89,6 +111,8 @@ func stepAuthenticate() (*config.Config, error) {
 		return nil, oauthErr
 	}
 
+	fmt.Print("\0338\033[J")
+
 	cfg.AccessToken = token.AccessToken
 	cfg.RefreshToken = token.RefreshToken
 	cfg.ExpiresAt = time.Now().Unix() + int64(token.ExpiresIn)
@@ -97,19 +121,93 @@ func stepAuthenticate() (*config.Config, error) {
 		return nil, fmt.Errorf("failed to save config: %w", err)
 	}
 
-	PrintSuccess("Authenticated!")
+	PrintSuccess("Authenticated")
 	return cfg, nil
 }
 
-// stepSelectDeployment lets the user select an existing deployment or create a new one.
-func stepSelectDeployment(cfg *config.Config, apiClient *client.Client) (*client.Deployment, error) {
-	var deployments []client.Deployment
+// stepSelectOrg fetches orgs and lets the user select one.
+// Auto-selects if there's only one org.
+func stepSelectOrg(apiClient *client.Client) (*client.Org, error) {
+	var orgs []client.Org
+	var fetchErr error
+
+	err := spinner.New().
+		Title("Fetching organizations...").
+		Action(func() {
+			orgs, fetchErr = apiClient.GetOrgs()
+		}).
+		Run()
+	if err != nil {
+		return nil, err
+	}
+	if fetchErr != nil {
+		return nil, fmt.Errorf("failed to fetch orgs: %w", fetchErr)
+	}
+
+	if len(orgs) == 0 {
+		return nil, fmt.Errorf("no organizations found for your account")
+	}
+
+	if len(orgs) == 1 {
+		PrintSuccess(fmt.Sprintf("Organization: %s", successStyle.Render(orgs[0].Name)))
+		return &orgs[0], nil
+	}
+
+	var selected string
+	options := make([]huh.Option[string], len(orgs))
+	for i, o := range orgs {
+		options[i] = huh.NewOption(o.Name, o.OrgID)
+	}
+
+	km := huh.NewDefaultKeyMap()
+	km.Quit = key.NewBinding(key.WithKeys("ctrl+c", "esc"))
+
+	err = huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title(Question("Select an organization")).
+				Options(options...).
+				Value(&selected),
+		),
+	).WithKeyMap(km).WithTheme(setupTheme()).Run()
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range orgs {
+		if orgs[i].OrgID == selected {
+			PrintSuccess(fmt.Sprintf("Organization: %s", successStyle.Render(orgs[i].Name)))
+			return &orgs[i], nil
+		}
+	}
+
+	return nil, fmt.Errorf("selected org not found")
+}
+
+// stepResolveDeployment fetches deployments and finds one by ID.
+func stepResolveDeployment(apiClient *client.Client, deploymentID string) (*client.Deployment, error) {
+	deployments, err := apiClient.GetDeployments()
+	if err != nil {
+		return nil, err
+	}
+	for i := range deployments {
+		if deployments[i].DeploymentID == deploymentID {
+			return &deployments[i], nil
+		}
+	}
+	return nil, fmt.Errorf("deployment %s not found", deploymentID)
+}
+
+// stepSelectDeployment lets the user select an existing deployment.
+// Auto-selects if there's only one.
+func stepSelectDeployment(apiClient *client.Client, org *client.Org) (*client.Deployment, error) {
+	var allDeployments []client.Deployment
 	var fetchErr error
 
 	err := spinner.New().
 		Title("Fetching deployments...").
 		Action(func() {
-			deployments, fetchErr = apiClient.GetDeployments()
+			allDeployments, fetchErr = apiClient.GetDeployments()
 		}).
 		Run()
 	if err != nil {
@@ -119,115 +217,73 @@ func stepSelectDeployment(cfg *config.Config, apiClient *client.Client) (*client
 		return nil, fmt.Errorf("failed to fetch deployments: %w", fetchErr)
 	}
 
+	// Filter by selected org
+	var deployments []client.Deployment
+	for _, d := range allDeployments {
+		if d.OrgID == org.OrgID {
+			deployments = append(deployments, d)
+		}
+	}
+
 	if len(deployments) == 0 {
-		return stepCreateDeployment(apiClient)
+		return nil, fmt.Errorf("no MCP deployments found for %s. Create one at %s", org.Name, config.GetWebAppURL())
 	}
 
-	for {
-		options := make([]huh.Option[string], 0, len(deployments)+1)
-		for _, d := range deployments {
-			label := fmt.Sprintf("%s (%s)", d.Name, d.OrgName)
-			options = append(options, huh.NewOption(label, d.DeploymentID))
-		}
-		options = append(options, huh.NewOption(
-			fmt.Sprintf("%s Create new deployment", IconAdd),
-			createNewValue,
-		))
-
-		var selected string
-		err = huh.NewForm(
-			huh.NewGroup(
-				huh.NewSelect[string]().
-					Title(Question("Select a deployment")).
-					Options(options...).
-					Value(&selected),
-			),
-		).WithTheme(setupTheme()).Run()
-		if err != nil {
-			return nil, err
-		}
-
-		if selected == createNewValue {
-			fmt.Print("\0337") // save cursor position
-			deployment, createErr := stepCreateDeployment(apiClient)
-			if errors.Is(createErr, errGoBack) {
-				fmt.Print("\0338\033[J") // restore cursor, clear below
-				continue
-			}
-			if createErr != nil {
-				return nil, createErr
-			}
-			deployments = append(deployments, *deployment)
-			return deployment, nil
-		}
-
-		for i := range deployments {
-			if deployments[i].DeploymentID == selected {
-				PrintSuccess(fmt.Sprintf("Using deployment: %s", successStyle.Render(deployments[i].Name)))
-				return &deployments[i], nil
-			}
-		}
-
-		return nil, fmt.Errorf("selected deployment not found")
+	if len(deployments) == 1 {
+		PrintSuccess(fmt.Sprintf("Using deployment: %s", successStyle.Render(deployments[0].Name)))
+		return &deployments[0], nil
 	}
-}
 
-// stepCreateDeployment handles creating a new deployment.
-func stepCreateDeployment(apiClient *client.Client) (*client.Deployment, error) {
-	var name string
-
-	km := huh.NewDefaultKeyMap()
-	km.Quit = key.NewBinding(key.WithKeys("ctrl+c", "esc"))
-
-	err := huh.NewForm(
-		huh.NewGroup(
-			huh.NewInput().
-				Title(Question("Deployment name") + " " + Dim("(Esc to go back)")).
-				Placeholder("My MCP Deployment").
-				Value(&name),
-		),
-	).WithKeyMap(km).WithTheme(setupTheme()).Run()
+	// Multiple deployments — let user pick
+	items := buildDeploymentItems(deployments)
+	selector := newDeploymentSelect(items)
+	result, err := tea.NewProgram(selector).Run()
 	if err != nil {
-		if errors.Is(err, huh.ErrUserAborted) {
-			return nil, errGoBack
-		}
 		return nil, err
 	}
 
-	if name == "" {
-		name = "My MCP Deployment"
+	model := result.(deploymentSelect)
+	if model.Aborted() {
+		return nil, huh.ErrUserAborted
 	}
 
-	var deployment *client.Deployment
-	var createErr error
+	selected := model.Selected()
+	for i := range deployments {
+		if deployments[i].DeploymentID == selected {
+			PrintSuccess(fmt.Sprintf("Using deployment: %s", successStyle.Render(deployments[i].Name)))
+			return &deployments[i], nil
+		}
+	}
 
-	err = spinner.New().
-		Title("Creating deployment...").
+	return nil, fmt.Errorf("selected deployment not found")
+}
+
+// stepMintAPIKey creates a new API key or reuses an existing one.
+func stepMintAPIKey(apiClient *client.Client, cfg *config.Config) (string, error) {
+	// Reuse existing key if available
+	if cfg.APIKey != "" {
+		PrintSuccess("API key: " + dimStyle.Render("using existing"))
+		return cfg.APIKey, nil
+	}
+
+	var apiKeyResp *client.APIKeyResponse
+	var mintErr error
+
+	err := spinner.New().
+		Title("Creating API key...").
 		Action(func() {
-			deployment, createErr = apiClient.CreateDeployment(client.CreateDeploymentRequest{
-				Name: name,
-			})
+			apiKeyResp, mintErr = apiClient.CreateAPIKey(cfg.DeploymentID, "dosu-cli")
 		}).
 		Run()
 	if err != nil {
-		return nil, err
+		return "", err
+	}
+	if mintErr != nil {
+		return "", fmt.Errorf("failed to create API key: %w", mintErr)
 	}
 
-	if createErr != nil {
-		if errors.Is(createErr, client.ErrEndpointNotAvailable) {
-			fmt.Println()
-			PrintWarning("Deployment creation via CLI is not yet available.")
-			fmt.Printf("  Opening %s to create a deployment...\n", Info(config.GetWebAppURL()))
-			fmt.Println()
-			_ = browser.OpenURL(config.GetWebAppURL())
-			fmt.Printf("  After creating a deployment, run %s again.\n", Info("dosu setup"))
-			return nil, errUserAbort
-		}
-		return nil, createErr
-	}
-
-	PrintSuccess(fmt.Sprintf("Created deployment: %s", name))
-	return deployment, nil
+	PrintSuccess("API key created")
+	return apiKeyResp.APIKey, nil
 }
 
 // isStdioOnly checks if a provider only supports stdio (can't be configured for remote MCP).
@@ -251,13 +307,11 @@ func stepDetectTools() []mcp.SetupProvider {
 
 // stepSelectTools shows a multi-select checkbox for the user to choose which tools to configure.
 func stepSelectTools(detected []mcp.SetupProvider) (*toolSelection, error) {
-	// Cache configured state
 	configuredMap := make(map[string]bool, len(detected))
 	for _, p := range detected {
 		configuredMap[p.ID()] = p.IsConfigured()
 	}
 
-	// Build options: configured first, then unconfigured
 	options := make([]huh.Option[string], 0, len(detected))
 	for _, p := range detected {
 		if configuredMap[p.ID()] {
@@ -271,7 +325,6 @@ func stepSelectTools(detected []mcp.SetupProvider) (*toolSelection, error) {
 		}
 	}
 
-	// Pre-populate so TitleFunc has correct data on first render
 	var selectedIDs []string
 	for _, p := range detected {
 		if configuredMap[p.ID()] {
@@ -321,13 +374,11 @@ func stepSelectTools(detected []mcp.SetupProvider) (*toolSelection, error) {
 		return nil, err
 	}
 
-	// Build lookup of selected IDs
 	idSet := make(map[string]bool, len(selectedIDs))
 	for _, id := range selectedIDs {
 		idSet[id] = true
 	}
 
-	// Categorize based on selection vs configured state
 	result := &toolSelection{}
 	for _, p := range detected {
 		selected := idSet[p.ID()]
@@ -408,6 +459,15 @@ func stepShowSummary(results []configResult) {
 		fmt.Printf("\U0001f389 %s\n", successStyle.Render(fmt.Sprintf("Configured %d tool(s):", len(installed))))
 		for _, r := range installed {
 			fmt.Printf("  %s %s\n", successStyle.Render(IconAdd), r.Provider.Name())
+			fmt.Printf("    %s\n", dimStyle.Render(r.Provider.GlobalConfigPath()))
+		}
+		fmt.Println()
+	}
+
+	if len(skipped) > 0 && len(installed) > 0 {
+		for _, r := range skipped {
+			fmt.Printf("  %s %s\n", dimStyle.Render("~"), r.Provider.Name()+" "+dimStyle.Render("(already configured)"))
+			fmt.Printf("    %s\n", dimStyle.Render(r.Provider.GlobalConfigPath()))
 		}
 		fmt.Println()
 	}
@@ -416,12 +476,17 @@ func stepShowSummary(results []configResult) {
 		fmt.Printf("\U0001f5d1\ufe0f  Removed from %d tool(s):\n", len(removed))
 		for _, r := range removed {
 			fmt.Printf("  %s %s\n", dimStyle.Render(IconRemove), r.Provider.Name())
+			fmt.Printf("    %s\n", dimStyle.Render(r.Provider.GlobalConfigPath()))
 		}
 		fmt.Println()
 	}
 
 	if len(installed) == 0 && len(removed) == 0 && len(skipped) > 0 {
 		fmt.Printf("\U0001f389 %s\n", successStyle.Render("All tools already configured. No changes needed."))
+		for _, r := range skipped {
+			fmt.Printf("  %s %s\n", dimStyle.Render("~"), r.Provider.Name()+" "+dimStyle.Render("(already configured)"))
+			fmt.Printf("    %s\n", dimStyle.Render(r.Provider.GlobalConfigPath()))
+		}
 		fmt.Println()
 	}
 

@@ -35,7 +35,7 @@ func (p *AntigravityProvider) Install(cfg *config.Config, global bool) error {
 		return fmt.Errorf("deployment ID is required")
 	}
 
-	url := fmt.Sprintf("%s/v1/mcp", config.GetBackendURL())
+	url := mcpURL(cfg.DeploymentID)
 	configPath := p.GlobalConfigPath()
 
 	agConfig, err := loadJSONConfig(configPath)
@@ -46,9 +46,7 @@ func (p *AntigravityProvider) Install(cfg *config.Config, global bool) error {
 	// Antigravity uses "serverUrl" instead of "url"
 	server := map[string]any{
 		"serverUrl": url,
-		"headers": map[string]string{
-			"X-Deployment-ID": cfg.DeploymentID,
-		},
+		"headers":   mcpHeaders(cfg),
 	}
 
 	mcpServers, ok := agConfig["mcpServers"].(map[string]any)
