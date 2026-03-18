@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/dosu-ai/dosu-cli/internal/config"
 )
@@ -22,6 +23,7 @@ func mcpHeaders(cfg *config.Config) map[string]string {
 }
 
 // loadJSONConfig reads and unmarshals a JSON config file. Returns an empty map if the file doesn't exist.
+// For .jsonc files, comments are stripped before parsing.
 func loadJSONConfig(path string) (map[string]any, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -30,11 +32,68 @@ func loadJSONConfig(path string) (map[string]any, error) {
 		}
 		return nil, err
 	}
+	if strings.HasSuffix(path, ".jsonc") {
+		data = stripJSONComments(data)
+	}
 	var cfg map[string]any
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// stripJSONComments removes // and /* */ comments from JSONC content,
+// preserving strings that contain comment-like sequences.
+func stripJSONComments(data []byte) []byte {
+	var result []byte
+	i := 0
+	for i < len(data) {
+		// String literal — copy verbatim, handling escapes
+		if data[i] == '"' {
+			result = append(result, data[i])
+			i++
+			for i < len(data) && data[i] != '"' {
+				if data[i] == '\\' {
+					result = append(result, data[i])
+					i++
+					if i < len(data) {
+						result = append(result, data[i])
+						i++
+					}
+					continue
+				}
+				result = append(result, data[i])
+				i++
+			}
+			if i < len(data) {
+				result = append(result, data[i])
+				i++
+			}
+			continue
+		}
+		// Line comment
+		if i+1 < len(data) && data[i] == '/' && data[i+1] == '/' {
+			i += 2
+			for i < len(data) && data[i] != '\n' {
+				i++
+			}
+			continue
+		}
+		// Block comment
+		if i+1 < len(data) && data[i] == '/' && data[i+1] == '*' {
+			i += 2
+			for i+1 < len(data) && !(data[i] == '*' && data[i+1] == '/') {
+				i++
+			}
+			if i+1 < len(data) {
+				i += 2
+			}
+			continue
+		}
+		result = append(result, data[i])
+		i++
+	}
+	return result
 }
 
 // saveJSONConfig writes a JSON config file, creating parent directories as needed.

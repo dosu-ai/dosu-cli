@@ -25,7 +25,7 @@ func (p *CopilotProvider) IsInstalled() bool {
 
 func (p *CopilotProvider) GlobalConfigPath() string {
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		return filepath.Join(xdg, ".copilot", "mcp-config.json")
+		return filepath.Join(xdg, "mcp-config.json")
 	}
 	return expandHome("~/.copilot/mcp-config.json")
 }

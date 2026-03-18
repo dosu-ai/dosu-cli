@@ -13,7 +13,7 @@ type CodexProvider struct{}
 
 func (p *CodexProvider) Name() string        { return "Codex CLI" }
 func (p *CodexProvider) ID() string          { return "codex" }
-func (p *CodexProvider) SupportsLocal() bool { return false }
+func (p *CodexProvider) SupportsLocal() bool { return true }
 func (p *CodexProvider) Priority() int       { return 8 }
 func (p *CodexProvider) DetectPaths() []string {
 	return []string{"~/.codex"}
@@ -21,16 +21,28 @@ func (p *CodexProvider) DetectPaths() []string {
 func (p *CodexProvider) IsInstalled() bool {
 	return isInstalled(p.DetectPaths())
 }
-func (p *CodexProvider) GlobalConfigPath() string {
-	return expandHome("~/.codex/config.toml")
+
+// codexHome returns the Codex home directory, respecting $CODEX_HOME.
+func (p *CodexProvider) codexHome() string {
+	if codexHome := os.Getenv("CODEX_HOME"); codexHome != "" {
+		return codexHome
+	}
+	return expandHome("~/.codex")
 }
 
-func (p *CodexProvider) getConfigPath() (string, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
+func (p *CodexProvider) GlobalConfigPath() string {
+	return filepath.Join(p.codexHome(), "config.toml")
+}
+
+func (p *CodexProvider) configPath(global bool) (string, error) {
+	if global {
+		return p.GlobalConfigPath(), nil
 	}
-	return filepath.Join(homeDir, ".codex", "config.toml"), nil
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current directory: %w", err)
+	}
+	return filepath.Join(cwd, ".codex", "config.toml"), nil
 }
 
 func (p *CodexProvider) loadConfig(path string) (*CodexConfig, error) {
@@ -62,7 +74,7 @@ func (p *CodexProvider) Install(cfg *config.Config, global bool) error {
 		return fmt.Errorf("deployment ID is required")
 	}
 
-	configPath, err := p.getConfigPath()
+	configPath, err := p.configPath(global)
 	if err != nil {
 		return fmt.Errorf("failed to get codex config path: %w", err)
 	}
@@ -79,6 +91,7 @@ func (p *CodexProvider) Install(cfg *config.Config, global bool) error {
 	}
 
 	codexConfig.MCPServers["dosu"] = CodexMCPServer{
+		Type:        "http",
 		URL:         url,
 		HTTPHeaders: mcpHeaders(cfg),
 	}
@@ -91,11 +104,7 @@ func (p *CodexProvider) Install(cfg *config.Config, global bool) error {
 }
 
 func (p *CodexProvider) IsConfigured() bool {
-	configPath, err := p.getConfigPath()
-	if err != nil {
-		return false
-	}
-	cfg, err := p.loadConfig(configPath)
+	cfg, err := p.loadConfig(p.GlobalConfigPath())
 	if err != nil {
 		return false
 	}
@@ -104,7 +113,7 @@ func (p *CodexProvider) IsConfigured() bool {
 }
 
 func (p *CodexProvider) Remove(global bool) error {
-	configPath, err := p.getConfigPath()
+	configPath, err := p.configPath(global)
 	if err != nil {
 		return fmt.Errorf("failed to get codex config path: %w", err)
 	}
@@ -134,6 +143,7 @@ type CodexConfig struct {
 
 // CodexMCPServer represents an MCP server entry in Codex config
 type CodexMCPServer struct {
+	Type              string            `toml:"type,omitempty"`
 	URL               string            `toml:"url"`
 	HTTPHeaders       map[string]string `toml:"http_headers,omitempty"`
 	BearerTokenEnvVar string            `toml:"bearer_token_env_var,omitempty"`

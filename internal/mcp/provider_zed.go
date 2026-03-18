@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 
@@ -40,9 +41,24 @@ func (p *ZedProvider) configDir() string {
 	return filepath.Join(appSupportDir(), "zed")
 }
 
+func (p *ZedProvider) configPath(global bool) (string, error) {
+	if global {
+		return p.GlobalConfigPath(), nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current directory: %w", err)
+	}
+	return filepath.Join(cwd, ".zed", "settings.json"), nil
+}
+
 func (p *ZedProvider) Install(cfg *config.Config, global bool) error {
 	if cfg.DeploymentID == "" {
 		return fmt.Errorf("deployment ID is required")
+	}
+	configPath, err := p.configPath(global)
+	if err != nil {
+		return err
 	}
 	server := map[string]any{
 		"source":  "custom",
@@ -50,9 +66,13 @@ func (p *ZedProvider) Install(cfg *config.Config, global bool) error {
 		"url":     mcpURL(cfg.DeploymentID),
 		"headers": mcpHeaders(cfg),
 	}
-	return installJSONServer(p.GlobalConfigPath(), "context_servers", server)
+	return installJSONServer(configPath, "context_servers", server)
 }
 
 func (p *ZedProvider) Remove(global bool) error {
-	return removeJSONServer(p.GlobalConfigPath(), "context_servers")
+	configPath, err := p.configPath(global)
+	if err != nil {
+		return err
+	}
+	return removeJSONServer(configPath, "context_servers")
 }

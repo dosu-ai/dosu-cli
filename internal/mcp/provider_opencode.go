@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/dosu-ai/dosu-cli/internal/config"
 )
@@ -29,9 +31,24 @@ func (p *OpenCodeProvider) IsConfigured() bool {
 	return isJSONKeyConfigured(p.GlobalConfigPath(), "mcp")
 }
 
+func (p *OpenCodeProvider) configPath(global bool) (string, error) {
+	if global {
+		return p.GlobalConfigPath(), nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current directory: %w", err)
+	}
+	return filepath.Join(cwd, "opencode.json"), nil
+}
+
 func (p *OpenCodeProvider) Install(cfg *config.Config, global bool) error {
 	if cfg.DeploymentID == "" {
 		return fmt.Errorf("deployment ID is required")
+	}
+	configPath, err := p.configPath(global)
+	if err != nil {
+		return err
 	}
 	server := map[string]any{
 		"type":    "remote",
@@ -39,9 +56,13 @@ func (p *OpenCodeProvider) Install(cfg *config.Config, global bool) error {
 		"enabled": true,
 		"headers": mcpHeaders(cfg),
 	}
-	return installJSONServer(p.GlobalConfigPath(), "mcp", server)
+	return installJSONServer(configPath, "mcp", server)
 }
 
 func (p *OpenCodeProvider) Remove(global bool) error {
-	return removeJSONServer(p.GlobalConfigPath(), "mcp")
+	configPath, err := p.configPath(global)
+	if err != nil {
+		return err
+	}
+	return removeJSONServer(configPath, "mcp")
 }
