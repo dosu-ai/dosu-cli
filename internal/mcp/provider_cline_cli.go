@@ -42,48 +42,15 @@ func (p *ClineCliProvider) Install(cfg *config.Config, global bool) error {
 	if cfg.DeploymentID == "" {
 		return fmt.Errorf("deployment ID is required")
 	}
-
-	url := mcpURL(cfg.DeploymentID)
-	configPath := p.GlobalConfigPath()
-
-	clineConfig, err := loadJSONConfig(configPath)
-	if err != nil {
-		return fmt.Errorf("failed to load cline cli config: %w", err)
-	}
-
-	// Same format as Cline VS Code: streamableHttp + disabled field
 	server := map[string]any{
-		"url":      url,
+		"url":      mcpURL(cfg.DeploymentID),
 		"type":     "streamableHttp",
 		"disabled": false,
 		"headers":  mcpHeaders(cfg),
 	}
-
-	mcpServers, ok := clineConfig["mcpServers"].(map[string]any)
-	if !ok {
-		mcpServers = make(map[string]any)
-	}
-	mcpServers["dosu"] = server
-	clineConfig["mcpServers"] = mcpServers
-
-	if err := saveJSONConfig(configPath, clineConfig); err != nil {
-		return fmt.Errorf("failed to save cline cli config: %w", err)
-	}
-
-	return nil
+	return installJSONServer(p.GlobalConfigPath(), "mcpServers", server)
 }
 
 func (p *ClineCliProvider) Remove(global bool) error {
-	configPath := p.GlobalConfigPath()
-
-	clineConfig, err := loadJSONConfig(configPath)
-	if err != nil {
-		return nil
-	}
-
-	if mcpServers, ok := clineConfig["mcpServers"].(map[string]any); ok {
-		delete(mcpServers, "dosu")
-	}
-
-	return saveJSONConfig(configPath, clineConfig)
+	return removeJSONServer(p.GlobalConfigPath(), "mcpServers")
 }

@@ -177,8 +177,7 @@ func (c *Client) GetDeployments() ([]Deployment, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		detail := string(body)
+		detail := readErrorBody(resp.Body)
 		if detail == "" || detail == "Internal Server Error" {
 			detail = "check backend logs for details"
 		}
@@ -208,8 +207,7 @@ func (c *Client) GetOrgs() ([]Org, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("failed to fetch orgs (status %d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("failed to fetch orgs (status %d): %s", resp.StatusCode, readErrorBody(resp.Body))
 	}
 
 	var orgs []Org
@@ -249,8 +247,7 @@ func (c *Client) CreateAPIKey(deploymentID string, name string) (*APIKeyResponse
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("failed to create API key (status %d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("failed to create API key (status %d): %s", resp.StatusCode, readErrorBody(resp.Body))
 	}
 
 	var result APIKeyResponse
@@ -258,4 +255,10 @@ func (c *Client) CreateAPIKey(deploymentID string, name string) (*APIKeyResponse
 		return nil, fmt.Errorf("failed to decode API key response: %w", err)
 	}
 	return &result, nil
+}
+
+// readErrorBody reads up to 1KB from an error response body for use in error messages.
+func readErrorBody(body io.Reader) string {
+	b, _ := io.ReadAll(io.LimitReader(body, 1024))
+	return string(b)
 }

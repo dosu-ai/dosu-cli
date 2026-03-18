@@ -38,24 +38,7 @@ func (p *CopilotProvider) Install(cfg *config.Config, global bool) error {
 	if cfg.DeploymentID == "" {
 		return fmt.Errorf("deployment ID is required")
 	}
-
 	url := mcpURL(cfg.DeploymentID)
-
-	var configPath string
-	if global {
-		configPath = p.GlobalConfigPath()
-	} else {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("failed to get current directory: %w", err)
-		}
-		configPath = filepath.Join(cwd, ".vscode", "mcp.json")
-	}
-
-	copilotConfig, err := loadJSONConfig(configPath)
-	if err != nil {
-		return fmt.Errorf("failed to load copilot config: %w", err)
-	}
 
 	if global {
 		server := map[string]any{
@@ -64,65 +47,31 @@ func (p *CopilotProvider) Install(cfg *config.Config, global bool) error {
 			"tools":   []string{"*"},
 			"headers": mcpHeaders(cfg),
 		}
-
-		mcpServers, ok := copilotConfig["mcpServers"].(map[string]any)
-		if !ok {
-			mcpServers = make(map[string]any)
-		}
-		mcpServers["dosu"] = server
-		copilotConfig["mcpServers"] = mcpServers
-	} else {
-		server := map[string]any{
-			"type":    "http",
-			"url":     url,
-			"headers": mcpHeaders(cfg),
-		}
-
-		servers, ok := copilotConfig["servers"].(map[string]any)
-		if !ok {
-			servers = make(map[string]any)
-		}
-		servers["dosu"] = server
-		copilotConfig["servers"] = servers
+		return installJSONServer(p.GlobalConfigPath(), "mcpServers", server)
 	}
 
-	if err := saveJSONConfig(configPath, copilotConfig); err != nil {
-		return fmt.Errorf("failed to save copilot config: %w", err)
+	// Local: uses .vscode/mcp.json with "servers" key
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current directory: %w", err)
 	}
-
-	return nil
+	configPath := filepath.Join(cwd, ".vscode", "mcp.json")
+	server := map[string]any{
+		"type":    "http",
+		"url":     url,
+		"headers": mcpHeaders(cfg),
+	}
+	return installJSONServer(configPath, "servers", server)
 }
 
 func (p *CopilotProvider) Remove(global bool) error {
-	var configPath string
 	if global {
-		configPath = p.GlobalConfigPath()
-	} else {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("failed to get current directory: %w", err)
-		}
-		configPath = filepath.Join(cwd, ".vscode", "mcp.json")
+		return removeJSONServer(p.GlobalConfigPath(), "mcpServers")
 	}
-
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		return nil
-	}
-
-	copilotConfig, err := loadJSONConfig(configPath)
+	cwd, err := os.Getwd()
 	if err != nil {
-		return fmt.Errorf("failed to load copilot config: %w", err)
+		return fmt.Errorf("failed to get current directory: %w", err)
 	}
-
-	if global {
-		if mcpServers, ok := copilotConfig["mcpServers"].(map[string]any); ok {
-			delete(mcpServers, "dosu")
-		}
-	} else {
-		if servers, ok := copilotConfig["servers"].(map[string]any); ok {
-			delete(servers, "dosu")
-		}
-	}
-
-	return saveJSONConfig(configPath, copilotConfig)
+	configPath := filepath.Join(cwd, ".vscode", "mcp.json")
+	return removeJSONServer(configPath, "servers")
 }

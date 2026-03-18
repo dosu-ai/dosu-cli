@@ -18,22 +18,13 @@ type SetupProvider interface {
 }
 
 // AllSetupProviders returns all providers that implement SetupProvider, sorted by priority.
+// Derived from AllProviders() so there's a single source of truth.
 func AllSetupProviders() []SetupProvider {
-	providers := []SetupProvider{
-		&ClaudeProvider{},
-		&ClaudeDesktopProvider{},
-		&CursorProvider{},
-		&VSCodeProvider{},
-		&GeminiProvider{},
-		&CodexProvider{},
-		&WindsurfProvider{},
-		&ZedProvider{},
-		&ClineProvider{},
-		&ClineCliProvider{},
-		&CopilotProvider{},
-		&OpenCodeProvider{},
-		&AntigravityProvider{},
-		&MCPorterProvider{},
+	var providers []SetupProvider
+	for _, p := range AllProviders() {
+		if sp, ok := p.(SetupProvider); ok {
+			providers = append(providers, sp)
+		}
 	}
 
 	sort.Slice(providers, func(i, j int) bool {

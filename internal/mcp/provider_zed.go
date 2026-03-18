@@ -44,48 +44,15 @@ func (p *ZedProvider) Install(cfg *config.Config, global bool) error {
 	if cfg.DeploymentID == "" {
 		return fmt.Errorf("deployment ID is required")
 	}
-
-	url := mcpURL(cfg.DeploymentID)
-	configPath := p.GlobalConfigPath()
-
-	zedConfig, err := loadJSONConfig(configPath)
-	if err != nil {
-		return fmt.Errorf("failed to load zed config: %w", err)
-	}
-
-	// Zed uses context_servers with a "source: custom" wrapper
 	server := map[string]any{
 		"source":  "custom",
 		"type":    "http",
-		"url":     url,
+		"url":     mcpURL(cfg.DeploymentID),
 		"headers": mcpHeaders(cfg),
 	}
-
-	contextServers, ok := zedConfig["context_servers"].(map[string]any)
-	if !ok {
-		contextServers = make(map[string]any)
-	}
-	contextServers["dosu"] = server
-	zedConfig["context_servers"] = contextServers
-
-	if err := saveJSONConfig(configPath, zedConfig); err != nil {
-		return fmt.Errorf("failed to save zed config: %w", err)
-	}
-
-	return nil
+	return installJSONServer(p.GlobalConfigPath(), "context_servers", server)
 }
 
 func (p *ZedProvider) Remove(global bool) error {
-	configPath := p.GlobalConfigPath()
-
-	zedConfig, err := loadJSONConfig(configPath)
-	if err != nil {
-		return nil
-	}
-
-	if contextServers, ok := zedConfig["context_servers"].(map[string]any); ok {
-		delete(contextServers, "dosu")
-	}
-
-	return saveJSONConfig(configPath, zedConfig)
+	return removeJSONServer(p.GlobalConfigPath(), "context_servers")
 }

@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -19,42 +18,14 @@ type Provider interface {
 	Remove(global bool) error
 }
 
-// GetProvider returns a provider for the given tool ID
+// GetProvider returns a provider for the given tool ID.
 func GetProvider(toolID string) (Provider, error) {
-	switch toolID {
-	case "claude":
-		return &ClaudeProvider{}, nil
-	case "claude-desktop":
-		return &ClaudeDesktopProvider{}, nil
-	case "cursor":
-		return &CursorProvider{}, nil
-	case "vscode":
-		return &VSCodeProvider{}, nil
-	case "gemini":
-		return &GeminiProvider{}, nil
-	case "codex":
-		return &CodexProvider{}, nil
-	case "windsurf":
-		return &WindsurfProvider{}, nil
-	case "zed":
-		return &ZedProvider{}, nil
-	case "cline":
-		return &ClineProvider{}, nil
-	case "cline-cli":
-		return &ClineCliProvider{}, nil
-	case "copilot":
-		return &CopilotProvider{}, nil
-	case "opencode":
-		return &OpenCodeProvider{}, nil
-	case "antigravity":
-		return &AntigravityProvider{}, nil
-	case "mcporter":
-		return &MCPorterProvider{}, nil
-	case "manual":
-		return &ManualProvider{}, nil
-	default:
-		return nil, fmt.Errorf("unknown tool: %s", toolID)
+	for _, p := range AllProviders() {
+		if p.ID() == toolID {
+			return p, nil
+		}
 	}
+	return nil, fmt.Errorf("unknown tool: %s", toolID)
 }
 
 // AllProviders returns all available providers (for CLI mcp add/list commands)
@@ -102,30 +73,6 @@ func (p *ClaudeProvider) getConfigPath() (string, error) {
 	return filepath.Join(homeDir, ".claude.json"), nil
 }
 
-func (p *ClaudeProvider) loadConfig(path string) (map[string]any, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return make(map[string]any), nil
-		}
-		return nil, err
-	}
-
-	var cfg map[string]any
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, err
-	}
-	return cfg, nil
-}
-
-func (p *ClaudeProvider) saveConfig(path string, cfg map[string]any) error {
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0644)
-}
-
 func (p *ClaudeProvider) Install(cfg *config.Config, global bool) error {
 	if cfg.DeploymentID == "" {
 		return fmt.Errorf("deployment ID is required")
@@ -138,7 +85,7 @@ func (p *ClaudeProvider) Install(cfg *config.Config, global bool) error {
 		return fmt.Errorf("failed to get claude config path: %w", err)
 	}
 
-	claudeConfig, err := p.loadConfig(configPath)
+	claudeConfig, err := loadJSONConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("failed to load claude config: %w", err)
 	}
@@ -185,7 +132,7 @@ func (p *ClaudeProvider) Install(cfg *config.Config, global bool) error {
 		claudeConfig["projects"] = projects
 	}
 
-	if err := p.saveConfig(configPath, claudeConfig); err != nil {
+	if err := saveJSONConfig(configPath, claudeConfig); err != nil {
 		return fmt.Errorf("failed to save claude config: %w", err)
 	}
 
@@ -197,7 +144,7 @@ func (p *ClaudeProvider) IsConfigured() bool {
 	if err != nil {
 		return false
 	}
-	cfg, err := p.loadConfig(configPath)
+	cfg, err := loadJSONConfig(configPath)
 	if err != nil {
 		return false
 	}
@@ -220,7 +167,7 @@ func (p *ClaudeProvider) Remove(global bool) error {
 		return nil
 	}
 
-	claudeConfig, err := p.loadConfig(configPath)
+	claudeConfig, err := loadJSONConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("failed to load claude config: %w", err)
 	}
@@ -244,7 +191,7 @@ func (p *ClaudeProvider) Remove(global bool) error {
 		}
 	}
 
-	if err := p.saveConfig(configPath, claudeConfig); err != nil {
+	if err := saveJSONConfig(configPath, claudeConfig); err != nil {
 		return fmt.Errorf("failed to save claude config: %w", err)
 	}
 
@@ -345,13 +292,11 @@ func (p *CodexProvider) Install(cfg *config.Config, global bool) error {
 		return fmt.Errorf("failed to get codex config path: %w", err)
 	}
 
-	// Load existing config or create new one
 	codexConfig, err := p.loadConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("failed to load codex config: %w", err)
 	}
 
-	// Add the Dosu MCP server configuration
 	url := mcpURL(cfg.DeploymentID)
 
 	if codexConfig.MCPServers == nil {

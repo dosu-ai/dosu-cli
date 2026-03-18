@@ -33,48 +33,15 @@ func (p *OpenCodeProvider) Install(cfg *config.Config, global bool) error {
 	if cfg.DeploymentID == "" {
 		return fmt.Errorf("deployment ID is required")
 	}
-
-	url := mcpURL(cfg.DeploymentID)
-	configPath := p.GlobalConfigPath()
-
-	ocConfig, err := loadJSONConfig(configPath)
-	if err != nil {
-		return fmt.Errorf("failed to load opencode config: %w", err)
-	}
-
-	// OpenCode uses "mcp" key with type: "remote" and enabled: true
 	server := map[string]any{
 		"type":    "remote",
-		"url":     url,
+		"url":     mcpURL(cfg.DeploymentID),
 		"enabled": true,
 		"headers": mcpHeaders(cfg),
 	}
-
-	mcpSection, ok := ocConfig["mcp"].(map[string]any)
-	if !ok {
-		mcpSection = make(map[string]any)
-	}
-	mcpSection["dosu"] = server
-	ocConfig["mcp"] = mcpSection
-
-	if err := saveJSONConfig(configPath, ocConfig); err != nil {
-		return fmt.Errorf("failed to save opencode config: %w", err)
-	}
-
-	return nil
+	return installJSONServer(p.GlobalConfigPath(), "mcp", server)
 }
 
 func (p *OpenCodeProvider) Remove(global bool) error {
-	configPath := p.GlobalConfigPath()
-
-	ocConfig, err := loadJSONConfig(configPath)
-	if err != nil {
-		return nil
-	}
-
-	if mcpSection, ok := ocConfig["mcp"].(map[string]any); ok {
-		delete(mcpSection, "dosu")
-	}
-
-	return saveJSONConfig(configPath, ocConfig)
+	return removeJSONServer(p.GlobalConfigPath(), "mcp")
 }

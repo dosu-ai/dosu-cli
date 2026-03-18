@@ -31,78 +31,37 @@ func (p *VSCodeProvider) IsConfigured() bool {
 	return isJSONKeyConfigured(p.GlobalConfigPath(), "servers")
 }
 
+func (p *VSCodeProvider) configPath(global bool) (string, error) {
+	if global {
+		return p.GlobalConfigPath(), nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current directory: %w", err)
+	}
+	return filepath.Join(cwd, ".vscode", "mcp.json"), nil
+}
+
 func (p *VSCodeProvider) Install(cfg *config.Config, global bool) error {
 	if cfg.DeploymentID == "" {
 		return fmt.Errorf("deployment ID is required")
 	}
-
-	url := mcpURL(cfg.DeploymentID)
-
-	var configPath string
-	if global {
-		configPath = p.GlobalConfigPath()
-	} else {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("failed to get current directory: %w", err)
-		}
-		configPath = filepath.Join(cwd, ".vscode", "mcp.json")
-	}
-
-	vscodeConfig, err := loadJSONConfig(configPath)
+	configPath, err := p.configPath(global)
 	if err != nil {
-		return fmt.Errorf("failed to load vscode config: %w", err)
+		return err
 	}
-
-	// VS Code uses "servers" key (not "mcpServers")
 	server := map[string]any{
 		"type":    "http",
-		"url":     url,
+		"url":     mcpURL(cfg.DeploymentID),
 		"headers": mcpHeaders(cfg),
 	}
-
-	servers, ok := vscodeConfig["servers"].(map[string]any)
-	if !ok {
-		servers = make(map[string]any)
-	}
-	servers["dosu"] = server
-	vscodeConfig["servers"] = servers
-
-	if err := saveJSONConfig(configPath, vscodeConfig); err != nil {
-		return fmt.Errorf("failed to save vscode config: %w", err)
-	}
-
-	return nil
+	return installJSONServer(configPath, "servers", server)
 }
 
 func (p *VSCodeProvider) Remove(global bool) error {
-	var configPath string
-	if global {
-		configPath = p.GlobalConfigPath()
-	} else {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("failed to get current directory: %w", err)
-		}
-		configPath = filepath.Join(cwd, ".vscode", "mcp.json")
-	}
-
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		return nil
-	}
-
-	vscodeConfig, err := loadJSONConfig(configPath)
+	configPath, err := p.configPath(global)
 	if err != nil {
-		return fmt.Errorf("failed to load vscode config: %w", err)
+		return err
 	}
-
-	if servers, ok := vscodeConfig["servers"].(map[string]any); ok {
-		delete(servers, "dosu")
-	}
-
-	if err := saveJSONConfig(configPath, vscodeConfig); err != nil {
-		return fmt.Errorf("failed to save vscode config: %w", err)
-	}
-
-	return nil
+	return removeJSONServer(configPath, "servers")
 }

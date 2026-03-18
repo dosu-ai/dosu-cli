@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,134 +27,40 @@ func (p *CursorProvider) GlobalConfigPath() string {
 	return expandHome("~/.cursor/mcp.json")
 }
 
-func (p *CursorProvider) Install(cfg *config.Config, global bool) error {
-	if cfg.DeploymentID == "" {
-		return fmt.Errorf("deployment ID is required")
-	}
-
-	url := mcpURL(cfg.DeploymentID)
-
-	var configPath string
-	if global {
-		configPath = p.GlobalConfigPath()
-	} else {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("failed to get current directory: %w", err)
-		}
-		configPath = filepath.Join(cwd, ".cursor", "mcp.json")
-	}
-
-	cursorConfig, err := loadJSONConfig(configPath)
-	if err != nil {
-		return fmt.Errorf("failed to load cursor config: %w", err)
-	}
-
-	server := map[string]any{
-		"url":     url,
-		"headers": mcpHeaders(cfg),
-	}
-
-	mcpServers, ok := cursorConfig["mcpServers"].(map[string]any)
-	if !ok {
-		mcpServers = make(map[string]any)
-	}
-	mcpServers["dosu"] = server
-	cursorConfig["mcpServers"] = mcpServers
-
-	if err := saveJSONConfig(configPath, cursorConfig); err != nil {
-		return fmt.Errorf("failed to save cursor config: %w", err)
-	}
-
-	return nil
-}
-
 func (p *CursorProvider) IsConfigured() bool {
 	return isJSONKeyConfigured(p.GlobalConfigPath(), "mcpServers")
 }
 
-func (p *CursorProvider) Remove(global bool) error {
-	var configPath string
+func (p *CursorProvider) configPath(global bool) (string, error) {
 	if global {
-		configPath = p.GlobalConfigPath()
-	} else {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("failed to get current directory: %w", err)
-		}
-		configPath = filepath.Join(cwd, ".cursor", "mcp.json")
+		return p.GlobalConfigPath(), nil
 	}
-
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		return nil
-	}
-
-	cursorConfig, err := loadJSONConfig(configPath)
+	cwd, err := os.Getwd()
 	if err != nil {
-		return fmt.Errorf("failed to load cursor config: %w", err)
+		return "", fmt.Errorf("failed to get current directory: %w", err)
 	}
-
-	if mcpServers, ok := cursorConfig["mcpServers"].(map[string]any); ok {
-		delete(mcpServers, "dosu")
-	}
-
-	if err := saveJSONConfig(configPath, cursorConfig); err != nil {
-		return fmt.Errorf("failed to save cursor config: %w", err)
-	}
-
-	return nil
+	return filepath.Join(cwd, ".cursor", "mcp.json"), nil
 }
 
-// mcpURL returns the MCP endpoint URL with deployment ID encoded in the path.
-func mcpURL(deploymentID string) string {
-	return fmt.Sprintf("%s/v1/mcp/deployments/%s", config.GetBackendURL(), deploymentID)
-}
-
-// mcpHeaders returns the standard MCP headers with API key auth.
-func mcpHeaders(cfg *config.Config) map[string]string {
-	return map[string]string{
-		"X-Dosu-API-Key": cfg.APIKey,
+func (p *CursorProvider) Install(cfg *config.Config, global bool) error {
+	if cfg.DeploymentID == "" {
+		return fmt.Errorf("deployment ID is required")
 	}
-}
-
-// Shared JSON config helpers used by multiple providers.
-
-func loadJSONConfig(path string) (map[string]any, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return make(map[string]any), nil
-		}
-		return nil, err
-	}
-	var cfg map[string]any
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, err
-	}
-	return cfg, nil
-}
-
-// isJSONKeyConfigured checks if "dosu" exists under the given top-level key in a JSON config file.
-func isJSONKeyConfigured(configPath string, topLevelKey string) bool {
-	cfg, err := loadJSONConfig(configPath)
-	if err != nil {
-		return false
-	}
-	section, ok := cfg[topLevelKey].(map[string]any)
-	if !ok {
-		return false
-	}
-	_, exists := section["dosu"]
-	return exists
-}
-
-func saveJSONConfig(path string, cfg map[string]any) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	configPath, err := p.configPath(global)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	server := map[string]any{
+		"url":     mcpURL(cfg.DeploymentID),
+		"headers": mcpHeaders(cfg),
+	}
+	return installJSONServer(configPath, "mcpServers", server)
+}
+
+func (p *CursorProvider) Remove(global bool) error {
+	configPath, err := p.configPath(global)
+	if err != nil {
+		return err
+	}
+	return removeJSONServer(configPath, "mcpServers")
 }

@@ -34,46 +34,14 @@ func (p *WindsurfProvider) Install(cfg *config.Config, global bool) error {
 	if cfg.DeploymentID == "" {
 		return fmt.Errorf("deployment ID is required")
 	}
-
-	url := mcpURL(cfg.DeploymentID)
-	configPath := p.GlobalConfigPath()
-
-	wsConfig, err := loadJSONConfig(configPath)
-	if err != nil {
-		return fmt.Errorf("failed to load windsurf config: %w", err)
-	}
-
 	server := map[string]any{
 		"type":    "http",
-		"url":     url,
+		"url":     mcpURL(cfg.DeploymentID),
 		"headers": mcpHeaders(cfg),
 	}
-
-	mcpServers, ok := wsConfig["mcpServers"].(map[string]any)
-	if !ok {
-		mcpServers = make(map[string]any)
-	}
-	mcpServers["dosu"] = server
-	wsConfig["mcpServers"] = mcpServers
-
-	if err := saveJSONConfig(configPath, wsConfig); err != nil {
-		return fmt.Errorf("failed to save windsurf config: %w", err)
-	}
-
-	return nil
+	return installJSONServer(p.GlobalConfigPath(), "mcpServers", server)
 }
 
 func (p *WindsurfProvider) Remove(global bool) error {
-	configPath := p.GlobalConfigPath()
-
-	wsConfig, err := loadJSONConfig(configPath)
-	if err != nil {
-		return nil
-	}
-
-	if mcpServers, ok := wsConfig["mcpServers"].(map[string]any); ok {
-		delete(mcpServers, "dosu")
-	}
-
-	return saveJSONConfig(configPath, wsConfig)
+	return removeJSONServer(p.GlobalConfigPath(), "mcpServers")
 }
