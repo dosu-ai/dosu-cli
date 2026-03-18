@@ -50,7 +50,7 @@ type Options struct {
 func Run(opts Options) error {
 	fmt.Println()
 
-	// Step 1: Authenticate
+	// Authenticate
 	cfg, err := stepAuthenticate()
 	if err != nil {
 		if isUserAbort(err) {
@@ -82,7 +82,7 @@ func Run(opts Options) error {
 		PrintSuccess(fmt.Sprintf("Using deployment: %s", Success(deployment.Name)))
 		fmt.Println()
 	} else {
-		// Step 2: Select organization
+		// Select organization
 		org, err := stepSelectOrg(apiClient)
 		if err != nil {
 			if isUserAbort(err) {
@@ -97,7 +97,7 @@ func Run(opts Options) error {
 		}
 		fmt.Println()
 
-		// Step 3: Select deployment (auto-select if only one, no creation)
+		// Select deployment (auto-select if only one, no creation)
 		deployment, err := stepSelectDeployment(apiClient, org)
 		if err != nil {
 			if isUserAbort(err) {
@@ -119,7 +119,7 @@ func Run(opts Options) error {
 		fmt.Println()
 	}
 
-	// Step 4: Mint API key (or reuse existing)
+	// Mint API key (or reuse existing)
 	apiKey, err := stepMintAPIKey(apiClient, cfg)
 	if err != nil {
 		if isUserAbort(err) {
@@ -134,7 +134,7 @@ func Run(opts Options) error {
 	}
 	fmt.Println()
 
-	// Step 5: Detect installed tools
+	// Detect installed tools
 	detected := stepDetectTools()
 	if len(detected) == 0 {
 		fmt.Println()
@@ -143,7 +143,7 @@ func Run(opts Options) error {
 		return nil
 	}
 
-	// Step 5b: Let user choose which tools to configure
+	// Let user choose which tools to configure
 	selection, err := stepSelectTools(detected)
 	if err != nil {
 		if isUserAbort(err) {
@@ -157,10 +157,10 @@ func Run(opts Options) error {
 		return nil
 	}
 
-	// Step 6: Configure/remove tools
+	// Configure/remove tools
 	results := stepConfigureTools(cfg, selection)
 
-	// Step 7: Show summary
+	// Show summary
 	stepShowSummary(results)
 
 	return nil
