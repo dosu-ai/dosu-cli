@@ -26,7 +26,11 @@ builds:
         goarch: arm64
     # Strip debug info to reduce binary size
     ldflags:
-      - -s -w -X github.com/dosu-ai/dosu-cli/internal/version.Version={{ .Version }}
+      - >-
+        -s -w
+        -X github.com/dosu-ai/dosu-cli/internal/version.Version={{.Version}}
+        -X github.com/dosu-ai/dosu-cli/internal/version.Commit={{.Commit}}
+        -X github.com/dosu-ai/dosu-cli/internal/version.Date={{.CommitDate}}
 
 archives:
   - name_template: >-
