@@ -1,11 +1,15 @@
 BINARY_NAME=dosu
 BUILD_DIR=bin
 CMD_DIR=cmd/dosu-cli
+VERSION ?= $(shell git describe --tags 2>/dev/null || echo "dev")
+COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "none")
+DATE    ?= $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
+LDFLAGS  = -s -w -X github.com/dosu-ai/dosu-cli/internal/version.Version=$(VERSION) -X github.com/dosu-ai/dosu-cli/internal/version.Commit=$(COMMIT) -X github.com/dosu-ai/dosu-cli/internal/version.Date=$(DATE)
 
 .PHONY: build run clean format lint test install help
 
 build:
-	go build -o $(BUILD_DIR)/$(BINARY_NAME) ./$(CMD_DIR)
+	go build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME) ./$(CMD_DIR)
 
 run: build
 	$(BUILD_DIR)/$(BINARY_NAME)
