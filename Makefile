@@ -1,11 +1,13 @@
 BINARY_NAME=dosu
 BUILD_DIR=bin
 CMD_DIR=cmd/dosu-cli
+VERSION?=dev
+LDFLAGS=-s -w -X github.com/dosu-ai/dosu-cli/internal/version.Version=$(VERSION)
 
 .PHONY: build run clean format lint test install help
 
 build:
-	go build -o $(BUILD_DIR)/$(BINARY_NAME) ./$(CMD_DIR)
+	go build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME) ./$(CMD_DIR)
 
 run: build
 	$(BUILD_DIR)/$(BINARY_NAME)

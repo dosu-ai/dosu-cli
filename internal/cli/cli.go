@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/dosu-ai/dosu-cli/internal/tui"
+	"github.com/dosu-ai/dosu-cli/internal/version"
 	"github.com/spf13/cobra"
 )
 
@@ -24,6 +25,10 @@ Run without arguments to launch the interactive TUI.`,
 			os.Exit(1)
 		}
 	},
+}
+
+func init() {
+	rootCmd.Version = version.Version
 }
 
 // Execute runs the root command
