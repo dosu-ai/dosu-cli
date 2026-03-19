@@ -31,6 +31,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TOKEN: ${{ secrets.HOMEBREW_TOKEN }}
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
 
   update-homebrew:
     needs: goreleaser
