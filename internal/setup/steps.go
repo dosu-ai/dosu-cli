@@ -260,10 +260,13 @@ func stepSelectDeployment(apiClient *client.Client, org *client.Org) (*client.De
 
 // stepMintAPIKey creates a new API key or reuses an existing one.
 func stepMintAPIKey(apiClient *client.Client, cfg *config.Config) (string, error) {
-	// Reuse existing key if available
+	// Reuse existing key if valid against current backend
 	if cfg.APIKey != "" {
-		PrintSuccess("API key: " + dimStyle.Render("using existing"))
-		return cfg.APIKey, nil
+		if apiClient.ValidateAPIKey(cfg.APIKey, cfg.DeploymentID) {
+			PrintSuccess("API key: " + dimStyle.Render("using existing"))
+			return cfg.APIKey, nil
+		}
+		PrintWarning("Existing API key is invalid, creating a new one...")
 	}
 
 	var apiKeyResp *client.APIKeyResponse

@@ -2,11 +2,13 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/dosu-ai/dosu-cli/internal/config"
@@ -234,6 +236,27 @@ type APIKeyResponse struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	KeyPrefix string `json:"key_prefix"`
+}
+
+// ValidateAPIKey checks if an API key is valid against the current backend.
+// Returns true if valid, false if invalid. On network errors, assumes valid (optimistic).
+func (c *Client) ValidateAPIKey(apiKey string, deploymentID string) bool {
+	endpoint := fmt.Sprintf("%s/v1/mcp/deployments/%s", c.baseURL, url.PathEscape(deploymentID))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+	if err != nil {
+		return true // assume valid on error
+	}
+	req.Header.Set("X-Dosu-API-Key", apiKey)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return true // network error — assume valid, will fail later with a clearer message
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	return resp.StatusCode != 401 && resp.StatusCode != 403
 }
 
 // CreateAPIKey mints a new API key for the given deployment.
