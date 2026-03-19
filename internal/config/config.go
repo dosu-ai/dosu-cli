@@ -17,6 +17,7 @@ type Config struct {
 	ExpiresAt      int64  `json:"expires_at"`
 	DeploymentID   string `json:"deployment_id,omitempty"`
 	DeploymentName string `json:"deployment_name,omitempty"`
+	APIKey         string `json:"api_key,omitempty"`
 }
 
 func configPath() (string, error) {
@@ -102,4 +103,5 @@ func (c *Config) Clear() {
 	c.ExpiresAt = 0
 	c.DeploymentID = ""
 	c.DeploymentName = ""
+	c.APIKey = ""
 }
