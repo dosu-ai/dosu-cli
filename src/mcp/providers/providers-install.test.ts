@@ -610,7 +610,7 @@ describe("ManualProvider", () => {
 
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
-    provider.install(makeCfg());
+    provider.install(makeCfg(), false);
 
     const allOutput = logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
     expect(allOutput).toContain("dep-123");
@@ -626,7 +626,7 @@ describe("ManualProvider", () => {
 
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
-    provider.remove();
+    provider.remove(false);
 
     const allOutput = logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
     expect(allOutput).toContain("remove");
