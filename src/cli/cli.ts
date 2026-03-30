@@ -15,7 +15,12 @@ export function createProgram(): Command {
   program
     .name("dosu")
     .description("Dosu CLI - Manage MCP servers for AI tools")
-    .version(getVersionString(), "-v, --version");
+    .version(getVersionString(), "-v, --version")
+    .action(async () => {
+      // Default: launch TUI when no subcommand given
+      const { runTUI } = await import("../tui/tui");
+      await runTUI();
+    });
 
   // login
   program
