@@ -11,22 +11,22 @@ describe("auth callback server", () => {
     }
   });
 
-  it("starts on a random port", () => {
-    const result = startCallbackServer();
+  it("starts on a random port", async () => {
+    const result = await startCallbackServer();
     server = result.server;
     expect(server.port).toBeGreaterThan(0);
     expect(server.port).toBeLessThan(65536);
   });
 
   it("returns 404 for non-callback paths", async () => {
-    const result = startCallbackServer();
+    const result = await startCallbackServer();
     server = result.server;
     const resp = await fetch(`http://localhost:${server.port}/other`);
     expect(resp.status).toBe(404);
   });
 
   it("serves extract HTML when no access_token in query", async () => {
-    const result = startCallbackServer();
+    const result = await startCallbackServer();
     server = result.server;
     const resp = await fetch(`http://localhost:${server.port}/callback`);
     expect(resp.status).toBe(200);
@@ -36,10 +36,9 @@ describe("auth callback server", () => {
   });
 
   it("returns token and serves success HTML when access_token is present", async () => {
-    const result = startCallbackServer();
+    const result = await startCallbackServer();
     server = result.server;
 
-    // Send callback with token
     const resp = await fetch(
       `http://localhost:${server.port}/callback?access_token=tok123&refresh_token=ref456&expires_in=7200`,
     );
@@ -47,7 +46,6 @@ describe("auth callback server", () => {
     const html = await resp.text();
     expect(html).toContain("Authentication Successful");
 
-    // Token promise should resolve
     const token = await result.tokenPromise;
     expect(token.access_token).toBe("tok123");
     expect(token.refresh_token).toBe("ref456");
@@ -55,7 +53,7 @@ describe("auth callback server", () => {
   });
 
   it("defaults expires_in to 3600 when not provided", async () => {
-    const result = startCallbackServer();
+    const result = await startCallbackServer();
     server = result.server;
 
     await fetch(`http://localhost:${server.port}/callback?access_token=tok`);
@@ -64,7 +62,7 @@ describe("auth callback server", () => {
   });
 
   it("handles missing refresh_token", async () => {
-    const result = startCallbackServer();
+    const result = await startCallbackServer();
     server = result.server;
 
     await fetch(`http://localhost:${server.port}/callback?access_token=tok`);

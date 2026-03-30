@@ -15,7 +15,7 @@ import { startCallbackServer, type TokenResponse } from "./server";
  * 4. Returns the token or throws
  */
 export async function startOAuthFlow(signal?: AbortSignal): Promise<TokenResponse> {
-  const { server, tokenPromise } = startCallbackServer();
+  const { server, tokenPromise } = await startCallbackServer();
 
   try {
     const callbackURL = `http://localhost:${server.port}/callback`;

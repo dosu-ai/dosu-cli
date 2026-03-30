@@ -144,10 +144,10 @@ export interface CallbackServer {
  * Starts a local HTTP server to receive the OAuth callback.
  * Returns a promise that resolves with the token when received.
  */
-export function startCallbackServer(): {
+export async function startCallbackServer(): Promise<{
   server: CallbackServer;
   tokenPromise: Promise<TokenResponse>;
-} {
+}> {
   let resolveToken: (token: TokenResponse) => void;
 
   const tokenPromise = new Promise<TokenResponse>((resolve) => {
@@ -192,8 +192,10 @@ export function startCallbackServer(): {
     res.end(CALLBACK_HTML_SUCCESS);
   });
 
-  // Listen on random port
-  httpServer.listen(0, "localhost");
+  // Listen on random port and wait for it to be ready
+  await new Promise<void>((resolve) => {
+    httpServer.listen(0, "localhost", () => resolve());
+  });
   const addr = httpServer.address() as import("node:net").AddressInfo;
 
   return {
