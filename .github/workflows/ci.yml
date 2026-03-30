@@ -24,8 +24,13 @@ jobs:
       - name: Run typecheck
         run: bunx tsc --noEmit
 
-      - name: Run tests
-        run: bunx vitest run
+      - name: Run tests with coverage
+        run: bunx vitest run --coverage
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Verify build compiles
         run: |
