@@ -1,0 +1,82 @@
+/**
+ * Config management — load/save JSON config from XDG config directory.
+ *
+ * Equivalent to Go's internal/config/config.go
+ */
+
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+export interface Config {
+  access_token: string;
+  refresh_token: string;
+  expires_at: number;
+  deployment_id?: string;
+  deployment_name?: string;
+  api_key?: string;
+}
+
+function getConfigDir(): string {
+  const xdgConfig = process.env.XDG_CONFIG_HOME;
+  if (xdgConfig) return join(xdgConfig, "dosu-cli");
+
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+  return join(home, ".config", "dosu-cli");
+}
+
+export function getConfigPath(): string {
+  const dir = getConfigDir();
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+  return join(dir, "config.json");
+}
+
+export function loadConfig(): Config {
+  const path = getConfigPath();
+  if (!existsSync(path)) {
+    return emptyConfig();
+  }
+  const data = readFileSync(path, "utf-8");
+  return JSON.parse(data) as Config;
+}
+
+export function saveConfig(cfg: Config): void {
+  const path = getConfigPath();
+  const dir = getConfigDir();
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+  writeFileSync(path, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+}
+
+export function isAuthenticated(cfg: Config): boolean {
+  return cfg.access_token !== "";
+}
+
+/**
+ * Check if the token is expired or about to expire (within 5 minutes).
+ */
+export function isTokenExpired(cfg: Config): boolean {
+  if (cfg.expires_at === 0) return false;
+  return Math.floor(Date.now() / 1000) > cfg.expires_at - 300;
+}
+
+export function clearConfig(cfg: Config): Config {
+  return {
+    access_token: "",
+    refresh_token: "",
+    expires_at: 0,
+    deployment_id: undefined,
+    deployment_name: undefined,
+    api_key: undefined,
+  };
+}
+
+export function emptyConfig(): Config {
+  return {
+    access_token: "",
+    refresh_token: "",
+    expires_at: 0,
+  };
+}
