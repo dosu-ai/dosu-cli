@@ -28,11 +28,16 @@ export function mcpHeaders(apiKey: string): Record<string, string> {
  */
 export function loadJSONConfig(path: string): Record<string, any> {
   if (!existsSync(path)) return {};
-  let data = readFileSync(path, "utf-8");
+  let data = readFileSync(path, "utf-8").trim();
+  if (!data) return {};
   if (path.endsWith(".jsonc")) {
     data = stripJSONComments(data);
   }
-  return JSON.parse(data);
+  try {
+    return JSON.parse(data);
+  } catch {
+    return {};
+  }
 }
 
 /**

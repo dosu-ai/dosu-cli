@@ -11,7 +11,7 @@ import {
   allSetupProviders,
   type SetupProvider,
 } from "../mcp/providers";
-import { printSuccess, printError, printWarning, info, dim, printBox } from "./styles";
+import { info, dim } from "./styles";
 
 export interface SetupOptions {
   deploymentID?: string;
@@ -67,8 +67,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   // Step 4: Detect and configure tools
   const detected = stepDetectTools();
   if (detected.length === 0) {
-    printWarning("No supported AI tools detected on your system.");
-    console.log(`  Run ${info("dosu mcp add <tool>")} to manually configure a tool.`);
+    p.log.warn(`No supported AI tools detected on your system.\nRun ${info("dosu mcp add <tool>")} to manually configure a tool.`);
     return;
   }
 
@@ -78,7 +77,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   const results = stepConfigureTools(cfg, selection);
   stepShowSummary(results);
 
-  p.outro("Setup complete!");
+  p.outro("\uD83C\uDF89 Setup complete!");
 }
 
 async function stepAuthenticate(): Promise<Config | null> {
@@ -109,7 +108,7 @@ async function stepAuthenticate(): Promise<Config | null> {
         }
       }
       s.stop("Session expired");
-      printWarning("Session expired.");
+      p.log.warn("Session expired.");
     } catch {
       s.stop("Session verification failed");
     }
@@ -132,7 +131,7 @@ async function stepAuthenticate(): Promise<Config | null> {
     saveConfig(cfg);
     return cfg;
   } catch (err: any) {
-    printError(`Authentication failed: ${err.message}`);
+    p.log.error(`Authentication failed: ${err.message}`);
     return null;
   }
 }
@@ -141,11 +140,11 @@ async function stepSelectOrg(apiClient: Client): Promise<Org | null> {
   try {
     const orgs = await apiClient.getOrgs();
     if (orgs.length === 0) {
-      printError("No organizations found for your account");
+      p.log.error("No organizations found for your account");
       return null;
     }
     if (orgs.length === 1) {
-      printSuccess(`Organization: ${orgs[0].name}`);
+      p.log.success(`Organization\n${dim(orgs[0].name)}`);
       return orgs[0];
     }
     const selected = await p.select({
@@ -156,10 +155,10 @@ async function stepSelectOrg(apiClient: Client): Promise<Org | null> {
     return orgs.find((o) => o.org_id === selected) ?? null;
   } catch (err: any) {
     if (err instanceof SessionExpiredError) {
-      printWarning("Session expired. Please run " + info("dosu setup") + " again.");
+      p.log.warn("Session expired. Please run " + info("dosu setup") + " again.");
       return null;
     }
-    printError(`Organization selection failed: ${err.message}`);
+    p.log.error(`Organization selection failed: ${err.message}`);
     return null;
   }
 }
@@ -169,13 +168,13 @@ async function stepResolveDeployment(apiClient: Client, id: string): Promise<Dep
     const deployments = await apiClient.getDeployments();
     const d = deployments.find((d) => d.deployment_id === id);
     if (!d) {
-      printError(`Deployment ${id} not found`);
+      p.log.error(`Deployment ${id} not found`);
       return null;
     }
-    printSuccess(`Using deployment: ${d.name}`);
+    p.log.success(`Using deployment\n${dim(d.name)}`);
     return d;
   } catch (err: any) {
-    printError(`Failed to resolve deployment: ${err.message}`);
+    p.log.error(`Failed to resolve deployment: ${err.message}`);
     return null;
   }
 }
@@ -186,11 +185,11 @@ async function stepSelectDeployment(apiClient: Client, org: Org): Promise<Deploy
     const deployments = allDeployments.filter((d) => d.org_id === org.org_id);
 
     if (deployments.length === 0) {
-      printError(`No deployments found for ${org.name}`);
+      p.log.error(`No deployments found for ${org.name}`);
       return null;
     }
     if (deployments.length === 1) {
-      printSuccess(`Using deployment: ${deployments[0].name}`);
+      p.log.success(`Using deployment\n${dim(deployments[0].name)}`);
       return deployments[0];
     }
     const selected = await p.select({
@@ -200,7 +199,7 @@ async function stepSelectDeployment(apiClient: Client, org: Org): Promise<Deploy
     if (p.isCancel(selected)) return null;
     return deployments.find((d) => d.deployment_id === selected) ?? null;
   } catch (err: any) {
-    printError(`Deployment selection failed: ${err.message}`);
+    p.log.error(`Deployment selection failed: ${err.message}`);
     return null;
   }
 }
@@ -209,18 +208,18 @@ async function stepMintAPIKey(apiClient: Client, cfg: Config): Promise<string | 
   if (cfg.api_key) {
     const valid = await apiClient.validateAPIKey(cfg.api_key, cfg.deployment_id!);
     if (valid) {
-      printSuccess("API key: " + dim("using existing"));
+      p.log.success(`API key\n${dim("using existing")}`);
       return cfg.api_key;
     }
-    printWarning("Existing API key is invalid, creating a new one...");
+    p.log.warn("Existing API key is invalid, creating a new one...");
   }
 
   try {
     const resp = await apiClient.createAPIKey(cfg.deployment_id!, "dosu-cli");
-    printSuccess("API key created");
+    p.log.success(`API key\n${dim("created")}`);
     return resp.api_key;
   } catch (err: any) {
-    printError(`API key creation failed: ${err.message}`);
+    p.log.error(`API key creation failed: ${err.message}`);
     return null;
   }
 }
@@ -281,7 +280,7 @@ function stepConfigureTools(cfg: Config, selection: ToolSelection): ConfigResult
       provider.install(cfg, true);
       results.push({ provider, action: "install" });
     } catch (err: any) {
-      printError(`Failed to configure ${provider.name()}: ${err.message}`);
+      p.log.error(`Failed to configure ${provider.name()}: ${err.message}`);
       results.push({ provider, action: "install", error: err });
     }
   }
@@ -291,7 +290,7 @@ function stepConfigureTools(cfg: Config, selection: ToolSelection): ConfigResult
       provider.remove(true);
       results.push({ provider, action: "remove" });
     } catch (err: any) {
-      printError(`Failed to remove ${provider.name()}: ${err.message}`);
+      p.log.error(`Failed to remove ${provider.name()}: ${err.message}`);
       results.push({ provider, action: "remove", error: err });
     }
   }
@@ -308,37 +307,28 @@ function stepShowSummary(results: ConfigResult[]): void {
   const removed = results.filter((r) => r.action === "remove" && !r.error);
   const skipped = results.filter((r) => r.action === "skip");
 
-  console.log();
-
   if (installed.length > 0) {
-    console.log(`\uD83C\uDF89 Configured ${installed.length} tool(s):`);
-    for (const r of installed) {
-      console.log(`  + ${r.provider.name()}`);
-      console.log(`    ${dim(r.provider.globalConfigPath())}`);
-    }
-    console.log();
+    const lines = installed
+      .map((r) => `+ ${r.provider.name()}\n  ${dim(r.provider.globalConfigPath())}`)
+      .join("\n");
+    p.log.success(`Configured ${installed.length} tool(s):\n${lines}`);
   }
 
   if (removed.length > 0) {
-    console.log(`\uD83D\uDDD1\uFE0F  Removed from ${removed.length} tool(s):`);
-    for (const r of removed) {
-      console.log(`  - ${r.provider.name()}`);
-      console.log(`    ${dim(r.provider.globalConfigPath())}`);
-    }
-    console.log();
+    const lines = removed
+      .map((r) => `- ${r.provider.name()}\n  ${dim(r.provider.globalConfigPath())}`)
+      .join("\n");
+    p.log.info(`Removed from ${removed.length} tool(s):\n${lines}`);
   }
 
   if (installed.length === 0 && removed.length === 0 && skipped.length > 0) {
-    console.log(`\uD83C\uDF89 All tools already configured. No changes needed.`);
-    console.log();
+    p.log.success("All tools already configured. No changes needed.");
   }
 
   if (installed.length > 0 || skipped.length > 0) {
-    console.log("Try it out! Paste this into your agent:\n");
-    printBox(
-      "Use Dosu to search our team's documentation and answer:",
-      "what are the main components of our system?",
+    p.log.message(
+      `Try it out! Paste this into your agent:\n\n` +
+        info(`Use Dosu to search our team's documentation and answer: what are the main components of our system?`),
     );
-    console.log();
   }
 }
