@@ -10,7 +10,9 @@ bun.lock
 *.bun-build
 
 # Environment
+.env
 .env.local
+.env.*
 
 # Editor/IDE
 # .idea/

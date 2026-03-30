@@ -1,8 +1,14 @@
 {
-  "name": "dosu-cli",
+  "name": "@dosu/cli",
   "version": "0.1.7",
   "type": "module",
   "description": "Dosu CLI - Manage MCP servers for AI tools",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dosu-ai/dosu-cli.git"
+  },
+  "homepage": "https://dosu.dev",
   "main": "src/index.ts",
   "bin": {
     "dosu": "src/index.ts"

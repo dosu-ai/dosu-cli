@@ -16,11 +16,36 @@ const TARGETS = [
   { target: "bun-windows-x64", output: "dosu-windows-x64.exe" },
 ];
 
-const distDir = join(import.meta.dir, "..", "dist");
+/**
+ * Build --define flags to bake version info into the compiled binary.
+ *
+ * `bun build --compile` produces a standalone executable that does NOT inherit
+ * the build-time environment, so `process.env.X` reads return undefined at
+ * runtime. `--define` replaces identifiers at compile time, turning e.g.
+ *   process.env.DOSU_VERSION ?? "dev"
+ * into
+ *   "0.2.0" ?? "dev"          →  "0.2.0"
+ */
+export function buildDefines(): string[] {
+  const version = process.env.DOSU_VERSION ?? "dev";
+  const commit = process.env.DOSU_COMMIT ?? "none";
+  const date = process.env.DOSU_DATE ?? "unknown";
+
+  return [
+    "--define",
+    `process.env.DOSU_VERSION=${JSON.stringify(version)}`,
+    "--define",
+    `process.env.DOSU_COMMIT=${JSON.stringify(commit)}`,
+    "--define",
+    `process.env.DOSU_DATE=${JSON.stringify(date)}`,
+  ];
+}
 
 async function main() {
+  const distDir = join(import.meta.dir, "..", "dist");
   if (!existsSync(distDir)) mkdirSync(distDir, { recursive: true });
 
+  const defines = buildDefines();
   console.log(`Building for ${TARGETS.length} platforms...\n`);
 
   for (const { target, output } of TARGETS) {
@@ -28,7 +53,7 @@ async function main() {
     console.log(`  Building ${target} → ${output}`);
 
     const proc = Bun.spawn(
-      ["bun", "build", "--compile", "--target", target, "src/index.ts", "--outfile", outPath],
+      ["bun", "build", "--compile", ...defines, "--target", target, "src/index.ts", "--outfile", outPath],
       { stdout: "pipe", stderr: "pipe" },
     );
 
@@ -44,4 +69,8 @@ async function main() {
   console.log(`\nAll binaries built in ${distDir}`);
 }
 
-main();
+// Only run when executed directly (not imported by tests)
+const isDirectRun =
+  typeof import.meta.dir === "string" &&
+  process.argv[1]?.endsWith("build-all.ts");
+if (isDirectRun) main();
