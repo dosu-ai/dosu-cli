@@ -3,13 +3,10 @@
  */
 
 import * as p from "@clack/prompts";
-import { loadConfig, saveConfig, type Config } from "../config/config";
 import { Client, type Deployment, type Org, SessionExpiredError } from "../client/client";
-import {
-  allSetupProviders,
-  type SetupProvider,
-} from "../mcp/providers";
-import { info, dim } from "./styles";
+import { type Config, loadConfig, saveConfig } from "../config/config";
+import { allSetupProviders, type SetupProvider } from "../mcp/providers";
+import { dim, info } from "./styles";
 
 export interface SetupOptions {
   deploymentID?: string;
@@ -65,7 +62,9 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   // Step 4: Detect and configure tools
   const detected = stepDetectTools();
   if (detected.length === 0) {
-    p.log.warn(`No supported AI tools detected on your system.\nRun ${info("dosu mcp add <tool>")} to manually configure a tool.`);
+    p.log.warn(
+      `No supported AI tools detected on your system.\nRun ${info("dosu mcp add <tool>")} to manually configure a tool.`,
+    );
     return;
   }
 
@@ -128,8 +127,8 @@ async function stepAuthenticate(): Promise<Config | null> {
     cfg.expires_at = Math.floor(Date.now() / 1000) + token.expires_in;
     saveConfig(cfg);
     return cfg;
-  } catch (err: any) {
-    p.log.error(`Authentication failed: ${err.message}`);
+  } catch (err: unknown) {
+    p.log.error(`Authentication failed: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
 }
@@ -151,12 +150,14 @@ async function stepSelectOrg(apiClient: Client): Promise<Org | null> {
     });
     if (p.isCancel(selected)) return null;
     return orgs.find((o) => o.org_id === selected) ?? null;
-  } catch (err: any) {
+  } catch (err: unknown) {
     if (err instanceof SessionExpiredError) {
-      p.log.warn("Session expired. Please run " + info("dosu setup") + " again.");
+      p.log.warn(`Session expired. Please run ${info("dosu setup")} again.`);
       return null;
     }
-    p.log.error(`Organization selection failed: ${err.message}`);
+    p.log.error(
+      `Organization selection failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return null;
   }
 }
@@ -171,8 +172,10 @@ async function stepResolveDeployment(apiClient: Client, id: string): Promise<Dep
     }
     p.log.success(`Using deployment\n${dim(d.name)}`);
     return d;
-  } catch (err: any) {
-    p.log.error(`Failed to resolve deployment: ${err.message}`);
+  } catch (err: unknown) {
+    p.log.error(
+      `Failed to resolve deployment: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return null;
   }
 }
@@ -196,15 +199,15 @@ async function stepSelectDeployment(apiClient: Client, org: Org): Promise<Deploy
     });
     if (p.isCancel(selected)) return null;
     return deployments.find((d) => d.deployment_id === selected) ?? null;
-  } catch (err: any) {
-    p.log.error(`Deployment selection failed: ${err.message}`);
+  } catch (err: unknown) {
+    p.log.error(`Deployment selection failed: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
 }
 
 async function stepMintAPIKey(apiClient: Client, cfg: Config): Promise<string | null> {
   if (cfg.api_key) {
-    const valid = await apiClient.validateAPIKey(cfg.api_key, cfg.deployment_id!);
+    const valid = await apiClient.validateAPIKey(cfg.api_key, cfg.deployment_id ?? "");
     if (valid) {
       p.log.success(`API key\n${dim("using existing")}`);
       return cfg.api_key;
@@ -213,11 +216,11 @@ async function stepMintAPIKey(apiClient: Client, cfg: Config): Promise<string | 
   }
 
   try {
-    const resp = await apiClient.createAPIKey(cfg.deployment_id!, "dosu-cli");
+    const resp = await apiClient.createAPIKey(cfg.deployment_id ?? "", "dosu-cli");
     p.log.success(`API key\n${dim("created")}`);
     return resp.api_key;
-  } catch (err: any) {
-    p.log.error(`API key creation failed: ${err.message}`);
+  } catch (err: unknown) {
+    p.log.error(`API key creation failed: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
 }
@@ -237,7 +240,7 @@ async function stepSelectTools(detected: SetupProvider[]): Promise<ToolSelection
   }
 
   const options = detected.map((p) => {
-    const configured = configuredMap.get(p.id())!;
+    const configured = configuredMap.get(p.id()) ?? false;
     return {
       label: configured ? `${p.name()} ${dim("(already configured)")}` : p.name(),
       value: p.id(),
@@ -260,7 +263,7 @@ async function stepSelectTools(detected: SetupProvider[]): Promise<ToolSelection
 
   for (const provider of detected) {
     const isSelected = selectedSet.has(provider.id());
-    const isConfigured = configuredMap.get(provider.id())!;
+    const isConfigured = configuredMap.get(provider.id()) ?? false;
 
     if (isSelected && !isConfigured) result.toInstall.push(provider);
     else if (isSelected && isConfigured) result.skipped.push(provider);
@@ -277,9 +280,10 @@ export function stepConfigureTools(cfg: Config, selection: ToolSelection): Confi
     try {
       provider.install(cfg, true);
       results.push({ provider, action: "install" });
-    } catch (err: any) {
-      p.log.error(`Failed to configure ${provider.name()}: ${err.message}`);
-      results.push({ provider, action: "install", error: err });
+    } catch (err: unknown) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      p.log.error(`Failed to configure ${provider.name()}: ${error.message}`);
+      results.push({ provider, action: "install", error });
     }
   }
 
@@ -287,9 +291,10 @@ export function stepConfigureTools(cfg: Config, selection: ToolSelection): Confi
     try {
       provider.remove(true);
       results.push({ provider, action: "remove" });
-    } catch (err: any) {
-      p.log.error(`Failed to remove ${provider.name()}: ${err.message}`);
-      results.push({ provider, action: "remove", error: err });
+    } catch (err: unknown) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      p.log.error(`Failed to remove ${provider.name()}: ${error.message}`);
+      results.push({ provider, action: "remove", error });
     }
   }
 
@@ -326,7 +331,9 @@ export function stepShowSummary(results: ConfigResult[]): void {
   if (installed.length > 0 || skipped.length > 0) {
     p.log.message(
       `Try it out! Paste this into your agent:\n\n` +
-        info(`Use Dosu to search our team's documentation and answer: what are the main components of our system?`),
+        info(
+          `Use Dosu to search our team's documentation and answer: what are the main components of our system?`,
+        ),
     );
   }
 }

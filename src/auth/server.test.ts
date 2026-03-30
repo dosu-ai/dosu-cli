@@ -1,5 +1,5 @@
-import { describe, it, expect, afterEach } from "vitest";
-import { startCallbackServer, type CallbackServer } from "./server";
+import { afterEach, describe, expect, it } from "vitest";
+import { type CallbackServer, startCallbackServer } from "./server";
 
 describe("auth callback server", () => {
   let server: CallbackServer | null = null;

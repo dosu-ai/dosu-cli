@@ -1,15 +1,15 @@
-import { join } from "node:path";
 import { existsSync } from "node:fs";
-import type { SetupProvider } from "../providers";
+import { join } from "node:path";
 import type { Config } from "../../config/config";
-import { expandHome, isInstalled } from "../detect";
 import {
-  mcpURL,
-  mcpHeaders,
-  isJSONKeyConfigured,
   installJSONServer,
+  isJSONKeyConfigured,
+  mcpHeaders,
+  mcpURL,
   removeJSONServer,
 } from "../config-helpers";
+import { expandHome, isInstalled } from "../detect";
+import type { SetupProvider } from "../providers";
 
 function resolveGlobalConfigPath(): string {
   const jsonPath = expandHome("~/.mcporter/mcporter.json");
@@ -37,7 +37,7 @@ export const MCPorterProvider = (): SetupProvider => ({
     const server = {
       type: "http",
       url: mcpURL(cfg.deployment_id),
-      headers: mcpHeaders(cfg.api_key!),
+      headers: mcpHeaders(cfg.api_key ?? ""),
     };
     installJSONServer(configPath, "mcpServers", server);
   },

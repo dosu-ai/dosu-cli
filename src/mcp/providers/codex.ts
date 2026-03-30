@@ -4,13 +4,12 @@
  * For full parity, we'd need a TOML library. For now, use JSON config as Codex also supports it.
  */
 
-import { join } from "node:path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import type { Config } from "../../config/config";
-import type { SetupProvider } from "../providers";
+import { mcpHeaders, mcpURL } from "../config-helpers";
 import { expandHome, isInstalled } from "../detect";
-import { mcpURL, mcpHeaders } from "../config-helpers";
+import type { SetupProvider } from "../providers";
 
 function codexHome(): string {
   return process.env.CODEX_HOME ?? expandHome("~/.codex");
@@ -41,8 +40,8 @@ function installDosuToTOML(path: string, cfg: Config): void {
   // Remove existing [mcp_servers.dosu] section if present
   content = removeDosuFromTOML(content);
   // Append new section
-  const url = mcpURL(cfg.deployment_id!);
-  const headers = mcpHeaders(cfg.api_key!);
+  const url = mcpURL(cfg.deployment_id ?? "");
+  const headers = mcpHeaders(cfg.api_key ?? "");
   const headerEntries = Object.entries(headers)
     .map(([k, v]) => `${k} = "${v}"`)
     .join("\n");

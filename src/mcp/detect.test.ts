@@ -1,8 +1,8 @@
-import { describe, it, expect } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isInstalled, expandHome, appSupportDir } from "./detect";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { appSupportDir, expandHome, isInstalled } from "./detect";
 
 describe("detect", () => {
   describe("expandHome", () => {

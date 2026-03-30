@@ -1,5 +1,5 @@
+import { mcpHeaders, mcpURL } from "../config-helpers";
 import { createJSONProvider } from "./base";
-import { mcpURL, mcpHeaders } from "../config-helpers";
 
 export const AntigravityProvider = () =>
   createJSONProvider({
@@ -11,7 +11,7 @@ export const AntigravityProvider = () =>
     globalPath: "~/.gemini/antigravity/mcp_config.json",
     topKey: "mcpServers",
     buildServer: (cfg) => ({
-      serverUrl: mcpURL(cfg.deployment_id!),
-      headers: mcpHeaders(cfg.api_key!),
+      serverUrl: mcpURL(cfg.deployment_id ?? ""),
+      headers: mcpHeaders(cfg.api_key ?? ""),
     }),
   });

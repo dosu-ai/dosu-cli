@@ -1,2 +1,2 @@
 export { startOAuthFlow } from "./flow";
-export { startCallbackServer, type TokenResponse, type CallbackServer } from "./server";
+export { type CallbackServer, startCallbackServer, type TokenResponse } from "./server";

@@ -1,6 +1,6 @@
 import { join } from "node:path";
+import { mcpHeaders, mcpURL } from "../config-helpers";
 import { createJSONProvider } from "./base";
-import { mcpURL, mcpHeaders } from "../config-helpers";
 
 export const CursorProvider = () =>
   createJSONProvider({
@@ -12,8 +12,8 @@ export const CursorProvider = () =>
     globalPath: "~/.cursor/mcp.json",
     topKey: "mcpServers",
     buildServer: (cfg) => ({
-      url: mcpURL(cfg.deployment_id!),
-      headers: mcpHeaders(cfg.api_key!),
+      url: mcpURL(cfg.deployment_id ?? ""),
+      headers: mcpHeaders(cfg.api_key ?? ""),
     }),
     localConfigPath: (cwd) => join(cwd, ".cursor", "mcp.json"),
   });

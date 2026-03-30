@@ -1,16 +1,16 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  loadConfig,
-  saveConfig,
+  type Config,
+  clearConfig,
+  emptyConfig,
   getConfigPath,
   isAuthenticated,
   isTokenExpired,
-  clearConfig,
-  emptyConfig,
-  type Config,
+  loadConfig,
+  saveConfig,
 } from "./config";
 
 describe("config", () => {
@@ -76,9 +76,13 @@ describe("config", () => {
   it("isTokenExpired returns true when within 5 minutes of expiry", () => {
     const nowSec = Math.floor(Date.now() / 1000);
     // Expires in 4 minutes (< 5 minute buffer)
-    expect(isTokenExpired({ access_token: "", refresh_token: "", expires_at: nowSec + 240 })).toBe(true);
+    expect(isTokenExpired({ access_token: "", refresh_token: "", expires_at: nowSec + 240 })).toBe(
+      true,
+    );
     // Expires in 10 minutes (> 5 minute buffer)
-    expect(isTokenExpired({ access_token: "", refresh_token: "", expires_at: nowSec + 600 })).toBe(false);
+    expect(isTokenExpired({ access_token: "", refresh_token: "", expires_at: nowSec + 600 })).toBe(
+      false,
+    );
   });
 
   it("clearConfig returns empty config", () => {

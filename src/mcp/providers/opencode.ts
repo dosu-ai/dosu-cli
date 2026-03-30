@@ -1,6 +1,6 @@
 import { join } from "node:path";
+import { mcpHeaders, mcpURL } from "../config-helpers";
 import { createJSONProvider } from "./base";
-import { mcpURL, mcpHeaders } from "../config-helpers";
 
 export const OpenCodeProvider = () =>
   createJSONProvider({
@@ -13,9 +13,9 @@ export const OpenCodeProvider = () =>
     topKey: "mcp",
     buildServer: (cfg) => ({
       type: "remote",
-      url: mcpURL(cfg.deployment_id!),
+      url: mcpURL(cfg.deployment_id ?? ""),
       enabled: true,
-      headers: mcpHeaders(cfg.api_key!),
+      headers: mcpHeaders(cfg.api_key ?? ""),
     }),
     localConfigPath: (cwd) => join(cwd, "opencode.json"),
   });

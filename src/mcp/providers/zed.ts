@@ -1,8 +1,8 @@
-import { join } from "node:path";
 import { platform } from "node:os";
-import { createJSONProvider } from "./base";
+import { join } from "node:path";
+import { mcpHeaders, mcpURL } from "../config-helpers";
 import { appSupportDir } from "../detect";
-import { mcpURL, mcpHeaders } from "../config-helpers";
+import { createJSONProvider } from "./base";
 
 function zedConfigDir(): string {
   const os = platform();
@@ -22,8 +22,8 @@ export const ZedProvider = () =>
     buildServer: (cfg) => ({
       source: "custom",
       type: "http",
-      url: mcpURL(cfg.deployment_id!),
-      headers: mcpHeaders(cfg.api_key!),
+      url: mcpURL(cfg.deployment_id ?? ""),
+      headers: mcpHeaders(cfg.api_key ?? ""),
     }),
     localConfigPath: (cwd) => join(cwd, ".zed", "settings.json"),
   });

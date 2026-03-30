@@ -5,9 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SCRIPT_DIR =
-  typeof import.meta.dir === "string"
-    ? import.meta.dir
-    : dirname(fileURLToPath(import.meta.url));
+  typeof import.meta.dir === "string" ? import.meta.dir : dirname(fileURLToPath(import.meta.url));
 const PACKAGE_JSON_PATH = join(SCRIPT_DIR, "..", "package.json");
 const OUTFILE = join(SCRIPT_DIR, "..", "bin", "dosu.js");
 const NODE_SHEBANG = "#!/usr/bin/env node";
@@ -74,7 +72,6 @@ async function main() {
   console.log(`Built Node CLI bundle at ${OUTFILE}`);
 }
 
-const isDirectRun =
-  process.argv[1]?.endsWith("build-npm.ts");
+const isDirectRun = process.argv[1]?.endsWith("build-npm.ts");
 
 if (isDirectRun) await main();
