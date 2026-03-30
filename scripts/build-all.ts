@@ -11,9 +11,11 @@ import { join } from "node:path";
 const TARGETS = [
   { target: "bun-darwin-arm64", output: "dosu-darwin-arm64" },
   { target: "bun-darwin-x64", output: "dosu-darwin-x64" },
-  { target: "bun-linux-x64", output: "dosu-linux-x64" },
+  { target: "bun-linux-x64-baseline", output: "dosu-linux-x64" },
   { target: "bun-linux-arm64", output: "dosu-linux-arm64" },
-  { target: "bun-windows-x64", output: "dosu-windows-x64.exe" },
+  { target: "bun-linux-x64-musl", output: "dosu-linux-x64-musl" },
+  { target: "bun-linux-arm64-musl", output: "dosu-linux-arm64-musl" },
+  { target: "bun-windows-x64-baseline", output: "dosu-windows-x64.exe" },
 ];
 
 /**

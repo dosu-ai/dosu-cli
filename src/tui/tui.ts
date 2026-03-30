@@ -1,10 +1,6 @@
 /**
  * TUI entry point.
  *
- * In Go, this was a full bubbletea Elm-architecture TUI.
- * In TypeScript, we use @clack/prompts for the interactive flow
- * which provides a similar but simpler user experience.
- *
  * The TUI launches when `dosu` is run without arguments.
  */
 
@@ -30,7 +26,7 @@ export async function runTUI(): Promise<void> {
 
   const cfg = loadConfig();
 
-  // If not authenticated, go straight to setup
+  // If not authenticated, open setup immediately
   if (!isAuthenticated(cfg)) {
     await runSetup();
     return;

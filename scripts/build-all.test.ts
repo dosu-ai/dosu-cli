@@ -13,9 +13,11 @@ describe("build-all script", () => {
     const content = readFileSync(join(__dirname, "build-all.ts"), "utf-8");
     expect(content).toContain("bun-darwin-arm64");
     expect(content).toContain("bun-darwin-x64");
-    expect(content).toContain("bun-linux-x64");
+    expect(content).toContain("bun-linux-x64-baseline");
     expect(content).toContain("bun-linux-arm64");
-    expect(content).toContain("bun-windows-x64");
+    expect(content).toContain("bun-linux-x64-musl");
+    expect(content).toContain("bun-linux-arm64-musl");
+    expect(content).toContain("bun-windows-x64-baseline");
   });
 });
 

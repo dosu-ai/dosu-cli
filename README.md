@@ -22,10 +22,16 @@ dosu setup
 
 ### curl / install (macOS / Linux)
 
-Downloads and installs the latest release binary.
+Downloads and installs the latest stable release binary.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/dosu-ai/dosu-cli/main/install.sh | sh
+```
+
+To install a specific release tag:
+
+```bash
+DOSU_INSTALL_VERSION=v0.2.0-rc1 curl -fsSL https://raw.githubusercontent.com/dosu-ai/dosu-cli/main/install.sh | sh
 ```
 
 ### Homebrew
@@ -88,4 +94,4 @@ Releases are automated via `bun build --compile` and GitHub Actions.
 - Production releases: `v1.0.0`, `v1.1.0`, `v2.0.0`
 - Pre-releases: `v0.1.0-alpha`, `v0.1.0-beta`, `v0.1.0-rc1`
 
-Pre-release tags (containing `-alpha`, `-beta`, `-rc`) are automatically marked as pre-releases on GitHub.
+Pre-release tags (containing `-alpha`, `-beta`, `-rc`) are automatically marked as pre-releases on GitHub and published to npm under the `next` dist-tag.

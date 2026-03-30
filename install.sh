@@ -7,7 +7,7 @@
 
 set -e
 
-REPO="dosu-ai/dosu-cli"
+REPO="${DOSU_INSTALL_REPO:-dosu-ai/dosu-cli}"
 BINARY_NAME="dosu"
 
 # --- Detect platform ---
@@ -44,6 +44,32 @@ if [ "$OS" = "windows" ]; then
   exit 1
 fi
 
+detect_libc() {
+  if [ "$OS" != "linux" ]; then
+    echo ""
+    return
+  fi
+
+  if [ -f /etc/alpine-release ]; then
+    echo "musl"
+    return
+  fi
+
+  if command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; then
+    echo "musl"
+    return
+  fi
+
+  if command -v getconf >/dev/null 2>&1 && getconf GNU_LIBC_VERSION >/dev/null 2>&1; then
+    echo "glibc"
+    return
+  fi
+
+  echo "glibc"
+}
+
+LIBC="$(detect_libc)"
+
 # --- Determine install directory ---
 
 INSTALL_DIR=""
@@ -58,46 +84,87 @@ fi
 
 # --- Fetch latest release tag ---
 
-echo "Fetching latest release..."
-
-if command -v curl >/dev/null 2>&1; then
-  LATEST_TAG=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"//;s/".*//')
-elif command -v wget >/dev/null 2>&1; then
-  LATEST_TAG=$(wget -qO- "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"//;s/".*//')
+if [ -n "$DOSU_INSTALL_VERSION" ]; then
+  RELEASE_TAG="$DOSU_INSTALL_VERSION"
 else
-  echo "Error: curl or wget is required"
-  exit 1
+  echo "Fetching latest release..."
+
+  if command -v curl >/dev/null 2>&1; then
+    RELEASE_TAG=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"//;s/".*//')
+  elif command -v wget >/dev/null 2>&1; then
+    RELEASE_TAG=$(wget -qO- "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"//;s/".*//')
+  else
+    echo "Error: curl or wget is required"
+    exit 1
+  fi
 fi
 
-if [ -z "$LATEST_TAG" ]; then
-  echo "Error: Could not determine latest release"
+if [ -z "$RELEASE_TAG" ]; then
+  echo "Error: Could not determine release tag"
   exit 1
 fi
 
 # --- Download ---
 
-ASSET_NAME="dosu-${OS}-${ARCH}.tar.gz"
-DOWNLOAD_URL="https://github.com/$REPO/releases/download/${LATEST_TAG}/${ASSET_NAME}"
+ASSET_SUFFIX=""
+if [ "$OS" = "linux" ] && [ "$LIBC" = "musl" ]; then
+  ASSET_SUFFIX="-musl"
+fi
 
-echo "Downloading $BINARY_NAME $LATEST_TAG for $OS/$ARCH..."
+ASSET_BASENAME="${BINARY_NAME}-${OS}-${ARCH}${ASSET_SUFFIX}"
+ASSET_NAME="${ASSET_BASENAME}.tar.gz"
+LEGACY_ASSET_NAME=""
+case "${OS}/${ARCH}" in
+  darwin/arm64) LEGACY_ASSET_NAME="dosu_Darwin_arm64.tar.gz" ;;
+  darwin/x64) LEGACY_ASSET_NAME="dosu_Darwin_x86_64.tar.gz" ;;
+  linux/arm64) LEGACY_ASSET_NAME="dosu_Linux_arm64.tar.gz" ;;
+  linux/x64) LEGACY_ASSET_NAME="dosu_Linux_x86_64.tar.gz" ;;
+esac
+
+download_asset() {
+  URL="$1"
+  DEST="$2"
+
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$URL" -o "$DEST"
+  else
+    wget -q "$URL" -O "$DEST"
+  fi
+}
+
+if [ "$OS" = "linux" ] && [ -n "$LIBC" ]; then
+  echo "Detected libc: $LIBC"
+fi
+
+echo "Downloading $BINARY_NAME $RELEASE_TAG for $OS/$ARCH${ASSET_SUFFIX}..."
 
 TMPDIR_DL=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_DL"' EXIT
 
-if command -v curl >/dev/null 2>&1; then
-  curl -fsSL "$DOWNLOAD_URL" -o "$TMPDIR_DL/$ASSET_NAME"
-elif command -v wget >/dev/null 2>&1; then
-  wget -q "$DOWNLOAD_URL" -O "$TMPDIR_DL/$ASSET_NAME"
+DOWNLOAD_URL="https://github.com/$REPO/releases/download/${RELEASE_TAG}/${ASSET_NAME}"
+EXTRACTED_PATH="$TMPDIR_DL/$ASSET_BASENAME"
+
+if ! download_asset "$DOWNLOAD_URL" "$TMPDIR_DL/$ASSET_NAME"; then
+  if [ -n "$LEGACY_ASSET_NAME" ]; then
+    echo "Primary asset name not found, trying legacy release naming..."
+    ASSET_NAME="$LEGACY_ASSET_NAME"
+    DOWNLOAD_URL="https://github.com/$REPO/releases/download/${RELEASE_TAG}/${ASSET_NAME}"
+    download_asset "$DOWNLOAD_URL" "$TMPDIR_DL/$ASSET_NAME"
+    EXTRACTED_PATH="$TMPDIR_DL/$BINARY_NAME"
+  else
+    echo "Error: Could not download $DOWNLOAD_URL"
+    exit 1
+  fi
 fi
 
 # --- Extract and install ---
 
 tar -xzf "$TMPDIR_DL/$ASSET_NAME" -C "$TMPDIR_DL"
-chmod +x "$TMPDIR_DL/$BINARY_NAME-$OS-$ARCH"
-mv "$TMPDIR_DL/$BINARY_NAME-$OS-$ARCH" "$INSTALL_DIR/$BINARY_NAME"
+chmod +x "$EXTRACTED_PATH"
+mv "$EXTRACTED_PATH" "$INSTALL_DIR/$BINARY_NAME"
 
 echo ""
-echo "✓ Installed $BINARY_NAME $LATEST_TAG to $INSTALL_DIR/$BINARY_NAME"
+echo "✓ Installed $BINARY_NAME $RELEASE_TAG to $INSTALL_DIR/$BINARY_NAME"
 
 # --- Check PATH ---
 

@@ -81,7 +81,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
 async function stepAuthenticate(): Promise<Config | null> {
   const cfg = loadConfig();
 
-  // If we have a token, verify it against the backend (like Go does)
+  // If we have a token, verify it against the backend first
   if (cfg.access_token) {
     const s = p.spinner();
     s.start("Verifying session...");

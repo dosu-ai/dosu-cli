@@ -69,6 +69,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             dist/*.tar.gz
             dist/*.zip
@@ -126,7 +127,11 @@ jobs:
           if [ "$CURRENT_VERSION" != "$TARGET_VERSION" ]; then
             npm version "$TARGET_VERSION" --no-git-tag-version
           fi
-          npm publish --access public
+          if [[ "$TARGET_VERSION" == *-* ]]; then
+            npm publish --access public --tag next
+          else
+            npm publish --access public
+          fi
 
   update-homebrew:
     needs: build-and-release
