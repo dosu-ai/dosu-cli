@@ -48,7 +48,7 @@ npm/cli-*/bin/
 # Node/Bun
 node_modules/
 bun.lock
-.18a1839dffe7debc-00000000.bun-build
+*.bun-build
 
 # Autoresearch
 autoresearch-results.tsv
