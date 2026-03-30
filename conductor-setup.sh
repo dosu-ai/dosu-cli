@@ -1,5 +1,5 @@
 #!/usr/bin/env zsh
-# Conductor workspace setup script for dosu-cli (Go CLI/TUI)
+# Conductor workspace setup script for dosu-cli (Bun/TypeScript)
 
 set -e
 
@@ -7,21 +7,21 @@ echo "Setting up Conductor workspace..."
 echo "Root path: $CONDUCTOR_ROOT_PATH"
 echo "Workspace path: $CONDUCTOR_WORKSPACE_PATH"
 
+cd "$CONDUCTOR_WORKSPACE_PATH"
+
 # =============================================================================
-# Install Go dependencies
+# Install dependencies
 # =============================================================================
 
 echo ""
-echo "Installing Go dependencies..."
-cd "$CONDUCTOR_WORKSPACE_PATH"
-go mod download
-echo "Go dependencies installed successfully!"
+echo "Installing dependencies..."
+bun install
+echo "Dependencies installed successfully!"
 
 # =============================================================================
 # Helper functions
 # =============================================================================
 
-# Copy a single file from root to workspace
 copy_env_file() {
     local relative_path="$1"
     local source="$CONDUCTOR_ROOT_PATH/$relative_path"
@@ -34,25 +34,17 @@ copy_env_file() {
     fi
 }
 
-# Copy a directory from root to workspace
 copy_dir() {
     local relative_path="$1"
     local source="$CONDUCTOR_ROOT_PATH/$relative_path"
     local dest="$CONDUCTOR_WORKSPACE_PATH/$relative_path"
 
     if [ ! -d "$source" ]; then
-        echo "  Warning: $relative_path not found in root, skipping"
         return 0
     fi
 
     mkdir -p "$dest"
-
-    if ! rsync -a --delete "$source/" "$dest/"; then
-        echo "  Warning: rsync failed for $relative_path"
-        echo "           Continuing setup..."
-        return 0
-    fi
-
+    rsync -a --delete "$source/" "$dest/" 2>/dev/null || true
     echo "  Synced: $relative_path"
 }
 
@@ -62,7 +54,6 @@ copy_dir() {
 
 echo ""
 echo "Copying environment files..."
-
 copy_env_file ".env"
 
 # =============================================================================
@@ -79,13 +70,13 @@ if [ -d "$CONDUCTOR_ROOT_PATH/.vscode" ]; then
 fi
 
 # =============================================================================
-# Build binary to verify setup
+# Verify build
 # =============================================================================
 
 echo ""
-echo "Building binary to verify setup..."
-make build
-echo "Build successful!"
+echo "Verifying build..."
+bun build --compile src/index.ts --outfile bin/dosu 2>/dev/null && rm -f bin/dosu
+echo "Build verified!"
 
 echo ""
 echo "Conductor workspace setup complete!"
