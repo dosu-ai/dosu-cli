@@ -19,5 +19,8 @@ bun.lock
 # OS
 .DS_Store
 
+# Test coverage
+coverage/
+
 # Autoresearch
 autoresearch-results.tsv
