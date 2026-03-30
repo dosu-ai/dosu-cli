@@ -158,7 +158,10 @@ export class Client {
   async getDeployments(): Promise<Deployment[]> {
     const resp = await this.get("/v1/mcp/deployments");
     if (resp.status !== 200) {
-      const detail = await readErrorBody(resp);
+      let detail = await readErrorBody(resp);
+      if (!detail || detail === "Internal Server Error") {
+        detail = "check backend logs for details";
+      }
       throw new Error(`failed to fetch deployments (status ${resp.status}): ${detail}`);
     }
     return resp.json() as Promise<Deployment[]>;

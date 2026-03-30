@@ -83,13 +83,40 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
 
 async function stepAuthenticate(): Promise<Config | null> {
   const cfg = loadConfig();
-  // For now, just check if already authenticated
+
+  // If we have a token, verify it against the backend (like Go does)
   if (cfg.access_token) {
-    printSuccess("Authenticated");
-    return cfg;
+    const s = p.spinner();
+    s.start("Verifying session...");
+    try {
+      const apiClient = new Client(cfg);
+      const resp = await apiClient.doRequestRaw("GET", "/v1/mcp/deployments");
+      if (resp.status === 200) {
+        s.stop("Authenticated");
+        return cfg;
+      }
+      // Token invalid — try refresh
+      if (resp.status === 401 || resp.status === 403 || resp.status === 500) {
+        try {
+          await apiClient.refreshToken();
+          const resp2 = await apiClient.doRequestRaw("GET", "/v1/mcp/deployments");
+          if (resp2.status === 200) {
+            s.stop("Authenticated");
+            return cfg;
+          }
+        } catch {
+          // refresh failed, fall through to login
+        }
+      }
+      s.stop("Session expired");
+      printWarning("Session expired.");
+    } catch {
+      s.stop("Session verification failed");
+    }
   }
 
-  const shouldLogin = await p.confirm({ message: "You need to log in. Open browser?" });
+  // Need login
+  const shouldLogin = await p.confirm({ message: "Open browser to log in?" });
   if (p.isCancel(shouldLogin) || !shouldLogin) return null;
 
   try {

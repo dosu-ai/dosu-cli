@@ -103,7 +103,12 @@ export function createProgram(): Command {
     .description("Add Dosu MCP to an AI tool")
     .option("-g, --global", "Add globally (all projects) instead of project-local", false)
     .action((toolId: string, opts: { global: boolean }) => {
-      const provider = getProvider(toolId.toLowerCase());
+      let provider;
+      try {
+        provider = getProvider(toolId.toLowerCase());
+      } catch {
+        throw new Error(`unknown tool '${toolId}'. Use 'dosu mcp list' to see available tools`);
+      }
       const cfg = loadConfig();
 
       if (!isAuthenticated(cfg)) {
@@ -149,7 +154,7 @@ export function createProgram(): Command {
         let scope = "(local + global)";
         if (!p.supportsLocal()) scope = "(global only)";
         if (p.id() === "manual") scope = "";
-        console.log(`  ${p.id().padEnd(16)} ${p.name()} ${scope}`);
+        console.log(`  ${p.id().padEnd(10)} ${p.name()} ${scope}`);
       }
       console.log("\nUse 'dosu mcp add <tool>' to add Dosu MCP to a tool.");
     });
@@ -160,9 +165,8 @@ export function createProgram(): Command {
     .description("Set up Dosu MCP for your AI tools")
     .option("--deployment <id>", "Skip to tool configuration for a specific deployment")
     .action(async (opts: { deployment?: string }) => {
-      // Will be implemented when setup module is ported
-      console.log("Setup flow not yet implemented in TypeScript version.");
-      console.log("Use the TUI (dosu without arguments) or individual commands.");
+      const { runSetup } = await import("../setup/flow");
+      await runSetup({ deploymentID: opts.deployment });
     });
 
   return program;

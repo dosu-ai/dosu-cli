@@ -37,8 +37,12 @@ export function loadConfig(): Config {
   if (!existsSync(path)) {
     return emptyConfig();
   }
-  const data = readFileSync(path, "utf-8");
-  return JSON.parse(data) as Config;
+  try {
+    const data = readFileSync(path, "utf-8");
+    return JSON.parse(data) as Config;
+  } catch {
+    return emptyConfig();
+  }
 }
 
 export function saveConfig(cfg: Config): void {
