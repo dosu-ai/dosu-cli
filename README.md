@@ -5,20 +5,9 @@ The Dosu CLI is pre-release alpha software and is not fully supported currently.
 
 ## Installation
 
-### Homebrew (Recommended)
+### npx / npm (Recommended)
 
-```bash
-brew install dosu-ai/dosu/dosu
-```
-
-Or tap first:
-
-```bash
-brew tap dosu-ai/dosu
-brew install dosu
-```
-
-### npm
+Requires Node.js 18+.
 
 ```bash
 npx @dosu/cli setup
@@ -29,6 +18,33 @@ Or install globally:
 ```bash
 npm install -g @dosu/cli
 dosu setup
+```
+
+### curl / install (macOS / Linux)
+
+Downloads and installs the latest stable release binary.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dosu-ai/dosu-cli/main/install.sh | sh
+```
+
+To install a specific release tag:
+
+```bash
+DOSU_INSTALL_VERSION=v0.2.0-rc1 curl -fsSL https://raw.githubusercontent.com/dosu-ai/dosu-cli/main/install.sh | sh
+```
+
+### Homebrew
+
+```bash
+brew install dosu-ai/dosu/dosu
+```
+
+Or tap first:
+
+```bash
+brew tap dosu-ai/dosu
+brew install dosu
 ```
 
 ### Manual Download
@@ -54,7 +70,7 @@ Or right-click the binary, select "Open", and click "Open" in the dialog.
 
 ## Releasing (for maintainers)
 
-Releases are automated via [GoReleaser](https://goreleaser.com/) and GitHub Actions.
+Releases are automated via `bun build --compile` and GitHub Actions.
 
 ### Creating a Release
 
@@ -62,33 +78,20 @@ Releases are automated via [GoReleaser](https://goreleaser.com/) and GitHub Acti
 
 2. **Create and push a new tag:**
    ```bash
-   # List existing tags
-   git tag -l
-
-   # Create a new tag (use semantic versioning)
-   git tag v0.1.0
-
-   # Push the tag to trigger the release
-   git push origin v0.1.0
+   git tag v0.2.0
+   git push origin v0.2.0
    ```
 
 3. **GitHub Actions will automatically:**
+   - Run tests
    - Build binaries for all platforms (macOS, Linux, Windows)
    - Create a GitHub release with the binaries
-   - Generate checksums and changelog
-
-4. **Update the Homebrew formula** (in [homebrew-dosu](https://github.com/dosu-ai/homebrew-dosu)):
-   ```bash
-   cd homebrew-dosu
-   ./scripts/update-formula.sh 0.1.0
-   git add Formula/dosu.rb
-   git commit -m "Update dosu to v0.1.0"
-   git push
-   ```
+   - Publish to npm (`@dosu/cli`)
+   - Update the Homebrew formula
 
 ### Version Naming
 
 - Production releases: `v1.0.0`, `v1.1.0`, `v2.0.0`
 - Pre-releases: `v0.1.0-alpha`, `v0.1.0-beta`, `v0.1.0-rc1`
 
-Pre-release tags (containing `-alpha`, `-beta`, `-rc`) are automatically marked as pre-releases on GitHub.
+Pre-release tags (containing `-alpha`, `-beta`, `-rc`) are automatically marked as pre-releases on GitHub and published to npm under the `next` dist-tag.

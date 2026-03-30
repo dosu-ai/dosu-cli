@@ -1,46 +1,29 @@
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
-#
-# Binaries for programs and plugins
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
+# Dependencies
+node_modules/
 
-# Test binary, built with `go test -c`
-*.test
+# Build output
+/bin
+dist/
+/dosu-cli-*.tgz
 
-# Code coverage profiles and other test artifacts
-*.out
-coverage.*
-*.coverprofile
-profile.cov
+# Bun
+bun.lock
+*.bun-build
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
-
-# Go workspace file
-go.work
-go.work.sum
-
-# env file
+# Environment
 .env
+.env.local
+.env.*
 
 # Editor/IDE
 # .idea/
 # .vscode/
 
-# The Dosu-CLI Executable (root only)
-/dosu
-/bin
+# OS
+.DS_Store
 
-# GoReleaser artifacts
-dist/
+# Test coverage
+coverage/
 
-# Air hot-reload
-tmp/
-build-errors.log
-
-# npm platform binaries (injected by CI)
-npm/cli-*/bin/
+# Autoresearch
+autoresearch-results.tsv
