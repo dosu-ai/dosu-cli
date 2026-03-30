@@ -9,61 +9,62 @@ permissions:
   contents: write
 
 jobs:
-  goreleaser:
+  build-and-release:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Go
-        uses: actions/setup-go@v6
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          go-version-file: "go.mod"
+          bun-version: latest
 
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+      - name: Install dependencies
+        run: bun install
+
+      - name: Run tests
+        run: bunx vitest run
+
+      - name: Extract version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build all platforms
+        run: bun run scripts/build-all.ts
+
+      - name: Create archives
+        run: |
+          cd dist
+          for f in dosu-*; do
+            if [[ "$f" == *.exe ]]; then
+              zip "${f%.exe}.zip" "$f"
+            else
+              tar czf "${f}.tar.gz" "$f"
+            fi
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          distribution: goreleaser
-          version: "~> v2"
-          args: release --clean
+          files: dist/*.{tar.gz,zip}
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TOKEN: ${{ secrets.HOMEBREW_TOKEN }}
-          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
-
-  update-homebrew:
-    needs: goreleaser
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout homebrew-dosu
-        uses: actions/checkout@v6
-        with:
-          repository: dosu-ai/homebrew-dosu
-          token: ${{ secrets.HOMEBREW_TOKEN }}
-          path: homebrew-dosu
-
-      - name: Update Homebrew formula
-        run: |
-          cd homebrew-dosu
-          ./scripts/update-formula.sh ${GITHUB_REF_NAME#v}
-
-      - name: Commit and push
-        run: |
-          cd homebrew-dosu
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/dosu.rb
-          git commit -m "Update dosu to ${{ github.ref_name }}"
-          git push
 
   publish-npm:
-    needs: goreleaser
+    needs: build-and-release
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -71,20 +72,20 @@ jobs:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
 
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build
+        run: bun run build
+
       - name: Extract version
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Download release artifacts
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir -p dist
-          gh release download "${{ github.ref_name }}" \
-            --pattern "dosu_*.tar.gz" \
-            --dir dist
-
-      - name: Build and publish npm packages
+      - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: ./npm/scripts/build-npm.sh "${{ steps.version.outputs.version }}"
+        run: |
+          # Update version in package.json
+          npm version ${{ steps.version.outputs.version }} --no-git-tag-version
+          npm publish --access public
