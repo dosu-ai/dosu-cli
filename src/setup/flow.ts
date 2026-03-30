@@ -15,15 +15,15 @@ export interface SetupOptions {
   deploymentID?: string;
 }
 
-type ConfigAction = "install" | "remove" | "skip";
+export type ConfigAction = "install" | "remove" | "skip";
 
-interface ConfigResult {
+export interface ConfigResult {
   provider: SetupProvider;
   action: ConfigAction;
   error?: Error;
 }
 
-interface ToolSelection {
+export interface ToolSelection {
   toInstall: SetupProvider[];
   toRemove: SetupProvider[];
   skipped: SetupProvider[];
@@ -222,11 +222,11 @@ async function stepMintAPIKey(apiClient: Client, cfg: Config): Promise<string | 
   }
 }
 
-function isStdioOnly(p: SetupProvider): boolean {
+export function isStdioOnly(p: SetupProvider): boolean {
   return p.id() === "claude-desktop";
 }
 
-function stepDetectTools(): SetupProvider[] {
+export function stepDetectTools(): SetupProvider[] {
   return allSetupProviders().filter((p) => p.isInstalled() && !isStdioOnly(p));
 }
 
@@ -270,7 +270,7 @@ async function stepSelectTools(detected: SetupProvider[]): Promise<ToolSelection
   return result;
 }
 
-function stepConfigureTools(cfg: Config, selection: ToolSelection): ConfigResult[] {
+export function stepConfigureTools(cfg: Config, selection: ToolSelection): ConfigResult[] {
   const results: ConfigResult[] = [];
 
   for (const provider of selection.toInstall) {
@@ -300,7 +300,7 @@ function stepConfigureTools(cfg: Config, selection: ToolSelection): ConfigResult
   return results;
 }
 
-function stepShowSummary(results: ConfigResult[]): void {
+export function stepShowSummary(results: ConfigResult[]): void {
   const installed = results.filter((r) => r.action === "install" && !r.error);
   const removed = results.filter((r) => r.action === "remove" && !r.error);
   const skipped = results.filter((r) => r.action === "skip");

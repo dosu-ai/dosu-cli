@@ -10,6 +10,18 @@ export default defineConfig({
       provider: "v8",
       reporter: ["text", "lcov"],
       reportsDirectory: "coverage",
+      exclude: [
+        "**/index.ts",           // barrel re-export files
+        "src/index.ts",          // CLI entry point
+        "scripts/*",             // build scripts (spawn Bun)
+        "vitest.config.ts",      // config file
+      ],
+      thresholds: {
+        statements: 95,
+        branches: 90,
+        functions: 80,
+        lines: 95,
+      },
     },
   },
 });
