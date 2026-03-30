@@ -171,7 +171,7 @@ async function handleMCPRemove(cfg: ReturnType<typeof loadConfig>): Promise<void
   }
 }
 
-function handleLogout(cfg: ReturnType<typeof loadConfig>): void {
+export function handleLogout(cfg: ReturnType<typeof loadConfig>): void {
   if (!isAuthenticated(cfg)) {
     p.log.warn("You are not logged in.");
     return;

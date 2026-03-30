@@ -1,44 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createProgram } from "./cli";
+import { loadConfig, saveConfig } from "../config/config";
 import type { Config } from "../config/config";
+import { allProviders } from "../mcp/providers";
 
-// ── Mocks ────────────────────────────────────────────────────────────────────
-
-const mockLoadConfig = vi.fn<() => Config>();
-const mockSaveConfig = vi.fn<(cfg: Config) => void>();
-const mockIsAuthenticated = vi.fn<(cfg: Config) => boolean>();
-const mockIsTokenExpired = vi.fn<(cfg: Config) => boolean>();
-const mockGetConfigPath = vi.fn<() => string>();
-
-vi.mock("../config/config", () => ({
-  loadConfig: (...args: unknown[]) => mockLoadConfig(...(args as [])),
-  saveConfig: (...args: unknown[]) => mockSaveConfig(...(args as [Config])),
-  isAuthenticated: (...args: unknown[]) => mockIsAuthenticated(...(args as [Config])),
-  isTokenExpired: (...args: unknown[]) => mockIsTokenExpired(...(args as [Config])),
-  getConfigPath: (...args: unknown[]) => mockGetConfigPath(...(args as [])),
-}));
-
-const mockInstall = vi.fn();
-
-const fakeProvider = (overrides: Partial<{
-  id: string;
-  name: string;
-  supportsLocal: boolean;
-}> = {}) => ({
-  id: vi.fn().mockReturnValue(overrides.id ?? "cursor"),
-  name: vi.fn().mockReturnValue(overrides.name ?? "Cursor"),
-  supportsLocal: vi.fn().mockReturnValue(overrides.supportsLocal ?? true),
-  install: mockInstall,
-  remove: vi.fn(),
-});
-
-const mockGetProvider = vi.fn();
-const mockAllProviders = vi.fn();
-
-vi.mock("../mcp/providers", () => ({
-  getProvider: (...args: unknown[]) => mockGetProvider(...args),
-  allProviders: (...args: unknown[]) => mockAllProviders(...args),
-}));
+// ── Mocks (true external boundaries only) ───────────────────────────────────
 
 const mockStartOAuthFlow = vi.fn();
 vi.mock("../auth/flow", () => ({
@@ -55,7 +24,34 @@ vi.mock("../setup/flow", () => ({
   runSetup: (...args: unknown[]) => mockRunSetup(...args),
 }));
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Temp dir + env management ───────────────────────────────────────────────
+
+let tempDir: string;
+let origXDG: string | undefined;
+let origHome: string | undefined;
+let logSpy: ReturnType<typeof vi.spyOn>;
+
+beforeEach(() => {
+  tempDir = mkdtempSync(join(tmpdir(), "dosu-cli-test-"));
+  origXDG = process.env.XDG_CONFIG_HOME;
+  origHome = process.env.HOME;
+  process.env.XDG_CONFIG_HOME = tempDir;
+  process.env.HOME = tempDir;
+
+  vi.clearAllMocks();
+  logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+});
+
+afterEach(() => {
+  if (origXDG !== undefined) process.env.XDG_CONFIG_HOME = origXDG;
+  else delete process.env.XDG_CONFIG_HOME;
+  if (origHome !== undefined) process.env.HOME = origHome;
+  else delete process.env.HOME;
+  rmSync(tempDir, { recursive: true, force: true });
+  logSpy.mockRestore();
+});
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
 
 function authenticatedConfig(): Config {
   return {
@@ -68,38 +64,20 @@ function authenticatedConfig(): Config {
   };
 }
 
-function unauthenticatedConfig(): Config {
-  return {
-    access_token: "",
-    refresh_token: "",
-    expires_at: 0,
-  };
-}
-
-/** Parse a command through Commander, catching Commander's own exit calls. */
 async function run(...args: string[]) {
   const program = createProgram();
   program.exitOverride();
-  // Commander wraps action errors in CommanderError; we want the original.
   await program.parseAsync(["node", "dosu", ...args]);
 }
 
-// ── Tests ────────────────────────────────────────────────────────────────────
+function allLogOutput(): string {
+  return logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+}
+
+// ── Tests ───────────────────────────────────────────────────────────────────
 
 describe("CLI actions", () => {
-  let logSpy: ReturnType<typeof vi.spyOn>;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    mockGetConfigPath.mockReturnValue("/home/user/.config/dosu-cli/config.json");
-  });
-
-  afterEach(() => {
-    logSpy.mockRestore();
-  });
-
-  // ── default (no subcommand) ──────────────────────────────────────────────
+  // ── default (no subcommand) ─────────────────────────────────────────────
 
   describe("default action (no subcommand)", () => {
     it("launches the TUI", async () => {
@@ -109,27 +87,23 @@ describe("CLI actions", () => {
     });
   });
 
-  // ── login ────────────────────────────────────────────────────────────────
+  // ── login ───────────────────────────────────────────────────────────────
 
   describe("login", () => {
-    it("prints already-logged-in message when authenticated", async () => {
-      const cfg = authenticatedConfig();
-      mockLoadConfig.mockReturnValue(cfg);
-      mockIsAuthenticated.mockReturnValue(true);
-      mockIsTokenExpired.mockReturnValue(false);
+    it("prints already-logged-in when config has valid token", async () => {
+      saveConfig(authenticatedConfig());
 
       await run("login");
 
       expect(logSpy).toHaveBeenCalledWith("You are already logged in.");
-      expect(logSpy).toHaveBeenCalledWith("Run 'dosu logout' first to re-authenticate.");
+      expect(logSpy).toHaveBeenCalledWith(
+        "Run 'dosu logout' first to re-authenticate.",
+      );
       expect(mockStartOAuthFlow).not.toHaveBeenCalled();
     });
 
-    it("runs OAuth flow and saves token when not authenticated", async () => {
-      const cfg = unauthenticatedConfig();
-      mockLoadConfig.mockReturnValue(cfg);
-      mockIsAuthenticated.mockReturnValue(false);
-      mockIsTokenExpired.mockReturnValue(false);
+    it("runs OAuth flow and writes token to real config file", async () => {
+      // Start with empty config (no file on disk)
       mockStartOAuthFlow.mockResolvedValue({
         access_token: "new_tok",
         refresh_token: "new_ref",
@@ -138,87 +112,73 @@ describe("CLI actions", () => {
 
       await run("login");
 
-      expect(logSpy).toHaveBeenCalledWith("Opening browser for authentication...");
-      expect(mockStartOAuthFlow).toHaveBeenCalledOnce();
-      expect(mockSaveConfig).toHaveBeenCalledOnce();
-      const saved = mockSaveConfig.mock.calls[0][0];
-      expect(saved.access_token).toBe("new_tok");
-      expect(saved.refresh_token).toBe("new_ref");
-      expect(saved.expires_at).toBeGreaterThan(0);
-      expect(logSpy).toHaveBeenCalledWith("Successfully authenticated!");
       expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Credentials saved to"),
+        "Opening browser for authentication...",
       );
+      expect(mockStartOAuthFlow).toHaveBeenCalledOnce();
+      expect(logSpy).toHaveBeenCalledWith("Successfully authenticated!");
+
+      // Verify the real config file was written
+      const cfg = loadConfig();
+      expect(cfg.access_token).toBe("new_tok");
+      expect(cfg.refresh_token).toBe("new_ref");
+      expect(cfg.expires_at).toBeGreaterThan(0);
     });
 
     it("runs OAuth flow when token is expired", async () => {
       const cfg = authenticatedConfig();
-      mockLoadConfig.mockReturnValue(cfg);
-      mockIsAuthenticated.mockReturnValue(true);
-      mockIsTokenExpired.mockReturnValue(true);
+      cfg.expires_at = Math.floor(Date.now() / 1000) - 1000; // expired
+      saveConfig(cfg);
+
       mockStartOAuthFlow.mockResolvedValue({
-        access_token: "refreshed",
-        refresh_token: "ref2",
+        access_token: "refreshed_tok",
+        refresh_token: "refreshed_ref",
         expires_in: 7200,
       });
 
       await run("login");
 
       expect(mockStartOAuthFlow).toHaveBeenCalledOnce();
-      expect(mockSaveConfig).toHaveBeenCalledOnce();
+
+      const updated = loadConfig();
+      expect(updated.access_token).toBe("refreshed_tok");
+      expect(updated.refresh_token).toBe("refreshed_ref");
     });
   });
 
-  // ── logout ───────────────────────────────────────────────────────────────
+  // ── logout ──────────────────────────────────────────────────────────────
 
   describe("logout", () => {
-    it("clears credentials and saves config when authenticated", async () => {
-      const cfg = authenticatedConfig();
-      mockLoadConfig.mockReturnValue(cfg);
-      mockIsAuthenticated.mockReturnValue(true);
+    it("clears credentials in real config file", async () => {
+      saveConfig(authenticatedConfig());
 
       await run("logout");
 
-      expect(mockSaveConfig).toHaveBeenCalledOnce();
-      const saved = mockSaveConfig.mock.calls[0][0];
-      expect(saved.access_token).toBe("");
-      expect(saved.refresh_token).toBe("");
-      expect(saved.expires_at).toBe(0);
-      expect(saved.deployment_id).toBeUndefined();
-      expect(saved.deployment_name).toBeUndefined();
-      expect(saved.api_key).toBeUndefined();
       expect(logSpy).toHaveBeenCalledWith("Successfully logged out.");
+
+      // Read back the real config file and verify credentials are cleared
+      const cfg = loadConfig();
+      expect(cfg.access_token).toBe("");
+      expect(cfg.refresh_token).toBe("");
+      expect(cfg.expires_at).toBe(0);
+      expect(cfg.deployment_id).toBeUndefined();
+      expect(cfg.deployment_name).toBeUndefined();
+      expect(cfg.api_key).toBeUndefined();
     });
 
-    it("prints not-logged-in message when not authenticated", async () => {
-      mockLoadConfig.mockReturnValue(unauthenticatedConfig());
-      mockIsAuthenticated.mockReturnValue(false);
-
+    it("prints not-logged-in when config has no credentials", async () => {
+      // No config file on disk = empty config
       await run("logout");
 
       expect(logSpy).toHaveBeenCalledWith("You are not logged in.");
-      expect(mockSaveConfig).not.toHaveBeenCalled();
     });
   });
 
-  // ── status ───────────────────────────────────────────────────────────────
+  // ── status ──────────────────────────────────────────────────────────────
 
   describe("status", () => {
-    it("shows not-logged-in when unauthenticated", async () => {
-      mockLoadConfig.mockReturnValue(unauthenticatedConfig());
-      mockIsAuthenticated.mockReturnValue(false);
-
-      await run("status");
-
-      expect(logSpy).toHaveBeenCalledWith("Status: Not logged in");
-      expect(logSpy).toHaveBeenCalledWith("Run 'dosu login' to authenticate.");
-    });
-
-    it("shows logged in with deployment info", async () => {
-      const cfg = authenticatedConfig();
-      mockLoadConfig.mockReturnValue(cfg);
-      mockIsAuthenticated.mockReturnValue(true);
-      mockIsTokenExpired.mockReturnValue(false);
+    it("shows deployment info from real config", async () => {
+      saveConfig(authenticatedConfig());
 
       await run("status");
 
@@ -227,25 +187,33 @@ describe("CLI actions", () => {
       expect(logSpy).toHaveBeenCalledWith("Deployment ID: dep_123");
     });
 
+    it("shows not-logged-in with empty config", async () => {
+      await run("status");
+
+      expect(logSpy).toHaveBeenCalledWith("Status: Not logged in");
+      expect(logSpy).toHaveBeenCalledWith(
+        "Run 'dosu login' to authenticate.",
+      );
+    });
+
     it("shows token-expired status", async () => {
       const cfg = authenticatedConfig();
-      mockLoadConfig.mockReturnValue(cfg);
-      mockIsAuthenticated.mockReturnValue(true);
-      mockIsTokenExpired.mockReturnValue(true);
+      cfg.expires_at = Math.floor(Date.now() / 1000) - 1000;
+      saveConfig(cfg);
 
       await run("status");
 
       expect(logSpy).toHaveBeenCalledWith("Status: Token expired");
-      expect(logSpy).toHaveBeenCalledWith("Run 'dosu login' to re-authenticate.");
+      expect(logSpy).toHaveBeenCalledWith(
+        "Run 'dosu login' to re-authenticate.",
+      );
     });
 
     it("shows no deployment when none selected", async () => {
       const cfg = authenticatedConfig();
       cfg.deployment_id = undefined;
       cfg.deployment_name = undefined;
-      mockLoadConfig.mockReturnValue(cfg);
-      mockIsAuthenticated.mockReturnValue(true);
-      mockIsTokenExpired.mockReturnValue(false);
+      saveConfig(cfg);
 
       await run("status");
 
@@ -256,89 +224,73 @@ describe("CLI actions", () => {
     });
   });
 
-  // ── mcp list ─────────────────────────────────────────────────────────────
+  // ── mcp list ────────────────────────────────────────────────────────────
 
   describe("mcp list", () => {
-    it("prints all providers", async () => {
-      const providers = [
-        fakeProvider({ id: "cursor", name: "Cursor", supportsLocal: true }),
-        fakeProvider({ id: "claude", name: "Claude Code", supportsLocal: true }),
-        fakeProvider({ id: "manual", name: "Manual", supportsLocal: true }),
-      ];
-      // Override the id check for "manual" — the list action uses p.id() === "manual"
-      providers[2].id.mockReturnValue("manual");
-      // Make the third one not support local to exercise all branches
-      providers[1].supportsLocal.mockReturnValue(false);
-
-      mockAllProviders.mockReturnValue(providers);
-
+    it("prints all real provider names", async () => {
       await run("mcp", "list");
 
-      expect(logSpy).toHaveBeenCalledWith("Available AI tools:\n");
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining("cursor"),
-      );
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining("claude"),
-      );
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining("manual"),
-      );
-      expect(logSpy).toHaveBeenCalledWith(
-        "\nUse 'dosu mcp add <tool>' to add Dosu MCP to a tool.",
+      const output = allLogOutput();
+      expect(output).toContain("Available AI tools:");
+
+      // Verify all real providers appear in the output
+      const providers = allProviders();
+      for (const p of providers) {
+        expect(output).toContain(p.id());
+      }
+
+      expect(output).toContain(
+        "Use 'dosu mcp add <tool>' to add Dosu MCP to a tool.",
       );
     });
   });
 
-  // ── mcp add ──────────────────────────────────────────────────────────────
+  // ── mcp add ─────────────────────────────────────────────────────────────
 
   describe("mcp add", () => {
-    it("installs a valid tool", async () => {
-      const provider = fakeProvider({ id: "cursor", name: "Cursor", supportsLocal: true });
-      mockGetProvider.mockReturnValue(provider);
-
+    it("creates real cursor config file with --global", async () => {
       const cfg = authenticatedConfig();
-      mockLoadConfig.mockReturnValue(cfg);
-      mockIsAuthenticated.mockReturnValue(true);
-      mockIsTokenExpired.mockReturnValue(false);
+      saveConfig(cfg);
 
-      await run("mcp", "add", "cursor");
+      await run("mcp", "add", "cursor", "--global");
 
-      expect(mockGetProvider).toHaveBeenCalledWith("cursor");
-      expect(mockInstall).toHaveBeenCalledWith(cfg, false);
+      // Verify real file was created on disk
+      const cursorConfigPath = join(tempDir, ".cursor", "mcp.json");
+      const cursorConfig = JSON.parse(
+        readFileSync(cursorConfigPath, "utf-8"),
+      );
+      expect(cursorConfig.mcpServers).toBeDefined();
+      expect(cursorConfig.mcpServers.dosu).toBeDefined();
+      expect(cursorConfig.mcpServers.dosu.url).toContain("dep_123");
+      expect(cursorConfig.mcpServers.dosu.headers).toBeDefined();
+      expect(cursorConfig.mcpServers.dosu.headers["X-Dosu-API-Key"]).toBe(
+        "key_abc",
+      );
+
       expect(logSpy).toHaveBeenCalledWith(
         expect.stringContaining("Successfully added Dosu MCP to Cursor"),
       );
     });
 
     it("throws error for unknown tool", async () => {
-      mockGetProvider.mockImplementation(() => {
-        throw new Error("unknown tool: nope");
-      });
+      saveConfig(authenticatedConfig());
 
-      await expect(run("mcp", "add", "nope")).rejects.toThrow(
-        "unknown tool 'nope'",
+      await expect(run("mcp", "add", "nonexistent")).rejects.toThrow(
+        "unknown tool 'nonexistent'",
       );
     });
 
-    it("throws error when not authenticated", async () => {
-      const provider = fakeProvider();
-      mockGetProvider.mockReturnValue(provider);
-      mockLoadConfig.mockReturnValue(unauthenticatedConfig());
-      mockIsAuthenticated.mockReturnValue(false);
-
+    it("throws error when not logged in", async () => {
+      // No config on disk = empty/unauthenticated
       await expect(run("mcp", "add", "cursor")).rejects.toThrow(
         "not logged in",
       );
     });
 
     it("throws error when token is expired", async () => {
-      const provider = fakeProvider();
-      mockGetProvider.mockReturnValue(provider);
       const cfg = authenticatedConfig();
-      mockLoadConfig.mockReturnValue(cfg);
-      mockIsAuthenticated.mockReturnValue(true);
-      mockIsTokenExpired.mockReturnValue(true);
+      cfg.expires_at = Math.floor(Date.now() / 1000) - 1000;
+      saveConfig(cfg);
 
       await expect(run("mcp", "add", "cursor")).rejects.toThrow(
         "session expired",
@@ -346,77 +298,50 @@ describe("CLI actions", () => {
     });
 
     it("throws error when no deployment selected", async () => {
-      const provider = fakeProvider();
-      mockGetProvider.mockReturnValue(provider);
       const cfg = authenticatedConfig();
       cfg.deployment_id = undefined;
-      mockLoadConfig.mockReturnValue(cfg);
-      mockIsAuthenticated.mockReturnValue(true);
-      mockIsTokenExpired.mockReturnValue(false);
+      saveConfig(cfg);
 
       await expect(run("mcp", "add", "cursor")).rejects.toThrow(
         "no deployment selected",
       );
     });
 
-    it("calls install without global flag for manual tool", async () => {
-      const provider = fakeProvider({ id: "manual", name: "Manual" });
-      mockGetProvider.mockReturnValue(provider);
-
-      const cfg = authenticatedConfig();
-      mockLoadConfig.mockReturnValue(cfg);
-      mockIsAuthenticated.mockReturnValue(true);
-      mockIsTokenExpired.mockReturnValue(false);
+    it("logs manual config details without writing files", async () => {
+      saveConfig(authenticatedConfig());
 
       await run("mcp", "add", "manual");
 
-      expect(mockInstall).toHaveBeenCalledWith(cfg, false);
-      // Should return early — no "Successfully added" message for manual
-      expect(logSpy).not.toHaveBeenCalledWith(
-        expect.stringContaining("Successfully added"),
-      );
+      const output = allLogOutput();
+      expect(output).toContain("dep_123");
+      expect(output).toContain("key_abc");
+      // Manual provider returns early, no "Successfully added" message
+      expect(output).not.toContain("Successfully added");
     });
 
     it("auto-sets global when provider does not support local", async () => {
-      const provider = fakeProvider({
-        id: "zed",
-        name: "Zed",
-        supportsLocal: false,
-      });
-      mockGetProvider.mockReturnValue(provider);
+      saveConfig(authenticatedConfig());
 
-      const cfg = authenticatedConfig();
-      mockLoadConfig.mockReturnValue(cfg);
-      mockIsAuthenticated.mockReturnValue(true);
-      mockIsTokenExpired.mockReturnValue(false);
+      // Windsurf only supports global installation
+      await run("mcp", "add", "windsurf");
 
-      await run("mcp", "add", "zed");
-
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining("only supports global installation"),
-      );
-      expect(mockInstall).toHaveBeenCalledWith(cfg, true);
+      const output = allLogOutput();
+      expect(output).toContain("only supports global installation");
+      expect(output).toContain("Successfully added Dosu MCP to Windsurf");
     });
 
     it("installs globally when --global flag is passed", async () => {
-      const provider = fakeProvider({ id: "cursor", name: "Cursor", supportsLocal: true });
-      mockGetProvider.mockReturnValue(provider);
-
-      const cfg = authenticatedConfig();
-      mockLoadConfig.mockReturnValue(cfg);
-      mockIsAuthenticated.mockReturnValue(true);
-      mockIsTokenExpired.mockReturnValue(false);
+      saveConfig(authenticatedConfig());
 
       await run("mcp", "add", "cursor", "--global");
 
-      expect(mockInstall).toHaveBeenCalledWith(cfg, true);
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining("global (all projects)"),
-      );
+      const output = allLogOutput();
+      expect(output).toContain("global (all projects)");
+      expect(output).toContain("Successfully added Dosu MCP to Cursor");
     });
   });
 
-  // ── setup ────────────────────────────────────────────────────────────────
+  // ── setup ───────────────────────────────────────────────────────────────
 
   describe("setup", () => {
     it("runs setup flow", async () => {
@@ -424,7 +349,9 @@ describe("CLI actions", () => {
 
       await run("setup");
 
-      expect(mockRunSetup).toHaveBeenCalledWith({ deploymentID: undefined });
+      expect(mockRunSetup).toHaveBeenCalledWith({
+        deploymentID: undefined,
+      });
     });
 
     it("passes --deployment option to setup flow", async () => {
@@ -432,7 +359,9 @@ describe("CLI actions", () => {
 
       await run("setup", "--deployment", "dep_456");
 
-      expect(mockRunSetup).toHaveBeenCalledWith({ deploymentID: "dep_456" });
+      expect(mockRunSetup).toHaveBeenCalledWith({
+        deploymentID: "dep_456",
+      });
     });
   });
 });
