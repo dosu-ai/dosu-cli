@@ -1,7 +1,5 @@
 /**
  * URL constants and environment-aware getters.
- *
- * Equivalent to Go's internal/config/constants.go
  */
 
 const DevWebAppURL = "http://localhost:3001";
@@ -11,7 +9,7 @@ const DevBackendURL = "http://localhost:7001";
 const ProdBackendURL = "https://api.dosu.dev";
 
 const DevSupabaseURL = "http://localhost:54321";
-const ProdSupabaseURL = "https://your-project.supabase.co";
+const ProdSupabaseURL = "https://wldmetsoicvieidlsqrb.supabase.co";
 
 function isDev(): boolean {
   return process.env.DOSU_DEV === "true";

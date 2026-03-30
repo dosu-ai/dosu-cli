@@ -1,7 +1,5 @@
 /**
  * Version information — injected at build time or read from package.json.
- *
- * Equivalent to Go's internal/version/version.go
  */
 
 export const VERSION = process.env.DOSU_VERSION ?? "dev";

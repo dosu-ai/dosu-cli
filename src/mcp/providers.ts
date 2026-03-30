@@ -1,7 +1,5 @@
 /**
  * Provider interface and registry.
- *
- * Equivalent to Go's internal/mcp/providers.go
  */
 
 import type { Config } from "../config/config";

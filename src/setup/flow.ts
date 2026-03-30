@@ -1,7 +1,5 @@
 /**
  * Setup flow — interactive wizard.
- *
- * Equivalent to Go's internal/setup/flow.go + steps.go
  */
 
 import * as p from "@clack/prompts";

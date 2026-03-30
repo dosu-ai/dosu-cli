@@ -1,7 +1,5 @@
 /**
  * OAuth flow — browser-based authentication.
- *
- * Equivalent to Go's internal/auth/flow.go
  */
 
 import { getWebAppURL } from "../config/constants";

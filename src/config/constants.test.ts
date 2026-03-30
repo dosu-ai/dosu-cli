@@ -62,7 +62,7 @@ describe("constants", () => {
 
   describe("getSupabaseURL", () => {
     it("returns prod URL by default", () => {
-      expect(getSupabaseURL()).toBe("https://your-project.supabase.co");
+      expect(getSupabaseURL()).toBe("https://wldmetsoicvieidlsqrb.supabase.co");
     });
 
     it("returns dev URL when DOSU_DEV=true", () => {

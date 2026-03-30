@@ -1,7 +1,5 @@
 /**
  * Provider detection and utility functions.
- *
- * Equivalent to Go's internal/mcp/detect.go
  */
 
 import { existsSync } from "node:fs";

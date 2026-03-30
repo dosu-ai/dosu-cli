@@ -19,7 +19,7 @@
     "test": "bunx vitest run",
     "test:watch": "bunx vitest",
     "typecheck": "bunx tsc --noEmit",
-    "postinstall": "bun scripts/patch-clack.ts"
+    "postinstall": "[ -f scripts/patch-clack.ts ] && bun scripts/patch-clack.ts || true"
   },
   "devDependencies": {
     "@types/bun": "^1.3.11",

@@ -1,7 +1,5 @@
 /**
  * Setup flow UI helpers and styled output.
- *
- * Equivalent to Go's internal/setup/styles.go
  */
 
 import pc from "picocolors";

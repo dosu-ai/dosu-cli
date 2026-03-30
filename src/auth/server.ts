@@ -1,7 +1,5 @@
 /**
  * Local OAuth callback server.
- *
- * Equivalent to Go's internal/auth/server.go
  */
 
 export interface TokenResponse {

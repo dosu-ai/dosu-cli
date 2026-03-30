@@ -1,7 +1,5 @@
 /**
  * HTTP client for making authenticated requests to the Dosu backend.
- *
- * Equivalent to Go's internal/client/client.go
  */
 
 import type { Config } from "../config/config";

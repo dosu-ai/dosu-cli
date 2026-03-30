@@ -31,6 +31,12 @@ npm install -g @dosu/cli
 dosu setup
 ```
 
+### Shell (macOS / Linux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dosu-ai/dosu-cli/main/install.sh | sh
+```
+
 ### Manual Download
 
 Download the appropriate archive from the [Releases](https://github.com/dosu-ai/dosu-cli/releases) page.
@@ -54,7 +60,7 @@ Or right-click the binary, select "Open", and click "Open" in the dialog.
 
 ## Releasing (for maintainers)
 
-Releases are automated via [GoReleaser](https://goreleaser.com/) and GitHub Actions.
+Releases are automated via `bun build --compile` and GitHub Actions.
 
 ### Creating a Release
 
@@ -62,29 +68,16 @@ Releases are automated via [GoReleaser](https://goreleaser.com/) and GitHub Acti
 
 2. **Create and push a new tag:**
    ```bash
-   # List existing tags
-   git tag -l
-
-   # Create a new tag (use semantic versioning)
-   git tag v0.1.0
-
-   # Push the tag to trigger the release
-   git push origin v0.1.0
+   git tag v0.2.0
+   git push origin v0.2.0
    ```
 
 3. **GitHub Actions will automatically:**
+   - Run tests
    - Build binaries for all platforms (macOS, Linux, Windows)
    - Create a GitHub release with the binaries
-   - Generate checksums and changelog
-
-4. **Update the Homebrew formula** (in [homebrew-dosu](https://github.com/dosu-ai/homebrew-dosu)):
-   ```bash
-   cd homebrew-dosu
-   ./scripts/update-formula.sh 0.1.0
-   git add Formula/dosu.rb
-   git commit -m "Update dosu to v0.1.0"
-   git push
-   ```
+   - Publish to npm (`@dosu/cli`)
+   - Update the Homebrew formula
 
 ### Version Naming
 

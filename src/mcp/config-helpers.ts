@@ -1,7 +1,5 @@
 /**
  * Shared JSON config helpers for MCP provider configuration.
- *
- * Equivalent to Go's internal/mcp/config_helpers.go
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";

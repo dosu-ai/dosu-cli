@@ -1,7 +1,5 @@
 /**
  * CLI command definitions using Commander.
- *
- * Equivalent to Go's internal/cli/ package.
  */
 
 import { Command } from "commander";

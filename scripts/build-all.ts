@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Cross-platform build script — replaces GoReleaser.
+ * Cross-platform build script.
  *
  * Builds standalone binaries for all supported platforms using `bun build --compile`.
  */

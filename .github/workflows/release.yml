@@ -47,14 +47,12 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Inject version into build
-        run: |
-          export DOSU_VERSION="${{ steps.version.outputs.version }}"
-          export DOSU_COMMIT="$(git rev-parse --short HEAD)"
-          export DOSU_DATE="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-
       - name: Build all platforms
         run: bun run scripts/build-all.ts
+        env:
+          DOSU_VERSION: ${{ steps.version.outputs.version }}
+          DOSU_COMMIT: ${{ github.sha }}
+          DOSU_DATE: ${{ github.event.head_commit.timestamp }}
 
       - name: Create archives
         run: |

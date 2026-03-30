@@ -1,7 +1,5 @@
 /**
  * Config management — load/save JSON config from XDG config directory.
- *
- * Equivalent to Go's internal/config/config.go
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
