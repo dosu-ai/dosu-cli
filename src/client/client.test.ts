@@ -177,7 +177,15 @@ describe("Client", () => {
     });
 
     it("throws on failure", async () => {
+      // First call returns 403, triggers refresh attempt
       mockFetch.mockResolvedValueOnce(new Response("Forbidden", { status: 403 }));
+      // Refresh succeeds
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({ access_token: "new", refresh_token: "new", expires_in: 3600 }),
+      );
+      // Retry still returns 500
+      mockFetch.mockResolvedValueOnce(new Response("Server Error", { status: 500 }));
+
       const client = new Client(makeConfig());
       await expect(client.createAPIKey("dep-1", "cli")).rejects.toThrow("failed to create API key");
     });
