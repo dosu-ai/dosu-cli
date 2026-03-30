@@ -149,58 +149,57 @@ export function startCallbackServer(): {
   tokenPromise: Promise<TokenResponse>;
 } {
   let resolveToken: (token: TokenResponse) => void;
-  let rejectToken: (err: Error) => void;
 
-  const tokenPromise = new Promise<TokenResponse>((resolve, reject) => {
+  const tokenPromise = new Promise<TokenResponse>((resolve) => {
     resolveToken = resolve;
-    rejectToken = reject;
   });
 
-  const server = Bun.serve({
-    port: 0, // random available port
-    hostname: "localhost",
-    fetch(req) {
-      const url = new URL(req.url);
+  const http = require("node:http") as typeof import("node:http");
 
-      if (url.pathname !== "/callback") {
-        return new Response("Not Found", { status: 404 });
-      }
+  const httpServer = http.createServer((req, res) => {
+    const url = new URL(req.url ?? "/", `http://localhost`);
 
-      const accessToken = url.searchParams.get("access_token");
-      const refreshToken = url.searchParams.get("refresh_token");
-      const expiresIn = url.searchParams.get("expires_in");
+    if (url.pathname !== "/callback") {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("Not Found");
+      return;
+    }
 
-      if (!accessToken) {
-        // Serve HTML that extracts token from URL fragment
-        return new Response(CALLBACK_HTML_EXTRACT, {
-          headers: { "Content-Type": "text/html" },
-        });
-      }
+    const accessToken = url.searchParams.get("access_token");
+    const refreshToken = url.searchParams.get("refresh_token");
+    const expiresIn = url.searchParams.get("expires_in");
 
-      // Parse expiry (default 1 hour)
-      let expiresInInt = 3600;
-      if (expiresIn) {
-        const parsed = parseInt(expiresIn, 10);
-        if (!isNaN(parsed)) expiresInInt = parsed;
-      }
+    if (!accessToken) {
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end(CALLBACK_HTML_EXTRACT);
+      return;
+    }
 
-      // Send token to promise
-      resolveToken!({
-        access_token: accessToken,
-        refresh_token: refreshToken ?? "",
-        expires_in: expiresInInt,
-      });
+    // Parse expiry (default 1 hour)
+    let expiresInInt = 3600;
+    if (expiresIn) {
+      const parsed = parseInt(expiresIn, 10);
+      if (!isNaN(parsed)) expiresInInt = parsed;
+    }
 
-      return new Response(CALLBACK_HTML_SUCCESS, {
-        headers: { "Content-Type": "text/html" },
-      });
-    },
+    resolveToken!({
+      access_token: accessToken,
+      refresh_token: refreshToken ?? "",
+      expires_in: expiresInInt,
+    });
+
+    res.writeHead(200, { "Content-Type": "text/html" });
+    res.end(CALLBACK_HTML_SUCCESS);
   });
+
+  // Listen on random port
+  httpServer.listen(0, "localhost");
+  const addr = httpServer.address() as import("node:net").AddressInfo;
 
   return {
     server: {
-      port: server.port,
-      close: () => server.stop(),
+      port: addr.port,
+      close: () => httpServer.close(),
     },
     tokenPromise,
   };
