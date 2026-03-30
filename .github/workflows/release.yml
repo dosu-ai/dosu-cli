@@ -9,7 +9,25 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Run tests
+        run: bunx vitest run
+
   build-and-release:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -25,12 +43,15 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      - name: Run tests
-        run: bunx vitest run
-
       - name: Extract version
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Inject version into build
+        run: |
+          export DOSU_VERSION="${{ steps.version.outputs.version }}"
+          export DOSU_COMMIT="$(git rev-parse --short HEAD)"
+          export DOSU_DATE="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
       - name: Build all platforms
         run: bun run scripts/build-all.ts
@@ -45,11 +66,14 @@ jobs:
               tar czf "${f}.tar.gz" "$f"
             fi
           done
+          ls -lh *.tar.gz *.zip
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.{tar.gz,zip}
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -75,9 +99,6 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      - name: Build
-        run: bun run build
-
       - name: Extract version
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
@@ -86,6 +107,31 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          # Update version in package.json
           npm version ${{ steps.version.outputs.version }} --no-git-tag-version
           npm publish --access public
+
+  update-homebrew:
+    needs: build-and-release
+    runs-on: ubuntu-latest
+    if: "!contains(github.ref_name, '-')"
+    steps:
+      - name: Checkout homebrew-dosu
+        uses: actions/checkout@v4
+        with:
+          repository: dosu-ai/homebrew-dosu
+          token: ${{ secrets.HOMEBREW_TOKEN }}
+          path: homebrew-dosu
+
+      - name: Update Homebrew formula
+        run: |
+          cd homebrew-dosu
+          ./scripts/update-formula.sh ${GITHUB_REF_NAME#v}
+
+      - name: Commit and push
+        run: |
+          cd homebrew-dosu
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/dosu.rb
+          git diff --cached --quiet || git commit -m "Update dosu to ${{ github.ref_name }}"
+          git push
