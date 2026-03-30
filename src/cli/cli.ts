@@ -149,7 +149,7 @@ export function createProgram(): Command {
         let scope = "(local + global)";
         if (!p.supportsLocal()) scope = "(global only)";
         if (p.id() === "manual") scope = "";
-        console.log(`  %-10s %s %s`, p.id(), p.name(), scope);
+        console.log(`  ${p.id().padEnd(16)} ${p.name()} ${scope}`);
       }
       console.log("\nUse 'dosu mcp add <tool>' to add Dosu MCP to a tool.");
     });
