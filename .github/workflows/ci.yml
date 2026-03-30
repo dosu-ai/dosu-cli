@@ -21,6 +21,9 @@ jobs:
       - name: Install dependencies
         run: bun install
 
+      - name: Check linting and formatting
+        run: bun run check
+
       - name: Run typecheck
         run: bunx tsc --noEmit
 
