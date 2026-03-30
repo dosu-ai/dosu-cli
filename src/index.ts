@@ -5,6 +5,9 @@
  * Migrated from Go to Bun/TypeScript.
  */
 
-// Placeholder entry — will be implemented during migration
-console.log("dosu-cli: not yet implemented");
-process.exit(0);
+import { execute } from "./cli/cli";
+
+execute().catch((err) => {
+  console.error(err.message ?? err);
+  process.exit(1);
+});
