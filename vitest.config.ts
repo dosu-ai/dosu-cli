@@ -6,5 +6,10 @@ export default defineConfig({
     environment: "node",
     include: ["src/**/*.test.ts", "scripts/**/*.test.ts"],
     pool: "forks",
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "lcov"],
+      reportsDirectory: "coverage",
+    },
   },
 });
