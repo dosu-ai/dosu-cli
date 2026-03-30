@@ -7,9 +7,9 @@ describe("build-all script", () => {
     expect(existsSync(join(__dirname, "build-all.ts"))).toBe(true);
   });
 
-  it("defines correct target platforms", async () => {
-    // Read the script and verify targets
-    const content = await Bun.file(join(__dirname, "build-all.ts")).text();
+  it("defines correct target platforms", () => {
+    const { readFileSync } = require("node:fs");
+    const content = readFileSync(join(__dirname, "build-all.ts"), "utf-8");
     expect(content).toContain("bun-darwin-arm64");
     expect(content).toContain("bun-darwin-x64");
     expect(content).toContain("bun-linux-x64");
