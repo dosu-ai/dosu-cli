@@ -9,23 +9,27 @@
     "url": "https://github.com/dosu-ai/dosu-cli.git"
   },
   "homepage": "https://dosu.dev",
-  "main": "src/index.ts",
+  "main": "bin/dosu.js",
   "bin": {
-    "dosu": "src/index.ts"
+    "dosu": "bin/dosu.js"
   },
   "files": [
-    "src/**/*.ts",
-    "!src/**/*.test.ts"
+    "bin/dosu.js"
   ],
   "scripts": {
     "dev": "bun run src/index.ts",
     "dev:local": "DOSU_DEV=true bun run src/index.ts",
     "build": "bun build --compile src/index.ts --outfile bin/dosu",
+    "build:npm": "bun run scripts/build-npm.ts",
     "build:all": "bun run scripts/build-all.ts",
     "test": "bunx vitest run",
     "test:watch": "bunx vitest",
     "typecheck": "bunx tsc --noEmit",
+    "prepack": "bun run build:npm",
     "postinstall": "[ -f scripts/patch-clack.ts ] && bun scripts/patch-clack.ts || true"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "devDependencies": {
     "@types/bun": "^1.3.11",

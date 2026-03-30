@@ -5,20 +5,9 @@ The Dosu CLI is pre-release alpha software and is not fully supported currently.
 
 ## Installation
 
-### Homebrew (Recommended)
+### npx / npm (Recommended)
 
-```bash
-brew install dosu-ai/dosu/dosu
-```
-
-Or tap first:
-
-```bash
-brew tap dosu-ai/dosu
-brew install dosu
-```
-
-### npm
+Requires Node.js 18+.
 
 ```bash
 npx @dosu/cli setup
@@ -31,10 +20,25 @@ npm install -g @dosu/cli
 dosu setup
 ```
 
-### Shell (macOS / Linux)
+### curl / install (macOS / Linux)
+
+Downloads and installs the latest release binary.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/dosu-ai/dosu-cli/main/install.sh | sh
+```
+
+### Homebrew
+
+```bash
+brew install dosu-ai/dosu/dosu
+```
+
+Or tap first:
+
+```bash
+brew tap dosu-ai/dosu
+brew install dosu
 ```
 
 ### Manual Download

@@ -4,6 +4,7 @@ node_modules/
 # Build output
 /bin
 dist/
+/dosu-cli-*.tgz
 
 # Bun
 bun.lock

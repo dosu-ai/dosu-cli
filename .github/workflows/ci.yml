@@ -29,3 +29,9 @@ jobs:
           bun build --compile src/index.ts --outfile bin/dosu
           ./bin/dosu --version
           rm -f bin/dosu
+
+      - name: Verify npm bundle works
+        run: |
+          bun run build:npm
+          node bin/dosu.js --version
+          npm pack --dry-run

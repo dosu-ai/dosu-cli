@@ -1,5 +1,5 @@
 /**
- * Version information — injected at build time or read from package.json.
+ * Version information — injected at build time, with dev fallbacks for local source runs.
  */
 
 export const VERSION = process.env.DOSU_VERSION ?? "dev";
