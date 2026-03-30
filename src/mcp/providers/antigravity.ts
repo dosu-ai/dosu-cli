@@ -1,5 +1,5 @@
+import { mcpHeaders, mcpURL } from "../config-helpers";
 import { createJSONProvider } from "./base";
-import { mcpURL, mcpHeaders } from "../config-helpers";
 
 export const AntigravityProvider = () =>
   createJSONProvider({
@@ -11,7 +11,9 @@ export const AntigravityProvider = () =>
     globalPath: "~/.gemini/antigravity/mcp_config.json",
     topKey: "mcpServers",
     buildServer: (cfg) => ({
+      // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
       serverUrl: mcpURL(cfg.deployment_id!),
+      // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
       headers: mcpHeaders(cfg.api_key!),
     }),
   });

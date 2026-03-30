@@ -1,22 +1,22 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
-  IconSuccess,
-  IconError,
-  IconWarning,
-  IconQuestion,
-  IconAdd,
-  IconRemove,
-  success,
-  error,
-  warning,
-  question,
-  dim,
   bold,
+  dim,
+  error,
+  IconAdd,
+  IconError,
+  IconQuestion,
+  IconRemove,
+  IconSuccess,
+  IconWarning,
   info,
-  printSuccess,
-  printError,
-  printWarning,
   printBox,
+  printError,
+  printSuccess,
+  printWarning,
+  question,
+  success,
+  warning,
 } from "./styles";
 
 describe("styles", () => {

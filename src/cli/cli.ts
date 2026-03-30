@@ -3,9 +3,15 @@
  */
 
 import { Command } from "commander";
-import { VERSION, COMMIT, DATE, getVersionString } from "../version/version";
-import { loadConfig, saveConfig, isAuthenticated, isTokenExpired, getConfigPath } from "../config/config";
-import { getProvider, allProviders } from "../mcp/providers";
+import {
+  getConfigPath,
+  isAuthenticated,
+  isTokenExpired,
+  loadConfig,
+  saveConfig,
+} from "../config/config";
+import { allProviders, getProvider, type Provider } from "../mcp/providers";
+import { getVersionString } from "../version/version";
 
 export function createProgram(): Command {
   const program = new Command();
@@ -92,16 +98,14 @@ export function createProgram(): Command {
     });
 
   // mcp
-  const mcp = program
-    .command("mcp")
-    .description("Manage MCP server integrations");
+  const mcp = program.command("mcp").description("Manage MCP server integrations");
 
   mcp
     .command("add <tool>")
     .description("Add Dosu MCP to an AI tool")
     .option("-g, --global", "Add globally (all projects) instead of project-local", false)
     .action((toolId: string, opts: { global: boolean }) => {
-      let provider;
+      let provider: Provider;
       try {
         provider = getProvider(toolId.toLowerCase());
       } catch {
@@ -116,7 +120,9 @@ export function createProgram(): Command {
         throw new Error("session expired. Run 'dosu login' to re-authenticate");
       }
       if (!cfg.deployment_id) {
-        throw new Error("no deployment selected. Run 'dosu' to open the TUI and select a deployment");
+        throw new Error(
+          "no deployment selected. Run 'dosu' to open the TUI and select a deployment",
+        );
       }
 
       if (provider.id() === "manual") {

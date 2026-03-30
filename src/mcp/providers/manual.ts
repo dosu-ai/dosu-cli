@@ -1,6 +1,6 @@
-import type { Provider } from "../providers";
 import type { Config } from "../../config/config";
 import { mcpURL } from "../config-helpers";
+import type { Provider } from "../providers";
 
 export const ManualProvider = (): Provider => ({
   name: () => "Manual Configuration",
@@ -8,6 +8,7 @@ export const ManualProvider = (): Provider => ({
   supportsLocal: () => false,
 
   install(cfg: Config): void {
+    // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
     const url = mcpURL(cfg.deployment_id!);
     console.log("Use these details to configure the Dosu MCP server in your client:");
     console.log();
@@ -18,6 +19,8 @@ export const ManualProvider = (): Provider => ({
   },
 
   remove(): void {
-    console.log("\nTo remove the Dosu MCP server, manually delete the configuration from your client.");
+    console.log(
+      "\nTo remove the Dosu MCP server, manually delete the configuration from your client.",
+    );
   },
 });

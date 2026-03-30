@@ -1,13 +1,7 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import {
-  mkdtempSync,
-  rmSync,
-  readFileSync,
-  mkdirSync,
-  existsSync,
-} from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Only mock true boundaries: terminal UI, auth (browser), and HTTP client
 vi.mock("@clack/prompts", () => ({
@@ -48,24 +42,25 @@ vi.mock("../client/client", () => {
 });
 
 import * as p from "@clack/prompts";
+import { startOAuthFlow } from "../auth/flow";
+import type { TokenResponse } from "../auth/server";
+import { Client } from "../client/client";
 import type { Config } from "../config/config";
-import { loadConfig, saveConfig, getConfigPath } from "../config/config";
+import { loadConfig, saveConfig } from "../config/config";
+import { loadJSONConfig } from "../mcp/config-helpers";
+import * as providersModule from "../mcp/providers";
+import { ClaudeDesktopProvider } from "../mcp/providers/claude-desktop";
 import { CursorProvider } from "../mcp/providers/cursor";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
-import { ClaudeDesktopProvider } from "../mcp/providers/claude-desktop";
-import { loadJSONConfig } from "../mcp/config-helpers";
 import {
-  isStdioOnly,
-  stepDetectTools,
-  stepConfigureTools,
-  stepShowSummary,
-  runSetup,
-  type ToolSelection,
   type ConfigResult,
+  isStdioOnly,
+  runSetup,
+  stepConfigureTools,
+  stepDetectTools,
+  stepShowSummary,
+  type ToolSelection,
 } from "./flow";
-import { Client } from "../client/client";
-import { startOAuthFlow } from "../auth/flow";
-import * as providersModule from "../mcp/providers";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -275,16 +270,14 @@ describe("stepConfigureTools", () => {
     expect(results).toHaveLength(1);
     expect(results[0].action).toBe("install");
     expect(results[0].error).toBeDefined();
-    expect(results[0].error!.message).toContain("stdio");
+    expect(results[0].error?.message).toContain("stdio");
     // p.log.error should have been called
-    expect(p.log.error).toHaveBeenCalledWith(
-      expect.stringContaining("Claude Desktop"),
-    );
+    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Claude Desktop"));
   });
 
   it("handles mixed install, remove, and skip in one call", () => {
     const cfg = makeCfg();
-    const cursor = CursorProvider();
+    const _cursor = CursorProvider();
     const opencode = OpenCodeProvider();
 
     // Pre-install opencode so we can remove it
@@ -314,9 +307,9 @@ describe("stepConfigureTools", () => {
     const skipResult = results.find((r) => r.action === "skip");
 
     expect(installResult).toBeDefined();
-    expect(installResult!.error).toBeUndefined();
+    expect(installResult?.error).toBeUndefined();
     expect(removeResult).toBeDefined();
-    expect(removeResult!.error).toBeUndefined();
+    expect(removeResult?.error).toBeUndefined();
     expect(skipResult).toBeDefined();
 
     // Verify cursor config was written
@@ -342,43 +335,29 @@ describe("stepShowSummary", () => {
 
   it("logs configured tools count and paths for installs", () => {
     const cursor = CursorProvider();
-    const results: ConfigResult[] = [
-      { provider: cursor, action: "install" },
-    ];
+    const results: ConfigResult[] = [{ provider: cursor, action: "install" }];
 
     stepShowSummary(results);
 
-    expect(p.log.success).toHaveBeenCalledWith(
-      expect.stringContaining("Configured 1 tool"),
-    );
-    expect(p.log.success).toHaveBeenCalledWith(
-      expect.stringContaining("Cursor"),
-    );
-    expect(p.log.message).toHaveBeenCalledWith(
-      expect.stringContaining("Try it out"),
-    );
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 tool"));
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Cursor"));
+    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("Try it out"));
   });
 
   it("logs removed tools count for removals", () => {
     const cursor = CursorProvider();
-    const results: ConfigResult[] = [
-      { provider: cursor, action: "remove" },
-    ];
+    const results: ConfigResult[] = [{ provider: cursor, action: "remove" }];
 
     stepShowSummary(results);
 
-    expect(p.log.info).toHaveBeenCalledWith(
-      expect.stringContaining("Removed from 1 tool"),
-    );
+    expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("Removed from 1 tool"));
     // No "Try it out" when only removals
     expect(p.log.message).not.toHaveBeenCalled();
   });
 
   it("shows 'all configured' when only skipped results", () => {
     const cursor = CursorProvider();
-    const results: ConfigResult[] = [
-      { provider: cursor, action: "skip" },
-    ];
+    const results: ConfigResult[] = [{ provider: cursor, action: "skip" }];
 
     stepShowSummary(results);
 
@@ -386,9 +365,7 @@ describe("stepShowSummary", () => {
       expect.stringContaining("All tools already configured"),
     );
     // Skipped still gets the "Try it out" message
-    expect(p.log.message).toHaveBeenCalledWith(
-      expect.stringContaining("Try it out"),
-    );
+    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("Try it out"));
   });
 
   it("shows both install and remove summaries for mixed results", () => {
@@ -401,12 +378,8 @@ describe("stepShowSummary", () => {
 
     stepShowSummary(results);
 
-    expect(p.log.success).toHaveBeenCalledWith(
-      expect.stringContaining("Configured 1 tool"),
-    );
-    expect(p.log.info).toHaveBeenCalledWith(
-      expect.stringContaining("Removed from 1 tool"),
-    );
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 tool"));
+    expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("Removed from 1 tool"));
   });
 
   it("does not count errored results in install summary", () => {
@@ -420,9 +393,7 @@ describe("stepShowSummary", () => {
     stepShowSummary(results);
 
     // Only 1 successful install
-    expect(p.log.success).toHaveBeenCalledWith(
-      expect.stringContaining("Configured 1 tool"),
-    );
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 tool"));
   });
 
   it("does not show 'Try it out' when only removals and no skips", () => {
@@ -435,9 +406,7 @@ describe("stepShowSummary", () => {
 
     stepShowSummary(results);
 
-    expect(p.log.info).toHaveBeenCalledWith(
-      expect.stringContaining("Removed from 2 tool"),
-    );
+    expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("Removed from 2 tool"));
     expect(p.log.message).not.toHaveBeenCalled();
   });
 
@@ -452,16 +421,12 @@ describe("stepShowSummary", () => {
     stepShowSummary(results);
 
     // Should show install summary, NOT "all configured"
-    expect(p.log.success).toHaveBeenCalledWith(
-      expect.stringContaining("Configured 1 tool"),
-    );
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 tool"));
     expect(p.log.success).not.toHaveBeenCalledWith(
       expect.stringContaining("All tools already configured"),
     );
     // Should still show "Try it out"
-    expect(p.log.message).toHaveBeenCalledWith(
-      expect.stringContaining("Try it out"),
-    );
+    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("Try it out"));
   });
 
   it("does not show 'Try it out' or 'all configured' when results are empty", () => {
@@ -490,19 +455,21 @@ describe("runSetup integration", () => {
   });
   afterEach(teardownTempEnv);
 
-  function setupAuthenticatedClient(overrides: Record<string, any> = {}) {
+  function setupAuthenticatedClient(overrides: Record<string, unknown> = {}) {
     const clientMethods = {
       doRequestRaw: vi.fn().mockResolvedValue({ status: 200 }),
       refreshToken: vi.fn(),
       getOrgs: vi.fn().mockResolvedValue([{ org_id: "o1", name: "Org1" }]),
-      getDeployments: vi.fn().mockResolvedValue([
-        { deployment_id: "d1", name: "Deploy1", org_id: "o1", org_name: "Org1" },
-      ]),
+      getDeployments: vi
+        .fn()
+        .mockResolvedValue([
+          { deployment_id: "d1", name: "Deploy1", org_id: "o1", org_name: "Org1" },
+        ]),
       validateAPIKey: vi.fn().mockResolvedValue(true),
       createAPIKey: vi.fn().mockResolvedValue({ api_key: "new-key" }),
       ...overrides,
     };
-    mockClient.mockImplementation(() => clientMethods as any);
+    mockClient.mockImplementation(() => clientMethods as unknown as Client);
     return clientMethods;
   }
 
@@ -518,7 +485,7 @@ describe("runSetup integration", () => {
 
   it("returns early when user cancels login prompt", async () => {
     const cancelSymbol = Symbol("cancel");
-    vi.mocked(p.confirm).mockResolvedValue(cancelSymbol as any);
+    vi.mocked(p.confirm).mockResolvedValue(cancelSymbol as unknown as boolean);
     vi.mocked(p.isCancel).mockImplementation((val) => val === cancelSymbol);
 
     await runSetup();
@@ -574,9 +541,7 @@ describe("runSetup integration", () => {
     expect(cursorConfig.mcpServers.dosu.url).toContain("d1");
 
     // Verify summary was shown
-    expect(p.log.success).toHaveBeenCalledWith(
-      expect.stringContaining("Configured 1 tool"),
-    );
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 tool"));
   });
 
   it("runs OAuth flow and saves tokens to real config", async () => {
@@ -586,7 +551,7 @@ describe("runSetup integration", () => {
       access_token: "oauth-tok",
       refresh_token: "oauth-ref",
       expires_in: 7200,
-    } as any);
+    } as TokenResponse);
 
     const clientMethods = setupAuthenticatedClient();
     clientMethods.createAPIKey.mockResolvedValue({ api_key: "minted-key" });
@@ -628,7 +593,7 @@ describe("runSetup integration", () => {
     const cfg = makeCfg({ api_key: "bad-key" });
     saveConfig(cfg);
 
-    const clientMethods = setupAuthenticatedClient({
+    const _clientMethods = setupAuthenticatedClient({
       validateAPIKey: vi.fn().mockResolvedValue(false),
       createAPIKey: vi.fn().mockResolvedValue({ api_key: "fresh-key" }),
     });
@@ -637,9 +602,7 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(p.log.warn).toHaveBeenCalledWith(
-      expect.stringContaining("invalid"),
-    );
+    expect(p.log.warn).toHaveBeenCalledWith(expect.stringContaining("invalid"));
 
     // Config on disk should have fresh key
     const savedCfg = loadConfig();
@@ -652,9 +615,7 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(p.log.error).toHaveBeenCalledWith(
-      expect.stringContaining("browser timeout"),
-    );
+    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("browser timeout"));
   });
 
   it("auto-selects single org without prompting", async () => {
@@ -668,9 +629,7 @@ describe("runSetup integration", () => {
 
     // Should not have shown org select since there's only one org
     expect(p.select).not.toHaveBeenCalled();
-    expect(p.log.success).toHaveBeenCalledWith(
-      expect.stringContaining("Org1"),
-    );
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Org1"));
   });
 
   it("prompts when multiple orgs exist", async () => {
@@ -703,9 +662,7 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(p.log.error).toHaveBeenCalledWith(
-      "No organizations found for your account",
-    );
+    expect(p.log.error).toHaveBeenCalledWith("No organizations found for your account");
   });
 
   it("handles SessionExpiredError during org fetch", async () => {
@@ -719,9 +676,7 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(p.log.warn).toHaveBeenCalledWith(
-      expect.stringContaining("Session expired"),
-    );
+    expect(p.log.warn).toHaveBeenCalledWith(expect.stringContaining("Session expired"));
   });
 
   it("handles org fetch error", async () => {
@@ -734,9 +689,7 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(p.log.error).toHaveBeenCalledWith(
-      expect.stringContaining("network fail"),
-    );
+    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("network fail"));
   });
 
   it("prompts when multiple deployments exist for org", async () => {
@@ -766,16 +719,16 @@ describe("runSetup integration", () => {
     saveConfig(cfg);
 
     setupAuthenticatedClient({
-      getDeployments: vi.fn().mockResolvedValue([
-        { deployment_id: "d1", name: "D1", org_id: "other", org_name: "Other" },
-      ]),
+      getDeployments: vi
+        .fn()
+        .mockResolvedValue([
+          { deployment_id: "d1", name: "D1", org_id: "other", org_name: "Other" },
+        ]),
     });
 
     await runSetup();
 
-    expect(p.log.error).toHaveBeenCalledWith(
-      expect.stringContaining("No deployments found"),
-    );
+    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("No deployments found"));
   });
 
   it("handles deployment fetch error", async () => {
@@ -788,9 +741,7 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(p.log.error).toHaveBeenCalledWith(
-      expect.stringContaining("timeout"),
-    );
+    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("timeout"));
   });
 
   it("handles API key creation failure", async () => {
@@ -804,9 +755,7 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(p.log.error).toHaveBeenCalledWith(
-      expect.stringContaining("rate limited"),
-    );
+    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("rate limited"));
   });
 
   it("refreshes token when initial check returns 401", async () => {
@@ -815,7 +764,8 @@ describe("runSetup integration", () => {
 
     const mockRefreshToken = vi.fn().mockResolvedValue(undefined);
     setupAuthenticatedClient({
-      doRequestRaw: vi.fn()
+      doRequestRaw: vi
+        .fn()
         .mockResolvedValueOnce({ status: 401 })
         .mockResolvedValueOnce({ status: 200 }),
       refreshToken: mockRefreshToken,
@@ -854,7 +804,7 @@ describe("runSetup integration", () => {
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
 
     const cancelSymbol = Symbol("cancel");
-    vi.mocked(p.multiselect).mockResolvedValue(cancelSymbol as any);
+    vi.mocked(p.multiselect).mockResolvedValue(cancelSymbol as unknown as string[]);
     vi.mocked(p.isCancel).mockImplementation((val) => val === cancelSymbol);
 
     await runSetup();
@@ -876,7 +826,7 @@ describe("runSetup integration", () => {
     });
 
     const cancelSymbol = Symbol("cancel");
-    vi.mocked(p.select).mockResolvedValueOnce(cancelSymbol as any);
+    vi.mocked(p.select).mockResolvedValueOnce(cancelSymbol as unknown);
     vi.mocked(p.isCancel).mockImplementation((val) => val === cancelSymbol);
 
     await runSetup();
@@ -899,7 +849,7 @@ describe("runSetup integration", () => {
     });
 
     const cancelSymbol = Symbol("cancel");
-    vi.mocked(p.select).mockResolvedValueOnce(cancelSymbol as any);
+    vi.mocked(p.select).mockResolvedValueOnce(cancelSymbol as unknown);
     vi.mocked(p.isCancel).mockImplementation((val) => val === cancelSymbol);
 
     await runSetup();
@@ -913,9 +863,9 @@ describe("runSetup integration", () => {
     saveConfig(cfg);
 
     setupAuthenticatedClient({
-      getDeployments: vi.fn().mockResolvedValue([
-        { deployment_id: "d1", name: "D1", org_id: "o1", org_name: "Org1" },
-      ]),
+      getDeployments: vi
+        .fn()
+        .mockResolvedValue([{ deployment_id: "d1", name: "D1", org_id: "o1", org_name: "Org1" }]),
     });
 
     await runSetup({ deploymentID: "nonexistent" });
@@ -933,9 +883,7 @@ describe("runSetup integration", () => {
 
     await runSetup({ deploymentID: "d1" });
 
-    expect(p.log.error).toHaveBeenCalledWith(
-      expect.stringContaining("gone"),
-    );
+    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("gone"));
   });
 
   it("handles session verification failure (network error)", async () => {
@@ -960,9 +908,10 @@ describe("runSetup integration", () => {
     saveConfig(cfg);
 
     setupAuthenticatedClient({
-      doRequestRaw: vi.fn()
-        .mockResolvedValueOnce({ status: 403 })    // initial check fails
-        .mockResolvedValueOnce({ status: 500 }),    // after refresh, still fails
+      doRequestRaw: vi
+        .fn()
+        .mockResolvedValueOnce({ status: 403 }) // initial check fails
+        .mockResolvedValueOnce({ status: 500 }), // after refresh, still fails
       refreshToken: vi.fn().mockResolvedValue(undefined),
     });
 

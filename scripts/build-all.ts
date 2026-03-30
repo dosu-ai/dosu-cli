@@ -5,7 +5,7 @@
  * Builds standalone binaries for all supported platforms using `bun build --compile`.
  */
 
-import { mkdirSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 const TARGETS = [
@@ -55,7 +55,17 @@ async function main() {
     console.log(`  Building ${target} → ${output}`);
 
     const proc = Bun.spawn(
-      ["bun", "build", "--compile", ...defines, "--target", target, "src/index.ts", "--outfile", outPath],
+      [
+        "bun",
+        "build",
+        "--compile",
+        ...defines,
+        "--target",
+        target,
+        "src/index.ts",
+        "--outfile",
+        outPath,
+      ],
       { stdout: "pipe", stderr: "pipe" },
     );
 
@@ -73,6 +83,5 @@ async function main() {
 
 // Only run when executed directly (not imported by tests)
 const isDirectRun =
-  typeof import.meta.dir === "string" &&
-  process.argv[1]?.endsWith("build-all.ts");
+  typeof import.meta.dir === "string" && process.argv[1]?.endsWith("build-all.ts");
 if (isDirectRun) main();

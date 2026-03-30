@@ -1,12 +1,12 @@
 export {
   type Config,
-  loadConfig,
-  saveConfig,
+  clearConfig,
+  emptyConfig,
   getConfigPath,
   isAuthenticated,
   isTokenExpired,
-  clearConfig,
-  emptyConfig,
+  loadConfig,
+  saveConfig,
 } from "./config";
 
-export { getWebAppURL, getBackendURL, getSupabaseURL } from "./constants";
+export { getBackendURL, getSupabaseURL, getWebAppURL } from "./constants";

@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildDefines } from "./build-all";
 
 describe("build-all script", () => {
@@ -79,10 +79,6 @@ describe("buildDefines", () => {
   it("should return exactly 6 elements (3 pairs of --define + value)", () => {
     const defines = buildDefines();
     expect(defines).toHaveLength(6);
-    expect(defines.filter((_, i) => i % 2 === 0)).toEqual([
-      "--define",
-      "--define",
-      "--define",
-    ]);
+    expect(defines.filter((_, i) => i % 2 === 0)).toEqual(["--define", "--define", "--define"]);
   });
 });

@@ -1,14 +1,7 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import {
-  mkdtempSync,
-  rmSync,
-  readFileSync,
-  writeFileSync,
-  mkdirSync,
-  existsSync,
-} from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../../config/config";
 import { loadJSONConfig } from "../config-helpers";
 
@@ -99,9 +92,7 @@ describe("createJSONProvider (base)", () => {
       topKey: "mcpServers",
     });
 
-    expect(() => provider.install(makeCfg(), false)).toThrow(
-      "does not support local installation",
-    );
+    expect(() => provider.install(makeCfg(), false)).toThrow("does not support local installation");
   });
 
   it("local install writes to localConfigPath when provided", async () => {
@@ -171,10 +162,7 @@ describe("createJSONProvider (base)", () => {
     const { createJSONProvider } = await import("./base");
     const localPath = join(tempDir, "local-rm", "mcp.json");
     mkdirSync(join(tempDir, "local-rm"), { recursive: true });
-    writeFileSync(
-      localPath,
-      JSON.stringify({ mcpServers: { dosu: { url: "x" } } }),
-    );
+    writeFileSync(localPath, JSON.stringify({ mcpServers: { dosu: { url: "x" } } }));
 
     const provider = createJSONProvider({
       providerName: "TestProvider",
@@ -276,9 +264,9 @@ describe("CodexProvider", () => {
     const { CodexProvider } = await import("./codex");
     const provider = CodexProvider();
 
-    expect(() =>
-      provider.install(makeCfg({ deployment_id: undefined }), true),
-    ).toThrow("deployment ID is required");
+    expect(() => provider.install(makeCfg({ deployment_id: undefined }), true)).toThrow(
+      "deployment ID is required",
+    );
   });
 
   it("install replaces existing dosu section", async () => {
@@ -311,7 +299,7 @@ describe("CodexProvider", () => {
     provider.install(makeCfg(), true);
 
     const content = readFileSync(configPath, "utf-8");
-    expect(content).toContain('[other_section]');
+    expect(content).toContain("[other_section]");
     expect(content).toContain('key = "value"');
     expect(content).toContain("[mcp_servers.dosu]");
   });
@@ -367,9 +355,7 @@ describe("CodexProvider", () => {
     const { CodexProvider } = await import("./codex");
     const provider = CodexProvider();
 
-    expect(provider.globalConfigPath()).toBe(
-      join(tempDir, "codex-home", "config.toml"),
-    );
+    expect(provider.globalConfigPath()).toBe(join(tempDir, "codex-home", "config.toml"));
   });
 });
 
@@ -438,9 +424,9 @@ describe("CopilotProvider", () => {
     const { CopilotProvider } = await import("./copilot");
     const provider = CopilotProvider();
 
-    expect(() =>
-      provider.install(makeCfg({ deployment_id: undefined }), true),
-    ).toThrow("deployment ID is required");
+    expect(() => provider.install(makeCfg({ deployment_id: undefined }), true)).toThrow(
+      "deployment ID is required",
+    );
   });
 
   it("global remove deletes dosu entry from mcpServers", async () => {
@@ -473,10 +459,7 @@ describe("CopilotProvider", () => {
 
     const configPath = join(tempDir, "xdg-config", "mcp-config.json");
     mkdirSync(join(tempDir, "xdg-config"), { recursive: true });
-    writeFileSync(
-      configPath,
-      JSON.stringify({ mcpServers: { other: { url: "http://other" } } }),
-    );
+    writeFileSync(configPath, JSON.stringify({ mcpServers: { other: { url: "http://other" } } }));
 
     provider.install(makeCfg(), true);
 
@@ -570,9 +553,9 @@ describe("MCPorterProvider", () => {
     const { MCPorterProvider } = await import("./mcporter");
     const provider = MCPorterProvider();
 
-    expect(() =>
-      provider.install(makeCfg({ deployment_id: undefined }), true),
-    ).toThrow("deployment ID is required");
+    expect(() => provider.install(makeCfg({ deployment_id: undefined }), true)).toThrow(
+      "deployment ID is required",
+    );
   });
 
   it("global remove deletes dosu entry", async () => {
@@ -654,9 +637,7 @@ describe("ClaudeDesktopProvider", () => {
     const { ClaudeDesktopProvider } = await import("./claude-desktop");
     const provider = ClaudeDesktopProvider();
 
-    expect(() => provider.remove(true)).toThrow(
-      "this tool only supports local (stdio) servers",
-    );
+    expect(() => provider.remove(true)).toThrow("this tool only supports local (stdio) servers");
   });
 });
 
@@ -811,13 +792,7 @@ describe("ClineCliProvider", () => {
 
     provider.install(makeCfg(), true);
 
-    const configPath = join(
-      tempDir,
-      "cline-home",
-      "data",
-      "settings",
-      "cline_mcp_settings.json",
-    );
+    const configPath = join(tempDir, "cline-home", "data", "settings", "cline_mcp_settings.json");
     expect(existsSync(configPath)).toBe(true);
     const cfg = loadJSONConfig(configPath);
     expect(cfg.mcpServers.dosu).toBeDefined();
@@ -830,9 +805,9 @@ describe("ClineCliProvider", () => {
     const { ClineCliProvider } = await import("./cline-cli");
     const provider = ClineCliProvider();
 
-    expect(() =>
-      provider.install(makeCfg({ deployment_id: undefined }), true),
-    ).toThrow("deployment ID is required");
+    expect(() => provider.install(makeCfg({ deployment_id: undefined }), true)).toThrow(
+      "deployment ID is required",
+    );
   });
 
   it("remove deletes dosu entry", async () => {
@@ -842,13 +817,7 @@ describe("ClineCliProvider", () => {
     provider.install(makeCfg(), true);
     provider.remove(true);
 
-    const configPath = join(
-      tempDir,
-      "cline-home",
-      "data",
-      "settings",
-      "cline_mcp_settings.json",
-    );
+    const configPath = join(tempDir, "cline-home", "data", "settings", "cline_mcp_settings.json");
     const cfg = loadJSONConfig(configPath);
     expect(cfg.mcpServers.dosu).toBeUndefined();
   });
@@ -857,9 +826,7 @@ describe("ClineCliProvider", () => {
     const { ClineCliProvider } = await import("./cline-cli");
     const provider = ClineCliProvider();
 
-    expect(() => provider.install(makeCfg(), false)).toThrow(
-      "does not support local installation",
-    );
+    expect(() => provider.install(makeCfg(), false)).toThrow("does not support local installation");
   });
 });
 
@@ -884,12 +851,7 @@ describe("AntigravityProvider", () => {
 
     provider.install(makeCfg(), true);
 
-    const configPath = join(
-      tempDir,
-      ".gemini",
-      "antigravity",
-      "mcp_config.json",
-    );
+    const configPath = join(tempDir, ".gemini", "antigravity", "mcp_config.json");
     expect(existsSync(configPath)).toBe(true);
     const cfg = loadJSONConfig(configPath);
     expect(cfg.mcpServers.dosu).toBeDefined();
@@ -902,9 +864,7 @@ describe("AntigravityProvider", () => {
     const { AntigravityProvider } = await import("./antigravity");
     const provider = AntigravityProvider();
 
-    expect(() => provider.install(makeCfg(), false)).toThrow(
-      "does not support local installation",
-    );
+    expect(() => provider.install(makeCfg(), false)).toThrow("does not support local installation");
   });
 
   it("remove deletes dosu entry", async () => {
@@ -914,12 +874,7 @@ describe("AntigravityProvider", () => {
     provider.install(makeCfg(), true);
     provider.remove(true);
 
-    const configPath = join(
-      tempDir,
-      ".gemini",
-      "antigravity",
-      "mcp_config.json",
-    );
+    const configPath = join(tempDir, ".gemini", "antigravity", "mcp_config.json");
     const cfg = loadJSONConfig(configPath);
     expect(cfg.mcpServers.dosu).toBeUndefined();
   });

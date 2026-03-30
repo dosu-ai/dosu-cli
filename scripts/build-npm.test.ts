@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
 import { buildDefines, normalizeNodeBundle } from "./build-npm";
 
 describe("build-npm script", () => {

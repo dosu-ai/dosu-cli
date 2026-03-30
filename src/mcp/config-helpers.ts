@@ -6,6 +6,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { getBackendURL } from "../config/constants";
 
+// biome-ignore lint/suspicious/noExplicitAny: JSON config values are inherently untyped
+type JsonConfig = Record<string, any>;
+
 /**
  * Returns the MCP endpoint URL with deployment ID encoded in the path.
  */
@@ -24,7 +27,7 @@ export function mcpHeaders(apiKey: string): Record<string, string> {
  * Reads and unmarshals a JSON config file. Returns an empty object if the file doesn't exist.
  * For .jsonc files, comments are stripped before parsing.
  */
-export function loadJSONConfig(path: string): Record<string, any> {
+export function loadJSONConfig(path: string): JsonConfig {
   if (!existsSync(path)) return {};
   let data = readFileSync(path, "utf-8").trim();
   if (!data) return {};
@@ -95,7 +98,7 @@ export function stripJSONComments(data: string): string {
 /**
  * Writes a JSON config file, creating parent directories as needed.
  */
-export function saveJSONConfig(path: string, cfg: Record<string, any>): void {
+export function saveJSONConfig(path: string, cfg: JsonConfig): void {
   const dir = dirname(path);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
@@ -116,17 +119,13 @@ export function isJSONKeyConfigured(configPath: string, topLevelKey: string): bo
 /**
  * Writes the dosu MCP server entry into a JSON config file.
  */
-export function installJSONServer(
-  configPath: string,
-  topKey: string,
-  server: Record<string, any>,
-): void {
+export function installJSONServer(configPath: string, topKey: string, server: JsonConfig): void {
   const jsonCfg = loadJSONConfig(configPath);
   let section = jsonCfg[topKey];
   if (typeof section !== "object" || section === null) {
     section = {};
   }
-  section["dosu"] = server;
+  section.dosu = server;
   jsonCfg[topKey] = section;
   saveJSONConfig(configPath, jsonCfg);
 }
@@ -135,7 +134,7 @@ export function installJSONServer(
  * Removes the dosu entry from a JSON config file.
  */
 export function removeJSONServer(configPath: string, topKey: string): void {
-  let jsonCfg: Record<string, any>;
+  let jsonCfg: JsonConfig;
   try {
     jsonCfg = loadJSONConfig(configPath);
   } catch {
@@ -143,7 +142,7 @@ export function removeJSONServer(configPath: string, topKey: string): void {
   }
   const section = jsonCfg[topKey];
   if (typeof section === "object" && section !== null) {
-    delete section["dosu"];
+    delete section.dosu;
   }
   saveJSONConfig(configPath, jsonCfg);
 }

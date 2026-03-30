@@ -25,7 +25,10 @@ export async function startOAuthFlow(signal?: AbortSignal): Promise<TokenRespons
 
     // Race: token, abort, or timeout
     const timeout = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error("authentication timeout - please try again")), 5 * 60 * 1000);
+      setTimeout(
+        () => reject(new Error("authentication timeout - please try again")),
+        5 * 60 * 1000,
+      );
     });
 
     const abort = signal

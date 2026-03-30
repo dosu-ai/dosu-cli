@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { getWebAppURL, getBackendURL, getSupabaseURL } from "./constants";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { getBackendURL, getSupabaseURL, getWebAppURL } from "./constants";
 
 describe("constants", () => {
   const savedEnv: Record<string, string | undefined> = {};

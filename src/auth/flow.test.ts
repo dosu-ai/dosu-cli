@@ -1,17 +1,14 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallbackServer, TokenResponse } from "./server";
 
-const {
-  mockOpenDefault,
-  mockClose,
-  mockStartCallbackServer,
-  mockGetWebAppURL,
-} = vi.hoisted(() => ({
-  mockOpenDefault: vi.fn().mockResolvedValue(undefined),
-  mockClose: vi.fn(),
-  mockStartCallbackServer: vi.fn(),
-  mockGetWebAppURL: vi.fn(() => "https://app.dosu.dev"),
-}));
+const { mockOpenDefault, mockClose, mockStartCallbackServer, mockGetWebAppURL } = vi.hoisted(
+  () => ({
+    mockOpenDefault: vi.fn().mockResolvedValue(undefined),
+    mockClose: vi.fn(),
+    mockStartCallbackServer: vi.fn(),
+    mockGetWebAppURL: vi.fn(() => "https://app.dosu.dev"),
+  }),
+);
 
 vi.mock("open", () => ({
   default: mockOpenDefault,
@@ -122,7 +119,7 @@ describe("startOAuthFlow", () => {
     await new Promise((r) => setTimeout(r, 10));
 
     expect(mockOpenDefault).toHaveBeenCalledOnce();
-    const calledURL = mockOpenDefault.mock.calls[0]![0] as string;
+    const calledURL = mockOpenDefault.mock.calls[0]?.[0] as string;
     expect(calledURL).toBe(
       "https://app.dosu.dev/cli-login?callback=http%3A%2F%2Flocalhost%3A12345%2Fcallback",
     );
@@ -138,7 +135,7 @@ describe("startOAuthFlow", () => {
     await new Promise((r) => setTimeout(r, 10));
 
     expect(mockOpenDefault).toHaveBeenCalledOnce();
-    const calledURL = mockOpenDefault.mock.calls[0]![0] as string;
+    const calledURL = mockOpenDefault.mock.calls[0]?.[0] as string;
     expect(calledURL).toContain("http://localhost:3001/cli-login?");
 
     resolveToken({ access_token: "a", refresh_token: "r", expires_in: 1 });

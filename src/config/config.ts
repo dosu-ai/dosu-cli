@@ -64,7 +64,7 @@ export function isTokenExpired(cfg: Config): boolean {
   return Math.floor(Date.now() / 1000) > cfg.expires_at - 300;
 }
 
-export function clearConfig(cfg: Config): Config {
+export function clearConfig(_cfg: Config): Config {
   return {
     access_token: "",
     refresh_token: "",

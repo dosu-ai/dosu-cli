@@ -1,6 +1,6 @@
 import { join } from "node:path";
-import type { SetupProvider } from "../providers";
 import { appSupportDir, isInstalled } from "../detect";
+import type { SetupProvider } from "../providers";
 
 export const ClaudeDesktopProvider = (): SetupProvider => ({
   name: () => "Claude Desktop",
@@ -12,9 +12,13 @@ export const ClaudeDesktopProvider = (): SetupProvider => ({
   globalConfigPath: () => join(appSupportDir(), "Claude", "claude_desktop_config.json"),
   isConfigured: () => false,
   install() {
-    throw new Error("this tool only supports local (stdio) servers and cannot be configured for remote MCP");
+    throw new Error(
+      "this tool only supports local (stdio) servers and cannot be configured for remote MCP",
+    );
   },
   remove() {
-    throw new Error("this tool only supports local (stdio) servers and cannot be configured for remote MCP");
+    throw new Error(
+      "this tool only supports local (stdio) servers and cannot be configured for remote MCP",
+    );
   },
 });

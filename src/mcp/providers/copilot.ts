@@ -1,14 +1,14 @@
 import { join } from "node:path";
 import type { Config } from "../../config/config";
-import type { SetupProvider } from "../providers";
-import { expandHome, isInstalled } from "../detect";
 import {
-  mcpURL,
-  mcpHeaders,
-  isJSONKeyConfigured,
   installJSONServer,
+  isJSONKeyConfigured,
+  mcpHeaders,
+  mcpURL,
   removeJSONServer,
 } from "../config-helpers";
+import { expandHome, isInstalled } from "../detect";
+import type { SetupProvider } from "../providers";
 
 function globalPath(): string {
   if (process.env.XDG_CONFIG_HOME) {
@@ -36,6 +36,7 @@ export const CopilotProvider = (): SetupProvider => ({
         type: "http",
         url,
         tools: ["*"],
+        // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
         headers: mcpHeaders(cfg.api_key!),
       };
       installJSONServer(globalPath(), "mcpServers", server);
@@ -44,6 +45,7 @@ export const CopilotProvider = (): SetupProvider => ({
       const server = {
         type: "http",
         url,
+        // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
         headers: mcpHeaders(cfg.api_key!),
       };
       installJSONServer(configPath, "servers", server);

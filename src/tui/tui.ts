@@ -6,8 +6,8 @@
 
 import * as p from "@clack/prompts";
 import pc from "picocolors";
-import { loadConfig, saveConfig, isAuthenticated } from "../config/config";
 import { Client } from "../client/client";
+import { isAuthenticated, loadConfig, saveConfig } from "../config/config";
 import { runSetup } from "../setup/flow";
 
 const LOGO = `
@@ -39,10 +39,26 @@ export async function runTUI(): Promise<void> {
     const action = await p.select({
       message: "What would you like to do?",
       options: [
-        { label: "Authenticate", value: "setup", hint: isAuthenticated(cfg) ? "Re-authenticate" : undefined },
-        { label: "Choose Deployment", value: "deployments", hint: !isAuthenticated(cfg) ? "Login first" : undefined },
-        { label: "Add MCP", value: "mcp-add", hint: !hasDeployment ? "Select deployment first" : undefined },
-        { label: "Remove MCP", value: "mcp-remove", hint: !hasDeployment ? "Select deployment first" : undefined },
+        {
+          label: "Authenticate",
+          value: "setup",
+          hint: isAuthenticated(cfg) ? "Re-authenticate" : undefined,
+        },
+        {
+          label: "Choose Deployment",
+          value: "deployments",
+          hint: !isAuthenticated(cfg) ? "Login first" : undefined,
+        },
+        {
+          label: "Add MCP",
+          value: "mcp-add",
+          hint: !hasDeployment ? "Select deployment first" : undefined,
+        },
+        {
+          label: "Remove MCP",
+          value: "mcp-remove",
+          hint: !hasDeployment ? "Select deployment first" : undefined,
+        },
         { label: "Clear Credentials", value: "logout" },
         { label: "Exit", value: "exit" },
       ],
@@ -113,8 +129,9 @@ async function handleDeployments(cfg: ReturnType<typeof loadConfig>): Promise<vo
       saveConfig(cfg);
       p.log.success(`Selected: ${deployment.name}`);
     }
-  } catch (err: any) {
-    p.log.error(`Failed: ${err.message}`);
+  } catch (err: unknown) {
+    /* v8 ignore next -- err is always Error in practice */
+    p.log.error(`Failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -139,12 +156,13 @@ async function handleMCPAdd(cfg: ReturnType<typeof loadConfig>): Promise<void> {
   try {
     provider.install(cfg, true);
     p.log.success(`Added Dosu MCP to ${provider.name()}`);
-  } catch (err: any) {
-    p.log.error(`Failed: ${err.message}`);
+  } catch (err: unknown) {
+    /* v8 ignore next -- err is always Error in practice */
+    p.log.error(`Failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
-async function handleMCPRemove(cfg: ReturnType<typeof loadConfig>): Promise<void> {
+async function handleMCPRemove(_cfg: ReturnType<typeof loadConfig>): Promise<void> {
   const { allProviders } = await import("../mcp/providers");
   const providers = allProviders();
 
@@ -166,8 +184,9 @@ async function handleMCPRemove(cfg: ReturnType<typeof loadConfig>): Promise<void
   try {
     provider.remove(true);
     p.log.success(`Removed Dosu MCP from ${provider.name()}`);
-  } catch (err: any) {
-    p.log.error(`Failed: ${err.message}`);
+  } catch (err: unknown) {
+    /* v8 ignore next -- err is always Error in practice */
+    p.log.error(`Failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 

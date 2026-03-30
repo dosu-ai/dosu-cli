@@ -3,8 +3,8 @@
  */
 
 import type { Config } from "../config/config";
+import { isAuthenticated, isTokenExpired, saveConfig } from "../config/config";
 import { getBackendURL, getSupabaseURL } from "../config/constants";
-import { saveConfig, isAuthenticated, isTokenExpired } from "../config/config";
 
 export class SessionExpiredError extends Error {
   constructor() {

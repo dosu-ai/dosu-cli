@@ -3,8 +3,8 @@
  */
 
 import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { homedir, platform } from "node:os";
+import { join } from "node:path";
 
 /**
  * Checks if any of the given paths exist on the filesystem.

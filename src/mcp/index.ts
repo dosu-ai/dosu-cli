@@ -1,3 +1,14 @@
+export {
+  installJSONServer,
+  isJSONKeyConfigured,
+  loadJSONConfig,
+  mcpHeaders,
+  mcpURL,
+  removeJSONServer,
+  saveJSONConfig,
+  stripJSONComments,
+} from "./config-helpers";
+export { appSupportDir, expandHome, isInstalled } from "./detect";
 export type { Provider, SetupProvider } from "./providers";
 export {
   allProviders,
@@ -5,16 +16,3 @@ export {
   detectInstalledProviders,
   getProvider,
 } from "./providers";
-
-export {
-  mcpURL,
-  mcpHeaders,
-  stripJSONComments,
-  loadJSONConfig,
-  saveJSONConfig,
-  isJSONKeyConfigured,
-  installJSONServer,
-  removeJSONServer,
-} from "./config-helpers";
-
-export { isInstalled, expandHome, appSupportDir } from "./detect";
