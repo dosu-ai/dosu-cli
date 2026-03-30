@@ -133,6 +133,67 @@ h1 { font-size: 24px; font-weight: 600; color: #111827; margin-bottom: 8px; }
 </body>
 </html>`;
 
+const CALLBACK_HTML_FALLBACK = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dosu CLI</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #fafafa;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+.container {
+    background: white;
+    border-radius: 12px;
+    padding: 48px 40px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    max-width: 480px;
+    width: 100%;
+    text-align: center;
+    border: 1px solid #e5e7eb;
+}
+.checkmark {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: #10b981;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 24px;
+}
+.checkmark svg { width: 32px; height: 32px; stroke: white; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+h1 { font-size: 24px; font-weight: 600; color: #111827; margin-bottom: 8px; }
+.subtitle { font-size: 15px; color: #6b7280; margin-bottom: 28px; }
+.info { background: #f9fafb; border-radius: 8px; padding: 16px; text-align: left; border: 1px solid #e5e7eb; }
+.info p { font-size: 14px; color: #374151; line-height: 1.5; }
+.info strong { display: block; margin-bottom: 4px; color: #111827; }
+.footer { margin-top: 24px; font-size: 13px; color: #9ca3af; }
+</style>
+</head>
+<body>
+<div class="container">
+    <div class="checkmark">
+        <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+    </div>
+    <h1>Dosu CLI Authenticated</h1>
+    <p class="subtitle">You can close this window and go back to your terminal.</p>
+    <div class="info">
+        <p><strong>What's next?</strong> Return to your terminal to continue the setup process.</p>
+    </div>
+    <div class="footer">Dosu CLI</div>
+</div>
+</body>
+</html>`;
+
 export interface CallbackServer {
   port: number;
   close: () => void;
@@ -158,8 +219,8 @@ export async function startCallbackServer(): Promise<{
     const url = new URL(req.url ?? "/", `http://localhost`);
 
     if (url.pathname !== "/callback") {
-      res.writeHead(404, { "Content-Type": "text/plain" });
-      res.end("Not Found");
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end(CALLBACK_HTML_FALLBACK);
       return;
     }
 

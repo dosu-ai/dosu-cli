@@ -18,11 +18,14 @@ describe("auth callback server", () => {
     expect(server.port).toBeLessThan(65536);
   });
 
-  it("returns 404 for non-callback paths", async () => {
+  it("returns friendly HTML for non-callback paths", async () => {
     const result = await startCallbackServer();
     server = result.server;
     const resp = await fetch(`http://localhost:${server.port}/other`);
-    expect(resp.status).toBe(404);
+    expect(resp.status).toBe(200);
+    const body = await resp.text();
+    expect(resp.headers.get("content-type")).toContain("text/html");
+    expect(body).toContain("close this window");
   });
 
   it("serves extract HTML when no access_token in query", async () => {
@@ -68,5 +71,19 @@ describe("auth callback server", () => {
     await fetch(`http://localhost:${server.port}/callback?access_token=tok`);
     const token = await result.tokenPromise;
     expect(token.refresh_token).toBe("");
+  });
+
+  it("returns a friendly HTML page for non-callback paths instead of plain text 404", async () => {
+    const result = await startCallbackServer();
+    server = result.server;
+
+    // Browsers may hit /, /favicon.ico, or other paths.
+    // These should show a friendly page, not a raw "Not Found" string.
+    const resp = await fetch(`http://localhost:${server.port}/`);
+    const body = await resp.text();
+
+    expect(resp.headers.get("content-type")).toContain("text/html");
+    expect(body).toContain("close this window");
+    expect(body).toContain("terminal");
   });
 });
