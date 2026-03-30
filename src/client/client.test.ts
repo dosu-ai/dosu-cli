@@ -79,6 +79,42 @@ describe("Client", () => {
       const client = new Client(makeConfig());
       await expect(client.get("/test")).rejects.toBeInstanceOf(SessionExpiredError);
     });
+
+    it("pre-emptively refreshes token when locally expired before making request", async () => {
+      // Refresh response
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({
+          access_token: "refreshed-token",
+          refresh_token: "refreshed-refresh",
+          expires_in: 7200,
+        }),
+      );
+      // Actual request after refresh
+      mockFetch.mockResolvedValueOnce(jsonResponse({ data: "ok" }));
+
+      const cfg = makeConfig({
+        expires_at: Math.floor(Date.now() / 1000) - 100, // already expired
+      });
+      const client = new Client(cfg);
+      const resp = await client.get("/test");
+
+      expect(resp.status).toBe(200);
+      // Should have made 2 calls: refresh + actual request
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      // First call should be to the refresh endpoint
+      expect(mockFetch.mock.calls[0][0]).toContain("/auth/v1/token");
+      // Config should be updated with new tokens
+      expect(cfg.access_token).toBe("refreshed-token");
+      expect(cfg.refresh_token).toBe("refreshed-refresh");
+    });
+
+    it("throws when refresh_token is missing and token is expired", async () => {
+      const client = new Client(makeConfig({
+        refresh_token: "",
+        expires_at: Math.floor(Date.now() / 1000) - 100,
+      }));
+      await expect(client.get("/test")).rejects.toThrow("no refresh token available");
+    });
   });
 
   describe("HTTP methods", () => {

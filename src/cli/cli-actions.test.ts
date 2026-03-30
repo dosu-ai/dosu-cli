@@ -227,7 +227,7 @@ describe("CLI actions", () => {
   // ── mcp list ────────────────────────────────────────────────────────────
 
   describe("mcp list", () => {
-    it("prints all real provider names", async () => {
+    it("prints all real provider names with correct scope labels", async () => {
       await run("mcp", "list");
 
       const output = allLogOutput();
@@ -237,6 +237,24 @@ describe("CLI actions", () => {
       const providers = allProviders();
       for (const p of providers) {
         expect(output).toContain(p.id());
+        expect(output).toContain(p.name());
+      }
+
+      // Verify scope labels are present for providers
+      for (const p of providers) {
+        if (p.id() === "manual") {
+          // Manual provider should have NO scope label
+          // Check that the line with "manual" does not include "(global only)" or "(local + global)"
+          const lines = output.split("\n");
+          const manualLine = lines.find((l: string) => l.includes("manual"));
+          expect(manualLine).toBeDefined();
+          expect(manualLine).not.toContain("(global only)");
+          expect(manualLine).not.toContain("(local + global)");
+        } else if (!p.supportsLocal()) {
+          expect(output).toContain("(global only)");
+        } else {
+          expect(output).toContain("(local + global)");
+        }
       }
 
       expect(output).toContain(

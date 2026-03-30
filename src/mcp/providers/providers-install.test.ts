@@ -254,6 +254,7 @@ describe("CodexProvider", () => {
     expect(existsSync(configPath)).toBe(true);
     const content = readFileSync(configPath, "utf-8");
     expect(content).toContain("[mcp_servers.dosu]");
+    expect(content).toContain('type = "http"');
     expect(content).toContain("dep-123");
     expect(content).toContain("X-Dosu-API-Key");
     expect(content).toContain("key-abc");

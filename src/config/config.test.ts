@@ -98,9 +98,48 @@ describe("config", () => {
     expect(cleared.api_key).toBeUndefined();
   });
 
-  it("emptyConfig returns default values", () => {
+  it("emptyConfig returns exact default shape", () => {
     const cfg = emptyConfig();
-    expect(cfg.access_token).toBe("");
-    expect(cfg.expires_at).toBe(0);
+    expect(cfg).toEqual({
+      access_token: "",
+      refresh_token: "",
+      expires_at: 0,
+    });
+    // Ensure optional fields are not present
+    expect(cfg.deployment_id).toBeUndefined();
+    expect(cfg.deployment_name).toBeUndefined();
+    expect(cfg.api_key).toBeUndefined();
+  });
+
+  it("loadConfig returns emptyConfig on corrupt JSON file", () => {
+    const { writeFileSync } = require("node:fs");
+    const path = getConfigPath();
+    writeFileSync(path, "NOT VALID JSON {{{{");
+    const cfg = loadConfig();
+    expect(cfg).toEqual({
+      access_token: "",
+      refresh_token: "",
+      expires_at: 0,
+    });
+  });
+
+  it("clearConfig returns exact empty shape with undefined optional fields", () => {
+    const cfg: Config = {
+      access_token: "tok",
+      refresh_token: "ref",
+      expires_at: 999,
+      deployment_id: "dep",
+      deployment_name: "name",
+      api_key: "key",
+    };
+    const cleared = clearConfig(cfg);
+    expect(cleared).toEqual({
+      access_token: "",
+      refresh_token: "",
+      expires_at: 0,
+      deployment_id: undefined,
+      deployment_name: undefined,
+      api_key: undefined,
+    });
   });
 });

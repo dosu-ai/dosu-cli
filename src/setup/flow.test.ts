@@ -424,6 +424,53 @@ describe("stepShowSummary", () => {
       expect.stringContaining("Configured 1 tool"),
     );
   });
+
+  it("does not show 'Try it out' when only removals and no skips", () => {
+    const cursor = CursorProvider();
+    const opencode = OpenCodeProvider();
+    const results: ConfigResult[] = [
+      { provider: cursor, action: "remove" },
+      { provider: opencode, action: "remove" },
+    ];
+
+    stepShowSummary(results);
+
+    expect(p.log.info).toHaveBeenCalledWith(
+      expect.stringContaining("Removed from 2 tool"),
+    );
+    expect(p.log.message).not.toHaveBeenCalled();
+  });
+
+  it("does not show 'all configured' when installs and skips are mixed", () => {
+    const cursor = CursorProvider();
+    const opencode = OpenCodeProvider();
+    const results: ConfigResult[] = [
+      { provider: cursor, action: "install" },
+      { provider: opencode, action: "skip" },
+    ];
+
+    stepShowSummary(results);
+
+    // Should show install summary, NOT "all configured"
+    expect(p.log.success).toHaveBeenCalledWith(
+      expect.stringContaining("Configured 1 tool"),
+    );
+    expect(p.log.success).not.toHaveBeenCalledWith(
+      expect.stringContaining("All tools already configured"),
+    );
+    // Should still show "Try it out"
+    expect(p.log.message).toHaveBeenCalledWith(
+      expect.stringContaining("Try it out"),
+    );
+  });
+
+  it("does not show 'Try it out' or 'all configured' when results are empty", () => {
+    stepShowSummary([]);
+
+    expect(p.log.success).not.toHaveBeenCalled();
+    expect(p.log.info).not.toHaveBeenCalled();
+    expect(p.log.message).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------
