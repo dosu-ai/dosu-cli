@@ -1,0 +1,185 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { Client, SessionExpiredError } from "./client";
+import type { Config } from "../config/config";
+
+// Mock fetch globally
+const mockFetch = vi.fn();
+vi.stubGlobal("fetch", mockFetch);
+
+function makeConfig(overrides: Partial<Config> = {}): Config {
+  return {
+    access_token: "test-token",
+    refresh_token: "test-refresh",
+    expires_at: Math.floor(Date.now() / 1000) + 3600, // 1 hour from now
+    ...overrides,
+  };
+}
+
+function jsonResponse(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+describe("Client", () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  describe("doRequest", () => {
+    it("throws if not authenticated", async () => {
+      const client = new Client(makeConfig({ access_token: "" }));
+      await expect(client.get("/test")).rejects.toThrow("not authenticated");
+    });
+
+    it("sends correct headers", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
+      const client = new Client(makeConfig());
+      await client.get("/test");
+      const [, options] = mockFetch.mock.calls[0];
+      expect(options.headers["Content-Type"]).toBe("application/json");
+      expect(options.headers["Supabase-Access-Token"]).toBe("test-token");
+    });
+
+    it("retries on 401 with token refresh", async () => {
+      // First call: 401
+      mockFetch.mockResolvedValueOnce(jsonResponse({}, 401));
+      // Refresh call
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({
+          access_token: "new-token",
+          refresh_token: "new-refresh",
+          expires_in: 3600,
+        }),
+      );
+      // Retry call
+      mockFetch.mockResolvedValueOnce(jsonResponse({ data: "success" }));
+
+      const cfg = makeConfig();
+      // Mock saveConfig to avoid filesystem writes
+      vi.mock("../config/config", async () => {
+        const actual = await vi.importActual("../config/config");
+        return {
+          ...actual,
+          saveConfig: vi.fn(),
+        };
+      });
+
+      const client = new Client(cfg);
+      const resp = await client.get("/test");
+      expect(resp.status).toBe(200);
+      expect(mockFetch).toHaveBeenCalledTimes(3); // original + refresh + retry
+    });
+
+    it("throws SessionExpiredError when refresh fails", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({}, 401));
+      mockFetch.mockResolvedValueOnce(jsonResponse({}, 400)); // refresh fails
+
+      const client = new Client(makeConfig());
+      await expect(client.get("/test")).rejects.toBeInstanceOf(SessionExpiredError);
+    });
+  });
+
+  describe("HTTP methods", () => {
+    it("get sends GET request", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({}));
+      const client = new Client(makeConfig());
+      await client.get("/path");
+      expect(mockFetch.mock.calls[0][1].method).toBe("GET");
+    });
+
+    it("post sends POST with body", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({}));
+      const client = new Client(makeConfig());
+      await client.post("/path", { key: "value" });
+      const [, options] = mockFetch.mock.calls[0];
+      expect(options.method).toBe("POST");
+      expect(options.body).toBe('{"key":"value"}');
+    });
+
+    it("put sends PUT with body", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({}));
+      const client = new Client(makeConfig());
+      await client.put("/path", { x: 1 });
+      expect(mockFetch.mock.calls[0][1].method).toBe("PUT");
+    });
+
+    it("delete sends DELETE request", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({}));
+      const client = new Client(makeConfig());
+      await client.delete("/path");
+      expect(mockFetch.mock.calls[0][1].method).toBe("DELETE");
+    });
+  });
+
+  describe("getDeployments", () => {
+    it("returns deployments on success", async () => {
+      const deployments = [
+        { deployment_id: "d1", name: "Test", description: "", provider_slug: "test", enabled: true, org_id: "o1", org_name: "Org", space_id: "s1" },
+      ];
+      mockFetch.mockResolvedValueOnce(jsonResponse(deployments));
+      const client = new Client(makeConfig());
+      const result = await client.getDeployments();
+      expect(result).toEqual(deployments);
+    });
+
+    it("throws on non-200 response", async () => {
+      mockFetch.mockResolvedValueOnce(new Response("Not Found", { status: 404 }));
+      const client = new Client(makeConfig());
+      await expect(client.getDeployments()).rejects.toThrow("failed to fetch deployments");
+    });
+  });
+
+  describe("getOrgs", () => {
+    it("returns orgs on success", async () => {
+      const orgs = [{ org_id: "o1", name: "My Org" }];
+      mockFetch.mockResolvedValueOnce(jsonResponse(orgs));
+      const client = new Client(makeConfig());
+      const result = await client.getOrgs();
+      expect(result).toEqual(orgs);
+    });
+  });
+
+  describe("validateAPIKey", () => {
+    it("returns true for valid key", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({}, 200));
+      const client = new Client(makeConfig());
+      expect(await client.validateAPIKey("key", "dep-1")).toBe(true);
+    });
+
+    it("returns false for 401", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({}, 401));
+      const client = new Client(makeConfig());
+      expect(await client.validateAPIKey("key", "dep-1")).toBe(false);
+    });
+
+    it("returns false for 403", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({}, 403));
+      const client = new Client(makeConfig());
+      expect(await client.validateAPIKey("key", "dep-1")).toBe(false);
+    });
+
+    it("returns true on network error (optimistic)", async () => {
+      mockFetch.mockRejectedValueOnce(new Error("network failure"));
+      const client = new Client(makeConfig());
+      expect(await client.validateAPIKey("key", "dep-1")).toBe(true);
+    });
+  });
+
+  describe("createAPIKey", () => {
+    it("returns API key on success", async () => {
+      const response = { api_key: "key-123", id: "id-1", name: "cli", key_prefix: "key" };
+      mockFetch.mockResolvedValueOnce(jsonResponse(response, 201));
+      const client = new Client(makeConfig());
+      const result = await client.createAPIKey("dep-1", "cli");
+      expect(result.api_key).toBe("key-123");
+    });
+
+    it("throws on failure", async () => {
+      mockFetch.mockResolvedValueOnce(new Response("Forbidden", { status: 403 }));
+      const client = new Client(makeConfig());
+      await expect(client.createAPIKey("dep-1", "cli")).rejects.toThrow("failed to create API key");
+    });
+  });
+});
