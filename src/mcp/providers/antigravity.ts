@@ -11,7 +11,9 @@ export const AntigravityProvider = () =>
     globalPath: "~/.gemini/antigravity/mcp_config.json",
     topKey: "mcpServers",
     buildServer: (cfg) => ({
-      serverUrl: mcpURL(cfg.deployment_id ?? ""),
-      headers: mcpHeaders(cfg.api_key ?? ""),
+      // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
+      serverUrl: mcpURL(cfg.deployment_id!),
+      // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
+      headers: mcpHeaders(cfg.api_key!),
     }),
   });

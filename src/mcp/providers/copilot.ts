@@ -36,7 +36,8 @@ export const CopilotProvider = (): SetupProvider => ({
         type: "http",
         url,
         tools: ["*"],
-        headers: mcpHeaders(cfg.api_key ?? ""),
+        // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
+        headers: mcpHeaders(cfg.api_key!),
       };
       installJSONServer(globalPath(), "mcpServers", server);
     } else {
@@ -44,7 +45,8 @@ export const CopilotProvider = (): SetupProvider => ({
       const server = {
         type: "http",
         url,
-        headers: mcpHeaders(cfg.api_key ?? ""),
+        // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
+        headers: mcpHeaders(cfg.api_key!),
       };
       installJSONServer(configPath, "servers", server);
     }

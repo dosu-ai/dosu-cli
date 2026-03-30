@@ -33,8 +33,10 @@ export function createJSONProvider(opts: BaseProviderConfig): SetupProvider {
   // biome-ignore lint/suspicious/noExplicitAny: server entries are arbitrary JSON
   const defaultBuildServer = (cfg: Config): Record<string, any> => ({
     type: "http",
-    url: mcpURL(cfg.deployment_id ?? ""),
-    headers: mcpHeaders(cfg.api_key ?? ""),
+    // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
+    url: mcpURL(cfg.deployment_id!),
+    // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
+    headers: mcpHeaders(cfg.api_key!),
   });
 
   const buildServer = opts.buildServer ?? defaultBuildServer;

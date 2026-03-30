@@ -8,7 +8,8 @@ export const ManualProvider = (): Provider => ({
   supportsLocal: () => false,
 
   install(cfg: Config): void {
-    const url = mcpURL(cfg.deployment_id ?? "");
+    // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
+    const url = mcpURL(cfg.deployment_id!);
     console.log("Use these details to configure the Dosu MCP server in your client:");
     console.log();
     console.log(`  Transport:      HTTP`);

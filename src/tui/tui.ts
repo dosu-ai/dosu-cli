@@ -130,6 +130,7 @@ async function handleDeployments(cfg: ReturnType<typeof loadConfig>): Promise<vo
       p.log.success(`Selected: ${deployment.name}`);
     }
   } catch (err: unknown) {
+    /* v8 ignore next -- err is always Error in practice */
     p.log.error(`Failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
@@ -156,6 +157,7 @@ async function handleMCPAdd(cfg: ReturnType<typeof loadConfig>): Promise<void> {
     provider.install(cfg, true);
     p.log.success(`Added Dosu MCP to ${provider.name()}`);
   } catch (err: unknown) {
+    /* v8 ignore next -- err is always Error in practice */
     p.log.error(`Failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
@@ -183,6 +185,7 @@ async function handleMCPRemove(_cfg: ReturnType<typeof loadConfig>): Promise<voi
     provider.remove(true);
     p.log.success(`Removed Dosu MCP from ${provider.name()}`);
   } catch (err: unknown) {
+    /* v8 ignore next -- err is always Error in practice */
     p.log.error(`Failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }

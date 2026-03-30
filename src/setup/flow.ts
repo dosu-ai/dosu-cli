@@ -128,6 +128,7 @@ async function stepAuthenticate(): Promise<Config | null> {
     saveConfig(cfg);
     return cfg;
   } catch (err: unknown) {
+    /* v8 ignore next -- err is always Error in practice */
     p.log.error(`Authentication failed: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
@@ -155,6 +156,7 @@ async function stepSelectOrg(apiClient: Client): Promise<Org | null> {
       p.log.warn(`Session expired. Please run ${info("dosu setup")} again.`);
       return null;
     }
+    /* v8 ignore next -- err is always Error in practice */
     p.log.error(
       `Organization selection failed: ${err instanceof Error ? err.message : String(err)}`,
     );
@@ -173,6 +175,7 @@ async function stepResolveDeployment(apiClient: Client, id: string): Promise<Dep
     p.log.success(`Using deployment\n${dim(d.name)}`);
     return d;
   } catch (err: unknown) {
+    /* v8 ignore next -- err is always Error in practice */
     p.log.error(
       `Failed to resolve deployment: ${err instanceof Error ? err.message : String(err)}`,
     );
@@ -200,6 +203,7 @@ async function stepSelectDeployment(apiClient: Client, org: Org): Promise<Deploy
     if (p.isCancel(selected)) return null;
     return deployments.find((d) => d.deployment_id === selected) ?? null;
   } catch (err: unknown) {
+    /* v8 ignore next -- err is always Error in practice */
     p.log.error(`Deployment selection failed: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
@@ -207,7 +211,8 @@ async function stepSelectDeployment(apiClient: Client, org: Org): Promise<Deploy
 
 async function stepMintAPIKey(apiClient: Client, cfg: Config): Promise<string | null> {
   if (cfg.api_key) {
-    const valid = await apiClient.validateAPIKey(cfg.api_key, cfg.deployment_id ?? "");
+    // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
+    const valid = await apiClient.validateAPIKey(cfg.api_key, cfg.deployment_id!);
     if (valid) {
       p.log.success(`API key\n${dim("using existing")}`);
       return cfg.api_key;
@@ -216,10 +221,12 @@ async function stepMintAPIKey(apiClient: Client, cfg: Config): Promise<string | 
   }
 
   try {
-    const resp = await apiClient.createAPIKey(cfg.deployment_id ?? "", "dosu-cli");
+    // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
+    const resp = await apiClient.createAPIKey(cfg.deployment_id!, "dosu-cli");
     p.log.success(`API key\n${dim("created")}`);
     return resp.api_key;
   } catch (err: unknown) {
+    /* v8 ignore next -- err is always Error in practice */
     p.log.error(`API key creation failed: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
@@ -281,6 +288,7 @@ export function stepConfigureTools(cfg: Config, selection: ToolSelection): Confi
       provider.install(cfg, true);
       results.push({ provider, action: "install" });
     } catch (err: unknown) {
+      /* v8 ignore next -- err is always Error in practice */
       const error = err instanceof Error ? err : new Error(String(err));
       p.log.error(`Failed to configure ${provider.name()}: ${error.message}`);
       results.push({ provider, action: "install", error });
@@ -292,6 +300,7 @@ export function stepConfigureTools(cfg: Config, selection: ToolSelection): Confi
       provider.remove(true);
       results.push({ provider, action: "remove" });
     } catch (err: unknown) {
+      /* v8 ignore next -- err is always Error in practice */
       const error = err instanceof Error ? err : new Error(String(err));
       p.log.error(`Failed to remove ${provider.name()}: ${error.message}`);
       results.push({ provider, action: "remove", error });

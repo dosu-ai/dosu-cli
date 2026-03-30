@@ -22,8 +22,10 @@ export const ZedProvider = () =>
     buildServer: (cfg) => ({
       source: "custom",
       type: "http",
-      url: mcpURL(cfg.deployment_id ?? ""),
-      headers: mcpHeaders(cfg.api_key ?? ""),
+      // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
+      url: mcpURL(cfg.deployment_id!),
+      // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
+      headers: mcpHeaders(cfg.api_key!),
     }),
     localConfigPath: (cwd) => join(cwd, ".zed", "settings.json"),
   });

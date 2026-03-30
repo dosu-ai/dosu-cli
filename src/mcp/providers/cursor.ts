@@ -12,8 +12,10 @@ export const CursorProvider = () =>
     globalPath: "~/.cursor/mcp.json",
     topKey: "mcpServers",
     buildServer: (cfg) => ({
-      url: mcpURL(cfg.deployment_id ?? ""),
-      headers: mcpHeaders(cfg.api_key ?? ""),
+      // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
+      url: mcpURL(cfg.deployment_id!),
+      // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
+      headers: mcpHeaders(cfg.api_key!),
     }),
     localConfigPath: (cwd) => join(cwd, ".cursor", "mcp.json"),
   });

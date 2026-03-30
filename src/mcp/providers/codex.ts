@@ -40,8 +40,10 @@ function installDosuToTOML(path: string, cfg: Config): void {
   // Remove existing [mcp_servers.dosu] section if present
   content = removeDosuFromTOML(content);
   // Append new section
-  const url = mcpURL(cfg.deployment_id ?? "");
-  const headers = mcpHeaders(cfg.api_key ?? "");
+  // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
+  const url = mcpURL(cfg.deployment_id!);
+  // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
+  const headers = mcpHeaders(cfg.api_key!);
   const headerEntries = Object.entries(headers)
     .map(([k, v]) => `${k} = "${v}"`)
     .join("\n");

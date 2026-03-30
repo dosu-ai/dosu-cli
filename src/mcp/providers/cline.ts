@@ -16,9 +16,11 @@ export const ClineProvider = () =>
     globalPath: join(extensionDir(), "settings", "cline_mcp_settings.json"),
     topKey: "mcpServers",
     buildServer: (cfg) => ({
-      url: mcpURL(cfg.deployment_id ?? ""),
+      // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
+      url: mcpURL(cfg.deployment_id!),
       type: "streamableHttp",
       disabled: false,
-      headers: mcpHeaders(cfg.api_key ?? ""),
+      // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
+      headers: mcpHeaders(cfg.api_key!),
     }),
   });

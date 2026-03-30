@@ -37,7 +37,8 @@ export const MCPorterProvider = (): SetupProvider => ({
     const server = {
       type: "http",
       url: mcpURL(cfg.deployment_id),
-      headers: mcpHeaders(cfg.api_key ?? ""),
+      // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
+      headers: mcpHeaders(cfg.api_key!),
     };
     installJSONServer(configPath, "mcpServers", server);
   },
