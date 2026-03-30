@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  test-and-build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -21,6 +21,9 @@ jobs:
       - name: Install dependencies
         run: bun install
 
+      - name: Run typecheck
+        run: bunx tsc --noEmit
+
       - name: Run tests
         run: bunx vitest run
 
@@ -30,8 +33,42 @@ jobs:
           ./bin/dosu --version
           rm -f bin/dosu
 
+      - name: Verify cross-platform build matrix
+        run: bun run build:all
+
       - name: Verify npm bundle works
         run: |
           bun run build:npm
           node bin/dosu.js --version
           npm pack --dry-run
+
+  windows-npm-smoke:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.2"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build npm package
+        run: |
+          bun run build:npm
+          node bin/dosu.js --version
+          npm pack
+
+      - name: Smoke test npm exec on Windows
+        shell: pwsh
+        run: |
+          $pkg = Get-ChildItem -Filter "dosu-cli-*.tgz" | Select-Object -First 1 -ExpandProperty Name
+          npm exec --yes --package "./$pkg" dosu -- --version

@@ -25,8 +25,7 @@
     "test": "bunx vitest run",
     "test:watch": "bunx vitest",
     "typecheck": "bunx tsc --noEmit",
-    "prepack": "bun run build:npm",
-    "postinstall": "[ -f scripts/patch-clack.ts ] && bun scripts/patch-clack.ts || true"
+    "prepack": "bun run build:npm"
   },
   "engines": {
     "node": ">=18"
