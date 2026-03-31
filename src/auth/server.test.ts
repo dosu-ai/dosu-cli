@@ -160,4 +160,17 @@ describe("auth callback server", () => {
     const html = await resp.text();
     expect(html).toContain("<strong>test@dosu.dev</strong>");
   });
+
+  it("treats literal string 'null' in refresh_token as empty", async () => {
+    const result = await startCallbackServer();
+    server = result.server;
+
+    // Simulates what happens when browser JS does encodeURIComponent(null)
+    // which produces the literal string "null" in the URL
+    await fetch(`http://localhost:${server.port}/callback?access_token=tok&refresh_token=null`);
+    const token = await result.tokenPromise;
+
+    // Should normalize "null" to empty string, not store literal "null"
+    expect(token.refresh_token).toBe("");
+  });
 });

@@ -904,6 +904,29 @@ describe("runSetup integration", () => {
     expect(p.confirm).toHaveBeenCalled();
   });
 
+  it("retries on transient backend error (502) instead of declaring session expired", async () => {
+    const cfg = makeCfg();
+    saveConfig(cfg);
+
+    const mockRefreshToken = vi.fn().mockResolvedValue(undefined);
+    setupAuthenticatedClient({
+      doRequestRaw: vi
+        .fn()
+        .mockResolvedValueOnce({ status: 502 }) // transient error
+        .mockResolvedValueOnce({ status: 200 }), // succeeds after refresh
+      refreshToken: mockRefreshToken,
+    });
+
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    // Should have tried to refresh instead of immediately declaring "session expired"
+    expect(mockRefreshToken).toHaveBeenCalled();
+    // Should NOT have shown "Session expired" warning
+    expect(p.log.warn).not.toHaveBeenCalledWith("Session expired.");
+  });
+
   it("handles refresh succeeding but second verify failing", async () => {
     const cfg = makeCfg();
     saveConfig(cfg);
