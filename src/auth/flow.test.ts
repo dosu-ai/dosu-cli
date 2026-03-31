@@ -125,7 +125,7 @@ describe("startOAuthFlow", () => {
     expect(mockOpenDefault).toHaveBeenCalledOnce();
     const calledURL = mockOpenDefault.mock.calls[0]?.[0] as string;
     expect(calledURL).toBe(
-      "https://app.dosu.dev/cli-login?callback=http%3A%2F%2Flocalhost%3A12345%2Fcallback",
+      "https://app.dosu.dev/cli/auth?callback=http%3A%2F%2Flocalhost%3A12345%2Fcallback",
     );
 
     resolveToken({ access_token: "a", refresh_token: "r", expires_in: 1 });
@@ -159,7 +159,7 @@ describe("startOAuthFlow", () => {
 
     expect(mockOpenDefault).toHaveBeenCalledOnce();
     const calledURL = mockOpenDefault.mock.calls[0]?.[0] as string;
-    expect(calledURL).toContain("http://localhost:3001/cli-login?");
+    expect(calledURL).toContain("http://localhost:3001/cli/auth?");
 
     resolveToken({ access_token: "a", refresh_token: "r", expires_in: 1 });
     await flowPromise;
