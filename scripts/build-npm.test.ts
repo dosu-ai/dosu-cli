@@ -43,8 +43,12 @@ describe("build-npm script", () => {
     expect(defines).toContain(`process.env.DOSU_VERSION=${JSON.stringify("9.9.9")}`);
     expect(defines).toContain(`process.env.DOSU_COMMIT=${JSON.stringify("abc123")}`);
     expect(defines).toContain(`process.env.DOSU_DATE=${JSON.stringify("2026-03-30T00:00:00Z")}`);
-    expect(defines).toContain(`process.env.DOSU_WEB_APP_URL=${JSON.stringify("https://app.test.dev")}`);
-    expect(defines).toContain(`process.env.DOSU_BACKEND_URL=${JSON.stringify("https://api.test.dev")}`);
+    expect(defines).toContain(
+      `process.env.DOSU_WEB_APP_URL=${JSON.stringify("https://app.test.dev")}`,
+    );
+    expect(defines).toContain(
+      `process.env.DOSU_BACKEND_URL=${JSON.stringify("https://api.test.dev")}`,
+    );
     expect(defines).toContain(`process.env.SUPABASE_URL=${JSON.stringify("https://db.test.dev")}`);
     expect(defines).toContain(`process.env.SUPABASE_ANON_KEY=${JSON.stringify("anon-test-key")}`);
 
