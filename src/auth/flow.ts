@@ -49,5 +49,5 @@ export async function startOAuthFlow(signal?: AbortSignal): Promise<TokenRespons
 function buildAuthURL(callbackURL: string): string {
   const webAppURL = getWebAppURL();
   const params = new URLSearchParams({ callback: callbackURL });
-  return `${webAppURL}/cli-login?${params}`;
+  return `${webAppURL}/cli/auth?${params}`;
 }
