@@ -173,6 +173,33 @@ export function createProgram(): Command {
       await runSetup({ deploymentID: opts.deployment });
     });
 
+  // add
+  program
+    .command("add <repo>")
+    .description("Add a public GitHub repository as a Dosu library")
+    .action(async (repo: string) => {
+      const { runAdd } = await import("../add/flow");
+      await runAdd({ repo });
+    });
+
+  // sync
+  program
+    .command("sync [repo]")
+    .description("Re-trigger indexing for a public library")
+    .action(async (repo?: string) => {
+      const { runSync } = await import("../sync/flow");
+      await runSync({ repo });
+    });
+
+  // init
+  program
+    .command("init")
+    .description("Initialize Dosu skills for this project")
+    .action(async () => {
+      const { runInit } = await import("../init/flow");
+      await runInit();
+    });
+
   return program;
 }
 

@@ -66,4 +66,25 @@ describe("CLI", () => {
     const globalOpt = addCmd?.options.find((o) => o.long === "--global");
     expect(globalOpt).toBeDefined();
   });
+
+  it("has add command", () => {
+    const program = createProgram();
+    const cmd = program.commands.find((c) => c.name() === "add");
+    expect(cmd).toBeDefined();
+    expect(cmd?.description()).toContain("public GitHub repository");
+  });
+
+  it("has sync command", () => {
+    const program = createProgram();
+    const cmd = program.commands.find((c) => c.name() === "sync");
+    expect(cmd).toBeDefined();
+    expect(cmd?.description()).toContain("indexing");
+  });
+
+  it("has init command", () => {
+    const program = createProgram();
+    const cmd = program.commands.find((c) => c.name() === "init");
+    expect(cmd).toBeDefined();
+    expect(cmd?.description()).toContain("skills");
+  });
 });
