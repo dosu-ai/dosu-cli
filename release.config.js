@@ -1,0 +1,36 @@
+/** @type {import('semantic-release').GlobalConfig} */
+export default {
+  branches: ["main"],
+  plugins: [
+    "@semantic-release/commit-analyzer",
+    "@semantic-release/release-notes-generator",
+    "@semantic-release/changelog",
+    ["@semantic-release/npm"],
+    [
+      "@semantic-release/exec",
+      {
+        prepareCmd:
+          "bash scripts/build-release.sh ${nextRelease.version} ${nextRelease.gitHead}",
+        successCmd:
+          "echo 'released=true' >> $GITHUB_OUTPUT && echo 'version=${nextRelease.version}' >> $GITHUB_OUTPUT",
+      },
+    ],
+    [
+      "@semantic-release/github",
+      {
+        assets: [
+          { path: "dist/*.tar.gz" },
+          { path: "dist/*.zip" },
+        ],
+      },
+    ],
+    [
+      "@semantic-release/git",
+      {
+        assets: ["package.json", "CHANGELOG.md"],
+        message:
+          "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}",
+      },
+    ],
+  ],
+};
