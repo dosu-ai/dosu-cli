@@ -4,7 +4,7 @@
 
 import type { Config } from "../config/config";
 import { isAuthenticated, isTokenExpired, saveConfig } from "../config/config";
-import { getBackendURL, getSupabaseURL } from "../config/constants";
+import { getBackendURL, getSupabaseAnonKey, getSupabaseURL } from "../config/constants";
 
 export class SessionExpiredError extends Error {
   constructor() {
@@ -132,7 +132,10 @@ export class Client {
 
     const resp = await fetch(endpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        apikey: getSupabaseAnonKey(),
+      },
       body: JSON.stringify({ refresh_token: this.config.refresh_token }),
     });
 

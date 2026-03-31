@@ -214,6 +214,26 @@ describe("Client", () => {
     });
   });
 
+  describe("refreshToken", () => {
+    it("sends apikey header to Supabase refresh endpoint", async () => {
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({
+          access_token: "new-tok",
+          refresh_token: "new-ref",
+          expires_in: 3600,
+        }),
+      );
+
+      const client = new Client(makeConfig());
+      await client.refreshToken();
+
+      const [url, options] = mockFetch.mock.calls[0];
+      expect(url).toContain("/auth/v1/token");
+      expect(options.headers).toHaveProperty("apikey");
+      expect(options.headers.apikey).toBeTruthy();
+    });
+  });
+
   describe("createAPIKey", () => {
     it("returns API key on success", async () => {
       const response = { api_key: "key-123", id: "id-1", name: "cli", key_prefix: "key" };

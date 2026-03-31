@@ -61,8 +61,8 @@ const hash = window.location.hash.substring(1);
 if (hash) {
     const params = new URLSearchParams(hash);
     const token = params.get('access_token');
-    const refresh = params.get('refresh_token');
-    const expires = params.get('expires_in');
+    const refresh = params.get('refresh_token') || '';
+    const expires = params.get('expires_in') || '';
     const email = params.get('email');
     if (token) {
         window.location.href = '/callback?access_token=' + encodeURIComponent(token) +
@@ -226,7 +226,7 @@ export async function startCallbackServer(): Promise<{
 
     resolveToken?.({
       access_token: accessToken,
-      refresh_token: refreshToken ?? "",
+      refresh_token: refreshToken && refreshToken !== "null" ? refreshToken : "",
       expires_in: expiresInInt,
       email: email ?? undefined,
     });

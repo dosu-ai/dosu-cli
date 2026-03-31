@@ -91,18 +91,16 @@ async function stepAuthenticate(): Promise<Config | null> {
         s.stop("Authenticated");
         return cfg;
       }
-      // Token invalid — try refresh
-      if (resp.status === 401 || resp.status === 403 || resp.status === 500) {
-        try {
-          await apiClient.refreshToken();
-          const resp2 = await apiClient.doRequestRaw("GET", "/v1/mcp/deployments");
-          if (resp2.status === 200) {
-            s.stop("Authenticated");
-            return cfg;
-          }
-        } catch {
-          // refresh failed, fall through to login
+      // Any non-200 status — try refresh before giving up
+      try {
+        await apiClient.refreshToken();
+        const resp2 = await apiClient.doRequestRaw("GET", "/v1/mcp/deployments");
+        if (resp2.status === 200) {
+          s.stop("Authenticated");
+          return cfg;
         }
+      } catch {
+        // refresh failed, fall through to login
       }
       s.stop("Session expired");
       p.log.warn("Session expired.");
