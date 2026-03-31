@@ -13,8 +13,11 @@ export default defineConfig({
       exclude: [
         "**/index.ts", // barrel re-export files
         "src/index.ts", // CLI entry point
+        ".context/*", // local agent scratch files
+        "bin/*", // generated npm bundle
         "scripts/*", // build scripts (spawn Bun)
         "vitest.config.ts", // config file
+        "release.config.js", // semantic-release config
       ],
       thresholds: {
         statements: 95,

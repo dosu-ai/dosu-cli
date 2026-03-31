@@ -23,6 +23,10 @@ export function buildDefines(): string[] {
   const version = process.env.DOSU_VERSION ?? packageJSON.version ?? "dev";
   const commit = process.env.DOSU_COMMIT ?? "none";
   const date = process.env.DOSU_DATE ?? "unknown";
+  const webAppURL = process.env.DOSU_WEB_APP_URL ?? "";
+  const backendURL = process.env.DOSU_BACKEND_URL ?? "";
+  const supabaseURL = process.env.SUPABASE_URL ?? "";
+  const supabaseAnonKey = process.env.SUPABASE_ANON_KEY ?? "";
 
   return [
     "--define",
@@ -31,6 +35,14 @@ export function buildDefines(): string[] {
     `process.env.DOSU_COMMIT=${JSON.stringify(commit)}`,
     "--define",
     `process.env.DOSU_DATE=${JSON.stringify(date)}`,
+    "--define",
+    `process.env.DOSU_WEB_APP_URL=${JSON.stringify(webAppURL)}`,
+    "--define",
+    `process.env.DOSU_BACKEND_URL=${JSON.stringify(backendURL)}`,
+    "--define",
+    `process.env.SUPABASE_URL=${JSON.stringify(supabaseURL)}`,
+    "--define",
+    `process.env.SUPABASE_ANON_KEY=${JSON.stringify(supabaseAnonKey)}`,
   ];
 }
 
@@ -55,8 +67,19 @@ async function main() {
   mkdirSync(dirname(OUTFILE), { recursive: true });
 
   const proc = Bun.spawn(
-    ["bun", "build", "--target", "node", ...buildDefines(), "src/index.ts", "--outfile", OUTFILE],
-    { stdout: "pipe", stderr: "pipe" },
+    [
+      "bun",
+      "build",
+      "--target",
+      "node",
+      "--env=DOSU_*",
+      "--env=SUPABASE_*",
+      ...buildDefines(),
+      "src/index.ts",
+      "--outfile",
+      OUTFILE,
+    ],
+    { stdout: "pipe", stderr: "pipe", env: process.env },
   );
 
   const exitCode = await proc.exited;

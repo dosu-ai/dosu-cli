@@ -14,6 +14,20 @@ import {
 } from "./config-helpers";
 
 describe("mcpURL", () => {
+  const savedBackendURL = process.env.DOSU_BACKEND_URL;
+
+  beforeEach(() => {
+    process.env.DOSU_BACKEND_URL = "https://api.test.dev";
+  });
+
+  afterEach(() => {
+    if (savedBackendURL !== undefined) {
+      process.env.DOSU_BACKEND_URL = savedBackendURL;
+    } else {
+      delete process.env.DOSU_BACKEND_URL;
+    }
+  });
+
   it("builds correct URL with deployment ID", () => {
     const url = mcpURL("deploy-abc");
     expect(url).toContain("/v1/mcp/deployments/deploy-abc");

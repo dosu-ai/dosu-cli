@@ -79,7 +79,7 @@ jobs:
 
       - name: Verify build compiles
         run: |
-          bun build --compile src/index.ts --outfile bin/dosu
+          bun run build
           ./bin/dosu --version
           rm -f bin/dosu
 
@@ -122,3 +122,72 @@ jobs:
         run: |
           $pkg = Get-ChildItem -Filter "dosu-cli-*.tgz" | Select-Object -First 1 -ExpandProperty Name
           npm exec --yes --package "./$pkg" dosu -- --version
+
+  release:
+    needs:
+      - lint
+      - typecheck
+      - test
+      - build
+      - windows-npm-smoke
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      released: ${{ steps.release.outputs.released }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.2"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Release
+        id: release
+        run: npx semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  update-homebrew:
+    needs: release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.release.outputs.released == 'true' && !contains(needs.release.outputs.version, '-')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout homebrew-dosu
+        uses: actions/checkout@v4
+        with:
+          repository: dosu-ai/homebrew-dosu
+          token: ${{ secrets.HOMEBREW_TOKEN }}
+          path: homebrew-dosu
+
+      - name: Update Homebrew formula
+        run: |
+          cd homebrew-dosu
+          ./scripts/update-formula.sh ${{ needs.release.outputs.version }}
+
+      - name: Commit and push
+        run: |
+          cd homebrew-dosu
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/dosu.rb
+          git diff --cached --quiet || git commit -m "Update dosu to v${{ needs.release.outputs.version }}"
+          git push
