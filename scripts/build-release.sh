@@ -9,7 +9,7 @@ echo "==> Building release v${VERSION} (${COMMIT})"
 
 # Build cross-platform binaries
 DOSU_VERSION="$VERSION" DOSU_COMMIT="$COMMIT" DOSU_DATE="$DATE" \
-  bun run scripts/build-all.ts
+  bun --env-file=.env.production run scripts/build-all.ts
 
 # Create archives
 cd dist
