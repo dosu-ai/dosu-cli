@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { Client, SessionExpiredError } from "./client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../config/config";
+import { Client, SessionExpiredError } from "./client";
 
 // Mock fetch globally
 const mockFetch = vi.fn();
@@ -109,10 +109,12 @@ describe("Client", () => {
     });
 
     it("throws when refresh_token is missing and token is expired", async () => {
-      const client = new Client(makeConfig({
-        refresh_token: "",
-        expires_at: Math.floor(Date.now() / 1000) - 100,
-      }));
+      const client = new Client(
+        makeConfig({
+          refresh_token: "",
+          expires_at: Math.floor(Date.now() / 1000) - 100,
+        }),
+      );
       await expect(client.get("/test")).rejects.toThrow("no refresh token available");
     });
   });
@@ -152,7 +154,16 @@ describe("Client", () => {
   describe("getDeployments", () => {
     it("returns deployments on success", async () => {
       const deployments = [
-        { deployment_id: "d1", name: "Test", description: "", provider_slug: "test", enabled: true, org_id: "o1", org_name: "Org", space_id: "s1" },
+        {
+          deployment_id: "d1",
+          name: "Test",
+          description: "",
+          provider_slug: "test",
+          enabled: true,
+          org_id: "o1",
+          org_name: "Org",
+          space_id: "s1",
+        },
       ];
       mockFetch.mockResolvedValueOnce(jsonResponse(deployments));
       const client = new Client(makeConfig());

@@ -1,6 +1,6 @@
 import { join } from "node:path";
-import { createJSONProvider } from "./base";
 import { appSupportDir } from "../detect";
+import { createJSONProvider } from "./base";
 
 export const VSCodeProvider = () =>
   createJSONProvider({

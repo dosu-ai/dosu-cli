@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createProgram } from "./cli";
-import { loadConfig, saveConfig } from "../config/config";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../config/config";
+import { loadConfig, saveConfig } from "../config/config";
 import { allProviders } from "../mcp/providers";
+import { createProgram } from "./cli";
 
 // ── Mocks (true external boundaries only) ───────────────────────────────────
 
@@ -96,9 +96,7 @@ describe("CLI actions", () => {
       await run("login");
 
       expect(logSpy).toHaveBeenCalledWith("You are already logged in.");
-      expect(logSpy).toHaveBeenCalledWith(
-        "Run 'dosu logout' first to re-authenticate.",
-      );
+      expect(logSpy).toHaveBeenCalledWith("Run 'dosu logout' first to re-authenticate.");
       expect(mockStartOAuthFlow).not.toHaveBeenCalled();
     });
 
@@ -112,9 +110,7 @@ describe("CLI actions", () => {
 
       await run("login");
 
-      expect(logSpy).toHaveBeenCalledWith(
-        "Opening browser for authentication...",
-      );
+      expect(logSpy).toHaveBeenCalledWith("Opening browser for authentication...");
       expect(mockStartOAuthFlow).toHaveBeenCalledOnce();
       expect(logSpy).toHaveBeenCalledWith("Successfully authenticated!");
 
@@ -191,9 +187,7 @@ describe("CLI actions", () => {
       await run("status");
 
       expect(logSpy).toHaveBeenCalledWith("Status: Not logged in");
-      expect(logSpy).toHaveBeenCalledWith(
-        "Run 'dosu login' to authenticate.",
-      );
+      expect(logSpy).toHaveBeenCalledWith("Run 'dosu login' to authenticate.");
     });
 
     it("shows token-expired status", async () => {
@@ -204,9 +198,7 @@ describe("CLI actions", () => {
       await run("status");
 
       expect(logSpy).toHaveBeenCalledWith("Status: Token expired");
-      expect(logSpy).toHaveBeenCalledWith(
-        "Run 'dosu login' to re-authenticate.",
-      );
+      expect(logSpy).toHaveBeenCalledWith("Run 'dosu login' to re-authenticate.");
     });
 
     it("shows no deployment when none selected", async () => {
@@ -218,9 +210,7 @@ describe("CLI actions", () => {
       await run("status");
 
       expect(logSpy).toHaveBeenCalledWith("Deployment: None selected");
-      expect(logSpy).toHaveBeenCalledWith(
-        "Run 'dosu' to open the TUI and select a deployment.",
-      );
+      expect(logSpy).toHaveBeenCalledWith("Run 'dosu' to open the TUI and select a deployment.");
     });
   });
 
@@ -257,9 +247,7 @@ describe("CLI actions", () => {
         }
       }
 
-      expect(output).toContain(
-        "Use 'dosu mcp add <tool>' to add Dosu MCP to a tool.",
-      );
+      expect(output).toContain("Use 'dosu mcp add <tool>' to add Dosu MCP to a tool.");
     });
   });
 
@@ -274,16 +262,12 @@ describe("CLI actions", () => {
 
       // Verify real file was created on disk
       const cursorConfigPath = join(tempDir, ".cursor", "mcp.json");
-      const cursorConfig = JSON.parse(
-        readFileSync(cursorConfigPath, "utf-8"),
-      );
+      const cursorConfig = JSON.parse(readFileSync(cursorConfigPath, "utf-8"));
       expect(cursorConfig.mcpServers).toBeDefined();
       expect(cursorConfig.mcpServers.dosu).toBeDefined();
       expect(cursorConfig.mcpServers.dosu.url).toContain("dep_123");
       expect(cursorConfig.mcpServers.dosu.headers).toBeDefined();
-      expect(cursorConfig.mcpServers.dosu.headers["X-Dosu-API-Key"]).toBe(
-        "key_abc",
-      );
+      expect(cursorConfig.mcpServers.dosu.headers["X-Dosu-API-Key"]).toBe("key_abc");
 
       expect(logSpy).toHaveBeenCalledWith(
         expect.stringContaining("Successfully added Dosu MCP to Cursor"),
@@ -293,16 +277,12 @@ describe("CLI actions", () => {
     it("throws error for unknown tool", async () => {
       saveConfig(authenticatedConfig());
 
-      await expect(run("mcp", "add", "nonexistent")).rejects.toThrow(
-        "unknown tool 'nonexistent'",
-      );
+      await expect(run("mcp", "add", "nonexistent")).rejects.toThrow("unknown tool 'nonexistent'");
     });
 
     it("throws error when not logged in", async () => {
       // No config on disk = empty/unauthenticated
-      await expect(run("mcp", "add", "cursor")).rejects.toThrow(
-        "not logged in",
-      );
+      await expect(run("mcp", "add", "cursor")).rejects.toThrow("not logged in");
     });
 
     it("throws error when token is expired", async () => {
@@ -310,9 +290,7 @@ describe("CLI actions", () => {
       cfg.expires_at = Math.floor(Date.now() / 1000) - 1000;
       saveConfig(cfg);
 
-      await expect(run("mcp", "add", "cursor")).rejects.toThrow(
-        "session expired",
-      );
+      await expect(run("mcp", "add", "cursor")).rejects.toThrow("session expired");
     });
 
     it("throws error when no deployment selected", async () => {
@@ -320,9 +298,7 @@ describe("CLI actions", () => {
       cfg.deployment_id = undefined;
       saveConfig(cfg);
 
-      await expect(run("mcp", "add", "cursor")).rejects.toThrow(
-        "no deployment selected",
-      );
+      await expect(run("mcp", "add", "cursor")).rejects.toThrow("no deployment selected");
     });
 
     it("logs manual config details without writing files", async () => {

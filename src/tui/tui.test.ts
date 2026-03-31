@@ -1,14 +1,7 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import {
-  mkdtempSync,
-  rmSync,
-  readFileSync,
-  existsSync,
-  mkdirSync,
-  writeFileSync,
-} from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // ---------------------------------------------------------------------------
 // Mocks — only true I/O boundaries
@@ -17,6 +10,7 @@ import { tmpdir } from "node:os";
 vi.mock("@clack/prompts", () => ({
   select: vi.fn(),
   isCancel: vi.fn(),
+  cancel: vi.fn(),
   outro: vi.fn(),
   log: {
     warn: vi.fn(),
@@ -46,12 +40,12 @@ vi.mock("picocolors", () => ({
 // ---------------------------------------------------------------------------
 
 import * as p from "@clack/prompts";
-import { loadConfig, saveConfig, isAuthenticated } from "../config/config";
-import type { Config } from "../config/config";
 import { Client } from "../client/client";
-import { runSetup } from "../setup/flow";
-import { runTUI, handleLogout } from "./tui";
+import type { Config } from "../config/config";
+import { loadConfig, saveConfig } from "../config/config";
 import { loadJSONConfig } from "../mcp/config-helpers";
+import { runSetup } from "../setup/flow";
+import { handleLogout, runTUI } from "./tui";
 
 const mockSelect = vi.mocked(p.select);
 const mockIsCancel = vi.mocked(p.isCancel);
@@ -161,16 +155,12 @@ describe("handleLogout (direct)", () => {
 
     // Grab file mtime before call
     const configPath = join(tempDir, "dosu-cli", "config.json");
-    const mtimeBefore = existsSync(configPath)
-      ? readFileSync(configPath, "utf-8")
-      : null;
+    const mtimeBefore = existsSync(configPath) ? readFileSync(configPath, "utf-8") : null;
 
     handleLogout(cfg);
 
     // File content should be unchanged
-    const mtimeAfter = existsSync(configPath)
-      ? readFileSync(configPath, "utf-8")
-      : null;
+    const mtimeAfter = existsSync(configPath) ? readFileSync(configPath, "utf-8") : null;
     expect(mtimeAfter).toBe(mtimeBefore);
 
     expect(p.log.warn).toHaveBeenCalledWith("You are not logged in.");
@@ -206,7 +196,7 @@ describe("runTUI", () => {
   it("exits loop when user cancels select", async () => {
     writeRealConfig(makeCfg({ access_token: "tok" }));
     const cancelSymbol = Symbol("cancel");
-    mockSelect.mockResolvedValueOnce(cancelSymbol as any);
+    mockSelect.mockResolvedValueOnce(cancelSymbol as unknown);
     mockIsCancel.mockReturnValue(true);
 
     await runTUI();
@@ -261,7 +251,7 @@ describe("runTUI", () => {
     ];
     const mockGetDeployments = vi.fn().mockResolvedValue(mockDeployments);
     vi.mocked(Client).mockImplementation(
-      () => ({ getDeployments: mockGetDeployments }) as any,
+      () => ({ getDeployments: mockGetDeployments }) as unknown as Client,
     );
 
     mockSelect
@@ -305,7 +295,7 @@ describe("runTUI", () => {
 
     const mockGetDeployments = vi.fn().mockResolvedValue([]);
     vi.mocked(Client).mockImplementation(
-      () => ({ getDeployments: mockGetDeployments }) as any,
+      () => ({ getDeployments: mockGetDeployments }) as unknown as Client,
     );
 
     mockSelect.mockResolvedValueOnce("deployments").mockResolvedValueOnce("exit");
@@ -318,12 +308,10 @@ describe("runTUI", () => {
   it("deployments handles cancel during deployment selection", async () => {
     writeRealConfig(makeCfg({ access_token: "tok" }));
 
-    const mockDeployments = [
-      { deployment_id: "d1", name: "Deploy 1", org_name: "Org" },
-    ];
+    const mockDeployments = [{ deployment_id: "d1", name: "Deploy 1", org_name: "Org" }];
     const mockGetDeployments = vi.fn().mockResolvedValue(mockDeployments);
     vi.mocked(Client).mockImplementation(
-      () => ({ getDeployments: mockGetDeployments }) as any,
+      () => ({ getDeployments: mockGetDeployments }) as unknown as Client,
     );
 
     const cancelSymbol = Symbol("cancel");
@@ -331,7 +319,7 @@ describe("runTUI", () => {
 
     mockSelect
       .mockResolvedValueOnce("deployments")
-      .mockResolvedValueOnce(cancelSymbol as any)
+      .mockResolvedValueOnce(cancelSymbol as unknown)
       .mockResolvedValueOnce("exit");
 
     await runTUI();
@@ -348,7 +336,7 @@ describe("runTUI", () => {
 
     const mockGetDeployments = vi.fn().mockRejectedValue(new Error("network error"));
     vi.mocked(Client).mockImplementation(
-      () => ({ getDeployments: mockGetDeployments }) as any,
+      () => ({ getDeployments: mockGetDeployments }) as unknown as Client,
     );
 
     mockSelect.mockResolvedValueOnce("deployments").mockResolvedValueOnce("exit");
@@ -471,7 +459,7 @@ describe("runTUI", () => {
 
     mockSelect
       .mockResolvedValueOnce("mcp-add")
-      .mockResolvedValueOnce(cancelSymbol as any)
+      .mockResolvedValueOnce(cancelSymbol as unknown)
       .mockResolvedValueOnce("exit");
 
     await runTUI();
@@ -533,8 +521,8 @@ describe("runTUI", () => {
 
     // Check the options passed to the remove select call (2nd select invocation)
     const removeSelectCall = mockSelect.mock.calls[1];
-    const options = (removeSelectCall[0] as any).options;
-    const ids = options.map((o: any) => o.value);
+    const options = (removeSelectCall[0] as { options: { value: string }[] }).options;
+    const ids = options.map((o: { value: string }) => o.value);
     expect(ids).not.toContain("manual");
   });
 });

@@ -238,10 +238,10 @@ export async function startCallbackServer(): Promise<{
     let expiresInInt = 3600;
     if (expiresIn) {
       const parsed = parseInt(expiresIn, 10);
-      if (!isNaN(parsed)) expiresInInt = parsed;
+      if (!Number.isNaN(parsed)) expiresInInt = parsed;
     }
 
-    resolveToken!({
+    resolveToken?.({
       access_token: accessToken,
       refresh_token: refreshToken ?? "",
       expires_in: expiresInInt,

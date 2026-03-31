@@ -26,22 +26,22 @@ export interface SetupProvider extends Provider {
   priority(): number;
 }
 
+import { AntigravityProvider } from "./providers/antigravity";
 // Import all providers (factory functions)
 import { ClaudeProvider } from "./providers/claude";
 import { ClaudeDesktopProvider } from "./providers/claude-desktop";
-import { CursorProvider } from "./providers/cursor";
-import { VSCodeProvider } from "./providers/vscode";
-import { GeminiProvider } from "./providers/gemini";
-import { CodexProvider } from "./providers/codex";
-import { WindsurfProvider } from "./providers/windsurf";
-import { ZedProvider } from "./providers/zed";
 import { ClineProvider } from "./providers/cline";
 import { ClineCliProvider } from "./providers/cline-cli";
+import { CodexProvider } from "./providers/codex";
 import { CopilotProvider } from "./providers/copilot";
-import { OpenCodeProvider } from "./providers/opencode";
-import { AntigravityProvider } from "./providers/antigravity";
-import { MCPorterProvider } from "./providers/mcporter";
+import { CursorProvider } from "./providers/cursor";
+import { GeminiProvider } from "./providers/gemini";
 import { ManualProvider } from "./providers/manual";
+import { MCPorterProvider } from "./providers/mcporter";
+import { OpenCodeProvider } from "./providers/opencode";
+import { VSCodeProvider } from "./providers/vscode";
+import { WindsurfProvider } from "./providers/windsurf";
+import { ZedProvider } from "./providers/zed";
 
 /**
  * Returns all available providers.

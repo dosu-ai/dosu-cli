@@ -1,2 +1,2 @@
+export type { APIKeyResponse, Deployment, Org } from "./client";
 export { Client, SessionExpiredError } from "./client";
-export type { Deployment, Org, APIKeyResponse } from "./client";

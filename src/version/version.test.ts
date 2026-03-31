@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { VERSION, COMMIT, DATE, getVersionString } from "./version";
+import { describe, expect, it } from "vitest";
+import { COMMIT, DATE, getVersionString, VERSION } from "./version";
 
 describe("version", () => {
   it("should have default values when env vars are not set", () => {

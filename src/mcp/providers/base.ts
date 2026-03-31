@@ -4,15 +4,15 @@
  */
 
 import type { Config } from "../../config/config";
-import type { SetupProvider } from "../providers";
-import { isInstalled, expandHome } from "../detect";
 import {
-  mcpURL,
-  mcpHeaders,
-  isJSONKeyConfigured,
   installJSONServer,
+  isJSONKeyConfigured,
+  mcpHeaders,
+  mcpURL,
   removeJSONServer,
 } from "../config-helpers";
+import { expandHome, isInstalled } from "../detect";
+import type { SetupProvider } from "../providers";
 
 export interface BaseProviderConfig {
   providerName: string;
@@ -23,15 +23,19 @@ export interface BaseProviderConfig {
   globalPath: string;
   topKey: string;
   /** Override the server entry shape if needed */
+  // biome-ignore lint/suspicious/noExplicitAny: server entries are arbitrary JSON
   buildServer?: (cfg: Config) => Record<string, any>;
   /** For providers that use a different local config path pattern */
   localConfigPath?: (cwd: string) => string;
 }
 
 export function createJSONProvider(opts: BaseProviderConfig): SetupProvider {
+  // biome-ignore lint/suspicious/noExplicitAny: server entries are arbitrary JSON
   const defaultBuildServer = (cfg: Config): Record<string, any> => ({
     type: "http",
+    // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
     url: mcpURL(cfg.deployment_id!),
+    // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
     headers: mcpHeaders(cfg.api_key!),
   });
 
