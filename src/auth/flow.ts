@@ -15,6 +15,8 @@ import { startCallbackServer, type TokenResponse } from "./server";
 export async function startOAuthFlow(signal?: AbortSignal): Promise<TokenResponse> {
   const { server, tokenPromise } = await startCallbackServer();
 
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
   try {
     const callbackURL = `http://localhost:${server.port}/callback`;
     const authURL = buildAuthURL(callbackURL);
@@ -25,7 +27,7 @@ export async function startOAuthFlow(signal?: AbortSignal): Promise<TokenRespons
 
     // Race: token, abort, or timeout
     const timeout = new Promise<never>((_, reject) => {
-      setTimeout(
+      timeoutId = setTimeout(
         () => reject(new Error("authentication timeout - please try again")),
         5 * 60 * 1000,
       );
@@ -39,6 +41,7 @@ export async function startOAuthFlow(signal?: AbortSignal): Promise<TokenRespons
 
     return await Promise.race([tokenPromise, timeout, abort]);
   } finally {
+    clearTimeout(timeoutId);
     server.close();
   }
 }

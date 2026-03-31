@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallbackServer, TokenResponse } from "./server";
 
 const { mockOpenDefault, mockClose, mockStartCallbackServer, mockGetWebAppURL } = vi.hoisted(
@@ -35,6 +35,10 @@ describe("startOAuthFlow", () => {
   let mockServer: CallbackServer;
   let resolveToken: (token: TokenResponse) => void;
   let rejectToken: (err: Error) => void;
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   beforeEach(() => {
     mockOpenDefault.mockClear().mockResolvedValue(undefined);
@@ -126,6 +130,25 @@ describe("startOAuthFlow", () => {
 
     resolveToken({ access_token: "a", refresh_token: "r", expires_in: 1 });
     await flowPromise;
+  });
+
+  it("clears the timeout timer after successful token receipt", async () => {
+    vi.useFakeTimers();
+
+    const token: TokenResponse = {
+      access_token: "tok",
+      refresh_token: "ref",
+      expires_in: 3600,
+    };
+
+    const flowPromise = startOAuthFlow();
+    await vi.advanceTimersByTimeAsync(10);
+
+    resolveToken(token);
+    await flowPromise;
+
+    // The 5-minute timeout should have been cleared — no lingering timers
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("uses the configured web app URL for building the auth URL", async () => {
