@@ -15,6 +15,7 @@ export default defineConfig({
         "src/index.ts", // CLI entry point
         "scripts/*", // build scripts (spawn Bun)
         "vitest.config.ts", // config file
+        "release.config.js", // semantic-release config
       ],
       thresholds: {
         statements: 95,
