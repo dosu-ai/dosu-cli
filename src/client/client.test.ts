@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../config/config";
 import { Client, SessionExpiredError } from "./client";
 
@@ -23,6 +23,27 @@ function jsonResponse(data: unknown, status = 200): Response {
 }
 
 describe("Client", () => {
+  const savedEnv: Record<string, string | undefined> = {};
+
+  beforeAll(() => {
+    for (const key of ["SUPABASE_URL", "SUPABASE_ANON_KEY", "DOSU_BACKEND_URL"]) {
+      savedEnv[key] = process.env[key];
+    }
+    process.env.SUPABASE_URL = "https://test.supabase.co";
+    process.env.SUPABASE_ANON_KEY = "test-anon-key";
+    process.env.DOSU_BACKEND_URL = "https://api.test.dev";
+  });
+
+  afterAll(() => {
+    for (const [key, val] of Object.entries(savedEnv)) {
+      if (val !== undefined) {
+        process.env[key] = val;
+      } else {
+        delete process.env[key];
+      }
+    }
+  });
+
   beforeEach(() => {
     mockFetch.mockReset();
   });

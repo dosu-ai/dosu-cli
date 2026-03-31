@@ -1,12 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getBackendURL, getSupabaseURL, getWebAppURL } from "./constants";
+import { getBackendURL, getSupabaseAnonKey, getSupabaseURL, getWebAppURL } from "./constants";
 
 describe("constants", () => {
   const savedEnv: Record<string, string | undefined> = {};
+  const ENV_KEYS = [
+    "DOSU_WEB_APP_URL",
+    "DOSU_BACKEND_URL",
+    "SUPABASE_URL",
+    "SUPABASE_ANON_KEY",
+    "DOSU_DEV",
+  ];
 
   beforeEach(() => {
-    // Save env vars we'll modify
-    for (const key of ["DOSU_WEB_APP_URL", "DOSU_BACKEND_URL", "SUPABASE_URL", "DOSU_DEV"]) {
+    for (const key of ENV_KEYS) {
       savedEnv[key] = process.env[key];
       delete process.env[key];
     }
@@ -23,56 +29,46 @@ describe("constants", () => {
   });
 
   describe("getWebAppURL", () => {
-    it("returns prod URL by default", () => {
+    it("returns empty string when env var is not set", () => {
+      expect(getWebAppURL()).toBe("");
+    });
+
+    it("returns value from DOSU_WEB_APP_URL", () => {
+      process.env.DOSU_WEB_APP_URL = "https://app.dosu.dev";
       expect(getWebAppURL()).toBe("https://app.dosu.dev");
-    });
-
-    it("returns dev URL when DOSU_DEV=true", () => {
-      process.env.DOSU_DEV = "true";
-      expect(getWebAppURL()).toBe("http://localhost:3001");
-    });
-
-    it("returns custom URL from DOSU_WEB_APP_URL", () => {
-      process.env.DOSU_WEB_APP_URL = "http://custom:9999";
-      expect(getWebAppURL()).toBe("http://custom:9999");
-    });
-
-    it("prefers DOSU_WEB_APP_URL over DOSU_DEV", () => {
-      process.env.DOSU_WEB_APP_URL = "http://custom:9999";
-      process.env.DOSU_DEV = "true";
-      expect(getWebAppURL()).toBe("http://custom:9999");
     });
   });
 
   describe("getBackendURL", () => {
-    it("returns prod URL by default", () => {
-      expect(getBackendURL()).toBe("https://api.dosu.dev");
+    it("returns empty string when env var is not set", () => {
+      expect(getBackendURL()).toBe("");
     });
 
-    it("returns dev URL when DOSU_DEV=true", () => {
-      process.env.DOSU_DEV = "true";
+    it("returns value from DOSU_BACKEND_URL", () => {
+      process.env.DOSU_BACKEND_URL = "http://localhost:7001";
       expect(getBackendURL()).toBe("http://localhost:7001");
-    });
-
-    it("returns custom URL from DOSU_BACKEND_URL", () => {
-      process.env.DOSU_BACKEND_URL = "http://custom:8888";
-      expect(getBackendURL()).toBe("http://custom:8888");
     });
   });
 
   describe("getSupabaseURL", () => {
-    it("returns prod URL by default", () => {
-      expect(getSupabaseURL()).toBe("https://wldmetsoicvieidlsqrb.supabase.co");
+    it("returns empty string when env var is not set", () => {
+      expect(getSupabaseURL()).toBe("");
     });
 
-    it("returns dev URL when DOSU_DEV=true", () => {
-      process.env.DOSU_DEV = "true";
+    it("returns value from SUPABASE_URL", () => {
+      process.env.SUPABASE_URL = "http://localhost:54321";
       expect(getSupabaseURL()).toBe("http://localhost:54321");
     });
+  });
 
-    it("returns custom URL from SUPABASE_URL", () => {
-      process.env.SUPABASE_URL = "http://supa:5432";
-      expect(getSupabaseURL()).toBe("http://supa:5432");
+  describe("getSupabaseAnonKey", () => {
+    it("returns empty string when env var is not set", () => {
+      expect(getSupabaseAnonKey()).toBe("");
+    });
+
+    it("returns value from SUPABASE_ANON_KEY", () => {
+      process.env.SUPABASE_ANON_KEY = "test-key";
+      expect(getSupabaseAnonKey()).toBe("test-key");
     });
   });
 });
