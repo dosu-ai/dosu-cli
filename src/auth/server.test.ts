@@ -89,9 +89,7 @@ describe("auth callback server", () => {
     const result = await startCallbackServer();
     server = result.server;
 
-    const resp = await fetch(
-      `http://localhost:${server.port}/callback?access_token=tok123`,
-    );
+    const resp = await fetch(`http://localhost:${server.port}/callback?access_token=tok123`);
     const html = await resp.text();
     expect(html).not.toContain("Signed in as");
     expect(html).toContain("Authentication Successful");
@@ -105,7 +103,7 @@ describe("auth callback server", () => {
     server = result.server;
 
     const resp = await fetch(
-      `http://localhost:${server.port}/callback?access_token=tok123&email=${encodeURIComponent('<script>alert(1)</script>')}`,
+      `http://localhost:${server.port}/callback?access_token=tok123&email=${encodeURIComponent("<script>alert(1)</script>")}`,
     );
     const html = await resp.text();
     expect(html).not.toContain("<script>alert(1)</script>");
@@ -126,9 +124,7 @@ describe("auth callback server", () => {
     const result = await startCallbackServer();
     server = result.server;
 
-    const resp = await fetch(
-      `http://localhost:${server.port}/callback?access_token=tok`,
-    );
+    const resp = await fetch(`http://localhost:${server.port}/callback?access_token=tok`);
     const html = await resp.text();
     expect(html).toContain('<svg width="52" height="54"');
     expect(html).toContain("viewBox");
@@ -138,9 +134,7 @@ describe("auth callback server", () => {
     const result = await startCallbackServer();
     server = result.server;
 
-    const resp = await fetch(
-      `http://localhost:${server.port}/callback?access_token=tok`,
-    );
+    const resp = await fetch(`http://localhost:${server.port}/callback?access_token=tok`);
     const html = await resp.text();
     expect(html).toContain('id="countdown">10</span>');
     expect(html).toContain("window.close()");
@@ -150,9 +144,7 @@ describe("auth callback server", () => {
     const result = await startCallbackServer();
     server = result.server;
 
-    const resp = await fetch(
-      `http://localhost:${server.port}/callback?access_token=tok`,
-    );
+    const resp = await fetch(`http://localhost:${server.port}/callback?access_token=tok`);
     const html = await resp.text();
     expect(html).toContain('class="card" onclick="window.close()"');
     expect(html).toContain("cursor: pointer");
