@@ -69,4 +69,95 @@ describe("auth callback server", () => {
     const token = await result.tokenPromise;
     expect(token.refresh_token).toBe("");
   });
+
+  it("passes email through when provided", async () => {
+    const result = await startCallbackServer();
+    server = result.server;
+
+    const resp = await fetch(
+      `http://localhost:${server.port}/callback?access_token=tok123&refresh_token=ref456&expires_in=7200&email=user%40example.com`,
+    );
+    const html = await resp.text();
+    expect(html).toContain("user@example.com");
+    expect(html).toContain("Signed in as");
+
+    const token = await result.tokenPromise;
+    expect(token.email).toBe("user@example.com");
+  });
+
+  it("omits email line when email is not provided", async () => {
+    const result = await startCallbackServer();
+    server = result.server;
+
+    const resp = await fetch(`http://localhost:${server.port}/callback?access_token=tok123`);
+    const html = await resp.text();
+    expect(html).not.toContain("Signed in as");
+    expect(html).toContain("Authentication Successful");
+
+    const token = await result.tokenPromise;
+    expect(token.email).toBeUndefined();
+  });
+
+  it("escapes HTML in email to prevent XSS", async () => {
+    const result = await startCallbackServer();
+    server = result.server;
+
+    const resp = await fetch(
+      `http://localhost:${server.port}/callback?access_token=tok123&email=${encodeURIComponent("<script>alert(1)</script>")}`,
+    );
+    const html = await resp.text();
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).toContain("&lt;script&gt;");
+  });
+
+  it("extract page forwards email parameter", async () => {
+    const result = await startCallbackServer();
+    server = result.server;
+
+    const resp = await fetch(`http://localhost:${server.port}/callback`);
+    const html = await resp.text();
+    expect(html).toContain("params.get('email')");
+    expect(html).toContain("encodeURIComponent(email)");
+  });
+
+  it("success page includes Dosu logo SVG", async () => {
+    const result = await startCallbackServer();
+    server = result.server;
+
+    const resp = await fetch(`http://localhost:${server.port}/callback?access_token=tok`);
+    const html = await resp.text();
+    expect(html).toContain('<svg width="52" height="54"');
+    expect(html).toContain("viewBox");
+  });
+
+  it("success page includes 10s auto-close countdown", async () => {
+    const result = await startCallbackServer();
+    server = result.server;
+
+    const resp = await fetch(`http://localhost:${server.port}/callback?access_token=tok`);
+    const html = await resp.text();
+    expect(html).toContain('id="countdown">10</span>');
+    expect(html).toContain("window.close()");
+  });
+
+  it("success page card is clickable to close", async () => {
+    const result = await startCallbackServer();
+    server = result.server;
+
+    const resp = await fetch(`http://localhost:${server.port}/callback?access_token=tok`);
+    const html = await resp.text();
+    expect(html).toContain('class="card" onclick="window.close()"');
+    expect(html).toContain("cursor: pointer");
+  });
+
+  it("email is rendered bold in success page", async () => {
+    const result = await startCallbackServer();
+    server = result.server;
+
+    const resp = await fetch(
+      `http://localhost:${server.port}/callback?access_token=tok&email=test%40dosu.dev`,
+    );
+    const html = await resp.text();
+    expect(html).toContain("<strong>test@dosu.dev</strong>");
+  });
 });
