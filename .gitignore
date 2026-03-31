@@ -10,10 +10,10 @@ dist/
 bun.lock
 *.bun-build
 
-# Environment
-.env
+# Environment — only .local files are ignored (contain personal overrides)
+# .env, .env.development, .env.production are tracked in git
 .env.local
-.env.*
+.env.*.local
 
 # Editor/IDE
 # .idea/
