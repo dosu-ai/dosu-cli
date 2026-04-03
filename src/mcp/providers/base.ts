@@ -3,7 +3,7 @@
  * Most providers follow the same install/remove pattern — only the config path and top-level key differ.
  */
 
-import type { Config } from "../../config/config";
+import { MODE_OSS, type Config } from "../../config/config";
 import {
   installJSONServer,
   isJSONKeyConfigured,
@@ -61,7 +61,7 @@ export function createJSONProvider(opts: BaseProviderConfig): SetupProvider {
     isConfigured: () => isJSONKeyConfigured(expandHome(opts.globalPath), opts.topKey),
 
     install(cfg: Config, global: boolean): void {
-      if (cfg.mode !== "oss" && !cfg.deployment_id) throw new Error("deployment ID is required");
+      if (cfg.mode !== MODE_OSS && !cfg.deployment_id) throw new Error("deployment ID is required");
       let configPath: string;
       if (global) {
         configPath = expandHome(opts.globalPath);
@@ -70,7 +70,7 @@ export function createJSONProvider(opts: BaseProviderConfig): SetupProvider {
       } else {
         throw new Error(`${opts.providerName} does not support local installation`);
       }
-      const serverBuilder = cfg.mode === "oss" ? defaultBuildOSSServer : buildServer;
+      const serverBuilder = cfg.mode === MODE_OSS ? defaultBuildOSSServer : buildServer;
       installJSONServer(configPath, opts.topKey, serverBuilder(cfg));
     },
 

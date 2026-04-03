@@ -4,7 +4,7 @@
 
 import * as p from "@clack/prompts";
 import { Client, type Deployment, type Org, SessionExpiredError } from "../client/client";
-import { type Config, loadConfig, saveConfig } from "../config/config";
+import { MODE_OSS, type Config, type SetupMode, loadConfig, saveConfig } from "../config/config";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { dim, info } from "./styles";
 
@@ -42,7 +42,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     if (!d) return;
     cfg.deployment_id = d.deployment_id;
     cfg.deployment_name = d.name;
-  } else if (cfg.mode === "oss") {
+  } else if (cfg.mode === MODE_OSS) {
     // OSS path: fetch first available deployment for API key creation only
     const deployments = await fetchDeployments(apiClient);
     if (deployments.length > 0) {
@@ -84,7 +84,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   const results = stepConfigureTools(cfg, selection);
   stepShowSummary(results, cfg.mode);
 
-  if (cfg.mode === "oss") {
+  if (cfg.mode === MODE_OSS) {
     p.outro(
       "Setup complete! Using open-source libraries only.\nRun `dosu setup` again to connect your own repos.",
     );
@@ -107,7 +107,7 @@ async function stepAuthenticate(opts: SetupOptions): Promise<Config | null> {
         s.stop("Authenticated");
 
         // If configured for OSS and no --deployment flag, let the user reconfigure
-        if (!opts.deploymentID && cfg.mode === "oss") {
+        if (!opts.deploymentID && cfg.mode === MODE_OSS) {
           const modeLabel = "open-source libraries only";
           const action = await p.select({
             message: `Currently configured for ${modeLabel}. What would you like to do?`,
@@ -163,7 +163,7 @@ async function openBrowserForSetup(cfg: Config, opts: SetupOptions): Promise<Con
     cfg.refresh_token = token.refresh_token;
     cfg.expires_at = Math.floor(Date.now() / 1000) + token.expires_in;
     // Only OSS mode is signaled from the browser; absence means cloud (existing flow)
-    if (token.mode === "oss") cfg.mode = "oss";
+    if (token.mode === MODE_OSS) cfg.mode = MODE_OSS;
     saveConfig(cfg);
     return cfg;
   } catch (err: unknown) {
@@ -366,7 +366,7 @@ export function stepConfigureTools(cfg: Config, selection: ToolSelection): Confi
   return results;
 }
 
-export function stepShowSummary(results: ConfigResult[], mode?: "oss"): void {
+export function stepShowSummary(results: ConfigResult[], mode?: SetupMode): void {
   const installed = results.filter((r) => r.action === "install" && !r.error);
   const removed = results.filter((r) => r.action === "remove" && !r.error);
   const skipped = results.filter((r) => r.action === "skip");
@@ -391,7 +391,7 @@ export function stepShowSummary(results: ConfigResult[], mode?: "oss"): void {
 
   if (installed.length > 0 || skipped.length > 0) {
     const prompt =
-      mode === "oss"
+      mode === MODE_OSS
         ? `Use Dosu to search open source libraries and answer: what are the main components of this project?`
         : `Use Dosu to search our team's documentation and answer: what are the main components of our system?`;
     p.log.message(`Try it out! Paste this into your agent:\n\n${info(prompt)}`);
