@@ -63,6 +63,29 @@ describe("createJSONProvider (base)", () => {
     expect(cfg.mcpServers.dosu.headers["X-Dosu-API-Key"]).toBe("key-abc");
   });
 
+  it("OSS mode install uses base MCP URL without deployment ID", async () => {
+    const { createJSONProvider } = await import("./base");
+    const globalPath = join(tempDir, "oss-config.json");
+    const provider = createJSONProvider({
+      providerName: "TestProvider",
+      providerID: "test",
+      local: false,
+      priorityValue: 1,
+      paths: [],
+      globalPath,
+      topKey: "mcpServers",
+    });
+
+    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), true);
+
+    const cfg = loadJSONConfig(globalPath);
+    expect(cfg.mcpServers.dosu).toBeDefined();
+    expect(cfg.mcpServers.dosu.type).toBe("http");
+    expect(cfg.mcpServers.dosu.url).toContain("/v1/mcp");
+    expect(cfg.mcpServers.dosu.url).not.toContain("/deployments/");
+    expect(cfg.mcpServers.dosu.headers["X-Dosu-API-Key"]).toBe("key-abc");
+  });
+
   it("install throws when deployment_id is missing", async () => {
     const { createJSONProvider } = await import("./base");
     const provider = createJSONProvider({
