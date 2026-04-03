@@ -3,7 +3,7 @@
  * Most providers follow the same install/remove pattern — only the config path and top-level key differ.
  */
 
-import { MODE_OSS, type Config } from "../../config/config";
+import { type Config, MODE_OSS } from "../../config/config";
 import {
   installJSONServer,
   isJSONKeyConfigured,

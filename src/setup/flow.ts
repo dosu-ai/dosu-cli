@@ -4,7 +4,7 @@
 
 import * as p from "@clack/prompts";
 import { Client, type Deployment, type Org, SessionExpiredError } from "../client/client";
-import { MODE_OSS, type Config, type SetupMode, loadConfig, saveConfig } from "../config/config";
+import { type Config, loadConfig, MODE_OSS, type SetupMode, saveConfig } from "../config/config";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { dim, info } from "./styles";
 
@@ -51,14 +51,12 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     }
   } else {
     // Standard path: select deployment interactively
-    if (!cfg.deployment_id) {
-      const org = await stepSelectOrg(apiClient);
-      if (!org) return;
-      const d = await stepSelectDeployment(apiClient, org);
-      if (!d) return;
-      cfg.deployment_id = d.deployment_id;
-      cfg.deployment_name = d.name;
-    }
+    const org = await stepSelectOrg(apiClient);
+    if (!org) return;
+    const d = await stepSelectDeployment(apiClient, org);
+    if (!d) return;
+    cfg.deployment_id = d.deployment_id;
+    cfg.deployment_name = d.name;
   }
 
   saveConfig(cfg);
