@@ -12,14 +12,17 @@ import { startCallbackServer, type TokenResponse } from "./server";
  * 3. Waits for the web app to redirect back with the token
  * 4. Returns the token or throws
  */
-export async function startOAuthFlow(signal?: AbortSignal): Promise<TokenResponse> {
+export async function startOAuthFlow(
+  signal?: AbortSignal,
+  path: string = "/cli/auth",
+): Promise<TokenResponse> {
   const { server, tokenPromise } = await startCallbackServer();
 
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
   try {
     const callbackURL = `http://localhost:${server.port}/callback`;
-    const authURL = buildAuthURL(callbackURL);
+    const authURL = buildAuthURL(callbackURL, path);
 
     // Open browser — dynamic import to avoid bundling issues
     const open = await import("open");
@@ -29,7 +32,7 @@ export async function startOAuthFlow(signal?: AbortSignal): Promise<TokenRespons
     const timeout = new Promise<never>((_, reject) => {
       timeoutId = setTimeout(
         () => reject(new Error("authentication timeout - please try again")),
-        5 * 60 * 1000,
+        15 * 60 * 1000,
       );
     });
 
@@ -46,8 +49,13 @@ export async function startOAuthFlow(signal?: AbortSignal): Promise<TokenRespons
   }
 }
 
-function buildAuthURL(callbackURL: string): string {
+function buildAuthURL(callbackURL: string, path: string): string {
   const webAppURL = getWebAppURL();
   const params = new URLSearchParams({ callback: callbackURL });
-  return `${webAppURL}/cli/auth?${params}`;
+  // For cli-setup, include redirect so OAuth callback returns to the same page
+  // instead of defaulting to "/". The app's useOAuthRedirect hook reads this param.
+  if (path !== "/cli/auth") {
+    params.set("redirect", `${path}?callback=${encodeURIComponent(callbackURL)}`);
+  }
+  return `${webAppURL}${path}?${params}`;
 }

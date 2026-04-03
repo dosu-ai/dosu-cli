@@ -12,6 +12,7 @@ export interface Config {
   deployment_id?: string;
   deployment_name?: string;
   api_key?: string;
+  mode?: "oss";
 }
 
 function getConfigDir(): string {
@@ -72,6 +73,7 @@ export function clearConfig(_cfg: Config): Config {
     deployment_id: undefined,
     deployment_name: undefined,
     api_key: undefined,
+    mode: undefined,
   };
 }
 
