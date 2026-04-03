@@ -1044,8 +1044,6 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(p.log.message).toHaveBeenCalledWith(
-      expect.stringContaining("open source libraries"),
-    );
+    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("open source libraries"));
   });
 });
