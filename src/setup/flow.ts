@@ -152,8 +152,8 @@ async function openBrowserForSetup(cfg: Config, opts: SetupOptions): Promise<Con
     const { startOAuthFlow } = await import("../auth/flow");
     const s = p.spinner();
     s.start("Waiting for authentication...");
-    // Use /cli-setup unless a specific deployment was already provided via --deployment flag
-    const authPath = opts.deploymentID ? "/cli/auth" : "/cli-setup";
+    // Use /cli/setup unless a specific deployment was already provided via --deployment flag
+    const authPath = opts.deploymentID ? "/cli/auth" : "/cli/setup";
     const token = await startOAuthFlow(undefined, authPath);
     s.stop("Authenticated");
 

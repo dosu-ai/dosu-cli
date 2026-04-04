@@ -982,6 +982,42 @@ describe("runSetup integration", () => {
     expect(saved.mode).toBe("oss");
   });
 
+  it("OSS mode handles getDeployments failure and exits at API key step", async () => {
+    const cfg = makeCfg({ mode: "oss", deployment_id: undefined, deployment_name: undefined });
+    saveConfig(cfg);
+
+    setupAuthenticatedClient({
+      getDeployments: vi.fn().mockRejectedValue(new Error("service unavailable")),
+    });
+    vi.mocked(p.select).mockResolvedValueOnce("keep");
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(p.log.error).toHaveBeenCalledWith("No deployment available for API key creation");
+    const saved = loadConfig();
+    expect(saved.deployment_id).toBeUndefined();
+    expect(p.outro).not.toHaveBeenCalled();
+  });
+
+  it("OSS mode exits early when no deployments are available", async () => {
+    const cfg = makeCfg({ mode: "oss", deployment_id: undefined, deployment_name: undefined });
+    saveConfig(cfg);
+
+    setupAuthenticatedClient({
+      getDeployments: vi.fn().mockResolvedValue([]),
+    });
+    vi.mocked(p.select).mockResolvedValueOnce("keep");
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(p.log.error).toHaveBeenCalledWith("No deployment available for API key creation");
+    const saved = loadConfig();
+    expect(saved.deployment_id).toBeUndefined();
+    expect(p.outro).not.toHaveBeenCalled();
+  });
+
   it("OSS mode shows OSS-specific outro message", async () => {
     const cfg = makeCfg({ mode: "oss" });
     saveConfig(cfg);

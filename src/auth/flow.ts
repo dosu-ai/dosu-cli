@@ -52,7 +52,7 @@ export async function startOAuthFlow(
 function buildAuthURL(callbackURL: string, path: string): string {
   const webAppURL = getWebAppURL();
   const params = new URLSearchParams({ callback: callbackURL });
-  // For cli-setup, include redirect so OAuth callback returns to the same page
+  // For cli/setup, include redirect so OAuth callback returns to the same page
   // instead of defaulting to "/". The app's useOAuthRedirect hook reads this param.
   if (path !== "/cli/auth") {
     params.set("redirect", `${path}?callback=${encodeURIComponent(callbackURL)}`);
