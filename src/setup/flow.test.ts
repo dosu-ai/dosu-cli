@@ -276,6 +276,25 @@ describe("stepConfigureTools", () => {
     expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Claude Desktop"));
   });
 
+  it("handles remove errors and records them in results", () => {
+    const claudeDesktop = ClaudeDesktopProvider();
+    const cfg = makeCfg();
+    // ClaudeDesktopProvider.remove() always throws
+    const selection: ToolSelection = {
+      toInstall: [],
+      toRemove: [claudeDesktop],
+      skipped: [],
+    };
+
+    const results = stepConfigureTools(cfg, selection);
+
+    expect(results).toHaveLength(1);
+    expect(results[0].action).toBe("remove");
+    expect(results[0].error).toBeDefined();
+    expect(results[0].error?.message).toContain("stdio");
+    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Claude Desktop"));
+  });
+
   it("handles mixed install, remove, and skip in one call", () => {
     const cfg = makeCfg();
     const _cursor = CursorProvider();
@@ -1029,6 +1048,41 @@ describe("runSetup integration", () => {
 
     const saved = loadConfig();
     expect(saved.mode).toBe("oss");
+  });
+
+  it("removes provider config when user deselects a previously configured tool", async () => {
+    const cfg = makeCfg();
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+
+    // Create detect paths for both cursor and opencode
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    mkdirSync(join(tempDir, ".config", "opencode"), { recursive: true });
+
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [
+      CursorProvider(),
+      OpenCodeProvider(),
+    ]);
+
+    // Pre-configure both providers so isConfigured() returns true
+    CursorProvider().install(cfg, true);
+    OpenCodeProvider().install(cfg, true);
+
+    // User deselects opencode but keeps cursor
+    vi.mocked(p.multiselect).mockResolvedValue(["cursor"]);
+
+    await runSetup();
+
+    // OpenCode should have been removed (configured + deselected)
+    const opencodeConfig = loadJSONConfig(join(tempDir, ".config", "opencode", "opencode.json"));
+    expect(opencodeConfig.mcp?.dosu).toBeUndefined();
+
+    // Cursor config should still have dosu entry (was skipped)
+    const cursorConfig = loadJSONConfig(join(tempDir, ".cursor", "mcp.json"));
+    expect(cursorConfig.mcpServers?.dosu).toBeDefined();
+
+    expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("Removed from 1 tool"));
   });
 
   it("OSS mode stepShowSummary uses OSS-specific prompt", async () => {
