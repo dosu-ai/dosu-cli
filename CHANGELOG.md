@@ -1,3 +1,10 @@
+## [0.3.1](https://github.com/dosu-ai/dosu-cli/compare/v0.3.0...v0.3.1) (2026-04-04)
+
+
+### Bug Fixes
+
+* rename /cli-setup to /cli/setup for consistent URL structure ([#34](https://github.com/dosu-ai/dosu-cli/issues/34)) ([dedbd32](https://github.com/dosu-ai/dosu-cli/commit/dedbd32b992bb6421640fdea88f286705f0379b3))
+
 # [0.3.0](https://github.com/dosu-ai/dosu-cli/compare/v0.2.0...v0.3.0) (2026-04-04)
 
 
