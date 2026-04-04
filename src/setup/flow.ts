@@ -390,7 +390,7 @@ export function stepShowSummary(results: ConfigResult[], mode?: SetupMode): void
   if (installed.length > 0 || skipped.length > 0) {
     const prompt =
       mode === MODE_OSS
-        ? `Use Dosu to search open source libraries and answer: what are the main components of this project?`
+        ? `What can I do with the Dosu MCP?`
         : `Use Dosu to search our team's documentation and answer: what are the main components of our system?`;
     p.log.message(`Try it out! Paste this into your agent:\n\n${info(prompt)}`);
   }
