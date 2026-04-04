@@ -945,4 +945,105 @@ describe("runSetup integration", () => {
 
     expect(p.log.warn).toHaveBeenCalledWith("Session expired.");
   });
+
+  it("OSS mode skips org selection and fetches first deployment", async () => {
+    const cfg = makeCfg({ mode: "oss", deployment_id: undefined, deployment_name: undefined });
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    // Reconfigure prompt → keep current setup
+    vi.mocked(p.select).mockResolvedValueOnce("keep");
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    // Should have saved deployment from fetchDeployments
+    const saved = loadConfig();
+    expect(saved.deployment_id).toBe("d1");
+    expect(saved.mode).toBe("oss");
+  });
+
+  it("OSS mode shows OSS-specific outro message", async () => {
+    const cfg = makeCfg({ mode: "oss" });
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    // Reconfigure prompt → keep current setup
+    vi.mocked(p.select).mockResolvedValueOnce("keep");
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    vi.mocked(p.multiselect).mockResolvedValue(["cursor"]);
+
+    await runSetup();
+
+    expect(p.outro).toHaveBeenCalledWith(expect.stringContaining("open-source libraries only"));
+  });
+
+  it("OSS mode reconfigure prompt lets user keep current setup", async () => {
+    const cfg = makeCfg({ mode: "oss" });
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    vi.mocked(p.select).mockResolvedValueOnce("keep");
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    // Should have shown reconfigure prompt
+    expect(p.select).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("open-source libraries") }),
+    );
+  });
+
+  it("OSS mode reconfigure prompt opens browser on reconfigure", async () => {
+    const cfg = makeCfg({ mode: "oss" });
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    vi.mocked(p.select).mockResolvedValueOnce("reconfigure");
+    mockStartOAuthFlow.mockResolvedValue({
+      access_token: "new-tok",
+      refresh_token: "new-ref",
+      expires_in: 3600,
+    } as TokenResponse);
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(mockStartOAuthFlow).toHaveBeenCalled();
+  });
+
+  it("OAuth flow sets OSS mode when token signals it", async () => {
+    vi.mocked(p.confirm).mockResolvedValue(true);
+    mockStartOAuthFlow.mockResolvedValue({
+      access_token: "oss-tok",
+      refresh_token: "oss-ref",
+      expires_in: 7200,
+      mode: "oss",
+    } as TokenResponse);
+
+    setupAuthenticatedClient();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    const saved = loadConfig();
+    expect(saved.mode).toBe("oss");
+  });
+
+  it("OSS mode stepShowSummary uses OSS-specific prompt", async () => {
+    const cfg = makeCfg({ mode: "oss" });
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    // Reconfigure prompt → keep current setup
+    vi.mocked(p.select).mockResolvedValueOnce("keep");
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    vi.mocked(p.multiselect).mockResolvedValue(["cursor"]);
+
+    await runSetup();
+
+    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("Dosu MCP"));
+  });
 });

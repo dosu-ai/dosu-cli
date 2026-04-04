@@ -2,11 +2,14 @@
  * Local OAuth callback server.
  */
 
+import { MODE_OSS, type SetupMode } from "../config/config";
+
 export interface TokenResponse {
   access_token: string;
   refresh_token: string;
   expires_in: number;
   email?: string;
+  mode?: SetupMode;
 }
 
 const CALLBACK_HTML_EXTRACT = `<!DOCTYPE html>
@@ -210,6 +213,7 @@ export async function startCallbackServer(): Promise<{
     const refreshToken = url.searchParams.get("refresh_token");
     const expiresIn = url.searchParams.get("expires_in");
     const email = url.searchParams.get("email");
+    const mode = url.searchParams.get("mode");
 
     if (!accessToken) {
       res.writeHead(200, { "Content-Type": "text/html" });
@@ -229,6 +233,7 @@ export async function startCallbackServer(): Promise<{
       refresh_token: refreshToken && refreshToken !== "null" ? refreshToken : "",
       expires_in: expiresInInt,
       email: email ?? undefined,
+      ...(mode === MODE_OSS && { mode: MODE_OSS }),
     });
 
     res.writeHead(200, { "Content-Type": "text/html" });

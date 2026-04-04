@@ -3,10 +3,11 @@
  * Most providers follow the same install/remove pattern — only the config path and top-level key differ.
  */
 
-import type { Config } from "../../config/config";
+import { type Config, MODE_OSS } from "../../config/config";
 import {
   installJSONServer,
   isJSONKeyConfigured,
+  mcpBaseURL,
   mcpHeaders,
   mcpURL,
   removeJSONServer,
@@ -39,6 +40,14 @@ export function createJSONProvider(opts: BaseProviderConfig): SetupProvider {
     headers: mcpHeaders(cfg.api_key!),
   });
 
+  // biome-ignore lint/suspicious/noExplicitAny: server entries are arbitrary JSON
+  const defaultBuildOSSServer = (cfg: Config): Record<string, any> => ({
+    type: "http",
+    url: mcpBaseURL(),
+    // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
+    headers: mcpHeaders(cfg.api_key!),
+  });
+
   const buildServer = opts.buildServer ?? defaultBuildServer;
 
   return {
@@ -52,7 +61,7 @@ export function createJSONProvider(opts: BaseProviderConfig): SetupProvider {
     isConfigured: () => isJSONKeyConfigured(expandHome(opts.globalPath), opts.topKey),
 
     install(cfg: Config, global: boolean): void {
-      if (!cfg.deployment_id) throw new Error("deployment ID is required");
+      if (cfg.mode !== MODE_OSS && !cfg.deployment_id) throw new Error("deployment ID is required");
       let configPath: string;
       if (global) {
         configPath = expandHome(opts.globalPath);
@@ -61,7 +70,8 @@ export function createJSONProvider(opts: BaseProviderConfig): SetupProvider {
       } else {
         throw new Error(`${opts.providerName} does not support local installation`);
       }
-      installJSONServer(configPath, opts.topKey, buildServer(cfg));
+      const serverBuilder = cfg.mode === MODE_OSS ? defaultBuildOSSServer : buildServer;
+      installJSONServer(configPath, opts.topKey, serverBuilder(cfg));
     },
 
     remove(global: boolean): void {

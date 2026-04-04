@@ -5,6 +5,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+/** Setup mode: OSS = public libraries only, undefined = standard (cloud) flow. */
+export const MODE_OSS = "oss" as const;
+export type SetupMode = typeof MODE_OSS;
+
 export interface Config {
   access_token: string;
   refresh_token: string;
@@ -12,6 +16,7 @@ export interface Config {
   deployment_id?: string;
   deployment_name?: string;
   api_key?: string;
+  mode?: SetupMode;
 }
 
 function getConfigDir(): string {
@@ -72,6 +77,7 @@ export function clearConfig(_cfg: Config): Config {
     deployment_id: undefined,
     deployment_name: undefined,
     api_key: undefined,
+    mode: undefined,
   };
 }
 

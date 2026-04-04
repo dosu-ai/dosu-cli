@@ -4,7 +4,7 @@
 
 import * as p from "@clack/prompts";
 import { Client, type Deployment, type Org, SessionExpiredError } from "../client/client";
-import { type Config, loadConfig, saveConfig } from "../config/config";
+import { type Config, loadConfig, MODE_OSS, type SetupMode, saveConfig } from "../config/config";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { dim, info } from "./styles";
 
@@ -30,30 +30,38 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   p.intro("Dosu CLI Setup");
 
   // Step 1: Authenticate
-  const cfg = await stepAuthenticate();
+  const cfg = await stepAuthenticate(opts);
   if (!cfg) return;
 
   const apiClient = new Client(cfg);
 
-  // Step 2: Select deployment
-  let deployment: Deployment;
+  // Step 2: Branch on mode
   if (opts.deploymentID) {
+    // --deployment flag provided, use specified deployment
     const d = await stepResolveDeployment(apiClient, opts.deploymentID);
     if (!d) return;
-    deployment = d;
+    cfg.deployment_id = d.deployment_id;
+    cfg.deployment_name = d.name;
+  } else if (cfg.mode === MODE_OSS) {
+    // OSS path: fetch first available deployment for API key creation only
+    const deployments = await fetchDeployments(apiClient);
+    if (deployments.length > 0) {
+      cfg.deployment_id = deployments[0].deployment_id;
+      cfg.deployment_name = deployments[0].name;
+    }
   } else {
+    // Standard path: select deployment interactively
     const org = await stepSelectOrg(apiClient);
     if (!org) return;
     const d = await stepSelectDeployment(apiClient, org);
     if (!d) return;
-    deployment = d;
+    cfg.deployment_id = d.deployment_id;
+    cfg.deployment_name = d.name;
   }
 
-  cfg.deployment_id = deployment.deployment_id;
-  cfg.deployment_name = deployment.name;
   saveConfig(cfg);
 
-  // Step 3: API key
+  // Step 3: API key (needed for both modes)
   const apiKey = await stepMintAPIKey(apiClient, cfg);
   if (!apiKey) return;
   cfg.api_key = apiKey;
@@ -72,12 +80,18 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   if (!selection) return;
 
   const results = stepConfigureTools(cfg, selection);
-  stepShowSummary(results);
+  stepShowSummary(results, cfg.mode);
 
-  p.outro("\uD83C\uDF89 Setup complete!");
+  if (cfg.mode === MODE_OSS) {
+    p.outro(
+      "Setup complete! Using open-source libraries only.\nRun `dosu setup` again to connect your own repos.",
+    );
+  } else {
+    p.outro("\uD83C\uDF89 Setup complete!");
+  }
 }
 
-async function stepAuthenticate(): Promise<Config | null> {
+async function stepAuthenticate(opts: SetupOptions): Promise<Config | null> {
   const cfg = loadConfig();
 
   // If we have a token, verify it against the backend first
@@ -89,6 +103,23 @@ async function stepAuthenticate(): Promise<Config | null> {
       const resp = await apiClient.doRequestRaw("GET", "/v1/mcp/deployments");
       if (resp.status === 200) {
         s.stop("Authenticated");
+
+        // If configured for OSS and no --deployment flag, let the user reconfigure
+        if (!opts.deploymentID && cfg.mode === MODE_OSS) {
+          const modeLabel = "open-source libraries only";
+          const action = await p.select({
+            message: `Currently configured for ${modeLabel}. What would you like to do?`,
+            options: [
+              { label: "Reconfigure (opens browser)", value: "reconfigure" },
+              { label: "Keep current setup and update tools", value: "keep" },
+            ],
+          });
+          if (p.isCancel(action)) return null;
+          if (action === "keep") return cfg;
+          // Reconfigure: open browser for mode re-selection
+          return await openBrowserForSetup(cfg, opts);
+        }
+
         return cfg;
       }
       // Any non-200 status — try refresh before giving up
@@ -113,22 +144,38 @@ async function stepAuthenticate(): Promise<Config | null> {
   const shouldLogin = await p.confirm({ message: "Open browser to log in?" });
   if (p.isCancel(shouldLogin) || !shouldLogin) return null;
 
+  return await openBrowserForSetup(cfg, opts);
+}
+
+async function openBrowserForSetup(cfg: Config, opts: SetupOptions): Promise<Config | null> {
   try {
     const { startOAuthFlow } = await import("../auth/flow");
     const s = p.spinner();
     s.start("Waiting for authentication...");
-    const token = await startOAuthFlow();
+    // Use /cli-setup unless a specific deployment was already provided via --deployment flag
+    const authPath = opts.deploymentID ? "/cli/auth" : "/cli-setup";
+    const token = await startOAuthFlow(undefined, authPath);
     s.stop("Authenticated");
 
     cfg.access_token = token.access_token;
     cfg.refresh_token = token.refresh_token;
     cfg.expires_at = Math.floor(Date.now() / 1000) + token.expires_in;
+    // Only OSS mode is signaled from the browser; absence means cloud (existing flow)
+    if (token.mode === MODE_OSS) cfg.mode = MODE_OSS;
     saveConfig(cfg);
     return cfg;
   } catch (err: unknown) {
     /* v8 ignore next -- err is always Error in practice */
     p.log.error(`Authentication failed: ${err instanceof Error ? err.message : String(err)}`);
     return null;
+  }
+}
+
+async function fetchDeployments(apiClient: Client): Promise<Deployment[]> {
+  try {
+    return await apiClient.getDeployments();
+  } catch {
+    return [];
   }
 }
 
@@ -208,8 +255,13 @@ async function stepSelectDeployment(apiClient: Client, org: Org): Promise<Deploy
 }
 
 async function stepMintAPIKey(apiClient: Client, cfg: Config): Promise<string | null> {
+  if (!cfg.deployment_id) {
+    p.log.error("No deployment available for API key creation");
+    return null;
+  }
+
   if (cfg.api_key) {
-    // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
+    // biome-ignore lint/style/noNonNullAssertion: checked above
     const valid = await apiClient.validateAPIKey(cfg.api_key, cfg.deployment_id!);
     if (valid) {
       p.log.success(`API key\n${dim("using existing")}`);
@@ -219,7 +271,7 @@ async function stepMintAPIKey(apiClient: Client, cfg: Config): Promise<string | 
   }
 
   try {
-    // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
+    // biome-ignore lint/style/noNonNullAssertion: checked above
     const resp = await apiClient.createAPIKey(cfg.deployment_id!, "dosu-cli");
     p.log.success(`API key\n${dim("created")}`);
     return resp.api_key;
@@ -312,7 +364,7 @@ export function stepConfigureTools(cfg: Config, selection: ToolSelection): Confi
   return results;
 }
 
-export function stepShowSummary(results: ConfigResult[]): void {
+export function stepShowSummary(results: ConfigResult[], mode?: SetupMode): void {
   const installed = results.filter((r) => r.action === "install" && !r.error);
   const removed = results.filter((r) => r.action === "remove" && !r.error);
   const skipped = results.filter((r) => r.action === "skip");
@@ -336,11 +388,10 @@ export function stepShowSummary(results: ConfigResult[]): void {
   }
 
   if (installed.length > 0 || skipped.length > 0) {
-    p.log.message(
-      `Try it out! Paste this into your agent:\n\n` +
-        info(
-          `Use Dosu to search our team's documentation and answer: what are the main components of our system?`,
-        ),
-    );
+    const prompt =
+      mode === MODE_OSS
+        ? `What can I do with the Dosu MCP?`
+        : `Use Dosu to search our team's documentation and answer: what are the main components of our system?`;
+    p.log.message(`Try it out! Paste this into your agent:\n\n${info(prompt)}`);
   }
 }

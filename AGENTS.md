@@ -58,12 +58,30 @@ Key modules:
 
 ## Commit Convention
 
-Commit messages must follow [Conventional Commits](https://www.conventionalcommits.org/):
+This project uses [semantic-release](https://github.com/semantic-release/semantic-release) for automated versioning and publishing. **Only commits that follow [Conventional Commits](https://www.conventionalcommits.org/) will be recognized by the release pipeline.** Non-conforming commit messages are invisible to semantic-release and will NOT trigger a version bump.
 
-- `fix: xxx` — patch release
-- `feat: xxx` — minor release
-- `feat!:` / `fix!: xxx` — major release (breaking change)
-- `docs` / `chore` / `refactor` / `test` / `ci: xxx` — no release
+### Format
+
+```
+<type>[optional scope]: <description>
+
+[optional body]
+
+[optional footer(s)]
+```
+
+### Types and their release impact
+
+| Type | Release | Example |
+|------|---------|---------|
+| `fix:` | patch (0.0.x) | `fix: handle empty config file without crash` |
+| `feat:` | minor (0.x.0) | `feat: add OSS mode support to setup flow` |
+| `fix!:` / `feat!:` | **major (x.0.0)** | `feat!: remove legacy auth flow` |
+| `docs:` | none | `docs: update README with new CLI flags` |
+| `chore:` | none | `chore: upgrade vitest to v3` |
+| `refactor:` | none | `refactor: extract provider factory` |
+| `test:` | none | `test: add coverage for MCP config edge cases` |
+| `ci:` | none | `ci: upgrade GitHub Actions to v6` |
 
 Scopes are optional: `fix(config): handle empty file without crash`
 
@@ -72,7 +90,3 @@ Scopes are optional: `fix(config): handle empty file without crash`
 - `DOSU_DEV=true` — switches all URLs to localhost dev endpoints
 - `DOSU_WEB_APP_URL`, `DOSU_BACKEND_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY` — individual URL overrides
 - `DOSU_VERSION`, `DOSU_COMMIT`, `DOSU_DATE` — injected at build time for version info
-
-## Release Process
-
-Tag-driven via GitHub Actions. Push a tag like `v0.2.0` to `main` to trigger builds for all platforms, npm publish, and Homebrew formula update. Pre-release tags (`-alpha`, `-beta`, `-rc`) publish to npm `next` dist-tag.
