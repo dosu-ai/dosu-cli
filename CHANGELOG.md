@@ -1,3 +1,10 @@
+## [0.3.2](https://github.com/dosu-ai/dosu-cli/compare/v0.3.1...v0.3.2) (2026-04-05)
+
+
+### Bug Fixes
+
+* add fallback UI when window.close() is blocked by browser ([#35](https://github.com/dosu-ai/dosu-cli/issues/35)) ([509c391](https://github.com/dosu-ai/dosu-cli/commit/509c391eb7951ddb7d403035360c0a56cd6038bf))
+
 ## [0.3.1](https://github.com/dosu-ai/dosu-cli/compare/v0.3.0...v0.3.1) (2026-04-04)
 
 
