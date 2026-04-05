@@ -26,6 +26,10 @@ vi.mock("../client/client", () => ({
   Client: vi.fn(),
 }));
 
+vi.mock("../auth/flow", () => ({
+  startOAuthFlow: vi.fn(),
+}));
+
 vi.mock("picocolors", () => ({
   default: {
     magenta: (s: string) => s,
@@ -38,6 +42,7 @@ vi.mock("picocolors", () => ({
 // ---------------------------------------------------------------------------
 
 import * as p from "@clack/prompts";
+import { startOAuthFlow } from "../auth/flow";
 import { Client } from "../client/client";
 import type { Config } from "../config/config";
 import { loadConfig, saveConfig } from "../config/config";
@@ -48,6 +53,7 @@ const mockSelect = vi.mocked(p.select);
 const mockConfirm = vi.mocked(p.confirm);
 const mockIsCancel = vi.mocked(p.isCancel);
 const mockOutro = vi.mocked(p.outro);
+const mockStartOAuthFlow = vi.mocked(startOAuthFlow);
 
 // ---------------------------------------------------------------------------
 // Temp directory setup — real config on disk
@@ -64,7 +70,13 @@ beforeEach(() => {
   process.env.XDG_CONFIG_HOME = tempDir;
   process.env.HOME = tempDir;
 
-  vi.clearAllMocks();
+  vi.resetAllMocks();
+  // Restore spinner factory cleared by resetAllMocks
+  vi.mocked(p.spinner).mockReturnValue({
+    start: vi.fn(),
+    stop: vi.fn(),
+    message: vi.fn(),
+  } as ReturnType<typeof p.spinner>);
   vi.spyOn(console, "log").mockImplementation(() => {});
 });
 
@@ -217,6 +229,125 @@ describe("runTUI", () => {
 
     expect(mockDoRequestRaw).toHaveBeenCalledWith("GET", "/v1/mcp/deployments");
     expect(mockOutro).toHaveBeenCalledWith("Goodbye!");
+  });
+
+  it("refreshes token when verification returns non-200", async () => {
+    writeRealConfig(makeCfg({ access_token: "tok" }));
+    mockIsCancel.mockReturnValue(false);
+
+    const mockRefreshToken = vi.fn().mockResolvedValue(undefined);
+    const mockDoRequestRaw = vi.fn().mockResolvedValue({ status: 401 });
+    vi.mocked(Client).mockImplementation(
+      () =>
+        ({ doRequestRaw: mockDoRequestRaw, refreshToken: mockRefreshToken }) as unknown as Client,
+    );
+
+    mockSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    expect(mockRefreshToken).toHaveBeenCalled();
+  });
+
+  it("falls through to login when refresh fails", async () => {
+    writeRealConfig(makeCfg({ access_token: "tok" }));
+    mockIsCancel.mockReturnValue(false);
+
+    const mockRefreshToken = vi.fn().mockRejectedValue(new Error("refresh failed"));
+    const mockDoRequestRaw = vi.fn().mockResolvedValue({ status: 401 });
+    vi.mocked(Client).mockImplementation(
+      () =>
+        ({ doRequestRaw: mockDoRequestRaw, refreshToken: mockRefreshToken }) as unknown as Client,
+    );
+
+    // User declines to open browser
+    mockConfirm.mockResolvedValueOnce(false);
+
+    mockSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    expect(mockConfirm).toHaveBeenCalledWith({ message: "Open browser to log in?" });
+  });
+
+  it("falls through to login when verification throws", async () => {
+    writeRealConfig(makeCfg({ access_token: "tok" }));
+    mockIsCancel.mockReturnValue(false);
+
+    const mockDoRequestRaw = vi.fn().mockRejectedValue(new Error("network error"));
+    vi.mocked(Client).mockImplementation(
+      () => ({ doRequestRaw: mockDoRequestRaw }) as unknown as Client,
+    );
+
+    // User declines to open browser
+    mockConfirm.mockResolvedValueOnce(false);
+
+    mockSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    expect(mockConfirm).toHaveBeenCalledWith({ message: "Open browser to log in?" });
+  });
+
+  it("opens browser and saves token on successful OAuth flow", async () => {
+    writeRealConfig(makeCfg({ access_token: "" }));
+    mockIsCancel.mockReturnValue(false);
+    mockConfirm.mockResolvedValueOnce(true);
+
+    mockStartOAuthFlow.mockResolvedValueOnce({
+      access_token: "new-tok",
+      refresh_token: "new-ref",
+      expires_in: 3600,
+    });
+
+    mockSelect.mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    expect(mockStartOAuthFlow).toHaveBeenCalledWith(undefined, "/cli/auth");
+    const ondisk = readRealConfig();
+    expect(ondisk.access_token).toBe("new-tok");
+    expect(ondisk.refresh_token).toBe("new-ref");
+  });
+
+  it("saves OSS mode from OAuth token response", async () => {
+    writeRealConfig(makeCfg({ access_token: "" }));
+    mockIsCancel.mockReturnValue(false);
+    mockConfirm.mockResolvedValueOnce(true);
+
+    mockStartOAuthFlow.mockResolvedValueOnce({
+      access_token: "new-tok",
+      refresh_token: "new-ref",
+      expires_in: 3600,
+      mode: "oss",
+    });
+
+    mockSelect.mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    const ondisk = readRealConfig();
+    expect(ondisk.mode).toBe("oss");
+  });
+
+  it("shows error when OAuth flow fails", async () => {
+    writeRealConfig(makeCfg({ access_token: "" }));
+    mockConfirm.mockResolvedValueOnce(true);
+    mockStartOAuthFlow.mockRejectedValueOnce(new Error("auth timeout"));
+
+    await runTUI();
+
+    expect(p.log.error).toHaveBeenCalledWith("Authentication failed: auth timeout");
+  });
+
+  it("does nothing when user cancels confirm prompt", async () => {
+    writeRealConfig(makeCfg({ access_token: "" }));
+    mockIsCancel.mockReturnValue(true);
+    mockConfirm.mockResolvedValueOnce(Symbol.for("cancel") as unknown as boolean);
+
+    await runTUI();
+
+    expect(mockStartOAuthFlow).not.toHaveBeenCalled();
   });
 
   it("logout action clears real config on disk", async () => {
