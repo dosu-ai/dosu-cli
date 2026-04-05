@@ -7,7 +7,7 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { Client } from "../client/client";
-import { MODE_OSS, isAuthenticated, loadConfig, saveConfig } from "../config/config";
+import { isAuthenticated, loadConfig, MODE_OSS, saveConfig } from "../config/config";
 
 const LOGO = `
  /$$$$$$$
