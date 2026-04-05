@@ -5,7 +5,7 @@
 
 function readPackageVersion(): string {
   try {
-    return require("../../package.json").version ?? "dev";
+    return require("../../package.json").version;
     /* v8 ignore next 3 -- unreachable in test: package.json always exists */
   } catch {
     return "dev";
