@@ -1,14 +1,21 @@
 /**
- * Version information — injected at build time, with dev fallbacks for local source runs.
+ * Version information — injected at build time via --define.
+ * When running from source (bun run dev), falls back to package.json.
  */
 
-export const VERSION = process.env.DOSU_VERSION ?? "dev";
-export const COMMIT = process.env.DOSU_COMMIT ?? "none";
-export const DATE = process.env.DOSU_DATE ?? "unknown";
+function readPackageVersion(): string {
+  try {
+    return require("../../package.json").version ?? "dev";
+  } catch {
+    return "dev";
+  }
+}
+
+export const VERSION = process.env.DOSU_VERSION ?? readPackageVersion();
 
 /**
- * Returns a formatted version string.
+ * Returns a formatted version string, e.g. "dosu v0.3.1".
  */
 export function getVersionString(): string {
-  return `dosu ${VERSION} (${COMMIT}, ${DATE})`;
+  return `v${VERSION}`;
 }

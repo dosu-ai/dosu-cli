@@ -19,7 +19,7 @@ describe("CLI", () => {
 
   it("has version flag", () => {
     const program = createProgram();
-    expect(program.version()).toMatch(/dosu .+/);
+    expect(program.version()).toMatch(/^v\d+/);
   });
 
   it("has login command", () => {

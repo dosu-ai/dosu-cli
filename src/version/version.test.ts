@@ -1,16 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { COMMIT, DATE, getVersionString, VERSION } from "./version";
+import { getVersionString, VERSION } from "./version";
 
 describe("version", () => {
-  it("should have default values when env vars are not set", () => {
-    expect(VERSION).toBe("dev");
-    expect(COMMIT).toBe("none");
-    expect(DATE).toBe("unknown");
+  it("should read version from package.json in dev mode", () => {
+    // When DOSU_VERSION is not set (dev mode), falls back to package.json
+    expect(VERSION).toMatch(/^\d+\.\d+\.\d+/);
   });
 
-  it("should return formatted version string", () => {
+  it("should return clean version string", () => {
     const result = getVersionString();
-    expect(result).toMatch(/^dosu .+ \(.+, .+\)$/);
-    expect(result).toContain("dev");
+    expect(result).toMatch(/^v\d+\.\d+\.\d+/);
   });
 });

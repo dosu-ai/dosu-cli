@@ -5,8 +5,13 @@
  * Builds standalone binaries for all supported platforms using `bun build --compile`.
  */
 
-import { existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const SCRIPT_DIR =
+  typeof import.meta.dir === "string" ? import.meta.dir : dirname(fileURLToPath(import.meta.url));
+const PACKAGE_JSON_PATH = join(SCRIPT_DIR, "..", "package.json");
 
 const TARGETS = [
   { target: "bun-darwin-arm64", output: "dosu-darwin-arm64" },
@@ -18,20 +23,23 @@ const TARGETS = [
   { target: "bun-windows-x64-baseline", output: "dosu-windows-x64.exe" },
 ];
 
+function readPackageVersion(): string {
+  try {
+    return JSON.parse(readFileSync(PACKAGE_JSON_PATH, "utf8")).version ?? "dev";
+  } catch {
+    return "dev";
+  }
+}
+
 /**
- * Build --define flags to bake version info into the compiled binary.
+ * Build --define flags to bake config into compiled/bundled output.
  *
  * `bun build --compile` produces a standalone executable that does NOT inherit
  * the build-time environment, so `process.env.X` reads return undefined at
- * runtime. `--define` replaces identifiers at compile time, turning e.g.
- *   process.env.DOSU_VERSION ?? "dev"
- * into
- *   "0.2.0" ?? "dev"          →  "0.2.0"
+ * runtime. `--define` replaces identifiers at compile time.
  */
 export function buildDefines(): string[] {
-  const version = process.env.DOSU_VERSION ?? "dev";
-  const commit = process.env.DOSU_COMMIT ?? "none";
-  const date = process.env.DOSU_DATE ?? "unknown";
+  const version = process.env.DOSU_VERSION ?? readPackageVersion();
   const webAppURL = process.env.DOSU_WEB_APP_URL ?? "";
   const backendURL = process.env.DOSU_BACKEND_URL ?? "";
   const supabaseURL = process.env.SUPABASE_URL ?? "";
@@ -40,10 +48,6 @@ export function buildDefines(): string[] {
   return [
     "--define",
     `process.env.DOSU_VERSION=${JSON.stringify(version)}`,
-    "--define",
-    `process.env.DOSU_COMMIT=${JSON.stringify(commit)}`,
-    "--define",
-    `process.env.DOSU_DATE=${JSON.stringify(date)}`,
     "--define",
     `process.env.DOSU_WEB_APP_URL=${JSON.stringify(webAppURL)}`,
     "--define",
@@ -56,7 +60,7 @@ export function buildDefines(): string[] {
 }
 
 async function main() {
-  const distDir = join(import.meta.dir, "..", "dist");
+  const distDir = join(SCRIPT_DIR, "..", "dist");
   if (!existsSync(distDir)) mkdirSync(distDir, { recursive: true });
 
   const defines = buildDefines();
