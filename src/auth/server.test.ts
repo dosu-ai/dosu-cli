@@ -130,27 +130,15 @@ describe("auth callback server", () => {
     expect(html).toContain("viewBox");
   });
 
-  it("success page includes 10s auto-close countdown with fallback", async () => {
+  it("success page shows static close message without scripts", async () => {
     const result = await startCallbackServer();
     server = result.server;
 
     const resp = await fetch(`http://localhost:${server.port}/callback?access_token=tok`);
     const html = await resp.text();
-    expect(html).toContain('id="countdown">10</span>');
-    expect(html).toContain("tryClose()");
-    expect(html).toContain("window.close()");
-    // Fallback: updates UI when window.close() doesn't work
-    expect(html).toContain("You can close this tab now.");
-  });
-
-  it("success page card is clickable to close with fallback", async () => {
-    const result = await startCallbackServer();
-    server = result.server;
-
-    const resp = await fetch(`http://localhost:${server.port}/callback?access_token=tok`);
-    const html = await resp.text();
-    expect(html).toContain('id="close-card" onclick="tryClose()"');
-    expect(html).toContain("cursor: pointer");
+    expect(html).toContain("You can close this tab and return to your terminal.");
+    expect(html).not.toContain("<script>");
+    expect(html).not.toContain("countdown");
   });
 
   it("email is rendered bold in success page", async () => {

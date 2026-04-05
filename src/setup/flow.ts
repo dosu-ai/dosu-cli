@@ -84,7 +84,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
 
   if (cfg.mode === MODE_OSS) {
     p.outro(
-      "Setup complete! Using open-source libraries only.\nRun `dosu setup` again to connect your own repos.",
+      "Setup complete! Using open-source libraries only.\n\nTips: Run `dosu setup` again to connect your own repos.",
     );
   } else {
     p.outro("\uD83C\uDF89 Setup complete!");

@@ -127,25 +127,10 @@ h1 {
     color: #999;
     margin-bottom: 28px;
 }
-.card {
-    background: #fff;
-    border: 1px solid #eaeaea;
-    border-radius: 8px;
-    padding: 16px 20px;
+.close-msg {
+    margin-top: 4px;
     font-size: 16px;
     color: #666;
-    line-height: 1.5;
-    cursor: pointer;
-    transition: background 0.15s, border-color 0.15s;
-}
-.card:hover {
-    background: #f5f5f5;
-    border-color: #ccc;
-}
-.close-hint {
-    margin-top: 20px;
-    font-size: 14px;
-    color: #999;
 }
 </style>
 </head>
@@ -168,25 +153,8 @@ h1 {
     <h1>Authentication Successful</h1>
     <p class="subtitle">You're all set. The CLI is now authenticated.</p>
     ${emailLine}
-    <div class="card" id="close-card" onclick="tryClose()">Close this tab and return to your terminal.</div>
-    <p class="close-hint" id="close-hint">This tab will close automatically in <span id="countdown">10</span>s</p>
+    <p class="close-msg">You can close this tab and return to your terminal.</p>
 </div>
-<script>
-function tryClose(){
-    window.close();
-    setTimeout(function(){
-        var c=document.getElementById('close-card');
-        c.textContent='You can close this tab now.';
-        c.style.cursor='default';
-        c.onclick=null;
-        var h=document.getElementById('close-hint');
-        if(h)h.style.display='none';
-        clearInterval(t);
-    },500);
-}
-var s=10,el=document.getElementById('countdown');
-var t=setInterval(function(){if(--s<=0){clearInterval(t);tryClose();}el.textContent=s;},1000);
-</script>
 </body>
 </html>`;
 }
