@@ -1068,6 +1068,26 @@ describe("runSetup integration", () => {
     expect(mockStartOAuthFlow).toHaveBeenCalled();
   });
 
+  it("OSS mode reconfigure clears mode when token has no OSS signal", async () => {
+    const cfg = makeCfg({ mode: "oss" });
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    vi.mocked(p.select).mockResolvedValueOnce("reconfigure");
+    // Token WITHOUT mode: "oss" means user switched to cloud/standard flow
+    mockStartOAuthFlow.mockResolvedValue({
+      access_token: "new-tok",
+      refresh_token: "new-ref",
+      expires_in: 3600,
+    } as TokenResponse);
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    const saved = loadConfig();
+    expect(saved.mode).toBeUndefined();
+  });
+
   it("OAuth flow sets OSS mode when token signals it", async () => {
     vi.mocked(p.confirm).mockResolvedValue(true);
     mockStartOAuthFlow.mockResolvedValue({

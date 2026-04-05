@@ -160,8 +160,8 @@ async function openBrowserForSetup(cfg: Config, opts: SetupOptions): Promise<Con
     cfg.access_token = token.access_token;
     cfg.refresh_token = token.refresh_token;
     cfg.expires_at = Math.floor(Date.now() / 1000) + token.expires_in;
-    // Only OSS mode is signaled from the browser; absence means cloud (existing flow)
-    if (token.mode === MODE_OSS) cfg.mode = MODE_OSS;
+    // Sync mode from browser: OSS when signaled, clear otherwise (cloud flow)
+    cfg.mode = token.mode === MODE_OSS ? MODE_OSS : undefined;
     saveConfig(cfg);
     return cfg;
   } catch (err: unknown) {

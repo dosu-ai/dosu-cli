@@ -3,13 +3,7 @@ import { getBackendURL, getSupabaseAnonKey, getSupabaseURL, getWebAppURL } from 
 
 describe("constants", () => {
   const savedEnv: Record<string, string | undefined> = {};
-  const ENV_KEYS = [
-    "DOSU_WEB_APP_URL",
-    "DOSU_BACKEND_URL",
-    "SUPABASE_URL",
-    "SUPABASE_ANON_KEY",
-    "DOSU_DEV",
-  ];
+  const ENV_KEYS = ["DOSU_WEB_APP_URL", "DOSU_BACKEND_URL", "SUPABASE_URL", "SUPABASE_ANON_KEY"];
 
   beforeEach(() => {
     for (const key of ENV_KEYS) {
