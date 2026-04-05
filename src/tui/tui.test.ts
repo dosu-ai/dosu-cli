@@ -9,19 +9,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@clack/prompts", () => ({
   select: vi.fn(),
+  confirm: vi.fn(),
   isCancel: vi.fn(),
   cancel: vi.fn(),
   outro: vi.fn(),
+  spinner: vi.fn(() => ({ start: vi.fn(), stop: vi.fn() })),
   log: {
     warn: vi.fn(),
     success: vi.fn(),
     error: vi.fn(),
     info: vi.fn(),
   },
-}));
-
-vi.mock("../setup/flow", () => ({
-  runSetup: vi.fn(),
 }));
 
 vi.mock("../client/client", () => ({
@@ -44,13 +42,12 @@ import { Client } from "../client/client";
 import type { Config } from "../config/config";
 import { loadConfig, saveConfig } from "../config/config";
 import { loadJSONConfig } from "../mcp/config-helpers";
-import { runSetup } from "../setup/flow";
 import { handleLogout, runTUI } from "./tui";
 
 const mockSelect = vi.mocked(p.select);
+const mockConfirm = vi.mocked(p.confirm);
 const mockIsCancel = vi.mocked(p.isCancel);
 const mockOutro = vi.mocked(p.outro);
-const mockRunSetup = vi.mocked(runSetup);
 
 // ---------------------------------------------------------------------------
 // Temp directory setup — real config on disk
@@ -173,13 +170,14 @@ describe("handleLogout (direct)", () => {
 // ---------------------------------------------------------------------------
 
 describe("runTUI", () => {
-  it("calls runSetup when not authenticated (real config, no file on disk)", async () => {
+  it("prompts to authenticate when not authenticated (real config, no file on disk)", async () => {
     // No config file exists, so loadConfig returns empty → not authenticated
-    mockRunSetup.mockResolvedValue(undefined);
+    // User declines to open browser → TUI exits
+    mockConfirm.mockResolvedValueOnce(false);
 
     await runTUI();
 
-    expect(mockRunSetup).toHaveBeenCalledOnce();
+    expect(mockConfirm).toHaveBeenCalledWith({ message: "Open browser to log in?" });
     expect(mockSelect).not.toHaveBeenCalled();
   });
 
@@ -204,16 +202,20 @@ describe("runTUI", () => {
     expect(mockOutro).toHaveBeenCalledWith("Goodbye!");
   });
 
-  it("calls runSetup when user selects setup action", async () => {
+  it("verifies session when user selects auth action with existing token", async () => {
     writeRealConfig(makeCfg({ access_token: "tok" }));
     mockIsCancel.mockReturnValue(false);
-    mockRunSetup.mockResolvedValue(undefined);
 
-    mockSelect.mockResolvedValueOnce("setup").mockResolvedValueOnce("exit");
+    const mockDoRequestRaw = vi.fn().mockResolvedValue({ status: 200 });
+    vi.mocked(Client).mockImplementation(
+      () => ({ doRequestRaw: mockDoRequestRaw }) as unknown as Client,
+    );
+
+    mockSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
 
     await runTUI();
 
-    expect(mockRunSetup).toHaveBeenCalledOnce();
+    expect(mockDoRequestRaw).toHaveBeenCalledWith("GET", "/v1/mcp/deployments");
     expect(mockOutro).toHaveBeenCalledWith("Goodbye!");
   });
 

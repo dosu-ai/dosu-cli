@@ -7,8 +7,7 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { Client } from "../client/client";
-import { isAuthenticated, loadConfig, saveConfig } from "../config/config";
-import { runSetup } from "../setup/flow";
+import { MODE_OSS, isAuthenticated, loadConfig, saveConfig } from "../config/config";
 
 const LOGO = `
  /$$$$$$$
@@ -26,10 +25,10 @@ export async function runTUI(): Promise<void> {
 
   const cfg = loadConfig();
 
-  // If not authenticated, open setup immediately
+  // If not authenticated, authenticate first
   if (!isAuthenticated(cfg)) {
-    await runSetup();
-    return;
+    await handleAuthenticate(cfg);
+    if (!isAuthenticated(cfg)) return;
   }
 
   // Main menu
@@ -41,7 +40,7 @@ export async function runTUI(): Promise<void> {
       options: [
         {
           label: "Authenticate",
-          value: "setup",
+          value: "auth",
           hint: isAuthenticated(cfg) ? "Re-authenticate" : undefined,
         },
         {
@@ -69,8 +68,8 @@ export async function runTUI(): Promise<void> {
     }
 
     switch (action) {
-      case "setup":
-        await runSetup();
+      case "auth":
+        await handleAuthenticate(cfg);
         break;
       case "deployments":
         await handleDeployments(cfg);
@@ -187,6 +186,51 @@ async function handleMCPRemove(_cfg: ReturnType<typeof loadConfig>): Promise<voi
   } catch (err: unknown) {
     /* v8 ignore next -- err is always Error in practice */
     p.log.error(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+async function handleAuthenticate(cfg: ReturnType<typeof loadConfig>): Promise<void> {
+  if (cfg.access_token) {
+    const s = p.spinner();
+    s.start("Verifying session...");
+    try {
+      const apiClient = new Client(cfg);
+      const resp = await apiClient.doRequestRaw("GET", "/v1/mcp/deployments");
+      if (resp.status === 200) {
+        s.stop("Already authenticated.");
+        return;
+      }
+      try {
+        await apiClient.refreshToken();
+        s.stop("Session refreshed.");
+        return;
+      } catch {
+        // refresh failed, fall through to login
+      }
+      s.stop("Session expired.");
+    } catch {
+      s.stop("Verification failed.");
+    }
+  }
+
+  const shouldLogin = await p.confirm({ message: "Open browser to log in?" });
+  if (p.isCancel(shouldLogin) || !shouldLogin) return;
+
+  try {
+    const { startOAuthFlow } = await import("../auth/flow");
+    const s = p.spinner();
+    s.start("Waiting for authentication...");
+    const token = await startOAuthFlow(undefined, "/cli/auth");
+    s.stop("Authenticated");
+
+    cfg.access_token = token.access_token;
+    cfg.refresh_token = token.refresh_token;
+    cfg.expires_at = Math.floor(Date.now() / 1000) + token.expires_in;
+    cfg.mode = token.mode === MODE_OSS ? MODE_OSS : undefined;
+    saveConfig(cfg);
+  } catch (err: unknown) {
+    /* v8 ignore next -- err is always Error in practice */
+    p.log.error(`Authentication failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
