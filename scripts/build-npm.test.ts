@@ -24,9 +24,8 @@ describe("build-npm script", () => {
     expect(defines.some((d) => d.startsWith("process.env.DOSU_VERSION="))).toBe(true);
   });
 
-  it("inlines Dosu and Supabase environment variables into the bundle", () => {
+  it("does not use redundant --env flags", () => {
     const content = readFileSync("scripts/build-npm.ts", "utf8");
-    expect(content).toContain("--env=DOSU_*");
-    expect(content).toContain("--env=SUPABASE_*");
+    expect(content).not.toContain("--env=");
   });
 });

@@ -25,8 +25,6 @@ async function main() {
       "bun",
       "build",
       "--compile",
-      "--env=DOSU_*",
-      "--env=SUPABASE_*",
       ...defines,
       "src/index.ts",
       "--outfile",

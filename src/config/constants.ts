@@ -5,10 +5,6 @@
  * See .env.example for the full list of supported variables.
  */
 
-export function isDev(): boolean {
-  return process.env.DOSU_DEV === "true";
-}
-
 export function getWebAppURL(): string {
   return process.env.DOSU_WEB_APP_URL ?? "";
 }

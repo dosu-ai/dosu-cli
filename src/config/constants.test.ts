@@ -8,7 +8,6 @@ describe("constants", () => {
     "DOSU_BACKEND_URL",
     "SUPABASE_URL",
     "SUPABASE_ANON_KEY",
-    "DOSU_DEV",
   ];
 
   beforeEach(() => {

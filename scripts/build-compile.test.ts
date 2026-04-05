@@ -18,9 +18,8 @@ describe("build-compile script", () => {
     expect(content).toContain("...defines");
   });
 
-  it("inlines Dosu and Supabase environment variables", () => {
+  it("does not use redundant --env flags", () => {
     const content = readFileSync(join(__dirname, "build-compile.ts"), "utf-8");
-    expect(content).toContain("--env=DOSU_*");
-    expect(content).toContain("--env=SUPABASE_*");
+    expect(content).not.toContain("--env=");
   });
 });

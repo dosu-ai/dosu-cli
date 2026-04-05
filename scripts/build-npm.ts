@@ -38,8 +38,6 @@ async function main() {
       "build",
       "--target",
       "node",
-      "--env=DOSU_*",
-      "--env=SUPABASE_*",
       ...buildDefines(),
       "src/index.ts",
       "--outfile",

@@ -17,8 +17,6 @@ describe("build-all script", () => {
     expect(content).toContain("bun-linux-x64-musl");
     expect(content).toContain("bun-linux-arm64-musl");
     expect(content).toContain("bun-windows-x64-baseline");
-    expect(content).toContain("--env=DOSU_*");
-    expect(content).toContain("--env=SUPABASE_*");
   });
 });
 
