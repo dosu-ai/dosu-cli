@@ -168,12 +168,24 @@ h1 {
     <h1>Authentication Successful</h1>
     <p class="subtitle">You're all set. The CLI is now authenticated.</p>
     ${emailLine}
-    <div class="card" onclick="window.close()">Close this tab and return to your terminal.</div>
-    <p class="close-hint">This tab will close automatically in <span id="countdown">10</span>s</p>
+    <div class="card" id="close-card" onclick="tryClose()">Close this tab and return to your terminal.</div>
+    <p class="close-hint" id="close-hint">This tab will close automatically in <span id="countdown">10</span>s</p>
 </div>
 <script>
+function tryClose(){
+    window.close();
+    setTimeout(function(){
+        var c=document.getElementById('close-card');
+        c.textContent='You can close this tab now.';
+        c.style.cursor='default';
+        c.onclick=null;
+        var h=document.getElementById('close-hint');
+        if(h)h.style.display='none';
+        clearInterval(t);
+    },500);
+}
 var s=10,el=document.getElementById('countdown');
-var t=setInterval(function(){if(--s<=0){clearInterval(t);window.close();}el.textContent=s;},1000);
+var t=setInterval(function(){if(--s<=0){clearInterval(t);tryClose();}el.textContent=s;},1000);
 </script>
 </body>
 </html>`;
