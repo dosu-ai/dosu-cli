@@ -1,3 +1,10 @@
+## [0.3.5](https://github.com/dosu-ai/dosu-cli/compare/v0.3.4...v0.3.5) (2026-04-05)
+
+
+### Bug Fixes
+
+* TUI Authenticate only authenticates, not full setup ([#38](https://github.com/dosu-ai/dosu-cli/issues/38)) ([23a9908](https://github.com/dosu-ai/dosu-cli/commit/23a9908703f16c7e9f1a3ae585f0dc619e91dcdb))
+
 ## [0.3.4](https://github.com/dosu-ai/dosu-cli/compare/v0.3.3...v0.3.4) (2026-04-05)
 
 
