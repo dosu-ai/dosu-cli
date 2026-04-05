@@ -33,16 +33,7 @@ async function main() {
   mkdirSync(dirname(OUTFILE), { recursive: true });
 
   const proc = Bun.spawn(
-    [
-      "bun",
-      "build",
-      "--target",
-      "node",
-      ...buildDefines(),
-      "src/index.ts",
-      "--outfile",
-      OUTFILE,
-    ],
+    ["bun", "build", "--target", "node", ...buildDefines(), "src/index.ts", "--outfile", OUTFILE],
     { stdout: "pipe", stderr: "pipe", env: process.env },
   );
 

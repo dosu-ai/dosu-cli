@@ -21,15 +21,7 @@ async function main() {
   const defines = buildDefines();
 
   const proc = Bun.spawn(
-    [
-      "bun",
-      "build",
-      "--compile",
-      ...defines,
-      "src/index.ts",
-      "--outfile",
-      OUTFILE,
-    ],
+    ["bun", "build", "--compile", ...defines, "src/index.ts", "--outfile", OUTFILE],
     { stdout: "inherit", stderr: "inherit", env: process.env },
   );
 
