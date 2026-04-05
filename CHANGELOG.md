@@ -1,3 +1,10 @@
+## [0.3.3](https://github.com/dosu-ai/dosu-cli/compare/v0.3.2...v0.3.3) (2026-04-05)
+
+
+### Bug Fixes
+
+* bake env vars into compiled binary via --define ([#36](https://github.com/dosu-ai/dosu-cli/issues/36)) ([9384bdb](https://github.com/dosu-ai/dosu-cli/commit/9384bdba1d705d793922eaf4422cf5f03591af9a))
+
 ## [0.3.2](https://github.com/dosu-ai/dosu-cli/compare/v0.3.1...v0.3.2) (2026-04-05)
 
 
