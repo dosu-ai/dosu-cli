@@ -1,3 +1,10 @@
+## [0.3.4](https://github.com/dosu-ai/dosu-cli/compare/v0.3.3...v0.3.4) (2026-04-05)
+
+
+### Bug Fixes
+
+* simplify auth success page and add Tips prefix to OSS outro ([#37](https://github.com/dosu-ai/dosu-cli/issues/37)) ([2ad0cfb](https://github.com/dosu-ai/dosu-cli/commit/2ad0cfbd91439c7b7a9c30d7c62170e657304998))
+
 ## [0.3.3](https://github.com/dosu-ai/dosu-cli/compare/v0.3.2...v0.3.3) (2026-04-05)
 
 
