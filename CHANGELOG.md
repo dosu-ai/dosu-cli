@@ -1,3 +1,10 @@
+## [0.3.8](https://github.com/dosu-ai/dosu-cli/compare/v0.3.7...v0.3.8) (2026-04-08)
+
+
+### Bug Fixes
+
+* **setup:** clear OSS mode when selecting a deployment ([#41](https://github.com/dosu-ai/dosu-cli/issues/41)) ([536936c](https://github.com/dosu-ai/dosu-cli/commit/536936ccb4afb8123474b9775ded97e830cf9bf6))
+
 ## [0.3.7](https://github.com/dosu-ai/dosu-cli/compare/v0.3.6...v0.3.7) (2026-04-08)
 
 
