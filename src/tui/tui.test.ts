@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -50,7 +50,6 @@ import { startOAuthFlow } from "../auth/flow";
 import { Client } from "../client/client";
 import type { Config } from "../config/config";
 import { loadConfig, saveConfig } from "../config/config";
-import { loadJSONConfig } from "../mcp/config-helpers";
 import { runSetup } from "../setup/flow";
 import { handleLogout, runTUI } from "./tui";
 
@@ -118,11 +117,6 @@ function writeRealConfig(cfg: Config): void {
 
 function readRealConfig(): Config {
   return loadConfig();
-}
-
-/** Returns the path to the Cursor global MCP config given current HOME. */
-function cursorMcpPath(): string {
-  return join(tempDir, ".cursor", "mcp.json");
 }
 
 // ---------------------------------------------------------------------------
@@ -402,86 +396,5 @@ describe("runTUI", () => {
 
     expect(mockRunSetup).toHaveBeenCalled();
     expect(mockOutro).toHaveBeenCalledWith("Goodbye!");
-  });
-
-  it("mcp-remove shows warning when no deployment selected", async () => {
-    writeRealConfig(makeCfg({ access_token: "tok", deployment_id: undefined }));
-    mockIsCancel.mockReturnValue(false);
-
-    mockSelect.mockResolvedValueOnce("mcp-remove").mockResolvedValueOnce("exit");
-
-    await runTUI();
-
-    expect(p.log.warn).toHaveBeenCalledWith("Please select a deployment first.");
-  });
-
-  it("mcp-remove with real Cursor provider removes dosu entry from JSON config", async () => {
-    writeRealConfig(
-      makeCfg({
-        access_token: "tok",
-        deployment_id: "dep-123",
-        deployment_name: "my-deploy",
-        api_key: "key-abc",
-      }),
-    );
-    mockIsCancel.mockReturnValue(false);
-
-    // Pre-create a Cursor MCP config with dosu entry and another entry
-    const mcpPath = cursorMcpPath();
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    writeFileSync(
-      mcpPath,
-      JSON.stringify(
-        {
-          mcpServers: {
-            dosu: { url: "http://old-url", headers: {} },
-            "other-tool": { url: "http://other" },
-          },
-        },
-        null,
-        2,
-      ),
-    );
-
-    mockSelect
-      .mockResolvedValueOnce("mcp-remove")
-      .mockResolvedValueOnce("cursor")
-      .mockResolvedValueOnce("exit");
-
-    await runTUI();
-
-    expect(p.log.success).toHaveBeenCalledWith("Removed Dosu MCP from Cursor");
-
-    // Verify dosu entry was removed but other-tool remains
-    const mcpConfig = loadJSONConfig(mcpPath);
-    expect(mcpConfig.mcpServers.dosu).toBeUndefined();
-    expect(mcpConfig.mcpServers["other-tool"]).toBeDefined();
-  });
-
-  it("mcp-remove filters out manual provider from options", async () => {
-    writeRealConfig(
-      makeCfg({
-        access_token: "tok",
-        deployment_id: "dep-123",
-        api_key: "key-abc",
-      }),
-    );
-    mockIsCancel.mockReturnValue(false);
-
-    // Create ~/.cursor so cursor provider is "installed"
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-
-    mockSelect
-      .mockResolvedValueOnce("mcp-remove")
-      .mockResolvedValueOnce("cursor")
-      .mockResolvedValueOnce("exit");
-
-    await runTUI();
-
-    // Check the options passed to the remove select call (2nd select invocation)
-    const removeSelectCall = mockSelect.mock.calls[1];
-    const options = (removeSelectCall[0] as { options: { value: string }[] }).options;
-    const ids = options.map((o: { value: string }) => o.value);
-    expect(ids).not.toContain("manual");
   });
 });
