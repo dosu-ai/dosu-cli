@@ -1,3 +1,10 @@
+# [0.6.0](https://github.com/dosu-ai/dosu-cli/compare/v0.5.0...v0.6.0) (2026-04-08)
+
+
+### Features
+
+* **tui:** replace Choose MCP and Add MCP with Setup entry ([#44](https://github.com/dosu-ai/dosu-cli/issues/44)) ([1e2ff11](https://github.com/dosu-ai/dosu-cli/commit/1e2ff11d833e739864f95a3d4787b911395a09e1))
+
 # [0.5.0](https://github.com/dosu-ai/dosu-cli/compare/v0.4.0...v0.5.0) (2026-04-08)
 
 
