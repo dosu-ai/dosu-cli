@@ -1,3 +1,10 @@
+# [0.4.0](https://github.com/dosu-ai/dosu-cli/compare/v0.3.8...v0.4.0) (2026-04-08)
+
+
+### Features
+
+* **mcp:** support OSS mode across all providers and CLI paths ([#42](https://github.com/dosu-ai/dosu-cli/issues/42)) ([ce4cfcb](https://github.com/dosu-ai/dosu-cli/commit/ce4cfcb411f3550688a2c757f4db8470823fb987))
+
 ## [0.3.8](https://github.com/dosu-ai/dosu-cli/compare/v0.3.7...v0.3.8) (2026-04-08)
 
 
