@@ -1,3 +1,10 @@
+## [0.3.6](https://github.com/dosu-ai/dosu-cli/compare/v0.3.5...v0.3.6) (2026-04-08)
+
+
+### Bug Fixes
+
+* trigger release ([1af948f](https://github.com/dosu-ai/dosu-cli/commit/1af948f4992456cf9badea476b62a08d3263b515))
+
 ## [0.3.5](https://github.com/dosu-ai/dosu-cli/compare/v0.3.4...v0.3.5) (2026-04-05)
 
 
