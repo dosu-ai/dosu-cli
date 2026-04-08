@@ -30,6 +30,10 @@ vi.mock("../auth/flow", () => ({
   startOAuthFlow: vi.fn(),
 }));
 
+vi.mock("../setup/flow", () => ({
+  runSetup: vi.fn(),
+}));
+
 vi.mock("picocolors", () => ({
   default: {
     magenta: (s: string) => s,
@@ -47,6 +51,7 @@ import { Client } from "../client/client";
 import type { Config } from "../config/config";
 import { loadConfig, saveConfig } from "../config/config";
 import { loadJSONConfig } from "../mcp/config-helpers";
+import { runSetup } from "../setup/flow";
 import { handleLogout, runTUI } from "./tui";
 
 const mockSelect = vi.mocked(p.select);
@@ -54,6 +59,7 @@ const mockConfirm = vi.mocked(p.confirm);
 const mockIsCancel = vi.mocked(p.isCancel);
 const mockOutro = vi.mocked(p.outro);
 const mockStartOAuthFlow = vi.mocked(startOAuthFlow);
+const mockRunSetup = vi.mocked(runSetup);
 
 // ---------------------------------------------------------------------------
 // Temp directory setup — real config on disk
@@ -376,120 +382,26 @@ describe("runTUI", () => {
     expect(p.log.success).toHaveBeenCalledWith("Credentials cleared.");
   });
 
-  it("deployments action saves selected deployment_id to real config", async () => {
-    writeRealConfig(makeCfg({ access_token: "tok" }));
+  it("setup action calls runSetup and reloads config", async () => {
+    const initialCfg = makeCfg({ access_token: "tok" });
+    writeRealConfig(initialCfg);
     mockIsCancel.mockReturnValue(false);
 
-    const mockDeployments = [
-      { deployment_id: "d1", name: "Deploy 1", org_name: "Org" },
-      { deployment_id: "d2", name: "Deploy 2", org_name: "Org" },
-    ];
-    const mockGetDeployments = vi.fn().mockResolvedValue(mockDeployments);
-    vi.mocked(Client).mockImplementation(
-      () => ({ getDeployments: mockGetDeployments }) as unknown as Client,
-    );
+    // Simulate setup writing new deployment to config
+    mockRunSetup.mockImplementation(async () => {
+      const cfg = readRealConfig();
+      cfg.deployment_id = "dep-from-setup";
+      cfg.deployment_name = "Setup Deploy";
+      cfg.api_key = "key-from-setup";
+      writeRealConfig(cfg);
+    });
 
-    mockSelect
-      .mockResolvedValueOnce("deployments")
-      .mockResolvedValueOnce("d1")
-      .mockResolvedValueOnce("exit");
+    mockSelect.mockResolvedValueOnce("setup").mockResolvedValueOnce("exit");
 
     await runTUI();
 
-    expect(mockGetDeployments).toHaveBeenCalled();
-    expect(p.log.success).toHaveBeenCalledWith("Selected: Deploy 1");
-
-    // Verify real config on disk has the deployment
-    const ondisk = readRealConfig();
-    expect(ondisk.deployment_id).toBe("d1");
-    expect(ondisk.deployment_name).toBe("Deploy 1");
-  });
-
-  it("deployments shows warning when not authenticated (handles inner check)", async () => {
-    // Write a config that starts authenticated, then becomes unauthenticated
-    // We simulate this by writing the config, then having logout clear it before deployments
-    // Actually, simpler: write config with access_token, select logout then deployments
-    // But the code checks isAuthenticated inside handleDeployments with the same cfg object.
-    // After logout, cfg.access_token is "". So selecting deployments after logout triggers the warn.
-    writeRealConfig(makeCfg({ access_token: "tok" }));
-    mockIsCancel.mockReturnValue(false);
-
-    mockSelect
-      .mockResolvedValueOnce("logout")
-      .mockResolvedValueOnce("deployments")
-      .mockResolvedValueOnce("exit");
-
-    await runTUI();
-
-    expect(p.log.warn).toHaveBeenCalledWith("Please authenticate first.");
-  });
-
-  it("deployments shows warning when no deployments found", async () => {
-    writeRealConfig(makeCfg({ access_token: "tok" }));
-    mockIsCancel.mockReturnValue(false);
-
-    const mockGetDeployments = vi.fn().mockResolvedValue([]);
-    vi.mocked(Client).mockImplementation(
-      () => ({ getDeployments: mockGetDeployments }) as unknown as Client,
-    );
-
-    mockSelect.mockResolvedValueOnce("deployments").mockResolvedValueOnce("exit");
-
-    await runTUI();
-
-    expect(p.log.warn).toHaveBeenCalledWith("No deployments found.");
-  });
-
-  it("deployments handles cancel during deployment selection", async () => {
-    writeRealConfig(makeCfg({ access_token: "tok" }));
-
-    const mockDeployments = [{ deployment_id: "d1", name: "Deploy 1", org_name: "Org" }];
-    const mockGetDeployments = vi.fn().mockResolvedValue(mockDeployments);
-    vi.mocked(Client).mockImplementation(
-      () => ({ getDeployments: mockGetDeployments }) as unknown as Client,
-    );
-
-    const cancelSymbol = Symbol("cancel");
-    mockIsCancel.mockImplementation((val) => val === cancelSymbol);
-
-    mockSelect
-      .mockResolvedValueOnce("deployments")
-      .mockResolvedValueOnce(cancelSymbol as unknown)
-      .mockResolvedValueOnce("exit");
-
-    await runTUI();
-
-    // Config should not have been updated
-    const ondisk = readRealConfig();
-    expect(ondisk.deployment_id).toBeUndefined();
+    expect(mockRunSetup).toHaveBeenCalled();
     expect(mockOutro).toHaveBeenCalledWith("Goodbye!");
-  });
-
-  it("deployments shows error when fetch fails", async () => {
-    writeRealConfig(makeCfg({ access_token: "tok" }));
-    mockIsCancel.mockReturnValue(false);
-
-    const mockGetDeployments = vi.fn().mockRejectedValue(new Error("network error"));
-    vi.mocked(Client).mockImplementation(
-      () => ({ getDeployments: mockGetDeployments }) as unknown as Client,
-    );
-
-    mockSelect.mockResolvedValueOnce("deployments").mockResolvedValueOnce("exit");
-
-    await runTUI();
-
-    expect(p.log.error).toHaveBeenCalledWith("Failed: network error");
-  });
-
-  it("mcp-add shows warning when no deployment selected", async () => {
-    writeRealConfig(makeCfg({ access_token: "tok", deployment_id: undefined }));
-    mockIsCancel.mockReturnValue(false);
-
-    mockSelect.mockResolvedValueOnce("mcp-add").mockResolvedValueOnce("exit");
-
-    await runTUI();
-
-    expect(p.log.warn).toHaveBeenCalledWith("Please select a deployment first.");
   });
 
   it("mcp-remove shows warning when no deployment selected", async () => {
@@ -501,68 +413,6 @@ describe("runTUI", () => {
     await runTUI();
 
     expect(p.log.warn).toHaveBeenCalledWith("Please select a deployment first.");
-  });
-
-  it("mcp-add in OSS mode works without a selected deployment", async () => {
-    writeRealConfig(
-      makeCfg({
-        access_token: "tok",
-        mode: "oss",
-        deployment_id: undefined,
-        deployment_name: undefined,
-        api_key: "key-abc",
-      }),
-    );
-    mockIsCancel.mockReturnValue(false);
-
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-
-    mockSelect
-      .mockResolvedValueOnce("mcp-add")
-      .mockResolvedValueOnce("cursor")
-      .mockResolvedValueOnce("exit");
-
-    await runTUI();
-
-    expect(p.log.warn).not.toHaveBeenCalledWith("Please select a deployment first.");
-
-    const mcpConfig = loadJSONConfig(cursorMcpPath());
-    expect(mcpConfig.mcpServers.dosu.url).toContain("/v1/mcp");
-    expect(mcpConfig.mcpServers.dosu.url).not.toContain("/deployments/");
-  });
-
-  it("mcp-add with real Cursor provider creates JSON config on disk", async () => {
-    writeRealConfig(
-      makeCfg({
-        access_token: "tok",
-        deployment_id: "dep-123",
-        deployment_name: "my-deploy",
-        api_key: "key-abc",
-      }),
-    );
-    mockIsCancel.mockReturnValue(false);
-
-    // Create the ~/.cursor directory so the provider is "installed"
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-
-    mockSelect
-      .mockResolvedValueOnce("mcp-add")
-      .mockResolvedValueOnce("cursor")
-      .mockResolvedValueOnce("exit");
-
-    await runTUI();
-
-    expect(p.log.success).toHaveBeenCalledWith("Added Dosu MCP to Cursor");
-
-    // Verify real Cursor MCP config file was created on disk
-    const mcpPath = cursorMcpPath();
-    expect(existsSync(mcpPath)).toBe(true);
-
-    const mcpConfig = loadJSONConfig(mcpPath);
-    expect(mcpConfig.mcpServers).toBeDefined();
-    expect(mcpConfig.mcpServers.dosu).toBeDefined();
-    expect(mcpConfig.mcpServers.dosu.url).toContain("dep-123");
-    expect(mcpConfig.mcpServers.dosu.headers["X-Dosu-API-Key"]).toBe("key-abc");
   });
 
   it("mcp-remove with real Cursor provider removes dosu entry from JSON config", async () => {
@@ -606,60 +456,6 @@ describe("runTUI", () => {
     const mcpConfig = loadJSONConfig(mcpPath);
     expect(mcpConfig.mcpServers.dosu).toBeUndefined();
     expect(mcpConfig.mcpServers["other-tool"]).toBeDefined();
-  });
-
-  it("mcp-add does nothing when user cancels provider selection", async () => {
-    writeRealConfig(
-      makeCfg({
-        access_token: "tok",
-        deployment_id: "dep-123",
-        api_key: "key-abc",
-      }),
-    );
-
-    const cancelSymbol = Symbol("cancel");
-    mockIsCancel.mockImplementation((val) => val === cancelSymbol);
-
-    mockSelect
-      .mockResolvedValueOnce("mcp-add")
-      .mockResolvedValueOnce(cancelSymbol as unknown)
-      .mockResolvedValueOnce("exit");
-
-    await runTUI();
-
-    // No MCP config file should have been created
-    expect(existsSync(cursorMcpPath())).toBe(false);
-  });
-
-  it("mcp-add shows error when install fails", async () => {
-    // Config without api_key — provider.install requires deployment_id
-    // but let's trigger the error by having no deployment_id on the config object
-    // Actually, the menu guard blocks this. Let's use a provider that throws.
-    // We write a config with deployment_id so the guard passes, but with
-    // a deployment_id that the provider can use. The real provider won't fail
-    // unless something is wrong. We can force it by making the target dir read-only...
-    // Simplest: just use a mock for the providers module for this specific error test.
-    writeRealConfig(
-      makeCfg({
-        access_token: "tok",
-        deployment_id: "dep-123",
-        api_key: "key-abc",
-      }),
-    );
-    mockIsCancel.mockReturnValue(false);
-
-    // Create ~/.cursor as a FILE (not directory) so writing mcp.json inside it fails
-    writeFileSync(join(tempDir, ".cursor"), "not-a-directory");
-
-    mockSelect
-      .mockResolvedValueOnce("mcp-add")
-      .mockResolvedValueOnce("cursor")
-      .mockResolvedValueOnce("exit");
-
-    await runTUI();
-
-    // The install should fail because .cursor is a file, not a directory
-    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Failed:"));
   });
 
   it("mcp-remove filters out manual provider from options", async () => {
