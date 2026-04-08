@@ -390,8 +390,8 @@ export function stepShowSummary(results: ConfigResult[], mode?: SetupMode): void
   if (installed.length > 0 || skipped.length > 0) {
     const prompt =
       mode === MODE_OSS
-        ? `What can I do with the Dosu MCP?`
-        : `Use Dosu to search our team's documentation and answer: what are the main components of our system?`;
+        ? `What can Dosu MCP help me do in this repo? Briefly explain, then tell me the main components, request flow, and where to start.`
+        : `I'm new to this codebase. Give me a 5-minute mental model: main services, request flow, where to start.`;
     p.log.message(`Try it out! Paste this into your agent:\n\n${info(prompt)}`);
   }
 }
