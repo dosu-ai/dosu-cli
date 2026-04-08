@@ -1,3 +1,10 @@
+## [0.3.7](https://github.com/dosu-ai/dosu-cli/compare/v0.3.6...v0.3.7) (2026-04-08)
+
+
+### Bug Fixes
+
+* **setup:** refine onboarding prompts ([#40](https://github.com/dosu-ai/dosu-cli/issues/40)) ([efc0677](https://github.com/dosu-ai/dosu-cli/commit/efc067769e76eecd568d7b1bcded4d77897d36a3))
+
 ## [0.3.6](https://github.com/dosu-ai/dosu-cli/compare/v0.3.5...v0.3.6) (2026-04-08)
 
 
