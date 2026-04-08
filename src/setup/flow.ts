@@ -40,7 +40,6 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     // --deployment flag provided, use specified deployment
     const d = await stepResolveDeployment(apiClient, opts.deploymentID);
     if (!d) return;
-    // Selecting a concrete deployment exits OSS mode and restores deployment-scoped MCP config.
     cfg.mode = undefined;
     cfg.deployment_id = d.deployment_id;
     cfg.deployment_name = d.name;
