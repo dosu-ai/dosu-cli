@@ -1,3 +1,10 @@
+# [0.7.0](https://github.com/dosu-ai/dosu-cli/compare/v0.6.0...v0.7.0) (2026-04-08)
+
+
+### Features
+
+* **tui:** rework Remove MCP to use multiselect deselection flow ([#45](https://github.com/dosu-ai/dosu-cli/issues/45)) ([67aaef7](https://github.com/dosu-ai/dosu-cli/commit/67aaef7055e76402d55f823b3c41a24fb8ffe3c1))
+
 # [0.6.0](https://github.com/dosu-ai/dosu-cli/compare/v0.5.0...v0.6.0) (2026-04-08)
 
 
