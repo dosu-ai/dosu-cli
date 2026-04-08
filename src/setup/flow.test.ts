@@ -671,6 +671,29 @@ describe("runSetup integration", () => {
     expect(savedCfg.api_key).toBe("fresh-key");
   });
 
+  it("reinstalls configured tools when only the API key changes", async () => {
+    // Use deployment_id "d1" to match the mock so deployment doesn't change
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    const cfg = makeCfg({ deployment_id: "d1", deployment_name: "Deploy1", api_key: "old-key" });
+    saveConfig(cfg);
+    CursorProvider().install(cfg, true);
+
+    // The old key is "invalid", so the flow will mint a new one
+    setupAuthenticatedClient({
+      validateAPIKey: vi.fn().mockResolvedValue(false),
+      createAPIKey: vi.fn().mockResolvedValue({ api_key: "new-key" }),
+    });
+
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    vi.mocked(p.multiselect).mockResolvedValue(["cursor"]);
+
+    await runSetup();
+
+    // Cursor should have been reinstalled (not skipped) because api_key changed
+    const cursorConfig = loadJSONConfig(join(tempDir, ".cursor", "mcp.json"));
+    expect(cursorConfig.mcpServers.dosu.headers["X-Dosu-API-Key"]).toBe("new-key");
+  });
+
   it("shows error when OAuth fails", async () => {
     vi.mocked(p.confirm).mockResolvedValue(true);
     mockStartOAuthFlow.mockRejectedValue(new Error("browser timeout"));
