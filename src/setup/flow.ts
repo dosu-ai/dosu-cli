@@ -26,23 +26,12 @@ export interface ToolSelection {
   skipped: SetupProvider[];
 }
 
-interface MCPTargetSnapshot {
-  mode?: SetupMode;
-  deployment_id?: string;
-  api_key?: string;
-}
-
 export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   p.intro("Dosu CLI Setup");
 
   // Step 1: Authenticate
   const cfg = await stepAuthenticate(opts);
   if (!cfg) return;
-  const previousTarget: MCPTargetSnapshot = {
-    mode: cfg.mode,
-    deployment_id: cfg.deployment_id,
-    api_key: cfg.api_key,
-  };
 
   const apiClient = new Client(cfg);
 
@@ -89,7 +78,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     return;
   }
 
-  const selection = await stepSelectTools(detected, hasMCPTargetChanged(previousTarget, cfg));
+  const selection = await stepSelectTools(detected);
   if (!selection) return;
 
   const results = stepConfigureTools(cfg, selection);
@@ -102,14 +91,6 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   } else {
     p.outro("\uD83C\uDF89 Setup complete!");
   }
-}
-
-function hasMCPTargetChanged(previous: MCPTargetSnapshot, current: Config): boolean {
-  return (
-    previous.mode !== current.mode ||
-    previous.deployment_id !== current.deployment_id ||
-    previous.api_key !== current.api_key
-  );
 }
 
 async function stepAuthenticate(opts: SetupOptions): Promise<Config | null> {
@@ -311,10 +292,7 @@ export function stepDetectTools(): SetupProvider[] {
   return allSetupProviders().filter((p) => p.isInstalled() && !isStdioOnly(p));
 }
 
-async function stepSelectTools(
-  detected: SetupProvider[],
-  reinstallConfigured = false,
-): Promise<ToolSelection | null> {
+async function stepSelectTools(detected: SetupProvider[]): Promise<ToolSelection | null> {
   const configuredMap = new Map<string, boolean>();
   for (const p of detected) {
     configuredMap.set(p.id(), p.isConfigured());
@@ -323,7 +301,7 @@ async function stepSelectTools(
   const options = detected.map((p) => {
     const configured = configuredMap.get(p.id()) ?? false;
     return {
-      label: configured ? `${p.name()} ${dim("(already configured)")}` : p.name(),
+      label: p.name(),
       value: p.id(),
       hint: configured ? "configured" : undefined,
     };
@@ -332,7 +310,7 @@ async function stepSelectTools(
   const preselected = detected.filter((p) => configuredMap.get(p.id())).map((p) => p.id());
 
   const selected = await p.multiselect({
-    message: "Select tools to configure",
+    message: "Select tools to configure or update",
     options,
     initialValues: preselected,
   });
@@ -346,9 +324,8 @@ async function stepSelectTools(
     const isSelected = selectedSet.has(provider.id());
     const isConfigured = configuredMap.get(provider.id()) ?? false;
 
-    if (isSelected && (!isConfigured || reinstallConfigured)) result.toInstall.push(provider);
-    else if (isSelected && isConfigured) result.skipped.push(provider);
-    else if (!isSelected && isConfigured) result.toRemove.push(provider);
+    if (isSelected) result.toInstall.push(provider);
+    else if (isConfigured) result.toRemove.push(provider);
   }
 
   return result;

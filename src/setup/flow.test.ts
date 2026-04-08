@@ -48,7 +48,7 @@ import type { TokenResponse } from "../auth/server";
 import { Client } from "../client/client";
 import type { Config } from "../config/config";
 import { loadConfig, saveConfig } from "../config/config";
-import { loadJSONConfig } from "../mcp/config-helpers";
+import { loadJSONConfig, saveJSONConfig } from "../mcp/config-helpers";
 import * as providersModule from "../mcp/providers";
 import { ClaudeDesktopProvider } from "../mcp/providers/claude-desktop";
 import { CursorProvider } from "../mcp/providers/cursor";
@@ -692,6 +692,38 @@ describe("runSetup integration", () => {
     // Cursor should have been reinstalled (not skipped) because api_key changed
     const cursorConfig = loadJSONConfig(join(tempDir, ".cursor", "mcp.json"));
     expect(cursorConfig.mcpServers.dosu.headers["X-Dosu-API-Key"]).toBe("new-key");
+  });
+
+  it("reinstalls configured tools when setup is re-run with the same target", async () => {
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    const cfg = makeCfg({ deployment_id: "d1", deployment_name: "Deploy1", api_key: "key-abc" });
+    saveConfig(cfg);
+
+    const cursorConfigPath = join(tempDir, ".cursor", "mcp.json");
+    saveJSONConfig(cursorConfigPath, {
+      mcpServers: {
+        dosu: {
+          type: "http",
+          url: "https://stale.example/v1/mcp/deployments/old-deployment",
+          headers: {
+            "X-Dosu-API-Key": "stale-key",
+          },
+        },
+      },
+    });
+
+    setupAuthenticatedClient({
+      validateAPIKey: vi.fn().mockResolvedValue(true),
+    });
+
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    vi.mocked(p.multiselect).mockResolvedValue(["cursor"]);
+
+    await runSetup();
+
+    const cursorConfig = loadJSONConfig(cursorConfigPath);
+    expect(cursorConfig.mcpServers.dosu.url).toContain("/v1/mcp/deployments/d1");
+    expect(cursorConfig.mcpServers.dosu.headers["X-Dosu-API-Key"]).toBe("key-abc");
   });
 
   it("shows error when OAuth fails", async () => {
