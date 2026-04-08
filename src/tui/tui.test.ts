@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +9,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@clack/prompts", () => ({
   select: vi.fn(),
-  multiselect: vi.fn(),
   confirm: vi.fn(),
   isCancel: vi.fn(),
   cancel: vi.fn(),
@@ -51,12 +50,10 @@ import { startOAuthFlow } from "../auth/flow";
 import { Client } from "../client/client";
 import type { Config } from "../config/config";
 import { loadConfig, saveConfig } from "../config/config";
-import { loadJSONConfig } from "../mcp/config-helpers";
 import { runSetup } from "../setup/flow";
 import { handleLogout, runTUI } from "./tui";
 
 const mockSelect = vi.mocked(p.select);
-const mockMultiselect = vi.mocked(p.multiselect);
 const mockConfirm = vi.mocked(p.confirm);
 const mockIsCancel = vi.mocked(p.isCancel);
 const mockOutro = vi.mocked(p.outro);
@@ -120,11 +117,6 @@ function writeRealConfig(cfg: Config): void {
 
 function readRealConfig(): Config {
   return loadConfig();
-}
-
-/** Returns the path to the Cursor global MCP config given current HOME. */
-function cursorMcpPath(): string {
-  return join(tempDir, ".cursor", "mcp.json");
 }
 
 // ---------------------------------------------------------------------------
@@ -404,123 +396,5 @@ describe("runTUI", () => {
 
     expect(mockRunSetup).toHaveBeenCalled();
     expect(mockOutro).toHaveBeenCalledWith("Goodbye!");
-  });
-
-  it("mcp-remove shows warning when no deployment selected", async () => {
-    writeRealConfig(makeCfg({ access_token: "tok", deployment_id: undefined }));
-    mockIsCancel.mockReturnValue(false);
-
-    mockSelect.mockResolvedValueOnce("mcp-remove").mockResolvedValueOnce("exit");
-
-    await runTUI();
-
-    expect(p.log.warn).toHaveBeenCalledWith("Please select a deployment first.");
-  });
-
-  it("mcp-remove with real Cursor provider removes dosu entry from JSON config", async () => {
-    writeRealConfig(
-      makeCfg({
-        access_token: "tok",
-        deployment_id: "dep-123",
-        deployment_name: "my-deploy",
-        api_key: "key-abc",
-      }),
-    );
-    mockIsCancel.mockReturnValue(false);
-
-    // Pre-create a Cursor MCP config with dosu entry and another entry
-    const mcpPath = cursorMcpPath();
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    writeFileSync(
-      mcpPath,
-      JSON.stringify(
-        {
-          mcpServers: {
-            dosu: { url: "http://old-url", headers: {} },
-            "other-tool": { url: "http://other" },
-          },
-        },
-        null,
-        2,
-      ),
-    );
-
-    // User deselects cursor (returns empty array = nothing kept)
-    mockMultiselect.mockResolvedValueOnce([]);
-
-    mockSelect.mockResolvedValueOnce("mcp-remove");
-
-    await runTUI();
-
-    expect(p.log.success).toHaveBeenCalledWith("Removed Dosu MCP from Cursor");
-    // Should exit directly after removal
-    expect(mockOutro).toHaveBeenCalledWith("Goodbye!");
-    // Should not return to main menu (no second select call)
-    expect(mockSelect).toHaveBeenCalledTimes(1);
-
-    // Verify dosu entry was removed but other-tool remains
-    const mcpConfig = loadJSONConfig(mcpPath);
-    expect(mcpConfig.mcpServers.dosu).toBeUndefined();
-    expect(mcpConfig.mcpServers["other-tool"]).toBeDefined();
-  });
-
-  it("mcp-remove shows only configured providers in multiselect", async () => {
-    writeRealConfig(
-      makeCfg({
-        access_token: "tok",
-        deployment_id: "dep-123",
-        api_key: "key-abc",
-      }),
-    );
-    mockIsCancel.mockReturnValue(false);
-
-    // Create ~/.cursor with dosu configured
-    const mcpPath = cursorMcpPath();
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    writeFileSync(
-      mcpPath,
-      JSON.stringify({ mcpServers: { dosu: { url: "http://old-url", headers: {} } } }, null, 2),
-    );
-
-    // User keeps all (no deselection)
-    mockMultiselect.mockResolvedValueOnce(["cursor"]);
-
-    mockSelect.mockResolvedValueOnce("mcp-remove").mockResolvedValueOnce("exit");
-
-    await runTUI();
-
-    // Verify multiselect was called with only configured providers
-    const multiselectCall = mockMultiselect.mock.calls[0];
-    const options = (multiselectCall[0] as { options: { value: string }[] }).options;
-    const ids = options.map((o: { value: string }) => o.value);
-    expect(ids).toContain("cursor");
-    expect(ids).not.toContain("manual");
-    // Only configured tools should appear — not unconfigured installed tools
-    for (const id of ids) {
-      expect(id).toBe("cursor"); // cursor is the only configured provider
-    }
-
-    expect(p.log.info).toHaveBeenCalledWith("No changes.");
-  });
-
-  it("mcp-remove shows warning when no tools are configured", async () => {
-    writeRealConfig(
-      makeCfg({
-        access_token: "tok",
-        deployment_id: "dep-123",
-        api_key: "key-abc",
-      }),
-    );
-    mockIsCancel.mockReturnValue(false);
-
-    // Create ~/.cursor but without dosu configured
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-
-    mockSelect.mockResolvedValueOnce("mcp-remove").mockResolvedValueOnce("exit");
-
-    await runTUI();
-
-    expect(p.log.warn).toHaveBeenCalledWith("No tools currently have Dosu MCP configured.");
-    expect(mockMultiselect).not.toHaveBeenCalled();
   });
 });

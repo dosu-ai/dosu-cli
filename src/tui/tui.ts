@@ -34,8 +34,6 @@ export async function runTUI(): Promise<void> {
 
   // Main menu
   while (true) {
-    const hasMcpTarget = cfg.mode === MODE_OSS || !!cfg.deployment_id;
-
     const action = await p.select({
       message: "What would you like to do?",
       options: [
@@ -48,11 +46,6 @@ export async function runTUI(): Promise<void> {
           label: "Authenticate",
           value: "auth",
           hint: isAuthenticated(cfg) ? "Re-authenticate" : undefined,
-        },
-        {
-          label: "Remove MCP",
-          value: "mcp-remove",
-          hint: !hasMcpTarget ? "Select deployment first" : undefined,
         },
         { label: "Clear Credentials", value: "logout" },
         { label: "Exit", value: "exit" },
@@ -72,16 +65,6 @@ export async function runTUI(): Promise<void> {
         // Reload config after setup (it may have changed deployment, api_key, etc.)
         Object.assign(cfg, loadConfig());
         break;
-      case "mcp-remove":
-        if (!hasMcpTarget) {
-          p.log.warn("Please select a deployment first.");
-          continue;
-        }
-        if (await handleMCPRemove(cfg)) {
-          p.outro("Goodbye!");
-          return;
-        }
-        break;
       case "logout":
         handleLogout(cfg);
         break;
@@ -89,50 +72,6 @@ export async function runTUI(): Promise<void> {
   }
 
   p.outro("Goodbye!");
-}
-
-async function handleMCPRemove(_cfg: ReturnType<typeof loadConfig>): Promise<boolean> {
-  const { allSetupProviders } = await import("../mcp/providers");
-  const configured = allSetupProviders().filter((p) => p.isConfigured());
-
-  if (configured.length === 0) {
-    p.log.warn("No tools currently have Dosu MCP configured.");
-    return false;
-  }
-
-  const options = configured.map((prov) => ({
-    label: prov.name(),
-    value: prov.id(),
-    hint: "configured",
-  }));
-
-  const kept = await p.multiselect({
-    message: "Deselect tools to remove Dosu MCP from",
-    options,
-    initialValues: configured.map((prov) => prov.id()),
-  });
-
-  if (p.isCancel(kept)) return false;
-
-  const keptSet = new Set(kept as string[]);
-  const toRemove = configured.filter((prov) => !keptSet.has(prov.id()));
-
-  if (toRemove.length === 0) {
-    p.log.info("No changes.");
-    return false;
-  }
-
-  for (const provider of toRemove) {
-    try {
-      provider.remove(true);
-      p.log.success(`Removed Dosu MCP from ${provider.name()}`);
-    } catch (err: unknown) {
-      /* v8 ignore next -- err is always Error in practice */
-      p.log.error(`Failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
-  return true;
 }
 
 async function handleAuthenticate(cfg: ReturnType<typeof loadConfig>): Promise<void> {
