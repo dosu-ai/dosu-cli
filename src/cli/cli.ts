@@ -8,6 +8,7 @@ import {
   isAuthenticated,
   isTokenExpired,
   loadConfig,
+  MODE_OSS,
   saveConfig,
 } from "../config/config";
 import { allProviders, getProvider, type Provider } from "../mcp/providers";
@@ -88,7 +89,10 @@ export function createProgram(): Command {
       } else {
         console.log("Status: Logged in");
       }
-      if (cfg.deployment_id) {
+      if (cfg.mode === MODE_OSS) {
+        console.log("Mode: OSS");
+        console.log("Deployment: Public libraries only");
+      } else if (cfg.deployment_id) {
         console.log(`Deployment: ${cfg.deployment_name}`);
         console.log(`Deployment ID: ${cfg.deployment_id}`);
       } else {
@@ -119,7 +123,7 @@ export function createProgram(): Command {
       if (isTokenExpired(cfg)) {
         throw new Error("session expired. Run 'dosu login' to re-authenticate");
       }
-      if (!cfg.deployment_id) {
+      if (cfg.mode !== MODE_OSS && !cfg.deployment_id) {
         throw new Error(
           "no deployment selected. Run 'dosu' to open the TUI and select a deployment",
         );

@@ -6,8 +6,8 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { Config } from "../../config/config";
-import { mcpHeaders, mcpURL } from "../config-helpers";
+import { type Config, MODE_OSS } from "../../config/config";
+import { mcpBaseURL, mcpHeaders, mcpURL } from "../config-helpers";
 import { expandHome, isInstalled } from "../detect";
 import type { SetupProvider } from "../providers";
 
@@ -40,8 +40,7 @@ function installDosuToTOML(path: string, cfg: Config): void {
   // Remove existing [mcp_servers.dosu] section if present
   content = removeDosuFromTOML(content);
   // Append new section
-  // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
-  const url = mcpURL(cfg.deployment_id!);
+  const url = cfg.mode === MODE_OSS ? mcpBaseURL() : mcpURL(cfg.deployment_id!);
   // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
   const headers = mcpHeaders(cfg.api_key!);
   const headerEntries = Object.entries(headers)
@@ -88,7 +87,7 @@ export const CodexProvider = (): SetupProvider => ({
     return content.includes("[mcp_servers.dosu]");
   },
   install(cfg: Config, global: boolean): void {
-    if (!cfg.deployment_id) throw new Error("deployment ID is required");
+    if (cfg.mode !== MODE_OSS && !cfg.deployment_id) throw new Error("deployment ID is required");
     installDosuToTOML(getConfigPath(global), cfg);
   },
   remove(global: boolean): void {

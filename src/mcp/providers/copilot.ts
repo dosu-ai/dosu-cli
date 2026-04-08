@@ -1,8 +1,9 @@
 import { join } from "node:path";
-import type { Config } from "../../config/config";
+import { type Config, MODE_OSS } from "../../config/config";
 import {
   installJSONServer,
   isJSONKeyConfigured,
+  mcpBaseURL,
   mcpHeaders,
   mcpURL,
   removeJSONServer,
@@ -28,8 +29,8 @@ export const CopilotProvider = (): SetupProvider => ({
   isConfigured: () => isJSONKeyConfigured(globalPath(), "mcpServers"),
 
   install(cfg: Config, global: boolean): void {
-    if (!cfg.deployment_id) throw new Error("deployment ID is required");
-    const url = mcpURL(cfg.deployment_id);
+    if (cfg.mode !== MODE_OSS && !cfg.deployment_id) throw new Error("deployment ID is required");
+    const url = cfg.mode === MODE_OSS ? mcpBaseURL() : mcpURL(cfg.deployment_id!);
 
     if (global) {
       const server = {

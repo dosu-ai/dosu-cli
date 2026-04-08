@@ -622,13 +622,17 @@ describe("runSetup integration", () => {
         { deployment_id: "d1", name: "Deploy1", org_id: "o1", org_name: "Org1" },
         { deployment_id: "d2", name: "Deploy2", org_id: "o1", org_name: "Org1" },
       ]),
-      validateAPIKey: vi.fn().mockResolvedValue(false),
-      createAPIKey: vi.fn().mockResolvedValue({ api_key: "fresh-key" }),
+      validateAPIKey: vi.fn().mockResolvedValue(true),
     });
 
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
     vi.mocked(p.multiselect).mockResolvedValue(["cursor"]);
+
+    CursorProvider().install(makeCfg({ mode: "oss", deployment_id: undefined }), true);
+    const ossConfig = loadJSONConfig(join(tempDir, ".cursor", "mcp.json"));
+    expect(ossConfig.mcpServers.dosu.url).toContain("/v1/mcp");
+    expect(ossConfig.mcpServers.dosu.url).not.toContain("/deployments/");
 
     await runSetup({ deploymentID: "d2" });
 
@@ -640,11 +644,11 @@ describe("runSetup integration", () => {
     const savedCfg = loadConfig();
     expect(savedCfg.mode).toBeUndefined();
     expect(savedCfg.deployment_id).toBe("d2");
-    expect(savedCfg.api_key).toBe("fresh-key");
+    expect(savedCfg.api_key).toBe("key-abc");
 
     const cursorConfig = loadJSONConfig(join(tempDir, ".cursor", "mcp.json"));
     expect(cursorConfig.mcpServers.dosu.url).toContain("/v1/mcp/deployments/d2");
-    expect(cursorConfig.mcpServers.dosu.url).not.toBe("https://api.dosu.dev/v1/mcp");
+    expect(cursorConfig.mcpServers.dosu.url).not.toBe(ossConfig.mcpServers.dosu.url);
   });
 
   it("creates new API key when existing one is invalid", async () => {

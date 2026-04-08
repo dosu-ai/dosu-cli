@@ -26,12 +26,23 @@ export interface ToolSelection {
   skipped: SetupProvider[];
 }
 
+interface MCPTargetSnapshot {
+  mode?: SetupMode;
+  deployment_id?: string;
+  api_key?: string;
+}
+
 export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   p.intro("Dosu CLI Setup");
 
   // Step 1: Authenticate
   const cfg = await stepAuthenticate(opts);
   if (!cfg) return;
+  const previousTarget: MCPTargetSnapshot = {
+    mode: cfg.mode,
+    deployment_id: cfg.deployment_id,
+    api_key: cfg.api_key,
+  };
 
   const apiClient = new Client(cfg);
 
@@ -78,7 +89,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     return;
   }
 
-  const selection = await stepSelectTools(detected);
+  const selection = await stepSelectTools(detected, hasMCPTargetChanged(previousTarget, cfg));
   if (!selection) return;
 
   const results = stepConfigureTools(cfg, selection);
@@ -91,6 +102,14 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   } else {
     p.outro("\uD83C\uDF89 Setup complete!");
   }
+}
+
+function hasMCPTargetChanged(previous: MCPTargetSnapshot, current: Config): boolean {
+  return (
+    previous.mode !== current.mode ||
+    previous.deployment_id !== current.deployment_id ||
+    previous.api_key !== current.api_key
+  );
 }
 
 async function stepAuthenticate(opts: SetupOptions): Promise<Config | null> {
@@ -292,7 +311,10 @@ export function stepDetectTools(): SetupProvider[] {
   return allSetupProviders().filter((p) => p.isInstalled() && !isStdioOnly(p));
 }
 
-async function stepSelectTools(detected: SetupProvider[]): Promise<ToolSelection | null> {
+async function stepSelectTools(
+  detected: SetupProvider[],
+  reinstallConfigured = false,
+): Promise<ToolSelection | null> {
   const configuredMap = new Map<string, boolean>();
   for (const p of detected) {
     configuredMap.set(p.id(), p.isConfigured());
@@ -324,7 +346,7 @@ async function stepSelectTools(detected: SetupProvider[]): Promise<ToolSelection
     const isSelected = selectedSet.has(provider.id());
     const isConfigured = configuredMap.get(provider.id()) ?? false;
 
-    if (isSelected && !isConfigured) result.toInstall.push(provider);
+    if (isSelected && (!isConfigured || reinstallConfigured)) result.toInstall.push(provider);
     else if (isSelected && isConfigured) result.skipped.push(provider);
     else if (!isSelected && isConfigured) result.toRemove.push(provider);
   }
