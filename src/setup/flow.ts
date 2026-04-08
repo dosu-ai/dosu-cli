@@ -40,6 +40,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     // --deployment flag provided, use specified deployment
     const d = await stepResolveDeployment(apiClient, opts.deploymentID);
     if (!d) return;
+    cfg.mode = undefined;
     cfg.deployment_id = d.deployment_id;
     cfg.deployment_name = d.name;
   } else if (cfg.mode === MODE_OSS) {
@@ -55,6 +56,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     if (!org) return;
     const d = await stepSelectDeployment(apiClient, org);
     if (!d) return;
+    cfg.mode = undefined;
     cfg.deployment_id = d.deployment_id;
     cfg.deployment_name = d.name;
   }
