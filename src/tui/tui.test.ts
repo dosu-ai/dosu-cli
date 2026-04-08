@@ -485,9 +485,7 @@ describe("runTUI", () => {
     // User keeps all (no deselection)
     mockMultiselect.mockResolvedValueOnce(["cursor"]);
 
-    mockSelect
-      .mockResolvedValueOnce("mcp-remove")
-      .mockResolvedValueOnce("exit");
+    mockSelect.mockResolvedValueOnce("mcp-remove").mockResolvedValueOnce("exit");
 
     await runTUI();
 
@@ -518,9 +516,7 @@ describe("runTUI", () => {
     // Create ~/.cursor but without dosu configured
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
 
-    mockSelect
-      .mockResolvedValueOnce("mcp-remove")
-      .mockResolvedValueOnce("exit");
+    mockSelect.mockResolvedValueOnce("mcp-remove").mockResolvedValueOnce("exit");
 
     await runTUI();
 
