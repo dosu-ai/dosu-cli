@@ -1,9 +1,10 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { Config } from "../../config/config";
+import { type Config, MODE_OSS } from "../../config/config";
 import {
   installJSONServer,
   isJSONKeyConfigured,
+  mcpBaseURL,
   mcpHeaders,
   mcpURL,
   removeJSONServer,
@@ -30,13 +31,13 @@ export const MCPorterProvider = (): SetupProvider => ({
   isConfigured: () => isJSONKeyConfigured(resolveGlobalConfigPath(), "mcpServers"),
 
   install(cfg: Config, global: boolean): void {
-    if (!cfg.deployment_id) throw new Error("deployment ID is required");
+    if (cfg.mode !== MODE_OSS && !cfg.deployment_id) throw new Error("deployment ID is required");
     const configPath = global
       ? resolveGlobalConfigPath()
       : join(process.cwd(), "config", "mcporter.json");
     const server = {
       type: "http",
-      url: mcpURL(cfg.deployment_id),
+      url: cfg.mode === MODE_OSS ? mcpBaseURL() : mcpURL(cfg.deployment_id!),
       // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
       headers: mcpHeaders(cfg.api_key!),
     };

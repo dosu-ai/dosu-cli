@@ -353,6 +353,7 @@ describe("runTUI", () => {
   it("logout action clears real config on disk", async () => {
     const cfg = makeCfg({
       access_token: "tok",
+      mode: "oss",
       refresh_token: "ref",
       expires_at: 9999999999,
       deployment_id: "dep-1",
@@ -371,6 +372,7 @@ describe("runTUI", () => {
     expect(ondisk.access_token).toBe("");
     expect(ondisk.refresh_token).toBe("");
     expect(ondisk.expires_at).toBe(0);
+    expect(ondisk.mode).toBeUndefined();
     expect(p.log.success).toHaveBeenCalledWith("Credentials cleared.");
   });
 
@@ -499,6 +501,34 @@ describe("runTUI", () => {
     await runTUI();
 
     expect(p.log.warn).toHaveBeenCalledWith("Please select a deployment first.");
+  });
+
+  it("mcp-add in OSS mode works without a selected deployment", async () => {
+    writeRealConfig(
+      makeCfg({
+        access_token: "tok",
+        mode: "oss",
+        deployment_id: undefined,
+        deployment_name: undefined,
+        api_key: "key-abc",
+      }),
+    );
+    mockIsCancel.mockReturnValue(false);
+
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+
+    mockSelect
+      .mockResolvedValueOnce("mcp-add")
+      .mockResolvedValueOnce("cursor")
+      .mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    expect(p.log.warn).not.toHaveBeenCalledWith("Please select a deployment first.");
+
+    const mcpConfig = loadJSONConfig(cursorMcpPath());
+    expect(mcpConfig.mcpServers.dosu.url).toContain("/v1/mcp");
+    expect(mcpConfig.mcpServers.dosu.url).not.toContain("/deployments/");
   });
 
   it("mcp-add with real Cursor provider creates JSON config on disk", async () => {

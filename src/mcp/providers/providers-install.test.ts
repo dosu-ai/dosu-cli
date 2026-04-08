@@ -283,6 +283,18 @@ describe("CodexProvider", () => {
     expect(content).toContain("[mcp_servers.dosu]");
   });
 
+  it("OSS mode install writes base MCP URL to TOML config", async () => {
+    const { CodexProvider } = await import("./codex");
+    const provider = CodexProvider();
+
+    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), true);
+
+    const configPath = join(tempDir, "codex-home", "config.toml");
+    const content = readFileSync(configPath, "utf-8");
+    expect(content).toContain("/v1/mcp");
+    expect(content).not.toContain("/deployments/");
+  });
+
   it("install throws when deployment_id is missing", async () => {
     const { CodexProvider } = await import("./codex");
     const provider = CodexProvider();
@@ -443,6 +455,22 @@ describe("CopilotProvider", () => {
     expect(cfg.servers.dosu.tools).toBeUndefined();
   });
 
+  it("OSS mode install writes base MCP URL for global and local Copilot configs", async () => {
+    const { CopilotProvider } = await import("./copilot");
+    const provider = CopilotProvider();
+
+    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), true);
+    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), false);
+
+    const globalCfg = loadJSONConfig(join(tempDir, "xdg-config", "mcp-config.json"));
+    expect(globalCfg.mcpServers.dosu.url).toContain("/v1/mcp");
+    expect(globalCfg.mcpServers.dosu.url).not.toContain("/deployments/");
+
+    const localCfg = loadJSONConfig(join(tempDir, ".vscode", "mcp.json"));
+    expect(localCfg.servers.dosu.url).toContain("/v1/mcp");
+    expect(localCfg.servers.dosu.url).not.toContain("/deployments/");
+  });
+
   it("install throws when deployment_id is missing", async () => {
     const { CopilotProvider } = await import("./copilot");
     const provider = CopilotProvider();
@@ -572,6 +600,18 @@ describe("MCPorterProvider", () => {
     expect(cfg.mcpServers.dosu).toBeDefined();
   });
 
+  it("OSS mode install writes base MCP URL for MCPorter", async () => {
+    const { MCPorterProvider } = await import("./mcporter");
+    const provider = MCPorterProvider();
+
+    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), true);
+
+    const configPath = join(tempDir, ".mcporter", "mcporter.json");
+    const cfg = loadJSONConfig(configPath);
+    expect(cfg.mcpServers.dosu.url).toContain("/v1/mcp");
+    expect(cfg.mcpServers.dosu.url).not.toContain("/deployments/");
+  });
+
   it("install throws when deployment_id is missing", async () => {
     const { MCPorterProvider } = await import("./mcporter");
     const provider = MCPorterProvider();
@@ -623,6 +663,21 @@ describe("ManualProvider", () => {
     expect(allOutput).toContain("dep-123");
     expect(allOutput).toContain("key-abc");
     expect(allOutput).toContain("X-Dosu-API-Key");
+
+    logSpy.mockRestore();
+  });
+
+  it("OSS mode install logs base MCP URL", async () => {
+    const { ManualProvider } = await import("./manual");
+    const provider = ManualProvider();
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), false);
+
+    const allOutput = logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(allOutput).toContain("/v1/mcp");
+    expect(allOutput).not.toContain("/deployments/");
 
     logSpy.mockRestore();
   });

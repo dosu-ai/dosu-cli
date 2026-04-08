@@ -33,7 +33,7 @@ export async function runTUI(): Promise<void> {
 
   // Main menu
   while (true) {
-    const hasDeployment = !!cfg.deployment_id;
+    const hasMcpTarget = cfg.mode === MODE_OSS || !!cfg.deployment_id;
 
     const action = await p.select({
       message: "What would you like to do?",
@@ -51,12 +51,12 @@ export async function runTUI(): Promise<void> {
         {
           label: "Add MCP",
           value: "mcp-add",
-          hint: !hasDeployment ? "Select deployment first" : undefined,
+          hint: !hasMcpTarget ? "Select deployment first" : undefined,
         },
         {
           label: "Remove MCP",
           value: "mcp-remove",
-          hint: !hasDeployment ? "Select deployment first" : undefined,
+          hint: !hasMcpTarget ? "Select deployment first" : undefined,
         },
         { label: "Clear Credentials", value: "logout" },
         { label: "Exit", value: "exit" },
@@ -75,14 +75,14 @@ export async function runTUI(): Promise<void> {
         await handleDeployments(cfg);
         break;
       case "mcp-add":
-        if (!hasDeployment) {
+        if (!hasMcpTarget) {
           p.log.warn("Please select a deployment first.");
           continue;
         }
         await handleMCPAdd(cfg);
         break;
       case "mcp-remove":
-        if (!hasDeployment) {
+        if (!hasMcpTarget) {
           p.log.warn("Please select a deployment first.");
           continue;
         }
@@ -242,6 +242,7 @@ export function handleLogout(cfg: ReturnType<typeof loadConfig>): void {
   cfg.access_token = "";
   cfg.refresh_token = "";
   cfg.expires_at = 0;
+  cfg.mode = undefined;
   cfg.deployment_id = undefined;
   cfg.deployment_name = undefined;
   cfg.api_key = undefined;

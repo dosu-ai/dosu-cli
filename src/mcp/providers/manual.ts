@@ -1,5 +1,5 @@
-import type { Config } from "../../config/config";
-import { mcpURL } from "../config-helpers";
+import { type Config, MODE_OSS } from "../../config/config";
+import { mcpBaseURL, mcpURL } from "../config-helpers";
 import type { Provider } from "../providers";
 
 export const ManualProvider = (): Provider => ({
@@ -8,8 +8,7 @@ export const ManualProvider = (): Provider => ({
   supportsLocal: () => false,
 
   install(cfg: Config): void {
-    // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
-    const url = mcpURL(cfg.deployment_id!);
+    const url = cfg.mode === MODE_OSS ? mcpBaseURL() : mcpURL(cfg.deployment_id!);
     console.log("Use these details to configure the Dosu MCP server in your client:");
     console.log();
     console.log(`  Transport:      HTTP`);

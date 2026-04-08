@@ -301,7 +301,7 @@ async function stepSelectTools(detected: SetupProvider[]): Promise<ToolSelection
   const options = detected.map((p) => {
     const configured = configuredMap.get(p.id()) ?? false;
     return {
-      label: configured ? `${p.name()} ${dim("(already configured)")}` : p.name(),
+      label: p.name(),
       value: p.id(),
       hint: configured ? "configured" : undefined,
     };
@@ -310,7 +310,7 @@ async function stepSelectTools(detected: SetupProvider[]): Promise<ToolSelection
   const preselected = detected.filter((p) => configuredMap.get(p.id())).map((p) => p.id());
 
   const selected = await p.multiselect({
-    message: "Select tools to configure",
+    message: "Select tools to configure or update",
     options,
     initialValues: preselected,
   });
@@ -324,9 +324,8 @@ async function stepSelectTools(detected: SetupProvider[]): Promise<ToolSelection
     const isSelected = selectedSet.has(provider.id());
     const isConfigured = configuredMap.get(provider.id()) ?? false;
 
-    if (isSelected && !isConfigured) result.toInstall.push(provider);
-    else if (isSelected && isConfigured) result.skipped.push(provider);
-    else if (!isSelected && isConfigured) result.toRemove.push(provider);
+    if (isSelected) result.toInstall.push(provider);
+    else if (isConfigured) result.toRemove.push(provider);
   }
 
   return result;

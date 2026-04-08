@@ -212,6 +212,19 @@ describe("CLI actions", () => {
       expect(logSpy).toHaveBeenCalledWith("Deployment: None selected");
       expect(logSpy).toHaveBeenCalledWith("Run 'dosu' to open the TUI and select a deployment.");
     });
+
+    it("shows OSS mode without requiring a deployment", async () => {
+      const cfg = authenticatedConfig();
+      cfg.mode = "oss";
+      cfg.deployment_id = undefined;
+      cfg.deployment_name = undefined;
+      saveConfig(cfg);
+
+      await run("status");
+
+      expect(logSpy).toHaveBeenCalledWith("Mode: OSS");
+      expect(logSpy).toHaveBeenCalledWith("Deployment: Public libraries only");
+    });
   });
 
   // ── mcp list ────────────────────────────────────────────────────────────
@@ -299,6 +312,21 @@ describe("CLI actions", () => {
       saveConfig(cfg);
 
       await expect(run("mcp", "add", "cursor")).rejects.toThrow("no deployment selected");
+    });
+
+    it("supports OSS mode without a selected deployment", async () => {
+      const cfg = authenticatedConfig();
+      cfg.mode = "oss";
+      cfg.deployment_id = undefined;
+      cfg.deployment_name = undefined;
+      saveConfig(cfg);
+
+      await run("mcp", "add", "cursor", "--global");
+
+      const cursorConfigPath = join(tempDir, ".cursor", "mcp.json");
+      const cursorConfig = JSON.parse(readFileSync(cursorConfigPath, "utf-8"));
+      expect(cursorConfig.mcpServers.dosu.url).toContain("/v1/mcp");
+      expect(cursorConfig.mcpServers.dosu.url).not.toContain("/deployments/");
     });
 
     it("logs manual config details without writing files", async () => {

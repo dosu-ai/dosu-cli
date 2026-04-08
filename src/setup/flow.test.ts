@@ -48,7 +48,7 @@ import type { TokenResponse } from "../auth/server";
 import { Client } from "../client/client";
 import type { Config } from "../config/config";
 import { loadConfig, saveConfig } from "../config/config";
-import { loadJSONConfig } from "../mcp/config-helpers";
+import { loadJSONConfig, saveJSONConfig } from "../mcp/config-helpers";
 import * as providersModule from "../mcp/providers";
 import { ClaudeDesktopProvider } from "../mcp/providers/claude-desktop";
 import { CursorProvider } from "../mcp/providers/cursor";
@@ -622,13 +622,17 @@ describe("runSetup integration", () => {
         { deployment_id: "d1", name: "Deploy1", org_id: "o1", org_name: "Org1" },
         { deployment_id: "d2", name: "Deploy2", org_id: "o1", org_name: "Org1" },
       ]),
-      validateAPIKey: vi.fn().mockResolvedValue(false),
-      createAPIKey: vi.fn().mockResolvedValue({ api_key: "fresh-key" }),
+      validateAPIKey: vi.fn().mockResolvedValue(true),
     });
 
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
     vi.mocked(p.multiselect).mockResolvedValue(["cursor"]);
+
+    CursorProvider().install(makeCfg({ mode: "oss", deployment_id: undefined }), true);
+    const ossConfig = loadJSONConfig(join(tempDir, ".cursor", "mcp.json"));
+    expect(ossConfig.mcpServers.dosu.url).toContain("/v1/mcp");
+    expect(ossConfig.mcpServers.dosu.url).not.toContain("/deployments/");
 
     await runSetup({ deploymentID: "d2" });
 
@@ -640,11 +644,11 @@ describe("runSetup integration", () => {
     const savedCfg = loadConfig();
     expect(savedCfg.mode).toBeUndefined();
     expect(savedCfg.deployment_id).toBe("d2");
-    expect(savedCfg.api_key).toBe("fresh-key");
+    expect(savedCfg.api_key).toBe("key-abc");
 
     const cursorConfig = loadJSONConfig(join(tempDir, ".cursor", "mcp.json"));
     expect(cursorConfig.mcpServers.dosu.url).toContain("/v1/mcp/deployments/d2");
-    expect(cursorConfig.mcpServers.dosu.url).not.toBe("https://api.dosu.dev/v1/mcp");
+    expect(cursorConfig.mcpServers.dosu.url).not.toBe(ossConfig.mcpServers.dosu.url);
   });
 
   it("creates new API key when existing one is invalid", async () => {
@@ -665,6 +669,61 @@ describe("runSetup integration", () => {
     // Config on disk should have fresh key
     const savedCfg = loadConfig();
     expect(savedCfg.api_key).toBe("fresh-key");
+  });
+
+  it("reinstalls configured tools when only the API key changes", async () => {
+    // Use deployment_id "d1" to match the mock so deployment doesn't change
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    const cfg = makeCfg({ deployment_id: "d1", deployment_name: "Deploy1", api_key: "old-key" });
+    saveConfig(cfg);
+    CursorProvider().install(cfg, true);
+
+    // The old key is "invalid", so the flow will mint a new one
+    setupAuthenticatedClient({
+      validateAPIKey: vi.fn().mockResolvedValue(false),
+      createAPIKey: vi.fn().mockResolvedValue({ api_key: "new-key" }),
+    });
+
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    vi.mocked(p.multiselect).mockResolvedValue(["cursor"]);
+
+    await runSetup();
+
+    // Cursor should have been reinstalled (not skipped) because api_key changed
+    const cursorConfig = loadJSONConfig(join(tempDir, ".cursor", "mcp.json"));
+    expect(cursorConfig.mcpServers.dosu.headers["X-Dosu-API-Key"]).toBe("new-key");
+  });
+
+  it("reinstalls configured tools when setup is re-run with the same target", async () => {
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    const cfg = makeCfg({ deployment_id: "d1", deployment_name: "Deploy1", api_key: "key-abc" });
+    saveConfig(cfg);
+
+    const cursorConfigPath = join(tempDir, ".cursor", "mcp.json");
+    saveJSONConfig(cursorConfigPath, {
+      mcpServers: {
+        dosu: {
+          type: "http",
+          url: "https://stale.example/v1/mcp/deployments/old-deployment",
+          headers: {
+            "X-Dosu-API-Key": "stale-key",
+          },
+        },
+      },
+    });
+
+    setupAuthenticatedClient({
+      validateAPIKey: vi.fn().mockResolvedValue(true),
+    });
+
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    vi.mocked(p.multiselect).mockResolvedValue(["cursor"]);
+
+    await runSetup();
+
+    const cursorConfig = loadJSONConfig(cursorConfigPath);
+    expect(cursorConfig.mcpServers.dosu.url).toContain("/v1/mcp/deployments/d1");
+    expect(cursorConfig.mcpServers.dosu.headers["X-Dosu-API-Key"]).toBe("key-abc");
   });
 
   it("shows error when OAuth fails", async () => {
