@@ -242,7 +242,7 @@ async function stepSelectDeployment(apiClient: Client, org: Org): Promise<Deploy
       return deployments[0];
     }
     const selected = await p.select({
-      message: "Select a deployment",
+      message: "Select an MCP",
       options: deployments.map((d) => ({ label: d.name, value: d.deployment_id })),
     });
     if (p.isCancel(selected)) return null;

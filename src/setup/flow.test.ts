@@ -727,9 +727,7 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(p.select).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Select a deployment" }),
-    );
+    expect(p.select).toHaveBeenCalledWith(expect.objectContaining({ message: "Select an MCP" }));
     const saved = loadConfig();
     expect(saved.deployment_id).toBe("d2");
   });

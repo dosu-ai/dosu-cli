@@ -44,7 +44,7 @@ export async function runTUI(): Promise<void> {
           hint: isAuthenticated(cfg) ? "Re-authenticate" : undefined,
         },
         {
-          label: "Choose Deployment",
+          label: "Choose MCP",
           value: "deployments",
           hint: !isAuthenticated(cfg) ? "Login first" : undefined,
         },
@@ -112,7 +112,7 @@ async function handleDeployments(cfg: ReturnType<typeof loadConfig>): Promise<vo
     }
 
     const selected = await p.select({
-      message: "Select a deployment",
+      message: "Select an MCP",
       options: deployments.map((d) => ({
         label: `${d.name} ${pc.dim(`(${d.org_name})`)}`,
         value: d.deployment_id,
