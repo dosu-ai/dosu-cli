@@ -1249,6 +1249,6 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("Dosu MCP"));
+    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("Dosu help"));
   });
 });
