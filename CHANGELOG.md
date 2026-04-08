@@ -1,3 +1,10 @@
+# [0.5.0](https://github.com/dosu-ai/dosu-cli/compare/v0.4.0...v0.5.0) (2026-04-08)
+
+
+### Features
+
+* OSS mode, CI upgrades, and setup improvements ([#43](https://github.com/dosu-ai/dosu-cli/issues/43)) ([06735fb](https://github.com/dosu-ai/dosu-cli/commit/06735fb01951b906daa84b9912a51d9cf54bed4e))
+
 # [0.4.0](https://github.com/dosu-ai/dosu-cli/compare/v0.3.8...v0.4.0) (2026-04-08)
 
 
