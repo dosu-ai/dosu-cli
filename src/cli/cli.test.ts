@@ -1,4 +1,16 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../debug/logger", () => ({
+  logger: {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    init: vi.fn(),
+    getLogPath: vi.fn(() => "/tmp/test-debug.log"),
+  },
+}));
+
 import { createProgram } from "./cli";
 
 describe("CLI", () => {
