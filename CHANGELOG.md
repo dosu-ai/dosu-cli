@@ -1,3 +1,10 @@
+# [0.8.0](https://github.com/dosu-ai/dosu-cli/compare/v0.7.0...v0.8.0) (2026-04-10)
+
+
+### Features
+
+* add persistent debug logging and --debug flag ([#46](https://github.com/dosu-ai/dosu-cli/issues/46)) ([e01b4b9](https://github.com/dosu-ai/dosu-cli/commit/e01b4b9e7057b94393a2d486d802bfd25c169252))
+
 # [0.7.0](https://github.com/dosu-ai/dosu-cli/compare/v0.6.0...v0.7.0) (2026-04-08)
 
 
