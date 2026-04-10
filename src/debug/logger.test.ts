@@ -135,8 +135,8 @@ describe("logger", () => {
 
   describe("graceful degradation", () => {
     it("does not throw when log path is unwritable", () => {
-      // Point to a path that can't be created
-      process.env.XDG_CONFIG_HOME = "/proc/nonexistent";
+      // Point to a path that can't be created (use /dev/null parent — not a directory)
+      process.env.XDG_CONFIG_HOME = "/dev/null";
       logger._resetForTesting();
 
       expect(() => logger.info("test", "should not crash")).not.toThrow();
