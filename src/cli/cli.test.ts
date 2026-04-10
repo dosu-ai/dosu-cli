@@ -1,4 +1,16 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../debug/logger", () => ({
+  logger: {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    init: vi.fn(),
+    getLogPath: vi.fn(() => "/tmp/test-debug.log"),
+  },
+}));
+
 import { createProgram } from "./cli";
 
 describe("CLI", () => {
@@ -65,5 +77,20 @@ describe("CLI", () => {
     const addCmd = mcpCmd?.commands.find((c) => c.name() === "add");
     const globalOpt = addCmd?.options.find((o) => o.long === "--global");
     expect(globalOpt).toBeDefined();
+  });
+
+  it("has --debug global option", () => {
+    const program = createProgram();
+    const debugOpt = program.options.find((o) => o.long === "--debug");
+    expect(debugOpt).toBeDefined();
+  });
+
+  it("has logs command with --tail and --clear options", () => {
+    const program = createProgram();
+    const cmd = program.commands.find((c) => c.name() === "logs");
+    expect(cmd).toBeDefined();
+    expect(cmd?.description()).toContain("debug logs");
+    expect(cmd?.options.find((o) => o.long === "--tail")).toBeDefined();
+    expect(cmd?.options.find((o) => o.long === "--clear")).toBeDefined();
   });
 });

@@ -2,6 +2,7 @@
  * CLI command definitions using Commander.
  */
 
+import { readFileSync, unlinkSync } from "node:fs";
 import { Command } from "commander";
 import {
   getConfigPath,
@@ -11,6 +12,7 @@ import {
   MODE_OSS,
   saveConfig,
 } from "../config/config";
+import { logger } from "../debug/logger";
 import { allProviders, getProvider, type Provider } from "../mcp/providers";
 import { getVersionString } from "../version/version";
 
@@ -21,6 +23,11 @@ export function createProgram(): Command {
     .name("dosu")
     .description("Dosu CLI - Manage MCP servers for AI tools")
     .version(getVersionString(), "-v, --version")
+    .option("--debug", "Enable debug logging to stderr", false)
+    .hook("preAction", (thisCommand) => {
+      const opts = thisCommand.optsWithGlobals();
+      logger.init({ debug: opts.debug });
+    })
     .action(async () => {
       // Default: launch TUI when no subcommand given
       const { runTUI } = await import("../tui/tui");
@@ -175,6 +182,41 @@ export function createProgram(): Command {
     .action(async (opts: { deployment?: string }) => {
       const { runSetup } = await import("../setup/flow");
       await runSetup({ deploymentID: opts.deployment });
+    });
+
+  // logs
+  program
+    .command("logs")
+    .description("View or manage debug logs")
+    .option("-t, --tail [n]", "Show last N lines (default: 50)")
+    .option("--clear", "Delete the log file")
+    .action((opts: { tail?: string | true; clear?: boolean }) => {
+      const logPath = logger.getLogPath();
+
+      if (opts.clear) {
+        try {
+          unlinkSync(logPath);
+          console.log("Log file deleted.");
+        } catch {
+          console.log("No log file to delete.");
+        }
+        return;
+      }
+
+      if (opts.tail !== undefined) {
+        const n = typeof opts.tail === "string" ? parseInt(opts.tail, 10) || 50 : 50;
+        try {
+          const content = readFileSync(logPath, "utf-8");
+          const lines = content.split("\n");
+          console.log(lines.slice(-n).join("\n"));
+        } catch {
+          console.log(`No log file found at ${logPath}`);
+        }
+        return;
+      }
+
+      // No flags: print log file path
+      console.log(logPath);
     });
 
   return program;

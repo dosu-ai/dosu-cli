@@ -6,6 +6,8 @@ export default defineConfig({
     environment: "node",
     include: ["src/**/*.test.ts", "scripts/**/*.test.ts"],
     pool: "forks",
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov"],

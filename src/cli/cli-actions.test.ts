@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -24,6 +24,21 @@ vi.mock("../setup/flow", () => ({
   runSetup: (...args: unknown[]) => mockRunSetup(...args),
 }));
 
+const { mockLoggerGetLogPath } = vi.hoisted(() => ({
+  mockLoggerGetLogPath: vi.fn(),
+}));
+vi.mock("../debug/logger", () => ({
+  logger: {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    init: vi.fn(),
+    getLogPath: mockLoggerGetLogPath,
+    _resetForTesting: vi.fn(),
+  },
+}));
+
 // ── Temp dir + env management ───────────────────────────────────────────────
 
 let tempDir: string;
@@ -39,6 +54,7 @@ beforeEach(() => {
   process.env.HOME = tempDir;
 
   vi.clearAllMocks();
+  mockLoggerGetLogPath.mockReturnValue(join(tempDir, "dosu-cli", "debug.log"));
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 });
 
@@ -384,6 +400,48 @@ describe("CLI actions", () => {
       expect(mockRunSetup).toHaveBeenCalledWith({
         deploymentID: "dep_456",
       });
+    });
+  });
+
+  // ── logs ────────────────────────────────────────────────────────────────
+
+  describe("logs", () => {
+    it("prints log file path with no flags", async () => {
+      await run("logs");
+      const output = allLogOutput();
+      expect(output).toContain(join(tempDir, "dosu-cli", "debug.log"));
+    });
+
+    it("--clear deletes the log file", async () => {
+      const logDir = join(tempDir, "dosu-cli");
+      mkdirSync(logDir, { recursive: true });
+      writeFileSync(join(logDir, "debug.log"), "test log content");
+
+      await run("logs", "--clear");
+      expect(logSpy).toHaveBeenCalledWith("Log file deleted.");
+    });
+
+    it("--clear prints message when no file exists", async () => {
+      await run("logs", "--clear");
+      expect(logSpy).toHaveBeenCalledWith("No log file to delete.");
+    });
+
+    it("--tail shows last N lines", async () => {
+      const logDir = join(tempDir, "dosu-cli");
+      mkdirSync(logDir, { recursive: true });
+      const lines = Array.from({ length: 100 }, (_, i) => `line ${i}`).join("\n");
+      writeFileSync(join(logDir, "debug.log"), lines);
+
+      await run("logs", "--tail", "5");
+      const output = allLogOutput();
+      expect(output).toContain("line 99");
+      expect(output).toContain("line 95");
+    });
+
+    it("--tail prints message when no file exists", async () => {
+      await run("logs", "--tail");
+      const output = allLogOutput();
+      expect(output).toContain("No log file found");
     });
   });
 });

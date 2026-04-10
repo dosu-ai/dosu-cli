@@ -22,6 +22,17 @@ vi.mock("../config/constants", () => ({
   getWebAppURL: mockGetWebAppURL,
 }));
 
+vi.mock("../debug/logger", () => ({
+  logger: {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    init: vi.fn(),
+    getLogPath: vi.fn(() => "/tmp/test-debug.log"),
+  },
+}));
+
 import { startOAuthFlow } from "./flow";
 
 function createMockServer(): CallbackServer {

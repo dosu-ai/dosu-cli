@@ -19,7 +19,7 @@ export interface Config {
   mode?: SetupMode;
 }
 
-function getConfigDir(): string {
+export function getConfigDir(): string {
   const xdgConfig = process.env.XDG_CONFIG_HOME;
   if (xdgConfig) return join(xdgConfig, "dosu-cli");
 

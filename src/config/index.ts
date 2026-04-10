@@ -2,6 +2,7 @@ export {
   type Config,
   clearConfig,
   emptyConfig,
+  getConfigDir,
   getConfigPath,
   isAuthenticated,
   isTokenExpired,

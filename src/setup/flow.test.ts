@@ -29,6 +29,17 @@ vi.mock("../auth/flow", () => ({
   startOAuthFlow: vi.fn(),
 }));
 
+vi.mock("../debug/logger", () => ({
+  logger: {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    init: vi.fn(),
+    getLogPath: vi.fn(() => "/tmp/test-debug.log"),
+  },
+}));
+
 vi.mock("../client/client", () => {
   const SessionExpiredError = class extends Error {
     constructor() {

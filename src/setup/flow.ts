@@ -5,6 +5,7 @@
 import * as p from "@clack/prompts";
 import { Client, type Deployment, type Org, SessionExpiredError } from "../client/client";
 import { type Config, loadConfig, MODE_OSS, type SetupMode, saveConfig } from "../config/config";
+import { logger } from "../debug/logger";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { dim, info } from "./styles";
 
@@ -27,6 +28,10 @@ export interface ToolSelection {
 }
 
 export async function runSetup(opts: SetupOptions = {}): Promise<void> {
+  logger.info(
+    "setup",
+    `Setup flow started${opts.deploymentID ? ` deployment=${opts.deploymentID}` : ""}`,
+  );
   p.intro("Dosu CLI Setup");
 
   // Step 1: Authenticate
@@ -94,6 +99,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
 }
 
 async function stepAuthenticate(opts: SetupOptions): Promise<Config | null> {
+  logger.info("setup", "Step: authenticate");
   const cfg = loadConfig();
 
   // If we have a token, verify it against the backend first
@@ -104,6 +110,7 @@ async function stepAuthenticate(opts: SetupOptions): Promise<Config | null> {
       const apiClient = new Client(cfg);
       const resp = await apiClient.doRequestRaw("GET", "/v1/mcp/deployments");
       if (resp.status === 200) {
+        logger.info("setup", `Session verified, status=${resp.status}`);
         s.stop("Authenticated");
 
         // If configured for OSS and no --deployment flag, let the user reconfigure
@@ -126,6 +133,7 @@ async function stepAuthenticate(opts: SetupOptions): Promise<Config | null> {
       }
       // Any non-200 status — try refresh before giving up
       try {
+        logger.debug("setup", "Attempting token refresh");
         await apiClient.refreshToken();
         const resp2 = await apiClient.doRequestRaw("GET", "/v1/mcp/deployments");
         if (resp2.status === 200) {
@@ -136,6 +144,7 @@ async function stepAuthenticate(opts: SetupOptions): Promise<Config | null> {
         // refresh failed, fall through to login
       }
       s.stop("Session expired");
+      logger.warn("setup", "Session expired");
       p.log.warn("Session expired.");
     } catch {
       s.stop("Session verification failed");
@@ -158,6 +167,7 @@ async function openBrowserForSetup(cfg: Config, opts: SetupOptions): Promise<Con
     const authPath = opts.deploymentID ? "/cli/auth" : "/cli/setup";
     const token = await startOAuthFlow(undefined, authPath);
     s.stop("Authenticated");
+    logger.info("setup", `Browser auth completed, mode=${token.mode ?? "cloud"}`);
 
     cfg.access_token = token.access_token;
     cfg.refresh_token = token.refresh_token;
@@ -167,7 +177,9 @@ async function openBrowserForSetup(cfg: Config, opts: SetupOptions): Promise<Con
     saveConfig(cfg);
     return cfg;
   } catch (err: unknown) {
-    /* v8 ignore next -- err is always Error in practice */
+    /* v8 ignore next 2 -- err is always Error in practice */
+    const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    logger.error("setup", `Auth failed: ${msg}`);
     p.log.error(`Authentication failed: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
@@ -189,6 +201,7 @@ async function stepSelectOrg(apiClient: Client): Promise<Org | null> {
       return null;
     }
     if (orgs.length === 1) {
+      logger.info("setup", `Selected org: ${orgs[0].name} (auto, only one)`);
       p.log.success(`Organization\n${dim(orgs[0].name)}`);
       return orgs[0];
     }
@@ -197,7 +210,9 @@ async function stepSelectOrg(apiClient: Client): Promise<Org | null> {
       options: orgs.map((o) => ({ label: o.name, value: o.org_id })),
     });
     if (p.isCancel(selected)) return null;
-    return orgs.find((o) => o.org_id === selected) ?? null;
+    const org = orgs.find((o) => o.org_id === selected) ?? null;
+    if (org) logger.info("setup", `Selected org: ${org.name}`);
+    return org;
   } catch (err: unknown) {
     if (err instanceof SessionExpiredError) {
       p.log.warn(`Session expired. Please run ${info("dosu setup")} again.`);
@@ -216,9 +231,11 @@ async function stepResolveDeployment(apiClient: Client, id: string): Promise<Dep
     const deployments = await apiClient.getDeployments();
     const d = deployments.find((d) => d.deployment_id === id);
     if (!d) {
+      logger.warn("setup", `Deployment ${id} not found`);
       p.log.error(`Deployment ${id} not found`);
       return null;
     }
+    logger.info("setup", `Resolved deployment: ${d.name}`);
     p.log.success(`Using deployment\n${dim(d.name)}`);
     return d;
   } catch (err: unknown) {
@@ -240,6 +257,7 @@ async function stepSelectDeployment(apiClient: Client, org: Org): Promise<Deploy
       return null;
     }
     if (deployments.length === 1) {
+      logger.info("setup", `Selected deployment: ${deployments[0].name} (auto, only one)`);
       p.log.success(`Using deployment\n${dim(deployments[0].name)}`);
       return deployments[0];
     }
@@ -248,7 +266,9 @@ async function stepSelectDeployment(apiClient: Client, org: Org): Promise<Deploy
       options: deployments.map((d) => ({ label: d.name, value: d.deployment_id })),
     });
     if (p.isCancel(selected)) return null;
-    return deployments.find((d) => d.deployment_id === selected) ?? null;
+    const d = deployments.find((d) => d.deployment_id === selected) ?? null;
+    if (d) logger.info("setup", `Selected deployment: ${d.name}`);
+    return d;
   } catch (err: unknown) {
     /* v8 ignore next -- err is always Error in practice */
     p.log.error(`Deployment selection failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -265,6 +285,7 @@ async function stepMintAPIKey(apiClient: Client, cfg: Config): Promise<string | 
   if (cfg.api_key) {
     // biome-ignore lint/style/noNonNullAssertion: checked above
     const valid = await apiClient.validateAPIKey(cfg.api_key, cfg.deployment_id!);
+    logger.debug("setup", `Existing API key valid=${valid}`);
     if (valid) {
       p.log.success(`API key\n${dim("using existing")}`);
       return cfg.api_key;
@@ -275,6 +296,7 @@ async function stepMintAPIKey(apiClient: Client, cfg: Config): Promise<string | 
   try {
     // biome-ignore lint/style/noNonNullAssertion: checked above
     const resp = await apiClient.createAPIKey(cfg.deployment_id!, "dosu-cli");
+    logger.info("setup", "API key created");
     p.log.success(`API key\n${dim("created")}`);
     return resp.api_key;
   } catch (err: unknown) {
@@ -337,10 +359,15 @@ export function stepConfigureTools(cfg: Config, selection: ToolSelection): Confi
   for (const provider of selection.toInstall) {
     try {
       provider.install(cfg, true);
+      logger.info("setup", `Configured ${provider.name()}`);
       results.push({ provider, action: "install" });
     } catch (err: unknown) {
       /* v8 ignore next -- err is always Error in practice */
       const error = err instanceof Error ? err : new Error(String(err));
+      logger.error(
+        "setup",
+        `Config failed for ${provider.name()}: ${error.stack ?? error.message}`,
+      );
       p.log.error(`Failed to configure ${provider.name()}: ${error.message}`);
       results.push({ provider, action: "install", error });
     }
@@ -349,10 +376,15 @@ export function stepConfigureTools(cfg: Config, selection: ToolSelection): Confi
   for (const provider of selection.toRemove) {
     try {
       provider.remove(true);
+      logger.info("setup", `Removed ${provider.name()}`);
       results.push({ provider, action: "remove" });
     } catch (err: unknown) {
       /* v8 ignore next -- err is always Error in practice */
       const error = err instanceof Error ? err : new Error(String(err));
+      logger.error(
+        "setup",
+        `Remove failed for ${provider.name()}: ${error.stack ?? error.message}`,
+      );
       p.log.error(`Failed to remove ${provider.name()}: ${error.message}`);
       results.push({ provider, action: "remove", error });
     }
