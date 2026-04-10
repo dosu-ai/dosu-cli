@@ -3,6 +3,7 @@
  */
 
 import { MODE_OSS, type SetupMode } from "../config/config";
+import { logger } from "../debug/logger";
 
 export interface TokenResponse {
   access_token: string;
@@ -183,7 +184,15 @@ export async function startCallbackServer(): Promise<{
   const httpServer = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", `http://localhost`);
 
+    const cookieLen = (req.headers.cookie ?? "").length;
+    const ua = req.headers["user-agent"] ?? "none";
+    logger.debug(
+      "auth.server",
+      `Request: ${req.method} ${req.url} cookie-len=${cookieLen} ua=${ua} has-token=${url.searchParams.has("access_token")}`,
+    );
+
     if (url.pathname !== "/callback") {
+      logger.debug("auth.server", `404: ${url.pathname}`);
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("Not Found");
       return;
@@ -196,6 +205,7 @@ export async function startCallbackServer(): Promise<{
     const mode = url.searchParams.get("mode");
 
     if (!accessToken) {
+      logger.debug("auth.server", "Served extract HTML (no token in query)");
       res.writeHead(200, { "Content-Type": "text/html" });
       res.end(CALLBACK_HTML_EXTRACT);
       return;
@@ -208,6 +218,7 @@ export async function startCallbackServer(): Promise<{
       if (!Number.isNaN(parsed)) expiresInInt = parsed;
     }
 
+    logger.info("auth.server", `Token resolved, email=${email ?? "none"}`);
     resolveToken?.({
       access_token: accessToken,
       refresh_token: refreshToken && refreshToken !== "null" ? refreshToken : "",
@@ -216,6 +227,7 @@ export async function startCallbackServer(): Promise<{
       ...(mode === MODE_OSS && { mode: MODE_OSS }),
     });
 
+    logger.info("auth.server", "Served success HTML");
     res.writeHead(200, { "Content-Type": "text/html" });
     res.end(buildSuccessHtml(email ?? undefined));
   });
@@ -225,6 +237,7 @@ export async function startCallbackServer(): Promise<{
     httpServer.listen(0, "localhost", () => resolve());
   });
   const addr = httpServer.address() as import("node:net").AddressInfo;
+  logger.info("auth.server", `Callback server listening on port ${addr.port}`);
 
   return {
     server: {

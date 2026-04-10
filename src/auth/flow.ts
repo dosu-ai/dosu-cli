@@ -3,6 +3,7 @@
  */
 
 import { getWebAppURL } from "../config/constants";
+import { logger } from "../debug/logger";
 import { startCallbackServer, type TokenResponse } from "./server";
 
 /**
@@ -22,30 +23,42 @@ export async function startOAuthFlow(
 
   try {
     const callbackURL = `http://localhost:${server.port}/callback`;
+    logger.debug("auth.flow", `Callback URL: ${callbackURL}`);
     const authURL = buildAuthURL(callbackURL, path);
+    logger.info("auth.flow", `Auth URL: ${authURL}`);
 
     // Open browser — dynamic import to avoid bundling issues
     const open = await import("open");
     await open.default(authURL);
+    logger.info("auth.flow", "Browser open command executed");
 
     // Race: token, abort, or timeout
     const timeout = new Promise<never>((_, reject) => {
       timeoutId = setTimeout(
-        () => reject(new Error("authentication timeout - please try again")),
+        () => {
+          logger.warn("auth.flow", "Authentication timed out (15min)");
+          reject(new Error("authentication timeout - please try again"));
+        },
         15 * 60 * 1000,
       );
     });
 
     const abort = signal
       ? new Promise<never>((_, reject) => {
-          signal.addEventListener("abort", () => reject(new Error("authentication cancelled")));
+          signal.addEventListener("abort", () => {
+            logger.warn("auth.flow", "Authentication cancelled via abort");
+            reject(new Error("authentication cancelled"));
+          });
         })
       : new Promise<never>(() => {}); // never resolves
 
-    return await Promise.race([tokenPromise, timeout, abort]);
+    const token = await Promise.race([tokenPromise, timeout, abort]);
+    logger.info("auth.flow", "Token received");
+    return token;
   } finally {
     clearTimeout(timeoutId);
     server.close();
+    logger.debug("auth.flow", "Cleaning up: timeout cleared, server closed");
   }
 }
 

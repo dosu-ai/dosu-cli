@@ -66,4 +66,19 @@ describe("CLI", () => {
     const globalOpt = addCmd?.options.find((o) => o.long === "--global");
     expect(globalOpt).toBeDefined();
   });
+
+  it("has --debug global option", () => {
+    const program = createProgram();
+    const debugOpt = program.options.find((o) => o.long === "--debug");
+    expect(debugOpt).toBeDefined();
+  });
+
+  it("has logs command with --tail and --clear options", () => {
+    const program = createProgram();
+    const cmd = program.commands.find((c) => c.name() === "logs");
+    expect(cmd).toBeDefined();
+    expect(cmd?.description()).toContain("debug logs");
+    expect(cmd?.options.find((o) => o.long === "--tail")).toBeDefined();
+    expect(cmd?.options.find((o) => o.long === "--clear")).toBeDefined();
+  });
 });
