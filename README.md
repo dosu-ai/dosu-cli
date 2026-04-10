@@ -94,4 +94,5 @@ Releases are automated via `bun build --compile` and GitHub Actions.
 - Production releases: `v1.0.0`, `v1.1.0`, `v2.0.0`
 - Pre-releases: `v0.1.0-alpha`, `v0.1.0-beta`, `v0.1.0-rc1`
 
+
 Pre-release tags (containing `-alpha`, `-beta`, `-rc`) are automatically marked as pre-releases on GitHub and published to npm under the `next` dist-tag.
