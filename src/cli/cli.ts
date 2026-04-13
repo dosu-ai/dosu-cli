@@ -14,6 +14,7 @@ import {
 } from "../config/config";
 import { logger } from "../debug/logger";
 import { allProviders, getProvider, type Provider } from "../mcp/providers";
+import { checkForUpdates } from "../version/update-check";
 import { getVersionString } from "../version/version";
 
 export function createProgram(): Command {
@@ -27,6 +28,7 @@ export function createProgram(): Command {
     .hook("preAction", (thisCommand) => {
       const opts = thisCommand.optsWithGlobals();
       logger.init({ debug: opts.debug });
+      checkForUpdates();
     })
     .action(async () => {
       // Default: launch TUI when no subcommand given
