@@ -17,6 +17,8 @@ export interface Config {
   deployment_name?: string;
   api_key?: string;
   mode?: SetupMode;
+  org_id?: string;
+  space_id?: string;
 }
 
 export function getConfigDir(): string {
@@ -78,6 +80,8 @@ export function clearConfig(_cfg: Config): Config {
     deployment_name: undefined,
     api_key: undefined,
     mode: undefined,
+    org_id: undefined,
+    space_id: undefined,
   };
 }
 

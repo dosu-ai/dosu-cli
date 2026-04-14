@@ -4,6 +4,19 @@
 
 import { readFileSync, unlinkSync } from "node:fs";
 import { Command } from "commander";
+import { analyticsCommand } from "../commands/analytics";
+import { askCommand } from "../commands/ask";
+import { deploymentsCommand } from "../commands/deployments";
+import { docsCommand } from "../commands/docs";
+import { integrationsCommand } from "../commands/integrations";
+import { knowledgeCommand } from "../commands/knowledge";
+import { membersCommand } from "../commands/members";
+import { orgCommand } from "../commands/org";
+import { reviewCommand } from "../commands/review";
+import { sourcesCommand } from "../commands/sources";
+import { suggestCommand } from "../commands/suggest";
+import { tagsCommand } from "../commands/tags";
+import { threadsCommand } from "../commands/threads";
 import {
   getConfigPath,
   isAuthenticated,
@@ -75,6 +88,8 @@ export function createProgram(): Command {
       cfg.deployment_id = undefined;
       cfg.deployment_name = undefined;
       cfg.api_key = undefined;
+      cfg.org_id = undefined;
+      cfg.space_id = undefined;
       saveConfig(cfg);
       console.log("Successfully logged out.");
     });
@@ -173,6 +188,21 @@ export function createProgram(): Command {
       }
       console.log("\nUse 'dosu mcp add <tool>' to add Dosu MCP to a tool.");
     });
+
+  // Agent-facing commands
+  program.addCommand(analyticsCommand());
+  program.addCommand(askCommand());
+  program.addCommand(deploymentsCommand());
+  program.addCommand(docsCommand());
+  program.addCommand(integrationsCommand());
+  program.addCommand(knowledgeCommand());
+  program.addCommand(membersCommand());
+  program.addCommand(orgCommand());
+  program.addCommand(reviewCommand());
+  program.addCommand(sourcesCommand());
+  program.addCommand(suggestCommand());
+  program.addCommand(tagsCommand());
+  program.addCommand(threadsCommand());
 
   // setup
   program
