@@ -13,6 +13,7 @@ import { knowledgeCommand } from "../commands/knowledge";
 import { membersCommand } from "../commands/members";
 import { orgCommand } from "../commands/org";
 import { reviewCommand } from "../commands/review";
+import { skillCommand } from "../commands/skill";
 import { sourcesCommand } from "../commands/sources";
 import { suggestCommand } from "../commands/suggest";
 import { tagsCommand } from "../commands/tags";
@@ -27,7 +28,6 @@ import {
 } from "../config/config";
 import { logger } from "../debug/logger";
 import { allProviders, getProvider, type Provider } from "../mcp/providers";
-import { skillCommand } from "../commands/skill";
 import { getVersionString } from "../version/version";
 
 export function createProgram(): Command {
