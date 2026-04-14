@@ -27,6 +27,7 @@ import {
 } from "../config/config";
 import { logger } from "../debug/logger";
 import { allProviders, getProvider, type Provider } from "../mcp/providers";
+import { skillCommand } from "../commands/skill";
 import { getVersionString } from "../version/version";
 
 export function createProgram(): Command {
@@ -203,6 +204,7 @@ export function createProgram(): Command {
   program.addCommand(suggestCommand());
   program.addCommand(tagsCommand());
   program.addCommand(threadsCommand());
+  program.addCommand(skillCommand());
 
   // setup
   program
