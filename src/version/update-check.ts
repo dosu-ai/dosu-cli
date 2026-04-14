@@ -7,7 +7,7 @@
  * 3. If the cache is stale (>24 h), fires a background fetch to the npm registry (not awaited).
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import pc from "picocolors";
 import { getConfigDir } from "../config/config";
@@ -24,10 +24,15 @@ interface UpdateCache {
   latestVersion: string;
 }
 
+/** Strip pre-release/build metadata from a semver string (e.g. "1.2.3-beta.1+build" → "1.2.3"). */
+function stripPrerelease(version: string): string {
+  return version.replace(/[-+].*$/, "");
+}
+
 /** Compare two semver strings. Returns true if `latest` is newer than `current`. */
 export function isNewerVersion(latest: string, current: string): boolean {
-  const a = latest.split(".").map(Number);
-  const b = current.split(".").map(Number);
+  const a = stripPrerelease(latest).split(".").map(Number);
+  const b = stripPrerelease(current).split(".").map(Number);
   const len = Math.max(a.length, b.length);
   for (let i = 0; i < len; i++) {
     const av = a[i] ?? 0;
@@ -58,6 +63,10 @@ function readCache(): UpdateCache | null {
 
 function writeCache(cache: UpdateCache): void {
   try {
+    const dir = getConfigDir();
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+    }
     writeFileSync(getCachePath(), JSON.stringify(cache), { mode: 0o600 });
   } catch {
     // Graceful degradation — cache write failure is non-fatal
@@ -108,12 +117,21 @@ export function checkForUpdates(): void {
     if (isStale) {
       fetchLatestVersion()
         .then((latest) => {
+          // Always update lastCheck to throttle retries (even on failure)
+          writeCache({
+            lastCheck: Date.now(),
+            latestVersion: latest ?? cache?.latestVersion ?? VERSION,
+          });
           if (latest) {
-            writeCache({ lastCheck: Date.now(), latestVersion: latest });
             logger.debug("update-check", `Cached latest version: ${latest}`);
           }
         })
         .catch((err) => {
+          // Still update timestamp so offline users aren't retried every run
+          writeCache({
+            lastCheck: Date.now(),
+            latestVersion: cache?.latestVersion ?? VERSION,
+          });
           logger.error("update-check", `Background fetch failed: ${err}`);
         });
     }

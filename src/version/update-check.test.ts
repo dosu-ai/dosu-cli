@@ -31,6 +31,13 @@ describe("isNewerVersion", () => {
     expect(isNewerVersion("1.0.0.1", "1.0.0")).toBe(true);
     expect(isNewerVersion("1.0.0", "1.0.0.1")).toBe(false);
   });
+
+  it("strips pre-release and build metadata before comparing", () => {
+    expect(isNewerVersion("2.0.0-beta.1", "1.0.0")).toBe(true);
+    expect(isNewerVersion("1.0.0-beta.1", "1.0.0")).toBe(false);
+    expect(isNewerVersion("1.0.1-rc.1+build.123", "1.0.0")).toBe(true);
+    expect(isNewerVersion("1.0.0+build.456", "1.0.0")).toBe(false);
+  });
 });
 
 describe("fetchLatestVersion", () => {
@@ -173,6 +180,34 @@ describe("checkForUpdates", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     checkForUpdates();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("writes lastCheck even when fetch returns null", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false });
+    vi.stubGlobal("fetch", fetchMock);
+
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    checkForUpdates();
+
+    const cachePath = join(tempDir, "dosu-cli", "update-check.json");
+    await vi.waitFor(() => {
+      const updated = JSON.parse(readFileSync(cachePath, "utf-8"));
+      expect(updated.lastCheck).toBeGreaterThan(0);
+    });
+  });
+
+  it("writes lastCheck even when fetch rejects", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error("offline"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    checkForUpdates();
+
+    const cachePath = join(tempDir, "dosu-cli", "update-check.json");
+    await vi.waitFor(() => {
+      const updated = JSON.parse(readFileSync(cachePath, "utf-8"));
+      expect(updated.lastCheck).toBeGreaterThan(0);
+    });
   });
 
   it("handles corrupt cache file gracefully", () => {
