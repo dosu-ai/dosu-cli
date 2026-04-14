@@ -5,15 +5,11 @@
 import { Command } from "commander";
 import pc from "picocolors";
 import { TrpcClient } from "../client/trpc";
-import { loadConfig } from "../config/config";
+import { requireLoginConfig } from "./auth";
 import { printInfo, printResult } from "./output";
 
 function requireConfig() {
-  const cfg = loadConfig();
-  if (!cfg.api_key) {
-    console.error(pc.red("Not configured. Run 'dosu setup' first."));
-    process.exit(1);
-  }
+  const cfg = requireLoginConfig();
   if (!cfg.space_id) {
     console.error(pc.red("Missing space config. Run 'dosu setup' to reconfigure."));
     process.exit(1);

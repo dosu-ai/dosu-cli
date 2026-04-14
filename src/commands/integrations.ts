@@ -5,15 +5,11 @@
 import { Command } from "commander";
 import pc from "picocolors";
 import { TrpcClient } from "../client/trpc";
-import { loadConfig } from "../config/config";
+import { requireLoginConfig } from "./auth";
 import { printResult, printTable } from "./output";
 
 function requireConfig() {
-  const cfg = loadConfig();
-  if (!cfg.api_key) {
-    console.error(pc.red("Not configured. Run 'dosu setup' first."));
-    process.exit(1);
-  }
+  const cfg = requireLoginConfig();
   if (!cfg.org_id) {
     console.error(pc.red("Missing org config. Run 'dosu setup' to reconfigure."));
     process.exit(1);

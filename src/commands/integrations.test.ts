@@ -254,8 +254,8 @@ describe("requireConfig", () => {
     await expect(run("list")).rejects.toThrow("exit");
   });
 
-  it("exits when api_key is missing", async () => {
-    mockLoadConfig.mockReturnValue({ ...validConfig, api_key: undefined });
+  it("exits when access_token is missing", async () => {
+    mockLoadConfig.mockReturnValue({ ...validConfig, access_token: "" });
     await expect(run("list")).rejects.toThrow("exit");
   });
 });

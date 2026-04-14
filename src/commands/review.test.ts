@@ -201,8 +201,8 @@ describe("review revert", () => {
 });
 
 describe("requireConfig", () => {
-  it("exits when api_key is missing", async () => {
-    mockLoadConfig.mockReturnValue({ ...validConfig, api_key: undefined });
+  it("exits when access_token is missing", async () => {
+    mockLoadConfig.mockReturnValue({ ...validConfig, access_token: "" });
     await expect(run("context", "t1")).rejects.toThrow("exit");
   });
 });

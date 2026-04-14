@@ -1,15 +1,20 @@
 import superjson from "superjson";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../config/config";
 import { createTypedClient, TrpcClient, TrpcError } from "./trpc";
 
 // Mock fetch globally (same pattern as client.test.ts)
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
+const mockGetWebAppURL = vi.fn(() => "https://app.test.dev");
 
 // Mock logger to avoid debug output
 vi.mock("../debug/logger", () => ({
   logger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+}));
+
+vi.mock("../config/constants", () => ({
+  getWebAppURL: () => mockGetWebAppURL(),
 }));
 
 function makeConfig(overrides: Partial<Config> = {}): Config {
@@ -42,47 +47,29 @@ function trpcErrorResponse(message?: string, dataCode?: string, status = 200): R
 }
 
 describe("TrpcClient", () => {
-  const savedEnv: Record<string, string | undefined> = {};
-
-  beforeAll(() => {
-    savedEnv.DOSU_WEB_APP_URL = process.env.DOSU_WEB_APP_URL;
-    process.env.DOSU_WEB_APP_URL = "https://app.test.dev";
-  });
-
-  afterAll(() => {
-    if (savedEnv.DOSU_WEB_APP_URL !== undefined) {
-      process.env.DOSU_WEB_APP_URL = savedEnv.DOSU_WEB_APP_URL;
-    } else {
-      delete process.env.DOSU_WEB_APP_URL;
-    }
-  });
-
   beforeEach(() => {
     mockFetch.mockReset();
+    mockGetWebAppURL.mockReset();
+    mockGetWebAppURL.mockReturnValue("https://app.test.dev");
   });
 
   // ── constructor ──
 
   describe("constructor", () => {
     it("throws when DOSU_WEB_APP_URL is empty", () => {
-      const orig = process.env.DOSU_WEB_APP_URL;
-      process.env.DOSU_WEB_APP_URL = "";
-      try {
-        expect(() => new TrpcClient(makeConfig())).toThrow("Web app URL not configured");
-      } finally {
-        process.env.DOSU_WEB_APP_URL = orig;
-      }
+      mockGetWebAppURL.mockReturnValueOnce("");
+      expect(() => new TrpcClient(makeConfig())).toThrow("Web app URL not configured");
     });
 
-    it("throws when api_key is missing from config", () => {
-      expect(() => new TrpcClient(makeConfig({ api_key: undefined }))).toThrow("API key not found");
+    it("throws when access_token is missing from config", () => {
+      expect(() => new TrpcClient(makeConfig({ access_token: "" }))).toThrow("Not authenticated");
     });
   });
 
   // ── query ──
 
   describe("query", () => {
-    it("sends GET to correct URL with API key header", async () => {
+    it("sends GET to correct URL with JWT header", async () => {
       mockFetch.mockResolvedValueOnce(trpcSuccess({ ok: true }));
       const client = new TrpcClient(makeConfig());
       await client.query("thread.list");
@@ -90,7 +77,7 @@ describe("TrpcClient", () => {
       const [url, options] = mockFetch.mock.calls[0];
       expect(url).toBe("https://app.test.dev/api/trpc/thread.list");
       expect(options.method).toBe("GET");
-      expect(options.headers["X-Dosu-API-Key"]).toBe("sk_user_test_key_123");
+      expect(options.headers["Supabase-Access-Token"]).toBe("t");
       // GET should NOT have Content-Type
       expect(options.headers["Content-Type"]).toBeUndefined();
     });
@@ -173,7 +160,7 @@ describe("TrpcClient", () => {
       expect(url).toBe("https://app.test.dev/api/trpc/thread.archive");
       expect(options.method).toBe("POST");
       expect(options.headers["Content-Type"]).toBe("application/json");
-      expect(options.headers["X-Dosu-API-Key"]).toBe("sk_user_test_key_123");
+      expect(options.headers["Supabase-Access-Token"]).toBe("t");
 
       // Verify body is JSON.stringify(superjson.serialize(input))
       const body = JSON.parse(options.body);
@@ -301,18 +288,13 @@ describe("TrpcClient", () => {
 
   describe("createTypedClient", () => {
     it("throws when DOSU_WEB_APP_URL is empty", () => {
-      const orig = process.env.DOSU_WEB_APP_URL;
-      process.env.DOSU_WEB_APP_URL = "";
-      try {
-        expect(() => createTypedClient(makeConfig())).toThrow("Web app URL not configured");
-      } finally {
-        process.env.DOSU_WEB_APP_URL = orig;
-      }
+      mockGetWebAppURL.mockReturnValueOnce("");
+      expect(() => createTypedClient(makeConfig())).toThrow("Web app URL not configured");
     });
 
-    it("throws when api_key is missing", () => {
-      expect(() => createTypedClient(makeConfig({ api_key: undefined }))).toThrow(
-        "API key not found",
+    it("throws when access_token is missing", () => {
+      expect(() => createTypedClient(makeConfig({ access_token: "" }))).toThrow(
+        "Not authenticated",
       );
     });
 

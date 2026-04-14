@@ -6,17 +6,13 @@ import { readFileSync } from "node:fs";
 import { Command } from "commander";
 import pc from "picocolors";
 import { TrpcClient } from "../client/trpc";
-import { loadConfig } from "../config/config";
 import { getBackendURL } from "../config/constants";
 import { logger } from "../debug/logger";
+import { requireAPIKey, requireLoginConfig } from "./auth";
 import { formatDate, printInfo, printResult, printTable, truncate } from "./output";
 
 function requireConfig() {
-  const cfg = loadConfig();
-  if (!cfg.api_key) {
-    console.error(pc.red("Not configured. Run 'dosu setup' first."));
-    process.exit(1);
-  }
+  const cfg = requireLoginConfig();
   if (!cfg.space_id) {
     console.error(pc.red("Missing space config. Run 'dosu setup' to reconfigure."));
     process.exit(1);
@@ -310,8 +306,7 @@ export function docsCommand(): Command {
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
       const ksId = await getKnowledgeStoreId(trpc, cfg.space_id!);
 
-      // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const result = await backendPost("/doc/generate", cfg.api_key!, {
+      const result = await backendPost("/doc/generate", requireAPIKey(cfg), {
         knowledge_store_id: ksId,
         title: opts.title,
         instructions: opts.instructions,
@@ -332,8 +327,7 @@ export function docsCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const result = await backendPost("/doc/auto-tag", cfg.api_key!, { page_id: id });
+      const result = await backendPost("/doc/auto-tag", requireAPIKey(cfg), { page_id: id });
 
       if (opts.json) {
         printResult(result, opts);
@@ -498,8 +492,7 @@ export function docsCommand(): Command {
         }
 
         logger.debug("docs", `Publishing to ${platform}`);
-        // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-        const result = await backendPost(config.path, cfg.api_key!, config.buildBody());
+        const result = await backendPost(config.path, requireAPIKey(cfg), config.buildBody());
 
         if (opts.json) {
           printResult(result, opts);

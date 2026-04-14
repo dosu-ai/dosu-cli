@@ -13,9 +13,10 @@ import type { AppRouter } from "@dosu/api-types";
 import { createTRPCClient, httpLink } from "@trpc/client";
 import type { SuperJSONResult } from "superjson";
 import superjson from "superjson";
-import type { Config } from "../config/config";
+import { type Config, isTokenExpired } from "../config/config";
 import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
+import { Client } from "./client";
 
 export type { AppRouter };
 
@@ -34,10 +35,9 @@ export function createTypedClient(config: Config) {
   if (!webAppURL) {
     throw new Error("Web app URL not configured");
   }
-  if (!config.api_key) {
-    throw new Error("API key not found. Run 'dosu setup' first.");
+  if (!config.access_token) {
+    throw new Error("Not authenticated. Run 'dosu login' first.");
   }
-  const apiKey = config.api_key;
 
   return createTRPCClient<AppRouter>({
     links: [
@@ -45,7 +45,7 @@ export function createTypedClient(config: Config) {
         url: `${webAppURL}/api/trpc`,
         transformer: superjson,
         headers() {
-          return { "X-Dosu-API-Key": apiKey };
+          return { "Supabase-Access-Token": config.access_token };
         },
       }),
     ],
@@ -74,77 +74,110 @@ export class TrpcError extends Error {
 
 export class TrpcClient {
   private baseURL: string;
-  private apiKey: string;
+  private config: Config;
 
   constructor(config: Config) {
     const webAppURL = getWebAppURL();
     if (!webAppURL) {
       throw new Error("Web app URL not configured");
     }
-    if (!config.api_key) {
-      throw new Error("API key not found. Run 'dosu setup' first.");
+    if (!config.access_token) {
+      throw new Error("Not authenticated. Run 'dosu login' first.");
     }
     this.baseURL = `${webAppURL}/api/trpc`;
-    this.apiKey = config.api_key;
+    this.config = config;
+  }
+
+  private async refreshToken(): Promise<void> {
+    await new Client(this.config).refreshToken();
+  }
+
+  private async doRequest(
+    method: "GET" | "POST",
+    procedure: string,
+    input?: unknown,
+  ): Promise<Response> {
+    if (!this.config.access_token) {
+      throw new Error("Not authenticated. Run 'dosu login' first.");
+    }
+
+    if (isTokenExpired(this.config)) {
+      try {
+        await this.refreshToken();
+      } catch {
+        throw new Error("session expired. Run 'dosu login' to re-authenticate");
+      }
+    }
+
+    let resp = await this.doRequestOnce(method, procedure, input);
+
+    if (resp.status === 401 || resp.status === 403) {
+      try {
+        await this.refreshToken();
+      } catch {
+        throw new Error("session expired. Run 'dosu login' to re-authenticate");
+      }
+      resp = await this.doRequestOnce(method, procedure, input);
+    }
+
+    return resp;
+  }
+
+  private async doRequestOnce(
+    method: "GET" | "POST",
+    procedure: string,
+    input?: unknown,
+  ): Promise<Response> {
+    const headers: Record<string, string> = {
+      "Supabase-Access-Token": this.config.access_token,
+    };
+
+    let url = `${this.baseURL}/${procedure}`;
+    let body: string | undefined;
+
+    if (method === "GET") {
+      if (input !== undefined) {
+        const serialized = superjson.serialize(input);
+        url += `?input=${encodeURIComponent(JSON.stringify(serialized))}`;
+      }
+    } else {
+      headers["Content-Type"] = "application/json";
+      if (input !== undefined) {
+        body = JSON.stringify(superjson.serialize(input));
+      }
+    }
+
+    logger.debug("trpc", `${method} ${procedure}`);
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30_000);
+
+    try {
+      return await fetch(url, {
+        method,
+        headers,
+        body,
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   /**
    * Call a tRPC query procedure (GET request).
    */
   async query<T = unknown>(procedure: string, input?: unknown): Promise<T> {
-    let url = `${this.baseURL}/${procedure}`;
-    if (input !== undefined) {
-      const serialized = superjson.serialize(input);
-      url += `?input=${encodeURIComponent(JSON.stringify(serialized))}`;
-    }
-
-    logger.debug("trpc", `GET ${procedure}`);
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30_000);
-
-    try {
-      const resp = await fetch(url, {
-        method: "GET",
-        headers: {
-          "X-Dosu-API-Key": this.apiKey,
-        },
-        signal: controller.signal,
-      });
-
-      return this.handleResponse<T>(resp, procedure);
-    } finally {
-      clearTimeout(timeout);
-    }
+    const resp = await this.doRequest("GET", procedure, input);
+    return this.handleResponse<T>(resp, procedure);
   }
 
   /**
    * Call a tRPC mutation procedure (POST request).
    */
   async mutate<T = unknown>(procedure: string, input?: unknown): Promise<T> {
-    const url = `${this.baseURL}/${procedure}`;
-    const body = input !== undefined ? superjson.serialize(input) : undefined;
-
-    logger.debug("trpc", `POST ${procedure}`);
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30_000);
-
-    try {
-      const resp = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Dosu-API-Key": this.apiKey,
-        },
-        body: body ? JSON.stringify(body) : undefined,
-        signal: controller.signal,
-      });
-
-      return this.handleResponse<T>(resp, procedure);
-    } finally {
-      clearTimeout(timeout);
-    }
+    const resp = await this.doRequest("POST", procedure, input);
+    return this.handleResponse<T>(resp, procedure);
   }
 
   private async handleResponse<T>(resp: Response, procedure: string): Promise<T> {

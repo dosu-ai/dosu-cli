@@ -150,8 +150,8 @@ describe("knowledge list", () => {
 });
 
 describe("requireConfig", () => {
-  it("exits when api_key is missing", async () => {
-    mockLoadConfig.mockReturnValue({ ...validConfig, api_key: undefined });
+  it("exits when access_token is missing", async () => {
+    mockLoadConfig.mockReturnValue({ ...validConfig, access_token: "" });
     await expect(run("search", "q")).rejects.toThrow("exit");
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
