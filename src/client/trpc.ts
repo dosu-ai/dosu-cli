@@ -9,9 +9,7 @@
  * compile-time procedure name and input schema validation.
  */
 
-// Type import from main project — resolved via tsconfig paths.
-// Will be replaced by @dosu/api-types npm package once published.
-import type { AppRouter } from "@dosu/api/root";
+import type { AppRouter } from "@dosu/api-types";
 import { createTRPCClient, httpLink } from "@trpc/client";
 import type { SuperJSONResult } from "superjson";
 import superjson from "superjson";

@@ -5,16 +5,10 @@
     "moduleResolution": "bundler",
     "esModuleInterop": true,
     "strict": true,
-    "jsx": "react-jsx",
     "skipLibCheck": true,
     "outDir": "dist",
     "resolveJsonModule": true,
-    "types": ["bun-types"],
-    "baseUrl": ".",
-    "paths": {
-      "@dosu/api/root": ["../../dosu/seoul-v1/frontend/packages/api/src/root"],
-      "@dosu/api/*": ["../../dosu/seoul-v1/frontend/packages/api/src/*"]
-    }
+    "types": ["bun-types"]
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "bin"]
