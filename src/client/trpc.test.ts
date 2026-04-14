@@ -1,7 +1,7 @@
 import superjson from "superjson";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../config/config";
-import { TrpcClient, TrpcError, createTypedClient } from "./trpc";
+import { createTypedClient, TrpcClient, TrpcError } from "./trpc";
 
 // Mock fetch globally (same pattern as client.test.ts)
 const mockFetch = vi.fn();
@@ -106,6 +106,7 @@ describe("TrpcClient", () => {
       expect(inputParam).not.toBeNull();
 
       // Decode and verify exact SuperJSON structure
+      // biome-ignore lint/style/noNonNullAssertion: asserted not null above
       const decoded = JSON.parse(inputParam!);
       const expected = superjson.serialize(input);
       expect(decoded).toEqual(expected);

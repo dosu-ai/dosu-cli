@@ -32,8 +32,8 @@ export function membersCommand(): Command {
       const cfg = requireConfig();
       const trpc = new TrpcClient(cfg);
 
-      // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
       const data = await trpc.query<unknown[]>("invitations.getInvitations", {
+        // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
         orgId: cfg.org_id!,
       });
 
@@ -113,8 +113,8 @@ export function membersCommand(): Command {
       const cfg = requireConfig();
       const trpc = new TrpcClient(cfg);
 
-      // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
       const data = await trpc.query<unknown[]>("invitations.listAccessRequests", {
+        // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
         orgId: cfg.org_id!,
       });
 

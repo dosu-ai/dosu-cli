@@ -22,7 +22,7 @@ import { docsCommand } from "./docs";
 
 let logSpy: ReturnType<typeof vi.spyOn>;
 let errorSpy: ReturnType<typeof vi.spyOn>;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// biome-ignore lint/suspicious/noExplicitAny: process.exit mock type mismatch
 let exitSpy: any;
 
 const validConfig = {
@@ -607,7 +607,16 @@ describe("docs publish", () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ status: "ok" }));
     mockQuery.mockReset();
 
-    await run("publish", "p1", "--to", "notion", "--parent-page-id", "np1", "--data-source-id", "ds1");
+    await run(
+      "publish",
+      "p1",
+      "--to",
+      "notion",
+      "--parent-page-id",
+      "np1",
+      "--data-source-id",
+      "ds1",
+    );
 
     const [url, opts] = mockFetch.mock.calls[0];
     expect(url).toBe("https://api.test.dev/sync-back/notion/p1/publish");

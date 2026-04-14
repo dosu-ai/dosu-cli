@@ -15,7 +15,7 @@ import { threadsCommand } from "./threads";
 
 let logSpy: ReturnType<typeof vi.spyOn>;
 let errorSpy: ReturnType<typeof vi.spyOn>;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// biome-ignore lint/suspicious/noExplicitAny: process.exit mock type mismatch
 let exitSpy: any;
 
 const validConfig = {
@@ -271,9 +271,7 @@ describe("threads get (human-readable)", () => {
 
   it("handles empty messages array", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery
-      .mockResolvedValueOnce({ id: "t1", title: "Empty Thread" })
-      .mockResolvedValueOnce([]);
+    mockQuery.mockResolvedValueOnce({ id: "t1", title: "Empty Thread" }).mockResolvedValueOnce([]);
 
     await run("get", "t1");
 
