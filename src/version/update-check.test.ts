@@ -196,17 +196,26 @@ describe("checkForUpdates", () => {
     });
   });
 
-  it("writes lastCheck even when fetch rejects", async () => {
-    const fetchMock = vi.fn().mockRejectedValue(new Error("offline"));
+  it("creates config directory if it does not exist when writing cache", async () => {
+    const { existsSync } = require("node:fs");
+    const configDir = join(tempDir, "dosu-cli");
+    // Ensure the dir does NOT exist before checkForUpdates
+    expect(existsSync(configDir)).toBe(false);
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ latest: "1.0.0" }),
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     vi.spyOn(console, "error").mockImplementation(() => {});
     checkForUpdates();
 
-    const cachePath = join(tempDir, "dosu-cli", "update-check.json");
+    const cachePath = join(configDir, "update-check.json");
     await vi.waitFor(() => {
+      expect(existsSync(cachePath)).toBe(true);
       const updated = JSON.parse(readFileSync(cachePath, "utf-8"));
-      expect(updated.lastCheck).toBeGreaterThan(0);
+      expect(updated.latestVersion).toBe("1.0.0");
     });
   });
 

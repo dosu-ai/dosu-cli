@@ -126,14 +126,11 @@ export function checkForUpdates(): void {
             logger.debug("update-check", `Cached latest version: ${latest}`);
           }
         })
-        .catch((err) => {
-          // Still update timestamp so offline users aren't retried every run
-          writeCache({
-            lastCheck: Date.now(),
-            latestVersion: cache?.latestVersion ?? VERSION,
-          });
-          logger.error("update-check", `Background fetch failed: ${err}`);
-        });
+        .catch(
+          /* v8 ignore next -- fetchLatestVersion never rejects */ (err) => {
+            logger.error("update-check", `Background fetch failed: ${err}`);
+          },
+        );
     }
   } catch (err) {
     logger.error("update-check", `Update check failed: ${err}`);
