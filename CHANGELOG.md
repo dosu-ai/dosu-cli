@@ -1,3 +1,10 @@
+# [0.9.0](https://github.com/dosu-ai/dosu-cli/compare/v0.8.0...v0.9.0) (2026-04-14)
+
+
+### Features
+
+* add CLI version update notifications ([#49](https://github.com/dosu-ai/dosu-cli/issues/49)) ([0993c9c](https://github.com/dosu-ai/dosu-cli/commit/0993c9c63e6baa63ae251b89e88eabd9fe3d6cd3))
+
 # [0.8.0](https://github.com/dosu-ai/dosu-cli/compare/v0.7.0...v0.8.0) (2026-04-10)
 
 
