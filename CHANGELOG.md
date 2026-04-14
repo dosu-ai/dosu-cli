@@ -1,3 +1,11 @@
+## [0.9.1](https://github.com/dosu-ai/dosu-cli/compare/v0.9.0...v0.9.1) (2026-04-14)
+
+
+### Bug Fixes
+
+* address PR review feedback for update checker ([0f0a3c2](https://github.com/dosu-ai/dosu-cli/commit/0f0a3c2bebb0ac3cf5b8c014ba7f2cdda514bba8))
+* improve test coverage for update checker ([c34ecae](https://github.com/dosu-ai/dosu-cli/commit/c34ecae8c96bfe2d273cd7a4c7b005fe1cbed9bd))
+
 # [0.9.0](https://github.com/dosu-ai/dosu-cli/compare/v0.8.0...v0.9.0) (2026-04-14)
 
 
