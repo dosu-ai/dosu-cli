@@ -2,8 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockQuery = vi.fn();
 const mockMutate = vi.fn();
+
+function createMockProxy(path: string[] = []): unknown {
+  return new Proxy(() => {}, {
+    get(_, prop: string) {
+      if (prop === "query") return (input: unknown) => mockQuery(path.join("."), input);
+      if (prop === "mutate") return (input: unknown) => mockMutate(path.join("."), input);
+      return createMockProxy([...path, prop]);
+    },
+  });
+}
+
 vi.mock("../client/trpc", () => ({
-  TrpcClient: vi.fn().mockImplementation(() => ({ query: mockQuery, mutate: mockMutate })),
+  createTypedClient: vi.fn().mockImplementation(() => createMockProxy()),
 }));
 
 const mockLoadConfig = vi.fn();
@@ -61,7 +72,10 @@ describe("sources list", () => {
 
     await run("list", "--json");
 
-    expect(mockQuery).toHaveBeenCalledWith("dataSource.list", { org_id: "org1" });
+    expect(mockQuery).toHaveBeenCalledWith("dataSource.list", {
+      org_id: "org1",
+      excluded_provider_slugs: [],
+    });
     const output = JSON.parse(allOutput());
     expect(output[0].name).toBe("GitHub");
   });
@@ -109,7 +123,7 @@ describe("sources info", () => {
 
     await run("info", "--json", "ds1");
 
-    expect(mockQuery).toHaveBeenCalledWith("dataSource.get", { id: "ds1" });
+    expect(mockQuery).toHaveBeenCalledWith("dataSource.get", "ds1");
     expect(() => JSON.parse(allOutput())).not.toThrow();
   });
 
@@ -138,9 +152,7 @@ describe("sources sync", () => {
 
     await run("sync", "ds1");
 
-    expect(mockMutate).toHaveBeenCalledWith("dataSource.syncDataSource", {
-      dataSourceId: "ds1",
-    });
+    expect(mockMutate).toHaveBeenCalledWith("dataSource.syncDataSource", "ds1");
   });
 
   it("outputs JSON with --json", async () => {
@@ -195,9 +207,7 @@ describe("sources delete", () => {
 
     await run("delete", "ds1");
 
-    expect(mockMutate).toHaveBeenCalledWith("dataSource.deleteDataSource", {
-      data_source_id: "ds1",
-    });
+    expect(mockMutate).toHaveBeenCalledWith("dataSource.deleteDataSource", "ds1");
   });
 
   it("outputs JSON with --json", async () => {

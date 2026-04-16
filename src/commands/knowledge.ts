@@ -4,7 +4,7 @@
 
 import { Command } from "commander";
 import pc from "picocolors";
-import { TrpcClient } from "../client/trpc";
+import { createTypedClient } from "../client/trpc";
 import { requireLoginConfig } from "./auth";
 import { printResult, printTable, truncate } from "./output";
 
@@ -28,37 +28,31 @@ export function knowledgeCommand(): Command {
     .option("--limit <n>", "Maximum results", "10")
     .action(async (query: string, opts: { json?: boolean; limit?: string }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
 
       // Get data source IDs for the org
-      const dataSources = await trpc.query<Array<{ id: string; name: string }>>(
-        "dataSource.list",
+      const dataSources = await client.dataSource.list.query({
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-        { org_id: cfg.org_id! },
-      );
+        org_id: cfg.org_id!,
+        excluded_provider_slugs: [],
+      });
 
-      const dataSourceIds = dataSources.map((ds) => ds.id);
+      const dataSourceIds = dataSources.map((ds: { id: string }) => ds.id);
       if (dataSourceIds.length === 0) {
         console.log(pc.dim("No data sources connected. Add data sources in the Dosu dashboard."));
         return;
       }
 
-      const results = await trpc.query<
-        Array<{
-          id: string;
-          title: string;
-          content?: string;
-          entity_type?: string;
-          similarity?: number;
-        }>
-      >("search.getMentions", {
+      const data = await client.search.getMentions.query({
         query,
         dataSourceIds,
         entityTypes: [],
       });
 
+      const results = data.documents;
+
       if (opts.json) {
-        printResult(results, opts);
+        printResult(data, opts);
         return;
       }
 
@@ -71,12 +65,8 @@ export function knowledgeCommand(): Command {
       const limited = results.slice(0, limit);
 
       printTable(
-        ["Title", "Type", "Score"],
-        limited.map((r) => [
-          truncate(r.title ?? "(untitled)", 60),
-          r.entity_type ?? "—",
-          r.similarity !== undefined ? r.similarity.toFixed(3) : "—",
-        ]),
+        ["Title", "Type"],
+        limited.map((r) => [truncate(r.title ?? "(untitled)", 60), r.entity_type ?? "—"]),
         { json: false, rawData: limited },
       );
 
@@ -91,14 +81,9 @@ export function knowledgeCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
 
-      const store = await trpc.query<{
-        id: string;
-        space_id: string;
-        [key: string]: unknown;
-      } | null>(
-        "knowledgeStore.getBySpaceId",
+      const store = await client.knowledgeStore.getBySpaceId.query(
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
         { space_id: cfg.space_id! },
       );

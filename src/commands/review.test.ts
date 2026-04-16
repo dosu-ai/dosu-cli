@@ -2,8 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockQuery = vi.fn();
 const mockMutate = vi.fn();
+
+function createMockProxy(path: string[] = []): unknown {
+  return new Proxy(() => {}, {
+    get(_, prop: string) {
+      if (prop === "query") return (input: unknown) => mockQuery(path.join("."), input);
+      if (prop === "mutate") return (input: unknown) => mockMutate(path.join("."), input);
+      return createMockProxy([...path, prop]);
+    },
+  });
+}
+
 vi.mock("../client/trpc", () => ({
-  TrpcClient: vi.fn().mockImplementation(() => ({ query: mockQuery, mutate: mockMutate })),
+  createTypedClient: vi.fn().mockImplementation(() => createMockProxy()),
 }));
 
 const mockLoadConfig = vi.fn();

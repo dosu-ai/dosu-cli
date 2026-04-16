@@ -77,20 +77,20 @@ afterEach(() => {
 });
 
 describe("ask", () => {
-  it("POSTs to /doc/generate-answer with correct body and headers", async () => {
+  it("POSTs to /ask with correct body and headers", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockFetch.mockResolvedValueOnce(jsonResponse({ answer: "42" }));
+    mockFetch.mockResolvedValueOnce(jsonResponse({ answer: "42", success: true }));
 
     await run("What is the meaning of life?");
 
     const [url, opts] = mockFetch.mock.calls[0];
-    expect(url).toBe("https://api.test.dev/doc/generate-answer");
+    expect(url).toBe("https://api.test.dev/ask");
     expect(opts.method).toBe("POST");
     expect(opts.headers["X-Dosu-API-Key"]).toBe("sk_user_test");
     expect(opts.headers["Content-Type"]).toBe("application/json");
 
     const body = JSON.parse(opts.body);
-    expect(body.space_id).toBe("sp1");
+    expect(body.deployment_id).toBe("dep1");
     expect(body.question).toBe("What is the meaning of life?");
   });
 });
@@ -135,22 +135,22 @@ describe("output formatting", () => {
     expect(output).toContain("something");
   });
 
-  it("prints sources when available", async () => {
+  it("prints observations when available", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockFetch.mockResolvedValueOnce(
       jsonResponse({
         answer: "Yes",
-        sources: [{ title: "Doc A" }, { url: "https://example.com" }, { id: "src3" }],
+        success: true,
+        observations: ["Observation A", "Observation B"],
       }),
     );
 
     await run("question");
 
     const output = allOutput();
-    expect(output).toContain("Sources");
-    expect(output).toContain("Doc A");
-    expect(output).toContain("https://example.com");
-    expect(output).toContain("src3");
+    expect(output).toContain("Key observations");
+    expect(output).toContain("Observation A");
+    expect(output).toContain("Observation B");
   });
 });
 

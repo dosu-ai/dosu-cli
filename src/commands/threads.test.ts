@@ -2,8 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockQuery = vi.fn();
 const mockMutate = vi.fn();
+
+function createMockProxy(path: string[] = []): unknown {
+  return new Proxy(() => {}, {
+    get(_, prop: string) {
+      if (prop === "query") return (input: unknown) => mockQuery(path.join("."), input);
+      if (prop === "mutate") return (input: unknown) => mockMutate(path.join("."), input);
+      return createMockProxy([...path, prop]);
+    },
+  });
+}
+
 vi.mock("../client/trpc", () => ({
-  TrpcClient: vi.fn().mockImplementation(() => ({ query: mockQuery, mutate: mockMutate })),
+  createTypedClient: vi.fn().mockImplementation(() => createMockProxy()),
 }));
 
 const mockLoadConfig = vi.fn();
@@ -56,7 +67,7 @@ afterEach(() => {
 describe("threads list", () => {
   it("uses space_id from config and default limit of 20", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([]);
+    mockQuery.mockResolvedValueOnce({ list: [], pageInfo: {} });
     await run("list");
 
     const [proc, input] = mockQuery.mock.calls[0];
@@ -67,21 +78,21 @@ describe("threads list", () => {
 
   it("sets resolved=true for --status resolved", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([]);
+    mockQuery.mockResolvedValueOnce({ list: [], pageInfo: {} });
     await run("list", "--status", "resolved");
     expect(mockQuery.mock.calls[0][1].resolved).toBe(true);
   });
 
   it("sets archived=true for --status archived", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([]);
+    mockQuery.mockResolvedValueOnce({ list: [], pageInfo: {} });
     await run("list", "--status", "archived");
     expect(mockQuery.mock.calls[0][1].archived).toBe(true);
   });
 
   it("sets resolved=false and archived=false for --status pending", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([]);
+    mockQuery.mockResolvedValueOnce({ list: [], pageInfo: {} });
     await run("list", "--status", "pending");
     const input = mockQuery.mock.calls[0][1];
     expect(input.resolved).toBe(false);
@@ -90,7 +101,7 @@ describe("threads list", () => {
 
   it("does not set resolved/archived when no --status", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([]);
+    mockQuery.mockResolvedValueOnce({ list: [], pageInfo: {} });
     await run("list");
     const input = mockQuery.mock.calls[0][1];
     expect(input.resolved).toBeUndefined();
@@ -99,69 +110,89 @@ describe("threads list", () => {
 
   it("passes search parameter with --search", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([]);
+    mockQuery.mockResolvedValueOnce({ list: [], pageInfo: {} });
     await run("list", "--search", "bug fix");
     expect(mockQuery.mock.calls[0][1].search).toBe("bug fix");
   });
 
   it("caps --limit at 100", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([]);
+    mockQuery.mockResolvedValueOnce({ list: [], pageInfo: {} });
     await run("list", "--limit", "200");
     expect(mockQuery.mock.calls[0][1].limit).toBe(100);
   });
 
   it("outputs valid JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "t1", title: "Bug" }]);
+    mockQuery.mockResolvedValueOnce({
+      list: [{ id: "t1", generated_title: "Bug" }],
+      pageInfo: {},
+    });
     await run("list", "--json");
     expect(() => JSON.parse(allOutput())).not.toThrow();
   });
 
   it("prints 'No threads found.' for empty results", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([]);
+    mockQuery.mockResolvedValueOnce({ list: [], pageInfo: {} });
     await run("list");
     expect(allOutput()).toContain("No threads found");
   });
 
-  it("shows 'resolved' status when resolved_at is set", async () => {
+  it("shows 'resolved' status when resolved is true", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([
-      { id: "t1", title: "Done", resolved_at: "2024-01-01", created_at: "2024-01-01" },
-    ]);
+    mockQuery.mockResolvedValueOnce({
+      list: [{ id: "t1", generated_title: "Done", resolved: true, created_at: "2024-01-01" }],
+      pageInfo: {},
+    });
     await run("list");
     expect(allOutput()).toContain("resolved");
   });
 
   it("shows 'archived' status when only inbox_archived_at is set", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([
-      { id: "t2", title: "Old", inbox_archived_at: "2024-01-01", created_at: "2024-01-01" },
-    ]);
+    mockQuery.mockResolvedValueOnce({
+      list: [
+        {
+          id: "t2",
+          generated_title: "Old",
+          resolved: false,
+          inbox_archived_at: "2024-01-01",
+          created_at: "2024-01-01",
+        },
+      ],
+      pageInfo: {},
+    });
     await run("list");
     expect(allOutput()).toContain("archived");
   });
 
   it("shows 'pending' status when neither resolved nor archived", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "t3", title: "Open", created_at: "2024-01-01" }]);
+    mockQuery.mockResolvedValueOnce({
+      list: [{ id: "t3", generated_title: "Open", created_at: "2024-01-01" }],
+      pageInfo: {},
+    });
     await run("list");
     expect(allOutput()).toContain("pending");
   });
 
-  it("uses preview as fallback when title is missing", async () => {
+  it("uses initial_message_title as fallback when generated_title is missing", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([
-      { id: "t4", preview: "Some preview text", created_at: "2024-01-01" },
-    ]);
+    mockQuery.mockResolvedValueOnce({
+      list: [{ id: "t4", initial_message_title: "Some preview text", created_at: "2024-01-01" }],
+      pageInfo: {},
+    });
     await run("list");
     expect(allOutput()).toContain("Some preview");
   });
 
-  it("shows '(no title)' when both title and preview are missing", async () => {
+  it("shows '(no title)' when both generated_title and initial_message_title are missing", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "t5", created_at: "2024-01-01" }]);
+    mockQuery.mockResolvedValueOnce({
+      list: [{ id: "t5", created_at: "2024-01-01" }],
+      pageInfo: {},
+    });
     await run("list");
     expect(allOutput()).toContain("(no title)");
   });
@@ -171,8 +202,10 @@ describe("threads get", () => {
   it("calls thread.get and messages.list, outputs JSON with both keys", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery
-      .mockResolvedValueOnce({ id: "t1", title: "Bug Report" })
-      .mockResolvedValueOnce([{ id: "m1", body: "Hello", author_role: "user" }]);
+      .mockResolvedValueOnce({ id: "t1", generated_title: "Bug Report" })
+      .mockResolvedValueOnce({
+        list: [{ messages: [{ id: "m1", body: "Hello", author_role: "user" }] }],
+      });
 
     await run("get", "--json", "t1");
 
@@ -190,7 +223,7 @@ describe("threads archive", () => {
 
     await run("archive", "t1");
 
-    expect(mockMutate).toHaveBeenCalledWith("thread.archive", { id: "t1" });
+    expect(mockMutate).toHaveBeenCalledWith("thread.archive", { threadId: "t1", archived: true });
     expect(mockQuery).not.toHaveBeenCalledWith("thread.archive", expect.anything());
   });
 
@@ -212,15 +245,21 @@ describe("threads get (human-readable)", () => {
     mockQuery
       .mockResolvedValueOnce({
         id: "t1",
-        title: "Bug Report",
+        generated_title: "Bug Report",
         created_at: "2024-01-15",
-        resolved_at: null,
+        resolved: false,
         channel: "support",
       })
-      .mockResolvedValueOnce([
-        { id: "m1", body: "Hello there", author_role: "user", created_at: "2024-01-15" },
-        { id: "m2", body: "I can help", author_role: "bot", created_at: "2024-01-15" },
-      ]);
+      .mockResolvedValueOnce({
+        list: [
+          {
+            messages: [
+              { id: "m1", body: "Hello there", author_role: "user", created_at: "2024-01-15" },
+              { id: "m2", body: "I can help", author_role: "bot", created_at: "2024-01-15" },
+            ],
+          },
+        ],
+      });
 
     await run("get", "t1");
 
@@ -234,8 +273,10 @@ describe("threads get (human-readable)", () => {
   it("handles messages without body", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery
-      .mockResolvedValueOnce({ id: "t1", title: "Empty Thread" })
-      .mockResolvedValueOnce([{ id: "m1", author_role: "user", created_at: "2024-01-15" }]);
+      .mockResolvedValueOnce({ id: "t1", generated_title: "Empty Thread" })
+      .mockResolvedValueOnce({
+        list: [{ messages: [{ id: "m1", author_role: "user", created_at: "2024-01-15" }] }],
+      });
 
     await run("get", "t1");
 
@@ -246,8 +287,8 @@ describe("threads get (human-readable)", () => {
   it("shows '(untitled thread)' when title is missing", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery
-      .mockResolvedValueOnce({ id: "t1", resolved_at: "2024-01-15" })
-      .mockResolvedValueOnce([]);
+      .mockResolvedValueOnce({ id: "t1", resolved: true })
+      .mockResolvedValueOnce({ list: [] });
 
     await run("get", "t1");
 
@@ -258,9 +299,9 @@ describe("threads get (human-readable)", () => {
 
   it("shows 'unknown' role when author_role is missing", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery
-      .mockResolvedValueOnce({ id: "t1", title: "Thread" })
-      .mockResolvedValueOnce([{ id: "m1", body: "test message" }]);
+    mockQuery.mockResolvedValueOnce({ id: "t1", generated_title: "Thread" }).mockResolvedValueOnce({
+      list: [{ messages: [{ id: "m1", body: "test message" }] }],
+    });
 
     await run("get", "t1");
 
@@ -271,7 +312,9 @@ describe("threads get (human-readable)", () => {
 
   it("handles empty messages array", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({ id: "t1", title: "Empty Thread" }).mockResolvedValueOnce([]);
+    mockQuery
+      .mockResolvedValueOnce({ id: "t1", generated_title: "Empty Thread" })
+      .mockResolvedValueOnce({ list: [] });
 
     await run("get", "t1");
 

@@ -1,8 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockQuery = vi.fn();
+const mockMutate = vi.fn();
+
+function createMockProxy(path: string[] = []): unknown {
+  return new Proxy(() => {}, {
+    get(_, prop: string) {
+      if (prop === "query") return (input: unknown) => mockQuery(path.join("."), input);
+      if (prop === "mutate") return (input: unknown) => mockMutate(path.join("."), input);
+      return createMockProxy([...path, prop]);
+    },
+  });
+}
+
 vi.mock("../client/trpc", () => ({
-  TrpcClient: vi.fn().mockImplementation(() => ({ query: mockQuery, mutate: vi.fn() })),
+  createTypedClient: vi.fn().mockImplementation(() => createMockProxy()),
 }));
 
 const mockLoadConfig = vi.fn();
@@ -61,7 +73,7 @@ describe("deployments list", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce([]);
     await run("list");
-    expect(mockQuery).toHaveBeenCalledWith("workspaces.listForOrg", { org_id: "org1" });
+    expect(mockQuery).toHaveBeenCalledWith("workspaces.listForOrg", "org1");
   });
 
   it("calls workspaces.listAll when org_id is missing", async () => {
@@ -143,7 +155,7 @@ describe("deployments info", () => {
       enabled: true,
     });
     await run("info");
-    expect(mockQuery).toHaveBeenCalledWith("workspaces.get", { id: "dep1" });
+    expect(mockQuery).toHaveBeenCalledWith("workspaces.get", "dep1");
   });
 
   it("exits when no deployment_id in config", async () => {
@@ -203,7 +215,7 @@ describe("deployments switch", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce(deployment);
     await run("switch", "new-dep");
-    expect(mockQuery).toHaveBeenCalledWith("workspaces.get", { id: "new-dep" });
+    expect(mockQuery).toHaveBeenCalledWith("workspaces.get", "new-dep");
   });
 
   it("saves all 4 fields to config", async () => {

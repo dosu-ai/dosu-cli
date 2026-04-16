@@ -2,8 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockQuery = vi.fn();
 const mockMutate = vi.fn();
+
+function createMockProxy(path: string[] = []): unknown {
+  return new Proxy(() => {}, {
+    get(_, prop: string) {
+      if (prop === "query") return (input: unknown) => mockQuery(path.join("."), input);
+      if (prop === "mutate") return (input: unknown) => mockMutate(path.join("."), input);
+      return createMockProxy([...path, prop]);
+    },
+  });
+}
+
 vi.mock("../client/trpc", () => ({
-  TrpcClient: vi.fn().mockImplementation(() => ({ query: mockQuery, mutate: mockMutate })),
+  createTypedClient: vi.fn().mockImplementation(() => createMockProxy()),
 }));
 
 const mockLoadConfig = vi.fn();
@@ -54,32 +65,44 @@ afterEach(() => {
 });
 
 describe("members list", () => {
-  it("calls invitations.getInvitations with org_id", async () => {
+  it("calls invitations.getInvitations with no args", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ email: "a@b.com", role: "ADMIN", status: "accepted" }]);
+    mockQuery.mockResolvedValueOnce({
+      items: [{ email: "a@b.com", org: { name: "Acme" } }],
+      tokenAvailable: true,
+      authProvider: "email",
+    });
 
     await run("list");
 
-    expect(mockQuery).toHaveBeenCalledWith("invitations.getInvitations", { orgId: "org1" });
+    expect(mockQuery).toHaveBeenCalledWith("invitations.getInvitations", undefined);
   });
 
   it("outputs valid JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ email: "a@b.com" }]);
+    mockQuery.mockResolvedValueOnce({
+      items: [{ email: "a@b.com" }],
+      tokenAvailable: true,
+      authProvider: "email",
+    });
     await run("list", "--json");
     expect(() => JSON.parse(allOutput())).not.toThrow();
   });
 
   it("prints message for empty results", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([]);
+    mockQuery.mockResolvedValueOnce({ items: [], tokenAvailable: true, authProvider: "email" });
     await run("list");
     expect(allOutput()).toContain("No members");
   });
 
   it("handles missing role and status fields", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ email: "a@b.com" }]);
+    mockQuery.mockResolvedValueOnce({
+      items: [{ email: "a@b.com" }],
+      tokenAvailable: true,
+      authProvider: "email",
+    });
     await run("list");
     const output = allOutput();
     expect(output).toContain("a@b.com");
@@ -126,13 +149,13 @@ describe("members invite", () => {
 });
 
 describe("members remove", () => {
-  it("calls invitations.removeMember with email", async () => {
+  it("calls invitations.rejectInvitation with email", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockMutate.mockResolvedValueOnce({});
 
     await run("remove", "old@user.com");
 
-    expect(mockMutate).toHaveBeenCalledWith("invitations.removeMember", {
+    expect(mockMutate).toHaveBeenCalledWith("invitations.rejectInvitation", {
       orgId: "org1",
       email: "old@user.com",
     });
@@ -156,13 +179,13 @@ describe("members remove", () => {
 });
 
 describe("members approve", () => {
-  it("calls invitations.approveAccessRequest", async () => {
+  it("calls invitations.acceptInvitation", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockMutate.mockResolvedValueOnce({});
 
     await run("approve", "req@user.com");
 
-    expect(mockMutate).toHaveBeenCalledWith("invitations.approveAccessRequest", {
+    expect(mockMutate).toHaveBeenCalledWith("invitations.acceptInvitation", {
       orgId: "org1",
       email: "req@user.com",
     });
@@ -218,21 +241,29 @@ describe("members deny", () => {
 describe("members requests", () => {
   it("lists pending access requests", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ email: "req@user.com", requested_at: "2024-01-01" }]);
+    mockQuery.mockResolvedValueOnce({
+      items: [{ email: "req@user.com", org: { name: "Acme" } }],
+      tokenAvailable: true,
+      authProvider: "email",
+    });
     await run("requests");
     expect(allOutput()).toContain("req@user.com");
   });
 
   it("prints message for empty requests", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([]);
+    mockQuery.mockResolvedValueOnce({ items: [], tokenAvailable: true, authProvider: "email" });
     await run("requests");
     expect(allOutput()).toContain("No pending access requests");
   });
 
-  it("handles missing requested_at field", async () => {
+  it("handles missing org field", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ email: "req@user.com" }]);
+    mockQuery.mockResolvedValueOnce({
+      items: [{ email: "req@user.com" }],
+      tokenAvailable: true,
+      authProvider: "email",
+    });
     await run("requests");
     const output = allOutput();
     expect(output).toContain("req@user.com");
@@ -241,7 +272,11 @@ describe("members requests", () => {
 
   it("outputs valid JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ email: "req@user.com", requested_at: "2024-01-01" }]);
+    mockQuery.mockResolvedValueOnce({
+      items: [{ email: "req@user.com", org: { name: "Acme" } }],
+      tokenAvailable: true,
+      authProvider: "email",
+    });
     await run("requests", "--json");
     expect(() => JSON.parse(allOutput())).not.toThrow();
   });

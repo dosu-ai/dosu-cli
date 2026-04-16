@@ -4,7 +4,7 @@
 
 import { Command } from "commander";
 import pc from "picocolors";
-import { TrpcClient } from "../client/trpc";
+import { createTypedClient } from "../client/trpc";
 import { requireLoginConfig } from "./auth";
 import { formatDate, printInfo, printResult, printTable, truncate } from "./output";
 
@@ -15,25 +15,6 @@ function requireConfig() {
     process.exit(1);
   }
   return cfg;
-}
-
-interface ThreadSummary {
-  id: string;
-  title?: string;
-  preview?: string;
-  created_at?: string;
-  resolved_at?: string;
-  inbox_archived_at?: string;
-  channel?: string;
-  provider?: string;
-}
-
-interface MessageSummary {
-  id: string;
-  body?: string;
-  author_role?: string;
-  created_at?: string;
-  action?: string;
 }
 
 export function threadsCommand(): Command {
@@ -48,9 +29,15 @@ export function threadsCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (opts: { status?: string; search?: string; limit?: string; json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
 
-      const input: Record<string, unknown> = {
+      const input: {
+        space_id: string;
+        limit: number;
+        search?: string;
+        resolved?: boolean;
+        archived?: boolean;
+      } = {
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
         space_id: cfg.space_id!,
         limit: Math.min(Number.parseInt(opts.limit ?? "20", 10), 100),
@@ -64,27 +51,28 @@ export function threadsCommand(): Command {
         input.archived = false;
       }
 
-      const data = await trpc.query<ThreadSummary[]>("thread.list", input);
+      const data = await client.thread.list.query(input);
+      const threads = data.list;
 
       if (opts.json) {
         printResult(data, opts);
         return;
       }
 
-      if (!data || data.length === 0) {
+      if (!threads || threads.length === 0) {
         console.log(pc.dim("No threads found."));
         return;
       }
 
       printTable(
         ["ID", "Title", "Status", "Created"],
-        data.map((t) => [
+        threads.map((t) => [
           t.id.slice(0, 8),
-          truncate(t.title ?? t.preview ?? "(no title)", 50),
-          t.resolved_at ? "resolved" : t.inbox_archived_at ? "archived" : "pending",
+          truncate(t.generated_title ?? t.initial_message_title ?? "(no title)", 50),
+          t.resolved ? "resolved" : t.inbox_archived_at ? "archived" : "pending",
           formatDate(t.created_at),
         ]),
-        { rawData: data },
+        { rawData: threads },
       );
     });
 
@@ -96,33 +84,41 @@ export function threadsCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { limit?: string; json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
 
-      const [thread, messages] = await Promise.all([
-        trpc.query<ThreadSummary>("thread.get", { id }),
-        trpc.query<MessageSummary[]>("messages.list", {
+      const [thread, messagesData] = await Promise.all([
+        client.thread.get.query(id),
+        client.messages.list.query({
           thread_id: id,
           limit: Number.parseInt(opts.limit ?? "20", 10),
         }),
       ]);
 
       if (opts.json) {
-        printResult({ thread, messages }, opts);
+        printResult({ thread, messages: messagesData }, opts);
         return;
       }
 
-      console.log(pc.bold(thread.title ?? "(untitled thread)"));
+      if (!thread) {
+        console.log(pc.dim("Thread not found."));
+        return;
+      }
+
+      console.log(pc.bold(thread.generated_title ?? "(untitled thread)"));
       printInfo([
         ["ID", thread.id],
         ["Created", formatDate(thread.created_at)],
-        ["Status", thread.resolved_at ? "resolved" : "pending"],
+        ["Status", thread.resolved ? "resolved" : "pending"],
         ["Channel", thread.channel],
       ]);
 
+      const messages = messagesData.list;
       if (messages && messages.length > 0) {
-        console.log(`\n${pc.bold("Messages")} (${messages.length})`);
+        // Flatten message groups into individual messages
+        const allMessages = messages.flatMap((group) => group.messages);
+        console.log(`\n${pc.bold("Messages")} (${allMessages.length})`);
         console.log(pc.dim("─".repeat(60)));
-        for (const msg of messages) {
+        for (const msg of allMessages) {
           const role = msg.author_role ?? "unknown";
           const date = formatDate(msg.created_at);
           console.log(`\n${pc.bold(role)} ${pc.dim(date)}`);
@@ -140,9 +136,9 @@ export function threadsCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
 
-      await trpc.mutate("thread.archive", { id });
+      await client.thread.archive.mutate({ threadId: id, archived: true });
 
       if (opts.json) {
         printResult({ success: true, id }, opts);

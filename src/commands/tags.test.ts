@@ -2,8 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockQuery = vi.fn();
 const mockMutate = vi.fn();
+
+function createMockProxy(path: string[] = []): unknown {
+  return new Proxy(() => {}, {
+    get(_, prop: string) {
+      if (prop === "query") return (input: unknown) => mockQuery(path.join("."), input);
+      if (prop === "mutate") return (input: unknown) => mockMutate(path.join("."), input);
+      return createMockProxy([...path, prop]);
+    },
+  });
+}
+
 vi.mock("../client/trpc", () => ({
-  TrpcClient: vi.fn().mockImplementation(() => ({ query: mockQuery, mutate: mockMutate })),
+  createTypedClient: vi.fn().mockImplementation(() => createMockProxy()),
 }));
 
 const mockLoadConfig = vi.fn();
@@ -69,7 +80,7 @@ describe("tags list", () => {
 
   it("uses pagination variant with --search", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([]);
+    mockQuery.mockResolvedValueOnce({ data: [] });
 
     await run("list", "--search", "api");
 
@@ -171,7 +182,7 @@ describe("tags delete", () => {
 
     await run("delete", "tag-id-1");
 
-    expect(mockMutate).toHaveBeenCalledWith("tag.delete", { id: "tag-id-1" });
+    expect(mockMutate).toHaveBeenCalledWith("tag.delete", "tag-id-1");
   });
 
   it("outputs JSON with --json", async () => {
@@ -268,7 +279,7 @@ describe("tags remove", () => {
 describe("tags pages", () => {
   it("calls tag.getPagesByTagId with pagination", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "p1", title: "Doc A" }]);
+    mockQuery.mockResolvedValueOnce({ data: [{ id: "p1", title: "Doc A" }] });
 
     await run("pages", "tag1", "--limit", "5");
 
@@ -280,7 +291,7 @@ describe("tags pages", () => {
 
   it("outputs valid JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "p1", title: "Doc A" }]);
+    mockQuery.mockResolvedValueOnce({ data: [{ id: "p1", title: "Doc A" }] });
 
     await run("pages", "--json", "tag1");
 
@@ -289,7 +300,7 @@ describe("tags pages", () => {
 
   it("prints message for empty results", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([]);
+    mockQuery.mockResolvedValueOnce({ data: [] });
 
     await run("pages", "tag1");
 

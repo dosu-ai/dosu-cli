@@ -4,7 +4,7 @@
 
 import { Command } from "commander";
 import pc from "picocolors";
-import { TrpcClient } from "../client/trpc";
+import { createTypedClient } from "../client/trpc";
 import { requireLoginConfig } from "./auth";
 import { printInfo, printResult } from "./output";
 
@@ -17,19 +17,6 @@ function requireConfig() {
   return cfg;
 }
 
-interface UsageStats {
-  total_responses?: number;
-  answer_rate?: number;
-  high_confidence_count?: number;
-  medium_confidence_count?: number;
-  low_confidence_count?: number;
-  positive_reaction_count?: number;
-  negative_reaction_count?: number;
-  reaction_rate?: number;
-  positive_rate?: number;
-  [key: string]: unknown;
-}
-
 export function analyticsCommand(): Command {
   const cmd = new Command("analytics")
     .description("View usage statistics")
@@ -37,9 +24,9 @@ export function analyticsCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (opts: { days?: string; json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
 
-      const stats = await trpc.query<UsageStats>("analytics.getUsageStats", {
+      const stats = await client.analytics.getUsageStats.query({
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
         spaceId: cfg.space_id!,
         days: Number.parseInt(opts.days ?? "30", 10),
@@ -51,18 +38,20 @@ export function analyticsCommand(): Command {
       }
 
       const pct = (v?: number) => (v !== undefined ? `${(v * 100).toFixed(1)}%` : "—");
+      const answerRate =
+        stats.totalResponses > 0 ? stats.totalWithResponse / stats.totalResponses : undefined;
 
       printInfo(
         [
-          ["Total Responses", String(stats.total_responses ?? 0)],
-          ["Answer Rate", pct(stats.answer_rate)],
-          ["High Confidence", String(stats.high_confidence_count ?? 0)],
-          ["Medium Confidence", String(stats.medium_confidence_count ?? 0)],
-          ["Low Confidence", String(stats.low_confidence_count ?? 0)],
-          ["Positive Reactions", String(stats.positive_reaction_count ?? 0)],
-          ["Negative Reactions", String(stats.negative_reaction_count ?? 0)],
-          ["Reaction Rate", pct(stats.reaction_rate)],
-          ["Positive Rate", pct(stats.positive_rate)],
+          ["Total Responses", String(stats.totalResponses)],
+          ["Answer Rate", pct(answerRate)],
+          ["High Confidence", String(stats.byConfidence.high)],
+          ["Medium Confidence", String(stats.byConfidence.medium)],
+          ["Low Confidence", String(stats.byConfidence.low)],
+          ["Positive Reactions", String(stats.reactions.totalPositive)],
+          ["Negative Reactions", String(stats.reactions.totalNegative)],
+          ["Reaction Rate", pct(stats.reactions.reactionRate)],
+          ["Positive Rate", pct(stats.reactions.positiveRate)],
         ],
         { rawData: stats },
       );

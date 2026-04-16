@@ -1,8 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockQuery = vi.fn();
+const mockMutate = vi.fn();
+
+function createMockProxy(path: string[] = []): unknown {
+  return new Proxy(() => {}, {
+    get(_, prop: string) {
+      if (prop === "query") return (input: unknown) => mockQuery(path.join("."), input);
+      if (prop === "mutate") return (input: unknown) => mockMutate(path.join("."), input);
+      return createMockProxy([...path, prop]);
+    },
+  });
+}
+
 vi.mock("../client/trpc", () => ({
-  TrpcClient: vi.fn().mockImplementation(() => ({ query: mockQuery, mutate: vi.fn() })),
+  createTypedClient: vi.fn().mockImplementation(() => createMockProxy()),
 }));
 
 const mockLoadConfig = vi.fn();
@@ -54,7 +66,12 @@ afterEach(() => {
 describe("analytics", () => {
   it("calls analytics.getUsageStats with space_id and default 30 days", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({ total_responses: 42, answer_rate: 0.85 });
+    mockQuery.mockResolvedValueOnce({
+      totalResponses: 42,
+      totalWithResponse: 36,
+      byConfidence: { high: 20, medium: 10, low: 12 },
+      reactions: { totalPositive: 5, totalNegative: 1, reactionRate: 0.14, positiveRate: 0.83 },
+    });
 
     await run();
 
@@ -66,7 +83,12 @@ describe("analytics", () => {
 
   it("passes --days parameter", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({ total_responses: 10 });
+    mockQuery.mockResolvedValueOnce({
+      totalResponses: 10,
+      totalWithResponse: 8,
+      byConfidence: { high: 5, medium: 3, low: 2 },
+      reactions: { totalPositive: 2, totalNegative: 0, reactionRate: 0.2, positiveRate: 1 },
+    });
 
     await run("--days", "7");
 
@@ -75,38 +97,49 @@ describe("analytics", () => {
 
   it("outputs valid JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({ total_responses: 42, answer_rate: 0.85 });
+    mockQuery.mockResolvedValueOnce({
+      totalResponses: 42,
+      totalWithResponse: 36,
+      byConfidence: { high: 20, medium: 10, low: 12 },
+      reactions: { totalPositive: 5, totalNegative: 1, reactionRate: 0.14, positiveRate: 0.83 },
+    });
 
     await run("--json");
 
     const output = JSON.parse(allOutput());
-    expect(output.total_responses).toBe(42);
+    expect(output.totalResponses).toBe(42);
   });
 
   it("formats percentage values in human output", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce({
-      total_responses: 100,
-      answer_rate: 0.856,
-      positive_rate: 0.923,
+      totalResponses: 100,
+      totalWithResponse: 86,
+      byConfidence: { high: 50, medium: 30, low: 20 },
+      reactions: { totalPositive: 90, totalNegative: 10, reactionRate: 0.5, positiveRate: 0.923 },
     });
 
     await run();
 
     const output = allOutput();
     expect(output).toContain("100");
-    expect(output).toContain("85.6%");
+    expect(output).toContain("86.0%"); // answerRate = 86/100
     expect(output).toContain("92.3%");
   });
 
   it("handles undefined stats values with fallback defaults", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({});
+    mockQuery.mockResolvedValueOnce({
+      totalResponses: 0,
+      totalWithResponse: 0,
+      byConfidence: { high: 0, medium: 0, low: 0 },
+      reactions: { totalPositive: 0, totalNegative: 0 },
+    });
 
     await run();
 
     const output = allOutput();
-    // Should show "0" for undefined counts and "—" for undefined percentages
+    // Should show "0" for zero counts and "—" for undefined percentages
     expect(output).toContain("0");
     expect(output).toContain("—");
   });

@@ -1,9 +1,8 @@
 /**
  * `dosu ask` — ask a question and get an AI-generated answer.
  *
- * This command calls the Python backend directly (not tRPC) because the
- * tRPC answers.generateAnswer procedure uses callBackend() which requires
- * browser cookies. The Python backend natively supports X-Dosu-API-Key auth.
+ * Calls the Python backend's /ask endpoint which runs the research workflow
+ * synchronously and returns the answer.
  */
 
 import { Command } from "commander";
@@ -30,8 +29,9 @@ export function askCommand(): Command {
   const cmd = new Command("ask")
     .description("Ask a question and get an AI-generated answer")
     .argument("<question>", "The question to ask")
+    .option("--session <id>", "Continue a previous ask session")
     .option("--json", "Output as JSON")
-    .action(async (question: string, opts: { json?: boolean }) => {
+    .action(async (question: string, opts: { session?: string; json?: boolean }) => {
       const cfg = requireConfig();
       const backendURL = getBackendURL();
 
@@ -43,10 +43,10 @@ export function askCommand(): Command {
       logger.debug("ask", `Asking: ${question}`);
 
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 60_000);
+      const timeout = setTimeout(() => controller.abort(), 120_000);
 
       try {
-        const resp = await fetch(`${backendURL}/doc/generate-answer`, {
+        const resp = await fetch(`${backendURL}/ask`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -55,8 +55,9 @@ export function askCommand(): Command {
           },
           body: JSON.stringify({
             // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-            space_id: cfg.space_id!,
+            deployment_id: cfg.deployment_id!,
             question,
+            session_id: opts.session ?? undefined,
           }),
           signal: controller.signal,
         });
@@ -64,7 +65,8 @@ export function askCommand(): Command {
         const body = await resp.json();
 
         if (!resp.ok) {
-          const detail = body.detail ?? `Request failed with status ${resp.status}`;
+          const raw = body.detail ?? `Request failed with status ${resp.status}`;
+          const detail = typeof raw === "string" ? raw : JSON.stringify(raw, null, 2);
           console.error(pc.red(`Error: ${detail}`));
           process.exit(1);
         }
@@ -77,17 +79,20 @@ export function askCommand(): Command {
         // Display the answer
         if (body.answer) {
           console.log(body.answer);
-        } else if (body.body) {
-          console.log(body.body);
         } else {
           console.log(JSON.stringify(body, null, 2));
         }
 
-        // Show sources if available
-        if (body.sources && body.sources.length > 0) {
-          console.log(`\n${pc.bold("Sources:")}`);
-          for (const source of body.sources) {
-            console.log(`  ${pc.dim("•")} ${source.title ?? source.url ?? source.id}`);
+        // Show session ID for follow-up
+        if (body.session_id) {
+          console.log(`\n${pc.dim(`Session: ${body.session_id}`)}`);
+        }
+
+        // Show observations if available
+        if (body.observations && body.observations.length > 0) {
+          console.log(`\n${pc.bold("Key observations:")}`);
+          for (const obs of body.observations) {
+            console.log(`  ${pc.dim("•")} ${obs}`);
           }
         }
       } catch (err: unknown) {

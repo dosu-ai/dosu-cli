@@ -1,8 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockQuery = vi.fn();
+const mockMutate = vi.fn();
+
+function createMockProxy(path: string[] = []): unknown {
+  return new Proxy(() => {}, {
+    get(_, prop: string) {
+      if (prop === "query") return (input: unknown) => mockQuery(path.join("."), input);
+      if (prop === "mutate") return (input: unknown) => mockMutate(path.join("."), input);
+      return createMockProxy([...path, prop]);
+    },
+  });
+}
+
 vi.mock("../client/trpc", () => ({
-  TrpcClient: vi.fn().mockImplementation(() => ({ query: mockQuery, mutate: vi.fn() })),
+  createTypedClient: vi.fn().mockImplementation(() => createMockProxy()),
 }));
 
 const mockLoadConfig = vi.fn();
@@ -60,14 +72,14 @@ describe("knowledge search", () => {
         { id: "ds1", name: "GH" },
         { id: "ds2", name: "Slack" },
       ])
-      .mockResolvedValueOnce([{ title: "Doc A", similarity: 0.95 }]);
+      .mockResolvedValueOnce({ documents: [{ title: "Doc A", similarity: 0.95 }] });
 
     await run("search", "test query");
 
     expect(mockQuery).toHaveBeenCalledTimes(2);
     const [proc1, input1] = mockQuery.mock.calls[0];
     expect(proc1).toBe("dataSource.list");
-    expect(input1).toEqual({ org_id: "org1" });
+    expect(input1).toEqual({ org_id: "org1", excluded_provider_slugs: [] });
 
     const [proc2, input2] = mockQuery.mock.calls[1];
     expect(proc2).toBe("search.getMentions");
@@ -79,7 +91,7 @@ describe("knowledge search", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery
       .mockResolvedValueOnce([{ id: "ds1" }])
-      .mockResolvedValueOnce([{ title: "Result", similarity: 0.8 }]);
+      .mockResolvedValueOnce({ documents: [{ title: "Result", similarity: 0.8 }] });
 
     await run("search", "--json", "query");
 
@@ -98,7 +110,7 @@ describe("knowledge search", () => {
 
   it("prints message when search returns empty", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "ds1" }]).mockResolvedValueOnce([]);
+    mockQuery.mockResolvedValueOnce([{ id: "ds1" }]).mockResolvedValueOnce({ documents: [] });
 
     await run("search", "query");
 
@@ -111,7 +123,7 @@ describe("knowledge search", () => {
       title: `Doc ${i}`,
       similarity: 0.9 - i * 0.1,
     }));
-    mockQuery.mockResolvedValueOnce([{ id: "ds1" }]).mockResolvedValueOnce(results);
+    mockQuery.mockResolvedValueOnce([{ id: "ds1" }]).mockResolvedValueOnce({ documents: results });
 
     await run("search", "--limit", "3", "query");
 

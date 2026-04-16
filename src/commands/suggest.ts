@@ -4,7 +4,7 @@
 
 import { Command } from "commander";
 import pc from "picocolors";
-import { TrpcClient } from "../client/trpc";
+import { createTypedClient, type TypedClient } from "../client/trpc";
 import { requireLoginConfig } from "./auth";
 import { printResult, printTable } from "./output";
 
@@ -17,8 +17,8 @@ function requireConfig() {
   return cfg;
 }
 
-async function getKnowledgeStoreId(trpc: TrpcClient, spaceId: string): Promise<string> {
-  const store = await trpc.query<{ id: string } | null>("knowledgeStore.getBySpaceId", {
+async function getKnowledgeStoreId(client: TypedClient, spaceId: string): Promise<string> {
+  const store = await client.knowledgeStore.getBySpaceId.query({
     space_id: spaceId,
   });
   if (!store) {
@@ -37,13 +37,13 @@ export function suggestCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const ksId = await getKnowledgeStoreId(trpc, cfg.space_id!);
+      const ksId = await getKnowledgeStoreId(client, cfg.space_id!);
 
-      const suggestions = await trpc.query<
-        Array<{ id: string; title?: string; [key: string]: unknown }>
-      >("suggestedDoc.listForKnowledgeStore", { knowledgeStoreId: ksId });
+      const suggestions = await client.suggestedDoc.listForKnowledgeStore.query({
+        knowledgeStoreId: ksId,
+      });
 
       if (opts.json) {
         printResult(suggestions, opts);
@@ -57,7 +57,10 @@ export function suggestCommand(): Command {
 
       printTable(
         ["ID", "Title"],
-        suggestions.map((s) => [s.id.slice(0, 8), s.title ?? "(untitled)"]),
+        suggestions.map((s: { id: string; title?: string }) => [
+          s.id.slice(0, 8),
+          s.title ?? "(untitled)",
+        ]),
         { rawData: suggestions },
       );
     });
@@ -68,17 +71,23 @@ export function suggestCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const ksId = await getKnowledgeStoreId(trpc, cfg.space_id!);
+      const ksId = await getKnowledgeStoreId(client, cfg.space_id!);
+
+      if (!cfg.org_id) {
+        console.error(pc.red("Missing org config. Run 'dosu setup' to reconfigure."));
+        process.exit(1);
+      }
 
       // Get data source IDs
-      const dataSources = await trpc.query<Array<{ id: string }>>("dataSource.list", {
+      const dataSources = await client.dataSource.list.query({
         org_id: cfg.org_id,
+        excluded_provider_slugs: [],
       });
-      const dataSourceIds = dataSources.map((ds) => ds.id);
+      const dataSourceIds = dataSources.map((ds: { id: string }) => ds.id);
 
-      const result = await trpc.mutate("suggestedDoc.generate", {
+      const result = await client.suggestedDoc.generate.mutate({
         knowledgeStoreId: ksId,
         dataSourceIds,
       });
@@ -99,11 +108,11 @@ export function suggestCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { title?: string; instructions?: string; json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const ksId = await getKnowledgeStoreId(trpc, cfg.space_id!);
+      const ksId = await getKnowledgeStoreId(client, cfg.space_id!);
 
-      const result = await trpc.mutate("suggestedDoc.generateDocBySuggestedDocId", {
+      const result = await client.suggestedDoc.generateDocBySuggestedDocId.mutate({
         knowledgeStoreId: ksId,
         suggestedDocId: id,
         title: opts.title,
@@ -124,8 +133,8 @@ export function suggestCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
-      await trpc.mutate("suggestedDoc.delete", { id });
+      const client = createTypedClient(cfg);
+      await client.suggestedDoc.delete.mutate({ id });
 
       if (opts.json) {
         printResult({ success: true, id }, opts);

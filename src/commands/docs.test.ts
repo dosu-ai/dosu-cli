@@ -2,8 +2,19 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 const mockQuery = vi.fn();
 const mockMutate = vi.fn();
+
+function createMockProxy(path: string[] = []): unknown {
+  return new Proxy(() => {}, {
+    get(_, prop: string) {
+      if (prop === "query") return (input: unknown) => mockQuery(path.join("."), input);
+      if (prop === "mutate") return (input: unknown) => mockMutate(path.join("."), input);
+      return createMockProxy([...path, prop]);
+    },
+  });
+}
+
 vi.mock("../client/trpc", () => ({
-  TrpcClient: vi.fn().mockImplementation(() => ({ query: mockQuery, mutate: mockMutate })),
+  createTypedClient: vi.fn().mockImplementation(() => createMockProxy()),
 }));
 
 const mockLoadConfig = vi.fn();
@@ -88,7 +99,7 @@ afterEach(() => {
 describe("docs list", () => {
   it("calls page.listWithTags with knowledge_store_id", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([]);
+    mockQuery.mockResolvedValueOnce({ data: [] });
     await run("list");
 
     const call = mockQuery.mock.calls[1];
@@ -98,34 +109,36 @@ describe("docs list", () => {
 
   it("passes --search and --tag filters", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([]);
+    mockQuery.mockResolvedValueOnce({ data: [] });
     await run("list", "--search", "api", "--tag", "t1");
 
     const input = mockQuery.mock.calls[1][1];
     expect(input.searchTerm).toBe("api");
-    expect(input.tags).toEqual(["t1"]);
+    expect(input.tag_id).toBe("t1");
   });
 
   it("outputs valid JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "p1", title: "Doc" }]);
+    mockQuery.mockResolvedValueOnce({ data: [{ id: "p1", title: "Doc" }] });
     await run("list", "--json");
     expect(() => JSON.parse(allOutput())).not.toThrow();
   });
 
   it("prints message for empty results", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([]);
+    mockQuery.mockResolvedValueOnce({ data: [] });
     await run("list");
     expect(allOutput()).toContain("No documents found");
   });
 
   it("shows published/draft status", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([
-      { id: "p1", title: "Published", published: true },
-      { id: "p2", title: "Draft", published: false },
-    ]);
+    mockQuery.mockResolvedValueOnce({
+      data: [
+        { id: "p1", title: "Published", published: true },
+        { id: "p2", title: "Draft", published: false },
+      ],
+    });
     await run("list");
     const output = allOutput();
     expect(output).toContain("published");
@@ -514,7 +527,7 @@ describe("docs import-status", () => {
     mockQuery.mockReset();
     mockQuery.mockResolvedValueOnce({ status: "completed" });
     await run("import-status", "task-1");
-    expect(mockQuery).toHaveBeenCalledWith("docImports.getImportStatus", { taskId: "task-1" });
+    expect(mockQuery).toHaveBeenCalledWith("docImports.getImportStatus", "task-1");
   });
 
   it("prints message when task not found", async () => {
@@ -538,7 +551,7 @@ describe("docs import-status", () => {
     mockQuery.mockReset();
     mockQuery.mockResolvedValueOnce({ status: "completed" });
     await run("import-status", "task-1");
-    expect(allOutput()).toContain("Status: completed");
+    expect(allOutput()).toContain('Status: {"status":"completed"}');
   });
 });
 

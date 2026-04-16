@@ -4,7 +4,7 @@
 
 import { Command } from "commander";
 import pc from "picocolors";
-import { TrpcClient } from "../client/trpc";
+import { createTypedClient, type TypedClient } from "../client/trpc";
 import { requireLoginConfig } from "./auth";
 import { printResult, printTable } from "./output";
 
@@ -17,8 +17,8 @@ function requireConfig() {
   return cfg;
 }
 
-async function getKnowledgeStoreId(trpc: TrpcClient, spaceId: string): Promise<string> {
-  const store = await trpc.query<{ id: string } | null>("knowledgeStore.getBySpaceId", {
+async function getKnowledgeStoreId(client: TypedClient, spaceId: string): Promise<string> {
+  const store = await client.knowledgeStore.getBySpaceId.query({
     space_id: spaceId,
   });
   if (!store) {
@@ -38,18 +38,22 @@ export function tagsCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (opts: { search?: string; json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const ksId = await getKnowledgeStoreId(trpc, cfg.space_id!);
+      const ksId = await getKnowledgeStoreId(client, cfg.space_id!);
 
-      const tags = opts.search
-        ? await trpc.query<unknown[]>("tag.listKnowledgeStoreTagsWithPagination", {
-            knowledge_store_id: ksId,
-            searchTerm: opts.search,
-          })
-        : await trpc.query<unknown[]>("tag.listKnowledgeStoreTags", {
-            knowledge_store_id: ksId,
-          });
+      let tags: Array<{ id: string; name: string; description?: string | null }>;
+      if (opts.search) {
+        const result = await client.tag.listKnowledgeStoreTagsWithPagination.query({
+          knowledge_store_id: ksId,
+          searchTerm: opts.search,
+        });
+        tags = result.data;
+      } else {
+        tags = await client.tag.listKnowledgeStoreTags.query({
+          knowledge_store_id: ksId,
+        });
+      }
 
       if (opts.json) {
         printResult(tags, opts);
@@ -63,11 +67,7 @@ export function tagsCommand(): Command {
 
       printTable(
         ["ID", "Name", "Description"],
-        (tags as Array<{ id: string; name: string; description?: string }>).map((t) => [
-          t.id.slice(0, 8),
-          t.name,
-          t.description ?? "—",
-        ]),
+        tags.map((t) => [t.id.slice(0, 8), t.name, t.description ?? "—"]),
         { rawData: tags },
       );
     });
@@ -80,11 +80,11 @@ export function tagsCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (opts: { name: string; description?: string; json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const ksId = await getKnowledgeStoreId(trpc, cfg.space_id!);
+      const ksId = await getKnowledgeStoreId(client, cfg.space_id!);
 
-      const result = await trpc.mutate("tag.create", {
+      const result = await client.tag.create.mutate({
         knowledge_store_id: ksId,
         name: opts.name,
         description: opts.description ?? "",
@@ -106,11 +106,11 @@ export function tagsCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { name: string; description?: string; json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const ksId = await getKnowledgeStoreId(trpc, cfg.space_id!);
+      const ksId = await getKnowledgeStoreId(client, cfg.space_id!);
 
-      const result = await trpc.mutate("tag.update", {
+      const result = await client.tag.update.mutate({
         id,
         knowledge_store_id: ksId,
         name: opts.name,
@@ -131,8 +131,8 @@ export function tagsCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
-      await trpc.mutate("tag.delete", { id });
+      const client = createTypedClient(cfg);
+      await client.tag.delete.mutate(id);
 
       if (opts.json) {
         printResult({ success: true, id }, opts);
@@ -149,8 +149,8 @@ export function tagsCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (tagId: string, pageId: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
-      await trpc.mutate("tag.addToPage", { tag_id: tagId, page_id: pageId });
+      const client = createTypedClient(cfg);
+      await client.tag.addToPage.mutate({ tag_id: tagId, page_id: pageId });
 
       if (opts.json) {
         printResult({ success: true, tag_id: tagId, page_id: pageId }, opts);
@@ -167,8 +167,8 @@ export function tagsCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (tagId: string, pageId: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
-      await trpc.mutate("tag.removeFromPage", { tag_id: tagId, page_id: pageId });
+      const client = createTypedClient(cfg);
+      await client.tag.removeFromPage.mutate({ tag_id: tagId, page_id: pageId });
 
       if (opts.json) {
         printResult({ success: true, tag_id: tagId, page_id: pageId }, opts);
@@ -186,19 +186,17 @@ export function tagsCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (tagId: string, opts: { search?: string; limit?: string; json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const ksId = await getKnowledgeStoreId(trpc, cfg.space_id!);
+      const ksId = await getKnowledgeStoreId(client, cfg.space_id!);
 
-      const pages = await trpc.query<Array<{ id: string; title?: string; created_at?: string }>>(
-        "tag.getPagesByTagId",
-        {
-          knowledge_store_id: ksId,
-          tag_id: tagId,
-          searchTerm: opts.search,
-          limit: Number.parseInt(opts.limit ?? "10", 10),
-        },
-      );
+      const result = await client.tag.getPagesByTagId.query({
+        knowledge_store_id: ksId,
+        tag_id: tagId,
+        searchTerm: opts.search,
+        limit: Number.parseInt(opts.limit ?? "10", 10),
+      });
+      const pages = result.data;
 
       if (opts.json) {
         printResult(pages, opts);
@@ -212,7 +210,10 @@ export function tagsCommand(): Command {
 
       printTable(
         ["ID", "Title"],
-        pages.map((p) => [p.id.slice(0, 8), p.title ?? "(untitled)"]),
+        pages.map((p: { id: string; title?: string }) => [
+          p.id.slice(0, 8),
+          p.title ?? "(untitled)",
+        ]),
         { rawData: pages },
       );
     });

@@ -1,8 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockQuery = vi.fn();
+const mockMutate = vi.fn();
+
+function createMockProxy(path: string[] = []): unknown {
+  return new Proxy(() => {}, {
+    get(_, prop: string) {
+      if (prop === "query") return (input: unknown) => mockQuery(path.join("."), input);
+      if (prop === "mutate") return (input: unknown) => mockMutate(path.join("."), input);
+      return createMockProxy([...path, prop]);
+    },
+  });
+}
+
 vi.mock("../client/trpc", () => ({
-  TrpcClient: vi.fn().mockImplementation(() => ({ query: mockQuery, mutate: vi.fn() })),
+  createTypedClient: vi.fn().mockImplementation(() => createMockProxy()),
 }));
 
 const mockLoadConfig = vi.fn();
@@ -54,14 +66,14 @@ afterEach(() => {
 describe("org info", () => {
   it("calls organization.getOrganizations", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "org1", name: "Acme" }]);
+    mockQuery.mockResolvedValueOnce([{ org_id: "org1", name: "Acme" }]);
     await run("info");
     expect(mockQuery).toHaveBeenCalledWith("organization.getOrganizations", {});
   });
 
   it("outputs valid JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "org1", name: "Acme" }]);
+    mockQuery.mockResolvedValueOnce([{ org_id: "org1", name: "Acme" }]);
     await run("info", "--json");
     expect(() => JSON.parse(allOutput())).not.toThrow();
   });
@@ -75,7 +87,7 @@ describe("org info", () => {
 
   it("prints single org as key-value info", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "org1", name: "Acme" }]);
+    mockQuery.mockResolvedValueOnce([{ org_id: "org1", name: "Acme" }]);
     await run("info");
     const output = allOutput();
     expect(output).toContain("Acme");
@@ -85,8 +97,8 @@ describe("org info", () => {
   it("prints multiple orgs as table", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce([
-      { id: "org1-full-uuid", name: "Acme" },
-      { id: "org2-full-uuid", name: "Beta" },
+      { org_id: "org1-full-uuid", name: "Acme" },
+      { org_id: "org2-full-uuid", name: "Beta" },
     ]);
     await run("info");
     const output = allOutput();
@@ -97,8 +109,8 @@ describe("org info", () => {
   it("shows current org hint for multiple orgs when org_id is set", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce([
-      { id: "org1", name: "Acme" },
-      { id: "org2", name: "Beta" },
+      { org_id: "org1", name: "Acme" },
+      { org_id: "org2", name: "Beta" },
     ]);
     await run("info");
     expect(allOutput()).toContain("Current:");

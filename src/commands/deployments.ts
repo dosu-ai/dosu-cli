@@ -4,26 +4,13 @@
 
 import { Command } from "commander";
 import pc from "picocolors";
-import { TrpcClient } from "../client/trpc";
+import { createTypedClient } from "../client/trpc";
 import { saveConfig } from "../config/config";
 import { requireLoginConfig } from "./auth";
 import { formatDate, printInfo, printResult, printTable } from "./output";
 
 function requireConfig() {
   return requireLoginConfig();
-}
-
-interface Workspace {
-  deployment_id: string;
-  name: string;
-  description?: string;
-  provider_slug?: string;
-  enabled?: boolean;
-  org_id?: string;
-  org_name?: string;
-  space_id?: string;
-  created_at?: string;
-  [key: string]: unknown;
 }
 
 export function deploymentsCommand(): Command {
@@ -35,16 +22,11 @@ export function deploymentsCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
 
-      let deployments: Workspace[];
-      if (cfg.org_id) {
-        deployments = await trpc.query<Workspace[]>("workspaces.listForOrg", {
-          org_id: cfg.org_id,
-        });
-      } else {
-        deployments = await trpc.query<Workspace[]>("workspaces.listAll", {});
-      }
+      const deployments = cfg.org_id
+        ? await client.workspaces.listForOrg.query(cfg.org_id)
+        : await client.workspaces.listAll.query({});
 
       if (opts.json) {
         printResult(deployments, opts);
@@ -58,12 +40,14 @@ export function deploymentsCommand(): Command {
 
       printTable(
         ["ID", "Name", "Org", "Status"],
-        deployments.map((d) => [
-          d.deployment_id.slice(0, 8),
-          d.name ?? "(unnamed)",
-          d.org_name ?? "—",
-          d.enabled ? pc.green("active") : pc.dim("disabled"),
-        ]),
+        deployments.map(
+          (d: { deployment_id: string; name?: string; org_name?: string; enabled?: boolean }) => [
+            d.deployment_id.slice(0, 8),
+            d.name ?? "(unnamed)",
+            d.org_name ?? "—",
+            d.enabled ? pc.green("active") : pc.dim("disabled"),
+          ],
+        ),
         { rawData: deployments },
       );
 
@@ -86,10 +70,8 @@ export function deploymentsCommand(): Command {
         process.exit(1);
       }
 
-      const trpc = new TrpcClient(cfg);
-      const deployment = await trpc.query<Workspace>("workspaces.get", {
-        id: cfg.deployment_id,
-      });
+      const client = createTypedClient(cfg);
+      const deployment = await client.workspaces.get.query(cfg.deployment_id);
 
       if (opts.json) {
         printResult(deployment, opts);
@@ -117,10 +99,10 @@ export function deploymentsCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
 
       // Validate the deployment exists and user has access
-      const deployment = await trpc.query<Workspace>("workspaces.get", { id });
+      const deployment = await client.workspaces.get.query(id);
 
       cfg.deployment_id = deployment.deployment_id;
       cfg.deployment_name = deployment.name;

@@ -4,20 +4,12 @@
 
 import { Command } from "commander";
 import pc from "picocolors";
-import { TrpcClient } from "../client/trpc";
+import { createTypedClient } from "../client/trpc";
 import { requireLoginConfig } from "./auth";
 import { printInfo, printResult, printTable } from "./output";
 
 function requireConfig() {
   return requireLoginConfig();
-}
-
-interface Organization {
-  id: string;
-  name: string;
-  avatar_url?: string;
-  created_at?: string;
-  [key: string]: unknown;
 }
 
 export function orgCommand(): Command {
@@ -29,9 +21,9 @@ export function orgCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
 
-      const orgs = await trpc.query<Organization[]>("organization.getOrganizations", {});
+      const orgs = await client.organization.getOrganizations.query({});
 
       if (opts.json) {
         printResult(orgs, opts);
@@ -48,7 +40,7 @@ export function orgCommand(): Command {
         printInfo(
           [
             ["Name", org.name],
-            ["ID", org.id],
+            ["ID", org.org_id],
           ],
           { rawData: org },
         );
@@ -57,7 +49,7 @@ export function orgCommand(): Command {
 
       printTable(
         ["ID", "Name"],
-        orgs.map((o) => [o.id.slice(0, 8), o.name]),
+        orgs.map((o) => [o.org_id.slice(0, 8), o.name]),
         { rawData: orgs },
       );
 

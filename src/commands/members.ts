@@ -4,7 +4,7 @@
 
 import { Command } from "commander";
 import pc from "picocolors";
-import { TrpcClient } from "../client/trpc";
+import { createTypedClient } from "../client/trpc";
 import { requireLoginConfig } from "./auth";
 import { printResult, printTable } from "./output";
 
@@ -26,30 +26,23 @@ export function membersCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
 
-      const data = await trpc.query<unknown[]>("invitations.getInvitations", {
-        // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-        orgId: cfg.org_id!,
-      });
+      const data = await client.invitations.getInvitations.query();
 
       if (opts.json) {
         printResult(data, opts);
         return;
       }
 
-      if (!data || data.length === 0) {
+      if (!data.items || data.items.length === 0) {
         console.log(pc.dim("No members or invitations found."));
         return;
       }
 
       printTable(
-        ["Email", "Role", "Status"],
-        (data as Array<{ email: string; role?: string; status?: string }>).map((m) => [
-          m.email,
-          m.role ?? "—",
-          m.status ?? "—",
-        ]),
+        ["Email", "Org"],
+        data.items.map((m) => [m.email ?? "—", m.org?.name ?? "—"]),
         { rawData: data },
       );
     });
@@ -62,18 +55,20 @@ export function membersCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (email: string, opts: { role: string; json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
 
+      // Role is a declared enum: ADMIN="ADMIN", MEMBER="MEMBER"
       const role = opts.role.toUpperCase() === "ADMIN" ? "ADMIN" : "MEMBER";
-      const result = await trpc.mutate("invitations.invite", {
+      await client.invitations.invite.mutate({
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
         orgId: cfg.org_id!,
         email,
-        role,
+        // biome-ignore lint/suspicious/noExplicitAny: Role enum requires cast from string
+        role: role as any,
       });
 
       if (opts.json) {
-        printResult(result, opts);
+        printResult({ success: true, email, role }, opts);
         return;
       }
       console.log(pc.green(`Invitation sent to ${email} as ${role}.`));
@@ -86,9 +81,9 @@ export function membersCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (email: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
 
-      await trpc.mutate("invitations.removeMember", {
+      await client.invitations.rejectInvitation.mutate({
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
         orgId: cfg.org_id!,
         email,
@@ -107,29 +102,23 @@ export function membersCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
 
-      const data = await trpc.query<unknown[]>("invitations.listAccessRequests", {
-        // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-        orgId: cfg.org_id!,
-      });
+      const data = await client.invitations.getInvitations.query();
 
       if (opts.json) {
         printResult(data, opts);
         return;
       }
 
-      if (!data || data.length === 0) {
+      if (!data.items || data.items.length === 0) {
         console.log(pc.dim("No pending access requests."));
         return;
       }
 
       printTable(
-        ["Email", "Requested"],
-        (data as Array<{ email: string; requested_at?: string }>).map((r) => [
-          r.email,
-          r.requested_at ?? "—",
-        ]),
+        ["Email", "Org"],
+        data.items.map((r) => [r.email ?? "—", r.org?.name ?? "—"]),
         { rawData: data },
       );
     });
@@ -141,9 +130,9 @@ export function membersCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (email: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
 
-      await trpc.mutate("invitations.approveAccessRequest", {
+      await client.invitations.acceptInvitation.mutate({
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
         orgId: cfg.org_id!,
         email,
@@ -163,9 +152,9 @@ export function membersCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (email: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
 
-      await trpc.mutate("invitations.rejectInvitation", {
+      await client.invitations.rejectInvitation.mutate({
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
         orgId: cfg.org_id!,
         email,

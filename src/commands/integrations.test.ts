@@ -2,8 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockQuery = vi.fn();
 const mockMutate = vi.fn();
+
+function createMockProxy(path: string[] = []): unknown {
+  return new Proxy(() => {}, {
+    get(_, prop: string) {
+      if (prop === "query") return (input: unknown) => mockQuery(path.join("."), input);
+      if (prop === "mutate") return (input: unknown) => mockMutate(path.join("."), input);
+      return createMockProxy([...path, prop]);
+    },
+  });
+}
+
 vi.mock("../client/trpc", () => ({
-  TrpcClient: vi.fn().mockImplementation(() => ({ query: mockQuery, mutate: mockMutate })),
+  createTypedClient: vi.fn().mockImplementation(() => createMockProxy()),
 }));
 
 const mockLoadConfig = vi.fn();
@@ -54,17 +65,14 @@ afterEach(() => {
 });
 
 describe("integrations list", () => {
-  it("queries all platforms and shows connection status", async () => {
+  it("queries nango platforms and shows connection status", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    // Mock each platform query — some connected, some not
+    // Only nango-supported platforms are queried: gitlab, confluence, notion, coda
     mockQuery
-      .mockResolvedValueOnce({ id: "conn1" }) // github - connected
       .mockResolvedValueOnce(null) // gitlab - not connected
-      .mockRejectedValueOnce(new Error("fail")) // slack - error
-      .mockResolvedValueOnce({ id: "conn2" }) // confluence
-      .mockResolvedValueOnce(null) // notion
-      .mockResolvedValueOnce(null) // coda
-      .mockResolvedValueOnce(null); // teams
+      .mockResolvedValueOnce({ id: "conn2" }) // confluence - connected
+      .mockResolvedValueOnce(null) // notion - not connected
+      .mockResolvedValueOnce(null); // coda - not connected
 
     await run("list");
 
@@ -76,7 +84,7 @@ describe("integrations list", () => {
 
   it("outputs valid JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    for (let i = 0; i < 7; i++) mockQuery.mockResolvedValueOnce(null);
+    for (let i = 0; i < 4; i++) mockQuery.mockResolvedValueOnce(null);
 
     await run("list", "--json");
 
@@ -92,7 +100,7 @@ describe("integrations status", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce({ id: "conn1", status: "active" });
 
-    await run("status", "github");
+    await run("status", "confluence");
 
     expect(allOutput()).toContain("connected");
   });
@@ -110,7 +118,7 @@ describe("integrations status", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce(null);
 
-    await run("status", "github");
+    await run("status", "confluence");
 
     expect(allOutput()).toContain("not connected");
   });
@@ -123,7 +131,7 @@ describe("integrations slack-channels", () => {
 
     await run("slack-channels");
 
-    expect(mockQuery).toHaveBeenCalledWith("slackChannel.getAll", { orgId: "org1" });
+    expect(mockQuery).toHaveBeenCalledWith("slackChannel.getAll", "org1");
     expect(allOutput()).toContain("general");
   });
 
@@ -142,14 +150,16 @@ describe("integrations slack-join", () => {
 
     await run("slack-join", "C123");
 
-    expect(mockMutate).toHaveBeenCalledWith("slackChannel.join", { channelId: "C123" });
+    expect(mockMutate).toHaveBeenCalledWith("slackChannel.join", "C123");
   });
 });
 
 describe("integrations github-collaborators", () => {
   it("lists collaborators", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ username: "octocat", name: "Mona", email: "mona@gh.com" }]);
+    mockQuery.mockResolvedValueOnce([
+      { user_name: "octocat", full_name: "Mona", email: "mona@gh.com" },
+    ]);
 
     await run("github-collaborators");
 
@@ -180,10 +190,10 @@ describe("integrations status (JSON branches)", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce({ id: "conn1", status: "active" });
 
-    await run("status", "--json", "github");
+    await run("status", "--json", "confluence");
 
     const output = JSON.parse(allOutput());
-    expect(output.platform).toBe("github");
+    expect(output.platform).toBe("confluence");
     expect(output.connected).toBe(true);
     expect(output.connection).toBeTruthy();
   });
@@ -238,13 +248,15 @@ describe("integrations slack-join (JSON and human branches)", () => {
 describe("integrations github-collaborators (JSON branch)", () => {
   it("outputs valid JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ username: "octocat", name: "Mona", email: "mona@gh.com" }]);
+    mockQuery.mockResolvedValueOnce([
+      { user_name: "octocat", full_name: "Mona", email: "mona@gh.com" },
+    ]);
 
     await run("github-collaborators", "--json");
 
     const output = JSON.parse(allOutput());
     expect(Array.isArray(output)).toBe(true);
-    expect(output[0].username).toBe("octocat");
+    expect(output[0].user_name).toBe("octocat");
   });
 });
 

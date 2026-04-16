@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { Command } from "commander";
 import pc from "picocolors";
-import { TrpcClient } from "../client/trpc";
+import { createTypedClient, type TypedClient } from "../client/trpc";
 import { getBackendURL } from "../config/constants";
 import { logger } from "../debug/logger";
 import { requireAPIKey, requireLoginConfig } from "./auth";
@@ -20,8 +20,8 @@ function requireConfig() {
   return cfg;
 }
 
-async function getKnowledgeStoreId(trpc: TrpcClient, spaceId: string): Promise<string> {
-  const store = await trpc.query<{ id: string } | null>("knowledgeStore.getBySpaceId", {
+async function getKnowledgeStoreId(client: TypedClient, spaceId: string): Promise<string> {
+  const store = await client.knowledgeStore.getBySpaceId.query({
     space_id: spaceId,
   });
   if (!store) {
@@ -71,18 +71,17 @@ export function docsCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (opts: { search?: string; tag?: string; limit?: string; json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const ksId = await getKnowledgeStoreId(trpc, cfg.space_id!);
+      const ksId = await getKnowledgeStoreId(client, cfg.space_id!);
 
-      const pages = await trpc.query<
-        Array<{ id: string; title?: string; published?: boolean; created_at?: string }>
-      >("page.listWithTags", {
+      const result = await client.page.listWithTags.query({
         knowledge_store_id: ksId,
         searchTerm: opts.search,
-        tags: opts.tag ? [opts.tag] : [],
+        tag_id: opts.tag,
         limit: Number.parseInt(opts.limit ?? "20", 10),
       });
+      const pages = result.data;
 
       if (opts.json) {
         printResult(pages, opts);
@@ -94,7 +93,7 @@ export function docsCommand(): Command {
       }
       printTable(
         ["ID", "Title", "Status", "Created"],
-        pages.map((p) => [
+        pages.map((p: { id: string; title?: string; published?: boolean; created_at?: string }) => [
           p.id.slice(0, 8),
           truncate(p.title ?? "(untitled)", 50),
           p.published ? "published" : "draft",
@@ -113,23 +112,23 @@ export function docsCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { version?: string; json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
 
-      const input: Record<string, unknown> = { page_id: id };
-      if (opts.version) input.version = Number.parseInt(opts.version, 10);
-
-      const page = await trpc.query<{
-        id: string;
-        title?: string;
-        body?: string;
-        published?: boolean;
-        created_at?: string;
-      }>("page.get", input);
+      const page = await client.page.get.query({
+        page_id: id,
+        version: opts.version ? Number.parseInt(opts.version, 10) : undefined,
+      });
 
       if (opts.json) {
         printResult(page, opts);
         return;
       }
+
+      if (!page) {
+        console.log(pc.dim("Document not found."));
+        return;
+      }
+
       console.log(pc.bold(page.title ?? "(untitled)"));
       printInfo([
         ["ID", page.id],
@@ -151,12 +150,12 @@ export function docsCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (opts: { title: string; body?: string; bodyFile?: string; json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const ksId = await getKnowledgeStoreId(trpc, cfg.space_id!);
+      const ksId = await getKnowledgeStoreId(client, cfg.space_id!);
 
       const body = readBody(opts);
-      const result = await trpc.mutate("page.create", {
+      const result = await client.page.create.mutate({
         knowledge_store_id: ksId,
         title: opts.title,
         body: body ?? "",
@@ -184,16 +183,17 @@ export function docsCommand(): Command {
         opts: { title?: string; body?: string; bodyFile?: string; json?: boolean },
       ) => {
         const cfg = requireConfig();
-        const trpc = new TrpcClient(cfg);
+        const client = createTypedClient(cfg);
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-        const ksId = await getKnowledgeStoreId(trpc, cfg.space_id!);
+        const ksId = await getKnowledgeStoreId(client, cfg.space_id!);
 
         const body = readBody(opts);
-        const input: Record<string, unknown> = { id, knowledge_store_id: ksId };
-        if (opts.title) input.title = opts.title;
-        if (body !== undefined) input.body = body;
-
-        const result = await trpc.mutate("page.update", input);
+        const result = await client.page.update.mutate({
+          id,
+          knowledge_store_id: ksId,
+          title: opts.title,
+          body: body,
+        });
 
         if (opts.json) {
           printResult(result, opts);
@@ -213,8 +213,8 @@ export function docsCommand(): Command {
       .option("--json", "Output as JSON")
       .action(async (id: string, opts: { json?: boolean }) => {
         const cfg = requireConfig();
-        const trpc = new TrpcClient(cfg);
-        await trpc.mutate("page.setArchiveState", { page_id: id, archived });
+        const client = createTypedClient(cfg);
+        await client.page.setArchiveState.mutate({ page_id: id, archived });
 
         if (opts.json) {
           printResult({ success: true, id, archived }, opts);
@@ -232,8 +232,8 @@ export function docsCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
-      await trpc.mutate("page.delete", { page_id: id });
+      const client = createTypedClient(cfg);
+      await client.page.delete.mutate({ page_id: id });
 
       if (opts.json) {
         printResult({ success: true, id }, opts);
@@ -250,11 +250,9 @@ export function docsCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
 
-      const versions = await trpc.query<
-        Array<{ version: number; created_at?: string; [key: string]: unknown }>
-      >("page.listVersions", { page_id: id });
+      const versions = await client.page.listVersions.query({ page_id: id });
 
       if (opts.json) {
         printResult(versions, opts);
@@ -266,7 +264,10 @@ export function docsCommand(): Command {
       }
       printTable(
         ["Version", "Created"],
-        versions.map((v) => [String(v.version), formatDate(v.created_at)]),
+        versions.map((v: { version: number; created_at?: string }) => [
+          String(v.version),
+          formatDate(v.created_at),
+        ]),
         { rawData: versions },
       );
     });
@@ -280,8 +281,8 @@ export function docsCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { version: string; json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
-      await trpc.mutate("page.restoreVersion", {
+      const client = createTypedClient(cfg);
+      await client.page.restoreVersion.mutate({
         page_id: id,
         version_to_restore: Number.parseInt(opts.version, 10),
       });
@@ -302,9 +303,9 @@ export function docsCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (opts: { title: string; instructions?: string; json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const ksId = await getKnowledgeStoreId(trpc, cfg.space_id!);
+      const ksId = await getKnowledgeStoreId(client, cfg.space_id!);
 
       const result = await backendPost("/doc/generate", requireAPIKey(cfg), {
         knowledge_store_id: ksId,
@@ -345,21 +346,22 @@ export function docsCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (platform: string, opts: { files: string; json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const ksId = await getKnowledgeStoreId(trpc, cfg.space_id!);
+      const ksId = await getKnowledgeStoreId(client, cfg.space_id!);
       const fileIds = opts.files.split(",").map((id) => id.trim());
 
-      const procedureMap: Record<string, string> = {
-        github: "docImports.importGithubFiles",
-        gitlab: "docImports.importGitlabFiles",
-        confluence: "docImports.importConfluencePages",
-        notion: "docImports.importNotionPages",
-        coda: "docImports.importCodaPages",
+      // biome-ignore lint/suspicious/noExplicitAny: dynamic platform dispatch
+      const importFn: Record<string, (input: any) => Promise<any>> = {
+        github: (input) => client.docImports.importGithubFiles.mutate(input),
+        gitlab: (input) => client.docImports.importGitlabFiles.mutate(input),
+        confluence: (input) => client.docImports.importConfluencePages.mutate(input),
+        notion: (input) => client.docImports.importNotionPages.mutate(input),
+        coda: (input) => client.docImports.importCodaPages.mutate(input),
       };
 
-      const procedure = procedureMap[platform.toLowerCase()];
-      if (!procedure) {
+      const fn = importFn[platform.toLowerCase()];
+      if (!fn) {
         console.error(
           pc.red(`Unknown platform: ${platform}. Use: github, gitlab, confluence, notion, coda`),
         );
@@ -370,7 +372,7 @@ export function docsCommand(): Command {
         ? "page_ids"
         : "file_ids";
 
-      const result = await trpc.mutate<{ task_id?: string }>(procedure, {
+      const result = await fn({
         knowledge_store_id: ksId,
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
         space_id: cfg.space_id!,
@@ -394,12 +396,9 @@ export function docsCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (taskId: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
 
-      const status = await trpc.query<{ status?: string; [key: string]: unknown } | null>(
-        "docImports.getImportStatus",
-        { taskId },
-      );
+      const status = await client.docImports.getImportStatus.query(taskId);
 
       if (opts.json) {
         printResult(status, opts);
@@ -409,7 +408,7 @@ export function docsCommand(): Command {
         console.log(pc.dim("Import task not found."));
         return;
       }
-      console.log(`Status: ${status.status ?? "unknown"}`);
+      console.log(`Status: ${JSON.stringify(status)}`);
     });
 
   // ── publish ──
@@ -510,9 +509,9 @@ export function docsCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
 
-      const result = await trpc.mutate("page.syncBack", { page_id: id });
+      const result = await client.page.syncBack.mutate({ page_id: id });
 
       if (opts.json) {
         printResult(result, opts);

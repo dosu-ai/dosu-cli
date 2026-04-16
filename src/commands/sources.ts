@@ -4,7 +4,7 @@
 
 import { Command } from "commander";
 import pc from "picocolors";
-import { TrpcClient } from "../client/trpc";
+import { createTypedClient } from "../client/trpc";
 import { requireLoginConfig } from "./auth";
 import { formatDate, printInfo, printResult, printTable } from "./output";
 
@@ -17,15 +17,6 @@ function requireConfig() {
   return cfg;
 }
 
-interface DataSource {
-  id: string;
-  name: string;
-  description?: string;
-  provider_slug?: string;
-  created_at?: string;
-  [key: string]: unknown;
-}
-
 export function sourcesCommand(): Command {
   const cmd = new Command("sources").description("Manage connected data sources");
 
@@ -35,33 +26,39 @@ export function sourcesCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
 
-      const dataSources = await trpc.query<DataSource[]>(
-        "dataSource.list",
+      const dataSources = await client.dataSource.list.query({
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-        { org_id: cfg.org_id! },
-      );
+        org_id: cfg.org_id!,
+        excluded_provider_slugs: [],
+      });
 
       if (opts.json) {
         printResult(dataSources, opts);
         return;
       }
 
-      if (!dataSources || dataSources.length === 0) {
+      const list = (dataSources ?? []) as Array<{
+        id: string;
+        name: string;
+        provider_slug?: string;
+        created_at?: string;
+      }>;
+      if (list.length === 0) {
         console.log(pc.dim("No data sources connected."));
         return;
       }
 
       printTable(
         ["ID", "Name", "Provider", "Created"],
-        dataSources.map((ds) => [
+        list.map((ds) => [
           ds.id.slice(0, 8),
           ds.name ?? "(unnamed)",
           ds.provider_slug ?? "—",
           formatDate(ds.created_at),
         ]),
-        { rawData: dataSources },
+        { rawData: list },
       );
     });
 
@@ -72,12 +69,17 @@ export function sourcesCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
 
-      const ds = await trpc.query<DataSource>("dataSource.get", { id });
+      const ds = await client.dataSource.get.query(id);
 
       if (opts.json) {
         printResult(ds, opts);
+        return;
+      }
+
+      if (!ds) {
+        console.log(pc.dim("Data source not found."));
         return;
       }
 
@@ -100,8 +102,8 @@ export function sourcesCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
-      await trpc.mutate("dataSource.syncDataSource", { dataSourceId: id });
+      const client = createTypedClient(cfg);
+      await client.dataSource.syncDataSource.mutate(id);
 
       if (opts.json) {
         printResult({ success: true, id }, opts);
@@ -119,9 +121,9 @@ export function sourcesCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { name?: string; description?: string; json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
+      const client = createTypedClient(cfg);
 
-      const result = await trpc.mutate("dataSource.update", {
+      const result = await client.dataSource.update.mutate({
         data_source_id: id,
         name: opts.name,
         description: opts.description,
@@ -141,8 +143,8 @@ export function sourcesCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const trpc = new TrpcClient(cfg);
-      await trpc.mutate("dataSource.deleteDataSource", { data_source_id: id });
+      const client = createTypedClient(cfg);
+      await client.dataSource.deleteDataSource.mutate(id);
 
       if (opts.json) {
         printResult({ success: true, id }, opts);
