@@ -7,8 +7,6 @@
     "strict": true,
     "skipLibCheck": true,
     "outDir": "dist",
-    "rootDir": "src",
-    "declaration": true,
     "resolveJsonModule": true,
     "types": ["bun-types"]
   },

@@ -35,12 +35,18 @@ function writeTOML(path: string, content: string): void {
   writeFileSync(path, content);
 }
 
+function mcpEndpoint(cfg: Config): string {
+  if (cfg.mode === MODE_OSS) return mcpBaseURL();
+  if (!cfg.deployment_id) throw new Error("deployment ID is required");
+  return mcpURL(cfg.deployment_id);
+}
+
 function installDosuToTOML(path: string, cfg: Config): void {
   let content = readTOML(path);
   // Remove existing [mcp_servers.dosu] section if present
   content = removeDosuFromTOML(content);
   // Append new section
-  const url = cfg.mode === MODE_OSS ? mcpBaseURL() : mcpURL(cfg.deployment_id!);
+  const url = mcpEndpoint(cfg);
   // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
   const headers = mcpHeaders(cfg.api_key!);
   const headerEntries = Object.entries(headers)

@@ -48,12 +48,16 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     cfg.mode = undefined;
     cfg.deployment_id = d.deployment_id;
     cfg.deployment_name = d.name;
+    cfg.org_id = d.org_id;
+    cfg.space_id = d.space_id;
   } else if (cfg.mode === MODE_OSS) {
     // OSS path: fetch first available deployment for API key creation only
     const deployments = await fetchDeployments(apiClient);
     if (deployments.length > 0) {
       cfg.deployment_id = deployments[0].deployment_id;
       cfg.deployment_name = deployments[0].name;
+      cfg.org_id = deployments[0].org_id;
+      cfg.space_id = deployments[0].space_id;
     }
   } else {
     // Standard path: select deployment interactively
@@ -64,6 +68,8 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     cfg.mode = undefined;
     cfg.deployment_id = d.deployment_id;
     cfg.deployment_name = d.name;
+    cfg.org_id = d.org_id;
+    cfg.space_id = d.space_id;
   }
 
   saveConfig(cfg);
