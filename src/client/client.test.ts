@@ -172,6 +172,17 @@ describe("Client", () => {
     });
   });
 
+  describe("doRequestRaw", () => {
+    it("returns 401 without retrying or refreshing", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({}, 401));
+      const client = new Client(makeConfig());
+      const resp = await client.doRequestRaw("GET", "/raw");
+      expect(resp.status).toBe(401);
+      // Only one call — no retry, no refresh
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("getDeployments", () => {
     it("returns deployments on success", async () => {
       const deployments = [

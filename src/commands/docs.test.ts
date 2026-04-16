@@ -509,6 +509,45 @@ describe("docs import", () => {
     });
   });
 
+  it("calls docImports.importGitlabFiles for gitlab", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockResolvedValueOnce({ task_id: "task-1" });
+
+    await run("import", "gitlab", "--files", "f1,f2");
+
+    expect(mockMutate).toHaveBeenCalledWith("docImports.importGitlabFiles", {
+      knowledge_store_id: "ks1",
+      space_id: "sp1",
+      file_ids: ["f1", "f2"],
+    });
+  });
+
+  it("calls docImports.importConfluencePages for confluence", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockResolvedValueOnce({ task_id: "task-1" });
+
+    await run("import", "confluence", "--files", "p1,p2");
+
+    expect(mockMutate).toHaveBeenCalledWith("docImports.importConfluencePages", {
+      knowledge_store_id: "ks1",
+      space_id: "sp1",
+      page_ids: ["p1", "p2"],
+    });
+  });
+
+  it("calls docImports.importCodaPages for coda", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockResolvedValueOnce({ task_id: "task-1" });
+
+    await run("import", "coda", "--files", "p1");
+
+    expect(mockMutate).toHaveBeenCalledWith("docImports.importCodaPages", {
+      knowledge_store_id: "ks1",
+      space_id: "sp1",
+      page_ids: ["p1"],
+    });
+  });
+
   it("exits on unknown platform", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     await expect(run("import", "unknown", "--files", "f1")).rejects.toThrow("exit");

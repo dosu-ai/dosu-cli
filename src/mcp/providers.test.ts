@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { allProviders, allSetupProviders, getProvider } from "./providers";
+import {
+  allProviders,
+  allSetupProviders,
+  detectInstalledProviders,
+  getProvider,
+} from "./providers";
 
 describe("provider registry", () => {
   it("allProviders returns 15 providers", () => {
@@ -67,6 +72,36 @@ describe("provider registry", () => {
         expect(p.name()).toBe(expected.name);
         expect(p.supportsLocal()).toBe(expected.local);
       });
+    }
+  });
+
+  describe("SetupProvider accessors", () => {
+    for (const p of allSetupProviders()) {
+      describe(p.id(), () => {
+        it("detectPaths returns string array", () => {
+          expect(Array.isArray(p.detectPaths())).toBe(true);
+        });
+
+        it("isInstalled returns boolean", () => {
+          expect(typeof p.isInstalled()).toBe("boolean");
+        });
+
+        it("globalConfigPath returns string", () => {
+          expect(typeof p.globalConfigPath()).toBe("string");
+        });
+
+        it("isConfigured returns boolean", () => {
+          expect(typeof p.isConfigured()).toBe("boolean");
+        });
+      });
+    }
+  });
+
+  it("detectInstalledProviders returns subset of allSetupProviders", () => {
+    const installed = detectInstalledProviders();
+    const allIds = allSetupProviders().map((p) => p.id());
+    for (const p of installed) {
+      expect(allIds).toContain(p.id());
     }
   });
 });
