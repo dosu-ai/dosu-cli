@@ -51,11 +51,15 @@ async function backendPost(
     headers: { "Content-Type": "application/json", "X-Dosu-API-Key": apiKey },
     body: JSON.stringify(body),
   });
-  const data = await resp.json();
   if (!resp.ok) {
-    throw new Error(data.detail ?? `Request failed with status ${resp.status}`);
+    let detail = `Request failed with status ${resp.status}`;
+    try {
+      const errBody = await resp.json();
+      detail = errBody.detail ?? detail;
+    } catch {}
+    throw new Error(detail);
   }
-  return data;
+  return await resp.json();
 }
 
 export function docsCommand(): Command {

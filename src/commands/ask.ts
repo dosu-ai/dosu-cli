@@ -62,14 +62,18 @@ export function askCommand(): Command {
           signal: controller.signal,
         });
 
-        const body = await resp.json();
-
         if (!resp.ok) {
-          const raw = body.detail ?? `Request failed with status ${resp.status}`;
-          const detail = typeof raw === "string" ? raw : JSON.stringify(raw, null, 2);
+          let detail = `Request failed with status ${resp.status}`;
+          try {
+            const errBody = await resp.json();
+            const raw = errBody.detail ?? detail;
+            detail = typeof raw === "string" ? raw : JSON.stringify(raw, null, 2);
+          } catch {}
           console.error(pc.red(`Error: ${detail}`));
           process.exit(1);
         }
+
+        const body = await resp.json();
 
         if (opts.json) {
           printResult(body, opts);

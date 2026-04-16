@@ -4,6 +4,9 @@
 
 import pc from "picocolors";
 
+// biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escape code stripping requires matching control characters
+const stripAnsi = (str: string): string => str.replace(/\x1b\[[0-9;]*m/g, "");
+
 /**
  * Print data as JSON (for --json flag / agent consumption) or formatted text.
  */
@@ -34,17 +37,27 @@ export function printTable(
     return;
   }
 
-  // Calculate column widths
-  const widths = headers.map((h, i) => Math.max(h.length, ...rows.map((r) => (r[i] ?? "").length)));
+  // Calculate column widths (strip ANSI codes for accurate visible-width measurement)
+  const widths = headers.map((h, i) =>
+    Math.max(h.length, ...rows.map((r) => stripAnsi(r[i] ?? "").length)),
+  );
 
   // Print header
   const headerLine = headers.map((h, i) => h.padEnd(widths[i])).join("  ");
   console.log(pc.bold(headerLine));
   console.log(pc.dim("─".repeat(headerLine.length)));
 
-  // Print rows
+  // Print rows (pad based on visible width to handle ANSI escape codes)
   for (const row of rows) {
-    console.log(row.map((cell, i) => (cell ?? "").padEnd(widths[i])).join("  "));
+    console.log(
+      row
+        .map((cell, i) => {
+          const s = cell ?? "";
+          const pad = Math.max(0, widths[i] - stripAnsi(s).length);
+          return s + " ".repeat(pad);
+        })
+        .join("  "),
+    );
   }
 }
 

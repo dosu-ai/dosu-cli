@@ -154,36 +154,6 @@ describe("members invite", () => {
   });
 });
 
-describe("members remove", () => {
-  it("calls invitations.rejectInvitation with email", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-
-    await run("remove", "old@user.com");
-
-    expect(mockMutate).toHaveBeenCalledWith("invitations.rejectInvitation", {
-      orgId: "org1",
-      email: "old@user.com",
-    });
-  });
-
-  it("outputs JSON with --json", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-    await run("remove", "--json", "old@user.com");
-    const output = JSON.parse(allOutput());
-    expect(output.success).toBe(true);
-    expect(output.email).toBe("old@user.com");
-  });
-
-  it("prints human-readable confirmation", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-    await run("remove", "old@user.com");
-    expect(allOutput()).toContain("Member old@user.com removed");
-  });
-});
-
 describe("members approve", () => {
   it("calls invitations.acceptInvitation", async () => {
     mockLoadConfig.mockReturnValue(validConfig);

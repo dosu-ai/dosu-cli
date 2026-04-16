@@ -75,28 +75,6 @@ export function membersCommand(): Command {
     });
 
   cmd
-    .command("remove")
-    .description("Remove a member from the organization")
-    .argument("<email>", "Email of member to remove")
-    .option("--json", "Output as JSON")
-    .action(async (email: string, opts: { json?: boolean }) => {
-      const cfg = requireConfig();
-      const client = createTypedClient(cfg);
-
-      await client.invitations.rejectInvitation.mutate({
-        // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-        orgId: cfg.org_id!,
-        email,
-      });
-
-      if (opts.json) {
-        printResult({ success: true, email }, opts);
-        return;
-      }
-      console.log(pc.green(`Member ${email} removed.`));
-    });
-
-  cmd
     .command("requests")
     .description("List pending access requests")
     .option("--json", "Output as JSON")
