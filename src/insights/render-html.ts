@@ -29,11 +29,15 @@ export function renderHTML(report: InsightsReport): string {
       <p class="subtitle">Last ${report.windowDays} days · generated ${generated}</p>
     </header>
 
+    ${renderHeadline(report)}
     ${renderAtAGlance(report)}
+    ${renderScorecard(report)}
     ${renderStatsRow(report)}
     ${renderSignals(report)}
     ${renderSuggestions(report)}
-    ${renderCharts(report.current)}
+    ${renderConfidenceBar(report.current)}
+    ${renderReactions(report.current)}
+    ${renderComparison(report)}
     ${renderTrend(report)}
 
     <footer class="fun-ending">
@@ -45,12 +49,84 @@ export function renderHTML(report: InsightsReport): string {
 </html>`;
 }
 
+function renderHeadline(r: InsightsReport): string {
+  const cur = r.current.totalResponses;
+  const delta = r.derived.responsesDelta;
+  const direction = delta > 0 ? "up" : delta < 0 ? "down" : "flat";
+  const arrow = delta > 0 ? "▲" : delta < 0 ? "▼" : "→";
+  const pct =
+    r.previous.totalResponses > 0
+      ? ` (${delta >= 0 ? "+" : ""}${Math.round((delta / r.previous.totalResponses) * 100)}%)`
+      : "";
+  const deltaText =
+    delta === 0
+      ? "no change vs the prior window"
+      : `${arrow} ${delta >= 0 ? "+" : ""}${delta}${pct} vs the prior ${r.windowDays} days`;
+  return `
+    <section class="headline">
+      <div class="headline-number">${cur.toLocaleString("en-US")}</div>
+      <div class="headline-label">responses answered</div>
+      <div class="headline-delta delta-${direction}">${deltaText}</div>
+    </section>`;
+}
+
 function renderAtAGlance(r: InsightsReport): string {
   return `
     <section class="at-a-glance">
       <div class="glance-title">At a Glance</div>
       <p>${escapeHTML(r.atAGlance)}</p>
     </section>`;
+}
+
+function renderScorecard(r: InsightsReport): string {
+  if (r.current.totalResponses === 0) return "";
+  const answer = r.derived.answerRate ?? 0;
+  const conf =
+    r.current.totalWithResponse > 0 ? r.current.byConfidence.high / r.current.totalWithResponse : 0;
+  const reactionTotal = r.current.reactions.totalPositive + r.current.reactions.totalNegative;
+  const sentiment = reactionTotal > 0 ? r.current.reactions.positiveRate : 0.7; // neutral default
+  const score = Math.round(((answer + conf + sentiment) / 3) * 100);
+  const grade = pickGrade(score);
+
+  return `
+    <section class="scorecard">
+      <div class="scorecard-grade grade-${grade.tone}">
+        <div class="grade-letter">${grade.letter}</div>
+        <div class="grade-label">${grade.label}</div>
+        <div class="grade-score">${score} / 100</div>
+      </div>
+      <div class="scorecard-bars">
+        ${miniBar("Answer rate", answer, "answers reaching the user")}
+        ${miniBar("High-confidence", conf, "of answers Dosu was sure about")}
+        ${miniBar(
+          "Sentiment",
+          sentiment,
+          reactionTotal > 0 ? "of reactions were positive" : "no reactions yet — neutral default",
+        )}
+      </div>
+    </section>`;
+}
+
+function miniBar(label: string, value: number, hint: string): string {
+  const v = Math.max(0, Math.min(1, value));
+  const tone = v >= 0.8 ? "good" : v >= 0.6 ? "ok" : "low";
+  return `
+        <div class="mini">
+          <div class="mini-row">
+            <span class="mini-label">${escapeHTML(label)}</span>
+            <span class="mini-value">${(v * 100).toFixed(0)}%</span>
+          </div>
+          <div class="mini-track"><div class="mini-fill mini-${tone}" style="width:${v * 100}%"></div></div>
+          <div class="mini-hint">${escapeHTML(hint)}</div>
+        </div>`;
+}
+
+function pickGrade(score: number): { letter: string; label: string; tone: string } {
+  if (score >= 90) return { letter: "A+", label: "Outstanding", tone: "great" };
+  if (score >= 80) return { letter: "A", label: "Excellent", tone: "great" };
+  if (score >= 70) return { letter: "B", label: "Healthy", tone: "good" };
+  if (score >= 60) return { letter: "C", label: "Needs attention", tone: "warn" };
+  return { letter: "D", label: "Investigate", tone: "alarm" };
 }
 
 function renderStatsRow(r: InsightsReport): string {
@@ -62,6 +138,9 @@ function renderStatsRow(r: InsightsReport): string {
       : "—";
   const prDelta = formatPctDelta(r.derived.positiveRateDelta);
   const respDelta = formatCountDelta(r.derived.responsesDelta);
+  const perDay = r.current.totalResponses > 0 ? r.current.totalResponses / r.windowDays : 0;
+  const perDayLabel = perDay >= 1 ? perDay.toFixed(1) : perDay > 0 ? perDay.toFixed(2) : "—";
+  const reactionTotal = r.current.reactions.totalPositive + r.current.reactions.totalNegative;
   return `
     <section class="stats-row">
       <div class="stat">
@@ -80,9 +159,19 @@ function renderStatsRow(r: InsightsReport): string {
         ${prDelta}
       </div>
       <div class="stat">
+        <div class="stat-value">${perDayLabel}</div>
+        <div class="stat-label">Responses / day</div>
+        <div class="stat-delta">avg over ${r.windowDays} days</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value">${reactionTotal}</div>
+        <div class="stat-label">Reactions</div>
+        <div class="stat-delta">${r.current.reactions.totalPositive} 👍 · ${r.current.reactions.totalNegative} 👎</div>
+      </div>
+      <div class="stat">
         <div class="stat-value">${r.windowDays}</div>
-        <div class="stat-label">Days</div>
-        <div class="stat-delta">&nbsp;</div>
+        <div class="stat-label">Window</div>
+        <div class="stat-delta">days</div>
       </div>
     </section>`;
 }
@@ -134,25 +223,157 @@ function renderSuggestionCard(s: Suggestion): string {
     </article>`;
 }
 
-function renderCharts(stats: UsageStats): string {
+function renderConfidenceBar(stats: UsageStats): string {
+  const total = stats.byConfidence.high + stats.byConfidence.medium + stats.byConfidence.low;
+  if (total === 0) return "";
+  const high = (stats.byConfidence.high / total) * 100;
+  const med = (stats.byConfidence.medium / total) * 100;
+  const low = (stats.byConfidence.low / total) * 100;
   return `
-    <section class="charts">
-      <div class="chart-card">
-        <div class="chart-title">Confidence Breakdown</div>
-        ${barChart([
-          ["High", stats.byConfidence.high, "#16a34a"],
-          ["Medium", stats.byConfidence.medium, "#eab308"],
-          ["Low", stats.byConfidence.low, "#dc2626"],
-        ])}
-      </div>
-      <div class="chart-card">
-        <div class="chart-title">Reactions</div>
-        ${barChart([
-          ["Positive", stats.reactions.totalPositive, "#16a34a"],
-          ["Negative", stats.reactions.totalNegative, "#dc2626"],
-        ])}
+    <section>
+      <h2 class="section-heading">Confidence Breakdown</h2>
+      <p class="section-intro">How sure Dosu was about each answer.</p>
+      <div class="stacked-bar-card">
+        <div class="stacked-bar">
+          <div class="stack-seg seg-high" style="width:${high}%" title="High confidence: ${stats.byConfidence.high}"></div>
+          <div class="stack-seg seg-med" style="width:${med}%" title="Medium confidence: ${stats.byConfidence.medium}"></div>
+          <div class="stack-seg seg-low" style="width:${low}%" title="Low confidence: ${stats.byConfidence.low}"></div>
+        </div>
+        <div class="stacked-legend">
+          <div class="legend-item"><span class="legend-swatch swatch-high"></span><strong>${stats.byConfidence.high}</strong> high <span class="legend-pct">${high.toFixed(0)}%</span></div>
+          <div class="legend-item"><span class="legend-swatch swatch-med"></span><strong>${stats.byConfidence.medium}</strong> medium <span class="legend-pct">${med.toFixed(0)}%</span></div>
+          <div class="legend-item"><span class="legend-swatch swatch-low"></span><strong>${stats.byConfidence.low}</strong> low <span class="legend-pct">${low.toFixed(0)}%</span></div>
+        </div>
       </div>
     </section>`;
+}
+
+function renderReactions(stats: UsageStats): string {
+  const total = stats.reactions.totalPositive + stats.reactions.totalNegative;
+  if (total === 0) {
+    return `
+    <section>
+      <h2 class="section-heading">Reactions</h2>
+      <div class="empty-card">No reactions logged yet — encourage your team to thumbs-up the answers that helped.</div>
+    </section>`;
+  }
+  const pos = (stats.reactions.totalPositive / total) * 100;
+  const neg = (stats.reactions.totalNegative / total) * 100;
+  return `
+    <section>
+      <h2 class="section-heading">Reactions</h2>
+      <p class="section-intro">${total} reactions across ${stats.reactions.messagesWithReactions} messages.</p>
+      <div class="stacked-bar-card">
+        <div class="stacked-bar">
+          <div class="stack-seg seg-high" style="width:${pos}%" title="Positive: ${stats.reactions.totalPositive}"></div>
+          <div class="stack-seg seg-low" style="width:${neg}%" title="Negative: ${stats.reactions.totalNegative}"></div>
+        </div>
+        <div class="stacked-legend">
+          <div class="legend-item"><span class="legend-swatch swatch-high"></span><strong>${stats.reactions.totalPositive}</strong> positive <span class="legend-pct">${pos.toFixed(0)}%</span></div>
+          <div class="legend-item"><span class="legend-swatch swatch-low"></span><strong>${stats.reactions.totalNegative}</strong> negative <span class="legend-pct">${neg.toFixed(0)}%</span></div>
+        </div>
+      </div>
+    </section>`;
+}
+
+function renderComparison(r: InsightsReport): string {
+  const rows: Array<{ label: string; cur: string; prev: string; delta: string; tone: string }> = [
+    rowResp("Responses", r.current.totalResponses, r.previous.totalResponses, true),
+    rowResp("Answers given", r.current.totalWithResponse, r.previous.totalWithResponse, true),
+    rowPct(
+      "Answer rate",
+      r.derived.answerRate,
+      r.previous.totalResponses > 0
+        ? r.previous.totalWithResponse / r.previous.totalResponses
+        : null,
+    ),
+    rowResp("High-confidence", r.current.byConfidence.high, r.previous.byConfidence.high, true),
+    rowResp("Low-confidence", r.current.byConfidence.low, r.previous.byConfidence.low, false),
+    rowResp(
+      "Positive reactions",
+      r.current.reactions.totalPositive,
+      r.previous.reactions.totalPositive,
+      true,
+    ),
+    rowResp(
+      "Negative reactions",
+      r.current.reactions.totalNegative,
+      r.previous.reactions.totalNegative,
+      false,
+    ),
+  ];
+  return `
+    <section>
+      <h2 class="section-heading">Period Comparison</h2>
+      <p class="section-intro">This window vs the prior ${r.windowDays} days.</p>
+      <div class="compare-card">
+        <table class="compare-table">
+          <thead>
+            <tr>
+              <th>Metric</th>
+              <th>This window</th>
+              <th>Prior window</th>
+              <th>Change</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows
+              .map(
+                (row) => `
+              <tr>
+                <td>${escapeHTML(row.label)}</td>
+                <td class="num">${row.cur}</td>
+                <td class="num prior">${row.prev}</td>
+                <td class="num delta-${row.tone}">${row.delta}</td>
+              </tr>`,
+              )
+              .join("")}
+          </tbody>
+        </table>
+      </div>
+    </section>`;
+}
+
+function rowResp(
+  label: string,
+  cur: number,
+  prev: number,
+  upIsGood: boolean,
+): { label: string; cur: string; prev: string; delta: string; tone: string } {
+  const d = cur - prev;
+  const tone = d === 0 ? "flat" : d > 0 === upIsGood ? "up" : "down";
+  const arrow = d === 0 ? "→" : d > 0 ? "▲" : "▼";
+  const delta = d === 0 ? "no change" : `${arrow} ${d > 0 ? "+" : ""}${d}`;
+  return {
+    label,
+    cur: cur.toLocaleString("en-US"),
+    prev: prev.toLocaleString("en-US"),
+    delta,
+    tone,
+  };
+}
+
+function rowPct(
+  label: string,
+  cur: number | null,
+  prev: number | null,
+): { label: string; cur: string; prev: string; delta: string; tone: string } {
+  const curStr = cur !== null ? `${(cur * 100).toFixed(0)}%` : "—";
+  const prevStr = prev !== null ? `${(prev * 100).toFixed(0)}%` : "—";
+  if (cur === null || prev === null)
+    return { label, cur: curStr, prev: prevStr, delta: "—", tone: "flat" };
+  const d = cur - prev;
+  if (Math.abs(d) < 0.005)
+    return { label, cur: curStr, prev: prevStr, delta: "no change", tone: "flat" };
+  const pct = Math.round(Math.abs(d * 100));
+  const arrow = d > 0 ? "▲" : "▼";
+  return {
+    label,
+    cur: curStr,
+    prev: prevStr,
+    delta: `${arrow} ${pct} pts`,
+    tone: d > 0 ? "up" : "down",
+  };
 }
 
 function renderTrend(r: InsightsReport): string {
@@ -179,20 +400,6 @@ function pickFlair(r: InsightsReport): string {
   if (r.derived.answerRate !== null && r.derived.answerRate >= 0.95)
     return "💯 Almost everything got answered. Chef's kiss.";
   return "👏 Keep the questions coming.";
-}
-
-function barChart(rows: Array<[string, number, string]>): string {
-  const max = Math.max(1, ...rows.map(([, v]) => v));
-  return rows
-    .map(
-      ([label, value, color]) => `
-        <div class="bar-row">
-          <div class="bar-label">${escapeHTML(label)}</div>
-          <div class="bar-track"><div class="bar-fill" style="width:${(value / max) * 100}%;background:${color}"></div></div>
-          <div class="bar-value">${value}</div>
-        </div>`,
-    )
-    .join("");
 }
 
 function formatPctDelta(delta: number | null): string {
@@ -234,13 +441,13 @@ body {
   background: #f8fafc;
   color: #334155;
   line-height: 1.6;
-  padding: 56px 24px;
+  padding: 56px 24px 80px;
   -webkit-font-smoothing: antialiased;
 }
-.container { max-width: 880px; margin: 0 auto; }
+.container { max-width: 920px; margin: 0 auto; }
 
 /* Hero */
-.hero { margin-bottom: 32px; }
+.hero { margin-bottom: 28px; }
 .brand {
   font-size: 11px;
   letter-spacing: 0.18em;
@@ -248,18 +455,48 @@ body {
   font-weight: 700;
   margin-bottom: 8px;
 }
-h1 { font-size: 30px; font-weight: 700; color: #0f172a; margin-bottom: 4px; }
+h1 { font-size: 32px; font-weight: 700; color: #0f172a; margin-bottom: 4px; letter-spacing: -0.01em; }
 .subtitle { color: #64748b; font-size: 14px; }
 .section-heading { font-size: 18px; font-weight: 600; color: #0f172a; margin-bottom: 4px; }
 .section-intro { color: #64748b; font-size: 13px; margin-bottom: 16px; }
+section { margin-top: 36px; }
+
+/* Headline metric */
+.headline {
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  padding: 32px 24px;
+  text-align: center;
+  margin-top: 16px;
+  box-shadow: 0 1px 3px rgba(15,23,42,0.04);
+}
+.headline-number {
+  font-size: 64px;
+  font-weight: 800;
+  color: #0f172a;
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+.headline-label {
+  font-size: 13px;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-top: 10px;
+}
+.headline-delta {
+  font-size: 14px;
+  margin-top: 14px;
+  font-weight: 500;
+}
 
 /* At-a-glance */
 .at-a-glance {
   background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
   border: 1px solid #f59e0b;
-  border-radius: 12px;
-  padding: 22px 26px;
-  margin-top: 8px;
+  border-radius: 14px;
+  padding: 24px 28px;
 }
 .glance-title {
   font-size: 11px;
@@ -270,18 +507,58 @@ h1 { font-size: 30px; font-weight: 700; color: #0f172a; margin-bottom: 4px; }
 }
 .at-a-glance p { color: #78350f; font-size: 15px; line-height: 1.7; }
 
+/* Scorecard */
+.scorecard {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 20px;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  padding: 24px;
+  box-shadow: 0 1px 3px rgba(15,23,42,0.04);
+}
+.scorecard-grade {
+  border-radius: 12px;
+  padding: 20px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.grade-letter { font-size: 56px; font-weight: 800; line-height: 1; letter-spacing: -0.03em; }
+.grade-label { font-size: 13px; font-weight: 600; margin-top: 8px; text-transform: uppercase; letter-spacing: 0.06em; }
+.grade-score { font-size: 12px; opacity: 0.7; margin-top: 4px; }
+.grade-great { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+.grade-good { background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe; }
+.grade-warn { background: #fffbeb; color: #92400e; border: 1px solid #fde68a; }
+.grade-alarm { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+.scorecard-bars {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+.mini-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+.mini-label { font-size: 13px; font-weight: 600; color: #334155; }
+.mini-value { font-size: 14px; font-weight: 700; color: #0f172a; font-variant-numeric: tabular-nums; }
+.mini-track { height: 8px; background: #f1f5f9; border-radius: 4px; overflow: hidden; }
+.mini-fill { height: 100%; border-radius: 4px; }
+.mini-good { background: #16a34a; }
+.mini-ok { background: #eab308; }
+.mini-low { background: #dc2626; }
+.mini-hint { font-size: 12px; color: #64748b; margin-top: 4px; }
+
 /* Stats row */
 .stats-row {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
-  margin: 32px 0 8px;
-  padding: 20px 0;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 12px;
+  padding: 22px 0;
   border-top: 1px solid #e2e8f0;
   border-bottom: 1px solid #e2e8f0;
 }
 .stat { text-align: center; }
-.stat-value { font-size: 26px; font-weight: 700; color: #0f172a; line-height: 1.1; }
+.stat-value { font-size: 24px; font-weight: 700; color: #0f172a; line-height: 1.1; font-variant-numeric: tabular-nums; }
 .stat-label {
   font-size: 11px;
   color: #64748b;
@@ -294,31 +571,30 @@ h1 { font-size: 30px; font-weight: 700; color: #0f172a; margin-bottom: 4px; }
 .delta-down { color: #dc2626; }
 .delta-flat { color: #94a3b8; }
 
-/* Signals (cheers + investigate side-by-side) */
+/* Signals */
 .signals {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
-  margin-top: 32px;
 }
 .signals:has(.signal-card:only-child) { grid-template-columns: 1fr; }
 .signal-card {
-  border-radius: 10px;
-  padding: 18px 20px;
+  border-radius: 12px;
+  padding: 20px 22px;
   border: 1px solid;
 }
 .signal-card h2 {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: 12px;
+  letter-spacing: 0.08em;
+  margin-bottom: 14px;
   display: flex;
   align-items: center;
   gap: 8px;
 }
 .signal-icon { font-size: 16px; }
-.signal-card ul { list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.signal-card ul { list-style: none; display: flex; flex-direction: column; gap: 10px; }
 .signal-card li {
   font-size: 14px;
   line-height: 1.55;
@@ -332,19 +608,12 @@ h1 { font-size: 30px; font-weight: 700; color: #0f172a; margin-bottom: 4px; }
   font-weight: 700;
   opacity: 0.6;
 }
-.signal-cheers {
-  background: #f0fdf4;
-  border-color: #bbf7d0;
-}
+.signal-cheers { background: #f0fdf4; border-color: #bbf7d0; }
 .signal-cheers h2, .signal-cheers li { color: #166534; }
-.signal-investigate {
-  background: #fef2f2;
-  border-color: #fecaca;
-}
+.signal-investigate { background: #fef2f2; border-color: #fecaca; }
 .signal-investigate h2, .signal-investigate li { color: #991b1b; }
 
 /* Suggestions */
-section { margin-top: 36px; }
 .suggestions {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -353,11 +622,12 @@ section { margin-top: 36px; }
 .suggestion {
   background: white;
   border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  padding: 18px 20px;
+  border-radius: 12px;
+  padding: 20px 22px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  box-shadow: 0 1px 3px rgba(15,23,42,0.04);
 }
 .suggestion h3 { font-size: 15px; font-weight: 600; color: #0f172a; }
 .suggestion p { font-size: 13px; color: #475569; line-height: 1.55; flex: 1; }
@@ -368,42 +638,93 @@ section { margin-top: 36px; }
   color: #e2e8f0;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
-  padding: 6px 10px;
+  padding: 6px 12px;
   border-radius: 6px;
-  letter-spacing: 0.01em;
 }
 
-/* Charts */
-.charts {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
-.chart-card {
+/* Stacked bars (confidence + reactions) */
+.stacked-bar-card {
   background: white;
   border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  padding: 18px;
+  border-radius: 12px;
+  padding: 22px;
+  box-shadow: 0 1px 3px rgba(15,23,42,0.04);
 }
-.chart-title {
+.stacked-bar {
+  display: flex;
+  height: 18px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #f1f5f9;
+  margin-bottom: 16px;
+}
+.stack-seg { height: 100%; transition: width 0.3s ease; }
+.seg-high { background: #16a34a; }
+.seg-med { background: #eab308; }
+.seg-low { background: #dc2626; }
+.stacked-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  font-size: 13px;
+  color: #475569;
+}
+.legend-item { display: flex; align-items: center; gap: 6px; }
+.legend-swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.swatch-high { background: #16a34a; }
+.swatch-med { background: #eab308; }
+.swatch-low { background: #dc2626; }
+.legend-pct { color: #94a3b8; font-variant-numeric: tabular-nums; }
+.empty-card {
+  background: white;
+  border: 1px dashed #cbd5e1;
+  border-radius: 12px;
+  padding: 22px;
+  color: #94a3b8;
+  font-size: 14px;
+  text-align: center;
+}
+
+/* Period comparison table */
+.compare-card {
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 8px 4px;
+  box-shadow: 0 1px 3px rgba(15,23,42,0.04);
+  overflow-x: auto;
+}
+.compare-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.compare-table th {
+  text-align: left;
   font-size: 11px;
-  font-weight: 600;
-  color: #64748b;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  margin-bottom: 12px;
+  color: #64748b;
+  font-weight: 600;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e2e8f0;
 }
-.bar-row { display: flex; align-items: center; margin-bottom: 8px; }
-.bar-row:last-child { margin-bottom: 0; }
-.bar-label { width: 80px; font-size: 12px; color: #475569; }
-.bar-track { flex: 1; height: 8px; background: #f1f5f9; border-radius: 4px; margin: 0 10px; }
-.bar-fill { height: 100%; border-radius: 4px; transition: width 0.3s ease; }
-.bar-value { width: 36px; font-size: 12px; font-weight: 600; color: #475569; text-align: right; }
+.compare-table th.num, .compare-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.compare-table th:nth-child(2), .compare-table td:nth-child(2),
+.compare-table th:nth-child(3), .compare-table td:nth-child(3),
+.compare-table th:nth-child(4), .compare-table td:nth-child(4) { text-align: right; }
+.compare-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid #f1f5f9;
+  color: #334155;
+}
+.compare-table tr:last-child td { border-bottom: none; }
+.compare-table td.prior { color: #94a3b8; }
 
 /* Trend */
 .trend {
-  border-radius: 10px;
-  padding: 14px 18px;
+  border-radius: 12px;
+  padding: 16px 20px;
   font-size: 14px;
   display: flex;
   align-items: center;
@@ -419,12 +740,12 @@ section { margin-top: 36px; }
 .fun-ending {
   background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
   border: 1px solid #fbbf24;
-  border-radius: 12px;
-  padding: 26px;
-  margin-top: 40px;
+  border-radius: 14px;
+  padding: 28px;
+  margin-top: 44px;
   text-align: center;
 }
-.fun-headline { font-size: 18px; font-weight: 600; color: #78350f; margin-bottom: 6px; }
+.fun-headline { font-size: 18px; font-weight: 700; color: #78350f; margin-bottom: 6px; }
 .fun-detail { font-size: 14px; color: #92400e; }
 .fun-detail code {
   background: rgba(255,255,255,0.7);
@@ -435,29 +756,16 @@ section { margin-top: 36px; }
 }
 
 /* Responsive */
-@media (max-width: 720px) {
-  body { padding: 32px 16px; }
+@media (max-width: 840px) {
+  .stats-row { grid-template-columns: repeat(3, 1fr); }
+  .scorecard { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+  body { padding: 32px 16px 60px; }
+  h1 { font-size: 26px; }
+  .headline-number { font-size: 52px; }
   .stats-row { grid-template-columns: repeat(2, 1fr); }
   .signals { grid-template-columns: 1fr; }
   .suggestions { grid-template-columns: 1fr; }
-  .charts { grid-template-columns: 1fr; }
-}
-@media (prefers-color-scheme: dark) {
-  body { background: #0b1220; color: #cbd5e1; }
-  h1, .stat-value, .section-heading { color: #f1f5f9; }
-  .subtitle, .section-intro, .stat-label, .chart-title { color: #94a3b8; }
-  .stats-row { border-color: #1e293b; }
-  .suggestion, .chart-card { background: #111827; border-color: #1e293b; }
-  .suggestion h3 { color: #f1f5f9; }
-  .suggestion p { color: #94a3b8; }
-  .bar-track { background: #1e293b; }
-  .bar-label, .bar-value { color: #cbd5e1; }
-  .signal-cheers { background: rgba(22,163,74,0.08); border-color: rgba(22,163,74,0.35); }
-  .signal-cheers h2, .signal-cheers li { color: #86efac; }
-  .signal-investigate { background: rgba(220,38,38,0.08); border-color: rgba(220,38,38,0.35); }
-  .signal-investigate h2, .signal-investigate li { color: #fca5a5; }
-  .trend-up { background: rgba(22,163,74,0.08); border-color: rgba(22,163,74,0.35); color: #86efac; }
-  .trend-down { background: rgba(220,38,38,0.08); border-color: rgba(220,38,38,0.35); color: #fca5a5; }
-  .trend-flat { background: #111827; border-color: #1e293b; color: #94a3b8; }
 }
 `;

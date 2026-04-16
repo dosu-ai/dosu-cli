@@ -261,9 +261,188 @@ describe("renderHTML", () => {
     expect(html).toContain("dosu &amp; co");
   });
 
-  it("includes a dark-mode media query in the inlined CSS", () => {
+  it("does not include a dark-mode media query (always-light)", () => {
     const html = renderHTML(makeReport());
-    expect(html).toContain("prefers-color-scheme: dark");
+    expect(html).not.toContain("prefers-color-scheme");
+  });
+
+  it("renders the headline metric with the response count", () => {
+    const html = renderHTML(makeReport());
+    expect(html).toContain('class="headline"');
+    expect(html).toContain('class="headline-number">100</div>');
+    expect(html).toContain("responses answered");
+  });
+
+  it("includes a percent change in the headline when prior > 0", () => {
+    const html = renderHTML(makeReport());
+    // 100 vs 80 → +20 → +25%
+    expect(html).toContain("(+25%)");
+  });
+
+  it("omits percent change in headline when prior window is empty", () => {
+    const html = renderHTML(
+      makeReport({
+        previous: {
+          ...makeReport().previous,
+          totalResponses: 0,
+        },
+        derived: {
+          answerRate: 0.8,
+          answerRateDelta: null,
+          responsesDelta: 100,
+          positiveRateDelta: null,
+        },
+      }),
+    );
+    // No prior baseline → no percentage
+    expect(html).toMatch(/\+100 vs the prior 30 days/);
+  });
+
+  it("renders the scorecard with a letter grade and three mini bars", () => {
+    const html = renderHTML(makeReport());
+    expect(html).toContain('class="scorecard"');
+    expect(html).toContain("grade-letter");
+    expect(html).toContain("Answer rate");
+    expect(html).toContain("High-confidence");
+    expect(html).toContain("Sentiment");
+  });
+
+  it("hides the scorecard for empty deployments", () => {
+    const html = renderHTML(
+      makeReport({
+        current: { ...makeReport().current, totalResponses: 0, totalWithResponse: 0 },
+      }),
+    );
+    expect(html).not.toContain('class="scorecard"');
+  });
+
+  it("uses a great grade for healthy deployments", () => {
+    const html = renderHTML(makeReport());
+    // 80/50/86 → ~72 → B (good tone)
+    expect(html).toMatch(/grade-(great|good)/);
+  });
+
+  it("uses an alarm grade for struggling deployments", () => {
+    const html = renderHTML(
+      makeReport({
+        current: {
+          totalResponses: 50,
+          totalWithResponse: 15, // 30% answer rate
+          byConfidence: { high: 2, medium: 5, low: 8 },
+          reactions: {
+            totalPositive: 1,
+            totalNegative: 9,
+            messagesWithReactions: 10,
+            reactionRate: 0.2,
+            positiveRate: 0.1,
+          },
+        },
+        derived: {
+          answerRate: 0.3,
+          answerRateDelta: -0.4,
+          responsesDelta: 0,
+          positiveRateDelta: -0.5,
+        },
+      }),
+    );
+    expect(html).toContain("grade-alarm");
+  });
+
+  it("renders a stacked confidence bar with all three segments", () => {
+    const html = renderHTML(makeReport());
+    expect(html).toContain('class="stacked-bar"');
+    expect(html).toContain("seg-high");
+    expect(html).toContain("seg-med");
+    expect(html).toContain("seg-low");
+    expect(html).toContain("Confidence Breakdown");
+  });
+
+  it("omits the confidence section when there are no answers to bucket", () => {
+    const html = renderHTML(
+      makeReport({
+        current: {
+          ...makeReport().current,
+          totalResponses: 0,
+          totalWithResponse: 0,
+          byConfidence: { high: 0, medium: 0, low: 0 },
+        },
+      }),
+    );
+    expect(html).not.toContain("Confidence Breakdown");
+  });
+
+  it("renders the reactions stacked bar when reactions exist", () => {
+    const html = renderHTML(makeReport());
+    expect(html).toMatch(/<h2[^>]*>Reactions<\/h2>/);
+    expect(html).toContain("positive");
+    expect(html).toContain("negative");
+  });
+
+  it("shows an empty card for reactions when none have been logged", () => {
+    const html = renderHTML(
+      makeReport({
+        current: {
+          ...makeReport().current,
+          reactions: {
+            totalPositive: 0,
+            totalNegative: 0,
+            messagesWithReactions: 0,
+            reactionRate: 0,
+            positiveRate: 0,
+          },
+        },
+      }),
+    );
+    expect(html).toContain("empty-card");
+    expect(html).toContain("No reactions logged yet");
+  });
+
+  it("renders the period-comparison table with current and prior columns", () => {
+    const html = renderHTML(makeReport());
+    expect(html).toContain('class="compare-table"');
+    expect(html).toContain("This window");
+    expect(html).toContain("Prior window");
+    expect(html).toContain("Responses");
+    expect(html).toContain("Answer rate");
+    expect(html).toContain("Negative reactions");
+  });
+
+  it("color-codes a rising metric as up in the comparison table", () => {
+    const html = renderHTML(makeReport());
+    // Responses 100 vs 80 → +20 (up is good)
+    expect(html).toMatch(/delta-up[^>]*>▲ \+20</);
+  });
+
+  it("color-codes a rising negative-reaction count as down (bad)", () => {
+    const html = renderHTML(
+      makeReport({
+        current: {
+          ...makeReport().current,
+          reactions: {
+            ...makeReport().current.reactions,
+            totalNegative: 12,
+          },
+        },
+        previous: {
+          ...makeReport().previous,
+          reactions: {
+            ...makeReport().previous.reactions,
+            totalNegative: 5,
+          },
+        },
+      }),
+    );
+    // Negative going up is bad → 'down' tone
+    expect(html).toMatch(/delta-down[^>]*>▲ \+7</);
+  });
+
+  it("includes responses-per-day and reactions tally in the stats row", () => {
+    const html = renderHTML(makeReport());
+    // 100 / 30 → 3.3
+    expect(html).toContain("3.3");
+    expect(html).toContain("Responses / day");
+    expect(html).toContain("👍");
+    expect(html).toContain("👎");
   });
 
   it("formats the generated date in long form", () => {
