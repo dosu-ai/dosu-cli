@@ -121,7 +121,9 @@ describe("docs list", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce({ data: [{ id: "p1", title: "Doc" }] });
     await run("list", "--json");
-    expect(() => JSON.parse(allOutput())).not.toThrow();
+    const output = JSON.parse(allOutput());
+    expect(output).toHaveLength(1);
+    expect(output[0]).toMatchObject({ id: "p1", title: "Doc" });
   });
 
   it("prints message for empty results", async () => {
@@ -149,10 +151,13 @@ describe("docs list", () => {
 describe("docs get", () => {
   it("calls page.get with id", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockReset();
     mockQuery.mockResolvedValueOnce({ id: "p1", title: "Test", body: "Content" });
     await run("get", "p1");
-    // call[0] is knowledgeStore, call[1] is page.get — but get doesn't need ksId
-    // Actually docs get doesn't call getKnowledgeStoreId, so calls[0] is not ks
+    expect(mockQuery).toHaveBeenCalledWith("page.get", {
+      page_id: "p1",
+      version: undefined,
+    });
   });
 
   it("outputs valid JSON with --json", async () => {
@@ -209,9 +214,10 @@ describe("docs create", () => {
 
   it("outputs JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({ id: "new-p1" });
+    mockMutate.mockResolvedValueOnce({ id: "new-p1", title: "T" });
     await run("create", "--json", "--title", "T");
-    expect(() => JSON.parse(allOutput())).not.toThrow();
+    const output = JSON.parse(allOutput());
+    expect(output).toMatchObject({ id: "new-p1", title: "T" });
   });
 
   it("prints human-readable confirmation", async () => {
@@ -237,9 +243,10 @@ describe("docs update", () => {
 
   it("outputs JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
+    mockMutate.mockResolvedValueOnce({ id: "p1", title: "Updated" });
     await run("update", "--json", "p1", "--title", "Updated");
-    expect(() => JSON.parse(allOutput())).not.toThrow();
+    const output = JSON.parse(allOutput());
+    expect(output).toMatchObject({ id: "p1", title: "Updated" });
   });
 
   it("prints human-readable confirmation", async () => {
@@ -361,7 +368,9 @@ describe("docs versions", () => {
     mockQuery.mockReset();
     mockQuery.mockResolvedValueOnce([{ version: 1 }, { version: 2 }]);
     await run("versions", "--json", "p1");
-    expect(() => JSON.parse(allOutput())).not.toThrow();
+    const output = JSON.parse(allOutput());
+    expect(output).toHaveLength(2);
+    expect(output.map((version: { version: number }) => version.version)).toEqual([1, 2]);
   });
 
   it("prints version table with data", async () => {
@@ -420,6 +429,7 @@ describe("docs generate", () => {
     expect(url).toBe("https://api.test.dev/doc/generate");
     expect(opts.headers["X-Dosu-API-Key"]).toBe("sk_user_test");
     const body = JSON.parse(opts.body);
+    expect(body.knowledge_store_id).toBe("ks1");
     expect(body.title).toBe("API Guide");
     expect(body.instructions).toBe("Focus on REST");
   });
@@ -428,7 +438,8 @@ describe("docs generate", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockFetch.mockResolvedValueOnce(jsonResponse({ status: "started" }));
     await run("generate", "--json", "--title", "API Guide");
-    expect(() => JSON.parse(allOutput())).not.toThrow();
+    const output = JSON.parse(allOutput());
+    expect(output).toMatchObject({ status: "started" });
   });
 
   it("prints human-readable confirmation", async () => {
@@ -447,8 +458,10 @@ describe("docs auto-tag", () => {
     mockQuery.mockReset();
     await run("auto-tag", "p1");
 
-    const [url] = mockFetch.mock.calls[0];
+    const [url, opts] = mockFetch.mock.calls[0];
     expect(url).toBe("https://api.test.dev/doc/auto-tag");
+    expect(opts.headers["X-Dosu-API-Key"]).toBe("sk_user_test");
+    expect(JSON.parse(opts.body)).toEqual({ page_id: "p1" });
   });
 
   it("outputs JSON with --json", async () => {
@@ -456,7 +469,8 @@ describe("docs auto-tag", () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ status: "ok" }));
     mockQuery.mockReset();
     await run("auto-tag", "--json", "p1");
-    expect(() => JSON.parse(allOutput())).not.toThrow();
+    const output = JSON.parse(allOutput());
+    expect(output).toMatchObject({ status: "ok" });
   });
 
   it("prints human-readable confirmation", async () => {
@@ -488,7 +502,11 @@ describe("docs import", () => {
 
     await run("import", "notion", "--files", "p1,p2");
 
-    expect(mockMutate.mock.calls[0][1].page_ids).toEqual(["p1", "p2"]);
+    expect(mockMutate).toHaveBeenCalledWith("docImports.importNotionPages", {
+      knowledge_store_id: "ks1",
+      space_id: "sp1",
+      page_ids: ["p1", "p2"],
+    });
   });
 
   it("exits on unknown platform", async () => {
@@ -543,7 +561,8 @@ describe("docs import-status", () => {
     mockQuery.mockReset();
     mockQuery.mockResolvedValueOnce({ status: "completed" });
     await run("import-status", "--json", "task-1");
-    expect(() => JSON.parse(allOutput())).not.toThrow();
+    const output = JSON.parse(allOutput());
+    expect(output).toMatchObject({ status: "completed" });
   });
 
   it("prints status in human-readable format", async () => {
@@ -597,8 +616,11 @@ describe("docs publish", () => {
       "ds1",
     );
 
-    const [url] = mockFetch.mock.calls[0];
+    const [url, opts] = mockFetch.mock.calls[0];
     expect(url).toBe("https://api.test.dev/sync-back/confluence/p1/publish");
+    const body = JSON.parse(opts.body);
+    expect(body.parent_page_id).toBe("cp1");
+    expect(body.target_data_source_id).toBe("ds1");
   });
 
   it("publishes to gitlab via Python backend", async () => {
@@ -661,7 +683,8 @@ describe("docs publish", () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ status: "ok" }));
     mockQuery.mockReset();
     await run("publish", "--json", "p1", "--to", "github", "--repo-id", "123");
-    expect(() => JSON.parse(allOutput())).not.toThrow();
+    const output = JSON.parse(allOutput());
+    expect(output).toMatchObject({ status: "ok" });
   });
 
   it("prints human-readable confirmation for publish", async () => {
@@ -684,10 +707,11 @@ describe("docs sync-back", () => {
 
   it("outputs JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
+    mockMutate.mockResolvedValueOnce({ status: "queued" });
     mockQuery.mockReset();
     await run("sync-back", "--json", "p1");
-    expect(() => JSON.parse(allOutput())).not.toThrow();
+    const output = JSON.parse(allOutput());
+    expect(output).toMatchObject({ status: "queued" });
   });
 
   it("prints human-readable confirmation", async () => {

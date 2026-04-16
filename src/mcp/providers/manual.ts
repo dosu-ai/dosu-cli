@@ -2,13 +2,19 @@ import { type Config, MODE_OSS } from "../../config/config";
 import { mcpBaseURL, mcpURL } from "../config-helpers";
 import type { Provider } from "../providers";
 
+function mcpEndpoint(cfg: Config): string {
+  if (cfg.mode === MODE_OSS) return mcpBaseURL();
+  if (!cfg.deployment_id) throw new Error("deployment ID is required");
+  return mcpURL(cfg.deployment_id);
+}
+
 export const ManualProvider = (): Provider => ({
   name: () => "Manual Configuration",
   id: () => "manual",
   supportsLocal: () => false,
 
   install(cfg: Config): void {
-    const url = cfg.mode === MODE_OSS ? mcpBaseURL() : mcpURL(cfg.deployment_id!);
+    const url = mcpEndpoint(cfg);
     console.log("Use these details to configure the Dosu MCP server in your client:");
     console.log();
     console.log(`  Transport:      HTTP`);

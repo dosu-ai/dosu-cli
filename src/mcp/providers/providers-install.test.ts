@@ -367,8 +367,9 @@ describe("CodexProvider", () => {
     const { CodexProvider } = await import("./codex");
     const provider = CodexProvider();
 
-    // Should not throw
-    provider.remove(true);
+    const configPath = join(tempDir, "codex-home", "config.toml");
+    expect(() => provider.remove(true)).not.toThrow();
+    expect(existsSync(configPath)).toBe(false);
   });
 
   it("isConfigured returns true when dosu section exists", async () => {

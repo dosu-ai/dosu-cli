@@ -129,7 +129,9 @@ describe("threads list", () => {
       pageInfo: {},
     });
     await run("list", "--json");
-    expect(() => JSON.parse(allOutput())).not.toThrow();
+    const output = JSON.parse(allOutput());
+    expect(output.list).toHaveLength(1);
+    expect(output.list[0]).toMatchObject({ id: "t1", generated_title: "Bug" });
   });
 
   it("prints 'No threads found.' for empty results", async () => {

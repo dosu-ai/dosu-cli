@@ -132,6 +132,9 @@ describe("review context", () => {
 
     const output = allOutput();
     expect(output).toContain("messages");
+    expect(output).toContain("p1");
+    expect(output).not.toContain("Published Page");
+    expect(output).not.toContain("Sync PR");
   });
 });
 
@@ -177,7 +180,7 @@ describe("review reject", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockMutate.mockResolvedValueOnce({});
     await run("reject", "pv-123456");
-    expect(allOutput()).toContain("Review reject");
+    expect(allOutput()).toContain("Review reject: pv-12345");
   });
 });
 
@@ -198,7 +201,7 @@ describe("review revert", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockMutate.mockResolvedValueOnce({});
     await run("revert", "pv-123456");
-    expect(allOutput()).toContain("Review revert");
+    expect(allOutput()).toContain("Review revert: pv-12345");
   });
 
   it("outputs JSON with --json", async () => {

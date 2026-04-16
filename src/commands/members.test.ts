@@ -86,7 +86,9 @@ describe("members list", () => {
       authProvider: "email",
     });
     await run("list", "--json");
-    expect(() => JSON.parse(allOutput())).not.toThrow();
+    const output = JSON.parse(allOutput());
+    expect(output.items).toHaveLength(1);
+    expect(output.items[0]).toMatchObject({ email: "a@b.com" });
   });
 
   it("prints message for empty results", async () => {
@@ -137,7 +139,11 @@ describe("members invite", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockMutate.mockResolvedValueOnce({ id: "inv1" });
     await run("invite", "--json", "a@b.com");
-    expect(() => JSON.parse(allOutput())).not.toThrow();
+    expect(JSON.parse(allOutput())).toMatchObject({
+      success: true,
+      email: "a@b.com",
+      role: "MEMBER",
+    });
   });
 
   it("prints human-readable confirmation", async () => {
@@ -278,7 +284,9 @@ describe("members requests", () => {
       authProvider: "email",
     });
     await run("requests", "--json");
-    expect(() => JSON.parse(allOutput())).not.toThrow();
+    const output = JSON.parse(allOutput());
+    expect(output.items).toHaveLength(1);
+    expect(output.items[0]).toMatchObject({ email: "req@user.com" });
   });
 });
 

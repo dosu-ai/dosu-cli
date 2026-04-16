@@ -95,7 +95,9 @@ describe("tags list", () => {
 
     await run("list", "--json");
 
-    expect(() => JSON.parse(allOutput())).not.toThrow();
+    const output = JSON.parse(allOutput());
+    expect(output).toHaveLength(1);
+    expect(output[0]).toMatchObject({ id: "t1", name: "API" });
   });
 
   it("prints message for empty results", async () => {
@@ -124,11 +126,11 @@ describe("tags create", () => {
 
   it("outputs JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({ id: "t1" });
+    mockMutate.mockResolvedValueOnce({ id: "t1", name: "API" });
 
     await run("create", "--json", "--name", "API");
 
-    expect(() => JSON.parse(allOutput())).not.toThrow();
+    expect(JSON.parse(allOutput())).toMatchObject({ id: "t1", name: "API" });
   });
 
   it("prints human-readable confirmation", async () => {
@@ -158,11 +160,11 @@ describe("tags update", () => {
 
   it("outputs JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
+    mockMutate.mockResolvedValueOnce({ id: "t1", name: "Updated" });
 
     await run("update", "--json", "t1", "--name", "Updated");
 
-    expect(() => JSON.parse(allOutput())).not.toThrow();
+    expect(JSON.parse(allOutput())).toMatchObject({ id: "t1", name: "Updated" });
   });
 
   it("prints human-readable confirmation", async () => {
@@ -295,7 +297,9 @@ describe("tags pages", () => {
 
     await run("pages", "--json", "tag1");
 
-    expect(() => JSON.parse(allOutput())).not.toThrow();
+    const output = JSON.parse(allOutput());
+    expect(output).toHaveLength(1);
+    expect(output[0]).toMatchObject({ id: "p1", title: "Doc A" });
   });
 
   it("prints message for empty results", async () => {

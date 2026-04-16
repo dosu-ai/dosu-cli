@@ -87,7 +87,9 @@ describe("deployments list", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce([{ deployment_id: "d1", name: "Test" }]);
     await run("list", "--json");
-    expect(() => JSON.parse(allOutput())).not.toThrow();
+    const output = JSON.parse(allOutput());
+    expect(output).toHaveLength(1);
+    expect(output[0]).toMatchObject({ deployment_id: "d1", name: "Test" });
   });
 
   it("prints message for empty results", async () => {
@@ -121,7 +123,7 @@ describe("deployments list", () => {
       { deployment_id: "d1", name: "Test", enabled: true, org_name: "Org" },
     ]);
     await run("list");
-    expect(allOutput()).toContain("Current:");
+    expect(allOutput()).toContain("Current: My Deploy");
   });
 
   it("shows '(unnamed)' for missing name and '—' for missing org_name", async () => {
@@ -130,6 +132,7 @@ describe("deployments list", () => {
     await run("list");
     const output = allOutput();
     expect(output).toContain("(unnamed)");
+    expect(output).toContain("—");
   });
 
   it("shows deployment_id when deployment_name is missing", async () => {
@@ -142,7 +145,7 @@ describe("deployments list", () => {
       { deployment_id: "d1", name: "Test", enabled: true, org_name: "Org" },
     ]);
     await run("list");
-    expect(allOutput()).toContain("dep1");
+    expect(allOutput()).toContain("Current: dep1");
   });
 });
 
@@ -171,7 +174,12 @@ describe("deployments info", () => {
       enabled: true,
     });
     await run("info", "--json");
-    expect(() => JSON.parse(allOutput())).not.toThrow();
+    const output = JSON.parse(allOutput());
+    expect(output).toMatchObject({
+      deployment_id: "dep1",
+      name: "My Deploy",
+      enabled: true,
+    });
   });
 
   it("displays human-readable details", async () => {
@@ -188,7 +196,10 @@ describe("deployments info", () => {
     await run("info");
     const output = allOutput();
     expect(output).toContain("My Deploy");
+    expect(output).toContain("Production");
+    expect(output).toContain("Org");
     expect(output).toContain("active");
+    expect(output).toContain("sp1");
   });
 
   it("shows 'disabled' for disabled deployment", async () => {

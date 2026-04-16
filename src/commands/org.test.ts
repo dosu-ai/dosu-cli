@@ -75,7 +75,9 @@ describe("org info", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce([{ org_id: "org1", name: "Acme" }]);
     await run("info", "--json");
-    expect(() => JSON.parse(allOutput())).not.toThrow();
+    const output = JSON.parse(allOutput());
+    expect(output).toHaveLength(1);
+    expect(output[0]).toMatchObject({ org_id: "org1", name: "Acme" });
   });
 
   it("prints message for empty results", async () => {

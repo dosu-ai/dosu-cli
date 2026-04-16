@@ -95,8 +95,9 @@ describe("knowledge search", () => {
 
     await run("search", "--json", "query");
 
-    const output = allOutput();
-    expect(() => JSON.parse(output)).not.toThrow();
+    const output = JSON.parse(allOutput());
+    expect(output.documents).toHaveLength(1);
+    expect(output.documents[0]).toMatchObject({ title: "Result", similarity: 0.8 });
   });
 
   it("prints message when no data sources connected", async () => {
@@ -148,7 +149,7 @@ describe("knowledge list", () => {
 
     await run("list", "--json");
 
-    expect(() => JSON.parse(allOutput())).not.toThrow();
+    expect(JSON.parse(allOutput())).toMatchObject({ id: "ks1", space_id: "sp1" });
   });
 
   it("prints message when store is null", async () => {

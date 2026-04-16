@@ -124,7 +124,7 @@ describe("sources info", () => {
     await run("info", "--json", "ds1");
 
     expect(mockQuery).toHaveBeenCalledWith("dataSource.get", "ds1");
-    expect(() => JSON.parse(allOutput())).not.toThrow();
+    expect(JSON.parse(allOutput())).toMatchObject(ds);
   });
 
   it("prints human-readable details", async () => {
@@ -187,9 +187,9 @@ describe("sources update", () => {
 
   it("outputs JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
+    mockMutate.mockResolvedValueOnce({ id: "ds1", name: "New Name" });
     await run("update", "--json", "ds1", "--name", "New Name");
-    expect(() => JSON.parse(allOutput())).not.toThrow();
+    expect(JSON.parse(allOutput())).toMatchObject({ id: "ds1", name: "New Name" });
   });
 
   it("prints human-readable confirmation", async () => {

@@ -80,9 +80,11 @@ describe("suggest list", () => {
 
   it("outputs valid JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "s1" }]);
+    mockQuery.mockResolvedValueOnce([{ id: "s1", title: "API Overview" }]);
     await run("list", "--json");
-    expect(() => JSON.parse(allOutput())).not.toThrow();
+    const output = JSON.parse(allOutput());
+    expect(output).toHaveLength(1);
+    expect(output[0]).toMatchObject({ id: "s1", title: "API Overview" });
   });
 
   it("prints message for empty suggestions", async () => {
@@ -114,7 +116,7 @@ describe("suggest generate", () => {
 
     await run("generate", "--json");
 
-    expect(() => JSON.parse(allOutput())).not.toThrow();
+    expect(JSON.parse(allOutput())).toMatchObject({ status: "generating" });
   });
 
   it("prints human-readable confirmation", async () => {
@@ -147,7 +149,7 @@ describe("suggest accept", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockMutate.mockResolvedValueOnce({ page_id: "p1" });
     await run("accept", "--json", "s1");
-    expect(() => JSON.parse(allOutput())).not.toThrow();
+    expect(JSON.parse(allOutput())).toMatchObject({ page_id: "p1" });
   });
 });
 

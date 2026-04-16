@@ -115,13 +115,13 @@ describe("output formatting", () => {
     expect(allOutput()).toContain("The answer is 42");
   });
 
-  it("prints body field as fallback when answer is missing", async () => {
+  it("prints raw JSON containing body when answer is missing", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockFetch.mockResolvedValueOnce(jsonResponse({ body: "Fallback body" }));
 
     await run("question");
 
-    expect(allOutput()).toContain("Fallback body");
+    expect(JSON.parse(allOutput())).toEqual({ body: "Fallback body" });
   });
 
   it("prints raw JSON when neither answer nor body exists", async () => {
@@ -130,9 +130,7 @@ describe("output formatting", () => {
 
     await run("question");
 
-    const output = allOutput();
-    expect(output).toContain("result");
-    expect(output).toContain("something");
+    expect(JSON.parse(allOutput())).toEqual({ result: "something" });
   });
 
   it("prints observations when available", async () => {

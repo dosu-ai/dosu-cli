@@ -18,6 +18,12 @@ function globalPath(): string {
   return expandHome("~/.copilot/mcp-config.json");
 }
 
+function mcpEndpoint(cfg: Config): string {
+  if (cfg.mode === MODE_OSS) return mcpBaseURL();
+  if (!cfg.deployment_id) throw new Error("deployment ID is required");
+  return mcpURL(cfg.deployment_id);
+}
+
 export const CopilotProvider = (): SetupProvider => ({
   name: () => "GitHub Copilot CLI",
   id: () => "copilot",
@@ -29,8 +35,7 @@ export const CopilotProvider = (): SetupProvider => ({
   isConfigured: () => isJSONKeyConfigured(globalPath(), "mcpServers"),
 
   install(cfg: Config, global: boolean): void {
-    if (cfg.mode !== MODE_OSS && !cfg.deployment_id) throw new Error("deployment ID is required");
-    const url = cfg.mode === MODE_OSS ? mcpBaseURL() : mcpURL(cfg.deployment_id!);
+    const url = mcpEndpoint(cfg);
 
     if (global) {
       const server = {
