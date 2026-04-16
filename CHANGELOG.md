@@ -1,3 +1,10 @@
+# [0.10.0](https://github.com/dosu-ai/dosu-cli/compare/v0.9.1...v0.10.0) (2026-04-16)
+
+
+### Features
+
+* add agent-facing CLI commands with tRPC client ([#50](https://github.com/dosu-ai/dosu-cli/issues/50)) ([12acf55](https://github.com/dosu-ai/dosu-cli/commit/12acf55d9961edbf6cd12e705a43e7965a0cef12))
+
 ## [0.9.1](https://github.com/dosu-ai/dosu-cli/compare/v0.9.0...v0.9.1) (2026-04-14)
 
 
