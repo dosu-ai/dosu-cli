@@ -90,8 +90,10 @@ const fakeReport: InsightsReport = {
     responsesDelta: 10,
     positiveRateDelta: 0.2,
   },
-  narratives: { atAGlance: "Hi", topics: "Stuff", suggestions: "1. Try X" },
+  atAGlance: "Hi",
   cheers: ["Big cheer!"],
+  investigate: [],
+  suggestions: [{ headline: "Try X", detail: "X is great.", command: "dosu setup" }],
 };
 
 beforeEach(() => {

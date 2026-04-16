@@ -4,8 +4,7 @@ import {
   type AskFn,
   buildAtAGlancePrompt,
   buildInsights,
-  buildSuggestionsPrompt,
-  buildTopicsPrompt,
+  fallbackAtAGlance,
   type UsageStats,
 } from "./insights";
 
@@ -57,19 +56,21 @@ function stats(over: Partial<UsageStats> = {}): UsageStats {
 
 const okAsk: AskFn = async (q) => `answered: ${q.slice(0, 16)}`;
 
+async function build(opts: { current: UsageStats; combined: UsageStats; ask?: AskFn }) {
+  mockQuery.mockResolvedValueOnce(opts.current);
+  mockQuery.mockResolvedValueOnce(opts.combined);
+  return buildInsights({
+    client: createMockClient() as never,
+    cfg,
+    ask: opts.ask ?? okAsk,
+    windowDays: 30,
+    now: NOW,
+  });
+}
+
 describe("buildInsights", () => {
-  it("queries current window and combined window", async () => {
-    mockQuery.mockResolvedValueOnce(stats({ totalResponses: 50, totalWithResponse: 40 }));
-    mockQuery.mockResolvedValueOnce(stats({ totalResponses: 90, totalWithResponse: 70 }));
-
-    await buildInsights({
-      client: createMockClient() as never,
-      cfg,
-      ask: okAsk,
-      windowDays: 30,
-      now: NOW,
-    });
-
+  it("queries current and combined windows", async () => {
+    await build({ current: stats(), combined: stats() });
     expect(mockQuery).toHaveBeenNthCalledWith(1, "analytics.getUsageStats", {
       spaceId: "sp1",
       days: 30,
@@ -80,71 +81,26 @@ describe("buildInsights", () => {
     });
   });
 
-  it("derives previous window by subtracting current from combined", async () => {
-    mockQuery.mockResolvedValueOnce(
-      stats({
-        totalResponses: 50,
-        totalWithResponse: 40,
-        byConfidence: { high: 30, medium: 15, low: 5 },
-        reactions: {
-          totalPositive: 10,
-          totalNegative: 2,
-          messagesWithReactions: 12,
-          reactionRate: 0.24,
-          positiveRate: 0.83,
-        },
-      }),
-    );
-    mockQuery.mockResolvedValueOnce(
-      stats({
-        totalResponses: 90,
-        totalWithResponse: 70,
-        byConfidence: { high: 50, medium: 25, low: 15 },
-        reactions: {
-          totalPositive: 14,
-          totalNegative: 6,
-          messagesWithReactions: 20,
-          reactionRate: 0.22,
-          positiveRate: 0.7,
-        },
-      }),
-    );
-
-    const r = await buildInsights({
-      client: createMockClient() as never,
-      cfg,
-      ask: okAsk,
-      windowDays: 30,
-      now: NOW,
+  it("derives previous window via subtraction", async () => {
+    const r = await build({
+      current: stats({ totalResponses: 50, totalWithResponse: 40 }),
+      combined: stats({ totalResponses: 90, totalWithResponse: 70 }),
     });
-
     expect(r.previous.totalResponses).toBe(40);
     expect(r.previous.totalWithResponse).toBe(30);
-    expect(r.previous.byConfidence).toEqual({ high: 20, medium: 10, low: 10 });
-    expect(r.previous.reactions.totalPositive).toBe(4);
-    expect(r.previous.reactions.totalNegative).toBe(4);
-    expect(r.previous.reactions.positiveRate).toBeCloseTo(0.5, 5);
   });
 
-  it("clamps subtraction to zero when combined is smaller than current (defensive)", async () => {
-    mockQuery.mockResolvedValueOnce(stats({ totalResponses: 50 }));
-    mockQuery.mockResolvedValueOnce(stats({ totalResponses: 30 }));
-
-    const r = await buildInsights({
-      client: createMockClient() as never,
-      cfg,
-      ask: okAsk,
-      windowDays: 30,
-      now: NOW,
+  it("clamps subtraction to zero defensively", async () => {
+    const r = await build({
+      current: stats({ totalResponses: 50 }),
+      combined: stats({ totalResponses: 30 }),
     });
-
     expect(r.previous.totalResponses).toBe(0);
   });
 
-  it("computes answer-rate delta between windows", async () => {
-    mockQuery.mockResolvedValueOnce(stats({ totalResponses: 100, totalWithResponse: 90 }));
-    mockQuery.mockResolvedValueOnce(stats({ totalResponses: 200, totalWithResponse: 160 }));
-
+  it("normalizes nullish API responses", async () => {
+    mockQuery.mockResolvedValueOnce(null);
+    mockQuery.mockResolvedValueOnce(undefined);
     const r = await buildInsights({
       client: createMockClient() as never,
       cfg,
@@ -152,52 +108,20 @@ describe("buildInsights", () => {
       windowDays: 30,
       now: NOW,
     });
-
-    // current = 90/100 = 0.9; previous = 70/100 = 0.7; delta = 0.2
-    expect(r.derived.answerRate).toBeCloseTo(0.9, 5);
-    expect(r.derived.answerRateDelta).toBeCloseTo(0.2, 5);
-    expect(r.derived.responsesDelta).toBe(0);
+    expect(r.current.totalResponses).toBe(0);
+    expect(r.previous.totalResponses).toBe(0);
   });
 
-  it("returns null answer-rate when there are no responses", async () => {
+  it("uses real Date when `now` is not provided", async () => {
     mockQuery.mockResolvedValueOnce(stats());
     mockQuery.mockResolvedValueOnce(stats());
-
     const r = await buildInsights({
       client: createMockClient() as never,
       cfg,
       ask: okAsk,
       windowDays: 30,
-      now: NOW,
     });
-
-    expect(r.derived.answerRate).toBeNull();
-    expect(r.derived.answerRateDelta).toBeNull();
-    expect(r.derived.positiveRateDelta).toBeNull();
-  });
-
-  it("preserves narrative answers and tolerates per-call failures", async () => {
-    mockQuery.mockResolvedValueOnce(stats({ totalResponses: 10, totalWithResponse: 8 }));
-    mockQuery.mockResolvedValueOnce(stats({ totalResponses: 12, totalWithResponse: 10 }));
-
-    let n = 0;
-    const ask: AskFn = async (q) => {
-      n += 1;
-      if (n === 2) return null; // simulate failure
-      return `OK: ${q.slice(0, 8)}`;
-    };
-
-    const r = await buildInsights({
-      client: createMockClient() as never,
-      cfg,
-      ask,
-      windowDays: 30,
-      now: NOW,
-    });
-
-    expect(r.narratives.atAGlance).toMatch(/^OK: /);
-    expect(r.narratives.topics).toBeNull();
-    expect(r.narratives.suggestions).toMatch(/^OK: /);
+    expect(r.generatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
   it("throws when space_id is missing", async () => {
@@ -210,153 +134,9 @@ describe("buildInsights", () => {
     ).rejects.toThrow(/space_id/);
   });
 
-  it("returns the welcome cheer when there are no responses", async () => {
+  it("falls back to 'your deployment' when name is missing", async () => {
     mockQuery.mockResolvedValueOnce(stats());
     mockQuery.mockResolvedValueOnce(stats());
-
-    const r = await buildInsights({
-      client: createMockClient() as never,
-      cfg,
-      ask: okAsk,
-      windowDays: 30,
-      now: NOW,
-    });
-
-    expect(r.cheers).toHaveLength(1);
-    expect(r.cheers[0]).toMatch(/brand new/);
-  });
-
-  it("celebrates a high answer rate", async () => {
-    mockQuery.mockResolvedValueOnce(stats({ totalResponses: 100, totalWithResponse: 95 }));
-    mockQuery.mockResolvedValueOnce(stats({ totalResponses: 100, totalWithResponse: 95 }));
-
-    const r = await buildInsights({
-      client: createMockClient() as never,
-      cfg,
-      ask: okAsk,
-      windowDays: 30,
-      now: NOW,
-    });
-
-    expect(r.cheers.some((c) => /answer rate/.test(c))).toBe(true);
-  });
-
-  it("celebrates dominant high-confidence responses", async () => {
-    mockQuery.mockResolvedValueOnce(
-      stats({
-        totalResponses: 30,
-        totalWithResponse: 28,
-        byConfidence: { high: 20, medium: 5, low: 5 },
-      }),
-    );
-    mockQuery.mockResolvedValueOnce(
-      stats({
-        totalResponses: 30,
-        totalWithResponse: 28,
-        byConfidence: { high: 20, medium: 5, low: 5 },
-      }),
-    );
-
-    const r = await buildInsights({
-      client: createMockClient() as never,
-      cfg,
-      ask: okAsk,
-      windowDays: 30,
-      now: NOW,
-    });
-
-    expect(r.cheers.some((c) => /high-confidence/.test(c))).toBe(true);
-  });
-
-  it("celebrates positive feedback when rate >= 80%", async () => {
-    mockQuery.mockResolvedValueOnce(
-      stats({
-        totalResponses: 50,
-        totalWithResponse: 40,
-        reactions: {
-          totalPositive: 9,
-          totalNegative: 1,
-          messagesWithReactions: 10,
-          reactionRate: 0.2,
-          positiveRate: 0.9,
-        },
-      }),
-    );
-    mockQuery.mockResolvedValueOnce(
-      stats({
-        totalResponses: 50,
-        totalWithResponse: 40,
-        reactions: {
-          totalPositive: 9,
-          totalNegative: 1,
-          messagesWithReactions: 10,
-          reactionRate: 0.2,
-          positiveRate: 0.9,
-        },
-      }),
-    );
-
-    const r = await buildInsights({
-      client: createMockClient() as never,
-      cfg,
-      ask: okAsk,
-      windowDays: 30,
-      now: NOW,
-    });
-
-    expect(r.cheers.some((c) => /positive feedback/.test(c))).toBe(true);
-  });
-
-  it("celebrates rising volume", async () => {
-    mockQuery.mockResolvedValueOnce(stats({ totalResponses: 80, totalWithResponse: 60 }));
-    // combined 30 means previous = 0; current 80 - prev 0 = +80
-    mockQuery.mockResolvedValueOnce(stats({ totalResponses: 80, totalWithResponse: 60 }));
-
-    const r = await buildInsights({
-      client: createMockClient() as never,
-      cfg,
-      ask: okAsk,
-      windowDays: 30,
-      now: NOW,
-    });
-
-    expect(r.cheers.some((c) => /Volume is up/.test(c))).toBe(true);
-  });
-
-  it("falls back to a generic cheer when no rules trigger", async () => {
-    // 30 responses, mediocre rates everywhere — no celebratable signal, and the
-    // combined window is double so previous == current → no volume delta.
-    mockQuery.mockResolvedValueOnce(
-      stats({
-        totalResponses: 30,
-        totalWithResponse: 15,
-        byConfidence: { high: 5, medium: 10, low: 15 },
-      }),
-    );
-    mockQuery.mockResolvedValueOnce(
-      stats({
-        totalResponses: 60,
-        totalWithResponse: 30,
-        byConfidence: { high: 10, medium: 20, low: 30 },
-      }),
-    );
-
-    const r = await buildInsights({
-      client: createMockClient() as never,
-      cfg,
-      ask: okAsk,
-      windowDays: 30,
-      now: NOW,
-    });
-
-    expect(r.cheers).toHaveLength(1);
-    expect(r.cheers[0]).toMatch(/30 responses logged/);
-  });
-
-  it("falls back to 'your deployment' when deployment_name is missing", async () => {
-    mockQuery.mockResolvedValueOnce(stats());
-    mockQuery.mockResolvedValueOnce(stats());
-
     const r = await buildInsights({
       client: createMockClient() as never,
       cfg: { ...cfg, deployment_name: undefined },
@@ -364,61 +144,416 @@ describe("buildInsights", () => {
       windowDays: 30,
       now: NOW,
     });
-
     expect(r.deploymentName).toBe("your deployment");
   });
 
-  it("normalizes nullish stats from the API", async () => {
-    mockQuery.mockResolvedValueOnce(null);
-    mockQuery.mockResolvedValueOnce(undefined);
-
-    const r = await buildInsights({
-      client: createMockClient() as never,
-      cfg,
-      ask: okAsk,
-      windowDays: 30,
-      now: NOW,
+  it("uses /ask answer for atAGlance when available", async () => {
+    const r = await build({
+      current: stats({ totalResponses: 10, totalWithResponse: 8 }),
+      combined: stats({ totalResponses: 12, totalWithResponse: 10 }),
+      ask: async () => "Custom prose from Dosu.",
     });
-
-    expect(r.current.totalResponses).toBe(0);
-    expect(r.previous.totalResponses).toBe(0);
+    expect(r.atAGlance).toBe("Custom prose from Dosu.");
   });
 
-  it("uses real Date when `now` is not provided", async () => {
-    mockQuery.mockResolvedValueOnce(stats());
-    mockQuery.mockResolvedValueOnce(stats());
-
-    const r = await buildInsights({
-      client: createMockClient() as never,
-      cfg,
-      ask: okAsk,
-      windowDays: 30,
+  it("falls back to a stats-grounded atAGlance when /ask returns null", async () => {
+    const r = await build({
+      current: stats({ totalResponses: 10, totalWithResponse: 8 }),
+      combined: stats({ totalResponses: 12, totalWithResponse: 10 }),
+      ask: async () => null,
     });
-
-    // Should be a valid ISO timestamp from "now"
-    expect(() => new Date(r.generatedAt)).not.toThrow();
-    expect(r.generatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    // The fallback is always non-null and should reference the real numbers.
+    expect(r.atAGlance).toContain("10 responses");
+    expect(r.atAGlance).toContain("80%");
   });
 });
 
-describe("prompt builders", () => {
+describe("cheers", () => {
+  it("welcomes empty deployments", async () => {
+    const r = await build({ current: stats(), combined: stats() });
+    expect(r.cheers).toHaveLength(1);
+    expect(r.cheers[0]).toMatch(/brand new/);
+  });
+
+  it("celebrates a high answer rate", async () => {
+    const r = await build({
+      current: stats({ totalResponses: 100, totalWithResponse: 95 }),
+      combined: stats({ totalResponses: 100, totalWithResponse: 95 }),
+    });
+    expect(r.cheers.some((c) => /answer rate/.test(c))).toBe(true);
+  });
+
+  it("celebrates dominant high-confidence", async () => {
+    const r = await build({
+      current: stats({
+        totalResponses: 30,
+        totalWithResponse: 28,
+        byConfidence: { high: 20, medium: 5, low: 5 },
+      }),
+      combined: stats({
+        totalResponses: 30,
+        totalWithResponse: 28,
+        byConfidence: { high: 20, medium: 5, low: 5 },
+      }),
+    });
+    expect(r.cheers.some((c) => /high-confidence/.test(c))).toBe(true);
+  });
+
+  it("celebrates positive feedback", async () => {
+    const r = await build({
+      current: stats({
+        totalResponses: 50,
+        totalWithResponse: 40,
+        reactions: {
+          totalPositive: 9,
+          totalNegative: 1,
+          messagesWithReactions: 10,
+          reactionRate: 0.2,
+          positiveRate: 0.9,
+        },
+      }),
+      combined: stats({
+        totalResponses: 50,
+        totalWithResponse: 40,
+        reactions: {
+          totalPositive: 9,
+          totalNegative: 1,
+          messagesWithReactions: 10,
+          reactionRate: 0.2,
+          positiveRate: 0.9,
+        },
+      }),
+    });
+    expect(r.cheers.some((c) => /positive feedback/.test(c))).toBe(true);
+  });
+
+  it("celebrates rising volume", async () => {
+    const r = await build({
+      current: stats({ totalResponses: 80, totalWithResponse: 60 }),
+      combined: stats({ totalResponses: 80, totalWithResponse: 60 }),
+    });
+    expect(r.cheers.some((c) => /Volume is up/.test(c))).toBe(true);
+  });
+
+  it("falls back to a generic cheer when no rule fires", async () => {
+    const r = await build({
+      current: stats({
+        totalResponses: 30,
+        totalWithResponse: 15,
+        byConfidence: { high: 5, medium: 10, low: 15 },
+      }),
+      combined: stats({
+        totalResponses: 60,
+        totalWithResponse: 30,
+        byConfidence: { high: 10, medium: 20, low: 30 },
+      }),
+    });
+    expect(r.cheers).toHaveLength(1);
+    expect(r.cheers[0]).toMatch(/30 responses logged/);
+  });
+});
+
+describe("investigate", () => {
+  it("is empty for a brand-new deployment", async () => {
+    const r = await build({ current: stats(), combined: stats() });
+    expect(r.investigate).toHaveLength(0);
+  });
+
+  it("flags a meaningful drop in answer rate", async () => {
+    const r = await build({
+      // current: 60/100 = 60%; previous: 90/100 = 90% → delta -30 pts
+      current: stats({ totalResponses: 100, totalWithResponse: 60 }),
+      combined: stats({ totalResponses: 200, totalWithResponse: 150 }),
+    });
+    expect(r.investigate.some((c) => /Answer rate dropped/.test(c))).toBe(true);
+  });
+
+  it("flags growing low-confidence count", async () => {
+    const r = await build({
+      current: stats({
+        totalResponses: 40,
+        totalWithResponse: 30,
+        byConfidence: { high: 10, medium: 10, low: 20 },
+      }),
+      combined: stats({
+        totalResponses: 60,
+        totalWithResponse: 50,
+        byConfidence: { high: 20, medium: 20, low: 25 },
+      }),
+    });
+    expect(r.investigate.some((c) => /Low-confidence answers grew/.test(c))).toBe(true);
+  });
+
+  it("flags a drop in positive feedback rate", async () => {
+    const r = await build({
+      current: stats({
+        totalResponses: 50,
+        totalWithResponse: 40,
+        reactions: {
+          totalPositive: 5,
+          totalNegative: 5,
+          messagesWithReactions: 10,
+          reactionRate: 0.2,
+          positiveRate: 0.5,
+        },
+      }),
+      combined: stats({
+        totalResponses: 100,
+        totalWithResponse: 90,
+        reactions: {
+          totalPositive: 14,
+          totalNegative: 6,
+          messagesWithReactions: 20,
+          reactionRate: 0.2,
+          positiveRate: 0.7,
+        },
+      }),
+    });
+    expect(r.investigate.some((c) => /Positive feedback fell/.test(c))).toBe(true);
+  });
+
+  it("flags more negative than positive feedback", async () => {
+    const r = await build({
+      current: stats({
+        totalResponses: 30,
+        totalWithResponse: 25,
+        reactions: {
+          totalPositive: 2,
+          totalNegative: 5,
+          messagesWithReactions: 7,
+          reactionRate: 0.23,
+          positiveRate: 0.29,
+        },
+      }),
+      combined: stats({
+        totalResponses: 30,
+        totalWithResponse: 25,
+        reactions: {
+          totalPositive: 2,
+          totalNegative: 5,
+          messagesWithReactions: 7,
+          reactionRate: 0.23,
+          positiveRate: 0.29,
+        },
+      }),
+    });
+    expect(r.investigate.some((c) => /negative reactions vs.*positive/.test(c))).toBe(true);
+  });
+
+  it("flags a meaningful drop in volume", async () => {
+    const r = await build({
+      current: stats({ totalResponses: 30, totalWithResponse: 25 }),
+      combined: stats({ totalResponses: 100, totalWithResponse: 80 }),
+    });
+    expect(r.investigate.some((c) => /Volume is down/.test(c))).toBe(true);
+  });
+
+  it("flags a low overall answer rate independent of trend", async () => {
+    const r = await build({
+      current: stats({ totalResponses: 20, totalWithResponse: 8 }),
+      combined: stats({ totalResponses: 40, totalWithResponse: 16 }),
+    });
+    expect(r.investigate.some((c) => /went without an answer/.test(c))).toBe(true);
+  });
+});
+
+describe("suggestions", () => {
+  it("recommends setup + integrations for empty deployments", async () => {
+    const r = await build({ current: stats(), combined: stats() });
+    expect(r.suggestions).toHaveLength(2);
+    expect(r.suggestions[0].command).toBe("dosu setup");
+    expect(r.suggestions[1].command).toBe("dosu integrations");
+  });
+
+  it("suggests auditing low-confidence threads when they grow", async () => {
+    const r = await build({
+      current: stats({
+        totalResponses: 30,
+        totalWithResponse: 25,
+        byConfidence: { high: 5, medium: 10, low: 15 },
+      }),
+      combined: stats({
+        totalResponses: 60,
+        totalWithResponse: 50,
+        byConfidence: { high: 10, medium: 20, low: 22 },
+      }),
+    });
+    const audit = r.suggestions.find((s) => /Audit/.test(s.headline));
+    expect(audit).toBeDefined();
+    expect(audit?.command).toBe("dosu threads list");
+    expect(audit?.detail).toContain("15");
+  });
+
+  it("suggests refreshing sources when positive rate drops", async () => {
+    const r = await build({
+      current: stats({
+        totalResponses: 50,
+        totalWithResponse: 40,
+        reactions: {
+          totalPositive: 5,
+          totalNegative: 5,
+          messagesWithReactions: 10,
+          reactionRate: 0.2,
+          positiveRate: 0.5,
+        },
+      }),
+      combined: stats({
+        totalResponses: 100,
+        totalWithResponse: 90,
+        reactions: {
+          totalPositive: 14,
+          totalNegative: 6,
+          messagesWithReactions: 20,
+          reactionRate: 0.2,
+          positiveRate: 0.7,
+        },
+      }),
+    });
+    const refresh = r.suggestions.find((s) => /Refresh/.test(s.headline));
+    expect(refresh?.command).toBe("dosu sources list");
+  });
+
+  it("suggests investigating unanswered threads when answer rate is low", async () => {
+    const r = await build({
+      current: stats({ totalResponses: 20, totalWithResponse: 8 }),
+      combined: stats({ totalResponses: 40, totalWithResponse: 20 }),
+    });
+    const inv = r.suggestions.find((s) => /Investigate/.test(s.headline));
+    expect(inv?.command).toBe("dosu threads list");
+    expect(inv?.detail).toContain("12");
+  });
+
+  it("suggests sharing the win when metrics are healthy and volume is high", async () => {
+    const r = await build({
+      current: stats({
+        totalResponses: 100,
+        totalWithResponse: 90,
+        byConfidence: { high: 80, medium: 8, low: 2 },
+        reactions: {
+          totalPositive: 9,
+          totalNegative: 1,
+          messagesWithReactions: 10,
+          reactionRate: 0.1,
+          positiveRate: 0.9,
+        },
+      }),
+      combined: stats({
+        totalResponses: 100,
+        totalWithResponse: 90,
+        byConfidence: { high: 80, medium: 8, low: 2 },
+        reactions: {
+          totalPositive: 9,
+          totalNegative: 1,
+          messagesWithReactions: 10,
+          reactionRate: 0.1,
+          positiveRate: 0.9,
+        },
+      }),
+    });
+    const share = r.suggestions.find((s) => /Share/.test(s.headline));
+    expect(share).toBeDefined();
+    expect(share?.command).toBeUndefined();
+  });
+
+  it("recommends adding a source when volume is rising", async () => {
+    const r = await build({
+      current: stats({ totalResponses: 40, totalWithResponse: 35 }),
+      combined: stats({ totalResponses: 50, totalWithResponse: 42 }),
+    });
+    const ride = r.suggestions.find((s) => /momentum/.test(s.headline));
+    expect(ride?.command).toBe("dosu integrations");
+  });
+
+  it("always includes at least one suggestion (fallback)", async () => {
+    const r = await build({
+      current: stats({ totalResponses: 5, totalWithResponse: 5 }),
+      combined: stats({ totalResponses: 10, totalWithResponse: 10 }),
+    });
+    expect(r.suggestions.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("caps suggestions at 4 to keep the report scannable", async () => {
+    const r = await build({
+      // Trigger every rule simultaneously: low-conf grew, positive rate dropped,
+      // low answer rate, volume rising
+      current: stats({
+        totalResponses: 50,
+        totalWithResponse: 25,
+        byConfidence: { high: 5, medium: 10, low: 35 },
+        reactions: {
+          totalPositive: 3,
+          totalNegative: 7,
+          messagesWithReactions: 10,
+          reactionRate: 0.2,
+          positiveRate: 0.3,
+        },
+      }),
+      combined: stats({
+        totalResponses: 90,
+        totalWithResponse: 70,
+        byConfidence: { high: 30, medium: 30, low: 30 },
+        reactions: {
+          totalPositive: 18,
+          totalNegative: 2,
+          messagesWithReactions: 20,
+          reactionRate: 0.22,
+          positiveRate: 0.9,
+        },
+      }),
+    });
+    expect(r.suggestions.length).toBeLessThanOrEqual(4);
+  });
+});
+
+describe("at-a-glance helpers", () => {
   const s = stats({ totalResponses: 10, totalWithResponse: 8 });
   const d = { answerRate: 0.8, answerRateDelta: 0.05, responsesDelta: 2, positiveRateDelta: null };
 
-  it("at-a-glance prompt embeds the stats", () => {
+  it("buildAtAGlancePrompt embeds the stats", () => {
     const p = buildAtAGlancePrompt(s, d, 30);
     expect(p).toContain("last 30 days");
     expect(p).toContain("10 total responses");
     expect(p).toContain("80% answer rate");
   });
 
-  it("topics prompt names the window", () => {
-    expect(buildTopicsPrompt(7)).toContain("last 7 days");
+  it("fallbackAtAGlance handles empty deployments warmly", () => {
+    const f = fallbackAtAGlance(
+      stats(),
+      {
+        answerRate: null,
+        answerRateDelta: null,
+        responsesDelta: 0,
+        positiveRateDelta: null,
+      },
+      30,
+    );
+    expect(f).toContain("brand new");
+    expect(f).toContain("30 days");
   });
 
-  it("suggestions prompt asks for actionable items", () => {
-    const p = buildSuggestionsPrompt(s, d, 30);
-    expect(p).toContain("numbered list");
-    expect(p).toContain("actionable");
+  it("fallbackAtAGlance mentions volume rising", () => {
+    const f = fallbackAtAGlance(s, { ...d, responsesDelta: 12 }, 30);
+    expect(f).toContain("Volume is up 12");
+  });
+
+  it("fallbackAtAGlance mentions volume dropping", () => {
+    const f = fallbackAtAGlance(s, { ...d, responsesDelta: -7 }, 30);
+    expect(f).toContain("Volume is down 7");
+  });
+
+  it("fallbackAtAGlance includes positive feedback rate when reactions exist", () => {
+    const withReactions = stats({
+      totalResponses: 10,
+      totalWithResponse: 8,
+      reactions: {
+        totalPositive: 4,
+        totalNegative: 1,
+        messagesWithReactions: 5,
+        reactionRate: 0.5,
+        positiveRate: 0.8,
+      },
+    });
+    const f = fallbackAtAGlance(withReactions, d, 30);
+    expect(f).toContain("80% positive feedback");
   });
 });

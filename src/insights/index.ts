@@ -3,10 +3,9 @@ export {
   type BuildInsightsArgs,
   buildAtAGlancePrompt,
   buildInsights,
-  buildSuggestionsPrompt,
-  buildTopicsPrompt,
-  type InsightsNarratives,
+  fallbackAtAGlance,
   type InsightsReport,
+  type Suggestion,
   type UsageStats,
 } from "./insights";
 export { renderHTML } from "./render-html";

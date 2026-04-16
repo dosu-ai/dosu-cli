@@ -1,9 +1,14 @@
 /**
  * Build an InsightsReport for the user's Dosu deployment.
  *
- * Combines hard numbers from `analytics.getUsageStats` with narrative prose
- * pulled from the Dosu `/ask` workflow. Each /ask call is independent — if one
- * fails or times out, the report still renders with the others.
+ * Hard numbers come from `analytics.getUsageStats` for the current and prior
+ * windows. The "investigate" warnings, "cheers" wins, and "suggestions" CTAs
+ * are all derived locally from those numbers — every report has actionable
+ * content even if the optional /ask narrative call fails.
+ *
+ * The single /ask call powers only the warm at-a-glance prose. If it fails or
+ * times out, we fall back to a stats-grounded summary so atAGlance is never
+ * empty.
  */
 
 import type { TypedClient } from "../client/trpc";
@@ -22,10 +27,10 @@ export interface UsageStats {
   };
 }
 
-export interface InsightsNarratives {
-  atAGlance: string | null;
-  topics: string | null;
-  suggestions: string | null;
+export interface Suggestion {
+  headline: string;
+  detail: string;
+  command?: string;
 }
 
 export interface InsightsReport {
@@ -40,8 +45,10 @@ export interface InsightsReport {
     responsesDelta: number;
     positiveRateDelta: number | null;
   };
-  narratives: InsightsNarratives;
+  atAGlance: string;
   cheers: string[];
+  investigate: string[];
+  suggestions: Suggestion[];
 }
 
 export type AskFn = (question: string) => Promise<string | null>;
@@ -90,12 +97,11 @@ export async function buildInsights({
 
   const derived = computeDerived(current, previous);
   const cheers = computeCheers(current, derived);
+  const investigate = computeInvestigate(current, previous, derived);
+  const suggestions = computeSuggestions(current, previous, derived);
 
-  const [atAGlance, topics, suggestions] = await Promise.all([
-    ask(buildAtAGlancePrompt(current, derived, windowDays)),
-    ask(buildTopicsPrompt(windowDays)),
-    ask(buildSuggestionsPrompt(current, derived, windowDays)),
-  ]);
+  const atAGlanceFromAsk = await ask(buildAtAGlancePrompt(current, derived, windowDays));
+  const atAGlance = atAGlanceFromAsk ?? fallbackAtAGlance(current, derived, windowDays);
 
   return {
     generatedAt: now().toISOString(),
@@ -104,8 +110,10 @@ export async function buildInsights({
     current,
     previous,
     derived,
-    narratives: { atAGlance, topics, suggestions },
+    atAGlance,
     cheers,
+    investigate,
+    suggestions,
   };
 }
 
@@ -216,6 +224,163 @@ function computeCheers(stats: UsageStats, derived: InsightsReport["derived"]): s
   return out;
 }
 
+function computeInvestigate(
+  current: UsageStats,
+  previous: UsageStats,
+  derived: InsightsReport["derived"],
+): string[] {
+  const out: string[] = [];
+  if (current.totalResponses === 0) return out;
+
+  // Answer rate dropped meaningfully
+  if (derived.answerRateDelta !== null && derived.answerRateDelta <= -0.05) {
+    const before = pct((derived.answerRate ?? 0) - derived.answerRateDelta);
+    const now = pct(derived.answerRate ?? 0);
+    out.push(
+      `Answer rate dropped from ${before} to ${now}. Usually a sign of a new product area Dosu doesn't have docs for yet.`,
+    );
+  }
+
+  // Low confidence growing in absolute terms
+  const lowDelta = current.byConfidence.low - previous.byConfidence.low;
+  if (lowDelta >= 5 && current.byConfidence.low > 0) {
+    out.push(
+      `Low-confidence answers grew by ${lowDelta} (now ${current.byConfidence.low} this window). Each one is a hint that your knowledge base has gaps.`,
+    );
+  }
+
+  // Positive reaction rate dropped
+  if (derived.positiveRateDelta !== null && derived.positiveRateDelta <= -0.05) {
+    const before = pct(current.reactions.positiveRate - derived.positiveRateDelta);
+    const now = pct(current.reactions.positiveRate);
+    out.push(
+      `Positive feedback fell from ${before} to ${now}. The negative reactions are the most actionable signal — open them first.`,
+    );
+  }
+
+  // More negative than positive feedback
+  if (
+    current.reactions.totalNegative > current.reactions.totalPositive &&
+    current.reactions.totalNegative >= 3
+  ) {
+    out.push(
+      `${current.reactions.totalNegative} negative reactions vs ${current.reactions.totalPositive} positive. Worth a look — what changed?`,
+    );
+  }
+
+  // Volume dropped meaningfully
+  if (derived.responsesDelta <= -10 && previous.totalResponses > 0) {
+    out.push(
+      `Volume is down by ${Math.abs(derived.responsesDelta)} responses. If your team stopped asking, find out why.`,
+    );
+  }
+
+  // Low overall answer rate (independent of trend)
+  if (derived.answerRate !== null && derived.answerRate < 0.6 && current.totalResponses >= 5) {
+    const unanswered = current.totalResponses - current.totalWithResponse;
+    out.push(
+      `${unanswered} of ${current.totalResponses} responses went without an answer. The unanswered ones show what your knowledge base doesn't cover yet.`,
+    );
+  }
+
+  return out;
+}
+
+function computeSuggestions(
+  current: UsageStats,
+  previous: UsageStats,
+  derived: InsightsReport["derived"],
+): Suggestion[] {
+  const out: Suggestion[] = [];
+
+  // Empty deployment — single most important CTA
+  if (current.totalResponses === 0) {
+    out.push({
+      headline: "Get your team using Dosu",
+      detail:
+        "No responses logged yet. The fastest unlock is wiring Dosu into the tools your team already uses — ask Dosu in Slack, your editor, or anywhere else.",
+      command: "dosu setup",
+    });
+    out.push({
+      headline: "Connect a knowledge source",
+      detail:
+        "Dosu is only as good as what it can read. Add at least one source so it has material to draw from.",
+      command: "dosu integrations",
+    });
+    return out;
+  }
+
+  // Low-confidence growing
+  const lowDelta = current.byConfidence.low - previous.byConfidence.low;
+  if (lowDelta >= 5 || current.byConfidence.low >= Math.max(5, current.totalResponses * 0.3)) {
+    out.push({
+      headline: "Audit recent low-confidence answers",
+      detail: `${current.byConfidence.low} answers had low confidence this window${
+        lowDelta > 0 ? ` (+${lowDelta} vs prior)` : ""
+      }. Open them to see exactly what knowledge is missing.`,
+      command: "dosu threads list",
+    });
+  }
+
+  // Positive rate dropping
+  if (derived.positiveRateDelta !== null && derived.positiveRateDelta <= -0.05) {
+    out.push({
+      headline: "Refresh your sources",
+      detail:
+        "Positive feedback is trending down. Usually a stale doc, a moved page, or a new product area Dosu hasn't seen.",
+      command: "dosu sources list",
+    });
+  }
+
+  // Low answer rate
+  if (derived.answerRate !== null && derived.answerRate < 0.7 && current.totalResponses >= 5) {
+    out.push({
+      headline: "Investigate unanswered questions",
+      detail: `${
+        current.totalResponses - current.totalWithResponse
+      } questions went unanswered. They map directly to the topics your knowledge base doesn't cover.`,
+      command: "dosu threads list",
+    });
+  }
+
+  // High volume + good metrics → share the wins
+  if (
+    current.totalResponses >= 50 &&
+    derived.answerRate !== null &&
+    derived.answerRate >= 0.8 &&
+    out.length === 0
+  ) {
+    out.push({
+      headline: "Share the win with your team",
+      detail: `${current.totalResponses} questions answered with a ${pct(
+        derived.answerRate,
+      )} answer rate. People are getting unblocked — make sure your team knows it's working.`,
+    });
+  }
+
+  // Volume rising — momentum suggestion
+  if (derived.responsesDelta >= 10) {
+    out.push({
+      headline: "Ride the momentum — add another source",
+      detail: `Volume is up by ${derived.responsesDelta} responses vs the prior window. Connect another source while engagement is high.`,
+      command: "dosu integrations",
+    });
+  }
+
+  // Always-available fallback so we never ship an empty list
+  if (out.length === 0) {
+    out.push({
+      headline: "Connect more knowledge sources",
+      detail:
+        "Each new source expands what Dosu can answer. Even a single new repo or doc set typically lifts answer rate.",
+      command: "dosu integrations",
+    });
+  }
+
+  // Cap at 4 to keep the report scannable
+  return out.slice(0, 4);
+}
+
 function pct(v: number): string {
   return `${(v * 100).toFixed(0)}%`;
 }
@@ -246,18 +411,22 @@ ${statsBlock(stats, derived)}
 Write 2-3 short sentences (no bullets, no headers, no markdown) that synthesize what's interesting or worth celebrating. Be warm, specific, and a little fun. Don't just list the numbers — interpret them. Speak directly to the reader ("you" / "your team").`;
 }
 
-export function buildTopicsPrompt(days: number): string {
-  return `Looking at the questions and threads in this Dosu deployment over the last ${days} days, what are the most common topics or themes people have been asking about? Reply in 2-3 friendly sentences naming specific topic areas. No bullet points, no headers — plain prose. If you don't have enough signal yet, say so honestly in one sentence.`;
-}
-
-export function buildSuggestionsPrompt(
+export function fallbackAtAGlance(
   stats: UsageStats,
   derived: InsightsReport["derived"],
   days: number,
 ): string {
-  return `Given this Dosu deployment's activity over the last ${days} days:
-
-${statsBlock(stats, derived)}
-
-Suggest 2-3 concrete, specific things the team could do this week to get more value from Dosu. Format as a short numbered list with one sentence each. Be actionable, not generic.`;
+  if (stats.totalResponses === 0) {
+    return `Your deployment is brand new. The next ${days} days will give us something to talk about — let's see what your team asks first.`;
+  }
+  const ar = derived.answerRate !== null ? pct(derived.answerRate) : "—";
+  const reactions = stats.reactions.totalPositive + stats.reactions.totalNegative;
+  const pr = reactions > 0 ? `, with ${pct(stats.reactions.positiveRate)} positive feedback` : "";
+  const trend =
+    derived.responsesDelta > 0
+      ? ` Volume is up ${derived.responsesDelta} vs the prior ${days} days — the team is leaning on Dosu more.`
+      : derived.responsesDelta < 0
+        ? ` Volume is down ${Math.abs(derived.responsesDelta)} vs the prior ${days} days — worth a quick look.`
+        : "";
+  return `In the last ${days} days you logged ${stats.totalResponses} responses with a ${ar} answer rate${pr}.${trend}`;
 }

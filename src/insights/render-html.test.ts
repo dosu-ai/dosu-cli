@@ -37,12 +37,16 @@ function makeReport(over: Partial<InsightsReport> = {}): InsightsReport {
       responsesDelta: 20,
       positiveRateDelta: 0.057,
     },
-    narratives: {
-      atAGlance: "You're crushing it this month.",
-      topics: "Mostly questions about deployment and onboarding.",
-      suggestions: "1. Add a runbook.\n2. Tag answers.",
-    },
+    atAGlance: "You're crushing it this month.",
     cheers: ["Big win this week."],
+    investigate: [],
+    suggestions: [
+      {
+        headline: "Audit recent low-confidence answers",
+        detail: "10 answers had low confidence this window.",
+        command: "dosu threads list",
+      },
+    ],
     ...over,
   };
 }
@@ -54,57 +58,16 @@ describe("renderHTML", () => {
     expect(html).toContain("Acme Docs");
   });
 
-  it("renders the at-a-glance narrative when provided", () => {
-    const html = renderHTML(
-      makeReport({ narratives: { atAGlance: "Hello world", topics: null, suggestions: null } }),
-    );
+  it("renders the at-a-glance prose verbatim", () => {
+    const html = renderHTML(makeReport({ atAGlance: "Hello world" }));
     expect(html).toContain("Hello world");
   });
 
-  it("falls back to generated at-a-glance when narrative is null and there are responses", () => {
-    const html = renderHTML(
-      makeReport({ narratives: { atAGlance: null, topics: null, suggestions: null } }),
-    );
-    expect(html).toContain("logged 100 responses");
-    expect(html).toContain("80% answer rate");
-  });
-
-  it("falls back to a welcome at-a-glance when there are no responses", () => {
-    const empty = makeReport({
-      current: {
-        totalResponses: 0,
-        totalWithResponse: 0,
-        byConfidence: { high: 0, medium: 0, low: 0 },
-        reactions: {
-          totalPositive: 0,
-          totalNegative: 0,
-          messagesWithReactions: 0,
-          reactionRate: 0,
-          positiveRate: 0,
-        },
-      },
-      derived: {
-        answerRate: null,
-        answerRateDelta: null,
-        responsesDelta: 0,
-        positiveRateDelta: null,
-      },
-      narratives: { atAGlance: null, topics: null, suggestions: null },
-    });
-    const html = renderHTML(empty);
-    expect(html).toContain("brand new");
-    expect(html).toContain("Day one");
-  });
-
-  it("escapes HTML in deployment name and narratives", () => {
+  it("escapes HTML in deployment name and at-a-glance prose", () => {
     const html = renderHTML(
       makeReport({
         deploymentName: "Pwn <script>alert(1)</script>",
-        narratives: {
-          atAGlance: "Look: <img src=x onerror=alert(1)> & co",
-          topics: null,
-          suggestions: null,
-        },
+        atAGlance: "Look: <img src=x onerror=alert(1)> & co",
       }),
     );
     expect(html).not.toContain("<script>alert(1)</script>");
@@ -113,12 +76,95 @@ describe("renderHTML", () => {
     expect(html).toContain("&amp;");
   });
 
+  it("renders both signal cards when both lists have entries", () => {
+    const html = renderHTML(
+      makeReport({
+        cheers: ["Yay!"],
+        investigate: ["Hmm."],
+      }),
+    );
+    expect(html).toContain('class="signal-card signal-cheers"');
+    expect(html).toContain('class="signal-card signal-investigate"');
+    expect(html).toContain("Yay!");
+    expect(html).toContain("Hmm.");
+  });
+
+  it("omits the cheers card when there are no cheers", () => {
+    const html = renderHTML(makeReport({ cheers: [], investigate: ["Hmm."] }));
+    expect(html).not.toContain('class="signal-card signal-cheers"');
+    expect(html).toContain('class="signal-card signal-investigate"');
+  });
+
+  it("omits the investigate card when there are no investigate items", () => {
+    const html = renderHTML(makeReport());
+    expect(html).toContain('class="signal-card signal-cheers"');
+    expect(html).not.toContain('class="signal-card signal-investigate"');
+  });
+
+  it("omits the entire signals section when both lists are empty", () => {
+    const html = renderHTML(makeReport({ cheers: [], investigate: [] }));
+    expect(html).not.toContain('class="signals"');
+  });
+
+  it("renders each suggestion as an article with headline, detail, and CTA", () => {
+    const html = renderHTML(makeReport());
+    expect(html).toContain("Audit recent low-confidence answers");
+    expect(html).toContain("10 answers had low confidence");
+    expect(html).toContain("$ dosu threads list");
+  });
+
+  it("omits the CTA block for suggestions with no command", () => {
+    const html = renderHTML(
+      makeReport({
+        suggestions: [{ headline: "Just FYI", detail: "Nothing to do, just sharing." }],
+      }),
+    );
+    expect(html).toContain("Just FYI");
+    expect(html).not.toContain('class="suggestion-cta"');
+  });
+
+  it("omits the suggestions section entirely when empty", () => {
+    const html = renderHTML(makeReport({ suggestions: [] }));
+    expect(html).not.toContain("Suggested Next Steps");
+  });
+
   it("renders a confidence bar chart with all three levels", () => {
     const html = renderHTML(makeReport());
     expect(html).toContain("High");
     expect(html).toContain("Medium");
     expect(html).toContain("Low");
     expect(html).toContain("Confidence Breakdown");
+  });
+
+  it("color-codes positive deltas as 'up'", () => {
+    const html = renderHTML(makeReport());
+    expect(html).toContain("delta-up");
+    expect(html).toContain("▲");
+  });
+
+  it("color-codes negative deltas as 'down'", () => {
+    const html = renderHTML(
+      makeReport({
+        derived: {
+          answerRate: 0.6,
+          answerRateDelta: -0.2,
+          responsesDelta: -15,
+          positiveRateDelta: -0.1,
+        },
+      }),
+    );
+    expect(html).toContain("delta-down");
+    expect(html).toContain("▼");
+  });
+
+  it("shows 'no change' when a delta is essentially zero", () => {
+    const html = renderHTML(
+      makeReport({
+        derived: { answerRate: 0.8, answerRateDelta: 0, responsesDelta: 0, positiveRateDelta: 0 },
+      }),
+    );
+    expect(html).toContain("no change");
+    expect(html).toContain("delta-flat");
   });
 
   it("shows the trend with a positive arrow when responses are up", () => {
@@ -132,7 +178,12 @@ describe("renderHTML", () => {
     const html = renderHTML(
       makeReport({
         current: { ...makeReport().current, totalResponses: 50 },
-        derived: { answerRate: 0.8, answerRateDelta: 0, responsesDelta: -30, positiveRateDelta: 0 },
+        derived: {
+          answerRate: 0.8,
+          answerRateDelta: 0,
+          responsesDelta: -30,
+          positiveRateDelta: 0,
+        },
       }),
     );
     expect(html).toContain("trend-down");
@@ -150,44 +201,21 @@ describe("renderHTML", () => {
     expect(html).toContain("→");
   });
 
-  it("shows a fallback message when topics narrative is missing", () => {
+  it("uses celebratory flair for high-volume deployments", () => {
     const html = renderHTML(
-      makeReport({ narratives: { atAGlance: "x", topics: null, suggestions: "y" } }),
-    );
-    expect(html).toContain("Not enough signal yet to summarize topics");
-  });
-
-  it("shows a friendly message when suggestions narrative is missing", () => {
-    const html = renderHTML(
-      makeReport({ narratives: { atAGlance: "x", topics: "y", suggestions: null } }),
-    );
-    expect(html).toContain("too busy answering questions");
-  });
-
-  it("renders all cheers as list items", () => {
-    const html = renderHTML(makeReport({ cheers: ["First", "Second", "Third"] }));
-    expect(html).toContain("<li>First</li>");
-    expect(html).toContain("<li>Second</li>");
-    expect(html).toContain("<li>Third</li>");
-  });
-
-  it("uses a celebratory flair for high-volume deployments", () => {
-    const html = renderHTML(
-      makeReport({
-        current: { ...makeReport().current, totalResponses: 1500 },
-      }),
+      makeReport({ current: { ...makeReport().current, totalResponses: 1500 } }),
     );
     expect(html).toContain("1,000 responses");
   });
 
-  it("uses the triple-digits flair when responses are between 100 and 999", () => {
+  it("uses triple-digits flair when responses are 100-999", () => {
     const html = renderHTML(
       makeReport({ current: { ...makeReport().current, totalResponses: 250 } }),
     );
     expect(html).toContain("Triple digits");
   });
 
-  it("uses the chef's-kiss flair when answer rate is at least 95%", () => {
+  it("uses chef's-kiss flair when answer rate is at least 95%", () => {
     const html = renderHTML(
       makeReport({
         current: { ...makeReport().current, totalResponses: 30 },
@@ -197,7 +225,16 @@ describe("renderHTML", () => {
     expect(html).toContain("Almost everything got answered");
   });
 
-  it("uses the default flair when no rule matches", () => {
+  it("uses Day-One flair for empty deployments", () => {
+    const html = renderHTML(
+      makeReport({
+        current: { ...makeReport().current, totalResponses: 0 },
+      }),
+    );
+    expect(html).toContain("Day one");
+  });
+
+  it("uses default flair when no rule matches", () => {
     const html = renderHTML(
       makeReport({
         current: { ...makeReport().current, totalResponses: 30 },
@@ -207,55 +244,30 @@ describe("renderHTML", () => {
     expect(html).toContain("Keep the questions coming");
   });
 
-  it("formats answer-rate delta in percentage points", () => {
-    const html = renderHTML(makeReport());
-    expect(html).toContain("▲ 5 pts");
-  });
-
-  it("renders an em-dash when the answer rate is null", () => {
+  it("escapes HTML in suggestion content", () => {
     const html = renderHTML(
       makeReport({
-        current: {
-          ...makeReport().current,
-          totalResponses: 0,
-          totalWithResponse: 0,
-        },
-        derived: {
-          answerRate: null,
-          answerRateDelta: null,
-          responsesDelta: 0,
-          positiveRateDelta: null,
-        },
+        suggestions: [
+          {
+            headline: "<script>x</script>",
+            detail: "Run <bad>",
+            command: "dosu & co",
+          },
+        ],
       }),
     );
-    expect(html).toContain('class="stat-value">—</div>');
+    expect(html).not.toContain("<script>x</script>");
+    expect(html).toContain("&lt;script&gt;");
+    expect(html).toContain("dosu &amp; co");
+  });
+
+  it("includes a dark-mode media query in the inlined CSS", () => {
+    const html = renderHTML(makeReport());
+    expect(html).toContain("prefers-color-scheme: dark");
   });
 
   it("formats the generated date in long form", () => {
-    const html = renderHTML(makeReport({ generatedAt: "2026-04-16T12:00:00Z" }));
+    const html = renderHTML(makeReport());
     expect(html).toMatch(/Apr 1[56]/);
-  });
-
-  it("shows a 'no change' delta when delta is essentially zero", () => {
-    const html = renderHTML(
-      makeReport({
-        derived: { answerRate: 0.8, answerRateDelta: 0, responsesDelta: 0, positiveRateDelta: 0 },
-      }),
-    );
-    expect(html).toContain("no change");
-  });
-
-  it("formats negative deltas with a down triangle", () => {
-    const html = renderHTML(
-      makeReport({
-        derived: {
-          answerRate: 0.8,
-          answerRateDelta: -0.1,
-          responsesDelta: 0,
-          positiveRateDelta: 0,
-        },
-      }),
-    );
-    expect(html).toContain("▼ 10 pts");
   });
 });
