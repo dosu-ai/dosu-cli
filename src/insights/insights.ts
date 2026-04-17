@@ -275,11 +275,10 @@ function computeInvestigate(
     );
   }
 
-  // Low overall answer rate (independent of trend)
   if (derived.answerRate !== null && derived.answerRate < 0.6 && current.totalResponses >= 5) {
-    const unanswered = current.totalResponses - current.totalWithResponse;
+    const noAnswer = current.totalResponses - current.totalWithResponse;
     out.push(
-      `${unanswered} of ${current.totalResponses} responses went without an answer. The unanswered ones show what your knowledge base doesn't cover yet.`,
+      `${noAnswer} of ${current.totalResponses} questions didn't get an answer. Open the threads to see the mix — some will be knowledge gaps, others out-of-scope or spam.`,
     );
   }
 
@@ -334,13 +333,12 @@ function computeSuggestions(
     });
   }
 
-  // Low answer rate
   if (derived.answerRate !== null && derived.answerRate < 0.7 && current.totalResponses >= 5) {
     out.push({
-      headline: "Investigate unanswered questions",
+      headline: "Investigate questions without an answer",
       detail: `${
         current.totalResponses - current.totalWithResponse
-      } questions went unanswered. They map directly to the topics your knowledge base doesn't cover.`,
+      } questions didn't get an answer this window. Open them to see the mix — knowledge gaps, out-of-scope asks, and spam look different up close.`,
       command: "dosu threads list",
     });
   }
@@ -354,9 +352,9 @@ function computeSuggestions(
   ) {
     out.push({
       headline: "Share the win with your team",
-      detail: `${current.totalResponses} questions answered with a ${pct(
+      detail: `${current.totalWithResponse} of ${current.totalResponses} questions got an answer (${pct(
         derived.answerRate,
-      )} answer rate. People are getting unblocked — make sure your team knows it's working.`,
+      )} answer rate). People are getting unblocked — make sure your team knows it's working.`,
     });
   }
 

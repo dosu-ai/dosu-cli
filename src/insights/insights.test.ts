@@ -361,7 +361,7 @@ describe("investigate", () => {
       current: stats({ totalResponses: 20, totalWithResponse: 8 }),
       combined: stats({ totalResponses: 40, totalWithResponse: 16 }),
     });
-    expect(r.investigate.some((c) => /went without an answer/.test(c))).toBe(true);
+    expect(r.investigate.some((c) => /didn't get an answer/.test(c))).toBe(true);
   });
 
   it("does not flag 'low-confidence growing' when prior window is empty", async () => {

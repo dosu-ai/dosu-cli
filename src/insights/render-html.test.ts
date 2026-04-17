@@ -329,14 +329,18 @@ describe("renderHTML", () => {
   });
 
   it("varies the headline label by count", () => {
-    // count=100 → 100 % 4 = 0 → "responses shipped"
+    // count=99 → 99 % 3 = 0 → "responses logged"
+    expect(
+      renderHTML(makeReport({ current: { ...makeReport().current, totalResponses: 99 } })),
+    ).toContain("responses logged");
+    // count=100 → 100 % 3 = 1 → "questions handled"
     expect(
       renderHTML(makeReport({ current: { ...makeReport().current, totalResponses: 100 } })),
-    ).toContain("responses shipped");
-    // count=101 → 1 → "questions tackled"
+    ).toContain("questions handled");
+    // count=101 → 101 % 3 = 2 → "threads fielded"
     expect(
       renderHTML(makeReport({ current: { ...makeReport().current, totalResponses: 101 } })),
-    ).toContain("questions tackled");
+    ).toContain("threads fielded");
   });
 
   it("shows the stable latest.html path in the fun-ending footer", () => {
@@ -361,10 +365,7 @@ describe("renderHTML", () => {
     const html = renderHTML(makeReport());
     expect(html).toContain('class="headline"');
     expect(html).toContain('class="headline-number">100</div>');
-    // The label varies by count (responses shipped / questions tackled / etc.)
-    expect(html).toMatch(
-      /responses (shipped|answered)|questions tackled|answers delivered|moments of help/,
-    );
+    expect(html).toMatch(/responses logged|questions handled|threads fielded/);
   });
 
   it("includes a percent change in the headline when prior > 0", () => {

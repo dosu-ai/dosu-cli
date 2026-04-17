@@ -62,14 +62,8 @@ function pickGreeting(iso: string): string {
 
 function pickHeadlineLabel(count: number): string {
   if (count === 0) return "responses to come";
-  if (count === 1) return "response shipped";
-  // Deterministic but varied — picks based on count so the same window always renders the same word
-  const variants = [
-    "responses shipped",
-    "questions tackled",
-    "answers delivered",
-    "moments of help",
-  ];
+  if (count === 1) return "response logged";
+  const variants = ["responses logged", "questions handled", "threads fielded"];
   return variants[count % variants.length];
 }
 
