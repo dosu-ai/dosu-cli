@@ -149,9 +149,7 @@ export function createProgram(): Command {
         throw new Error("session expired. Run 'dosu login' to re-authenticate");
       }
       if (cfg.mode !== MODE_OSS && !cfg.deployment_id) {
-        throw new Error(
-          "no MCP selected. Run 'dosu' to open the TUI and select an MCP",
-        );
+        throw new Error("no MCP selected. Run 'dosu' to open the TUI and select an MCP");
       }
 
       if (provider.id() === "manual") {

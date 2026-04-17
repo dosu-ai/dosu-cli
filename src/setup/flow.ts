@@ -246,9 +246,7 @@ async function stepResolveDeployment(apiClient: Client, id: string): Promise<Dep
     return d;
   } catch (err: unknown) {
     /* v8 ignore next -- err is always Error in practice */
-    p.log.error(
-      `Failed to resolve MCP: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    p.log.error(`Failed to resolve MCP: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
 }
