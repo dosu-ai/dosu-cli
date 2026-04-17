@@ -32,8 +32,8 @@ function makeReport(over: Partial<InsightsReport> = {}): InsightsReport {
       },
     },
     derived: {
-      answerRate: 0.8,
-      answerRateDelta: 0.05,
+      highConfidenceRate: 0.625,
+      highConfidenceRateDelta: 0.125,
       responsesDelta: 20,
       positiveRateDelta: 0.057,
       hasPriorWindow: true,
@@ -149,8 +149,8 @@ describe("renderHTML", () => {
     const html = renderHTML(
       makeReport({
         derived: {
-          answerRate: 0.6,
-          answerRateDelta: -0.2,
+          highConfidenceRate: 0.4,
+          highConfidenceRateDelta: -0.2,
           responsesDelta: -15,
           positiveRateDelta: -0.1,
           hasPriorWindow: true,
@@ -165,8 +165,8 @@ describe("renderHTML", () => {
     const html = renderHTML(
       makeReport({
         derived: {
-          answerRate: 0.8,
-          answerRateDelta: 0,
+          highConfidenceRate: 0.8,
+          highConfidenceRateDelta: 0,
           responsesDelta: 0,
           positiveRateDelta: 0,
           hasPriorWindow: true,
@@ -189,8 +189,8 @@ describe("renderHTML", () => {
       makeReport({
         current: { ...makeReport().current, totalResponses: 50 },
         derived: {
-          answerRate: 0.8,
-          answerRateDelta: 0,
+          highConfidenceRate: 0.8,
+          highConfidenceRateDelta: 0,
           responsesDelta: -30,
           positiveRateDelta: 0,
           hasPriorWindow: true,
@@ -207,8 +207,8 @@ describe("renderHTML", () => {
       makeReport({
         current: { ...makeReport().current, totalResponses: 80 },
         derived: {
-          answerRate: 0.8,
-          answerRateDelta: 0,
+          highConfidenceRate: 0.8,
+          highConfidenceRateDelta: 0,
           responsesDelta: 0,
           positiveRateDelta: 0,
           hasPriorWindow: true,
@@ -232,20 +232,24 @@ describe("renderHTML", () => {
     expect(html).toContain("Triple digits");
   });
 
-  it("uses chef's-kiss flair when answer rate is at least 95%", () => {
+  it("uses chef's-kiss flair when high-confidence share is at least 90%", () => {
     const html = renderHTML(
       makeReport({
-        current: { ...makeReport().current, totalResponses: 30 },
+        current: {
+          ...makeReport().current,
+          totalResponses: 30,
+          byConfidence: { high: 29, medium: 1, low: 0 },
+        },
         derived: {
-          answerRate: 0.97,
-          answerRateDelta: 0,
+          highConfidenceRate: 0.97,
+          highConfidenceRateDelta: 0,
           responsesDelta: 0,
           positiveRateDelta: 0,
           hasPriorWindow: true,
         },
       }),
     );
-    expect(html).toContain("Almost everything got answered");
+    expect(html).toContain("Almost every response landed with high confidence");
   });
 
   it("uses Day-One flair for empty deployments", () => {
@@ -262,8 +266,8 @@ describe("renderHTML", () => {
       makeReport({
         current: { ...makeReport().current, totalResponses: 30 },
         derived: {
-          answerRate: 0.5,
-          answerRateDelta: 0,
+          highConfidenceRate: 0.5,
+          highConfidenceRateDelta: 0,
           responsesDelta: 0,
           positiveRateDelta: 0,
           hasPriorWindow: true,
@@ -382,8 +386,8 @@ describe("renderHTML", () => {
           totalResponses: 0,
         },
         derived: {
-          answerRate: 0.8,
-          answerRateDelta: null,
+          highConfidenceRate: 0.625,
+          highConfidenceRateDelta: null,
           responsesDelta: 100,
           positiveRateDelta: null,
           hasPriorWindow: false,
@@ -392,7 +396,6 @@ describe("renderHTML", () => {
     );
     expect(html).toContain("first 30 days of data");
     expect(html).not.toMatch(/vs the prior 30 days/);
-    // Delta indicators should be suppressed everywhere (headline + stats row)
     expect(html).not.toMatch(/▲ \+?100/);
   });
 
@@ -401,8 +404,8 @@ describe("renderHTML", () => {
       makeReport({
         previous: { ...makeReport().previous, totalResponses: 0 },
         derived: {
-          answerRate: 0.8,
-          answerRateDelta: null,
+          highConfidenceRate: 0.625,
+          highConfidenceRateDelta: null,
           responsesDelta: 100,
           positiveRateDelta: null,
           hasPriorWindow: false,
@@ -417,8 +420,8 @@ describe("renderHTML", () => {
       makeReport({
         previous: { ...makeReport().previous, totalResponses: 0 },
         derived: {
-          answerRate: 0.8,
-          answerRateDelta: null,
+          highConfidenceRate: 0.625,
+          highConfidenceRateDelta: null,
           responsesDelta: 100,
           positiveRateDelta: null,
           hasPriorWindow: false,
@@ -435,8 +438,8 @@ describe("renderHTML", () => {
       makeReport({
         previous: { ...makeReport().previous, totalResponses: 0 },
         derived: {
-          answerRate: 0.8,
-          answerRateDelta: null,
+          highConfidenceRate: 0.625,
+          highConfidenceRateDelta: null,
           responsesDelta: 100,
           positiveRateDelta: null,
           hasPriorWindow: false,
@@ -447,11 +450,11 @@ describe("renderHTML", () => {
     expect(html).not.toContain("3.3");
   });
 
-  it("renders the scorecard with a letter grade and three mini bars", () => {
+  it("renders the scorecard with a letter grade and mini bars", () => {
     const html = renderHTML(makeReport());
     expect(html).toContain('class="scorecard"');
     expect(html).toContain("grade-letter");
-    expect(html).toContain("Answer rate");
+    expect(html).not.toContain("Answer rate");
     expect(html).toContain("High-confidence");
     expect(html).toContain("Sentiment");
   });
@@ -472,13 +475,13 @@ describe("renderHTML", () => {
   });
 
   it("excludes sentiment from the grade when no reactions exist and shows — in the mini-bar", () => {
-    // answer = 0.9, conf = 81/90 = 0.9, no sentiment → score = round((0.9 + 0.9) / 2 * 100) = 90 → A+ Outstanding
+    // conf = 90/100 = 0.9, no sentiment → score = round(0.9 * 100) = 90 → A+ Outstanding
     const html = renderHTML(
       makeReport({
         current: {
           totalResponses: 100,
           totalWithResponse: 90,
-          byConfidence: { high: 81, medium: 9, low: 0 },
+          byConfidence: { high: 90, medium: 9, low: 0 },
           reactions: {
             totalPositive: 0,
             totalNegative: 0,
@@ -488,8 +491,8 @@ describe("renderHTML", () => {
           },
         },
         derived: {
-          answerRate: 0.9,
-          answerRateDelta: 0,
+          highConfidenceRate: 0.9,
+          highConfidenceRateDelta: 0,
           responsesDelta: 0,
           positiveRateDelta: null,
           hasPriorWindow: true,
@@ -511,7 +514,7 @@ describe("renderHTML", () => {
       makeReport({
         current: {
           totalResponses: 50,
-          totalWithResponse: 15, // 30% answer rate
+          totalWithResponse: 15,
           byConfidence: { high: 2, medium: 5, low: 8 },
           reactions: {
             totalPositive: 1,
@@ -522,8 +525,8 @@ describe("renderHTML", () => {
           },
         },
         derived: {
-          answerRate: 0.3,
-          answerRateDelta: -0.4,
+          highConfidenceRate: 0.04,
+          highConfidenceRateDelta: -0.4,
           responsesDelta: 0,
           positiveRateDelta: -0.5,
           hasPriorWindow: true,
@@ -588,7 +591,7 @@ describe("renderHTML", () => {
     expect(html).toContain("This window");
     expect(html).toContain("Prior window");
     expect(html).toContain("Responses");
-    expect(html).toContain("Answer rate");
+    expect(html).toContain("High-confidence share");
     expect(html).toContain("Negative reactions");
   });
 

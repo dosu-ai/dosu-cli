@@ -40,8 +40,8 @@ export interface InsightsReport {
   current: UsageStats;
   previous: UsageStats;
   derived: {
-    answerRate: number | null;
-    answerRateDelta: number | null;
+    highConfidenceRate: number | null;
+    highConfidenceRateDelta: number | null;
     responsesDelta: number;
     positiveRateDelta: number | null;
     hasPriorWindow: boolean;
@@ -167,12 +167,14 @@ function subtractStats(combined: UsageStats, current: UsageStats): UsageStats {
 }
 
 function computeDerived(current: UsageStats, previous: UsageStats): InsightsReport["derived"] {
-  const answerRate =
-    current.totalResponses > 0 ? current.totalWithResponse / current.totalResponses : null;
-  const prevAnswerRate =
-    previous.totalResponses > 0 ? previous.totalWithResponse / previous.totalResponses : null;
-  const answerRateDelta =
-    answerRate !== null && prevAnswerRate !== null ? answerRate - prevAnswerRate : null;
+  const highConfidenceRate =
+    current.totalResponses > 0 ? current.byConfidence.high / current.totalResponses : null;
+  const prevHighConfidenceRate =
+    previous.totalResponses > 0 ? previous.byConfidence.high / previous.totalResponses : null;
+  const highConfidenceRateDelta =
+    highConfidenceRate !== null && prevHighConfidenceRate !== null
+      ? highConfidenceRate - prevHighConfidenceRate
+      : null;
 
   const positiveRateDelta =
     current.reactions.totalPositive + current.reactions.totalNegative > 0 &&
@@ -181,8 +183,8 @@ function computeDerived(current: UsageStats, previous: UsageStats): InsightsRepo
       : null;
 
   return {
-    answerRate,
-    answerRateDelta,
+    highConfidenceRate,
+    highConfidenceRateDelta,
     responsesDelta: current.totalResponses - previous.totalResponses,
     positiveRateDelta,
     hasPriorWindow: previous.totalResponses > 0,
@@ -197,9 +199,9 @@ function computeCheers(stats: UsageStats, derived: InsightsReport["derived"]): s
     );
     return out;
   }
-  if (derived.answerRate !== null && derived.answerRate >= 0.9) {
+  if (derived.highConfidenceRate !== null && derived.highConfidenceRate >= 0.8) {
     out.push(
-      `${pct(derived.answerRate)} answer rate — Dosu is finding answers for almost everything you throw at it.`,
+      `${pct(derived.highConfidenceRate)} of responses were high-confidence — Dosu's knowledge base is paying off.`,
     );
   }
   if (stats.byConfidence.high > stats.byConfidence.low * 2 && stats.byConfidence.high > 0) {
@@ -234,11 +236,15 @@ function computeInvestigate(
   const out: string[] = [];
   if (current.totalResponses === 0) return out;
 
-  if (derived.answerRateDelta !== null && derived.answerRateDelta <= -0.05) {
-    const before = pct(previous.totalWithResponse / previous.totalResponses);
-    const now = pct(current.totalWithResponse / current.totalResponses);
+  if (
+    derived.highConfidenceRateDelta !== null &&
+    derived.highConfidenceRateDelta <= -0.05 &&
+    previous.totalResponses > 0
+  ) {
+    const before = pct(previous.byConfidence.high / previous.totalResponses);
+    const now = pct(current.byConfidence.high / current.totalResponses);
     out.push(
-      `Answer rate dropped from ${before} to ${now}. Usually a sign of a new product area Dosu doesn't have docs for yet.`,
+      `High-confidence share dropped from ${before} to ${now}. Usually a sign of a new product area Dosu doesn't have docs for yet.`,
     );
   }
 
@@ -257,7 +263,6 @@ function computeInvestigate(
     );
   }
 
-  // More negative than positive feedback
   if (
     current.reactions.totalNegative > current.reactions.totalPositive &&
     current.reactions.totalNegative >= 3
@@ -273,10 +278,14 @@ function computeInvestigate(
     );
   }
 
-  if (derived.answerRate !== null && derived.answerRate < 0.6 && current.totalResponses >= 5) {
-    const noAnswer = current.totalResponses - current.totalWithResponse;
+  if (
+    derived.highConfidenceRate !== null &&
+    derived.highConfidenceRate < 0.5 &&
+    current.totalResponses >= 5
+  ) {
+    const lowAndMed = current.byConfidence.low + current.byConfidence.medium;
     out.push(
-      `${noAnswer} of ${current.totalResponses} questions didn't get an answer. Open the threads to see the mix — some will be knowledge gaps, others out-of-scope or spam.`,
+      `${lowAndMed} of ${current.totalResponses} responses were medium- or low-confidence. Open the threads to see where the knowledge base needs more material.`,
     );
   }
 
@@ -331,28 +340,17 @@ function computeSuggestions(
     });
   }
 
-  if (derived.answerRate !== null && derived.answerRate < 0.7 && current.totalResponses >= 5) {
-    out.push({
-      headline: "Investigate questions without an answer",
-      detail: `${
-        current.totalResponses - current.totalWithResponse
-      } questions didn't get an answer this window. Open them to see the mix — knowledge gaps, out-of-scope asks, and spam look different up close.`,
-      command: "dosu threads list",
-    });
-  }
-
-  // High volume + good metrics → share the wins
   if (
     current.totalResponses >= 50 &&
-    derived.answerRate !== null &&
-    derived.answerRate >= 0.8 &&
+    derived.highConfidenceRate !== null &&
+    derived.highConfidenceRate >= 0.7 &&
     out.length === 0
   ) {
     out.push({
       headline: "Share the win with your team",
-      detail: `${current.totalWithResponse} of ${current.totalResponses} questions got an answer (${pct(
-        derived.answerRate,
-      )} answer rate). People are getting unblocked — make sure your team knows it's working.`,
+      detail: `${current.byConfidence.high} of ${current.totalResponses} responses landed with high confidence (${pct(
+        derived.highConfidenceRate,
+      )}). People are getting unblocked — make sure your team knows it's working.`,
     });
   }
 
@@ -369,7 +367,7 @@ function computeSuggestions(
     out.push({
       headline: "Connect more knowledge sources",
       detail:
-        "Each new source expands what Dosu can answer. Even a single new repo or doc set typically lifts answer rate.",
+        "Each new source expands what Dosu can answer. Even a single new repo or doc set typically lifts high-confidence share.",
       command: "dosu integrations",
     });
   }
@@ -383,15 +381,14 @@ function pct(v: number): string {
 }
 
 function statsBlock(stats: UsageStats, derived: InsightsReport["derived"]): string {
-  const ar = derived.answerRate !== null ? pct(derived.answerRate) : "n/a";
+  const hc = derived.highConfidenceRate !== null ? pct(derived.highConfidenceRate) : "n/a";
   const pr =
     stats.reactions.totalPositive + stats.reactions.totalNegative > 0
       ? pct(stats.reactions.positiveRate)
       : "n/a";
   return [
     `- ${stats.totalResponses} total responses`,
-    `- ${stats.totalWithResponse} with answers (${ar} answer rate)`,
-    `- Confidence: ${stats.byConfidence.high} high, ${stats.byConfidence.medium} medium, ${stats.byConfidence.low} low`,
+    `- Confidence: ${stats.byConfidence.high} high, ${stats.byConfidence.medium} medium, ${stats.byConfidence.low} low (${hc} high-confidence share)`,
     `- Reactions: ${stats.reactions.totalPositive} positive, ${stats.reactions.totalNegative} negative (${pr} positive rate)`,
   ].join("\n");
 }
@@ -419,11 +416,11 @@ export function fallbackAtAGlance(
   if (stats.totalResponses === 0) {
     return `Your deployment is brand new. The next ${days} days will give us something to talk about — let's see what your team asks first.`;
   }
-  const ar = derived.answerRate !== null ? pct(derived.answerRate) : "—";
+  const hc = derived.highConfidenceRate !== null ? pct(derived.highConfidenceRate) : "—";
   const reactions = stats.reactions.totalPositive + stats.reactions.totalNegative;
   const pr = reactions > 0 ? `, with ${pct(stats.reactions.positiveRate)} positive feedback` : "";
   if (!derived.hasPriorWindow) {
-    return `In your first ${days}-day window you logged ${stats.totalResponses} responses with a ${ar} answer rate${pr}. Check back after another ${days} days for trend comparisons.`;
+    return `In your first ${days}-day window you logged ${stats.totalResponses} responses, ${hc} of them high-confidence${pr}. Check back after another ${days} days for trend comparisons.`;
   }
   const trend =
     derived.responsesDelta > 0
@@ -431,5 +428,5 @@ export function fallbackAtAGlance(
       : derived.responsesDelta < 0
         ? ` Volume is down ${Math.abs(derived.responsesDelta)} vs the prior ${days} days — worth a quick look.`
         : "";
-  return `In the last ${days} days you logged ${stats.totalResponses} responses with a ${ar} answer rate${pr}.${trend}`;
+  return `In the last ${days} days you logged ${stats.totalResponses} responses, ${hc} of them high-confidence${pr}.${trend}`;
 }

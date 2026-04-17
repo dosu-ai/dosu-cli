@@ -106,12 +106,10 @@ function renderAtAGlance(r: InsightsReport): string {
 
 function renderScorecard(r: InsightsReport): string {
   if (r.current.totalResponses === 0) return "";
-  const answer = r.derived.answerRate ?? 0;
-  const conf =
-    r.current.totalWithResponse > 0 ? r.current.byConfidence.high / r.current.totalWithResponse : 0;
+  const conf = r.derived.highConfidenceRate ?? 0;
   const reactionTotal = r.current.reactions.totalPositive + r.current.reactions.totalNegative;
   const sentiment: number | null = reactionTotal > 0 ? r.current.reactions.positiveRate : null;
-  const signals = sentiment === null ? [answer, conf] : [answer, conf, sentiment];
+  const signals = sentiment === null ? [conf] : [conf, sentiment];
   const score = Math.round((signals.reduce((a, b) => a + b, 0) / signals.length) * 100);
   const grade = pickGrade(score);
 
@@ -123,8 +121,7 @@ function renderScorecard(r: InsightsReport): string {
         <div class="grade-score">${score} / 100</div>
       </div>
       <div class="scorecard-bars">
-        ${miniBar("Answer rate", answer, "answers reaching the user")}
-        ${miniBar("High-confidence", conf, "of answers Dosu was sure about")}
+        ${miniBar("High-confidence", conf, "of responses Dosu was sure about")}
         ${miniBar(
           "Sentiment",
           sentiment,
@@ -170,8 +167,11 @@ function pickGrade(score: number): { letter: string; label: string; tone: string
 }
 
 function renderStatsRow(r: InsightsReport): string {
-  const ar = r.derived.answerRate !== null ? `${(r.derived.answerRate * 100).toFixed(0)}%` : "—";
-  const arDelta = formatPctDelta(r.derived.answerRateDelta);
+  const hc =
+    r.derived.highConfidenceRate !== null
+      ? `${(r.derived.highConfidenceRate * 100).toFixed(0)}%`
+      : "—";
+  const hcDelta = formatPctDelta(r.derived.highConfidenceRateDelta);
   const pr =
     r.current.reactions.totalPositive + r.current.reactions.totalNegative > 0
       ? `${(r.current.reactions.positiveRate * 100).toFixed(0)}%`
@@ -200,9 +200,9 @@ function renderStatsRow(r: InsightsReport): string {
         ${respDelta}
       </div>
       <div class="stat">
-        <div class="stat-value">${ar}</div>
-        <div class="stat-label">Answer rate</div>
-        ${arDelta}
+        <div class="stat-value">${hc}</div>
+        <div class="stat-label">High-confidence</div>
+        ${hcDelta}
       </div>
       <div class="stat">
         <div class="stat-value">${pr}</div>
@@ -337,12 +337,11 @@ function renderComparison(r: InsightsReport): string {
   }
   const rows: Array<{ label: string; cur: string; prev: string; delta: string; tone: string }> = [
     rowResp("Responses", r.current.totalResponses, r.previous.totalResponses, true),
-    rowResp("Answers given", r.current.totalWithResponse, r.previous.totalWithResponse, true),
     rowPct(
-      "Answer rate",
-      r.derived.answerRate,
+      "High-confidence share",
+      r.derived.highConfidenceRate,
       r.previous.totalResponses > 0
-        ? r.previous.totalWithResponse / r.previous.totalResponses
+        ? r.previous.byConfidence.high / r.previous.totalResponses
         : null,
     ),
     rowResp("High-confidence", r.current.byConfidence.high, r.previous.byConfidence.high, true),
@@ -456,8 +455,8 @@ function pickFlair(r: InsightsReport): string {
   if (r.current.totalResponses >= 1000)
     return "🚀 You crossed 1,000 responses. That's a lot of help shipped.";
   if (r.current.totalResponses >= 100) return "🎉 Triple digits. Your team is on a roll.";
-  if (r.derived.answerRate !== null && r.derived.answerRate >= 0.95)
-    return "💯 Almost everything got answered. Chef's kiss.";
+  if (r.derived.highConfidenceRate !== null && r.derived.highConfidenceRate >= 0.9)
+    return "💯 Almost every response landed with high confidence. Chef's kiss.";
   return "👏 Keep the questions coming.";
 }
 

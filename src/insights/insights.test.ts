@@ -158,11 +158,18 @@ describe("buildInsights", () => {
 
   it("falls back to a stats-grounded atAGlance when /ask returns null", async () => {
     const r = await build({
-      current: stats({ totalResponses: 10, totalWithResponse: 8 }),
-      combined: stats({ totalResponses: 12, totalWithResponse: 10 }),
+      current: stats({
+        totalResponses: 10,
+        totalWithResponse: 10,
+        byConfidence: { high: 8, medium: 1, low: 1 },
+      }),
+      combined: stats({
+        totalResponses: 12,
+        totalWithResponse: 12,
+        byConfidence: { high: 9, medium: 2, low: 1 },
+      }),
       ask: async () => null,
     });
-    // The fallback is always non-null and should reference the real numbers.
     expect(r.atAGlance).toContain("10 responses");
     expect(r.atAGlance).toContain("80%");
   });
@@ -175,12 +182,20 @@ describe("cheers", () => {
     expect(r.cheers[0]).toMatch(/brand new/);
   });
 
-  it("celebrates a high answer rate", async () => {
+  it("celebrates a high high-confidence share", async () => {
     const r = await build({
-      current: stats({ totalResponses: 100, totalWithResponse: 95 }),
-      combined: stats({ totalResponses: 100, totalWithResponse: 95 }),
+      current: stats({
+        totalResponses: 100,
+        totalWithResponse: 100,
+        byConfidence: { high: 90, medium: 8, low: 2 },
+      }),
+      combined: stats({
+        totalResponses: 100,
+        totalWithResponse: 100,
+        byConfidence: { high: 90, medium: 8, low: 2 },
+      }),
     });
-    expect(r.cheers.some((c) => /answer rate/.test(c))).toBe(true);
+    expect(r.cheers.some((c) => /high-confidence/.test(c))).toBe(true);
   });
 
   it("celebrates dominant high-confidence", async () => {
@@ -267,13 +282,23 @@ describe("investigate", () => {
     expect(r.investigate).toHaveLength(0);
   });
 
-  it("flags a meaningful drop in answer rate with exact before/after percentages", async () => {
+  it("flags a meaningful drop in high-confidence share with exact before/after percentages", async () => {
     const r = await build({
-      // current: 60/100 = 60%; previous: 90/100 = 90% → delta -30 pts
-      current: stats({ totalResponses: 100, totalWithResponse: 60 }),
-      combined: stats({ totalResponses: 200, totalWithResponse: 150 }),
+      // current: 60/100 = 60% high; previous: 90/100 = 90% high → delta -30 pts
+      current: stats({
+        totalResponses: 100,
+        totalWithResponse: 100,
+        byConfidence: { high: 60, medium: 20, low: 20 },
+      }),
+      combined: stats({
+        totalResponses: 200,
+        totalWithResponse: 200,
+        byConfidence: { high: 150, medium: 30, low: 20 },
+      }),
     });
-    expect(r.investigate.some((c) => /Answer rate dropped from 90% to 60%/.test(c))).toBe(true);
+    expect(r.investigate.some((c) => /High-confidence share dropped from 90% to 60%/.test(c))).toBe(
+      true,
+    );
   });
 
   it("flags growing low-confidence count", async () => {
@@ -357,12 +382,21 @@ describe("investigate", () => {
     expect(r.investigate.some((c) => /Volume is down/.test(c))).toBe(true);
   });
 
-  it("flags a low overall answer rate independent of trend", async () => {
+  it("flags a low overall high-confidence share independent of trend", async () => {
     const r = await build({
-      current: stats({ totalResponses: 20, totalWithResponse: 8 }),
-      combined: stats({ totalResponses: 40, totalWithResponse: 16 }),
+      // current: 8/20 high = 40%; previous: 8/20 high = 40%
+      current: stats({
+        totalResponses: 20,
+        totalWithResponse: 20,
+        byConfidence: { high: 8, medium: 6, low: 6 },
+      }),
+      combined: stats({
+        totalResponses: 40,
+        totalWithResponse: 40,
+        byConfidence: { high: 16, medium: 12, low: 12 },
+      }),
     });
-    expect(r.investigate.some((c) => /didn't get an answer/.test(c))).toBe(true);
+    expect(r.investigate.some((c) => /medium- or low-confidence/.test(c))).toBe(true);
   });
 
   it("does not flag 'low-confidence growing' when prior window is empty", async () => {
@@ -446,16 +480,6 @@ describe("suggestions", () => {
     expect(refresh?.command).toBe("dosu sources list");
   });
 
-  it("suggests investigating unanswered threads when answer rate is low", async () => {
-    const r = await build({
-      current: stats({ totalResponses: 20, totalWithResponse: 8 }),
-      combined: stats({ totalResponses: 40, totalWithResponse: 20 }),
-    });
-    const inv = r.suggestions.find((s) => /Investigate/.test(s.headline));
-    expect(inv?.command).toBe("dosu threads list");
-    expect(inv?.detail).toContain("12");
-  });
-
   it("suggests sharing the win when metrics are healthy and volume is high", async () => {
     const r = await build({
       current: stats({
@@ -534,7 +558,7 @@ describe("suggestions", () => {
   it("caps suggestions at 4 to keep the report scannable", async () => {
     const r = await build({
       // Trigger every rule simultaneously: low-conf grew, positive rate dropped,
-      // low answer rate, volume rising
+      // low high-confidence share, volume rising
       current: stats({
         totalResponses: 50,
         totalWithResponse: 25,
@@ -565,10 +589,14 @@ describe("suggestions", () => {
 });
 
 describe("at-a-glance helpers", () => {
-  const s = stats({ totalResponses: 10, totalWithResponse: 8 });
+  const s = stats({
+    totalResponses: 10,
+    totalWithResponse: 10,
+    byConfidence: { high: 8, medium: 1, low: 1 },
+  });
   const d = {
-    answerRate: 0.8,
-    answerRateDelta: 0.05,
+    highConfidenceRate: 0.8,
+    highConfidenceRateDelta: 0.05,
     responsesDelta: 2,
     positiveRateDelta: null,
     hasPriorWindow: true,
@@ -578,7 +606,7 @@ describe("at-a-glance helpers", () => {
     const p = buildAtAGlancePrompt(s, d, 30);
     expect(p).toContain("last 30 days");
     expect(p).toContain("10 total responses");
-    expect(p).toContain("80% answer rate");
+    expect(p).toContain("80% high-confidence share");
   });
 
   it("buildAtAGlancePrompt includes a 'first window' note when prior is empty", () => {
@@ -596,8 +624,8 @@ describe("at-a-glance helpers", () => {
     const f = fallbackAtAGlance(
       stats(),
       {
-        answerRate: null,
-        answerRateDelta: null,
+        highConfidenceRate: null,
+        highConfidenceRateDelta: null,
         responsesDelta: 0,
         positiveRateDelta: null,
         hasPriorWindow: false,

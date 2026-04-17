@@ -87,8 +87,8 @@ const fakeReport: InsightsReport = {
     },
   },
   derived: {
-    answerRate: 0.8,
-    answerRateDelta: 0.05,
+    highConfidenceRate: 0.5,
+    highConfidenceRateDelta: 0,
     responsesDelta: 10,
     positiveRateDelta: 0.2,
     hasPriorWindow: true,
