@@ -195,8 +195,8 @@ describe("CLI actions", () => {
       await run("status");
 
       expect(logSpy).toHaveBeenCalledWith("Status: Logged in");
-      expect(logSpy).toHaveBeenCalledWith("Deployment: My App");
-      expect(logSpy).toHaveBeenCalledWith("Deployment ID: dep_123");
+      expect(logSpy).toHaveBeenCalledWith("MCP: My App");
+      expect(logSpy).toHaveBeenCalledWith("MCP ID: dep_123");
     });
 
     it("shows not-logged-in with empty config", async () => {
@@ -225,8 +225,8 @@ describe("CLI actions", () => {
 
       await run("status");
 
-      expect(logSpy).toHaveBeenCalledWith("Deployment: None selected");
-      expect(logSpy).toHaveBeenCalledWith("Run 'dosu' to open the TUI and select a deployment.");
+      expect(logSpy).toHaveBeenCalledWith("MCP: None selected");
+      expect(logSpy).toHaveBeenCalledWith("Run 'dosu' to open the TUI and select an MCP.");
     });
 
     it("shows OSS mode without requiring a deployment", async () => {
@@ -239,7 +239,7 @@ describe("CLI actions", () => {
       await run("status");
 
       expect(logSpy).toHaveBeenCalledWith("Mode: OSS");
-      expect(logSpy).toHaveBeenCalledWith("Deployment: Public libraries only");
+      expect(logSpy).toHaveBeenCalledWith("MCP: Public libraries only");
     });
   });
 
@@ -276,7 +276,7 @@ describe("CLI actions", () => {
         }
       }
 
-      expect(output).toContain("Use 'dosu mcp add <tool>' to add Dosu MCP to a tool.");
+      expect(output).toContain("Use 'dosu mcp add <agent>' to add Dosu MCP to a tool.");
     });
   });
 
@@ -327,7 +327,7 @@ describe("CLI actions", () => {
       cfg.deployment_id = undefined;
       saveConfig(cfg);
 
-      await expect(run("mcp", "add", "cursor")).rejects.toThrow("no deployment selected");
+      await expect(run("mcp", "add", "cursor")).rejects.toThrow("no MCP selected");
     });
 
     it("supports OSS mode without a selected deployment", async () => {

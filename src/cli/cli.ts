@@ -100,7 +100,7 @@ export function createProgram(): Command {
   // status
   program
     .command("status")
-    .description("Show current authentication and deployment status")
+    .description("Show current authentication and MCP status")
     .action(() => {
       const cfg = loadConfig();
       if (!isAuthenticated(cfg)) {
@@ -116,13 +116,13 @@ export function createProgram(): Command {
       }
       if (cfg.mode === MODE_OSS) {
         console.log("Mode: OSS");
-        console.log("Deployment: Public libraries only");
+        console.log("MCP: Public libraries only");
       } else if (cfg.deployment_id) {
-        console.log(`Deployment: ${cfg.deployment_name}`);
-        console.log(`Deployment ID: ${cfg.deployment_id}`);
+        console.log(`MCP: ${cfg.deployment_name}`);
+        console.log(`MCP ID: ${cfg.deployment_id}`);
       } else {
-        console.log("Deployment: None selected");
-        console.log("Run 'dosu' to open the TUI and select a deployment.");
+        console.log("MCP: None selected");
+        console.log("Run 'dosu' to open the TUI and select an MCP.");
       }
     });
 
@@ -130,7 +130,7 @@ export function createProgram(): Command {
   const mcp = program.command("mcp").description("Manage MCP server integrations");
 
   mcp
-    .command("add <tool>")
+    .command("add <agent>")
     .description("Add Dosu MCP to an AI tool")
     .option("-g, --global", "Add globally (all projects) instead of project-local", false)
     .action((toolId: string, opts: { global: boolean }) => {
@@ -149,9 +149,7 @@ export function createProgram(): Command {
         throw new Error("session expired. Run 'dosu login' to re-authenticate");
       }
       if (cfg.mode !== MODE_OSS && !cfg.deployment_id) {
-        throw new Error(
-          "no deployment selected. Run 'dosu' to open the TUI and select a deployment",
-        );
+        throw new Error("no MCP selected. Run 'dosu' to open the TUI and select an MCP");
       }
 
       if (provider.id() === "manual") {
@@ -189,7 +187,7 @@ export function createProgram(): Command {
         if (p.id() === "manual") scope = "";
         console.log(`  ${p.id().padEnd(10)} ${p.name()} ${scope}`);
       }
-      console.log("\nUse 'dosu mcp add <tool>' to add Dosu MCP to a tool.");
+      console.log("\nUse 'dosu mcp add <agent>' to add Dosu MCP to a tool.");
     });
 
   // Agent-facing commands
@@ -212,7 +210,7 @@ export function createProgram(): Command {
   program
     .command("setup")
     .description("Set up Dosu MCP for your AI tools")
-    .option("--deployment <id>", "Skip to tool configuration for a specific deployment")
+    .option("--deployment <id>", "Skip to tool configuration for a specific MCP")
     .action(async (opts: { deployment?: string }) => {
       const { runSetup } = await import("../setup/flow");
       await runSetup({ deploymentID: opts.deployment });

@@ -370,7 +370,7 @@ describe("stepShowSummary", () => {
 
     stepShowSummary(results);
 
-    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 tool"));
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 agent"));
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Cursor"));
     expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("Try it out"));
   });
@@ -381,7 +381,7 @@ describe("stepShowSummary", () => {
 
     stepShowSummary(results);
 
-    expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("Removed from 1 tool"));
+    expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("Removed from 1 agent"));
     // No "Try it out" when only removals
     expect(p.log.message).not.toHaveBeenCalled();
   });
@@ -393,7 +393,7 @@ describe("stepShowSummary", () => {
     stepShowSummary(results);
 
     expect(p.log.success).toHaveBeenCalledWith(
-      expect.stringContaining("All tools already configured"),
+      expect.stringContaining("All agents already configured"),
     );
     // Skipped still gets the "Try it out" message
     expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("Try it out"));
@@ -409,8 +409,8 @@ describe("stepShowSummary", () => {
 
     stepShowSummary(results);
 
-    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 tool"));
-    expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("Removed from 1 tool"));
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 agent"));
+    expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("Removed from 1 agent"));
   });
 
   it("does not count errored results in install summary", () => {
@@ -424,7 +424,7 @@ describe("stepShowSummary", () => {
     stepShowSummary(results);
 
     // Only 1 successful install
-    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 tool"));
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 agent"));
   });
 
   it("does not show 'Try it out' when only removals and no skips", () => {
@@ -437,7 +437,7 @@ describe("stepShowSummary", () => {
 
     stepShowSummary(results);
 
-    expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("Removed from 2 tool"));
+    expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("Removed from 2 agent"));
     expect(p.log.message).not.toHaveBeenCalled();
   });
 
@@ -452,9 +452,9 @@ describe("stepShowSummary", () => {
     stepShowSummary(results);
 
     // Should show install summary, NOT "all configured"
-    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 tool"));
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 agent"));
     expect(p.log.success).not.toHaveBeenCalledWith(
-      expect.stringContaining("All tools already configured"),
+      expect.stringContaining("All agents already configured"),
     );
     // Should still show "Try it out"
     expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("Try it out"));
@@ -538,7 +538,7 @@ describe("runSetup integration", () => {
 
     // Should warn about no tools
     expect(p.log.warn).toHaveBeenCalledWith(
-      expect.stringContaining("No supported AI tools detected"),
+      expect.stringContaining("No supported AI agents detected"),
     );
 
     // Config should have been saved with deployment info
@@ -572,7 +572,7 @@ describe("runSetup integration", () => {
     expect(cursorConfig.mcpServers.dosu.url).toContain("d1");
 
     // Verify summary was shown
-    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 tool"));
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 agent"));
   });
 
   it("runs OAuth flow and saves tokens to real config", async () => {
@@ -854,7 +854,7 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("No deployments found"));
+    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("No MCPs found"));
   });
 
   it("handles deployment fetch error", async () => {
@@ -996,7 +996,7 @@ describe("runSetup integration", () => {
 
     await runSetup({ deploymentID: "nonexistent" });
 
-    expect(p.log.error).toHaveBeenCalledWith("Deployment nonexistent not found");
+    expect(p.log.error).toHaveBeenCalledWith("MCP nonexistent not found");
   });
 
   it("handles resolve deployment fetch error", async () => {
@@ -1100,7 +1100,7 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(p.log.error).toHaveBeenCalledWith("No deployment available for API key creation");
+    expect(p.log.error).toHaveBeenCalledWith("No MCP available for API key creation");
     const saved = loadConfig();
     expect(saved.deployment_id).toBeUndefined();
     expect(p.outro).not.toHaveBeenCalled();
@@ -1118,7 +1118,7 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(p.log.error).toHaveBeenCalledWith("No deployment available for API key creation");
+    expect(p.log.error).toHaveBeenCalledWith("No MCP available for API key creation");
     const saved = loadConfig();
     expect(saved.deployment_id).toBeUndefined();
     expect(p.outro).not.toHaveBeenCalled();
@@ -1244,7 +1244,7 @@ describe("runSetup integration", () => {
     const cursorConfig = loadJSONConfig(join(tempDir, ".cursor", "mcp.json"));
     expect(cursorConfig.mcpServers?.dosu).toBeDefined();
 
-    expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("Removed from 1 tool"));
+    expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("Removed from 1 agent"));
   });
 
   it("OSS mode stepShowSummary uses OSS-specific prompt", async () => {
