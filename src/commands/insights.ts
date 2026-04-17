@@ -3,10 +3,10 @@
  *
  * One word, no flags. Builds an HTML report from `analytics.getUsageStats`
  * plus a few parallel `/ask` calls for narrative sections, writes it to
- * ~/.config/dosu-cli/insights/report.html, and opens it in the default browser.
+ * ~/.config/dosu-cli/insights/ (timestamped snapshot + latest.html), and opens it in the default browser.
  */
 
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Command } from "commander";
 import pc from "picocolors";
@@ -18,6 +18,8 @@ import { type AskFn, buildInsights, renderHTML } from "../insights";
 import { requireAPIKey, requireLoginConfig } from "./auth";
 
 const ASK_TIMEOUT_MS = 90_000;
+const KEEP_REPORTS = 20;
+const REPORT_FILE_PATTERN = /^report-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z\.html$/;
 
 function requireFullConfig(): Config {
   const cfg = requireLoginConfig();
@@ -68,14 +70,37 @@ export function makeAskFn(cfg: Config): AskFn {
   };
 }
 
-export function reportPath(): string {
-  return join(getConfigDir(), "insights", "report.html");
+export function insightsDir(): string {
+  return join(getConfigDir(), "insights");
+}
+
+export function reportPath(timestamp?: Date): string {
+  const dir = insightsDir();
+  if (!timestamp) return join(dir, "latest.html");
+  const iso = timestamp.toISOString().slice(0, 19).replace(/:/g, "-");
+  return join(dir, `report-${iso}Z.html`);
+}
+
+export function pruneOldReports(dir: string, keepN: number): void {
+  if (!existsSync(dir)) return;
+  const reports = readdirSync(dir)
+    .filter((f) => REPORT_FILE_PATTERN.test(f))
+    .sort()
+    .reverse();
+  for (const f of reports.slice(keepN)) {
+    try {
+      unlinkSync(join(dir, f));
+    } catch (err) {
+      logger.debug("insights", `failed to prune ${f}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
 }
 
 export interface InsightsRunner {
   build: typeof buildInsights;
   render: typeof renderHTML;
   writeFile: (path: string, content: string) => void;
+  prune: (dir: string, keepN: number) => void;
   openInBrowser: (path: string) => Promise<void>;
   ask: AskFn;
 }
@@ -87,8 +112,12 @@ export async function runInsights(cfg: Config, runner: InsightsRunner): Promise<
 
   const report = await runner.build({ client, cfg, ask: runner.ask, windowDays: 30 });
   const html = runner.render(report);
-  const path = reportPath();
-  runner.writeFile(path, html);
+  const timestamp = new Date();
+  const snapshotPath = reportPath(timestamp);
+  const latestPath = reportPath();
+  runner.writeFile(snapshotPath, html);
+  runner.writeFile(latestPath, html);
+  runner.prune(insightsDir(), KEEP_REPORTS);
 
   console.log("");
   console.log(pc.bold(`📊 Dosu Insights — ${report.deploymentName}`));
@@ -96,16 +125,17 @@ export async function runInsights(cfg: Config, runner: InsightsRunner): Promise<
     console.log(pc.green(`   ${report.cheers[0]}`));
   }
   console.log("");
-  console.log(`   Report: ${pc.cyan(`file://${path}`)}`);
+  console.log(`   Snapshot: ${pc.cyan(`file://${snapshotPath}`)}`);
+  console.log(`   Latest:   ${pc.cyan(`file://${latestPath}`)}`);
   console.log(pc.dim("   Opening in your browser..."));
 
   try {
-    await runner.openInBrowser(path);
+    await runner.openInBrowser(snapshotPath);
   } catch {
     console.log(pc.dim("   (couldn't auto-open — copy the link above)"));
   }
 
-  return path;
+  return snapshotPath;
 }
 
 export function defaultRunner(cfg: Config): InsightsRunner {
@@ -117,6 +147,7 @@ export function defaultRunner(cfg: Config): InsightsRunner {
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
       writeFileSync(path, content, { mode: 0o600 });
     },
+    prune: pruneOldReports,
     openInBrowser: async (path) => {
       const open = await import("open");
       await open.default(path);

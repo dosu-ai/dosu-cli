@@ -1,11 +1,5 @@
-/**
- * Render an InsightsReport as a self-contained HTML file.
- *
- * Embeds all CSS inline so the file is portable. No external assets, no JS.
- * Visually inspired by Claude Code's `/insights` report — gradient panels,
- * card-based content, color-coded deltas, and an action-oriented suggestions
- * grid that calls out the exact `dosu` commands to run next.
- */
+// Render an InsightsReport as a self-contained HTML file. All CSS inline, no
+// JS, no external assets so the file is portable and shareable.
 
 import type { InsightsReport, Suggestion, UsageStats } from "./insights";
 
@@ -47,7 +41,7 @@ export function renderHTML(report: InsightsReport): string {
     <footer class="fun-ending">
       <div class="fun-headline">${pickFlair(report)}</div>
       <div class="fun-detail">Run <code>dosu insights</code> any time to see what's new. ✨</div>
-      <div class="fun-path">~/.config/dosu-cli/insights/report.html</div>
+      <div class="fun-path">~/.config/dosu-cli/insights/latest.html</div>
     </footer>
   </main>
 </body>
@@ -81,13 +75,18 @@ function pickHeadlineLabel(count: number): string {
 
 function renderHeadline(r: InsightsReport): string {
   const cur = r.current.totalResponses;
+  if (!r.derived.hasPriorWindow) {
+    return `
+    <section class="headline">
+      <div class="headline-number">${cur.toLocaleString("en-US")}</div>
+      <div class="headline-label">${pickHeadlineLabel(cur)}</div>
+      <div class="headline-delta delta-flat">first ${r.windowDays} days of data</div>
+    </section>`;
+  }
   const delta = r.derived.responsesDelta;
   const direction = delta > 0 ? "up" : delta < 0 ? "down" : "flat";
   const arrow = delta > 0 ? "▲" : delta < 0 ? "▼" : "→";
-  const pct =
-    r.previous.totalResponses > 0
-      ? ` (${delta >= 0 ? "+" : ""}${Math.round((delta / r.previous.totalResponses) * 100)}%)`
-      : "";
+  const pct = ` (${delta >= 0 ? "+" : ""}${Math.round((delta / r.previous.totalResponses) * 100)}%)`;
   const deltaText =
     delta === 0
       ? "no change vs the prior window"
@@ -167,9 +166,20 @@ function renderStatsRow(r: InsightsReport): string {
       ? `${(r.current.reactions.positiveRate * 100).toFixed(0)}%`
       : "—";
   const prDelta = formatPctDelta(r.derived.positiveRateDelta);
-  const respDelta = formatCountDelta(r.derived.responsesDelta);
+  const respDelta = r.derived.hasPriorWindow
+    ? formatCountDelta(r.derived.responsesDelta)
+    : `<div class="stat-delta">&nbsp;</div>`;
   const perDay = r.current.totalResponses > 0 ? r.current.totalResponses / r.windowDays : 0;
-  const perDayLabel = perDay >= 1 ? perDay.toFixed(1) : perDay > 0 ? perDay.toFixed(2) : "—";
+  const perDayLabel = !r.derived.hasPriorWindow
+    ? "—"
+    : perDay >= 1
+      ? perDay.toFixed(1)
+      : perDay > 0
+        ? perDay.toFixed(2)
+        : "—";
+  const perDayHint = r.derived.hasPriorWindow
+    ? `avg over ${r.windowDays} days`
+    : `needs ${r.windowDays}d of history`;
   const reactionTotal = r.current.reactions.totalPositive + r.current.reactions.totalNegative;
   return `
     <section class="stats-row">
@@ -191,7 +201,7 @@ function renderStatsRow(r: InsightsReport): string {
       <div class="stat">
         <div class="stat-value">${perDayLabel}</div>
         <div class="stat-label">Responses / day</div>
-        <div class="stat-delta">avg over ${r.windowDays} days</div>
+        <div class="stat-delta">${perDayHint}</div>
       </div>
       <div class="stat">
         <div class="stat-value">${reactionTotal}</div>
@@ -213,7 +223,7 @@ function renderSignals(r: InsightsReport): string {
       ${
         r.cheers.length > 0
           ? `<div class="signal-card signal-cheers">
-        <h2><span class="signal-icon">✨</span> Worth Celebrating</h2>
+        <h2>Worth Celebrating</h2>
         <ul>${r.cheers.map((c) => `<li>${escapeHTML(c)}</li>`).join("")}</ul>
       </div>`
           : ""
@@ -221,7 +231,7 @@ function renderSignals(r: InsightsReport): string {
       ${
         r.investigate.length > 0
           ? `<div class="signal-card signal-investigate">
-        <h2><span class="signal-icon">🔎</span> Things to Investigate</h2>
+        <h2>Things to Investigate</h2>
         <ul>${r.investigate.map((c) => `<li>${escapeHTML(c)}</li>`).join("")}</ul>
       </div>`
           : ""
@@ -233,7 +243,7 @@ function renderSuggestions(r: InsightsReport): string {
   if (r.suggestions.length === 0) return "";
   return `
     <section>
-      <h2 class="section-heading"><span class="section-icon">🎯</span> Suggested Next Steps</h2>
+      <h2 class="section-heading">Suggested Next Steps</h2>
       <p class="section-intro">Based on this window's activity. The fastest wins first.</p>
       <div class="suggestions">
         ${r.suggestions.map(renderSuggestionCard).join("")}
@@ -261,7 +271,7 @@ function renderConfidenceBar(stats: UsageStats): string {
   const low = (stats.byConfidence.low / total) * 100;
   return `
     <section>
-      <h2 class="section-heading"><span class="section-icon">📊</span> Confidence Breakdown</h2>
+      <h2 class="section-heading">Confidence Breakdown</h2>
       <p class="section-intro">How sure Dosu was about each answer.</p>
       <div class="stacked-bar-card">
         <div class="stacked-bar">
@@ -283,7 +293,7 @@ function renderReactions(stats: UsageStats): string {
   if (total === 0) {
     return `
     <section>
-      <h2 class="section-heading"><span class="section-icon">💬</span> Reactions</h2>
+      <h2 class="section-heading">Reactions</h2>
       <div class="empty-card">No reactions logged yet — encourage your team to thumbs-up the answers that helped.</div>
     </section>`;
   }
@@ -291,7 +301,7 @@ function renderReactions(stats: UsageStats): string {
   const neg = (stats.reactions.totalNegative / total) * 100;
   return `
     <section>
-      <h2 class="section-heading"><span class="section-icon">💬</span> Reactions</h2>
+      <h2 class="section-heading">Reactions</h2>
       <p class="section-intro">${total} reactions across ${stats.reactions.messagesWithReactions} messages.</p>
       <div class="stacked-bar-card">
         <div class="stacked-bar">
@@ -307,6 +317,13 @@ function renderReactions(stats: UsageStats): string {
 }
 
 function renderComparison(r: InsightsReport): string {
+  if (!r.derived.hasPriorWindow) {
+    return `
+    <section>
+      <h2 class="section-heading">Period Comparison</h2>
+      <div class="empty-card">Not enough history yet — check back after ${r.windowDays} more days for a prior-window comparison.</div>
+    </section>`;
+  }
   const rows: Array<{ label: string; cur: string; prev: string; delta: string; tone: string }> = [
     rowResp("Responses", r.current.totalResponses, r.previous.totalResponses, true),
     rowResp("Answers given", r.current.totalWithResponse, r.previous.totalWithResponse, true),
@@ -334,7 +351,7 @@ function renderComparison(r: InsightsReport): string {
   ];
   return `
     <section>
-      <h2 class="section-heading"><span class="section-icon">📋</span> Period Comparison</h2>
+      <h2 class="section-heading">Period Comparison</h2>
       <p class="section-intro">This window vs the prior ${r.windowDays} days.</p>
       <div class="compare-card">
         <table class="compare-table">
@@ -407,6 +424,7 @@ function rowPct(
 }
 
 function renderTrend(r: InsightsReport): string {
+  if (!r.derived.hasPriorWindow) return "";
   const cur = r.current.totalResponses;
   const prev = r.previous.totalResponses;
   const delta = cur - prev;
@@ -509,7 +527,6 @@ h1 { font-size: 32px; font-weight: 700; color: #0f172a; margin-bottom: 4px; lett
   align-items: center;
   gap: 8px;
 }
-.section-icon { font-size: 18px; }
 .section-intro { color: #64748b; font-size: 13px; margin-bottom: 16px; }
 section { margin-top: 36px; }
 
@@ -645,7 +662,6 @@ section { margin-top: 36px; }
   align-items: center;
   gap: 8px;
 }
-.signal-icon { font-size: 16px; }
 .signal-card ul { list-style: none; display: flex; flex-direction: column; gap: 10px; }
 .signal-card li {
   font-size: 14px;

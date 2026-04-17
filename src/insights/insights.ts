@@ -44,6 +44,7 @@ export interface InsightsReport {
     answerRateDelta: number | null;
     responsesDelta: number;
     positiveRateDelta: number | null;
+    hasPriorWindow: boolean;
   };
   atAGlance: string;
   cheers: string[];
@@ -184,6 +185,7 @@ function computeDerived(current: UsageStats, previous: UsageStats): InsightsRepo
     answerRateDelta,
     responsesDelta: current.totalResponses - previous.totalResponses,
     positiveRateDelta,
+    hasPriorWindow: previous.totalResponses > 0,
   };
 }
 
@@ -213,7 +215,7 @@ function computeCheers(stats: UsageStats, derived: InsightsReport["derived"]): s
       `${pct(stats.reactions.positiveRate)} positive feedback — your team is loving the answers.`,
     );
   }
-  if (derived.responsesDelta > 0) {
+  if (derived.hasPriorWindow && derived.responsesDelta > 0) {
     out.push(`Volume is up by ${derived.responsesDelta} responses vs the prior window. 📈`);
   }
   if (out.length === 0) {
@@ -241,9 +243,8 @@ function computeInvestigate(
     );
   }
 
-  // Low confidence growing in absolute terms
   const lowDelta = current.byConfidence.low - previous.byConfidence.low;
-  if (lowDelta >= 5 && current.byConfidence.low > 0) {
+  if (derived.hasPriorWindow && lowDelta >= 5 && current.byConfidence.low > 0) {
     out.push(
       `Low-confidence answers grew by ${lowDelta} (now ${current.byConfidence.low} this window). Each one is a hint that your knowledge base has gaps.`,
     );
@@ -268,8 +269,7 @@ function computeInvestigate(
     );
   }
 
-  // Volume dropped meaningfully
-  if (derived.responsesDelta <= -10 && previous.totalResponses > 0) {
+  if (derived.hasPriorWindow && derived.responsesDelta <= -10) {
     out.push(
       `Volume is down by ${Math.abs(derived.responsesDelta)} responses. If your team stopped asking, find out why.`,
     );
@@ -310,13 +310,15 @@ function computeSuggestions(
     return out;
   }
 
-  // Low-confidence growing
   const lowDelta = current.byConfidence.low - previous.byConfidence.low;
-  if (lowDelta >= 5 || current.byConfidence.low >= Math.max(5, current.totalResponses * 0.3)) {
+  const lowGrewSignificantly = derived.hasPriorWindow && lowDelta >= 5;
+  const lowHighInAbsoluteTerms =
+    current.byConfidence.low >= Math.max(5, current.totalResponses * 0.3);
+  if (lowGrewSignificantly || lowHighInAbsoluteTerms) {
     out.push({
       headline: "Audit recent low-confidence answers",
       detail: `${current.byConfidence.low} answers had low confidence this window${
-        lowDelta > 0 ? ` (+${lowDelta} vs prior)` : ""
+        lowGrewSignificantly ? ` (+${lowDelta} vs prior)` : ""
       }. Open them to see exactly what knowledge is missing.`,
       command: "dosu threads list",
     });
@@ -358,8 +360,7 @@ function computeSuggestions(
     });
   }
 
-  // Volume rising — momentum suggestion
-  if (derived.responsesDelta >= 10) {
+  if (derived.hasPriorWindow && derived.responsesDelta >= 10) {
     out.push({
       headline: "Ride the momentum — add another source",
       detail: `Volume is up by ${derived.responsesDelta} responses vs the prior window. Connect another source while engagement is high.`,
@@ -404,9 +405,12 @@ export function buildAtAGlancePrompt(
   derived: InsightsReport["derived"],
   days: number,
 ): string {
+  const priorNote = derived.hasPriorWindow
+    ? ""
+    : `\n\nNote: this is the deployment's first ${days}-day window — do NOT compare to a prior period. Focus on what's present.`;
   return `You're writing the "At a Glance" panel for a Dosu deployment insights report. Here are the real stats from the last ${days} days:
 
-${statsBlock(stats, derived)}
+${statsBlock(stats, derived)}${priorNote}
 
 Write 2-3 short sentences (no bullets, no headers, no markdown) that synthesize what's interesting or worth celebrating. Be warm, specific, and a little fun. Don't just list the numbers — interpret them. Speak directly to the reader ("you" / "your team").`;
 }
@@ -422,6 +426,9 @@ export function fallbackAtAGlance(
   const ar = derived.answerRate !== null ? pct(derived.answerRate) : "—";
   const reactions = stats.reactions.totalPositive + stats.reactions.totalNegative;
   const pr = reactions > 0 ? `, with ${pct(stats.reactions.positiveRate)} positive feedback` : "";
+  if (!derived.hasPriorWindow) {
+    return `In your first ${days}-day window you logged ${stats.totalResponses} responses with a ${ar} answer rate${pr}. Check back after another ${days} days for trend comparisons.`;
+  }
   const trend =
     derived.responsesDelta > 0
       ? ` Volume is up ${derived.responsesDelta} vs the prior ${days} days — the team is leaning on Dosu more.`

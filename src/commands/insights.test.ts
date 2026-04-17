@@ -36,7 +36,9 @@ import type { InsightsReport } from "../insights";
 import {
   type InsightsRunner,
   insightsCommand,
+  insightsDir,
   makeAskFn,
+  pruneOldReports,
   reportPath,
   runInsights,
 } from "./insights";
@@ -89,6 +91,7 @@ const fakeReport: InsightsReport = {
     answerRateDelta: 0.05,
     responsesDelta: 10,
     positiveRateDelta: 0.2,
+    hasPriorWindow: true,
   },
   atAGlance: "Hi",
   cheers: ["Big cheer!"],
@@ -122,6 +125,7 @@ function makeRunner(over: Partial<InsightsRunner> = {}): InsightsRunner {
     build: vi.fn().mockResolvedValue(fakeReport),
     render: vi.fn().mockReturnValue("<html>hi</html>"),
     writeFile: vi.fn(),
+    prune: vi.fn(),
     openInBrowser: vi.fn().mockResolvedValue(undefined),
     ask: vi.fn().mockResolvedValue(null),
     ...over,
@@ -129,24 +133,39 @@ function makeRunner(over: Partial<InsightsRunner> = {}): InsightsRunner {
 }
 
 describe("runInsights", () => {
-  it("writes the rendered HTML to the report path and auto-opens it", async () => {
+  it("writes both a timestamped snapshot and latest.html, and opens the snapshot", async () => {
     const runner = makeRunner();
     const path = await runInsights(validConfig, runner);
 
-    expect(path).toBe(reportPath());
+    expect(path).toMatch(/report-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z\.html$/);
     expect(runner.build).toHaveBeenCalledWith(
       expect.objectContaining({ cfg: validConfig, windowDays: 30 }),
     );
     expect(runner.render).toHaveBeenCalledWith(fakeReport);
-    expect(runner.writeFile).toHaveBeenCalledWith(reportPath(), "<html>hi</html>");
-    expect(runner.openInBrowser).toHaveBeenCalledWith(reportPath());
+
+    const writeCalls = (runner.writeFile as ReturnType<typeof vi.fn>).mock.calls;
+    expect(writeCalls).toHaveLength(2);
+    const writtenPaths = writeCalls.map((c) => c[0] as string);
+    expect(writtenPaths).toEqual(expect.arrayContaining([path, reportPath()]));
+    for (const call of writeCalls) {
+      expect(call[1]).toBe("<html>hi</html>");
+    }
+    expect(runner.openInBrowser).toHaveBeenCalledWith(path);
   });
 
-  it("prints the deployment name, first cheer, and file URL", async () => {
-    await runInsights(validConfig, makeRunner());
+  it("prunes the insights directory after writing", async () => {
+    const runner = makeRunner();
+    await runInsights(validConfig, runner);
+    expect(runner.prune).toHaveBeenCalledWith(insightsDir(), 20);
+  });
+
+  it("prints the deployment name, first cheer, and both file URLs", async () => {
+    const runner = makeRunner();
+    const snapshotPath = await runInsights(validConfig, runner);
     const out = allOutput();
     expect(out).toContain("Test Deploy");
     expect(out).toContain("Big cheer!");
+    expect(out).toContain(`file://${snapshotPath}`);
     expect(out).toContain(`file://${reportPath()}`);
   });
 
@@ -154,7 +173,7 @@ describe("runInsights", () => {
     const runner = makeRunner({
       openInBrowser: vi.fn().mockRejectedValue(new Error("nope")),
     });
-    await expect(runInsights(validConfig, runner)).resolves.toBe(reportPath());
+    await expect(runInsights(validConfig, runner)).resolves.toMatch(/report-.*\.html$/);
     expect(allOutput()).toContain("couldn't auto-open");
   });
 
@@ -294,7 +313,57 @@ describe("insightsCommand", () => {
 });
 
 describe("reportPath", () => {
-  it("returns a path under the config dir", () => {
-    expect(reportPath()).toMatch(/dosu-cli[\\/]+insights[\\/]+report\.html$/);
+  it("returns the stable latest.html path when called without arguments", () => {
+    expect(reportPath()).toMatch(/dosu-cli[\\/]+insights[\\/]+latest\.html$/);
+  });
+
+  it("returns a timestamped path when given a Date", () => {
+    const d = new Date("2026-04-17T12:30:45.000Z");
+    expect(reportPath(d)).toMatch(/dosu-cli[\\/]+insights[\\/]+report-2026-04-17T12-30-45Z\.html$/);
+  });
+
+  it("renders colons as dashes so the filename is portable on Windows", () => {
+    const d = new Date("2026-04-17T12:30:45.000Z");
+    expect(reportPath(d)).not.toContain(":");
+  });
+});
+
+describe("pruneOldReports", () => {
+  it("keeps the most recent N reports and deletes the rest", async () => {
+    const { mkdtempSync, writeFileSync, readdirSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "dosu-insights-test-"));
+    try {
+      const names = [
+        "report-2026-01-01T00-00-00Z.html",
+        "report-2026-02-01T00-00-00Z.html",
+        "report-2026-03-01T00-00-00Z.html",
+        "report-2026-04-01T00-00-00Z.html",
+        "report-2026-05-01T00-00-00Z.html",
+        // Non-matching files must be left alone
+        "latest.html",
+        "README.md",
+      ];
+      for (const n of names) writeFileSync(join(dir, n), "x");
+
+      pruneOldReports(dir, 2);
+
+      const remaining = readdirSync(dir).sort();
+      expect(remaining).toEqual(
+        [
+          "README.md",
+          "latest.html",
+          "report-2026-04-01T00-00-00Z.html",
+          "report-2026-05-01T00-00-00Z.html",
+        ].sort(),
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("no-ops when the directory does not exist", () => {
+    expect(() => pruneOldReports("/tmp/does-not-exist-dosu-xyz", 5)).not.toThrow();
   });
 });

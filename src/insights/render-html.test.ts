@@ -36,6 +36,7 @@ function makeReport(over: Partial<InsightsReport> = {}): InsightsReport {
       answerRateDelta: 0.05,
       responsesDelta: 20,
       positiveRateDelta: 0.057,
+      hasPriorWindow: true,
     },
     atAGlance: "You're crushing it this month.",
     cheers: ["Big win this week."],
@@ -152,6 +153,7 @@ describe("renderHTML", () => {
           answerRateDelta: -0.2,
           responsesDelta: -15,
           positiveRateDelta: -0.1,
+          hasPriorWindow: true,
         },
       }),
     );
@@ -162,7 +164,13 @@ describe("renderHTML", () => {
   it("shows 'no change' when a delta is essentially zero", () => {
     const html = renderHTML(
       makeReport({
-        derived: { answerRate: 0.8, answerRateDelta: 0, responsesDelta: 0, positiveRateDelta: 0 },
+        derived: {
+          answerRate: 0.8,
+          answerRateDelta: 0,
+          responsesDelta: 0,
+          positiveRateDelta: 0,
+          hasPriorWindow: true,
+        },
       }),
     );
     expect(html).toContain("no change");
@@ -185,6 +193,7 @@ describe("renderHTML", () => {
           answerRateDelta: 0,
           responsesDelta: -30,
           positiveRateDelta: 0,
+          hasPriorWindow: true,
         },
       }),
     );
@@ -197,7 +206,13 @@ describe("renderHTML", () => {
     const html = renderHTML(
       makeReport({
         current: { ...makeReport().current, totalResponses: 80 },
-        derived: { answerRate: 0.8, answerRateDelta: 0, responsesDelta: 0, positiveRateDelta: 0 },
+        derived: {
+          answerRate: 0.8,
+          answerRateDelta: 0,
+          responsesDelta: 0,
+          positiveRateDelta: 0,
+          hasPriorWindow: true,
+        },
       }),
     );
     expect(html).toContain("→");
@@ -221,7 +236,13 @@ describe("renderHTML", () => {
     const html = renderHTML(
       makeReport({
         current: { ...makeReport().current, totalResponses: 30 },
-        derived: { answerRate: 0.97, answerRateDelta: 0, responsesDelta: 0, positiveRateDelta: 0 },
+        derived: {
+          answerRate: 0.97,
+          answerRateDelta: 0,
+          responsesDelta: 0,
+          positiveRateDelta: 0,
+          hasPriorWindow: true,
+        },
       }),
     );
     expect(html).toContain("Almost everything got answered");
@@ -240,7 +261,13 @@ describe("renderHTML", () => {
     const html = renderHTML(
       makeReport({
         current: { ...makeReport().current, totalResponses: 30 },
-        derived: { answerRate: 0.5, answerRateDelta: 0, responsesDelta: 0, positiveRateDelta: 0 },
+        derived: {
+          answerRate: 0.5,
+          answerRateDelta: 0,
+          responsesDelta: 0,
+          positiveRateDelta: 0,
+          hasPriorWindow: true,
+        },
       }),
     );
     expect(html).toContain("Keep the questions coming");
@@ -291,12 +318,14 @@ describe("renderHTML", () => {
     expect(html).toContain("Snapshot");
   });
 
-  it("section headings include emoji icons", () => {
+  it("section headings render as plain text without decorative emoji", () => {
     const html = renderHTML(makeReport());
-    expect(html).toContain('<span class="section-icon">📊</span> Confidence Breakdown');
-    expect(html).toContain('<span class="section-icon">🎯</span> Suggested Next Steps');
-    expect(html).toContain('<span class="section-icon">📋</span> Period Comparison');
-    expect(html).toContain('<span class="section-icon">💬</span> Reactions');
+    expect(html).toContain('<h2 class="section-heading">Confidence Breakdown</h2>');
+    expect(html).toContain('<h2 class="section-heading">Suggested Next Steps</h2>');
+    expect(html).toContain('<h2 class="section-heading">Period Comparison</h2>');
+    expect(html).toContain('<h2 class="section-heading">Reactions</h2>');
+    expect(html).not.toContain("section-icon");
+    expect(html).not.toContain("signal-icon");
   });
 
   it("varies the headline label by count", () => {
@@ -310,10 +339,10 @@ describe("renderHTML", () => {
     ).toContain("questions tackled");
   });
 
-  it("shows the report file path in the fun-ending footer", () => {
+  it("shows the stable latest.html path in the fun-ending footer", () => {
     const html = renderHTML(makeReport());
     expect(html).toContain('class="fun-path"');
-    expect(html).toContain("~/.config/dosu-cli/insights/report.html");
+    expect(html).toContain("~/.config/dosu-cli/insights/latest.html");
   });
 
   it("provides hover transitions on suggestion + chart cards", () => {
@@ -344,7 +373,7 @@ describe("renderHTML", () => {
     expect(html).toContain("(+25%)");
   });
 
-  it("omits percent change in headline when prior window is empty", () => {
+  it("replaces headline delta with 'first N days of data' when prior window is empty", () => {
     const html = renderHTML(
       makeReport({
         previous: {
@@ -356,11 +385,65 @@ describe("renderHTML", () => {
           answerRateDelta: null,
           responsesDelta: 100,
           positiveRateDelta: null,
+          hasPriorWindow: false,
         },
       }),
     );
-    // No prior baseline → no percentage
-    expect(html).toMatch(/\+100 vs the prior 30 days/);
+    expect(html).toContain("first 30 days of data");
+    expect(html).not.toMatch(/vs the prior 30 days/);
+    // Delta indicators should be suppressed everywhere (headline + stats row)
+    expect(html).not.toMatch(/▲ \+?100/);
+  });
+
+  it("omits the trend section entirely when prior window is empty", () => {
+    const html = renderHTML(
+      makeReport({
+        previous: { ...makeReport().previous, totalResponses: 0 },
+        derived: {
+          answerRate: 0.8,
+          answerRateDelta: null,
+          responsesDelta: 100,
+          positiveRateDelta: null,
+          hasPriorWindow: false,
+        },
+      }),
+    );
+    expect(html).not.toMatch(/<div class="trend trend-/);
+  });
+
+  it("replaces the comparison table with a 'not enough history' card when prior is empty", () => {
+    const html = renderHTML(
+      makeReport({
+        previous: { ...makeReport().previous, totalResponses: 0 },
+        derived: {
+          answerRate: 0.8,
+          answerRateDelta: null,
+          responsesDelta: 100,
+          positiveRateDelta: null,
+          hasPriorWindow: false,
+        },
+      }),
+    );
+    expect(html).toContain("Period Comparison");
+    expect(html).toContain("Not enough history yet");
+    expect(html).not.toMatch(/<table class="compare-table"/);
+  });
+
+  it("shows em-dash for responses/day and a hint when prior is empty", () => {
+    const html = renderHTML(
+      makeReport({
+        previous: { ...makeReport().previous, totalResponses: 0 },
+        derived: {
+          answerRate: 0.8,
+          answerRateDelta: null,
+          responsesDelta: 100,
+          positiveRateDelta: null,
+          hasPriorWindow: false,
+        },
+      }),
+    );
+    expect(html).toContain("needs 30d of history");
+    expect(html).not.toContain("3.3");
   });
 
   it("renders the scorecard with a letter grade and three mini bars", () => {
@@ -407,6 +490,7 @@ describe("renderHTML", () => {
           answerRateDelta: -0.4,
           responsesDelta: 0,
           positiveRateDelta: -0.5,
+          hasPriorWindow: true,
         },
       }),
     );

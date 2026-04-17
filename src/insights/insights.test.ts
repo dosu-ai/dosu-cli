@@ -230,9 +230,17 @@ describe("cheers", () => {
   it("celebrates rising volume", async () => {
     const r = await build({
       current: stats({ totalResponses: 80, totalWithResponse: 60 }),
-      combined: stats({ totalResponses: 80, totalWithResponse: 60 }),
+      combined: stats({ totalResponses: 130, totalWithResponse: 100 }),
     });
     expect(r.cheers.some((c) => /Volume is up/.test(c))).toBe(true);
+  });
+
+  it("does not celebrate 'rising volume' when prior window is empty", async () => {
+    const r = await build({
+      current: stats({ totalResponses: 80, totalWithResponse: 60 }),
+      combined: stats({ totalResponses: 80, totalWithResponse: 60 }),
+    });
+    expect(r.cheers.some((c) => /Volume is up/.test(c))).toBe(false);
   });
 
   it("falls back to a generic cheer when no rule fires", async () => {
@@ -355,6 +363,30 @@ describe("investigate", () => {
     });
     expect(r.investigate.some((c) => /went without an answer/.test(c))).toBe(true);
   });
+
+  it("does not flag 'low-confidence growing' when prior window is empty", async () => {
+    const r = await build({
+      current: stats({
+        totalResponses: 20,
+        totalWithResponse: 15,
+        byConfidence: { high: 5, medium: 5, low: 10 },
+      }),
+      combined: stats({
+        totalResponses: 20,
+        totalWithResponse: 15,
+        byConfidence: { high: 5, medium: 5, low: 10 },
+      }),
+    });
+    expect(r.investigate.some((c) => /Low-confidence answers grew/.test(c))).toBe(false);
+  });
+
+  it("does not flag 'volume is down' when prior window is empty", async () => {
+    const r = await build({
+      current: stats({ totalResponses: 5, totalWithResponse: 5 }),
+      combined: stats({ totalResponses: 5, totalWithResponse: 5 }),
+    });
+    expect(r.investigate.some((c) => /Volume is down/.test(c))).toBe(false);
+  });
 });
 
 describe("suggestions", () => {
@@ -472,6 +504,32 @@ describe("suggestions", () => {
     expect(r.suggestions.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("does not emit 'Ride the momentum' when prior window is empty", async () => {
+    const r = await build({
+      current: stats({ totalResponses: 40, totalWithResponse: 35 }),
+      combined: stats({ totalResponses: 40, totalWithResponse: 35 }),
+    });
+    expect(r.suggestions.some((s) => /momentum/.test(s.headline))).toBe(false);
+  });
+
+  it("audit-low-confidence fires on absolute threshold without '(+X vs prior)' suffix", async () => {
+    const r = await build({
+      current: stats({
+        totalResponses: 20,
+        totalWithResponse: 15,
+        byConfidence: { high: 5, medium: 5, low: 10 },
+      }),
+      combined: stats({
+        totalResponses: 20,
+        totalWithResponse: 15,
+        byConfidence: { high: 5, medium: 5, low: 10 },
+      }),
+    });
+    const audit = r.suggestions.find((s) => /Audit/.test(s.headline));
+    expect(audit).toBeDefined();
+    expect(audit?.detail).not.toMatch(/vs prior/);
+  });
+
   it("caps suggestions at 4 to keep the report scannable", async () => {
     const r = await build({
       // Trigger every rule simultaneously: low-conf grew, positive rate dropped,
@@ -507,13 +565,30 @@ describe("suggestions", () => {
 
 describe("at-a-glance helpers", () => {
   const s = stats({ totalResponses: 10, totalWithResponse: 8 });
-  const d = { answerRate: 0.8, answerRateDelta: 0.05, responsesDelta: 2, positiveRateDelta: null };
+  const d = {
+    answerRate: 0.8,
+    answerRateDelta: 0.05,
+    responsesDelta: 2,
+    positiveRateDelta: null,
+    hasPriorWindow: true,
+  };
 
   it("buildAtAGlancePrompt embeds the stats", () => {
     const p = buildAtAGlancePrompt(s, d, 30);
     expect(p).toContain("last 30 days");
     expect(p).toContain("10 total responses");
     expect(p).toContain("80% answer rate");
+  });
+
+  it("buildAtAGlancePrompt includes a 'first window' note when prior is empty", () => {
+    const p = buildAtAGlancePrompt(s, { ...d, hasPriorWindow: false }, 30);
+    expect(p).toMatch(/first 30-day window/);
+    expect(p).toMatch(/do NOT compare to a prior period/);
+  });
+
+  it("buildAtAGlancePrompt omits the 'first window' note when prior exists", () => {
+    const p = buildAtAGlancePrompt(s, d, 30);
+    expect(p).not.toMatch(/first 30-day window/);
   });
 
   it("fallbackAtAGlance handles empty deployments warmly", () => {
@@ -524,11 +599,18 @@ describe("at-a-glance helpers", () => {
         answerRateDelta: null,
         responsesDelta: 0,
         positiveRateDelta: null,
+        hasPriorWindow: false,
       },
       30,
     );
     expect(f).toContain("brand new");
     expect(f).toContain("30 days");
+  });
+
+  it("fallbackAtAGlance uses 'first window' copy when prior is empty", () => {
+    const f = fallbackAtAGlance(s, { ...d, hasPriorWindow: false, responsesDelta: 10 }, 30);
+    expect(f).toContain("first 30-day window");
+    expect(f).not.toContain("Volume is up");
   });
 
   it("fallbackAtAGlance mentions volume rising", () => {
