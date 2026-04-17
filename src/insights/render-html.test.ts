@@ -110,7 +110,9 @@ describe("renderHTML", () => {
     const html = renderHTML(makeReport());
     expect(html).toContain("Audit recent low-confidence answers");
     expect(html).toContain("10 answers had low confidence");
-    expect(html).toContain("$ dosu threads list");
+    expect(html).toContain("dosu threads list");
+    // CTA uses a terminal-prompt accent
+    expect(html).toContain('class="cta-prompt"');
   });
 
   it("omits the CTA block for suggestions with no command", () => {
@@ -263,14 +265,77 @@ describe("renderHTML", () => {
 
   it("does not include a dark-mode media query (always-light)", () => {
     const html = renderHTML(makeReport());
-    expect(html).not.toContain("prefers-color-scheme");
+    expect(html).not.toContain("prefers-color-scheme: dark");
+  });
+
+  it("renders a terminal-prompt brand line with a blinking cursor", () => {
+    const html = renderHTML(makeReport());
+    expect(html).toContain('class="prompt"');
+    expect(html).toContain("dosu insights");
+    expect(html).toContain('class="cursor"');
+    // The blink keyframes power the cursor animation
+    expect(html).toContain("@keyframes blink");
+  });
+
+  it("includes a time-of-day greeting in the subtitle", () => {
+    // 12:00 UTC → 04:00 PT (depending on test runner TZ this can land in
+    // various hour buckets, but the structure is constant).
+    const html = renderHTML(makeReport());
+    expect(html).toMatch(
+      /(Late )?(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday) (morning|afternoon|evening|night)/,
+    );
+  });
+
+  it("falls back to 'Snapshot' when generatedAt is unparseable", () => {
+    const html = renderHTML(makeReport({ generatedAt: "not-a-date" }));
+    expect(html).toContain("Snapshot");
+  });
+
+  it("section headings include emoji icons", () => {
+    const html = renderHTML(makeReport());
+    expect(html).toContain('<span class="section-icon">📊</span> Confidence Breakdown');
+    expect(html).toContain('<span class="section-icon">🎯</span> Suggested Next Steps');
+    expect(html).toContain('<span class="section-icon">📋</span> Period Comparison');
+    expect(html).toContain('<span class="section-icon">💬</span> Reactions');
+  });
+
+  it("varies the headline label by count", () => {
+    // count=100 → 100 % 4 = 0 → "responses shipped"
+    expect(
+      renderHTML(makeReport({ current: { ...makeReport().current, totalResponses: 100 } })),
+    ).toContain("responses shipped");
+    // count=101 → 1 → "questions tackled"
+    expect(
+      renderHTML(makeReport({ current: { ...makeReport().current, totalResponses: 101 } })),
+    ).toContain("questions tackled");
+  });
+
+  it("shows the report file path in the fun-ending footer", () => {
+    const html = renderHTML(makeReport());
+    expect(html).toContain('class="fun-path"');
+    expect(html).toContain("~/.config/dosu-cli/insights/report.html");
+  });
+
+  it("provides hover transitions on suggestion + chart cards", () => {
+    const html = renderHTML(makeReport());
+    expect(html).toContain(".suggestion:hover");
+    expect(html).toContain(".stacked-bar-card:hover");
+    expect(html).toContain(".compare-card:hover");
+  });
+
+  it("respects prefers-reduced-motion by disabling animations", () => {
+    const html = renderHTML(makeReport());
+    expect(html).toContain("prefers-reduced-motion");
   });
 
   it("renders the headline metric with the response count", () => {
     const html = renderHTML(makeReport());
     expect(html).toContain('class="headline"');
     expect(html).toContain('class="headline-number">100</div>');
-    expect(html).toContain("responses answered");
+    // The label varies by count (responses shipped / questions tackled / etc.)
+    expect(html).toMatch(
+      /responses (shipped|answered)|questions tackled|answers delivered|moments of help/,
+    );
   });
 
   it("includes a percent change in the headline when prior > 0", () => {
@@ -373,7 +438,7 @@ describe("renderHTML", () => {
 
   it("renders the reactions stacked bar when reactions exist", () => {
     const html = renderHTML(makeReport());
-    expect(html).toMatch(/<h2[^>]*>Reactions<\/h2>/);
+    expect(html).toMatch(/<h2[^>]*>[\s\S]*?Reactions<\/h2>/);
     expect(html).toContain("positive");
     expect(html).toContain("negative");
   });

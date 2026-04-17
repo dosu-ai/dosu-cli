@@ -13,6 +13,8 @@ export function renderHTML(report: InsightsReport): string {
   const safeName = escapeHTML(report.deploymentName);
   const generated = formatDate(report.generatedAt);
 
+  const greeting = pickGreeting(report.generatedAt);
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -24,9 +26,11 @@ export function renderHTML(report: InsightsReport): string {
 <body>
   <main class="container">
     <header class="hero">
-      <div class="brand">DOSU INSIGHTS</div>
+      <div class="brand">
+        <span class="prompt">❯</span> dosu insights<span class="cursor">▌</span>
+      </div>
       <h1>${safeName}</h1>
-      <p class="subtitle">Last ${report.windowDays} days · generated ${generated}</p>
+      <p class="subtitle">${greeting} · last ${report.windowDays} days · generated ${generated}</p>
     </header>
 
     ${renderHeadline(report)}
@@ -43,10 +47,36 @@ export function renderHTML(report: InsightsReport): string {
     <footer class="fun-ending">
       <div class="fun-headline">${pickFlair(report)}</div>
       <div class="fun-detail">Run <code>dosu insights</code> any time to see what's new. ✨</div>
+      <div class="fun-path">~/.config/dosu-cli/insights/report.html</div>
     </footer>
   </main>
 </body>
 </html>`;
+}
+
+function pickGreeting(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "Snapshot";
+  const hour = d.getHours();
+  const day = d.toLocaleDateString("en-US", { weekday: "long" });
+  if (hour < 5) return `Late ${day} night`;
+  if (hour < 12) return `${day} morning`;
+  if (hour < 17) return `${day} afternoon`;
+  if (hour < 21) return `${day} evening`;
+  return `${day} night`;
+}
+
+function pickHeadlineLabel(count: number): string {
+  if (count === 0) return "responses to come";
+  if (count === 1) return "response shipped";
+  // Deterministic but varied — picks based on count so the same window always renders the same word
+  const variants = [
+    "responses shipped",
+    "questions tackled",
+    "answers delivered",
+    "moments of help",
+  ];
+  return variants[count % variants.length];
 }
 
 function renderHeadline(r: InsightsReport): string {
@@ -65,7 +95,7 @@ function renderHeadline(r: InsightsReport): string {
   return `
     <section class="headline">
       <div class="headline-number">${cur.toLocaleString("en-US")}</div>
-      <div class="headline-label">responses answered</div>
+      <div class="headline-label">${pickHeadlineLabel(cur)}</div>
       <div class="headline-delta delta-${direction}">${deltaText}</div>
     </section>`;
 }
@@ -203,7 +233,7 @@ function renderSuggestions(r: InsightsReport): string {
   if (r.suggestions.length === 0) return "";
   return `
     <section>
-      <h2 class="section-heading">Suggested Next Steps</h2>
+      <h2 class="section-heading"><span class="section-icon">🎯</span> Suggested Next Steps</h2>
       <p class="section-intro">Based on this window's activity. The fastest wins first.</p>
       <div class="suggestions">
         ${r.suggestions.map(renderSuggestionCard).join("")}
@@ -213,7 +243,7 @@ function renderSuggestions(r: InsightsReport): string {
 
 function renderSuggestionCard(s: Suggestion): string {
   const cmd = s.command
-    ? `<div class="suggestion-cta"><code>$ ${escapeHTML(s.command)}</code></div>`
+    ? `<div class="suggestion-cta"><code><span class="cta-prompt">❯</span> ${escapeHTML(s.command)}</code></div>`
     : "";
   return `
     <article class="suggestion">
@@ -231,7 +261,7 @@ function renderConfidenceBar(stats: UsageStats): string {
   const low = (stats.byConfidence.low / total) * 100;
   return `
     <section>
-      <h2 class="section-heading">Confidence Breakdown</h2>
+      <h2 class="section-heading"><span class="section-icon">📊</span> Confidence Breakdown</h2>
       <p class="section-intro">How sure Dosu was about each answer.</p>
       <div class="stacked-bar-card">
         <div class="stacked-bar">
@@ -253,7 +283,7 @@ function renderReactions(stats: UsageStats): string {
   if (total === 0) {
     return `
     <section>
-      <h2 class="section-heading">Reactions</h2>
+      <h2 class="section-heading"><span class="section-icon">💬</span> Reactions</h2>
       <div class="empty-card">No reactions logged yet — encourage your team to thumbs-up the answers that helped.</div>
     </section>`;
   }
@@ -261,7 +291,7 @@ function renderReactions(stats: UsageStats): string {
   const neg = (stats.reactions.totalNegative / total) * 100;
   return `
     <section>
-      <h2 class="section-heading">Reactions</h2>
+      <h2 class="section-heading"><span class="section-icon">💬</span> Reactions</h2>
       <p class="section-intro">${total} reactions across ${stats.reactions.messagesWithReactions} messages.</p>
       <div class="stacked-bar-card">
         <div class="stacked-bar">
@@ -304,7 +334,7 @@ function renderComparison(r: InsightsReport): string {
   ];
   return `
     <section>
-      <h2 class="section-heading">Period Comparison</h2>
+      <h2 class="section-heading"><span class="section-icon">📋</span> Period Comparison</h2>
       <p class="section-intro">This window vs the prior ${r.windowDays} days.</p>
       <div class="compare-card">
         <table class="compare-table">
@@ -438,7 +468,9 @@ const CSS = `
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
-  background: #f8fafc;
+  background:
+    radial-gradient(ellipse 900px 360px at 50% -120px, rgba(251, 191, 36, 0.18), transparent 70%),
+    #f8fafc;
   color: #334155;
   line-height: 1.6;
   padding: 56px 24px 80px;
@@ -449,15 +481,35 @@ body {
 /* Hero */
 .hero { margin-bottom: 28px; }
 .brand {
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  color: #b45309;
-  font-weight: 700;
-  margin-bottom: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  color: #92400e;
+  font-weight: 600;
+  margin-bottom: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
+.brand .prompt { color: #f59e0b; font-weight: 700; }
+.brand .cursor {
+  display: inline-block;
+  margin-left: 2px;
+  color: #f59e0b;
+  animation: blink 1.1s steps(2) infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
 h1 { font-size: 32px; font-weight: 700; color: #0f172a; margin-bottom: 4px; letter-spacing: -0.01em; }
 .subtitle { color: #64748b; font-size: 14px; }
-.section-heading { font-size: 18px; font-weight: 600; color: #0f172a; margin-bottom: 4px; }
+.section-heading {
+  font-size: 18px;
+  font-weight: 600;
+  color: #0f172a;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.section-icon { font-size: 18px; }
 .section-intro { color: #64748b; font-size: 13px; margin-bottom: 16px; }
 section { margin-top: 36px; }
 
@@ -628,6 +680,12 @@ section { margin-top: 36px; }
   flex-direction: column;
   gap: 10px;
   box-shadow: 0 1px 3px rgba(15,23,42,0.04);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+.suggestion:hover {
+  transform: translateY(-2px);
+  border-color: #fcd34d;
+  box-shadow: 0 6px 18px rgba(245, 158, 11, 0.12);
 }
 .suggestion h3 { font-size: 15px; font-weight: 600; color: #0f172a; }
 .suggestion p { font-size: 13px; color: #475569; line-height: 1.55; flex: 1; }
@@ -641,6 +699,7 @@ section { margin-top: 36px; }
   padding: 6px 12px;
   border-radius: 6px;
 }
+.cta-prompt { color: #fbbf24; font-weight: 700; margin-right: 4px; }
 
 /* Stacked bars (confidence + reactions) */
 .stacked-bar-card {
@@ -649,6 +708,12 @@ section { margin-top: 36px; }
   border-radius: 12px;
   padding: 22px;
   box-shadow: 0 1px 3px rgba(15,23,42,0.04);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+.stacked-bar-card:hover {
+  transform: translateY(-2px);
+  border-color: #fcd34d;
+  box-shadow: 0 6px 18px rgba(245, 158, 11, 0.12);
 }
 .stacked-bar {
   display: flex;
@@ -693,6 +758,12 @@ section { margin-top: 36px; }
   padding: 8px 4px;
   box-shadow: 0 1px 3px rgba(15,23,42,0.04);
   overflow-x: auto;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+.compare-card:hover {
+  transform: translateY(-2px);
+  border-color: #fcd34d;
+  box-shadow: 0 6px 18px rgba(245, 158, 11, 0.12);
 }
 .compare-table {
   width: 100%;
@@ -753,6 +824,34 @@ section { margin-top: 36px; }
   border-radius: 4px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 13px;
+}
+.fun-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: #b45309;
+  margin-top: 14px;
+  opacity: 0.7;
+}
+.headline {
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+.headline:hover {
+  border-color: #fcd34d;
+  box-shadow: 0 6px 18px rgba(245, 158, 11, 0.12);
+}
+.scorecard {
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+.scorecard:hover {
+  border-color: #fcd34d;
+  box-shadow: 0 6px 18px rgba(245, 158, 11, 0.12);
+}
+@media (prefers-reduced-motion: reduce) {
+  .brand .cursor { animation: none; }
+  .suggestion, .stacked-bar-card, .compare-card, .headline, .scorecard {
+    transition: none;
+  }
+  .suggestion:hover, .stacked-bar-card:hover, .compare-card:hover { transform: none; }
 }
 
 /* Responsive */
