@@ -32,6 +32,8 @@ vi.mock("../config/constants", () => ({
   getSupabaseAnonKey: () => "",
 }));
 
+vi.mock("open", () => ({ default: vi.fn().mockResolvedValue(undefined) }));
+
 import type { InsightsReport } from "../insights";
 import {
   type InsightsRunner,
@@ -277,9 +279,6 @@ describe("executeInsights", () => {
       },
     });
 
-    // Stub the dynamic open import so executeInsights doesn't try to launch a real browser.
-    vi.doMock("open", () => ({ default: vi.fn().mockResolvedValue(undefined) }));
-
     const { executeInsights } = await import("./insights");
     await expect(executeInsights(validConfig)).resolves.toBeUndefined();
   });
@@ -341,7 +340,6 @@ describe("insightsCommand", () => {
         positiveRate: 0,
       },
     });
-    vi.doMock("open", () => ({ default: vi.fn().mockResolvedValue(undefined) }));
 
     await expect(runCmd()).resolves.toBeUndefined();
     expect(exitSpy).not.toHaveBeenCalled();
