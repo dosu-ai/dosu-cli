@@ -84,7 +84,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   const detected = stepDetectTools();
   if (detected.length === 0) {
     p.log.warn(
-      `No supported AI tools detected on your system.\nRun ${info("dosu mcp add <tool>")} to manually configure a tool.`,
+      `No supported AI agents detected on your system.\nRun ${info("dosu mcp add <agent>")} to manually configure an agent.`,
     );
     return;
   }
@@ -126,7 +126,7 @@ async function stepAuthenticate(opts: SetupOptions): Promise<Config | null> {
             message: `Currently configured for ${modeLabel}. What would you like to do?`,
             options: [
               { label: "Reconfigure (opens browser)", value: "reconfigure" },
-              { label: "Keep current setup and update tools", value: "keep" },
+              { label: "Keep current setup and update agents", value: "keep" },
             ],
           });
           if (p.isCancel(action)) return null;
@@ -238,16 +238,16 @@ async function stepResolveDeployment(apiClient: Client, id: string): Promise<Dep
     const d = deployments.find((d) => d.deployment_id === id);
     if (!d) {
       logger.warn("setup", `Deployment ${id} not found`);
-      p.log.error(`Deployment ${id} not found`);
+      p.log.error(`MCP ${id} not found`);
       return null;
     }
     logger.info("setup", `Resolved deployment: ${d.name}`);
-    p.log.success(`Using deployment\n${dim(d.name)}`);
+    p.log.success(`Using MCP\n${dim(d.name)}`);
     return d;
   } catch (err: unknown) {
     /* v8 ignore next -- err is always Error in practice */
     p.log.error(
-      `Failed to resolve deployment: ${err instanceof Error ? err.message : String(err)}`,
+      `Failed to resolve MCP: ${err instanceof Error ? err.message : String(err)}`,
     );
     return null;
   }
@@ -259,12 +259,12 @@ async function stepSelectDeployment(apiClient: Client, org: Org): Promise<Deploy
     const deployments = allDeployments.filter((d) => d.org_id === org.org_id);
 
     if (deployments.length === 0) {
-      p.log.error(`No deployments found for ${org.name}`);
+      p.log.error(`No MCPs found for ${org.name}`);
       return null;
     }
     if (deployments.length === 1) {
       logger.info("setup", `Selected deployment: ${deployments[0].name} (auto, only one)`);
-      p.log.success(`Using deployment\n${dim(deployments[0].name)}`);
+      p.log.success(`Using MCP\n${dim(deployments[0].name)}`);
       return deployments[0];
     }
     const selected = await p.select({
@@ -277,14 +277,14 @@ async function stepSelectDeployment(apiClient: Client, org: Org): Promise<Deploy
     return d;
   } catch (err: unknown) {
     /* v8 ignore next -- err is always Error in practice */
-    p.log.error(`Deployment selection failed: ${err instanceof Error ? err.message : String(err)}`);
+    p.log.error(`MCP selection failed: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
 }
 
 async function stepMintAPIKey(apiClient: Client, cfg: Config): Promise<string | null> {
   if (!cfg.deployment_id) {
-    p.log.error("No deployment available for API key creation");
+    p.log.error("No MCP available for API key creation");
     return null;
   }
 
@@ -338,7 +338,7 @@ async function stepSelectTools(detected: SetupProvider[]): Promise<ToolSelection
   const preselected = detected.filter((p) => configuredMap.get(p.id())).map((p) => p.id());
 
   const selected = await p.multiselect({
-    message: "Select tools to configure or update",
+    message: "Select agents to configure or update",
     options,
     initialValues: preselected,
   });
@@ -412,18 +412,18 @@ export function stepShowSummary(results: ConfigResult[], mode?: SetupMode): void
     const lines = installed
       .map((r) => `+ ${r.provider.name()}\n  ${dim(r.provider.globalConfigPath())}`)
       .join("\n");
-    p.log.success(`Configured ${installed.length} tool(s):\n${lines}`);
+    p.log.success(`Configured ${installed.length} agent(s):\n${lines}`);
   }
 
   if (removed.length > 0) {
     const lines = removed
       .map((r) => `- ${r.provider.name()}\n  ${dim(r.provider.globalConfigPath())}`)
       .join("\n");
-    p.log.info(`Removed from ${removed.length} tool(s):\n${lines}`);
+    p.log.info(`Removed from ${removed.length} agent(s):\n${lines}`);
   }
 
   if (installed.length === 0 && removed.length === 0 && skipped.length > 0) {
-    p.log.success("All tools already configured. No changes needed.");
+    p.log.success("All agents already configured. No changes needed.");
   }
 
   if (installed.length > 0 || skipped.length > 0) {
