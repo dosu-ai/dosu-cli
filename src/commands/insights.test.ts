@@ -64,7 +64,6 @@ const fakeReport: InsightsReport = {
   deploymentName: "Test Deploy",
   current: {
     totalResponses: 50,
-    totalWithResponse: 40,
     byConfidence: { high: 25, medium: 15, low: 10 },
     reactions: {
       totalPositive: 8,
@@ -76,7 +75,6 @@ const fakeReport: InsightsReport = {
   },
   previous: {
     totalResponses: 40,
-    totalWithResponse: 30,
     byConfidence: { high: 20, medium: 10, low: 10 },
     reactions: {
       totalPositive: 6,
@@ -255,7 +253,6 @@ describe("executeInsights", () => {
       });
     mockQuery.mockResolvedValue({
       totalResponses: 1,
-      totalWithResponse: 1,
       byConfidence: { high: 1, medium: 0, low: 0 },
       reactions: {
         totalPositive: 0,
@@ -321,7 +318,6 @@ describe("insightsCommand", () => {
       });
     mockQuery.mockResolvedValue({
       totalResponses: 1,
-      totalWithResponse: 1,
       byConfidence: { high: 1, medium: 0, low: 0 },
       reactions: {
         totalPositive: 0,

@@ -16,7 +16,6 @@ import type { Config } from "../config/config";
 
 export interface UsageStats {
   totalResponses: number;
-  totalWithResponse: number;
   byConfidence: { high: number; medium: number; low: number };
   reactions: {
     totalPositive: number;
@@ -64,7 +63,6 @@ export interface BuildInsightsArgs {
 
 const EMPTY_STATS: UsageStats = {
   totalResponses: 0,
-  totalWithResponse: 0,
   byConfidence: { high: 0, medium: 0, low: 0 },
   reactions: {
     totalPositive: 0,
@@ -122,7 +120,6 @@ function normalizeStats(raw: UsageStats | null | undefined): UsageStats {
   if (!raw) return { ...EMPTY_STATS };
   return {
     totalResponses: raw.totalResponses ?? 0,
-    totalWithResponse: raw.totalWithResponse ?? 0,
     byConfidence: {
       high: raw.byConfidence?.high ?? 0,
       medium: raw.byConfidence?.medium ?? 0,
@@ -140,7 +137,6 @@ function normalizeStats(raw: UsageStats | null | undefined): UsageStats {
 
 function subtractStats(combined: UsageStats, current: UsageStats): UsageStats {
   const totalResponses = Math.max(0, combined.totalResponses - current.totalResponses);
-  const totalWithResponse = Math.max(0, combined.totalWithResponse - current.totalWithResponse);
   const positive = Math.max(0, combined.reactions.totalPositive - current.reactions.totalPositive);
   const negative = Math.max(0, combined.reactions.totalNegative - current.reactions.totalNegative);
   const reactionMsgs = Math.max(
@@ -150,7 +146,6 @@ function subtractStats(combined: UsageStats, current: UsageStats): UsageStats {
   const totalReactions = positive + negative;
   return {
     totalResponses,
-    totalWithResponse,
     byConfidence: {
       high: Math.max(0, combined.byConfidence.high - current.byConfidence.high),
       medium: Math.max(0, combined.byConfidence.medium - current.byConfidence.medium),

@@ -9,7 +9,6 @@ function makeReport(over: Partial<InsightsReport> = {}): InsightsReport {
     deploymentName: "Acme Docs",
     current: {
       totalResponses: 100,
-      totalWithResponse: 80,
       byConfidence: { high: 50, medium: 20, low: 10 },
       reactions: {
         totalPositive: 30,
@@ -21,7 +20,6 @@ function makeReport(over: Partial<InsightsReport> = {}): InsightsReport {
     },
     previous: {
       totalResponses: 80,
-      totalWithResponse: 60,
       byConfidence: { high: 40, medium: 20, low: 10 },
       reactions: {
         totalPositive: 20,
@@ -462,7 +460,7 @@ describe("renderHTML", () => {
   it("hides the scorecard for empty deployments", () => {
     const html = renderHTML(
       makeReport({
-        current: { ...makeReport().current, totalResponses: 0, totalWithResponse: 0 },
+        current: { ...makeReport().current, totalResponses: 0 },
       }),
     );
     expect(html).not.toContain('class="scorecard"');
@@ -480,7 +478,6 @@ describe("renderHTML", () => {
       makeReport({
         current: {
           totalResponses: 100,
-          totalWithResponse: 90,
           byConfidence: { high: 90, medium: 9, low: 0 },
           reactions: {
             totalPositive: 0,
@@ -514,7 +511,6 @@ describe("renderHTML", () => {
       makeReport({
         current: {
           totalResponses: 50,
-          totalWithResponse: 15,
           byConfidence: { high: 2, medium: 5, low: 8 },
           reactions: {
             totalPositive: 1,
@@ -551,7 +547,6 @@ describe("renderHTML", () => {
         current: {
           ...makeReport().current,
           totalResponses: 0,
-          totalWithResponse: 0,
           byConfidence: { high: 0, medium: 0, low: 0 },
         },
       }),
@@ -686,7 +681,6 @@ describe("renderHTML", () => {
       makeReport({
         current: {
           totalResponses: 0,
-          totalWithResponse: 0,
           byConfidence: { high: 0, medium: 0, low: 0 },
           reactions: {
             totalPositive: 0,
@@ -744,7 +738,6 @@ describe("renderHTML", () => {
       makeReport({
         previous: {
           totalResponses: 0,
-          totalWithResponse: 0,
           byConfidence: { high: 0, medium: 0, low: 0 },
           reactions: {
             totalPositive: 0,

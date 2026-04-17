@@ -41,7 +41,6 @@ beforeEach(() => {
 function stats(over: Partial<UsageStats> = {}): UsageStats {
   return {
     totalResponses: 0,
-    totalWithResponse: 0,
     byConfidence: { high: 0, medium: 0, low: 0 },
     reactions: {
       totalPositive: 0,
@@ -83,11 +82,10 @@ describe("buildInsights", () => {
 
   it("derives previous window via subtraction", async () => {
     const r = await build({
-      current: stats({ totalResponses: 50, totalWithResponse: 40 }),
-      combined: stats({ totalResponses: 90, totalWithResponse: 70 }),
+      current: stats({ totalResponses: 50 }),
+      combined: stats({ totalResponses: 90 }),
     });
     expect(r.previous.totalResponses).toBe(40);
-    expect(r.previous.totalWithResponse).toBe(30);
   });
 
   it("clamps subtraction to zero defensively", async () => {
@@ -149,8 +147,8 @@ describe("buildInsights", () => {
 
   it("uses /ask answer for atAGlance when available", async () => {
     const r = await build({
-      current: stats({ totalResponses: 10, totalWithResponse: 8 }),
-      combined: stats({ totalResponses: 12, totalWithResponse: 10 }),
+      current: stats({ totalResponses: 10 }),
+      combined: stats({ totalResponses: 12 }),
       ask: async () => "Custom prose from Dosu.",
     });
     expect(r.atAGlance).toBe("Custom prose from Dosu.");
@@ -160,12 +158,10 @@ describe("buildInsights", () => {
     const r = await build({
       current: stats({
         totalResponses: 10,
-        totalWithResponse: 10,
         byConfidence: { high: 8, medium: 1, low: 1 },
       }),
       combined: stats({
         totalResponses: 12,
-        totalWithResponse: 12,
         byConfidence: { high: 9, medium: 2, low: 1 },
       }),
       ask: async () => null,
@@ -186,12 +182,10 @@ describe("cheers", () => {
     const r = await build({
       current: stats({
         totalResponses: 100,
-        totalWithResponse: 100,
         byConfidence: { high: 90, medium: 8, low: 2 },
       }),
       combined: stats({
         totalResponses: 100,
-        totalWithResponse: 100,
         byConfidence: { high: 90, medium: 8, low: 2 },
       }),
     });
@@ -202,12 +196,10 @@ describe("cheers", () => {
     const r = await build({
       current: stats({
         totalResponses: 30,
-        totalWithResponse: 28,
         byConfidence: { high: 20, medium: 5, low: 5 },
       }),
       combined: stats({
         totalResponses: 30,
-        totalWithResponse: 28,
         byConfidence: { high: 20, medium: 5, low: 5 },
       }),
     });
@@ -218,7 +210,6 @@ describe("cheers", () => {
     const r = await build({
       current: stats({
         totalResponses: 50,
-        totalWithResponse: 40,
         reactions: {
           totalPositive: 9,
           totalNegative: 1,
@@ -229,7 +220,6 @@ describe("cheers", () => {
       }),
       combined: stats({
         totalResponses: 50,
-        totalWithResponse: 40,
         reactions: {
           totalPositive: 9,
           totalNegative: 1,
@@ -244,16 +234,16 @@ describe("cheers", () => {
 
   it("celebrates rising volume", async () => {
     const r = await build({
-      current: stats({ totalResponses: 80, totalWithResponse: 60 }),
-      combined: stats({ totalResponses: 130, totalWithResponse: 100 }),
+      current: stats({ totalResponses: 80 }),
+      combined: stats({ totalResponses: 130 }),
     });
     expect(r.cheers.some((c) => /Volume is up/.test(c))).toBe(true);
   });
 
   it("does not celebrate 'rising volume' when prior window is empty", async () => {
     const r = await build({
-      current: stats({ totalResponses: 80, totalWithResponse: 60 }),
-      combined: stats({ totalResponses: 80, totalWithResponse: 60 }),
+      current: stats({ totalResponses: 80 }),
+      combined: stats({ totalResponses: 80 }),
     });
     expect(r.cheers.some((c) => /Volume is up/.test(c))).toBe(false);
   });
@@ -262,12 +252,10 @@ describe("cheers", () => {
     const r = await build({
       current: stats({
         totalResponses: 30,
-        totalWithResponse: 15,
         byConfidence: { high: 5, medium: 10, low: 15 },
       }),
       combined: stats({
         totalResponses: 60,
-        totalWithResponse: 30,
         byConfidence: { high: 10, medium: 20, low: 30 },
       }),
     });
@@ -287,12 +275,10 @@ describe("investigate", () => {
       // current: 60/100 = 60% high; previous: 90/100 = 90% high → delta -30 pts
       current: stats({
         totalResponses: 100,
-        totalWithResponse: 100,
         byConfidence: { high: 60, medium: 20, low: 20 },
       }),
       combined: stats({
         totalResponses: 200,
-        totalWithResponse: 200,
         byConfidence: { high: 150, medium: 30, low: 20 },
       }),
     });
@@ -305,12 +291,10 @@ describe("investigate", () => {
     const r = await build({
       current: stats({
         totalResponses: 40,
-        totalWithResponse: 30,
         byConfidence: { high: 10, medium: 10, low: 20 },
       }),
       combined: stats({
         totalResponses: 60,
-        totalWithResponse: 50,
         byConfidence: { high: 20, medium: 20, low: 25 },
       }),
     });
@@ -322,7 +306,6 @@ describe("investigate", () => {
     const r = await build({
       current: stats({
         totalResponses: 50,
-        totalWithResponse: 40,
         reactions: {
           totalPositive: 5,
           totalNegative: 5,
@@ -333,7 +316,6 @@ describe("investigate", () => {
       }),
       combined: stats({
         totalResponses: 100,
-        totalWithResponse: 90,
         reactions: {
           totalPositive: 14,
           totalNegative: 6,
@@ -350,7 +332,6 @@ describe("investigate", () => {
     const r = await build({
       current: stats({
         totalResponses: 30,
-        totalWithResponse: 25,
         reactions: {
           totalPositive: 2,
           totalNegative: 5,
@@ -361,7 +342,6 @@ describe("investigate", () => {
       }),
       combined: stats({
         totalResponses: 30,
-        totalWithResponse: 25,
         reactions: {
           totalPositive: 2,
           totalNegative: 5,
@@ -376,8 +356,8 @@ describe("investigate", () => {
 
   it("flags a meaningful drop in volume", async () => {
     const r = await build({
-      current: stats({ totalResponses: 30, totalWithResponse: 25 }),
-      combined: stats({ totalResponses: 100, totalWithResponse: 80 }),
+      current: stats({ totalResponses: 30 }),
+      combined: stats({ totalResponses: 100 }),
     });
     expect(r.investigate.some((c) => /Volume is down/.test(c))).toBe(true);
   });
@@ -387,12 +367,10 @@ describe("investigate", () => {
       // current: 8/20 high = 40%; previous: 8/20 high = 40%
       current: stats({
         totalResponses: 20,
-        totalWithResponse: 20,
         byConfidence: { high: 8, medium: 6, low: 6 },
       }),
       combined: stats({
         totalResponses: 40,
-        totalWithResponse: 40,
         byConfidence: { high: 16, medium: 12, low: 12 },
       }),
     });
@@ -403,12 +381,10 @@ describe("investigate", () => {
     const r = await build({
       current: stats({
         totalResponses: 20,
-        totalWithResponse: 15,
         byConfidence: { high: 5, medium: 5, low: 10 },
       }),
       combined: stats({
         totalResponses: 20,
-        totalWithResponse: 15,
         byConfidence: { high: 5, medium: 5, low: 10 },
       }),
     });
@@ -417,8 +393,8 @@ describe("investigate", () => {
 
   it("does not flag 'volume is down' when prior window is empty", async () => {
     const r = await build({
-      current: stats({ totalResponses: 5, totalWithResponse: 5 }),
-      combined: stats({ totalResponses: 5, totalWithResponse: 5 }),
+      current: stats({ totalResponses: 5 }),
+      combined: stats({ totalResponses: 5 }),
     });
     expect(r.investigate.some((c) => /Volume is down/.test(c))).toBe(false);
   });
@@ -436,12 +412,10 @@ describe("suggestions", () => {
     const r = await build({
       current: stats({
         totalResponses: 30,
-        totalWithResponse: 25,
         byConfidence: { high: 5, medium: 10, low: 15 },
       }),
       combined: stats({
         totalResponses: 60,
-        totalWithResponse: 50,
         byConfidence: { high: 10, medium: 20, low: 22 },
       }),
     });
@@ -455,7 +429,6 @@ describe("suggestions", () => {
     const r = await build({
       current: stats({
         totalResponses: 50,
-        totalWithResponse: 40,
         reactions: {
           totalPositive: 5,
           totalNegative: 5,
@@ -466,7 +439,6 @@ describe("suggestions", () => {
       }),
       combined: stats({
         totalResponses: 100,
-        totalWithResponse: 90,
         reactions: {
           totalPositive: 14,
           totalNegative: 6,
@@ -484,7 +456,6 @@ describe("suggestions", () => {
     const r = await build({
       current: stats({
         totalResponses: 100,
-        totalWithResponse: 90,
         byConfidence: { high: 80, medium: 8, low: 2 },
         reactions: {
           totalPositive: 9,
@@ -496,7 +467,6 @@ describe("suggestions", () => {
       }),
       combined: stats({
         totalResponses: 100,
-        totalWithResponse: 90,
         byConfidence: { high: 80, medium: 8, low: 2 },
         reactions: {
           totalPositive: 9,
@@ -514,8 +484,8 @@ describe("suggestions", () => {
 
   it("recommends adding a source when volume is rising", async () => {
     const r = await build({
-      current: stats({ totalResponses: 40, totalWithResponse: 35 }),
-      combined: stats({ totalResponses: 50, totalWithResponse: 42 }),
+      current: stats({ totalResponses: 40 }),
+      combined: stats({ totalResponses: 50 }),
     });
     const ride = r.suggestions.find((s) => /momentum/.test(s.headline));
     expect(ride?.command).toBe("dosu integrations");
@@ -523,16 +493,16 @@ describe("suggestions", () => {
 
   it("always includes at least one suggestion (fallback)", async () => {
     const r = await build({
-      current: stats({ totalResponses: 5, totalWithResponse: 5 }),
-      combined: stats({ totalResponses: 10, totalWithResponse: 10 }),
+      current: stats({ totalResponses: 5 }),
+      combined: stats({ totalResponses: 10 }),
     });
     expect(r.suggestions.length).toBeGreaterThanOrEqual(1);
   });
 
   it("does not emit 'Ride the momentum' when prior window is empty", async () => {
     const r = await build({
-      current: stats({ totalResponses: 40, totalWithResponse: 35 }),
-      combined: stats({ totalResponses: 40, totalWithResponse: 35 }),
+      current: stats({ totalResponses: 40 }),
+      combined: stats({ totalResponses: 40 }),
     });
     expect(r.suggestions.some((s) => /momentum/.test(s.headline))).toBe(false);
   });
@@ -541,12 +511,10 @@ describe("suggestions", () => {
     const r = await build({
       current: stats({
         totalResponses: 20,
-        totalWithResponse: 15,
         byConfidence: { high: 5, medium: 5, low: 10 },
       }),
       combined: stats({
         totalResponses: 20,
-        totalWithResponse: 15,
         byConfidence: { high: 5, medium: 5, low: 10 },
       }),
     });
@@ -561,7 +529,6 @@ describe("suggestions", () => {
       // low high-confidence share, volume rising
       current: stats({
         totalResponses: 50,
-        totalWithResponse: 25,
         byConfidence: { high: 5, medium: 10, low: 35 },
         reactions: {
           totalPositive: 3,
@@ -573,7 +540,6 @@ describe("suggestions", () => {
       }),
       combined: stats({
         totalResponses: 90,
-        totalWithResponse: 70,
         byConfidence: { high: 30, medium: 30, low: 30 },
         reactions: {
           totalPositive: 18,
@@ -591,7 +557,6 @@ describe("suggestions", () => {
 describe("at-a-glance helpers", () => {
   const s = stats({
     totalResponses: 10,
-    totalWithResponse: 10,
     byConfidence: { high: 8, medium: 1, low: 1 },
   });
   const d = {
@@ -661,7 +626,6 @@ describe("at-a-glance helpers", () => {
   it("fallbackAtAGlance includes positive feedback rate when reactions exist", () => {
     const withReactions = stats({
       totalResponses: 10,
-      totalWithResponse: 8,
       reactions: {
         totalPositive: 4,
         totalNegative: 1,
