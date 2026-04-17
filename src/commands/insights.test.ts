@@ -61,7 +61,7 @@ const validConfig = {
 const fakeReport: InsightsReport = {
   generatedAt: "2026-04-16T00:00:00Z",
   windowDays: 30,
-  deploymentName: "Test Deploy",
+  spaceName: "Test Deploy",
   current: {
     totalResponses: 50,
     byConfidence: { high: 25, medium: 15, low: 10 },
@@ -157,7 +157,7 @@ describe("runInsights", () => {
     expect(runner.prune).toHaveBeenCalledWith(insightsDir(), 20);
   });
 
-  it("prints the deployment name, first cheer, and both file URLs", async () => {
+  it("prints the space name, first cheer, and both file URLs", async () => {
     const runner = makeRunner();
     const snapshotPath = await runInsights(validConfig, runner);
     const out = allOutput();

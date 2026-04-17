@@ -132,7 +132,7 @@ describe("buildInsights", () => {
     ).rejects.toThrow(/space_id/);
   });
 
-  it("falls back to 'your deployment' when name is missing", async () => {
+  it("falls back to 'your space' when name is missing", async () => {
     mockQuery.mockResolvedValueOnce(stats());
     mockQuery.mockResolvedValueOnce(stats());
     const r = await buildInsights({
@@ -142,7 +142,7 @@ describe("buildInsights", () => {
       windowDays: 30,
       now: NOW,
     });
-    expect(r.deploymentName).toBe("your deployment");
+    expect(r.spaceName).toBe("your space");
   });
 
   it("uses /ask answer for atAGlance when available", async () => {
@@ -172,7 +172,7 @@ describe("buildInsights", () => {
 });
 
 describe("cheers", () => {
-  it("welcomes empty deployments", async () => {
+  it("welcomes empty spaces", async () => {
     const r = await build({ current: stats(), combined: stats() });
     expect(r.cheers).toHaveLength(1);
     expect(r.cheers[0]).toMatch(/brand new/);
@@ -265,7 +265,7 @@ describe("cheers", () => {
 });
 
 describe("investigate", () => {
-  it("is empty for a brand-new deployment", async () => {
+  it("is empty for a brand-new space", async () => {
     const r = await build({ current: stats(), combined: stats() });
     expect(r.investigate).toHaveLength(0);
   });
@@ -401,7 +401,7 @@ describe("investigate", () => {
 });
 
 describe("suggestions", () => {
-  it("recommends setup + integrations for empty deployments", async () => {
+  it("recommends setup + integrations for empty spaces", async () => {
     const r = await build({ current: stats(), combined: stats() });
     expect(r.suggestions).toHaveLength(2);
     expect(r.suggestions[0].command).toBe("dosu setup");
@@ -585,7 +585,7 @@ describe("at-a-glance helpers", () => {
     expect(p).not.toMatch(/first 30-day window/);
   });
 
-  it("fallbackAtAGlance handles empty deployments warmly", () => {
+  it("fallbackAtAGlance handles empty spaces warmly", () => {
     const f = fallbackAtAGlance(
       stats(),
       {

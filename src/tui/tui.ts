@@ -41,7 +41,7 @@ export async function runTUI(): Promise<void> {
       options.push({
         label: "View Insights",
         value: "insights",
-        hint: "Open a fun report of your deployment's activity",
+        hint: "Open a fun report of your space's activity",
       });
     }
     options.push(

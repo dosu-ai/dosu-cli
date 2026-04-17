@@ -1,5 +1,5 @@
 /**
- * `dosu insights` — open a fun visual report of your deployment activity.
+ * `dosu insights` — open a fun visual report of your space activity.
  *
  * One word, no flags. Builds an HTML report from `analytics.getUsageStats`
  * plus a few parallel `/ask` calls for narrative sections, writes it to
@@ -25,7 +25,7 @@ function requireFullConfig(): Config {
   const cfg = requireLoginConfig();
   requireAPIKey(cfg);
   if (!cfg.space_id || !cfg.deployment_id) {
-    console.error(pc.red("Missing deployment config. Run 'dosu setup' to reconfigure."));
+    console.error(pc.red("Missing space config. Run 'dosu setup' to reconfigure."));
     process.exit(1);
   }
   return cfg;
@@ -108,7 +108,7 @@ export interface InsightsRunner {
 export async function runInsights(cfg: Config, runner: InsightsRunner): Promise<string> {
   const client = createTypedClient(cfg);
 
-  console.log(pc.dim("✨ Looking at the last 30 days of your deployment..."));
+  console.log(pc.dim("✨ Looking at the last 30 days of your space..."));
 
   const report = await runner.build({ client, cfg, ask: runner.ask, windowDays: 30 });
   const html = runner.render(report);
@@ -120,7 +120,7 @@ export async function runInsights(cfg: Config, runner: InsightsRunner): Promise<
   runner.prune(insightsDir(), KEEP_REPORTS);
 
   console.log("");
-  console.log(pc.bold(`📊 Dosu Insights — ${report.deploymentName}`));
+  console.log(pc.bold(`📊 Dosu Insights — ${report.spaceName}`));
   if (report.cheers[0]) {
     console.log(pc.green(`   ${report.cheers[0]}`));
   }
@@ -172,7 +172,7 @@ export async function executeInsights(cfg: Config): Promise<void> {
 
 export function insightsCommand(): Command {
   return new Command("insights")
-    .description("Open a fun visual report of your Dosu deployment activity")
+    .description("Open a fun visual report of your Dosu space activity")
     .action(async () => {
       const cfg = requireFullConfig();
       try {

@@ -4,7 +4,7 @@
 import type { InsightsReport, Suggestion, UsageStats } from "./insights";
 
 export function renderHTML(report: InsightsReport): string {
-  const safeName = escapeHTML(report.deploymentName);
+  const safeName = escapeHTML(report.spaceName);
   const generated = formatDate(report.generatedAt);
 
   const greeting = pickGreeting(report.generatedAt);

@@ -1,9 +1,9 @@
 /**
- * Build an InsightsReport for the user's Dosu deployment.
+ * Build an InsightsReport for the user's Dosu space.
  *
  * Hard numbers come from `analytics.getUsageStats` for the current and prior
  * windows. The "investigate" warnings, "cheers" wins, and "suggestions" CTAs
- * are all derived locally from those numbers — every report has actionable
+ * are all derived locally from those numbers, so every report has actionable
  * content even if the optional /ask narrative call fails.
  *
  * The single /ask call powers only the warm at-a-glance prose. If it fails or
@@ -35,7 +35,7 @@ export interface Suggestion {
 export interface InsightsReport {
   generatedAt: string;
   windowDays: number;
-  deploymentName: string;
+  spaceName: string;
   current: UsageStats;
   previous: UsageStats;
   derived: {
@@ -105,7 +105,7 @@ export async function buildInsights({
   return {
     generatedAt: now().toISOString(),
     windowDays,
-    deploymentName: cfg.deployment_name ?? "your deployment",
+    spaceName: cfg.deployment_name ?? "your space",
     current,
     previous,
     derived,
@@ -190,7 +190,7 @@ function computeCheers(stats: UsageStats, derived: InsightsReport["derived"]): s
   const out: string[] = [];
   if (stats.totalResponses === 0) {
     out.push(
-      "Your deployment is brand new and ready to roll. Share `dosu setup` with your team to start asking questions.",
+      "Your space is brand new and ready to roll. Share `dosu setup` with your team to start asking questions.",
     );
     return out;
   }
@@ -294,7 +294,7 @@ function computeSuggestions(
 ): Suggestion[] {
   const out: Suggestion[] = [];
 
-  // Empty deployment — single most important CTA
+  // Empty space: single most important CTA
   if (current.totalResponses === 0) {
     out.push({
       headline: "Get your team using Dosu",
@@ -395,8 +395,8 @@ export function buildAtAGlancePrompt(
 ): string {
   const priorNote = derived.hasPriorWindow
     ? ""
-    : `\n\nNote: this is the deployment's first ${days}-day window — do NOT compare to a prior period. Focus on what's present.`;
-  return `You're writing the "At a Glance" panel for a Dosu deployment insights report. Here are the real stats from the last ${days} days:
+    : `\n\nNote: this is the space's first ${days}-day window, so do NOT compare to a prior period. Focus on what's present.`;
+  return `You're writing the "At a Glance" panel for a Dosu space insights report. Here are the real stats from the last ${days} days:
 
 ${statsBlock(stats, derived)}${priorNote}
 
@@ -409,7 +409,7 @@ export function fallbackAtAGlance(
   days: number,
 ): string {
   if (stats.totalResponses === 0) {
-    return `Your deployment is brand new. The next ${days} days will give us something to talk about — let's see what your team asks first.`;
+    return `Your space is brand new. The next ${days} days will give us something to talk about, so let's see what your team asks first.`;
   }
   const hc = derived.highConfidenceRate !== null ? pct(derived.highConfidenceRate) : "—";
   const reactions = stats.reactions.totalPositive + stats.reactions.totalNegative;

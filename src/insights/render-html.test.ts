@@ -6,7 +6,7 @@ function makeReport(over: Partial<InsightsReport> = {}): InsightsReport {
   return {
     generatedAt: "2026-04-16T12:00:00Z",
     windowDays: 30,
-    deploymentName: "Acme Docs",
+    spaceName: "Acme Docs",
     current: {
       totalResponses: 100,
       byConfidence: { high: 50, medium: 20, low: 10 },
@@ -51,7 +51,7 @@ function makeReport(over: Partial<InsightsReport> = {}): InsightsReport {
 }
 
 describe("renderHTML", () => {
-  it("includes the deployment name and a doctype", () => {
+  it("includes the space name and a doctype", () => {
     const html = renderHTML(makeReport());
     expect(html).toMatch(/^<!DOCTYPE html>/);
     expect(html).toContain("Acme Docs");
@@ -62,10 +62,10 @@ describe("renderHTML", () => {
     expect(html).toContain("Hello world");
   });
 
-  it("escapes HTML in deployment name and at-a-glance prose", () => {
+  it("escapes HTML in space name and at-a-glance prose", () => {
     const html = renderHTML(
       makeReport({
-        deploymentName: "Pwn <script>alert(1)</script>",
+        spaceName: "Pwn <script>alert(1)</script>",
         atAGlance: "Look: <img src=x onerror=alert(1)> & co",
       }),
     );
@@ -216,7 +216,7 @@ describe("renderHTML", () => {
     expect(html).toContain("→");
   });
 
-  it("uses celebratory flair for high-volume deployments", () => {
+  it("uses celebratory flair for high-volume spaces", () => {
     const html = renderHTML(
       makeReport({ current: { ...makeReport().current, totalResponses: 1500 } }),
     );
@@ -250,7 +250,7 @@ describe("renderHTML", () => {
     expect(html).toContain("Almost every response landed with high confidence");
   });
 
-  it("uses Day-One flair for empty deployments", () => {
+  it("uses Day-One flair for empty spaces", () => {
     const html = renderHTML(
       makeReport({
         current: { ...makeReport().current, totalResponses: 0 },
@@ -457,7 +457,7 @@ describe("renderHTML", () => {
     expect(html).toContain("Sentiment");
   });
 
-  it("hides the scorecard for empty deployments", () => {
+  it("hides the scorecard for empty spaces", () => {
     const html = renderHTML(
       makeReport({
         current: { ...makeReport().current, totalResponses: 0 },
@@ -466,7 +466,7 @@ describe("renderHTML", () => {
     expect(html).not.toContain('class="scorecard"');
   });
 
-  it("uses a great grade for healthy deployments", () => {
+  it("uses a great grade for healthy spaces", () => {
     const html = renderHTML(makeReport());
     // 80/50/86 → ~72 → B (good tone)
     expect(html).toMatch(/grade-(great|good)/);
@@ -506,7 +506,7 @@ describe("renderHTML", () => {
     expect(html).not.toContain("neutral default");
   });
 
-  it("uses an alarm grade for struggling deployments", () => {
+  it("uses an alarm grade for struggling spaces", () => {
     const html = renderHTML(
       makeReport({
         current: {
@@ -642,32 +642,32 @@ describe("renderHTML", () => {
       return d.toISOString();
     }
 
-    it("uses 'Late … night' for early-morning hours (<5)", () => {
+    it("uses 'Late [day] night' for early-morning hours under 5", () => {
       const html = renderHTML(makeReport({ generatedAt: localIsoAtHour(3) }));
       expect(html).toMatch(
         /Late (Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday) night ·/,
       );
     });
 
-    it("uses a morning greeting for hours 5–11", () => {
+    it("uses a morning greeting for hours 5 to 11", () => {
       const html = renderHTML(makeReport({ generatedAt: localIsoAtHour(9) }));
       expect(html).toMatch(/(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday) morning ·/);
       expect(html).not.toContain("Late ");
     });
 
-    it("uses an afternoon greeting for hours 12–16", () => {
+    it("uses an afternoon greeting for hours 12 to 16", () => {
       const html = renderHTML(makeReport({ generatedAt: localIsoAtHour(14) }));
       expect(html).toMatch(
         /(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday) afternoon ·/,
       );
     });
 
-    it("uses an evening greeting for hours 17–20", () => {
+    it("uses an evening greeting for hours 17 to 20", () => {
       const html = renderHTML(makeReport({ generatedAt: localIsoAtHour(19) }));
       expect(html).toMatch(/(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday) evening ·/);
     });
 
-    it("uses a bare '<day> night' greeting for hours 21+", () => {
+    it("uses a bare '[day] night' greeting for hours 21 and up", () => {
       const html = renderHTML(makeReport({ generatedAt: localIsoAtHour(22) }));
       expect(html).toMatch(/(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday) night ·/);
       expect(html).not.toMatch(
