@@ -471,6 +471,41 @@ describe("renderHTML", () => {
     expect(html).toMatch(/grade-(great|good)/);
   });
 
+  it("excludes sentiment from the grade when no reactions exist and shows — in the mini-bar", () => {
+    // answer = 0.9, conf = 81/90 = 0.9, no sentiment → score = round((0.9 + 0.9) / 2 * 100) = 90 → A+ Outstanding
+    const html = renderHTML(
+      makeReport({
+        current: {
+          totalResponses: 100,
+          totalWithResponse: 90,
+          byConfidence: { high: 81, medium: 9, low: 0 },
+          reactions: {
+            totalPositive: 0,
+            totalNegative: 0,
+            messagesWithReactions: 0,
+            reactionRate: 0,
+            positiveRate: 0,
+          },
+        },
+        derived: {
+          answerRate: 0.9,
+          answerRateDelta: 0,
+          responsesDelta: 0,
+          positiveRateDelta: null,
+          hasPriorWindow: true,
+        },
+      }),
+    );
+    expect(html).toContain('<div class="grade-score">90 / 100</div>');
+    expect(html).toContain('<div class="grade-letter">A+</div>');
+    expect(html).toContain("no reactions yet — excluded from grade");
+    // The Sentiment mini-bar specifically renders "—", not the old 70% magic number
+    expect(html).toMatch(
+      /<span class="mini-label">Sentiment<\/span>\s*<span class="mini-value">—<\/span>/,
+    );
+    expect(html).not.toContain("neutral default");
+  });
+
   it("uses an alarm grade for struggling deployments", () => {
     const html = renderHTML(
       makeReport({

@@ -234,10 +234,9 @@ function computeInvestigate(
   const out: string[] = [];
   if (current.totalResponses === 0) return out;
 
-  // Answer rate dropped meaningfully
   if (derived.answerRateDelta !== null && derived.answerRateDelta <= -0.05) {
-    const before = pct((derived.answerRate ?? 0) - derived.answerRateDelta);
-    const now = pct(derived.answerRate ?? 0);
+    const before = pct(previous.totalWithResponse / previous.totalResponses);
+    const now = pct(current.totalWithResponse / current.totalResponses);
     out.push(
       `Answer rate dropped from ${before} to ${now}. Usually a sign of a new product area Dosu doesn't have docs for yet.`,
     );
@@ -250,9 +249,8 @@ function computeInvestigate(
     );
   }
 
-  // Positive reaction rate dropped
   if (derived.positiveRateDelta !== null && derived.positiveRateDelta <= -0.05) {
-    const before = pct(current.reactions.positiveRate - derived.positiveRateDelta);
+    const before = pct(previous.reactions.positiveRate);
     const now = pct(current.reactions.positiveRate);
     out.push(
       `Positive feedback fell from ${before} to ${now}. The negative reactions are the most actionable signal — open them first.`,

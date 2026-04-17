@@ -80,7 +80,10 @@ function renderHeadline(r: InsightsReport): string {
   const delta = r.derived.responsesDelta;
   const direction = delta > 0 ? "up" : delta < 0 ? "down" : "flat";
   const arrow = delta > 0 ? "▲" : delta < 0 ? "▼" : "→";
-  const pct = ` (${delta >= 0 ? "+" : ""}${Math.round((delta / r.previous.totalResponses) * 100)}%)`;
+  const pct =
+    r.previous.totalResponses > 0
+      ? ` (${delta >= 0 ? "+" : ""}${Math.round((delta / r.previous.totalResponses) * 100)}%)`
+      : "";
   const deltaText =
     delta === 0
       ? "no change vs the prior window"
@@ -107,8 +110,9 @@ function renderScorecard(r: InsightsReport): string {
   const conf =
     r.current.totalWithResponse > 0 ? r.current.byConfidence.high / r.current.totalWithResponse : 0;
   const reactionTotal = r.current.reactions.totalPositive + r.current.reactions.totalNegative;
-  const sentiment = reactionTotal > 0 ? r.current.reactions.positiveRate : 0.7; // neutral default
-  const score = Math.round(((answer + conf + sentiment) / 3) * 100);
+  const sentiment: number | null = reactionTotal > 0 ? r.current.reactions.positiveRate : null;
+  const signals = sentiment === null ? [answer, conf] : [answer, conf, sentiment];
+  const score = Math.round((signals.reduce((a, b) => a + b, 0) / signals.length) * 100);
   const grade = pickGrade(score);
 
   return `
@@ -124,13 +128,26 @@ function renderScorecard(r: InsightsReport): string {
         ${miniBar(
           "Sentiment",
           sentiment,
-          reactionTotal > 0 ? "of reactions were positive" : "no reactions yet — neutral default",
+          sentiment === null
+            ? "no reactions yet — excluded from grade"
+            : "of reactions were positive",
         )}
       </div>
     </section>`;
 }
 
-function miniBar(label: string, value: number, hint: string): string {
+function miniBar(label: string, value: number | null, hint: string): string {
+  if (value === null) {
+    return `
+        <div class="mini">
+          <div class="mini-row">
+            <span class="mini-label">${escapeHTML(label)}</span>
+            <span class="mini-value">—</span>
+          </div>
+          <div class="mini-track"><div class="mini-fill mini-ok" style="width:0%"></div></div>
+          <div class="mini-hint">${escapeHTML(hint)}</div>
+        </div>`;
+  }
   const v = Math.max(0, Math.min(1, value));
   const tone = v >= 0.8 ? "good" : v >= 0.6 ? "ok" : "low";
   return `

@@ -267,13 +267,13 @@ describe("investigate", () => {
     expect(r.investigate).toHaveLength(0);
   });
 
-  it("flags a meaningful drop in answer rate", async () => {
+  it("flags a meaningful drop in answer rate with exact before/after percentages", async () => {
     const r = await build({
       // current: 60/100 = 60%; previous: 90/100 = 90% → delta -30 pts
       current: stats({ totalResponses: 100, totalWithResponse: 60 }),
       combined: stats({ totalResponses: 200, totalWithResponse: 150 }),
     });
-    expect(r.investigate.some((c) => /Answer rate dropped/.test(c))).toBe(true);
+    expect(r.investigate.some((c) => /Answer rate dropped from 90% to 60%/.test(c))).toBe(true);
   });
 
   it("flags growing low-confidence count", async () => {
@@ -292,7 +292,8 @@ describe("investigate", () => {
     expect(r.investigate.some((c) => /Low-confidence answers grew/.test(c))).toBe(true);
   });
 
-  it("flags a drop in positive feedback rate", async () => {
+  it("flags a drop in positive feedback rate with exact before/after percentages", async () => {
+    // current: 5 pos / 5 neg → 50%; previous (via subtraction): 9 pos / 1 neg → 90%
     const r = await build({
       current: stats({
         totalResponses: 50,
@@ -317,7 +318,7 @@ describe("investigate", () => {
         },
       }),
     });
-    expect(r.investigate.some((c) => /Positive feedback fell/.test(c))).toBe(true);
+    expect(r.investigate.some((c) => /Positive feedback fell from 90% to 50%/.test(c))).toBe(true);
   });
 
   it("flags more negative than positive feedback", async () => {
