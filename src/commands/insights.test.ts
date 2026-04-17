@@ -340,7 +340,6 @@ describe("insightsCommand", () => {
         positiveRate: 0,
       },
     });
-
     await expect(runCmd()).resolves.toBeUndefined();
     expect(exitSpy).not.toHaveBeenCalled();
   });
@@ -410,6 +409,21 @@ describe("pruneOldReports", () => {
 
   it("no-ops when the directory does not exist", () => {
     expect(() => pruneOldReports("/tmp/does-not-exist-dosu-xyz", 5)).not.toThrow();
+  });
+
+  it("returns without throwing when readdirSync fails", async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "dosu-insights-test-"));
+    try {
+      // A regular file passes existsSync but readdirSync throws ENOTDIR on it.
+      const notADir = join(dir, "not-a-dir");
+      writeFileSync(notADir, "x");
+      expect(() => pruneOldReports(notADir, 5)).not.toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("swallows per-file unlink errors and keeps pruning the rest", async () => {

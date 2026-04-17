@@ -83,7 +83,17 @@ export function reportPath(timestamp?: Date): string {
 
 export function pruneOldReports(dir: string, keepN: number): void {
   if (!existsSync(dir)) return;
-  const reports = readdirSync(dir)
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch (err) {
+    logger.debug(
+      "insights",
+      `failed to list ${dir} for pruning: ${err instanceof Error ? err.message : err}`,
+    );
+    return;
+  }
+  const reports = entries
     .filter((f) => REPORT_FILE_PATTERN.test(f))
     .sort()
     .reverse();
