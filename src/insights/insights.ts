@@ -53,12 +53,16 @@ export interface InsightsReport {
 
 export type AskFn = (question: string) => Promise<string | null>;
 
+export type InsightsStage = "stats" | "narrative";
+export type ProgressFn = (stage: InsightsStage) => void;
+
 export interface BuildInsightsArgs {
   client: TypedClient;
   cfg: Config;
   ask: AskFn;
   windowDays?: number;
   now?: () => Date;
+  onProgress?: ProgressFn;
 }
 
 const EMPTY_STATS: UsageStats = {
@@ -79,12 +83,14 @@ export async function buildInsights({
   ask,
   windowDays = 30,
   now = () => new Date(),
+  onProgress,
 }: BuildInsightsArgs): Promise<InsightsReport> {
   if (!cfg.space_id) {
     throw new Error("space_id missing — run 'dosu setup' first");
   }
   const spaceId = cfg.space_id;
 
+  onProgress?.("stats");
   const [currentRaw, combinedRaw] = await Promise.all([
     client.analytics.getUsageStats.query({ spaceId, days: windowDays }),
     client.analytics.getUsageStats.query({ spaceId, days: windowDays * 2 }),
@@ -99,6 +105,7 @@ export async function buildInsights({
   const investigate = computeInvestigate(current, previous, derived);
   const suggestions = computeSuggestions(current, previous, derived);
 
+  onProgress?.("narrative");
   const atAGlanceFromAsk = await ask(buildAtAGlancePrompt(current, derived, windowDays));
   const atAGlance = atAGlanceFromAsk ?? fallbackAtAGlance(current, derived, windowDays);
 

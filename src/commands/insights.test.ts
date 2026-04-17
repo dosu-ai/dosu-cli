@@ -167,6 +167,20 @@ describe("runInsights", () => {
     expect(out).toContain(`file://${reportPath()}`);
   });
 
+  it("logs progress for both the stats and narrative stages", async () => {
+    const runner = makeRunner({
+      build: vi.fn().mockImplementation(async (args: { onProgress?: (s: string) => void }) => {
+        args.onProgress?.("stats");
+        args.onProgress?.("narrative");
+        return fakeReport;
+      }),
+    });
+    await runInsights(validConfig, runner);
+    const out = allOutput();
+    expect(out).toContain("Looking at the last 30 days");
+    expect(out).toContain("narrate the numbers");
+  });
+
   it("falls back gracefully when the browser open call rejects", async () => {
     const runner = makeRunner({
       openInBrowser: vi.fn().mockRejectedValue(new Error("nope")),

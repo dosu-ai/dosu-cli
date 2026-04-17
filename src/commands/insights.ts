@@ -14,7 +14,7 @@ import { createTypedClient } from "../client/trpc";
 import { type Config, getConfigDir } from "../config/config";
 import { getBackendURL } from "../config/constants";
 import { logger } from "../debug/logger";
-import { type AskFn, buildInsights, renderHTML } from "../insights";
+import { type AskFn, buildInsights, type InsightsStage, renderHTML } from "../insights";
 import { requireAPIKey, requireLoginConfig } from "./auth";
 
 const ASK_TIMEOUT_MS = 90_000;
@@ -108,9 +108,15 @@ export interface InsightsRunner {
 export async function runInsights(cfg: Config, runner: InsightsRunner): Promise<string> {
   const client = createTypedClient(cfg);
 
-  console.log(pc.dim("✨ Looking at the last 30 days of your space..."));
+  const onProgress = (stage: InsightsStage) => {
+    if (stage === "stats") {
+      console.log(pc.dim("✨ Looking at the last 30 days of your space..."));
+    } else if (stage === "narrative") {
+      console.log(pc.dim("   Asking Dosu to narrate the numbers (up to 90s)..."));
+    }
+  };
 
-  const report = await runner.build({ client, cfg, ask: runner.ask, windowDays: 30 });
+  const report = await runner.build({ client, cfg, ask: runner.ask, windowDays: 30, onProgress });
   const html = runner.render(report);
   const timestamp = new Date();
   const snapshotPath = reportPath(timestamp);

@@ -110,6 +110,21 @@ describe("buildInsights", () => {
     expect(r.previous.totalResponses).toBe(0);
   });
 
+  it("fires onProgress before each slow phase", async () => {
+    const stages: string[] = [];
+    mockQuery.mockResolvedValueOnce(stats());
+    mockQuery.mockResolvedValueOnce(stats());
+    await buildInsights({
+      client: createMockClient() as never,
+      cfg,
+      ask: okAsk,
+      windowDays: 30,
+      now: NOW,
+      onProgress: (s) => stages.push(s),
+    });
+    expect(stages).toEqual(["stats", "narrative"]);
+  });
+
   it("uses real Date when `now` is not provided", async () => {
     mockQuery.mockResolvedValueOnce(stats());
     mockQuery.mockResolvedValueOnce(stats());
