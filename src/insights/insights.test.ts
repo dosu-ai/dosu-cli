@@ -652,6 +652,12 @@ describe("at-a-glance helpers", () => {
     expect(f).toContain("Volume is down 7");
   });
 
+  it("fallbackAtAGlance omits any volume trend text when deltas are flat", () => {
+    const f = fallbackAtAGlance(s, { ...d, responsesDelta: 0 }, 30);
+    expect(f).not.toContain("Volume is up");
+    expect(f).not.toContain("Volume is down");
+  });
+
   it("fallbackAtAGlance includes positive feedback rate when reactions exist", () => {
     const withReactions = stats({
       totalResponses: 10,

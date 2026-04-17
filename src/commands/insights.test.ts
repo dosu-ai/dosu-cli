@@ -310,6 +310,43 @@ describe("insightsCommand", () => {
     mockLoadConfig.mockReturnValue({ ...validConfig, deployment_id: undefined });
     await expect(runCmd()).rejects.toThrow("exit");
   });
+
+  it("runs to completion when every config field is present", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi
+      .fn()
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({ answer: "ok" }),
+      });
+    mockQuery.mockResolvedValue({
+      totalResponses: 1,
+      totalWithResponse: 1,
+      byConfidence: { high: 1, medium: 0, low: 0 },
+      reactions: {
+        totalPositive: 0,
+        totalNegative: 0,
+        messagesWithReactions: 0,
+        reactionRate: 0,
+        positiveRate: 0,
+      },
+    });
+    vi.doMock("open", () => ({ default: vi.fn().mockResolvedValue(undefined) }));
+
+    await expect(runCmd()).resolves.toBeUndefined();
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("logs and exits 1 when the runner throws", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi.fn();
+    mockQuery.mockRejectedValue(new Error("runner boom"));
+
+    await expect(runCmd()).rejects.toThrow("exit");
+    expect(errorSpy).toHaveBeenCalled();
+    const errOut = errorSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(errOut).toContain("runner boom");
+  });
 });
 
 describe("reportPath", () => {
@@ -365,5 +402,26 @@ describe("pruneOldReports", () => {
 
   it("no-ops when the directory does not exist", () => {
     expect(() => pruneOldReports("/tmp/does-not-exist-dosu-xyz", 5)).not.toThrow();
+  });
+
+  it("swallows per-file unlink errors and keeps pruning the rest", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, readdirSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "dosu-insights-test-"));
+    try {
+      writeFileSync(join(dir, "report-2026-01-01T00-00-00Z.html"), "x");
+      writeFileSync(join(dir, "report-2026-02-01T00-00-00Z.html"), "x");
+      // A directory whose name matches the report pattern — unlinkSync will
+      // throw EISDIR/EPERM on every platform, exercising the catch branch.
+      mkdirSync(join(dir, "report-2026-03-01T00-00-00Z.html"));
+
+      expect(() => pruneOldReports(dir, 0)).not.toThrow();
+
+      // The two real files are gone; the problem directory is left in place.
+      expect(readdirSync(dir).sort()).toEqual(["report-2026-03-01T00-00-00Z.html"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -637,4 +637,132 @@ describe("renderHTML", () => {
     const html = renderHTML(makeReport());
     expect(html).toMatch(/Apr 1[56]/);
   });
+
+  describe("pickGreeting time-of-day branches", () => {
+    // Build an ISO string that parses back to the given local hour, regardless
+    // of the runner's timezone (pickGreeting uses Date.getHours()).
+    function localIsoAtHour(hour: number): string {
+      const d = new Date();
+      d.setHours(hour, 0, 0, 0);
+      return d.toISOString();
+    }
+
+    it("uses 'Late … night' for early-morning hours (<5)", () => {
+      const html = renderHTML(makeReport({ generatedAt: localIsoAtHour(3) }));
+      expect(html).toMatch(
+        /Late (Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday) night ·/,
+      );
+    });
+
+    it("uses a morning greeting for hours 5–11", () => {
+      const html = renderHTML(makeReport({ generatedAt: localIsoAtHour(9) }));
+      expect(html).toMatch(/(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday) morning ·/);
+      expect(html).not.toContain("Late ");
+    });
+
+    it("uses an afternoon greeting for hours 12–16", () => {
+      const html = renderHTML(makeReport({ generatedAt: localIsoAtHour(14) }));
+      expect(html).toMatch(
+        /(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday) afternoon ·/,
+      );
+    });
+
+    it("uses an evening greeting for hours 17–20", () => {
+      const html = renderHTML(makeReport({ generatedAt: localIsoAtHour(19) }));
+      expect(html).toMatch(/(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday) evening ·/);
+    });
+
+    it("uses a bare '<day> night' greeting for hours 21+", () => {
+      const html = renderHTML(makeReport({ generatedAt: localIsoAtHour(22) }));
+      expect(html).toMatch(/(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday) night ·/);
+      expect(html).not.toMatch(
+        /Late (Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday) night/,
+      );
+    });
+  });
+
+  it("shows em-dash in the stats row when highConfidenceRate is null", () => {
+    const html = renderHTML(
+      makeReport({
+        current: {
+          totalResponses: 0,
+          totalWithResponse: 0,
+          byConfidence: { high: 0, medium: 0, low: 0 },
+          reactions: {
+            totalPositive: 0,
+            totalNegative: 0,
+            messagesWithReactions: 0,
+            reactionRate: 0,
+            positiveRate: 0,
+          },
+        },
+        derived: {
+          highConfidenceRate: null,
+          highConfidenceRateDelta: null,
+          responsesDelta: 0,
+          positiveRateDelta: null,
+          hasPriorWindow: true,
+        },
+      }),
+    );
+    expect(html).toMatch(
+      /<div class="stat-value">—<\/div>\s*<div class="stat-label">High-confidence<\/div>/,
+    );
+  });
+
+  it("omits the headline percent when hasPriorWindow but prior total is 0", () => {
+    const html = renderHTML(
+      makeReport({
+        previous: { ...makeReport().previous, totalResponses: 0 },
+        derived: {
+          highConfidenceRate: 0.625,
+          highConfidenceRateDelta: null,
+          responsesDelta: 100,
+          positiveRateDelta: null,
+          hasPriorWindow: true,
+        },
+      }),
+    );
+    expect(html).toMatch(/▲ \+100 vs the prior 30 days/);
+    expect(html).not.toMatch(/▲ \+100 \(\+?\d+%\)/);
+  });
+
+  it("formats responses/day to two decimals when below 1.0", () => {
+    const html = renderHTML(
+      makeReport({
+        current: { ...makeReport().current, totalResponses: 15 },
+      }),
+    );
+    // 15 / 30 = 0.5 → "0.50"
+    expect(html).toMatch(
+      /<div class="stat-value">0\.50<\/div>\s*<div class="stat-label">Responses \/ day<\/div>/,
+    );
+  });
+
+  it("shows em-dash for the prior high-confidence share when previous total is 0", () => {
+    const html = renderHTML(
+      makeReport({
+        previous: {
+          totalResponses: 0,
+          totalWithResponse: 0,
+          byConfidence: { high: 0, medium: 0, low: 0 },
+          reactions: {
+            totalPositive: 0,
+            totalNegative: 0,
+            messagesWithReactions: 0,
+            reactionRate: 0,
+            positiveRate: 0,
+          },
+        },
+        derived: {
+          highConfidenceRate: 0.5,
+          highConfidenceRateDelta: null,
+          responsesDelta: 100,
+          positiveRateDelta: null,
+          hasPriorWindow: true,
+        },
+      }),
+    );
+    expect(html).toMatch(/High-confidence share[\s\S]*?<td class="num prior">—<\/td>/);
+  });
 });
