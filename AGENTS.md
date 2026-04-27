@@ -85,8 +85,60 @@ This project uses [semantic-release](https://github.com/semantic-release/semanti
 
 Scopes are optional: `fix(config): handle empty file without crash`
 
+## Release Channels
+
+semantic-release publishes on every push to a release branch. Two channels are configured (`release.config.js`):
+
+| Branch | npm dist-tag | Version shape | Install with |
+|---|---|---|---|
+| `main` | `latest` | `0.11.0` | `npx @dosu/cli setup` |
+| `alpha` | `alpha` | `0.11.0-alpha.1` | `npx @dosu/cli@alpha setup` |
+
+The `alpha` channel is for **internal pre-release / dogfooding**. Workflow:
+
+```bash
+# Cut an alpha branch off main when you want internal testers to try a feature.
+git checkout -b alpha
+git push -u origin alpha
+
+# From then on, every conventional commit pushed to `alpha` cuts a new prerelease:
+#   feat: something  → 0.11.0-alpha.1
+#   fix: ...         → 0.11.0-alpha.2
+#
+# When ready to graduate, merge `alpha` into `main` — semantic-release rolls the
+# version forward to a stable 0.11.0 on the `latest` tag.
+```
+
+`update-homebrew` is intentionally skipped for prereleases — the gate is `!contains(version, '-')` in `.github/workflows/ci.yml`.
+
 ## Environment Variables
 
-- `DOSU_DEV=true` — switches all URLs to localhost dev endpoints
-- `DOSU_WEB_APP_URL`, `DOSU_BACKEND_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY` — individual URL overrides
+### Build-time defaults (baked into the bundle)
+
+These are read by `scripts/build-all.ts:buildDefines()` and inlined as string literals via `bun build --define` at compile time. The published npm bundle contains the build-time values verbatim — they cannot be changed at runtime.
+
+- `DOSU_WEB_APP_URL`, `DOSU_BACKEND_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY` — sourced from `.env.production` for prod builds, `.env.development` for `bun run dev:local`
 - `DOSU_VERSION`, `DOSU_COMMIT`, `DOSU_DATE` — injected at build time for version info
+
+### Runtime overrides
+
+These are read **on every CLI invocation** and take precedence over the baked-in defaults. Useful for repointing a published `@alpha` build at staging/local backends without rebuilding.
+
+- `DOSU_WEB_APP_URL_OVERRIDE`
+- `DOSU_BACKEND_URL_OVERRIDE`
+- `SUPABASE_URL_OVERRIDE`
+- `SUPABASE_ANON_KEY_OVERRIDE`
+
+Example:
+
+```bash
+DOSU_WEB_APP_URL_OVERRIDE=https://staging.dosu.dev \
+DOSU_BACKEND_URL_OVERRIDE=https://api-staging.dosu.dev \
+SUPABASE_URL_OVERRIDE=https://staging.supabase.co \
+SUPABASE_ANON_KEY_OVERRIDE=eyJ... \
+npx @dosu/cli@alpha setup
+```
+
+### Other runtime env
+
+- `DOSU_DEV=true` — isolates the CLI's config dir to `~/.config/dosu-cli-dev/` so dev runs don't clobber prod credentials. Does **not** switch URLs (URLs are build-time-baked; use `*_OVERRIDE` for that).
