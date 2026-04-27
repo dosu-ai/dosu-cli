@@ -28,6 +28,7 @@ import {
 } from "../config/config";
 import { logger } from "../debug/logger";
 import { allProviders, getProvider, type Provider } from "../mcp/providers";
+import { checkForSkillUpdates } from "../version/skill-update-check";
 import { checkForUpdates } from "../version/update-check";
 import { getVersionString } from "../version/version";
 
@@ -43,6 +44,7 @@ export function createProgram(): Command {
       const opts = thisCommand.optsWithGlobals();
       logger.init({ debug: opts.debug });
       checkForUpdates();
+      checkForSkillUpdates();
     })
     .action(async () => {
       // Default: launch TUI when no subcommand given
@@ -211,9 +213,18 @@ export function createProgram(): Command {
     .command("setup")
     .description("Set up Dosu MCP for your AI tools")
     .option("--deployment <id>", "Skip to tool configuration for a specific MCP")
-    .action(async (opts: { deployment?: string }) => {
+    .option("--mode <mode>", "Force OSS or Cloud mode, skipping the interactive prompt (oss|cloud)")
+    .action(async (opts: { deployment?: string; mode?: string }) => {
       const { runSetup } = await import("../setup/flow");
-      await runSetup({ deploymentID: opts.deployment });
+      let mode: "oss" | "cloud" | undefined;
+      if (opts.mode !== undefined) {
+        const normalized = opts.mode.toLowerCase();
+        if (normalized !== "oss" && normalized !== "cloud") {
+          throw new Error(`invalid --mode value '${opts.mode}' (expected 'oss' or 'cloud')`);
+        }
+        mode = normalized;
+      }
+      await runSetup({ deploymentID: opts.deployment, mode });
     });
 
   // logs

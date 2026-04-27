@@ -38,6 +38,60 @@ describe("config", () => {
     expect(existsSync(join(tempDir, "dosu-cli"))).toBe(true);
   });
 
+  it("DOSU_DEV=true isolates config into a separate dosu-cli-dev directory", () => {
+    const origDev = process.env.DOSU_DEV;
+    try {
+      process.env.DOSU_DEV = "true";
+      const devPath = getConfigPath();
+      expect(devPath).toBe(join(tempDir, "dosu-cli-dev", "config.json"));
+      expect(existsSync(join(tempDir, "dosu-cli-dev"))).toBe(true);
+
+      // Writing under dev must not touch the prod dir.
+      const devCfg: Config = {
+        access_token: "dev-tok",
+        refresh_token: "dev-ref",
+        expires_at: 1,
+      };
+      saveConfig(devCfg);
+
+      // Switch back to prod — we should see empty config, not the dev one.
+      delete process.env.DOSU_DEV;
+      const prodCfg = loadConfig();
+      expect(prodCfg.access_token).toBe("");
+
+      // Switch back to dev — dev config must still be there.
+      process.env.DOSU_DEV = "true";
+      const devCfgReloaded = loadConfig();
+      expect(devCfgReloaded.access_token).toBe("dev-tok");
+    } finally {
+      if (origDev !== undefined) {
+        process.env.DOSU_DEV = origDev;
+      } else {
+        delete process.env.DOSU_DEV;
+      }
+    }
+  });
+
+  it("DOSU_DEV other values don't enable dev isolation (only 'true' counts)", () => {
+    const origDev = process.env.DOSU_DEV;
+    try {
+      process.env.DOSU_DEV = "1";
+      expect(getConfigPath()).toBe(join(tempDir, "dosu-cli", "config.json"));
+
+      process.env.DOSU_DEV = "yes";
+      expect(getConfigPath()).toBe(join(tempDir, "dosu-cli", "config.json"));
+
+      process.env.DOSU_DEV = "";
+      expect(getConfigPath()).toBe(join(tempDir, "dosu-cli", "config.json"));
+    } finally {
+      if (origDev !== undefined) {
+        process.env.DOSU_DEV = origDev;
+      } else {
+        delete process.env.DOSU_DEV;
+      }
+    }
+  });
+
   it("loadConfig returns empty config when file does not exist", () => {
     const cfg = loadConfig();
     expect(cfg.access_token).toBe("");
@@ -144,6 +198,9 @@ describe("config", () => {
       deployment_id: undefined,
       deployment_name: undefined,
       api_key: undefined,
+      mode: undefined,
+      org_id: undefined,
+      space_id: undefined,
     });
   });
 });
