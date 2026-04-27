@@ -35,6 +35,7 @@ interface PromptGitHubRepositoriesOptions {
   maxItems?: number;
 }
 
+/* v8 ignore start -- TTY-only wrapper; logic covered via GitHubRepoPrompt tests */
 export async function promptGitHubRepositories({
   message,
   options,
@@ -49,8 +50,9 @@ export async function promptGitHubRepositories({
   });
   return (await prompt.prompt()) as symbol | typeof ADD_REPOSITORIES_VALUE | string[];
 }
+/* v8 ignore stop */
 
-class GitHubRepoPrompt extends Prompt {
+export class GitHubRepoPrompt extends Prompt {
   options: PromptOption[];
   message: string;
   maxItems?: number;
@@ -229,6 +231,7 @@ function supportsUnicode(): boolean {
   if (process.platform !== "win32") {
     return process.env.TERM !== "linux";
   }
+  /* v8 ignore start -- win32-only; cannot be exercised on Linux CI */
   return !!(
     process.env.CI ||
     process.env.WT_SESSION ||
@@ -240,6 +243,7 @@ function supportsUnicode(): boolean {
     process.env.TERM === "alacritty" ||
     process.env.TERMINAL_EMULATOR === "JetBrains-JediTerm"
   );
+  /* v8 ignore stop */
 }
 
 function symbol(unicodeValue: string, asciiValue: string): string {

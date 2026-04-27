@@ -36,12 +36,14 @@ interface KeyInfo {
   name?: string;
 }
 
+/* v8 ignore start -- TTY-only wrapper; logic covered via GitHubDocsImportPrompt tests */
 export async function promptGitHubDocsImport({
   repositories,
 }: PromptGitHubDocsImportOptions): Promise<symbol | string[]> {
   const prompt = new GitHubDocsImportPrompt({ repositories });
   return (await prompt.prompt()) as symbol | string[];
 }
+/* v8 ignore stop */
 
 export class GitHubDocsImportPrompt extends Prompt {
   repositories: GitHubImportRepositoryOption[];
@@ -468,6 +470,7 @@ function supportsUnicode(): boolean {
   if (process.platform !== "win32") {
     return process.env.TERM !== "linux";
   }
+  /* v8 ignore start -- win32-only; cannot be exercised on Linux CI */
   return !!(
     process.env.CI ||
     process.env.WT_SESSION ||
@@ -479,6 +482,7 @@ function supportsUnicode(): boolean {
     process.env.TERM === "alacritty" ||
     process.env.TERMINAL_EMULATOR === "JetBrains-JediTerm"
   );
+  /* v8 ignore stop */
 }
 
 function symbol(unicodeValue: string, asciiValue: string): string {
