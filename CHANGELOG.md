@@ -1,3 +1,10 @@
+# [0.11.0-alpha.3](https://github.com/dosu-ai/dosu-cli/compare/v0.11.0-alpha.2...v0.11.0-alpha.3) (2026-04-27)
+
+
+### Bug Fixes
+
+* **setup:** sync GitHub data sources ([#56](https://github.com/dosu-ai/dosu-cli/issues/56)) ([1ea4098](https://github.com/dosu-ai/dosu-cli/commit/1ea4098999a522d145fb6ddcab14ff2c2d6ee2fa))
+
 # [0.11.0-alpha.2](https://github.com/dosu-ai/dosu-cli/compare/v0.11.0-alpha.1...v0.11.0-alpha.2) (2026-04-27)
 
 
