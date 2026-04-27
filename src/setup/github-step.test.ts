@@ -20,7 +20,7 @@ const {
       create: { mutate: vi.fn() },
       listForSpace: { query: vi.fn() },
     },
-    dataSource: { create: { mutate: vi.fn() } },
+    dataSource: { create: { mutate: vi.fn() }, syncDataSource: { mutate: vi.fn() } },
     deploymentDataSource: { create: { mutate: vi.fn() } },
   },
 }));
@@ -320,6 +320,11 @@ describe("stepConnectGitHubRepo", () => {
     expect(result.advance).toBe(true);
     expect(mockTrpc.workspaces.create.mutate).toHaveBeenCalledTimes(2);
     expect(mockTrpc.dataSource.create.mutate).toHaveBeenCalledTimes(2);
+    // syncDataSource fires once per created data source so the backend
+    // enqueues `sync_data_source` and clones the repo.
+    expect(mockTrpc.dataSource.syncDataSource.mutate).toHaveBeenCalledTimes(2);
+    expect(mockTrpc.dataSource.syncDataSource.mutate).toHaveBeenCalledWith("ds-A");
+    expect(mockTrpc.dataSource.syncDataSource.mutate).toHaveBeenCalledWith("ds-B");
     // deploymentDataSource.create fires once per (selected repo × space deployments):
     // 2 repos × 3 deployments = 6 invocations.
     expect(mockTrpc.deploymentDataSource.create.mutate).toHaveBeenCalledTimes(6);
