@@ -1,3 +1,10 @@
+# [0.11.0-alpha.2](https://github.com/dosu-ai/dosu-cli/compare/v0.11.0-alpha.1...v0.11.0-alpha.2) (2026-04-27)
+
+
+### Bug Fixes
+
+* **setup:** exit doc-scan early when repos are indexed but empty ([#55](https://github.com/dosu-ai/dosu-cli/issues/55)) ([e9d6dbf](https://github.com/dosu-ai/dosu-cli/commit/e9d6dbf002319bc5fd1da264aa3d430b887d6e58))
+
 # [0.11.0-alpha.1](https://github.com/dosu-ai/dosu-cli/compare/v0.10.0...v0.11.0-alpha.1) (2026-04-27)
 
 
