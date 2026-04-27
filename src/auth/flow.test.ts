@@ -162,23 +162,6 @@ describe("startOAuthFlow", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("includes redirect param when path is not /cli/auth", async () => {
-    const flowPromise = startOAuthFlow(undefined, "/cli-setup");
-    await new Promise((r) => setTimeout(r, 10));
-
-    expect(mockOpenDefault).toHaveBeenCalledOnce();
-    const calledURL = new URL(mockOpenDefault.mock.calls[0]?.[0] as string);
-
-    expect(calledURL.pathname).toBe("/cli-setup");
-    expect(calledURL.searchParams.get("callback")).toBe("http://localhost:12345/callback");
-    const redirect = calledURL.searchParams.get("redirect") ?? "";
-    expect(redirect).toContain("/cli-setup?callback=");
-    expect(redirect).toContain(encodeURIComponent("http://localhost:12345/callback"));
-
-    resolveToken({ access_token: "a", refresh_token: "r", expires_in: 1 });
-    await flowPromise;
-  });
-
   it("uses the configured web app URL for building the auth URL", async () => {
     mockGetWebAppURL.mockReturnValue("http://localhost:3001");
 

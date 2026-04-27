@@ -7,7 +7,7 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { Client } from "../client/client";
-import { isAuthenticated, loadConfig, MODE_OSS, saveConfig } from "../config/config";
+import { isAuthenticated, loadConfig, saveConfig } from "../config/config";
 import { runSetup } from "../setup/flow";
 
 const LOGO = `
@@ -25,12 +25,6 @@ export async function runTUI(): Promise<void> {
   console.log(pc.magenta(LOGO));
 
   const cfg = loadConfig();
-
-  // If not authenticated, authenticate first
-  if (!isAuthenticated(cfg)) {
-    await handleAuthenticate(cfg);
-    if (!isAuthenticated(cfg)) return;
-  }
 
   // Main menu
   while (true) {
@@ -111,7 +105,6 @@ async function handleAuthenticate(cfg: ReturnType<typeof loadConfig>): Promise<v
     cfg.access_token = token.access_token;
     cfg.refresh_token = token.refresh_token;
     cfg.expires_at = Math.floor(Date.now() / 1000) + token.expires_in;
-    cfg.mode = token.mode === MODE_OSS ? MODE_OSS : undefined;
     saveConfig(cfg);
   } catch (err: unknown) {
     /* v8 ignore next -- err is always Error in practice */

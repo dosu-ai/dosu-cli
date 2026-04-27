@@ -2,9 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, alpha]
   push:
-    branches: [main]
+    branches: [main, alpha]
 
 jobs:
   lint:
@@ -130,7 +130,7 @@ jobs:
       - test
       - build
       - windows-npm-smoke
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/alpha')
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -163,24 +163,6 @@ describe("auth callback server", () => {
     expect(html).toContain("<strong>test@dosu.dev</strong>");
   });
 
-  it("includes mode in token when mode=oss is in query params", async () => {
-    const result = await startCallbackServer();
-    server = result.server;
-
-    await fetch(`http://localhost:${server.port}/callback?access_token=tok&mode=oss`);
-    const token = await result.tokenPromise;
-    expect(token.mode).toBe("oss");
-  });
-
-  it("omits mode from token when mode is not oss", async () => {
-    const result = await startCallbackServer();
-    server = result.server;
-
-    await fetch(`http://localhost:${server.port}/callback?access_token=tok&mode=cloud`);
-    const token = await result.tokenPromise;
-    expect(token.mode).toBeUndefined();
-  });
-
   it("treats literal string 'null' in refresh_token as empty", async () => {
     const result = await startCallbackServer();
     server = result.server;

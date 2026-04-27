@@ -182,15 +182,14 @@ describe("handleLogout (direct)", () => {
 // ---------------------------------------------------------------------------
 
 describe("runTUI", () => {
-  it("prompts to authenticate when not authenticated (real config, no file on disk)", async () => {
-    // No config file exists, so loadConfig returns empty → not authenticated
-    // User declines to open browser → TUI exits
-    mockConfirm.mockResolvedValueOnce(false);
+  it("shows the main menu before authentication", async () => {
+    mockSelect.mockResolvedValueOnce("exit");
+    mockIsCancel.mockReturnValue(false);
 
     await runTUI();
 
-    expect(mockConfirm).toHaveBeenCalledWith({ message: "Open browser to log in?" });
-    expect(mockSelect).not.toHaveBeenCalled();
+    expect(mockSelect).toHaveBeenCalledOnce();
+    expect(mockConfirm).not.toHaveBeenCalled();
   });
 
   it("exits loop and calls outro when user selects exit", async () => {
@@ -300,7 +299,7 @@ describe("runTUI", () => {
       expires_in: 3600,
     });
 
-    mockSelect.mockResolvedValueOnce("exit");
+    mockSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
 
     await runTUI();
 
@@ -310,30 +309,12 @@ describe("runTUI", () => {
     expect(ondisk.refresh_token).toBe("new-ref");
   });
 
-  it("saves OSS mode from OAuth token response", async () => {
-    writeRealConfig(makeCfg({ access_token: "" }));
-    mockIsCancel.mockReturnValue(false);
-    mockConfirm.mockResolvedValueOnce(true);
-
-    mockStartOAuthFlow.mockResolvedValueOnce({
-      access_token: "new-tok",
-      refresh_token: "new-ref",
-      expires_in: 3600,
-      mode: "oss",
-    });
-
-    mockSelect.mockResolvedValueOnce("exit");
-
-    await runTUI();
-
-    const ondisk = readRealConfig();
-    expect(ondisk.mode).toBe("oss");
-  });
-
   it("shows error when OAuth flow fails", async () => {
     writeRealConfig(makeCfg({ access_token: "" }));
     mockConfirm.mockResolvedValueOnce(true);
     mockStartOAuthFlow.mockRejectedValueOnce(new Error("auth timeout"));
+    mockIsCancel.mockReturnValue(false);
+    mockSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
 
     await runTUI();
 
@@ -344,6 +325,7 @@ describe("runTUI", () => {
     writeRealConfig(makeCfg({ access_token: "" }));
     mockIsCancel.mockReturnValue(true);
     mockConfirm.mockResolvedValueOnce(Symbol.for("cancel") as unknown as boolean);
+    mockSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
 
     await runTUI();
 
