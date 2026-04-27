@@ -271,6 +271,8 @@ async function createDeploymentForRepo(
       return { deployment_id: deployment.deployment_id };
     }
 
+    await trpc.dataSource.syncDataSource.mutate(dataSource.data_source_id);
+
     const spaceDeployments = (await trpc.workspaces.listForSpace.query(spaceID)) as unknown as {
       deployment_id: string;
     }[];
