@@ -1,3 +1,10 @@
+# [0.11.0-alpha.1](https://github.com/dosu-ai/dosu-cli/compare/v0.10.0...v0.11.0-alpha.1) (2026-04-27)
+
+
+### Features
+
+* **setup:** CLI-led onboarding ([7d65817](https://github.com/dosu-ai/dosu-cli/commit/7d65817cf30d948b82cb91279b0204207f1359b2))
+
 # [0.10.0](https://github.com/dosu-ai/dosu-cli/compare/v0.9.1...v0.10.0) (2026-04-16)
 
 
