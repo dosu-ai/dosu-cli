@@ -267,7 +267,15 @@ async function waitForImportableGithubFiles(
         return latestFiles;
       }
 
-      await fetchGitHubDataSources(trpc, orgID);
+      // Distinguish "still indexing" from "indexed but empty". If every
+      // GitHub data source in the org is fully indexed and we still have no
+      // files, the repos legitimately contain no markdown — exit immediately
+      // instead of waiting out the timeout.
+      const dataSources = await fetchGitHubDataSources(trpc, orgID);
+      if (dataSources.length > 0 && dataSources.every((ds) => ds.is_indexed === true)) {
+        spinner.stop("No markdown docs found");
+        return [];
+      }
       await sleep(DOC_SCAN_POLL_INTERVAL_MS);
     }
 

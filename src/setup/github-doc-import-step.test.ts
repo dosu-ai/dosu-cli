@@ -201,6 +201,23 @@ describe("stepImportGitHubDocs", () => {
     expect(result.advance).toBe(true);
   });
 
+  it("returns immediately when every github data source is indexed but the repos contain no markdown", async () => {
+    // Repo legitimately has no .md files (e.g. an asset repo). Backend has
+    // already finished indexing — listImportableGithubFiles returns []
+    // forever. We must not wait out the 60s timeout in that case.
+    mockTrpc.docImports.listImportableGithubFiles.query.mockResolvedValue([]);
+    mockTrpc.dataSource.list.query.mockResolvedValue([
+      { provider_slug: "github", is_indexed: true },
+    ]);
+
+    const result = await stepImportGitHubDocs(makeCfg(), { waitForFreshDocs: true });
+
+    expect(result.advance).toBe(true);
+    // We don't ask the user anything when we can prove there's nothing to scan.
+    expect(p.select).not.toHaveBeenCalled();
+    expect(mockTrpc.docImports.importGithubFiles.mutate).not.toHaveBeenCalled();
+  });
+
   it("treats an empty doc selection as skip and does not start an import", async () => {
     mockTrpc.docImports.listImportableGithubFiles.query.mockResolvedValue([
       {
