@@ -86,10 +86,6 @@ vi.mock("../client/trpc", () => ({
   createTypedClient: vi.fn(() => mockTrpc),
 }));
 
-vi.mock("../auth/jwt", () => ({
-  userIdFromAccessToken: vi.fn(() => "test-user-id"),
-}));
-
 vi.mock("../client/client", () => {
   const SessionExpiredError = class extends Error {
     constructor() {
