@@ -284,17 +284,16 @@ async function openGitHubInstallFlow(
  * into every deployment in the space. Mirrors the web
  * `OnboardingGithub.handleNext` + `useCreateDataSources` flow exactly.
  *
- * Returns the `data_source_id` alongside `deployment_id` so the caller can
- * verify the row survived the backend's initial sync attempt — when Dosu's
- * GitHub App can't reach the repo, `sync_github_data_source` deletes the
- * data_source asynchronously, leaving an orphan deployment behind.
+ * If `dataSource.create` returns nothing the deployment is rolled back so
+ * downstream verify/report logic never has to reason about
+ * deployment-without-data_source orphans.
  */
 async function createDeploymentForRepo(
   trpc: TrpcAny,
   orgID: string,
   spaceID: string,
   repo: AvailableRepo,
-): Promise<{ deployment_id: string; data_source_id?: string } | null> {
+): Promise<{ deployment_id: string; data_source_id: string } | null> {
   try {
     const deployment = (await trpc.workspaces.create.mutate({
       org_id: orgID,
@@ -326,7 +325,8 @@ async function createDeploymentForRepo(
     })) as unknown as { data_source_id: string } | null;
     if (!dataSource?.data_source_id) {
       logger.warn("setup", `dataSource.create returned no data_source for ${repo.slug}`);
-      return { deployment_id: deployment.deployment_id };
+      await deleteOrphanDeployment(trpc, deployment.deployment_id, repo.slug);
+      return null;
     }
 
     await trpc.dataSource.syncDataSource.mutate(dataSource.data_source_id);
@@ -511,7 +511,7 @@ export async function stepConnectGitHubRepo(
 
     const s = p.spinner();
     s.start(`Connecting ${slugs.length} repo${slugs.length === 1 ? "" : "s"}...`);
-    const created: { deployment_id: string; data_source_id?: string; slug: string }[] = [];
+    const created: { deployment_id: string; data_source_id: string; slug: string }[] = [];
     for (const slug of slugs) {
       const repo = repos.find((r) => r.slug === slug);
       if (!repo) continue;
@@ -530,24 +530,18 @@ export async function stepConnectGitHubRepo(
     // GitHub App can't reach the repo. Verify before declaring success — and
     // revert the orphan deployments so the multiselect doesn't keep showing
     // those repos as `is_deployed=true` on the next run.
-    const expectedDsIds = created
-      .map((c) => c.data_source_id)
-      .filter((id): id is string => Boolean(id));
+    const expectedDsIds = created.map((c) => c.data_source_id);
     const survivors = await verifyDataSourcesPersist(trpc, orgID, expectedDsIds, opts.verify);
 
     const reverted: { slug: string; deployment_id: string }[] = [];
     if (survivors.dropped.size > 0) {
-      const droppedEntries = created.filter(
-        (c) => c.data_source_id && survivors.dropped.has(c.data_source_id),
-      );
+      const droppedEntries = created.filter((c) => survivors.dropped.has(c.data_source_id));
       for (const entry of droppedEntries) {
         await deleteOrphanDeployment(trpc, entry.deployment_id, entry.slug);
         reverted.push({ slug: entry.slug, deployment_id: entry.deployment_id });
       }
     }
-    const survived = created.filter(
-      (c) => !c.data_source_id || survivors.alive.has(c.data_source_id),
-    );
+    const survived = created.filter((c) => survivors.alive.has(c.data_source_id));
 
     if (survived.length === 0) {
       s.stop("Failed");
@@ -581,15 +575,12 @@ export async function stepConnectGitHubRepo(
     // Prefer the cwd repo's deployment as the primary; fall back to the first
     // successfully created one.
     const primary = (detected && survived.find((c) => c.slug === detected.slug)) ?? survived[0];
-    const survivingDataSourceIds = survived
-      .map((c) => c.data_source_id)
-      .filter((id): id is string => Boolean(id));
     return {
       advance: true,
       has_connected_repo: true,
       deployment_id: primary.deployment_id,
       space_id: cfg.space_id,
-      created_data_source_ids: survivingDataSourceIds,
+      created_data_source_ids: survived.map((c) => c.data_source_id),
     };
   }
 }

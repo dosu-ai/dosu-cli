@@ -470,6 +470,37 @@ describe("stepConnectGitHubRepo", () => {
     expect(warnCalls.some((m) => m.includes("acme/stale"))).toBe(true);
   });
 
+  it("rolls back the deployment when dataSource.create returns nothing", async () => {
+    // dataSource.create occasionally returns null on the staging tRPC router
+    // (transient validation failure). Without rollback the deployment row
+    // would be left orphaned and reported as Connected, then leak into
+    // cfg.deployment_id as primary on first-run onboarding.
+    mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
+      { repository_id: 1, name: "good", slug: "acme/good", is_deployed: false },
+      { repository_id: 2, name: "broken", slug: "acme/broken", is_deployed: false },
+    ]);
+    mockPromptGitHubRepositories.mockResolvedValue(["acme/good", "acme/broken"]);
+    mockTrpc.workspaces.create.mutate
+      .mockResolvedValueOnce({ deployment_id: "dep-good" })
+      .mockResolvedValueOnce({ deployment_id: "dep-broken" });
+    mockTrpc.dataSource.create.mutate
+      .mockResolvedValueOnce({ data_source_id: "ds-good" })
+      .mockResolvedValueOnce(null);
+    mockTrpc.workspaces.listForSpace.query.mockResolvedValue([{ deployment_id: "dep-good" }]);
+    mockTrpc.deploymentDataSource.create.mutate.mockResolvedValue({});
+    mockTrpc.dataSource.list.query.mockResolvedValue([
+      { data_source_id: "ds-good", provider_slug: "github", is_indexed: false },
+    ]);
+
+    const result = await stepConnectGitHubRepo(makeCfg(), null, NO_WAIT_VERIFY);
+
+    expect(result.advance).toBe(true);
+    expect(result.deployment_id).toBe("dep-good");
+    expect(result.created_data_source_ids).toEqual(["ds-good"]);
+    expect(mockTrpc.workspaces.delete.mutate).toHaveBeenCalledWith("dep-broken");
+    expect(mockTrpc.workspaces.delete.mutate).not.toHaveBeenCalledWith("dep-good");
+  });
+
   it("fails the step when every connected data_source gets deleted by backend sync", async () => {
     mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
       { repository_id: 100, name: "stale", slug: "acme/stale", is_deployed: false },
