@@ -1,3 +1,11 @@
+# [0.11.0-alpha.5](https://github.com/dosu-ai/dosu-cli/compare/v0.11.0-alpha.4...v0.11.0-alpha.5) (2026-04-28)
+
+
+### Bug Fixes
+
+* **setup:** roll back deployment when dataSource.create returns null ([e4db7b8](https://github.com/dosu-ai/dosu-cli/commit/e4db7b8c1fd1b930a8495ba86ec628300e6461a8))
+* **skill-update:** re-read cache before background write-back ([aa9e27b](https://github.com/dosu-ai/dosu-cli/commit/aa9e27bbfb1b70667ea9f5a73eb8284500294b5a))
+
 # [0.11.0-alpha.4](https://github.com/dosu-ai/dosu-cli/compare/v0.11.0-alpha.3...v0.11.0-alpha.4) (2026-04-28)
 
 
