@@ -1,16 +1,18 @@
 import { Prompt } from "@clack/core";
 import pc from "picocolors";
+import {
+  ACTIVE_SYMBOL,
+  BAR,
+  CANCEL_SYMBOL,
+  CHECKBOX_OFF,
+  CHECKBOX_ON,
+  ELLIPSIS,
+  FOOTER,
+  SUBMIT_SYMBOL,
+  symbol,
+} from "./prompt-symbols";
 
-const unicode = supportsUnicode();
-const ACTIVE_SYMBOL = symbol("◆", "*");
-const SUBMIT_SYMBOL = symbol("◇", "o");
-const CANCEL_SYMBOL = symbol("■", "x");
-const BAR = symbol("│", "|");
-const FOOTER = symbol("└", "-");
-const CHECKBOX_OFF = symbol("◻", "[ ]");
-const CHECKBOX_ON = symbol("◼", "[+]");
 const ACTION_ARROW = symbol("→", ">");
-const ELLIPSIS = "...";
 
 export const ADD_REPOSITORIES_VALUE = "__add_repositories__" as const;
 
@@ -225,27 +227,4 @@ function visibleOptions(
     }
     return { kind: "option" as const, index: start + index };
   });
-}
-
-function supportsUnicode(): boolean {
-  if (process.platform !== "win32") {
-    return process.env.TERM !== "linux";
-  }
-  /* v8 ignore start -- win32-only; cannot be exercised on Linux CI */
-  return !!(
-    process.env.CI ||
-    process.env.WT_SESSION ||
-    process.env.TERMINUS_SUBLIME ||
-    process.env.ConEmuTask === "{cmd::Cmder}" ||
-    process.env.TERM_PROGRAM === "Terminus-Sublime" ||
-    process.env.TERM_PROGRAM === "vscode" ||
-    process.env.TERM === "xterm-256color" ||
-    process.env.TERM === "alacritty" ||
-    process.env.TERMINAL_EMULATOR === "JetBrains-JediTerm"
-  );
-  /* v8 ignore stop */
-}
-
-function symbol(unicodeValue: string, asciiValue: string): string {
-  return unicode ? unicodeValue : asciiValue;
 }
