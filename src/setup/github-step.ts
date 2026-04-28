@@ -138,13 +138,13 @@ function buildPromptOptions(
   repos: AvailableRepo[],
 ): Parameters<typeof promptGitHubRepositories>[0]["options"] {
   return [
-    ...repos.map((r) => ({ kind: "repo" as const, label: r.slug, value: r.slug })),
     {
       kind: "action" as const,
       label: "Add repositories...",
       value: ADD_REPOSITORIES_VALUE,
       hint: "Open GitHub and refresh this list",
     },
+    ...repos.map((r) => ({ kind: "repo" as const, label: r.slug, value: r.slug })),
   ];
 }
 

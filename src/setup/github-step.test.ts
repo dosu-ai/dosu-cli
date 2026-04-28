@@ -191,8 +191,8 @@ describe("stepConnectGitHubRepo", () => {
       initialValues?: string[];
     };
     expect(promptArgs.options).toMatchObject([
-      { label: "acme/api", value: "acme/api" },
       { label: "Add repositories...", value: "__add_repositories__" },
+      { label: "acme/api", value: "acme/api" },
     ]);
     expect(promptArgs.initialValues).toEqual([]);
   });
@@ -227,11 +227,11 @@ describe("stepConnectGitHubRepo", () => {
     const secondArgs = mockPromptGitHubRepositories.mock.calls[1][0] as {
       options: { value: string }[];
     };
-    expect(firstArgs.options.map((o) => o.value)).toEqual(["acme/api", "__add_repositories__"]);
+    expect(firstArgs.options.map((o) => o.value)).toEqual(["__add_repositories__", "acme/api"]);
     expect(secondArgs.options.map((o) => o.value)).toEqual([
+      "__add_repositories__",
       "acme/api",
       "acme/core",
-      "__add_repositories__",
     ]);
     expect(mockTrpc.workspaces.create.mutate).toHaveBeenCalledTimes(1);
     const [args] = mockTrpc.workspaces.create.mutate.mock.calls[0];
@@ -306,9 +306,9 @@ describe("stepConnectGitHubRepo", () => {
       options: { value: string }[];
     };
     expect(secondArgs.options.map((o) => o.value)).toEqual([
+      "__add_repositories__",
       "acme/api",
       "acme/core",
-      "__add_repositories__",
     ]);
     expect(mockTrpc.workspaces.create.mutate).toHaveBeenCalledTimes(1);
     const [args] = mockTrpc.workspaces.create.mutate.mock.calls[0];
@@ -388,9 +388,9 @@ describe("stepConnectGitHubRepo", () => {
       options: { value: string }[];
     };
     expect(multiselectArgs.options.map((o) => o.value)).toEqual([
+      "__add_repositories__",
       "acme/core",
       "acme/cli",
-      "__add_repositories__",
     ]);
     // Deployed repos surface via a separate info log.
     const infoCalls = vi.mocked(p.log.info).mock.calls.map((c) => String(c[0]));
