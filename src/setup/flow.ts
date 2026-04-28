@@ -191,6 +191,17 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
 }
 
 /**
+ * Copy the four deployment fields onto cfg. Caller decides whether to also
+ * clear `cfg.mode` (Cloud paths do; the OSS auto-pick path doesn't).
+ */
+function applyDeployment(cfg: Config, d: Deployment): void {
+  cfg.deployment_id = d.deployment_id;
+  cfg.deployment_name = d.name;
+  cfg.org_id = d.org_id;
+  cfg.space_id = d.space_id;
+}
+
+/**
  * Apply a user-supplied --mode flag against the current config.
  */
 function applyModeOverride(cfg: Config, opts: SetupOptions): void {
@@ -427,10 +438,7 @@ async function bindOnboardingDeployment(
   }
 
   cfg.mode = undefined;
-  cfg.deployment_id = deployment.deployment_id;
-  cfg.deployment_name = deployment.name;
-  cfg.org_id = deployment.org_id;
-  cfg.space_id = deployment.space_id;
+  applyDeployment(cfg, deployment);
   logger.info(
     "setup",
     `Bound onboarding context org=${targetOrg.org_id} deployment=${deployment.deployment_id}`,
@@ -467,19 +475,13 @@ async function resolveDeployment(
     const d = await stepResolveDeployment(apiClient, opts.deploymentID);
     if (!d) return false;
     cfg.mode = undefined;
-    cfg.deployment_id = d.deployment_id;
-    cfg.deployment_name = d.name;
-    cfg.org_id = d.org_id;
-    cfg.space_id = d.space_id;
+    applyDeployment(cfg, d);
     return true;
   }
   if (cfg.mode === MODE_OSS) {
     const deployments = await fetchDeployments(apiClient);
     if (deployments.length > 0) {
-      cfg.deployment_id = deployments[0].deployment_id;
-      cfg.deployment_name = deployments[0].name;
-      cfg.org_id = deployments[0].org_id;
-      cfg.space_id = deployments[0].space_id;
+      applyDeployment(cfg, deployments[0]);
     }
     return true;
   }
@@ -488,10 +490,7 @@ async function resolveDeployment(
   const d = await stepSelectDeployment(apiClient, org);
   if (!d) return false;
   cfg.mode = undefined;
-  cfg.deployment_id = d.deployment_id;
-  cfg.deployment_name = d.name;
-  cfg.org_id = d.org_id;
-  cfg.space_id = d.space_id;
+  applyDeployment(cfg, d);
   return true;
 }
 
