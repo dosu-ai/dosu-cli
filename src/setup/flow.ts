@@ -429,6 +429,7 @@ async function bindOnboardingDeployment(
     "setup",
     `Bound onboarding context org=${targetOrg.org_id} deployment=${deployment.deployment_id}`,
   );
+  p.log.success(`Organization\n${dim(targetOrg.name)}`);
   return true;
 }
 
