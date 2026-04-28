@@ -17,6 +17,7 @@ const IMPORT_STATUS_POLL_INTERVAL_MS = 2_000;
 const IMPORT_STATUS_MAX_ERRORS = 3;
 
 interface GitHubDataSource {
+  data_source_id?: string;
   provider_slug?: string;
   is_indexed?: boolean;
 }
@@ -62,6 +63,15 @@ export interface GitHubDocsImportStepResult {
 
 export interface GitHubDocsImportStepOptions {
   waitForFreshDocs?: boolean;
+  /**
+   * `data_source_id`s the caller just created in this run. When set, the
+   * scan loop only waits on these ids — once each one is either indexed or
+   * has been deleted by the backend, we exit. Without this, the loop
+   * watches every GitHub data source in the org, so a stale
+   * `is_indexed=false` row from a previous run can stall fresh setups
+   * indefinitely.
+   */
+  expectedDataSourceIds?: string[];
 }
 
 export async function stepImportGitHubDocs(
@@ -80,7 +90,7 @@ export async function stepImportGitHubDocs(
 
   const trpc: TrpcAny = createTypedClient(cfg);
   const files = opts.waitForFreshDocs
-    ? await waitForImportableGithubFiles(trpc, cfg.org_id, cfg.space_id)
+    ? await waitForImportableGithubFiles(trpc, cfg.org_id, cfg.space_id, opts.expectedDataSourceIds)
     : await fetchImportableGithubFiles(trpc, cfg.space_id);
   if (files === null) {
     return { advance: false };
@@ -251,6 +261,7 @@ async function waitForImportableGithubFiles(
   trpc: TrpcAny,
   orgID: string,
   spaceID: string,
+  expectedDataSourceIds?: string[],
 ): Promise<ImportableGithubFile[] | null> {
   while (true) {
     const spinner = p.spinner();
@@ -267,12 +278,13 @@ async function waitForImportableGithubFiles(
         return latestFiles;
       }
 
-      // Distinguish "still indexing" from "indexed but empty". If every
-      // GitHub data source in the org is fully indexed and we still have no
-      // files, the repos legitimately contain no markdown — exit immediately
-      // instead of waiting out the timeout.
+      // Distinguish "still indexing" from "indexed but empty". When the
+      // caller passed the data_source ids it just created we only wait on
+      // those — they're either indexed-or-missing very quickly. Otherwise
+      // fall back to watching every GitHub data source in the org (legacy
+      // path used by non-onboarding callers).
       const dataSources = await fetchGitHubDataSources(trpc, orgID);
-      if (dataSources.length > 0 && dataSources.every((ds) => ds.is_indexed === true)) {
+      if (isScanComplete(dataSources, expectedDataSourceIds)) {
         spinner.stop("No markdown docs found");
         return [];
       }
@@ -296,6 +308,34 @@ async function waitForImportableGithubFiles(
       return [];
     }
   }
+}
+
+/**
+ * Decide whether the GitHub doc scan has settled and the user can move on.
+ *
+ * - With `expectedDataSourceIds`: every id is either indexed in the current
+ *   list or absent (the backend deleted it because Dosu can't reach the
+ *   repo). A still-pending QUEUED row elsewhere in the org doesn't matter.
+ * - Without it: keep the legacy "all GitHub data sources indexed" check so
+ *   non-onboarding callers don't change behaviour.
+ */
+function isScanComplete(
+  dataSources: GitHubDataSource[],
+  expectedDataSourceIds?: string[],
+): boolean {
+  if (expectedDataSourceIds && expectedDataSourceIds.length > 0) {
+    const byId = new Map<string, GitHubDataSource>();
+    for (const ds of dataSources) {
+      if (ds.data_source_id) byId.set(ds.data_source_id, ds);
+    }
+    for (const id of expectedDataSourceIds) {
+      const ds = byId.get(id);
+      if (!ds) continue; // backend deleted it — treat as resolved
+      if (ds.is_indexed !== true) return false;
+    }
+    return true;
+  }
+  return dataSources.length > 0 && dataSources.every((ds) => ds.is_indexed === true);
 }
 
 async function fetchGitHubDataSources(trpc: TrpcAny, orgID: string): Promise<GitHubDataSource[]> {

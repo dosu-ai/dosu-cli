@@ -141,6 +141,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     const { stepImportGitHubDocs } = await import("./github-doc-import-step");
     const importResult = await stepImportGitHubDocs(cfg, {
       waitForFreshDocs: Boolean(connectResult.deployment_id),
+      expectedDataSourceIds: connectResult.created_data_source_ids,
     });
     if (!importResult.advance) return;
     githubOnboardingDone = true;

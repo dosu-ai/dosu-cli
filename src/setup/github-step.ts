@@ -47,6 +47,12 @@ type TrpcAny = any;
 const INSTALLATION_TIMEOUT_MS = 10 * 60 * 1000;
 const REPO_REFRESH_POLL_INTERVAL_MS = 500;
 const REPO_REFRESH_POLL_TIMEOUT_MS = 10_000;
+// Backend `sync_github_data_source` deletes the data_source row if it can't
+// reach the repo on GitHub (typical RepositoryNotFoundException turnaround is
+// 3–7s once the workflow picks up). We poll a little past that to detect the
+// drop before reporting Connected to the user.
+const DATA_SOURCE_VERIFY_POLL_INTERVAL_MS = 1_000;
+const DATA_SOURCE_VERIFY_POLL_TIMEOUT_MS = 10_000;
 
 export interface DetectedRepo {
   owner: string;
@@ -54,11 +60,34 @@ export interface DetectedRepo {
   slug: string;
 }
 
+/**
+ * Internal knobs for the post-connect data-source verification poll. Real
+ * runs use the defaults (multi-second budget so we catch the backend's
+ * async `RepositoryNotFoundException` deletion). Tests inject `0` so they
+ * don't burn real time waiting on fake timers that don't pair cleanly with
+ * the install-flow promise chain.
+ */
+export interface StepConnectGitHubRepoOptions {
+  verify?: {
+    timeoutMs?: number;
+    intervalMs?: number;
+  };
+}
+
 export interface GithubStepResult {
   advance: boolean;
   has_connected_repo?: boolean;
   deployment_id?: string;
   space_id?: string;
+  /**
+   * `data_source_id`s that the user just connected in this run AND that
+   * survived the backend's initial sync attempt. Empty when nothing connected
+   * or when every connection was reverted because Dosu couldn't reach the
+   * underlying GitHub repo. Downstream doc-import waits on exactly this set
+   * so a stale `is_indexed=false` data source elsewhere in the org doesn't
+   * stall it.
+   */
+  created_data_source_ids?: string[];
 }
 
 // Shape returned by tRPC `githubRepository.listForOrg`.
@@ -230,13 +259,18 @@ async function openGitHubInstallFlow(
  * Create one github deployment + its data_source, then link the data_source
  * into every deployment in the space. Mirrors the web
  * `OnboardingGithub.handleNext` + `useCreateDataSources` flow exactly.
+ *
+ * Returns the `data_source_id` alongside `deployment_id` so the caller can
+ * verify the row survived the backend's initial sync attempt — when Dosu's
+ * GitHub App can't reach the repo, `sync_github_data_source` deletes the
+ * data_source asynchronously, leaving an orphan deployment behind.
  */
 async function createDeploymentForRepo(
   trpc: TrpcAny,
   orgID: string,
   spaceID: string,
   repo: AvailableRepo,
-): Promise<{ deployment_id: string } | null> {
+): Promise<{ deployment_id: string; data_source_id?: string } | null> {
   try {
     const deployment = (await trpc.workspaces.create.mutate({
       org_id: orgID,
@@ -284,7 +318,10 @@ async function createDeploymentForRepo(
         }),
       ),
     );
-    return { deployment_id: deployment.deployment_id };
+    return {
+      deployment_id: deployment.deployment_id,
+      data_source_id: dataSource.data_source_id,
+    };
   } catch (err: unknown) {
     /* v8 ignore next -- server errors bubble up */
     const msg = err instanceof Error ? err.message : String(err);
@@ -293,9 +330,99 @@ async function createDeploymentForRepo(
   }
 }
 
+interface SyncSurvivors {
+  alive: Set<string>;
+  dropped: Set<string>;
+}
+
+interface VerifyDataSourcesOptions {
+  /** Poll budget. Tests inject 0 to short-circuit to a single check. */
+  timeoutMs?: number;
+  /** Sleep between polls. Tests inject 0 to avoid any awaiting. */
+  intervalMs?: number;
+}
+
+/**
+ * Poll `dataSource.list` until each `expectedDataSourceIds` either shows up
+ * (alive) or stays missing through the budget (dropped — backend sync
+ * deleted it).
+ *
+ * Why we need this: `dataSource.create` is a synchronous insert, but
+ * `syncDataSource` only enqueues the GitHub clone+index workflow. If that
+ * workflow throws `RepositoryNotFoundException` it deletes the data_source
+ * a few seconds later. CLI-side this looks like a successful create, so
+ * without a follow-up read the user sees "Connected N" even when the row
+ * has already been GC'd server-side.
+ */
+export async function verifyDataSourcesPersist(
+  trpc: TrpcAny,
+  orgID: string,
+  expectedDataSourceIds: string[],
+  opts: VerifyDataSourcesOptions = {},
+): Promise<SyncSurvivors> {
+  const expected = new Set(expectedDataSourceIds);
+  if (expected.size === 0) {
+    return { alive: new Set(), dropped: new Set() };
+  }
+
+  const timeoutMs = opts.timeoutMs ?? DATA_SOURCE_VERIFY_POLL_TIMEOUT_MS;
+  const intervalMs = opts.intervalMs ?? DATA_SOURCE_VERIFY_POLL_INTERVAL_MS;
+
+  const startedAt = Date.now();
+  let alive = new Set<string>();
+  let dropped = new Set<string>();
+  let firstIteration = true;
+
+  while (firstIteration || Date.now() - startedAt < timeoutMs) {
+    firstIteration = false;
+    let listed: { data_source_id?: string }[] = [];
+    try {
+      listed = (await trpc.dataSource.list.query({
+        org_id: orgID,
+        excluded_provider_slugs: [],
+      })) as { data_source_id?: string }[];
+    } catch (err: unknown) {
+      /* v8 ignore next -- transient list failures are non-fatal; we'll retry */
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn("setup", `dataSource.list during verify failed: ${msg}`);
+    }
+
+    const presentNow = new Set(
+      listed.map((d) => d.data_source_id).filter((id): id is string => Boolean(id)),
+    );
+
+    alive = new Set([...expected].filter((id) => presentNow.has(id)));
+    dropped = new Set([...expected].filter((id) => !presentNow.has(id)));
+
+    // Earliest exit: any expected id has already been GC'd by the backend.
+    // Once one is gone we don't gain anything by polling longer.
+    if (dropped.size > 0) return { alive, dropped };
+
+    if (timeoutMs === 0) break;
+    await sleep(intervalMs);
+  }
+
+  return { alive, dropped };
+}
+
+async function deleteOrphanDeployment(
+  trpc: TrpcAny,
+  deploymentID: string,
+  slug: string,
+): Promise<void> {
+  try {
+    await trpc.workspaces.delete.mutate(deploymentID);
+  } catch (err: unknown) {
+    /* v8 ignore next -- best-effort cleanup; user can delete manually if needed */
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn("setup", `Failed to revert orphan deployment for ${slug}: ${msg}`);
+  }
+}
+
 export async function stepConnectGitHubRepo(
   cfg: Config,
   detected: DetectedRepo | null = detectGitRepo(),
+  opts: StepConnectGitHubRepoOptions = {},
 ): Promise<GithubStepResult> {
   logger.info("setup", "Step: connect GitHub repo(s)");
 
@@ -359,35 +486,85 @@ export async function stepConnectGitHubRepo(
 
     const s = p.spinner();
     s.start(`Connecting ${slugs.length} repo${slugs.length === 1 ? "" : "s"}...`);
-    const created: { deployment_id: string; slug: string }[] = [];
+    const created: { deployment_id: string; data_source_id?: string; slug: string }[] = [];
     for (const slug of slugs) {
       const repo = repos.find((r) => r.slug === slug);
       if (!repo) continue;
       const result = await createDeploymentForRepo(trpc, orgID, spaceID, repo);
       if (result) {
-        created.push({ deployment_id: result.deployment_id, slug });
+        created.push({
+          deployment_id: result.deployment_id,
+          data_source_id: result.data_source_id,
+          slug,
+        });
       }
     }
 
-    if (created.length === 0) {
+    // The CLI just created data_sources synchronously, but the backend's
+    // GitHub sync workflow may have already deleted some of them if Dosu's
+    // GitHub App can't reach the repo. Verify before declaring success — and
+    // revert the orphan deployments so the multiselect doesn't keep showing
+    // those repos as `is_deployed=true` on the next run.
+    const expectedDsIds = created
+      .map((c) => c.data_source_id)
+      .filter((id): id is string => Boolean(id));
+    const survivors = await verifyDataSourcesPersist(trpc, orgID, expectedDsIds, opts.verify);
+
+    const reverted: { slug: string; deployment_id: string }[] = [];
+    if (survivors.dropped.size > 0) {
+      const droppedEntries = created.filter(
+        (c) => c.data_source_id && survivors.dropped.has(c.data_source_id),
+      );
+      for (const entry of droppedEntries) {
+        await deleteOrphanDeployment(trpc, entry.deployment_id, entry.slug);
+        reverted.push({ slug: entry.slug, deployment_id: entry.deployment_id });
+      }
+    }
+    const survived = created.filter(
+      (c) => !c.data_source_id || survivors.alive.has(c.data_source_id),
+    );
+
+    if (survived.length === 0) {
       s.stop("Failed");
-      p.log.error("Could not connect any repos. Check `dosu logs --tail 50` for details.");
+      if (reverted.length > 0) {
+        p.log.error(
+          `Couldn't sync any repos — Dosu doesn't have GitHub access to: ${reverted
+            .map((r) => r.slug)
+            .join(", ")}.`,
+        );
+      } else {
+        p.log.error("Could not connect any repos. Check `dosu logs --tail 50` for details.");
+      }
       return { advance: false, has_connected_repo: deployed.length > 0 };
     }
 
-    s.stop(`Connected ${created.length} repo${created.length === 1 ? "" : "s"}`);
-    for (const { slug, deployment_id } of created) {
+    if (reverted.length > 0) {
+      s.stop(
+        `Connected ${survived.length} repo${survived.length === 1 ? "" : "s"} · ${reverted.length} skipped`,
+      );
+      p.log.warn(
+        `Dosu couldn't sync ${reverted.length} repo${reverted.length === 1 ? "" : "s"} ` +
+          `(GitHub App has no access): ${reverted.map((r) => r.slug).join(", ")}`,
+      );
+    } else {
+      s.stop(`Connected ${survived.length} repo${survived.length === 1 ? "" : "s"}`);
+    }
+    for (const { slug, deployment_id } of survived) {
       p.log.success(`${slug}\n${dim(`deployment ${deployment_id}`)}`);
     }
 
     // Prefer the cwd repo's deployment as the primary; fall back to the first
     // successfully created one.
-    const primary = (detected && created.find((c) => c.slug === detected.slug)) ?? created[0];
+    const primary = (detected && survived.find((c) => c.slug === detected.slug)) ?? survived[0];
+    const survivingDataSourceIds = survived
+      .map((c) => c.data_source_id)
+      .filter((id): id is string => Boolean(id));
     return {
       advance: true,
       has_connected_repo: true,
       deployment_id: primary.deployment_id,
       space_id: cfg.space_id,
+      created_data_source_ids: survivingDataSourceIds,
     };
   }
 }
