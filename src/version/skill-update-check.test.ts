@@ -273,6 +273,55 @@ describe("checkForSkillUpdates", () => {
     });
   });
 
+  it("background fetch does not clobber installedSha refreshed mid-flight", async () => {
+    // Reproduces the race where preAction's stale `checkForSkillUpdates` fetch
+    // resolves AFTER `dosu skill update` has already written a fresh
+    // installedSha. The closure-captured `cache.installedSha` must not win.
+    let resolveFetch: ((value: { ok: boolean; json: () => unknown }) => void) | undefined;
+    const fetchMock = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    mkdirSync(join(tempDir, "dosu-cli"), { recursive: true });
+    const cachePath = join(tempDir, "dosu-cli", CACHE_FILENAME);
+    writeFileSync(
+      cachePath,
+      JSON.stringify({
+        lastCheck: Date.now() - 2 * 24 * 60 * 60 * 1000,
+        latestSha: "old-sha",
+        installedSha: "old-sha",
+      }),
+    );
+
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    checkForSkillUpdates();
+
+    // Simulate `dosu skill update` running while the background fetch is still
+    // in flight: it writes a fresh installedSha to disk.
+    writeFileSync(
+      cachePath,
+      JSON.stringify({
+        lastCheck: Date.now(),
+        latestSha: "new-sha",
+        installedSha: "new-sha",
+      }),
+    );
+
+    // Now the background fetch resolves (with the same SHA the user just installed).
+    resolveFetch?.({ ok: true, json: async () => ({ sha: "new-sha" }) });
+
+    await vi.waitFor(() => {
+      const updated = JSON.parse(readFileSync(cachePath, "utf-8"));
+      // installedSha must reflect the fresh write, not the stale closure copy.
+      expect(updated.installedSha).toBe("new-sha");
+      expect(updated.latestSha).toBe("new-sha");
+    });
+  });
+
   it("fetch failure retains stale cache latestSha but still bumps lastCheck", async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: false });
     vi.stubGlobal("fetch", fetchMock);

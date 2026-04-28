@@ -136,11 +136,13 @@ export function checkForSkillUpdates(): void {
     if (isStale) {
       fetchLatestSha()
         .then((latest) => {
-          // Always update lastCheck to throttle retries (even on failure)
+          // Re-read so a concurrent `dosu skill update` that just refreshed
+          // installedSha isn't clobbered by our stale closure copy.
+          const fresh = readSkillCache();
           writeSkillCache({
             lastCheck: Date.now(),
-            latestSha: latest ?? cache?.latestSha ?? "",
-            installedSha: cache?.installedSha ?? "",
+            latestSha: latest ?? fresh?.latestSha ?? "",
+            installedSha: fresh?.installedSha ?? "",
           });
           if (latest) {
             logger.debug("skill-update-check", `Cached latest SHA: ${latest}`);
