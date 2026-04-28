@@ -47,6 +47,10 @@ type TrpcAny = any;
 const INSTALLATION_TIMEOUT_MS = 10 * 60 * 1000;
 const REPO_REFRESH_POLL_INTERVAL_MS = 500;
 const REPO_REFRESH_POLL_TIMEOUT_MS = 10_000;
+// Cap visible rows in the multiselect — orgs with hundreds of repos
+// otherwise blow past the terminal height. The prompt scrolls the rest
+// behind ellipsis markers (see github-repo-prompt.ts:198).
+const REPO_MULTISELECT_MAX_ITEMS = 10;
 // Backend `sync_github_data_source` deletes the data_source row if it can't
 // reach the repo on GitHub (typical RepositoryNotFoundException turnaround is
 // 3–7s once the workflow picks up). We poll a little past that to detect the
@@ -457,9 +461,10 @@ export async function stepConnectGitHubRepo(
     }
 
     const selected = await promptGitHubRepositories({
-      message: "Select repositories to connect",
+      message: `Select repositories to connect ${dim(`(${undeployed.length} available)`)}`,
       options: buildPromptOptions(undeployed),
       initialValues: [],
+      maxItems: REPO_MULTISELECT_MAX_ITEMS,
     });
     if (p.isCancel(selected)) {
       logger.info("setup", "Repository selection cancelled");
