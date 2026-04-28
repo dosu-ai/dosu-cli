@@ -18,9 +18,14 @@ const {
     githubRepository: { listForOrg: { query: vi.fn() } },
     workspaces: {
       create: { mutate: vi.fn() },
+      delete: { mutate: vi.fn() },
       listForSpace: { query: vi.fn() },
     },
-    dataSource: { create: { mutate: vi.fn() }, syncDataSource: { mutate: vi.fn() } },
+    dataSource: {
+      create: { mutate: vi.fn() },
+      syncDataSource: { mutate: vi.fn() },
+      list: { query: vi.fn() },
+    },
     deploymentDataSource: { create: { mutate: vi.fn() } },
   },
 }));
@@ -82,6 +87,12 @@ import * as p from "@clack/prompts";
 import type { Config } from "../config/config";
 import { detectGitRepo, stepConnectGitHubRepo } from "./github-step";
 
+// Skip the post-connect verify-poll budget so each test resolves in real
+// time without needing fake timers to coexist with the install-flow promise
+// chain. The verify behaviour itself is still exercised — the loop runs
+// once and exits — just without any sleep between checks.
+const NO_WAIT_VERIFY = { verify: { timeoutMs: 0, intervalMs: 0 } } as const;
+
 function makeCfg(overrides: Partial<Config> = {}): Config {
   return {
     access_token: "tok",
@@ -134,15 +145,22 @@ function installationServerReturning(installationId: number) {
 
 describe("stepConnectGitHubRepo", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    // resetAllMocks (not clearAllMocks) so leftover `mockResolvedValueOnce`
+    // queues from a previous test don't bleed into this one's first call.
+    vi.resetAllMocks();
     vi.mocked(p.isCancel).mockReturnValue(false);
     mockPromptGitHubRepositories.mockResolvedValue([]);
     mockStartInstallationCallbackServer.mockResolvedValue(installationServerReturning(12345));
+    // Default: dataSource.list returns whatever's in mockTrpc state. Tests
+    // that exercise the verify step set their own mock; the rest stub it
+    // empty so verifyDataSourcesPersist completes immediately.
+    mockTrpc.dataSource.list.query.mockResolvedValue([]);
+    mockTrpc.workspaces.delete.mutate.mockResolvedValue({});
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it("returns advance=false when cfg has no org_id / space_id", async () => {
@@ -173,8 +191,8 @@ describe("stepConnectGitHubRepo", () => {
       initialValues?: string[];
     };
     expect(promptArgs.options).toMatchObject([
-      { label: "acme/api", value: "acme/api" },
       { label: "Add repositories...", value: "__add_repositories__" },
+      { label: "acme/api", value: "acme/api" },
     ]);
     expect(promptArgs.initialValues).toEqual([]);
   });
@@ -194,8 +212,11 @@ describe("stepConnectGitHubRepo", () => {
     mockTrpc.workspaces.create.mutate.mockResolvedValue({ deployment_id: "dep-core" });
     mockTrpc.dataSource.create.mutate.mockResolvedValue({ data_source_id: "ds-core" });
     mockTrpc.workspaces.listForSpace.query.mockResolvedValue([{ deployment_id: "dep-core" }]);
+    mockTrpc.dataSource.list.query.mockResolvedValue([
+      { data_source_id: "ds-core", provider_slug: "github", is_indexed: false },
+    ]);
 
-    const result = await stepConnectGitHubRepo(makeCfg(), null);
+    const result = await stepConnectGitHubRepo(makeCfg(), null, NO_WAIT_VERIFY);
 
     expect(mockOpenDefault).toHaveBeenCalledOnce();
     expect(mockPromptGitHubRepositories).toHaveBeenCalledTimes(2);
@@ -206,11 +227,11 @@ describe("stepConnectGitHubRepo", () => {
     const secondArgs = mockPromptGitHubRepositories.mock.calls[1][0] as {
       options: { value: string }[];
     };
-    expect(firstArgs.options.map((o) => o.value)).toEqual(["acme/api", "__add_repositories__"]);
+    expect(firstArgs.options.map((o) => o.value)).toEqual(["__add_repositories__", "acme/api"]);
     expect(secondArgs.options.map((o) => o.value)).toEqual([
+      "__add_repositories__",
       "acme/api",
       "acme/core",
-      "__add_repositories__",
     ]);
     expect(mockTrpc.workspaces.create.mutate).toHaveBeenCalledTimes(1);
     const [args] = mockTrpc.workspaces.create.mutate.mock.calls[0];
@@ -269,12 +290,15 @@ describe("stepConnectGitHubRepo", () => {
     mockTrpc.workspaces.create.mutate.mockResolvedValue({ deployment_id: "dep-core" });
     mockTrpc.dataSource.create.mutate.mockResolvedValue({ data_source_id: "ds-core" });
     mockTrpc.workspaces.listForSpace.query.mockResolvedValue([{ deployment_id: "dep-core" }]);
+    mockTrpc.dataSource.list.query.mockResolvedValue([
+      { data_source_id: "ds-core", provider_slug: "github", is_indexed: false },
+    ]);
 
-    const result = await stepConnectGitHubRepo(makeCfg(), {
-      owner: "acme",
-      name: "api",
-      slug: "acme/api",
-    });
+    const result = await stepConnectGitHubRepo(
+      makeCfg(),
+      { owner: "acme", name: "api", slug: "acme/api" },
+      NO_WAIT_VERIFY,
+    );
 
     expect(mockTrpc.githubRepository.listForOrg.query).toHaveBeenCalledTimes(4);
     expect(mockPromptGitHubRepositories).toHaveBeenCalledTimes(2);
@@ -282,9 +306,9 @@ describe("stepConnectGitHubRepo", () => {
       options: { value: string }[];
     };
     expect(secondArgs.options.map((o) => o.value)).toEqual([
+      "__add_repositories__",
       "acme/api",
       "acme/core",
-      "__add_repositories__",
     ]);
     expect(mockTrpc.workspaces.create.mutate).toHaveBeenCalledTimes(1);
     const [args] = mockTrpc.workspaces.create.mutate.mock.calls[0];
@@ -310,12 +334,16 @@ describe("stepConnectGitHubRepo", () => {
       { deployment_id: "dep-B" },
     ]);
     mockTrpc.deploymentDataSource.create.mutate.mockResolvedValue({});
+    mockTrpc.dataSource.list.query.mockResolvedValue([
+      { data_source_id: "ds-A", provider_slug: "github", is_indexed: false },
+      { data_source_id: "ds-B", provider_slug: "github", is_indexed: false },
+    ]);
 
-    const result = await stepConnectGitHubRepo(makeCfg(), {
-      owner: "acme",
-      name: "api",
-      slug: "acme/api",
-    });
+    const result = await stepConnectGitHubRepo(
+      makeCfg(),
+      { owner: "acme", name: "api", slug: "acme/api" },
+      NO_WAIT_VERIFY,
+    );
 
     expect(result.advance).toBe(true);
     expect(mockTrpc.workspaces.create.mutate).toHaveBeenCalledTimes(2);
@@ -331,6 +359,10 @@ describe("stepConnectGitHubRepo", () => {
     // Cwd repo's deployment is reported as primary.
     expect(result.deployment_id).toBe("dep-A");
     expect(result.space_id).toBe("space-1");
+    // Both data_sources survived the verify step — neither got deleted by
+    // backend sync — so they're surfaced for downstream doc-import wait.
+    expect(result.created_data_source_ids).toEqual(["ds-A", "ds-B"]);
+    expect(mockTrpc.workspaces.delete.mutate).not.toHaveBeenCalled();
   });
 
   it("shows already-deployed repos in a separate info block, excludes them from multiselect", async () => {
@@ -344,8 +376,11 @@ describe("stepConnectGitHubRepo", () => {
     mockTrpc.workspaces.create.mutate.mockResolvedValue({ deployment_id: "dep-X" });
     mockTrpc.dataSource.create.mutate.mockResolvedValue({ data_source_id: "ds-X" });
     mockTrpc.workspaces.listForSpace.query.mockResolvedValue([{ deployment_id: "dep-X" }]);
+    mockTrpc.dataSource.list.query.mockResolvedValue([
+      { data_source_id: "ds-X", provider_slug: "github", is_indexed: false },
+    ]);
 
-    await stepConnectGitHubRepo(makeCfg(), null);
+    await stepConnectGitHubRepo(makeCfg(), null, NO_WAIT_VERIFY);
 
     // Multiselect only contains undeployed repos — deployed ones can't be
     // navigated to because they're not in the options list at all.
@@ -353,9 +388,9 @@ describe("stepConnectGitHubRepo", () => {
       options: { value: string }[];
     };
     expect(multiselectArgs.options.map((o) => o.value)).toEqual([
+      "__add_repositories__",
       "acme/core",
       "acme/cli",
-      "__add_repositories__",
     ]);
     // Deployed repos surface via a separate info log.
     const infoCalls = vi.mocked(p.log.info).mock.calls.map((c) => String(c[0]));
@@ -393,6 +428,107 @@ describe("stepConnectGitHubRepo", () => {
     // re-prompt if the user consciously declined to pick anything.
     expect(result.advance).toBe(true);
     expect(mockTrpc.workspaces.create.mutate).not.toHaveBeenCalled();
+  });
+
+  it("reverts orphan deployment when backend deletes its data_source mid-sync", async () => {
+    // Reproduces the staging case: `dataSource.create` succeeds, but
+    // `sync_github_data_source` fires `RepositoryNotFoundException` because
+    // Dosu's GitHub App can't reach the repo, so the backend deletes the
+    // data_source row a few seconds later. The CLI must detect that and
+    // tear down the orphan deployment instead of reporting "Connected".
+    mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
+      { repository_id: 100, name: "good", slug: "acme/good", is_deployed: false },
+      { repository_id: 200, name: "stale", slug: "acme/stale", is_deployed: false },
+    ]);
+    mockPromptGitHubRepositories.mockResolvedValue(["acme/good", "acme/stale"]);
+    mockTrpc.workspaces.create.mutate
+      .mockResolvedValueOnce({ deployment_id: "dep-good" })
+      .mockResolvedValueOnce({ deployment_id: "dep-stale" });
+    mockTrpc.dataSource.create.mutate
+      .mockResolvedValueOnce({ data_source_id: "ds-good" })
+      .mockResolvedValueOnce({ data_source_id: "ds-stale" });
+    mockTrpc.workspaces.listForSpace.query.mockResolvedValue([
+      { deployment_id: "dep-good" },
+      { deployment_id: "dep-stale" },
+    ]);
+    mockTrpc.deploymentDataSource.create.mutate.mockResolvedValue({});
+    // Verify-poll sees ds-good present and ds-stale missing (backend already
+    // deleted it after RepositoryNotFoundException) — single-iteration mock
+    // is sufficient because NO_WAIT_VERIFY exits as soon as a drop appears.
+    mockTrpc.dataSource.list.query.mockResolvedValue([
+      { data_source_id: "ds-good", provider_slug: "github", is_indexed: false },
+    ]);
+
+    const result = await stepConnectGitHubRepo(makeCfg(), null, NO_WAIT_VERIFY);
+
+    expect(result.advance).toBe(true);
+    expect(mockTrpc.workspaces.delete.mutate).toHaveBeenCalledTimes(1);
+    expect(mockTrpc.workspaces.delete.mutate).toHaveBeenCalledWith("dep-stale");
+    expect(result.created_data_source_ids).toEqual(["ds-good"]);
+    expect(result.deployment_id).toBe("dep-good");
+    const warnCalls = vi.mocked(p.log.warn).mock.calls.map((c) => String(c[0]));
+    expect(warnCalls.some((m) => m.includes("acme/stale"))).toBe(true);
+  });
+
+  it("fails the step when every connected data_source gets deleted by backend sync", async () => {
+    mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
+      { repository_id: 100, name: "stale", slug: "acme/stale", is_deployed: false },
+    ]);
+    mockPromptGitHubRepositories.mockResolvedValue(["acme/stale"]);
+    mockTrpc.workspaces.create.mutate.mockResolvedValue({ deployment_id: "dep-stale" });
+    mockTrpc.dataSource.create.mutate.mockResolvedValue({ data_source_id: "ds-stale" });
+    mockTrpc.workspaces.listForSpace.query.mockResolvedValue([{ deployment_id: "dep-stale" }]);
+    mockTrpc.dataSource.list.query.mockResolvedValue([]); // already gone
+
+    const result = await stepConnectGitHubRepo(makeCfg(), null, NO_WAIT_VERIFY);
+
+    expect(result.advance).toBe(false);
+    expect(mockTrpc.workspaces.delete.mutate).toHaveBeenCalledWith("dep-stale");
+    const errorCalls = vi.mocked(p.log.error).mock.calls.map((c) => String(c[0]));
+    expect(errorCalls.some((m) => m.includes("acme/stale"))).toBe(true);
+  });
+
+  it("sorts repos most-recently-added-first so a fresh GitHub App install lands on top", async () => {
+    // Backend sorts alphabetically; for orgs with hundreds of repos that
+    // buries the one the user just added. The CLI re-sorts by created_at
+    // desc so the freshly installed repo is the first thing the cursor
+    // can reach.
+    mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
+      {
+        repository_id: 1,
+        name: "old",
+        slug: "acme/old",
+        is_deployed: false,
+        created_at: "2025-01-01T00:00:00Z",
+      },
+      {
+        repository_id: 2,
+        name: "newest",
+        slug: "acme/newest",
+        is_deployed: false,
+        created_at: "2026-04-27T18:00:00Z",
+      },
+      {
+        repository_id: 3,
+        name: "middle",
+        slug: "acme/middle",
+        is_deployed: false,
+        created_at: "2025-12-01T00:00:00Z",
+      },
+    ]);
+    mockPromptGitHubRepositories.mockResolvedValue([]);
+
+    await stepConnectGitHubRepo(makeCfg(), null, NO_WAIT_VERIFY);
+
+    const args = mockPromptGitHubRepositories.mock.calls[0][0] as {
+      options: { value: string }[];
+    };
+    expect(args.options.map((o) => o.value)).toEqual([
+      "__add_repositories__",
+      "acme/newest",
+      "acme/middle",
+      "acme/old",
+    ]);
   });
 
   it("returns advance=false when user cancels the multiselect", async () => {

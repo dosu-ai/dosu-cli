@@ -218,6 +218,45 @@ describe("stepImportGitHubDocs", () => {
     expect(mockTrpc.docImports.importGithubFiles.mutate).not.toHaveBeenCalled();
   });
 
+  it("ignores stale org-wide data sources and only waits on this run's set", async () => {
+    // Reproduces the bug we hit on staging: a previous setup left a
+    // GitHub data source stuck in is_indexed=false (QUEUED). With the old
+    // exit condition, that would block "No markdown docs found" forever
+    // even when this run's freshly-created data source is already done.
+    mockTrpc.docImports.listImportableGithubFiles.query.mockResolvedValue([]);
+    mockTrpc.dataSource.list.query.mockResolvedValue([
+      { data_source_id: "ds-stale", provider_slug: "github", is_indexed: false },
+      { data_source_id: "ds-fresh", provider_slug: "github", is_indexed: true },
+    ]);
+
+    const result = await stepImportGitHubDocs(makeCfg(), {
+      waitForFreshDocs: true,
+      expectedDataSourceIds: ["ds-fresh"],
+    });
+
+    expect(result.advance).toBe(true);
+    expect(p.select).not.toHaveBeenCalled();
+  });
+
+  it("treats a backend-deleted expected data source as resolved (no markdown found)", async () => {
+    // Backend's sync_github_data_source deleted ds-fresh after Dosu's
+    // GitHub App couldn't clone the repo. The data source we expected is
+    // simply absent — that's a terminal "nothing to import" state, not an
+    // ongoing wait.
+    mockTrpc.docImports.listImportableGithubFiles.query.mockResolvedValue([]);
+    mockTrpc.dataSource.list.query.mockResolvedValue([
+      { data_source_id: "ds-other", provider_slug: "github", is_indexed: false },
+    ]);
+
+    const result = await stepImportGitHubDocs(makeCfg(), {
+      waitForFreshDocs: true,
+      expectedDataSourceIds: ["ds-fresh"],
+    });
+
+    expect(result.advance).toBe(true);
+    expect(p.select).not.toHaveBeenCalled();
+  });
+
   it("treats an empty doc selection as skip and does not start an import", async () => {
     mockTrpc.docImports.listImportableGithubFiles.query.mockResolvedValue([
       {

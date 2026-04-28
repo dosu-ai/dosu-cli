@@ -82,8 +82,14 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   let cloudSetupContext: CloudSetupContext | null = null;
 
   if (cfg.mode !== MODE_OSS) {
+    const s = p.spinner();
+    s.start("Loading your workspace...");
     cloudSetupContext = await resolveCloudSetupContext(cfg);
-    if (!cloudSetupContext) return;
+    if (!cloudSetupContext) {
+      s.stop("Workspace load failed");
+      return;
+    }
+    s.stop("Workspace loaded");
   }
 
   // Deployment: first-run onboarding binds the user's default deployment.
@@ -141,6 +147,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     const { stepImportGitHubDocs } = await import("./github-doc-import-step");
     const importResult = await stepImportGitHubDocs(cfg, {
       waitForFreshDocs: Boolean(connectResult.deployment_id),
+      expectedDataSourceIds: connectResult.created_data_source_ids,
     });
     if (!importResult.advance) return;
     githubOnboardingDone = true;
@@ -428,6 +435,7 @@ async function bindOnboardingDeployment(
     "setup",
     `Bound onboarding context org=${targetOrg.org_id} deployment=${deployment.deployment_id}`,
   );
+  p.log.success(`Organization\n${dim(targetOrg.name)}`);
   return true;
 }
 
