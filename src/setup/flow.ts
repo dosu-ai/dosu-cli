@@ -82,9 +82,6 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   let cloudSetupContext: CloudSetupContext | null = null;
 
   if (cfg.mode !== MODE_OSS) {
-    // resolveCloudSetupContext fans out 1–3 tRPC calls (profile +
-    // organization lookup) which can each take a few hundred ms. Without
-    // a spinner the post-Authenticated gap looks like a freeze.
     const s = p.spinner();
     s.start("Loading your workspace...");
     cloudSetupContext = await resolveCloudSetupContext(cfg);
