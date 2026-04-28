@@ -1,3 +1,10 @@
+# [0.11.0-alpha.4](https://github.com/dosu-ai/dosu-cli/compare/v0.11.0-alpha.3...v0.11.0-alpha.4) (2026-04-28)
+
+
+### Bug Fixes
+
+* **setup:** drop orphan deployments + scope doc-scan to this run ([#57](https://github.com/dosu-ai/dosu-cli/issues/57)) ([eba2105](https://github.com/dosu-ai/dosu-cli/commit/eba2105750fac1727076cc9f0d9ee3e94005d21c))
+
 # [0.11.0-alpha.3](https://github.com/dosu-ai/dosu-cli/compare/v0.11.0-alpha.2...v0.11.0-alpha.3) (2026-04-27)
 
 
