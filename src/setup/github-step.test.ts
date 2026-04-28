@@ -488,6 +488,49 @@ describe("stepConnectGitHubRepo", () => {
     expect(errorCalls.some((m) => m.includes("acme/stale"))).toBe(true);
   });
 
+  it("sorts repos most-recently-added-first so a fresh GitHub App install lands on top", async () => {
+    // Backend sorts alphabetically; for orgs with hundreds of repos that
+    // buries the one the user just added. The CLI re-sorts by created_at
+    // desc so the freshly installed repo is the first thing the cursor
+    // can reach.
+    mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
+      {
+        repository_id: 1,
+        name: "old",
+        slug: "acme/old",
+        is_deployed: false,
+        created_at: "2025-01-01T00:00:00Z",
+      },
+      {
+        repository_id: 2,
+        name: "newest",
+        slug: "acme/newest",
+        is_deployed: false,
+        created_at: "2026-04-27T18:00:00Z",
+      },
+      {
+        repository_id: 3,
+        name: "middle",
+        slug: "acme/middle",
+        is_deployed: false,
+        created_at: "2025-12-01T00:00:00Z",
+      },
+    ]);
+    mockPromptGitHubRepositories.mockResolvedValue([]);
+
+    await stepConnectGitHubRepo(makeCfg(), null, NO_WAIT_VERIFY);
+
+    const args = mockPromptGitHubRepositories.mock.calls[0][0] as {
+      options: { value: string }[];
+    };
+    expect(args.options.map((o) => o.value)).toEqual([
+      "__add_repositories__",
+      "acme/newest",
+      "acme/middle",
+      "acme/old",
+    ]);
+  });
+
   it("returns advance=false when user cancels the multiselect", async () => {
     mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
       { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },

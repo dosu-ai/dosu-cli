@@ -94,12 +94,15 @@ export interface GithubStepResult {
   created_data_source_ids?: string[];
 }
 
-// Shape returned by tRPC `githubRepository.listForOrg`.
+// Shape returned by tRPC `githubRepository.listForOrg`. Backend spreads
+// `...github.repository` so `created_at` rides along even though the
+// router type doesn't surface it explicitly.
 interface AvailableRepo {
   repository_id: number;
   name: string;
   slug: string; // "owner/repo"
   is_deployed: boolean;
+  created_at?: string;
 }
 export function detectGitRepo(cwd: string = process.cwd()): DetectedRepo | null {
   let url: string;
@@ -127,15 +130,32 @@ export function detectGitRepo(cwd: string = process.cwd()): DetectedRepo | null 
 
 async function fetchListForOrg(trpc: TrpcAny, orgID: string): Promise<AvailableRepo[]> {
   try {
-    return (await trpc.githubRepository.listForOrg.query({
+    const repos = (await trpc.githubRepository.listForOrg.query({
       org_id: orgID,
     })) as AvailableRepo[];
+    return sortReposByRecency(repos);
   } catch (err: unknown) {
     /* v8 ignore next -- non-fatal; caller decides what to do with an empty list */
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn("setup", `listForOrg failed: ${msg}`);
     return [];
   }
+}
+
+/**
+ * Sort repos with most recently added to the org first. The backend
+ * sorts alphabetically — for orgs with hundreds of repos that buries the
+ * one the user just installed via the GitHub App. Repos missing
+ * `created_at` keep their incoming order (Array.prototype.sort is
+ * stable), so callers and tests that don't supply timestamps stay
+ * deterministic.
+ */
+function sortReposByRecency(repos: AvailableRepo[]): AvailableRepo[] {
+  return [...repos].sort((a, b) => {
+    const ta = Date.parse(a.created_at ?? "") || 0;
+    const tb = Date.parse(b.created_at ?? "") || 0;
+    return tb - ta;
+  });
 }
 
 function buildPromptOptions(
