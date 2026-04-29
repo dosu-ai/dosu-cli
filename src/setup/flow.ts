@@ -2,6 +2,8 @@
  * Setup flow — interactive wizard.
  */
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import * as p from "@clack/prompts";
 import { Client, type Deployment, type Org, SessionExpiredError } from "../client/client";
 import { installSkill } from "../commands/skill";
@@ -178,7 +180,11 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   }
 
   if (mcpConfiguredThisRun) {
-    showTryItOutPrompt(cfg.mode);
+    showTryItOutPrompt({
+      mode: cfg.mode,
+      docsImported: choices.connectGitHub && githubOnboardingDone,
+      hasAgentsMd: existsSync(join(process.cwd(), "AGENTS.md")),
+    });
   }
 
   if (cfg.mode === MODE_OSS) {
@@ -736,10 +742,22 @@ export function stepShowSummary(results: ConfigResult[]): void {
  * for only invoking this when MCP was actually (re)configured this run, so
  * users who skip MCP don't get a tip they can't act on.
  */
-export function showTryItOutPrompt(mode?: SetupMode): void {
-  const prompt =
-    mode === MODE_OSS
-      ? `What can Dosu help me with? Pick an open source library related to my project and explain how it works.`
-      : `Please use Dosu to host my AGENTS.md`;
+export function showTryItOutPrompt(opts: {
+  mode?: SetupMode;
+  docsImported?: boolean;
+  hasAgentsMd?: boolean;
+} = {}): void {
+  const prompt = (() => {
+    if (opts.mode === MODE_OSS) {
+      return `What can Dosu help me with? Pick an open source library related to my project and explain how it works.`;
+    }
+    if (opts.docsImported) {
+      return `Use Dosu to summarize the most important docs in my repo.`;
+    }
+    if (opts.hasAgentsMd) {
+      return `Please use Dosu to host my AGENTS.md`;
+    }
+    return `Ask Dosu to draft an AGENTS.md for this project.`;
+  })();
   p.log.message(`Try it out! Paste this into your agent:\n\n${info(prompt)}`);
 }

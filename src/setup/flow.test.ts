@@ -121,7 +121,7 @@ import { startOAuthFlow } from "../auth/flow";
 import type { TokenResponse } from "../auth/server";
 import { Client } from "../client/client";
 import type { Config } from "../config/config";
-import { loadConfig, saveConfig } from "../config/config";
+import { loadConfig, MODE_OSS, saveConfig } from "../config/config";
 import { loadJSONConfig, saveJSONConfig } from "../mcp/config-helpers";
 import * as providersModule from "../mcp/providers";
 import { ClaudeDesktopProvider } from "../mcp/providers/claude-desktop";
@@ -132,6 +132,7 @@ import {
   isStdioOnly,
   runInstallSkill,
   runSetup,
+  showTryItOutPrompt,
   stepConfigureTools,
   stepDetectTools,
   stepShowSummary,
@@ -593,6 +594,57 @@ describe("stepShowSummary", () => {
     expect(p.log.success).not.toHaveBeenCalled();
     expect(p.log.info).not.toHaveBeenCalled();
     expect(p.log.message).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4b. showTryItOutPrompt — pure, just inspects the message string
+// ---------------------------------------------------------------------------
+
+describe("showTryItOutPrompt", () => {
+  beforeEach(() => {
+    vi.mocked(p.log.message).mockClear();
+  });
+
+  it("suggests querying imported docs when docsImported is true", () => {
+    showTryItOutPrompt({ docsImported: true, hasAgentsMd: true });
+
+    expect(p.log.message).toHaveBeenCalledWith(
+      expect.stringContaining("summarize the most important docs"),
+    );
+    expect(p.log.message).not.toHaveBeenCalledWith(
+      expect.stringContaining("host my AGENTS.md"),
+    );
+  });
+
+  it("suggests hosting AGENTS.md when the file exists and no docs were imported", () => {
+    showTryItOutPrompt({ docsImported: false, hasAgentsMd: true });
+
+    expect(p.log.message).toHaveBeenCalledWith(
+      expect.stringContaining("host my AGENTS.md"),
+    );
+  });
+
+  it("suggests drafting AGENTS.md when neither docs are imported nor the file exists", () => {
+    showTryItOutPrompt({ docsImported: false, hasAgentsMd: false });
+
+    expect(p.log.message).toHaveBeenCalledWith(
+      expect.stringContaining("draft an AGENTS.md"),
+    );
+    expect(p.log.message).not.toHaveBeenCalledWith(
+      expect.stringContaining("host my AGENTS.md"),
+    );
+  });
+
+  it("uses the OSS prompt regardless of other flags", () => {
+    showTryItOutPrompt({ mode: MODE_OSS, docsImported: true, hasAgentsMd: true });
+
+    expect(p.log.message).toHaveBeenCalledWith(
+      expect.stringContaining("open source library"),
+    );
+    expect(p.log.message).not.toHaveBeenCalledWith(
+      expect.stringContaining("summarize the most important docs"),
+    );
   });
 });
 
