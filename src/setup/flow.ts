@@ -638,14 +638,14 @@ async function stepSelectTools(detected: SetupProvider[]): Promise<ToolSelection
     return {
       label: p.name(),
       value: p.id(),
-      hint: configured ? "configured" : undefined,
+      hint: configured ? "configured — untick to remove" : undefined,
     };
   });
 
   const preselected = detected.filter((p) => configuredMap.get(p.id())).map((p) => p.id());
 
   const selected = await p.multiselect({
-    message: "Select agents to configure or update",
+    message: "Select agents — tick to configure, untick to remove",
     options,
     initialValues: preselected,
   });
