@@ -80,6 +80,10 @@ export interface StepConnectGitHubRepoOptions {
     timeoutMs?: number;
     intervalMs?: number;
   };
+  refresh?: {
+    timeoutMs?: number;
+    intervalMs?: number;
+  };
 }
 
 export interface GithubStepResult {
@@ -199,11 +203,14 @@ async function waitForRepositoryRefresh(
   trpc: TrpcAny,
   orgID: string,
   previousRepos: AvailableRepo[],
+  opts?: { timeoutMs?: number; intervalMs?: number },
 ): Promise<{ repos: AvailableRepo[]; foundNew: boolean }> {
+  const timeoutMs = opts?.timeoutMs ?? REPO_REFRESH_POLL_TIMEOUT_MS;
+  const intervalMs = opts?.intervalMs ?? REPO_REFRESH_POLL_INTERVAL_MS;
   const startedAt = Date.now();
   let latestRepos = previousRepos;
 
-  while (Date.now() - startedAt < REPO_REFRESH_POLL_TIMEOUT_MS) {
+  while (Date.now() - startedAt < timeoutMs) {
     const polledRepos = await fetchListForOrg(trpc, orgID);
     latestRepos =
       polledRepos.length === 0 && previousRepos.length > 0 ? previousRepos : polledRepos;
@@ -212,7 +219,7 @@ async function waitForRepositoryRefresh(
       return { repos: latestRepos, foundNew: true };
     }
 
-    await sleep(REPO_REFRESH_POLL_INTERVAL_MS);
+    await sleep(intervalMs);
   }
 
   return { repos: latestRepos, foundNew: false };
@@ -505,7 +512,7 @@ export async function stepConnectGitHubRepo(
     if (selected === ADD_REPOSITORIES_VALUE) {
       let refresh: { repos: AvailableRepo[]; foundNew: boolean } = { repos, foundNew: false };
       const installationID = await openGitHubInstallFlow(async () => {
-        refresh = await waitForRepositoryRefresh(trpc, orgID, repos);
+        refresh = await waitForRepositoryRefresh(trpc, orgID, repos, opts.refresh);
       });
       if (installationID === null) {
         return { advance: false, has_connected_repo: deployed.length > 0 };

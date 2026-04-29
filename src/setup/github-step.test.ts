@@ -93,6 +93,13 @@ import { detectGitRepo, stepConnectGitHubRepo } from "./github-step";
 // chain. The verify behaviour itself is still exercised — the loop runs
 // once and exits — just without any sleep between checks.
 const NO_WAIT_VERIFY = { verify: { timeoutMs: 0, intervalMs: 0 } } as const;
+// Same idea for the post-install repo refresh poll: in tests the loop runs
+// at most once. Use this when a test wants to exercise the timeout branch
+// without burning 10s of real time.
+const NO_WAIT_REFRESH = {
+  verify: { timeoutMs: 0, intervalMs: 0 },
+  refresh: { timeoutMs: 0, intervalMs: 0 },
+} as const;
 
 function makeCfg(overrides: Partial<Config> = {}): Config {
   return {
@@ -316,6 +323,79 @@ describe("stepConnectGitHubRepo", () => {
     expect(mockTrpc.workspaces.create.mutate).toHaveBeenCalledTimes(1);
     const [args] = mockTrpc.workspaces.create.mutate.mock.calls[0];
     expect(args.name).toBe("acme/core");
+    expect(result.advance).toBe(true);
+  });
+
+  it("warns when add-repositories install completes but no new repo appears", async () => {
+    // Same repo list before and after install — backend still syncing, polling
+    // budget elapses without seeing a new repo. We expect a warn pointing the
+    // user at "Refresh list" to retry.
+    mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
+      { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
+    ]);
+    mockPromptGitHubRepositories
+      .mockResolvedValueOnce("__add_repositories__")
+      .mockResolvedValueOnce([]);
+
+    const result = await stepConnectGitHubRepo(makeCfg(), null, NO_WAIT_REFRESH);
+
+    expect(mockOpenDefault).toHaveBeenCalledOnce();
+    expect(p.log.warn).toHaveBeenCalledWith(expect.stringContaining("GitHub may still be syncing"));
+    expect(p.log.warn).toHaveBeenCalledWith(expect.stringContaining("Refresh list"));
+    expect(result.advance).toBe(true);
+  });
+
+  it("refreshes the list without opening the browser when refresh-list is selected", async () => {
+    // First listForOrg = pre-flight (1 repo). User picks "Refresh list" → second
+    // listForOrg returns 2 repos. User then picks the new one.
+    mockTrpc.githubRepository.listForOrg.query
+      .mockResolvedValueOnce([
+        { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
+      ])
+      .mockResolvedValueOnce([
+        { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
+        { repository_id: 2, name: "core", slug: "acme/core", is_deployed: false },
+      ]);
+    mockPromptGitHubRepositories
+      .mockResolvedValueOnce("__refresh_list__")
+      .mockResolvedValueOnce(["acme/core"]);
+    mockTrpc.workspaces.create.mutate.mockResolvedValue({ deployment_id: "dep-core" });
+    mockTrpc.dataSource.create.mutate.mockResolvedValue({ data_source_id: "ds-core" });
+    mockTrpc.workspaces.listForSpace.query.mockResolvedValue([{ deployment_id: "dep-core" }]);
+    mockTrpc.dataSource.list.query.mockResolvedValue([
+      { data_source_id: "ds-core", provider_slug: "github", is_indexed: false },
+    ]);
+
+    const result = await stepConnectGitHubRepo(makeCfg(), null, NO_WAIT_VERIFY);
+
+    expect(mockOpenDefault).not.toHaveBeenCalled();
+    expect(mockStartInstallationCallbackServer).not.toHaveBeenCalled();
+    expect(mockTrpc.githubRepository.listForOrg.query).toHaveBeenCalledTimes(2);
+    expect(mockPromptGitHubRepositories).toHaveBeenCalledTimes(2);
+    const secondArgs = mockPromptGitHubRepositories.mock.calls[1][0] as {
+      options: { kind?: string; value?: string }[];
+    };
+    expect(secondArgs.options.filter((o) => o.kind === "repo").map((o) => o.value)).toEqual([
+      "acme/api",
+      "acme/core",
+    ]);
+    expect(result.advance).toBe(true);
+  });
+
+  it("reports zero new repos when refresh-list finds nothing fresh", async () => {
+    // Same list pre-flight and post-refresh — covers the "List refreshed — no
+    // new repos yet" branch and the empty-selection exit.
+    mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
+      { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
+    ]);
+    mockPromptGitHubRepositories
+      .mockResolvedValueOnce("__refresh_list__")
+      .mockResolvedValueOnce([]);
+
+    const result = await stepConnectGitHubRepo(makeCfg(), null, NO_WAIT_VERIFY);
+
+    expect(mockOpenDefault).not.toHaveBeenCalled();
+    expect(mockTrpc.githubRepository.listForOrg.query).toHaveBeenCalledTimes(2);
     expect(result.advance).toBe(true);
   });
 
