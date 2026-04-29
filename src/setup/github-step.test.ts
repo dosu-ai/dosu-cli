@@ -75,6 +75,7 @@ vi.mock("./installation-server", () => ({
 
 vi.mock("./github-repo-prompt", () => ({
   ADD_REPOSITORIES_VALUE: "__add_repositories__",
+  REFRESH_LIST_VALUE: "__refresh_list__",
   promptGitHubRepositories: (...args: unknown[]) => mockPromptGitHubRepositories(...args),
 }));
 
@@ -192,6 +193,8 @@ describe("stepConnectGitHubRepo", () => {
     };
     expect(promptArgs.options).toMatchObject([
       { label: "Add repositories...", value: "__add_repositories__" },
+      { label: "Refresh list", value: "__refresh_list__" },
+      { kind: "separator" },
       { label: "acme/api", value: "acme/api" },
     ]);
     expect(promptArgs.initialValues).toEqual([]);
@@ -222,14 +225,15 @@ describe("stepConnectGitHubRepo", () => {
     expect(mockPromptGitHubRepositories).toHaveBeenCalledTimes(2);
     expect(mockTrpc.githubRepository.listForOrg.query).toHaveBeenCalledTimes(2);
     const firstArgs = mockPromptGitHubRepositories.mock.calls[0][0] as {
-      options: { value: string }[];
+      options: { kind?: string; value?: string }[];
     };
     const secondArgs = mockPromptGitHubRepositories.mock.calls[1][0] as {
-      options: { value: string }[];
+      options: { kind?: string; value?: string }[];
     };
-    expect(firstArgs.options.map((o) => o.value)).toEqual(["__add_repositories__", "acme/api"]);
-    expect(secondArgs.options.map((o) => o.value)).toEqual([
-      "__add_repositories__",
+    expect(firstArgs.options.filter((o) => o.kind === "repo").map((o) => o.value)).toEqual([
+      "acme/api",
+    ]);
+    expect(secondArgs.options.filter((o) => o.kind === "repo").map((o) => o.value)).toEqual([
       "acme/api",
       "acme/core",
     ]);
@@ -303,10 +307,9 @@ describe("stepConnectGitHubRepo", () => {
     expect(mockTrpc.githubRepository.listForOrg.query).toHaveBeenCalledTimes(4);
     expect(mockPromptGitHubRepositories).toHaveBeenCalledTimes(2);
     const secondArgs = mockPromptGitHubRepositories.mock.calls[1][0] as {
-      options: { value: string }[];
+      options: { kind?: string; value?: string }[];
     };
-    expect(secondArgs.options.map((o) => o.value)).toEqual([
-      "__add_repositories__",
+    expect(secondArgs.options.filter((o) => o.kind === "repo").map((o) => o.value)).toEqual([
       "acme/api",
       "acme/core",
     ]);
@@ -385,10 +388,9 @@ describe("stepConnectGitHubRepo", () => {
     // Multiselect only contains undeployed repos — deployed ones can't be
     // navigated to because they're not in the options list at all.
     const multiselectArgs = mockPromptGitHubRepositories.mock.calls[0][0] as {
-      options: { value: string }[];
+      options: { kind?: string; value?: string }[];
     };
-    expect(multiselectArgs.options.map((o) => o.value)).toEqual([
-      "__add_repositories__",
+    expect(multiselectArgs.options.filter((o) => o.kind === "repo").map((o) => o.value)).toEqual([
       "acme/core",
       "acme/cli",
     ]);
@@ -552,10 +554,9 @@ describe("stepConnectGitHubRepo", () => {
     await stepConnectGitHubRepo(makeCfg(), null, NO_WAIT_VERIFY);
 
     const args = mockPromptGitHubRepositories.mock.calls[0][0] as {
-      options: { value: string }[];
+      options: { kind?: string; value?: string }[];
     };
-    expect(args.options.map((o) => o.value)).toEqual([
-      "__add_repositories__",
+    expect(args.options.filter((o) => o.kind === "repo").map((o) => o.value)).toEqual([
       "acme/newest",
       "acme/middle",
       "acme/old",

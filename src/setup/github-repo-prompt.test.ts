@@ -1,8 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ADD_REPOSITORIES_VALUE, GitHubRepoPrompt } from "./github-repo-prompt";
+import {
+  ADD_REPOSITORIES_VALUE,
+  GitHubRepoPrompt,
+  type REFRESH_LIST_VALUE,
+} from "./github-repo-prompt";
 
 type PromptOption =
-  | { kind: "action"; value: typeof ADD_REPOSITORIES_VALUE; label: string; hint?: string }
+  | {
+      kind: "action";
+      value: typeof ADD_REPOSITORIES_VALUE | typeof REFRESH_LIST_VALUE;
+      label: string;
+      hint?: string;
+    }
+  | { kind: "separator" }
   | { kind: "repo"; value: string; label: string; hint?: string };
 
 const ACTION_OPTION: PromptOption = {
@@ -132,6 +142,27 @@ describe("GitHubRepoPrompt", () => {
     (prompt.emit as (event: string, key: string) => void)("cursor", "tab");
     expect(prompt.cursor).toBe(before);
   });
+
+  it("skips over a separator when moving the cursor down", () => {
+    const options: PromptOption[] = [ACTION_OPTION, { kind: "separator" }, ...repoOptions("a/b")];
+    const prompt = makePrompt(options);
+    expect(prompt.cursor).toBe(0);
+    prompt.emit("cursor", "down");
+    expect(prompt.cursor).toBe(2);
+  });
+
+  it("skips over a separator when moving the cursor up (wrap-around)", () => {
+    const options: PromptOption[] = [ACTION_OPTION, { kind: "separator" }, ...repoOptions("a/b")];
+    const prompt = makePrompt(options);
+    prompt.emit("cursor", "up");
+    expect(prompt.cursor).toBe(2);
+  });
+
+  it("places the initial cursor on the first focusable option when index 0 is a separator", () => {
+    const options: PromptOption[] = [{ kind: "separator" }, ACTION_OPTION, ...repoOptions("a/b")];
+    const prompt = makePrompt(options);
+    expect(prompt.cursor).toBe(1);
+  });
 });
 
 describe("GitHubRepoPrompt rendering", () => {
@@ -203,6 +234,13 @@ describe("GitHubRepoPrompt rendering", () => {
     }
     const output = render(prompt);
     expect(output).toContain("...");
+  });
+
+  it("renders a dim horizontal line for separator options", () => {
+    const options: PromptOption[] = [ACTION_OPTION, { kind: "separator" }, ...repoOptions("a/b")];
+    const prompt = makePrompt(options);
+    const output = render(prompt);
+    expect(output).toContain("─");
   });
 
   it("highlights the active action option with a colored arrow", () => {

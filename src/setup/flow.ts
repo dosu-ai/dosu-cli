@@ -742,11 +742,9 @@ export function stepShowSummary(results: ConfigResult[]): void {
  * for only invoking this when MCP was actually (re)configured this run, so
  * users who skip MCP don't get a tip they can't act on.
  */
-export function showTryItOutPrompt(opts: {
-  mode?: SetupMode;
-  docsImported?: boolean;
-  hasAgentsMd?: boolean;
-} = {}): void {
+export function showTryItOutPrompt(
+  opts: { mode?: SetupMode; docsImported?: boolean; hasAgentsMd?: boolean } = {},
+): void {
   const prompt = (() => {
     if (opts.mode === MODE_OSS) {
       return `What can Dosu help me with? Pick an open source library related to my project and explain how it works.`;

@@ -33,7 +33,11 @@ import type { Config } from "../config/config";
 import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
 import { DEFAULT_DEPLOYMENT_CONFIG_GITHUB } from "./default-deployment-config";
-import { ADD_REPOSITORIES_VALUE, promptGitHubRepositories } from "./github-repo-prompt";
+import {
+  ADD_REPOSITORIES_VALUE,
+  promptGitHubRepositories,
+  REFRESH_LIST_VALUE,
+} from "./github-repo-prompt";
 import { startInstallationCallbackServer } from "./installation-server";
 import { dim } from "./styles";
 
@@ -166,8 +170,15 @@ function buildPromptOptions(
       kind: "action" as const,
       label: "Add repositories...",
       value: ADD_REPOSITORIES_VALUE,
-      hint: "Open GitHub and refresh this list",
+      hint: "Open GitHub to install/update access",
     },
+    {
+      kind: "action" as const,
+      label: "Refresh list",
+      value: REFRESH_LIST_VALUE,
+      hint: "Re-check Dosu for new repos",
+    },
+    { kind: "separator" as const },
     ...repos.map((r) => ({ kind: "repo" as const, label: r.slug, value: r.slug })),
   ];
 }
@@ -188,7 +199,7 @@ async function waitForRepositoryRefresh(
   trpc: TrpcAny,
   orgID: string,
   previousRepos: AvailableRepo[],
-): Promise<AvailableRepo[]> {
+): Promise<{ repos: AvailableRepo[]; foundNew: boolean }> {
   const startedAt = Date.now();
   let latestRepos = previousRepos;
 
@@ -198,13 +209,13 @@ async function waitForRepositoryRefresh(
       polledRepos.length === 0 && previousRepos.length > 0 ? previousRepos : polledRepos;
 
     if (hasNewVisibleRepository(previousRepos, latestRepos)) {
-      return latestRepos;
+      return { repos: latestRepos, foundNew: true };
     }
 
     await sleep(REPO_REFRESH_POLL_INTERVAL_MS);
   }
 
-  return latestRepos;
+  return { repos: latestRepos, foundNew: false };
 }
 
 /**
@@ -492,14 +503,33 @@ export async function stepConnectGitHubRepo(
     }
 
     if (selected === ADD_REPOSITORIES_VALUE) {
-      let refreshedRepos = repos;
+      let refresh: { repos: AvailableRepo[]; foundNew: boolean } = { repos, foundNew: false };
       const installationID = await openGitHubInstallFlow(async () => {
-        refreshedRepos = await waitForRepositoryRefresh(trpc, orgID, repos);
+        refresh = await waitForRepositoryRefresh(trpc, orgID, repos);
       });
       if (installationID === null) {
         return { advance: false, has_connected_repo: deployed.length > 0 };
       }
-      repos = refreshedRepos;
+      repos = refresh.repos;
+      if (!refresh.foundNew) {
+        p.log.warn(
+          "GitHub may still be syncing. Pick 'Refresh list' in a moment to re-check — sync usually completes within a minute.",
+        );
+      }
+      continue;
+    }
+
+    if (selected === REFRESH_LIST_VALUE) {
+      const s = p.spinner();
+      s.start("Refreshing repository list...");
+      const previousIds = new Set(repos.map((r) => r.repository_id));
+      repos = await fetchListForOrg(trpc, orgID);
+      const newCount = repos.filter((r) => !previousIds.has(r.repository_id)).length;
+      s.stop(
+        newCount > 0
+          ? `Found ${newCount} new repo${newCount === 1 ? "" : "s"}`
+          : "List refreshed — no new repos yet",
+      );
       continue;
     }
 

@@ -612,36 +612,26 @@ describe("showTryItOutPrompt", () => {
     expect(p.log.message).toHaveBeenCalledWith(
       expect.stringContaining("summarize the most important docs"),
     );
-    expect(p.log.message).not.toHaveBeenCalledWith(
-      expect.stringContaining("host my AGENTS.md"),
-    );
+    expect(p.log.message).not.toHaveBeenCalledWith(expect.stringContaining("host my AGENTS.md"));
   });
 
   it("suggests hosting AGENTS.md when the file exists and no docs were imported", () => {
     showTryItOutPrompt({ docsImported: false, hasAgentsMd: true });
 
-    expect(p.log.message).toHaveBeenCalledWith(
-      expect.stringContaining("host my AGENTS.md"),
-    );
+    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("host my AGENTS.md"));
   });
 
   it("suggests drafting AGENTS.md when neither docs are imported nor the file exists", () => {
     showTryItOutPrompt({ docsImported: false, hasAgentsMd: false });
 
-    expect(p.log.message).toHaveBeenCalledWith(
-      expect.stringContaining("draft an AGENTS.md"),
-    );
-    expect(p.log.message).not.toHaveBeenCalledWith(
-      expect.stringContaining("host my AGENTS.md"),
-    );
+    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("draft an AGENTS.md"));
+    expect(p.log.message).not.toHaveBeenCalledWith(expect.stringContaining("host my AGENTS.md"));
   });
 
   it("uses the OSS prompt regardless of other flags", () => {
     showTryItOutPrompt({ mode: MODE_OSS, docsImported: true, hasAgentsMd: true });
 
-    expect(p.log.message).toHaveBeenCalledWith(
-      expect.stringContaining("open source library"),
-    );
+    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("open source library"));
     expect(p.log.message).not.toHaveBeenCalledWith(
       expect.stringContaining("summarize the most important docs"),
     );

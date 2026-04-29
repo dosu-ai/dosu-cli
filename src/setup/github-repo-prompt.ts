@@ -13,15 +13,22 @@ import {
 } from "./prompt-symbols";
 
 const ACTION_ARROW = symbol("→", ">");
+const SEPARATOR_LINE = "─".repeat(30);
 
 export const ADD_REPOSITORIES_VALUE = "__add_repositories__" as const;
+export const REFRESH_LIST_VALUE = "__refresh_list__" as const;
+
+type ActionValue = typeof ADD_REPOSITORIES_VALUE | typeof REFRESH_LIST_VALUE;
 
 type PromptOption =
   | {
       kind: "action";
-      value: typeof ADD_REPOSITORIES_VALUE;
+      value: ActionValue;
       label: string;
       hint?: string;
+    }
+  | {
+      kind: "separator";
     }
   | {
       kind: "repo";
@@ -43,14 +50,14 @@ export async function promptGitHubRepositories({
   options,
   initialValues = [],
   maxItems,
-}: PromptGitHubRepositoriesOptions): Promise<symbol | typeof ADD_REPOSITORIES_VALUE | string[]> {
+}: PromptGitHubRepositoriesOptions): Promise<symbol | ActionValue | string[]> {
   const prompt = new GitHubRepoPrompt({
     message,
     options,
     initialValues,
     maxItems,
   });
-  return (await prompt.prompt()) as symbol | typeof ADD_REPOSITORIES_VALUE | string[];
+  return (await prompt.prompt()) as symbol | ActionValue | string[];
 }
 /* v8 ignore stop */
 
@@ -77,12 +84,10 @@ export class GitHubRepoPrompt extends Prompt {
     this.selected = initialValues.filter((value) =>
       options.some((option) => option.kind === "repo" && option.value === value),
     );
-    this.cursor = Math.max(
-      this.options.findIndex(
-        (option) => option.kind === "repo" && this.selected.includes(option.value),
-      ),
-      0,
+    const initialCursor = this.options.findIndex(
+      (option) => option.kind === "repo" && this.selected.includes(option.value),
     );
+    this.cursor = initialCursor >= 0 ? initialCursor : this.firstFocusableIndex();
     this.syncValue();
 
     this.on("key", (key) => {
@@ -96,11 +101,11 @@ export class GitHubRepoPrompt extends Prompt {
       switch (key) {
         case "left":
         case "up":
-          this.cursor = this.cursor === 0 ? this.options.length - 1 : this.cursor - 1;
+          this.cursor = this.advanceCursor(-1);
           break;
         case "down":
         case "right":
-          this.cursor = this.cursor === this.options.length - 1 ? 0 : this.cursor + 1;
+          this.cursor = this.advanceCursor(1);
           break;
         case "space":
           this.toggleCurrent();
@@ -108,6 +113,22 @@ export class GitHubRepoPrompt extends Prompt {
       }
       this.syncValue();
     });
+  }
+
+  private firstFocusableIndex(): number {
+    const idx = this.options.findIndex((option) => option.kind !== "separator");
+    return idx >= 0 ? idx : 0;
+  }
+
+  private advanceCursor(direction: 1 | -1): number {
+    const total = this.options.length;
+    if (total === 0) return 0;
+    let next = this.cursor;
+    for (let i = 0; i < total; i++) {
+      next = (next + direction + total) % total;
+      if (this.options[next].kind !== "separator") return next;
+    }
+    return this.cursor;
   }
 
   private get currentOption(): PromptOption {
@@ -120,11 +141,12 @@ export class GitHubRepoPrompt extends Prompt {
   }
 
   private toggleCurrent(): void {
-    if (this.currentOption.kind !== "repo") return;
-    const selected = this.selected.includes(this.currentOption.value);
+    const current = this.currentOption;
+    if (current.kind !== "repo") return;
+    const selected = this.selected.includes(current.value);
     this.selected = selected
-      ? this.selected.filter((value) => value !== this.currentOption.value)
-      : [...this.selected, this.currentOption.value];
+      ? this.selected.filter((value) => value !== current.value)
+      : [...this.selected, current.value];
   }
 
   private toggleAll(): void {
@@ -154,13 +176,16 @@ ${symbolByState}  ${this.message}
     }
 
     const body = visibleOptions(this.cursor, this.options, this.maxItems).map((option) => {
-      const actualIndex = option.kind === "ellipsis" ? -1 : option.index;
       if (option.kind === "ellipsis") {
         return `${pc.gray(BAR)}  ${pc.dim(ELLIPSIS)}`;
       }
 
-      const isActive = actualIndex === this.cursor;
-      const current = this.options[actualIndex];
+      const current = this.options[option.index];
+      if (current.kind === "separator") {
+        return `${pc.gray(BAR)}  ${pc.dim(SEPARATOR_LINE)}`;
+      }
+
+      const isActive = option.index === this.cursor;
       const marker =
         current.kind === "action"
           ? isActive
@@ -183,9 +208,13 @@ ${pc.cyan(FOOTER)}`;
   }
 
   private submitLabel(): string {
-    if (this.value === ADD_REPOSITORIES_VALUE) {
-      const action = this.options.find((option) => option.kind === "action");
-      return action?.label ?? "Add repositories...";
+    if (typeof this.value === "string") {
+      const matched = this.options.find(
+        (option) => option.kind === "action" && option.value === this.value,
+      );
+      if (matched && matched.kind === "action") return matched.label;
+      const fallback = this.options.find((option) => option.kind === "action");
+      return fallback && fallback.kind === "action" ? fallback.label : "Add repositories...";
     }
 
     const selectedValues = Array.isArray(this.value) ? this.value : [];
