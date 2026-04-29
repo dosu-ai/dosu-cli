@@ -1,3 +1,12 @@
+# [0.11.0-alpha.6](https://github.com/dosu-ai/dosu-cli/compare/v0.11.0-alpha.5...v0.11.0-alpha.6) (2026-04-29)
+
+
+### Bug Fixes
+
+* **setup:** adapt try-it-out CTA to user state ([f4ad9f5](https://github.com/dosu-ai/dosu-cli/commit/f4ad9f5029dc5fe2880f8ee7167abef9e34c6f2f))
+* **setup:** add Refresh list action so users can re-check after install lag ([fd12719](https://github.com/dosu-ai/dosu-cli/commit/fd12719569ca37b72fbf6e512dbd87aaef439dc9))
+* **setup:** clarify that unticking an agent removes its Dosu config ([04a1711](https://github.com/dosu-ai/dosu-cli/commit/04a1711b2824d2c56b0623f6aa5f63ef8b0d5db1))
+
 # [0.11.0-alpha.5](https://github.com/dosu-ai/dosu-cli/compare/v0.11.0-alpha.4...v0.11.0-alpha.5) (2026-04-28)
 
 
