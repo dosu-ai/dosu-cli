@@ -326,6 +326,29 @@ describe("stepConnectGitHubRepo", () => {
     expect(result.advance).toBe(true);
   });
 
+  it("returns advance=false when the GitHub install times out", async () => {
+    // installationPromise never resolves; with install.timeoutMs = 1, the
+    // race resolves to null and the flow bails. Covers the
+    // `installationID === null` branch.
+    mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([]);
+    mockStartInstallationCallbackServer.mockResolvedValue({
+      server: { port: 0, close: vi.fn() },
+      installationPromise: new Promise<{ installation_id: number }>(() => {}),
+    });
+    mockPromptGitHubRepositories.mockResolvedValueOnce("__add_repositories__");
+
+    const result = await stepConnectGitHubRepo(makeCfg(), null, {
+      verify: { timeoutMs: 0, intervalMs: 0 },
+      refresh: { timeoutMs: 0, intervalMs: 0 },
+      install: { timeoutMs: 1 },
+    });
+
+    expect(result.advance).toBe(false);
+    expect(p.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Didn't hear back from the browser"),
+    );
+  });
+
   it("warns when add-repositories install completes but no new repo appears", async () => {
     // Same repo list before and after install — backend still syncing, polling
     // budget elapses without seeing a new repo. We expect a warn pointing the
@@ -378,6 +401,54 @@ describe("stepConnectGitHubRepo", () => {
     expect(secondArgs.options.filter((o) => o.kind === "repo").map((o) => o.value)).toEqual([
       "acme/api",
       "acme/core",
+    ]);
+    expect(result.advance).toBe(true);
+  });
+
+  it("reports the count when refresh-list finds multiple new repos (plural label)", async () => {
+    // Covers the `newCount === 1 ? "" : "s"` plural branch in the refresh
+    // spinner.stop label.
+    mockTrpc.githubRepository.listForOrg.query
+      .mockResolvedValueOnce([
+        { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
+      ])
+      .mockResolvedValueOnce([
+        { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
+        { repository_id: 2, name: "core", slug: "acme/core", is_deployed: false },
+        { repository_id: 3, name: "web", slug: "acme/web", is_deployed: false },
+      ]);
+    mockPromptGitHubRepositories
+      .mockResolvedValueOnce("__refresh_list__")
+      .mockResolvedValueOnce([]);
+
+    const result = await stepConnectGitHubRepo(makeCfg(), null, NO_WAIT_VERIFY);
+
+    expect(mockTrpc.githubRepository.listForOrg.query).toHaveBeenCalledTimes(2);
+    expect(result.advance).toBe(true);
+  });
+
+  it("falls back to previous repos when polling returns an empty list", async () => {
+    // Covers the `polledRepos.length === 0 && previousRepos.length > 0` ternary
+    // in waitForRepositoryRefresh — a transient empty response shouldn't wipe
+    // the in-memory list before the next prompt.
+    mockTrpc.githubRepository.listForOrg.query
+      .mockResolvedValueOnce([
+        { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
+      ])
+      .mockResolvedValueOnce([]);
+    mockPromptGitHubRepositories
+      .mockResolvedValueOnce("__add_repositories__")
+      .mockResolvedValueOnce([]);
+
+    const result = await stepConnectGitHubRepo(makeCfg(), null, NO_WAIT_REFRESH);
+
+    // Second call to the prompt should still see the original repo because the
+    // empty polled response was discarded.
+    const secondArgs = mockPromptGitHubRepositories.mock.calls[1][0] as {
+      options: { kind?: string; value?: string }[];
+    };
+    expect(secondArgs.options.filter((o) => o.kind === "repo").map((o) => o.value)).toEqual([
+      "acme/api",
     ]);
     expect(result.advance).toBe(true);
   });

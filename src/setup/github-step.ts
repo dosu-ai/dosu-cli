@@ -84,6 +84,9 @@ export interface StepConnectGitHubRepoOptions {
     timeoutMs?: number;
     intervalMs?: number;
   };
+  install?: {
+    timeoutMs?: number;
+  };
 }
 
 export interface GithubStepResult {
@@ -240,7 +243,9 @@ async function waitForRepositoryRefresh(
  */
 async function openGitHubInstallFlow(
   onInstalled?: (installationID: number) => Promise<void>,
+  opts?: { timeoutMs?: number },
 ): Promise<number | null> {
+  const timeoutMs = opts?.timeoutMs ?? INSTALLATION_TIMEOUT_MS;
   const { server, installationPromise } = await startInstallationCallbackServer();
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
@@ -266,9 +271,9 @@ async function openGitHubInstallFlow(
 
     const timeout = new Promise<null>((resolve) => {
       timeoutId = setTimeout(() => {
-        logger.warn("setup", `GitHub install timed out after ${INSTALLATION_TIMEOUT_MS / 1000}s`);
+        logger.warn("setup", `GitHub install timed out after ${timeoutMs / 1000}s`);
         resolve(null);
-      }, INSTALLATION_TIMEOUT_MS);
+      }, timeoutMs);
     });
 
     const s = p.spinner();
@@ -281,7 +286,7 @@ async function openGitHubInstallFlow(
       s.stop("Timed out");
       p.log.warn(
         `Didn't hear back from the browser after ${Math.floor(
-          INSTALLATION_TIMEOUT_MS / 1000,
+          timeoutMs / 1000,
         )}s. Run \`dosu setup\` again once you've completed the install.`,
       );
       return null;
@@ -513,7 +518,7 @@ export async function stepConnectGitHubRepo(
       let refresh: { repos: AvailableRepo[]; foundNew: boolean } = { repos, foundNew: false };
       const installationID = await openGitHubInstallFlow(async () => {
         refresh = await waitForRepositoryRefresh(trpc, orgID, repos, opts.refresh);
-      });
+      }, opts.install);
       if (installationID === null) {
         return { advance: false, has_connected_repo: deployed.length > 0 };
       }

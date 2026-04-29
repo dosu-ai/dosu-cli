@@ -23,7 +23,12 @@ export function expandHome(path: string): string {
 
 /**
  * Returns the platform-specific Application Support directory.
+ *
+ * v8 coverage of the switch arms varies by platform (macOS CI hits darwin,
+ * Linux CI hits default). The arms are trivial dispatch — exclude from
+ * coverage so the global threshold is stable across runners.
  */
+/* v8 ignore start */
 export function appSupportDir(): string {
   switch (platform()) {
     case "darwin": {
@@ -40,3 +45,4 @@ export function appSupportDir(): string {
     }
   }
 }
+/* v8 ignore stop */

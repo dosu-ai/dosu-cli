@@ -4,11 +4,13 @@ import { mcpHeaders, mcpURL } from "../config-helpers";
 import { appSupportDir } from "../detect";
 import { createJSONProvider } from "./base";
 
+/* v8 ignore start -- platform dispatch: only one branch runs per CI runner */
 function zedConfigDir(): string {
   const os = platform();
   if (os === "darwin" || os === "win32") return join(appSupportDir(), "Zed");
   return join(appSupportDir(), "zed"); // Linux uses lowercase
 }
+/* v8 ignore stop */
 
 export const ZedProvider = () =>
   createJSONProvider({
