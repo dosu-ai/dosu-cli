@@ -1,3 +1,55 @@
+# [0.11.0-alpha.7](https://github.com/dosu-ai/dosu-cli/compare/v0.11.0-alpha.6...v0.11.0-alpha.7) (2026-04-29)
+
+
+### Bug Fixes
+
+* refine setup success pages ([4852611](https://github.com/dosu-ai/dosu-cli/commit/485261171c15184e086621a4352e60fa012698ee))
+
+# [0.11.0-alpha.6](https://github.com/dosu-ai/dosu-cli/compare/v0.11.0-alpha.5...v0.11.0-alpha.6) (2026-04-29)
+
+
+### Bug Fixes
+
+* **setup:** adapt try-it-out CTA to user state ([f4ad9f5](https://github.com/dosu-ai/dosu-cli/commit/f4ad9f5029dc5fe2880f8ee7167abef9e34c6f2f))
+* **setup:** add Refresh list action so users can re-check after install lag ([fd12719](https://github.com/dosu-ai/dosu-cli/commit/fd12719569ca37b72fbf6e512dbd87aaef439dc9))
+* **setup:** clarify that unticking an agent removes its Dosu config ([04a1711](https://github.com/dosu-ai/dosu-cli/commit/04a1711b2824d2c56b0623f6aa5f63ef8b0d5db1))
+
+# [0.11.0-alpha.5](https://github.com/dosu-ai/dosu-cli/compare/v0.11.0-alpha.4...v0.11.0-alpha.5) (2026-04-28)
+
+
+### Bug Fixes
+
+* **setup:** roll back deployment when dataSource.create returns null ([e4db7b8](https://github.com/dosu-ai/dosu-cli/commit/e4db7b8c1fd1b930a8495ba86ec628300e6461a8))
+* **skill-update:** re-read cache before background write-back ([aa9e27b](https://github.com/dosu-ai/dosu-cli/commit/aa9e27bbfb1b70667ea9f5a73eb8284500294b5a))
+
+# [0.11.0-alpha.4](https://github.com/dosu-ai/dosu-cli/compare/v0.11.0-alpha.3...v0.11.0-alpha.4) (2026-04-28)
+
+
+### Bug Fixes
+
+* **setup:** drop orphan deployments + scope doc-scan to this run ([#57](https://github.com/dosu-ai/dosu-cli/issues/57)) ([eba2105](https://github.com/dosu-ai/dosu-cli/commit/eba2105750fac1727076cc9f0d9ee3e94005d21c))
+
+# [0.11.0-alpha.3](https://github.com/dosu-ai/dosu-cli/compare/v0.11.0-alpha.2...v0.11.0-alpha.3) (2026-04-27)
+
+
+### Bug Fixes
+
+* **setup:** sync GitHub data sources ([#56](https://github.com/dosu-ai/dosu-cli/issues/56)) ([1ea4098](https://github.com/dosu-ai/dosu-cli/commit/1ea4098999a522d145fb6ddcab14ff2c2d6ee2fa))
+
+# [0.11.0-alpha.2](https://github.com/dosu-ai/dosu-cli/compare/v0.11.0-alpha.1...v0.11.0-alpha.2) (2026-04-27)
+
+
+### Bug Fixes
+
+* **setup:** exit doc-scan early when repos are indexed but empty ([#55](https://github.com/dosu-ai/dosu-cli/issues/55)) ([e9d6dbf](https://github.com/dosu-ai/dosu-cli/commit/e9d6dbf002319bc5fd1da264aa3d430b887d6e58))
+
+# [0.11.0-alpha.1](https://github.com/dosu-ai/dosu-cli/compare/v0.10.0...v0.11.0-alpha.1) (2026-04-27)
+
+
+### Features
+
+* **setup:** CLI-led onboarding ([7d65817](https://github.com/dosu-ai/dosu-cli/commit/7d65817cf30d948b82cb91279b0204207f1359b2))
+
 # [0.10.0](https://github.com/dosu-ai/dosu-cli/compare/v0.9.1...v0.10.0) (2026-04-16)
 
 

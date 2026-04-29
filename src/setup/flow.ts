@@ -2,8 +2,11 @@
  * Setup flow — interactive wizard.
  */
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import * as p from "@clack/prompts";
 import { Client, type Deployment, type Org, SessionExpiredError } from "../client/client";
+import { installSkill } from "../commands/skill";
 import { type Config, loadConfig, MODE_OSS, type SetupMode, saveConfig } from "../config/config";
 import { logger } from "../debug/logger";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
@@ -11,6 +14,8 @@ import { dim, info } from "./styles";
 
 export interface SetupOptions {
   deploymentID?: string;
+  /** Force a specific mode, bypassing the default. "cloud" = standard flow, "oss" = public-libraries-only. */
+  mode?: SetupMode | "cloud";
 }
 
 export type ConfigAction = "install" | "remove" | "skip";
@@ -27,88 +32,287 @@ export interface ToolSelection {
   skipped: SetupProvider[];
 }
 
+interface OneShotChoices {
+  configureMcp: boolean;
+  installSkill: boolean;
+  connectGitHub: boolean;
+}
+
+type SetupFlowKind = "onboarding" | "setup";
+
+interface CloudSetupContext {
+  kind: SetupFlowKind;
+  profileUserID: string;
+  targetOrg?: OwnedOrg;
+}
+
+interface OwnedOrg {
+  org_id: string;
+  name: string;
+  user_role?: string | null;
+}
+
+// `@dosu/api-types` trails a few app routers; use a narrow local cast in setup.
+// biome-ignore lint/suspicious/noExplicitAny: see note above
+type TrpcAny = any;
+
 export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   logger.info(
     "setup",
-    `Setup flow started${opts.deploymentID ? ` deployment=${opts.deploymentID}` : ""}`,
+    `Setup flow started${opts.deploymentID ? ` deployment=${opts.deploymentID}` : ""}${
+      opts.mode ? ` mode=${opts.mode}` : ""
+    }`,
   );
   p.intro("Dosu CLI Setup");
 
-  // Step 1: Authenticate
-  const cfg = await stepAuthenticate(opts);
-  if (!cfg) return;
+  let cfg = loadConfig();
 
-  const apiClient = new Client(cfg);
+  applyModeOverride(cfg, opts);
 
-  // Step 2: Branch on mode
+  // --deployment implies Cloud; otherwise default to Cloud unless --mode oss.
   if (opts.deploymentID) {
-    // --deployment flag provided, use specified deployment
-    const d = await stepResolveDeployment(apiClient, opts.deploymentID);
-    if (!d) return;
     cfg.mode = undefined;
-    cfg.deployment_id = d.deployment_id;
-    cfg.deployment_name = d.name;
-    cfg.org_id = d.org_id;
-    cfg.space_id = d.space_id;
-  } else if (cfg.mode === MODE_OSS) {
-    // OSS path: fetch first available deployment for API key creation only
-    const deployments = await fetchDeployments(apiClient);
-    if (deployments.length > 0) {
-      cfg.deployment_id = deployments[0].deployment_id;
-      cfg.deployment_name = deployments[0].name;
-      cfg.org_id = deployments[0].org_id;
-      cfg.space_id = deployments[0].space_id;
-    }
-  } else {
-    // Standard path: select deployment interactively
-    const org = await stepSelectOrg(apiClient);
-    if (!org) return;
-    const d = await stepSelectDeployment(apiClient, org);
-    if (!d) return;
-    cfg.mode = undefined;
-    cfg.deployment_id = d.deployment_id;
-    cfg.deployment_name = d.name;
-    cfg.org_id = d.org_id;
-    cfg.space_id = d.space_id;
+    saveConfig(cfg);
   }
 
-  saveConfig(cfg);
+  // Authenticate — always runs so we can verify/refresh tokens.
+  const authedCfg = await stepAuthenticate(cfg);
+  if (!authedCfg) return;
+  cfg = authedCfg;
 
-  // Step 3: API key (needed for both modes)
+  const apiClient = new Client(cfg);
+  let cloudSetupContext: CloudSetupContext | null = null;
+
+  if (cfg.mode !== MODE_OSS) {
+    const s = p.spinner();
+    s.start("Loading your workspace...");
+    cloudSetupContext = await resolveCloudSetupContext(cfg);
+    if (!cloudSetupContext) {
+      s.stop("Workspace load failed");
+      return;
+    }
+    s.stop("Workspace loaded");
+  }
+
+  // Deployment: first-run onboarding binds the user's default deployment.
+  // Otherwise we only run the interactive picker when we don't already have
+  // a deployment id locked in, OR when the caller passed `--deployment` to
+  // explicitly switch. Everyday re-runs reuse the stored deployment silently.
+  if (cfg.mode !== MODE_OSS && cloudSetupContext?.kind === "onboarding") {
+    const ok = await bindOnboardingDeployment(apiClient, cfg, cloudSetupContext.targetOrg ?? null);
+    if (!ok) return;
+  } else if (!cfg.deployment_id || opts.deploymentID) {
+    const ok = await resolveDeployment(apiClient, cfg, opts);
+    if (!ok) return;
+  }
+
+  // API key: `stepMintAPIKey` is idempotent — it validates an existing key
+  // before minting a new one, so it's safe to call on every run.
   const apiKey = await stepMintAPIKey(apiClient, cfg);
   if (!apiKey) return;
   cfg.api_key = apiKey;
   saveConfig(cfg);
 
-  // Step 4: Detect and configure tools
-  const detected = stepDetectTools();
-  if (detected.length === 0) {
-    p.log.warn(
-      `No supported AI agents detected on your system.\nRun ${info("dosu mcp add <agent>")} to manually configure an agent.`,
-    );
-    return;
+  // One-shot confirm: MCP + skill are always listed (user picks what to
+  // (re)run); GitHub docs import only shows during first-run onboarding.
+  const choices = await stepOneShotConfirm({
+    includeGitHub: cloudSetupContext?.kind === "onboarding",
+  });
+  if (!choices) return;
+
+  // MCP tools. Track whether at least one agent ended up with Dosu MCP
+  // configured (newly installed or previously installed) so we only nudge
+  // the user with the "Try it out" prompt when there's actually an agent
+  // they can paste it into.
+  let mcpConfiguredThisRun = false;
+  if (choices.configureMcp) {
+    const configured = await stepConfigureMcpTools(cfg);
+    if (configured === null) return;
+    mcpConfiguredThisRun = configured.some((r) => r.action === "install" || r.action === "skip");
   }
 
-  const selection = await stepSelectTools(detected);
-  if (!selection) return;
+  // Dosu skill
+  if (choices.installSkill) {
+    await runInstallSkill();
+  }
 
-  const results = stepConfigureTools(cfg, selection);
-  stepShowSummary(results, cfg.mode);
+  let githubOnboardingDone = !choices.connectGitHub;
+  if (choices.connectGitHub && cloudSetupContext?.kind === "onboarding") {
+    const { stepConnectGitHubRepo } = await import("./github-step");
+    const connectResult = await stepConnectGitHubRepo(cfg);
+    if (!connectResult.advance) return;
+    if (connectResult.space_id && !cfg.space_id) {
+      cfg.space_id = connectResult.space_id;
+      saveConfig(cfg);
+    }
+
+    const { stepImportGitHubDocs } = await import("./github-doc-import-step");
+    const importResult = await stepImportGitHubDocs(cfg, {
+      waitForFreshDocs: Boolean(connectResult.deployment_id),
+      expectedDataSourceIds: connectResult.created_data_source_ids,
+    });
+    if (!importResult.advance) return;
+    githubOnboardingDone = true;
+  }
+
+  const shouldCompleteRemoteOnboarding =
+    cloudSetupContext?.kind === "onboarding" && githubOnboardingDone;
+
+  if (shouldCompleteRemoteOnboarding && cloudSetupContext) {
+    const profileUserID = cloudSetupContext.profileUserID;
+    try {
+      const { createTypedClient } = await import("../client/trpc");
+      const trpc = createTypedClient(cfg) as TrpcAny;
+      await trpc.user.updateProfile.mutate({
+        user_id: profileUserID,
+        finished_onboarding: true,
+      });
+      logger.info("setup", "Server onboarding marked complete");
+    } catch (err) {
+      logger.warn(
+        "setup",
+        `completeOnboarding failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      p.log.warn(
+        "Could not mark onboarding complete on the server — you can retry later by running `dosu setup` again.",
+      );
+    }
+  }
+
+  if (mcpConfiguredThisRun) {
+    showTryItOutPrompt({
+      mode: cfg.mode,
+      docsImported: choices.connectGitHub && githubOnboardingDone,
+      hasAgentsMd: existsSync(join(process.cwd(), "AGENTS.md")),
+    });
+  }
 
   if (cfg.mode === MODE_OSS) {
     p.outro(
-      "Setup complete! Using open-source libraries only.\n\nTips: Run `dosu setup` again to connect your own repos.",
+      "Setup complete! Using open-source libraries only.\n\nTips: Run `dosu setup --mode cloud` to connect your own repos.",
     );
   } else {
     p.outro("\uD83C\uDF89 Setup complete!");
   }
 }
 
-async function stepAuthenticate(opts: SetupOptions): Promise<Config | null> {
-  logger.info("setup", "Step: authenticate");
-  const cfg = loadConfig();
+/**
+ * Copy the four deployment fields onto cfg. Caller decides whether to also
+ * clear `cfg.mode` (Cloud paths do; the OSS auto-pick path doesn't).
+ */
+function applyDeployment(cfg: Config, d: Deployment): void {
+  cfg.deployment_id = d.deployment_id;
+  cfg.deployment_name = d.name;
+  cfg.org_id = d.org_id;
+  cfg.space_id = d.space_id;
+}
 
-  // If we have a token, verify it against the backend first
+/**
+ * Apply a user-supplied --mode flag against the current config.
+ */
+function applyModeOverride(cfg: Config, opts: SetupOptions): void {
+  if (!opts.mode) return;
+  const newMode = opts.mode === "oss" ? MODE_OSS : undefined;
+  const oldMode = cfg.mode;
+  cfg.mode = newMode;
+  if (oldMode === MODE_OSS && newMode === undefined) {
+    logger.info("setup", "Mode switched OSS → Cloud");
+  }
+  saveConfig(cfg);
+}
+
+/**
+ * One-shot confirmation: a single multiselect listing everything Dosu will
+ * set up. All items default checked; user hits Enter to do it all, or
+ * unticks specific items.
+ *
+ * MCP + skill are always listed so users can re-run either step at any
+ * time (add a new agent, reinstall the skill). GitHub docs import only
+ * shows during first-run cloud onboarding.
+ */
+async function stepOneShotConfirm(opts: {
+  includeGitHub: boolean;
+}): Promise<OneShotChoices | null> {
+  type Item = { value: keyof OneShotChoices; label: string };
+  const items: Item[] = [
+    { value: "configureMcp", label: "Install Dosu MCP" },
+    { value: "installSkill", label: "Install Dosu skill" },
+  ];
+  if (opts.includeGitHub) {
+    items.push({
+      value: "connectGitHub",
+      label: `Import docs from GitHub ${dim("(Keep them up to date)")}`,
+    });
+  }
+
+  const selected = await p.multiselect({
+    message: "Dosu will set these up — press Enter to accept, space to toggle",
+    options: items.map((it) => ({ value: it.value, label: it.label })),
+    initialValues: items.map((it) => it.value),
+    required: false,
+  });
+
+  if (p.isCancel(selected)) {
+    logger.info("setup", "One-shot confirm cancelled");
+    return null;
+  }
+
+  const chosen = new Set(selected as Array<keyof OneShotChoices>);
+  return {
+    configureMcp: chosen.has("configureMcp"),
+    installSkill: chosen.has("installSkill"),
+    connectGitHub: chosen.has("connectGitHub"),
+  };
+}
+
+/**
+ * Runs MCP tool detection → selection → configuration as a single unit.
+ * Returns the ConfigResult array on success, or null if the user cancelled.
+ * An empty detection pool is treated as success (nothing to do).
+ */
+async function stepConfigureMcpTools(cfg: Config): Promise<ConfigResult[] | null> {
+  const detected = stepDetectTools();
+  if (detected.length === 0) {
+    p.log.warn(
+      `No supported AI agents detected on your system.\nRun ${info("dosu mcp add <agent>")} to manually configure an agent.`,
+    );
+    return [];
+  }
+  const selection = await stepSelectTools(detected);
+  if (!selection) return null;
+  const results = stepConfigureTools(cfg, selection);
+  stepShowSummary(results);
+  return results;
+}
+
+/**
+ * Run the skill install (no prompt). The upfront one-shot confirm already
+ * decided whether to run this. Returns `true` on success.
+ */
+export async function runInstallSkill(): Promise<boolean> {
+  logger.info("setup", "Step: install skill");
+  try {
+    const result = await installSkill();
+    if (result.success) {
+      logger.info("setup", `Skill installed${result.sha ? ` sha=${result.sha}` : ""}`);
+      p.log.success("Skill installed");
+      return true;
+    }
+    p.log.error("Failed to install skill. Run `dosu skill install` to retry.");
+    return false;
+  } catch (err: unknown) {
+    /* v8 ignore next -- err is always Error in practice */
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error("setup", `Skill install failed: ${msg}`);
+    p.log.error(`Skill install failed: ${msg}`);
+    return false;
+  }
+}
+
+async function stepAuthenticate(existingCfg?: Config): Promise<Config | null> {
+  logger.info("setup", "Step: authenticate");
+  const cfg = existingCfg ?? loadConfig();
+
   if (cfg.access_token) {
     const s = p.spinner();
     s.start("Verifying session...");
@@ -118,26 +322,8 @@ async function stepAuthenticate(opts: SetupOptions): Promise<Config | null> {
       if (resp.status === 200) {
         logger.info("setup", `Session verified, status=${resp.status}`);
         s.stop("Authenticated");
-
-        // If configured for OSS and no --deployment flag, let the user reconfigure
-        if (!opts.deploymentID && cfg.mode === MODE_OSS) {
-          const modeLabel = "open-source libraries only";
-          const action = await p.select({
-            message: `Currently configured for ${modeLabel}. What would you like to do?`,
-            options: [
-              { label: "Reconfigure (opens browser)", value: "reconfigure" },
-              { label: "Keep current setup and update agents", value: "keep" },
-            ],
-          });
-          if (p.isCancel(action)) return null;
-          if (action === "keep") return cfg;
-          // Reconfigure: open browser for mode re-selection
-          return await openBrowserForSetup(cfg, opts);
-        }
-
         return cfg;
       }
-      // Any non-200 status — try refresh before giving up
       try {
         logger.debug("setup", "Attempting token refresh");
         await apiClient.refreshToken();
@@ -157,29 +343,24 @@ async function stepAuthenticate(opts: SetupOptions): Promise<Config | null> {
     }
   }
 
-  // Need login
   const shouldLogin = await p.confirm({ message: "Open browser to log in?" });
   if (p.isCancel(shouldLogin) || !shouldLogin) return null;
 
-  return await openBrowserForSetup(cfg, opts);
+  return await openBrowserForSetup(cfg);
 }
 
-async function openBrowserForSetup(cfg: Config, opts: SetupOptions): Promise<Config | null> {
+async function openBrowserForSetup(cfg: Config): Promise<Config | null> {
   try {
     const { startOAuthFlow } = await import("../auth/flow");
     const s = p.spinner();
     s.start("Waiting for authentication...");
-    // Use /cli/setup unless a specific deployment was already provided via --deployment flag
-    const authPath = opts.deploymentID ? "/cli/auth" : "/cli/setup";
-    const token = await startOAuthFlow(undefined, authPath);
+    const token = await startOAuthFlow(undefined, "/cli/auth");
     s.stop("Authenticated");
-    logger.info("setup", `Browser auth completed, mode=${token.mode ?? "cloud"}`);
+    logger.info("setup", "Browser auth completed");
 
     cfg.access_token = token.access_token;
     cfg.refresh_token = token.refresh_token;
     cfg.expires_at = Math.floor(Date.now() / 1000) + token.expires_in;
-    // Sync mode from browser: OSS when signaled, clear otherwise (cloud flow)
-    cfg.mode = token.mode === MODE_OSS ? MODE_OSS : undefined;
     saveConfig(cfg);
     return cfg;
   } catch (err: unknown) {
@@ -189,6 +370,134 @@ async function openBrowserForSetup(cfg: Config, opts: SetupOptions): Promise<Con
     p.log.error(`Authentication failed: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
+}
+
+async function resolveCloudSetupContext(cfg: Config): Promise<CloudSetupContext | null> {
+  try {
+    const { createTypedClient } = await import("../client/trpc");
+    const trpc = createTypedClient(cfg) as TrpcAny;
+    const profile = (await trpc.user.getCliOnboardingContext.query()) as {
+      user_id?: string;
+      finished_onboarding?: boolean | null;
+      cli_onboarding_enabled?: boolean | null;
+    } | null;
+
+    if (!profile?.user_id) {
+      p.log.error("Could not load your profile.");
+      return null;
+    }
+
+    if (profile.finished_onboarding === true || profile.cli_onboarding_enabled !== true) {
+      return {
+        kind: "setup",
+        profileUserID: profile.user_id,
+      };
+    }
+
+    const targetOrg = await resolveOnboardingTargetOrg(trpc);
+    if (!targetOrg) {
+      p.log.error("Could not determine your onboarding organization.");
+      return null;
+    }
+
+    logger.info("setup", `First-run onboarding detected for org ${targetOrg.org_id}`);
+    return {
+      kind: "onboarding",
+      profileUserID: profile.user_id,
+      targetOrg,
+    };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error("setup", `Failed to resolve cloud setup context: ${msg}`);
+    p.log.error(`Could not load your onboarding state: ${msg}`);
+    return null;
+  }
+}
+
+async function resolveOnboardingTargetOrg(trpc: TrpcAny): Promise<OwnedOrg | null> {
+  const ownerOrgs = (await trpc.organization.getOrganizations.query({
+    userRole: "OWNER",
+    exact: true,
+  })) as OwnedOrg[];
+  if (ownerOrgs.length > 0) {
+    return ownerOrgs[0];
+  }
+
+  const accessibleOrgs = (await trpc.organization.getOrganizations.query()) as OwnedOrg[];
+  return accessibleOrgs[0] ?? null;
+}
+
+async function bindOnboardingDeployment(
+  apiClient: Client,
+  cfg: Config,
+  targetOrg: OwnedOrg | null,
+): Promise<boolean> {
+  if (!targetOrg) {
+    p.log.error("Could not determine your onboarding organization.");
+    return false;
+  }
+
+  const deployment = await resolveOnboardingDeployment(apiClient, targetOrg);
+  if (!deployment) {
+    p.log.error(`No MCP found for ${targetOrg.name}.`);
+    return false;
+  }
+
+  cfg.mode = undefined;
+  applyDeployment(cfg, deployment);
+  logger.info(
+    "setup",
+    `Bound onboarding context org=${targetOrg.org_id} deployment=${deployment.deployment_id}`,
+  );
+  p.log.success(`Organization\n${dim(targetOrg.name)}`);
+  return true;
+}
+
+async function resolveOnboardingDeployment(
+  apiClient: Client,
+  targetOrg: OwnedOrg,
+): Promise<Deployment | null> {
+  const deployments = await fetchDeployments(apiClient);
+  const orgDeployments = deployments.filter((deployment) => deployment.org_id === targetOrg.org_id);
+  return (
+    orgDeployments.find((deployment) => deployment.provider_slug === "dosu_mcp") ??
+    orgDeployments[0] ??
+    null
+  );
+}
+
+/**
+ * Resolves the deployment according to the three branches:
+ *   - --deployment flag → use that specific deployment
+ *   - OSS mode → auto-pick the first deployment (used only for API-key issuance)
+ *   - standard → interactive org + deployment select
+ */
+async function resolveDeployment(
+  apiClient: Client,
+  cfg: Config,
+  opts: SetupOptions,
+): Promise<boolean> {
+  if (opts.deploymentID) {
+    const d = await stepResolveDeployment(apiClient, opts.deploymentID);
+    if (!d) return false;
+    cfg.mode = undefined;
+    applyDeployment(cfg, d);
+    return true;
+  }
+  if (cfg.mode === MODE_OSS) {
+    const deployments = await fetchDeployments(apiClient);
+    if (deployments.length > 0) {
+      applyDeployment(cfg, deployments[0]);
+    }
+    return true;
+  }
+  const org = await stepSelectOrg(apiClient);
+  if (!org) return false;
+  const d = await stepSelectDeployment(apiClient, org);
+  if (!d) return false;
+  cfg.mode = undefined;
+  applyDeployment(cfg, d);
+  return true;
 }
 
 async function fetchDeployments(apiClient: Client): Promise<Deployment[]> {
@@ -329,14 +638,14 @@ async function stepSelectTools(detected: SetupProvider[]): Promise<ToolSelection
     return {
       label: p.name(),
       value: p.id(),
-      hint: configured ? "configured" : undefined,
+      hint: configured ? "configured — untick to remove" : undefined,
     };
   });
 
   const preselected = detected.filter((p) => configuredMap.get(p.id())).map((p) => p.id());
 
   const selected = await p.multiselect({
-    message: "Select agents to configure or update",
+    message: "Select agents — tick to configure, untick to remove",
     options,
     initialValues: preselected,
   });
@@ -401,7 +710,7 @@ export function stepConfigureTools(cfg: Config, selection: ToolSelection): Confi
   return results;
 }
 
-export function stepShowSummary(results: ConfigResult[], mode?: SetupMode): void {
+export function stepShowSummary(results: ConfigResult[]): void {
   const installed = results.filter((r) => r.action === "install" && !r.error);
   const removed = results.filter((r) => r.action === "remove" && !r.error);
   const skipped = results.filter((r) => r.action === "skip");
@@ -423,12 +732,30 @@ export function stepShowSummary(results: ConfigResult[], mode?: SetupMode): void
   if (installed.length === 0 && removed.length === 0 && skipped.length > 0) {
     p.log.success("All agents already configured. No changes needed.");
   }
+}
 
-  if (installed.length > 0 || skipped.length > 0) {
-    const prompt =
-      mode === MODE_OSS
-        ? `What can Dosu help me with? Pick an open source library related to my project and explain how it works.`
-        : `I'm new to this codebase. Give me a 5-minute mental model: main services, request flow, where to start.`;
-    p.log.message(`Try it out! Paste this into your agent:\n\n${info(prompt)}`);
-  }
+/**
+ * Post-setup nudge: a ready-to-paste prompt so the user can immediately try
+ * Dosu in their configured AI agent. Rendered at the very end of the flow
+ * (right before outro) so it's the last actionable thing they see — not
+ * buried right after the MCP configuration step. The call site is responsible
+ * for only invoking this when MCP was actually (re)configured this run, so
+ * users who skip MCP don't get a tip they can't act on.
+ */
+export function showTryItOutPrompt(
+  opts: { mode?: SetupMode; docsImported?: boolean; hasAgentsMd?: boolean } = {},
+): void {
+  const prompt = (() => {
+    if (opts.mode === MODE_OSS) {
+      return `What can Dosu help me with? Pick an open source library related to my project and explain how it works.`;
+    }
+    if (opts.docsImported) {
+      return `Use Dosu to summarize the most important docs in my repo.`;
+    }
+    if (opts.hasAgentsMd) {
+      return `Please use Dosu to host my AGENTS.md`;
+    }
+    return `Ask Dosu to draft an AGENTS.md for this project.`;
+  })();
+  p.log.message(`Try it out! Paste this into your agent:\n\n${info(prompt)}`);
 }

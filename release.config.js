@@ -1,6 +1,13 @@
 /** @type {import('semantic-release').GlobalConfig} */
 export default {
-  branches: ["main"],
+  branches: [
+    "main",
+    // Internal pre-release channel: commits to `alpha` publish to npm under
+    // dist-tag `alpha`, e.g. `0.11.0-alpha.1`. Users opt in via
+    // `npx @dosu/cli@alpha setup`. Homebrew is skipped for these (see
+    // ci.yml — `update-homebrew` filters out versions containing `-`).
+    { name: "alpha", prerelease: true },
+  ],
   plugins: [
     "@semantic-release/commit-analyzer",
     "@semantic-release/release-notes-generator",

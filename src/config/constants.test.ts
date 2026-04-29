@@ -3,7 +3,16 @@ import { getBackendURL, getSupabaseAnonKey, getSupabaseURL, getWebAppURL } from 
 
 describe("constants", () => {
   const savedEnv: Record<string, string | undefined> = {};
-  const ENV_KEYS = ["DOSU_WEB_APP_URL", "DOSU_BACKEND_URL", "SUPABASE_URL", "SUPABASE_ANON_KEY"];
+  const ENV_KEYS = [
+    "DOSU_WEB_APP_URL",
+    "DOSU_BACKEND_URL",
+    "SUPABASE_URL",
+    "SUPABASE_ANON_KEY",
+    "DOSU_WEB_APP_URL_OVERRIDE",
+    "DOSU_BACKEND_URL_OVERRIDE",
+    "SUPABASE_URL_OVERRIDE",
+    "SUPABASE_ANON_KEY_OVERRIDE",
+  ];
 
   beforeEach(() => {
     for (const key of ENV_KEYS) {
@@ -31,6 +40,12 @@ describe("constants", () => {
       process.env.DOSU_WEB_APP_URL = "https://app.dosu.dev";
       expect(getWebAppURL()).toBe("https://app.dosu.dev");
     });
+
+    it("DOSU_WEB_APP_URL_OVERRIDE wins over the build-time default", () => {
+      process.env.DOSU_WEB_APP_URL = "https://app.dosu.dev";
+      process.env.DOSU_WEB_APP_URL_OVERRIDE = "https://staging.dosu.dev";
+      expect(getWebAppURL()).toBe("https://staging.dosu.dev");
+    });
   });
 
   describe("getBackendURL", () => {
@@ -41,6 +56,12 @@ describe("constants", () => {
     it("returns value from DOSU_BACKEND_URL", () => {
       process.env.DOSU_BACKEND_URL = "http://localhost:7001";
       expect(getBackendURL()).toBe("http://localhost:7001");
+    });
+
+    it("DOSU_BACKEND_URL_OVERRIDE wins over the build-time default", () => {
+      process.env.DOSU_BACKEND_URL = "https://api.dosu.dev";
+      process.env.DOSU_BACKEND_URL_OVERRIDE = "https://api-staging.dosu.dev";
+      expect(getBackendURL()).toBe("https://api-staging.dosu.dev");
     });
   });
 
@@ -53,6 +74,12 @@ describe("constants", () => {
       process.env.SUPABASE_URL = "http://localhost:54321";
       expect(getSupabaseURL()).toBe("http://localhost:54321");
     });
+
+    it("SUPABASE_URL_OVERRIDE wins over the build-time default", () => {
+      process.env.SUPABASE_URL = "https://prod.supabase.co";
+      process.env.SUPABASE_URL_OVERRIDE = "https://staging.supabase.co";
+      expect(getSupabaseURL()).toBe("https://staging.supabase.co");
+    });
   });
 
   describe("getSupabaseAnonKey", () => {
@@ -63,6 +90,12 @@ describe("constants", () => {
     it("returns value from SUPABASE_ANON_KEY", () => {
       process.env.SUPABASE_ANON_KEY = "test-key";
       expect(getSupabaseAnonKey()).toBe("test-key");
+    });
+
+    it("SUPABASE_ANON_KEY_OVERRIDE wins over the build-time default", () => {
+      process.env.SUPABASE_ANON_KEY = "prod-key";
+      process.env.SUPABASE_ANON_KEY_OVERRIDE = "staging-key";
+      expect(getSupabaseAnonKey()).toBe("staging-key");
     });
   });
 });

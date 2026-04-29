@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockExecSync = vi.fn();
@@ -5,12 +8,15 @@ vi.mock("node:child_process", () => ({
   execSync: (...args: unknown[]) => mockExecSync(...args),
 }));
 
-import { skillCommand } from "./skill";
+import { installSkill, skillCommand } from "./skill";
 
 let logSpy: ReturnType<typeof vi.spyOn>;
 let errorSpy: ReturnType<typeof vi.spyOn>;
 // biome-ignore lint/suspicious/noExplicitAny: process.exit mock type mismatch
 let exitSpy: any;
+
+let tempDir: string;
+let origXDG: string | undefined;
 
 function allOutput(): string {
   return logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
@@ -33,12 +39,34 @@ beforeEach(() => {
   exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
     throw new Error("exit");
   }) as never);
+
+  // Isolate cache writes to a temp dir so they don't pollute $HOME
+  origXDG = process.env.XDG_CONFIG_HOME;
+  tempDir = mkdtempSync(join(tmpdir(), "dosu-skill-test-"));
+  process.env.XDG_CONFIG_HOME = tempDir;
+
+  // Default: fetch returns a SHA
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ sha: "test-sha" }),
+    }),
+  );
 });
 
 afterEach(() => {
   logSpy.mockRestore();
   errorSpy.mockRestore();
   exitSpy.mockRestore();
+
+  if (origXDG !== undefined) {
+    process.env.XDG_CONFIG_HOME = origXDG;
+  } else {
+    delete process.env.XDG_CONFIG_HOME;
+  }
+  rmSync(tempDir, { recursive: true, force: true });
+  vi.restoreAllMocks();
 });
 
 describe("skill install", () => {
@@ -104,5 +132,58 @@ describe("skill update", () => {
     });
     await expect(run("update")).rejects.toThrow("exit");
     expect(allErrors()).toContain("Failed to update skill");
+  });
+
+  it("refreshes installedSha in cache after successful update", async () => {
+    await run("update");
+
+    const cachePath = join(tempDir, "dosu-cli", "skill-update-check.json");
+    const cache = JSON.parse(readFileSync(cachePath, "utf-8"));
+    expect(cache.installedSha).toBe("test-sha");
+    expect(cache.latestSha).toBe("test-sha");
+  });
+
+  it("does not write cache when fetch fails during refresh", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false }));
+    await run("update");
+    // npx command still succeeded, we just didn't learn a SHA
+    expect(allOutput()).toContain("updated");
+  });
+});
+
+describe("installSkill helper", () => {
+  it("writes cache with SHA on success", async () => {
+    const result = await installSkill();
+    expect(result.success).toBe(true);
+    expect(result.sha).toBe("test-sha");
+
+    const cachePath = join(tempDir, "dosu-cli", "skill-update-check.json");
+    const cache = JSON.parse(readFileSync(cachePath, "utf-8"));
+    expect(cache.installedSha).toBe("test-sha");
+    expect(cache.latestSha).toBe("test-sha");
+    expect(typeof cache.lastCheck).toBe("number");
+  });
+
+  it("returns success without SHA when fetch fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false }));
+    const result = await installSkill();
+    expect(result.success).toBe(true);
+    expect(result.sha).toBeUndefined();
+  });
+
+  it("returns success without SHA when fetch throws", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network error")));
+    const result = await installSkill();
+    expect(result.success).toBe(true);
+    expect(result.sha).toBeUndefined();
+  });
+
+  it("returns failure when execSync throws", async () => {
+    mockExecSync.mockImplementation(() => {
+      throw new Error("command failed");
+    });
+    const result = await installSkill();
+    expect(result.success).toBe(false);
+    expect(result.sha).toBeUndefined();
   });
 });

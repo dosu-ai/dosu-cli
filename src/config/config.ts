@@ -21,12 +21,24 @@ export interface Config {
   space_id?: string;
 }
 
+/**
+ * The CLI uses separate config directories for dev and production so that
+ * testing against a local dev stack never clobbers a user's real credentials.
+ *
+ * - Production: `~/.config/dosu-cli/` (or `$XDG_CONFIG_HOME/dosu-cli/`)
+ * - Dev (`DOSU_DEV=true`): `~/.config/dosu-cli-dev/`
+ *
+ * Everything that lives under `getConfigDir()` — `config.json`,
+ * `update-check.json`, `skill-update-check.json` — is isolated between the two.
+ */
 export function getConfigDir(): string {
+  const dirName = process.env.DOSU_DEV === "true" ? "dosu-cli-dev" : "dosu-cli";
+
   const xdgConfig = process.env.XDG_CONFIG_HOME;
-  if (xdgConfig) return join(xdgConfig, "dosu-cli");
+  if (xdgConfig) return join(xdgConfig, dirName);
 
   const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
-  return join(home, ".config", "dosu-cli");
+  return join(home, ".config", dirName);
 }
 
 export function getConfigPath(): string {

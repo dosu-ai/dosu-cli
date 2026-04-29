@@ -2,7 +2,6 @@
  * Local OAuth callback server.
  */
 
-import { MODE_OSS, type SetupMode } from "../config/config";
 import { logger } from "../debug/logger";
 
 export interface TokenResponse {
@@ -10,7 +9,6 @@ export interface TokenResponse {
   refresh_token: string;
   expires_in: number;
   email?: string;
-  mode?: SetupMode;
 }
 
 const CALLBACK_HTML_EXTRACT = `<!DOCTYPE html>
@@ -96,12 +94,14 @@ body {
     background: #fafafa;
     color: #171717;
     min-height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    position: relative;
     padding: 20px;
 }
 .container {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
     max-width: 420px;
     width: 100%;
     text-align: center;
@@ -116,22 +116,59 @@ h1 {
     font-weight: 600;
     color: #171717;
     letter-spacing: -0.02em;
-    margin-bottom: 8px;
-}
-.subtitle {
-    font-size: 16px;
-    color: #666;
-    margin-bottom: 8px;
+    margin-bottom: 18px;
 }
 .email {
     font-size: 14px;
     color: #999;
-    margin-bottom: 28px;
+    margin-bottom: 18px;
 }
 .close-msg {
-    margin-top: 4px;
     font-size: 16px;
     color: #666;
+}
+.tip {
+    position: fixed;
+    left: 50%;
+    bottom: 28px;
+    transform: translateX(-50%);
+    width: calc(100vw - 48px);
+    text-align: center;
+    font-size: 14px;
+    line-height: 1.5;
+    color: #666;
+    white-space: nowrap;
+}
+.tip-rule {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: min(720px, 100%);
+    margin-bottom: 14px;
+    margin-left: auto;
+    margin-right: auto;
+}
+.tip-rule::before,
+.tip-rule::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: #eeeeee;
+}
+.tip-dot {
+    width: 3px;
+    height: 3px;
+    border-radius: 999px;
+    background: #dddddd;
+}
+.tip-label {
+    font-weight: 600;
+    color: #171717;
+}
+@media (max-width: 900px) {
+    .tip {
+        white-space: normal;
+    }
 }
 </style>
 </head>
@@ -152,9 +189,13 @@ h1 {
         </svg>
     </div>
     <h1>Authentication Successful</h1>
-    <p class="subtitle">You're all set. The CLI is now authenticated.</p>
     ${emailLine}
     <p class="close-msg">You can close this tab and return to your terminal.</p>
+</div>
+<div class="tip">
+    <div class="tip-rule" aria-hidden="true"><span class="tip-dot"></span></div>
+    <span class="tip-label">Did you know?</span>
+    You can use Dosu to make your coding agents faster and cheaper. Just ask your agent to use Dosu to update your AGENTS.md.
 </div>
 </body>
 </html>`;
@@ -202,7 +243,6 @@ export async function startCallbackServer(): Promise<{
     const refreshToken = url.searchParams.get("refresh_token");
     const expiresIn = url.searchParams.get("expires_in");
     const email = url.searchParams.get("email");
-    const mode = url.searchParams.get("mode");
 
     if (!accessToken) {
       logger.debug("auth.server", "Served extract HTML (no token in query)");
@@ -224,7 +264,6 @@ export async function startCallbackServer(): Promise<{
       refresh_token: refreshToken && refreshToken !== "null" ? refreshToken : "",
       expires_in: expiresInInt,
       email: email ?? undefined,
-      ...(mode === MODE_OSS && { mode: MODE_OSS }),
     });
 
     logger.info("auth.server", "Served success HTML");

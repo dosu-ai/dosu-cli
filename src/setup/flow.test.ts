@@ -3,6 +3,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// CRITICAL: mock `open` so runSetup's github-step (imported dynamically) can
+// never actually pop a real browser tab to the Dosu App install URL when the
+// `repo_not_installed` code path fires. Also mock `git` lookup so
+// detectGitRepo() doesn't hit the real filesystem.
+vi.mock("open", () => ({ default: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("node:child_process", () => ({
+  execSync: vi.fn().mockImplementation(() => {
+    throw new Error("git not available in tests");
+  }),
+}));
+
 // Only mock true boundaries: terminal UI, auth (browser), and HTTP client
 vi.mock("@clack/prompts", () => ({
   intro: vi.fn(),
@@ -40,6 +51,41 @@ vi.mock("../debug/logger", () => ({
   },
 }));
 
+// tRPC client used by:
+//   - completeOnboarding via `user.updateProfile`
+//   - github step via `workspaces.create`, `dataSource.create`, etc.
+// Tests can override any of these via `mockTrpc.<path>.mockResolvedValue(...)`.
+const mockTrpc = vi.hoisted(() => ({
+  user: {
+    getCliOnboardingContext: {
+      query: vi.fn().mockResolvedValue({
+        user_id: "test-user-id",
+        finished_onboarding: true,
+        cli_onboarding_enabled: false,
+      }),
+    },
+    getProfile: {
+      query: vi.fn().mockResolvedValue({ user_id: "test-user-id", finished_onboarding: true }),
+    },
+    updateProfile: { mutate: vi.fn().mockResolvedValue(null) },
+  },
+  organization: {
+    getOrganizations: {
+      query: vi.fn().mockResolvedValue([{ org_id: "o1", name: "Org1", user_role: "OWNER" }]),
+    },
+  },
+  githubRepository: { listForOrg: { query: vi.fn().mockResolvedValue([]) } },
+  workspaces: {
+    create: { mutate: vi.fn() },
+    listForSpace: { query: vi.fn().mockResolvedValue([]) },
+  },
+  dataSource: { create: { mutate: vi.fn() } },
+  deploymentDataSource: { create: { mutate: vi.fn().mockResolvedValue({}) } },
+}));
+vi.mock("../client/trpc", () => ({
+  createTypedClient: vi.fn(() => mockTrpc),
+}));
+
 vi.mock("../client/client", () => {
   const SessionExpiredError = class extends Error {
     constructor() {
@@ -53,12 +99,29 @@ vi.mock("../client/client", () => {
   };
 });
 
+const mockInstallSkill = vi.fn();
+vi.mock("../commands/skill", () => ({
+  installSkill: (...args: unknown[]) => mockInstallSkill(...args),
+  skillCommand: vi.fn(),
+}));
+
+const { mockStepConnectGitHubRepo, mockStepImportGitHubDocs } = vi.hoisted(() => ({
+  mockStepConnectGitHubRepo: vi.fn(),
+  mockStepImportGitHubDocs: vi.fn(),
+}));
+vi.mock("./github-step", () => ({
+  stepConnectGitHubRepo: (...args: unknown[]) => mockStepConnectGitHubRepo(...args),
+}));
+vi.mock("./github-doc-import-step", () => ({
+  stepImportGitHubDocs: (...args: unknown[]) => mockStepImportGitHubDocs(...args),
+}));
+
 import * as p from "@clack/prompts";
 import { startOAuthFlow } from "../auth/flow";
 import type { TokenResponse } from "../auth/server";
 import { Client } from "../client/client";
 import type { Config } from "../config/config";
-import { loadConfig, saveConfig } from "../config/config";
+import { loadConfig, MODE_OSS, saveConfig } from "../config/config";
 import { loadJSONConfig, saveJSONConfig } from "../mcp/config-helpers";
 import * as providersModule from "../mcp/providers";
 import { ClaudeDesktopProvider } from "../mcp/providers/claude-desktop";
@@ -67,12 +130,59 @@ import { OpenCodeProvider } from "../mcp/providers/opencode";
 import {
   type ConfigResult,
   isStdioOnly,
+  runInstallSkill,
   runSetup,
+  showTryItOutPrompt,
   stepConfigureTools,
   stepDetectTools,
   stepShowSummary,
   type ToolSelection,
 } from "./flow";
+
+/**
+ * Default p.multiselect behaviour: auto-accept the initialValues for the
+ * one-shot confirm step (`stepOneShotConfirm`) AND the tool-selection step.
+ * Tests that want to override tool selection use `mockToolSelection()` below.
+ */
+function installMultiselectDefault() {
+  vi.mocked(p.multiselect).mockImplementation(async (opts: unknown) => {
+    const o = opts as { message: string; initialValues?: unknown[] };
+    return (o.initialValues ?? []) as unknown as never;
+  });
+}
+
+/**
+ * Override tool selection with a specific set of provider IDs while still
+ * auto-accepting the upfront one-shot confirm. Use instead of
+ * `vi.mocked(p.multiselect).mockResolvedValue(...)`.
+ */
+function mockToolSelection(selection: string[]) {
+  vi.mocked(p.multiselect).mockImplementation(async (opts: unknown) => {
+    const o = opts as { message: string; initialValues?: unknown[] };
+    const msg = String(o.message ?? "").toLowerCase();
+    if (msg.includes("dosu will set")) {
+      return (o.initialValues ?? []) as unknown as never;
+    }
+    return selection as unknown as never;
+  });
+}
+
+function installSetupStepDefaults() {
+  mockStepConnectGitHubRepo.mockResolvedValue({ advance: false, has_connected_repo: false });
+  mockStepImportGitHubDocs.mockResolvedValue({ advance: false });
+}
+
+function installRemoteSetupDefaults() {
+  mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+    user_id: "test-user-id",
+    finished_onboarding: true,
+    cli_onboarding_enabled: false,
+  });
+  mockTrpc.organization.getOrganizations.query.mockResolvedValue([
+    { org_id: "o1", name: "Org1", user_role: "OWNER" },
+  ]);
+  mockTrpc.user.updateProfile.mutate.mockResolvedValue(null);
+}
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -112,6 +222,20 @@ function makeCfg(overrides: Partial<Config> = {}): Config {
   };
 }
 
+function makeDeployment(overrides: Record<string, unknown> = {}) {
+  return {
+    deployment_id: "d1",
+    name: "Deploy1",
+    description: "",
+    provider_slug: "dosu_mcp",
+    enabled: true,
+    org_id: "o1",
+    org_name: "Org1",
+    space_id: "s1",
+    ...overrides,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // 1. isStdioOnly — pure function, real providers
 // ---------------------------------------------------------------------------
@@ -140,7 +264,8 @@ describe("isStdioOnly", () => {
 describe("stepDetectTools", () => {
   beforeEach(() => {
     setupTempEnv();
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    installSetupStepDefaults();
   });
   afterEach(teardownTempEnv);
 
@@ -192,7 +317,8 @@ describe("stepDetectTools", () => {
 describe("stepConfigureTools", () => {
   beforeEach(() => {
     setupTempEnv();
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    installSetupStepDefaults();
   });
   afterEach(teardownTempEnv);
 
@@ -360,7 +486,8 @@ describe("stepConfigureTools", () => {
 describe("stepShowSummary", () => {
   beforeEach(() => {
     setupTempEnv();
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    installSetupStepDefaults();
   });
   afterEach(teardownTempEnv);
 
@@ -372,7 +499,8 @@ describe("stepShowSummary", () => {
 
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 agent"));
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Cursor"));
-    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("Try it out"));
+    // "Try it out" moved to showTryItOutPrompt at end of runSetup.
+    expect(p.log.message).not.toHaveBeenCalled();
   });
 
   it("logs removed tools count for removals", () => {
@@ -395,8 +523,8 @@ describe("stepShowSummary", () => {
     expect(p.log.success).toHaveBeenCalledWith(
       expect.stringContaining("All agents already configured"),
     );
-    // Skipped still gets the "Try it out" message
-    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("Try it out"));
+    // "Try it out" moved to showTryItOutPrompt at end of runSetup.
+    expect(p.log.message).not.toHaveBeenCalled();
   });
 
   it("shows both install and remove summaries for mixed results", () => {
@@ -456,8 +584,8 @@ describe("stepShowSummary", () => {
     expect(p.log.success).not.toHaveBeenCalledWith(
       expect.stringContaining("All agents already configured"),
     );
-    // Should still show "Try it out"
-    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("Try it out"));
+    // "Try it out" moved to showTryItOutPrompt at end of runSetup.
+    expect(p.log.message).not.toHaveBeenCalled();
   });
 
   it("does not show 'Try it out' or 'all configured' when results are empty", () => {
@@ -466,6 +594,47 @@ describe("stepShowSummary", () => {
     expect(p.log.success).not.toHaveBeenCalled();
     expect(p.log.info).not.toHaveBeenCalled();
     expect(p.log.message).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4b. showTryItOutPrompt — pure, just inspects the message string
+// ---------------------------------------------------------------------------
+
+describe("showTryItOutPrompt", () => {
+  beforeEach(() => {
+    vi.mocked(p.log.message).mockClear();
+  });
+
+  it("suggests querying imported docs when docsImported is true", () => {
+    showTryItOutPrompt({ docsImported: true, hasAgentsMd: true });
+
+    expect(p.log.message).toHaveBeenCalledWith(
+      expect.stringContaining("summarize the most important docs"),
+    );
+    expect(p.log.message).not.toHaveBeenCalledWith(expect.stringContaining("host my AGENTS.md"));
+  });
+
+  it("suggests hosting AGENTS.md when the file exists and no docs were imported", () => {
+    showTryItOutPrompt({ docsImported: false, hasAgentsMd: true });
+
+    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("host my AGENTS.md"));
+  });
+
+  it("suggests drafting AGENTS.md when neither docs are imported nor the file exists", () => {
+    showTryItOutPrompt({ docsImported: false, hasAgentsMd: false });
+
+    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("draft an AGENTS.md"));
+    expect(p.log.message).not.toHaveBeenCalledWith(expect.stringContaining("host my AGENTS.md"));
+  });
+
+  it("uses the OSS prompt regardless of other flags", () => {
+    showTryItOutPrompt({ mode: MODE_OSS, docsImported: true, hasAgentsMd: true });
+
+    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("open source library"));
+    expect(p.log.message).not.toHaveBeenCalledWith(
+      expect.stringContaining("summarize the most important docs"),
+    );
   });
 });
 
@@ -481,8 +650,12 @@ describe("runSetup integration", () => {
 
   beforeEach(() => {
     setupTempEnv();
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    installSetupStepDefaults();
+    installRemoteSetupDefaults();
     vi.mocked(p.isCancel).mockReturnValue(false);
+    installMultiselectDefault();
+    mockInstallSkill.mockResolvedValue({ success: true, sha: "test-sha" });
   });
   afterEach(teardownTempEnv);
 
@@ -491,13 +664,13 @@ describe("runSetup integration", () => {
       doRequestRaw: vi.fn().mockResolvedValue({ status: 200 }),
       refreshToken: vi.fn(),
       getOrgs: vi.fn().mockResolvedValue([{ org_id: "o1", name: "Org1" }]),
-      getDeployments: vi
-        .fn()
-        .mockResolvedValue([
-          { deployment_id: "d1", name: "Deploy1", org_id: "o1", org_name: "Org1" },
-        ]),
+      getDeployments: vi.fn().mockResolvedValue([makeDeployment()]),
       validateAPIKey: vi.fn().mockResolvedValue(true),
       createAPIKey: vi.fn().mockResolvedValue({ api_key: "new-key" }),
+      completeOnboarding: vi.fn().mockResolvedValue(undefined),
+      // Default: github connect soft-skips (user not in git repo). Tests that
+      // exercise it override.
+      connectGithubRepo: vi.fn().mockResolvedValue({ skipped: true, reason: "repo_not_installed" }),
       ...overrides,
     };
     mockClient.mockImplementation(() => clientMethods as unknown as Client);
@@ -525,8 +698,8 @@ describe("runSetup integration", () => {
   });
 
   it("completes full flow with existing token and no tools", async () => {
-    // Save a real config with token
-    const cfg = makeCfg();
+    // Save a real config with token but no deployment — forces the picker.
+    const cfg = makeCfg({ deployment_id: undefined, deployment_name: undefined });
     saveConfig(cfg);
 
     setupAuthenticatedClient();
@@ -548,8 +721,8 @@ describe("runSetup integration", () => {
   });
 
   it("completes full flow with tool install via real filesystem", async () => {
-    // Save a real config with token
-    const cfg = makeCfg();
+    // Save a real config with token but no deployment — forces the picker.
+    const cfg = makeCfg({ deployment_id: undefined, deployment_name: undefined });
     saveConfig(cfg);
 
     setupAuthenticatedClient();
@@ -560,7 +733,7 @@ describe("runSetup integration", () => {
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
 
     // User selects cursor in multiselect
-    vi.mocked(p.multiselect).mockResolvedValue(["cursor"]);
+    mockToolSelection(["cursor"]);
 
     await runSetup();
 
@@ -576,7 +749,7 @@ describe("runSetup integration", () => {
   });
 
   it("runs OAuth flow and saves tokens to real config", async () => {
-    // No pre-existing config (fresh temp dir), so needs login
+    // No pre-existing config (fresh temp dir), so needs login. No mode prompt anymore.
     vi.mocked(p.confirm).mockResolvedValue(true);
     mockStartOAuthFlow.mockResolvedValue({
       access_token: "oauth-tok",
@@ -638,7 +811,7 @@ describe("runSetup integration", () => {
 
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-    vi.mocked(p.multiselect).mockResolvedValue(["cursor"]);
+    mockToolSelection(["cursor"]);
 
     CursorProvider().install(makeCfg({ mode: "oss", deployment_id: undefined }), true);
     const ossConfig = loadJSONConfig(join(tempDir, ".cursor", "mcp.json"));
@@ -696,7 +869,7 @@ describe("runSetup integration", () => {
     });
 
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-    vi.mocked(p.multiselect).mockResolvedValue(["cursor"]);
+    mockToolSelection(["cursor"]);
 
     await runSetup();
 
@@ -728,7 +901,7 @@ describe("runSetup integration", () => {
     });
 
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-    vi.mocked(p.multiselect).mockResolvedValue(["cursor"]);
+    mockToolSelection(["cursor"]);
 
     await runSetup();
 
@@ -747,7 +920,7 @@ describe("runSetup integration", () => {
   });
 
   it("auto-selects single org without prompting", async () => {
-    const cfg = makeCfg();
+    const cfg = makeCfg({ deployment_id: undefined, deployment_name: undefined });
     saveConfig(cfg);
 
     setupAuthenticatedClient();
@@ -761,7 +934,7 @@ describe("runSetup integration", () => {
   });
 
   it("prompts when multiple orgs exist", async () => {
-    const cfg = makeCfg();
+    const cfg = makeCfg({ deployment_id: undefined, deployment_name: undefined });
     saveConfig(cfg);
 
     setupAuthenticatedClient({
@@ -781,7 +954,7 @@ describe("runSetup integration", () => {
   });
 
   it("returns early when no orgs found", async () => {
-    const cfg = makeCfg();
+    const cfg = makeCfg({ deployment_id: undefined, deployment_name: undefined });
     saveConfig(cfg);
 
     setupAuthenticatedClient({
@@ -794,7 +967,7 @@ describe("runSetup integration", () => {
   });
 
   it("handles SessionExpiredError during org fetch", async () => {
-    const cfg = makeCfg();
+    const cfg = makeCfg({ deployment_id: undefined, deployment_name: undefined });
     saveConfig(cfg);
 
     const { SessionExpiredError } = await import("../client/client");
@@ -808,7 +981,7 @@ describe("runSetup integration", () => {
   });
 
   it("handles org fetch error", async () => {
-    const cfg = makeCfg();
+    const cfg = makeCfg({ deployment_id: undefined, deployment_name: undefined });
     saveConfig(cfg);
 
     setupAuthenticatedClient({
@@ -821,7 +994,7 @@ describe("runSetup integration", () => {
   });
 
   it("prompts when multiple deployments exist for org", async () => {
-    const cfg = makeCfg();
+    const cfg = makeCfg({ deployment_id: undefined, deployment_name: undefined });
     saveConfig(cfg);
 
     setupAuthenticatedClient({
@@ -841,7 +1014,7 @@ describe("runSetup integration", () => {
   });
 
   it("returns early when no deployments for org", async () => {
-    const cfg = makeCfg();
+    const cfg = makeCfg({ deployment_id: undefined, deployment_name: undefined });
     saveConfig(cfg);
 
     setupAuthenticatedClient({
@@ -858,7 +1031,7 @@ describe("runSetup integration", () => {
   });
 
   it("handles deployment fetch error", async () => {
-    const cfg = makeCfg();
+    const cfg = makeCfg({ deployment_id: undefined, deployment_name: undefined });
     saveConfig(cfg);
 
     setupAuthenticatedClient({
@@ -930,7 +1103,18 @@ describe("runSetup integration", () => {
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
 
     const cancelSymbol = Symbol("cancel");
-    vi.mocked(p.multiselect).mockResolvedValue(cancelSymbol as unknown as string[]);
+    // Cancel only the tool-selection multiselect; accept the one-shot confirm.
+    vi.mocked(p.multiselect).mockImplementation(async (opts: unknown) => {
+      const o = opts as { message: string; initialValues?: unknown[] };
+      if (
+        String(o.message ?? "")
+          .toLowerCase()
+          .includes("dosu will set")
+      ) {
+        return (o.initialValues ?? []) as unknown as never;
+      }
+      return cancelSymbol as unknown as never;
+    });
     vi.mocked(p.isCancel).mockImplementation((val) => val === cancelSymbol);
 
     await runSetup();
@@ -985,7 +1169,7 @@ describe("runSetup integration", () => {
   });
 
   it("shows deployment not found error", async () => {
-    const cfg = makeCfg();
+    const cfg = makeCfg({ deployment_id: undefined, deployment_name: undefined });
     saveConfig(cfg);
 
     setupAuthenticatedClient({
@@ -1000,7 +1184,7 @@ describe("runSetup integration", () => {
   });
 
   it("handles resolve deployment fetch error", async () => {
-    const cfg = makeCfg();
+    const cfg = makeCfg({ deployment_id: undefined, deployment_name: undefined });
     saveConfig(cfg);
 
     setupAuthenticatedClient({
@@ -1076,8 +1260,6 @@ describe("runSetup integration", () => {
     saveConfig(cfg);
 
     setupAuthenticatedClient();
-    // Reconfigure prompt → keep current setup
-    vi.mocked(p.select).mockResolvedValueOnce("keep");
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
 
     await runSetup();
@@ -1095,7 +1277,6 @@ describe("runSetup integration", () => {
     setupAuthenticatedClient({
       getDeployments: vi.fn().mockRejectedValue(new Error("service unavailable")),
     });
-    vi.mocked(p.select).mockResolvedValueOnce("keep");
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
 
     await runSetup();
@@ -1113,7 +1294,6 @@ describe("runSetup integration", () => {
     setupAuthenticatedClient({
       getDeployments: vi.fn().mockResolvedValue([]),
     });
-    vi.mocked(p.select).mockResolvedValueOnce("keep");
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
 
     await runSetup();
@@ -1129,84 +1309,21 @@ describe("runSetup integration", () => {
     saveConfig(cfg);
 
     setupAuthenticatedClient();
-    // Reconfigure prompt → keep current setup
-    vi.mocked(p.select).mockResolvedValueOnce("keep");
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-    vi.mocked(p.multiselect).mockResolvedValue(["cursor"]);
+    mockToolSelection(["cursor"]);
 
     await runSetup();
 
     expect(p.outro).toHaveBeenCalledWith(expect.stringContaining("open-source libraries only"));
   });
 
-  it("OSS mode reconfigure prompt lets user keep current setup", async () => {
-    const cfg = makeCfg({ mode: "oss" });
-    saveConfig(cfg);
-
-    setupAuthenticatedClient();
-    vi.mocked(p.select).mockResolvedValueOnce("keep");
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-
-    await runSetup();
-
-    // Should have shown reconfigure prompt
-    expect(p.select).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining("open-source libraries") }),
-    );
-  });
-
-  it("OSS mode reconfigure prompt opens browser on reconfigure", async () => {
-    const cfg = makeCfg({ mode: "oss" });
-    saveConfig(cfg);
-
-    setupAuthenticatedClient();
-    vi.mocked(p.select).mockResolvedValueOnce("reconfigure");
-    mockStartOAuthFlow.mockResolvedValue({
-      access_token: "new-tok",
-      refresh_token: "new-ref",
-      expires_in: 3600,
-    } as TokenResponse);
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-
-    await runSetup();
-
-    expect(mockStartOAuthFlow).toHaveBeenCalled();
-  });
-
-  it("OSS mode reconfigure clears mode when token has no OSS signal", async () => {
-    const cfg = makeCfg({ mode: "oss" });
-    saveConfig(cfg);
-
-    setupAuthenticatedClient();
-    vi.mocked(p.select).mockResolvedValueOnce("reconfigure");
-    // Token WITHOUT mode: "oss" means user switched to cloud/standard flow
-    mockStartOAuthFlow.mockResolvedValue({
-      access_token: "new-tok",
-      refresh_token: "new-ref",
-      expires_in: 3600,
-    } as TokenResponse);
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-
-    await runSetup();
-
-    const saved = loadConfig();
-    expect(saved.mode).toBeUndefined();
-  });
-
-  it("OAuth flow sets OSS mode when token signals it", async () => {
-    vi.mocked(p.confirm).mockResolvedValue(true);
-    mockStartOAuthFlow.mockResolvedValue({
-      access_token: "oss-tok",
-      refresh_token: "oss-ref",
-      expires_in: 7200,
-      mode: "oss",
-    } as TokenResponse);
-
+  it("--mode oss flag switches cfg.mode to OSS and skips Cloud-only steps", async () => {
+    saveConfig(makeCfg());
     setupAuthenticatedClient();
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
 
-    await runSetup();
+    await runSetup({ mode: "oss" });
 
     const saved = loadConfig();
     expect(saved.mode).toBe("oss");
@@ -1232,7 +1349,7 @@ describe("runSetup integration", () => {
     OpenCodeProvider().install(cfg, true);
 
     // User deselects opencode but keeps cursor
-    vi.mocked(p.multiselect).mockResolvedValue(["cursor"]);
+    mockToolSelection(["cursor"]);
 
     await runSetup();
 
@@ -1252,14 +1369,437 @@ describe("runSetup integration", () => {
     saveConfig(cfg);
 
     setupAuthenticatedClient();
-    // Reconfigure prompt → keep current setup
-    vi.mocked(p.select).mockResolvedValueOnce("keep");
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-    vi.mocked(p.multiselect).mockResolvedValue(["cursor"]);
+    mockToolSelection(["cursor"]);
 
     await runSetup();
 
     expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("Dosu help"));
+  });
+
+  it("installs skill automatically when the one-shot confirm leaves it ticked", async () => {
+    const cfg = makeCfg();
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(mockInstallSkill).toHaveBeenCalled();
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill installed"));
+  });
+
+  it("does not install skill when the one-shot confirm unticks it", async () => {
+    const cfg = makeCfg({ mode: "oss" });
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    // Override the one-shot confirm to deselect the skill item.
+    vi.mocked(p.multiselect).mockImplementation(async (opts: unknown) => {
+      const o = opts as { message: string; initialValues?: unknown[] };
+      if (
+        String(o.message ?? "")
+          .toLowerCase()
+          .includes("dosu will set")
+      ) {
+        return ["configureMcp"] as unknown as never;
+      }
+      return (o.initialValues ?? []) as unknown as never;
+    });
+
+    await runSetup();
+
+    expect(mockInstallSkill).not.toHaveBeenCalled();
+    expect(p.outro).toHaveBeenCalledWith(expect.stringContaining("open-source libraries only"));
+  });
+
+  it("installs skill in OSS mode when the one-shot confirm leaves it ticked", async () => {
+    const cfg = makeCfg({ mode: "oss" });
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(mockInstallSkill).toHaveBeenCalled();
+  });
+
+  it("shows the GitHub docs import label in the one-shot confirm", async () => {
+    const cfg = makeCfg();
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: false,
+      cli_onboarding_enabled: true,
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    const oneShotCall = vi
+      .mocked(p.multiselect)
+      .mock.calls.find(([args]) =>
+        String((args as { message?: string }).message ?? "").includes("Dosu will set"),
+      );
+    const options = (oneShotCall?.[0] as { options: Array<{ label: string }> }).options;
+    expect(options.map((option) => String(option.label))).toEqual(
+      expect.arrayContaining([expect.stringContaining("Import docs from GitHub")]),
+    );
+    expect(options.map((option) => String(option.label))).toEqual(
+      expect.arrayContaining([expect.stringContaining("Keep them up to date")]),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. runInstallSkill — focused unit tests
+// ---------------------------------------------------------------------------
+
+describe("runInstallSkill", () => {
+  beforeEach(() => {
+    setupTempEnv();
+    vi.resetAllMocks();
+    installSetupStepDefaults();
+    installRemoteSetupDefaults();
+    vi.mocked(p.isCancel).mockReturnValue(false);
+    installMultiselectDefault();
+  });
+  afterEach(teardownTempEnv);
+
+  it("calls installSkill and returns true on success", async () => {
+    mockInstallSkill.mockResolvedValue({ success: true, sha: "abc" });
+
+    const result = await runInstallSkill();
+
+    expect(result).toBe(true);
+    expect(mockInstallSkill).toHaveBeenCalled();
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill installed"));
+  });
+
+  it("returns false and logs error when installSkill reports failure", async () => {
+    mockInstallSkill.mockResolvedValue({ success: false });
+
+    const result = await runInstallSkill();
+
+    expect(result).toBe(false);
+    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Failed to install skill"));
+  });
+
+  it("returns false and logs error when installSkill throws", async () => {
+    mockInstallSkill.mockRejectedValue(new Error("boom"));
+
+    const result = await runInstallSkill();
+
+    expect(result).toBe(false);
+    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("boom"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7. Checkpoint-aware resume (M1)
+// ---------------------------------------------------------------------------
+
+describe("runSetup checkpoint behavior", () => {
+  const mockClient = vi.mocked(Client);
+  const mockStartOAuthFlow = vi.mocked(startOAuthFlow);
+
+  beforeEach(() => {
+    setupTempEnv();
+    vi.resetAllMocks();
+    installSetupStepDefaults();
+    installRemoteSetupDefaults();
+    vi.mocked(p.isCancel).mockReturnValue(false);
+    installMultiselectDefault();
+    mockInstallSkill.mockResolvedValue({ success: true, sha: "test-sha" });
+  });
+  afterEach(teardownTempEnv);
+
+  function setupAuthed(overrides: Record<string, unknown> = {}) {
+    const methods = {
+      doRequestRaw: vi.fn().mockResolvedValue({ status: 200 }),
+      refreshToken: vi.fn(),
+      getOrgs: vi.fn().mockResolvedValue([{ org_id: "o1", name: "Org1" }]),
+      getDeployments: vi.fn().mockResolvedValue([makeDeployment()]),
+      validateAPIKey: vi.fn().mockResolvedValue(true),
+      createAPIKey: vi.fn().mockResolvedValue({ api_key: "new-key" }),
+      completeOnboarding: vi.fn().mockResolvedValue(undefined),
+      // Default: github connect soft-skips (user not in git repo). Tests that
+      // exercise it override.
+      connectGithubRepo: vi.fn().mockResolvedValue({ skipped: true, reason: "repo_not_installed" }),
+      ...overrides,
+    };
+    mockClient.mockImplementation(() => methods as unknown as Client);
+    return methods;
+  }
+
+  it("does not prompt for mode (mode selection UI is gone)", async () => {
+    // Fresh config, no checkpoint. User declines login so we exit early,
+    // but any p.select call must NOT have been a mode prompt.
+    vi.mocked(p.confirm).mockResolvedValue(false);
+
+    await runSetup();
+
+    const calls = vi.mocked(p.select).mock.calls;
+    for (const [args] of calls) {
+      expect(String(args.message).toLowerCase()).not.toContain("mode");
+    }
+  });
+
+  it("does not show the 'Try it out' prompt when the user unticks MCP", async () => {
+    // If the user deselects both "Install Dosu MCP" and "Install Dosu skill"
+    // from the one-shot confirm, nothing was configured this run, so the
+    // paste-into-your-agent tip would be noise.
+    saveConfig(makeCfg());
+    setupAuthed();
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    // Override the one-shot confirm to return an empty selection.
+    vi.mocked(p.multiselect).mockImplementation(async (opts: unknown) => {
+      const o = opts as { message: string };
+      if (
+        String(o.message ?? "")
+          .toLowerCase()
+          .includes("dosu will set")
+      ) {
+        return [] as unknown as never;
+      }
+      return [] as unknown as never;
+    });
+
+    await runSetup();
+
+    expect(p.log.message).not.toHaveBeenCalledWith(expect.stringContaining("Try it out"));
+  });
+
+  it("does not show the 'Try it out' prompt when no AI agents are detected", async () => {
+    // User ticked MCP but has no supported agents installed. stepConfigureMcpTools
+    // returns an empty array (nothing to configure), so the tip would be useless.
+    saveConfig(makeCfg());
+    setupAuthed();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(p.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("No supported AI agents detected"),
+    );
+    expect(p.log.message).not.toHaveBeenCalledWith(expect.stringContaining("Try it out"));
+  });
+
+  it("persists a fresh token after successful authentication", async () => {
+    // Fresh config (no token yet) → user authenticates → token is saved.
+    saveConfig(
+      makeCfg({
+        access_token: "",
+        refresh_token: "",
+        expires_at: 0,
+      }),
+    );
+    vi.mocked(p.confirm).mockResolvedValue(true);
+    mockStartOAuthFlow.mockResolvedValue({
+      access_token: "tok-fresh",
+      refresh_token: "ref-fresh",
+      expires_in: 3600,
+    } as TokenResponse);
+    setupAuthed();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    const saved = loadConfig();
+    expect(saved.access_token).toBe("tok-fresh");
+    expect(saved.refresh_token).toBe("ref-fresh");
+  });
+
+  it("mints a new API key when the existing one is invalid", async () => {
+    saveConfig(makeCfg({ api_key: undefined }));
+    const methods = setupAuthed();
+    methods.validateAPIKey.mockResolvedValue(false);
+    methods.createAPIKey.mockResolvedValue({ api_key: "fresh-key" });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    await runSetup();
+
+    const saved = loadConfig();
+    expect(saved.api_key).toBe("fresh-key");
+  });
+
+  it("marks remote onboarding complete at the end of first-run cloud onboarding", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: false,
+      cli_onboarding_enabled: true,
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mockStepConnectGitHubRepo.mockResolvedValue({ advance: true, has_connected_repo: false });
+    mockStepImportGitHubDocs.mockResolvedValue({ advance: true });
+
+    await runSetup();
+
+    expect(mockTrpc.user.updateProfile.mutate).toHaveBeenCalledTimes(1);
+    expect(mockTrpc.user.updateProfile.mutate).toHaveBeenCalledWith({
+      user_id: "test-user-id",
+      finished_onboarding: true,
+    });
+  });
+
+  it("does not call updateProfile during ordinary cloud setup", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(mockTrpc.user.updateProfile.mutate).not.toHaveBeenCalled();
+  });
+
+  it("warns but does not throw when remote onboarding completion fails", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: false,
+      cli_onboarding_enabled: true,
+    });
+    mockTrpc.user.updateProfile.mutate.mockRejectedValueOnce(new Error("503 Service Unavailable"));
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mockStepConnectGitHubRepo.mockResolvedValue({ advance: true, has_connected_repo: false });
+    mockStepImportGitHubDocs.mockResolvedValue({ advance: true });
+
+    await runSetup();
+
+    expect(p.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Could not mark onboarding complete"),
+    );
+  });
+
+  it("keeps ordinary setup free of GitHub when the remote profile is already onboarded", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
+    expect(mockStepImportGitHubDocs).not.toHaveBeenCalled();
+  });
+
+  it("keeps setup free of GitHub when onboarding is incomplete but the CLI flag is disabled", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: false,
+      cli_onboarding_enabled: false,
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
+    expect(mockStepImportGitHubDocs).not.toHaveBeenCalled();
+    expect(mockTrpc.user.updateProfile.mutate).not.toHaveBeenCalled();
+  });
+
+  it("binds first-run onboarding to the owner org instead of stale local config", async () => {
+    saveConfig(
+      makeCfg({
+        deployment_id: "old-dep",
+        deployment_name: "Old Deploy",
+        org_id: "old-org",
+        space_id: "old-space",
+      }),
+    );
+    setupAuthed({
+      getDeployments: vi.fn().mockResolvedValue([
+        makeDeployment({
+          deployment_id: "dep-old",
+          org_id: "old-org",
+          org_name: "Old Org",
+          space_id: "space-old",
+        }),
+        makeDeployment({
+          deployment_id: "dep-owner",
+          org_id: "owner-org",
+          org_name: "Owner Org",
+          space_id: "space-owner",
+        }),
+      ]),
+    });
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: false,
+      cli_onboarding_enabled: true,
+    });
+    mockTrpc.organization.getOrganizations.query.mockResolvedValue([
+      { org_id: "owner-org", name: "Owner Org", user_role: "OWNER" },
+    ]);
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mockStepConnectGitHubRepo.mockResolvedValue({ advance: true, has_connected_repo: false });
+    mockStepImportGitHubDocs.mockResolvedValue({ advance: true });
+
+    await runSetup();
+
+    const saved = loadConfig();
+    expect(saved.org_id).toBe("owner-org");
+    expect(saved.space_id).toBe("space-owner");
+    expect(saved.deployment_id).toBe("dep-owner");
+  });
+
+  it("always starts the GitHub step from repo selection during first-run onboarding", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: false,
+      cli_onboarding_enabled: true,
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mockStepConnectGitHubRepo.mockResolvedValue({
+      advance: true,
+      has_connected_repo: true,
+      deployment_id: "dep-github",
+      space_id: "space-1",
+    });
+    mockStepImportGitHubDocs.mockResolvedValue({ advance: true });
+
+    await runSetup();
+
+    expect(mockStepConnectGitHubRepo).toHaveBeenCalledTimes(1);
+    expect(mockStepImportGitHubDocs).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ waitForFreshDocs: true }),
+    );
+  });
+
+  it("does not wait for fresh docs when no repo was connected in this run", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: false,
+      cli_onboarding_enabled: true,
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mockStepConnectGitHubRepo.mockResolvedValue({
+      advance: true,
+      has_connected_repo: false,
+    });
+    mockStepImportGitHubDocs.mockResolvedValue({ advance: true });
+
+    await runSetup();
+
+    expect(mockStepImportGitHubDocs).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ waitForFreshDocs: false }),
+    );
   });
 });
