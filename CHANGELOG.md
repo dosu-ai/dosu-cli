@@ -1,3 +1,10 @@
+# [0.11.0-alpha.7](https://github.com/dosu-ai/dosu-cli/compare/v0.11.0-alpha.6...v0.11.0-alpha.7) (2026-04-29)
+
+
+### Bug Fixes
+
+* refine setup success pages ([4852611](https://github.com/dosu-ai/dosu-cli/commit/485261171c15184e086621a4352e60fa012698ee))
+
 # [0.11.0-alpha.6](https://github.com/dosu-ai/dosu-cli/compare/v0.11.0-alpha.5...v0.11.0-alpha.6) (2026-04-29)
 
 
