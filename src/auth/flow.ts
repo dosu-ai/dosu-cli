@@ -16,6 +16,7 @@ import { startCallbackServer, type TokenResponse } from "./server";
 export async function startOAuthFlow(
   signal?: AbortSignal,
   path: string = "/cli/auth",
+  params: Record<string, string> = {},
 ): Promise<TokenResponse> {
   const { server, tokenPromise } = await startCallbackServer();
 
@@ -24,7 +25,7 @@ export async function startOAuthFlow(
   try {
     const callbackURL = `http://localhost:${server.port}/callback`;
     logger.debug("auth.flow", `Callback URL: ${callbackURL}`);
-    const authURL = buildAuthURL(callbackURL, path);
+    const authURL = buildAuthURL(callbackURL, path, params);
     logger.info("auth.flow", `Auth URL: ${authURL}`);
 
     // Open browser — dynamic import to avoid bundling issues
@@ -62,8 +63,12 @@ export async function startOAuthFlow(
   }
 }
 
-function buildAuthURL(callbackURL: string, path: string): string {
+function buildAuthURL(
+  callbackURL: string,
+  path: string,
+  extraParams: Record<string, string>,
+): string {
   const webAppURL = getWebAppURL();
-  const params = new URLSearchParams({ callback: callbackURL });
+  const params = new URLSearchParams({ callback: callbackURL, ...extraParams });
   return `${webAppURL}${path}?${params}`;
 }

@@ -143,6 +143,19 @@ describe("startOAuthFlow", () => {
     await flowPromise;
   });
 
+  it("includes extra auth URL params", async () => {
+    const flowPromise = startOAuthFlow(undefined, "/cli/auth", {
+      onboarding_run_id: "run-123",
+    });
+    await new Promise((r) => setTimeout(r, 10));
+
+    const calledURL = mockOpenDefault.mock.calls[0]?.[0] as string;
+    expect(calledURL).toContain("onboarding_run_id=run-123");
+
+    resolveToken({ access_token: "a", refresh_token: "r", expires_in: 1 });
+    await flowPromise;
+  });
+
   it("clears the timeout timer after successful token receipt", async () => {
     vi.useFakeTimers();
 

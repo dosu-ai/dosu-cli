@@ -69,6 +69,7 @@ const mockTrpc = vi.hoisted(() => ({
     },
     updateProfile: { mutate: vi.fn().mockResolvedValue(null) },
     trackCliOnboardingEvent: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
+    trackCliOnboardingPreAuthEvent: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
   },
   organization: {
     getOrganizations: {
@@ -82,6 +83,10 @@ const mockTrpc = vi.hoisted(() => ({
   },
   dataSource: { create: { mutate: vi.fn() } },
   deploymentDataSource: { create: { mutate: vi.fn().mockResolvedValue({}) } },
+}));
+vi.mock("@trpc/client", () => ({
+  createTRPCClient: vi.fn(() => mockTrpc),
+  httpLink: vi.fn(() => ({})),
 }));
 vi.mock("../client/trpc", () => ({
   createTypedClient: vi.fn(() => mockTrpc),
@@ -184,6 +189,7 @@ function installRemoteSetupDefaults() {
   ]);
   mockTrpc.user.updateProfile.mutate.mockResolvedValue(null);
   mockTrpc.user.trackCliOnboardingEvent.mutate.mockResolvedValue({ ok: true });
+  mockTrpc.user.trackCliOnboardingPreAuthEvent.mutate.mockResolvedValue({ ok: true });
 }
 
 // ---------------------------------------------------------------------------

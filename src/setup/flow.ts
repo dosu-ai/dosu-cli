@@ -2,6 +2,7 @@
  * Setup flow — interactive wizard.
  */
 
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import * as p from "@clack/prompts";
@@ -10,7 +11,7 @@ import { installSkill } from "../commands/skill";
 import { type Config, loadConfig, MODE_OSS, type SetupMode, saveConfig } from "../config/config";
 import { logger } from "../debug/logger";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
-import { trackCliOnboardingEvent } from "./analytics";
+import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
 import { dim, info } from "./styles";
 
 export interface SetupOptions {
@@ -58,6 +59,7 @@ interface OwnedOrg {
 type TrpcAny = any;
 
 export async function runSetup(opts: SetupOptions = {}): Promise<void> {
+  const onboardingRunID = randomUUID();
   logger.info(
     "setup",
     `Setup flow started${opts.deploymentID ? ` deployment=${opts.deploymentID}` : ""}${
@@ -65,6 +67,10 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     }`,
   );
   p.intro("Dosu CLI Setup");
+  await trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_launch_attempted", {
+    has_deployment_option: Boolean(opts.deploymentID),
+    mode_option: opts.mode,
+  });
 
   let cfg = loadConfig();
 
@@ -77,10 +83,10 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   }
 
   // Authenticate — always runs so we can verify/refresh tokens.
-  const authedCfg = await stepAuthenticate(cfg);
+  const authedCfg = await stepAuthenticate(cfg, onboardingRunID);
   if (!authedCfg) return;
   cfg = authedCfg;
-  await trackCliOnboardingEvent(cfg, "cli_onboarding_auth_completed");
+  await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_auth_completed");
 
   const apiClient = new Client(cfg);
   let cloudSetupContext: CloudSetupContext | null = null;
@@ -90,7 +96,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     s.start("Loading your workspace...");
     cloudSetupContext = await resolveCloudSetupContext(cfg);
     if (!cloudSetupContext) {
-      await trackCliOnboardingEvent(cfg, "cli_onboarding_failed", {
+      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
         reason: "cloud_setup_context_failed",
       });
       s.stop("Workspace load failed");
@@ -98,7 +104,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     }
     s.stop("Workspace loaded");
   }
-  await trackCliOnboardingEvent(cfg, "cli_onboarding_started", {
+  await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_started", {
     flow_kind: cloudSetupContext?.kind ?? "oss",
   });
 
@@ -109,7 +115,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   if (cfg.mode !== MODE_OSS && cloudSetupContext?.kind === "onboarding") {
     const ok = await bindOnboardingDeployment(apiClient, cfg, cloudSetupContext.targetOrg ?? null);
     if (!ok) {
-      await trackCliOnboardingEvent(cfg, "cli_onboarding_failed", {
+      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
         reason: "onboarding_deployment_failed",
       });
       return;
@@ -117,7 +123,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   } else if (!cfg.deployment_id || opts.deploymentID) {
     const ok = await resolveDeployment(apiClient, cfg, opts);
     if (!ok) {
-      await trackCliOnboardingEvent(cfg, "cli_onboarding_failed", {
+      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
         reason: "deployment_resolution_failed",
       });
       return;
@@ -128,7 +134,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   // before minting a new one, so it's safe to call on every run.
   const apiKey = await stepMintAPIKey(apiClient, cfg);
   if (!apiKey) {
-    await trackCliOnboardingEvent(cfg, "cli_onboarding_failed", {
+    await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
       reason: "api_key_failed",
     });
     return;
@@ -142,12 +148,12 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     includeGitHub: cloudSetupContext?.kind === "onboarding",
   });
   if (!choices) {
-    await trackCliOnboardingEvent(cfg, "cli_onboarding_cancelled", {
+    await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_cancelled", {
       reason: "options_cancelled",
     });
     return;
   }
-  await trackCliOnboardingEvent(cfg, "cli_onboarding_options_selected", {
+  await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_options_selected", {
     configure_mcp: choices.configureMcp,
     install_skill: choices.installSkill,
     connect_github: choices.connectGitHub,
@@ -164,7 +170,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   if (choices.configureMcp) {
     const configured = await stepConfigureMcpTools(cfg);
     if (configured === null) {
-      await trackCliOnboardingEvent(cfg, "cli_onboarding_cancelled", {
+      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_cancelled", {
         reason: "mcp_selection_cancelled",
       });
       return;
@@ -175,7 +181,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     );
     mcpCompleted = configuredProviders.length > 0;
     if (mcpCompleted) {
-      await trackCliOnboardingEvent(cfg, "cli_onboarding_mcp_configured", {
+      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_mcp_configured", {
         provider_count: configuredProviders.length,
         providers: configuredProviders.map((r) => r.provider.id()),
       });
@@ -186,7 +192,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   if (choices.installSkill) {
     skillCompleted = await runInstallSkill();
     if (skillCompleted) {
-      await trackCliOnboardingEvent(cfg, "cli_onboarding_skill_installed");
+      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_skill_installed");
     }
   }
 
@@ -195,7 +201,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     const { stepConnectGitHubRepo } = await import("./github-step");
     const connectResult = await stepConnectGitHubRepo(cfg);
     if (!connectResult.advance) {
-      await trackCliOnboardingEvent(cfg, "cli_onboarding_cancelled", {
+      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_cancelled", {
         reason: "github_connect_not_advanced",
         has_connected_repo: connectResult.has_connected_repo,
       });
@@ -205,7 +211,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
       connectResult.has_connected_repo ||
       (connectResult.created_data_source_ids?.length ?? 0) > 0
     ) {
-      await trackCliOnboardingEvent(cfg, "cli_onboarding_github_connected", {
+      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_github_connected", {
         created_data_source_count: connectResult.created_data_source_ids?.length ?? 0,
       });
     }
@@ -220,19 +226,19 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
       expectedDataSourceIds: connectResult.created_data_source_ids,
     });
     if (!importResult.advance) {
-      await trackCliOnboardingEvent(cfg, "cli_onboarding_failed", {
+      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
         reason: "github_docs_import_failed",
       });
       return;
     }
     docsImported = importResult.imported === true && (importResult.imported_count ?? 0) > 0;
     if (docsImported) {
-      await trackCliOnboardingEvent(cfg, "cli_onboarding_docs_imported", {
+      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_docs_imported", {
         imported_count: importResult.imported_count ?? 0,
         failed_count: importResult.failed_count ?? 0,
         task_id: importResult.task_id,
       });
-      await trackCliOnboardingEvent(cfg, "cli_onboarding_activated", {
+      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_activated", {
         imported_count: importResult.imported_count ?? 0,
         failed_count: importResult.failed_count ?? 0,
       });
@@ -273,7 +279,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   }
 
   if (mcpCompleted || skillCompleted || docsImported) {
-    await trackCliOnboardingEvent(cfg, "cli_onboarding_completed", {
+    await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_completed", {
       completed_mcp: mcpCompleted,
       completed_skill: skillCompleted,
       imported_docs: docsImported,
@@ -402,7 +408,10 @@ export async function runInstallSkill(): Promise<boolean> {
   }
 }
 
-async function stepAuthenticate(existingCfg?: Config): Promise<Config | null> {
+async function stepAuthenticate(
+  existingCfg?: Config,
+  onboardingRunID?: string,
+): Promise<Config | null> {
   logger.info("setup", "Step: authenticate");
   const cfg = existingCfg ?? loadConfig();
 
@@ -437,17 +446,31 @@ async function stepAuthenticate(existingCfg?: Config): Promise<Config | null> {
   }
 
   const shouldLogin = await p.confirm({ message: "Open browser to log in?" });
-  if (p.isCancel(shouldLogin) || !shouldLogin) return null;
+  if (p.isCancel(shouldLogin) || !shouldLogin) {
+    if (onboardingRunID) {
+      await trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_auth_cancelled", {
+        reason: p.isCancel(shouldLogin) ? "prompt_cancelled" : "login_declined",
+      });
+    }
+    return null;
+  }
 
-  return await openBrowserForSetup(cfg);
+  if (onboardingRunID) {
+    await trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_auth_started");
+  }
+  return await openBrowserForSetup(cfg, onboardingRunID);
 }
 
-async function openBrowserForSetup(cfg: Config): Promise<Config | null> {
+async function openBrowserForSetup(cfg: Config, onboardingRunID?: string): Promise<Config | null> {
   try {
     const { startOAuthFlow } = await import("../auth/flow");
     const s = p.spinner();
     s.start("Waiting for authentication...");
-    const token = await startOAuthFlow(undefined, "/cli/auth");
+    const token = await startOAuthFlow(
+      undefined,
+      "/cli/auth",
+      onboardingRunID ? { onboarding_run_id: onboardingRunID } : {},
+    );
     s.stop("Authenticated");
     logger.info("setup", "Browser auth completed");
 
@@ -461,6 +484,11 @@ async function openBrowserForSetup(cfg: Config): Promise<Config | null> {
     const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
     logger.error("setup", `Auth failed: ${msg}`);
     p.log.error(`Authentication failed: ${err instanceof Error ? err.message : String(err)}`);
+    if (onboardingRunID) {
+      await trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_auth_failed", {
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
     return null;
   }
 }

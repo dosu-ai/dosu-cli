@@ -1,5 +1,8 @@
+import { createTRPCClient, httpLink } from "@trpc/client";
+import superjson from "superjson";
 import { createTypedClient } from "../client/trpc";
 import type { Config } from "../config/config";
+import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
 import { VERSION } from "../version/version";
 
@@ -16,6 +19,12 @@ export type CliOnboardingEvent =
   | "cli_onboarding_cancelled"
   | "cli_onboarding_failed";
 
+export type CliOnboardingPreAuthEvent =
+  | "cli_onboarding_launch_attempted"
+  | "cli_onboarding_auth_started"
+  | "cli_onboarding_auth_cancelled"
+  | "cli_onboarding_auth_failed";
+
 type CliOnboardingProperties = Record<
   string,
   string | number | boolean | null | undefined | string[]
@@ -29,6 +38,7 @@ type TrpcAny = any;
 
 export async function trackCliOnboardingEvent(
   cfg: Config,
+  onboardingRunID: string,
   event: CliOnboardingEvent,
   properties: CliOnboardingProperties = {},
 ): Promise<void> {
@@ -41,6 +51,7 @@ export async function trackCliOnboardingEvent(
         event,
         properties: {
           ...baseProperties(cfg),
+          onboarding_run_id: onboardingRunID,
           ...properties,
         },
       }),
@@ -49,6 +60,30 @@ export async function trackCliOnboardingEvent(
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.debug("setup", `CLI onboarding analytics failed: ${event}: ${msg}`);
+  }
+}
+
+export async function trackCliOnboardingPreAuthEvent(
+  onboardingRunID: string,
+  event: CliOnboardingPreAuthEvent,
+  properties: CliOnboardingProperties = {},
+): Promise<void> {
+  try {
+    const trpc = createAnonymousClient();
+    await withTimeout(
+      trpc.user.trackCliOnboardingPreAuthEvent.mutate({
+        event,
+        onboarding_run_id: onboardingRunID,
+        properties: {
+          ...baseProperties({ access_token: "", refresh_token: "", expires_at: 0 }),
+          ...properties,
+        },
+      }),
+      TRACKING_TIMEOUT_MS,
+    );
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.debug("setup", `CLI onboarding pre-auth analytics failed: ${event}: ${msg}`);
   }
 }
 
@@ -62,6 +97,21 @@ function baseProperties(cfg: Config): CliOnboardingProperties {
     deployment_id: cfg.deployment_id,
     space_id: cfg.space_id,
   };
+}
+
+function createAnonymousClient(): TrpcAny {
+  const webAppURL = getWebAppURL();
+  if (!webAppURL) {
+    throw new Error("Web app URL not configured");
+  }
+  return createTRPCClient({
+    links: [
+      httpLink({
+        url: `${webAppURL}/api/trpc`,
+        transformer: superjson,
+      }),
+    ],
+  }) as TrpcAny;
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
