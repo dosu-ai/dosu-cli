@@ -1,6 +1,6 @@
 import { createTRPCClient, httpLink } from "@trpc/client";
 import superjson from "superjson";
-import { createTypedClient } from "../client/trpc";
+import { type AppRouter, createTypedClient, type TypedClient } from "../client/trpc";
 import type { Config } from "../config/config";
 import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
@@ -32,10 +32,6 @@ type CliOnboardingProperties = Record<
 
 const TRACKING_TIMEOUT_MS = 1_500;
 
-// `@dosu/api-types` can trail app routers; keep this best-effort tracking path narrow.
-// biome-ignore lint/suspicious/noExplicitAny: see note above.
-type TrpcAny = any;
-
 export async function trackCliOnboardingEvent(
   cfg: Config,
   onboardingRunID: string,
@@ -45,7 +41,7 @@ export async function trackCliOnboardingEvent(
   if (!cfg.access_token) return;
 
   try {
-    const trpc = createTypedClient(cfg) as TrpcAny;
+    const trpc = createTypedClient(cfg);
     await withTimeout(
       trpc.user.trackCliOnboardingEvent.mutate({
         event,
@@ -99,19 +95,19 @@ function baseProperties(cfg: Config): CliOnboardingProperties {
   };
 }
 
-function createAnonymousClient(): TrpcAny {
+function createAnonymousClient(): TypedClient {
   const webAppURL = getWebAppURL();
   if (!webAppURL) {
     throw new Error("Web app URL not configured");
   }
-  return createTRPCClient({
+  return createTRPCClient<AppRouter>({
     links: [
       httpLink({
         url: `${webAppURL}/api/trpc`,
         transformer: superjson,
       }),
     ],
-  }) as TrpcAny;
+  });
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {

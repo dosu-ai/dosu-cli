@@ -48,7 +48,7 @@
   },
   "dependencies": {
     "@clack/prompts": "^0.10.0",
-    "@dosu/api-types": "0.0.4",
+    "@dosu/api-types": "0.0.7",
     "commander": "^13.1.0",
     "open": "^10.1.0",
     "picocolors": "^1.1.1",
