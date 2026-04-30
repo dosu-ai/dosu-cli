@@ -10,6 +10,7 @@ import { installSkill } from "../commands/skill";
 import { type Config, loadConfig, MODE_OSS, type SetupMode, saveConfig } from "../config/config";
 import { logger } from "../debug/logger";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
+import { trackCliOnboardingEvent } from "./analytics";
 import { dim, info } from "./styles";
 
 export interface SetupOptions {
@@ -79,6 +80,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   const authedCfg = await stepAuthenticate(cfg);
   if (!authedCfg) return;
   cfg = authedCfg;
+  await trackCliOnboardingEvent(cfg, "cli_onboarding_auth_completed");
 
   const apiClient = new Client(cfg);
   let cloudSetupContext: CloudSetupContext | null = null;
@@ -88,11 +90,17 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     s.start("Loading your workspace...");
     cloudSetupContext = await resolveCloudSetupContext(cfg);
     if (!cloudSetupContext) {
+      await trackCliOnboardingEvent(cfg, "cli_onboarding_failed", {
+        reason: "cloud_setup_context_failed",
+      });
       s.stop("Workspace load failed");
       return;
     }
     s.stop("Workspace loaded");
   }
+  await trackCliOnboardingEvent(cfg, "cli_onboarding_started", {
+    flow_kind: cloudSetupContext?.kind ?? "oss",
+  });
 
   // Deployment: first-run onboarding binds the user's default deployment.
   // Otherwise we only run the interactive picker when we don't already have
@@ -100,16 +108,31 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   // explicitly switch. Everyday re-runs reuse the stored deployment silently.
   if (cfg.mode !== MODE_OSS && cloudSetupContext?.kind === "onboarding") {
     const ok = await bindOnboardingDeployment(apiClient, cfg, cloudSetupContext.targetOrg ?? null);
-    if (!ok) return;
+    if (!ok) {
+      await trackCliOnboardingEvent(cfg, "cli_onboarding_failed", {
+        reason: "onboarding_deployment_failed",
+      });
+      return;
+    }
   } else if (!cfg.deployment_id || opts.deploymentID) {
     const ok = await resolveDeployment(apiClient, cfg, opts);
-    if (!ok) return;
+    if (!ok) {
+      await trackCliOnboardingEvent(cfg, "cli_onboarding_failed", {
+        reason: "deployment_resolution_failed",
+      });
+      return;
+    }
   }
 
   // API key: `stepMintAPIKey` is idempotent — it validates an existing key
   // before minting a new one, so it's safe to call on every run.
   const apiKey = await stepMintAPIKey(apiClient, cfg);
-  if (!apiKey) return;
+  if (!apiKey) {
+    await trackCliOnboardingEvent(cfg, "cli_onboarding_failed", {
+      reason: "api_key_failed",
+    });
+    return;
+  }
   cfg.api_key = apiKey;
   saveConfig(cfg);
 
@@ -118,29 +141,74 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   const choices = await stepOneShotConfirm({
     includeGitHub: cloudSetupContext?.kind === "onboarding",
   });
-  if (!choices) return;
+  if (!choices) {
+    await trackCliOnboardingEvent(cfg, "cli_onboarding_cancelled", {
+      reason: "options_cancelled",
+    });
+    return;
+  }
+  await trackCliOnboardingEvent(cfg, "cli_onboarding_options_selected", {
+    configure_mcp: choices.configureMcp,
+    install_skill: choices.installSkill,
+    connect_github: choices.connectGitHub,
+  });
 
   // MCP tools. Track whether at least one agent ended up with Dosu MCP
   // configured (newly installed or previously installed) so we only nudge
   // the user with the "Try it out" prompt when there's actually an agent
   // they can paste it into.
   let mcpConfiguredThisRun = false;
+  let mcpCompleted = false;
+  let skillCompleted = false;
+  let docsImported = false;
   if (choices.configureMcp) {
     const configured = await stepConfigureMcpTools(cfg);
-    if (configured === null) return;
+    if (configured === null) {
+      await trackCliOnboardingEvent(cfg, "cli_onboarding_cancelled", {
+        reason: "mcp_selection_cancelled",
+      });
+      return;
+    }
     mcpConfiguredThisRun = configured.some((r) => r.action === "install" || r.action === "skip");
+    const configuredProviders = configured.filter(
+      (r) => (r.action === "install" || r.action === "skip") && !r.error,
+    );
+    mcpCompleted = configuredProviders.length > 0;
+    if (mcpCompleted) {
+      await trackCliOnboardingEvent(cfg, "cli_onboarding_mcp_configured", {
+        provider_count: configuredProviders.length,
+        providers: configuredProviders.map((r) => r.provider.id()),
+      });
+    }
   }
 
   // Dosu skill
   if (choices.installSkill) {
-    await runInstallSkill();
+    skillCompleted = await runInstallSkill();
+    if (skillCompleted) {
+      await trackCliOnboardingEvent(cfg, "cli_onboarding_skill_installed");
+    }
   }
 
   let githubOnboardingDone = !choices.connectGitHub;
   if (choices.connectGitHub && cloudSetupContext?.kind === "onboarding") {
     const { stepConnectGitHubRepo } = await import("./github-step");
     const connectResult = await stepConnectGitHubRepo(cfg);
-    if (!connectResult.advance) return;
+    if (!connectResult.advance) {
+      await trackCliOnboardingEvent(cfg, "cli_onboarding_cancelled", {
+        reason: "github_connect_not_advanced",
+        has_connected_repo: connectResult.has_connected_repo,
+      });
+      return;
+    }
+    if (
+      connectResult.has_connected_repo ||
+      (connectResult.created_data_source_ids?.length ?? 0) > 0
+    ) {
+      await trackCliOnboardingEvent(cfg, "cli_onboarding_github_connected", {
+        created_data_source_count: connectResult.created_data_source_ids?.length ?? 0,
+      });
+    }
     if (connectResult.space_id && !cfg.space_id) {
       cfg.space_id = connectResult.space_id;
       saveConfig(cfg);
@@ -151,7 +219,24 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
       waitForFreshDocs: Boolean(connectResult.deployment_id),
       expectedDataSourceIds: connectResult.created_data_source_ids,
     });
-    if (!importResult.advance) return;
+    if (!importResult.advance) {
+      await trackCliOnboardingEvent(cfg, "cli_onboarding_failed", {
+        reason: "github_docs_import_failed",
+      });
+      return;
+    }
+    docsImported = importResult.imported === true;
+    if (docsImported) {
+      await trackCliOnboardingEvent(cfg, "cli_onboarding_docs_imported", {
+        imported_count: importResult.imported_count ?? 0,
+        failed_count: importResult.failed_count ?? 0,
+        task_id: importResult.task_id,
+      });
+      await trackCliOnboardingEvent(cfg, "cli_onboarding_activated", {
+        imported_count: importResult.imported_count ?? 0,
+        failed_count: importResult.failed_count ?? 0,
+      });
+    }
     githubOnboardingDone = true;
   }
 
@@ -184,6 +269,14 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
       mode: cfg.mode,
       docsImported: choices.connectGitHub && githubOnboardingDone,
       hasAgentsMd: existsSync(join(process.cwd(), "AGENTS.md")),
+    });
+  }
+
+  if (mcpCompleted || skillCompleted || docsImported) {
+    await trackCliOnboardingEvent(cfg, "cli_onboarding_completed", {
+      completed_mcp: mcpCompleted,
+      completed_skill: skillCompleted,
+      imported_docs: docsImported,
     });
   }
 

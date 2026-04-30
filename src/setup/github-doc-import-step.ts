@@ -59,6 +59,10 @@ interface ImportTaskStatusResponse {
 
 export interface GitHubDocsImportStepResult {
   advance: boolean;
+  imported?: boolean;
+  imported_count?: number;
+  failed_count?: number;
+  task_id?: string;
 }
 
 export interface GitHubDocsImportStepOptions {
@@ -98,7 +102,7 @@ export async function stepImportGitHubDocs(
 
   if (files.length === 0) {
     p.log.info("No markdown docs available to import right now. You can import them later.");
-    return { advance: true };
+    return { advance: true, imported: false, imported_count: 0 };
   }
 
   const repositories = buildRepositories(files);
@@ -111,7 +115,7 @@ export async function stepImportGitHubDocs(
   const fileIDs = selected as string[];
   if (fileIDs.length === 0) {
     p.log.info("Skipped importing docs for now. You can import them later.");
-    return { advance: true };
+    return { advance: true, imported: false, imported_count: 0 };
   }
 
   const knowledgeStoreID = await getKnowledgeStoreID(trpc, cfg.space_id);
@@ -133,7 +137,7 @@ export async function stepImportGitHubDocs(
       spinner.stop("Import task started");
       p.log.success("Import task started.");
       p.log.info("Your docs should finish importing in a few minutes.");
-      return { advance: true };
+      return { advance: true, imported: true, imported_count: fileIDs.length };
     }
 
     spinner.stop("Import task started");
@@ -153,11 +157,17 @@ export async function stepImportGitHubDocs(
       p.log.info(
         `The import is still running in the background.\nCheck status later with: dosu docs import-status ${taskID}`,
       );
-      return { advance: true };
+      return { advance: true, imported: true, imported_count: fileIDs.length, task_id: taskID };
     }
 
     handleImportCompletion(finalStatus, progressSpinner);
-    return { advance: true };
+    return {
+      advance: true,
+      imported: true,
+      imported_count: finalStatus.detail?.completed ?? fileIDs.length,
+      failed_count: finalStatus.detail?.failed ?? 0,
+      task_id: taskID,
+    };
   } catch (err: unknown) {
     spinner.stop("Failed");
     const msg = err instanceof Error ? err.message : String(err);
