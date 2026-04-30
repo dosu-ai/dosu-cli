@@ -1722,6 +1722,46 @@ describe("runSetup checkpoint behavior", () => {
     );
   });
 
+  it("does not track activation when docs import is only queued", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: false,
+      cli_onboarding_enabled: true,
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mockStepConnectGitHubRepo.mockResolvedValue({
+      advance: true,
+      has_connected_repo: true,
+      created_data_source_ids: ["ds-1"],
+    });
+    mockStepImportGitHubDocs.mockResolvedValue({
+      advance: true,
+      imported: false,
+      imported_count: 0,
+      queued: true,
+      task_id: "task-1",
+    });
+
+    await runSetup();
+
+    const events = trackedCliOnboardingEvents().map((input) => input.event);
+    expect(events).not.toContain("cli_onboarding_docs_imported");
+    expect(events).not.toContain("cli_onboarding_activated");
+    expect(trackedCliOnboardingEvents()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "cli_onboarding_completed",
+          properties: expect.objectContaining({
+            completed_skill: true,
+            imported_docs: false,
+          }),
+        }),
+      ]),
+    );
+  });
+
   it("does not call updateProfile during ordinary cloud setup", async () => {
     saveConfig(makeCfg());
     setupAuthed();

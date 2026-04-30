@@ -62,6 +62,7 @@ export interface GitHubDocsImportStepResult {
   imported?: boolean;
   imported_count?: number;
   failed_count?: number;
+  queued?: boolean;
   task_id?: string;
 }
 
@@ -137,7 +138,7 @@ export async function stepImportGitHubDocs(
       spinner.stop("Import task started");
       p.log.success("Import task started.");
       p.log.info("Your docs should finish importing in a few minutes.");
-      return { advance: true, imported: true, imported_count: fileIDs.length };
+      return { advance: true, imported: false, imported_count: 0, queued: true };
     }
 
     spinner.stop("Import task started");
@@ -157,14 +158,21 @@ export async function stepImportGitHubDocs(
       p.log.info(
         `The import is still running in the background.\nCheck status later with: dosu docs import-status ${taskID}`,
       );
-      return { advance: true, imported: true, imported_count: fileIDs.length, task_id: taskID };
+      return {
+        advance: true,
+        imported: false,
+        imported_count: 0,
+        queued: true,
+        task_id: taskID,
+      };
     }
 
     handleImportCompletion(finalStatus, progressSpinner);
+    const importedCount = finalStatus.detail?.completed ?? 0;
     return {
       advance: true,
-      imported: true,
-      imported_count: finalStatus.detail?.completed ?? fileIDs.length,
+      imported: importedCount > 0,
+      imported_count: importedCount,
       failed_count: finalStatus.detail?.failed ?? 0,
       task_id: taskID,
     };

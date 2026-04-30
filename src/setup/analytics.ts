@@ -21,6 +21,8 @@ type CliOnboardingProperties = Record<
   string | number | boolean | null | undefined | string[]
 >;
 
+const TRACKING_TIMEOUT_MS = 1_500;
+
 // `@dosu/api-types` can trail app routers; keep this best-effort tracking path narrow.
 // biome-ignore lint/suspicious/noExplicitAny: see note above.
 type TrpcAny = any;
@@ -34,13 +36,16 @@ export async function trackCliOnboardingEvent(
 
   try {
     const trpc = createTypedClient(cfg) as TrpcAny;
-    await trpc.user.trackCliOnboardingEvent.mutate({
-      event,
-      properties: {
-        ...baseProperties(cfg),
-        ...properties,
-      },
-    });
+    await withTimeout(
+      trpc.user.trackCliOnboardingEvent.mutate({
+        event,
+        properties: {
+          ...baseProperties(cfg),
+          ...properties,
+        },
+      }),
+      TRACKING_TIMEOUT_MS,
+    );
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.debug("setup", `CLI onboarding analytics failed: ${event}: ${msg}`);
@@ -57,4 +62,18 @@ function baseProperties(cfg: Config): CliOnboardingProperties {
     deployment_id: cfg.deployment_id,
     space_id: cfg.space_id,
   };
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("tracking timeout")), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }

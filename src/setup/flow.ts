@@ -225,7 +225,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
       });
       return;
     }
-    docsImported = importResult.imported === true;
+    docsImported = importResult.imported === true && (importResult.imported_count ?? 0) > 0;
     if (docsImported) {
       await trackCliOnboardingEvent(cfg, "cli_onboarding_docs_imported", {
         imported_count: importResult.imported_count ?? 0,
