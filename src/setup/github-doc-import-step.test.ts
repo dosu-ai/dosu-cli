@@ -280,6 +280,36 @@ describe("stepImportGitHubDocs", () => {
     expect(mockTrpc.docImports.importGithubFiles.mutate).not.toHaveBeenCalled();
   });
 
+  it("shows importable docs immediately on the legacy fresh-doc wait path", async () => {
+    mockTrpc.dataSource.list.query.mockResolvedValue([
+      { data_source_id: "ds-pending", provider_slug: "github", is_indexed: false },
+    ]);
+    mockTrpc.docImports.listImportableGithubFiles.query.mockResolvedValue([
+      {
+        id: "file-1",
+        file_path: "docs/setup.md",
+        repository_slug: "acme/api",
+        is_synced: false,
+      },
+    ]);
+    mockPromptGitHubDocsImport.mockResolvedValue(["file-1"]);
+
+    const result = await stepImportGitHubDocs(makeCfg(), { waitForFreshDocs: true });
+
+    const scanSpinner = vi.mocked(p.spinner).mock.results[0]?.value;
+    expect(scanSpinner?.stop).toHaveBeenCalledWith("Docs ready");
+    expect(p.select).not.toHaveBeenCalled();
+    expect(mockPromptGitHubDocsImport).toHaveBeenCalledWith({
+      repositories: [
+        {
+          slug: "acme/api",
+          files: [{ id: "file-1", path: "docs/setup.md", is_synced: false }],
+        },
+      ],
+    });
+    expect(result.advance).toBe(true);
+  });
+
   it("ignores stale org-wide data sources and only waits on this run's set", async () => {
     // Reproduces the bug we hit on staging: a previous setup left a
     // GitHub data source stuck in is_indexed=false (QUEUED). With the old
