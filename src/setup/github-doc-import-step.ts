@@ -285,20 +285,32 @@ async function waitForImportableGithubFiles(
 
     const startedAt = Date.now();
     let latestFiles: ImportableGithubFile[] = [];
+    const waitsForExpectedDataSources =
+      expectedDataSourceIds !== undefined && expectedDataSourceIds.length > 0;
 
     while (Date.now() - startedAt < DOC_SCAN_POLL_TIMEOUT_MS) {
-      latestFiles = await fetchImportableGithubFiles(trpc, spaceID);
-      if (latestFiles.length > 0) {
-        spinner.stop("Docs ready");
-        return latestFiles;
-      }
-
       // Distinguish "still indexing" from "indexed but empty". When the
       // caller passed the data_source ids it just created we only wait on
       // those — they're either indexed-or-missing very quickly. Otherwise
       // fall back to watching every GitHub data source in the org (legacy
       // path used by non-onboarding callers).
       const dataSources = await fetchGitHubDataSources(trpc, orgID);
+      if (waitsForExpectedDataSources) {
+        if (isScanComplete(dataSources, expectedDataSourceIds)) {
+          latestFiles = await fetchImportableGithubFiles(trpc, spaceID);
+          spinner.stop(latestFiles.length > 0 ? "Docs ready" : "No markdown docs found");
+          return latestFiles;
+        }
+        await sleep(DOC_SCAN_POLL_INTERVAL_MS);
+        continue;
+      }
+
+      latestFiles = await fetchImportableGithubFiles(trpc, spaceID);
+      if (latestFiles.length > 0) {
+        spinner.stop("Docs ready");
+        return latestFiles;
+      }
+
       if (isScanComplete(dataSources, expectedDataSourceIds)) {
         spinner.stop("No markdown docs found");
         return [];
