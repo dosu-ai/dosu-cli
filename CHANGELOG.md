@@ -1,3 +1,18 @@
+# [0.12.0](https://github.com/dosu-ai/dosu-cli/compare/v0.11.0...v0.12.0) (2026-05-01)
+
+
+### Bug Fixes
+
+* align analytics client with api types ([ab125ae](https://github.com/dosu-ai/dosu-cli/commit/ab125aec84ffb93e85cb529ced42f2184a889468))
+* **ci:** cover CLI onboarding analytics branches ([06ae8ce](https://github.com/dosu-ai/dosu-cli/commit/06ae8ce3e8057dc98c2be4329352da9fab984e52))
+* track docs import only after completion ([64757a3](https://github.com/dosu-ai/dosu-cli/commit/64757a34272c86638321c42ea7948acf570b6b43))
+
+
+### Features
+
+* track CLI onboarding analytics ([70dbcbb](https://github.com/dosu-ai/dosu-cli/commit/70dbcbb4fb3d429582e88c121ae4e0d5812ba457))
+* track pre-auth onboarding analytics ([5ae90d4](https://github.com/dosu-ai/dosu-cli/commit/5ae90d4c6e87d2ecac817169902e6ded2250d34a))
+
 # [0.11.0](https://github.com/dosu-ai/dosu-cli/compare/v0.10.0...v0.11.0) (2026-04-29)
 
 
