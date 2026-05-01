@@ -210,6 +210,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     ) {
       await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_github_connected", {
         created_data_source_count: connectResult.created_data_source_ids?.length ?? 0,
+        created_repository_slugs: connectResult.created_repository_slugs,
       });
     }
     if (connectResult.space_id && !cfg.space_id) {

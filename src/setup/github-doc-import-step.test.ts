@@ -157,27 +157,38 @@ describe("stepImportGitHubDocs", () => {
   });
 
   it("waits for docs only when a fresh repo was connected in this run", async () => {
-    mockTrpc.docImports.listImportableGithubFiles.query
-      .mockResolvedValueOnce([])
+    vi.useFakeTimers();
+    mockTrpc.dataSource.list.query
       .mockResolvedValueOnce([
-        {
-          id: "file-1",
-          file_path: "docs/auth/login.md",
-          repository_slug: "acme/api",
-          is_synced: false,
-        },
-        {
-          id: "file-2",
-          file_path: "README.md",
-          repository_slug: "acme/api",
-          is_synced: true,
-        },
+        { data_source_id: "ds-fresh", provider_slug: "github", is_indexed: false },
+      ])
+      .mockResolvedValueOnce([
+        { data_source_id: "ds-fresh", provider_slug: "github", is_indexed: true },
       ]);
+    mockTrpc.docImports.listImportableGithubFiles.query.mockResolvedValueOnce([
+      {
+        id: "file-1",
+        file_path: "docs/auth/login.md",
+        repository_slug: "acme/api",
+        is_synced: false,
+      },
+      {
+        id: "file-2",
+        file_path: "README.md",
+        repository_slug: "acme/api",
+        is_synced: true,
+      },
+    ]);
     mockPromptGitHubDocsImport.mockResolvedValue(["file-1"]);
 
-    const result = await stepImportGitHubDocs(makeCfg(), { waitForFreshDocs: true });
+    const resultPromise = stepImportGitHubDocs(makeCfg(), {
+      waitForFreshDocs: true,
+      expectedDataSourceIds: ["ds-fresh"],
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    const result = await resultPromise;
 
-    expect(mockTrpc.docImports.listImportableGithubFiles.query).toHaveBeenCalledTimes(2);
+    expect(mockTrpc.docImports.listImportableGithubFiles.query).toHaveBeenCalledTimes(1);
     expect(mockPromptGitHubDocsImport).toHaveBeenCalledWith({
       repositories: [
         {
@@ -198,6 +209,57 @@ describe("stepImportGitHubDocs", () => {
       file_ids: ["file-1"],
     });
     expect(mockTrpc.docImports.getImportStatus.query).toHaveBeenCalledWith("task-1");
+    expect(result.advance).toBe(true);
+  });
+
+  it("does not show old repo docs before a freshly connected repo finishes scanning", async () => {
+    vi.useFakeTimers();
+    mockTrpc.dataSource.list.query
+      .mockResolvedValueOnce([
+        { data_source_id: "ds-fresh", provider_slug: "github", is_indexed: false },
+      ])
+      .mockResolvedValueOnce([
+        { data_source_id: "ds-fresh", provider_slug: "github", is_indexed: true },
+      ]);
+    mockTrpc.docImports.listImportableGithubFiles.query.mockResolvedValue([
+      {
+        id: "old-file",
+        file_path: "docs/old.md",
+        repository_slug: "acme/old",
+        is_synced: false,
+      },
+      {
+        id: "fresh-file",
+        file_path: "docs/fresh.md",
+        repository_slug: "acme/fresh",
+        is_synced: false,
+      },
+    ]);
+    mockPromptGitHubDocsImport.mockResolvedValue(["fresh-file"]);
+
+    const resultPromise = stepImportGitHubDocs(makeCfg(), {
+      waitForFreshDocs: true,
+      expectedDataSourceIds: ["ds-fresh"],
+    });
+
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(mockPromptGitHubDocsImport).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    const result = await resultPromise;
+
+    expect(mockPromptGitHubDocsImport).toHaveBeenCalledWith({
+      repositories: [
+        {
+          slug: "acme/fresh",
+          files: [{ id: "fresh-file", path: "docs/fresh.md", is_synced: false }],
+        },
+        {
+          slug: "acme/old",
+          files: [{ id: "old-file", path: "docs/old.md", is_synced: false }],
+        },
+      ],
+    });
     expect(result.advance).toBe(true);
   });
 

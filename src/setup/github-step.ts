@@ -96,6 +96,8 @@ export interface GithubStepResult {
    * stall it.
    */
   created_data_source_ids?: string[];
+  /** Repository slugs for the data sources created in this run. */
+  created_repository_slugs?: string[];
 }
 
 // Shape returned by tRPC `githubRepository.listForOrg`. Backend spreads
@@ -616,6 +618,7 @@ export async function stepConnectGitHubRepo(
       deployment_id: primary.deployment_id,
       space_id: cfg.space_id,
       created_data_source_ids: survived.map((c) => c.data_source_id),
+      created_repository_slugs: survived.map((c) => c.slug),
     };
   }
 }
