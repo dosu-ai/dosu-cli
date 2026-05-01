@@ -1,3 +1,10 @@
+## [0.12.1](https://github.com/dosu-ai/dosu-cli/compare/v0.12.0...v0.12.1) (2026-05-01)
+
+
+### Bug Fixes
+
+* wait for fresh GitHub docs before import ([#60](https://github.com/dosu-ai/dosu-cli/issues/60)) ([88b936c](https://github.com/dosu-ai/dosu-cli/commit/88b936ce642849371d477cbe74c360aa53914bfe))
+
 # [0.12.0](https://github.com/dosu-ai/dosu-cli/compare/v0.11.0...v0.12.0) (2026-05-01)
 
 
