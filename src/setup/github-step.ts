@@ -28,7 +28,7 @@
 
 import { execSync } from "node:child_process";
 import * as p from "@clack/prompts";
-import { createTypedClient } from "../client/trpc";
+import { createTypedClient, type TypedClient } from "../client/trpc";
 import type { Config } from "../config/config";
 import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
@@ -40,13 +40,6 @@ import {
 } from "./github-repo-prompt";
 import { startInstallationCallbackServer } from "./installation-server";
 import { dim } from "./styles";
-
-// `@dosu/api-types` lags the tRPC routers we just added on the server side
-// (`githubRepository.listForOrg`, `dataSource.create`). Runtime routing is
-// dynamic, so we bypass compile-time type checks for those two procedures
-// until a new `@dosu/api-types` version is published that knows about them.
-// biome-ignore lint/suspicious/noExplicitAny: see note above
-type TrpcAny = any;
 
 const INSTALLATION_TIMEOUT_MS = 10 * 60 * 1000;
 const REPO_REFRESH_POLL_INTERVAL_MS = 500;
@@ -139,7 +132,7 @@ export function detectGitRepo(cwd: string = process.cwd()): DetectedRepo | null 
   return { owner, name, slug: `${owner}/${name}` };
 }
 
-async function fetchListForOrg(trpc: TrpcAny, orgID: string): Promise<AvailableRepo[]> {
+async function fetchListForOrg(trpc: TypedClient, orgID: string): Promise<AvailableRepo[]> {
   try {
     const repos = (await trpc.githubRepository.listForOrg.query({
       org_id: orgID,
@@ -203,7 +196,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 async function waitForRepositoryRefresh(
-  trpc: TrpcAny,
+  trpc: TypedClient,
   orgID: string,
   previousRepos: AvailableRepo[],
   opts?: { timeoutMs?: number; intervalMs?: number },
@@ -312,7 +305,7 @@ async function openGitHubInstallFlow(
  * deployment-without-data_source orphans.
  */
 async function createDeploymentForRepo(
-  trpc: TrpcAny,
+  trpc: TypedClient,
   orgID: string,
   spaceID: string,
   repo: AvailableRepo,
@@ -402,7 +395,7 @@ interface VerifyDataSourcesOptions {
  * has already been GC'd server-side.
  */
 export async function verifyDataSourcesPersist(
-  trpc: TrpcAny,
+  trpc: TypedClient,
   orgID: string,
   expectedDataSourceIds: string[],
   opts: VerifyDataSourcesOptions = {},
@@ -453,7 +446,7 @@ export async function verifyDataSourcesPersist(
 }
 
 async function deleteOrphanDeployment(
-  trpc: TrpcAny,
+  trpc: TypedClient,
   deploymentID: string,
   slug: string,
 ): Promise<void> {
@@ -487,7 +480,7 @@ export async function stepConnectGitHubRepo(
     p.log.info(`Connecting GitHub repos (detected local repo: ${detected.slug})`);
   }
 
-  const trpc: TrpcAny = createTypedClient(cfg);
+  const trpc = createTypedClient(cfg);
   let repos = await fetchListForOrg(trpc, orgID);
 
   while (true) {

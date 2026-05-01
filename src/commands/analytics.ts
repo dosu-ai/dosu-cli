@@ -50,7 +50,6 @@ export function analyticsCommand(): Command {
           ["Low Confidence", String(stats.byConfidence.low)],
           ["Positive Reactions", String(stats.reactions.totalPositive)],
           ["Negative Reactions", String(stats.reactions.totalNegative)],
-          ["Reaction Rate", pct(stats.reactions.reactionRate)],
           ["Positive Rate", pct(stats.reactions.positiveRate)],
         ],
         { rawData: stats },

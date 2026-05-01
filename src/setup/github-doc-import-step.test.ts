@@ -272,6 +272,8 @@ describe("stepImportGitHubDocs", () => {
 
     expect(mockTrpc.docImports.importGithubFiles.mutate).not.toHaveBeenCalled();
     expect(result.advance).toBe(true);
+    expect(result.imported).toBe(false);
+    expect(result.imported_count).toBe(0);
   });
 
   it("polls import status until the task succeeds", async () => {
@@ -331,6 +333,8 @@ describe("stepImportGitHubDocs", () => {
       "Imported 1 doc.\nYour GitHub docs are ready, and onboarding is complete.",
     );
     expect(result.advance).toBe(true);
+    expect(result.imported).toBe(true);
+    expect(result.imported_count).toBe(1);
   });
 
   it("falls back to the client-selected count when server reports total=0 during STARTING", async () => {
@@ -444,6 +448,9 @@ describe("stepImportGitHubDocs", () => {
       "Imported 1 of 2 docs; 1 failed.\nYou can review the failed docs later, but onboarding is complete.",
     );
     expect(result.advance).toBe(true);
+    expect(result.imported).toBe(true);
+    expect(result.imported_count).toBe(1);
+    expect(result.failed_count).toBe(1);
   });
 
   it("lets onboarding continue if progress polling becomes unavailable", async () => {
@@ -469,6 +476,9 @@ describe("stepImportGitHubDocs", () => {
       "The import is still running in the background.\nCheck status later with: dosu docs import-status task-1",
     );
     expect(result.advance).toBe(true);
+    expect(result.imported).toBe(false);
+    expect(result.imported_count).toBe(0);
+    expect(result.queued).toBe(true);
   });
 
   it("shows an immediate empty state when no docs are currently importable", async () => {

@@ -68,6 +68,8 @@ const mockTrpc = vi.hoisted(() => ({
       query: vi.fn().mockResolvedValue({ user_id: "test-user-id", finished_onboarding: true }),
     },
     updateProfile: { mutate: vi.fn().mockResolvedValue(null) },
+    trackCliOnboardingEvent: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
+    trackCliOnboardingPreAuthEvent: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
   },
   organization: {
     getOrganizations: {
@@ -81,6 +83,10 @@ const mockTrpc = vi.hoisted(() => ({
   },
   dataSource: { create: { mutate: vi.fn() } },
   deploymentDataSource: { create: { mutate: vi.fn().mockResolvedValue({}) } },
+}));
+vi.mock("@trpc/client", () => ({
+  createTRPCClient: vi.fn(() => mockTrpc),
+  httpLink: vi.fn(() => ({})),
 }));
 vi.mock("../client/trpc", () => ({
   createTypedClient: vi.fn(() => mockTrpc),
@@ -182,6 +188,8 @@ function installRemoteSetupDefaults() {
     { org_id: "o1", name: "Org1", user_role: "OWNER" },
   ]);
   mockTrpc.user.updateProfile.mutate.mockResolvedValue(null);
+  mockTrpc.user.trackCliOnboardingEvent.mutate.mockResolvedValue({ ok: true });
+  mockTrpc.user.trackCliOnboardingPreAuthEvent.mutate.mockResolvedValue({ ok: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -234,6 +242,10 @@ function makeDeployment(overrides: Record<string, unknown> = {}) {
     space_id: "s1",
     ...overrides,
   };
+}
+
+function trackedCliOnboardingEvents() {
+  return mockTrpc.user.trackCliOnboardingEvent.mutate.mock.calls.map(([input]) => input);
 }
 
 // ---------------------------------------------------------------------------
@@ -1649,6 +1661,111 @@ describe("runSetup checkpoint behavior", () => {
       user_id: "test-user-id",
       finished_onboarding: true,
     });
+  });
+
+  it("tracks completion when at least one valuable onboarding action succeeds", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(trackedCliOnboardingEvents()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ event: "cli_onboarding_skill_installed" }),
+        expect.objectContaining({
+          event: "cli_onboarding_completed",
+          properties: expect.objectContaining({
+            completed_mcp: false,
+            completed_skill: true,
+            imported_docs: false,
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it("tracks docs import as activation during first-run onboarding", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: false,
+      cli_onboarding_enabled: true,
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mockStepConnectGitHubRepo.mockResolvedValue({
+      advance: true,
+      has_connected_repo: true,
+      created_data_source_ids: ["ds-1"],
+    });
+    mockStepImportGitHubDocs.mockResolvedValue({
+      advance: true,
+      imported: true,
+      imported_count: 3,
+      failed_count: 0,
+      task_id: "task-1",
+    });
+
+    await runSetup();
+
+    expect(trackedCliOnboardingEvents()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ event: "cli_onboarding_github_connected" }),
+        expect.objectContaining({
+          event: "cli_onboarding_docs_imported",
+          properties: expect.objectContaining({ imported_count: 3, task_id: "task-1" }),
+        }),
+        expect.objectContaining({
+          event: "cli_onboarding_activated",
+          properties: expect.objectContaining({ imported_count: 3 }),
+        }),
+        expect.objectContaining({
+          event: "cli_onboarding_completed",
+          properties: expect.objectContaining({ imported_docs: true }),
+        }),
+      ]),
+    );
+  });
+
+  it("does not track activation when docs import is only queued", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: false,
+      cli_onboarding_enabled: true,
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mockStepConnectGitHubRepo.mockResolvedValue({
+      advance: true,
+      has_connected_repo: true,
+      created_data_source_ids: ["ds-1"],
+    });
+    mockStepImportGitHubDocs.mockResolvedValue({
+      advance: true,
+      imported: false,
+      imported_count: 0,
+      queued: true,
+      task_id: "task-1",
+    });
+
+    await runSetup();
+
+    const events = trackedCliOnboardingEvents().map((input) => input.event);
+    expect(events).not.toContain("cli_onboarding_docs_imported");
+    expect(events).not.toContain("cli_onboarding_activated");
+    expect(trackedCliOnboardingEvents()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "cli_onboarding_completed",
+          properties: expect.objectContaining({
+            completed_skill: true,
+            imported_docs: false,
+          }),
+        }),
+      ]),
+    );
   });
 
   it("does not call updateProfile during ordinary cloud setup", async () => {

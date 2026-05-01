@@ -1,5 +1,5 @@
 import * as p from "@clack/prompts";
-import { createTypedClient } from "../client/trpc";
+import { createTypedClient, type TypedClient } from "../client/trpc";
 import type { Config } from "../config/config";
 import { logger } from "../debug/logger";
 import {
@@ -7,9 +7,6 @@ import {
   type GitHubImportRepositoryOption,
   promptGitHubDocsImport,
 } from "./github-doc-import-prompt";
-
-// biome-ignore lint/suspicious/noExplicitAny: `@dosu/api-types` does not fully cover these routes yet.
-type TrpcAny = any;
 
 const DOC_SCAN_POLL_INTERVAL_MS = 2_000;
 const DOC_SCAN_POLL_TIMEOUT_MS = 60_000;
@@ -59,6 +56,11 @@ interface ImportTaskStatusResponse {
 
 export interface GitHubDocsImportStepResult {
   advance: boolean;
+  imported?: boolean;
+  imported_count?: number;
+  failed_count?: number;
+  queued?: boolean;
+  task_id?: string;
 }
 
 export interface GitHubDocsImportStepOptions {
@@ -88,7 +90,7 @@ export async function stepImportGitHubDocs(
     return { advance: false };
   }
 
-  const trpc: TrpcAny = createTypedClient(cfg);
+  const trpc = createTypedClient(cfg);
   const files = opts.waitForFreshDocs
     ? await waitForImportableGithubFiles(trpc, cfg.org_id, cfg.space_id, opts.expectedDataSourceIds)
     : await fetchImportableGithubFiles(trpc, cfg.space_id);
@@ -98,7 +100,7 @@ export async function stepImportGitHubDocs(
 
   if (files.length === 0) {
     p.log.info("No markdown docs available to import right now. You can import them later.");
-    return { advance: true };
+    return { advance: true, imported: false, imported_count: 0 };
   }
 
   const repositories = buildRepositories(files);
@@ -111,7 +113,7 @@ export async function stepImportGitHubDocs(
   const fileIDs = selected as string[];
   if (fileIDs.length === 0) {
     p.log.info("Skipped importing docs for now. You can import them later.");
-    return { advance: true };
+    return { advance: true, imported: false, imported_count: 0 };
   }
 
   const knowledgeStoreID = await getKnowledgeStoreID(trpc, cfg.space_id);
@@ -133,7 +135,7 @@ export async function stepImportGitHubDocs(
       spinner.stop("Import task started");
       p.log.success("Import task started.");
       p.log.info("Your docs should finish importing in a few minutes.");
-      return { advance: true };
+      return { advance: true, imported: false, imported_count: 0, queued: true };
     }
 
     spinner.stop("Import task started");
@@ -153,11 +155,24 @@ export async function stepImportGitHubDocs(
       p.log.info(
         `The import is still running in the background.\nCheck status later with: dosu docs import-status ${taskID}`,
       );
-      return { advance: true };
+      return {
+        advance: true,
+        imported: false,
+        imported_count: 0,
+        queued: true,
+        task_id: taskID,
+      };
     }
 
     handleImportCompletion(finalStatus, progressSpinner);
-    return { advance: true };
+    const importedCount = finalStatus.detail?.completed ?? 0;
+    return {
+      advance: true,
+      imported: importedCount > 0,
+      imported_count: importedCount,
+      failed_count: finalStatus.detail?.failed ?? 0,
+      task_id: taskID,
+    };
   } catch (err: unknown) {
     spinner.stop("Failed");
     const msg = err instanceof Error ? err.message : String(err);
@@ -168,7 +183,7 @@ export async function stepImportGitHubDocs(
 }
 
 async function waitForImportTaskCompletion(
-  trpc: TrpcAny,
+  trpc: TypedClient,
   taskID: string,
   spinner: ReturnType<typeof p.spinner>,
   expectedTotal: number,
@@ -258,7 +273,7 @@ function handleImportCompletion(
 }
 
 async function waitForImportableGithubFiles(
-  trpc: TrpcAny,
+  trpc: TypedClient,
   orgID: string,
   spaceID: string,
   expectedDataSourceIds?: string[],
@@ -338,7 +353,10 @@ function isScanComplete(
   return dataSources.length > 0 && dataSources.every((ds) => ds.is_indexed === true);
 }
 
-async function fetchGitHubDataSources(trpc: TrpcAny, orgID: string): Promise<GitHubDataSource[]> {
+async function fetchGitHubDataSources(
+  trpc: TypedClient,
+  orgID: string,
+): Promise<GitHubDataSource[]> {
   try {
     const dataSources = (await trpc.dataSource.list.query({
       org_id: orgID,
@@ -353,7 +371,7 @@ async function fetchGitHubDataSources(trpc: TrpcAny, orgID: string): Promise<Git
 }
 
 async function fetchImportableGithubFiles(
-  trpc: TrpcAny,
+  trpc: TypedClient,
   spaceID: string,
 ): Promise<ImportableGithubFile[]> {
   try {
@@ -390,7 +408,7 @@ function buildRepositories(files: ImportableGithubFile[]): GitHubImportRepositor
     .sort((a, b) => a.slug.localeCompare(b.slug));
 }
 
-async function getKnowledgeStoreID(trpc: TrpcAny, spaceID: string): Promise<string | null> {
+async function getKnowledgeStoreID(trpc: TypedClient, spaceID: string): Promise<string | null> {
   try {
     const store = (await trpc.knowledgeStore.getBySpaceId.query({
       space_id: spaceID,
