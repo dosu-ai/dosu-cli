@@ -7,6 +7,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import * as p from "@clack/prompts";
 import { Client, type Deployment, type Org, SessionExpiredError } from "../client/client";
+import type { TypedClient } from "../client/trpc";
 import { installSkill } from "../commands/skill";
 import { type Config, loadConfig, MODE_OSS, type SetupMode, saveConfig } from "../config/config";
 import { logger } from "../debug/logger";
@@ -53,10 +54,6 @@ interface OwnedOrg {
   name: string;
   user_role?: string | null;
 }
-
-// `@dosu/api-types` trails a few app routers; use a narrow local cast in setup.
-// biome-ignore lint/suspicious/noExplicitAny: see note above
-type TrpcAny = any;
 
 export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   const onboardingRunID = randomUUID();
@@ -253,7 +250,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     const profileUserID = cloudSetupContext.profileUserID;
     try {
       const { createTypedClient } = await import("../client/trpc");
-      const trpc = createTypedClient(cfg) as TrpcAny;
+      const trpc = createTypedClient(cfg);
       await trpc.user.updateProfile.mutate({
         user_id: profileUserID,
         finished_onboarding: true,
@@ -496,12 +493,8 @@ async function openBrowserForSetup(cfg: Config, onboardingRunID?: string): Promi
 async function resolveCloudSetupContext(cfg: Config): Promise<CloudSetupContext | null> {
   try {
     const { createTypedClient } = await import("../client/trpc");
-    const trpc = createTypedClient(cfg) as TrpcAny;
-    const profile = (await trpc.user.getCliOnboardingContext.query()) as {
-      user_id?: string;
-      finished_onboarding?: boolean | null;
-      cli_onboarding_enabled?: boolean | null;
-    } | null;
+    const trpc = createTypedClient(cfg);
+    const profile = await trpc.user.getCliOnboardingContext.query();
 
     if (!profile?.user_id) {
       p.log.error("Could not load your profile.");
@@ -535,16 +528,12 @@ async function resolveCloudSetupContext(cfg: Config): Promise<CloudSetupContext 
   }
 }
 
-async function resolveOnboardingTargetOrg(trpc: TrpcAny): Promise<OwnedOrg | null> {
-  const ownerOrgs = (await trpc.organization.getOrganizations.query({
-    userRole: "OWNER",
-    exact: true,
-  })) as OwnedOrg[];
-  if (ownerOrgs.length > 0) {
-    return ownerOrgs[0];
+async function resolveOnboardingTargetOrg(trpc: TypedClient): Promise<OwnedOrg | null> {
+  const accessibleOrgs = await trpc.organization.getOrganizations.query();
+  const ownerOrg = accessibleOrgs.find((org) => org.user_role === "OWNER");
+  if (ownerOrg) {
+    return ownerOrg;
   }
-
-  const accessibleOrgs = (await trpc.organization.getOrganizations.query()) as OwnedOrg[];
   return accessibleOrgs[0] ?? null;
 }
 

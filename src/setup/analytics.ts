@@ -1,4 +1,5 @@
 import { createTRPCClient, httpLink } from "@trpc/client";
+import type { inferRouterInputs } from "@trpc/server";
 import superjson from "superjson";
 import { type AppRouter, createTypedClient, type TypedClient } from "../client/trpc";
 import type { Config } from "../config/config";
@@ -6,24 +7,9 @@ import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
 import { VERSION } from "../version/version";
 
-export type CliOnboardingEvent =
-  | "cli_onboarding_started"
-  | "cli_onboarding_auth_completed"
-  | "cli_onboarding_options_selected"
-  | "cli_onboarding_mcp_configured"
-  | "cli_onboarding_skill_installed"
-  | "cli_onboarding_github_connected"
-  | "cli_onboarding_docs_imported"
-  | "cli_onboarding_completed"
-  | "cli_onboarding_activated"
-  | "cli_onboarding_cancelled"
-  | "cli_onboarding_failed";
-
-export type CliOnboardingPreAuthEvent =
-  | "cli_onboarding_launch_attempted"
-  | "cli_onboarding_auth_started"
-  | "cli_onboarding_auth_cancelled"
-  | "cli_onboarding_auth_failed";
+type UserRouterInputs = inferRouterInputs<AppRouter>["user"];
+type CliOnboardingEvent = UserRouterInputs["trackCliOnboardingEvent"]["event"];
+type CliOnboardingPreAuthEvent = UserRouterInputs["trackCliOnboardingPreAuthEvent"]["event"];
 
 type CliOnboardingProperties = Record<
   string,
