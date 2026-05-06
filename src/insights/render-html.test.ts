@@ -472,7 +472,7 @@ describe("renderHTML", () => {
     expect(html).toMatch(/grade-(great|good)/);
   });
 
-  it("excludes sentiment from the grade when no reactions exist and shows — in the mini-bar", () => {
+  it("excludes sentiment from the grade when no reactions exist and shows n/a in the mini-bar", () => {
     // conf = 90/100 = 0.9, no sentiment → score = round(0.9 * 100) = 90 → A+ Outstanding
     const html = renderHTML(
       makeReport({
@@ -498,10 +498,10 @@ describe("renderHTML", () => {
     );
     expect(html).toContain('<div class="grade-score">90 / 100</div>');
     expect(html).toContain('<div class="grade-letter">A+</div>');
-    expect(html).toContain("no reactions yet — excluded from grade");
-    // The Sentiment mini-bar specifically renders "—", not the old 70% magic number
+    expect(html).toContain("no reactions yet, excluded from grade");
+    // The Sentiment mini-bar specifically renders "n/a", not the old 70% magic number
     expect(html).toMatch(
-      /<span class="mini-label">Sentiment<\/span>\s*<span class="mini-value">—<\/span>/,
+      /<span class="mini-label">Sentiment<\/span>\s*<span class="mini-value">n\/a<\/span>/,
     );
     expect(html).not.toContain("neutral default");
   });
@@ -700,7 +700,7 @@ describe("renderHTML", () => {
       }),
     );
     expect(html).toMatch(
-      /<div class="stat-value">—<\/div>\s*<div class="stat-label">High-confidence<\/div>/,
+      /<div class="stat-value">n\/a<\/div>\s*<div class="stat-label">High-confidence<\/div>/,
     );
   });
 
@@ -733,7 +733,7 @@ describe("renderHTML", () => {
     );
   });
 
-  it("shows em-dash for the prior high-confidence share when previous total is 0", () => {
+  it("shows n/a for the prior high-confidence share when previous total is 0", () => {
     const html = renderHTML(
       makeReport({
         previous: {
@@ -756,6 +756,6 @@ describe("renderHTML", () => {
         },
       }),
     );
-    expect(html).toMatch(/High-confidence share[\s\S]*?<td class="num prior">—<\/td>/);
+    expect(html).toMatch(/High-confidence share[\s\S]*?<td class="num prior">n\/a<\/td>/);
   });
 });

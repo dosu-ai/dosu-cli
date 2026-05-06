@@ -420,7 +420,7 @@ describe("suggestions", () => {
     const r = await build({ current: stats(), combined: stats() });
     expect(r.suggestions).toHaveLength(2);
     expect(r.suggestions[0].command).toBe("dosu setup");
-    expect(r.suggestions[1].command).toBe("dosu integrations");
+    expect(r.suggestions[1].command).toBe("dosu integrations list");
   });
 
   it("suggests auditing low-confidence threads when they grow", async () => {
@@ -503,7 +503,7 @@ describe("suggestions", () => {
       combined: stats({ totalResponses: 50 }),
     });
     const ride = r.suggestions.find((s) => /momentum/.test(s.headline));
-    expect(ride?.command).toBe("dosu integrations");
+    expect(ride?.command).toBe("dosu integrations list");
   });
 
   it("always includes at least one suggestion (fallback)", async () => {

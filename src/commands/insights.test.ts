@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const spinnerStart = vi.fn();
+const spinnerStop = vi.fn();
+const spinnerMessage = vi.fn();
+
 const mockQuery = vi.fn();
 
 function createMockProxy(path: string[] = []): unknown {
@@ -102,6 +106,9 @@ const fakeReport: InsightsReport = {
 beforeEach(() => {
   mockLoadConfig.mockReset();
   mockQuery.mockReset();
+  spinnerStart.mockReset();
+  spinnerStop.mockReset();
+  spinnerMessage.mockReset();
   mockGetBackendURL.mockReturnValue("https://api.test");
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -128,6 +135,11 @@ function makeRunner(over: Partial<InsightsRunner> = {}): InsightsRunner {
     prune: vi.fn(),
     openInBrowser: vi.fn().mockResolvedValue(undefined),
     ask: vi.fn().mockResolvedValue(null),
+    createSpinner: () => ({
+      start: spinnerStart,
+      message: spinnerMessage,
+      stop: spinnerStop,
+    }),
     ...over,
   };
 }
@@ -169,18 +181,41 @@ describe("runInsights", () => {
     expect(out).toContain(`file://${reportPath()}`);
   });
 
-  it("logs progress for both the stats and narrative stages", async () => {
+  it("drives the spinner through both stages and rotates narrative hints", async () => {
+    vi.useFakeTimers();
+    try {
+      const runner = makeRunner({
+        build: vi.fn().mockImplementation(async (args: { onProgress?: (s: string) => void }) => {
+          args.onProgress?.("stats");
+          args.onProgress?.("narrative");
+          // Advance past two hint rotations so the interval fires.
+          await vi.advanceTimersByTimeAsync(13_000);
+          return fakeReport;
+        }),
+      });
+      await runInsights(validConfig, runner);
+
+      expect(spinnerStart).toHaveBeenCalledWith(
+        expect.stringContaining("Looking at the last 30 days"),
+      );
+      const messages = spinnerMessage.mock.calls.map((c) => c[0] as string);
+      expect(messages[0]).toBe("Asking Dosu to narrate the numbers");
+      expect(messages.length).toBeGreaterThanOrEqual(2);
+      expect(spinnerStop).toHaveBeenCalledWith(expect.stringContaining("Insights ready"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops the spinner with a failure message when the build throws", async () => {
     const runner = makeRunner({
       build: vi.fn().mockImplementation(async (args: { onProgress?: (s: string) => void }) => {
         args.onProgress?.("stats");
-        args.onProgress?.("narrative");
-        return fakeReport;
+        throw new Error("build boom");
       }),
     });
-    await runInsights(validConfig, runner);
-    const out = allOutput();
-    expect(out).toContain("Looking at the last 30 days");
-    expect(out).toContain("narrate the numbers");
+    await expect(runInsights(validConfig, runner)).rejects.toThrow("build boom");
+    expect(spinnerStop).toHaveBeenCalledWith(expect.stringContaining("Couldn't build"), 1);
   });
 
   it("falls back gracefully when the browser open call rejects", async () => {

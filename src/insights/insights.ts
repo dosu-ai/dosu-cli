@@ -86,7 +86,7 @@ export async function buildInsights({
   onProgress,
 }: BuildInsightsArgs): Promise<InsightsReport> {
   if (!cfg.space_id) {
-    throw new Error("space_id missing — run 'dosu setup' first");
+    throw new Error("space_id missing. Run 'dosu setup' first");
   }
   const spaceId = cfg.space_id;
 
@@ -218,12 +218,12 @@ function computeCheers(stats: UsageStats, derived: InsightsReport["derived"]): s
   }
   if (derived.highConfidenceRate !== null && derived.highConfidenceRate >= 0.8) {
     out.push(
-      `${pct(derived.highConfidenceRate)} of responses were high-confidence — Dosu's knowledge base is paying off.`,
+      `${pct(derived.highConfidenceRate)} of responses were high-confidence. Dosu's knowledge base is paying off.`,
     );
   }
   if (stats.byConfidence.high > stats.byConfidence.low * 2 && stats.byConfidence.high > 0) {
     out.push(
-      `${stats.byConfidence.high} high-confidence answers vs ${stats.byConfidence.low} low — your knowledge base has the receipts.`,
+      `${stats.byConfidence.high} high-confidence answers vs ${stats.byConfidence.low} low. Your knowledge base has the receipts.`,
     );
   }
   if (
@@ -231,7 +231,7 @@ function computeCheers(stats: UsageStats, derived: InsightsReport["derived"]): s
     stats.reactions.positiveRate >= 0.8
   ) {
     out.push(
-      `${pct(stats.reactions.positiveRate)} positive feedback — your team is loving the answers.`,
+      `${pct(stats.reactions.positiveRate)} positive feedback. Your team is loving the answers.`,
     );
   }
   if (derived.hasPriorWindow && derived.responsesDelta > 0) {
@@ -239,7 +239,7 @@ function computeCheers(stats: UsageStats, derived: InsightsReport["derived"]): s
   }
   if (out.length === 0) {
     out.push(
-      `${stats.totalResponses} responses logged this window — every one is a chance to learn what your team needs.`,
+      `${stats.totalResponses} responses logged this window. Every one is a chance to learn what your team needs.`,
     );
   }
   return out;
@@ -276,7 +276,7 @@ function computeInvestigate(
     const before = pct(previous.reactions.positiveRate);
     const now = pct(current.reactions.positiveRate);
     out.push(
-      `Positive feedback fell from ${before} to ${now}. The negative reactions are the most actionable signal — open them first.`,
+      `Positive feedback fell from ${before} to ${now}. The negative reactions are the most actionable signal. Open them first.`,
     );
   }
 
@@ -285,7 +285,7 @@ function computeInvestigate(
     current.reactions.totalNegative >= 3
   ) {
     out.push(
-      `${current.reactions.totalNegative} negative reactions vs ${current.reactions.totalPositive} positive. Worth a look — what changed?`,
+      `${current.reactions.totalNegative} negative reactions vs ${current.reactions.totalPositive} positive. Worth a look. What changed?`,
     );
   }
 
@@ -321,14 +321,14 @@ function computeSuggestions(
     out.push({
       headline: "Get your team using Dosu",
       detail:
-        "No responses logged yet. The fastest unlock is wiring Dosu into the tools your team already uses — ask Dosu in Slack, your editor, or anywhere else.",
+        "No responses logged yet. The fastest unlock is wiring Dosu into the tools your team already uses. Ask Dosu in Slack, your editor, or anywhere else.",
       command: "dosu setup",
     });
     out.push({
       headline: "Connect a knowledge source",
       detail:
         "Dosu is only as good as what it can read. Add at least one source so it has material to draw from.",
-      command: "dosu integrations",
+      command: "dosu integrations list",
     });
     return out;
   }
@@ -367,15 +367,15 @@ function computeSuggestions(
       headline: "Share the win with your team",
       detail: `${current.byConfidence.high} of ${current.totalResponses} responses landed with high confidence (${pct(
         derived.highConfidenceRate,
-      )}). People are getting unblocked — make sure your team knows it's working.`,
+      )}). People are getting unblocked. Make sure your team knows it's working.`,
     });
   }
 
   if (derived.hasPriorWindow && derived.responsesDelta >= 10) {
     out.push({
-      headline: "Ride the momentum — add another source",
+      headline: "Ride the momentum: add another source",
       detail: `Volume is up by ${derived.responsesDelta} responses vs the prior window. Connect another source while engagement is high.`,
-      command: "dosu integrations",
+      command: "dosu integrations list",
     });
   }
 
@@ -385,7 +385,7 @@ function computeSuggestions(
       headline: "Connect more knowledge sources",
       detail:
         "Each new source expands what Dosu can answer. Even a single new repo or doc set typically lifts high-confidence share.",
-      command: "dosu integrations",
+      command: "dosu integrations list",
     });
   }
 
@@ -422,7 +422,7 @@ export function buildAtAGlancePrompt(
 
 ${statsBlock(stats, derived)}${priorNote}
 
-Write 2-3 short sentences (no bullets, no headers, no markdown) that synthesize what's interesting or worth celebrating. Be warm, specific, and a little fun. Don't just list the numbers — interpret them. Speak directly to the reader ("you" / "your team").`;
+Write 2-3 short sentences (no bullets, no headers, no markdown, no em dashes) that synthesize what's interesting or worth celebrating. Be warm, specific, and a little fun. Don't just list the numbers; interpret them. Speak directly to the reader ("you" / "your team").`;
 }
 
 export function fallbackAtAGlance(
@@ -433,7 +433,7 @@ export function fallbackAtAGlance(
   if (stats.totalResponses === 0) {
     return `Your space is brand new. The next ${days} days will give us something to talk about, so let's see what your team asks first.`;
   }
-  const hc = derived.highConfidenceRate !== null ? pct(derived.highConfidenceRate) : "—";
+  const hc = derived.highConfidenceRate !== null ? pct(derived.highConfidenceRate) : "n/a";
   const reactions = stats.reactions.totalPositive + stats.reactions.totalNegative;
   const pr = reactions > 0 ? `, with ${pct(stats.reactions.positiveRate)} positive feedback` : "";
   if (!derived.hasPriorWindow) {
@@ -441,9 +441,9 @@ export function fallbackAtAGlance(
   }
   const trend =
     derived.responsesDelta > 0
-      ? ` Volume is up ${derived.responsesDelta} vs the prior ${days} days — the team is leaning on Dosu more.`
+      ? ` Volume is up ${derived.responsesDelta} vs the prior ${days} days. The team is leaning on Dosu more.`
       : derived.responsesDelta < 0
-        ? ` Volume is down ${Math.abs(derived.responsesDelta)} vs the prior ${days} days — worth a quick look.`
+        ? ` Volume is down ${Math.abs(derived.responsesDelta)} vs the prior ${days} days. Worth a quick look.`
         : "";
   return `In the last ${days} days you logged ${stats.totalResponses} responses, ${hc} of them high-confidence${pr}.${trend}`;
 }

@@ -1,5 +1,5 @@
 /**
- * `dosu insights` — open a fun visual report of your space activity.
+ * `dosu insights`: open a fun visual report of your space activity.
  *
  * One word, no flags. Builds an HTML report from `analytics.getUsageStats`
  * plus a few parallel `/ask` calls for narrative sections, writes it to
@@ -20,6 +20,62 @@ import { requireAPIKey, requireLoginConfig } from "./auth";
 const ASK_TIMEOUT_MS = 90_000;
 const KEEP_REPORTS = 20;
 const REPORT_FILE_PATTERN = /^report-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z\.html$/;
+const HINT_INTERVAL_MS = 6_000;
+const NARRATIVE_HINTS = [
+  "Asking Dosu to narrate the numbers",
+  "Reading reactions and confidence levels",
+  "Looking for the story in the data",
+  "Drafting your at-a-glance summary",
+  "Polishing the narrative",
+  "Almost there",
+];
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER_INTERVAL_MS = 80;
+
+export interface Spinner {
+  start(message: string): void;
+  message(message: string): void;
+  stop(message: string, code?: number): void;
+}
+
+export function createDotsSpinner(): Spinner {
+  let frameIdx = 0;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let current = "";
+  const isTTY = Boolean(process.stdout.isTTY) && process.env.CI !== "true";
+
+  const draw = () => {
+    process.stdout.write(`\r\x1b[2K${pc.cyan(SPINNER_FRAMES[frameIdx])} ${current}`);
+    frameIdx = (frameIdx + 1) % SPINNER_FRAMES.length;
+  };
+
+  return {
+    start(msg) {
+      current = msg;
+      if (!isTTY) {
+        process.stdout.write(`${msg}\n`);
+        return;
+      }
+      draw();
+      timer = setInterval(draw, SPINNER_INTERVAL_MS);
+    },
+    message(msg) {
+      current = msg;
+    },
+    stop(msg, code = 0) {
+      if (timer) {
+        clearInterval(timer);
+        timer = undefined;
+      }
+      const symbol = code === 0 ? pc.green("✓") : pc.red("✗");
+      if (isTTY) {
+        process.stdout.write(`\r\x1b[2K${symbol} ${msg}\n`);
+      } else {
+        process.stdout.write(`${symbol} ${msg}\n`);
+      }
+    },
+  };
+}
 
 function requireFullConfig(): Config {
   const cfg = requireLoginConfig();
@@ -113,20 +169,48 @@ export interface InsightsRunner {
   prune: (dir: string, keepN: number) => void;
   openInBrowser: (path: string) => Promise<void>;
   ask: AskFn;
+  createSpinner: () => Spinner;
 }
 
 export async function runInsights(cfg: Config, runner: InsightsRunner): Promise<string> {
   const client = createTypedClient(cfg);
+  const spinner = runner.createSpinner();
+  let hintTimer: ReturnType<typeof setInterval> | undefined;
+  let spinnerActive = false;
 
-  const onProgress = (stage: InsightsStage) => {
-    if (stage === "stats") {
-      console.log(pc.dim("✨ Looking at the last 30 days of your space..."));
-    } else if (stage === "narrative") {
-      console.log(pc.dim("   Asking Dosu to narrate the numbers (up to 90s)..."));
+  const stopHints = () => {
+    if (hintTimer) {
+      clearInterval(hintTimer);
+      hintTimer = undefined;
     }
   };
 
-  const report = await runner.build({ client, cfg, ask: runner.ask, windowDays: 30, onProgress });
+  const onProgress = (stage: InsightsStage) => {
+    if (stage === "stats") {
+      spinner.start("Looking at the last 30 days of your space");
+      spinnerActive = true;
+    } else if (stage === "narrative") {
+      let hintIdx = 0;
+      spinner.message(NARRATIVE_HINTS[hintIdx]);
+      stopHints();
+      hintTimer = setInterval(() => {
+        hintIdx = (hintIdx + 1) % NARRATIVE_HINTS.length;
+        spinner.message(NARRATIVE_HINTS[hintIdx]);
+      }, HINT_INTERVAL_MS);
+    }
+  };
+
+  let report: Awaited<ReturnType<typeof runner.build>>;
+  try {
+    report = await runner.build({ client, cfg, ask: runner.ask, windowDays: 30, onProgress });
+  } catch (err) {
+    stopHints();
+    if (spinnerActive) spinner.stop("Couldn't build your insights", 1);
+    throw err;
+  }
+  stopHints();
+  if (spinnerActive) spinner.stop("Insights ready");
+
   const html = runner.render(report);
   const timestamp = new Date();
   const snapshotPath = reportPath(timestamp);
@@ -136,7 +220,7 @@ export async function runInsights(cfg: Config, runner: InsightsRunner): Promise<
   runner.prune(insightsDir(), KEEP_REPORTS);
 
   console.log("");
-  console.log(pc.bold(`📊 Dosu Insights — ${report.spaceName}`));
+  console.log(pc.bold(`📊 Dosu Insights · ${report.spaceName}`));
   if (report.cheers[0]) {
     console.log(pc.green(`   ${report.cheers[0]}`));
   }
@@ -148,7 +232,7 @@ export async function runInsights(cfg: Config, runner: InsightsRunner): Promise<
   try {
     await runner.openInBrowser(snapshotPath);
   } catch {
-    console.log(pc.dim("   (couldn't auto-open — copy the link above)"));
+    console.log(pc.dim("   (couldn't auto-open. Copy the link above.)"));
   }
 
   return snapshotPath;
@@ -169,6 +253,7 @@ export function defaultRunner(cfg: Config): InsightsRunner {
       await open.default(path);
     },
     ask: makeAskFn(cfg),
+    createSpinner: createDotsSpinner,
   };
 }
 
@@ -176,7 +261,7 @@ export function defaultRunner(cfg: Config): InsightsRunner {
  * Run the insights flow with the default runner. Shared by the CLI command
  * and the TUI menu so both surfaces produce identical output.
  *
- * Logs and swallows errors — callers (TUI) shouldn't crash on one bad insights run.
+ * Logs and swallows errors so callers (TUI) shouldn't crash on one bad insights run.
  */
 export async function executeInsights(cfg: Config): Promise<void> {
   try {

@@ -13,7 +13,7 @@ export function renderHTML(report: InsightsReport): string {
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Dosu Insights — ${safeName}</title>
+<title>Dosu Insights · ${safeName}</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>${CSS}</style>
 </head>
@@ -126,7 +126,7 @@ function renderScorecard(r: InsightsReport): string {
           "Sentiment",
           sentiment,
           sentiment === null
-            ? "no reactions yet — excluded from grade"
+            ? "no reactions yet, excluded from grade"
             : "of reactions were positive",
         )}
       </div>
@@ -139,7 +139,7 @@ function miniBar(label: string, value: number | null, hint: string): string {
         <div class="mini">
           <div class="mini-row">
             <span class="mini-label">${escapeHTML(label)}</span>
-            <span class="mini-value">—</span>
+            <span class="mini-value">n/a</span>
           </div>
           <div class="mini-track"><div class="mini-fill mini-ok" style="width:0%"></div></div>
           <div class="mini-hint">${escapeHTML(hint)}</div>
@@ -170,24 +170,24 @@ function renderStatsRow(r: InsightsReport): string {
   const hc =
     r.derived.highConfidenceRate !== null
       ? `${(r.derived.highConfidenceRate * 100).toFixed(0)}%`
-      : "—";
+      : "n/a";
   const hcDelta = formatPctDelta(r.derived.highConfidenceRateDelta);
   const pr =
     r.current.reactions.totalPositive + r.current.reactions.totalNegative > 0
       ? `${(r.current.reactions.positiveRate * 100).toFixed(0)}%`
-      : "—";
+      : "n/a";
   const prDelta = formatPctDelta(r.derived.positiveRateDelta);
   const respDelta = r.derived.hasPriorWindow
     ? formatCountDelta(r.derived.responsesDelta)
     : `<div class="stat-delta">&nbsp;</div>`;
   const perDay = r.current.totalResponses > 0 ? r.current.totalResponses / r.windowDays : 0;
   const perDayLabel = !r.derived.hasPriorWindow
-    ? "—"
+    ? "n/a"
     : perDay >= 1
       ? perDay.toFixed(1)
       : perDay > 0
         ? perDay.toFixed(2)
-        : "—";
+        : "n/a";
   const perDayHint = r.derived.hasPriorWindow
     ? `avg over ${r.windowDays} days`
     : `needs ${r.windowDays}d of history`;
@@ -305,7 +305,7 @@ function renderReactions(stats: UsageStats): string {
     return `
     <section>
       <h2 class="section-heading">Reactions</h2>
-      <div class="empty-card">No reactions logged yet — encourage your team to thumbs-up the answers that helped.</div>
+      <div class="empty-card">No reactions logged yet. Encourage your team to thumbs-up the answers that helped.</div>
     </section>`;
   }
   const pos = (stats.reactions.totalPositive / total) * 100;
@@ -332,7 +332,7 @@ function renderComparison(r: InsightsReport): string {
     return `
     <section>
       <h2 class="section-heading">Period Comparison</h2>
-      <div class="empty-card">Not enough history yet — check back after ${r.windowDays} more days for a prior-window comparison.</div>
+      <div class="empty-card">Not enough history yet. Check back after ${r.windowDays} more days for a prior-window comparison.</div>
     </section>`;
   }
   const rows: Array<{ label: string; cur: string; prev: string; delta: string; tone: string }> = [
@@ -415,10 +415,10 @@ function rowPct(
   cur: number | null,
   prev: number | null,
 ): { label: string; cur: string; prev: string; delta: string; tone: string } {
-  const curStr = cur !== null ? `${(cur * 100).toFixed(0)}%` : "—";
-  const prevStr = prev !== null ? `${(prev * 100).toFixed(0)}%` : "—";
+  const curStr = cur !== null ? `${(cur * 100).toFixed(0)}%` : "n/a";
+  const prevStr = prev !== null ? `${(prev * 100).toFixed(0)}%` : "n/a";
   if (cur === null || prev === null)
-    return { label, cur: curStr, prev: prevStr, delta: "—", tone: "flat" };
+    return { label, cur: curStr, prev: prevStr, delta: "n/a", tone: "flat" };
   const d = cur - prev;
   if (Math.abs(d) < 0.005)
     return { label, cur: curStr, prev: prevStr, delta: "no change", tone: "flat" };
