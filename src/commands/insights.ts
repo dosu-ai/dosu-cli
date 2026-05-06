@@ -21,14 +21,32 @@ const ASK_TIMEOUT_MS = 90_000;
 const KEEP_REPORTS = 20;
 const REPORT_FILE_PATTERN = /^report-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z\.html$/;
 const HINT_INTERVAL_MS = 6_000;
-const NARRATIVE_HINTS = [
-  "Asking Dosu to narrate the numbers",
-  "Reading reactions and confidence levels",
-  "Looking for the story in the data",
+export const NARRATIVE_HINTS = [
+  "Reading your reactions and confidence levels",
+  "Looking for the story in your numbers",
   "Drafting your at-a-glance summary",
-  "Polishing the narrative",
-  "Almost there",
+  "Spotting the highlights of the week",
+  "Sifting through signal and noise",
+  "Tracking what changed week over week",
+  "Following the threads with the most reactions",
+  "Pulling together the highlights",
+  "Tuning the headlines for clarity",
+  "Surfacing the wins worth sharing",
+  "Pondering the patterns",
+  "Composing your weekly recap",
+  "Crunching the deltas",
+  "Catching the standouts",
+  "Polishing the writeup",
 ];
+
+function shuffled<T>(arr: readonly T[]): T[] {
+  const copy = [...arr];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_INTERVAL_MS = 80;
 
@@ -190,12 +208,13 @@ export async function runInsights(cfg: Config, runner: InsightsRunner): Promise<
       spinner.start("Looking at the last 30 days of your space");
       spinnerActive = true;
     } else if (stage === "narrative") {
+      const hints = shuffled(NARRATIVE_HINTS);
       let hintIdx = 0;
-      spinner.message(NARRATIVE_HINTS[hintIdx]);
+      spinner.message(hints[hintIdx]);
       stopHints();
       hintTimer = setInterval(() => {
-        hintIdx = (hintIdx + 1) % NARRATIVE_HINTS.length;
-        spinner.message(NARRATIVE_HINTS[hintIdx]);
+        hintIdx = (hintIdx + 1) % hints.length;
+        spinner.message(hints[hintIdx]);
       }, HINT_INTERVAL_MS);
     }
   };

@@ -416,11 +416,11 @@ describe("investigate", () => {
 });
 
 describe("suggestions", () => {
-  it("recommends setup + integrations for empty spaces", async () => {
+  it("points empty spaces at setup and a try-it-yourself ask", async () => {
     const r = await build({ current: stats(), combined: stats() });
     expect(r.suggestions).toHaveLength(2);
     expect(r.suggestions[0].command).toBe("dosu setup");
-    expect(r.suggestions[1].command).toBe("dosu integrations list");
+    expect(r.suggestions[1].command).toBe('dosu ask "what is Dosu?"');
   });
 
   it("suggests auditing low-confidence threads when they grow", async () => {
@@ -497,13 +497,13 @@ describe("suggestions", () => {
     expect(share?.command).toBeUndefined();
   });
 
-  it("recommends adding a source when volume is rising", async () => {
+  it("suggests browsing recent threads when volume is rising", async () => {
     const r = await build({
       current: stats({ totalResponses: 40 }),
       combined: stats({ totalResponses: 50 }),
     });
-    const ride = r.suggestions.find((s) => /momentum/.test(s.headline));
-    expect(ride?.command).toBe("dosu integrations list");
+    const rising = r.suggestions.find((s) => /what your team is asking/.test(s.headline));
+    expect(rising?.command).toBe("dosu threads list");
   });
 
   it("always includes at least one suggestion (fallback)", async () => {
@@ -514,12 +514,12 @@ describe("suggestions", () => {
     expect(r.suggestions.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("does not emit 'Ride the momentum' when prior window is empty", async () => {
+  it("does not emit the rising-volume suggestion when prior window is empty", async () => {
     const r = await build({
       current: stats({ totalResponses: 40 }),
       combined: stats({ totalResponses: 40 }),
     });
-    expect(r.suggestions.some((s) => /momentum/.test(s.headline))).toBe(false);
+    expect(r.suggestions.some((s) => /what your team is asking/.test(s.headline))).toBe(false);
   });
 
   it("audit-low-confidence fires on absolute threshold without '(+X vs prior)' suffix", async () => {

@@ -325,10 +325,10 @@ function computeSuggestions(
       command: "dosu setup",
     });
     out.push({
-      headline: "Connect a knowledge source",
+      headline: "Try a question yourself",
       detail:
-        "Dosu is only as good as what it can read. Add at least one source so it has material to draw from.",
-      command: "dosu integrations list",
+        "See what Dosu does without configuring anything else. Replace the example with whatever you're curious about.",
+      command: 'dosu ask "what is Dosu?"',
     });
     return out;
   }
@@ -373,19 +373,19 @@ function computeSuggestions(
 
   if (derived.hasPriorWindow && derived.responsesDelta >= 10) {
     out.push({
-      headline: "Ride the momentum: add another source",
-      detail: `Volume is up by ${derived.responsesDelta} responses vs the prior window. Connect another source while engagement is high.`,
-      command: "dosu integrations list",
+      headline: "See what your team is asking",
+      detail: `Volume is up by ${derived.responsesDelta} responses vs the prior window. Browsing recent threads is the fastest way to spot patterns and gaps.`,
+      command: "dosu threads list",
     });
   }
 
   // Always-available fallback so we never ship an empty list
   if (out.length === 0) {
     out.push({
-      headline: "Connect more knowledge sources",
+      headline: "Find your knowledge gaps",
       detail:
-        "Each new source expands what Dosu can answer. Even a single new repo or doc set typically lifts high-confidence share.",
-      command: "dosu integrations list",
+        "Dosu surfaces document suggestions from real questions. A quick scan often reveals what's worth writing next.",
+      command: "dosu suggest list",
     });
   }
 

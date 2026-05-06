@@ -41,6 +41,7 @@ vi.mock("open", () => ({ default: vi.fn().mockResolvedValue(undefined) }));
 import type { InsightsReport } from "../insights";
 import {
   type InsightsRunner,
+  NARRATIVE_HINTS,
   insightsCommand,
   insightsDir,
   makeAskFn,
@@ -199,8 +200,10 @@ describe("runInsights", () => {
         expect.stringContaining("Looking at the last 30 days"),
       );
       const messages = spinnerMessage.mock.calls.map((c) => c[0] as string);
-      expect(messages[0]).toBe("Asking Dosu to narrate the numbers");
+      // Hints are randomized; just verify two distinct hints were rendered.
+      expect(NARRATIVE_HINTS).toContain(messages[0]);
       expect(messages.length).toBeGreaterThanOrEqual(2);
+      expect(messages[1]).not.toBe(messages[0]);
       expect(spinnerStop).toHaveBeenCalledWith(expect.stringContaining("Insights ready"));
     } finally {
       vi.useRealTimers();
