@@ -234,7 +234,7 @@ function renderSignals(r: InsightsReport): string {
       ${
         r.cheers.length > 0
           ? `<div class="signal-card signal-cheers">
-        <h2>Worth Celebrating</h2>
+        <h2>What's Working</h2>
         <ul>${r.cheers.map((c) => `<li>${escapeHTML(c)}</li>`).join("")}</ul>
       </div>`
           : ""

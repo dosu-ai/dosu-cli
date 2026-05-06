@@ -218,12 +218,12 @@ function computeCheers(stats: UsageStats, derived: InsightsReport["derived"]): s
   }
   if (derived.highConfidenceRate !== null && derived.highConfidenceRate >= 0.8) {
     out.push(
-      `${pct(derived.highConfidenceRate)} of responses were high-confidence. Dosu's knowledge base is paying off.`,
+      `${pct(derived.highConfidenceRate)} of responses came back high-confidence. Your sources are covering most of what your team's asking about.`,
     );
   }
   if (stats.byConfidence.high > stats.byConfidence.low * 2 && stats.byConfidence.high > 0) {
     out.push(
-      `${stats.byConfidence.high} high-confidence answers vs ${stats.byConfidence.low} low. Your knowledge base has the receipts.`,
+      `${stats.byConfidence.high} high-confidence answers vs ${stats.byConfidence.low} low. Most questions have a clear source to point to.`,
     );
   }
   if (
@@ -231,11 +231,13 @@ function computeCheers(stats: UsageStats, derived: InsightsReport["derived"]): s
     stats.reactions.positiveRate >= 0.8
   ) {
     out.push(
-      `${pct(stats.reactions.positiveRate)} positive feedback. Your team is loving the answers.`,
+      `${pct(stats.reactions.positiveRate)} of reactions were positive. The answers your team's engaging with are landing.`,
     );
   }
   if (derived.hasPriorWindow && derived.responsesDelta > 0) {
-    out.push(`Volume is up by ${derived.responsesDelta} responses vs the prior window. 📈`);
+    out.push(
+      `Volume is up ${derived.responsesDelta} responses vs the prior window. Your team is leaning on Dosu more.`,
+    );
   }
   if (out.length === 0) {
     out.push(
@@ -389,8 +391,17 @@ function computeSuggestions(
     });
   }
 
+  // Drop later suggestions that repeat a command already used — same CTA twice is noise
+  const seen = new Set<string>();
+  const deduped = out.filter((s) => {
+    if (!s.command) return true;
+    if (seen.has(s.command)) return false;
+    seen.add(s.command);
+    return true;
+  });
+
   // Cap at 4 to keep the report scannable
-  return out.slice(0, 4);
+  return deduped.slice(0, 4);
 }
 
 function pct(v: number): string {

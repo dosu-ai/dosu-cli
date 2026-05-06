@@ -244,7 +244,7 @@ describe("cheers", () => {
         },
       }),
     });
-    expect(r.cheers.some((c) => /positive feedback/.test(c))).toBe(true);
+    expect(r.cheers.some((c) => /positive/.test(c))).toBe(true);
   });
 
   it("celebrates rising volume", async () => {
@@ -536,6 +536,25 @@ describe("suggestions", () => {
     const audit = r.suggestions.find((s) => /Audit/.test(s.headline));
     expect(audit).toBeDefined();
     expect(audit?.detail).not.toMatch(/vs prior/);
+  });
+
+  it("dedupes suggestions by command so the same CTA never appears twice", async () => {
+    // Both audit-low-confidence and rising-volume use `dosu threads list`.
+    // Trigger both: low-conf elevated AND volume up >= 10.
+    const r = await build({
+      current: stats({
+        totalResponses: 50,
+        byConfidence: { high: 10, medium: 15, low: 25 },
+      }),
+      combined: stats({
+        totalResponses: 80,
+        byConfidence: { high: 20, medium: 30, low: 30 },
+      }),
+    });
+    const threadsListCount = r.suggestions.filter((s) => s.command === "dosu threads list").length;
+    expect(threadsListCount).toBe(1);
+    // Audit wins because it appears earlier in the priority order
+    expect(r.suggestions.find((s) => s.command === "dosu threads list")?.headline).toMatch(/Audit/);
   });
 
   it("caps suggestions at 4 to keep the report scannable", async () => {
