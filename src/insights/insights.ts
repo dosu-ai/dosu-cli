@@ -123,10 +123,24 @@ export async function buildInsights({
   };
 }
 
-function normalizeStats(raw: UsageStats | null | undefined): UsageStats {
+interface RawUsageStats {
+  totalResponses?: number;
+  byConfidence?: { high?: number; medium?: number; low?: number };
+  reactions?: {
+    totalPositive?: number;
+    totalNegative?: number;
+    messagesWithReactions?: number;
+    reactionRate?: number;
+    positiveRate?: number;
+  };
+}
+
+function normalizeStats(raw: RawUsageStats | null | undefined): UsageStats {
   if (!raw) return { ...EMPTY_STATS };
+  const totalResponses = raw.totalResponses ?? 0;
+  const reactionMsgs = raw.reactions?.messagesWithReactions ?? 0;
   return {
-    totalResponses: raw.totalResponses ?? 0,
+    totalResponses,
     byConfidence: {
       high: raw.byConfidence?.high ?? 0,
       medium: raw.byConfidence?.medium ?? 0,
@@ -135,8 +149,9 @@ function normalizeStats(raw: UsageStats | null | undefined): UsageStats {
     reactions: {
       totalPositive: raw.reactions?.totalPositive ?? 0,
       totalNegative: raw.reactions?.totalNegative ?? 0,
-      messagesWithReactions: raw.reactions?.messagesWithReactions ?? 0,
-      reactionRate: raw.reactions?.reactionRate ?? 0,
+      messagesWithReactions: reactionMsgs,
+      reactionRate:
+        raw.reactions?.reactionRate ?? (totalResponses > 0 ? reactionMsgs / totalResponses : 0),
       positiveRate: raw.reactions?.positiveRate ?? 0,
     },
   };
