@@ -10,7 +10,7 @@ Dosu CLI (`@dosu/cli`) — a CLI tool that manages MCP (Model Context Protocol) 
 
 ```bash
 bun install                     # Install dependencies
-bun run dev                     # Run CLI from source (production endpoints)
+bun run dev                     # Run CLI from source (loads .env.development; Bun's NODE_ENV default)
 bun run dev:local               # Run CLI from source (local dev endpoints, DOSU_DEV=true)
 bun run build                   # Compile to single binary via bun build --compile
 bun run build:npm               # Bundle for npm distribution (bin/dosu.js)
