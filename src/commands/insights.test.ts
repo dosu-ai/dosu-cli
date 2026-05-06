@@ -41,10 +41,10 @@ vi.mock("open", () => ({ default: vi.fn().mockResolvedValue(undefined) }));
 import type { InsightsReport } from "../insights";
 import {
   type InsightsRunner,
-  NARRATIVE_HINTS,
   insightsCommand,
   insightsDir,
   makeAskFn,
+  NARRATIVE_HINTS,
   pruneOldReports,
   reportPath,
   runInsights,
