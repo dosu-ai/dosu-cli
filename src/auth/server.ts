@@ -307,7 +307,8 @@ export async function startCallbackServer(): Promise<{
     const errorCodeParam = url.searchParams.get("error_code");
     const errorDescriptionParam = url.searchParams.get("error_description");
     if (errorParam || errorCodeParam || errorDescriptionParam) {
-      const rawDescription = errorDescriptionParam ?? errorCodeParam ?? errorParam ?? "OAuth authentication failed";
+      const rawDescription =
+        errorDescriptionParam ?? errorCodeParam ?? errorParam ?? "OAuth authentication failed";
       // Tag-strip for log lines and the rejection message (so plaintext
       // surfaces stay clean). The HTML page does its own escape on the raw
       // value — that's where the actual XSS defence lives.
