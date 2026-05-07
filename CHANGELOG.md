@@ -1,3 +1,10 @@
+# [0.13.0](https://github.com/dosu-ai/dosu-cli/compare/v0.12.1...v0.13.0) (2026-05-07)
+
+
+### Features
+
+* **insights:** add dosu insights command ([#52](https://github.com/dosu-ai/dosu-cli/issues/52)) ([9e8827c](https://github.com/dosu-ai/dosu-cli/commit/9e8827cc0e18d0d2c9037b4bb81f3f4395f4f1d8)), closes [hi#confidence](https://github.com/hi/issues/confidence) [hi#confidence](https://github.com/hi/issues/confidence) [Hi#Confidence](https://github.com/Hi/issues/Confidence) [hi#confidence](https://github.com/hi/issues/confidence)
+
 ## [0.12.1](https://github.com/dosu-ai/dosu-cli/compare/v0.12.0...v0.12.1) (2026-05-01)
 
 
