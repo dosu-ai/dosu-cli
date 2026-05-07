@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { OAuthCallbackError } from "./errors";
 import { type CallbackServer, startCallbackServer } from "./server";
 
 vi.mock("../debug/logger", () => ({
@@ -161,6 +162,47 @@ describe("auth callback server", () => {
     );
     const html = await resp.text();
     expect(html).toContain("<strong>test@dosu.dev</strong>");
+  });
+
+  it("rejects with OAuthCallbackError when /callback receives error params", async () => {
+    const result = await startCallbackServer();
+    server = result.server;
+    // Attach the rejection handler BEFORE issuing the request — the server
+    // rejects synchronously in the request handler, so a late `.catch`
+    // surfaces as an unhandled rejection in the test runner.
+    const errorPromise = result.tokenPromise.catch((e: Error) => e);
+
+    const resp = await fetch(
+      `http://localhost:${server.port}/callback?error=invalid_request&error_code=bad_oauth_state&error_description=${encodeURIComponent("OAuth state has expired")}`,
+    );
+    expect(resp.status).toBe(200);
+    const html = await resp.text();
+    expect(html.toLowerCase()).toContain("authentication failed");
+    expect(html).toContain("OAuth state has expired");
+    expect(html).not.toContain("Authentication Successful");
+
+    const error = await errorPromise;
+    expect(error).toBeInstanceOf(OAuthCallbackError);
+    const callbackErr = error as OAuthCallbackError;
+    expect(callbackErr.errorCode).toBe("bad_oauth_state");
+    expect(callbackErr.errorDescription).toBe("OAuth state has expired");
+    expect(callbackErr.userMessage).toContain("dosu login");
+  });
+
+  it("escapes HTML in error description on the error page (XSS)", async () => {
+    const result = await startCallbackServer();
+    server = result.server;
+    // Attach early — see comment in previous test.
+    const drained = result.tokenPromise.catch(() => undefined);
+
+    const resp = await fetch(
+      `http://localhost:${server.port}/callback?error_code=bad_oauth_state&error_description=${encodeURIComponent("<script>alert(1)</script>")}`,
+    );
+    const html = await resp.text();
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).toContain("&lt;script&gt;");
+
+    await drained;
   });
 
   it("treats literal string 'null' in refresh_token as empty", async () => {

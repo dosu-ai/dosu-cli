@@ -108,6 +108,11 @@ async function handleAuthenticate(cfg: ReturnType<typeof loadConfig>): Promise<v
     saveConfig(cfg);
   } catch (err: unknown) {
     /* v8 ignore next -- err is always Error in practice */
+    const { OAuthCallbackError } = await import("../auth/errors");
+    if (err instanceof OAuthCallbackError) {
+      p.log.error(err.userMessage);
+      return;
+    }
     p.log.error(`Authentication failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
