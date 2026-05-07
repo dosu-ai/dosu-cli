@@ -7,6 +7,7 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { Client } from "../client/client";
+import { executeInsights } from "../commands/insights";
 import { isAuthenticated, loadConfig, saveConfig } from "../config/config";
 import { runSetup } from "../setup/flow";
 
@@ -28,22 +29,34 @@ export async function runTUI(): Promise<void> {
 
   // Main menu
   while (true) {
+    const insightsReady = Boolean(cfg.space_id && cfg.deployment_id && cfg.api_key);
+    const options: Array<{ label: string; value: string; hint?: string }> = [
+      {
+        label: "Setup",
+        value: "setup",
+        hint: "Configure MCP for your AI tools",
+      },
+    ];
+    if (insightsReady) {
+      options.push({
+        label: "View Insights",
+        value: "insights",
+        hint: "Open a fun report of your space's activity",
+      });
+    }
+    options.push(
+      {
+        label: "Authenticate",
+        value: "auth",
+        hint: isAuthenticated(cfg) ? "Re-authenticate" : undefined,
+      },
+      { label: "Clear Credentials", value: "logout" },
+      { label: "Exit", value: "exit" },
+    );
+
     const action = await p.select({
       message: "What would you like to do?",
-      options: [
-        {
-          label: "Setup",
-          value: "setup",
-          hint: "Configure MCP for your AI tools",
-        },
-        {
-          label: "Authenticate",
-          value: "auth",
-          hint: isAuthenticated(cfg) ? "Re-authenticate" : undefined,
-        },
-        { label: "Clear Credentials", value: "logout" },
-        { label: "Exit", value: "exit" },
-      ],
+      options,
     });
 
     if (p.isCancel(action) || action === "exit") {
@@ -58,6 +71,9 @@ export async function runTUI(): Promise<void> {
         await runSetup();
         // Reload config after setup (it may have changed deployment, api_key, etc.)
         Object.assign(cfg, loadConfig());
+        break;
+      case "insights":
+        await executeInsights(cfg);
         break;
       case "logout":
         handleLogout(cfg);

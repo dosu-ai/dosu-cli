@@ -38,13 +38,13 @@ export function analyticsCommand(): Command {
       }
 
       const pct = (v?: number) => (v !== undefined ? `${(v * 100).toFixed(1)}%` : "—");
-      const answerRate =
-        stats.totalResponses > 0 ? stats.totalWithResponse / stats.totalResponses : undefined;
+      const highConfidenceRate =
+        stats.totalResponses > 0 ? stats.byConfidence.high / stats.totalResponses : undefined;
 
       printInfo(
         [
           ["Total Responses", String(stats.totalResponses)],
-          ["Answer Rate", pct(answerRate)],
+          ["High-Confidence Share", pct(highConfidenceRate)],
           ["High Confidence", String(stats.byConfidence.high)],
           ["Medium Confidence", String(stats.byConfidence.medium)],
           ["Low Confidence", String(stats.byConfidence.low)],

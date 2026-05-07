@@ -8,6 +8,7 @@ import { analyticsCommand } from "../commands/analytics";
 import { askCommand } from "../commands/ask";
 import { deploymentsCommand } from "../commands/deployments";
 import { docsCommand } from "../commands/docs";
+import { insightsCommand } from "../commands/insights";
 import { integrationsCommand } from "../commands/integrations";
 import { knowledgeCommand } from "../commands/knowledge";
 import { membersCommand } from "../commands/members";
@@ -197,6 +198,7 @@ export function createProgram(): Command {
   program.addCommand(askCommand());
   program.addCommand(deploymentsCommand());
   program.addCommand(docsCommand());
+  program.addCommand(insightsCommand());
   program.addCommand(integrationsCommand());
   program.addCommand(knowledgeCommand());
   program.addCommand(membersCommand());

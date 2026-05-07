@@ -123,7 +123,7 @@ describe("analytics", () => {
 
     const output = allOutput();
     expect(output).toContain("100");
-    expect(output).toContain("86.0%"); // answerRate = 86/100
+    expect(output).toContain("50.0%"); // highConfidenceRate = 50/100
     expect(output).toContain("92.3%");
   });
 
