@@ -33,14 +33,8 @@ export async function startOAuthFlow(
     await open.default(authURL);
     logger.info("auth.flow", "Browser open command executed");
 
-    // Race: token, abort, or timeout.
-    //
-    // 8 min is just under Supabase's default OAuth state TTL (~10 min). A
-    // longer wait used to push users past that boundary — they'd come back
-    // to a `bad_oauth_state` error in the browser while the CLI kept
-    // spinning silently. Tightening the window means the worst case is
-    // ~8 min of silence instead of 15, and the message points users at the
-    // right next step.
+    // 8 min < Supabase's ~10 min OAuth state TTL, so we surface a useful
+    // message before users hit a stale-state error.
     const timeout = new Promise<never>((_, reject) => {
       timeoutId = setTimeout(
         () => {

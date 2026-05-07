@@ -167,9 +167,7 @@ describe("auth callback server", () => {
   it("rejects with OAuthCallbackError when /callback receives error params", async () => {
     const result = await startCallbackServer();
     server = result.server;
-    // Attach the rejection handler BEFORE issuing the request — the server
-    // rejects synchronously in the request handler, so a late `.catch`
-    // surfaces as an unhandled rejection in the test runner.
+    // Catch attached before fetch — the server rejects synchronously.
     const errorPromise = result.tokenPromise.catch((e: Error) => e);
 
     const resp = await fetch(
@@ -232,7 +230,6 @@ describe("auth callback server", () => {
   it("escapes HTML in error description on the error page (XSS)", async () => {
     const result = await startCallbackServer();
     server = result.server;
-    // Attach early — see comment in previous test.
     const drained = result.tokenPromise.catch(() => undefined);
 
     const resp = await fetch(

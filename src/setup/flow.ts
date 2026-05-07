@@ -483,7 +483,6 @@ async function openBrowserForSetup(cfg: Config, onboardingRunID?: string): Promi
     logger.error("setup", `Auth failed: ${msg}`);
     const { OAuthCallbackError } = await import("../auth/errors");
     if (err instanceof OAuthCallbackError) {
-      // Curated single-line message; the noisy stack stays in the debug log.
       p.log.error(err.userMessage);
       if (onboardingRunID) {
         await trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_auth_failed", {

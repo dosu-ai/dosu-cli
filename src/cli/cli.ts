@@ -72,9 +72,6 @@ export function createProgram(): Command {
       try {
         token = await startOAuthFlow();
       } catch (err) {
-        // Curated message for the now-typed OAuth callback error (e.g.
-        // bad_oauth_state). Anything else falls through to Commander's
-        // default error reporting.
         if (err instanceof OAuthCallbackError) {
           console.error(err.userMessage);
           process.exitCode = 1;

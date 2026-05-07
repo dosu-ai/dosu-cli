@@ -1,20 +1,10 @@
-/**
- * OAuth-specific errors thrown by the auth subsystem.
- */
-
 export interface OAuthCallbackErrorDetails {
   error?: string;
   errorCode?: string;
   errorDescription?: string;
 }
 
-/**
- * Thrown when the local /callback listener receives an OAuth error from the
- * web side (e.g. Supabase rejected the OAuth state because it expired).
- *
- * Callers can `instanceof OAuthCallbackError` to print a curated message
- * instead of falling through to the generic "auth failed" path.
- */
+/** Thrown when /callback receives OAuth error params from the web side. */
 export class OAuthCallbackError extends Error {
   readonly error?: string;
   readonly errorCode?: string;
@@ -28,9 +18,7 @@ export class OAuthCallbackError extends Error {
     this.errorDescription = details.errorDescription;
   }
 
-  /**
-   * Tells the user what to do. Most CLI surfaces just want this one line.
-   */
+  /** One-line message for CLI surfaces. */
   get userMessage(): string {
     const desc = this.errorDescription ?? this.message;
     if (this.errorCode === "bad_oauth_state" || /state/i.test(desc)) {

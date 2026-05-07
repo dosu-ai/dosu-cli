@@ -299,19 +299,14 @@ export async function startCallbackServer(): Promise<{
       return;
     }
 
-    // OAuth error forwarded by the web side (Supabase rejected state, user
-    // denied consent, …). Reject the token promise so the CLI process can
-    // exit immediately with a useful message instead of hanging on
-    // tokenPromise until the timeout fires.
+    // OAuth error forwarded by the web side — reject so the CLI exits now.
     const errorParam = url.searchParams.get("error");
     const errorCodeParam = url.searchParams.get("error_code");
     const errorDescriptionParam = url.searchParams.get("error_description");
     if (errorParam || errorCodeParam || errorDescriptionParam) {
       const rawDescription =
         errorDescriptionParam ?? errorCodeParam ?? errorParam ?? "OAuth authentication failed";
-      // Tag-strip for log lines and the rejection message (so plaintext
-      // surfaces stay clean). The HTML page does its own escape on the raw
-      // value — that's where the actual XSS defence lives.
+      // Tag-strip for plaintext surfaces; HTML escape happens in the template.
       const sanitized = rawDescription.replace(/<[^>]*>/g, "");
       logger.warn(
         "auth.server",

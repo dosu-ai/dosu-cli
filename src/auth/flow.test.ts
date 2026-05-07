@@ -175,6 +175,25 @@ describe("startOAuthFlow", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("rejects after 8 minutes with retry guidance", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((callback) => {
+      queueMicrotask(() => {
+        if (typeof callback === "function") callback();
+      });
+      return 1 as unknown as ReturnType<typeof setTimeout>;
+    });
+
+    const flowPromise = startOAuthFlow();
+
+    await expect(flowPromise).rejects.toThrow(
+      "Authentication did not complete within 8 minutes. The OAuth state may have expired",
+    );
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 8 * 60 * 1000);
+    expect(mockClose).toHaveBeenCalledOnce();
+
+    setTimeoutSpy.mockRestore();
+  });
+
   it("uses the configured web app URL for building the auth URL", async () => {
     mockGetWebAppURL.mockReturnValue("http://localhost:3001");
 

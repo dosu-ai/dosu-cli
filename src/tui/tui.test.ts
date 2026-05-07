@@ -50,6 +50,7 @@ vi.mock("picocolors", () => ({
 // ---------------------------------------------------------------------------
 
 import * as p from "@clack/prompts";
+import { OAuthCallbackError } from "../auth/errors";
 import { startOAuthFlow } from "../auth/flow";
 import { Client } from "../client/client";
 import { executeInsights } from "../commands/insights";
@@ -325,6 +326,25 @@ describe("runTUI", () => {
     await runTUI();
 
     expect(p.log.error).toHaveBeenCalledWith("Authentication failed: auth timeout");
+  });
+
+  it("shows curated OAuth callback errors", async () => {
+    writeRealConfig(makeCfg({ access_token: "" }));
+    mockConfirm.mockResolvedValueOnce(true);
+    mockStartOAuthFlow.mockRejectedValueOnce(
+      new OAuthCallbackError("OAuth state expired", {
+        errorCode: "bad_oauth_state",
+        errorDescription: "OAuth state expired",
+      }),
+    );
+    mockIsCancel.mockReturnValue(false);
+    mockSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    expect(p.log.error).toHaveBeenCalledWith(
+      "Authentication failed: OAuth state expired. Run `dosu login` again.",
+    );
   });
 
   it("does nothing when user cancels confirm prompt", async () => {
