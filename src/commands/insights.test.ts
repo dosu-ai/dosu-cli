@@ -4,6 +4,26 @@ const spinnerStart = vi.fn();
 const spinnerStop = vi.fn();
 const spinnerMessage = vi.fn();
 
+const mockConfirm = vi.fn();
+const mockIsCancel = vi.fn<(v: unknown) => boolean>();
+const mockLogWarn = vi.fn();
+
+vi.mock("@clack/prompts", () => ({
+  confirm: (...args: unknown[]) => mockConfirm(...args),
+  isCancel: (v: unknown) => mockIsCancel(v),
+  log: {
+    warn: (...args: unknown[]) => mockLogWarn(...args),
+    info: vi.fn(),
+    success: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
+const mockRunSetup = vi.fn();
+vi.mock("../setup/flow", () => ({
+  runSetup: () => mockRunSetup(),
+}));
+
 const mockQuery = vi.fn();
 
 function createMockProxy(path: string[] = []): unknown {
@@ -110,6 +130,11 @@ beforeEach(() => {
   spinnerStart.mockReset();
   spinnerStop.mockReset();
   spinnerMessage.mockReset();
+  mockConfirm.mockReset();
+  mockIsCancel.mockReset();
+  mockIsCancel.mockReturnValue(false);
+  mockLogWarn.mockReset();
+  mockRunSetup.mockReset();
   mockGetBackendURL.mockReturnValue("https://api.test");
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -339,24 +364,74 @@ describe("insightsCommand", () => {
     await cmd.parseAsync(["node", "test", ...args]);
   }
 
-  it("exits when not logged in", async () => {
-    mockLoadConfig.mockReturnValue({ ...validConfig, access_token: "" });
-    await expect(runCmd()).rejects.toThrow("exit");
+  it("prompts to run setup when not logged in, then runs insights after a successful setup", async () => {
+    mockLoadConfig
+      .mockReturnValueOnce({ ...validConfig, access_token: "" })
+      .mockReturnValue(validConfig);
+    mockConfirm.mockResolvedValue(true);
+    mockRunSetup.mockResolvedValue(undefined);
+    (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi
+      .fn()
+      .mockResolvedValue({ ok: true, json: async () => ({ answer: "ok" }) });
+    mockQuery.mockResolvedValue({
+      totalResponses: 1,
+      byConfidence: { high: 1, medium: 0, low: 0 },
+      reactions: {
+        totalPositive: 0,
+        totalNegative: 0,
+        messagesWithReactions: 0,
+        reactionRate: 0,
+        positiveRate: 0,
+      },
+    });
+
+    await expect(runCmd()).resolves.toBeUndefined();
+
+    expect(mockLogWarn).toHaveBeenCalledWith(expect.stringContaining("log in"));
+    expect(mockConfirm).toHaveBeenCalled();
+    expect(mockRunSetup).toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
   });
 
-  it("exits when api_key is missing", async () => {
-    mockLoadConfig.mockReturnValue({ ...validConfig, api_key: undefined });
-    await expect(runCmd()).rejects.toThrow("exit");
+  it("warns about missing deployment when api_key is missing", async () => {
+    mockLoadConfig.mockReturnValueOnce({ ...validConfig, api_key: undefined });
+    mockConfirm.mockResolvedValue(false);
+
+    await expect(runCmd()).resolves.toBeUndefined();
+    expect(mockLogWarn).toHaveBeenCalledWith(expect.stringContaining("configured Dosu deployment"));
+    expect(mockRunSetup).not.toHaveBeenCalled();
   });
 
-  it("exits when space_id is missing", async () => {
-    mockLoadConfig.mockReturnValue({ ...validConfig, space_id: undefined });
-    await expect(runCmd()).rejects.toThrow("exit");
+  it("returns without running insights when the user declines setup", async () => {
+    mockLoadConfig.mockReturnValueOnce({ ...validConfig, space_id: undefined });
+    mockConfirm.mockResolvedValue(false);
+
+    await expect(runCmd()).resolves.toBeUndefined();
+    expect(mockRunSetup).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
   });
 
-  it("exits when deployment_id is missing", async () => {
-    mockLoadConfig.mockReturnValue({ ...validConfig, deployment_id: undefined });
-    await expect(runCmd()).rejects.toThrow("exit");
+  it("returns without running insights when the user cancels the prompt", async () => {
+    mockLoadConfig.mockReturnValueOnce({ ...validConfig, deployment_id: undefined });
+    const cancelSentinel = Symbol("cancel");
+    mockConfirm.mockResolvedValue(cancelSentinel);
+    mockIsCancel.mockImplementation((v: unknown) => v === cancelSentinel);
+
+    await expect(runCmd()).resolves.toBeUndefined();
+    expect(mockRunSetup).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns gracefully when setup completes but config is still incomplete", async () => {
+    mockLoadConfig
+      .mockReturnValueOnce({ ...validConfig, access_token: "" })
+      .mockReturnValue({ ...validConfig, access_token: "" });
+    mockConfirm.mockResolvedValue(true);
+    mockRunSetup.mockResolvedValue(undefined);
+
+    await expect(runCmd()).resolves.toBeUndefined();
+    expect(mockRunSetup).toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
   });
 
   it("runs to completion when every config field is present", async () => {

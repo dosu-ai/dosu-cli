@@ -8,14 +8,15 @@
 
 import { existsSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import * as p from "@clack/prompts";
 import { Command } from "commander";
 import pc from "picocolors";
 import { createTypedClient } from "../client/trpc";
-import { type Config, getConfigDir } from "../config/config";
+import { type Config, getConfigDir, loadConfig } from "../config/config";
 import { getBackendURL } from "../config/constants";
 import { logger } from "../debug/logger";
 import { type AskFn, buildInsights, type InsightsStage, renderHTML } from "../insights";
-import { requireAPIKey, requireLoginConfig } from "./auth";
+import { runSetup } from "../setup/flow";
 
 const ASK_TIMEOUT_MS = 90_000;
 const KEEP_REPORTS = 20;
@@ -95,14 +96,29 @@ export function createDotsSpinner(): Spinner {
   };
 }
 
-function requireFullConfig(): Config {
-  const cfg = requireLoginConfig();
-  requireAPIKey(cfg);
-  if (!cfg.space_id || !cfg.deployment_id) {
-    console.error(pc.red("Missing space config. Run 'dosu setup' to reconfigure."));
-    process.exit(1);
-  }
-  return cfg;
+function isFullConfig(cfg: Config): boolean {
+  return Boolean(cfg.access_token && cfg.api_key && cfg.space_id && cfg.deployment_id);
+}
+
+export async function ensureFullConfig(): Promise<Config | null> {
+  let cfg = loadConfig();
+  if (isFullConfig(cfg)) return cfg;
+
+  const reason = !cfg.access_token
+    ? "Insights needs you to log in first."
+    : "Insights needs a configured Dosu deployment.";
+  p.log.warn(reason);
+
+  const shouldSetup = await p.confirm({
+    message: "Run setup now?",
+    initialValue: true,
+  });
+  if (p.isCancel(shouldSetup) || !shouldSetup) return null;
+
+  await runSetup();
+
+  cfg = loadConfig();
+  return isFullConfig(cfg) ? cfg : null;
 }
 
 export function makeAskFn(cfg: Config): AskFn {
@@ -294,7 +310,8 @@ export function insightsCommand(): Command {
   return new Command("insights")
     .description("Open a fun visual report of your Dosu space activity")
     .action(async () => {
-      const cfg = requireFullConfig();
+      const cfg = await ensureFullConfig();
+      if (!cfg) return;
       try {
         await runInsights(cfg, defaultRunner(cfg));
       } catch (err) {
