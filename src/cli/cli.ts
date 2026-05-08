@@ -67,7 +67,18 @@ export function createProgram(): Command {
 
       console.log("Opening browser for authentication...");
       const { startOAuthFlow } = await import("../auth/flow");
-      const token = await startOAuthFlow();
+      const { OAuthCallbackError } = await import("../auth/errors");
+      let token: Awaited<ReturnType<typeof startOAuthFlow>>;
+      try {
+        token = await startOAuthFlow();
+      } catch (err) {
+        if (err instanceof OAuthCallbackError) {
+          console.error(err.userMessage);
+          process.exitCode = 1;
+          return;
+        }
+        throw err;
+      }
 
       cfg.access_token = token.access_token;
       cfg.refresh_token = token.refresh_token;

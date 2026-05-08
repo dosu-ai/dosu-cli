@@ -123,6 +123,7 @@ vi.mock("./github-doc-import-step", () => ({
 }));
 
 import * as p from "@clack/prompts";
+import { OAuthCallbackError } from "../auth/errors";
 import { startOAuthFlow } from "../auth/flow";
 import type { TokenResponse } from "../auth/server";
 import { Client } from "../client/client";
@@ -707,6 +708,22 @@ describe("runSetup integration", () => {
     await runSetup();
 
     expect(mockStartOAuthFlow).not.toHaveBeenCalled();
+  });
+
+  it("logs curated OAuth callback errors during browser login", async () => {
+    vi.mocked(p.confirm).mockResolvedValue(true);
+    mockStartOAuthFlow.mockRejectedValue(
+      new OAuthCallbackError("OAuth state expired", {
+        errorCode: "bad_oauth_state",
+        errorDescription: "OAuth state expired",
+      }),
+    );
+
+    await runSetup();
+
+    expect(p.log.error).toHaveBeenCalledWith(
+      "Authentication failed: OAuth state expired. Run `dosu login` again.",
+    );
   });
 
   it("completes full flow with existing token and no tools", async () => {

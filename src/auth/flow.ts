@@ -33,14 +33,19 @@ export async function startOAuthFlow(
     await open.default(authURL);
     logger.info("auth.flow", "Browser open command executed");
 
-    // Race: token, abort, or timeout
+    // 8 min < Supabase's ~10 min OAuth state TTL, so we surface a useful
+    // message before users hit a stale-state error.
     const timeout = new Promise<never>((_, reject) => {
       timeoutId = setTimeout(
         () => {
-          logger.warn("auth.flow", "Authentication timed out (15min)");
-          reject(new Error("authentication timeout - please try again"));
+          logger.warn("auth.flow", "Authentication timed out (8min)");
+          reject(
+            new Error(
+              "Authentication did not complete within 8 minutes. The OAuth state may have expired — please run `dosu login` again.",
+            ),
+          );
         },
-        15 * 60 * 1000,
+        8 * 60 * 1000,
       );
     });
 

@@ -481,6 +481,16 @@ async function openBrowserForSetup(cfg: Config, onboardingRunID?: string): Promi
     /* v8 ignore next 2 -- err is always Error in practice */
     const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
     logger.error("setup", `Auth failed: ${msg}`);
+    const { OAuthCallbackError } = await import("../auth/errors");
+    if (err instanceof OAuthCallbackError) {
+      p.log.error(err.userMessage);
+      if (onboardingRunID) {
+        await trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_auth_failed", {
+          reason: err.errorCode ?? err.errorDescription ?? "oauth_callback_error",
+        });
+      }
+      return null;
+    }
     p.log.error(`Authentication failed: ${err instanceof Error ? err.message : String(err)}`);
     if (onboardingRunID) {
       await trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_auth_failed", {

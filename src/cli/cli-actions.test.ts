@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { OAuthCallbackError } from "../auth/errors";
 import type { Config } from "../config/config";
 import { loadConfig, saveConfig } from "../config/config";
 import { allProviders } from "../mcp/providers";
@@ -155,6 +156,28 @@ describe("CLI actions", () => {
       const updated = loadConfig();
       expect(updated.access_token).toBe("refreshed_tok");
       expect(updated.refresh_token).toBe("refreshed_ref");
+    });
+
+    it("prints curated OAuth callback errors without saving credentials", async () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const originalExitCode = process.exitCode;
+      mockStartOAuthFlow.mockRejectedValue(
+        new OAuthCallbackError("OAuth state expired", {
+          errorCode: "bad_oauth_state",
+          errorDescription: "OAuth state expired",
+        }),
+      );
+
+      await run("login");
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        "Authentication failed: OAuth state expired. Run `dosu login` again.",
+      );
+      expect(process.exitCode).toBe(1);
+      expect(loadConfig().access_token).toBe("");
+
+      process.exitCode = originalExitCode;
+      errorSpy.mockRestore();
     });
   });
 
