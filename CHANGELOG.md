@@ -1,3 +1,10 @@
+## [0.13.1](https://github.com/dosu-ai/dosu-cli/compare/v0.13.0...v0.13.1) (2026-05-08)
+
+
+### Bug Fixes
+
+* handle OAuth callback failures ([#61](https://github.com/dosu-ai/dosu-cli/issues/61)) ([d59bc13](https://github.com/dosu-ai/dosu-cli/commit/d59bc13f832964464bc8fd692a6629f7faeaea51))
+
 # [0.13.0](https://github.com/dosu-ai/dosu-cli/compare/v0.12.1...v0.13.0) (2026-05-07)
 
 
