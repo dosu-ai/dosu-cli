@@ -1936,4 +1936,99 @@ describe("runSetup checkpoint behavior", () => {
       expect.objectContaining({ waitForFreshDocs: false }),
     );
   });
+
+  describe("pre-onboarding gated state", () => {
+    let prevWebAppURL: string | undefined;
+    let prevOverride: string | undefined;
+    beforeEach(() => {
+      prevWebAppURL = process.env.DOSU_WEB_APP_URL;
+      prevOverride = process.env.DOSU_WEB_APP_URL_OVERRIDE;
+      process.env.DOSU_WEB_APP_URL = "https://app.dosu.dev";
+      delete process.env.DOSU_WEB_APP_URL_OVERRIDE;
+    });
+    afterEach(() => {
+      if (prevWebAppURL !== undefined) {
+        process.env.DOSU_WEB_APP_URL = prevWebAppURL;
+      } else {
+        delete process.env.DOSU_WEB_APP_URL;
+      }
+      if (prevOverride !== undefined) {
+        process.env.DOSU_WEB_APP_URL_OVERRIDE = prevOverride;
+      } else {
+        delete process.env.DOSU_WEB_APP_URL_OVERRIDE;
+      }
+    });
+
+    function setupGatedUser() {
+      saveConfig(makeCfg());
+      setupAuthed();
+      mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+        user_id: "test-user-id",
+        finished_onboarding: false,
+        cli_onboarding_enabled: true,
+      });
+      mockTrpc.organization.getOrganizations.query.mockResolvedValue([]);
+      vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    }
+
+    it("renders a friendly schedule-onboarding message with the web app URL", async () => {
+      setupGatedUser();
+
+      await runSetup();
+
+      expect(p.log.warn).toHaveBeenCalledWith(
+        expect.stringContaining("Dosu workspace isn't ready"),
+      );
+      expect(p.log.message).toHaveBeenCalledWith(
+        expect.stringContaining("https://app.dosu.dev/onboarding"),
+      );
+      expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("Schedule"));
+      expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("dosu setup"));
+    });
+
+    it("tracks cli_onboarding_failed with reason 'pre_onboarding_gated'", async () => {
+      setupGatedUser();
+
+      await runSetup();
+
+      expect(trackedCliOnboardingEvents()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            event: "cli_onboarding_failed",
+            properties: expect.objectContaining({ reason: "pre_onboarding_gated" }),
+          }),
+        ]),
+      );
+    });
+
+    it("exits before deployment binding, GitHub steps, or one-shot prompts", async () => {
+      setupGatedUser();
+
+      await runSetup();
+
+      expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
+      expect(mockStepImportGitHubDocs).not.toHaveBeenCalled();
+      expect(mockTrpc.user.updateProfile.mutate).not.toHaveBeenCalled();
+      expect(p.multiselect).not.toHaveBeenCalled();
+    });
+
+    it("does not show the generic 'Workspace load failed' status", async () => {
+      setupGatedUser();
+
+      await runSetup();
+
+      const errorCalls = vi.mocked(p.log.error).mock.calls;
+      expect(errorCalls).toEqual([]);
+    });
+
+    it("falls back to a generic phrase when DOSU_WEB_APP_URL is unset", async () => {
+      delete process.env.DOSU_WEB_APP_URL;
+      delete process.env.DOSU_WEB_APP_URL_OVERRIDE;
+      setupGatedUser();
+
+      await runSetup();
+
+      expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("Dosu web app"));
+    });
+  });
 });

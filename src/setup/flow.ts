@@ -10,6 +10,7 @@ import { Client, type Deployment, type Org, SessionExpiredError } from "../clien
 import type { TypedClient } from "../client/trpc";
 import { installSkill } from "../commands/skill";
 import { type Config, loadConfig, MODE_OSS, type SetupMode, saveConfig } from "../config/config";
+import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
@@ -48,6 +49,11 @@ interface CloudSetupContext {
   profileUserID: string;
   targetOrg?: OwnedOrg;
 }
+
+type CloudSetupResolution =
+  | { kind: "ready"; context: CloudSetupContext }
+  | { kind: "pre_onboarding" }
+  | { kind: "error" };
 
 interface OwnedOrg {
   org_id: string;
@@ -91,14 +97,23 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   if (cfg.mode !== MODE_OSS) {
     const s = p.spinner();
     s.start("Loading your workspace...");
-    cloudSetupContext = await resolveCloudSetupContext(cfg);
-    if (!cloudSetupContext) {
+    const resolution = await resolveCloudSetupContext(cfg);
+    if (resolution.kind === "pre_onboarding") {
+      s.stop("Onboarding pending");
+      showScheduleOnboardingMessage();
+      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
+        reason: "pre_onboarding_gated",
+      });
+      return;
+    }
+    if (resolution.kind === "error") {
       await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
         reason: "cloud_setup_context_failed",
       });
       s.stop("Workspace load failed");
       return;
     }
+    cloudSetupContext = resolution.context;
     s.stop("Workspace loaded");
   }
   await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_started", {
@@ -501,7 +516,7 @@ async function openBrowserForSetup(cfg: Config, onboardingRunID?: string): Promi
   }
 }
 
-async function resolveCloudSetupContext(cfg: Config): Promise<CloudSetupContext | null> {
+async function resolveCloudSetupContext(cfg: Config): Promise<CloudSetupResolution> {
   try {
     const { createTypedClient } = await import("../client/trpc");
     const trpc = createTypedClient(cfg);
@@ -509,34 +524,47 @@ async function resolveCloudSetupContext(cfg: Config): Promise<CloudSetupContext 
 
     if (!profile?.user_id) {
       p.log.error("Could not load your profile.");
-      return null;
+      return { kind: "error" };
     }
 
     if (profile.finished_onboarding === true || profile.cli_onboarding_enabled !== true) {
       return {
-        kind: "setup",
-        profileUserID: profile.user_id,
+        kind: "ready",
+        context: { kind: "setup", profileUserID: profile.user_id },
       };
     }
 
     const targetOrg = await resolveOnboardingTargetOrg(trpc);
     if (!targetOrg) {
-      p.log.error("Could not determine your onboarding organization.");
-      return null;
+      // No org yet → user is still in the web app's Schedule Onboarding gate.
+      logger.info("setup", "Pre-onboarding gated: user has no accessible orgs");
+      return { kind: "pre_onboarding" };
     }
 
     logger.info("setup", `First-run onboarding detected for org ${targetOrg.org_id}`);
     return {
-      kind: "onboarding",
-      profileUserID: profile.user_id,
-      targetOrg,
+      kind: "ready",
+      context: {
+        kind: "onboarding",
+        profileUserID: profile.user_id,
+        targetOrg,
+      },
     };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error("setup", `Failed to resolve cloud setup context: ${msg}`);
     p.log.error(`Could not load your onboarding state: ${msg}`);
-    return null;
+    return { kind: "error" };
   }
+}
+
+function showScheduleOnboardingMessage(): void {
+  const webAppURL = getWebAppURL();
+  const url = webAppURL ? `${webAppURL}/onboarding` : "the Dosu web app";
+  p.log.warn("Your Dosu workspace isn't ready yet.");
+  p.log.message(
+    `Schedule a quick onboarding call to finish setting up your account:\n\n  ${info(url)}\n\nOnce that's done, run ${info("dosu setup")} again to finish configuring the CLI.`,
+  );
 }
 
 async function resolveOnboardingTargetOrg(trpc: TypedClient): Promise<OwnedOrg | null> {
