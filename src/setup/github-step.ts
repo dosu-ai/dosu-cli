@@ -119,17 +119,43 @@ interface MutationProcedure<TInput, TOutput = unknown> {
   mutate(input: TInput): Promise<TOutput>;
 }
 
+interface GitHubWorkspaceCreateInput {
+  org_id: string;
+  space_id: string;
+  enabled: boolean;
+  name: string;
+  description: string;
+  provider_slug: "github";
+  repository_id: number;
+  metadata: {
+    app: {
+      deployment_mode: string;
+      setup_mode: string;
+    };
+    provider_slug: "github";
+  };
+  config: typeof DEFAULT_DEPLOYMENT_CONFIG_GITHUB;
+}
+
+interface GitHubDataSourceCreateInput {
+  org_id: string;
+  provider_slug: "github";
+  name: string;
+  description: string;
+  repository_id: number;
+}
+
 interface GitHubSetupClient {
   githubRepository: {
     listForOrg: QueryProcedure<{ org_id: string }, AvailableRepo[]>;
   };
   workspaces: {
-    create: MutationProcedure<unknown, { deployment_id?: string } | null>;
+    create: MutationProcedure<GitHubWorkspaceCreateInput, { deployment_id?: string } | null>;
     delete: MutationProcedure<string>;
     listForSpace: QueryProcedure<string, { deployment_id: string }[]>;
   };
   dataSource: {
-    create: MutationProcedure<unknown, { data_source_id?: string } | null>;
+    create: MutationProcedure<GitHubDataSourceCreateInput, { data_source_id?: string } | null>;
     list: QueryProcedure<
       { org_id: string; excluded_provider_slugs: string[] },
       { data_source_id?: string }[]
@@ -344,7 +370,7 @@ async function createDeploymentForRepo(
   repo: AvailableRepo,
 ): Promise<{ deployment_id: string; data_source_id: string } | null> {
   try {
-    const deployment = (await trpc.workspaces.create.mutate({
+    const deployment = await trpc.workspaces.create.mutate({
       org_id: orgID,
       space_id: spaceID,
       enabled: true,
@@ -357,7 +383,7 @@ async function createDeploymentForRepo(
         provider_slug: "github",
       },
       config: DEFAULT_DEPLOYMENT_CONFIG_GITHUB,
-    })) as { deployment_id?: string } | null;
+    });
     if (!deployment?.deployment_id) {
       logger.warn("setup", `workspaces.create returned no deployment for ${repo.slug}`);
       return null;
