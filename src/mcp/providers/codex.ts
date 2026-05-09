@@ -4,7 +4,7 @@
  * For full parity, we'd need a TOML library. For now, use JSON config as Codex also supports it.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { type Config, MODE_OSS } from "../../config/config";
 import { mcpBaseURL, mcpHeaders, mcpURL } from "../config-helpers";
@@ -31,8 +31,13 @@ function readTOML(path: string): string {
 
 function writeTOML(path: string, content: string): void {
   const dir = dirname(path);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(path, content);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileSync(path, content, { mode: 0o600 });
+  try {
+    chmodSync(path, 0o600);
+  } catch {
+    // Best effort: Windows and some filesystems may not support chmod.
+  }
 }
 
 function mcpEndpoint(cfg: Config): string {
@@ -47,8 +52,7 @@ function installDosuToTOML(path: string, cfg: Config): void {
   content = removeDosuFromTOML(content);
   // Append new section
   const url = mcpEndpoint(cfg);
-  // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
-  const headers = mcpHeaders(cfg.api_key!);
+  const headers = mcpHeaders(cfg.api_key);
   const headerEntries = Object.entries(headers)
     .map(([k, v]) => `${k} = "${v}"`)
     .join("\n");

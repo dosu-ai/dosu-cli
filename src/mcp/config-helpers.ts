@@ -2,7 +2,7 @@
  * Shared JSON config helpers for MCP provider configuration.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { getBackendURL } from "../config/constants";
 
@@ -26,7 +26,10 @@ export function mcpBaseURL(): string {
 /**
  * Returns the standard MCP headers with API key auth.
  */
-export function mcpHeaders(apiKey: string): Record<string, string> {
+export function mcpHeaders(apiKey: string | undefined): Record<string, string> {
+  if (!apiKey) {
+    throw new Error("API key is required. Run 'dosu setup' to create one.");
+  }
   return { "X-Dosu-API-Key": apiKey };
 }
 
@@ -108,9 +111,14 @@ export function stripJSONComments(data: string): string {
 export function saveJSONConfig(path: string, cfg: JsonConfig): void {
   const dir = dirname(path);
   if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
-  writeFileSync(path, JSON.stringify(cfg, null, 2));
+  writeFileSync(path, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+  try {
+    chmodSync(path, 0o600);
+  } catch {
+    // Best effort: Windows and some filesystems may not support chmod.
+  }
 }
 
 /**

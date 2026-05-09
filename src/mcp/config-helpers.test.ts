@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -39,6 +39,11 @@ describe("mcpHeaders", () => {
   it("returns correct header map", () => {
     const headers = mcpHeaders("my-api-key");
     expect(headers).toEqual({ "X-Dosu-API-Key": "my-api-key" });
+  });
+
+  it("throws instead of returning an empty header map when the API key is missing", () => {
+    expect(() => mcpHeaders(undefined)).toThrow("API key is required");
+    expect(() => mcpHeaders("")).toThrow("API key is required");
   });
 });
 
@@ -127,6 +132,12 @@ describe("JSON config file operations", () => {
       const path = join(tempDir, "deep", "nested", "out.json");
       saveJSONConfig(path, { x: 1 });
       expect(JSON.parse(readFileSync(path, "utf-8"))).toEqual({ x: 1 });
+    });
+
+    it("writes config files with owner-only permissions", () => {
+      const path = join(tempDir, "secret.json");
+      saveJSONConfig(path, { headers: { "X-Dosu-API-Key": "key" } });
+      expect(statSync(path).mode & 0o777).toBe(0o600);
     });
   });
 

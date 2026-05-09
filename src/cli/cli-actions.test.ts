@@ -353,6 +353,14 @@ describe("CLI actions", () => {
       await expect(run("mcp", "add", "cursor")).rejects.toThrow("no MCP selected");
     });
 
+    it("throws error when API key is missing before writing tool config", async () => {
+      const cfg = authenticatedConfig();
+      cfg.api_key = undefined;
+      saveConfig(cfg);
+
+      await expect(run("mcp", "add", "cursor", "--global")).rejects.toThrow("no API key available");
+    });
+
     it("supports OSS mode without a selected deployment", async () => {
       const cfg = authenticatedConfig();
       cfg.mode = "oss";
@@ -375,9 +383,18 @@ describe("CLI actions", () => {
 
       const output = allLogOutput();
       expect(output).toContain("dep_123");
-      expect(output).toContain("key_abc");
+      expect(output).not.toContain("key_abc");
+      expect(output).toContain("Secret hidden");
       // Manual provider returns early, no "Successfully added" message
       expect(output).not.toContain("Successfully added");
+    });
+
+    it("only prints the full manual API key when --show-secret is passed", async () => {
+      saveConfig(authenticatedConfig());
+
+      await run("mcp", "add", "manual", "--show-secret");
+
+      expect(allLogOutput()).toContain("key_abc");
     });
 
     it("auto-sets global when provider does not support local", async () => {

@@ -662,8 +662,23 @@ describe("ManualProvider", () => {
 
     const allOutput = logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
     expect(allOutput).toContain("dep-123");
-    expect(allOutput).toContain("key-abc");
+    expect(allOutput).not.toContain("key-abc");
+    expect(allOutput).toContain("Secret hidden");
     expect(allOutput).toContain("X-Dosu-API-Key");
+
+    logSpy.mockRestore();
+  });
+
+  it("install logs the full API key when requested", async () => {
+    const { ManualProvider } = await import("./manual");
+    const provider = ManualProvider();
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    provider.install(makeCfg(), false, { showSecret: true });
+
+    const allOutput = logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(allOutput).toContain("key-abc");
 
     logSpy.mockRestore();
   });
