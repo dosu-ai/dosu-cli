@@ -10,7 +10,8 @@ function mcpEndpoint(cfg: Config): string {
 
 function maskSecret(secret: string): string {
   if (secret.length <= 8) return "[hidden]";
-  return `${secret.slice(0, 4)}...${secret.slice(-4)}`;
+  const visibleChars = Math.min(4, Math.floor(secret.length / 4));
+  return `${secret.slice(0, visibleChars)}...${secret.slice(-visibleChars)}`;
 }
 
 export const ManualProvider = (): Provider => ({

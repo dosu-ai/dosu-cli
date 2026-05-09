@@ -4,10 +4,10 @@
  * For full parity, we'd need a TOML library. For now, use JSON config as Codex also supports it.
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { type Config, MODE_OSS } from "../../config/config";
-import { mcpBaseURL, mcpHeaders, mcpURL } from "../config-helpers";
+import { mcpBaseURL, mcpHeaders, mcpURL, writeSecureFile } from "../config-helpers";
 import { expandHome, isInstalled } from "../detect";
 import type { SetupProvider } from "../providers";
 
@@ -30,14 +30,7 @@ function readTOML(path: string): string {
 }
 
 function writeTOML(path: string, content: string): void {
-  const dir = dirname(path);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeFileSync(path, content, { mode: 0o600 });
-  try {
-    chmodSync(path, 0o600);
-  } catch {
-    // Best effort: Windows and some filesystems may not support chmod.
-  }
+  writeSecureFile(path, content);
 }
 
 function mcpEndpoint(cfg: Config): string {

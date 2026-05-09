@@ -11,6 +11,7 @@ import {
   removeJSONServer,
   saveJSONConfig,
   stripJSONComments,
+  writeSecureFile,
 } from "./config-helpers";
 
 describe("mcpURL", () => {
@@ -137,6 +138,16 @@ describe("JSON config file operations", () => {
     it("writes config files with owner-only permissions", () => {
       const path = join(tempDir, "secret.json");
       saveJSONConfig(path, { headers: { "X-Dosu-API-Key": "key" } });
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+    });
+
+    it("replaces existing loose-permission files with owner-only permissions", () => {
+      const path = join(tempDir, "secret.json");
+      writeFileSync(path, "old secret", { mode: 0o644 });
+
+      writeSecureFile(path, "new secret");
+
+      expect(readFileSync(path, "utf-8")).toBe("new secret");
       expect(statSync(path).mode & 0o777).toBe(0o600);
     });
   });

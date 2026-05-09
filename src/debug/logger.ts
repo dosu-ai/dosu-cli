@@ -45,7 +45,7 @@ export function redactSecrets(message: string): string {
     redacted = redacted.replace(queryPattern, `$1${REDACTED}`);
   }
   redacted = redacted.replace(
-    /(\b(?:access_token|refresh_token|api_key|id_token|token)\b\s*[:=]\s*)("[^"]+"|'[^']+'|[^\s,]+)/gi,
+    /(\b(?:access_token|refresh_token|api_key|apikey|id_token|token)\b\s*[:=]\s*)("[^"]+"|'[^']+'|[^\s,]+)/gi,
     `$1${REDACTED}`,
   );
   redacted = redacted.replace(/(X-Dosu-API-Key:\s*)[^\s,]+/gi, `$1${REDACTED}`);

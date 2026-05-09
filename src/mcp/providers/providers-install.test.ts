@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -337,6 +345,20 @@ describe("CodexProvider", () => {
     expect(content).toContain("[other_section]");
     expect(content).toContain('key = "value"');
     expect(content).toContain("[mcp_servers.dosu]");
+  });
+
+  it("global install replaces loose-permission TOML config with owner-only permissions", async () => {
+    const { CodexProvider } = await import("./codex");
+    const provider = CodexProvider();
+
+    const configPath = join(tempDir, "codex-home", "config.toml");
+    mkdirSync(join(tempDir, "codex-home"), { recursive: true });
+    writeFileSync(configPath, '[other_section]\nkey = "value"\n', { mode: 0o644 });
+
+    provider.install(makeCfg(), true);
+
+    expect(readFileSync(configPath, "utf-8")).toContain("[mcp_servers.dosu]");
+    expect(statSync(configPath).mode & 0o777).toBe(0o600);
   });
 
   it("global remove deletes dosu section from TOML", async () => {
@@ -679,6 +701,37 @@ describe("ManualProvider", () => {
 
     const allOutput = logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
     expect(allOutput).toContain("key-abc");
+
+    logSpy.mockRestore();
+  });
+
+  it("hides short API keys completely", async () => {
+    const { ManualProvider } = await import("./manual");
+    const provider = ManualProvider();
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    provider.install(makeCfg({ api_key: "shortkey" }), false);
+
+    const allOutput = logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(allOutput).toContain("X-Dosu-API-Key: [hidden]");
+    expect(allOutput).not.toContain("shortkey");
+
+    logSpy.mockRestore();
+  });
+
+  it("reveals less of medium-length API keys", async () => {
+    const { ManualProvider } = await import("./manual");
+    const provider = ManualProvider();
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    provider.install(makeCfg({ api_key: "abcdefghijkl" }), false);
+
+    const allOutput = logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(allOutput).toContain("X-Dosu-API-Key: abc...jkl");
+    expect(allOutput).not.toContain("abcd...ijkl");
+    expect(allOutput).not.toContain("abcdefghijkl");
 
     logSpy.mockRestore();
   });
