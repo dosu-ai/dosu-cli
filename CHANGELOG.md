@@ -1,3 +1,10 @@
+## [0.13.2](https://github.com/dosu-ai/dosu-cli/compare/v0.13.1...v0.13.2) (2026-05-12)
+
+
+### Bug Fixes
+
+* stabilize CLI onboarding types and insights tests ([#63](https://github.com/dosu-ai/dosu-cli/issues/63)) ([a6aee6f](https://github.com/dosu-ai/dosu-cli/commit/a6aee6fbaff67e0ff824fe25437d8e096393a758))
+
 ## [0.13.1](https://github.com/dosu-ai/dosu-cli/compare/v0.13.0...v0.13.1) (2026-05-08)
 
 

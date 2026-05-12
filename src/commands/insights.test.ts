@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join as joinPath } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spinnerStart = vi.fn();
@@ -74,6 +77,9 @@ let logSpy: ReturnType<typeof vi.spyOn>;
 let errorSpy: ReturnType<typeof vi.spyOn>;
 // biome-ignore lint/suspicious/noExplicitAny: process.exit mock type mismatch
 let exitSpy: any;
+let tempConfigDir: string;
+let origXDG: string | undefined;
+let origHome: string | undefined;
 
 const validConfig = {
   access_token: "t",
@@ -125,6 +131,11 @@ const fakeReport: InsightsReport = {
 };
 
 beforeEach(() => {
+  tempConfigDir = mkdtempSync(joinPath(tmpdir(), "dosu-insights-config-"));
+  origXDG = process.env.XDG_CONFIG_HOME;
+  origHome = process.env.HOME;
+  process.env.XDG_CONFIG_HOME = tempConfigDir;
+  process.env.HOME = tempConfigDir;
   mockLoadConfig.mockReset();
   mockQuery.mockReset();
   spinnerStart.mockReset();
@@ -147,6 +158,11 @@ afterEach(() => {
   logSpy.mockRestore();
   errorSpy.mockRestore();
   exitSpy.mockRestore();
+  if (origXDG !== undefined) process.env.XDG_CONFIG_HOME = origXDG;
+  else delete process.env.XDG_CONFIG_HOME;
+  if (origHome !== undefined) process.env.HOME = origHome;
+  else delete process.env.HOME;
+  rmSync(tempConfigDir, { recursive: true, force: true });
 });
 
 function allOutput(): string {
