@@ -147,7 +147,8 @@ export function createProgram(): Command {
     .command("add <agent>")
     .description("Add Dosu MCP to an AI tool")
     .option("-g, --global", "Add globally (all projects) instead of project-local", false)
-    .action((toolId: string, opts: { global: boolean }) => {
+    .option("--show-secret", "Print full manual configuration secrets", false)
+    .action((toolId: string, opts: { global: boolean; showSecret: boolean }) => {
       let provider: Provider;
       try {
         provider = getProvider(toolId.toLowerCase());
@@ -165,9 +166,12 @@ export function createProgram(): Command {
       if (cfg.mode !== MODE_OSS && !cfg.deployment_id) {
         throw new Error("no MCP selected. Run 'dosu' to open the TUI and select an MCP");
       }
+      if (!cfg.api_key) {
+        throw new Error("no API key available. Run 'dosu setup' to create one");
+      }
 
       if (provider.id() === "manual") {
-        provider.install(cfg, false);
+        provider.install(cfg, false, { showSecret: opts.showSecret });
         return;
       }
 
@@ -180,7 +184,7 @@ export function createProgram(): Command {
       const scope = global ? "global (all projects)" : "project-local";
       console.log(`Adding Dosu MCP to ${provider.name()} (${scope})...`);
 
-      provider.install(cfg, global);
+      provider.install(cfg, global, { showSecret: opts.showSecret });
 
       console.log(`\n✓ Successfully added Dosu MCP to ${provider.name()}!`);
       if (global) {
