@@ -39,7 +39,8 @@ function readBody(opts: { body?: string; bodyFile?: string }): string | undefine
 
 const IMPORT_ALREADY_IN_PROGRESS = "import operation is already in progress";
 
-function parseImportError(message: string): { userMessage: string; isConcurrentImport: boolean } {
+/** Raw API/trpc error string → user-visible detail (uses JSON `detail` when present). */
+function extractImportErrorDetail(message: string): string {
   let text = message;
   try {
     const parsed = JSON.parse(message) as { detail?: unknown };
@@ -50,18 +51,7 @@ function parseImportError(message: string): { userMessage: string; isConcurrentI
     // Not JSON, use message as-is
   }
 
-  if (text.includes(IMPORT_ALREADY_IN_PROGRESS)) {
-    return {
-      userMessage:
-        "An import is already in progress for this organization. Wait for it to complete or check status with: dosu docs import-status <task-id>",
-      isConcurrentImport: true,
-    };
-  }
-
-  return {
-    userMessage: text || "Import failed. Please try again.",
-    isConcurrentImport: false,
-  };
+  return text || "Import failed. Please try again.";
 }
 
 async function backendPost(
@@ -422,16 +412,20 @@ export function docsCommand(): Command {
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.warn("docs-import", `Import failed: ${msg}`);
-        const { userMessage, isConcurrentImport } = parseImportError(msg);
+        const detail = extractImportErrorDetail(msg);
+        const isConcurrentImport = detail.includes(IMPORT_ALREADY_IN_PROGRESS);
 
         if (opts.json) {
-          console.error(JSON.stringify({ error: userMessage }));
+          const error = isConcurrentImport
+            ? "An import is already in progress for this organization. Wait for it to complete or check status with: dosu docs import-status <task-id>"
+            : detail;
+          console.error(JSON.stringify({ error }));
         } else if (isConcurrentImport) {
           p.log.error("An import is already in progress for this organization.");
           p.log.info(`Check status with: ${pc.cyan("dosu docs import-status <task-id>")}`);
           p.log.info("Only one import can run per organization at a time.");
         } else {
-          p.log.error(userMessage);
+          p.log.error(detail);
         }
         process.exit(1);
       }
