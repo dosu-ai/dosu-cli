@@ -38,12 +38,18 @@ function readBody(opts: { body?: string; bodyFile?: string }): string | undefine
   return opts.body;
 }
 
-/** Discriminator in tRPC `error.data` or JSON error body (`code` / `dosuCode`). */
+/** Discriminator in tRPC `error.data`, flat JSON body, or nested FastAPI `detail` object. */
 const IMPORT_ALREADY_IN_PROGRESS_CODE = "IMPORT_ALREADY_IN_PROGRESS";
 
-/** Legacy API copy before structured codes were guaranteed. */
+/** Fallback when API returns only human `detail` (no structured `code` yet). */
 const IMPORT_ALREADY_IN_PROGRESS_LEGACY_DETAIL_PHRASE = "import operation is already in progress";
 
+/**
+ * Parse `Error.message` when it looks like JSON (tRPC / HTTP error bodies).
+ * Supports:
+ * - `{"detail":"…","code":"…"}` (flat)
+ * - `{"detail":{"detail":"…","code":"…"}}` (FastAPI `HTTPException(detail={...})` → JSON)
+ */
 function parseSerializedImportError(message: string): { detail: string; appCode?: string } {
   let text = message;
   let appCode: string | undefined;
@@ -53,12 +59,25 @@ function parseSerializedImportError(message: string): { detail: string; appCode?
       code?: unknown;
       dosuCode?: unknown;
     };
+
+    let codeCandidate: unknown;
+
     if (typeof parsed?.detail === "string") {
       text = parsed.detail;
+      codeCandidate = parsed.code ?? parsed.dosuCode;
+    } else if (parsed?.detail !== null && typeof parsed.detail === "object") {
+      const inner = parsed.detail as Record<string, unknown>;
+      if (typeof inner.detail === "string") {
+        text = inner.detail;
+      } else if (typeof inner.message === "string") {
+        text = inner.message;
+      }
+      codeCandidate = inner.code ?? inner.dosuCode ?? parsed.code ?? parsed.dosuCode;
+    } else {
+      codeCandidate = parsed.code ?? parsed.dosuCode;
     }
-    let candidate: unknown = parsed.code;
-    if (typeof candidate !== "string") candidate = parsed.dosuCode;
-    if (typeof candidate === "string" && candidate === IMPORT_ALREADY_IN_PROGRESS_CODE) {
+
+    if (typeof codeCandidate === "string" && codeCandidate === IMPORT_ALREADY_IN_PROGRESS_CODE) {
       appCode = IMPORT_ALREADY_IN_PROGRESS_CODE;
     }
   } catch {

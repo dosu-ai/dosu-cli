@@ -737,6 +737,42 @@ describe("docs import", () => {
     );
   });
 
+  it("shows concurrent-import guidance for nested FastAPI detail + code body", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error(
+        JSON.stringify({
+          detail: {
+            detail: "An import operation is already in progress",
+            code: "IMPORT_ALREADY_IN_PROGRESS",
+          },
+        }),
+      ),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+  });
+
+  it("detects concurrent import from nested detail code without legacy phrase in inner text", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error(
+        JSON.stringify({
+          detail: {
+            detail: "Please try again later.",
+            code: "IMPORT_ALREADY_IN_PROGRESS",
+          },
+        }),
+      ),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+  });
+
   it("accepts concurrent flag from dosuCode in error JSON", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockMutate.mockRejectedValueOnce(
