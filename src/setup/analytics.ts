@@ -1,15 +1,29 @@
 import { createTRPCClient, httpLink } from "@trpc/client";
-import type { inferRouterInputs } from "@trpc/server";
 import superjson from "superjson";
-import { type AppRouter, createTypedClient, type TypedClient } from "../client/trpc";
+import { type AppRouter, createTypedClient } from "../client/trpc";
 import type { Config } from "../config/config";
 import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
 import { VERSION } from "../version/version";
 
-type UserRouterInputs = inferRouterInputs<AppRouter>["user"];
-type CliOnboardingEvent = UserRouterInputs["trackCliOnboardingEvent"]["event"];
-type CliOnboardingPreAuthEvent = UserRouterInputs["trackCliOnboardingPreAuthEvent"]["event"];
+type CliOnboardingEvent =
+  | "cli_onboarding_auth_completed"
+  | "cli_onboarding_started"
+  | "cli_onboarding_failed"
+  | "cli_onboarding_cancelled"
+  | "cli_onboarding_options_selected"
+  | "cli_onboarding_mcp_configured"
+  | "cli_onboarding_skill_installed"
+  | "cli_onboarding_github_connected"
+  | "cli_onboarding_docs_imported"
+  | "cli_onboarding_activated"
+  | "cli_onboarding_completed";
+
+type CliOnboardingPreAuthEvent =
+  | "cli_onboarding_launch_attempted"
+  | "cli_onboarding_auth_cancelled"
+  | "cli_onboarding_auth_started"
+  | "cli_onboarding_auth_failed";
 
 type CliOnboardingProperties = Record<
   string,
@@ -17,6 +31,24 @@ type CliOnboardingProperties = Record<
 >;
 
 const TRACKING_TIMEOUT_MS = 1_500;
+
+interface CliOnboardingAnalyticsClient {
+  user: {
+    trackCliOnboardingEvent: {
+      mutate(input: {
+        event: CliOnboardingEvent;
+        properties: CliOnboardingProperties;
+      }): Promise<unknown>;
+    };
+    trackCliOnboardingPreAuthEvent: {
+      mutate(input: {
+        event: CliOnboardingPreAuthEvent;
+        onboarding_run_id: string;
+        properties: CliOnboardingProperties;
+      }): Promise<unknown>;
+    };
+  };
+}
 
 export async function trackCliOnboardingEvent(
   cfg: Config,
@@ -27,7 +59,7 @@ export async function trackCliOnboardingEvent(
   if (!cfg.access_token) return;
 
   try {
-    const trpc = createTypedClient(cfg);
+    const trpc: CliOnboardingAnalyticsClient = createTypedClient(cfg);
     await withTimeout(
       trpc.user.trackCliOnboardingEvent.mutate({
         event,
@@ -81,7 +113,7 @@ function baseProperties(cfg: Config): CliOnboardingProperties {
   };
 }
 
-function createAnonymousClient(): TypedClient {
+function createAnonymousClient(): CliOnboardingAnalyticsClient {
   const webAppURL = getWebAppURL();
   if (!webAppURL) {
     throw new Error("Web app URL not configured");
@@ -93,7 +125,7 @@ function createAnonymousClient(): TypedClient {
         transformer: superjson,
       }),
     ],
-  });
+  }) as unknown as CliOnboardingAnalyticsClient;
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
