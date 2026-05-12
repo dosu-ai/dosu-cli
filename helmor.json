@@ -1,0 +1,8 @@
+{
+  "scripts": {
+    "setup": "$HELMOR_ROOT_PATH/conductor-setup.sh",
+    "run": "$HELMOR_WORKSPACE_PATH/conductor-run.sh",
+    "archive": ""
+  },
+  "runScriptMode": "nonconcurrent"
+}
