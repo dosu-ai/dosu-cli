@@ -1,5 +1,17 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+const { mockClackLogError, mockClackLogInfo } = vi.hoisted(() => ({
+  mockClackLogError: vi.fn(),
+  mockClackLogInfo: vi.fn(),
+}));
+
+vi.mock("@clack/prompts", () => ({
+  log: {
+    error: mockClackLogError,
+    info: mockClackLogInfo,
+  },
+}));
+
 const mockQuery = vi.fn();
 const mockMutate = vi.fn();
 
@@ -29,6 +41,7 @@ vi.mock("../debug/logger", () => ({
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
+import { logger } from "../debug/logger";
 import { docsCommand } from "./docs";
 
 let logSpy: ReturnType<typeof vi.spyOn>;
@@ -82,6 +95,8 @@ beforeEach(() => {
   mockMutate.mockReset();
   mockLoadConfig.mockReset();
   mockFetch.mockReset();
+  mockClackLogError.mockReset();
+  mockClackLogInfo.mockReset();
   mockQuery.mockResolvedValueOnce({ id: "ks1" }); // knowledgeStore.getBySpaceId
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -575,6 +590,49 @@ describe("docs import", () => {
     mockMutate.mockResolvedValueOnce({});
     await run("import", "github", "--files", "f1");
     expect(allOutput()).toContain("Import started");
+  });
+
+  it("logs import failure and shows JSON detail as a clean message", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(new Error('{"detail":"Something went wrong"}'));
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(vi.mocked(logger.error)).toHaveBeenCalledWith(
+      "docs-import",
+      expect.stringContaining("Something went wrong"),
+    );
+    expect(mockClackLogError).toHaveBeenCalledWith("Something went wrong");
+    expect(mockClackLogInfo).not.toHaveBeenCalled();
+  });
+
+  it("shows concurrent-import guidance when import is already in progress", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error('{"detail":"An import operation is already in progress"}'),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+    expect(mockClackLogInfo).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining("dosu docs import-status <task-id>"),
+    );
+    expect(mockClackLogInfo).toHaveBeenNthCalledWith(
+      2,
+      "Only one import can run per organization at a time.",
+    );
+  });
+
+  it("outputs JSON error with parsed message when import fails with --json", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error('{"detail":"An import operation is already in progress"}'),
+    );
+    await expect(run("import", "--json", "github", "--files", "f1")).rejects.toThrow("exit");
+    const errLine = errorSpy.mock.calls.map((c) => c[0]).join("\n");
+    const parsed = JSON.parse(errLine) as { error: string };
+    expect(parsed.error).toContain("dosu docs import-status");
+    expect(mockClackLogError).not.toHaveBeenCalled();
   });
 });
 

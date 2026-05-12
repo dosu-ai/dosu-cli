@@ -3,6 +3,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import * as p from "@clack/prompts";
 import { Command } from "commander";
 import pc from "picocolors";
 import { createTypedClient, type TypedClient } from "../client/trpc";
@@ -34,6 +35,24 @@ async function getKnowledgeStoreId(client: TypedClient, spaceId: string): Promis
 function readBody(opts: { body?: string; bodyFile?: string }): string | undefined {
   if (opts.bodyFile) return readFileSync(opts.bodyFile, "utf-8");
   return opts.body;
+}
+
+function parseImportError(message: string): string {
+  let text = message;
+  try {
+    const parsed = JSON.parse(message) as { detail?: unknown };
+    if (typeof parsed?.detail === "string") {
+      text = parsed.detail;
+    }
+  } catch {
+    // Not JSON, use message as-is
+  }
+
+  if (text.includes("import operation is already in progress")) {
+    return "An import is already in progress for this organization. Wait for it to complete or check status with: dosu docs import-status <task-id>";
+  }
+
+  return text || "Import failed. Please try again.";
 }
 
 async function backendPost(
@@ -376,20 +395,38 @@ export function docsCommand(): Command {
         ? "page_ids"
         : "file_ids";
 
-      const result = await fn({
-        knowledge_store_id: ksId,
-        // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-        space_id: cfg.space_id!,
-        [idField]: fileIds,
-      });
+      try {
+        const result = await fn({
+          knowledge_store_id: ksId,
+          // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
+          space_id: cfg.space_id!,
+          [idField]: fileIds,
+        });
 
-      if (opts.json) {
-        printResult(result, opts);
-        return;
+        if (opts.json) {
+          printResult(result, opts);
+          return;
+        }
+        console.log(
+          pc.green(`Import started.${result.task_id ? ` Task ID: ${result.task_id}` : ""}`),
+        );
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error("docs-import", `Import failed: ${msg}`);
+        const userMessage = parseImportError(msg);
+        const isConcurrentImport = msg.includes("already in progress");
+
+        if (opts.json) {
+          console.error(JSON.stringify({ error: userMessage }));
+        } else if (isConcurrentImport) {
+          p.log.error("An import is already in progress for this organization.");
+          p.log.info(`Check status with: ${pc.cyan("dosu docs import-status <task-id>")}`);
+          p.log.info("Only one import can run per organization at a time.");
+        } else {
+          p.log.error(userMessage);
+        }
+        process.exit(1);
       }
-      console.log(
-        pc.green(`Import started.${result.task_id ? ` Task ID: ${result.task_id}` : ""}`),
-      );
     });
 
   // ── import-status ──
