@@ -412,7 +412,7 @@ export function docsCommand(): Command {
         );
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        logger.error("docs-import", `Import failed: ${msg}`);
+        logger.warn("docs-import", `Import failed: ${msg}`);
         const userMessage = parseImportError(msg);
         const isConcurrentImport = msg.includes("already in progress");
 

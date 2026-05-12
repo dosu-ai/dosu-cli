@@ -596,7 +596,7 @@ describe("docs import", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockMutate.mockRejectedValueOnce(new Error('{"detail":"Something went wrong"}'));
     await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
-    expect(vi.mocked(logger.error)).toHaveBeenCalledWith(
+    expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
       "docs-import",
       expect.stringContaining("Something went wrong"),
     );
