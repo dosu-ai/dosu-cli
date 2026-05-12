@@ -1,3 +1,10 @@
+## [0.13.3](https://github.com/dosu-ai/dosu-cli/compare/v0.13.2...v0.13.3) (2026-05-12)
+
+
+### Bug Fixes
+
+* harden CLI secret handling ([#62](https://github.com/dosu-ai/dosu-cli/issues/62)) ([26cf8e2](https://github.com/dosu-ai/dosu-cli/commit/26cf8e27fd434795696ebdde499dcb048cf866bd))
+
 ## [0.13.2](https://github.com/dosu-ai/dosu-cli/compare/v0.13.1...v0.13.2) (2026-05-12)
 
 
