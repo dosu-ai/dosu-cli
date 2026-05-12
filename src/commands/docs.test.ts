@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { TRPCClientError } from "@trpc/client";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { mockClackLogError, mockClackLogInfo } = vi.hoisted(() => ({
@@ -718,6 +719,87 @@ describe("docs import", () => {
       2,
       "Only one import can run per organization at a time.",
     );
+  });
+
+  it("shows concurrent-import guidance when error JSON uses IMPORT_ALREADY_IN_PROGRESS code", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error(
+        JSON.stringify({
+          code: "IMPORT_ALREADY_IN_PROGRESS",
+          detail: "Try again later.",
+        }),
+      ),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+  });
+
+  it("accepts concurrent flag from dosuCode in error JSON", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error(
+        JSON.stringify({
+          dosuCode: "IMPORT_ALREADY_IN_PROGRESS",
+          detail: "Busy.",
+        }),
+      ),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+  });
+
+  it("shows concurrent-import guidance from TRPCClientError data", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      TRPCClientError.from({
+        error: {
+          message: "Conflict",
+          code: -32603,
+          data: {
+            code: "IMPORT_ALREADY_IN_PROGRESS",
+            httpStatus: 409,
+            zodError: null,
+          },
+        },
+      }),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+  });
+
+  it("does not treat unrelated TRPCClientError data code as concurrent", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      TRPCClientError.from({
+        error: {
+          message: "Nope",
+          code: -32600,
+          data: {
+            code: "BAD_REQUEST",
+            httpStatus: 400,
+            zodError: null,
+          },
+        },
+      }),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith("Nope");
+  });
+
+  it("does not treat unrelated JSON code as concurrent", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error(JSON.stringify({ code: "OTHER", detail: "failed" })),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith("failed");
   });
 
   it("does not treat concurrent import when only non-detail JSON fields mention in progress", async () => {

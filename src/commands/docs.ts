@@ -4,6 +4,7 @@
 
 import { readFileSync } from "node:fs";
 import * as p from "@clack/prompts";
+import { isTRPCClientError } from "@trpc/client";
 import { Command } from "commander";
 import pc from "picocolors";
 import { createTypedClient, type TypedClient } from "../client/trpc";
@@ -37,21 +38,61 @@ function readBody(opts: { body?: string; bodyFile?: string }): string | undefine
   return opts.body;
 }
 
-const IMPORT_ALREADY_IN_PROGRESS = "import operation is already in progress";
+/** Discriminator in tRPC `error.data` or JSON error body (`code` / `dosuCode`). */
+const IMPORT_ALREADY_IN_PROGRESS_CODE = "IMPORT_ALREADY_IN_PROGRESS";
 
-/** Raw API/trpc error string → user-visible detail (uses JSON `detail` when present). */
-function extractImportErrorDetail(message: string): string {
+/** Legacy API copy before structured codes were guaranteed. */
+const IMPORT_ALREADY_IN_PROGRESS_LEGACY_DETAIL_PHRASE = "import operation is already in progress";
+
+function parseSerializedImportError(message: string): { detail: string; appCode?: string } {
   let text = message;
+  let appCode: string | undefined;
   try {
-    const parsed = JSON.parse(message) as { detail?: unknown };
+    const parsed = JSON.parse(message) as {
+      detail?: unknown;
+      code?: unknown;
+      dosuCode?: unknown;
+    };
     if (typeof parsed?.detail === "string") {
       text = parsed.detail;
+    }
+    let candidate: unknown = parsed.code;
+    if (typeof candidate !== "string") candidate = parsed.dosuCode;
+    if (typeof candidate === "string" && candidate === IMPORT_ALREADY_IN_PROGRESS_CODE) {
+      appCode = IMPORT_ALREADY_IN_PROGRESS_CODE;
     }
   } catch {
     // Not JSON, use message as-is
   }
 
-  return text || "Import failed. Please try again.";
+  return {
+    detail: text || "Import failed. Please try again.",
+    appCode,
+  };
+}
+
+function trpcImportConflictAppCode(err: unknown): string | undefined {
+  if (!isTRPCClientError(err)) return undefined;
+  const { data } = err;
+  if (data === null || typeof data !== "object") return undefined;
+  const d = data as Record<string, unknown>;
+  let candidate: unknown = d.code;
+  if (typeof candidate !== "string") candidate = d.dosuCode;
+  if (typeof candidate !== "string") return undefined;
+  return candidate === IMPORT_ALREADY_IN_PROGRESS_CODE
+    ? IMPORT_ALREADY_IN_PROGRESS_CODE
+    : undefined;
+}
+
+function isConcurrentImportError(err: unknown, msg: string): boolean {
+  if (trpcImportConflictAppCode(err) === IMPORT_ALREADY_IN_PROGRESS_CODE) {
+    return true;
+  }
+  const { detail, appCode } = parseSerializedImportError(msg);
+  if (appCode === IMPORT_ALREADY_IN_PROGRESS_CODE) {
+    return true;
+  }
+  return detail.includes(IMPORT_ALREADY_IN_PROGRESS_LEGACY_DETAIL_PHRASE);
 }
 
 async function backendPost(
@@ -412,8 +453,8 @@ export function docsCommand(): Command {
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.warn("docs-import", `Import failed: ${msg}`);
-        const detail = extractImportErrorDetail(msg);
-        const isConcurrentImport = detail.includes(IMPORT_ALREADY_IN_PROGRESS);
+        const { detail } = parseSerializedImportError(msg);
+        const isConcurrentImport = isConcurrentImportError(err, msg);
 
         if (opts.json) {
           const error = isConcurrentImport
