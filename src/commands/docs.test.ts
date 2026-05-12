@@ -773,6 +773,151 @@ describe("docs import", () => {
     );
   });
 
+  it("reads nested detail message from message field when detail string is absent", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error(
+        JSON.stringify({
+          detail: {
+            message: "No import slot",
+            code: "IMPORT_ALREADY_IN_PROGRESS",
+          },
+        }),
+      ),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+  });
+
+  it("detects concurrent import code at top level when detail is null", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error(
+        JSON.stringify({
+          detail: null,
+          code: "IMPORT_ALREADY_IN_PROGRESS",
+        }),
+      ),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+  });
+
+  it("detects concurrent import when only top-level code is present", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error(JSON.stringify({ code: "IMPORT_ALREADY_IN_PROGRESS" })),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+  });
+
+  it("detects concurrent import when only top-level dosuCode is present", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error(JSON.stringify({ dosuCode: "IMPORT_ALREADY_IN_PROGRESS" })),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+  });
+
+  it("detects concurrent import when detail is non-string non-object and code is top-level", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error(
+        JSON.stringify({
+          detail: 409,
+          code: "IMPORT_ALREADY_IN_PROGRESS",
+        }),
+      ),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+  });
+
+  it("detects concurrent import from nested dosuCode when inner code is absent", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error(
+        JSON.stringify({
+          detail: {
+            detail: "Please wait",
+            dosuCode: "IMPORT_ALREADY_IN_PROGRESS",
+          },
+        }),
+      ),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+  });
+
+  it("detects concurrent import from top-level dosuCode when nested inner has no code", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error(
+        JSON.stringify({
+          detail: { detail: "Please wait" },
+          dosuCode: "IMPORT_ALREADY_IN_PROGRESS",
+        }),
+      ),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+  });
+
+  it("shows concurrent-import guidance from TRPCClientError dosuCode in data", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      TRPCClientError.from({
+        error: {
+          message: "Conflict",
+          code: -32603,
+          data: {
+            dosuCode: "IMPORT_ALREADY_IN_PROGRESS",
+            httpStatus: 409,
+            zodError: null,
+          },
+        },
+      }),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+  });
+
+  it("does not treat TRPCClientError with null data as concurrent", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new TRPCClientError("Something failed", {
+        result: {
+          error: {
+            message: "Something failed",
+            code: -32603,
+            data: null,
+          },
+        },
+        // biome-ignore lint/suspicious/noExplicitAny: minimal TRPC error envelope for coverage
+      } as any),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith("Something failed");
+  });
+
   it("accepts concurrent flag from dosuCode in error JSON", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockMutate.mockRejectedValueOnce(
@@ -827,6 +972,24 @@ describe("docs import", () => {
     );
     await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
     expect(mockClackLogError).toHaveBeenCalledWith("Nope");
+  });
+
+  it("does not treat TRPCClientError when data code is not a string", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new TRPCClientError("Bad", {
+        result: {
+          error: {
+            message: "Bad",
+            code: -32600,
+            data: { code: 123, httpStatus: 400, zodError: null },
+          },
+        },
+        // biome-ignore lint/suspicious/noExplicitAny: minimal TRPC error envelope for coverage
+      } as any),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith("Bad");
   });
 
   it("does not treat unrelated JSON code as concurrent", async () => {
