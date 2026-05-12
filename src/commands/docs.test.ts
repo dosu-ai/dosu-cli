@@ -623,6 +623,18 @@ describe("docs import", () => {
     );
   });
 
+  it("does not treat concurrent import when only non-detail JSON fields mention in progress", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error(
+        '{"detail":"Upstream service unavailable","request_id":"req-already-in-progress-1"}',
+      ),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith("Upstream service unavailable");
+    expect(mockClackLogInfo).not.toHaveBeenCalled();
+  });
+
   it("outputs JSON error with parsed message when import fails with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockMutate.mockRejectedValueOnce(

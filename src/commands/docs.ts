@@ -37,7 +37,9 @@ function readBody(opts: { body?: string; bodyFile?: string }): string | undefine
   return opts.body;
 }
 
-function parseImportError(message: string): string {
+const IMPORT_ALREADY_IN_PROGRESS = "import operation is already in progress";
+
+function parseImportError(message: string): { userMessage: string; isConcurrentImport: boolean } {
   let text = message;
   try {
     const parsed = JSON.parse(message) as { detail?: unknown };
@@ -48,11 +50,18 @@ function parseImportError(message: string): string {
     // Not JSON, use message as-is
   }
 
-  if (text.includes("import operation is already in progress")) {
-    return "An import is already in progress for this organization. Wait for it to complete or check status with: dosu docs import-status <task-id>";
+  if (text.includes(IMPORT_ALREADY_IN_PROGRESS)) {
+    return {
+      userMessage:
+        "An import is already in progress for this organization. Wait for it to complete or check status with: dosu docs import-status <task-id>",
+      isConcurrentImport: true,
+    };
   }
 
-  return text || "Import failed. Please try again.";
+  return {
+    userMessage: text || "Import failed. Please try again.",
+    isConcurrentImport: false,
+  };
 }
 
 async function backendPost(
@@ -413,8 +422,7 @@ export function docsCommand(): Command {
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.warn("docs-import", `Import failed: ${msg}`);
-        const userMessage = parseImportError(msg);
-        const isConcurrentImport = msg.includes("already in progress");
+        const { userMessage, isConcurrentImport } = parseImportError(msg);
 
         if (opts.json) {
           console.error(JSON.stringify({ error: userMessage }));
