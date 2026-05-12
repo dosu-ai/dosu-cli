@@ -481,9 +481,9 @@ describe("docs generate", () => {
     delete process.env.DOSU_BACKEND_URL_OVERRIDE;
     mockLoadConfig.mockReturnValue(validConfig);
     try {
-      await expect(
-        run("generate", "--title", "API Guide", "--instructions", "x"),
-      ).rejects.toThrow("exit");
+      await expect(run("generate", "--title", "API Guide", "--instructions", "x")).rejects.toThrow(
+        "exit",
+      );
       expect(errorSpy.mock.calls.flat().join(" ")).toContain("Backend URL not configured");
     } finally {
       if (saved.url !== undefined) {
