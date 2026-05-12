@@ -211,6 +211,14 @@ describe("docs get", () => {
     expect(output).toContain("(untitled)");
     expect(output).toContain("draft");
   });
+
+  it("prints dim message when document is not found", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockReset();
+    mockQuery.mockResolvedValueOnce(null);
+    await run("get", "missing-id");
+    expect(allOutput()).toContain("Document not found.");
+  });
 });
 
 describe("docs create", () => {
@@ -463,6 +471,33 @@ describe("docs generate", () => {
     await run("generate", "--title", "API Guide");
     expect(allOutput()).toContain("Document generation started");
   });
+
+  it("exits when backend URL is not configured", async () => {
+    const saved = {
+      url: process.env.DOSU_BACKEND_URL,
+      override: process.env.DOSU_BACKEND_URL_OVERRIDE,
+    };
+    delete process.env.DOSU_BACKEND_URL;
+    delete process.env.DOSU_BACKEND_URL_OVERRIDE;
+    mockLoadConfig.mockReturnValue(validConfig);
+    try {
+      await expect(
+        run("generate", "--title", "API Guide", "--instructions", "x"),
+      ).rejects.toThrow("exit");
+      expect(errorSpy.mock.calls.flat().join(" ")).toContain("Backend URL not configured");
+    } finally {
+      if (saved.url !== undefined) {
+        process.env.DOSU_BACKEND_URL = saved.url;
+      } else {
+        delete process.env.DOSU_BACKEND_URL;
+      }
+      if (saved.override !== undefined) {
+        process.env.DOSU_BACKEND_URL_OVERRIDE = saved.override;
+      } else {
+        delete process.env.DOSU_BACKEND_URL_OVERRIDE;
+      }
+    }
+  });
 });
 
 describe("docs auto-tag", () => {
@@ -604,6 +639,13 @@ describe("docs import", () => {
     expect(mockClackLogInfo).not.toHaveBeenCalled();
   });
 
+  it("shows plain error message when import fails with non-JSON error", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(new Error("Network failure"));
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith("Network failure");
+  });
+
   it("shows concurrent-import guidance when import is already in progress", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockMutate.mockRejectedValueOnce(
@@ -644,6 +686,16 @@ describe("docs import", () => {
     const errLine = errorSpy.mock.calls.map((c) => c[0]).join("\n");
     const parsed = JSON.parse(errLine) as { error: string };
     expect(parsed.error).toContain("dosu docs import-status");
+    expect(mockClackLogError).not.toHaveBeenCalled();
+  });
+
+  it("outputs JSON error with detail when import fails with --json (non-concurrent)", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(new Error('{"detail":"Something went wrong"}'));
+    await expect(run("import", "--json", "github", "--files", "f1")).rejects.toThrow("exit");
+    const errLine = errorSpy.mock.calls.map((c) => c[0]).join("\n");
+    const parsed = JSON.parse(errLine) as { error: string };
+    expect(parsed.error).toBe("Something went wrong");
     expect(mockClackLogError).not.toHaveBeenCalled();
   });
 });
