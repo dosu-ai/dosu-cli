@@ -6,7 +6,7 @@
  */
 
 import type { AppRouter } from "@dosu/api-types";
-import { createTRPCClient, httpLink } from "@trpc/client";
+import { createTRPCClient, httpLink, type TRPCClient } from "@trpc/client";
 import superjson from "superjson";
 import { type Config, isTokenExpired } from "../config/config";
 import { getWebAppURL } from "../config/constants";
@@ -15,8 +15,8 @@ import { Client } from "./client";
 
 export type { AppRouter };
 
-/** Return type of createTypedClient — use this to type function parameters. */
-export type TypedClient = ReturnType<typeof createTypedClient>;
+/** Full app tRPC client — use this to type function parameters. */
+export type TypedClient = TRPCClient<AppRouter>;
 
 /**
  * Create a type-safe tRPC client with full AppRouter type inference.
@@ -32,7 +32,7 @@ export type TypedClient = ReturnType<typeof createTypedClient>;
  * const result = await client.page.create.mutate({ title: "...", body: "..." });
  * ```
  */
-export function createTypedClient(config: Config) {
+export function createTypedClient<TClient extends object = TypedClient>(config: Config): TClient {
   const webAppURL = getWebAppURL();
   if (!webAppURL) {
     throw new Error("Web app URL not configured");
@@ -82,5 +82,5 @@ export function createTypedClient(config: Config) {
         },
       }),
     ],
-  });
+  }) as TClient;
 }

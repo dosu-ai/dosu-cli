@@ -272,7 +272,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     const profileUserID = cloudSetupContext.profileUserID;
     try {
       const { createTypedClient } = await import("../client/trpc");
-      const trpc = createTypedClient(cfg) as unknown as CliOnboardingClient;
+      const trpc: CliOnboardingClient = createTypedClient(cfg);
       await trpc.user.updateProfile.mutate({
         user_id: profileUserID,
         finished_onboarding: true,
@@ -525,7 +525,7 @@ async function openBrowserForSetup(cfg: Config, onboardingRunID?: string): Promi
 async function resolveCloudSetupContext(cfg: Config): Promise<CloudSetupContext | null> {
   try {
     const { createTypedClient } = await import("../client/trpc");
-    const trpc = createTypedClient(cfg) as unknown as CliOnboardingClient;
+    const trpc: CliOnboardingClient = createTypedClient(cfg);
     const profile = await trpc.user.getCliOnboardingContext.query();
 
     if (!profile?.user_id) {

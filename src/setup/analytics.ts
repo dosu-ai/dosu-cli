@@ -1,6 +1,6 @@
 import { createTRPCClient, httpLink } from "@trpc/client";
 import superjson from "superjson";
-import { type AppRouter, createTypedClient, type TypedClient } from "../client/trpc";
+import { type AppRouter, createTypedClient } from "../client/trpc";
 import type { Config } from "../config/config";
 import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
@@ -59,7 +59,7 @@ export async function trackCliOnboardingEvent(
   if (!cfg.access_token) return;
 
   try {
-    const trpc = createTypedClient(cfg) as unknown as CliOnboardingAnalyticsClient;
+    const trpc: CliOnboardingAnalyticsClient = createTypedClient(cfg);
     await withTimeout(
       trpc.user.trackCliOnboardingEvent.mutate({
         event,
@@ -83,7 +83,7 @@ export async function trackCliOnboardingPreAuthEvent(
   properties: CliOnboardingProperties = {},
 ): Promise<void> {
   try {
-    const trpc = createAnonymousAnalyticsClient();
+    const trpc = createAnonymousClient();
     await withTimeout(
       trpc.user.trackCliOnboardingPreAuthEvent.mutate({
         event,
@@ -113,7 +113,7 @@ function baseProperties(cfg: Config): CliOnboardingProperties {
   };
 }
 
-function createAnonymousClient(): TypedClient {
+function createAnonymousClient(): CliOnboardingAnalyticsClient {
   const webAppURL = getWebAppURL();
   if (!webAppURL) {
     throw new Error("Web app URL not configured");
@@ -125,11 +125,7 @@ function createAnonymousClient(): TypedClient {
         transformer: superjson,
       }),
     ],
-  });
-}
-
-function createAnonymousAnalyticsClient(): CliOnboardingAnalyticsClient {
-  return createAnonymousClient() as unknown as CliOnboardingAnalyticsClient;
+  }) as unknown as CliOnboardingAnalyticsClient;
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {

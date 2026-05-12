@@ -536,7 +536,7 @@ export async function stepConnectGitHubRepo(
     p.log.info(`Connecting GitHub repos (detected local repo: ${detected.slug})`);
   }
 
-  const trpc = createTypedClient(cfg) as unknown as GitHubSetupClient;
+  const trpc: GitHubSetupClient = createTypedClient(cfg);
   let repos = await fetchListForOrg(trpc, orgID);
 
   while (true) {
