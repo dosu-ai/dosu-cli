@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { mockClackLogError, mockClackLogInfo } = vi.hoisted(() => ({
@@ -161,6 +164,15 @@ describe("docs list", () => {
     expect(output).toContain("published");
     expect(output).toContain("draft");
   });
+
+  it("shows untitled in list when title is missing", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce({
+      data: [{ id: "p1", published: true }],
+    });
+    await run("list");
+    expect(allOutput()).toContain("(untitled)");
+  });
 });
 
 describe("docs get", () => {
@@ -172,6 +184,17 @@ describe("docs get", () => {
     expect(mockQuery).toHaveBeenCalledWith("page.get", {
       page_id: "p1",
       version: undefined,
+    });
+  });
+
+  it("passes --version to page.get when provided", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockReset();
+    mockQuery.mockResolvedValueOnce({ id: "p1", title: "V2" });
+    await run("get", "p1", "--version", "2");
+    expect(mockQuery).toHaveBeenCalledWith("page.get", {
+      page_id: "p1",
+      version: 2,
     });
   });
 
@@ -233,6 +256,24 @@ describe("docs create", () => {
       title: "New Doc",
       body: "# Hello World",
     });
+  });
+
+  it("reads body from --body-file for create", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockResolvedValueOnce({ id: "new-p1" });
+    const dir = mkdtempSync(join(tmpdir(), "dosu-docs-test-"));
+    const file = join(dir, "body.md");
+    try {
+      writeFileSync(file, "# From file\n", "utf-8");
+      await run("create", "--title", "From file", "--body-file", file);
+      expect(mockMutate).toHaveBeenCalledWith("page.create", {
+        knowledge_store_id: "ks1",
+        title: "From file",
+        body: "# From file\n",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("outputs JSON with --json", async () => {
@@ -646,6 +687,20 @@ describe("docs import", () => {
     expect(mockClackLogError).toHaveBeenCalledWith("Network failure");
   });
 
+  it("handles non-Error rejection when import fails", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce("not an Error instance");
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith("not an Error instance");
+  });
+
+  it("uses fallback message when import error detail is empty", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(new Error('{"detail":""}'));
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith("Import failed. Please try again.");
+  });
+
   it("shows concurrent-import guidance when import is already in progress", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockMutate.mockRejectedValueOnce(
@@ -798,6 +853,17 @@ describe("docs publish", () => {
     expect(body.target_directory).toBe("docs/");
   });
 
+  it("defaults gitlab publish directory to / when omitted", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockFetch.mockResolvedValueOnce(jsonResponse({ status: "ok" }));
+    mockQuery.mockReset();
+
+    await run("publish", "p1", "--to", "gitlab", "--project-id", "42");
+
+    const [, opts] = mockFetch.mock.calls[0];
+    expect(JSON.parse(opts.body).target_directory).toBe("/");
+  });
+
   it("publishes to notion via Python backend", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockFetch.mockResolvedValueOnce(jsonResponse({ status: "ok" }));
@@ -916,6 +982,17 @@ describe("backendPost", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockFetch.mockResolvedValueOnce(jsonResponse({}, 500));
     await expect(run("generate", "--title", "T")).rejects.toThrow("Request failed with status 500");
+  });
+
+  it("throws status message when failed response body is not JSON", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockFetch.mockResolvedValueOnce(
+      new Response("upstream error", {
+        status: 502,
+        headers: { "Content-Type": "text/plain" },
+      }),
+    );
+    await expect(run("generate", "--title", "T")).rejects.toThrow("Request failed with status 502");
   });
 });
 
