@@ -3,6 +3,8 @@
  */
 
 import { readFileSync } from "node:fs";
+import * as p from "@clack/prompts";
+import { isTRPCClientError } from "@trpc/client";
 import { Command } from "commander";
 import pc from "picocolors";
 import { createTypedClient, type TypedClient } from "../client/trpc";
@@ -34,6 +36,82 @@ async function getKnowledgeStoreId(client: TypedClient, spaceId: string): Promis
 function readBody(opts: { body?: string; bodyFile?: string }): string | undefined {
   if (opts.bodyFile) return readFileSync(opts.bodyFile, "utf-8");
   return opts.body;
+}
+
+/** Discriminator in tRPC `error.data`, flat JSON body, or nested FastAPI `detail` object. */
+const IMPORT_ALREADY_IN_PROGRESS_CODE = "IMPORT_ALREADY_IN_PROGRESS";
+
+/** Fallback when API returns only human `detail` (no structured `code` yet). */
+const IMPORT_ALREADY_IN_PROGRESS_LEGACY_DETAIL_PHRASE = "import operation is already in progress";
+
+/**
+ * Parse `Error.message` when it looks like JSON (tRPC / HTTP error bodies).
+ * Supports:
+ * - `{"detail":"…","code":"…"}` (flat)
+ * - `{"detail":{"detail":"…","code":"…"}}` (FastAPI `HTTPException(detail={...})` → JSON)
+ */
+function parseSerializedImportError(message: string): { detail: string; appCode?: string } {
+  let text = message;
+  let appCode: string | undefined;
+  try {
+    const parsed = JSON.parse(message) as {
+      detail?: unknown;
+      code?: unknown;
+      dosuCode?: unknown;
+    };
+
+    let codeCandidate: unknown;
+
+    if (typeof parsed?.detail === "string") {
+      text = parsed.detail;
+      codeCandidate = parsed.code ?? parsed.dosuCode;
+    } else if (parsed?.detail !== null && typeof parsed.detail === "object") {
+      const inner = parsed.detail as Record<string, unknown>;
+      if (typeof inner.detail === "string") {
+        text = inner.detail;
+      } else if (typeof inner.message === "string") {
+        text = inner.message;
+      }
+      codeCandidate = inner.code ?? inner.dosuCode ?? parsed.code ?? parsed.dosuCode;
+    } else {
+      codeCandidate = parsed.code ?? parsed.dosuCode;
+    }
+
+    if (typeof codeCandidate === "string" && codeCandidate === IMPORT_ALREADY_IN_PROGRESS_CODE) {
+      appCode = IMPORT_ALREADY_IN_PROGRESS_CODE;
+    }
+  } catch {
+    // Not JSON, use message as-is
+  }
+
+  return {
+    detail: text || "Import failed. Please try again.",
+    appCode,
+  };
+}
+
+function trpcImportConflictAppCode(err: unknown): string | undefined {
+  if (!isTRPCClientError(err)) return undefined;
+  const { data } = err;
+  if (data === null || typeof data !== "object") return undefined;
+  const d = data as Record<string, unknown>;
+  let candidate: unknown = d.code;
+  if (typeof candidate !== "string") candidate = d.dosuCode;
+  if (typeof candidate !== "string") return undefined;
+  return candidate === IMPORT_ALREADY_IN_PROGRESS_CODE
+    ? IMPORT_ALREADY_IN_PROGRESS_CODE
+    : undefined;
+}
+
+function isConcurrentImportError(err: unknown, msg: string): boolean {
+  if (trpcImportConflictAppCode(err) === IMPORT_ALREADY_IN_PROGRESS_CODE) {
+    return true;
+  }
+  const { detail, appCode } = parseSerializedImportError(msg);
+  if (appCode === IMPORT_ALREADY_IN_PROGRESS_CODE) {
+    return true;
+  }
+  return detail.includes(IMPORT_ALREADY_IN_PROGRESS_LEGACY_DETAIL_PHRASE);
 }
 
 async function backendPost(
@@ -376,20 +454,41 @@ export function docsCommand(): Command {
         ? "page_ids"
         : "file_ids";
 
-      const result = await fn({
-        knowledge_store_id: ksId,
-        // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-        space_id: cfg.space_id!,
-        [idField]: fileIds,
-      });
+      try {
+        const result = await fn({
+          knowledge_store_id: ksId,
+          // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
+          space_id: cfg.space_id!,
+          [idField]: fileIds,
+        });
 
-      if (opts.json) {
-        printResult(result, opts);
-        return;
+        if (opts.json) {
+          printResult(result, opts);
+          return;
+        }
+        console.log(
+          pc.green(`Import started.${result.task_id ? ` Task ID: ${result.task_id}` : ""}`),
+        );
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn("docs-import", `Import failed: ${msg}`);
+        const { detail } = parseSerializedImportError(msg);
+        const isConcurrentImport = isConcurrentImportError(err, msg);
+
+        if (opts.json) {
+          const error = isConcurrentImport
+            ? "An import is already in progress for this organization. Wait for it to complete or check status with: dosu docs import-status <task-id>"
+            : detail;
+          console.error(JSON.stringify({ error }));
+        } else if (isConcurrentImport) {
+          p.log.error("An import is already in progress for this organization.");
+          p.log.info(`Check status with: ${pc.cyan("dosu docs import-status <task-id>")}`);
+          p.log.info("Only one import can run per organization at a time.");
+        } else {
+          p.log.error(detail);
+        }
+        process.exit(1);
       }
-      console.log(
-        pc.green(`Import started.${result.task_id ? ` Task ID: ${result.task_id}` : ""}`),
-      );
     });
 
   // ── import-status ──

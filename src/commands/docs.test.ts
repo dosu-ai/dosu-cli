@@ -1,4 +1,20 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { TRPCClientError } from "@trpc/client";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { mockClackLogError, mockClackLogInfo } = vi.hoisted(() => ({
+  mockClackLogError: vi.fn(),
+  mockClackLogInfo: vi.fn(),
+}));
+
+vi.mock("@clack/prompts", () => ({
+  log: {
+    error: mockClackLogError,
+    info: mockClackLogInfo,
+  },
+}));
 
 const mockQuery = vi.fn();
 const mockMutate = vi.fn();
@@ -29,6 +45,7 @@ vi.mock("../debug/logger", () => ({
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
+import { logger } from "../debug/logger";
 import { docsCommand } from "./docs";
 
 let logSpy: ReturnType<typeof vi.spyOn>;
@@ -82,6 +99,8 @@ beforeEach(() => {
   mockMutate.mockReset();
   mockLoadConfig.mockReset();
   mockFetch.mockReset();
+  mockClackLogError.mockReset();
+  mockClackLogInfo.mockReset();
   mockQuery.mockResolvedValueOnce({ id: "ks1" }); // knowledgeStore.getBySpaceId
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -146,6 +165,15 @@ describe("docs list", () => {
     expect(output).toContain("published");
     expect(output).toContain("draft");
   });
+
+  it("shows untitled in list when title is missing", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce({
+      data: [{ id: "p1", published: true }],
+    });
+    await run("list");
+    expect(allOutput()).toContain("(untitled)");
+  });
 });
 
 describe("docs get", () => {
@@ -157,6 +185,17 @@ describe("docs get", () => {
     expect(mockQuery).toHaveBeenCalledWith("page.get", {
       page_id: "p1",
       version: undefined,
+    });
+  });
+
+  it("passes --version to page.get when provided", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockReset();
+    mockQuery.mockResolvedValueOnce({ id: "p1", title: "V2" });
+    await run("get", "p1", "--version", "2");
+    expect(mockQuery).toHaveBeenCalledWith("page.get", {
+      page_id: "p1",
+      version: 2,
     });
   });
 
@@ -196,6 +235,14 @@ describe("docs get", () => {
     expect(output).toContain("(untitled)");
     expect(output).toContain("draft");
   });
+
+  it("prints dim message when document is not found", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockReset();
+    mockQuery.mockResolvedValueOnce(null);
+    await run("get", "missing-id");
+    expect(allOutput()).toContain("Document not found.");
+  });
 });
 
 describe("docs create", () => {
@@ -210,6 +257,24 @@ describe("docs create", () => {
       title: "New Doc",
       body: "# Hello World",
     });
+  });
+
+  it("reads body from --body-file for create", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockResolvedValueOnce({ id: "new-p1" });
+    const dir = mkdtempSync(join(tmpdir(), "dosu-docs-test-"));
+    const file = join(dir, "body.md");
+    try {
+      writeFileSync(file, "# From file\n", "utf-8");
+      await run("create", "--title", "From file", "--body-file", file);
+      expect(mockMutate).toHaveBeenCalledWith("page.create", {
+        knowledge_store_id: "ks1",
+        title: "From file",
+        body: "# From file\n",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("outputs JSON with --json", async () => {
@@ -448,6 +513,33 @@ describe("docs generate", () => {
     await run("generate", "--title", "API Guide");
     expect(allOutput()).toContain("Document generation started");
   });
+
+  it("exits when backend URL is not configured", async () => {
+    const saved = {
+      url: process.env.DOSU_BACKEND_URL,
+      override: process.env.DOSU_BACKEND_URL_OVERRIDE,
+    };
+    delete process.env.DOSU_BACKEND_URL;
+    delete process.env.DOSU_BACKEND_URL_OVERRIDE;
+    mockLoadConfig.mockReturnValue(validConfig);
+    try {
+      await expect(run("generate", "--title", "API Guide", "--instructions", "x")).rejects.toThrow(
+        "exit",
+      );
+      expect(errorSpy.mock.calls.flat().join(" ")).toContain("Backend URL not configured");
+    } finally {
+      if (saved.url !== undefined) {
+        process.env.DOSU_BACKEND_URL = saved.url;
+      } else {
+        delete process.env.DOSU_BACKEND_URL;
+      }
+      if (saved.override !== undefined) {
+        process.env.DOSU_BACKEND_URL_OVERRIDE = saved.override;
+      } else {
+        delete process.env.DOSU_BACKEND_URL_OVERRIDE;
+      }
+    }
+  });
 });
 
 describe("docs auto-tag", () => {
@@ -576,6 +668,372 @@ describe("docs import", () => {
     await run("import", "github", "--files", "f1");
     expect(allOutput()).toContain("Import started");
   });
+
+  it("logs import failure and shows JSON detail as a clean message", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(new Error('{"detail":"Something went wrong"}'));
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+      "docs-import",
+      expect.stringContaining("Something went wrong"),
+    );
+    expect(mockClackLogError).toHaveBeenCalledWith("Something went wrong");
+    expect(mockClackLogInfo).not.toHaveBeenCalled();
+  });
+
+  it("shows plain error message when import fails with non-JSON error", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(new Error("Network failure"));
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith("Network failure");
+  });
+
+  it("handles non-Error rejection when import fails", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce("not an Error instance");
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith("not an Error instance");
+  });
+
+  it("uses fallback message when import error detail is empty", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(new Error('{"detail":""}'));
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith("Import failed. Please try again.");
+  });
+
+  it("shows concurrent-import guidance when import is already in progress", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error('{"detail":"An import operation is already in progress"}'),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+    expect(mockClackLogInfo).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining("dosu docs import-status <task-id>"),
+    );
+    expect(mockClackLogInfo).toHaveBeenNthCalledWith(
+      2,
+      "Only one import can run per organization at a time.",
+    );
+  });
+
+  it("shows concurrent-import guidance when error JSON uses IMPORT_ALREADY_IN_PROGRESS code", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error(
+        JSON.stringify({
+          code: "IMPORT_ALREADY_IN_PROGRESS",
+          detail: "Try again later.",
+        }),
+      ),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+  });
+
+  it("shows concurrent-import guidance for nested FastAPI detail + code body", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error(
+        JSON.stringify({
+          detail: {
+            detail: "An import operation is already in progress",
+            code: "IMPORT_ALREADY_IN_PROGRESS",
+          },
+        }),
+      ),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+  });
+
+  it("detects concurrent import from nested detail code without legacy phrase in inner text", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error(
+        JSON.stringify({
+          detail: {
+            detail: "Please try again later.",
+            code: "IMPORT_ALREADY_IN_PROGRESS",
+          },
+        }),
+      ),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+  });
+
+  it("reads nested detail message from message field when detail string is absent", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error(
+        JSON.stringify({
+          detail: {
+            message: "No import slot",
+            code: "IMPORT_ALREADY_IN_PROGRESS",
+          },
+        }),
+      ),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+  });
+
+  it("detects concurrent import code at top level when detail is null", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error(
+        JSON.stringify({
+          detail: null,
+          code: "IMPORT_ALREADY_IN_PROGRESS",
+        }),
+      ),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+  });
+
+  it("detects concurrent import when only top-level code is present", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error(JSON.stringify({ code: "IMPORT_ALREADY_IN_PROGRESS" })),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+  });
+
+  it("detects concurrent import when only top-level dosuCode is present", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error(JSON.stringify({ dosuCode: "IMPORT_ALREADY_IN_PROGRESS" })),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+  });
+
+  it("detects concurrent import when detail is non-string non-object and code is top-level", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error(
+        JSON.stringify({
+          detail: 409,
+          code: "IMPORT_ALREADY_IN_PROGRESS",
+        }),
+      ),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+  });
+
+  it("detects concurrent import from nested dosuCode when inner code is absent", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error(
+        JSON.stringify({
+          detail: {
+            detail: "Please wait",
+            dosuCode: "IMPORT_ALREADY_IN_PROGRESS",
+          },
+        }),
+      ),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+  });
+
+  it("detects concurrent import from top-level dosuCode when nested inner has no code", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error(
+        JSON.stringify({
+          detail: { detail: "Please wait" },
+          dosuCode: "IMPORT_ALREADY_IN_PROGRESS",
+        }),
+      ),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+  });
+
+  it("shows concurrent-import guidance from TRPCClientError dosuCode in data", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      TRPCClientError.from({
+        error: {
+          message: "Conflict",
+          code: -32603,
+          data: {
+            dosuCode: "IMPORT_ALREADY_IN_PROGRESS",
+            httpStatus: 409,
+            zodError: null,
+          },
+        },
+      }),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+  });
+
+  it("does not treat TRPCClientError with null data as concurrent", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new TRPCClientError("Something failed", {
+        result: {
+          error: {
+            message: "Something failed",
+            code: -32603,
+            data: null,
+          },
+        },
+        // biome-ignore lint/suspicious/noExplicitAny: minimal TRPC error envelope for coverage
+      } as any),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith("Something failed");
+  });
+
+  it("accepts concurrent flag from dosuCode in error JSON", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error(
+        JSON.stringify({
+          dosuCode: "IMPORT_ALREADY_IN_PROGRESS",
+          detail: "Busy.",
+        }),
+      ),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+  });
+
+  it("shows concurrent-import guidance from TRPCClientError data", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      TRPCClientError.from({
+        error: {
+          message: "Conflict",
+          code: -32603,
+          data: {
+            code: "IMPORT_ALREADY_IN_PROGRESS",
+            httpStatus: 409,
+            zodError: null,
+          },
+        },
+      }),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith(
+      "An import is already in progress for this organization.",
+    );
+  });
+
+  it("does not treat unrelated TRPCClientError data code as concurrent", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      TRPCClientError.from({
+        error: {
+          message: "Nope",
+          code: -32600,
+          data: {
+            code: "BAD_REQUEST",
+            httpStatus: 400,
+            zodError: null,
+          },
+        },
+      }),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith("Nope");
+  });
+
+  it("does not treat TRPCClientError when data code is not a string", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new TRPCClientError("Bad", {
+        result: {
+          error: {
+            message: "Bad",
+            code: -32600,
+            data: { code: 123, httpStatus: 400, zodError: null },
+          },
+        },
+        // biome-ignore lint/suspicious/noExplicitAny: minimal TRPC error envelope for coverage
+      } as any),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith("Bad");
+  });
+
+  it("does not treat unrelated JSON code as concurrent", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error(JSON.stringify({ code: "OTHER", detail: "failed" })),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith("failed");
+  });
+
+  it("does not treat concurrent import when only non-detail JSON fields mention in progress", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error(
+        '{"detail":"Upstream service unavailable","request_id":"req-already-in-progress-1"}',
+      ),
+    );
+    await expect(run("import", "github", "--files", "f1")).rejects.toThrow("exit");
+    expect(mockClackLogError).toHaveBeenCalledWith("Upstream service unavailable");
+    expect(mockClackLogInfo).not.toHaveBeenCalled();
+  });
+
+  it("outputs JSON error with parsed message when import fails with --json", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new Error('{"detail":"An import operation is already in progress"}'),
+    );
+    await expect(run("import", "--json", "github", "--files", "f1")).rejects.toThrow("exit");
+    const errLine = errorSpy.mock.calls.map((c) => c[0]).join("\n");
+    const parsed = JSON.parse(errLine) as { error: string };
+    expect(parsed.error).toContain("dosu docs import-status");
+    expect(mockClackLogError).not.toHaveBeenCalled();
+  });
+
+  it("outputs JSON error with detail when import fails with --json (non-concurrent)", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(new Error('{"detail":"Something went wrong"}'));
+    await expect(run("import", "--json", "github", "--files", "f1")).rejects.toThrow("exit");
+    const errLine = errorSpy.mock.calls.map((c) => c[0]).join("\n");
+    const parsed = JSON.parse(errLine) as { error: string };
+    expect(parsed.error).toBe("Something went wrong");
+    expect(mockClackLogError).not.toHaveBeenCalled();
+  });
 });
 
 describe("docs import-status", () => {
@@ -674,6 +1132,17 @@ describe("docs publish", () => {
     const body = JSON.parse(opts.body);
     expect(body.gitlab_project_id).toBe("42");
     expect(body.target_directory).toBe("docs/");
+  });
+
+  it("defaults gitlab publish directory to / when omitted", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockFetch.mockResolvedValueOnce(jsonResponse({ status: "ok" }));
+    mockQuery.mockReset();
+
+    await run("publish", "p1", "--to", "gitlab", "--project-id", "42");
+
+    const [, opts] = mockFetch.mock.calls[0];
+    expect(JSON.parse(opts.body).target_directory).toBe("/");
   });
 
   it("publishes to notion via Python backend", async () => {
@@ -794,6 +1263,17 @@ describe("backendPost", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockFetch.mockResolvedValueOnce(jsonResponse({}, 500));
     await expect(run("generate", "--title", "T")).rejects.toThrow("Request failed with status 500");
+  });
+
+  it("throws status message when failed response body is not JSON", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockFetch.mockResolvedValueOnce(
+      new Response("upstream error", {
+        status: 502,
+        headers: { "Content-Type": "text/plain" },
+      }),
+    );
+    await expect(run("generate", "--title", "T")).rejects.toThrow("Request failed with status 502");
   });
 });
 
