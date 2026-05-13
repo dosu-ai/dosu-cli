@@ -1647,6 +1647,47 @@ describe("runSetup checkpoint behavior", () => {
     expect(saved.refresh_token).toBe("ref-fresh");
   });
 
+  it("supports agent-mediated login and explicit tool configuration", async () => {
+    saveConfig(
+      makeCfg({
+        access_token: "",
+        refresh_token: "",
+        expires_at: 0,
+        deployment_id: undefined,
+        deployment_name: undefined,
+      }),
+    );
+    mockStartOAuthFlow.mockResolvedValue({
+      access_token: "tok-agent",
+      refresh_token: "ref-agent",
+      expires_in: 3600,
+    } as TokenResponse);
+    setupAuthed();
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+
+    await runSetup({
+      yes: true,
+      openBrowser: false,
+      toolIDs: ["cursor"],
+      skipSkill: true,
+      skipGitHub: true,
+    });
+
+    expect(p.confirm).not.toHaveBeenCalled();
+    expect(mockStartOAuthFlow).toHaveBeenCalledWith(
+      undefined,
+      "/cli/auth",
+      expect.any(Object),
+      expect.objectContaining({ openBrowser: false }),
+    );
+    expect(p.multiselect).not.toHaveBeenCalled();
+    expect(mockInstallSkill).not.toHaveBeenCalled();
+
+    const cursorConfig = loadJSONConfig(join(tempDir, ".cursor", "mcp.json"));
+    expect(cursorConfig.mcpServers.dosu).toBeDefined();
+    expect(loadConfig().access_token).toBe("tok-agent");
+  });
+
   it("mints a new API key when the existing one is invalid", async () => {
     saveConfig(makeCfg({ api_key: undefined }));
     const methods = setupAuthed();

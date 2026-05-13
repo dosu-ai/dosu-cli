@@ -158,6 +158,24 @@ describe("CLI actions", () => {
       expect(updated.refresh_token).toBe("refreshed_ref");
     });
 
+    it("passes --no-open through to OAuth flow", async () => {
+      mockStartOAuthFlow.mockResolvedValue({
+        access_token: "new_tok",
+        refresh_token: "new_ref",
+        expires_in: 3600,
+      });
+
+      await run("login", "--no-open");
+
+      expect(logSpy).toHaveBeenCalledWith("Starting authentication...");
+      expect(mockStartOAuthFlow).toHaveBeenCalledWith(
+        undefined,
+        "/cli/auth",
+        {},
+        expect.objectContaining({ openBrowser: false }),
+      );
+    });
+
     it("prints curated OAuth callback errors without saving credentials", async () => {
       const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       const originalExitCode = process.exitCode;
@@ -429,6 +447,13 @@ describe("CLI actions", () => {
 
       expect(mockRunSetup).toHaveBeenCalledWith({
         deploymentID: undefined,
+        mode: undefined,
+        yes: false,
+        openBrowser: true,
+        toolIDs: [],
+        skipMcp: false,
+        skipSkill: false,
+        skipGitHub: false,
       });
     });
 
@@ -439,6 +464,30 @@ describe("CLI actions", () => {
 
       expect(mockRunSetup).toHaveBeenCalledWith({
         deploymentID: "dep_456",
+        mode: undefined,
+        yes: false,
+        openBrowser: true,
+        toolIDs: [],
+        skipMcp: false,
+        skipSkill: false,
+        skipGitHub: false,
+      });
+    });
+
+    it("passes agent setup defaults and requested tools", async () => {
+      mockRunSetup.mockResolvedValue(undefined);
+
+      await run("setup", "--agent", "--tool", "codex", "--tool", "cursor", "--skip-skill");
+
+      expect(mockRunSetup).toHaveBeenCalledWith({
+        deploymentID: undefined,
+        mode: undefined,
+        yes: true,
+        openBrowser: false,
+        toolIDs: ["codex", "cursor"],
+        skipMcp: false,
+        skipSkill: true,
+        skipGitHub: true,
       });
     });
   });
