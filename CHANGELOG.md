@@ -1,3 +1,10 @@
+## [0.14.2](https://github.com/dosu-ai/dosu-cli/compare/v0.14.1...v0.14.2) (2026-05-13)
+
+
+### Bug Fixes
+
+* update status deployment prompt ([#68](https://github.com/dosu-ai/dosu-cli/issues/68)) ([5f2ce96](https://github.com/dosu-ai/dosu-cli/commit/5f2ce96d4994b7557bb928815490a4681f5cd67e))
+
 ## [0.14.1](https://github.com/dosu-ai/dosu-cli/compare/v0.14.0...v0.14.1) (2026-05-13)
 
 
