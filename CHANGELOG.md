@@ -1,3 +1,24 @@
+## [0.14.1](https://github.com/dosu-ai/dosu-cli/compare/v0.14.0...v0.14.1) (2026-05-13)
+
+
+### Bug Fixes
+
+* remove agent setup options ([#67](https://github.com/dosu-ai/dosu-cli/issues/67)) ([1f8a120](https://github.com/dosu-ai/dosu-cli/commit/1f8a120c860a2b5173b122a3e974670b9b0fe765))
+
+# [0.14.0](https://github.com/dosu-ai/dosu-cli/compare/v0.13.3...v0.14.0) (2026-05-13)
+
+
+### Features
+
+* add agent-friendly setup flags ([#66](https://github.com/dosu-ai/dosu-cli/issues/66)) ([fc5f2f4](https://github.com/dosu-ai/dosu-cli/commit/fc5f2f4c46bee0b473e3d161ed123bcb4d5cc325))
+
+## [0.13.3](https://github.com/dosu-ai/dosu-cli/compare/v0.13.2...v0.13.3) (2026-05-12)
+
+
+### Bug Fixes
+
+* harden CLI secret handling ([#62](https://github.com/dosu-ai/dosu-cli/issues/62)) ([26cf8e2](https://github.com/dosu-ai/dosu-cli/commit/26cf8e27fd434795696ebdde499dcb048cf866bd))
+
 ## [0.13.2](https://github.com/dosu-ai/dosu-cli/compare/v0.13.1...v0.13.2) (2026-05-12)
 
 

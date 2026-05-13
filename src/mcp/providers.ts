@@ -7,11 +7,15 @@ import type { Config } from "../config/config";
 /**
  * Provider is the base interface for MCP tool providers.
  */
+export interface ProviderInstallOptions {
+  showSecret?: boolean;
+}
+
 export interface Provider {
   name(): string;
   id(): string;
   supportsLocal(): boolean;
-  install(cfg: Config, global: boolean): void;
+  install(cfg: Config, global: boolean, opts?: ProviderInstallOptions): void;
   remove(global: boolean): void;
 }
 

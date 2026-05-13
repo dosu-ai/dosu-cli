@@ -1,6 +1,6 @@
 {
   "name": "@dosu/cli",
-  "version": "0.13.2",
+  "version": "0.14.1",
   "type": "module",
   "description": "Dosu CLI - Manage MCP servers for AI tools",
   "license": "MIT",
@@ -52,6 +52,7 @@
     "commander": "^13.1.0",
     "open": "^10.1.0",
     "picocolors": "^1.1.1",
-    "superjson": "^2.2.6"
+    "superjson": "^2.2.6",
+    "write-file-atomic": "^5.0.1"
   }
 }

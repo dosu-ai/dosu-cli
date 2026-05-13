@@ -23,10 +23,35 @@ type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR";
 const MAX_LOG_SIZE = 1_048_576; // 1 MB
 const TRUNCATE_KEEP = 524_288; // 512 KB
 const LOG_FILENAME = "debug.log";
+const REDACTED = "[REDACTED]";
+const SECRET_QUERY_KEYS = [
+  "access_token",
+  "refresh_token",
+  "api_key",
+  "apikey",
+  "token",
+  "id_token",
+  "code",
+];
 
 let initialized = false;
 let debugToConsole = false;
 let logFilePath: string | null = null;
+
+export function redactSecrets(message: string): string {
+  let redacted = message;
+  for (const key of SECRET_QUERY_KEYS) {
+    const queryPattern = new RegExp(`([?&]${key}=)[^\\s&#]+`, "gi");
+    redacted = redacted.replace(queryPattern, `$1${REDACTED}`);
+  }
+  redacted = redacted.replace(
+    /(\b(?:access_token|refresh_token|api_key|apikey|id_token|token)\b\s*[:=]\s*)("[^"]+"|'[^']+'|[^\s,]+)/gi,
+    `$1${REDACTED}`,
+  );
+  redacted = redacted.replace(/(X-Dosu-API-Key:\s*)[^\s,]+/gi, `$1${REDACTED}`);
+  redacted = redacted.replace(/(Authorization:\s*Bearer\s+)[^\s,]+/gi, `$1${REDACTED}`);
+  return redacted;
+}
 
 function ensureInit(): void {
   if (!initialized) {
@@ -95,7 +120,8 @@ function initLogger(opts: { debug?: boolean }): void {
 function writeEntry(level: LogLevel, mod: string, message: string): void {
   ensureInit();
   const timestamp = new Date().toISOString();
-  const line = `[${timestamp}] [${level}] [${mod}] ${message}\n`;
+  const safeMessage = redactSecrets(message);
+  const line = `[${timestamp}] [${level}] [${mod}] ${safeMessage}\n`;
 
   try {
     appendFileSync(resolveLogPath(), line, { mode: 0o600 });

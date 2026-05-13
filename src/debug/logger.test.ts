@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { logger } from "./logger";
+import { logger, redactSecrets } from "./logger";
 
 let tempDir: string;
 let origXDG: string | undefined;
@@ -26,6 +26,13 @@ function logPath(): string {
 }
 
 describe("logger", () => {
+  describe("redactSecrets", () => {
+    it("redacts apikey assignments", () => {
+      expect(redactSecrets("apikey=secret-value")).toBe("apikey=[REDACTED]");
+      expect(redactSecrets("apikey: secret-value")).toBe("apikey: [REDACTED]");
+    });
+  });
+
   describe("getLogPath", () => {
     it("returns path ending with dosu-cli/debug.log", () => {
       const p = logger.getLogPath();

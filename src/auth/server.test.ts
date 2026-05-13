@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { logger } from "../debug/logger";
 import { OAuthCallbackError } from "./errors";
 import { type CallbackServer, startCallbackServer } from "./server";
 
@@ -62,6 +63,23 @@ describe("auth callback server", () => {
     expect(token.access_token).toBe("tok123");
     expect(token.refresh_token).toBe("ref456");
     expect(token.expires_in).toBe(7200);
+  });
+
+  it("does not pass token-bearing callback URLs to debug logs", async () => {
+    const result = await startCallbackServer();
+    server = result.server;
+    const debug = vi.mocked(logger.debug);
+    debug.mockClear();
+
+    await fetch(
+      `http://localhost:${server.port}/callback?access_token=tok123&refresh_token=ref456&expires_in=7200`,
+    );
+    await result.tokenPromise;
+
+    const debugOutput = debug.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(debugOutput).toContain("has-token=true");
+    expect(debugOutput).not.toContain("tok123");
+    expect(debugOutput).not.toContain("ref456");
   });
 
   it("defaults expires_in to 3600 when not provided", async () => {

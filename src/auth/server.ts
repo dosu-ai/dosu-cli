@@ -289,7 +289,7 @@ export async function startCallbackServer(): Promise<{
     const ua = req.headers["user-agent"] ?? "none";
     logger.debug(
       "auth.server",
-      `Request: ${req.method} ${req.url} cookie-len=${cookieLen} ua=${ua} has-token=${url.searchParams.has("access_token")}`,
+      `Request: ${req.method} ${url.pathname} cookie-len=${cookieLen} ua=${ua} has-token=${url.searchParams.has("access_token")}`,
     );
 
     if (url.pathname !== "/callback") {

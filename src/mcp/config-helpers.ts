@@ -2,9 +2,20 @@
  * Shared JSON config helpers for MCP provider configuration.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import { getBackendURL } from "../config/constants";
+
+type WriteFileAtomicOptions = {
+  mode: number;
+  chown: false;
+};
+
+const require = createRequire(import.meta.url);
+const writeFileAtomic = require("write-file-atomic") as {
+  sync(path: string, data: string, options: WriteFileAtomicOptions): void;
+};
 
 // biome-ignore lint/suspicious/noExplicitAny: JSON config values are inherently untyped
 type JsonConfig = Record<string, any>;
@@ -26,7 +37,10 @@ export function mcpBaseURL(): string {
 /**
  * Returns the standard MCP headers with API key auth.
  */
-export function mcpHeaders(apiKey: string): Record<string, string> {
+export function mcpHeaders(apiKey: string | undefined): Record<string, string> {
+  if (!apiKey) {
+    throw new Error("API key is required. Run 'dosu setup' to create one.");
+  }
   return { "X-Dosu-API-Key": apiKey };
 }
 
@@ -106,11 +120,16 @@ export function stripJSONComments(data: string): string {
  * Writes a JSON config file, creating parent directories as needed.
  */
 export function saveJSONConfig(path: string, cfg: JsonConfig): void {
+  writeSecureFile(path, JSON.stringify(cfg, null, 2));
+}
+
+/** Writes a secret-bearing config file atomically with owner-only permissions. */
+export function writeSecureFile(path: string, content: string): void {
   const dir = dirname(path);
   if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
-  writeFileSync(path, JSON.stringify(cfg, null, 2));
+  writeFileAtomic.sync(path, content, { mode: 0o600, chown: false });
 }
 
 /**
