@@ -1,3 +1,10 @@
+## [0.14.1](https://github.com/dosu-ai/dosu-cli/compare/v0.14.0...v0.14.1) (2026-05-13)
+
+
+### Bug Fixes
+
+* remove agent setup options ([#67](https://github.com/dosu-ai/dosu-cli/issues/67)) ([1f8a120](https://github.com/dosu-ai/dosu-cli/commit/1f8a120c860a2b5173b122a3e974670b9b0fe765))
+
 # [0.14.0](https://github.com/dosu-ai/dosu-cli/compare/v0.13.3...v0.14.0) (2026-05-13)
 
 
