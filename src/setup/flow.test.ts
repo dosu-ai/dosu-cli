@@ -1622,6 +1622,19 @@ describe("runSetup checkpoint behavior", () => {
     expect(p.log.message).not.toHaveBeenCalledWith(expect.stringContaining("Try it out"));
   });
 
+  it("--yes accepts the default MCP setup choice", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    mockToolSelection(["cursor"]);
+
+    await runSetup({ yes: true, skipSkill: true, skipGitHub: true });
+
+    const cursorConfig = loadJSONConfig(join(tempDir, ".cursor", "mcp.json"));
+    expect(cursorConfig.mcpServers.dosu).toBeDefined();
+  });
+
   it("persists a fresh token after successful authentication", async () => {
     // Fresh config (no token yet) → user authenticates → token is saved.
     saveConfig(

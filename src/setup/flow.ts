@@ -364,7 +364,7 @@ async function stepOneShotConfirm(opts: {
 }): Promise<OneShotChoices | null> {
   if (opts.setupOptions?.yes) {
     return {
-      configureMcp: !opts.setupOptions.skipMcp && (opts.setupOptions.toolIDs?.length ?? 0) > 0,
+      configureMcp: !opts.setupOptions.skipMcp,
       installSkill: !opts.setupOptions.skipSkill,
       connectGitHub: opts.includeGitHub && !opts.setupOptions.skipGitHub,
     };
