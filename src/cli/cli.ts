@@ -57,8 +57,7 @@ export function createProgram(): Command {
   program
     .command("login")
     .description("Authenticate with Dosu via OAuth")
-    .option("--no-open", "Print the login URL instead of opening a browser")
-    .action(async (opts: { open?: boolean }) => {
+    .action(async () => {
       const cfg = loadConfig();
       if (isAuthenticated(cfg) && !isTokenExpired(cfg)) {
         console.log("You are already logged in.");
@@ -66,31 +65,12 @@ export function createProgram(): Command {
         return;
       }
 
-      console.log(
-        opts.open === false
-          ? "Starting authentication..."
-          : "Opening browser for authentication...",
-      );
+      console.log("Opening browser for authentication...");
       const { startOAuthFlow } = await import("../auth/flow");
       const { OAuthCallbackError } = await import("../auth/errors");
       let token: Awaited<ReturnType<typeof startOAuthFlow>>;
       try {
-        token = await startOAuthFlow(
-          undefined,
-          "/cli/auth",
-          {},
-          {
-            openBrowser: opts.open !== false,
-            onAuthURL:
-              opts.open === false
-                ? (url) => {
-                    console.log("Open this URL to authenticate:");
-                    console.log(url);
-                    console.log("\nWaiting for login to complete...");
-                  }
-                : undefined,
-          },
-        );
+        token = await startOAuthFlow();
       } catch (err) {
         if (err instanceof OAuthCallbackError) {
           console.error(err.userMessage);
@@ -251,46 +231,18 @@ export function createProgram(): Command {
     .description("Set up Dosu MCP for your AI tools")
     .option("--deployment <id>", "Skip to tool configuration for a specific MCP")
     .option("--mode <mode>", "Force OSS or Cloud mode, skipping the interactive prompt (oss|cloud)")
-    .option("--agent", "Run an agent-assisted setup with safe defaults", false)
-    .option("-y, --yes", "Accept setup defaults and skip confirmation prompts", false)
-    .option("--no-open", "Print browser login URLs instead of opening them")
-    .option("--tool <agent>", "Configure a specific AI tool; may be repeated", collectValues, [])
-    .option("--skip-mcp", "Do not configure AI tool MCP entries", false)
-    .option("--skip-skill", "Do not install the Dosu agent skill", false)
-    .option("--skip-github", "Do not run GitHub repository/doc onboarding", false)
-    .action(
-      async (opts: {
-        deployment?: string;
-        mode?: string;
-        agent?: boolean;
-        yes?: boolean;
-        open?: boolean;
-        tool?: string[];
-        skipMcp?: boolean;
-        skipSkill?: boolean;
-        skipGithub?: boolean;
-      }) => {
-        const { runSetup } = await import("../setup/flow");
-        let mode: "oss" | "cloud" | undefined;
-        if (opts.mode !== undefined) {
-          const normalized = opts.mode.toLowerCase();
-          if (normalized !== "oss" && normalized !== "cloud") {
-            throw new Error(`invalid --mode value '${opts.mode}' (expected 'oss' or 'cloud')`);
-          }
-          mode = normalized;
+    .action(async (opts: { deployment?: string; mode?: string }) => {
+      const { runSetup } = await import("../setup/flow");
+      let mode: "oss" | "cloud" | undefined;
+      if (opts.mode !== undefined) {
+        const normalized = opts.mode.toLowerCase();
+        if (normalized !== "oss" && normalized !== "cloud") {
+          throw new Error(`invalid --mode value '${opts.mode}' (expected 'oss' or 'cloud')`);
         }
-        await runSetup({
-          deploymentID: opts.deployment,
-          mode,
-          yes: opts.agent === true || opts.yes === true,
-          openBrowser: opts.agent === true ? false : opts.open !== false,
-          toolIDs: opts.tool ?? [],
-          skipMcp: opts.skipMcp === true,
-          skipSkill: opts.skipSkill === true,
-          skipGitHub: opts.agent === true || opts.skipGithub === true,
-        });
-      },
-    );
+        mode = normalized;
+      }
+      await runSetup({ deploymentID: opts.deployment, mode });
+    });
 
   // logs
   program
@@ -328,11 +280,6 @@ export function createProgram(): Command {
     });
 
   return program;
-}
-
-function collectValues(value: string, previous: string[]): string[] {
-  previous.push(value);
-  return previous;
 }
 
 export async function execute(): Promise<void> {

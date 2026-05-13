@@ -156,25 +156,6 @@ describe("startOAuthFlow", () => {
     await flowPromise;
   });
 
-  it("can expose the auth URL without opening the browser", async () => {
-    const onAuthURL = vi.fn();
-    const flowPromise = startOAuthFlow(
-      undefined,
-      "/cli/auth",
-      {},
-      { openBrowser: false, onAuthURL },
-    );
-    await new Promise((r) => setTimeout(r, 10));
-
-    expect(mockOpenDefault).not.toHaveBeenCalled();
-    expect(onAuthURL).toHaveBeenCalledWith(
-      "https://app.dosu.dev/cli/auth?callback=http%3A%2F%2Flocalhost%3A12345%2Fcallback",
-    );
-
-    resolveToken({ access_token: "a", refresh_token: "r", expires_in: 1 });
-    await flowPromise;
-  });
-
   it("clears the timeout timer after successful token receipt", async () => {
     vi.useFakeTimers();
 
