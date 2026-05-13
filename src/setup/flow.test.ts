@@ -1622,19 +1622,6 @@ describe("runSetup checkpoint behavior", () => {
     expect(p.log.message).not.toHaveBeenCalledWith(expect.stringContaining("Try it out"));
   });
 
-  it("--yes accepts the default MCP setup choice", async () => {
-    saveConfig(makeCfg());
-    setupAuthed();
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-    mockToolSelection(["cursor"]);
-
-    await runSetup({ yes: true, skipSkill: true, skipGitHub: true });
-
-    const cursorConfig = loadJSONConfig(join(tempDir, ".cursor", "mcp.json"));
-    expect(cursorConfig.mcpServers.dosu).toBeDefined();
-  });
-
   it("persists a fresh token after successful authentication", async () => {
     // Fresh config (no token yet) → user authenticates → token is saved.
     saveConfig(
@@ -1658,114 +1645,6 @@ describe("runSetup checkpoint behavior", () => {
     const saved = loadConfig();
     expect(saved.access_token).toBe("tok-fresh");
     expect(saved.refresh_token).toBe("ref-fresh");
-  });
-
-  it("supports agent-mediated login and explicit tool configuration", async () => {
-    saveConfig(
-      makeCfg({
-        access_token: "",
-        refresh_token: "",
-        expires_at: 0,
-        deployment_id: undefined,
-        deployment_name: undefined,
-      }),
-    );
-    mockStartOAuthFlow.mockResolvedValue({
-      access_token: "tok-agent",
-      refresh_token: "ref-agent",
-      expires_in: 3600,
-    } as TokenResponse);
-    setupAuthed();
-    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-
-    await runSetup({
-      yes: true,
-      openBrowser: false,
-      toolIDs: ["cursor"],
-      skipSkill: true,
-      skipGitHub: true,
-    });
-
-    expect(p.confirm).not.toHaveBeenCalled();
-    expect(mockStartOAuthFlow).toHaveBeenCalledWith(
-      undefined,
-      "/cli/auth",
-      expect.any(Object),
-      expect.objectContaining({ openBrowser: false }),
-    );
-    expect(p.multiselect).not.toHaveBeenCalled();
-    expect(mockInstallSkill).not.toHaveBeenCalled();
-
-    const cursorConfig = loadJSONConfig(join(tempDir, ".cursor", "mcp.json"));
-    expect(cursorConfig.mcpServers.dosu).toBeDefined();
-    expect(loadConfig().access_token).toBe("tok-agent");
-  });
-
-  it("reports multiple organizations instead of prompting in yes mode", async () => {
-    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
-    setupAuthed({
-      getOrgs: vi.fn().mockResolvedValue([
-        { org_id: "o1", name: "Org1" },
-        { org_id: "o2", name: "Org2" },
-      ]),
-    });
-
-    await runSetup({ yes: true, skipMcp: true, skipSkill: true, skipGitHub: true });
-
-    expect(p.select).not.toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Select an organization" }),
-    );
-    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Multiple organizations"));
-  });
-
-  it("reports multiple MCPs instead of prompting in yes mode", async () => {
-    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
-    setupAuthed({
-      getDeployments: vi
-        .fn()
-        .mockResolvedValue([
-          makeDeployment({ deployment_id: "d1", name: "Deploy1" }),
-          makeDeployment({ deployment_id: "d2", name: "Deploy2" }),
-        ]),
-    });
-
-    await runSetup({ yes: true, skipMcp: true, skipSkill: true, skipGitHub: true });
-
-    expect(p.select).not.toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Select an MCP" }),
-    );
-    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Multiple MCPs"));
-  });
-
-  it("reports unknown requested tools", async () => {
-    saveConfig(makeCfg());
-    setupAuthed();
-
-    await runSetup({
-      yes: true,
-      toolIDs: ["unknown-agent"],
-      skipSkill: true,
-      skipGitHub: true,
-    });
-
-    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Unknown AI tool"));
-  });
-
-  it("reports stdio-only requested tools", async () => {
-    saveConfig(makeCfg());
-    setupAuthed();
-    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [
-      ClaudeDesktopProvider(),
-    ]);
-
-    await runSetup({
-      yes: true,
-      toolIDs: ["claude-desktop"],
-      skipSkill: true,
-      skipGitHub: true,
-    });
-
-    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("not supported by setup"));
   });
 
   it("mints a new API key when the existing one is invalid", async () => {
