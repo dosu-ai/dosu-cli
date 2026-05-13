@@ -1701,6 +1701,73 @@ describe("runSetup checkpoint behavior", () => {
     expect(loadConfig().access_token).toBe("tok-agent");
   });
 
+  it("reports multiple organizations instead of prompting in yes mode", async () => {
+    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
+    setupAuthed({
+      getOrgs: vi.fn().mockResolvedValue([
+        { org_id: "o1", name: "Org1" },
+        { org_id: "o2", name: "Org2" },
+      ]),
+    });
+
+    await runSetup({ yes: true, skipMcp: true, skipSkill: true, skipGitHub: true });
+
+    expect(p.select).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Select an organization" }),
+    );
+    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Multiple organizations"));
+  });
+
+  it("reports multiple MCPs instead of prompting in yes mode", async () => {
+    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
+    setupAuthed({
+      getDeployments: vi
+        .fn()
+        .mockResolvedValue([
+          makeDeployment({ deployment_id: "d1", name: "Deploy1" }),
+          makeDeployment({ deployment_id: "d2", name: "Deploy2" }),
+        ]),
+    });
+
+    await runSetup({ yes: true, skipMcp: true, skipSkill: true, skipGitHub: true });
+
+    expect(p.select).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Select an MCP" }),
+    );
+    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Multiple MCPs"));
+  });
+
+  it("reports unknown requested tools", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+
+    await runSetup({
+      yes: true,
+      toolIDs: ["unknown-agent"],
+      skipSkill: true,
+      skipGitHub: true,
+    });
+
+    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Unknown AI tool"));
+  });
+
+  it("reports stdio-only requested tools", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [
+      ClaudeDesktopProvider(),
+    ]);
+
+    await runSetup({
+      yes: true,
+      toolIDs: ["claude-desktop"],
+      skipSkill: true,
+      skipGitHub: true,
+    });
+
+    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("not supported by setup"));
+  });
+
   it("mints a new API key when the existing one is invalid", async () => {
     saveConfig(makeCfg({ api_key: undefined }));
     const methods = setupAuthed();

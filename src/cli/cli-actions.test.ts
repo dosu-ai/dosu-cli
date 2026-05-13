@@ -490,6 +490,40 @@ describe("CLI actions", () => {
         skipGitHub: true,
       });
     });
+
+    it("rejects invalid --mode values before running setup", async () => {
+      await expect(run("setup", "--mode", "enterprise")).rejects.toThrow(
+        "invalid --mode value 'enterprise'",
+      );
+      expect(mockRunSetup).not.toHaveBeenCalled();
+    });
+
+    it("passes explicit setup flags without --agent", async () => {
+      mockRunSetup.mockResolvedValue(undefined);
+
+      await run(
+        "setup",
+        "--mode",
+        "cloud",
+        "--no-open",
+        "--yes",
+        "--tool",
+        "codex",
+        "--skip-mcp",
+        "--skip-github",
+      );
+
+      expect(mockRunSetup).toHaveBeenCalledWith({
+        deploymentID: undefined,
+        mode: "cloud",
+        yes: true,
+        openBrowser: false,
+        toolIDs: ["codex"],
+        skipMcp: true,
+        skipSkill: false,
+        skipGitHub: true,
+      });
+    });
   });
 
   // ── logs ────────────────────────────────────────────────────────────────
