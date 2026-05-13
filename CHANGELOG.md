@@ -1,3 +1,10 @@
+# [0.14.0](https://github.com/dosu-ai/dosu-cli/compare/v0.13.3...v0.14.0) (2026-05-13)
+
+
+### Features
+
+* add agent-friendly setup flags ([#66](https://github.com/dosu-ai/dosu-cli/issues/66)) ([fc5f2f4](https://github.com/dosu-ai/dosu-cli/commit/fc5f2f4c46bee0b473e3d161ed123bcb4d5cc325))
+
 ## [0.13.3](https://github.com/dosu-ai/dosu-cli/compare/v0.13.2...v0.13.3) (2026-05-12)
 
 
