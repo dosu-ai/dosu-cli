@@ -18,6 +18,15 @@ export interface SetupOptions {
   deploymentID?: string;
   /** Force a specific mode, bypassing the default. "cloud" = standard flow, "oss" = public-libraries-only. */
   mode?: SetupMode | "cloud";
+  /** Accept setup defaults and avoid prompts where flags provide enough information. */
+  yes?: boolean;
+  /** Open browser windows automatically. Set false for agent-mediated login URLs. */
+  openBrowser?: boolean;
+  /** Explicit AI tools to configure during setup. Bypasses the tool multiselect. */
+  toolIDs?: string[];
+  skipMcp?: boolean;
+  skipSkill?: boolean;
+  skipGitHub?: boolean;
 }
 
 export type ConfigAction = "install" | "remove" | "skip";
@@ -101,7 +110,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   }
 
   // Authenticate — always runs so we can verify/refresh tokens.
-  const authedCfg = await stepAuthenticate(cfg, onboardingRunID);
+  const authedCfg = await stepAuthenticate(cfg, onboardingRunID, opts);
   if (!authedCfg) return;
   cfg = authedCfg;
   await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_auth_completed");
@@ -164,6 +173,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   // (re)run); GitHub docs import only shows during first-run onboarding.
   const choices = await stepOneShotConfirm({
     includeGitHub: cloudSetupContext?.kind === "onboarding",
+    setupOptions: opts,
   });
   if (!choices) {
     await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_cancelled", {
@@ -186,7 +196,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   let skillCompleted = false;
   let docsImported = false;
   if (choices.configureMcp) {
-    const configured = await stepConfigureMcpTools(cfg);
+    const configured = await stepConfigureMcpTools(cfg, opts.toolIDs);
     if (configured === null) {
       await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_cancelled", {
         reason: "mcp_selection_cancelled",
@@ -350,7 +360,16 @@ function applyModeOverride(cfg: Config, opts: SetupOptions): void {
  */
 async function stepOneShotConfirm(opts: {
   includeGitHub: boolean;
+  setupOptions?: SetupOptions;
 }): Promise<OneShotChoices | null> {
+  if (opts.setupOptions?.yes) {
+    return {
+      configureMcp: !opts.setupOptions.skipMcp,
+      installSkill: !opts.setupOptions.skipSkill,
+      connectGitHub: opts.includeGitHub && !opts.setupOptions.skipGitHub,
+    };
+  }
+
   type Item = { value: keyof OneShotChoices; label: string };
   const items: Item[] = [
     { value: "configureMcp", label: "Install Dosu MCP" },
@@ -388,7 +407,18 @@ async function stepOneShotConfirm(opts: {
  * Returns the ConfigResult array on success, or null if the user cancelled.
  * An empty detection pool is treated as success (nothing to do).
  */
-async function stepConfigureMcpTools(cfg: Config): Promise<ConfigResult[] | null> {
+async function stepConfigureMcpTools(
+  cfg: Config,
+  requestedToolIDs?: string[],
+): Promise<ConfigResult[] | null> {
+  if (requestedToolIDs && requestedToolIDs.length > 0) {
+    const selection = selectRequestedTools(requestedToolIDs);
+    if (!selection) return null;
+    const results = stepConfigureTools(cfg, selection);
+    stepShowSummary(results);
+    return results;
+  }
+
   const detected = stepDetectTools();
   if (detected.length === 0) {
     p.log.warn(
@@ -430,6 +460,7 @@ export async function runInstallSkill(): Promise<boolean> {
 async function stepAuthenticate(
   existingCfg?: Config,
   onboardingRunID?: string,
+  opts: SetupOptions = {},
 ): Promise<Config | null> {
   logger.info("setup", "Step: authenticate");
   const cfg = existingCfg ?? loadConfig();
@@ -464,23 +495,29 @@ async function stepAuthenticate(
     }
   }
 
-  const shouldLogin = await p.confirm({ message: "Open browser to log in?" });
-  if (p.isCancel(shouldLogin) || !shouldLogin) {
-    if (onboardingRunID) {
-      await trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_auth_cancelled", {
-        reason: p.isCancel(shouldLogin) ? "prompt_cancelled" : "login_declined",
-      });
+  if (!opts.yes && opts.openBrowser !== false) {
+    const shouldLogin = await p.confirm({ message: "Open browser to log in?" });
+    if (p.isCancel(shouldLogin) || !shouldLogin) {
+      if (onboardingRunID) {
+        await trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_auth_cancelled", {
+          reason: p.isCancel(shouldLogin) ? "prompt_cancelled" : "login_declined",
+        });
+      }
+      return null;
     }
-    return null;
   }
 
   if (onboardingRunID) {
     await trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_auth_started");
   }
-  return await openBrowserForSetup(cfg, onboardingRunID);
+  return await openBrowserForSetup(cfg, onboardingRunID, opts);
 }
 
-async function openBrowserForSetup(cfg: Config, onboardingRunID?: string): Promise<Config | null> {
+async function openBrowserForSetup(
+  cfg: Config,
+  onboardingRunID?: string,
+  opts: SetupOptions = {},
+): Promise<Config | null> {
   try {
     const { startOAuthFlow } = await import("../auth/flow");
     const s = p.spinner();
@@ -489,6 +526,17 @@ async function openBrowserForSetup(cfg: Config, onboardingRunID?: string): Promi
       undefined,
       "/cli/auth",
       onboardingRunID ? { onboarding_run_id: onboardingRunID } : {},
+      {
+        openBrowser: opts.openBrowser !== false,
+        onAuthURL:
+          opts.openBrowser === false
+            ? (url) => {
+                p.log.info(
+                  `Open this URL to authenticate:\n${url}\n\nWaiting for login to complete...`,
+                );
+              }
+            : undefined,
+      },
     );
     s.stop("Authenticated");
     logger.info("setup", "Browser auth completed");
@@ -633,9 +681,9 @@ async function resolveDeployment(
     }
     return true;
   }
-  const org = await stepSelectOrg(apiClient);
+  const org = await stepSelectOrg(apiClient, opts.yes === true);
   if (!org) return false;
-  const d = await stepSelectDeployment(apiClient, org);
+  const d = await stepSelectDeployment(apiClient, org, opts.yes === true);
   if (!d) return false;
   cfg.mode = undefined;
   applyDeployment(cfg, d);
@@ -650,7 +698,7 @@ async function fetchDeployments(apiClient: Client): Promise<Deployment[]> {
   }
 }
 
-async function stepSelectOrg(apiClient: Client): Promise<Org | null> {
+async function stepSelectOrg(apiClient: Client, noPrompt = false): Promise<Org | null> {
   try {
     const orgs = await apiClient.getOrgs();
     if (orgs.length === 0) {
@@ -661,6 +709,12 @@ async function stepSelectOrg(apiClient: Client): Promise<Org | null> {
       logger.info("setup", `Selected org: ${orgs[0].name} (auto, only one)`);
       p.log.success(`Organization\n${dim(orgs[0].name)}`);
       return orgs[0];
+    }
+    if (noPrompt) {
+      p.log.error(
+        "Multiple organizations found. Run `dosu deployments list --json`, choose a deployment, then re-run setup with `--deployment <id>`.",
+      );
+      return null;
     }
     const selected = await p.select({
       message: "Select an organization",
@@ -702,7 +756,11 @@ async function stepResolveDeployment(apiClient: Client, id: string): Promise<Dep
   }
 }
 
-async function stepSelectDeployment(apiClient: Client, org: Org): Promise<Deployment | null> {
+async function stepSelectDeployment(
+  apiClient: Client,
+  org: Org,
+  noPrompt = false,
+): Promise<Deployment | null> {
   try {
     const allDeployments = await apiClient.getDeployments();
     const deployments = allDeployments.filter((d) => d.org_id === org.org_id);
@@ -715,6 +773,12 @@ async function stepSelectDeployment(apiClient: Client, org: Org): Promise<Deploy
       logger.info("setup", `Selected deployment: ${deployments[0].name} (auto, only one)`);
       p.log.success(`Using MCP\n${dim(deployments[0].name)}`);
       return deployments[0];
+    }
+    if (noPrompt) {
+      p.log.error(
+        "Multiple MCPs found. Run `dosu deployments list --json`, choose one, then re-run setup with `--deployment <id>`.",
+      );
+      return null;
     }
     const selected = await p.select({
       message: "Select an MCP",
@@ -767,6 +831,27 @@ export function isStdioOnly(p: SetupProvider): boolean {
 
 export function stepDetectTools(): SetupProvider[] {
   return allSetupProviders().filter((p) => p.isInstalled() && !isStdioOnly(p));
+}
+
+function selectRequestedTools(requestedToolIDs: string[]): ToolSelection | null {
+  const normalized = [...new Set(requestedToolIDs.map((id) => id.toLowerCase()))];
+  const providers = allSetupProviders();
+  const selected: SetupProvider[] = [];
+
+  for (const id of normalized) {
+    const provider = providers.find((p) => p.id() === id);
+    if (!provider) {
+      p.log.error(`Unknown AI tool '${id}'. Run 'dosu mcp list' to see available tools.`);
+      return null;
+    }
+    if (isStdioOnly(provider)) {
+      p.log.error(`${provider.name()} is not supported by setup. Use 'dosu mcp add ${id}'.`);
+      return null;
+    }
+    selected.push(provider);
+  }
+
+  return { toInstall: selected, toRemove: [], skipped: [] };
 }
 
 async function stepSelectTools(detected: SetupProvider[]): Promise<ToolSelection | null> {

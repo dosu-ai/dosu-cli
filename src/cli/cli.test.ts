@@ -69,6 +69,9 @@ describe("CLI", () => {
     expect(cmd).toBeDefined();
     const opts = cmd?.options.find((o) => o.long === "--deployment");
     expect(opts).toBeDefined();
+    expect(cmd?.options.find((o) => o.long === "--agent")).toBeDefined();
+    expect(cmd?.options.find((o) => o.long === "--tool")).toBeDefined();
+    expect(cmd?.options.find((o) => o.long === "--no-open")).toBeDefined();
   });
 
   it("mcp add has --global flag", () => {

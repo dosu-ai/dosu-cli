@@ -17,6 +17,7 @@ export async function startOAuthFlow(
   signal?: AbortSignal,
   path: string = "/cli/auth",
   params: Record<string, string> = {},
+  opts: { openBrowser?: boolean; onAuthURL?: (url: string) => void } = {},
 ): Promise<TokenResponse> {
   const { server, tokenPromise } = await startCallbackServer();
 
@@ -27,11 +28,14 @@ export async function startOAuthFlow(
     logger.debug("auth.flow", `Callback URL: ${callbackURL}`);
     const authURL = buildAuthURL(callbackURL, path, params);
     logger.info("auth.flow", `Auth URL: ${authURL}`);
+    opts.onAuthURL?.(authURL);
 
-    // Open browser — dynamic import to avoid bundling issues
-    const open = await import("open");
-    await open.default(authURL);
-    logger.info("auth.flow", "Browser open command executed");
+    if (opts.openBrowser !== false) {
+      // Open browser — dynamic import to avoid bundling issues
+      const open = await import("open");
+      await open.default(authURL);
+      logger.info("auth.flow", "Browser open command executed");
+    }
 
     // 8 min < Supabase's ~10 min OAuth state TTL, so we surface a useful
     // message before users hit a stale-state error.
