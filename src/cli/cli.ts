@@ -136,7 +136,9 @@ export function createProgram(): Command {
         console.log(`MCP ID: ${cfg.deployment_id}`);
       } else {
         console.log("MCP: None selected");
-        console.log("Run 'dosu' to open the TUI and select an MCP.");
+        console.log(
+          "Run 'dosu deployments list' to see available MCPs, then 'dosu deployments switch <id>' to select one.",
+        );
       }
     });
 

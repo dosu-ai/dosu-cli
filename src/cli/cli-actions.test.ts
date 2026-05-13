@@ -249,7 +249,9 @@ describe("CLI actions", () => {
       await run("status");
 
       expect(logSpy).toHaveBeenCalledWith("MCP: None selected");
-      expect(logSpy).toHaveBeenCalledWith("Run 'dosu' to open the TUI and select an MCP.");
+      const output = allLogOutput();
+      expect(output).toContain("dosu deployments list");
+      expect(output).toContain("dosu deployments switch <id>");
     });
 
     it("shows OSS mode without requiring a deployment", async () => {
