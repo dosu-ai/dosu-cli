@@ -1,3 +1,10 @@
+# [0.15.0](https://github.com/dosu-ai/dosu-cli/compare/v0.14.2...v0.15.0) (2026-05-14)
+
+
+### Features
+
+* add non-interactive agent setup ([#69](https://github.com/dosu-ai/dosu-cli/issues/69)) ([79b214e](https://github.com/dosu-ai/dosu-cli/commit/79b214e2147a9185cbe043ffce9ab1d28a72cbbd))
+
 ## [0.14.2](https://github.com/dosu-ai/dosu-cli/compare/v0.14.1...v0.14.2) (2026-05-13)
 
 
