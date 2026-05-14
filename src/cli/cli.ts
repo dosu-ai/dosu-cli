@@ -57,7 +57,34 @@ export function createProgram(): Command {
   program
     .command("login")
     .description("Authenticate with Dosu via OAuth")
-    .action(async () => {
+    .option(
+      "--request",
+      "Mint a login ticket for agent / human-in-the-loop auth (prints URL and exits)",
+    )
+    .option("--check <ticket>", "Exchange a login ticket created with --request for a token")
+    .option("--json", "Emit machine-readable JSON output (use with --request or --check)")
+    .action(async (opts: { request?: boolean; check?: string; json?: boolean }) => {
+      if (opts.request && opts.check !== undefined) {
+        console.error("--request and --check cannot be combined.");
+        process.exitCode = 2;
+        return;
+      }
+
+      if (opts.request) {
+        const { runLoginRequest } = await import("../agent/login-commands");
+        process.exitCode = await runLoginRequest({ json: opts.json === true });
+        return;
+      }
+
+      if (opts.check !== undefined) {
+        const { runLoginCheck } = await import("../agent/login-commands");
+        process.exitCode = await runLoginCheck({
+          ticket: opts.check,
+          json: opts.json === true,
+        });
+        return;
+      }
+
       const cfg = loadConfig();
       if (isAuthenticated(cfg) && !isTokenExpired(cfg)) {
         console.log("You are already logged in.");
@@ -231,18 +258,61 @@ export function createProgram(): Command {
     .description("Set up Dosu MCP for your AI tools")
     .option("--deployment <id>", "Skip to tool configuration for a specific MCP")
     .option("--mode <mode>", "Force OSS or Cloud mode, skipping the interactive prompt (oss|cloud)")
-    .action(async (opts: { deployment?: string; mode?: string }) => {
-      const { runSetup } = await import("../setup/flow");
-      let mode: "oss" | "cloud" | undefined;
-      if (opts.mode !== undefined) {
-        const normalized = opts.mode.toLowerCase();
-        if (normalized !== "oss" && normalized !== "cloud") {
-          throw new Error(`invalid --mode value '${opts.mode}' (expected 'oss' or 'cloud')`);
+    .option("--agent", "Run non-interactive setup designed for coding agents (requires --tool)")
+    .option(
+      "--tool <id>",
+      "Configure a single AI tool by id (claude, cursor, codex, …). Required with --agent.",
+    )
+    .option(
+      "--login-ticket <ticket>",
+      "Resume an --agent setup by redeeming a ticket from a previous run",
+    )
+    .action(
+      async (opts: {
+        deployment?: string;
+        mode?: string;
+        agent?: boolean;
+        tool?: string;
+        loginTicket?: string;
+      }) => {
+        if (opts.agent) {
+          if (!opts.tool) {
+            const { emitError } = await import("../agent/output");
+            const { listAgentSupportedToolIDs } = await import("../agent/flow");
+            emitError({
+              step: "setup",
+              reason: "missing_tool",
+              agent_next_steps: `Pass --tool <id> when using --agent. Supported ids: ${listAgentSupportedToolIDs().join(", ")}.`,
+            });
+            process.exitCode = 2;
+            return;
+          }
+          const { runAgentSetup } = await import("../agent/flow");
+          process.exitCode = await runAgentSetup({
+            tool: opts.tool,
+            loginTicket: opts.loginTicket,
+            deploymentID: opts.deployment,
+          });
+          return;
         }
-        mode = normalized;
-      }
-      await runSetup({ deploymentID: opts.deployment, mode });
-    });
+
+        // Non-agent flags that only make sense with --agent.
+        if (opts.tool || opts.loginTicket) {
+          throw new Error("--tool and --login-ticket require --agent");
+        }
+
+        const { runSetup } = await import("../setup/flow");
+        let mode: "oss" | "cloud" | undefined;
+        if (opts.mode !== undefined) {
+          const normalized = opts.mode.toLowerCase();
+          if (normalized !== "oss" && normalized !== "cloud") {
+            throw new Error(`invalid --mode value '${opts.mode}' (expected 'oss' or 'cloud')`);
+          }
+          mode = normalized;
+        }
+        await runSetup({ deploymentID: opts.deployment, mode });
+      },
+    );
 
   // logs
   program

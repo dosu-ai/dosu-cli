@@ -3,8 +3,13 @@
  */
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { dirname } from "node:path";
+// Static default import (not `createRequire`) so `bun build --compile`
+// statically detects the dependency and bundles it into the binary.
+// Otherwise the compiled `dosu` looks for `write-file-atomic` on the
+// caller's CWD `node_modules` at runtime and fails outside this repo.
+// @ts-expect-error — write-file-atomic ships no types; shape is documented inline.
+import writeFileAtomicRaw from "write-file-atomic";
 import { getBackendURL } from "../config/constants";
 
 type WriteFileAtomicOptions = {
@@ -12,8 +17,7 @@ type WriteFileAtomicOptions = {
   chown: false;
 };
 
-const require = createRequire(import.meta.url);
-const writeFileAtomic = require("write-file-atomic") as {
+const writeFileAtomic = writeFileAtomicRaw as {
   sync(path: string, data: string, options: WriteFileAtomicOptions): void;
 };
 

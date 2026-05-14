@@ -20,6 +20,7 @@
     "dev": "bun run src/index.ts",
     "dev:local": "DOSU_DEV=true bun run src/index.ts",
     "build": "bun --env-file=.env.production run scripts/build-compile.ts",
+    "build:dev": "bun --env-file=.env.development run scripts/build-compile.ts",
     "build:npm": "bun --env-file=.env.production run scripts/build-npm.ts",
     "build:all": "bun --env-file=.env.production run scripts/build-all.ts",
     "test": "bunx vitest run",
