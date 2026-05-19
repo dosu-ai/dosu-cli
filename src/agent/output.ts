@@ -57,13 +57,25 @@ export function emitNeedUserAction(opts: {
  * Emit a structured error with a `reason` machine code and a human/agent
  * remediation string. `reason` is for telemetry / agents to switch on;
  * `agent_next_steps` is what the calling agent should tell the user.
+ *
+ * Additional fields can be attached (e.g. `candidates` for a list of
+ * deployments to pick from) — they're spread into the JSON line so the
+ * driving agent can consume them programmatically without parsing
+ * `agent_next_steps` prose.
  */
-export function emitError(opts: { step: string; reason: string; agent_next_steps: string }): void {
+export function emitError(opts: {
+  step: string;
+  reason: string;
+  agent_next_steps: string;
+  [key: string]: unknown;
+}): void {
+  const { step, reason, agent_next_steps, ...rest } = opts;
   emitJSONLine({
-    step: opts.step,
+    step,
     status: "error",
-    reason: opts.reason,
-    agent_next_steps: opts.agent_next_steps,
+    reason,
+    ...rest,
+    agent_next_steps,
   });
 }
 

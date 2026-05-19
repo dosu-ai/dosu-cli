@@ -10,6 +10,7 @@ import { Client, type Deployment, type Org, SessionExpiredError } from "../clien
 import { installSkill } from "../commands/skill";
 import { type Config, loadConfig, MODE_OSS, type SetupMode, saveConfig } from "../config/config";
 import { logger } from "../debug/logger";
+import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
 import { dim, info } from "./styles";
@@ -602,7 +603,7 @@ async function resolveOnboardingDeployment(
   const deployments = await fetchDeployments(apiClient);
   const orgDeployments = deployments.filter((deployment) => deployment.org_id === targetOrg.org_id);
   return (
-    orgDeployments.find((deployment) => deployment.provider_slug === "dosu_mcp") ??
+    orgDeployments.find((deployment) => deployment.provider_slug === MCP_PROVIDER_SLUG) ??
     orgDeployments[0] ??
     null
   );

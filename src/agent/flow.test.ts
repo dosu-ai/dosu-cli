@@ -253,7 +253,7 @@ describe("runAgentSetup", () => {
     });
   });
 
-  it("errors with multiple_deployments when the user has more than one", async () => {
+  it("errors with multiple_deployments when the user has more than one dosu_mcp", async () => {
     mockExchangeTicket.mockResolvedValue({
       status: "authenticated",
       access_token: "tok",
@@ -291,6 +291,114 @@ describe("runAgentSetup", () => {
       step: "deployment",
       status: "error",
       reason: "multiple_deployments",
+      candidates: [
+        { deployment_id: "dep-1", name: "acme/main", org_id: "org-1", org_name: "acme" },
+        { deployment_id: "dep-2", name: "acme/staging", org_id: "org-1", org_name: "acme" },
+      ],
+    });
+    expect(claudeProvider.install).not.toHaveBeenCalled();
+  });
+
+  it("auto-picks the lone dosu_mcp when other non-MCP deployments coexist", async () => {
+    mockExchangeTicket.mockResolvedValue({
+      status: "authenticated",
+      access_token: "tok",
+      refresh_token: "ref",
+      expires_in: 3600,
+      email: "user@example.com",
+    });
+    mockClient.getDeployments.mockResolvedValue([
+      {
+        deployment_id: "dep-chat",
+        name: "In-App Chat",
+        description: "",
+        provider_slug: "dosu_app",
+        enabled: true,
+        org_id: "org-1",
+        org_name: "acme",
+        space_id: "space-1",
+      },
+      {
+        deployment_id: "dep-mcp",
+        name: "acme/main",
+        description: "",
+        provider_slug: "dosu_mcp",
+        enabled: true,
+        org_id: "org-1",
+        org_name: "acme",
+        space_id: "space-2",
+      },
+      {
+        deployment_id: "dep-kb",
+        name: "Knowledge Base",
+        description: "",
+        provider_slug: "dosu_knowledge_store",
+        enabled: true,
+        org_id: "org-1",
+        org_name: "acme",
+        space_id: "space-3",
+      },
+    ]);
+    mockClient.validateAPIKey.mockResolvedValue(false);
+    mockClient.createAPIKey.mockResolvedValue({
+      api_key: "sk_user_z",
+      id: "k3",
+      name: "dosu-cli",
+      key_prefix: "sk_user_z",
+    });
+
+    const code = await runAgentSetup({ tool: "claude", loginTicket: "tkt-good" });
+
+    expect(code).toBe(0);
+    const events = emittedEvents();
+    const depEvent = events.find((e) => e.step === "deployment");
+    expect(depEvent).toMatchObject({
+      step: "deployment",
+      status: "ok",
+      deployment_id: "dep-mcp",
+      name: "acme/main",
+    });
+    expect(claudeProvider.install).toHaveBeenCalledTimes(1);
+  });
+
+  it("errors with no_mcp_deployment when account has deployments but none are MCP", async () => {
+    mockExchangeTicket.mockResolvedValue({
+      status: "authenticated",
+      access_token: "tok",
+      refresh_token: "ref",
+      expires_in: 3600,
+    });
+    mockClient.getDeployments.mockResolvedValue([
+      {
+        deployment_id: "dep-chat",
+        name: "In-App Chat",
+        description: "",
+        provider_slug: "dosu_app",
+        enabled: true,
+        org_id: "org-1",
+        org_name: "acme",
+        space_id: "space-1",
+      },
+      {
+        deployment_id: "dep-gh",
+        name: "acme/repo",
+        description: "",
+        provider_slug: "github",
+        enabled: true,
+        org_id: "org-1",
+        org_name: "acme",
+        space_id: "space-2",
+      },
+    ]);
+
+    const code = await runAgentSetup({ tool: "claude", loginTicket: "tkt" });
+
+    expect(code).toBe(1);
+    const events = emittedEvents();
+    expect(events.at(-1)).toMatchObject({
+      step: "deployment",
+      status: "error",
+      reason: "no_mcp_deployment",
     });
     expect(claudeProvider.install).not.toHaveBeenCalled();
   });
