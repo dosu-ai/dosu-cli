@@ -14,9 +14,10 @@
  */
 
 import { exchangeTicket, mintTicket } from "../auth/ticket";
-import { Client } from "../client/client";
+import { Client, type Deployment } from "../client/client";
 import { type Config, loadConfig, saveConfig } from "../config/config";
 import { logger } from "../debug/logger";
+import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { isStdioOnly } from "../setup/flow";
 import { emitError, emitNeedUserAction, emitStep } from "./output";
@@ -273,12 +274,14 @@ async function resolveDeployment(
     return { code: 0, cfg };
   }
 
-  // Auto-pick if the user has exactly one deployment; otherwise refuse and
-  // let the user choose. Agent mode is intentionally strict here — we'd
-  // rather error than guess wrong.
+  // No explicit --deployment and nothing locked in — try to find a unique
+  // MCP-backed deployment to auto-pick. An account can have many non-MCP
+  // deployments (in-app chat, knowledge stores, GitHub/Slack integrations)
+  // which are not valid targets for agent setup, so we filter to
+  // `dosu_mcp` slug before counting.
   try {
-    const deployments = await client.getDeployments();
-    if (deployments.length === 0) {
+    const allDeployments = await client.getDeployments();
+    if (allDeployments.length === 0) {
       emitError({
         step: "deployment",
         reason: "no_deployments",
@@ -287,8 +290,21 @@ async function resolveDeployment(
       });
       return { code: 1, cfg };
     }
-    if (deployments.length === 1) {
-      const d = deployments[0];
+
+    const mcpDeployments = allDeployments.filter((d) => d.provider_slug === MCP_PROVIDER_SLUG);
+
+    if (mcpDeployments.length === 0) {
+      emitError({
+        step: "deployment",
+        reason: "no_mcp_deployment",
+        agent_next_steps:
+          "Account has deployments but none of them back an MCP server. Tell the user to create an MCP deployment at https://app.dosu.dev, or pass --deployment <id> to target a specific deployment.",
+      });
+      return { code: 1, cfg };
+    }
+
+    if (mcpDeployments.length === 1) {
+      const d = mcpDeployments[0];
       cfg.deployment_id = d.deployment_id;
       cfg.deployment_name = d.name;
       cfg.org_id = d.org_id;
@@ -302,11 +318,21 @@ async function resolveDeployment(
       });
       return { code: 0, cfg };
     }
+
+    // Multiple MCP-backed deployments — agent must ask the user. We attach
+    // the filtered candidates inline so the driving agent doesn't need to
+    // call `dosu deployments list --json` and re-filter on its own.
+    const candidates = mcpDeployments.map((d) => ({
+      deployment_id: d.deployment_id,
+      name: d.name,
+      org_id: d.org_id,
+      org_name: d.org_name,
+    }));
     emitError({
       step: "deployment",
       reason: "multiple_deployments",
-      agent_next_steps:
-        "User has multiple Dosu deployments. Ask the user which one to use, then re-run the same command with `--deployment <id>`. Run 'dosu deployments list --json' to list options.",
+      candidates,
+      agent_next_steps: `User has ${mcpDeployments.length} MCP deployments. Show these options to the user and re-run the same command with \`--deployment <id>\`:\n${formatCandidates(mcpDeployments)}`,
     });
     return { code: 1, cfg };
   } catch (err: unknown) {
@@ -319,6 +345,10 @@ async function resolveDeployment(
     });
     return { code: 1, cfg };
   }
+}
+
+function formatCandidates(deployments: Deployment[]): string {
+  return deployments.map((d) => `  - ${d.name} (${d.org_name}) — ${d.deployment_id}`).join("\n");
 }
 
 async function ensureAPIKey(client: Client, cfg: Config): Promise<{ code: number; cfg: Config }> {
