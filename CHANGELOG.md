@@ -1,3 +1,10 @@
+## [0.15.1](https://github.com/dosu-ai/dosu-cli/compare/v0.15.0...v0.15.1) (2026-05-19)
+
+
+### Bug Fixes
+
+* select only MCP deployments in agent setup ([#70](https://github.com/dosu-ai/dosu-cli/issues/70)) ([4b6ec32](https://github.com/dosu-ai/dosu-cli/commit/4b6ec32dcce3d6aa10dfa08ebbf2466a78971beb))
+
 # [0.15.0](https://github.com/dosu-ai/dosu-cli/compare/v0.14.2...v0.15.0) (2026-05-14)
 
 
