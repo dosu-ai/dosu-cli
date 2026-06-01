@@ -152,7 +152,9 @@ describe("sources sync", () => {
 
     await run("sync", "ds1");
 
-    expect(mockMutate).toHaveBeenCalledWith("dataSource.syncDataSource", "ds1");
+    expect(mockMutate).toHaveBeenCalledWith("dataSource.syncDataSource", {
+      data_source_id: "ds1",
+    });
   });
 
   it("outputs JSON with --json", async () => {

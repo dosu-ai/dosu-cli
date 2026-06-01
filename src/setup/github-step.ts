@@ -160,7 +160,8 @@ interface GitHubSetupClient {
       { org_id: string; excluded_provider_slugs: string[] },
       { data_source_id?: string }[]
     >;
-    syncDataSource: MutationProcedure<string>;
+    syncDataSource: MutationProcedure<{ data_source_id: string }>;
+    attachToSpace: MutationProcedure<{ space_id: string; data_source_ids: string[] }, number>;
   };
   deploymentDataSource: {
     create: MutationProcedure<{ deployment_id: string; data_source_id: string }>;
@@ -403,8 +404,12 @@ async function createDeploymentForRepo(
     }
     const dataSourceID = dataSource.data_source_id;
 
-    await trpc.dataSource.syncDataSource.mutate(dataSourceID);
+    await trpc.dataSource.syncDataSource.mutate({ data_source_id: dataSourceID });
 
+    await trpc.dataSource.attachToSpace.mutate({
+      space_id: spaceID,
+      data_source_ids: [dataSourceID],
+    });
     const spaceDeployments = await trpc.workspaces.listForSpace.query(spaceID);
     await Promise.all(
       spaceDeployments.map((d) =>

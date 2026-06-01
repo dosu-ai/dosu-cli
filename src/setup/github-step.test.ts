@@ -24,6 +24,7 @@ const {
     dataSource: {
       create: { mutate: vi.fn() },
       syncDataSource: { mutate: vi.fn() },
+      attachToSpace: { mutate: vi.fn() },
       list: { query: vi.fn() },
     },
     deploymentDataSource: { create: { mutate: vi.fn() } },
@@ -505,8 +506,23 @@ describe("stepConnectGitHubRepo", () => {
     // syncDataSource fires once per created data source so the backend
     // enqueues `sync_data_source` and clones the repo.
     expect(mockTrpc.dataSource.syncDataSource.mutate).toHaveBeenCalledTimes(2);
-    expect(mockTrpc.dataSource.syncDataSource.mutate).toHaveBeenCalledWith("ds-A");
-    expect(mockTrpc.dataSource.syncDataSource.mutate).toHaveBeenCalledWith("ds-B");
+    expect(mockTrpc.dataSource.syncDataSource.mutate).toHaveBeenCalledWith({
+      data_source_id: "ds-A",
+    });
+    expect(mockTrpc.dataSource.syncDataSource.mutate).toHaveBeenCalledWith({
+      data_source_id: "ds-B",
+    });
+    // attachToSpace fires once per created data source so the backend's
+    // SDS→DDS trigger fans the source out across the space's library.
+    expect(mockTrpc.dataSource.attachToSpace.mutate).toHaveBeenCalledTimes(2);
+    expect(mockTrpc.dataSource.attachToSpace.mutate).toHaveBeenCalledWith({
+      space_id: "space-1",
+      data_source_ids: ["ds-A"],
+    });
+    expect(mockTrpc.dataSource.attachToSpace.mutate).toHaveBeenCalledWith({
+      space_id: "space-1",
+      data_source_ids: ["ds-B"],
+    });
     // deploymentDataSource.create fires once per (selected repo × space deployments):
     // 2 repos × 3 deployments = 6 invocations.
     expect(mockTrpc.deploymentDataSource.create.mutate).toHaveBeenCalledTimes(6);
