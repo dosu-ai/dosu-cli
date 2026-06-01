@@ -512,8 +512,6 @@ describe("stepConnectGitHubRepo", () => {
     expect(mockTrpc.dataSource.syncDataSource.mutate).toHaveBeenCalledWith({
       data_source_id: "ds-B",
     });
-    // attachToSpace fires once per created data source so the backend's
-    // SDS→DDS trigger fans the source out across the space's library.
     expect(mockTrpc.dataSource.attachToSpace.mutate).toHaveBeenCalledTimes(2);
     expect(mockTrpc.dataSource.attachToSpace.mutate).toHaveBeenCalledWith({
       space_id: "space-1",
