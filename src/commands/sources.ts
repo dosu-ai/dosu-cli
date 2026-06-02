@@ -102,8 +102,15 @@ export function sourcesCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const client = createTypedClient(cfg);
-      await client.dataSource.syncDataSource.mutate(id);
+      type SyncClient = {
+        dataSource: {
+          syncDataSource: {
+            mutate(input: { data_source_id: string }): Promise<boolean>;
+          };
+        };
+      };
+      const client = createTypedClient<SyncClient>(cfg);
+      await client.dataSource.syncDataSource.mutate({ data_source_id: id });
 
       if (opts.json) {
         printResult({ success: true, id }, opts);
