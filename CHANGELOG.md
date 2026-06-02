@@ -1,3 +1,10 @@
+## [0.15.2](https://github.com/dosu-ai/dosu-cli/compare/v0.15.1...v0.15.2) (2026-06-02)
+
+
+### Bug Fixes
+
+* align with explicit-library-membership backend changes ([#71](https://github.com/dosu-ai/dosu-cli/issues/71)) ([671c497](https://github.com/dosu-ai/dosu-cli/commit/671c497d74522b95b63d36d152ca0185bb545fe3))
+
 ## [0.15.1](https://github.com/dosu-ai/dosu-cli/compare/v0.15.0...v0.15.1) (2026-05-19)
 
 
