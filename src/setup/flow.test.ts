@@ -111,15 +111,28 @@ vi.mock("../commands/skill", () => ({
   skillCommand: vi.fn(),
 }));
 
-const { mockStepConnectGitHubRepo, mockStepImportGitHubDocs } = vi.hoisted(() => ({
+const {
+  mockStepConnectGitHubRepo,
+  mockStepImportGitHubDocs,
+  mockStepConnectGitHubPat,
+  mockStepAnalyzeDocs,
+} = vi.hoisted(() => ({
   mockStepConnectGitHubRepo: vi.fn(),
   mockStepImportGitHubDocs: vi.fn(),
+  mockStepConnectGitHubPat: vi.fn(),
+  mockStepAnalyzeDocs: vi.fn(),
 }));
 vi.mock("./github-step", () => ({
   stepConnectGitHubRepo: (...args: unknown[]) => mockStepConnectGitHubRepo(...args),
 }));
 vi.mock("./github-doc-import-step", () => ({
   stepImportGitHubDocs: (...args: unknown[]) => mockStepImportGitHubDocs(...args),
+}));
+vi.mock("./github-pat-step", () => ({
+  stepConnectGitHubPat: (...args: unknown[]) => mockStepConnectGitHubPat(...args),
+}));
+vi.mock("./doc-analyze-step", () => ({
+  stepAnalyzeDocs: (...args: unknown[]) => mockStepAnalyzeDocs(...args),
 }));
 
 import * as p from "@clack/prompts";
@@ -177,6 +190,12 @@ function mockToolSelection(selection: string[]) {
 function installSetupStepDefaults() {
   mockStepConnectGitHubRepo.mockResolvedValue({ advance: false, has_connected_repo: false });
   mockStepImportGitHubDocs.mockResolvedValue({ advance: false });
+  mockStepConnectGitHubPat.mockResolvedValue({ advance: true });
+  mockStepAnalyzeDocs.mockResolvedValue({
+    imported_count: 0,
+    failed_count: 0,
+    suggestions_queued: false,
+  });
 }
 
 function installRemoteSetupDefaults() {
@@ -224,7 +243,7 @@ function makeCfg(overrides: Partial<Config> = {}): Config {
     access_token: "tok",
     refresh_token: "ref",
     expires_at: Math.floor(Date.now() / 1000) + 3600,
-    deployment_id: "dep-123",
+    deployment_id: "d1",
     deployment_name: "TestDeploy",
     api_key: "key-abc",
     ...overrides,
@@ -357,7 +376,7 @@ describe("stepConfigureTools", () => {
     const written = loadJSONConfig(configPath);
     expect(written.mcpServers).toBeDefined();
     expect(written.mcpServers.dosu).toBeDefined();
-    expect(written.mcpServers.dosu.url).toContain("dep-123");
+    expect(written.mcpServers.dosu.url).toContain("d1");
     expect(written.mcpServers.dosu.headers["X-Dosu-API-Key"]).toBe("key-abc");
   });
 
@@ -628,17 +647,18 @@ describe("showTryItOutPrompt", () => {
     expect(p.log.message).not.toHaveBeenCalledWith(expect.stringContaining("host my AGENTS.md"));
   });
 
-  it("suggests hosting AGENTS.md when the file exists and no docs were imported", () => {
+  it("surfaces dosu write and dosu read when no docs imported and AGENTS.md exists", () => {
     showTryItOutPrompt({ docsImported: false, hasAgentsMd: true });
 
-    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("host my AGENTS.md"));
+    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("dosu write"));
+    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("dosu read"));
   });
 
-  it("suggests drafting AGENTS.md when neither docs are imported nor the file exists", () => {
+  it("surfaces dosu write and dosu read when neither docs imported nor AGENTS.md exists", () => {
     showTryItOutPrompt({ docsImported: false, hasAgentsMd: false });
 
-    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("draft an AGENTS.md"));
-    expect(p.log.message).not.toHaveBeenCalledWith(expect.stringContaining("host my AGENTS.md"));
+    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("dosu write"));
+    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("dosu read"));
   });
 
   it("uses the OSS prompt regardless of other flags", () => {
@@ -992,7 +1012,9 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(p.log.error).toHaveBeenCalledWith("No organizations found for your account");
+    expect(p.log.error).toHaveBeenCalledWith(
+      expect.stringContaining("No organizations found for your account"),
+    );
   });
 
   it("handles SessionExpiredError during org fetch", async () => {
@@ -1037,7 +1059,7 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(p.select).toHaveBeenCalledWith(expect.objectContaining({ message: "Select an MCP" }));
+    expect(p.select).toHaveBeenCalledWith(expect.objectContaining({ message: "Select a project" }));
     const saved = loadConfig();
     expect(saved.deployment_id).toBe("d2");
   });
@@ -1209,7 +1231,7 @@ describe("runSetup integration", () => {
 
     await runSetup({ deploymentID: "nonexistent" });
 
-    expect(p.log.error).toHaveBeenCalledWith("MCP nonexistent not found");
+    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("MCP nonexistent not found"));
   });
 
   it("handles resolve deployment fetch error", async () => {
@@ -1310,7 +1332,9 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(p.log.error).toHaveBeenCalledWith("No MCP available for API key creation");
+    expect(p.log.error).toHaveBeenCalledWith(
+      expect.stringContaining("No MCP available for API key creation"),
+    );
     const saved = loadConfig();
     expect(saved.deployment_id).toBeUndefined();
     expect(p.outro).not.toHaveBeenCalled();
@@ -1327,7 +1351,9 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(p.log.error).toHaveBeenCalledWith("No MCP available for API key creation");
+    expect(p.log.error).toHaveBeenCalledWith(
+      expect.stringContaining("No MCP available for API key creation"),
+    );
     const saved = loadConfig();
     expect(saved.deployment_id).toBeUndefined();
     expect(p.outro).not.toHaveBeenCalled();
@@ -1417,7 +1443,8 @@ describe("runSetup integration", () => {
     await runSetup();
 
     expect(mockInstallSkill).toHaveBeenCalled();
-    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill installed"));
+    const spinnerInstance = vi.mocked(p.spinner).mock.results.at(-1)?.value;
+    expect(spinnerInstance?.stop).toHaveBeenCalledWith(expect.stringContaining("skill installed"));
   });
 
   it("does not install skill when the one-shot confirm unticks it", async () => {
@@ -1458,7 +1485,7 @@ describe("runSetup integration", () => {
     expect(mockInstallSkill).toHaveBeenCalled();
   });
 
-  it("shows the GitHub docs import label in the one-shot confirm", async () => {
+  it("auto-accepts all defaults on first-run onboarding without a confirm prompt", async () => {
     const cfg = makeCfg();
     saveConfig(cfg);
 
@@ -1472,18 +1499,16 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
+    // First-run onboarding skips the one-shot confirm — no "Dosu will set" prompt shown.
     const oneShotCall = vi
       .mocked(p.multiselect)
       .mock.calls.find(([args]) =>
         String((args as { message?: string }).message ?? "").includes("Dosu will set"),
       );
-    const options = (oneShotCall?.[0] as { options: Array<{ label: string }> }).options;
-    expect(options.map((option) => String(option.label))).toEqual(
-      expect.arrayContaining([expect.stringContaining("Import docs from GitHub")]),
-    );
-    expect(options.map((option) => String(option.label))).toEqual(
-      expect.arrayContaining([expect.stringContaining("Keep them up to date")]),
-    );
+    expect(oneShotCall).toBeUndefined();
+
+    // Skill should still be installed automatically.
+    expect(mockInstallSkill).toHaveBeenCalled();
   });
 });
 
@@ -1509,7 +1534,8 @@ describe("runInstallSkill", () => {
 
     expect(result).toBe(true);
     expect(mockInstallSkill).toHaveBeenCalled();
-    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill installed"));
+    const spinnerInstance = vi.mocked(p.spinner).mock.results.at(-1)?.value;
+    expect(spinnerInstance?.stop).toHaveBeenCalledWith(expect.stringContaining("skill installed"));
   });
 
   it("returns false and logs error when installSkill reports failure", async () => {
@@ -1711,17 +1737,17 @@ describe("runSetup checkpoint behavior", () => {
       cli_onboarding_enabled: true,
     });
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockStepConnectGitHubRepo.mockResolvedValue({
+    mockStepConnectGitHubPat.mockResolvedValue({
       advance: true,
-      has_connected_repo: true,
-      created_data_source_ids: ["ds-1"],
+      data_source_id: "ds-1",
+      space_id: "space-1",
+      deployment_id: "dep-1",
+      repo_slug: "owner/repo",
     });
-    mockStepImportGitHubDocs.mockResolvedValue({
-      advance: true,
-      imported: true,
+    mockStepAnalyzeDocs.mockResolvedValue({
       imported_count: 3,
       failed_count: 0,
-      task_id: "task-1",
+      suggestions_queued: true,
     });
 
     await runSetup();
@@ -1731,7 +1757,7 @@ describe("runSetup checkpoint behavior", () => {
         expect.objectContaining({ event: "cli_onboarding_github_connected" }),
         expect.objectContaining({
           event: "cli_onboarding_docs_imported",
-          properties: expect.objectContaining({ imported_count: 3, task_id: "task-1" }),
+          properties: expect.objectContaining({ imported_count: 3 }),
         }),
         expect.objectContaining({
           event: "cli_onboarding_activated",
@@ -1888,7 +1914,7 @@ describe("runSetup checkpoint behavior", () => {
     expect(saved.deployment_id).toBe("dep-owner");
   });
 
-  it("always starts the GitHub step from repo selection during first-run onboarding", async () => {
+  it("calls stepConnectGitHubPat during first-run onboarding", async () => {
     saveConfig(makeCfg());
     setupAuthed();
     mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
@@ -1897,24 +1923,26 @@ describe("runSetup checkpoint behavior", () => {
       cli_onboarding_enabled: true,
     });
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockStepConnectGitHubRepo.mockResolvedValue({
+    mockStepConnectGitHubPat.mockResolvedValue({
       advance: true,
-      has_connected_repo: true,
-      deployment_id: "dep-github",
+      data_source_id: "ds-1",
       space_id: "space-1",
+      deployment_id: "dep-github",
+      repo_slug: "owner/repo",
     });
-    mockStepImportGitHubDocs.mockResolvedValue({ advance: true });
+    mockStepAnalyzeDocs.mockResolvedValue({
+      imported_count: 5,
+      failed_count: 0,
+      suggestions_queued: true,
+    });
 
     await runSetup();
 
-    expect(mockStepConnectGitHubRepo).toHaveBeenCalledTimes(1);
-    expect(mockStepImportGitHubDocs).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({ waitForFreshDocs: true }),
-    );
+    expect(mockStepConnectGitHubPat).toHaveBeenCalledTimes(1);
+    expect(mockStepAnalyzeDocs).toHaveBeenCalledTimes(1);
   });
 
-  it("does not wait for fresh docs when no repo was connected in this run", async () => {
+  it("skips doc analysis when PAT step returns no data_source_id", async () => {
     saveConfig(makeCfg());
     setupAuthed();
     mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
@@ -1923,17 +1951,11 @@ describe("runSetup checkpoint behavior", () => {
       cli_onboarding_enabled: true,
     });
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockStepConnectGitHubRepo.mockResolvedValue({
-      advance: true,
-      has_connected_repo: false,
-    });
-    mockStepImportGitHubDocs.mockResolvedValue({ advance: true });
+    mockStepConnectGitHubPat.mockResolvedValue({ advance: true }); // no data_source_id
 
     await runSetup();
 
-    expect(mockStepImportGitHubDocs).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({ waitForFreshDocs: false }),
-    );
+    expect(mockStepConnectGitHubPat).toHaveBeenCalledTimes(1);
+    expect(mockStepAnalyzeDocs).not.toHaveBeenCalled();
   });
 });

@@ -13,12 +13,14 @@ import { integrationsCommand } from "../commands/integrations";
 import { knowledgeCommand } from "../commands/knowledge";
 import { membersCommand } from "../commands/members";
 import { orgCommand } from "../commands/org";
+import { readCommand } from "../commands/read";
 import { reviewCommand } from "../commands/review";
 import { skillCommand } from "../commands/skill";
 import { sourcesCommand } from "../commands/sources";
 import { suggestCommand } from "../commands/suggest";
 import { tagsCommand } from "../commands/tags";
 import { threadsCommand } from "../commands/threads";
+import { writeCommand } from "../commands/write";
 import {
   getConfigPath,
   isAuthenticated,
@@ -247,12 +249,14 @@ export function createProgram(): Command {
   program.addCommand(knowledgeCommand());
   program.addCommand(membersCommand());
   program.addCommand(orgCommand());
+  program.addCommand(readCommand());
   program.addCommand(reviewCommand());
+  program.addCommand(skillCommand());
   program.addCommand(sourcesCommand());
   program.addCommand(suggestCommand());
   program.addCommand(tagsCommand());
   program.addCommand(threadsCommand());
-  program.addCommand(skillCommand());
+  program.addCommand(writeCommand());
 
   // setup
   program

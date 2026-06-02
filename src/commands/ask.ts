@@ -36,7 +36,9 @@ export function askCommand(): Command {
       const backendURL = getBackendURL();
 
       if (!backendURL) {
-        console.error(pc.red("Backend URL not configured."));
+        console.error(
+          pc.red("Backend URL not configured. Reinstall the CLI or set DOSU_BACKEND_URL_OVERRIDE."),
+        );
         process.exit(1);
       }
 
@@ -70,6 +72,9 @@ export function askCommand(): Command {
             detail = typeof raw === "string" ? raw : JSON.stringify(raw, null, 2);
           } catch {}
           console.error(pc.red(`Error: ${detail}`));
+          console.error(
+            pc.dim("Run `dosu logs --tail 30` for details, or `dosu status` to check auth."),
+          );
           process.exit(1);
         }
 
@@ -101,7 +106,7 @@ export function askCommand(): Command {
         }
       } catch (err: unknown) {
         if (err instanceof Error && err.name === "AbortError") {
-          console.error(pc.red("Request timed out."));
+          console.error(pc.red("Request timed out after 120s. Re-run, or simplify the question."));
           process.exit(1);
         }
         throw err;

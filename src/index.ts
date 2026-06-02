@@ -11,5 +11,8 @@ process.on("SIGINT", () => process.exit(0));
 
 execute().catch((err) => {
   console.error(err.message ?? err);
+  console.error(
+    "\nRun `dosu logs --tail 30` for details, or re-run with `--debug` to stream debug logs.",
+  );
   process.exit(1);
 });

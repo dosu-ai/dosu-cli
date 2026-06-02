@@ -21,11 +21,16 @@ const SKILL_NAME = "dosu";
  * what was installed. Network failure is non-fatal — the skill is still
  * installed, the SHA is just not cached (the update checker will fill it
  * in on the next stale check).
+ *
+ * Pass `silent: true` to suppress raw npx output (used during setup to avoid
+ * showing security-risk warnings in the FTUE).
  */
-export async function installSkill(): Promise<{ success: boolean; sha?: string }> {
+export async function installSkill(
+  opts: { silent?: boolean } = {},
+): Promise<{ success: boolean; sha?: string }> {
   try {
     execSync(`npx skills add ${SKILL_REPO} -g -s ${SKILL_NAME} -y`, {
-      stdio: "inherit",
+      stdio: opts.silent ? "pipe" : "inherit",
     });
   } catch (err) {
     logger.error("skill", `Failed to install skill: ${err}`);

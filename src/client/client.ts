@@ -36,6 +36,13 @@ export interface APIKeyResponse {
   key_prefix: string;
 }
 
+const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+
+export interface RequestOptions {
+  /** Override the per-request HTTP timeout (ms). Defaults to 10_000. */
+  timeoutMs?: number;
+}
+
 export class Client {
   private baseURL: string;
   private config: Config;
@@ -47,8 +54,17 @@ export class Client {
 
   /**
    * Performs an authenticated HTTP request with auto-refresh on 401/403.
+   *
+   * `opts.timeoutMs` overrides the default 10s timeout for endpoints known to
+   * exceed it (e.g. the GitHub PAT storage endpoint, which performs KMS
+   * encrypt + DB upsert + sync enqueue).
    */
-  async doRequest(method: string, path: string, body?: unknown): Promise<Response> {
+  async doRequest(
+    method: string,
+    path: string,
+    body?: unknown,
+    opts?: RequestOptions,
+  ): Promise<Response> {
     if (!isAuthenticated(this.config)) {
       throw new Error("not authenticated - please run setup first");
     }
@@ -58,7 +74,7 @@ export class Client {
       await this.refreshToken();
     }
 
-    let resp = await this.doRequestOnce(method, path, body);
+    let resp = await this.doRequestOnce(method, path, body, opts);
 
     // If backend says unauthorized, try refresh + retry once
     if (resp.status === 401 || resp.status === 403) {
@@ -67,7 +83,7 @@ export class Client {
       } catch {
         throw new SessionExpiredError();
       }
-      resp = await this.doRequestOnce(method, path, body);
+      resp = await this.doRequestOnce(method, path, body, opts);
     }
 
     return resp;
@@ -76,11 +92,16 @@ export class Client {
   /**
    * Performs a single authenticated request without any retry/refresh logic.
    */
-  async doRequestRaw(method: string, path: string): Promise<Response> {
-    return this.doRequestOnce(method, path);
+  async doRequestRaw(method: string, path: string, opts?: RequestOptions): Promise<Response> {
+    return this.doRequestOnce(method, path, undefined, opts);
   }
 
-  private async doRequestOnce(method: string, path: string, body?: unknown): Promise<Response> {
+  private async doRequestOnce(
+    method: string,
+    path: string,
+    body?: unknown,
+    opts?: RequestOptions,
+  ): Promise<Response> {
     const url = this.baseURL + path;
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -93,7 +114,8 @@ export class Client {
     }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10_000);
+    const timeoutMs = opts?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     options.signal = controller.signal;
 
     try {

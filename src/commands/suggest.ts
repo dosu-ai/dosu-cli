@@ -85,7 +85,9 @@ export function suggestCommand(): Command {
         org_id: cfg.org_id,
         excluded_provider_slugs: [],
       });
-      const dataSourceIds = dataSources.map((ds: { id: string }) => ds.id);
+      const dataSourceIds = (dataSources as { data_source_id?: string }[])
+        .map((ds) => ds.data_source_id)
+        .filter((id): id is string => typeof id === "string");
 
       const result = await client.suggestedDoc.generate.mutate({
         knowledgeStoreId: ksId,
