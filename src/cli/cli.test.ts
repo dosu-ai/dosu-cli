@@ -109,4 +109,24 @@ describe("CLI", () => {
     expect(cmd?.options.find((o) => o.long === "--tail")).toBeDefined();
     expect(cmd?.options.find((o) => o.long === "--clear")).toBeDefined();
   });
+
+  it("has hooks command with entrypoint and lifecycle subcommands", () => {
+    const program = createProgram();
+    const cmd = program.commands.find((c) => c.name() === "hooks");
+    expect(cmd).toBeDefined();
+    const names = cmd?.commands.map((c) => c.name()) ?? [];
+    expect(names).toEqual(
+      expect.arrayContaining([
+        "user-prompt-submit",
+        "post-tool-use",
+        "stop",
+        "status",
+        "install",
+        "uninstall",
+        "doctor",
+      ]),
+    );
+    const install = cmd?.commands.find((c) => c.name() === "install");
+    expect(install?.options.find((o) => o.long === "--with-stop")).toBeDefined();
+  });
 });
