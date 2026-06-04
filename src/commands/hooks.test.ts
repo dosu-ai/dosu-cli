@@ -301,6 +301,21 @@ describe("runStop (opt-in)", () => {
     expect(saveState).toHaveBeenCalledWith(expect.objectContaining({ status: "delivered" }));
   });
 
+  it("consumes but does NOT block on a ready gap ticket (empty context)", async () => {
+    vi.mocked(loadState).mockReturnValue(pending());
+    vi.mocked(requestGetTicket).mockResolvedValue({
+      ticket_id: "kt_1",
+      status: "ready",
+      created_at: "x",
+      expires_at: "y",
+      result: { context: "", sources: [], attribution: "attr", save_recommended: true },
+      error: null,
+    });
+    await runStop({ session_id: "sess" }, 70_000);
+    expect(JSON.parse(logSpy.mock.calls[0][0])).toEqual({ continue: true });
+    expect(saveState).toHaveBeenCalledWith(expect.objectContaining({ status: "delivered" }));
+  });
+
   it("continues (never blocks) when the ticket is still pending", async () => {
     vi.mocked(loadState).mockReturnValue(pending());
     vi.mocked(requestGetTicket).mockResolvedValue({

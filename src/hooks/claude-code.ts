@@ -67,7 +67,11 @@ function dosuGroup(event: string): HookGroup {
 /** Fallback (marker-less) detection: a `dosu hooks …` or legacy `@dosu/cli … hooks …` command. */
 function isDosuHookCommand(command: string): boolean {
   if (!/\bhooks\b/.test(command)) return false;
-  return /@dosu\/cli/.test(command) || /(^|[/\s])dosu(\s|$)/.test(command);
+  if (/@dosu\/cli/.test(command)) return true;
+  // `dosu` must be the command name (optionally path-prefixed), NOT merely an
+  // argument — so a user hook like `echo "dosu hooks ..."` is not misidentified
+  // (and therefore not wrongly deleted on uninstall).
+  return /^([^\s]*\/)?dosu\s/.test(command.trimStart());
 }
 
 /** True if a hook group is Dosu-owned (by marker, or — fallback — by command shape). */

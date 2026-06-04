@@ -243,13 +243,22 @@ export async function runStop(input: HookInput, now: number = Date.now()): Promi
   }
 
   if (resp.status === "ready" && resp.result) {
+    // Consume the ticket either way, but only BLOCK the agent for real knowledge.
+    // A bare save nudge (knowledge gap, empty context) is not worth holding the
+    // agent open at Stop — drop it rather than block on nothing actionable.
     saveState({ ...state, status: "delivered", deliveredAt: now, lastCheckedAt: now });
-    const { buildReadyEnvelope, STOP_PREFIX } = await import("../hooks/prompts");
-    const envelope = buildReadyEnvelope(resp.result.context, resp.result.save_recommended ?? false);
-    const reason = `${STOP_PREFIX}\n\n${envelope}`;
-    console.log(JSON.stringify({ decision: "block", reason }));
-    logger.info("hooks", `stop tid=${state.ticketId} delivered=true`);
-    return;
+    if (resp.result.context.trim()) {
+      const { buildReadyEnvelope, STOP_PREFIX } = await import("../hooks/prompts");
+      const envelope = buildReadyEnvelope(
+        resp.result.context,
+        resp.result.save_recommended ?? false,
+      );
+      console.log(JSON.stringify({ decision: "block", reason: `${STOP_PREFIX}\n\n${envelope}` }));
+      logger.info("hooks", `stop tid=${state.ticketId} delivered=true`);
+      return;
+    }
+    logger.debug("hooks", `stop tid=${state.ticketId} delivered=true gap-no-block`);
+    return printContinue();
   }
 
   saveState({ ...state, lastCheckedAt: now });

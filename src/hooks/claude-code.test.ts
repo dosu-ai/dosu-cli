@@ -124,6 +124,14 @@ describe("hooks/claude-code installer", () => {
     expect(
       isDosuGroup({ hooks: [{ type: "command", command: "npx -y @dosu/cli@1 hooks stop" }] }),
     ).toBe(true);
+    // path-prefixed dosu still matches; a user command that merely MENTIONS
+    // "dosu hooks" as an argument must NOT (else uninstall would delete it)
+    expect(isDosuGroup({ hooks: [{ type: "command", command: "/usr/bin/dosu hooks stop" }] })).toBe(
+      true,
+    );
+    expect(isDosuGroup({ hooks: [{ type: "command", command: 'echo "dosu hooks stop"' }] })).toBe(
+      false,
+    );
     expect(isDosuGroup({ hooks: [{ type: "command", command: "echo hi" }] })).toBe(false);
     expect(isDosuGroup(null)).toBe(false);
     expect(isDosuGroup({ hooks: "nope" })).toBe(false);

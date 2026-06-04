@@ -160,6 +160,12 @@ export function startFakeTicketServer(opts: { port?: number } = {}): Promise<Fak
   const counts = { create: 0, poll: 0 };
   const server: Server = createServer((req, res) => {
     const chunks: Buffer[] = [];
+    /* v8 ignore start -- defensive: a mid-stream socket error must not crash the dev server */
+    req.on("error", () => {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "request error" }));
+    });
+    /* v8 ignore stop */
     req.on("data", (c) => chunks.push(c as Buffer));
     req.on("end", () => {
       let body: { prompt?: string } | null = null;
