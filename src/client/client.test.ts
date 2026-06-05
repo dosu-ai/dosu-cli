@@ -289,4 +289,37 @@ describe("Client", () => {
       await expect(client.createAPIKey("dep-1", "cli")).rejects.toThrow("failed to create API key");
     });
   });
+
+  describe("api-key requests", () => {
+    it("postWithApiKey sends the X-Dosu-API-Key header and JSON body (no OAuth token)", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ ticket_id: "t1" }, 202));
+      const client = new Client(makeConfig({ api_key: "key-abc" }));
+      const resp = await client.postWithApiKey("/v1/tickets/knowledge", { prompt: "p" });
+      expect(resp.status).toBe(202);
+      const [url, options] = mockFetch.mock.calls[0];
+      expect(url).toBe("https://api.test.dev/v1/tickets/knowledge");
+      expect(options.method).toBe("POST");
+      expect(options.headers["X-Dosu-API-Key"]).toBe("key-abc");
+      expect(options.headers["Supabase-Access-Token"]).toBeUndefined();
+      expect(JSON.parse(options.body)).toEqual({ prompt: "p" });
+    });
+
+    it("getWithApiKey sends the header, no body, and surfaces 401 without refreshing", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({}, 401));
+      const client = new Client(makeConfig({ api_key: "key-abc" }));
+      const resp = await client.getWithApiKey("/v1/tickets/knowledge/t1");
+      expect(resp.status).toBe(401); // surfaced as-is — no OAuth refresh/retry
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const [, options] = mockFetch.mock.calls[0];
+      expect(options.method).toBe("GET");
+      expect(options.body).toBeUndefined();
+      expect(options.headers["X-Dosu-API-Key"]).toBe("key-abc");
+    });
+
+    it("throws when no API key is configured", async () => {
+      const client = new Client(makeConfig({ api_key: undefined }));
+      await expect(client.postWithApiKey("/x", {})).rejects.toThrow("no API key available");
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+  });
 });

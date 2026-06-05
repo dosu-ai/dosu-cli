@@ -127,6 +127,6 @@ describe("CLI", () => {
       ]),
     );
     const install = cmd?.commands.find((c) => c.name() === "install");
-    expect(install?.options.find((o) => o.long === "--with-stop")).toBeDefined();
+    expect(install?.options.find((o) => o.long === "--no-stop")).toBeDefined();
   });
 });

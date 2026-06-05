@@ -102,7 +102,7 @@ export async function runUserPromptSubmit(
   }
 
   const cfg = loadConfig();
-  if (!isAuthenticated(cfg) || !cfg.deployment_id) {
+  if (!cfg.api_key || !cfg.deployment_id) {
     logger.debug("hooks", "submit skipped reason=not-configured");
     return; // a hook never prompts the user; `doctor` surfaces this
   }
@@ -167,7 +167,7 @@ export async function runPostToolUse(input: HookInput, now: number = Date.now())
   }
 
   const cfg = loadConfig();
-  if (!isAuthenticated(cfg) || !cfg.deployment_id) {
+  if (!cfg.api_key || !cfg.deployment_id) {
     saveState({ ...state, lastCheckedAt: now });
     return;
   }
@@ -219,7 +219,7 @@ export async function runPostToolUse(input: HookInput, now: number = Date.now())
   }
 }
 
-/** Stop (opt-in): last-chance delivery. Blocks ONLY for a ready-but-undelivered ticket. */
+/** Stop: last-chance delivery at end of turn. Blocks ONLY for a ready-but-undelivered ticket. */
 export async function runStop(input: HookInput, now: number = Date.now()): Promise<void> {
   const sessionId = input.session_id;
   if (!sessionId) return printContinue();
@@ -234,7 +234,7 @@ export async function runStop(input: HookInput, now: number = Date.now()): Promi
   }
 
   const cfg = loadConfig();
-  if (!isAuthenticated(cfg) || !cfg.deployment_id) return printContinue();
+  if (!cfg.api_key || !cfg.deployment_id) return printContinue();
 
   const tc = await import("../hooks/ticket-client");
   let resp: import("../hooks/ticket-client").TicketStatusResponse;
@@ -340,7 +340,7 @@ function resolveDir(dir?: string): string {
 export interface LifecycleOptions {
   scope?: string;
   dir?: string;
-  withStop?: boolean;
+  stop?: boolean;
   json?: boolean;
 }
 
@@ -373,7 +373,7 @@ export async function runInstall(agent: string, opts: LifecycleOptions): Promise
   const { installClaudeHooks, claudeLocalSettingsPath } = await import("../hooks/claude-code");
   const configPath = claudeLocalSettingsPath(resolveDir(opts.dir));
   try {
-    const { events } = installClaudeHooks(configPath, { withStop: opts.withStop });
+    const { events } = installClaudeHooks(configPath, { stop: opts.stop });
     if (opts.json) {
       const { emitStep } = await import("../agent/output");
       emitStep({ step: "hooks-install", path: configPath, events });
@@ -484,8 +484,10 @@ export async function collectDoctorChecks(opts: { dir?: string }): Promise<Docto
     });
   }
 
-  // 5. Backend reachable + key valid (best-effort; optimistic on network error).
-  if (cfg.api_key && cfg.deployment_id && isAuthenticated(cfg)) {
+  // 5. Backend reachable + API key valid (best-effort; optimistic on network error).
+  // This validates the SAME credential the hooks use (`X-Dosu-API-Key`), so it
+  // reflects real hook auth — independent of the OAuth login state above.
+  if (cfg.api_key && cfg.deployment_id) {
     const { Client } = await import("../client/client");
     const ok = await new Client(cfg).validateAPIKey(cfg.api_key, cfg.deployment_id);
     checks.push({
@@ -497,7 +499,7 @@ export async function collectDoctorChecks(opts: { dir?: string }): Promise<Docto
     checks.push({
       name: "backend",
       status: "warn",
-      detail: "skipped (not authenticated / no deployment)",
+      detail: "skipped (no API key / no deployment)",
     });
   }
 
@@ -547,7 +549,7 @@ export function hooksCommand(): Command {
 
   cmd
     .command("stop")
-    .description("Hook entrypoint (opt-in): last-chance non-blocking delivery")
+    .description("Hook entrypoint: last-chance knowledge delivery when the agent stops")
     .action(async () => {
       await runHookEntrypoint("stop", readStdinRaw());
     });
@@ -574,7 +576,10 @@ export function hooksCommand(): Command {
     .addArgument(new Argument("<agent>", "coding agent to configure").choices(SUPPORTED_AGENTS))
     .option("--scope <scope>", "Config scope (local only)", "local")
     .option("--dir <path>", "Project root (defaults to current directory)")
-    .option("--with-stop", "Also install the optional Stop hook", false)
+    .option(
+      "--no-stop",
+      "Skip the Stop hook (knowledge then delivers mid-session only, less reliably)",
+    )
     .option("--json", "Emit machine-readable JSON", false)
     .addHelpText(
       "after",
@@ -584,7 +589,7 @@ export function hooksCommand(): Command {
         "",
         "Examples:",
         "  $ dosu hooks install claude-code",
-        "  $ dosu hooks install claude-code --with-stop",
+        "  $ dosu hooks install claude-code --no-stop",
         "  $ dosu hooks install claude-code --dir ./my-project",
       ].join("\n"),
     )

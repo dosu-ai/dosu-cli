@@ -120,6 +120,47 @@ export class Client {
   }
 
   /**
+   * API-key-authenticated requests (`X-Dosu-API-Key`) — the same credential the
+   * MCP integration uses. Unlike {@link doRequest}, these carry no Supabase OAuth
+   * token and never refresh: the API key is long-lived, so callers that run as
+   * frequent short-lived processes (e.g. the knowledge hooks) are not subject to
+   * hourly token expiry or refresh-token rotation races.
+   */
+  async getWithApiKey(path: string): Promise<Response> {
+    return this.apiKeyRequest("GET", path);
+  }
+
+  async postWithApiKey(path: string, body: unknown): Promise<Response> {
+    return this.apiKeyRequest("POST", path, body);
+  }
+
+  private async apiKeyRequest(method: string, path: string, body?: unknown): Promise<Response> {
+    if (!this.config.api_key) {
+      throw new Error("no API key available");
+    }
+    const url = this.baseURL + path;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "X-Dosu-API-Key": this.config.api_key,
+    };
+
+    const options: RequestInit = { method, headers };
+    if (body !== undefined) {
+      options.body = JSON.stringify(body);
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    options.signal = controller.signal;
+
+    try {
+      return await fetch(url, options);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  /**
    * Public method to refresh token externally (used during auth step).
    */
   async refreshToken(): Promise<void> {

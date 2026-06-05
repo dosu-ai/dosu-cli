@@ -278,7 +278,7 @@ describe("runPostToolUse", () => {
   });
 });
 
-describe("runStop (opt-in)", () => {
+describe("runStop", () => {
   it("continues without a session, on the loop-guard, or without a pending ticket", async () => {
     await runStop({});
     await runStop({ session_id: "s", stop_hook_active: true });
@@ -412,7 +412,7 @@ describe("lifecycle commands", () => {
     await runInstall("claude-code", { dir, json: true });
     const line = JSON.parse(logSpy.mock.calls[0][0]);
     expect(line.step).toBe("hooks-install");
-    expect(line.events).toEqual(["UserPromptSubmit", "PostToolUse"]);
+    expect(line.events).toEqual(["UserPromptSubmit", "PostToolUse", "Stop"]);
   });
 
   it("rejects an unsupported agent and a non-local scope", async () => {

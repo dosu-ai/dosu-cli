@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../config/config";
 
-const post = vi.fn();
-const get = vi.fn();
+const postWithApiKey = vi.fn();
+const getWithApiKey = vi.fn();
 
 vi.mock("../client/client", () => ({
-  Client: vi.fn(() => ({ post, get })),
+  Client: vi.fn(() => ({ postWithApiKey, getWithApiKey })),
 }));
 
 import {
@@ -23,12 +23,12 @@ function jsonResponse(status: number, body: unknown) {
 
 describe("hooks/ticket-client", () => {
   beforeEach(() => {
-    post.mockReset();
-    get.mockReset();
+    postWithApiKey.mockReset();
+    getWithApiKey.mockReset();
   });
 
   it("requestCreateTicket returns the parsed 202 body", async () => {
-    post.mockResolvedValue(
+    postWithApiKey.mockResolvedValue(
       jsonResponse(202, { ticket_id: "t1", status: "pending", created_at: "x", expires_at: "y" }),
     );
     const res = await requestCreateTicket(cfg, {
@@ -38,21 +38,21 @@ describe("hooks/ticket-client", () => {
       prompt: "p",
     });
     expect(res.ticket_id).toBe("t1");
-    expect(post).toHaveBeenCalledWith(
+    expect(postWithApiKey).toHaveBeenCalledWith(
       "/v1/tickets/knowledge",
       expect.objectContaining({ prompt: "p" }),
     );
   });
 
   it("requestCreateTicket throws TicketHttpError on a non-2xx status", async () => {
-    post.mockResolvedValue(jsonResponse(400, {}));
+    postWithApiKey.mockResolvedValue(jsonResponse(400, {}));
     await expect(
       requestCreateTicket(cfg, { deployment_id: "d", agent: "a", session_id: "s", prompt: "p" }),
     ).rejects.toBeInstanceOf(TicketHttpError);
   });
 
   it("requestGetTicket parses ready and pending", async () => {
-    get.mockResolvedValueOnce(
+    getWithApiKey.mockResolvedValueOnce(
       jsonResponse(200, {
         ticket_id: "t",
         status: "ready",
@@ -66,14 +66,14 @@ describe("hooks/ticket-client", () => {
     expect(ready.status).toBe("ready");
     expect(ready.result?.context).toBe("c");
 
-    get.mockResolvedValueOnce(
+    getWithApiKey.mockResolvedValueOnce(
       jsonResponse(202, { ticket_id: "t", status: "pending", result: null, error: null }),
     );
     expect((await requestGetTicket(cfg, "t")).status).toBe("pending");
   });
 
   it("requestGetTicket coerces an unknown status to failed", async () => {
-    get.mockResolvedValue(
+    getWithApiKey.mockResolvedValue(
       jsonResponse(200, { ticket_id: "t", status: "weird", result: { context: "c" }, error: null }),
     );
     const res = await requestGetTicket(cfg, "t");
@@ -82,9 +82,9 @@ describe("hooks/ticket-client", () => {
   });
 
   it("requestGetTicket throws TicketHttpError for 404/5xx", async () => {
-    get.mockResolvedValueOnce(jsonResponse(404, {}));
+    getWithApiKey.mockResolvedValueOnce(jsonResponse(404, {}));
     await expect(requestGetTicket(cfg, "t")).rejects.toBeInstanceOf(TicketHttpError);
-    get.mockResolvedValueOnce(jsonResponse(503, {}));
+    getWithApiKey.mockResolvedValueOnce(jsonResponse(503, {}));
     await expect(requestGetTicket(cfg, "t")).rejects.toBeInstanceOf(TicketHttpError);
   });
 

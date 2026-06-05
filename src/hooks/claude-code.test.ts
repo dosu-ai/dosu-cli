@@ -29,9 +29,9 @@ describe("hooks/claude-code installer", () => {
     expect(hookCommand("post-tool-use")).toBe("dosu hooks post-tool-use");
   });
 
-  it("installs UserPromptSubmit + PostToolUse with a marker, dosu command, and 0o600 perms", () => {
+  it("installs UserPromptSubmit + PostToolUse + Stop with a marker, dosu command, and 0o600 perms", () => {
     const { events } = installClaudeHooks(configPath);
-    expect(events).toEqual(["UserPromptSubmit", "PostToolUse"]);
+    expect(events).toEqual(["UserPromptSubmit", "PostToolUse", "Stop"]);
     expect(statSync(configPath).mode & 0o777).toBe(0o600);
 
     const cfg = loadJSONConfig(configPath);
@@ -39,15 +39,16 @@ describe("hooks/claude-code installer", () => {
     expect(post.matcher).toBe("*");
     expect(post.hooks[0].command).toBe("dosu hooks post-tool-use");
     expect(post.hooks[0].__dosu).toBe(true);
-    // UserPromptSubmit groups omit the matcher.
+    // UserPromptSubmit / Stop groups omit the matcher.
     expect(cfg.hooks.UserPromptSubmit[0].matcher).toBeUndefined();
-    expect(cfg.hooks.Stop).toBeUndefined();
+    expect(cfg.hooks.Stop[0].matcher).toBeUndefined();
+    expect(cfg.hooks.Stop[0].hooks[0].__dosu).toBe(true);
   });
 
-  it("--with-stop additionally installs a Stop group", () => {
-    const { events } = installClaudeHooks(configPath, { withStop: true });
-    expect(events).toContain("Stop");
-    expect(loadJSONConfig(configPath).hooks.Stop[0].hooks[0].__dosu).toBe(true);
+  it("--no-stop (stop: false) omits the Stop group", () => {
+    const { events } = installClaudeHooks(configPath, { stop: false });
+    expect(events).toEqual(["UserPromptSubmit", "PostToolUse"]);
+    expect(loadJSONConfig(configPath).hooks.Stop).toBeUndefined();
   });
 
   it("preserves existing user hooks and sibling settings when merging", () => {
@@ -93,7 +94,7 @@ describe("hooks/claude-code installer", () => {
         },
       }),
     );
-    installClaudeHooks(configPath, { withStop: true });
+    installClaudeHooks(configPath);
     const { removed } = removeClaudeHooks(configPath);
     expect(removed).toBe(true);
     const cfg = loadJSONConfig(configPath);
@@ -147,7 +148,7 @@ describe("hooks/claude-code installer", () => {
     expect(inspectClaudeHooks(configPath)).toEqual({
       fileExists: true,
       parseError: false,
-      events: ["UserPromptSubmit", "PostToolUse"],
+      events: ["UserPromptSubmit", "PostToolUse", "Stop"],
     });
     writeFileSync(configPath, "{ broken");
     expect(inspectClaudeHooks(configPath)).toEqual({
