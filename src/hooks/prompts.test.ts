@@ -19,9 +19,9 @@ describe("hooks/prompts", () => {
     expect(out).toContain("one brief quoted note");
   });
 
-  it("envelope contains no demo-baked file paths or relevance/threshold numbers", () => {
+  it("envelope contains no hardcoded file paths or relevance/threshold numbers", () => {
     const out = buildReadyEnvelope("generic distilled context with no internals");
-    // §5.2 verify: only generic framing + live context — no hardcoded paths or thresholds.
+    // Verify: only generic framing + live context — no hardcoded paths or thresholds.
     expect(out).not.toMatch(/RELEVANCE_THRESHOLD/);
     expect(out).not.toMatch(/0\.4|0\.5/);
     expect(out).not.toMatch(/backend\/agent|\.py\b/);

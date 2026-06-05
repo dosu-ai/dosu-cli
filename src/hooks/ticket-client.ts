@@ -1,5 +1,5 @@
 /**
- * Knowledge-ticket API client (plan §3.6 wire contract).
+ * Knowledge-ticket API client.
  *
  * Talks to the deployment-scoped ticket endpoints via the shared authenticated
  * `Client` (token refresh + 401/403 retry). The base URL is resolved from

@@ -75,7 +75,7 @@ function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** Repo identifier for retrieval/correlation — basename only, never the absolute path (privacy §8.2). */
+/** Repo identifier for retrieval/correlation — basename only, never the absolute path (privacy). */
 function repoSlug(cwd?: string): string | undefined {
   return cwd ? basename(cwd) : undefined;
 }
@@ -356,7 +356,7 @@ export async function runInstall(agent: string, opts: LifecycleOptions): Promise
     if (opts.json) {
       await emitErrorLine("hooks-install", "unsupported_agent", `Only 'claude-code' is supported.`);
     } else {
-      console.error(`Unsupported agent '${agent}'. The MVP supports: claude-code.`);
+      console.error(`Unsupported agent '${agent}'. Supported agents: claude-code.`);
     }
     return;
   }
@@ -365,7 +365,7 @@ export async function runInstall(agent: string, opts: LifecycleOptions): Promise
     if (opts.json) {
       await emitErrorLine("hooks-install", "unsupported_scope", "Only --scope local is supported.");
     } else {
-      console.error(`Unsupported --scope '${opts.scope}'. The MVP supports: local.`);
+      console.error(`Unsupported --scope '${opts.scope}'. Supported scopes: local.`);
     }
     return;
   }
@@ -403,7 +403,7 @@ export async function runUninstall(agent: string, opts: LifecycleOptions): Promi
         "Only 'claude-code' is supported.",
       );
     } else {
-      console.error(`Unsupported agent '${agent}'. The MVP supports: claude-code.`);
+      console.error(`Unsupported agent '${agent}'. Supported agents: claude-code.`);
     }
     return;
   }
