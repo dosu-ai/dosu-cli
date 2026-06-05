@@ -4,6 +4,7 @@
 
 import { readFileSync, unlinkSync } from "node:fs";
 import { Command } from "commander";
+import { Client } from "../client/client";
 import { analyticsCommand } from "../commands/analytics";
 import { askCommand } from "../commands/ask";
 import { deploymentsCommand } from "../commands/deployments";
@@ -21,6 +22,7 @@ import { suggestCommand } from "../commands/suggest";
 import { tagsCommand } from "../commands/tags";
 import { threadsCommand } from "../commands/threads";
 import {
+  type Config,
   getConfigPath,
   isAuthenticated,
   isTokenExpired,
@@ -100,10 +102,17 @@ export function createProgram(): Command {
       }
 
       const cfg = loadConfig();
-      if (isAuthenticated(cfg) && !isTokenExpired(cfg)) {
-        console.log("You are already logged in.");
-        console.log("Run 'dosu logout' first to re-authenticate.");
-        return;
+      if (isAuthenticated(cfg)) {
+        if (!isTokenExpired(cfg)) {
+          console.log("You are already logged in.");
+          console.log("Run 'dosu logout' first to re-authenticate.");
+          return;
+        }
+        if (await ensureFreshSession(cfg)) {
+          console.log("Session refreshed.");
+          console.log(`Credentials saved to ${getConfigPath()}`);
+          return;
+        }
       }
 
       console.log("Opening browser for authentication...");
@@ -156,14 +165,14 @@ export function createProgram(): Command {
   program
     .command("status")
     .description("Show current authentication and MCP status")
-    .action(() => {
+    .action(async () => {
       const cfg = loadConfig();
       if (!isAuthenticated(cfg)) {
         console.log("Status: Not logged in");
         console.log("Run 'dosu login' to authenticate.");
         return;
       }
-      if (isTokenExpired(cfg)) {
+      if (isTokenExpired(cfg) && !(await ensureFreshSession(cfg))) {
         console.log("Status: Token expired");
         console.log("Run 'dosu login' to re-authenticate.");
       } else {
@@ -191,7 +200,7 @@ export function createProgram(): Command {
     .description("Add Dosu MCP to an AI tool")
     .option("-g, --global", "Add globally (all projects) instead of project-local", false)
     .option("--show-secret", "Print full manual configuration secrets", false)
-    .action((toolId: string, opts: { global: boolean; showSecret: boolean }) => {
+    .action(async (toolId: string, opts: { global: boolean; showSecret: boolean }) => {
       let provider: Provider;
       try {
         provider = getProvider(toolId.toLowerCase());
@@ -203,7 +212,7 @@ export function createProgram(): Command {
       if (!isAuthenticated(cfg)) {
         throw new Error("not logged in. Run 'dosu login' first");
       }
-      if (isTokenExpired(cfg)) {
+      if (isTokenExpired(cfg) && !(await ensureFreshSession(cfg))) {
         throw new Error("session expired. Run 'dosu login' to re-authenticate");
       }
       if (cfg.mode !== MODE_OSS && !cfg.deployment_id) {
@@ -367,6 +376,18 @@ export function createProgram(): Command {
     });
 
   return program;
+}
+
+async function ensureFreshSession(cfg: Config): Promise<boolean> {
+  if (!isTokenExpired(cfg)) return true;
+  try {
+    logger.debug("cli", "token expired, attempting refresh");
+    await new Client(cfg).refreshToken();
+    return true;
+  } catch (err: unknown) {
+    logger.debug("cli", `token refresh failed: ${err instanceof Error ? err.message : err}`);
+    return false;
+  }
 }
 
 export async function execute(): Promise<void> {

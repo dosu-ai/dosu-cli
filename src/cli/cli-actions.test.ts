@@ -15,6 +15,26 @@ vi.mock("../auth/flow", () => ({
   startOAuthFlow: (...args: unknown[]) => mockStartOAuthFlow(...args),
 }));
 
+const { mockRefreshToken } = vi.hoisted(() => ({
+  mockRefreshToken: vi.fn(),
+}));
+vi.mock("../client/client", () => ({
+  Client: class MockClient {
+    private cfg: { refresh_token?: string };
+
+    constructor(cfg: { refresh_token?: string }) {
+      this.cfg = cfg;
+    }
+
+    refreshToken() {
+      if (!this.cfg.refresh_token) {
+        throw new Error("no refresh token available");
+      }
+      return mockRefreshToken(this.cfg);
+    }
+  },
+}));
+
 const mockRunTUI = vi.fn();
 vi.mock("../tui/tui", () => ({
   runTUI: (...args: unknown[]) => mockRunTUI(...args),
@@ -91,6 +111,15 @@ function allLogOutput(): string {
   return logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
 }
 
+function mockSuccessfulRefresh(accessToken: string, refreshToken: string): void {
+  mockRefreshToken.mockImplementationOnce(async (cfg: Config) => {
+    cfg.access_token = accessToken;
+    cfg.refresh_token = refreshToken;
+    cfg.expires_at = Math.floor(Date.now() / 1000) + 3600;
+    saveConfig(cfg);
+  });
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 describe("CLI actions", () => {
@@ -138,14 +167,32 @@ describe("CLI actions", () => {
       expect(cfg.expires_at).toBeGreaterThan(0);
     });
 
-    it("runs OAuth flow when token is expired", async () => {
+    it("refreshes the session when token is expired", async () => {
       const cfg = authenticatedConfig();
       cfg.expires_at = Math.floor(Date.now() / 1000) - 1000; // expired
       saveConfig(cfg);
 
+      mockSuccessfulRefresh("refreshed_tok", "refreshed_ref");
+
+      await run("login");
+
+      expect(mockStartOAuthFlow).not.toHaveBeenCalled();
+      expect(logSpy).toHaveBeenCalledWith("Session refreshed.");
+
+      const updated = loadConfig();
+      expect(updated.access_token).toBe("refreshed_tok");
+      expect(updated.refresh_token).toBe("refreshed_ref");
+    });
+
+    it("runs OAuth flow when expired token cannot be refreshed", async () => {
+      const cfg = authenticatedConfig();
+      cfg.expires_at = Math.floor(Date.now() / 1000) - 1000; // expired
+      saveConfig(cfg);
+
+      mockRefreshToken.mockRejectedValueOnce(new Error("refresh failed"));
       mockStartOAuthFlow.mockResolvedValue({
-        access_token: "refreshed_tok",
-        refresh_token: "refreshed_ref",
+        access_token: "oauth_tok",
+        refresh_token: "oauth_ref",
         expires_in: 7200,
       });
 
@@ -154,8 +201,8 @@ describe("CLI actions", () => {
       expect(mockStartOAuthFlow).toHaveBeenCalledOnce();
 
       const updated = loadConfig();
-      expect(updated.access_token).toBe("refreshed_tok");
-      expect(updated.refresh_token).toBe("refreshed_ref");
+      expect(updated.access_token).toBe("oauth_tok");
+      expect(updated.refresh_token).toBe("oauth_ref");
     });
 
     it("prints curated OAuth callback errors without saving credentials", async () => {
@@ -232,12 +279,26 @@ describe("CLI actions", () => {
     it("shows token-expired status", async () => {
       const cfg = authenticatedConfig();
       cfg.expires_at = Math.floor(Date.now() / 1000) - 1000;
+      cfg.refresh_token = "";
       saveConfig(cfg);
 
       await run("status");
 
       expect(logSpy).toHaveBeenCalledWith("Status: Token expired");
       expect(logSpy).toHaveBeenCalledWith("Run 'dosu login' to re-authenticate.");
+    });
+
+    it("refreshes expired token before showing logged-in status", async () => {
+      const cfg = authenticatedConfig();
+      cfg.expires_at = Math.floor(Date.now() / 1000) - 1000;
+      saveConfig(cfg);
+      mockSuccessfulRefresh("status_tok", "status_ref");
+
+      await run("status");
+
+      expect(logSpy).toHaveBeenCalledWith("Status: Logged in");
+      expect(allLogOutput()).not.toContain("Status: Token expired");
+      expect(loadConfig().access_token).toBe("status_tok");
     });
 
     it("shows no deployment when none selected", async () => {
@@ -342,9 +403,24 @@ describe("CLI actions", () => {
     it("throws error when token is expired", async () => {
       const cfg = authenticatedConfig();
       cfg.expires_at = Math.floor(Date.now() / 1000) - 1000;
+      cfg.refresh_token = "";
       saveConfig(cfg);
 
       await expect(run("mcp", "add", "cursor")).rejects.toThrow("session expired");
+    });
+
+    it("refreshes expired token before adding MCP config", async () => {
+      const cfg = authenticatedConfig();
+      cfg.expires_at = Math.floor(Date.now() / 1000) - 1000;
+      saveConfig(cfg);
+      mockSuccessfulRefresh("mcp_tok", "mcp_ref");
+
+      await run("mcp", "add", "cursor", "--global");
+
+      const cursorConfigPath = join(tempDir, ".cursor", "mcp.json");
+      const cursorConfig = JSON.parse(readFileSync(cursorConfigPath, "utf-8"));
+      expect(cursorConfig.mcpServers.dosu).toBeDefined();
+      expect(loadConfig().access_token).toBe("mcp_tok");
     });
 
     it("throws error when no deployment selected", async () => {
