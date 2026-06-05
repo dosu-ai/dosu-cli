@@ -151,22 +151,40 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     // Stored deployment_id exists — verify it's still reachable before
     // spending the rest of setup on a stale reference (e.g. after switching
     // between local dev and prod, or if a deployment was deleted).
-    const deployments = await fetchDeployments(apiClient);
-    const exists = deployments.some((d) => d.deployment_id === cfg.deployment_id);
-    if (!exists) {
-      p.log.warn(
-        `Project "${cfg.deployment_name ?? cfg.deployment_id}" no longer exists — select a new one.`,
+    //
+    // IMPORTANT: only wipe the cached config when the API explicitly returns
+    // a deployment list that excludes our id. A network/API failure must NOT
+    // count as "deployment doesn't exist" — that would silently corrupt the
+    // user's config every time prod has a transient outage. Call
+    // `getDeployments()` directly so we see the error instead of letting
+    // `fetchDeployments` swallow it into an empty array.
+    let deployments: Deployment[] | null = null;
+    try {
+      deployments = await apiClient.getDeployments();
+    } catch (err: unknown) {
+      logger.warn(
+        "setup",
+        `Could not verify cached deployment (preserving config): ${err instanceof Error ? err.message : String(err)}`,
       );
-      cfg.deployment_id = undefined;
-      cfg.deployment_name = undefined;
-      cfg.api_key = undefined;
-      saveConfig(cfg);
-      const ok = await resolveDeployment(apiClient, cfg, opts);
-      if (!ok) {
-        await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
-          reason: "deployment_resolution_failed",
-        });
-        return;
+    }
+
+    if (deployments !== null) {
+      const exists = deployments.some((d) => d.deployment_id === cfg.deployment_id);
+      if (!exists) {
+        p.log.warn(
+          `Project "${cfg.deployment_name ?? cfg.deployment_id}" no longer exists — select a new one.`,
+        );
+        cfg.deployment_id = undefined;
+        cfg.deployment_name = undefined;
+        cfg.api_key = undefined;
+        saveConfig(cfg);
+        const ok = await resolveDeployment(apiClient, cfg, opts);
+        if (!ok) {
+          await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
+            reason: "deployment_resolution_failed",
+          });
+          return;
+        }
       }
     }
   }

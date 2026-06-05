@@ -1958,4 +1958,69 @@ describe("runSetup checkpoint behavior", () => {
     expect(mockStepConnectGitHubPat).toHaveBeenCalledTimes(1);
     expect(mockStepAnalyzeDocs).not.toHaveBeenCalled();
   });
+
+  // Regression test for the data-loss bug: a transient network/API failure
+  // during the cached-deployment-verification step used to wipe deployment_id,
+  // deployment_name, and api_key from local config. Now we preserve them.
+  it("preserves cached deployment when getDeployments fails (network/API error)", async () => {
+    saveConfig(makeCfg()); // has deployment_id, deployment_name, api_key
+    setupAuthed({
+      getDeployments: vi.fn().mockRejectedValue(new Error("ECONNRESET")),
+    });
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: true,
+      cli_onboarding_enabled: false,
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    const saved = loadConfig();
+    // Cached deployment must NOT be wiped by a network failure
+    expect(saved.deployment_id).toBeDefined();
+    expect(saved.deployment_name).toBeDefined();
+    expect(saved.api_key).toBeDefined();
+    // And we should NOT have emitted the "no longer exists" warning, since
+    // we never confirmed it's gone.
+    const warnCalls = vi.mocked(p.log.warn).mock.calls.map((c) => String(c[0]));
+    expect(warnCalls.some((m) => m.includes("no longer exists"))).toBe(false);
+  });
+
+  // Confirms the other half of the contract: when the API DOES return a list
+  // and our id isn't in it, we still wipe + re-pick. This guards against the
+  // fix above accidentally suppressing legitimate cleanups.
+  it("wipes cached deployment when getDeployments confirms it's gone", async () => {
+    saveConfig(makeCfg());
+    setupAuthed({
+      // Returns a list that doesn't contain our deployment_id
+      getDeployments: vi.fn().mockResolvedValue([
+        {
+          deployment_id: "different-id",
+          name: "Other",
+          description: "",
+          provider_slug: "dosu_mcp",
+          enabled: true,
+          org_id: "o1",
+          org_name: "Org1",
+          space_id: "sp-other",
+        },
+      ]),
+    });
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: true,
+      cli_onboarding_enabled: false,
+    });
+    // User cancels the org-pick prompt so we exit without re-binding —
+    // this keeps the test focused on the wipe behaviour.
+    vi.mocked(p.select).mockResolvedValue(Symbol("cancel") as never);
+    vi.mocked(p.isCancel).mockImplementation((v) => typeof v === "symbol");
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    const warnCalls = vi.mocked(p.log.warn).mock.calls.map((c) => String(c[0]));
+    expect(warnCalls.some((m) => m.includes("no longer exists"))).toBe(true);
+  });
 });

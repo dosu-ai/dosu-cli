@@ -32,16 +32,27 @@ export function writeCommand(): Command {
     .argument("<fact>", "The fact or insight to save")
     .option("--json", "Output as JSON")
     .action(async (fact: string, opts: { json?: boolean }) => {
+      const trimmed = fact.trim();
+      if (trimmed.length === 0) {
+        console.error(pc.red("Error: fact cannot be empty or whitespace-only."));
+        console.error(
+          pc.dim(
+            'Pass a concise fact, e.g.: dosu write "TOKEN_TTL=3600 is intentional — do not change without coordinating with mobile team."',
+          ),
+        );
+        process.exit(1);
+      }
+
       const cfg = requireConfig();
       const apiClient = new Client(cfg);
 
-      logger.debug("write", `Saving topic: ${fact.slice(0, 60)}`);
+      logger.debug("write", `Saving topic: ${trimmed.slice(0, 60)}`);
 
       const resp = await apiClient.doRequest("POST", "/v1/topics", {
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
         deployment_id: cfg.deployment_id!,
-        name: fact.trim().split(/\s+/).slice(0, 8).join(" "),
-        context: fact,
+        name: trimmed.split(/\s+/).slice(0, 8).join(" "),
+        context: trimmed,
       });
 
       if (!resp.ok) {

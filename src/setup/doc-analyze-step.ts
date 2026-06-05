@@ -18,6 +18,10 @@ const DOC_SCAN_POLL_INTERVAL_MS = 2_000;
 const DOC_SCAN_POLL_TIMEOUT_MS = 60_000;
 const IMPORT_STATUS_POLL_INTERVAL_MS = 2_000;
 const IMPORT_STATUS_MAX_ERRORS = 3;
+// Upper bound for waiting on the doc-import workflow. Larger repos legitimately
+// take a few minutes; anything past this is almost certainly a stuck backend
+// task, and we should release the CLI rather than block setup forever.
+const IMPORT_STATUS_POLL_TIMEOUT_MS = 5 * 60_000;
 
 const IMPORTABLE_EXTENSIONS = new Set([".md", ".mdx", ".txt", ".rst", ".markdown"]);
 
@@ -109,12 +113,30 @@ async function waitForFiles(
   return { kind: "indexing_timeout", files };
 }
 
-async function pollImportCompletion(
+export interface PollImportCompletionResult {
+  imported: number;
+  failed: number;
+  /** True when the deadline expired before the workflow reached a terminal state. */
+  timed_out?: boolean;
+}
+
+export interface PollImportCompletionOptions {
+  /** Override the wall-clock deadline. Tests pass small values. */
+  timeoutMs?: number;
+  /** Override the per-attempt sleep. Tests pass 0. */
+  intervalMs?: number;
+}
+
+export async function pollImportCompletion(
   trpc: TypedClient,
   taskID: string,
-): Promise<{ imported: number; failed: number }> {
+  opts: PollImportCompletionOptions = {},
+): Promise<PollImportCompletionResult> {
+  const timeoutMs = opts.timeoutMs ?? IMPORT_STATUS_POLL_TIMEOUT_MS;
+  const intervalMs = opts.intervalMs ?? IMPORT_STATUS_POLL_INTERVAL_MS;
+  const deadline = Date.now() + timeoutMs;
   let errors = 0;
-  while (true) {
+  while (Date.now() < deadline) {
     try {
       const status = (await trpc.docImports.getImportStatus.query(
         taskID,
@@ -141,8 +163,13 @@ async function pollImportCompletion(
       );
       if (errors >= IMPORT_STATUS_MAX_ERRORS) return { imported: 0, failed: 0 };
     }
-    await sleep(IMPORT_STATUS_POLL_INTERVAL_MS);
+    await sleep(intervalMs);
   }
+  logger.warn(
+    "setup",
+    `pollImportCompletion timed out after ${timeoutMs}ms waiting for task ${taskID}`,
+  );
+  return { imported: 0, failed: 0, timed_out: true };
 }
 
 export async function stepAnalyzeDocs(
@@ -242,6 +269,12 @@ export async function stepAnalyzeDocs(
     const result = await pollImportCompletion(trpc, taskID);
     imported = result.imported;
     failed = result.failed;
+    if (result.timed_out) {
+      p.log.warn(
+        "Doc import is still running in the background — the CLI stopped waiting after 5 minutes. " +
+          "Check progress later with `dosu docs import-status` or `dosu sources list`.",
+      );
+    }
   } else {
     // Queued in background with no task ID — treat as success
     imported = docFiles.length;
