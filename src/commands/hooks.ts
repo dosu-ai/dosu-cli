@@ -18,7 +18,7 @@
 
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
-import { Command } from "commander";
+import { Argument, Command } from "commander";
 import { isAuthenticated, loadConfig, MODE_OSS } from "../config/config";
 import { logger } from "../debug/logger";
 import { loadState, saveState, type TicketState } from "../hooks/state";
@@ -37,6 +37,9 @@ type HookEvent = "user-prompt-submit" | "post-tool-use" | "stop";
 
 const COOLDOWN_DEFAULT_MS = 3000;
 const TTL_DEFAULT_MS = 10 * 60 * 1000; // 10 minutes
+
+/** Coding agents that have a Dosu hook adapter today (Codex is a follow-up). */
+const SUPPORTED_AGENTS = ["claude-code"];
 
 // ---------------------------------------------------------------------------
 // Timing knobs (env-overridable; production relies on the cooldown only)
@@ -566,20 +569,44 @@ export function hooksCommand(): Command {
   /* v8 ignore stop */
 
   cmd
-    .command("install <agent>")
-    .description("Install Dosu hooks into a coding agent's local config (claude-code)")
-    .option("--scope <scope>", "Config scope (local)", "local")
+    .command("install")
+    .description("Install Dosu hooks into a coding agent's local config")
+    .addArgument(new Argument("<agent>", "coding agent to configure").choices(SUPPORTED_AGENTS))
+    .option("--scope <scope>", "Config scope (local only)", "local")
     .option("--dir <path>", "Project root (defaults to current directory)")
     .option("--with-stop", "Also install the optional Stop hook", false)
     .option("--json", "Emit machine-readable JSON", false)
+    .addHelpText(
+      "after",
+      [
+        "",
+        `Supported agents: ${SUPPORTED_AGENTS.join(", ")}`,
+        "",
+        "Examples:",
+        "  $ dosu hooks install claude-code",
+        "  $ dosu hooks install claude-code --with-stop",
+        "  $ dosu hooks install claude-code --dir ./my-project",
+      ].join("\n"),
+    )
     .action((agent: string, opts: LifecycleOptions) => runInstall(agent, opts));
 
   cmd
-    .command("uninstall <agent>")
-    .description("Remove Dosu hooks from a coding agent's local config (claude-code)")
-    .option("--scope <scope>", "Config scope (local)", "local")
+    .command("uninstall")
+    .description("Remove Dosu hooks from a coding agent's local config (Dosu-owned entries only)")
+    .addArgument(new Argument("<agent>", "coding agent to clean up").choices(SUPPORTED_AGENTS))
+    .option("--scope <scope>", "Config scope (local only)", "local")
     .option("--dir <path>", "Project root (defaults to current directory)")
     .option("--json", "Emit machine-readable JSON", false)
+    .addHelpText(
+      "after",
+      [
+        "",
+        `Supported agents: ${SUPPORTED_AGENTS.join(", ")}`,
+        "",
+        "Example:",
+        "  $ dosu hooks uninstall claude-code",
+      ].join("\n"),
+    )
     .action((agent: string, opts: LifecycleOptions) => runUninstall(agent, opts));
 
   cmd
