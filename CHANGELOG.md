@@ -1,3 +1,10 @@
+# [0.16.0](https://github.com/dosu-ai/dosu-cli/compare/v0.15.2...v0.16.0) (2026-06-05)
+
+
+### Features
+
+* add dosu hooks for Claude Code knowledge injection ([#74](https://github.com/dosu-ai/dosu-cli/issues/74)) ([ebae8a1](https://github.com/dosu-ai/dosu-cli/commit/ebae8a10ec5330f93ac48a4f903b72086501ca34))
+
 ## [0.15.2](https://github.com/dosu-ai/dosu-cli/compare/v0.15.1...v0.15.2) (2026-06-02)
 
 
