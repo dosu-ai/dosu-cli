@@ -1,3 +1,10 @@
+## [0.16.1](https://github.com/dosu-ai/dosu-cli/compare/v0.16.0...v0.16.1) (2026-06-05)
+
+
+### Bug Fixes
+
+* refresh expired CLI sessions ([#75](https://github.com/dosu-ai/dosu-cli/issues/75)) ([9f0f082](https://github.com/dosu-ai/dosu-cli/commit/9f0f082dc542c40784b83e6a2012f0229d102313))
+
 # [0.16.0](https://github.com/dosu-ai/dosu-cli/compare/v0.15.2...v0.16.0) (2026-06-05)
 
 
