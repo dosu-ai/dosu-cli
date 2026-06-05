@@ -8,6 +8,7 @@ import { analyticsCommand } from "../commands/analytics";
 import { askCommand } from "../commands/ask";
 import { deploymentsCommand } from "../commands/deployments";
 import { docsCommand } from "../commands/docs";
+import { hooksCommand } from "../commands/hooks";
 import { insightsCommand } from "../commands/insights";
 import { integrationsCommand } from "../commands/integrations";
 import { knowledgeCommand } from "../commands/knowledge";
@@ -33,6 +34,17 @@ import { checkForSkillUpdates } from "../version/skill-update-check";
 import { checkForUpdates } from "../version/update-check";
 import { getVersionString } from "../version/version";
 
+/**
+ * Hook entrypoints are auto-invoked by Claude Code on every turn and must stay
+ * fast and stdout-clean. Skip the update checks for them (their stderr notices
+ * are noise on the hot path and the background fetch can delay process exit).
+ */
+const HOOK_ENTRYPOINTS = new Set(["user-prompt-submit", "post-tool-use", "stop"]);
+function isHookEntrypointInvocation(argv: string[]): boolean {
+  const i = argv.indexOf("hooks");
+  return i >= 0 && HOOK_ENTRYPOINTS.has(argv[i + 1] ?? "");
+}
+
 export function createProgram(): Command {
   const program = new Command();
 
@@ -44,8 +56,10 @@ export function createProgram(): Command {
     .hook("preAction", (thisCommand) => {
       const opts = thisCommand.optsWithGlobals();
       logger.init({ debug: opts.debug });
-      checkForUpdates();
-      checkForSkillUpdates();
+      if (!isHookEntrypointInvocation(process.argv)) {
+        checkForUpdates();
+        checkForSkillUpdates();
+      }
     })
     .action(async () => {
       // Default: launch TUI when no subcommand given
@@ -242,6 +256,7 @@ export function createProgram(): Command {
   program.addCommand(askCommand());
   program.addCommand(deploymentsCommand());
   program.addCommand(docsCommand());
+  program.addCommand(hooksCommand());
   program.addCommand(insightsCommand());
   program.addCommand(integrationsCommand());
   program.addCommand(knowledgeCommand());
