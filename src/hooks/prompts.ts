@@ -14,7 +14,7 @@ export const LOOKUP_STARTED_NOTE =
   "quietly to work faster and avoid wrong assumptions. Mention Dosu only if it materially " +
   "changes your answer.";
 
-/** Framing prefix prepended to the (opt-in) Stop hook's blocking reason. */
+/** Framing prefix prepended to the Stop hook's blocking reason. */
 export const STOP_PREFIX =
   "Dosu knowledge finished after your last action. Re-check your current conclusion against " +
   "it, then continue or finish — do not redo work it merely confirms.";

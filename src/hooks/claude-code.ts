@@ -12,8 +12,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveJSONConfig } from "../mcp/config-helpers";
 
-/** Events the default install owns. `Stop` is added only with `--with-stop`. */
-export const DEFAULT_HOOK_EVENTS = ["UserPromptSubmit", "PostToolUse"] as const;
+/**
+ * Events the default install owns. `Stop` is included by default (opt out with
+ * `--no-stop`): it is the reliable last-chance delivery point. The async backend
+ * lookup often becomes ready only after the agent has stopped calling tools, so a
+ * `PostToolUse`-only install frequently never delivers; `Stop` closes that gap.
+ */
+export const DEFAULT_HOOK_EVENTS = ["UserPromptSubmit", "PostToolUse", "Stop"] as const;
 const MARKER = "__dosu";
 
 // biome-ignore lint/suspicious/noExplicitAny: settings JSON is inherently untyped
@@ -105,7 +110,8 @@ function readSettingsOrThrow(path: string): JsonConfig {
 }
 
 export interface InstallOptions {
-  withStop?: boolean;
+  /** Install the `Stop` hook. Defaults to true; pass `false` (via `--no-stop`) to skip it. */
+  stop?: boolean;
 }
 
 /** Merge the Dosu hook block into a Claude Code settings file. Returns the events installed. */
@@ -117,7 +123,8 @@ export function installClaudeHooks(
   if (typeof cfg.hooks !== "object" || cfg.hooks === null) {
     cfg.hooks = {};
   }
-  const events = [...DEFAULT_HOOK_EVENTS, ...(opts.withStop ? ["Stop"] : [])];
+  const includeStop = opts.stop !== false;
+  const events = DEFAULT_HOOK_EVENTS.filter((event) => event !== "Stop" || includeStop);
   for (const event of events) {
     const existing: HookGroup[] = Array.isArray(cfg.hooks[event]) ? cfg.hooks[event] : [];
     // Drop any prior Dosu group first so reinstall/upgrade is idempotent.

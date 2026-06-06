@@ -131,11 +131,13 @@ describe("runUserPromptSubmit", () => {
     expect(printed.hookSpecificOutput.additionalContext).toContain("Keep working normally");
   });
 
-  it("no-ops without a session id, an empty prompt, or when not configured", async () => {
+  it("no-ops without a session id, an empty prompt, or when missing api key / deployment", async () => {
     await runUserPromptSubmit({ prompt: "x" });
     await runUserPromptSubmit({ session_id: "s", prompt: "   " });
     vi.mocked(loadState).mockReturnValue(null);
     vi.mocked(loadConfig).mockReturnValue({ ...AUTHED, deployment_id: undefined });
+    await runUserPromptSubmit({ session_id: "s", prompt: "real" });
+    vi.mocked(loadConfig).mockReturnValue({ ...AUTHED, api_key: undefined });
     await runUserPromptSubmit({ session_id: "s", prompt: "real" });
     expect(requestCreateTicket).not.toHaveBeenCalled();
     expect(stdout()).toBe("");
@@ -278,7 +280,7 @@ describe("runPostToolUse", () => {
   });
 });
 
-describe("runStop (opt-in)", () => {
+describe("runStop", () => {
   it("continues without a session, on the loop-guard, or without a pending ticket", async () => {
     await runStop({});
     await runStop({ session_id: "s", stop_hook_active: true });
@@ -412,7 +414,7 @@ describe("lifecycle commands", () => {
     await runInstall("claude-code", { dir, json: true });
     const line = JSON.parse(logSpy.mock.calls[0][0]);
     expect(line.step).toBe("hooks-install");
-    expect(line.events).toEqual(["UserPromptSubmit", "PostToolUse"]);
+    expect(line.events).toEqual(["UserPromptSubmit", "PostToolUse", "Stop"]);
   });
 
   it("rejects an unsupported agent and a non-local scope", async () => {

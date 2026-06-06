@@ -1,11 +1,12 @@
 /**
  * Knowledge-ticket API client.
  *
- * Talks to the deployment-scoped ticket endpoints via the shared authenticated
- * `Client` (token refresh + 401/403 retry). The base URL is resolved from
- * `getBackendURL()` / `*_OVERRIDE`, so integration tests and local dev point at
- * the fake API by exporting `DOSU_BACKEND_URL_OVERRIDE` — the code path is
- * identical against the real and fake backends.
+ * Talks to the deployment-scoped ticket endpoints with the deployment **API key**
+ * (`X-Dosu-API-Key`) via `Client.{post,get}WithApiKey` — the same long-lived
+ * credential the MCP integration uses. It deliberately does NOT use the Supabase
+ * OAuth token: hooks run as frequent, short-lived processes, and an hourly-expiring
+ * token (refreshed via rotation through a single shared config file) would race and
+ * fail silently. The base URL is resolved from `getBackendURL()` / `*_OVERRIDE`.
  *
  * This module is lazy-imported only off the hook fast-path (i.e. only when a
  * create or a poll is actually required), per the latency mitigations.
@@ -93,7 +94,7 @@ export async function requestCreateTicket(
   req: CreateTicketRequest,
 ): Promise<CreateTicketResponse> {
   const client = new Client(cfg);
-  const resp = await client.post(TICKETS_PATH, req);
+  const resp = await client.postWithApiKey(TICKETS_PATH, req);
   if (resp.status !== 202 && resp.status !== 200 && resp.status !== 201) {
     throw new TicketHttpError(resp.status);
   }
@@ -106,7 +107,7 @@ export async function requestGetTicket(
   ticketId: string,
 ): Promise<TicketStatusResponse> {
   const client = new Client(cfg);
-  const resp = await client.get(`${TICKETS_PATH}/${encodeURIComponent(ticketId)}`);
+  const resp = await client.getWithApiKey(`${TICKETS_PATH}/${encodeURIComponent(ticketId)}`);
   if (resp.status !== 200 && resp.status !== 202) {
     throw new TicketHttpError(resp.status);
   }
