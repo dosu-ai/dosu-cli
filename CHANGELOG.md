@@ -1,3 +1,10 @@
+## [0.16.2](https://github.com/dosu-ai/dosu-cli/compare/v0.16.1...v0.16.2) (2026-06-06)
+
+
+### Bug Fixes
+
+* use API key auth for hooks ([#76](https://github.com/dosu-ai/dosu-cli/issues/76)) ([eaf6c9b](https://github.com/dosu-ai/dosu-cli/commit/eaf6c9b9df34158637e11920b88354bf1208d9bc))
+
 ## [0.16.1](https://github.com/dosu-ai/dosu-cli/compare/v0.16.0...v0.16.1) (2026-06-05)
 
 
