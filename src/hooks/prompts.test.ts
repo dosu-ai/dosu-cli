@@ -16,7 +16,7 @@ describe("hooks/prompts", () => {
     expect(out).toContain("Dosu knowledge context for this task:");
     expect(out).toContain("ROUTE MAP BODY");
     expect(out).toContain("verify adjacent");
-    expect(out).toContain("one brief quoted note");
+    expect(out).toContain("one brief cited note");
   });
 
   it("envelope contains no hardcoded file paths or relevance/threshold numbers", () => {
