@@ -1,3 +1,10 @@
+# [0.17.0](https://github.com/dosu-ai/dosu-cli/compare/v0.16.2...v0.17.0) (2026-06-07)
+
+
+### Features
+
+* bounded-wait at Stop for last-chance knowledge delivery ([#77](https://github.com/dosu-ai/dosu-cli/issues/77)) ([29a48ce](https://github.com/dosu-ai/dosu-cli/commit/29a48ce7293691d3d2af89ce1a2edb6131bf07ce))
+
 ## [0.16.2](https://github.com/dosu-ai/dosu-cli/compare/v0.16.1...v0.16.2) (2026-06-06)
 
 
