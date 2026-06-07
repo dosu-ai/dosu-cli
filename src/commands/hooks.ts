@@ -37,12 +37,14 @@ type HookEvent = "user-prompt-submit" | "post-tool-use" | "stop";
 
 const COOLDOWN_DEFAULT_MS = 3000;
 const TTL_DEFAULT_MS = 10 * 60 * 1000; // 10 minutes
+const STOP_WAIT_DEFAULT_MS = 8000; // max time Stop waits for an in-flight lookup
+const STOP_POLL_DEFAULT_MS = 1000; // interval between Stop poll attempts
 
 /** Coding agents that have a Dosu hook adapter today (Codex is a follow-up). */
 const SUPPORTED_AGENTS = ["claude-code"];
 
 // ---------------------------------------------------------------------------
-// Timing knobs (env-overridable; production relies on the cooldown only)
+// Timing knobs (env-overridable)
 // ---------------------------------------------------------------------------
 
 function cooldownMs(): number {
@@ -53,6 +55,18 @@ function cooldownMs(): number {
 function ttlMs(): number {
   const n = Number.parseInt(process.env.DOSU_HOOK_TTL_MS ?? "", 10);
   return Number.isFinite(n) && n > 0 ? n : TTL_DEFAULT_MS;
+}
+
+/** Max time the Stop hook will wait for an in-flight lookup before finishing. */
+function stopWaitMs(): number {
+  const n = Number.parseInt(process.env.DOSU_HOOK_STOP_WAIT_MS ?? "", 10);
+  return Number.isFinite(n) && n >= 0 ? n : STOP_WAIT_DEFAULT_MS;
+}
+
+/** Interval between Stop-hook poll attempts while waiting for a ready ticket. */
+function stopPollMs(): number {
+  const n = Number.parseInt(process.env.DOSU_HOOK_STOP_POLL_MS ?? "", 10);
+  return Number.isFinite(n) && n > 0 ? n : STOP_POLL_DEFAULT_MS;
 }
 
 // ---------------------------------------------------------------------------
@@ -66,6 +80,8 @@ function printHookContext(event: string, additionalContext: string): void {
 function printContinue(): void {
   console.log(JSON.stringify({ continue: true }));
 }
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 function sid8(sessionId: string): string {
   return sessionId.slice(0, 8);
@@ -219,49 +235,62 @@ export async function runPostToolUse(input: HookInput, now: number = Date.now())
   }
 }
 
-/** Stop: last-chance delivery at end of turn. Blocks ONLY for a ready-but-undelivered ticket. */
+/**
+ * Stop: last-chance delivery at end of turn.
+ *
+ * If the ticket is ready, block once with the knowledge as today. If it is still
+ * in flight, briefly WAIT for it (poll every `DOSU_HOOK_STOP_POLL_MS` up to
+ * `DOSU_HOOK_STOP_WAIT_MS`, default 8s) rather than finish without it — Stop is
+ * the final chance. The agent is given NO extra instruction: it simply pauses
+ * while the lookup lands, then either receives the knowledge or continues.
+ * Delivery latches `delivered` (terminal), so there is no re-fire loop to guard.
+ */
 export async function runStop(input: HookInput, now: number = Date.now()): Promise<void> {
   const sessionId = input.session_id;
   if (!sessionId) return printContinue();
-  // Loop-guard: a Stop triggered by a prior Stop-hook block must not re-block.
-  if (input.stop_hook_active === true) return printContinue();
 
   const state = loadState(sessionId);
   if (!state) return printContinue();
   if (state.status !== "pending" || now > state.expiresAt) return printContinue();
-  if (state.lastCheckedAt !== undefined && now - state.lastCheckedAt < cooldownMs()) {
-    return printContinue();
-  }
 
   const cfg = loadConfig();
   if (!cfg.api_key || !cfg.deployment_id) return printContinue();
 
   const tc = await import("../hooks/ticket-client");
-  let resp: import("../hooks/ticket-client").TicketStatusResponse;
-  try {
-    resp = await tc.requestGetTicket(cfg, state.ticketId);
-  } catch {
-    saveState({ ...state, lastCheckedAt: now }); // never hold the agent open
-    return printContinue();
-  }
+  const pollMs = stopPollMs();
+  const maxWaits = pollMs > 0 ? Math.floor(stopWaitMs() / pollMs) : 0;
 
-  if (resp.status === "ready" && resp.result) {
-    // Consume the ticket either way, but only BLOCK the agent for real knowledge.
-    // A bare save nudge (knowledge gap, empty context) is not worth holding the
-    // agent open at Stop — drop it rather than block on nothing actionable.
-    saveState({ ...state, status: "delivered", deliveredAt: now, lastCheckedAt: now });
-    if (resp.result.context.trim()) {
-      const { buildReadyEnvelope, STOP_PREFIX } = await import("../hooks/prompts");
-      const envelope = buildReadyEnvelope(
-        resp.result.context,
-        resp.result.save_recommended ?? false,
-      );
-      console.log(JSON.stringify({ decision: "block", reason: `${STOP_PREFIX}\n\n${envelope}` }));
-      logger.info("hooks", `stop tid=${state.ticketId} delivered=true`);
-      return;
+  for (let waited = 0; ; waited++) {
+    let resp: import("../hooks/ticket-client").TicketStatusResponse;
+    try {
+      resp = await tc.requestGetTicket(cfg, state.ticketId);
+    } catch {
+      saveState({ ...state, lastCheckedAt: now }); // never hold the agent open
+      return printContinue();
     }
-    logger.debug("hooks", `stop tid=${state.ticketId} delivered=true gap-no-block`);
-    return printContinue();
+
+    if (resp.status === "ready" && resp.result) {
+      // Consume the ticket either way, but only BLOCK the agent for real knowledge.
+      // A bare save nudge (knowledge gap, empty context) is not worth holding the
+      // agent open at Stop — drop it rather than block on nothing actionable.
+      saveState({ ...state, status: "delivered", deliveredAt: now, lastCheckedAt: now });
+      if (resp.result.context.trim()) {
+        const { buildReadyEnvelope, STOP_PREFIX } = await import("../hooks/prompts");
+        const envelope = buildReadyEnvelope(
+          resp.result.context,
+          resp.result.save_recommended ?? false,
+        );
+        console.log(JSON.stringify({ decision: "block", reason: `${STOP_PREFIX}\n\n${envelope}` }));
+        logger.info("hooks", `stop tid=${state.ticketId} delivered=true`);
+        return;
+      }
+      logger.debug("hooks", `stop tid=${state.ticketId} delivered=true gap-no-block`);
+      return printContinue();
+    }
+
+    // Keep waiting only while still pending and within the budget.
+    if (resp.status !== "pending" || waited >= maxWaits) break;
+    await sleep(pollMs);
   }
 
   saveState({ ...state, lastCheckedAt: now });
