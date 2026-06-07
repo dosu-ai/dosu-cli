@@ -1,3 +1,10 @@
+# [0.18.0](https://github.com/dosu-ai/dosu-cli/compare/v0.17.0...v0.18.0) (2026-06-07)
+
+
+### Features
+
+* **hooks:** surface Dosu attribution as a team-knowledge cross-check ([#78](https://github.com/dosu-ai/dosu-cli/issues/78)) ([03d5090](https://github.com/dosu-ai/dosu-cli/commit/03d5090e932963b673b15d2bcabe84ca227e8ba3))
+
 # [0.17.0](https://github.com/dosu-ai/dosu-cli/compare/v0.16.2...v0.17.0) (2026-06-07)
 
 
