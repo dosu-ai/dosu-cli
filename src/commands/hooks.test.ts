@@ -281,9 +281,17 @@ describe("runPostToolUse", () => {
 });
 
 describe("runStop", () => {
-  it("continues without a session, on the loop-guard, or without a pending ticket", async () => {
+  // Default the Stop wait to 0 so the pending-path tests poll once and never sleep.
+  beforeEach(() => {
+    process.env.DOSU_HOOK_STOP_WAIT_MS = "0";
+  });
+  afterEach(() => {
+    delete process.env.DOSU_HOOK_STOP_WAIT_MS;
+    delete process.env.DOSU_HOOK_STOP_POLL_MS;
+  });
+
+  it("continues without a session or without a pending ticket", async () => {
     await runStop({});
-    await runStop({ session_id: "s", stop_hook_active: true });
     vi.mocked(loadState).mockReturnValue(null);
     await runStop({ session_id: "s" });
     expect(requestGetTicket).not.toHaveBeenCalled();
@@ -318,7 +326,7 @@ describe("runStop", () => {
     expect(saveState).toHaveBeenCalledWith(expect.objectContaining({ status: "delivered" }));
   });
 
-  it("continues (never blocks) when the ticket is still pending", async () => {
+  it("continues (no block) when the ticket is still in flight after the wait", async () => {
     vi.mocked(loadState).mockReturnValue(pending());
     vi.mocked(requestGetTicket).mockResolvedValue({
       ticket_id: "kt_1",
@@ -330,6 +338,32 @@ describe("runStop", () => {
     });
     await runStop({ session_id: "sess" }, 70_000);
     expect(JSON.parse(logSpy.mock.calls[0][0])).toEqual({ continue: true });
+    expect(saveState).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "pending", lastCheckedAt: 70_000 }),
+    );
+  });
+
+  it("waits, re-polls, and delivers when the ticket flips ready mid-wait", async () => {
+    process.env.DOSU_HOOK_STOP_WAIT_MS = "50";
+    process.env.DOSU_HOOK_STOP_POLL_MS = "1";
+    vi.mocked(loadState).mockReturnValue(pending());
+    const pendingResp = {
+      ticket_id: "kt_1",
+      status: "pending" as const,
+      created_at: "x",
+      expires_at: "y",
+      result: null,
+      error: null,
+    };
+    vi.mocked(requestGetTicket)
+      .mockResolvedValueOnce(pendingResp)
+      .mockResolvedValueOnce(pendingResp)
+      .mockResolvedValue(readyResp("READY MID-WAIT"));
+    await runStop({ session_id: "sess" }, 70_000);
+    expect(requestGetTicket).toHaveBeenCalledTimes(3);
+    const printed = JSON.parse(logSpy.mock.calls[0][0]);
+    expect(printed.decision).toBe("block");
+    expect(printed.reason).toContain("READY MID-WAIT");
   });
 
   it("continues on a poll error (never holds the agent open)", async () => {
