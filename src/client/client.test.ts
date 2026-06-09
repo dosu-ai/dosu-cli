@@ -172,6 +172,28 @@ describe("Client", () => {
     });
   });
 
+  describe("timeoutMs option", () => {
+    it("uses the default 10s timeout when no option is passed", async () => {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
+      const client = new Client(makeConfig());
+      await client.get("/test");
+      const timeoutCall = setTimeoutSpy.mock.calls.find((c) => c[1] === 10_000);
+      expect(timeoutCall).toBeDefined();
+      setTimeoutSpy.mockRestore();
+    });
+
+    it("uses the override when opts.timeoutMs is passed to doRequest", async () => {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
+      const client = new Client(makeConfig());
+      await client.doRequest("POST", "/slow", { x: 1 }, { timeoutMs: 60_000 });
+      const timeoutCall = setTimeoutSpy.mock.calls.find((c) => c[1] === 60_000);
+      expect(timeoutCall).toBeDefined();
+      setTimeoutSpy.mockRestore();
+    });
+  });
+
   describe("doRequestRaw", () => {
     it("returns 401 without retrying or refreshing", async () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({}, 401));

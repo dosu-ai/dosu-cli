@@ -176,3 +176,82 @@ export function removeJSONServer(configPath: string, topKey: string): void {
   }
   saveJSONConfig(configPath, jsonCfg);
 }
+
+// Marker used to identify the Dosu workflow hook entry so we can be idempotent.
+const DOSU_HOOK_MARKER = "dosu write";
+
+// biome-ignore lint/suspicious/noExplicitAny: hook entries are arbitrary JSON
+type HookEntry = Record<string, any>;
+
+/**
+ * Installs a UserPromptSubmit hook into a Claude Code config file that reminds
+ * the agent to save non-obvious facts with `dosu write` after each task.
+ * Idempotent — no-ops if the hook is already present.
+ */
+export function installWorkflowHook(configPath: string): void {
+  const cfg = loadJSONConfig(configPath);
+  const hooks: Record<string, HookEntry[]> = cfg.hooks ?? {};
+  const submitHooks: HookEntry[] = Array.isArray(hooks.UserPromptSubmit)
+    ? hooks.UserPromptSubmit
+    : [];
+
+  const alreadyInstalled = submitHooks.some((entry: HookEntry) =>
+    (entry.hooks ?? []).some(
+      (h: HookEntry) => typeof h.command === "string" && h.command.includes(DOSU_HOOK_MARKER),
+    ),
+  );
+  if (alreadyInstalled) return;
+
+  submitHooks.push({
+    hooks: [
+      {
+        type: "command",
+        command:
+          "echo 'When you finish this task: if you discovered any non-obvious facts (constraints, gotchas, decisions), save them with: dosu write \"<concise fact>\"'",
+      },
+    ],
+  });
+
+  cfg.hooks = { ...hooks, UserPromptSubmit: submitHooks };
+  saveJSONConfig(configPath, cfg);
+}
+
+/**
+ * Removes the Dosu workflow hook from a Claude Code config file.
+ * Idempotent — no-ops if the hook is not present.
+ */
+export function removeWorkflowHook(configPath: string): void {
+  let cfg: JsonConfig;
+  try {
+    cfg = loadJSONConfig(configPath);
+  } catch {
+    return;
+  }
+
+  const hooks: Record<string, HookEntry[]> = cfg.hooks ?? {};
+  const submitHooks: HookEntry[] = Array.isArray(hooks.UserPromptSubmit)
+    ? hooks.UserPromptSubmit
+    : [];
+
+  const filtered = submitHooks.filter(
+    (entry: HookEntry) =>
+      !(entry.hooks ?? []).some(
+        (h: HookEntry) => typeof h.command === "string" && h.command.includes(DOSU_HOOK_MARKER),
+      ),
+  );
+
+  if (filtered.length === submitHooks.length) return; // nothing changed
+
+  if (filtered.length === 0) {
+    delete hooks.UserPromptSubmit;
+  } else {
+    hooks.UserPromptSubmit = filtered;
+  }
+
+  if (Object.keys(hooks).length === 0) {
+    delete cfg.hooks;
+  } else {
+    cfg.hooks = hooks;
+  }
+  saveJSONConfig(configPath, cfg);
+}

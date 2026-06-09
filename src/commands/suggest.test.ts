@@ -98,7 +98,7 @@ describe("suggest list", () => {
 describe("suggest generate", () => {
   it("fetches data sources then calls suggestedDoc.generate", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "ds1" }, { id: "ds2" }]); // dataSource.list
+    mockQuery.mockResolvedValueOnce([{ data_source_id: "ds1" }, { data_source_id: "ds2" }]); // dataSource.list
     mockMutate.mockResolvedValueOnce({});
 
     await run("generate");
@@ -111,7 +111,7 @@ describe("suggest generate", () => {
 
   it("outputs JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "ds1" }]);
+    mockQuery.mockResolvedValueOnce([{ data_source_id: "ds1" }]);
     mockMutate.mockResolvedValueOnce({ status: "generating" });
 
     await run("generate", "--json");
@@ -121,7 +121,7 @@ describe("suggest generate", () => {
 
   it("prints human-readable confirmation", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "ds1" }]);
+    mockQuery.mockResolvedValueOnce([{ data_source_id: "ds1" }]);
     mockMutate.mockResolvedValueOnce({});
 
     await run("generate");

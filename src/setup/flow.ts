@@ -147,6 +147,46 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
       });
       return;
     }
+  } else {
+    // Stored deployment_id exists — verify it's still reachable before
+    // spending the rest of setup on a stale reference (e.g. after switching
+    // between local dev and prod, or if a deployment was deleted).
+    //
+    // IMPORTANT: only wipe the cached config when the API explicitly returns
+    // a deployment list that excludes our id. A network/API failure must NOT
+    // count as "deployment doesn't exist" — that would silently corrupt the
+    // user's config every time prod has a transient outage. Call
+    // `getDeployments()` directly so we see the error instead of letting
+    // `fetchDeployments` swallow it into an empty array.
+    let deployments: Deployment[] | null = null;
+    try {
+      deployments = await apiClient.getDeployments();
+    } catch (err: unknown) {
+      logger.warn(
+        "setup",
+        `Could not verify cached deployment (preserving config): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    if (deployments !== null) {
+      const exists = deployments.some((d) => d.deployment_id === cfg.deployment_id);
+      if (!exists) {
+        p.log.warn(
+          `Project "${cfg.deployment_name ?? cfg.deployment_id}" no longer exists — select a new one.`,
+        );
+        cfg.deployment_id = undefined;
+        cfg.deployment_name = undefined;
+        cfg.api_key = undefined;
+        saveConfig(cfg);
+        const ok = await resolveDeployment(apiClient, cfg, opts);
+        if (!ok) {
+          await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
+            reason: "deployment_resolution_failed",
+          });
+          return;
+        }
+      }
+    }
   }
 
   // API key: `stepMintAPIKey` is idempotent — it validates an existing key
@@ -161,11 +201,17 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   cfg.api_key = apiKey;
   saveConfig(cfg);
 
-  // One-shot confirm: MCP + skill are always listed (user picks what to
-  // (re)run); GitHub docs import only shows during first-run onboarding.
-  const choices = await stepOneShotConfirm({
-    includeGitHub: cloudSetupContext?.kind === "onboarding",
-  });
+  // One-shot confirm: on first-run onboarding, auto-accept all defaults so
+  // new users reach value faster. On re-runs, show the multiselect so users
+  // can pick what to re-run.
+  let choices: OneShotChoices | null;
+  if (cloudSetupContext?.kind === "onboarding") {
+    choices = { configureMcp: true, installSkill: true, connectGitHub: true };
+  } else {
+    choices = await stepOneShotConfirm({
+      includeGitHub: cfg.mode !== MODE_OSS,
+    });
+  }
   if (!choices) {
     await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_cancelled", {
       reason: "options_cancelled",
@@ -215,53 +261,48 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     }
   }
 
+  // GitHub repo connection: PAT-first flow (user picks PAT or GitHub App).
+  // Runs for both first-run onboarding and Cloud re-runs when the user ticked
+  // connectGitHub. OSS mode skips this entirely.
   let githubOnboardingDone = !choices.connectGitHub;
-  if (choices.connectGitHub && cloudSetupContext?.kind === "onboarding") {
-    const { stepConnectGitHubRepo } = await import("./github-step");
-    const connectResult = await stepConnectGitHubRepo(cfg);
-    if (!connectResult.advance) {
-      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_cancelled", {
-        reason: "github_connect_not_advanced",
-        has_connected_repo: connectResult.has_connected_repo,
-      });
-      return;
-    }
-    if (
-      connectResult.has_connected_repo ||
-      (connectResult.created_data_source_ids?.length ?? 0) > 0
-    ) {
-      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_github_connected", {
-        created_data_source_count: connectResult.created_data_source_ids?.length ?? 0,
-        created_repository_slugs: connectResult.created_repository_slugs,
-      });
-    }
-    if (connectResult.space_id && !cfg.space_id) {
-      cfg.space_id = connectResult.space_id;
+  if (choices.connectGitHub && cfg.mode !== MODE_OSS) {
+    const { stepConnectGitHubPat } = await import("./github-pat-step");
+    const patResult = await stepConnectGitHubPat(apiClient, cfg);
+
+    if (patResult.space_id && !cfg.space_id) {
+      cfg.space_id = patResult.space_id;
       saveConfig(cfg);
     }
 
-    const { stepImportGitHubDocs } = await import("./github-doc-import-step");
-    const importResult = await stepImportGitHubDocs(cfg, {
-      waitForFreshDocs: Boolean(connectResult.deployment_id),
-      expectedDataSourceIds: connectResult.created_data_source_ids,
-    });
-    if (!importResult.advance) {
-      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
-        reason: "github_docs_import_failed",
+    if (patResult.data_source_id) {
+      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_github_connected", {
+        created_data_source_count: 1,
+        created_repository_slugs: patResult.repo_slug ? [patResult.repo_slug] : [],
       });
-      return;
-    }
-    docsImported = importResult.imported === true && (importResult.imported_count ?? 0) > 0;
-    if (docsImported) {
-      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_docs_imported", {
-        imported_count: importResult.imported_count ?? 0,
-        failed_count: importResult.failed_count ?? 0,
-        task_id: importResult.task_id,
-      });
-      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_activated", {
-        imported_count: importResult.imported_count ?? 0,
-        failed_count: importResult.failed_count ?? 0,
-      });
+
+      if (patResult.pat_stored === false) {
+        // Sync can't run without a stored PAT — skip the 60s indexing poll
+        // and tell the user explicitly what to do next instead of timing out
+        // into a misleading "No docs found".
+        p.log.info(
+          "Skipping doc analysis — Dosu can't sync the repo until the PAT is stored. " +
+            "Re-run `dosu setup` once the previous PAT-storage error is resolved.",
+        );
+      } else {
+        const { stepAnalyzeDocs } = await import("./doc-analyze-step");
+        const analyzeResult = await stepAnalyzeDocs(cfg, patResult);
+        docsImported = analyzeResult.imported_count > 0;
+        if (docsImported) {
+          await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_docs_imported", {
+            imported_count: analyzeResult.imported_count,
+            failed_count: analyzeResult.failed_count,
+          });
+          await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_activated", {
+            imported_count: analyzeResult.imported_count,
+            failed_count: analyzeResult.failed_count,
+          });
+        }
+      }
     }
     githubOnboardingDone = true;
   }
@@ -360,7 +401,7 @@ async function stepOneShotConfirm(opts: {
   if (opts.includeGitHub) {
     items.push({
       value: "connectGitHub",
-      label: `Import docs from GitHub ${dim("(Keep them up to date)")}`,
+      label: "Connect a GitHub repo",
     });
   }
 
@@ -407,22 +448,29 @@ async function stepConfigureMcpTools(cfg: Config): Promise<ConfigResult[] | null
 /**
  * Run the skill install (no prompt). The upfront one-shot confirm already
  * decided whether to run this. Returns `true` on success.
+ *
+ * Wraps npx output in a spinner so the raw security-risk warnings from
+ * `npx skills` don't appear during the happy-path FTUE.
  */
 export async function runInstallSkill(): Promise<boolean> {
   logger.info("setup", "Step: install skill");
+  const s = p.spinner();
+  s.start("Installing Dosu skill...");
   try {
-    const result = await installSkill();
+    const result = await installSkill({ silent: true });
     if (result.success) {
       logger.info("setup", `Skill installed${result.sha ? ` sha=${result.sha}` : ""}`);
-      p.log.success("Skill installed");
+      s.stop("Dosu skill installed");
       return true;
     }
+    s.stop("Skill install failed");
     p.log.error("Failed to install skill. Run `dosu skill install` to retry.");
     return false;
   } catch (err: unknown) {
     /* v8 ignore next -- err is always Error in practice */
     const msg = err instanceof Error ? err.message : String(err);
     logger.error("setup", `Skill install failed: ${msg}`);
+    s.stop("Skill install failed");
     p.log.error(`Skill install failed: ${msg}`);
     return false;
   }
@@ -530,7 +578,9 @@ async function resolveCloudSetupContext(cfg: Config): Promise<CloudSetupContext 
     const profile = await trpc.user.getCliOnboardingContext.query();
 
     if (!profile?.user_id) {
-      p.log.error("Could not load your profile.");
+      p.log.error(
+        "Could not load your profile. Run `dosu logs --tail 30` for details, then re-run `dosu setup`.",
+      );
       return null;
     }
 
@@ -543,7 +593,9 @@ async function resolveCloudSetupContext(cfg: Config): Promise<CloudSetupContext 
 
     const targetOrg = await resolveOnboardingTargetOrg(trpc);
     if (!targetOrg) {
-      p.log.error("Could not determine your onboarding organization.");
+      p.log.error(
+        "Could not determine your onboarding organization. Visit https://app.dosu.dev to create or join one, then re-run `dosu setup`.",
+      );
       return null;
     }
 
@@ -556,7 +608,9 @@ async function resolveCloudSetupContext(cfg: Config): Promise<CloudSetupContext 
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error("setup", `Failed to resolve cloud setup context: ${msg}`);
-    p.log.error(`Could not load your onboarding state: ${msg}`);
+    p.log.error(
+      `Could not load your onboarding state: ${msg}. Run \`dosu logs --tail 30\` for details, then re-run \`dosu setup\`.`,
+    );
     return null;
   }
 }
@@ -576,13 +630,17 @@ async function bindOnboardingDeployment(
   targetOrg: OwnedOrg | null,
 ): Promise<boolean> {
   if (!targetOrg) {
-    p.log.error("Could not determine your onboarding organization.");
+    p.log.error(
+      "Could not determine your onboarding organization. Visit https://app.dosu.dev to create or join one, then re-run `dosu setup`.",
+    );
     return false;
   }
 
   const deployment = await resolveOnboardingDeployment(apiClient, targetOrg);
   if (!deployment) {
-    p.log.error(`No MCP found for ${targetOrg.name}.`);
+    p.log.error(
+      `No MCP found for ${targetOrg.name}. Create one at https://app.dosu.dev/mcp, then re-run \`dosu setup\`.`,
+    );
     return false;
   }
 
@@ -655,7 +713,9 @@ async function stepSelectOrg(apiClient: Client): Promise<Org | null> {
   try {
     const orgs = await apiClient.getOrgs();
     if (orgs.length === 0) {
-      p.log.error("No organizations found for your account");
+      p.log.error(
+        "No organizations found for your account. Visit https://app.dosu.dev to create or join one, then re-run `dosu setup`.",
+      );
       return null;
     }
     if (orgs.length === 1) {
@@ -678,7 +738,7 @@ async function stepSelectOrg(apiClient: Client): Promise<Org | null> {
     }
     /* v8 ignore next -- err is always Error in practice */
     p.log.error(
-      `Organization selection failed: ${err instanceof Error ? err.message : String(err)}`,
+      `Organization selection failed: ${err instanceof Error ? err.message : String(err)}. Run \`dosu logs --tail 30\` for details, then re-run \`dosu setup\`.`,
     );
     return null;
   }
@@ -690,7 +750,9 @@ async function stepResolveDeployment(apiClient: Client, id: string): Promise<Dep
     const d = deployments.find((d) => d.deployment_id === id);
     if (!d) {
       logger.warn("setup", `Deployment ${id} not found`);
-      p.log.error(`MCP ${id} not found`);
+      p.log.error(
+        `MCP ${id} not found. Run \`dosu deployments list\` to see available MCPs, then re-run \`dosu setup --deployment <id>\`.`,
+      );
       return null;
     }
     logger.info("setup", `Resolved deployment: ${d.name}`);
@@ -698,7 +760,9 @@ async function stepResolveDeployment(apiClient: Client, id: string): Promise<Dep
     return d;
   } catch (err: unknown) {
     /* v8 ignore next -- err is always Error in practice */
-    p.log.error(`Failed to resolve MCP: ${err instanceof Error ? err.message : String(err)}`);
+    p.log.error(
+      `Failed to resolve MCP: ${err instanceof Error ? err.message : String(err)}. Run \`dosu logs --tail 30\` for details.`,
+    );
     return null;
   }
 }
@@ -709,7 +773,9 @@ async function stepSelectDeployment(apiClient: Client, org: Org): Promise<Deploy
     const deployments = allDeployments.filter((d) => d.org_id === org.org_id);
 
     if (deployments.length === 0) {
-      p.log.error(`No MCPs found for ${org.name}`);
+      p.log.error(
+        `No MCPs found for ${org.name}. Create one at https://app.dosu.dev/mcp, then re-run \`dosu setup\`.`,
+      );
       return null;
     }
     if (deployments.length === 1) {
@@ -718,7 +784,7 @@ async function stepSelectDeployment(apiClient: Client, org: Org): Promise<Deploy
       return deployments[0];
     }
     const selected = await p.select({
-      message: "Select an MCP",
+      message: "Select a project",
       options: deployments.map((d) => ({ label: d.name, value: d.deployment_id })),
     });
     if (p.isCancel(selected)) return null;
@@ -727,14 +793,16 @@ async function stepSelectDeployment(apiClient: Client, org: Org): Promise<Deploy
     return d;
   } catch (err: unknown) {
     /* v8 ignore next -- err is always Error in practice */
-    p.log.error(`MCP selection failed: ${err instanceof Error ? err.message : String(err)}`);
+    p.log.error(
+      `MCP selection failed: ${err instanceof Error ? err.message : String(err)}. Run \`dosu logs --tail 30\` for details.`,
+    );
     return null;
   }
 }
 
 async function stepMintAPIKey(apiClient: Client, cfg: Config): Promise<string | null> {
   if (!cfg.deployment_id) {
-    p.log.error("No MCP available for API key creation");
+    p.log.error("No MCP available for API key creation. Re-run `dosu setup` to pick a deployment.");
     return null;
   }
 
@@ -757,7 +825,18 @@ async function stepMintAPIKey(apiClient: Client, cfg: Config): Promise<string | 
     return resp.api_key;
   } catch (err: unknown) {
     /* v8 ignore next -- err is always Error in practice */
-    p.log.error(`API key creation failed: ${err instanceof Error ? err.message : String(err)}`);
+    const msg = err instanceof Error ? err.message : String(err);
+    const isNotFound = msg.includes("404") || msg.toLowerCase().includes("not found");
+    if (isNotFound) {
+      p.log.error(
+        `Project "${cfg.deployment_name ?? cfg.deployment_id}" not found. ` +
+          "Run `dosu setup` again to select a different project.",
+      );
+    } else {
+      p.log.error(
+        `API key creation failed: ${msg}. Run \`dosu logs --tail 30\` for details, then re-run \`dosu setup\`.`,
+      );
+    }
     return null;
   }
 }
@@ -878,27 +957,32 @@ export function stepShowSummary(results: ConfigResult[]): void {
 }
 
 /**
- * Post-setup nudge: a ready-to-paste prompt so the user can immediately try
- * Dosu in their configured AI agent. Rendered at the very end of the flow
- * (right before outro) so it's the last actionable thing they see — not
- * buried right after the MCP configuration step. The call site is responsible
- * for only invoking this when MCP was actually (re)configured this run, so
- * users who skip MCP don't get a tip they can't act on.
+ * Post-setup nudge: concrete next actions the user can take immediately.
+ * Always surfaces `dosu write` so agents learn the save pattern right away.
+ * Rendered at the very end of the flow (right before outro) so it's the last
+ * actionable thing they see.
  */
 export function showTryItOutPrompt(
   opts: { mode?: SetupMode; docsImported?: boolean; hasAgentsMd?: boolean } = {},
 ): void {
-  const prompt = (() => {
+  const agentPrompt = (() => {
     if (opts.mode === MODE_OSS) {
       return `What can Dosu help me with? Pick an open source library related to my project and explain how it works.`;
     }
     if (opts.docsImported) {
       return `Use Dosu to summarize the most important docs in my repo.`;
     }
-    if (opts.hasAgentsMd) {
-      return `Please use Dosu to host my AGENTS.md`;
-    }
-    return `Ask Dosu to draft an AGENTS.md for this project.`;
+    return `Ask Dosu to explain the most important patterns in this codebase.`;
   })();
-  p.log.message(`Try it out! Paste this into your agent:\n\n${info(prompt)}`);
+
+  p.log.message(
+    [
+      "Try it out:",
+      "",
+      `  Ask your agent: ${info(agentPrompt)}`,
+      "",
+      `  Save a fact:    ${info(`dosu write "something non-obvious about this project"`)}`,
+      `  Read context:   ${info(`dosu read "what should I know before making changes?"`)}`,
+    ].join("\n"),
+  );
 }

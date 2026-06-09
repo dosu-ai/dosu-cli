@@ -69,8 +69,8 @@ describe("knowledge search", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery
       .mockResolvedValueOnce([
-        { id: "ds1", name: "GH" },
-        { id: "ds2", name: "Slack" },
+        { data_source_id: "ds1", name: "GH" },
+        { data_source_id: "ds2", name: "Slack" },
       ])
       .mockResolvedValueOnce({ documents: [{ title: "Doc A", similarity: 0.95 }] });
 
@@ -90,7 +90,7 @@ describe("knowledge search", () => {
   it("outputs valid JSON with --json flag", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery
-      .mockResolvedValueOnce([{ id: "ds1" }])
+      .mockResolvedValueOnce([{ data_source_id: "ds1" }])
       .mockResolvedValueOnce({ documents: [{ title: "Result", similarity: 0.8 }] });
 
     await run("search", "--json", "query");
@@ -111,7 +111,9 @@ describe("knowledge search", () => {
 
   it("prints message when search returns empty", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "ds1" }]).mockResolvedValueOnce({ documents: [] });
+    mockQuery
+      .mockResolvedValueOnce([{ data_source_id: "ds1" }])
+      .mockResolvedValueOnce({ documents: [] });
 
     await run("search", "query");
 
@@ -124,7 +126,9 @@ describe("knowledge search", () => {
       title: `Doc ${i}`,
       similarity: 0.9 - i * 0.1,
     }));
-    mockQuery.mockResolvedValueOnce([{ id: "ds1" }]).mockResolvedValueOnce({ documents: results });
+    mockQuery
+      .mockResolvedValueOnce([{ data_source_id: "ds1" }])
+      .mockResolvedValueOnce({ documents: results });
 
     await run("search", "--limit", "3", "query");
 
