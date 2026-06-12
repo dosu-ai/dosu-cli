@@ -1,12 +1,14 @@
 /**
- * Dosu knowledge-injection hooks for Claude Code.
+ * Dosu knowledge-injection hooks for coding agents (Claude Code, Codex).
  *
  * Two kinds of subcommands:
  *  - Hook entrypoints (`user-prompt-submit`, `post-tool-use`, `stop`, `status`) —
- *    invoked by Claude Code on every turn. They read a hook-event JSON object on
- *    stdin and print the hook contract on stdout. They are async, idempotent, and
- *    fail silently: ANY error results in no stdout (or `{continue:true}` for stop)
- *    and exit 0, so the agent is never disrupted.
+ *    invoked by the agent on every turn. They read a hook-event JSON object on
+ *    stdin and print the hook contract on stdout. Codex implements Claude Code's
+ *    hook wire protocol (same event names, stdin fields, and stdout contracts),
+ *    so one runtime serves both; `--agent` only attributes tickets. They are
+ *    async, idempotent, and fail silently: ANY error results in no stdout (or
+ *    `{continue:true}` for stop) and exit 0, so the agent is never disrupted.
  *  - Lifecycle commands (`install`/`uninstall`/`doctor`) — run once by a human or
  *    setup agent.
  *
@@ -21,6 +23,7 @@ import { basename } from "node:path";
 import { Argument, Command } from "commander";
 import { isAuthenticated, loadConfig, MODE_OSS } from "../config/config";
 import { logger } from "../debug/logger";
+import { STOP_PREFIX } from "../hooks/prompts";
 import { loadState, saveState, type TicketState } from "../hooks/state";
 
 interface HookInput {
@@ -40,8 +43,12 @@ const TTL_DEFAULT_MS = 10 * 60 * 1000; // 10 minutes
 const STOP_WAIT_DEFAULT_MS = 8000; // max time Stop waits for an in-flight lookup
 const STOP_POLL_DEFAULT_MS = 1000; // interval between Stop poll attempts
 
-/** Coding agents that have a Dosu hook adapter today (Codex is a follow-up). */
-const SUPPORTED_AGENTS = ["claude-code"];
+/** Coding agents that have a Dosu hook adapter today. */
+const SUPPORTED_AGENTS = ["claude-code", "codex"];
+type SupportedAgent = "claude-code" | "codex";
+
+/** Hook entrypoints attribute tickets to this agent unless --agent overrides it. */
+const DEFAULT_AGENT: SupportedAgent = "claude-code";
 
 // ---------------------------------------------------------------------------
 // Timing knobs (env-overridable)
@@ -104,11 +111,19 @@ function repoSlug(cwd?: string): string | undefined {
 export async function runUserPromptSubmit(
   input: HookInput,
   now: number = Date.now(),
+  agent: string = DEFAULT_AGENT,
 ): Promise<void> {
   const sessionId = input.session_id;
   if (!sessionId) return;
   const prompt = (input.prompt ?? "").trim();
   if (!prompt) return; // nothing to retrieve
+  // Self-recognition guard: Codex turns a Stop hook's `decision:"block"`
+  // reason into a NEW user prompt, which fires UserPromptSubmit again. Never
+  // mint a knowledge lookup for our own Stop-delivered envelope.
+  if (prompt.startsWith(STOP_PREFIX)) {
+    logger.debug("hooks", "submit skipped reason=own-stop-envelope");
+    return;
+  }
 
   // One active ticket per session: reuse a live pending ticket; don't mint a second.
   const existing = loadState(sessionId);
@@ -129,7 +144,7 @@ export async function runUserPromptSubmit(
   try {
     resp = await tc.requestCreateTicket(cfg, {
       deployment_id: cfg.deployment_id,
-      agent: "claude-code",
+      agent,
       session_id: sessionId,
       turn_id: input.turn_id ?? String(now),
       prompt,
@@ -331,6 +346,7 @@ export async function runHookEntrypoint(
   event: HookEvent,
   raw: string,
   now: number = Date.now(),
+  agent: string = DEFAULT_AGENT,
 ): Promise<void> {
   let input: HookInput = {};
   try {
@@ -339,7 +355,7 @@ export async function runHookEntrypoint(
     input = {}; // malformed stdin → treat as empty → silent no-op
   }
   try {
-    if (event === "user-prompt-submit") await runUserPromptSubmit(input, now);
+    if (event === "user-prompt-submit") await runUserPromptSubmit(input, now, agent);
     else if (event === "post-tool-use") await runPostToolUse(input, now);
     else await runStop(input, now);
   } catch (err) {
@@ -378,14 +394,15 @@ async function emitErrorLine(step: string, reason: string, agentNextSteps: strin
   emitError({ step, reason, agent_next_steps: agentNextSteps });
 }
 
-/** `dosu hooks install claude-code` — merge Dosu hooks into local Claude Code config. */
+/** `dosu hooks install <agent>` — merge Dosu hooks into the agent's local config. */
 export async function runInstall(agent: string, opts: LifecycleOptions): Promise<void> {
-  if (agent !== "claude-code") {
+  if (!SUPPORTED_AGENTS.includes(agent)) {
     process.exitCode = 2;
+    const supported = SUPPORTED_AGENTS.join(", ");
     if (opts.json) {
-      await emitErrorLine("hooks-install", "unsupported_agent", `Only 'claude-code' is supported.`);
+      await emitErrorLine("hooks-install", "unsupported_agent", `Supported agents: ${supported}.`);
     } else {
-      console.error(`Unsupported agent '${agent}'. Supported agents: claude-code.`);
+      console.error(`Unsupported agent '${agent}'. Supported agents: ${supported}.`);
     }
     return;
   }
@@ -399,13 +416,29 @@ export async function runInstall(agent: string, opts: LifecycleOptions): Promise
     return;
   }
 
-  const { installClaudeHooks, claudeLocalSettingsPath } = await import("../hooks/claude-code");
-  const configPath = claudeLocalSettingsPath(resolveDir(opts.dir));
   try {
+    if (agent === "codex") {
+      const { installCodexHooks, codexHooksPath } = await import("../hooks/codex");
+      const configPath = codexHooksPath(resolveDir(opts.dir));
+      const { events } = installCodexHooks(configPath, { stop: opts.stop });
+      if (opts.json) {
+        const { emitStep } = await import("../agent/output");
+        emitStep({ step: "hooks-install", agent, path: configPath, events });
+      } else {
+        console.log(`✓ Installed Dosu hooks for Codex (${events.join(", ")}).`);
+        console.log(`  → ${configPath}`);
+        console.log("  One-time step: open Codex in this project and run /hooks to review and");
+        console.log("  trust the Dosu hooks — Codex skips untrusted hooks by design.");
+      }
+      return;
+    }
+
+    const { installClaudeHooks, claudeLocalSettingsPath } = await import("../hooks/claude-code");
+    const configPath = claudeLocalSettingsPath(resolveDir(opts.dir));
     const { events } = installClaudeHooks(configPath, { stop: opts.stop });
     if (opts.json) {
       const { emitStep } = await import("../agent/output");
-      emitStep({ step: "hooks-install", path: configPath, events });
+      emitStep({ step: "hooks-install", agent, path: configPath, events });
     } else {
       console.log(`✓ Installed Dosu hooks for Claude Code (${events.join(", ")}).`);
       console.log(`  → ${configPath}`);
@@ -421,24 +454,33 @@ export async function runInstall(agent: string, opts: LifecycleOptions): Promise
   }
 }
 
-/** `dosu hooks uninstall claude-code` — remove only Dosu-owned hook entries. */
+/** `dosu hooks uninstall <agent>` — remove only Dosu-owned hook entries. */
 export async function runUninstall(agent: string, opts: LifecycleOptions): Promise<void> {
-  if (agent !== "claude-code") {
+  if (!SUPPORTED_AGENTS.includes(agent)) {
     process.exitCode = 2;
+    const supported = SUPPORTED_AGENTS.join(", ");
     if (opts.json) {
       await emitErrorLine(
         "hooks-uninstall",
         "unsupported_agent",
-        "Only 'claude-code' is supported.",
+        `Supported agents: ${supported}.`,
       );
     } else {
-      console.error(`Unsupported agent '${agent}'. Supported agents: claude-code.`);
+      console.error(`Unsupported agent '${agent}'. Supported agents: ${supported}.`);
     }
     return;
   }
-  const { removeClaudeHooks, claudeLocalSettingsPath } = await import("../hooks/claude-code");
-  const configPath = claudeLocalSettingsPath(resolveDir(opts.dir));
-  const { removed } = removeClaudeHooks(configPath);
+  let configPath: string;
+  let removed: boolean;
+  if (agent === "codex") {
+    const { removeCodexHooks, codexHooksPath } = await import("../hooks/codex");
+    configPath = codexHooksPath(resolveDir(opts.dir));
+    ({ removed } = removeCodexHooks(configPath));
+  } else {
+    const { removeClaudeHooks, claudeLocalSettingsPath } = await import("../hooks/claude-code");
+    configPath = claudeLocalSettingsPath(resolveDir(opts.dir));
+    ({ removed } = removeClaudeHooks(configPath));
+  }
   if (opts.json) {
     const { emitStep } = await import("../agent/output");
     emitStep({ step: "hooks-uninstall", path: configPath, removed });
@@ -459,14 +501,20 @@ export interface DoctorCheck {
 export async function collectDoctorChecks(opts: { dir?: string }): Promise<DoctorCheck[]> {
   const checks: DoctorCheck[] = [];
   const { claudeLocalSettingsPath, inspectClaudeHooks } = await import("../hooks/claude-code");
+  const { codexHooksPath, inspectCodexHooks } = await import("../hooks/codex");
   const configPath = claudeLocalSettingsPath(resolveDir(opts.dir));
   const inspection = inspectClaudeHooks(configPath);
+  const codexPath = codexHooksPath(resolveDir(opts.dir));
+  const codex = inspectCodexHooks(codexPath);
+  const codexInstalled =
+    codex.events.includes("UserPromptSubmit") && codex.events.includes("PostToolUse");
 
-  // 1. Config present + valid JSON.
+  // 1. Claude Code config present + valid JSON. A missing Claude config is
+  // only a warning when Codex hooks carry the chain instead.
   if (!inspection.fileExists) {
     checks.push({
       name: "config",
-      status: "fail",
+      status: codexInstalled ? "warn" : "fail",
       detail: `not found: ${configPath} (run 'dosu hooks install claude-code')`,
     });
   } else if (inspection.parseError) {
@@ -475,7 +523,7 @@ export async function collectDoctorChecks(opts: { dir?: string }): Promise<Docto
     checks.push({ name: "config", status: "ok", detail: configPath });
   }
 
-  // 2. Dosu hooks installed.
+  // 2. Dosu hooks installed for Claude Code.
   const hasSubmit = inspection.events.includes("UserPromptSubmit");
   const hasPostTool = inspection.events.includes("PostToolUse");
   if (hasSubmit && hasPostTool) {
@@ -487,9 +535,34 @@ export async function collectDoctorChecks(opts: { dir?: string }): Promise<Docto
   } else {
     checks.push({
       name: "hooks",
-      status: "fail",
+      status: codexInstalled ? "warn" : "fail",
       detail: "UserPromptSubmit + PostToolUse not both installed",
     });
+  }
+
+  // 2b. Codex hooks (only reported when the Codex hooks file exists).
+  if (codex.fileExists) {
+    if (codex.parseError) {
+      checks.push({ name: "codex-config", status: "fail", detail: `invalid JSON: ${codexPath}` });
+    } else if (codexInstalled) {
+      checks.push({
+        name: "codex-config",
+        status: "ok",
+        detail: `installed: ${codex.events.join(", ")} (${codexPath})`,
+      });
+      // Trust state lives inside Codex itself and is not verifiable here.
+      checks.push({
+        name: "codex-trust",
+        status: "warn",
+        detail: "if hooks aren't firing, run /hooks inside Codex to review + trust them (one-time)",
+      });
+    } else {
+      checks.push({
+        name: "codex-config",
+        status: "fail",
+        detail: "UserPromptSubmit + PostToolUse not both installed",
+      });
+    }
   }
 
   // 3. Auth + 4. Deployment.
@@ -559,28 +632,33 @@ export async function runDoctor(opts: { dir?: string; json?: boolean }): Promise
 // ---------------------------------------------------------------------------
 
 export function hooksCommand(): Command {
-  const cmd = new Command("hooks").description("Dosu knowledge-injection hooks for Claude Code");
+  const cmd = new Command("hooks").description(
+    "Dosu knowledge-injection hooks for coding agents (Claude Code, Codex)",
+  );
 
   /* v8 ignore start -- thin Commander glue: reads fd 0 and delegates to tested handlers */
   cmd
     .command("user-prompt-submit")
     .description("Hook entrypoint: create a knowledge ticket on prompt submit")
-    .action(async () => {
-      await runHookEntrypoint("user-prompt-submit", readStdinRaw());
+    .option("--agent <agent>", "Calling agent for ticket attribution", DEFAULT_AGENT)
+    .action(async (opts: { agent?: string }) => {
+      await runHookEntrypoint("user-prompt-submit", readStdinRaw(), Date.now(), opts.agent);
     });
 
   cmd
     .command("post-tool-use")
     .description("Hook entrypoint: poll and inject ready knowledge once")
-    .action(async () => {
-      await runHookEntrypoint("post-tool-use", readStdinRaw());
+    .option("--agent <agent>", "Calling agent for ticket attribution", DEFAULT_AGENT)
+    .action(async (opts: { agent?: string }) => {
+      await runHookEntrypoint("post-tool-use", readStdinRaw(), Date.now(), opts.agent);
     });
 
   cmd
     .command("stop")
     .description("Hook entrypoint: last-chance knowledge delivery when the agent stops")
-    .action(async () => {
-      await runHookEntrypoint("stop", readStdinRaw());
+    .option("--agent <agent>", "Calling agent for ticket attribution", DEFAULT_AGENT)
+    .action(async (opts: { agent?: string }) => {
+      await runHookEntrypoint("stop", readStdinRaw(), Date.now(), opts.agent);
     });
 
   cmd
@@ -618,8 +696,12 @@ export function hooksCommand(): Command {
         "",
         "Examples:",
         "  $ dosu hooks install claude-code",
+        "  $ dosu hooks install codex",
         "  $ dosu hooks install claude-code --no-stop",
-        "  $ dosu hooks install claude-code --dir ./my-project",
+        "  $ dosu hooks install codex --dir ./my-project",
+        "",
+        "Codex requires a one-time trust step after install: open Codex in the",
+        "project and run /hooks to review and trust the Dosu hooks.",
       ].join("\n"),
     )
     .action((agent: string, opts: LifecycleOptions) => runInstall(agent, opts));
@@ -637,8 +719,9 @@ export function hooksCommand(): Command {
         "",
         `Supported agents: ${SUPPORTED_AGENTS.join(", ")}`,
         "",
-        "Example:",
+        "Examples:",
         "  $ dosu hooks uninstall claude-code",
+        "  $ dosu hooks uninstall codex",
       ].join("\n"),
     )
     .action((agent: string, opts: LifecycleOptions) => runUninstall(agent, opts));
