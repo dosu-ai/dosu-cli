@@ -16,7 +16,13 @@ describe("hooks/prompts", () => {
     expect(out).toContain("Dosu knowledge context for this task:");
     expect(out).toContain("ROUTE MAP BODY");
     expect(out).toContain("verify adjacent");
-    expect(out).toContain("one brief cited note");
+    expect(out).toContain("mention Dosu briefly near that finding");
+    expect(out).toContain("Say what role the Dosu context played");
+    expect(out).toContain("do not force a link");
+    expect(out).toContain("Do not create a separate Dosu section");
+    expect(out).not.toContain("Prefer this format");
+    expect(out).not.toContain("[Source Title](Source URL)");
+    expect(out).not.toContain("<source title/link>");
   });
 
   it("envelope contains no hardcoded file paths or relevance/threshold numbers", () => {
