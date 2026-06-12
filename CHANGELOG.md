@@ -1,3 +1,10 @@
+## [0.19.1](https://github.com/dosu-ai/dosu-cli/compare/v0.19.0...v0.19.1) (2026-06-12)
+
+
+### Bug Fixes
+
+* bake the rotated Supabase publishable key into production builds ([#82](https://github.com/dosu-ai/dosu-cli/issues/82)) ([dc63308](https://github.com/dosu-ai/dosu-cli/commit/dc63308feacca8b6c806c332d19a8d08d1d98de9))
+
 # [0.19.0](https://github.com/dosu-ai/dosu-cli/compare/v0.18.1...v0.19.0) (2026-06-12)
 
 
