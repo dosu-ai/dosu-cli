@@ -1,3 +1,10 @@
+## [0.18.1](https://github.com/dosu-ai/dosu-cli/compare/v0.18.0...v0.18.1) (2026-06-12)
+
+
+### Bug Fixes
+
+* self-heal token refresh across concurrent CLI processes ([#79](https://github.com/dosu-ai/dosu-cli/issues/79)) ([d1fcbbe](https://github.com/dosu-ai/dosu-cli/commit/d1fcbbeed58e82804e3a8755eeae3ee1a09e20e9)), closes [dosu#10989](https://github.com/dosu/issues/10989) [dosu#10990](https://github.com/dosu/issues/10990)
+
 # [0.18.0](https://github.com/dosu-ai/dosu-cli/compare/v0.17.0...v0.18.0) (2026-06-07)
 
 
