@@ -1,3 +1,10 @@
+## [0.19.2](https://github.com/dosu-ai/dosu-cli/compare/v0.19.1...v0.19.2) (2026-06-12)
+
+
+### Bug Fixes
+
+* release hooks attribution guidance ([2fb8918](https://github.com/dosu-ai/dosu-cli/commit/2fb8918cfa07d55a449896de8621637416ce62f2))
+
 ## [0.19.1](https://github.com/dosu-ai/dosu-cli/compare/v0.19.0...v0.19.1) (2026-06-12)
 
 
