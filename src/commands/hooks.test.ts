@@ -416,6 +416,40 @@ describe("runHookEntrypoint", () => {
     expect(stdout()).toBe("");
   });
 
+  it("threads --agent through to ticket attribution", async () => {
+    vi.mocked(loadState).mockReturnValue(null);
+    vi.mocked(requestCreateTicket).mockResolvedValue({
+      ticket_id: "kt_codex",
+      status: "pending",
+      created_at: "x",
+      expires_at: "y",
+    });
+    await runHookEntrypoint(
+      "user-prompt-submit",
+      JSON.stringify({ session_id: "s", prompt: "p" }),
+      1,
+      "codex",
+    );
+    expect(vi.mocked(requestCreateTicket).mock.calls[0][1]).toMatchObject({ agent: "codex" });
+  });
+
+  it("never mints a lookup for its own Stop-delivered envelope (Codex continuation prompt)", async () => {
+    vi.mocked(loadState).mockReturnValue(null);
+    const { STOP_PREFIX } = await import("../hooks/prompts");
+
+    // Codex turns a Stop hook's block reason into a NEW user prompt, which
+    // re-fires UserPromptSubmit with our own envelope as the prompt text.
+    await runHookEntrypoint(
+      "user-prompt-submit",
+      JSON.stringify({ session_id: "s", prompt: `${STOP_PREFIX}\n\nDosu knowledge context…` }),
+      1,
+      "codex",
+    );
+
+    expect(requestCreateTicket).not.toHaveBeenCalled();
+    expect(stdout()).toBe(""); // no injection either
+  });
+
   it("swallows handler errors; stop still emits continue", async () => {
     vi.mocked(loadState).mockImplementation(() => {
       throw new Error("disk boom");
@@ -452,7 +486,7 @@ describe("lifecycle commands", () => {
   });
 
   it("rejects an unsupported agent and a non-local scope", async () => {
-    await runInstall("codex", {});
+    await runInstall("cursor", {});
     expect(process.exitCode).toBe(2);
     process.exitCode = 0;
     await runInstall("claude-code", { scope: "project" });
@@ -461,8 +495,44 @@ describe("lifecycle commands", () => {
   });
 
   it("uninstall rejects an unsupported agent", async () => {
-    await runUninstall("codex", {});
+    await runUninstall("cursor", {});
     expect(process.exitCode).toBe(2);
+  });
+
+  it("install codex writes .codex/hooks.json and surfaces the one-time trust step", async () => {
+    await runInstall("codex", { dir });
+    expect(process.exitCode ?? 0).toBe(0);
+
+    const { codexHooksPath, inspectCodexHooks } = await import("../hooks/codex");
+    const inspection = inspectCodexHooks(codexHooksPath(dir));
+    expect(inspection.fileExists).toBe(true);
+    expect(inspection.events).toEqual(["UserPromptSubmit", "PostToolUse", "Stop"]);
+
+    expect(stdout()).toContain("Codex");
+    expect(stdout()).toContain("/hooks"); // Codex skips untrusted hooks — UX must say so
+  });
+
+  it("uninstall codex removes only the Dosu groups", async () => {
+    await runInstall("codex", { dir });
+    logSpy.mockClear();
+    await runUninstall("codex", { dir });
+
+    const { codexHooksPath, inspectCodexHooks } = await import("../hooks/codex");
+    expect(inspectCodexHooks(codexHooksPath(dir)).events).toEqual([]);
+    expect(stdout()).toContain("Removed");
+  });
+
+  it("doctor reports the codex section and softens claude checks when codex carries the chain", async () => {
+    await runInstall("codex", { dir });
+    logSpy.mockClear();
+    const checks = await collectDoctorChecks({ dir });
+    const byName = Object.fromEntries(checks.map((c) => [c.name, c.status]));
+    expect(byName).toMatchObject({
+      config: "warn", // claude config missing, but codex hooks are active
+      hooks: "warn",
+      "codex-config": "ok",
+      "codex-trust": "warn", // trust lives inside Codex; always remind
+    });
   });
 
   it("doctor reports ok when fully configured and installed", async () => {
