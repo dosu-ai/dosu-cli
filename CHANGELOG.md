@@ -1,3 +1,10 @@
+# [0.19.0](https://github.com/dosu-ai/dosu-cli/compare/v0.18.1...v0.19.0) (2026-06-12)
+
+
+### Features
+
+* **hooks:** add Codex CLI support to the knowledge hooks ([#81](https://github.com/dosu-ai/dosu-cli/issues/81)) ([69ff6ec](https://github.com/dosu-ai/dosu-cli/commit/69ff6ecd4f509c2c26bc5dc55143cba9fb04665d))
+
 ## [0.18.1](https://github.com/dosu-ai/dosu-cli/compare/v0.18.0...v0.18.1) (2026-06-12)
 
 
