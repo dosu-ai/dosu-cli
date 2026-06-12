@@ -3,7 +3,7 @@
  */
 
 import type { Config } from "../config/config";
-import { isAuthenticated, isTokenExpired, saveConfig } from "../config/config";
+import { isAuthenticated, isTokenExpired, loadConfig, saveConfig } from "../config/config";
 import { getBackendURL, getSupabaseAnonKey, getSupabaseURL } from "../config/constants";
 
 export class SessionExpiredError extends Error {
@@ -162,12 +162,50 @@ export class Client {
 
   /**
    * Public method to refresh token externally (used during auth step).
+   *
+   * Multi-process self-healing: sibling CLI processes rotate the refresh
+   * token through the shared config file, and GoTrue refresh tokens are
+   * single-use — replaying a stale one outside the reuse interval can revoke
+   * the ENTIRE session for every client holding it. So: adopt the newest
+   * on-disk tokens before refreshing (a long-lived process may hold a stale
+   * in-memory copy), and on failure re-read the config once in case a
+   * sibling rotated mid-flight.
    */
   async refreshToken(): Promise<void> {
+    this.adoptNewerDiskTokens();
     if (!this.config.refresh_token) {
       throw new Error("no refresh token available");
     }
 
+    try {
+      await this.refreshTokenOnce();
+    } catch (err) {
+      // A sibling may have rotated the token between our config read and the
+      // request landing. If the file now holds a different token, retry once
+      // with it before declaring the session dead.
+      if (!this.adoptNewerDiskTokens()) {
+        throw err;
+      }
+      await this.refreshTokenOnce();
+    }
+  }
+
+  /**
+   * Sync in-memory tokens from the config file when a sibling process saved
+   * a different refresh token. Returns true when tokens were adopted.
+   */
+  private adoptNewerDiskTokens(): boolean {
+    const disk = loadConfig();
+    if (!disk.refresh_token || disk.refresh_token === this.config.refresh_token) {
+      return false;
+    }
+    this.config.access_token = disk.access_token;
+    this.config.refresh_token = disk.refresh_token;
+    this.config.expires_at = disk.expires_at;
+    return true;
+  }
+
+  private async refreshTokenOnce(): Promise<void> {
     const supabaseURL = getSupabaseURL();
     const endpoint = `${supabaseURL}/auth/v1/token?grant_type=refresh_token`;
 

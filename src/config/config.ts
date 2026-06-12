@@ -2,7 +2,7 @@
  * Config management — load/save JSON config from XDG config directory.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /** Setup mode: OSS = public libraries only, undefined = standard (cloud) flow. */
@@ -68,7 +68,15 @@ export function saveConfig(cfg: Config): void {
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
-  writeFileSync(path, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+  // Write-then-rename so concurrent CLI processes never observe a partially
+  // written config and never interleave writes. A clobbered refresh token
+  // would be replayed on the next refresh, and GoTrue's reuse detection can
+  // revoke the whole session for a replayed token. The temp file lives in
+  // the same directory (rename is only atomic within one filesystem) and is
+  // pid-suffixed so sibling processes never share it.
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+  renameSync(tmp, path);
 }
 
 export function isAuthenticated(cfg: Config): boolean {

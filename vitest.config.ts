@@ -5,6 +5,7 @@ export default defineConfig({
     globals: true,
     environment: "node",
     include: ["src/**/*.test.ts", "scripts/**/*.test.ts"],
+    setupFiles: ["./vitest.setup.ts"],
     pool: "forks",
     testTimeout: 30_000,
     hookTimeout: 30_000,
