@@ -42,6 +42,22 @@ function createMockServer(): CallbackServer {
   };
 }
 
+/**
+ * Deterministically wait until the flow under test has opened the browser
+ * and armed its timeout/abort race. Fixed-duration sleeps flaked on slow CI
+ * runners (coverage-instrumented dynamic import of "open" can take >10ms):
+ * the assertion then saw zero open() calls, and the leaked unresolved flow
+ * created its 8-minute timer under a later test's fake timers, cascading
+ * into that test's timer-count assertion.
+ */
+async function flowReady(): Promise<void> {
+  await vi.waitFor(() => expect(mockOpenDefault).toHaveBeenCalledOnce());
+  // open() resolving hands control back to the flow on the microtask queue;
+  // a macrotask barrier guarantees the timeout/abort race is armed before
+  // the test acts (e.g. fires an abort the flow must be listening for).
+  await new Promise((r) => setImmediate(r));
+}
+
 describe("startOAuthFlow", () => {
   let mockServer: CallbackServer;
   let resolveToken: (token: TokenResponse) => void;
@@ -77,9 +93,7 @@ describe("startOAuthFlow", () => {
     };
 
     const flowPromise = startOAuthFlow();
-
-    // Let the async setup run
-    await new Promise((r) => setTimeout(r, 10));
+    await flowReady();
 
     resolveToken(expectedToken);
 
@@ -95,7 +109,7 @@ describe("startOAuthFlow", () => {
     };
 
     const flowPromise = startOAuthFlow();
-    await new Promise((r) => setTimeout(r, 10));
+    await flowReady();
 
     resolveToken(token);
     await flowPromise;
@@ -105,7 +119,7 @@ describe("startOAuthFlow", () => {
 
   it("closes the server when tokenPromise rejects", async () => {
     const flowPromise = startOAuthFlow();
-    await new Promise((r) => setTimeout(r, 10));
+    await flowReady();
 
     rejectToken(new Error("something went wrong"));
 
@@ -119,7 +133,7 @@ describe("startOAuthFlow", () => {
     const controller = new AbortController();
 
     const flowPromise = startOAuthFlow(controller.signal);
-    await new Promise((r) => setTimeout(r, 10));
+    await flowReady();
 
     controller.abort();
 
@@ -131,7 +145,7 @@ describe("startOAuthFlow", () => {
 
   it("opens the browser with the correct auth URL", async () => {
     const flowPromise = startOAuthFlow();
-    await new Promise((r) => setTimeout(r, 10));
+    await flowReady();
 
     expect(mockOpenDefault).toHaveBeenCalledOnce();
     const calledURL = mockOpenDefault.mock.calls[0]?.[0] as string;
@@ -147,7 +161,7 @@ describe("startOAuthFlow", () => {
     const flowPromise = startOAuthFlow(undefined, "/cli/auth", {
       onboarding_run_id: "run-123",
     });
-    await new Promise((r) => setTimeout(r, 10));
+    await flowReady();
 
     const calledURL = mockOpenDefault.mock.calls[0]?.[0] as string;
     expect(calledURL).toContain("onboarding_run_id=run-123");
@@ -198,7 +212,7 @@ describe("startOAuthFlow", () => {
     mockGetWebAppURL.mockReturnValue("http://localhost:3001");
 
     const flowPromise = startOAuthFlow();
-    await new Promise((r) => setTimeout(r, 10));
+    await flowReady();
 
     expect(mockOpenDefault).toHaveBeenCalledOnce();
     const calledURL = mockOpenDefault.mock.calls[0]?.[0] as string;
