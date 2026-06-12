@@ -1,0 +1,578 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join as joinPath } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const spinnerStart = vi.fn();
+const spinnerStop = vi.fn();
+const spinnerMessage = vi.fn();
+
+const mockConfirm = vi.fn();
+const mockIsCancel = vi.fn<(v: unknown) => boolean>();
+const mockLogWarn = vi.fn();
+
+vi.mock("@clack/prompts", () => ({
+  confirm: (...args: unknown[]) => mockConfirm(...args),
+  isCancel: (v: unknown) => mockIsCancel(v),
+  log: {
+    warn: (...args: unknown[]) => mockLogWarn(...args),
+    info: vi.fn(),
+    success: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
+const mockRunSetup = vi.fn();
+vi.mock("../setup/flow", () => ({
+  runSetup: () => mockRunSetup(),
+}));
+
+const mockQuery = vi.fn();
+
+function createMockProxy(path: string[] = []): unknown {
+  return new Proxy(() => {}, {
+    get(_, prop: string) {
+      if (prop === "query") return (input: unknown) => mockQuery(path.join("."), input);
+      return createMockProxy([...path, prop]);
+    },
+  });
+}
+
+vi.mock("../client/trpc", () => ({
+  createTypedClient: vi.fn().mockImplementation(() => createMockProxy()),
+}));
+
+const mockLoadConfig = vi.fn();
+vi.mock("../config/config", async () => {
+  const actual = await vi.importActual<typeof import("../config/config")>("../config/config");
+  return {
+    ...actual,
+    loadConfig: (...args: unknown[]) => mockLoadConfig(...args),
+  };
+});
+
+const mockGetBackendURL = vi.fn(() => "https://api.test");
+vi.mock("../config/constants", () => ({
+  getBackendURL: () => mockGetBackendURL(),
+  getWebAppURL: () => "https://web.test",
+  getSupabaseURL: () => "",
+  getSupabaseAnonKey: () => "",
+}));
+
+vi.mock("open", () => ({ default: vi.fn().mockResolvedValue(undefined) }));
+
+import type { InsightsReport } from "../insights";
+import {
+  type InsightsRunner,
+  insightsCommand,
+  insightsDir,
+  makeAskFn,
+  NARRATIVE_HINTS,
+  pruneOldReports,
+  reportPath,
+  runInsights,
+} from "./insights";
+
+let logSpy: ReturnType<typeof vi.spyOn>;
+let errorSpy: ReturnType<typeof vi.spyOn>;
+// biome-ignore lint/suspicious/noExplicitAny: process.exit mock type mismatch
+let exitSpy: any;
+let tempConfigDir: string;
+let origXDG: string | undefined;
+let origHome: string | undefined;
+
+const validConfig = {
+  access_token: "t",
+  refresh_token: "r",
+  expires_at: 0,
+  api_key: "sk_user_test",
+  space_id: "sp1",
+  deployment_id: "d1",
+  deployment_name: "Test Deploy",
+};
+
+const fakeReport: InsightsReport = {
+  generatedAt: "2026-04-16T00:00:00Z",
+  windowDays: 30,
+  spaceName: "Test Deploy",
+  current: {
+    totalResponses: 50,
+    byConfidence: { high: 25, medium: 15, low: 10 },
+    reactions: {
+      totalPositive: 8,
+      totalNegative: 2,
+      messagesWithReactions: 10,
+      reactionRate: 0.2,
+      positiveRate: 0.8,
+    },
+  },
+  previous: {
+    totalResponses: 40,
+    byConfidence: { high: 20, medium: 10, low: 10 },
+    reactions: {
+      totalPositive: 6,
+      totalNegative: 4,
+      messagesWithReactions: 10,
+      reactionRate: 0.25,
+      positiveRate: 0.6,
+    },
+  },
+  derived: {
+    highConfidenceRate: 0.5,
+    highConfidenceRateDelta: 0,
+    responsesDelta: 10,
+    positiveRateDelta: 0.2,
+    hasPriorWindow: true,
+  },
+  atAGlance: "Hi",
+  cheers: ["Big cheer!"],
+  investigate: [],
+  suggestions: [{ headline: "Try X", detail: "X is great.", command: "dosu setup" }],
+};
+
+beforeEach(() => {
+  tempConfigDir = mkdtempSync(joinPath(tmpdir(), "dosu-insights-config-"));
+  origXDG = process.env.XDG_CONFIG_HOME;
+  origHome = process.env.HOME;
+  process.env.XDG_CONFIG_HOME = tempConfigDir;
+  process.env.HOME = tempConfigDir;
+  mockLoadConfig.mockReset();
+  mockQuery.mockReset();
+  spinnerStart.mockReset();
+  spinnerStop.mockReset();
+  spinnerMessage.mockReset();
+  mockConfirm.mockReset();
+  mockIsCancel.mockReset();
+  mockIsCancel.mockReturnValue(false);
+  mockLogWarn.mockReset();
+  mockRunSetup.mockReset();
+  mockGetBackendURL.mockReturnValue("https://api.test");
+  logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+  errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
+    throw new Error("exit");
+  }) as never);
+});
+
+afterEach(() => {
+  logSpy.mockRestore();
+  errorSpy.mockRestore();
+  exitSpy.mockRestore();
+  if (origXDG !== undefined) process.env.XDG_CONFIG_HOME = origXDG;
+  else delete process.env.XDG_CONFIG_HOME;
+  if (origHome !== undefined) process.env.HOME = origHome;
+  else delete process.env.HOME;
+  rmSync(tempConfigDir, { recursive: true, force: true });
+});
+
+function allOutput(): string {
+  return logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+}
+
+function makeRunner(over: Partial<InsightsRunner> = {}): InsightsRunner {
+  return {
+    build: vi.fn().mockResolvedValue(fakeReport),
+    render: vi.fn().mockReturnValue("<html>hi</html>"),
+    writeFile: vi.fn(),
+    prune: vi.fn(),
+    openInBrowser: vi.fn().mockResolvedValue(undefined),
+    ask: vi.fn().mockResolvedValue(null),
+    createSpinner: () => ({
+      start: spinnerStart,
+      message: spinnerMessage,
+      stop: spinnerStop,
+    }),
+    ...over,
+  };
+}
+
+describe("runInsights", () => {
+  it("writes both a timestamped snapshot and latest.html, and opens the snapshot", async () => {
+    const runner = makeRunner();
+    const path = await runInsights(validConfig, runner);
+
+    expect(path).toMatch(/report-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z\.html$/);
+    expect(runner.build).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg: validConfig, windowDays: 30 }),
+    );
+    expect(runner.render).toHaveBeenCalledWith(fakeReport);
+
+    const writeCalls = (runner.writeFile as ReturnType<typeof vi.fn>).mock.calls;
+    expect(writeCalls).toHaveLength(2);
+    const writtenPaths = writeCalls.map((c) => c[0] as string);
+    expect(writtenPaths).toEqual(expect.arrayContaining([path, reportPath()]));
+    for (const call of writeCalls) {
+      expect(call[1]).toBe("<html>hi</html>");
+    }
+    expect(runner.openInBrowser).toHaveBeenCalledWith(path);
+  });
+
+  it("prunes the insights directory after writing", async () => {
+    const runner = makeRunner();
+    await runInsights(validConfig, runner);
+    expect(runner.prune).toHaveBeenCalledWith(insightsDir(), 20);
+  });
+
+  it("prints the space name, first cheer, and both file URLs", async () => {
+    const runner = makeRunner();
+    const snapshotPath = await runInsights(validConfig, runner);
+    const out = allOutput();
+    expect(out).toContain("Test Deploy");
+    expect(out).toContain("Big cheer!");
+    expect(out).toContain(`file://${snapshotPath}`);
+    expect(out).toContain(`file://${reportPath()}`);
+  });
+
+  it("drives the spinner through both stages and rotates narrative hints", async () => {
+    vi.useFakeTimers();
+    try {
+      const runner = makeRunner({
+        build: vi.fn().mockImplementation(async (args: { onProgress?: (s: string) => void }) => {
+          args.onProgress?.("stats");
+          args.onProgress?.("narrative");
+          // Advance past two hint rotations so the interval fires.
+          await vi.advanceTimersByTimeAsync(13_000);
+          return fakeReport;
+        }),
+      });
+      await runInsights(validConfig, runner);
+
+      expect(spinnerStart).toHaveBeenCalledWith(
+        expect.stringContaining("Looking at the last 30 days"),
+      );
+      const messages = spinnerMessage.mock.calls.map((c) => c[0] as string);
+      // Hints are randomized; just verify two distinct hints were rendered.
+      expect(NARRATIVE_HINTS).toContain(messages[0]);
+      expect(messages.length).toBeGreaterThanOrEqual(2);
+      expect(messages[1]).not.toBe(messages[0]);
+      expect(spinnerStop).toHaveBeenCalledWith(expect.stringContaining("Insights ready"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops the spinner with a failure message when the build throws", async () => {
+    const runner = makeRunner({
+      build: vi.fn().mockImplementation(async (args: { onProgress?: (s: string) => void }) => {
+        args.onProgress?.("stats");
+        throw new Error("build boom");
+      }),
+    });
+    await expect(runInsights(validConfig, runner)).rejects.toThrow("build boom");
+    expect(spinnerStop).toHaveBeenCalledWith(expect.stringContaining("Couldn't build"), 1);
+  });
+
+  it("falls back gracefully when the browser open call rejects", async () => {
+    const runner = makeRunner({
+      openInBrowser: vi.fn().mockRejectedValue(new Error("nope")),
+    });
+    await expect(runInsights(validConfig, runner)).resolves.toMatch(/report-.*\.html$/);
+    expect(allOutput()).toContain("couldn't auto-open");
+  });
+
+  it("skips the cheer line when there are no cheers", async () => {
+    const runner = makeRunner({
+      build: vi.fn().mockResolvedValue({ ...fakeReport, cheers: [] }),
+    });
+    await runInsights(validConfig, runner);
+    expect(allOutput()).not.toContain("Big cheer!");
+  });
+});
+
+describe("makeAskFn", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns a function that POSTs to /ask and returns the answer", async () => {
+    (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      json: async () => ({ answer: "Hello!" }),
+    });
+
+    const ask = makeAskFn(validConfig);
+    const out = await ask("test");
+
+    expect(out).toBe("Hello!");
+    const call = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(call[0]).toBe("https://api.test/ask");
+    expect(call[1].method).toBe("POST");
+    expect(call[1].headers["X-Dosu-API-Key"]).toBe("sk_user_test");
+    expect(JSON.parse(call[1].body)).toEqual({ deployment_id: "d1", question: "test" });
+  });
+
+  it("returns null when the response is not ok", async () => {
+    (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({}),
+    });
+    const ask = makeAskFn(validConfig);
+    expect(await ask("q")).toBeNull();
+  });
+
+  it("returns null when fetch throws", async () => {
+    (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("net"));
+    const ask = makeAskFn(validConfig);
+    expect(await ask("q")).toBeNull();
+  });
+
+  it("returns null when the response body has no answer string", async () => {
+    (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      json: async () => ({ answer: 42 }),
+    });
+    const ask = makeAskFn(validConfig);
+    expect(await ask("q")).toBeNull();
+  });
+
+  it("returns a no-op ask function when backend URL is unset", async () => {
+    mockGetBackendURL.mockReturnValue("");
+    const ask = makeAskFn(validConfig);
+    expect(await ask("q")).toBeNull();
+    // fetch should never have been called
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("executeInsights", () => {
+  it("runs to completion when config is valid", async () => {
+    (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi
+      .fn()
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({ answer: "ok" }),
+      });
+    mockQuery.mockResolvedValue({
+      totalResponses: 1,
+      byConfidence: { high: 1, medium: 0, low: 0 },
+      reactions: {
+        totalPositive: 0,
+        totalNegative: 0,
+        messagesWithReactions: 0,
+        reactionRate: 0,
+        positiveRate: 0,
+      },
+    });
+
+    const { executeInsights } = await import("./insights");
+    await expect(executeInsights(validConfig)).resolves.toBeUndefined();
+  });
+
+  it("logs and swallows errors so the TUI loop survives", async () => {
+    (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi.fn();
+    mockQuery.mockRejectedValue(new Error("boom"));
+
+    const { executeInsights } = await import("./insights");
+    await executeInsights(validConfig);
+
+    expect(errorSpy).toHaveBeenCalled();
+  });
+});
+
+describe("insightsCommand", () => {
+  async function runCmd(...args: string[]) {
+    const cmd = insightsCommand();
+    cmd.exitOverride();
+    await cmd.parseAsync(["node", "test", ...args]);
+  }
+
+  it("prompts to run setup when not logged in, then runs insights after a successful setup", async () => {
+    mockLoadConfig
+      .mockReturnValueOnce({ ...validConfig, access_token: "" })
+      .mockReturnValue(validConfig);
+    mockConfirm.mockResolvedValue(true);
+    mockRunSetup.mockResolvedValue(undefined);
+    (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi
+      .fn()
+      .mockResolvedValue({ ok: true, json: async () => ({ answer: "ok" }) });
+    mockQuery.mockResolvedValue({
+      totalResponses: 1,
+      byConfidence: { high: 1, medium: 0, low: 0 },
+      reactions: {
+        totalPositive: 0,
+        totalNegative: 0,
+        messagesWithReactions: 0,
+        reactionRate: 0,
+        positiveRate: 0,
+      },
+    });
+
+    await expect(runCmd()).resolves.toBeUndefined();
+
+    expect(mockLogWarn).toHaveBeenCalledWith(expect.stringContaining("log in"));
+    expect(mockConfirm).toHaveBeenCalled();
+    expect(mockRunSetup).toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("warns about missing deployment when api_key is missing", async () => {
+    mockLoadConfig.mockReturnValueOnce({ ...validConfig, api_key: undefined });
+    mockConfirm.mockResolvedValue(false);
+
+    await expect(runCmd()).resolves.toBeUndefined();
+    expect(mockLogWarn).toHaveBeenCalledWith(expect.stringContaining("configured Dosu deployment"));
+    expect(mockRunSetup).not.toHaveBeenCalled();
+  });
+
+  it("returns without running insights when the user declines setup", async () => {
+    mockLoadConfig.mockReturnValueOnce({ ...validConfig, space_id: undefined });
+    mockConfirm.mockResolvedValue(false);
+
+    await expect(runCmd()).resolves.toBeUndefined();
+    expect(mockRunSetup).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns without running insights when the user cancels the prompt", async () => {
+    mockLoadConfig.mockReturnValueOnce({ ...validConfig, deployment_id: undefined });
+    const cancelSentinel = Symbol("cancel");
+    mockConfirm.mockResolvedValue(cancelSentinel);
+    mockIsCancel.mockImplementation((v: unknown) => v === cancelSentinel);
+
+    await expect(runCmd()).resolves.toBeUndefined();
+    expect(mockRunSetup).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns gracefully when setup completes but config is still incomplete", async () => {
+    mockLoadConfig
+      .mockReturnValueOnce({ ...validConfig, access_token: "" })
+      .mockReturnValue({ ...validConfig, access_token: "" });
+    mockConfirm.mockResolvedValue(true);
+    mockRunSetup.mockResolvedValue(undefined);
+
+    await expect(runCmd()).resolves.toBeUndefined();
+    expect(mockRunSetup).toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("runs to completion when every config field is present", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi
+      .fn()
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({ answer: "ok" }),
+      });
+    mockQuery.mockResolvedValue({
+      totalResponses: 1,
+      byConfidence: { high: 1, medium: 0, low: 0 },
+      reactions: {
+        totalPositive: 0,
+        totalNegative: 0,
+        messagesWithReactions: 0,
+        reactionRate: 0,
+        positiveRate: 0,
+      },
+    });
+    await expect(runCmd()).resolves.toBeUndefined();
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("logs and exits 1 when the runner throws", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi.fn();
+    mockQuery.mockRejectedValue(new Error("runner boom"));
+
+    await expect(runCmd()).rejects.toThrow("exit");
+    expect(errorSpy).toHaveBeenCalled();
+    const errOut = errorSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(errOut).toContain("runner boom");
+  });
+});
+
+describe("reportPath", () => {
+  it("returns the stable latest.html path when called without arguments", () => {
+    expect(reportPath()).toMatch(/dosu-cli[\\/]+insights[\\/]+latest\.html$/);
+  });
+
+  it("returns a timestamped path when given a Date", () => {
+    const d = new Date("2026-04-17T12:30:45.000Z");
+    expect(reportPath(d)).toMatch(/dosu-cli[\\/]+insights[\\/]+report-2026-04-17T12-30-45Z\.html$/);
+  });
+
+  it("renders colons as dashes so the filename is portable on Windows", () => {
+    const d = new Date("2026-04-17T12:30:45.000Z");
+    expect(reportPath(d)).not.toContain(":");
+  });
+});
+
+describe("pruneOldReports", () => {
+  it("keeps the most recent N reports and deletes the rest", async () => {
+    const { mkdtempSync, writeFileSync, readdirSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "dosu-insights-test-"));
+    try {
+      const names = [
+        "report-2026-01-01T00-00-00Z.html",
+        "report-2026-02-01T00-00-00Z.html",
+        "report-2026-03-01T00-00-00Z.html",
+        "report-2026-04-01T00-00-00Z.html",
+        "report-2026-05-01T00-00-00Z.html",
+        // Non-matching files must be left alone
+        "latest.html",
+        "README.md",
+      ];
+      for (const n of names) writeFileSync(join(dir, n), "x");
+
+      pruneOldReports(dir, 2);
+
+      const remaining = readdirSync(dir).sort();
+      expect(remaining).toEqual(
+        [
+          "README.md",
+          "latest.html",
+          "report-2026-04-01T00-00-00Z.html",
+          "report-2026-05-01T00-00-00Z.html",
+        ].sort(),
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("no-ops when the directory does not exist", () => {
+    expect(() => pruneOldReports("/tmp/does-not-exist-dosu-xyz", 5)).not.toThrow();
+  });
+
+  it("returns without throwing when readdirSync fails", async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "dosu-insights-test-"));
+    try {
+      // A regular file passes existsSync but readdirSync throws ENOTDIR on it.
+      const notADir = join(dir, "not-a-dir");
+      writeFileSync(notADir, "x");
+      expect(() => pruneOldReports(notADir, 5)).not.toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("swallows per-file unlink errors and keeps pruning the rest", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, readdirSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "dosu-insights-test-"));
+    try {
+      writeFileSync(join(dir, "report-2026-01-01T00-00-00Z.html"), "x");
+      writeFileSync(join(dir, "report-2026-02-01T00-00-00Z.html"), "x");
+      // A directory whose name matches the report pattern — unlinkSync will
+      // throw EISDIR/EPERM on every platform, exercising the catch branch.
+      mkdirSync(join(dir, "report-2026-03-01T00-00-00Z.html"));
+
+      expect(() => pruneOldReports(dir, 0)).not.toThrow();
+
+      // The two real files are gone; the problem directory is left in place.
+      expect(readdirSync(dir).sort()).toEqual(["report-2026-03-01T00-00-00Z.html"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

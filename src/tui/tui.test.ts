@@ -34,6 +34,10 @@ vi.mock("../setup/flow", () => ({
   runSetup: vi.fn(),
 }));
 
+vi.mock("../commands/insights", () => ({
+  executeInsights: vi.fn(),
+}));
+
 vi.mock("picocolors", () => ({
   default: {
     magenta: (s: string) => s,
@@ -46,8 +50,10 @@ vi.mock("picocolors", () => ({
 // ---------------------------------------------------------------------------
 
 import * as p from "@clack/prompts";
+import { OAuthCallbackError } from "../auth/errors";
 import { startOAuthFlow } from "../auth/flow";
 import { Client } from "../client/client";
+import { executeInsights } from "../commands/insights";
 import type { Config } from "../config/config";
 import { loadConfig, saveConfig } from "../config/config";
 import { runSetup } from "../setup/flow";
@@ -59,6 +65,7 @@ const mockIsCancel = vi.mocked(p.isCancel);
 const mockOutro = vi.mocked(p.outro);
 const mockStartOAuthFlow = vi.mocked(startOAuthFlow);
 const mockRunSetup = vi.mocked(runSetup);
+const mockExecuteInsights = vi.mocked(executeInsights);
 
 // ---------------------------------------------------------------------------
 // Temp directory setup — real config on disk
@@ -321,6 +328,25 @@ describe("runTUI", () => {
     expect(p.log.error).toHaveBeenCalledWith("Authentication failed: auth timeout");
   });
 
+  it("shows curated OAuth callback errors", async () => {
+    writeRealConfig(makeCfg({ access_token: "" }));
+    mockConfirm.mockResolvedValueOnce(true);
+    mockStartOAuthFlow.mockRejectedValueOnce(
+      new OAuthCallbackError("OAuth state expired", {
+        errorCode: "bad_oauth_state",
+        errorDescription: "OAuth state expired",
+      }),
+    );
+    mockIsCancel.mockReturnValue(false);
+    mockSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    expect(p.log.error).toHaveBeenCalledWith(
+      "Authentication failed: OAuth state expired. Run `dosu login` again.",
+    );
+  });
+
   it("does nothing when user cancels confirm prompt", async () => {
     writeRealConfig(makeCfg({ access_token: "" }));
     mockIsCancel.mockReturnValue(true);
@@ -356,6 +382,43 @@ describe("runTUI", () => {
     expect(ondisk.expires_at).toBe(0);
     expect(ondisk.mode).toBeUndefined();
     expect(p.log.success).toHaveBeenCalledWith("Credentials cleared.");
+  });
+
+  it("includes 'View Insights' in the menu when fully configured", async () => {
+    writeRealConfig(
+      makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
+    );
+    mockIsCancel.mockReturnValue(false);
+    mockSelect.mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    const opts = mockSelect.mock.calls[0]?.[0]?.options as Array<{ value: string }>;
+    expect(opts.map((o) => o.value)).toContain("insights");
+  });
+
+  it("omits 'View Insights' when the deployment isn't configured yet", async () => {
+    writeRealConfig(makeCfg({ access_token: "tok" }));
+    mockIsCancel.mockReturnValue(false);
+    mockSelect.mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    const opts = mockSelect.mock.calls[0]?.[0]?.options as Array<{ value: string }>;
+    expect(opts.map((o) => o.value)).not.toContain("insights");
+  });
+
+  it("calls executeInsights when 'insights' is selected", async () => {
+    writeRealConfig(
+      makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
+    );
+    mockIsCancel.mockReturnValue(false);
+    mockExecuteInsights.mockResolvedValueOnce(undefined);
+    mockSelect.mockResolvedValueOnce("insights").mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    expect(mockExecuteInsights).toHaveBeenCalledTimes(1);
   });
 
   it("setup action calls runSetup and reloads config", async () => {

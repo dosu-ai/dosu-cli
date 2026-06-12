@@ -3,12 +3,70 @@
  */
 
 import { logger } from "../debug/logger";
+import { OAuthCallbackError } from "./errors";
 
 export interface TokenResponse {
   access_token: string;
   refresh_token: string;
   expires_in: number;
   email?: string;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function buildErrorHtml(message: string): string {
+  const safe = escapeHtml(message);
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dosu CLI - Authentication Failed</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #fafafa;
+    color: #171717;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+.container {
+    max-width: 480px;
+    width: 100%;
+    text-align: center;
+    background: white;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 40px 32px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+h1 { font-size: 20px; font-weight: 600; color: #b91c1c; margin-bottom: 12px; }
+p { font-size: 14px; color: #4b5563; line-height: 1.5; }
+.detail { margin-top: 16px; padding: 12px; background: #fef2f2; border-radius: 8px; color: #991b1b; font-size: 13px; }
+.next { margin-top: 20px; color: #6b7280; font-size: 13px; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #f3f4f6; padding: 2px 6px; border-radius: 4px; color: #111827; }
+</style>
+</head>
+<body>
+<div class="container">
+    <h1>Authentication Failed</h1>
+    <p>The OAuth flow could not be completed.</p>
+    <div class="detail">${safe}</div>
+    <p class="next">You can close this tab. In your terminal, run <code>dosu login</code> again.</p>
+</div>
+</body>
+</html>`;
 }
 
 const CALLBACK_HTML_EXTRACT = `<!DOCTYPE html>
@@ -215,9 +273,11 @@ export async function startCallbackServer(): Promise<{
   tokenPromise: Promise<TokenResponse>;
 }> {
   let resolveToken: (token: TokenResponse) => void;
+  let rejectToken: (err: Error) => void;
 
-  const tokenPromise = new Promise<TokenResponse>((resolve) => {
+  const tokenPromise = new Promise<TokenResponse>((resolve, reject) => {
     resolveToken = resolve;
+    rejectToken = reject;
   });
 
   const http = require("node:http") as typeof import("node:http");
@@ -229,13 +289,38 @@ export async function startCallbackServer(): Promise<{
     const ua = req.headers["user-agent"] ?? "none";
     logger.debug(
       "auth.server",
-      `Request: ${req.method} ${req.url} cookie-len=${cookieLen} ua=${ua} has-token=${url.searchParams.has("access_token")}`,
+      `Request: ${req.method} ${url.pathname} cookie-len=${cookieLen} ua=${ua} has-token=${url.searchParams.has("access_token")}`,
     );
 
     if (url.pathname !== "/callback") {
       logger.debug("auth.server", `404: ${url.pathname}`);
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("Not Found");
+      return;
+    }
+
+    // OAuth error forwarded by the web side — reject so the CLI exits now.
+    const errorParam = url.searchParams.get("error");
+    const errorCodeParam = url.searchParams.get("error_code");
+    const errorDescriptionParam = url.searchParams.get("error_description");
+    if (errorParam || errorCodeParam || errorDescriptionParam) {
+      const rawDescription =
+        errorDescriptionParam ?? errorCodeParam ?? errorParam ?? "OAuth authentication failed";
+      // Tag-strip for plaintext surfaces; HTML escape happens in the template.
+      const sanitized = rawDescription.replace(/<[^>]*>/g, "");
+      logger.warn(
+        "auth.server",
+        `OAuth callback received error: code=${errorCodeParam ?? "n/a"} description=${sanitized}`,
+      );
+      rejectToken?.(
+        new OAuthCallbackError(sanitized, {
+          error: errorParam ?? undefined,
+          errorCode: errorCodeParam ?? undefined,
+          errorDescription: sanitized,
+        }),
+      );
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end(buildErrorHtml(rawDescription));
       return;
     }
 

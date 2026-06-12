@@ -71,6 +71,22 @@ describe("CLI", () => {
     expect(opts).toBeDefined();
   });
 
+  it("setup exposes agent-mode flags", () => {
+    const program = createProgram();
+    const cmd = program.commands.find((c) => c.name() === "setup");
+    expect(cmd?.options.find((o) => o.long === "--agent")).toBeDefined();
+    expect(cmd?.options.find((o) => o.long === "--tool")).toBeDefined();
+    expect(cmd?.options.find((o) => o.long === "--login-ticket")).toBeDefined();
+  });
+
+  it("login exposes ticket-flow flags (--request, --check, --json)", () => {
+    const program = createProgram();
+    const cmd = program.commands.find((c) => c.name() === "login");
+    expect(cmd?.options.find((o) => o.long === "--request")).toBeDefined();
+    expect(cmd?.options.find((o) => o.long === "--check")).toBeDefined();
+    expect(cmd?.options.find((o) => o.long === "--json")).toBeDefined();
+  });
+
   it("mcp add has --global flag", () => {
     const program = createProgram();
     const mcpCmd = program.commands.find((c) => c.name() === "mcp");
@@ -92,5 +108,25 @@ describe("CLI", () => {
     expect(cmd?.description()).toContain("debug logs");
     expect(cmd?.options.find((o) => o.long === "--tail")).toBeDefined();
     expect(cmd?.options.find((o) => o.long === "--clear")).toBeDefined();
+  });
+
+  it("has hooks command with entrypoint and lifecycle subcommands", () => {
+    const program = createProgram();
+    const cmd = program.commands.find((c) => c.name() === "hooks");
+    expect(cmd).toBeDefined();
+    const names = cmd?.commands.map((c) => c.name()) ?? [];
+    expect(names).toEqual(
+      expect.arrayContaining([
+        "user-prompt-submit",
+        "post-tool-use",
+        "stop",
+        "status",
+        "install",
+        "uninstall",
+        "doctor",
+      ]),
+    );
+    const install = cmd?.commands.find((c) => c.name() === "install");
+    expect(install?.options.find((o) => o.long === "--no-stop")).toBeDefined();
   });
 });

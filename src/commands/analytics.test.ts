@@ -70,7 +70,7 @@ describe("analytics", () => {
       totalResponses: 42,
       totalWithResponse: 36,
       byConfidence: { high: 20, medium: 10, low: 12 },
-      reactions: { totalPositive: 5, totalNegative: 1, reactionRate: 0.14, positiveRate: 0.83 },
+      reactions: { totalPositive: 5, totalNegative: 1, positiveRate: 0.83 },
     });
 
     await run();
@@ -87,7 +87,7 @@ describe("analytics", () => {
       totalResponses: 10,
       totalWithResponse: 8,
       byConfidence: { high: 5, medium: 3, low: 2 },
-      reactions: { totalPositive: 2, totalNegative: 0, reactionRate: 0.2, positiveRate: 1 },
+      reactions: { totalPositive: 2, totalNegative: 0, positiveRate: 1 },
     });
 
     await run("--days", "7");
@@ -101,7 +101,7 @@ describe("analytics", () => {
       totalResponses: 42,
       totalWithResponse: 36,
       byConfidence: { high: 20, medium: 10, low: 12 },
-      reactions: { totalPositive: 5, totalNegative: 1, reactionRate: 0.14, positiveRate: 0.83 },
+      reactions: { totalPositive: 5, totalNegative: 1, positiveRate: 0.83 },
     });
 
     await run("--json");
@@ -116,14 +116,14 @@ describe("analytics", () => {
       totalResponses: 100,
       totalWithResponse: 86,
       byConfidence: { high: 50, medium: 30, low: 20 },
-      reactions: { totalPositive: 90, totalNegative: 10, reactionRate: 0.5, positiveRate: 0.923 },
+      reactions: { totalPositive: 90, totalNegative: 10, positiveRate: 0.923 },
     });
 
     await run();
 
     const output = allOutput();
     expect(output).toContain("100");
-    expect(output).toContain("86.0%"); // answerRate = 86/100
+    expect(output).toContain("50.0%"); // highConfidenceRate = 50/100
     expect(output).toContain("92.3%");
   });
 

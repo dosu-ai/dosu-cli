@@ -4,10 +4,13 @@
 
 import { readFileSync, unlinkSync } from "node:fs";
 import { Command } from "commander";
+import { Client } from "../client/client";
 import { analyticsCommand } from "../commands/analytics";
 import { askCommand } from "../commands/ask";
 import { deploymentsCommand } from "../commands/deployments";
 import { docsCommand } from "../commands/docs";
+import { hooksCommand } from "../commands/hooks";
+import { insightsCommand } from "../commands/insights";
 import { integrationsCommand } from "../commands/integrations";
 import { knowledgeCommand } from "../commands/knowledge";
 import { membersCommand } from "../commands/members";
@@ -19,6 +22,7 @@ import { suggestCommand } from "../commands/suggest";
 import { tagsCommand } from "../commands/tags";
 import { threadsCommand } from "../commands/threads";
 import {
+  type Config,
   getConfigPath,
   isAuthenticated,
   isTokenExpired,
@@ -32,6 +36,17 @@ import { checkForSkillUpdates } from "../version/skill-update-check";
 import { checkForUpdates } from "../version/update-check";
 import { getVersionString } from "../version/version";
 
+/**
+ * Hook entrypoints are auto-invoked by Claude Code on every turn and must stay
+ * fast and stdout-clean. Skip the update checks for them (their stderr notices
+ * are noise on the hot path and the background fetch can delay process exit).
+ */
+const HOOK_ENTRYPOINTS = new Set(["user-prompt-submit", "post-tool-use", "stop"]);
+function isHookEntrypointInvocation(argv: string[]): boolean {
+  const i = argv.indexOf("hooks");
+  return i >= 0 && HOOK_ENTRYPOINTS.has(argv[i + 1] ?? "");
+}
+
 export function createProgram(): Command {
   const program = new Command();
 
@@ -43,8 +58,10 @@ export function createProgram(): Command {
     .hook("preAction", (thisCommand) => {
       const opts = thisCommand.optsWithGlobals();
       logger.init({ debug: opts.debug });
-      checkForUpdates();
-      checkForSkillUpdates();
+      if (!isHookEntrypointInvocation(process.argv)) {
+        checkForUpdates();
+        checkForSkillUpdates();
+      }
     })
     .action(async () => {
       // Default: launch TUI when no subcommand given
@@ -56,17 +73,62 @@ export function createProgram(): Command {
   program
     .command("login")
     .description("Authenticate with Dosu via OAuth")
-    .action(async () => {
-      const cfg = loadConfig();
-      if (isAuthenticated(cfg) && !isTokenExpired(cfg)) {
-        console.log("You are already logged in.");
-        console.log("Run 'dosu logout' first to re-authenticate.");
+    .option(
+      "--request",
+      "Mint a login ticket for agent / human-in-the-loop auth (prints URL and exits)",
+    )
+    .option("--check <ticket>", "Exchange a login ticket created with --request for a token")
+    .option("--json", "Emit machine-readable JSON output (use with --request or --check)")
+    .action(async (opts: { request?: boolean; check?: string; json?: boolean }) => {
+      if (opts.request && opts.check !== undefined) {
+        console.error("--request and --check cannot be combined.");
+        process.exitCode = 2;
         return;
+      }
+
+      if (opts.request) {
+        const { runLoginRequest } = await import("../agent/login-commands");
+        process.exitCode = await runLoginRequest({ json: opts.json === true });
+        return;
+      }
+
+      if (opts.check !== undefined) {
+        const { runLoginCheck } = await import("../agent/login-commands");
+        process.exitCode = await runLoginCheck({
+          ticket: opts.check,
+          json: opts.json === true,
+        });
+        return;
+      }
+
+      const cfg = loadConfig();
+      if (isAuthenticated(cfg)) {
+        if (!isTokenExpired(cfg)) {
+          console.log("You are already logged in.");
+          console.log("Run 'dosu logout' first to re-authenticate.");
+          return;
+        }
+        if (await ensureFreshSession(cfg)) {
+          console.log("Session refreshed.");
+          console.log(`Credentials saved to ${getConfigPath()}`);
+          return;
+        }
       }
 
       console.log("Opening browser for authentication...");
       const { startOAuthFlow } = await import("../auth/flow");
-      const token = await startOAuthFlow();
+      const { OAuthCallbackError } = await import("../auth/errors");
+      let token: Awaited<ReturnType<typeof startOAuthFlow>>;
+      try {
+        token = await startOAuthFlow();
+      } catch (err) {
+        if (err instanceof OAuthCallbackError) {
+          console.error(err.userMessage);
+          process.exitCode = 1;
+          return;
+        }
+        throw err;
+      }
 
       cfg.access_token = token.access_token;
       cfg.refresh_token = token.refresh_token;
@@ -103,14 +165,14 @@ export function createProgram(): Command {
   program
     .command("status")
     .description("Show current authentication and MCP status")
-    .action(() => {
+    .action(async () => {
       const cfg = loadConfig();
       if (!isAuthenticated(cfg)) {
         console.log("Status: Not logged in");
         console.log("Run 'dosu login' to authenticate.");
         return;
       }
-      if (isTokenExpired(cfg)) {
+      if (isTokenExpired(cfg) && !(await ensureFreshSession(cfg))) {
         console.log("Status: Token expired");
         console.log("Run 'dosu login' to re-authenticate.");
       } else {
@@ -124,7 +186,9 @@ export function createProgram(): Command {
         console.log(`MCP ID: ${cfg.deployment_id}`);
       } else {
         console.log("MCP: None selected");
-        console.log("Run 'dosu' to open the TUI and select an MCP.");
+        console.log(
+          "Run 'dosu deployments list' to see available MCPs, then 'dosu deployments switch <id>' to select one.",
+        );
       }
     });
 
@@ -135,7 +199,8 @@ export function createProgram(): Command {
     .command("add <agent>")
     .description("Add Dosu MCP to an AI tool")
     .option("-g, --global", "Add globally (all projects) instead of project-local", false)
-    .action((toolId: string, opts: { global: boolean }) => {
+    .option("--show-secret", "Print full manual configuration secrets", false)
+    .action(async (toolId: string, opts: { global: boolean; showSecret: boolean }) => {
       let provider: Provider;
       try {
         provider = getProvider(toolId.toLowerCase());
@@ -147,15 +212,18 @@ export function createProgram(): Command {
       if (!isAuthenticated(cfg)) {
         throw new Error("not logged in. Run 'dosu login' first");
       }
-      if (isTokenExpired(cfg)) {
+      if (isTokenExpired(cfg) && !(await ensureFreshSession(cfg))) {
         throw new Error("session expired. Run 'dosu login' to re-authenticate");
       }
       if (cfg.mode !== MODE_OSS && !cfg.deployment_id) {
         throw new Error("no MCP selected. Run 'dosu' to open the TUI and select an MCP");
       }
+      if (!cfg.api_key) {
+        throw new Error("no API key available. Run 'dosu setup' to create one");
+      }
 
       if (provider.id() === "manual") {
-        provider.install(cfg, false);
+        provider.install(cfg, false, { showSecret: opts.showSecret });
         return;
       }
 
@@ -168,7 +236,7 @@ export function createProgram(): Command {
       const scope = global ? "global (all projects)" : "project-local";
       console.log(`Adding Dosu MCP to ${provider.name()} (${scope})...`);
 
-      provider.install(cfg, global);
+      provider.install(cfg, global, { showSecret: opts.showSecret });
 
       console.log(`\n✓ Successfully added Dosu MCP to ${provider.name()}!`);
       if (global) {
@@ -197,6 +265,8 @@ export function createProgram(): Command {
   program.addCommand(askCommand());
   program.addCommand(deploymentsCommand());
   program.addCommand(docsCommand());
+  program.addCommand(hooksCommand());
+  program.addCommand(insightsCommand());
   program.addCommand(integrationsCommand());
   program.addCommand(knowledgeCommand());
   program.addCommand(membersCommand());
@@ -214,18 +284,61 @@ export function createProgram(): Command {
     .description("Set up Dosu MCP for your AI tools")
     .option("--deployment <id>", "Skip to tool configuration for a specific MCP")
     .option("--mode <mode>", "Force OSS or Cloud mode, skipping the interactive prompt (oss|cloud)")
-    .action(async (opts: { deployment?: string; mode?: string }) => {
-      const { runSetup } = await import("../setup/flow");
-      let mode: "oss" | "cloud" | undefined;
-      if (opts.mode !== undefined) {
-        const normalized = opts.mode.toLowerCase();
-        if (normalized !== "oss" && normalized !== "cloud") {
-          throw new Error(`invalid --mode value '${opts.mode}' (expected 'oss' or 'cloud')`);
+    .option("--agent", "Run non-interactive setup designed for coding agents (requires --tool)")
+    .option(
+      "--tool <id>",
+      "Configure a single AI tool by id (claude, cursor, codex, …). Required with --agent.",
+    )
+    .option(
+      "--login-ticket <ticket>",
+      "Resume an --agent setup by redeeming a ticket from a previous run",
+    )
+    .action(
+      async (opts: {
+        deployment?: string;
+        mode?: string;
+        agent?: boolean;
+        tool?: string;
+        loginTicket?: string;
+      }) => {
+        if (opts.agent) {
+          if (!opts.tool) {
+            const { emitError } = await import("../agent/output");
+            const { listAgentSupportedToolIDs } = await import("../agent/flow");
+            emitError({
+              step: "setup",
+              reason: "missing_tool",
+              agent_next_steps: `Pass --tool <id> when using --agent. Supported ids: ${listAgentSupportedToolIDs().join(", ")}.`,
+            });
+            process.exitCode = 2;
+            return;
+          }
+          const { runAgentSetup } = await import("../agent/flow");
+          process.exitCode = await runAgentSetup({
+            tool: opts.tool,
+            loginTicket: opts.loginTicket,
+            deploymentID: opts.deployment,
+          });
+          return;
         }
-        mode = normalized;
-      }
-      await runSetup({ deploymentID: opts.deployment, mode });
-    });
+
+        // Non-agent flags that only make sense with --agent.
+        if (opts.tool || opts.loginTicket) {
+          throw new Error("--tool and --login-ticket require --agent");
+        }
+
+        const { runSetup } = await import("../setup/flow");
+        let mode: "oss" | "cloud" | undefined;
+        if (opts.mode !== undefined) {
+          const normalized = opts.mode.toLowerCase();
+          if (normalized !== "oss" && normalized !== "cloud") {
+            throw new Error(`invalid --mode value '${opts.mode}' (expected 'oss' or 'cloud')`);
+          }
+          mode = normalized;
+        }
+        await runSetup({ deploymentID: opts.deployment, mode });
+      },
+    );
 
   // logs
   program
@@ -263,6 +376,18 @@ export function createProgram(): Command {
     });
 
   return program;
+}
+
+async function ensureFreshSession(cfg: Config): Promise<boolean> {
+  if (!isTokenExpired(cfg)) return true;
+  try {
+    logger.debug("cli", "token expired, attempting refresh");
+    await new Client(cfg).refreshToken();
+    return true;
+  } catch (err: unknown) {
+    logger.debug("cli", `token refresh failed: ${err instanceof Error ? err.message : err}`);
+    return false;
+  }
 }
 
 export async function execute(): Promise<void> {

@@ -5,6 +5,7 @@ export default defineConfig({
     globals: true,
     environment: "node",
     include: ["src/**/*.test.ts", "scripts/**/*.test.ts"],
+    setupFiles: ["./vitest.setup.ts"],
     pool: "forks",
     testTimeout: 30_000,
     hookTimeout: 30_000,
@@ -16,6 +17,7 @@ export default defineConfig({
         "**/index.ts", // barrel re-export files
         "src/index.ts", // CLI entry point
         ".context/*", // local agent scratch files
+        ".agent-contexts/**", // local agent scratch files (gitignored; stray .ts here would sink coverage)
         "bin/*", // generated npm bundle
         "scripts/*", // build scripts (spawn Bun)
         "vitest.config.ts", // config file

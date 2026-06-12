@@ -1,3 +1,158 @@
+## [0.19.1](https://github.com/dosu-ai/dosu-cli/compare/v0.19.0...v0.19.1) (2026-06-12)
+
+
+### Bug Fixes
+
+* bake the rotated Supabase publishable key into production builds ([#82](https://github.com/dosu-ai/dosu-cli/issues/82)) ([dc63308](https://github.com/dosu-ai/dosu-cli/commit/dc63308feacca8b6c806c332d19a8d08d1d98de9))
+
+# [0.19.0](https://github.com/dosu-ai/dosu-cli/compare/v0.18.1...v0.19.0) (2026-06-12)
+
+
+### Features
+
+* **hooks:** add Codex CLI support to the knowledge hooks ([#81](https://github.com/dosu-ai/dosu-cli/issues/81)) ([69ff6ec](https://github.com/dosu-ai/dosu-cli/commit/69ff6ecd4f509c2c26bc5dc55143cba9fb04665d))
+
+## [0.18.1](https://github.com/dosu-ai/dosu-cli/compare/v0.18.0...v0.18.1) (2026-06-12)
+
+
+### Bug Fixes
+
+* self-heal token refresh across concurrent CLI processes ([#79](https://github.com/dosu-ai/dosu-cli/issues/79)) ([d1fcbbe](https://github.com/dosu-ai/dosu-cli/commit/d1fcbbeed58e82804e3a8755eeae3ee1a09e20e9)), closes [dosu#10989](https://github.com/dosu/issues/10989) [dosu#10990](https://github.com/dosu/issues/10990)
+
+# [0.18.0](https://github.com/dosu-ai/dosu-cli/compare/v0.17.0...v0.18.0) (2026-06-07)
+
+
+### Features
+
+* **hooks:** surface Dosu attribution as a team-knowledge cross-check ([#78](https://github.com/dosu-ai/dosu-cli/issues/78)) ([03d5090](https://github.com/dosu-ai/dosu-cli/commit/03d5090e932963b673b15d2bcabe84ca227e8ba3))
+
+# [0.17.0](https://github.com/dosu-ai/dosu-cli/compare/v0.16.2...v0.17.0) (2026-06-07)
+
+
+### Features
+
+* bounded-wait at Stop for last-chance knowledge delivery ([#77](https://github.com/dosu-ai/dosu-cli/issues/77)) ([29a48ce](https://github.com/dosu-ai/dosu-cli/commit/29a48ce7293691d3d2af89ce1a2edb6131bf07ce))
+
+## [0.16.2](https://github.com/dosu-ai/dosu-cli/compare/v0.16.1...v0.16.2) (2026-06-06)
+
+
+### Bug Fixes
+
+* use API key auth for hooks ([#76](https://github.com/dosu-ai/dosu-cli/issues/76)) ([eaf6c9b](https://github.com/dosu-ai/dosu-cli/commit/eaf6c9b9df34158637e11920b88354bf1208d9bc))
+
+## [0.16.1](https://github.com/dosu-ai/dosu-cli/compare/v0.16.0...v0.16.1) (2026-06-05)
+
+
+### Bug Fixes
+
+* refresh expired CLI sessions ([#75](https://github.com/dosu-ai/dosu-cli/issues/75)) ([9f0f082](https://github.com/dosu-ai/dosu-cli/commit/9f0f082dc542c40784b83e6a2012f0229d102313))
+
+# [0.16.0](https://github.com/dosu-ai/dosu-cli/compare/v0.15.2...v0.16.0) (2026-06-05)
+
+
+### Features
+
+* add dosu hooks for Claude Code knowledge injection ([#74](https://github.com/dosu-ai/dosu-cli/issues/74)) ([ebae8a1](https://github.com/dosu-ai/dosu-cli/commit/ebae8a10ec5330f93ac48a4f903b72086501ca34))
+
+## [0.15.2](https://github.com/dosu-ai/dosu-cli/compare/v0.15.1...v0.15.2) (2026-06-02)
+
+
+### Bug Fixes
+
+* align with explicit-library-membership backend changes ([#71](https://github.com/dosu-ai/dosu-cli/issues/71)) ([671c497](https://github.com/dosu-ai/dosu-cli/commit/671c497d74522b95b63d36d152ca0185bb545fe3))
+
+## [0.15.1](https://github.com/dosu-ai/dosu-cli/compare/v0.15.0...v0.15.1) (2026-05-19)
+
+
+### Bug Fixes
+
+* select only MCP deployments in agent setup ([#70](https://github.com/dosu-ai/dosu-cli/issues/70)) ([4b6ec32](https://github.com/dosu-ai/dosu-cli/commit/4b6ec32dcce3d6aa10dfa08ebbf2466a78971beb))
+
+# [0.15.0](https://github.com/dosu-ai/dosu-cli/compare/v0.14.2...v0.15.0) (2026-05-14)
+
+
+### Features
+
+* add non-interactive agent setup ([#69](https://github.com/dosu-ai/dosu-cli/issues/69)) ([79b214e](https://github.com/dosu-ai/dosu-cli/commit/79b214e2147a9185cbe043ffce9ab1d28a72cbbd))
+
+## [0.14.2](https://github.com/dosu-ai/dosu-cli/compare/v0.14.1...v0.14.2) (2026-05-13)
+
+
+### Bug Fixes
+
+* update status deployment prompt ([#68](https://github.com/dosu-ai/dosu-cli/issues/68)) ([5f2ce96](https://github.com/dosu-ai/dosu-cli/commit/5f2ce96d4994b7557bb928815490a4681f5cd67e))
+
+## [0.14.1](https://github.com/dosu-ai/dosu-cli/compare/v0.14.0...v0.14.1) (2026-05-13)
+
+
+### Bug Fixes
+
+* remove agent setup options ([#67](https://github.com/dosu-ai/dosu-cli/issues/67)) ([1f8a120](https://github.com/dosu-ai/dosu-cli/commit/1f8a120c860a2b5173b122a3e974670b9b0fe765))
+
+# [0.14.0](https://github.com/dosu-ai/dosu-cli/compare/v0.13.3...v0.14.0) (2026-05-13)
+
+
+### Features
+
+* add agent-friendly setup flags ([#66](https://github.com/dosu-ai/dosu-cli/issues/66)) ([fc5f2f4](https://github.com/dosu-ai/dosu-cli/commit/fc5f2f4c46bee0b473e3d161ed123bcb4d5cc325))
+
+## [0.13.3](https://github.com/dosu-ai/dosu-cli/compare/v0.13.2...v0.13.3) (2026-05-12)
+
+
+### Bug Fixes
+
+* harden CLI secret handling ([#62](https://github.com/dosu-ai/dosu-cli/issues/62)) ([26cf8e2](https://github.com/dosu-ai/dosu-cli/commit/26cf8e27fd434795696ebdde499dcb048cf866bd))
+
+## [0.13.2](https://github.com/dosu-ai/dosu-cli/compare/v0.13.1...v0.13.2) (2026-05-12)
+
+
+### Bug Fixes
+
+* stabilize CLI onboarding types and insights tests ([#63](https://github.com/dosu-ai/dosu-cli/issues/63)) ([a6aee6f](https://github.com/dosu-ai/dosu-cli/commit/a6aee6fbaff67e0ff824fe25437d8e096393a758))
+
+## [0.13.1](https://github.com/dosu-ai/dosu-cli/compare/v0.13.0...v0.13.1) (2026-05-08)
+
+
+### Bug Fixes
+
+* handle OAuth callback failures ([#61](https://github.com/dosu-ai/dosu-cli/issues/61)) ([d59bc13](https://github.com/dosu-ai/dosu-cli/commit/d59bc13f832964464bc8fd692a6629f7faeaea51))
+
+# [0.13.0](https://github.com/dosu-ai/dosu-cli/compare/v0.12.1...v0.13.0) (2026-05-07)
+
+
+### Features
+
+* **insights:** add dosu insights command ([#52](https://github.com/dosu-ai/dosu-cli/issues/52)) ([9e8827c](https://github.com/dosu-ai/dosu-cli/commit/9e8827cc0e18d0d2c9037b4bb81f3f4395f4f1d8)), closes [hi#confidence](https://github.com/hi/issues/confidence) [hi#confidence](https://github.com/hi/issues/confidence) [Hi#Confidence](https://github.com/Hi/issues/Confidence) [hi#confidence](https://github.com/hi/issues/confidence)
+
+## [0.12.1](https://github.com/dosu-ai/dosu-cli/compare/v0.12.0...v0.12.1) (2026-05-01)
+
+
+### Bug Fixes
+
+* wait for fresh GitHub docs before import ([#60](https://github.com/dosu-ai/dosu-cli/issues/60)) ([88b936c](https://github.com/dosu-ai/dosu-cli/commit/88b936ce642849371d477cbe74c360aa53914bfe))
+
+# [0.12.0](https://github.com/dosu-ai/dosu-cli/compare/v0.11.0...v0.12.0) (2026-05-01)
+
+
+### Bug Fixes
+
+* align analytics client with api types ([ab125ae](https://github.com/dosu-ai/dosu-cli/commit/ab125aec84ffb93e85cb529ced42f2184a889468))
+* **ci:** cover CLI onboarding analytics branches ([06ae8ce](https://github.com/dosu-ai/dosu-cli/commit/06ae8ce3e8057dc98c2be4329352da9fab984e52))
+* track docs import only after completion ([64757a3](https://github.com/dosu-ai/dosu-cli/commit/64757a34272c86638321c42ea7948acf570b6b43))
+
+
+### Features
+
+* track CLI onboarding analytics ([70dbcbb](https://github.com/dosu-ai/dosu-cli/commit/70dbcbb4fb3d429582e88c121ae4e0d5812ba457))
+* track pre-auth onboarding analytics ([5ae90d4](https://github.com/dosu-ai/dosu-cli/commit/5ae90d4c6e87d2ecac817169902e6ded2250d34a))
+
+# [0.11.0](https://github.com/dosu-ai/dosu-cli/compare/v0.10.0...v0.11.0) (2026-04-29)
+
+
+### Features
+
+* **setup:** CLI-led first-run onboarding ([#58](https://github.com/dosu-ai/dosu-cli/issues/58)) ([fcb91cd](https://github.com/dosu-ai/dosu-cli/commit/fcb91cd769b48fcb1fa2213636d34e00e5f73615))
+
 # [0.11.0-alpha.7](https://github.com/dosu-ai/dosu-cli/compare/v0.11.0-alpha.6...v0.11.0-alpha.7) (2026-04-29)
 
 

@@ -16,6 +16,7 @@ import { startCallbackServer, type TokenResponse } from "./server";
 export async function startOAuthFlow(
   signal?: AbortSignal,
   path: string = "/cli/auth",
+  params: Record<string, string> = {},
 ): Promise<TokenResponse> {
   const { server, tokenPromise } = await startCallbackServer();
 
@@ -24,7 +25,7 @@ export async function startOAuthFlow(
   try {
     const callbackURL = `http://localhost:${server.port}/callback`;
     logger.debug("auth.flow", `Callback URL: ${callbackURL}`);
-    const authURL = buildAuthURL(callbackURL, path);
+    const authURL = buildAuthURL(callbackURL, path, params);
     logger.info("auth.flow", `Auth URL: ${authURL}`);
 
     // Open browser — dynamic import to avoid bundling issues
@@ -32,14 +33,19 @@ export async function startOAuthFlow(
     await open.default(authURL);
     logger.info("auth.flow", "Browser open command executed");
 
-    // Race: token, abort, or timeout
+    // 8 min < Supabase's ~10 min OAuth state TTL, so we surface a useful
+    // message before users hit a stale-state error.
     const timeout = new Promise<never>((_, reject) => {
       timeoutId = setTimeout(
         () => {
-          logger.warn("auth.flow", "Authentication timed out (15min)");
-          reject(new Error("authentication timeout - please try again"));
+          logger.warn("auth.flow", "Authentication timed out (8min)");
+          reject(
+            new Error(
+              "Authentication did not complete within 8 minutes. The OAuth state may have expired — please run `dosu login` again.",
+            ),
+          );
         },
-        15 * 60 * 1000,
+        8 * 60 * 1000,
       );
     });
 
@@ -62,8 +68,12 @@ export async function startOAuthFlow(
   }
 }
 
-function buildAuthURL(callbackURL: string, path: string): string {
+function buildAuthURL(
+  callbackURL: string,
+  path: string,
+  extraParams: Record<string, string>,
+): string {
   const webAppURL = getWebAppURL();
-  const params = new URLSearchParams({ callback: callbackURL });
+  const params = new URLSearchParams({ callback: callbackURL, ...extraParams });
   return `${webAppURL}${path}?${params}`;
 }

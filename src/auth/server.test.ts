@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { logger } from "../debug/logger";
+import { OAuthCallbackError } from "./errors";
 import { type CallbackServer, startCallbackServer } from "./server";
 
 vi.mock("../debug/logger", () => ({
@@ -61,6 +63,23 @@ describe("auth callback server", () => {
     expect(token.access_token).toBe("tok123");
     expect(token.refresh_token).toBe("ref456");
     expect(token.expires_in).toBe(7200);
+  });
+
+  it("does not pass token-bearing callback URLs to debug logs", async () => {
+    const result = await startCallbackServer();
+    server = result.server;
+    const debug = vi.mocked(logger.debug);
+    debug.mockClear();
+
+    await fetch(
+      `http://localhost:${server.port}/callback?access_token=tok123&refresh_token=ref456&expires_in=7200`,
+    );
+    await result.tokenPromise;
+
+    const debugOutput = debug.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(debugOutput).toContain("has-token=true");
+    expect(debugOutput).not.toContain("tok123");
+    expect(debugOutput).not.toContain("ref456");
   });
 
   it("defaults expires_in to 3600 when not provided", async () => {
@@ -161,6 +180,84 @@ describe("auth callback server", () => {
     );
     const html = await resp.text();
     expect(html).toContain("<strong>test@dosu.dev</strong>");
+  });
+
+  it("rejects with OAuthCallbackError when /callback receives error params", async () => {
+    const result = await startCallbackServer();
+    server = result.server;
+    // Catch attached before fetch — the server rejects synchronously.
+    const errorPromise = result.tokenPromise.catch((e: Error) => e);
+
+    const resp = await fetch(
+      `http://localhost:${server.port}/callback?error=invalid_request&error_code=bad_oauth_state&error_description=${encodeURIComponent("OAuth state has expired")}`,
+    );
+    expect(resp.status).toBe(200);
+    const html = await resp.text();
+    expect(html.toLowerCase()).toContain("authentication failed");
+    expect(html).toContain("OAuth state has expired");
+    expect(html).not.toContain("Authentication Successful");
+
+    const error = await errorPromise;
+    expect(error).toBeInstanceOf(OAuthCallbackError);
+    const callbackErr = error as OAuthCallbackError;
+    expect(callbackErr.errorCode).toBe("bad_oauth_state");
+    expect(callbackErr.errorDescription).toBe("OAuth state has expired");
+    expect(callbackErr.userMessage).toContain("dosu login");
+  });
+
+  it("uses error_code when OAuth error description is missing", async () => {
+    const result = await startCallbackServer();
+    server = result.server;
+    const errorPromise = result.tokenPromise.catch((e: Error) => e);
+
+    const resp = await fetch(
+      `http://localhost:${server.port}/callback?error=server_error&error_code=temporarily_unavailable`,
+    );
+    expect(resp.status).toBe(200);
+    const html = await resp.text();
+    expect(html).toContain("temporarily_unavailable");
+
+    const error = await errorPromise;
+    expect(error).toBeInstanceOf(OAuthCallbackError);
+    const callbackErr = error as OAuthCallbackError;
+    expect(callbackErr.message).toBe("temporarily_unavailable");
+    expect(callbackErr.error).toBe("server_error");
+    expect(callbackErr.errorCode).toBe("temporarily_unavailable");
+    expect(callbackErr.errorDescription).toBe("temporarily_unavailable");
+  });
+
+  it("uses error when OAuth error code and description are missing", async () => {
+    const result = await startCallbackServer();
+    server = result.server;
+    const errorPromise = result.tokenPromise.catch((e: Error) => e);
+
+    const resp = await fetch(`http://localhost:${server.port}/callback?error=access_denied`);
+    expect(resp.status).toBe(200);
+    const html = await resp.text();
+    expect(html).toContain("access_denied");
+
+    const error = await errorPromise;
+    expect(error).toBeInstanceOf(OAuthCallbackError);
+    const callbackErr = error as OAuthCallbackError;
+    expect(callbackErr.message).toBe("access_denied");
+    expect(callbackErr.error).toBe("access_denied");
+    expect(callbackErr.errorCode).toBeUndefined();
+    expect(callbackErr.errorDescription).toBe("access_denied");
+  });
+
+  it("escapes HTML in error description on the error page (XSS)", async () => {
+    const result = await startCallbackServer();
+    server = result.server;
+    const drained = result.tokenPromise.catch(() => undefined);
+
+    const resp = await fetch(
+      `http://localhost:${server.port}/callback?error_code=bad_oauth_state&error_description=${encodeURIComponent("<script>alert(1)</script>")}`,
+    );
+    const html = await resp.text();
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).toContain("&lt;script&gt;");
+
+    await drained;
   });
 
   it("treats literal string 'null' in refresh_token as empty", async () => {
