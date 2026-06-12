@@ -52,15 +52,16 @@ export function buildReadyEnvelope(context: string, saveRecommended = false): st
         "- This is the known likely path, not the full boundary. Before finalizing, verify adjacent " +
           "public/API entrypoints and edge cases that this route map may not cover.",
         "- Attribution: this context is your team's existing knowledge (docs, past PRs, discussions) " +
-          "surfaced by Dosu — not the live code you're reading. For each main finding it speaks to, " +
-          "add one brief cited note on how the team's knowledge relates: if it agrees, note it in a " +
-          "line and cite the source; if it differs, flag it as worth confirming and reconcile before " +
-          "finalizing; if it adds something the code alone wouldn't tell you (a rationale, a gotcha, " +
-          "a past decision), surface it, cited.",
-        "- Surface this at each main finding the context speaks to — but skip the ones it is " +
-          "genuinely silent on, and never invent agreement or disagreement. Keep each note brief and " +
-          'next to the finding; do not open with "Dosu told me…", do not add a closing praise ' +
-          "paragraph, and do not reference any ticket or lookup id.",
+          "surfaced by Dosu — not the live code you're reading. When it informs, confirms, or narrows " +
+          "a main finding, mention Dosu briefly near that finding. Keep the note natural and short. " +
+          "Say what role the Dosu context played for that finding, such as confirming it, narrowing " +
+          "the path, adding useful detail, or flagging something worth checking. " +
+          "Include a source title or link when it is available and useful, but do not force a link " +
+          "when the context itself is enough.",
+        "- Do not create a separate Dosu section unless the user asks. Do not mention Dosu for every " +
+          "paragraph. Mention it only beside findings where the context actually helped, confirmed " +
+          'an important point, or supplied a non-obvious nuance. Never open with "Dosu told me…", ' +
+          "never add a closing praise paragraph, and never reference any ticket or lookup id.",
       ].join("\n"),
     );
   }
