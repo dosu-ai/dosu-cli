@@ -72,9 +72,24 @@ afterEach(() => {
 describe("skill install", () => {
   it("runs npx skills add with correct args", async () => {
     await run("install");
-    expect(mockExecSync).toHaveBeenCalledWith("npx skills add dosu-ai/dosu-skill -g -s dosu -y", {
-      stdio: "inherit",
-    });
+    expect(mockExecSync).toHaveBeenCalledWith(
+      [
+        "npx skills add dosu-ai/dosu-skill -g",
+        "-a claude-code -a cursor -a gemini-cli -a codex -a windsurf",
+        "-a zed -a cline -a github-copilot -a opencode -a antigravity",
+        "-s dosu -y",
+      ].join(" "),
+      {
+        stdio: "inherit",
+      },
+    );
+  });
+
+  it("does not let skills auto-target PromptScript", async () => {
+    await run("install");
+    const command = String(mockExecSync.mock.calls[0][0]);
+    expect(command).toContain("-a claude-code");
+    expect(command).not.toContain("promptscript");
   });
 
   it("prints success message", async () => {

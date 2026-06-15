@@ -14,6 +14,22 @@ import {
 
 const SKILL_REPO = "dosu-ai/dosu-skill";
 const SKILL_NAME = "dosu";
+const SUPPORTED_SKILL_AGENTS = [
+  "claude-code",
+  "cursor",
+  "gemini-cli",
+  "codex",
+  "windsurf",
+  "zed",
+  "cline",
+  "github-copilot",
+  "opencode",
+  "antigravity",
+];
+
+function supportedSkillAgentArgs(): string {
+  return SUPPORTED_SKILL_AGENTS.map((agent) => `-a ${agent}`).join(" ");
+}
 
 /**
  * Install the Dosu skill via `npx skills`. After a successful install we try
@@ -24,7 +40,7 @@ const SKILL_NAME = "dosu";
  */
 export async function installSkill(): Promise<{ success: boolean; sha?: string }> {
   try {
-    execSync(`npx skills add ${SKILL_REPO} -g -s ${SKILL_NAME} -y`, {
+    execSync(`npx skills add ${SKILL_REPO} -g ${supportedSkillAgentArgs()} -s ${SKILL_NAME} -y`, {
       stdio: "inherit",
     });
   } catch (err) {
