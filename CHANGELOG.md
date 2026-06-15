@@ -1,3 +1,10 @@
+## [0.19.3](https://github.com/dosu-ai/dosu-cli/compare/v0.19.2...v0.19.3) (2026-06-15)
+
+
+### Bug Fixes
+
+* Target supported agents for skill install ([#85](https://github.com/dosu-ai/dosu-cli/issues/85)) ([0eb2e50](https://github.com/dosu-ai/dosu-cli/commit/0eb2e504db826072c4ab4165b029918cc72dd1c3))
+
 ## [0.19.2](https://github.com/dosu-ai/dosu-cli/compare/v0.19.1...v0.19.2) (2026-06-12)
 
 
