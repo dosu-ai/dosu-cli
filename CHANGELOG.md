@@ -1,3 +1,10 @@
+## [0.20.1](https://github.com/dosu-ai/dosu-cli/compare/v0.20.0...v0.20.1) (2026-06-17)
+
+
+### Bug Fixes
+
+* **auth:** gracefully handle missing browser in OAuth flow ([#87](https://github.com/dosu-ai/dosu-cli/issues/87)) ([80ffcd0](https://github.com/dosu-ai/dosu-cli/commit/80ffcd072eaa90ea09c27afa26f91d3f8785107a))
+
 # [0.20.0](https://github.com/dosu-ai/dosu-cli/compare/v0.19.3...v0.20.0) (2026-06-17)
 
 
