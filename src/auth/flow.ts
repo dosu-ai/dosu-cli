@@ -30,8 +30,23 @@ export async function startOAuthFlow(
 
     // Open browser — dynamic import to avoid bundling issues
     const open = await import("open");
-    await open.default(authURL);
-    logger.info("auth.flow", "Browser open command executed");
+    let browserOpened = false;
+    try {
+      await open.default(authURL);
+      browserOpened = true;
+      logger.info("auth.flow", "Browser open command executed");
+    } catch (openErr) {
+      logger.warn(
+        "auth.flow",
+        `Could not open browser automatically: ${openErr instanceof Error ? openErr.message : String(openErr)}`,
+      );
+    }
+
+    if (!browserOpened) {
+      console.log("\nCould not open a browser automatically.");
+      console.log("Please open this URL in your browser to log in:\n");
+      console.log(`  ${authURL}\n`);
+    }
 
     // 8 min < Supabase's ~10 min OAuth state TTL, so we surface a useful
     // message before users hit a stale-state error.
