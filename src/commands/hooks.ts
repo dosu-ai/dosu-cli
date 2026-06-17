@@ -1,5 +1,5 @@
 /**
- * Dosu knowledge-injection hooks for coding agents (Claude Code, Codex).
+ * Dosu knowledge-injection hooks for coding agents (Claude Code, Codex, Factory).
  *
  * Two kinds of subcommands:
  *  - Hook entrypoints (`user-prompt-submit`, `post-tool-use`, `stop`, `status`) —
@@ -44,8 +44,8 @@ const STOP_WAIT_DEFAULT_MS = 8000; // max time Stop waits for an in-flight looku
 const STOP_POLL_DEFAULT_MS = 1000; // interval between Stop poll attempts
 
 /** Coding agents that have a Dosu hook adapter today. */
-const SUPPORTED_AGENTS = ["claude-code", "codex"];
-type SupportedAgent = "claude-code" | "codex";
+const SUPPORTED_AGENTS = ["claude-code", "codex", "factory"];
+type SupportedAgent = "claude-code" | "codex" | "factory";
 
 /** Hook entrypoints attribute tickets to this agent unless --agent overrides it. */
 const DEFAULT_AGENT: SupportedAgent = "claude-code";
@@ -433,6 +433,21 @@ export async function runInstall(agent: string, opts: LifecycleOptions): Promise
       return;
     }
 
+    if (agent === "factory") {
+      const { installFactoryHooks, factoryHooksPath } = await import("../hooks/factory");
+      const configPath = factoryHooksPath(resolveDir(opts.dir));
+      const { events } = installFactoryHooks(configPath, { stop: opts.stop });
+      if (opts.json) {
+        const { emitStep } = await import("../agent/output");
+        emitStep({ step: "hooks-install", agent, path: configPath, events });
+      } else {
+        console.log(`✓ Installed Dosu hooks for Factory (${events.join(", ")}).`);
+        console.log(`  → ${configPath}`);
+        console.log("  Start a new Factory session in this project to use them.");
+      }
+      return;
+    }
+
     const { installClaudeHooks, claudeLocalSettingsPath } = await import("../hooks/claude-code");
     const configPath = claudeLocalSettingsPath(resolveDir(opts.dir));
     const { events } = installClaudeHooks(configPath, { stop: opts.stop });
@@ -476,6 +491,10 @@ export async function runUninstall(agent: string, opts: LifecycleOptions): Promi
     const { removeCodexHooks, codexHooksPath } = await import("../hooks/codex");
     configPath = codexHooksPath(resolveDir(opts.dir));
     ({ removed } = removeCodexHooks(configPath));
+  } else if (agent === "factory") {
+    const { removeFactoryHooks, factoryHooksPath } = await import("../hooks/factory");
+    configPath = factoryHooksPath(resolveDir(opts.dir));
+    ({ removed } = removeFactoryHooks(configPath));
   } else {
     const { removeClaudeHooks, claudeLocalSettingsPath } = await import("../hooks/claude-code");
     configPath = claudeLocalSettingsPath(resolveDir(opts.dir));
@@ -502,19 +521,26 @@ export async function collectDoctorChecks(opts: { dir?: string }): Promise<Docto
   const checks: DoctorCheck[] = [];
   const { claudeLocalSettingsPath, inspectClaudeHooks } = await import("../hooks/claude-code");
   const { codexHooksPath, inspectCodexHooks } = await import("../hooks/codex");
+  const { factoryHooksPath, inspectFactoryHooks } = await import("../hooks/factory");
   const configPath = claudeLocalSettingsPath(resolveDir(opts.dir));
   const inspection = inspectClaudeHooks(configPath);
   const codexPath = codexHooksPath(resolveDir(opts.dir));
   const codex = inspectCodexHooks(codexPath);
+  const factoryPath = factoryHooksPath(resolveDir(opts.dir));
+  const factory = inspectFactoryHooks(factoryPath);
   const codexInstalled =
     codex.events.includes("UserPromptSubmit") && codex.events.includes("PostToolUse");
+  const factoryInstalled =
+    factory.events.includes("UserPromptSubmit") && factory.events.includes("PostToolUse");
+
+  const alternativeInstalled = codexInstalled || factoryInstalled;
 
   // 1. Claude Code config present + valid JSON. A missing Claude config is
-  // only a warning when Codex hooks carry the chain instead.
+  // only a warning when another agent's hooks carry the chain instead.
   if (!inspection.fileExists) {
     checks.push({
       name: "config",
-      status: codexInstalled ? "warn" : "fail",
+      status: alternativeInstalled ? "warn" : "fail",
       detail: `not found: ${configPath} (run 'dosu hooks install claude-code')`,
     });
   } else if (inspection.parseError) {
@@ -535,7 +561,7 @@ export async function collectDoctorChecks(opts: { dir?: string }): Promise<Docto
   } else {
     checks.push({
       name: "hooks",
-      status: codexInstalled ? "warn" : "fail",
+      status: alternativeInstalled ? "warn" : "fail",
       detail: "UserPromptSubmit + PostToolUse not both installed",
     });
   }
@@ -559,6 +585,29 @@ export async function collectDoctorChecks(opts: { dir?: string }): Promise<Docto
     } else {
       checks.push({
         name: "codex-config",
+        status: "fail",
+        detail: "UserPromptSubmit + PostToolUse not both installed",
+      });
+    }
+  }
+
+  // 2c. Factory hooks (only reported when the Factory hooks file exists).
+  if (factory.fileExists) {
+    if (factory.parseError) {
+      checks.push({
+        name: "factory-config",
+        status: "fail",
+        detail: `invalid JSON: ${factoryPath}`,
+      });
+    } else if (factoryInstalled) {
+      checks.push({
+        name: "factory-config",
+        status: "ok",
+        detail: `installed: ${factory.events.join(", ")} (${factoryPath})`,
+      });
+    } else {
+      checks.push({
+        name: "factory-config",
         status: "fail",
         detail: "UserPromptSubmit + PostToolUse not both installed",
       });
@@ -633,7 +682,7 @@ export async function runDoctor(opts: { dir?: string; json?: boolean }): Promise
 
 export function hooksCommand(): Command {
   const cmd = new Command("hooks").description(
-    "Dosu knowledge-injection hooks for coding agents (Claude Code, Codex)",
+    "Dosu knowledge-injection hooks for coding agents (Claude Code, Codex, Factory)",
   );
 
   /* v8 ignore start -- thin Commander glue: reads fd 0 and delegates to tested handlers */
@@ -697,6 +746,7 @@ export function hooksCommand(): Command {
         "Examples:",
         "  $ dosu hooks install claude-code",
         "  $ dosu hooks install codex",
+        "  $ dosu hooks install factory",
         "  $ dosu hooks install claude-code --no-stop",
         "  $ dosu hooks install codex --dir ./my-project",
         "",
@@ -722,6 +772,7 @@ export function hooksCommand(): Command {
         "Examples:",
         "  $ dosu hooks uninstall claude-code",
         "  $ dosu hooks uninstall codex",
+        "  $ dosu hooks uninstall factory",
       ].join("\n"),
     )
     .action((agent: string, opts: LifecycleOptions) => runUninstall(agent, opts));

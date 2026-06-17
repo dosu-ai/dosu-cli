@@ -535,6 +535,40 @@ describe("lifecycle commands", () => {
     });
   });
 
+  it("install factory writes .factory/hooks.json", async () => {
+    await runInstall("factory", { dir });
+    expect(process.exitCode ?? 0).toBe(0);
+
+    const { factoryHooksPath, inspectFactoryHooks } = await import("../hooks/factory");
+    const inspection = inspectFactoryHooks(factoryHooksPath(dir));
+    expect(inspection.fileExists).toBe(true);
+    expect(inspection.events).toEqual(["UserPromptSubmit", "PostToolUse", "Stop"]);
+
+    expect(stdout()).toContain("Factory");
+  });
+
+  it("uninstall factory removes only the Dosu groups", async () => {
+    await runInstall("factory", { dir });
+    logSpy.mockClear();
+    await runUninstall("factory", { dir });
+
+    const { factoryHooksPath, inspectFactoryHooks } = await import("../hooks/factory");
+    expect(inspectFactoryHooks(factoryHooksPath(dir)).events).toEqual([]);
+    expect(stdout()).toContain("Removed");
+  });
+
+  it("doctor reports the factory section and softens claude checks when factory carries the chain", async () => {
+    await runInstall("factory", { dir });
+    logSpy.mockClear();
+    const checks = await collectDoctorChecks({ dir });
+    const byName = Object.fromEntries(checks.map((c) => [c.name, c.status]));
+    expect(byName).toMatchObject({
+      config: "warn", // claude config missing, but factory hooks are active
+      hooks: "warn",
+      "factory-config": "ok",
+    });
+  });
+
   it("doctor reports ok when fully configured and installed", async () => {
     await runInstall("claude-code", { dir });
     logSpy.mockClear();
