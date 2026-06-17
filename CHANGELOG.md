@@ -1,3 +1,10 @@
+# [0.20.0](https://github.com/dosu-ai/dosu-cli/compare/v0.19.3...v0.20.0) (2026-06-17)
+
+
+### Features
+
+* add Factory coding agent support (MCP + hooks) ([#86](https://github.com/dosu-ai/dosu-cli/issues/86)) ([a3ac9ed](https://github.com/dosu-ai/dosu-cli/commit/a3ac9ed82e3bf3b4724de58681183bbd2b45949f))
+
 ## [0.19.3](https://github.com/dosu-ai/dosu-cli/compare/v0.19.2...v0.19.3) (2026-06-15)
 
 
