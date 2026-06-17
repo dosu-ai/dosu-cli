@@ -208,6 +208,23 @@ describe("startOAuthFlow", () => {
     setTimeoutSpy.mockRestore();
   });
 
+  it("prints the auth URL and continues waiting when browser cannot be opened", async () => {
+    mockOpenDefault.mockRejectedValueOnce(new Error("Executable not found in $PATH: xdg-open"));
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const flowPromise = startOAuthFlow();
+    await flowReady();
+
+    // URL should have been printed
+    const printed = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
+    expect(printed).toContain("https://app.dosu.dev/cli/auth");
+    consoleSpy.mockRestore();
+
+    // flow still resolves when the token arrives
+    resolveToken({ access_token: "a", refresh_token: "r", expires_in: 1 });
+    await expect(flowPromise).resolves.toMatchObject({ access_token: "a" });
+  });
+
   it("uses the configured web app URL for building the auth URL", async () => {
     mockGetWebAppURL.mockReturnValue("http://localhost:3001");
 
