@@ -39,6 +39,7 @@ import { ClineCliProvider } from "./providers/cline-cli";
 import { CodexProvider } from "./providers/codex";
 import { CopilotProvider } from "./providers/copilot";
 import { CursorProvider } from "./providers/cursor";
+import { FactoryProvider } from "./providers/factory";
 import { GeminiProvider } from "./providers/gemini";
 import { ManualProvider } from "./providers/manual";
 import { MCPorterProvider } from "./providers/mcporter";
@@ -66,6 +67,7 @@ export function allProviders(): Provider[] {
     OpenCodeProvider(),
     AntigravityProvider(),
     MCPorterProvider(),
+    FactoryProvider(),
     ManualProvider(),
   ];
 }

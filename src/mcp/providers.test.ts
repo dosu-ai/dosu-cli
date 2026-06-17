@@ -7,9 +7,9 @@ import {
 } from "./providers";
 
 describe("provider registry", () => {
-  it("allProviders returns 15 providers", () => {
+  it("allProviders returns 16 providers", () => {
     const providers = allProviders();
-    expect(providers).toHaveLength(15);
+    expect(providers).toHaveLength(16);
   });
 
   it("all providers have unique IDs", () => {
