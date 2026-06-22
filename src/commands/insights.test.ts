@@ -166,7 +166,7 @@ afterEach(() => {
 });
 
 function allOutput(): string {
-  return logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+  return logSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
 }
 
 function makeRunner(over: Partial<InsightsRunner> = {}): InsightsRunner {
@@ -480,7 +480,7 @@ describe("insightsCommand", () => {
 
     await expect(runCmd()).rejects.toThrow("exit");
     expect(errorSpy).toHaveBeenCalled();
-    const errOut = errorSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+    const errOut = errorSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
     expect(errOut).toContain("runner boom");
   });
 });

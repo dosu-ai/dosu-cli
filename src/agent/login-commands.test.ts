@@ -76,7 +76,7 @@ describe("runLoginRequest", () => {
     const code = await runLoginRequest({ json: false });
 
     expect(code).toBe(0);
-    const joined = logSpy.mock.calls.map((c) => c[0]).join("\n");
+    const joined = logSpy.mock.calls.map((c: unknown[]) => c[0]).join("\n");
     expect(joined).toContain("https://app.dosu.dev/cli/auth?ticket=tkt-xyz");
     expect(joined).toContain("dosu login --check tkt-xyz");
     // No --json suffix when the user did not opt in.
@@ -192,7 +192,7 @@ describe("runLoginCheck", () => {
     const code = await runLoginCheck({ ticket: "tkt", json: false });
 
     expect(code).toBe(0);
-    const joined = logSpy.mock.calls.map((c) => c[0]).join("\n");
+    const joined = logSpy.mock.calls.map((c: unknown[]) => c[0]).join("\n");
     expect(joined).toContain("Successfully authenticated");
     expect(joined).toContain("user@example.com");
   });

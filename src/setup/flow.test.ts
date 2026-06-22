@@ -686,7 +686,9 @@ describe("runSetup integration", () => {
       connectGithubRepo: vi.fn().mockResolvedValue({ skipped: true, reason: "repo_not_installed" }),
       ...overrides,
     };
-    mockClient.mockImplementation(() => clientMethods as unknown as Client);
+    mockClient.mockImplementation(function () {
+      return clientMethods as unknown as Client;
+    });
     return clientMethods;
   }
 
@@ -1564,7 +1566,9 @@ describe("runSetup checkpoint behavior", () => {
       connectGithubRepo: vi.fn().mockResolvedValue({ skipped: true, reason: "repo_not_installed" }),
       ...overrides,
     };
-    mockClient.mockImplementation(() => methods as unknown as Client);
+    mockClient.mockImplementation(function () {
+      return methods as unknown as Client;
+    });
     return methods;
   }
 

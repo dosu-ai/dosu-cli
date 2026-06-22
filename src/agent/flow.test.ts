@@ -49,7 +49,7 @@ vi.mock("../setup/flow", () => ({
 }));
 
 vi.mock("../client/client", () => ({
-  Client: vi.fn().mockImplementation((cfg: unknown) => {
+  Client: vi.fn().mockImplementation(function (cfg: unknown) {
     mockClientConstructor(cfg);
     return mockClient;
   }),
@@ -123,7 +123,7 @@ describe("runAgentSetup", () => {
   let stdioProvider: SetupProvider;
 
   function emittedEvents(): Array<Record<string, unknown>> {
-    return logSpy.mock.calls.map((c) => JSON.parse(c[0] as string));
+    return logSpy.mock.calls.map((c: unknown[]) => JSON.parse(c[0] as string));
   }
 
   beforeEach(() => {

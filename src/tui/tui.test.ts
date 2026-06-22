@@ -225,9 +225,9 @@ describe("runTUI", () => {
     mockIsCancel.mockReturnValue(false);
 
     const mockDoRequestRaw = vi.fn().mockResolvedValue({ status: 200 });
-    vi.mocked(Client).mockImplementation(
-      () => ({ doRequestRaw: mockDoRequestRaw }) as unknown as Client,
-    );
+    vi.mocked(Client).mockImplementation(function () {
+      return { doRequestRaw: mockDoRequestRaw } as unknown as Client;
+    });
 
     mockSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
 
@@ -243,10 +243,12 @@ describe("runTUI", () => {
 
     const mockRefreshToken = vi.fn().mockResolvedValue(undefined);
     const mockDoRequestRaw = vi.fn().mockResolvedValue({ status: 401 });
-    vi.mocked(Client).mockImplementation(
-      () =>
-        ({ doRequestRaw: mockDoRequestRaw, refreshToken: mockRefreshToken }) as unknown as Client,
-    );
+    vi.mocked(Client).mockImplementation(function () {
+      return {
+        doRequestRaw: mockDoRequestRaw,
+        refreshToken: mockRefreshToken,
+      } as unknown as Client;
+    });
 
     mockSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
 
@@ -261,10 +263,12 @@ describe("runTUI", () => {
 
     const mockRefreshToken = vi.fn().mockRejectedValue(new Error("refresh failed"));
     const mockDoRequestRaw = vi.fn().mockResolvedValue({ status: 401 });
-    vi.mocked(Client).mockImplementation(
-      () =>
-        ({ doRequestRaw: mockDoRequestRaw, refreshToken: mockRefreshToken }) as unknown as Client,
-    );
+    vi.mocked(Client).mockImplementation(function () {
+      return {
+        doRequestRaw: mockDoRequestRaw,
+        refreshToken: mockRefreshToken,
+      } as unknown as Client;
+    });
 
     // User declines to open browser
     mockConfirm.mockResolvedValueOnce(false);
@@ -281,9 +285,9 @@ describe("runTUI", () => {
     mockIsCancel.mockReturnValue(false);
 
     const mockDoRequestRaw = vi.fn().mockRejectedValue(new Error("network error"));
-    vi.mocked(Client).mockImplementation(
-      () => ({ doRequestRaw: mockDoRequestRaw }) as unknown as Client,
-    );
+    vi.mocked(Client).mockImplementation(function () {
+      return { doRequestRaw: mockDoRequestRaw } as unknown as Client;
+    });
 
     // User declines to open browser
     mockConfirm.mockResolvedValueOnce(false);

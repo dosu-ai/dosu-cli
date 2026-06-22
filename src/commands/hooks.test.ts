@@ -24,7 +24,9 @@ vi.mock("../config/config", async (importOriginal) => {
 });
 
 vi.mock("../client/client", () => ({
-  Client: vi.fn(() => ({ validateAPIKey: vi.fn(async () => true) })),
+  Client: vi.fn(function () {
+    return { validateAPIKey: vi.fn(async () => true) };
+  }),
 }));
 
 import { Client } from "../client/client";
@@ -599,9 +601,9 @@ describe("lifecycle commands", () => {
 
   it("doctor reports a backend failure when the API key is rejected", async () => {
     vi.mocked(loadConfig).mockReturnValue({ ...AUTHED });
-    vi.mocked(Client).mockImplementationOnce(
-      () => ({ validateAPIKey: vi.fn(async () => false) }) as unknown as Client,
-    );
+    vi.mocked(Client).mockImplementationOnce(function () {
+      return { validateAPIKey: vi.fn(async () => false) } as unknown as Client;
+    });
     await runInstall("claude-code", { dir });
     const checks = await collectDoctorChecks({ dir });
     expect(checks.find((c) => c.name === "backend")?.status).toBe("fail");

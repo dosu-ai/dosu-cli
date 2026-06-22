@@ -63,7 +63,7 @@ const validConfig = {
 };
 
 function allOutput(): string {
-  return logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+  return logSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
 }
 
 function jsonResponse(data: unknown, status = 200): Response {
@@ -1019,7 +1019,7 @@ describe("docs import", () => {
       new Error('{"detail":"An import operation is already in progress"}'),
     );
     await expect(run("import", "--json", "github", "--files", "f1")).rejects.toThrow("exit");
-    const errLine = errorSpy.mock.calls.map((c) => c[0]).join("\n");
+    const errLine = errorSpy.mock.calls.map((c: unknown[]) => c[0]).join("\n");
     const parsed = JSON.parse(errLine) as { error: string };
     expect(parsed.error).toContain("dosu docs import-status");
     expect(mockClackLogError).not.toHaveBeenCalled();
@@ -1029,7 +1029,7 @@ describe("docs import", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockMutate.mockRejectedValueOnce(new Error('{"detail":"Something went wrong"}'));
     await expect(run("import", "--json", "github", "--files", "f1")).rejects.toThrow("exit");
-    const errLine = errorSpy.mock.calls.map((c) => c[0]).join("\n");
+    const errLine = errorSpy.mock.calls.map((c: unknown[]) => c[0]).join("\n");
     const parsed = JSON.parse(errLine) as { error: string };
     expect(parsed.error).toBe("Something went wrong");
     expect(mockClackLogError).not.toHaveBeenCalled();
