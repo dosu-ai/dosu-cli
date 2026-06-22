@@ -30,11 +30,12 @@ vi.mock("../client/client", () => ({
 }));
 
 import { Client } from "../client/client";
-import { loadConfig } from "../config/config";
+import { loadConfig, MODE_OSS } from "../config/config";
 import { loadState, saveState, type TicketState } from "../hooks/state";
 import { requestCreateTicket, requestGetTicket, TicketHttpError } from "../hooks/ticket-client";
 import {
   collectDoctorChecks,
+  hooksCommand,
   runDoctor,
   runHookEntrypoint,
   runInstall,
@@ -158,6 +159,36 @@ describe("runUserPromptSubmit", () => {
     expect(saveState).not.toHaveBeenCalled();
     expect(stdout()).toBe("");
   });
+
+  it("no-ops when the prompt field is absent entirely", async () => {
+    await runUserPromptSubmit({ session_id: "sess" });
+    expect(requestCreateTicket).not.toHaveBeenCalled();
+    expect(stdout()).toBe("");
+  });
+
+  it("is silent when create rejects with a non-Error value", async () => {
+    vi.mocked(loadState).mockReturnValue(null);
+    vi.mocked(requestCreateTicket).mockRejectedValue("boom-string");
+    await runUserPromptSubmit({ session_id: "sess", prompt: "x" });
+    expect(saveState).not.toHaveBeenCalled();
+    expect(stdout()).toBe("");
+  });
+
+  it("honors a valid DOSU_HOOK_TTL_MS override when setting expiresAt", async () => {
+    process.env.DOSU_HOOK_TTL_MS = "5000";
+    vi.mocked(loadState).mockReturnValue(null);
+    vi.mocked(requestCreateTicket).mockResolvedValue({
+      ticket_id: "kt_ttl",
+      status: "pending",
+      created_at: "x",
+      expires_at: "y",
+    });
+    await runUserPromptSubmit({ session_id: "sess", prompt: "p" }, 10_000);
+    expect(saveState).toHaveBeenCalledWith(
+      expect.objectContaining({ expiresAt: 15_000 }), // 10_000 + 5000 override
+    );
+    delete process.env.DOSU_HOOK_TTL_MS;
+  });
 });
 
 describe("runPostToolUse", () => {
@@ -280,6 +311,36 @@ describe("runPostToolUse", () => {
     expect(saveState).toHaveBeenCalledWith(expect.objectContaining({ lastCheckedAt: 50_000 }));
     expect(stdout()).toBe("");
   });
+
+  it("latches the server status (failed/expired) without injecting context", async () => {
+    for (const status of ["failed", "expired"] as const) {
+      vi.clearAllMocks();
+      vi.mocked(loadConfig).mockReturnValue({ ...AUTHED });
+      vi.mocked(loadState).mockReturnValue(pending());
+      vi.mocked(requestGetTicket).mockResolvedValue({
+        ticket_id: "kt_1",
+        status,
+        created_at: "x",
+        expires_at: "y",
+        result: null,
+        error: null,
+      });
+      await runPostToolUse({ session_id: "sess" }, 50_000);
+      expect(saveState).toHaveBeenCalledWith(
+        expect.objectContaining({ status, lastCheckedAt: 50_000 }),
+      );
+      expect(stdout()).toBe("");
+    }
+  });
+
+  it("honors a valid DOSU_HOOK_CHECK_COOLDOWN_MS override on the cooldown gate", async () => {
+    process.env.DOSU_HOOK_CHECK_COOLDOWN_MS = "10000";
+    vi.mocked(loadState).mockReturnValue(pending({ lastCheckedAt: 1000 }));
+    await runPostToolUse({ session_id: "sess" }, 5000); // 4000ms < 10000ms override
+    expect(requestGetTicket).not.toHaveBeenCalled();
+    expect(stdout()).toBe("");
+    delete process.env.DOSU_HOOK_CHECK_COOLDOWN_MS;
+  });
 });
 
 describe("runStop", () => {
@@ -374,6 +435,66 @@ describe("runStop", () => {
     await runStop({ session_id: "sess" }, 70_000);
     expect(JSON.parse(logSpy.mock.calls[0][0])).toEqual({ continue: true });
   });
+
+  it("continues without polling when the ticket is in a terminal (non-pending) state", async () => {
+    vi.mocked(loadState).mockReturnValue(pending({ status: "delivered" }));
+    await runStop({ session_id: "sess" }, 70_000);
+    expect(requestGetTicket).not.toHaveBeenCalled();
+    expect(JSON.parse(logSpy.mock.calls[0][0])).toEqual({ continue: true });
+  });
+
+  it("continues without polling when the pending ticket has expired", async () => {
+    vi.mocked(loadState).mockReturnValue(pending({ expiresAt: 100 }));
+    await runStop({ session_id: "sess" }, 70_000);
+    expect(requestGetTicket).not.toHaveBeenCalled();
+    expect(JSON.parse(logSpy.mock.calls[0][0])).toEqual({ continue: true });
+  });
+
+  it("continues without polling when auth/deployment is missing", async () => {
+    vi.mocked(loadState).mockReturnValue(pending());
+    vi.mocked(loadConfig).mockReturnValue({ ...AUTHED, api_key: undefined });
+    await runStop({ session_id: "sess" }, 70_000);
+    expect(requestGetTicket).not.toHaveBeenCalled();
+    expect(JSON.parse(logSpy.mock.calls[0][0])).toEqual({ continue: true });
+  });
+
+  it("clamps a non-positive poll override back to the default interval", async () => {
+    // DOSU_HOOK_STOP_POLL_MS="0" is invalid (must be > 0), so stopPollMs() returns
+    // the 1000ms default; with wait=0 (beforeEach) maxWaits = floor(0/1000) = 0,
+    // so the loop polls once and never sleeps.
+    process.env.DOSU_HOOK_STOP_POLL_MS = "0";
+    vi.mocked(loadState).mockReturnValue(pending());
+    vi.mocked(requestGetTicket).mockResolvedValue({
+      ticket_id: "kt_1",
+      status: "pending",
+      created_at: "x",
+      expires_at: "y",
+      result: null,
+      error: null,
+    });
+    await runStop({ session_id: "sess" }, 70_000);
+    expect(requestGetTicket).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(logSpy.mock.calls[0][0])).toEqual({ continue: true });
+  });
+
+  it("falls back to the default stop-wait budget when the env override is unset", async () => {
+    // No DOSU_HOOK_STOP_WAIT_MS → default 8000ms; a huge poll interval keeps
+    // maxWaits at 0 so the loop polls once and never sleeps.
+    delete process.env.DOSU_HOOK_STOP_WAIT_MS;
+    process.env.DOSU_HOOK_STOP_POLL_MS = "999999"; // floor(8000/999999) = 0
+    vi.mocked(loadState).mockReturnValue(pending());
+    vi.mocked(requestGetTicket).mockResolvedValue({
+      ticket_id: "kt_1",
+      status: "pending",
+      created_at: "x",
+      expires_at: "y",
+      result: null,
+      error: null,
+    });
+    await runStop({ session_id: "sess" }, 70_000);
+    expect(requestGetTicket).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(logSpy.mock.calls[0][0])).toEqual({ continue: true });
+  });
 });
 
 describe("runStatus", () => {
@@ -393,6 +514,13 @@ describe("runStatus", () => {
   it("reports no active ticket when there is none", () => {
     runStatus({}, {});
     expect(stdout()).toContain("No active Dosu knowledge ticket");
+  });
+
+  it("prints Delivered: no for an undelivered ticket", () => {
+    vi.mocked(loadState).mockReturnValue(pending());
+    runStatus({ session_id: "sess" }, {}, 10);
+    expect(stdout()).toContain("Status: pending");
+    expect(stdout()).toContain("Delivered: no");
   });
 });
 
@@ -415,6 +543,13 @@ describe("runHookEntrypoint", () => {
 
   it("treats malformed stdin as empty and never throws", async () => {
     await expect(runHookEntrypoint("post-tool-use", "{not json")).resolves.toBeUndefined();
+    expect(stdout()).toBe("");
+  });
+
+  it("treats blank stdin as an empty input object", async () => {
+    vi.mocked(loadState).mockReturnValue(null);
+    await expect(runHookEntrypoint("post-tool-use", "   ")).resolves.toBeUndefined();
+    expect(requestGetTicket).not.toHaveBeenCalled();
     expect(stdout()).toBe("");
   });
 
@@ -638,5 +773,145 @@ describe("lifecycle commands", () => {
     expect(steps).toEqual(
       expect.arrayContaining(["doctor-config", "doctor-hooks", "doctor-backend"]),
     );
+  });
+
+  it("install --json emits a machine-readable error for an unsupported agent", async () => {
+    await runInstall("cursor", { dir, json: true });
+    expect(process.exitCode).toBe(2);
+    const line = JSON.parse(logSpy.mock.calls[0][0]);
+    expect(line).toMatchObject({ step: "hooks-install", reason: "unsupported_agent" });
+  });
+
+  it("install --json emits a machine-readable error for an unsupported scope", async () => {
+    await runInstall("claude-code", { dir, scope: "project", json: true });
+    expect(process.exitCode).toBe(2);
+    const line = JSON.parse(logSpy.mock.calls[0][0]);
+    expect(line).toMatchObject({ step: "hooks-install", reason: "unsupported_scope" });
+  });
+
+  it("uninstall --json emits a machine-readable error for an unsupported agent", async () => {
+    await runUninstall("cursor", { dir, json: true });
+    expect(process.exitCode).toBe(2);
+    const line = JSON.parse(logSpy.mock.calls[0][0]);
+    expect(line).toMatchObject({ step: "hooks-uninstall", reason: "unsupported_agent" });
+  });
+
+  it("install codex --json emits a machine-readable step", async () => {
+    await runInstall("codex", { dir, json: true });
+    const line = JSON.parse(logSpy.mock.calls[0][0]);
+    expect(line).toMatchObject({ step: "hooks-install", agent: "codex" });
+    expect(line.events).toEqual(["UserPromptSubmit", "PostToolUse", "Stop"]);
+  });
+
+  it("install factory --json emits a machine-readable step", async () => {
+    await runInstall("factory", { dir, json: true });
+    const line = JSON.parse(logSpy.mock.calls[0][0]);
+    expect(line).toMatchObject({ step: "hooks-install", agent: "factory" });
+    expect(line.events).toEqual(["UserPromptSubmit", "PostToolUse", "Stop"]);
+  });
+
+  it("install --json surfaces a write failure as a machine-readable error", async () => {
+    mkdirSync(join(dir, ".claude"), { recursive: true });
+    writeFileSync(join(dir, ".claude", "settings.local.json"), "{ broken");
+    await runInstall("claude-code", { dir, json: true });
+    expect(process.exitCode).toBe(1);
+    const line = JSON.parse(logSpy.mock.calls[0][0]);
+    expect(line).toMatchObject({ step: "hooks-install", reason: "write_failed" });
+  });
+
+  it("doctor flags an unparseable claude config as a failure", async () => {
+    mkdirSync(join(dir, ".claude"), { recursive: true });
+    writeFileSync(join(dir, ".claude", "settings.local.json"), "{ broken");
+    const checks = await collectDoctorChecks({ dir });
+    expect(checks.find((c) => c.name === "config")?.status).toBe("fail");
+    expect(checks.find((c) => c.name === "config")?.detail).toContain("invalid JSON");
+  });
+
+  it("doctor flags an unparseable codex config and an installed-but-incomplete one", async () => {
+    // Unparseable codex hooks file.
+    mkdirSync(join(dir, ".codex"), { recursive: true });
+    writeFileSync(join(dir, ".codex", "hooks.json"), "{ broken");
+    let checks = await collectDoctorChecks({ dir });
+    expect(checks.find((c) => c.name === "codex-config")?.status).toBe("fail");
+
+    // Valid JSON, but Dosu hooks not installed.
+    writeFileSync(join(dir, ".codex", "hooks.json"), "{}");
+    checks = await collectDoctorChecks({ dir });
+    const codex = checks.find((c) => c.name === "codex-config");
+    expect(codex?.status).toBe("fail");
+    expect(codex?.detail).toContain("not both installed");
+  });
+
+  it("doctor flags an unparseable factory config and an installed-but-incomplete one", async () => {
+    mkdirSync(join(dir, ".factory"), { recursive: true });
+    writeFileSync(join(dir, ".factory", "hooks.json"), "{ broken");
+    let checks = await collectDoctorChecks({ dir });
+    expect(checks.find((c) => c.name === "factory-config")?.status).toBe("fail");
+
+    writeFileSync(join(dir, ".factory", "hooks.json"), "{}");
+    checks = await collectDoctorChecks({ dir });
+    const factory = checks.find((c) => c.name === "factory-config");
+    expect(factory?.status).toBe("fail");
+    expect(factory?.detail).toContain("not both installed");
+  });
+});
+
+describe("hooksCommand wiring", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "dosu-hooks-wire-"));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("dispatches the install action through Commander", async () => {
+    await hooksCommand().parseAsync(["install", "claude-code", "--dir", dir], { from: "user" });
+    expect(stdout()).toContain("Installed Dosu hooks");
+  });
+
+  it("dispatches the uninstall action through Commander", async () => {
+    await hooksCommand().parseAsync(["install", "claude-code", "--dir", dir], { from: "user" });
+    logSpy.mockClear();
+    await hooksCommand().parseAsync(["uninstall", "claude-code", "--dir", dir], { from: "user" });
+    expect(stdout()).toContain("Removed Dosu hooks");
+  });
+
+  it("dispatches the doctor action through Commander", async () => {
+    await hooksCommand().parseAsync(["install", "claude-code", "--dir", dir], { from: "user" });
+    logSpy.mockClear();
+    await hooksCommand().parseAsync(["doctor", "--dir", dir, "--json"], { from: "user" });
+    const steps = logSpy.mock.calls.map((c) => JSON.parse(c[0]).step);
+    expect(steps).toEqual(expect.arrayContaining(["doctor-config"]));
+  });
+});
+
+describe("collectDoctorChecks deployment detail", () => {
+  it("defaults the project dir to cwd when none is passed (read-only inspection)", async () => {
+    // No `dir` → resolveDir falls back to process.cwd(); the repo cwd has no
+    // agent hook files, so this just inspects and reports without writing.
+    const checks = await collectDoctorChecks({});
+    expect(checks.some((c) => c.name === "config")).toBe(true);
+  });
+
+  it("falls back to deployment_id when no deployment_name is set", async () => {
+    vi.mocked(loadConfig).mockReturnValue({ ...AUTHED, deployment_name: undefined });
+    const checks = await collectDoctorChecks({});
+    const deployment = checks.find((c) => c.name === "deployment");
+    expect(deployment?.status).toBe("ok");
+    expect(deployment?.detail).toBe("dep-1"); // deployment_id fallback
+  });
+
+  it("reports 'oss' for an OSS-mode config with no deployment id or name", async () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      access_token: "at",
+      refresh_token: "rt",
+      expires_at: Date.now() + 3_600_000,
+      mode: MODE_OSS,
+    });
+    const checks = await collectDoctorChecks({});
+    const deployment = checks.find((c) => c.name === "deployment");
+    expect(deployment?.status).toBe("ok");
+    expect(deployment?.detail).toBe("oss"); // final fallback
   });
 });

@@ -1941,3 +1941,504 @@ describe("runSetup checkpoint behavior", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// 8. Additional branch coverage for runSetup error/edge paths
+// ---------------------------------------------------------------------------
+
+describe("runSetup additional branches", () => {
+  const mockClient = vi.mocked(Client);
+
+  beforeEach(() => {
+    setupTempEnv();
+    vi.resetAllMocks();
+    installSetupStepDefaults();
+    installRemoteSetupDefaults();
+    vi.mocked(p.isCancel).mockReturnValue(false);
+    installMultiselectDefault();
+    mockInstallSkill.mockResolvedValue({ success: true, sha: "test-sha" });
+  });
+  afterEach(teardownTempEnv);
+
+  function setupAuthed(overrides: Record<string, unknown> = {}) {
+    const methods = {
+      doRequestRaw: vi.fn().mockResolvedValue({ status: 200 }),
+      refreshToken: vi.fn(),
+      getOrgs: vi.fn().mockResolvedValue([{ org_id: "o1", name: "Org1" }]),
+      getDeployments: vi.fn().mockResolvedValue([makeDeployment()]),
+      validateAPIKey: vi.fn().mockResolvedValue(true),
+      createAPIKey: vi.fn().mockResolvedValue({ api_key: "new-key" }),
+      ...overrides,
+    };
+    mockClient.mockImplementation(function () {
+      return methods as unknown as Client;
+    });
+    return methods;
+  }
+
+  it("aborts when the cloud setup context fails to load (profile has no user_id)", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    // Profile without a user_id → resolveCloudSetupContext returns null.
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: null,
+      finished_onboarding: false,
+      cli_onboarding_enabled: true,
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(p.log.error).toHaveBeenCalledWith("Could not load your profile.");
+    // Never advanced to the one-shot confirm / outro.
+    expect(p.outro).not.toHaveBeenCalled();
+    expect(
+      trackedCliOnboardingEvents().some(
+        (e) =>
+          e.event === "cli_onboarding_failed" &&
+          e.properties?.reason === "cloud_setup_context_failed",
+      ),
+    ).toBe(true);
+  });
+
+  it("aborts when the cloud setup context query throws", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    mockTrpc.user.getCliOnboardingContext.query.mockRejectedValue(new Error("trpc down"));
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(p.log.error).toHaveBeenCalledWith(
+      expect.stringContaining("Could not load your onboarding state"),
+    );
+    expect(p.outro).not.toHaveBeenCalled();
+  });
+
+  it("aborts onboarding when no target org can be determined", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: false,
+      cli_onboarding_enabled: true,
+    });
+    // No accessible orgs → resolveOnboardingTargetOrg returns null.
+    mockTrpc.organization.getOrganizations.query.mockResolvedValue([]);
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(p.log.error).toHaveBeenCalledWith("Could not determine your onboarding organization.");
+    expect(p.outro).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the first accessible org when none has the OWNER role", async () => {
+    saveConfig(makeCfg());
+    setupAuthed({
+      getDeployments: vi.fn().mockResolvedValue([
+        makeDeployment({
+          deployment_id: "dep-member",
+          org_id: "member-org",
+          org_name: "Member Org",
+          space_id: "space-member",
+        }),
+      ]),
+    });
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: false,
+      cli_onboarding_enabled: true,
+    });
+    // No OWNER role anywhere → falls back to accessibleOrgs[0].
+    mockTrpc.organization.getOrganizations.query.mockResolvedValue([
+      { org_id: "member-org", name: "Member Org", user_role: "MEMBER" },
+    ]);
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mockStepConnectGitHubRepo.mockResolvedValue({ advance: true, has_connected_repo: false });
+    mockStepImportGitHubDocs.mockResolvedValue({ advance: true });
+
+    await runSetup();
+
+    const saved = loadConfig();
+    expect(saved.org_id).toBe("member-org");
+    expect(saved.deployment_id).toBe("dep-member");
+  });
+
+  it("aborts onboarding when no deployment exists for the target org", async () => {
+    saveConfig(makeCfg());
+    // Deployments exist but none belong to the onboarding org.
+    setupAuthed({
+      getDeployments: vi
+        .fn()
+        .mockResolvedValue([makeDeployment({ deployment_id: "dep-other", org_id: "other-org" })]),
+    });
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: false,
+      cli_onboarding_enabled: true,
+    });
+    mockTrpc.organization.getOrganizations.query.mockResolvedValue([
+      { org_id: "owner-org", name: "Owner Org", user_role: "OWNER" },
+    ]);
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("No MCP found for Owner Org"));
+    expect(p.outro).not.toHaveBeenCalled();
+    expect(
+      trackedCliOnboardingEvents().some(
+        (e) =>
+          e.event === "cli_onboarding_failed" &&
+          e.properties?.reason === "onboarding_deployment_failed",
+      ),
+    ).toBe(true);
+  });
+
+  it("picks the first org deployment when none matches the dosu_mcp provider slug", async () => {
+    saveConfig(makeCfg());
+    setupAuthed({
+      getDeployments: vi.fn().mockResolvedValue([
+        makeDeployment({
+          deployment_id: "dep-fallback",
+          org_id: "owner-org",
+          org_name: "Owner Org",
+          space_id: "space-fallback",
+          provider_slug: "some_other_provider",
+        }),
+      ]),
+    });
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: false,
+      cli_onboarding_enabled: true,
+    });
+    mockTrpc.organization.getOrganizations.query.mockResolvedValue([
+      { org_id: "owner-org", name: "Owner Org", user_role: "OWNER" },
+    ]);
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mockStepConnectGitHubRepo.mockResolvedValue({ advance: true, has_connected_repo: false });
+    mockStepImportGitHubDocs.mockResolvedValue({ advance: true });
+
+    await runSetup();
+
+    const saved = loadConfig();
+    expect(saved.deployment_id).toBe("dep-fallback");
+  });
+
+  it("returns early when the one-shot confirm is cancelled", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    const cancelSymbol = Symbol("cancel");
+    // Cancel the one-shot confirm multiselect specifically.
+    vi.mocked(p.multiselect).mockImplementation(async (opts: unknown) => {
+      const o = opts as { message: string; initialValues?: unknown[] };
+      if (
+        String(o.message ?? "")
+          .toLowerCase()
+          .includes("dosu will set")
+      ) {
+        return cancelSymbol as unknown as never;
+      }
+      return (o.initialValues ?? []) as unknown as never;
+    });
+    vi.mocked(p.isCancel).mockImplementation((val) => val === cancelSymbol);
+
+    await runSetup();
+
+    expect(mockInstallSkill).not.toHaveBeenCalled();
+    expect(p.outro).not.toHaveBeenCalled();
+    expect(
+      trackedCliOnboardingEvents().some(
+        (e) =>
+          e.event === "cli_onboarding_cancelled" && e.properties?.reason === "options_cancelled",
+      ),
+    ).toBe(true);
+  });
+
+  it("returns early when the MCP tool selection is cancelled", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+
+    const cancelSymbol = Symbol("cancel");
+    vi.mocked(p.multiselect).mockImplementation(async (opts: unknown) => {
+      const o = opts as { message: string; initialValues?: unknown[] };
+      if (
+        String(o.message ?? "")
+          .toLowerCase()
+          .includes("dosu will set")
+      ) {
+        return (o.initialValues ?? []) as unknown as never;
+      }
+      return cancelSymbol as unknown as never;
+    });
+    vi.mocked(p.isCancel).mockImplementation((val) => val === cancelSymbol);
+
+    await runSetup();
+
+    expect(p.outro).not.toHaveBeenCalled();
+    expect(
+      trackedCliOnboardingEvents().some(
+        (e) =>
+          e.event === "cli_onboarding_cancelled" &&
+          e.properties?.reason === "mcp_selection_cancelled",
+      ),
+    ).toBe(true);
+  });
+
+  it("aborts when the GitHub docs import step does not advance", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: false,
+      cli_onboarding_enabled: true,
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mockStepConnectGitHubRepo.mockResolvedValue({ advance: true, has_connected_repo: false });
+    // Docs import refuses to advance → tracks github_docs_import_failed and returns.
+    mockStepImportGitHubDocs.mockResolvedValue({ advance: false });
+
+    await runSetup();
+
+    expect(p.outro).not.toHaveBeenCalled();
+    expect(
+      trackedCliOnboardingEvents().some(
+        (e) =>
+          e.event === "cli_onboarding_failed" &&
+          e.properties?.reason === "github_docs_import_failed",
+      ),
+    ).toBe(true);
+  });
+
+  it("returns early and tracks cancellation when the GitHub connect step does not advance", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: false,
+      cli_onboarding_enabled: true,
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mockStepConnectGitHubRepo.mockResolvedValue({ advance: false, has_connected_repo: false });
+
+    await runSetup();
+
+    expect(mockStepImportGitHubDocs).not.toHaveBeenCalled();
+    expect(p.outro).not.toHaveBeenCalled();
+    expect(
+      trackedCliOnboardingEvents().some(
+        (e) =>
+          e.event === "cli_onboarding_cancelled" &&
+          e.properties?.reason === "github_connect_not_advanced",
+      ),
+    ).toBe(true);
+  });
+
+  it("persists a fresh space_id surfaced by the GitHub connect step", async () => {
+    // After binding the onboarding deployment cfg has no space_id, and the
+    // connect step returns one → the `connectResult.space_id && !cfg.space_id`
+    // branch saves it.
+    saveConfig(makeCfg({ space_id: undefined }));
+    // Bound deployment carries no space_id so cfg.space_id stays empty until
+    // the connect step supplies one.
+    setupAuthed({
+      getDeployments: vi
+        .fn()
+        .mockResolvedValue([makeDeployment({ org_id: "o1", space_id: undefined })]),
+    });
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: false,
+      cli_onboarding_enabled: true,
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mockStepConnectGitHubRepo.mockResolvedValue({
+      advance: true,
+      has_connected_repo: false,
+      space_id: "space-from-connect",
+    });
+    mockStepImportGitHubDocs.mockResolvedValue({ advance: true });
+
+    await runSetup();
+
+    const saved = loadConfig();
+    expect(saved.space_id).toBe("space-from-connect");
+  });
+
+  it("switches mode from OSS to Cloud when --mode cloud is passed over an OSS config", async () => {
+    saveConfig(makeCfg({ mode: "oss" }));
+    setupAuthed();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup({ mode: "cloud" });
+
+    const saved = loadConfig();
+    expect(saved.mode).toBeUndefined();
+  });
+
+  it("treats docs import with no imported count as not activated", async () => {
+    // imported is true but imported_count is absent → the `(imported_count ?? 0)
+    // > 0` guard is false, so docsImported stays false (no activation event).
+    saveConfig(makeCfg());
+    setupAuthed();
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: false,
+      cli_onboarding_enabled: true,
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mockStepConnectGitHubRepo.mockResolvedValue({ advance: true, has_connected_repo: false });
+    mockStepImportGitHubDocs.mockResolvedValue({ advance: true, imported: true });
+
+    await runSetup();
+
+    const events = trackedCliOnboardingEvents().map((input) => input.event);
+    expect(events).not.toContain("cli_onboarding_docs_imported");
+    expect(events).not.toContain("cli_onboarding_activated");
+  });
+
+  it("defaults the failed count to zero in the docs-imported tracking events", async () => {
+    // docsImported is true (imported_count > 0) but failed_count is absent, so
+    // the `failed_count ?? 0` fallbacks are exercised.
+    saveConfig(makeCfg());
+    setupAuthed();
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: false,
+      cli_onboarding_enabled: true,
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mockStepConnectGitHubRepo.mockResolvedValue({ advance: true, has_connected_repo: false });
+    mockStepImportGitHubDocs.mockResolvedValue({
+      advance: true,
+      imported: true,
+      imported_count: 2,
+      task_id: "task-x",
+    });
+
+    await runSetup();
+
+    expect(trackedCliOnboardingEvents()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "cli_onboarding_docs_imported",
+          properties: expect.objectContaining({ imported_count: 2, failed_count: 0 }),
+        }),
+        expect.objectContaining({
+          event: "cli_onboarding_activated",
+          properties: expect.objectContaining({ imported_count: 2, failed_count: 0 }),
+        }),
+      ]),
+    );
+  });
+
+  it("continues to the outro when the skill install reports failure", async () => {
+    // skillCompleted is false → the `if (skillCompleted)` tracking branch is
+    // skipped, but the flow still completes (MCP/docs unaffected).
+    saveConfig(makeCfg());
+    setupAuthed();
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    mockToolSelection(["cursor"]);
+    mockInstallSkill.mockResolvedValue({ success: false });
+
+    await runSetup();
+
+    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Failed to install skill"));
+    const skillEvents = trackedCliOnboardingEvents().map((e) => e.event);
+    expect(skillEvents).not.toContain("cli_onboarding_skill_installed");
+  });
+
+  it("neither installs nor removes a detected tool that is unconfigured and left unticked", async () => {
+    // Cursor is detected but not configured, so it starts unticked. The default
+    // multiselect leaves it unticked → it lands in neither toInstall nor
+    // toRemove (the else arm of `else if (isConfigured)`).
+    saveConfig(makeCfg());
+    setupAuthed();
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    // Accept the one-shot confirm and the (preselected = none, since
+    // unconfigured) tool selection as-is.
+    installMultiselectDefault();
+
+    await runSetup();
+
+    // Nothing written to disk for cursor (not installed, not removed).
+    expect(existsSync(join(tempDir, ".cursor", "mcp.json"))).toBe(false);
+  });
+
+  it("returns no org when the org selection resolves to an unknown id", async () => {
+    // p.select returns a value that doesn't match any org → `orgs.find(...) ??
+    // null` takes the null arm and the deployment never gets saved.
+    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
+    setupAuthed({
+      getOrgs: vi.fn().mockResolvedValue([
+        { org_id: "o1", name: "Org1" },
+        { org_id: "o2", name: "Org2" },
+      ]),
+    });
+    vi.mocked(p.select).mockResolvedValueOnce("does-not-exist");
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    const saved = loadConfig();
+    expect(saved.deployment_id).toBeUndefined();
+    expect(p.outro).not.toHaveBeenCalled();
+  });
+
+  it("returns no deployment when the MCP selection resolves to an unknown id", async () => {
+    // p.select returns a value that matches no deployment → `deployments.find(...)
+    // ?? null` takes the null arm.
+    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
+    setupAuthed({
+      getDeployments: vi.fn().mockResolvedValue([
+        { deployment_id: "d1", name: "D1", org_id: "o1", org_name: "Org1" },
+        { deployment_id: "d2", name: "D2", org_id: "o1", org_name: "Org1" },
+      ]),
+    });
+    vi.mocked(p.select).mockResolvedValueOnce("nope");
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    const saved = loadConfig();
+    expect(saved.deployment_id).toBeUndefined();
+    expect(p.outro).not.toHaveBeenCalled();
+  });
+
+  it("shows the docs-imported 'Try it out' prompt when MCP and GitHub onboarding both ran", async () => {
+    // Configure an MCP tool (so mcpConfiguredThisRun is true) AND complete the
+    // GitHub onboarding step → showTryItOutPrompt is invoked with docsImported
+    // = `choices.connectGitHub && githubOnboardingDone` = true.
+    saveConfig(makeCfg());
+    setupAuthed();
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: false,
+      cli_onboarding_enabled: true,
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    mockToolSelection(["cursor"]);
+    mockStepConnectGitHubRepo.mockResolvedValue({ advance: true, has_connected_repo: true });
+    mockStepImportGitHubDocs.mockResolvedValue({
+      advance: true,
+      imported: true,
+      imported_count: 1,
+      failed_count: 0,
+    });
+
+    await runSetup();
+
+    expect(p.log.message).toHaveBeenCalledWith(
+      expect.stringContaining("summarize the most important docs"),
+    );
+  });
+});

@@ -603,4 +603,514 @@ describe("stepImportGitHubDocs", () => {
     expect(mockPromptGitHubDocsImport).not.toHaveBeenCalled();
     expect(result.advance).toBe(true);
   });
+
+  it("returns advance=false when the user cancels at the scan timeout", async () => {
+    vi.useFakeTimers();
+    mockTrpc.docImports.listImportableGithubFiles.query.mockResolvedValue([]);
+    vi.mocked(p.isCancel).mockReturnValue(true);
+
+    const resultPromise = stepImportGitHubDocs(makeCfg(), { waitForFreshDocs: true });
+    await vi.advanceTimersByTimeAsync(60_000);
+    const result = await resultPromise;
+
+    expect(result.advance).toBe(false);
+    expect(mockPromptGitHubDocsImport).not.toHaveBeenCalled();
+  });
+
+  it("returns advance=false when the doc import selection is cancelled", async () => {
+    mockTrpc.docImports.listImportableGithubFiles.query.mockResolvedValue([
+      {
+        id: "file-1",
+        file_path: "docs/setup.md",
+        repository_slug: "acme/api",
+        is_synced: false,
+      },
+    ]);
+    mockPromptGitHubDocsImport.mockResolvedValue(Symbol("cancel"));
+    vi.mocked(p.isCancel).mockReturnValue(true);
+
+    const result = await stepImportGitHubDocs(makeCfg());
+
+    expect(result.advance).toBe(false);
+    expect(mockTrpc.knowledgeStore.getBySpaceId.query).not.toHaveBeenCalled();
+    expect(mockTrpc.docImports.importGithubFiles.mutate).not.toHaveBeenCalled();
+  });
+
+  it("returns advance=false when no knowledge store is found for the deployment", async () => {
+    mockTrpc.docImports.listImportableGithubFiles.query.mockResolvedValue([
+      {
+        id: "file-1",
+        file_path: "docs/setup.md",
+        repository_slug: "acme/api",
+        is_synced: false,
+      },
+    ]);
+    mockPromptGitHubDocsImport.mockResolvedValue(["file-1"]);
+    mockTrpc.knowledgeStore.getBySpaceId.query.mockResolvedValue(null);
+
+    const result = await stepImportGitHubDocs(makeCfg());
+
+    expect(result.advance).toBe(false);
+    expect(p.log.error).toHaveBeenCalledWith("No knowledge store found for this deployment.");
+    expect(mockTrpc.docImports.importGithubFiles.mutate).not.toHaveBeenCalled();
+  });
+
+  it("returns advance=false when loading the knowledge store throws", async () => {
+    mockTrpc.docImports.listImportableGithubFiles.query.mockResolvedValue([
+      {
+        id: "file-1",
+        file_path: "docs/setup.md",
+        repository_slug: "acme/api",
+        is_synced: false,
+      },
+    ]);
+    mockPromptGitHubDocsImport.mockResolvedValue(["file-1"]);
+    mockTrpc.knowledgeStore.getBySpaceId.query.mockRejectedValue(new Error("db down"));
+
+    const result = await stepImportGitHubDocs(makeCfg());
+
+    expect(result.advance).toBe(false);
+    expect(p.log.error).toHaveBeenCalledWith(
+      "Could not load the knowledge store for this deployment.",
+    );
+    expect(mockTrpc.docImports.importGithubFiles.mutate).not.toHaveBeenCalled();
+  });
+
+  it("treats a missing task_id as a queued background import", async () => {
+    mockTrpc.docImports.listImportableGithubFiles.query.mockResolvedValue([
+      {
+        id: "file-1",
+        file_path: "docs/setup.md",
+        repository_slug: "acme/api",
+        is_synced: false,
+      },
+    ]);
+    mockPromptGitHubDocsImport.mockResolvedValue(["file-1"]);
+    mockTrpc.docImports.importGithubFiles.mutate.mockResolvedValue(null);
+
+    const result = await stepImportGitHubDocs(makeCfg());
+
+    expect(p.log.success).toHaveBeenCalledWith("Import task started.");
+    expect(p.log.info).toHaveBeenCalledWith("Your docs should finish importing in a few minutes.");
+    expect(mockTrpc.docImports.getImportStatus.query).not.toHaveBeenCalled();
+    expect(result.advance).toBe(true);
+    expect(result.imported).toBe(false);
+    expect(result.imported_count).toBe(0);
+    expect(result.queued).toBe(true);
+  });
+
+  it("returns advance=false when starting the import task throws", async () => {
+    mockTrpc.docImports.listImportableGithubFiles.query.mockResolvedValue([
+      {
+        id: "file-1",
+        file_path: "docs/setup.md",
+        repository_slug: "acme/api",
+        is_synced: false,
+      },
+    ]);
+    mockPromptGitHubDocsImport.mockResolvedValue(["file-1"]);
+    mockTrpc.docImports.importGithubFiles.mutate.mockRejectedValue(new Error("kaboom"));
+
+    const result = await stepImportGitHubDocs(makeCfg());
+
+    expect(p.log.error).toHaveBeenCalledWith("Could not start the GitHub doc import.");
+    expect(result.advance).toBe(false);
+    expect(mockTrpc.docImports.getImportStatus.query).not.toHaveBeenCalled();
+  });
+
+  it("stops watching after repeated null status responses", async () => {
+    vi.useFakeTimers();
+    mockTrpc.docImports.listImportableGithubFiles.query.mockResolvedValue([
+      {
+        id: "file-1",
+        file_path: "docs/setup.md",
+        repository_slug: "acme/api",
+        is_synced: false,
+      },
+    ]);
+    mockPromptGitHubDocsImport.mockResolvedValue(["file-1"]);
+    mockTrpc.docImports.getImportStatus.query.mockResolvedValue(null);
+
+    const resultPromise = stepImportGitHubDocs(makeCfg());
+    await vi.advanceTimersByTimeAsync(6_000);
+    const result = await resultPromise;
+
+    const spinnerInstance = vi.mocked(p.spinner).mock.results.at(-1)?.value;
+    expect(spinnerInstance?.stop).toHaveBeenCalledWith("Stopped watching import progress");
+    expect(result.advance).toBe(true);
+    expect(result.queued).toBe(true);
+    expect(result.task_id).toBe("task-1");
+  });
+
+  it("shows a zero-progress message when status arrives without detail, then completes", async () => {
+    vi.useFakeTimers();
+    mockTrpc.docImports.listImportableGithubFiles.query.mockResolvedValue([
+      {
+        id: "file-1",
+        file_path: "docs/setup.md",
+        repository_slug: "acme/api",
+        is_synced: false,
+      },
+    ]);
+    mockPromptGitHubDocsImport.mockResolvedValue(["file-1"]);
+    mockTrpc.docImports.getImportStatus.query
+      .mockResolvedValueOnce({
+        task_id: "task-1",
+        state: "PROGRESS",
+        detail: null,
+        created_at: "2026-04-24T00:00:00Z",
+        updated_at: null,
+      })
+      .mockResolvedValueOnce({
+        task_id: "task-1",
+        state: "SUCCESS",
+        detail: {
+          message: "COMPLETED",
+          knowledge_store_id: "ks-1",
+          provider: "github",
+          total: 1,
+          completed: 1,
+          failed: 0,
+          documents: [{ id: "file-1", title: "docs/setup.md", status: "SUCCESS" }],
+        },
+        created_at: "2026-04-24T00:00:00Z",
+        updated_at: "2026-04-24T00:00:02Z",
+      });
+
+    const resultPromise = stepImportGitHubDocs(makeCfg());
+    await vi.advanceTimersByTimeAsync(2_000);
+    const result = await resultPromise;
+
+    const spinnerInstance = vi.mocked(p.spinner).mock.results.at(-1)?.value;
+    expect(spinnerInstance?.message).toHaveBeenCalledWith("Importing documents... 0/1 complete");
+    expect(result.advance).toBe(true);
+  });
+
+  it("appends the failed suffix to the in-progress message while importing", async () => {
+    vi.useFakeTimers();
+    mockTrpc.docImports.listImportableGithubFiles.query.mockResolvedValue([
+      {
+        id: "file-1",
+        file_path: "docs/a.md",
+        repository_slug: "acme/api",
+        is_synced: false,
+      },
+      {
+        id: "file-2",
+        file_path: "docs/b.md",
+        repository_slug: "acme/api",
+        is_synced: false,
+      },
+    ]);
+    mockPromptGitHubDocsImport.mockResolvedValue(["file-1", "file-2"]);
+    mockTrpc.docImports.getImportStatus.query
+      .mockResolvedValueOnce({
+        task_id: "task-1",
+        state: "PROGRESS",
+        detail: {
+          message: "IN_PROGRESS",
+          knowledge_store_id: "ks-1",
+          provider: "github",
+          total: 2,
+          completed: 0,
+          failed: 1,
+          documents: [],
+        },
+        created_at: "2026-04-24T00:00:00Z",
+        updated_at: null,
+      })
+      .mockResolvedValueOnce({
+        task_id: "task-1",
+        state: "SUCCESS",
+        detail: {
+          message: "COMPLETED",
+          knowledge_store_id: "ks-1",
+          provider: "github",
+          total: 2,
+          completed: 2,
+          failed: 0,
+          documents: [],
+        },
+        created_at: "2026-04-24T00:00:00Z",
+        updated_at: "2026-04-24T00:00:02Z",
+      });
+
+    const resultPromise = stepImportGitHubDocs(makeCfg());
+    await vi.advanceTimersByTimeAsync(2_000);
+    const result = await resultPromise;
+
+    const spinnerInstance = vi.mocked(p.spinner).mock.results.at(-1)?.value;
+    expect(spinnerInstance?.message).toHaveBeenCalledWith(
+      "Importing documents... 1/2 complete, 1 failed",
+    );
+    expect(result.advance).toBe(true);
+  });
+
+  it("handles a completed task whose final status has no detail", async () => {
+    mockTrpc.docImports.listImportableGithubFiles.query.mockResolvedValue([
+      {
+        id: "file-1",
+        file_path: "docs/setup.md",
+        repository_slug: "acme/api",
+        is_synced: false,
+      },
+    ]);
+    mockPromptGitHubDocsImport.mockResolvedValue(["file-1"]);
+    mockTrpc.docImports.getImportStatus.query.mockResolvedValue({
+      task_id: "task-1",
+      state: "SUCCESS",
+      detail: null,
+      created_at: "2026-04-24T00:00:00Z",
+      updated_at: "2026-04-24T00:00:02Z",
+    });
+
+    const result = await stepImportGitHubDocs(makeCfg());
+
+    const spinnerInstance = vi.mocked(p.spinner).mock.results.at(-1)?.value;
+    expect(spinnerInstance?.stop).toHaveBeenCalledWith("Import complete");
+    expect(p.log.success).toHaveBeenCalledWith(
+      "Imported 0 docs.\nYour GitHub docs are ready, and onboarding is complete.",
+    );
+    expect(result.advance).toBe(true);
+    expect(result.imported).toBe(false);
+    expect(result.imported_count).toBe(0);
+    expect(result.failed_count).toBe(0);
+  });
+
+  it("groups files without a repository slug under 'unknown'", async () => {
+    mockTrpc.docImports.listImportableGithubFiles.query.mockResolvedValue([
+      {
+        id: "file-1",
+        file_path: "docs/orphan.md",
+        repository_slug: null,
+        is_synced: false,
+      },
+    ]);
+    mockPromptGitHubDocsImport.mockResolvedValue([]);
+
+    const result = await stepImportGitHubDocs(makeCfg());
+
+    expect(mockPromptGitHubDocsImport).toHaveBeenCalledWith({
+      repositories: [
+        {
+          slug: "unknown",
+          files: [{ id: "file-1", path: "docs/orphan.md", is_synced: false }],
+        },
+      ],
+    });
+    expect(result.advance).toBe(true);
+  });
+
+  it("keeps scanning when listing data sources throws (legacy wait path)", async () => {
+    vi.useFakeTimers();
+    mockTrpc.dataSource.list.query.mockRejectedValue(new Error("data source list failed"));
+    mockTrpc.docImports.listImportableGithubFiles.query
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([
+        {
+          id: "file-1",
+          file_path: "docs/setup.md",
+          repository_slug: "acme/api",
+          is_synced: false,
+        },
+      ]);
+    mockPromptGitHubDocsImport.mockResolvedValue(["file-1"]);
+
+    const resultPromise = stepImportGitHubDocs(makeCfg(), { waitForFreshDocs: true });
+    await vi.advanceTimersByTimeAsync(2_000);
+    const result = await resultPromise;
+
+    expect(mockPromptGitHubDocsImport).toHaveBeenCalled();
+    expect(result.advance).toBe(true);
+  });
+
+  it("treats a failed importable-files query as an empty list", async () => {
+    mockTrpc.docImports.listImportableGithubFiles.query.mockRejectedValue(
+      new Error("list importable failed"),
+    );
+
+    const result = await stepImportGitHubDocs(makeCfg());
+
+    expect(mockPromptGitHubDocsImport).not.toHaveBeenCalled();
+    expect(result.advance).toBe(true);
+    expect(result.imported).toBe(false);
+    expect(result.imported_count).toBe(0);
+  });
+
+  it("handles a non-Error thrown while loading the knowledge store", async () => {
+    mockTrpc.docImports.listImportableGithubFiles.query.mockResolvedValue([
+      {
+        id: "file-1",
+        file_path: "docs/setup.md",
+        repository_slug: "acme/api",
+        is_synced: false,
+      },
+    ]);
+    mockPromptGitHubDocsImport.mockResolvedValue(["file-1"]);
+    mockTrpc.knowledgeStore.getBySpaceId.query.mockRejectedValue("string failure");
+
+    const result = await stepImportGitHubDocs(makeCfg());
+
+    expect(result.advance).toBe(false);
+    expect(p.log.error).toHaveBeenCalledWith(
+      "Could not load the knowledge store for this deployment.",
+    );
+  });
+
+  it("handles a non-Error thrown while starting the import task", async () => {
+    mockTrpc.docImports.listImportableGithubFiles.query.mockResolvedValue([
+      {
+        id: "file-1",
+        file_path: "docs/setup.md",
+        repository_slug: "acme/api",
+        is_synced: false,
+      },
+    ]);
+    mockPromptGitHubDocsImport.mockResolvedValue(["file-1"]);
+    mockTrpc.docImports.importGithubFiles.mutate.mockRejectedValue("string failure");
+
+    const result = await stepImportGitHubDocs(makeCfg());
+
+    expect(result.advance).toBe(false);
+    expect(p.log.error).toHaveBeenCalledWith("Could not start the GitHub doc import.");
+  });
+
+  it("handles a non-Error thrown while polling import status", async () => {
+    vi.useFakeTimers();
+    mockTrpc.docImports.listImportableGithubFiles.query.mockResolvedValue([
+      {
+        id: "file-1",
+        file_path: "docs/setup.md",
+        repository_slug: "acme/api",
+        is_synced: false,
+      },
+    ]);
+    mockPromptGitHubDocsImport.mockResolvedValue(["file-1"]);
+    mockTrpc.docImports.getImportStatus.query.mockRejectedValue("string failure");
+
+    const resultPromise = stepImportGitHubDocs(makeCfg());
+    await vi.advanceTimersByTimeAsync(6_000);
+    const result = await resultPromise;
+
+    expect(result.advance).toBe(true);
+    expect(result.queued).toBe(true);
+  });
+
+  it("handles a non-Error thrown while listing data sources (legacy wait path)", async () => {
+    vi.useFakeTimers();
+    mockTrpc.dataSource.list.query.mockRejectedValue("string failure");
+    mockTrpc.docImports.listImportableGithubFiles.query
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([
+        {
+          id: "file-1",
+          file_path: "docs/setup.md",
+          repository_slug: "acme/api",
+          is_synced: false,
+        },
+      ]);
+    mockPromptGitHubDocsImport.mockResolvedValue(["file-1"]);
+
+    const resultPromise = stepImportGitHubDocs(makeCfg(), { waitForFreshDocs: true });
+    await vi.advanceTimersByTimeAsync(2_000);
+    const result = await resultPromise;
+
+    expect(mockPromptGitHubDocsImport).toHaveBeenCalled();
+    expect(result.advance).toBe(true);
+  });
+
+  it("handles a non-Error thrown while listing importable files", async () => {
+    mockTrpc.docImports.listImportableGithubFiles.query.mockRejectedValue("string failure");
+
+    const result = await stepImportGitHubDocs(makeCfg());
+
+    expect(mockPromptGitHubDocsImport).not.toHaveBeenCalled();
+    expect(result.advance).toBe(true);
+  });
+
+  it("uses the singular doc form when a single-doc import partially fails", async () => {
+    mockTrpc.docImports.listImportableGithubFiles.query.mockResolvedValue([
+      {
+        id: "file-1",
+        file_path: "docs/setup.md",
+        repository_slug: "acme/api",
+        is_synced: false,
+      },
+    ]);
+    mockPromptGitHubDocsImport.mockResolvedValue(["file-1"]);
+    mockTrpc.docImports.getImportStatus.query.mockResolvedValue({
+      task_id: "task-1",
+      state: "FAILURE",
+      detail: {
+        message: "COMPLETED_WITH_ERRORS",
+        knowledge_store_id: "ks-1",
+        provider: "github",
+        total: 1,
+        completed: 0,
+        failed: 1,
+        documents: [{ id: "file-1", title: "docs/setup.md", status: "FAILED", error: "boom" }],
+      },
+      created_at: "2026-04-24T00:00:00Z",
+      updated_at: "2026-04-24T00:00:02Z",
+    });
+
+    const result = await stepImportGitHubDocs(makeCfg());
+
+    expect(p.log.warn).toHaveBeenCalledWith(
+      "Imported 0 of 1 doc; 1 failed.\nYou can review the failed docs later, but onboarding is complete.",
+    );
+    expect(result.advance).toBe(true);
+    expect(result.failed_count).toBe(1);
+  });
+
+  it("loops back to a fresh scan when the user chooses retry after a timeout", async () => {
+    vi.useFakeTimers();
+    // Never any docs and never indexed -> each scan runs the full timeout.
+    mockTrpc.docImports.listImportableGithubFiles.query.mockResolvedValue([]);
+    mockTrpc.dataSource.list.query.mockResolvedValue([
+      { provider_slug: "github", is_indexed: false },
+    ]);
+    // First timeout -> retry (loop again); second timeout -> skip (exit).
+    vi.mocked(p.select).mockResolvedValueOnce("retry").mockResolvedValueOnce("skip");
+
+    const resultPromise = stepImportGitHubDocs(makeCfg(), { waitForFreshDocs: true });
+    await vi.advanceTimersByTimeAsync(120_000);
+    const result = await resultPromise;
+
+    expect(p.select).toHaveBeenCalledTimes(2);
+    expect(mockPromptGitHubDocsImport).not.toHaveBeenCalled();
+    expect(result.advance).toBe(true);
+  });
+
+  it("ignores data source rows without an id when waiting on expected ids", async () => {
+    vi.useFakeTimers();
+    mockTrpc.dataSource.list.query
+      .mockResolvedValueOnce([
+        { provider_slug: "github", is_indexed: false },
+        { data_source_id: "ds-fresh", provider_slug: "github", is_indexed: false },
+      ])
+      .mockResolvedValueOnce([
+        { provider_slug: "github", is_indexed: false },
+        { data_source_id: "ds-fresh", provider_slug: "github", is_indexed: true },
+      ]);
+    mockTrpc.docImports.listImportableGithubFiles.query.mockResolvedValue([
+      {
+        id: "file-1",
+        file_path: "docs/setup.md",
+        repository_slug: "acme/api",
+        is_synced: false,
+      },
+    ]);
+    mockPromptGitHubDocsImport.mockResolvedValue(["file-1"]);
+
+    const resultPromise = stepImportGitHubDocs(makeCfg(), {
+      waitForFreshDocs: true,
+      expectedDataSourceIds: ["ds-fresh"],
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    const result = await resultPromise;
+
+    expect(mockPromptGitHubDocsImport).toHaveBeenCalled();
+    expect(result.advance).toBe(true);
+  });
 });

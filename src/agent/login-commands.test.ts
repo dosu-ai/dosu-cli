@@ -96,6 +96,26 @@ describe("runLoginRequest", () => {
       reason: "mint_failed",
     });
   });
+
+  it("prints a human-readable error when minting fails (no --json)", async () => {
+    mockMintTicket.mockRejectedValue(new Error("network down"));
+
+    const code = await runLoginRequest({ json: false });
+
+    expect(code).toBe(1);
+    const joined = errSpy.mock.calls.map((c: unknown[]) => c[0]).join("\n");
+    expect(joined).toContain("Failed to mint login ticket: network down");
+  });
+
+  it("stringifies non-Error rejections when minting fails (no --json)", async () => {
+    mockMintTicket.mockRejectedValue("boom");
+
+    const code = await runLoginRequest({ json: false });
+
+    expect(code).toBe(1);
+    const joined = errSpy.mock.calls.map((c: unknown[]) => c[0]).join("\n");
+    expect(joined).toContain("Failed to mint login ticket: boom");
+  });
 });
 
 describe("runLoginCheck", () => {
@@ -195,5 +215,96 @@ describe("runLoginCheck", () => {
     const joined = logSpy.mock.calls.map((c: unknown[]) => c[0]).join("\n");
     expect(joined).toContain("Successfully authenticated");
     expect(joined).toContain("user@example.com");
+  });
+
+  it("emits a structured error when exchange throws (--json)", async () => {
+    mockExchangeTicket.mockRejectedValue(new Error("network down"));
+
+    const code = await runLoginCheck({ ticket: "tkt", json: true });
+
+    expect(code).toBe(1);
+    expect(mockSaveConfig).not.toHaveBeenCalled();
+    const payload = JSON.parse(logSpy.mock.calls[0]?.[0] as string);
+    expect(payload).toMatchObject({
+      step: "check",
+      status: "error",
+      reason: "exchange_failed",
+    });
+  });
+
+  it("prints a human-readable error when exchange throws (no --json)", async () => {
+    mockExchangeTicket.mockRejectedValue(new Error("network down"));
+
+    const code = await runLoginCheck({ ticket: "tkt", json: false });
+
+    expect(code).toBe(1);
+    const joined = errSpy.mock.calls.map((c: unknown[]) => c[0]).join("\n");
+    expect(joined).toContain("Ticket exchange failed: network down");
+  });
+
+  it("stringifies non-Error rejections when exchange throws (no --json)", async () => {
+    mockExchangeTicket.mockRejectedValue("boom");
+
+    const code = await runLoginCheck({ ticket: "tkt", json: false });
+
+    expect(code).toBe(1);
+    const joined = errSpy.mock.calls.map((c: unknown[]) => c[0]).join("\n");
+    expect(joined).toContain("Ticket exchange failed: boom");
+  });
+
+  it("falls back to defaults when authenticated response omits tokens", async () => {
+    mockExchangeTicket.mockResolvedValue({ status: "authenticated" });
+
+    const code = await runLoginCheck({ ticket: "tkt", json: true });
+
+    expect(code).toBe(0);
+    expect(mockSaveConfig).toHaveBeenCalledTimes(1);
+    const saved = mockSaveConfig.mock.calls[0]?.[0] as {
+      access_token: string;
+      refresh_token: string;
+      expires_at: number;
+    };
+    expect(saved.access_token).toBe("");
+    expect(saved.refresh_token).toBe("");
+    // 3600s fallback applied.
+    expect(saved.expires_at).toBeGreaterThan(Math.floor(Date.now() / 1000) + 3000);
+  });
+
+  it("omits the email line in non-JSON mode when no email is returned", async () => {
+    mockExchangeTicket.mockResolvedValue({
+      status: "authenticated",
+      access_token: "tok",
+      refresh_token: "ref",
+      expires_in: 3600,
+    });
+
+    const code = await runLoginCheck({ ticket: "tkt", json: false });
+
+    expect(code).toBe(0);
+    const joined = logSpy.mock.calls.map((c: unknown[]) => c[0]).join("\n");
+    expect(joined).toContain("Successfully authenticated");
+    expect(joined).not.toContain("Signed in as");
+  });
+
+  it("prints a human-readable pending message in non-JSON mode", async () => {
+    mockExchangeTicket.mockResolvedValue({ status: "pending" });
+
+    const code = await runLoginCheck({ ticket: "tkt", json: false });
+
+    expect(code).toBe(0);
+    expect(mockSaveConfig).not.toHaveBeenCalled();
+    const joined = logSpy.mock.calls.map((c: unknown[]) => c[0]).join("\n");
+    expect(joined).toContain("Still waiting for the user to complete sign-in");
+  });
+
+  it("prints a human-readable expired message in non-JSON mode", async () => {
+    mockExchangeTicket.mockResolvedValue({ status: "expired" });
+
+    const code = await runLoginCheck({ ticket: "tkt", json: false });
+
+    expect(code).toBe(1);
+    expect(mockSaveConfig).not.toHaveBeenCalled();
+    const joined = errSpy.mock.calls.map((c: unknown[]) => c[0]).join("\n");
+    expect(joined).toContain("Ticket has expired or was already used");
   });
 });
