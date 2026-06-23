@@ -1,3 +1,10 @@
+# [0.21.0](https://github.com/dosu-ai/dosu-cli/compare/v0.20.3...v0.21.0) (2026-06-23)
+
+
+### Features
+
+* per-channel update hints for npm, binary, and Homebrew installs ([#93](https://github.com/dosu-ai/dosu-cli/issues/93)) ([ea74dc9](https://github.com/dosu-ai/dosu-cli/commit/ea74dc9d4774e096cd9140dde9227e264481d09e))
+
 ## [0.20.3](https://github.com/dosu-ai/dosu-cli/compare/v0.20.2...v0.20.3) (2026-06-23)
 
 
