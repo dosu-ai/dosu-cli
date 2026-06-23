@@ -108,7 +108,7 @@ async function run(...args: string[]) {
 }
 
 function allLogOutput(): string {
-  return logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+  return logSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
 }
 
 function mockSuccessfulRefresh(accessToken: string, refreshToken: string): void {

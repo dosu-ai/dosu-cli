@@ -19,11 +19,11 @@ let tempDir: string;
 let origXDG: string | undefined;
 
 function allOutput(): string {
-  return logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+  return logSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
 }
 
 function allErrors(): string {
-  return errorSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+  return errorSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
 }
 
 async function run(...args: string[]) {

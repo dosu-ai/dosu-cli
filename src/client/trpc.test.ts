@@ -26,9 +26,9 @@ const { mockRefreshToken } = vi.hoisted(() => ({
   mockRefreshToken: vi.fn(),
 }));
 vi.mock("./client", () => ({
-  Client: vi.fn().mockImplementation(() => ({
-    refreshToken: mockRefreshToken,
-  })),
+  Client: vi.fn().mockImplementation(function () {
+    return { refreshToken: mockRefreshToken };
+  }),
 }));
 
 function makeConfig(overrides: Partial<Config> = {}): Config {

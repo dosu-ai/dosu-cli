@@ -5,7 +5,9 @@ const postWithApiKey = vi.fn();
 const getWithApiKey = vi.fn();
 
 vi.mock("../client/client", () => ({
-  Client: vi.fn(() => ({ postWithApiKey, getWithApiKey })),
+  Client: vi.fn(function () {
+    return { postWithApiKey, getWithApiKey };
+  }),
 }));
 
 import {

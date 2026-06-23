@@ -7,7 +7,7 @@ dist/
 /dosu-cli-*.tgz
 
 # Bun
-bun.lock
+# bun.lock is committed for reproducible installs (see AGENTS.md › Dependencies)
 *.bun-build
 
 # Environment — only .local files are ignored (contain personal overrides)
