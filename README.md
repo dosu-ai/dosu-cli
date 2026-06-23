@@ -21,7 +21,7 @@ Run `dosu` with no arguments any time to open the interactive menu.
 
 ### npx / npm (Recommended)
 
-Requires Node.js 18+.
+Requires Node.js 22+.
 
 ```bash
 npx @dosu/cli setup

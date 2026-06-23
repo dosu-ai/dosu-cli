@@ -2,6 +2,15 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { Config } from "../config/config";
 import { Client, SessionExpiredError } from "./client";
 
+// Mock saveConfig to avoid filesystem writes (hoisted; applies to the whole file)
+vi.mock("../config/config", async () => {
+  const actual = await vi.importActual("../config/config");
+  return {
+    ...actual,
+    saveConfig: vi.fn(),
+  };
+});
+
 // Mock fetch globally
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
@@ -78,14 +87,6 @@ describe("Client", () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({ data: "success" }));
 
       const cfg = makeConfig();
-      // Mock saveConfig to avoid filesystem writes
-      vi.mock("../config/config", async () => {
-        const actual = await vi.importActual("../config/config");
-        return {
-          ...actual,
-          saveConfig: vi.fn(),
-        };
-      });
 
       const client = new Client(cfg);
       const resp = await client.get("/test");
