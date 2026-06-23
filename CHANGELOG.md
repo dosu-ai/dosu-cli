@@ -1,3 +1,10 @@
+## [0.20.3](https://github.com/dosu-ai/dosu-cli/compare/v0.20.2...v0.20.3) (2026-06-23)
+
+
+### Bug Fixes
+
+* catch up to @dosu/api-types 0.0.10 and repair tRPC API drift ([#89](https://github.com/dosu-ai/dosu-cli/issues/89)) ([8dd9600](https://github.com/dosu-ai/dosu-cli/commit/8dd9600d7a976b66b8cfc5ee371c3cf08891378d)), closes [#10864](https://github.com/dosu-ai/dosu-cli/issues/10864) [#10276](https://github.com/dosu-ai/dosu-cli/issues/10276)
+
 ## [0.20.2](https://github.com/dosu-ai/dosu-cli/compare/v0.20.1...v0.20.2) (2026-06-23)
 
 
