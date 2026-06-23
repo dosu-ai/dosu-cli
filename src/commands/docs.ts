@@ -160,7 +160,7 @@ export function docsCommand(): Command {
       const result = await client.page.listWithTags.query({
         knowledge_store_id: ksId,
         searchTerm: opts.search,
-        tag_id: opts.tag,
+        topic_id: opts.tag,
         limit: Number.parseInt(opts.limit ?? "20", 10),
       });
       const pages = result.data;

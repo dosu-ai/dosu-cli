@@ -102,7 +102,7 @@ describe("deployments list", () => {
   it("shows 'active' for enabled=true", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce([
-      { deployment_id: "d1", name: "Prod", enabled: true, org_name: "Org" },
+      { deployment_id: "d1", name: "Prod", enabled: true, org_id: "org1" },
     ]);
     await run("list");
     expect(allOutput()).toContain("active");
@@ -111,7 +111,7 @@ describe("deployments list", () => {
   it("shows 'disabled' for enabled=false", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce([
-      { deployment_id: "d1", name: "Old", enabled: false, org_name: "Org" },
+      { deployment_id: "d1", name: "Old", enabled: false, org_id: "org1" },
     ]);
     await run("list");
     expect(allOutput()).toContain("disabled");
@@ -120,13 +120,22 @@ describe("deployments list", () => {
   it("shows current deployment hint", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce([
-      { deployment_id: "d1", name: "Test", enabled: true, org_name: "Org" },
+      { deployment_id: "d1", name: "Test", enabled: true, org_id: "org1" },
     ]);
     await run("list");
     expect(allOutput()).toContain("Current: My Deploy");
   });
 
-  it("shows '(unnamed)' for missing name and '—' for missing org_name", async () => {
+  it("shows truncated org_id", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce([
+      { deployment_id: "d1", name: "Prod", enabled: true, org_id: "0123456789abcdef" },
+    ]);
+    await run("list");
+    expect(allOutput()).toContain("01234567");
+  });
+
+  it("shows '(unnamed)' for missing name and '—' for missing org_id", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce([{ deployment_id: "d1", enabled: true }]);
     await run("list");
@@ -142,7 +151,7 @@ describe("deployments list", () => {
       deployment_id: "dep1",
     });
     mockQuery.mockResolvedValueOnce([
-      { deployment_id: "d1", name: "Test", enabled: true, org_name: "Org" },
+      { deployment_id: "d1", name: "Test", enabled: true, org_id: "org1" },
     ]);
     await run("list");
     expect(allOutput()).toContain("Current: dep1");
@@ -155,8 +164,10 @@ describe("deployments info", () => {
     mockQuery.mockResolvedValueOnce({
       deployment_id: "dep1",
       name: "My Deploy",
+      org_id: "org1",
       enabled: true,
     });
+    mockQuery.mockResolvedValueOnce({ name: "Org" });
     await run("info");
     expect(mockQuery).toHaveBeenCalledWith("workspaces.get", "dep1");
   });
@@ -166,13 +177,21 @@ describe("deployments info", () => {
     await expect(run("info")).rejects.toThrow("exit");
   });
 
+  it("exits when deployment is not found", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce(null);
+    await expect(run("info")).rejects.toThrow("exit");
+  });
+
   it("outputs valid JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce({
       deployment_id: "dep1",
       name: "My Deploy",
+      org_id: "org1",
       enabled: true,
     });
+    mockQuery.mockResolvedValueOnce({ name: "Org" });
     await run("info", "--json");
     const output = JSON.parse(allOutput());
     expect(output).toMatchObject({
@@ -188,11 +207,12 @@ describe("deployments info", () => {
       deployment_id: "dep1",
       name: "My Deploy",
       description: "Production",
-      org_name: "Org",
+      org_id: "org1",
       enabled: true,
       space_id: "sp1",
       created_at: "2024-01-01",
     });
+    mockQuery.mockResolvedValueOnce({ name: "Org" });
     await run("info");
     const output = allOutput();
     expect(output).toContain("My Deploy");
@@ -202,13 +222,28 @@ describe("deployments info", () => {
     expect(output).toContain("sp1");
   });
 
+  it("falls back to org_id when organization lookup returns null", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce({
+      deployment_id: "dep1",
+      name: "My Deploy",
+      org_id: "org1",
+      enabled: true,
+    });
+    mockQuery.mockResolvedValueOnce(null);
+    await run("info");
+    expect(allOutput()).toContain("org1");
+  });
+
   it("shows 'disabled' for disabled deployment", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce({
       deployment_id: "dep1",
       name: "My Deploy",
+      org_id: "org1",
       enabled: false,
     });
+    mockQuery.mockResolvedValueOnce({ name: "Org" });
     await run("info");
     expect(allOutput()).toContain("disabled");
   });
@@ -256,6 +291,13 @@ describe("deployments switch", () => {
     mockQuery.mockResolvedValueOnce(deployment);
     await run("switch", "new-dep");
     expect(allOutput()).toContain("New Deploy");
+  });
+
+  it("exits when deployment is not found", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce(null);
+    await expect(run("switch", "missing-dep")).rejects.toThrow("exit");
+    expect(mockSaveConfig).not.toHaveBeenCalled();
   });
 });
 

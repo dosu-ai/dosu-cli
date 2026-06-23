@@ -130,29 +130,6 @@ describe("suggest generate", () => {
   });
 });
 
-describe("suggest accept", () => {
-  it("calls suggestedDoc.generateDocBySuggestedDocId with options", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-
-    await run("accept", "s1", "--title", "Custom Title", "--instructions", "Focus on API");
-
-    expect(mockMutate).toHaveBeenCalledWith("suggestedDoc.generateDocBySuggestedDocId", {
-      knowledgeStoreId: "ks1",
-      suggestedDocId: "s1",
-      title: "Custom Title",
-      instructions: "Focus on API",
-    });
-  });
-
-  it("outputs JSON with --json", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({ page_id: "p1" });
-    await run("accept", "--json", "s1");
-    expect(JSON.parse(allOutput())).toMatchObject({ page_id: "p1" });
-  });
-});
-
 describe("suggest reject", () => {
   it("calls suggestedDoc.delete mutation", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
@@ -181,17 +158,6 @@ describe("suggest reject", () => {
     await run("reject", "s1");
 
     expect(allOutput()).toContain("Suggestion rejected");
-  });
-});
-
-describe("suggest accept (human-readable)", () => {
-  it("prints human-readable confirmation", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-
-    await run("accept", "s1");
-
-    expect(allOutput()).toContain("Document created from suggestion");
   });
 });
 

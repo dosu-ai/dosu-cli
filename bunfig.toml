@@ -1,3 +1,7 @@
 [install]
 # Supply-chain hardening: ignore package versions published less than 3 days ago.
 minimumReleaseAge = 259200
+# Exception: @dosu/api-types is first-party — its publishes are generated from our own
+# tRPC router (dosu-ai/dosu), not an external supply-chain risk — so the 3-day cool-off
+# doesn't apply. Needed to adopt the regenerated 0.0.10 types (dosu PR #11218) promptly.
+minimumReleaseAgeExcludes = ["@dosu/api-types"]

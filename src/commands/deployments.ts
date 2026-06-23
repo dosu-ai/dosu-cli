@@ -41,10 +41,10 @@ export function deploymentsCommand(): Command {
       printTable(
         ["ID", "Name", "Org", "Status"],
         deployments.map(
-          (d: { deployment_id: string; name?: string; org_name?: string; enabled?: boolean }) => [
+          (d: { deployment_id: string; name?: string; org_id?: string; enabled?: boolean }) => [
             d.deployment_id.slice(0, 8),
             d.name ?? "(unnamed)",
-            d.org_name ?? "—",
+            d.org_id ? d.org_id.slice(0, 8) : "—",
             d.enabled ? pc.green("active") : pc.dim("disabled"),
           ],
         ),
@@ -73,17 +73,24 @@ export function deploymentsCommand(): Command {
       const client = createTypedClient(cfg);
       const deployment = await client.workspaces.get.query(cfg.deployment_id);
 
+      if (!deployment) {
+        console.error(pc.red(`Deployment not found: ${cfg.deployment_id}`));
+        process.exit(1);
+      }
+
       if (opts.json) {
         printResult(deployment, opts);
         return;
       }
+
+      const org = await client.organization.getOrganizationById.query(deployment.org_id);
 
       printInfo(
         [
           ["ID", deployment.deployment_id],
           ["Name", deployment.name],
           ["Description", deployment.description],
-          ["Organization", deployment.org_name],
+          ["Organization", org?.name ?? deployment.org_id],
           ["Status", deployment.enabled ? "active" : "disabled"],
           ["Space ID", deployment.space_id],
           ["Created", formatDate(deployment.created_at)],
@@ -103,6 +110,11 @@ export function deploymentsCommand(): Command {
 
       // Validate the deployment exists and user has access
       const deployment = await client.workspaces.get.query(id);
+
+      if (!deployment) {
+        console.error(pc.red(`Deployment not found: ${id}`));
+        process.exit(1);
+      }
 
       cfg.deployment_id = deployment.deployment_id;
       cfg.deployment_name = deployment.name;
