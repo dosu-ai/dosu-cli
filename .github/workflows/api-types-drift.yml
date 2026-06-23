@@ -1,0 +1,51 @@
+name: API types drift check
+
+# Best-effort, non-blocking canary. Detects when the CLI's pinned `@dosu/api-types`
+# has fallen behind the live backend tRPC surface — the exact failure mode that left
+# the CLI ~2 months stale on 0.0.7 with broken commands that still type-checked.
+#
+# It does NOT change pinned versions. It type-checks the current source against
+# `@dosu/api-types@latest` (plus the `@trpc/*` version that release was generated
+# against — they move in lockstep) and goes red when drift appears, so a maintainer
+# can adopt the new types and fix the surfaced call sites.
+
+on:
+  schedule:
+    - cron: "0 13 * * 1" # Mondays, 13:00 UTC
+  workflow_dispatch:
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.2"
+
+      - name: Install pinned dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck against latest @dosu/api-types (with matching @trpc/*)
+        run: |
+          set -euo pipefail
+          bun add -d @dosu/api-types@latest
+          # @dosu/api-types ships declarations generated against a specific @trpc/server.
+          # Align @trpc/* to it, otherwise the router resolves to `never` (phantom errors).
+          TRPC=$(node -e "console.log(JSON.parse(require('fs').readFileSync('node_modules/@dosu/api-types/package.json','utf8')).dependencies['@trpc/server'])")
+          echo "Latest @dosu/api-types pins @trpc/server@$TRPC — aligning @trpc/* to match."
+          bun add -d "@trpc/client@$TRPC" "@trpc/server@$TRPC"
+          echo "::group::tsc --noEmit against latest types"
+          bunx tsc --noEmit
+          echo "::endgroup::"
+
+      - name: Explain on drift
+        if: failure()
+        run: |
+          echo "::warning::CLI types are drifting from the live Dosu API."
+          echo "@dosu/api-types@latest no longer type-checks against the current CLI source."
+          echo "To resolve: bump @dosu/api-types and @trpc/client/@trpc/server (lockstep) in"
+          echo "package.json, then fix the surfaced call sites. See AGENTS.md > Dependencies & Packaging."
