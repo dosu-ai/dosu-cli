@@ -2,7 +2,30 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { checkForUpdates, fetchLatestVersion, isNewerVersion } from "./update-check";
+import {
+  buildUpdateHint,
+  checkForUpdates,
+  fetchLatestVersion,
+  isNewerVersion,
+} from "./update-check";
+
+describe("buildUpdateHint", () => {
+  it("returns npm update command for npm channel", () => {
+    expect(buildUpdateHint("npm")).toBe('Run "npm update -g @dosu/cli"');
+  });
+
+  it("returns brew upgrade command for homebrew channel", () => {
+    expect(buildUpdateHint("homebrew")).toBe('Run "brew upgrade dosu"');
+  });
+
+  it("returns GitHub releases download link for binary channel", () => {
+    expect(buildUpdateHint("binary")).toContain("github.com/dosu-ai/dosu-cli/releases");
+  });
+
+  it("falls back to npm hint for unknown channel", () => {
+    expect(buildUpdateHint("unknown")).toBe('Run "npm update -g @dosu/cli"');
+  });
+});
 
 describe("isNewerVersion", () => {
   it("returns true when latest is a higher major", () => {

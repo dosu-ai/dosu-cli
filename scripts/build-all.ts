@@ -44,6 +44,7 @@ export function buildDefines(): string[] {
   const backendURL = process.env.DOSU_BACKEND_URL ?? "";
   const supabaseURL = process.env.SUPABASE_URL ?? "";
   const supabaseAnonKey = process.env.SUPABASE_ANON_KEY ?? "";
+  const installChannel = process.env.DOSU_INSTALL_CHANNEL ?? "npm";
 
   return [
     "--define",
@@ -56,6 +57,8 @@ export function buildDefines(): string[] {
     `process.env.SUPABASE_URL=${JSON.stringify(supabaseURL)}`,
     "--define",
     `process.env.SUPABASE_ANON_KEY=${JSON.stringify(supabaseAnonKey)}`,
+    "--define",
+    `process.env.DOSU_INSTALL_CHANNEL=${JSON.stringify(installChannel)}`,
   ];
 }
 
@@ -64,9 +67,16 @@ async function main() {
   if (!existsSync(distDir)) mkdirSync(distDir, { recursive: true });
 
   const defines = buildDefines();
-  console.log(`Building for ${TARGETS.length} platforms...\n`);
+  const outputSuffix = process.env.DOSU_OUTPUT_SUFFIX ?? "";
+  console.log(
+    `Building for ${TARGETS.length} platforms...${outputSuffix ? ` (suffix: ${outputSuffix})` : ""}\n`,
+  );
 
-  for (const { target, output } of TARGETS) {
+  for (const { target, output: baseOutput } of TARGETS) {
+    // Insert suffix before the file extension (.exe) or append to the end.
+    const output = baseOutput.includes(".")
+      ? baseOutput.replace(/(\.[^.]+)$/, `${outputSuffix}$1`)
+      : `${baseOutput}${outputSuffix}`;
     const outPath = join(distDir, output);
     console.log(`  Building ${target} → ${output}`);
 
