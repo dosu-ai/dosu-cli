@@ -1,3 +1,10 @@
+## [0.20.2](https://github.com/dosu-ai/dosu-cli/compare/v0.20.1...v0.20.2) (2026-06-23)
+
+
+### Bug Fixes
+
+* Supply-chain hardening, Vitest 4 + TypeScript 6, and docs ([#88](https://github.com/dosu-ai/dosu-cli/issues/88)) ([bf2389f](https://github.com/dosu-ai/dosu-cli/commit/bf2389f5d29f795551ed37c5ae4ae99690ceda7b))
+
 ## [0.20.1](https://github.com/dosu-ai/dosu-cli/compare/v0.20.0...v0.20.1) (2026-06-17)
 
 
