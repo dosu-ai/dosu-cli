@@ -14,6 +14,9 @@ function readPackageVersion(): string {
 
 export const VERSION = process.env.DOSU_VERSION ?? readPackageVersion();
 
+/** Distribution channel baked in at build time. One of: "npm", "binary", "homebrew". */
+export const INSTALL_CHANNEL = process.env.DOSU_INSTALL_CHANNEL ?? "npm";
+
 /**
  * Returns a formatted version string, e.g. "dosu v0.3.1".
  */

@@ -12,7 +12,7 @@ import { join } from "node:path";
 import pc from "picocolors";
 import { getConfigDir } from "../config/config";
 import { logger } from "../debug/logger";
-import { VERSION } from "./version";
+import { INSTALL_CHANNEL, VERSION } from "./version";
 
 const CACHE_FILENAME = "update-check.json";
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -90,10 +90,16 @@ export async function fetchLatestVersion(): Promise<string | null> {
   }
 }
 
+export function buildUpdateHint(channel: string): string {
+  if (channel === "homebrew") return 'Run "brew upgrade dosu"';
+  if (channel === "binary") return "Download from https://github.com/dosu-ai/dosu-cli/releases";
+  return 'Run "npm update -g @dosu/cli"';
+}
+
 function displayNotice(current: string, latest: string): void {
   const msg =
     `\n${pc.yellow(`  Update available: ${current} → ${latest}`)}\n` +
-    `${pc.dim('  Run "npm update -g @dosu/cli" or visit https://github.com/dosu-ai/dosu-cli/releases')}\n`;
+    `${pc.dim(`  ${buildUpdateHint(INSTALL_CHANNEL)}`)}\n`;
   console.error(msg);
 }
 

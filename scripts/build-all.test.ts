@@ -29,11 +29,13 @@ describe("buildDefines", () => {
     envBackup.DOSU_BACKEND_URL = process.env.DOSU_BACKEND_URL;
     envBackup.SUPABASE_URL = process.env.SUPABASE_URL;
     envBackup.SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+    envBackup.DOSU_INSTALL_CHANNEL = process.env.DOSU_INSTALL_CHANNEL;
     delete process.env.DOSU_VERSION;
     delete process.env.DOSU_WEB_APP_URL;
     delete process.env.DOSU_BACKEND_URL;
     delete process.env.SUPABASE_URL;
     delete process.env.SUPABASE_ANON_KEY;
+    delete process.env.DOSU_INSTALL_CHANNEL;
   });
 
   afterEach(() => {
@@ -63,6 +65,7 @@ describe("buildDefines", () => {
     process.env.DOSU_BACKEND_URL = "https://api.test.dev";
     process.env.SUPABASE_URL = "https://db.test.dev";
     process.env.SUPABASE_ANON_KEY = "anon-test-key";
+    process.env.DOSU_INSTALL_CHANNEL = "homebrew";
 
     const defines = buildDefines();
     expect(defines).toEqual([
@@ -76,6 +79,8 @@ describe("buildDefines", () => {
       'process.env.SUPABASE_URL="https://db.test.dev"',
       "--define",
       'process.env.SUPABASE_ANON_KEY="anon-test-key"',
+      "--define",
+      'process.env.DOSU_INSTALL_CHANNEL="homebrew"',
     ]);
   });
 
@@ -85,15 +90,21 @@ describe("buildDefines", () => {
     expect(defines[1]).toBe('process.env.DOSU_VERSION="has\\"quotes"');
   });
 
-  it("should return exactly 10 elements (5 pairs of --define + value)", () => {
+  it("should return exactly 12 elements (6 pairs of --define + value)", () => {
     const defines = buildDefines();
-    expect(defines).toHaveLength(10);
+    expect(defines).toHaveLength(12);
     expect(defines.filter((_, i) => i % 2 === 0)).toEqual([
       "--define",
       "--define",
       "--define",
       "--define",
       "--define",
+      "--define",
     ]);
+  });
+
+  it("should default INSTALL_CHANNEL to npm when env var is not set", () => {
+    const defines = buildDefines();
+    expect(defines).toContain('process.env.DOSU_INSTALL_CHANNEL="npm"');
   });
 });
