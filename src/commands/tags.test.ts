@@ -67,37 +67,26 @@ afterEach(() => {
 });
 
 describe("tags list", () => {
-  it("calls tag.listKnowledgeStoreTags with knowledge_store_id", async () => {
+  it("calls topic.listTopicsByKnowledgeStore with knowledge_store_id", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "t1", name: "API", description: "API docs" }]);
+    mockQuery.mockResolvedValueOnce([{ topic_id: "t1", name: "API", description: "API docs" }]);
 
     await run("list");
 
     const listCall = mockQuery.mock.calls[1]; // [0] is knowledgeStore.getBySpaceId
-    expect(listCall[0]).toBe("tag.listKnowledgeStoreTags");
+    expect(listCall[0]).toBe("topic.listTopicsByKnowledgeStore");
     expect(listCall[1]).toEqual({ knowledge_store_id: "ks1" });
-  });
-
-  it("uses pagination variant with --search", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({ data: [] });
-
-    await run("list", "--search", "api");
-
-    const listCall = mockQuery.mock.calls[1];
-    expect(listCall[0]).toBe("tag.listKnowledgeStoreTagsWithPagination");
-    expect(listCall[1].searchTerm).toBe("api");
   });
 
   it("outputs valid JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "t1", name: "API" }]);
+    mockQuery.mockResolvedValueOnce([{ topic_id: "t1", name: "API" }]);
 
     await run("list", "--json");
 
     const output = JSON.parse(allOutput());
     expect(output).toHaveLength(1);
-    expect(output[0]).toMatchObject({ id: "t1", name: "API" });
+    expect(output[0]).toMatchObject({ topic_id: "t1", name: "API" });
   });
 
   it("prints message for empty results", async () => {
@@ -110,148 +99,15 @@ describe("tags list", () => {
   });
 });
 
-describe("tags create", () => {
-  it("calls tag.create with correct input", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({ id: "t1" });
-
-    await run("create", "--name", "API", "--description", "API docs");
-
-    expect(mockMutate).toHaveBeenCalledWith("tag.create", {
-      knowledge_store_id: "ks1",
-      name: "API",
-      description: "API docs",
-    });
-  });
-
-  it("outputs JSON with --json", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({ id: "t1", name: "API" });
-
-    await run("create", "--json", "--name", "API");
-
-    expect(JSON.parse(allOutput())).toMatchObject({ id: "t1", name: "API" });
-  });
-
-  it("prints human-readable confirmation", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({ id: "t1" });
-
-    await run("create", "--name", "API");
-
-    expect(allOutput()).toContain('Tag "API" created');
-  });
-});
-
-describe("tags update", () => {
-  it("calls tag.update with correct input", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-
-    await run("update", "t1", "--name", "Updated");
-
-    expect(mockMutate).toHaveBeenCalledWith("tag.update", {
-      id: "t1",
-      knowledge_store_id: "ks1",
-      name: "Updated",
-      description: undefined,
-    });
-  });
-
-  it("outputs JSON with --json", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({ id: "t1", name: "Updated" });
-
-    await run("update", "--json", "t1", "--name", "Updated");
-
-    expect(JSON.parse(allOutput())).toMatchObject({ id: "t1", name: "Updated" });
-  });
-
-  it("prints human-readable confirmation", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-
-    await run("update", "t1", "--name", "Updated");
-
-    expect(allOutput()).toContain("Tag updated");
-  });
-});
-
-describe("tags delete", () => {
-  it("calls tag.delete mutation", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-
-    await run("delete", "tag-id-1");
-
-    expect(mockMutate).toHaveBeenCalledWith("tag.delete", "tag-id-1");
-  });
-
-  it("outputs JSON with --json", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-
-    await run("delete", "--json", "tag-id-1");
-
-    const output = JSON.parse(allOutput());
-    expect(output.success).toBe(true);
-    expect(output.id).toBe("tag-id-1");
-  });
-
-  it("prints human-readable confirmation", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-
-    await run("delete", "tag-id-1");
-
-    expect(allOutput()).toContain("Tag deleted");
-  });
-});
-
-describe("tags add", () => {
-  it("calls tag.addToPage with tag_id and page_id", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-
-    await run("add", "tag1", "page1");
-
-    expect(mockMutate).toHaveBeenCalledWith("tag.addToPage", {
-      tag_id: "tag1",
-      page_id: "page1",
-    });
-  });
-
-  it("outputs JSON with --json", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-
-    await run("add", "--json", "tag1", "page1");
-
-    const output = JSON.parse(allOutput());
-    expect(output.success).toBe(true);
-    expect(output.tag_id).toBe("tag1");
-    expect(output.page_id).toBe("page1");
-  });
-
-  it("prints human-readable confirmation", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-
-    await run("add", "tag1", "page1");
-
-    expect(allOutput()).toContain("Tag added to page");
-  });
-});
-
 describe("tags remove", () => {
-  it("calls tag.removeFromPage", async () => {
+  it("calls topic.removeFromPage", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockMutate.mockResolvedValueOnce({});
 
     await run("remove", "tag1", "page1");
 
-    expect(mockMutate).toHaveBeenCalledWith("tag.removeFromPage", {
-      tag_id: "tag1",
+    expect(mockMutate).toHaveBeenCalledWith("topic.removeFromPage", {
+      topic_id: "tag1",
       page_id: "page1",
     });
   });
@@ -279,15 +135,15 @@ describe("tags remove", () => {
 });
 
 describe("tags pages", () => {
-  it("calls tag.getPagesByTagId with pagination", async () => {
+  it("calls topic.getPagesByTopicId with pagination", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce({ data: [{ id: "p1", title: "Doc A" }] });
 
     await run("pages", "tag1", "--limit", "5");
 
     const call = mockQuery.mock.calls[1];
-    expect(call[0]).toBe("tag.getPagesByTagId");
-    expect(call[1].tag_id).toBe("tag1");
+    expect(call[0]).toBe("topic.getPagesByTopicId");
+    expect(call[1].topic_id).toBe("tag1");
     expect(call[1].limit).toBe(5);
   });
 

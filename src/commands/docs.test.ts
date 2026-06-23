@@ -133,7 +133,7 @@ describe("docs list", () => {
 
     const input = mockQuery.mock.calls[1][1];
     expect(input.searchTerm).toBe("api");
-    expect(input.tag_id).toBe("t1");
+    expect(input.topic_id).toBe("t1");
   });
 
   it("outputs valid JSON with --json", async () => {

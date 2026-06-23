@@ -108,12 +108,12 @@ Once authenticated against a deployment, you can drive the Dosu platform without
 | `dosu ask` | Ask a question and get an AI-generated answer |
 | `dosu knowledge` | Search and browse your knowledge base |
 | `dosu docs` | Manage documents (list, create, update, import, publish, AI-generate) |
-| `dosu suggest` | Review and accept AI document suggestions |
+| `dosu suggest` | Review and manage AI document suggestions |
 | `dosu threads` | List and manage conversation threads |
 | `dosu review` | Document review workflow |
 | `dosu sources` | Manage connected data sources (list, sync, update) |
 | `dosu integrations` | List and inspect platform integrations (Slack, GitHub, …) |
-| `dosu tags` | Manage knowledge base tags |
+| `dosu tags` | List knowledge base tags and tagged pages |
 | `dosu members` | Manage team members and access requests |
 | `dosu org` | Show organization information |
 | `dosu deployments` | List / show / switch deployments |

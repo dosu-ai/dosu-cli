@@ -100,33 +100,6 @@ export function suggestCommand(): Command {
     });
 
   cmd
-    .command("accept")
-    .description("Accept a suggestion and create a document")
-    .argument("<id>", "Suggestion ID")
-    .option("--title <title>", "Custom title for the document")
-    .option("--instructions <text>", "Custom instructions for generation")
-    .option("--json", "Output as JSON")
-    .action(async (id: string, opts: { title?: string; instructions?: string; json?: boolean }) => {
-      const cfg = requireConfig();
-      const client = createTypedClient(cfg);
-      // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const ksId = await getKnowledgeStoreId(client, cfg.space_id!);
-
-      const result = await client.suggestedDoc.generateDocBySuggestedDocId.mutate({
-        knowledgeStoreId: ksId,
-        suggestedDocId: id,
-        title: opts.title,
-        instructions: opts.instructions,
-      });
-
-      if (opts.json) {
-        printResult(result, opts);
-        return;
-      }
-      console.log(pc.green("Document created from suggestion."));
-    });
-
-  cmd
     .command("reject")
     .description("Reject a suggestion")
     .argument("<id>", "Suggestion ID")
