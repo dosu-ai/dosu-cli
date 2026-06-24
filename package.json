@@ -1,6 +1,6 @@
 {
   "name": "@dosu/cli",
-  "version": "0.20.3",
+  "version": "0.21.0",
   "type": "module",
   "description": "Dosu CLI - Manage MCP servers for AI tools",
   "license": "MIT",
@@ -21,7 +21,7 @@
     "dev:local": "DOSU_DEV=true bun run src/index.ts",
     "build": "bun --env-file=.env.production run scripts/build-compile.ts",
     "build:dev": "bun --env-file=.env.development run scripts/build-compile.ts",
-    "build:npm": "bun --env-file=.env.production run scripts/build-npm.ts",
+    "build:npm": "DOSU_INSTALL_CHANNEL=npm bun --env-file=.env.production run scripts/build-npm.ts",
     "build:all": "bun --env-file=.env.production run scripts/build-all.ts",
     "test": "bunx vitest run",
     "test:watch": "bunx vitest",
