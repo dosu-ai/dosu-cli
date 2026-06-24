@@ -421,7 +421,7 @@ describe("GitHubDocsImportPrompt", () => {
     prompt.handleRawKeypress("a", undefined);
     expect(prompt.value).toEqual(["f-4"]);
     prompt.handleRawKeypress("a", undefined);
-    expect(prompt.value.sort()).toEqual(["f-1", "f-2", "f-4"]);
+    expect(prompt.value?.toSorted()).toEqual(["f-1", "f-2", "f-4"]);
   });
 
   it("renders inactive repo rows with plain labels and no hint", () => {
