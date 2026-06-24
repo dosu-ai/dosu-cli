@@ -486,11 +486,17 @@ async function openBrowserForSetup(cfg: Config, onboardingRunID?: string): Promi
     const { startOAuthFlow } = await import("../auth/flow");
     const s = p.spinner();
     s.start("Waiting for authentication...");
-    const token = await startOAuthFlow(
+    const result = await startOAuthFlow(
       undefined,
       "/cli/auth",
       onboardingRunID ? { onboarding_run_id: onboardingRunID } : {},
     );
+    if (!result.browserOpened) {
+      s.stop("Could not open a browser");
+      p.log.error("Run 'dosu login --no-browser' from the terminal to authenticate over SSH.");
+      return null;
+    }
+    const token = result.token;
     s.stop("Authenticated");
     logger.info("setup", "Browser auth completed");
 

@@ -115,7 +115,13 @@ async function handleAuthenticate(cfg: ReturnType<typeof loadConfig>): Promise<v
     const { startOAuthFlow } = await import("../auth/flow");
     const s = p.spinner();
     s.start("Waiting for authentication...");
-    const token = await startOAuthFlow(undefined, "/cli/auth");
+    const result = await startOAuthFlow(undefined, "/cli/auth");
+    if (!result.browserOpened) {
+      s.stop("Could not open a browser");
+      p.log.error("Run 'dosu login --no-browser' from the terminal to authenticate over SSH.");
+      return;
+    }
+    const token = result.token;
     s.stop("Authenticated");
 
     cfg.access_token = token.access_token;

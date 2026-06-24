@@ -309,9 +309,8 @@ describe("runTUI", () => {
     mockConfirm.mockResolvedValueOnce(true);
 
     mockStartOAuthFlow.mockResolvedValueOnce({
-      access_token: "new-tok",
-      refresh_token: "new-ref",
-      expires_in: 3600,
+      browserOpened: true,
+      token: { access_token: "new-tok", refresh_token: "new-ref", expires_in: 3600 },
     });
 
     mockSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
@@ -353,6 +352,21 @@ describe("runTUI", () => {
     expect(p.log.error).toHaveBeenCalledWith(
       "Authentication failed: OAuth state expired. Run `dosu login` again.",
     );
+  });
+
+  it("shows error message and skips save when browser cannot be opened", async () => {
+    writeRealConfig(makeCfg({ access_token: "" }));
+    mockIsCancel.mockReturnValue(false);
+    mockConfirm.mockResolvedValueOnce(true);
+    mockStartOAuthFlow.mockResolvedValueOnce({ browserOpened: false });
+    mockSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    expect(p.log.error).toHaveBeenCalledWith(
+      "Run 'dosu login --no-browser' from the terminal to authenticate over SSH.",
+    );
+    expect(readRealConfig().access_token).toBe("");
   });
 
   it("does nothing when user cancels confirm prompt", async () => {
