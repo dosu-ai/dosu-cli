@@ -648,6 +648,19 @@ describe("showTryItOutPrompt", () => {
       expect.stringContaining("summarize the most important docs"),
     );
   });
+
+  it("points to the codebase audit in cloud mode", () => {
+    showTryItOutPrompt({ docsImported: false, hasAgentsMd: false });
+
+    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("audit this repo"));
+    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("dosu audit"));
+  });
+
+  it("omits the audit pointer in OSS mode", () => {
+    showTryItOutPrompt({ mode: MODE_OSS });
+
+    expect(p.log.message).not.toHaveBeenCalledWith(expect.stringContaining("audit this repo"));
+  });
 });
 
 // ---------------------------------------------------------------------------
