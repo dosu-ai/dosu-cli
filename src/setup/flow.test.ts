@@ -125,7 +125,6 @@ vi.mock("./github-doc-import-step", () => ({
 import * as p from "@clack/prompts";
 import { OAuthCallbackError } from "../auth/errors";
 import { startOAuthFlow } from "../auth/flow";
-import type { TokenResponse } from "../auth/server";
 import { Client } from "../client/client";
 import type { Config } from "../config/config";
 import { loadConfig, MODE_OSS, saveConfig } from "../config/config";
@@ -783,10 +782,9 @@ describe("runSetup integration", () => {
     // No pre-existing config (fresh temp dir), so needs login. No mode prompt anymore.
     vi.mocked(p.confirm).mockResolvedValue(true);
     mockStartOAuthFlow.mockResolvedValue({
-      access_token: "oauth-tok",
-      refresh_token: "oauth-ref",
-      expires_in: 7200,
-    } as TokenResponse);
+      browserOpened: true,
+      token: { access_token: "oauth-tok", refresh_token: "oauth-ref", expires_in: 7200 },
+    });
 
     const clientMethods = setupAuthenticatedClient();
     clientMethods.createAPIKey.mockResolvedValue({ api_key: "minted-key" });
@@ -799,6 +797,19 @@ describe("runSetup integration", () => {
     const savedCfg = loadConfig();
     expect(savedCfg.access_token).toBe("oauth-tok");
     expect(savedCfg.refresh_token).toBe("oauth-ref");
+  });
+
+  it("returns null and shows error when browser cannot be opened during OAuth", async () => {
+    vi.mocked(p.confirm).mockResolvedValue(true);
+    mockStartOAuthFlow.mockResolvedValue({ browserOpened: false });
+
+    const result = await runSetup();
+
+    expect(result).toBeUndefined();
+    expect(p.log.error).toHaveBeenCalledWith(
+      "Run 'dosu login --no-browser' from the terminal to authenticate over SSH.",
+    );
+    expect(loadConfig().access_token).toBe("");
   });
 
   it("uses deploymentID option to resolve deployment directly", async () => {
@@ -1637,10 +1648,9 @@ describe("runSetup checkpoint behavior", () => {
     );
     vi.mocked(p.confirm).mockResolvedValue(true);
     mockStartOAuthFlow.mockResolvedValue({
-      access_token: "tok-fresh",
-      refresh_token: "ref-fresh",
-      expires_in: 3600,
-    } as TokenResponse);
+      browserOpened: true,
+      token: { access_token: "tok-fresh", refresh_token: "ref-fresh", expires_in: 3600 },
+    });
     setupAuthed();
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
 

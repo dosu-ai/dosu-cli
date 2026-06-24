@@ -98,7 +98,7 @@ describe("startOAuthFlow", () => {
     resolveToken(expectedToken);
 
     const result = await flowPromise;
-    expect(result).toEqual(expectedToken);
+    expect(result).toEqual({ browserOpened: true, token: expectedToken });
   });
 
   it("closes the server after successful completion", async () => {
@@ -112,7 +112,8 @@ describe("startOAuthFlow", () => {
     await flowReady();
 
     resolveToken(token);
-    await flowPromise;
+    const result = await flowPromise;
+    expect(result).toMatchObject({ browserOpened: true });
 
     expect(mockClose).toHaveBeenCalledOnce();
   });
@@ -143,6 +144,15 @@ describe("startOAuthFlow", () => {
     expect(mockClose).toHaveBeenCalledOnce();
   });
 
+  it("returns browserOpened:false and closes the server when open() throws", async () => {
+    mockOpenDefault.mockRejectedValueOnce(new Error("Executable not found in $PATH: xdg-open"));
+
+    const result = await startOAuthFlow();
+
+    expect(result).toEqual({ browserOpened: false });
+    expect(mockClose).toHaveBeenCalledOnce();
+  });
+
   it("opens the browser with the correct auth URL", async () => {
     const flowPromise = startOAuthFlow();
     await flowReady();
@@ -154,7 +164,8 @@ describe("startOAuthFlow", () => {
     );
 
     resolveToken({ access_token: "a", refresh_token: "r", expires_in: 1 });
-    await flowPromise;
+    const r = await flowPromise;
+    expect(r).toMatchObject({ browserOpened: true });
   });
 
   it("includes extra auth URL params", async () => {
@@ -167,7 +178,8 @@ describe("startOAuthFlow", () => {
     expect(calledURL).toContain("onboarding_run_id=run-123");
 
     resolveToken({ access_token: "a", refresh_token: "r", expires_in: 1 });
-    await flowPromise;
+    const r = await flowPromise;
+    expect(r).toMatchObject({ browserOpened: true });
   });
 
   it("clears the timeout timer after successful token receipt", async () => {
@@ -208,21 +220,16 @@ describe("startOAuthFlow", () => {
     setTimeoutSpy.mockRestore();
   });
 
-  it("prints the auth URL and continues waiting when browser cannot be opened", async () => {
+  it("does not print anything and returns immediately when browser cannot be opened", async () => {
     mockOpenDefault.mockRejectedValueOnce(new Error("Executable not found in $PATH: xdg-open"));
     const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
-    const flowPromise = startOAuthFlow();
-    await flowReady();
+    const result = await startOAuthFlow();
 
-    // URL should have been printed
-    const printed = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
-    expect(printed).toContain("https://app.dosu.dev/cli/auth");
+    expect(result).toEqual({ browserOpened: false });
+    // No URL printed — the caller (cli.ts / device flow) handles messaging
+    expect(consoleSpy).not.toHaveBeenCalled();
     consoleSpy.mockRestore();
-
-    // flow still resolves when the token arrives
-    resolveToken({ access_token: "a", refresh_token: "r", expires_in: 1 });
-    await expect(flowPromise).resolves.toMatchObject({ access_token: "a" });
   });
 
   it("uses the configured web app URL for building the auth URL", async () => {
@@ -236,6 +243,7 @@ describe("startOAuthFlow", () => {
     expect(calledURL).toContain("http://localhost:3001/cli/auth?");
 
     resolveToken({ access_token: "a", refresh_token: "r", expires_in: 1 });
-    await flowPromise;
+    const r = await flowPromise;
+    expect(r).toMatchObject({ browserOpened: true });
   });
 });

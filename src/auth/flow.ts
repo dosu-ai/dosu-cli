@@ -6,18 +6,24 @@ import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
 import { startCallbackServer, type TokenResponse } from "./server";
 
+export type OAuthFlowResult =
+  | { browserOpened: true; token: TokenResponse }
+  | { browserOpened: false };
+
 /**
  * Starts the browser-based OAuth flow.
  * 1. Starts a local HTTP server on a random port
  * 2. Opens the browser to the Dosu web app login page
  * 3. Waits for the web app to redirect back with the token
- * 4. Returns the token or throws
+ * 4. Returns { token, browserOpened: true } on success, or
+ *    { browserOpened: false } immediately if the browser could not be opened
+ *    (caller should fall through to the device/ticket flow).
  */
 export async function startOAuthFlow(
   signal?: AbortSignal,
   path: string = "/cli/auth",
   params: Record<string, string> = {},
-): Promise<TokenResponse> {
+): Promise<OAuthFlowResult> {
   const { server, tokenPromise } = await startCallbackServer();
 
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -43,9 +49,9 @@ export async function startOAuthFlow(
     }
 
     if (!browserOpened) {
-      console.log("\nCould not open a browser automatically.");
-      console.log("Please open this URL in your browser to log in:\n");
-      console.log(`  ${authURL}\n`);
+      logger.debug("auth.flow", "Browser unavailable — returning to caller for fallback");
+      return { browserOpened: false };
+      // Note: server.close() is called by the finally block below
     }
 
     // 8 min < Supabase's ~10 min OAuth state TTL, so we surface a useful
@@ -75,7 +81,7 @@ export async function startOAuthFlow(
 
     const token = await Promise.race([tokenPromise, timeout, abort]);
     logger.info("auth.flow", "Token received");
-    return token;
+    return { browserOpened: true, token };
   } finally {
     clearTimeout(timeoutId);
     server.close();

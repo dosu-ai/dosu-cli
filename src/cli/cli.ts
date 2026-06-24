@@ -79,65 +79,100 @@ export function createProgram(): Command {
     )
     .option("--check <ticket>", "Exchange a login ticket created with --request for a token")
     .option("--json", "Emit machine-readable JSON output (use with --request or --check)")
-    .action(async (opts: { request?: boolean; check?: string; json?: boolean }) => {
-      if (opts.request && opts.check !== undefined) {
-        console.error("--request and --check cannot be combined.");
-        process.exitCode = 2;
-        return;
-      }
-
-      if (opts.request) {
-        const { runLoginRequest } = await import("../agent/login-commands");
-        process.exitCode = await runLoginRequest({ json: opts.json === true });
-        return;
-      }
-
-      if (opts.check !== undefined) {
-        const { runLoginCheck } = await import("../agent/login-commands");
-        process.exitCode = await runLoginCheck({
-          ticket: opts.check,
-          json: opts.json === true,
-        });
-        return;
-      }
-
-      const cfg = loadConfig();
-      if (isAuthenticated(cfg)) {
-        if (!isTokenExpired(cfg)) {
-          console.log("You are already logged in.");
-          console.log("Run 'dosu logout' first to re-authenticate.");
+    .option("--no-browser", "Skip browser — print a URL to open on another machine and wait")
+    .action(
+      async (opts: { request?: boolean; check?: string; json?: boolean; browser: boolean }) => {
+        if (opts.request && opts.check !== undefined) {
+          console.error("--request and --check cannot be combined.");
+          process.exitCode = 2;
           return;
         }
-        if (await ensureFreshSession(cfg)) {
-          console.log("Session refreshed.");
-          console.log(`Credentials saved to ${getConfigPath()}`);
+
+        if (opts.request) {
+          const { runLoginRequest } = await import("../agent/login-commands");
+          process.exitCode = await runLoginRequest({ json: opts.json === true });
           return;
         }
-      }
 
-      console.log("Opening browser for authentication...");
-      const { startOAuthFlow } = await import("../auth/flow");
-      const { OAuthCallbackError } = await import("../auth/errors");
-      let token: Awaited<ReturnType<typeof startOAuthFlow>>;
-      try {
-        token = await startOAuthFlow();
-      } catch (err) {
-        if (err instanceof OAuthCallbackError) {
-          console.error(err.userMessage);
-          process.exitCode = 1;
+        if (opts.check !== undefined) {
+          const { runLoginCheck } = await import("../agent/login-commands");
+          process.exitCode = await runLoginCheck({
+            ticket: opts.check,
+            json: opts.json === true,
+          });
           return;
         }
-        throw err;
-      }
 
-      cfg.access_token = token.access_token;
-      cfg.refresh_token = token.refresh_token;
-      cfg.expires_at = Math.floor(Date.now() / 1000) + token.expires_in;
-      saveConfig(cfg);
+        const cfg = loadConfig();
+        if (isAuthenticated(cfg)) {
+          if (!isTokenExpired(cfg)) {
+            console.log("You are already logged in.");
+            console.log("Run 'dosu logout' first to re-authenticate.");
+            return;
+          }
+          if (await ensureFreshSession(cfg)) {
+            console.log("Session refreshed.");
+            console.log(`Credentials saved to ${getConfigPath()}`);
+            return;
+          }
+        }
 
-      console.log("Successfully authenticated!");
-      console.log(`Credentials saved to ${getConfigPath()}`);
-    });
+        const { isHeadless } = await import("../auth/headless");
+        const useDeviceFlow = !opts.browser || isHeadless();
+
+        const { OAuthCallbackError } = await import("../auth/errors");
+
+        let token: { access_token: string; refresh_token: string; expires_in: number };
+
+        if (useDeviceFlow) {
+          const { startDeviceFlow } = await import("../auth/device");
+          try {
+            token = await startDeviceFlow();
+          } catch (err) {
+            console.error(err instanceof Error ? err.message : String(err));
+            process.exitCode = 1;
+            return;
+          }
+        } else {
+          console.log("Opening browser for authentication...");
+          const { startOAuthFlow } = await import("../auth/flow");
+          let result: Awaited<ReturnType<typeof startOAuthFlow>>;
+          try {
+            result = await startOAuthFlow();
+          } catch (err) {
+            if (err instanceof OAuthCallbackError) {
+              console.error(err.userMessage);
+            } else {
+              console.error(err instanceof Error ? err.message : String(err));
+            }
+            process.exitCode = 1;
+            return;
+          }
+
+          if (!result.browserOpened) {
+            // Browser unavailable — fall through to device flow
+            const { startDeviceFlow } = await import("../auth/device");
+            try {
+              token = await startDeviceFlow();
+            } catch (err) {
+              console.error(err instanceof Error ? err.message : String(err));
+              process.exitCode = 1;
+              return;
+            }
+          } else {
+            token = result.token;
+          }
+        }
+
+        cfg.access_token = token.access_token;
+        cfg.refresh_token = token.refresh_token;
+        cfg.expires_at = Math.floor(Date.now() / 1000) + token.expires_in;
+        saveConfig(cfg);
+
+        console.log("Successfully authenticated!");
+        console.log(`Credentials saved to ${getConfigPath()}`);
+      },
+    );
 
   // logout
   program
