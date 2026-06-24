@@ -47,7 +47,7 @@ export async function promptGitHubDocsImport({
 }
 /* v8 ignore stop */
 
-export class GitHubDocsImportPrompt extends Prompt {
+export class GitHubDocsImportPrompt extends Prompt<string[]> {
   repositories: GitHubImportRepositoryOption[];
   mode: PromptMode = "repos";
   repoCursor = 0;

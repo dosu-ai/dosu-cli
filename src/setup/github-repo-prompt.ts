@@ -61,7 +61,7 @@ export async function promptGitHubRepositories({
 }
 /* v8 ignore stop */
 
-export class GitHubRepoPrompt extends Prompt {
+export class GitHubRepoPrompt extends Prompt<ActionValue | string[]> {
   options: PromptOption[];
   message: string;
   maxItems?: number;

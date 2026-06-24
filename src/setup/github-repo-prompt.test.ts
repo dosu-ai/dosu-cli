@@ -121,9 +121,9 @@ describe("GitHubRepoPrompt", () => {
     const options = [ACTION_OPTION, ...repoOptions("a/b", "c/d", "e/f")];
     const prompt = makePrompt(options);
     prompt.emit("cursor", "down");
-    prompt.emit("key", "a");
+    prompt.emit("key", "a", {});
     expect(prompt.value).toEqual(["a/b", "c/d", "e/f"]);
-    prompt.emit("key", "a");
+    prompt.emit("key", "a", {});
     expect(prompt.value).toEqual([]);
   });
 
@@ -131,7 +131,7 @@ describe("GitHubRepoPrompt", () => {
     const options = [ACTION_OPTION, ...repoOptions("a/b")];
     const prompt = makePrompt(options);
     prompt.emit("cursor", "down");
-    prompt.emit("key", "z");
+    prompt.emit("key", "z", {});
     expect(prompt.value).toEqual([]);
   });
 

@@ -88,6 +88,10 @@ beforeEach(() => {
     start: vi.fn(),
     stop: vi.fn(),
     message: vi.fn(),
+    cancel: vi.fn(),
+    error: vi.fn(),
+    clear: vi.fn(),
+    isCancelled: false,
   } as ReturnType<typeof p.spinner>);
   vi.spyOn(console, "log").mockImplementation(() => {});
 });
