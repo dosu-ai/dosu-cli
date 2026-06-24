@@ -1,3 +1,10 @@
+# [0.22.0](https://github.com/dosu-ai/dosu-cli/compare/v0.21.0...v0.22.0) (2026-06-24)
+
+
+### Features
+
+* headless detection support and --no-browser tag ([#94](https://github.com/dosu-ai/dosu-cli/issues/94)) ([faa89b4](https://github.com/dosu-ai/dosu-cli/commit/faa89b4623d54c0c62313432e7023dcefbd06c34))
+
 # [0.21.0](https://github.com/dosu-ai/dosu-cli/compare/v0.20.3...v0.21.0) (2026-06-23)
 
 
