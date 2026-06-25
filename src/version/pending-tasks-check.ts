@@ -112,9 +112,10 @@ export async function fetchTaskRun(
 }
 
 function displayTask(task: PendingTask): void {
+  // Only ever called for a finished task (prUrl set, else an error).
   if (task.prUrl) {
     console.error(`\n${pc.green(`✓ Dosu PR ready (${task.repo}): ${task.prUrl}`)}\n`);
-  } else if (task.error) {
+  } else {
     console.error(`\n${pc.yellow(`✗ Dosu doc generation failed (${task.repo}): ${task.error}`)}\n`);
   }
 }
@@ -150,8 +151,9 @@ export function checkForReadyTasks(): void {
     const apiKey = cfg.api_key;
     if (backendURL && apiKey) {
       const now = Date.now();
+      // Only in-flight tasks remain here — finished ones were displayed and
+      // pruned above — so we just skip those polled too recently.
       for (const task of cache.tasks) {
-        if (task.prUrl || task.error) continue;
         if (now - task.lastCheck < CHECK_INTERVAL_MS) continue;
         pollTask(backendURL, apiKey, task.task_id);
       }

@@ -215,6 +215,12 @@ describe("repo enforcement", () => {
     expect(mockStepConnect).not.toHaveBeenCalled();
   });
 
+  it("handles a null dataSource.list result as no data sources", async () => {
+    mockQuery.mockResolvedValue(null); // dataSource.list → null → `?? []`
+    await expect(run("--tasks", "generate-agents-md")).rejects.toThrow("exit");
+    expect(mockStepConnect).not.toHaveBeenCalled();
+  });
+
   it("connects when accepted, then proceeds", async () => {
     // list #1 no match → confirm yes → connect → list #2 indexed match
     mockQuery
@@ -370,6 +376,14 @@ describe("indexing poll (fake timers)", () => {
     await assertion;
     expect(mockSpinner.stop).toHaveBeenCalledWith("Still indexing");
   });
+
+  it("handles a non-Error rejection during polling", async () => {
+    mockQuery.mockResolvedValueOnce(notIndexed).mockRejectedValueOnce("string failure"); // non-Error → String(err) branch
+    const assertion = expect(run()).rejects.toThrow("exit");
+    await vi.advanceTimersByTimeAsync(3_000);
+    await assertion;
+    expect(mockSpinner.stop).toHaveBeenCalledWith("Still indexing");
+  });
 });
 
 describe("capability intersection + selection", () => {
@@ -455,6 +469,12 @@ describe("capability intersection + selection", () => {
   it("info message when no findings intersect capabilities", async () => {
     setFindings({ ...findings, items: [findings.items[2]] }); // only unsupported
     mockFetch.mockResolvedValueOnce(jsonResp(capabilities));
+    await run();
+    expect(mockMultiselect).not.toHaveBeenCalled();
+  });
+
+  it("treats a missing tasks array in the capabilities response as none", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResp({})); // no `tasks` key → `?? []`
     await run();
     expect(mockMultiselect).not.toHaveBeenCalled();
   });
@@ -578,6 +598,14 @@ describe("error branches", () => {
       },
     } as unknown as Response);
     await expect(run()).rejects.toThrow("Request failed with status 503");
+  });
+
+  it("uses the status message when the error JSON has no detail field", async () => {
+    mockQuery.mockResolvedValue([
+      { data_source_id: "ds1", provider_slug: "github", name: "o/r", is_indexed: true },
+    ]);
+    mockFetch.mockResolvedValueOnce(jsonResp({}, false)); // valid JSON, no `detail`
+    await expect(run()).rejects.toThrow("Request failed with status 500");
   });
 
   it("skips items where the POST returns no task_id", async () => {

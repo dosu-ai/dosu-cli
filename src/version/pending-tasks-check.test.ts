@@ -332,4 +332,28 @@ describe("checkForReadyTasks — polling", () => {
     });
     expect(() => checkForReadyTasks()).not.toThrow();
   });
+
+  it("ignores a poll result when the task is no longer cached", async () => {
+    let resolveFetch: (v: unknown) => void = () => {};
+    const fetchMock = vi.fn().mockReturnValue(
+      new Promise((r) => {
+        resolveFetch = r;
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    writeCacheFile([{ task_id: "t1", doc_types: ["agents"], repo: "o/r", lastCheck: 0 }]);
+
+    checkForReadyTasks(); // dispatches the poll (still pending)
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // The task disappears (e.g. pruned by a concurrent run) before it resolves.
+    writeCacheFile([]);
+    resolveFetch({ ok: true, json: async () => ({ state: "SUCCESS", pr_url: "x" }) });
+
+    await vi.waitFor(() => {
+      // pollTask re-reads the cache, finds no matching task, and returns early.
+      expect(readCacheFile().tasks).toHaveLength(0);
+    });
+  });
 });
