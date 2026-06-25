@@ -311,4 +311,25 @@ describe("checkForReadyTasks — polling", () => {
     checkForReadyTasks();
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("does not poll when the backend URL is not configured", () => {
+    delete process.env.DOSU_BACKEND_URL_OVERRIDE;
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    writeCacheFile([{ task_id: "t1", doc_types: ["agents"], repo: "o/r", lastCheck: 0 }]);
+    checkForReadyTasks();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("swallows unexpected errors during the check (never throws on the hot path)", () => {
+    vi.stubGlobal("fetch", vi.fn());
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // A pending task gets past the early-return, then loadConfig blows up.
+    writeCacheFile([{ task_id: "t1", doc_types: ["agents"], repo: "o/r", lastCheck: 0 }]);
+    mockLoadConfig.mockImplementation(() => {
+      throw new Error("boom");
+    });
+    expect(() => checkForReadyTasks()).not.toThrow();
+  });
 });

@@ -360,6 +360,16 @@ describe("indexing poll (fake timers)", () => {
     await assertion;
     expect(mockSpinner.start).not.toHaveBeenCalled(); // quiet poll: no spinner
   });
+
+  it("treats a transient dataSource.list failure during polling as still-indexing", async () => {
+    mockQuery
+      .mockResolvedValueOnce(notIndexed) // initial check
+      .mockRejectedValueOnce(new Error("network blip")); // poll throws → caught
+    const assertion = expect(run()).rejects.toThrow("exit");
+    await vi.advanceTimersByTimeAsync(3_000);
+    await assertion;
+    expect(mockSpinner.stop).toHaveBeenCalledWith("Still indexing");
+  });
 });
 
 describe("capability intersection + selection", () => {
@@ -554,6 +564,20 @@ describe("error branches", () => {
       .mockResolvedValueOnce(jsonResp({ detail: "task rejected" }, false));
     mockMultiselect.mockResolvedValue(["generate-agents-md"]);
     await expect(run()).rejects.toThrow("task rejected");
+  });
+
+  it("falls back to a status message when the error body isn't JSON", async () => {
+    mockQuery.mockResolvedValue([
+      { data_source_id: "ds1", provider_slug: "github", name: "o/r", is_indexed: true },
+    ]);
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 503,
+      json: async () => {
+        throw new Error("not json");
+      },
+    } as unknown as Response);
+    await expect(run()).rejects.toThrow("Request failed with status 503");
   });
 
   it("skips items where the POST returns no task_id", async () => {

@@ -76,15 +76,16 @@ function requireConfig(): Config & { api_key: string; org_id: string } {
   return cfg as Config & { api_key: string; org_id: string };
 }
 
-async function backendGet(path: string, apiKey: string): Promise<unknown> {
+function requireBackendURL(): string {
   const backendURL = getBackendURL();
   if (!backendURL) {
     console.error(pc.red("Backend URL not configured."));
     process.exit(1);
   }
-  const resp = await fetch(`${backendURL}${path}`, {
-    headers: { "X-Dosu-API-Key": apiKey },
-  });
+  return backendURL;
+}
+
+async function parseBackendResponse(resp: Response): Promise<unknown> {
   if (!resp.ok) {
     let detail = `Request failed with status ${resp.status}`;
     try {
@@ -96,30 +97,24 @@ async function backendGet(path: string, apiKey: string): Promise<unknown> {
   return await resp.json();
 }
 
+async function backendGet(path: string, apiKey: string): Promise<unknown> {
+  const resp = await fetch(`${requireBackendURL()}${path}`, {
+    headers: { "X-Dosu-API-Key": apiKey },
+  });
+  return parseBackendResponse(resp);
+}
+
 async function backendPost(
   path: string,
   apiKey: string,
   body: Record<string, unknown>,
 ): Promise<unknown> {
-  const backendURL = getBackendURL();
-  if (!backendURL) {
-    console.error(pc.red("Backend URL not configured."));
-    process.exit(1);
-  }
-  const resp = await fetch(`${backendURL}${path}`, {
+  const resp = await fetch(`${requireBackendURL()}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Dosu-API-Key": apiKey },
     body: JSON.stringify(body),
   });
-  if (!resp.ok) {
-    let detail = `Request failed with status ${resp.status}`;
-    try {
-      const errBody = (await resp.json()) as { detail?: string };
-      detail = errBody.detail ?? detail;
-    } catch {}
-    throw new Error(detail);
-  }
-  return await resp.json();
+  return parseBackendResponse(resp);
 }
 
 async function listDataSources(client: TypedClient, orgId: string): Promise<DataSourceLike[]> {
