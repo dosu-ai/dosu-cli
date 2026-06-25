@@ -297,6 +297,69 @@ describe("findings loading", () => {
     mockReadFileSync.mockReturnValue("NOT JSON{{{");
     await expect(run()).rejects.toThrow("exit");
   });
+
+  it("exits when findings JSON is valid but null", async () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue("null");
+    await expect(run()).rejects.toThrow("exit");
+  });
+
+  it("exits when findings items is not an array", async () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue(JSON.stringify({ version: 1, items: "nope" }));
+    await expect(run()).rejects.toThrow("exit");
+  });
+});
+
+describe("indexing poll (fake timers)", () => {
+  const notIndexed = [
+    { data_source_id: "ds1", provider_slug: "github", name: "o/r", is_indexed: false },
+  ];
+  const indexed = [
+    { data_source_id: "ds1", provider_slug: "github", name: "o/r", is_indexed: true },
+  ];
+
+  beforeEach(() => {
+    setFindings(findings);
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("polls through a not-indexed cycle, then proceeds once indexed", async () => {
+    mockQuery
+      .mockResolvedValueOnce(notIndexed) // initial check in ensureSyncedRepo
+      .mockResolvedValueOnce(notIndexed) // poll iteration 1 → sleep
+      .mockResolvedValueOnce(indexed); // poll iteration 2 → indexed
+    mockFetch
+      .mockResolvedValueOnce(jsonResp(capabilities))
+      .mockResolvedValueOnce(jsonResp({ task_id: "task-1" }));
+    mockMultiselect.mockResolvedValue(["generate-agents-md"]);
+
+    const pr = run();
+    await vi.advanceTimersByTimeAsync(6_000);
+    await pr;
+
+    expect(mockSpinner.stop).toHaveBeenCalledWith("Repo indexed");
+    expect(mockAddPendingTask).toHaveBeenCalled();
+  });
+
+  it("exits when indexing never finishes (interactive shows spinner)", async () => {
+    mockQuery.mockResolvedValue(notIndexed);
+    const assertion = expect(run()).rejects.toThrow("exit");
+    await vi.advanceTimersByTimeAsync(130_000);
+    await assertion;
+    expect(mockSpinner.stop).toHaveBeenCalledWith("Still indexing");
+  });
+
+  it("--tasks exits non-interactively when indexing never finishes (no spinner)", async () => {
+    mockQuery.mockResolvedValue(notIndexed);
+    const assertion = expect(run("--tasks", "generate-agents-md")).rejects.toThrow("exit");
+    await vi.advanceTimersByTimeAsync(130_000);
+    await assertion;
+    expect(mockSpinner.start).not.toHaveBeenCalled(); // quiet poll: no spinner
+  });
 });
 
 describe("capability intersection + selection", () => {

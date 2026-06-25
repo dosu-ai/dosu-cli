@@ -242,6 +242,57 @@ describe("checkForReadyTasks — polling", () => {
     });
   });
 
+  it("falls back to a placeholder url when SUCCESS has no pr_url", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, json: async () => ({ state: "SUCCESS" }) });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    writeCacheFile([{ task_id: "t1", doc_types: ["agents"], repo: "o/r", lastCheck: 0 }]);
+
+    checkForReadyTasks();
+    await vi.waitFor(() => {
+      const task = readCacheFile().tasks[0] as { prUrl?: string };
+      expect(task.prUrl).toBe("(no URL returned)");
+    });
+  });
+
+  it("falls back to a generic error when FAILURE has no detail message", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, json: async () => ({ state: "FAILURE" }) });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    writeCacheFile([{ task_id: "t1", doc_types: ["agents"], repo: "o/r", lastCheck: 0 }]);
+
+    checkForReadyTasks();
+    await vi.waitFor(() => {
+      const task = readCacheFile().tasks[0] as { error?: string };
+      expect(task.error).toBe("generation failed");
+    });
+  });
+
+  it("leaves a task in-flight on PROGRESS (only bumps lastCheck)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, json: async () => ({ state: "PROGRESS" }) });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    writeCacheFile([{ task_id: "t1", doc_types: ["agents"], repo: "o/r", lastCheck: 0 }]);
+
+    checkForReadyTasks();
+    await vi.waitFor(() => {
+      const task = readCacheFile().tasks[0] as {
+        prUrl?: string;
+        error?: string;
+        lastCheck: number;
+      };
+      expect(task.prUrl).toBeUndefined();
+      expect(task.error).toBeUndefined();
+      expect(task.lastCheck).toBeGreaterThan(0);
+    });
+  });
+
   it("does not poll a fresh in-flight task", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

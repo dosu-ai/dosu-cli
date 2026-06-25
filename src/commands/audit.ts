@@ -243,28 +243,32 @@ async function ensureSyncedRepo(
 }
 
 function loadFindings(findingsPath: string): AuditFindings {
+  const fail = (): never => {
+    console.error(
+      pc.red("Run the Dosu audit in your coding agent first (it writes .dosu/audit.json)."),
+    );
+    process.exit(1);
+  };
   if (!existsSync(findingsPath)) {
-    console.error(
-      pc.red("Run the Dosu audit in your coding agent first (it writes .dosu/audit.json)."),
-    );
-    process.exit(1);
+    fail();
   }
-  let parsed: AuditFindings;
+  let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(findingsPath, "utf-8")) as AuditFindings;
+    parsed = JSON.parse(readFileSync(findingsPath, "utf-8"));
   } catch {
-    console.error(
-      pc.red("Run the Dosu audit in your coding agent first (it writes .dosu/audit.json)."),
-    );
-    process.exit(1);
+    fail();
   }
-  if (parsed.version !== 1) {
-    console.error(
-      pc.red("Run the Dosu audit in your coding agent first (it writes .dosu/audit.json)."),
-    );
-    process.exit(1);
+  // Guard against valid-JSON-but-wrong-shape (e.g. `null`, a primitive, or a
+  // missing/!==1 version, or non-array items) — accessing fields would throw.
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    (parsed as AuditFindings).version !== 1 ||
+    !Array.isArray((parsed as AuditFindings).items)
+  ) {
+    fail();
   }
-  return parsed;
+  return parsed as AuditFindings;
 }
 
 /** Intersect findings with capabilities, keyed by `item.task` === capability `id`. */
