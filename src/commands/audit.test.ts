@@ -278,6 +278,42 @@ describe("repo enforcement", () => {
     const body = JSON.parse(postCall[1].body);
     expect(body.data_source_id).toBe("ds-explicit");
   });
+
+  it("matches a data source named by the bare repo name (not the full slug)", async () => {
+    // Repos connected via the dashboard/older flows are named just "r", not
+    // "o/r". detected.slug is "o/r"; the match must still find it.
+    mockQuery.mockResolvedValue([
+      { data_source_id: "ds-bare", provider_slug: "github", name: "r", is_indexed: true },
+    ]);
+    setFindings(findings);
+    mockFetch
+      .mockResolvedValueOnce(jsonResp(capabilities))
+      .mockResolvedValueOnce(jsonResp({ task_id: "task-1" }));
+    mockMultiselect.mockResolvedValue(["generate-agents-md"]);
+
+    await run();
+
+    expect(mockStepConnect).not.toHaveBeenCalled();
+    const body = JSON.parse(postCalls()[0][1].body);
+    expect(body.data_source_id).toBe("ds-bare");
+  });
+
+  it("prefers an exact slug match over a bare-name match", async () => {
+    mockQuery.mockResolvedValue([
+      { data_source_id: "ds-bare", provider_slug: "github", name: "r", is_indexed: true },
+      { data_source_id: "ds-slug", provider_slug: "github", name: "o/r", is_indexed: true },
+    ]);
+    setFindings(findings);
+    mockFetch
+      .mockResolvedValueOnce(jsonResp(capabilities))
+      .mockResolvedValueOnce(jsonResp({ task_id: "task-1" }));
+    mockMultiselect.mockResolvedValue(["generate-agents-md"]);
+
+    await run();
+
+    const body = JSON.parse(postCalls()[0][1].body);
+    expect(body.data_source_id).toBe("ds-slug");
+  });
 });
 
 describe("findings loading", () => {
@@ -314,6 +350,28 @@ describe("findings loading", () => {
     mockExistsSync.mockReturnValue(true);
     mockReadFileSync.mockReturnValue(JSON.stringify({ version: 1, items: "nope" }));
     await expect(run()).rejects.toThrow("exit");
+  });
+
+  it("refuses to publish to a repo other than the one the audit ran on", async () => {
+    // detected repo is o/r; findings say the audit ran on a different repo.
+    setFindings({
+      ...findings,
+      repo: { remote: "git@github.com:other/repo.git", slug: "other/repo" },
+    });
+    await expect(run()).rejects.toThrow("exit");
+    expect(errorSpy.mock.calls.join(" ")).toContain("Audit was run on other/repo");
+  });
+
+  it("allows a repo mismatch when --data-source-id is given explicitly", async () => {
+    setFindings({
+      ...findings,
+      repo: { remote: "git@github.com:other/repo.git", slug: "other/repo" },
+    });
+    mockFetch
+      .mockResolvedValueOnce(jsonResp(capabilities))
+      .mockResolvedValueOnce(jsonResp({ task_id: "task-1" }));
+    await run("--data-source-id", "ds-explicit", "--tasks", "generate-agents-md");
+    expect(postCalls()).toHaveLength(1); // override bypasses the audited-repo guard
   });
 });
 

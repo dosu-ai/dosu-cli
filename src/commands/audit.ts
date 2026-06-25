@@ -126,7 +126,14 @@ async function listDataSources(client: TypedClient, orgId: string): Promise<Data
 }
 
 function findMatch(sources: DataSourceLike[], detected: DetectedRepo): DataSourceLike | undefined {
-  return sources.find((ds) => ds.provider_slug === "github" && ds.name === detected.slug);
+  const github = sources.filter((ds) => ds.provider_slug === "github");
+  // Prefer an exact "owner/repo" slug match (how the CLI's own connect flow
+  // names data sources), but fall back to the bare repo name — repos connected
+  // via the dashboard or older flows are named just the repo (e.g. "repo", not
+  // "owner/repo").
+  return (
+    github.find((ds) => ds.name === detected.slug) ?? github.find((ds) => ds.name === detected.name)
+  );
 }
 
 function sleep(ms: number): Promise<void> {
@@ -319,9 +326,21 @@ export function auditCommand(): Command {
           nonInteractive,
         );
 
-        // 2. Load findings.
+        // 2. Load findings, then guarantee the PR targets the repo the audit
+        // skill actually ran on (recorded in findings.repo.slug) — never a
+        // different repo than the one audited, unless --data-source-id overrides.
         const findingsPath = opts.findings ?? join(process.cwd(), ".dosu", "audit.json");
         const findings = loadFindings(findingsPath);
+
+        if (!opts.dataSourceId && findings.repo?.slug && findings.repo.slug !== detected.slug) {
+          console.error(
+            pc.red(
+              `Audit was run on ${findings.repo.slug}, but the current repo is ${detected.slug}. ` +
+                `Run 'dosu audit' from ${findings.repo.slug} so the PR targets the audited repo.`,
+            ),
+          );
+          process.exit(1);
+        }
 
         // 3. Fetch capabilities.
         const capsResp = (await backendGet("/v1/cli/tasks", apiKey)) as CapabilitiesResponse;
