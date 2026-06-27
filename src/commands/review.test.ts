@@ -71,7 +71,7 @@ describe("review list", () => {
     title: "API Guide",
     version: 3,
     type: "document",
-    origin: "github_pr",
+    origin: "sync_upstream",
     externalTriggerUrl: "https://github.com/org/repo/pull/42",
     pendingStatus: "pending_review",
     createdAt: "2026-06-24T19:18:50.002Z",
