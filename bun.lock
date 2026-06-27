@@ -7,7 +7,7 @@
       "devDependencies": {
         "@biomejs/biome": "^2.5.0",
         "@clack/prompts": "^1.6.0",
-        "@dosu/api-types": "0.0.11",
+        "@dosu/api-types": "^0.0.24",
         "@semantic-release/changelog": "^6.0.3",
         "@semantic-release/exec": "^7.1.0",
         "@semantic-release/git": "^10.0.1",
@@ -71,7 +71,7 @@
 
     "@colors/colors": ["@colors/colors@1.5.0", "", {}, "sha512-ooWCrlZP11i8GImSjTHYHLkvFDP48nS4+204nGb1RiX/WXYHmJA2III9/e2DWVabCESdW7hBAEzHRqUn9OUVvQ=="],
 
-    "@dosu/api-types": ["@dosu/api-types@0.0.11", "", { "dependencies": { "@trpc/server": "11.17.0" } }, "sha512-/ZGvM+daxr9MmfzmgJy1S7DeiQEGyI5nnxE6ZVYNhkU9nlq/EHwinekoBCxmnicFS6S7bgimA6km08hGkm+qYg=="],
+    "@dosu/api-types": ["@dosu/api-types@0.0.24", "", { "peerDependencies": { "@trpc/server": "^11.17.0" } }, "sha512-F+QLZsm2cSz6wI2F3XBsayfXY9i4uivcRmOCGtzV/MdeZTA0EWgO1vHKIm5gmM8vgvtfQyOWaOtqXIXyQtLEzw=="],
 
     "@esbuild/aix-ppc64": ["@esbuild/aix-ppc64@0.27.7", "", { "os": "aix", "cpu": "ppc64" }, "sha512-EKX3Qwmhz1eMdEJokhALr0YiD0lhQNwDqkPYyPhiSwKrh7/4KRjQc04sZ8db+5DVVnZ1LmbNDI1uAMPEUBnQPg=="],
 
@@ -804,8 +804,6 @@
     "@actions/http-client/undici": ["undici@6.27.0", "", {}, "sha512-YmfV3YnEDzXRC5lZ2jWtWWHKGUm1zIt8AhesR1tens+HTNv+YZlN/dp6G727LOvMJ8xjP9Be7Y2Sdr96LDm+pg=="],
 
     "@babel/code-frame/js-tokens": ["js-tokens@4.0.0", "", {}, "sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ=="],
-
-    "@dosu/api-types/@trpc/server": ["@trpc/server@11.17.0", "", { "peerDependencies": { "typescript": ">=5.7.2" }, "bin": { "intent": "bin/intent.js" } }, "sha512-jbAOUe0PpUTCYqziyu+8vYXZdDXPudZgnEhWCQ2NjKnVEjfE93RqHTt1oycZJv/HNf51YlRXfEEwSIAbb161rw=="],
 
     "@pnpm/network.ca-file/graceful-fs": ["graceful-fs@4.2.10", "", {}, "sha512-9ByhssR2fPVsNZj478qUUbKfmL0+t5BDVyjShtyZZLiK7ZDAArFFfopyOTj0M05wE2tJPisA4iTnnXl2YoPvOA=="],
 

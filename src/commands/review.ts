@@ -4,16 +4,63 @@
 
 import { Command } from "commander";
 import pc from "picocolors";
-import { createTypedClient } from "../client/trpc";
+import { createTypedClient, type TypedClient } from "../client/trpc";
 import { requireLoginConfig } from "./auth";
-import { printInfo, printResult } from "./output";
+import { formatDate, printInfo, printResult, printTable, truncate } from "./output";
 
 function requireConfig() {
   return requireLoginConfig();
 }
 
+async function getKnowledgeStoreId(client: TypedClient, spaceId: string): Promise<string> {
+  const store = await client.knowledgeStore.getBySpaceId.query({ space_id: spaceId });
+  if (!store) {
+    console.error(pc.red("No knowledge store found for this deployment."));
+    process.exit(1);
+  }
+  return store.id;
+}
+
 export function reviewCommand(): Command {
   const cmd = new Command("review").description("Document review workflow");
+
+  cmd
+    .command("list")
+    .description("List pending document review items")
+    .option("--json", "Output as JSON")
+    .action(async (opts: { json?: boolean }) => {
+      const cfg = requireConfig();
+      if (!cfg.space_id) {
+        console.error(pc.red("Missing space config. Run 'dosu setup' to reconfigure."));
+        process.exit(1);
+      }
+      const client = createTypedClient(cfg);
+      const ksId = await getKnowledgeStoreId(client, cfg.space_id);
+
+      const items = await client.review.listPending.query({ knowledgeStoreId: ksId });
+
+      if (opts.json) {
+        printResult(items, opts);
+        return;
+      }
+
+      if (!items || items.length === 0) {
+        console.log(pc.dim("No pending review items."));
+        return;
+      }
+
+      printTable(
+        ["Version ID", "Title", "Origin", "Status", "Created"],
+        items.map((i) => [
+          i.pageVersionId.slice(0, 8),
+          truncate(i.title, 40),
+          i.origin,
+          i.pendingStatus,
+          formatDate(i.createdAt),
+        ]),
+        { rawData: items },
+      );
+    });
 
   cmd
     .command("context")
