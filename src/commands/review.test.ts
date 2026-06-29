@@ -106,6 +106,16 @@ describe("review list", () => {
     expect(output[0].pageVersionId).toBe("pv-abcdef12");
   });
 
+  it("falls back to (untitled) when title is missing", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce({ id: "ks1" });
+    mockQuery.mockResolvedValueOnce([{ ...pendingItem, title: null }]);
+
+    await run("list");
+
+    expect(allOutput()).toContain("(untitled)");
+  });
+
   it("prints message for empty queue", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce({ id: "ks1" });

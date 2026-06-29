@@ -53,7 +53,7 @@ export function reviewCommand(): Command {
         ["Version ID", "Title", "Origin", "Status", "Created"],
         items.map((i) => [
           i.pageVersionId.slice(0, 8),
-          truncate(i.title, 40),
+          truncate(i.title ?? "(untitled)", 40),
           i.origin,
           i.pendingStatus,
           formatDate(i.createdAt),
