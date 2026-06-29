@@ -92,6 +92,9 @@ describe("review list", () => {
     });
     expect(allOutput()).toContain("pv-abcde");
     expect(allOutput()).toContain("API Guide");
+    // origin enum is humanized to match the MCP tool / dashboard
+    expect(allOutput()).toContain("Synced from source");
+    expect(allOutput()).not.toContain("sync_upstream");
   });
 
   it("outputs valid JSON with --json", async () => {
@@ -104,6 +107,24 @@ describe("review list", () => {
     const output = JSON.parse(allOutput());
     expect(output).toHaveLength(1);
     expect(output[0].pageVersionId).toBe("pv-abcdef12");
+    // --json is the machine surface — raw enum, not humanized
+    expect(output[0].origin).toBe("sync_upstream");
+  });
+
+  it.each([
+    ["manual_update", 1, "User created"],
+    ["manual_update", 2, "User updated"],
+    ["llm_generated", 1, "AI generated"],
+    ["api_update", 1, "Created via API"],
+    ["future_origin", 1, "future_origin"], // unknown enum falls through to raw value
+  ])("humanizes source %s (v%i) as %s", async (origin, version, expected) => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce({ id: "ks1" });
+    mockQuery.mockResolvedValueOnce([{ ...pendingItem, origin, version }]);
+
+    await run("list");
+
+    expect(allOutput()).toContain(expected);
   });
 
   it("falls back to (untitled) when title is missing", async () => {

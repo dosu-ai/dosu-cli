@@ -12,6 +12,23 @@ function requireConfig() {
   return requireLoginConfig();
 }
 
+// ponytail: mirrors _humanize_origin in dosu's backend/public_api/mcp/tools/review.py —
+// keep in sync so the CLI, MCP tool, and dashboard show the same source labels.
+function humanizeSource(origin: string, version: number): string {
+  switch (origin) {
+    case "manual_update":
+      return version <= 1 ? "User created" : "User updated";
+    case "llm_generated":
+      return "AI generated";
+    case "sync_upstream":
+      return "Synced from source";
+    case "api_update":
+      return "Created via API";
+    default:
+      return origin;
+  }
+}
+
 async function getKnowledgeStoreId(client: TypedClient, spaceId: string): Promise<string> {
   const store = await client.knowledgeStore.getBySpaceId.query({ space_id: spaceId });
   if (!store) {
@@ -50,11 +67,11 @@ export function reviewCommand(): Command {
       }
 
       printTable(
-        ["Version ID", "Title", "Origin", "Status", "Created"],
+        ["Version ID", "Title", "Source", "Status", "Created"],
         items.map((i) => [
           i.pageVersionId.slice(0, 8),
           truncate(i.title ?? "(untitled)", 40),
-          i.origin,
+          humanizeSource(i.origin, i.version),
           i.pendingStatus,
           formatDate(i.createdAt),
         ]),
