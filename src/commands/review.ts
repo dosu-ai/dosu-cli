@@ -2,6 +2,7 @@
  * `dosu review` — document review workflow.
  */
 
+import type { RouterOutputs } from "@dosu/api-types";
 import { Command } from "commander";
 import pc from "picocolors";
 import { createTypedClient, type TypedClient } from "../client/trpc";
@@ -12,9 +13,13 @@ function requireConfig() {
   return requireLoginConfig();
 }
 
+// Pinned to the published API enum so the case labels are checked against the real
+// origin union (RouterOutputs derives it from `review.listPending`).
+type ReviewOrigin = RouterOutputs["review"]["listPending"][number]["origin"];
+
 // ponytail: mirrors _humanize_origin in dosu's backend/public_api/mcp/tools/review.py —
 // keep in sync so the CLI, MCP tool, and dashboard show the same source labels.
-function humanizeSource(origin: string, version: number): string {
+function humanizeSource(origin: ReviewOrigin, version: number): string {
   switch (origin) {
     case "manual_update":
       return version <= 1 ? "User created" : "User updated";
