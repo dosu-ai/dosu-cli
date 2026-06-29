@@ -1,3 +1,10 @@
+# [0.23.0](https://github.com/dosu-ai/dosu-cli/compare/v0.22.0...v0.23.0) (2026-06-29)
+
+
+### Features
+
+* **review:** add `dosu review list` for the pending review queue ([#96](https://github.com/dosu-ai/dosu-cli/issues/96)) ([d58afad](https://github.com/dosu-ai/dosu-cli/commit/d58afad23c8fe1e55cadc1a2caf2bc737cf05adf))
+
 # [0.22.0](https://github.com/dosu-ai/dosu-cli/compare/v0.21.0...v0.22.0) (2026-06-24)
 
 
