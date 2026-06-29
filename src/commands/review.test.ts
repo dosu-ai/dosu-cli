@@ -34,6 +34,7 @@ const validConfig = {
   refresh_token: "r",
   expires_at: 0,
   api_key: "sk_user_test",
+  space_id: "sp1",
 };
 
 function allOutput(): string {
@@ -61,6 +62,101 @@ afterEach(() => {
   logSpy.mockRestore();
   errorSpy.mockRestore();
   exitSpy.mockRestore();
+});
+
+describe("review list", () => {
+  const pendingItem = {
+    pageVersionId: "pv-abcdef12",
+    pageId: "pg-1",
+    title: "API Guide",
+    version: 3,
+    type: "document",
+    origin: "sync_upstream",
+    externalTriggerUrl: "https://github.com/org/repo/pull/42",
+    pendingStatus: "pending_review",
+    createdAt: "2026-06-24T19:18:50.002Z",
+  };
+
+  it("resolves space→KS then calls review.listPending", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce({ id: "ks1" }); // knowledgeStore.getBySpaceId
+    mockQuery.mockResolvedValueOnce([pendingItem]);
+
+    await run("list");
+
+    expect(mockQuery).toHaveBeenNthCalledWith(1, "knowledgeStore.getBySpaceId", {
+      space_id: "sp1",
+    });
+    expect(mockQuery).toHaveBeenNthCalledWith(2, "review.listPending", {
+      knowledgeStoreId: "ks1",
+    });
+    expect(allOutput()).toContain("pv-abcde");
+    expect(allOutput()).toContain("API Guide");
+    // origin enum is humanized to match the MCP tool / dashboard
+    expect(allOutput()).toContain("Synced from source");
+    expect(allOutput()).not.toContain("sync_upstream");
+  });
+
+  it("outputs valid JSON with --json", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce({ id: "ks1" });
+    mockQuery.mockResolvedValueOnce([pendingItem]);
+
+    await run("list", "--json");
+
+    const output = JSON.parse(allOutput());
+    expect(output).toHaveLength(1);
+    expect(output[0].pageVersionId).toBe("pv-abcdef12");
+    // --json is the machine surface — raw enum, not humanized
+    expect(output[0].origin).toBe("sync_upstream");
+  });
+
+  it.each([
+    ["manual_update", 1, "User created"],
+    ["manual_update", 2, "User updated"],
+    ["llm_generated", 1, "AI generated"],
+    ["api_update", 1, "Created via API"],
+    ["future_origin", 1, "future_origin"], // unknown enum falls through to raw value
+  ])("humanizes source %s (v%i) as %s", async (origin, version, expected) => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce({ id: "ks1" });
+    mockQuery.mockResolvedValueOnce([{ ...pendingItem, origin, version }]);
+
+    await run("list");
+
+    expect(allOutput()).toContain(expected);
+  });
+
+  it("falls back to (untitled) when title is missing", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce({ id: "ks1" });
+    mockQuery.mockResolvedValueOnce([{ ...pendingItem, title: null }]);
+
+    await run("list");
+
+    expect(allOutput()).toContain("(untitled)");
+  });
+
+  it("prints message for empty queue", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce({ id: "ks1" });
+    mockQuery.mockResolvedValueOnce([]);
+
+    await run("list");
+
+    expect(allOutput()).toContain("No pending review items");
+  });
+
+  it("exits when space_id is missing", async () => {
+    mockLoadConfig.mockReturnValue({ ...validConfig, space_id: undefined });
+    await expect(run("list")).rejects.toThrow("exit");
+  });
+
+  it("exits when no knowledge store is found", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce(null); // knowledgeStore.getBySpaceId
+    await expect(run("list")).rejects.toThrow("exit");
+  });
 });
 
 describe("review context", () => {
