@@ -112,7 +112,8 @@ describe("review list", () => {
       knowledgeStoreId: "ks1",
       deploymentId: "dep1",
     });
-    expect(allOutput()).toContain("pv-abcde");
+    // full id must print — verbs (diff/approve/reject/edit) need the whole id (#102)
+    expect(allOutput()).toContain("pv-abcdef12");
     expect(allOutput()).toContain("doc_change");
     expect(allOutput()).toContain("API Guide");
     // origin enum is humanized to match the MCP tool / dashboard
