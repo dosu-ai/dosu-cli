@@ -1,3 +1,10 @@
+# [0.27.0](https://github.com/dosu-ai/dosu-cli/compare/v0.26.0...v0.27.0) (2026-06-30)
+
+
+### Features
+
+* **review:** surface draft messages in `dosu review` (ENG-524) ([#101](https://github.com/dosu-ai/dosu-cli/issues/101)) ([0070480](https://github.com/dosu-ai/dosu-cli/commit/0070480c58c205baa07f7ba0a3705c72fb27b182))
+
 # [0.26.0](https://github.com/dosu-ai/dosu-cli/compare/v0.25.0...v0.26.0) (2026-06-30)
 
 
