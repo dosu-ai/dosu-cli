@@ -1,3 +1,10 @@
+# [0.25.0](https://github.com/dosu-ai/dosu-cli/compare/v0.24.0...v0.25.0) (2026-06-30)
+
+
+### Features
+
+* **review:** gate `review approve`/`reject` behind diff preview + --confirm ([#99](https://github.com/dosu-ai/dosu-cli/issues/99)) ([9cbb432](https://github.com/dosu-ai/dosu-cli/commit/9cbb43212bffe92f2d8522c61a5bc6df7a0b56c3))
+
 # [0.24.0](https://github.com/dosu-ai/dosu-cli/compare/v0.23.1...v0.24.0) (2026-06-30)
 
 
