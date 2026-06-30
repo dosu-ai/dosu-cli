@@ -183,6 +183,10 @@ export function reviewCommand(): Command {
             message: `${verb} this change?`,
             initialValue: false,
           });
+          if (p.isCancel(answer)) {
+            console.log(pc.dim("Cancelled."));
+            return;
+          }
           proceed = answer === true;
         }
 

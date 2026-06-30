@@ -20,6 +20,7 @@ vi.mock("../client/trpc", () => ({
 const mockConfirm = vi.fn();
 vi.mock("@clack/prompts", () => ({
   confirm: (...args: unknown[]) => mockConfirm(...args),
+  isCancel: (value: unknown) => value === Symbol.for("clack:cancel"),
 }));
 
 const mockLoadConfig = vi.fn();
@@ -369,7 +370,7 @@ describe("review approve (interactive prompt)", () => {
     });
   });
 
-  it("aborts when the user declines (or cancels)", async () => {
+  it("aborts when the user declines", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce(changeView);
     mockConfirm.mockResolvedValueOnce(false);
@@ -378,6 +379,17 @@ describe("review approve (interactive prompt)", () => {
 
     expect(mockMutate).not.toHaveBeenCalled();
     expect(allOutput()).toContain("Aborted");
+  });
+
+  it("handles cancellation gracefully", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce(changeView);
+    mockConfirm.mockResolvedValueOnce(Symbol.for("clack:cancel"));
+
+    await run("approve", "pv-1");
+
+    expect(mockMutate).not.toHaveBeenCalled();
+    expect(allOutput()).toContain("Cancelled");
   });
 
   it("renders a new-doc preview (no published version)", async () => {
