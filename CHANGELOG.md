@@ -1,3 +1,10 @@
+# [0.26.0](https://github.com/dosu-ai/dosu-cli/compare/v0.25.0...v0.26.0) (2026-06-30)
+
+
+### Features
+
+* **review:** add `dosu review edit <page-version-id>` ([#100](https://github.com/dosu-ai/dosu-cli/issues/100)) ([e799ccc](https://github.com/dosu-ai/dosu-cli/commit/e799cccd0f59476675b1e3e0d96e6e5a0348aa16))
+
 # [0.25.0](https://github.com/dosu-ai/dosu-cli/compare/v0.24.0...v0.25.0) (2026-06-30)
 
 
