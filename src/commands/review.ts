@@ -387,7 +387,12 @@ export function reviewCommand(): Command {
 
         if (!proceed) {
           if (opts.json) {
-            const preview = change ?? { id, kind: "draft_message" };
+            const preview = change ?? {
+              id,
+              kind: "draft_message",
+              title: draft?.title,
+              body: draft?.body,
+            };
             printResult({ ...preview, applied: false, confirmRequired: true }, opts);
           } else {
             console.log(pc.dim("Aborted. Re-run with --confirm to apply."));
@@ -425,22 +430,24 @@ export function reviewCommand(): Command {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
 
-      try {
-        await client.page.updatePublicationStatus.mutate({
-          page_version_id: id,
-          action: "revert_to_pending",
-        });
-      } catch (err) {
-        if (isNotFound(err)) {
-          console.error(
-            pc.red(
-              "Revert is not supported for draft replies. A rejected draft is regenerated on the next agent run.",
-            ),
-          );
-          process.exit(1);
-        }
-        throw err;
+      // Resolve kind like the other verbs rather than catching the mutation's 404:
+      // a draft id 404s on getChange, and requireDraft turns a truly-unknown id into
+      // a clean "no review item" error instead of a misleading "not supported" one.
+      const change = await resolveChange(client, id);
+      if (!change) {
+        await requireDraft(client, id);
+        console.error(
+          pc.red(
+            "Revert is not supported for draft replies. A rejected draft is regenerated on the next agent run.",
+          ),
+        );
+        process.exit(1);
       }
+
+      await client.page.updatePublicationStatus.mutate({
+        page_version_id: id,
+        action: "revert_to_pending",
+      });
 
       if (opts.json) {
         printResult({ success: true, id, action: "revert_to_pending" }, opts);

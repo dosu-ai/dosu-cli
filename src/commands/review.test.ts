@@ -639,6 +639,8 @@ describe("review approve/reject (draft messages)", () => {
 
     const output = JSON.parse(allOutput());
     expect(output.kind).toBe("draft_message");
+    expect(output.title).toBe(draftRow.title);
+    expect(output.body).toBe(draftRow.body);
     expect(output.confirmRequired).toBe(true);
     expect(output.applied).toBe(false);
     expect(mockMutate).not.toHaveBeenCalled();
@@ -728,6 +730,7 @@ describe("review approve (interactive prompt)", () => {
 describe("review revert", () => {
   it("calls page.updatePublicationStatus with action=revert_to_pending", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce(docChange); // review.getChange → doc
     mockMutate.mockResolvedValueOnce({});
 
     await run("revert", "pv-1");
@@ -740,6 +743,7 @@ describe("review revert", () => {
 
   it("prints human-readable confirmation", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce(docChange);
     mockMutate.mockResolvedValueOnce({});
     await run("revert", "pv-123456");
     expect(allOutput()).toContain("Review revert: pv-12345");
@@ -747,6 +751,7 @@ describe("review revert", () => {
 
   it("outputs JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce(docChange);
     mockMutate.mockResolvedValueOnce({});
     await run("revert", "--json", "pv-1");
     const output = JSON.parse(allOutput());
@@ -754,16 +759,29 @@ describe("review revert", () => {
     expect(output.action).toBe("revert_to_pending");
   });
 
-  it("rejects revert for a draft id (mutation 404s → unsupported message)", async () => {
+  it("rejects revert for a draft id (resolveChange 404s → draft path)", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockRejectedValueOnce(notFound());
+    mockQuery.mockRejectedValueOnce(notFound()); // review.getChange → draft
+    mockQuery.mockResolvedValueOnce({ id: "msg-1" }); // messages.getMessage exists
 
     await expect(run("revert", "msg-1")).rejects.toThrow("exit");
     expect(errorSpy.mock.calls.flat().join(" ")).toContain("not supported for draft replies");
+    expect(mockMutate).not.toHaveBeenCalled();
   });
 
-  it("rethrows a non-NOT_FOUND error from revert", async () => {
+  it("exits with a clear message for an id that is neither a doc change nor a draft", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockRejectedValueOnce(notFound()); // review.getChange → not a doc
+    mockQuery.mockResolvedValueOnce(null); // messages.getMessage → not a draft
+
+    await expect(run("revert", "missing")).rejects.toThrow("exit");
+    expect(errorSpy.mock.calls.flat().join(" ")).toContain("No review item found");
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
+
+  it("rethrows an error from the revert mutation", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce(docChange); // review.getChange → doc
     mockMutate.mockRejectedValueOnce(new Error("boom"));
 
     await expect(run("revert", "pv-1")).rejects.toThrow("boom");
