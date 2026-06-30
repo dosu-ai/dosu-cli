@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { TRPCClientError } from "@trpc/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -233,6 +236,59 @@ describe("review diff", () => {
 
     await expect(run("diff", "pv-missing")).rejects.toThrow("exit");
     expect(errorSpy.mock.calls.flat().join(" ")).toContain("No review item found");
+  });
+});
+
+describe("review edit", () => {
+  it("calls page.updateReview with title and body", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockResolvedValueOnce(undefined);
+
+    await run("edit", "pv-abcdef12", "--title", "New Title", "--body", "# Body");
+
+    expect(mockMutate).toHaveBeenCalledWith("page.updateReview", {
+      page_version_id: "pv-abcdef12",
+      title: "New Title",
+      body: "# Body",
+    });
+    expect(allOutput()).toContain("Review edited: pv-abcde");
+  });
+
+  it("reads body from --body-file", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockResolvedValueOnce(undefined);
+    const dir = mkdtempSync(join(tmpdir(), "dosu-review-test-"));
+    const file = join(dir, "body.md");
+    try {
+      writeFileSync(file, "# From file\n", "utf-8");
+      await run("edit", "pv-abcdef12", "--body-file", file);
+      expect(mockMutate).toHaveBeenCalledWith("page.updateReview", {
+        page_version_id: "pv-abcdef12",
+        title: undefined,
+        body: "# From file\n",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("errors when neither title nor body is given", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+
+    await expect(run("edit", "pv-abcdef12")).rejects.toThrow("exit");
+    expect(errorSpy.mock.calls.flat().join(" ")).toContain("Nothing to edit");
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
+
+  it("outputs JSON with --json", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockResolvedValueOnce(undefined);
+
+    await run("edit", "--json", "pv-abcdef12", "--title", "T");
+
+    const output = JSON.parse(allOutput());
+    expect(output.success).toBe(true);
+    expect(output.id).toBe("pv-abcdef12");
   });
 });
 

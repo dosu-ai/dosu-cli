@@ -2,6 +2,7 @@
  * `dosu review` — document review workflow.
  */
 
+import { readFileSync } from "node:fs";
 import * as p from "@clack/prompts";
 import type { RouterOutputs } from "@dosu/api-types";
 import { isTRPCClientError } from "@trpc/client";
@@ -166,6 +167,44 @@ export function reviewCommand(): Command {
       // "(No textual changes…)" notice — distinguished by isNewDoc / hasChanges.
       console.log(change.diff);
     });
+
+  // In-place edit of a pending version's body/title via page.updateReview
+  // (PENDING_REVIEW-guarded server-side). After editing, `dosu review approve` publishes.
+  cmd
+    .command("edit")
+    .description("Edit a pending document version's body/title in place")
+    .argument("<page-version-id>", "Page version ID (from `dosu review list`)")
+    .option("--title <title>", "New title")
+    .option("--body <markdown>", "New body (markdown)")
+    .option("--body-file <path>", "Read body from file")
+    .option("--json", "Output as JSON")
+    .action(
+      async (
+        id: string,
+        opts: { title?: string; body?: string; bodyFile?: string; json?: boolean },
+      ) => {
+        const cfg = requireConfig();
+        const client = createTypedClient(cfg);
+
+        const body = opts.bodyFile ? readFileSync(opts.bodyFile, "utf-8") : opts.body;
+        if (body === undefined && opts.title === undefined) {
+          console.error(pc.red("Nothing to edit. Pass --title and/or --body/--body-file."));
+          process.exit(1);
+        }
+
+        await client.page.updateReview.mutate({
+          page_version_id: id,
+          title: opts.title,
+          body,
+        });
+
+        if (opts.json) {
+          printResult({ success: true, id }, opts);
+          return;
+        }
+        console.log(pc.green(`Review edited: ${id.slice(0, 8)}`));
+      },
+    );
 
   cmd
     .command("context")
