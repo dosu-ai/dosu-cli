@@ -7,7 +7,7 @@
       "devDependencies": {
         "@biomejs/biome": "^2.5.0",
         "@clack/prompts": "^1.6.0",
-        "@dosu/api-types": "^0.0.24",
+        "@dosu/api-types": "0.0.33",
         "@semantic-release/changelog": "^6.0.3",
         "@semantic-release/exec": "^7.1.0",
         "@semantic-release/git": "^10.0.1",
@@ -71,7 +71,7 @@
 
     "@colors/colors": ["@colors/colors@1.5.0", "", {}, "sha512-ooWCrlZP11i8GImSjTHYHLkvFDP48nS4+204nGb1RiX/WXYHmJA2III9/e2DWVabCESdW7hBAEzHRqUn9OUVvQ=="],
 
-    "@dosu/api-types": ["@dosu/api-types@0.0.24", "", { "peerDependencies": { "@trpc/server": "^11.17.0" } }, "sha512-F+QLZsm2cSz6wI2F3XBsayfXY9i4uivcRmOCGtzV/MdeZTA0EWgO1vHKIm5gmM8vgvtfQyOWaOtqXIXyQtLEzw=="],
+    "@dosu/api-types": ["@dosu/api-types@0.0.33", "", { "peerDependencies": { "@trpc/server": "^11.17.0" } }, "sha512-kpxEHFb8pE/FzNdMQoiSQTph4SOr5Q0sBB6cUjebdZP+0W5qOhnOJt2Uyf9jK49TMZssWr+6SAYIOr9CiljpGw=="],
 
     "@esbuild/aix-ppc64": ["@esbuild/aix-ppc64@0.27.7", "", { "os": "aix", "cpu": "ppc64" }, "sha512-EKX3Qwmhz1eMdEJokhALr0YiD0lhQNwDqkPYyPhiSwKrh7/4KRjQc04sZ8db+5DVVnZ1LmbNDI1uAMPEUBnQPg=="],
 

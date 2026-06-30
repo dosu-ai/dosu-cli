@@ -72,9 +72,10 @@ export function reviewCommand(): Command {
       }
 
       printTable(
-        ["Version ID", "Title", "Source", "Status", "Created"],
+        ["ID", "Kind", "Title", "Source", "Status", "Created"],
         items.map((i) => [
-          i.pageVersionId.slice(0, 8),
+          i.id.slice(0, 8),
+          i.kind,
           truncate(i.title ?? "(untitled)", 40),
           humanizeSource(i.origin, i.version),
           i.pendingStatus,
@@ -130,22 +131,23 @@ export function reviewCommand(): Command {
     cmd
       .command(name)
       .description(description)
-      .argument("<page-version-id>", "Page version ID")
+      .argument("<id>", "Review item ID (from `dosu review list`)")
       .option("--json", "Output as JSON")
-      .action(async (pageVersionId: string, opts: { json?: boolean }) => {
+      .action(async (id: string, opts: { json?: boolean }) => {
         const cfg = requireConfig();
         const client = createTypedClient(cfg);
 
+        // For the only kind today (doc_change) the opaque id is the page version id.
         await client.page.updatePublicationStatus.mutate({
-          page_version_id: pageVersionId,
+          page_version_id: id,
           action,
         });
 
         if (opts.json) {
-          printResult({ success: true, page_version_id: pageVersionId, action }, opts);
+          printResult({ success: true, id, action }, opts);
           return;
         }
-        console.log(pc.green(`Review ${name}: ${pageVersionId.slice(0, 8)}`));
+        console.log(pc.green(`Review ${name}: ${id.slice(0, 8)}`));
       });
   }
 
