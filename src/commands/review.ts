@@ -206,11 +206,26 @@ export function reviewCommand(): Command {
           process.exit(1);
         }
 
-        await client.page.updateReview.mutate({
-          page_version_id: id,
-          title: opts.title,
-          body,
-        });
+        try {
+          await client.page.updateReview.mutate({
+            page_version_id: id,
+            title: opts.title,
+            body,
+          });
+        } catch (err) {
+          if (
+            isTRPCClientError(err) &&
+            (err.data as { code?: string } | null)?.code === "NOT_FOUND"
+          ) {
+            console.error(
+              pc.red(
+                `No pending review item found for '${id}'. Run 'dosu review list' to see editable items.`,
+              ),
+            );
+            process.exit(1);
+          }
+          throw err;
+        }
 
         if (opts.json) {
           printResult({ success: true, id }, opts);

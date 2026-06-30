@@ -300,6 +300,18 @@ describe("review edit", () => {
     expect(mockMutate).not.toHaveBeenCalled();
   });
 
+  it("prints a clear message for an unknown or non-pending page-version id", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(
+      new TRPCClientError("not found", {
+        result: { error: { code: -32004, message: "not found", data: { code: "NOT_FOUND" } } },
+      }),
+    );
+
+    await expect(run("edit", "pv-missing", "--title", "T")).rejects.toThrow("exit");
+    expect(errorSpy.mock.calls.flat().join(" ")).toContain("No pending review item found");
+  });
+
   it("outputs JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockMutate.mockResolvedValueOnce(undefined);
