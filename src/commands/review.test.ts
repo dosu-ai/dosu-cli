@@ -66,7 +66,8 @@ afterEach(() => {
 
 describe("review list", () => {
   const pendingItem = {
-    pageVersionId: "pv-abcdef12",
+    id: "pv-abcdef12",
+    kind: "doc_change",
     pageId: "pg-1",
     title: "API Guide",
     version: 3,
@@ -91,6 +92,7 @@ describe("review list", () => {
       knowledgeStoreId: "ks1",
     });
     expect(allOutput()).toContain("pv-abcde");
+    expect(allOutput()).toContain("doc_change");
     expect(allOutput()).toContain("API Guide");
     // origin enum is humanized to match the MCP tool / dashboard
     expect(allOutput()).toContain("Synced from source");
@@ -106,7 +108,8 @@ describe("review list", () => {
 
     const output = JSON.parse(allOutput());
     expect(output).toHaveLength(1);
-    expect(output[0].pageVersionId).toBe("pv-abcdef12");
+    expect(output[0].id).toBe("pv-abcdef12");
+    expect(output[0].kind).toBe("doc_change");
     // --json is the machine surface — raw enum, not humanized
     expect(output[0].origin).toBe("sync_upstream");
   });
@@ -255,6 +258,7 @@ describe("review approve", () => {
 
     const output = JSON.parse(allOutput());
     expect(output.success).toBe(true);
+    expect(output.id).toBe("pv-1");
     expect(output.action).toBe("accept");
   });
 });
