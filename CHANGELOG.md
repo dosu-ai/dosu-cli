@@ -1,3 +1,10 @@
+## [0.27.1](https://github.com/dosu-ai/dosu-cli/compare/v0.27.0...v0.27.1) (2026-06-30)
+
+
+### Bug Fixes
+
+* **review:** print full review item IDs in `dosu review list` ([#102](https://github.com/dosu-ai/dosu-cli/issues/102)) ([#103](https://github.com/dosu-ai/dosu-cli/issues/103)) ([4b09dc4](https://github.com/dosu-ai/dosu-cli/commit/4b09dc400be0b1e588063962d33bc408cd7edc3d))
+
 # [0.27.0](https://github.com/dosu-ai/dosu-cli/compare/v0.26.0...v0.27.0) (2026-06-30)
 
 
