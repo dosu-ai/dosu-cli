@@ -169,7 +169,7 @@ export function reviewCommand(): Command {
         items.map((i) =>
           i.kind === "draft_message"
             ? [
-                i.id.slice(0, 8),
+                i.id,
                 i.kind,
                 truncate(i.title || "(untitled)", 40),
                 "Draft reply",
@@ -177,7 +177,7 @@ export function reviewCommand(): Command {
                 formatDate(i.createdAt),
               ]
             : [
-                i.id.slice(0, 8),
+                i.id,
                 i.kind,
                 truncate(i.title ?? "(untitled)", 40),
                 humanizeSource(i.origin, i.version),
