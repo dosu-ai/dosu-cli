@@ -45,7 +45,17 @@ const validConfig = {
   expires_at: 0,
   api_key: "sk_user_test",
   space_id: "sp1",
+  deployment_id: "dep1",
 };
+
+// A tRPC NOT_FOUND error, as the client surfaces it. doc_change ids resolve via
+// review.getChange; a draft_message id 404s there — that 404 routes the verb to
+// the draft path.
+function notFound() {
+  return new TRPCClientError("not found", {
+    result: { error: { code: -32004, message: "not found", data: { code: "NOT_FOUND" } } },
+  });
+}
 
 function allOutput(): string {
   return logSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
@@ -100,6 +110,7 @@ describe("review list", () => {
     });
     expect(mockQuery).toHaveBeenNthCalledWith(2, "review.listPending", {
       knowledgeStoreId: "ks1",
+      deploymentId: "dep1",
     });
     expect(allOutput()).toContain("pv-abcde");
     expect(allOutput()).toContain("doc_change");
@@ -144,6 +155,41 @@ describe("review list", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce({ id: "ks1" });
     mockQuery.mockResolvedValueOnce([{ ...pendingItem, title: null }]);
+
+    await run("list");
+
+    expect(allOutput()).toContain("(untitled)");
+  });
+
+  const draftItem = {
+    id: "msg-abcdef12",
+    kind: "draft_message",
+    title: "Re: how do I configure X?",
+    body: "You can configure X by…",
+    threadId: "th-1",
+    createdAt: "2026-06-25T10:00:00.000Z",
+  };
+
+  it("renders draft_message items alongside doc changes", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce({ id: "ks1" });
+    mockQuery.mockResolvedValueOnce([pendingItem, draftItem]);
+
+    await run("list");
+
+    const out = allOutput();
+    expect(out).toContain("doc_change");
+    expect(out).toContain("draft_message");
+    expect(out).toContain("Re: how do I configure X?");
+    // drafts have no origin/version/pendingStatus — they render fixed labels
+    expect(out).toContain("Draft reply");
+    expect(out).toContain("draft");
+  });
+
+  it("falls back to (untitled) for a draft with an empty title", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce({ id: "ks1" });
+    mockQuery.mockResolvedValueOnce([{ ...draftItem, title: "" }]);
 
     await run("list");
 
@@ -226,22 +272,49 @@ describe("review diff", () => {
     expect(output.diff).toContain("@@");
   });
 
-  it("prints a clear message for an unknown page-version id", async () => {
+  it("prints a clear message for an id that is neither a doc change nor a draft", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockRejectedValueOnce(
-      new TRPCClientError("not found", {
-        result: { error: { code: -32004, message: "not found", data: { code: "NOT_FOUND" } } },
-      }),
-    );
+    mockQuery.mockRejectedValueOnce(notFound()); // review.getChange → not a doc
+    mockQuery.mockResolvedValueOnce(null); // messages.getMessage → not a draft
 
-    await expect(run("diff", "pv-missing")).rejects.toThrow("exit");
+    await expect(run("diff", "missing")).rejects.toThrow("exit");
     expect(errorSpy.mock.calls.flat().join(" ")).toContain("No review item found");
   });
+
+  it("shows the body for a draft id (getChange 404s → draft path)", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockRejectedValueOnce(notFound()); // review.getChange
+    mockQuery.mockResolvedValueOnce({ id: "msg-1", title: "Re: q", body: "the answer" });
+
+    await run("diff", "msg-1");
+
+    const out = allOutput();
+    expect(out).toContain("Re: q");
+    expect(out).toContain("Draft reply");
+    expect(out).toContain("the answer");
+  });
+
+  it("passes the draft through with --json", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockRejectedValueOnce(notFound());
+    mockQuery.mockResolvedValueOnce({ id: "msg-1", title: "Re: q", body: "the answer" });
+
+    await run("diff", "--json", "msg-1");
+
+    const output = JSON.parse(allOutput());
+    expect(output.kind).toBe("draft_message");
+    expect(output.body).toBe("the answer");
+  });
 });
+
+// resolveChange resolves a doc-change id (any truthy ChangeView) so edit/approve
+// take the doc path; a rejection routes to the draft path.
+const docChange = { kind: "doc_change" };
 
 describe("review edit", () => {
   it("calls page.updateReview with title and body", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce(docChange); // review.getChange → doc
     mockMutate.mockResolvedValueOnce(undefined);
 
     await run("edit", "pv-abcdef12", "--title", "New Title", "--body", "# Body");
@@ -256,6 +329,7 @@ describe("review edit", () => {
 
   it("reads body from --body-file", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce(docChange);
     mockMutate.mockResolvedValueOnce(undefined);
     const dir = mkdtempSync(join(tmpdir(), "dosu-review-test-"));
     const file = join(dir, "body.md");
@@ -270,6 +344,40 @@ describe("review edit", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("saves a new draft revision for a draft id (body only)", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockRejectedValueOnce(notFound()); // review.getChange → draft
+    mockQuery.mockResolvedValueOnce({ id: "msg-1", title: "Re: q", body: "old" }); // getMessage
+    mockMutate.mockResolvedValueOnce(undefined);
+
+    await run("edit", "msg-1", "--body", "new body");
+
+    expect(mockMutate).toHaveBeenCalledWith("messages.saveDraft", {
+      messageId: "msg-1",
+      body: "new body",
+    });
+    expect(allOutput()).toContain("Review edited: msg-1");
+  });
+
+  it("rejects --title for a draft id (saveDraft is body-only)", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockRejectedValueOnce(notFound()); // review.getChange → draft
+
+    await expect(run("edit", "msg-1", "--title", "T", "--body", "b")).rejects.toThrow("exit");
+    expect(errorSpy.mock.calls.flat().join(" ")).toContain("--body only");
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
+
+  it("prints a clear message for an unknown draft id", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockRejectedValueOnce(notFound()); // review.getChange → not a doc
+    mockQuery.mockResolvedValueOnce(null); // getMessage → not a draft
+
+    await expect(run("edit", "missing", "--body", "b")).rejects.toThrow("exit");
+    expect(errorSpy.mock.calls.flat().join(" ")).toContain("No review item found");
+    expect(mockMutate).not.toHaveBeenCalled();
   });
 
   it("errors when neither title nor body is given", async () => {
@@ -300,13 +408,10 @@ describe("review edit", () => {
     expect(mockMutate).not.toHaveBeenCalled();
   });
 
-  it("prints a clear message for an unknown or non-pending page-version id", async () => {
+  it("prints a clear message for a doc that left review between resolve and update", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockRejectedValueOnce(
-      new TRPCClientError("not found", {
-        result: { error: { code: -32004, message: "not found", data: { code: "NOT_FOUND" } } },
-      }),
-    );
+    mockQuery.mockResolvedValueOnce(docChange); // review.getChange → doc
+    mockMutate.mockRejectedValueOnce(notFound()); // page.updateReview → no longer pending
 
     await expect(run("edit", "pv-missing", "--title", "T")).rejects.toThrow("exit");
     expect(errorSpy.mock.calls.flat().join(" ")).toContain("No pending review item found");
@@ -314,6 +419,7 @@ describe("review edit", () => {
 
   it("outputs JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce(docChange);
     mockMutate.mockResolvedValueOnce(undefined);
 
     await run("edit", "--json", "pv-abcdef12", "--title", "T");
@@ -494,6 +600,61 @@ describe("review reject", () => {
   });
 });
 
+describe("review approve/reject (draft messages)", () => {
+  const draftRow = { id: "msg-1", title: "Re: how do I configure X?", body: "Configure it like…" };
+
+  it("previews the draft and publishes it on approve --confirm", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockRejectedValueOnce(notFound()); // review.getChange → draft
+    mockQuery.mockResolvedValueOnce(draftRow); // messages.getMessage
+    mockMutate.mockResolvedValueOnce(undefined);
+
+    await run("approve", "--confirm", "msg-1");
+
+    const out = allOutput();
+    expect(out).toContain("Re: how do I configure X?"); // preview shown
+    expect(out).toContain("Configure it like…");
+    expect(mockMutate).toHaveBeenCalledWith("messages.publishMessage", { postId: "msg-1" });
+    expect(out).toContain("Review approve: msg-1");
+  });
+
+  it("discards the draft on reject --confirm", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockRejectedValueOnce(notFound());
+    mockQuery.mockResolvedValueOnce(draftRow);
+    mockMutate.mockResolvedValueOnce(undefined);
+
+    await run("reject", "--confirm", "msg-1");
+
+    expect(mockMutate).toHaveBeenCalledWith("messages.deleteMessage", "msg-1");
+    expect(allOutput()).toContain("Review reject: msg-1");
+  });
+
+  it("returns a draft confirmRequired payload as JSON without --confirm", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockRejectedValueOnce(notFound());
+    mockQuery.mockResolvedValueOnce(draftRow);
+
+    await run("approve", "--json", "msg-1");
+
+    const output = JSON.parse(allOutput());
+    expect(output.kind).toBe("draft_message");
+    expect(output.confirmRequired).toBe(true);
+    expect(output.applied).toBe(false);
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
+
+  it("exits with a clear message when the draft id resolves to nothing", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockRejectedValueOnce(notFound());
+    mockQuery.mockResolvedValueOnce(null); // messages.getMessage → missing
+
+    await expect(run("approve", "--confirm", "missing")).rejects.toThrow("exit");
+    expect(errorSpy.mock.calls.flat().join(" ")).toContain("No review item found");
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
+});
+
 describe("review approve (interactive prompt)", () => {
   let ttyDescriptor: PropertyDescriptor | undefined;
 
@@ -591,6 +752,40 @@ describe("review revert", () => {
     const output = JSON.parse(allOutput());
     expect(output.success).toBe(true);
     expect(output.action).toBe("revert_to_pending");
+  });
+
+  it("rejects revert for a draft id (mutation 404s → unsupported message)", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(notFound());
+
+    await expect(run("revert", "msg-1")).rejects.toThrow("exit");
+    expect(errorSpy.mock.calls.flat().join(" ")).toContain("not supported for draft replies");
+  });
+
+  it("rethrows a non-NOT_FOUND error from revert", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockRejectedValueOnce(new Error("boom"));
+
+    await expect(run("revert", "pv-1")).rejects.toThrow("boom");
+  });
+});
+
+// Errors other than NOT_FOUND are not kind-routing signals — they propagate.
+describe("review error propagation", () => {
+  it("rethrows a non-NOT_FOUND error from getChange (kind resolution)", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockRejectedValueOnce(new Error("boom")); // review.getChange
+
+    await expect(run("approve", "--confirm", "pv-1")).rejects.toThrow("boom");
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
+
+  it("rethrows a non-NOT_FOUND error from page.updateReview", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce(docChange); // review.getChange → doc
+    mockMutate.mockRejectedValueOnce(new Error("boom"));
+
+    await expect(run("edit", "pv-1", "--body", "x")).rejects.toThrow("boom");
   });
 });
 

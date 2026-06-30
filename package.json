@@ -37,7 +37,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.5.0",
     "@clack/prompts": "^1.6.0",
-    "@dosu/api-types": "0.0.33",
+    "@dosu/api-types": "0.0.36",
     "@semantic-release/changelog": "^6.0.3",
     "@semantic-release/exec": "^7.1.0",
     "@semantic-release/git": "^10.0.1",
