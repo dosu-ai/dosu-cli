@@ -280,6 +280,26 @@ describe("review edit", () => {
     expect(mockMutate).not.toHaveBeenCalled();
   });
 
+  it("errors when both --body and --body-file are given", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+
+    await expect(run("edit", "pv-abcdef12", "--body", "x", "--body-file", "f.md")).rejects.toThrow(
+      "exit",
+    );
+    expect(errorSpy.mock.calls.flat().join(" ")).toContain("only one of --body or --body-file");
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
+
+  it("errors gracefully when --body-file cannot be read", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+
+    await expect(run("edit", "pv-abcdef12", "--body-file", "/no/such/file.md")).rejects.toThrow(
+      "exit",
+    );
+    expect(errorSpy.mock.calls.flat().join(" ")).toContain("Failed to read --body-file");
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
+
   it("outputs JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockMutate.mockResolvedValueOnce(undefined);

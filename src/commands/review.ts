@@ -186,7 +186,21 @@ export function reviewCommand(): Command {
         const cfg = requireConfig();
         const client = createTypedClient(cfg);
 
-        const body = opts.bodyFile ? readFileSync(opts.bodyFile, "utf-8") : opts.body;
+        if (opts.body !== undefined && opts.bodyFile !== undefined) {
+          console.error(pc.red("Pass only one of --body or --body-file."));
+          process.exit(1);
+        }
+
+        let body: string | undefined = opts.body;
+        if (opts.bodyFile) {
+          try {
+            body = readFileSync(opts.bodyFile, "utf-8");
+          } catch (err) {
+            console.error(pc.red(`Failed to read --body-file: ${(err as Error).message}`));
+            process.exit(1);
+          }
+        }
+
         if (body === undefined && opts.title === undefined) {
           console.error(pc.red("Nothing to edit. Pass --title and/or --body/--body-file."));
           process.exit(1);
