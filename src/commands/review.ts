@@ -2,12 +2,16 @@
  * `dosu review` — document review workflow.
  */
 
+import * as p from "@clack/prompts";
 import type { RouterOutputs } from "@dosu/api-types";
 import { Command } from "commander";
 import pc from "picocolors";
 import { createTypedClient, type TypedClient } from "../client/trpc";
 import { requireLoginConfig } from "./auth";
 import { formatDate, printInfo, printResult, printTable, truncate } from "./output";
+
+// The server-rendered change view consumed by the approve/reject confirm-gate.
+type ChangeView = RouterOutputs["review"]["getChange"];
 
 function requireConfig() {
   return requireLoginConfig();
@@ -32,6 +36,39 @@ function humanizeSource(origin: ReviewOrigin, version: number): string {
     default:
       return origin;
   }
+}
+
+// Colorize a unified diff so the preview reads like one. + green, - red, hunk headers dim.
+function colorizeDiff(diff: string): string {
+  return diff
+    .split("\n")
+    .map((line) => {
+      if (line.startsWith("+")) return pc.green(line);
+      if (line.startsWith("-")) return pc.red(line);
+      if (line.startsWith("@@")) return pc.cyan(line);
+      return pc.dim(line);
+    })
+    .join("\n");
+}
+
+// Render the change view preview shown before an approve/reject confirmation.
+function printChangePreview(change: ChangeView): void {
+  printInfo([
+    ["Title", change.title],
+    ["Source", change.source],
+    [
+      "Version",
+      change.isNewDoc
+        ? `${change.version} (new)`
+        : `${change.publishedVersion ?? "?"} → ${change.version}`,
+    ],
+  ]);
+  if (!change.hasChanges) {
+    console.log(pc.dim("No content changes."));
+    return;
+  }
+  console.log();
+  console.log(colorizeDiff(change.diff));
 }
 
 async function getKnowledgeStoreId(client: TypedClient, spaceId: string): Promise<string> {
@@ -117,27 +154,47 @@ export function reviewCommand(): Command {
       ]);
     });
 
-  const actions = [
-    { name: "approve", action: "accept" as const, description: "Approve a document version" },
-    { name: "reject", action: "decline" as const, description: "Reject a document version" },
-    {
-      name: "revert",
-      action: "revert_to_pending" as const,
-      description: "Revert to pending review",
-    },
+  // approve/reject mutate published content, so they're gated behind a diff
+  // preview + explicit confirmation — mirroring the MCP tool's confirm-gated
+  // accept/decline. `--confirm` (or an interactive y/N) is required to apply.
+  const gated = [
+    { name: "approve", action: "accept" as const, verb: "Approve" },
+    { name: "reject", action: "decline" as const, verb: "Reject" },
   ];
 
-  for (const { name, action, description } of actions) {
+  for (const { name, action, verb } of gated) {
     cmd
       .command(name)
-      .description(description)
+      .description(`${verb} a document version (shows the diff, requires --confirm)`)
       .argument("<id>", "Review item ID (from `dosu review list`)")
+      .option("--confirm", "Apply without the interactive prompt")
       .option("--json", "Output as JSON")
-      .action(async (id: string, opts: { json?: boolean }) => {
+      .action(async (id: string, opts: { json?: boolean; confirm?: boolean }) => {
         const cfg = requireConfig();
         const client = createTypedClient(cfg);
 
         // For the only kind today (doc_change) the opaque id is the page version id.
+        const change = await client.review.getChange.query({ id });
+        if (!opts.json) printChangePreview(change);
+
+        let proceed = opts.confirm === true;
+        if (!proceed && !opts.json && process.stdin?.isTTY) {
+          const answer = await p.confirm({
+            message: `${verb} this change?`,
+            initialValue: false,
+          });
+          proceed = answer === true;
+        }
+
+        if (!proceed) {
+          if (opts.json) {
+            printResult({ ...change, applied: false, confirmRequired: true }, opts);
+          } else {
+            console.log(pc.dim("Aborted. Re-run with --confirm to apply."));
+          }
+          return;
+        }
+
         await client.page.updatePublicationStatus.mutate({
           page_version_id: id,
           action,
@@ -150,6 +207,28 @@ export function reviewCommand(): Command {
         console.log(pc.green(`Review ${name}: ${id.slice(0, 8)}`));
       });
   }
+
+  // revert just re-opens an item for review (non-destructive), so it stays ungated.
+  cmd
+    .command("revert")
+    .description("Revert to pending review")
+    .argument("<id>", "Review item ID (from `dosu review list`)")
+    .option("--json", "Output as JSON")
+    .action(async (id: string, opts: { json?: boolean }) => {
+      const cfg = requireConfig();
+      const client = createTypedClient(cfg);
+
+      await client.page.updatePublicationStatus.mutate({
+        page_version_id: id,
+        action: "revert_to_pending",
+      });
+
+      if (opts.json) {
+        printResult({ success: true, id, action: "revert_to_pending" }, opts);
+        return;
+      }
+      console.log(pc.green(`Review revert: ${id.slice(0, 8)}`));
+    });
 
   return cmd;
 }

@@ -17,6 +17,11 @@ vi.mock("../client/trpc", () => ({
   createTypedClient: vi.fn().mockImplementation(() => createMockProxy()),
 }));
 
+const mockConfirm = vi.fn();
+vi.mock("@clack/prompts", () => ({
+  confirm: (...args: unknown[]) => mockConfirm(...args),
+}));
+
 const mockLoadConfig = vi.fn();
 vi.mock("../config/config", () => ({
   loadConfig: (...args: unknown[]) => mockLoadConfig(...args),
@@ -237,50 +242,157 @@ describe("review context", () => {
   });
 });
 
+const changeView = {
+  id: "pv-1",
+  kind: "doc_change",
+  title: "API Guide",
+  source: "Synced from source",
+  version: 3,
+  publishedVersion: 2,
+  isNewDoc: false,
+  hasChanges: true,
+  diff: "@@ -1,2 +1,2 @@\n context line\n-old line\n+new line",
+};
+
 describe("review approve", () => {
-  it("calls page.updatePublicationStatus with action=accept", async () => {
+  it("previews the diff and applies with --confirm", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce(changeView); // review.getChange
     mockMutate.mockResolvedValueOnce({});
 
-    await run("approve", "pv-1");
+    await run("approve", "--confirm", "pv-1");
 
+    expect(mockQuery).toHaveBeenCalledWith("review.getChange", { id: "pv-1" });
     expect(mockMutate).toHaveBeenCalledWith("page.updatePublicationStatus", {
       page_version_id: "pv-1",
       action: "accept",
     });
+    // the diff preview is shown before applying
+    const out = allOutput();
+    expect(out).toContain("API Guide");
+    expect(out).toContain("new line");
+    expect(out).toContain("Review approve: pv-1");
   });
 
-  it("outputs JSON with --json", async () => {
+  it("does not mutate without --confirm in non-interactive mode", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce(changeView);
+
+    await run("approve", "pv-1");
+
+    expect(mockMutate).not.toHaveBeenCalled();
+    expect(allOutput()).toContain("Re-run with --confirm");
+  });
+
+  it("outputs JSON with --json --confirm", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce(changeView);
     mockMutate.mockResolvedValueOnce({});
 
-    await run("approve", "--json", "pv-1");
+    await run("approve", "--json", "--confirm", "pv-1");
 
     const output = JSON.parse(allOutput());
     expect(output.success).toBe(true);
     expect(output.id).toBe("pv-1");
     expect(output.action).toBe("accept");
   });
+
+  it("returns the change preview as JSON without --confirm and does not mutate", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce(changeView);
+
+    await run("approve", "--json", "pv-1");
+
+    const output = JSON.parse(allOutput());
+    expect(output.confirmRequired).toBe(true);
+    expect(output.applied).toBe(false);
+    expect(output.diff).toContain("new line");
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
 });
 
 describe("review reject", () => {
-  it("calls page.updatePublicationStatus with action=decline", async () => {
+  it("applies with --confirm", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce(changeView);
     mockMutate.mockResolvedValueOnce({});
+
+    await run("reject", "--confirm", "pv-123456");
+
+    expect(mockMutate).toHaveBeenCalledWith("page.updatePublicationStatus", {
+      page_version_id: "pv-123456",
+      action: "decline",
+    });
+    expect(allOutput()).toContain("Review reject: pv-12345");
+  });
+
+  it("shows 'No content changes' when hasChanges is false", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce({ ...changeView, hasChanges: false });
 
     await run("reject", "pv-1");
 
+    expect(allOutput()).toContain("No content changes");
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
+});
+
+describe("review approve (interactive prompt)", () => {
+  let ttyDescriptor: PropertyDescriptor | undefined;
+
+  beforeEach(() => {
+    ttyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+  });
+
+  afterEach(() => {
+    if (ttyDescriptor) {
+      Object.defineProperty(process.stdin, "isTTY", ttyDescriptor);
+    } else {
+      // restore the original "absent" state so later tests stay non-interactive
+      Object.defineProperty(process.stdin, "isTTY", { value: undefined, configurable: true });
+    }
+  });
+
+  it("applies when the user confirms y/N", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce(changeView);
+    mockMutate.mockResolvedValueOnce({});
+    mockConfirm.mockResolvedValueOnce(true);
+
+    await run("approve", "pv-1");
+
+    expect(mockConfirm).toHaveBeenCalled();
     expect(mockMutate).toHaveBeenCalledWith("page.updatePublicationStatus", {
       page_version_id: "pv-1",
-      action: "decline",
+      action: "accept",
     });
   });
 
-  it("prints human-readable confirmation", async () => {
+  it("aborts when the user declines (or cancels)", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-    await run("reject", "pv-123456");
-    expect(allOutput()).toContain("Review reject: pv-12345");
+    mockQuery.mockResolvedValueOnce(changeView);
+    mockConfirm.mockResolvedValueOnce(false);
+
+    await run("approve", "pv-1");
+
+    expect(mockMutate).not.toHaveBeenCalled();
+    expect(allOutput()).toContain("Aborted");
+  });
+
+  it("renders a new-doc preview (no published version)", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce({
+      ...changeView,
+      isNewDoc: true,
+      publishedVersion: null,
+      version: 1,
+    });
+    mockConfirm.mockResolvedValueOnce(false);
+
+    await run("approve", "pv-1");
+
+    expect(allOutput()).toContain("1 (new)");
   });
 });
 
