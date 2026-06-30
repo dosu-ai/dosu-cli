@@ -3,6 +3,7 @@
  */
 
 import type { RouterOutputs } from "@dosu/api-types";
+import { isTRPCClientError } from "@trpc/client";
 import { Command } from "commander";
 import pc from "picocolors";
 import { createTypedClient, type TypedClient } from "../client/trpc";
@@ -83,6 +84,50 @@ export function reviewCommand(): Command {
         ]),
         { rawData: items },
       );
+    });
+
+  cmd
+    .command("diff")
+    .description("Show the server-rendered diff for a pending document version")
+    .argument("<page-version-id>", "Page version ID (from `dosu review list`)")
+    .option("--json", "Output as JSON")
+    .action(async (id: string, opts: { json?: boolean }) => {
+      const cfg = requireConfig();
+      const client = createTypedClient(cfg);
+
+      let change: RouterOutputs["review"]["getChange"];
+      try {
+        change = await client.review.getChange.query({ id });
+      } catch (err) {
+        if (
+          isTRPCClientError(err) &&
+          (err.data as { code?: string } | null)?.code === "NOT_FOUND"
+        ) {
+          console.error(
+            pc.red(
+              `No review item found for '${id}'. Run 'dosu review list' to see pending items.`,
+            ),
+          );
+          process.exit(1);
+        }
+        throw err;
+      }
+
+      if (opts.json) {
+        printResult(change, opts);
+        return;
+      }
+
+      const versions =
+        change.publishedVersion != null
+          ? `v${change.publishedVersion} → v${change.version}`
+          : `v${change.version}`;
+      console.log(pc.bold(change.title));
+      console.log(pc.dim(`${change.source} · ${versions}`));
+      console.log("");
+      // `diff` is fully rendered server-side: unified diff, new-doc body, or the
+      // "(No textual changes…)" notice — distinguished by isNewDoc / hasChanges.
+      console.log(change.diff);
     });
 
   cmd

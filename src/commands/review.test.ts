@@ -1,3 +1,4 @@
+import { TRPCClientError } from "@trpc/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockQuery = vi.fn();
@@ -159,6 +160,73 @@ describe("review list", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce(null); // knowledgeStore.getBySpaceId
     await expect(run("list")).rejects.toThrow("exit");
+  });
+});
+
+describe("review diff", () => {
+  const changeView = {
+    title: "API Guide",
+    source: "Synced from source",
+    version: 3,
+    publishedVersion: 2,
+    isNewDoc: false,
+    hasChanges: true,
+    diff: "Changes vs. current published version:\n@@ -1 +1 @@\n-old\n+new",
+  };
+
+  it("calls review.getChange with the opaque id and prints the diff", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce(changeView);
+
+    await run("diff", "pv-abcdef12");
+
+    expect(mockQuery).toHaveBeenCalledWith("review.getChange", { id: "pv-abcdef12" });
+    const output = allOutput();
+    expect(output).toContain("API Guide");
+    expect(output).toContain("Synced from source");
+    expect(output).toContain("v2 → v3");
+    expect(output).toContain("+new");
+  });
+
+  it("omits the published version arrow for a new doc", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce({
+      ...changeView,
+      publishedVersion: null,
+      isNewDoc: true,
+      diff: "New document content:\nhello world",
+    });
+
+    await run("diff", "pv-1");
+
+    const output = allOutput();
+    expect(output).toContain("v3");
+    expect(output).not.toContain("→");
+    expect(output).toContain("New document content:");
+  });
+
+  it("passes the ChangeView through with --json", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce(changeView);
+
+    await run("diff", "--json", "pv-abcdef12");
+
+    const output = JSON.parse(allOutput());
+    expect(output.title).toBe("API Guide");
+    expect(output.hasChanges).toBe(true);
+    expect(output.diff).toContain("@@");
+  });
+
+  it("prints a clear message for an unknown page-version id", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockRejectedValueOnce(
+      new TRPCClientError("not found", {
+        result: { error: { code: -32004, message: "not found", data: { code: "NOT_FOUND" } } },
+      }),
+    );
+
+    await expect(run("diff", "pv-missing")).rejects.toThrow("exit");
+    expect(errorSpy.mock.calls.flat().join(" ")).toContain("No review item found");
   });
 });
 
