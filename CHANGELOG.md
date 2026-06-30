@@ -1,3 +1,10 @@
+## [0.23.1](https://github.com/dosu-ai/dosu-cli/compare/v0.23.0...v0.23.1) (2026-06-30)
+
+
+### Bug Fixes
+
+* **review:** migrate `dosu review list` to the opaque {id, kind} contract ([#97](https://github.com/dosu-ai/dosu-cli/issues/97)) ([5a204e3](https://github.com/dosu-ai/dosu-cli/commit/5a204e343c184919edc06c0a3a43600c870e58fb)), closes [dosu-ai/dosu#11362](https://github.com/dosu-ai/dosu/issues/11362) [post-#11362](https://github.com/post-/issues/11362)
+
 # [0.23.0](https://github.com/dosu-ai/dosu-cli/compare/v0.22.0...v0.23.0) (2026-06-29)
 
 

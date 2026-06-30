@@ -1,6 +1,6 @@
 {
   "name": "@dosu/cli",
-  "version": "0.23.0",
+  "version": "0.23.1",
   "type": "module",
   "description": "Dosu CLI - Manage MCP servers for AI tools",
   "license": "MIT",
