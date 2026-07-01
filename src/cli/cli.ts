@@ -7,6 +7,7 @@ import { Command } from "commander";
 import { Client } from "../client/client";
 import { analyticsCommand } from "../commands/analytics";
 import { askCommand } from "../commands/ask";
+import { auditCommand } from "../commands/audit";
 import { deploymentsCommand } from "../commands/deployments";
 import { docsCommand } from "../commands/docs";
 import { hooksCommand } from "../commands/hooks";
@@ -32,6 +33,7 @@ import {
 } from "../config/config";
 import { logger } from "../debug/logger";
 import { allProviders, getProvider, type Provider } from "../mcp/providers";
+import { checkForReadyTasks } from "../version/pending-tasks-check";
 import { checkForSkillUpdates } from "../version/skill-update-check";
 import { checkForUpdates } from "../version/update-check";
 import { getVersionString } from "../version/version";
@@ -61,6 +63,7 @@ export function createProgram(): Command {
       if (!isHookEntrypointInvocation(process.argv)) {
         checkForUpdates();
         checkForSkillUpdates();
+        checkForReadyTasks();
       }
     })
     .action(async () => {
@@ -298,6 +301,7 @@ export function createProgram(): Command {
   // Agent-facing commands
   program.addCommand(analyticsCommand());
   program.addCommand(askCommand());
+  program.addCommand(auditCommand());
   program.addCommand(deploymentsCommand());
   program.addCommand(docsCommand());
   program.addCommand(hooksCommand());

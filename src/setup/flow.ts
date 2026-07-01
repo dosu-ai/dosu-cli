@@ -907,4 +907,13 @@ export function showTryItOutPrompt(
     return `Ask Dosu to draft an AGENTS.md for this project.`;
   })();
   p.log.message(`Try it out! Paste this into your agent:\n\n${info(prompt)}`);
+
+  // Surface the codebase audit as a next step (cloud mode only — it acts on the
+  // user's own repo). The agent runs the audit skill; `dosu audit` is the
+  // terminal-only fallback.
+  if (opts.mode !== MODE_OSS) {
+    p.log.message(
+      `See what docs Dosu can generate for this repo:\n\n${info("Ask Dosu to audit this repo and show what docs it can generate.")}\n\nOr run ${info("dosu audit")} after your agent writes the audit.`,
+    );
+  }
 }
