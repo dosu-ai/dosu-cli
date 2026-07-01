@@ -1,3 +1,10 @@
+# [0.28.0](https://github.com/dosu-ai/dosu-cli/compare/v0.27.1...v0.28.0) (2026-07-01)
+
+
+### Features
+
+* add audit command with repo-sync enforcement and non-blocking PR generation ([#95](https://github.com/dosu-ai/dosu-cli/issues/95)) ([8a81467](https://github.com/dosu-ai/dosu-cli/commit/8a81467c60fb91a943318314c008288bf8814c6e))
+
 ## [0.27.1](https://github.com/dosu-ai/dosu-cli/compare/v0.27.0...v0.27.1) (2026-06-30)
 
 
