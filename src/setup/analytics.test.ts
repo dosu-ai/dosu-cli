@@ -136,7 +136,10 @@ describe("setup analytics", () => {
     });
 
     expect(mockHttpLink).toHaveBeenCalledWith(
-      expect.objectContaining({ url: "https://app.test.dev/api/trpc" }),
+      expect.objectContaining({
+        url: "https://app.test.dev/api/cli-trpc",
+        headers: { "x-dosu-cli-contract": "ae7e94a8f7cd" },
+      }),
     );
     expect(mockCreateTRPCClient).toHaveBeenCalledWith({
       links: [expect.objectContaining({ type: "httpLink" })],
