@@ -280,7 +280,7 @@ export type CliDeployment = {
 	updated_at: string | null
 }
 
-export declare const CLI_CONTRACT_HASH: 'bce01e877c99'
+export declare const CLI_CONTRACT_HASH: '07910c2acd7a'
 
 export type AnalyticsGetUsageStatsInput = {
 	days?: number
@@ -1057,23 +1057,7 @@ export type ThreadGetOutput = {
 			ts: string
 		}
 	}
-	platform:
-		| 'github'
-		| 'slack'
-		| 'discord'
-		| 'web'
-		| 'linear'
-		| 'jira'
-		| 'memory'
-		| 'dosu_app'
-		| 'confluence'
-		| 'dosu_knowledge_store'
-		| 'notion'
-		| 'coda'
-		| 'gitlab'
-		| 'dosu_mcp'
-		| 'teams'
-		| 'azure_devops'
+	platform: string
 	read: boolean
 	resolved: boolean | null
 	resolved_reason: string | null
@@ -1149,23 +1133,7 @@ export type ThreadListOutput = {
 			}
 		}
 		page_title: string | null
-		platform:
-			| 'github'
-			| 'slack'
-			| 'discord'
-			| 'web'
-			| 'linear'
-			| 'jira'
-			| 'memory'
-			| 'dosu_app'
-			| 'confluence'
-			| 'dosu_knowledge_store'
-			| 'notion'
-			| 'coda'
-			| 'gitlab'
-			| 'dosu_mcp'
-			| 'teams'
-			| 'azure_devops'
+		platform: string
 		read: boolean
 		resolved: boolean | null
 		resolved_reason: string | null
