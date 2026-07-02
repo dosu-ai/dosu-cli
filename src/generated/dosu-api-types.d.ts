@@ -60,7 +60,227 @@ export type OptionalMutationProcedure<TInput, TOutput = any> = {
 
 export type NonUndefined<T> = Exclude<T, undefined>
 
-export declare const CLI_CONTRACT_HASH: '8f10f8658db0'
+export type CliJson =
+	| string
+	| number
+	| boolean
+	| null
+	| { [key: string]: CliJson | undefined }
+	| Array<CliJson>
+
+export type CliProviderSlug =
+	| 'github'
+	| 'slack'
+	| 'discord'
+	| 'web'
+	| 'linear'
+	| 'jira'
+	| 'memory'
+	| 'dosu_app'
+	| 'confluence'
+	| 'dosu_knowledge_store'
+	| 'notion'
+	| 'coda'
+	| 'gitlab'
+	| 'dosu_mcp'
+	| 'teams'
+	| 'azure_devops'
+
+export type CliMarkdownTree = {
+	type: string
+	children?: Array<CliMarkdownTree>
+	data?: Record<string, CliJson>
+	position?: {
+		start: { line: number; column: number; offset?: number }
+		end: { line: number; column: number; offset?: number }
+	}
+	properties?: Record<string, CliJson>
+	tagName?: string
+	value?: string
+}
+
+export type CliDataSourceStatus = 'QUEUED' | 'SYNCING' | 'PARTIAL' | 'SYNCED' | 'ERROR'
+
+export type CliDataSourceGithubRepository = {
+	config: unknown | null
+	created_at: string | null
+	description: string | null
+	discussion_categories: Array<string> | null
+	discussions_enabled: boolean | null
+	git_url: string | null
+	installation_id: number | null
+	is_fork: boolean | null
+	is_private: boolean | null
+	is_suspended: boolean | null
+	issues_enabled: boolean | null
+	languages: unknown | null
+	last_indexed_commit_sha: string | null
+	latest_event_id: number | null
+	metadata: unknown | null
+	name: string | null
+	owner_avatar_url: string | null
+	owner_name: string | null
+	paygated?: boolean
+	repository_id: number | null
+	slug: string | null
+	stargazer_count: number | null
+	updated_at: string | null
+}
+
+export type CliDataSourceSlackChannelType = 'im' | 'mpim' | 'group' | 'channel'
+
+export type CliDataSourceSlackChannel = {
+	archived: boolean | null
+	channel_id: string | null
+	channel_type: CliDataSourceSlackChannelType | null
+	description: string | null
+	enterprise_id: string | null
+	id: string | null
+	installation_id: string | null
+	is_private: boolean | null
+	name: string | null
+	org_id: string | null
+	team_id: string | null
+	team_name: string | null
+	topic: string | null
+}
+
+export type CliDataSourceTeamsChannelMembershipType = 'standard' | 'private' | 'shared'
+
+export type CliDataSourceTeamsChannel = {
+	conversation_reference: unknown | null
+	created_at: string | null
+	description: string | null
+	display_name: string | null
+	external_id: string | null
+	external_team_id: string | null
+	id: string | null
+	membership_type: CliDataSourceTeamsChannelMembershipType | null
+	org_connection_id: string | null
+	org_id: string | null
+	org_name: string | null
+	updated_at: string | null
+}
+
+export type CliDataSourceWebWebsite = {
+	created_at: string
+	id: string
+	updated_at: string
+	url: string
+}
+
+export type CliDataSourceGitlabProject = {
+	archived: boolean | null
+	avatar_url: string | null
+	created_at: string | null
+	default_branch: string | null
+	description: string | null
+	external_id: number | null
+	forks_count: number | null
+	http_url_to_repo: string | null
+	id: string | null
+	last_activity_at: string | null
+	name: string | null
+	namespace_id: number | null
+	namespace_name: string | null
+	namespace_path: string | null
+	nango_connection_id: string | null
+	org_id: string | null
+	owner_id: number | null
+	owner_username: string | null
+	path_with_namespace: string | null
+	paygated?: boolean
+	ssh_url_to_repo: string | null
+	star_count: number | null
+	updated_at: string | null
+	user_id: string | null
+	visibility: string | null
+	web_url: string | null
+}
+
+export type CliDataSourceAzureDevOpsRepository = {
+	created_at: string | null
+	default_branch: string | null
+	external_id: string | null
+	id: string | null
+	is_disabled: boolean | null
+	name: string | null
+	org_id: string | null
+	organization: string | null
+	project_id: string | null
+	project_name: string | null
+	remote_url: string | null
+	size: number | null
+	updated_at: string | null
+	user_id: string | null
+	web_url: string | null
+}
+
+export type CliDataSource = {
+	azure_devops_repository: CliDataSourceAzureDevOpsRepository | null
+	azure_devops_repository_id: string | null
+	coda_workspace_id: string | null
+	confluence_space_id: string | null
+	created_at: string
+	created_by: string | null
+	data_source_id: string
+	description: string
+	enabled: boolean
+	generated_description: string | null
+	gitlab_project: CliDataSourceGitlabProject | null
+	gitlab_project_id: string | null
+	grandfather: boolean
+	id: string
+	is_indexed: boolean
+	knowledge_store_id: string | null
+	last_indexed_at?: string
+	name: string
+	notion_workspace_id: string | null
+	org_id: string
+	paygated: boolean
+	provider_slug: CliProviderSlug
+	repository: CliDataSourceGithubRepository | null
+	repository_id: number | null
+	slack_channel: CliDataSourceSlackChannel | null
+	slack_channel_id: string | null
+	status: CliDataSourceStatus
+	teams_channel: CliDataSourceTeamsChannel | null
+	teams_channel_id: string | null
+	updated_at: string
+	website: CliDataSourceWebWebsite | null
+	website_id: string | null
+}
+
+export type CliDeploymentTargetRecord = Record<string, CliJson> & { paygated?: boolean }
+
+export type CliDeploymentTarget = {
+	azure_devops_repository: Record<string, CliJson> | null
+	gitlab_project: CliDeploymentTargetRecord | null
+	repository: CliDeploymentTargetRecord | null
+	slack_channel: Record<string, CliJson> | null
+	teams_channel: Record<string, CliJson> | null
+}
+
+export type CliDeployment = {
+	config: CliJson
+	created_at: string
+	deployment_id: string
+	description: string
+	enabled: boolean
+	knowledge_store_id: string | null
+	metadata: CliJson
+	name: string
+	org_id: string
+	provider_slug: CliProviderSlug
+	repository_id: number | null
+	response_guidelines: string | null
+	slack_channel_id: string | null
+	space_id: string
+	target: CliDeploymentTarget
+	updated_at: string
+}
+
+export declare const CLI_CONTRACT_HASH: '41a4389bbe23'
 
 export type AnalyticsGetUsageStatsInput = {
 	days?: number
@@ -184,157 +404,7 @@ export type DataSourceListInput = {
 	org_id: string
 }
 
-export type DataSourceListOutput = Array<
-	{
-		azure_devops_repository: {
-			created_at: string | null
-			default_branch: string | null
-			external_id: string | null
-			id: string | null
-			is_disabled: boolean | null
-			name: string | null
-			org_id: string | null
-			organization: string | null
-			project_id: string | null
-			project_name: string | null
-			remote_url: string | null
-			size: number | null
-			updated_at: string | null
-			user_id: string | null
-			web_url: string | null
-		} | null
-		azure_devops_repository_id: string | null
-		coda_workspace_id: string | null
-		confluence_space_id: string | null
-		created_at: string
-		created_by: string | null
-		data_source_id: string
-		description: string
-		enabled: boolean
-		generated_description: string | null
-		gitlab_project: {
-			archived: boolean | null
-			avatar_url: string | null
-			created_at: string | null
-			default_branch: string | null
-			description: string | null
-			external_id: number | null
-			forks_count: number | null
-			http_url_to_repo: string | null
-			id: string | null
-			last_activity_at: string | null
-			name: string | null
-			namespace_id: number | null
-			namespace_name: string | null
-			namespace_path: string | null
-			nango_connection_id: string | null
-			org_id: string | null
-			owner_id: number | null
-			owner_username: string | null
-			path_with_namespace: string | null
-			paygated?: boolean
-			ssh_url_to_repo: string | null
-			star_count: number | null
-			updated_at: string | null
-			user_id: string | null
-			visibility: string | null
-			web_url: string | null
-		} | null
-		gitlab_project_id: string | null
-		grandfather: boolean
-		id: string
-		is_indexed: boolean
-		knowledge_store_id: string | null
-		last_indexed_at?: string
-		name: string
-		notion_workspace_id: string | null
-		org_id: string
-		paygated: boolean
-		provider_slug:
-			| 'github'
-			| 'slack'
-			| 'discord'
-			| 'web'
-			| 'linear'
-			| 'jira'
-			| 'memory'
-			| 'dosu_app'
-			| 'confluence'
-			| 'dosu_knowledge_store'
-			| 'notion'
-			| 'coda'
-			| 'gitlab'
-			| 'dosu_mcp'
-			| 'teams'
-			| 'azure_devops'
-		repository: {
-			config: unknown | null
-			created_at: string | null
-			description: string | null
-			discussion_categories: Array<string> | null
-			discussions_enabled: boolean | null
-			git_url: string | null
-			installation_id: number | null
-			is_fork: boolean | null
-			is_private: boolean | null
-			is_suspended: boolean | null
-			issues_enabled: boolean | null
-			languages: unknown | null
-			last_indexed_commit_sha: string | null
-			latest_event_id: number | null
-			metadata: unknown | null
-			name: string | null
-			owner_avatar_url: string | null
-			owner_name: string | null
-			paygated?: boolean
-			repository_id: number | null
-			slug: string | null
-			stargazer_count: number | null
-			updated_at: string | null
-		} | null
-		repository_id: number | null
-		slack_channel: {
-			archived: boolean | null
-			channel_id: string | null
-			channel_type: 'im' | 'mpim' | 'group' | 'channel' | null
-			description: string | null
-			enterprise_id: string | null
-			id: string | null
-			installation_id: string | null
-			is_private: boolean | null
-			name: string | null
-			org_id: string | null
-			team_id: string | null
-			team_name: string | null
-			topic: string | null
-		} | null
-		slack_channel_id: string | null
-		status: 'QUEUED' | 'SYNCING' | 'PARTIAL' | 'SYNCED' | 'ERROR'
-		teams_channel: {
-			conversation_reference: unknown | null
-			created_at: string | null
-			description: string | null
-			display_name: string | null
-			external_id: string | null
-			external_team_id: string | null
-			id: string | null
-			membership_type: 'standard' | 'private' | 'shared' | null
-			org_connection_id: string | null
-			org_id: string | null
-			org_name: string | null
-			updated_at: string | null
-		} | null
-		teams_channel_id: string | null
-		updated_at: string
-		website: {
-			created_at: string
-			id: string
-			updated_at: string
-			url: string
-		} | null
-		website_id: string | null
-	} & import('@dosu/core/types/supabase').DataSource & { id: string; paygated: boolean }
->
+export type DataSourceListOutput = Array<CliDataSource>
 
 export type DataSourceSyncDataSourceInput = {
 	auto_import?: {
@@ -462,8 +532,8 @@ export type KnowledgeStoreGetBySpaceIdInput = {
 export type KnowledgeStoreGetBySpaceIdOutput = any
 
 export type MessagesListInput = {
-	cursor?: number | undefined
-	expand_body_tree?: boolean | undefined
+	cursor?: number
+	expand_body_tree?: boolean
 	limit?: number
 	sort?: 'asc' | 'desc'
 	thread_id: string
@@ -493,7 +563,7 @@ export type MessagesListOutput = {
 			author: string
 			author_role: 'user' | 'assistant' | 'maintainer' | 'bot'
 			body: string | null
-			body_tree: import('@dosu/core/markdown/types').MarkdownTree | null
+			body_tree: CliMarkdownTree | null
 			created_at: string
 			external_author_id: string | null
 			external_id: string | null
@@ -681,7 +751,7 @@ export type PageDeleteOutput = {
 }
 
 export type PageGetInput = {
-	include_resolved_relative_links?: boolean | undefined
+	include_resolved_relative_links?: boolean
 	page_id: string
 	version?: number
 }
@@ -751,17 +821,17 @@ export type PageListVersionsOutput = Array<{
 
 export type PageListWithTagsInput = {
 	excludePageType?: 'document' | 'answer' | 'changelog' | 'template' | 'topic'
-	isArchived?: boolean | undefined
+	isArchived?: boolean
 	knowledge_store_id: string
-	limit?: number | undefined
-	offset?: number | undefined
+	limit?: number
+	offset?: number
 	pageType?: 'document' | 'answer' | 'changelog' | 'template' | 'topic'
-	publishedOnly?: boolean | null | undefined
+	publishedOnly?: boolean | null
 	searchTerm?: string
-	sourceScope?: 'all' | 'external' | 'internal' | undefined
+	sourceScope?: 'all' | 'external' | 'internal'
 	syncProvider?: 'github' | 'gitlab' | 'coda' | 'confluence' | 'notion' | 'azure_devops' | null
 	topic_id?: string | null
-	withoutTopicsOnly?: boolean | undefined
+	withoutTopicsOnly?: boolean
 }
 
 export type PageListWithTagsOutput = {
@@ -947,12 +1017,12 @@ export type ThreadGetOutput = {
 	deployment_id: string
 	deployment_name: string
 	external_id: string
-	external_url?: string | null
-	generated_title: string
+	external_url: string | null
+	generated_title: string | null
 	id: string
-	inbox_archived_at: string
-	initial_message_title: string
-	latest_message_body: string
+	inbox_archived_at: string | null
+	initial_message_title: string | null
+	latest_message_body: string | null
 	metadata: {
 		github?: {
 			author_id: string
@@ -987,7 +1057,6 @@ export type ThreadGetOutput = {
 			ts: string
 		}
 	}
-	page_title: string
 	platform:
 		| 'github'
 		| 'slack'
@@ -1006,31 +1075,30 @@ export type ThreadGetOutput = {
 		| 'teams'
 		| 'azure_devops'
 	read: boolean
-	resolved: boolean
-	resolved_reason: string
-	sync_provider: 'github' | 'coda' | 'confluence' | 'notion' | 'gitlab' | 'azure_devops' | null
+	resolved: boolean | null
+	resolved_reason: string | null
 } | null
 
 export type ThreadListInput = {
-	__testing_scope__: string | undefined | null
-	active: boolean | undefined | null
-	archived: boolean | undefined | null
-	channels: Array<string> | undefined | null
-	chatOnly: boolean | undefined | null
-	confidenceLevels: Array<'low' | 'medium' | 'high'> | undefined | null
-	cursor?: number | undefined
-	excludeChannels?: Array<string> | undefined
-	excludeProviders?: Array<string> | undefined
-	inbox_archived: boolean | undefined | null
-	limit?: number | undefined
-	previewOnly: boolean | undefined | null
-	providers: Array<string> | undefined | null
-	read: boolean | undefined | null
-	resolved: boolean | undefined | null
-	search: string | undefined | null
-	sort?: 'created_at_asc' | 'created_at_desc' | undefined
+	__testing_scope__?: string | null
+	active?: boolean | null
+	archived?: boolean | null
+	channels?: Array<string> | null
+	chatOnly?: boolean | null
+	confidenceLevels?: Array<'low' | 'medium' | 'high'> | null
+	cursor?: number
+	excludeChannels?: Array<string>
+	excludeProviders?: Array<string>
+	inbox_archived?: boolean | null
+	limit?: number
+	previewOnly?: boolean | null
+	providers?: Array<string> | null
+	read?: boolean | null
+	resolved?: boolean | null
+	search?: string | null
+	sort?: 'created_at_asc' | 'created_at_desc'
 	space_id: string | null
-	workspaces: Array<string> | undefined | null
+	workspaces?: Array<string> | null
 }
 
 export type ThreadListOutput = {
@@ -1110,8 +1178,8 @@ export type ThreadListOutput = {
 
 export type TopicGetPagesByTopicIdInput = {
 	knowledge_store_id: string
-	limit?: number | undefined
-	offset?: number | undefined
+	limit?: number
+	offset?: number
 	searchTerm?: string
 	topic_id: string
 }
@@ -1169,11 +1237,11 @@ export type UserUpdateProfileInput = {
 	app_metadata?: {
 		hide_banners: Record<string, boolean>
 	}
-	bio?: string | null | undefined
+	bio?: string | null
 	created_at?: string
 	display_name?: string | null
 	email?: string
-	finished_onboarding?: boolean | undefined
+	finished_onboarding?: boolean
 	full_name?: string
 	survey_response?: {
 		discoverySource?: string
@@ -1186,18 +1254,18 @@ export type UserUpdateProfileInput = {
 	}
 	updated_at?: string
 	user_id: string
-	weekly_digest_enabled?: boolean | undefined
+	weekly_digest_enabled?: boolean
 }
 
 export type UserUpdateProfileOutput = any
 
 export type WorkspacesCreateInput = {
-	azure_devops_repository_id: string | undefined | null
+	azure_devops_repository_id?: string | null
 	config: any
 	description: string
 	enabled: boolean
-	gitlab_project_id: string | undefined | null
-	mcp_deployment_id: string | undefined | null
+	gitlab_project_id?: string | null
+	mcp_deployment_id?: string | null
 	metadata: any
 	name: string
 	org_id: string
@@ -1218,11 +1286,11 @@ export type WorkspacesCreateInput = {
 		| 'dosu_mcp'
 		| 'teams'
 		| 'azure_devops'
-	repository_id: number | undefined | null
-	response_guidelines: string | undefined | null
-	slack_channel_id: string | undefined | null
+	repository_id?: number | null
+	response_guidelines?: string | null
+	slack_channel_id?: string | null
 	space_id: string
-	teams_channel_id: string | undefined | null
+	teams_channel_id?: string | null
 }
 
 export type WorkspacesCreateOutput = any
@@ -1261,7 +1329,7 @@ export type WorkspacesListAllOutput = any
 
 export type WorkspacesListForOrgInput = string
 
-export type WorkspacesListForOrgOutput = Array<import('@dosu/core/types/supabase').Deployment>
+export type WorkspacesListForOrgOutput = Array<CliDeployment>
 
 export type WorkspacesListForSpaceInput = string
 
