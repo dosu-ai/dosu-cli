@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { CLI_CONTRACT_HASH } from "../client/contract";
 import type { Config } from "../config/config";
 
 const { mockCreateTypedClient, mockCreateTRPCClient, mockDebug, mockGetWebAppURL, mockHttpLink } =
@@ -136,7 +137,10 @@ describe("setup analytics", () => {
     });
 
     expect(mockHttpLink).toHaveBeenCalledWith(
-      expect.objectContaining({ url: "https://app.test.dev/api/trpc" }),
+      expect.objectContaining({
+        url: "https://app.test.dev/api/cli-trpc",
+        headers: { "x-dosu-cli-contract": CLI_CONTRACT_HASH },
+      }),
     );
     expect(mockCreateTRPCClient).toHaveBeenCalledWith({
       links: [expect.objectContaining({ type: "httpLink" })],

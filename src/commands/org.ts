@@ -49,7 +49,7 @@ export function orgCommand(): Command {
 
       printTable(
         ["ID", "Name"],
-        orgs.map((o) => [o.org_id.slice(0, 8), o.name]),
+        orgs.map((o: { org_id: string; name: string }) => [o.org_id.slice(0, 8), o.name]),
         { rawData: orgs },
       );
 

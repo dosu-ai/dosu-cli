@@ -66,7 +66,10 @@ export function knowledgeCommand(): Command {
 
       printTable(
         ["Title", "Type"],
-        limited.map((r) => [truncate(r.title ?? "(untitled)", 60), r.entity_type ?? "—"]),
+        limited.map((r: { title?: string | null; entity_type?: string | null }) => [
+          truncate(r.title ?? "(untitled)", 60),
+          r.entity_type ?? "—",
+        ]),
         { json: false, rawData: limited },
       );
 

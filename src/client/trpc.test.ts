@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../config/config";
+import { CLI_CONTRACT_HASH } from "./contract";
 import { createTypedClient } from "./trpc";
 
 // Mock fetch globally
@@ -98,6 +99,7 @@ describe("createTypedClient", () => {
       // Verify fetch was called with the refreshed token
       const [, fetchOpts] = mockFetch.mock.calls[0];
       expect(fetchOpts.headers["Supabase-Access-Token"]).toBe("refreshed");
+      expect(fetchOpts.headers["x-dosu-cli-contract"]).toBe(CLI_CONTRACT_HASH);
     });
 
     it("throws session expired when proactive refresh fails", async () => {
@@ -133,6 +135,7 @@ describe("createTypedClient", () => {
       // Verify retry used the new token
       const [, retryOpts] = mockFetch.mock.calls[1];
       expect(retryOpts.headers["Supabase-Access-Token"]).toBe("new_token");
+      expect(retryOpts.headers["x-dosu-cli-contract"]).toBe(CLI_CONTRACT_HASH);
     });
 
     it("returns original response when 401 refresh fails", async () => {

@@ -1,6 +1,7 @@
 import { createTRPCClient, httpLink } from "@trpc/client";
 import superjson from "superjson";
-import { type AppRouter, createTypedClient } from "../client/trpc";
+import { CLI_CONTRACT_HASH } from "../client/contract";
+import { createTypedClient } from "../client/trpc";
 import type { Config } from "../config/config";
 import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
@@ -118,11 +119,14 @@ function createAnonymousClient(): CliOnboardingAnalyticsClient {
   if (!webAppURL) {
     throw new Error("Web app URL not configured");
   }
-  return createTRPCClient<AppRouter>({
+  return createTRPCClient<never>({
     links: [
       httpLink({
-        url: `${webAppURL}/api/trpc`,
+        url: `${webAppURL}/api/cli-trpc`,
         transformer: superjson,
+        headers: {
+          "x-dosu-cli-contract": CLI_CONTRACT_HASH,
+        },
       }),
     ],
   }) as unknown as CliOnboardingAnalyticsClient;

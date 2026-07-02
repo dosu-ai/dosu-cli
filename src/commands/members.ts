@@ -42,7 +42,10 @@ export function membersCommand(): Command {
 
       printTable(
         ["Email", "Org"],
-        data.items.map((m) => [m.email ?? "—", m.org?.name ?? "—"]),
+        data.items.map((m: { email?: string | null; org?: { name?: string | null } | null }) => [
+          m.email ?? "—",
+          m.org?.name ?? "—",
+        ]),
         { rawData: data },
       );
     });
@@ -96,7 +99,10 @@ export function membersCommand(): Command {
 
       printTable(
         ["Email", "Org"],
-        data.items.map((r) => [r.email ?? "—", r.org?.name ?? "—"]),
+        data.items.map((r: { email?: string | null; org?: { name?: string | null } | null }) => [
+          r.email ?? "—",
+          r.org?.name ?? "—",
+        ]),
         { rawData: data },
       );
     });
