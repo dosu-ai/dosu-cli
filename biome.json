@@ -14,7 +14,7 @@
     }
   },
   "files": {
-    "includes": ["src/**", "scripts/**", "*.ts", "*.json"]
+    "includes": ["src/**", "scripts/**", "*.ts", "*.json", "!src/generated"]
   },
   "formatter": {
     "enabled": true,

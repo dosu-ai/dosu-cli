@@ -5,8 +5,8 @@
 import { Command } from "commander";
 import pc from "picocolors";
 import { createTypedClient } from "../client/trpc";
-import { requireLoginConfig } from "./auth";
 import type { ThreadListInput } from "../generated/dosu-api-types";
+import { requireLoginConfig } from "./auth";
 import { formatDate, printInfo, printResult, printTable, truncate } from "./output";
 
 type ThreadListItem = {
