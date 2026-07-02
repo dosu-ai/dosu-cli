@@ -4,7 +4,7 @@ import { type AppRouter, createTypedClient } from "../client/trpc";
 import type { Config } from "../config/config";
 import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
-import { VERSION } from "../version/version";
+import { INSTALL_CHANNEL, VERSION } from "../version/version";
 
 type CliOnboardingEvent =
   | "cli_onboarding_auth_completed"
@@ -104,6 +104,7 @@ export async function trackCliOnboardingPreAuthEvent(
 function baseProperties(cfg: Config): CliOnboardingProperties {
   return {
     cli_version: VERSION,
+    install_channel: INSTALL_CHANNEL,
     platform: process.platform,
     arch: process.arch,
     mode: cfg.mode ?? "cloud",

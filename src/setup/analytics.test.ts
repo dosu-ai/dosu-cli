@@ -95,6 +95,7 @@ describe("setup analytics", () => {
       event: "cli_onboarding_completed",
       properties: expect.objectContaining({
         onboarding_run_id: "run-1",
+        install_channel: "npm",
         mode: "oss",
         org_id: "org-1",
         deployment_id: "dep-1",
@@ -145,6 +146,7 @@ describe("setup analytics", () => {
       event: "cli_onboarding_auth_started",
       onboarding_run_id: "run-2",
       properties: expect.objectContaining({
+        install_channel: "npm",
         mode: "cloud",
         source: "setup",
       }),
