@@ -37,7 +37,9 @@ export function knowledgeCommand(): Command {
         excluded_provider_slugs: [],
       });
 
-      const dataSourceIds = dataSources.map((ds: { id: string }) => ds.id);
+      const dataSourceIds = dataSources
+        .map((ds) => ds.id)
+        .filter((id): id is string => id !== null);
       if (dataSourceIds.length === 0) {
         console.log(pc.dim("No data sources connected. Add data sources in the Dosu dashboard."));
         return;

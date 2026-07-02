@@ -221,32 +221,32 @@ export type CliDataSource = {
 	azure_devops_repository_id: string | null
 	coda_workspace_id: string | null
 	confluence_space_id: string | null
-	created_at: string
+	created_at: string | null
 	created_by: string | null
-	data_source_id: string
-	description: string
-	enabled: boolean
+	data_source_id: string | null
+	description: string | null
+	enabled: boolean | null
 	generated_description: string | null
 	gitlab_project: CliDataSourceGitlabProject | null
 	gitlab_project_id: string | null
-	grandfather: boolean
-	id: string
-	is_indexed: boolean
+	grandfather: boolean | null
+	id: string | null
+	is_indexed: boolean | null
 	knowledge_store_id: string | null
 	last_indexed_at?: string
-	name: string
+	name: string | null
 	notion_workspace_id: string | null
-	org_id: string
+	org_id: string | null
 	paygated: boolean
-	provider_slug: CliProviderSlug
+	provider_slug: CliProviderSlug | null
 	repository: CliDataSourceGithubRepository | null
 	repository_id: number | null
 	slack_channel: CliDataSourceSlackChannel | null
 	slack_channel_id: string | null
-	status: CliDataSourceStatus
+	status: CliDataSourceStatus | null
 	teams_channel: CliDataSourceTeamsChannel | null
 	teams_channel_id: string | null
-	updated_at: string
+	updated_at: string | null
 	website: CliDataSourceWebWebsite | null
 	website_id: string | null
 }
@@ -262,25 +262,25 @@ export type CliDeploymentTarget = {
 }
 
 export type CliDeployment = {
-	config: CliJson
-	created_at: string
-	deployment_id: string
-	description: string
-	enabled: boolean
+	config: CliJson | null
+	created_at: string | null
+	deployment_id: string | null
+	description: string | null
+	enabled: boolean | null
 	knowledge_store_id: string | null
-	metadata: CliJson
-	name: string
-	org_id: string
-	provider_slug: CliProviderSlug
+	metadata: CliJson | null
+	name: string | null
+	org_id: string | null
+	provider_slug: CliProviderSlug | null
 	repository_id: number | null
 	response_guidelines: string | null
 	slack_channel_id: string | null
-	space_id: string
-	target: CliDeploymentTarget
-	updated_at: string
+	space_id: string | null
+	target: CliDeploymentTarget | null
+	updated_at: string | null
 }
 
-export declare const CLI_CONTRACT_HASH: '41a4389bbe23'
+export declare const CLI_CONTRACT_HASH: 'bce01e877c99'
 
 export type AnalyticsGetUsageStatsInput = {
 	days?: number
@@ -541,18 +541,18 @@ export type MessagesListInput = {
 
 export type MessagesListOutput = {
 	channels: Array<{
-		archived: boolean
-		channel_id: string
-		channel_type: 'im' | 'mpim' | 'group' | 'channel'
+		archived: boolean | null
+		channel_id: string | null
+		channel_type: 'im' | 'mpim' | 'group' | 'channel' | null
 		description: string | null
 		enterprise_id: string | null
-		id: string
-		installation_id: string
+		id: string | null
+		installation_id: string | null
 		is_private: boolean | null
 		name: string | null
-		org_id: string
-		team_id: string
-		team_name: string
+		org_id: string | null
+		team_id: string | null
+		team_name: string | null
 		topic: string | null
 	}>
 	list: Array<{
@@ -562,7 +562,7 @@ export type MessagesListOutput = {
 			action: 'create' | 'edit' | 'delete'
 			author: string
 			author_role: 'user' | 'assistant' | 'maintainer' | 'bot'
-			body: string | null
+			body: string
 			body_tree: CliMarkdownTree | null
 			created_at: string
 			external_author_id: string | null
@@ -758,14 +758,14 @@ export type PageGetInput = {
 
 export type PageGetOutput = {
 	archived: boolean
-	body: string
+	body: string | null
 	created_at: string
 	created_by: string | null
 	creator_full_name: string | null
-	description: string | null
+	description?: string | null
 	document_source_path?: string | null
 	document_source_title: string | null
-	explanation: string | null
+	explanation?: string | null
 	external_trigger_url?: string | null
 	external_url: string | null
 	id: string
@@ -780,7 +780,7 @@ export type PageGetOutput = {
 	restored_from: number | null
 	sync_provider: 'github' | 'gitlab' | 'coda' | 'confluence' | 'notion' | 'azure_devops' | null
 	synced_from_document_source_id: string | null
-	thread_id: string
+	thread_id?: string | null
 	title: string
 	type: 'document' | 'answer' | 'changelog' | 'template' | 'topic'
 	updated_at: string
@@ -837,14 +837,14 @@ export type PageListWithTagsInput = {
 export type PageListWithTagsOutput = {
 	data: Array<{
 		archived: boolean
-		body: string
+		body: string | null
 		created_at: string
 		created_by: string | null
 		creator_full_name: string | null
-		description: string | null
+		description?: string | null
 		document_source_path?: string | null
 		document_source_title: string | null
-		explanation: string | null
+		explanation?: string | null
 		external_trigger_url?: string | null
 		external_url: string | null
 		id: string
@@ -860,7 +860,7 @@ export type PageListWithTagsOutput = {
 		restored_from: number | null
 		sync_provider: 'github' | 'gitlab' | 'coda' | 'confluence' | 'notion' | 'azure_devops' | null
 		synced_from_document_source_id: string | null
-		thread_id: string
+		thread_id?: string | null
 		title: string
 		topics: Array<{
 			archived: boolean
@@ -1022,14 +1022,14 @@ export type ThreadGetOutput = {
 	id: string
 	inbox_archived_at: string | null
 	initial_message_title: string | null
-	latest_message_body: string | null
+	latest_message_body: string
 	metadata: {
 		github?: {
 			author_id: string
-			discussion_number?: number
+			discussion_number?: number | null
 			html_url: string
-			issue_number?: number
-			pullrequest_number?: number
+			issue_number?: number | null
+			pullrequest_number?: number | null
 			repo_name: string
 			repo_owner: string
 		}
@@ -1105,22 +1105,22 @@ export type ThreadListOutput = {
 	list: Array<{
 		channel: string
 		created_at: string
-		deployment_id: string
-		deployment_name: string
+		deployment_id: string | null
+		deployment_name: string | null
 		external_id: string
 		external_url?: string | null
-		generated_title: string
+		generated_title: string | null
 		id: string
-		inbox_archived_at: string
-		initial_message_title: string
+		inbox_archived_at: string | null
+		initial_message_title: string | null
 		latest_message_body: string
 		metadata: {
 			github?: {
 				author_id: string
-				discussion_number?: number
+				discussion_number?: number | null
 				html_url: string
-				issue_number?: number
-				pullrequest_number?: number
+				issue_number?: number | null
+				pullrequest_number?: number | null
 				repo_name: string
 				repo_owner: string
 			}
@@ -1148,7 +1148,7 @@ export type ThreadListOutput = {
 				ts: string
 			}
 		}
-		page_title: string
+		page_title: string | null
 		platform:
 			| 'github'
 			| 'slack'
@@ -1167,8 +1167,8 @@ export type ThreadListOutput = {
 			| 'teams'
 			| 'azure_devops'
 		read: boolean
-		resolved: boolean
-		resolved_reason: string
+		resolved: boolean | null
+		resolved_reason: string | null
 		sync_provider: 'github' | 'coda' | 'confluence' | 'notion' | 'gitlab' | 'azure_devops' | null
 	}>
 	pageInfo: {
