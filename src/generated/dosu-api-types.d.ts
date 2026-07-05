@@ -280,7 +280,7 @@ export type CliDeployment = {
 	updated_at: string | null
 }
 
-export declare const CLI_CONTRACT_HASH: '07910c2acd7a'
+export declare const CLI_CONTRACT_HASH: '84df3b75c814'
 
 export type AnalyticsGetUsageStatsInput = {
 	days?: number
@@ -1025,36 +1025,38 @@ export type ThreadGetOutput = {
 	latest_message_body: string
 	metadata: {
 		github?: {
-			author_id: string
+			author_avatar_url?: string | null
+			author_id?: string | null
 			discussion_number?: number | null
-			html_url: string
+			html_url?: string | null
 			issue_number?: number | null
 			pullrequest_number?: number | null
-			repo_name: string
-			repo_owner: string
+			repo_name?: string | null
+			repo_owner?: string | null
 		}
 		gitlab?: {
-			author_id: number
-			author_username: string
-			html_url: string
-			merge_request_iid: number
-			project_id: number
-			project_path: string
+			author_id?: number | null
+			author_username?: string | null
+			html_url?: string | null
+			merge_request_iid?: number | null
+			project_id?: number | null
+			project_path?: string | null
 		}
 		linear?: {
-			author_display_name: string
-			author_id: string
-			author_name: string
-			issue_id: string
-			issue_url: string
+			author_display_name?: string | null
+			author_id?: string | null
+			author_name?: string | null
+			issue_id?: string | null
+			issue_url?: string | null
 		}
 		selected_data_source_ids?: Array<string>
 		slack?: {
-			channel_id: string
-			enterprise_id: string | null
-			team_id: string
-			thread_ts: string
-			ts: string
+			author_real_name?: string | null
+			channel_id?: string | null
+			enterprise_id?: string | null
+			team_id?: string | null
+			thread_ts?: string | null
+			ts?: string | null
 		}
 	}
 	platform: string
@@ -1100,36 +1102,38 @@ export type ThreadListOutput = {
 		latest_message_body: string
 		metadata: {
 			github?: {
-				author_id: string
+				author_avatar_url?: string | null
+				author_id?: string | null
 				discussion_number?: number | null
-				html_url: string
+				html_url?: string | null
 				issue_number?: number | null
 				pullrequest_number?: number | null
-				repo_name: string
-				repo_owner: string
+				repo_name?: string | null
+				repo_owner?: string | null
 			}
 			gitlab?: {
-				author_id: number
-				author_username: string
-				html_url: string
-				merge_request_iid: number
-				project_id: number
-				project_path: string
+				author_id?: number | null
+				author_username?: string | null
+				html_url?: string | null
+				merge_request_iid?: number | null
+				project_id?: number | null
+				project_path?: string | null
 			}
 			linear?: {
-				author_display_name: string
-				author_id: string
-				author_name: string
-				issue_id: string
-				issue_url: string
+				author_display_name?: string | null
+				author_id?: string | null
+				author_name?: string | null
+				issue_id?: string | null
+				issue_url?: string | null
 			}
 			selected_data_source_ids?: Array<string>
 			slack?: {
-				channel_id: string
-				enterprise_id: string | null
-				team_id: string
-				thread_ts: string
-				ts: string
+				author_real_name?: string | null
+				channel_id?: string | null
+				enterprise_id?: string | null
+				team_id?: string | null
+				thread_ts?: string | null
+				ts?: string | null
 			}
 		}
 		page_title: string | null
