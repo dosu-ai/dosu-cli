@@ -1,3 +1,10 @@
+## [0.28.1](https://github.com/dosu-ai/dosu-cli/compare/v0.28.0...v0.28.1) (2026-07-06)
+
+
+### Bug Fixes
+
+* **review:** dispatch draft review items by id prefix (ENG-547) ([#110](https://github.com/dosu-ai/dosu-cli/issues/110)) ([9845a2e](https://github.com/dosu-ai/dosu-cli/commit/9845a2e9762bbc12af07e611bf6303dd67e6f684)), closes [dosu-ai/dosu#11451](https://github.com/dosu-ai/dosu/issues/11451)
+
 # [0.28.0](https://github.com/dosu-ai/dosu-cli/compare/v0.27.1...v0.28.0) (2026-07-01)
 
 
