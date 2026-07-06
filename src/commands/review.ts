@@ -26,6 +26,17 @@ function isNotFound(err: unknown): boolean {
   return isTRPCClientError(err) && (err.data as { code?: string } | null)?.code === "NOT_FOUND";
 }
 
+// The change-view endpoint types its id as a UUID, so a malformed/non-UUID id
+// (a typo, or a mangled draft prefix) fails FastAPI validation with 422 → tRPC
+// UNPROCESSABLE_CONTENT rather than 404. Treat it like NOT_FOUND so a bad id reads
+// as a clean "no such review item" instead of an uncaught crash.
+function isInvalidId(err: unknown): boolean {
+  return (
+    isTRPCClientError(err) &&
+    (err.data as { code?: string } | null)?.code === "UNPROCESSABLE_CONTENT"
+  );
+}
+
 // Prefix on draft-message review-item ids from `review.listPending` (ENG-547,
 // dosu-ai/dosu#11451). Mirror of DRAFT_MESSAGE_ID_PREFIX in dosu's
 // frontend/packages/api/src/routers/review.ts and DRAFT_MESSAGE_PREFIX in
@@ -57,12 +68,13 @@ function truncateId(id: string): string {
 }
 
 // Fetch the doc-change view for a bare page-version id, or exit with a clear
-// message if it's unknown/inaccessible (getChange 404s). Non-404s propagate.
+// message if it's unknown (404), inaccessible, or a malformed id (422). Other
+// errors propagate.
 async function requireChange(client: TypedClient, id: string): Promise<ChangeView> {
   try {
     return await client.review.getChange.query({ id });
   } catch (err) {
-    if (isNotFound(err)) {
+    if (isNotFound(err) || isInvalidId(err)) {
       console.error(
         pc.red(`No review item found for '${id}'. Run 'dosu review list' to see pending items.`),
       );

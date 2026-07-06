@@ -57,6 +57,17 @@ function notFound() {
   });
 }
 
+// A tRPC UNPROCESSABLE_CONTENT error — what review.getChange surfaces for a
+// malformed (non-UUID) id, since the change-view endpoint types its path param
+// as a UUID and FastAPI 422s before any lookup.
+function unprocessable() {
+  return new TRPCClientError("invalid id", {
+    result: {
+      error: { code: -32600, message: "invalid id", data: { code: "UNPROCESSABLE_CONTENT" } },
+    },
+  });
+}
+
 function allOutput(): string {
   return logSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
 }
@@ -282,6 +293,14 @@ describe("review diff", () => {
     mockQuery.mockRejectedValueOnce(notFound()); // review.getChange → unknown doc
 
     await expect(run("diff", "missing")).rejects.toThrow("exit");
+    expect(errorSpy.mock.calls.flat().join(" ")).toContain("No review item found");
+  });
+
+  it("prints a clear message for a malformed (non-UUID) id instead of crashing", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockRejectedValueOnce(unprocessable()); // review.getChange → 422, not 404
+
+    await expect(run("diff", "not-a-uuid")).rejects.toThrow("exit");
     expect(errorSpy.mock.calls.flat().join(" ")).toContain("No review item found");
   });
 
