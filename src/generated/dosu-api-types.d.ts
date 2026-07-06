@@ -280,12 +280,13 @@ export type CliDeployment = {
 	updated_at: string | null
 }
 
-export declare const CLI_CONTRACT_HASH: '84df3b75c814'
+export declare const CLI_CONTRACT_HASH: '0a2e577fc547'
 
 export type AnalyticsGetUsageStatsInput = {
 	days?: number
 	deploymentIds?: Array<string>
 	excludeChannels?: Array<string>
+	orgId?: string | null
 	spaceId: string | null
 }
 
