@@ -361,7 +361,8 @@ describe("review edit", () => {
       messageId: "msg-1",
       body: "new body",
     });
-    expect(allOutput()).toContain("Review edited: draft_me");
+    // confirmation shows the bare message id, not the shared draft_message: prefix
+    expect(allOutput()).toContain("Review edited: msg-1");
   });
 
   it("rejects --title for a draft id (saveDraft is body-only)", async () => {
@@ -618,7 +619,7 @@ describe("review approve/reject (draft messages)", () => {
     expect(mockQuery).not.toHaveBeenCalledWith("review.getChange", expect.anything());
     expect(mockQuery).toHaveBeenCalledWith("messages.getMessage", "msg-1");
     expect(mockMutate).toHaveBeenCalledWith("messages.publishMessage", { postId: "msg-1" });
-    expect(out).toContain("Review approve: draft_me");
+    expect(out).toContain("Review approve: msg-1");
   });
 
   it("strips the prefix and discards the draft on reject --confirm", async () => {
@@ -629,7 +630,7 @@ describe("review approve/reject (draft messages)", () => {
     await run("reject", "--confirm", "draft_message:msg-1");
 
     expect(mockMutate).toHaveBeenCalledWith("messages.deleteMessage", "msg-1");
-    expect(allOutput()).toContain("Review reject: draft_me");
+    expect(allOutput()).toContain("Review reject: msg-1");
   });
 
   it("returns a draft confirmRequired payload as JSON without --confirm", async () => {

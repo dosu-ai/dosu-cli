@@ -50,6 +50,12 @@ function bareMessageId(id: string): string {
   return id.slice(DRAFT_MESSAGE_ID_PREFIX.length);
 }
 
+// Short id for confirmation messages — strip the draft prefix first so a draft
+// shows its message id (`msg-1`), not the shared prefix (`draft_me`).
+function truncateId(id: string): string {
+  return (isDraftId(id) ? bareMessageId(id) : id).slice(0, 8);
+}
+
 // Fetch the doc-change view for a bare page-version id, or exit with a clear
 // message if it's unknown/inaccessible (getChange 404s). Non-404s propagate.
 async function requireChange(client: TypedClient, id: string): Promise<ChangeView> {
@@ -335,7 +341,7 @@ export function reviewCommand(): Command {
           printResult({ success: true, id }, opts);
           return;
         }
-        console.log(pc.green(`Review edited: ${id.slice(0, 8)}`));
+        console.log(pc.green(`Review edited: ${truncateId(id)}`));
       },
     );
 
@@ -445,7 +451,7 @@ export function reviewCommand(): Command {
           printResult({ success: true, id, action }, opts);
           return;
         }
-        console.log(pc.green(`Review ${name}: ${id.slice(0, 8)}`));
+        console.log(pc.green(`Review ${name}: ${truncateId(id)}`));
       });
   }
 
@@ -484,7 +490,7 @@ export function reviewCommand(): Command {
         printResult({ success: true, id, action: "revert_to_pending" }, opts);
         return;
       }
-      console.log(pc.green(`Review revert: ${id.slice(0, 8)}`));
+      console.log(pc.green(`Review revert: ${truncateId(id)}`));
     });
 
   return cmd;
