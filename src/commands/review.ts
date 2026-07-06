@@ -83,22 +83,69 @@ function isNotFound(err: unknown): boolean {
   return isTRPCClientError(err) && (err.data as { code?: string } | null)?.code === "NOT_FOUND";
 }
 
-// Resolve the kind behind an opaque review-item id (ENG-524). doc_change items are
-// page versions (resolved by review.getChange); a draft_message id lives in the
-// message table, so getChange 404s — that 404 is how the verbs route by kind
-// without a separate flag. Returns the ChangeView for docs, null for drafts.
-async function resolveChange(client: ReviewCommandClient, id: string): Promise<ChangeView | null> {
+// The change-view endpoint types its id as a UUID, so a malformed/non-UUID id
+// (a typo, or a mangled draft prefix) fails FastAPI validation with 422 → tRPC
+// UNPROCESSABLE_CONTENT rather than 404. Treat it like NOT_FOUND so a bad id reads
+// as a clean "no such review item" instead of an uncaught crash.
+function isInvalidId(err: unknown): boolean {
+  return (
+    isTRPCClientError(err) &&
+    (err.data as { code?: string } | null)?.code === "UNPROCESSABLE_CONTENT"
+  );
+}
+
+// Prefix on draft-message review-item ids from `review.listPending` (ENG-547,
+// dosu-ai/dosu#11451). Mirror of DRAFT_MESSAGE_ID_PREFIX in dosu's
+// frontend/packages/api/src/routers/review.ts and DRAFT_MESSAGE_PREFIX in
+// backend/public_api/mcp/tools/review.py — keep all three in sync. Prefixing makes
+// the opaque id identical across MCP and tRPC/CLI so the same token is portable.
+const DRAFT_MESSAGE_ID_PREFIX = "draft_message:";
+
+// Route an opaque review-item id to its kind, mirroring the MCP tool's
+// `_parse_item_id`: a prefixed id is a draft_message, a bare id is a doc_change
+// page-version UUID. We dispatch on the prefix rather than probing review.getChange
+// (the old ENG-524 approach) because the change-view endpoint types its id as a UUID
+// and now 422s — not 404s — on a prefixed id, so a 404-probe can no longer route drafts.
+function isDraftId(id: string): boolean {
+  return id.startsWith(DRAFT_MESSAGE_ID_PREFIX);
+}
+
+// Strip the draft prefix to recover the bare message UUID the `messages.*`
+// procedures expect (they're otherwise called by the web with bare, web-controlled
+// ids). Only called on ids already confirmed as drafts by isDraftId, so the prefix
+// is always present.
+function bareMessageId(id: string): string {
+  return id.slice(DRAFT_MESSAGE_ID_PREFIX.length);
+}
+
+// Short id for confirmation messages — strip the draft prefix first so a draft
+// shows its message id (`msg-1`), not the shared prefix (`draft_me`).
+function truncateId(id: string): string {
+  return (isDraftId(id) ? bareMessageId(id) : id).slice(0, 8);
+}
+
+// Fetch the doc-change view for a bare page-version id, or exit with a clear
+// message if it's unknown (404), inaccessible, or a malformed id (422). Other
+// errors propagate.
+async function requireChange(client: ReviewCommandClient, id: string): Promise<ChangeView> {
   try {
     return await client.review.getChange.query({ id });
   } catch (err) {
-    if (isNotFound(err)) return null;
+    if (isNotFound(err) || isInvalidId(err)) {
+      console.error(
+        pc.red(`No review item found for '${id}'. Run 'dosu review list' to see pending items.`),
+      );
+      process.exit(1);
+    }
     throw err;
   }
 }
 
 // Fetch the message row behind a draft id, or exit with a clear message if missing.
+// `messages.getMessage` wants the bare UUID, so strip the prefix for the lookup while
+// still echoing the id the user passed in any error.
 async function requireDraft(client: ReviewCommandClient, id: string): Promise<DraftMessageRow> {
-  const draft = await client.messages.getMessage.query(id);
+  const draft = await client.messages.getMessage.query(bareMessageId(id));
   if (!draft) {
     console.error(
       pc.red(`No review item found for '${id}'. Run 'dosu review list' to see pending items.`),
@@ -245,9 +292,8 @@ export function reviewCommand(): Command {
       const cfg = requireConfig();
       const client = createTypedClient<ReviewCommandClient>(cfg);
 
-      // A draft_message id 404s on getChange → render its body instead of a diff.
-      const change = await resolveChange(client, id);
-      if (!change) {
+      // Route by the opaque id's prefix: a draft renders its body, a doc renders a diff.
+      if (isDraftId(id)) {
         const draft = await requireDraft(client, id);
         if (opts.json) {
           printResult({ id, kind: "draft_message", title: draft.title, body: draft.body }, opts);
@@ -260,6 +306,7 @@ export function reviewCommand(): Command {
         return;
       }
 
+      const change = await requireChange(client, id);
       if (opts.json) {
         printResult(change, opts);
         return;
@@ -316,9 +363,8 @@ export function reviewCommand(): Command {
           process.exit(1);
         }
 
-        // A draft_message id 404s on getChange → route to saveDraft (body only).
-        const change = await resolveChange(client, id);
-        if (!change) {
+        // Route by prefix: a draft saves a new revision (body only), a doc edits in place.
+        if (isDraftId(id)) {
           // saveDraft takes body only; --title is doc-only. (Past the generic
           // "nothing to edit" check above, body is guaranteed set when title isn't.)
           if (opts.title !== undefined) {
@@ -326,7 +372,10 @@ export function reviewCommand(): Command {
             process.exit(1);
           }
           await requireDraft(client, id);
-          await client.messages.saveDraft.mutate({ messageId: id, body: body as string });
+          await client.messages.saveDraft.mutate({
+            messageId: bareMessageId(id),
+            body: body as string,
+          });
         } else {
           try {
             await client.page.updateReview.mutate({
@@ -351,7 +400,7 @@ export function reviewCommand(): Command {
           printResult({ success: true, id }, opts);
           return;
         }
-        console.log(pc.green(`Review edited: ${id.slice(0, 8)}`));
+        console.log(pc.green(`Review edited: ${truncateId(id)}`));
       },
     );
 
@@ -408,9 +457,9 @@ export function reviewCommand(): Command {
         const cfg = requireConfig();
         const client = createTypedClient<ReviewCommandClient>(cfg);
 
-        // Route by kind behind the opaque id: docs resolve via getChange; a draft
-        // message 404s there, so we preview the draft body instead (ENG-524).
-        const change = await resolveChange(client, id);
+        // Route by the opaque id's prefix: a doc resolves its diff via getChange;
+        // a draft previews its stored body instead (ENG-524 / ENG-547).
+        const change = isDraftId(id) ? null : await requireChange(client, id);
         const draft = change ? null : await requireDraft(client, id);
         const noun = change ? "change" : "draft reply";
 
@@ -451,23 +500,23 @@ export function reviewCommand(): Command {
           await client.page.updatePublicationStatus.mutate({ page_version_id: id, action });
         } else if (action === "accept") {
           // Publish the draft (latest stored body) to its originating thread.
-          await client.messages.publishMessage.mutate({ postId: id });
+          await client.messages.publishMessage.mutate({ postId: bareMessageId(id) });
         } else {
           // Reject = discard the draft reply.
-          await client.messages.deleteMessage.mutate(id);
+          await client.messages.deleteMessage.mutate(bareMessageId(id));
         }
 
         if (opts.json) {
           printResult({ success: true, id, action }, opts);
           return;
         }
-        console.log(pc.green(`Review ${name}: ${id.slice(0, 8)}`));
+        console.log(pc.green(`Review ${name}: ${truncateId(id)}`));
       });
   }
 
   // revert just re-opens a doc change for review (non-destructive), so it stays
   // ungated. Drafts have no revert — a rejected draft is regenerated on the next
-  // agent run — so a draft id 404s here and we say so (ENG-524).
+  // agent run — so a draft-prefixed id is refused here (ENG-524).
   cmd
     .command("revert")
     .description("Revert a doc change to pending review (not supported for draft replies)")
@@ -477,11 +526,10 @@ export function reviewCommand(): Command {
       const cfg = requireConfig();
       const client = createTypedClient<ReviewCommandClient>(cfg);
 
-      // Resolve kind like the other verbs rather than catching the mutation's 404:
-      // a draft id 404s on getChange, and requireDraft turns a truly-unknown id into
-      // a clean "no review item" error instead of a misleading "not supported" one.
-      const change = await resolveChange(client, id);
-      if (!change) {
+      // Route by prefix: drafts have no revert. requireDraft turns a truly-unknown
+      // id into a clean "no review item" error instead of a misleading "not
+      // supported" one; requireChange does the same for an unknown doc id.
+      if (isDraftId(id)) {
         await requireDraft(client, id);
         console.error(
           pc.red(
@@ -490,6 +538,7 @@ export function reviewCommand(): Command {
         );
         process.exit(1);
       }
+      await requireChange(client, id);
 
       await client.page.updatePublicationStatus.mutate({
         page_version_id: id,
@@ -500,7 +549,7 @@ export function reviewCommand(): Command {
         printResult({ success: true, id, action: "revert_to_pending" }, opts);
         return;
       }
-      console.log(pc.green(`Review revert: ${id.slice(0, 8)}`));
+      console.log(pc.green(`Review revert: ${truncateId(id)}`));
     });
 
   return cmd;
