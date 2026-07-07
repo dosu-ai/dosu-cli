@@ -20,9 +20,16 @@
 // - invitations.invite
 // - invitations.rejectInvitation
 // - knowledgeStore.getBySpaceId
+// - messages.deleteMessage
+// - messages.getMessage
 // - messages.list
+// - messages.publishMessage
+// - messages.saveDraft
 // - nango.getConnection
+// - page.updateReview
+// - review.getChange
 // - review.getThreadContext
+// - review.listPending
 // - search.getMentions
 // - slackChannel.getAll
 // - slackChannel.join
@@ -283,7 +290,7 @@ export type CliProviderSlug =
 	| 'teams'
 	| 'azure_devops'
 
-export declare const CLI_CONTRACT_HASH: '140d68a8c401'
+export declare const CLI_CONTRACT_HASH: '8d9ba113842a'
 
 export type AnalyticsGetUsageStatsInput = {
 	days?: number
@@ -535,6 +542,14 @@ export type KnowledgeStoreGetBySpaceIdInput = {
 
 export type KnowledgeStoreGetBySpaceIdOutput = any
 
+export type MessagesDeleteMessageInput = string
+
+export type MessagesDeleteMessageOutput = any
+
+export type MessagesGetMessageInput = string
+
+export type MessagesGetMessageOutput = any
+
 export type MessagesListInput = {
 	cursor?: number
 	expand_body_tree?: boolean
@@ -544,6 +559,20 @@ export type MessagesListInput = {
 }
 
 export type MessagesListOutput = any
+
+export type MessagesPublishMessageInput = {
+	body?: string
+	postId: string
+}
+
+export type MessagesPublishMessageOutput = any
+
+export type MessagesSaveDraftInput = {
+	body: string
+	messageId: string
+}
+
+export type MessagesSaveDraftOutput = any
 
 export type NangoGetConnectionInput = {
 	orgId: string
@@ -830,11 +859,32 @@ export type PageUpdatePublicationStatusOutput = {
 	page_version_id: string
 }
 
+export type PageUpdateReviewInput = {
+	body?: string
+	page_version_id: string
+	title?: string
+}
+
+export type PageUpdateReviewOutput = any
+
+export type ReviewGetChangeInput = {
+	id: string
+}
+
+export type ReviewGetChangeOutput = any
+
 export type ReviewGetThreadContextInput = {
 	thread_id: string
 }
 
 export type ReviewGetThreadContextOutput = any
+
+export type ReviewListPendingInput = {
+	deploymentId?: string
+	knowledgeStoreId: string
+}
+
+export type ReviewListPendingOutput = any
 
 export type SearchGetMentionsInput = {
 	dataSourceIds: Array<string>
@@ -1147,7 +1197,11 @@ export interface CliApiClient {
 		getBySpaceId: QueryProcedure<KnowledgeStoreGetBySpaceIdInput, KnowledgeStoreGetBySpaceIdOutput>
 	}
 	messages: {
+		deleteMessage: MutationProcedure<MessagesDeleteMessageInput, MessagesDeleteMessageOutput>
+		getMessage: QueryProcedure<MessagesGetMessageInput, MessagesGetMessageOutput>
 		list: QueryProcedure<MessagesListInput, MessagesListOutput>
+		publishMessage: MutationProcedure<MessagesPublishMessageInput, MessagesPublishMessageOutput>
+		saveDraft: MutationProcedure<MessagesSaveDraftInput, MessagesSaveDraftOutput>
 	}
 	nango: {
 		getConnection: QueryProcedure<NangoGetConnectionInput, NangoGetConnectionOutput>
@@ -1176,9 +1230,12 @@ export interface CliApiClient {
 			PageUpdatePublicationStatusInput,
 			PageUpdatePublicationStatusOutput
 		>
+		updateReview: MutationProcedure<PageUpdateReviewInput, PageUpdateReviewOutput>
 	}
 	review: {
+		getChange: QueryProcedure<ReviewGetChangeInput, ReviewGetChangeOutput>
 		getThreadContext: QueryProcedure<ReviewGetThreadContextInput, ReviewGetThreadContextOutput>
+		listPending: QueryProcedure<ReviewListPendingInput, ReviewListPendingOutput>
 	}
 	search: {
 		getMentions: QueryProcedure<SearchGetMentionsInput, SearchGetMentionsOutput>

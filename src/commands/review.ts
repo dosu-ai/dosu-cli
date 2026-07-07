@@ -243,7 +243,7 @@ export function reviewCommand(): Command {
       // Docs are knowledge-store-scoped; drafts are deployment-scoped. Passing
       // deploymentId merges draft replies into the list (ENG-524) — omit it and
       // the server returns doc changes only.
-      const items = await client.review.listPending.query({
+      const items: ReviewListItem[] = await client.review.listPending.query({
         knowledgeStoreId: ksId,
         deploymentId: cfg.deployment_id,
       });
