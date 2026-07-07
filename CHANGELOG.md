@@ -1,3 +1,10 @@
+# [0.29.0](https://github.com/dosu-ai/dosu-cli/compare/v0.28.1...v0.29.0) (2026-07-07)
+
+
+### Features
+
+* adopt vendored CLI contract and call /api/cli-trpc ([#108](https://github.com/dosu-ai/dosu-cli/issues/108)) ([e8e6d7e](https://github.com/dosu-ai/dosu-cli/commit/e8e6d7ed23b76391685b681ed21b603f50586547)), closes [dosu#11450](https://github.com/dosu/issues/11450) [dosu#11484](https://github.com/dosu/issues/11484)
+
 ## [0.28.1](https://github.com/dosu-ai/dosu-cli/compare/v0.28.0...v0.28.1) (2026-07-06)
 
 
