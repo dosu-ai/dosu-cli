@@ -5,8 +5,26 @@
 import { Command } from "commander";
 import pc from "picocolors";
 import { createTypedClient } from "../client/trpc";
+import type { ThreadListInput } from "../generated/dosu-api-types";
 import { requireLoginConfig } from "./auth";
 import { formatDate, printInfo, printResult, printTable, truncate } from "./output";
+
+type ThreadListItem = {
+  id: string;
+  generated_title?: string | null;
+  initial_message_title?: string | null;
+  resolved?: boolean | null;
+  inbox_archived_at?: string | null;
+  created_at?: string | null;
+};
+
+type ThreadMessageGroup = {
+  messages: Array<{
+    author_role?: string | null;
+    created_at?: string | null;
+    body?: string | null;
+  }>;
+};
 
 function requireConfig() {
   const cfg = requireLoginConfig();
@@ -31,28 +49,39 @@ export function threadsCommand(): Command {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
 
-      const input: {
-        space_id: string;
-        limit: number;
-        search?: string;
-        resolved?: boolean;
-        archived?: boolean;
-      } = {
+      const input: ThreadListInput = {
+        __testing_scope__: undefined,
+        active: undefined,
+        archived: undefined,
+        channels: undefined,
+        chatOnly: undefined,
+        confidenceLevels: undefined,
+        inbox_archived: undefined,
+        previewOnly: undefined,
+        providers: undefined,
+        read: undefined,
+        resolved: undefined,
+        search: undefined,
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
         space_id: cfg.space_id!,
+        workspaces: undefined,
         limit: Math.min(Number.parseInt(opts.limit ?? "20", 10), 100),
       };
 
       if (opts.search) input.search = opts.search;
       if (opts.status === "resolved") input.resolved = true;
-      if (opts.status === "archived") input.archived = true;
+      if (opts.status === "archived") {
+        input.archived = true;
+        input.inbox_archived = true;
+      }
       if (opts.status === "pending") {
         input.resolved = false;
         input.archived = false;
+        input.inbox_archived = false;
       }
 
       const data = await client.thread.list.query(input);
-      const threads = data.list;
+      const threads = data.list as ThreadListItem[];
 
       if (opts.json) {
         printResult(data, opts);
@@ -112,7 +141,7 @@ export function threadsCommand(): Command {
         ["Channel", thread.channel],
       ]);
 
-      const messages = messagesData.list;
+      const messages = messagesData.list as ThreadMessageGroup[] | undefined;
       if (messages && messages.length > 0) {
         // Flatten message groups into individual messages
         const allMessages = messages.flatMap((group) => group.messages);

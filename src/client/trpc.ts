@@ -1,25 +1,26 @@
 /**
  * tRPC client for calling the Dosu app's tRPC API.
  *
- * Uses `@trpc/client` with full AppRouter type safety.
+ * Uses `@trpc/client` with the CLI-facing API contract.
  * Provides automatic token refresh via async headers + fetch-level 401 retry.
  */
 
-import type { AppRouter } from "@dosu/api-types";
-import { createTRPCClient, httpLink, type TRPCClient } from "@trpc/client";
+import { createTRPCClient, httpLink } from "@trpc/client";
 import superjson from "superjson";
 import { type Config, isTokenExpired } from "../config/config";
 import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
+import type { CliApiClient } from "../generated/dosu-api-types";
 import { Client } from "./client";
+import { CLI_CONTRACT_HASH } from "./contract";
 
-export type { AppRouter };
+export type { CliApiClient };
 
-/** Full app tRPC client — use this to type function parameters. */
-export type TypedClient = TRPCClient<AppRouter>;
+/** CLI tRPC client — use this to type function parameters. */
+export type TypedClient = CliApiClient;
 
 /**
- * Create a type-safe tRPC client with full AppRouter type inference.
+ * Create a type-safe tRPC client for the app's CLI router.
  *
  * Features:
  * - Proactive token refresh via async headers (checks expiry before each request)
@@ -43,10 +44,10 @@ export function createTypedClient<TClient extends object = TypedClient>(config: 
 
   const httpClient = new Client(config);
 
-  return createTRPCClient<AppRouter>({
+  return createTRPCClient<never>({
     links: [
       httpLink({
-        url: `${webAppURL}/api/trpc`,
+        url: `${webAppURL}/api/cli-trpc`,
         transformer: superjson,
         async headers() {
           if (isTokenExpired(config)) {
@@ -57,7 +58,10 @@ export function createTypedClient<TClient extends object = TypedClient>(config: 
               throw new Error("session expired. Run 'dosu login' to re-authenticate");
             }
           }
-          return { "Supabase-Access-Token": config.access_token };
+          return {
+            "Supabase-Access-Token": config.access_token,
+            "x-dosu-cli-contract": CLI_CONTRACT_HASH,
+          };
         },
         async fetch(url, options) {
           const res = await globalThis.fetch(url, options);
@@ -74,6 +78,7 @@ export function createTypedClient<TClient extends object = TypedClient>(config: 
               headers: {
                 ...(options?.headers as Record<string, string>),
                 "Supabase-Access-Token": config.access_token,
+                "x-dosu-cli-contract": CLI_CONTRACT_HASH,
               },
             });
           }
@@ -82,5 +87,5 @@ export function createTypedClient<TClient extends object = TypedClient>(config: 
         },
       }),
     ],
-  }) as TClient;
+  }) as unknown as TClient;
 }

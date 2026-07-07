@@ -151,7 +151,10 @@ export function integrationsCommand(): Command {
 
       printTable(
         ["ID", "Name"],
-        channels.map((c) => [c.channel_id, c.name ?? "(unnamed)"]),
+        channels.map((c: { channel_id: string; name?: string | null }) => [
+          c.channel_id,
+          c.name ?? "(unnamed)",
+        ]),
         { rawData: channels },
       );
     });

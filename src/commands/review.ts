@@ -4,7 +4,6 @@
 
 import { readFileSync } from "node:fs";
 import * as p from "@clack/prompts";
-import type { RouterOutputs } from "@dosu/api-types";
 import { isTRPCClientError } from "@trpc/client";
 import { Command } from "commander";
 import pc from "picocolors";
@@ -13,10 +12,68 @@ import { requireLoginConfig } from "./auth";
 import { formatDate, printInfo, printResult, printTable, truncate } from "./output";
 
 // The server-rendered change view consumed by the approve/reject confirm-gate.
-type ChangeView = RouterOutputs["review"]["getChange"];
+type ChangeView = {
+  title: string;
+  source: string;
+  version: number;
+  publishedVersion?: number | null;
+  isNewDoc: boolean;
+  hasChanges: boolean;
+  diff: string;
+};
 
 // The raw message row behind a draft id (used to preview a draft in the gate).
-type DraftMessageRow = NonNullable<RouterOutputs["messages"]["getMessage"]>;
+type DraftMessageRow = {
+  id: string;
+  title?: string | null;
+  body?: string | null;
+};
+
+type ReviewOrigin =
+  | "manual_update"
+  | "llm_generated"
+  | "sync_upstream"
+  | "api_update"
+  | (string & {});
+
+type DocReviewItem = {
+  id: string;
+  kind: "doc_change";
+  title?: string | null;
+  origin: ReviewOrigin;
+  version: number;
+  pendingStatus: string;
+  createdAt: string;
+};
+
+type DraftReviewItem = {
+  id: string;
+  kind: "draft_message";
+  title?: string | null;
+  createdAt: string;
+};
+
+type ReviewListItem = DocReviewItem | DraftReviewItem;
+
+type ReviewCommandClient = TypedClient & {
+  messages: TypedClient["messages"] & {
+    getMessage: { query(input: string): Promise<DraftMessageRow | null> };
+    saveDraft: { mutate(input: { messageId: string; body: string }): Promise<unknown> };
+    publishMessage: { mutate(input: { postId: string }): Promise<unknown> };
+    deleteMessage: { mutate(input: string): Promise<unknown> };
+  };
+  page: TypedClient["page"] & {
+    updateReview: {
+      mutate(input: { page_version_id: string; title?: string; body?: string }): Promise<unknown>;
+    };
+  };
+  review: TypedClient["review"] & {
+    getChange: { query(input: { id: string }): Promise<ChangeView> };
+    listPending: {
+      query(input: { knowledgeStoreId: string; deploymentId?: string }): Promise<ReviewListItem[]>;
+    };
+  };
+};
 
 function requireConfig() {
   return requireLoginConfig();
@@ -70,7 +127,7 @@ function truncateId(id: string): string {
 // Fetch the doc-change view for a bare page-version id, or exit with a clear
 // message if it's unknown (404), inaccessible, or a malformed id (422). Other
 // errors propagate.
-async function requireChange(client: TypedClient, id: string): Promise<ChangeView> {
+async function requireChange(client: ReviewCommandClient, id: string): Promise<ChangeView> {
   try {
     return await client.review.getChange.query({ id });
   } catch (err) {
@@ -87,7 +144,7 @@ async function requireChange(client: TypedClient, id: string): Promise<ChangeVie
 // Fetch the message row behind a draft id, or exit with a clear message if missing.
 // `messages.getMessage` wants the bare UUID, so strip the prefix for the lookup while
 // still echoing the id the user passed in any error.
-async function requireDraft(client: TypedClient, id: string): Promise<DraftMessageRow> {
+async function requireDraft(client: ReviewCommandClient, id: string): Promise<DraftMessageRow> {
   const draft = await client.messages.getMessage.query(bareMessageId(id));
   if (!draft) {
     console.error(
@@ -97,16 +154,6 @@ async function requireDraft(client: TypedClient, id: string): Promise<DraftMessa
   }
   return draft;
 }
-
-// Pinned to the published API enum so the case labels are checked against the real
-// origin union (RouterOutputs derives it from `review.listPending`).
-// `origin` is unique to the doc-change member of the listPending union (drafts
-// have none), so extract on its presence rather than on `kind` — the doc member's
-// kind is the broad ReviewItemKind, not a literal, so a kind-extract yields never.
-type ReviewOrigin = Extract<
-  RouterOutputs["review"]["listPending"][number],
-  { origin: string }
->["origin"];
 
 // ponytail: mirrors _humanize_origin in dosu's backend/public_api/mcp/tools/review.py —
 // keep in sync so the CLI, MCP tool, and dashboard show the same source labels.
@@ -190,7 +237,7 @@ export function reviewCommand(): Command {
         console.error(pc.red("Missing space config. Run 'dosu setup' to reconfigure."));
         process.exit(1);
       }
-      const client = createTypedClient(cfg);
+      const client = createTypedClient<ReviewCommandClient>(cfg);
       const ksId = await getKnowledgeStoreId(client, cfg.space_id);
 
       // Docs are knowledge-store-scoped; drafts are deployment-scoped. Passing
@@ -243,7 +290,7 @@ export function reviewCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const client = createTypedClient(cfg);
+      const client = createTypedClient<ReviewCommandClient>(cfg);
 
       // Route by the opaque id's prefix: a draft renders its body, a doc renders a diff.
       if (isDraftId(id)) {
@@ -294,7 +341,7 @@ export function reviewCommand(): Command {
         opts: { title?: string; body?: string; bodyFile?: string; json?: boolean },
       ) => {
         const cfg = requireConfig();
-        const client = createTypedClient(cfg);
+        const client = createTypedClient<ReviewCommandClient>(cfg);
 
         if (opts.body !== undefined && opts.bodyFile !== undefined) {
           console.error(pc.red("Pass only one of --body or --body-file."));
@@ -364,7 +411,7 @@ export function reviewCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (threadId: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const client = createTypedClient(cfg);
+      const client = createTypedClient<ReviewCommandClient>(cfg);
 
       const context = await client.review.getThreadContext.query({
         thread_id: threadId,
@@ -408,7 +455,7 @@ export function reviewCommand(): Command {
       .option("--json", "Output as JSON")
       .action(async (id: string, opts: { json?: boolean; confirm?: boolean }) => {
         const cfg = requireConfig();
-        const client = createTypedClient(cfg);
+        const client = createTypedClient<ReviewCommandClient>(cfg);
 
         // Route by the opaque id's prefix: a doc resolves its diff via getChange;
         // a draft previews its stored body instead (ENG-524 / ENG-547).
@@ -477,7 +524,7 @@ export function reviewCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const client = createTypedClient(cfg);
+      const client = createTypedClient<ReviewCommandClient>(cfg);
 
       // Route by prefix: drafts have no revert. requireDraft turns a truly-unknown
       // id into a clean "no review item" error instead of a misleading "not

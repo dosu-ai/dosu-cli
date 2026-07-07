@@ -37,7 +37,9 @@ export function knowledgeCommand(): Command {
         excluded_provider_slugs: [],
       });
 
-      const dataSourceIds = dataSources.map((ds: { id: string }) => ds.id);
+      const dataSourceIds = dataSources
+        .map((ds) => ds.id)
+        .filter((id): id is string => id !== null);
       if (dataSourceIds.length === 0) {
         console.log(pc.dim("No data sources connected. Add data sources in the Dosu dashboard."));
         return;
@@ -66,7 +68,10 @@ export function knowledgeCommand(): Command {
 
       printTable(
         ["Title", "Type"],
-        limited.map((r) => [truncate(r.title ?? "(untitled)", 60), r.entity_type ?? "—"]),
+        limited.map((r: { title?: string | null; entity_type?: string | null }) => [
+          truncate(r.title ?? "(untitled)", 60),
+          r.entity_type ?? "—",
+        ]),
         { json: false, rawData: limited },
       );
 

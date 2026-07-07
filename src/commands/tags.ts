@@ -57,7 +57,11 @@ export function tagsCommand(): Command {
 
       printTable(
         ["ID", "Name", "Description"],
-        tags.map((t) => [t.topic_id.slice(0, 8), t.name, t.description ?? "—"]),
+        tags.map((t: { topic_id: string; name: string; description?: string | null }) => [
+          t.topic_id.slice(0, 8),
+          t.name,
+          t.description ?? "—",
+        ]),
         { rawData: tags },
       );
     });
