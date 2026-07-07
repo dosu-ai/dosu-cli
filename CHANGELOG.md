@@ -1,3 +1,10 @@
+## [0.29.1](https://github.com/dosu-ai/dosu-cli/compare/v0.29.0...v0.29.1) (2026-07-07)
+
+
+### Bug Fixes
+
+* **review:** type all tRPC calls from the vendored contract ([#113](https://github.com/dosu-ai/dosu-cli/issues/113)) ([607022d](https://github.com/dosu-ai/dosu-cli/commit/607022d711fb73b8036ba42403cba256cc12016e)), closes [dosu#11489](https://github.com/dosu/issues/11489) [dosu#11478](https://github.com/dosu/issues/11478) [dosu#11489](https://github.com/dosu/issues/11489)
+
 # [0.29.0](https://github.com/dosu-ai/dosu-cli/compare/v0.28.1...v0.29.0) (2026-07-07)
 
 
