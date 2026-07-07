@@ -5,6 +5,7 @@ import { createTypedClient } from "../client/trpc";
 import type { Config } from "../config/config";
 import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
+import type { CliApiClient } from "../generated/dosu-api-types";
 import { VERSION } from "../version/version";
 
 type CliOnboardingEvent =
@@ -33,23 +34,9 @@ type CliOnboardingProperties = Record<
 
 const TRACKING_TIMEOUT_MS = 1_500;
 
-interface CliOnboardingAnalyticsClient {
-  user: {
-    trackCliOnboardingEvent: {
-      mutate(input: {
-        event: CliOnboardingEvent;
-        properties: CliOnboardingProperties;
-      }): Promise<unknown>;
-    };
-    trackCliOnboardingPreAuthEvent: {
-      mutate(input: {
-        event: CliOnboardingPreAuthEvent;
-        onboarding_run_id: string;
-        properties: CliOnboardingProperties;
-      }): Promise<unknown>;
-    };
-  };
-}
+// Analytics calls are typed straight from the generated contract — only the
+// `user` router subset is needed here.
+type CliOnboardingAnalyticsClient = Pick<CliApiClient, "user">;
 
 export async function trackCliOnboardingEvent(
   cfg: Config,

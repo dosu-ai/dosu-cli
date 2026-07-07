@@ -28,7 +28,7 @@
 
 import { execSync } from "node:child_process";
 import * as p from "@clack/prompts";
-import { createTypedClient } from "../client/trpc";
+import { createTypedClient, type TypedClient } from "../client/trpc";
 import type { Config } from "../config/config";
 import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
@@ -111,63 +111,6 @@ interface AvailableRepo {
   created_at?: string;
 }
 
-interface QueryProcedure<TInput, TOutput> {
-  query(input: TInput): Promise<TOutput>;
-}
-
-interface MutationProcedure<TInput, TOutput = unknown> {
-  mutate(input: TInput): Promise<TOutput>;
-}
-
-interface GitHubWorkspaceCreateInput {
-  org_id: string;
-  space_id: string;
-  enabled: boolean;
-  name: string;
-  description: string;
-  provider_slug: "github";
-  repository_id: number;
-  metadata: {
-    app: {
-      deployment_mode: string;
-      setup_mode: string;
-    };
-    provider_slug: "github";
-  };
-  config: typeof DEFAULT_DEPLOYMENT_CONFIG_GITHUB;
-}
-
-interface GitHubDataSourceCreateInput {
-  org_id: string;
-  provider_slug: "github";
-  name: string;
-  description: string;
-  repository_id: number;
-}
-
-interface GitHubSetupClient {
-  githubRepository: {
-    listForOrg: QueryProcedure<{ org_id: string }, AvailableRepo[]>;
-  };
-  workspaces: {
-    create: MutationProcedure<GitHubWorkspaceCreateInput, { deployment_id?: string } | null>;
-    delete: MutationProcedure<string>;
-    listForSpace: QueryProcedure<string, { deployment_id: string }[]>;
-  };
-  dataSource: {
-    create: MutationProcedure<GitHubDataSourceCreateInput, { data_source_id?: string } | null>;
-    list: QueryProcedure<
-      { org_id: string; excluded_provider_slugs: string[] },
-      { data_source_id?: string }[]
-    >;
-    syncDataSource: MutationProcedure<{ data_source_id: string }>;
-    attachToSpace: MutationProcedure<{ space_id: string; data_source_ids: string[] }, number>;
-  };
-  deploymentDataSource: {
-    create: MutationProcedure<{ deployment_id: string; data_source_id: string }>;
-  };
-}
-
 export function detectGitRepo(cwd: string = process.cwd()): DetectedRepo | null {
   let url: string;
   try {
@@ -192,7 +135,7 @@ export function detectGitRepo(cwd: string = process.cwd()): DetectedRepo | null 
   return { owner, name, slug: `${owner}/${name}` };
 }
 
-async function fetchListForOrg(trpc: GitHubSetupClient, orgID: string): Promise<AvailableRepo[]> {
+async function fetchListForOrg(trpc: TypedClient, orgID: string): Promise<AvailableRepo[]> {
   try {
     const repos = (await trpc.githubRepository.listForOrg.query({
       org_id: orgID,
@@ -256,7 +199,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 async function waitForRepositoryRefresh(
-  trpc: GitHubSetupClient,
+  trpc: TypedClient,
   orgID: string,
   previousRepos: AvailableRepo[],
   opts?: { timeoutMs?: number; intervalMs?: number },
@@ -365,7 +308,7 @@ async function openGitHubInstallFlow(
  * deployment-without-data_source orphans.
  */
 async function createDeploymentForRepo(
-  trpc: GitHubSetupClient,
+  trpc: TypedClient,
   orgID: string,
   spaceID: string,
   repo: AvailableRepo,
@@ -410,7 +353,8 @@ async function createDeploymentForRepo(
       space_id: spaceID,
       data_source_ids: [dataSourceID],
     });
-    const spaceDeployments = await trpc.workspaces.listForSpace.query(spaceID);
+    const spaceDeployments: { deployment_id: string }[] =
+      await trpc.workspaces.listForSpace.query(spaceID);
     await Promise.all(
       spaceDeployments.map((d) =>
         trpc.deploymentDataSource.create.mutate({
@@ -456,7 +400,7 @@ interface VerifyDataSourcesOptions {
  * has already been GC'd server-side.
  */
 export async function verifyDataSourcesPersist(
-  trpc: GitHubSetupClient,
+  trpc: TypedClient,
   orgID: string,
   expectedDataSourceIds: string[],
   opts: VerifyDataSourcesOptions = {},
@@ -476,7 +420,9 @@ export async function verifyDataSourcesPersist(
 
   while (firstIteration || Date.now() - startedAt < timeoutMs) {
     firstIteration = false;
-    let listed: { data_source_id?: string }[] = [];
+    // `data_source_id` is nullable in the contract (CliDataSource mirrors the DB
+    // view, where all columns are nullable) — the Boolean filter below drops nulls.
+    let listed: { data_source_id?: string | null }[] = [];
     try {
       listed = await trpc.dataSource.list.query({
         org_id: orgID,
@@ -507,7 +453,7 @@ export async function verifyDataSourcesPersist(
 }
 
 async function deleteOrphanDeployment(
-  trpc: GitHubSetupClient,
+  trpc: TypedClient,
   deploymentID: string,
   slug: string,
 ): Promise<void> {
@@ -541,7 +487,7 @@ export async function stepConnectGitHubRepo(
     p.log.info(`Connecting GitHub repos (detected local repo: ${detected.slug})`);
   }
 
-  const trpc: GitHubSetupClient = createTypedClient(cfg);
+  const trpc = createTypedClient(cfg);
   let repos = await fetchListForOrg(trpc, orgID);
 
   while (true) {

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { TypedClient } from "../client/trpc";
 
 // Hoist shared mocks so `vi.mock()` (which runs before imports) can capture them.
 const {
@@ -30,6 +31,11 @@ const {
     deploymentDataSource: { create: { mutate: vi.fn() } },
   },
 }));
+
+// The hoisted mock only models the routers this step touches; functions under
+// test take the full contract client, so cast once here (standard partial-mock
+// pattern in this repo).
+const mockTrpcClient = mockTrpc as unknown as TypedClient;
 
 // `open` module — MUST be mocked, or the fallback "open browser" path in
 // stepConnectGitHubRepo pops a real GitHub App install tab during tests.
@@ -995,7 +1001,7 @@ describe("verifyDataSourcesPersist", () => {
 
   it("short-circuits with empty sets when there are no expected ids", async () => {
     // Empty expected set never touches the network — covers the early return.
-    const result = await verifyDataSourcesPersist(mockTrpc, "org-1", []);
+    const result = await verifyDataSourcesPersist(mockTrpcClient, "org-1", []);
 
     expect(result.alive.size).toBe(0);
     expect(result.dropped.size).toBe(0);
@@ -1008,7 +1014,7 @@ describe("verifyDataSourcesPersist", () => {
     // return, so the real 10s default budget is never actually waited on.
     mockTrpc.dataSource.list.query.mockResolvedValue([{ data_source_id: "ds-1" }]);
 
-    const result = await verifyDataSourcesPersist(mockTrpc, "org-1", ["ds-1", "ds-2"]);
+    const result = await verifyDataSourcesPersist(mockTrpcClient, "org-1", ["ds-1", "ds-2"]);
 
     expect([...result.alive]).toEqual(["ds-1"]);
     expect([...result.dropped]).toEqual(["ds-2"]);
@@ -1018,7 +1024,7 @@ describe("verifyDataSourcesPersist", () => {
   it("reports dropped ids and exits on the first poll that misses one", async () => {
     mockTrpc.dataSource.list.query.mockResolvedValue([{ data_source_id: "ds-1" }]);
 
-    const result = await verifyDataSourcesPersist(mockTrpc, "org-1", ["ds-1", "ds-2"], {
+    const result = await verifyDataSourcesPersist(mockTrpcClient, "org-1", ["ds-1", "ds-2"], {
       timeoutMs: 0,
       intervalMs: 0,
     });
@@ -1032,7 +1038,7 @@ describe("verifyDataSourcesPersist", () => {
     // dropped and we exit immediately. Covers the dataSource.list catch block.
     mockTrpc.dataSource.list.query.mockRejectedValue(new Error("transient 503"));
 
-    const result = await verifyDataSourcesPersist(mockTrpc, "org-1", ["ds-1"], {
+    const result = await verifyDataSourcesPersist(mockTrpcClient, "org-1", ["ds-1"], {
       timeoutMs: 0,
       intervalMs: 0,
     });
@@ -1046,7 +1052,7 @@ describe("verifyDataSourcesPersist", () => {
     // side of the catch's `instanceof Error` ternary.
     mockTrpc.dataSource.list.query.mockRejectedValue("boom");
 
-    const result = await verifyDataSourcesPersist(mockTrpc, "org-1", ["ds-1"], {
+    const result = await verifyDataSourcesPersist(mockTrpcClient, "org-1", ["ds-1"], {
       timeoutMs: 0,
       intervalMs: 0,
     });
@@ -1060,7 +1066,7 @@ describe("verifyDataSourcesPersist", () => {
     // break` exit fires after the first iteration without sleeping.
     mockTrpc.dataSource.list.query.mockResolvedValue([{ data_source_id: "ds-1" }]);
 
-    const result = await verifyDataSourcesPersist(mockTrpc, "org-1", ["ds-1"], {
+    const result = await verifyDataSourcesPersist(mockTrpcClient, "org-1", ["ds-1"], {
       timeoutMs: 0,
       intervalMs: 0,
     });
@@ -1077,7 +1083,7 @@ describe("verifyDataSourcesPersist", () => {
     // timeout path through the loop without burning real time.
     mockTrpc.dataSource.list.query.mockResolvedValue([{ data_source_id: "ds-1" }]);
 
-    const result = await verifyDataSourcesPersist(mockTrpc, "org-1", ["ds-1"], {
+    const result = await verifyDataSourcesPersist(mockTrpcClient, "org-1", ["ds-1"], {
       timeoutMs: 25,
       intervalMs: 0,
     });

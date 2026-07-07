@@ -49,6 +49,10 @@ Key modules:
 - **`src/tui/`** — Main menu TUI when running `dosu` with no subcommand.
 - **`src/version/`** — Version string from build-time env vars (`DOSU_VERSION`, `DOSU_COMMIT`, `DOSU_DATE`), plus background update checks (`update-check.ts`, `skill-update-check.ts`).
 
+## CLI Contract Discipline
+
+All tRPC calls MUST be typed through the generated contract (`CliApiClient` / `TypedClient` from `src/generated/dosu-api-types.d.ts`). Never hand-write client shapes — no `TypedClient & {...}` intersections and no local `{ query(input: ...) }` / `{ mutate(input: ...) }` interfaces. Hand shapes compile against procedures the backend may not serve, turning a missing route into a production 404 instead of a type error (how `dosu review` broke in v0.29.0). If a procedure is missing from the contract, register it in `cliRouter` (dosu repo, `frontend/packages/api/src/cli-root.ts`), regenerate, and re-vendor the contract. Enforced by `src/client/contract-discipline.test.ts`.
+
 ## Testing
 
 - Tests live alongside source files as `*.test.ts`
