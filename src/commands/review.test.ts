@@ -112,7 +112,7 @@ describe("review list", () => {
   it("resolves space→KS then calls review.listPending", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce({ id: "ks1" }); // knowledgeStore.getBySpaceId
-    mockQuery.mockResolvedValueOnce([pendingItem]);
+    mockQuery.mockResolvedValueOnce({ items: [pendingItem], truncated: false, total: 0 });
 
     await run("list");
 
@@ -135,16 +135,19 @@ describe("review list", () => {
   it("outputs valid JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce({ id: "ks1" });
-    mockQuery.mockResolvedValueOnce([pendingItem]);
+    mockQuery.mockResolvedValueOnce({ items: [pendingItem], truncated: false, total: 0 });
 
     await run("list", "--json");
 
+    // --json emits the full ENG-605 envelope ({ items, truncated, total }) so
+    // machine consumers see truncation, not just the visible slice.
     const output = JSON.parse(allOutput());
-    expect(output).toHaveLength(1);
-    expect(output[0].id).toBe("pv-abcdef12");
-    expect(output[0].kind).toBe("doc_change");
+    expect(output.items).toHaveLength(1);
+    expect(output.truncated).toBe(false);
+    expect(output.items[0].id).toBe("pv-abcdef12");
+    expect(output.items[0].kind).toBe("doc_change");
     // --json is the machine surface — raw enum, not humanized
-    expect(output[0].origin).toBe("sync_upstream");
+    expect(output.items[0].origin).toBe("sync_upstream");
   });
 
   it.each([
@@ -156,7 +159,11 @@ describe("review list", () => {
   ])("humanizes source %s (v%i) as %s", async (origin, version, expected) => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce({ id: "ks1" });
-    mockQuery.mockResolvedValueOnce([{ ...pendingItem, origin, version }]);
+    mockQuery.mockResolvedValueOnce({
+      items: [{ ...pendingItem, origin, version }],
+      truncated: false,
+      total: 0,
+    });
 
     await run("list");
 
@@ -166,7 +173,11 @@ describe("review list", () => {
   it("falls back to (untitled) when title is missing", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce({ id: "ks1" });
-    mockQuery.mockResolvedValueOnce([{ ...pendingItem, title: null }]);
+    mockQuery.mockResolvedValueOnce({
+      items: [{ ...pendingItem, title: null }],
+      truncated: false,
+      total: 0,
+    });
 
     await run("list");
 
@@ -187,7 +198,11 @@ describe("review list", () => {
   it("renders draft_message items alongside doc changes", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce({ id: "ks1" });
-    mockQuery.mockResolvedValueOnce([pendingItem, draftItem]);
+    mockQuery.mockResolvedValueOnce({
+      items: [pendingItem, draftItem],
+      truncated: false,
+      total: 0,
+    });
 
     await run("list");
 
@@ -205,7 +220,11 @@ describe("review list", () => {
   it("falls back to (untitled) for a draft with an empty title", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce({ id: "ks1" });
-    mockQuery.mockResolvedValueOnce([{ ...draftItem, title: "" }]);
+    mockQuery.mockResolvedValueOnce({
+      items: [{ ...draftItem, title: "" }],
+      truncated: false,
+      total: 0,
+    });
 
     await run("list");
 
@@ -215,7 +234,7 @@ describe("review list", () => {
   it("prints message for empty queue", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce({ id: "ks1" });
-    mockQuery.mockResolvedValueOnce([]);
+    mockQuery.mockResolvedValueOnce({ items: [], truncated: false, total: 0 });
 
     await run("list");
 

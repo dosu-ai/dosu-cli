@@ -55,24 +55,14 @@ type DraftReviewItem = {
 
 type ReviewListItem = DocReviewItem | DraftReviewItem;
 
-type ReviewCommandClient = TypedClient & {
-  messages: TypedClient["messages"] & {
-    getMessage: { query(input: string): Promise<DraftMessageRow | null> };
-    saveDraft: { mutate(input: { messageId: string; body: string }): Promise<unknown> };
-    publishMessage: { mutate(input: { postId: string }): Promise<unknown> };
-    deleteMessage: { mutate(input: string): Promise<unknown> };
-  };
-  page: TypedClient["page"] & {
-    updateReview: {
-      mutate(input: { page_version_id: string; title?: string; body?: string }): Promise<unknown>;
-    };
-  };
-  review: TypedClient["review"] & {
-    getChange: { query(input: { id: string }): Promise<ChangeView> };
-    listPending: {
-      query(input: { knowledgeStoreId: string; deploymentId?: string }): Promise<ReviewListItem[]>;
-    };
-  };
+// Shape of `review.listPending` (ENG-605, dosu-ai/dosu#11478): `truncated` is
+// true when `items` may be a slice rather than the full backlog; `total` is the
+// pre-cap count (itself a lower bound). The contract types this output as `any`
+// until the procedure gets a real `.output()` DTO, so model the result locally.
+type ReviewListResult = {
+  items: ReviewListItem[];
+  truncated: boolean;
+  total: number;
 };
 
 function requireConfig() {
@@ -127,7 +117,7 @@ function truncateId(id: string): string {
 // Fetch the doc-change view for a bare page-version id, or exit with a clear
 // message if it's unknown (404), inaccessible, or a malformed id (422). Other
 // errors propagate.
-async function requireChange(client: ReviewCommandClient, id: string): Promise<ChangeView> {
+async function requireChange(client: TypedClient, id: string): Promise<ChangeView> {
   try {
     return await client.review.getChange.query({ id });
   } catch (err) {
@@ -144,7 +134,7 @@ async function requireChange(client: ReviewCommandClient, id: string): Promise<C
 // Fetch the message row behind a draft id, or exit with a clear message if missing.
 // `messages.getMessage` wants the bare UUID, so strip the prefix for the lookup while
 // still echoing the id the user passed in any error.
-async function requireDraft(client: ReviewCommandClient, id: string): Promise<DraftMessageRow> {
+async function requireDraft(client: TypedClient, id: string): Promise<DraftMessageRow> {
   const draft = await client.messages.getMessage.query(bareMessageId(id));
   if (!draft) {
     console.error(
@@ -237,19 +227,20 @@ export function reviewCommand(): Command {
         console.error(pc.red("Missing space config. Run 'dosu setup' to reconfigure."));
         process.exit(1);
       }
-      const client = createTypedClient<ReviewCommandClient>(cfg);
+      const client = createTypedClient(cfg);
       const ksId = await getKnowledgeStoreId(client, cfg.space_id);
 
       // Docs are knowledge-store-scoped; drafts are deployment-scoped. Passing
       // deploymentId merges draft replies into the list (ENG-524) — omit it and
       // the server returns doc changes only.
-      const items: ReviewListItem[] = await client.review.listPending.query({
+      const result: ReviewListResult = await client.review.listPending.query({
         knowledgeStoreId: ksId,
         deploymentId: cfg.deployment_id,
       });
+      const { items, truncated, total } = result;
 
       if (opts.json) {
-        printResult(items, opts);
+        printResult(result, opts);
         return;
       }
 
@@ -281,6 +272,11 @@ export function reviewCommand(): Command {
         ),
         { rawData: items },
       );
+      if (truncated) {
+        // Mirrors the MCP review tool's truncation footer (ENG-605): the backlog
+        // is larger than one page, so tell the user what they're looking at.
+        console.log(pc.dim(`Showing ${items.length} of ${total}+ pending items (list truncated).`));
+      }
     });
 
   cmd
@@ -290,7 +286,7 @@ export function reviewCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const client = createTypedClient<ReviewCommandClient>(cfg);
+      const client = createTypedClient(cfg);
 
       // Route by the opaque id's prefix: a draft renders its body, a doc renders a diff.
       if (isDraftId(id)) {
@@ -341,7 +337,7 @@ export function reviewCommand(): Command {
         opts: { title?: string; body?: string; bodyFile?: string; json?: boolean },
       ) => {
         const cfg = requireConfig();
-        const client = createTypedClient<ReviewCommandClient>(cfg);
+        const client = createTypedClient(cfg);
 
         if (opts.body !== undefined && opts.bodyFile !== undefined) {
           console.error(pc.red("Pass only one of --body or --body-file."));
@@ -411,7 +407,7 @@ export function reviewCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (threadId: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const client = createTypedClient<ReviewCommandClient>(cfg);
+      const client = createTypedClient(cfg);
 
       const context = await client.review.getThreadContext.query({
         thread_id: threadId,
@@ -455,7 +451,7 @@ export function reviewCommand(): Command {
       .option("--json", "Output as JSON")
       .action(async (id: string, opts: { json?: boolean; confirm?: boolean }) => {
         const cfg = requireConfig();
-        const client = createTypedClient<ReviewCommandClient>(cfg);
+        const client = createTypedClient(cfg);
 
         // Route by the opaque id's prefix: a doc resolves its diff via getChange;
         // a draft previews its stored body instead (ENG-524 / ENG-547).
@@ -524,7 +520,7 @@ export function reviewCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const client = createTypedClient<ReviewCommandClient>(cfg);
+      const client = createTypedClient(cfg);
 
       // Route by prefix: drafts have no revert. requireDraft turns a truly-unknown
       // id into a clean "no review item" error instead of a misleading "not

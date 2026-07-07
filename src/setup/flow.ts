@@ -7,6 +7,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import * as p from "@clack/prompts";
 import { Client, type Deployment, type Org, SessionExpiredError } from "../client/client";
+import type { TypedClient } from "../client/trpc";
 import { installSkill } from "../commands/skill";
 import { type Config, loadConfig, MODE_OSS, type SetupMode, saveConfig } from "../config/config";
 import { logger } from "../debug/logger";
@@ -59,22 +60,6 @@ interface CliOnboardingProfile {
   user_id?: string | null;
   finished_onboarding?: boolean | null;
   cli_onboarding_enabled?: boolean | null;
-}
-
-interface CliOnboardingClient {
-  user: {
-    getCliOnboardingContext: {
-      query(): Promise<CliOnboardingProfile | null>;
-    };
-    updateProfile: {
-      mutate(input: { user_id: string; finished_onboarding: boolean }): Promise<unknown>;
-    };
-  };
-  organization: {
-    getOrganizations: {
-      query(): Promise<OwnedOrg[]>;
-    };
-  };
 }
 
 export async function runSetup(opts: SetupOptions = {}): Promise<void> {
@@ -273,7 +258,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     const profileUserID = cloudSetupContext.profileUserID;
     try {
       const { createTypedClient } = await import("../client/trpc");
-      const trpc: CliOnboardingClient = createTypedClient(cfg);
+      const trpc = createTypedClient(cfg);
       await trpc.user.updateProfile.mutate({
         user_id: profileUserID,
         finished_onboarding: true,
@@ -532,8 +517,8 @@ async function openBrowserForSetup(cfg: Config, onboardingRunID?: string): Promi
 async function resolveCloudSetupContext(cfg: Config): Promise<CloudSetupContext | null> {
   try {
     const { createTypedClient } = await import("../client/trpc");
-    const trpc: CliOnboardingClient = createTypedClient(cfg);
-    const profile = await trpc.user.getCliOnboardingContext.query();
+    const trpc = createTypedClient(cfg);
+    const profile: CliOnboardingProfile | null = await trpc.user.getCliOnboardingContext.query();
 
     if (!profile?.user_id) {
       p.log.error("Could not load your profile.");
@@ -567,8 +552,8 @@ async function resolveCloudSetupContext(cfg: Config): Promise<CloudSetupContext 
   }
 }
 
-async function resolveOnboardingTargetOrg(trpc: CliOnboardingClient): Promise<OwnedOrg | null> {
-  const accessibleOrgs = await trpc.organization.getOrganizations.query();
+async function resolveOnboardingTargetOrg(trpc: TypedClient): Promise<OwnedOrg | null> {
+  const accessibleOrgs: OwnedOrg[] = await trpc.organization.getOrganizations.query();
   const ownerOrg = accessibleOrgs.find((org) => org.user_role === "OWNER");
   if (ownerOrg) {
     return ownerOrg;
