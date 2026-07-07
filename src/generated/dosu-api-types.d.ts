@@ -30,6 +30,8 @@
 // - suggestedDoc.generate
 // - suggestedDoc.listForKnowledgeStore
 // - thread.archive
+// - thread.get
+// - thread.list
 // - topic.getPagesByTopicId
 // - topic.listTopicsByKnowledgeStore
 // - topic.removeFromPage
@@ -281,7 +283,7 @@ export type CliProviderSlug =
 	| 'teams'
 	| 'azure_devops'
 
-export declare const CLI_CONTRACT_HASH: 'dc6d867d105a'
+export declare const CLI_CONTRACT_HASH: '140d68a8c401'
 
 export type AnalyticsGetUsageStatsInput = {
 	days?: number
@@ -891,59 +893,7 @@ export type ThreadArchiveOutput = any
 
 export type ThreadGetInput = string
 
-export type ThreadGetOutput = {
-	channel: string
-	created_at: string
-	deployment_id: string
-	deployment_name: string
-	external_id: string
-	external_url: string | null
-	generated_title: string | null
-	id: string
-	inbox_archived_at: string | null
-	initial_message_title: string | null
-	latest_message_body: string
-	metadata: {
-		github?: {
-			author_avatar_url?: string | null
-			author_id?: string | null
-			discussion_number?: number | null
-			html_url?: string | null
-			issue_number?: number | null
-			pullrequest_number?: number | null
-			repo_name?: string | null
-			repo_owner?: string | null
-		}
-		gitlab?: {
-			author_id?: number | null
-			author_username?: string | null
-			html_url?: string | null
-			merge_request_iid?: number | null
-			project_id?: number | null
-			project_path?: string | null
-		}
-		linear?: {
-			author_display_name?: string | null
-			author_id?: string | null
-			author_name?: string | null
-			issue_id?: string | null
-			issue_url?: string | null
-		}
-		selected_data_source_ids?: Array<string>
-		slack?: {
-			author_real_name?: string | null
-			channel_id?: string | null
-			enterprise_id?: string | null
-			team_id?: string | null
-			thread_ts?: string | null
-			ts?: string | null
-		}
-	}
-	platform: string
-	read: boolean
-	resolved: boolean | null
-	resolved_reason: string | null
-} | null
+export type ThreadGetOutput = any
 
 export type ThreadListInput = {
 	__testing_scope__?: string | null
@@ -967,66 +917,7 @@ export type ThreadListInput = {
 	workspaces?: Array<string> | null
 }
 
-export type ThreadListOutput = {
-	list: Array<{
-		channel: string
-		created_at: string
-		deployment_id: string | null
-		deployment_name: string | null
-		external_id: string
-		external_url?: string | null
-		generated_title: string | null
-		id: string
-		inbox_archived_at: string | null
-		initial_message_title: string | null
-		latest_message_body: string
-		metadata: {
-			github?: {
-				author_avatar_url?: string | null
-				author_id?: string | null
-				discussion_number?: number | null
-				html_url?: string | null
-				issue_number?: number | null
-				pullrequest_number?: number | null
-				repo_name?: string | null
-				repo_owner?: string | null
-			}
-			gitlab?: {
-				author_id?: number | null
-				author_username?: string | null
-				html_url?: string | null
-				merge_request_iid?: number | null
-				project_id?: number | null
-				project_path?: string | null
-			}
-			linear?: {
-				author_display_name?: string | null
-				author_id?: string | null
-				author_name?: string | null
-				issue_id?: string | null
-				issue_url?: string | null
-			}
-			selected_data_source_ids?: Array<string>
-			slack?: {
-				author_real_name?: string | null
-				channel_id?: string | null
-				enterprise_id?: string | null
-				team_id?: string | null
-				thread_ts?: string | null
-				ts?: string | null
-			}
-		}
-		page_title: string | null
-		platform: string
-		read: boolean
-		resolved: boolean | null
-		resolved_reason: string | null
-		sync_provider: 'github' | 'coda' | 'confluence' | 'notion' | 'gitlab' | 'azure_devops' | null
-	}>
-	pageInfo: {
-		nextCursor: number | null
-	}
-}
+export type ThreadListOutput = any
 
 export type TopicGetPagesByTopicIdInput = {
 	knowledge_store_id: string
