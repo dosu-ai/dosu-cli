@@ -22,7 +22,7 @@ vi.mock("../config/config", () => ({
   loadConfig: (...args: unknown[]) => mockLoadConfig(...args),
 }));
 
-import { tagsCommand } from "./tags";
+import { topicsCommand } from "./topics";
 
 let logSpy: ReturnType<typeof vi.spyOn>;
 let errorSpy: ReturnType<typeof vi.spyOn>;
@@ -42,7 +42,7 @@ function allOutput(): string {
 }
 
 async function run(...args: string[]) {
-  const cmd = tagsCommand();
+  const cmd = topicsCommand();
   cmd.exitOverride();
   await cmd.parseAsync(["node", "test", ...args]);
 }
@@ -66,7 +66,7 @@ afterEach(() => {
   exitSpy.mockRestore();
 });
 
-describe("tags list", () => {
+describe("topics list", () => {
   it("calls topic.listTopicsByKnowledgeStore with knowledge_store_id", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce([{ topic_id: "t1", name: "API", description: "API docs" }]);
@@ -95,11 +95,11 @@ describe("tags list", () => {
 
     await run("list");
 
-    expect(allOutput()).toContain("No tags found");
+    expect(allOutput()).toContain("No topics found");
   });
 });
 
-describe("tags pages", () => {
+describe("topics pages", () => {
   it("calls topic.getPagesByTopicId with pagination", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce({ data: [{ id: "p1", title: "Doc A" }] });

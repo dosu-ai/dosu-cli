@@ -20,8 +20,8 @@ import { reviewCommand } from "../commands/review";
 import { skillCommand } from "../commands/skill";
 import { sourcesCommand } from "../commands/sources";
 import { suggestCommand } from "../commands/suggest";
-import { tagsCommand } from "../commands/tags";
 import { threadsCommand } from "../commands/threads";
+import { topicsCommand } from "../commands/topics";
 import {
   type Config,
   getConfigPath,
@@ -313,7 +313,7 @@ export function createProgram(): Command {
   program.addCommand(reviewCommand());
   program.addCommand(sourcesCommand());
   program.addCommand(suggestCommand());
-  program.addCommand(tagsCommand());
+  program.addCommand(topicsCommand());
   program.addCommand(threadsCommand());
   program.addCommand(skillCommand());
 
