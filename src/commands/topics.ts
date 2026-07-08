@@ -1,5 +1,8 @@
 /**
- * `dosu tags` — tag management for knowledge base.
+ * `dosu topics` — browse Topics in your knowledge base (read-only).
+ *
+ * Topics are fully managed by Dosu (assigned during indexing); the CLI can
+ * list them and the pages under each, but cannot create, edit, or remove them.
  */
 
 import { Command } from "commander";
@@ -28,12 +31,15 @@ async function getKnowledgeStoreId(client: TypedClient, spaceId: string): Promis
   return store.id;
 }
 
-export function tagsCommand(): Command {
-  const cmd = new Command("tags").description("Manage knowledge base tags");
+export function topicsCommand(): Command {
+  // `tags` kept as a hidden alias for back-compat with the pre-rename CLI.
+  const cmd = new Command("topics")
+    .alias("tags")
+    .description("Browse Topics in your knowledge base");
 
   cmd
     .command("list")
-    .description("List all tags")
+    .description("List all topics")
     .option("--json", "Output as JSON")
     .action(async (opts: { json?: boolean }) => {
       const cfg = requireConfig();
@@ -41,57 +47,39 @@ export function tagsCommand(): Command {
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
       const ksId = await getKnowledgeStoreId(client, cfg.space_id!);
 
-      const tags = await client.topic.listTopicsByKnowledgeStore.query({
+      const topics = await client.topic.listTopicsByKnowledgeStore.query({
         knowledge_store_id: ksId,
       });
 
       if (opts.json) {
-        printResult(tags, opts);
+        printResult(topics, opts);
         return;
       }
 
-      if (!tags || tags.length === 0) {
-        console.log(pc.dim("No tags found."));
+      if (!topics || topics.length === 0) {
+        console.log(pc.dim("No topics found."));
         return;
       }
 
       printTable(
         ["ID", "Name", "Description"],
-        tags.map((t: { topic_id: string; name: string; description?: string | null }) => [
+        topics.map((t: { topic_id: string; name: string; description?: string | null }) => [
           t.topic_id.slice(0, 8),
           t.name,
           t.description ?? "—",
         ]),
-        { rawData: tags },
+        { rawData: topics },
       );
     });
 
   cmd
-    .command("remove")
-    .description("Remove a tag from a page")
-    .argument("<tag-id>", "Tag ID")
-    .argument("<page-id>", "Page ID")
-    .option("--json", "Output as JSON")
-    .action(async (tagId: string, pageId: string, opts: { json?: boolean }) => {
-      const cfg = requireConfig();
-      const client = createTypedClient(cfg);
-      await client.topic.removeFromPage.mutate({ topic_id: tagId, page_id: pageId });
-
-      if (opts.json) {
-        printResult({ success: true, tag_id: tagId, page_id: pageId }, opts);
-        return;
-      }
-      console.log(pc.green("Tag removed from page."));
-    });
-
-  cmd
     .command("pages")
-    .description("List pages with a specific tag")
-    .argument("<tag-id>", "Tag ID")
-    .option("--search <query>", "Search within tagged pages")
+    .description("List pages with a specific topic")
+    .argument("<topic-id>", "Topic ID")
+    .option("--search <query>", "Search within the topic's pages")
     .option("--limit <n>", "Maximum results", "10")
     .option("--json", "Output as JSON")
-    .action(async (tagId: string, opts: { search?: string; limit?: string; json?: boolean }) => {
+    .action(async (topicId: string, opts: { search?: string; limit?: string; json?: boolean }) => {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
@@ -99,7 +87,7 @@ export function tagsCommand(): Command {
 
       const result = await client.topic.getPagesByTopicId.query({
         knowledge_store_id: ksId,
-        topic_id: tagId,
+        topic_id: topicId,
         searchTerm: opts.search,
         limit: Number.parseInt(opts.limit ?? "10", 10),
       });
@@ -111,7 +99,7 @@ export function tagsCommand(): Command {
       }
 
       if (!pages || pages.length === 0) {
-        console.log(pc.dim("No pages found with this tag."));
+        console.log(pc.dim("No pages found with this topic."));
         return;
       }
 
