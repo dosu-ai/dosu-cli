@@ -99,41 +99,6 @@ describe("tags list", () => {
   });
 });
 
-describe("tags remove", () => {
-  it("calls topic.removeFromPage", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-
-    await run("remove", "tag1", "page1");
-
-    expect(mockMutate).toHaveBeenCalledWith("topic.removeFromPage", {
-      topic_id: "tag1",
-      page_id: "page1",
-    });
-  });
-
-  it("outputs JSON with --json", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-
-    await run("remove", "--json", "tag1", "page1");
-
-    const output = JSON.parse(allOutput());
-    expect(output.success).toBe(true);
-    expect(output.tag_id).toBe("tag1");
-    expect(output.page_id).toBe("page1");
-  });
-
-  it("prints human-readable confirmation", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-
-    await run("remove", "tag1", "page1");
-
-    expect(allOutput()).toContain("Tag removed from page");
-  });
-});
-
 describe("tags pages", () => {
   it("calls topic.getPagesByTopicId with pagination", async () => {
     mockLoadConfig.mockReturnValue(validConfig);

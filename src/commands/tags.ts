@@ -67,24 +67,6 @@ export function tagsCommand(): Command {
     });
 
   cmd
-    .command("remove")
-    .description("Remove a tag from a page")
-    .argument("<tag-id>", "Tag ID")
-    .argument("<page-id>", "Page ID")
-    .option("--json", "Output as JSON")
-    .action(async (tagId: string, pageId: string, opts: { json?: boolean }) => {
-      const cfg = requireConfig();
-      const client = createTypedClient(cfg);
-      await client.topic.removeFromPage.mutate({ topic_id: tagId, page_id: pageId });
-
-      if (opts.json) {
-        printResult({ success: true, tag_id: tagId, page_id: pageId }, opts);
-        return;
-      }
-      console.log(pc.green("Tag removed from page."));
-    });
-
-  cmd
     .command("pages")
     .description("List pages with a specific tag")
     .argument("<tag-id>", "Tag ID")
