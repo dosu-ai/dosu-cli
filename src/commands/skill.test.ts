@@ -129,11 +129,16 @@ describe("skill remove", () => {
 });
 
 describe("skill update", () => {
-  it("runs npx skills update with correct args", async () => {
+  it("reinstalls via npx skills add (update can't follow repo-layout moves)", async () => {
     await run("update");
-    expect(mockExecSync).toHaveBeenCalledWith("npx skills update dosu -g", {
-      stdio: "inherit",
-    });
+    expect(mockExecSync).toHaveBeenCalledWith(
+      expect.stringContaining("npx skills add dosu-ai/dosu-skill -g"),
+      { stdio: "inherit" },
+    );
+    expect(mockExecSync).not.toHaveBeenCalledWith(
+      expect.stringContaining("npx skills update"),
+      expect.anything(),
+    );
   });
 
   it("prints success message", async () => {
