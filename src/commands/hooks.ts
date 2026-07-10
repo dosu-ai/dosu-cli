@@ -18,7 +18,7 @@
  * poll is actually required.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { Argument, Command } from "commander";
 import { isAuthenticated, loadConfig, MODE_OSS } from "../config/config";
@@ -610,6 +610,26 @@ export async function collectDoctorChecks(opts: { dir?: string }): Promise<Docto
         name: "factory-config",
         status: "fail",
         detail: "UserPromptSubmit + PostToolUse not both installed",
+      });
+    }
+  }
+
+  // 2d. Hook runtime resolvable. Installed commands exec either bare `dosu`
+  // (global install) or the materialized bundle (npx-only install) — if
+  // neither exists, every hook silently no-ops on the agent's next turn.
+  if ((hasSubmit && hasPostTool) || alternativeInstalled) {
+    const { dosuOnPath, materializedRuntimePath } = await import("../hooks/runtime");
+    const materialized = materializedRuntimePath();
+    if (dosuOnPath()) {
+      checks.push({ name: "runtime", status: "ok", detail: "dosu on PATH" });
+    } else if (existsSync(materialized)) {
+      checks.push({ name: "runtime", status: "ok", detail: `materialized: ${materialized}` });
+    } else {
+      checks.push({
+        name: "runtime",
+        status: "fail",
+        detail:
+          "dosu is not on PATH and no materialized runtime exists — re-run 'npx -y @dosu/cli hooks install <agent>'",
       });
     }
   }

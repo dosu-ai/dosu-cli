@@ -18,6 +18,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveJSONConfig } from "../mcp/config-helpers";
 import { DEFAULT_HOOK_EVENTS, isDosuGroup } from "./claude-code";
+import { resolveHookCommandPrefix } from "./runtime";
 
 // biome-ignore lint/suspicious/noExplicitAny: hooks JSON is inherently untyped
 type JsonConfig = Record<string, any>;
@@ -45,11 +46,15 @@ const EVENT_SUBCOMMAND: Record<string, string> = {
 };
 
 /**
- * The command Factory runs for a given hook subcommand. Bare `dosu` from PATH;
+ * The command Factory runs for a given hook subcommand. `dosu` from PATH, or
+ * the materialized runtime when there is no global install (see hooks/runtime.ts);
  * `--agent factory` attributes the resulting knowledge tickets to Factory sessions.
  */
-export function factoryHookCommand(subcommand: string): string {
-  return `dosu hooks ${subcommand} --agent factory`;
+export function factoryHookCommand(
+  subcommand: string,
+  prefix: string = resolveHookCommandPrefix(),
+): string {
+  return `${prefix} hooks ${subcommand} --agent factory`;
 }
 
 function dosuGroup(event: string): FactoryMatcherGroup {

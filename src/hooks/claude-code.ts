@@ -11,6 +11,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveJSONConfig } from "../mcp/config-helpers";
+import { resolveHookCommandPrefix } from "./runtime";
 
 /**
  * Events the default install owns. `Stop` is included by default (opt out with
@@ -50,13 +51,16 @@ const EVENT_SUBCOMMAND: Record<string, string> = {
 /**
  * The command Claude Code runs for a given hook subcommand.
  *
- * Bare `dosu` (resolved from PATH), NOT `npx @dosu/cli@…`: the user installs via
- * the global `dosu`, so the same binary is already present. A direct exec is far
- * faster than an npx resolution on every tool call, and it auto-follows the
- * installed version with no pin to drift.
+ * NEVER `npx @dosu/cli@…` — a direct exec is far faster than an npx resolution
+ * on every tool call. The prefix is bare `dosu` when it's on PATH (auto-follows
+ * the installed version), or `node "<materialized bundle>"` when the CLI was
+ * run without a global install (see hooks/runtime.ts).
  */
-export function hookCommand(subcommand: string): string {
-  return `dosu hooks ${subcommand}`;
+export function hookCommand(
+  subcommand: string,
+  prefix: string = resolveHookCommandPrefix(),
+): string {
+  return `${prefix} hooks ${subcommand}`;
 }
 
 function dosuGroup(event: string): HookGroup {
@@ -69,10 +73,18 @@ function dosuGroup(event: string): HookGroup {
   return event === "PostToolUse" ? { matcher: "*", hooks: [entry] } : { hooks: [entry] };
 }
 
-/** Fallback (marker-less) detection: a `dosu hooks …` or legacy `@dosu/cli … hooks …` command. */
+/**
+ * Fallback (marker-less) detection: a `dosu hooks …`, materialized
+ * `node "<…>/dosu.js" hooks …`, or legacy `@dosu/cli … hooks …` command.
+ */
 function isDosuHookCommand(command: string): boolean {
   if (!/\bhooks\b/.test(command)) return false;
   if (/@dosu\/cli/.test(command)) return true;
+  // Materialized runtime (no global install): `node` must be the command name
+  // and its script a dosu.js bundle — an `echo "… dosu.js hooks …"` is not ours.
+  if (/^([^\s]*\/)?node(\.exe)?\s+"?[^\s"]*dosu\.(c|m)?js"?\s/.test(command.trimStart())) {
+    return true;
+  }
   // `dosu` must be the command name (optionally path-prefixed), NOT merely an
   // argument — so a user hook like `echo "dosu hooks ..."` is not misidentified
   // (and therefore not wrongly deleted on uninstall).

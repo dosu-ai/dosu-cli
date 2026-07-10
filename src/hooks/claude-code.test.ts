@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadJSONConfig } from "../mcp/config-helpers";
 import {
   claudeLocalSettingsPath,
@@ -11,6 +11,12 @@ import {
   isDosuGroup,
   removeClaudeHooks,
 } from "./claude-code";
+
+// Pin the hook command prefix: the real resolver probes PATH and can
+// materialize a bundle — nondeterministic across machines and unwanted in tests.
+vi.mock("./runtime", () => ({
+  resolveHookCommandPrefix: vi.fn(() => "dosu"),
+}));
 
 describe("hooks/claude-code installer", () => {
   let tempDir: string;
