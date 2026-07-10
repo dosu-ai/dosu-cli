@@ -36,12 +36,16 @@ vi.mock("../version/pending-tasks-check", () => ({
   addPendingTask: (...a: unknown[]) => mockAddPendingTask(...a),
 }));
 
-// ── fs (findings file) ──
+// ── fs (findings file, cleanup, .gitignore) ──
 const mockExistsSync = vi.fn();
 const mockReadFileSync = vi.fn();
+const mockWriteFileSync = vi.fn();
+const mockRmSync = vi.fn();
 vi.mock("node:fs", () => ({
   existsSync: (...a: unknown[]) => mockExistsSync(...a),
   readFileSync: (...a: unknown[]) => mockReadFileSync(...a),
+  writeFileSync: (...a: unknown[]) => mockWriteFileSync(...a),
+  rmSync: (...a: unknown[]) => mockRmSync(...a),
 }));
 
 // ── clack ──
@@ -64,7 +68,8 @@ vi.mock("../debug/logger", () => ({
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-import { auditCommand } from "./audit";
+import { join } from "node:path";
+import { auditCommand, cleanupFindings } from "./audit";
 
 let logSpy: ReturnType<typeof vi.spyOn>;
 let errorSpy: ReturnType<typeof vi.spyOn>;
@@ -610,6 +615,91 @@ describe("--tasks (agent-driven, non-interactive)", () => {
     await expect(run("--tasks", "generate-agents-md")).rejects.toThrow("exit");
     expect(mockConfirm).not.toHaveBeenCalled();
     expect(mockStepConnect).not.toHaveBeenCalled();
+  });
+
+  it("removes the .dosu dir and gitignores it after firing tasks", async () => {
+    mockFetch
+      .mockResolvedValueOnce(jsonResp(capabilities))
+      .mockResolvedValueOnce(jsonResp({ task_id: "task-1" }));
+
+    await run("--tasks", "generate-agents-md");
+
+    expect(mockRmSync).toHaveBeenCalledWith(join(process.cwd(), ".dosu"), {
+      recursive: true,
+      force: true,
+    });
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      join(process.cwd(), ".gitignore"),
+      expect.stringContaining(".dosu/\n"),
+    );
+  });
+
+  it("keeps the findings when no task was fired", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResp(capabilities)).mockResolvedValueOnce(jsonResp({})); // backend returns no task_id
+
+    await run("--tasks", "generate-agents-md");
+
+    expect(mockRmSync).not.toHaveBeenCalled();
+  });
+});
+
+describe("cleanupFindings", () => {
+  it("appends .dosu/ to an existing .gitignore that lacks it", () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue("node_modules/\n");
+
+    cleanupFindings("/repo/.dosu/audit.json", "/repo");
+
+    expect(mockWriteFileSync).toHaveBeenCalledWith("/repo/.gitignore", "node_modules/\n.dosu/\n");
+    expect(mockRmSync).toHaveBeenCalledWith("/repo/.dosu", { recursive: true, force: true });
+  });
+
+  it("creates .gitignore when the repo has none", () => {
+    mockExistsSync.mockReturnValue(false);
+
+    cleanupFindings("/repo/.dosu/audit.json", "/repo");
+
+    expect(mockWriteFileSync).toHaveBeenCalledWith("/repo/.gitignore", ".dosu/\n");
+  });
+
+  it("adds a separating newline when .gitignore lacks a trailing one", () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue("dist/");
+
+    cleanupFindings("/repo/.dosu/audit.json", "/repo");
+
+    expect(mockWriteFileSync).toHaveBeenCalledWith("/repo/.gitignore", "dist/\n.dosu/\n");
+  });
+
+  it("leaves .gitignore untouched when .dosu is already listed (either form)", () => {
+    mockExistsSync.mockReturnValue(true);
+    for (const existing of ["dist/\n.dosu/\n", "dist/\n.dosu\n", "  .dosu/  \n"]) {
+      mockWriteFileSync.mockClear();
+      mockReadFileSync.mockReturnValue(existing);
+      cleanupFindings("/repo/.dosu/audit.json", "/repo");
+      expect(mockWriteFileSync).not.toHaveBeenCalled();
+    }
+  });
+
+  it("never removes a custom --findings location outside the default .dosu dir", () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue(".dosu/\n");
+
+    cleanupFindings("/elsewhere/findings.json", "/repo");
+
+    expect(mockRmSync).not.toHaveBeenCalled();
+  });
+
+  it("is best-effort: fs errors never throw", () => {
+    mockExistsSync.mockReturnValue(false);
+    mockWriteFileSync.mockImplementation(() => {
+      throw new Error("EACCES");
+    });
+    mockRmSync.mockImplementation(() => {
+      throw new Error("EBUSY");
+    });
+
+    expect(() => cleanupFindings("/repo/.dosu/audit.json", "/repo")).not.toThrow();
   });
 });
 

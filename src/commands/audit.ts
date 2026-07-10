@@ -5,8 +5,8 @@
  * pending-tasks notifier (see `src/version/pending-tasks-check.ts`).
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import * as p from "@clack/prompts";
 import { Command } from "commander";
 import pc from "picocolors";
@@ -273,6 +273,39 @@ function loadFindings(findingsPath: string): AuditFindings {
   return parsed as AuditFindings;
 }
 
+/**
+ * Post-generation cleanup: the findings file is a one-shot handoff artifact,
+ * not something to keep (or commit). Once tasks are fired, remove the default
+ * `.dosu/` dir — but never a user-specified `--findings` location outside it —
+ * and make sure `.dosu/` is gitignored so future audit runs can't end up in a
+ * commit. Both steps are best-effort; failing them never fails the audit.
+ */
+export function cleanupFindings(findingsPath: string, cwd: string = process.cwd()): void {
+  const gitignorePath = join(cwd, ".gitignore");
+  try {
+    const content = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf-8") : "";
+    const hasEntry = content.split(/\r?\n/).some((line) => /^\.dosu\/?$/.test(line.trim()));
+    if (!hasEntry) {
+      const sep = content === "" || content.endsWith("\n") ? "" : "\n";
+      writeFileSync(gitignorePath, `${content}${sep}.dosu/\n`);
+    }
+  } catch (err) {
+    logger.warn("audit", `could not update .gitignore: ${errText(err)}`);
+  }
+
+  const defaultDir = join(cwd, ".dosu");
+  if (dirname(findingsPath) !== defaultDir) return;
+  try {
+    rmSync(defaultDir, { recursive: true, force: true });
+  } catch (err) {
+    logger.warn("audit", `could not remove ${defaultDir}: ${errText(err)}`);
+  }
+}
+
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 /** Intersect findings with capabilities, keyed by `item.task` === capability `id`. */
 function intersectActionable(items: AuditItem[], capabilities: Capability[]): AuditItem[] {
   const known = new Set(capabilities.map((c) => c.id));
@@ -441,6 +474,12 @@ export function auditCommand(): Command {
             doc_types: [item.type],
             repo: detected.slug,
           });
+        }
+
+        // 8. The findings are consumed — clean up so they can't go stale or
+        // get committed, and gitignore `.dosu/` for future audit runs.
+        if (taskIds.length > 0) {
+          cleanupFindings(findingsPath);
         }
 
         if (opts.json) {
