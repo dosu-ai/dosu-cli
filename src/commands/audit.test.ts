@@ -99,7 +99,7 @@ const findings = {
       evidence: ["e1"],
     },
     {
-      task: "generate-readme",
+      task: "refresh-readme",
       type: "readme",
       file: "README.md",
       status: "present_ok",
@@ -126,7 +126,7 @@ const findings = {
 const capabilities = {
   tasks: [
     { id: "generate-agents-md", label: "AGENTS.md", description: "", doc_type: "agents" },
-    { id: "generate-readme", label: "README", description: "", doc_type: "readme" },
+    { id: "refresh-readme", label: "README", description: "", doc_type: "readme" },
   ],
 };
 
@@ -459,7 +459,7 @@ describe("capability intersection + selection", () => {
     const opts = mockMultiselect.mock.calls[0][0].options as { value: string }[];
     const values = opts.map((o) => o.value);
     expect(values).toContain("generate-agents-md");
-    expect(values).toContain("generate-readme");
+    expect(values).toContain("refresh-readme");
     expect(values).not.toContain("unsupported-thing");
   });
 

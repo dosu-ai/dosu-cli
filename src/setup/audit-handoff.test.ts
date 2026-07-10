@@ -122,9 +122,11 @@ describe("launchAuditAgent", () => {
 
     launchAuditAgent();
 
-    expect(mockSpawnSync).toHaveBeenCalledWith("claude", [buildAuditHandoffPrompt("dosu")], {
-      stdio: "inherit",
-    });
+    expect(mockSpawnSync).toHaveBeenCalledWith(
+      "claude",
+      ["--model", "haiku", buildAuditHandoffPrompt("dosu")],
+      { stdio: "inherit" },
+    );
     expect(p.log.message).not.toHaveBeenCalled();
   });
 

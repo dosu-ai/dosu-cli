@@ -81,10 +81,19 @@ export async function offerAuditHandoff(): Promise<boolean> {
   return true;
 }
 
+/**
+ * Model for the onboarding audit session. The audit is a bounded
+ * read-and-classify task, so a small model keeps a brand-new user's first
+ * Dosu experience from burning through their Claude credits.
+ */
+export const AUDIT_AGENT_MODEL = "haiku";
+
 /** Hand the terminal to Claude Code with the audit prompt. Blocks until it exits. */
 export function launchAuditAgent(): void {
   logger.info("setup", "Handing off to Claude Code for the codebase audit");
-  const result = spawnSync("claude", [buildAuditHandoffPrompt()], { stdio: "inherit" });
+  const result = spawnSync("claude", ["--model", AUDIT_AGENT_MODEL, buildAuditHandoffPrompt()], {
+    stdio: "inherit",
+  });
   if (result.error) {
     logger.warn("setup", `Claude Code launch failed: ${result.error.message}`);
     printManualAuditNudge();
