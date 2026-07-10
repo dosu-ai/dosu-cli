@@ -19,8 +19,11 @@ export type OAuthFlowResult =
  *    { browserOpened: false } immediately if the browser could not be opened
  *    (caller should fall through to the device/ticket flow).
  *
- * `onAuthURL` fires with the login URL before the browser opens, so callers
- * can show it as a manual fallback (closed browser, remote session, etc.).
+ * `onAuthURL` fires with the login URL once the browser opens, so callers can
+ * show it as a manual fallback (e.g. the user closed the tab). It does NOT
+ * fire when the browser fails to open — the callback server is torn down on
+ * that path, so the URL would be a dead link; callers fall back to the
+ * device/ticket flow instead.
  */
 export async function startOAuthFlow(
   signal?: AbortSignal,
@@ -37,7 +40,6 @@ export async function startOAuthFlow(
     logger.debug("auth.flow", `Callback URL: ${callbackURL}`);
     const authURL = buildAuthURL(callbackURL, path, params);
     logger.info("auth.flow", `Auth URL: ${authURL}`);
-    onAuthURL?.(authURL);
 
     // Open browser — dynamic import to avoid bundling issues
     const open = await import("open");
@@ -46,6 +48,7 @@ export async function startOAuthFlow(
       await open.default(authURL);
       browserOpened = true;
       logger.info("auth.flow", "Browser open command executed");
+      onAuthURL?.(authURL);
     } catch (openErr) {
       logger.warn(
         "auth.flow",
