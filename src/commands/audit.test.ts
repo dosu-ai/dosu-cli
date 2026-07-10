@@ -200,6 +200,39 @@ describe("config guard", () => {
   });
 });
 
+describe("--list-tasks", () => {
+  it("prints capabilities as JSON without touching repo or findings", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResp(capabilities));
+    await run("--list-tasks", "--json");
+
+    expect(fetchCalls()[0][0]).toBe("https://api.example.test/v1/cli/tasks");
+    const out = JSON.parse(logSpy.mock.calls.map((c: unknown[]) => c.join("")).join(""));
+    expect(out.tasks.map((t: { id: string }) => t.id)).toEqual([
+      "generate-agents-md",
+      "refresh-readme",
+    ]);
+    expect(mockDetectGitRepo).not.toHaveBeenCalled();
+    expect(mockReadFileSync).not.toHaveBeenCalled();
+  });
+
+  it("prints a human-readable line per task without --json", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResp(capabilities));
+    await run("--list-tasks");
+
+    const out = logSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
+    expect(out).toContain("generate-agents-md");
+    expect(out).toContain("refresh-readme");
+  });
+
+  it("handles a capabilities response without tasks", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResp({}));
+    await run("--list-tasks", "--json");
+
+    const out = JSON.parse(logSpy.mock.calls.map((c: unknown[]) => c.join("")).join(""));
+    expect(out.tasks).toEqual([]);
+  });
+});
+
 describe("repo enforcement", () => {
   it("exits when not a git repo", async () => {
     mockDetectGitRepo.mockReturnValue(null);

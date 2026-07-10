@@ -292,6 +292,7 @@ export function auditCommand(): Command {
       "--tasks <ids>",
       "Comma-separated task ids to generate (non-interactive; for agent-driven use)",
     )
+    .option("--list-tasks", "List the doc-generation capabilities (valid task ids) and exit")
     .option("--yes", "Skip the prompt and select all suggested items")
     .option("--json", "Output as JSON")
     .action(
@@ -299,11 +300,28 @@ export function auditCommand(): Command {
         dataSourceId?: string;
         findings?: string;
         tasks?: string;
+        listTasks?: boolean;
         yes?: boolean;
         json?: boolean;
       }) => {
         const cfg = requireConfig();
         const apiKey = requireAPIKey(cfg);
+
+        // Capability discovery — lets agents enumerate valid task ids through
+        // the CLI instead of hitting the backend with a raw API key. Doesn't
+        // need a repo or findings, so it runs before those checks.
+        if (opts.listTasks) {
+          const resp = (await backendGet("/v1/cli/tasks", apiKey)) as CapabilitiesResponse;
+          const tasks = resp.tasks ?? [];
+          if (opts.json) {
+            printResult({ tasks }, opts);
+            return;
+          }
+          for (const t of tasks) {
+            console.log(`${t.id}  ${pc.dim(`(${t.doc_type})`)}  ${t.label} — ${t.description}`);
+          }
+          return;
+        }
 
         // 1. Enforce a synced repo (block otherwise).
         const detected = detectGitRepo();
