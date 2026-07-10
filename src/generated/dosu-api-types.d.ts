@@ -41,7 +41,6 @@
 // - thread.list
 // - topic.getPagesByTopicId
 // - topic.listTopicsByKnowledgeStore
-// - topic.removeFromPage
 // - user.getCliOnboardingContext
 // - user.trackCliOnboardingEvent
 // - user.trackCliOnboardingPreAuthEvent
@@ -290,7 +289,7 @@ export type CliProviderSlug =
 	| 'teams'
 	| 'azure_devops'
 
-export declare const CLI_CONTRACT_HASH: '8d9ba113842a'
+export declare const CLI_CONTRACT_HASH: '888669da10bd'
 
 export type AnalyticsGetUsageStatsInput = {
 	days?: number
@@ -617,6 +616,7 @@ export type OrganizationGetOrganizationsOutput = Array<{
 	customer_id: string | null
 	name: string
 	org_id: string
+	pro_trial_ends_at: string | null
 	user_id: string
 	user_role: 'OWNER' | 'ADMIN' | 'MEMBER'
 }>
@@ -985,13 +985,6 @@ export type TopicListTopicsByKnowledgeStoreInput = {
 
 export type TopicListTopicsByKnowledgeStoreOutput = any
 
-export type TopicRemoveFromPageInput = {
-	page_id: string
-	topic_id: string
-}
-
-export type TopicRemoveFromPageOutput = any
-
 export type UserGetCliOnboardingContextInput = undefined
 
 export type UserGetCliOnboardingContextOutput = any
@@ -1263,7 +1256,6 @@ export interface CliApiClient {
 			TopicListTopicsByKnowledgeStoreInput,
 			TopicListTopicsByKnowledgeStoreOutput
 		>
-		removeFromPage: MutationProcedure<TopicRemoveFromPageInput, TopicRemoveFromPageOutput>
 	}
 	user: {
 		getCliOnboardingContext: QueryProcedure<undefined, UserGetCliOnboardingContextOutput>
