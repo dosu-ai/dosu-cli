@@ -15,7 +15,7 @@ import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
 import { launchAuditAgent, offerAuditHandoff } from "./audit-handoff";
-import { dim, info } from "./styles";
+import { browserFallbackHint, dim, info } from "./styles";
 
 export interface SetupOptions {
   deploymentID?: string;
@@ -483,11 +483,14 @@ async function openBrowserForSetup(cfg: Config, onboardingRunID?: string): Promi
   try {
     const { startOAuthFlow } = await import("../auth/flow");
     const s = p.spinner();
-    s.start("Waiting for authentication...");
     const result = await startOAuthFlow(
       undefined,
       "/cli/auth",
       onboardingRunID ? { onboarding_run_id: onboardingRunID } : {},
+      (url) => {
+        p.log.message(browserFallbackHint(url));
+        s.start("Waiting for authentication...");
+      },
     );
     if (!result.browserOpened) {
       s.stop("Could not open a browser");

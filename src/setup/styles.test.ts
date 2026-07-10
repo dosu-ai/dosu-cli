@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   bold,
+  browserFallbackHint,
   dim,
   error,
   IconAdd,
@@ -61,6 +62,12 @@ describe("styles", () => {
 
     it("info returns a string", () => {
       expect(typeof info("text")).toBe("string");
+    });
+
+    it("browserFallbackHint puts the URL on its own line", () => {
+      const hint = browserFallbackHint("https://example.com/auth?x=1");
+      expect(hint).toContain("If your browser doesn't open automatically, visit:\n");
+      expect(hint).toContain("https://example.com/auth?x=1");
     });
   });
 

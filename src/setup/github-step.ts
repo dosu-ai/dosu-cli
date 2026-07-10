@@ -39,7 +39,7 @@ import {
   REFRESH_LIST_VALUE,
 } from "./github-repo-prompt";
 import { startInstallationCallbackServer } from "./installation-server";
-import { dim } from "./styles";
+import { browserFallbackHint, dim } from "./styles";
 
 const INSTALLATION_TIMEOUT_MS = 10 * 60 * 1000;
 const REPO_REFRESH_POLL_INTERVAL_MS = 500;
@@ -255,6 +255,7 @@ async function openGitHubInstallFlow(
       "Opening your browser to GitHub.\n" +
         "Add repositories or install the Dosu GitHub App, and we'll pick up automatically.",
     );
+    p.log.message(browserFallbackHint(middleURL.toString()));
     try {
       const open = await import("open");
       await open.default(middleURL.toString());

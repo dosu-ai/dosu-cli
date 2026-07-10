@@ -168,6 +168,33 @@ describe("startOAuthFlow", () => {
     expect(r).toMatchObject({ browserOpened: true });
   });
 
+  it("invokes onAuthURL with the auth URL once the browser opens", async () => {
+    const onAuthURL = vi.fn();
+
+    const flowPromise = startOAuthFlow(undefined, "/cli/auth", {}, onAuthURL);
+    await flowReady();
+
+    expect(onAuthURL).toHaveBeenCalledExactlyOnceWith(
+      "https://app.dosu.dev/cli/auth?callback=http%3A%2F%2Flocalhost%3A12345%2Fcallback",
+    );
+
+    resolveToken({ access_token: "a", refresh_token: "r", expires_in: 1 });
+    const r = await flowPromise;
+    expect(r).toMatchObject({ browserOpened: true });
+  });
+
+  it("does not invoke onAuthURL when the browser fails to open", async () => {
+    mockOpenDefault.mockRejectedValueOnce(new Error("Executable not found in $PATH: xdg-open"));
+    const onAuthURL = vi.fn();
+
+    const result = await startOAuthFlow(undefined, "/cli/auth", {}, onAuthURL);
+
+    // The callback server is closed on this path — the URL would be a dead
+    // link, and callers fall back to the device flow instead.
+    expect(result).toEqual({ browserOpened: false });
+    expect(onAuthURL).not.toHaveBeenCalled();
+  });
+
   it("includes extra auth URL params", async () => {
     const flowPromise = startOAuthFlow(undefined, "/cli/auth", {
       onboarding_run_id: "run-123",

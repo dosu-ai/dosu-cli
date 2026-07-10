@@ -19,6 +19,7 @@ vi.mock("@clack/prompts", () => ({
     success: vi.fn(),
     error: vi.fn(),
     info: vi.fn(),
+    message: vi.fn(),
   },
 }));
 
@@ -308,16 +309,29 @@ describe("runTUI", () => {
     mockIsCancel.mockReturnValue(false);
     mockConfirm.mockResolvedValueOnce(true);
 
-    mockStartOAuthFlow.mockResolvedValueOnce({
-      browserOpened: true,
-      token: { access_token: "new-tok", refresh_token: "new-ref", expires_in: 3600 },
+    mockStartOAuthFlow.mockImplementationOnce(async (_signal, _path, _params, onAuthURL) => {
+      onAuthURL?.("https://app.test/cli/auth?callback=cb");
+      return {
+        browserOpened: true,
+        token: { access_token: "new-tok", refresh_token: "new-ref", expires_in: 3600 },
+      };
     });
 
     mockSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
 
     await runTUI();
 
-    expect(mockStartOAuthFlow).toHaveBeenCalledWith(undefined, "/cli/auth");
+    expect(mockStartOAuthFlow).toHaveBeenCalledWith(
+      undefined,
+      "/cli/auth",
+      {},
+      expect.any(Function),
+    );
+    expect(p.log.message).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "If your browser doesn't open automatically, visit:\nhttps://app.test/cli/auth?callback=cb",
+      ),
+    );
     const ondisk = readRealConfig();
     expect(ondisk.access_token).toBe("new-tok");
     expect(ondisk.refresh_token).toBe("new-ref");

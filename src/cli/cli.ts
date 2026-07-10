@@ -33,6 +33,7 @@ import {
 } from "../config/config";
 import { logger } from "../debug/logger";
 import { allProviders, getProvider, type Provider } from "../mcp/providers";
+import { browserFallbackHint } from "../setup/styles";
 import { checkForReadyTasks } from "../version/pending-tasks-check";
 import { checkForSkillUpdates } from "../version/skill-update-check";
 import { checkForUpdates } from "../version/update-check";
@@ -141,7 +142,9 @@ export function createProgram(): Command {
           const { startOAuthFlow } = await import("../auth/flow");
           let result: Awaited<ReturnType<typeof startOAuthFlow>>;
           try {
-            result = await startOAuthFlow();
+            result = await startOAuthFlow(undefined, undefined, undefined, (url) => {
+              console.log(browserFallbackHint(url));
+            });
           } catch (err) {
             if (err instanceof OAuthCallbackError) {
               console.error(err.userMessage);

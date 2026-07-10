@@ -168,14 +168,22 @@ describe("CLI actions", () => {
 
     it("runs OAuth flow and writes token to real config file", async () => {
       // Start with empty config (no file on disk)
-      mockStartOAuthFlow.mockResolvedValue({
-        browserOpened: true,
-        token: { access_token: "new_tok", refresh_token: "new_ref", expires_in: 3600 },
+      mockStartOAuthFlow.mockImplementation(async (...args: unknown[]) => {
+        (args[3] as (url: string) => void)("https://app.test/cli/auth?callback=cb");
+        return {
+          browserOpened: true,
+          token: { access_token: "new_tok", refresh_token: "new_ref", expires_in: 3600 },
+        };
       });
 
       await run("login");
 
       expect(logSpy).toHaveBeenCalledWith("Opening browser for authentication...");
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "If your browser doesn't open automatically, visit:\nhttps://app.test/cli/auth?callback=cb",
+        ),
+      );
       expect(mockStartOAuthFlow).toHaveBeenCalledOnce();
       expect(logSpy).toHaveBeenCalledWith("Successfully authenticated!");
 

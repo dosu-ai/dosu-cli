@@ -789,9 +789,12 @@ describe("runSetup integration", () => {
   it("runs OAuth flow and saves tokens to real config", async () => {
     // No pre-existing config (fresh temp dir), so needs login. No mode prompt anymore.
     vi.mocked(p.confirm).mockResolvedValue(true);
-    mockStartOAuthFlow.mockResolvedValue({
-      browserOpened: true,
-      token: { access_token: "oauth-tok", refresh_token: "oauth-ref", expires_in: 7200 },
+    mockStartOAuthFlow.mockImplementation(async (_signal, _path, _params, onAuthURL) => {
+      onAuthURL?.("https://app.test/cli/auth?callback=cb");
+      return {
+        browserOpened: true,
+        token: { access_token: "oauth-tok", refresh_token: "oauth-ref", expires_in: 7200 },
+      };
     });
 
     const clientMethods = setupAuthenticatedClient();
@@ -805,6 +808,11 @@ describe("runSetup integration", () => {
     const savedCfg = loadConfig();
     expect(savedCfg.access_token).toBe("oauth-tok");
     expect(savedCfg.refresh_token).toBe("oauth-ref");
+    expect(p.log.message).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "If your browser doesn't open automatically, visit:\nhttps://app.test/cli/auth?callback=cb",
+      ),
+    );
   });
 
   it("returns null and shows error when browser cannot be opened during OAuth", async () => {

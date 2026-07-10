@@ -10,6 +10,7 @@ import { Client } from "../client/client";
 import { executeInsights } from "../commands/insights";
 import { isAuthenticated, loadConfig, saveConfig } from "../config/config";
 import { runSetup } from "../setup/flow";
+import { browserFallbackHint } from "../setup/styles";
 
 const LOGO = `
  /$$$$$$$
@@ -114,8 +115,10 @@ async function handleAuthenticate(cfg: ReturnType<typeof loadConfig>): Promise<v
   try {
     const { startOAuthFlow } = await import("../auth/flow");
     const s = p.spinner();
-    s.start("Waiting for authentication...");
-    const result = await startOAuthFlow(undefined, "/cli/auth");
+    const result = await startOAuthFlow(undefined, "/cli/auth", {}, (url) => {
+      p.log.message(browserFallbackHint(url));
+      s.start("Waiting for authentication...");
+    });
     if (!result.browserOpened) {
       s.stop("Could not open a browser");
       p.log.error("Run 'dosu login --no-browser' from the terminal to authenticate over SSH.");
