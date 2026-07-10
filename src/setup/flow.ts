@@ -14,6 +14,7 @@ import { logger } from "../debug/logger";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
+import { launchAuditAgent, offerAuditHandoff } from "./audit-handoff";
 import { dim, info } from "./styles";
 
 export interface SetupOptions {
@@ -275,12 +276,19 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     }
   }
 
+  let handoffToAudit = false;
   if (mcpConfiguredThisRun) {
     showTryItOutPrompt({
       mode: cfg.mode,
       docsImported: choices.connectGitHub && githubOnboardingDone,
       hasAgentsMd: existsSync(join(process.cwd(), "AGENTS.md")),
     });
+    // Codebase audit handoff (cloud mode only — it acts on the user's own
+    // repo): offer to launch Claude Code with the audit prompt so there's no
+    // gap between finishing setup and seeing what Dosu can generate.
+    if (cfg.mode !== MODE_OSS) {
+      handoffToAudit = await offerAuditHandoff();
+    }
   }
 
   if (mcpCompleted || skillCompleted || docsImported) {
@@ -297,6 +305,11 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     );
   } else {
     p.outro("\uD83C\uDF89 Setup complete!");
+  }
+
+  // Launch after the outro so Claude Code takes over a finished clack session.
+  if (handoffToAudit) {
+    launchAuditAgent();
   }
 }
 
@@ -892,13 +905,4 @@ export function showTryItOutPrompt(
     return `Ask Dosu to draft an AGENTS.md for this project.`;
   })();
   p.log.message(`Try it out! Paste this into your agent:\n\n${info(prompt)}`);
-
-  // Surface the codebase audit as a next step (cloud mode only — it acts on the
-  // user's own repo). The agent runs the audit skill; `dosu audit` is the
-  // terminal-only fallback.
-  if (opts.mode !== MODE_OSS) {
-    p.log.message(
-      `See what docs Dosu can generate for this repo:\n\n${info("Ask Dosu to audit this repo and show what docs it can generate.")}\n\nOr run ${info("dosu audit")} after your agent writes the audit.`,
-    );
-  }
 }

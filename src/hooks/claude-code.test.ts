@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadJSONConfig } from "../mcp/config-helpers";
 import {
   claudeLocalSettingsPath,
@@ -11,6 +11,12 @@ import {
   isDosuGroup,
   removeClaudeHooks,
 } from "./claude-code";
+
+// Pin the hook command prefix: the real resolver probes PATH and can
+// materialize a bundle — nondeterministic across machines and unwanted in tests.
+vi.mock("./runtime", () => ({
+  resolveHookCommandPrefix: vi.fn(() => "dosu"),
+}));
 
 describe("hooks/claude-code installer", () => {
   let tempDir: string;
@@ -134,6 +140,42 @@ describe("hooks/claude-code installer", () => {
       false,
     );
     expect(isDosuGroup({ hooks: [{ type: "command", command: "echo hi" }] })).toBe(false);
+    // materialized runtime (npx-only install): node + dosu.js bundle, with or
+    // without quotes/spaces, POSIX or Windows paths and separators
+    expect(
+      isDosuGroup({
+        hooks: [
+          { type: "command", command: 'node "/home/u/.config/dosu-cli/bin/dosu.js" hooks stop' },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      isDosuGroup({
+        hooks: [
+          {
+            type: "command",
+            command: 'node "C:\\Users\\John Doe\\AppData\\dosu-cli\\bin\\dosu.js" hooks stop',
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      isDosuGroup({
+        hooks: [
+          {
+            type: "command",
+            command: "C:\\nodejs\\node.exe C:\\dosu-cli\\bin\\dosu.js hooks post-tool-use",
+          },
+        ],
+      }),
+    ).toBe(true);
+    // node running some OTHER script that merely mentions hooks is not ours
+    expect(isDosuGroup({ hooks: [{ type: "command", command: "node build.js hooks stop" }] })).toBe(
+      false,
+    );
+    expect(
+      isDosuGroup({ hooks: [{ type: "command", command: 'echo "node dosu.js hooks stop"' }] }),
+    ).toBe(false);
     expect(isDosuGroup(null)).toBe(false);
     expect(isDosuGroup({ hooks: "nope" })).toBe(false);
   });
