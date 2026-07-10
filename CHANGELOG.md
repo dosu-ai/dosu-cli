@@ -1,3 +1,10 @@
+# [0.31.0](https://github.com/dosu-ai/dosu-cli/compare/v0.30.0...v0.31.0) (2026-07-10)
+
+
+### Features
+
+* **auth:** show fallback login URL when the browser doesn't open ([#120](https://github.com/dosu-ai/dosu-cli/issues/120)) ([013be93](https://github.com/dosu-ai/dosu-cli/commit/013be938c62f0c9409ef19214a53198f97c944ff))
+
 # [0.30.0](https://github.com/dosu-ai/dosu-cli/compare/v0.29.1...v0.30.0) (2026-07-10)
 
 
