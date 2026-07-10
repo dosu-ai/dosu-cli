@@ -22,9 +22,13 @@ type NangoProvider = NangoGetConnectionInput["provider"];
 
 /**
  * Nango probes per platform. A platform can be connectable under more than one
- * Nango provider — Azure DevOps, for example, connects via PAT (`azure_devops`)
- * or OAuth (`microsoft-entra-id`). A repo may be linked under either, so we
- * probe every provider and report connected if ANY probe returns a row.
+ * Nango provider, and a connection may exist under any of them:
+ *   - GitLab: OAuth (`gitlab`) or PAT (`gitlab-pat`)
+ *   - Confluence: OAuth (`confluence`) or Basic auth (`confluence-basic`)
+ *   - Azure DevOps: PAT (`azure_devops`) or OAuth (`microsoft-entra-id`)
+ * So each platform lists every provider to probe; we report connected if ANY
+ * probe returns a row. `gitlab-pat`/`confluence-basic` are also kept as
+ * standalone keys so `status gitlab-pat` / `status confluence-basic` still work.
  * `nango.getConnection` filters on provider AND providerConfigKey together;
  * prod uses bare config keys, so provider === providerConfigKey === the bare name.
  */
@@ -32,9 +36,15 @@ const NANGO_PROBES: Record<
   string,
   readonly { provider: NangoProvider; providerConfigKey: string }[]
 > = {
-  gitlab: [{ provider: "gitlab", providerConfigKey: "gitlab" }],
+  gitlab: [
+    { provider: "gitlab", providerConfigKey: "gitlab" },
+    { provider: "gitlab-pat", providerConfigKey: "gitlab-pat" },
+  ],
   "gitlab-pat": [{ provider: "gitlab-pat", providerConfigKey: "gitlab-pat" }],
-  confluence: [{ provider: "confluence", providerConfigKey: "confluence" }],
+  confluence: [
+    { provider: "confluence", providerConfigKey: "confluence" },
+    { provider: "confluence-basic", providerConfigKey: "confluence-basic" },
+  ],
   "confluence-basic": [{ provider: "confluence-basic", providerConfigKey: "confluence-basic" }],
   notion: [{ provider: "notion", providerConfigKey: "notion" }],
   coda: [{ provider: "coda", providerConfigKey: "coda" }],
@@ -99,12 +109,16 @@ export function integrationsCommand(): Command {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
 
-      const results: Array<{ platform: string; connected: boolean }> = [];
-      for (const platform of DISPLAY_PLATFORMS) {
-        // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-        const { connected } = await probeConnection(client, cfg.org_id!, platform);
-        results.push({ platform, connected });
-      }
+      // Probe platforms in parallel — each is independent — so the command
+      // isn't gated on the sum of every platform's network round-trips.
+      // Promise.all preserves order, so the table still follows DISPLAY_PLATFORMS.
+      const results = await Promise.all(
+        DISPLAY_PLATFORMS.map(async (platform) => {
+          // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
+          const { connected } = await probeConnection(client, cfg.org_id!, platform);
+          return { platform, connected };
+        }),
+      );
 
       if (opts.json) {
         printResult(results, opts);
