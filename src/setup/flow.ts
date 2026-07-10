@@ -3,8 +3,6 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import * as p from "@clack/prompts";
 import { Client, type Deployment, type Org, SessionExpiredError } from "../client/client";
 import type { TypedClient } from "../client/trpc";
@@ -165,9 +163,8 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   });
 
   // MCP tools. Track whether at least one agent ended up with Dosu MCP
-  // configured (newly installed or previously installed) so we only nudge
-  // the user with the "Try it out" prompt when there's actually an agent
-  // they can paste it into.
+  // configured (newly installed or previously installed) so we only offer
+  // the audit handoff when there's actually an agent that can use Dosu.
   let mcpConfiguredThisRun = false;
   let mcpCompleted = false;
   let skillCompleted = false;
@@ -276,19 +273,12 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     }
   }
 
+  // Codebase audit handoff (cloud mode only — it acts on the user's own
+  // repo): offer to launch Claude Code with the audit prompt so there's no
+  // gap between finishing setup and seeing what Dosu can generate.
   let handoffToAudit = false;
-  if (mcpConfiguredThisRun) {
-    showTryItOutPrompt({
-      mode: cfg.mode,
-      docsImported: choices.connectGitHub && githubOnboardingDone,
-      hasAgentsMd: existsSync(join(process.cwd(), "AGENTS.md")),
-    });
-    // Codebase audit handoff (cloud mode only — it acts on the user's own
-    // repo): offer to launch Claude Code with the audit prompt so there's no
-    // gap between finishing setup and seeing what Dosu can generate.
-    if (cfg.mode !== MODE_OSS) {
-      handoffToAudit = await offerAuditHandoff();
-    }
+  if (mcpConfiguredThisRun && cfg.mode !== MODE_OSS) {
+    handoffToAudit = await offerAuditHandoff();
   }
 
   if (mcpCompleted || skillCompleted || docsImported) {
@@ -463,16 +453,6 @@ async function stepAuthenticate(
     }
   }
 
-  const shouldLogin = await p.confirm({ message: "Open browser to log in?" });
-  if (p.isCancel(shouldLogin) || !shouldLogin) {
-    if (onboardingRunID) {
-      await trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_auth_cancelled", {
-        reason: p.isCancel(shouldLogin) ? "prompt_cancelled" : "login_declined",
-      });
-    }
-    return null;
-  }
-
   if (onboardingRunID) {
     await trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_auth_started");
   }
@@ -487,14 +467,18 @@ async function openBrowserForSetup(cfg: Config, onboardingRunID?: string): Promi
       undefined,
       "/cli/auth",
       onboardingRunID ? { onboarding_run_id: onboardingRunID } : {},
-      (url) => {
-        p.log.message(browserFallbackHint(url));
-        s.start("Waiting for authentication...");
+      undefined,
+      {
+        waitWithoutBrowser: true,
+        onAuthURL: (url) => {
+          p.log.message(browserFallbackHint(url));
+          s.start("Waiting for authentication...");
+        },
       },
     );
+    /* v8 ignore next 4 -- unreachable with waitWithoutBrowser */
     if (!result.browserOpened) {
       s.stop("Could not open a browser");
-      p.log.error("Run 'dosu login --no-browser' from the terminal to authenticate over SSH.");
       return null;
     }
     const token = result.token;
@@ -882,30 +866,4 @@ export function stepShowSummary(results: ConfigResult[]): void {
   if (installed.length === 0 && removed.length === 0 && skipped.length > 0) {
     p.log.success("All agents already configured. No changes needed.");
   }
-}
-
-/**
- * Post-setup nudge: a ready-to-paste prompt so the user can immediately try
- * Dosu in their configured AI agent. Rendered at the very end of the flow
- * (right before outro) so it's the last actionable thing they see — not
- * buried right after the MCP configuration step. The call site is responsible
- * for only invoking this when MCP was actually (re)configured this run, so
- * users who skip MCP don't get a tip they can't act on.
- */
-export function showTryItOutPrompt(
-  opts: { mode?: SetupMode; docsImported?: boolean; hasAgentsMd?: boolean } = {},
-): void {
-  const prompt = (() => {
-    if (opts.mode === MODE_OSS) {
-      return `What can Dosu help me with? Pick an open source library related to my project and explain how it works.`;
-    }
-    if (opts.docsImported) {
-      return `Use Dosu to summarize the most important docs in my repo.`;
-    }
-    if (opts.hasAgentsMd) {
-      return `Please use Dosu to host my AGENTS.md`;
-    }
-    return `Ask Dosu to draft an AGENTS.md for this project.`;
-  })();
-  p.log.message(`Try it out! Paste this into your agent:\n\n${info(prompt)}`);
 }

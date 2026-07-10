@@ -129,7 +129,7 @@ import { OAuthCallbackError } from "../auth/errors";
 import { startOAuthFlow } from "../auth/flow";
 import { Client } from "../client/client";
 import type { Config } from "../config/config";
-import { loadConfig, MODE_OSS, saveConfig } from "../config/config";
+import { loadConfig, saveConfig } from "../config/config";
 import { loadJSONConfig, saveJSONConfig } from "../mcp/config-helpers";
 import * as providersModule from "../mcp/providers";
 import { ClaudeDesktopProvider } from "../mcp/providers/claude-desktop";
@@ -140,7 +140,6 @@ import {
   isStdioOnly,
   runInstallSkill,
   runSetup,
-  showTryItOutPrompt,
   stepConfigureTools,
   stepDetectTools,
   stepShowSummary,
@@ -513,7 +512,7 @@ describe("stepShowSummary", () => {
 
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 agent"));
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Cursor"));
-    // "Try it out" moved to showTryItOutPrompt at end of runSetup.
+    // The summary itself never prints extra messages.
     expect(p.log.message).not.toHaveBeenCalled();
   });
 
@@ -524,7 +523,6 @@ describe("stepShowSummary", () => {
     stepShowSummary(results);
 
     expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("Removed from 1 agent"));
-    // No "Try it out" when only removals
     expect(p.log.message).not.toHaveBeenCalled();
   });
 
@@ -537,7 +535,6 @@ describe("stepShowSummary", () => {
     expect(p.log.success).toHaveBeenCalledWith(
       expect.stringContaining("All agents already configured"),
     );
-    // "Try it out" moved to showTryItOutPrompt at end of runSetup.
     expect(p.log.message).not.toHaveBeenCalled();
   });
 
@@ -569,7 +566,7 @@ describe("stepShowSummary", () => {
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 agent"));
   });
 
-  it("does not show 'Try it out' when only removals and no skips", () => {
+  it("prints no extra messages when only removals and no skips", () => {
     const cursor = CursorProvider();
     const opencode = OpenCodeProvider();
     const results: ConfigResult[] = [
@@ -598,63 +595,15 @@ describe("stepShowSummary", () => {
     expect(p.log.success).not.toHaveBeenCalledWith(
       expect.stringContaining("All agents already configured"),
     );
-    // "Try it out" moved to showTryItOutPrompt at end of runSetup.
     expect(p.log.message).not.toHaveBeenCalled();
   });
 
-  it("does not show 'Try it out' or 'all configured' when results are empty", () => {
+  it("prints nothing when results are empty", () => {
     stepShowSummary([]);
 
     expect(p.log.success).not.toHaveBeenCalled();
     expect(p.log.info).not.toHaveBeenCalled();
     expect(p.log.message).not.toHaveBeenCalled();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 4b. showTryItOutPrompt — pure, just inspects the message string
-// ---------------------------------------------------------------------------
-
-describe("showTryItOutPrompt", () => {
-  beforeEach(() => {
-    vi.mocked(p.log.message).mockClear();
-  });
-
-  it("suggests querying imported docs when docsImported is true", () => {
-    showTryItOutPrompt({ docsImported: true, hasAgentsMd: true });
-
-    expect(p.log.message).toHaveBeenCalledWith(
-      expect.stringContaining("summarize the most important docs"),
-    );
-    expect(p.log.message).not.toHaveBeenCalledWith(expect.stringContaining("host my AGENTS.md"));
-  });
-
-  it("suggests hosting AGENTS.md when the file exists and no docs were imported", () => {
-    showTryItOutPrompt({ docsImported: false, hasAgentsMd: true });
-
-    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("host my AGENTS.md"));
-  });
-
-  it("suggests drafting AGENTS.md when neither docs are imported nor the file exists", () => {
-    showTryItOutPrompt({ docsImported: false, hasAgentsMd: false });
-
-    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("draft an AGENTS.md"));
-    expect(p.log.message).not.toHaveBeenCalledWith(expect.stringContaining("host my AGENTS.md"));
-  });
-
-  it("uses the OSS prompt regardless of other flags", () => {
-    showTryItOutPrompt({ mode: MODE_OSS, docsImported: true, hasAgentsMd: true });
-
-    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("open source library"));
-    expect(p.log.message).not.toHaveBeenCalledWith(
-      expect.stringContaining("summarize the most important docs"),
-    );
-  });
-
-  it("no longer prints the audit pointer (moved to the audit handoff)", () => {
-    showTryItOutPrompt({ docsImported: false, hasAgentsMd: false });
-
-    expect(p.log.message).not.toHaveBeenCalledWith(expect.stringContaining("audit this repo"));
   });
 });
 
@@ -699,28 +648,36 @@ describe("runSetup integration", () => {
     return clientMethods;
   }
 
-  it("returns early when user declines login", async () => {
+  it("starts the OAuth flow without a confirm prompt and prints the login link", async () => {
     // No token in config (fresh state via temp dir)
-    vi.mocked(p.confirm).mockResolvedValue(false);
+    mockStartOAuthFlow.mockImplementation(async (_signal, _path, _params, _onAuthURL, options) => {
+      options?.onAuthURL?.("https://app.dosu.dev/cli/auth?callback=x");
+      return {
+        browserOpened: true,
+        token: { access_token: "tok", refresh_token: "ref", expires_in: 3600 },
+      };
+    });
+    setupAuthenticatedClient();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
 
     await runSetup();
 
-    expect(mockStartOAuthFlow).not.toHaveBeenCalled();
-    expect(p.log.success).not.toHaveBeenCalled();
-  });
-
-  it("returns early when user cancels login prompt", async () => {
-    const cancelSymbol = Symbol("cancel");
-    vi.mocked(p.confirm).mockResolvedValue(cancelSymbol as unknown as boolean);
-    vi.mocked(p.isCancel).mockImplementation((val) => val === cancelSymbol);
-
-    await runSetup();
-
-    expect(mockStartOAuthFlow).not.toHaveBeenCalled();
+    expect(p.confirm).not.toHaveBeenCalledWith({ message: "Open browser to log in?" });
+    expect(mockStartOAuthFlow).toHaveBeenCalledWith(
+      undefined,
+      "/cli/auth",
+      expect.any(Object),
+      undefined,
+      expect.objectContaining({ waitWithoutBrowser: true }),
+    );
+    expect(p.log.message).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "If your browser doesn't open automatically, visit:\nhttps://app.dosu.dev/cli/auth?callback=x",
+      ),
+    );
   });
 
   it("logs curated OAuth callback errors during browser login", async () => {
-    vi.mocked(p.confirm).mockResolvedValue(true);
     mockStartOAuthFlow.mockRejectedValue(
       new OAuthCallbackError("OAuth state expired", {
         errorCode: "bad_oauth_state",
@@ -789,8 +746,8 @@ describe("runSetup integration", () => {
   it("runs OAuth flow and saves tokens to real config", async () => {
     // No pre-existing config (fresh temp dir), so needs login. No mode prompt anymore.
     vi.mocked(p.confirm).mockResolvedValue(true);
-    mockStartOAuthFlow.mockImplementation(async (_signal, _path, _params, onAuthURL) => {
-      onAuthURL?.("https://app.test/cli/auth?callback=cb");
+    mockStartOAuthFlow.mockImplementation(async (_signal, _path, _params, _onAuthURL, options) => {
+      options?.onAuthURL?.("https://app.test/cli/auth?callback=cb");
       return {
         browserOpened: true,
         token: { access_token: "oauth-tok", refresh_token: "oauth-ref", expires_in: 7200 },
@@ -815,16 +772,12 @@ describe("runSetup integration", () => {
     );
   });
 
-  it("returns null and shows error when browser cannot be opened during OAuth", async () => {
-    vi.mocked(p.confirm).mockResolvedValue(true);
+  it("returns null when the OAuth flow yields no token", async () => {
     mockStartOAuthFlow.mockResolvedValue({ browserOpened: false });
 
     const result = await runSetup();
 
     expect(result).toBeUndefined();
-    expect(p.log.error).toHaveBeenCalledWith(
-      "Run 'dosu login --no-browser' from the terminal to authenticate over SSH.",
-    );
     expect(loadConfig().access_token).toBe("");
   });
 
@@ -1262,13 +1215,12 @@ describe("runSetup integration", () => {
       doRequestRaw: vi.fn().mockRejectedValue(new Error("ECONNREFUSED")),
     });
 
-    // Falls through to login prompt
-    vi.mocked(p.confirm).mockResolvedValue(false);
+    // Falls through to login (OAuth flow starts directly, no confirm prompt)
+    mockStartOAuthFlow.mockResolvedValue({ browserOpened: false });
 
     await runSetup();
 
-    // Should have asked to login
-    expect(p.confirm).toHaveBeenCalled();
+    expect(mockStartOAuthFlow).toHaveBeenCalled();
   });
 
   it("retries on transient backend error (502) instead of declaring session expired", async () => {
@@ -1422,7 +1374,8 @@ describe("runSetup integration", () => {
     expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("Removed from 1 agent"));
   });
 
-  it("OSS mode stepShowSummary uses OSS-specific prompt", async () => {
+  it("OSS mode configures MCP but never offers the audit handoff", async () => {
+    // The audit acts on the user's own repo, so it's cloud-mode only.
     const cfg = makeCfg({ mode: "oss" });
     saveConfig(cfg);
 
@@ -1433,7 +1386,10 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("Dosu help"));
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 agent"));
+    expect(p.confirm).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Kick off the codebase audit in Claude Code now?" }),
+    );
   });
 
   it("installs skill automatically when the one-shot confirm leaves it ticked", async () => {
@@ -1612,10 +1568,10 @@ describe("runSetup checkpoint behavior", () => {
     }
   });
 
-  it("does not show the 'Try it out' prompt when the user unticks MCP", async () => {
+  it("does not offer the audit handoff when the user unticks MCP", async () => {
     // If the user deselects both "Install Dosu MCP" and "Install Dosu skill"
     // from the one-shot confirm, nothing was configured this run, so the
-    // paste-into-your-agent tip would be noise.
+    // audit handoff would be noise.
     saveConfig(makeCfg());
     setupAuthed();
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
@@ -1635,12 +1591,14 @@ describe("runSetup checkpoint behavior", () => {
 
     await runSetup();
 
-    expect(p.log.message).not.toHaveBeenCalledWith(expect.stringContaining("Try it out"));
+    expect(p.confirm).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Kick off the codebase audit in Claude Code now?" }),
+    );
   });
 
-  it("does not show the 'Try it out' prompt when no AI agents are detected", async () => {
+  it("does not offer the audit handoff when no AI agents are detected", async () => {
     // User ticked MCP but has no supported agents installed. stepConfigureMcpTools
-    // returns an empty array (nothing to configure), so the tip would be useless.
+    // returns an empty array (nothing to configure), so the handoff would be useless.
     saveConfig(makeCfg());
     setupAuthed();
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
@@ -1650,7 +1608,9 @@ describe("runSetup checkpoint behavior", () => {
     expect(p.log.warn).toHaveBeenCalledWith(
       expect.stringContaining("No supported AI agents detected"),
     );
-    expect(p.log.message).not.toHaveBeenCalledWith(expect.stringContaining("Try it out"));
+    expect(p.confirm).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Kick off the codebase audit in Claude Code now?" }),
+    );
   });
 
   it("persists a fresh token after successful authentication", async () => {
@@ -2439,10 +2399,9 @@ describe("runSetup additional branches", () => {
     expect(p.outro).not.toHaveBeenCalled();
   });
 
-  it("shows the docs-imported 'Try it out' prompt when MCP and GitHub onboarding both ran", async () => {
+  it("tracks MCP configuration and docs import when MCP and GitHub onboarding both ran", async () => {
     // Configure an MCP tool (so mcpConfiguredThisRun is true) AND complete the
-    // GitHub onboarding step → showTryItOutPrompt is invoked with docsImported
-    // = `choices.connectGitHub && githubOnboardingDone` = true.
+    // GitHub onboarding step — both completion events should be tracked.
     saveConfig(makeCfg());
     setupAuthed();
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
@@ -2463,8 +2422,8 @@ describe("runSetup additional branches", () => {
 
     await runSetup();
 
-    expect(p.log.message).toHaveBeenCalledWith(
-      expect.stringContaining("summarize the most important docs"),
-    );
+    const events = trackedCliOnboardingEvents().map((input) => input.event);
+    expect(events).toContain("cli_onboarding_mcp_configured");
+    expect(events).toContain("cli_onboarding_docs_imported");
   });
 });

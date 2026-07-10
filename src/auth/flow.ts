@@ -10,6 +10,17 @@ export type OAuthFlowResult =
   | { browserOpened: true; token: TokenResponse }
   | { browserOpened: false };
 
+export interface OAuthFlowOptions {
+  /** Called with the auth URL before the browser open is attempted. */
+  onAuthURL?: (url: string) => void;
+  /**
+   * Keep waiting for the callback even if the browser could not be opened
+   * (the user can open the URL from onAuthURL manually). Without this, a
+   * failed browser open returns { browserOpened: false } immediately.
+   */
+  waitWithoutBrowser?: boolean;
+}
+
 /**
  * Starts the browser-based OAuth flow.
  * 1. Starts a local HTTP server on a random port
@@ -30,6 +41,7 @@ export async function startOAuthFlow(
   path: string = "/cli/auth",
   params: Record<string, string> = {},
   onAuthURL?: (url: string) => void,
+  options: OAuthFlowOptions = {},
 ): Promise<OAuthFlowResult> {
   const { server, tokenPromise } = await startCallbackServer();
 
@@ -40,6 +52,7 @@ export async function startOAuthFlow(
     logger.debug("auth.flow", `Callback URL: ${callbackURL}`);
     const authURL = buildAuthURL(callbackURL, path, params);
     logger.info("auth.flow", `Auth URL: ${authURL}`);
+    options.onAuthURL?.(authURL);
 
     // Open browser — dynamic import to avoid bundling issues
     const open = await import("open");
@@ -56,7 +69,7 @@ export async function startOAuthFlow(
       );
     }
 
-    if (!browserOpened) {
+    if (!browserOpened && !options.waitWithoutBrowser) {
       logger.debug("auth.flow", "Browser unavailable — returning to caller for fallback");
       return { browserOpened: false };
       // Note: server.close() is called by the finally block below
