@@ -93,6 +93,10 @@ export function launchAuditAgent(): void {
   logger.info("setup", "Handing off to Claude Code for the codebase audit");
   const result = spawnSync("claude", ["--model", AUDIT_AGENT_MODEL, buildAuditHandoffPrompt()], {
     stdio: "inherit",
+    // npm-installed `claude` is a .cmd shim on Windows; Node refuses to spawn
+    // batch files without a shell. The prompt is our own static string, so
+    // there's no untrusted input reaching the shell.
+    shell: process.platform === "win32",
   });
   if (result.error) {
     logger.warn("setup", `Claude Code launch failed: ${result.error.message}`);

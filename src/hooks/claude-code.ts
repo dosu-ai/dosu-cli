@@ -82,7 +82,13 @@ function isDosuHookCommand(command: string): boolean {
   if (/@dosu\/cli/.test(command)) return true;
   // Materialized runtime (no global install): `node` must be the command name
   // and its script a dosu.js bundle — an `echo "… dosu.js hooks …"` is not ours.
-  if (/^([^\s]*\/)?node(\.exe)?\s+"?[^\s"]*dosu\.(c|m)?js"?\s/.test(command.trimStart())) {
+  // The script path is quoted when it contains spaces (Windows user profiles)
+  // and may use either path separator.
+  if (
+    /^([^\s]*[/\\])?node(\.exe)?\s+("[^"]*dosu\.(c|m)?js"|[^\s]*dosu\.(c|m)?js)\s/.test(
+      command.trimStart(),
+    )
+  ) {
     return true;
   }
   // `dosu` must be the command name (optionally path-prefixed), NOT merely an

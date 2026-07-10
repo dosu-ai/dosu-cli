@@ -125,7 +125,7 @@ describe("launchAuditAgent", () => {
     expect(mockSpawnSync).toHaveBeenCalledWith(
       "claude",
       ["--model", "haiku", buildAuditHandoffPrompt("dosu")],
-      { stdio: "inherit" },
+      { stdio: "inherit", shell: process.platform === "win32" },
     );
     expect(p.log.message).not.toHaveBeenCalled();
   });
