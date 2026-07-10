@@ -117,6 +117,8 @@ const { mockStepConnectGitHubRepo, mockStepImportGitHubDocs } = vi.hoisted(() =>
 }));
 vi.mock("./github-step", () => ({
   stepConnectGitHubRepo: (...args: unknown[]) => mockStepConnectGitHubRepo(...args),
+  // Audit handoff never fires in these tests: not a git repo.
+  detectGitRepo: vi.fn(() => null),
 }));
 vi.mock("./github-doc-import-step", () => ({
   stepImportGitHubDocs: (...args: unknown[]) => mockStepImportGitHubDocs(...args),
@@ -649,15 +651,8 @@ describe("showTryItOutPrompt", () => {
     );
   });
 
-  it("points to the codebase audit in cloud mode", () => {
+  it("no longer prints the audit pointer (moved to the audit handoff)", () => {
     showTryItOutPrompt({ docsImported: false, hasAgentsMd: false });
-
-    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("audit this repo"));
-    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("dosu audit"));
-  });
-
-  it("omits the audit pointer in OSS mode", () => {
-    showTryItOutPrompt({ mode: MODE_OSS });
 
     expect(p.log.message).not.toHaveBeenCalledWith(expect.stringContaining("audit this repo"));
   });

@@ -6,11 +6,7 @@ import { execSync } from "node:child_process";
 import { Command } from "commander";
 import pc from "picocolors";
 import { logger } from "../debug/logger";
-import {
-  fetchLatestSha,
-  refreshInstalledSha,
-  writeSkillCache,
-} from "../version/skill-update-check";
+import { fetchLatestSha, writeSkillCache } from "../version/skill-update-check";
 
 const SKILL_REPO = "dosu-ai/dosu-skill";
 const SKILL_NAME = "dosu";
@@ -99,15 +95,16 @@ export function skillCommand(): Command {
     .description("Update the Dosu skill to the latest version")
     .action(async () => {
       console.log(`Updating ${SKILL_NAME} skill...`);
-      try {
-        execSync(`npx skills update ${SKILL_NAME} -g`, {
-          stdio: "inherit",
-        });
-      } catch {
+      // Reinstall rather than `npx skills update`: update matches on the
+      // skillPath recorded in the skills lockfile, so it can't follow the
+      // skill across a repo-layout move (it reports "deleted upstream"
+      // instead). `skills add` overwrites by name and refreshes the lock
+      // entry, so it always converges on the latest layout.
+      const result = await installSkill();
+      if (!result.success) {
         console.error(pc.red(`\nFailed to update skill.`));
         process.exit(1);
       }
-      await refreshInstalledSha();
       console.log(pc.green(`\n✓ Skill "${SKILL_NAME}" updated.`));
     });
 

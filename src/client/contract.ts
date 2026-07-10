@@ -1,2 +1,2 @@
 export const CLI_CONTRACT_HASH: typeof import("../generated/dosu-api-types").CLI_CONTRACT_HASH =
-  "888669da10bd";
+  "f5c0727a7884";

@@ -1,3 +1,10 @@
+# [0.30.0](https://github.com/dosu-ai/dosu-cli/compare/v0.29.1...v0.30.0) (2026-07-10)
+
+
+### Features
+
+* **setup:** audit handoff to Claude Code + first-class npx-only support ([#119](https://github.com/dosu-ai/dosu-cli/issues/119)) ([1bc13af](https://github.com/dosu-ai/dosu-cli/commit/1bc13af3a640c1d4a9025b7edf521fa3b15bf921)), closes [dosu-ai/dosu-skill#9](https://github.com/dosu-ai/dosu-skill/issues/9)
+
 ## [0.29.1](https://github.com/dosu-ai/dosu-cli/compare/v0.29.0...v0.29.1) (2026-07-07)
 
 

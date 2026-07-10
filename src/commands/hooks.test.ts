@@ -29,6 +29,14 @@ vi.mock("../client/client", () => ({
   }),
 }));
 
+// Deterministic hook runtime: the real resolver probes PATH and can
+// materialize a bundle into the config dir.
+vi.mock("../hooks/runtime", () => ({
+  resolveHookCommandPrefix: vi.fn(() => "dosu"),
+  dosuOnPath: vi.fn(() => true),
+  materializedRuntimePath: vi.fn(() => "/nonexistent/dosu-runtime/dosu.js"),
+}));
+
 import { Client } from "../client/client";
 import { loadConfig, MODE_OSS } from "../config/config";
 import { loadState, saveState, type TicketState } from "../hooks/state";
@@ -853,6 +861,48 @@ describe("lifecycle commands", () => {
     const factory = checks.find((c) => c.name === "factory-config");
     expect(factory?.status).toBe("fail");
     expect(factory?.detail).toContain("not both installed");
+  });
+
+  it("doctor reports runtime ok when dosu is on PATH", async () => {
+    const rt = await import("../hooks/runtime");
+    vi.mocked(rt.dosuOnPath).mockReturnValue(true);
+    await runInstall("claude-code", { dir });
+    const checks = await collectDoctorChecks({ dir });
+    const runtime = checks.find((c) => c.name === "runtime");
+    expect(runtime?.status).toBe("ok");
+    expect(runtime?.detail).toBe("dosu on PATH");
+  });
+
+  it("doctor reports runtime ok via the materialized bundle when dosu is off PATH", async () => {
+    const rt = await import("../hooks/runtime");
+    const materialized = join(dir, "bin", "dosu.js");
+    mkdirSync(join(dir, "bin"), { recursive: true });
+    writeFileSync(materialized, "// bundle");
+    vi.mocked(rt.dosuOnPath).mockReturnValue(false);
+    vi.mocked(rt.materializedRuntimePath).mockReturnValue(materialized);
+
+    await runInstall("claude-code", { dir });
+    const checks = await collectDoctorChecks({ dir });
+    const runtime = checks.find((c) => c.name === "runtime");
+    expect(runtime?.status).toBe("ok");
+    expect(runtime?.detail).toContain(materialized);
+  });
+
+  it("doctor fails runtime when neither dosu nor a materialized bundle exists", async () => {
+    const rt = await import("../hooks/runtime");
+    vi.mocked(rt.dosuOnPath).mockReturnValue(false);
+    vi.mocked(rt.materializedRuntimePath).mockReturnValue("/nonexistent/dosu-runtime/dosu.js");
+
+    await runInstall("claude-code", { dir });
+    const checks = await collectDoctorChecks({ dir });
+    const runtime = checks.find((c) => c.name === "runtime");
+    expect(runtime?.status).toBe("fail");
+    expect(runtime?.detail).toContain("npx -y @dosu/cli hooks install");
+  });
+
+  it("doctor omits the runtime check when no hooks are installed anywhere", async () => {
+    const checks = await collectDoctorChecks({ dir });
+    expect(checks.find((c) => c.name === "runtime")).toBeUndefined();
   });
 });
 
