@@ -699,28 +699,33 @@ describe("runSetup integration", () => {
     return clientMethods;
   }
 
-  it("returns early when user declines login", async () => {
+  it("starts the OAuth flow without a confirm prompt and prints the login link", async () => {
     // No token in config (fresh state via temp dir)
-    vi.mocked(p.confirm).mockResolvedValue(false);
+    mockStartOAuthFlow.mockImplementation(async (_signal, _path, _params, options) => {
+      options?.onAuthURL?.("https://app.dosu.dev/cli/auth?callback=x");
+      return {
+        browserOpened: true,
+        token: { access_token: "tok", refresh_token: "ref", expires_in: 3600 },
+      };
+    });
+    setupAuthenticatedClient();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
 
     await runSetup();
 
-    expect(mockStartOAuthFlow).not.toHaveBeenCalled();
-    expect(p.log.success).not.toHaveBeenCalled();
-  });
-
-  it("returns early when user cancels login prompt", async () => {
-    const cancelSymbol = Symbol("cancel");
-    vi.mocked(p.confirm).mockResolvedValue(cancelSymbol as unknown as boolean);
-    vi.mocked(p.isCancel).mockImplementation((val) => val === cancelSymbol);
-
-    await runSetup();
-
-    expect(mockStartOAuthFlow).not.toHaveBeenCalled();
+    expect(p.confirm).not.toHaveBeenCalledWith({ message: "Open browser to log in?" });
+    expect(mockStartOAuthFlow).toHaveBeenCalledWith(
+      undefined,
+      "/cli/auth",
+      expect.any(Object),
+      expect.objectContaining({ waitWithoutBrowser: true }),
+    );
+    expect(p.log.info).toHaveBeenCalledWith(
+      "Open https://app.dosu.dev/cli/auth?callback=x to log in",
+    );
   });
 
   it("logs curated OAuth callback errors during browser login", async () => {
-    vi.mocked(p.confirm).mockResolvedValue(true);
     mockStartOAuthFlow.mockRejectedValue(
       new OAuthCallbackError("OAuth state expired", {
         errorCode: "bad_oauth_state",
@@ -815,16 +820,12 @@ describe("runSetup integration", () => {
     );
   });
 
-  it("returns null and shows error when browser cannot be opened during OAuth", async () => {
-    vi.mocked(p.confirm).mockResolvedValue(true);
+  it("returns null when the OAuth flow yields no token", async () => {
     mockStartOAuthFlow.mockResolvedValue({ browserOpened: false });
 
     const result = await runSetup();
 
     expect(result).toBeUndefined();
-    expect(p.log.error).toHaveBeenCalledWith(
-      "Run 'dosu login --no-browser' from the terminal to authenticate over SSH.",
-    );
     expect(loadConfig().access_token).toBe("");
   });
 
@@ -1262,13 +1263,12 @@ describe("runSetup integration", () => {
       doRequestRaw: vi.fn().mockRejectedValue(new Error("ECONNREFUSED")),
     });
 
-    // Falls through to login prompt
-    vi.mocked(p.confirm).mockResolvedValue(false);
+    // Falls through to login (OAuth flow starts directly, no confirm prompt)
+    mockStartOAuthFlow.mockResolvedValue({ browserOpened: false });
 
     await runSetup();
 
-    // Should have asked to login
-    expect(p.confirm).toHaveBeenCalled();
+    expect(mockStartOAuthFlow).toHaveBeenCalled();
   });
 
   it("retries on transient backend error (502) instead of declaring session expired", async () => {

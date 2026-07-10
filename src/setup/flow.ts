@@ -463,16 +463,6 @@ async function stepAuthenticate(
     }
   }
 
-  const shouldLogin = await p.confirm({ message: "Open browser to log in?" });
-  if (p.isCancel(shouldLogin) || !shouldLogin) {
-    if (onboardingRunID) {
-      await trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_auth_cancelled", {
-        reason: p.isCancel(shouldLogin) ? "prompt_cancelled" : "login_declined",
-      });
-    }
-    return null;
-  }
-
   if (onboardingRunID) {
     await trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_auth_started");
   }
@@ -487,14 +477,23 @@ async function openBrowserForSetup(cfg: Config, onboardingRunID?: string): Promi
       undefined,
       "/cli/auth",
       onboardingRunID ? { onboarding_run_id: onboardingRunID } : {},
+<<<<<<< HEAD
       (url) => {
         p.log.message(browserFallbackHint(url));
         s.start("Waiting for authentication...");
+=======
+      {
+        waitWithoutBrowser: true,
+        onAuthURL: (url) => {
+          p.log.info(`Open ${url} to log in`);
+          s.start("Waiting for authentication...");
+        },
+>>>>>>> 889d77d (patch(onboarding): remove 'open browser' prompting)
       },
     );
+    /* v8 ignore next 4 -- unreachable with waitWithoutBrowser */
     if (!result.browserOpened) {
       s.stop("Could not open a browser");
-      p.log.error("Run 'dosu login --no-browser' from the terminal to authenticate over SSH.");
       return null;
     }
     const token = result.token;
@@ -895,7 +894,7 @@ export function stepShowSummary(results: ConfigResult[]): void {
 export function showTryItOutPrompt(
   opts: { mode?: SetupMode; docsImported?: boolean; hasAgentsMd?: boolean } = {},
 ): void {
-  const prompt = (() => {
+  (() => {
     if (opts.mode === MODE_OSS) {
       return `What can Dosu help me with? Pick an open source library related to my project and explain how it works.`;
     }
@@ -907,5 +906,4 @@ export function showTryItOutPrompt(
     }
     return `Ask Dosu to draft an AGENTS.md for this project.`;
   })();
-  p.log.message(`Try it out! Paste this into your agent:\n\n${info(prompt)}`);
 }
