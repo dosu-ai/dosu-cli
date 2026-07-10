@@ -4,7 +4,8 @@
 
 import { Command } from "commander";
 import pc from "picocolors";
-import { createTypedClient } from "../client/trpc";
+import { createTypedClient, type TypedClient } from "../client/trpc";
+import type { NangoGetConnectionInput } from "../generated/dosu-api-types";
 import { requireLoginConfig } from "./auth";
 import { printResult, printTable } from "./output";
 
@@ -17,26 +18,75 @@ function requireConfig() {
   return cfg;
 }
 
-/** Platforms supported by `nango.getConnection` */
-const NANGO_PLATFORMS = [
-  "confluence",
-  "notion",
-  "coda",
-  "gitlab",
-  "gitlab-pat",
-  "confluence-basic",
-] as const;
+type NangoProvider = NangoGetConnectionInput["provider"];
+
+/**
+ * Nango probes per platform. A platform can be connectable under more than one
+ * Nango provider — Azure DevOps, for example, connects via PAT (`azure_devops`)
+ * or OAuth (`microsoft-entra-id`). A repo may be linked under either, so we
+ * probe every provider and report connected if ANY probe returns a row.
+ * `nango.getConnection` filters on provider AND providerConfigKey together;
+ * prod uses bare config keys, so provider === providerConfigKey === the bare name.
+ */
+const NANGO_PROBES: Record<
+  string,
+  readonly { provider: NangoProvider; providerConfigKey: string }[]
+> = {
+  gitlab: [{ provider: "gitlab", providerConfigKey: "gitlab" }],
+  "gitlab-pat": [{ provider: "gitlab-pat", providerConfigKey: "gitlab-pat" }],
+  confluence: [{ provider: "confluence", providerConfigKey: "confluence" }],
+  "confluence-basic": [{ provider: "confluence-basic", providerConfigKey: "confluence-basic" }],
+  notion: [{ provider: "notion", providerConfigKey: "notion" }],
+  coda: [{ provider: "coda", providerConfigKey: "coda" }],
+  azure_devops: [
+    { provider: "azure_devops", providerConfigKey: "azure_devops" },
+    { provider: "microsoft-entra-id", providerConfigKey: "microsoft-entra-id" },
+  ],
+};
 
 /** All display platforms including those checked via other means */
 const DISPLAY_PLATFORMS = [
   "github",
   "gitlab",
+  "azure_devops",
   "slack",
   "confluence",
   "notion",
   "coda",
   "teams",
 ] as const;
+
+/**
+ * Probe a platform's Nango connection state. Platforms absent from
+ * `NANGO_PROBES` (github, slack, teams) are reported as `queryable: false`.
+ * Otherwise every probe is tried in order, short-circuiting on the first
+ * connection found; a throwing probe is swallowed so the next one still runs.
+ */
+async function probeConnection(
+  client: TypedClient,
+  orgId: string,
+  platform: string,
+): Promise<{ queryable: boolean; connected: boolean; connection: unknown }> {
+  const probes = NANGO_PROBES[platform];
+  if (!probes) {
+    return { queryable: false, connected: false, connection: null };
+  }
+  for (const probe of probes) {
+    try {
+      const conn = await client.nango.getConnection.query({
+        provider: probe.provider,
+        providerConfigKey: probe.providerConfigKey,
+        orgId,
+      });
+      if (conn != null) {
+        return { queryable: true, connected: true, connection: conn };
+      }
+    } catch {
+      // Swallow and try the next probe.
+    }
+  }
+  return { queryable: true, connected: false, connection: null };
+}
 
 export function integrationsCommand(): Command {
   const cmd = new Command("integrations").description("Manage integrations");
@@ -51,24 +101,9 @@ export function integrationsCommand(): Command {
 
       const results: Array<{ platform: string; connected: boolean }> = [];
       for (const platform of DISPLAY_PLATFORMS) {
-        // Only nango-supported platforms can be queried via getConnection
-        const nangoProvider = NANGO_PLATFORMS.find((p) => p === platform);
-        if (nangoProvider) {
-          try {
-            const conn = await client.nango.getConnection.query({
-              provider: nangoProvider,
-              providerConfigKey: nangoProvider,
-              // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-              orgId: cfg.org_id!,
-            });
-            results.push({ platform, connected: conn !== null });
-          } catch {
-            results.push({ platform, connected: false });
-          }
-        } else {
-          // github, slack, teams — not queryable via nango
-          results.push({ platform, connected: false });
-        }
+        // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
+        const { connected } = await probeConnection(client, cfg.org_id!, platform);
+        results.push({ platform, connected });
       }
 
       if (opts.json) {
@@ -94,9 +129,15 @@ export function integrationsCommand(): Command {
     .action(async (platform: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
-      const nangoProvider = NANGO_PLATFORMS.find((p) => p === platform);
+      const { queryable, connected, connection } = await probeConnection(
+        client,
+        // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
+        cfg.org_id!,
+        platform,
+      );
 
-      if (!nangoProvider) {
+      if (!queryable) {
+        // github, slack, teams — not queryable via nango
         if (opts.json) {
           printResult({ platform, connected: false, note: "not queryable via nango" }, opts);
           return;
@@ -105,27 +146,11 @@ export function integrationsCommand(): Command {
         return;
       }
 
-      try {
-        const conn = await client.nango.getConnection.query({
-          provider: nangoProvider,
-          providerConfigKey: nangoProvider,
-          // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-          orgId: cfg.org_id!,
-        });
-
-        const connected = conn !== null;
-        if (opts.json) {
-          printResult({ platform, connected, connection: conn }, opts);
-          return;
-        }
-        console.log(`${platform}: ${connected ? pc.green("connected") : pc.dim("not connected")}`);
-      } catch {
-        if (opts.json) {
-          printResult({ platform, connected: false }, opts);
-          return;
-        }
-        console.log(`${platform}: ${pc.dim("not connected")}`);
+      if (opts.json) {
+        printResult({ platform, connected, connection }, opts);
+        return;
       }
+      console.log(`${platform}: ${connected ? pc.green("connected") : pc.dim("not connected")}`);
     });
 
   cmd

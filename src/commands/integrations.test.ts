@@ -67,9 +67,11 @@ afterEach(() => {
 describe("integrations list", () => {
   it("queries nango platforms and shows connection status", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    // Only nango-supported platforms are queried: gitlab, confluence, notion, coda
+    // Query order: gitlab, azure_devops (PAT), azure_devops (OAuth), confluence, notion, coda
     mockQuery
       .mockResolvedValueOnce(null) // gitlab - not connected
+      .mockResolvedValueOnce(null) // azure_devops PAT - not connected
+      .mockResolvedValueOnce(null) // azure_devops OAuth - not connected
       .mockResolvedValueOnce({ id: "conn2" }) // confluence - connected
       .mockResolvedValueOnce(null) // notion - not connected
       .mockResolvedValueOnce(null); // coda - not connected
@@ -78,13 +80,14 @@ describe("integrations list", () => {
 
     const output = allOutput();
     expect(output).toContain("github");
+    expect(output).toContain("azure_devops");
     expect(output).toContain("connected");
     expect(output).toContain("not connected");
   });
 
   it("outputs valid JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    for (let i = 0; i < 4; i++) mockQuery.mockResolvedValueOnce(null);
+    for (let i = 0; i < 6; i++) mockQuery.mockResolvedValueOnce(null);
 
     await run("list", "--json");
 
@@ -92,6 +95,23 @@ describe("integrations list", () => {
     expect(Array.isArray(output)).toBe(true);
     expect(output[0]).toHaveProperty("platform");
     expect(output[0]).toHaveProperty("connected");
+  });
+
+  it("includes azure_devops connected via OAuth", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery
+      .mockResolvedValueOnce(null) // gitlab
+      .mockResolvedValueOnce(null) // azure_devops PAT - not connected
+      .mockResolvedValueOnce({ id: "ado-oauth" }) // azure_devops OAuth - connected
+      .mockResolvedValueOnce(null) // confluence
+      .mockResolvedValueOnce(null) // notion
+      .mockResolvedValueOnce(null); // coda
+
+    await run("list", "--json");
+
+    const output = JSON.parse(allOutput());
+    const ado = output.find((r: { platform: string }) => r.platform === "azure_devops");
+    expect(ado.connected).toBe(true);
   });
 });
 
@@ -121,6 +141,96 @@ describe("integrations status", () => {
     await run("status", "confluence");
 
     expect(allOutput()).toContain("not connected");
+  });
+});
+
+describe("integrations status azure_devops", () => {
+  it("reports connected via PAT and short-circuits before the OAuth probe", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce({ id: "ado-pat" });
+
+    await run("status", "azure_devops");
+
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    expect(mockQuery.mock.calls[0][1]).toMatchObject({ provider: "azure_devops" });
+    const output = allOutput();
+    expect(output).toContain("connected");
+    // "not connected" contains the substring "connected", so assert it is absent
+    expect(output).not.toContain("not connected");
+  });
+
+  it("falls back to the OAuth probe when PAT is not connected", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery
+      .mockResolvedValueOnce(null) // PAT - not connected
+      .mockResolvedValueOnce({ id: "ado-oauth" }); // OAuth - connected
+
+    await run("status", "azure_devops");
+
+    expect(mockQuery).toHaveBeenCalledTimes(2);
+    expect(mockQuery.mock.calls[1][1]).toMatchObject({ provider: "microsoft-entra-id" });
+    const output = allOutput();
+    expect(output).toContain("connected");
+    expect(output).not.toContain("not connected");
+  });
+
+  it("reports not connected when neither probe returns a connection", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+
+    await run("status", "azure_devops");
+
+    expect(mockQuery).toHaveBeenCalledTimes(2);
+    expect(allOutput()).toContain("not connected");
+  });
+
+  it("continues past a probe that throws", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery
+      .mockRejectedValueOnce(new Error("boom")) // PAT throws
+      .mockResolvedValueOnce({ id: "ado-oauth" }); // OAuth - connected
+
+    await run("status", "azure_devops");
+
+    expect(mockQuery).toHaveBeenCalledTimes(2);
+    const output = allOutput();
+    expect(output).toContain("connected");
+    expect(output).not.toContain("not connected");
+  });
+
+  it("outputs JSON with the connection payload when connected", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce({ id: "ado-pat" });
+
+    await run("status", "--json", "azure_devops");
+
+    const output = JSON.parse(allOutput());
+    expect(output.platform).toBe("azure_devops");
+    expect(output.connected).toBe(true);
+    expect(output.connection).toBeTruthy();
+  });
+});
+
+describe("integrations status (not queryable via nango)", () => {
+  it("reports github as not connected without issuing a nango query", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+
+    await run("status", "github");
+
+    expect(mockQuery).not.toHaveBeenCalled();
+    expect(allOutput()).toContain("not connected");
+  });
+
+  it("outputs a JSON note for a not-queryable platform", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+
+    await run("status", "--json", "github");
+
+    const output = JSON.parse(allOutput());
+    expect(output.platform).toBe("github");
+    expect(output.connected).toBe(false);
+    expect(output.note).toContain("not queryable");
+    expect(mockQuery).not.toHaveBeenCalled();
   });
 });
 
