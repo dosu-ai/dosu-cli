@@ -168,6 +168,18 @@ describe("startOAuthFlow", () => {
     expect(r).toMatchObject({ browserOpened: true });
   });
 
+  it("invokes onAuthURL with the auth URL, even when the browser fails to open", async () => {
+    mockOpenDefault.mockRejectedValueOnce(new Error("Executable not found in $PATH: xdg-open"));
+    const onAuthURL = vi.fn();
+
+    const result = await startOAuthFlow(undefined, "/cli/auth", {}, onAuthURL);
+
+    expect(result).toEqual({ browserOpened: false });
+    expect(onAuthURL).toHaveBeenCalledExactlyOnceWith(
+      "https://app.dosu.dev/cli/auth?callback=http%3A%2F%2Flocalhost%3A12345%2Fcallback",
+    );
+  });
+
   it("includes extra auth URL params", async () => {
     const flowPromise = startOAuthFlow(undefined, "/cli/auth", {
       onboarding_run_id: "run-123",

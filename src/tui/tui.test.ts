@@ -317,7 +317,12 @@ describe("runTUI", () => {
 
     await runTUI();
 
-    expect(mockStartOAuthFlow).toHaveBeenCalledWith(undefined, "/cli/auth");
+    expect(mockStartOAuthFlow).toHaveBeenCalledWith(
+      undefined,
+      "/cli/auth",
+      {},
+      expect.any(Function),
+    );
     const ondisk = readRealConfig();
     expect(ondisk.access_token).toBe("new-tok");
     expect(ondisk.refresh_token).toBe("new-ref");

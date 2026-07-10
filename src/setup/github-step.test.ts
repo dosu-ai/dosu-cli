@@ -56,6 +56,7 @@ vi.mock("@clack/prompts", () => ({
     success: vi.fn(),
     error: vi.fn(),
     info: vi.fn(),
+    message: vi.fn(),
   },
 }));
 

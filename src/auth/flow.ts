@@ -18,11 +18,15 @@ export type OAuthFlowResult =
  * 4. Returns { token, browserOpened: true } on success, or
  *    { browserOpened: false } immediately if the browser could not be opened
  *    (caller should fall through to the device/ticket flow).
+ *
+ * `onAuthURL` fires with the login URL before the browser opens, so callers
+ * can show it as a manual fallback (closed browser, remote session, etc.).
  */
 export async function startOAuthFlow(
   signal?: AbortSignal,
   path: string = "/cli/auth",
   params: Record<string, string> = {},
+  onAuthURL?: (url: string) => void,
 ): Promise<OAuthFlowResult> {
   const { server, tokenPromise } = await startCallbackServer();
 
@@ -33,6 +37,7 @@ export async function startOAuthFlow(
     logger.debug("auth.flow", `Callback URL: ${callbackURL}`);
     const authURL = buildAuthURL(callbackURL, path, params);
     logger.info("auth.flow", `Auth URL: ${authURL}`);
+    onAuthURL?.(authURL);
 
     // Open browser — dynamic import to avoid bundling issues
     const open = await import("open");
