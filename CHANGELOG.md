@@ -1,3 +1,10 @@
+# [0.32.0](https://github.com/dosu-ai/dosu-cli/compare/v0.31.0...v0.32.0) (2026-07-11)
+
+
+### Features
+
+* **setup:** route first-run onboarding through the web wizard ([#123](https://github.com/dosu-ai/dosu-cli/issues/123)) ([4a038ce](https://github.com/dosu-ai/dosu-cli/commit/4a038ce815b024084ad3456bc63aaff2bedb6f3d))
+
 # [0.31.0](https://github.com/dosu-ai/dosu-cli/compare/v0.30.0...v0.31.0) (2026-07-10)
 
 
