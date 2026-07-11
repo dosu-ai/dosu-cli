@@ -159,9 +159,11 @@ const SUCCESS_COPY: Record<SuccessVariant, { title: string; heading: string; clo
  * Injected when the server was started with `nextHold`: the success page
  * polls GET /next so the CLI can steer this same tab onward (e.g. into the
  * web onboarding wizard) instead of opening a second one. Polling stops on
- * 410 (CLI decided there's nowhere to go — the page then tells the user the
- * tab can be closed) or after ~3 minutes. Transient fetch errors are
- * tolerated: the budget, not a single hiccup, ends the loop, because giving
+ * 410 (CLI decided there's nowhere to go — the page then settles to
+ * `settleMsg`, the variant's regular close message), after ~3 minutes, or
+ * once the server is clearly gone (several consecutive fetch failures —
+ * covers both a closed server and a 410 whose response was cut off
+ * mid-flush). A single transient error never ends the loop, because giving
  * up early would strand a handoff the CLI is still preparing (it may spend
  * several network round-trips deciding before calling setNext).
  *
@@ -170,19 +172,23 @@ const SUCCESS_COPY: Record<SuccessVariant, { title: string; heading: string; clo
  * "authentication successful, close this tab" right before that would be
  * confusing — then navigates.
  */
-const NEXT_POLL_SCRIPT = `<script>
+function buildNextPollScript(settleMsg: string): string {
+  return `<script>
 (function () {
   var tries = 0;
+  var misses = 0;
   var setCopy = function (heading, msg) {
     var h = document.getElementById('heading');
     var m = document.getElementById('close-msg');
     if (h && heading) h.textContent = heading;
     if (m && msg) m.textContent = msg;
   };
+  var settle = function () { setCopy(null, ${JSON.stringify(settleMsg)}); };
   var timer = setInterval(function () {
     tries += 1;
-    if (tries > 720) { clearInterval(timer); setCopy(null, ${JSON.stringify(SUCCESS_COPY.auth.close)}); return; }
+    if (tries > 720) { clearInterval(timer); settle(); return; }
     fetch('/next').then(function (res) {
+      misses = 0;
       if (res.status === 200) {
         clearInterval(timer);
         res.json().then(function (body) {
@@ -193,12 +199,16 @@ const NEXT_POLL_SCRIPT = `<script>
         });
       } else if (res.status === 410) {
         clearInterval(timer);
-        setCopy(null, ${JSON.stringify(SUCCESS_COPY.auth.close)});
+        settle();
       }
-    }).catch(function () {});
+    }).catch(function () {
+      misses += 1;
+      if (misses >= 8) { clearInterval(timer); settle(); }
+    });
   }, 250);
 })();
 </script>`;
+}
 
 function buildSuccessHtml(
   email?: string,
@@ -330,7 +340,7 @@ h1 {
     <span class="tip-label">Did you know?</span>
     You can use Dosu to make your coding agents faster and cheaper. Just ask your agent to use Dosu to update your AGENTS.md.
 </div>
-${withNextPoll ? NEXT_POLL_SCRIPT : ""}
+${withNextPoll ? buildNextPollScript(copy.close) : ""}
 </body>
 </html>`;
 }
