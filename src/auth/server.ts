@@ -135,7 +135,82 @@ if (hash) {
 </body>
 </html>`;
 
-function buildSuccessHtml(email?: string): string {
+/**
+ * Success-page copy variants. "auth" is the classic login confirmation;
+ * "onboarding" is served when the web onboarding wizard hands control back
+ * to the terminal, so the page should say setup finished — not "authentication".
+ */
+export type SuccessVariant = "auth" | "onboarding";
+
+const SUCCESS_COPY: Record<SuccessVariant, { title: string; heading: string; close: string }> = {
+  auth: {
+    title: "Dosu CLI - Authentication Successful",
+    heading: "Authentication Successful",
+    close: "You can close this tab and return to your terminal.",
+  },
+  onboarding: {
+    title: "Dosu CLI - Onboarding Complete",
+    heading: "Onboarding Complete",
+    close: "You're all set — return to your terminal, Dosu is finishing your setup there.",
+  },
+};
+
+/**
+ * Injected when the server was started with `nextHold`: the success page
+ * polls GET /next so the CLI can steer this same tab onward (e.g. into the
+ * web onboarding wizard) instead of opening a second one. Polling stops on
+ * 410 (CLI decided there's nowhere to go — the page then tells the user the
+ * tab can be closed) or after ~3 minutes. Transient fetch errors are
+ * tolerated: the budget, not a single hiccup, ends the loop, because giving
+ * up early would strand a handoff the CLI is still preparing (it may spend
+ * several network round-trips deciding before calling setNext).
+ *
+ * When the steer arrives (200), the page announces the next step — first-run
+ * users are about to see the data-source connection wizard, so saying
+ * "authentication successful, close this tab" right before that would be
+ * confusing — then navigates.
+ */
+const NEXT_POLL_SCRIPT = `<script>
+(function () {
+  var tries = 0;
+  var setCopy = function (heading, msg) {
+    var h = document.getElementById('heading');
+    var m = document.getElementById('close-msg');
+    if (h && heading) h.textContent = heading;
+    if (m && msg) m.textContent = msg;
+  };
+  var timer = setInterval(function () {
+    tries += 1;
+    if (tries > 720) { clearInterval(timer); setCopy(null, ${JSON.stringify(SUCCESS_COPY.auth.close)}); return; }
+    fetch('/next').then(function (res) {
+      if (res.status === 200) {
+        clearInterval(timer);
+        res.json().then(function (body) {
+          if (body && body.url) {
+            setCopy("You're ready to connect your data sources", 'Redirecting...');
+            window.location.replace(body.url);
+          }
+        });
+      } else if (res.status === 410) {
+        clearInterval(timer);
+        setCopy(null, ${JSON.stringify(SUCCESS_COPY.auth.close)});
+      }
+    }).catch(function () {});
+  }, 250);
+})();
+</script>`;
+
+function buildSuccessHtml(
+  email?: string,
+  variant: SuccessVariant = "auth",
+  withNextPoll = false,
+): string {
+  const copy = SUCCESS_COPY[variant];
+  // While the /next poller is live, don't invite the user to close the tab —
+  // the CLI may be about to steer it onward. The poll script swaps in the
+  // regular close message once the CLI dismisses the hold (410) or the
+  // budget runs out.
+  const closeMsg = withNextPoll ? "Hang tight — this tab will continue automatically." : copy.close;
   const emailLine = email
     ? `<p class="email">Signed in as <strong>${email.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</strong></p>`
     : "";
@@ -144,7 +219,7 @@ function buildSuccessHtml(email?: string): string {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Dosu CLI - Authentication Successful</title>
+<title>${copy.title}</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -246,15 +321,16 @@ h1 {
         <path d="M0.348633 85.4946C0.348633 85.4946 29.4856 85.8309 34.809 85.698C44.8337 85.4477 51.2872 84.402 57.5269 78.9724C62.8129 74.3727 75.1342 59.6836 75.1342 59.6836" stroke="black" stroke-width="6.16482"/>
         </svg>
     </div>
-    <h1>Authentication Successful</h1>
+    <h1 id="heading">${copy.heading}</h1>
     ${emailLine}
-    <p class="close-msg">You can close this tab and return to your terminal.</p>
+    <p class="close-msg" id="close-msg">${closeMsg}</p>
 </div>
 <div class="tip">
     <div class="tip-rule" aria-hidden="true"><span class="tip-dot"></span></div>
     <span class="tip-label">Did you know?</span>
     You can use Dosu to make your coding agents faster and cheaper. Just ask your agent to use Dosu to update your AGENTS.md.
 </div>
+${withNextPoll ? NEXT_POLL_SCRIPT : ""}
 </body>
 </html>`;
 }
@@ -262,13 +338,30 @@ h1 {
 export interface CallbackServer {
   port: number;
   close: () => void;
+  /**
+   * Steer the success page's tab onward (requires `nextHold`): a URL makes
+   * the page navigate there in place; `null` tells it to stop polling and
+   * stay put. No-op when the page never polls (server started without
+   * `nextHold`) or already navigated.
+   */
+  setNext: (url: string | null) => void;
+}
+
+export interface CallbackServerOptions {
+  /**
+   * Serve the success page with the /next poller so the CLI can redirect
+   * the tab afterwards via `server.setNext(url)`.
+   */
+  nextHold?: boolean;
+  /** Success-page copy variant. Defaults to "auth". */
+  successVariant?: SuccessVariant;
 }
 
 /**
  * Starts a local HTTP server to receive the OAuth callback.
  * Returns a promise that resolves with the token when received.
  */
-export async function startCallbackServer(): Promise<{
+export async function startCallbackServer(opts: CallbackServerOptions = {}): Promise<{
   server: CallbackServer;
   tokenPromise: Promise<TokenResponse>;
 }> {
@@ -279,6 +372,9 @@ export async function startCallbackServer(): Promise<{
     resolveToken = resolve;
     rejectToken = reject;
   });
+
+  // undefined = undecided (keep polling), string = navigate, null = dismissed.
+  let nextTarget: string | null | undefined;
 
   const http = require("node:http") as typeof import("node:http");
 
@@ -291,6 +387,21 @@ export async function startCallbackServer(): Promise<{
       "auth.server",
       `Request: ${req.method} ${url.pathname} cookie-len=${cookieLen} ua=${ua} has-token=${url.searchParams.has("access_token")}`,
     );
+
+    if (opts.nextHold && url.pathname === "/next") {
+      if (nextTarget === undefined) {
+        res.writeHead(204);
+        res.end();
+      } else if (nextTarget === null) {
+        res.writeHead(410);
+        res.end();
+      } else {
+        logger.info("auth.server", "Handing tab onward via /next");
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ url: nextTarget }));
+      }
+      return;
+    }
 
     if (url.pathname !== "/callback") {
       logger.debug("auth.server", `404: ${url.pathname}`);
@@ -353,20 +464,35 @@ export async function startCallbackServer(): Promise<{
 
     logger.info("auth.server", "Served success HTML");
     res.writeHead(200, { "Content-Type": "text/html" });
-    res.end(buildSuccessHtml(email ?? undefined));
+    res.end(
+      buildSuccessHtml(email ?? undefined, opts.successVariant ?? "auth", Boolean(opts.nextHold)),
+    );
   });
 
   // Listen on random port and wait for it to be ready
   await new Promise<void>((resolve) => {
     httpServer.listen(0, "localhost", () => resolve());
   });
+  // Never let this server keep the process alive on its own: the flows that
+  // wait on it always hold a ref'd timer, and a leaked server (error path
+  // that skipped close) must not turn into a hung CLI at exit.
+  httpServer.unref();
   const addr = httpServer.address() as import("node:net").AddressInfo;
   logger.info("auth.server", `Callback server listening on port ${addr.port}`);
 
   return {
     server: {
       port: addr.port,
-      close: () => httpServer.close(),
+      close: () => {
+        httpServer.close();
+        // The success page's /next poller keeps a keep-alive socket open;
+        // plain close() would wait for it to drain. Sever it so close
+        // completes promptly.
+        httpServer.closeAllConnections?.();
+      },
+      setNext: (url) => {
+        nextTarget = url;
+      },
     },
     tokenPromise,
   };

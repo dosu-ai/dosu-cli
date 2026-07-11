@@ -111,17 +111,13 @@ vi.mock("../commands/skill", () => ({
   skillCommand: vi.fn(),
 }));
 
-const { mockStepConnectGitHubRepo, mockStepImportGitHubDocs } = vi.hoisted(() => ({
+const { mockStepConnectGitHubRepo } = vi.hoisted(() => ({
   mockStepConnectGitHubRepo: vi.fn(),
-  mockStepImportGitHubDocs: vi.fn(),
 }));
 vi.mock("./github-step", () => ({
   stepConnectGitHubRepo: (...args: unknown[]) => mockStepConnectGitHubRepo(...args),
   // Audit handoff never fires in these tests: not a git repo.
   detectGitRepo: vi.fn(() => null),
-}));
-vi.mock("./github-doc-import-step", () => ({
-  stepImportGitHubDocs: (...args: unknown[]) => mockStepImportGitHubDocs(...args),
 }));
 
 import * as p from "@clack/prompts";
@@ -176,7 +172,6 @@ function mockToolSelection(selection: string[]) {
 
 function installSetupStepDefaults() {
   mockStepConnectGitHubRepo.mockResolvedValue({ advance: false, has_connected_repo: false });
-  mockStepImportGitHubDocs.mockResolvedValue({ advance: false });
 }
 
 function installRemoteSetupDefaults() {
@@ -1443,7 +1438,7 @@ describe("runSetup integration", () => {
     expect(mockInstallSkill).toHaveBeenCalled();
   });
 
-  it("shows the GitHub docs import label in the one-shot confirm", async () => {
+  it("offers only MCP + skill in the one-shot confirm (docs import lives in the web wizard)", async () => {
     const cfg = makeCfg();
     saveConfig(cfg);
 
@@ -1452,6 +1447,10 @@ describe("runSetup integration", () => {
       user_id: "test-user-id",
       finished_onboarding: false,
       cli_onboarding_enabled: true,
+    });
+    mockStartOAuthFlow.mockResolvedValue({
+      browserOpened: true,
+      token: { access_token: "tok-web", refresh_token: "ref-web", expires_in: 3600 },
     });
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
 
@@ -1463,12 +1462,10 @@ describe("runSetup integration", () => {
         String((args as { message?: string }).message ?? "").includes("Dosu will set"),
       );
     const options = (oneShotCall?.[0] as { options: Array<{ label: string }> }).options;
-    expect(options.map((option) => String(option.label))).toEqual(
-      expect.arrayContaining([expect.stringContaining("Import docs from GitHub")]),
-    );
-    expect(options.map((option) => String(option.label))).toEqual(
-      expect.arrayContaining([expect.stringContaining("Keep them up to date")]),
-    );
+    expect(options.map((option) => String(option.label))).toEqual([
+      "Install Dosu MCP",
+      "Install Dosu skill",
+    ]);
   });
 });
 
@@ -1649,7 +1646,7 @@ describe("runSetup checkpoint behavior", () => {
     expect(saved.api_key).toBe("fresh-key");
   });
 
-  it("marks remote onboarding complete at the end of first-run cloud onboarding", async () => {
+  it("does not mark onboarding complete server-side — the web wizard owns that", async () => {
     saveConfig(makeCfg());
     setupAuthed();
     mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
@@ -1657,17 +1654,15 @@ describe("runSetup checkpoint behavior", () => {
       finished_onboarding: false,
       cli_onboarding_enabled: true,
     });
+    mockStartOAuthFlow.mockResolvedValue({
+      browserOpened: true,
+      token: { access_token: "tok-web", refresh_token: "ref-web", expires_in: 3600 },
+    });
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockStepConnectGitHubRepo.mockResolvedValue({ advance: true, has_connected_repo: false });
-    mockStepImportGitHubDocs.mockResolvedValue({ advance: true });
 
     await runSetup();
 
-    expect(mockTrpc.user.updateProfile.mutate).toHaveBeenCalledTimes(1);
-    expect(mockTrpc.user.updateProfile.mutate).toHaveBeenCalledWith({
-      user_id: "test-user-id",
-      finished_onboarding: true,
-    });
+    expect(mockTrpc.user.updateProfile.mutate).not.toHaveBeenCalled();
   });
 
   it("tracks completion when at least one valuable onboarding action succeeds", async () => {
@@ -1685,90 +1680,6 @@ describe("runSetup checkpoint behavior", () => {
           properties: expect.objectContaining({
             completed_mcp: false,
             completed_skill: true,
-            imported_docs: false,
-          }),
-        }),
-      ]),
-    );
-  });
-
-  it("tracks docs import as activation during first-run onboarding", async () => {
-    saveConfig(makeCfg());
-    setupAuthed();
-    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
-      user_id: "test-user-id",
-      finished_onboarding: false,
-      cli_onboarding_enabled: true,
-    });
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockStepConnectGitHubRepo.mockResolvedValue({
-      advance: true,
-      has_connected_repo: true,
-      created_data_source_ids: ["ds-1"],
-    });
-    mockStepImportGitHubDocs.mockResolvedValue({
-      advance: true,
-      imported: true,
-      imported_count: 3,
-      failed_count: 0,
-      task_id: "task-1",
-    });
-
-    await runSetup();
-
-    expect(trackedCliOnboardingEvents()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ event: "cli_onboarding_github_connected" }),
-        expect.objectContaining({
-          event: "cli_onboarding_docs_imported",
-          properties: expect.objectContaining({ imported_count: 3, task_id: "task-1" }),
-        }),
-        expect.objectContaining({
-          event: "cli_onboarding_activated",
-          properties: expect.objectContaining({ imported_count: 3 }),
-        }),
-        expect.objectContaining({
-          event: "cli_onboarding_completed",
-          properties: expect.objectContaining({ imported_docs: true }),
-        }),
-      ]),
-    );
-  });
-
-  it("does not track activation when docs import is only queued", async () => {
-    saveConfig(makeCfg());
-    setupAuthed();
-    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
-      user_id: "test-user-id",
-      finished_onboarding: false,
-      cli_onboarding_enabled: true,
-    });
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockStepConnectGitHubRepo.mockResolvedValue({
-      advance: true,
-      has_connected_repo: true,
-      created_data_source_ids: ["ds-1"],
-    });
-    mockStepImportGitHubDocs.mockResolvedValue({
-      advance: true,
-      imported: false,
-      imported_count: 0,
-      queued: true,
-      task_id: "task-1",
-    });
-
-    await runSetup();
-
-    const events = trackedCliOnboardingEvents().map((input) => input.event);
-    expect(events).not.toContain("cli_onboarding_docs_imported");
-    expect(events).not.toContain("cli_onboarding_activated");
-    expect(trackedCliOnboardingEvents()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          event: "cli_onboarding_completed",
-          properties: expect.objectContaining({
-            completed_skill: true,
-            imported_docs: false,
           }),
         }),
       ]),
@@ -1785,26 +1696,6 @@ describe("runSetup checkpoint behavior", () => {
     expect(mockTrpc.user.updateProfile.mutate).not.toHaveBeenCalled();
   });
 
-  it("warns but does not throw when remote onboarding completion fails", async () => {
-    saveConfig(makeCfg());
-    setupAuthed();
-    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
-      user_id: "test-user-id",
-      finished_onboarding: false,
-      cli_onboarding_enabled: true,
-    });
-    mockTrpc.user.updateProfile.mutate.mockRejectedValueOnce(new Error("503 Service Unavailable"));
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockStepConnectGitHubRepo.mockResolvedValue({ advance: true, has_connected_repo: false });
-    mockStepImportGitHubDocs.mockResolvedValue({ advance: true });
-
-    await runSetup();
-
-    expect(p.log.warn).toHaveBeenCalledWith(
-      expect.stringContaining("Could not mark onboarding complete"),
-    );
-  });
-
   it("keeps ordinary setup free of GitHub when the remote profile is already onboarded", async () => {
     saveConfig(makeCfg());
     setupAuthed();
@@ -1813,10 +1704,9 @@ describe("runSetup checkpoint behavior", () => {
     await runSetup();
 
     expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
-    expect(mockStepImportGitHubDocs).not.toHaveBeenCalled();
   });
 
-  it("keeps setup free of GitHub when onboarding is incomplete but the CLI flag is disabled", async () => {
+  it("hands first-run users to the web onboarding wizard even when the legacy CLI flag is disabled", async () => {
     saveConfig(makeCfg());
     setupAuthed();
     mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
@@ -1824,13 +1714,72 @@ describe("runSetup checkpoint behavior", () => {
       finished_onboarding: false,
       cli_onboarding_enabled: false,
     });
+    mockStartOAuthFlow.mockResolvedValue({
+      browserOpened: true,
+      token: { access_token: "tok-web", refresh_token: "ref-web", expires_in: 3600 },
+    });
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
 
     await runSetup();
 
+    expect(mockStartOAuthFlow).toHaveBeenCalledWith(
+      undefined,
+      "/onboarding/connections",
+      expect.objectContaining({ source: "cli" }),
+      undefined,
+      expect.objectContaining({ waitWithoutBrowser: true }),
+    );
     expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
-    expect(mockStepImportGitHubDocs).not.toHaveBeenCalled();
-    expect(mockTrpc.user.updateProfile.mutate).not.toHaveBeenCalled();
+  });
+
+  it("saves the freshly minted session from the web onboarding handback", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: false,
+      cli_onboarding_enabled: true,
+    });
+    mockStartOAuthFlow.mockResolvedValue({
+      browserOpened: true,
+      token: { access_token: "tok-minted", refresh_token: "ref-minted", expires_in: 3600 },
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    const saved = loadConfig();
+    expect(saved.access_token).toBe("tok-minted");
+    expect(saved.refresh_token).toBe("ref-minted");
+  });
+
+  it("aborts and tracks failure when the web onboarding handoff does not complete", async () => {
+    saveConfig(makeCfg());
+    const methods = setupAuthed();
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: false,
+      cli_onboarding_enabled: true,
+    });
+    mockStartOAuthFlow.mockRejectedValue(new Error("timed out"));
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(p.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Finish onboarding there, then re-run `dosu setup`."),
+    );
+    expect(trackedCliOnboardingEvents()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "cli_onboarding_failed",
+          properties: expect.objectContaining({ reason: "web_onboarding_incomplete" }),
+        }),
+      ]),
+    );
+    // Never reached deployment binding or the one-shot confirm.
+    expect(methods.getDeployments).not.toHaveBeenCalled();
+    expect(p.multiselect).not.toHaveBeenCalled();
   });
 
   it("binds first-run onboarding to the owner org instead of stale local config", async () => {
@@ -1866,9 +1815,11 @@ describe("runSetup checkpoint behavior", () => {
     mockTrpc.organization.getOrganizations.query.mockResolvedValue([
       { org_id: "owner-org", name: "Owner Org", user_role: "OWNER" },
     ]);
+    mockStartOAuthFlow.mockResolvedValue({
+      browserOpened: true,
+      token: { access_token: "tok-web", refresh_token: "ref-web", expires_in: 3600 },
+    });
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockStepConnectGitHubRepo.mockResolvedValue({ advance: true, has_connected_repo: false });
-    mockStepImportGitHubDocs.mockResolvedValue({ advance: true });
 
     await runSetup();
 
@@ -1878,7 +1829,7 @@ describe("runSetup checkpoint behavior", () => {
     expect(saved.deployment_id).toBe("dep-owner");
   });
 
-  it("always starts the GitHub step from repo selection during first-run onboarding", async () => {
+  it("never runs the terminal GitHub step during first-run onboarding", async () => {
     saveConfig(makeCfg());
     setupAuthed();
     mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
@@ -1886,45 +1837,101 @@ describe("runSetup checkpoint behavior", () => {
       finished_onboarding: false,
       cli_onboarding_enabled: true,
     });
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockStepConnectGitHubRepo.mockResolvedValue({
-      advance: true,
-      has_connected_repo: true,
-      deployment_id: "dep-github",
-      space_id: "space-1",
+    mockStartOAuthFlow.mockResolvedValue({
+      browserOpened: true,
+      token: { access_token: "tok-web", refresh_token: "ref-web", expires_in: 3600 },
     });
-    mockStepImportGitHubDocs.mockResolvedValue({ advance: true });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
 
     await runSetup();
 
-    expect(mockStepConnectGitHubRepo).toHaveBeenCalledTimes(1);
-    expect(mockStepImportGitHubDocs).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({ waitForFreshDocs: true }),
-    );
+    expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
   });
 
-  it("does not wait for fresh docs when no repo was connected in this run", async () => {
-    saveConfig(makeCfg());
+  it("steers the auth tab into the web wizard instead of opening a second one", async () => {
+    // Fresh config → browser auth happens this run, so an auth tab exists.
+    saveConfig(makeCfg({ access_token: "", refresh_token: "", expires_at: 0 }));
     setupAuthed();
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: false,
+      cli_onboarding_enabled: false,
+    });
+    const authTab = { port: 1, close: vi.fn(), setNext: vi.fn() };
+    mockStartOAuthFlow
+      .mockResolvedValueOnce({
+        browserOpened: true,
+        token: { access_token: "tok-auth", refresh_token: "ref-auth", expires_in: 3600 },
+        server: authTab,
+      })
+      .mockImplementationOnce(async (_signal, _path, _params, _onAuthURL, options) => {
+        options?.onAuthURL?.("https://app.test/onboarding/connections?source=cli&callback=x");
+        return {
+          browserOpened: true,
+          token: { access_token: "tok-web", refresh_token: "ref-web", expires_in: 3600 },
+        };
+      });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    // The existing tab was steered to the wizard URL…
+    expect(authTab.setNext).toHaveBeenCalledWith(
+      "https://app.test/onboarding/connections?source=cli&callback=x",
+    );
+    // …and the wizard call suppressed its own browser open.
+    const handoffOptions = mockStartOAuthFlow.mock.calls[1]?.[4];
+    expect(handoffOptions).toMatchObject({
+      suppressBrowserOpen: true,
+      successVariant: "onboarding",
+    });
+    expect(authTab.close).toHaveBeenCalled();
+  });
+
+  it("releases the auth tab when the profile is already onboarded", async () => {
+    saveConfig(makeCfg({ access_token: "", refresh_token: "", expires_at: 0 }));
+    setupAuthed();
+    // installRemoteSetupDefaults: finished_onboarding=true → ordinary setup.
+    const authTab = { port: 1, close: vi.fn(), setNext: vi.fn() };
+    mockStartOAuthFlow.mockResolvedValueOnce({
+      browserOpened: true,
+      token: { access_token: "tok-auth", refresh_token: "ref-auth", expires_in: 3600 },
+      server: authTab,
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    // Tab dismissed (stops polling) and the server closed; no second flow.
+    expect(authTab.setNext).toHaveBeenCalledWith(null);
+    expect(authTab.close).toHaveBeenCalled();
+    expect(mockStartOAuthFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it("honors --deployment over the web onboarding handoff for unfinished profiles", async () => {
+    // `--deployment` is an explicit escape hatch: even a first-run profile
+    // must be wired straight to the requested deployment, never silently
+    // rerouted through the wizard and auto-bound elsewhere.
+    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
+    setupAuthed({
+      getDeployments: vi
+        .fn()
+        .mockResolvedValue([makeDeployment({ deployment_id: "dep-explicit" })]),
+    });
     mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
       user_id: "test-user-id",
       finished_onboarding: false,
       cli_onboarding_enabled: true,
     });
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockStepConnectGitHubRepo.mockResolvedValue({
-      advance: true,
-      has_connected_repo: false,
-    });
-    mockStepImportGitHubDocs.mockResolvedValue({ advance: true });
 
-    await runSetup();
+    await runSetup({ deploymentID: "dep-explicit" });
 
-    expect(mockStepImportGitHubDocs).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({ waitForFreshDocs: false }),
-    );
+    // No web-onboarding handoff was started (no browser flow at all — the
+    // session was already valid), and the explicit deployment was bound.
+    expect(mockStartOAuthFlow).not.toHaveBeenCalled();
+    const saved = loadConfig();
+    expect(saved.deployment_id).toBe("dep-explicit");
   });
 });
 
@@ -2040,9 +2047,11 @@ describe("runSetup additional branches", () => {
     mockTrpc.organization.getOrganizations.query.mockResolvedValue([
       { org_id: "member-org", name: "Member Org", user_role: "MEMBER" },
     ]);
+    vi.mocked(startOAuthFlow).mockResolvedValue({
+      browserOpened: true,
+      token: { access_token: "tok-web", refresh_token: "ref-web", expires_in: 3600 },
+    });
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockStepConnectGitHubRepo.mockResolvedValue({ advance: true, has_connected_repo: false });
-    mockStepImportGitHubDocs.mockResolvedValue({ advance: true });
 
     await runSetup();
 
@@ -2067,6 +2076,10 @@ describe("runSetup additional branches", () => {
     mockTrpc.organization.getOrganizations.query.mockResolvedValue([
       { org_id: "owner-org", name: "Owner Org", user_role: "OWNER" },
     ]);
+    vi.mocked(startOAuthFlow).mockResolvedValue({
+      browserOpened: true,
+      token: { access_token: "tok-web", refresh_token: "ref-web", expires_in: 3600 },
+    });
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
 
     await runSetup();
@@ -2103,9 +2116,11 @@ describe("runSetup additional branches", () => {
     mockTrpc.organization.getOrganizations.query.mockResolvedValue([
       { org_id: "owner-org", name: "Owner Org", user_role: "OWNER" },
     ]);
+    vi.mocked(startOAuthFlow).mockResolvedValue({
+      browserOpened: true,
+      token: { access_token: "tok-web", refresh_token: "ref-web", expires_in: 3600 },
+    });
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockStepConnectGitHubRepo.mockResolvedValue({ advance: true, has_connected_repo: false });
-    mockStepImportGitHubDocs.mockResolvedValue({ advance: true });
 
     await runSetup();
 
@@ -2177,86 +2192,6 @@ describe("runSetup additional branches", () => {
     ).toBe(true);
   });
 
-  it("aborts when the GitHub docs import step does not advance", async () => {
-    saveConfig(makeCfg());
-    setupAuthed();
-    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
-      user_id: "test-user-id",
-      finished_onboarding: false,
-      cli_onboarding_enabled: true,
-    });
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockStepConnectGitHubRepo.mockResolvedValue({ advance: true, has_connected_repo: false });
-    // Docs import refuses to advance → tracks github_docs_import_failed and returns.
-    mockStepImportGitHubDocs.mockResolvedValue({ advance: false });
-
-    await runSetup();
-
-    expect(p.outro).not.toHaveBeenCalled();
-    expect(
-      trackedCliOnboardingEvents().some(
-        (e) =>
-          e.event === "cli_onboarding_failed" &&
-          e.properties?.reason === "github_docs_import_failed",
-      ),
-    ).toBe(true);
-  });
-
-  it("returns early and tracks cancellation when the GitHub connect step does not advance", async () => {
-    saveConfig(makeCfg());
-    setupAuthed();
-    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
-      user_id: "test-user-id",
-      finished_onboarding: false,
-      cli_onboarding_enabled: true,
-    });
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockStepConnectGitHubRepo.mockResolvedValue({ advance: false, has_connected_repo: false });
-
-    await runSetup();
-
-    expect(mockStepImportGitHubDocs).not.toHaveBeenCalled();
-    expect(p.outro).not.toHaveBeenCalled();
-    expect(
-      trackedCliOnboardingEvents().some(
-        (e) =>
-          e.event === "cli_onboarding_cancelled" &&
-          e.properties?.reason === "github_connect_not_advanced",
-      ),
-    ).toBe(true);
-  });
-
-  it("persists a fresh space_id surfaced by the GitHub connect step", async () => {
-    // After binding the onboarding deployment cfg has no space_id, and the
-    // connect step returns one → the `connectResult.space_id && !cfg.space_id`
-    // branch saves it.
-    saveConfig(makeCfg({ space_id: undefined }));
-    // Bound deployment carries no space_id so cfg.space_id stays empty until
-    // the connect step supplies one.
-    setupAuthed({
-      getDeployments: vi
-        .fn()
-        .mockResolvedValue([makeDeployment({ org_id: "o1", space_id: undefined })]),
-    });
-    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
-      user_id: "test-user-id",
-      finished_onboarding: false,
-      cli_onboarding_enabled: true,
-    });
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockStepConnectGitHubRepo.mockResolvedValue({
-      advance: true,
-      has_connected_repo: false,
-      space_id: "space-from-connect",
-    });
-    mockStepImportGitHubDocs.mockResolvedValue({ advance: true });
-
-    await runSetup();
-
-    const saved = loadConfig();
-    expect(saved.space_id).toBe("space-from-connect");
-  });
-
   it("switches mode from OSS to Cloud when --mode cloud is passed over an OSS config", async () => {
     saveConfig(makeCfg({ mode: "oss" }));
     setupAuthed();
@@ -2266,62 +2201,6 @@ describe("runSetup additional branches", () => {
 
     const saved = loadConfig();
     expect(saved.mode).toBeUndefined();
-  });
-
-  it("treats docs import with no imported count as not activated", async () => {
-    // imported is true but imported_count is absent → the `(imported_count ?? 0)
-    // > 0` guard is false, so docsImported stays false (no activation event).
-    saveConfig(makeCfg());
-    setupAuthed();
-    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
-      user_id: "test-user-id",
-      finished_onboarding: false,
-      cli_onboarding_enabled: true,
-    });
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockStepConnectGitHubRepo.mockResolvedValue({ advance: true, has_connected_repo: false });
-    mockStepImportGitHubDocs.mockResolvedValue({ advance: true, imported: true });
-
-    await runSetup();
-
-    const events = trackedCliOnboardingEvents().map((input) => input.event);
-    expect(events).not.toContain("cli_onboarding_docs_imported");
-    expect(events).not.toContain("cli_onboarding_activated");
-  });
-
-  it("defaults the failed count to zero in the docs-imported tracking events", async () => {
-    // docsImported is true (imported_count > 0) but failed_count is absent, so
-    // the `failed_count ?? 0` fallbacks are exercised.
-    saveConfig(makeCfg());
-    setupAuthed();
-    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
-      user_id: "test-user-id",
-      finished_onboarding: false,
-      cli_onboarding_enabled: true,
-    });
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockStepConnectGitHubRepo.mockResolvedValue({ advance: true, has_connected_repo: false });
-    mockStepImportGitHubDocs.mockResolvedValue({
-      advance: true,
-      imported: true,
-      imported_count: 2,
-      task_id: "task-x",
-    });
-
-    await runSetup();
-
-    expect(trackedCliOnboardingEvents()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          event: "cli_onboarding_docs_imported",
-          properties: expect.objectContaining({ imported_count: 2, failed_count: 0 }),
-        }),
-        expect.objectContaining({
-          event: "cli_onboarding_activated",
-          properties: expect.objectContaining({ imported_count: 2, failed_count: 0 }),
-        }),
-      ]),
-    );
   });
 
   it("continues to the outro when the skill install reports failure", async () => {
@@ -2399,9 +2278,9 @@ describe("runSetup additional branches", () => {
     expect(p.outro).not.toHaveBeenCalled();
   });
 
-  it("tracks MCP configuration and docs import when MCP and GitHub onboarding both ran", async () => {
-    // Configure an MCP tool (so mcpConfiguredThisRun is true) AND complete the
-    // GitHub onboarding step — both completion events should be tracked.
+  it("tracks MCP configuration after the web onboarding handback", async () => {
+    // First-run: the web wizard hands back, then the MCP tool configuration
+    // still runs (and is tracked) in the terminal.
     saveConfig(makeCfg());
     setupAuthed();
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
@@ -2410,20 +2289,17 @@ describe("runSetup additional branches", () => {
       finished_onboarding: false,
       cli_onboarding_enabled: true,
     });
+    vi.mocked(startOAuthFlow).mockResolvedValue({
+      browserOpened: true,
+      token: { access_token: "tok-web", refresh_token: "ref-web", expires_in: 3600 },
+    });
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
     mockToolSelection(["cursor"]);
-    mockStepConnectGitHubRepo.mockResolvedValue({ advance: true, has_connected_repo: true });
-    mockStepImportGitHubDocs.mockResolvedValue({
-      advance: true,
-      imported: true,
-      imported_count: 1,
-      failed_count: 0,
-    });
 
     await runSetup();
 
     const events = trackedCliOnboardingEvents().map((input) => input.event);
     expect(events).toContain("cli_onboarding_mcp_configured");
-    expect(events).toContain("cli_onboarding_docs_imported");
+    expect(events).toContain("cli_onboarding_completed");
   });
 });

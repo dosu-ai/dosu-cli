@@ -4,10 +4,15 @@
 
 import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
-import { startCallbackServer, type TokenResponse } from "./server";
+import {
+  type CallbackServer,
+  type SuccessVariant,
+  startCallbackServer,
+  type TokenResponse,
+} from "./server";
 
 export type OAuthFlowResult =
-  | { browserOpened: true; token: TokenResponse }
+  | { browserOpened: true; token: TokenResponse; server?: CallbackServer }
   | { browserOpened: false };
 
 export interface OAuthFlowOptions {
@@ -19,6 +24,20 @@ export interface OAuthFlowOptions {
    * failed browser open returns { browserOpened: false } immediately.
    */
   waitWithoutBrowser?: boolean;
+  /**
+   * Keep the callback server alive after the token arrives and return it on
+   * the result, so the caller can steer the success page's tab onward via
+   * `server.setNext(url)`. The caller owns closing the server.
+   */
+  holdNext?: boolean;
+  /**
+   * Don't open a browser — the caller navigates an already-open tab to the
+   * auth URL itself (e.g. via a previous server's `setNext`). `onAuthURL`
+   * still fires so the caller has the URL.
+   */
+  suppressBrowserOpen?: boolean;
+  /** Success-page copy variant served on the callback. Defaults to "auth". */
+  successVariant?: SuccessVariant;
 }
 
 /**
@@ -43,9 +62,13 @@ export async function startOAuthFlow(
   onAuthURL?: (url: string) => void,
   options: OAuthFlowOptions = {},
 ): Promise<OAuthFlowResult> {
-  const { server, tokenPromise } = await startCallbackServer();
+  const { server, tokenPromise } = await startCallbackServer({
+    nextHold: options.holdNext,
+    successVariant: options.successVariant,
+  });
 
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  let handedOver = false;
 
   try {
     const callbackURL = `http://localhost:${server.port}/callback`;
@@ -54,19 +77,25 @@ export async function startOAuthFlow(
     logger.info("auth.flow", `Auth URL: ${authURL}`);
     options.onAuthURL?.(authURL);
 
-    // Open browser — dynamic import to avoid bundling issues
-    const open = await import("open");
     let browserOpened = false;
-    try {
-      await open.default(authURL);
+    if (options.suppressBrowserOpen) {
+      // The caller navigates an existing tab to authURL itself.
       browserOpened = true;
-      logger.info("auth.flow", "Browser open command executed");
-      onAuthURL?.(authURL);
-    } catch (openErr) {
-      logger.warn(
-        "auth.flow",
-        `Could not open browser automatically: ${openErr instanceof Error ? openErr.message : String(openErr)}`,
-      );
+      logger.info("auth.flow", "Browser open suppressed — caller steers an existing tab");
+    } else {
+      // Open browser — dynamic import to avoid bundling issues
+      const open = await import("open");
+      try {
+        await open.default(authURL);
+        browserOpened = true;
+        logger.info("auth.flow", "Browser open command executed");
+        onAuthURL?.(authURL);
+      } catch (openErr) {
+        logger.warn(
+          "auth.flow",
+          `Could not open browser automatically: ${openErr instanceof Error ? openErr.message : String(openErr)}`,
+        );
+      }
     }
 
     if (!browserOpened && !options.waitWithoutBrowser) {
@@ -102,11 +131,18 @@ export async function startOAuthFlow(
 
     const token = await Promise.race([tokenPromise, timeout, abort]);
     logger.info("auth.flow", "Token received");
+    if (options.holdNext) {
+      // Caller takes over the server to steer the tab (and close it).
+      handedOver = true;
+      return { browserOpened: true, token, server };
+    }
     return { browserOpened: true, token };
   } finally {
     clearTimeout(timeoutId);
-    server.close();
-    logger.debug("auth.flow", "Cleaning up: timeout cleared, server closed");
+    if (!handedOver) {
+      server.close();
+      logger.debug("auth.flow", "Cleaning up: timeout cleared, server closed");
+    }
   }
 }
 
