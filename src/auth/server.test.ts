@@ -273,3 +273,80 @@ describe("auth callback server", () => {
     expect(token.refresh_token).toBe("");
   });
 });
+
+describe("auth callback server — nextHold tab steering", () => {
+  let server: CallbackServer | null = null;
+
+  afterEach(() => {
+    if (server) {
+      server.close();
+      server = null;
+    }
+  });
+
+  it("serves the /next poll script on the success page only when nextHold is set", async () => {
+    const held = await startCallbackServer({ nextHold: true });
+    server = held.server;
+    const heldResp = await fetch(`http://localhost:${server.port}/callback?access_token=tok`);
+    const heldHtml = await heldResp.text();
+    expect(heldHtml).toContain("fetch('/next')");
+    // Steered tabs announce the next step instead of "close this tab".
+    expect(heldHtml).toContain("Hang tight");
+    expect(heldHtml).toContain("ready to connect your data sources");
+    expect(heldHtml).toContain("Redirecting...");
+    await held.tokenPromise;
+    server.close();
+
+    const plain = await startCallbackServer();
+    server = plain.server;
+    const plainResp = await fetch(`http://localhost:${server.port}/callback?access_token=tok`);
+    expect(await plainResp.text()).not.toContain("fetch('/next')");
+    await plain.tokenPromise;
+  });
+
+  it("answers /next: 204 while undecided, 200 with the URL after setNext, 410 after dismissal", async () => {
+    const result = await startCallbackServer({ nextHold: true });
+    server = result.server;
+    const base = `http://localhost:${server.port}`;
+
+    const undecided = await fetch(`${base}/next`);
+    expect(undecided.status).toBe(204);
+
+    server.setNext("https://app.test/onboarding/connections?source=cli");
+    const decided = await fetch(`${base}/next`);
+    expect(decided.status).toBe(200);
+    expect(await decided.json()).toEqual({
+      url: "https://app.test/onboarding/connections?source=cli",
+    });
+
+    server.setNext(null);
+    const dismissed = await fetch(`${base}/next`);
+    expect(dismissed.status).toBe(410);
+  });
+
+  it("keeps /next a 404 when the server was started without nextHold", async () => {
+    const result = await startCallbackServer();
+    server = result.server;
+    const resp = await fetch(`http://localhost:${server.port}/next`);
+    expect(resp.status).toBe(404);
+  });
+
+  it("serves onboarding-specific success copy for the onboarding variant", async () => {
+    const result = await startCallbackServer({ successVariant: "onboarding" });
+    server = result.server;
+    const resp = await fetch(`http://localhost:${server.port}/callback?access_token=tok`);
+    const html = await resp.text();
+    expect(html).toContain("Onboarding Complete");
+    expect(html).toContain("Dosu is finishing your setup");
+    expect(html).not.toContain("Authentication Successful");
+    await result.tokenPromise;
+  });
+
+  it("defaults to the auth success copy", async () => {
+    const result = await startCallbackServer({ nextHold: true });
+    server = result.server;
+    const resp = await fetch(`http://localhost:${server.port}/callback?access_token=tok`);
+    expect(await resp.text()).toContain("Authentication Successful");
+    await result.tokenPromise;
+  });
+});

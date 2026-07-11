@@ -39,6 +39,7 @@ function createMockServer(): CallbackServer {
   return {
     port: 12345,
     close: mockClose,
+    setNext: vi.fn(),
   };
 }
 
@@ -272,5 +273,57 @@ describe("startOAuthFlow", () => {
     resolveToken({ access_token: "a", refresh_token: "r", expires_in: 1 });
     const r = await flowPromise;
     expect(r).toMatchObject({ browserOpened: true });
+  });
+
+  it("holdNext keeps the server open and hands it over on the result", async () => {
+    const token: TokenResponse = { access_token: "tok", refresh_token: "ref", expires_in: 3600 };
+
+    const flowPromise = startOAuthFlow(undefined, "/cli/auth", {}, undefined, { holdNext: true });
+    await flowReady();
+
+    resolveToken(token);
+    const result = await flowPromise;
+
+    expect(result).toMatchObject({ browserOpened: true, token });
+    expect((result as { server?: CallbackServer }).server).toBe(mockServer);
+    // Server ownership transferred to the caller — not closed here.
+    expect(mockClose).not.toHaveBeenCalled();
+    expect(mockStartCallbackServer).toHaveBeenCalledWith(
+      expect.objectContaining({ nextHold: true }),
+    );
+  });
+
+  it("holdNext still closes the server on failure (no handover happened)", async () => {
+    const flowPromise = startOAuthFlow(undefined, "/cli/auth", {}, undefined, { holdNext: true });
+    await flowReady();
+
+    rejectToken(new Error("boom"));
+    await flowPromise.catch(() => {});
+
+    expect(mockClose).toHaveBeenCalledOnce();
+  });
+
+  it("suppressBrowserOpen completes the flow without opening a browser", async () => {
+    const token: TokenResponse = { access_token: "tok", refresh_token: "ref", expires_in: 3600 };
+
+    const flowPromise = startOAuthFlow(undefined, "/onboarding/connections", {}, undefined, {
+      suppressBrowserOpen: true,
+      successVariant: "onboarding",
+    });
+    // flowReady() waits on open(), which never fires here — wait on the
+    // callback server instead, plus a macrotask barrier for the race arming.
+    await vi.waitFor(() => expect(mockStartCallbackServer).toHaveBeenCalled());
+    await new Promise((r) => setImmediate(r));
+
+    resolveToken(token);
+    const result = await flowPromise;
+
+    expect(result).toMatchObject({ browserOpened: true, token });
+    expect(mockOpenDefault).not.toHaveBeenCalled();
+    expect(mockStartCallbackServer).toHaveBeenCalledWith(
+      expect.objectContaining({ successVariant: "onboarding" }),
+    );
+    // No holdNext → the flow still owns and closes the server.
+    expect(mockClose).toHaveBeenCalledOnce();
   });
 });
