@@ -153,6 +153,48 @@ describe("CLI actions", () => {
     });
   });
 
+  describe("unknown command", () => {
+    let errorSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      errorSpy.mockRestore();
+      process.exitCode = undefined;
+    });
+
+    function allErrorOutput(): string {
+      return errorSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
+    }
+
+    it("reports the unknown command instead of launching the TUI", async () => {
+      await run("halp");
+
+      expect(mockRunTUI).not.toHaveBeenCalled();
+      expect(allErrorOutput()).toContain("unknown command 'halp'");
+      expect(allErrorOutput()).toContain("Run 'dosu --help' to see available commands.");
+      expect(process.exitCode).toBe(1);
+    });
+
+    it("suggests the closest command name", async () => {
+      await run("loginn");
+      expect(allErrorOutput()).toContain("(Did you mean 'login'?)");
+    });
+
+    it("suggests 'help' for near-misses of help", async () => {
+      await run("halp");
+      expect(allErrorOutput()).toContain("(Did you mean 'help'?)");
+    });
+
+    it("omits the suggestion when nothing is close", async () => {
+      await run("zzzzzzzzzz");
+      expect(allErrorOutput()).toContain("unknown command 'zzzzzzzzzz'");
+      expect(allErrorOutput()).not.toContain("Did you mean");
+    });
+  });
+
   // ── login ───────────────────────────────────────────────────────────────
 
   describe("login", () => {
