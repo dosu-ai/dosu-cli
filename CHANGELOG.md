@@ -1,3 +1,10 @@
+## [0.32.1](https://github.com/dosu-ai/dosu-cli/compare/v0.32.0...v0.32.1) (2026-07-12)
+
+
+### Bug Fixes
+
+* **cli:** friendly unknown-command errors and a working 'dosu help' ([#125](https://github.com/dosu-ai/dosu-cli/issues/125)) ([13425a3](https://github.com/dosu-ai/dosu-cli/commit/13425a30edfbf6220bb6f633931e9d20225b1f0c))
+
 # [0.32.0](https://github.com/dosu-ai/dosu-cli/compare/v0.31.0...v0.32.0) (2026-07-11)
 
 
