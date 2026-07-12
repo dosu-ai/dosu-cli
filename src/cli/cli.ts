@@ -50,6 +50,36 @@ function isHookEntrypointInvocation(argv: string[]): boolean {
   return i >= 0 && HOOK_ENTRYPOINTS.has(argv[i + 1] ?? "");
 }
 
+/** Suggest the closest registered command name for a mistyped one, if any is close enough. */
+function suggestClosestCommand(input: string, program: Command): string | undefined {
+  let best: string | undefined;
+  let bestDistance = Infinity;
+  const candidates = ["help", ...program.commands.flatMap((c) => [c.name(), ...c.aliases()])];
+  for (const name of candidates) {
+    const d = editDistance(input.toLowerCase(), name.toLowerCase());
+    if (d < bestDistance) {
+      bestDistance = d;
+      best = name;
+    }
+  }
+  // Same threshold commander uses for its own suggestions.
+  return best !== undefined && bestDistance <= 3 && bestDistance < best.length ? best : undefined;
+}
+
+function editDistance(a: string, b: string): number {
+  const prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let diag = prev[0];
+    prev[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const tmp = prev[j];
+      prev[j] = Math.min(prev[j] + 1, prev[j - 1] + 1, diag + (a[i - 1] === b[j - 1] ? 0 : 1));
+      diag = tmp;
+    }
+  }
+  return prev[b.length];
+}
+
 export function createProgram(): Command {
   const program = new Command();
 
@@ -57,6 +87,7 @@ export function createProgram(): Command {
     .name("dosu")
     .description("Dosu CLI - Manage MCP servers for AI tools")
     .version(getVersionString(), "-v, --version")
+    .helpCommand("help [command]", "Show help for a command")
     .option("--debug", "Enable debug logging to stderr", false)
     .hook("preAction", (thisCommand) => {
       const opts = thisCommand.optsWithGlobals();
@@ -67,7 +98,20 @@ export function createProgram(): Command {
         checkForReadyTasks();
       }
     })
+    .allowExcessArguments(true)
     .action(async () => {
+      const command = program.args[0];
+      if (command !== undefined) {
+        // An unrecognized first token reaches the root action instead of a
+        // subcommand — report it as an unknown command, not "too many arguments".
+        let message = `error: unknown command '${command}'`;
+        const suggestion = suggestClosestCommand(command, program);
+        if (suggestion) message += `\n(Did you mean '${suggestion}'?)`;
+        message += "\nRun 'dosu --help' to see available commands.";
+        console.error(message);
+        process.exitCode = 1;
+        return;
+      }
       // Default: launch TUI when no subcommand given
       const { runTUI } = await import("../tui/tui");
       await runTUI();
