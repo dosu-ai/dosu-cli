@@ -36,26 +36,16 @@ dosu setup
 
 ### curl / install (macOS / Linux)
 
-#### npm-based installer (Recommended)
-
-Requires Node.js 22+ and npm. Installs `@dosu/cli` globally and runs `dosu setup` interactively.
+Requires Node.js 22+. Installs `@dosu/cli` globally via npm and runs `dosu setup` interactively.
 
 ```bash
 curl -fsSL https://cli.dosu.dev/install.sh | sh
 ```
 
-#### Binary installer
-
-Downloads and installs the latest stable release binary.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/dosu-ai/dosu-cli/main/install.sh | sh
-```
-
 To install a specific release tag:
 
 ```bash
-DOSU_INSTALL_VERSION=v0.2.0-rc1 curl -fsSL https://raw.githubusercontent.com/dosu-ai/dosu-cli/main/install.sh | sh
+DOSU_INSTALL_VERSION=v0.2.0-rc1 curl -fsSL https://cli.dosu.dev/install.sh | sh
 ```
 
 ### Homebrew
