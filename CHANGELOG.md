@@ -1,3 +1,10 @@
+# [0.33.0](https://github.com/dosu-ai/dosu-cli/compare/v0.32.1...v0.33.0) (2026-07-13)
+
+
+### Features
+
+* **setup:** add Dosu MCP instructions to AGENTS.md during onboarding ([#126](https://github.com/dosu-ai/dosu-cli/issues/126)) ([b646488](https://github.com/dosu-ai/dosu-cli/commit/b646488ce74c2268c4ead1e9256bb0ebf4dd6e1c))
+
 ## [0.32.1](https://github.com/dosu-ai/dosu-cli/compare/v0.32.0...v0.32.1) (2026-07-12)
 
 
