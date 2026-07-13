@@ -29,6 +29,7 @@ import {
   isTokenExpired,
   loadConfig,
   MODE_OSS,
+  replaceLoginSession,
   saveConfig,
 } from "../config/config";
 import { logger } from "../debug/logger";
@@ -214,9 +215,11 @@ export function createProgram(): Command {
           }
         }
 
-        cfg.access_token = token.access_token;
-        cfg.refresh_token = token.refresh_token;
-        cfg.expires_at = Math.floor(Date.now() / 1000) + token.expires_in;
+        replaceLoginSession(cfg, {
+          access_token: token.access_token,
+          refresh_token: token.refresh_token,
+          expires_at: Math.floor(Date.now() / 1000) + token.expires_in,
+        });
         saveConfig(cfg);
 
         console.log("Successfully authenticated!");

@@ -1917,6 +1917,68 @@ describe("runSetup checkpoint behavior", () => {
     expect(saved.deployment_id).toBe("dep-owner");
   });
 
+  it("re-resolves onboarding state when the browser hands back a different account", async () => {
+    saveConfig(
+      makeCfg({
+        access_token: "account-a-token",
+        refresh_token: "account-a-refresh",
+        deployment_id: "account-a-deployment",
+        deployment_name: "Account A MCP",
+        api_key: "account-a-key",
+        org_id: "account-a-org",
+        space_id: "account-a-space",
+      }),
+    );
+    const methods = setupAuthed({
+      getDeployments: vi.fn().mockResolvedValue([
+        makeDeployment({
+          deployment_id: "account-a-deployment",
+          org_id: "account-a-org",
+          org_name: "Account A Org",
+          space_id: "account-a-space",
+        }),
+        makeDeployment({
+          deployment_id: "account-b-deployment",
+          org_id: "account-b-org",
+          org_name: "Account B Org",
+          space_id: "account-b-space",
+        }),
+      ]),
+    });
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "account-a-user",
+      finished_onboarding: false,
+      cli_onboarding_enabled: true,
+    });
+    mockTrpc.organization.getOrganizations.query
+      .mockResolvedValueOnce([
+        { org_id: "account-a-org", name: "Account A Org", user_role: "OWNER" },
+      ])
+      .mockResolvedValueOnce([
+        { org_id: "account-b-org", name: "Account B Org", user_role: "OWNER" },
+      ]);
+    mockStartOAuthFlow.mockResolvedValue({
+      browserOpened: true,
+      token: {
+        access_token: "account-b-token",
+        refresh_token: "account-b-refresh",
+        expires_in: 3600,
+      },
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    const saved = loadConfig();
+    expect(saved.access_token).toBe("account-b-token");
+    expect(saved.refresh_token).toBe("account-b-refresh");
+    expect(saved.org_id).toBe("account-b-org");
+    expect(saved.space_id).toBe("account-b-space");
+    expect(saved.deployment_id).toBe("account-b-deployment");
+    expect(saved.api_key).toBe("new-key");
+    expect(methods.validateAPIKey).not.toHaveBeenCalled();
+  });
+
   it("never runs the terminal GitHub step during first-run onboarding", async () => {
     saveConfig(makeCfg());
     setupAuthed();

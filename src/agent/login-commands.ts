@@ -8,7 +8,7 @@
  */
 
 import { exchangeTicket, mintTicket } from "../auth/ticket";
-import { loadConfig, saveConfig } from "../config/config";
+import { loadConfig, replaceLoginSession, saveConfig } from "../config/config";
 import { logger } from "../debug/logger";
 import { emitError, emitJSONLine, emitStep } from "./output";
 
@@ -73,9 +73,11 @@ export async function runLoginCheck(opts: { ticket: string; json: boolean }): Pr
 
   if (result.status === "authenticated") {
     const cfg = loadConfig();
-    cfg.access_token = result.access_token ?? "";
-    cfg.refresh_token = result.refresh_token ?? "";
-    cfg.expires_at = Math.floor(Date.now() / 1000) + (result.expires_in ?? 3600);
+    replaceLoginSession(cfg, {
+      access_token: result.access_token ?? "",
+      refresh_token: result.refresh_token ?? "",
+      expires_at: Math.floor(Date.now() / 1000) + (result.expires_in ?? 3600),
+    });
     saveConfig(cfg);
     logger.info("auth.ticket", "Ticket redeemed via dosu login --check");
 

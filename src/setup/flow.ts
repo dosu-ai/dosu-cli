@@ -8,7 +8,14 @@ import type { CallbackServer } from "../auth/server";
 import { Client, type Deployment, type Org, SessionExpiredError } from "../client/client";
 import type { TypedClient } from "../client/trpc";
 import { installSkill } from "../commands/skill";
-import { type Config, loadConfig, MODE_OSS, type SetupMode, saveConfig } from "../config/config";
+import {
+  type Config,
+  loadConfig,
+  MODE_OSS,
+  replaceLoginSession,
+  type SetupMode,
+  saveConfig,
+} from "../config/config";
 import { logger } from "../debug/logger";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
@@ -101,7 +108,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   };
   await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_auth_completed");
 
-  const apiClient = new Client(cfg);
+  let apiClient = new Client(cfg);
   let cloudSetupContext: CloudSetupContext | null = null;
 
   if (cfg.mode !== MODE_OSS) {
@@ -150,7 +157,12 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
       });
       return;
     }
-    const ok = await bindOnboardingDeployment(apiClient, cfg, cloudSetupContext.targetOrg ?? null);
+    // The browser may have completed onboarding under a different account.
+    // Resolve the target again with the returned session; never reuse the
+    // pre-handoff organization or client across an authentication boundary.
+    apiClient = new Client(cfg);
+    const targetOrg = await resolveCurrentOnboardingTargetOrg(cfg);
+    const ok = await bindOnboardingDeployment(apiClient, cfg, targetOrg);
     if (!ok) {
       await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
         reason: "onboarding_deployment_failed",
@@ -462,9 +474,11 @@ async function openBrowserForSetup(
     s.stop("Authenticated");
     logger.info("setup", "Browser auth completed");
 
-    cfg.access_token = token.access_token;
-    cfg.refresh_token = token.refresh_token;
-    cfg.expires_at = Math.floor(Date.now() / 1000) + token.expires_in;
+    replaceLoginSession(cfg, {
+      access_token: token.access_token,
+      refresh_token: token.refresh_token,
+      expires_at: Math.floor(Date.now() / 1000) + token.expires_in,
+    });
     saveConfig(cfg);
     return { cfg, authTab: result.server };
   } catch (err: unknown) {
@@ -538,10 +552,14 @@ async function stepWebOnboarding(
       s.stop("Could not open a browser");
       return false;
     }
-    // The wizard hands back a freshly minted CLI session — keep the newest.
-    cfg.access_token = result.token.access_token;
-    cfg.refresh_token = result.token.refresh_token;
-    cfg.expires_at = Math.floor(Date.now() / 1000) + result.token.expires_in;
+    // The wizard may hand back a session for a different browser account.
+    // Replace the session and discard every deployment-scoped value before
+    // resolving the newly authenticated account's onboarding target.
+    replaceLoginSession(cfg, {
+      access_token: result.token.access_token,
+      refresh_token: result.token.refresh_token,
+      expires_at: Math.floor(Date.now() / 1000) + result.token.expires_in,
+    });
     saveConfig(cfg);
     s.stop("Onboarding finished in the browser");
     logger.info("setup", "Web onboarding handoff completed");
@@ -611,6 +629,18 @@ async function resolveOnboardingTargetOrg(trpc: TypedClient): Promise<OwnedOrg |
     return ownerOrg;
   }
   return accessibleOrgs[0] ?? null;
+}
+
+async function resolveCurrentOnboardingTargetOrg(cfg: Config): Promise<OwnedOrg | null> {
+  try {
+    const { createTypedClient } = await import("../client/trpc");
+    return await resolveOnboardingTargetOrg(createTypedClient(cfg));
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error("setup", `Failed to resolve post-onboarding organization: ${msg}`);
+    p.log.error(`Could not determine your onboarding organization: ${msg}`);
+    return null;
+  }
 }
 
 async function bindOnboardingDeployment(

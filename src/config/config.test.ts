@@ -10,6 +10,7 @@ import {
   isAuthenticated,
   isTokenExpired,
   loadConfig,
+  replaceLoginSession,
   saveConfig,
 } from "./config";
 
@@ -121,6 +122,36 @@ describe("config", () => {
   it("isAuthenticated returns true when access_token is set", () => {
     expect(isAuthenticated({ access_token: "tok", refresh_token: "", expires_at: 0 })).toBe(true);
     expect(isAuthenticated({ access_token: "", refresh_token: "", expires_at: 0 })).toBe(false);
+  });
+
+  it("replaceLoginSession clears deployment state that may belong to another account", () => {
+    const cfg: Config = {
+      access_token: "old-token",
+      refresh_token: "old-refresh",
+      expires_at: 1,
+      deployment_id: "old-deployment",
+      deployment_name: "Old deployment",
+      api_key: "old-key",
+      org_id: "old-org",
+      space_id: "old-space",
+    };
+
+    replaceLoginSession(cfg, {
+      access_token: "new-token",
+      refresh_token: "new-refresh",
+      expires_at: 2,
+    });
+
+    expect(cfg).toEqual({
+      access_token: "new-token",
+      refresh_token: "new-refresh",
+      expires_at: 2,
+      deployment_id: undefined,
+      deployment_name: undefined,
+      api_key: undefined,
+      org_id: undefined,
+      space_id: undefined,
+    });
   });
 
   it("isTokenExpired returns false when expires_at is 0", () => {

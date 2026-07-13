@@ -15,7 +15,7 @@
 
 import { exchangeTicket, mintTicket } from "../auth/ticket";
 import { Client, type Deployment } from "../client/client";
-import { type Config, loadConfig, saveConfig } from "../config/config";
+import { type Config, loadConfig, replaceLoginSession, saveConfig } from "../config/config";
 import { logger } from "../debug/logger";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
@@ -147,9 +147,11 @@ async function redeemTicket(
       });
       return { code: 0, cfg, exit: true };
     }
-    cfg.access_token = result.access_token ?? "";
-    cfg.refresh_token = result.refresh_token ?? "";
-    cfg.expires_at = Math.floor(Date.now() / 1000) + (result.expires_in ?? 3600);
+    replaceLoginSession(cfg, {
+      access_token: result.access_token ?? "",
+      refresh_token: result.refresh_token ?? "",
+      expires_at: Math.floor(Date.now() / 1000) + (result.expires_in ?? 3600),
+    });
     saveConfig(cfg);
     logger.info("agent.flow", "Ticket redeemed; session saved");
     emitStep({ step: "auth", email: result.email });

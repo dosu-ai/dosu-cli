@@ -21,6 +21,31 @@ export interface Config {
   space_id?: string;
 }
 
+export interface SessionCredentials {
+  access_token: string;
+  refresh_token: string;
+  expires_at: number;
+}
+
+/**
+ * Replace credentials obtained from an explicit login flow.
+ *
+ * A login may authenticate a different account, so deployment-scoped state
+ * from the previous session must never survive the transition. Token refresh
+ * deliberately does not use this helper because it preserves the same
+ * authenticated identity.
+ */
+export function replaceLoginSession(cfg: Config, session: SessionCredentials): void {
+  cfg.access_token = session.access_token;
+  cfg.refresh_token = session.refresh_token;
+  cfg.expires_at = session.expires_at;
+  cfg.deployment_id = undefined;
+  cfg.deployment_name = undefined;
+  cfg.api_key = undefined;
+  cfg.org_id = undefined;
+  cfg.space_id = undefined;
+}
+
 /**
  * The CLI uses separate config directories for dev and production so that
  * testing against a local dev stack never clobbers a user's real credentials.
