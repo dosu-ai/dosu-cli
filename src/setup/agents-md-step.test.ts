@@ -8,7 +8,9 @@ import {
   buildDosuAgentsSection,
   DOSU_SECTION_END,
   DOSU_SECTION_START,
+  DOSU_SECTION_VERSION,
   inGitWorkTree,
+  installedDosuSectionVersion,
   stepUpdateAgentsMd,
   upsertDosuAgentsSection,
 } from "./agents-md-step";
@@ -102,10 +104,39 @@ describe("upsertDosuAgentsSection", () => {
     expect(content.match(new RegExp(DOSU_SECTION_START, "g"))).toHaveLength(1);
   });
 
+  it("replaces a section left by the original unversioned marker", () => {
+    const path = join(dir, "AGENTS.md");
+    writeFileSync(
+      path,
+      `# Top\n\n<!-- dosu:mcp:start -->\nold unversioned content\n${DOSU_SECTION_END}\n`,
+    );
+    const result = upsertDosuAgentsSection(dir, "dosu");
+    expect(result.action).toBe("updated");
+    const content = readFileSync(path, "utf-8");
+    expect(content).not.toContain("old unversioned content");
+    expect(content).toContain(DOSU_SECTION_START);
+  });
+
   it("is idempotent — a second run reports unchanged", () => {
     upsertDosuAgentsSection(dir, "dosu");
     const result = upsertDosuAgentsSection(dir, "dosu");
     expect(result.action).toBe("unchanged");
+  });
+});
+
+describe("installedDosuSectionVersion", () => {
+  it("returns null when no section is present", () => {
+    expect(installedDosuSectionVersion("# Just a readme\n")).toBeNull();
+  });
+
+  it("returns 0 for the original unversioned marker", () => {
+    expect(installedDosuSectionVersion("<!-- dosu:mcp:start -->\nx\n<!-- dosu:mcp:end -->")).toBe(
+      0,
+    );
+  });
+
+  it("returns the stamped version for a generated section", () => {
+    expect(installedDosuSectionVersion(buildDosuAgentsSection("dosu"))).toBe(DOSU_SECTION_VERSION);
   });
 });
 

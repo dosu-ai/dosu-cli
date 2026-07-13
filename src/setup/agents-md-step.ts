@@ -16,8 +16,18 @@ import { logger } from "../debug/logger";
 import { dosuInvocation } from "./audit-handoff";
 import { dim } from "./styles";
 
-export const DOSU_SECTION_START = "<!-- dosu:mcp:start -->";
+/**
+ * Bump when the section content changes meaningfully. The version is stamped
+ * into the start marker so the CLI can tell whether a repo's section is
+ * stale without diffing content (which varies with the embedded invocation).
+ */
+export const DOSU_SECTION_VERSION = 1;
+
+export const DOSU_SECTION_START = `<!-- dosu:mcp:start v${DOSU_SECTION_VERSION} -->`;
 export const DOSU_SECTION_END = "<!-- dosu:mcp:end -->";
+
+/** Matches any start marker: current, older versions, and the unversioned original. */
+const SECTION_START_RE = /<!-- dosu:mcp:start(?: v(\d+))? -->/;
 
 export type AgentsMdAction = "created" | "updated" | "unchanged";
 
@@ -77,7 +87,8 @@ export function upsertDosuAgentsSection(
   }
 
   const existing = readFileSync(path, "utf-8");
-  const start = existing.indexOf(DOSU_SECTION_START);
+  const startMatch = existing.match(SECTION_START_RE);
+  const start = startMatch?.index ?? -1;
   const end = existing.indexOf(DOSU_SECTION_END);
 
   let next: string;
@@ -90,6 +101,17 @@ export function upsertDosuAgentsSection(
   if (next === existing) return { path, action: "unchanged" };
   writeFileSync(path, next);
   return { path, action: "updated" };
+}
+
+/**
+ * Version of the Dosu section installed in `content`, for staleness checks
+ * (e.g. a future `dosu agents-md update`). Returns `0` for the original
+ * unversioned marker and `null` when no section is present.
+ */
+export function installedDosuSectionVersion(content: string): number | null {
+  const m = content.match(SECTION_START_RE);
+  if (!m) return null;
+  return m[1] ? Number.parseInt(m[1], 10) : 0;
 }
 
 /**

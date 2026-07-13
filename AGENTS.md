@@ -160,7 +160,7 @@ npx @dosu/cli@alpha setup
 
 - `DOSU_DEV=true` — isolates the CLI's config dir to `~/.config/dosu-cli-dev/` so dev runs don't clobber prod credentials. Does **not** switch URLs (URLs are build-time-baked; use `*_OVERRIDE` for that).
 
-<!-- dosu:mcp:start -->
+<!-- dosu:mcp:start v1 -->
 ## Dosu
 
 Shared team knowledge lives in [Dosu](https://dosu.dev), via the Dosu MCP server.
