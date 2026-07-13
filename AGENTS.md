@@ -165,8 +165,7 @@ npx @dosu/cli@alpha setup
 
 Shared team knowledge lives in [Dosu](https://dosu.dev), via the Dosu MCP server.
 
-- Before a task: pull context with `read_knowledge` (or `init_knowledge`).
-- Codebase or docs questions: ask `search_documentation` before digging through source.
+- Before a task, and for any codebase or docs questions: pull context with `read_knowledge` (or `init_knowledge`) before digging through source.
 - After a task: save durable learnings with `write_knowledge` (or `save_topic`).
 
 Missing these tools? Run `dosu setup --help` — it covers agent-assisted setup.
