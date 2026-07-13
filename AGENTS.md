@@ -163,11 +163,11 @@ npx @dosu/cli@alpha setup
 <!-- dosu:mcp:start -->
 ## Dosu
 
-This project uses [Dosu](https://dosu.dev) for shared team knowledge, available through the Dosu MCP server.
+Shared team knowledge lives in [Dosu](https://dosu.dev), via the Dosu MCP server.
 
-- Before starting a task, pull relevant context from the knowledge base with Dosu's `read_knowledge` (or `init_knowledge`) tool.
-- When you have questions about this codebase or its docs, ask Dosu via `search_documentation` before digging through source.
-- After completing a task, save durable learnings back with `write_knowledge` (or `save_topic`) so the knowledge base stays current.
+- Before a task: pull context with `read_knowledge` (or `init_knowledge`).
+- Codebase or docs questions: ask `search_documentation` before digging through source.
+- After a task: save durable learnings with `write_knowledge` (or `save_topic`).
 
-If the Dosu MCP server isn't configured for your agent, run `dosu setup`.
+Missing these tools? Run `dosu setup`.
 <!-- dosu:mcp:end -->
