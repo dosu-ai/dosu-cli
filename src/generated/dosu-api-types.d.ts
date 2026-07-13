@@ -8,6 +8,7 @@
 // - dataSource.update
 // - deploymentDataSource.create
 // - docImports.getImportStatus
+// - docImports.importAzureDevopsFiles
 // - docImports.importCodaPages
 // - docImports.importConfluencePages
 // - docImports.importGithubFiles
@@ -289,7 +290,7 @@ export type CliProviderSlug =
 	| 'teams'
 	| 'azure_devops'
 
-export declare const CLI_CONTRACT_HASH: 'f5c0727a7884'
+export declare const CLI_CONTRACT_HASH: 'a27c8fdd5baf'
 
 export type AnalyticsGetUsageStatsInput = {
 	days?: number
@@ -445,6 +446,14 @@ export type DeploymentDataSourceCreateOutput = any
 export type DocImportsGetImportStatusInput = string
 
 export type DocImportsGetImportStatusOutput = any
+
+export type DocImportsImportAzureDevopsFilesInput = {
+	file_ids: Array<string>
+	knowledge_store_id: string
+	space_id: string
+}
+
+export type DocImportsImportAzureDevopsFilesOutput = any
 
 export type DocImportsImportCodaPagesInput = {
 	knowledge_store_id: string
@@ -1142,6 +1151,10 @@ export interface CliApiClient {
 	}
 	docImports: {
 		getImportStatus: QueryProcedure<DocImportsGetImportStatusInput, DocImportsGetImportStatusOutput>
+		importAzureDevopsFiles: MutationProcedure<
+			DocImportsImportAzureDevopsFilesInput,
+			DocImportsImportAzureDevopsFilesOutput
+		>
 		importCodaPages: MutationProcedure<
 			DocImportsImportCodaPagesInput,
 			DocImportsImportCodaPagesOutput
