@@ -1,3 +1,10 @@
+## [0.33.1](https://github.com/dosu-ai/dosu-cli/compare/v0.33.0...v0.33.1) (2026-07-13)
+
+
+### Bug Fixes
+
+* prevent account state mixing during login ([#129](https://github.com/dosu-ai/dosu-cli/issues/129)) ([5036961](https://github.com/dosu-ai/dosu-cli/commit/50369618c27285dcab6bf6b29c2b3c4037ff7962))
+
 # [0.33.0](https://github.com/dosu-ai/dosu-cli/compare/v0.32.1...v0.33.0) (2026-07-13)
 
 
