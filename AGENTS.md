@@ -159,3 +159,15 @@ npx @dosu/cli@alpha setup
 ### Other runtime env
 
 - `DOSU_DEV=true` — isolates the CLI's config dir to `~/.config/dosu-cli-dev/` so dev runs don't clobber prod credentials. Does **not** switch URLs (URLs are build-time-baked; use `*_OVERRIDE` for that).
+
+<!-- dosu:mcp:start -->
+## Dosu
+
+This project uses [Dosu](https://dosu.dev) for shared team knowledge, available through the Dosu MCP server.
+
+- Before starting a task, pull relevant context from the knowledge base with Dosu's `read_knowledge` (or `init_knowledge`) tool.
+- When you have questions about this codebase or its docs, ask Dosu via `search_documentation` before digging through source.
+- After completing a task, save durable learnings back with `write_knowledge` (or `save_topic`) so the knowledge base stays current.
+
+If the Dosu MCP server isn't configured for your agent, run `dosu setup`.
+<!-- dosu:mcp:end -->

@@ -114,6 +114,18 @@ vi.mock("../commands/skill", () => ({
 const { mockStepConnectGitHubRepo } = vi.hoisted(() => ({
   mockStepConnectGitHubRepo: vi.fn(),
 }));
+
+// AGENTS.md step: mocked so flow tests never write an AGENTS.md into the real
+// repo cwd. Defaults (not in a git work tree) are installed by
+// `installSetupStepDefaults()`.
+const { mockInGitWorkTree, mockStepUpdateAgentsMd } = vi.hoisted(() => ({
+  mockInGitWorkTree: vi.fn(),
+  mockStepUpdateAgentsMd: vi.fn(),
+}));
+vi.mock("./agents-md-step", () => ({
+  inGitWorkTree: (...args: unknown[]) => mockInGitWorkTree(...args),
+  stepUpdateAgentsMd: (...args: unknown[]) => mockStepUpdateAgentsMd(...args),
+}));
 vi.mock("./github-step", () => ({
   stepConnectGitHubRepo: (...args: unknown[]) => mockStepConnectGitHubRepo(...args),
   // Audit handoff never fires in these tests: not a git repo.
@@ -172,6 +184,8 @@ function mockToolSelection(selection: string[]) {
 
 function installSetupStepDefaults() {
   mockStepConnectGitHubRepo.mockResolvedValue({ advance: false, has_connected_repo: false });
+  mockInGitWorkTree.mockReturnValue(false);
+  mockStepUpdateAgentsMd.mockReturnValue(true);
 }
 
 function installRemoteSetupDefaults() {
@@ -1466,6 +1480,80 @@ describe("runSetup integration", () => {
       "Install Dosu MCP",
       "Install Dosu skill",
     ]);
+  });
+
+  it("offers the AGENTS.md option and runs the step when the cwd is a git work tree", async () => {
+    const cfg = makeCfg();
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    mockInGitWorkTree.mockReturnValue(true);
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    const oneShotCall = vi
+      .mocked(p.multiselect)
+      .mock.calls.find(([args]) =>
+        String((args as { message?: string }).message ?? "").includes("Dosu will set"),
+      );
+    const options = (oneShotCall?.[0] as { options: Array<{ label: string }> }).options;
+    expect(options.map((option) => String(option.label))).toContain(
+      "Add Dosu instructions to AGENTS.md",
+    );
+    expect(mockStepUpdateAgentsMd).toHaveBeenCalled();
+
+    const completed = trackedCliOnboardingEvents().find(
+      (e) => e.event === "cli_onboarding_completed",
+    );
+    expect(completed?.properties.completed_agents_md).toBe(true);
+  });
+
+  it("skips the AGENTS.md step when the one-shot confirm unticks it", async () => {
+    const cfg = makeCfg();
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    mockInGitWorkTree.mockReturnValue(true);
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    // Deselect only the AGENTS.md item in the one-shot confirm.
+    vi.mocked(p.multiselect).mockImplementation(async (opts: unknown) => {
+      const o = opts as { message: string; initialValues?: unknown[] };
+      if (
+        String(o.message ?? "")
+          .toLowerCase()
+          .includes("dosu will set")
+      ) {
+        return ["configureMcp", "installSkill"] as unknown as never;
+      }
+      return (o.initialValues ?? []) as unknown as never;
+    });
+
+    await runSetup();
+
+    expect(mockStepUpdateAgentsMd).not.toHaveBeenCalled();
+  });
+
+  it("never offers the AGENTS.md option outside a git work tree", async () => {
+    const cfg = makeCfg();
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    const oneShotCall = vi
+      .mocked(p.multiselect)
+      .mock.calls.find(([args]) =>
+        String((args as { message?: string }).message ?? "").includes("Dosu will set"),
+      );
+    const options = (oneShotCall?.[0] as { options: Array<{ label: string }> }).options;
+    expect(options.map((option) => String(option.label))).not.toContain(
+      "Add Dosu instructions to AGENTS.md",
+    );
+    expect(mockStepUpdateAgentsMd).not.toHaveBeenCalled();
   });
 });
 

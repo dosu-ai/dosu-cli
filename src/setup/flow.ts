@@ -12,6 +12,7 @@ import { type Config, loadConfig, MODE_OSS, type SetupMode, saveConfig } from ".
 import { logger } from "../debug/logger";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
+import { inGitWorkTree, stepUpdateAgentsMd } from "./agents-md-step";
 import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
 import { launchAuditAgent, offerAuditHandoff } from "./audit-handoff";
 import { browserFallbackHint, dim, info } from "./styles";
@@ -39,6 +40,7 @@ export interface ToolSelection {
 interface OneShotChoices {
   configureMcp: boolean;
   installSkill: boolean;
+  updateAgentsMd: boolean;
 }
 
 type SetupFlowKind = "onboarding" | "setup";
@@ -180,7 +182,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   // One-shot confirm: MCP + skill are always listed (user picks what to
   // (re)run). Repo connection + docs import happen in the web onboarding
   // wizard, so the CLI no longer offers them here.
-  const choices = await stepOneShotConfirm();
+  const choices = await stepOneShotConfirm(inGitWorkTree());
   if (!choices) {
     await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_cancelled", {
       reason: "options_cancelled",
@@ -190,6 +192,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_options_selected", {
     configure_mcp: choices.configureMcp,
     install_skill: choices.installSkill,
+    update_agents_md: choices.updateAgentsMd,
   });
 
   // MCP tools. Track whether at least one agent ended up with Dosu MCP
@@ -227,6 +230,15 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     }
   }
 
+  // AGENTS.md — prompt coding agents to use the Dosu MCP tools. Only offered
+  // (and run) when the cwd is a git work tree. Tracked via the
+  // `completed_agents_md` property on cli_onboarding_completed — the backend
+  // event enum has no dedicated event for this step.
+  let agentsMdCompleted = false;
+  if (choices.updateAgentsMd) {
+    agentsMdCompleted = stepUpdateAgentsMd();
+  }
+
   // Codebase audit handoff (cloud mode only — it acts on the user's own
   // repo): offer to launch Claude Code with the audit prompt so there's no
   // gap between finishing setup and seeing what Dosu can generate.
@@ -235,10 +247,11 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     handoffToAudit = await offerAuditHandoff();
   }
 
-  if (mcpCompleted || skillCompleted) {
+  if (mcpCompleted || skillCompleted || agentsMdCompleted) {
     await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_completed", {
       completed_mcp: mcpCompleted,
       completed_skill: skillCompleted,
+      completed_agents_md: agentsMdCompleted,
     });
   }
 
@@ -290,12 +303,15 @@ function applyModeOverride(cfg: Config, opts: SetupOptions): void {
  * time (add a new agent, reinstall the skill). Repo connection + docs
  * import happen in the web onboarding wizard, not here.
  */
-async function stepOneShotConfirm(): Promise<OneShotChoices | null> {
+async function stepOneShotConfirm(offerAgentsMd: boolean): Promise<OneShotChoices | null> {
   type Item = { value: keyof OneShotChoices; label: string };
   const items: Item[] = [
     { value: "configureMcp", label: "Install Dosu MCP" },
     { value: "installSkill", label: "Install Dosu skill" },
   ];
+  if (offerAgentsMd) {
+    items.push({ value: "updateAgentsMd", label: "Add Dosu instructions to AGENTS.md" });
+  }
 
   const selected = await p.multiselect({
     message: "Dosu will set these up — press Enter to accept, space to toggle",
@@ -313,6 +329,7 @@ async function stepOneShotConfirm(): Promise<OneShotChoices | null> {
   return {
     configureMcp: chosen.has("configureMcp"),
     installSkill: chosen.has("installSkill"),
+    updateAgentsMd: chosen.has("updateAgentsMd"),
   };
 }
 
