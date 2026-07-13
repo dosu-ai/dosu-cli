@@ -572,11 +572,20 @@ export function docsCommand(): Command {
           },
           azure_devops: {
             path: `/sync-back/azure_devops/${id}/publish`,
-            // The repository is resolved from the data source server-side.
-            buildBody: () => ({
-              target_directory: opts.directory ?? "/",
-              target_data_source_id: opts.dataSourceId,
-            }),
+            // The repository is resolved server-side from the data source, so
+            // --data-source-id is the sole target identifier and is required.
+            buildBody: () => {
+              if (!opts.dataSourceId) {
+                console.error(
+                  pc.red("--data-source-id <id> is required when publishing to azure_devops"),
+                );
+                process.exit(1);
+              }
+              return {
+                target_directory: opts.directory ?? "/",
+                target_data_source_id: opts.dataSourceId,
+              };
+            },
           },
           confluence: {
             path: `/sync-back/confluence/${id}/publish`,

@@ -1181,6 +1181,29 @@ describe("docs publish", () => {
     expect(body.target_data_source_id).toBe("ds1");
   });
 
+  it("defaults azure_devops publish directory to / when omitted", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockFetch.mockResolvedValueOnce(jsonResponse({ status: "ok" }));
+    mockQuery.mockReset();
+
+    await run("publish", "p1", "--to", "azure_devops", "--data-source-id", "ds1");
+
+    const [, opts] = mockFetch.mock.calls[0];
+    expect(JSON.parse(opts.body).target_directory).toBe("/");
+  });
+
+  it("exits when publishing to azure_devops without --data-source-id", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockReset();
+
+    await expect(
+      run("publish", "p1", "--to", "azure_devops", "--directory", "docs/"),
+    ).rejects.toThrow("exit");
+
+    expect(errorSpy.mock.calls.flat().join(" ")).toContain("--data-source-id");
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it("publishes to notion via Python backend", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockFetch.mockResolvedValueOnce(jsonResponse({ status: "ok" }));
