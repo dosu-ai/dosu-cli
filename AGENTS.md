@@ -169,5 +169,5 @@ Shared team knowledge lives in [Dosu](https://dosu.dev), via the Dosu MCP server
 - Codebase or docs questions: ask `search_documentation` before digging through source.
 - After a task: save durable learnings with `write_knowledge` (or `save_topic`).
 
-Missing these tools? Run `dosu setup`.
+Missing these tools? Run `dosu setup --help` — it covers agent-assisted setup.
 <!-- dosu:mcp:end -->

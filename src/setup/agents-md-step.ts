@@ -33,11 +33,13 @@ export interface AgentsMdResult {
  */
 export function inGitWorkTree(cwd: string = process.cwd()): boolean {
   try {
-    execSync("git rev-parse --is-inside-work-tree", {
+    // Exits 0 but prints "false" in bare repos and inside .git itself, so
+    // the stdout check matters — exit code alone is not enough.
+    const stdout = execSync("git rev-parse --is-inside-work-tree", {
       cwd,
       stdio: ["ignore", "pipe", "ignore"],
     });
-    return true;
+    return stdout.toString().trim() === "true";
   } catch {
     return false;
   }
@@ -54,7 +56,7 @@ export function buildDosuAgentsSection(dosuCmd: string = dosuInvocation()): stri
     "- Codebase or docs questions: ask `search_documentation` before digging through source.",
     "- After a task: save durable learnings with `write_knowledge` (or `save_topic`).",
     "",
-    `Missing these tools? Run \`${dosuCmd} setup\`.`,
+    `Missing these tools? Run \`${dosuCmd} setup --help\` — it covers agent-assisted setup.`,
     DOSU_SECTION_END,
   ].join("\n");
 }

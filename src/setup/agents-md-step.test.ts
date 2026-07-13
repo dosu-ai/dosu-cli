@@ -41,7 +41,7 @@ describe("buildDosuAgentsSection", () => {
   });
 
   it("embeds the given dosu invocation", () => {
-    expect(buildDosuAgentsSection("npx -y @dosu/cli")).toContain("`npx -y @dosu/cli setup`");
+    expect(buildDosuAgentsSection("npx -y @dosu/cli")).toContain("`npx -y @dosu/cli setup --help`");
   });
 });
 
@@ -53,6 +53,16 @@ describe("inGitWorkTree", () => {
   it("returns true inside a git repo", () => {
     execSync("git init", { cwd: dir, stdio: "ignore" });
     expect(inGitWorkTree(dir)).toBe(true);
+  });
+
+  it("returns false inside the .git directory (rev-parse exits 0 but prints false)", () => {
+    execSync("git init", { cwd: dir, stdio: "ignore" });
+    expect(inGitWorkTree(join(dir, ".git"))).toBe(false);
+  });
+
+  it("returns false in a bare repository", () => {
+    execSync("git init --bare", { cwd: dir, stdio: "ignore" });
+    expect(inGitWorkTree(dir)).toBe(false);
   });
 });
 
