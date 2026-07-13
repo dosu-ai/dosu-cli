@@ -35,7 +35,8 @@ vi.mock("../auth/ticket", () => ({
   exchangeTicket: mockExchangeTicket,
 }));
 
-vi.mock("../config/config", () => ({
+vi.mock("../config/config", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config")>()),
   loadConfig: mockLoadConfig,
   saveConfig: mockSaveConfig,
 }));

@@ -8,7 +8,7 @@ import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { Client } from "../client/client";
 import { executeInsights } from "../commands/insights";
-import { isAuthenticated, loadConfig, saveConfig } from "../config/config";
+import { isAuthenticated, loadConfig, replaceLoginSession, saveConfig } from "../config/config";
 import { runSetup } from "../setup/flow";
 import { browserFallbackHint } from "../setup/styles";
 
@@ -127,9 +127,11 @@ async function handleAuthenticate(cfg: ReturnType<typeof loadConfig>): Promise<v
     const token = result.token;
     s.stop("Authenticated");
 
-    cfg.access_token = token.access_token;
-    cfg.refresh_token = token.refresh_token;
-    cfg.expires_at = Math.floor(Date.now() / 1000) + token.expires_in;
+    replaceLoginSession(cfg, {
+      access_token: token.access_token,
+      refresh_token: token.refresh_token,
+      expires_at: Math.floor(Date.now() / 1000) + token.expires_in,
+    });
     saveConfig(cfg);
   } catch (err: unknown) {
     /* v8 ignore next -- err is always Error in practice */
