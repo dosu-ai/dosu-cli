@@ -614,6 +614,19 @@ describe("docs import", () => {
     });
   });
 
+  it("calls docImports.importAzureDevopsFiles for azure_devops", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockResolvedValueOnce({ task_id: "task-1" });
+
+    await run("import", "azure_devops", "--files", "f1,f2");
+
+    expect(mockMutate).toHaveBeenCalledWith("docImports.importAzureDevopsFiles", {
+      knowledge_store_id: "ks1",
+      space_id: "sp1",
+      file_ids: ["f1", "f2"],
+    });
+  });
+
   it("calls docImports.importConfluencePages for confluence", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockMutate.mockResolvedValueOnce({ task_id: "task-1" });
@@ -1143,6 +1156,29 @@ describe("docs publish", () => {
 
     const [, opts] = mockFetch.mock.calls[0];
     expect(JSON.parse(opts.body).target_directory).toBe("/");
+  });
+
+  it("publishes to azure_devops via Python backend", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockFetch.mockResolvedValueOnce(jsonResponse({ status: "ok" }));
+    mockQuery.mockReset();
+
+    await run(
+      "publish",
+      "p1",
+      "--to",
+      "azure_devops",
+      "--directory",
+      "docs/",
+      "--data-source-id",
+      "ds1",
+    );
+
+    const [url, opts] = mockFetch.mock.calls[0];
+    expect(url).toBe("https://api.test.dev/sync-back/azure_devops/p1/publish");
+    const body = JSON.parse(opts.body);
+    expect(body.target_directory).toBe("docs/");
+    expect(body.target_data_source_id).toBe("ds1");
   });
 
   it("publishes to notion via Python backend", async () => {

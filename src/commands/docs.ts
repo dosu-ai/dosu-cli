@@ -423,7 +423,7 @@ export function docsCommand(): Command {
   cmd
     .command("import")
     .description("Import documents from an external platform")
-    .argument("<platform>", "Platform: github, gitlab, confluence, notion, coda")
+    .argument("<platform>", "Platform: github, gitlab, azure_devops, confluence, notion, coda")
     .requiredOption("--files <ids>", "Comma-separated file/page IDs to import")
     .option("--json", "Output as JSON")
     .action(async (platform: string, opts: { files: string; json?: boolean }) => {
@@ -437,6 +437,7 @@ export function docsCommand(): Command {
       const importFn: Record<string, (input: any) => Promise<any>> = {
         github: (input) => client.docImports.importGithubFiles.mutate(input),
         gitlab: (input) => client.docImports.importGitlabFiles.mutate(input),
+        azure_devops: (input) => client.docImports.importAzureDevopsFiles.mutate(input),
         confluence: (input) => client.docImports.importConfluencePages.mutate(input),
         notion: (input) => client.docImports.importNotionPages.mutate(input),
         coda: (input) => client.docImports.importCodaPages.mutate(input),
@@ -445,7 +446,9 @@ export function docsCommand(): Command {
       const fn = importFn[platform.toLowerCase()];
       if (!fn) {
         console.error(
-          pc.red(`Unknown platform: ${platform}. Use: github, gitlab, confluence, notion, coda`),
+          pc.red(
+            `Unknown platform: ${platform}. Use: github, gitlab, azure_devops, confluence, notion, coda`,
+          ),
         );
         process.exit(1);
       }
@@ -519,7 +522,10 @@ export function docsCommand(): Command {
     .command("publish")
     .description("Publish a document to an external platform")
     .argument("<id>", "Page ID")
-    .requiredOption("--to <platform>", "Target: github, gitlab, confluence, notion, coda")
+    .requiredOption(
+      "--to <platform>",
+      "Target: github, gitlab, azure_devops, confluence, notion, coda",
+    )
     .option("--repo-id <id>", "GitHub repository ID")
     .option("--project-id <id>", "GitLab project ID")
     .option("--parent-page-id <id>", "Parent page ID (Confluence/Notion)")
@@ -560,6 +566,14 @@ export function docsCommand(): Command {
             path: `/sync-back/gitlab/${id}/publish`,
             buildBody: () => ({
               gitlab_project_id: opts.projectId,
+              target_directory: opts.directory ?? "/",
+              target_data_source_id: opts.dataSourceId,
+            }),
+          },
+          azure_devops: {
+            path: `/sync-back/azure_devops/${id}/publish`,
+            // The repository is resolved from the data source server-side.
+            buildBody: () => ({
               target_directory: opts.directory ?? "/",
               target_data_source_id: opts.dataSourceId,
             }),
