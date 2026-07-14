@@ -100,16 +100,26 @@ export function loadConfig(): Config {
   const path = getConfigPath();
   if (!existsSync(path)) return emptyConfig();
 
+  let raw: unknown;
   try {
-    const raw = JSON.parse(readFileSync(path, "utf-8")) as unknown;
-    if (isConfigV2(raw)) return normalizeV2(raw);
-
-    const migrated = migrateLegacyConfig(raw);
-    writeConfig(path, migrated);
-    return migrated;
+    raw = JSON.parse(readFileSync(path, "utf-8")) as unknown;
   } catch {
     return emptyConfig();
   }
+
+  if (isConfigV2(raw)) return normalizeV2(raw);
+  // Legacy configs were unversioned. Never rewrite a schema this version does
+  // not understand, or downgrading could destroy newer config data.
+  if (isRecord(raw) && "schema_version" in raw) return emptyConfig();
+
+  const migrated = migrateLegacyConfig(raw);
+  try {
+    writeConfig(path, migrated);
+  } catch {
+    // The parsed config is still usable even when its migration cannot be
+    // persisted (for example, on a temporarily read-only filesystem).
+  }
+  return migrated;
 }
 
 export function saveConfig(cfg: Config): void {
