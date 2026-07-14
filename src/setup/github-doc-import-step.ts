@@ -82,7 +82,7 @@ export async function stepImportGitHubDocs(
 ): Promise<GitHubDocsImportStepResult> {
   logger.info("setup", "Step: import GitHub docs");
 
-  if (!cfg.org_id || !cfg.space_id) {
+  if (!cfg.active_account?.target?.org_id || !cfg.active_account?.target?.space_id) {
     p.log.warn(
       "Cannot import GitHub docs: your Dosu workspace is missing org/space context. " +
         "Re-run `dosu setup` from a fresh state.",
@@ -92,8 +92,13 @@ export async function stepImportGitHubDocs(
 
   const trpc = createTypedClient(cfg);
   const files = opts.waitForFreshDocs
-    ? await waitForImportableGithubFiles(trpc, cfg.org_id, cfg.space_id, opts.expectedDataSourceIds)
-    : await fetchImportableGithubFiles(trpc, cfg.space_id);
+    ? await waitForImportableGithubFiles(
+        trpc,
+        cfg.active_account?.target?.org_id,
+        cfg.active_account?.target?.space_id,
+        opts.expectedDataSourceIds,
+      )
+    : await fetchImportableGithubFiles(trpc, cfg.active_account?.target?.space_id);
   if (files === null) {
     return { advance: false };
   }
@@ -116,7 +121,7 @@ export async function stepImportGitHubDocs(
     return { advance: true, imported: false, imported_count: 0 };
   }
 
-  const knowledgeStoreID = await getKnowledgeStoreID(trpc, cfg.space_id);
+  const knowledgeStoreID = await getKnowledgeStoreID(trpc, cfg.active_account?.target?.space_id);
   if (!knowledgeStoreID) {
     return { advance: false };
   }
@@ -126,7 +131,7 @@ export async function stepImportGitHubDocs(
   try {
     const result = (await trpc.docImports.importGithubFiles.mutate({
       knowledge_store_id: knowledgeStoreID,
-      space_id: cfg.space_id,
+      space_id: cfg.active_account?.target?.space_id,
       file_ids: fileIDs,
     })) as { task_id?: string } | null;
 

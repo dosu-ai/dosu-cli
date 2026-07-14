@@ -48,10 +48,11 @@ vi.mock("./github-doc-import-prompt", () => ({
 
 import * as p from "@clack/prompts";
 import type { Config } from "../config/config";
+import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { stepImportGitHubDocs } from "./github-doc-import-step";
 
-function makeCfg(overrides: Partial<Config> = {}): Config {
-  return {
+function makeCfg(overrides: Partial<FlatTestConfig> = {}): Config {
+  return makeTestConfig({
     access_token: "tok",
     refresh_token: "ref",
     expires_at: Math.floor(Date.now() / 1000) + 3600,
@@ -61,7 +62,7 @@ function makeCfg(overrides: Partial<Config> = {}): Config {
     org_id: "org-1",
     space_id: "space-1",
     ...overrides,
-  };
+  });
 }
 
 describe("stepImportGitHubDocs", () => {

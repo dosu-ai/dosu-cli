@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  type FlatTestConfig,
+  makeTestConfig,
+  testAccessTokenFor,
+  testSession,
+  testTarget,
+} from "../config/config.test-utils";
 import type { SetupProvider } from "../mcp/providers";
 
 const {
@@ -85,11 +92,14 @@ function makeProvider(id: string, opts: Partial<SetupProvider> = {}): SetupProvi
   };
 }
 
-const baseCfg = {
+const baseCfg: FlatTestConfig = {
   access_token: "",
   refresh_token: "",
   expires_at: 0,
 };
+const makeBaseConfig = (overrides: Partial<FlatTestConfig> = {}) =>
+  makeTestConfig({ ...baseCfg, ...overrides });
+const ticketAccessToken = testAccessTokenFor("ticket-user");
 
 describe("buildResumeCommand", () => {
   it("includes --tool and --login-ticket and uses the npx invocation", () => {
@@ -143,7 +153,7 @@ describe("runAgentSetup", () => {
 
     mockAllSetupProviders.mockReturnValue([claudeProvider, stdioProvider]);
     mockIsStdioOnly.mockImplementation((p: SetupProvider) => p.id() === "claude-desktop");
-    mockLoadConfig.mockReturnValue({ ...baseCfg });
+    mockLoadConfig.mockReturnValue(makeBaseConfig());
   });
 
   afterEach(() => {
@@ -201,7 +211,7 @@ describe("runAgentSetup", () => {
   it("redeems the ticket, picks the lone deployment, mints an API key, installs MCP", async () => {
     mockExchangeTicket.mockResolvedValue({
       status: "authenticated",
-      access_token: "tok",
+      access_token: ticketAccessToken,
       refresh_token: "ref",
       expires_in: 3600,
       email: "user@example.com",
@@ -239,14 +249,10 @@ describe("runAgentSetup", () => {
     ]);
     expect(claudeProvider.install).toHaveBeenCalledTimes(1);
     expect(mockSaveConfig).toHaveBeenCalled();
-    const lastSave = mockSaveConfig.mock.calls.at(-1)?.[0] as {
-      access_token: string;
-      api_key?: string;
-      deployment_id?: string;
-    };
-    expect(lastSave.access_token).toBe("tok");
-    expect(lastSave.api_key).toBe("sk_user_x");
-    expect(lastSave.deployment_id).toBe("dep-1");
+    const lastSave = mockSaveConfig.mock.calls.at(-1)?.[0];
+    expect(testSession(lastSave).access_token).toBe(ticketAccessToken);
+    expect(testTarget(lastSave).api_key).toBe("sk_user_x");
+    expect(testTarget(lastSave).deployment_id).toBe("dep-1");
     expect(events.at(-1)).toMatchObject({
       step: "done",
       status: "ok",
@@ -257,7 +263,7 @@ describe("runAgentSetup", () => {
   it("errors with multiple_deployments when the user has more than one dosu_mcp", async () => {
     mockExchangeTicket.mockResolvedValue({
       status: "authenticated",
-      access_token: "tok",
+      access_token: ticketAccessToken,
       refresh_token: "ref",
       expires_in: 3600,
     });
@@ -303,7 +309,7 @@ describe("runAgentSetup", () => {
   it("auto-picks the lone dosu_mcp when other non-MCP deployments coexist", async () => {
     mockExchangeTicket.mockResolvedValue({
       status: "authenticated",
-      access_token: "tok",
+      access_token: ticketAccessToken,
       refresh_token: "ref",
       expires_in: 3600,
       email: "user@example.com",
@@ -365,7 +371,7 @@ describe("runAgentSetup", () => {
   it("errors with no_mcp_deployment when account has deployments but none are MCP", async () => {
     mockExchangeTicket.mockResolvedValue({
       status: "authenticated",
-      access_token: "tok",
+      access_token: ticketAccessToken,
       refresh_token: "ref",
       expires_in: 3600,
     });
@@ -434,12 +440,13 @@ describe("runAgentSetup", () => {
   });
 
   it("uses --deployment when supplied", async () => {
-    mockLoadConfig.mockReturnValue({
-      ...baseCfg,
-      access_token: "tok",
-      refresh_token: "ref",
-      expires_at: Math.floor(Date.now() / 1000) + 3600,
-    });
+    mockLoadConfig.mockReturnValue(
+      makeBaseConfig({
+        access_token: ticketAccessToken,
+        refresh_token: "ref",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+      }),
+    );
     mockClient.doRequestRaw.mockResolvedValue(new Response(null, { status: 200 }));
     mockClient.getDeployments.mockResolvedValue([
       {
@@ -487,7 +494,7 @@ describe("runAgentSetup", () => {
   it("errors when --deployment refers to an inaccessible deployment", async () => {
     mockExchangeTicket.mockResolvedValue({
       status: "authenticated",
-      access_token: "tok",
+      access_token: ticketAccessToken,
       refresh_token: "ref",
       expires_in: 3600,
     });
@@ -511,7 +518,7 @@ describe("runAgentSetup", () => {
   it("emits fetch_failed when loading deployments throws while resolving --deployment", async () => {
     mockExchangeTicket.mockResolvedValue({
       status: "authenticated",
-      access_token: "tok",
+      access_token: ticketAccessToken,
       refresh_token: "ref",
       expires_in: 3600,
     });
@@ -537,7 +544,7 @@ describe("runAgentSetup", () => {
   it("emits fetch_failed when auto-resolving deployments throws", async () => {
     mockExchangeTicket.mockResolvedValue({
       status: "authenticated",
-      access_token: "tok",
+      access_token: ticketAccessToken,
       refresh_token: "ref",
       expires_in: 3600,
     });
@@ -559,7 +566,7 @@ describe("runAgentSetup", () => {
   it("emits no_deployments when the account has no deployments at all", async () => {
     mockExchangeTicket.mockResolvedValue({
       status: "authenticated",
-      access_token: "tok",
+      access_token: ticketAccessToken,
       refresh_token: "ref",
       expires_in: 3600,
     });
@@ -578,14 +585,15 @@ describe("runAgentSetup", () => {
   });
 
   it("reuses a deployment already locked in from a previous run", async () => {
-    mockLoadConfig.mockReturnValue({
-      ...baseCfg,
-      access_token: "tok",
-      refresh_token: "ref",
-      expires_at: Math.floor(Date.now() / 1000) + 3600,
-      deployment_id: "dep-locked",
-      deployment_name: "acme/locked",
-    });
+    mockLoadConfig.mockReturnValue(
+      makeBaseConfig({
+        access_token: ticketAccessToken,
+        refresh_token: "ref",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        deployment_id: "dep-locked",
+        deployment_name: "acme/locked",
+      }),
+    );
     mockClient.doRequestRaw.mockResolvedValue(new Response(null, { status: 200 }));
     mockClient.validateAPIKey.mockResolvedValue(false);
     mockClient.createAPIKey.mockResolvedValue({
@@ -612,15 +620,16 @@ describe("runAgentSetup", () => {
   });
 
   it("reuses a still-valid API key without minting a new one", async () => {
-    mockLoadConfig.mockReturnValue({
-      ...baseCfg,
-      access_token: "tok",
-      refresh_token: "ref",
-      expires_at: Math.floor(Date.now() / 1000) + 3600,
-      deployment_id: "dep-locked",
-      deployment_name: "acme/locked",
-      api_key: "sk_existing",
-    });
+    mockLoadConfig.mockReturnValue(
+      makeBaseConfig({
+        access_token: ticketAccessToken,
+        refresh_token: "ref",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        deployment_id: "dep-locked",
+        deployment_name: "acme/locked",
+        api_key: "sk_existing",
+      }),
+    );
     mockClient.doRequestRaw.mockResolvedValue(new Response(null, { status: 200 }));
     mockClient.validateAPIKey.mockResolvedValue(true);
 
@@ -635,14 +644,15 @@ describe("runAgentSetup", () => {
   });
 
   it("emits create_failed when minting the API key throws", async () => {
-    mockLoadConfig.mockReturnValue({
-      ...baseCfg,
-      access_token: "tok",
-      refresh_token: "ref",
-      expires_at: Math.floor(Date.now() / 1000) + 3600,
-      deployment_id: "dep-locked",
-      deployment_name: "acme/locked",
-    });
+    mockLoadConfig.mockReturnValue(
+      makeBaseConfig({
+        access_token: ticketAccessToken,
+        refresh_token: "ref",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        deployment_id: "dep-locked",
+        deployment_name: "acme/locked",
+      }),
+    );
     mockClient.doRequestRaw.mockResolvedValue(new Response(null, { status: 200 }));
     mockClient.validateAPIKey.mockResolvedValue(false);
     mockClient.createAPIKey.mockRejectedValue(new Error("key service down"));
@@ -661,15 +671,16 @@ describe("runAgentSetup", () => {
   });
 
   it("emits install_failed when the provider install throws", async () => {
-    mockLoadConfig.mockReturnValue({
-      ...baseCfg,
-      access_token: "tok",
-      refresh_token: "ref",
-      expires_at: Math.floor(Date.now() / 1000) + 3600,
-      deployment_id: "dep-locked",
-      deployment_name: "acme/locked",
-      api_key: "sk_existing",
-    });
+    mockLoadConfig.mockReturnValue(
+      makeBaseConfig({
+        access_token: ticketAccessToken,
+        refresh_token: "ref",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        deployment_id: "dep-locked",
+        deployment_name: "acme/locked",
+        api_key: "sk_existing",
+      }),
+    );
     mockClient.doRequestRaw.mockResolvedValue(new Response(null, { status: 200 }));
     mockClient.validateAPIKey.mockResolvedValue(true);
     (claudeProvider.install as ReturnType<typeof vi.fn>).mockImplementation(() => {
@@ -688,8 +699,11 @@ describe("runAgentSetup", () => {
     });
   });
 
-  it("redeems a ticket whose response omits tokens, falling back to defaults", async () => {
-    mockExchangeTicket.mockResolvedValue({ status: "authenticated" });
+  it("redeems a ticket whose response omits optional session fields", async () => {
+    mockExchangeTicket.mockResolvedValue({
+      status: "authenticated",
+      access_token: ticketAccessToken,
+    });
     mockClient.getDeployments.mockResolvedValue([
       {
         deployment_id: "dep-1",
@@ -713,14 +727,10 @@ describe("runAgentSetup", () => {
     const code = await runAgentSetup({ tool: "claude", loginTicket: "tkt-good" });
 
     expect(code).toBe(0);
-    const authSave = mockSaveConfig.mock.calls[0]?.[0] as {
-      access_token: string;
-      refresh_token: string;
-      expires_at: number;
-    };
-    expect(authSave.access_token).toBe("");
-    expect(authSave.refresh_token).toBe("");
-    expect(authSave.expires_at).toBeGreaterThan(Math.floor(Date.now() / 1000) + 3000);
+    const authSave = mockSaveConfig.mock.calls[0]?.[0];
+    expect(testSession(authSave).access_token).toBe(ticketAccessToken);
+    expect(testSession(authSave).refresh_token).toBe("");
+    expect(testSession(authSave).expires_at).toBeGreaterThan(Math.floor(Date.now() / 1000) + 3000);
   });
 
   it("emits ticket_exchange_failed when redeeming a ticket throws", async () => {
@@ -742,21 +752,23 @@ describe("runAgentSetup", () => {
 
   it("refreshes an expired token and continues when the raw probe is unauthorized", async () => {
     mockLoadConfig
-      .mockReturnValueOnce({
-        ...baseCfg,
-        access_token: "stale",
-        refresh_token: "ref",
-        expires_at: Math.floor(Date.now() / 1000) + 3600,
-      })
-      .mockReturnValue({
-        ...baseCfg,
-        access_token: "fresh",
-        refresh_token: "ref2",
-        expires_at: Math.floor(Date.now() / 1000) + 3600,
-        deployment_id: "dep-locked",
-        deployment_name: "acme/locked",
-        api_key: "sk_existing",
-      });
+      .mockReturnValueOnce(
+        makeBaseConfig({
+          access_token: "stale",
+          refresh_token: "ref",
+          expires_at: Math.floor(Date.now() / 1000) + 3600,
+        }),
+      )
+      .mockReturnValue(
+        makeBaseConfig({
+          access_token: "fresh",
+          refresh_token: "ref2",
+          expires_at: Math.floor(Date.now() / 1000) + 3600,
+          deployment_id: "dep-locked",
+          deployment_name: "acme/locked",
+          api_key: "sk_existing",
+        }),
+      );
     mockClient.doRequestRaw.mockResolvedValue(new Response(null, { status: 401 }));
     mockClient.refreshToken.mockResolvedValue(undefined);
     mockClient.validateAPIKey.mockResolvedValue(true);
@@ -771,12 +783,13 @@ describe("runAgentSetup", () => {
   });
 
   it("mints a ticket when the existing session is unauthorized and refresh fails", async () => {
-    mockLoadConfig.mockReturnValue({
-      ...baseCfg,
-      access_token: "stale",
-      refresh_token: "ref",
-      expires_at: Math.floor(Date.now() / 1000) + 3600,
-    });
+    mockLoadConfig.mockReturnValue(
+      makeBaseConfig({
+        access_token: "stale",
+        refresh_token: "ref",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+      }),
+    );
     mockClient.doRequestRaw.mockResolvedValue(new Response(null, { status: 401 }));
     mockClient.refreshToken.mockRejectedValue(new Error("refresh failed"));
     mockMintTicket.mockResolvedValue({

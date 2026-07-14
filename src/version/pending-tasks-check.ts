@@ -148,7 +148,7 @@ export function checkForReadyTasks(): void {
     // 2. Fire background polls for stale, in-flight tasks.
     const cfg = loadConfig();
     const backendURL = getBackendURL();
-    const apiKey = cfg.api_key;
+    const apiKey = cfg.active_account?.target?.api_key;
     if (backendURL && apiKey) {
       const now = Date.now();
       // Only in-flight tasks remain here — finished ones were displayed and

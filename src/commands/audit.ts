@@ -63,17 +63,17 @@ interface AuditFindings {
   items: AuditItem[];
 }
 
-function requireConfig(): Config & { api_key: string; org_id: string } {
+function requireConfig(): Config {
   const cfg = requireLoginConfig();
-  if (!cfg.api_key) {
+  if (!cfg.active_account?.target?.api_key) {
     console.error(pc.red("API key not configured. Run 'dosu setup' first."));
     process.exit(1);
   }
-  if (!cfg.org_id) {
+  if (!cfg.active_account?.target?.org_id) {
     console.error(pc.red("Missing org config. Run 'dosu setup' to reconfigure."));
     process.exit(1);
   }
-  return cfg as Config & { api_key: string; org_id: string };
+  return cfg;
 }
 
 function requireBackendURL(): string {
@@ -178,7 +178,7 @@ async function waitForIndexed(
  * data_source_id on success.
  */
 async function ensureSyncedRepo(
-  cfg: Config & { org_id: string },
+  cfg: Config,
   client: TypedClient,
   detected: DetectedRepo,
   explicitDataSourceId: string | undefined,
@@ -188,7 +188,9 @@ async function ensureSyncedRepo(
     return explicitDataSourceId;
   }
 
-  let sources = await listDataSources(client, cfg.org_id);
+  const orgID = cfg.active_account?.target?.org_id;
+  if (!orgID) throw new Error("missing org config");
+  let sources = await listDataSources(client, orgID);
   let match = findMatch(sources, detected);
 
   if (!match) {
@@ -214,7 +216,7 @@ async function ensureSyncedRepo(
       console.error(pc.red(`Could not connect ${detected.slug}. Run 'dosu setup' and retry.`));
       process.exit(1);
     }
-    sources = await listDataSources(client, cfg.org_id);
+    sources = await listDataSources(client, orgID);
     match = findMatch(sources, detected);
     if (!match) {
       console.error(pc.red(`Could not find ${detected.slug} after connecting. Retry shortly.`));
@@ -223,7 +225,7 @@ async function ensureSyncedRepo(
   }
 
   if (match.is_indexed !== true) {
-    const indexed = await waitForIndexed(client, cfg.org_id, detected, nonInteractive);
+    const indexed = await waitForIndexed(client, orgID, detected, nonInteractive);
     if (!indexed) {
       if (nonInteractive) {
         console.error(pc.red(`${detected.slug} is still indexing. Re-run once indexing finishes.`));

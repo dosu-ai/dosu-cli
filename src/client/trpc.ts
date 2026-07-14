@@ -38,7 +38,7 @@ export function createTypedClient<TClient extends object = TypedClient>(config: 
   if (!webAppURL) {
     throw new Error("Web app URL not configured");
   }
-  if (!config.access_token) {
+  if (!config.active_account?.session.access_token) {
     throw new Error("Not authenticated. Run 'dosu login' first.");
   }
 
@@ -59,7 +59,7 @@ export function createTypedClient<TClient extends object = TypedClient>(config: 
             }
           }
           return {
-            "Supabase-Access-Token": config.access_token,
+            "Supabase-Access-Token": config.active_account?.session.access_token ?? "",
             "x-dosu-cli-contract": CLI_CONTRACT_HASH,
           };
         },
@@ -77,7 +77,7 @@ export function createTypedClient<TClient extends object = TypedClient>(config: 
               ...options,
               headers: {
                 ...(options?.headers as Record<string, string>),
-                "Supabase-Access-Token": config.access_token,
+                "Supabase-Access-Token": config.active_account?.session.access_token ?? "",
                 "x-dosu-cli-contract": CLI_CONTRACT_HASH,
               },
             });

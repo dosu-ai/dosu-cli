@@ -5,7 +5,7 @@
 import { Command } from "commander";
 import pc from "picocolors";
 import { createTypedClient } from "../client/trpc";
-import { saveConfig } from "../config/config";
+import { saveConfig, updateTarget } from "../config/config";
 import { requireLoginConfig } from "./auth";
 import { formatDate, printInfo, printResult, printTable } from "./output";
 
@@ -24,8 +24,8 @@ export function deploymentsCommand(): Command {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
 
-      const deployments = cfg.org_id
-        ? await client.workspaces.listForOrg.query(cfg.org_id)
+      const deployments = cfg.active_account?.target?.org_id
+        ? await client.workspaces.listForOrg.query(cfg.active_account?.target?.org_id)
         : await client.workspaces.listAll.query({});
 
       if (opts.json) {
@@ -51,8 +51,10 @@ export function deploymentsCommand(): Command {
         { rawData: deployments },
       );
 
-      if (cfg.deployment_id) {
-        console.log(`\n${pc.dim(`Current: ${cfg.deployment_name ?? cfg.deployment_id}`)}`);
+      if (cfg.active_account?.target?.deployment_id) {
+        console.log(
+          `\n${pc.dim(`Current: ${cfg.active_account?.target?.deployment_name ?? cfg.active_account?.target?.deployment_id}`)}`,
+        );
       }
     });
 
@@ -63,7 +65,7 @@ export function deploymentsCommand(): Command {
     .action(async (opts: { json?: boolean }) => {
       const cfg = requireConfig();
 
-      if (!cfg.deployment_id) {
+      if (!cfg.active_account?.target?.deployment_id) {
         console.error(
           pc.red("No deployment selected. Run 'dosu setup' or 'dosu deployments switch'."),
         );
@@ -71,10 +73,12 @@ export function deploymentsCommand(): Command {
       }
 
       const client = createTypedClient(cfg);
-      const deployment = await client.workspaces.get.query(cfg.deployment_id);
+      const deployment = await client.workspaces.get.query(
+        cfg.active_account?.target?.deployment_id,
+      );
 
       if (!deployment) {
-        console.error(pc.red(`Deployment not found: ${cfg.deployment_id}`));
+        console.error(pc.red(`Deployment not found: ${cfg.active_account?.target?.deployment_id}`));
         process.exit(1);
       }
 
@@ -116,10 +120,12 @@ export function deploymentsCommand(): Command {
         process.exit(1);
       }
 
-      cfg.deployment_id = deployment.deployment_id;
-      cfg.deployment_name = deployment.name;
-      cfg.org_id = deployment.org_id;
-      cfg.space_id = deployment.space_id;
+      updateTarget(cfg, {
+        deployment_id: deployment.deployment_id,
+        deployment_name: deployment.name,
+        org_id: deployment.org_id,
+        space_id: deployment.space_id,
+      });
       saveConfig(cfg);
 
       if (opts.json) {

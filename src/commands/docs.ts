@@ -15,7 +15,7 @@ import { formatDate, printInfo, printResult, printTable, truncate } from "./outp
 
 function requireConfig() {
   const cfg = requireLoginConfig();
-  if (!cfg.space_id) {
+  if (!cfg.active_account?.target?.space_id) {
     console.error(pc.red("Missing space config. Run 'dosu setup' to reconfigure."));
     process.exit(1);
   }
@@ -155,7 +155,7 @@ export function docsCommand(): Command {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const ksId = await getKnowledgeStoreId(client, cfg.space_id!);
+      const ksId = await getKnowledgeStoreId(client, cfg.active_account!.target!.space_id!);
 
       const result = await client.page.listWithTags.query({
         knowledge_store_id: ksId,
@@ -234,7 +234,7 @@ export function docsCommand(): Command {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const ksId = await getKnowledgeStoreId(client, cfg.space_id!);
+      const ksId = await getKnowledgeStoreId(client, cfg.active_account!.target!.space_id!);
 
       const body = readBody(opts);
       const result = await client.page.create.mutate({
@@ -267,7 +267,7 @@ export function docsCommand(): Command {
         const cfg = requireConfig();
         const client = createTypedClient(cfg);
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-        const ksId = await getKnowledgeStoreId(client, cfg.space_id!);
+        const ksId = await getKnowledgeStoreId(client, cfg.active_account!.target!.space_id!);
 
         const body = readBody(opts);
         const result = await client.page.update.mutate({
@@ -387,7 +387,7 @@ export function docsCommand(): Command {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const ksId = await getKnowledgeStoreId(client, cfg.space_id!);
+      const ksId = await getKnowledgeStoreId(client, cfg.active_account!.target!.space_id!);
 
       const result = await backendPost("/doc/generate", requireAPIKey(cfg), {
         knowledge_store_id: ksId,
@@ -430,7 +430,7 @@ export function docsCommand(): Command {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const ksId = await getKnowledgeStoreId(client, cfg.space_id!);
+      const ksId = await getKnowledgeStoreId(client, cfg.active_account!.target!.space_id!);
       const fileIds = opts.files.split(",").map((id) => id.trim());
 
       // biome-ignore lint/suspicious/noExplicitAny: dynamic platform dispatch
@@ -458,7 +458,7 @@ export function docsCommand(): Command {
         const result = await fn({
           knowledge_store_id: ksId,
           // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-          space_id: cfg.space_id!,
+          space_id: cfg.active_account!.target!.space_id!,
           [idField]: fileIds,
         });
 

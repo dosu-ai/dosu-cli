@@ -45,6 +45,7 @@ vi.mock("../debug/logger", () => ({
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
+import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { logger } from "../debug/logger";
 import { docsCommand } from "./docs";
 
@@ -53,7 +54,7 @@ let errorSpy: ReturnType<typeof vi.spyOn>;
 // biome-ignore lint/suspicious/noExplicitAny: process.exit mock type mismatch
 let exitSpy: any;
 
-const validConfig = {
+const validFlatConfig: FlatTestConfig = {
   access_token: "t",
   refresh_token: "r",
   expires_at: 0,
@@ -61,6 +62,9 @@ const validConfig = {
   space_id: "sp1",
   org_id: "org1",
 };
+const makeValidConfig = (overrides: Partial<FlatTestConfig> = {}) =>
+  makeTestConfig({ ...validFlatConfig, ...overrides });
+const validConfig = makeValidConfig();
 
 function allOutput(): string {
   return logSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
@@ -1279,12 +1283,12 @@ describe("backendPost", () => {
 
 describe("requireConfig", () => {
   it("exits when access_token is missing", async () => {
-    mockLoadConfig.mockReturnValue({ ...validConfig, access_token: "" });
+    mockLoadConfig.mockReturnValue(makeValidConfig({ access_token: "" }));
     await expect(run("list")).rejects.toThrow("exit");
   });
 
   it("exits when space_id is missing", async () => {
-    mockLoadConfig.mockReturnValue({ ...validConfig, space_id: undefined });
+    mockLoadConfig.mockReturnValue(makeValidConfig({ space_id: undefined }));
     await expect(run("list")).rejects.toThrow("exit");
   });
 });

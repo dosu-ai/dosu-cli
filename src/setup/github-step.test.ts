@@ -94,6 +94,7 @@ vi.mock("../client/trpc", () => ({
 
 import * as p from "@clack/prompts";
 import type { Config } from "../config/config";
+import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { detectGitRepo, stepConnectGitHubRepo, verifyDataSourcesPersist } from "./github-step";
 
 // Skip the post-connect verify-poll budget so each test resolves in real
@@ -109,8 +110,8 @@ const NO_WAIT_REFRESH = {
   refresh: { timeoutMs: 0, intervalMs: 0 },
 } as const;
 
-function makeCfg(overrides: Partial<Config> = {}): Config {
-  return {
+function makeCfg(overrides: Partial<FlatTestConfig> = {}): Config {
+  return makeTestConfig({
     access_token: "tok",
     refresh_token: "ref",
     expires_at: Math.floor(Date.now() / 1000) + 3600,
@@ -120,7 +121,7 @@ function makeCfg(overrides: Partial<Config> = {}): Config {
     org_id: "org-1",
     space_id: "space-1",
     ...overrides,
-  };
+  });
 }
 
 describe("detectGitRepo", () => {
