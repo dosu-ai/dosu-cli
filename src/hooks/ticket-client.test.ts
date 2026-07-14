@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../config/config";
+import { makeTestConfig } from "../config/config.test-utils";
 
 const postWithApiKey = vi.fn();
 const getWithApiKey = vi.fn();
@@ -17,7 +18,7 @@ import {
   TicketHttpError,
 } from "./ticket-client";
 
-const cfg = { access_token: "at", refresh_token: "rt", expires_at: 0 } as Config;
+const cfg: Config = makeTestConfig({ access_token: "at", refresh_token: "rt", expires_at: 0 });
 
 function jsonResponse(status: number, body: unknown) {
   return { status, json: async () => body };

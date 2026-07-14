@@ -223,19 +223,19 @@ export function reviewCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      if (!cfg.space_id) {
+      if (!cfg.active_account?.target?.space_id) {
         console.error(pc.red("Missing space config. Run 'dosu setup' to reconfigure."));
         process.exit(1);
       }
       const client = createTypedClient(cfg);
-      const ksId = await getKnowledgeStoreId(client, cfg.space_id);
+      const ksId = await getKnowledgeStoreId(client, cfg.active_account?.target?.space_id);
 
       // Docs are knowledge-store-scoped; drafts are deployment-scoped. Passing
       // deploymentId merges draft replies into the list (ENG-524) — omit it and
       // the server returns doc changes only.
       const result: ReviewListResult = await client.review.listPending.query({
         knowledgeStoreId: ksId,
-        deploymentId: cfg.deployment_id,
+        deploymentId: cfg.active_account?.target?.deployment_id,
       });
       const { items, truncated, total } = result;
 

@@ -27,6 +27,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { type Config, loadConfig, saveConfig } from "../config/config";
+import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { Client } from "./client";
 
 const mockFetch = vi.fn();
@@ -68,13 +69,17 @@ class FakeGoTrue {
   };
 }
 
-function makeConfig(overrides: Partial<Config> = {}): Config {
-  return {
+function makeConfig(overrides: Partial<FlatTestConfig> = {}): Config {
+  return makeTestConfig({
     access_token: "at-stale",
     refresh_token: "rt-stale",
     expires_at: Math.floor(Date.now() / 1000) + 3600,
     ...overrides,
-  };
+  });
+}
+
+function makeAccountConfig(userID: string, overrides: Partial<FlatTestConfig> = {}): Config {
+  return makeConfig({ ...overrides, user_id: userID });
 }
 
 describe("refresh self-healing", () => {
@@ -122,8 +127,8 @@ describe("refresh self-healing", () => {
 
     expect(gotrue.presented).toEqual(["rt-disk"]); // never "rt-stale"
     expect(gotrue.rejections).toBe(0);
-    expect(cfg.refresh_token).toBe("rt-1");
-    expect(loadConfig().refresh_token).toBe("rt-1"); // rotation persisted
+    expect(cfg.active_account?.session.refresh_token).toBe("rt-1");
+    expect(loadConfig().active_account?.session.refresh_token).toBe("rt-1"); // rotation persisted
   });
 
   it("retries once with the on-disk token when a sibling rotates mid-flight", async () => {
@@ -147,8 +152,8 @@ describe("refresh self-healing", () => {
     await new Client(cfg).refreshToken();
 
     expect(gotrue.presented).toEqual(["rt-a", "rt-b"]); // failed once, healed
-    expect(cfg.refresh_token).toBe("rt-1");
-    expect(loadConfig().refresh_token).toBe("rt-1");
+    expect(cfg.active_account?.session.refresh_token).toBe("rt-1");
+    expect(loadConfig().active_account?.session.refresh_token).toBe("rt-1");
   });
 
   it("two clients sharing one config file relay the rotation instead of killing it", async () => {
@@ -167,7 +172,7 @@ describe("refresh self-healing", () => {
 
     expect(gotrue.presented).toEqual(["rt-0", "rt-1"]);
     expect(gotrue.rejections).toBe(0); // a replayed token would kill the session
-    expect(loadConfig().refresh_token).toBe("rt-2");
+    expect(loadConfig().active_account?.session.refresh_token).toBe("rt-2");
 
     // The config dir contains exactly the config file — no stray tmp files.
     expect(readdirSync(join(tempDir, "dosu-cli"))).toEqual(["config.json"]);
@@ -182,5 +187,40 @@ describe("refresh self-healing", () => {
     await expect(new Client(cfg).refreshToken()).rejects.toThrow("refresh failed with status 400");
     // One attempt only — disk has nothing newer to retry with.
     expect(gotrue.presented).toEqual(["rt-dead"]);
+  });
+
+  it("does not adopt tokens from a different account on disk", async () => {
+    saveConfig(makeAccountConfig("account-b", { refresh_token: "rt-b" }));
+    const cfg = makeAccountConfig("account-a", { refresh_token: "rt-a" });
+
+    await expect(new Client(cfg).refreshToken()).rejects.toThrow(
+      "authenticated account changed while this command was running",
+    );
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(loadConfig().active_account?.user_id).toBe("account-b");
+  });
+
+  it("does not overwrite a different account that logs in during refresh", async () => {
+    saveConfig(makeAccountConfig("account-a", { refresh_token: "rt-a" }));
+    const cfg = loadConfig();
+    mockFetch.mockImplementation(async () => {
+      saveConfig(makeAccountConfig("account-b", { refresh_token: "rt-b" }));
+      return new Response(
+        JSON.stringify({
+          access_token: "at-a-refreshed",
+          refresh_token: "rt-a-refreshed",
+          expires_in: 3600,
+        }),
+        { status: 200 },
+      );
+    });
+
+    await expect(new Client(cfg).refreshToken()).rejects.toThrow(
+      "authenticated account changed while this command was running",
+    );
+
+    expect(loadConfig().active_account?.user_id).toBe("account-b");
+    expect(loadConfig().active_account?.session.refresh_token).toBe("rt-b");
   });
 });

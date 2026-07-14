@@ -3,7 +3,13 @@
  */
 
 import type { Config } from "../config/config";
-import { isAuthenticated, isTokenExpired, loadConfig, saveConfig } from "../config/config";
+import {
+  getConfigUserID,
+  isAuthenticated,
+  isTokenExpired,
+  loadConfig,
+  saveConfig,
+} from "../config/config";
 import { getBackendURL, getSupabaseAnonKey, getSupabaseURL } from "../config/constants";
 
 export class SessionExpiredError extends Error {
@@ -84,7 +90,7 @@ export class Client {
     const url = this.baseURL + path;
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
-      "Supabase-Access-Token": this.config.access_token,
+      "Supabase-Access-Token": this.config.active_account?.session.access_token ?? "",
     };
 
     const options: RequestInit = { method, headers };
@@ -135,13 +141,13 @@ export class Client {
   }
 
   private async apiKeyRequest(method: string, path: string, body?: unknown): Promise<Response> {
-    if (!this.config.api_key) {
+    if (!this.config.active_account?.target?.api_key) {
       throw new Error("no API key available");
     }
     const url = this.baseURL + path;
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
-      "X-Dosu-API-Key": this.config.api_key,
+      "X-Dosu-API-Key": this.config.active_account?.target?.api_key,
     };
 
     const options: RequestInit = { method, headers };
@@ -173,7 +179,7 @@ export class Client {
    */
   async refreshToken(): Promise<void> {
     this.adoptNewerDiskTokens();
-    if (!this.config.refresh_token) {
+    if (!this.config.active_account?.session.refresh_token) {
       throw new Error("no refresh token available");
     }
 
@@ -196,16 +202,26 @@ export class Client {
    */
   private adoptNewerDiskTokens(): boolean {
     const disk = loadConfig();
-    if (!disk.refresh_token || disk.refresh_token === this.config.refresh_token) {
+    this.assertSameActiveAccount(disk);
+    const diskSession = disk.active_account?.session;
+    const memorySession = this.config.active_account?.session;
+    if (
+      !diskSession?.refresh_token ||
+      !memorySession ||
+      diskSession.refresh_token === memorySession.refresh_token
+    ) {
       return false;
     }
-    this.config.access_token = disk.access_token;
-    this.config.refresh_token = disk.refresh_token;
-    this.config.expires_at = disk.expires_at;
+    memorySession.access_token = diskSession.access_token;
+    memorySession.refresh_token = diskSession.refresh_token;
+    memorySession.expires_at = diskSession.expires_at;
     return true;
   }
 
   private async refreshTokenOnce(): Promise<void> {
+    const session = this.config.active_account?.session;
+    if (!session?.refresh_token) throw new Error("no refresh token available");
+
     const supabaseURL = getSupabaseURL();
     const endpoint = `${supabaseURL}/auth/v1/token?grant_type=refresh_token`;
 
@@ -215,7 +231,7 @@ export class Client {
         "Content-Type": "application/json",
         apikey: getSupabaseAnonKey(),
       },
-      body: JSON.stringify({ refresh_token: this.config.refresh_token }),
+      body: JSON.stringify({ refresh_token: session.refresh_token }),
     });
 
     if (resp.status !== 200) {
@@ -228,11 +244,24 @@ export class Client {
       expires_in: number;
     };
 
-    this.config.access_token = data.access_token;
-    this.config.refresh_token = data.refresh_token;
-    this.config.expires_at = Math.floor(Date.now() / 1000) + data.expires_in;
+    // A browser login in another process may have switched accounts while the
+    // refresh request was in flight. Never let this stale client overwrite the
+    // new account aggregate with tokens from the previous account.
+    this.assertSameActiveAccount(loadConfig());
+
+    session.access_token = data.access_token;
+    session.refresh_token = data.refresh_token;
+    session.expires_at = Math.floor(Date.now() / 1000) + data.expires_in;
 
     saveConfig(this.config);
+  }
+
+  private assertSameActiveAccount(disk: Config): void {
+    const memoryUserID = getConfigUserID(this.config);
+    const diskUserID = getConfigUserID(disk);
+    if (memoryUserID && diskUserID && memoryUserID !== diskUserID) {
+      throw new Error("authenticated account changed while this command was running; retry it");
+    }
   }
 
   async getDeployments(): Promise<Deployment[]> {

@@ -19,11 +19,13 @@ vi.mock("../client/trpc", () => ({
 
 const mockLoadConfig = vi.fn();
 const mockSaveConfig = vi.fn();
-vi.mock("../config/config", () => ({
+vi.mock("../config/config", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config")>()),
   loadConfig: (...args: unknown[]) => mockLoadConfig(...args),
   saveConfig: (...args: unknown[]) => mockSaveConfig(...args),
 }));
 
+import { type FlatTestConfig, makeTestConfig, testTarget } from "../config/config.test-utils";
 import { deploymentsCommand } from "./deployments";
 
 let logSpy: ReturnType<typeof vi.spyOn>;
@@ -31,7 +33,7 @@ let errorSpy: ReturnType<typeof vi.spyOn>;
 // biome-ignore lint/suspicious/noExplicitAny: process.exit mock type mismatch
 let exitSpy: any;
 
-const validConfig = {
+const validFlatConfig: FlatTestConfig = {
   access_token: "t",
   refresh_token: "r",
   expires_at: 0,
@@ -40,6 +42,9 @@ const validConfig = {
   deployment_id: "dep1",
   deployment_name: "My Deploy",
 };
+const makeValidConfig = (overrides: Partial<FlatTestConfig> = {}) =>
+  makeTestConfig({ ...validFlatConfig, ...overrides });
+const validConfig = makeValidConfig();
 
 function allOutput(): string {
   return logSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
@@ -77,7 +82,7 @@ describe("deployments list", () => {
   });
 
   it("calls workspaces.listAll when org_id is missing", async () => {
-    mockLoadConfig.mockReturnValue({ ...validConfig, org_id: undefined });
+    mockLoadConfig.mockReturnValue(makeValidConfig({ org_id: undefined }));
     mockQuery.mockResolvedValueOnce([]);
     await run("list");
     expect(mockQuery).toHaveBeenCalledWith("workspaces.listAll", {});
@@ -145,11 +150,12 @@ describe("deployments list", () => {
   });
 
   it("shows deployment_id when deployment_name is missing", async () => {
-    mockLoadConfig.mockReturnValue({
-      ...validConfig,
-      deployment_name: undefined,
-      deployment_id: "dep1",
-    });
+    mockLoadConfig.mockReturnValue(
+      makeValidConfig({
+        deployment_name: undefined,
+        deployment_id: "dep1",
+      }),
+    );
     mockQuery.mockResolvedValueOnce([
       { deployment_id: "d1", name: "Test", enabled: true, org_id: "org1" },
     ]);
@@ -173,7 +179,7 @@ describe("deployments info", () => {
   });
 
   it("exits when no deployment_id in config", async () => {
-    mockLoadConfig.mockReturnValue({ ...validConfig, deployment_id: undefined });
+    mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: undefined }));
     await expect(run("info")).rejects.toThrow("exit");
   });
 
@@ -269,11 +275,11 @@ describe("deployments switch", () => {
     mockQuery.mockResolvedValueOnce(deployment);
     await run("switch", "new-dep");
 
-    const saved = mockSaveConfig.mock.calls[0][0];
-    expect(saved.deployment_id).toBe("new-dep");
-    expect(saved.deployment_name).toBe("New Deploy");
-    expect(saved.org_id).toBe("org2");
-    expect(saved.space_id).toBe("sp2");
+    const savedTarget = testTarget(mockSaveConfig.mock.calls[0][0]);
+    expect(savedTarget.deployment_id).toBe("new-dep");
+    expect(savedTarget.deployment_name).toBe("New Deploy");
+    expect(savedTarget.org_id).toBe("org2");
+    expect(savedTarget.space_id).toBe("sp2");
   });
 
   it("outputs JSON with --json", async () => {
@@ -303,7 +309,7 @@ describe("deployments switch", () => {
 
 describe("requireConfig", () => {
   it("exits when access_token is missing", async () => {
-    mockLoadConfig.mockReturnValue({ ...validConfig, access_token: "" });
+    mockLoadConfig.mockReturnValue(makeValidConfig({ access_token: "" }));
     await expect(run("list")).rejects.toThrow("exit");
   });
 });

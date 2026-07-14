@@ -9,12 +9,14 @@ import { Client, type Deployment, type Org, SessionExpiredError } from "../clien
 import type { TypedClient } from "../client/trpc";
 import { installSkill } from "../commands/skill";
 import {
+  bindAccountIdentity,
   type Config,
   loadConfig,
   MODE_OSS,
   replaceLoginSession,
   type SetupMode,
   saveConfig,
+  updateTarget,
 } from "../config/config";
 import { logger } from "../debug/logger";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
@@ -169,7 +171,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
       });
       return;
     }
-  } else if (!cfg.deployment_id || opts.deploymentID) {
+  } else if (!cfg.active_account?.target?.deployment_id || opts.deploymentID) {
     const ok = await resolveDeployment(apiClient, cfg, opts);
     if (!ok) {
       await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
@@ -188,7 +190,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     });
     return;
   }
-  cfg.api_key = apiKey;
+  updateTarget(cfg, { api_key: apiKey });
   saveConfig(cfg);
 
   // One-shot confirm: MCP + skill are always listed (user picks what to
@@ -286,10 +288,12 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
  * clear `cfg.mode` (Cloud paths do; the OSS auto-pick path doesn't).
  */
 function applyDeployment(cfg: Config, d: Deployment): void {
-  cfg.deployment_id = d.deployment_id;
-  cfg.deployment_name = d.name;
-  cfg.org_id = d.org_id;
-  cfg.space_id = d.space_id;
+  updateTarget(cfg, {
+    deployment_id: d.deployment_id,
+    deployment_name: d.name,
+    org_id: d.org_id,
+    space_id: d.space_id,
+  });
 }
 
 /**
@@ -406,7 +410,7 @@ async function stepAuthenticate(
   logger.info("setup", "Step: authenticate");
   const cfg = existingCfg ?? loadConfig();
 
-  if (cfg.access_token) {
+  if (cfg.active_account?.session.access_token) {
     const s = p.spinner();
     s.start("Verifying session...");
     try {
@@ -553,8 +557,8 @@ async function stepWebOnboarding(
       return false;
     }
     // The wizard may hand back a session for a different browser account.
-    // Replace the session and discard every deployment-scoped value before
-    // resolving the newly authenticated account's onboarding target.
+    // Replace the account aggregate: same-account auth keeps its target, while
+    // an account change drops the old target before resolving the new one.
     replaceLoginSession(cfg, {
       access_token: result.token.access_token,
       refresh_token: result.token.refresh_token,
@@ -590,6 +594,8 @@ async function resolveCloudSetupContext(cfg: Config): Promise<CloudSetupContext 
       p.log.error("Could not load your profile.");
       return null;
     }
+    bindAccountIdentity(cfg, profile.user_id);
+    saveConfig(cfg);
 
     // First-run detection is driven purely by `finished_onboarding`. The old
     // `cli_onboarding_enabled` flag gated a terminal-local onboarding path
@@ -634,7 +640,12 @@ async function resolveOnboardingTargetOrg(trpc: TypedClient): Promise<OwnedOrg |
 async function resolveCurrentOnboardingTargetOrg(cfg: Config): Promise<OwnedOrg | null> {
   try {
     const { createTypedClient } = await import("../client/trpc");
-    return await resolveOnboardingTargetOrg(createTypedClient(cfg));
+    const trpc = createTypedClient(cfg);
+    const profile: CliOnboardingProfile | null = await trpc.user.getCliOnboardingContext.query();
+    if (!profile?.user_id) return null;
+    bindAccountIdentity(cfg, profile.user_id);
+    saveConfig(cfg);
+    return await resolveOnboardingTargetOrg(trpc);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error("setup", `Failed to resolve post-onboarding organization: ${msg}`);
@@ -806,25 +817,25 @@ async function stepSelectDeployment(apiClient: Client, org: Org): Promise<Deploy
 }
 
 async function stepMintAPIKey(apiClient: Client, cfg: Config): Promise<string | null> {
-  if (!cfg.deployment_id) {
+  const target = cfg.active_account?.target;
+  const deploymentID = target?.deployment_id;
+  if (!deploymentID) {
     p.log.error("No MCP available for API key creation");
     return null;
   }
 
-  if (cfg.api_key) {
-    // biome-ignore lint/style/noNonNullAssertion: checked above
-    const valid = await apiClient.validateAPIKey(cfg.api_key, cfg.deployment_id!);
+  if (target.api_key) {
+    const valid = await apiClient.validateAPIKey(target.api_key, deploymentID);
     logger.debug("setup", `Existing API key valid=${valid}`);
     if (valid) {
       p.log.success(`API key\n${dim("using existing")}`);
-      return cfg.api_key;
+      return target.api_key;
     }
     p.log.warn("Existing API key is invalid, creating a new one...");
   }
 
   try {
-    // biome-ignore lint/style/noNonNullAssertion: checked above
-    const resp = await apiClient.createAPIKey(cfg.deployment_id!, "dosu-cli");
+    const resp = await apiClient.createAPIKey(deploymentID, "dosu-cli");
     logger.info("setup", "API key created");
     p.log.success(`API key\n${dim("created")}`);
     return resp.api_key;

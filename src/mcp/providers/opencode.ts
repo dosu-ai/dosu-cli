@@ -14,10 +14,10 @@ export const OpenCodeProvider = () =>
     buildServer: (cfg) => ({
       type: "remote",
       // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
-      url: mcpURL(cfg.deployment_id!),
+      url: mcpURL(cfg.active_account!.target!.deployment_id!),
       enabled: true,
       // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
-      headers: mcpHeaders(cfg.api_key!),
+      headers: mcpHeaders(cfg.active_account!.target!.api_key!),
     }),
     localConfigPath: (cwd) => join(cwd, "opencode.json"),
   });

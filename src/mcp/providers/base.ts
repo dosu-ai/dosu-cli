@@ -35,15 +35,15 @@ export function createJSONProvider(opts: BaseProviderConfig): SetupProvider {
   const defaultBuildServer = (cfg: Config): Record<string, any> => ({
     type: "http",
     // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
-    url: mcpURL(cfg.deployment_id!),
-    headers: mcpHeaders(cfg.api_key),
+    url: mcpURL(cfg.active_account!.target!.deployment_id!),
+    headers: mcpHeaders(cfg.active_account?.target?.api_key),
   });
 
   // biome-ignore lint/suspicious/noExplicitAny: server entries are arbitrary JSON
   const defaultBuildOSSServer = (cfg: Config): Record<string, any> => ({
     type: "http",
     url: mcpBaseURL(),
-    headers: mcpHeaders(cfg.api_key),
+    headers: mcpHeaders(cfg.active_account?.target?.api_key),
   });
 
   const buildServer = opts.buildServer ?? defaultBuildServer;
@@ -59,7 +59,8 @@ export function createJSONProvider(opts: BaseProviderConfig): SetupProvider {
     isConfigured: () => isJSONKeyConfigured(expandHome(opts.globalPath), opts.topKey),
 
     install(cfg: Config, global: boolean): void {
-      if (cfg.mode !== MODE_OSS && !cfg.deployment_id) throw new Error("deployment ID is required");
+      if (cfg.mode !== MODE_OSS && !cfg.active_account?.target?.deployment_id)
+        throw new Error("deployment ID is required");
       let configPath: string;
       if (global) {
         configPath = expandHome(opts.globalPath);

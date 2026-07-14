@@ -13,7 +13,7 @@ import { printResult, printTable } from "./output";
 
 function requireConfig() {
   const cfg = requireLoginConfig();
-  if (!cfg.space_id) {
+  if (!cfg.active_account?.target?.space_id) {
     console.error(pc.red("Missing space config. Run 'dosu setup' to reconfigure."));
     process.exit(1);
   }
@@ -45,7 +45,7 @@ export function topicsCommand(): Command {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const ksId = await getKnowledgeStoreId(client, cfg.space_id!);
+      const ksId = await getKnowledgeStoreId(client, cfg.active_account!.target!.space_id!);
 
       const topics = await client.topic.listTopicsByKnowledgeStore.query({
         knowledge_store_id: ksId,
@@ -83,7 +83,7 @@ export function topicsCommand(): Command {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const ksId = await getKnowledgeStoreId(client, cfg.space_id!);
+      const ksId = await getKnowledgeStoreId(client, cfg.active_account!.target!.space_id!);
 
       const result = await client.topic.getPagesByTopicId.query({
         knowledge_store_id: ksId,

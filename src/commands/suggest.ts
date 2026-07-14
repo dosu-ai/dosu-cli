@@ -10,7 +10,7 @@ import { printResult, printTable } from "./output";
 
 function requireConfig() {
   const cfg = requireLoginConfig();
-  if (!cfg.space_id) {
+  if (!cfg.active_account?.target?.space_id) {
     console.error(pc.red("Missing space config. Run 'dosu setup' to reconfigure."));
     process.exit(1);
   }
@@ -39,7 +39,7 @@ export function suggestCommand(): Command {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const ksId = await getKnowledgeStoreId(client, cfg.space_id!);
+      const ksId = await getKnowledgeStoreId(client, cfg.active_account!.target!.space_id!);
 
       const suggestions = await client.suggestedDoc.listForKnowledgeStore.query({
         knowledgeStoreId: ksId,
@@ -73,16 +73,16 @@ export function suggestCommand(): Command {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const ksId = await getKnowledgeStoreId(client, cfg.space_id!);
+      const ksId = await getKnowledgeStoreId(client, cfg.active_account!.target!.space_id!);
 
-      if (!cfg.org_id) {
+      if (!cfg.active_account?.target?.org_id) {
         console.error(pc.red("Missing org config. Run 'dosu setup' to reconfigure."));
         process.exit(1);
       }
 
       // Get data source IDs
       const dataSources = await client.dataSource.list.query({
-        org_id: cfg.org_id,
+        org_id: cfg.active_account?.target?.org_id,
         excluded_provider_slugs: [],
       });
       const dataSourceIds = dataSources
