@@ -56,7 +56,7 @@ import { startOAuthFlow } from "../auth/flow";
 import { Client } from "../client/client";
 import { executeInsights } from "../commands/insights";
 import type { Config } from "../config/config";
-import { loadConfig, saveConfig, updateTarget } from "../config/config";
+import { emptyConfig, loadConfig, saveConfig, updateTarget } from "../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { runSetup } from "../setup/flow";
 import { handleLogout, runTUI } from "./tui";
@@ -468,5 +468,21 @@ describe("runTUI", () => {
 
     expect(mockRunSetup).toHaveBeenCalled();
     expect(mockOutro).toHaveBeenCalledWith("Goodbye!");
+  });
+
+  it("setup reload removes account state that was cleared on disk", async () => {
+    writeRealConfig(
+      makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
+    );
+    mockIsCancel.mockReturnValue(false);
+    mockRunSetup.mockImplementation(async () => {
+      writeRealConfig(emptyConfig());
+    });
+    mockSelect.mockResolvedValueOnce("setup").mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    const nextOptions = mockSelect.mock.calls[1]?.[0]?.options as Array<{ value: string }>;
+    expect(nextOptions.map((option) => option.value)).not.toContain("insights");
   });
 });

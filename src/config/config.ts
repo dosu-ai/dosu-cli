@@ -26,18 +26,30 @@ export {
   type SetupMode,
 } from "./schema";
 
+export function getConfigUserID(cfg: Config): string | undefined {
+  return (
+    cfg.active_account?.user_id ??
+    getAccessTokenUserID(cfg.active_account?.session.access_token ?? "")
+  );
+}
+
 /**
  * Replace credentials obtained from an explicit login flow.
  *
- * Explicit login clears the target so deployment-scoped state cannot survive
- * a possible account transition. Token refresh deliberately does not use this
- * helper because it preserves the identity.
+ * Re-authenticating the same verified account preserves its target. Changing
+ * accounts replaces the entire aggregate, so the previous account's org,
+ * deployment, space, and API key cannot survive the transition. Token refresh
+ * deliberately does not use this helper because it preserves the identity.
  */
 export function replaceLoginSession(cfg: Config, session: SessionCredentials): void {
+  const previousUserID = getConfigUserID(cfg);
   const nextUserID = session.user_id ?? getAccessTokenUserID(session.access_token);
+  const preserveTarget = Boolean(previousUserID && nextUserID && previousUserID === nextUserID);
+
   cfg.active_account = {
     user_id: nextUserID,
     session: sessionWithoutIdentity(session),
+    target: preserveTarget ? cloneTarget(cfg.active_account?.target) : undefined,
   };
 }
 
@@ -88,16 +100,26 @@ export function loadConfig(): Config {
   const path = getConfigPath();
   if (!existsSync(path)) return emptyConfig();
 
+  let raw: unknown;
   try {
-    const raw = JSON.parse(readFileSync(path, "utf-8")) as unknown;
-    if (isConfigV2(raw)) return normalizeV2(raw);
-
-    const migrated = migrateLegacyConfig(raw);
-    writeConfig(path, migrated);
-    return migrated;
+    raw = JSON.parse(readFileSync(path, "utf-8")) as unknown;
   } catch {
     return emptyConfig();
   }
+
+  if (isConfigV2(raw)) return normalizeV2(raw);
+  // Legacy configs were unversioned. Never rewrite a schema this version does
+  // not understand, or downgrading could destroy newer config data.
+  if (isRecord(raw) && "schema_version" in raw) return emptyConfig();
+
+  const migrated = migrateLegacyConfig(raw);
+  try {
+    writeConfig(path, migrated);
+  } catch {
+    // The parsed config is still usable even when its migration cannot be
+    // persisted (for example, on a temporarily read-only filesystem).
+  }
+  return migrated;
 }
 
 export function saveConfig(cfg: Config): void {
@@ -136,6 +158,10 @@ function sessionWithoutIdentity(session: SessionCredentials): Omit<SessionCreden
     refresh_token: session.refresh_token,
     expires_at: session.expires_at,
   };
+}
+
+function cloneTarget(target: AccountTarget | undefined): AccountTarget | undefined {
+  return target ? { ...target } : undefined;
 }
 
 function isConfigV2(value: unknown): value is Config {

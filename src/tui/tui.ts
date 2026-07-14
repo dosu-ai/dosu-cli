@@ -81,7 +81,11 @@ export async function runTUI(): Promise<void> {
       case "setup":
         await runSetup();
         // Reload config after setup (it may have changed deployment, api_key, etc.)
-        Object.assign(cfg, loadConfig());
+        {
+          const fresh = loadConfig();
+          cfg.mode = fresh.mode;
+          cfg.active_account = fresh.active_account;
+        }
         break;
       case "insights":
         await executeInsights(cfg);

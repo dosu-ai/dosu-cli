@@ -1,8 +1,9 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  bindAccountIdentity,
   CONFIG_SCHEMA_VERSION,
   type Config,
   clearConfig,
@@ -190,6 +191,37 @@ describe("config", () => {
     });
   });
 
+  it("uses a migrated legacy config when the migration cannot be persisted", () => {
+    const path = getConfigPath();
+    const legacy = {
+      access_token: accessTokenFor("account-a"),
+      refresh_token: "legacy-refresh",
+      expires_at: 1700000000,
+      deployment_id: "legacy-deployment",
+      api_key: "legacy-key",
+    };
+    writeFileSync(path, JSON.stringify(legacy));
+    mkdirSync(`${path}.${process.pid}.tmp`);
+
+    const loaded = loadConfig();
+
+    expect(loaded.active_account?.user_id).toBe("account-a");
+    expect(loaded.active_account?.target?.api_key).toBe("legacy-key");
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(legacy);
+  });
+
+  it("does not overwrite a config with an unknown schema version", () => {
+    const path = getConfigPath();
+    const futureConfig = {
+      schema_version: CONFIG_SCHEMA_VERSION + 1,
+      active_account: { future_session: "preserve-me" },
+    };
+    writeFileSync(path, JSON.stringify(futureConfig));
+
+    expect(loadConfig()).toEqual(emptyConfig());
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(futureConfig);
+  });
+
   it("drops an unowned legacy target when the token identity cannot be verified", () => {
     writeFileSync(
       getConfigPath(),
@@ -215,7 +247,7 @@ describe("config", () => {
     ).toBe(false);
   });
 
-  it("replaceLoginSession clears target state before resolving the authenticated account", () => {
+  it("replaceLoginSession preserves target state when the authenticated account is unchanged", () => {
     const cfg = makeTestConfig({
       access_token: "old-token",
       refresh_token: "old-refresh",
@@ -236,8 +268,56 @@ describe("config", () => {
 
     replaceLoginSession(cfg, session);
 
-    expect(cfg.active_account?.target).toBeUndefined();
+    expect(cfg.active_account?.target).toEqual({
+      deployment_id: "account-a-deployment",
+      deployment_name: "Account A deployment",
+      api_key: "account-a-key",
+      org_id: "account-a-org",
+      space_id: "account-a-space",
+    });
     expect(cfg.active_account?.user_id).toBe("account-a");
+  });
+
+  it("replaceLoginSession clears target state when the authenticated account changes", () => {
+    const cfg = makeTestConfig({
+      access_token: "old-token",
+      refresh_token: "old-refresh",
+      expires_at: 1,
+      deployment_id: "account-a-deployment",
+      deployment_name: "Account A deployment",
+      api_key: "account-a-key",
+      org_id: "account-a-org",
+      space_id: "account-a-space",
+      user_id: "account-a",
+    });
+    const session: SessionCredentials = {
+      access_token: "new-token",
+      refresh_token: "new-refresh",
+      expires_at: 2,
+      user_id: "account-b",
+    };
+
+    replaceLoginSession(cfg, session);
+
+    expect(cfg.active_account?.target).toBeUndefined();
+    expect(cfg.active_account?.user_id).toBe("account-b");
+  });
+
+  it("bindAccountIdentity clears target state when the verified identity changes", () => {
+    const cfg = makeTestConfig({
+      access_token: "account-a-token",
+      refresh_token: "account-a-refresh",
+      expires_at: 1,
+      user_id: "account-a",
+      deployment_id: "account-a-deployment",
+      api_key: "account-a-key",
+    });
+
+    bindAccountIdentity(cfg, "account-b");
+
+    expect(cfg.active_account?.user_id).toBe("account-b");
+    expect(cfg.active_account?.session.access_token).toBe("account-a-token");
+    expect(cfg.active_account?.target).toBeUndefined();
   });
 
   it("isTokenExpired returns false when expires_at is 0", () => {

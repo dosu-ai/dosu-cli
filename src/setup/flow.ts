@@ -557,8 +557,8 @@ async function stepWebOnboarding(
       return false;
     }
     // The wizard may hand back a session for a different browser account.
-    // Replace the session and discard every deployment-scoped value before
-    // resolving the newly authenticated account's onboarding target.
+    // Replace the account aggregate: same-account auth keeps its target, while
+    // an account change drops the old target before resolving the new one.
     replaceLoginSession(cfg, {
       access_token: result.token.access_token,
       refresh_token: result.token.refresh_token,
