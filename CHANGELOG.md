@@ -1,3 +1,10 @@
+## [0.33.2](https://github.com/dosu-ai/dosu-cli/compare/v0.33.1...v0.33.2) (2026-07-14)
+
+
+### Bug Fixes
+
+* **config:** bind target state to authenticated account ([2c57171](https://github.com/dosu-ai/dosu-cli/commit/2c57171a13a9acc385b1ccb70be5d56c361d0c26)), closes [#133](https://github.com/dosu-ai/dosu-cli/issues/133) [#130](https://github.com/dosu-ai/dosu-cli/issues/130)
+
 ## [0.33.1](https://github.com/dosu-ai/dosu-cli/compare/v0.33.0...v0.33.1) (2026-07-13)
 
 
