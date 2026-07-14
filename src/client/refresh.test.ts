@@ -78,6 +78,10 @@ function makeConfig(overrides: Partial<FlatTestConfig> = {}): Config {
   });
 }
 
+function makeAccountConfig(userID: string, overrides: Partial<FlatTestConfig> = {}): Config {
+  return makeConfig({ ...overrides, user_id: userID });
+}
+
 describe("refresh self-healing", () => {
   const savedEnv: Record<string, string | undefined> = {};
   let tempDir: string;
@@ -183,5 +187,40 @@ describe("refresh self-healing", () => {
     await expect(new Client(cfg).refreshToken()).rejects.toThrow("refresh failed with status 400");
     // One attempt only — disk has nothing newer to retry with.
     expect(gotrue.presented).toEqual(["rt-dead"]);
+  });
+
+  it("does not adopt tokens from a different account on disk", async () => {
+    saveConfig(makeAccountConfig("account-b", { refresh_token: "rt-b" }));
+    const cfg = makeAccountConfig("account-a", { refresh_token: "rt-a" });
+
+    await expect(new Client(cfg).refreshToken()).rejects.toThrow(
+      "authenticated account changed while this command was running",
+    );
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(loadConfig().active_account?.user_id).toBe("account-b");
+  });
+
+  it("does not overwrite a different account that logs in during refresh", async () => {
+    saveConfig(makeAccountConfig("account-a", { refresh_token: "rt-a" }));
+    const cfg = loadConfig();
+    mockFetch.mockImplementation(async () => {
+      saveConfig(makeAccountConfig("account-b", { refresh_token: "rt-b" }));
+      return new Response(
+        JSON.stringify({
+          access_token: "at-a-refreshed",
+          refresh_token: "rt-a-refreshed",
+          expires_in: 3600,
+        }),
+        { status: 200 },
+      );
+    });
+
+    await expect(new Client(cfg).refreshToken()).rejects.toThrow(
+      "authenticated account changed while this command was running",
+    );
+
+    expect(loadConfig().active_account?.user_id).toBe("account-b");
+    expect(loadConfig().active_account?.session.refresh_token).toBe("rt-b");
   });
 });

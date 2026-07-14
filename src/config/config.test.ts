@@ -215,7 +215,7 @@ describe("config", () => {
     ).toBe(false);
   });
 
-  it("replaceLoginSession clears target state before resolving the authenticated account", () => {
+  it("replaceLoginSession preserves target state when the authenticated account is unchanged", () => {
     const cfg = makeTestConfig({
       access_token: "old-token",
       refresh_token: "old-refresh",
@@ -236,8 +236,39 @@ describe("config", () => {
 
     replaceLoginSession(cfg, session);
 
-    expect(cfg.active_account?.target).toBeUndefined();
+    expect(cfg.active_account?.target).toEqual({
+      deployment_id: "account-a-deployment",
+      deployment_name: "Account A deployment",
+      api_key: "account-a-key",
+      org_id: "account-a-org",
+      space_id: "account-a-space",
+    });
     expect(cfg.active_account?.user_id).toBe("account-a");
+  });
+
+  it("replaceLoginSession clears target state when the authenticated account changes", () => {
+    const cfg = makeTestConfig({
+      access_token: "old-token",
+      refresh_token: "old-refresh",
+      expires_at: 1,
+      deployment_id: "account-a-deployment",
+      deployment_name: "Account A deployment",
+      api_key: "account-a-key",
+      org_id: "account-a-org",
+      space_id: "account-a-space",
+      user_id: "account-a",
+    });
+    const session: SessionCredentials = {
+      access_token: "new-token",
+      refresh_token: "new-refresh",
+      expires_at: 2,
+      user_id: "account-b",
+    };
+
+    replaceLoginSession(cfg, session);
+
+    expect(cfg.active_account?.target).toBeUndefined();
+    expect(cfg.active_account?.user_id).toBe("account-b");
   });
 
   it("isTokenExpired returns false when expires_at is 0", () => {

@@ -3,7 +3,13 @@
  */
 
 import type { Config } from "../config/config";
-import { isAuthenticated, isTokenExpired, loadConfig, saveConfig } from "../config/config";
+import {
+  getConfigUserID,
+  isAuthenticated,
+  isTokenExpired,
+  loadConfig,
+  saveConfig,
+} from "../config/config";
 import { getBackendURL, getSupabaseAnonKey, getSupabaseURL } from "../config/constants";
 
 export class SessionExpiredError extends Error {
@@ -196,6 +202,7 @@ export class Client {
    */
   private adoptNewerDiskTokens(): boolean {
     const disk = loadConfig();
+    this.assertSameActiveAccount(disk);
     const diskSession = disk.active_account?.session;
     const memorySession = this.config.active_account?.session;
     if (
@@ -237,11 +244,24 @@ export class Client {
       expires_in: number;
     };
 
+    // A browser login in another process may have switched accounts while the
+    // refresh request was in flight. Never let this stale client overwrite the
+    // new account aggregate with tokens from the previous account.
+    this.assertSameActiveAccount(loadConfig());
+
     session.access_token = data.access_token;
     session.refresh_token = data.refresh_token;
     session.expires_at = Math.floor(Date.now() / 1000) + data.expires_in;
 
     saveConfig(this.config);
+  }
+
+  private assertSameActiveAccount(disk: Config): void {
+    const memoryUserID = getConfigUserID(this.config);
+    const diskUserID = getConfigUserID(disk);
+    if (memoryUserID && diskUserID && memoryUserID !== diskUserID) {
+      throw new Error("authenticated account changed while this command was running; retry it");
+    }
   }
 
   async getDeployments(): Promise<Deployment[]> {
