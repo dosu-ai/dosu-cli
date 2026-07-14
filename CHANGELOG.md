@@ -1,3 +1,52 @@
+## [0.33.2](https://github.com/dosu-ai/dosu-cli/compare/v0.33.1...v0.33.2) (2026-07-14)
+
+
+### Bug Fixes
+
+* **config:** bind target state to authenticated account ([2c57171](https://github.com/dosu-ai/dosu-cli/commit/2c57171a13a9acc385b1ccb70be5d56c361d0c26)), closes [#133](https://github.com/dosu-ai/dosu-cli/issues/133) [#130](https://github.com/dosu-ai/dosu-cli/issues/130)
+
+## [0.33.1](https://github.com/dosu-ai/dosu-cli/compare/v0.33.0...v0.33.1) (2026-07-13)
+
+
+### Bug Fixes
+
+* prevent account state mixing during login ([#129](https://github.com/dosu-ai/dosu-cli/issues/129)) ([5036961](https://github.com/dosu-ai/dosu-cli/commit/50369618c27285dcab6bf6b29c2b3c4037ff7962))
+
+# [0.33.0](https://github.com/dosu-ai/dosu-cli/compare/v0.32.1...v0.33.0) (2026-07-13)
+
+
+### Features
+
+* **setup:** add Dosu MCP instructions to AGENTS.md during onboarding ([#126](https://github.com/dosu-ai/dosu-cli/issues/126)) ([b646488](https://github.com/dosu-ai/dosu-cli/commit/b646488ce74c2268c4ead1e9256bb0ebf4dd6e1c))
+
+## [0.32.1](https://github.com/dosu-ai/dosu-cli/compare/v0.32.0...v0.32.1) (2026-07-12)
+
+
+### Bug Fixes
+
+* **cli:** friendly unknown-command errors and a working 'dosu help' ([#125](https://github.com/dosu-ai/dosu-cli/issues/125)) ([13425a3](https://github.com/dosu-ai/dosu-cli/commit/13425a30edfbf6220bb6f633931e9d20225b1f0c))
+
+# [0.32.0](https://github.com/dosu-ai/dosu-cli/compare/v0.31.0...v0.32.0) (2026-07-11)
+
+
+### Features
+
+* **setup:** route first-run onboarding through the web wizard ([#123](https://github.com/dosu-ai/dosu-cli/issues/123)) ([4a038ce](https://github.com/dosu-ai/dosu-cli/commit/4a038ce815b024084ad3456bc63aaff2bedb6f3d))
+
+# [0.31.0](https://github.com/dosu-ai/dosu-cli/compare/v0.30.0...v0.31.0) (2026-07-10)
+
+
+### Features
+
+* **auth:** show fallback login URL when the browser doesn't open ([#120](https://github.com/dosu-ai/dosu-cli/issues/120)) ([013be93](https://github.com/dosu-ai/dosu-cli/commit/013be938c62f0c9409ef19214a53198f97c944ff))
+
+# [0.30.0](https://github.com/dosu-ai/dosu-cli/compare/v0.29.1...v0.30.0) (2026-07-10)
+
+
+### Features
+
+* **setup:** audit handoff to Claude Code + first-class npx-only support ([#119](https://github.com/dosu-ai/dosu-cli/issues/119)) ([1bc13af](https://github.com/dosu-ai/dosu-cli/commit/1bc13af3a640c1d4a9025b7edf521fa3b15bf921)), closes [dosu-ai/dosu-skill#9](https://github.com/dosu-ai/dosu-skill/issues/9)
+
 ## [0.29.1](https://github.com/dosu-ai/dosu-cli/compare/v0.29.0...v0.29.1) (2026-07-07)
 
 

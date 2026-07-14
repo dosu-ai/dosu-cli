@@ -32,6 +32,7 @@ vi.mock("../config/config", () => ({
   loadConfig: (...args: unknown[]) => mockLoadConfig(...args),
 }));
 
+import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { reviewCommand } from "./review";
 
 let logSpy: ReturnType<typeof vi.spyOn>;
@@ -39,7 +40,7 @@ let errorSpy: ReturnType<typeof vi.spyOn>;
 // biome-ignore lint/suspicious/noExplicitAny: process.exit mock type mismatch
 let exitSpy: any;
 
-const validConfig = {
+const validFlatConfig: FlatTestConfig = {
   access_token: "t",
   refresh_token: "r",
   expires_at: 0,
@@ -47,6 +48,9 @@ const validConfig = {
   space_id: "sp1",
   deployment_id: "dep1",
 };
+const makeValidConfig = (overrides: Partial<FlatTestConfig> = {}) =>
+  makeTestConfig({ ...validFlatConfig, ...overrides });
+const validConfig = makeValidConfig();
 
 // A tRPC NOT_FOUND error, as the client surfaces it. Verbs route by the opaque
 // id's prefix (draft_message:<uuid> → draft, bare uuid → doc_change), so a
@@ -242,7 +246,7 @@ describe("review list", () => {
   });
 
   it("exits when space_id is missing", async () => {
-    mockLoadConfig.mockReturnValue({ ...validConfig, space_id: undefined });
+    mockLoadConfig.mockReturnValue(makeValidConfig({ space_id: undefined }));
     await expect(run("list")).rejects.toThrow("exit");
   });
 
@@ -845,7 +849,7 @@ describe("review error propagation", () => {
 
 describe("requireConfig", () => {
   it("exits when access_token is missing", async () => {
-    mockLoadConfig.mockReturnValue({ ...validConfig, access_token: "" });
+    mockLoadConfig.mockReturnValue(makeValidConfig({ access_token: "" }));
     await expect(run("context", "t1")).rejects.toThrow("exit");
   });
 });

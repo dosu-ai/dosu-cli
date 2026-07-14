@@ -12,12 +12,13 @@ vi.mock("../debug/logger", () => ({
   logger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
 }));
 
+import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { askCommand } from "./ask";
 
 let logSpy: ReturnType<typeof vi.spyOn>;
 let errorSpy: ReturnType<typeof vi.spyOn>;
 
-const validConfig = {
+const validFlatConfig: FlatTestConfig = {
   access_token: "t",
   refresh_token: "r",
   expires_at: 0,
@@ -25,6 +26,9 @@ const validConfig = {
   deployment_id: "dep1",
   space_id: "sp1",
 };
+const makeValidConfig = (overrides: Partial<FlatTestConfig> = {}) =>
+  makeTestConfig({ ...validFlatConfig, ...overrides });
+const validConfig = makeValidConfig();
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -200,12 +204,12 @@ describe("error handling", () => {
 
 describe("requireConfig", () => {
   it("exits when api_key is missing", async () => {
-    mockLoadConfig.mockReturnValue({ ...validConfig, api_key: undefined });
+    mockLoadConfig.mockReturnValue(makeValidConfig({ api_key: undefined }));
     await expect(run("question")).rejects.toThrow("exit");
   });
 
   it("exits when space_id is missing", async () => {
-    mockLoadConfig.mockReturnValue({ ...validConfig, space_id: undefined });
+    mockLoadConfig.mockReturnValue(makeValidConfig({ space_id: undefined }));
     await expect(run("question")).rejects.toThrow("exit");
   });
 });

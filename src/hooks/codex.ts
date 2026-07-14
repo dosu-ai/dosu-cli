@@ -32,6 +32,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveJSONConfig } from "../mcp/config-helpers";
 import { DEFAULT_HOOK_EVENTS, isDosuGroup } from "./claude-code";
+import { resolveHookCommandPrefix } from "./runtime";
 
 // biome-ignore lint/suspicious/noExplicitAny: hooks JSON is inherently untyped
 type JsonConfig = Record<string, any>;
@@ -79,12 +80,16 @@ const EVENT_STATUS_MESSAGE: Record<string, string> = {
 };
 
 /**
- * The command Codex runs for a given hook subcommand. Bare `dosu` from PATH
- * (same reasoning as the Claude Code installer); `--agent codex` attributes
+ * The command Codex runs for a given hook subcommand. `dosu` from PATH, or the
+ * materialized runtime when there is no global install (same resolution as the
+ * Claude Code installer — see hooks/runtime.ts); `--agent codex` attributes
  * the resulting knowledge tickets to Codex sessions.
  */
-export function codexHookCommand(subcommand: string): string {
-  return `dosu hooks ${subcommand} --agent codex`;
+export function codexHookCommand(
+  subcommand: string,
+  prefix: string = resolveHookCommandPrefix(),
+): string {
+  return `${prefix} hooks ${subcommand} --agent codex`;
 }
 
 function dosuGroup(event: string): CodexMatcherGroup {

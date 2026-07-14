@@ -39,6 +39,7 @@ function createMockServer(): CallbackServer {
   return {
     port: 12345,
     close: mockClose,
+    setNext: vi.fn(),
   };
 }
 
@@ -168,6 +169,33 @@ describe("startOAuthFlow", () => {
     expect(r).toMatchObject({ browserOpened: true });
   });
 
+  it("invokes onAuthURL with the auth URL once the browser opens", async () => {
+    const onAuthURL = vi.fn();
+
+    const flowPromise = startOAuthFlow(undefined, "/cli/auth", {}, onAuthURL);
+    await flowReady();
+
+    expect(onAuthURL).toHaveBeenCalledExactlyOnceWith(
+      "https://app.dosu.dev/cli/auth?callback=http%3A%2F%2Flocalhost%3A12345%2Fcallback",
+    );
+
+    resolveToken({ access_token: "a", refresh_token: "r", expires_in: 1 });
+    const r = await flowPromise;
+    expect(r).toMatchObject({ browserOpened: true });
+  });
+
+  it("does not invoke onAuthURL when the browser fails to open", async () => {
+    mockOpenDefault.mockRejectedValueOnce(new Error("Executable not found in $PATH: xdg-open"));
+    const onAuthURL = vi.fn();
+
+    const result = await startOAuthFlow(undefined, "/cli/auth", {}, onAuthURL);
+
+    // The callback server is closed on this path — the URL would be a dead
+    // link, and callers fall back to the device flow instead.
+    expect(result).toEqual({ browserOpened: false });
+    expect(onAuthURL).not.toHaveBeenCalled();
+  });
+
   it("includes extra auth URL params", async () => {
     const flowPromise = startOAuthFlow(undefined, "/cli/auth", {
       onboarding_run_id: "run-123",
@@ -245,5 +273,57 @@ describe("startOAuthFlow", () => {
     resolveToken({ access_token: "a", refresh_token: "r", expires_in: 1 });
     const r = await flowPromise;
     expect(r).toMatchObject({ browserOpened: true });
+  });
+
+  it("holdNext keeps the server open and hands it over on the result", async () => {
+    const token: TokenResponse = { access_token: "tok", refresh_token: "ref", expires_in: 3600 };
+
+    const flowPromise = startOAuthFlow(undefined, "/cli/auth", {}, undefined, { holdNext: true });
+    await flowReady();
+
+    resolveToken(token);
+    const result = await flowPromise;
+
+    expect(result).toMatchObject({ browserOpened: true, token });
+    expect((result as { server?: CallbackServer }).server).toBe(mockServer);
+    // Server ownership transferred to the caller — not closed here.
+    expect(mockClose).not.toHaveBeenCalled();
+    expect(mockStartCallbackServer).toHaveBeenCalledWith(
+      expect.objectContaining({ nextHold: true }),
+    );
+  });
+
+  it("holdNext still closes the server on failure (no handover happened)", async () => {
+    const flowPromise = startOAuthFlow(undefined, "/cli/auth", {}, undefined, { holdNext: true });
+    await flowReady();
+
+    rejectToken(new Error("boom"));
+    await flowPromise.catch(() => {});
+
+    expect(mockClose).toHaveBeenCalledOnce();
+  });
+
+  it("suppressBrowserOpen completes the flow without opening a browser", async () => {
+    const token: TokenResponse = { access_token: "tok", refresh_token: "ref", expires_in: 3600 };
+
+    const flowPromise = startOAuthFlow(undefined, "/onboarding/connections", {}, undefined, {
+      suppressBrowserOpen: true,
+      successVariant: "onboarding",
+    });
+    // flowReady() waits on open(), which never fires here — wait on the
+    // callback server instead, plus a macrotask barrier for the race arming.
+    await vi.waitFor(() => expect(mockStartCallbackServer).toHaveBeenCalled());
+    await new Promise((r) => setImmediate(r));
+
+    resolveToken(token);
+    const result = await flowPromise;
+
+    expect(result).toMatchObject({ browserOpened: true, token });
+    expect(mockOpenDefault).not.toHaveBeenCalled();
+    expect(mockStartCallbackServer).toHaveBeenCalledWith(
+      expect.objectContaining({ successVariant: "onboarding" }),
+    );
+    // No holdNext → the flow still owns and closes the server.
+    expect(mockClose).toHaveBeenCalledOnce();
   });
 });

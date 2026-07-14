@@ -3,18 +3,28 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import * as p from "@clack/prompts";
+import type { CallbackServer } from "../auth/server";
 import { Client, type Deployment, type Org, SessionExpiredError } from "../client/client";
 import type { TypedClient } from "../client/trpc";
 import { installSkill } from "../commands/skill";
-import { type Config, loadConfig, MODE_OSS, type SetupMode, saveConfig } from "../config/config";
+import {
+  bindAccountIdentity,
+  type Config,
+  loadConfig,
+  MODE_OSS,
+  replaceLoginSession,
+  type SetupMode,
+  saveConfig,
+  updateTarget,
+} from "../config/config";
 import { logger } from "../debug/logger";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
+import { inGitWorkTree, stepUpdateAgentsMd } from "./agents-md-step";
 import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
-import { dim, info } from "./styles";
+import { launchAuditAgent, offerAuditHandoff } from "./audit-handoff";
+import { browserFallbackHint, dim, info } from "./styles";
 
 export interface SetupOptions {
   deploymentID?: string;
@@ -39,7 +49,7 @@ export interface ToolSelection {
 interface OneShotChoices {
   configureMcp: boolean;
   installSkill: boolean;
-  connectGitHub: boolean;
+  updateAgentsMd: boolean;
 }
 
 type SetupFlowKind = "onboarding" | "setup";
@@ -59,7 +69,8 @@ interface OwnedOrg {
 interface CliOnboardingProfile {
   user_id?: string | null;
   finished_onboarding?: boolean | null;
-  cli_onboarding_enabled?: boolean | null;
+  // The server also returns `cli_onboarding_enabled` (a dead feature flag);
+  // the CLI deliberately no longer reads it.
 }
 
 export async function runSetup(opts: SetupOptions = {}): Promise<void> {
@@ -86,13 +97,20 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     saveConfig(cfg);
   }
 
-  // Authenticate — always runs so we can verify/refresh tokens.
-  const authedCfg = await stepAuthenticate(cfg, onboardingRunID);
-  if (!authedCfg) return;
-  cfg = authedCfg;
+  // Authenticate — always runs so we can verify/refresh tokens. When the
+  // browser was involved, `authTab` steers that same tab onward (into the
+  // web onboarding wizard) instead of opening a second one.
+  const authed = await stepAuthenticate(cfg, onboardingRunID);
+  if (!authed) return;
+  cfg = authed.cfg;
+  const authTab = authed.authTab;
+  const releaseAuthTab = () => {
+    authTab?.setNext(null);
+    authTab?.close();
+  };
   await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_auth_completed");
 
-  const apiClient = new Client(cfg);
+  let apiClient = new Client(cfg);
   let cloudSetupContext: CloudSetupContext | null = null;
 
   if (cfg.mode !== MODE_OSS) {
@@ -104,6 +122,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
         reason: "cloud_setup_context_failed",
       });
       s.stop("Workspace load failed");
+      releaseAuthTab();
       return;
     }
     s.stop("Workspace loaded");
@@ -112,19 +131,47 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     flow_kind: cloudSetupContext?.kind ?? "oss",
   });
 
+  // First-run web onboarding applies to cloud-mode users who haven't
+  // finished onboarding — unless they passed `--deployment`, which is an
+  // explicit "just wire me to this deployment" escape hatch that must never
+  // be silently overridden by the onboarding auto-bind.
+  const firstRunOnboarding =
+    cfg.mode !== MODE_OSS && cloudSetupContext?.kind === "onboarding" && !opts.deploymentID;
+
+  // Only the first-run web-onboarding handoff can steer the auth tab; every
+  // other path lets the success page settle where it is.
+  if (!firstRunOnboarding) {
+    releaseAuthTab();
+  }
+
   // Deployment: first-run onboarding binds the user's default deployment.
   // Otherwise we only run the interactive picker when we don't already have
   // a deployment id locked in, OR when the caller passed `--deployment` to
   // explicitly switch. Everyday re-runs reuse the stored deployment silently.
-  if (cfg.mode !== MODE_OSS && cloudSetupContext?.kind === "onboarding") {
-    const ok = await bindOnboardingDeployment(apiClient, cfg, cloudSetupContext.targetOrg ?? null);
+  if (firstRunOnboarding && cloudSetupContext) {
+    // First-run: repo connection + docs import live in the web onboarding
+    // wizard (the one code path we trust). Hand the browser over, wait for
+    // the wizard to finish, then bind the deployment context it left behind.
+    const onboarded = await stepWebOnboarding(cfg, onboardingRunID, authTab);
+    if (!onboarded) {
+      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
+        reason: "web_onboarding_incomplete",
+      });
+      return;
+    }
+    // The browser may have completed onboarding under a different account.
+    // Resolve the target again with the returned session; never reuse the
+    // pre-handoff organization or client across an authentication boundary.
+    apiClient = new Client(cfg);
+    const targetOrg = await resolveCurrentOnboardingTargetOrg(cfg);
+    const ok = await bindOnboardingDeployment(apiClient, cfg, targetOrg);
     if (!ok) {
       await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
         reason: "onboarding_deployment_failed",
       });
       return;
     }
-  } else if (!cfg.deployment_id || opts.deploymentID) {
+  } else if (!cfg.active_account?.target?.deployment_id || opts.deploymentID) {
     const ok = await resolveDeployment(apiClient, cfg, opts);
     if (!ok) {
       await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
@@ -143,14 +190,13 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     });
     return;
   }
-  cfg.api_key = apiKey;
+  updateTarget(cfg, { api_key: apiKey });
   saveConfig(cfg);
 
   // One-shot confirm: MCP + skill are always listed (user picks what to
-  // (re)run); GitHub docs import only shows during first-run onboarding.
-  const choices = await stepOneShotConfirm({
-    includeGitHub: cloudSetupContext?.kind === "onboarding",
-  });
+  // (re)run). Repo connection + docs import happen in the web onboarding
+  // wizard, so the CLI no longer offers them here.
+  const choices = await stepOneShotConfirm(inGitWorkTree());
   if (!choices) {
     await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_cancelled", {
       reason: "options_cancelled",
@@ -160,17 +206,15 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_options_selected", {
     configure_mcp: choices.configureMcp,
     install_skill: choices.installSkill,
-    connect_github: choices.connectGitHub,
+    update_agents_md: choices.updateAgentsMd,
   });
 
   // MCP tools. Track whether at least one agent ended up with Dosu MCP
-  // configured (newly installed or previously installed) so we only nudge
-  // the user with the "Try it out" prompt when there's actually an agent
-  // they can paste it into.
+  // configured (newly installed or previously installed) so we only offer
+  // the audit handoff when there's actually an agent that can use Dosu.
   let mcpConfiguredThisRun = false;
   let mcpCompleted = false;
   let skillCompleted = false;
-  let docsImported = false;
   if (choices.configureMcp) {
     const configured = await stepConfigureMcpTools(cfg);
     if (configured === null) {
@@ -200,94 +244,28 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     }
   }
 
-  let githubOnboardingDone = !choices.connectGitHub;
-  if (choices.connectGitHub && cloudSetupContext?.kind === "onboarding") {
-    const { stepConnectGitHubRepo } = await import("./github-step");
-    const connectResult = await stepConnectGitHubRepo(cfg);
-    if (!connectResult.advance) {
-      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_cancelled", {
-        reason: "github_connect_not_advanced",
-        has_connected_repo: connectResult.has_connected_repo,
-      });
-      return;
-    }
-    if (
-      connectResult.has_connected_repo ||
-      (connectResult.created_data_source_ids?.length ?? 0) > 0
-    ) {
-      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_github_connected", {
-        created_data_source_count: connectResult.created_data_source_ids?.length ?? 0,
-        created_repository_slugs: connectResult.created_repository_slugs,
-      });
-    }
-    if (connectResult.space_id && !cfg.space_id) {
-      cfg.space_id = connectResult.space_id;
-      saveConfig(cfg);
-    }
-
-    const { stepImportGitHubDocs } = await import("./github-doc-import-step");
-    const importResult = await stepImportGitHubDocs(cfg, {
-      waitForFreshDocs: Boolean(connectResult.deployment_id),
-      expectedDataSourceIds: connectResult.created_data_source_ids,
-    });
-    if (!importResult.advance) {
-      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
-        reason: "github_docs_import_failed",
-      });
-      return;
-    }
-    docsImported = importResult.imported === true && (importResult.imported_count ?? 0) > 0;
-    if (docsImported) {
-      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_docs_imported", {
-        imported_count: importResult.imported_count ?? 0,
-        failed_count: importResult.failed_count ?? 0,
-        task_id: importResult.task_id,
-      });
-      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_activated", {
-        imported_count: importResult.imported_count ?? 0,
-        failed_count: importResult.failed_count ?? 0,
-      });
-    }
-    githubOnboardingDone = true;
+  // AGENTS.md — prompt coding agents to use the Dosu MCP tools. Only offered
+  // (and run) when the cwd is a git work tree. Tracked via the
+  // `completed_agents_md` property on cli_onboarding_completed — the backend
+  // event enum has no dedicated event for this step.
+  let agentsMdCompleted = false;
+  if (choices.updateAgentsMd) {
+    agentsMdCompleted = stepUpdateAgentsMd();
   }
 
-  const shouldCompleteRemoteOnboarding =
-    cloudSetupContext?.kind === "onboarding" && githubOnboardingDone;
-
-  if (shouldCompleteRemoteOnboarding && cloudSetupContext) {
-    const profileUserID = cloudSetupContext.profileUserID;
-    try {
-      const { createTypedClient } = await import("../client/trpc");
-      const trpc = createTypedClient(cfg);
-      await trpc.user.updateProfile.mutate({
-        user_id: profileUserID,
-        finished_onboarding: true,
-      });
-      logger.info("setup", "Server onboarding marked complete");
-    } catch (err) {
-      logger.warn(
-        "setup",
-        `completeOnboarding failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      p.log.warn(
-        "Could not mark onboarding complete on the server — you can retry later by running `dosu setup` again.",
-      );
-    }
+  // Codebase audit handoff (cloud mode only — it acts on the user's own
+  // repo): offer to launch Claude Code with the audit prompt so there's no
+  // gap between finishing setup and seeing what Dosu can generate.
+  let handoffToAudit = false;
+  if (mcpConfiguredThisRun && cfg.mode !== MODE_OSS) {
+    handoffToAudit = await offerAuditHandoff();
   }
 
-  if (mcpConfiguredThisRun) {
-    showTryItOutPrompt({
-      mode: cfg.mode,
-      docsImported: choices.connectGitHub && githubOnboardingDone,
-      hasAgentsMd: existsSync(join(process.cwd(), "AGENTS.md")),
-    });
-  }
-
-  if (mcpCompleted || skillCompleted || docsImported) {
+  if (mcpCompleted || skillCompleted || agentsMdCompleted) {
     await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_completed", {
       completed_mcp: mcpCompleted,
       completed_skill: skillCompleted,
-      imported_docs: docsImported,
+      completed_agents_md: agentsMdCompleted,
     });
   }
 
@@ -298,6 +276,11 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   } else {
     p.outro("\uD83C\uDF89 Setup complete!");
   }
+
+  // Launch after the outro so Claude Code takes over a finished clack session.
+  if (handoffToAudit) {
+    launchAuditAgent();
+  }
 }
 
 /**
@@ -305,10 +288,12 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
  * clear `cfg.mode` (Cloud paths do; the OSS auto-pick path doesn't).
  */
 function applyDeployment(cfg: Config, d: Deployment): void {
-  cfg.deployment_id = d.deployment_id;
-  cfg.deployment_name = d.name;
-  cfg.org_id = d.org_id;
-  cfg.space_id = d.space_id;
+  updateTarget(cfg, {
+    deployment_id: d.deployment_id,
+    deployment_name: d.name,
+    org_id: d.org_id,
+    space_id: d.space_id,
+  });
 }
 
 /**
@@ -331,22 +316,17 @@ function applyModeOverride(cfg: Config, opts: SetupOptions): void {
  * unticks specific items.
  *
  * MCP + skill are always listed so users can re-run either step at any
- * time (add a new agent, reinstall the skill). GitHub docs import only
- * shows during first-run cloud onboarding.
+ * time (add a new agent, reinstall the skill). Repo connection + docs
+ * import happen in the web onboarding wizard, not here.
  */
-async function stepOneShotConfirm(opts: {
-  includeGitHub: boolean;
-}): Promise<OneShotChoices | null> {
+async function stepOneShotConfirm(offerAgentsMd: boolean): Promise<OneShotChoices | null> {
   type Item = { value: keyof OneShotChoices; label: string };
   const items: Item[] = [
     { value: "configureMcp", label: "Install Dosu MCP" },
     { value: "installSkill", label: "Install Dosu skill" },
   ];
-  if (opts.includeGitHub) {
-    items.push({
-      value: "connectGitHub",
-      label: `Import docs from GitHub ${dim("(Keep them up to date)")}`,
-    });
+  if (offerAgentsMd) {
+    items.push({ value: "updateAgentsMd", label: "Add Dosu instructions to AGENTS.md" });
   }
 
   const selected = await p.multiselect({
@@ -365,7 +345,7 @@ async function stepOneShotConfirm(opts: {
   return {
     configureMcp: chosen.has("configureMcp"),
     installSkill: chosen.has("installSkill"),
-    connectGitHub: chosen.has("connectGitHub"),
+    updateAgentsMd: chosen.has("updateAgentsMd"),
   };
 }
 
@@ -413,14 +393,24 @@ export async function runInstallSkill(): Promise<boolean> {
   }
 }
 
+interface AuthenticatedSetup {
+  cfg: Config;
+  /**
+   * Present when this run authenticated via the browser: the still-open
+   * callback server whose success page polls /next, letting the setup flow
+   * steer that same tab onward (web onboarding) instead of opening another.
+   */
+  authTab?: CallbackServer;
+}
+
 async function stepAuthenticate(
   existingCfg?: Config,
   onboardingRunID?: string,
-): Promise<Config | null> {
+): Promise<AuthenticatedSetup | null> {
   logger.info("setup", "Step: authenticate");
   const cfg = existingCfg ?? loadConfig();
 
-  if (cfg.access_token) {
+  if (cfg.active_account?.session.access_token) {
     const s = p.spinner();
     s.start("Verifying session...");
     try {
@@ -429,7 +419,7 @@ async function stepAuthenticate(
       if (resp.status === 200) {
         logger.info("setup", `Session verified, status=${resp.status}`);
         s.stop("Authenticated");
-        return cfg;
+        return { cfg };
       }
       try {
         logger.debug("setup", "Attempting token refresh");
@@ -437,7 +427,7 @@ async function stepAuthenticate(
         const resp2 = await apiClient.doRequestRaw("GET", "/v1/mcp/deployments");
         if (resp2.status === 200) {
           s.stop("Authenticated");
-          return cfg;
+          return { cfg };
         }
       } catch {
         // refresh failed, fall through to login
@@ -450,46 +440,51 @@ async function stepAuthenticate(
     }
   }
 
-  const shouldLogin = await p.confirm({ message: "Open browser to log in?" });
-  if (p.isCancel(shouldLogin) || !shouldLogin) {
-    if (onboardingRunID) {
-      await trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_auth_cancelled", {
-        reason: p.isCancel(shouldLogin) ? "prompt_cancelled" : "login_declined",
-      });
-    }
-    return null;
-  }
-
   if (onboardingRunID) {
     await trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_auth_started");
   }
   return await openBrowserForSetup(cfg, onboardingRunID);
 }
 
-async function openBrowserForSetup(cfg: Config, onboardingRunID?: string): Promise<Config | null> {
+async function openBrowserForSetup(
+  cfg: Config,
+  onboardingRunID?: string,
+): Promise<AuthenticatedSetup | null> {
   try {
     const { startOAuthFlow } = await import("../auth/flow");
     const s = p.spinner();
-    s.start("Waiting for authentication...");
     const result = await startOAuthFlow(
       undefined,
       "/cli/auth",
       onboardingRunID ? { onboarding_run_id: onboardingRunID } : {},
+      undefined,
+      {
+        waitWithoutBrowser: true,
+        // Keep the callback server alive so the success page's tab can be
+        // steered into the web onboarding wizard for first-run users.
+        holdNext: true,
+        onAuthURL: (url) => {
+          p.log.message(browserFallbackHint(url));
+          s.start("Waiting for authentication...");
+        },
+      },
     );
+    /* v8 ignore next 4 -- unreachable with waitWithoutBrowser */
     if (!result.browserOpened) {
       s.stop("Could not open a browser");
-      p.log.error("Run 'dosu login --no-browser' from the terminal to authenticate over SSH.");
       return null;
     }
     const token = result.token;
     s.stop("Authenticated");
     logger.info("setup", "Browser auth completed");
 
-    cfg.access_token = token.access_token;
-    cfg.refresh_token = token.refresh_token;
-    cfg.expires_at = Math.floor(Date.now() / 1000) + token.expires_in;
+    replaceLoginSession(cfg, {
+      access_token: token.access_token,
+      refresh_token: token.refresh_token,
+      expires_at: Math.floor(Date.now() / 1000) + token.expires_in,
+    });
     saveConfig(cfg);
-    return cfg;
+    return { cfg, authTab: result.server };
   } catch (err: unknown) {
     /* v8 ignore next 2 -- err is always Error in practice */
     const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
@@ -514,6 +509,81 @@ async function openBrowserForSetup(cfg: Config, onboardingRunID?: string): Promi
   }
 }
 
+/**
+ * First-run onboarding handoff: repo connection + docs import happen in the
+ * web onboarding wizard, not the terminal. Opens the browser at
+ * `/onboarding/connections?source=cli&callback=…` — the wizard detects the
+ * CLI flow, skips its "set up the CLI" step, marks onboarding finished on
+ * the server, and redirects back to the local callback with a freshly
+ * minted CLI session (same payload shape as the auth callback, so
+ * `startOAuthFlow` provides the listener, browser open, and timeout).
+ *
+ * Returns `true` once the wizard handed back, `false` on timeout/failure
+ * (with a hint to finish in the browser and re-run `dosu setup`).
+ *
+ * When `authTab` is present (this run authenticated via the browser), the
+ * auth success page is steered straight into the wizard via `setNext` — one
+ * tab for the whole journey. Without it, a fresh tab is opened.
+ */
+async function stepWebOnboarding(
+  cfg: Config,
+  onboardingRunID: string,
+  authTab?: CallbackServer,
+): Promise<boolean> {
+  logger.info("setup", "Step: web onboarding handoff");
+  p.log.info("Almost there — connect your repos in the browser and we'll pick up from here.");
+  const s = p.spinner();
+  try {
+    const { startOAuthFlow } = await import("../auth/flow");
+    const result = await startOAuthFlow(
+      undefined,
+      "/onboarding/connections",
+      { source: "cli", onboarding_run_id: onboardingRunID },
+      undefined,
+      {
+        waitWithoutBrowser: true,
+        suppressBrowserOpen: Boolean(authTab),
+        successVariant: "onboarding",
+        onAuthURL: (url) => {
+          authTab?.setNext(url);
+          p.log.message(browserFallbackHint(url));
+          s.start("Waiting for onboarding to finish in the browser...");
+        },
+      },
+    );
+    /* v8 ignore next 4 -- unreachable with waitWithoutBrowser */
+    if (!result.browserOpened) {
+      s.stop("Could not open a browser");
+      return false;
+    }
+    // The wizard may hand back a session for a different browser account.
+    // Replace the account aggregate: same-account auth keeps its target, while
+    // an account change drops the old target before resolving the new one.
+    replaceLoginSession(cfg, {
+      access_token: result.token.access_token,
+      refresh_token: result.token.refresh_token,
+      expires_at: Math.floor(Date.now() / 1000) + result.token.expires_in,
+    });
+    saveConfig(cfg);
+    s.stop("Onboarding finished in the browser");
+    logger.info("setup", "Web onboarding handoff completed");
+    return true;
+  } catch (err: unknown) {
+    /* v8 ignore next -- err is always Error in practice */
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn("setup", `Web onboarding handoff did not complete: ${msg}`);
+    s.stop("Onboarding not completed");
+    p.log.warn(
+      "Didn't hear back from the browser. Finish onboarding there, then re-run `dosu setup`.",
+    );
+    return false;
+  } finally {
+    // The auth tab either navigated into the wizard already or was closed by
+    // the user; either way its server has served its purpose.
+    authTab?.close();
+  }
+}
+
 async function resolveCloudSetupContext(cfg: Config): Promise<CloudSetupContext | null> {
   try {
     const { createTypedClient } = await import("../client/trpc");
@@ -524,8 +594,14 @@ async function resolveCloudSetupContext(cfg: Config): Promise<CloudSetupContext 
       p.log.error("Could not load your profile.");
       return null;
     }
+    bindAccountIdentity(cfg, profile.user_id);
+    saveConfig(cfg);
 
-    if (profile.finished_onboarding === true || profile.cli_onboarding_enabled !== true) {
+    // First-run detection is driven purely by `finished_onboarding`. The old
+    // `cli_onboarding_enabled` flag gated a terminal-local onboarding path
+    // that no longer exists — first-run users now finish onboarding in the
+    // web wizard via `stepWebOnboarding`.
+    if (profile.finished_onboarding === true) {
       return {
         kind: "setup",
         profileUserID: profile.user_id,
@@ -559,6 +635,23 @@ async function resolveOnboardingTargetOrg(trpc: TypedClient): Promise<OwnedOrg |
     return ownerOrg;
   }
   return accessibleOrgs[0] ?? null;
+}
+
+async function resolveCurrentOnboardingTargetOrg(cfg: Config): Promise<OwnedOrg | null> {
+  try {
+    const { createTypedClient } = await import("../client/trpc");
+    const trpc = createTypedClient(cfg);
+    const profile: CliOnboardingProfile | null = await trpc.user.getCliOnboardingContext.query();
+    if (!profile?.user_id) return null;
+    bindAccountIdentity(cfg, profile.user_id);
+    saveConfig(cfg);
+    return await resolveOnboardingTargetOrg(trpc);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error("setup", `Failed to resolve post-onboarding organization: ${msg}`);
+    p.log.error(`Could not determine your onboarding organization: ${msg}`);
+    return null;
+  }
 }
 
 async function bindOnboardingDeployment(
@@ -724,25 +817,25 @@ async function stepSelectDeployment(apiClient: Client, org: Org): Promise<Deploy
 }
 
 async function stepMintAPIKey(apiClient: Client, cfg: Config): Promise<string | null> {
-  if (!cfg.deployment_id) {
+  const target = cfg.active_account?.target;
+  const deploymentID = target?.deployment_id;
+  if (!deploymentID) {
     p.log.error("No MCP available for API key creation");
     return null;
   }
 
-  if (cfg.api_key) {
-    // biome-ignore lint/style/noNonNullAssertion: checked above
-    const valid = await apiClient.validateAPIKey(cfg.api_key, cfg.deployment_id!);
+  if (target.api_key) {
+    const valid = await apiClient.validateAPIKey(target.api_key, deploymentID);
     logger.debug("setup", `Existing API key valid=${valid}`);
     if (valid) {
       p.log.success(`API key\n${dim("using existing")}`);
-      return cfg.api_key;
+      return target.api_key;
     }
     p.log.warn("Existing API key is invalid, creating a new one...");
   }
 
   try {
-    // biome-ignore lint/style/noNonNullAssertion: checked above
-    const resp = await apiClient.createAPIKey(cfg.deployment_id!, "dosu-cli");
+    const resp = await apiClient.createAPIKey(deploymentID, "dosu-cli");
     logger.info("setup", "API key created");
     p.log.success(`API key\n${dim("created")}`);
     return resp.api_key;
@@ -865,40 +958,5 @@ export function stepShowSummary(results: ConfigResult[]): void {
 
   if (installed.length === 0 && removed.length === 0 && skipped.length > 0) {
     p.log.success("All agents already configured. No changes needed.");
-  }
-}
-
-/**
- * Post-setup nudge: a ready-to-paste prompt so the user can immediately try
- * Dosu in their configured AI agent. Rendered at the very end of the flow
- * (right before outro) so it's the last actionable thing they see — not
- * buried right after the MCP configuration step. The call site is responsible
- * for only invoking this when MCP was actually (re)configured this run, so
- * users who skip MCP don't get a tip they can't act on.
- */
-export function showTryItOutPrompt(
-  opts: { mode?: SetupMode; docsImported?: boolean; hasAgentsMd?: boolean } = {},
-): void {
-  const prompt = (() => {
-    if (opts.mode === MODE_OSS) {
-      return `What can Dosu help me with? Pick an open source library related to my project and explain how it works.`;
-    }
-    if (opts.docsImported) {
-      return `Use Dosu to summarize the most important docs in my repo.`;
-    }
-    if (opts.hasAgentsMd) {
-      return `Please use Dosu to host my AGENTS.md`;
-    }
-    return `Ask Dosu to draft an AGENTS.md for this project.`;
-  })();
-  p.log.message(`Try it out! Paste this into your agent:\n\n${info(prompt)}`);
-
-  // Surface the codebase audit as a next step (cloud mode only — it acts on the
-  // user's own repo). The agent runs the audit skill; `dosu audit` is the
-  // terminal-only fallback.
-  if (opts.mode !== MODE_OSS) {
-    p.log.message(
-      `See what docs Dosu can generate for this repo:\n\n${info("Ask Dosu to audit this repo and show what docs it can generate.")}\n\nOr run ${info("dosu audit")} after your agent writes the audit.`,
-    );
   }
 }

@@ -12,6 +12,8 @@ vi.mock("../config/config", async (importOriginal) => {
   };
 });
 
+import { emptyConfig } from "../config/config";
+import { makeTestConfig } from "../config/config.test-utils";
 import {
   addPendingTask,
   checkForReadyTasks,
@@ -44,7 +46,14 @@ beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), "dosu-pending-test-"));
   process.env.XDG_CONFIG_HOME = tempDir;
   process.env.DOSU_BACKEND_URL_OVERRIDE = "https://api.example.test";
-  mockLoadConfig.mockReturnValue({ api_key: "sk_user_test" });
+  mockLoadConfig.mockReturnValue(
+    makeTestConfig({
+      access_token: "test-token",
+      refresh_token: "test-refresh",
+      expires_at: 0,
+      api_key: "sk_user_test",
+    }),
+  );
 });
 
 afterEach(() => {
@@ -303,7 +312,7 @@ describe("checkForReadyTasks — polling", () => {
   });
 
   it("does not poll when api key is missing", () => {
-    mockLoadConfig.mockReturnValue({});
+    mockLoadConfig.mockReturnValue(emptyConfig());
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     vi.spyOn(console, "error").mockImplementation(() => {});

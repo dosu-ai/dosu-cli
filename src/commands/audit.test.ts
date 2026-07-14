@@ -36,12 +36,16 @@ vi.mock("../version/pending-tasks-check", () => ({
   addPendingTask: (...a: unknown[]) => mockAddPendingTask(...a),
 }));
 
-// ── fs (findings file) ──
+// ── fs (findings file, cleanup, .gitignore) ──
 const mockExistsSync = vi.fn();
 const mockReadFileSync = vi.fn();
+const mockWriteFileSync = vi.fn();
+const mockRmSync = vi.fn();
 vi.mock("node:fs", () => ({
   existsSync: (...a: unknown[]) => mockExistsSync(...a),
   readFileSync: (...a: unknown[]) => mockReadFileSync(...a),
+  writeFileSync: (...a: unknown[]) => mockWriteFileSync(...a),
+  rmSync: (...a: unknown[]) => mockRmSync(...a),
 }));
 
 // ── clack ──
@@ -64,14 +68,16 @@ vi.mock("../debug/logger", () => ({
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-import { auditCommand } from "./audit";
+import { join } from "node:path";
+import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
+import { auditCommand, cleanupFindings } from "./audit";
 
 let logSpy: ReturnType<typeof vi.spyOn>;
 let errorSpy: ReturnType<typeof vi.spyOn>;
 // biome-ignore lint/suspicious/noExplicitAny: process.exit mock type mismatch
 let exitSpy: any;
 
-const validConfig = {
+const validFlatConfig: FlatTestConfig = {
   access_token: "t",
   refresh_token: "r",
   expires_at: 0,
@@ -79,6 +85,9 @@ const validConfig = {
   org_id: "org1",
   space_id: "sp1",
 };
+const makeValidConfig = (overrides: Partial<FlatTestConfig> = {}) =>
+  makeTestConfig({ ...validFlatConfig, ...overrides });
+const validConfig = makeValidConfig();
 
 const detected = { owner: "o", name: "r", slug: "o/r" };
 
@@ -99,7 +108,7 @@ const findings = {
       evidence: ["e1"],
     },
     {
-      task: "generate-readme",
+      task: "refresh-readme",
       type: "readme",
       file: "README.md",
       status: "present_ok",
@@ -126,7 +135,7 @@ const findings = {
 const capabilities = {
   tasks: [
     { id: "generate-agents-md", label: "AGENTS.md", description: "", doc_type: "agents" },
-    { id: "generate-readme", label: "README", description: "", doc_type: "readme" },
+    { id: "refresh-readme", label: "README", description: "", doc_type: "readme" },
   ],
 };
 
@@ -185,18 +194,51 @@ afterEach(() => {
 
 describe("config guard", () => {
   it("exits when api_key missing", async () => {
-    mockLoadConfig.mockReturnValue({ ...validConfig, api_key: undefined });
+    mockLoadConfig.mockReturnValue(makeValidConfig({ api_key: undefined }));
     await expect(run()).rejects.toThrow("exit");
   });
 
   it("exits when org_id missing", async () => {
-    mockLoadConfig.mockReturnValue({ ...validConfig, org_id: undefined });
+    mockLoadConfig.mockReturnValue(makeValidConfig({ org_id: undefined }));
     await expect(run()).rejects.toThrow("exit");
   });
 
   it("exits when not logged in", async () => {
-    mockLoadConfig.mockReturnValue({ ...validConfig, access_token: "" });
+    mockLoadConfig.mockReturnValue(makeValidConfig({ access_token: "" }));
     await expect(run()).rejects.toThrow("exit");
+  });
+});
+
+describe("--list-tasks", () => {
+  it("prints capabilities as JSON without touching repo or findings", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResp(capabilities));
+    await run("--list-tasks", "--json");
+
+    expect(fetchCalls()[0][0]).toBe("https://api.example.test/v1/cli/tasks");
+    const out = JSON.parse(logSpy.mock.calls.map((c: unknown[]) => c.join("")).join(""));
+    expect(out.tasks.map((t: { id: string }) => t.id)).toEqual([
+      "generate-agents-md",
+      "refresh-readme",
+    ]);
+    expect(mockDetectGitRepo).not.toHaveBeenCalled();
+    expect(mockReadFileSync).not.toHaveBeenCalled();
+  });
+
+  it("prints a human-readable line per task without --json", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResp(capabilities));
+    await run("--list-tasks");
+
+    const out = logSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
+    expect(out).toContain("generate-agents-md");
+    expect(out).toContain("refresh-readme");
+  });
+
+  it("handles a capabilities response without tasks", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResp({}));
+    await run("--list-tasks", "--json");
+
+    const out = JSON.parse(logSpy.mock.calls.map((c: unknown[]) => c.join("")).join(""));
+    expect(out.tasks).toEqual([]);
   });
 });
 
@@ -459,7 +501,7 @@ describe("capability intersection + selection", () => {
     const opts = mockMultiselect.mock.calls[0][0].options as { value: string }[];
     const values = opts.map((o) => o.value);
     expect(values).toContain("generate-agents-md");
-    expect(values).toContain("generate-readme");
+    expect(values).toContain("refresh-readme");
     expect(values).not.toContain("unsupported-thing");
   });
 
@@ -577,6 +619,91 @@ describe("--tasks (agent-driven, non-interactive)", () => {
     await expect(run("--tasks", "generate-agents-md")).rejects.toThrow("exit");
     expect(mockConfirm).not.toHaveBeenCalled();
     expect(mockStepConnect).not.toHaveBeenCalled();
+  });
+
+  it("removes the .dosu dir and gitignores it after firing tasks", async () => {
+    mockFetch
+      .mockResolvedValueOnce(jsonResp(capabilities))
+      .mockResolvedValueOnce(jsonResp({ task_id: "task-1" }));
+
+    await run("--tasks", "generate-agents-md");
+
+    expect(mockRmSync).toHaveBeenCalledWith(join(process.cwd(), ".dosu"), {
+      recursive: true,
+      force: true,
+    });
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      join(process.cwd(), ".gitignore"),
+      expect.stringContaining(".dosu/\n"),
+    );
+  });
+
+  it("keeps the findings when no task was fired", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResp(capabilities)).mockResolvedValueOnce(jsonResp({})); // backend returns no task_id
+
+    await run("--tasks", "generate-agents-md");
+
+    expect(mockRmSync).not.toHaveBeenCalled();
+  });
+});
+
+describe("cleanupFindings", () => {
+  it("appends .dosu/ to an existing .gitignore that lacks it", () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue("node_modules/\n");
+
+    cleanupFindings("/repo/.dosu/audit.json", "/repo");
+
+    expect(mockWriteFileSync).toHaveBeenCalledWith("/repo/.gitignore", "node_modules/\n.dosu/\n");
+    expect(mockRmSync).toHaveBeenCalledWith("/repo/.dosu", { recursive: true, force: true });
+  });
+
+  it("creates .gitignore when the repo has none", () => {
+    mockExistsSync.mockReturnValue(false);
+
+    cleanupFindings("/repo/.dosu/audit.json", "/repo");
+
+    expect(mockWriteFileSync).toHaveBeenCalledWith("/repo/.gitignore", ".dosu/\n");
+  });
+
+  it("adds a separating newline when .gitignore lacks a trailing one", () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue("dist/");
+
+    cleanupFindings("/repo/.dosu/audit.json", "/repo");
+
+    expect(mockWriteFileSync).toHaveBeenCalledWith("/repo/.gitignore", "dist/\n.dosu/\n");
+  });
+
+  it("leaves .gitignore untouched when .dosu is already listed (either form)", () => {
+    mockExistsSync.mockReturnValue(true);
+    for (const existing of ["dist/\n.dosu/\n", "dist/\n.dosu\n", "  .dosu/  \n"]) {
+      mockWriteFileSync.mockClear();
+      mockReadFileSync.mockReturnValue(existing);
+      cleanupFindings("/repo/.dosu/audit.json", "/repo");
+      expect(mockWriteFileSync).not.toHaveBeenCalled();
+    }
+  });
+
+  it("never removes a custom --findings location outside the default .dosu dir", () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue(".dosu/\n");
+
+    cleanupFindings("/elsewhere/findings.json", "/repo");
+
+    expect(mockRmSync).not.toHaveBeenCalled();
+  });
+
+  it("is best-effort: fs errors never throw", () => {
+    mockExistsSync.mockReturnValue(false);
+    mockWriteFileSync.mockImplementation(() => {
+      throw new Error("EACCES");
+    });
+    mockRmSync.mockImplementation(() => {
+      throw new Error("EBUSY");
+    });
+
+    expect(() => cleanupFindings("/repo/.dosu/audit.json", "/repo")).not.toThrow();
   });
 });
 

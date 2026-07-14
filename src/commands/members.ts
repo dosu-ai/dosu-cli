@@ -10,7 +10,7 @@ import { printResult, printTable } from "./output";
 
 function requireConfig() {
   const cfg = requireLoginConfig();
-  if (!cfg.org_id) {
+  if (!cfg.active_account?.target?.org_id) {
     console.error(pc.red("Missing org config. Run 'dosu setup' to reconfigure."));
     process.exit(1);
   }
@@ -64,7 +64,7 @@ export function membersCommand(): Command {
       const role = opts.role.toUpperCase() === "ADMIN" ? "ADMIN" : "MEMBER";
       await client.invitations.invite.mutate({
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-        orgId: cfg.org_id!,
+        orgId: cfg.active_account!.target!.org_id!,
         email,
         // biome-ignore lint/suspicious/noExplicitAny: Role enum requires cast from string
         role: role as any,
@@ -118,7 +118,7 @@ export function membersCommand(): Command {
 
       await client.invitations.acceptInvitation.mutate({
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-        orgId: cfg.org_id!,
+        orgId: cfg.active_account!.target!.org_id!,
         email,
       });
 
@@ -140,7 +140,7 @@ export function membersCommand(): Command {
 
       await client.invitations.rejectInvitation.mutate({
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-        orgId: cfg.org_id!,
+        orgId: cfg.active_account!.target!.org_id!,
         email,
       });
 

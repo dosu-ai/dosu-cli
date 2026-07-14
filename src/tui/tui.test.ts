@@ -19,6 +19,7 @@ vi.mock("@clack/prompts", () => ({
     success: vi.fn(),
     error: vi.fn(),
     info: vi.fn(),
+    message: vi.fn(),
   },
 }));
 
@@ -55,7 +56,8 @@ import { startOAuthFlow } from "../auth/flow";
 import { Client } from "../client/client";
 import { executeInsights } from "../commands/insights";
 import type { Config } from "../config/config";
-import { loadConfig, saveConfig } from "../config/config";
+import { emptyConfig, loadConfig, saveConfig, updateTarget } from "../config/config";
+import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { runSetup } from "../setup/flow";
 import { handleLogout, runTUI } from "./tui";
 
@@ -110,8 +112,8 @@ afterEach(() => {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeCfg(overrides: Partial<Config> = {}): Config {
-  return {
+function makeCfg(overrides: Partial<FlatTestConfig> = {}): Config {
+  return makeTestConfig({
     access_token: "tok",
     refresh_token: "ref",
     expires_at: 9999999999,
@@ -119,7 +121,7 @@ function makeCfg(overrides: Partial<Config> = {}): Config {
     deployment_name: undefined,
     api_key: undefined,
     ...overrides,
-  };
+  });
 }
 
 function writeRealConfig(cfg: Config): void {
@@ -150,21 +152,11 @@ describe("handleLogout (direct)", () => {
     handleLogout(cfg);
 
     // Verify the object was cleared
-    expect(cfg.access_token).toBe("");
-    expect(cfg.refresh_token).toBe("");
-    expect(cfg.expires_at).toBe(0);
-    expect(cfg.deployment_id).toBeUndefined();
-    expect(cfg.deployment_name).toBeUndefined();
-    expect(cfg.api_key).toBeUndefined();
+    expect(cfg.active_account).toBeUndefined();
 
     // Verify the file on disk was actually written with cleared values
     const ondisk = readRealConfig();
-    expect(ondisk.access_token).toBe("");
-    expect(ondisk.refresh_token).toBe("");
-    expect(ondisk.expires_at).toBe(0);
-    expect(ondisk.deployment_id).toBeUndefined();
-    expect(ondisk.deployment_name).toBeUndefined();
-    expect(ondisk.api_key).toBeUndefined();
+    expect(ondisk.active_account).toBeUndefined();
 
     expect(p.log.success).toHaveBeenCalledWith("Credentials cleared.");
   });
@@ -308,19 +300,32 @@ describe("runTUI", () => {
     mockIsCancel.mockReturnValue(false);
     mockConfirm.mockResolvedValueOnce(true);
 
-    mockStartOAuthFlow.mockResolvedValueOnce({
-      browserOpened: true,
-      token: { access_token: "new-tok", refresh_token: "new-ref", expires_in: 3600 },
+    mockStartOAuthFlow.mockImplementationOnce(async (_signal, _path, _params, onAuthURL) => {
+      onAuthURL?.("https://app.test/cli/auth?callback=cb");
+      return {
+        browserOpened: true,
+        token: { access_token: "new-tok", refresh_token: "new-ref", expires_in: 3600 },
+      };
     });
 
     mockSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
 
     await runTUI();
 
-    expect(mockStartOAuthFlow).toHaveBeenCalledWith(undefined, "/cli/auth");
+    expect(mockStartOAuthFlow).toHaveBeenCalledWith(
+      undefined,
+      "/cli/auth",
+      {},
+      expect.any(Function),
+    );
+    expect(p.log.message).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "If your browser doesn't open automatically, visit:\nhttps://app.test/cli/auth?callback=cb",
+      ),
+    );
     const ondisk = readRealConfig();
-    expect(ondisk.access_token).toBe("new-tok");
-    expect(ondisk.refresh_token).toBe("new-ref");
+    expect(ondisk.active_account?.session.access_token).toBe("new-tok");
+    expect(ondisk.active_account?.session.refresh_token).toBe("new-ref");
   });
 
   it("shows error when OAuth flow fails", async () => {
@@ -366,7 +371,7 @@ describe("runTUI", () => {
     expect(p.log.error).toHaveBeenCalledWith(
       "Run 'dosu login --no-browser' from the terminal to authenticate over SSH.",
     );
-    expect(readRealConfig().access_token).toBe("");
+    expect(readRealConfig().active_account?.session.access_token).toBe("");
   });
 
   it("does nothing when user cancels confirm prompt", async () => {
@@ -399,9 +404,7 @@ describe("runTUI", () => {
 
     // Verify real file on disk was cleared
     const ondisk = readRealConfig();
-    expect(ondisk.access_token).toBe("");
-    expect(ondisk.refresh_token).toBe("");
-    expect(ondisk.expires_at).toBe(0);
+    expect(ondisk.active_account).toBeUndefined();
     expect(ondisk.mode).toBeUndefined();
     expect(p.log.success).toHaveBeenCalledWith("Credentials cleared.");
   });
@@ -451,9 +454,11 @@ describe("runTUI", () => {
     // Simulate setup writing new deployment to config
     mockRunSetup.mockImplementation(async () => {
       const cfg = readRealConfig();
-      cfg.deployment_id = "dep-from-setup";
-      cfg.deployment_name = "Setup Deploy";
-      cfg.api_key = "key-from-setup";
+      updateTarget(cfg, {
+        deployment_id: "dep-from-setup",
+        deployment_name: "Setup Deploy",
+        api_key: "key-from-setup",
+      });
       writeRealConfig(cfg);
     });
 
@@ -463,5 +468,21 @@ describe("runTUI", () => {
 
     expect(mockRunSetup).toHaveBeenCalled();
     expect(mockOutro).toHaveBeenCalledWith("Goodbye!");
+  });
+
+  it("setup reload removes account state that was cleared on disk", async () => {
+    writeRealConfig(
+      makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
+    );
+    mockIsCancel.mockReturnValue(false);
+    mockRunSetup.mockImplementation(async () => {
+      writeRealConfig(emptyConfig());
+    });
+    mockSelect.mockResolvedValueOnce("setup").mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    const nextOptions = mockSelect.mock.calls[1]?.[0]?.options as Array<{ value: string }>;
+    expect(nextOptions.map((option) => option.value)).not.toContain("insights");
   });
 });

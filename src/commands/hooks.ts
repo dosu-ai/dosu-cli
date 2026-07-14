@@ -18,7 +18,7 @@
  * poll is actually required.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { Argument, Command } from "commander";
 import { isAuthenticated, loadConfig, MODE_OSS } from "../config/config";
@@ -133,7 +133,7 @@ export async function runUserPromptSubmit(
   }
 
   const cfg = loadConfig();
-  if (!cfg.api_key || !cfg.deployment_id) {
+  if (!cfg.active_account?.target?.api_key || !cfg.active_account?.target?.deployment_id) {
     logger.debug("hooks", "submit skipped reason=not-configured");
     return; // a hook never prompts the user; `doctor` surfaces this
   }
@@ -143,7 +143,7 @@ export async function runUserPromptSubmit(
   let resp: import("../hooks/ticket-client").CreateTicketResponse;
   try {
     resp = await tc.requestCreateTicket(cfg, {
-      deployment_id: cfg.deployment_id,
+      deployment_id: cfg.active_account?.target?.deployment_id,
       agent,
       session_id: sessionId,
       turn_id: input.turn_id ?? String(now),
@@ -198,7 +198,7 @@ export async function runPostToolUse(input: HookInput, now: number = Date.now())
   }
 
   const cfg = loadConfig();
-  if (!cfg.api_key || !cfg.deployment_id) {
+  if (!cfg.active_account?.target?.api_key || !cfg.active_account?.target?.deployment_id) {
     saveState({ ...state, lastCheckedAt: now });
     return;
   }
@@ -269,7 +269,8 @@ export async function runStop(input: HookInput, now: number = Date.now()): Promi
   if (state.status !== "pending" || now > state.expiresAt) return printContinue();
 
   const cfg = loadConfig();
-  if (!cfg.api_key || !cfg.deployment_id) return printContinue();
+  if (!cfg.active_account?.target?.api_key || !cfg.active_account?.target?.deployment_id)
+    return printContinue();
 
   const tc = await import("../hooks/ticket-client");
   const pollMs = stopPollMs();
@@ -614,6 +615,26 @@ export async function collectDoctorChecks(opts: { dir?: string }): Promise<Docto
     }
   }
 
+  // 2d. Hook runtime resolvable. Installed commands exec either bare `dosu`
+  // (global install) or the materialized bundle (npx-only install) — if
+  // neither exists, every hook silently no-ops on the agent's next turn.
+  if ((hasSubmit && hasPostTool) || alternativeInstalled) {
+    const { dosuOnPath, materializedRuntimePath } = await import("../hooks/runtime");
+    const materialized = materializedRuntimePath();
+    if (dosuOnPath()) {
+      checks.push({ name: "runtime", status: "ok", detail: "dosu on PATH" });
+    } else if (existsSync(materialized)) {
+      checks.push({ name: "runtime", status: "ok", detail: `materialized: ${materialized}` });
+    } else {
+      checks.push({
+        name: "runtime",
+        status: "fail",
+        detail:
+          "dosu is not on PATH and no materialized runtime exists — re-run 'npx -y @dosu/cli hooks install <agent>'",
+      });
+    }
+  }
+
   // 3. Auth + 4. Deployment.
   const cfg = loadConfig();
   if (isAuthenticated(cfg)) {
@@ -621,11 +642,14 @@ export async function collectDoctorChecks(opts: { dir?: string }): Promise<Docto
   } else {
     checks.push({ name: "auth", status: "fail", detail: "not logged in (run 'dosu login')" });
   }
-  if (cfg.deployment_id || cfg.mode === MODE_OSS) {
+  if (cfg.active_account?.target?.deployment_id || cfg.mode === MODE_OSS) {
     checks.push({
       name: "deployment",
       status: "ok",
-      detail: cfg.deployment_name ?? cfg.deployment_id ?? "oss",
+      detail:
+        cfg.active_account?.target?.deployment_name ??
+        cfg.active_account?.target?.deployment_id ??
+        "oss",
     });
   } else {
     checks.push({
@@ -638,9 +662,12 @@ export async function collectDoctorChecks(opts: { dir?: string }): Promise<Docto
   // 5. Backend reachable + API key valid (best-effort; optimistic on network error).
   // This validates the SAME credential the hooks use (`X-Dosu-API-Key`), so it
   // reflects real hook auth — independent of the OAuth login state above.
-  if (cfg.api_key && cfg.deployment_id) {
+  if (cfg.active_account?.target?.api_key && cfg.active_account?.target?.deployment_id) {
     const { Client } = await import("../client/client");
-    const ok = await new Client(cfg).validateAPIKey(cfg.api_key, cfg.deployment_id);
+    const ok = await new Client(cfg).validateAPIKey(
+      cfg.active_account?.target?.api_key,
+      cfg.active_account?.target?.deployment_id,
+    );
     checks.push({
       name: "backend",
       status: ok ? "ok" : "fail",

@@ -24,15 +24,18 @@ import { threadsCommand } from "../commands/threads";
 import { topicsCommand } from "../commands/topics";
 import {
   type Config,
+  clearConfigInPlace,
   getConfigPath,
   isAuthenticated,
   isTokenExpired,
   loadConfig,
   MODE_OSS,
+  replaceLoginSession,
   saveConfig,
 } from "../config/config";
 import { logger } from "../debug/logger";
 import { allProviders, getProvider, type Provider } from "../mcp/providers";
+import { browserFallbackHint } from "../setup/styles";
 import { checkForReadyTasks } from "../version/pending-tasks-check";
 import { checkForSkillUpdates } from "../version/skill-update-check";
 import { checkForUpdates } from "../version/update-check";
@@ -49,6 +52,36 @@ function isHookEntrypointInvocation(argv: string[]): boolean {
   return i >= 0 && HOOK_ENTRYPOINTS.has(argv[i + 1] ?? "");
 }
 
+/** Suggest the closest registered command name for a mistyped one, if any is close enough. */
+function suggestClosestCommand(input: string, program: Command): string | undefined {
+  let best: string | undefined;
+  let bestDistance = Infinity;
+  const candidates = ["help", ...program.commands.flatMap((c) => [c.name(), ...c.aliases()])];
+  for (const name of candidates) {
+    const d = editDistance(input.toLowerCase(), name.toLowerCase());
+    if (d < bestDistance) {
+      bestDistance = d;
+      best = name;
+    }
+  }
+  // Same threshold commander uses for its own suggestions.
+  return best !== undefined && bestDistance <= 3 && bestDistance < best.length ? best : undefined;
+}
+
+function editDistance(a: string, b: string): number {
+  const prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let diag = prev[0];
+    prev[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const tmp = prev[j];
+      prev[j] = Math.min(prev[j] + 1, prev[j - 1] + 1, diag + (a[i - 1] === b[j - 1] ? 0 : 1));
+      diag = tmp;
+    }
+  }
+  return prev[b.length];
+}
+
 export function createProgram(): Command {
   const program = new Command();
 
@@ -56,6 +89,7 @@ export function createProgram(): Command {
     .name("dosu")
     .description("Dosu CLI - Manage MCP servers for AI tools")
     .version(getVersionString(), "-v, --version")
+    .helpCommand("help [command]", "Show help for a command")
     .option("--debug", "Enable debug logging to stderr", false)
     .hook("preAction", (thisCommand) => {
       const opts = thisCommand.optsWithGlobals();
@@ -66,7 +100,20 @@ export function createProgram(): Command {
         checkForReadyTasks();
       }
     })
+    .allowExcessArguments(true)
     .action(async () => {
+      const command = program.args[0];
+      if (command !== undefined) {
+        // An unrecognized first token reaches the root action instead of a
+        // subcommand — report it as an unknown command, not "too many arguments".
+        let message = `error: unknown command '${command}'`;
+        const suggestion = suggestClosestCommand(command, program);
+        if (suggestion) message += `\n(Did you mean '${suggestion}'?)`;
+        message += "\nRun 'dosu --help' to see available commands.";
+        console.error(message);
+        process.exitCode = 1;
+        return;
+      }
       // Default: launch TUI when no subcommand given
       const { runTUI } = await import("../tui/tui");
       await runTUI();
@@ -141,7 +188,9 @@ export function createProgram(): Command {
           const { startOAuthFlow } = await import("../auth/flow");
           let result: Awaited<ReturnType<typeof startOAuthFlow>>;
           try {
-            result = await startOAuthFlow();
+            result = await startOAuthFlow(undefined, undefined, undefined, (url) => {
+              console.log(browserFallbackHint(url));
+            });
           } catch (err) {
             if (err instanceof OAuthCallbackError) {
               console.error(err.userMessage);
@@ -167,9 +216,11 @@ export function createProgram(): Command {
           }
         }
 
-        cfg.access_token = token.access_token;
-        cfg.refresh_token = token.refresh_token;
-        cfg.expires_at = Math.floor(Date.now() / 1000) + token.expires_in;
+        replaceLoginSession(cfg, {
+          access_token: token.access_token,
+          refresh_token: token.refresh_token,
+          expires_at: Math.floor(Date.now() / 1000) + token.expires_in,
+        });
         saveConfig(cfg);
 
         console.log("Successfully authenticated!");
@@ -187,14 +238,7 @@ export function createProgram(): Command {
         console.log("You are not logged in.");
         return;
       }
-      cfg.access_token = "";
-      cfg.refresh_token = "";
-      cfg.expires_at = 0;
-      cfg.deployment_id = undefined;
-      cfg.deployment_name = undefined;
-      cfg.api_key = undefined;
-      cfg.org_id = undefined;
-      cfg.space_id = undefined;
+      clearConfigInPlace(cfg);
       saveConfig(cfg);
       console.log("Successfully logged out.");
     });
@@ -219,9 +263,9 @@ export function createProgram(): Command {
       if (cfg.mode === MODE_OSS) {
         console.log("Mode: OSS");
         console.log("MCP: Public libraries only");
-      } else if (cfg.deployment_id) {
-        console.log(`MCP: ${cfg.deployment_name}`);
-        console.log(`MCP ID: ${cfg.deployment_id}`);
+      } else if (cfg.active_account?.target?.deployment_id) {
+        console.log(`MCP: ${cfg.active_account?.target?.deployment_name}`);
+        console.log(`MCP ID: ${cfg.active_account?.target?.deployment_id}`);
       } else {
         console.log("MCP: None selected");
         console.log(
@@ -253,10 +297,10 @@ export function createProgram(): Command {
       if (isTokenExpired(cfg) && !(await ensureFreshSession(cfg))) {
         throw new Error("session expired. Run 'dosu login' to re-authenticate");
       }
-      if (cfg.mode !== MODE_OSS && !cfg.deployment_id) {
+      if (cfg.mode !== MODE_OSS && !cfg.active_account?.target?.deployment_id) {
         throw new Error("no MCP selected. Run 'dosu' to open the TUI and select an MCP");
       }
-      if (!cfg.api_key) {
+      if (!cfg.active_account?.target?.api_key) {
         throw new Error("no API key available. Run 'dosu setup' to create one");
       }
 

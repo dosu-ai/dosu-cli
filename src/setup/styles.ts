@@ -36,6 +36,15 @@ export function bold(msg: string): string {
   return pc.bold(msg);
 }
 
+/**
+ * Muted fallback hint shown whenever the CLI opens a browser, so a closed or
+ * missing browser isn't a dead end. Single source of truth for the copy —
+ * print via `console.log` in plain flows or `p.log.message` in clack flows.
+ */
+export function browserFallbackHint(url: string): string {
+  return dim(`If your browser doesn't open automatically, visit:\n${url}`);
+}
+
 export function info(msg: string): string {
   return pc.cyan(msg);
 }

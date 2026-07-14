@@ -2,7 +2,7 @@ import { createTRPCClient, httpLink } from "@trpc/client";
 import superjson from "superjson";
 import { CLI_CONTRACT_HASH } from "../client/contract";
 import { createTypedClient } from "../client/trpc";
-import type { Config } from "../config/config";
+import { type Config, emptyConfig } from "../config/config";
 import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
 import type { CliApiClient } from "../generated/dosu-api-types";
@@ -44,7 +44,7 @@ export async function trackCliOnboardingEvent(
   event: CliOnboardingEvent,
   properties: CliOnboardingProperties = {},
 ): Promise<void> {
-  if (!cfg.access_token) return;
+  if (!cfg.active_account?.session.access_token) return;
 
   try {
     const trpc: CliOnboardingAnalyticsClient = createTypedClient(cfg);
@@ -77,7 +77,7 @@ export async function trackCliOnboardingPreAuthEvent(
         event,
         onboarding_run_id: onboardingRunID,
         properties: {
-          ...baseProperties({ access_token: "", refresh_token: "", expires_at: 0 }),
+          ...baseProperties(emptyConfig()),
           ...properties,
         },
       }),
@@ -95,9 +95,9 @@ function baseProperties(cfg: Config): CliOnboardingProperties {
     platform: process.platform,
     arch: process.arch,
     mode: cfg.mode ?? "cloud",
-    org_id: cfg.org_id,
-    deployment_id: cfg.deployment_id,
-    space_id: cfg.space_id,
+    org_id: cfg.active_account?.target?.org_id,
+    deployment_id: cfg.active_account?.target?.deployment_id,
+    space_id: cfg.active_account?.target?.space_id,
   };
 }
 

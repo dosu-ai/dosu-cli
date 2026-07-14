@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../config/config";
+import { type FlatTestConfig, makeTestConfig, testSession } from "../config/config.test-utils";
 import { CLI_CONTRACT_HASH } from "./contract";
 import { createTypedClient } from "./trpc";
 
@@ -19,9 +20,13 @@ vi.mock("../config/constants", () => ({
 const { mockIsTokenExpired } = vi.hoisted(() => ({
   mockIsTokenExpired: vi.fn<(cfg: Config) => boolean>().mockReturnValue(false),
 }));
-vi.mock("../config/config", () => ({
-  isTokenExpired: (cfg: Config) => mockIsTokenExpired(cfg),
-}));
+vi.mock("../config/config", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config")>();
+  return {
+    ...actual,
+    isTokenExpired: (cfg: Config) => mockIsTokenExpired(cfg),
+  };
+});
 
 const { mockRefreshToken } = vi.hoisted(() => ({
   mockRefreshToken: vi.fn(),
@@ -32,14 +37,14 @@ vi.mock("./client", () => ({
   }),
 }));
 
-function makeConfig(overrides: Partial<Config> = {}): Config {
-  return {
+function makeConfig(overrides: Partial<FlatTestConfig> = {}): Config {
+  return makeTestConfig({
     access_token: "t",
     refresh_token: "r",
     expires_at: 0,
     api_key: "sk_user_test_key_123",
     ...overrides,
-  };
+  });
 }
 
 /** Build a minimal tRPC-compatible single response (httpLink, not batch). */
@@ -85,7 +90,7 @@ describe("createTypedClient", () => {
       const cfg = makeConfig();
       mockIsTokenExpired.mockReturnValue(true);
       mockRefreshToken.mockImplementation(async () => {
-        cfg.access_token = "refreshed";
+        testSession(cfg).access_token = "refreshed";
       });
       mockFetch.mockResolvedValue(trpcOk({ ok: true }));
 
@@ -119,7 +124,7 @@ describe("createTypedClient", () => {
     it("retries on 401 with refreshed token", async () => {
       const cfg = makeConfig({ access_token: "old" });
       mockRefreshToken.mockImplementation(async () => {
-        cfg.access_token = "new_token";
+        testSession(cfg).access_token = "new_token";
       });
       // First call: 401, retry: success
       mockFetch.mockResolvedValueOnce(trpcError(401));

@@ -10,7 +10,7 @@ import { formatDate, printInfo, printResult, printTable } from "./output";
 
 function requireConfig() {
   const cfg = requireLoginConfig();
-  if (!cfg.org_id) {
+  if (!cfg.active_account?.target?.org_id) {
     console.error(pc.red("Missing org config. Run 'dosu setup' to reconfigure."));
     process.exit(1);
   }
@@ -30,7 +30,7 @@ export function sourcesCommand(): Command {
 
       const dataSources = await client.dataSource.list.query({
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-        org_id: cfg.org_id!,
+        org_id: cfg.active_account!.target!.org_id!,
         excluded_provider_slugs: [],
       });
 

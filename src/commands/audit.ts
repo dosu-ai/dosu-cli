@@ -5,8 +5,8 @@
  * pending-tasks notifier (see `src/version/pending-tasks-check.ts`).
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import * as p from "@clack/prompts";
 import { Command } from "commander";
 import pc from "picocolors";
@@ -63,17 +63,17 @@ interface AuditFindings {
   items: AuditItem[];
 }
 
-function requireConfig(): Config & { api_key: string; org_id: string } {
+function requireConfig(): Config {
   const cfg = requireLoginConfig();
-  if (!cfg.api_key) {
+  if (!cfg.active_account?.target?.api_key) {
     console.error(pc.red("API key not configured. Run 'dosu setup' first."));
     process.exit(1);
   }
-  if (!cfg.org_id) {
+  if (!cfg.active_account?.target?.org_id) {
     console.error(pc.red("Missing org config. Run 'dosu setup' to reconfigure."));
     process.exit(1);
   }
-  return cfg as Config & { api_key: string; org_id: string };
+  return cfg;
 }
 
 function requireBackendURL(): string {
@@ -178,7 +178,7 @@ async function waitForIndexed(
  * data_source_id on success.
  */
 async function ensureSyncedRepo(
-  cfg: Config & { org_id: string },
+  cfg: Config,
   client: TypedClient,
   detected: DetectedRepo,
   explicitDataSourceId: string | undefined,
@@ -188,7 +188,9 @@ async function ensureSyncedRepo(
     return explicitDataSourceId;
   }
 
-  let sources = await listDataSources(client, cfg.org_id);
+  const orgID = cfg.active_account?.target?.org_id;
+  if (!orgID) throw new Error("missing org config");
+  let sources = await listDataSources(client, orgID);
   let match = findMatch(sources, detected);
 
   if (!match) {
@@ -214,7 +216,7 @@ async function ensureSyncedRepo(
       console.error(pc.red(`Could not connect ${detected.slug}. Run 'dosu setup' and retry.`));
       process.exit(1);
     }
-    sources = await listDataSources(client, cfg.org_id);
+    sources = await listDataSources(client, orgID);
     match = findMatch(sources, detected);
     if (!match) {
       console.error(pc.red(`Could not find ${detected.slug} after connecting. Retry shortly.`));
@@ -223,7 +225,7 @@ async function ensureSyncedRepo(
   }
 
   if (match.is_indexed !== true) {
-    const indexed = await waitForIndexed(client, cfg.org_id, detected, nonInteractive);
+    const indexed = await waitForIndexed(client, orgID, detected, nonInteractive);
     if (!indexed) {
       if (nonInteractive) {
         console.error(pc.red(`${detected.slug} is still indexing. Re-run once indexing finishes.`));
@@ -273,6 +275,39 @@ function loadFindings(findingsPath: string): AuditFindings {
   return parsed as AuditFindings;
 }
 
+/**
+ * Post-generation cleanup: the findings file is a one-shot handoff artifact,
+ * not something to keep (or commit). Once tasks are fired, remove the default
+ * `.dosu/` dir — but never a user-specified `--findings` location outside it —
+ * and make sure `.dosu/` is gitignored so future audit runs can't end up in a
+ * commit. Both steps are best-effort; failing them never fails the audit.
+ */
+export function cleanupFindings(findingsPath: string, cwd: string = process.cwd()): void {
+  const gitignorePath = join(cwd, ".gitignore");
+  try {
+    const content = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf-8") : "";
+    const hasEntry = content.split(/\r?\n/).some((line) => /^\.dosu\/?$/.test(line.trim()));
+    if (!hasEntry) {
+      const sep = content === "" || content.endsWith("\n") ? "" : "\n";
+      writeFileSync(gitignorePath, `${content}${sep}.dosu/\n`);
+    }
+  } catch (err) {
+    logger.warn("audit", `could not update .gitignore: ${errText(err)}`);
+  }
+
+  const defaultDir = join(cwd, ".dosu");
+  if (dirname(findingsPath) !== defaultDir) return;
+  try {
+    rmSync(defaultDir, { recursive: true, force: true });
+  } catch (err) {
+    logger.warn("audit", `could not remove ${defaultDir}: ${errText(err)}`);
+  }
+}
+
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 /** Intersect findings with capabilities, keyed by `item.task` === capability `id`. */
 function intersectActionable(items: AuditItem[], capabilities: Capability[]): AuditItem[] {
   const known = new Set(capabilities.map((c) => c.id));
@@ -292,6 +327,7 @@ export function auditCommand(): Command {
       "--tasks <ids>",
       "Comma-separated task ids to generate (non-interactive; for agent-driven use)",
     )
+    .option("--list-tasks", "List the doc-generation capabilities (valid task ids) and exit")
     .option("--yes", "Skip the prompt and select all suggested items")
     .option("--json", "Output as JSON")
     .action(
@@ -299,11 +335,28 @@ export function auditCommand(): Command {
         dataSourceId?: string;
         findings?: string;
         tasks?: string;
+        listTasks?: boolean;
         yes?: boolean;
         json?: boolean;
       }) => {
         const cfg = requireConfig();
         const apiKey = requireAPIKey(cfg);
+
+        // Capability discovery — lets agents enumerate valid task ids through
+        // the CLI instead of hitting the backend with a raw API key. Doesn't
+        // need a repo or findings, so it runs before those checks.
+        if (opts.listTasks) {
+          const resp = (await backendGet("/v1/cli/tasks", apiKey)) as CapabilitiesResponse;
+          const tasks = resp.tasks ?? [];
+          if (opts.json) {
+            printResult({ tasks }, opts);
+            return;
+          }
+          for (const t of tasks) {
+            console.log(`${t.id}  ${pc.dim(`(${t.doc_type})`)}  ${t.label} — ${t.description}`);
+          }
+          return;
+        }
 
         // 1. Enforce a synced repo (block otherwise).
         const detected = detectGitRepo();
@@ -423,6 +476,12 @@ export function auditCommand(): Command {
             doc_types: [item.type],
             repo: detected.slug,
           });
+        }
+
+        // 8. The findings are consumed — clean up so they can't go stale or
+        // get committed, and gitignore `.dosu/` for future audit runs.
+        if (taskIds.length > 0) {
+          cleanupFindings(findingsPath);
         }
 
         if (opts.json) {

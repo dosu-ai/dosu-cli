@@ -11,7 +11,7 @@ import { printResult, printTable } from "./output";
 
 function requireConfig() {
   const cfg = requireLoginConfig();
-  if (!cfg.org_id) {
+  if (!cfg.active_account?.target?.org_id) {
     console.error(pc.red("Missing org config. Run 'dosu setup' to reconfigure."));
     process.exit(1);
   }
@@ -120,8 +120,12 @@ export function integrationsCommand(): Command {
       // Promise.all preserves order, so the table still follows DISPLAY_PLATFORMS.
       const results = await Promise.all(
         DISPLAY_PLATFORMS.map(async (platform) => {
-          // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-          const { connected } = await probeConnection(client, cfg.org_id!, platform);
+          const { connected } = await probeConnection(
+            client,
+            // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
+            cfg.active_account!.target!.org_id!,
+            platform,
+          );
           return { platform, connected };
         }),
       );
@@ -152,7 +156,7 @@ export function integrationsCommand(): Command {
       const { queryable, connected, connection } = await probeConnection(
         client,
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-        cfg.org_id!,
+        cfg.active_account!.target!.org_id!,
         platform,
       );
 
@@ -182,7 +186,7 @@ export function integrationsCommand(): Command {
       const client = createTypedClient(cfg);
 
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const channels = await client.slackChannel.getAll.query(cfg.org_id!);
+      const channels = await client.slackChannel.getAll.query(cfg.active_account!.target!.org_id!);
 
       if (opts.json) {
         printResult(channels, opts);

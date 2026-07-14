@@ -39,7 +39,7 @@ import {
   REFRESH_LIST_VALUE,
 } from "./github-repo-prompt";
 import { startInstallationCallbackServer } from "./installation-server";
-import { dim } from "./styles";
+import { browserFallbackHint, dim } from "./styles";
 
 const INSTALLATION_TIMEOUT_MS = 10 * 60 * 1000;
 const REPO_REFRESH_POLL_INTERVAL_MS = 500;
@@ -255,6 +255,7 @@ async function openGitHubInstallFlow(
       "Opening your browser to GitHub.\n" +
         "Add repositories or install the Dosu GitHub App, and we'll pick up automatically.",
     );
+    p.log.message(browserFallbackHint(middleURL.toString()));
     try {
       const open = await import("open");
       await open.default(middleURL.toString());
@@ -473,15 +474,15 @@ export async function stepConnectGitHubRepo(
 ): Promise<GithubStepResult> {
   logger.info("setup", "Step: connect GitHub repo(s)");
 
-  if (!cfg.org_id || !cfg.space_id) {
+  if (!cfg.active_account?.target?.org_id || !cfg.active_account?.target?.space_id) {
     p.log.warn(
       "Cannot connect GitHub: your Dosu workspace is missing org/space context. " +
         "Re-run `dosu setup` from a fresh state.",
     );
     return { advance: false, has_connected_repo: false };
   }
-  const orgID = cfg.org_id;
-  const spaceID = cfg.space_id;
+  const orgID = cfg.active_account?.target?.org_id;
+  const spaceID = cfg.active_account?.target?.space_id;
 
   if (detected) {
     p.log.info(`Connecting GitHub repos (detected local repo: ${detected.slug})`);
@@ -621,7 +622,7 @@ export async function stepConnectGitHubRepo(
       advance: true,
       has_connected_repo: true,
       deployment_id: primary.deployment_id,
-      space_id: cfg.space_id,
+      space_id: cfg.active_account?.target?.space_id,
       created_data_source_ids: survived.map((c) => c.data_source_id),
       created_repository_slugs: survived.map((c) => c.slug),
     };

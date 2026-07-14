@@ -29,8 +29,17 @@ vi.mock("../client/client", () => ({
   }),
 }));
 
+// Deterministic hook runtime: the real resolver probes PATH and can
+// materialize a bundle into the config dir.
+vi.mock("../hooks/runtime", () => ({
+  resolveHookCommandPrefix: vi.fn(() => "dosu"),
+  dosuOnPath: vi.fn(() => true),
+  materializedRuntimePath: vi.fn(() => "/nonexistent/dosu-runtime/dosu.js"),
+}));
+
 import { Client } from "../client/client";
 import { loadConfig, MODE_OSS } from "../config/config";
+import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { loadState, saveState, type TicketState } from "../hooks/state";
 import { requestCreateTicket, requestGetTicket, TicketHttpError } from "../hooks/ticket-client";
 import {
@@ -46,7 +55,7 @@ import {
   runUserPromptSubmit,
 } from "./hooks";
 
-const AUTHED = {
+const AUTHED_FLAT: FlatTestConfig = {
   access_token: "at",
   refresh_token: "rt",
   expires_at: Date.now() + 3_600_000,
@@ -54,6 +63,9 @@ const AUTHED = {
   deployment_name: "My Deploy",
   api_key: "key-abc",
 };
+const authed = (overrides: Partial<FlatTestConfig> = {}) =>
+  makeTestConfig({ ...AUTHED_FLAT, ...overrides });
+const AUTHED = authed();
 
 function pending(overrides: Partial<TicketState> = {}): TicketState {
   return {
@@ -138,9 +150,9 @@ describe("runUserPromptSubmit", () => {
     await runUserPromptSubmit({ prompt: "x" });
     await runUserPromptSubmit({ session_id: "s", prompt: "   " });
     vi.mocked(loadState).mockReturnValue(null);
-    vi.mocked(loadConfig).mockReturnValue({ ...AUTHED, deployment_id: undefined });
+    vi.mocked(loadConfig).mockReturnValue(authed({ deployment_id: undefined }));
     await runUserPromptSubmit({ session_id: "s", prompt: "real" });
-    vi.mocked(loadConfig).mockReturnValue({ ...AUTHED, api_key: undefined });
+    vi.mocked(loadConfig).mockReturnValue(authed({ api_key: undefined }));
     await runUserPromptSubmit({ session_id: "s", prompt: "real" });
     expect(requestCreateTicket).not.toHaveBeenCalled();
     expect(stdout()).toBe("");
@@ -305,7 +317,7 @@ describe("runPostToolUse", () => {
 
   it("records the check but never polls when auth/deployment is missing", async () => {
     vi.mocked(loadState).mockReturnValue(pending());
-    vi.mocked(loadConfig).mockReturnValue({ ...AUTHED, deployment_id: undefined });
+    vi.mocked(loadConfig).mockReturnValue(authed({ deployment_id: undefined }));
     await runPostToolUse({ session_id: "sess" }, 50_000);
     expect(requestGetTicket).not.toHaveBeenCalled();
     expect(saveState).toHaveBeenCalledWith(expect.objectContaining({ lastCheckedAt: 50_000 }));
@@ -452,7 +464,7 @@ describe("runStop", () => {
 
   it("continues without polling when auth/deployment is missing", async () => {
     vi.mocked(loadState).mockReturnValue(pending());
-    vi.mocked(loadConfig).mockReturnValue({ ...AUTHED, api_key: undefined });
+    vi.mocked(loadConfig).mockReturnValue(authed({ api_key: undefined }));
     await runStop({ session_id: "sess" }, 70_000);
     expect(requestGetTicket).not.toHaveBeenCalled();
     expect(JSON.parse(logSpy.mock.calls[0][0])).toEqual({ continue: true });
@@ -721,7 +733,9 @@ describe("lifecycle commands", () => {
   });
 
   it("doctor flags missing config / auth / deployment and exits non-zero", async () => {
-    vi.mocked(loadConfig).mockReturnValue({ access_token: "", refresh_token: "", expires_at: 0 });
+    vi.mocked(loadConfig).mockReturnValue(
+      makeTestConfig({ access_token: "", refresh_token: "", expires_at: 0 }),
+    );
     const checks = await collectDoctorChecks({ dir });
     const byName = Object.fromEntries(checks.map((c) => [c.name, c.status]));
     expect(byName).toMatchObject({
@@ -854,6 +868,48 @@ describe("lifecycle commands", () => {
     expect(factory?.status).toBe("fail");
     expect(factory?.detail).toContain("not both installed");
   });
+
+  it("doctor reports runtime ok when dosu is on PATH", async () => {
+    const rt = await import("../hooks/runtime");
+    vi.mocked(rt.dosuOnPath).mockReturnValue(true);
+    await runInstall("claude-code", { dir });
+    const checks = await collectDoctorChecks({ dir });
+    const runtime = checks.find((c) => c.name === "runtime");
+    expect(runtime?.status).toBe("ok");
+    expect(runtime?.detail).toBe("dosu on PATH");
+  });
+
+  it("doctor reports runtime ok via the materialized bundle when dosu is off PATH", async () => {
+    const rt = await import("../hooks/runtime");
+    const materialized = join(dir, "bin", "dosu.js");
+    mkdirSync(join(dir, "bin"), { recursive: true });
+    writeFileSync(materialized, "// bundle");
+    vi.mocked(rt.dosuOnPath).mockReturnValue(false);
+    vi.mocked(rt.materializedRuntimePath).mockReturnValue(materialized);
+
+    await runInstall("claude-code", { dir });
+    const checks = await collectDoctorChecks({ dir });
+    const runtime = checks.find((c) => c.name === "runtime");
+    expect(runtime?.status).toBe("ok");
+    expect(runtime?.detail).toContain(materialized);
+  });
+
+  it("doctor fails runtime when neither dosu nor a materialized bundle exists", async () => {
+    const rt = await import("../hooks/runtime");
+    vi.mocked(rt.dosuOnPath).mockReturnValue(false);
+    vi.mocked(rt.materializedRuntimePath).mockReturnValue("/nonexistent/dosu-runtime/dosu.js");
+
+    await runInstall("claude-code", { dir });
+    const checks = await collectDoctorChecks({ dir });
+    const runtime = checks.find((c) => c.name === "runtime");
+    expect(runtime?.status).toBe("fail");
+    expect(runtime?.detail).toContain("npx -y @dosu/cli hooks install");
+  });
+
+  it("doctor omits the runtime check when no hooks are installed anywhere", async () => {
+    const checks = await collectDoctorChecks({ dir });
+    expect(checks.find((c) => c.name === "runtime")).toBeUndefined();
+  });
 });
 
 describe("hooksCommand wiring", () => {
@@ -895,7 +951,7 @@ describe("collectDoctorChecks deployment detail", () => {
   });
 
   it("falls back to deployment_id when no deployment_name is set", async () => {
-    vi.mocked(loadConfig).mockReturnValue({ ...AUTHED, deployment_name: undefined });
+    vi.mocked(loadConfig).mockReturnValue(authed({ deployment_name: undefined }));
     const checks = await collectDoctorChecks({});
     const deployment = checks.find((c) => c.name === "deployment");
     expect(deployment?.status).toBe("ok");
@@ -903,12 +959,14 @@ describe("collectDoctorChecks deployment detail", () => {
   });
 
   it("reports 'oss' for an OSS-mode config with no deployment id or name", async () => {
-    vi.mocked(loadConfig).mockReturnValue({
-      access_token: "at",
-      refresh_token: "rt",
-      expires_at: Date.now() + 3_600_000,
-      mode: MODE_OSS,
-    });
+    vi.mocked(loadConfig).mockReturnValue(
+      makeTestConfig({
+        access_token: "at",
+        refresh_token: "rt",
+        expires_at: Date.now() + 3_600_000,
+        mode: MODE_OSS,
+      }),
+    );
     const checks = await collectDoctorChecks({});
     const deployment = checks.find((c) => c.name === "deployment");
     expect(deployment?.status).toBe("ok");
