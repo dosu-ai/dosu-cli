@@ -22,15 +22,21 @@ type NangoProvider = NangoGetConnectionInput["provider"];
 
 /**
  * Nango probes per platform. A platform can be connectable under more than one
- * Nango provider, and a connection may exist under any of them:
- *   - GitLab: OAuth (`gitlab`) or PAT (`gitlab-pat`)
- *   - Confluence: OAuth (`confluence`) or Basic auth (`confluence-basic`)
- *   - Azure DevOps: PAT (`azure_devops`) or OAuth (`microsoft-entra-id`)
- * So each platform lists every provider to probe; we report connected if ANY
- * probe returns a row. `gitlab-pat`/`confluence-basic` are also kept as
- * standalone keys so `status gitlab-pat` / `status confluence-basic` still work.
- * `nango.getConnection` filters on provider AND providerConfigKey together;
- * prod uses bare config keys, so provider === providerConfigKey === the bare name.
+ * Nango provider, and a connection may exist under any of them; we report
+ * connected if ANY probe returns a row.
+ *
+ * `nango.getConnection` exact-matches BOTH `provider` (the Nango DB provider
+ * value) and `providerConfigKey` (the Nango integration id). These differ for
+ * the alternate-auth integrations — the integration id is a distinct base, and
+ * the DB provider stays the platform's canonical value:
+ *   - GitLab: OAuth `{gitlab, gitlab}`, PAT `{gitlab, gitlab-pat}`
+ *   - Confluence: OAuth `{confluence, confluence}`, Basic `{confluence, confluence-basic}`
+ *   - Azure DevOps: PAT `{azure_devops, azure-devops}`, OAuth `{microsoft-entra-id, microsoft-entra-id}`
+ * (Note `azure_devops` the DB provider vs `azure-devops` the integration id.)
+ *
+ * `gitlab-pat`/`confluence-basic` are also kept as standalone keys so
+ * `status gitlab-pat` / `status confluence-basic` still work. Prod uses bare
+ * integration ids (no env suffix), which is what the shipped CLI targets.
  */
 const NANGO_PROBES: Record<
   string,
@@ -38,18 +44,18 @@ const NANGO_PROBES: Record<
 > = {
   gitlab: [
     { provider: "gitlab", providerConfigKey: "gitlab" },
-    { provider: "gitlab-pat", providerConfigKey: "gitlab-pat" },
+    { provider: "gitlab", providerConfigKey: "gitlab-pat" },
   ],
-  "gitlab-pat": [{ provider: "gitlab-pat", providerConfigKey: "gitlab-pat" }],
+  "gitlab-pat": [{ provider: "gitlab", providerConfigKey: "gitlab-pat" }],
   confluence: [
     { provider: "confluence", providerConfigKey: "confluence" },
-    { provider: "confluence-basic", providerConfigKey: "confluence-basic" },
+    { provider: "confluence", providerConfigKey: "confluence-basic" },
   ],
-  "confluence-basic": [{ provider: "confluence-basic", providerConfigKey: "confluence-basic" }],
+  "confluence-basic": [{ provider: "confluence", providerConfigKey: "confluence-basic" }],
   notion: [{ provider: "notion", providerConfigKey: "notion" }],
   coda: [{ provider: "coda", providerConfigKey: "coda" }],
   azure_devops: [
-    { provider: "azure_devops", providerConfigKey: "azure_devops" },
+    { provider: "azure_devops", providerConfigKey: "azure-devops" },
     { provider: "microsoft-entra-id", providerConfigKey: "microsoft-entra-id" },
   ],
 };

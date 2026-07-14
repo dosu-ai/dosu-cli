@@ -161,7 +161,10 @@ describe("integrations status azure_devops", () => {
     await run("status", "azure_devops");
 
     expect(mockQuery).toHaveBeenCalledTimes(1);
-    expect(mockQuery.mock.calls[0][1]).toMatchObject({ provider: "azure_devops" });
+    expect(mockQuery.mock.calls[0][1]).toMatchObject({
+      provider: "azure_devops",
+      providerConfigKey: "azure-devops",
+    });
     const output = allOutput();
     expect(output).toContain("connected");
     // "not connected" contains the substring "connected", so assert it is absent
@@ -177,7 +180,10 @@ describe("integrations status azure_devops", () => {
     await run("status", "azure_devops");
 
     expect(mockQuery).toHaveBeenCalledTimes(2);
-    expect(mockQuery.mock.calls[1][1]).toMatchObject({ provider: "microsoft-entra-id" });
+    expect(mockQuery.mock.calls[1][1]).toMatchObject({
+      provider: "microsoft-entra-id",
+      providerConfigKey: "microsoft-entra-id",
+    });
     const output = allOutput();
     expect(output).toContain("connected");
     expect(output).not.toContain("not connected");
@@ -230,7 +236,10 @@ describe("integrations status gitlab (multi-auth)", () => {
     await run("status", "gitlab");
 
     expect(mockQuery).toHaveBeenCalledTimes(2);
-    expect(mockQuery.mock.calls[1][1]).toMatchObject({ provider: "gitlab-pat" });
+    expect(mockQuery.mock.calls[1][1]).toMatchObject({
+      provider: "gitlab",
+      providerConfigKey: "gitlab-pat",
+    });
     const output = allOutput();
     expect(output).toContain("connected");
     expect(output).not.toContain("not connected");
@@ -243,7 +252,10 @@ describe("integrations status gitlab (multi-auth)", () => {
     await run("status", "gitlab-pat");
 
     expect(mockQuery).toHaveBeenCalledTimes(1);
-    expect(mockQuery.mock.calls[0][1]).toMatchObject({ provider: "gitlab-pat" });
+    expect(mockQuery.mock.calls[0][1]).toMatchObject({
+      provider: "gitlab",
+      providerConfigKey: "gitlab-pat",
+    });
     expect(allOutput()).toContain("connected");
   });
 });
