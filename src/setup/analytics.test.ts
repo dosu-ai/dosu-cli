@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CLI_CONTRACT_HASH } from "../client/contract";
 import type { Config } from "../config/config";
+import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 
 const { mockCreateTypedClient, mockCreateTRPCClient, mockDebug, mockGetWebAppURL, mockHttpLink } =
   vi.hoisted(() => ({
@@ -32,8 +33,8 @@ import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analy
 
 const mutate = vi.fn();
 
-function makeConfig(overrides: Partial<Config> = {}): Config {
-  return {
+function makeConfig(overrides: Partial<FlatTestConfig> = {}): Config {
+  return makeTestConfig({
     access_token: "token",
     refresh_token: "refresh",
     expires_at: 0,
@@ -41,7 +42,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     deployment_id: "dep-1",
     space_id: "space-1",
     ...overrides,
-  };
+  });
 }
 
 function mockTrackingClient() {
@@ -90,7 +91,11 @@ describe("setup analytics", () => {
     );
 
     expect(mockCreateTypedClient).toHaveBeenCalledWith(
-      expect.objectContaining({ access_token: "token" }),
+      expect.objectContaining({
+        active_account: expect.objectContaining({
+          session: expect.objectContaining({ access_token: "token" }),
+        }),
+      }),
     );
     expect(mutate).toHaveBeenCalledWith({
       event: "cli_onboarding_completed",

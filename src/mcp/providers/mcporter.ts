@@ -22,8 +22,8 @@ function resolveGlobalConfigPath(): string {
 
 function mcpEndpoint(cfg: Config): string {
   if (cfg.mode === MODE_OSS) return mcpBaseURL();
-  if (!cfg.deployment_id) throw new Error("deployment ID is required");
-  return mcpURL(cfg.deployment_id);
+  if (!cfg.active_account?.target?.deployment_id) throw new Error("deployment ID is required");
+  return mcpURL(cfg.active_account?.target?.deployment_id);
 }
 
 export const MCPorterProvider = (): SetupProvider => ({
@@ -44,7 +44,7 @@ export const MCPorterProvider = (): SetupProvider => ({
       type: "http",
       url: mcpEndpoint(cfg),
       // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
-      headers: mcpHeaders(cfg.api_key!),
+      headers: mcpHeaders(cfg.active_account!.target!.api_key!),
     };
     installJSONServer(configPath, "mcpServers", server);
   },

@@ -11,14 +11,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../../config/config";
+import { type FlatTestConfig, makeTestConfig } from "../../config/config.test-utils";
 import { loadJSONConfig } from "../config-helpers";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeCfg(overrides: Partial<Config> = {}): Config {
-  return {
+function makeCfg(overrides: Partial<FlatTestConfig> = {}): Config {
+  return makeTestConfig({
     access_token: "at",
     refresh_token: "rt",
     expires_at: Date.now() + 3600_000,
@@ -26,7 +27,7 @@ function makeCfg(overrides: Partial<Config> = {}): Config {
     deployment_name: "my-deploy",
     api_key: "key-abc",
     ...overrides,
-  };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -225,7 +226,7 @@ describe("createJSONProvider (base)", () => {
       globalPath,
       topKey: "servers",
       buildServer: (cfg) => ({
-        myUrl: `custom-${cfg.deployment_id}`,
+        myUrl: `custom-${cfg.active_account?.target?.deployment_id}`,
       }),
     });
 

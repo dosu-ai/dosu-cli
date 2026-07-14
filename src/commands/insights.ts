@@ -97,14 +97,19 @@ export function createDotsSpinner(): Spinner {
 }
 
 function isFullConfig(cfg: Config): boolean {
-  return Boolean(cfg.access_token && cfg.api_key && cfg.space_id && cfg.deployment_id);
+  return Boolean(
+    cfg.active_account?.session.access_token &&
+      cfg.active_account?.target?.api_key &&
+      cfg.active_account?.target?.space_id &&
+      cfg.active_account?.target?.deployment_id,
+  );
 }
 
 export async function ensureFullConfig(): Promise<Config | null> {
   let cfg = loadConfig();
   if (isFullConfig(cfg)) return cfg;
 
-  const reason = !cfg.access_token
+  const reason = !cfg.active_account?.session.access_token
     ? "Insights needs you to log in first."
     : "Insights needs a configured Dosu deployment.";
   p.log.warn(reason);
@@ -136,11 +141,11 @@ export function makeAskFn(cfg: Config): AskFn {
         headers: {
           "Content-Type": "application/json",
           // biome-ignore lint/style/noNonNullAssertion: checked in requireFullConfig
-          "X-Dosu-API-Key": cfg.api_key!,
+          "X-Dosu-API-Key": cfg.active_account!.target!.api_key!,
         },
         body: JSON.stringify({
           // biome-ignore lint/style/noNonNullAssertion: checked in requireFullConfig
-          deployment_id: cfg.deployment_id!,
+          deployment_id: cfg.active_account!.target!.deployment_id!,
           question,
         }),
         signal: controller.signal,

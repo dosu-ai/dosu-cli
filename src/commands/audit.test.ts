@@ -69,6 +69,7 @@ const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
 import { join } from "node:path";
+import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { auditCommand, cleanupFindings } from "./audit";
 
 let logSpy: ReturnType<typeof vi.spyOn>;
@@ -76,7 +77,7 @@ let errorSpy: ReturnType<typeof vi.spyOn>;
 // biome-ignore lint/suspicious/noExplicitAny: process.exit mock type mismatch
 let exitSpy: any;
 
-const validConfig = {
+const validFlatConfig: FlatTestConfig = {
   access_token: "t",
   refresh_token: "r",
   expires_at: 0,
@@ -84,6 +85,9 @@ const validConfig = {
   org_id: "org1",
   space_id: "sp1",
 };
+const makeValidConfig = (overrides: Partial<FlatTestConfig> = {}) =>
+  makeTestConfig({ ...validFlatConfig, ...overrides });
+const validConfig = makeValidConfig();
 
 const detected = { owner: "o", name: "r", slug: "o/r" };
 
@@ -190,17 +194,17 @@ afterEach(() => {
 
 describe("config guard", () => {
   it("exits when api_key missing", async () => {
-    mockLoadConfig.mockReturnValue({ ...validConfig, api_key: undefined });
+    mockLoadConfig.mockReturnValue(makeValidConfig({ api_key: undefined }));
     await expect(run()).rejects.toThrow("exit");
   });
 
   it("exits when org_id missing", async () => {
-    mockLoadConfig.mockReturnValue({ ...validConfig, org_id: undefined });
+    mockLoadConfig.mockReturnValue(makeValidConfig({ org_id: undefined }));
     await expect(run()).rejects.toThrow("exit");
   });
 
   it("exits when not logged in", async () => {
-    mockLoadConfig.mockReturnValue({ ...validConfig, access_token: "" });
+    mockLoadConfig.mockReturnValue(makeValidConfig({ access_token: "" }));
     await expect(run()).rejects.toThrow("exit");
   });
 });

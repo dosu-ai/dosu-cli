@@ -4,46 +4,56 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { migrateLegacyConfig } from "./config-v1-migration";
+import { getAccessTokenUserID } from "./identity";
+import {
+  type AccountTarget,
+  type AuthenticatedConfig,
+  CONFIG_SCHEMA_VERSION,
+  type Config,
+  MODE_OSS,
+  type SessionCredentials,
+} from "./schema";
 
-/** Setup mode: OSS = public libraries only, undefined = standard (cloud) flow. */
-export const MODE_OSS = "oss" as const;
-export type SetupMode = typeof MODE_OSS;
-
-export interface Config {
-  access_token: string;
-  refresh_token: string;
-  expires_at: number;
-  deployment_id?: string;
-  deployment_name?: string;
-  api_key?: string;
-  mode?: SetupMode;
-  org_id?: string;
-  space_id?: string;
-}
-
-export interface SessionCredentials {
-  access_token: string;
-  refresh_token: string;
-  expires_at: number;
-}
+export {
+  type AccountTarget,
+  type ActiveAccount,
+  type AuthenticatedConfig,
+  CONFIG_SCHEMA_VERSION,
+  type Config,
+  MODE_OSS,
+  type SessionCredentials,
+  type SetupMode,
+} from "./schema";
 
 /**
  * Replace credentials obtained from an explicit login flow.
  *
- * A login may authenticate a different account, so deployment-scoped state
- * from the previous session must never survive the transition. Token refresh
- * deliberately does not use this helper because it preserves the same
- * authenticated identity.
+ * Explicit login clears the target so deployment-scoped state cannot survive
+ * a possible account transition. Token refresh deliberately does not use this
+ * helper because it preserves the identity.
  */
 export function replaceLoginSession(cfg: Config, session: SessionCredentials): void {
-  cfg.access_token = session.access_token;
-  cfg.refresh_token = session.refresh_token;
-  cfg.expires_at = session.expires_at;
-  cfg.deployment_id = undefined;
-  cfg.deployment_name = undefined;
-  cfg.api_key = undefined;
-  cfg.org_id = undefined;
-  cfg.space_id = undefined;
+  const nextUserID = session.user_id ?? getAccessTokenUserID(session.access_token);
+  cfg.active_account = {
+    user_id: nextUserID,
+    session: sessionWithoutIdentity(session),
+  };
+}
+
+/** Attach a backend-verified identity to the current session. */
+export function bindAccountIdentity(cfg: Config, userID: string): void {
+  const account = cfg.active_account;
+  if (!account) throw new Error("cannot bind an identity without an authenticated session");
+  if (account.user_id && account.user_id !== userID) account.target = undefined;
+  account.user_id = userID;
+}
+
+export function updateTarget(cfg: Config, target: AccountTarget): void {
+  if (!cfg.active_account?.user_id) {
+    throw new Error("cannot bind a target without a verified account identity");
+  }
+  cfg.active_account.target = { ...cfg.active_account.target, ...target };
 }
 
 /**
@@ -76,23 +86,105 @@ export function getConfigPath(): string {
 
 export function loadConfig(): Config {
   const path = getConfigPath();
-  if (!existsSync(path)) {
-    return emptyConfig();
-  }
+  if (!existsSync(path)) return emptyConfig();
+
   try {
-    const data = readFileSync(path, "utf-8");
-    return JSON.parse(data) as Config;
+    const raw = JSON.parse(readFileSync(path, "utf-8")) as unknown;
+    if (isConfigV2(raw)) return normalizeV2(raw);
+
+    const migrated = migrateLegacyConfig(raw);
+    writeConfig(path, migrated);
+    return migrated;
   } catch {
     return emptyConfig();
   }
 }
 
 export function saveConfig(cfg: Config): void {
-  const path = getConfigPath();
-  const dir = getConfigDir();
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeConfig(getConfigPath(), cfg);
+}
+
+export function isAuthenticated(cfg: Config): cfg is AuthenticatedConfig {
+  return Boolean(cfg.active_account?.session.access_token);
+}
+
+/**
+ * Check if the token is expired or about to expire (within 5 minutes).
+ */
+export function isTokenExpired(cfg: Config): boolean {
+  const expiresAt = cfg.active_account?.session.expires_at ?? 0;
+  if (expiresAt === 0) return false;
+  return Math.floor(Date.now() / 1000) > expiresAt - 300;
+}
+
+export function clearConfig(_cfg: Config): Config {
+  return emptyConfig();
+}
+
+export function clearConfigInPlace(cfg: Config): void {
+  cfg.mode = undefined;
+  cfg.active_account = undefined;
+}
+
+export function emptyConfig(): Config {
+  return { schema_version: CONFIG_SCHEMA_VERSION };
+}
+
+function sessionWithoutIdentity(session: SessionCredentials): Omit<SessionCredentials, "user_id"> {
+  return {
+    access_token: session.access_token,
+    refresh_token: session.refresh_token,
+    expires_at: session.expires_at,
+  };
+}
+
+function isConfigV2(value: unknown): value is Config {
+  return isRecord(value) && value.schema_version === CONFIG_SCHEMA_VERSION;
+}
+
+function normalizeV2(value: Config): Config {
+  const active = isRecord(value.active_account) ? value.active_account : undefined;
+  const session = active && isRecord(active.session) ? active.session : undefined;
+  if (!active || !session) {
+    return {
+      schema_version: CONFIG_SCHEMA_VERSION,
+      mode: value.mode === MODE_OSS ? MODE_OSS : undefined,
+    };
   }
+
+  const accessToken = stringValue(session.access_token) ?? "";
+  const userID = stringValue(active.user_id) ?? getAccessTokenUserID(accessToken);
+  return {
+    schema_version: CONFIG_SCHEMA_VERSION,
+    mode: value.mode === MODE_OSS ? MODE_OSS : undefined,
+    active_account: {
+      user_id: userID,
+      session: {
+        access_token: accessToken,
+        refresh_token: stringValue(session.refresh_token) ?? "",
+        expires_at: numberValue(session.expires_at) ?? 0,
+      },
+      target: userID ? normalizeTarget(active.target) : undefined,
+    },
+  };
+}
+
+function normalizeTarget(value: unknown): AccountTarget | undefined {
+  if (!isRecord(value)) return undefined;
+  const target: AccountTarget = {
+    deployment_id: stringValue(value.deployment_id),
+    deployment_name: stringValue(value.deployment_name),
+    api_key: stringValue(value.api_key),
+    org_id: stringValue(value.org_id),
+    space_id: stringValue(value.space_id),
+  };
+  return Object.values(target).some((field) => field !== undefined) ? target : undefined;
+}
+
+function writeConfig(path: string, config: Config): void {
+  const dir = getConfigDir();
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+
   // Write-then-rename so concurrent CLI processes never observe a partially
   // written config and never interleave writes. A clobbered refresh token
   // would be replayed on the next refresh, and GoTrue's reuse detection can
@@ -100,40 +192,18 @@ export function saveConfig(cfg: Config): void {
   // the same directory (rename is only atomic within one filesystem) and is
   // pid-suffixed so sibling processes never share it.
   const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+  writeFileSync(tmp, JSON.stringify(config, null, 2), { mode: 0o600 });
   renameSync(tmp, path);
 }
 
-export function isAuthenticated(cfg: Config): boolean {
-  return cfg.access_token !== "";
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/**
- * Check if the token is expired or about to expire (within 5 minutes).
- */
-export function isTokenExpired(cfg: Config): boolean {
-  if (cfg.expires_at === 0) return false;
-  return Math.floor(Date.now() / 1000) > cfg.expires_at - 300;
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
-export function clearConfig(_cfg: Config): Config {
-  return {
-    access_token: "",
-    refresh_token: "",
-    expires_at: 0,
-    deployment_id: undefined,
-    deployment_name: undefined,
-    api_key: undefined,
-    mode: undefined,
-    org_id: undefined,
-    space_id: undefined,
-  };
-}
-
-export function emptyConfig(): Config {
-  return {
-    access_token: "",
-    refresh_token: "",
-    expires_at: 0,
-  };
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }

@@ -8,7 +8,13 @@ import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { Client } from "../client/client";
 import { executeInsights } from "../commands/insights";
-import { isAuthenticated, loadConfig, replaceLoginSession, saveConfig } from "../config/config";
+import {
+  clearConfigInPlace,
+  isAuthenticated,
+  loadConfig,
+  replaceLoginSession,
+  saveConfig,
+} from "../config/config";
 import { runSetup } from "../setup/flow";
 import { browserFallbackHint } from "../setup/styles";
 
@@ -30,7 +36,11 @@ export async function runTUI(): Promise<void> {
 
   // Main menu
   while (true) {
-    const insightsReady = Boolean(cfg.space_id && cfg.deployment_id && cfg.api_key);
+    const insightsReady = Boolean(
+      cfg.active_account?.target?.space_id &&
+        cfg.active_account?.target?.deployment_id &&
+        cfg.active_account?.target?.api_key,
+    );
     const options: Array<{ label: string; value: string; hint?: string }> = [
       {
         label: "Setup",
@@ -86,7 +96,7 @@ export async function runTUI(): Promise<void> {
 }
 
 async function handleAuthenticate(cfg: ReturnType<typeof loadConfig>): Promise<void> {
-  if (cfg.access_token) {
+  if (cfg.active_account?.session.access_token) {
     const s = p.spinner();
     s.start("Verifying session...");
     try {
@@ -149,13 +159,7 @@ export function handleLogout(cfg: ReturnType<typeof loadConfig>): void {
     p.log.warn("You are not logged in.");
     return;
   }
-  cfg.access_token = "";
-  cfg.refresh_token = "";
-  cfg.expires_at = 0;
-  cfg.mode = undefined;
-  cfg.deployment_id = undefined;
-  cfg.deployment_name = undefined;
-  cfg.api_key = undefined;
+  clearConfigInPlace(cfg);
   saveConfig(cfg);
   p.log.success("Credentials cleared.");
 }

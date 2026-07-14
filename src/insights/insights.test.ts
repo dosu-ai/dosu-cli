@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../config/config";
+import { makeTestConfig, testSession } from "../config/config.test-utils";
 import {
   type AskFn,
   buildAtAGlancePrompt,
@@ -22,7 +23,7 @@ function createMockClient(): unknown {
   return proxy();
 }
 
-const cfg: Config = {
+const cfg: Config = makeTestConfig({
   access_token: "t",
   refresh_token: "r",
   expires_at: 0,
@@ -30,7 +31,7 @@ const cfg: Config = {
   deployment_id: "d1",
   deployment_name: "Acme Docs",
   api_key: "sk_user_test",
-};
+});
 
 const NOW = () => new Date("2026-04-16T12:00:00Z");
 
@@ -141,7 +142,14 @@ describe("buildInsights", () => {
     await expect(
       buildInsights({
         client: createMockClient() as never,
-        cfg: { ...cfg, space_id: undefined },
+        cfg: {
+          ...cfg,
+          active_account: {
+            ...cfg.active_account,
+            session: testSession(cfg),
+            target: { ...cfg.active_account?.target, space_id: undefined },
+          },
+        },
         ask: okAsk,
       }),
     ).rejects.toThrow(/space_id/);
@@ -152,7 +160,14 @@ describe("buildInsights", () => {
     mockQuery.mockResolvedValueOnce(stats());
     const r = await buildInsights({
       client: createMockClient() as never,
-      cfg: { ...cfg, deployment_name: undefined },
+      cfg: {
+        ...cfg,
+        active_account: {
+          ...cfg.active_account,
+          session: testSession(cfg),
+          target: { ...cfg.active_account?.target, deployment_name: undefined },
+        },
+      },
       ask: okAsk,
       windowDays: 30,
       now: NOW,

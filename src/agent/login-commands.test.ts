@@ -29,6 +29,8 @@ vi.mock("../debug/logger", () => ({
   },
 }));
 
+import { emptyConfig } from "../config/config";
+import { testSession } from "../config/config.test-utils";
 import { runLoginCheck, runLoginRequest } from "./login-commands";
 
 describe("runLoginRequest", () => {
@@ -129,11 +131,7 @@ describe("runLoginCheck", () => {
     mockExchangeTicket.mockReset();
     mockLoadConfig.mockReset();
     mockSaveConfig.mockReset();
-    mockLoadConfig.mockReturnValue({
-      access_token: "",
-      refresh_token: "",
-      expires_at: 0,
-    });
+    mockLoadConfig.mockReturnValue(emptyConfig());
   });
 
   afterEach(() => {
@@ -154,14 +152,10 @@ describe("runLoginCheck", () => {
 
     expect(code).toBe(0);
     expect(mockSaveConfig).toHaveBeenCalledTimes(1);
-    const saved = mockSaveConfig.mock.calls[0]?.[0] as {
-      access_token: string;
-      refresh_token: string;
-      expires_at: number;
-    };
-    expect(saved.access_token).toBe("tok");
-    expect(saved.refresh_token).toBe("ref");
-    expect(saved.expires_at).toBeGreaterThan(Math.floor(Date.now() / 1000));
+    const saved = mockSaveConfig.mock.calls[0]?.[0];
+    expect(testSession(saved).access_token).toBe("tok");
+    expect(testSession(saved).refresh_token).toBe("ref");
+    expect(testSession(saved).expires_at).toBeGreaterThan(Math.floor(Date.now() / 1000));
 
     const payload = JSON.parse(logSpy.mock.calls[0]?.[0] as string);
     expect(payload).toMatchObject({
@@ -260,15 +254,11 @@ describe("runLoginCheck", () => {
 
     expect(code).toBe(0);
     expect(mockSaveConfig).toHaveBeenCalledTimes(1);
-    const saved = mockSaveConfig.mock.calls[0]?.[0] as {
-      access_token: string;
-      refresh_token: string;
-      expires_at: number;
-    };
-    expect(saved.access_token).toBe("");
-    expect(saved.refresh_token).toBe("");
+    const saved = mockSaveConfig.mock.calls[0]?.[0];
+    expect(testSession(saved).access_token).toBe("");
+    expect(testSession(saved).refresh_token).toBe("");
     // 3600s fallback applied.
-    expect(saved.expires_at).toBeGreaterThan(Math.floor(Date.now() / 1000) + 3000);
+    expect(testSession(saved).expires_at).toBeGreaterThan(Math.floor(Date.now() / 1000) + 3000);
   });
 
   it("omits the email line in non-JSON mode when no email is returned", async () => {

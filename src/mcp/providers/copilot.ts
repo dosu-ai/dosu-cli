@@ -20,8 +20,8 @@ function globalPath(): string {
 
 function mcpEndpoint(cfg: Config): string {
   if (cfg.mode === MODE_OSS) return mcpBaseURL();
-  if (!cfg.deployment_id) throw new Error("deployment ID is required");
-  return mcpURL(cfg.deployment_id);
+  if (!cfg.active_account?.target?.deployment_id) throw new Error("deployment ID is required");
+  return mcpURL(cfg.active_account?.target?.deployment_id);
 }
 
 export const CopilotProvider = (): SetupProvider => ({
@@ -43,7 +43,7 @@ export const CopilotProvider = (): SetupProvider => ({
         url,
         tools: ["*"],
         // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
-        headers: mcpHeaders(cfg.api_key!),
+        headers: mcpHeaders(cfg.active_account!.target!.api_key!),
       };
       installJSONServer(globalPath(), "mcpServers", server);
     } else {
@@ -52,7 +52,7 @@ export const CopilotProvider = (): SetupProvider => ({
         type: "http",
         url,
         // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
-        headers: mcpHeaders(cfg.api_key!),
+        headers: mcpHeaders(cfg.active_account!.target!.api_key!),
       };
       installJSONServer(configPath, "servers", server);
     }

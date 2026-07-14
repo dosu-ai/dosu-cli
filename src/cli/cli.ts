@@ -24,6 +24,7 @@ import { threadsCommand } from "../commands/threads";
 import { topicsCommand } from "../commands/topics";
 import {
   type Config,
+  clearConfigInPlace,
   getConfigPath,
   isAuthenticated,
   isTokenExpired,
@@ -237,14 +238,7 @@ export function createProgram(): Command {
         console.log("You are not logged in.");
         return;
       }
-      cfg.access_token = "";
-      cfg.refresh_token = "";
-      cfg.expires_at = 0;
-      cfg.deployment_id = undefined;
-      cfg.deployment_name = undefined;
-      cfg.api_key = undefined;
-      cfg.org_id = undefined;
-      cfg.space_id = undefined;
+      clearConfigInPlace(cfg);
       saveConfig(cfg);
       console.log("Successfully logged out.");
     });
@@ -269,9 +263,9 @@ export function createProgram(): Command {
       if (cfg.mode === MODE_OSS) {
         console.log("Mode: OSS");
         console.log("MCP: Public libraries only");
-      } else if (cfg.deployment_id) {
-        console.log(`MCP: ${cfg.deployment_name}`);
-        console.log(`MCP ID: ${cfg.deployment_id}`);
+      } else if (cfg.active_account?.target?.deployment_id) {
+        console.log(`MCP: ${cfg.active_account?.target?.deployment_name}`);
+        console.log(`MCP ID: ${cfg.active_account?.target?.deployment_id}`);
       } else {
         console.log("MCP: None selected");
         console.log(
@@ -303,10 +297,10 @@ export function createProgram(): Command {
       if (isTokenExpired(cfg) && !(await ensureFreshSession(cfg))) {
         throw new Error("session expired. Run 'dosu login' to re-authenticate");
       }
-      if (cfg.mode !== MODE_OSS && !cfg.deployment_id) {
+      if (cfg.mode !== MODE_OSS && !cfg.active_account?.target?.deployment_id) {
         throw new Error("no MCP selected. Run 'dosu' to open the TUI and select an MCP");
       }
-      if (!cfg.api_key) {
+      if (!cfg.active_account?.target?.api_key) {
         throw new Error("no API key available. Run 'dosu setup' to create one");
       }
 

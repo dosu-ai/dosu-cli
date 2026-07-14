@@ -10,7 +10,7 @@ import { printResult, printTable } from "./output";
 
 function requireConfig() {
   const cfg = requireLoginConfig();
-  if (!cfg.org_id) {
+  if (!cfg.active_account?.target?.org_id) {
     console.error(pc.red("Missing org config. Run 'dosu setup' to reconfigure."));
     process.exit(1);
   }
@@ -59,7 +59,7 @@ export function integrationsCommand(): Command {
               provider: nangoProvider,
               providerConfigKey: nangoProvider,
               // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-              orgId: cfg.org_id!,
+              orgId: cfg.active_account!.target!.org_id!,
             });
             results.push({ platform, connected: conn !== null });
           } catch {
@@ -110,7 +110,7 @@ export function integrationsCommand(): Command {
           provider: nangoProvider,
           providerConfigKey: nangoProvider,
           // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-          orgId: cfg.org_id!,
+          orgId: cfg.active_account!.target!.org_id!,
         });
 
         const connected = conn !== null;
@@ -137,7 +137,7 @@ export function integrationsCommand(): Command {
       const client = createTypedClient(cfg);
 
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const channels = await client.slackChannel.getAll.query(cfg.org_id!);
+      const channels = await client.slackChannel.getAll.query(cfg.active_account!.target!.org_id!);
 
       if (opts.json) {
         printResult(channels, opts);

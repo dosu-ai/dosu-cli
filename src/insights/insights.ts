@@ -85,10 +85,10 @@ export async function buildInsights({
   now = () => new Date(),
   onProgress,
 }: BuildInsightsArgs): Promise<InsightsReport> {
-  if (!cfg.space_id) {
+  if (!cfg.active_account?.target?.space_id) {
     throw new Error("space_id missing. Run 'dosu setup' first");
   }
-  const spaceId = cfg.space_id;
+  const spaceId = cfg.active_account?.target?.space_id;
 
   onProgress?.("stats");
   const [currentRaw, combinedRaw] = await Promise.all([
@@ -112,7 +112,7 @@ export async function buildInsights({
   return {
     generatedAt: now().toISOString(),
     windowDays,
-    spaceName: cfg.deployment_name ?? "your space",
+    spaceName: cfg.active_account?.target?.deployment_name ?? "your space",
     current,
     previous,
     derived,
