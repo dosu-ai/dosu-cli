@@ -8,10 +8,20 @@ import type { CallbackServer } from "../auth/server";
 import { Client, type Deployment, type Org, SessionExpiredError } from "../client/client";
 import type { TypedClient } from "../client/trpc";
 import { installSkill } from "../commands/skill";
-import { type Config, loadConfig, MODE_OSS, type SetupMode, saveConfig } from "../config/config";
+import {
+  bindAccountIdentity,
+  type Config,
+  loadConfig,
+  MODE_OSS,
+  replaceLoginSession,
+  type SetupMode,
+  saveConfig,
+  updateTarget,
+} from "../config/config";
 import { logger } from "../debug/logger";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
+import { inGitWorkTree, stepUpdateAgentsMd } from "./agents-md-step";
 import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
 import { launchAuditAgent, offerAuditHandoff } from "./audit-handoff";
 import { browserFallbackHint, dim, info } from "./styles";
@@ -39,6 +49,7 @@ export interface ToolSelection {
 interface OneShotChoices {
   configureMcp: boolean;
   installSkill: boolean;
+  updateAgentsMd: boolean;
 }
 
 type SetupFlowKind = "onboarding" | "setup";
@@ -99,7 +110,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   };
   await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_auth_completed");
 
-  const apiClient = new Client(cfg);
+  let apiClient = new Client(cfg);
   let cloudSetupContext: CloudSetupContext | null = null;
 
   if (cfg.mode !== MODE_OSS) {
@@ -148,14 +159,19 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
       });
       return;
     }
-    const ok = await bindOnboardingDeployment(apiClient, cfg, cloudSetupContext.targetOrg ?? null);
+    // The browser may have completed onboarding under a different account.
+    // Resolve the target again with the returned session; never reuse the
+    // pre-handoff organization or client across an authentication boundary.
+    apiClient = new Client(cfg);
+    const targetOrg = await resolveCurrentOnboardingTargetOrg(cfg);
+    const ok = await bindOnboardingDeployment(apiClient, cfg, targetOrg);
     if (!ok) {
       await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
         reason: "onboarding_deployment_failed",
       });
       return;
     }
-  } else if (!cfg.deployment_id || opts.deploymentID) {
+  } else if (!cfg.active_account?.target?.deployment_id || opts.deploymentID) {
     const ok = await resolveDeployment(apiClient, cfg, opts);
     if (!ok) {
       await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
@@ -174,13 +190,13 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     });
     return;
   }
-  cfg.api_key = apiKey;
+  updateTarget(cfg, { api_key: apiKey });
   saveConfig(cfg);
 
   // One-shot confirm: MCP + skill are always listed (user picks what to
   // (re)run). Repo connection + docs import happen in the web onboarding
   // wizard, so the CLI no longer offers them here.
-  const choices = await stepOneShotConfirm();
+  const choices = await stepOneShotConfirm(inGitWorkTree());
   if (!choices) {
     await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_cancelled", {
       reason: "options_cancelled",
@@ -190,6 +206,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_options_selected", {
     configure_mcp: choices.configureMcp,
     install_skill: choices.installSkill,
+    update_agents_md: choices.updateAgentsMd,
   });
 
   // MCP tools. Track whether at least one agent ended up with Dosu MCP
@@ -227,6 +244,15 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     }
   }
 
+  // AGENTS.md — prompt coding agents to use the Dosu MCP tools. Only offered
+  // (and run) when the cwd is a git work tree. Tracked via the
+  // `completed_agents_md` property on cli_onboarding_completed — the backend
+  // event enum has no dedicated event for this step.
+  let agentsMdCompleted = false;
+  if (choices.updateAgentsMd) {
+    agentsMdCompleted = stepUpdateAgentsMd();
+  }
+
   // Codebase audit handoff (cloud mode only — it acts on the user's own
   // repo): offer to launch Claude Code with the audit prompt so there's no
   // gap between finishing setup and seeing what Dosu can generate.
@@ -235,10 +261,11 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     handoffToAudit = await offerAuditHandoff();
   }
 
-  if (mcpCompleted || skillCompleted) {
+  if (mcpCompleted || skillCompleted || agentsMdCompleted) {
     await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_completed", {
       completed_mcp: mcpCompleted,
       completed_skill: skillCompleted,
+      completed_agents_md: agentsMdCompleted,
     });
   }
 
@@ -261,10 +288,12 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
  * clear `cfg.mode` (Cloud paths do; the OSS auto-pick path doesn't).
  */
 function applyDeployment(cfg: Config, d: Deployment): void {
-  cfg.deployment_id = d.deployment_id;
-  cfg.deployment_name = d.name;
-  cfg.org_id = d.org_id;
-  cfg.space_id = d.space_id;
+  updateTarget(cfg, {
+    deployment_id: d.deployment_id,
+    deployment_name: d.name,
+    org_id: d.org_id,
+    space_id: d.space_id,
+  });
 }
 
 /**
@@ -290,12 +319,15 @@ function applyModeOverride(cfg: Config, opts: SetupOptions): void {
  * time (add a new agent, reinstall the skill). Repo connection + docs
  * import happen in the web onboarding wizard, not here.
  */
-async function stepOneShotConfirm(): Promise<OneShotChoices | null> {
+async function stepOneShotConfirm(offerAgentsMd: boolean): Promise<OneShotChoices | null> {
   type Item = { value: keyof OneShotChoices; label: string };
   const items: Item[] = [
     { value: "configureMcp", label: "Install Dosu MCP" },
     { value: "installSkill", label: "Install Dosu skill" },
   ];
+  if (offerAgentsMd) {
+    items.push({ value: "updateAgentsMd", label: "Add Dosu instructions to AGENTS.md" });
+  }
 
   const selected = await p.multiselect({
     message: "Dosu will set these up — press Enter to accept, space to toggle",
@@ -313,6 +345,7 @@ async function stepOneShotConfirm(): Promise<OneShotChoices | null> {
   return {
     configureMcp: chosen.has("configureMcp"),
     installSkill: chosen.has("installSkill"),
+    updateAgentsMd: chosen.has("updateAgentsMd"),
   };
 }
 
@@ -377,7 +410,7 @@ async function stepAuthenticate(
   logger.info("setup", "Step: authenticate");
   const cfg = existingCfg ?? loadConfig();
 
-  if (cfg.access_token) {
+  if (cfg.active_account?.session.access_token) {
     const s = p.spinner();
     s.start("Verifying session...");
     try {
@@ -445,9 +478,11 @@ async function openBrowserForSetup(
     s.stop("Authenticated");
     logger.info("setup", "Browser auth completed");
 
-    cfg.access_token = token.access_token;
-    cfg.refresh_token = token.refresh_token;
-    cfg.expires_at = Math.floor(Date.now() / 1000) + token.expires_in;
+    replaceLoginSession(cfg, {
+      access_token: token.access_token,
+      refresh_token: token.refresh_token,
+      expires_at: Math.floor(Date.now() / 1000) + token.expires_in,
+    });
     saveConfig(cfg);
     return { cfg, authTab: result.server };
   } catch (err: unknown) {
@@ -521,10 +556,14 @@ async function stepWebOnboarding(
       s.stop("Could not open a browser");
       return false;
     }
-    // The wizard hands back a freshly minted CLI session — keep the newest.
-    cfg.access_token = result.token.access_token;
-    cfg.refresh_token = result.token.refresh_token;
-    cfg.expires_at = Math.floor(Date.now() / 1000) + result.token.expires_in;
+    // The wizard may hand back a session for a different browser account.
+    // Replace the account aggregate: same-account auth keeps its target, while
+    // an account change drops the old target before resolving the new one.
+    replaceLoginSession(cfg, {
+      access_token: result.token.access_token,
+      refresh_token: result.token.refresh_token,
+      expires_at: Math.floor(Date.now() / 1000) + result.token.expires_in,
+    });
     saveConfig(cfg);
     s.stop("Onboarding finished in the browser");
     logger.info("setup", "Web onboarding handoff completed");
@@ -555,6 +594,8 @@ async function resolveCloudSetupContext(cfg: Config): Promise<CloudSetupContext 
       p.log.error("Could not load your profile.");
       return null;
     }
+    bindAccountIdentity(cfg, profile.user_id);
+    saveConfig(cfg);
 
     // First-run detection is driven purely by `finished_onboarding`. The old
     // `cli_onboarding_enabled` flag gated a terminal-local onboarding path
@@ -594,6 +635,23 @@ async function resolveOnboardingTargetOrg(trpc: TypedClient): Promise<OwnedOrg |
     return ownerOrg;
   }
   return accessibleOrgs[0] ?? null;
+}
+
+async function resolveCurrentOnboardingTargetOrg(cfg: Config): Promise<OwnedOrg | null> {
+  try {
+    const { createTypedClient } = await import("../client/trpc");
+    const trpc = createTypedClient(cfg);
+    const profile: CliOnboardingProfile | null = await trpc.user.getCliOnboardingContext.query();
+    if (!profile?.user_id) return null;
+    bindAccountIdentity(cfg, profile.user_id);
+    saveConfig(cfg);
+    return await resolveOnboardingTargetOrg(trpc);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error("setup", `Failed to resolve post-onboarding organization: ${msg}`);
+    p.log.error(`Could not determine your onboarding organization: ${msg}`);
+    return null;
+  }
 }
 
 async function bindOnboardingDeployment(
@@ -759,25 +817,25 @@ async function stepSelectDeployment(apiClient: Client, org: Org): Promise<Deploy
 }
 
 async function stepMintAPIKey(apiClient: Client, cfg: Config): Promise<string | null> {
-  if (!cfg.deployment_id) {
+  const target = cfg.active_account?.target;
+  const deploymentID = target?.deployment_id;
+  if (!deploymentID) {
     p.log.error("No MCP available for API key creation");
     return null;
   }
 
-  if (cfg.api_key) {
-    // biome-ignore lint/style/noNonNullAssertion: checked above
-    const valid = await apiClient.validateAPIKey(cfg.api_key, cfg.deployment_id!);
+  if (target.api_key) {
+    const valid = await apiClient.validateAPIKey(target.api_key, deploymentID);
     logger.debug("setup", `Existing API key valid=${valid}`);
     if (valid) {
       p.log.success(`API key\n${dim("using existing")}`);
-      return cfg.api_key;
+      return target.api_key;
     }
     p.log.warn("Existing API key is invalid, creating a new one...");
   }
 
   try {
-    // biome-ignore lint/style/noNonNullAssertion: checked above
-    const resp = await apiClient.createAPIKey(cfg.deployment_id!, "dosu-cli");
+    const resp = await apiClient.createAPIKey(deploymentID, "dosu-cli");
     logger.info("setup", "API key created");
     p.log.success(`API key\n${dim("created")}`);
     return resp.api_key;

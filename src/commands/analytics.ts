@@ -10,7 +10,7 @@ import { printInfo, printResult } from "./output";
 
 function requireConfig() {
   const cfg = requireLoginConfig();
-  if (!cfg.space_id) {
+  if (!cfg.active_account?.target?.space_id) {
     console.error(pc.red("Missing space config. Run 'dosu setup' to reconfigure."));
     process.exit(1);
   }
@@ -28,7 +28,7 @@ export function analyticsCommand(): Command {
 
       const stats = await client.analytics.getUsageStats.query({
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-        spaceId: cfg.space_id!,
+        spaceId: cfg.active_account!.target!.space_id!,
         days: Number.parseInt(opts.days ?? "30", 10),
       });
 

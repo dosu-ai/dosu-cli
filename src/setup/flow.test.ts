@@ -114,6 +114,18 @@ vi.mock("../commands/skill", () => ({
 const { mockStepConnectGitHubRepo } = vi.hoisted(() => ({
   mockStepConnectGitHubRepo: vi.fn(),
 }));
+
+// AGENTS.md step: mocked so flow tests never write an AGENTS.md into the real
+// repo cwd. Defaults (not in a git work tree) are installed by
+// `installSetupStepDefaults()`.
+const { mockInGitWorkTree, mockStepUpdateAgentsMd } = vi.hoisted(() => ({
+  mockInGitWorkTree: vi.fn(),
+  mockStepUpdateAgentsMd: vi.fn(),
+}));
+vi.mock("./agents-md-step", () => ({
+  inGitWorkTree: (...args: unknown[]) => mockInGitWorkTree(...args),
+  stepUpdateAgentsMd: (...args: unknown[]) => mockStepUpdateAgentsMd(...args),
+}));
 vi.mock("./github-step", () => ({
   stepConnectGitHubRepo: (...args: unknown[]) => mockStepConnectGitHubRepo(...args),
   // Audit handoff never fires in these tests: not a git repo.
@@ -126,6 +138,7 @@ import { startOAuthFlow } from "../auth/flow";
 import { Client } from "../client/client";
 import type { Config } from "../config/config";
 import { loadConfig, saveConfig } from "../config/config";
+import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { loadJSONConfig, saveJSONConfig } from "../mcp/config-helpers";
 import * as providersModule from "../mcp/providers";
 import { ClaudeDesktopProvider } from "../mcp/providers/claude-desktop";
@@ -172,6 +185,8 @@ function mockToolSelection(selection: string[]) {
 
 function installSetupStepDefaults() {
   mockStepConnectGitHubRepo.mockResolvedValue({ advance: false, has_connected_repo: false });
+  mockInGitWorkTree.mockReturnValue(false);
+  mockStepUpdateAgentsMd.mockReturnValue(true);
 }
 
 function installRemoteSetupDefaults() {
@@ -214,8 +229,8 @@ function teardownTempEnv() {
   rmSync(tempDir, { recursive: true, force: true });
 }
 
-function makeCfg(overrides: Partial<Config> = {}): Config {
-  return {
+function makeCfg(overrides: Partial<FlatTestConfig> = {}): Config {
+  return makeTestConfig({
     access_token: "tok",
     refresh_token: "ref",
     expires_at: Math.floor(Date.now() / 1000) + 3600,
@@ -223,7 +238,7 @@ function makeCfg(overrides: Partial<Config> = {}): Config {
     deployment_name: "TestDeploy",
     api_key: "key-abc",
     ...overrides,
-  };
+  });
 }
 
 function makeDeployment(overrides: Record<string, unknown> = {}) {
@@ -706,8 +721,8 @@ describe("runSetup integration", () => {
 
     // Config should have been saved with deployment info
     const savedCfg = loadConfig();
-    expect(savedCfg.deployment_id).toBe("d1");
-    expect(savedCfg.deployment_name).toBe("Deploy1");
+    expect(savedCfg.active_account?.target?.deployment_id).toBe("d1");
+    expect(savedCfg.active_account?.target?.deployment_name).toBe("Deploy1");
   });
 
   it("completes full flow with tool install via real filesystem", async () => {
@@ -758,8 +773,8 @@ describe("runSetup integration", () => {
 
     // Real config on disk should have OAuth tokens
     const savedCfg = loadConfig();
-    expect(savedCfg.access_token).toBe("oauth-tok");
-    expect(savedCfg.refresh_token).toBe("oauth-ref");
+    expect(savedCfg.active_account?.session.access_token).toBe("oauth-tok");
+    expect(savedCfg.active_account?.session.refresh_token).toBe("oauth-ref");
     expect(p.log.message).toHaveBeenCalledWith(
       expect.stringContaining(
         "If your browser doesn't open automatically, visit:\nhttps://app.test/cli/auth?callback=cb",
@@ -773,7 +788,7 @@ describe("runSetup integration", () => {
     const result = await runSetup();
 
     expect(result).toBeUndefined();
-    expect(loadConfig().access_token).toBe("");
+    expect(loadConfig().active_account).toBeUndefined();
   });
 
   it("uses deploymentID option to resolve deployment directly", async () => {
@@ -795,8 +810,8 @@ describe("runSetup integration", () => {
 
     // Config on disk should have d2
     const savedCfg = loadConfig();
-    expect(savedCfg.deployment_id).toBe("d2");
-    expect(savedCfg.deployment_name).toBe("Deploy2");
+    expect(savedCfg.active_account?.target?.deployment_id).toBe("d2");
+    expect(savedCfg.active_account?.target?.deployment_name).toBe("Deploy2");
   });
 
   it("clears OSS mode when re-running setup with a specific deployment", async () => {
@@ -833,8 +848,8 @@ describe("runSetup integration", () => {
 
     const savedCfg = loadConfig();
     expect(savedCfg.mode).toBeUndefined();
-    expect(savedCfg.deployment_id).toBe("d2");
-    expect(savedCfg.api_key).toBe("key-abc");
+    expect(savedCfg.active_account?.target?.deployment_id).toBe("d2");
+    expect(savedCfg.active_account?.target?.api_key).toBe("key-abc");
 
     const cursorConfig = loadJSONConfig(join(tempDir, ".cursor", "mcp.json"));
     expect(cursorConfig.mcpServers.dosu.url).toContain("/v1/mcp/deployments/d2");
@@ -858,7 +873,7 @@ describe("runSetup integration", () => {
 
     // Config on disk should have fresh key
     const savedCfg = loadConfig();
-    expect(savedCfg.api_key).toBe("fresh-key");
+    expect(savedCfg.active_account?.target?.api_key).toBe("fresh-key");
   });
 
   it("reinstalls configured tools when only the API key changes", async () => {
@@ -1016,7 +1031,7 @@ describe("runSetup integration", () => {
 
     expect(p.select).toHaveBeenCalledWith(expect.objectContaining({ message: "Select an MCP" }));
     const saved = loadConfig();
-    expect(saved.deployment_id).toBe("d2");
+    expect(saved.active_account?.target?.deployment_id).toBe("d2");
   });
 
   it("returns early when no deployments for org", async () => {
@@ -1149,7 +1164,7 @@ describe("runSetup integration", () => {
 
     // Should return early without saving deployment
     const saved = loadConfig();
-    expect(saved.deployment_id).toBeUndefined();
+    expect(saved.active_account?.target?.deployment_id).toBeUndefined();
   });
 
   it("handles user cancelling deployment selection", async () => {
@@ -1171,7 +1186,7 @@ describe("runSetup integration", () => {
     await runSetup();
 
     const saved = loadConfig();
-    expect(saved.deployment_id).toBeUndefined();
+    expect(saved.active_account?.target?.deployment_id).toBeUndefined();
   });
 
   it("shows deployment not found error", async () => {
@@ -1271,7 +1286,7 @@ describe("runSetup integration", () => {
 
     // Should have saved deployment from fetchDeployments
     const saved = loadConfig();
-    expect(saved.deployment_id).toBe("d1");
+    expect(saved.active_account?.target?.deployment_id).toBe("d1");
     expect(saved.mode).toBe("oss");
   });
 
@@ -1288,7 +1303,7 @@ describe("runSetup integration", () => {
 
     expect(p.log.error).toHaveBeenCalledWith("No MCP available for API key creation");
     const saved = loadConfig();
-    expect(saved.deployment_id).toBeUndefined();
+    expect(saved.active_account?.target?.deployment_id).toBeUndefined();
     expect(p.outro).not.toHaveBeenCalled();
   });
 
@@ -1305,7 +1320,7 @@ describe("runSetup integration", () => {
 
     expect(p.log.error).toHaveBeenCalledWith("No MCP available for API key creation");
     const saved = loadConfig();
-    expect(saved.deployment_id).toBeUndefined();
+    expect(saved.active_account?.target?.deployment_id).toBeUndefined();
     expect(p.outro).not.toHaveBeenCalled();
   });
 
@@ -1466,6 +1481,80 @@ describe("runSetup integration", () => {
       "Install Dosu MCP",
       "Install Dosu skill",
     ]);
+  });
+
+  it("offers the AGENTS.md option and runs the step when the cwd is a git work tree", async () => {
+    const cfg = makeCfg();
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    mockInGitWorkTree.mockReturnValue(true);
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    const oneShotCall = vi
+      .mocked(p.multiselect)
+      .mock.calls.find(([args]) =>
+        String((args as { message?: string }).message ?? "").includes("Dosu will set"),
+      );
+    const options = (oneShotCall?.[0] as { options: Array<{ label: string }> }).options;
+    expect(options.map((option) => String(option.label))).toContain(
+      "Add Dosu instructions to AGENTS.md",
+    );
+    expect(mockStepUpdateAgentsMd).toHaveBeenCalled();
+
+    const completed = trackedCliOnboardingEvents().find(
+      (e) => e.event === "cli_onboarding_completed",
+    );
+    expect(completed?.properties.completed_agents_md).toBe(true);
+  });
+
+  it("skips the AGENTS.md step when the one-shot confirm unticks it", async () => {
+    const cfg = makeCfg();
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    mockInGitWorkTree.mockReturnValue(true);
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    // Deselect only the AGENTS.md item in the one-shot confirm.
+    vi.mocked(p.multiselect).mockImplementation(async (opts: unknown) => {
+      const o = opts as { message: string; initialValues?: unknown[] };
+      if (
+        String(o.message ?? "")
+          .toLowerCase()
+          .includes("dosu will set")
+      ) {
+        return ["configureMcp", "installSkill"] as unknown as never;
+      }
+      return (o.initialValues ?? []) as unknown as never;
+    });
+
+    await runSetup();
+
+    expect(mockStepUpdateAgentsMd).not.toHaveBeenCalled();
+  });
+
+  it("never offers the AGENTS.md option outside a git work tree", async () => {
+    const cfg = makeCfg();
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    const oneShotCall = vi
+      .mocked(p.multiselect)
+      .mock.calls.find(([args]) =>
+        String((args as { message?: string }).message ?? "").includes("Dosu will set"),
+      );
+    const options = (oneShotCall?.[0] as { options: Array<{ label: string }> }).options;
+    expect(options.map((option) => String(option.label))).not.toContain(
+      "Add Dosu instructions to AGENTS.md",
+    );
+    expect(mockStepUpdateAgentsMd).not.toHaveBeenCalled();
   });
 });
 
@@ -1630,8 +1719,8 @@ describe("runSetup checkpoint behavior", () => {
     await runSetup();
 
     const saved = loadConfig();
-    expect(saved.access_token).toBe("tok-fresh");
-    expect(saved.refresh_token).toBe("ref-fresh");
+    expect(saved.active_account?.session.access_token).toBe("tok-fresh");
+    expect(saved.active_account?.session.refresh_token).toBe("ref-fresh");
   });
 
   it("mints a new API key when the existing one is invalid", async () => {
@@ -1643,7 +1732,7 @@ describe("runSetup checkpoint behavior", () => {
     await runSetup();
 
     const saved = loadConfig();
-    expect(saved.api_key).toBe("fresh-key");
+    expect(saved.active_account?.target?.api_key).toBe("fresh-key");
   });
 
   it("does not mark onboarding complete server-side — the web wizard owns that", async () => {
@@ -1749,8 +1838,8 @@ describe("runSetup checkpoint behavior", () => {
     await runSetup();
 
     const saved = loadConfig();
-    expect(saved.access_token).toBe("tok-minted");
-    expect(saved.refresh_token).toBe("ref-minted");
+    expect(saved.active_account?.session.access_token).toBe("tok-minted");
+    expect(saved.active_account?.session.refresh_token).toBe("ref-minted");
   });
 
   it("aborts and tracks failure when the web onboarding handoff does not complete", async () => {
@@ -1824,9 +1913,71 @@ describe("runSetup checkpoint behavior", () => {
     await runSetup();
 
     const saved = loadConfig();
-    expect(saved.org_id).toBe("owner-org");
-    expect(saved.space_id).toBe("space-owner");
-    expect(saved.deployment_id).toBe("dep-owner");
+    expect(saved.active_account?.target?.org_id).toBe("owner-org");
+    expect(saved.active_account?.target?.space_id).toBe("space-owner");
+    expect(saved.active_account?.target?.deployment_id).toBe("dep-owner");
+  });
+
+  it("re-resolves onboarding state when the browser hands back a different account", async () => {
+    saveConfig(
+      makeCfg({
+        access_token: "account-a-token",
+        refresh_token: "account-a-refresh",
+        deployment_id: "account-a-deployment",
+        deployment_name: "Account A MCP",
+        api_key: "account-a-key",
+        org_id: "account-a-org",
+        space_id: "account-a-space",
+      }),
+    );
+    const methods = setupAuthed({
+      getDeployments: vi.fn().mockResolvedValue([
+        makeDeployment({
+          deployment_id: "account-a-deployment",
+          org_id: "account-a-org",
+          org_name: "Account A Org",
+          space_id: "account-a-space",
+        }),
+        makeDeployment({
+          deployment_id: "account-b-deployment",
+          org_id: "account-b-org",
+          org_name: "Account B Org",
+          space_id: "account-b-space",
+        }),
+      ]),
+    });
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "account-a-user",
+      finished_onboarding: false,
+      cli_onboarding_enabled: true,
+    });
+    mockTrpc.organization.getOrganizations.query
+      .mockResolvedValueOnce([
+        { org_id: "account-a-org", name: "Account A Org", user_role: "OWNER" },
+      ])
+      .mockResolvedValueOnce([
+        { org_id: "account-b-org", name: "Account B Org", user_role: "OWNER" },
+      ]);
+    mockStartOAuthFlow.mockResolvedValue({
+      browserOpened: true,
+      token: {
+        access_token: "account-b-token",
+        refresh_token: "account-b-refresh",
+        expires_in: 3600,
+      },
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    const saved = loadConfig();
+    expect(saved.active_account?.session.access_token).toBe("account-b-token");
+    expect(saved.active_account?.session.refresh_token).toBe("account-b-refresh");
+    expect(saved.active_account?.target?.org_id).toBe("account-b-org");
+    expect(saved.active_account?.target?.space_id).toBe("account-b-space");
+    expect(saved.active_account?.target?.deployment_id).toBe("account-b-deployment");
+    expect(saved.active_account?.target?.api_key).toBe("new-key");
+    expect(methods.validateAPIKey).not.toHaveBeenCalled();
   });
 
   it("never runs the terminal GitHub step during first-run onboarding", async () => {
@@ -1931,7 +2082,7 @@ describe("runSetup checkpoint behavior", () => {
     // session was already valid), and the explicit deployment was bound.
     expect(mockStartOAuthFlow).not.toHaveBeenCalled();
     const saved = loadConfig();
-    expect(saved.deployment_id).toBe("dep-explicit");
+    expect(saved.active_account?.target?.deployment_id).toBe("dep-explicit");
   });
 });
 
@@ -2056,8 +2207,8 @@ describe("runSetup additional branches", () => {
     await runSetup();
 
     const saved = loadConfig();
-    expect(saved.org_id).toBe("member-org");
-    expect(saved.deployment_id).toBe("dep-member");
+    expect(saved.active_account?.target?.org_id).toBe("member-org");
+    expect(saved.active_account?.target?.deployment_id).toBe("dep-member");
   });
 
   it("aborts onboarding when no deployment exists for the target org", async () => {
@@ -2125,7 +2276,7 @@ describe("runSetup additional branches", () => {
     await runSetup();
 
     const saved = loadConfig();
-    expect(saved.deployment_id).toBe("dep-fallback");
+    expect(saved.active_account?.target?.deployment_id).toBe("dep-fallback");
   });
 
   it("returns early when the one-shot confirm is cancelled", async () => {
@@ -2254,7 +2405,7 @@ describe("runSetup additional branches", () => {
     await runSetup();
 
     const saved = loadConfig();
-    expect(saved.deployment_id).toBeUndefined();
+    expect(saved.active_account?.target?.deployment_id).toBeUndefined();
     expect(p.outro).not.toHaveBeenCalled();
   });
 
@@ -2274,7 +2425,7 @@ describe("runSetup additional branches", () => {
     await runSetup();
 
     const saved = loadConfig();
-    expect(saved.deployment_id).toBeUndefined();
+    expect(saved.active_account?.target?.deployment_id).toBeUndefined();
     expect(p.outro).not.toHaveBeenCalled();
   });
 

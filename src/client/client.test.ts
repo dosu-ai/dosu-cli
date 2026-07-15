@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../config/config";
+import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { Client, SessionExpiredError } from "./client";
 
 // Mock saveConfig to avoid filesystem writes (hoisted; applies to the whole file)
@@ -15,13 +16,13 @@ vi.mock("../config/config", async () => {
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-function makeConfig(overrides: Partial<Config> = {}): Config {
-  return {
+function makeConfig(overrides: Partial<FlatTestConfig> = {}): Config {
+  return makeTestConfig({
     access_token: "test-token",
     refresh_token: "test-refresh",
     expires_at: Math.floor(Date.now() / 1000) + 3600, // 1 hour from now
     ...overrides,
-  };
+  });
 }
 
 function jsonResponse(data: unknown, status = 200): Response {
@@ -126,8 +127,8 @@ describe("Client", () => {
       // First call should be to the refresh endpoint
       expect(mockFetch.mock.calls[0][0]).toContain("/auth/v1/token");
       // Config should be updated with new tokens
-      expect(cfg.access_token).toBe("refreshed-token");
-      expect(cfg.refresh_token).toBe("refreshed-refresh");
+      expect(cfg.active_account?.session.access_token).toBe("refreshed-token");
+      expect(cfg.active_account?.session.refresh_token).toBe("refreshed-refresh");
     });
 
     it("throws when refresh_token is missing and token is expired", async () => {

@@ -4,39 +4,107 @@
 
 import { Command } from "commander";
 import pc from "picocolors";
-import { createTypedClient } from "../client/trpc";
+import { createTypedClient, type TypedClient } from "../client/trpc";
+import type { NangoGetConnectionInput } from "../generated/dosu-api-types";
 import { requireLoginConfig } from "./auth";
 import { printResult, printTable } from "./output";
 
 function requireConfig() {
   const cfg = requireLoginConfig();
-  if (!cfg.org_id) {
+  if (!cfg.active_account?.target?.org_id) {
     console.error(pc.red("Missing org config. Run 'dosu setup' to reconfigure."));
     process.exit(1);
   }
   return cfg;
 }
 
-/** Platforms supported by `nango.getConnection` */
-const NANGO_PLATFORMS = [
-  "confluence",
-  "notion",
-  "coda",
-  "gitlab",
-  "gitlab-pat",
-  "confluence-basic",
-] as const;
+type NangoProvider = NangoGetConnectionInput["provider"];
+
+/**
+ * Nango probes per platform. A platform can be connectable under more than one
+ * Nango provider, and a connection may exist under any of them; we report
+ * connected if ANY probe returns a row.
+ *
+ * `nango.getConnection` exact-matches BOTH `provider` (the Nango DB provider
+ * value) and `providerConfigKey` (the Nango integration id). These differ for
+ * the alternate-auth integrations — the integration id is a distinct base, and
+ * the DB provider stays the platform's canonical value. The primary auth method
+ * (OAuth) is listed first so the common case short-circuits on the first probe;
+ * the alternate (PAT / Basic) is the fallback:
+ *   - GitLab: OAuth `{gitlab, gitlab}`, PAT `{gitlab, gitlab-pat}`
+ *   - Confluence: OAuth `{confluence, confluence}`, Basic `{confluence, confluence-basic}`
+ *   - Azure DevOps: OAuth `{microsoft-entra-id, microsoft-entra-id}`, PAT `{azure_devops, azure-devops}`
+ * (Note `azure_devops` the DB provider vs `azure-devops` the integration id.)
+ *
+ * `gitlab-pat`/`confluence-basic` are also kept as standalone keys so
+ * `status gitlab-pat` / `status confluence-basic` still work. Prod uses bare
+ * integration ids (no env suffix), which is what the shipped CLI targets.
+ */
+const NANGO_PROBES: Record<
+  string,
+  readonly { provider: NangoProvider; providerConfigKey: string }[]
+> = {
+  gitlab: [
+    { provider: "gitlab", providerConfigKey: "gitlab" },
+    { provider: "gitlab", providerConfigKey: "gitlab-pat" },
+  ],
+  "gitlab-pat": [{ provider: "gitlab", providerConfigKey: "gitlab-pat" }],
+  confluence: [
+    { provider: "confluence", providerConfigKey: "confluence" },
+    { provider: "confluence", providerConfigKey: "confluence-basic" },
+  ],
+  "confluence-basic": [{ provider: "confluence", providerConfigKey: "confluence-basic" }],
+  notion: [{ provider: "notion", providerConfigKey: "notion" }],
+  coda: [{ provider: "coda", providerConfigKey: "coda" }],
+  azure_devops: [
+    { provider: "microsoft-entra-id", providerConfigKey: "microsoft-entra-id" },
+    { provider: "azure_devops", providerConfigKey: "azure-devops" },
+  ],
+};
 
 /** All display platforms including those checked via other means */
 const DISPLAY_PLATFORMS = [
   "github",
   "gitlab",
+  "azure_devops",
   "slack",
   "confluence",
   "notion",
   "coda",
   "teams",
 ] as const;
+
+/**
+ * Probe a platform's Nango connection state. Platforms absent from
+ * `NANGO_PROBES` (github, slack, teams) are reported as `queryable: false`.
+ * Otherwise every probe is tried in order, short-circuiting on the first
+ * connection found; a throwing probe is swallowed so the next one still runs.
+ */
+async function probeConnection(
+  client: TypedClient,
+  orgId: string,
+  platform: string,
+): Promise<{ queryable: boolean; connected: boolean; connection: unknown }> {
+  const probes = NANGO_PROBES[platform];
+  if (!probes) {
+    return { queryable: false, connected: false, connection: null };
+  }
+  for (const probe of probes) {
+    try {
+      const conn = await client.nango.getConnection.query({
+        provider: probe.provider,
+        providerConfigKey: probe.providerConfigKey,
+        orgId,
+      });
+      if (conn != null) {
+        return { queryable: true, connected: true, connection: conn };
+      }
+    } catch {
+      // Swallow and try the next probe.
+    }
+  }
+  return { queryable: true, connected: false, connection: null };
+}
 
 export function integrationsCommand(): Command {
   const cmd = new Command("integrations").description("Manage integrations");
@@ -49,27 +117,20 @@ export function integrationsCommand(): Command {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
 
-      const results: Array<{ platform: string; connected: boolean }> = [];
-      for (const platform of DISPLAY_PLATFORMS) {
-        // Only nango-supported platforms can be queried via getConnection
-        const nangoProvider = NANGO_PLATFORMS.find((p) => p === platform);
-        if (nangoProvider) {
-          try {
-            const conn = await client.nango.getConnection.query({
-              provider: nangoProvider,
-              providerConfigKey: nangoProvider,
-              // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-              orgId: cfg.org_id!,
-            });
-            results.push({ platform, connected: conn !== null });
-          } catch {
-            results.push({ platform, connected: false });
-          }
-        } else {
-          // github, slack, teams — not queryable via nango
-          results.push({ platform, connected: false });
-        }
-      }
+      // Probe platforms in parallel — each is independent — so the command
+      // isn't gated on the sum of every platform's network round-trips.
+      // Promise.all preserves order, so the table still follows DISPLAY_PLATFORMS.
+      const results = await Promise.all(
+        DISPLAY_PLATFORMS.map(async (platform) => {
+          const { connected } = await probeConnection(
+            client,
+            // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
+            cfg.active_account!.target!.org_id!,
+            platform,
+          );
+          return { platform, connected };
+        }),
+      );
 
       if (opts.json) {
         printResult(results, opts);
@@ -94,9 +155,15 @@ export function integrationsCommand(): Command {
     .action(async (platform: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
-      const nangoProvider = NANGO_PLATFORMS.find((p) => p === platform);
+      const { queryable, connected, connection } = await probeConnection(
+        client,
+        // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
+        cfg.active_account!.target!.org_id!,
+        platform,
+      );
 
-      if (!nangoProvider) {
+      if (!queryable) {
+        // github, slack, teams — not queryable via nango
         if (opts.json) {
           printResult({ platform, connected: false, note: "not queryable via nango" }, opts);
           return;
@@ -105,27 +172,11 @@ export function integrationsCommand(): Command {
         return;
       }
 
-      try {
-        const conn = await client.nango.getConnection.query({
-          provider: nangoProvider,
-          providerConfigKey: nangoProvider,
-          // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-          orgId: cfg.org_id!,
-        });
-
-        const connected = conn !== null;
-        if (opts.json) {
-          printResult({ platform, connected, connection: conn }, opts);
-          return;
-        }
-        console.log(`${platform}: ${connected ? pc.green("connected") : pc.dim("not connected")}`);
-      } catch {
-        if (opts.json) {
-          printResult({ platform, connected: false }, opts);
-          return;
-        }
-        console.log(`${platform}: ${pc.dim("not connected")}`);
+      if (opts.json) {
+        printResult({ platform, connected, connection }, opts);
+        return;
       }
+      console.log(`${platform}: ${connected ? pc.green("connected") : pc.dim("not connected")}`);
     });
 
   cmd
@@ -137,7 +188,7 @@ export function integrationsCommand(): Command {
       const client = createTypedClient(cfg);
 
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const channels = await client.slackChannel.getAll.query(cfg.org_id!);
+      const channels = await client.slackChannel.getAll.query(cfg.active_account!.target!.org_id!);
 
       if (opts.json) {
         printResult(channels, opts);

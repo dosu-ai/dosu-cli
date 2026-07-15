@@ -25,6 +25,7 @@ vi.mock("node:fs", async (importOriginal) => {
 
 import { renameSync, writeFileSync } from "node:fs";
 import { type Config, getConfigPath, loadConfig, saveConfig } from "./config";
+import { makeTestConfig } from "./config.test-utils";
 
 describe("saveConfig atomicity", () => {
   let origXDG: string | undefined;
@@ -48,7 +49,11 @@ describe("saveConfig atomicity", () => {
   });
 
   it("writes a temp file and atomically renames it over the final path", () => {
-    const cfg: Config = { access_token: "tok", refresh_token: "ref", expires_at: 1 };
+    const cfg: Config = makeTestConfig({
+      access_token: "tok",
+      refresh_token: "ref",
+      expires_at: 1,
+    });
     saveConfig(cfg);
 
     const finalPath = getConfigPath();
@@ -67,12 +72,14 @@ describe("saveConfig atomicity", () => {
     expect(dirname(String(from))).toBe(dirname(finalPath));
 
     // Result round-trips and leaves no stray temp files behind.
-    expect(loadConfig()).toEqual(cfg);
+    const loaded = loadConfig();
+    expect(loaded.active_account?.session).toEqual(cfg.active_account?.session);
+    expect(loaded.schema_version).toBe(2);
     expect(readdirSync(dirname(finalPath))).toEqual(["config.json"]);
   });
 
   it("keeps the 0600 mode on the written file", () => {
-    saveConfig({ access_token: "tok", refresh_token: "ref", expires_at: 1 });
+    saveConfig(makeTestConfig({ access_token: "tok", refresh_token: "ref", expires_at: 1 }));
     const dataWrite = vi
       .mocked(writeFileSync)
       .mock.calls.find((c) => String(c[0]).includes("dosu-cli"));

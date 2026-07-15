@@ -10,7 +10,7 @@ import { printResult, printTable, truncate } from "./output";
 
 function requireConfig() {
   const cfg = requireLoginConfig();
-  if (!cfg.org_id || !cfg.space_id) {
+  if (!cfg.active_account?.target?.org_id || !cfg.active_account?.target?.space_id) {
     console.error(pc.red("Missing org/space config. Run 'dosu setup' to reconfigure."));
     process.exit(1);
   }
@@ -33,7 +33,7 @@ export function knowledgeCommand(): Command {
       // Get data source IDs for the org
       const dataSources = await client.dataSource.list.query({
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-        org_id: cfg.org_id!,
+        org_id: cfg.active_account!.target!.org_id!,
         excluded_provider_slugs: [],
       });
 
@@ -90,7 +90,7 @@ export function knowledgeCommand(): Command {
 
       const store = await client.knowledgeStore.getBySpaceId.query(
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-        { space_id: cfg.space_id! },
+        { space_id: cfg.active_account!.target!.space_id! },
       );
 
       if (opts.json) {

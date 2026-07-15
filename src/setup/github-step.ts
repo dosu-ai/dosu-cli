@@ -474,15 +474,15 @@ export async function stepConnectGitHubRepo(
 ): Promise<GithubStepResult> {
   logger.info("setup", "Step: connect GitHub repo(s)");
 
-  if (!cfg.org_id || !cfg.space_id) {
+  if (!cfg.active_account?.target?.org_id || !cfg.active_account?.target?.space_id) {
     p.log.warn(
       "Cannot connect GitHub: your Dosu workspace is missing org/space context. " +
         "Re-run `dosu setup` from a fresh state.",
     );
     return { advance: false, has_connected_repo: false };
   }
-  const orgID = cfg.org_id;
-  const spaceID = cfg.space_id;
+  const orgID = cfg.active_account?.target?.org_id;
+  const spaceID = cfg.active_account?.target?.space_id;
 
   if (detected) {
     p.log.info(`Connecting GitHub repos (detected local repo: ${detected.slug})`);
@@ -622,7 +622,7 @@ export async function stepConnectGitHubRepo(
       advance: true,
       has_connected_repo: true,
       deployment_id: primary.deployment_id,
-      space_id: cfg.space_id,
+      space_id: cfg.active_account?.target?.space_id,
       created_data_source_ids: survived.map((c) => c.data_source_id),
       created_repository_slugs: survived.map((c) => c.slug),
     };

@@ -15,7 +15,13 @@
 
 import { exchangeTicket, mintTicket } from "../auth/ticket";
 import { Client, type Deployment } from "../client/client";
-import { type Config, loadConfig, saveConfig } from "../config/config";
+import {
+  type Config,
+  loadConfig,
+  replaceLoginSession,
+  saveConfig,
+  updateTarget,
+} from "../config/config";
 import { logger } from "../debug/logger";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
@@ -147,9 +153,11 @@ async function redeemTicket(
       });
       return { code: 0, cfg, exit: true };
     }
-    cfg.access_token = result.access_token ?? "";
-    cfg.refresh_token = result.refresh_token ?? "";
-    cfg.expires_at = Math.floor(Date.now() / 1000) + (result.expires_in ?? 3600);
+    replaceLoginSession(cfg, {
+      access_token: result.access_token ?? "",
+      refresh_token: result.refresh_token ?? "",
+      expires_at: Math.floor(Date.now() / 1000) + (result.expires_in ?? 3600),
+    });
     saveConfig(cfg);
     logger.info("agent.flow", "Ticket redeemed; session saved");
     emitStep({ step: "auth", email: result.email });
@@ -177,7 +185,7 @@ async function verifyOrMint(
   cfg: Config,
   opts: AgentSetupOptions,
 ): Promise<{ code: number; cfg: Config; exit?: boolean }> {
-  if (cfg.access_token) {
+  if (cfg.active_account?.session.access_token) {
     try {
       const client = new Client(cfg);
       const resp = await client.doRequestRaw("GET", "/v1/mcp/deployments");
@@ -240,10 +248,12 @@ async function resolveDeployment(
         });
         return { code: 1, cfg };
       }
-      cfg.deployment_id = d.deployment_id;
-      cfg.deployment_name = d.name;
-      cfg.org_id = d.org_id;
-      cfg.space_id = d.space_id;
+      updateTarget(cfg, {
+        deployment_id: d.deployment_id,
+        deployment_name: d.name,
+        org_id: d.org_id,
+        space_id: d.space_id,
+      });
       cfg.mode = undefined;
       saveConfig(cfg);
       emitStep({
@@ -265,11 +275,11 @@ async function resolveDeployment(
   }
 
   // Already locked in from a previous run — reuse it.
-  if (cfg.deployment_id) {
+  if (cfg.active_account?.target?.deployment_id) {
     emitStep({
       step: "deployment",
-      deployment_id: cfg.deployment_id,
-      name: cfg.deployment_name,
+      deployment_id: cfg.active_account?.target?.deployment_id,
+      name: cfg.active_account?.target?.deployment_name,
     });
     return { code: 0, cfg };
   }
@@ -305,10 +315,12 @@ async function resolveDeployment(
 
     if (mcpDeployments.length === 1) {
       const d = mcpDeployments[0];
-      cfg.deployment_id = d.deployment_id;
-      cfg.deployment_name = d.name;
-      cfg.org_id = d.org_id;
-      cfg.space_id = d.space_id;
+      updateTarget(cfg, {
+        deployment_id: d.deployment_id,
+        deployment_name: d.name,
+        org_id: d.org_id,
+        space_id: d.space_id,
+      });
       cfg.mode = undefined;
       saveConfig(cfg);
       emitStep({
@@ -352,7 +364,9 @@ function formatCandidates(deployments: Deployment[]): string {
 }
 
 async function ensureAPIKey(client: Client, cfg: Config): Promise<{ code: number; cfg: Config }> {
-  if (!cfg.deployment_id) {
+  const target = cfg.active_account?.target;
+  const deploymentID = target?.deployment_id;
+  if (!deploymentID) {
     emitError({
       step: "api_key",
       reason: "no_deployment",
@@ -363,15 +377,15 @@ async function ensureAPIKey(client: Client, cfg: Config): Promise<{ code: number
   }
 
   try {
-    if (cfg.api_key) {
-      const valid = await client.validateAPIKey(cfg.api_key, cfg.deployment_id);
+    if (target.api_key) {
+      const valid = await client.validateAPIKey(target.api_key, deploymentID);
       if (valid) {
         emitStep({ step: "api_key", reused: true });
         return { code: 0, cfg };
       }
     }
-    const resp = await client.createAPIKey(cfg.deployment_id, "dosu-cli");
-    cfg.api_key = resp.api_key;
+    const resp = await client.createAPIKey(deploymentID, "dosu-cli");
+    updateTarget(cfg, { api_key: resp.api_key });
     saveConfig(cfg);
     emitStep({ step: "api_key", reused: false });
     return { code: 0, cfg };

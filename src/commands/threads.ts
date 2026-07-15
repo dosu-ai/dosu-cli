@@ -28,7 +28,7 @@ type ThreadMessageGroup = {
 
 function requireConfig() {
   const cfg = requireLoginConfig();
-  if (!cfg.space_id) {
+  if (!cfg.active_account?.target?.space_id) {
     console.error(pc.red("Missing space config. Run 'dosu setup' to reconfigure."));
     process.exit(1);
   }
@@ -63,7 +63,7 @@ export function threadsCommand(): Command {
         resolved: undefined,
         search: undefined,
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-        space_id: cfg.space_id!,
+        space_id: cfg.active_account!.target!.space_id!,
         workspaces: undefined,
         limit: Math.min(Number.parseInt(opts.limit ?? "20", 10), 100),
       };

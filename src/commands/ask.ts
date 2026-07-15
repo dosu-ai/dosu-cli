@@ -14,11 +14,11 @@ import { printResult } from "./output";
 
 function requireConfig() {
   const cfg = loadConfig();
-  if (!cfg.api_key) {
+  if (!cfg.active_account?.target?.api_key) {
     console.error(pc.red("Not configured. Run 'dosu setup' first."));
     process.exit(1);
   }
-  if (!cfg.deployment_id || !cfg.space_id) {
+  if (!cfg.active_account?.target?.deployment_id || !cfg.active_account?.target?.space_id) {
     console.error(pc.red("Missing deployment config. Run 'dosu setup' to reconfigure."));
     process.exit(1);
   }
@@ -51,11 +51,11 @@ export function askCommand(): Command {
           headers: {
             "Content-Type": "application/json",
             // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-            "X-Dosu-API-Key": cfg.api_key!,
+            "X-Dosu-API-Key": cfg.active_account!.target!.api_key!,
           },
           body: JSON.stringify({
             // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-            deployment_id: cfg.deployment_id!,
+            deployment_id: cfg.active_account!.target!.deployment_id!,
             question,
             session_id: opts.session ?? undefined,
           }),

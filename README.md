@@ -10,7 +10,7 @@
 ## Quick Start
 
 ```bash
-npx @dosu/cli setup
+curl -fsSL https://cli.dosu.dev/install | sh
 ```
 
 The interactive wizard authenticates you via browser OAuth, lets you pick a Dosu deployment (or OSS / public-library mode), mints an API key, detects which AI tools you have installed, and writes the Dosu MCP server entry into each one's config. Restart your AI tool and Dosu is available.
@@ -19,7 +19,21 @@ Run `dosu` with no arguments any time to open the interactive menu.
 
 ## Installation
 
-### npx / npm (Recommended)
+### curl / install (macOS / Linux) (Recommended)
+
+Downloads and installs the latest stable release binary.
+
+```bash
+curl -fsSL https://cli.dosu.dev/install | sh
+```
+
+To install a specific release tag:
+
+```bash
+DOSU_INSTALL_VERSION=v0.2.0-rc1 curl -fsSL https://cli.dosu.dev/install | sh
+```
+
+### npx / npm
 
 Requires Node.js 22+.
 
@@ -32,20 +46,6 @@ Or install globally:
 ```bash
 npm install -g @dosu/cli
 dosu setup
-```
-
-### curl / install (macOS / Linux)
-
-Requires Node.js 22+. Installs `@dosu/cli` globally via npm and runs `dosu setup` interactively.
-
-```bash
-curl -fsSL https://cli.dosu.dev/install.sh | sh
-```
-
-To install a specific release tag:
-
-```bash
-DOSU_INSTALL_VERSION=v0.2.0-rc1 curl -fsSL https://cli.dosu.dev/install.sh | sh
 ```
 
 ### Homebrew

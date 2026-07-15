@@ -22,6 +22,7 @@ vi.mock("../config/config", () => ({
   loadConfig: (...args: unknown[]) => mockLoadConfig(...args),
 }));
 
+import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { orgCommand } from "./org";
 
 let logSpy: ReturnType<typeof vi.spyOn>;
@@ -29,13 +30,16 @@ let errorSpy: ReturnType<typeof vi.spyOn>;
 // biome-ignore lint/suspicious/noExplicitAny: process.exit mock type mismatch
 let exitSpy: any;
 
-const validConfig = {
+const validFlatConfig: FlatTestConfig = {
   access_token: "t",
   refresh_token: "r",
   expires_at: 0,
   api_key: "sk_user_test",
   org_id: "org1",
 };
+const makeValidConfig = (overrides: Partial<FlatTestConfig> = {}) =>
+  makeTestConfig({ ...validFlatConfig, ...overrides });
+const validConfig = makeValidConfig();
 
 function allOutput(): string {
   return logSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
@@ -121,7 +125,7 @@ describe("org info", () => {
 
 describe("requireConfig", () => {
   it("exits when access_token is missing", async () => {
-    mockLoadConfig.mockReturnValue({ ...validConfig, access_token: "" });
+    mockLoadConfig.mockReturnValue(makeValidConfig({ access_token: "" }));
     await expect(run("info")).rejects.toThrow("exit");
   });
 });

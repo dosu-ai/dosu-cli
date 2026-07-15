@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as joinPath } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 
 const spinnerStart = vi.fn();
 const spinnerStop = vi.fn();
@@ -81,7 +82,7 @@ let tempConfigDir: string;
 let origXDG: string | undefined;
 let origHome: string | undefined;
 
-const validConfig = {
+const validFlatConfig: FlatTestConfig = {
   access_token: "t",
   refresh_token: "r",
   expires_at: 0,
@@ -90,6 +91,9 @@ const validConfig = {
   deployment_id: "d1",
   deployment_name: "Test Deploy",
 };
+const makeValidConfig = (overrides: Partial<FlatTestConfig> = {}) =>
+  makeTestConfig({ ...validFlatConfig, ...overrides });
+const validConfig = makeValidConfig();
 
 const fakeReport: InsightsReport = {
   generatedAt: "2026-04-16T00:00:00Z",
@@ -382,7 +386,7 @@ describe("insightsCommand", () => {
 
   it("prompts to run setup when not logged in, then runs insights after a successful setup", async () => {
     mockLoadConfig
-      .mockReturnValueOnce({ ...validConfig, access_token: "" })
+      .mockReturnValueOnce(makeValidConfig({ access_token: "" }))
       .mockReturnValue(validConfig);
     mockConfirm.mockResolvedValue(true);
     mockRunSetup.mockResolvedValue(undefined);
@@ -410,7 +414,7 @@ describe("insightsCommand", () => {
   });
 
   it("warns about missing deployment when api_key is missing", async () => {
-    mockLoadConfig.mockReturnValueOnce({ ...validConfig, api_key: undefined });
+    mockLoadConfig.mockReturnValueOnce(makeValidConfig({ api_key: undefined }));
     mockConfirm.mockResolvedValue(false);
 
     await expect(runCmd()).resolves.toBeUndefined();
@@ -419,7 +423,7 @@ describe("insightsCommand", () => {
   });
 
   it("returns without running insights when the user declines setup", async () => {
-    mockLoadConfig.mockReturnValueOnce({ ...validConfig, space_id: undefined });
+    mockLoadConfig.mockReturnValueOnce(makeValidConfig({ space_id: undefined }));
     mockConfirm.mockResolvedValue(false);
 
     await expect(runCmd()).resolves.toBeUndefined();
@@ -428,7 +432,7 @@ describe("insightsCommand", () => {
   });
 
   it("returns without running insights when the user cancels the prompt", async () => {
-    mockLoadConfig.mockReturnValueOnce({ ...validConfig, deployment_id: undefined });
+    mockLoadConfig.mockReturnValueOnce(makeValidConfig({ deployment_id: undefined }));
     const cancelSentinel = Symbol("cancel");
     mockConfirm.mockResolvedValue(cancelSentinel);
     mockIsCancel.mockImplementation((v: unknown) => v === cancelSentinel);
@@ -440,8 +444,8 @@ describe("insightsCommand", () => {
 
   it("returns gracefully when setup completes but config is still incomplete", async () => {
     mockLoadConfig
-      .mockReturnValueOnce({ ...validConfig, access_token: "" })
-      .mockReturnValue({ ...validConfig, access_token: "" });
+      .mockReturnValueOnce(makeValidConfig({ access_token: "" }))
+      .mockReturnValue(makeValidConfig({ access_token: "" }));
     mockConfirm.mockResolvedValue(true);
     mockRunSetup.mockResolvedValue(undefined);
 

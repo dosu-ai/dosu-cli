@@ -35,8 +35,8 @@ function writeTOML(path: string, content: string): void {
 
 function mcpEndpoint(cfg: Config): string {
   if (cfg.mode === MODE_OSS) return mcpBaseURL();
-  if (!cfg.deployment_id) throw new Error("deployment ID is required");
-  return mcpURL(cfg.deployment_id);
+  if (!cfg.active_account?.target?.deployment_id) throw new Error("deployment ID is required");
+  return mcpURL(cfg.active_account?.target?.deployment_id);
 }
 
 function installDosuToTOML(path: string, cfg: Config): void {
@@ -45,7 +45,7 @@ function installDosuToTOML(path: string, cfg: Config): void {
   content = removeDosuFromTOML(content);
   // Append new section
   const url = mcpEndpoint(cfg);
-  const headers = mcpHeaders(cfg.api_key);
+  const headers = mcpHeaders(cfg.active_account?.target?.api_key);
   const headerEntries = Object.entries(headers)
     .map(([k, v]) => `${k} = "${v}"`)
     .join("\n");
@@ -90,7 +90,8 @@ export const CodexProvider = (): SetupProvider => ({
     return content.includes("[mcp_servers.dosu]");
   },
   install(cfg: Config, global: boolean): void {
-    if (cfg.mode !== MODE_OSS && !cfg.deployment_id) throw new Error("deployment ID is required");
+    if (cfg.mode !== MODE_OSS && !cfg.active_account?.target?.deployment_id)
+      throw new Error("deployment ID is required");
     installDosuToTOML(getConfigPath(global), cfg);
   },
   remove(global: boolean): void {

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OAuthCallbackError } from "../auth/errors";
 import type { Config } from "../config/config";
 import { loadConfig, saveConfig } from "../config/config";
+import { makeTestConfig, testSession, testTarget } from "../config/config.test-utils";
 import { allProviders } from "../mcp/providers";
 import { createProgram } from "./cli";
 
@@ -39,14 +40,14 @@ const { mockRefreshToken } = vi.hoisted(() => ({
 }));
 vi.mock("../client/client", () => ({
   Client: class MockClient {
-    private cfg: { refresh_token?: string };
+    private cfg: Config;
 
-    constructor(cfg: { refresh_token?: string }) {
+    constructor(cfg: Config) {
       this.cfg = cfg;
     }
 
     refreshToken() {
-      if (!this.cfg.refresh_token) {
+      if (!this.cfg.active_account?.session.refresh_token) {
         throw new Error("no refresh token available");
       }
       return mockRefreshToken(this.cfg);
@@ -111,14 +112,14 @@ afterEach(() => {
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 function authenticatedConfig(): Config {
-  return {
+  return makeTestConfig({
     access_token: "tok_abc",
     refresh_token: "ref_abc",
     expires_at: Math.floor(Date.now() / 1000) + 3600,
     deployment_id: "dep_123",
     deployment_name: "My App",
     api_key: "key_abc",
-  };
+  });
 }
 
 async function run(...args: string[]) {
@@ -133,9 +134,9 @@ function allLogOutput(): string {
 
 function mockSuccessfulRefresh(accessToken: string, refreshToken: string): void {
   mockRefreshToken.mockImplementationOnce(async (cfg: Config) => {
-    cfg.access_token = accessToken;
-    cfg.refresh_token = refreshToken;
-    cfg.expires_at = Math.floor(Date.now() / 1000) + 3600;
+    testSession(cfg).access_token = accessToken;
+    testSession(cfg).refresh_token = refreshToken;
+    testSession(cfg).expires_at = Math.floor(Date.now() / 1000) + 3600;
     saveConfig(cfg);
   });
 }
@@ -150,6 +151,48 @@ describe("CLI actions", () => {
       mockRunTUI.mockResolvedValue(undefined);
       await run();
       expect(mockRunTUI).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe("unknown command", () => {
+    let errorSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      errorSpy.mockRestore();
+      process.exitCode = undefined;
+    });
+
+    function allErrorOutput(): string {
+      return errorSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
+    }
+
+    it("reports the unknown command instead of launching the TUI", async () => {
+      await run("halp");
+
+      expect(mockRunTUI).not.toHaveBeenCalled();
+      expect(allErrorOutput()).toContain("unknown command 'halp'");
+      expect(allErrorOutput()).toContain("Run 'dosu --help' to see available commands.");
+      expect(process.exitCode).toBe(1);
+    });
+
+    it("suggests the closest command name", async () => {
+      await run("loginn");
+      expect(allErrorOutput()).toContain("(Did you mean 'login'?)");
+    });
+
+    it("suggests 'help' for near-misses of help", async () => {
+      await run("halp");
+      expect(allErrorOutput()).toContain("(Did you mean 'help'?)");
+    });
+
+    it("omits the suggestion when nothing is close", async () => {
+      await run("zzzzzzzzzz");
+      expect(allErrorOutput()).toContain("unknown command 'zzzzzzzzzz'");
+      expect(allErrorOutput()).not.toContain("Did you mean");
     });
   });
 
@@ -189,14 +232,14 @@ describe("CLI actions", () => {
 
       // Verify the real config file was written
       const cfg = loadConfig();
-      expect(cfg.access_token).toBe("new_tok");
-      expect(cfg.refresh_token).toBe("new_ref");
-      expect(cfg.expires_at).toBeGreaterThan(0);
+      expect(cfg.active_account?.session.access_token).toBe("new_tok");
+      expect(cfg.active_account?.session.refresh_token).toBe("new_ref");
+      expect(cfg.active_account?.session.expires_at).toBeGreaterThan(0);
     });
 
     it("refreshes the session when token is expired", async () => {
       const cfg = authenticatedConfig();
-      cfg.expires_at = Math.floor(Date.now() / 1000) - 1000; // expired
+      testSession(cfg).expires_at = Math.floor(Date.now() / 1000) - 1000; // expired
       saveConfig(cfg);
 
       mockSuccessfulRefresh("refreshed_tok", "refreshed_ref");
@@ -207,13 +250,13 @@ describe("CLI actions", () => {
       expect(logSpy).toHaveBeenCalledWith("Session refreshed.");
 
       const updated = loadConfig();
-      expect(updated.access_token).toBe("refreshed_tok");
-      expect(updated.refresh_token).toBe("refreshed_ref");
+      expect(updated.active_account?.session.access_token).toBe("refreshed_tok");
+      expect(updated.active_account?.session.refresh_token).toBe("refreshed_ref");
     });
 
     it("runs OAuth flow when expired token cannot be refreshed", async () => {
       const cfg = authenticatedConfig();
-      cfg.expires_at = Math.floor(Date.now() / 1000) - 1000; // expired
+      testSession(cfg).expires_at = Math.floor(Date.now() / 1000) - 1000; // expired
       saveConfig(cfg);
 
       mockRefreshToken.mockRejectedValueOnce(new Error("refresh failed"));
@@ -227,8 +270,8 @@ describe("CLI actions", () => {
       expect(mockStartOAuthFlow).toHaveBeenCalledOnce();
 
       const updated = loadConfig();
-      expect(updated.access_token).toBe("oauth_tok");
-      expect(updated.refresh_token).toBe("oauth_ref");
+      expect(updated.active_account?.session.access_token).toBe("oauth_tok");
+      expect(updated.active_account?.session.refresh_token).toBe("oauth_ref");
     });
 
     it("prints curated OAuth callback errors without saving credentials", async () => {
@@ -247,7 +290,7 @@ describe("CLI actions", () => {
         "Authentication failed: OAuth state expired. Run `dosu login` again.",
       );
       expect(process.exitCode).toBe(1);
-      expect(loadConfig().access_token).toBe("");
+      expect(loadConfig().active_account).toBeUndefined();
 
       process.exitCode = originalExitCode;
       errorSpy.mockRestore();
@@ -262,7 +305,7 @@ describe("CLI actions", () => {
 
       expect(errorSpy).toHaveBeenCalledWith("Authentication timed out after 8 minutes");
       expect(process.exitCode).toBe(1);
-      expect(loadConfig().access_token).toBe("");
+      expect(loadConfig().active_account).toBeUndefined();
 
       process.exitCode = originalExitCode;
       errorSpy.mockRestore();
@@ -281,8 +324,8 @@ describe("CLI actions", () => {
       expect(mockStartDeviceFlow).toHaveBeenCalledOnce();
       expect(logSpy).toHaveBeenCalledWith("Successfully authenticated!");
       const cfg = loadConfig();
-      expect(cfg.access_token).toBe("dev_tok");
-      expect(cfg.refresh_token).toBe("dev_ref");
+      expect(cfg.active_account?.session.access_token).toBe("dev_tok");
+      expect(cfg.active_account?.session.refresh_token).toBe("dev_ref");
     });
 
     it("uses device flow when headless environment is detected", async () => {
@@ -298,7 +341,7 @@ describe("CLI actions", () => {
       expect(mockStartOAuthFlow).not.toHaveBeenCalled();
       expect(mockStartDeviceFlow).toHaveBeenCalledOnce();
       const cfg = loadConfig();
-      expect(cfg.access_token).toBe("ssh_tok");
+      expect(cfg.active_account?.session.access_token).toBe("ssh_tok");
     });
 
     it("falls through to device flow when browser cannot be opened", async () => {
@@ -314,7 +357,7 @@ describe("CLI actions", () => {
       expect(mockStartOAuthFlow).toHaveBeenCalledOnce();
       expect(mockStartDeviceFlow).toHaveBeenCalledOnce();
       const cfg = loadConfig();
-      expect(cfg.access_token).toBe("fb_tok");
+      expect(cfg.active_account?.session.access_token).toBe("fb_tok");
     });
 
     it("prints error and sets exitCode when device flow fails", async () => {
@@ -327,7 +370,7 @@ describe("CLI actions", () => {
 
       expect(errorSpy).toHaveBeenCalledWith("Login session expired");
       expect(process.exitCode).toBe(1);
-      expect(loadConfig().access_token).toBe("");
+      expect(loadConfig().active_account).toBeUndefined();
 
       process.exitCode = originalExitCode;
       errorSpy.mockRestore();
@@ -428,12 +471,7 @@ describe("CLI actions", () => {
 
       // Read back the real config file and verify credentials are cleared
       const cfg = loadConfig();
-      expect(cfg.access_token).toBe("");
-      expect(cfg.refresh_token).toBe("");
-      expect(cfg.expires_at).toBe(0);
-      expect(cfg.deployment_id).toBeUndefined();
-      expect(cfg.deployment_name).toBeUndefined();
-      expect(cfg.api_key).toBeUndefined();
+      expect(cfg.active_account).toBeUndefined();
     });
 
     it("prints not-logged-in when config has no credentials", async () => {
@@ -466,8 +504,8 @@ describe("CLI actions", () => {
 
     it("shows token-expired status", async () => {
       const cfg = authenticatedConfig();
-      cfg.expires_at = Math.floor(Date.now() / 1000) - 1000;
-      cfg.refresh_token = "";
+      testSession(cfg).expires_at = Math.floor(Date.now() / 1000) - 1000;
+      testSession(cfg).refresh_token = "";
       saveConfig(cfg);
 
       await run("status");
@@ -478,7 +516,7 @@ describe("CLI actions", () => {
 
     it("refreshes expired token before showing logged-in status", async () => {
       const cfg = authenticatedConfig();
-      cfg.expires_at = Math.floor(Date.now() / 1000) - 1000;
+      testSession(cfg).expires_at = Math.floor(Date.now() / 1000) - 1000;
       saveConfig(cfg);
       mockSuccessfulRefresh("status_tok", "status_ref");
 
@@ -486,13 +524,13 @@ describe("CLI actions", () => {
 
       expect(logSpy).toHaveBeenCalledWith("Status: Logged in");
       expect(allLogOutput()).not.toContain("Status: Token expired");
-      expect(loadConfig().access_token).toBe("status_tok");
+      expect(loadConfig().active_account?.session.access_token).toBe("status_tok");
     });
 
     it("shows no deployment when none selected", async () => {
       const cfg = authenticatedConfig();
-      cfg.deployment_id = undefined;
-      cfg.deployment_name = undefined;
+      testTarget(cfg).deployment_id = undefined;
+      testTarget(cfg).deployment_name = undefined;
       saveConfig(cfg);
 
       await run("status");
@@ -506,8 +544,8 @@ describe("CLI actions", () => {
     it("shows OSS mode without requiring a deployment", async () => {
       const cfg = authenticatedConfig();
       cfg.mode = "oss";
-      cfg.deployment_id = undefined;
-      cfg.deployment_name = undefined;
+      testTarget(cfg).deployment_id = undefined;
+      testTarget(cfg).deployment_name = undefined;
       saveConfig(cfg);
 
       await run("status");
@@ -590,8 +628,8 @@ describe("CLI actions", () => {
 
     it("throws error when token is expired", async () => {
       const cfg = authenticatedConfig();
-      cfg.expires_at = Math.floor(Date.now() / 1000) - 1000;
-      cfg.refresh_token = "";
+      testSession(cfg).expires_at = Math.floor(Date.now() / 1000) - 1000;
+      testSession(cfg).refresh_token = "";
       saveConfig(cfg);
 
       await expect(run("mcp", "add", "cursor")).rejects.toThrow("session expired");
@@ -599,7 +637,7 @@ describe("CLI actions", () => {
 
     it("refreshes expired token before adding MCP config", async () => {
       const cfg = authenticatedConfig();
-      cfg.expires_at = Math.floor(Date.now() / 1000) - 1000;
+      testSession(cfg).expires_at = Math.floor(Date.now() / 1000) - 1000;
       saveConfig(cfg);
       mockSuccessfulRefresh("mcp_tok", "mcp_ref");
 
@@ -608,12 +646,12 @@ describe("CLI actions", () => {
       const cursorConfigPath = join(tempDir, ".cursor", "mcp.json");
       const cursorConfig = JSON.parse(readFileSync(cursorConfigPath, "utf-8"));
       expect(cursorConfig.mcpServers.dosu).toBeDefined();
-      expect(loadConfig().access_token).toBe("mcp_tok");
+      expect(loadConfig().active_account?.session.access_token).toBe("mcp_tok");
     });
 
     it("throws error when no deployment selected", async () => {
       const cfg = authenticatedConfig();
-      cfg.deployment_id = undefined;
+      testTarget(cfg).deployment_id = undefined;
       saveConfig(cfg);
 
       await expect(run("mcp", "add", "cursor")).rejects.toThrow("no MCP selected");
@@ -621,7 +659,7 @@ describe("CLI actions", () => {
 
     it("throws error when API key is missing before writing tool config", async () => {
       const cfg = authenticatedConfig();
-      cfg.api_key = undefined;
+      testTarget(cfg).api_key = undefined;
       saveConfig(cfg);
 
       await expect(run("mcp", "add", "cursor", "--global")).rejects.toThrow("no API key available");
@@ -630,8 +668,8 @@ describe("CLI actions", () => {
     it("supports OSS mode without a selected deployment", async () => {
       const cfg = authenticatedConfig();
       cfg.mode = "oss";
-      cfg.deployment_id = undefined;
-      cfg.deployment_name = undefined;
+      testTarget(cfg).deployment_id = undefined;
+      testTarget(cfg).deployment_name = undefined;
       saveConfig(cfg);
 
       await run("mcp", "add", "cursor", "--global");

@@ -1,3 +1,38 @@
+# [0.34.0](https://github.com/dosu-ai/dosu-cli/compare/v0.33.2...v0.34.0) (2026-07-15)
+
+
+### Features
+
+* **integrations:** report Azure DevOps connection status ([#121](https://github.com/dosu-ai/dosu-cli/issues/121)) ([e12e480](https://github.com/dosu-ai/dosu-cli/commit/e12e480ea32fd9ebd34781efb0a421ffeb08953b))
+
+## [0.33.2](https://github.com/dosu-ai/dosu-cli/compare/v0.33.1...v0.33.2) (2026-07-14)
+
+
+### Bug Fixes
+
+* **config:** bind target state to authenticated account ([2c57171](https://github.com/dosu-ai/dosu-cli/commit/2c57171a13a9acc385b1ccb70be5d56c361d0c26)), closes [#133](https://github.com/dosu-ai/dosu-cli/issues/133) [#130](https://github.com/dosu-ai/dosu-cli/issues/130)
+
+## [0.33.1](https://github.com/dosu-ai/dosu-cli/compare/v0.33.0...v0.33.1) (2026-07-13)
+
+
+### Bug Fixes
+
+* prevent account state mixing during login ([#129](https://github.com/dosu-ai/dosu-cli/issues/129)) ([5036961](https://github.com/dosu-ai/dosu-cli/commit/50369618c27285dcab6bf6b29c2b3c4037ff7962))
+
+# [0.33.0](https://github.com/dosu-ai/dosu-cli/compare/v0.32.1...v0.33.0) (2026-07-13)
+
+
+### Features
+
+* **setup:** add Dosu MCP instructions to AGENTS.md during onboarding ([#126](https://github.com/dosu-ai/dosu-cli/issues/126)) ([b646488](https://github.com/dosu-ai/dosu-cli/commit/b646488ce74c2268c4ead1e9256bb0ebf4dd6e1c))
+
+## [0.32.1](https://github.com/dosu-ai/dosu-cli/compare/v0.32.0...v0.32.1) (2026-07-12)
+
+
+### Bug Fixes
+
+* **cli:** friendly unknown-command errors and a working 'dosu help' ([#125](https://github.com/dosu-ai/dosu-cli/issues/125)) ([13425a3](https://github.com/dosu-ai/dosu-cli/commit/13425a30edfbf6220bb6f633931e9d20225b1f0c))
+
 # [0.32.0](https://github.com/dosu-ai/dosu-cli/compare/v0.31.0...v0.32.0) (2026-07-11)
 
 

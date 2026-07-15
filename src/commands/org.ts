@@ -53,8 +53,8 @@ export function orgCommand(): Command {
         { rawData: orgs },
       );
 
-      if (cfg.org_id) {
-        console.log(`\n${pc.dim(`Current: ${cfg.org_id}`)}`);
+      if (cfg.active_account?.target?.org_id) {
+        console.log(`\n${pc.dim(`Current: ${cfg.active_account?.target?.org_id}`)}`);
       }
     });
 
