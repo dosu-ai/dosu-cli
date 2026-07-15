@@ -1,3 +1,10 @@
+# [0.34.0](https://github.com/dosu-ai/dosu-cli/compare/v0.33.2...v0.34.0) (2026-07-15)
+
+
+### Features
+
+* **integrations:** report Azure DevOps connection status ([#121](https://github.com/dosu-ai/dosu-cli/issues/121)) ([e12e480](https://github.com/dosu-ai/dosu-cli/commit/e12e480ea32fd9ebd34781efb0a421ffeb08953b))
+
 ## [0.33.2](https://github.com/dosu-ai/dosu-cli/compare/v0.33.1...v0.33.2) (2026-07-14)
 
 
