@@ -158,16 +158,16 @@ describe("integrations status", () => {
 });
 
 describe("integrations status azure_devops", () => {
-  it("reports connected via PAT and short-circuits before the OAuth probe", async () => {
+  it("reports connected via OAuth (primary) and short-circuits before the PAT probe", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({ id: "ado-pat" });
+    mockQuery.mockResolvedValueOnce({ id: "ado-oauth" });
 
     await run("status", "azure_devops");
 
     expect(mockQuery).toHaveBeenCalledTimes(1);
     expect(mockQuery.mock.calls[0][1]).toMatchObject({
-      provider: "azure_devops",
-      providerConfigKey: "azure-devops",
+      provider: "microsoft-entra-id",
+      providerConfigKey: "microsoft-entra-id",
     });
     const output = allOutput();
     expect(output).toContain("connected");
@@ -175,18 +175,18 @@ describe("integrations status azure_devops", () => {
     expect(output).not.toContain("not connected");
   });
 
-  it("falls back to the OAuth probe when PAT is not connected", async () => {
+  it("falls back to the PAT probe when OAuth is not connected", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery
-      .mockResolvedValueOnce(null) // PAT - not connected
-      .mockResolvedValueOnce({ id: "ado-oauth" }); // OAuth - connected
+      .mockResolvedValueOnce(null) // OAuth - not connected
+      .mockResolvedValueOnce({ id: "ado-pat" }); // PAT - connected
 
     await run("status", "azure_devops");
 
     expect(mockQuery).toHaveBeenCalledTimes(2);
     expect(mockQuery.mock.calls[1][1]).toMatchObject({
-      provider: "microsoft-entra-id",
-      providerConfigKey: "microsoft-entra-id",
+      provider: "azure_devops",
+      providerConfigKey: "azure-devops",
     });
     const output = allOutput();
     expect(output).toContain("connected");
@@ -206,8 +206,8 @@ describe("integrations status azure_devops", () => {
   it("continues past a probe that throws", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery
-      .mockRejectedValueOnce(new Error("boom")) // PAT throws
-      .mockResolvedValueOnce({ id: "ado-oauth" }); // OAuth - connected
+      .mockRejectedValueOnce(new Error("boom")) // OAuth throws
+      .mockResolvedValueOnce({ id: "ado-pat" }); // PAT - connected
 
     await run("status", "azure_devops");
 

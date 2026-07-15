@@ -28,10 +28,12 @@ type NangoProvider = NangoGetConnectionInput["provider"];
  * `nango.getConnection` exact-matches BOTH `provider` (the Nango DB provider
  * value) and `providerConfigKey` (the Nango integration id). These differ for
  * the alternate-auth integrations — the integration id is a distinct base, and
- * the DB provider stays the platform's canonical value:
+ * the DB provider stays the platform's canonical value. The primary auth method
+ * (OAuth) is listed first so the common case short-circuits on the first probe;
+ * the alternate (PAT / Basic) is the fallback:
  *   - GitLab: OAuth `{gitlab, gitlab}`, PAT `{gitlab, gitlab-pat}`
  *   - Confluence: OAuth `{confluence, confluence}`, Basic `{confluence, confluence-basic}`
- *   - Azure DevOps: PAT `{azure_devops, azure-devops}`, OAuth `{microsoft-entra-id, microsoft-entra-id}`
+ *   - Azure DevOps: OAuth `{microsoft-entra-id, microsoft-entra-id}`, PAT `{azure_devops, azure-devops}`
  * (Note `azure_devops` the DB provider vs `azure-devops` the integration id.)
  *
  * `gitlab-pat`/`confluence-basic` are also kept as standalone keys so
@@ -55,8 +57,8 @@ const NANGO_PROBES: Record<
   notion: [{ provider: "notion", providerConfigKey: "notion" }],
   coda: [{ provider: "coda", providerConfigKey: "coda" }],
   azure_devops: [
-    { provider: "azure_devops", providerConfigKey: "azure-devops" },
     { provider: "microsoft-entra-id", providerConfigKey: "microsoft-entra-id" },
+    { provider: "azure_devops", providerConfigKey: "azure-devops" },
   ],
 };
 
