@@ -1,3 +1,10 @@
+## [0.35.1](https://github.com/dosu-ai/dosu-cli/compare/v0.35.0...v0.35.1) (2026-07-17)
+
+
+### Bug Fixes
+
+* **types:** consume contract types directly instead of any-era local mirrors ([#135](https://github.com/dosu-ai/dosu-cli/issues/135)) ([d3cabfd](https://github.com/dosu-ai/dosu-cli/commit/d3cabfd9edbec56be18fa46be942ae68c0aeaabb)), closes [dosu#11679](https://github.com/dosu/issues/11679)
+
 # [0.35.0](https://github.com/dosu-ai/dosu-cli/compare/v0.34.0...v0.35.0) (2026-07-17)
 
 
