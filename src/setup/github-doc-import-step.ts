@@ -2,6 +2,7 @@ import * as p from "@clack/prompts";
 import { createTypedClient, type TypedClient } from "../client/trpc";
 import type { Config } from "../config/config";
 import { logger } from "../debug/logger";
+import type { CliDataSource } from "../generated/dosu-api-types";
 import {
   type GitHubImportFileOption,
   type GitHubImportRepositoryOption,
@@ -13,11 +14,8 @@ const DOC_SCAN_POLL_TIMEOUT_MS = 60_000;
 const IMPORT_STATUS_POLL_INTERVAL_MS = 2_000;
 const IMPORT_STATUS_MAX_ERRORS = 3;
 
-interface GitHubDataSource {
-  data_source_id?: string;
-  provider_slug?: string;
-  is_indexed?: boolean;
-}
+// Contract-typed (dosu#11679): rows from `dataSource.list`.
+type GitHubDataSource = CliDataSource;
 
 interface ImportableGithubFile {
   id: string;
@@ -375,10 +373,10 @@ async function fetchGitHubDataSources(
   orgID: string,
 ): Promise<GitHubDataSource[]> {
   try {
-    const dataSources = (await trpc.dataSource.list.query({
+    const dataSources = await trpc.dataSource.list.query({
       org_id: orgID,
       excluded_provider_slugs: [],
-    })) as GitHubDataSource[];
+    });
     return dataSources.filter((dataSource) => dataSource.provider_slug === "github");
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -427,9 +425,10 @@ function buildRepositories(files: ImportableGithubFile[]): GitHubImportRepositor
 
 async function getKnowledgeStoreID(trpc: TypedClient, spaceID: string): Promise<string | null> {
   try {
-    const store = (await trpc.knowledgeStore.getBySpaceId.query({
+    // Contract-typed (dosu#11679) — no cast needed.
+    const store = await trpc.knowledgeStore.getBySpaceId.query({
       space_id: spaceID,
-    })) as { id: string } | null;
+    });
     if (!store?.id) {
       p.log.error("No knowledge store found for this deployment.");
       return null;

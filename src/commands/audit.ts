@@ -14,6 +14,7 @@ import { createTypedClient, type TypedClient } from "../client/trpc";
 import type { Config } from "../config/config";
 import { getBackendURL } from "../config/constants";
 import { logger } from "../debug/logger";
+import type { CliDataSource } from "../generated/dosu-api-types";
 import { type DetectedRepo, detectGitRepo, stepConnectGitHubRepo } from "../setup/github-step";
 import { addPendingTask } from "../version/pending-tasks-check";
 import { requireAPIKey, requireLoginConfig } from "./auth";
@@ -22,14 +23,8 @@ import { printResult } from "./output";
 const INDEX_POLL_INTERVAL_MS = 2_000;
 const INDEX_POLL_TIMEOUT_MS = 120_000;
 
-/** A data source as returned by `dataSource.list` (subset we rely on). */
-interface DataSourceLike {
-  data_source_id?: string;
-  provider_slug?: string;
-  name?: string;
-  is_indexed?: boolean;
-  status?: string;
-}
+/** A data source as returned by `dataSource.list` — contract-typed (dosu#11679). */
+type DataSourceLike = CliDataSource;
 
 /** A capability as returned by `GET /v1/cli/tasks`. */
 interface Capability {
@@ -118,10 +113,10 @@ async function backendPost(
 }
 
 async function listDataSources(client: TypedClient, orgId: string): Promise<DataSourceLike[]> {
-  const result = (await client.dataSource.list.query({
+  const result = await client.dataSource.list.query({
     org_id: orgId,
     excluded_provider_slugs: [],
-  })) as DataSourceLike[] | null;
+  });
   return result ?? [];
 }
 
