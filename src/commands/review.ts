@@ -8,62 +8,21 @@ import { isTRPCClientError } from "@trpc/client";
 import { Command } from "commander";
 import pc from "picocolors";
 import { createTypedClient, type TypedClient } from "../client/trpc";
+import type {
+  CliPendingReviewItem,
+  MessagesGetMessageOutput,
+  ReviewGetChangeOutput,
+} from "../generated/dosu-api-types";
 import { requireLoginConfig } from "./auth";
 import { formatDate, printInfo, printResult, printTable, truncate } from "./output";
 
-// The server-rendered change view consumed by the approve/reject confirm-gate.
-type ChangeView = {
-  title: string;
-  source: string;
-  version: number;
-  publishedVersion?: number | null;
-  isNewDoc: boolean;
-  hasChanges: boolean;
-  diff: string;
-};
-
-// The raw message row behind a draft id (used to preview a draft in the gate).
-type DraftMessageRow = {
-  id: string;
-  title?: string | null;
-  body?: string | null;
-};
-
-type ReviewOrigin =
-  | "manual_update"
-  | "llm_generated"
-  | "sync_upstream"
-  | "api_update"
-  | (string & {});
-
-type DocReviewItem = {
-  id: string;
-  kind: "doc_change";
-  title?: string | null;
-  origin: ReviewOrigin;
-  version: number;
-  pendingStatus: string;
-  createdAt: string;
-};
-
-type DraftReviewItem = {
-  id: string;
-  kind: "draft_message";
-  title?: string | null;
-  createdAt: string;
-};
-
-type ReviewListItem = DocReviewItem | DraftReviewItem;
-
-// Shape of `review.listPending` (ENG-605, dosu-ai/dosu#11478): `truncated` is
-// true when `items` may be a slice rather than the full backlog; `total` is the
-// pre-cap count (itself a lower bound). The contract types this output as `any`
-// until the procedure gets a real `.output()` DTO, so model the result locally.
-type ReviewListResult = {
-  items: ReviewListItem[];
-  truncated: boolean;
-  total: number;
-};
+// Contract-typed since dosu#11679: ChangeView, review-list items, and the raw
+// message row all come from the vendored contract — no local mirror types, so a
+// contract-side shape change fails typecheck here instead of silently breaking
+// at runtime.
+type ChangeView = ReviewGetChangeOutput;
+type DraftMessageRow = NonNullable<MessagesGetMessageOutput>;
+type ReviewOrigin = CliPendingReviewItem["origin"];
 
 function requireConfig() {
   return requireLoginConfig();
@@ -233,7 +192,7 @@ export function reviewCommand(): Command {
       // Docs are knowledge-store-scoped; drafts are deployment-scoped. Passing
       // deploymentId merges draft replies into the list (ENG-524) — omit it and
       // the server returns doc changes only.
-      const result: ReviewListResult = await client.review.listPending.query({
+      const result = await client.review.listPending.query({
         knowledgeStoreId: ksId,
         deploymentId: cfg.active_account?.target?.deployment_id,
       });

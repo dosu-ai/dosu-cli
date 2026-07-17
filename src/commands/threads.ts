@@ -9,23 +9,6 @@ import type { ThreadListInput } from "../generated/dosu-api-types";
 import { requireLoginConfig } from "./auth";
 import { formatDate, printInfo, printResult, printTable, truncate } from "./output";
 
-type ThreadListItem = {
-  id: string;
-  generated_title?: string | null;
-  initial_message_title?: string | null;
-  resolved?: boolean | null;
-  inbox_archived_at?: string | null;
-  created_at?: string | null;
-};
-
-type ThreadMessageGroup = {
-  messages: Array<{
-    author_role?: string | null;
-    created_at?: string | null;
-    body?: string | null;
-  }>;
-};
-
 function requireConfig() {
   const cfg = requireLoginConfig();
   if (!cfg.active_account?.target?.space_id) {
@@ -81,7 +64,10 @@ export function threadsCommand(): Command {
       }
 
       const data = await client.thread.list.query(input);
-      const threads = data.list as ThreadListItem[];
+      // Contract-typed since dosu#11679 — no local mirror type or cast, so a
+      // contract-side field change fails this file's typecheck instead of
+      // silently returning undefined at runtime.
+      const threads = data.list;
 
       if (opts.json) {
         printResult(data, opts);
@@ -141,7 +127,7 @@ export function threadsCommand(): Command {
         ["Channel", thread.channel],
       ]);
 
-      const messages = messagesData.list as ThreadMessageGroup[] | undefined;
+      const messages = messagesData.list;
       if (messages && messages.length > 0) {
         // Flatten message groups into individual messages
         const allMessages = messages.flatMap((group) => group.messages);
