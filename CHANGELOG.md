@@ -1,3 +1,10 @@
+# [0.35.0](https://github.com/dosu-ai/dosu-cli/compare/v0.34.0...v0.35.0) (2026-07-17)
+
+
+### Features
+
+* **docs:** support azure_devops for import and publish ([#127](https://github.com/dosu-ai/dosu-cli/issues/127)) ([1ee638d](https://github.com/dosu-ai/dosu-cli/commit/1ee638d66c6f42576fc6738a6d67cb2fe4101ddf))
+
 # [0.34.0](https://github.com/dosu-ai/dosu-cli/compare/v0.33.2...v0.34.0) (2026-07-15)
 
 
