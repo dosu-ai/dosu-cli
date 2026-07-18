@@ -4,14 +4,6 @@
 // - dataSource.deleteDataSource
 // - dataSource.syncDataSource
 // - dataSource.update
-// - docImports.getImportStatus
-// - docImports.importAzureDevopsFiles
-// - docImports.importCodaPages
-// - docImports.importConfluencePages
-// - docImports.importGithubFiles
-// - docImports.importGitlabFiles
-// - docImports.importNotionPages
-// - docImports.listImportableGithubFiles
 // - githubRepository.listForOrg
 // - invitations.acceptInvitation
 // - invitations.getInvitations
@@ -64,6 +56,10 @@ export type CliJson =
 	| null
 	| { [key: string]: CliJson | undefined }
 	| Array<CliJson>
+
+export type CliAsyncImportResponse = {
+	task_id: string
+}
 
 export type CliChangeViewThread = {
 	ingested: boolean
@@ -280,6 +276,30 @@ export type CliDraftMessageReviewItem = {
 	title: string
 }
 
+export type CliImportTaskDetail = {
+	completed?: number | null
+	documents?: Array<{
+		error?: string | null
+		id?: string | null
+		status?: string | null
+		title?: string | null
+	}> | null
+	failed?: number | null
+	knowledge_store_id?: string | null
+	message?: string | null
+	provider?: string | null
+	total?: number | null
+}
+
+export type CliImportTaskStatus = {
+	created_at: string
+	data_source_id: string | null
+	detail: CliImportTaskDetail | null
+	state: 'PROGRESS' | 'SUCCESS' | 'FAILURE'
+	task_id: string
+	updated_at: string | null
+}
+
 export type CliMessage = {
 	action: 'create' | 'edit' | 'delete'
 	author: string
@@ -441,7 +461,7 @@ export type CliSlackChannelRow = {
 	topic?: string | null
 }
 
-export declare const CLI_CONTRACT_HASH: 'dec2f515bbc6'
+export declare const CLI_CONTRACT_HASH: '8735e566b0ed'
 
 export type AnalyticsGetUsageStatsInput = {
 	days?: number
@@ -600,7 +620,7 @@ export type DeploymentDataSourceCreateOutput = {
 
 export type DocImportsGetImportStatusInput = string
 
-export type DocImportsGetImportStatusOutput = any
+export type DocImportsGetImportStatusOutput = CliImportTaskStatus | null
 
 export type DocImportsImportAzureDevopsFilesInput = {
 	file_ids: Array<string>
@@ -608,7 +628,7 @@ export type DocImportsImportAzureDevopsFilesInput = {
 	space_id: string
 }
 
-export type DocImportsImportAzureDevopsFilesOutput = any
+export type DocImportsImportAzureDevopsFilesOutput = CliAsyncImportResponse
 
 export type DocImportsImportCodaPagesInput = {
 	knowledge_store_id: string
@@ -616,7 +636,7 @@ export type DocImportsImportCodaPagesInput = {
 	space_id: string
 }
 
-export type DocImportsImportCodaPagesOutput = any
+export type DocImportsImportCodaPagesOutput = CliAsyncImportResponse
 
 export type DocImportsImportConfluencePagesInput = {
 	knowledge_store_id: string
@@ -624,7 +644,7 @@ export type DocImportsImportConfluencePagesInput = {
 	space_id: string
 }
 
-export type DocImportsImportConfluencePagesOutput = any
+export type DocImportsImportConfluencePagesOutput = CliAsyncImportResponse
 
 export type DocImportsImportGithubFilesInput = {
 	file_ids: Array<string>
@@ -632,7 +652,7 @@ export type DocImportsImportGithubFilesInput = {
 	space_id: string
 }
 
-export type DocImportsImportGithubFilesOutput = any
+export type DocImportsImportGithubFilesOutput = CliAsyncImportResponse
 
 export type DocImportsImportGitlabFilesInput = {
 	file_ids: Array<string>
@@ -640,7 +660,7 @@ export type DocImportsImportGitlabFilesInput = {
 	space_id: string
 }
 
-export type DocImportsImportGitlabFilesOutput = any
+export type DocImportsImportGitlabFilesOutput = CliAsyncImportResponse
 
 export type DocImportsImportNotionPagesInput = {
 	knowledge_store_id: string
@@ -648,11 +668,21 @@ export type DocImportsImportNotionPagesInput = {
 	space_id: string
 }
 
-export type DocImportsImportNotionPagesOutput = any
+export type DocImportsImportNotionPagesOutput = CliAsyncImportResponse
 
 export type DocImportsListImportableGithubFilesInput = string
 
-export type DocImportsListImportableGithubFilesOutput = any
+export type DocImportsListImportableGithubFilesOutput = Array<{
+	file_ext: string
+	file_name: string
+	file_path: string
+	html_url: string
+	id: string
+	is_synced: boolean
+	repository_description: string
+	repository_name: string
+	repository_slug: string
+}>
 
 export type GithubRepositoryGetCollaboratorsInput = number
 
