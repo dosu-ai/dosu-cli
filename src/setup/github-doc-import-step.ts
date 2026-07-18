@@ -2,7 +2,11 @@ import * as p from "@clack/prompts";
 import { createTypedClient, type TypedClient } from "../client/trpc";
 import type { Config } from "../config/config";
 import { logger } from "../debug/logger";
-import type { CliDataSource } from "../generated/dosu-api-types";
+import type {
+  CliDataSource,
+  CliImportTaskStatus,
+  DocImportsListImportableGithubFilesOutput,
+} from "../generated/dosu-api-types";
 import {
   type GitHubImportFileOption,
   type GitHubImportRepositoryOption,
@@ -17,40 +21,10 @@ const IMPORT_STATUS_MAX_ERRORS = 3;
 // Contract-typed (dosu#11679): rows from `dataSource.list`.
 type GitHubDataSource = CliDataSource;
 
-interface ImportableGithubFile {
-  id: string;
-  file_path: string;
-  repository_slug: string | null;
-  is_synced?: boolean;
-}
-
-type AsyncTaskState = "PROGRESS" | "SUCCESS" | "FAILURE";
-type ImportDocumentState = "PENDING" | "SUCCESS" | "FAILED";
-
-interface ImportTaskDocument {
-  id: string;
-  title: string;
-  status: ImportDocumentState;
-  error?: string;
-}
-
-interface ImportTaskDetail {
-  message: string;
-  knowledge_store_id: string;
-  provider: string;
-  total: number;
-  completed: number;
-  failed: number;
-  documents: ImportTaskDocument[];
-}
-
-interface ImportTaskStatusResponse {
-  task_id: string;
-  state: AsyncTaskState;
-  detail: ImportTaskDetail | null;
-  created_at: string;
-  updated_at: string | null;
-}
+// Contract-typed (dosu#11688): the last any-era mirror types are gone — the
+// vendored contract is the single source of truth for docImports shapes.
+type ImportableGithubFile = DocImportsListImportableGithubFilesOutput[number];
+type ImportTaskStatusResponse = CliImportTaskStatus;
 
 export interface GitHubDocsImportStepResult {
   advance: boolean;
@@ -127,11 +101,11 @@ export async function stepImportGitHubDocs(
   const spinner = p.spinner();
   spinner.start(`Queueing import for ${fileIDs.length} doc${fileIDs.length === 1 ? "" : "s"}...`);
   try {
-    const result = (await trpc.docImports.importGithubFiles.mutate({
+    const result = await trpc.docImports.importGithubFiles.mutate({
       knowledge_store_id: knowledgeStoreID,
       space_id: cfg.active_account?.target?.space_id,
       file_ids: fileIDs,
-    })) as { task_id?: string } | null;
+    });
 
     const taskID = result?.task_id;
     if (!taskID) {
@@ -195,9 +169,7 @@ async function waitForImportTaskCompletion(
 
   while (true) {
     try {
-      const status = (await trpc.docImports.getImportStatus.query(
-        taskID,
-      )) as ImportTaskStatusResponse | null;
+      const status = await trpc.docImports.getImportStatus.query(taskID);
 
       if (!status) {
         consecutiveErrors += 1;
@@ -233,22 +205,26 @@ function buildImportProgressMessage(
     return `Importing documents... 0/${expectedTotal} complete`;
   }
 
-  const processed = detail.completed + detail.failed;
+  // The contract types detail leaves as nullish (the worker writes the dict
+  // freely server-side) — default the counters to 0.
+  const completed = detail.completed ?? 0;
+  const failed = detail.failed ?? 0;
+  const processed = completed + failed;
   // Server returns total=0 until it finishes enumerating files (STARTING state).
   // Fall back to the client-known count so the UI never shows "0/0".
-  const total = detail.total > 0 ? detail.total : expectedTotal;
+  const total = (detail.total ?? 0) > 0 ? (detail.total ?? 0) : expectedTotal;
 
   if (status.state === "SUCCESS") {
     return `Import complete (${processed}/${total})`;
   }
 
   if (status.state === "FAILURE") {
-    return `Import finished with issues (${processed}/${total}, ${detail.failed} failed)`;
+    return `Import finished with issues (${processed}/${total}, ${failed} failed)`;
   }
 
   const prefix =
     detail.message === "STARTING" ? "Preparing document import" : "Importing documents";
-  const failureSuffix = detail.failed > 0 ? `, ${detail.failed} failed` : "";
+  const failureSuffix = failed > 0 ? `, ${failed} failed` : "";
   return `${prefix}... ${processed}/${total} complete${failureSuffix}`;
 }
 
@@ -257,7 +233,7 @@ function handleImportCompletion(
   spinner: ReturnType<typeof p.spinner>,
 ): void {
   const detail = status.detail;
-  const processed = detail ? detail.completed + detail.failed : 0;
+  const processed = detail ? (detail.completed ?? 0) + (detail.failed ?? 0) : 0;
   const total = detail?.total ?? processed;
   const failed = detail?.failed ?? 0;
 
@@ -390,9 +366,7 @@ async function fetchImportableGithubFiles(
   spaceID: string,
 ): Promise<ImportableGithubFile[]> {
   try {
-    return (await trpc.docImports.listImportableGithubFiles.query(
-      spaceID,
-    )) as ImportableGithubFile[];
+    return await trpc.docImports.listImportableGithubFiles.query(spaceID);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn("setup", `listImportableGithubFiles failed: ${msg}`);
