@@ -1,3 +1,10 @@
+## [0.35.2](https://github.com/dosu-ai/dosu-cli/compare/v0.35.1...v0.35.2) (2026-07-18)
+
+
+### Bug Fixes
+
+* **types:** consume docImports contract types — last any-era mirrors removed ([#137](https://github.com/dosu-ai/dosu-cli/issues/137)) ([ef28d69](https://github.com/dosu-ai/dosu-cli/commit/ef28d69a7e37809131648a2dc8135179dfe56532)), closes [dosu#11688](https://github.com/dosu/issues/11688)
+
 ## [0.35.1](https://github.com/dosu-ai/dosu-cli/compare/v0.35.0...v0.35.1) (2026-07-17)
 
 
