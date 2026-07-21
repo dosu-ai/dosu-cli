@@ -773,8 +773,11 @@ async function stepResolveDeployment(apiClient: Client, id: string): Promise<Dep
     const deployments = await apiClient.getDeployments();
     const d = deployments.find((d) => d.deployment_id === id);
     if (!d) {
-      logger.warn("setup", `Deployment ${id} not found`);
-      p.log.error(`MCP ${id} not found`);
+      logger.warn("setup", `Deployment ${id} is not accessible to the current account`);
+      p.log.error(
+        "This MCP is not accessible to the current Dosu account.\n" +
+          "Make sure you are logged in to the correct account. Run `dosu logout`, then try again.",
+      );
       return null;
     }
     logger.info("setup", `Resolved deployment: ${d.name}`);

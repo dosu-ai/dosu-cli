@@ -1189,7 +1189,7 @@ describe("runSetup integration", () => {
     expect(saved.active_account?.target?.deployment_id).toBeUndefined();
   });
 
-  it("shows deployment not found error", async () => {
+  it("shows an account hint when the requested MCP is inaccessible", async () => {
     const cfg = makeCfg({ deployment_id: undefined, deployment_name: undefined });
     saveConfig(cfg);
 
@@ -1201,7 +1201,10 @@ describe("runSetup integration", () => {
 
     await runSetup({ deploymentID: "nonexistent" });
 
-    expect(p.log.error).toHaveBeenCalledWith("MCP nonexistent not found");
+    expect(p.log.error).toHaveBeenCalledWith(
+      "This MCP is not accessible to the current Dosu account.\n" +
+        "Make sure you are logged in to the correct account. Run `dosu logout`, then try again.",
+    );
   });
 
   it("handles resolve deployment fetch error", async () => {

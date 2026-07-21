@@ -512,6 +512,10 @@ describe("runAgentSetup", () => {
       step: "deployment",
       status: "error",
       reason: "not_found",
+      agent_next_steps:
+        "The requested MCP is not accessible to the current Dosu account. " +
+        "Make sure the user is logged in to the correct account. " +
+        "Run 'dosu logout', then retry setup.",
     });
   });
 
