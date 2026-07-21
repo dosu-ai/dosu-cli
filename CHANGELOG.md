@@ -1,3 +1,10 @@
+## [0.35.3](https://github.com/dosu-ai/dosu-cli/compare/v0.35.2...v0.35.3) (2026-07-21)
+
+
+### Bug Fixes
+
+* **setup:** clarify inaccessible MCP account mismatch ([#140](https://github.com/dosu-ai/dosu-cli/issues/140)) ([276dc41](https://github.com/dosu-ai/dosu-cli/commit/276dc41bab9a50b8a4cb829b4d6dfba5723f11d9))
+
 ## [0.35.2](https://github.com/dosu-ai/dosu-cli/compare/v0.35.1...v0.35.2) (2026-07-18)
 
 
