@@ -244,7 +244,10 @@ async function resolveDeployment(
         emitError({
           step: "deployment",
           reason: "not_found",
-          agent_next_steps: `Deployment '${opts.deploymentID}' is not accessible. Run 'dosu deployments list --json' to see options and try again with a valid id.`,
+          agent_next_steps:
+            "The requested MCP is not accessible to the current Dosu account. " +
+            "Make sure the user is logged in to the correct account. " +
+            "Run 'dosu logout', then retry setup.",
         });
         return { code: 1, cfg };
       }
