@@ -11,6 +11,7 @@ import {
   saveConfig,
 } from "../config/config";
 import { getBackendURL, getSupabaseAnonKey, getSupabaseURL } from "../config/constants";
+import { getAccessTokenOAuthClientID } from "../config/identity";
 
 export class SessionExpiredError extends Error {
   constructor() {
@@ -223,15 +224,25 @@ export class Client {
     if (!session?.refresh_token) throw new Error("no refresh token available");
 
     const supabaseURL = getSupabaseURL();
-    const endpoint = `${supabaseURL}/auth/v1/token?grant_type=refresh_token`;
+    const oauthClientID = getAccessTokenOAuthClientID(session.access_token);
+    const endpoint = oauthClientID
+      ? `${supabaseURL}/auth/v1/oauth/token`
+      : `${supabaseURL}/auth/v1/token?grant_type=refresh_token`;
+    const headers: Record<string, string> = oauthClientID
+      ? { "Content-Type": "application/x-www-form-urlencoded" }
+      : { "Content-Type": "application/json", apikey: getSupabaseAnonKey() };
+    const body = oauthClientID
+      ? new URLSearchParams({
+          grant_type: "refresh_token",
+          refresh_token: session.refresh_token,
+          client_id: oauthClientID,
+        }).toString()
+      : JSON.stringify({ refresh_token: session.refresh_token });
 
     const resp = await fetch(endpoint, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: getSupabaseAnonKey(),
-      },
-      body: JSON.stringify({ refresh_token: session.refresh_token }),
+      headers,
+      body,
     });
 
     if (resp.status !== 200) {
