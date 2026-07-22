@@ -149,6 +149,7 @@ export type CliDataSourceGithubRepository = {
 	description: string | null
 	discussion_categories: Array<string> | null
 	discussions_enabled: boolean | null
+	fork_parent_slug: string | null
 	git_url: string | null
 	installation_id: number | null
 	is_fork: boolean | null
@@ -331,30 +332,44 @@ export type CliMessage = {
 			selected_label_names?: Array<string> | null
 			start_time?: number | null
 			wants_help?: string | null
-		}
+		} | null
 		github?: {
 			author_avatar_url?: string | null
 			author_id?: string | null
 			author_url?: string | null
 			html_url?: string | null
-		}
+		} | null
 		linear?: {
 			author_display_name?: string | null
 			author_id?: string | null
 			author_name?: string | null
 			issue_id?: string | null
 			issue_url?: string | null
-		}
+		} | null
+		selected_data_source_ids?: Array<string> | null
 		slack?: {
 			acked?: boolean | null
 			author_email?: string | null
 			author_id?: string | null
 			author_real_name?: string | null
 			channel_id?: string | null
+			channel_name?: string | null
+			enterprise_id?: string | null
+			html_url?: string | null
 			team_id?: string | null
 			thread_ts?: string | null
 			ts?: string | null
-		}
+		} | null
+		teams?: {
+			channel_id?: string | null
+			external_team_id?: string | null
+			html_url?: string | null
+			message_id?: string | null
+			sender_aad_id?: string | null
+			sender_name?: string | null
+			service_url?: string | null
+			tenant_id?: string | null
+		} | null
 	} | null
 	page_id: string | null
 	parent_id: string | null
@@ -421,6 +436,7 @@ export type CliProviderSlug =
 	| 'azure_devops'
 
 export type CliReviewDocument = {
+	libraryName: string | null
 	previousVersion: {
 		body: string
 		version: number
@@ -461,7 +477,7 @@ export type CliSlackChannelRow = {
 	topic?: string | null
 }
 
-export declare const CLI_CONTRACT_HASH: '8735e566b0ed'
+export declare const CLI_CONTRACT_HASH: '819a4ad17443'
 
 export type AnalyticsGetUsageStatsInput = {
 	days?: number
@@ -1224,7 +1240,7 @@ export type ThreadGetOutput = {
 			pullrequest_number?: number | null
 			repo_name?: string | null
 			repo_owner?: string | null
-		}
+		} | null
 		gitlab?: {
 			author_id?: number | null
 			author_username?: string | null
@@ -1232,15 +1248,15 @@ export type ThreadGetOutput = {
 			merge_request_iid?: number | null
 			project_id?: number | null
 			project_path?: string | null
-		}
+		} | null
 		linear?: {
 			author_display_name?: string | null
 			author_id?: string | null
 			author_name?: string | null
 			issue_id?: string | null
 			issue_url?: string | null
-		}
-		selected_data_source_ids?: Array<string>
+		} | null
+		selected_data_source_ids?: Array<string> | null
 		slack?: {
 			author_real_name?: string | null
 			channel_id?: string | null
@@ -1248,7 +1264,14 @@ export type ThreadGetOutput = {
 			team_id?: string | null
 			thread_ts?: string | null
 			ts?: string | null
-		}
+		} | null
+		teams?: {
+			channel_id?: string | null
+			conversation_reference?: Record<string, unknown> | null
+			external_team_id?: string | null
+			message_id?: string | null
+			tenant_id?: string | null
+		} | null
 	} | null
 	platform: string
 	read: boolean
@@ -1268,6 +1291,7 @@ export type ThreadListInput = {
 	excludeProviders?: Array<string>
 	inbox_archived?: boolean | null
 	limit?: number
+	org_id?: string | null
 	previewOnly?: boolean | null
 	providers?: Array<string> | null
 	read?: boolean | null
@@ -1301,7 +1325,7 @@ export type ThreadListOutput = {
 				pullrequest_number?: number | null
 				repo_name?: string | null
 				repo_owner?: string | null
-			}
+			} | null
 			gitlab?: {
 				author_id?: number | null
 				author_username?: string | null
@@ -1309,15 +1333,15 @@ export type ThreadListOutput = {
 				merge_request_iid?: number | null
 				project_id?: number | null
 				project_path?: string | null
-			}
+			} | null
 			linear?: {
 				author_display_name?: string | null
 				author_id?: string | null
 				author_name?: string | null
 				issue_id?: string | null
 				issue_url?: string | null
-			}
-			selected_data_source_ids?: Array<string>
+			} | null
+			selected_data_source_ids?: Array<string> | null
 			slack?: {
 				author_real_name?: string | null
 				channel_id?: string | null
@@ -1325,7 +1349,14 @@ export type ThreadListOutput = {
 				team_id?: string | null
 				thread_ts?: string | null
 				ts?: string | null
-			}
+			} | null
+			teams?: {
+				channel_id?: string | null
+				conversation_reference?: Record<string, unknown> | null
+				external_team_id?: string | null
+				message_id?: string | null
+				tenant_id?: string | null
+			} | null
 		} | null
 		page_title: string | null
 		platform: string
