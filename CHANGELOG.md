@@ -1,3 +1,10 @@
+## [0.35.4](https://github.com/dosu-ai/dosu-cli/compare/v0.35.3...v0.35.4) (2026-07-23)
+
+
+### Bug Fixes
+
+* **auth:** refresh OAuth-issued CLI sessions ([#141](https://github.com/dosu-ai/dosu-cli/issues/141)) ([83da158](https://github.com/dosu-ai/dosu-cli/commit/83da158fda1afdfe439a29413445b81486191578))
+
 ## [0.35.3](https://github.com/dosu-ai/dosu-cli/compare/v0.35.2...v0.35.3) (2026-07-21)
 
 
