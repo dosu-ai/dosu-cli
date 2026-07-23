@@ -82,6 +82,13 @@ function makeAccountConfig(userID: string, overrides: Partial<FlatTestConfig> = 
   return makeConfig({ ...overrides, user_id: userID });
 }
 
+function oauthAccessToken(clientID: string): string {
+  const payload = Buffer.from(JSON.stringify({ sub: "oauth-user", client_id: clientID })).toString(
+    "base64url",
+  );
+  return `header.${payload}.signature`;
+}
+
 describe("refresh self-healing", () => {
   const savedEnv: Record<string, string | undefined> = {};
   let tempDir: string;
@@ -129,6 +136,32 @@ describe("refresh self-healing", () => {
     expect(gotrue.rejections).toBe(0);
     expect(cfg.active_account?.session.refresh_token).toBe("rt-1");
     expect(loadConfig().active_account?.session.refresh_token).toBe("rt-1"); // rotation persisted
+  });
+
+  it("refreshes OAuth 2.1 sessions through the OAuth token endpoint", async () => {
+    const accessToken = oauthAccessToken("cli-client-id");
+    saveConfig(makeConfig({ access_token: accessToken, refresh_token: "oauth-refresh" }));
+    const cfg = loadConfig();
+    mockFetch.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          access_token: oauthAccessToken("cli-client-id"),
+          refresh_token: "oauth-refresh-2",
+          expires_in: 3600,
+        }),
+        { status: 200 },
+      ),
+    );
+
+    await new Client(cfg).refreshToken();
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://test.supabase.co/auth/v1/oauth/token");
+    expect(init.headers).toEqual({ "Content-Type": "application/x-www-form-urlencoded" });
+    expect(new URLSearchParams(init.body as string).get("grant_type")).toBe("refresh_token");
+    expect(new URLSearchParams(init.body as string).get("refresh_token")).toBe("oauth-refresh");
+    expect(new URLSearchParams(init.body as string).get("client_id")).toBe("cli-client-id");
   });
 
   it("retries once with the on-disk token when a sibling rotates mid-flight", async () => {
