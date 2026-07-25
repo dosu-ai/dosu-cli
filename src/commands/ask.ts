@@ -43,7 +43,7 @@ export function askCommand(): Command {
       logger.debug("ask", `Asking: ${question}`);
 
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 120_000);
+      const timeout = setTimeout(() => controller.abort(), 600_000);
 
       try {
         const resp = await fetch(`${backendURL}/ask`, {
