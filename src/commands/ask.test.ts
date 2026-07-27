@@ -99,6 +99,56 @@ describe("ask", () => {
   });
 });
 
+describe("--timeout", () => {
+  it("aborts the request after the given timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      mockLoadConfig.mockReturnValue(validConfig);
+      let captured: AbortSignal | undefined;
+      // Mimic fetch: reject with an AbortError once the signal aborts.
+      mockFetch.mockImplementationOnce(
+        (_url: string, opts: { signal: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            captured = opts.signal;
+            opts.signal.addEventListener("abort", () => {
+              const err = new Error("The operation was aborted");
+              err.name = "AbortError";
+              reject(err);
+            });
+          }),
+      );
+
+      const p = run("--timeout", "5", "question");
+      // Let the action run up to the awaited fetch so the signal is captured.
+      await Promise.resolve();
+      expect(captured?.aborted).toBe(false);
+
+      vi.advanceTimersByTime(5_000);
+      expect(captured?.aborted).toBe(true);
+
+      // The aborted fetch rejects → command prints a timeout and exits.
+      await expect(p).rejects.toThrow("exit");
+      expect(allErrors()).toContain("Request timed out");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects a non-numeric timeout", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    await expect(run("--timeout", "abc", "question")).rejects.toThrow("exit");
+    expect(allErrors()).toContain("--timeout must be a positive number");
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-positive timeout", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    await expect(run("--timeout", "0", "question")).rejects.toThrow("exit");
+    expect(allErrors()).toContain("--timeout must be a positive number");
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
 describe("output formatting", () => {
   it("outputs raw JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
