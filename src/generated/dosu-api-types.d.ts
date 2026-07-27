@@ -410,7 +410,7 @@ export type CliPendingReviewItem = {
 	kind: 'doc_change' | 'draft_message'
 	origin: 'manual_update' | 'llm_generated' | 'sync_upstream' | 'api_update'
 	pageId: string
-	pendingStatus: 'PENDING_REVIEW' | 'PENDING_SYNC' | 'DECLINED' | 'PENDING_MERGE'
+	pendingStatus: 'PENDING_REVIEW' | 'PENDING_SYNC' | 'DECLINED' | 'PENDING_MERGE' | 'EXPIRED'
 	source: string
 	title: string
 	type: 'document' | 'answer' | 'changelog' | 'template' | 'topic'
@@ -477,7 +477,7 @@ export type CliSlackChannelRow = {
 	topic?: string | null
 }
 
-export declare const CLI_CONTRACT_HASH: '819a4ad17443'
+export declare const CLI_CONTRACT_HASH: '663c43d2937c'
 
 export type AnalyticsGetUsageStatsInput = {
 	days?: number
@@ -874,7 +874,7 @@ export type PageCreateInput = {
 	id?: string
 	knowledge_store_id: string
 	page_type?: 'document' | 'answer' | 'changelog' | 'template' | 'topic'
-	pending_status?: 'PENDING_REVIEW' | 'PENDING_SYNC' | 'PENDING_MERGE' | 'DECLINED'
+	pending_status?: 'PENDING_REVIEW' | 'PENDING_SYNC' | 'PENDING_MERGE' | 'DECLINED' | 'EXPIRED'
 	published?: boolean
 	title?: string
 }
@@ -933,7 +933,13 @@ export type PageGetOutput = {
 	md5_hash: string
 	origin: 'manual_update' | 'llm_generated' | 'sync_upstream' | 'api_update'
 	page_version_id: string
-	pending_status: 'PENDING_REVIEW' | 'PENDING_SYNC' | 'DECLINED' | 'PENDING_MERGE' | null
+	pending_status:
+		| 'PENDING_REVIEW'
+		| 'PENDING_SYNC'
+		| 'DECLINED'
+		| 'PENDING_MERGE'
+		| 'EXPIRED'
+		| null
 	published: boolean
 	resolved_relative_links?: Record<string, string>
 	restored_from: number | null
@@ -971,7 +977,13 @@ export type PageListVersionsOutput = Array<{
 		sync_provider: 'github' | 'coda' | 'confluence' | 'notion' | 'gitlab' | 'azure_devops' | null
 		synced_from_document_source_id: string | null
 	} | null
-	pending_status: 'PENDING_REVIEW' | 'PENDING_SYNC' | 'DECLINED' | 'PENDING_MERGE' | null
+	pending_status:
+		| 'PENDING_REVIEW'
+		| 'PENDING_SYNC'
+		| 'DECLINED'
+		| 'PENDING_MERGE'
+		| 'EXPIRED'
+		| null
 	published: boolean
 	restored_from: number | null
 	title: string
@@ -1012,7 +1024,13 @@ export type PageListWithTagsOutput = {
 		md5_hash: string
 		origin: 'manual_update' | 'llm_generated' | 'sync_upstream' | 'api_update'
 		page_version_id: string
-		pending_status: 'PENDING_REVIEW' | 'PENDING_SYNC' | 'DECLINED' | 'PENDING_MERGE' | null
+		pending_status:
+			| 'PENDING_REVIEW'
+			| 'PENDING_SYNC'
+			| 'DECLINED'
+			| 'PENDING_MERGE'
+			| 'EXPIRED'
+			| null
 		published: boolean
 		repository_slug?: string
 		resolved_relative_links?: Record<string, string>
@@ -1064,7 +1082,13 @@ export type PageRestoreVersionOutput = {
 	id: string
 	origin: 'manual_update' | 'llm_generated' | 'sync_upstream' | 'api_update'
 	page_id: string
-	pending_status: 'PENDING_REVIEW' | 'PENDING_SYNC' | 'DECLINED' | 'PENDING_MERGE' | null
+	pending_status:
+		| 'PENDING_REVIEW'
+		| 'PENDING_SYNC'
+		| 'DECLINED'
+		| 'PENDING_MERGE'
+		| 'EXPIRED'
+		| null
 	published: boolean
 	restored_from: number | null
 	reviewed_at: string | null
@@ -1090,7 +1114,7 @@ export type PageUpdateInput = {
 	body?: string
 	id: string
 	knowledge_store_id: string
-	pending_status?: 'PENDING_REVIEW' | 'PENDING_SYNC' | 'PENDING_MERGE' | 'DECLINED'
+	pending_status?: 'PENDING_REVIEW' | 'PENDING_SYNC' | 'PENDING_MERGE' | 'DECLINED' | 'EXPIRED'
 	published?: boolean
 	title?: string
 	version?: number
