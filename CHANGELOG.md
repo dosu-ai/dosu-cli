@@ -1,3 +1,10 @@
+# [0.36.0](https://github.com/dosu-ai/dosu-cli/compare/v0.35.4...v0.36.0) (2026-07-28)
+
+
+### Features
+
+* **ask:** add --timeout option to configure request timeout ([#143](https://github.com/dosu-ai/dosu-cli/issues/143)) ([6fc0cf0](https://github.com/dosu-ai/dosu-cli/commit/6fc0cf07bfcd50bd354a80e2aa67381c3308105a))
+
 # [0.36.0](https://github.com/dosu-ai/dosu-cli/compare/v0.35.4...v0.36.0) (2026-07-27)
 
 
