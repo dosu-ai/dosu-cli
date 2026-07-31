@@ -1409,7 +1409,7 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(mockInstallSkill).toHaveBeenCalledWith(["cursor"]);
+    expect(mockInstallSkill).toHaveBeenCalledWith(["cursor"], { quiet: true });
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill installed"));
   });
 
@@ -1439,7 +1439,7 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(mockInstallSkill).toHaveBeenCalledWith(["cursor"]);
+    expect(mockInstallSkill).toHaveBeenCalledWith(["cursor"], { quiet: true });
   });
 
   it("goes directly to agent selection without a component-selection prompt", async () => {
@@ -1531,7 +1531,7 @@ describe("runInstallSkill", () => {
     const result = await runInstallSkill(["claude"]);
 
     expect(result).toBe(true);
-    expect(mockInstallSkill).toHaveBeenCalledWith(["claude"]);
+    expect(mockInstallSkill).toHaveBeenCalledWith(["claude"], { quiet: true });
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill installed"));
   });
 
