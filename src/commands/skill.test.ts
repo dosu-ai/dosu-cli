@@ -4,7 +4,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockExecSync = vi.fn();
+const mockExec = vi.fn();
 vi.mock("node:child_process", () => ({
+  exec: (...args: unknown[]) => mockExec(...args),
   execSync: (...args: unknown[]) => mockExecSync(...args),
 }));
 
@@ -38,6 +40,11 @@ async function run(...args: string[]) {
 }
 
 beforeEach(() => {
+  mockExec.mockReset();
+  mockExec.mockImplementation((...args: unknown[]) => {
+    const callback = args.at(-1) as (error: Error | null) => void;
+    callback(null);
+  });
   mockExecSync.mockReset();
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -224,7 +231,23 @@ describe("installSkill helper", () => {
   it("keeps the installer quiet for agent-mediated setup", async () => {
     await installSkill(["claude"], { quiet: true });
 
-    expect(mockExecSync).toHaveBeenCalledWith(expect.any(String), { stdio: "pipe" });
+    expect(mockExec).toHaveBeenCalledWith(
+      expect.any(String),
+      { windowsHide: true },
+      expect.any(Function),
+    );
+    expect(mockExecSync).not.toHaveBeenCalled();
+  });
+
+  it("returns failure when the async quiet installer fails", async () => {
+    mockExec.mockImplementation((...args: unknown[]) => {
+      const callback = args.at(-1) as (error: Error | null) => void;
+      callback(new Error("command failed"));
+    });
+
+    const result = await installSkill(["claude"], { quiet: true });
+
+    expect(result.success).toBe(false);
   });
 
   it("does not broaden an unsupported provider into an all-agent install", async () => {

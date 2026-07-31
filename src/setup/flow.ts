@@ -317,6 +317,9 @@ async function stepConfigureMcpTools(cfg: Config): Promise<ConfigResult[] | null
  */
 export async function runInstallSkill(providers: readonly SetupProvider[]): Promise<boolean> {
   logger.info("setup", "Step: install skill");
+  const spinner = p.spinner();
+  const agentLabel = providers.length === 1 ? "agent" : "agents";
+  spinner.start(`Installing skill for ${providers.length} ${agentLabel}`);
   try {
     // Interactive setup owns the summary UI. Keep the nested skills installer
     // quiet so its progress screens do not interrupt the standardized setup
@@ -339,15 +342,18 @@ export async function runInstallSkill(providers: readonly SetupProvider[]): Prom
           },
         ];
       });
+      spinner.clear();
       p.log.success(formatSetupSummary(`Skill ready for ${items.length} agent(s):`, items));
       return true;
     }
+    spinner.clear();
     p.log.error("Failed to install skill. Run `dosu skill install` to retry.");
     return false;
   } catch (err: unknown) {
     /* v8 ignore next -- err is always Error in practice */
     const msg = err instanceof Error ? err.message : String(err);
     logger.error("setup", `Skill install failed: ${msg}`);
+    spinner.clear();
     p.log.error(`Skill install failed: ${msg}`);
     return false;
   }

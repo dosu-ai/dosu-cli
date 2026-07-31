@@ -2,7 +2,7 @@
  * `dosu skill` — manage the Dosu agent skill.
  */
 
-import { execSync } from "node:child_process";
+import { exec, execSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
@@ -83,6 +83,15 @@ function skillAgentArgs(providerIDs?: readonly string[]): string {
   return agents.map((agent) => `-a ${agent}`).join(" ");
 }
 
+function execQuiet(command: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    exec(command, { windowsHide: true }, (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
+
 /**
  * Install the Dosu skill via `npx skills`. After a successful install we try
  * to fetch the latest commit SHA and cache it so the update checker knows
@@ -101,9 +110,9 @@ export async function installSkill(
   }
 
   try {
-    execSync(`npx skills add ${SKILL_REPO} -g ${agentArgs} -s ${SKILL_NAME} -y`, {
-      stdio: options.quiet ? "pipe" : "inherit",
-    });
+    const command = `npx skills add ${SKILL_REPO} -g ${agentArgs} -s ${SKILL_NAME} -y`;
+    if (options.quiet) await execQuiet(command);
+    else execSync(command, { stdio: "inherit" });
   } catch (err) {
     logger.error("skill", `Failed to install skill: ${err}`);
     return { success: false };
