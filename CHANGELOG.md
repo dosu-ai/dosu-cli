@@ -1,3 +1,10 @@
+# [0.37.0-alpha.2](https://github.com/dosu-ai/dosu-cli/compare/v0.37.0-alpha.1...v0.37.0-alpha.2) (2026-07-31)
+
+
+### Bug Fixes
+
+* **status:** support JSON output ([dc19349](https://github.com/dosu-ai/dosu-cli/commit/dc1934921066aa267765db95bc9f60d3cdc52baa))
+
 # [0.37.0-alpha.1](https://github.com/dosu-ai/dosu-cli/compare/v0.36.0...v0.37.0-alpha.1) (2026-07-31)
 
 
