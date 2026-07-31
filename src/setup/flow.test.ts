@@ -115,6 +115,13 @@ vi.mock("../commands/skill", () => ({
           ({ claude: "claude-code", cursor: "cursor" })[providerID as "claude" | "cursor"],
       )
       .filter(Boolean),
+  skillInstallTargetForProvider: (providerID: string) => {
+    const target = {
+      claude: { path: "/skills/claude/dosu", symlink: true },
+      cursor: { path: "/skills/cursor/dosu", symlink: false },
+    }[providerID as "claude" | "cursor"];
+    return target ?? null;
+  },
   skillCommand: vi.fn(),
 }));
 
@@ -155,6 +162,7 @@ import { loadConfig, saveConfig } from "../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { loadJSONConfig, saveJSONConfig } from "../mcp/config-helpers";
 import * as providersModule from "../mcp/providers";
+import { ClaudeProvider } from "../mcp/providers/claude";
 import { ClaudeDesktopProvider } from "../mcp/providers/claude-desktop";
 import { CursorProvider } from "../mcp/providers/cursor";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
@@ -1410,7 +1418,8 @@ describe("runSetup integration", () => {
     await runSetup();
 
     expect(mockInstallSkill).toHaveBeenCalledWith(["cursor"], { quiet: true });
-    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill installed"));
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill ready for 1 agent"));
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("/skills/cursor/dosu"));
   });
 
   it("does not install the skill when no agent is selected", async () => {
@@ -1528,17 +1537,20 @@ describe("runInstallSkill", () => {
   it("calls installSkill and returns true on success", async () => {
     mockInstallSkill.mockResolvedValue({ success: true, sha: "abc" });
 
-    const result = await runInstallSkill(["claude"]);
+    const result = await runInstallSkill([ClaudeProvider()]);
 
     expect(result).toBe(true);
     expect(mockInstallSkill).toHaveBeenCalledWith(["claude"], { quiet: true });
-    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill installed"));
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill ready for 1 agent"));
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Claude Code"));
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("/skills/claude/dosu"));
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("(symlink)"));
   });
 
   it("returns false and logs error when installSkill reports failure", async () => {
     mockInstallSkill.mockResolvedValue({ success: false });
 
-    const result = await runInstallSkill(["claude"]);
+    const result = await runInstallSkill([ClaudeProvider()]);
 
     expect(result).toBe(false);
     expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Failed to install skill"));
@@ -1547,7 +1559,7 @@ describe("runInstallSkill", () => {
   it("returns false and logs error when installSkill throws", async () => {
     mockInstallSkill.mockRejectedValue(new Error("boom"));
 
-    const result = await runInstallSkill(["claude"]);
+    const result = await runInstallSkill([ClaudeProvider()]);
 
     expect(result).toBe(false);
     expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("boom"));

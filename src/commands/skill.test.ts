@@ -1,5 +1,5 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -8,7 +8,12 @@ vi.mock("node:child_process", () => ({
   execSync: (...args: unknown[]) => mockExecSync(...args),
 }));
 
-import { installSkill, skillAgentIDsForProviders, skillCommand } from "./skill";
+import {
+  installSkill,
+  skillAgentIDsForProviders,
+  skillCommand,
+  skillInstallTargetForProvider,
+} from "./skill";
 
 let logSpy: ReturnType<typeof vi.spyOn>;
 let errorSpy: ReturnType<typeof vi.spyOn>;
@@ -66,6 +71,7 @@ afterEach(() => {
     delete process.env.XDG_CONFIG_HOME;
   }
   rmSync(tempDir, { recursive: true, force: true });
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
@@ -186,6 +192,33 @@ describe("installSkill helper", () => {
     expect(
       skillAgentIDsForProviders(["vscode", "copilot", "cline", "cline-cli", "manual"]),
     ).toEqual(["github-copilot", "cline"]);
+  });
+
+  it("reports the Claude symlink target and respects CLAUDE_CONFIG_DIR", () => {
+    vi.stubEnv("CLAUDE_CONFIG_DIR", "/tmp/custom-claude");
+
+    expect(skillInstallTargetForProvider("claude")).toEqual({
+      path: "/tmp/custom-claude/skills/dosu",
+      symlink: true,
+    });
+  });
+
+  it("reports the universal skill target for Codex", () => {
+    expect(skillInstallTargetForProvider("codex")).toEqual({
+      path: join(homedir(), ".agents", "skills", "dosu"),
+      symlink: false,
+    });
+  });
+
+  it("reports the Windsurf symlink target", () => {
+    expect(skillInstallTargetForProvider("windsurf")).toEqual({
+      path: join(homedir(), ".codeium", "windsurf", "skills", "dosu"),
+      symlink: true,
+    });
+  });
+
+  it("returns null for a provider without skill support", () => {
+    expect(skillInstallTargetForProvider("manual")).toBeNull();
   });
 
   it("keeps the installer quiet for agent-mediated setup", async () => {

@@ -174,13 +174,15 @@ describe("installedDosuSectionVersion", () => {
 describe("stepUpdateAgentsMd", () => {
   it("returns true and logs success on create", async () => {
     await expect(stepUpdateAgentsMd(dir, "canonical instruction")).resolves.toBe(true);
-    expect(p.log.success).toHaveBeenCalled();
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining(join(dir, "AGENTS.md")));
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("(created)"));
   });
 
   it("returns true when already up to date", async () => {
     upsertDosuAgentsSection(dir, "canonical instruction");
     await expect(stepUpdateAgentsMd(dir, "canonical instruction")).resolves.toBe(true);
-    expect(vi.mocked(p.log.success).mock.calls[0][0]).toContain("already up to date");
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining(join(dir, "AGENTS.md")));
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("(already up to date)"));
   });
 
   it("returns false and logs error when the write fails", async () => {
