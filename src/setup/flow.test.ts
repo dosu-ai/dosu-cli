@@ -26,6 +26,7 @@ vi.mock("@clack/prompts", () => ({
   spinner: vi.fn(() => ({
     start: vi.fn(),
     stop: vi.fn(),
+    clear: vi.fn(),
   })),
   log: {
     warn: vi.fn(),
@@ -1538,8 +1539,11 @@ describe("runInstallSkill", () => {
     mockInstallSkill.mockResolvedValue({ success: true, sha: "abc" });
 
     const result = await runInstallSkill([ClaudeProvider()]);
+    const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
 
     expect(result).toBe(true);
+    expect(spinner?.start).toHaveBeenCalledWith("Installing skill for 1 agent");
+    expect(spinner?.clear).toHaveBeenCalledOnce();
     expect(mockInstallSkill).toHaveBeenCalledWith(["claude"], { quiet: true });
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill ready for 1 agent"));
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Claude Code"));
@@ -1547,12 +1551,25 @@ describe("runInstallSkill", () => {
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("(symlink)"));
   });
 
+  it("uses plural loading copy for multiple selected agents", async () => {
+    mockInstallSkill.mockResolvedValue({ success: true });
+
+    await runInstallSkill([ClaudeProvider(), CursorProvider()]);
+    const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
+
+    expect(spinner?.start).toHaveBeenCalledWith("Installing skill for 2 agents");
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill ready for 2 agent"));
+  });
+
   it("returns false and logs error when installSkill reports failure", async () => {
     mockInstallSkill.mockResolvedValue({ success: false });
 
     const result = await runInstallSkill([ClaudeProvider()]);
+    const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
 
     expect(result).toBe(false);
+    expect(spinner?.start).toHaveBeenCalledWith("Installing skill for 1 agent");
+    expect(spinner?.clear).toHaveBeenCalledOnce();
     expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Failed to install skill"));
   });
 
@@ -1560,8 +1577,11 @@ describe("runInstallSkill", () => {
     mockInstallSkill.mockRejectedValue(new Error("boom"));
 
     const result = await runInstallSkill([ClaudeProvider()]);
+    const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
 
     expect(result).toBe(false);
+    expect(spinner?.start).toHaveBeenCalledWith("Installing skill for 1 agent");
+    expect(spinner?.clear).toHaveBeenCalledOnce();
     expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("boom"));
   });
 });
