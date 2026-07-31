@@ -1,3 +1,10 @@
+# [0.37.0-alpha.3](https://github.com/dosu-ai/dosu-cli/compare/v0.37.0-alpha.2...v0.37.0-alpha.3) (2026-07-31)
+
+
+### Bug Fixes
+
+* **setup:** quiet nested skill installer ([997bcaa](https://github.com/dosu-ai/dosu-cli/commit/997bcaad9319f44f0aeace6c3ee451bfd42dbbee))
+
 # [0.37.0-alpha.2](https://github.com/dosu-ai/dosu-cli/compare/v0.37.0-alpha.1...v0.37.0-alpha.2) (2026-07-31)
 
 
