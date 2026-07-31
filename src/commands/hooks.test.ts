@@ -40,7 +40,7 @@ vi.mock("../hooks/runtime", () => ({
 import { Client } from "../client/client";
 import { loadConfig, MODE_OSS } from "../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
-import { loadState, saveState, type TicketState } from "../hooks/state";
+import { clearState, loadState, saveState, type TicketState } from "../hooks/state";
 import { requestCreateTicket, requestGetTicket, TicketHttpError } from "../hooks/ticket-client";
 import {
   collectDoctorChecks,
@@ -165,6 +165,7 @@ describe("runUserPromptSubmit", () => {
       1000,
     );
     expect(requestCreateTicket).not.toHaveBeenCalled();
+    expect(clearState).not.toHaveBeenCalled();
   });
 
   it("creates a fresh ticket when a pending ticket belongs to a previous turn", async () => {
@@ -187,6 +188,7 @@ describe("runUserPromptSubmit", () => {
       expect.anything(),
       expect.objectContaining({ turn_id: "turn-2", prompt: "new question" }),
     );
+    expect(clearState).toHaveBeenCalledWith("sess");
     expect(saveState).toHaveBeenCalledWith(
       expect.objectContaining({ ticketId: "kt_new", turnId: "turn-2" }),
     );
@@ -214,12 +216,24 @@ describe("runUserPromptSubmit", () => {
     );
   });
 
-  it("is silent and writes no state when create fails", async () => {
-    vi.mocked(loadState).mockReturnValue(null);
+  it("clears the previous turn when creating its replacement fails", async () => {
+    vi.mocked(loadState).mockReturnValue(pending({ turnId: "turn-1" }));
     vi.mocked(requestCreateTicket).mockRejectedValue(new TicketHttpError(500));
-    await runUserPromptSubmit({ session_id: "sess", prompt: "x" });
+    await runUserPromptSubmit({ session_id: "sess", turn_id: "turn-2", prompt: "x" });
+    expect(clearState).toHaveBeenCalledWith("sess");
     expect(saveState).not.toHaveBeenCalled();
     expect(stdout()).toBe("");
+  });
+
+  it("clears the previous turn before returning when configuration is missing", async () => {
+    vi.mocked(loadState).mockReturnValue(pending({ turnId: "turn-1" }));
+    vi.mocked(loadConfig).mockReturnValue(authed({ deployment_id: undefined }));
+
+    await runUserPromptSubmit({ session_id: "sess", turn_id: "turn-2", prompt: "x" });
+
+    expect(clearState).toHaveBeenCalledWith("sess");
+    expect(requestCreateTicket).not.toHaveBeenCalled();
+    expect(saveState).not.toHaveBeenCalled();
   });
 
   it("no-ops when the prompt field is absent entirely", async () => {

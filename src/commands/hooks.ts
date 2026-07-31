@@ -24,7 +24,7 @@ import { Argument, Command } from "commander";
 import { isAuthenticated, loadConfig, MODE_OSS } from "../config/config";
 import { logger } from "../debug/logger";
 import { STOP_PREFIX } from "../hooks/prompts";
-import { loadState, saveState, type TicketState } from "../hooks/state";
+import { clearState, loadState, saveState, type TicketState } from "../hooks/state";
 
 interface HookInput {
   session_id?: string;
@@ -140,6 +140,10 @@ export async function runUserPromptSubmit(
     logger.debug("hooks", `submit sid=${sid8(sessionId)} reuse tid=${existing.ticketId}`);
     return;
   }
+
+  // A new turn supersedes the session's prior ticket even if configuration or
+  // network failures prevent its replacement from being created.
+  if (existing) clearState(sessionId);
 
   const cfg = loadConfig();
   if (!cfg.active_account?.target?.api_key || !cfg.active_account?.target?.deployment_id) {
