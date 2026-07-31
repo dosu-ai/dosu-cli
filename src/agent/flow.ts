@@ -15,6 +15,7 @@
 
 import { exchangeTicket, mintTicket } from "../auth/ticket";
 import { Client, type Deployment } from "../client/client";
+import { installSkill, skillAgentIDsForProviders } from "../commands/skill";
 import {
   type Config,
   loadConfig,
@@ -25,6 +26,8 @@ import {
 import { logger } from "../debug/logger";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
+import { fetchDosuRule, installRuleForAgent, isRuleAgent } from "../rules/installer";
+import { inGitWorkTree, upsertDosuAgentsSection } from "../setup/agents-md-step";
 import { isStdioOnly } from "../setup/flow";
 import { emitError, emitNeedUserAction, emitStep } from "./output";
 
@@ -119,9 +122,88 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
     return 1;
   }
 
+  // 5. Install the matching always-on rule when this agent is part of the
+  // mainstream rule matrix. Unsupported MCP clients simply skip this step.
+  let instruction: string | undefined;
+  try {
+    if (isRuleAgent(provider.id())) {
+      instruction = await fetchDosuRule();
+      const rule = installRuleForAgent(provider.id(), instruction);
+      if (rule) {
+        emitStep({
+          step: "rule_install",
+          tool: provider.id(),
+          tool_name: provider.name(),
+          rule_path: rule.path,
+          action: rule.action,
+        });
+      }
+    }
+  } catch (err: unknown) {
+    emitError({
+      step: "rule_install",
+      reason: "install_failed",
+      agent_next_steps: `Dosu MCP was installed, but its rule could not be installed for ${provider.name()}: ${
+        err instanceof Error ? err.message : String(err)
+      }. Re-run this setup command; installation is idempotent.`,
+    });
+    return 1;
+  }
+
+  // 6. Install the remote Dosu skill only for the requested agent. Keep the
+  // child process quiet so agent mode preserves its one-JSON-line-per-step
+  // stdout contract.
+  if (skillAgentIDsForProviders([provider.id()]).length > 0) {
+    try {
+      const skill = await installSkill([provider.id()], { quiet: true });
+      if (!skill.success) {
+        throw new Error("the skills installer failed");
+      }
+      emitStep({
+        step: "skill_install",
+        tool: provider.id(),
+        tool_name: provider.name(),
+        source: "dosu-ai/dosu-skill",
+      });
+    } catch (err: unknown) {
+      emitError({
+        step: "skill_install",
+        reason: "install_failed",
+        agent_next_steps: `Dosu MCP and its rule were installed, but the skill could not be installed for ${provider.name()}: ${
+          err instanceof Error ? err.message : String(err)
+        }. Re-run this setup command; installation is idempotent.`,
+      });
+      return 1;
+    }
+  }
+
+  // 7. Add the project-level pointer when setup runs from a git work tree.
+  // Use the low-level writer instead of the clack wrapper so stdout stays
+  // valid NDJSON.
+  if (inGitWorkTree()) {
+    try {
+      instruction ??= await fetchDosuRule();
+      const agentsMd = upsertDosuAgentsSection(process.cwd(), instruction);
+      emitStep({
+        step: "agents_md_install",
+        path: agentsMd.path,
+        action: agentsMd.action,
+      });
+    } catch (err: unknown) {
+      emitError({
+        step: "agents_md_install",
+        reason: "install_failed",
+        agent_next_steps: `Dosu's agent integrations were installed, but AGENTS.md could not be updated: ${
+          err instanceof Error ? err.message : String(err)
+        }. Re-run this setup command; installation is idempotent.`,
+      });
+      return 1;
+    }
+  }
+
   emitStep({
     step: "done",
-    agent_next_steps: `Dosu MCP is configured for ${provider.name()}. Tell the user setup is complete and they can ask their agent a Dosu question. Run 'dosu status' to verify.`,
+    agent_next_steps: `Dosu is configured for ${provider.name()}. Tell the user setup is complete and they can ask their agent a Dosu question. Run 'dosu status' to verify.`,
   });
   return 0;
 }

@@ -32,6 +32,24 @@ export function dim(msg: string): string {
   return pc.dim(msg);
 }
 
+export interface SetupSummaryItem {
+  label?: string;
+  path: string;
+  status?: string;
+}
+
+export function formatSetupSummary(
+  title: string,
+  items: readonly SetupSummaryItem[],
+  marker: string = IconAdd,
+): string {
+  const lines = items.map((item) => {
+    const path = `${item.path}${item.status ? ` (${item.status})` : ""}`;
+    return item.label ? `${marker} ${item.label}\n  ${dim(path)}` : `${marker} ${dim(path)}`;
+  });
+  return `${title}\n${lines.join("\n")}`;
+}
+
 export function bold(msg: string): string {
   return pc.bold(msg);
 }

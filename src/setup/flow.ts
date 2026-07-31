@@ -7,7 +7,7 @@ import * as p from "@clack/prompts";
 import type { CallbackServer } from "../auth/server";
 import { Client, type Deployment, type Org, SessionExpiredError } from "../client/client";
 import type { TypedClient } from "../client/trpc";
-import { installSkill } from "../commands/skill";
+import { installSkill, skillInstallTargetForProvider } from "../commands/skill";
 import {
   bindAccountIdentity,
   type Config,
@@ -24,7 +24,8 @@ import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { inGitWorkTree, stepUpdateAgentsMd } from "./agents-md-step";
 import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
 import { launchAuditAgent, offerAuditHandoff } from "./audit-handoff";
-import { browserFallbackHint, dim, info } from "./styles";
+import { stepConfigureAgentRules } from "./rules-step";
+import { browserFallbackHint, dim, formatSetupSummary, IconRemove, info } from "./styles";
 
 export interface SetupOptions {
   deploymentID?: string;
@@ -44,12 +45,6 @@ export interface ToolSelection {
   toInstall: SetupProvider[];
   toRemove: SetupProvider[];
   skipped: SetupProvider[];
-}
-
-interface OneShotChoices {
-  configureMcp: boolean;
-  installSkill: boolean;
-  updateAgentsMd: boolean;
 }
 
 type SetupFlowKind = "onboarding" | "setup";
@@ -193,64 +188,49 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   updateTarget(cfg, { api_key: apiKey });
   saveConfig(cfg);
 
-  // One-shot confirm: MCP + skill are always listed (user picks what to
-  // (re)run). Repo connection + docs import happen in the web onboarding
-  // wizard, so the CLI no longer offers them here.
-  const choices = await stepOneShotConfirm(inGitWorkTree());
-  if (!choices) {
+  // Agent selection is the only install choice. Every successfully configured
+  // agent receives the full supported bundle: MCP, rules, and skill.
+  const configured = await stepConfigureMcpTools(cfg);
+  if (configured === null) {
     await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_cancelled", {
-      reason: "options_cancelled",
+      reason: "mcp_selection_cancelled",
     });
     return;
   }
-  await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_options_selected", {
-    configure_mcp: choices.configureMcp,
-    install_skill: choices.installSkill,
-    update_agents_md: choices.updateAgentsMd,
-  });
 
-  // MCP tools. Track whether at least one agent ended up with Dosu MCP
-  // configured (newly installed or previously installed) so we only offer
-  // the audit handoff when there's actually an agent that can use Dosu.
-  let mcpConfiguredThisRun = false;
-  let mcpCompleted = false;
-  let skillCompleted = false;
-  if (choices.configureMcp) {
-    const configured = await stepConfigureMcpTools(cfg);
-    if (configured === null) {
-      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_cancelled", {
-        reason: "mcp_selection_cancelled",
-      });
-      return;
-    }
-    mcpConfiguredThisRun = configured.some((r) => r.action === "install" || r.action === "skip");
-    const configuredProviders = configured.filter(
-      (r) => (r.action === "install" || r.action === "skip") && !r.error,
-    );
-    mcpCompleted = configuredProviders.length > 0;
-    if (mcpCompleted) {
-      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_mcp_configured", {
-        provider_count: configuredProviders.length,
-        providers: configuredProviders.map((r) => r.provider.id()),
-      });
-    }
+  const mcpConfiguredThisRun = configured.some(
+    (result) => result.action === "install" || result.action === "skip",
+  );
+  const configuredProviders = configured.filter(
+    (result) => (result.action === "install" || result.action === "skip") && !result.error,
+  );
+  const mcpCompleted = configuredProviders.length > 0;
+  if (mcpCompleted) {
+    await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_mcp_configured", {
+      provider_count: configuredProviders.length,
+      providers: configuredProviders.map((result) => result.provider.id()),
+    });
   }
 
-  // Dosu skill
-  if (choices.installSkill) {
-    skillCompleted = await runInstallSkill();
+  // Skill installation follows the same agent selection as MCP and rules.
+  // Unsupported clients are left alone rather than broadening the install
+  // to every agent on the machine.
+  let skillCompleted = false;
+  const skillProviders = configuredProviders
+    .map((result) => result.provider)
+    .filter((provider) => skillInstallTargetForProvider(provider.id()) !== null);
+  if (skillProviders.length > 0) {
+    skillCompleted = await runInstallSkill(skillProviders);
     if (skillCompleted) {
       await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_skill_installed");
     }
   }
 
-  // AGENTS.md — prompt coding agents to use the Dosu MCP tools. Only offered
-  // (and run) when the cwd is a git work tree. Tracked via the
-  // `completed_agents_md` property on cli_onboarding_completed — the backend
-  // event enum has no dedicated event for this step.
+  // Project instructions are part of the bundle when setup runs inside a git
+  // work tree and at least one agent was configured.
   let agentsMdCompleted = false;
-  if (choices.updateAgentsMd) {
-    agentsMdCompleted = stepUpdateAgentsMd();
+  if (mcpCompleted && inGitWorkTree()) {
+    agentsMdCompleted = await stepUpdateAgentsMd();
   }
 
   // Codebase audit handoff (cloud mode only — it acts on the user's own
@@ -311,45 +291,6 @@ function applyModeOverride(cfg: Config, opts: SetupOptions): void {
 }
 
 /**
- * One-shot confirmation: a single multiselect listing everything Dosu will
- * set up. All items default checked; user hits Enter to do it all, or
- * unticks specific items.
- *
- * MCP + skill are always listed so users can re-run either step at any
- * time (add a new agent, reinstall the skill). Repo connection + docs
- * import happen in the web onboarding wizard, not here.
- */
-async function stepOneShotConfirm(offerAgentsMd: boolean): Promise<OneShotChoices | null> {
-  type Item = { value: keyof OneShotChoices; label: string };
-  const items: Item[] = [
-    { value: "configureMcp", label: "Install Dosu MCP" },
-    { value: "installSkill", label: "Install Dosu skill" },
-  ];
-  if (offerAgentsMd) {
-    items.push({ value: "updateAgentsMd", label: "Add Dosu instructions to AGENTS.md" });
-  }
-
-  const selected = await p.multiselect({
-    message: "Dosu will set these up — press Enter to accept, space to toggle",
-    options: items.map((it) => ({ value: it.value, label: it.label })),
-    initialValues: items.map((it) => it.value),
-    required: false,
-  });
-
-  if (p.isCancel(selected)) {
-    logger.info("setup", "One-shot confirm cancelled");
-    return null;
-  }
-
-  const chosen = new Set(selected as Array<keyof OneShotChoices>);
-  return {
-    configureMcp: chosen.has("configureMcp"),
-    installSkill: chosen.has("installSkill"),
-    updateAgentsMd: chosen.has("updateAgentsMd"),
-  };
-}
-
-/**
  * Runs MCP tool detection → selection → configuration as a single unit.
  * Returns the ConfigResult array on success, or null if the user cancelled.
  * An empty detection pool is treated as success (nothing to do).
@@ -366,28 +307,53 @@ async function stepConfigureMcpTools(cfg: Config): Promise<ConfigResult[] | null
   if (!selection) return null;
   const results = stepConfigureTools(cfg, selection);
   stepShowSummary(results);
+  await stepConfigureAgentRules(selection, results);
   return results;
 }
 
 /**
- * Run the skill install (no prompt). The upfront one-shot confirm already
- * decided whether to run this. Returns `true` on success.
+ * Install the skill for the same providers selected during MCP setup.
+ * Returns `true` on success.
  */
-export async function runInstallSkill(): Promise<boolean> {
+export async function runInstallSkill(providers: readonly SetupProvider[]): Promise<boolean> {
   logger.info("setup", "Step: install skill");
+  const spinner = p.spinner();
+  const agentLabel = providers.length === 1 ? "agent" : "agents";
+  spinner.start(`Installing skill for ${providers.length} ${agentLabel}`);
   try {
-    const result = await installSkill();
+    // Interactive setup owns the summary UI. Keep the nested skills installer
+    // quiet so its progress screens do not interrupt the standardized setup
+    // results below. The standalone `dosu skill install` command remains
+    // verbose.
+    const result = await installSkill(
+      providers.map((provider) => provider.id()),
+      { quiet: true },
+    );
     if (result.success) {
       logger.info("setup", `Skill installed${result.sha ? ` sha=${result.sha}` : ""}`);
-      p.log.success("Skill installed");
+      const items = providers.flatMap((provider) => {
+        const target = skillInstallTargetForProvider(provider.id());
+        if (!target) return [];
+        return [
+          {
+            label: provider.name(),
+            path: target.path,
+            status: target.symlink ? "symlink" : undefined,
+          },
+        ];
+      });
+      spinner.clear();
+      p.log.success(formatSetupSummary(`Skill ready for ${items.length} agent(s):`, items));
       return true;
     }
+    spinner.clear();
     p.log.error("Failed to install skill. Run `dosu skill install` to retry.");
     return false;
   } catch (err: unknown) {
     /* v8 ignore next -- err is always Error in practice */
     const msg = err instanceof Error ? err.message : String(err);
     logger.error("setup", `Skill install failed: ${msg}`);
+    spinner.clear();
     p.log.error(`Skill install failed: ${msg}`);
     return false;
   }
@@ -946,17 +912,28 @@ export function stepShowSummary(results: ConfigResult[]): void {
   const skipped = results.filter((r) => r.action === "skip");
 
   if (installed.length > 0) {
-    const lines = installed
-      .map((r) => `+ ${r.provider.name()}\n  ${dim(r.provider.globalConfigPath())}`)
-      .join("\n");
-    p.log.success(`Configured ${installed.length} agent(s):\n${lines}`);
+    p.log.success(
+      formatSetupSummary(
+        `Configured ${installed.length} agent(s):`,
+        installed.map((result) => ({
+          label: result.provider.name(),
+          path: result.provider.globalConfigPath(),
+        })),
+      ),
+    );
   }
 
   if (removed.length > 0) {
-    const lines = removed
-      .map((r) => `- ${r.provider.name()}\n  ${dim(r.provider.globalConfigPath())}`)
-      .join("\n");
-    p.log.info(`Removed from ${removed.length} agent(s):\n${lines}`);
+    p.log.info(
+      formatSetupSummary(
+        `Removed from ${removed.length} agent(s):`,
+        removed.map((result) => ({
+          label: result.provider.name(),
+          path: result.provider.globalConfigPath(),
+        })),
+        IconRemove,
+      ),
+    );
   }
 
   if (installed.length === 0 && removed.length === 0 && skipped.length > 0) {

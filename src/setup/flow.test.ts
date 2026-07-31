@@ -26,6 +26,7 @@ vi.mock("@clack/prompts", () => ({
   spinner: vi.fn(() => ({
     start: vi.fn(),
     stop: vi.fn(),
+    clear: vi.fn(),
   })),
   log: {
     warn: vi.fn(),
@@ -108,6 +109,20 @@ vi.mock("../client/client", () => {
 const mockInstallSkill = vi.fn();
 vi.mock("../commands/skill", () => ({
   installSkill: (...args: unknown[]) => mockInstallSkill(...args),
+  skillAgentIDsForProviders: (providerIDs: string[]) =>
+    providerIDs
+      .map(
+        (providerID) =>
+          ({ claude: "claude-code", cursor: "cursor" })[providerID as "claude" | "cursor"],
+      )
+      .filter(Boolean),
+  skillInstallTargetForProvider: (providerID: string) => {
+    const target = {
+      claude: { path: "/skills/claude/dosu", symlink: true },
+      cursor: { path: "/skills/cursor/dosu", symlink: false },
+    }[providerID as "claude" | "cursor"];
+    return target ?? null;
+  },
   skillCommand: vi.fn(),
 }));
 
@@ -126,6 +141,13 @@ vi.mock("./agents-md-step", () => ({
   inGitWorkTree: (...args: unknown[]) => mockInGitWorkTree(...args),
   stepUpdateAgentsMd: (...args: unknown[]) => mockStepUpdateAgentsMd(...args),
 }));
+
+const { mockStepConfigureAgentRules } = vi.hoisted(() => ({
+  mockStepConfigureAgentRules: vi.fn(),
+}));
+vi.mock("./rules-step", () => ({
+  stepConfigureAgentRules: (...args: unknown[]) => mockStepConfigureAgentRules(...args),
+}));
 vi.mock("./github-step", () => ({
   stepConnectGitHubRepo: (...args: unknown[]) => mockStepConnectGitHubRepo(...args),
   // Audit handoff never fires in these tests: not a git repo.
@@ -141,6 +163,7 @@ import { loadConfig, saveConfig } from "../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { loadJSONConfig, saveJSONConfig } from "../mcp/config-helpers";
 import * as providersModule from "../mcp/providers";
+import { ClaudeProvider } from "../mcp/providers/claude";
 import { ClaudeDesktopProvider } from "../mcp/providers/claude-desktop";
 import { CursorProvider } from "../mcp/providers/cursor";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
@@ -155,11 +178,7 @@ import {
   type ToolSelection,
 } from "./flow";
 
-/**
- * Default p.multiselect behaviour: auto-accept the initialValues for the
- * one-shot confirm step (`stepOneShotConfirm`) AND the tool-selection step.
- * Tests that want to override tool selection use `mockToolSelection()` below.
- */
+/** Default p.multiselect behaviour: accept the agent selection's initial values. */
 function installMultiselectDefault() {
   vi.mocked(p.multiselect).mockImplementation(async (opts: unknown) => {
     const o = opts as { message: string; initialValues?: unknown[] };
@@ -167,26 +186,16 @@ function installMultiselectDefault() {
   });
 }
 
-/**
- * Override tool selection with a specific set of provider IDs while still
- * auto-accepting the upfront one-shot confirm. Use instead of
- * `vi.mocked(p.multiselect).mockResolvedValue(...)`.
- */
+/** Override the selected agent provider IDs. */
 function mockToolSelection(selection: string[]) {
-  vi.mocked(p.multiselect).mockImplementation(async (opts: unknown) => {
-    const o = opts as { message: string; initialValues?: unknown[] };
-    const msg = String(o.message ?? "").toLowerCase();
-    if (msg.includes("dosu will set")) {
-      return (o.initialValues ?? []) as unknown as never;
-    }
-    return selection as unknown as never;
-  });
+  vi.mocked(p.multiselect).mockResolvedValue(selection as unknown as never);
 }
 
 function installSetupStepDefaults() {
   mockStepConnectGitHubRepo.mockResolvedValue({ advance: false, has_connected_repo: false });
   mockInGitWorkTree.mockReturnValue(false);
   mockStepUpdateAgentsMd.mockReturnValue(true);
+  mockStepConfigureAgentRules.mockResolvedValue([]);
 }
 
 function installRemoteSetupDefaults() {
@@ -751,6 +760,10 @@ describe("runSetup integration", () => {
 
     // Verify summary was shown
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 agent"));
+    expect(mockStepConfigureAgentRules).toHaveBeenCalledWith(
+      expect.objectContaining({ toInstall: [expect.objectContaining({})] }),
+      [expect.objectContaining({ action: "install" })],
+    );
   });
 
   it("runs OAuth flow and saves tokens to real config", async () => {
@@ -1124,18 +1137,7 @@ describe("runSetup integration", () => {
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
 
     const cancelSymbol = Symbol("cancel");
-    // Cancel only the tool-selection multiselect; accept the one-shot confirm.
-    vi.mocked(p.multiselect).mockImplementation(async (opts: unknown) => {
-      const o = opts as { message: string; initialValues?: unknown[] };
-      if (
-        String(o.message ?? "")
-          .toLowerCase()
-          .includes("dosu will set")
-      ) {
-        return (o.initialValues ?? []) as unknown as never;
-      }
-      return cancelSymbol as unknown as never;
-    });
+    vi.mocked(p.multiselect).mockResolvedValue(cancelSymbol as unknown as never);
     vi.mocked(p.isCancel).mockImplementation((val) => val === cancelSymbol);
 
     await runSetup();
@@ -1405,38 +1407,30 @@ describe("runSetup integration", () => {
     );
   });
 
-  it("installs skill automatically when the one-shot confirm leaves it ticked", async () => {
+  it("installs the skill automatically for the selected agent", async () => {
     const cfg = makeCfg();
     saveConfig(cfg);
 
     setupAuthenticatedClient();
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    mockToolSelection(["cursor"]);
 
     await runSetup();
 
-    expect(mockInstallSkill).toHaveBeenCalled();
-    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill installed"));
+    expect(mockInstallSkill).toHaveBeenCalledWith(["cursor"], { quiet: true });
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill ready for 1 agent"));
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("/skills/cursor/dosu"));
   });
 
-  it("does not install skill when the one-shot confirm unticks it", async () => {
+  it("does not install the skill when no agent is selected", async () => {
     const cfg = makeCfg({ mode: "oss" });
     saveConfig(cfg);
 
     setupAuthenticatedClient();
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-
-    // Override the one-shot confirm to deselect the skill item.
-    vi.mocked(p.multiselect).mockImplementation(async (opts: unknown) => {
-      const o = opts as { message: string; initialValues?: unknown[] };
-      if (
-        String(o.message ?? "")
-          .toLowerCase()
-          .includes("dosu will set")
-      ) {
-        return ["configureMcp"] as unknown as never;
-      }
-      return (o.initialValues ?? []) as unknown as never;
-    });
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    mockToolSelection([]);
 
     await runSetup();
 
@@ -1444,68 +1438,51 @@ describe("runSetup integration", () => {
     expect(p.outro).toHaveBeenCalledWith(expect.stringContaining("open-source libraries only"));
   });
 
-  it("installs skill in OSS mode when the one-shot confirm leaves it ticked", async () => {
+  it("installs the selected agent skill in OSS mode", async () => {
     const cfg = makeCfg({ mode: "oss" });
     saveConfig(cfg);
 
     setupAuthenticatedClient();
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    mockToolSelection(["cursor"]);
 
     await runSetup();
 
-    expect(mockInstallSkill).toHaveBeenCalled();
+    expect(mockInstallSkill).toHaveBeenCalledWith(["cursor"], { quiet: true });
   });
 
-  it("offers only MCP + skill in the one-shot confirm (docs import lives in the web wizard)", async () => {
+  it("goes directly to agent selection without a component-selection prompt", async () => {
     const cfg = makeCfg();
     saveConfig(cfg);
 
     setupAuthenticatedClient();
-    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
-      user_id: "test-user-id",
-      finished_onboarding: false,
-      cli_onboarding_enabled: true,
-    });
-    mockStartOAuthFlow.mockResolvedValue({
-      browserOpened: true,
-      token: { access_token: "tok-web", refresh_token: "ref-web", expires_in: 3600 },
-    });
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    mockToolSelection(["cursor"]);
 
     await runSetup();
 
-    const oneShotCall = vi
+    const messages = vi
       .mocked(p.multiselect)
-      .mock.calls.find(([args]) =>
-        String((args as { message?: string }).message ?? "").includes("Dosu will set"),
-      );
-    const options = (oneShotCall?.[0] as { options: Array<{ label: string }> }).options;
-    expect(options.map((option) => String(option.label))).toEqual([
-      "Install Dosu MCP",
-      "Install Dosu skill",
-    ]);
+      .mock.calls.map(([args]) => String((args as { message?: string }).message ?? ""));
+    expect(messages).toEqual(["Select agents — tick to configure, untick to remove"]);
+    expect(messages.some((message) => message.includes("Dosu will set"))).toBe(false);
   });
 
-  it("offers the AGENTS.md option and runs the step when the cwd is a git work tree", async () => {
+  it("automatically updates AGENTS.md after configuring an agent in a git work tree", async () => {
     const cfg = makeCfg();
     saveConfig(cfg);
 
     setupAuthenticatedClient();
     mockInGitWorkTree.mockReturnValue(true);
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    mockToolSelection(["cursor"]);
 
     await runSetup();
 
-    const oneShotCall = vi
-      .mocked(p.multiselect)
-      .mock.calls.find(([args]) =>
-        String((args as { message?: string }).message ?? "").includes("Dosu will set"),
-      );
-    const options = (oneShotCall?.[0] as { options: Array<{ label: string }> }).options;
-    expect(options.map((option) => String(option.label))).toContain(
-      "Add Dosu instructions to AGENTS.md",
-    );
-    expect(mockStepUpdateAgentsMd).toHaveBeenCalled();
+    expect(mockStepUpdateAgentsMd).toHaveBeenCalledTimes(1);
 
     const completed = trackedCliOnboardingEvents().find(
       (e) => e.event === "cli_onboarding_completed",
@@ -1513,50 +1490,32 @@ describe("runSetup integration", () => {
     expect(completed?.properties.completed_agents_md).toBe(true);
   });
 
-  it("skips the AGENTS.md step when the one-shot confirm unticks it", async () => {
+  it("does not update AGENTS.md when no agent was configured", async () => {
     const cfg = makeCfg();
     saveConfig(cfg);
 
     setupAuthenticatedClient();
     mockInGitWorkTree.mockReturnValue(true);
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-
-    // Deselect only the AGENTS.md item in the one-shot confirm.
-    vi.mocked(p.multiselect).mockImplementation(async (opts: unknown) => {
-      const o = opts as { message: string; initialValues?: unknown[] };
-      if (
-        String(o.message ?? "")
-          .toLowerCase()
-          .includes("dosu will set")
-      ) {
-        return ["configureMcp", "installSkill"] as unknown as never;
-      }
-      return (o.initialValues ?? []) as unknown as never;
-    });
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    mockToolSelection([]);
 
     await runSetup();
 
     expect(mockStepUpdateAgentsMd).not.toHaveBeenCalled();
   });
 
-  it("never offers the AGENTS.md option outside a git work tree", async () => {
+  it("does not update AGENTS.md outside a git work tree", async () => {
     const cfg = makeCfg();
     saveConfig(cfg);
 
     setupAuthenticatedClient();
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    mockToolSelection(["cursor"]);
 
     await runSetup();
 
-    const oneShotCall = vi
-      .mocked(p.multiselect)
-      .mock.calls.find(([args]) =>
-        String((args as { message?: string }).message ?? "").includes("Dosu will set"),
-      );
-    const options = (oneShotCall?.[0] as { options: Array<{ label: string }> }).options;
-    expect(options.map((option) => String(option.label))).not.toContain(
-      "Add Dosu instructions to AGENTS.md",
-    );
     expect(mockStepUpdateAgentsMd).not.toHaveBeenCalled();
   });
 });
@@ -1579,28 +1538,50 @@ describe("runInstallSkill", () => {
   it("calls installSkill and returns true on success", async () => {
     mockInstallSkill.mockResolvedValue({ success: true, sha: "abc" });
 
-    const result = await runInstallSkill();
+    const result = await runInstallSkill([ClaudeProvider()]);
+    const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
 
     expect(result).toBe(true);
-    expect(mockInstallSkill).toHaveBeenCalled();
-    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill installed"));
+    expect(spinner?.start).toHaveBeenCalledWith("Installing skill for 1 agent");
+    expect(spinner?.clear).toHaveBeenCalledOnce();
+    expect(mockInstallSkill).toHaveBeenCalledWith(["claude"], { quiet: true });
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill ready for 1 agent"));
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Claude Code"));
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("/skills/claude/dosu"));
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("(symlink)"));
+  });
+
+  it("uses plural loading copy for multiple selected agents", async () => {
+    mockInstallSkill.mockResolvedValue({ success: true });
+
+    await runInstallSkill([ClaudeProvider(), CursorProvider()]);
+    const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
+
+    expect(spinner?.start).toHaveBeenCalledWith("Installing skill for 2 agents");
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill ready for 2 agent"));
   });
 
   it("returns false and logs error when installSkill reports failure", async () => {
     mockInstallSkill.mockResolvedValue({ success: false });
 
-    const result = await runInstallSkill();
+    const result = await runInstallSkill([ClaudeProvider()]);
+    const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
 
     expect(result).toBe(false);
+    expect(spinner?.start).toHaveBeenCalledWith("Installing skill for 1 agent");
+    expect(spinner?.clear).toHaveBeenCalledOnce();
     expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Failed to install skill"));
   });
 
   it("returns false and logs error when installSkill throws", async () => {
     mockInstallSkill.mockRejectedValue(new Error("boom"));
 
-    const result = await runInstallSkill();
+    const result = await runInstallSkill([ClaudeProvider()]);
+    const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
 
     expect(result).toBe(false);
+    expect(spinner?.start).toHaveBeenCalledWith("Installing skill for 1 agent");
+    expect(spinner?.clear).toHaveBeenCalledOnce();
     expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("boom"));
   });
 });
@@ -1657,26 +1638,12 @@ describe("runSetup checkpoint behavior", () => {
     }
   });
 
-  it("does not offer the audit handoff when the user unticks MCP", async () => {
-    // If the user deselects both "Install Dosu MCP" and "Install Dosu skill"
-    // from the one-shot confirm, nothing was configured this run, so the
-    // audit handoff would be noise.
+  it("does not offer the audit handoff when the user selects no agents", async () => {
     saveConfig(makeCfg());
     setupAuthed();
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-    // Override the one-shot confirm to return an empty selection.
-    vi.mocked(p.multiselect).mockImplementation(async (opts: unknown) => {
-      const o = opts as { message: string };
-      if (
-        String(o.message ?? "")
-          .toLowerCase()
-          .includes("dosu will set")
-      ) {
-        return [] as unknown as never;
-      }
-      return [] as unknown as never;
-    });
+    mockToolSelection([]);
 
     await runSetup();
 
@@ -1760,7 +1727,9 @@ describe("runSetup checkpoint behavior", () => {
   it("tracks completion when at least one valuable onboarding action succeeds", async () => {
     saveConfig(makeCfg());
     setupAuthed();
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    mockToolSelection(["cursor"]);
 
     await runSetup();
 
@@ -1770,7 +1739,7 @@ describe("runSetup checkpoint behavior", () => {
         expect.objectContaining({
           event: "cli_onboarding_completed",
           properties: expect.objectContaining({
-            completed_mcp: false,
+            completed_mcp: true,
             completed_skill: true,
           }),
         }),
@@ -1869,7 +1838,7 @@ describe("runSetup checkpoint behavior", () => {
         }),
       ]),
     );
-    // Never reached deployment binding or the one-shot confirm.
+    // Never reached deployment binding or agent selection.
     expect(methods.getDeployments).not.toHaveBeenCalled();
     expect(p.multiselect).not.toHaveBeenCalled();
   });
@@ -2137,7 +2106,7 @@ describe("runSetup additional branches", () => {
     await runSetup();
 
     expect(p.log.error).toHaveBeenCalledWith("Could not load your profile.");
-    // Never advanced to the one-shot confirm / outro.
+    // Never advanced to agent selection / outro.
     expect(p.outro).not.toHaveBeenCalled();
     expect(
       trackedCliOnboardingEvents().some(
@@ -2282,36 +2251,18 @@ describe("runSetup additional branches", () => {
     expect(saved.active_account?.target?.deployment_id).toBe("dep-fallback");
   });
 
-  it("returns early when the one-shot confirm is cancelled", async () => {
+  it("does not emit the removed component-selection telemetry event", async () => {
     saveConfig(makeCfg());
     setupAuthed();
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
 
-    const cancelSymbol = Symbol("cancel");
-    // Cancel the one-shot confirm multiselect specifically.
-    vi.mocked(p.multiselect).mockImplementation(async (opts: unknown) => {
-      const o = opts as { message: string; initialValues?: unknown[] };
-      if (
-        String(o.message ?? "")
-          .toLowerCase()
-          .includes("dosu will set")
-      ) {
-        return cancelSymbol as unknown as never;
-      }
-      return (o.initialValues ?? []) as unknown as never;
-    });
-    vi.mocked(p.isCancel).mockImplementation((val) => val === cancelSymbol);
-
     await runSetup();
 
     expect(mockInstallSkill).not.toHaveBeenCalled();
-    expect(p.outro).not.toHaveBeenCalled();
-    expect(
-      trackedCliOnboardingEvents().some(
-        (e) =>
-          e.event === "cli_onboarding_cancelled" && e.properties?.reason === "options_cancelled",
-      ),
-    ).toBe(true);
+    expect(p.outro).toHaveBeenCalled();
+    expect(trackedCliOnboardingEvents().map((event) => event.event)).not.toContain(
+      "cli_onboarding_options_selected",
+    );
   });
 
   it("returns early when the MCP tool selection is cancelled", async () => {
@@ -2321,17 +2272,7 @@ describe("runSetup additional branches", () => {
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
 
     const cancelSymbol = Symbol("cancel");
-    vi.mocked(p.multiselect).mockImplementation(async (opts: unknown) => {
-      const o = opts as { message: string; initialValues?: unknown[] };
-      if (
-        String(o.message ?? "")
-          .toLowerCase()
-          .includes("dosu will set")
-      ) {
-        return (o.initialValues ?? []) as unknown as never;
-      }
-      return cancelSymbol as unknown as never;
-    });
+    vi.mocked(p.multiselect).mockResolvedValue(cancelSymbol as unknown as never);
     vi.mocked(p.isCancel).mockImplementation((val) => val === cancelSymbol);
 
     await runSetup();
@@ -2382,8 +2323,7 @@ describe("runSetup additional branches", () => {
     setupAuthed();
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-    // Accept the one-shot confirm and the (preselected = none, since
-    // unconfigured) tool selection as-is.
+    // Accept the agent selection's initial values (none, since unconfigured).
     installMultiselectDefault();
 
     await runSetup();

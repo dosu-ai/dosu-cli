@@ -13,7 +13,6 @@ type CliOnboardingEvent =
   | "cli_onboarding_started"
   | "cli_onboarding_failed"
   | "cli_onboarding_cancelled"
-  | "cli_onboarding_options_selected"
   | "cli_onboarding_mcp_configured"
   | "cli_onboarding_skill_installed"
   | "cli_onboarding_github_connected"
