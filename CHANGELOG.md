@@ -1,3 +1,10 @@
+# [0.37.0-alpha.4](https://github.com/dosu-ai/dosu-cli/compare/v0.37.0-alpha.3...v0.37.0-alpha.4) (2026-07-31)
+
+
+### Bug Fixes
+
+* **setup:** standardize installation summaries ([1e976a5](https://github.com/dosu-ai/dosu-cli/commit/1e976a56b3bc56d77cf59f630dd546931bd9b510))
+
 # [0.37.0-alpha.3](https://github.com/dosu-ai/dosu-cli/compare/v0.37.0-alpha.2...v0.37.0-alpha.3) (2026-07-31)
 
 
