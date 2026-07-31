@@ -1,3 +1,10 @@
+# [0.37.0-alpha.5](https://github.com/dosu-ai/dosu-cli/compare/v0.37.0-alpha.4...v0.37.0-alpha.5) (2026-07-31)
+
+
+### Bug Fixes
+
+* **setup:** show skill installation progress ([c0067cf](https://github.com/dosu-ai/dosu-cli/commit/c0067cf736cb16416f4ecb2b45d51b0fc9f96185))
+
 # [0.37.0-alpha.4](https://github.com/dosu-ai/dosu-cli/compare/v0.37.0-alpha.3...v0.37.0-alpha.4) (2026-07-31)
 
 
