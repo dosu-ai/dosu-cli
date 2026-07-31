@@ -316,7 +316,11 @@ async function stepConfigureMcpTools(cfg: Config): Promise<ConfigResult[] | null
 export async function runInstallSkill(providerIDs: readonly string[]): Promise<boolean> {
   logger.info("setup", "Step: install skill");
   try {
-    const result = await installSkill(providerIDs);
+    // Interactive setup owns the summary UI. Keep the nested skills installer
+    // quiet so its progress screens do not interrupt the standardized setup
+    // results below. The standalone `dosu skill install` command remains
+    // verbose.
+    const result = await installSkill(providerIDs, { quiet: true });
     if (result.success) {
       logger.info("setup", `Skill installed${result.sha ? ` sha=${result.sha}` : ""}`);
       p.log.success("Skill installed");
