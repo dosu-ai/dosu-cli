@@ -23,8 +23,35 @@ const SUPPORTED_SKILL_AGENTS = [
   "antigravity",
 ];
 
-function supportedSkillAgentArgs(): string {
-  return SUPPORTED_SKILL_AGENTS.map((agent) => `-a ${agent}`).join(" ");
+const SKILL_AGENT_BY_PROVIDER: Readonly<Record<string, string>> = {
+  claude: "claude-code",
+  cursor: "cursor",
+  vscode: "github-copilot",
+  gemini: "gemini-cli",
+  codex: "codex",
+  windsurf: "windsurf",
+  zed: "zed",
+  cline: "cline",
+  "cline-cli": "cline",
+  copilot: "github-copilot",
+  opencode: "opencode",
+  antigravity: "antigravity",
+};
+
+export function skillAgentIDsForProviders(providerIDs: readonly string[]): string[] {
+  return [
+    ...new Set(
+      providerIDs
+        .map((providerID) => SKILL_AGENT_BY_PROVIDER[providerID])
+        .filter((agent): agent is string => Boolean(agent)),
+    ),
+  ];
+}
+
+function skillAgentArgs(providerIDs?: readonly string[]): string {
+  const agents =
+    providerIDs === undefined ? SUPPORTED_SKILL_AGENTS : skillAgentIDsForProviders(providerIDs);
+  return agents.map((agent) => `-a ${agent}`).join(" ");
 }
 
 /**
@@ -34,10 +61,19 @@ function supportedSkillAgentArgs(): string {
  * installed, the SHA is just not cached (the update checker will fill it
  * in on the next stale check).
  */
-export async function installSkill(): Promise<{ success: boolean; sha?: string }> {
+export async function installSkill(
+  providerIDs?: readonly string[],
+  options: { quiet?: boolean } = {},
+): Promise<{ success: boolean; sha?: string }> {
+  const agentArgs = skillAgentArgs(providerIDs);
+  if (!agentArgs) {
+    logger.debug("skill", "No selected providers support the Dosu skill");
+    return { success: true };
+  }
+
   try {
-    execSync(`npx skills add ${SKILL_REPO} -g ${supportedSkillAgentArgs()} -s ${SKILL_NAME} -y`, {
-      stdio: "inherit",
+    execSync(`npx skills add ${SKILL_REPO} -g ${agentArgs} -s ${SKILL_NAME} -y`, {
+      stdio: options.quiet ? "pipe" : "inherit",
     });
   } catch (err) {
     logger.error("skill", `Failed to install skill: ${err}`);

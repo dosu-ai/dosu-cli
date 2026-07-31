@@ -8,7 +8,7 @@ vi.mock("node:child_process", () => ({
   execSync: (...args: unknown[]) => mockExecSync(...args),
 }));
 
-import { installSkill, skillCommand } from "./skill";
+import { installSkill, skillAgentIDsForProviders, skillCommand } from "./skill";
 
 let logSpy: ReturnType<typeof vi.spyOn>;
 let errorSpy: ReturnType<typeof vi.spyOn>;
@@ -172,6 +172,35 @@ describe("skill update", () => {
 });
 
 describe("installSkill helper", () => {
+  it("installs only for the selected MCP providers", async () => {
+    const result = await installSkill(["claude", "codex"]);
+
+    expect(result.success).toBe(true);
+    expect(mockExecSync).toHaveBeenCalledWith(
+      "npx skills add dosu-ai/dosu-skill -g -a claude-code -a codex -s dosu -y",
+      { stdio: "inherit" },
+    );
+  });
+
+  it("maps provider aliases and de-duplicates shared skill agents", () => {
+    expect(
+      skillAgentIDsForProviders(["vscode", "copilot", "cline", "cline-cli", "manual"]),
+    ).toEqual(["github-copilot", "cline"]);
+  });
+
+  it("keeps the installer quiet for agent-mediated setup", async () => {
+    await installSkill(["claude"], { quiet: true });
+
+    expect(mockExecSync).toHaveBeenCalledWith(expect.any(String), { stdio: "pipe" });
+  });
+
+  it("does not broaden an unsupported provider into an all-agent install", async () => {
+    const result = await installSkill(["manual"]);
+
+    expect(result.success).toBe(true);
+    expect(mockExecSync).not.toHaveBeenCalled();
+  });
+
   it("writes cache with SHA on success", async () => {
     const result = await installSkill();
     expect(result.success).toBe(true);
