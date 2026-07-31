@@ -256,7 +256,7 @@ describe("runAgentSetup", () => {
     expect(events.at(-1)).toMatchObject({
       step: "done",
       status: "ok",
-      agent_next_steps: expect.stringContaining("Claude Code"),
+      agent_next_steps: expect.stringMatching(/Claude Code.*dosu status --json/),
     });
   });
 

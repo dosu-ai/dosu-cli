@@ -553,6 +553,106 @@ describe("CLI actions", () => {
       expect(logSpy).toHaveBeenCalledWith("Mode: OSS");
       expect(logSpy).toHaveBeenCalledWith("MCP: Public libraries only");
     });
+
+    it("outputs configured cloud status as JSON without secrets", async () => {
+      saveConfig(authenticatedConfig());
+
+      await run("status", "--json");
+
+      expect(logSpy).toHaveBeenCalledTimes(1);
+      const output = allLogOutput();
+      expect(JSON.parse(output)).toEqual({
+        authenticated: true,
+        session_status: "valid",
+        mode: "cloud",
+        mcp: {
+          status: "configured",
+          deployment_id: "dep_123",
+          deployment_name: "My App",
+        },
+      });
+      expect(output).not.toContain("tok_abc");
+      expect(output).not.toContain("ref_abc");
+      expect(output).not.toContain("key_abc");
+    });
+
+    it("outputs missing authentication as JSON", async () => {
+      await run("status", "--json");
+
+      expect(logSpy).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(allLogOutput())).toEqual({
+        authenticated: false,
+        session_status: "missing",
+        mode: "cloud",
+        mcp: {
+          status: "not_configured",
+          deployment_id: null,
+          deployment_name: null,
+        },
+      });
+    });
+
+    it("outputs an expired session as JSON", async () => {
+      const cfg = authenticatedConfig();
+      testSession(cfg).expires_at = Math.floor(Date.now() / 1000) - 1000;
+      testSession(cfg).refresh_token = "";
+      saveConfig(cfg);
+
+      await run("status", "--json");
+
+      expect(logSpy).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(allLogOutput())).toEqual({
+        authenticated: false,
+        session_status: "expired",
+        mode: "cloud",
+        mcp: {
+          status: "configured",
+          deployment_id: "dep_123",
+          deployment_name: "My App",
+        },
+      });
+    });
+
+    it("outputs an unconfigured cloud MCP as JSON", async () => {
+      const cfg = authenticatedConfig();
+      testTarget(cfg).deployment_id = undefined;
+      testTarget(cfg).deployment_name = undefined;
+      saveConfig(cfg);
+
+      await run("status", "--json");
+
+      expect(JSON.parse(allLogOutput())).toEqual({
+        authenticated: true,
+        session_status: "valid",
+        mode: "cloud",
+        mcp: {
+          status: "not_configured",
+          deployment_id: null,
+          deployment_name: null,
+        },
+      });
+    });
+
+    it("outputs OSS status as JSON", async () => {
+      const cfg = authenticatedConfig();
+      cfg.mode = "oss";
+      testTarget(cfg).deployment_id = undefined;
+      testTarget(cfg).deployment_name = undefined;
+      saveConfig(cfg);
+
+      await run("status", "--json");
+
+      expect(JSON.parse(allLogOutput())).toEqual({
+        authenticated: true,
+        session_status: "valid",
+        mode: "oss",
+        mcp: {
+          status: "public_libraries",
+          deployment_id: null,
+          deployment_name: null,
+        },
+      });
+    });
   });
 
   // ── mcp list ────────────────────────────────────────────────────────────

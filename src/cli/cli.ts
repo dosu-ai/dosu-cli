@@ -247,14 +247,66 @@ export function createProgram(): Command {
   program
     .command("status")
     .description("Show current authentication and MCP status")
-    .action(async () => {
+    .option("--json", "Output as JSON")
+    .action(async (opts: { json?: boolean }) => {
       const cfg = loadConfig();
+      const mode = cfg.mode === MODE_OSS ? "oss" : "cloud";
       if (!isAuthenticated(cfg)) {
+        if (opts.json) {
+          console.log(
+            JSON.stringify(
+              {
+                authenticated: false,
+                session_status: "missing",
+                mode,
+                mcp: {
+                  status: "not_configured",
+                  deployment_id: null,
+                  deployment_name: null,
+                },
+              },
+              null,
+              2,
+            ),
+          );
+          return;
+        }
         console.log("Status: Not logged in");
         console.log("Run 'dosu login' to authenticate.");
         return;
       }
-      if (isTokenExpired(cfg) && !(await ensureFreshSession(cfg))) {
+
+      const sessionStatus =
+        isTokenExpired(cfg) && !(await ensureFreshSession(cfg)) ? "expired" : "valid";
+      if (opts.json) {
+        const deploymentId = cfg.active_account.target?.deployment_id ?? null;
+        const deploymentName = cfg.active_account.target?.deployment_name ?? null;
+        const mcpStatus =
+          cfg.mode === MODE_OSS
+            ? "public_libraries"
+            : deploymentId
+              ? "configured"
+              : "not_configured";
+        console.log(
+          JSON.stringify(
+            {
+              authenticated: sessionStatus === "valid",
+              session_status: sessionStatus,
+              mode,
+              mcp: {
+                status: mcpStatus,
+                deployment_id: deploymentId,
+                deployment_name: deploymentName,
+              },
+            },
+            null,
+            2,
+          ),
+        );
+        return;
+      }
+
+      if (sessionStatus === "expired") {
         console.log("Status: Token expired");
         console.log("Run 'dosu login' to re-authenticate.");
       } else {
