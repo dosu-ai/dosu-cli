@@ -1,3 +1,4 @@
+import { stripVTControlCharacters } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import {
   bold,
@@ -72,10 +73,12 @@ describe("styles", () => {
     });
 
     it("formats labeled installation paths with optional status", () => {
-      const summary = formatSetupSummary("Skill ready for 2 agent(s):", [
-        { label: "Claude Code", path: "/tmp/claude/skills/dosu", status: "symlink" },
-        { label: "Codex CLI", path: "/tmp/agents/skills/dosu" },
-      ]);
+      const summary = stripVTControlCharacters(
+        formatSetupSummary("Skill ready for 2 agent(s):", [
+          { label: "Claude Code", path: "/tmp/claude/skills/dosu", status: "symlink" },
+          { label: "Codex CLI", path: "/tmp/agents/skills/dosu" },
+        ]),
+      );
 
       expect(summary).toContain("Skill ready for 2 agent(s):");
       expect(summary).toContain("+ Claude Code\n  /tmp/claude/skills/dosu (symlink)");
@@ -84,12 +87,16 @@ describe("styles", () => {
 
     it("formats an unlabeled path and supports a custom marker", () => {
       expect(
-        formatSetupSummary("AGENTS.md", [
-          { path: "/tmp/project/AGENTS.md", status: "already up to date" },
-        ]),
+        stripVTControlCharacters(
+          formatSetupSummary("AGENTS.md", [
+            { path: "/tmp/project/AGENTS.md", status: "already up to date" },
+          ]),
+        ),
       ).toContain("+ /tmp/project/AGENTS.md (already up to date)");
       expect(
-        formatSetupSummary("Removed", [{ label: "Codex CLI", path: "/tmp/config" }], IconRemove),
+        stripVTControlCharacters(
+          formatSetupSummary("Removed", [{ label: "Codex CLI", path: "/tmp/config" }], IconRemove),
+        ),
       ).toContain("- Codex CLI\n  /tmp/config");
     });
   });
