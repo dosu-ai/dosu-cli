@@ -53,6 +53,7 @@ describe("CLI", () => {
     const cmd = program.commands.find((c) => c.name() === "status");
     expect(cmd).toBeDefined();
     expect(cmd?.description()).toContain("status");
+    expect(cmd?.options.find((o) => o.long === "--json")).toBeDefined();
   });
 
   it("has mcp command with add and list subcommands", () => {
