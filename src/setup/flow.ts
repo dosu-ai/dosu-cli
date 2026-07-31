@@ -7,7 +7,7 @@ import * as p from "@clack/prompts";
 import type { CallbackServer } from "../auth/server";
 import { Client, type Deployment, type Org, SessionExpiredError } from "../client/client";
 import type { TypedClient } from "../client/trpc";
-import { installSkill, skillAgentIDsForProviders } from "../commands/skill";
+import { installSkill, skillInstallTargetForProvider } from "../commands/skill";
 import {
   bindAccountIdentity,
   type Config,
@@ -25,7 +25,7 @@ import { inGitWorkTree, stepUpdateAgentsMd } from "./agents-md-step";
 import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
 import { launchAuditAgent, offerAuditHandoff } from "./audit-handoff";
 import { stepConfigureAgentRules } from "./rules-step";
-import { browserFallbackHint, dim, info } from "./styles";
+import { browserFallbackHint, dim, formatSetupSummary, IconRemove, info } from "./styles";
 
 export interface SetupOptions {
   deploymentID?: string;
@@ -216,9 +216,11 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   // Unsupported clients are left alone rather than broadening the install
   // to every agent on the machine.
   let skillCompleted = false;
-  const selectedProviderIDs = configuredProviders.map((result) => result.provider.id());
-  if (skillAgentIDsForProviders(selectedProviderIDs).length > 0) {
-    skillCompleted = await runInstallSkill(selectedProviderIDs);
+  const skillProviders = configuredProviders
+    .map((result) => result.provider)
+    .filter((provider) => skillInstallTargetForProvider(provider.id()) !== null);
+  if (skillProviders.length > 0) {
+    skillCompleted = await runInstallSkill(skillProviders);
     if (skillCompleted) {
       await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_skill_installed");
     }
@@ -310,20 +312,34 @@ async function stepConfigureMcpTools(cfg: Config): Promise<ConfigResult[] | null
 }
 
 /**
- * Install the skill for the same provider ids selected during MCP setup.
+ * Install the skill for the same providers selected during MCP setup.
  * Returns `true` on success.
  */
-export async function runInstallSkill(providerIDs: readonly string[]): Promise<boolean> {
+export async function runInstallSkill(providers: readonly SetupProvider[]): Promise<boolean> {
   logger.info("setup", "Step: install skill");
   try {
     // Interactive setup owns the summary UI. Keep the nested skills installer
     // quiet so its progress screens do not interrupt the standardized setup
     // results below. The standalone `dosu skill install` command remains
     // verbose.
-    const result = await installSkill(providerIDs, { quiet: true });
+    const result = await installSkill(
+      providers.map((provider) => provider.id()),
+      { quiet: true },
+    );
     if (result.success) {
       logger.info("setup", `Skill installed${result.sha ? ` sha=${result.sha}` : ""}`);
-      p.log.success("Skill installed");
+      const items = providers.flatMap((provider) => {
+        const target = skillInstallTargetForProvider(provider.id());
+        if (!target) return [];
+        return [
+          {
+            label: provider.name(),
+            path: target.path,
+            status: target.symlink ? "symlink" : undefined,
+          },
+        ];
+      });
+      p.log.success(formatSetupSummary(`Skill ready for ${items.length} agent(s):`, items));
       return true;
     }
     p.log.error("Failed to install skill. Run `dosu skill install` to retry.");
@@ -890,17 +906,28 @@ export function stepShowSummary(results: ConfigResult[]): void {
   const skipped = results.filter((r) => r.action === "skip");
 
   if (installed.length > 0) {
-    const lines = installed
-      .map((r) => `+ ${r.provider.name()}\n  ${dim(r.provider.globalConfigPath())}`)
-      .join("\n");
-    p.log.success(`Configured ${installed.length} agent(s):\n${lines}`);
+    p.log.success(
+      formatSetupSummary(
+        `Configured ${installed.length} agent(s):`,
+        installed.map((result) => ({
+          label: result.provider.name(),
+          path: result.provider.globalConfigPath(),
+        })),
+      ),
+    );
   }
 
   if (removed.length > 0) {
-    const lines = removed
-      .map((r) => `- ${r.provider.name()}\n  ${dim(r.provider.globalConfigPath())}`)
-      .join("\n");
-    p.log.info(`Removed from ${removed.length} agent(s):\n${lines}`);
+    p.log.info(
+      formatSetupSummary(
+        `Removed from ${removed.length} agent(s):`,
+        removed.map((result) => ({
+          label: result.provider.name(),
+          path: result.provider.globalConfigPath(),
+        })),
+        IconRemove,
+      ),
+    );
   }
 
   if (installed.length === 0 && removed.length === 0 && skipped.length > 0) {

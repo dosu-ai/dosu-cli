@@ -99,6 +99,8 @@ describe("stepConfigureAgentRules", () => {
     expect(mockInstallRuleForAgent).toHaveBeenCalledWith("cursor", "canonical rule\n");
     expect(results).toHaveLength(2);
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Rules ready for 2 agent"));
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Agent claude"));
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("/rules/claude.md"));
   });
 
   it("does not install a rule when MCP configuration failed", async () => {

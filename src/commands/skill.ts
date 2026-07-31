@@ -3,6 +3,8 @@
  */
 
 import { execSync } from "node:child_process";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { Command } from "commander";
 import pc from "picocolors";
 import { logger } from "../debug/logger";
@@ -46,6 +48,33 @@ export function skillAgentIDsForProviders(providerIDs: readonly string[]): strin
         .filter((agent): agent is string => Boolean(agent)),
     ),
   ];
+}
+
+export interface SkillInstallTarget {
+  path: string;
+  symlink: boolean;
+}
+
+export function skillInstallTargetForProvider(providerID: string): SkillInstallTarget | null {
+  const agentID = SKILL_AGENT_BY_PROVIDER[providerID];
+  if (!agentID) return null;
+
+  if (agentID === "claude-code") {
+    const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), ".claude");
+    return { path: join(claudeConfigDir, "skills", SKILL_NAME), symlink: true };
+  }
+
+  if (agentID === "windsurf") {
+    return {
+      path: join(homedir(), ".codeium", "windsurf", "skills", SKILL_NAME),
+      symlink: true,
+    };
+  }
+
+  return {
+    path: join(homedir(), ".agents", "skills", SKILL_NAME),
+    symlink: false,
+  };
 }
 
 function skillAgentArgs(providerIDs?: readonly string[]): string {

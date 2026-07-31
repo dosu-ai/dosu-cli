@@ -17,7 +17,7 @@ import {
   removeRuleForAgent,
   rulePathForAgent,
 } from "../rules/installer";
-import { dim } from "./styles";
+import { formatSetupSummary, IconRemove } from "./styles";
 
 interface SetupSelection {
   toInstall: SetupProvider[];
@@ -54,17 +54,22 @@ function logRuleResults(results: AgentRuleSetupResult[]): void {
   const removed = results.filter((result) => !result.error && result.action === "removed");
 
   if (ready.length > 0) {
-    const lines = ready
-      .map((result) => `+ ${result.provider.name()}\n  ${dim(result.path)}`)
-      .join("\n");
-    p.log.success(`Rules ready for ${ready.length} agent(s):\n${lines}`);
+    p.log.success(
+      formatSetupSummary(
+        `Rules ready for ${ready.length} agent(s):`,
+        ready.map((result) => ({ label: result.provider.name(), path: result.path })),
+      ),
+    );
   }
 
   if (removed.length > 0) {
-    const lines = removed
-      .map((result) => `- ${result.provider.name()}\n  ${dim(result.path)}`)
-      .join("\n");
-    p.log.info(`Rules removed from ${removed.length} agent(s):\n${lines}`);
+    p.log.info(
+      formatSetupSummary(
+        `Rules removed from ${removed.length} agent(s):`,
+        removed.map((result) => ({ label: result.provider.name(), path: result.path })),
+        IconRemove,
+      ),
+    );
   }
 }
 

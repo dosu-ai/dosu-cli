@@ -14,7 +14,7 @@ import { join } from "node:path";
 import * as p from "@clack/prompts";
 import { logger } from "../debug/logger";
 import { FALLBACK_DOSU_RULE, fetchDosuRule } from "../rules/installer";
-import { dim } from "./styles";
+import { formatSetupSummary } from "./styles";
 
 /**
  * Bump when the section content changes meaningfully. The version is stamped
@@ -144,11 +144,8 @@ export async function stepUpdateAgentsMd(
   try {
     const result = upsertDosuAgentsSection(cwd, content ?? (await fetchDosuRule()));
     logger.info("setup", `AGENTS.md ${result.action} at ${result.path}`);
-    if (result.action === "unchanged") {
-      p.log.success(`AGENTS.md\n${dim("Dosu section already up to date")}`);
-    } else {
-      p.log.success(`AGENTS.md\n${dim(`Dosu section ${result.action} — ${result.path}`)}`);
-    }
+    const status = result.action === "unchanged" ? "already up to date" : result.action;
+    p.log.success(formatSetupSummary("AGENTS.md", [{ path: result.path, status }]));
     return true;
   } catch (err: unknown) {
     /* v8 ignore next -- err is always Error in practice */
