@@ -1,7 +1,7 @@
 /**
  * AGENTS.md step — writes a marker-delimited Dosu section into the repo's
- * AGENTS.md during setup so coding agents are prompted to lean on the Dosu
- * MCP tools (pull knowledge before a task, write learnings back after).
+ * AGENTS.md during setup so coding agents receive the canonical Dosu
+ * knowledge instructions.
  *
  * The section lives between HTML-comment markers so re-running setup updates
  * it in place instead of appending duplicates, and users can freely edit the
@@ -13,15 +13,14 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as p from "@clack/prompts";
 import { logger } from "../debug/logger";
-import { dosuInvocation } from "./audit-handoff";
-import { dim } from "./styles";
+import { FALLBACK_DOSU_RULE, fetchDosuRule } from "../rules/installer";
+import { formatSetupSummary } from "./styles";
 
 /**
  * Bump when the section content changes meaningfully. The version is stamped
- * into the start marker so the CLI can tell whether a repo's section is
- * stale without diffing content (which varies with the embedded invocation).
+ * into the start marker so the CLI can tell whether a repo's section is stale.
  */
-export const DOSU_SECTION_VERSION = 1;
+export const DOSU_SECTION_VERSION = 2;
 
 export const DOSU_SECTION_START = `<!-- dosu:mcp:start v${DOSU_SECTION_VERSION} -->`;
 export const DOSU_SECTION_END = "<!-- dosu:mcp:end -->";
@@ -34,6 +33,11 @@ export type AgentsMdAction = "created" | "updated" | "unchanged";
 export interface AgentsMdResult {
   path: string;
   action: AgentsMdAction;
+}
+
+interface SectionLocation {
+  start: number;
+  end: number;
 }
 
 /**
@@ -55,19 +59,29 @@ export function inGitWorkTree(cwd: string = process.cwd()): boolean {
   }
 }
 
-export function buildDosuAgentsSection(dosuCmd: string = dosuInvocation()): string {
-  return [
-    DOSU_SECTION_START,
-    "## Dosu",
-    "",
-    "Shared team knowledge lives in [Dosu](https://dosu.dev), via the Dosu MCP server.",
-    "",
-    "- Before a task, and for any codebase or docs questions: pull context with `read_knowledge` before digging through source.",
-    "- After a task: save durable learnings with `write_knowledge`.",
-    "",
-    `Missing these tools? Run \`${dosuCmd} setup --help\` — it covers agent-assisted setup.`,
-    DOSU_SECTION_END,
-  ].join("\n");
+function lineEndingFor(content: string): "\r\n" | "\n" {
+  return content.includes("\r\n") ? "\r\n" : "\n";
+}
+
+function renderDosuAgentsSection(content: string, lineEnding: "\r\n" | "\n"): string {
+  const body = content.trim().replace(/\r?\n/g, lineEnding);
+  return `${DOSU_SECTION_START}${lineEnding}${body}${lineEnding}${DOSU_SECTION_END}`;
+}
+
+export function buildDosuAgentsSection(content: string = FALLBACK_DOSU_RULE): string {
+  return renderDosuAgentsSection(content, "\n");
+}
+
+function findSection(content: string): SectionLocation | null {
+  const startMatch = content.match(SECTION_START_RE);
+  const start = startMatch?.index ?? -1;
+  const end = content.indexOf(DOSU_SECTION_END, Math.max(start, 0));
+
+  if (start === -1 && end === -1) return null;
+  if (start === -1 || end < start) {
+    throw new Error("Dosu AGENTS.md markers are incomplete; refusing to overwrite the file");
+  }
+  return { start, end };
 }
 
 /**
@@ -76,26 +90,29 @@ export function buildDosuAgentsSection(dosuCmd: string = dosuInvocation()): stri
  */
 export function upsertDosuAgentsSection(
   cwd: string = process.cwd(),
-  dosuCmd: string = dosuInvocation(),
+  content: string = FALLBACK_DOSU_RULE,
 ): AgentsMdResult {
   const path = join(cwd, "AGENTS.md");
-  const section = buildDosuAgentsSection(dosuCmd);
 
   if (!existsSync(path)) {
+    const section = buildDosuAgentsSection(content);
     writeFileSync(path, `${section}\n`);
     return { path, action: "created" };
   }
 
   const existing = readFileSync(path, "utf-8");
-  const startMatch = existing.match(SECTION_START_RE);
-  const start = startMatch?.index ?? -1;
-  const end = existing.indexOf(DOSU_SECTION_END);
+  const lineEnding = lineEndingFor(existing);
+  const section = renderDosuAgentsSection(content, lineEnding);
+  const location = findSection(existing);
 
   let next: string;
-  if (start !== -1 && end !== -1 && end >= start) {
-    next = existing.slice(0, start) + section + existing.slice(end + DOSU_SECTION_END.length);
+  if (location) {
+    next =
+      existing.slice(0, location.start) +
+      section +
+      existing.slice(location.end + DOSU_SECTION_END.length);
   } else {
-    next = `${existing.trimEnd()}\n\n${section}\n`;
+    next = `${existing.trimEnd()}${lineEnding}${lineEnding}${section}${lineEnding}`;
   }
 
   if (next === existing) return { path, action: "unchanged" };
@@ -119,16 +136,16 @@ export function installedDosuSectionVersion(content: string): number | null {
  * `true` when AGENTS.md ends up carrying the Dosu section (including the
  * already-up-to-date case).
  */
-export function stepUpdateAgentsMd(cwd: string = process.cwd()): boolean {
+export async function stepUpdateAgentsMd(
+  cwd: string = process.cwd(),
+  content?: string,
+): Promise<boolean> {
   logger.info("setup", "Step: update AGENTS.md");
   try {
-    const result = upsertDosuAgentsSection(cwd);
+    const result = upsertDosuAgentsSection(cwd, content ?? (await fetchDosuRule()));
     logger.info("setup", `AGENTS.md ${result.action} at ${result.path}`);
-    if (result.action === "unchanged") {
-      p.log.success(`AGENTS.md\n${dim("Dosu section already up to date")}`);
-    } else {
-      p.log.success(`AGENTS.md\n${dim(`Dosu section ${result.action} — ${result.path}`)}`);
-    }
+    const status = result.action === "unchanged" ? "already up to date" : result.action;
+    p.log.success(formatSetupSummary("AGENTS.md", [{ path: result.path, status }]));
     return true;
   } catch (err: unknown) {
     /* v8 ignore next -- err is always Error in practice */

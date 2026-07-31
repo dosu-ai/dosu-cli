@@ -1,14 +1,21 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockExecSync = vi.fn();
+const mockExec = vi.fn();
 vi.mock("node:child_process", () => ({
+  exec: (...args: unknown[]) => mockExec(...args),
   execSync: (...args: unknown[]) => mockExecSync(...args),
 }));
 
-import { installSkill, skillCommand } from "./skill";
+import {
+  installSkill,
+  skillAgentIDsForProviders,
+  skillCommand,
+  skillInstallTargetForProvider,
+} from "./skill";
 
 let logSpy: ReturnType<typeof vi.spyOn>;
 let errorSpy: ReturnType<typeof vi.spyOn>;
@@ -33,6 +40,11 @@ async function run(...args: string[]) {
 }
 
 beforeEach(() => {
+  mockExec.mockReset();
+  mockExec.mockImplementation((...args: unknown[]) => {
+    const callback = args.at(-1) as (error: Error | null) => void;
+    callback(null);
+  });
   mockExecSync.mockReset();
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -66,6 +78,7 @@ afterEach(() => {
     delete process.env.XDG_CONFIG_HOME;
   }
   rmSync(tempDir, { recursive: true, force: true });
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
@@ -172,6 +185,78 @@ describe("skill update", () => {
 });
 
 describe("installSkill helper", () => {
+  it("installs only for the selected MCP providers", async () => {
+    const result = await installSkill(["claude", "codex"]);
+
+    expect(result.success).toBe(true);
+    expect(mockExecSync).toHaveBeenCalledWith(
+      "npx skills add dosu-ai/dosu-skill -g -a claude-code -a codex -s dosu -y",
+      { stdio: "inherit" },
+    );
+  });
+
+  it("maps provider aliases and de-duplicates shared skill agents", () => {
+    expect(
+      skillAgentIDsForProviders(["vscode", "copilot", "cline", "cline-cli", "manual"]),
+    ).toEqual(["github-copilot", "cline"]);
+  });
+
+  it("reports the Claude symlink target and respects CLAUDE_CONFIG_DIR", () => {
+    vi.stubEnv("CLAUDE_CONFIG_DIR", "/tmp/custom-claude");
+
+    expect(skillInstallTargetForProvider("claude")).toEqual({
+      path: "/tmp/custom-claude/skills/dosu",
+      symlink: true,
+    });
+  });
+
+  it("reports the universal skill target for Codex", () => {
+    expect(skillInstallTargetForProvider("codex")).toEqual({
+      path: join(homedir(), ".agents", "skills", "dosu"),
+      symlink: false,
+    });
+  });
+
+  it("reports the Windsurf symlink target", () => {
+    expect(skillInstallTargetForProvider("windsurf")).toEqual({
+      path: join(homedir(), ".codeium", "windsurf", "skills", "dosu"),
+      symlink: true,
+    });
+  });
+
+  it("returns null for a provider without skill support", () => {
+    expect(skillInstallTargetForProvider("manual")).toBeNull();
+  });
+
+  it("keeps the installer quiet for agent-mediated setup", async () => {
+    await installSkill(["claude"], { quiet: true });
+
+    expect(mockExec).toHaveBeenCalledWith(
+      expect.any(String),
+      { windowsHide: true },
+      expect.any(Function),
+    );
+    expect(mockExecSync).not.toHaveBeenCalled();
+  });
+
+  it("returns failure when the async quiet installer fails", async () => {
+    mockExec.mockImplementation((...args: unknown[]) => {
+      const callback = args.at(-1) as (error: Error | null) => void;
+      callback(new Error("command failed"));
+    });
+
+    const result = await installSkill(["claude"], { quiet: true });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("does not broaden an unsupported provider into an all-agent install", async () => {
+    const result = await installSkill(["manual"]);
+
+    expect(result.success).toBe(true);
+    expect(mockExecSync).not.toHaveBeenCalled();
+  });
+
   it("writes cache with SHA on success", async () => {
     const result = await installSkill();
     expect(result.success).toBe(true);
