@@ -1,3 +1,10 @@
+# [0.37.0-alpha.1](https://github.com/dosu-ai/dosu-cli/compare/v0.36.0...v0.37.0-alpha.1) (2026-07-31)
+
+
+### Features
+
+* **setup:** install complete agent bundle ([349d9e0](https://github.com/dosu-ai/dosu-cli/commit/349d9e03d4b73aaa1c41869e71ca2d5b95959cc7))
+
 # [0.36.0](https://github.com/dosu-ai/dosu-cli/compare/v0.35.4...v0.36.0) (2026-07-28)
 
 
