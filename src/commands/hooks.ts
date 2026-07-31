@@ -125,9 +125,18 @@ export async function runUserPromptSubmit(
     return;
   }
 
-  // One active ticket per session: reuse a live pending ticket; don't mint a second.
+  const turnId = input.turn_id ?? String(now);
+
+  // Reuse only a duplicate submit from the same turn. A new turn must replace
+  // the session's active ticket so its Stop hook cannot inject stale context.
   const existing = loadState(sessionId);
-  if (existing && existing.status === "pending" && now <= existing.expiresAt) {
+  if (
+    existing &&
+    existing.status === "pending" &&
+    now <= existing.expiresAt &&
+    input.turn_id !== undefined &&
+    existing.turnId === turnId
+  ) {
     logger.debug("hooks", `submit sid=${sid8(sessionId)} reuse tid=${existing.ticketId}`);
     return;
   }
@@ -146,7 +155,7 @@ export async function runUserPromptSubmit(
       deployment_id: cfg.active_account?.target?.deployment_id,
       agent,
       session_id: sessionId,
-      turn_id: input.turn_id ?? String(now),
+      turn_id: turnId,
       prompt,
       repo: repoSlug(input.cwd),
     });
@@ -158,7 +167,7 @@ export async function runUserPromptSubmit(
   saveState({
     ticketId: resp.ticket_id,
     sessionId,
-    turnId: input.turn_id ?? String(now),
+    turnId,
     status: "pending",
     createdAt: now,
     expiresAt: now + ttlMs(),
