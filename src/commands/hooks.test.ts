@@ -1,7 +1,14 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
+
+vi.mock("node:child_process", () => ({
+  execFileSync: vi.fn(() => {
+    throw new Error("git unavailable");
+  }),
+}));
 
 vi.mock("../debug/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), init: vi.fn() },
@@ -156,6 +163,70 @@ describe("runUserPromptSubmit", () => {
     await runUserPromptSubmit({ session_id: "s", prompt: "real" });
     expect(requestCreateTicket).not.toHaveBeenCalled();
     expect(stdout()).toBe("");
+  });
+
+  it("sends the git remote url and current branch when available", async () => {
+    vi.mocked(loadState).mockReturnValue(null);
+    vi.mocked(requestCreateTicket).mockResolvedValue({
+      ticket_id: "kt_git",
+      status: "pending",
+      created_at: "x",
+      expires_at: "y",
+    });
+    vi.mocked(execFileSync)
+      .mockReturnValueOnce("git@github.com:dosu-ai/dosu.git\n")
+      .mockReturnValueOnce("feat-x\n");
+
+    await runUserPromptSubmit({
+      session_id: "sess",
+      prompt: "investigate X",
+      cwd: "/Users/me/work/myrepo",
+    });
+
+    expect(execFileSync).toHaveBeenCalledWith(
+      "git",
+      ["remote", "get-url", "origin"],
+      expect.objectContaining({ cwd: "/Users/me/work/myrepo" }),
+    );
+    expect(requestCreateTicket).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ repo: "git@github.com:dosu-ai/dosu.git", branch: "feat-x" }),
+    );
+  });
+
+  it("omits branch on detached HEAD but keeps the remote url", async () => {
+    vi.mocked(loadState).mockReturnValue(null);
+    vi.mocked(requestCreateTicket).mockResolvedValue({
+      ticket_id: "kt_detached",
+      status: "pending",
+      created_at: "x",
+      expires_at: "y",
+    });
+    vi.mocked(execFileSync)
+      .mockReturnValueOnce("git@github.com:dosu-ai/dosu.git\n")
+      .mockReturnValueOnce("");
+
+    await runUserPromptSubmit({ session_id: "sess", prompt: "x", cwd: "/w/myrepo" });
+
+    const arg = vi.mocked(requestCreateTicket).mock.calls[0][1];
+    expect(arg.repo).toBe("git@github.com:dosu-ai/dosu.git");
+    expect(arg.branch).toBeUndefined();
+  });
+
+  it("falls back to the cwd basename when git is unavailable", async () => {
+    vi.mocked(loadState).mockReturnValue(null);
+    vi.mocked(requestCreateTicket).mockResolvedValue({
+      ticket_id: "kt_nogit",
+      status: "pending",
+      created_at: "x",
+      expires_at: "y",
+    });
+
+    await runUserPromptSubmit({ session_id: "sess", prompt: "x", cwd: "/w/myrepo" });
+
+    const arg = vi.mocked(requestCreateTicket).mock.calls[0][1];
+    expect(arg.repo).toBe("myrepo");
+    expect(arg.branch).toBeUndefined();
   });
 
   it("reuses a live pending ticket from the same turn", async () => {
