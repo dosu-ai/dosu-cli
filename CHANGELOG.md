@@ -1,3 +1,10 @@
+# [0.38.0](https://github.com/dosu-ai/dosu-cli/compare/v0.37.1...v0.38.0) (2026-08-01)
+
+
+### Features
+
+* **status:** add machine-readable --json output ([#145](https://github.com/dosu-ai/dosu-cli/issues/145)) ([695bb46](https://github.com/dosu-ai/dosu-cli/commit/695bb46a93b39b782e22fc133a570ef7bd50ec39))
+
 ## [0.37.1](https://github.com/dosu-ai/dosu-cli/compare/v0.37.0...v0.37.1) (2026-08-01)
 
 
