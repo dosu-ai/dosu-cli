@@ -2,7 +2,9 @@
  * `dosu skill` — manage the Dosu agent skill.
  */
 
-import { execSync } from "node:child_process";
+import { exec, execSync } from "node:child_process";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { Command } from "commander";
 import pc from "picocolors";
 import { logger } from "../debug/logger";
@@ -23,8 +25,71 @@ const SUPPORTED_SKILL_AGENTS = [
   "antigravity",
 ];
 
-function supportedSkillAgentArgs(): string {
-  return SUPPORTED_SKILL_AGENTS.map((agent) => `-a ${agent}`).join(" ");
+const SKILL_AGENT_BY_PROVIDER: Readonly<Record<string, string>> = {
+  claude: "claude-code",
+  cursor: "cursor",
+  vscode: "github-copilot",
+  gemini: "gemini-cli",
+  codex: "codex",
+  windsurf: "windsurf",
+  zed: "zed",
+  cline: "cline",
+  "cline-cli": "cline",
+  copilot: "github-copilot",
+  opencode: "opencode",
+  antigravity: "antigravity",
+};
+
+export function skillAgentIDsForProviders(providerIDs: readonly string[]): string[] {
+  return [
+    ...new Set(
+      providerIDs
+        .map((providerID) => SKILL_AGENT_BY_PROVIDER[providerID])
+        .filter((agent): agent is string => Boolean(agent)),
+    ),
+  ];
+}
+
+export interface SkillInstallTarget {
+  path: string;
+  symlink: boolean;
+}
+
+export function skillInstallTargetForProvider(providerID: string): SkillInstallTarget | null {
+  const agentID = SKILL_AGENT_BY_PROVIDER[providerID];
+  if (!agentID) return null;
+
+  if (agentID === "claude-code") {
+    const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), ".claude");
+    return { path: join(claudeConfigDir, "skills", SKILL_NAME), symlink: true };
+  }
+
+  if (agentID === "windsurf") {
+    return {
+      path: join(homedir(), ".codeium", "windsurf", "skills", SKILL_NAME),
+      symlink: true,
+    };
+  }
+
+  return {
+    path: join(homedir(), ".agents", "skills", SKILL_NAME),
+    symlink: false,
+  };
+}
+
+function skillAgentArgs(providerIDs?: readonly string[]): string {
+  const agents =
+    providerIDs === undefined ? SUPPORTED_SKILL_AGENTS : skillAgentIDsForProviders(providerIDs);
+  return agents.map((agent) => `-a ${agent}`).join(" ");
+}
+
+function execQuiet(command: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    exec(command, { windowsHide: true }, (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
 }
 
 /**
@@ -34,11 +99,20 @@ function supportedSkillAgentArgs(): string {
  * installed, the SHA is just not cached (the update checker will fill it
  * in on the next stale check).
  */
-export async function installSkill(): Promise<{ success: boolean; sha?: string }> {
+export async function installSkill(
+  providerIDs?: readonly string[],
+  options: { quiet?: boolean } = {},
+): Promise<{ success: boolean; sha?: string }> {
+  const agentArgs = skillAgentArgs(providerIDs);
+  if (!agentArgs) {
+    logger.debug("skill", "No selected providers support the Dosu skill");
+    return { success: true };
+  }
+
   try {
-    execSync(`npx skills add ${SKILL_REPO} -g ${supportedSkillAgentArgs()} -s ${SKILL_NAME} -y`, {
-      stdio: "inherit",
-    });
+    const command = `npx skills add ${SKILL_REPO} -g ${agentArgs} -s ${SKILL_NAME} -y`;
+    if (options.quiet) await execQuiet(command);
+    else execSync(command, { stdio: "inherit" });
   } catch (err) {
     logger.error("skill", `Failed to install skill: ${err}`);
     return { success: false };

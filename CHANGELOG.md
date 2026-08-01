@@ -1,3 +1,17 @@
+## [0.37.1](https://github.com/dosu-ai/dosu-cli/compare/v0.37.0...v0.37.1) (2026-08-01)
+
+
+### Bug Fixes
+
+* **hooks:** replace stale knowledge tickets on new turns ([#146](https://github.com/dosu-ai/dosu-cli/issues/146)) ([bcfaa4e](https://github.com/dosu-ai/dosu-cli/commit/bcfaa4e1f1b50530b4cd32cabe425ac64b087193))
+
+# [0.37.0](https://github.com/dosu-ai/dosu-cli/compare/v0.36.0...v0.37.0) (2026-07-31)
+
+
+### Features
+
+* **setup:** install complete agent bundle ([#144](https://github.com/dosu-ai/dosu-cli/issues/144)) ([ee85184](https://github.com/dosu-ai/dosu-cli/commit/ee85184ff07f11fd73dd6698114b0910bc878ca7))
+
 # [0.36.0](https://github.com/dosu-ai/dosu-cli/compare/v0.35.4...v0.36.0) (2026-07-28)
 
 

@@ -18,6 +18,13 @@ const {
   mockIsStdioOnly,
   mockClient,
   mockClientConstructor,
+  mockFetchDosuRule,
+  mockInstallRuleForAgent,
+  mockIsRuleAgent,
+  mockInstallSkill,
+  mockSkillAgentIDsForProviders,
+  mockInGitWorkTree,
+  mockUpsertDosuAgentsSection,
 } = vi.hoisted(() => {
   return {
     mockMintTicket: vi.fn(),
@@ -34,6 +41,13 @@ const {
       createAPIKey: vi.fn(),
     },
     mockClientConstructor: vi.fn(),
+    mockFetchDosuRule: vi.fn(),
+    mockInstallRuleForAgent: vi.fn(),
+    mockIsRuleAgent: vi.fn(),
+    mockInstallSkill: vi.fn(),
+    mockSkillAgentIDsForProviders: vi.fn(),
+    mockInGitWorkTree: vi.fn(),
+    mockUpsertDosuAgentsSection: vi.fn(),
   };
 });
 
@@ -54,6 +68,22 @@ vi.mock("../mcp/providers", () => ({
 
 vi.mock("../setup/flow", () => ({
   isStdioOnly: mockIsStdioOnly,
+}));
+
+vi.mock("../rules/installer", () => ({
+  fetchDosuRule: mockFetchDosuRule,
+  installRuleForAgent: mockInstallRuleForAgent,
+  isRuleAgent: mockIsRuleAgent,
+}));
+
+vi.mock("../commands/skill", () => ({
+  installSkill: mockInstallSkill,
+  skillAgentIDsForProviders: mockSkillAgentIDsForProviders,
+}));
+
+vi.mock("../setup/agents-md-step", () => ({
+  inGitWorkTree: mockInGitWorkTree,
+  upsertDosuAgentsSection: mockUpsertDosuAgentsSection,
 }));
 
 vi.mock("../client/client", () => ({
@@ -146,6 +176,13 @@ describe("runAgentSetup", () => {
     mockAllSetupProviders.mockReset();
     mockIsStdioOnly.mockReset();
     mockClientConstructor.mockReset();
+    mockFetchDosuRule.mockReset();
+    mockInstallRuleForAgent.mockReset();
+    mockIsRuleAgent.mockReset();
+    mockInstallSkill.mockReset();
+    mockSkillAgentIDsForProviders.mockReset();
+    mockInGitWorkTree.mockReset();
+    mockUpsertDosuAgentsSection.mockReset();
     for (const fn of Object.values(mockClient)) fn.mockReset();
 
     claudeProvider = makeProvider("claude", { name: () => "Claude Code" });
@@ -154,6 +191,22 @@ describe("runAgentSetup", () => {
     mockAllSetupProviders.mockReturnValue([claudeProvider, stdioProvider]);
     mockIsStdioOnly.mockImplementation((p: SetupProvider) => p.id() === "claude-desktop");
     mockLoadConfig.mockReturnValue(makeBaseConfig());
+    mockFetchDosuRule.mockResolvedValue("canonical rule\n");
+    mockIsRuleAgent.mockImplementation((agent: string) => agent === "claude");
+    mockInstallRuleForAgent.mockImplementation((agent: string) => ({
+      agent,
+      action: "created",
+      path: `/tmp/${agent}/rules/dosu.md`,
+    }));
+    mockSkillAgentIDsForProviders.mockImplementation((agents: string[]) =>
+      agents.includes("claude") ? ["claude-code"] : [],
+    );
+    mockInstallSkill.mockResolvedValue({ success: true, sha: "skill-sha" });
+    mockInGitWorkTree.mockReturnValue(false);
+    mockUpsertDosuAgentsSection.mockReturnValue({
+      action: "created",
+      path: "/tmp/repo/AGENTS.md",
+    });
   });
 
   afterEach(() => {
@@ -209,6 +262,7 @@ describe("runAgentSetup", () => {
   });
 
   it("redeems the ticket, picks the lone deployment, mints an API key, installs MCP", async () => {
+    mockInGitWorkTree.mockReturnValue(true);
     mockExchangeTicket.mockResolvedValue({
       status: "authenticated",
       access_token: ticketAccessToken,
@@ -245,6 +299,9 @@ describe("runAgentSetup", () => {
       "deployment",
       "api_key",
       "mcp_install",
+      "rule_install",
+      "skill_install",
+      "agents_md_install",
       "done",
     ]);
     expect(claudeProvider.install).toHaveBeenCalledTimes(1);
@@ -258,6 +315,9 @@ describe("runAgentSetup", () => {
       status: "ok",
       agent_next_steps: expect.stringMatching(/Claude Code.*dosu status --json/),
     });
+    expect(mockInstallRuleForAgent).toHaveBeenCalledWith("claude", "canonical rule\n");
+    expect(mockInstallSkill).toHaveBeenCalledWith(["claude"], { quiet: true });
+    expect(mockUpsertDosuAgentsSection).toHaveBeenCalledWith(process.cwd(), "canonical rule\n");
   });
 
   it("errors with multiple_deployments when the user has more than one dosu_mcp", async () => {
@@ -700,6 +760,98 @@ describe("runAgentSetup", () => {
       status: "error",
       reason: "install_failed",
       agent_next_steps: expect.stringContaining("disk full"),
+    });
+    expect(mockInstallRuleForAgent).not.toHaveBeenCalled();
+    expect(mockInstallSkill).not.toHaveBeenCalled();
+  });
+
+  it("reports a rule failure after preserving the installed MCP configuration", async () => {
+    mockLoadConfig.mockReturnValue(
+      makeBaseConfig({
+        access_token: ticketAccessToken,
+        refresh_token: "ref",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        deployment_id: "dep-locked",
+        deployment_name: "acme/locked",
+        api_key: "sk_existing",
+      }),
+    );
+    mockClient.doRequestRaw.mockResolvedValue(new Response(null, { status: 200 }));
+    mockClient.validateAPIKey.mockResolvedValue(true);
+    mockInstallRuleForAgent.mockImplementation(() => {
+      throw new Error("rule directory is read-only");
+    });
+
+    const code = await runAgentSetup({ tool: "claude" });
+
+    expect(code).toBe(1);
+    expect(claudeProvider.install).toHaveBeenCalledTimes(1);
+    expect(emittedEvents().at(-1)).toMatchObject({
+      step: "rule_install",
+      status: "error",
+      reason: "install_failed",
+      agent_next_steps: expect.stringContaining("idempotent"),
+    });
+    expect(mockInstallSkill).not.toHaveBeenCalled();
+  });
+
+  it("reports a skill failure after preserving the MCP and rule installation", async () => {
+    mockLoadConfig.mockReturnValue(
+      makeBaseConfig({
+        access_token: ticketAccessToken,
+        refresh_token: "ref",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        deployment_id: "dep-locked",
+        deployment_name: "acme/locked",
+        api_key: "sk_existing",
+      }),
+    );
+    mockClient.doRequestRaw.mockResolvedValue(new Response(null, { status: 200 }));
+    mockClient.validateAPIKey.mockResolvedValue(true);
+    mockInstallSkill.mockResolvedValue({ success: false });
+
+    const code = await runAgentSetup({ tool: "claude" });
+
+    expect(code).toBe(1);
+    expect(claudeProvider.install).toHaveBeenCalledTimes(1);
+    expect(mockInstallRuleForAgent).toHaveBeenCalledTimes(1);
+    expect(emittedEvents().at(-1)).toMatchObject({
+      step: "skill_install",
+      status: "error",
+      reason: "install_failed",
+      agent_next_steps: expect.stringContaining("idempotent"),
+    });
+  });
+
+  it("reports an AGENTS.md failure after preserving the other bundled installs", async () => {
+    mockLoadConfig.mockReturnValue(
+      makeBaseConfig({
+        access_token: ticketAccessToken,
+        refresh_token: "ref",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        deployment_id: "dep-locked",
+        deployment_name: "acme/locked",
+        api_key: "sk_existing",
+      }),
+    );
+    mockClient.doRequestRaw.mockResolvedValue(new Response(null, { status: 200 }));
+    mockClient.validateAPIKey.mockResolvedValue(true);
+    mockInGitWorkTree.mockReturnValue(true);
+    mockUpsertDosuAgentsSection.mockImplementation(() => {
+      throw new Error("AGENTS.md is read-only");
+    });
+
+    const code = await runAgentSetup({ tool: "claude" });
+
+    expect(code).toBe(1);
+    expect(claudeProvider.install).toHaveBeenCalledTimes(1);
+    expect(mockInstallRuleForAgent).toHaveBeenCalledTimes(1);
+    expect(mockInstallSkill).toHaveBeenCalledTimes(1);
+    expect(emittedEvents().at(-1)).toMatchObject({
+      step: "agents_md_install",
+      status: "error",
+      reason: "install_failed",
+      agent_next_steps: expect.stringContaining("idempotent"),
     });
   });
 

@@ -24,7 +24,7 @@ import { Argument, Command } from "commander";
 import { isAuthenticated, loadConfig, MODE_OSS } from "../config/config";
 import { logger } from "../debug/logger";
 import { STOP_PREFIX } from "../hooks/prompts";
-import { loadState, saveState, type TicketState } from "../hooks/state";
+import { clearState, loadState, saveState, type TicketState } from "../hooks/state";
 
 interface HookInput {
   session_id?: string;
@@ -125,12 +125,25 @@ export async function runUserPromptSubmit(
     return;
   }
 
-  // One active ticket per session: reuse a live pending ticket; don't mint a second.
+  const turnId = input.turn_id ?? String(now);
+
+  // Reuse only a duplicate submit from the same turn. A new turn must replace
+  // the session's active ticket so its Stop hook cannot inject stale context.
   const existing = loadState(sessionId);
-  if (existing && existing.status === "pending" && now <= existing.expiresAt) {
+  if (
+    existing &&
+    existing.status === "pending" &&
+    now <= existing.expiresAt &&
+    input.turn_id !== undefined &&
+    existing.turnId === turnId
+  ) {
     logger.debug("hooks", `submit sid=${sid8(sessionId)} reuse tid=${existing.ticketId}`);
     return;
   }
+
+  // A new turn supersedes the session's prior ticket even if configuration or
+  // network failures prevent its replacement from being created.
+  if (existing) clearState(sessionId);
 
   const cfg = loadConfig();
   if (!cfg.active_account?.target?.api_key || !cfg.active_account?.target?.deployment_id) {
@@ -146,7 +159,7 @@ export async function runUserPromptSubmit(
       deployment_id: cfg.active_account?.target?.deployment_id,
       agent,
       session_id: sessionId,
-      turn_id: input.turn_id ?? String(now),
+      turn_id: turnId,
       prompt,
       repo: repoSlug(input.cwd),
     });
@@ -158,7 +171,7 @@ export async function runUserPromptSubmit(
   saveState({
     ticketId: resp.ticket_id,
     sessionId,
-    turnId: input.turn_id ?? String(now),
+    turnId,
     status: "pending",
     createdAt: now,
     expiresAt: now + ttlMs(),
