@@ -92,7 +92,7 @@ Or right-click the binary, select "Open", and click "Open" in the dialog.
 | `dosu setup` | Run the setup wizard (auth → deployment → detect tools → configure) |
 | `dosu login` | Authenticate with Dosu via browser OAuth |
 | `dosu logout` | Clear saved credentials |
-| `dosu status` | Show current authentication and MCP status |
+| `dosu status [--json]` | Show current authentication and MCP status |
 | `dosu mcp list` | List supported AI tools |
 | `dosu mcp add <tool>` | Add the Dosu MCP server to a specific tool |
 | `dosu logs` | View or manage debug logs (`--tail`, `--clear`) |

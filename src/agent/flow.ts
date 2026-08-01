@@ -203,7 +203,7 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
 
   emitStep({
     step: "done",
-    agent_next_steps: `Dosu is configured for ${provider.name()}. Tell the user setup is complete and they can ask their agent a Dosu question. Run 'dosu status' to verify.`,
+    agent_next_steps: `Dosu is configured for ${provider.name()}. Tell the user setup is complete and they can ask their agent a Dosu question. Run 'dosu status --json' to verify.`,
   });
   return 0;
 }
