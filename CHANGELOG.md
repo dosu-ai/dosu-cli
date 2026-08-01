@@ -1,3 +1,10 @@
+# [0.39.0](https://github.com/dosu-ai/dosu-cli/compare/v0.38.0...v0.39.0) (2026-08-01)
+
+
+### Features
+
+* **hooks:** send git remote and branch with knowledge tickets ([#148](https://github.com/dosu-ai/dosu-cli/issues/148)) ([d94107f](https://github.com/dosu-ai/dosu-cli/commit/d94107f0dc62da5e190fcbbc466eea7bb55ebc3c))
+
 # [0.38.0](https://github.com/dosu-ai/dosu-cli/compare/v0.37.1...v0.38.0) (2026-08-01)
 
 
