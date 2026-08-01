@@ -40,7 +40,7 @@ vi.mock("../hooks/runtime", () => ({
 import { Client } from "../client/client";
 import { loadConfig, MODE_OSS } from "../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
-import { loadState, saveState, type TicketState } from "../hooks/state";
+import { clearState, loadState, saveState, type TicketState } from "../hooks/state";
 import { requestCreateTicket, requestGetTicket, TicketHttpError } from "../hooks/ticket-client";
 import {
   collectDoctorChecks,
@@ -158,18 +158,82 @@ describe("runUserPromptSubmit", () => {
     expect(stdout()).toBe("");
   });
 
-  it("reuses a live pending ticket instead of minting a second", async () => {
-    vi.mocked(loadState).mockReturnValue(pending({ expiresAt: 999_999 }));
-    await runUserPromptSubmit({ session_id: "sess", prompt: "another prompt" }, 1000);
+  it("reuses a live pending ticket from the same turn", async () => {
+    vi.mocked(loadState).mockReturnValue(pending({ turnId: "turn-1", expiresAt: 999_999 }));
+    await runUserPromptSubmit(
+      { session_id: "sess", turn_id: "turn-1", prompt: "same turn retry" },
+      1000,
+    );
     expect(requestCreateTicket).not.toHaveBeenCalled();
+    expect(clearState).not.toHaveBeenCalled();
   });
 
-  it("is silent and writes no state when create fails", async () => {
-    vi.mocked(loadState).mockReturnValue(null);
+  it("creates a fresh ticket when a pending ticket belongs to a previous turn", async () => {
+    vi.mocked(loadState).mockReturnValue(
+      pending({ ticketId: "kt_old", turnId: "turn-1", expiresAt: 999_999 }),
+    );
+    vi.mocked(requestCreateTicket).mockResolvedValue({
+      ticket_id: "kt_new",
+      status: "pending",
+      created_at: "x",
+      expires_at: "y",
+    });
+
+    await runUserPromptSubmit(
+      { session_id: "sess", turn_id: "turn-2", prompt: "new question" },
+      2000,
+    );
+
+    expect(requestCreateTicket).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ turn_id: "turn-2", prompt: "new question" }),
+    );
+    expect(clearState).toHaveBeenCalledWith("sess");
+    expect(saveState).toHaveBeenCalledWith(
+      expect.objectContaining({ ticketId: "kt_new", turnId: "turn-2" }),
+    );
+  });
+
+  it("treats a later submit without turn ids as a new turn", async () => {
+    vi.mocked(loadState).mockReturnValue(
+      pending({ ticketId: "kt_old", turnId: "2000", expiresAt: 999_999 }),
+    );
+    vi.mocked(requestCreateTicket).mockResolvedValue({
+      ticket_id: "kt_new",
+      status: "pending",
+      created_at: "x",
+      expires_at: "y",
+    });
+
+    await runUserPromptSubmit({ session_id: "sess", prompt: "new question" }, 2000);
+
+    expect(requestCreateTicket).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ turn_id: "2000", prompt: "new question" }),
+    );
+    expect(saveState).toHaveBeenCalledWith(
+      expect.objectContaining({ ticketId: "kt_new", turnId: "2000" }),
+    );
+  });
+
+  it("clears the previous turn when creating its replacement fails", async () => {
+    vi.mocked(loadState).mockReturnValue(pending({ turnId: "turn-1" }));
     vi.mocked(requestCreateTicket).mockRejectedValue(new TicketHttpError(500));
-    await runUserPromptSubmit({ session_id: "sess", prompt: "x" });
+    await runUserPromptSubmit({ session_id: "sess", turn_id: "turn-2", prompt: "x" });
+    expect(clearState).toHaveBeenCalledWith("sess");
     expect(saveState).not.toHaveBeenCalled();
     expect(stdout()).toBe("");
+  });
+
+  it("clears the previous turn before returning when configuration is missing", async () => {
+    vi.mocked(loadState).mockReturnValue(pending({ turnId: "turn-1" }));
+    vi.mocked(loadConfig).mockReturnValue(authed({ deployment_id: undefined }));
+
+    await runUserPromptSubmit({ session_id: "sess", turn_id: "turn-2", prompt: "x" });
+
+    expect(clearState).toHaveBeenCalledWith("sess");
+    expect(requestCreateTicket).not.toHaveBeenCalled();
+    expect(saveState).not.toHaveBeenCalled();
   });
 
   it("no-ops when the prompt field is absent entirely", async () => {
