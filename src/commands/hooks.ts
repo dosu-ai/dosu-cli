@@ -18,6 +18,7 @@
  * poll is actually required.
  */
 
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { Argument, Command } from "commander";
@@ -103,6 +104,32 @@ function repoSlug(cwd?: string): string | undefined {
   return cwd ? basename(cwd) : undefined;
 }
 
+/** Git context for retrieval scoping — remote URL + current branch. Best-effort:
+ * a non-git cwd, missing origin, or detached HEAD degrades gracefully (callers
+ * fall back to the basename-only repo slug). Sends the remote identity only,
+ * never a local path. */
+function gitContext(cwd?: string): { repo?: string; branch?: string } {
+  if (!cwd) return {};
+  const run = (args: string[]): string | undefined => {
+    try {
+      const out = execFileSync("git", args, {
+        cwd,
+        timeout: 1500,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      return out.toString().trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const repo = run(["remote", "get-url", "origin"]);
+  if (!repo) return {};
+  // Empty on detached HEAD — the server aggregates branch notes only when
+  // both repo and branch are present.
+  return { repo, branch: run(["branch", "--show-current"]) };
+}
+
 // ---------------------------------------------------------------------------
 // Hook entrypoint handlers (exported for direct unit testing)
 // ---------------------------------------------------------------------------
@@ -151,6 +178,7 @@ export async function runUserPromptSubmit(
     return; // a hook never prompts the user; `doctor` surfaces this
   }
 
+  const git = gitContext(input.cwd);
   const tc = await import("../hooks/ticket-client");
   const startedAt = Date.now();
   let resp: import("../hooks/ticket-client").CreateTicketResponse;
@@ -161,7 +189,8 @@ export async function runUserPromptSubmit(
       session_id: sessionId,
       turn_id: turnId,
       prompt,
-      repo: repoSlug(input.cwd),
+      repo: git.repo ?? repoSlug(input.cwd),
+      branch: git.branch,
     });
   } catch (err) {
     logger.warn("hooks", `error event=user-prompt-submit reason=${errMsg(err)}`);
