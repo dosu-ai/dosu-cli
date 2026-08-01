@@ -15,6 +15,11 @@ export const LOOKUP_STARTED_NOTE =
   "helps you.";
 
 /** Framing prefix prepended to the Stop hook's blocking reason. */
+export const LATE_RESULT_NOTE =
+  "Heads-up: the context below answers your PREVIOUS prompt — its lookup finished after " +
+  "that turn had already ended. Apply it only where it is still relevant to the current " +
+  "work; do not treat it as a response to the new prompt.";
+
 export const STOP_PREFIX =
   "Dosu knowledge finished after your last action. Re-check your current conclusion against " +
   "it, then continue or finish — do not redo work it merely confirms.";
