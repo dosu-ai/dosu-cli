@@ -1,3 +1,10 @@
+# [0.40.0](https://github.com/dosu-ai/dosu-cli/compare/v0.39.0...v0.40.0) (2026-08-02)
+
+
+### Features
+
+* **hooks:** exactly-once delivery and late-result harvest ([#149](https://github.com/dosu-ai/dosu-cli/issues/149)) ([17a3d51](https://github.com/dosu-ai/dosu-cli/commit/17a3d51f5eb117e202b373f6ba5587c058320b76))
+
 # [0.39.0](https://github.com/dosu-ai/dosu-cli/compare/v0.38.0...v0.39.0) (2026-08-01)
 
 
