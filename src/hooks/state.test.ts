@@ -2,7 +2,16 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { clearState, getStateDir, loadState, sanitize, saveState, type TicketState } from "./state";
+import {
+  claimState,
+  clearState,
+  getStateDir,
+  loadState,
+  releaseState,
+  sanitize,
+  saveState,
+  type TicketState,
+} from "./state";
 
 function makeState(overrides: Partial<TicketState> = {}): TicketState {
   return {
@@ -16,6 +25,54 @@ function makeState(overrides: Partial<TicketState> = {}): TicketState {
 }
 
 describe("hooks/state", () => {
+  describe("claimState / releaseState", () => {
+    it("exactly one concurrent claimer wins", () => {
+      saveState(makeState());
+      const won = claimState("sess-1");
+      expect(won?.ticketId).toBe("kt_abc");
+      // the slot is empty while claimed: rivals lose, loadState sees nothing
+      expect(claimState("sess-1")).toBeNull();
+      expect(loadState("sess-1")).toBeNull();
+    });
+
+    it("returns null when no state exists", () => {
+      expect(claimState("sess-none")).toBeNull();
+    });
+
+    it("release restores the parked state when the slot is free", () => {
+      saveState(makeState());
+      const won = claimState("sess-1");
+      releaseState("sess-1", { ...(won as TicketState), lastCheckedAt: 1500 });
+      expect(loadState("sess-1")?.lastCheckedAt).toBe(1500);
+      // claim marker is gone — the next claim takes the restored state
+      expect(claimState("sess-1")?.lastCheckedAt).toBe(1500);
+    });
+
+    it("release never clobbers a newer state written meanwhile", () => {
+      saveState(makeState());
+      const won = claimState("sess-1");
+      // a new prompt registered a fresh ticket while we were polling
+      saveState(makeState({ ticketId: "kt_newer" }));
+      releaseState("sess-1", won as TicketState);
+      expect(loadState("sess-1")?.ticketId).toBe("kt_newer");
+    });
+
+    it("release with null discards the parked state", () => {
+      saveState(makeState());
+      claimState("sess-1");
+      releaseState("sess-1", null);
+      expect(loadState("sess-1")).toBeNull();
+      expect(claimState("sess-1")).toBeNull();
+    });
+
+    it("a stale claim from a crashed holder never blocks the next claim", () => {
+      saveState(makeState());
+      claimState("sess-1"); // holder "crashes": never releases
+      saveState(makeState({ ticketId: "kt_after_crash" }));
+      expect(claimState("sess-1")?.ticketId).toBe("kt_after_crash");
+    });
+  });
+
   let tempDir: string;
   let origStateDir: string | undefined;
   let origXdg: string | undefined;

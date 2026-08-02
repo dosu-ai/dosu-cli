@@ -25,7 +25,7 @@ import { Argument, Command } from "commander";
 import { isAuthenticated, loadConfig, MODE_OSS } from "../config/config";
 import { logger } from "../debug/logger";
 import { STOP_PREFIX } from "../hooks/prompts";
-import { clearState, loadState, saveState, type TicketState } from "../hooks/state";
+import { claimState, loadState, releaseState, saveState, type TicketState } from "../hooks/state";
 
 interface HookInput {
   session_id?: string;
@@ -169,17 +169,41 @@ export async function runUserPromptSubmit(
   }
 
   // A new turn supersedes the session's prior ticket even if configuration or
-  // network failures prevent its replacement from being created.
-  if (existing) clearState(sessionId);
+  // network failures prevent its replacement from being created. Claim it
+  // (atomic rename) so a concurrent delivery hook can't double-inject what we
+  // may harvest below; the claim is always discarded before the replacement.
+  const claimed = existing ? claimState(sessionId) : null;
 
   const cfg = loadConfig();
   if (!cfg.active_account?.target?.api_key || !cfg.active_account?.target?.deployment_id) {
+    if (claimed) releaseState(sessionId, null);
     logger.debug("hooks", "submit skipped reason=not-configured");
     return; // a hook never prompts the user; `doctor` surfaces this
   }
 
   const git = gitContext(input.cwd);
   const tc = await import("../hooks/ticket-client");
+
+  // Harvest: when the previous turn's lookup finished but was never delivered,
+  // inject it now with provenance instead of throwing the finished work away.
+  let lateBlock: string | undefined;
+  if (claimed && claimed.status === "pending" && now <= claimed.expiresAt) {
+    try {
+      const old = await tc.requestGetTicket(cfg, claimed.ticketId);
+      if (old.status === "ready" && old.result?.context.trim()) {
+        const { buildReadyEnvelope, LATE_RESULT_NOTE } = await import("../hooks/prompts");
+        lateBlock = `${LATE_RESULT_NOTE}\n\n${buildReadyEnvelope(
+          old.result.context,
+          old.result.save_recommended ?? false,
+        )}`;
+        logger.info("hooks", `harvest tid=${claimed.ticketId} delivered=late`);
+      }
+    } catch {
+      // best-effort — a failed harvest never blocks the new lookup
+    }
+  }
+  if (claimed) releaseState(sessionId, null);
+
   const startedAt = Date.now();
   let resp: import("../hooks/ticket-client").CreateTicketResponse;
   try {
@@ -211,7 +235,10 @@ export async function runUserPromptSubmit(
   );
 
   const { LOOKUP_STARTED_NOTE } = await import("../hooks/prompts");
-  printHookContext("UserPromptSubmit", LOOKUP_STARTED_NOTE);
+  printHookContext(
+    "UserPromptSubmit",
+    lateBlock ? `${lateBlock}\n\n${LOOKUP_STARTED_NOTE}` : LOOKUP_STARTED_NOTE,
+  );
 }
 
 /** PostToolUse: poll a pending ticket (throttled) and inject the route map exactly once. */
@@ -245,40 +272,54 @@ export async function runPostToolUse(input: HookInput, now: number = Date.now())
     return;
   }
 
+  // Exactly-once: take the claim before any network. Concurrent hooks (rapid
+  // tool completions racing within one HTTP round-trip) lose the rename and
+  // exit — the winner alone may poll and inject.
+  const claimed = claimState(sessionId);
+  if (!claimed) {
+    logger.debug("hooks", `poll tid=${state.ticketId} skipped=contended`);
+    return;
+  }
+
   const tc = await import("../hooks/ticket-client");
   const startedAt = Date.now();
   let resp: import("../hooks/ticket-client").TicketStatusResponse;
   try {
-    resp = await tc.requestGetTicket(cfg, state.ticketId);
+    resp = await tc.requestGetTicket(cfg, claimed.ticketId);
   } catch (err) {
     if (tc.isDefinitiveError(err)) {
-      saveState({ ...state, status: "failed", lastCheckedAt: now });
+      releaseState(sessionId, { ...claimed, status: "failed", lastCheckedAt: now });
       logger.warn("hooks", `error event=post-tool-use reason=${errMsg(err)} definitive`);
     } else {
-      saveState({ ...state, lastCheckedAt: now }); // transient → retry next tick
-      logger.debug("hooks", `poll tid=${state.ticketId} transient-error`);
+      releaseState(sessionId, { ...claimed, lastCheckedAt: now }); // transient → retry next tick
+      logger.debug("hooks", `poll tid=${claimed.ticketId} transient-error`);
     }
     return;
   }
 
   if (resp.status === "pending") {
-    saveState({ ...state, lastCheckedAt: now });
-    logger.debug("hooks", `poll tid=${state.ticketId} status=pending`);
+    releaseState(sessionId, { ...claimed, lastCheckedAt: now });
+    logger.debug("hooks", `poll tid=${claimed.ticketId} status=pending`);
     return;
   }
   if (resp.status === "failed" || resp.status === "expired") {
-    saveState({ ...state, status: resp.status, lastCheckedAt: now });
+    releaseState(sessionId, { ...claimed, status: resp.status, lastCheckedAt: now });
     return;
   }
   if (!resp.result) {
     // ready but no payload — defensive: treat as failed, never inject empty context.
-    saveState({ ...state, status: "failed", lastCheckedAt: now });
+    releaseState(sessionId, { ...claimed, status: "failed", lastCheckedAt: now });
     return;
   }
 
   // The single delivery moment. Persist `delivered` BEFORE printing so a crash
   // after disk fails toward "no duplicate injection" rather than a re-poll.
-  saveState({ ...state, status: "delivered", deliveredAt: now, lastCheckedAt: now });
+  releaseState(sessionId, {
+    ...claimed,
+    status: "delivered",
+    deliveredAt: now,
+    lastCheckedAt: now,
+  });
   const { buildReadyEnvelope } = await import("../hooks/prompts");
   const context = buildReadyEnvelope(resp.result.context, resp.result.save_recommended ?? false);
   if (context) {
@@ -314,6 +355,11 @@ export async function runStop(input: HookInput, now: number = Date.now()): Promi
   if (!cfg.active_account?.target?.api_key || !cfg.active_account?.target?.deployment_id)
     return printContinue();
 
+  // Exactly-once: hold the claim for the whole bounded wait so an in-flight
+  // PostToolUse from the turn's last tool can't double-inject the same ticket.
+  const claimed = claimState(sessionId);
+  if (!claimed) return printContinue();
+
   const tc = await import("../hooks/ticket-client");
   const pollMs = stopPollMs();
   const maxWaits = pollMs > 0 ? Math.floor(stopWaitMs() / pollMs) : 0;
@@ -321,9 +367,9 @@ export async function runStop(input: HookInput, now: number = Date.now()): Promi
   for (let waited = 0; ; waited++) {
     let resp: import("../hooks/ticket-client").TicketStatusResponse;
     try {
-      resp = await tc.requestGetTicket(cfg, state.ticketId);
+      resp = await tc.requestGetTicket(cfg, claimed.ticketId);
     } catch {
-      saveState({ ...state, lastCheckedAt: now }); // never hold the agent open
+      releaseState(sessionId, { ...claimed, lastCheckedAt: now }); // never hold the agent open
       return printContinue();
     }
 
@@ -331,7 +377,12 @@ export async function runStop(input: HookInput, now: number = Date.now()): Promi
       // Consume the ticket either way, but only BLOCK the agent for real knowledge.
       // A bare save nudge (knowledge gap, empty context) is not worth holding the
       // agent open at Stop — drop it rather than block on nothing actionable.
-      saveState({ ...state, status: "delivered", deliveredAt: now, lastCheckedAt: now });
+      releaseState(sessionId, {
+        ...claimed,
+        status: "delivered",
+        deliveredAt: now,
+        lastCheckedAt: now,
+      });
       if (resp.result.context.trim()) {
         const { buildReadyEnvelope, STOP_PREFIX } = await import("../hooks/prompts");
         const envelope = buildReadyEnvelope(
@@ -339,10 +390,10 @@ export async function runStop(input: HookInput, now: number = Date.now()): Promi
           resp.result.save_recommended ?? false,
         );
         console.log(JSON.stringify({ decision: "block", reason: `${STOP_PREFIX}\n\n${envelope}` }));
-        logger.info("hooks", `stop tid=${state.ticketId} delivered=true`);
+        logger.info("hooks", `stop tid=${claimed.ticketId} delivered=true`);
         return;
       }
-      logger.debug("hooks", `stop tid=${state.ticketId} delivered=true gap-no-block`);
+      logger.debug("hooks", `stop tid=${claimed.ticketId} delivered=true gap-no-block`);
       return printContinue();
     }
 
@@ -351,8 +402,8 @@ export async function runStop(input: HookInput, now: number = Date.now()): Promi
     await sleep(pollMs);
   }
 
-  saveState({ ...state, lastCheckedAt: now });
-  logger.debug("hooks", `stop tid=${state.ticketId} delivered=false`);
+  releaseState(sessionId, { ...claimed, lastCheckedAt: now });
+  logger.debug("hooks", `stop tid=${claimed.ticketId} delivered=false`);
   printContinue();
 }
 
