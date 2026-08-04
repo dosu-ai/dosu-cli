@@ -54,12 +54,15 @@ dosu setup
 brew install dosu-ai/dosu/dosu
 ```
 
-Or tap first:
+The fully qualified name works on every Homebrew version: it taps the repo if needed and, on Homebrew 6.0+, records trust for just the `dosu` formula. To use tapped short names instead:
 
 ```bash
 brew tap dosu-ai/dosu
+brew trust dosu-ai/dosu   # Homebrew 6.0+ only — skip on older versions
 brew install dosu
 ```
+
+**Homebrew 6.0+ only** ([tap trust](https://docs.brew.sh/Tap-Trust), since June 2026): third-party taps start untrusted, so short-name installs or upgrades — including on machines that tapped `dosu-ai/dosu` before upgrading Homebrew — fail with `Error: Refusing to load formula dosu-ai/dosu/dosu from untrusted tap dosu-ai/dosu` until a one-time `brew trust dosu-ai/dosu` (the tap also ships [decant](https://github.com/dosu-ai/decant)). Homebrew 5 and earlier has no trust step and needs none. Tap trust is Homebrew's own consent step, separate from the macOS Gatekeeper warning below — Homebrew installs never trigger Gatekeeper.
 
 ### Manual Download
 
