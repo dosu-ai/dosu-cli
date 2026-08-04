@@ -1,3 +1,10 @@
+# [0.41.0](https://github.com/dosu-ai/dosu-cli/compare/v0.40.0...v0.41.0) (2026-08-04)
+
+
+### Features
+
+* **rules:** instruct agents to finalize session knowledge receipts ([#150](https://github.com/dosu-ai/dosu-cli/issues/150)) ([56b4687](https://github.com/dosu-ai/dosu-cli/commit/56b468740f755b0d31fa459a25a1242eb2180db2))
+
 # [0.40.0](https://github.com/dosu-ai/dosu-cli/compare/v0.39.0...v0.40.0) (2026-08-02)
 
 
