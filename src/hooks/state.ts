@@ -7,7 +7,7 @@
  * returns `null` and a write failure is swallowed — a hook must never throw.
  */
 
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getConfigDir } from "../config/config";
 
@@ -74,6 +74,47 @@ export function saveState(state: TicketState): void {
 export function clearState(sessionId: string): void {
   try {
     rmSync(stateFile(sessionId), { force: true });
+  } catch {
+    // best-effort
+  }
+}
+
+/** Atomically take exclusive ownership of a session's ticket state.
+ *
+ * `rename(2)` is atomic, so when several hook processes race, exactly one gets
+ * the state back and the rest get `null` (no state, or another holder). The
+ * state is parked in a `.claim` file until `releaseState`; a holder that
+ * crashes leaves only a stale park that the next claim overwrites. Never
+ * throws.
+ */
+export function claimState(sessionId: string): TicketState | null {
+  const file = stateFile(sessionId);
+  try {
+    renameSync(file, `${file}.claim`);
+    return JSON.parse(readFileSync(`${file}.claim`, "utf8")) as TicketState;
+  } catch {
+    return null;
+  }
+}
+
+/** Release a claim taken by `claimState`. Only the claim winner may call this.
+ *
+ * With a state, restores it — but never over a newer state written meanwhile
+ * (`wx` = exclusive create), so a finished old ticket can't resurrect over a
+ * newly registered one. With `null`, the parked state is discarded. Never
+ * throws.
+ */
+export function releaseState(sessionId: string, state: TicketState | null): void {
+  const file = stateFile(sessionId);
+  if (state) {
+    try {
+      writeFileSync(file, JSON.stringify(state, null, 2), { flag: "wx", mode: 0o600 });
+    } catch {
+      // a newer state owns the slot (or the write failed) — discard ours
+    }
+  }
+  try {
+    rmSync(`${file}.claim`, { force: true });
   } catch {
     // best-effort
   }

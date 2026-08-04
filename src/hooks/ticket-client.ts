@@ -25,6 +25,7 @@ export interface CreateTicketRequest {
   prompt: string;
   cwd?: string | null;
   repo?: string | null;
+  branch?: string | null;
   data_source_ids?: string[] | null;
 }
 

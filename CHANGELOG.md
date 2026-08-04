@@ -1,3 +1,38 @@
+# [0.41.0](https://github.com/dosu-ai/dosu-cli/compare/v0.40.0...v0.41.0) (2026-08-04)
+
+
+### Features
+
+* **rules:** instruct agents to finalize session knowledge receipts ([#150](https://github.com/dosu-ai/dosu-cli/issues/150)) ([56b4687](https://github.com/dosu-ai/dosu-cli/commit/56b468740f755b0d31fa459a25a1242eb2180db2))
+
+# [0.40.0](https://github.com/dosu-ai/dosu-cli/compare/v0.39.0...v0.40.0) (2026-08-02)
+
+
+### Features
+
+* **hooks:** exactly-once delivery and late-result harvest ([#149](https://github.com/dosu-ai/dosu-cli/issues/149)) ([17a3d51](https://github.com/dosu-ai/dosu-cli/commit/17a3d51f5eb117e202b373f6ba5587c058320b76))
+
+# [0.39.0](https://github.com/dosu-ai/dosu-cli/compare/v0.38.0...v0.39.0) (2026-08-01)
+
+
+### Features
+
+* **hooks:** send git remote and branch with knowledge tickets ([#148](https://github.com/dosu-ai/dosu-cli/issues/148)) ([d94107f](https://github.com/dosu-ai/dosu-cli/commit/d94107f0dc62da5e190fcbbc466eea7bb55ebc3c))
+
+# [0.38.0](https://github.com/dosu-ai/dosu-cli/compare/v0.37.1...v0.38.0) (2026-08-01)
+
+
+### Features
+
+* **status:** add machine-readable --json output ([#145](https://github.com/dosu-ai/dosu-cli/issues/145)) ([695bb46](https://github.com/dosu-ai/dosu-cli/commit/695bb46a93b39b782e22fc133a570ef7bd50ec39))
+
+## [0.37.1](https://github.com/dosu-ai/dosu-cli/compare/v0.37.0...v0.37.1) (2026-08-01)
+
+
+### Bug Fixes
+
+* **hooks:** replace stale knowledge tickets on new turns ([#146](https://github.com/dosu-ai/dosu-cli/issues/146)) ([bcfaa4e](https://github.com/dosu-ai/dosu-cli/commit/bcfaa4e1f1b50530b4cd32cabe425ac64b087193))
+
 # [0.37.0](https://github.com/dosu-ai/dosu-cli/compare/v0.36.0...v0.37.0) (2026-07-31)
 
 
