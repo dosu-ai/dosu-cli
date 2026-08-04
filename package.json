@@ -50,6 +50,7 @@
     "semantic-release": "^25.0.5",
     "superjson": "^2.2.6",
     "typescript": "^6.0.3",
+    "undici": "^8.9.0",
     "vitest": "^4.1.9",
     "write-file-atomic": "^8.0.0"
   }

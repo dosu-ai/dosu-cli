@@ -7,6 +7,7 @@
 
 import { Command } from "commander";
 import pc from "picocolors";
+import { longFetch } from "../client/long-fetch";
 import { loadConfig } from "../config/config";
 import { getBackendURL } from "../config/constants";
 import { logger } from "../debug/logger";
@@ -62,7 +63,7 @@ export function askCommand(): Command {
         const timeout = setTimeout(() => controller.abort(), timeoutSeconds * 1_000);
 
         try {
-          const resp = await fetch(`${backendURL}/ask`, {
+          const resp = await longFetch(`${backendURL}/ask`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",

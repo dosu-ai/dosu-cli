@@ -1,7 +1,9 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockFetch = vi.fn();
-vi.stubGlobal("fetch", mockFetch);
+vi.mock("../client/long-fetch", () => ({
+  longFetch: (...args: unknown[]) => mockFetch(...args),
+}));
 
 const mockLoadConfig = vi.fn();
 vi.mock("../config/config", () => ({
