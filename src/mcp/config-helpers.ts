@@ -49,6 +49,21 @@ export function mcpHeaders(apiKey: string | undefined): Record<string, string> {
 }
 
 /**
+ * Builds the `npx mcp-remote` argument list that proxies the remote HTTP MCP
+ * endpoint as a local stdio server. Hosts that only render MCP Apps for
+ * stdio servers (Codex desktop, Claude Desktop chat) need this form — a
+ * remote-HTTP entry serves tools fine but never shows the Session Knowledge
+ * card.
+ */
+export function mcpRemoteArgs(url: string, apiKey: string | undefined): string[] {
+  const headerArgs = Object.entries(mcpHeaders(apiKey)).flatMap(([key, value]) => [
+    "--header",
+    `${key}:${value}`,
+  ]);
+  return ["-y", "mcp-remote", url, ...headerArgs, "--transport", "http-only"];
+}
+
+/**
  * Reads and unmarshals a JSON config file. Returns an empty object if the file doesn't exist.
  * For .jsonc files, comments are stripped before parsing.
  */

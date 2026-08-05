@@ -7,7 +7,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { type Config, MODE_OSS } from "../../config/config";
-import { mcpBaseURL, mcpHeaders, mcpURL, writeSecureFile } from "../config-helpers";
+import { mcpBaseURL, mcpRemoteArgs, mcpURL, writeSecureFile } from "../config-helpers";
 import { expandHome, isInstalled } from "../detect";
 import type { SetupProvider } from "../providers";
 
@@ -39,18 +39,20 @@ function mcpEndpoint(cfg: Config): string {
   return mcpURL(cfg.active_account?.target?.deployment_id);
 }
 
+function tomlString(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
 function installDosuToTOML(path: string, cfg: Config): void {
   let content = readTOML(path);
-  // Remove existing [mcp_servers.dosu] section if present
+  // Remove existing [mcp_servers.dosu] section if present (including the
+  // legacy [mcp_servers.dosu.http_headers] subtable from the remote-HTTP form)
   content = removeDosuFromTOML(content);
-  // Append new section
-  const url = mcpEndpoint(cfg);
-  const headers = mcpHeaders(cfg.active_account?.target?.api_key);
-  const headerEntries = Object.entries(headers)
-    .map(([k, v]) => `${k} = "${v}"`)
-    .join("\n");
-
-  const section = `\n[mcp_servers.dosu]\ntype = "http"\nurl = "${url}"\n\n[mcp_servers.dosu.http_headers]\n${headerEntries}\n`;
+  // Codex desktop only renders MCP Apps (the Session Knowledge card) for
+  // stdio servers — a remote-HTTP entry serves tools fine but never shows
+  // the card — so proxy the endpoint through `npx mcp-remote`.
+  const args = mcpRemoteArgs(mcpEndpoint(cfg), cfg.active_account?.target?.api_key);
+  const section = `\n[mcp_servers.dosu]\ncommand = "npx"\nargs = [${args.map(tomlString).join(", ")}]\n`;
   content += section;
   writeTOML(path, content);
 }

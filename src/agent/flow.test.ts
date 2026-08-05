@@ -15,7 +15,6 @@ const {
   mockLoadConfig,
   mockSaveConfig,
   mockAllSetupProviders,
-  mockIsStdioOnly,
   mockClient,
   mockClientConstructor,
   mockFetchDosuRule,
@@ -32,7 +31,6 @@ const {
     mockLoadConfig: vi.fn(),
     mockSaveConfig: vi.fn(),
     mockAllSetupProviders: vi.fn(),
-    mockIsStdioOnly: vi.fn(),
     mockClient: {
       doRequestRaw: vi.fn(),
       refreshToken: vi.fn(),
@@ -64,10 +62,6 @@ vi.mock("../config/config", async (importOriginal) => ({
 
 vi.mock("../mcp/providers", () => ({
   allSetupProviders: mockAllSetupProviders,
-}));
-
-vi.mock("../setup/flow", () => ({
-  isStdioOnly: mockIsStdioOnly,
 }));
 
 vi.mock("../rules/installer", () => ({
@@ -146,22 +140,21 @@ describe("buildResumeCommand", () => {
 });
 
 describe("listAgentSupportedToolIDs", () => {
-  it("excludes stdio-only providers", () => {
+  it("lists every setup provider id, including Claude Desktop", () => {
     mockAllSetupProviders.mockReturnValue([
       makeProvider("claude"),
       makeProvider("claude-desktop"),
       makeProvider("cursor"),
     ]);
-    mockIsStdioOnly.mockImplementation((p: SetupProvider) => p.id() === "claude-desktop");
 
-    expect(listAgentSupportedToolIDs()).toEqual(["claude", "cursor"]);
+    expect(listAgentSupportedToolIDs()).toEqual(["claude", "claude-desktop", "cursor"]);
   });
 });
 
 describe("runAgentSetup", () => {
   let logSpy: ReturnType<typeof vi.spyOn>;
   let claudeProvider: SetupProvider;
-  let stdioProvider: SetupProvider;
+  let desktopProvider: SetupProvider;
 
   function emittedEvents(): Array<Record<string, unknown>> {
     return logSpy.mock.calls.map((c: unknown[]) => JSON.parse(c[0] as string));
@@ -174,7 +167,6 @@ describe("runAgentSetup", () => {
     mockLoadConfig.mockReset();
     mockSaveConfig.mockReset();
     mockAllSetupProviders.mockReset();
-    mockIsStdioOnly.mockReset();
     mockClientConstructor.mockReset();
     mockFetchDosuRule.mockReset();
     mockInstallRuleForAgent.mockReset();
@@ -186,10 +178,9 @@ describe("runAgentSetup", () => {
     for (const fn of Object.values(mockClient)) fn.mockReset();
 
     claudeProvider = makeProvider("claude", { name: () => "Claude Code" });
-    stdioProvider = makeProvider("claude-desktop", { name: () => "Claude Desktop" });
+    desktopProvider = makeProvider("claude-desktop", { name: () => "Claude Desktop" });
 
-    mockAllSetupProviders.mockReturnValue([claudeProvider, stdioProvider]);
-    mockIsStdioOnly.mockImplementation((p: SetupProvider) => p.id() === "claude-desktop");
+    mockAllSetupProviders.mockReturnValue([claudeProvider, desktopProvider]);
     mockLoadConfig.mockReturnValue(makeBaseConfig());
     mockFetchDosuRule.mockResolvedValue("canonical rule\n");
     mockIsRuleAgent.mockImplementation((agent: string) => agent === "claude");
@@ -223,19 +214,6 @@ describe("runAgentSetup", () => {
         status: "error",
         reason: "unknown_tool",
         agent_next_steps: expect.stringContaining("'nope' is not"),
-      }),
-    ]);
-  });
-
-  it("emits tool_unsupported error when the chosen tool is stdio-only", async () => {
-    const code = await runAgentSetup({ tool: "claude-desktop" });
-
-    expect(code).toBe(2);
-    expect(emittedEvents()).toEqual([
-      expect.objectContaining({
-        step: "setup",
-        status: "error",
-        reason: "tool_unsupported_in_agent_mode",
       }),
     ]);
   });

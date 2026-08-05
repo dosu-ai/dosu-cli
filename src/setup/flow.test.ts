@@ -169,7 +169,6 @@ import { CursorProvider } from "../mcp/providers/cursor";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
 import {
   type ConfigResult,
-  isStdioOnly,
   runInstallSkill,
   runSetup,
   stepConfigureTools,
@@ -238,6 +237,26 @@ function teardownTempEnv() {
   rmSync(tempDir, { recursive: true, force: true });
 }
 
+/** A SetupProvider whose install/remove always throw, for error-path tests. */
+function throwingProvider(): providersModule.SetupProvider {
+  return {
+    name: () => "Broken Tool",
+    id: () => "broken",
+    supportsLocal: () => false,
+    priority: () => 99,
+    detectPaths: () => [],
+    isInstalled: () => true,
+    isConfigured: () => false,
+    globalConfigPath: () => join(tempDir, "broken.json"),
+    install() {
+      throw new Error("boom: provider failure");
+    },
+    remove() {
+      throw new Error("boom: provider failure");
+    },
+  };
+}
+
 function makeCfg(overrides: Partial<FlatTestConfig> = {}): Config {
   return makeTestConfig({
     access_token: "tok",
@@ -269,28 +288,7 @@ function trackedCliOnboardingEvents() {
 }
 
 // ---------------------------------------------------------------------------
-// 1. isStdioOnly — pure function, real providers
-// ---------------------------------------------------------------------------
-
-describe("isStdioOnly", () => {
-  it("returns true for ClaudeDesktopProvider", () => {
-    const provider = ClaudeDesktopProvider();
-    expect(isStdioOnly(provider)).toBe(true);
-  });
-
-  it("returns false for CursorProvider", () => {
-    const provider = CursorProvider();
-    expect(isStdioOnly(provider)).toBe(false);
-  });
-
-  it("returns false for OpenCodeProvider", () => {
-    const provider = OpenCodeProvider();
-    expect(isStdioOnly(provider)).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 2. stepDetectTools — real providers, temp HOME
+// 1. stepDetectTools — real providers, temp HOME
 // ---------------------------------------------------------------------------
 
 describe("stepDetectTools", () => {
@@ -301,8 +299,9 @@ describe("stepDetectTools", () => {
   });
   afterEach(teardownTempEnv);
 
-  it("returns providers whose detect paths exist, excluding stdio-only", () => {
-    // Create Cursor detect path so it's "installed"
+  it("returns providers whose detect paths exist", () => {
+    // Create Cursor detect path so it's "installed"; Claude Desktop's app
+    // dir does not exist in the temp env, so it stays undetected.
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
 
     // Mock allSetupProviders to return real providers built in our temp env
@@ -313,6 +312,20 @@ describe("stepDetectTools", () => {
     const detected = stepDetectTools();
     expect(detected.length).toBe(1);
     expect(detected[0].id()).toBe("cursor");
+  });
+
+  it("includes Claude Desktop when its app dir exists", () => {
+    const desktop = ClaudeDesktopProvider();
+    for (const detectPath of desktop.detectPaths()) {
+      mkdirSync(detectPath, { recursive: true });
+    }
+
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => {
+      return [CursorProvider(), ClaudeDesktopProvider()];
+    });
+
+    const detected = stepDetectTools();
+    expect(detected.map((p2) => p2.id())).toEqual(["claude-desktop"]);
   });
 
   it("returns empty array when no providers are installed", () => {
@@ -426,11 +439,10 @@ describe("stepConfigureTools", () => {
   });
 
   it("handles install errors and records them in results", () => {
-    const claudeDesktop = ClaudeDesktopProvider();
+    const broken = throwingProvider();
     const cfg = makeCfg();
-    // ClaudeDesktopProvider.install() always throws
     const selection: ToolSelection = {
-      toInstall: [claudeDesktop],
+      toInstall: [broken],
       toRemove: [],
       skipped: [],
     };
@@ -440,18 +452,17 @@ describe("stepConfigureTools", () => {
     expect(results).toHaveLength(1);
     expect(results[0].action).toBe("install");
     expect(results[0].error).toBeDefined();
-    expect(results[0].error?.message).toContain("stdio");
+    expect(results[0].error?.message).toContain("boom");
     // p.log.error should have been called
-    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Claude Desktop"));
+    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Broken Tool"));
   });
 
   it("handles remove errors and records them in results", () => {
-    const claudeDesktop = ClaudeDesktopProvider();
+    const broken = throwingProvider();
     const cfg = makeCfg();
-    // ClaudeDesktopProvider.remove() always throws
     const selection: ToolSelection = {
       toInstall: [],
-      toRemove: [claudeDesktop],
+      toRemove: [broken],
       skipped: [],
     };
 
@@ -460,8 +471,8 @@ describe("stepConfigureTools", () => {
     expect(results).toHaveLength(1);
     expect(results[0].action).toBe("remove");
     expect(results[0].error).toBeDefined();
-    expect(results[0].error?.message).toContain("stdio");
-    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Claude Desktop"));
+    expect(results[0].error?.message).toContain("boom");
+    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Broken Tool"));
   });
 
   it("handles mixed install, remove, and skip in one call", () => {
