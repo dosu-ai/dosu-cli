@@ -815,12 +815,8 @@ async function stepMintAPIKey(apiClient: Client, cfg: Config): Promise<string | 
   }
 }
 
-export function isStdioOnly(p: SetupProvider): boolean {
-  return p.id() === "claude-desktop";
-}
-
 export function stepDetectTools(): SetupProvider[] {
-  return allSetupProviders().filter((p) => p.isInstalled() && !isStdioOnly(p));
+  return allSetupProviders().filter((p) => p.isInstalled());
 }
 
 async function stepSelectTools(detected: SetupProvider[]): Promise<ToolSelection | null> {

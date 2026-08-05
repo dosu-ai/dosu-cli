@@ -8,11 +8,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../../config/config.test-utils";
-import { loadJSONConfig } from "../config-helpers";
+import { loadJSONConfig, MCP_REMOTE_VERSION } from "../config-helpers";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -245,6 +245,8 @@ describe("CodexProvider", () => {
   let tempDir: string;
   let origCodexHome: string | undefined;
   let origCwd: string;
+  let origPath: string | undefined;
+  let npxPath: string;
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), "dosu-codex-test-"));
@@ -252,6 +254,12 @@ describe("CodexProvider", () => {
     process.env.CODEX_HOME = join(tempDir, "codex-home");
     origCwd = process.cwd();
     process.chdir(tempDir);
+    origPath = process.env.PATH;
+    const binDir = join(tempDir, "fake-bin");
+    mkdirSync(binDir, { recursive: true });
+    npxPath = join(binDir, "npx");
+    writeFileSync(npxPath, "#!/bin/sh\n", { mode: 0o755 });
+    process.env.PATH = binDir;
   });
 
   afterEach(() => {
@@ -261,6 +269,7 @@ describe("CodexProvider", () => {
     } else {
       delete process.env.CODEX_HOME;
     }
+    process.env.PATH = origPath;
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -274,10 +283,24 @@ describe("CodexProvider", () => {
     expect(existsSync(configPath)).toBe(true);
     const content = readFileSync(configPath, "utf-8");
     expect(content).toContain("[mcp_servers.dosu]");
-    expect(content).toContain('type = "http"');
-    expect(content).toContain("dep-123");
-    expect(content).toContain("X-Dosu-API-Key");
-    expect(content).toContain("key-abc");
+    // Absolute npx + explicit PATH: config.toml is shared with Codex
+    // desktop, which launches from the Dock with the minimal launchd PATH.
+    expect(content).toContain(`command = "${npxPath}"`);
+    expect(content).toContain(`mcp-remote@${MCP_REMOTE_VERSION}`);
+    expect(content).toContain("/deployments/dep-123");
+    expect(content).toContain("http-only");
+    // The API key rides in the env block as a ${VAR} placeholder the proxy
+    // expands — argv (visible via `ps`) never carries the raw key.
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal placeholder expanded by mcp-remote
+    expect(content).toContain("X-Dosu-API-Key:${X_DOSU_API_KEY}");
+    expect(content).toContain("[mcp_servers.dosu.env]");
+    expect(content).toContain('X_DOSU_API_KEY = "key-abc"');
+    expect(content).not.toContain("X-Dosu-API-Key:key-abc");
+    // Codex desktop only renders MCP Apps (the Session Knowledge card) for
+    // stdio servers — a remote-HTTP entry works for tools but never shows
+    // the card, so the provider must not write that form.
+    expect(content).not.toContain('type = "http"');
+    expect(content).not.toContain("http_headers");
   });
 
   it("local install writes TOML config to .codex/config.toml in cwd", async () => {
@@ -313,6 +336,15 @@ describe("CodexProvider", () => {
     );
   });
 
+  it("install throws a clear error when npx is not on PATH", async () => {
+    const { CodexProvider } = await import("./codex");
+    const provider = CodexProvider();
+
+    process.env.PATH = join(tempDir, "no-bin");
+
+    expect(() => provider.install(makeCfg(), true)).toThrow(/npx/);
+  });
+
   it("install replaces existing dosu section", async () => {
     const { CodexProvider } = await import("./codex");
     const provider = CodexProvider();
@@ -330,6 +362,27 @@ describe("CodexProvider", () => {
     // Should only have one dosu section
     const matches = content.match(/\[mcp_servers\.dosu\]/g);
     expect(matches?.length).toBe(1);
+  });
+
+  it("install replaces a legacy remote-HTTP dosu section including http_headers", async () => {
+    const { CodexProvider } = await import("./codex");
+    const provider = CodexProvider();
+
+    const configPath = join(tempDir, "codex-home", "config.toml");
+    mkdirSync(join(tempDir, "codex-home"), { recursive: true });
+    writeFileSync(
+      configPath,
+      '[mcp_servers.dosu]\ntype = "http"\nurl = "https://old.example"\n\n[mcp_servers.dosu.http_headers]\nX-Dosu-API-Key = "old-key"\n',
+    );
+
+    provider.install(makeCfg(), true);
+
+    const content = readFileSync(configPath, "utf-8");
+    expect(content).not.toContain('type = "http"');
+    expect(content).not.toContain("http_headers");
+    expect(content).not.toContain("old-key");
+    expect(content.match(/\[mcp_servers\.dosu\]/g)?.length).toBe(1);
+    expect(content).toContain("mcp-remote");
   });
 
   it("install preserves other TOML content", async () => {
@@ -772,20 +825,135 @@ describe("ManualProvider", () => {
 // ---------------------------------------------------------------------------
 
 describe("ClaudeDesktopProvider", () => {
-  it("install throws with stdio-only error", async () => {
+  let tempDir: string;
+  let origHome: string | undefined;
+  let origXdg: string | undefined;
+  let origPath: string | undefined;
+  let npxPath: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "dosu-claude-desktop-test-"));
+    origHome = process.env.HOME;
+    origXdg = process.env.XDG_CONFIG_HOME;
+    origPath = process.env.PATH;
+    process.env.HOME = tempDir;
+    process.env.XDG_CONFIG_HOME = join(tempDir, "xdg");
+    const binDir = join(tempDir, "fake-bin");
+    mkdirSync(binDir, { recursive: true });
+    npxPath = join(binDir, "npx");
+    writeFileSync(npxPath, "#!/bin/sh\n", { mode: 0o755 });
+    process.env.PATH = binDir;
+  });
+
+  afterEach(() => {
+    process.env.HOME = origHome;
+    if (origXdg !== undefined) {
+      process.env.XDG_CONFIG_HOME = origXdg;
+    } else {
+      delete process.env.XDG_CONFIG_HOME;
+    }
+    process.env.PATH = origPath;
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("global install writes an absolute-npx mcp-remote stdio entry with PATH env", async () => {
     const { ClaudeDesktopProvider } = await import("./claude-desktop");
     const provider = ClaudeDesktopProvider();
 
-    expect(() => provider.install(makeCfg(), true)).toThrow(
-      "this tool only supports local (stdio) servers",
+    provider.install(makeCfg(), true);
+
+    const cfg = loadJSONConfig(provider.globalConfigPath());
+    const dosu = cfg.mcpServers.dosu;
+    expect(dosu).toBeDefined();
+    // Claude Desktop chat launches MCP servers with a minimal PATH that has
+    // no Homebrew/nvm, so the entry needs an absolute npx plus a PATH env
+    // that lets npx's node shebang resolve.
+    expect(dosu.command).toBe(npxPath);
+    expect(dosu.args).toContain(`mcp-remote@${MCP_REMOTE_VERSION}`);
+    expect(dosu.args.join(" ")).toContain("/deployments/dep-123");
+    // Key in env as a ${VAR} placeholder — never in argv.
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal placeholder expanded by mcp-remote
+    expect(dosu.args).toContain("X-Dosu-API-Key:${X_DOSU_API_KEY}");
+    expect(dosu.args.join(" ")).not.toContain("key-abc");
+    expect(dosu.env.X_DOSU_API_KEY).toBe("key-abc");
+    expect(dosu.args).toContain("http-only");
+    expect(dosu.env.PATH).toContain(dirname(npxPath));
+    expect(dosu.url).toBeUndefined();
+  });
+
+  it("OSS mode install uses the base MCP URL", async () => {
+    const { ClaudeDesktopProvider } = await import("./claude-desktop");
+    const provider = ClaudeDesktopProvider();
+
+    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), true);
+
+    const cfg = loadJSONConfig(provider.globalConfigPath());
+    const args = cfg.mcpServers.dosu.args.join(" ");
+    expect(args).toContain("/v1/mcp");
+    expect(args).not.toContain("/deployments/");
+  });
+
+  it("install throws when deployment_id is missing", async () => {
+    const { ClaudeDesktopProvider } = await import("./claude-desktop");
+    const provider = ClaudeDesktopProvider();
+
+    expect(() => provider.install(makeCfg({ deployment_id: undefined }), true)).toThrow(
+      "deployment ID is required",
     );
   });
 
-  it("remove throws with stdio-only error", async () => {
+  it("install throws a clear error when npx is not on PATH", async () => {
     const { ClaudeDesktopProvider } = await import("./claude-desktop");
     const provider = ClaudeDesktopProvider();
 
-    expect(() => provider.remove(true)).toThrow("this tool only supports local (stdio) servers");
+    process.env.PATH = join(tempDir, "no-bin");
+
+    expect(() => provider.install(makeCfg(), true)).toThrow(/npx/);
+  });
+
+  it("local install throws because Claude Desktop is global-only", async () => {
+    const { ClaudeDesktopProvider } = await import("./claude-desktop");
+    const provider = ClaudeDesktopProvider();
+
+    expect(() => provider.install(makeCfg(), false)).toThrow("does not support local installation");
+  });
+
+  it("remove deletes the dosu entry", async () => {
+    const { ClaudeDesktopProvider } = await import("./claude-desktop");
+    const provider = ClaudeDesktopProvider();
+
+    provider.install(makeCfg(), true);
+    provider.remove(true);
+
+    const cfg = loadJSONConfig(provider.globalConfigPath());
+    expect(cfg.mcpServers.dosu).toBeUndefined();
+  });
+
+  it("local remove throws because Claude Desktop is global-only", async () => {
+    const { ClaudeDesktopProvider } = await import("./claude-desktop");
+    const provider = ClaudeDesktopProvider();
+
+    expect(() => provider.remove(false)).toThrow("does not support local removal");
+  });
+
+  it("install skips empty PATH segments when resolving npx", async () => {
+    const { ClaudeDesktopProvider } = await import("./claude-desktop");
+    const provider = ClaudeDesktopProvider();
+
+    process.env.PATH = `:${dirname(npxPath)}`;
+    provider.install(makeCfg(), true);
+
+    const cfg = loadJSONConfig(provider.globalConfigPath());
+    expect(cfg.mcpServers.dosu.command).toBe(npxPath);
+  });
+
+  it("isConfigured reflects presence of the dosu entry", async () => {
+    const { ClaudeDesktopProvider } = await import("./claude-desktop");
+    const provider = ClaudeDesktopProvider();
+
+    expect(provider.isConfigured()).toBe(false);
+    provider.install(makeCfg(), true);
+    expect(provider.isConfigured()).toBe(true);
   });
 });
 

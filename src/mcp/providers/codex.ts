@@ -1,5 +1,5 @@
 /**
- * Codex CLI provider — uses TOML config format.
+ * Codex provider — CLI and desktop app share ~/.codex/config.toml (TOML format).
  * Simplified: we write JSON-style to a TOML-like structure using manual serialization.
  * For full parity, we'd need a TOML library. For now, use JSON config as Codex also supports it.
  */
@@ -7,8 +7,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { type Config, MODE_OSS } from "../../config/config";
-import { mcpBaseURL, mcpHeaders, mcpURL, writeSecureFile } from "../config-helpers";
-import { expandHome, isInstalled } from "../detect";
+import { mcpBaseURL, mcpRemoteServer, mcpURL, writeSecureFile } from "../config-helpers";
+import { expandHome, findNpx, isInstalled, npxPathEnv } from "../detect";
 import type { SetupProvider } from "../providers";
 
 function codexHome(): string {
@@ -39,18 +39,35 @@ function mcpEndpoint(cfg: Config): string {
   return mcpURL(cfg.active_account?.target?.deployment_id);
 }
 
+function tomlString(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
 function installDosuToTOML(path: string, cfg: Config): void {
   let content = readTOML(path);
-  // Remove existing [mcp_servers.dosu] section if present
+  // Remove existing [mcp_servers.dosu] section if present (including the
+  // legacy [mcp_servers.dosu.http_headers] subtable from the remote-HTTP form)
   content = removeDosuFromTOML(content);
-  // Append new section
-  const url = mcpEndpoint(cfg);
-  const headers = mcpHeaders(cfg.active_account?.target?.api_key);
-  const headerEntries = Object.entries(headers)
-    .map(([k, v]) => `${k} = "${v}"`)
+  // Codex desktop only renders MCP Apps (the Session Knowledge card) for
+  // locally spawned stdio servers — a remote-HTTP entry serves tools fine
+  // but never shows the card — so proxy the endpoint through `npx
+  // mcp-remote`. Revert to the remote-HTTP form (type = "http" + url +
+  // http_headers) once Codex desktop renders MCP Apps from remote servers
+  // (no upstream issue tracks that as of 2026-08; closest is the closed
+  // feature request openai/codex#28912). npx is written by absolute path
+  // with an explicit PATH because this config is shared with Codex desktop,
+  // which launches from the Dock with the minimal launchd PATH — the same
+  // pitfall as Claude Desktop.
+  const npx = findNpx();
+  const remote = mcpRemoteServer(mcpEndpoint(cfg), cfg.active_account?.target?.api_key);
+  const env: Record<string, string> = { PATH: npxPathEnv(npx), ...remote.env };
+  const envEntries = Object.entries(env)
+    .map(([key, value]) => `${key} = ${tomlString(value)}`)
     .join("\n");
-
-  const section = `\n[mcp_servers.dosu]\ntype = "http"\nurl = "${url}"\n\n[mcp_servers.dosu.http_headers]\n${headerEntries}\n`;
+  const args = remote.args.map(tomlString).join(", ");
+  const section =
+    `\n[mcp_servers.dosu]\ncommand = ${tomlString(npx)}\nargs = [${args}]\n` +
+    `\n[mcp_servers.dosu.env]\n${envEntries}\n`;
   content += section;
   writeTOML(path, content);
 }
@@ -78,7 +95,7 @@ function removeDosuFromTOML(content: string): string {
 }
 
 export const CodexProvider = (): SetupProvider => ({
-  name: () => "Codex CLI",
+  name: () => "Codex (CLI + Desktop)",
   id: () => "codex",
   supportsLocal: () => true,
   priority: () => 8,
