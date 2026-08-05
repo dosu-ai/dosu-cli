@@ -7,8 +7,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { type Config, MODE_OSS } from "../../config/config";
-import { mcpBaseURL, mcpRemoteArgs, mcpURL, writeSecureFile } from "../config-helpers";
-import { expandHome, isInstalled } from "../detect";
+import { mcpBaseURL, mcpRemoteServer, mcpURL, writeSecureFile } from "../config-helpers";
+import { expandHome, findNpx, isInstalled, npxPathEnv } from "../detect";
 import type { SetupProvider } from "../providers";
 
 function codexHome(): string {
@@ -49,10 +49,25 @@ function installDosuToTOML(path: string, cfg: Config): void {
   // legacy [mcp_servers.dosu.http_headers] subtable from the remote-HTTP form)
   content = removeDosuFromTOML(content);
   // Codex desktop only renders MCP Apps (the Session Knowledge card) for
-  // stdio servers — a remote-HTTP entry serves tools fine but never shows
-  // the card — so proxy the endpoint through `npx mcp-remote`.
-  const args = mcpRemoteArgs(mcpEndpoint(cfg), cfg.active_account?.target?.api_key);
-  const section = `\n[mcp_servers.dosu]\ncommand = "npx"\nargs = [${args.map(tomlString).join(", ")}]\n`;
+  // locally spawned stdio servers — a remote-HTTP entry serves tools fine
+  // but never shows the card — so proxy the endpoint through `npx
+  // mcp-remote`. Revert to the remote-HTTP form (type = "http" + url +
+  // http_headers) once Codex desktop renders MCP Apps from remote servers
+  // (no upstream issue tracks that as of 2026-08; closest is the closed
+  // feature request openai/codex#28912). npx is written by absolute path
+  // with an explicit PATH because this config is shared with Codex desktop,
+  // which launches from the Dock with the minimal launchd PATH — the same
+  // pitfall as Claude Desktop.
+  const npx = findNpx();
+  const remote = mcpRemoteServer(mcpEndpoint(cfg), cfg.active_account?.target?.api_key);
+  const env: Record<string, string> = { PATH: npxPathEnv(npx), ...remote.env };
+  const envEntries = Object.entries(env)
+    .map(([key, value]) => `${key} = ${tomlString(value)}`)
+    .join("\n");
+  const args = remote.args.map(tomlString).join(", ");
+  const section =
+    `\n[mcp_servers.dosu]\ncommand = ${tomlString(npx)}\nargs = [${args}]\n` +
+    `\n[mcp_servers.dosu.env]\n${envEntries}\n`;
   content += section;
   writeTOML(path, content);
 }
