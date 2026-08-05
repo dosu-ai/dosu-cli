@@ -1,3 +1,10 @@
+# [0.42.0](https://github.com/dosu-ai/dosu-cli/compare/v0.41.0...v0.42.0) (2026-08-05)
+
+
+### Features
+
+* **mcp:** write stdio mcp-remote configs for Codex and Claude Desktop ([#153](https://github.com/dosu-ai/dosu-cli/issues/153)) ([7a73e33](https://github.com/dosu-ai/dosu-cli/commit/7a73e339389348b7a00b1c1e62241bd1e0482916))
+
 # [0.41.0](https://github.com/dosu-ai/dosu-cli/compare/v0.40.0...v0.41.0) (2026-08-04)
 
 
