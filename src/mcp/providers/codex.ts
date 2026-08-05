@@ -1,5 +1,5 @@
 /**
- * Codex CLI provider — uses TOML config format.
+ * Codex provider — CLI and desktop app share ~/.codex/config.toml (TOML format).
  * Simplified: we write JSON-style to a TOML-like structure using manual serialization.
  * For full parity, we'd need a TOML library. For now, use JSON config as Codex also supports it.
  */
@@ -95,7 +95,7 @@ function removeDosuFromTOML(content: string): string {
 }
 
 export const CodexProvider = (): SetupProvider => ({
-  name: () => "Codex CLI",
+  name: () => "Codex (CLI + Desktop)",
   id: () => "codex",
   supportsLocal: () => true,
   priority: () => 8,

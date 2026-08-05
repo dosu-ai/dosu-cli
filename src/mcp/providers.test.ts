@@ -54,7 +54,7 @@ describe("provider registry", () => {
       { id: "cursor", name: "Cursor", local: true },
       { id: "vscode", name: "VS Code", local: true },
       { id: "gemini", name: "Gemini CLI", local: true },
-      { id: "codex", name: "Codex CLI", local: true },
+      { id: "codex", name: "Codex (CLI + Desktop)", local: true },
       { id: "windsurf", name: "Windsurf", local: false },
       { id: "zed", name: "Zed", local: true },
       { id: "cline", name: "Cline", local: false },
