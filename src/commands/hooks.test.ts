@@ -38,6 +38,14 @@ vi.mock("../client/client", () => ({
   }),
 }));
 
+// Status-line accounting writes per-session state under the real home dir;
+// mock it so hook tests never touch ~/.dosu and the calls are assertable.
+vi.mock("../statusline/state", () => ({
+  countKnowledge: vi.fn(() => ({ pages: 1, notes: 2 })),
+  recordKnowledgeCounts: vi.fn(),
+  loadToolResponseText: vi.fn((v: unknown) => String(v)),
+}));
+
 // Deterministic hook runtime: the real resolver probes PATH and can
 // materialize a bundle into the config dir.
 vi.mock("../hooks/runtime", () => ({
@@ -51,6 +59,7 @@ import { loadConfig, MODE_OSS } from "../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { claimState, loadState, releaseState, saveState, type TicketState } from "../hooks/state";
 import { requestCreateTicket, requestGetTicket, TicketHttpError } from "../hooks/ticket-client";
+import { countKnowledge, loadToolResponseText, recordKnowledgeCounts } from "../statusline/state";
 import {
   collectDoctorChecks,
   hooksCommand,
@@ -259,6 +268,9 @@ describe("runUserPromptSubmit", () => {
     // the old ticket is consumed, the new one registered
     expect(releaseState).toHaveBeenCalledWith("sess", null);
     expect(saveState).toHaveBeenCalledWith(expect.objectContaining({ ticketId: "kt_new" }));
+    // the late delivery still counts for the status line
+    expect(countKnowledge).toHaveBeenCalledWith("OLD RESULT");
+    expect(recordKnowledgeCounts).toHaveBeenCalledWith("sess", { pages: 1, notes: 2 });
   });
 
   it("skips the harvest when the old lookup is still running", async () => {
@@ -464,6 +476,47 @@ describe("runPostToolUse", () => {
     expect(printed.hookSpecificOutput.additionalContext).toContain("verify adjacent");
   });
 
+  it("records status-line counts for an explicit read_knowledge call", async () => {
+    vi.mocked(loadState).mockReturnValue(null);
+    await runPostToolUse({
+      session_id: "sess",
+      tool_name: "mcp__dosu__read_knowledge",
+      tool_response: { result: "payload" },
+    });
+    expect(loadToolResponseText).toHaveBeenCalledWith({ result: "payload" });
+    expect(recordKnowledgeCounts).toHaveBeenCalledWith("sess", { pages: 1, notes: 2 });
+  });
+
+  it("matches plugin-style read_knowledge tool names", async () => {
+    vi.mocked(loadState).mockReturnValue(null);
+    await runPostToolUse({
+      session_id: "sess",
+      tool_name: "mcp__plugin_foo_dosu__read_knowledge",
+      tool_response: "payload",
+    });
+    expect(recordKnowledgeCounts).toHaveBeenCalled();
+  });
+
+  it("does not record counts for other tools or subagent lookups", async () => {
+    vi.mocked(loadState).mockReturnValue(null);
+    await runPostToolUse({ session_id: "sess", tool_name: "Bash", tool_response: "x" });
+    await runPostToolUse({
+      session_id: "sess",
+      tool_name: "mcp__dosu__read_knowledge",
+      tool_response: "x",
+      agent_id: "sub-1",
+    });
+    expect(recordKnowledgeCounts).not.toHaveBeenCalled();
+  });
+
+  it("records status-line counts when injecting ready context", async () => {
+    vi.mocked(loadState).mockReturnValue(pending());
+    vi.mocked(requestGetTicket).mockResolvedValue(readyResp("INJECTED"));
+    await runPostToolUse({ session_id: "sess" }, 50_000);
+    expect(countKnowledge).toHaveBeenCalledWith("INJECTED");
+    expect(recordKnowledgeCounts).toHaveBeenCalledWith("sess", { pages: 1, notes: 2 });
+  });
+
   it("appends a save nudge when the server recommends saving", async () => {
     vi.mocked(loadState).mockReturnValue(pending());
     vi.mocked(requestGetTicket).mockResolvedValue({
@@ -627,6 +680,8 @@ describe("runStop", () => {
       "sess",
       expect.objectContaining({ status: "delivered" }),
     );
+    expect(countKnowledge).toHaveBeenCalledWith("LATE CONTEXT");
+    expect(recordKnowledgeCounts).toHaveBeenCalledWith("sess", { pages: 1, notes: 2 });
   });
 
   it("consumes but does NOT block on a ready gap ticket (empty context)", async () => {
