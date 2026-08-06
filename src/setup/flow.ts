@@ -143,7 +143,15 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     // session; never reuse anything across an authentication boundary.
     apiClient = new Client(cfg);
     const refreshed = await resolveCloudSetupContext(cfg);
-    if (!refreshed || !refreshed.finishedOnboarding) {
+    if (refreshed === null) {
+      // Context load failed (it already printed the real error) — this is a
+      // transient/API problem, not an onboarding state.
+      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
+        reason: "cloud_setup_context_failed",
+      });
+      return;
+    }
+    if (!refreshed.finishedOnboarding) {
       // At most one trip per process — never a handshake loop. This is the
       // permanent guard for a web tier that didn't route the wizard
       // (deploy skew): tell the user, exit cleanly, let a re-run retry.
@@ -153,6 +161,8 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
       await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
         reason: "onboarding_incomplete_after_handshake",
       });
+      // The one deliberately non-zero setup exit: scripts chaining
+      // `dosu setup && …` must not proceed on a half-onboarded account.
       process.exitCode = 1;
       return;
     }
@@ -542,6 +552,13 @@ async function stepSetupHandshake(cfg: Config, onboardingRunID: string): Promise
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn("setup", `Setup handshake did not complete: ${msg}`);
     s.stop("Setup not completed");
+    // An `?error=` callback IS an answer — surface the browser's real reason
+    // instead of pretending we heard nothing.
+    const { OAuthCallbackError } = await import("../auth/errors");
+    if (err instanceof OAuthCallbackError) {
+      p.log.error(err.userMessage);
+      return false;
+    }
     p.log.warn(
       "Didn't hear back from the browser. If it opened the Dosu app instead of the setup " +
         "wizard, your CLI and browser may be signed in to different accounts — run " +

@@ -2468,6 +2468,79 @@ describe("runSetup single-handshake protocol", () => {
     expect(saved.active_account?.target?.deployment_id).toBe("d1");
   });
 
+  it("surfaces the browser's real reason when the handshake calls back with an error", async () => {
+    // An `?error=` callback is an ANSWER, not silence: show the web side's
+    // message instead of the generic "didn't hear back" + logout advice.
+    saveConfig(makeCfg());
+    setupAuthed();
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: false,
+      cli_onboarding_enabled: false,
+    });
+    const { OAuthCallbackError } = await import("../auth/errors");
+    mockStartOAuthFlow.mockRejectedValue(
+      new OAuthCallbackError("cli_mint_failed", {
+        error: "cli_mint_failed",
+        errorDescription: "The authentication service rejected the request",
+      }),
+    );
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(p.log.error).toHaveBeenCalledWith(
+      expect.stringContaining("The authentication service rejected the request"),
+    );
+    expect(p.log.warn).not.toHaveBeenCalledWith(expect.stringContaining("Didn't hear back"));
+    expect(
+      trackedCliOnboardingEvents().some(
+        (e) =>
+          e.event === "cli_onboarding_failed" &&
+          e.properties?.reason === "web_onboarding_incomplete",
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps the same account's stored target after the handshake (everyday semantics)", async () => {
+    // The sibling branch of the cross-account rebind above: when the SAME
+    // account comes back (now onboarded), the stored deployment is
+    // deliberately reused — no picker, no re-resolution. Note: the token must
+    // be JWT-shaped so replaceLoginSession can see it is the same user.
+    saveConfig(makeCfg());
+    setupAuthed();
+    const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
+    const payload = Buffer.from(JSON.stringify({ sub: "test-user-id" })).toString("base64url");
+    mockTrpc.user.getCliOnboardingContext.query
+      .mockResolvedValueOnce({
+        user_id: "test-user-id",
+        finished_onboarding: false,
+        cli_onboarding_enabled: false,
+      })
+      .mockResolvedValueOnce({
+        user_id: "test-user-id",
+        finished_onboarding: true,
+        cli_onboarding_enabled: false,
+      });
+    mockStartOAuthFlow.mockResolvedValue({
+      browserOpened: true,
+      token: {
+        access_token: `${header}.${payload}.signature`,
+        refresh_token: "ref-same",
+        expires_in: 3600,
+      },
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    const saved = loadConfig();
+    expect(saved.active_account?.user_id).toBe("test-user-id");
+    expect(saved.active_account?.target?.deployment_id).toBe("dep-123");
+    expect(p.select).not.toHaveBeenCalled();
+    expect(p.outro).toHaveBeenCalled();
+  });
+
   it("aborts once with guidance when the handshake returns a still-not-onboarded account", async () => {
     saveConfig(makeCfg());
     setupAuthed();

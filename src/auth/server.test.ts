@@ -274,7 +274,7 @@ describe("auth callback server", () => {
   });
 });
 
-describe("auth callback server — nextHold tab steering", () => {
+describe("auth callback server — single-purpose listener & success copy", () => {
   let server: CallbackServer | null = null;
 
   afterEach(() => {
