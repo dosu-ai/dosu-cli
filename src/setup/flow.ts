@@ -4,9 +4,7 @@
 
 import { randomUUID } from "node:crypto";
 import * as p from "@clack/prompts";
-import type { CallbackServer } from "../auth/server";
 import { Client, type Deployment, type Org, SessionExpiredError } from "../client/client";
-import type { TypedClient } from "../client/trpc";
 import { installSkill, skillInstallTargetForProvider } from "../commands/skill";
 import {
   bindAccountIdentity,
@@ -47,18 +45,16 @@ export interface ToolSelection {
   skipped: SetupProvider[];
 }
 
-type SetupFlowKind = "onboarding" | "setup";
-
 interface CloudSetupContext {
-  kind: SetupFlowKind;
   profileUserID: string;
-  targetOrg?: OwnedOrg;
-}
-
-interface OwnedOrg {
-  org_id: string;
-  name: string;
-  user_role?: string | null;
+  /**
+   * Analytics + handshake trigger only — never a flow decider. The CLI's
+   * view of this flag can be stale or belong to the wrong account (the
+   * 2026-08-05 twin-account deadlock); a wrong value here costs at most one
+   * redundant `/cli/auth` roundtrip, never a wrong irreversible branch. The
+   * browser side owns the real onboarding routing.
+   */
+  finishedOnboarding: boolean;
 }
 
 interface CliOnboardingProfile {
@@ -92,17 +88,12 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     saveConfig(cfg);
   }
 
-  // Authenticate — always runs so we can verify/refresh tokens. When the
-  // browser was involved, `authTab` steers that same tab onward (into the
-  // web onboarding wizard) instead of opening a second one.
+  // Authenticate — always runs so we can verify/refresh tokens. In cloud
+  // mode the browser hop carries `intent=setup`, so a first-run user
+  // completes the onboarding wizard inside that same trip.
   const authed = await stepAuthenticate(cfg, onboardingRunID);
   if (!authed) return;
   cfg = authed.cfg;
-  const authTab = authed.authTab;
-  const releaseAuthTab = () => {
-    authTab?.setNext(null);
-    authTab?.close();
-  };
   await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_auth_completed");
 
   let apiClient = new Client(cfg);
@@ -117,56 +108,63 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
         reason: "cloud_setup_context_failed",
       });
       s.stop("Workspace load failed");
-      releaseAuthTab();
       return;
     }
     s.stop("Workspace loaded");
   }
   await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_started", {
-    flow_kind: cloudSetupContext?.kind ?? "oss",
+    flow_kind: cloudSetupContext
+      ? cloudSetupContext.finishedOnboarding
+        ? "setup"
+        : "onboarding"
+      : "oss",
   });
 
-  // First-run web onboarding applies to cloud-mode users who haven't
-  // finished onboarding — unless they passed `--deployment`, which is an
-  // explicit "just wire me to this deployment" escape hatch that must never
-  // be silently overridden by the onboarding auto-bind.
-  const firstRunOnboarding =
-    cfg.mode !== MODE_OSS && cloudSetupContext?.kind === "onboarding" && !opts.deploymentID;
+  // The CLI-side flag only TRIGGERS one browser handshake — the browser
+  // decides whether the wizard is actually needed (it knows who is really
+  // signed in there). `--deployment` stays an explicit escape hatch that
+  // must never be overridden.
+  const needsHandshake =
+    cfg.mode !== MODE_OSS &&
+    cloudSetupContext !== null &&
+    !cloudSetupContext.finishedOnboarding &&
+    !opts.deploymentID;
 
-  // Only the first-run web-onboarding handoff can steer the auth tab; every
-  // other path lets the success page settle where it is.
-  if (!firstRunOnboarding) {
-    releaseAuthTab();
-  }
-
-  // Deployment: first-run onboarding binds the user's default deployment.
-  // Otherwise we only run the interactive picker when we don't already have
-  // a deployment id locked in, OR when the caller passed `--deployment` to
-  // explicitly switch. Everyday re-runs reuse the stored deployment silently.
-  if (firstRunOnboarding && cloudSetupContext) {
-    // First-run: repo connection + docs import live in the web onboarding
-    // wizard (the one code path we trust). Hand the browser over, wait for
-    // the wizard to finish, then bind the deployment context it left behind.
-    const onboarded = await stepWebOnboarding(cfg, onboardingRunID, authTab);
-    if (!onboarded) {
+  if (needsHandshake) {
+    const handshook = await stepSetupHandshake(cfg, onboardingRunID);
+    if (!handshook) {
       await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
         reason: "web_onboarding_incomplete",
       });
       return;
     }
-    // The browser may have completed onboarding under a different account.
-    // Resolve the target again with the returned session; never reuse the
-    // pre-handoff organization or client across an authentication boundary.
+    // The browser may have handed back a different account — that is the
+    // point: it knows who is really signed in. Re-resolve with the returned
+    // session; never reuse anything across an authentication boundary.
     apiClient = new Client(cfg);
-    const targetOrg = await resolveCurrentOnboardingTargetOrg(cfg);
-    const ok = await bindOnboardingDeployment(apiClient, cfg, targetOrg);
-    if (!ok) {
+    const refreshed = await resolveCloudSetupContext(cfg);
+    if (!refreshed || !refreshed.finishedOnboarding) {
+      // At most one trip per process — never a handshake loop. This is the
+      // permanent guard for a web tier that didn't route the wizard
+      // (deploy skew): tell the user, exit cleanly, let a re-run retry.
+      p.log.warn(
+        "Your account still needs onboarding. Finish it in the browser at the Dosu app, then re-run `dosu setup`.",
+      );
       await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
-        reason: "onboarding_deployment_failed",
+        reason: "onboarding_incomplete_after_handshake",
       });
+      process.exitCode = 1;
       return;
     }
-  } else if (!cfg.active_account?.target?.deployment_id || opts.deploymentID) {
+    cloudSetupContext = refreshed;
+  }
+
+  // Deployment: run the picker only when nothing is locked in yet, or when
+  // `--deployment` explicitly asks to switch. Everyday re-runs reuse the
+  // stored deployment silently. (After an account change the handshake
+  // dropped the old target, so the fresh account resolves here —
+  // stepSelectDeployment auto-picks the single real MCP.)
+  if (!cfg.active_account?.target?.deployment_id || opts.deploymentID) {
     const ok = await resolveDeployment(apiClient, cfg, opts);
     if (!ok) {
       await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
@@ -361,12 +359,6 @@ export async function runInstallSkill(providers: readonly SetupProvider[]): Prom
 
 interface AuthenticatedSetup {
   cfg: Config;
-  /**
-   * Present when this run authenticated via the browser: the still-open
-   * callback server whose success page polls /next, letting the setup flow
-   * steer that same tab onward (web onboarding) instead of opening another.
-   */
-  authTab?: CallbackServer;
 }
 
 async function stepAuthenticate(
@@ -419,16 +411,22 @@ async function openBrowserForSetup(
   try {
     const { startOAuthFlow } = await import("../auth/flow");
     const s = p.spinner();
+    // Cloud mode declares `intent=setup`: the web side routes a first-run
+    // *browser* user through the onboarding wizard inside this same trip, so
+    // the window must be handshake-sized. OSS users may never onboard — no
+    // intent, plain auth timeout.
+    const isCloud = cfg.mode !== MODE_OSS;
     const result = await startOAuthFlow(
       undefined,
       "/cli/auth",
-      onboardingRunID ? { onboarding_run_id: onboardingRunID } : {},
+      {
+        ...(isCloud ? { intent: "setup" } : {}),
+        ...(onboardingRunID ? { onboarding_run_id: onboardingRunID } : {}),
+      },
       undefined,
       {
         waitWithoutBrowser: true,
-        // Keep the callback server alive so the success page's tab can be
-        // steered into the web onboarding wizard for first-run users.
-        holdNext: true,
+        ...(isCloud ? { timeoutMs: SETUP_HANDSHAKE_TIMEOUT_MS } : {}),
         onAuthURL: (url) => {
           p.log.message(browserFallbackHint(url));
           s.start("Waiting for authentication...");
@@ -441,7 +439,10 @@ async function openBrowserForSetup(
       return null;
     }
     const token = result.token;
-    s.stop("Authenticated");
+    // Show WHICH account authenticated — a stale or twin-account session is
+    // caught by eye here long before it can misroute anything. (SSO PKCE
+    // callbacks carry no email; fall back to the generic word.)
+    s.stop(token.email ? `Authenticated as ${token.email}` : "Authenticated");
     logger.info("setup", "Browser auth completed");
 
     replaceLoginSession(cfg, {
@@ -450,7 +451,7 @@ async function openBrowserForSetup(
       expires_at: Math.floor(Date.now() / 1000) + token.expires_in,
     });
     saveConfig(cfg);
-    return { cfg, authTab: result.server };
+    return { cfg };
   } catch (err: unknown) {
     /* v8 ignore next 2 -- err is always Error in practice */
     const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
@@ -476,44 +477,44 @@ async function openBrowserForSetup(
 }
 
 /**
- * First-run onboarding handoff: repo connection + docs import happen in the
- * web onboarding wizard, not the terminal. Opens the browser at
- * `/onboarding/connections?source=cli&callback=…` — the wizard detects the
- * CLI flow, skips its "set up the CLI" step, marks onboarding finished on
- * the server, and redirects back to the local callback with a freshly
- * minted CLI session (same payload shape as the auth callback, so
- * `startOAuthFlow` provides the listener, browser open, and timeout).
- *
- * Returns `true` once the wizard handed back, `false` on timeout/failure
- * (with a hint to finish in the browser and re-run `dosu setup`).
- *
- * When `authTab` is present (this run authenticated via the browser), the
- * auth success page is steered straight into the wizard via `setNext` — one
- * tab for the whole journey. Without it, a fresh tab is opened.
+ * The setup handshake may contain the whole onboarding wizard — including a
+ * GitHub App install that can sit on an org-admin approval — so it gets a
+ * far longer window than a plain auth roundtrip.
  */
-async function stepWebOnboarding(
-  cfg: Config,
-  onboardingRunID: string,
-  authTab?: CallbackServer,
-): Promise<boolean> {
-  logger.info("setup", "Step: web onboarding handoff");
-  p.log.info("Almost there — connect your repos in the browser and we'll pick up from here.");
+const SETUP_HANDSHAKE_TIMEOUT_MS = 30 * 60 * 1000;
+
+/**
+ * One browser handshake against the ONE protocol endpoint, `/cli/auth`.
+ *
+ * `intent=setup` tells the web side to route the *browser* user through the
+ * onboarding wizard first when that user still needs it; either way the
+ * callback comes back with a freshly minted session for whoever is really
+ * signed in there — possibly a different account than the CLI held (the
+ * caller re-resolves everything after). The CLI never deep-links a web
+ * product page: the 2026-08-05 deadlock began with a wizard URL whose
+ * middleware owed the CLI nothing.
+ *
+ * Returns `true` once the browser handed a session back, `false` on
+ * timeout/failure.
+ */
+async function stepSetupHandshake(cfg: Config, onboardingRunID: string): Promise<boolean> {
+  logger.info("setup", "Step: setup handshake");
+  p.log.info("Almost there — finish setting up in the browser and we'll pick up from here.");
   const s = p.spinner();
   try {
     const { startOAuthFlow } = await import("../auth/flow");
     const result = await startOAuthFlow(
       undefined,
-      "/onboarding/connections",
-      { source: "cli", onboarding_run_id: onboardingRunID },
+      "/cli/auth",
+      { intent: "setup", onboarding_run_id: onboardingRunID },
       undefined,
       {
         waitWithoutBrowser: true,
-        suppressBrowserOpen: Boolean(authTab),
         successVariant: "onboarding",
+        timeoutMs: SETUP_HANDSHAKE_TIMEOUT_MS,
         onAuthURL: (url) => {
-          authTab?.setNext(url);
           p.log.message(browserFallbackHint(url));
-          s.start("Waiting for onboarding to finish in the browser...");
+          s.start("Waiting for the browser...");
         },
       },
     );
@@ -522,31 +523,31 @@ async function stepWebOnboarding(
       s.stop("Could not open a browser");
       return false;
     }
-    // The wizard may hand back a session for a different browser account.
-    // Replace the account aggregate: same-account auth keeps its target, while
-    // an account change drops the old target before resolving the new one.
+    // The browser may hand back a session for a different account. Replace
+    // the account aggregate: same-account auth keeps its target, while an
+    // account change drops the old target before resolving the new one.
     replaceLoginSession(cfg, {
       access_token: result.token.access_token,
       refresh_token: result.token.refresh_token,
       expires_at: Math.floor(Date.now() / 1000) + result.token.expires_in,
     });
     saveConfig(cfg);
-    s.stop("Onboarding finished in the browser");
-    logger.info("setup", "Web onboarding handoff completed");
+    s.stop(
+      result.token.email ? `Authenticated as ${result.token.email}` : "Browser setup finished",
+    );
+    logger.info("setup", "Setup handshake completed");
     return true;
   } catch (err: unknown) {
     /* v8 ignore next -- err is always Error in practice */
     const msg = err instanceof Error ? err.message : String(err);
-    logger.warn("setup", `Web onboarding handoff did not complete: ${msg}`);
-    s.stop("Onboarding not completed");
+    logger.warn("setup", `Setup handshake did not complete: ${msg}`);
+    s.stop("Setup not completed");
     p.log.warn(
-      "Didn't hear back from the browser. Finish onboarding there, then re-run `dosu setup`.",
+      "Didn't hear back from the browser. If it opened the Dosu app instead of the setup " +
+        "wizard, your CLI and browser may be signed in to different accounts — run " +
+        "`dosu logout`, then retry. Otherwise finish in the browser and re-run `dosu setup`.",
     );
     return false;
-  } finally {
-    // The auth tab either navigated into the wizard already or was closed by
-    // the user; either way its server has served its purpose.
-    authTab?.close();
   }
 }
 
@@ -563,28 +564,9 @@ async function resolveCloudSetupContext(cfg: Config): Promise<CloudSetupContext 
     bindAccountIdentity(cfg, profile.user_id);
     saveConfig(cfg);
 
-    // First-run detection is driven purely by `finished_onboarding`. The old
-    // `cli_onboarding_enabled` flag gated a terminal-local onboarding path
-    // that no longer exists — first-run users now finish onboarding in the
-    // web wizard via `stepWebOnboarding`.
-    if (profile.finished_onboarding === true) {
-      return {
-        kind: "setup",
-        profileUserID: profile.user_id,
-      };
-    }
-
-    const targetOrg = await resolveOnboardingTargetOrg(trpc);
-    if (!targetOrg) {
-      p.log.error("Could not determine your onboarding organization.");
-      return null;
-    }
-
-    logger.info("setup", `First-run onboarding detected for org ${targetOrg.org_id}`);
     return {
-      kind: "onboarding",
       profileUserID: profile.user_id,
-      targetOrg,
+      finishedOnboarding: profile.finished_onboarding === true,
     };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -592,71 +574,6 @@ async function resolveCloudSetupContext(cfg: Config): Promise<CloudSetupContext 
     p.log.error(`Could not load your onboarding state: ${msg}`);
     return null;
   }
-}
-
-async function resolveOnboardingTargetOrg(trpc: TypedClient): Promise<OwnedOrg | null> {
-  const accessibleOrgs: OwnedOrg[] = await trpc.organization.getOrganizations.query();
-  const ownerOrg = accessibleOrgs.find((org) => org.user_role === "OWNER");
-  if (ownerOrg) {
-    return ownerOrg;
-  }
-  return accessibleOrgs[0] ?? null;
-}
-
-async function resolveCurrentOnboardingTargetOrg(cfg: Config): Promise<OwnedOrg | null> {
-  try {
-    const { createTypedClient } = await import("../client/trpc");
-    const trpc = createTypedClient(cfg);
-    const profile: CliOnboardingProfile | null = await trpc.user.getCliOnboardingContext.query();
-    if (!profile?.user_id) return null;
-    bindAccountIdentity(cfg, profile.user_id);
-    saveConfig(cfg);
-    return await resolveOnboardingTargetOrg(trpc);
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.error("setup", `Failed to resolve post-onboarding organization: ${msg}`);
-    p.log.error(`Could not determine your onboarding organization: ${msg}`);
-    return null;
-  }
-}
-
-async function bindOnboardingDeployment(
-  apiClient: Client,
-  cfg: Config,
-  targetOrg: OwnedOrg | null,
-): Promise<boolean> {
-  if (!targetOrg) {
-    p.log.error("Could not determine your onboarding organization.");
-    return false;
-  }
-
-  const deployment = await resolveOnboardingDeployment(apiClient, targetOrg);
-  if (!deployment) {
-    p.log.error(`No MCP found for ${targetOrg.name}.`);
-    return false;
-  }
-
-  cfg.mode = undefined;
-  applyDeployment(cfg, deployment);
-  logger.info(
-    "setup",
-    `Bound onboarding context org=${targetOrg.org_id} deployment=${deployment.deployment_id}`,
-  );
-  p.log.success(`Organization\n${dim(targetOrg.name)}`);
-  return true;
-}
-
-async function resolveOnboardingDeployment(
-  apiClient: Client,
-  targetOrg: OwnedOrg,
-): Promise<Deployment | null> {
-  const deployments = await fetchDeployments(apiClient);
-  const orgDeployments = deployments.filter((deployment) => deployment.org_id === targetOrg.org_id);
-  return (
-    orgDeployments.find((deployment) => deployment.provider_slug === MCP_PROVIDER_SLUG) ??
-    orgDeployments[0] ??
-    null
-  );
 }
 
 /**
@@ -769,6 +686,16 @@ async function stepSelectDeployment(apiClient: Client, org: Org): Promise<Deploy
       logger.info("setup", `Selected deployment: ${deployments[0].name} (auto, only one)`);
       p.log.success(`Using MCP\n${dim(deployments[0].name)}`);
       return deployments[0];
+    }
+    // The onboarding wizard creates one repo-deployment per connected repo,
+    // so a freshly onboarded org always has several deployments — but only
+    // one real MCP. Never show users a picker full of their own repo names
+    // when the answer is unambiguous.
+    const mcpDeployments = deployments.filter((d) => d.provider_slug === MCP_PROVIDER_SLUG);
+    if (mcpDeployments.length === 1) {
+      logger.info("setup", `Selected deployment: ${mcpDeployments[0].name} (auto, single MCP)`);
+      p.log.success(`Using MCP\n${dim(mcpDeployments[0].name)}`);
+      return mcpDeployments[0];
     }
     const selected = await p.select({
       message: "Select an MCP",

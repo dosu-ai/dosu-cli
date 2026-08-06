@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1778,14 +1778,20 @@ describe("runSetup checkpoint behavior", () => {
     expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
   });
 
-  it("hands first-run users to the web onboarding wizard even when the legacy CLI flag is disabled", async () => {
+  it("hands first-run users to the /cli/auth handshake even when the legacy CLI flag is disabled", async () => {
     saveConfig(makeCfg());
     setupAuthed();
-    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
-      user_id: "test-user-id",
-      finished_onboarding: false,
-      cli_onboarding_enabled: false,
-    });
+    mockTrpc.user.getCliOnboardingContext.query
+      .mockResolvedValueOnce({
+        user_id: "test-user-id",
+        finished_onboarding: false,
+        cli_onboarding_enabled: false,
+      })
+      .mockResolvedValueOnce({
+        user_id: "test-user-id",
+        finished_onboarding: true,
+        cli_onboarding_enabled: false,
+      });
     mockStartOAuthFlow.mockResolvedValue({
       browserOpened: true,
       token: { access_token: "tok-web", refresh_token: "ref-web", expires_in: 3600 },
@@ -1796,8 +1802,8 @@ describe("runSetup checkpoint behavior", () => {
 
     expect(mockStartOAuthFlow).toHaveBeenCalledWith(
       undefined,
-      "/onboarding/connections",
-      expect.objectContaining({ source: "cli" }),
+      "/cli/auth",
+      expect.objectContaining({ intent: "setup" }),
       undefined,
       expect.objectContaining({ waitWithoutBrowser: true }),
     );
@@ -1838,9 +1844,10 @@ describe("runSetup checkpoint behavior", () => {
 
     await runSetup();
 
-    expect(p.log.warn).toHaveBeenCalledWith(
-      expect.stringContaining("Finish onboarding there, then re-run `dosu setup`."),
-    );
+    // The timeout guidance names the likeliest cause (account mismatch) and
+    // its cure — never a bare "go finish in the browser" loop.
+    expect(p.log.warn).toHaveBeenCalledWith(expect.stringContaining("`dosu logout`"));
+    expect(p.log.warn).toHaveBeenCalledWith(expect.stringContaining("re-run `dosu setup`"));
     expect(trackedCliOnboardingEvents()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -1854,54 +1861,11 @@ describe("runSetup checkpoint behavior", () => {
     expect(p.multiselect).not.toHaveBeenCalled();
   });
 
-  it("binds first-run onboarding to the owner org instead of stale local config", async () => {
-    saveConfig(
-      makeCfg({
-        deployment_id: "old-dep",
-        deployment_name: "Old Deploy",
-        org_id: "old-org",
-        space_id: "old-space",
-      }),
-    );
-    setupAuthed({
-      getDeployments: vi.fn().mockResolvedValue([
-        makeDeployment({
-          deployment_id: "dep-old",
-          org_id: "old-org",
-          org_name: "Old Org",
-          space_id: "space-old",
-        }),
-        makeDeployment({
-          deployment_id: "dep-owner",
-          org_id: "owner-org",
-          org_name: "Owner Org",
-          space_id: "space-owner",
-        }),
-      ]),
-    });
-    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
-      user_id: "test-user-id",
-      finished_onboarding: false,
-      cli_onboarding_enabled: true,
-    });
-    mockTrpc.organization.getOrganizations.query.mockResolvedValue([
-      { org_id: "owner-org", name: "Owner Org", user_role: "OWNER" },
-    ]);
-    mockStartOAuthFlow.mockResolvedValue({
-      browserOpened: true,
-      token: { access_token: "tok-web", refresh_token: "ref-web", expires_in: 3600 },
-    });
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-
-    await runSetup();
-
-    const saved = loadConfig();
-    expect(saved.active_account?.target?.org_id).toBe("owner-org");
-    expect(saved.active_account?.target?.space_id).toBe("space-owner");
-    expect(saved.active_account?.target?.deployment_id).toBe("dep-owner");
-  });
-
-  it("re-resolves onboarding state when the browser hands back a different account", async () => {
+  it("re-resolves everything when the handshake hands back a different account", async () => {
+    // The twin-account incident shape: the CLI held account A's session and
+    // stale target; the browser is signed in as account B. The handshake
+    // returns B's minted session — the stale target must be dropped and B's
+    // MCP bound, with a fresh API key (never A's).
     saveConfig(
       makeCfg({
         access_token: "account-a-token",
@@ -1914,13 +1878,8 @@ describe("runSetup checkpoint behavior", () => {
       }),
     );
     const methods = setupAuthed({
+      getOrgs: vi.fn().mockResolvedValue([{ org_id: "account-b-org", name: "Account B Org" }]),
       getDeployments: vi.fn().mockResolvedValue([
-        makeDeployment({
-          deployment_id: "account-a-deployment",
-          org_id: "account-a-org",
-          org_name: "Account A Org",
-          space_id: "account-a-space",
-        }),
         makeDeployment({
           deployment_id: "account-b-deployment",
           org_id: "account-b-org",
@@ -1929,18 +1888,17 @@ describe("runSetup checkpoint behavior", () => {
         }),
       ]),
     });
-    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
-      user_id: "account-a-user",
-      finished_onboarding: false,
-      cli_onboarding_enabled: true,
-    });
-    mockTrpc.organization.getOrganizations.query
-      .mockResolvedValueOnce([
-        { org_id: "account-a-org", name: "Account A Org", user_role: "OWNER" },
-      ])
-      .mockResolvedValueOnce([
-        { org_id: "account-b-org", name: "Account B Org", user_role: "OWNER" },
-      ]);
+    mockTrpc.user.getCliOnboardingContext.query
+      .mockResolvedValueOnce({
+        user_id: "account-a-user",
+        finished_onboarding: false,
+        cli_onboarding_enabled: false,
+      })
+      .mockResolvedValueOnce({
+        user_id: "account-b-user",
+        finished_onboarding: true,
+        cli_onboarding_enabled: false,
+      });
     mockStartOAuthFlow.mockResolvedValue({
       browserOpened: true,
       token: {
@@ -1954,6 +1912,7 @@ describe("runSetup checkpoint behavior", () => {
     await runSetup();
 
     const saved = loadConfig();
+    expect(saved.active_account?.user_id).toBe("account-b-user");
     expect(saved.active_account?.session.access_token).toBe("account-b-token");
     expect(saved.active_account?.session.refresh_token).toBe("account-b-refresh");
     expect(saved.active_account?.target?.org_id).toBe("account-b-org");
@@ -1982,64 +1941,31 @@ describe("runSetup checkpoint behavior", () => {
     expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
   });
 
-  it("steers the auth tab into the web wizard instead of opening a second one", async () => {
-    // Fresh config → browser auth happens this run, so an auth tab exists.
+  it("completes a fresh first-run in a single browser trip (wizard rides the auth hop)", async () => {
+    // Fresh config → the auth hop itself carries `intent=setup`, so the web
+    // side routes the wizard inside that same trip. There is no second
+    // browser flow and no tab-steering machinery.
     saveConfig(makeCfg({ access_token: "", refresh_token: "", expires_at: 0 }));
     setupAuthed();
-    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
-      user_id: "test-user-id",
-      finished_onboarding: false,
-      cli_onboarding_enabled: false,
-    });
-    const authTab = { port: 1, close: vi.fn(), setNext: vi.fn() };
-    mockStartOAuthFlow
-      .mockResolvedValueOnce({
-        browserOpened: true,
-        token: { access_token: "tok-auth", refresh_token: "ref-auth", expires_in: 3600 },
-        server: authTab,
-      })
-      .mockImplementationOnce(async (_signal, _path, _params, _onAuthURL, options) => {
-        options?.onAuthURL?.("https://app.test/onboarding/connections?source=cli&callback=x");
-        return {
-          browserOpened: true,
-          token: { access_token: "tok-web", refresh_token: "ref-web", expires_in: 3600 },
-        };
-      });
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-
-    await runSetup();
-
-    // The existing tab was steered to the wizard URL…
-    expect(authTab.setNext).toHaveBeenCalledWith(
-      "https://app.test/onboarding/connections?source=cli&callback=x",
-    );
-    // …and the wizard call suppressed its own browser open.
-    const handoffOptions = mockStartOAuthFlow.mock.calls[1]?.[4];
-    expect(handoffOptions).toMatchObject({
-      suppressBrowserOpen: true,
-      successVariant: "onboarding",
-    });
-    expect(authTab.close).toHaveBeenCalled();
-  });
-
-  it("releases the auth tab when the profile is already onboarded", async () => {
-    saveConfig(makeCfg({ access_token: "", refresh_token: "", expires_at: 0 }));
-    setupAuthed();
-    // installRemoteSetupDefaults: finished_onboarding=true → ordinary setup.
-    const authTab = { port: 1, close: vi.fn(), setNext: vi.fn() };
+    // By the time the CLI queries its context, the browser-side wizard has
+    // already finished — the flag comes back true.
     mockStartOAuthFlow.mockResolvedValueOnce({
       browserOpened: true,
       token: { access_token: "tok-auth", refresh_token: "ref-auth", expires_in: 3600 },
-      server: authTab,
     });
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
 
     await runSetup();
 
-    // Tab dismissed (stops polling) and the server closed; no second flow.
-    expect(authTab.setNext).toHaveBeenCalledWith(null);
-    expect(authTab.close).toHaveBeenCalled();
     expect(mockStartOAuthFlow).toHaveBeenCalledTimes(1);
+    expect(mockStartOAuthFlow).toHaveBeenCalledWith(
+      undefined,
+      "/cli/auth",
+      expect.objectContaining({ intent: "setup" }),
+      undefined,
+      expect.objectContaining({ timeoutMs: 30 * 60 * 1000 }),
+    );
+    expect(p.outro).toHaveBeenCalled();
   });
 
   it("honors --deployment over the web onboarding handoff for unfinished profiles", async () => {
@@ -2142,45 +2068,20 @@ describe("runSetup additional branches", () => {
     expect(p.outro).not.toHaveBeenCalled();
   });
 
-  it("aborts onboarding when no target org can be determined", async () => {
+  it("aborts when the handshake account has no organizations", async () => {
     saveConfig(makeCfg());
-    setupAuthed();
-    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
-      user_id: "test-user-id",
-      finished_onboarding: false,
-      cli_onboarding_enabled: true,
-    });
-    // No accessible orgs → resolveOnboardingTargetOrg returns null.
-    mockTrpc.organization.getOrganizations.query.mockResolvedValue([]);
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-
-    await runSetup();
-
-    expect(p.log.error).toHaveBeenCalledWith("Could not determine your onboarding organization.");
-    expect(p.outro).not.toHaveBeenCalled();
-  });
-
-  it("falls back to the first accessible org when none has the OWNER role", async () => {
-    saveConfig(makeCfg());
-    setupAuthed({
-      getDeployments: vi.fn().mockResolvedValue([
-        makeDeployment({
-          deployment_id: "dep-member",
-          org_id: "member-org",
-          org_name: "Member Org",
-          space_id: "space-member",
-        }),
-      ]),
-    });
-    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
-      user_id: "test-user-id",
-      finished_onboarding: false,
-      cli_onboarding_enabled: true,
-    });
-    // No OWNER role anywhere → falls back to accessibleOrgs[0].
-    mockTrpc.organization.getOrganizations.query.mockResolvedValue([
-      { org_id: "member-org", name: "Member Org", user_role: "MEMBER" },
-    ]);
+    setupAuthed({ getOrgs: vi.fn().mockResolvedValue([]) });
+    mockTrpc.user.getCliOnboardingContext.query
+      .mockResolvedValueOnce({
+        user_id: "test-user-id",
+        finished_onboarding: false,
+        cli_onboarding_enabled: false,
+      })
+      .mockResolvedValueOnce({
+        user_id: "user-b",
+        finished_onboarding: true,
+        cli_onboarding_enabled: false,
+      });
     vi.mocked(startOAuthFlow).mockResolvedValue({
       browserOpened: true,
       token: { access_token: "tok-web", refresh_token: "ref-web", expires_in: 3600 },
@@ -2189,67 +2090,37 @@ describe("runSetup additional branches", () => {
 
     await runSetup();
 
-    const saved = loadConfig();
-    expect(saved.active_account?.target?.org_id).toBe("member-org");
-    expect(saved.active_account?.target?.deployment_id).toBe("dep-member");
-  });
-
-  it("aborts onboarding when no deployment exists for the target org", async () => {
-    saveConfig(makeCfg());
-    // Deployments exist but none belong to the onboarding org.
-    setupAuthed({
-      getDeployments: vi
-        .fn()
-        .mockResolvedValue([makeDeployment({ deployment_id: "dep-other", org_id: "other-org" })]),
-    });
-    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
-      user_id: "test-user-id",
-      finished_onboarding: false,
-      cli_onboarding_enabled: true,
-    });
-    mockTrpc.organization.getOrganizations.query.mockResolvedValue([
-      { org_id: "owner-org", name: "Owner Org", user_role: "OWNER" },
-    ]);
-    vi.mocked(startOAuthFlow).mockResolvedValue({
-      browserOpened: true,
-      token: { access_token: "tok-web", refresh_token: "ref-web", expires_in: 3600 },
-    });
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-
-    await runSetup();
-
-    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("No MCP found for Owner Org"));
+    expect(p.log.error).toHaveBeenCalledWith("No organizations found for your account");
     expect(p.outro).not.toHaveBeenCalled();
     expect(
       trackedCliOnboardingEvents().some(
         (e) =>
           e.event === "cli_onboarding_failed" &&
-          e.properties?.reason === "onboarding_deployment_failed",
+          e.properties?.reason === "deployment_resolution_failed",
       ),
     ).toBe(true);
   });
 
-  it("picks the first org deployment when none matches the dosu_mcp provider slug", async () => {
+  it("aborts when the handshake account's org has no MCPs", async () => {
     saveConfig(makeCfg());
+    // Deployments exist but none belong to the handshake account's org.
     setupAuthed({
-      getDeployments: vi.fn().mockResolvedValue([
-        makeDeployment({
-          deployment_id: "dep-fallback",
-          org_id: "owner-org",
-          org_name: "Owner Org",
-          space_id: "space-fallback",
-          provider_slug: "some_other_provider",
-        }),
-      ]),
+      getOrgs: vi.fn().mockResolvedValue([{ org_id: "org-b", name: "Org B" }]),
+      getDeployments: vi
+        .fn()
+        .mockResolvedValue([makeDeployment({ deployment_id: "dep-other", org_id: "other-org" })]),
     });
-    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
-      user_id: "test-user-id",
-      finished_onboarding: false,
-      cli_onboarding_enabled: true,
-    });
-    mockTrpc.organization.getOrganizations.query.mockResolvedValue([
-      { org_id: "owner-org", name: "Owner Org", user_role: "OWNER" },
-    ]);
+    mockTrpc.user.getCliOnboardingContext.query
+      .mockResolvedValueOnce({
+        user_id: "test-user-id",
+        finished_onboarding: false,
+        cli_onboarding_enabled: false,
+      })
+      .mockResolvedValueOnce({
+        user_id: "user-b",
+        finished_onboarding: true,
+        cli_onboarding_enabled: false,
+      });
     vi.mocked(startOAuthFlow).mockResolvedValue({
       browserOpened: true,
       token: { access_token: "tok-web", refresh_token: "ref-web", expires_in: 3600 },
@@ -2258,8 +2129,60 @@ describe("runSetup additional branches", () => {
 
     await runSetup();
 
+    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("No MCPs found for Org B"));
+    expect(p.outro).not.toHaveBeenCalled();
+    expect(
+      trackedCliOnboardingEvents().some(
+        (e) =>
+          e.event === "cli_onboarding_failed" &&
+          e.properties?.reason === "deployment_resolution_failed",
+      ),
+    ).toBe(true);
+  });
+
+  it("asks instead of guessing when the org has several deployments but no dosu_mcp", async () => {
+    // The old flow silently grabbed the first deployment regardless of slug;
+    // with repo-deployments in the mix that guess is usually wrong. When no
+    // single MCP disambiguates, show the picker.
+    saveConfig(makeCfg());
+    setupAuthed({
+      getOrgs: vi.fn().mockResolvedValue([{ org_id: "org-b", name: "Org B" }]),
+      getDeployments: vi.fn().mockResolvedValue([
+        makeDeployment({
+          deployment_id: "dep-x",
+          org_id: "org-b",
+          provider_slug: "some_other_provider",
+        }),
+        makeDeployment({
+          deployment_id: "dep-y",
+          org_id: "org-b",
+          provider_slug: "github",
+        }),
+      ]),
+    });
+    vi.mocked(p.select).mockResolvedValue("dep-x");
+    mockTrpc.user.getCliOnboardingContext.query
+      .mockResolvedValueOnce({
+        user_id: "test-user-id",
+        finished_onboarding: false,
+        cli_onboarding_enabled: false,
+      })
+      .mockResolvedValueOnce({
+        user_id: "user-b",
+        finished_onboarding: true,
+        cli_onboarding_enabled: false,
+      });
+    vi.mocked(startOAuthFlow).mockResolvedValue({
+      browserOpened: true,
+      token: { access_token: "tok-web", refresh_token: "ref-web", expires_in: 3600 },
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(p.select).toHaveBeenCalledWith(expect.objectContaining({ message: "Select an MCP" }));
     const saved = loadConfig();
-    expect(saved.active_account?.target?.deployment_id).toBe("dep-fallback");
+    expect(saved.active_account?.target?.deployment_id).toBe("dep-x");
   });
 
   it("does not emit the removed component-selection telemetry event", async () => {
@@ -2383,17 +2306,23 @@ describe("runSetup additional branches", () => {
     expect(p.outro).not.toHaveBeenCalled();
   });
 
-  it("tracks MCP configuration after the web onboarding handback", async () => {
-    // First-run: the web wizard hands back, then the MCP tool configuration
-    // still runs (and is tracked) in the terminal.
+  it("tracks MCP configuration after the setup handshake hands back", async () => {
+    // First-run: the browser handshake hands back, then the MCP tool
+    // configuration still runs (and is tracked) in the terminal.
     saveConfig(makeCfg());
     setupAuthed();
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
-      user_id: "test-user-id",
-      finished_onboarding: false,
-      cli_onboarding_enabled: true,
-    });
+    mockTrpc.user.getCliOnboardingContext.query
+      .mockResolvedValueOnce({
+        user_id: "test-user-id",
+        finished_onboarding: false,
+        cli_onboarding_enabled: false,
+      })
+      .mockResolvedValueOnce({
+        user_id: "test-user-id",
+        finished_onboarding: true,
+        cli_onboarding_enabled: false,
+      });
     vi.mocked(startOAuthFlow).mockResolvedValue({
       browserOpened: true,
       token: { access_token: "tok-web", refresh_token: "ref-web", expires_in: 3600 },
@@ -2406,5 +2335,220 @@ describe("runSetup additional branches", () => {
     const events = trackedCliOnboardingEvents().map((input) => input.event);
     expect(events).toContain("cli_onboarding_mcp_configured");
     expect(events).toContain("cli_onboarding_completed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 9. Single-handshake protocol: /cli/auth owns onboarding routing.
+//
+// The CLI no longer decides "first run" by itself and never deep-links a web
+// product page: it expresses `intent=setup` on the ONE browser entry
+// (/cli/auth) and the web routes by the *browser* user's state. The callback
+// always comes back — with a session for whoever is really in the browser.
+// ---------------------------------------------------------------------------
+
+const SETUP_HANDSHAKE_TIMEOUT_MS = 30 * 60 * 1000;
+
+describe("runSetup single-handshake protocol", () => {
+  const mockClient = vi.mocked(Client);
+  const mockStartOAuthFlow = vi.mocked(startOAuthFlow);
+
+  beforeEach(() => {
+    setupTempEnv();
+    vi.resetAllMocks();
+    installSetupStepDefaults();
+    installRemoteSetupDefaults();
+    vi.mocked(p.isCancel).mockReturnValue(false);
+    installMultiselectDefault();
+    mockInstallSkill.mockResolvedValue({ success: true, sha: "test-sha" });
+  });
+  afterEach(() => {
+    process.exitCode = undefined;
+    teardownTempEnv();
+  });
+
+  function setupAuthed(overrides: Record<string, unknown> = {}) {
+    const methods = {
+      doRequestRaw: vi.fn().mockResolvedValue({ status: 200 }),
+      refreshToken: vi.fn(),
+      getOrgs: vi.fn().mockResolvedValue([{ org_id: "o1", name: "Org1" }]),
+      getDeployments: vi.fn().mockResolvedValue([makeDeployment()]),
+      validateAPIKey: vi.fn().mockResolvedValue(true),
+      createAPIKey: vi.fn().mockResolvedValue({ api_key: "new-key" }),
+      ...overrides,
+    };
+    mockClient.mockImplementation(function () {
+      return methods as unknown as Client;
+    });
+    return methods;
+  }
+
+  function firstRunThenOnboarded() {
+    // CLI-session user is not onboarded; the account the browser hands back
+    // is a different, already-onboarded one (the twin-account incident).
+    mockTrpc.user.getCliOnboardingContext.query
+      .mockResolvedValueOnce({
+        user_id: "test-user-id",
+        finished_onboarding: false,
+        cli_onboarding_enabled: false,
+      })
+      .mockResolvedValueOnce({
+        user_id: "user-b",
+        finished_onboarding: true,
+        cli_onboarding_enabled: false,
+      });
+    mockStartOAuthFlow.mockResolvedValue({
+      browserOpened: true,
+      token: {
+        access_token: "tok-b",
+        refresh_token: "ref-b",
+        expires_in: 3600,
+        email: "b@example.com",
+      },
+    });
+  }
+
+  it("hands a first-run user to /cli/auth with intent=setup and a 30-minute window", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    firstRunThenOnboarded();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(mockStartOAuthFlow).toHaveBeenCalledWith(
+      undefined,
+      "/cli/auth",
+      expect.objectContaining({ intent: "setup" }),
+      undefined,
+      expect.objectContaining({
+        waitWithoutBrowser: true,
+        timeoutMs: SETUP_HANDSHAKE_TIMEOUT_MS,
+      }),
+    );
+    const paths = mockStartOAuthFlow.mock.calls.map((call) => call[1]);
+    expect(paths).not.toContain("/onboarding/connections");
+  });
+
+  it("rebinds to the account the browser handed back (cross-account self-heal)", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    firstRunThenOnboarded();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    const saved = loadConfig();
+    expect(saved.active_account?.user_id).toBe("user-b");
+    expect(saved.active_account?.session.access_token).toBe("tok-b");
+    // The wizard creates one repo-deployment per connected repo — the MCP
+    // deployment must still be auto-bound without an interactive picker.
+    expect(saved.active_account?.target?.deployment_id).toBe("d1");
+    expect(p.outro).toHaveBeenCalled();
+  });
+
+  it("auto-binds the single dosu_mcp deployment even among repo deployments", async () => {
+    saveConfig(makeCfg());
+    setupAuthed({
+      getDeployments: vi
+        .fn()
+        .mockResolvedValue([
+          makeDeployment({ deployment_id: "repo-1", provider_slug: "github", name: "my-repo" }),
+          makeDeployment(),
+          makeDeployment({ deployment_id: "repo-2", provider_slug: "gitlab", name: "my-lib" }),
+        ]),
+    });
+    firstRunThenOnboarded();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(p.select).not.toHaveBeenCalled();
+    const saved = loadConfig();
+    expect(saved.active_account?.target?.deployment_id).toBe("d1");
+  });
+
+  it("aborts once with guidance when the handshake returns a still-not-onboarded account", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
+      user_id: "test-user-id",
+      finished_onboarding: false,
+      cli_onboarding_enabled: false,
+    });
+    mockStartOAuthFlow.mockResolvedValue({
+      browserOpened: true,
+      token: { access_token: "tok-x", refresh_token: "ref-x", expires_in: 3600 },
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    // Exactly one browser trip — never a handshake loop.
+    expect(mockStartOAuthFlow).toHaveBeenCalledTimes(1);
+    expect(p.outro).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    expect(
+      trackedCliOnboardingEvents().some(
+        (e) =>
+          e.event === "cli_onboarding_failed" &&
+          e.properties?.reason === "onboarding_incomplete_after_handshake",
+      ),
+    ).toBe(true);
+  });
+
+  it("sends intent=setup on the first browser hop for cloud mode", async () => {
+    // No stored session at all → stepAuthenticate goes to the browser.
+    setupAuthed();
+    mockStartOAuthFlow.mockResolvedValue({
+      browserOpened: true,
+      token: {
+        access_token: "tok-fresh",
+        refresh_token: "ref-fresh",
+        expires_in: 3600,
+        email: "fresh@example.com",
+      },
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(mockStartOAuthFlow).toHaveBeenCalledWith(
+      undefined,
+      "/cli/auth",
+      expect.objectContaining({ intent: "setup" }),
+      undefined,
+      expect.objectContaining({ timeoutMs: SETUP_HANDSHAKE_TIMEOUT_MS }),
+    );
+  });
+
+  it("keeps the OSS first hop free of the setup intent", async () => {
+    setupAuthed();
+    // OSS mode never queries the cloud profile, so the account identity must
+    // come from the JWT itself (as it does with real tokens).
+    const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
+    const payload = Buffer.from(JSON.stringify({ sub: "oss-user" })).toString("base64url");
+    mockStartOAuthFlow.mockResolvedValue({
+      browserOpened: true,
+      token: {
+        access_token: `${header}.${payload}.signature`,
+        refresh_token: "ref-oss",
+        expires_in: 3600,
+      },
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup({ mode: "oss" });
+
+    const [, , params] = mockStartOAuthFlow.mock.calls[0];
+    expect(params).not.toHaveProperty("intent");
+  });
+
+  it("keeps the setup flow's only web-app path /cli/auth (source contract)", () => {
+    // The 2026-08-05 deadlock began with the CLI deep-linking a web product
+    // page whose middleware owed it nothing. The setup flow may only ever
+    // link the protocol endpoint.
+    const source = readFileSync(new URL("./flow.ts", import.meta.url), "utf8");
+    expect(source).not.toContain("/onboarding/");
   });
 });
