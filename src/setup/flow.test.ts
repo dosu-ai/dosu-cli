@@ -1805,8 +1805,14 @@ describe("runSetup checkpoint behavior", () => {
       "/cli/auth",
       expect.objectContaining({ intent: "setup" }),
       undefined,
-      expect.objectContaining({ waitWithoutBrowser: true }),
+      expect.objectContaining({
+        waitWithoutBrowser: true,
+        timeoutMs: 30 * 60 * 1000,
+      }),
     );
+    // The setup flow never deep-links a web product page.
+    const paths = mockStartOAuthFlow.mock.calls.map((call) => call[1]);
+    expect(paths).not.toContain("/onboarding/connections");
     expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
   });
 
@@ -2347,8 +2353,6 @@ describe("runSetup additional branches", () => {
 // always comes back — with a session for whoever is really in the browser.
 // ---------------------------------------------------------------------------
 
-const SETUP_HANDSHAKE_TIMEOUT_MS = 30 * 60 * 1000;
-
 describe("runSetup single-handshake protocol", () => {
   const mockClient = vi.mocked(Client);
   const mockStartOAuthFlow = vi.mocked(startOAuthFlow);
@@ -2407,28 +2411,6 @@ describe("runSetup single-handshake protocol", () => {
       },
     });
   }
-
-  it("hands a first-run user to /cli/auth with intent=setup and a 30-minute window", async () => {
-    saveConfig(makeCfg());
-    setupAuthed();
-    firstRunThenOnboarded();
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-
-    await runSetup();
-
-    expect(mockStartOAuthFlow).toHaveBeenCalledWith(
-      undefined,
-      "/cli/auth",
-      expect.objectContaining({ intent: "setup" }),
-      undefined,
-      expect.objectContaining({
-        waitWithoutBrowser: true,
-        timeoutMs: SETUP_HANDSHAKE_TIMEOUT_MS,
-      }),
-    );
-    const paths = mockStartOAuthFlow.mock.calls.map((call) => call[1]);
-    expect(paths).not.toContain("/onboarding/connections");
-  });
 
   it("rebinds to the account the browser handed back (cross-account self-heal)", async () => {
     saveConfig(makeCfg());
@@ -2568,31 +2550,6 @@ describe("runSetup single-handshake protocol", () => {
           e.properties?.reason === "onboarding_incomplete_after_handshake",
       ),
     ).toBe(true);
-  });
-
-  it("sends intent=setup on the first browser hop for cloud mode", async () => {
-    // No stored session at all → stepAuthenticate goes to the browser.
-    setupAuthed();
-    mockStartOAuthFlow.mockResolvedValue({
-      browserOpened: true,
-      token: {
-        access_token: "tok-fresh",
-        refresh_token: "ref-fresh",
-        expires_in: 3600,
-        email: "fresh@example.com",
-      },
-    });
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-
-    await runSetup();
-
-    expect(mockStartOAuthFlow).toHaveBeenCalledWith(
-      undefined,
-      "/cli/auth",
-      expect.objectContaining({ intent: "setup" }),
-      undefined,
-      expect.objectContaining({ timeoutMs: SETUP_HANDSHAKE_TIMEOUT_MS }),
-    );
   });
 
   it("keeps the OSS first hop free of the setup intent", async () => {
