@@ -1,3 +1,10 @@
+# [0.43.0](https://github.com/dosu-ai/dosu-cli/compare/v0.42.0...v0.43.0) (2026-08-07)
+
+
+### Features
+
+* **setup:** collapse setup onto the single /cli/auth handshake ([#155](https://github.com/dosu-ai/dosu-cli/issues/155)) ([698aeee](https://github.com/dosu-ai/dosu-cli/commit/698aeee9fa2e70b5180563254e7ac628b50e9489)), closes [dosu#11968](https://github.com/dosu/issues/11968)
+
 # [0.42.0](https://github.com/dosu-ai/dosu-cli/compare/v0.41.0...v0.42.0) (2026-08-05)
 
 
