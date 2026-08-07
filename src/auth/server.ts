@@ -399,7 +399,7 @@ export async function startCallbackServer(opts: CallbackServerOptions = {}): Pro
       port: addr.port,
       close: () => {
         httpServer.close();
-        // Sever any keep-alive sockets so close completes promptly.
+        // Sever any keep-alive sockets so close completes promptly
         httpServer.closeAllConnections?.();
       },
     },
