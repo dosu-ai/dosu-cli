@@ -370,7 +370,9 @@ async function resolveDeployment(
         step: "deployment",
         reason: "no_deployments",
         agent_next_steps:
-          "No Dosu deployments are accessible to this account. Tell the user to create one at https://app.dosu.dev before retrying.",
+          "No Dosu deployments are accessible to this account. The CLI may be signed in to a " +
+          "different account than the user expects — have them run 'dosu logout' and retry, or " +
+          "create a deployment at https://app.dosu.dev before retrying.",
       });
       return { code: 1, cfg };
     }
@@ -382,7 +384,10 @@ async function resolveDeployment(
         step: "deployment",
         reason: "no_mcp_deployment",
         agent_next_steps:
-          "Account has deployments but none of them back an MCP server. Tell the user to create an MCP deployment at https://app.dosu.dev, or pass --deployment <id> to target a specific deployment.",
+          "Account has deployments but none of them back an MCP server. The CLI may be signed in " +
+          "to a different account than the user expects — have them run 'dosu logout' and retry, " +
+          "create an MCP deployment at https://app.dosu.dev, or pass --deployment <id> to target " +
+          "a specific deployment.",
       });
       return { code: 1, cfg };
     }

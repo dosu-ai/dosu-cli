@@ -4,16 +4,16 @@
 
 import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
-import {
-  type CallbackServer,
-  type SuccessVariant,
-  startCallbackServer,
-  type TokenResponse,
-} from "./server";
+import { type SuccessVariant, startCallbackServer, type TokenResponse } from "./server";
 
 export type OAuthFlowResult =
-  | { browserOpened: true; token: TokenResponse; server?: CallbackServer }
+  | { browserOpened: true; token: TokenResponse }
   | { browserOpened: false };
+
+/** Default wait for a plain auth roundtrip: under Supabase's ~10 min OAuth
+ * state TTL, so we surface a useful message before users hit a stale-state
+ * error. */
+const DEFAULT_TIMEOUT_MS = 8 * 60 * 1000;
 
 export interface OAuthFlowOptions {
   /** Called with the auth URL before the browser open is attempted. */
@@ -25,17 +25,12 @@ export interface OAuthFlowOptions {
    */
   waitWithoutBrowser?: boolean;
   /**
-   * Keep the callback server alive after the token arrives and return it on
-   * the result, so the caller can steer the success page's tab onward via
-   * `server.setNext(url)`. The caller owns closing the server.
+   * How long to wait for the callback. Defaults to 8 minutes (a plain auth
+   * roundtrip). The setup handshake passes a much longer window: with
+   * `intent=setup` the browser trip can contain the whole onboarding wizard
+   * — including a GitHub App install that may sit on an org-admin approval.
    */
-  holdNext?: boolean;
-  /**
-   * Don't open a browser — the caller navigates an already-open tab to the
-   * auth URL itself (e.g. via a previous server's `setNext`). `onAuthURL`
-   * still fires so the caller has the URL.
-   */
-  suppressBrowserOpen?: boolean;
+  timeoutMs?: number;
   /** Success-page copy variant served on the callback. Defaults to "auth". */
   successVariant?: SuccessVariant;
 }
@@ -63,12 +58,10 @@ export async function startOAuthFlow(
   options: OAuthFlowOptions = {},
 ): Promise<OAuthFlowResult> {
   const { server, tokenPromise } = await startCallbackServer({
-    nextHold: options.holdNext,
     successVariant: options.successVariant,
   });
 
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  let handedOver = false;
 
   try {
     const callbackURL = `http://localhost:${server.port}/callback`;
@@ -78,24 +71,18 @@ export async function startOAuthFlow(
     options.onAuthURL?.(authURL);
 
     let browserOpened = false;
-    if (options.suppressBrowserOpen) {
-      // The caller navigates an existing tab to authURL itself.
+    // Open browser — dynamic import to avoid bundling issues
+    const open = await import("open");
+    try {
+      await open.default(authURL);
       browserOpened = true;
-      logger.info("auth.flow", "Browser open suppressed — caller steers an existing tab");
-    } else {
-      // Open browser — dynamic import to avoid bundling issues
-      const open = await import("open");
-      try {
-        await open.default(authURL);
-        browserOpened = true;
-        logger.info("auth.flow", "Browser open command executed");
-        onAuthURL?.(authURL);
-      } catch (openErr) {
-        logger.warn(
-          "auth.flow",
-          `Could not open browser automatically: ${openErr instanceof Error ? openErr.message : String(openErr)}`,
-        );
-      }
+      logger.info("auth.flow", "Browser open command executed");
+      onAuthURL?.(authURL);
+    } catch (openErr) {
+      logger.warn(
+        "auth.flow",
+        `Could not open browser automatically: ${openErr instanceof Error ? openErr.message : String(openErr)}`,
+      );
     }
 
     if (!browserOpened && !options.waitWithoutBrowser) {
@@ -104,20 +91,18 @@ export async function startOAuthFlow(
       // Note: server.close() is called by the finally block below
     }
 
-    // 8 min < Supabase's ~10 min OAuth state TTL, so we surface a useful
-    // message before users hit a stale-state error.
+    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const timeoutMinutes = Math.round(timeoutMs / 60_000);
     const timeout = new Promise<never>((_, reject) => {
-      timeoutId = setTimeout(
-        () => {
-          logger.warn("auth.flow", "Authentication timed out (8min)");
-          reject(
-            new Error(
-              "Authentication did not complete within 8 minutes. The OAuth state may have expired — please run `dosu login` again.",
-            ),
-          );
-        },
-        8 * 60 * 1000,
-      );
+      timeoutId = setTimeout(() => {
+        logger.warn("auth.flow", `Authentication timed out (${timeoutMinutes}min)`);
+        reject(
+          new Error(
+            `Authentication did not complete within ${timeoutMinutes} minutes. ` +
+              "If you finished in the browser after the timeout, just re-run the command.",
+          ),
+        );
+      }, timeoutMs);
     });
 
     const abort = signal
@@ -131,18 +116,11 @@ export async function startOAuthFlow(
 
     const token = await Promise.race([tokenPromise, timeout, abort]);
     logger.info("auth.flow", "Token received");
-    if (options.holdNext) {
-      // Caller takes over the server to steer the tab (and close it).
-      handedOver = true;
-      return { browserOpened: true, token, server };
-    }
     return { browserOpened: true, token };
   } finally {
     clearTimeout(timeoutId);
-    if (!handedOver) {
-      server.close();
-      logger.debug("auth.flow", "Cleaning up: timeout cleared, server closed");
-    }
+    server.close();
+    logger.debug("auth.flow", "Cleaning up: timeout cleared, server closed");
   }
 }
 

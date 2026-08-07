@@ -39,7 +39,6 @@ function createMockServer(): CallbackServer {
   return {
     port: 12345,
     close: mockClose,
-    setNext: vi.fn(),
   };
 }
 
@@ -239,11 +238,27 @@ describe("startOAuthFlow", () => {
 
     const flowPromise = startOAuthFlow();
 
-    await expect(flowPromise).rejects.toThrow(
-      "Authentication did not complete within 8 minutes. The OAuth state may have expired",
-    );
+    await expect(flowPromise).rejects.toThrow("Authentication did not complete within 8 minutes.");
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 8 * 60 * 1000);
     expect(mockClose).toHaveBeenCalledOnce();
+
+    setTimeoutSpy.mockRestore();
+  });
+
+  it("honors a caller-supplied timeout window (the setup handshake is longer)", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((callback) => {
+      queueMicrotask(() => {
+        if (typeof callback === "function") callback();
+      });
+      return 1 as unknown as ReturnType<typeof setTimeout>;
+    });
+
+    const flowPromise = startOAuthFlow(undefined, "/cli/auth", {}, undefined, {
+      timeoutMs: 30 * 60 * 1000,
+    });
+
+    await expect(flowPromise).rejects.toThrow("Authentication did not complete within 30 minutes.");
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 30 * 60 * 1000);
 
     setTimeoutSpy.mockRestore();
   });
@@ -275,55 +290,22 @@ describe("startOAuthFlow", () => {
     expect(r).toMatchObject({ browserOpened: true });
   });
 
-  it("holdNext keeps the server open and hands it over on the result", async () => {
+  it("passes the successVariant through to the callback server and always closes it", async () => {
     const token: TokenResponse = { access_token: "tok", refresh_token: "ref", expires_in: 3600 };
 
-    const flowPromise = startOAuthFlow(undefined, "/cli/auth", {}, undefined, { holdNext: true });
-    await flowReady();
-
-    resolveToken(token);
-    const result = await flowPromise;
-
-    expect(result).toMatchObject({ browserOpened: true, token });
-    expect((result as { server?: CallbackServer }).server).toBe(mockServer);
-    // Server ownership transferred to the caller — not closed here.
-    expect(mockClose).not.toHaveBeenCalled();
-    expect(mockStartCallbackServer).toHaveBeenCalledWith(
-      expect.objectContaining({ nextHold: true }),
-    );
-  });
-
-  it("holdNext still closes the server on failure (no handover happened)", async () => {
-    const flowPromise = startOAuthFlow(undefined, "/cli/auth", {}, undefined, { holdNext: true });
-    await flowReady();
-
-    rejectToken(new Error("boom"));
-    await flowPromise.catch(() => {});
-
-    expect(mockClose).toHaveBeenCalledOnce();
-  });
-
-  it("suppressBrowserOpen completes the flow without opening a browser", async () => {
-    const token: TokenResponse = { access_token: "tok", refresh_token: "ref", expires_in: 3600 };
-
-    const flowPromise = startOAuthFlow(undefined, "/onboarding/connections", {}, undefined, {
-      suppressBrowserOpen: true,
+    const flowPromise = startOAuthFlow(undefined, "/cli/auth", {}, undefined, {
       successVariant: "onboarding",
     });
-    // flowReady() waits on open(), which never fires here — wait on the
-    // callback server instead, plus a macrotask barrier for the race arming.
-    await vi.waitFor(() => expect(mockStartCallbackServer).toHaveBeenCalled());
-    await new Promise((r) => setImmediate(r));
+    await flowReady();
 
     resolveToken(token);
     const result = await flowPromise;
 
     expect(result).toMatchObject({ browserOpened: true, token });
-    expect(mockOpenDefault).not.toHaveBeenCalled();
     expect(mockStartCallbackServer).toHaveBeenCalledWith(
       expect.objectContaining({ successVariant: "onboarding" }),
     );
-    // No holdNext → the flow still owns and closes the server.
+    // The flow always owns and closes the server — there is no handover.
     expect(mockClose).toHaveBeenCalledOnce();
   });
 });
