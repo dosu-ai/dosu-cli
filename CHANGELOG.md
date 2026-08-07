@@ -1,3 +1,20 @@
+# [0.43.0-alpha.1](https://github.com/dosu-ai/dosu-cli/compare/v0.42.0...v0.43.0-alpha.1) (2026-08-07)
+
+
+### Bug Fixes
+
+* **setup:** quiet nested skill installer ([997bcaa](https://github.com/dosu-ai/dosu-cli/commit/997bcaad9319f44f0aeace6c3ee451bfd42dbbee))
+* **setup:** show skill installation progress ([c0067cf](https://github.com/dosu-ai/dosu-cli/commit/c0067cf736cb16416f4ecb2b45d51b0fc9f96185))
+* **setup:** standardize installation summaries ([1e976a5](https://github.com/dosu-ai/dosu-cli/commit/1e976a56b3bc56d77cf59f630dd546931bd9b510))
+* **setup:** surface error callbacks and split the skew guard's failure modes ([0f3c94b](https://github.com/dosu-ai/dosu-cli/commit/0f3c94b9ffccd43e30988f19e9b812ac456a7f18))
+* **status:** support JSON output ([dc19349](https://github.com/dosu-ai/dosu-cli/commit/dc1934921066aa267765db95bc9f60d3cdc52baa))
+
+
+### Features
+
+* **setup:** collapse setup onto the single /cli/auth handshake ([9c7fbea](https://github.com/dosu-ai/dosu-cli/commit/9c7fbeae05c7758e467035b36d8ff5b553877675)), closes [dosu#11968](https://github.com/dosu/issues/11968)
+* **setup:** install complete agent bundle ([349d9e0](https://github.com/dosu-ai/dosu-cli/commit/349d9e03d4b73aaa1c41869e71ca2d5b95959cc7))
+
 # [0.42.0](https://github.com/dosu-ai/dosu-cli/compare/v0.41.0...v0.42.0) (2026-08-05)
 
 
