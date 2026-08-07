@@ -155,72 +155,9 @@ const SUCCESS_COPY: Record<SuccessVariant, { title: string; heading: string; clo
   },
 };
 
-/**
- * Injected when the server was started with `nextHold`: the success page
- * polls GET /next so the CLI can steer this same tab onward (e.g. into the
- * web onboarding wizard) instead of opening a second one. Polling stops on
- * 410 (CLI decided there's nowhere to go — the page then settles to
- * `settleMsg`, the variant's regular close message), after ~3 minutes, or
- * once the server is clearly gone (several consecutive fetch failures —
- * covers both a closed server and a 410 whose response was cut off
- * mid-flush). A single transient error never ends the loop, because giving
- * up early would strand a handoff the CLI is still preparing (it may spend
- * several network round-trips deciding before calling setNext).
- *
- * When the steer arrives (200), the page announces the next step — first-run
- * users are about to see the data-source connection wizard, so saying
- * "authentication successful, close this tab" right before that would be
- * confusing — then navigates.
- */
-function buildNextPollScript(settleMsg: string): string {
-  return `<script>
-(function () {
-  var tries = 0;
-  var misses = 0;
-  var setCopy = function (heading, msg) {
-    var h = document.getElementById('heading');
-    var m = document.getElementById('close-msg');
-    if (h && heading) h.textContent = heading;
-    if (m && msg) m.textContent = msg;
-  };
-  var settle = function () { setCopy(null, ${JSON.stringify(settleMsg)}); };
-  var timer = setInterval(function () {
-    tries += 1;
-    if (tries > 720) { clearInterval(timer); settle(); return; }
-    fetch('/next').then(function (res) {
-      misses = 0;
-      if (res.status === 200) {
-        clearInterval(timer);
-        res.json().then(function (body) {
-          if (body && body.url) {
-            setCopy("You're ready to connect your data sources", 'Redirecting...');
-            window.location.replace(body.url);
-          }
-        });
-      } else if (res.status === 410) {
-        clearInterval(timer);
-        settle();
-      }
-    }).catch(function () {
-      misses += 1;
-      if (misses >= 8) { clearInterval(timer); settle(); }
-    });
-  }, 250);
-})();
-</script>`;
-}
-
-function buildSuccessHtml(
-  email?: string,
-  variant: SuccessVariant = "auth",
-  withNextPoll = false,
-): string {
+function buildSuccessHtml(email?: string, variant: SuccessVariant = "auth"): string {
   const copy = SUCCESS_COPY[variant];
-  // While the /next poller is live, don't invite the user to close the tab —
-  // the CLI may be about to steer it onward. The poll script swaps in the
-  // regular close message once the CLI dismisses the hold (410) or the
-  // budget runs out.
-  const closeMsg = withNextPoll ? "Hang tight — this tab will continue automatically." : copy.close;
+  const closeMsg = copy.close;
   const emailLine = email
     ? `<p class="email">Signed in as <strong>${email.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</strong></p>`
     : "";
@@ -340,7 +277,6 @@ h1 {
     <span class="tip-label">Did you know?</span>
     You can use Dosu to make your coding agents faster and cheaper. Just ask your agent to use Dosu to update your AGENTS.md.
 </div>
-${withNextPoll ? buildNextPollScript(copy.close) : ""}
 </body>
 </html>`;
 }
@@ -348,21 +284,9 @@ ${withNextPoll ? buildNextPollScript(copy.close) : ""}
 export interface CallbackServer {
   port: number;
   close: () => void;
-  /**
-   * Steer the success page's tab onward (requires `nextHold`): a URL makes
-   * the page navigate there in place; `null` tells it to stop polling and
-   * stay put. No-op when the page never polls (server started without
-   * `nextHold`) or already navigated.
-   */
-  setNext: (url: string | null) => void;
 }
 
 export interface CallbackServerOptions {
-  /**
-   * Serve the success page with the /next poller so the CLI can redirect
-   * the tab afterwards via `server.setNext(url)`.
-   */
-  nextHold?: boolean;
   /** Success-page copy variant. Defaults to "auth". */
   successVariant?: SuccessVariant;
 }
@@ -383,9 +307,6 @@ export async function startCallbackServer(opts: CallbackServerOptions = {}): Pro
     rejectToken = reject;
   });
 
-  // undefined = undecided (keep polling), string = navigate, null = dismissed.
-  let nextTarget: string | null | undefined;
-
   const http = require("node:http") as typeof import("node:http");
 
   const httpServer = http.createServer((req, res) => {
@@ -397,21 +318,6 @@ export async function startCallbackServer(opts: CallbackServerOptions = {}): Pro
       "auth.server",
       `Request: ${req.method} ${url.pathname} cookie-len=${cookieLen} ua=${ua} has-token=${url.searchParams.has("access_token")}`,
     );
-
-    if (opts.nextHold && url.pathname === "/next") {
-      if (nextTarget === undefined) {
-        res.writeHead(204);
-        res.end();
-      } else if (nextTarget === null) {
-        res.writeHead(410);
-        res.end();
-      } else {
-        logger.info("auth.server", "Handing tab onward via /next");
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ url: nextTarget }));
-      }
-      return;
-    }
 
     if (url.pathname !== "/callback") {
       logger.debug("auth.server", `404: ${url.pathname}`);
@@ -474,9 +380,7 @@ export async function startCallbackServer(opts: CallbackServerOptions = {}): Pro
 
     logger.info("auth.server", "Served success HTML");
     res.writeHead(200, { "Content-Type": "text/html" });
-    res.end(
-      buildSuccessHtml(email ?? undefined, opts.successVariant ?? "auth", Boolean(opts.nextHold)),
-    );
+    res.end(buildSuccessHtml(email ?? undefined, opts.successVariant ?? "auth"));
   });
 
   // Listen on random port and wait for it to be ready
@@ -495,13 +399,8 @@ export async function startCallbackServer(opts: CallbackServerOptions = {}): Pro
       port: addr.port,
       close: () => {
         httpServer.close();
-        // The success page's /next poller keeps a keep-alive socket open;
-        // plain close() would wait for it to drain. Sever it so close
-        // completes promptly.
+        // Sever any keep-alive sockets so close completes promptly
         httpServer.closeAllConnections?.();
-      },
-      setNext: (url) => {
-        nextTarget = url;
       },
     },
     tokenPromise,
