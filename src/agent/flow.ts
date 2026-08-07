@@ -25,10 +25,9 @@ import {
 } from "../config/config";
 import { logger } from "../debug/logger";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
-import { allSetupProviders, type SetupProvider } from "../mcp/providers";
+import { allSetupProviders } from "../mcp/providers";
 import { fetchDosuRule, installRuleForAgent, isRuleAgent } from "../rules/installer";
 import { inGitWorkTree, upsertDosuAgentsSection } from "../setup/agents-md-step";
-import { isStdioOnly } from "../setup/flow";
 import { emitError, emitNeedUserAction, emitStep } from "./output";
 
 export interface AgentSetupOptions {
@@ -57,7 +56,6 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
   const provider = allSetupProviders().find((p) => p.id() === opts.tool.toLowerCase());
   if (!provider) {
     const available = allSetupProviders()
-      .filter((p) => !isStdioOnly(p))
       .map((p) => p.id())
       .join(", ");
     emitError({
@@ -67,15 +65,6 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
     });
     return 2;
   }
-  if (isStdioOnly(provider)) {
-    emitError({
-      step: "setup",
-      reason: "tool_unsupported_in_agent_mode",
-      agent_next_steps: `${provider.name()} is not supported by agent setup. Tell the user to run 'dosu mcp add ${provider.id()}' manually after signing in.`,
-    });
-    return 2;
-  }
-
   // 1. Auth: redeem a ticket if one was provided, otherwise verify any
   //    existing session, otherwise mint a fresh ticket and exit so the
   //    agent can hand the URL to the user.
@@ -500,7 +489,5 @@ export function buildResumeCommand(tool: string, ticket: string, deploymentID?: 
 
 /** Provider listing for `--tool` validation. Exported for tests. */
 export function listAgentSupportedToolIDs(): string[] {
-  return allSetupProviders()
-    .filter((p: SetupProvider) => !isStdioOnly(p))
-    .map((p) => p.id());
+  return allSetupProviders().map((p) => p.id());
 }

@@ -49,6 +49,50 @@ export function mcpHeaders(apiKey: string | undefined): Record<string, string> {
 }
 
 /**
+ * Exact-pinned so npx never floats to a fresh release on user machines —
+ * mcp-remote is a third-party package on the agent hot path, and a floating
+ * tag would bypass the supply-chain delay this repo applies to its own
+ * dependencies (bunfig minimumReleaseAge). Bump deliberately.
+ */
+export const MCP_REMOTE_VERSION = "0.1.38";
+
+export interface McpRemoteServer {
+  args: string[];
+  env: Record<string, string>;
+}
+
+/**
+ * Builds the `npx mcp-remote` invocation that proxies the remote HTTP MCP
+ * endpoint as a local stdio server. Hosts that only render MCP Apps for
+ * stdio servers (Codex desktop, Claude Desktop chat) need this form — a
+ * remote-HTTP entry serves tools fine but never shows the Session Knowledge
+ * card.
+ *
+ * Header values are passed as `${VAR}` placeholders that mcp-remote expands
+ * from its environment, so the API key lives in the config entry's `env`
+ * block instead of argv (argv is visible to every local process via `ps`).
+ */
+export function mcpRemoteServer(url: string, apiKey: string | undefined): McpRemoteServer {
+  const env: Record<string, string> = {};
+  const headerArgs = Object.entries(mcpHeaders(apiKey)).flatMap(([key, value]) => {
+    const envKey = key.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+    env[envKey] = value;
+    return ["--header", `${key}:\${${envKey}}`];
+  });
+  return {
+    args: [
+      "-y",
+      `mcp-remote@${MCP_REMOTE_VERSION}`,
+      url,
+      ...headerArgs,
+      "--transport",
+      "http-only",
+    ],
+    env,
+  };
+}
+
+/**
  * Reads and unmarshals a JSON config file. Returns an empty object if the file doesn't exist.
  * For .jsonc files, comments are stripped before parsing.
  */

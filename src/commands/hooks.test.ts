@@ -1,7 +1,14 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
+
+vi.mock("node:child_process", () => ({
+  execFileSync: vi.fn(() => {
+    throw new Error("git unavailable");
+  }),
+}));
 
 vi.mock("../debug/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), init: vi.fn() },
@@ -11,6 +18,8 @@ vi.mock("../hooks/state", () => ({
   loadState: vi.fn(),
   saveState: vi.fn(),
   clearState: vi.fn(),
+  claimState: vi.fn(),
+  releaseState: vi.fn(),
 }));
 
 vi.mock("../hooks/ticket-client", async (importOriginal) => {
@@ -40,7 +49,7 @@ vi.mock("../hooks/runtime", () => ({
 import { Client } from "../client/client";
 import { loadConfig, MODE_OSS } from "../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
-import { loadState, saveState, type TicketState } from "../hooks/state";
+import { claimState, loadState, releaseState, saveState, type TicketState } from "../hooks/state";
 import { requestCreateTicket, requestGetTicket, TicketHttpError } from "../hooks/ticket-client";
 import {
   collectDoctorChecks,
@@ -99,6 +108,9 @@ function stdout(): string {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(loadConfig).mockReturnValue({ ...AUTHED });
+  // Default: a claim wins whatever loadState currently returns (tests override
+  // with mockReturnValue(null) to simulate a rival holder).
+  vi.mocked(claimState).mockImplementation((sid) => vi.mocked(loadState)(sid));
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -158,18 +170,221 @@ describe("runUserPromptSubmit", () => {
     expect(stdout()).toBe("");
   });
 
-  it("reuses a live pending ticket instead of minting a second", async () => {
-    vi.mocked(loadState).mockReturnValue(pending({ expiresAt: 999_999 }));
-    await runUserPromptSubmit({ session_id: "sess", prompt: "another prompt" }, 1000);
-    expect(requestCreateTicket).not.toHaveBeenCalled();
+  it("sends the git remote url and current branch when available", async () => {
+    vi.mocked(loadState).mockReturnValue(null);
+    vi.mocked(requestCreateTicket).mockResolvedValue({
+      ticket_id: "kt_git",
+      status: "pending",
+      created_at: "x",
+      expires_at: "y",
+    });
+    vi.mocked(execFileSync)
+      .mockReturnValueOnce("git@github.com:dosu-ai/dosu.git\n")
+      .mockReturnValueOnce("feat-x\n");
+
+    await runUserPromptSubmit({
+      session_id: "sess",
+      prompt: "investigate X",
+      cwd: "/Users/me/work/myrepo",
+    });
+
+    expect(execFileSync).toHaveBeenCalledWith(
+      "git",
+      ["remote", "get-url", "origin"],
+      expect.objectContaining({ cwd: "/Users/me/work/myrepo" }),
+    );
+    expect(requestCreateTicket).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ repo: "git@github.com:dosu-ai/dosu.git", branch: "feat-x" }),
+    );
   });
 
-  it("is silent and writes no state when create fails", async () => {
+  it("omits branch on detached HEAD but keeps the remote url", async () => {
     vi.mocked(loadState).mockReturnValue(null);
+    vi.mocked(requestCreateTicket).mockResolvedValue({
+      ticket_id: "kt_detached",
+      status: "pending",
+      created_at: "x",
+      expires_at: "y",
+    });
+    vi.mocked(execFileSync)
+      .mockReturnValueOnce("git@github.com:dosu-ai/dosu.git\n")
+      .mockReturnValueOnce("");
+
+    await runUserPromptSubmit({ session_id: "sess", prompt: "x", cwd: "/w/myrepo" });
+
+    const arg = vi.mocked(requestCreateTicket).mock.calls[0][1];
+    expect(arg.repo).toBe("git@github.com:dosu-ai/dosu.git");
+    expect(arg.branch).toBeUndefined();
+  });
+
+  it("falls back to the cwd basename when git is unavailable", async () => {
+    vi.mocked(loadState).mockReturnValue(null);
+    vi.mocked(requestCreateTicket).mockResolvedValue({
+      ticket_id: "kt_nogit",
+      status: "pending",
+      created_at: "x",
+      expires_at: "y",
+    });
+
+    await runUserPromptSubmit({ session_id: "sess", prompt: "x", cwd: "/w/myrepo" });
+
+    const arg = vi.mocked(requestCreateTicket).mock.calls[0][1];
+    expect(arg.repo).toBe("myrepo");
+    expect(arg.branch).toBeUndefined();
+  });
+
+  it("harvests a finished undelivered previous ticket with provenance", async () => {
+    vi.mocked(loadState).mockReturnValue(pending({ ticketId: "kt_old", turnId: "turn-1" }));
+    vi.mocked(requestGetTicket).mockResolvedValue(readyResp("OLD RESULT"));
+    vi.mocked(requestCreateTicket).mockResolvedValue({
+      ticket_id: "kt_new",
+      status: "pending",
+      created_at: "x",
+      expires_at: "y",
+    });
+
+    await runUserPromptSubmit(
+      { session_id: "sess", turn_id: "turn-2", prompt: "new question" },
+      2000,
+    );
+
+    // old result injected once, labeled as answering the PREVIOUS prompt
+    expect(requestGetTicket).toHaveBeenCalledWith(expect.anything(), "kt_old");
+    const printed = JSON.parse(logSpy.mock.calls[0][0]);
+    const context = printed.hookSpecificOutput.additionalContext;
+    expect(context).toContain("PREVIOUS prompt");
+    expect(context).toContain("OLD RESULT");
+    expect(context).toContain("background knowledge lookup"); // new lookup note too
+    // the old ticket is consumed, the new one registered
+    expect(releaseState).toHaveBeenCalledWith("sess", null);
+    expect(saveState).toHaveBeenCalledWith(expect.objectContaining({ ticketId: "kt_new" }));
+  });
+
+  it("skips the harvest when the old lookup is still running", async () => {
+    vi.mocked(loadState).mockReturnValue(pending({ ticketId: "kt_old", turnId: "turn-1" }));
+    vi.mocked(requestGetTicket).mockResolvedValue({
+      ticket_id: "kt_old",
+      status: "pending",
+      created_at: "x",
+      expires_at: "y",
+      result: null,
+      error: null,
+    });
+    vi.mocked(requestCreateTicket).mockResolvedValue({
+      ticket_id: "kt_new",
+      status: "pending",
+      created_at: "x",
+      expires_at: "y",
+    });
+
+    await runUserPromptSubmit(
+      { session_id: "sess", turn_id: "turn-2", prompt: "new question" },
+      2000,
+    );
+
+    const printed = JSON.parse(logSpy.mock.calls[0][0]);
+    expect(printed.hookSpecificOutput.additionalContext).not.toContain("PREVIOUS prompt");
+    expect(saveState).toHaveBeenCalledWith(expect.objectContaining({ ticketId: "kt_new" }));
+  });
+
+  it("creates the new ticket without harvesting when a rival holds the claim", async () => {
+    vi.mocked(loadState).mockReturnValue(pending({ ticketId: "kt_old", turnId: "turn-1" }));
+    vi.mocked(claimState).mockReturnValue(null); // delivery hook owns the old ticket
+    vi.mocked(requestCreateTicket).mockResolvedValue({
+      ticket_id: "kt_new",
+      status: "pending",
+      created_at: "x",
+      expires_at: "y",
+    });
+
+    await runUserPromptSubmit(
+      { session_id: "sess", turn_id: "turn-2", prompt: "new question" },
+      2000,
+    );
+
+    expect(requestGetTicket).not.toHaveBeenCalled();
+    expect(releaseState).not.toHaveBeenCalled();
+    expect(saveState).toHaveBeenCalledWith(expect.objectContaining({ ticketId: "kt_new" }));
+  });
+
+  it("reuses a live pending ticket from the same turn", async () => {
+    vi.mocked(loadState).mockReturnValue(pending({ turnId: "turn-1", expiresAt: 999_999 }));
+    await runUserPromptSubmit(
+      { session_id: "sess", turn_id: "turn-1", prompt: "same turn retry" },
+      1000,
+    );
+    expect(requestCreateTicket).not.toHaveBeenCalled();
+    expect(claimState).not.toHaveBeenCalled();
+  });
+
+  it("creates a fresh ticket when a pending ticket belongs to a previous turn", async () => {
+    vi.mocked(loadState).mockReturnValue(
+      pending({ ticketId: "kt_old", turnId: "turn-1", expiresAt: 999_999 }),
+    );
+    vi.mocked(requestCreateTicket).mockResolvedValue({
+      ticket_id: "kt_new",
+      status: "pending",
+      created_at: "x",
+      expires_at: "y",
+    });
+
+    await runUserPromptSubmit(
+      { session_id: "sess", turn_id: "turn-2", prompt: "new question" },
+      2000,
+    );
+
+    expect(requestCreateTicket).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ turn_id: "turn-2", prompt: "new question" }),
+    );
+    expect(claimState).toHaveBeenCalledWith("sess");
+    expect(releaseState).toHaveBeenCalledWith("sess", null);
+    expect(saveState).toHaveBeenCalledWith(
+      expect.objectContaining({ ticketId: "kt_new", turnId: "turn-2" }),
+    );
+  });
+
+  it("treats a later submit without turn ids as a new turn", async () => {
+    vi.mocked(loadState).mockReturnValue(
+      pending({ ticketId: "kt_old", turnId: "2000", expiresAt: 999_999 }),
+    );
+    vi.mocked(requestCreateTicket).mockResolvedValue({
+      ticket_id: "kt_new",
+      status: "pending",
+      created_at: "x",
+      expires_at: "y",
+    });
+
+    await runUserPromptSubmit({ session_id: "sess", prompt: "new question" }, 2000);
+
+    expect(requestCreateTicket).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ turn_id: "2000", prompt: "new question" }),
+    );
+    expect(saveState).toHaveBeenCalledWith(
+      expect.objectContaining({ ticketId: "kt_new", turnId: "2000" }),
+    );
+  });
+
+  it("clears the previous turn when creating its replacement fails", async () => {
+    vi.mocked(loadState).mockReturnValue(pending({ turnId: "turn-1" }));
     vi.mocked(requestCreateTicket).mockRejectedValue(new TicketHttpError(500));
-    await runUserPromptSubmit({ session_id: "sess", prompt: "x" });
+    await runUserPromptSubmit({ session_id: "sess", turn_id: "turn-2", prompt: "x" });
+    expect(releaseState).toHaveBeenCalledWith("sess", null);
     expect(saveState).not.toHaveBeenCalled();
     expect(stdout()).toBe("");
+  });
+
+  it("clears the previous turn before returning when configuration is missing", async () => {
+    vi.mocked(loadState).mockReturnValue(pending({ turnId: "turn-1" }));
+    vi.mocked(loadConfig).mockReturnValue(authed({ deployment_id: undefined }));
+
+    await runUserPromptSubmit({ session_id: "sess", turn_id: "turn-2", prompt: "x" });
+
+    expect(releaseState).toHaveBeenCalledWith("sess", null);
+    expect(requestCreateTicket).not.toHaveBeenCalled();
+    expect(saveState).not.toHaveBeenCalled();
   });
 
   it("no-ops when the prompt field is absent entirely", async () => {
@@ -239,7 +454,8 @@ describe("runPostToolUse", () => {
     vi.mocked(loadState).mockReturnValue(pending());
     vi.mocked(requestGetTicket).mockResolvedValue(readyResp("FAST PATH"));
     await runPostToolUse({ session_id: "sess" }, 50_000);
-    expect(saveState).toHaveBeenCalledWith(
+    expect(releaseState).toHaveBeenCalledWith(
+      "sess",
       expect.objectContaining({ status: "delivered", deliveredAt: 50_000 }),
     );
     const printed = JSON.parse(logSpy.mock.calls[0][0]);
@@ -274,7 +490,10 @@ describe("runPostToolUse", () => {
       error: null,
     });
     await runPostToolUse({ session_id: "sess" }, 50_000);
-    expect(saveState).toHaveBeenCalledWith(expect.objectContaining({ status: "delivered" }));
+    expect(releaseState).toHaveBeenCalledWith(
+      "sess",
+      expect.objectContaining({ status: "delivered" }),
+    );
     expect(stdout()).toBe("");
   });
 
@@ -289,7 +508,10 @@ describe("runPostToolUse", () => {
       error: null,
     });
     await runPostToolUse({ session_id: "sess" }, 50_000);
-    expect(saveState).toHaveBeenCalledWith(expect.objectContaining({ lastCheckedAt: 50_000 }));
+    expect(releaseState).toHaveBeenCalledWith(
+      "sess",
+      expect.objectContaining({ lastCheckedAt: 50_000 }),
+    );
     expect(stdout()).toBe("");
   });
 
@@ -297,21 +519,28 @@ describe("runPostToolUse", () => {
     vi.mocked(loadState).mockReturnValue(pending());
     vi.mocked(requestGetTicket).mockRejectedValueOnce(new TicketHttpError(503));
     await runPostToolUse({ session_id: "sess" }, 50_000);
-    expect(saveState).toHaveBeenLastCalledWith(
+    expect(releaseState).toHaveBeenLastCalledWith(
+      "sess",
       expect.objectContaining({ status: "pending", lastCheckedAt: 50_000 }),
     );
     expect(stdout()).toBe("");
 
     vi.mocked(requestGetTicket).mockRejectedValueOnce(new TicketHttpError(404));
     await runPostToolUse({ session_id: "sess" }, 60_000);
-    expect(saveState).toHaveBeenLastCalledWith(expect.objectContaining({ status: "failed" }));
+    expect(releaseState).toHaveBeenLastCalledWith(
+      "sess",
+      expect.objectContaining({ status: "failed" }),
+    );
   });
 
   it("treats a ready response with no result as failed (never injects empty context)", async () => {
     vi.mocked(loadState).mockReturnValue(pending());
     vi.mocked(requestGetTicket).mockResolvedValue({ ...readyResp(), result: null });
     await runPostToolUse({ session_id: "sess" }, 50_000);
-    expect(saveState).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }));
+    expect(releaseState).toHaveBeenCalledWith(
+      "sess",
+      expect.objectContaining({ status: "failed" }),
+    );
     expect(stdout()).toBe("");
   });
 
@@ -329,6 +558,7 @@ describe("runPostToolUse", () => {
       vi.clearAllMocks();
       vi.mocked(loadConfig).mockReturnValue({ ...AUTHED });
       vi.mocked(loadState).mockReturnValue(pending());
+      vi.mocked(claimState).mockImplementation((sid) => vi.mocked(loadState)(sid));
       vi.mocked(requestGetTicket).mockResolvedValue({
         ticket_id: "kt_1",
         status,
@@ -338,11 +568,21 @@ describe("runPostToolUse", () => {
         error: null,
       });
       await runPostToolUse({ session_id: "sess" }, 50_000);
-      expect(saveState).toHaveBeenCalledWith(
+      expect(releaseState).toHaveBeenCalledWith(
+        "sess",
         expect.objectContaining({ status, lastCheckedAt: 50_000 }),
       );
       expect(stdout()).toBe("");
     }
+  });
+
+  it("exits without polling when another hook holds the claim", async () => {
+    vi.mocked(loadState).mockReturnValue(pending());
+    vi.mocked(claimState).mockReturnValue(null); // rival delivery in flight
+    await runPostToolUse({ session_id: "sess" }, 50_000);
+    expect(requestGetTicket).not.toHaveBeenCalled();
+    expect(releaseState).not.toHaveBeenCalled();
+    expect(stdout()).toBe("");
   });
 
   it("honors a valid DOSU_HOOK_CHECK_COOLDOWN_MS override on the cooldown gate", async () => {
@@ -383,7 +623,10 @@ describe("runStop", () => {
     expect(printed.decision).toBe("block");
     expect(printed.reason).toContain("LATE CONTEXT");
     expect(printed.reason).toContain("Re-check");
-    expect(saveState).toHaveBeenCalledWith(expect.objectContaining({ status: "delivered" }));
+    expect(releaseState).toHaveBeenCalledWith(
+      "sess",
+      expect.objectContaining({ status: "delivered" }),
+    );
   });
 
   it("consumes but does NOT block on a ready gap ticket (empty context)", async () => {
@@ -398,7 +641,10 @@ describe("runStop", () => {
     });
     await runStop({ session_id: "sess" }, 70_000);
     expect(JSON.parse(logSpy.mock.calls[0][0])).toEqual({ continue: true });
-    expect(saveState).toHaveBeenCalledWith(expect.objectContaining({ status: "delivered" }));
+    expect(releaseState).toHaveBeenCalledWith(
+      "sess",
+      expect.objectContaining({ status: "delivered" }),
+    );
   });
 
   it("continues (no block) when the ticket is still in flight after the wait", async () => {
@@ -413,7 +659,8 @@ describe("runStop", () => {
     });
     await runStop({ session_id: "sess" }, 70_000);
     expect(JSON.parse(logSpy.mock.calls[0][0])).toEqual({ continue: true });
-    expect(saveState).toHaveBeenCalledWith(
+    expect(releaseState).toHaveBeenCalledWith(
+      "sess",
       expect.objectContaining({ status: "pending", lastCheckedAt: 70_000 }),
     );
   });
