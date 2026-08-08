@@ -19,6 +19,7 @@ import { orgCommand } from "../commands/org";
 import { reviewCommand } from "../commands/review";
 import { skillCommand } from "../commands/skill";
 import { sourcesCommand } from "../commands/sources";
+import { statuslineCommand } from "../commands/statusline";
 import { suggestCommand } from "../commands/suggest";
 import { threadsCommand } from "../commands/threads";
 import { topicsCommand } from "../commands/topics";
@@ -408,6 +409,7 @@ export function createProgram(): Command {
   program.addCommand(orgCommand());
   program.addCommand(reviewCommand());
   program.addCommand(sourcesCommand());
+  program.addCommand(statuslineCommand());
   program.addCommand(suggestCommand());
   program.addCommand(topicsCommand());
   program.addCommand(threadsCommand());
