@@ -73,6 +73,13 @@ vi.mock("../setup/project-root", () => ({
   requireProjectRoot: mockRequireProjectRoot,
 }));
 
+const { mockCleanupLegacyGlobalMcp } = vi.hoisted(() => ({
+  mockCleanupLegacyGlobalMcp: vi.fn(),
+}));
+vi.mock("../setup/legacy-global-cleanup", () => ({
+  cleanupLegacyGlobalMcp: mockCleanupLegacyGlobalMcp,
+}));
+
 const { mockRunProjectProxy } = vi.hoisted(() => ({
   mockRunProjectProxy: vi.fn(),
 }));
@@ -736,6 +743,7 @@ describe("CLI actions", () => {
       expect(config.mcpServers.dosu.command).toBe("npx");
       expect(config.mcpServers.dosu.args).toContain("dep_123");
       expect(JSON.stringify(config)).not.toContain("key_abc");
+      expect(mockCleanupLegacyGlobalMcp).toHaveBeenCalledOnce();
     });
 
     it("creates real cursor config file with --global", async () => {
@@ -756,6 +764,7 @@ describe("CLI actions", () => {
       expect(logSpy).toHaveBeenCalledWith(
         expect.stringContaining("Successfully added Dosu MCP to Cursor"),
       );
+      expect(mockCleanupLegacyGlobalMcp).not.toHaveBeenCalled();
     });
 
     it("throws error for unknown tool", async () => {

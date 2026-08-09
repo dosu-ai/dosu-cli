@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { type Config, MODE_OSS } from "../../config/config";
-import { assertSafeProjectPath } from "../../setup/project-root";
+import { assertSafeProjectPath, hasSymlinkInPath } from "../../setup/project-root";
 import {
   getJSONServer,
   installJSONServer,
@@ -12,6 +12,7 @@ import {
   removeJSONServer,
 } from "../config-helpers";
 import { expandHome, isInstalled } from "../detect";
+import { isReleasedLegacyGlobalMcpServer } from "../legacy-global";
 import { buildProjectProxyCommand, isDosuOwnedMcpServer } from "../project-proxy";
 import type { SetupProvider } from "../providers";
 
@@ -71,6 +72,19 @@ export const MCPorterProvider = (): SetupProvider => ({
   isConfigured: () => isJSONKeyConfigured(resolveGlobalConfigPath(), "mcpServers"),
   projectConfigPath: (projectRoot: string) => join(projectRoot, "config", "mcporter.json"),
   isProjectConfigured,
+  removeLegacyGlobal: () => {
+    const configPath = resolveGlobalConfigPath();
+    try {
+      // JSONC may contain comments that removeJSONServer cannot preserve.
+      if (configPath.endsWith(".jsonc") || hasSymlinkInPath(configPath)) return false;
+      const existing = getJSONServer(configPath, "mcpServers");
+      if (!isReleasedLegacyGlobalMcpServer("mcporter", existing)) return false;
+      removeJSONServer(configPath, "mcpServers");
+      return true;
+    } catch {
+      return false;
+    }
+  },
 
   install(cfg: Config, global: boolean, opts = {}): void {
     const configPath = global ? resolveGlobalConfigPath() : projectPath(opts.projectRoot);

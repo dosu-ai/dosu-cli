@@ -13,7 +13,13 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+// @ts-expect-error — write-file-atomic ships no types; shape is documented inline.
+import writeFileAtomicRaw from "write-file-atomic";
 import { assertSafeProjectPath } from "../setup/project-root";
+
+const writeFileAtomic = writeFileAtomicRaw as {
+  sync(path: string, data: string): void;
+};
 
 export type RuleAgentID = "claude" | "cursor" | "codex" | "opencode" | "gemini" | "antigravity";
 
@@ -254,7 +260,9 @@ export function removeRuleForAgent(agent: string, projectRoot?: string): RuleRes
   if (!next) {
     unlinkSync(path);
   } else {
-    writeFileSync(path, `${next}${lineEnding}`, "utf-8");
+    // A failed compatibility cleanup must leave the user's surrounding
+    // instructions intact, so replace the file only after the new copy is complete.
+    writeFileAtomic.sync(path, `${next}${lineEnding}`);
   }
   return { agent, path, action: "removed" };
 }
