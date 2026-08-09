@@ -70,15 +70,6 @@ export function saveState(state: TicketState): void {
   }
 }
 
-/** Remove a session's state file. Never throws. */
-export function clearState(sessionId: string): void {
-  try {
-    rmSync(stateFile(sessionId), { force: true });
-  } catch {
-    // best-effort
-  }
-}
-
 /** Atomically take exclusive ownership of a session's ticket state.
  *
  * `rename(2)` is atomic, so when several hook processes race, exactly one gets

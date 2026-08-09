@@ -18,7 +18,6 @@ import {
 export {
   type AccountTarget,
   type AuthenticatedConfig,
-  CONFIG_SCHEMA_VERSION,
   type Config,
   MODE_OSS,
   type SessionCredentials,

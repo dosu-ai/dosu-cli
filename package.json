@@ -29,7 +29,7 @@
     "lint": "bunx biome lint .",
     "format": "bunx biome format .",
     "check": "bunx biome check .",
-    "deadcode": "knip --no-config-hints && knip --production --include files --no-config-hints",
+    "deadcode": "knip --no-config-hints && knip --production --config knip.production.jsonc --no-config-hints",
     "prepack": "bun run build:npm"
   },
   "engines": {

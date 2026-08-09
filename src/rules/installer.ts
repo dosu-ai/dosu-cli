@@ -94,8 +94,6 @@ const RULE_TARGETS: Record<RuleAgentID, RuleTarget> = {
   },
 };
 
-export const SUPPORTED_RULE_AGENT_IDS = Object.keys(RULE_TARGETS) as RuleAgentID[];
-
 export function isRuleAgent(agent: string): agent is RuleAgentID {
   return Object.hasOwn(RULE_TARGETS, agent);
 }

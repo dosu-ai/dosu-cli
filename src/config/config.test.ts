@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   bindAccountIdentity,
-  CONFIG_SCHEMA_VERSION,
   type Config,
   emptyConfig,
   getConfigPath,
@@ -16,6 +15,7 @@ import {
   saveConfig,
 } from "./config";
 import { makeTestConfig } from "./config.test-utils";
+import { CONFIG_SCHEMA_VERSION } from "./schema";
 
 function accessTokenFor(userID: string): string {
   const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
