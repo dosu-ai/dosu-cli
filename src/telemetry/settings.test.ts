@@ -1,5 +1,6 @@
 import {
   existsSync,
+  lstatSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -17,6 +18,7 @@ vi.mock("node:fs", async (importOriginal) => {
   return {
     ...actual,
     existsSync: vi.fn(actual.existsSync),
+    lstatSync: vi.fn(actual.lstatSync),
     readFileSync: vi.fn(actual.readFileSync),
     renameSync: vi.fn(actual.renameSync),
     writeFileSync: vi.fn(actual.writeFileSync),
@@ -59,6 +61,7 @@ describe("telemetry settings", () => {
     delete process.env.DO_NOT_TRACK;
     delete process.env.DOSU_TELEMETRY_DISABLED;
     vi.mocked(existsSync).mockClear();
+    vi.mocked(lstatSync).mockClear();
     vi.mocked(readFileSync).mockClear();
     vi.mocked(renameSync).mockClear();
     vi.mocked(writeFileSync).mockClear();
@@ -120,6 +123,23 @@ describe("telemetry settings", () => {
     expect(setTelemetryEnabled(true)).toBe(true);
     expect(loadTelemetrySettings()).toEqual({ schema_version: 1 });
     expect(isTelemetryEnabled()).toBe(true);
+  });
+
+  it("rejects special files before trying to read them", () => {
+    vi.mocked(lstatSync).mockReturnValueOnce({
+      isFile: () => false,
+      size: 0,
+    } as ReturnType<typeof lstatSync>);
+
+    expect(loadTelemetrySettings()).toEqual({ schema_version: 1, disabled: true });
+    expect(readFileSync).not.toHaveBeenCalled();
+  });
+
+  it("rejects oversized settings before reading their contents", () => {
+    createSettingsFile("x".repeat(16_385));
+
+    expect(loadTelemetrySettings()).toEqual({ schema_version: 1, disabled: true });
+    expect(readFileSync).not.toHaveBeenCalled();
   });
 
   it("accepts only the global flag and a valid installation id", () => {
@@ -216,7 +236,7 @@ describe("telemetry settings", () => {
     });
     expect(isTelemetryEnabled()).toBe(false);
 
-    vi.mocked(existsSync).mockImplementationOnce(() => {
+    vi.mocked(lstatSync).mockImplementationOnce(() => {
       throw new Error("stat denied");
     });
     expect(loadTelemetrySettings()).toEqual({ schema_version: 1, disabled: true });

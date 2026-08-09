@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   renameSync,
@@ -12,6 +13,7 @@ import { getConfigDir } from "../config/config";
 
 const TELEMETRY_SCHEMA_VERSION = 1 as const;
 const TELEMETRY_SETTINGS_FILENAME = "telemetry.json";
+const MAX_TELEMETRY_SETTINGS_BYTES = 16 * 1_024;
 
 export type TelemetryEnvironmentOverride = "DO_NOT_TRACK" | "DOSU_TELEMETRY_DISABLED";
 
@@ -96,10 +98,17 @@ export function resetInstallID(): string | undefined {
 
 function readTelemetrySettings(): SettingsReadResult {
   const path = getTelemetrySettingsPath();
+  let file: ReturnType<typeof lstatSync>;
   try {
-    if (!existsSync(path)) return { status: "missing", settings: emptyTelemetrySettings() };
-  } catch {
+    file = lstatSync(path);
+  } catch (error) {
+    if (isErrorCode(error, "ENOENT")) {
+      return { status: "missing", settings: emptyTelemetrySettings() };
+    }
     return { status: "error", settings: disabledTelemetrySettings() };
+  }
+  if (!file.isFile() || file.size > MAX_TELEMETRY_SETTINGS_BYTES) {
+    return { status: "invalid", settings: disabledTelemetrySettings() };
   }
 
   let content: string;
@@ -177,4 +186,13 @@ function isUUID(value: string): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isErrorCode(error: unknown, code: string): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === code
+  );
 }
