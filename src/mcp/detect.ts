@@ -4,7 +4,7 @@
 
 import { existsSync } from "node:fs";
 import { homedir, platform } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, join, win32 } from "node:path";
 
 /**
  * Checks if any of the given paths exist on the filesystem.
@@ -48,13 +48,11 @@ export function appSupportDir(): string {
 /* v8 ignore stop */
 
 /**
- * Locates `npx` by absolute path on the current (shell) PATH.
- *
- * GUI hosts that spawn config-file stdio servers (Codex desktop, Claude
- * Desktop) launch them with the minimal launchd PATH that lacks
- * Homebrew/nvm, so entries must reference npx absolutely and carry a PATH
- * under which npx's `#!/usr/bin/env node` shebang resolves. Resolved at
- * install time from the user's shell PATH.
+ * Locates `npx` by absolute path on the current process PATH. Setup uses this
+ * as an install-time availability check; the private proxy runtime uses the
+ * absolute result to give its child a PATH that also resolves Node.js.
+ * Project files deliberately keep the portable command name `npx`, so GUI
+ * clients with a restricted PATH may still need to be restarted from a shell.
  */
 export function findNpx(): string {
   /* v8 ignore next -- platform dispatch, win32 arm not exercised on POSIX CI */
@@ -64,9 +62,7 @@ export function findNpx(): string {
     const candidate = join(dir, bin);
     if (existsSync(candidate)) return candidate;
   }
-  throw new Error(
-    "npx not found on PATH — Node.js is required (the MCP entry runs `npx mcp-remote`).",
-  );
+  throw new Error("npx not found on PATH — Node.js 22+ is required for this MCP configuration.");
 }
 
 /**
@@ -75,5 +71,10 @@ export function findNpx(): string {
  * fallbacks are harmless on Windows.
  */
 export function npxPathEnv(npx: string): string {
-  return [dirname(npx), "/usr/bin", "/bin"].join(delimiter);
+  const windowsStyle = /^[A-Za-z]:[\\/]/.test(npx) || npx.startsWith("\\\\");
+  const parent = windowsStyle ? win32.dirname(npx) : dirname(npx);
+  const separator = windowsStyle ? ";" : delimiter;
+  const inherited = process.env.PATH?.split(separator).filter(Boolean) ?? [];
+  const fallback = windowsStyle ? [] : ["/usr/bin", "/bin"];
+  return [...new Set([parent, ...inherited, ...fallback])].join(separator);
 }
