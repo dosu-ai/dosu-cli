@@ -24,6 +24,9 @@ jobs:
       - name: Check linting and formatting
         run: bun run check
 
+      - name: Check for unused code
+        run: bun run deadcode
+
   typecheck:
     runs-on: ubuntu-latest
     steps:

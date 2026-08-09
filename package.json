@@ -29,6 +29,7 @@
     "lint": "bunx biome lint .",
     "format": "bunx biome format .",
     "check": "bunx biome check .",
+    "deadcode": "knip --no-config-hints && knip --production --include files --no-config-hints",
     "prepack": "bun run build:npm"
   },
   "engines": {
@@ -36,6 +37,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.0",
+    "@clack/core": "1.4.2",
     "@clack/prompts": "^1.6.0",
     "@semantic-release/changelog": "^6.0.3",
     "@semantic-release/exec": "^7.1.0",
@@ -45,6 +47,7 @@
     "@types/bun": "^1.3.14",
     "@vitest/coverage-v8": "^4.1.9",
     "commander": "^15.0.0",
+    "knip": "6.32.0",
     "open": "^11.0.0",
     "picocolors": "^1.1.1",
     "semantic-release": "^25.0.5",
