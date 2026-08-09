@@ -1,0 +1,20 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema-jsonc.json",
+  // Keep this graph aligned with knip.jsonc. In production mode, exports that are
+  // still called within their own file are live even when exported only for tests.
+  "entry": [
+    "src/index.ts!",
+    "scripts/build-all.ts!",
+    "scripts/build-compile.ts!",
+    "scripts/build-npm.ts!"
+  ],
+  "project": [
+    "src/**/*.ts!",
+    "!src/**/*.test.ts!",
+    "!src/**/*.test-utils.ts!",
+    "scripts/**/*.ts!",
+    "!scripts/**/*.test.ts!"
+  ],
+  "ignoreExportsUsedInFile": true,
+  "ignoreUnresolved": ["bun-types"]
+}

@@ -17,9 +17,7 @@ import {
 
 export {
   type AccountTarget,
-  type ActiveAccount,
   type AuthenticatedConfig,
-  CONFIG_SCHEMA_VERSION,
   type Config,
   MODE_OSS,
   type SessionCredentials,
@@ -137,10 +135,6 @@ export function isTokenExpired(cfg: Config): boolean {
   const expiresAt = cfg.active_account?.session.expires_at ?? 0;
   if (expiresAt === 0) return false;
   return Math.floor(Date.now() / 1000) > expiresAt - 300;
-}
-
-export function clearConfig(_cfg: Config): Config {
-  return emptyConfig();
 }
 
 export function clearConfigInPlace(cfg: Config): void {

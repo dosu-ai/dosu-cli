@@ -15,9 +15,6 @@ type CliOnboardingEvent =
   | "cli_onboarding_cancelled"
   | "cli_onboarding_mcp_configured"
   | "cli_onboarding_skill_installed"
-  | "cli_onboarding_github_connected"
-  | "cli_onboarding_docs_imported"
-  | "cli_onboarding_activated"
   | "cli_onboarding_completed";
 
 type CliOnboardingPreAuthEvent =
