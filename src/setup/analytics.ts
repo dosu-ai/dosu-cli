@@ -11,7 +11,7 @@ import {
   parsePostHogProjectToken,
   parseTelemetryWebAppURL,
 } from "../telemetry/telemetry";
-import { VERSION } from "../version/version";
+import { INSTALL_CHANNEL, VERSION } from "../version/version";
 
 type CliOnboardingEvent =
   | "cli_onboarding_auth_completed"
@@ -157,6 +157,7 @@ function analyticsReleaseEnabled(): boolean {
 function baseProperties(cfg: Config): SafeProperties {
   return {
     cli_version: safeIdentifier(VERSION, 32),
+    install_channel: safeIdentifier(INSTALL_CHANNEL, 32),
     platform: safeIdentifier(process.platform, 24),
     arch: safeIdentifier(process.arch, 24),
     mode: cfg.mode ?? "cloud",

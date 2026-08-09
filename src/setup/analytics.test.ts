@@ -168,6 +168,7 @@ describe("setup analytics", () => {
       event: "cli_onboarding_completed",
       properties: expect.objectContaining({
         onboarding_run_id: RUN_ID,
+        install_channel: "npm",
         mode: "oss",
         org_id: "org-1",
         deployment_id: "dep-1",
@@ -233,6 +234,7 @@ describe("setup analytics", () => {
       onboarding_run_id: OTHER_RUN_ID,
       properties: expect.objectContaining({
         mode: "cloud",
+        install_channel: "npm",
         has_deployment_option: false,
       }),
     });
