@@ -118,15 +118,15 @@ export function buildUpdateNotice(
     const horizontal = "─".repeat(innerWidth);
     const emptyLine = `│${" ".repeat(innerWidth)}│`;
 
-    const frame = [
+    const frameLines = [
       `╭${horizontal}╮`,
       emptyLine,
       `│  ${versionMessage}${" ".repeat(contentWidth - versionMessage.length)}  │`,
       `│  ${hint}${" ".repeat(contentWidth - hint.length)}  │`,
       emptyLine,
       `╰${horizontal}╯`,
-    ].join("\n");
-    return `\n${pc.white(frame)}\n`;
+    ];
+    return `\n${frameLines.map((line) => pc.yellow(line)).join("\n")}\n`;
   }
 
   const agentAction = hint[0].toLowerCase() + hint.slice(1);

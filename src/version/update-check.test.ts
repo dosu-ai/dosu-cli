@@ -34,7 +34,7 @@ describe("buildUpdateHint", () => {
 });
 
 describe("buildUpdateNotice", () => {
-  it("shows a concise update command to an interactive user", () => {
+  it("shows a standard rounded gold notice to an interactive user", () => {
     const notice = buildUpdateNotice("0.43.0", "0.44.0", "npm", true);
     const lines = notice
       // biome-ignore lint/suspicious/noControlCharactersInRegex: Strip ANSI colors before measuring the frame.
@@ -45,8 +45,8 @@ describe("buildUpdateNotice", () => {
     expect(notice).toContain("Update available: 0.43.0 → 0.44.0");
     expect(notice).toContain('Run "dosu upgrade"');
     expect(notice).not.toContain("Tell the user");
-    expect(notice).toContain("\u001B[37m");
-    expect(notice).not.toContain("\u001B[33m");
+    expect(notice.split("\u001B[33m").length - 1).toBe(6);
+    expect(notice).not.toContain("\u001B[37m");
     expect(notice).not.toContain("\u001B[2m");
     expect(notice).not.toContain("═");
     expect(lines).toHaveLength(6);
