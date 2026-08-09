@@ -484,8 +484,13 @@ describe("JSON config file operations", () => {
       if (tamper === "hash") {
         writeFileSync(captured, "tampered captured data\n");
       } else {
+        // Allocate the replacement while the captured inode still exists.
+        // Unlink-then-create can immediately reuse the same inode on Linux,
+        // making this mismatch test nondeterministic in CI.
+        const replacement = join(tempDir, "replacement-capture");
+        writeFileSync(replacement, "captured original\n");
         unlinkSync(captured);
-        writeFileSync(captured, "captured original\n");
+        renameSync(replacement, captured);
       }
 
       expect(() => writeProjectFile(path, "new\n", null)).toThrow(/does not match/i);
