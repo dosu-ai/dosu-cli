@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,18 +8,49 @@ vi.mock("node:child_process", () => ({
   spawnSync: vi.fn(),
 }));
 
-import { buildNpmInvocation, runUpgrade } from "./upgrade";
+import { buildPackageManagerInvocation, runUpgrade, upgradeCommand } from "./upgrade";
 
 const mockSpawnSync = vi.mocked(spawnSync);
+const PNPM_LOCATE_COMMAND = "pnpm list -g --depth=0 --parseable @dosu/cli";
 let tempDir: string;
 let logSpy: ReturnType<typeof vi.spyOn>;
 let errorSpy: ReturnType<typeof vi.spyOn>;
+let originalArgv: string[];
+let originalExitCode: typeof process.exitCode;
+let originalNpmCommand: string | undefined;
+let originalNpmLifecycleEvent: string | undefined;
 
-function makeEntrypoint(root: string): string {
-  const entrypoint = join(root, "@dosu", "cli", "bin", "dosu.js");
+interface MockResult {
+  status: number | null;
+  stdout?: string;
+  error?: Error;
+}
+
+function makeEntrypoint(packageRoot: string): string {
+  const entrypoint = join(packageRoot, "bin", "dosu.js");
   mkdirSync(dirname(entrypoint), { recursive: true });
   writeFileSync(entrypoint, "");
   return entrypoint;
+}
+
+function npmPackageRoot(modulesRoot: string): string {
+  return join(modulesRoot, "@dosu", "cli");
+}
+
+function yarnPackageRoot(globalDir: string): string {
+  return join(globalDir, "node_modules", "@dosu", "cli");
+}
+
+function pnpmOutput(packageRoot?: string): string {
+  return packageRoot ? `${join(tempDir, "pnpm", "global-project")}\n${packageRoot}\n` : "";
+}
+
+function mockCommands(responses: Record<string, MockResult>): void {
+  mockSpawnSync.mockImplementation((command, args) => {
+    const commandArgs = Array.isArray(args) ? args : [];
+    const key = [String(command), ...commandArgs].join(" ");
+    return (responses[key] ?? { status: 127, stdout: "" }) as never;
+  });
 }
 
 function output(): string {
@@ -35,9 +66,22 @@ beforeEach(() => {
   mockSpawnSync.mockReset();
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  originalArgv = process.argv;
+  originalExitCode = process.exitCode;
+  originalNpmCommand = process.env.npm_command;
+  originalNpmLifecycleEvent = process.env.npm_lifecycle_event;
+  delete process.env.npm_command;
+  delete process.env.npm_lifecycle_event;
+  process.exitCode = undefined;
 });
 
 afterEach(() => {
+  process.argv = originalArgv;
+  process.exitCode = originalExitCode;
+  if (originalNpmCommand === undefined) delete process.env.npm_command;
+  else process.env.npm_command = originalNpmCommand;
+  if (originalNpmLifecycleEvent === undefined) delete process.env.npm_lifecycle_event;
+  else process.env.npm_lifecycle_event = originalNpmLifecycleEvent;
   logSpy.mockRestore();
   errorSpy.mockRestore();
   rmSync(tempDir, { recursive: true, force: true });
@@ -45,20 +89,18 @@ afterEach(() => {
 
 describe("runUpgrade", () => {
   it("updates a confirmed global npm installation with fixed arguments", () => {
-    const globalRoot = join(tempDir, "global", "node_modules");
-    const entrypoint = makeEntrypoint(globalRoot);
-    mockSpawnSync
-      .mockReturnValueOnce({ status: 0, stdout: `${globalRoot}\n` } as never)
-      .mockReturnValueOnce({ status: 0 } as never);
+    const npmRoot = join(tempDir, "npm", "node_modules");
+    const entrypoint = makeEntrypoint(npmPackageRoot(npmRoot));
+    mockCommands({
+      "npm root -g": { status: 0, stdout: `${npmRoot}\n` },
+      [PNPM_LOCATE_COMMAND]: { status: 0, stdout: "" },
+      "yarn --silent global dir": { status: 1, stdout: "" },
+      "npm install -g @dosu/cli@latest": { status: 0 },
+    });
 
     const status = runUpgrade("npm", { entrypoint, platform: "darwin", env: {} });
 
-    expect(mockSpawnSync).toHaveBeenNthCalledWith(1, "npm", ["root", "-g"], {
-      encoding: "utf8",
-      shell: false,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    expect(mockSpawnSync).toHaveBeenNthCalledWith(2, "npm", ["install", "-g", "@dosu/cli@latest"], {
+    expect(mockSpawnSync).toHaveBeenCalledWith("npm", ["install", "-g", "@dosu/cli@latest"], {
       shell: false,
       stdio: "inherit",
     });
@@ -68,31 +110,162 @@ describe("runUpgrade", () => {
     expect(output()).toContain("Update command completed");
   });
 
-  it("delegates a Homebrew installation to brew", () => {
-    mockSpawnSync.mockReturnValueOnce({ status: 0 } as never);
+  it("updates a confirmed global pnpm installation without switching managers", () => {
+    const packageRoot = join(tempDir, "pnpm", "global-project", "node_modules", "@dosu", "cli");
+    const entrypoint = makeEntrypoint(packageRoot);
+    mockCommands({
+      "npm root -g": { status: 1, stdout: "" },
+      [PNPM_LOCATE_COMMAND]: { status: 0, stdout: pnpmOutput(packageRoot) },
+      "yarn --silent global dir": { status: 1, stdout: "" },
+      "pnpm add -g @dosu/cli@latest": { status: 0 },
+    });
 
-    const status = runUpgrade("homebrew", { platform: "darwin" });
+    const status = runUpgrade("npm", { entrypoint, platform: "darwin", env: {} });
 
-    expect(mockSpawnSync).toHaveBeenCalledWith("brew", ["upgrade", "dosu-ai/dosu/dosu"], {
+    expect(mockSpawnSync).toHaveBeenCalledWith("pnpm", ["add", "-g", "@dosu/cli@latest"], {
+      shell: false,
+      stdio: "inherit",
+    });
+    expect(mockSpawnSync).not.toHaveBeenCalledWith(
+      "npm",
+      ["install", "-g", "@dosu/cli@latest"],
+      expect.anything(),
+    );
+    expect(status).toBe(0);
+    expect(output()).toContain("Updating Dosu with pnpm");
+  });
+
+  it("recognizes a pnpm package symlink by its real package path", () => {
+    const storeRoot = join(
+      tempDir,
+      "pnpm",
+      "store",
+      "node_modules",
+      ".pnpm",
+      "@dosu+cli@0.44.0",
+      "node_modules",
+      "@dosu",
+      "cli",
+    );
+    const entrypoint = makeEntrypoint(storeRoot);
+    const linkedRoot = join(tempDir, "pnpm", "global-project", "node_modules", "@dosu", "cli");
+    mkdirSync(dirname(linkedRoot), { recursive: true });
+    symlinkSync(storeRoot, linkedRoot, "dir");
+    mockCommands({
+      "npm root -g": { status: 1, stdout: "" },
+      [PNPM_LOCATE_COMMAND]: { status: 0, stdout: pnpmOutput(linkedRoot) },
+      "yarn --silent global dir": { status: 1, stdout: "" },
+      "pnpm add -g @dosu/cli@latest": { status: 0 },
+    });
+
+    expect(runUpgrade("npm", { entrypoint, platform: "darwin", env: {} })).toBe(0);
+    expect(mockSpawnSync).toHaveBeenLastCalledWith("pnpm", ["add", "-g", "@dosu/cli@latest"], {
+      shell: false,
+      stdio: "inherit",
+    });
+  });
+
+  it("updates a confirmed global Yarn Classic installation without switching managers", () => {
+    const globalDir = join(tempDir, "yarn", "global");
+    const entrypoint = makeEntrypoint(yarnPackageRoot(globalDir));
+    mockCommands({
+      "npm root -g": { status: 1, stdout: "" },
+      [PNPM_LOCATE_COMMAND]: { status: 0, stdout: "" },
+      "yarn --silent global dir": { status: 0, stdout: `${globalDir}\n` },
+      "yarn global add @dosu/cli@latest": { status: 0 },
+    });
+
+    const status = runUpgrade("npm", { entrypoint, platform: "darwin", env: {} });
+
+    expect(mockSpawnSync).toHaveBeenCalledWith("yarn", ["global", "add", "@dosu/cli@latest"], {
       shell: false,
       stdio: "inherit",
     });
     expect(status).toBe(0);
-    expect(output()).toContain("Updating Dosu with Homebrew");
-    expect(output()).toContain("brew upgrade dosu-ai/dosu/dosu");
+    expect(output()).toContain("Updating Dosu with Yarn Classic");
   });
 
-  it("does not turn an npx or local npm invocation into a global install", () => {
-    const globalRoot = join(tempDir, "global", "node_modules");
-    const entrypoint = makeEntrypoint(join(tempDir, "npx", "node_modules"));
-    mockSpawnSync.mockReturnValueOnce({ status: 0, stdout: `${globalRoot}\n` } as never);
+  it("rejects a local entrypoint even when a global package exists", () => {
+    const npmRoot = join(tempDir, "npm", "node_modules");
+    makeEntrypoint(npmPackageRoot(npmRoot));
+    const localEntrypoint = makeEntrypoint(
+      join(tempDir, "project", "node_modules", "@dosu", "cli"),
+    );
+    mockCommands({
+      "npm root -g": { status: 0, stdout: `${npmRoot}\n` },
+      [PNPM_LOCATE_COMMAND]: { status: 0, stdout: "" },
+      "yarn --silent global dir": { status: 1, stdout: "" },
+    });
+
+    const status = runUpgrade("npm", {
+      entrypoint: localEntrypoint,
+      platform: "darwin",
+      env: {},
+    });
+
+    expect(mockSpawnSync).toHaveBeenCalledTimes(3);
+    expect(status).toBe(1);
+    expect(output()).toContain("not a uniquely identified global package installation");
+    expect(output()).toContain("pnpm add -g @dosu/cli@latest");
+    expect(output()).toContain("yarn global add @dosu/cli@latest");
+  });
+
+  it("fails closed when more than one manager claims the same installation", () => {
+    const npmRoot = join(tempDir, "shared", "node_modules");
+    const packageRoot = npmPackageRoot(npmRoot);
+    const entrypoint = makeEntrypoint(packageRoot);
+    mockCommands({
+      "npm root -g": { status: 0, stdout: `${npmRoot}\n` },
+      [PNPM_LOCATE_COMMAND]: { status: 0, stdout: pnpmOutput(packageRoot) },
+      "yarn --silent global dir": { status: 1, stdout: "" },
+    });
 
     const status = runUpgrade("npm", { entrypoint, platform: "darwin", env: {} });
 
-    expect(mockSpawnSync).toHaveBeenCalledTimes(1);
     expect(status).toBe(1);
-    expect(output()).toContain("npx -y @dosu/cli@latest");
-    expect(output()).toContain("npm install -g @dosu/cli@latest");
+    expect(mockSpawnSync).toHaveBeenCalledTimes(3);
+    expect(output()).toContain("not a uniquely identified global package installation");
+  });
+
+  it("fails closed when package-manager ownership cannot be queried", () => {
+    const entrypoint = makeEntrypoint(join(tempDir, "unknown", "@dosu", "cli"));
+    mockCommands({
+      "npm root -g": { status: 1, stdout: "/untrusted\n" },
+      [PNPM_LOCATE_COMMAND]: { status: 0, stdout: "not-a-package-path\n" },
+      "yarn --silent global dir": { status: 0, stdout: "\n" },
+    });
+
+    const status = runUpgrade("npm", { entrypoint, platform: "darwin", env: {} });
+
+    expect(status).toBe(1);
+    expect(mockSpawnSync).toHaveBeenCalledTimes(3);
+    expect(output()).toContain("not a uniquely identified global package installation");
+  });
+
+  it("fails closed without probing when the running entrypoint has disappeared", () => {
+    const status = runUpgrade("npm", {
+      entrypoint: join(tempDir, "missing", "bin", "dosu.js"),
+      platform: "darwin",
+      env: {},
+    });
+
+    expect(status).toBe(1);
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+    expect(output()).toContain("not a uniquely identified global package installation");
+  });
+
+  it("ignores a manager package path that no longer exists", () => {
+    const entrypoint = makeEntrypoint(join(tempDir, "cache", "@dosu", "cli"));
+    const missingNpmRoot = join(tempDir, "removed", "node_modules");
+    mockCommands({
+      "npm root -g": { status: 0, stdout: `${missingNpmRoot}\n` },
+      [PNPM_LOCATE_COMMAND]: { status: 0, stdout: "" },
+      "yarn --silent global dir": { status: 1, stdout: "" },
+    });
+
+    expect(runUpgrade("npm", { entrypoint, platform: "darwin", env: {} })).toBe(1);
+    expect(mockSpawnSync).toHaveBeenCalledTimes(3);
+    expect(output()).toContain("not a uniquely identified global package installation");
   });
 
   it("does not inspect or install global packages during an npx run", () => {
@@ -107,8 +280,21 @@ describe("runUpgrade", () => {
     expect(output()).toContain("npx -y @dosu/cli@latest");
   });
 
+  it("delegates a Homebrew installation to brew", () => {
+    mockCommands({ "brew upgrade dosu-ai/dosu/dosu": { status: 0 } });
+
+    const status = runUpgrade("homebrew", { platform: "darwin" });
+
+    expect(mockSpawnSync).toHaveBeenCalledWith("brew", ["upgrade", "dosu-ai/dosu/dosu"], {
+      shell: false,
+      stdio: "inherit",
+    });
+    expect(status).toBe(0);
+    expect(output()).toContain("Updating Dosu with Homebrew");
+  });
+
   it("preserves a package-manager failure and shows the same manual command", () => {
-    mockSpawnSync.mockReturnValueOnce({ status: 7 } as never);
+    mockCommands({ "brew upgrade dosu-ai/dosu/dosu": { status: 7 } });
 
     const status = runUpgrade("homebrew", { platform: "darwin" });
 
@@ -119,10 +305,12 @@ describe("runUpgrade", () => {
   });
 
   it("handles a missing package manager without claiming success", () => {
-    mockSpawnSync.mockReturnValueOnce({
-      error: Object.assign(new Error("spawn brew ENOENT"), { code: "ENOENT" }),
-      status: null,
-    } as never);
+    mockCommands({
+      "brew upgrade dosu-ai/dosu/dosu": {
+        error: Object.assign(new Error("spawn brew ENOENT"), { code: "ENOENT" }),
+        status: null,
+      },
+    });
 
     const status = runUpgrade("homebrew", { platform: "darwin" });
 
@@ -139,20 +327,77 @@ describe("runUpgrade", () => {
     expect(output()).toContain("github.com/dosu-ai/dosu-cli/releases/latest");
   });
 
-  it("uses a fixed cmd.exe command on Windows instead of shell mode", () => {
+  it.each([
+    { installStatus: 0, expectedExitCode: undefined },
+    { installStatus: 7, expectedExitCode: 7 },
+  ])("maps an upgrade result of $installStatus to shell exit code $expectedExitCode", async ({
+    installStatus,
+    expectedExitCode,
+  }) => {
+    const npmRoot = join(tempDir, "npm", "node_modules");
+    const entrypoint = makeEntrypoint(npmPackageRoot(npmRoot));
+    process.argv = [process.execPath, entrypoint];
+    mockCommands({
+      "npm root -g": { status: 0, stdout: `${npmRoot}\n` },
+      [PNPM_LOCATE_COMMAND]: { status: 0, stdout: "" },
+      "yarn --silent global dir": { status: 1, stdout: "" },
+      "npm install -g @dosu/cli@latest": { status: installStatus },
+    });
+
+    await upgradeCommand().parseAsync([], { from: "user" });
+
+    expect(process.exitCode).toBe(expectedExitCode);
+  });
+});
+
+describe("buildPackageManagerInvocation", () => {
+  it("uses fixed Windows commands and a safe command processor environment", () => {
     const env = { Path: "C:\\Program Files\\nodejs", TEMP: "C:\\Temp" };
-    expect(buildNpmInvocation("root", "win32", "C:\\Windows\\System32\\cmd.exe", env)).toEqual({
-      command: "C:\\Windows\\System32\\cmd.exe",
+    const cmd = "C:\\Windows\\System32\\cmd.exe";
+
+    expect(buildPackageManagerInvocation("npm", "locate", "win32", cmd, env)).toEqual({
+      command: cmd,
       args: ["/d", "/s", "/c", "npm root -g"],
       env: { ...env, NoDefaultCurrentDirectoryInExePath: "1" },
     });
-    expect(buildNpmInvocation("install", "win32", "C:\\Windows\\System32\\cmd.exe", env)).toEqual({
-      command: "C:\\Windows\\System32\\cmd.exe",
-      args: ["/d", "/s", "/c", "npm install -g @dosu/cli@latest"],
+    expect(buildPackageManagerInvocation("pnpm", "install", "win32", cmd, env)).toEqual({
+      command: cmd,
+      args: ["/d", "/s", "/c", "pnpm add -g @dosu/cli@latest"],
       env: { ...env, NoDefaultCurrentDirectoryInExePath: "1" },
     });
+    expect(buildPackageManagerInvocation("yarn", "locate", "win32", cmd, env)).toEqual({
+      command: cmd,
+      args: ["/d", "/s", "/c", "yarn --silent global dir"],
+      env: { ...env, NoDefaultCurrentDirectoryInExePath: "1" },
+    });
+  });
+
+  it("accepts only absolute Windows command processor paths", () => {
     expect(
-      buildNpmInvocation("root", "win32", "cmd.exe", { SystemRoot: "D:\\Windows" }).command,
+      buildPackageManagerInvocation("npm", "locate", "win32", undefined, {
+        ComSpec: "D:\\Windows\\System32\\cmd.exe",
+      }).command,
     ).toBe("D:\\Windows\\System32\\cmd.exe");
+    expect(
+      buildPackageManagerInvocation("npm", "locate", "win32", "cmd.exe", {
+        ComSpec: "cmd.exe",
+        SystemRoot: "D:\\Windows",
+      }).command,
+    ).toBe("D:\\Windows\\System32\\cmd.exe");
+    expect(
+      buildPackageManagerInvocation(
+        "npm",
+        "locate",
+        "win32",
+        "D:\\Windows\\System32\\powershell.exe",
+        { SystemRoot: "D:\\Windows" },
+      ).command,
+    ).toBe("D:\\Windows\\System32\\cmd.exe");
+    expect(
+      buildPackageManagerInvocation("npm", "locate", "win32", undefined, {
+        ComSpec: "cmd.exe",
+        SystemRoot: "Windows",
+      }).command,
+    ).toBe("C:\\Windows\\System32\\cmd.exe");
   });
 });

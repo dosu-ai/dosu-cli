@@ -103,7 +103,7 @@ Or right-click the binary, select "Open", and click "Open" in the dialog.
 
 `dosu mcp add` takes `-g, --global` to install for all projects instead of project-local, and `--show-secret` to print the full manual config.
 
-`dosu upgrade` delegates to npm or Homebrew without switching package managers. Temporary npx runs stay ephemeral and standalone binaries receive the latest safe manual download path.
+`dosu upgrade` delegates to npm, pnpm, Yarn Classic, or Homebrew only after confirming which manager owns the current installation. Temporary package-runner invocations stay ephemeral, ambiguous or local installs are left unchanged, and standalone binaries receive the latest safe manual download path.
 
 ### Platform commands
 
