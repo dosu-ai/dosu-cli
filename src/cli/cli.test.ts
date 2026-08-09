@@ -171,6 +171,82 @@ describe("CLI", () => {
     }
   });
 
+  it("preserves command output when telemetry start throws", async () => {
+    const telemetry: CommandTelemetry = {
+      start: vi.fn(() => {
+        throw new Error("telemetry start failed");
+      }),
+      complete: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await expect(
+        createProgram({ telemetry }).parseAsync(["node", "dosu", "logs"]),
+      ).resolves.toBeDefined();
+      expect(logSpy).toHaveBeenCalledWith("/tmp/test-debug.log");
+      expect(telemetry.complete).not.toHaveBeenCalled();
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("preserves command output when telemetry completion rejects", async () => {
+    const telemetry: CommandTelemetry = {
+      start: vi.fn(),
+      complete: vi.fn().mockRejectedValue(new Error("telemetry completion failed")),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await expect(
+        createProgram({ telemetry }).parseAsync(["node", "dosu", "logs"]),
+      ).resolves.toBeDefined();
+      expect(logSpy).toHaveBeenCalledWith("/tmp/test-debug.log");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("bounds a telemetry completion that never settles", async () => {
+    vi.useFakeTimers();
+    const telemetry: CommandTelemetry = {
+      start: vi.fn(),
+      complete: vi.fn(() => new Promise<void>(() => {})),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const command = createProgram({ telemetry }).parseAsync(["node", "dosu", "logs"]);
+      await vi.advanceTimersByTimeAsync(750);
+      await expect(command).resolves.toBeDefined();
+      expect(logSpy).toHaveBeenCalledWith("/tmp/test-debug.log");
+    } finally {
+      logSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves validation behavior when telemetry failure reporting rejects", async () => {
+    const originalExitCode = process.exitCode;
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const telemetry: CommandTelemetry = {
+      start: vi.fn(),
+      complete: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockRejectedValue(new Error("telemetry failure reporting failed")),
+    };
+    try {
+      await expect(
+        createProgram({ telemetry }).parseAsync(["node", "dosu", "definitely-unknown"]),
+      ).resolves.toBeDefined();
+      expect(process.exitCode).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("unknown command"));
+    } finally {
+      process.exitCode = originalExitCode;
+      errorSpy.mockRestore();
+    }
+  });
+
   it("marks invalid CLI options as expected usage errors", async () => {
     const telemetry: CommandTelemetry = {
       start: vi.fn(),

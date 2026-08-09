@@ -73,6 +73,7 @@ const TELEMETRY_EXCLUDED_COMMANDS = new Set([
   "hooks post-tool-use",
   "hooks stop",
 ]);
+const TELEMETRY_FLUSH_TIMEOUT_MS = 750;
 
 class CliUsageError extends Error {
   readonly exitCode = 1;
@@ -108,6 +109,36 @@ function commandTelemetryContext(): CommandTelemetryContext {
     };
   } catch {
     return { mode: "cloud", isAuthenticated: false };
+  }
+}
+
+function startTelemetry(
+  telemetry: CommandTelemetry | undefined,
+  command: string,
+  context: CommandTelemetryContext,
+): boolean {
+  if (!telemetry) return false;
+  try {
+    telemetry.start(command, context);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function finishTelemetry(operation: () => Promise<void>): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.resolve().then(operation),
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(resolve, TELEMETRY_FLUSH_TIMEOUT_MS);
+      }),
+    ]);
+  } catch {
+    // Telemetry must never change command output, exit codes, or behavior.
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
 }
 
@@ -164,17 +195,19 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
       }
       const command = commandTelemetryName(actionCommand);
       if (options.telemetry && shouldTrackCommand(command)) {
-        options.telemetry.start(command, commandTelemetryContext());
-        telemetryStarted = true;
+        telemetryStarted = startTelemetry(options.telemetry, command, commandTelemetryContext());
       }
     })
     .hook("postAction", async () => {
       const exitCode = Number(process.exitCode ?? 0);
-      if (telemetryStarted) {
+      const telemetry = options.telemetry;
+      if (telemetryStarted && telemetry) {
         if (telemetryValidationFailure) {
-          await options.telemetry?.fail(new CliUsageError("expected CLI usage error"));
+          await finishTelemetry(() =>
+            telemetry.fail(new CliUsageError("expected CLI usage error")),
+          );
         } else {
-          await options.telemetry?.complete(Number.isFinite(exitCode) ? exitCode : 1);
+          await finishTelemetry(() => telemetry.complete(Number.isFinite(exitCode) ? exitCode : 1));
         }
       }
     })
@@ -618,7 +651,7 @@ export async function execute(): Promise<void> {
   try {
     await program.parseAsync(process.argv);
   } catch (err: unknown) {
-    await telemetry?.fail(err);
+    if (telemetry) await finishTelemetry(() => telemetry.fail(err));
     throw err;
   }
 }

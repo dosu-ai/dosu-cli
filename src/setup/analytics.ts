@@ -70,12 +70,12 @@ export async function trackCliOnboardingEvent(
   event: CliOnboardingEvent,
   properties: CliOnboardingProperties = {},
 ): Promise<void> {
-  if (!isTelemetryEnabled("analytics")) return;
-  if (!analyticsReleaseEnabled()) return;
-  if (!cfg.active_account?.session.access_token) return;
-  if (!isUUID(onboardingRunID)) return;
-
   try {
+    if (!isTelemetryEnabled("analytics")) return;
+    if (!analyticsReleaseEnabled()) return;
+    if (!cfg.active_account?.session.access_token) return;
+    if (!isUUID(onboardingRunID)) return;
+
     const input = {
       event,
       properties: {
@@ -94,8 +94,7 @@ export async function trackCliOnboardingEvent(
       TRACKING_TIMEOUT_MS,
     );
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.debug("setup", `CLI onboarding analytics failed: ${event}: ${msg}`);
+    logTrackingFailure("analytics", event, err);
   }
 }
 
@@ -104,10 +103,11 @@ export async function trackCliOnboardingPreAuthEvent(
   event: CliOnboardingPreAuthEvent,
   properties: CliOnboardingProperties = {},
 ): Promise<void> {
-  if (!isTelemetryEnabled("analytics")) return;
-  if (!analyticsReleaseEnabled()) return;
-  if (!isUUID(onboardingRunID)) return;
   try {
+    if (!isTelemetryEnabled("analytics")) return;
+    if (!analyticsReleaseEnabled()) return;
+    if (!isUUID(onboardingRunID)) return;
+
     const input = {
       event,
       onboarding_run_id: onboardingRunID,
@@ -123,8 +123,16 @@ export async function trackCliOnboardingPreAuthEvent(
       TRACKING_TIMEOUT_MS,
     );
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.debug("setup", `CLI onboarding pre-auth analytics failed: ${event}: ${msg}`);
+    logTrackingFailure("pre-auth analytics", event, err);
+  }
+}
+
+function logTrackingFailure(kind: string, event: string, error: unknown): void {
+  try {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.debug("setup", `CLI onboarding ${kind} failed: ${event}: ${message}`);
+  } catch {
+    // Telemetry diagnostics must never affect setup.
   }
 }
 

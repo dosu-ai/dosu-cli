@@ -91,6 +91,22 @@ describe("setup analytics", () => {
     expect(mutate).not.toHaveBeenCalled();
   });
 
+  it("swallows telemetry settings failures before setup tracking starts", async () => {
+    mockTelemetryEnabled.mockImplementation(() => {
+      throw new Error("telemetry settings failed");
+    });
+
+    await expect(
+      trackCliOnboardingEvent(makeConfig(), RUN_ID, "cli_onboarding_started"),
+    ).resolves.toBeUndefined();
+    await expect(
+      trackCliOnboardingPreAuthEvent(OTHER_RUN_ID, "cli_onboarding_auth_started"),
+    ).resolves.toBeUndefined();
+
+    expect(mockCreateTRPCClient).not.toHaveBeenCalled();
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
   it("keeps both setup analytics paths inert without the shared release token", async () => {
     delete process.env.DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE;
     delete process.env.DOSU_POSTHOG_PROJECT_TOKEN;
@@ -184,6 +200,17 @@ describe("setup analytics", () => {
       "setup",
       "CLI onboarding analytics failed: cli_onboarding_failed: request failed",
     );
+  });
+
+  it("swallows failures from telemetry-only debug logging", async () => {
+    mutate.mockRejectedValueOnce(new Error("request failed"));
+    mockDebug.mockImplementationOnce(() => {
+      throw new Error("debug logger failed");
+    });
+
+    await expect(
+      trackCliOnboardingEvent(makeConfig(), RUN_ID, "cli_onboarding_failed"),
+    ).resolves.toBeUndefined();
   });
 
   it("tracks pre-auth events through the anonymous client", async () => {
