@@ -86,7 +86,7 @@ const SAFE_ERROR_CODES = new Set([
   "commander.unknownOption",
 ]);
 
-export type CommandResult = "success" | "validation_error" | "failure";
+type CommandResult = "success" | "validation_error" | "failure";
 
 /** Compatible with the persisted settings shape without coupling to its I/O. */
 export interface TelemetrySettings {
@@ -106,7 +106,7 @@ interface NormalizedContext {
   isAuthenticated: boolean;
 }
 
-export interface RuntimeMetadata {
+interface RuntimeMetadata {
   version: string;
   installChannel: string;
   platform: string;
@@ -117,7 +117,7 @@ export interface RuntimeMetadata {
   isTty: boolean;
 }
 
-export interface SafeStackFrame {
+interface SafeStackFrame {
   filename: string;
   lineno: number;
   colno: number;
@@ -132,7 +132,7 @@ export interface SafeError {
   exitCode?: number;
 }
 
-export interface PostHogProperties {
+interface PostHogProperties {
   $geoip_disable: true;
   $process_person_profile: false;
   schema_version: 1;
@@ -717,6 +717,8 @@ export function createCommandTelemetry(
   const debug = env.DOSU_TELEMETRY_DEBUG === "1";
   const disabled =
     environmentFlag(env.DO_NOT_TRACK) || environmentFlag(env.DOSU_TELEMETRY_DISABLED);
+  // Keep direct process.env references in production so buildDefines() can inline
+  // the public release credentials; injected env objects isolate tests.
   const rawAnalyticsToken = dependencies.env
     ? (env.DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE ?? env.DOSU_POSTHOG_PROJECT_TOKEN)
     : (process.env.DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE ?? process.env.DOSU_POSTHOG_PROJECT_TOKEN);

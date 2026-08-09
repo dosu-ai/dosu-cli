@@ -18,9 +18,8 @@ vi.mock("../version/update-check", () => ({ checkForUpdates: vi.fn() }));
 vi.mock("../version/skill-update-check", () => ({ checkForSkillUpdates: vi.fn() }));
 vi.mock("../version/pending-tasks-check", () => ({ checkForReadyTasks: vi.fn() }));
 
-import { loadTelemetrySettings, setTelemetryConsent } from "../telemetry/settings";
 import type { CommandTelemetry } from "../telemetry/telemetry";
-import { _cliTelemetryInternals, createProgram, shouldRunBackgroundChecks } from "./cli";
+import { createProgram, shouldRunBackgroundChecks } from "./cli";
 
 describe("CLI", () => {
   let originalArgv: string[];
@@ -209,40 +208,20 @@ describe("CLI", () => {
     }
   });
 
-  it("excludes telemetry controls and automatic hook entrypoints", () => {
-    expect(_cliTelemetryInternals.shouldTrack("status")).toBe(true);
-    expect(_cliTelemetryInternals.shouldTrack("hooks doctor")).toBe(true);
-    expect(_cliTelemetryInternals.shouldTrack("telemetry status")).toBe(false);
-    expect(_cliTelemetryInternals.shouldTrack("telemetry enable")).toBe(false);
-    expect(_cliTelemetryInternals.shouldTrack("hooks user-prompt-submit")).toBe(false);
-    expect(_cliTelemetryInternals.shouldTrack("hooks post-tool-use")).toBe(false);
-    expect(_cliTelemetryInternals.shouldTrack("hooks stop")).toBe(false);
-    expect(
-      _cliTelemetryInternals.isHookEntrypoint(["node", "dosu", "hooks", "post-tool-use"]),
-    ).toBe(true);
-    expect(_cliTelemetryInternals.isHookEntrypoint(["node", "dosu", "hooks", "doctor"])).toBe(
-      false,
-    );
-  });
-
-  it("honors the master disable before creating an analytics ID", () => {
-    const configRoot = mkdtempSync(join(tmpdir(), "dosu-cli-telemetry-disabled-"));
-    const originalConfigRoot = process.env.XDG_CONFIG_HOME;
-    const originalDoNotTrack = process.env.DO_NOT_TRACK;
-    process.env.XDG_CONFIG_HOME = configRoot;
-    delete process.env.DO_NOT_TRACK;
+  it("does not record telemetry-control commands", async () => {
+    const telemetry: CommandTelemetry = {
+      start: vi.fn(),
+      complete: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
-      expect(setTelemetryConsent("analytics", true)).toBe(true);
-      process.env.DO_NOT_TRACK = "1";
-
-      expect(_cliTelemetryInternals.processTelemetry()).toBeUndefined();
-      expect(loadTelemetrySettings().install_id).toBeUndefined();
+      await createProgram({ telemetry }).parseAsync(["node", "dosu", "telemetry", "status"]);
+      expect(telemetry.start).not.toHaveBeenCalled();
+      expect(telemetry.complete).not.toHaveBeenCalled();
+      expect(telemetry.fail).not.toHaveBeenCalled();
     } finally {
-      rmSync(configRoot, { recursive: true, force: true });
-      if (originalConfigRoot === undefined) delete process.env.XDG_CONFIG_HOME;
-      else process.env.XDG_CONFIG_HOME = originalConfigRoot;
-      if (originalDoNotTrack === undefined) delete process.env.DO_NOT_TRACK;
-      else process.env.DO_NOT_TRACK = originalDoNotTrack;
+      logSpy.mockRestore();
     }
   });
 

@@ -126,5 +126,3 @@ export function telemetryCommand(): Command {
 
   return command;
 }
-
-export const _telemetryCommandInternals = { parseTarget, statusPayload };

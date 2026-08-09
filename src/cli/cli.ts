@@ -111,12 +111,6 @@ function commandTelemetryContext(): CommandTelemetryContext {
   }
 }
 
-export const _cliTelemetryInternals = {
-  isHookEntrypoint: isHookEntrypointInvocation,
-  shouldTrack: shouldTrackCommand,
-  processTelemetry: processCommandTelemetry,
-};
-
 /** Suggest the closest registered command name for a mistyped one, if any is close enough. */
 function suggestClosestCommand(input: string, program: Command): string | undefined {
   let best: string | undefined;
