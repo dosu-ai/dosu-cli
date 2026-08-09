@@ -115,19 +115,18 @@ export function buildUpdateNotice(
     const versionMessage = `Update available: ${current} → ${latest}`;
     const contentWidth = Math.max(versionMessage.length, hint.length);
     const innerWidth = contentWidth + 4;
-    const horizontal = "═".repeat(innerWidth);
+    const horizontal = "─".repeat(innerWidth);
     const emptyLine = `│${" ".repeat(innerWidth)}│`;
 
-    return [
-      "",
+    const frame = [
       `╭${horizontal}╮`,
       emptyLine,
-      `│  ${pc.yellow(versionMessage)}${" ".repeat(contentWidth - versionMessage.length)}  │`,
-      `│  ${pc.dim(hint)}${" ".repeat(contentWidth - hint.length)}  │`,
+      `│  ${versionMessage}${" ".repeat(contentWidth - versionMessage.length)}  │`,
+      `│  ${hint}${" ".repeat(contentWidth - hint.length)}  │`,
       emptyLine,
       `╰${horizontal}╯`,
-      "",
     ].join("\n");
+    return `\n${pc.white(frame)}\n`;
   }
 
   const agentAction = hint[0].toLowerCase() + hint.slice(1);

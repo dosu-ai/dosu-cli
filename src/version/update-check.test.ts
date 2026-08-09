@@ -2,6 +2,12 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("picocolors", async () => {
+  const actual = await vi.importActual<typeof import("picocolors")>("picocolors");
+  return { default: actual.createColors(true) };
+});
+
 import {
   buildUpdateHint,
   buildUpdateNotice,
@@ -39,9 +45,13 @@ describe("buildUpdateNotice", () => {
     expect(notice).toContain("Update available: 0.43.0 → 0.44.0");
     expect(notice).toContain('Run "dosu upgrade"');
     expect(notice).not.toContain("Tell the user");
+    expect(notice).toContain("\u001B[37m");
+    expect(notice).not.toContain("\u001B[33m");
+    expect(notice).not.toContain("\u001B[2m");
+    expect(notice).not.toContain("═");
     expect(lines).toHaveLength(6);
-    expect(lines[0]).toMatch(/^╭═+╮$/);
-    expect(lines.at(-1)).toMatch(/^╰═+╯$/);
+    expect(lines[0]).toMatch(/^╭─+╮$/);
+    expect(lines.at(-1)).toMatch(/^╰─+╯$/);
     expect(lines.slice(1, -1).every((line) => line.startsWith("│") && line.endsWith("│"))).toBe(
       true,
     );
