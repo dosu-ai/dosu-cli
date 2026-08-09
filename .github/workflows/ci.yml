@@ -245,7 +245,7 @@ jobs:
               $startInfo.ArgumentList.Add($argument)
             }
             $outer = [Diagnostics.Process]::Start($startInfo)
-            if (-not $outer.WaitForExit(30_000)) {
+            if (-not $outer.WaitForExit(30000)) {
               throw "packed project proxy did not settle after SIGINT"
             }
             if ($outer.ExitCode -ne 0) { throw "project proxy exited $($outer.ExitCode)" }
