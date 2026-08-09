@@ -126,7 +126,7 @@ export function buildUpdateNotice(
       emptyLine,
       `└${horizontal}┘`,
     ];
-    return `\n${frameLines.map((line) => pc.cyan(line)).join("\n")}\n`;
+    return `\n${frameLines.map((line) => pc.yellow(line)).join("\n")}\n`;
   }
 
   const agentAction = hint[0].toLowerCase() + hint.slice(1);
