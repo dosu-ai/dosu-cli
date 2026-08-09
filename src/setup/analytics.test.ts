@@ -1,3 +1,4 @@
+import { createServer, type Socket } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CLI_CONTRACT_HASH } from "../client/contract";
 import type { Config } from "../config/config";
@@ -312,33 +313,36 @@ describe("setup analytics", () => {
   });
 
   it("aborts a hung setup analytics request after 500ms", async () => {
-    vi.useFakeTimers();
-    let observedSignal: AbortSignal | undefined;
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockImplementationOnce(
-        async (_input: string | URL | Request, options?: RequestInit): Promise<Response> => {
-          observedSignal = options?.signal ?? undefined;
-          return await new Promise<Response>((_resolve, reject) => {
-            observedSignal?.addEventListener("abort", () => reject(new Error("aborted")), {
-              once: true,
-            });
-          });
-        },
-      );
-    mutate.mockImplementationOnce(async (): Promise<void> => {
-      const linkOptions = mockHttpLink.mock.calls.at(-1)?.[0] as {
-        fetch: (url: string, options?: RequestInit) => Promise<Response>;
-      };
-      await linkOptions.fetch("https://app.test.dev/api/cli-trpc", { redirect: "follow" });
+    const sockets = new Set<Socket>();
+    const server = createServer((socket) => {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+      socket.resume();
     });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("test server has no TCP address");
+    mockGetWebAppURL.mockReturnValue(`https://127.0.0.1:${address.port}`);
 
-    const tracking = trackCliOnboardingEvent(makeConfig(), RUN_ID, "cli_onboarding_started");
-    await vi.advanceTimersByTimeAsync(500);
+    try {
+      mutate.mockImplementationOnce(async (): Promise<void> => {
+        const linkOptions = mockHttpLink.mock.calls.at(-1)?.[0] as {
+          fetch: (url: string, options?: RequestInit) => Promise<Response>;
+        };
+        await linkOptions.fetch(`https://127.0.0.1:${address.port}/api/cli-trpc`, {
+          redirect: "follow",
+        });
+      });
 
-    await expect(tracking).resolves.toBeUndefined();
-    expect(observedSignal?.aborted).toBe(true);
-    expect(fetchSpy.mock.calls[0]?.[1]).toMatchObject({ redirect: "error" });
-    fetchSpy.mockRestore();
+      const startedAt = Date.now();
+      await expect(
+        trackCliOnboardingEvent(makeConfig(), RUN_ID, "cli_onboarding_started"),
+      ).resolves.toBeUndefined();
+      expect(Date.now() - startedAt).toBeLessThan(1_500);
+      await vi.waitFor(() => expect(sockets.size).toBe(0), { timeout: 1_000 });
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });

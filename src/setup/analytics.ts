@@ -6,7 +6,11 @@ import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
 import type { CliApiClient } from "../generated/dosu-api-types";
 import { isTelemetryEnabled } from "../telemetry/settings";
-import { parsePostHogProjectToken, parseTelemetryWebAppURL } from "../telemetry/telemetry";
+import {
+  fetchWithoutRedirect,
+  parsePostHogProjectToken,
+  parseTelemetryWebAppURL,
+} from "../telemetry/telemetry";
 import { VERSION } from "../version/version";
 
 type CliOnboardingEvent =
@@ -232,12 +236,15 @@ function createAnalyticsClient(
           "x-dosu-cli-contract": CLI_CONTRACT_HASH,
           ...(accessToken ? { "Supabase-Access-Token": accessToken } : {}),
         },
-        fetch: (url, options) =>
-          globalThis.fetch(url, {
+        fetch: (url, options) => {
+          const target =
+            typeof url === "string" ? url : url instanceof URL ? url.toString() : url.url;
+          return fetchWithoutRedirect(target, {
             ...options,
             redirect: "error",
             ...(requestSignal ? { signal: requestSignal } : {}),
-          }),
+          });
+        },
       }),
     ],
   }) as unknown as CliOnboardingAnalyticsClient;

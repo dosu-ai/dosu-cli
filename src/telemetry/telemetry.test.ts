@@ -1,4 +1,6 @@
 import { readFileSync } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
+import { createServer, type Socket } from "node:net";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
@@ -8,6 +10,7 @@ import {
   buildSentryEnvelope,
   createCommandTelemetry,
   durationBucket,
+  fetchWithoutRedirect,
   parsePostHogProjectToken,
   parseSentryDsn,
   parseTelemetryWebAppURL,
@@ -409,6 +412,44 @@ describe("telemetry web-app URL parsing", () => {
 });
 
 describe("HTTPS transport", () => {
+  it("round-trips a bounded POST response through the manual transport", async () => {
+    let receivedMethod = "";
+    let receivedHeader = "";
+    let receivedBody = "";
+    const server = createHttpServer((request, response) => {
+      receivedMethod = request.method ?? "";
+      receivedHeader = String(request.headers["x-test-header"] ?? "");
+      request.setEncoding("utf8");
+      request.on("data", (chunk) => {
+        receivedBody += chunk;
+      });
+      request.on("end", () => {
+        response.writeHead(202, { "content-type": "application/json", "x-test-response": "ok" });
+        response.end('{"accepted":true}');
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("test server has no TCP address");
+
+    try {
+      const response = await fetchWithoutRedirect(`http://127.0.0.1:${address.port}/capture`, {
+        method: "POST",
+        headers: { "x-test-header": "present" },
+        body: '{"event":"safe"}',
+      });
+
+      expect(response.status).toBe(202);
+      expect(response.headers.get("x-test-response")).toBe("ok");
+      expect(await response.json()).toEqual({ accepted: true });
+      expect(receivedMethod).toBe("POST");
+      expect(receivedHeader).toBe("present");
+      expect(receivedBody).toBe('{"event":"safe"}');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it("aborts after 500ms and resolves false", async () => {
     vi.useFakeTimers();
     try {
@@ -431,6 +472,33 @@ describe("HTTPS transport", () => {
       expect(fetcher.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("destroys a socket whose TLS handshake never completes", async () => {
+    const sockets = new Set<Socket>();
+    const server = createServer((socket) => {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+      socket.resume();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("test server has no TCP address");
+
+    try {
+      const startedAt = Date.now();
+      await expect(
+        sendHttpsRequest(`https://127.0.0.1:${address.port}/`, {
+          method: "POST",
+          body: "{}",
+        }),
+      ).resolves.toBe(false);
+      expect(Date.now() - startedAt).toBeLessThan(1_500);
+      await vi.waitFor(() => expect(sockets.size).toBe(0), { timeout: 1_000 });
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
 
@@ -524,6 +592,27 @@ describe("CommandTelemetry lifecycle", () => {
     expect(disabledDeps.fetch).not.toHaveBeenCalled();
     expect(disabledDeps.randomUUID).not.toHaveBeenCalled();
     expect(disabledDeps.stderr).not.toHaveBeenCalled();
+  });
+
+  it("resolves the installation id lazily only when PostHog sends", async () => {
+    const resolveInstallId = vi.fn(() => "11111111-1111-4111-8111-111111111111");
+    const deps = testDependencies({ resolveInstallId });
+    const telemetry = createCommandTelemetry({}, deps);
+
+    expect(resolveInstallId).not.toHaveBeenCalled();
+    telemetry.start("status", SAFE_CONTEXT);
+    expect(resolveInstallId).not.toHaveBeenCalled();
+    await telemetry.complete(0);
+
+    expect(resolveInstallId).toHaveBeenCalledOnce();
+    expect(deps.fetch).toHaveBeenCalledOnce();
+
+    const inertResolver = vi.fn(() => "22222222-2222-4222-8222-222222222222");
+    const inertDeps = testDependencies({ env: {}, resolveInstallId: inertResolver });
+    const inertTelemetry = createCommandTelemetry({}, inertDeps);
+    inertTelemetry.start("status", SAFE_CONTEXT);
+    await inertTelemetry.complete(0);
+    expect(inertResolver).not.toHaveBeenCalled();
   });
 
   it("sends exactly one PostHog completion event", async () => {

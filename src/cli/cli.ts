@@ -64,10 +64,6 @@ function isHookEntrypointInvocation(argv: string[]): boolean {
   return i >= 0 && HOOK_ENTRYPOINTS.has(argv[i + 1] ?? "");
 }
 
-function isTelemetryControlInvocation(argv: string[]): boolean {
-  return argv.includes("telemetry");
-}
-
 export function shouldRunBackgroundChecks(actionName: string, argv: string[]): boolean {
   return actionName !== "upgrade" && !isHookEntrypointInvocation(argv);
 }
@@ -648,10 +644,9 @@ async function ensureFreshSession(cfg: Config): Promise<boolean> {
 }
 
 export async function execute(): Promise<void> {
-  const telemetry =
-    isHookEntrypointInvocation(process.argv) || isTelemetryControlInvocation(process.argv)
-      ? undefined
-      : processCommandTelemetry();
+  const telemetry = isHookEntrypointInvocation(process.argv)
+    ? undefined
+    : processCommandTelemetry();
   const program = createProgram({ telemetry });
   try {
     await program.parseAsync(process.argv);
@@ -665,11 +660,12 @@ function processCommandTelemetry(): CommandTelemetry | undefined {
   try {
     const settings = loadTelemetrySettings();
     if (!isTelemetryEnabled(settings)) return undefined;
-    const installID = settings.install_id ?? getOrCreateInstallID();
-
-    return createCommandTelemetry({
-      ...(installID ? { install_id: installID } : {}),
-    });
+    return createCommandTelemetry(
+      {},
+      {
+        resolveInstallId: () => settings.install_id ?? getOrCreateInstallID(),
+      },
+    );
   } catch {
     return undefined;
   }

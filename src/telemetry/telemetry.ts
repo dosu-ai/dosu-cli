@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import { request as httpRequest, type IncomingMessage } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -7,6 +9,7 @@ import { getWebAppURL } from "../config/constants";
 import { INSTALL_CHANNEL, VERSION } from "../version/version";
 
 const REQUEST_TIMEOUT_MS = 500;
+const MAX_RESPONSE_BYTES = 1_024 * 1_024;
 const MAX_STACK_FRAMES = 20;
 const UNKNOWN_COMMAND = "unknown";
 const FALLBACK_INSTALL_ID = "00000000-0000-4000-8000-000000000000";
@@ -196,6 +199,7 @@ export type TelemetryFetch = (input: string, init: RequestInit) => Promise<{ ok:
 
 export interface TelemetryDependencies {
   fetch?: TelemetryFetch;
+  resolveInstallId?: () => string | undefined;
   now?: () => number;
   randomUUID?: () => string;
   env?: Readonly<Record<string, string | undefined>>;
@@ -594,13 +598,119 @@ export function buildSentryEnvelope(input: SentryEnvelopeInput): SentryEnvelope 
   };
 }
 
-const defaultFetch: TelemetryFetch = async (input, init) => fetch(input, init);
+/** Fetch without redirects or pooled sockets; abort always destroys the underlying request. */
+export function fetchWithoutRedirect(url: string, init: RequestInit = {}): Promise<Response> {
+  let parsedURL: URL;
+  try {
+    parsedURL = new URL(url);
+    if (parsedURL.protocol !== "http:" && parsedURL.protocol !== "https:") {
+      return Promise.reject(new Error("unsupported telemetry protocol"));
+    }
+  } catch (error) {
+    return Promise.reject(error);
+  }
+
+  return new Promise<Response>((resolve, reject) => {
+    let request: ReturnType<typeof httpsRequest> | undefined;
+    let response: IncomingMessage | undefined;
+    let settled = false;
+    const signal = init.signal;
+
+    const cleanup = () => signal?.removeEventListener("abort", onAbort);
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      response?.destroy();
+      request?.socket?.destroy();
+      request?.destroy();
+      reject(error);
+    };
+    const succeed = (value: Response) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      response?.destroy();
+      request?.socket?.destroy();
+      request?.destroy();
+      resolve(value);
+    };
+    const onAbort = () => {
+      const error = new Error("telemetry request aborted");
+      error.name = "AbortError";
+      fail(error);
+    };
+
+    try {
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
+      const body = init.body;
+      if (body !== undefined && body !== null && typeof body !== "string") {
+        fail(new Error("unsupported telemetry request body"));
+        return;
+      }
+      const headers = Object.fromEntries(new Headers(init.headers).entries());
+      const transport = parsedURL.protocol === "https:" ? httpsRequest : httpRequest;
+      request = transport(
+        parsedURL,
+        {
+          method: init.method ?? "GET",
+          headers,
+          agent: false,
+        },
+        (incoming) => {
+          response = incoming;
+          const chunks: Buffer[] = [];
+          let totalBytes = 0;
+          incoming.on("data", (chunk: Buffer | string) => {
+            const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+            totalBytes += bytes.byteLength;
+            if (totalBytes > MAX_RESPONSE_BYTES) {
+              fail(new Error("telemetry response too large"));
+              return;
+            }
+            chunks.push(bytes);
+          });
+          incoming.once("error", fail);
+          incoming.once("end", () => {
+            try {
+              const responseHeaders = new Headers();
+              for (let index = 0; index < incoming.rawHeaders.length; index += 2) {
+                const name = incoming.rawHeaders[index];
+                const value = incoming.rawHeaders[index + 1];
+                if (name && value) responseHeaders.append(name, value);
+              }
+              const status = incoming.statusCode;
+              if (!status) throw new Error("telemetry response missing status");
+              succeed(
+                new Response(chunks.length > 0 ? Buffer.concat(chunks) : null, {
+                  status,
+                  statusText: incoming.statusMessage,
+                  headers: responseHeaders,
+                }),
+              );
+            } catch (error) {
+              fail(error);
+            }
+          });
+        },
+      );
+      request.once("error", fail);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      request.end(body);
+    } catch (error) {
+      fail(error);
+    }
+  });
+}
 
 /** One attempt, HTTPS only, hard 500ms deadline, and every failure is swallowed. */
 export async function sendHttpsRequest(
   url: string,
   init: RequestInit,
-  fetcher: TelemetryFetch = defaultFetch,
+  fetcher: TelemetryFetch = fetchWithoutRedirect,
 ): Promise<boolean> {
   try {
     if (new URL(url).protocol !== "https:") return false;
@@ -705,7 +815,7 @@ export function createCommandTelemetry(
   dependencies: TelemetryDependencies = {},
 ): CommandTelemetry {
   const env = dependencies.env ?? process.env;
-  const fetcher = dependencies.fetch ?? defaultFetch;
+  const fetcher = dependencies.fetch;
   const now = dependencies.now ?? Date.now;
   const generateUuid = dependencies.randomUUID ?? randomUUID;
   const writeStderr =
@@ -733,9 +843,19 @@ export function createCommandTelemetry(
   let startedAt = 0;
   let command = UNKNOWN_COMMAND;
   let context: NormalizedContext = normalizeContext(undefined);
+  let installIdResolved = false;
+  let resolvedInstallId = settings.install_id;
 
   function installId(): string | undefined {
-    return validInstallId(settings.install_id) ? settings.install_id : undefined;
+    if (validInstallId(resolvedInstallId)) return resolvedInstallId;
+    if (installIdResolved) return undefined;
+    installIdResolved = true;
+    try {
+      resolvedInstallId = dependencies.resolveInstallId?.();
+    } catch {
+      resolvedInstallId = undefined;
+    }
+    return validInstallId(resolvedInstallId) ? resolvedInstallId : undefined;
   }
 
   function debugPayload(payload: string): void {

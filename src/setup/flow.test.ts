@@ -698,6 +698,29 @@ describe("runSetup integration", () => {
     return clientMethods;
   }
 
+  it("does not block setup when telemetry is hung", async () => {
+    let releaseTelemetry: (() => void) | undefined;
+    mockTrpc.user.trackCliOnboardingPreAuthEvent.mutate.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseTelemetry = () => resolve({ ok: true });
+        }),
+    );
+    mockStartOAuthFlow.mockRejectedValue(new Error("auth unavailable"));
+
+    const setup = runSetup();
+    try {
+      const completedPromptly = await Promise.race([
+        setup.then(() => true),
+        new Promise<false>((resolve) => setTimeout(() => resolve(false), 100)),
+      ]);
+      expect(completedPromptly).toBe(true);
+    } finally {
+      releaseTelemetry?.();
+      await setup;
+    }
+  });
+
   it("starts the OAuth flow without a confirm prompt and prints the login link", async () => {
     // No token in config (fresh state via temp dir)
     mockStartOAuthFlow.mockImplementation(async (_signal, _path, _params, _onAuthURL, options) => {
