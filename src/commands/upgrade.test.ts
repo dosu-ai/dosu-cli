@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -8,9 +8,15 @@ vi.mock("node:child_process", () => ({
   spawnSync: vi.fn(),
 }));
 
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, realpathSync: vi.fn(actual.realpathSync) };
+});
+
 import { buildPackageManagerInvocation, runUpgrade, upgradeCommand } from "./upgrade";
 
 const mockSpawnSync = vi.mocked(spawnSync);
+const mockRealpathSync = vi.mocked(realpathSync);
 const PNPM_LOCATE_COMMAND = "pnpm list -g --depth=0 --parseable @dosu/cli";
 let tempDir: string;
 let logSpy: ReturnType<typeof vi.spyOn>;
@@ -43,6 +49,15 @@ function yarnPackageRoot(globalDir: string): string {
 
 function pnpmOutput(packageRoot?: string): string {
   return packageRoot ? `${join(tempDir, "pnpm", "global-project")}\n${packageRoot}\n` : "";
+}
+
+function hardenedEnv(env: Record<string, string> = {}): Record<string, string> {
+  return {
+    ...env,
+    COREPACK_ENABLE_NETWORK: "0",
+    COREPACK_ENABLE_PROJECT_SPEC: "0",
+    YARN_IGNORE_PATH: "1",
+  };
 }
 
 function mockCommands(responses: Record<string, MockResult>): void {
@@ -91,6 +106,10 @@ describe("runUpgrade", () => {
   it("updates a confirmed global npm installation with fixed arguments", () => {
     const npmRoot = join(tempDir, "npm", "node_modules");
     const entrypoint = makeEntrypoint(npmPackageRoot(npmRoot));
+    const neutralCwd = join(tempDir, "neutral");
+    const env = { PATH: "/trusted/bin" };
+    const safeEnv = hardenedEnv(env);
+    mkdirSync(neutralCwd);
     mockCommands({
       "npm root -g": { status: 0, stdout: `${npmRoot}\n` },
       [PNPM_LOCATE_COMMAND]: { status: 0, stdout: "" },
@@ -98,11 +117,26 @@ describe("runUpgrade", () => {
       "npm install -g @dosu/cli@latest": { status: 0 },
     });
 
-    const status = runUpgrade("npm", { entrypoint, platform: "darwin", env: {} });
+    const status = runUpgrade("npm", {
+      entrypoint,
+      platform: "darwin",
+      cwd: neutralCwd,
+      env,
+    });
 
     expect(mockSpawnSync).toHaveBeenCalledWith("npm", ["install", "-g", "@dosu/cli@latest"], {
+      cwd: neutralCwd,
+      env: safeEnv,
       shell: false,
       stdio: "inherit",
+    });
+    expect(mockSpawnSync).toHaveBeenCalledWith("yarn", ["--silent", "global", "dir"], {
+      cwd: neutralCwd,
+      encoding: "utf8",
+      env: safeEnv,
+      shell: false,
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5_000,
     });
     expect(status).toBe(0);
     expect(output()).toContain("Updating Dosu with npm");
@@ -123,6 +157,8 @@ describe("runUpgrade", () => {
     const status = runUpgrade("npm", { entrypoint, platform: "darwin", env: {} });
 
     expect(mockSpawnSync).toHaveBeenCalledWith("pnpm", ["add", "-g", "@dosu/cli@latest"], {
+      cwd: homedir(),
+      env: hardenedEnv(),
       shell: false,
       stdio: "inherit",
     });
@@ -160,6 +196,8 @@ describe("runUpgrade", () => {
 
     expect(runUpgrade("npm", { entrypoint, platform: "darwin", env: {} })).toBe(0);
     expect(mockSpawnSync).toHaveBeenLastCalledWith("pnpm", ["add", "-g", "@dosu/cli@latest"], {
+      cwd: homedir(),
+      env: hardenedEnv(),
       shell: false,
       stdio: "inherit",
     });
@@ -178,6 +216,8 @@ describe("runUpgrade", () => {
     const status = runUpgrade("npm", { entrypoint, platform: "darwin", env: {} });
 
     expect(mockSpawnSync).toHaveBeenCalledWith("yarn", ["global", "add", "@dosu/cli@latest"], {
+      cwd: homedir(),
+      env: hardenedEnv(),
       shell: false,
       stdio: "inherit",
     });
@@ -250,6 +290,14 @@ describe("runUpgrade", () => {
     });
 
     expect(status).toBe(1);
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+    expect(output()).toContain("not a uniquely identified global package installation");
+  });
+
+  it("fails closed without probing when no running entrypoint is available", () => {
+    process.argv = [process.execPath];
+
+    expect(runUpgrade("npm", { platform: "darwin", env: {} })).toBe(1);
     expect(mockSpawnSync).not.toHaveBeenCalled();
     expect(output()).toContain("not a uniquely identified global package installation");
   });
@@ -327,6 +375,43 @@ describe("runUpgrade", () => {
     expect(output()).toContain("github.com/dosu-ai/dosu-cli/releases/latest");
   });
 
+  it("detects and updates an npm-owned installation on Windows with fixed commands", () => {
+    const cmd = "C:\\Windows\\System32\\cmd.exe";
+    const npmRoot = "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules";
+    const entrypoint = `${npmRoot}\\@dosu\\cli\\bin\\dosu.js`;
+    const neutralCwd = "C:\\Users\\alice";
+    const safeEnv = { Path: "C:\\Program Files\\nodejs" };
+    mockCommands({
+      [`${cmd} /d /s /c npm root -g`]: { status: 0, stdout: `${npmRoot}\r\n` },
+      [`${cmd} /d /s /c ${PNPM_LOCATE_COMMAND}`]: { status: 0, stdout: "" },
+      [`${cmd} /d /s /c yarn --silent global dir`]: { status: 1, stdout: "" },
+      [`${cmd} /d /s /c npm install -g @dosu/cli@latest`]: { status: 0 },
+    });
+
+    mockRealpathSync.withImplementation(((path: unknown) => String(path)) as never, () => {
+      expect(
+        runUpgrade("npm", {
+          entrypoint,
+          platform: "win32",
+          comSpec: cmd,
+          cwd: neutralCwd,
+          env: safeEnv,
+        }),
+      ).toBe(0);
+    });
+
+    expect(mockSpawnSync).toHaveBeenLastCalledWith(
+      cmd,
+      ["/d", "/s", "/c", "npm install -g @dosu/cli@latest"],
+      {
+        cwd: neutralCwd,
+        env: { ...hardenedEnv(safeEnv), NoDefaultCurrentDirectoryInExePath: "1" },
+        shell: false,
+        stdio: "inherit",
+      },
+    );
+  });
+
   it.each([
     { installStatus: 0, expectedExitCode: undefined },
     { installStatus: 7, expectedExitCode: 7 },
@@ -358,17 +443,17 @@ describe("buildPackageManagerInvocation", () => {
     expect(buildPackageManagerInvocation("npm", "locate", "win32", cmd, env)).toEqual({
       command: cmd,
       args: ["/d", "/s", "/c", "npm root -g"],
-      env: { ...env, NoDefaultCurrentDirectoryInExePath: "1" },
+      env: { ...hardenedEnv(env), NoDefaultCurrentDirectoryInExePath: "1" },
     });
     expect(buildPackageManagerInvocation("pnpm", "install", "win32", cmd, env)).toEqual({
       command: cmd,
       args: ["/d", "/s", "/c", "pnpm add -g @dosu/cli@latest"],
-      env: { ...env, NoDefaultCurrentDirectoryInExePath: "1" },
+      env: { ...hardenedEnv(env), NoDefaultCurrentDirectoryInExePath: "1" },
     });
     expect(buildPackageManagerInvocation("yarn", "locate", "win32", cmd, env)).toEqual({
       command: cmd,
       args: ["/d", "/s", "/c", "yarn --silent global dir"],
-      env: { ...env, NoDefaultCurrentDirectoryInExePath: "1" },
+      env: { ...hardenedEnv(env), NoDefaultCurrentDirectoryInExePath: "1" },
     });
   });
 

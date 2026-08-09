@@ -2,6 +2,7 @@
 
 import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { posix, win32 } from "node:path";
 import { Command } from "commander";
 import pc from "picocolors";
@@ -11,6 +12,7 @@ const PACKAGE_NAME = "@dosu/cli";
 const LATEST_PACKAGE = `${PACKAGE_NAME}@latest`;
 const BREW_MANUAL_COMMAND = "brew upgrade dosu-ai/dosu/dosu";
 const NPX_COMMAND = "npx -y @dosu/cli@latest";
+const PROBE_TIMEOUT_MS = 5_000;
 const RELEASES_URL = "https://github.com/dosu-ai/dosu-cli/releases/latest";
 
 type GlobalPackageManager = "npm" | "pnpm" | "yarn";
@@ -63,6 +65,18 @@ function windowsCommandProcessor(
   return win32.join(systemRoot, "System32", "cmd.exe");
 }
 
+function safePackageManagerEnv(
+  env: Readonly<Record<string, string | undefined>>,
+): NodeJS.ProcessEnv {
+  // The caller's project must not select a package-manager binary or trigger a Corepack download.
+  return {
+    ...env,
+    COREPACK_ENABLE_NETWORK: "0",
+    COREPACK_ENABLE_PROJECT_SPEC: "0",
+    YARN_IGNORE_PATH: "1",
+  };
+}
+
 export function buildPackageManagerInvocation(
   manager: GlobalPackageManager,
   action: PackageManagerAction,
@@ -74,15 +88,16 @@ export function buildPackageManagerInvocation(
     action === "locate"
       ? PACKAGE_MANAGERS[manager].locateArgs
       : PACKAGE_MANAGERS[manager].installArgs;
+  const safeEnv = safePackageManagerEnv(env);
   if (platform === "win32") {
     return {
       command: isAbsoluteCommandProcessor(comSpec) ? comSpec : windowsCommandProcessor(env),
       args: ["/d", "/s", "/c", [manager, ...args].join(" ")],
       // Prevent cmd.exe from resolving a malicious package-manager shim in the project first.
-      env: { ...env, NoDefaultCurrentDirectoryInExePath: "1" },
+      env: { ...safeEnv, NoDefaultCurrentDirectoryInExePath: "1" },
     };
   }
-  return { command: manager, args: [...args] };
+  return { command: manager, args: [...args], env: safeEnv };
 }
 
 function packageRoots(
@@ -90,13 +105,16 @@ function packageRoots(
   platform: NodeJS.Platform,
   comSpec: string | undefined,
   env: Readonly<Record<string, string | undefined>>,
+  cwd: string,
 ): string[] {
   const invocation = buildPackageManagerInvocation(manager, "locate", platform, comSpec, env);
   const result = spawnSync(invocation.command, invocation.args, {
+    cwd,
     encoding: "utf8",
-    ...(invocation.env ? { env: invocation.env } : {}),
+    env: invocation.env,
     shell: false,
     stdio: ["ignore", "pipe", "ignore"],
+    timeout: PROBE_TIMEOUT_MS,
   });
   if (result.status !== 0 || typeof result.stdout !== "string") return [];
 
@@ -127,6 +145,7 @@ function owningPackageManager(
   platform: NodeJS.Platform,
   comSpec?: string,
   env: Readonly<Record<string, string | undefined>> = process.env,
+  cwd = homedir(),
 ): GlobalPackageManager | null {
   const path = platform === "win32" ? win32 : posix;
   if (!entrypoint || !path.isAbsolute(entrypoint)) return null;
@@ -139,7 +158,7 @@ function owningPackageManager(
   }
 
   const owners = (Object.keys(PACKAGE_MANAGERS) as GlobalPackageManager[]).filter((manager) =>
-    packageRoots(manager, platform, comSpec, env).some((root) => {
+    packageRoots(manager, platform, comSpec, env, cwd).some((root) => {
       try {
         const relative = path.relative(realpathSync(root), realEntrypoint);
         return (
@@ -184,6 +203,7 @@ interface UpgradeOptions {
   platform?: NodeJS.Platform;
   comSpec?: string;
   env?: Readonly<Record<string, string | undefined>>;
+  cwd?: string;
 }
 
 function printNonGlobalPackageGuidance(): void {
@@ -200,6 +220,8 @@ function printNonGlobalPackageGuidance(): void {
 export function runUpgrade(channel = INSTALL_CHANNEL, options: UpgradeOptions = {}): number {
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
+  // Global operations do not need the caller's project, whose config may execute arbitrary code.
+  const cwd = options.cwd ?? homedir();
   let manager: GlobalPackageManager | null = null;
 
   if (channel === "npm") {
@@ -212,6 +234,7 @@ export function runUpgrade(channel = INSTALL_CHANNEL, options: UpgradeOptions = 
       platform,
       options.comSpec,
       env,
+      cwd,
     );
     if (!manager) {
       printNonGlobalPackageGuidance();
@@ -229,6 +252,7 @@ export function runUpgrade(channel = INSTALL_CHANNEL, options: UpgradeOptions = 
   console.log(`Updating Dosu with ${plan.label}...`);
   console.log(`  ${plan.manualCommand}\n`);
   const result = spawnSync(plan.command, plan.args, {
+    ...(channel === "npm" ? { cwd } : {}),
     ...(plan.env ? { env: plan.env } : {}),
     shell: false,
     stdio: "inherit",
