@@ -94,6 +94,17 @@ describe("agent registry", () => {
     expect(rulePathForAgent("antigravity")).toBe(join(tempDir, ".gemini", "GEMINI.md"));
     expect(rulePathForAgent("windsurf")).toBeNull();
   });
+
+  it("keeps project rules inside the repository", () => {
+    const root = join(tempDir, "repo");
+
+    expect(rulePathForAgent("claude", root)).toBe(join(root, ".claude", "rules", "dosu.md"));
+    expect(rulePathForAgent("cursor", root)).toBe(join(root, ".cursor", "rules", "dosu.mdc"));
+    expect(rulePathForAgent("gemini", root)).toBe(join(root, "GEMINI.md"));
+    expect(rulePathForAgent("codex", root)).toBeNull();
+    expect(rulePathForAgent("opencode", root)).toBeNull();
+    expect(rulePathForAgent("antigravity", root)).toBeNull();
+  });
 });
 
 describe("standalone rule files", () => {
@@ -118,6 +129,15 @@ describe("standalone rule files", () => {
       "---\nalwaysApply: true\n---\n\nshared rule\n",
     );
     expect(readFileSync(claude?.path ?? "", "utf-8")).toBe("shared rule\n");
+  });
+
+  it("writes project rules without touching global rule paths", () => {
+    const root = join(tempDir, "repo");
+    const installed = installRuleForAgent("claude", "project rule", root);
+
+    expect(installed?.path).toBe(join(root, ".claude", "rules", "dosu.md"));
+    expect(readFileSync(installed?.path ?? "", "utf-8")).toBe("project rule\n");
+    expect(existsSync(join(tempDir, ".claude", "rules", "dosu.md"))).toBe(false);
   });
 
   it("removes a standalone rule idempotently", () => {

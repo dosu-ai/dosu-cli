@@ -122,7 +122,14 @@ vi.mock("../commands/skill", () => ({
           ({ claude: "claude-code", cursor: "cursor" })[providerID as "claude" | "cursor"],
       )
       .filter(Boolean),
-  skillInstallTargetForProvider: (providerID: string) => {
+  skillInstallTargetForProvider: (providerID: string, projectRoot?: string) => {
+    if (projectRoot) {
+      const target = {
+        claude: { path: `${projectRoot}/.claude/skills/dosu`, symlink: false },
+        cursor: { path: `${projectRoot}/.agents/skills/dosu`, symlink: false },
+      }[providerID as "claude" | "cursor"];
+      return target ?? null;
+    }
     const target = {
       claude: { path: "/skills/claude/dosu", symlink: true },
       cursor: { path: "/skills/cursor/dosu", symlink: false },
@@ -139,12 +146,10 @@ const { mockStepConnectGitHubRepo } = vi.hoisted(() => ({
 // AGENTS.md step: mocked so flow tests never write an AGENTS.md into the real
 // repo cwd. Defaults (not in a git work tree) are installed by
 // `installSetupStepDefaults()`.
-const { mockInGitWorkTree, mockStepUpdateAgentsMd } = vi.hoisted(() => ({
-  mockInGitWorkTree: vi.fn(),
+const { mockStepUpdateAgentsMd } = vi.hoisted(() => ({
   mockStepUpdateAgentsMd: vi.fn(),
 }));
 vi.mock("./agents-md-step", () => ({
-  inGitWorkTree: (...args: unknown[]) => mockInGitWorkTree(...args),
   stepUpdateAgentsMd: (...args: unknown[]) => mockStepUpdateAgentsMd(...args),
 }));
 
@@ -167,6 +172,13 @@ const { mockStepConfigureAgentRules } = vi.hoisted(() => ({
 }));
 vi.mock("./rules-step", () => ({
   stepConfigureAgentRules: (...args: unknown[]) => mockStepConfigureAgentRules(...args),
+}));
+const { mockRequireProjectRoot } = vi.hoisted(() => ({
+  mockRequireProjectRoot: vi.fn(),
+}));
+vi.mock("./project-root", () => ({
+  assertSafeProjectPath: vi.fn(),
+  requireProjectRoot: (...args: unknown[]) => mockRequireProjectRoot(...args),
 }));
 vi.mock("./github-step", () => ({
   stepConnectGitHubRepo: (...args: unknown[]) => mockStepConnectGitHubRepo(...args),
@@ -212,10 +224,10 @@ function mockToolSelection(selection: string[]) {
 
 function installSetupStepDefaults() {
   mockStepConnectGitHubRepo.mockResolvedValue({ advance: false, has_connected_repo: false });
-  mockInGitWorkTree.mockReturnValue(false);
   mockStepUpdateAgentsMd.mockReturnValue(true);
   mockStepConfigureAgentRules.mockResolvedValue([]);
   mockOfferLogsHandoff.mockResolvedValue({ plan: null });
+  mockRequireProjectRoot.mockImplementation(() => tempDir);
 }
 
 function installRemoteSetupDefaults() {
@@ -255,6 +267,7 @@ function setupTempEnv() {
 }
 
 function teardownTempEnv() {
+  process.exitCode = undefined;
   process.env.HOME = origHome;
   if (origXdg !== undefined) {
     process.env.XDG_CONFIG_HOME = origXdg;
@@ -285,6 +298,8 @@ function throwingProvider(): providersModule.SetupProvider {
     isInstalled: () => true,
     isConfigured: () => false,
     globalConfigPath: () => join(tempDir, "broken.json"),
+    projectConfigPath: (root) => join(root, "broken.json"),
+    isProjectConfigured: () => false,
     install() {
       throw new Error("boom: provider failure");
     },
@@ -351,7 +366,7 @@ describe("stepDetectTools", () => {
     expect(detected[0].id()).toBe("cursor");
   });
 
-  it("includes Claude Desktop when its app dir exists", () => {
+  it("excludes installed agents that have no project-scoped config", () => {
     const desktop = ClaudeDesktopProvider();
     for (const detectPath of desktop.detectPaths()) {
       mkdirSync(detectPath, { recursive: true });
@@ -362,7 +377,7 @@ describe("stepDetectTools", () => {
     });
 
     const detected = stepDetectTools();
-    expect(detected.map((p2) => p2.id())).toEqual(["claude-desktop"]);
+    expect(detected).toEqual([]);
   });
 
   it("returns empty array when no providers are installed", () => {
@@ -413,21 +428,23 @@ describe("stepConfigureTools", () => {
       skipped: [],
     };
 
-    const results = stepConfigureTools(cfg, selection);
+    const results = stepConfigureTools(cfg, selection, tempDir);
 
     expect(results).toHaveLength(1);
     expect(results[0].action).toBe("install");
     expect(results[0].error).toBeUndefined();
 
     // Verify the file was actually written to disk
-    const configPath = cursor.globalConfigPath();
-    expect(existsSync(configPath)).toBe(true);
+    const configPath = cursor.projectConfigPath(tempDir);
+    expect(configPath).not.toBeNull();
+    expect(existsSync(configPath ?? "")).toBe(true);
 
-    const written = loadJSONConfig(configPath);
+    const written = loadJSONConfig(configPath ?? "");
     expect(written.mcpServers).toBeDefined();
     expect(written.mcpServers.dosu).toBeDefined();
-    expect(written.mcpServers.dosu.url).toContain("dep-123");
-    expect(written.mcpServers.dosu.headers["X-Dosu-API-Key"]).toBe("key-abc");
+    expect(written.mcpServers.dosu.command).toBe("npx");
+    expect(written.mcpServers.dosu.args).toContain("dep-123");
+    expect(JSON.stringify(written)).not.toContain("key-abc");
   });
 
   it("removes a provider and deletes the dosu entry from disk", () => {
@@ -435,8 +452,8 @@ describe("stepConfigureTools", () => {
     const cursor = CursorProvider();
 
     // First install so there's something to remove
-    cursor.install(cfg, true);
-    const configPath = cursor.globalConfigPath();
+    cursor.install(cfg, false, { projectRoot: tempDir });
+    const configPath = cursor.projectConfigPath(tempDir) ?? "";
     let written = loadJSONConfig(configPath);
     expect(written.mcpServers.dosu).toBeDefined();
 
@@ -446,7 +463,7 @@ describe("stepConfigureTools", () => {
       skipped: [],
     };
 
-    const results = stepConfigureTools(cfg, selection);
+    const results = stepConfigureTools(cfg, selection, tempDir);
 
     expect(results).toHaveLength(1);
     expect(results[0].action).toBe("remove");
@@ -466,13 +483,13 @@ describe("stepConfigureTools", () => {
       skipped: [cursor],
     };
 
-    const results = stepConfigureTools(cfg, selection);
+    const results = stepConfigureTools(cfg, selection, tempDir);
 
     expect(results).toHaveLength(1);
     expect(results[0].action).toBe("skip");
     expect(results[0].error).toBeUndefined();
     // No file should have been created
-    expect(existsSync(cursor.globalConfigPath())).toBe(false);
+    expect(existsSync(cursor.projectConfigPath(tempDir) ?? "")).toBe(false);
   });
 
   it("handles install errors and records them in results", () => {
@@ -484,7 +501,7 @@ describe("stepConfigureTools", () => {
       skipped: [],
     };
 
-    const results = stepConfigureTools(cfg, selection);
+    const results = stepConfigureTools(cfg, selection, tempDir);
 
     expect(results).toHaveLength(1);
     expect(results[0].action).toBe("install");
@@ -503,7 +520,7 @@ describe("stepConfigureTools", () => {
       skipped: [],
     };
 
-    const results = stepConfigureTools(cfg, selection);
+    const results = stepConfigureTools(cfg, selection, tempDir);
 
     expect(results).toHaveLength(1);
     expect(results[0].action).toBe("remove");
@@ -517,11 +534,11 @@ describe("stepConfigureTools", () => {
     const opencode = OpenCodeProvider();
 
     // Pre-install opencode so we can remove it
-    opencode.install(cfg, true);
+    opencode.install(cfg, false, { projectRoot: tempDir });
 
     const cursorForSkip = CursorProvider();
     // Pre-install cursor so the skip entry refers to an installed provider
-    cursorForSkip.install(cfg, true);
+    cursorForSkip.install(cfg, false, { projectRoot: tempDir });
 
     // Fresh providers for this call
     const freshCursor = CursorProvider();
@@ -534,7 +551,7 @@ describe("stepConfigureTools", () => {
       skipped: [anotherCursor],
     };
 
-    const results = stepConfigureTools(cfg, selection);
+    const results = stepConfigureTools(cfg, selection, tempDir);
 
     expect(results).toHaveLength(3);
 
@@ -549,11 +566,11 @@ describe("stepConfigureTools", () => {
     expect(skipResult).toBeDefined();
 
     // Verify cursor config was written
-    const cursorConfig = loadJSONConfig(freshCursor.globalConfigPath());
+    const cursorConfig = loadJSONConfig(freshCursor.projectConfigPath(tempDir) ?? "");
     expect(cursorConfig.mcpServers.dosu).toBeDefined();
 
     // Verify opencode dosu entry was removed
-    const opencodeConfig = loadJSONConfig(freshOpencode.globalConfigPath());
+    const opencodeConfig = loadJSONConfig(freshOpencode.projectConfigPath(tempDir) ?? "");
     expect(opencodeConfig.mcp.dosu).toBeUndefined();
   });
 });
@@ -573,11 +590,15 @@ describe("stepShowSummary", () => {
   it("logs configured tools count and paths for installs", () => {
     const cursor = CursorProvider();
     const results: ConfigResult[] = [{ provider: cursor, action: "install" }];
+    const projectRoot = join(tempDir, "repo");
 
-    stepShowSummary(results);
+    stepShowSummary(results, projectRoot);
 
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 agent"));
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Cursor"));
+    expect(p.log.success).toHaveBeenCalledWith(
+      expect.stringContaining(join(projectRoot, ".cursor", "mcp.json")),
+    );
     // The summary itself never prints extra messages.
     expect(p.log.message).not.toHaveBeenCalled();
   });
@@ -586,7 +607,7 @@ describe("stepShowSummary", () => {
     const cursor = CursorProvider();
     const results: ConfigResult[] = [{ provider: cursor, action: "remove" }];
 
-    stepShowSummary(results);
+    stepShowSummary(results, tempDir);
 
     expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("Removed from 1 agent"));
     expect(p.log.message).not.toHaveBeenCalled();
@@ -596,7 +617,7 @@ describe("stepShowSummary", () => {
     const cursor = CursorProvider();
     const results: ConfigResult[] = [{ provider: cursor, action: "skip" }];
 
-    stepShowSummary(results);
+    stepShowSummary(results, tempDir);
 
     expect(p.log.success).toHaveBeenCalledWith(
       expect.stringContaining("All agents already configured"),
@@ -612,7 +633,7 @@ describe("stepShowSummary", () => {
       { provider: opencode, action: "remove" },
     ];
 
-    stepShowSummary(results);
+    stepShowSummary(results, tempDir);
 
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 agent"));
     expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("Removed from 1 agent"));
@@ -626,7 +647,7 @@ describe("stepShowSummary", () => {
       { provider: opencode, action: "install", error: new Error("failed") },
     ];
 
-    stepShowSummary(results);
+    stepShowSummary(results, tempDir);
 
     // Only 1 successful install
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 agent"));
@@ -640,7 +661,7 @@ describe("stepShowSummary", () => {
       { provider: opencode, action: "remove" },
     ];
 
-    stepShowSummary(results);
+    stepShowSummary(results, tempDir);
 
     expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("Removed from 2 agent"));
     expect(p.log.message).not.toHaveBeenCalled();
@@ -654,7 +675,7 @@ describe("stepShowSummary", () => {
       { provider: opencode, action: "skip" },
     ];
 
-    stepShowSummary(results);
+    stepShowSummary(results, tempDir);
 
     // Should show install summary, NOT "all configured"
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 agent"));
@@ -665,7 +686,7 @@ describe("stepShowSummary", () => {
   });
 
   it("prints nothing when results are empty", () => {
-    stepShowSummary([]);
+    stepShowSummary([], tempDir);
 
     expect(p.log.success).not.toHaveBeenCalled();
     expect(p.log.info).not.toHaveBeenCalled();
@@ -854,13 +875,16 @@ describe("runSetup integration", () => {
     expect(existsSync(cursorConfigPath)).toBe(true);
     const cursorConfig = loadJSONConfig(cursorConfigPath);
     expect(cursorConfig.mcpServers.dosu).toBeDefined();
-    expect(cursorConfig.mcpServers.dosu.url).toContain("d1");
+    expect(cursorConfig.mcpServers.dosu.command).toBe("npx");
+    expect(cursorConfig.mcpServers.dosu.args).toContain("d1");
+    expect(JSON.stringify(cursorConfig)).not.toContain("key-abc");
 
     // Verify summary was shown
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 agent"));
     expect(mockStepConfigureAgentRules).toHaveBeenCalledWith(
       expect.objectContaining({ toInstall: [expect.objectContaining({})] }),
       [expect.objectContaining({ action: "install" })],
+      tempDir,
     );
   });
 
@@ -963,8 +987,9 @@ describe("runSetup integration", () => {
     expect(savedCfg.active_account?.target?.api_key).toBe("key-abc");
 
     const cursorConfig = loadJSONConfig(join(tempDir, ".cursor", "mcp.json"));
-    expect(cursorConfig.mcpServers.dosu.url).toContain("/v1/mcp/deployments/d2");
-    expect(cursorConfig.mcpServers.dosu.url).not.toBe(ossConfig.mcpServers.dosu.url);
+    expect(cursorConfig.mcpServers.dosu.args).toContain("d2");
+    expect(cursorConfig.mcpServers.dosu.args).not.toContain("--oss");
+    expect(JSON.stringify(cursorConfig)).not.toContain("key-abc");
   });
 
   it("creates new API key when existing one is invalid", async () => {
@@ -1005,9 +1030,11 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    // Cursor should have been reinstalled (not skipped) because api_key changed
+    // The project command is reinstalled but remains secretless when the key changes.
     const cursorConfig = loadJSONConfig(join(tempDir, ".cursor", "mcp.json"));
-    expect(cursorConfig.mcpServers.dosu.headers["X-Dosu-API-Key"]).toBe("new-key");
+    expect(cursorConfig.mcpServers.dosu.args).toContain("d1");
+    expect(JSON.stringify(cursorConfig)).not.toContain("old-key");
+    expect(JSON.stringify(cursorConfig)).not.toContain("new-key");
   });
 
   it("reinstalls configured tools when setup is re-run with the same target", async () => {
@@ -1038,8 +1065,10 @@ describe("runSetup integration", () => {
     await runSetup();
 
     const cursorConfig = loadJSONConfig(cursorConfigPath);
-    expect(cursorConfig.mcpServers.dosu.url).toContain("/v1/mcp/deployments/d1");
-    expect(cursorConfig.mcpServers.dosu.headers["X-Dosu-API-Key"]).toBe("key-abc");
+    expect(cursorConfig.mcpServers.dosu.command).toBe("npx");
+    expect(cursorConfig.mcpServers.dosu.args).toContain("d1");
+    expect(JSON.stringify(cursorConfig)).not.toContain("stale-key");
+    expect(JSON.stringify(cursorConfig)).not.toContain("key-abc");
   });
 
   it("shows error when OAuth fails", async () => {
@@ -1467,9 +1496,9 @@ describe("runSetup integration", () => {
       OpenCodeProvider(),
     ]);
 
-    // Pre-configure both providers so isConfigured() returns true
-    CursorProvider().install(cfg, true);
-    OpenCodeProvider().install(cfg, true);
+    // Pre-configure both providers in this project.
+    CursorProvider().install(cfg, false, { projectRoot: tempDir });
+    OpenCodeProvider().install(cfg, false, { projectRoot: tempDir });
 
     // User deselects opencode but keeps cursor
     mockToolSelection(["cursor"]);
@@ -1494,7 +1523,6 @@ describe("runSetup integration", () => {
 
     setupAuthenticatedClient();
     // Every other gate is open, so OSS mode is the only reason it stays quiet.
-    mockInGitWorkTree.mockReturnValue(true);
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
     mockToolSelection(["cursor"]);
@@ -1516,9 +1544,14 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(mockInstallSkill).toHaveBeenCalledWith(["cursor"], { quiet: true });
+    expect(mockInstallSkill).toHaveBeenCalledWith(["cursor"], {
+      quiet: true,
+      projectRoot: tempDir,
+    });
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill ready for 1 agent"));
-    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("/skills/cursor/dosu"));
+    expect(p.log.success).toHaveBeenCalledWith(
+      expect.stringContaining(`${tempDir}/.agents/skills/dosu`),
+    );
   });
 
   it("does not install the skill when no agent is selected", async () => {
@@ -1547,7 +1580,10 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(mockInstallSkill).toHaveBeenCalledWith(["cursor"], { quiet: true });
+    expect(mockInstallSkill).toHaveBeenCalledWith(["cursor"], {
+      quiet: true,
+      projectRoot: tempDir,
+    });
   });
 
   it("goes directly to agent selection without a component-selection prompt", async () => {
@@ -1568,19 +1604,18 @@ describe("runSetup integration", () => {
     expect(messages.some((message) => message.includes("Dosu will set"))).toBe(false);
   });
 
-  it("automatically updates AGENTS.md after configuring an agent in a git work tree", async () => {
+  it("updates AGENTS.md at the verified project root after configuring an agent", async () => {
     const cfg = makeCfg();
     saveConfig(cfg);
 
     setupAuthenticatedClient();
-    mockInGitWorkTree.mockReturnValue(true);
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
     mockToolSelection(["cursor"]);
 
     await runSetup();
 
-    expect(mockStepUpdateAgentsMd).toHaveBeenCalledTimes(1);
+    expect(mockStepUpdateAgentsMd).toHaveBeenCalledWith(tempDir);
 
     const completed = trackedCliOnboardingEvents().find(
       (e) => e.event === "cli_onboarding_completed",
@@ -1593,7 +1628,6 @@ describe("runSetup integration", () => {
     saveConfig(cfg);
 
     setupAuthenticatedClient();
-    mockInGitWorkTree.mockReturnValue(true);
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
     mockToolSelection([]);
@@ -1603,18 +1637,21 @@ describe("runSetup integration", () => {
     expect(mockStepUpdateAgentsMd).not.toHaveBeenCalled();
   });
 
-  it("does not update AGENTS.md outside a git work tree", async () => {
+  it("stops before authentication outside a Git project", async () => {
     const cfg = makeCfg();
     saveConfig(cfg);
 
-    setupAuthenticatedClient();
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-    mockToolSelection(["cursor"]);
+    mockRequireProjectRoot.mockImplementationOnce(() => {
+      throw new Error("Run Dosu setup inside a Git project.");
+    });
 
     await runSetup();
 
     expect(mockStepUpdateAgentsMd).not.toHaveBeenCalled();
+    expect(mockOfferLogsHandoff).not.toHaveBeenCalled();
+    expect(Client).not.toHaveBeenCalled();
+    expect(p.log.error).toHaveBeenCalledWith("Run Dosu setup inside a Git project.");
+    expect(process.exitCode).toBe(1);
   });
 });
 
@@ -1636,23 +1673,28 @@ describe("runInstallSkill", () => {
   it("calls installSkill and returns true on success", async () => {
     mockInstallSkill.mockResolvedValue({ success: true, sha: "abc" });
 
-    const result = await runInstallSkill([ClaudeProvider()]);
+    const result = await runInstallSkill([ClaudeProvider()], tempDir);
     const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
 
     expect(result).toBe(true);
     expect(spinner?.start).toHaveBeenCalledWith("Installing skill for 1 agent");
     expect(spinner?.clear).toHaveBeenCalledOnce();
-    expect(mockInstallSkill).toHaveBeenCalledWith(["claude"], { quiet: true });
+    expect(mockInstallSkill).toHaveBeenCalledWith(["claude"], {
+      quiet: true,
+      projectRoot: tempDir,
+    });
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill ready for 1 agent"));
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Claude Code"));
-    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("/skills/claude/dosu"));
-    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("(symlink)"));
+    expect(p.log.success).toHaveBeenCalledWith(
+      expect.stringContaining(`${tempDir}/.claude/skills/dosu`),
+    );
+    expect(p.log.success).not.toHaveBeenCalledWith(expect.stringContaining("(symlink)"));
   });
 
   it("uses plural loading copy for multiple selected agents", async () => {
     mockInstallSkill.mockResolvedValue({ success: true });
 
-    await runInstallSkill([ClaudeProvider(), CursorProvider()]);
+    await runInstallSkill([ClaudeProvider(), CursorProvider()], tempDir);
     const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
 
     expect(spinner?.start).toHaveBeenCalledWith("Installing skill for 2 agents");
@@ -1662,7 +1704,7 @@ describe("runInstallSkill", () => {
   it("returns false and logs error when installSkill reports failure", async () => {
     mockInstallSkill.mockResolvedValue({ success: false });
 
-    const result = await runInstallSkill([ClaudeProvider()]);
+    const result = await runInstallSkill([ClaudeProvider()], tempDir);
     const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
 
     expect(result).toBe(false);
@@ -1674,7 +1716,7 @@ describe("runInstallSkill", () => {
   it("returns false and logs error when installSkill throws", async () => {
     mockInstallSkill.mockRejectedValue(new Error("boom"));
 
-    const result = await runInstallSkill([ClaudeProvider()]);
+    const result = await runInstallSkill([ClaudeProvider()], tempDir);
     const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
 
     expect(result).toBe(false);
@@ -1739,7 +1781,6 @@ describe("runSetup checkpoint behavior", () => {
   it("does not offer the logs handoff when the user selects no agents", async () => {
     saveConfig(makeCfg());
     setupAuthed();
-    mockInGitWorkTree.mockReturnValue(true);
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
     mockToolSelection([]);
@@ -1754,7 +1795,6 @@ describe("runSetup checkpoint behavior", () => {
     // returns an empty array (nothing to configure), so the handoff would be useless.
     saveConfig(makeCfg());
     setupAuthed();
-    mockInGitWorkTree.mockReturnValue(true);
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
 
     await runSetup();
@@ -1768,7 +1808,6 @@ describe("runSetup checkpoint behavior", () => {
   it("does not offer the logs handoff when every MCP install errors", async () => {
     saveConfig(makeCfg());
     setupAuthed();
-    mockInGitWorkTree.mockReturnValue(true);
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
     const cursor = CursorProvider();
     vi.spyOn(cursor, "install").mockImplementation(() => {
@@ -1783,25 +1822,9 @@ describe("runSetup checkpoint behavior", () => {
     expect(mockOfferLogsHandoff).not.toHaveBeenCalled();
   });
 
-  it("does not offer the logs handoff outside a git work tree", async () => {
-    // `npx @dosu/cli setup` is routinely run from $HOME; the handoff hands the
-    // terminal to a coding agent rooted at cwd, so it stays inside a repo.
-    saveConfig(makeCfg());
-    setupAuthed();
-    mockInGitWorkTree.mockReturnValue(false);
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-    mockToolSelection(["cursor"]);
-
-    await runSetup();
-
-    expect(mockOfferLogsHandoff).not.toHaveBeenCalled();
-  });
-
   it("offers the logs handoff with the configured agents and launches after the outro", async () => {
     saveConfig(makeCfg());
     setupAuthed();
-    mockInGitWorkTree.mockReturnValue(true);
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
     mockToolSelection(["cursor"]);
@@ -1832,7 +1855,6 @@ describe("runSetup checkpoint behavior", () => {
   it("records a declined logs handoff without launching the agent", async () => {
     saveConfig(makeCfg());
     setupAuthed();
-    mockInGitWorkTree.mockReturnValue(true);
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
     mockToolSelection(["cursor"]);

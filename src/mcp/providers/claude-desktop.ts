@@ -24,6 +24,8 @@ export const ClaudeDesktopProvider = (): SetupProvider => ({
   isInstalled: () => isInstalled([join(appSupportDir(), "Claude")]),
   globalConfigPath: () => configPath(),
   isConfigured: () => isJSONKeyConfigured(configPath(), "mcpServers"),
+  projectConfigPath: () => null,
+  isProjectConfigured: () => false,
 
   install(cfg: Config, global: boolean): void {
     if (!global) throw new Error("Claude Desktop does not support local installation");

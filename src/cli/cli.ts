@@ -46,7 +46,9 @@ import {
 } from "../config/config";
 import { getAccessTokenEmail, getAccessTokenUserID } from "../config/identity";
 import { logger } from "../debug/logger";
+import { runProjectProxy } from "../mcp/project-proxy";
 import { allProviders, getProvider, type Provider } from "../mcp/providers";
+import { requireProjectRoot } from "../setup/project-root";
 import { browserFallbackHint } from "../setup/styles";
 import {
   getOrCreateInstallID,
@@ -63,8 +65,17 @@ import { checkForSkillUpdates } from "../version/skill-update-check";
 import { checkForUpdates } from "../version/update-check";
 import { getVersionString } from "../version/version";
 
-export function shouldRunBackgroundChecks(actionName: string): boolean {
-  return actionName !== "upgrade";
+/**
+ * The MCP proxy is an agent hot path and must stay fast and stdout-clean.
+ * Update notices would corrupt MCP stdio and delay startup.
+ */
+function isMcpProxyInvocation(argv: string[]): boolean {
+  const mcpIndex = argv.indexOf("mcp");
+  return mcpIndex >= 0 && argv[mcpIndex + 1] === "proxy";
+}
+
+export function shouldRunBackgroundChecks(actionName: string, argv: string[]): boolean {
+  return actionName !== "upgrade" && !isMcpProxyInvocation(argv);
 }
 
 const TELEMETRY_FLUSH_TIMEOUT_MS = 750;
@@ -214,7 +225,7 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
     .hook("preAction", async (thisCommand, actionCommand) => {
       const opts = thisCommand.optsWithGlobals();
       logger.init({ debug: opts.debug });
-      if (shouldRunBackgroundChecks(actionCommand.name())) {
+      if (shouldRunBackgroundChecks(actionCommand.name(), process.argv)) {
         if (process.env.NODE_ENV !== "test" && !process.env.CI) {
           await checkForUpdates();
         }
@@ -503,16 +514,19 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
         return;
       }
 
-      let global = opts.global;
+      const global = opts.global;
       if (!provider.supportsLocal() && !global) {
-        console.log(`Note: ${provider.name()} only supports global installation.\n`);
-        global = true;
+        throw new Error(
+          `${provider.name()} does not support project-local MCP configuration. Use --global explicitly if you want a global install.`,
+        );
       }
+
+      const projectRoot = global ? undefined : requireProjectRoot();
 
       const scope = global ? "global (all projects)" : "project-local";
       console.log(`Adding Dosu MCP to ${provider.name()} (${scope})...`);
 
-      provider.install(cfg, global, { showSecret: opts.showSecret });
+      provider.install(cfg, global, { showSecret: opts.showSecret, projectRoot });
 
       console.log(`\n✓ Successfully added Dosu MCP to ${provider.name()}!`);
       if (global) {
@@ -521,6 +535,23 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
         console.log(`\nStart ${provider.name()} in this project directory to use the Dosu MCP.`);
       }
     });
+
+  const proxyCommand = new Command("proxy")
+    .description("Internal project MCP credential bridge")
+    .option("--deployment <id>", "Expected project deployment")
+    .option("--oss", "Use the configured public-libraries endpoint", false)
+    .action(async (opts: { deployment?: string; oss: boolean }) => {
+      if (Boolean(opts.deployment) === opts.oss) {
+        console.error("Exactly one of --deployment or --oss is required.");
+        process.exitCode = 2;
+        return;
+      }
+      process.exitCode = await runProjectProxy({
+        deploymentID: opts.deployment,
+        oss: opts.oss,
+      });
+    });
+  mcp.addCommand(proxyCommand, { hidden: true });
 
   mcp
     .command("list")
@@ -671,7 +702,7 @@ async function ensureFreshSession(cfg: Config): Promise<boolean> {
 }
 
 export async function execute(): Promise<void> {
-  const telemetry = processCommandTelemetry();
+  const telemetry = isMcpProxyInvocation(process.argv) ? undefined : processCommandTelemetry();
   const program = createProgram({ telemetry });
   try {
     await program.parseAsync(process.argv);

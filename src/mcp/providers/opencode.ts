@@ -19,5 +19,10 @@ export const OpenCodeProvider = () =>
       // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
       headers: mcpHeaders(cfg.active_account!.target!.api_key!),
     }),
+    buildProjectServer: (command) => ({
+      type: "local",
+      command: [command.command, ...command.args],
+      enabled: true,
+    }),
     localConfigPath: (cwd) => join(cwd, "opencode.json"),
   });

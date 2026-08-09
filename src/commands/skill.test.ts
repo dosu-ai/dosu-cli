@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -309,6 +309,23 @@ describe("installSkill helper", () => {
     });
   });
 
+  it("reports project-local targets for Claude, Codex, and Factory", () => {
+    const root = "/tmp/project";
+
+    expect(skillInstallTargetForProvider("claude", root)).toEqual({
+      path: join(root, ".claude", "skills", "dosu"),
+      symlink: false,
+    });
+    expect(skillInstallTargetForProvider("codex", root)).toEqual({
+      path: join(root, ".agents", "skills", "dosu"),
+      symlink: false,
+    });
+    expect(skillInstallTargetForProvider("factory", root)).toEqual({
+      path: join(root, ".factory", "skills", "dosu"),
+      symlink: false,
+    });
+  });
+
   it("reports the Windsurf symlink target", () => {
     expect(skillInstallTargetForProvider("windsurf")).toEqual({
       path: join(homedir(), ".codeium", "windsurf", "skills", "dosu"),
@@ -329,6 +346,30 @@ describe("installSkill helper", () => {
       expect.any(Function),
     );
     expect(mockExecSync).not.toHaveBeenCalled();
+  });
+
+  it("installs selected skills in the project without the global flag", async () => {
+    await installSkill(["claude", "codex"], { quiet: true, projectRoot: "/tmp/project" });
+
+    expect(mockExec).toHaveBeenCalledWith(
+      'npx skills add dosu-ai/dosu-skill -a claude-code codex -s "*" --copy -y',
+      { windowsHide: true, cwd: "/tmp/project" },
+      expect.any(Function),
+    );
+  });
+
+  it("refuses a symlinked project skills lock before running the installer", async () => {
+    const projectRoot = join(tempDir, "project");
+    mkdirSync(projectRoot);
+    const outsideLock = join(tempDir, "outside-skills-lock.json");
+    writeFileSync(outsideLock, "{}\n");
+    symlinkSync(outsideLock, join(projectRoot, "skills-lock.json"));
+
+    await expect(installSkill(["claude"], { quiet: true, projectRoot })).rejects.toThrow(
+      "symbolic link",
+    );
+    expect(mockExec).not.toHaveBeenCalled();
+    expect(readFileSync(outsideLock, "utf-8")).toBe("{}\n");
   });
 
   it("returns failure when the async quiet installer fails", async () => {
