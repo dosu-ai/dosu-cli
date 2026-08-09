@@ -64,6 +64,17 @@ describe("CLI", () => {
     expect(mcpCmd?.commands.find((c) => c.name() === "list")).toBeDefined();
   });
 
+  it("registers the internal project proxy without advertising it in help", () => {
+    const program = createProgram();
+    const mcpCmd = program.commands.find((c) => c.name() === "mcp");
+    const proxy = mcpCmd?.commands.find((c) => c.name() === "proxy");
+
+    expect(proxy).toBeDefined();
+    expect(proxy?.options.find((o) => o.long === "--deployment")).toBeDefined();
+    expect(proxy?.options.find((o) => o.long === "--oss")).toBeDefined();
+    expect(mcpCmd?.helpInformation()).not.toContain("proxy");
+  });
+
   it("has setup command with --deployment option", () => {
     const program = createProgram();
     const cmd = program.commands.find((c) => c.name() === "setup");

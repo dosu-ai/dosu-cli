@@ -248,6 +248,8 @@ function throwingProvider(): providersModule.SetupProvider {
     isInstalled: () => true,
     isConfigured: () => false,
     globalConfigPath: () => join(tempDir, "broken.json"),
+    projectConfigPath: (root) => join(root, ".broken", "mcp.json"),
+    isProjectConfigured: () => false,
     install() {
       throw new Error("boom: provider failure");
     },
@@ -1380,9 +1382,17 @@ describe("runSetup integration", () => {
       OpenCodeProvider(),
     ]);
 
-    // Pre-configure both providers so isConfigured() returns true
-    CursorProvider().install(cfg, true);
-    OpenCodeProvider().install(cfg, true);
+    // Pre-configure both providers with the production-shaped absolute URL
+    // required by the stricter ownership check introduced in this stack layer.
+    const previousBackendOverride = process.env.DOSU_BACKEND_URL_OVERRIDE;
+    try {
+      process.env.DOSU_BACKEND_URL_OVERRIDE = "https://api.dosu.dev";
+      CursorProvider().install(cfg, true);
+      OpenCodeProvider().install(cfg, true);
+    } finally {
+      if (previousBackendOverride === undefined) delete process.env.DOSU_BACKEND_URL_OVERRIDE;
+      else process.env.DOSU_BACKEND_URL_OVERRIDE = previousBackendOverride;
+    }
 
     // User deselects opencode but keeps cursor
     mockToolSelection(["cursor"]);

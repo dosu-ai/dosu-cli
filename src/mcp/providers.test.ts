@@ -61,7 +61,7 @@ describe("provider registry", () => {
       { id: "cline-cli", name: "Cline CLI", local: false },
       { id: "copilot", name: "GitHub Copilot CLI", local: true },
       { id: "opencode", name: "OpenCode", local: true },
-      { id: "antigravity", name: "Antigravity", local: false },
+      { id: "antigravity", name: "Antigravity", local: true },
       { id: "mcporter", name: "MCPorter", local: true },
       { id: "manual", name: "Manual Configuration", local: false },
     ];

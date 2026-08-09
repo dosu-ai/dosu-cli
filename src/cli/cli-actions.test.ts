@@ -1,4 +1,13 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,7 +15,13 @@ import { OAuthCallbackError } from "../auth/errors";
 import type { Config } from "../config/config";
 import { loadConfig, saveConfig } from "../config/config";
 import { makeTestConfig, testSession, testTarget } from "../config/config.test-utils";
+import {
+  getProjectMcpCredentialStorePath,
+  readProjectMcpCredential,
+  saveProjectMcpCredential,
+} from "../mcp/project-credential-store";
 import { allProviders } from "../mcp/providers";
+import { globalMcpIntentMarkerPath, inspectGlobalMcpIntent } from "../migration/global-intent";
 import { createProgram } from "./cli";
 
 // ── Mocks (true external boundaries only) ───────────────────────────────────
@@ -65,6 +80,12 @@ vi.mock("../setup/flow", () => ({
   runSetup: (...args: unknown[]) => mockRunSetup(...args),
 }));
 
+const mockRunAgentSetup = vi.fn();
+vi.mock("../agent/flow", () => ({
+  runAgentSetup: (...args: unknown[]) => mockRunAgentSetup(...args),
+  listAgentSupportedToolIDs: () => ["claude", "codex"],
+}));
+
 const { mockLoggerGetLogPath } = vi.hoisted(() => ({
   mockLoggerGetLogPath: vi.fn(),
 }));
@@ -85,14 +106,36 @@ vi.mock("../debug/logger", () => ({
 let tempDir: string;
 let origXDG: string | undefined;
 let origHome: string | undefined;
+let origDosuDev: string | undefined;
+let origCwd: string;
+let origExitCode: typeof process.exitCode;
 let logSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), "dosu-cli-test-"));
   origXDG = process.env.XDG_CONFIG_HOME;
   origHome = process.env.HOME;
+  origDosuDev = process.env.DOSU_DEV;
+  origCwd = process.cwd();
+  origExitCode = process.exitCode;
+  process.exitCode = undefined;
   process.env.XDG_CONFIG_HOME = tempDir;
   process.env.HOME = tempDir;
+  delete process.env.DOSU_DEV;
+
+  // Keep every CLI action offline: fresh caches prevent the fire-and-forget
+  // npm/GitHub update checks from starting real network requests.
+  const configDir = join(tempDir, "dosu-cli");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(
+    join(configDir, "update-check.json"),
+    JSON.stringify({ lastCheck: Date.now(), latestVersion: "0.0.0" }),
+  );
+  writeFileSync(
+    join(configDir, "skill-update-check.json"),
+    JSON.stringify({ lastCheck: Date.now(), latestSha: "same", installedSha: "same" }),
+  );
+  writeFileSync(join(configDir, "pending-tasks.json"), JSON.stringify({ tasks: [] }));
 
   vi.clearAllMocks();
   mockIsHeadless.mockReturnValue(false);
@@ -101,10 +144,14 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  process.chdir(origCwd);
+  process.exitCode = origExitCode;
   if (origXDG !== undefined) process.env.XDG_CONFIG_HOME = origXDG;
   else delete process.env.XDG_CONFIG_HOME;
   if (origHome !== undefined) process.env.HOME = origHome;
   else delete process.env.HOME;
+  if (origDosuDev !== undefined) process.env.DOSU_DEV = origDosuDev;
+  else delete process.env.DOSU_DEV;
   rmSync(tempDir, { recursive: true, force: true });
   logSpy.mockRestore();
 });
@@ -464,6 +511,11 @@ describe("CLI actions", () => {
   describe("logout", () => {
     it("clears credentials in real config file", async () => {
       saveConfig(authenticatedConfig());
+      saveProjectMcpCredential({
+        userID: "user-1",
+        targetKey: "deployment-1",
+        credential: { endpoint: "https://api.dosu.dev/mcp", api_key: "secret" },
+      });
 
       await run("logout");
 
@@ -472,13 +524,21 @@ describe("CLI actions", () => {
       // Read back the real config file and verify credentials are cleared
       const cfg = loadConfig();
       expect(cfg.active_account).toBeUndefined();
+      expect(existsSync(getProjectMcpCredentialStorePath())).toBe(false);
     });
 
     it("prints not-logged-in when config has no credentials", async () => {
       // No config file on disk = empty config
+      saveProjectMcpCredential({
+        userID: "user-1",
+        targetKey: "deployment-1",
+        credential: { endpoint: "https://api.dosu.dev/mcp", api_key: "secret" },
+      });
+
       await run("logout");
 
       expect(logSpy).toHaveBeenCalledWith("You are not logged in.");
+      expect(existsSync(getProjectMcpCredentialStorePath())).toBe(false);
     });
   });
 
@@ -675,16 +735,16 @@ describe("CLI actions", () => {
       for (const p of providers) {
         if (p.id() === "manual") {
           // Manual provider should have NO scope label
-          // Check that the line with "manual" does not include "(global only)" or "(local + global)"
+          // Check that the line with "manual" does not include a scope label.
           const lines = output.split("\n");
           const manualLine = lines.find((l: string) => l.includes("manual"));
           expect(manualLine).toBeDefined();
           expect(manualLine).not.toContain("(global only)");
-          expect(manualLine).not.toContain("(local + global)");
+          expect(manualLine).not.toContain("(project + global)");
         } else if (!p.supportsLocal()) {
           expect(output).toContain("(global only)");
         } else {
-          expect(output).toContain("(local + global)");
+          expect(output).toContain("(project + global)");
         }
       }
 
@@ -695,6 +755,70 @@ describe("CLI actions", () => {
   // ── mcp add ─────────────────────────────────────────────────────────────
 
   describe("mcp add", () => {
+    it("installs a secretless proxy only in the current Git project by default", async () => {
+      const projectRoot = join(tempDir, "project");
+      mkdirSync(projectRoot);
+      execFileSync("git", ["init", "--quiet"], { cwd: projectRoot, stdio: "ignore" });
+      process.chdir(projectRoot);
+      saveConfig(authenticatedConfig());
+
+      await run("mcp", "add", "cursor");
+
+      const projectConfigPath = join(projectRoot, ".cursor", "mcp.json");
+      const projectConfig = readFileSync(projectConfigPath, "utf8");
+      expect(projectConfig).toContain("@dosu/cli@");
+      expect(projectConfig).toContain("dep_123");
+      expect(projectConfig).not.toContain("key_abc");
+      expect(projectConfig).not.toContain("/v1/mcp/deployments/");
+      expect(existsSync(join(tempDir, ".cursor", "mcp.json"))).toBe(false);
+      expect(
+        readProjectMcpCredential({
+          userID: "test-user-id",
+          targetKey: "deployment:dep_123",
+        }),
+      ).toMatchObject({ api_key: "key_abc" });
+      expect(allLogOutput()).toContain("current project");
+    });
+
+    it("refuses to create split-brain project targets across agents", async () => {
+      const projectRoot = join(tempDir, "project");
+      mkdirSync(projectRoot);
+      execFileSync("git", ["init", "--quiet"], { cwd: projectRoot, stdio: "ignore" });
+      process.chdir(projectRoot);
+      const cfg = authenticatedConfig();
+      saveConfig(cfg);
+      await run("mcp", "add", "codex");
+
+      testTarget(cfg).deployment_id = "dep_456";
+      testTarget(cfg).api_key = "key_updated";
+      saveConfig(cfg);
+
+      await expect(run("mcp", "add", "cursor")).rejects.toThrow(/pinned to a different/i);
+      expect(existsSync(join(projectRoot, ".cursor", "mcp.json"))).toBe(false);
+      expect(readFileSync(join(projectRoot, ".codex", "config.toml"), "utf8")).toContain("dep_123");
+    });
+
+    it("retargets one existing project agent only with explicit authorization", async () => {
+      const projectRoot = join(tempDir, "project");
+      mkdirSync(projectRoot);
+      execFileSync("git", ["init", "--quiet"], { cwd: projectRoot, stdio: "ignore" });
+      process.chdir(projectRoot);
+      const cfg = authenticatedConfig();
+      saveConfig(cfg);
+      await run("mcp", "add", "cursor");
+
+      testTarget(cfg).deployment_id = "dep_456";
+      testTarget(cfg).api_key = "key_updated";
+      saveConfig(cfg);
+      await expect(run("mcp", "add", "cursor")).rejects.toThrow(/pinned to a different/i);
+
+      await run("mcp", "add", "cursor", "--retarget");
+
+      const content = readFileSync(join(projectRoot, ".cursor", "mcp.json"), "utf8");
+      expect(content).toContain("dep_456");
+      expect(content).not.toContain("dep_123");
+    });
+
     it("creates real cursor config file with --global", async () => {
       const cfg = authenticatedConfig();
       saveConfig(cfg);
@@ -709,10 +833,67 @@ describe("CLI actions", () => {
       expect(cursorConfig.mcpServers.dosu.url).toContain("dep_123");
       expect(cursorConfig.mcpServers.dosu.headers).toBeDefined();
       expect(cursorConfig.mcpServers.dosu.headers["X-Dosu-API-Key"]).toBe("key_abc");
+      expect(inspectGlobalMcpIntent({ provider: "cursor", targetPath: cursorConfigPath })).toEqual({
+        status: "preserve",
+        reason: "explicit_global_intent",
+      });
 
       expect(logSpy).toHaveBeenCalledWith(
         expect.stringContaining("Successfully added Dosu MCP to Cursor"),
       );
+    });
+
+    it("updates explicit global intent when the user reinstalls a different target", async () => {
+      const cfg = authenticatedConfig();
+      saveConfig(cfg);
+      await run("mcp", "add", "cursor", "--global");
+      const cursorConfigPath = join(tempDir, ".cursor", "mcp.json");
+      const markerPath = globalMcpIntentMarkerPath({
+        provider: "cursor",
+        targetPath: cursorConfigPath,
+      });
+      const firstHash = JSON.parse(readFileSync(markerPath, "utf8")).contentHash;
+
+      testTarget(cfg).deployment_id = "dep_456";
+      testTarget(cfg).api_key = "key_updated";
+      saveConfig(cfg);
+      await run("mcp", "add", "cursor", "--global");
+
+      const secondHash = JSON.parse(readFileSync(markerPath, "utf8")).contentHash;
+      expect(secondHash).not.toBe(firstHash);
+      expect(readFileSync(cursorConfigPath, "utf8")).toContain("dep_456");
+      expect(inspectGlobalMcpIntent({ provider: "cursor", targetPath: cursorConfigPath })).toEqual({
+        status: "preserve",
+        reason: "explicit_global_intent",
+      });
+    });
+
+    it("does not modify global config when pending intent cannot be written safely", async () => {
+      saveConfig(authenticatedConfig());
+      const intentRoot = join(tempDir, "dosu-cli", "migrations", "global-mcp-intent-v1");
+      const foreign = join(tempDir, "foreign-intent-root");
+      mkdirSync(join(intentRoot, ".."), { recursive: true });
+      mkdirSync(foreign);
+      symlinkSync(foreign, intentRoot, "dir");
+
+      await expect(run("mcp", "add", "cursor", "--global")).rejects.toThrow(/unsafe/i);
+
+      expect(existsSync(join(tempDir, ".cursor", "mcp.json"))).toBe(false);
+    });
+
+    it("releases shared migration exclusion but keeps pending intent when global install fails", async () => {
+      saveConfig(authenticatedConfig());
+      const cursorConfigPath = join(tempDir, ".cursor", "mcp.json");
+      mkdirSync(cursorConfigPath, { recursive: true });
+
+      await expect(run("mcp", "add", "cursor", "--global")).rejects.toThrow();
+
+      expect(existsSync(`${cursorConfigPath}.dosu-migration.lock`)).toBe(false);
+      expect(existsSync(cursorConfigPath)).toBe(true);
+      expect(inspectGlobalMcpIntent({ provider: "cursor", targetPath: cursorConfigPath })).toEqual({
+        status: "preserve",
+        reason: "global_intent_pending",
+      });
     });
 
     it("throws error for unknown tool", async () => {
@@ -801,15 +982,28 @@ describe("CLI actions", () => {
       expect(allLogOutput()).toContain("key_abc");
     });
 
-    it("auto-sets global when provider does not support local", async () => {
+    it("rejects an untrackable manual global install", async () => {
       saveConfig(authenticatedConfig());
 
-      // Windsurf only supports global installation
-      await run("mcp", "add", "windsurf");
+      await expect(run("mcp", "add", "manual", "--global")).rejects.toThrow(
+        /cannot be recorded safely/i,
+      );
+      expect(allLogOutput()).not.toContain("api.dosu.dev");
+    });
 
-      const output = allLogOutput();
-      expect(output).toContain("only supports global installation");
-      expect(output).toContain("Successfully added Dosu MCP to Windsurf");
+    it("refuses to silently fall back to global when project scope is unsupported", async () => {
+      saveConfig(authenticatedConfig());
+
+      await expect(run("mcp", "add", "windsurf")).rejects.toThrow(/will not silently fall back/i);
+      expect(allLogOutput()).not.toContain("Successfully added Dosu MCP to Windsurf");
+    });
+
+    it("still allows an explicit global install for an unsupported project client", async () => {
+      saveConfig(authenticatedConfig());
+
+      await run("mcp", "add", "windsurf", "--global");
+
+      expect(allLogOutput()).toContain("Successfully added Dosu MCP to Windsurf");
     });
 
     it("installs globally when --global flag is passed", async () => {
@@ -825,7 +1019,43 @@ describe("CLI actions", () => {
 
   // ── setup ───────────────────────────────────────────────────────────────
 
+  describe("mcp proxy", () => {
+    it("rejects both missing and conflicting target selectors before starting the proxy", async () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await run("mcp", "proxy");
+        expect(process.exitCode).toBe(2);
+
+        process.exitCode = undefined;
+        await run("mcp", "proxy", "--deployment", "dep_123", "--oss");
+        expect(process.exitCode).toBe(2);
+        expect(errorSpy).toHaveBeenCalledTimes(2);
+        expect(errorSpy).toHaveBeenCalledWith("Exactly one of --deployment or --oss is required.");
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+  });
+
   describe("setup", () => {
+    it("emits a structured error when agent setup omits --tool", async () => {
+      await run("setup", "--agent");
+
+      expect(process.exitCode).toBe(2);
+      expect(allLogOutput()).toContain('"reason":"missing_tool"');
+      expect(allLogOutput()).toContain("Supported ids: claude, codex");
+      expect(mockRunAgentSetup).not.toHaveBeenCalled();
+    });
+
+    it("rejects agent-only flags outside agent setup", async () => {
+      await expect(run("setup", "--tool", "codex")).rejects.toThrow(
+        "--tool and --login-ticket require --agent",
+      );
+
+      expect(mockRunSetup).not.toHaveBeenCalled();
+      expect(mockRunAgentSetup).not.toHaveBeenCalled();
+    });
+
     it("runs setup flow", async () => {
       mockRunSetup.mockResolvedValue(undefined);
 

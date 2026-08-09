@@ -1,14 +1,23 @@
 import { join } from "node:path";
 import { type Config, MODE_OSS } from "../../config/config";
+import { assertSafeProjectPath } from "../../setup/project-path";
 import {
   installJSONServer,
-  isJSONKeyConfigured,
+  installProjectJSONServer,
+  isProjectJSONServerConfigured,
   mcpBaseURL,
   mcpHeaders,
   mcpURL,
   removeJSONServer,
+  removeProjectJSONServer,
 } from "../config-helpers";
 import { expandHome, isInstalled } from "../detect";
+import {
+  buildProjectProxyCommand,
+  isDosuMcpEntryForProvider,
+  ownedProjectProxyOptionsForProvider,
+  sameProjectProxyTarget,
+} from "../project-proxy";
 import type { SetupProvider } from "../providers";
 
 function globalPath(): string {
@@ -24,6 +33,12 @@ function mcpEndpoint(cfg: Config): string {
   return mcpURL(cfg.active_account?.target?.deployment_id);
 }
 
+function requireProjectRoot(projectRoot: string | undefined): string {
+  if (!projectRoot)
+    throw new Error("Copilot project installation requires a verified project root");
+  return projectRoot;
+}
+
 export const CopilotProvider = (): SetupProvider => ({
   name: () => "GitHub Copilot CLI",
   id: () => "copilot",
@@ -32,9 +47,17 @@ export const CopilotProvider = (): SetupProvider => ({
   detectPaths: () => [expandHome("~/.copilot")],
   isInstalled: () => isInstalled([expandHome("~/.copilot")]),
   globalConfigPath: () => globalPath(),
-  isConfigured: () => isJSONKeyConfigured(globalPath(), "mcpServers"),
+  isConfigured: () =>
+    isProjectJSONServerConfigured(globalPath(), "mcpServers", (entry) =>
+      isDosuMcpEntryForProvider("copilot", entry),
+    ),
+  projectConfigPath: (projectRoot) => join(projectRoot, ".mcp.json"),
+  isProjectConfigured: (projectRoot) =>
+    isProjectJSONServerConfigured(join(projectRoot, ".mcp.json"), "mcpServers", (entry) =>
+      Boolean(ownedProjectProxyOptionsForProvider("copilot", entry)),
+    ),
 
-  install(cfg: Config, global: boolean): void {
+  install(cfg: Config, global: boolean, opts = {}) {
     const url = mcpEndpoint(cfg);
 
     if (global) {
@@ -47,23 +70,50 @@ export const CopilotProvider = (): SetupProvider => ({
       };
       installJSONServer(globalPath(), "mcpServers", server);
     } else {
-      const configPath = join(process.cwd(), ".vscode", "mcp.json");
+      const projectRoot = requireProjectRoot(opts.projectRoot);
+      const configPath = join(projectRoot, ".mcp.json");
+      assertSafeProjectPath(projectRoot, configPath);
+      const command = buildProjectProxyCommand(cfg);
+      const desiredTarget =
+        cfg.mode === MODE_OSS
+          ? ({ oss: true } as const)
+          : { deploymentID: cfg.active_account?.target?.deployment_id as string };
       const server = {
-        type: "http",
-        url,
-        // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
-        headers: mcpHeaders(cfg.active_account!.target!.api_key!),
+        type: "stdio",
+        command: command.command,
+        args: command.args,
       };
-      installJSONServer(configPath, "servers", server);
+      return installProjectJSONServer(
+        configPath,
+        "mcpServers",
+        server,
+        (entry) => isDosuMcpEntryForProvider("copilot", entry),
+        (current) => {
+          const currentTarget = ownedProjectProxyOptionsForProvider("copilot", current);
+          if (
+            !opts.allowProjectRetarget &&
+            (!currentTarget || !sameProjectProxyTarget(currentTarget, desiredTarget))
+          ) {
+            throw new Error(
+              "Existing GitHub Copilot CLI project MCP targets something else; refusing to retarget. " +
+                "Pass an explicit deployment to retarget it",
+            );
+          }
+        },
+      );
     }
   },
 
-  remove(global: boolean): void {
+  remove(global: boolean, opts = {}) {
     if (global) {
       removeJSONServer(globalPath(), "mcpServers");
     } else {
-      const configPath = join(process.cwd(), ".vscode", "mcp.json");
-      removeJSONServer(configPath, "servers");
+      const projectRoot = requireProjectRoot(opts.projectRoot);
+      const configPath = join(projectRoot, ".mcp.json");
+      assertSafeProjectPath(projectRoot, configPath);
+      return removeProjectJSONServer(configPath, "mcpServers", (entry) =>
+        isDosuMcpEntryForProvider("copilot", entry),
+      );
     }
   },
 });

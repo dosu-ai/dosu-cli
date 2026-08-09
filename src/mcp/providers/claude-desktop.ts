@@ -24,9 +24,11 @@ export const ClaudeDesktopProvider = (): SetupProvider => ({
   isInstalled: () => isInstalled([join(appSupportDir(), "Claude")]),
   globalConfigPath: () => configPath(),
   isConfigured: () => isJSONKeyConfigured(configPath(), "mcpServers"),
+  projectConfigPath: () => null,
+  isProjectConfigured: () => false,
 
-  install(cfg: Config, global: boolean): void {
-    if (!global) throw new Error("Claude Desktop does not support local installation");
+  install(cfg: Config, global: boolean) {
+    if (!global) throw new Error("Claude Desktop does not support project installation");
     if (cfg.mode !== MODE_OSS && !cfg.active_account?.target?.deployment_id)
       throw new Error("deployment ID is required");
     const url =
@@ -48,10 +50,12 @@ export const ClaudeDesktopProvider = (): SetupProvider => ({
       args: remote.args,
       env: { PATH: npxPathEnv(npx), ...remote.env },
     });
+    return undefined;
   },
 
-  remove(global: boolean): void {
-    if (!global) throw new Error("Claude Desktop does not support local removal");
+  remove(global: boolean) {
+    if (!global) throw new Error("Claude Desktop does not support project removal");
     removeJSONServer(configPath(), "mcpServers");
+    return undefined;
   },
 });

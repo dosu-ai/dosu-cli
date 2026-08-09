@@ -29,5 +29,10 @@ export const ZedProvider = () =>
       // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
       headers: mcpHeaders(cfg.active_account!.target!.api_key!),
     }),
+    buildProjectServer: (command) => ({
+      command: command.command,
+      args: command.args,
+      env: {},
+    }),
     localConfigPath: (cwd) => join(cwd, ".zed", "settings.json"),
   });

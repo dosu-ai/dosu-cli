@@ -123,6 +123,182 @@ jobs:
           $pkg = Get-ChildItem -Filter "dosu-cli-*.tgz" | Select-Object -First 1 -ExpandProperty Name
           npm exec --yes --package "./$pkg" dosu -- --version
 
+      - name: Exercise project proxy from a spaced Windows PATH
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $smokeRoot = Join-Path $env:RUNNER_TEMP "dosu proxy smoke"
+          $fakeBin = Join-Path $smokeRoot "node tools"
+          $configRoot = Join-Path $smokeRoot "config"
+          $dosuConfig = Join-Path $configRoot "dosu-cli"
+          $credentialStore = Join-Path $dosuConfig "project-mcp-credentials.v1"
+          $packageRoot = Join-Path $smokeRoot "installed package"
+          New-Item -ItemType Directory -Force -Path @($fakeBin, $credentialStore, $packageRoot) | Out-Null
+
+          $env:XDG_CONFIG_HOME = $configRoot
+          $env:DOSU_PROXY_CAPTURE = Join-Path $smokeRoot "proxy-capture.txt"
+          $env:DOSU_PROXY_DESCENDANT_PID = Join-Path $smokeRoot "descendant.pid"
+          $env:DOSU_FAKE_NPX_PID = Join-Path $smokeRoot "fake-npx.pid"
+          $env:DOSU_FAKE_NPX_SCRIPT = Join-Path $smokeRoot "fake-npx.mjs"
+          $env:DOSU_SIGNAL_INJECTOR = Join-Path $smokeRoot "signal-packed-proxy.mjs"
+          $env:DOSU_NODE_EXE = (Get-Command node).Source
+          $env:PATH = "$fakeBin;$env:PATH"
+
+          @'
+          import { spawn } from "node:child_process";
+          import { writeFileSync } from "node:fs";
+
+          writeFileSync(
+            process.env.DOSU_PROXY_CAPTURE,
+            `${process.argv.slice(2).join(" ")}\n${process.env.X_DOSU_API_KEY ?? ""}\n`,
+          );
+          writeFileSync(process.env.DOSU_FAKE_NPX_PID, String(process.pid));
+          const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], {
+            detached: true,
+            stdio: "ignore",
+            windowsHide: true,
+          });
+          if (!descendant.pid) process.exit(92);
+          writeFileSync(process.env.DOSU_PROXY_DESCENDANT_PID, String(descendant.pid));
+          descendant.unref();
+          setInterval(() => {}, 1_000);
+          '@ | Set-Content -Encoding utf8 $env:DOSU_FAKE_NPX_SCRIPT
+
+          @'
+          import { existsSync } from "node:fs";
+
+          // GitHub's Windows shell is non-interactive, so inject the same Node
+          // SIGINT event only after the packed proxy owns its signal listener.
+          const deadline = Date.now() + 15_000;
+          let descendantReadyAt;
+          const timer = setInterval(() => {
+            if (existsSync(process.env.DOSU_PROXY_DESCENDANT_PID)) {
+              descendantReadyAt ??= Date.now();
+            }
+            if (
+              descendantReadyAt &&
+              Date.now() - descendantReadyAt >= 100 &&
+              process.listenerCount("SIGINT") > 0
+            ) {
+              clearInterval(timer);
+              process.emit("SIGINT");
+              return;
+            }
+            if (Date.now() >= deadline) {
+              clearInterval(timer);
+              console.error("packed proxy never became ready for the shutdown signal");
+              process.exit(91);
+            }
+          }, 25);
+          '@ | Set-Content -Encoding utf8 $env:DOSU_SIGNAL_INJECTOR
+
+          @'
+          @echo off
+          "%DOSU_NODE_EXE%" "%DOSU_FAKE_NPX_SCRIPT%" %*
+          '@ | Set-Content -Encoding ascii (Join-Path $fakeBin "npx.cmd")
+
+          $userID = "windows-smoke-user"
+          $targetKey = "deployment:windows-smoke-dep"
+          @{
+            schema_version = 2
+            active_account = @{
+              user_id = $userID
+              session = @{
+                access_token = "smoke-token"
+                refresh_token = "smoke-refresh"
+                expires_at = 4102444800
+              }
+            }
+          } | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 (Join-Path $dosuConfig "config.json")
+
+          $identity = [Text.Encoding]::UTF8.GetBytes("$userID`0$targetKey")
+          $recordName = "$([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($identity)).ToLower()).json"
+          @{
+            schema_version = 1
+            user_id = $userID
+            target_key = $targetKey
+            credential = @{
+              endpoint = "https://api.dosu.dev/v1/mcp/deployments/windows-smoke-dep"
+              api_key = "windows-smoke-secret"
+            }
+          } | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 (Join-Path $credentialStore $recordName)
+
+          $pkg = Get-ChildItem -Filter "dosu-cli-*.tgz" | Select-Object -First 1 -ExpandProperty FullName
+          npm install --ignore-scripts --no-audit --no-fund --prefix "$packageRoot" "$pkg"
+          if ($LASTEXITCODE -ne 0) { throw "could not install packed CLI" }
+          $dosuBin = Join-Path $packageRoot "node_modules/@dosu/cli/bin/dosu.js"
+          $signalInjectorURL = [Uri]::new($env:DOSU_SIGNAL_INJECTOR).AbsoluteUri
+          if (-not $signalInjectorURL.StartsWith("file:")) {
+            throw "could not convert the signal injector to a file URL"
+          }
+
+          $outer = $null
+          try {
+            $startInfo = [Diagnostics.ProcessStartInfo]::new()
+            $startInfo.FileName = $env:DOSU_NODE_EXE
+            $startInfo.UseShellExecute = $false
+            foreach ($argument in @(
+              "--import",
+              $signalInjectorURL,
+              $dosuBin,
+              "mcp",
+              "proxy",
+              "--deployment",
+              "windows-smoke-dep"
+            )) {
+              $startInfo.ArgumentList.Add($argument)
+            }
+            $outer = [Diagnostics.Process]::Start($startInfo)
+            if (-not $outer.WaitForExit(30000)) {
+              throw "packed project proxy did not settle after SIGINT"
+            }
+            if ($outer.ExitCode -ne 0) { throw "project proxy exited $($outer.ExitCode)" }
+
+            if (-not (Test-Path $env:DOSU_PROXY_DESCENDANT_PID)) {
+              throw "fake npx did not launch its persistent descendant"
+            }
+            $descendantPID = [int](Get-Content $env:DOSU_PROXY_DESCENDANT_PID -Raw)
+            $descendantGone = $false
+            for ($attempt = 0; $attempt -lt 50; $attempt++) {
+              if (-not (Get-Process -Id $descendantPID -ErrorAction SilentlyContinue)) {
+                $descendantGone = $true
+                break
+              }
+              Start-Sleep -Milliseconds 100
+            }
+            if (-not $descendantGone) {
+              throw "taskkill returned but descendant PID $descendantPID survived"
+            }
+
+            $capture = Get-Content $env:DOSU_PROXY_CAPTURE
+            if ($capture.Count -lt 2) { throw "fake npx did not capture argv and env" }
+            if ($capture[0] -notmatch "mcp-remote@0\.1\.38") { throw "proxy did not invoke pinned mcp-remote" }
+            if ($capture[0] -match "windows-smoke-secret") { throw "proxy exposed its key in argv" }
+            if ($capture[1].Trim() -ne "windows-smoke-secret") { throw "proxy did not pass its key through env" }
+
+            # A save interrupted after fsync leaves this exact temporary shape.
+            # Exercise the packed CLI against Windows/libuv's real stat mode.
+            $crashTemporary = Join-Path $credentialStore "$recordName.4321.abcdef012345.tmp"
+            Copy-Item (Join-Path $credentialStore $recordName) $crashTemporary
+            & $env:DOSU_NODE_EXE $dosuBin logout | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "packed logout rejected its own crash temporary" }
+            if (Test-Path $credentialStore) {
+              throw "packed logout left the proven crash credential temporary behind"
+            }
+          } finally {
+            if ($outer -and -not $outer.HasExited) { $outer.Kill($true) }
+            if (Test-Path $env:DOSU_FAKE_NPX_PID) {
+              $fakeNpxPID = [int](Get-Content $env:DOSU_FAKE_NPX_PID -Raw)
+              if (Get-Process -Id $fakeNpxPID -ErrorAction SilentlyContinue) {
+                & taskkill.exe /PID $fakeNpxPID /T /F 2>&1 | Out-Null
+              }
+            }
+            if (Test-Path $env:DOSU_PROXY_DESCENDANT_PID) {
+              $cleanupPID = [int](Get-Content $env:DOSU_PROXY_DESCENDANT_PID -Raw)
+              Stop-Process -Id $cleanupPID -Force -ErrorAction SilentlyContinue
+            }
+          }
+
   release:
     needs:
       - lint
