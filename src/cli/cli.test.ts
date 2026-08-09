@@ -11,7 +11,7 @@ vi.mock("../debug/logger", () => ({
   },
 }));
 
-import { createProgram } from "./cli";
+import { createProgram, shouldRunBackgroundChecks } from "./cli";
 
 describe("CLI", () => {
   let originalArgv: string[];
@@ -32,6 +32,18 @@ describe("CLI", () => {
   it("has version flag", () => {
     const program = createProgram();
     expect(program.version()).toMatch(/^v\d+/);
+  });
+
+  it("has an upgrade command", () => {
+    const program = createProgram();
+    const cmd = program.commands.find((command) => command.name() === "upgrade");
+    expect(cmd?.description()).toContain("latest version");
+  });
+
+  it("skips background notices for upgrade and hook entrypoints", () => {
+    expect(shouldRunBackgroundChecks("upgrade", ["node", "dosu", "upgrade"])).toBe(false);
+    expect(shouldRunBackgroundChecks("stop", ["node", "dosu", "hooks", "stop"])).toBe(false);
+    expect(shouldRunBackgroundChecks("status", ["node", "dosu", "status"])).toBe(true);
   });
 
   it("has login command", () => {

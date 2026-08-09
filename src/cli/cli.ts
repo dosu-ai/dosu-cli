@@ -22,6 +22,7 @@ import { sourcesCommand } from "../commands/sources";
 import { suggestCommand } from "../commands/suggest";
 import { threadsCommand } from "../commands/threads";
 import { topicsCommand } from "../commands/topics";
+import { upgradeCommand } from "../commands/upgrade";
 import {
   type Config,
   clearConfigInPlace,
@@ -44,12 +45,16 @@ import { getVersionString } from "../version/version";
 /**
  * Hook entrypoints are auto-invoked by Claude Code on every turn and must stay
  * fast and stdout-clean. Skip the update checks for them (their stderr notices
- * are noise on the hot path and the background fetch can delay process exit).
+ * are noise on the hot path and a registry refresh would add latency).
  */
 const HOOK_ENTRYPOINTS = new Set(["user-prompt-submit", "post-tool-use", "stop"]);
 function isHookEntrypointInvocation(argv: string[]): boolean {
   const i = argv.indexOf("hooks");
   return i >= 0 && HOOK_ENTRYPOINTS.has(argv[i + 1] ?? "");
+}
+
+export function shouldRunBackgroundChecks(actionName: string, argv: string[]): boolean {
+  return actionName !== "upgrade" && !isHookEntrypointInvocation(argv);
 }
 
 /** Suggest the closest registered command name for a mistyped one, if any is close enough. */
@@ -91,11 +96,13 @@ export function createProgram(): Command {
     .version(getVersionString(), "-v, --version")
     .helpCommand("help [command]", "Show help for a command")
     .option("--debug", "Enable debug logging to stderr", false)
-    .hook("preAction", (thisCommand) => {
+    .hook("preAction", async (thisCommand, actionCommand) => {
       const opts = thisCommand.optsWithGlobals();
       logger.init({ debug: opts.debug });
-      if (!isHookEntrypointInvocation(process.argv)) {
-        checkForUpdates();
+      if (shouldRunBackgroundChecks(actionCommand.name(), process.argv)) {
+        if (process.env.NODE_ENV !== "test" && !process.env.CI) {
+          await checkForUpdates();
+        }
         checkForSkillUpdates();
         checkForReadyTasks();
       }
@@ -412,6 +419,7 @@ export function createProgram(): Command {
   program.addCommand(topicsCommand());
   program.addCommand(threadsCommand());
   program.addCommand(skillCommand());
+  program.addCommand(upgradeCommand());
 
   // setup
   program
