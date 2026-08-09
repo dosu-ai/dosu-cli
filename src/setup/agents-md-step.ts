@@ -9,10 +9,11 @@
  */
 
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as p from "@clack/prompts";
 import { logger } from "../debug/logger";
+import { writeProjectFile } from "../mcp/config-helpers";
 import { FALLBACK_DOSU_RULE, fetchDosuRule } from "../rules/installer";
 import { formatSetupSummary } from "./styles";
 
@@ -81,6 +82,11 @@ function findSection(content: string): SectionLocation | null {
   if (start === -1 || end < start) {
     throw new Error("Dosu AGENTS.md markers are incomplete; refusing to overwrite the file");
   }
+  const afterStart = content.slice(start + (startMatch?.[0].length ?? 0));
+  const remaining = content.slice(end + DOSU_SECTION_END.length);
+  if (SECTION_START_RE.test(afterStart) || remaining.includes(DOSU_SECTION_END)) {
+    throw new Error("Multiple Dosu AGENTS.md marker blocks found; refusing to overwrite the file");
+  }
   return { start, end };
 }
 
@@ -92,11 +98,18 @@ export function upsertDosuAgentsSection(
   cwd: string = process.cwd(),
   content: string = FALLBACK_DOSU_RULE,
 ): AgentsMdResult {
+  if (!existsSync(cwd) || !lstatSync(cwd).isDirectory() || lstatSync(cwd).isSymbolicLink()) {
+    throw new Error(`Project root is not a regular directory: ${cwd}`);
+  }
   const path = join(cwd, "AGENTS.md");
+
+  if (existsSync(path) && lstatSync(path).isSymbolicLink()) {
+    throw new Error(`Refusing to modify symbolic link at ${path}`);
+  }
 
   if (!existsSync(path)) {
     const section = buildDosuAgentsSection(content);
-    writeFileSync(path, `${section}\n`);
+    writeProjectFile(path, `${section}\n`, null);
     return { path, action: "created" };
   }
 
@@ -116,7 +129,7 @@ export function upsertDosuAgentsSection(
   }
 
   if (next === existing) return { path, action: "unchanged" };
-  writeFileSync(path, next);
+  writeProjectFile(path, next, existing);
   return { path, action: "updated" };
 }
 
