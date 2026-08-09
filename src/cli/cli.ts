@@ -40,8 +40,8 @@ import { allProviders, getProvider, type Provider } from "../mcp/providers";
 import { browserFallbackHint } from "../setup/styles";
 import {
   getOrCreateInstallID,
-  isTelemetryEnabled,
   loadTelemetrySettings,
+  telemetryDisabledByEnvironment,
 } from "../telemetry/settings";
 import {
   type CommandTelemetry,
@@ -625,11 +625,12 @@ export async function execute(): Promise<void> {
 
 function processCommandTelemetry(): CommandTelemetry | undefined {
   try {
-    let analytics = isTelemetryEnabled("analytics");
-    const errors = isTelemetryEnabled("errors");
+    if (telemetryDisabledByEnvironment()) return undefined;
+    const settings = loadTelemetrySettings();
+    let analytics = settings.analytics === true;
+    const errors = settings.errors === true;
     if (!analytics && !errors) return undefined;
 
-    const settings = loadTelemetrySettings();
     let installID = settings.install_id;
     if (analytics && !installID) {
       installID = getOrCreateInstallID();
