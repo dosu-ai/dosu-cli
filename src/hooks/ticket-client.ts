@@ -37,7 +37,7 @@ export interface CreateTicketResponse {
   poll_url?: string;
 }
 
-export interface TicketSource {
+interface TicketSource {
   source_id: string;
   title: string;
   url: string;
@@ -45,7 +45,7 @@ export interface TicketSource {
   data_source_id: string | null;
 }
 
-export interface TicketResult {
+interface TicketResult {
   context: string;
   sources: TicketSource[];
   attribution: string;
@@ -53,7 +53,7 @@ export interface TicketResult {
   save_recommended?: boolean;
 }
 
-export type TicketStatus = "pending" | "ready" | "failed" | "expired";
+type TicketStatus = "pending" | "ready" | "failed" | "expired";
 
 export interface TicketStatusResponse {
   ticket_id: string;

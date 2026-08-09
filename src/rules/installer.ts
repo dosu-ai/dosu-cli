@@ -35,7 +35,7 @@ export interface RuleResult {
   action: RuleAction;
 }
 
-export const DOSU_RULE_SECTION_VERSION = 1;
+const DOSU_RULE_SECTION_VERSION = 1;
 export const DOSU_RULE_SECTION_START = `<!-- dosu:rules:start v${DOSU_RULE_SECTION_VERSION} -->`;
 export const DOSU_RULE_SECTION_END = "<!-- dosu:rules:end -->";
 
@@ -93,8 +93,6 @@ const RULE_TARGETS: Record<RuleAgentID, RuleTarget> = {
     path: () => join(homedir(), ".gemini", "GEMINI.md"),
   },
 };
-
-export const SUPPORTED_RULE_AGENT_IDS = Object.keys(RULE_TARGETS) as RuleAgentID[];
 
 export function isRuleAgent(agent: string): agent is RuleAgentID {
   return Object.hasOwn(RULE_TARGETS, agent);

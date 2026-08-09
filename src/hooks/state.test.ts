@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   claimState,
-  clearState,
   getStateDir,
   loadState,
   releaseState,
@@ -131,14 +130,6 @@ describe("hooks/state", () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, `${sanitize("corrupt")}.json`), "{not json");
     expect(loadState("corrupt")).toBeNull();
-  });
-
-  it("clearState removes the session file", () => {
-    const state = makeState({ sessionId: "to-clear" });
-    saveState(state);
-    expect(loadState("to-clear")).not.toBeNull();
-    clearState("to-clear");
-    expect(loadState("to-clear")).toBeNull();
   });
 
   it("saveState never throws when the state dir cannot be created", () => {

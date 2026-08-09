@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { getConfigDir } from "../config/config";
 
 /** Steady-state local lifecycle of a ticket. `ready` is transient and never persisted. */
-export type TicketLocalStatus = "pending" | "delivered" | "failed" | "expired";
+type TicketLocalStatus = "pending" | "delivered" | "failed" | "expired";
 
 export interface TicketState {
   ticketId: string;
@@ -67,15 +67,6 @@ export function saveState(state: TicketState): void {
     writeFileSync(file, JSON.stringify(state, null, 2), { mode: 0o600 });
   } catch {
     // best-effort; a failed state write must not disrupt the agent
-  }
-}
-
-/** Remove a session's state file. Never throws. */
-export function clearState(sessionId: string): void {
-  try {
-    rmSync(stateFile(sessionId), { force: true });
-  } catch {
-    // best-effort
   }
 }
 

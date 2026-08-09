@@ -17,7 +17,6 @@ vi.mock("../debug/logger", () => ({
 vi.mock("../hooks/state", () => ({
   loadState: vi.fn(),
   saveState: vi.fn(),
-  clearState: vi.fn(),
   claimState: vi.fn(),
   releaseState: vi.fn(),
 }));

@@ -85,10 +85,7 @@ const EVENT_STATUS_MESSAGE: Record<string, string> = {
  * Claude Code installer — see hooks/runtime.ts); `--agent codex` attributes
  * the resulting knowledge tickets to Codex sessions.
  */
-export function codexHookCommand(
-  subcommand: string,
-  prefix: string = resolveHookCommandPrefix(),
-): string {
+function codexHookCommand(subcommand: string, prefix: string = resolveHookCommandPrefix()): string {
   return `${prefix} hooks ${subcommand} --agent codex`;
 }
 

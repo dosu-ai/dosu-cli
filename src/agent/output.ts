@@ -18,12 +18,6 @@ export type AgentStatus =
   | "expired"
   | "error";
 
-export interface AgentEventBase {
-  step?: string;
-  status: AgentStatus;
-  agent_next_steps?: string;
-}
-
 /** Emit a single JSON line to stdout. */
 export function emitJSONLine(value: unknown): void {
   console.log(JSON.stringify(value));

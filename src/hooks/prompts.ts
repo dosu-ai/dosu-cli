@@ -29,7 +29,7 @@ export const STOP_PREFIX =
  * (`save_recommended`). Nudges the agent to contribute back via the Dosu
  * `save_topic` MCP tool. Requires the Dosu MCP installed alongside the hooks.
  */
-export const SAVE_NUDGE =
+const SAVE_NUDGE =
   "Dosu has little or no existing knowledge on this topic. If you uncover something durable — " +
   "a non-obvious mechanism, a gotcha, or a route through the code — save it with the Dosu " +
   "`save_topic` tool when you finish, so future sessions start ahead. Only save genuinely " +

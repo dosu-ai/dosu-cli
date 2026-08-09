@@ -20,7 +20,7 @@ export interface AccountTarget {
   space_id?: string;
 }
 
-export interface ActiveAccount {
+interface ActiveAccount {
   /** Missing only when a token does not expose a readable identity. */
   user_id?: string;
   session: Omit<SessionCredentials, "user_id">;

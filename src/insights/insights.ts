@@ -54,7 +54,7 @@ export interface InsightsReport {
 export type AskFn = (question: string) => Promise<string | null>;
 
 export type InsightsStage = "stats" | "narrative";
-export type ProgressFn = (stage: InsightsStage) => void;
+type ProgressFn = (stage: InsightsStage) => void;
 
 export interface BuildInsightsArgs {
   client: TypedClient;
