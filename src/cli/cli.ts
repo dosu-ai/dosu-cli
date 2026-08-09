@@ -44,7 +44,7 @@ import { getVersionString } from "../version/version";
 /**
  * Hook entrypoints are auto-invoked by Claude Code on every turn and must stay
  * fast and stdout-clean. Skip the update checks for them (their stderr notices
- * are noise on the hot path and the background fetch can delay process exit).
+ * are noise on the hot path and a registry refresh would add latency).
  */
 const HOOK_ENTRYPOINTS = new Set(["user-prompt-submit", "post-tool-use", "stop"]);
 function isHookEntrypointInvocation(argv: string[]): boolean {
@@ -91,11 +91,13 @@ export function createProgram(): Command {
     .version(getVersionString(), "-v, --version")
     .helpCommand("help [command]", "Show help for a command")
     .option("--debug", "Enable debug logging to stderr", false)
-    .hook("preAction", (thisCommand) => {
+    .hook("preAction", async (thisCommand) => {
       const opts = thisCommand.optsWithGlobals();
       logger.init({ debug: opts.debug });
       if (!isHookEntrypointInvocation(process.argv)) {
-        checkForUpdates();
+        if (process.env.NODE_ENV !== "test" && !process.env.CI) {
+          await checkForUpdates();
+        }
         checkForSkillUpdates();
         checkForReadyTasks();
       }
