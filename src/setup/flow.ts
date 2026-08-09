@@ -6,7 +6,11 @@ import { randomUUID } from "node:crypto";
 import * as p from "@clack/prompts";
 import { OAuthCallbackError } from "../auth/errors";
 import { Client, type Deployment, type Org, SessionExpiredError } from "../client/client";
-import { installSkill, skillInstallTargetForProvider } from "../commands/skill";
+import {
+  installSkill,
+  skillInstallTargetForProvider,
+  verifiedProjectSkillProviderIDs,
+} from "../commands/skill";
 import {
   bindAccountIdentity,
   type Config,
@@ -20,8 +24,14 @@ import {
 import { logger } from "../debug/logger";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
+import { isRuleAgent, rulePathForAgent } from "../rules/installer";
 import { stepUpdateAgentsMd } from "./agents-md-step";
 import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
+import {
+  cleanupLegacyGlobalMcp,
+  cleanupLegacyGlobalRule,
+  cleanupLegacyGlobalSkill,
+} from "./legacy-global-cleanup";
 import {
   type LogsHandoffDecision,
   type LogsHandoffPlan,
@@ -277,6 +287,11 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   if (skillProviders.length > 0) {
     skillCompleted = await runInstallSkill(skillProviders, projectRoot);
     if (skillCompleted) {
+      const verifiedProviders = verifiedProjectSkillProviderIDs(
+        skillProviders.map((provider) => provider.id()),
+        projectRoot,
+      );
+      if (verifiedProviders.length > 0) await cleanupLegacyGlobalSkill(verifiedProviders);
       trackInBackground(
         trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_skill_installed"),
       );
@@ -287,6 +302,13 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   let agentsMdCompleted = false;
   if (mcpCompleted) {
     agentsMdCompleted = await stepUpdateAgentsMd(projectRoot);
+    if (agentsMdCompleted) {
+      for (const { provider } of configuredProviders) {
+        if (isRuleAgent(provider.id()) && rulePathForAgent(provider.id(), projectRoot) === null) {
+          cleanupLegacyGlobalRule(provider.id());
+        }
+      }
+    }
   }
 
   // Post-setup log mining (cloud mode only): replaces the old codebase-audit
@@ -901,6 +923,7 @@ export function stepConfigureTools(
       provider.install(cfg, false, { projectRoot });
       const projectConfigPath = provider.projectConfigPath(projectRoot);
       if (projectConfigPath) retainedProjectConfigPaths.add(projectConfigPath);
+      if (provider.isProjectConfigured(projectRoot)) cleanupLegacyGlobalMcp(provider);
       logger.info("setup", `Configured ${provider.name()}`);
       results.push({ provider, action: "install" });
     } catch (err: unknown) {

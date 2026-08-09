@@ -1,10 +1,13 @@
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -40,7 +43,7 @@ describe("createJSONProvider (base)", () => {
   let origHome: string | undefined;
 
   beforeEach(() => {
-    tempDir = mkdtempSync(join(tmpdir(), "dosu-base-test-"));
+    tempDir = realpathSync(mkdtempSync(join(tmpdir(), "dosu-base-test-")));
     origHome = process.env.HOME;
     process.env.HOME = tempDir;
   });
@@ -199,6 +202,109 @@ describe("createJSONProvider (base)", () => {
     expect(cfg.mcpServers.other).toEqual({ url: "keep" });
   });
 
+  it("legacy global cleanup removes only an owned Dosu entry", async () => {
+    const { createJSONProvider } = await import("./base");
+    const globalPath = join(tempDir, "legacy-owned.json");
+    const provider = createJSONProvider({
+      providerName: "TestProvider",
+      providerID: "claude",
+      local: true,
+      priorityValue: 1,
+      paths: [],
+      globalPath,
+      topKey: "mcpServers",
+      localConfigPath: (projectRoot) => join(projectRoot, ".test", "mcp.json"),
+    });
+    writeFileSync(
+      globalPath,
+      JSON.stringify({
+        mcpServers: {
+          dosu: {
+            type: "http",
+            url: "https://api.dosu.dev/v1/mcp/deployments/dep-123",
+            headers: { "X-Dosu-API-Key": "old-key" },
+          },
+          other: { url: "https://example.com/mcp" },
+        },
+      }),
+    );
+
+    expect(provider.removeLegacyGlobal?.()).toBe(true);
+    expect(loadJSONConfig(globalPath).mcpServers).toEqual({
+      other: { url: "https://example.com/mcp" },
+    });
+  });
+
+  it("legacy global cleanup leaves missing, malformed, and foreign entries untouched", async () => {
+    const { createJSONProvider } = await import("./base");
+    const globalPath = join(tempDir, "legacy-safe.json");
+    const provider = createJSONProvider({
+      providerName: "TestProvider",
+      providerID: "claude",
+      local: true,
+      priorityValue: 1,
+      paths: [],
+      globalPath,
+      topKey: "mcpServers",
+      localConfigPath: (projectRoot) => join(projectRoot, ".test", "mcp.json"),
+    });
+
+    expect(provider.removeLegacyGlobal?.()).toBe(false);
+    expect(existsSync(globalPath)).toBe(false);
+
+    const malformed = '{"mcpServers":{"dosu":';
+    writeFileSync(globalPath, malformed);
+    expect(provider.removeLegacyGlobal?.()).toBe(false);
+    expect(readFileSync(globalPath, "utf-8")).toBe(malformed);
+
+    const foreign = JSON.stringify({
+      mcpServers: {
+        dosu: {
+          type: "http",
+          url: "https://foreign.example/v1/mcp/deployments/dep-123",
+          headers: { "X-Dosu-API-Key": "foreign-key" },
+        },
+      },
+    });
+    writeFileSync(globalPath, foreign);
+    expect(provider.removeLegacyGlobal?.()).toBe(false);
+    expect(readFileSync(globalPath, "utf-8")).toBe(foreign);
+  });
+
+  it("legacy global cleanup does not follow a symlinked parent directory", async () => {
+    const { createJSONProvider } = await import("./base");
+    const realParent = join(tempDir, "legacy-real-parent");
+    const linkedParent = join(tempDir, "legacy-linked-parent");
+    const globalPath = join(linkedParent, "legacy.json");
+    const targetPath = join(realParent, "legacy.json");
+    const target = JSON.stringify({
+      mcpServers: {
+        dosu: {
+          type: "http",
+          url: "https://api.dosu.dev/v1/mcp/deployments/dep-123",
+          headers: { "X-Dosu-API-Key": "old-key" },
+        },
+      },
+    });
+    mkdirSync(realParent);
+    writeFileSync(targetPath, target);
+    symlinkSync(realParent, linkedParent);
+    const provider = createJSONProvider({
+      providerName: "TestProvider",
+      providerID: "claude",
+      local: true,
+      priorityValue: 1,
+      paths: [],
+      globalPath,
+      topKey: "mcpServers",
+      localConfigPath: (projectRoot) => join(projectRoot, ".test", "mcp.json"),
+    });
+
+    expect(provider.removeLegacyGlobal?.()).toBe(false);
+    expect(lstatSync(linkedParent).isSymbolicLink()).toBe(true);
+    expect(readFileSync(targetPath, "utf-8")).toBe(target);
+  });
+
   it("local remove throws when localConfigPath is not provided", async () => {
     const { createJSONProvider } = await import("./base");
     const provider = createJSONProvider({
@@ -296,7 +402,7 @@ describe("CodexProvider", () => {
   let npxPath: string;
 
   beforeEach(() => {
-    tempDir = mkdtempSync(join(tmpdir(), "dosu-codex-test-"));
+    tempDir = realpathSync(mkdtempSync(join(tmpdir(), "dosu-codex-test-")));
     origCodexHome = process.env.CODEX_HOME;
     process.env.CODEX_HOME = join(tempDir, "codex-home");
     origCwd = process.cwd();
@@ -480,6 +586,24 @@ describe("CodexProvider", () => {
     expect(content).not.toContain("[mcp_servers.dosu]");
   });
 
+  it("preserves legacy global Codex config because it is shared with Desktop", async () => {
+    const { CodexProvider } = await import("./codex");
+    const provider = CodexProvider();
+    const configPath = join(tempDir, "codex-home", "config.toml");
+
+    provider.install(makeCfg(), true);
+    const current = readFileSync(configPath, "utf-8");
+    expect(provider.removeLegacyGlobal).toBeUndefined();
+    provider.removeLegacyGlobal?.();
+    expect(readFileSync(configPath, "utf-8")).toBe(current);
+
+    const historical =
+      '[mcp_servers.dosu]\ntype = "http"\nurl = "https://api.dosu.dev/v1/mcp/deployments/dep-123"\n\n[mcp_servers.dosu.http_headers]\nX-Dosu-API-Key = "old-key"\n';
+    writeFileSync(configPath, historical);
+    provider.removeLegacyGlobal?.();
+    expect(readFileSync(configPath, "utf-8")).toBe(historical);
+  });
+
   it("local remove deletes dosu section from local TOML", async () => {
     const { CodexProvider } = await import("./codex");
     const provider = CodexProvider();
@@ -550,7 +674,7 @@ describe("CopilotProvider", () => {
   let origCwd: string;
 
   beforeEach(() => {
-    tempDir = mkdtempSync(join(tmpdir(), "dosu-copilot-test-"));
+    tempDir = realpathSync(mkdtempSync(join(tmpdir(), "dosu-copilot-test-")));
     origXdgConfig = process.env.XDG_CONFIG_HOME;
     process.env.XDG_CONFIG_HOME = join(tempDir, "xdg-config");
     origCwd = process.cwd();
@@ -639,6 +763,61 @@ describe("CopilotProvider", () => {
     expect(cfg.mcpServers.dosu).toBeUndefined();
   });
 
+  it("legacy global cleanup removes an owned entry and ignores a foreign entry", async () => {
+    const { CopilotProvider } = await import("./copilot");
+    const provider = CopilotProvider();
+    const configPath = join(tempDir, "xdg-config", "mcp-config.json");
+
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        mcpServers: {
+          dosu: {
+            type: "http",
+            url: "https://api.dosu.dev/v1/mcp/deployments/dep-123",
+            tools: ["*"],
+            headers: { "X-Dosu-API-Key": "old-key" },
+          },
+        },
+      }),
+    );
+    expect(provider.removeLegacyGlobal?.()).toBe(true);
+    expect(loadJSONConfig(configPath).mcpServers.dosu).toBeUndefined();
+
+    const foreign = JSON.stringify({
+      mcpServers: { dosu: { command: "other-server", args: ["serve"] } },
+    });
+    writeFileSync(configPath, foreign);
+    expect(provider.removeLegacyGlobal?.()).toBe(false);
+    expect(readFileSync(configPath, "utf-8")).toBe(foreign);
+  });
+
+  it("legacy global cleanup does not follow a Copilot parent symlink", async () => {
+    const { CopilotProvider } = await import("./copilot");
+    const configPath = join(tempDir, "xdg-config", "mcp-config.json");
+    const realParent = join(tempDir, "copilot-real-parent");
+    const targetPath = join(realParent, "mcp-config.json");
+    const target = JSON.stringify({
+      mcpServers: {
+        dosu: {
+          type: "http",
+          url: "https://api.dosu.dev/v1/mcp/deployments/dep-123",
+          tools: ["*"],
+          headers: { "X-Dosu-API-Key": "old-key" },
+        },
+      },
+    });
+    mkdirSync(realParent);
+    writeFileSync(targetPath, target);
+    symlinkSync(realParent, dirname(configPath));
+    const provider = CopilotProvider();
+
+    expect(provider.removeLegacyGlobal?.()).toBe(false);
+    expect(lstatSync(dirname(configPath)).isSymbolicLink()).toBe(true);
+    expect(readFileSync(targetPath, "utf-8")).toBe(target);
+  });
+
   it("local remove deletes dosu entry from servers", async () => {
     const { CopilotProvider } = await import("./copilot");
     const provider = CopilotProvider();
@@ -677,7 +856,7 @@ describe("MCPorterProvider", () => {
   let origCwd: string;
 
   beforeEach(() => {
-    tempDir = mkdtempSync(join(tmpdir(), "dosu-mcporter-test-"));
+    tempDir = realpathSync(mkdtempSync(join(tmpdir(), "dosu-mcporter-test-")));
     origHome = process.env.HOME;
     process.env.HOME = tempDir;
     origCwd = process.cwd();
@@ -782,6 +961,76 @@ describe("MCPorterProvider", () => {
     const configPath = join(tempDir, ".mcporter", "mcporter.json");
     const cfg = loadJSONConfig(configPath);
     expect(cfg.mcpServers.dosu).toBeUndefined();
+  });
+
+  it("legacy global cleanup removes an owned entry from plain JSON", async () => {
+    const jsonPath = join(tempDir, ".mcporter", "mcporter.json");
+    mkdirSync(dirname(jsonPath), { recursive: true });
+    writeFileSync(
+      jsonPath,
+      JSON.stringify({
+        mcpServers: {
+          dosu: {
+            type: "http",
+            url: "https://api.dosu.dev/v1/mcp/deployments/dep-123",
+            headers: { "X-Dosu-API-Key": "old-key" },
+          },
+          other: { url: "https://example.com/mcp" },
+        },
+      }),
+    );
+    const { MCPorterProvider } = await import("./mcporter");
+    const provider = MCPorterProvider();
+
+    expect(provider.removeLegacyGlobal?.()).toBe(true);
+    expect(loadJSONConfig(jsonPath).mcpServers).toEqual({
+      other: { url: "https://example.com/mcp" },
+    });
+  });
+
+  it("legacy global cleanup preserves JSONC byte-for-byte", async () => {
+    const jsoncPath = join(tempDir, ".mcporter", "mcporter.jsonc");
+    mkdirSync(dirname(jsoncPath), { recursive: true });
+    const jsonc = `{
+  // This comment must not be lost during compatibility cleanup.
+  "mcpServers": {
+    "dosu": {
+      "type": "http",
+      "url": "https://api.dosu.dev/v1/mcp/deployments/dep-123",
+      "headers": { "X-Dosu-API-Key": "old-key" }
+    }
+  }
+}\n`;
+    writeFileSync(jsoncPath, jsonc);
+    const { MCPorterProvider } = await import("./mcporter");
+    const provider = MCPorterProvider();
+
+    expect(provider.removeLegacyGlobal?.()).toBe(false);
+    expect(readFileSync(jsoncPath, "utf-8")).toBe(jsonc);
+  });
+
+  it("legacy global cleanup does not follow an MCPorter parent symlink", async () => {
+    const realParent = join(tempDir, "mcporter-real-parent");
+    const linkedParent = join(tempDir, ".mcporter");
+    const targetPath = join(realParent, "mcporter.json");
+    const target = JSON.stringify({
+      mcpServers: {
+        dosu: {
+          type: "http",
+          url: "https://api.dosu.dev/v1/mcp/deployments/dep-123",
+          headers: { "X-Dosu-API-Key": "old-key" },
+        },
+      },
+    });
+    mkdirSync(realParent);
+    writeFileSync(targetPath, target);
+    symlinkSync(realParent, linkedParent);
+    const { MCPorterProvider } = await import("./mcporter");
+    const provider = MCPorterProvider();
+
+    expect(provider.removeLegacyGlobal?.()).toBe(false);
+    expect(lstatSync(linkedParent).isSymbolicLink()).toBe(true);
+    expect(readFileSync(targetPath, "utf-8")).toBe(target);
   });
 
   it("local remove deletes dosu entry", async () => {

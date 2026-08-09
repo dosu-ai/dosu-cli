@@ -20,11 +20,16 @@ const {
   mockFetchDosuRule,
   mockInstallRuleForAgent,
   mockIsRuleAgent,
+  mockRulePathForAgent,
   mockInstallSkill,
   mockSkillAgentIDsForProviders,
+  mockVerifiedProjectSkillProviderIDs,
   mockInGitWorkTree,
   mockUpsertDosuAgentsSection,
   mockRequireProjectRoot,
+  mockCleanupLegacyGlobalMcp,
+  mockCleanupLegacyGlobalRule,
+  mockCleanupLegacyGlobalSkill,
 } = vi.hoisted(() => {
   return {
     mockMintTicket: vi.fn(),
@@ -43,11 +48,16 @@ const {
     mockFetchDosuRule: vi.fn(),
     mockInstallRuleForAgent: vi.fn(),
     mockIsRuleAgent: vi.fn(),
+    mockRulePathForAgent: vi.fn(),
     mockInstallSkill: vi.fn(),
     mockSkillAgentIDsForProviders: vi.fn(),
+    mockVerifiedProjectSkillProviderIDs: vi.fn(),
     mockInGitWorkTree: vi.fn(),
     mockUpsertDosuAgentsSection: vi.fn(),
     mockRequireProjectRoot: vi.fn(),
+    mockCleanupLegacyGlobalMcp: vi.fn(),
+    mockCleanupLegacyGlobalRule: vi.fn(),
+    mockCleanupLegacyGlobalSkill: vi.fn(),
   };
 });
 
@@ -70,11 +80,13 @@ vi.mock("../rules/installer", () => ({
   fetchDosuRule: mockFetchDosuRule,
   installRuleForAgent: mockInstallRuleForAgent,
   isRuleAgent: mockIsRuleAgent,
+  rulePathForAgent: mockRulePathForAgent,
 }));
 
 vi.mock("../commands/skill", () => ({
   installSkill: mockInstallSkill,
   skillAgentIDsForProviders: mockSkillAgentIDsForProviders,
+  verifiedProjectSkillProviderIDs: mockVerifiedProjectSkillProviderIDs,
 }));
 
 vi.mock("../setup/agents-md-step", () => ({
@@ -85,6 +97,12 @@ vi.mock("../setup/agents-md-step", () => ({
 vi.mock("../setup/project-root", () => ({
   assertSafeProjectPath: vi.fn(),
   requireProjectRoot: mockRequireProjectRoot,
+}));
+
+vi.mock("../setup/legacy-global-cleanup", () => ({
+  cleanupLegacyGlobalMcp: mockCleanupLegacyGlobalMcp,
+  cleanupLegacyGlobalRule: mockCleanupLegacyGlobalRule,
+  cleanupLegacyGlobalSkill: mockCleanupLegacyGlobalSkill,
 }));
 
 vi.mock("../client/client", () => ({
@@ -180,15 +198,23 @@ describe("runAgentSetup", () => {
     mockFetchDosuRule.mockReset();
     mockInstallRuleForAgent.mockReset();
     mockIsRuleAgent.mockReset();
+    mockRulePathForAgent.mockReset();
     mockInstallSkill.mockReset();
     mockSkillAgentIDsForProviders.mockReset();
+    mockVerifiedProjectSkillProviderIDs.mockReset();
     mockInGitWorkTree.mockReset();
     mockUpsertDosuAgentsSection.mockReset();
     mockRequireProjectRoot.mockReset();
+    mockCleanupLegacyGlobalMcp.mockReset();
+    mockCleanupLegacyGlobalRule.mockReset();
+    mockCleanupLegacyGlobalSkill.mockReset();
     mockRequireProjectRoot.mockReturnValue("/tmp/repo");
     for (const fn of Object.values(mockClient)) fn.mockReset();
 
-    claudeProvider = makeProvider("claude", { name: () => "Claude Code" });
+    claudeProvider = makeProvider("claude", {
+      name: () => "Claude Code",
+      isProjectConfigured: () => true,
+    });
     desktopProvider = makeProvider("claude-desktop", {
       name: () => "Claude Desktop",
       supportsLocal: () => false,
@@ -198,6 +224,9 @@ describe("runAgentSetup", () => {
     mockLoadConfig.mockReturnValue(makeBaseConfig());
     mockFetchDosuRule.mockResolvedValue("canonical rule\n");
     mockIsRuleAgent.mockImplementation((agent: string) => agent === "claude");
+    mockRulePathForAgent.mockImplementation((_agent: string, projectRoot?: string) =>
+      projectRoot ? `${projectRoot}/rule.md` : "/tmp/global-rule.md",
+    );
     mockInstallRuleForAgent.mockImplementation((agent: string) => ({
       agent,
       action: "created",
@@ -206,6 +235,7 @@ describe("runAgentSetup", () => {
     mockSkillAgentIDsForProviders.mockImplementation((agents: string[]) =>
       agents.includes("claude") ? ["claude-code"] : [],
     );
+    mockVerifiedProjectSkillProviderIDs.mockImplementation((agents: string[]) => agents);
     mockInstallSkill.mockResolvedValue({ success: true, sha: "skill-sha" });
     mockInGitWorkTree.mockReturnValue(false);
     mockUpsertDosuAgentsSection.mockReturnValue({
@@ -344,7 +374,11 @@ describe("runAgentSetup", () => {
       quiet: true,
       projectRoot: "/tmp/repo",
     });
+    expect(mockVerifiedProjectSkillProviderIDs).toHaveBeenCalledWith(["claude"], "/tmp/repo");
     expect(mockUpsertDosuAgentsSection).toHaveBeenCalledWith("/tmp/repo", "canonical rule\n");
+    expect(mockCleanupLegacyGlobalMcp).toHaveBeenCalledWith(claudeProvider);
+    expect(mockCleanupLegacyGlobalRule).toHaveBeenCalledWith("claude");
+    expect(mockCleanupLegacyGlobalSkill).toHaveBeenCalledWith(["claude"]);
   });
 
   it("errors with multiple_deployments when the user has more than one dosu_mcp", async () => {
@@ -790,6 +824,7 @@ describe("runAgentSetup", () => {
     });
     expect(mockInstallRuleForAgent).not.toHaveBeenCalled();
     expect(mockInstallSkill).not.toHaveBeenCalled();
+    expect(mockCleanupLegacyGlobalMcp).not.toHaveBeenCalled();
   });
 
   it("reports a rule failure after preserving the installed MCP configuration", async () => {
@@ -820,6 +855,7 @@ describe("runAgentSetup", () => {
       agent_next_steps: expect.stringContaining("idempotent"),
     });
     expect(mockInstallSkill).not.toHaveBeenCalled();
+    expect(mockCleanupLegacyGlobalRule).not.toHaveBeenCalled();
   });
 
   it("reports a skill failure after preserving the MCP and rule installation", async () => {
@@ -848,6 +884,7 @@ describe("runAgentSetup", () => {
       reason: "install_failed",
       agent_next_steps: expect.stringContaining("idempotent"),
     });
+    expect(mockCleanupLegacyGlobalSkill).not.toHaveBeenCalled();
   });
 
   it("reports an AGENTS.md failure after preserving the other bundled installs", async () => {
@@ -864,6 +901,7 @@ describe("runAgentSetup", () => {
     mockClient.doRequestRaw.mockResolvedValue(new Response(null, { status: 200 }));
     mockClient.validateAPIKey.mockResolvedValue(true);
     mockInGitWorkTree.mockReturnValue(true);
+    mockVerifiedProjectSkillProviderIDs.mockReturnValue([]);
     mockUpsertDosuAgentsSection.mockImplementation(() => {
       throw new Error("AGENTS.md is read-only");
     });
@@ -874,6 +912,7 @@ describe("runAgentSetup", () => {
     expect(claudeProvider.install).toHaveBeenCalledTimes(1);
     expect(mockInstallRuleForAgent).toHaveBeenCalledTimes(1);
     expect(mockInstallSkill).toHaveBeenCalledTimes(1);
+    expect(mockCleanupLegacyGlobalSkill).not.toHaveBeenCalled();
     expect(emittedEvents().at(-1)).toMatchObject({
       step: "agents_md_install",
       status: "error",

@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,9 +20,11 @@ vi.mock("node:child_process", () => ({
 
 import {
   installSkill,
+  removeGlobalSkillQuietly,
   skillAgentIDsForProviders,
   skillCommand,
   skillInstallTargetForProvider,
+  verifiedProjectSkillProviderIDs,
 } from "./skill";
 
 let logSpy: ReturnType<typeof vi.spyOn>;
@@ -23,7 +33,22 @@ let errorSpy: ReturnType<typeof vi.spyOn>;
 let exitSpy: any;
 
 let tempDir: string;
+let origHome: string | undefined;
 let origXDG: string | undefined;
+let origXDGState: string | undefined;
+
+function writeDosuSkill(path: string): void {
+  mkdirSync(path, { recursive: true });
+  writeFileSync(join(path, "SKILL.md"), "---\nname: dosu\n---\n# Using the Dosu CLI\n");
+}
+
+function writeOwnedSkillLock(path: string): void {
+  mkdirSync(join(path, ".."), { recursive: true });
+  writeFileSync(
+    path,
+    JSON.stringify({ version: 3, skills: { dosu: { source: "dosu-ai/dosu-skill" } } }),
+  );
+}
 
 function allOutput(): string {
   return logSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
@@ -54,8 +79,12 @@ beforeEach(() => {
 
   // Isolate cache writes to a temp dir so they don't pollute $HOME
   origXDG = process.env.XDG_CONFIG_HOME;
-  tempDir = mkdtempSync(join(tmpdir(), "dosu-skill-test-"));
+  origXDGState = process.env.XDG_STATE_HOME;
+  origHome = process.env.HOME;
+  tempDir = realpathSync(mkdtempSync(join(tmpdir(), "dosu-skill-test-")));
+  process.env.HOME = tempDir;
   process.env.XDG_CONFIG_HOME = tempDir;
+  process.env.XDG_STATE_HOME = tempDir;
 
   // Default: fetch returns a SHA
   vi.stubGlobal(
@@ -76,6 +105,16 @@ afterEach(() => {
     process.env.XDG_CONFIG_HOME = origXDG;
   } else {
     delete process.env.XDG_CONFIG_HOME;
+  }
+  if (origXDGState !== undefined) {
+    process.env.XDG_STATE_HOME = origXDGState;
+  } else {
+    delete process.env.XDG_STATE_HOME;
+  }
+  if (origHome !== undefined) {
+    process.env.HOME = origHome;
+  } else {
+    delete process.env.HOME;
   }
   rmSync(tempDir, { recursive: true, force: true });
   vi.unstubAllEnvs();
@@ -116,6 +155,106 @@ describe("skill install", () => {
     });
     await expect(run("install")).rejects.toThrow("exit");
     expect(allErrors()).toContain("Failed to install skill");
+  });
+});
+
+describe("quiet global skill cleanup", () => {
+  it("removes only the historical global Dosu skill", async () => {
+    writeOwnedSkillLock(join(tempDir, "skills", ".skill-lock.json"));
+    const canonical = join(tempDir, ".agents", "skills", "dosu");
+    writeDosuSkill(canonical);
+    mkdirSync(join(tempDir, ".claude", "skills"), { recursive: true });
+    symlinkSync(canonical, join(tempDir, ".claude", "skills", "dosu"));
+
+    await expect(removeGlobalSkillQuietly(["claude", "cursor"])).resolves.toBe(true);
+
+    expect(mockExec).toHaveBeenCalledWith(
+      "npx -y skills@1.5.22 remove -g -a claude-code -s dosu -y",
+      { windowsHide: true },
+      expect.any(Function),
+    );
+  });
+
+  it("silently reports failure", async () => {
+    writeOwnedSkillLock(join(tempDir, "skills", ".skill-lock.json"));
+    const canonical = join(tempDir, ".agents", "skills", "dosu");
+    writeDosuSkill(canonical);
+    mkdirSync(join(tempDir, ".claude", "skills"), { recursive: true });
+    symlinkSync(canonical, join(tempDir, ".claude", "skills", "dosu"));
+    mockExec.mockImplementation((...args: unknown[]) => {
+      const callback = args.at(-1) as (error: Error | null) => void;
+      callback(new Error("remove failed"));
+    });
+
+    await expect(removeGlobalSkillQuietly(["claude"])).resolves.toBe(false);
+  });
+
+  it("preserves missing, malformed, and foreign global skills", async () => {
+    await expect(removeGlobalSkillQuietly(["claude"])).resolves.toBe(false);
+
+    const lockDir = join(tempDir, "skills");
+    mkdirSync(lockDir, { recursive: true });
+    const lockPath = join(lockDir, ".skill-lock.json");
+    writeFileSync(lockPath, "not-json");
+    await expect(removeGlobalSkillQuietly(["claude"])).resolves.toBe(false);
+
+    writeFileSync(
+      lockPath,
+      JSON.stringify({ version: 3, skills: { dosu: { source: "someone-else/dosu" } } }),
+    );
+    await expect(removeGlobalSkillQuietly(["claude"])).resolves.toBe(false);
+
+    expect(mockExec).not.toHaveBeenCalled();
+  });
+
+  it("does not run for a provider without a project skill target", async () => {
+    await expect(removeGlobalSkillQuietly(["manual"])).resolves.toBe(false);
+
+    expect(mockExec).not.toHaveBeenCalled();
+  });
+
+  it("preserves universal global skills shared by other agents", async () => {
+    writeOwnedSkillLock(join(tempDir, "skills", ".skill-lock.json"));
+    writeDosuSkill(join(tempDir, ".agents", "skills", "dosu"));
+
+    await expect(removeGlobalSkillQuietly(["cursor", "codex"])).resolves.toBe(false);
+
+    expect(mockExec).not.toHaveBeenCalled();
+  });
+
+  it("preserves a foreign canonical skill even when an isolated target is owned", async () => {
+    writeOwnedSkillLock(join(tempDir, "skills", ".skill-lock.json"));
+    const canonical = join(tempDir, ".agents", "skills", "dosu");
+    mkdirSync(canonical, { recursive: true });
+    writeFileSync(join(canonical, "SKILL.md"), "---\nname: dosu\n---\n# Foreign skill\n");
+    writeDosuSkill(join(tempDir, ".claude", "skills", "dosu"));
+
+    await expect(removeGlobalSkillQuietly(["claude"])).resolves.toBe(false);
+
+    rmSync(canonical, { recursive: true });
+    symlinkSync(join(tempDir, "missing-canonical"), canonical);
+    await expect(removeGlobalSkillQuietly(["claude"])).resolves.toBe(false);
+
+    expect(mockExec).not.toHaveBeenCalled();
+  });
+
+  it("preserves a global skill behind a symlinked parent or lock path", async () => {
+    const outside = join(tempDir, "outside");
+    writeDosuSkill(join(outside, "skills", "dosu"));
+    symlinkSync(outside, join(tempDir, ".agents"));
+    writeOwnedSkillLock(join(tempDir, "skills", ".skill-lock.json"));
+
+    await expect(removeGlobalSkillQuietly(["cursor"])).resolves.toBe(false);
+
+    rmSync(join(tempDir, ".agents"));
+    mkdirSync(join(tempDir, ".agents"));
+    const outsideLock = join(tempDir, "outside-lock.json");
+    writeOwnedSkillLock(outsideLock);
+    rmSync(join(tempDir, "skills", ".skill-lock.json"));
+    symlinkSync(outsideLock, join(tempDir, "skills", ".skill-lock.json"));
+
+    await expect(removeGlobalSkillQuietly(["cursor"])).resolves.toBe(false);
+    expect(mockExec).not.toHaveBeenCalled();
   });
 });
 
@@ -335,6 +474,39 @@ describe("installSkill helper", () => {
 
   it("returns null for a provider without skill support", () => {
     expect(skillInstallTargetForProvider("manual")).toBeNull();
+  });
+
+  it("verifies each project skill target before legacy cleanup", () => {
+    const projectRoot = join(tempDir, "project");
+    mkdirSync(projectRoot);
+    writeOwnedSkillLock(join(projectRoot, "skills-lock.json"));
+    writeDosuSkill(join(projectRoot, ".claude", "skills", "dosu"));
+    writeDosuSkill(join(projectRoot, ".agents", "skills", "dosu"));
+
+    expect(verifiedProjectSkillProviderIDs(["claude", "cursor"], projectRoot)).toEqual([
+      "claude",
+      "cursor",
+    ]);
+
+    writeFileSync(
+      join(projectRoot, ".claude", "skills", "dosu", "SKILL.md"),
+      "---\nname: dosu\n---\n# Foreign skill\n",
+    );
+    expect(verifiedProjectSkillProviderIDs(["claude", "cursor"], projectRoot)).toEqual(["cursor"]);
+  });
+
+  it("does not verify a project skill without an owned lock or through a symlink", () => {
+    const projectRoot = join(tempDir, "project");
+    const outside = join(tempDir, "outside-skill");
+    mkdirSync(projectRoot);
+    writeDosuSkill(outside);
+    mkdirSync(join(projectRoot, ".claude", "skills"), { recursive: true });
+    symlinkSync(outside, join(projectRoot, ".claude", "skills", "dosu"));
+
+    expect(verifiedProjectSkillProviderIDs(["claude"], projectRoot)).toEqual([]);
+
+    writeOwnedSkillLock(join(projectRoot, "skills-lock.json"));
+    expect(verifiedProjectSkillProviderIDs(["claude"], projectRoot)).toEqual([]);
   });
 
   it("keeps the installer quiet for agent-mediated setup", async () => {

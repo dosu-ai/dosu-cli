@@ -15,7 +15,11 @@
 
 import { exchangeTicket, mintTicket } from "../auth/ticket";
 import { Client, type Deployment } from "../client/client";
-import { installSkill, skillAgentIDsForProviders } from "../commands/skill";
+import {
+  installSkill,
+  skillAgentIDsForProviders,
+  verifiedProjectSkillProviderIDs,
+} from "../commands/skill";
 import {
   type Config,
   loadConfig,
@@ -26,8 +30,18 @@ import {
 import { logger } from "../debug/logger";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders } from "../mcp/providers";
-import { fetchDosuRule, installRuleForAgent, isRuleAgent } from "../rules/installer";
+import {
+  fetchDosuRule,
+  installRuleForAgent,
+  isRuleAgent,
+  rulePathForAgent,
+} from "../rules/installer";
 import { upsertDosuAgentsSection } from "../setup/agents-md-step";
+import {
+  cleanupLegacyGlobalMcp,
+  cleanupLegacyGlobalRule,
+  cleanupLegacyGlobalSkill,
+} from "../setup/legacy-global-cleanup";
 import { requireProjectRoot } from "../setup/project-root";
 import { emitError, emitNeedUserAction, emitStep } from "./output";
 
@@ -108,6 +122,9 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
   // 4. Install Dosu MCP into the requested tool.
   try {
     provider.install(cfg, false, { projectRoot });
+    if (provider.isProjectConfigured(projectRoot)) {
+      cleanupLegacyGlobalMcp(provider);
+    }
     emitStep({
       step: "mcp_install",
       tool: provider.id(),
@@ -133,6 +150,7 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
       instruction = await fetchDosuRule();
       const rule = installRuleForAgent(provider.id(), instruction, projectRoot);
       if (rule) {
+        cleanupLegacyGlobalRule(provider.id());
         emitStep({
           step: "rule_install",
           tool: provider.id(),
@@ -162,6 +180,8 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
       if (!skill.success) {
         throw new Error("the skills installer failed");
       }
+      const verifiedProviders = verifiedProjectSkillProviderIDs([provider.id()], projectRoot);
+      if (verifiedProviders.length > 0) await cleanupLegacyGlobalSkill(verifiedProviders);
       emitStep({
         step: "skill_install",
         tool: provider.id(),
@@ -185,6 +205,9 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
   try {
     instruction ??= await fetchDosuRule();
     const agentsMd = upsertDosuAgentsSection(projectRoot, instruction);
+    if (isRuleAgent(provider.id()) && rulePathForAgent(provider.id(), projectRoot) === null) {
+      cleanupLegacyGlobalRule(provider.id());
+    }
     emitStep({
       step: "agents_md_install",
       path: agentsMd.path,

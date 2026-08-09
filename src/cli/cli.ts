@@ -47,7 +47,8 @@ import {
 import { getAccessTokenEmail, getAccessTokenUserID } from "../config/identity";
 import { logger } from "../debug/logger";
 import { runProjectProxy } from "../mcp/project-proxy";
-import { allProviders, getProvider, type Provider } from "../mcp/providers";
+import { allProviders, getProvider, type Provider, type SetupProvider } from "../mcp/providers";
+import { cleanupLegacyGlobalMcp } from "../setup/legacy-global-cleanup";
 import { requireProjectRoot } from "../setup/project-root";
 import { browserFallbackHint } from "../setup/styles";
 import {
@@ -179,6 +180,10 @@ async function finishTelemetry(operation: () => Promise<void>): Promise<void> {
   } finally {
     if (timeout) clearTimeout(timeout);
   }
+}
+
+function isSetupProvider(provider: Provider): provider is SetupProvider {
+  return "isProjectConfigured" in provider && typeof provider.isProjectConfigured === "function";
 }
 
 /** Suggest the closest registered command name for a mistyped one, if any is close enough. */
@@ -527,6 +532,9 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
       console.log(`Adding Dosu MCP to ${provider.name()} (${scope})...`);
 
       provider.install(cfg, global, { showSecret: opts.showSecret, projectRoot });
+      if (!global && projectRoot && isSetupProvider(provider)) {
+        if (provider.isProjectConfigured(projectRoot)) cleanupLegacyGlobalMcp(provider);
+      }
 
       console.log(`\n✓ Successfully added Dosu MCP to ${provider.name()}!`);
       if (global) {

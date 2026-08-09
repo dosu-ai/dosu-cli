@@ -3,16 +3,25 @@
  */
 
 import { exec, execSync } from "node:child_process";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Command } from "commander";
 import pc from "picocolors";
 import { logger } from "../debug/logger";
-import { assertSafeProjectPath } from "../setup/project-root";
+import { assertSafeProjectPath, hasSymlinkInPath } from "../setup/project-root";
 import { clearInstalledSha, fetchLatestSha, writeSkillCache } from "../version/skill-update-check";
 
 const SKILL_REPO = "dosu-ai/dosu-skill";
 const SKILL_NAME = "dosu";
+// Pin the temporary destructive migration to the skills CLI behavior audited for this release.
+const LEGACY_SKILLS_CLI_VERSION = "1.5.22";
+const ISOLATED_LEGACY_GLOBAL_SKILL_PROVIDERS = new Set(["claude", "factory"]);
+const OWNED_SKILL_SOURCES = new Set([
+  SKILL_REPO,
+  `https://github.com/${SKILL_REPO}`,
+  `https://github.com/${SKILL_REPO}.git`,
+]);
 /**
  * Names are interpolated into a shell command as positional arguments, so keep
  * them boring. The leading character must be alphanumeric: `skills list` echoes
@@ -124,6 +133,115 @@ function execQuiet(command: string, cwd?: string): Promise<void> {
       else resolve();
     });
   });
+}
+
+function hasOwnedSkillLock(lockPath: string): boolean {
+  try {
+    const lock = JSON.parse(readFileSync(lockPath, "utf-8")) as {
+      skills?: Record<string, { source?: unknown; sourceUrl?: unknown }>;
+    };
+    const entry = lock.skills?.[SKILL_NAME];
+    return Boolean(
+      entry &&
+        [entry.source, entry.sourceUrl].some(
+          (source) => typeof source === "string" && OWNED_SKILL_SOURCES.has(source),
+        ),
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isDosuSkillDirectory(path: string): boolean {
+  try {
+    const skillFile = join(path, "SKILL.md");
+    if (!lstatSync(path).isDirectory() || hasSymlinkInPath(skillFile)) return false;
+    if (!lstatSync(skillFile).isFile()) return false;
+    const content = readFileSync(skillFile, "utf-8");
+    return /^name:\s*['"]?dosu['"]?\s*$/m.test(content) && content.includes("Dosu CLI");
+  } catch {
+    return false;
+  }
+}
+
+function pathEntryExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function safeLegacyGlobalSkillProviderIDs(providerIDs: readonly string[]): string[] {
+  const canonicalPath = join(homedir(), ".agents", "skills", SKILL_NAME);
+  if (hasSymlinkInPath(canonicalPath)) return [];
+  if (pathEntryExists(canonicalPath) && !isDosuSkillDirectory(canonicalPath)) return [];
+  return [...new Set(providerIDs)].filter((providerID) => {
+    // Universal agents share ~/.agents/skills and have extra upstream removal
+    // paths, so they keep their global copy until that can be migrated safely.
+    if (!ISOLATED_LEGACY_GLOBAL_SKILL_PROVIDERS.has(providerID)) return false;
+    const target = skillInstallTargetForProvider(providerID);
+    if (!target || !pathEntryExists(target.path) || hasSymlinkInPath(dirname(target.path))) {
+      return false;
+    }
+    try {
+      const stat = lstatSync(target.path);
+      if (!stat.isSymbolicLink()) return isDosuSkillDirectory(target.path);
+      if (!target.symlink || hasSymlinkInPath(dirname(canonicalPath))) return false;
+      return (
+        realpathSync(target.path) === realpathSync(canonicalPath) &&
+        isDosuSkillDirectory(canonicalPath)
+      );
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** Providers whose expected project skill target is a verified Dosu copy. */
+export function verifiedProjectSkillProviderIDs(
+  providerIDs: readonly string[],
+  projectRoot: string,
+): string[] {
+  const lockPath = join(projectRoot, "skills-lock.json");
+  try {
+    assertSafeProjectPath(projectRoot, lockPath);
+    if (!hasOwnedSkillLock(lockPath)) return [];
+  } catch {
+    return [];
+  }
+
+  return [...new Set(providerIDs)].filter((providerID) => {
+    const target = skillInstallTargetForProvider(providerID, projectRoot);
+    if (!target) return false;
+    try {
+      assertSafeProjectPath(projectRoot, target.path);
+      assertSafeProjectPath(projectRoot, join(target.path, "SKILL.md"));
+      return isDosuSkillDirectory(target.path);
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** Best-effort removal used only by the temporary legacy setup migration. */
+export async function removeGlobalSkillQuietly(providerIDs: readonly string[]): Promise<boolean> {
+  try {
+    const stateRoot = process.env.XDG_STATE_HOME?.trim();
+    const lockPath = stateRoot
+      ? join(stateRoot, "skills", ".skill-lock.json")
+      : join(homedir(), ".agents", ".skill-lock.json");
+    if (hasSymlinkInPath(lockPath) || !hasOwnedSkillLock(lockPath)) return false;
+    const agentIDs = skillAgentIDsForProviders(safeLegacyGlobalSkillProviderIDs(providerIDs));
+    if (agentIDs.length === 0) return false;
+    await execQuiet(
+      `npx -y skills@${LEGACY_SKILLS_CLI_VERSION} remove -g -a ${agentIDs.join(" ")} -s ${SKILL_NAME} -y`,
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

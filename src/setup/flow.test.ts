@@ -113,8 +113,11 @@ vi.mock("../client/client", () => {
 });
 
 const mockInstallSkill = vi.fn();
+const mockVerifiedProjectSkillProviderIDs = vi.fn();
 vi.mock("../commands/skill", () => ({
   installSkill: (...args: unknown[]) => mockInstallSkill(...args),
+  verifiedProjectSkillProviderIDs: (...args: unknown[]) =>
+    mockVerifiedProjectSkillProviderIDs(...args),
   skillAgentIDsForProviders: (providerIDs: string[]) =>
     providerIDs
       .map(
@@ -173,6 +176,17 @@ const { mockStepConfigureAgentRules } = vi.hoisted(() => ({
 vi.mock("./rules-step", () => ({
   stepConfigureAgentRules: (...args: unknown[]) => mockStepConfigureAgentRules(...args),
 }));
+const { mockCleanupLegacyGlobalMcp, mockCleanupLegacyGlobalRule, mockCleanupLegacyGlobalSkill } =
+  vi.hoisted(() => ({
+    mockCleanupLegacyGlobalMcp: vi.fn(),
+    mockCleanupLegacyGlobalRule: vi.fn(),
+    mockCleanupLegacyGlobalSkill: vi.fn(),
+  }));
+vi.mock("./legacy-global-cleanup", () => ({
+  cleanupLegacyGlobalMcp: mockCleanupLegacyGlobalMcp,
+  cleanupLegacyGlobalRule: mockCleanupLegacyGlobalRule,
+  cleanupLegacyGlobalSkill: mockCleanupLegacyGlobalSkill,
+}));
 const { mockRequireProjectRoot } = vi.hoisted(() => ({
   mockRequireProjectRoot: vi.fn(),
 }));
@@ -229,6 +243,7 @@ function installSetupStepDefaults() {
   mockStepConfigureAgentRules.mockResolvedValue([]);
   mockOfferLogsHandoff.mockResolvedValue({ plan: null });
   mockRequireProjectRoot.mockImplementation(() => tempDir);
+  mockVerifiedProjectSkillProviderIDs.mockImplementation((providerIDs: string[]) => providerIDs);
 }
 
 function installRemoteSetupDefaults() {
@@ -446,6 +461,7 @@ describe("stepConfigureTools", () => {
     expect(written.mcpServers.dosu.command).toBe("npx");
     expect(written.mcpServers.dosu.args).toContain("dep-123");
     expect(JSON.stringify(written)).not.toContain("key-abc");
+    expect(mockCleanupLegacyGlobalMcp).toHaveBeenCalledWith(cursor);
   });
 
   it("removes a provider and deletes the dosu entry from disk", () => {
@@ -549,6 +565,7 @@ describe("stepConfigureTools", () => {
     expect(results[0].action).toBe("install");
     expect(results[0].error).toBeDefined();
     expect(results[0].error?.message).toContain("boom");
+    expect(mockCleanupLegacyGlobalMcp).not.toHaveBeenCalled();
     // p.log.error should have been called
     expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Broken Tool"));
   });
@@ -1594,6 +1611,38 @@ describe("runSetup integration", () => {
     expect(p.log.success).toHaveBeenCalledWith(
       expect.stringContaining(`${tempDir}/.agents/skills/dosu`),
     );
+    expect(mockVerifiedProjectSkillProviderIDs).toHaveBeenCalledWith(["cursor"], tempDir);
+    expect(mockCleanupLegacyGlobalSkill).toHaveBeenCalledWith(["cursor"]);
+  });
+
+  it("keeps the global skill when the project target cannot be verified", async () => {
+    const cfg = makeCfg();
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    mockToolSelection(["cursor"]);
+    mockVerifiedProjectSkillProviderIDs.mockReturnValue([]);
+
+    await runSetup();
+
+    expect(mockCleanupLegacyGlobalSkill).not.toHaveBeenCalled();
+  });
+
+  it("cleans instruction-only global rules after the project AGENTS.md succeeds", async () => {
+    const cfg = makeCfg();
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    mkdirSync(join(tempDir, ".config", "opencode"), { recursive: true });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [OpenCodeProvider()]);
+    mockToolSelection(["opencode"]);
+
+    await runSetup();
+
+    expect(mockStepUpdateAgentsMd).toHaveBeenCalledWith(tempDir);
+    expect(mockCleanupLegacyGlobalRule).toHaveBeenCalledWith("opencode");
   });
 
   it("does not install the skill when no agent is selected", async () => {

@@ -4,7 +4,7 @@
  */
 
 import { type Config, MODE_OSS } from "../../config/config";
-import { assertSafeProjectPath } from "../../setup/project-root";
+import { assertSafeProjectPath, hasSymlinkInPath } from "../../setup/project-root";
 import {
   getJSONServer,
   installJSONServer,
@@ -15,6 +15,7 @@ import {
   removeJSONServer,
 } from "../config-helpers";
 import { expandHome, isInstalled } from "../detect";
+import { isReleasedLegacyGlobalMcpServer } from "../legacy-global";
 import {
   buildProjectProxyCommand,
   isDosuOwnedMcpServer,
@@ -92,6 +93,18 @@ export function createJSONProvider(opts: BaseProviderConfig): SetupProvider {
       if (!path) return false;
       try {
         return isDosuOwnedMcpServer(getJSONServer(path, opts.topKey));
+      } catch {
+        return false;
+      }
+    },
+    removeLegacyGlobal: () => {
+      const path = expandHome(opts.globalPath);
+      try {
+        if (hasSymlinkInPath(path)) return false;
+        const existing = getJSONServer(path, opts.topKey);
+        if (!isReleasedLegacyGlobalMcpServer(opts.providerID, existing)) return false;
+        removeJSONServer(path, opts.topKey);
+        return true;
       } catch {
         return false;
       }

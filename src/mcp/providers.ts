@@ -36,6 +36,8 @@ export interface SetupProvider extends Provider {
   globalConfigPath(): string;
   projectConfigPath(projectRoot: string): string | null;
   isProjectConfigured(projectRoot: string): boolean;
+  /** Temporary migration hook for removing only a verified Dosu entry at the old global path. */
+  removeLegacyGlobal?(): boolean;
   priority(): number;
 }
 
