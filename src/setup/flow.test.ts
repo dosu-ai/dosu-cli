@@ -52,6 +52,14 @@ vi.mock("../debug/logger", () => ({
   },
 }));
 
+vi.mock("../telemetry/consent", () => ({
+  promptForTelemetryConsent: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../telemetry/settings", () => ({
+  isTelemetryEnabled: vi.fn(() => true),
+}));
+
 // tRPC client used by:
 //   - completeOnboarding via `user.updateProfile`
 //   - github step via `workspaces.create`, `dataSource.create`, etc.
@@ -169,6 +177,7 @@ import { CursorProvider } from "../mcp/providers/cursor";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
 import {
   type ConfigResult,
+  cliAuthFailureReason,
   runInstallSkill,
   runSetup,
   stepConfigureTools,
@@ -218,13 +227,19 @@ function installRemoteSetupDefaults() {
 let tempDir: string;
 let origHome: string | undefined;
 let origXdg: string | undefined;
+let origWebAppURLOverride: string | undefined;
+let origPostHogTokenOverride: string | undefined;
 
 function setupTempEnv() {
   tempDir = mkdtempSync(join(tmpdir(), "dosu-flow-test-"));
   origHome = process.env.HOME;
   origXdg = process.env.XDG_CONFIG_HOME;
+  origWebAppURLOverride = process.env.DOSU_WEB_APP_URL_OVERRIDE;
+  origPostHogTokenOverride = process.env.DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE;
   process.env.HOME = tempDir;
   process.env.XDG_CONFIG_HOME = tempDir;
+  process.env.DOSU_WEB_APP_URL_OVERRIDE = "https://app.test.dev";
+  process.env.DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE = "phc_test_public";
 }
 
 function teardownTempEnv() {
@@ -233,6 +248,16 @@ function teardownTempEnv() {
     process.env.XDG_CONFIG_HOME = origXdg;
   } else {
     delete process.env.XDG_CONFIG_HOME;
+  }
+  if (origWebAppURLOverride !== undefined) {
+    process.env.DOSU_WEB_APP_URL_OVERRIDE = origWebAppURLOverride;
+  } else {
+    delete process.env.DOSU_WEB_APP_URL_OVERRIDE;
+  }
+  if (origPostHogTokenOverride !== undefined) {
+    process.env.DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE = origPostHogTokenOverride;
+  } else {
+    delete process.env.DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE;
   }
   rmSync(tempDir, { recursive: true, force: true });
 }
@@ -719,6 +744,34 @@ describe("runSetup integration", () => {
     expect(p.log.error).toHaveBeenCalledWith(
       "Authentication failed: OAuth state expired. Run `dosu login` again.",
     );
+    expect(
+      cliAuthFailureReason(
+        new OAuthCallbackError("OAuth state expired", {
+          errorCode: "bad_oauth_state",
+          errorDescription: "secret callback detail",
+        }),
+      ),
+    ).toBe("bad_oauth_state");
+    expect(
+      cliAuthFailureReason(
+        new OAuthCallbackError("private", { errorCode: "customer_private_value" }),
+      ),
+    ).toBe("oauth_callback_error");
+  });
+
+  it("never sends a raw unexpected authentication error as analytics", async () => {
+    mockStartOAuthFlow.mockRejectedValue(
+      new Error("token=secret-value failed in /Users/alice/private-repo"),
+    );
+
+    await runSetup();
+
+    const reason = cliAuthFailureReason(
+      new Error("token=secret-value failed in /Users/alice/private-repo"),
+    );
+    expect(reason).toBe("unexpected_auth_error");
+    expect(reason).not.toContain("secret-value");
+    expect(reason).not.toContain("private-repo");
   });
 
   it("completes full flow with existing token and no tools", async () => {

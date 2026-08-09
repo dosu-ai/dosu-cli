@@ -4,6 +4,7 @@
 
 import { randomUUID } from "node:crypto";
 import * as p from "@clack/prompts";
+import { OAuthCallbackError } from "../auth/errors";
 import { Client, type Deployment, type Org, SessionExpiredError } from "../client/client";
 import { installSkill, skillInstallTargetForProvider } from "../commands/skill";
 import {
@@ -19,6 +20,7 @@ import {
 import { logger } from "../debug/logger";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
+import { promptForTelemetryConsent } from "../telemetry/consent";
 import { inGitWorkTree, stepUpdateAgentsMd } from "./agents-md-step";
 import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
 import { launchAuditAgent, offerAuditHandoff } from "./audit-handoff";
@@ -64,6 +66,17 @@ interface CliOnboardingProfile {
   // the CLI deliberately no longer reads it.
 }
 
+const OAUTH_ANALYTICS_REASONS = new Set([
+  "access_denied",
+  "bad_oauth_state",
+  "invalid_request",
+  "invalid_scope",
+  "server_error",
+  "temporarily_unavailable",
+  "unauthorized_client",
+  "unsupported_response_type",
+]);
+
 export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   const onboardingRunID = randomUUID();
   logger.info(
@@ -73,6 +86,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     }`,
   );
   p.intro("Dosu CLI Setup");
+  await promptForTelemetryConsent();
   await trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_launch_attempted", {
     has_deployment_option: Boolean(opts.deploymentID),
     mode_option: opts.mode,
@@ -466,12 +480,11 @@ async function openBrowserForSetup(
     /* v8 ignore next 2 -- err is always Error in practice */
     const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
     logger.error("setup", `Auth failed: ${msg}`);
-    const { OAuthCallbackError } = await import("../auth/errors");
     if (err instanceof OAuthCallbackError) {
       p.log.error(err.userMessage);
       if (onboardingRunID) {
         await trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_auth_failed", {
-          reason: err.errorCode ?? err.errorDescription ?? "oauth_callback_error",
+          reason: cliAuthFailureReason(err),
         });
       }
       return null;
@@ -479,11 +492,18 @@ async function openBrowserForSetup(
     p.log.error(`Authentication failed: ${err instanceof Error ? err.message : String(err)}`);
     if (onboardingRunID) {
       await trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_auth_failed", {
-        reason: err instanceof Error ? err.message : String(err),
+        reason: cliAuthFailureReason(err),
       });
     }
     return null;
   }
+}
+
+/** Stable, low-cardinality analytics reason. Raw OAuth/error text may contain local data. */
+export function cliAuthFailureReason(err: unknown): string {
+  if (!(err instanceof OAuthCallbackError)) return "unexpected_auth_error";
+  const code = err.errorCode;
+  return code && OAUTH_ANALYTICS_REASONS.has(code) ? code : "oauth_callback_error";
 }
 
 /**

@@ -20,6 +20,7 @@ import { reviewCommand } from "../commands/review";
 import { skillCommand } from "../commands/skill";
 import { sourcesCommand } from "../commands/sources";
 import { suggestCommand } from "../commands/suggest";
+import { telemetryCommand } from "../commands/telemetry";
 import { threadsCommand } from "../commands/threads";
 import { topicsCommand } from "../commands/topics";
 import { upgradeCommand } from "../commands/upgrade";
@@ -37,6 +38,16 @@ import {
 import { logger } from "../debug/logger";
 import { allProviders, getProvider, type Provider } from "../mcp/providers";
 import { browserFallbackHint } from "../setup/styles";
+import {
+  getOrCreateInstallID,
+  isTelemetryEnabled,
+  loadTelemetrySettings,
+} from "../telemetry/settings";
+import {
+  type CommandTelemetry,
+  type CommandTelemetryContext,
+  createCommandTelemetry,
+} from "../telemetry/telemetry";
 import { checkForReadyTasks } from "../version/pending-tasks-check";
 import { checkForSkillUpdates } from "../version/skill-update-check";
 import { checkForUpdates } from "../version/update-check";
@@ -56,6 +67,55 @@ function isHookEntrypointInvocation(argv: string[]): boolean {
 export function shouldRunBackgroundChecks(actionName: string, argv: string[]): boolean {
   return actionName !== "upgrade" && !isHookEntrypointInvocation(argv);
 }
+
+const TELEMETRY_EXCLUDED_COMMANDS = new Set([
+  "hooks user-prompt-submit",
+  "hooks post-tool-use",
+  "hooks stop",
+]);
+
+class CliUsageError extends Error {
+  readonly exitCode = 1;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "CliUsageError";
+  }
+}
+
+function commandTelemetryName(actionCommand: Command): string {
+  const segments: string[] = [];
+  let current: Command | null = actionCommand;
+  while (current.parent) {
+    segments.unshift(current.name());
+    current = current.parent;
+  }
+  if (segments.length > 0) return segments.join(" ");
+  return actionCommand.args.length > 0 ? "unknown" : "tui";
+}
+
+function shouldTrackCommand(command: string): boolean {
+  if (command === "telemetry" || command.startsWith("telemetry ")) return false;
+  return !TELEMETRY_EXCLUDED_COMMANDS.has(command);
+}
+
+function commandTelemetryContext(): CommandTelemetryContext {
+  try {
+    const cfg = loadConfig();
+    return {
+      mode: cfg.mode === MODE_OSS ? "oss" : "cloud",
+      isAuthenticated: isAuthenticated(cfg),
+    };
+  } catch {
+    return { mode: "cloud", isAuthenticated: false };
+  }
+}
+
+export const _cliTelemetryInternals = {
+  isHookEntrypoint: isHookEntrypointInvocation,
+  shouldTrack: shouldTrackCommand,
+  processTelemetry: processCommandTelemetry,
+};
 
 /** Suggest the closest registered command name for a mistyped one, if any is close enough. */
 function suggestClosestCommand(input: string, program: Command): string | undefined {
@@ -87,8 +147,10 @@ function editDistance(a: string, b: string): number {
   return prev[b.length];
 }
 
-export function createProgram(): Command {
+export function createProgram(options: { telemetry?: CommandTelemetry } = {}): Command {
   const program = new Command();
+  let telemetryStarted = false;
+  let telemetryValidationFailure = false;
 
   program
     .name("dosu")
@@ -106,6 +168,21 @@ export function createProgram(): Command {
         checkForSkillUpdates();
         checkForReadyTasks();
       }
+      const command = commandTelemetryName(actionCommand);
+      if (options.telemetry && shouldTrackCommand(command)) {
+        options.telemetry.start(command, commandTelemetryContext());
+        telemetryStarted = true;
+      }
+    })
+    .hook("postAction", async () => {
+      const exitCode = Number(process.exitCode ?? 0);
+      if (telemetryStarted) {
+        if (telemetryValidationFailure) {
+          await options.telemetry?.fail(new CliUsageError("expected CLI usage error"));
+        } else {
+          await options.telemetry?.complete(Number.isFinite(exitCode) ? exitCode : 1);
+        }
+      }
     })
     .allowExcessArguments(true)
     .action(async () => {
@@ -118,6 +195,7 @@ export function createProgram(): Command {
         if (suggestion) message += `\n(Did you mean '${suggestion}'?)`;
         message += "\nRun 'dosu --help' to see available commands.";
         console.error(message);
+        telemetryValidationFailure = true;
         process.exitCode = 1;
         return;
       }
@@ -346,21 +424,23 @@ export function createProgram(): Command {
       try {
         provider = getProvider(toolId.toLowerCase());
       } catch {
-        throw new Error(`unknown tool '${toolId}'. Use 'dosu mcp list' to see available tools`);
+        throw new CliUsageError(
+          `unknown tool '${toolId}'. Use 'dosu mcp list' to see available tools`,
+        );
       }
       const cfg = loadConfig();
 
       if (!isAuthenticated(cfg)) {
-        throw new Error("not logged in. Run 'dosu login' first");
+        throw new CliUsageError("not logged in. Run 'dosu login' first");
       }
       if (isTokenExpired(cfg) && !(await ensureFreshSession(cfg))) {
-        throw new Error("session expired. Run 'dosu login' to re-authenticate");
+        throw new CliUsageError("session expired. Run 'dosu login' to re-authenticate");
       }
       if (cfg.mode !== MODE_OSS && !cfg.active_account?.target?.deployment_id) {
-        throw new Error("no MCP selected. Run 'dosu' to open the TUI and select an MCP");
+        throw new CliUsageError("no MCP selected. Run 'dosu' to open the TUI and select an MCP");
       }
       if (!cfg.active_account?.target?.api_key) {
-        throw new Error("no API key available. Run 'dosu setup' to create one");
+        throw new CliUsageError("no API key available. Run 'dosu setup' to create one");
       }
 
       if (provider.id() === "manual") {
@@ -416,6 +496,7 @@ export function createProgram(): Command {
   program.addCommand(reviewCommand());
   program.addCommand(sourcesCommand());
   program.addCommand(suggestCommand());
+  program.addCommand(telemetryCommand());
   program.addCommand(topicsCommand());
   program.addCommand(threadsCommand());
   program.addCommand(skillCommand());
@@ -467,7 +548,7 @@ export function createProgram(): Command {
 
         // Non-agent flags that only make sense with --agent.
         if (opts.tool || opts.loginTicket) {
-          throw new Error("--tool and --login-ticket require --agent");
+          throw new CliUsageError("--tool and --login-ticket require --agent");
         }
 
         const { runSetup } = await import("../setup/flow");
@@ -475,7 +556,9 @@ export function createProgram(): Command {
         if (opts.mode !== undefined) {
           const normalized = opts.mode.toLowerCase();
           if (normalized !== "oss" && normalized !== "cloud") {
-            throw new Error(`invalid --mode value '${opts.mode}' (expected 'oss' or 'cloud')`);
+            throw new CliUsageError(
+              `invalid --mode value '${opts.mode}' (expected 'oss' or 'cloud')`,
+            );
           }
           mode = normalized;
         }
@@ -534,6 +617,39 @@ async function ensureFreshSession(cfg: Config): Promise<boolean> {
 }
 
 export async function execute(): Promise<void> {
-  const program = createProgram();
-  await program.parseAsync(process.argv);
+  const telemetry = isHookEntrypointInvocation(process.argv)
+    ? undefined
+    : processCommandTelemetry();
+  const program = createProgram({ telemetry });
+  try {
+    await program.parseAsync(process.argv);
+  } catch (err: unknown) {
+    await telemetry?.fail(err);
+    throw err;
+  }
+}
+
+function processCommandTelemetry(): CommandTelemetry | undefined {
+  try {
+    let analytics = isTelemetryEnabled("analytics");
+    const errors = isTelemetryEnabled("errors");
+    if (!analytics && !errors) return undefined;
+
+    const settings = loadTelemetrySettings();
+    let installID = settings.install_id;
+    if (analytics && !installID) {
+      installID = getOrCreateInstallID();
+      if (!installID) analytics = false;
+    }
+    if (!analytics && !errors) return undefined;
+
+    return createCommandTelemetry({
+      schema_version: settings.schema_version,
+      analytics,
+      errors,
+      ...(installID ? { install_id: installID } : {}),
+    });
+  } catch {
+    return undefined;
+  }
 }

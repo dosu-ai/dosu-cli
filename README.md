@@ -100,6 +100,7 @@ Or right-click the binary, select "Open", and click "Open" in the dialog.
 | `dosu mcp list` | List supported AI tools |
 | `dosu mcp add <tool>` | Add the Dosu MCP server to a specific tool |
 | `dosu logs` | View or manage debug logs (`--tail`, `--clear`) |
+| `dosu telemetry` | Manage usage analytics and error diagnostics (`status`, `enable`, `disable`, `reset`) |
 
 `dosu mcp add` takes `-g, --global` to install for all projects instead of project-local, and `--show-secret` to print the full manual config.
 
@@ -163,6 +164,26 @@ dosu setup --agent --tool claude
 
 Combine with `dosu login --request` / `--check <ticket>` for human-in-the-loop authentication, and `--mode oss|cloud` to skip the mode prompt.
 
+### Telemetry and privacy
+
+Usage analytics and error diagnostics are separate, explicit choices. Both stay off while unset.
+
+```bash
+dosu telemetry status [--json]
+dosu telemetry enable [analytics|errors|all]
+dosu telemetry disable [analytics|errors|all]
+dosu telemetry reset
+```
+
+`reset` rotates the local pseudonymous telemetry ID; it does not delete already retained events.
+General command analytics uses that ID; setup-funnel events can be linked to the user's Dosu account
+and email after sign-in and may include documented coarse setup choices. Dosu never collects
+prompts, raw command lines, free-form argument or option values, user source code, file contents,
+local paths, raw environment-variable names or values, credentials, raw error messages, or
+`debug.log`. See
+[Telemetry and privacy](docs/telemetry.md) for the exact event fields, destinations, retention, and
+controls.
+
 ## Configuration
 
 Credentials and the selected deployment live in `~/.config/dosu-cli/config.json`. Set `DOSU_DEV=true` to isolate config under `~/.config/dosu-cli-dev/`.
@@ -173,6 +194,16 @@ To repoint a published build at a different backend without rebuilding, set any 
 - `DOSU_BACKEND_URL_OVERRIDE`
 - `SUPABASE_URL_OVERRIDE`
 - `SUPABASE_ANON_KEY_OVERRIDE`
+
+Telemetry destination settings are:
+
+- Build time: `DOSU_POSTHOG_PROJECT_TOKEN`, `DOSU_SENTRY_DSN`
+- Runtime overrides: `DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE`, `DOSU_SENTRY_DSN_OVERRIDE`
+- Privacy controls: `DO_NOT_TRACK=1`, `DOSU_TELEMETRY_DISABLED=1`,
+  `DOSU_TELEMETRY_DEBUG=1` (print the exact payload to stderr without sending it)
+
+PostHog project tokens and Sentry DSNs are public client-side ingestion credentials. Never put a
+PostHog personal API key, Sentry auth token, or admin/management credential in these variables.
 
 ## Development
 

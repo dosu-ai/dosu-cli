@@ -170,6 +170,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
+          # Public ingestion credentials. Undefined repository variables resolve to empty strings,
+          # which keeps both telemetry lanes inert until the production checklist is complete.
+          DOSU_POSTHOG_PROJECT_TOKEN: ${{ vars.DOSU_POSTHOG_PROJECT_TOKEN }}
+          DOSU_SENTRY_DSN: ${{ vars.DOSU_SENTRY_DSN }}
 
   update-homebrew:
     needs: release
