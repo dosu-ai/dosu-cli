@@ -14,7 +14,8 @@
     "dosu": "bin/dosu.js"
   },
   "files": [
-    "bin/dosu.js"
+    "bin/dosu.js",
+    "docs/project-scoped-agent-setup.md"
   ],
   "scripts": {
     "dev": "bun run src/index.ts",

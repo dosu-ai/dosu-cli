@@ -13,7 +13,25 @@
 curl -fsSL https://cli.dosu.dev/install | sh
 ```
 
-The interactive wizard authenticates you via browser OAuth, lets you pick a Dosu deployment (or OSS / public-library mode), mints an API key, detects which AI tools you have installed, and writes the Dosu MCP server entry into each one's config. Restart your AI tool and Dosu is available.
+Run the wizard from inside the Git project you want to configure. It authenticates
+you via browser OAuth, lets you pick a Dosu deployment (or OSS / public-library
+mode), mints an API key, detects installed AI tools, and writes their supported
+MCP, instruction, and skill files into that project. Credentials stay in the
+private Dosu user config and are never written into the repository.
+
+Project MCP entries launch a pinned Dosu CLI through `npx`, so Node.js 22+ and
+`npx` must also be available when the AI tool starts. See the
+[project-scoped setup contract](docs/project-scoped-agent-setup.md) for paths,
+migration safety, and clients that only support global configuration.
+
+On a re-run, an exact Dosu project entry keeps the project pinned to its existing
+deployment even if another deployment is active globally; an explicit target is
+required to retarget it. After the project MCP completes an initialize check and
+the whole project bundle is re-read successfully, setup removes only exact,
+proven legacy Dosu MCP and rule globals. Ambiguous or unsupported entries are
+preserved; old global skills are always kept because setup and explicit standalone
+installs cannot be distinguished. Recoverable backups and receipts stay in the
+private Dosu config directory.
 
 Run `dosu` with no arguments any time to open the interactive menu.
 
@@ -129,7 +147,20 @@ Run `dosu <command> --help` for subcommands and flags.
 
 ### Supported AI tools
 
-`dosu mcp add <id>` and the setup wizard support:
+The setup wizard supports project-scoped configuration for `claude`, `cursor`,
+`vscode`, `codex`, `gemini`, `zed`, `copilot`, `opencode`, `antigravity`,
+`mcporter`, and `factory`. `dosu mcp add <id> --global` remains available as an
+explicit opt-in for global-only clients such as Claude Desktop, Windsurf, and
+Cline; the wizard does not silently fall back to global scope.
+The `manual` ID only prints connection values for a user-managed client; it does
+not accept `--global` because the CLI has no target path on which to record safe
+ownership intent.
+
+Project-default `dosu mcp add <id>` checks every supported client in the
+repository before writing, so it cannot create conflicting project targets. Use
+`--retarget` only to replace that agent's existing Dosu pin (and any client that
+shares the same project MCP file); use `dosu setup` when several independent
+project agents must move together.
 
 | ID | Tool |
 |---|---|
@@ -162,7 +193,12 @@ Combine with `dosu login --request` / `--check <ticket>` for human-in-the-loop a
 
 ## Configuration
 
-Credentials and the selected deployment live in `~/.config/dosu-cli/config.json`. Set `DOSU_DEV=true` to isolate config under `~/.config/dosu-cli-dev/`.
+The login session and active deployment live in
+`~/.config/dosu-cli/config.json`. Project MCP credentials are stored separately as
+private per-user, per-target records under
+`~/.config/dosu-cli/project-mcp-credentials.v1/`; repository files contain no API
+key or endpoint. `dosu logout` clears both credential stores. Set `DOSU_DEV=true`
+to isolate config under `~/.config/dosu-cli-dev/`.
 
 To repoint a published build at a different backend without rebuilding, set any of these runtime overrides:
 
