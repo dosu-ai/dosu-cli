@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   bindAccountIdentity,
@@ -8,6 +8,7 @@ import {
   type Config,
   clearConfig,
   emptyConfig,
+  getConfigDir,
   getConfigPath,
   isAuthenticated,
   isTokenExpired,
@@ -47,6 +48,57 @@ describe("config", () => {
     const path = getConfigPath();
     expect(path).toBe(join(tempDir, "dosu-cli", "config.json"));
     expect(existsSync(join(tempDir, "dosu-cli"))).toBe(true);
+  });
+
+  it("ignores a relative XDG config root instead of writing secrets below the project cwd", () => {
+    const originalCwd = process.cwd();
+    const originalHome = process.env.HOME;
+    const originalUserProfile = process.env.USERPROFILE;
+    const projectRoot = join(tempDir, "repo");
+    const safeHome = join(tempDir, "safe-home");
+    mkdirSync(projectRoot);
+    try {
+      process.chdir(projectRoot);
+      process.env.XDG_CONFIG_HOME = "repo-relative-config";
+      process.env.HOME = safeHome;
+      delete process.env.USERPROFILE;
+
+      const path = getConfigPath();
+
+      expect(path).toBe(join(safeHome, ".config", "dosu-cli", "config.json"));
+      expect(isAbsolute(path)).toBe(true);
+      expect(existsSync(join(projectRoot, "repo-relative-config"))).toBe(false);
+    } finally {
+      process.chdir(originalCwd);
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = originalUserProfile;
+    }
+  });
+
+  it("uses only an absolute home fallback and otherwise fails closed", () => {
+    expect(
+      getConfigDir({
+        env: {
+          XDG_CONFIG_HOME: "relative-xdg",
+          HOME: "relative-home",
+          USERPROFILE: "also-relative",
+        },
+        homedir: () => join(tempDir, "system-home"),
+      }),
+    ).toBe(join(tempDir, "system-home", ".config", "dosu-cli"));
+
+    expect(() =>
+      getConfigDir({
+        env: {
+          XDG_CONFIG_HOME: "relative-xdg",
+          HOME: "relative-home",
+          USERPROFILE: "also-relative",
+        },
+        homedir: () => "relative-system-home",
+      }),
+    ).toThrow(/absolute user config directory/i);
   });
 
   it("DOSU_DEV=true isolates config into a separate dosu-cli-dev directory", () => {

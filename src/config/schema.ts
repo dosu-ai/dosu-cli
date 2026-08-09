@@ -16,6 +16,8 @@ export interface AccountTarget {
   deployment_id?: string;
   deployment_name?: string;
   api_key?: string;
+  /** Trusted runtime endpoint kept in private user config, never in project MCP files. */
+  mcp_endpoint?: string;
   org_id?: string;
   space_id?: string;
 }

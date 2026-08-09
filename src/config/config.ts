@@ -3,7 +3,8 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { homedir as nodeHomedir } from "node:os";
+import { isAbsolute, join } from "node:path";
 import { migrateLegacyConfig } from "./config-v1-migration";
 import { getAccessTokenUserID } from "./identity";
 import {
@@ -78,13 +79,30 @@ export function updateTarget(cfg: Config, target: AccountTarget): void {
  * Everything that lives under `getConfigDir()` — `config.json`,
  * `update-check.json`, `skill-update-check.json` — is isolated between the two.
  */
-export function getConfigDir(): string {
-  const dirName = process.env.DOSU_DEV === "true" ? "dosu-cli-dev" : "dosu-cli";
+export interface ConfigDirDependencies {
+  /** @internal Test seam for environment/path safety checks. */
+  env?: NodeJS.ProcessEnv;
+  /** @internal Test seam for the operating-system home lookup. */
+  homedir?: () => string;
+}
 
-  const xdgConfig = process.env.XDG_CONFIG_HOME;
-  if (xdgConfig) return join(xdgConfig, dirName);
+export function getConfigDir(deps: ConfigDirDependencies = {}): string {
+  const env = deps.env ?? process.env;
+  const dirName = env.DOSU_DEV === "true" ? "dosu-cli-dev" : "dosu-cli";
 
-  const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+  // XDG_CONFIG_HOME is defined to be absolute. Treating a relative value as a
+  // pathname would put credentials beneath the caller's current project.
+  const xdgConfig = env.XDG_CONFIG_HOME;
+  if (xdgConfig && isAbsolute(xdgConfig)) return join(xdgConfig, dirName);
+
+  const home = [env.HOME, env.USERPROFILE, (deps.homedir ?? nodeHomedir)()].find(
+    (candidate): candidate is string => Boolean(candidate && isAbsolute(candidate)),
+  );
+  if (!home) {
+    throw new Error(
+      "Dosu could not resolve an absolute user config directory; refusing to store credentials",
+    );
+  }
   return join(home, ".config", dirName);
 }
 
@@ -201,6 +219,7 @@ function normalizeTarget(value: unknown): AccountTarget | undefined {
     deployment_id: stringValue(value.deployment_id),
     deployment_name: stringValue(value.deployment_name),
     api_key: stringValue(value.api_key),
+    mcp_endpoint: stringValue(value.mcp_endpoint),
     org_id: stringValue(value.org_id),
     space_id: stringValue(value.space_id),
   };
