@@ -227,6 +227,10 @@ jobs:
           npm install --ignore-scripts --no-audit --no-fund --prefix "$packageRoot" "$pkg"
           if ($LASTEXITCODE -ne 0) { throw "could not install packed CLI" }
           $dosuBin = Join-Path $packageRoot "node_modules/@dosu/cli/bin/dosu.js"
+          $signalInjectorURL = [Uri]::new($env:DOSU_SIGNAL_INJECTOR).AbsoluteUri
+          if (-not $signalInjectorURL.StartsWith("file:")) {
+            throw "could not convert the signal injector to a file URL"
+          }
 
           $outer = $null
           try {
@@ -235,7 +239,7 @@ jobs:
             $startInfo.UseShellExecute = $false
             foreach ($argument in @(
               "--import",
-              $env:DOSU_SIGNAL_INJECTOR,
+              $signalInjectorURL,
               $dosuBin,
               "mcp",
               "proxy",
