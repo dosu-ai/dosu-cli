@@ -3,12 +3,14 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { migrateLegacyTargets } from "./orchestrator";
 import {
   assertProjectBundleProof,
   projectBundleStatus,
   verifyProjectBundle,
 } from "./project-bundle";
 import { proveProjectScope } from "./project-proof";
+import type { LegacyTarget } from "./targets";
 
 let root: string;
 
@@ -221,6 +223,45 @@ describe("file-backed project bundle proof", () => {
     writeClaudeBundle();
     writeFileSync(join(root, ".claude", "skills", "dosu", "SKILL.md"), "user replacement");
     expect(verifyClaude()).toMatchObject({ ok: false, reason: "project_skill_mismatch" });
+  });
+
+  it("revalidates proof evidence immediately before cleanup", () => {
+    writeClaudeBundle();
+    const verified = verifyClaude();
+    if (!verified.ok) throw new Error(verified.reason);
+
+    writeFileSync(join(root, ".mcp.json"), '{"mcpServers":{}}');
+    const globalPath = join(root, "legacy-global.json");
+    writeFileSync(
+      globalPath,
+      JSON.stringify({
+        mcpServers: {
+          dosu: {
+            type: "http",
+            url: "https://api.dosu.dev/v1/mcp/deployments/dep",
+            headers: { "X-Dosu-API-Key": "secret" },
+          },
+        },
+      }),
+    );
+    const target: LegacyTarget = {
+      id: "claude:mcp",
+      provider: "claude",
+      kind: "json_mcp",
+      path: globalPath,
+      topKey: "mcpServers",
+    };
+    const receipt = migrateLegacyTargets({
+      bundle: verified.proof,
+      targets: [target],
+      backupRoot: join(root, "backups"),
+      allowRemoval: true,
+    })[0];
+    expect(receipt).toMatchObject({
+      outcome: "preserved_ambiguous",
+      reason: "project_bundle_changed",
+    });
+    expect(readFileSync(globalPath, "utf8")).toContain("secret");
   });
 
   it("requires at least one selected project-capable provider", () => {
