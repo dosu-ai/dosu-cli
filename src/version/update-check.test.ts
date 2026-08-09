@@ -266,6 +266,49 @@ describe("checkForUpdates", () => {
     expect(updated.latestVersion).toBe("1.2.3");
   });
 
+  it("refreshes after six hours", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ latest: "1.2.3" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { mkdirSync } = require("node:fs");
+    mkdirSync(join(tempDir, "dosu-cli"), { recursive: true });
+    writeFileSync(
+      join(tempDir, "dosu-cli", "update-check.json"),
+      JSON.stringify({
+        lastCheck: Date.now() - 6 * 60 * 60 * 1000 - 1,
+        latestVersion: "0.0.1",
+      }),
+    );
+
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await checkForUpdates();
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not refresh before six hours", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { mkdirSync } = require("node:fs");
+    mkdirSync(join(tempDir, "dosu-cli"), { recursive: true });
+    writeFileSync(
+      join(tempDir, "dosu-cli", "update-check.json"),
+      JSON.stringify({
+        lastCheck: Date.now() - 6 * 60 * 60 * 1000 + 60_000,
+        latestVersion: "0.0.1",
+      }),
+    );
+
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await checkForUpdates();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("prints the refreshed latest version once when an outdated cache is stale", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

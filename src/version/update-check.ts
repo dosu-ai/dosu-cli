@@ -4,7 +4,7 @@
  * Uses a cached, bounded check:
  * 1. On startup, reads a cached latest version from disk.
  * 2. If the cached version is newer than the running version, prints a notice to stderr.
- * 3. If the cache is stale (>24 h), waits up to one second and can print on the same run.
+ * 3. If the cache is stale (>6 h), waits up to one second and can print on the same run.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -15,7 +15,7 @@ import { logger } from "../debug/logger";
 import { INSTALL_CHANNEL, VERSION } from "./version";
 
 const CACHE_FILENAME = "update-check.json";
-const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 1_000;
 const REGISTRY_URL = "https://registry.npmjs.org/-/package/@dosu/cli/dist-tags";
 const SEMVER_PATTERN =
@@ -129,7 +129,7 @@ function displayNotice(current: string, latest: string): void {
  * Check for updates — awaited from the preAction hook.
  *
  * Reads cached version info and displays a notice if outdated.
- * Waits up to one second for a refresh if the cache is stale (>24 h), so short-lived
+ * Waits up to one second for a refresh if the cache is stale (>6 h), so short-lived
  * commands cannot exit before a newly discovered update is shown.
  */
 export async function checkForUpdates(): Promise<void> {
