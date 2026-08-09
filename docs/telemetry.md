@@ -170,12 +170,14 @@ no-refresh client, refuses redirects, and aborts its request after 500ms. The se
 accepts a generic property record, but the CLI constructs that record from the closed runtime
 allowlist above rather than forwarding arbitrary properties.
 
-The existing Dosu server tRPC middleware is a separate operational-observability boundary. If a
-setup analytics procedure fails, it can currently attach the typed setup input and, for an
-authenticated call, Sentry user scope containing user ID, email, username, and serialized user
-metadata to the **server** Sentry project. This happens independently of the CLI error-diagnostics
-choice. The CLI does not construct that server scope, but it must be scrubbed or disabled for these
-procedures before production launch; see the checklist below.
+The existing Dosu server tRPC middleware is a separate operational-observability boundary. It puts
+the typed setup input on the Sentry isolation scope for every call and creates a transaction span;
+the current server trace sample rate is 10%, so successful sampled calls as well as captured errors
+can copy that input to the **server** Sentry project. For authenticated calls, the same scope can
+also contain user ID, email, username, and serialized user metadata. This happens independently of
+the CLI error-diagnostics choice. The CLI does not construct that server scope, but input and user
+scope must be scrubbed or disabled for these procedures before production launch; see the checklist
+below.
 
 ## Data excluded from CLI-built telemetry fields
 
@@ -202,7 +204,7 @@ The payloads constructed by the CLI never include:
 
 This CLI-field contract does not erase the two separately disclosed boundaries: authenticated setup
 uses a session-token transport header, and the Dosu server enriches successful setup analytics with
-account identity and may attach input/user scope to server Sentry on procedure failure.
+account identity and may attach input/user scope to sampled server transactions or captured errors.
 
 The analytics payload itself does not contain an IP address. As with any HTTPS request, the network
 destination can observe connection metadata; production launch must verify the Vercel proxy and
@@ -257,8 +259,8 @@ setup/onboarding analytics
   -> HTTPS https://<Dosu web app>/api/cli-trpc
   -> authenticated or pre-auth Dosu API procedure
   -> PostHog
-  -> on server-side procedure failure, existing Dosu server Sentry middleware may also receive the
-     typed setup input and authenticated user scope independently of the CLI error-diagnostics consent
+  -> on sampled calls or captured errors, existing Dosu server Sentry middleware may also receive
+     the typed setup input and authenticated user scope independently of CLI error consent
 ```
 
 Command telemetry has these delivery guarantees:
@@ -336,7 +338,7 @@ Complete and record each item before enabling release destinations:
   source-context collection, and performance/session features. Verify project-side scrubbing as a
   second line of defense, not a replacement for the client allowlist. On the Dosu server project,
   disable or scrub attached RPC input and authenticated Sentry user metadata for the two setup
-  analytics procedures so server failures do not create an undocumented copy.
+  analytics procedures so sampled calls and errors do not create an undocumented copy.
 - **Source maps:** upload release-matched source maps for the npm bundle so its package-relative
   frames are actionable. Define and test a separate native-symbolication strategy before promising
   frames for binary/homebrew builds. Use a Sentry auth token only in CI, ensure
