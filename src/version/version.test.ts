@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getVersionString, INSTALL_CHANNEL, VERSION } from "./version";
+import { getVersionString, INSTALL_CHANNEL, isNpxInvocation, VERSION } from "./version";
 
 describe("version", () => {
   it("should read version from package.json in dev mode", () => {
@@ -14,5 +14,12 @@ describe("version", () => {
 
   it("should default INSTALL_CHANNEL to npm in dev/source mode", () => {
     expect(INSTALL_CHANNEL).toBe("npm");
+  });
+
+  it("recognizes npm exec and npx without treating other channels as npx", () => {
+    expect(isNpxInvocation("npm", { npm_lifecycle_event: "npx" })).toBe(true);
+    expect(isNpxInvocation("npm", { npm_command: "exec" })).toBe(true);
+    expect(isNpxInvocation("npm", {})).toBe(false);
+    expect(isNpxInvocation("homebrew", { npm_lifecycle_event: "npx" })).toBe(false);
   });
 });

@@ -11,20 +11,19 @@ import {
 } from "./update-check";
 
 describe("buildUpdateHint", () => {
-  it("returns npm update command for npm channel", () => {
-    expect(buildUpdateHint("npm")).toBe('Run "npm install -g @dosu/cli@latest"');
+  it.each([
+    "npm",
+    "homebrew",
+    "binary",
+    "unknown",
+  ])("uses the unified upgrade command for %s installs", (channel) => {
+    expect(buildUpdateHint(channel)).toBe('Run "dosu upgrade"');
   });
 
-  it("returns brew upgrade command for homebrew channel", () => {
-    expect(buildUpdateHint("homebrew")).toBe('Run "brew upgrade dosu-ai/dosu/dosu"');
-  });
-
-  it("returns GitHub releases download link for binary channel", () => {
-    expect(buildUpdateHint("binary")).toContain("github.com/dosu-ai/dosu-cli/releases");
-  });
-
-  it("falls back to npm hint for unknown channel", () => {
-    expect(buildUpdateHint("unknown")).toBe('Run "npm install -g @dosu/cli@latest"');
+  it("keeps an npx invocation ephemeral", () => {
+    expect(buildUpdateHint("npm", true)).toBe(
+      'Use "npx -y @dosu/cli@latest" for the next Dosu command',
+    );
   });
 });
 
@@ -38,7 +37,7 @@ describe("buildUpdateNotice", () => {
       .split("\n");
 
     expect(notice).toContain("Update available: 0.43.0 → 0.44.0");
-    expect(notice).toContain('Run "npm install -g @dosu/cli@latest"');
+    expect(notice).toContain('Run "dosu upgrade"');
     expect(notice).not.toContain("Tell the user");
     expect(lines).toHaveLength(6);
     expect(lines[0]).toMatch(/^╭═+╮$/);
@@ -55,10 +54,19 @@ describe("buildUpdateNotice", () => {
     expect(notice).toContain("[dosu:update] Update available: 0.43.0 → 0.44.0");
     expect(notice).toContain("Tell the user Dosu CLI is outdated");
     expect(notice).toContain("After they approve");
-    expect(notice).toContain('run "brew upgrade dosu-ai/dosu/dosu"');
+    expect(notice).toContain('run "dosu upgrade"');
     expect(notice).toContain('verify with "dosu --version"');
     expect(notice).not.toContain("\u001B");
     expect(notice).not.toContain("╭");
+  });
+
+  it("tells an npx-driven agent to keep using npx", () => {
+    const notice = buildUpdateNotice("0.43.0", "0.44.0", "npm", false, true);
+
+    expect(notice).toContain("After they approve");
+    expect(notice).toContain('use "npx -y @dosu/cli@latest" for the next Dosu command');
+    expect(notice).toContain('verify with "npx -y @dosu/cli@latest --version"');
+    expect(notice).not.toContain("npm install -g");
   });
 });
 

@@ -12,7 +12,7 @@ import { join } from "node:path";
 import pc from "picocolors";
 import { getConfigDir } from "../config/config";
 import { logger } from "../debug/logger";
-import { INSTALL_CHANNEL, VERSION } from "./version";
+import { INSTALL_CHANNEL, isNpxInvocation, VERSION } from "./version";
 
 const CACHE_FILENAME = "update-check.json";
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -96,10 +96,11 @@ export async function fetchLatestVersion(): Promise<string | null> {
   }
 }
 
-export function buildUpdateHint(channel: string): string {
-  if (channel === "homebrew") return 'Run "brew upgrade dosu-ai/dosu/dosu"';
-  if (channel === "binary") return "Download from https://github.com/dosu-ai/dosu-cli/releases";
-  return 'Run "npm install -g @dosu/cli@latest"';
+export function buildUpdateHint(channel: string, npx = false): string {
+  if (channel === "npm" && npx) {
+    return 'Use "npx -y @dosu/cli@latest" for the next Dosu command';
+  }
+  return 'Run "dosu upgrade"';
 }
 
 export function buildUpdateNotice(
@@ -107,8 +108,9 @@ export function buildUpdateNotice(
   latest: string,
   channel: string,
   interactive: boolean,
+  npx = false,
 ): string {
-  const hint = buildUpdateHint(channel);
+  const hint = buildUpdateHint(channel, npx);
   if (interactive) {
     const versionMessage = `Update available: ${current} → ${latest}`;
     const contentWidth = Math.max(versionMessage.length, hint.length);
@@ -129,15 +131,24 @@ export function buildUpdateNotice(
   }
 
   const agentAction = hint[0].toLowerCase() + hint.slice(1);
+  const verifyCommand = npx ? "npx -y @dosu/cli@latest --version" : "dosu --version";
   return (
     `\n[dosu:update] Update available: ${current} → ${latest}\n` +
     `Tell the user Dosu CLI is outdated. After they approve, ${agentAction}, ` +
-    'then verify with "dosu --version".\n'
+    `then verify with "${verifyCommand}".\n`
   );
 }
 
 function displayNotice(current: string, latest: string): void {
-  console.error(buildUpdateNotice(current, latest, INSTALL_CHANNEL, process.stderr.isTTY === true));
+  console.error(
+    buildUpdateNotice(
+      current,
+      latest,
+      INSTALL_CHANNEL,
+      process.stderr.isTTY === true,
+      isNpxInvocation(),
+    ),
+  );
 }
 
 /**
