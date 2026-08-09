@@ -1,3 +1,10 @@
+# [0.44.0](https://github.com/dosu-ai/dosu-cli/compare/v0.43.0...v0.44.0) (2026-08-09)
+
+
+### Features
+
+* add dosu upgrade and agent-aware notices ([#166](https://github.com/dosu-ai/dosu-cli/issues/166)) ([cbe0707](https://github.com/dosu-ai/dosu-cli/commit/cbe0707659ce725ce63bec7e9e55f0e7ff98ac16))
+
 # [0.43.0](https://github.com/dosu-ai/dosu-cli/compare/v0.42.0...v0.43.0) (2026-08-07)
 
 
