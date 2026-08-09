@@ -24,6 +24,7 @@ const {
   mockSkillAgentIDsForProviders,
   mockInGitWorkTree,
   mockUpsertDosuAgentsSection,
+  mockRequireProjectRoot,
 } = vi.hoisted(() => {
   return {
     mockMintTicket: vi.fn(),
@@ -46,6 +47,7 @@ const {
     mockSkillAgentIDsForProviders: vi.fn(),
     mockInGitWorkTree: vi.fn(),
     mockUpsertDosuAgentsSection: vi.fn(),
+    mockRequireProjectRoot: vi.fn(),
   };
 });
 
@@ -80,6 +82,11 @@ vi.mock("../setup/agents-md-step", () => ({
   upsertDosuAgentsSection: mockUpsertDosuAgentsSection,
 }));
 
+vi.mock("../setup/project-root", () => ({
+  assertSafeProjectPath: vi.fn(),
+  requireProjectRoot: mockRequireProjectRoot,
+}));
+
 vi.mock("../client/client", () => ({
   Client: vi.fn().mockImplementation(function (cfg: unknown) {
     mockClientConstructor(cfg);
@@ -111,6 +118,8 @@ function makeProvider(id: string, opts: Partial<SetupProvider> = {}): SetupProvi
     isInstalled: () => true,
     isConfigured: () => false,
     globalConfigPath: () => `/tmp/${id}/mcp.json`,
+    projectConfigPath: (root) => `${root}/mcp.json`,
+    isProjectConfigured: () => false,
     priority: () => 0,
     ...opts,
   };
@@ -140,14 +149,14 @@ describe("buildResumeCommand", () => {
 });
 
 describe("listAgentSupportedToolIDs", () => {
-  it("lists every setup provider id, including Claude Desktop", () => {
+  it("lists only providers with project-scoped configuration", () => {
     mockAllSetupProviders.mockReturnValue([
       makeProvider("claude"),
-      makeProvider("claude-desktop"),
+      makeProvider("claude-desktop", { supportsLocal: () => false }),
       makeProvider("cursor"),
     ]);
 
-    expect(listAgentSupportedToolIDs()).toEqual(["claude", "claude-desktop", "cursor"]);
+    expect(listAgentSupportedToolIDs()).toEqual(["claude", "cursor"]);
   });
 });
 
@@ -175,10 +184,15 @@ describe("runAgentSetup", () => {
     mockSkillAgentIDsForProviders.mockReset();
     mockInGitWorkTree.mockReset();
     mockUpsertDosuAgentsSection.mockReset();
+    mockRequireProjectRoot.mockReset();
+    mockRequireProjectRoot.mockReturnValue("/tmp/repo");
     for (const fn of Object.values(mockClient)) fn.mockReset();
 
     claudeProvider = makeProvider("claude", { name: () => "Claude Code" });
-    desktopProvider = makeProvider("claude-desktop", { name: () => "Claude Desktop" });
+    desktopProvider = makeProvider("claude-desktop", {
+      name: () => "Claude Desktop",
+      supportsLocal: () => false,
+    });
 
     mockAllSetupProviders.mockReturnValue([claudeProvider, desktopProvider]);
     mockLoadConfig.mockReturnValue(makeBaseConfig());
@@ -216,6 +230,35 @@ describe("runAgentSetup", () => {
         agent_next_steps: expect.stringContaining("'nope' is not"),
       }),
     ]);
+  });
+
+  it("rejects global-only tools before authentication", async () => {
+    const code = await runAgentSetup({ tool: "claude-desktop" });
+
+    expect(code).toBe(2);
+    expect(mockLoadConfig).not.toHaveBeenCalled();
+    expect(emittedEvents()[0]).toMatchObject({
+      step: "setup",
+      status: "error",
+      reason: "unknown_tool",
+    });
+    expect(String(emittedEvents()[0].agent_next_steps)).toContain("Choose one of: claude.");
+  });
+
+  it("stops before authentication outside a Git project", async () => {
+    mockRequireProjectRoot.mockImplementationOnce(() => {
+      throw new Error("Run Dosu setup inside a Git project.");
+    });
+
+    const code = await runAgentSetup({ tool: "claude" });
+
+    expect(code).toBe(2);
+    expect(mockLoadConfig).not.toHaveBeenCalled();
+    expect(emittedEvents()[0]).toMatchObject({
+      step: "setup",
+      status: "error",
+      reason: "not_in_git_project",
+    });
   });
 
   it("mints a ticket and emits need_user_action when not authenticated", async () => {
@@ -283,6 +326,9 @@ describe("runAgentSetup", () => {
       "done",
     ]);
     expect(claudeProvider.install).toHaveBeenCalledTimes(1);
+    expect(claudeProvider.install).toHaveBeenCalledWith(expect.any(Object), false, {
+      projectRoot: "/tmp/repo",
+    });
     expect(mockSaveConfig).toHaveBeenCalled();
     const lastSave = mockSaveConfig.mock.calls.at(-1)?.[0];
     expect(testSession(lastSave).access_token).toBe(ticketAccessToken);
@@ -293,9 +339,12 @@ describe("runAgentSetup", () => {
       status: "ok",
       agent_next_steps: expect.stringMatching(/Claude Code.*dosu status --json/),
     });
-    expect(mockInstallRuleForAgent).toHaveBeenCalledWith("claude", "canonical rule\n");
-    expect(mockInstallSkill).toHaveBeenCalledWith(["claude"], { quiet: true });
-    expect(mockUpsertDosuAgentsSection).toHaveBeenCalledWith(process.cwd(), "canonical rule\n");
+    expect(mockInstallRuleForAgent).toHaveBeenCalledWith("claude", "canonical rule\n", "/tmp/repo");
+    expect(mockInstallSkill).toHaveBeenCalledWith(["claude"], {
+      quiet: true,
+      projectRoot: "/tmp/repo",
+    });
+    expect(mockUpsertDosuAgentsSection).toHaveBeenCalledWith("/tmp/repo", "canonical rule\n");
   });
 
   it("errors with multiple_deployments when the user has more than one dosu_mcp", async () => {

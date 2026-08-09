@@ -47,7 +47,9 @@ import {
 } from "../config/config";
 import { getAccessTokenEmail, getAccessTokenUserID } from "../config/identity";
 import { logger } from "../debug/logger";
+import { runProjectProxy } from "../mcp/project-proxy";
 import { allProviders, getProvider, type Provider } from "../mcp/providers";
+import { requireProjectRoot } from "../setup/project-root";
 import { browserFallbackHint } from "../setup/styles";
 import {
   getOrCreateInstallID,
@@ -65,18 +67,19 @@ import { checkForUpdates } from "../version/update-check";
 import { getVersionString } from "../version/version";
 
 /**
- * Hook entrypoints are auto-invoked by Claude Code on every turn and must stay
- * fast and stdout-clean. Skip the update checks for them (their stderr notices
- * are noise on the hot path and a registry refresh would add latency).
+ * Hook and MCP proxy entrypoints are agent hot paths and must stay fast and
+ * stdout-clean. Update notices would corrupt MCP stdio and delay startup.
  */
 const HOOK_ENTRYPOINTS = new Set(["user-prompt-submit", "post-tool-use", "stop"]);
-function isHookEntrypointInvocation(argv: string[]): boolean {
+function isAgentHotPathInvocation(argv: string[]): boolean {
   const i = argv.indexOf("hooks");
-  return i >= 0 && HOOK_ENTRYPOINTS.has(argv[i + 1] ?? "");
+  if (i >= 0 && HOOK_ENTRYPOINTS.has(argv[i + 1] ?? "")) return true;
+  const mcpIndex = argv.indexOf("mcp");
+  return mcpIndex >= 0 && argv[mcpIndex + 1] === "proxy";
 }
 
 export function shouldRunBackgroundChecks(actionName: string, argv: string[]): boolean {
-  return actionName !== "upgrade" && !isHookEntrypointInvocation(argv);
+  return actionName !== "upgrade" && !isAgentHotPathInvocation(argv);
 }
 
 const TELEMETRY_EXCLUDED_COMMANDS = new Set([
@@ -521,16 +524,19 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
         return;
       }
 
-      let global = opts.global;
+      const global = opts.global;
       if (!provider.supportsLocal() && !global) {
-        console.log(`Note: ${provider.name()} only supports global installation.\n`);
-        global = true;
+        throw new Error(
+          `${provider.name()} does not support project-local MCP configuration. Use --global explicitly if you want a global install.`,
+        );
       }
+
+      const projectRoot = global ? undefined : requireProjectRoot();
 
       const scope = global ? "global (all projects)" : "project-local";
       console.log(`Adding Dosu MCP to ${provider.name()} (${scope})...`);
 
-      provider.install(cfg, global, { showSecret: opts.showSecret });
+      provider.install(cfg, global, { showSecret: opts.showSecret, projectRoot });
 
       console.log(`\n✓ Successfully added Dosu MCP to ${provider.name()}!`);
       if (global) {
@@ -539,6 +545,23 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
         console.log(`\nStart ${provider.name()} in this project directory to use the Dosu MCP.`);
       }
     });
+
+  const proxyCommand = new Command("proxy")
+    .description("Internal project MCP credential bridge")
+    .option("--deployment <id>", "Expected project deployment")
+    .option("--oss", "Use the configured public-libraries endpoint", false)
+    .action(async (opts: { deployment?: string; oss: boolean }) => {
+      if (Boolean(opts.deployment) === opts.oss) {
+        console.error("Exactly one of --deployment or --oss is required.");
+        process.exitCode = 2;
+        return;
+      }
+      process.exitCode = await runProjectProxy({
+        deploymentID: opts.deployment,
+        oss: opts.oss,
+      });
+    });
+  mcp.addCommand(proxyCommand, { hidden: true });
 
   mcp
     .command("list")
@@ -690,9 +713,7 @@ async function ensureFreshSession(cfg: Config): Promise<boolean> {
 }
 
 export async function execute(): Promise<void> {
-  const telemetry = isHookEntrypointInvocation(process.argv)
-    ? undefined
-    : processCommandTelemetry();
+  const telemetry = isAgentHotPathInvocation(process.argv) ? undefined : processCommandTelemetry();
   const program = createProgram({ telemetry });
   try {
     await program.parseAsync(process.argv);

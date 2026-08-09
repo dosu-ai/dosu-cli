@@ -76,14 +76,21 @@ function logRuleResults(results: AgentRuleSetupResult[]): void {
 export async function stepConfigureAgentRules(
   selection: SetupSelection,
   mcpResults: McpResult[],
+  projectRoot?: string,
 ): Promise<AgentRuleSetupResult[]> {
   const successfulInstalls = successfulAgentIDs(mcpResults, "install");
   const successfulRemovals = successfulAgentIDs(mcpResults, "remove");
   const toInstall = selection.toInstall.filter(
-    (provider) => successfulInstalls.has(provider.id()) && isRuleAgent(provider.id()),
+    (provider) =>
+      successfulInstalls.has(provider.id()) &&
+      isRuleAgent(provider.id()) &&
+      rulePathForAgent(provider.id(), projectRoot) !== null,
   );
   const toRemove = selection.toRemove.filter(
-    (provider) => successfulRemovals.has(provider.id()) && isRuleAgent(provider.id()),
+    (provider) =>
+      successfulRemovals.has(provider.id()) &&
+      isRuleAgent(provider.id()) &&
+      rulePathForAgent(provider.id(), projectRoot) !== null,
   );
   const results: AgentRuleSetupResult[] = [];
 
@@ -91,7 +98,7 @@ export async function stepConfigureAgentRules(
     const content = await fetchDosuRule();
     for (const provider of toInstall) {
       try {
-        const installed = installRuleForAgent(provider.id(), content);
+        const installed = installRuleForAgent(provider.id(), content, projectRoot);
         if (installed) results.push({ provider, action: installed.action, path: installed.path });
       } catch (err: unknown) {
         const error = err instanceof Error ? err : new Error(String(err));
@@ -103,7 +110,7 @@ export async function stepConfigureAgentRules(
         results.push({
           provider,
           action: "not_found",
-          path: rulePathForAgent(provider.id()) ?? "",
+          path: rulePathForAgent(provider.id(), projectRoot) ?? "",
           error,
         });
       }
@@ -114,16 +121,16 @@ export async function stepConfigureAgentRules(
   // Keep the shared section if either selected agent still needs it.
   const retainedPaths = new Set(
     toInstall
-      .map((provider) => rulePathForAgent(provider.id()))
+      .map((provider) => rulePathForAgent(provider.id(), projectRoot))
       .filter((path): path is string => path !== null),
   );
 
   for (const provider of toRemove) {
-    const path = rulePathForAgent(provider.id());
+    const path = rulePathForAgent(provider.id(), projectRoot);
     if (path && retainedPaths.has(path)) continue;
 
     try {
-      const removed = removeRuleForAgent(provider.id());
+      const removed = removeRuleForAgent(provider.id(), projectRoot);
       if (removed) results.push({ provider, action: removed.action, path: removed.path });
     } catch (err: unknown) {
       const error = err instanceof Error ? err : new Error(String(err));

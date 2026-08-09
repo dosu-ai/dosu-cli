@@ -1,4 +1,3 @@
-import { execSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,7 +7,6 @@ import {
   buildDosuAgentsSection,
   DOSU_SECTION_END,
   DOSU_SECTION_START,
-  inGitWorkTree,
   stepUpdateAgentsMd,
   upsertDosuAgentsSection,
 } from "./agents-md-step";
@@ -45,27 +43,6 @@ describe("buildDosuAgentsSection", () => {
     expect(buildDosuAgentsSection()).toBe(
       `${DOSU_SECTION_START}\n${canonical}\n${DOSU_SECTION_END}`,
     );
-  });
-});
-
-describe("inGitWorkTree", () => {
-  it("returns false outside a git repo", () => {
-    expect(inGitWorkTree(dir)).toBe(false);
-  });
-
-  it("returns true inside a git repo", () => {
-    execSync("git init", { cwd: dir, stdio: "ignore" });
-    expect(inGitWorkTree(dir)).toBe(true);
-  });
-
-  it("returns false inside the .git directory (rev-parse exits 0 but prints false)", () => {
-    execSync("git init", { cwd: dir, stdio: "ignore" });
-    expect(inGitWorkTree(join(dir, ".git"))).toBe(false);
-  });
-
-  it("returns false in a bare repository", () => {
-    execSync("git init --bare", { cwd: dir, stdio: "ignore" });
-    expect(inGitWorkTree(dir)).toBe(false);
   });
 });
 

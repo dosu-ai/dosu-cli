@@ -4,7 +4,9 @@
  */
 
 import { type Config, MODE_OSS } from "../../config/config";
+import { assertSafeProjectPath } from "../../setup/project-root";
 import {
+  getJSONServer,
   installJSONServer,
   isJSONKeyConfigured,
   mcpBaseURL,
@@ -13,6 +15,11 @@ import {
   removeJSONServer,
 } from "../config-helpers";
 import { expandHome, isInstalled } from "../detect";
+import {
+  buildProjectProxyCommand,
+  isDosuOwnedMcpServer,
+  type ProjectProxyCommand,
+} from "../project-proxy";
 import type { SetupProvider } from "../providers";
 
 export interface BaseProviderConfig {
@@ -26,6 +33,8 @@ export interface BaseProviderConfig {
   /** Override the server entry shape if needed */
   // biome-ignore lint/suspicious/noExplicitAny: server entries are arbitrary JSON
   buildServer?: (cfg: Config) => Record<string, any>;
+  /** Exact provider-specific stdio shape for a secretless project entry. */
+  buildProjectServer?: (command: ProjectProxyCommand) => Record<string, unknown>;
   /** For providers that use a different local config path pattern */
   localConfigPath?: (cwd: string) => string;
 }
@@ -47,6 +56,25 @@ export function createJSONProvider(opts: BaseProviderConfig): SetupProvider {
   });
 
   const buildServer = opts.buildServer ?? defaultBuildServer;
+  const buildProjectServer =
+    opts.buildProjectServer ??
+    ((command: ProjectProxyCommand): Record<string, unknown> => ({
+      type: "stdio",
+      command: command.command,
+      args: command.args,
+    }));
+
+  const projectConfigPath = (projectRoot: string): string | null =>
+    opts.localConfigPath ? opts.localConfigPath(projectRoot) : null;
+
+  const requireProjectRoot = (projectRoot: string | undefined): string => {
+    if (!projectRoot) {
+      throw new Error(
+        `${opts.providerName} project installation requires an explicit project root`,
+      );
+    }
+    return projectRoot;
+  };
 
   return {
     name: () => opts.providerName,
@@ -57,30 +85,71 @@ export function createJSONProvider(opts: BaseProviderConfig): SetupProvider {
     isInstalled: () => isInstalled(opts.paths),
     globalConfigPath: () => expandHome(opts.globalPath),
     isConfigured: () => isJSONKeyConfigured(expandHome(opts.globalPath), opts.topKey),
+    projectConfigPath,
+    isProjectConfigured: (projectRoot: string) => {
+      const path = projectConfigPath(projectRoot);
+      if (path) assertSafeProjectPath(projectRoot, path);
+      if (!path) return false;
+      try {
+        return isDosuOwnedMcpServer(getJSONServer(path, opts.topKey));
+      } catch {
+        return false;
+      }
+    },
 
-    install(cfg: Config, global: boolean): void {
+    install(cfg: Config, global: boolean, installOpts = {}): void {
       if (cfg.mode !== MODE_OSS && !cfg.active_account?.target?.deployment_id)
         throw new Error("deployment ID is required");
       let configPath: string;
       if (global) {
         configPath = expandHome(opts.globalPath);
       } else if (opts.localConfigPath) {
-        configPath = opts.localConfigPath(process.cwd());
+        const projectRoot = requireProjectRoot(installOpts.projectRoot);
+        configPath = opts.localConfigPath(projectRoot);
+        assertSafeProjectPath(projectRoot, configPath);
       } else {
         throw new Error(`${opts.providerName} does not support local installation`);
       }
-      const serverBuilder = cfg.mode === MODE_OSS ? defaultBuildOSSServer : buildServer;
-      installJSONServer(configPath, opts.topKey, serverBuilder(cfg));
+      if (global) {
+        const serverBuilder = cfg.mode === MODE_OSS ? defaultBuildOSSServer : buildServer;
+        installJSONServer(configPath, opts.topKey, serverBuilder(cfg));
+      } else {
+        const existing = getJSONServer(configPath, opts.topKey);
+        if (existing !== undefined && !isDosuOwnedMcpServer(existing)) {
+          throw new Error(
+            `${opts.providerName} already has a non-Dosu MCP server named "dosu"; refusing to overwrite it`,
+          );
+        }
+        installJSONServer(
+          configPath,
+          opts.topKey,
+          buildProjectServer(buildProjectProxyCommand(cfg)),
+        );
+      }
     },
 
-    remove(global: boolean): void {
+    remove(global: boolean, removeOpts = {}): void {
       let configPath: string;
       if (global) {
         configPath = expandHome(opts.globalPath);
       } else if (opts.localConfigPath) {
-        configPath = opts.localConfigPath(process.cwd());
+        const projectRoot = removeOpts.projectRoot;
+        if (!projectRoot) {
+          throw new Error(`${opts.providerName} project removal requires an explicit project root`);
+        }
+        configPath = opts.localConfigPath(projectRoot);
+        assertSafeProjectPath(projectRoot, configPath);
       } else {
         throw new Error(`${opts.providerName} does not support local removal`);
+      }
+      if (!global) {
+        const existing = getJSONServer(configPath, opts.topKey);
+        if (existing === undefined) return;
+        if (!isDosuOwnedMcpServer(existing)) {
+          throw new Error(
+            `${opts.providerName} has a non-Dosu MCP server named "dosu"; refusing to remove it`,
+          );
+        }
       }
       removeJSONServer(configPath, opts.topKey);
     },

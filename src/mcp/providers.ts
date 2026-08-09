@@ -9,6 +9,13 @@ import type { Config } from "../config/config";
  */
 export interface ProviderInstallOptions {
   showSecret?: boolean;
+  /** Verified Git root used for project-scoped configuration. */
+  projectRoot?: string;
+}
+
+interface ProviderRemoveOptions {
+  /** Verified Git root used for project-scoped configuration. */
+  projectRoot?: string;
 }
 
 export interface Provider {
@@ -16,7 +23,7 @@ export interface Provider {
   id(): string;
   supportsLocal(): boolean;
   install(cfg: Config, global: boolean, opts?: ProviderInstallOptions): void;
-  remove(global: boolean): void;
+  remove(global: boolean, opts?: ProviderRemoveOptions): void;
 }
 
 /**
@@ -27,6 +34,8 @@ export interface SetupProvider extends Provider {
   isInstalled(): boolean;
   isConfigured(): boolean;
   globalConfigPath(): string;
+  projectConfigPath(projectRoot: string): string | null;
+  isProjectConfigured(projectRoot: string): boolean;
   priority(): number;
 }
 

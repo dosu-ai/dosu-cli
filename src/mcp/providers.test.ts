@@ -49,7 +49,7 @@ describe("provider registry", () => {
       { id: "cursor", name: "Cursor", local: true },
       { id: "vscode", name: "VS Code", local: true },
       { id: "gemini", name: "Gemini CLI", local: true },
-      { id: "codex", name: "Codex (CLI + Desktop)", local: true },
+      { id: "codex", name: "Codex", local: true },
       { id: "windsurf", name: "Windsurf", local: false },
       { id: "zed", name: "Zed", local: true },
       { id: "cline", name: "Cline", local: false },
@@ -87,6 +87,17 @@ describe("provider registry", () => {
 
         it("isConfigured returns boolean", () => {
           expect(typeof p.isConfigured()).toBe("boolean");
+        });
+
+        it("reports project configuration capability consistently", () => {
+          const projectRoot = "/tmp/dosu-provider-project";
+          if (p.supportsLocal()) {
+            expect(typeof p.projectConfigPath(projectRoot)).toBe("string");
+            expect(typeof p.isProjectConfigured(projectRoot)).toBe("boolean");
+          } else {
+            expect(p.projectConfigPath(projectRoot)).toBeNull();
+            expect(p.isProjectConfigured(projectRoot)).toBe(false);
+          }
         });
       });
     }

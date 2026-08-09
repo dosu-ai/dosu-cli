@@ -7,17 +7,24 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { type Config, MODE_OSS } from "../../config/config";
+import { assertSafeProjectPath } from "../../setup/project-root";
 import { mcpBaseURL, mcpRemoteServer, mcpURL, writeSecureFile } from "../config-helpers";
 import { expandHome, findNpx, isInstalled, npxPathEnv } from "../detect";
+import { buildProjectProxyCommand, isDosuOwnedMcpServer } from "../project-proxy";
 import type { SetupProvider } from "../providers";
 
 function codexHome(): string {
   return process.env.CODEX_HOME ?? expandHome("~/.codex");
 }
 
-function getConfigPath(global: boolean): string {
+function getConfigPath(global: boolean, projectRoot?: string): string {
   if (global) return join(codexHome(), "config.toml");
-  return join(process.cwd(), ".codex", "config.toml");
+  if (!projectRoot) {
+    throw new Error("Codex project installation requires an explicit project root");
+  }
+  const path = join(projectRoot, ".codex", "config.toml");
+  assertSafeProjectPath(projectRoot, path);
+  return path;
 }
 
 /**
@@ -43,8 +50,40 @@ function tomlString(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
-function installDosuToTOML(path: string, cfg: Config): void {
+function hasDosuSection(content: string): boolean {
+  return content.split("\n").some((line) => /^\[mcp_servers\.dosu(?:\..*)?]$/.test(line.trim()));
+}
+
+function isOwnedProjectSection(content: string): boolean {
+  const lines = content.split("\n");
+  const start = lines.findIndex((line) => line.trim() === "[mcp_servers.dosu]");
+  if (start < 0) return false;
+  const body: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    if (line.trim().startsWith("[")) break;
+    body.push(line);
+  }
+  const text = body.join("\n");
+  const commandMatch = text.match(/^command\s*=\s*("(?:\\.|[^"])*")\s*$/m);
+  const argsMatch = text.match(/^args\s*=\s*(\[[^\n]*])\s*$/m);
+  if (!commandMatch || !argsMatch) return false;
+  try {
+    return isDosuOwnedMcpServer({
+      command: JSON.parse(commandMatch[1]),
+      args: JSON.parse(argsMatch[1]),
+    });
+  } catch {
+    return false;
+  }
+}
+
+function installDosuToTOML(path: string, cfg: Config, global: boolean): void {
   let content = readTOML(path);
+  if (!global && hasDosuSection(content) && !isOwnedProjectSection(content)) {
+    throw new Error(
+      'Codex already has a non-Dosu MCP server named "dosu"; refusing to overwrite it',
+    );
+  }
   // Remove existing [mcp_servers.dosu] section if present (including the
   // legacy [mcp_servers.dosu.http_headers] subtable from the remote-HTTP form)
   content = removeDosuFromTOML(content);
@@ -58,16 +97,23 @@ function installDosuToTOML(path: string, cfg: Config): void {
   // with an explicit PATH because this config is shared with Codex desktop,
   // which launches from the Dock with the minimal launchd PATH — the same
   // pitfall as Claude Desktop.
-  const npx = findNpx();
-  const remote = mcpRemoteServer(mcpEndpoint(cfg), cfg.active_account?.target?.api_key);
-  const env: Record<string, string> = { PATH: npxPathEnv(npx), ...remote.env };
-  const envEntries = Object.entries(env)
-    .map(([key, value]) => `${key} = ${tomlString(value)}`)
-    .join("\n");
-  const args = remote.args.map(tomlString).join(", ");
-  const section =
-    `\n[mcp_servers.dosu]\ncommand = ${tomlString(npx)}\nargs = [${args}]\n` +
-    `\n[mcp_servers.dosu.env]\n${envEntries}\n`;
+  let section: string;
+  if (global) {
+    const npx = findNpx();
+    const remote = mcpRemoteServer(mcpEndpoint(cfg), cfg.active_account?.target?.api_key);
+    const env: Record<string, string> = { PATH: npxPathEnv(npx), ...remote.env };
+    const envEntries = Object.entries(env)
+      .map(([key, value]) => `${key} = ${tomlString(value)}`)
+      .join("\n");
+    const args = remote.args.map(tomlString).join(", ");
+    section =
+      `\n[mcp_servers.dosu]\ncommand = ${tomlString(npx)}\nargs = [${args}]\n` +
+      `\n[mcp_servers.dosu.env]\n${envEntries}\n`;
+  } else {
+    const command = buildProjectProxyCommand(cfg);
+    const args = command.args.map(tomlString).join(", ");
+    section = `\n[mcp_servers.dosu]\ncommand = ${tomlString(command.command)}\nargs = [${args}]\n`;
+  }
   content += section;
   writeTOML(path, content);
 }
@@ -95,7 +141,9 @@ function removeDosuFromTOML(content: string): string {
 }
 
 export const CodexProvider = (): SetupProvider => ({
-  name: () => "Codex (CLI + Desktop)",
+  // Project .codex/config.toml is documented for Codex CLI and the IDE extension.
+  // Do not imply that Codex Desktop currently honors project MCP configuration.
+  name: () => "Codex",
   id: () => "codex",
   supportsLocal: () => true,
   priority: () => 8,
@@ -106,14 +154,21 @@ export const CodexProvider = (): SetupProvider => ({
     const content = readTOML(join(codexHome(), "config.toml"));
     return content.includes("[mcp_servers.dosu]");
   },
-  install(cfg: Config, global: boolean): void {
+  projectConfigPath: (projectRoot: string) => join(projectRoot, ".codex", "config.toml"),
+  isProjectConfigured: (projectRoot: string) =>
+    isOwnedProjectSection(readTOML(getConfigPath(false, projectRoot))),
+  install(cfg: Config, global: boolean, opts = {}): void {
     if (cfg.mode !== MODE_OSS && !cfg.active_account?.target?.deployment_id)
       throw new Error("deployment ID is required");
-    installDosuToTOML(getConfigPath(global), cfg);
+    installDosuToTOML(getConfigPath(global, opts.projectRoot), cfg, global);
   },
-  remove(global: boolean): void {
-    const path = getConfigPath(global);
+  remove(global: boolean, opts = {}): void {
+    const path = getConfigPath(global, opts.projectRoot);
     const content = readTOML(path);
-    if (content) writeTOML(path, removeDosuFromTOML(content));
+    if (!content) return;
+    if (!global && hasDosuSection(content) && !isOwnedProjectSection(content)) {
+      throw new Error('Codex has a non-Dosu MCP server named "dosu"; refusing to remove it');
+    }
+    if (hasDosuSection(content)) writeTOML(path, removeDosuFromTOML(content));
   },
 });

@@ -13,18 +13,19 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { assertSafeProjectPath } from "../setup/project-root";
 
 export type RuleAgentID = "claude" | "cursor" | "codex" | "opencode" | "gemini" | "antigravity";
 
 type RuleTarget =
   | {
       kind: "file";
-      path: () => string;
+      path: (projectRoot?: string) => string | null;
       cursorFrontmatter?: boolean;
     }
   | {
       kind: "section";
-      path: () => string;
+      path: (projectRoot?: string) => string | null;
     };
 
 export type RuleAction = "created" | "updated" | "unchanged" | "removed" | "not_found";
@@ -69,28 +70,36 @@ function codexHome(): string {
 const RULE_TARGETS: Record<RuleAgentID, RuleTarget> = {
   claude: {
     kind: "file",
-    path: () => join(claudeConfigDir(), "rules", "dosu.md"),
+    path: (root) =>
+      root
+        ? join(root, ".claude", "rules", "dosu.md")
+        : join(claudeConfigDir(), "rules", "dosu.md"),
   },
   cursor: {
     kind: "file",
-    path: () => join(homedir(), ".cursor", "rules", "dosu.mdc"),
+    path: (root) =>
+      root
+        ? join(root, ".cursor", "rules", "dosu.mdc")
+        : join(homedir(), ".cursor", "rules", "dosu.mdc"),
     cursorFrontmatter: true,
   },
   codex: {
     kind: "section",
-    path: () => join(codexHome(), "AGENTS.md"),
+    // Project setup writes the canonical root AGENTS.md separately.
+    path: (root) => (root ? null : join(codexHome(), "AGENTS.md")),
   },
   opencode: {
     kind: "section",
-    path: () => join(homedir(), ".config", "opencode", "AGENTS.md"),
+    // OpenCode also reads the canonical project AGENTS.md.
+    path: (root) => (root ? null : join(homedir(), ".config", "opencode", "AGENTS.md")),
   },
   gemini: {
     kind: "section",
-    path: () => join(homedir(), ".gemini", "GEMINI.md"),
+    path: (root) => (root ? join(root, "GEMINI.md") : join(homedir(), ".gemini", "GEMINI.md")),
   },
   antigravity: {
     kind: "section",
-    path: () => join(homedir(), ".gemini", "GEMINI.md"),
+    path: (root) => (root ? null : join(homedir(), ".gemini", "GEMINI.md")),
   },
 };
 
@@ -98,8 +107,8 @@ export function isRuleAgent(agent: string): agent is RuleAgentID {
   return Object.hasOwn(RULE_TARGETS, agent);
 }
 
-export function rulePathForAgent(agent: string): string | null {
-  return isRuleAgent(agent) ? RULE_TARGETS[agent].path() : null;
+export function rulePathForAgent(agent: string, projectRoot?: string): string | null {
+  return isRuleAgent(agent) ? RULE_TARGETS[agent].path(projectRoot) : null;
 }
 
 function normalizeRule(content: string): string {
@@ -193,11 +202,17 @@ function upsertSection(path: string, content: string): RuleAction {
   return "updated";
 }
 
-export function installRuleForAgent(agent: string, content: string): RuleResult | null {
+export function installRuleForAgent(
+  agent: string,
+  content: string,
+  projectRoot?: string,
+): RuleResult | null {
   if (!isRuleAgent(agent)) return null;
 
   const target = RULE_TARGETS[agent];
-  const path = target.path();
+  const path = target.path(projectRoot);
+  if (!path) return null;
+  if (projectRoot) assertSafeProjectPath(projectRoot, path);
   const normalized = normalizeRule(content);
   const action =
     target.kind === "file"
@@ -210,11 +225,13 @@ export function installRuleForAgent(agent: string, content: string): RuleResult 
   return { agent, path, action };
 }
 
-export function removeRuleForAgent(agent: string): RuleResult | null {
+export function removeRuleForAgent(agent: string, projectRoot?: string): RuleResult | null {
   if (!isRuleAgent(agent)) return null;
 
   const target = RULE_TARGETS[agent];
-  const path = target.path();
+  const path = target.path(projectRoot);
+  if (!path) return null;
+  if (projectRoot) assertSafeProjectPath(projectRoot, path);
   if (!existsSync(path)) return { agent, path, action: "not_found" };
 
   if (target.kind === "file") {
