@@ -54,7 +54,7 @@ export function setTelemetryConsent(lane: TelemetryLane | "all", enabled: boolea
 /** Persist one or both explicit consent decisions while keeping the lanes independent. */
 export function setTelemetryConsents(consents: TelemetryConsentUpdate): boolean {
   const current = readTelemetrySettings();
-  if (current.status === "unsupported") return false;
+  if (current.status === "unsupported" || current.status === "error") return false;
   const settings = current.status === "current" ? current.settings : emptyTelemetrySettings();
   let hasDecision = false;
 
@@ -105,7 +105,7 @@ export function getOrCreateInstallID(): string | undefined {
 /** Explicitly rotate the installation UUID, preserving understood consent decisions. */
 export function resetInstallID(): string | undefined {
   const current = readTelemetrySettings();
-  if (current.status === "unsupported") return undefined;
+  if (current.status === "unsupported" || current.status === "error") return undefined;
   const settings = current.status === "current" ? current.settings : emptyTelemetrySettings();
   const installID = randomUUID();
   settings.install_id = installID;
@@ -120,9 +120,16 @@ function readTelemetrySettings(): SettingsReadResult {
     return { status: "error", settings: emptyTelemetrySettings() };
   }
 
+  let content: string;
+  try {
+    content = readFileSync(path, "utf-8");
+  } catch {
+    return { status: "error", settings: emptyTelemetrySettings() };
+  }
+
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(path, "utf-8")) as unknown;
+    raw = JSON.parse(content) as unknown;
   } catch {
     return { status: "invalid", settings: emptyTelemetrySettings() };
   }

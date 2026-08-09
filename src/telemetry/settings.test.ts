@@ -256,6 +256,28 @@ describe("telemetry settings", () => {
     expect(loadTelemetrySettings()).toEqual({ schema_version: 1 });
   });
 
+  it("preserves existing settings when a transient read fails", () => {
+    const original = `${JSON.stringify({
+      schema_version: 1,
+      analytics: true,
+      errors: false,
+      install_id: "11111111-1111-4111-8111-111111111111",
+    })}\n`;
+    const path = createSettingsFile(original);
+
+    vi.mocked(readFileSync).mockImplementationOnce(() => {
+      throw new Error("temporarily unreadable");
+    });
+    expect(setTelemetryConsent("errors", true)).toBe(false);
+    expect(readFileSync(path, "utf-8")).toBe(original);
+
+    vi.mocked(readFileSync).mockImplementationOnce(() => {
+      throw new Error("temporarily unreadable");
+    });
+    expect(resetInstallID()).toBeUndefined();
+    expect(readFileSync(path, "utf-8")).toBe(original);
+  });
+
   it("never throws or enables collection when data writes fail", () => {
     vi.mocked(writeFileSync).mockImplementationOnce(() => {
       throw new Error("read-only filesystem");
