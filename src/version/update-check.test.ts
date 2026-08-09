@@ -31,10 +31,22 @@ describe("buildUpdateHint", () => {
 describe("buildUpdateNotice", () => {
   it("shows a concise update command to an interactive user", () => {
     const notice = buildUpdateNotice("0.43.0", "0.44.0", "npm", true);
+    const lines = notice
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: Strip ANSI colors before measuring the frame.
+      .replaceAll(/\u001B\[[0-9;]*m/g, "")
+      .trim()
+      .split("\n");
 
     expect(notice).toContain("Update available: 0.43.0 → 0.44.0");
     expect(notice).toContain('Run "npm install -g @dosu/cli@latest"');
     expect(notice).not.toContain("Tell the user");
+    expect(lines).toHaveLength(6);
+    expect(lines[0]).toMatch(/^╭═+╮$/);
+    expect(lines.at(-1)).toMatch(/^╰═+╯$/);
+    expect(lines.slice(1, -1).every((line) => line.startsWith("│") && line.endsWith("│"))).toBe(
+      true,
+    );
+    expect(new Set(lines.map((line) => line.length)).size).toBe(1);
   });
 
   it("tells an agent to get approval before updating", () => {
@@ -46,6 +58,7 @@ describe("buildUpdateNotice", () => {
     expect(notice).toContain('run "brew upgrade dosu-ai/dosu/dosu"');
     expect(notice).toContain('verify with "dosu --version"');
     expect(notice).not.toContain("\u001B");
+    expect(notice).not.toContain("╭");
   });
 });
 

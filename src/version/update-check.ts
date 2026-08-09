@@ -110,7 +110,22 @@ export function buildUpdateNotice(
 ): string {
   const hint = buildUpdateHint(channel);
   if (interactive) {
-    return `\n${pc.yellow(`  Update available: ${current} → ${latest}`)}\n${pc.dim(`  ${hint}`)}\n`;
+    const versionMessage = `Update available: ${current} → ${latest}`;
+    const contentWidth = Math.max(versionMessage.length, hint.length);
+    const innerWidth = contentWidth + 4;
+    const horizontal = "═".repeat(innerWidth);
+    const emptyLine = `│${" ".repeat(innerWidth)}│`;
+
+    return [
+      "",
+      `╭${horizontal}╮`,
+      emptyLine,
+      `│  ${pc.yellow(versionMessage)}${" ".repeat(contentWidth - versionMessage.length)}  │`,
+      `│  ${pc.dim(hint)}${" ".repeat(contentWidth - hint.length)}  │`,
+      emptyLine,
+      `╰${horizontal}╯`,
+      "",
+    ].join("\n");
   }
 
   const agentAction = hint[0].toLowerCase() + hint.slice(1);
