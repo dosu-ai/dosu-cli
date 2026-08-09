@@ -8,6 +8,7 @@ import {
   testTarget,
 } from "../config/config.test-utils";
 import type { SetupProvider } from "../mcp/providers";
+import { VERSION } from "../version/version";
 
 const {
   mockMintTicket,
@@ -24,6 +25,10 @@ const {
   mockSkillAgentIDsForProviders,
   mockInGitWorkTree,
   mockUpsertDosuAgentsSection,
+  mockRequireProjectRoot,
+  mockInstallProjectInstructions,
+  mockResolveProjectProof,
+  mockRunProjectScopeMigration,
 } = vi.hoisted(() => {
   return {
     mockMintTicket: vi.fn(),
@@ -46,12 +51,39 @@ const {
     mockSkillAgentIDsForProviders: vi.fn(),
     mockInGitWorkTree: vi.fn(),
     mockUpsertDosuAgentsSection: vi.fn(),
+    mockRequireProjectRoot: vi.fn(),
+    mockInstallProjectInstructions: vi.fn(),
+    mockResolveProjectProof: vi.fn(),
+    mockRunProjectScopeMigration: vi.fn(),
   };
 });
 
 vi.mock("../auth/ticket", () => ({
   mintTicket: mockMintTicket,
   exchangeTicket: mockExchangeTicket,
+}));
+
+vi.mock("../mcp/project-credential-store", () => ({
+  saveProjectMcpCredential: vi.fn(),
+  readProjectMcpCredential: vi.fn(),
+}));
+
+const { mockPreflightProjectProxy } = vi.hoisted(() => ({
+  mockPreflightProjectProxy: vi.fn(),
+}));
+vi.mock("../mcp/project-proxy-preflight", () => ({
+  preflightProjectProxy: (...args: unknown[]) => mockPreflightProjectProxy(...args),
+}));
+
+vi.mock("../migration", () => ({
+  resolveProjectProof: (...args: unknown[]) => mockResolveProjectProof(...args),
+}));
+
+const { mockResolveProjectPinnedTarget } = vi.hoisted(() => ({
+  mockResolveProjectPinnedTarget: vi.fn(),
+}));
+vi.mock("../setup/project-target", () => ({
+  resolveProjectPinnedTarget: (...args: unknown[]) => mockResolveProjectPinnedTarget(...args),
 }));
 
 vi.mock("../config/config", async (importOriginal) => ({
@@ -78,6 +110,19 @@ vi.mock("../commands/skill", () => ({
 vi.mock("../setup/agents-md-step", () => ({
   inGitWorkTree: mockInGitWorkTree,
   upsertDosuAgentsSection: mockUpsertDosuAgentsSection,
+}));
+
+vi.mock("../setup/project-root", () => ({
+  requireProjectRoot: mockRequireProjectRoot,
+}));
+
+vi.mock("../setup/project-scope-migration", () => ({
+  runProjectScopeMigration: (...args: unknown[]) => mockRunProjectScopeMigration(...args),
+}));
+
+vi.mock("../setup/project-instructions", () => ({
+  installProjectInstructions: mockInstallProjectInstructions,
+  providerUsesProjectInstructions: (providerID: string) => providerID !== "mcporter",
 }));
 
 vi.mock("../client/client", () => ({
@@ -139,17 +184,24 @@ describe("buildResumeCommand", () => {
       "npx @dosu/cli@latest setup --agent --tool cursor --login-ticket tkt-2 --deployment dep-9",
     );
   });
+
+  it("preserves an explicit mode in the resume command", () => {
+    const cmd = buildResumeCommand("codex", "tkt-3", undefined, "oss");
+    expect(cmd).toBe(
+      "npx @dosu/cli@latest setup --agent --tool codex --login-ticket tkt-3 --mode oss",
+    );
+  });
 });
 
 describe("listAgentSupportedToolIDs", () => {
-  it("lists every setup provider id, including Claude Desktop", () => {
+  it("lists only providers with an official project MCP scope", () => {
     mockAllSetupProviders.mockReturnValue([
       makeProvider("claude"),
-      makeProvider("claude-desktop"),
+      makeProvider("claude-desktop", { supportsLocal: () => false }),
       makeProvider("cursor"),
     ]);
 
-    expect(listAgentSupportedToolIDs()).toEqual(["claude", "claude-desktop", "cursor"]);
+    expect(listAgentSupportedToolIDs()).toEqual(["claude", "cursor"]);
   });
 });
 
@@ -177,10 +229,19 @@ describe("runAgentSetup", () => {
     mockSkillAgentIDsForProviders.mockReset();
     mockInGitWorkTree.mockReset();
     mockUpsertDosuAgentsSection.mockReset();
+    mockRequireProjectRoot.mockReset();
+    mockInstallProjectInstructions.mockReset();
+    mockResolveProjectProof.mockReset();
+    mockRunProjectScopeMigration.mockReset();
+    mockPreflightProjectProxy.mockReset();
+    mockResolveProjectPinnedTarget.mockReset();
     for (const fn of Object.values(mockClient)) fn.mockReset();
 
     claudeProvider = makeProvider("claude", { name: () => "Claude Code" });
-    desktopProvider = makeProvider("claude-desktop", { name: () => "Claude Desktop" });
+    desktopProvider = makeProvider("claude-desktop", {
+      name: () => "Claude Desktop",
+      supportsLocal: () => false,
+    });
 
     mockAllSetupProviders.mockReturnValue([claudeProvider, desktopProvider]);
     mockLoadConfig.mockReturnValue(makeBaseConfig());
@@ -200,6 +261,25 @@ describe("runAgentSetup", () => {
       action: "created",
       path: "/tmp/repo/AGENTS.md",
     });
+    mockRequireProjectRoot.mockReturnValue("/tmp/repo");
+    mockInstallProjectInstructions.mockReturnValue({
+      agentsMd: { action: "created", path: "/tmp/repo/AGENTS.md" },
+      adapters: [{ provider: "claude", action: "created", path: "/tmp/repo/CLAUDE.md" }],
+    });
+    mockResolveProjectProof.mockReturnValue({
+      ok: true,
+      proof: { root: "/tmp/repo", cwd: "/tmp/repo" },
+    });
+    mockRunProjectScopeMigration.mockReturnValue({
+      ok: true,
+      cleanupAttempted: true,
+      runtimeVerified: true,
+      receiptRoot: "/tmp/dosu-migration-receipts",
+      counts: { removed: 0, not_found: 3, preserved: 0, failed: 0, total: 3 },
+      warnings: [],
+    });
+    mockPreflightProjectProxy.mockResolvedValue({ ok: true, reason: "initialize_ok" });
+    mockResolveProjectPinnedTarget.mockReturnValue({ ok: true, providers: [] });
   });
 
   afterEach(() => {
@@ -281,7 +361,7 @@ describe("runAgentSetup", () => {
       "mcp_install",
       "rule_install",
       "skill_install",
-      "agents_md_install",
+      "legacy_migration",
       "done",
     ]);
     expect(claudeProvider.install).toHaveBeenCalledTimes(1);
@@ -295,9 +375,40 @@ describe("runAgentSetup", () => {
       status: "ok",
       agent_next_steps: expect.stringMatching(/Claude Code.*dosu status --json/),
     });
-    expect(mockInstallRuleForAgent).toHaveBeenCalledWith("claude", "canonical rule\n");
-    expect(mockInstallSkill).toHaveBeenCalledWith(["claude"], { quiet: true });
-    expect(mockUpsertDosuAgentsSection).toHaveBeenCalledWith(process.cwd(), "canonical rule\n");
+    expect(events.at(-2)).toMatchObject({
+      step: "legacy_migration",
+      status: "ok",
+      receipt_root: "/tmp/dosu-migration-receipts",
+      counts: { removed: 0, not_found: 3, preserved: 0, failed: 0, total: 3 },
+    });
+    expect(JSON.stringify(events)).not.toContain("sk_user_x");
+    expect(mockInstallProjectInstructions).toHaveBeenCalledWith({
+      projectRoot: "/tmp/repo",
+      providerIDs: ["claude"],
+      content: "canonical rule\n",
+    });
+    expect(mockInstallSkill).toHaveBeenCalledWith(["claude"], {
+      quiet: true,
+      projectRoot: "/tmp/repo",
+    });
+    expect(mockResolveProjectProof).toHaveBeenCalledWith("/tmp/repo");
+    expect(mockRunProjectScopeMigration).toHaveBeenCalledWith({
+      project: { root: "/tmp/repo", cwd: "/tmp/repo" },
+      providerIDs: ["claude"],
+      proxy: { packageVersion: VERSION, deploymentID: "dep-1" },
+      instructionContent: "canonical rule\n",
+      runtimeVerified: true,
+    });
+    const preflightOrder = mockPreflightProjectProxy.mock.invocationCallOrder[0];
+    const mcpOrder = (claudeProvider.install as ReturnType<typeof vi.fn>).mock
+      .invocationCallOrder[0];
+    const instructionOrder = mockInstallProjectInstructions.mock.invocationCallOrder[0];
+    const skillOrder = mockInstallSkill.mock.invocationCallOrder[0];
+    const migrationOrder = mockRunProjectScopeMigration.mock.invocationCallOrder[0];
+    expect(preflightOrder).toBeLessThan(mcpOrder);
+    expect(mcpOrder).toBeLessThan(instructionOrder);
+    expect(instructionOrder).toBeLessThan(skillOrder);
+    expect(skillOrder).toBeLessThan(migrationOrder);
   });
 
   it("errors with multiple_deployments when the user has more than one dosu_mcp", async () => {
@@ -521,6 +632,12 @@ describe("runAgentSetup", () => {
     const code = await runAgentSetup({ tool: "claude", deploymentID: "dep-B" });
 
     expect(code).toBe(0);
+    expect(mockResolveProjectPinnedTarget).toHaveBeenCalledWith(
+      [claudeProvider, desktopProvider],
+      "/tmp/repo",
+      { mode: "cloud", deploymentID: "dep-B" },
+      ["claude"],
+    );
     const events = emittedEvents();
     const depEvent = events.find((e) => e.step === "deployment");
     expect(depEvent).toMatchObject({
@@ -663,6 +780,305 @@ describe("runAgentSetup", () => {
     expect(claudeProvider.install).toHaveBeenCalledTimes(1);
   });
 
+  it("prefers the exact project-pinned deployment over another globally active target", async () => {
+    mockLoadConfig.mockReturnValue(
+      makeBaseConfig({
+        access_token: ticketAccessToken,
+        refresh_token: "ref",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        deployment_id: "dep-global-b",
+        deployment_name: "acme/global-b",
+      }),
+    );
+    mockClient.doRequestRaw.mockResolvedValue(new Response(null, { status: 200 }));
+    mockClient.getDeployments.mockResolvedValue([
+      {
+        deployment_id: "dep-project-a",
+        name: "acme/project-a",
+        provider_slug: "dosu_mcp",
+        enabled: true,
+        org_id: "org-1",
+        org_name: "acme",
+        space_id: "space-1",
+      },
+    ]);
+    mockClient.validateAPIKey.mockResolvedValue(false);
+    mockClient.createAPIKey.mockResolvedValue({ api_key: "key-a" });
+    mockResolveProjectPinnedTarget.mockReturnValue({
+      ok: true,
+      providers: ["claude"],
+      target: { deploymentID: "dep-project-a" },
+    });
+
+    const code = await runAgentSetup({ tool: "claude" });
+
+    expect(code).toBe(0);
+    expect(emittedEvents().find((event) => event.step === "deployment")).toMatchObject({
+      deployment_id: "dep-project-a",
+    });
+    expect(claudeProvider.install).toHaveBeenCalledWith(
+      expect.objectContaining({
+        active_account: expect.objectContaining({
+          target: expect.objectContaining({ deployment_id: "dep-project-a" }),
+        }),
+      }),
+      false,
+      { projectRoot: "/tmp/repo", allowProjectRetarget: false },
+    );
+    expect(mockRunProjectScopeMigration).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerIDs: ["claude"],
+        proxy: { packageVersion: VERSION, deploymentID: "dep-project-a" },
+        runtimeVerified: true,
+      }),
+    );
+  });
+
+  it("fails closed on conflicting pins from any project-supported provider", async () => {
+    const undetectedCodex = makeProvider("codex", { isInstalled: () => false });
+    mockAllSetupProviders.mockReturnValue([claudeProvider, undetectedCodex, desktopProvider]);
+    mockLoadConfig.mockReturnValue(
+      makeBaseConfig({
+        access_token: ticketAccessToken,
+        refresh_token: "ref",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        deployment_id: "dep-global",
+        deployment_name: "acme/global",
+      }),
+    );
+    mockClient.doRequestRaw.mockResolvedValue(new Response(null, { status: 200 }));
+    mockResolveProjectPinnedTarget.mockReturnValue({
+      ok: false,
+      reason: "conflicting_project_targets",
+      providers: ["claude", "codex"],
+    });
+
+    const code = await runAgentSetup({ tool: "claude" });
+
+    expect(code).toBe(1);
+    expect(mockResolveProjectPinnedTarget).toHaveBeenCalledWith(
+      [claudeProvider, undetectedCodex, desktopProvider],
+      "/tmp/repo",
+    );
+    expect(emittedEvents().at(-1)).toMatchObject({
+      step: "project_target",
+      status: "error",
+      reason: "conflicting_project_targets",
+      providers: ["claude", "codex"],
+    });
+    expect(claudeProvider.install).not.toHaveBeenCalled();
+    expect(mockPreflightProjectProxy).not.toHaveBeenCalled();
+  });
+
+  it("fails on an ambiguous project entry before ticket redemption or session verification", async () => {
+    mockLoadConfig.mockReturnValue(makeBaseConfig());
+    mockResolveProjectPinnedTarget.mockReturnValue({
+      ok: false,
+      reason: "ambiguous_project_config",
+      providers: ["claude"],
+      paths: ["/tmp/repo/.mcp.json"],
+    });
+
+    const code = await runAgentSetup({
+      tool: "claude",
+      loginTicket: "ticket-must-not-be-redeemed",
+    });
+
+    expect(code).toBe(1);
+    expect(mockExchangeTicket).not.toHaveBeenCalled();
+    expect(mockClient.doRequestRaw).not.toHaveBeenCalled();
+    expect(emittedEvents().at(-1)).toMatchObject({
+      step: "project_target",
+      status: "error",
+      reason: "ambiguous_project_config",
+      providers: ["claude"],
+      paths: ["/tmp/repo/.mcp.json"],
+    });
+  });
+
+  it("rejects an explicit OSS split-brain in an undetected client before authentication", async () => {
+    const undetectedCodex = makeProvider("codex", { isInstalled: () => false });
+    mockAllSetupProviders.mockReturnValue([claudeProvider, undetectedCodex, desktopProvider]);
+    mockLoadConfig.mockReturnValue(makeBaseConfig());
+    mockResolveProjectPinnedTarget.mockReturnValue({
+      ok: false,
+      reason: "requested_project_target_conflict",
+      providers: ["codex"],
+      paths: ["/tmp/repo/.codex/config.toml"],
+    });
+
+    const code = await runAgentSetup({ tool: "claude", mode: "oss" });
+
+    expect(code).toBe(1);
+    expect(mockResolveProjectPinnedTarget).toHaveBeenCalledWith(
+      [claudeProvider, undetectedCodex, desktopProvider],
+      "/tmp/repo",
+      { mode: "oss" },
+      ["claude"],
+    );
+    expect(mockMintTicket).not.toHaveBeenCalled();
+    expect(mockClient.doRequestRaw).not.toHaveBeenCalled();
+    expect(claudeProvider.install).not.toHaveBeenCalled();
+  });
+
+  it("passes the exact OSS project proxy expectation to legacy migration", async () => {
+    mockLoadConfig.mockReturnValue(
+      makeBaseConfig({
+        access_token: ticketAccessToken,
+        refresh_token: "ref",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        deployment_id: "dep-global",
+        deployment_name: "acme/global",
+        api_key: "sk_existing",
+      }),
+    );
+    mockClient.doRequestRaw.mockResolvedValue(new Response(null, { status: 200 }));
+    mockClient.validateAPIKey.mockResolvedValue(true);
+    mockResolveProjectPinnedTarget.mockReturnValue({
+      ok: true,
+      providers: ["claude"],
+      target: { oss: true },
+    });
+
+    const code = await runAgentSetup({ tool: "claude" });
+
+    expect(code).toBe(0);
+    expect(claudeProvider.install).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "oss" }),
+      false,
+      { projectRoot: "/tmp/repo", allowProjectRetarget: false },
+    );
+    expect(mockRunProjectScopeMigration).toHaveBeenCalledWith(
+      expect.objectContaining({
+        proxy: { packageVersion: VERSION, oss: true },
+        runtimeVerified: true,
+      }),
+    );
+  });
+
+  it("honors an explicit OSS mode and authorizes that project retarget", async () => {
+    mockLoadConfig.mockReturnValue(
+      makeBaseConfig({
+        access_token: ticketAccessToken,
+        refresh_token: "ref",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        deployment_id: "dep-cloud",
+        deployment_name: "acme/cloud",
+        api_key: "sk_existing",
+      }),
+    );
+    mockClient.doRequestRaw.mockResolvedValue(new Response(null, { status: 200 }));
+    mockClient.validateAPIKey.mockResolvedValue(true);
+
+    const code = await runAgentSetup({ tool: "claude", mode: "oss" });
+
+    expect(code).toBe(0);
+    expect(mockResolveProjectPinnedTarget).toHaveBeenCalledWith(
+      [claudeProvider, desktopProvider],
+      "/tmp/repo",
+      { mode: "oss" },
+      ["claude"],
+    );
+    expect(claudeProvider.install).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "oss" }),
+      false,
+      { projectRoot: "/tmp/repo", allowProjectRetarget: true },
+    );
+    expect(mockRunProjectScopeMigration).toHaveBeenCalledWith(
+      expect.objectContaining({
+        proxy: { packageVersion: VERSION, oss: true },
+        runtimeVerified: true,
+      }),
+    );
+  });
+
+  it("honors an explicit cloud mode when the saved mode is OSS", async () => {
+    mockLoadConfig.mockReturnValue(
+      makeBaseConfig({
+        access_token: ticketAccessToken,
+        refresh_token: "ref",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        deployment_id: "dep-cloud",
+        deployment_name: "acme/cloud",
+        api_key: "sk_existing",
+        mode: "oss",
+      }),
+    );
+    mockClient.doRequestRaw.mockResolvedValue(new Response(null, { status: 200 }));
+    mockClient.validateAPIKey.mockResolvedValue(true);
+
+    const code = await runAgentSetup({ tool: "claude", mode: "cloud" });
+
+    expect(code).toBe(0);
+    expect(mockResolveProjectPinnedTarget).toHaveBeenCalledWith(
+      [claudeProvider, desktopProvider],
+      "/tmp/repo",
+      { mode: "cloud", deploymentID: "dep-cloud" },
+      ["claude"],
+    );
+    expect(claudeProvider.install).toHaveBeenCalledWith(
+      expect.not.objectContaining({ mode: "oss" }),
+      false,
+      { projectRoot: "/tmp/repo", allowProjectRetarget: true },
+    );
+    expect(mockRunProjectScopeMigration).toHaveBeenCalledWith(
+      expect.objectContaining({
+        proxy: { packageVersion: VERSION, deploymentID: "dep-cloud" },
+        runtimeVerified: true,
+      }),
+    );
+  });
+
+  it("uses the Cloud picker instead of recovering a selected client's old OSS pin", async () => {
+    mockLoadConfig.mockReturnValue(
+      makeBaseConfig({
+        access_token: ticketAccessToken,
+        refresh_token: "ref",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        api_key: "sk_existing",
+        mode: "oss",
+      }),
+    );
+    mockResolveProjectPinnedTarget.mockReturnValue({
+      ok: true,
+      providers: ["claude"],
+    });
+    mockClient.doRequestRaw.mockResolvedValue(new Response(null, { status: 200 }));
+    mockClient.getDeployments.mockResolvedValue([
+      {
+        deployment_id: "dep-cloud-picked",
+        name: "acme/cloud-picked",
+        provider_slug: "dosu_mcp",
+        enabled: true,
+        org_id: "org-1",
+        org_name: "acme",
+        space_id: "space-1",
+      },
+    ]);
+    mockClient.validateAPIKey.mockResolvedValue(true);
+
+    const code = await runAgentSetup({ tool: "claude", mode: "cloud" });
+
+    expect(code).toBe(0);
+    expect(mockResolveProjectPinnedTarget).toHaveBeenCalledWith(
+      [claudeProvider, desktopProvider],
+      "/tmp/repo",
+      { mode: "cloud", deploymentID: undefined },
+      ["claude"],
+    );
+    expect(mockClient.getDeployments).toHaveBeenCalled();
+    expect(claudeProvider.install).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: undefined,
+        active_account: expect.objectContaining({
+          target: expect.objectContaining({ deployment_id: "dep-cloud-picked" }),
+        }),
+      }),
+      false,
+      { projectRoot: "/tmp/repo", allowProjectRetarget: true },
+    );
+  });
+
   it("reuses a still-valid API key without minting a new one", async () => {
     mockLoadConfig.mockReturnValue(
       makeBaseConfig({
@@ -714,6 +1130,35 @@ describe("runAgentSetup", () => {
     expect(claudeProvider.install).not.toHaveBeenCalled();
   });
 
+  it("fails before project writes when the exact proxy cannot initialize", async () => {
+    mockLoadConfig.mockReturnValue(
+      makeBaseConfig({
+        access_token: ticketAccessToken,
+        refresh_token: "ref",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        deployment_id: "dep-locked",
+        deployment_name: "acme/locked",
+        api_key: "sk_existing",
+      }),
+    );
+    mockClient.doRequestRaw.mockResolvedValue(new Response(null, { status: 200 }));
+    mockClient.validateAPIKey.mockResolvedValue(true);
+    mockPreflightProjectProxy.mockResolvedValue({ ok: false, reason: "timeout" });
+
+    const code = await runAgentSetup({ tool: "claude" });
+
+    expect(code).toBe(1);
+    expect(emittedEvents().at(-1)).toMatchObject({
+      step: "mcp_preflight",
+      status: "error",
+      reason: "timeout",
+      agent_next_steps: expect.stringContaining("no project files"),
+    });
+    expect(claudeProvider.install).not.toHaveBeenCalled();
+    expect(mockInstallProjectInstructions).not.toHaveBeenCalled();
+    expect(mockInstallSkill).not.toHaveBeenCalled();
+  });
+
   it("emits install_failed when the provider install throws", async () => {
     mockLoadConfig.mockReturnValue(
       makeBaseConfig({
@@ -758,7 +1203,7 @@ describe("runAgentSetup", () => {
     );
     mockClient.doRequestRaw.mockResolvedValue(new Response(null, { status: 200 }));
     mockClient.validateAPIKey.mockResolvedValue(true);
-    mockInstallRuleForAgent.mockImplementation(() => {
+    mockInstallProjectInstructions.mockImplementation(() => {
       throw new Error("rule directory is read-only");
     });
 
@@ -794,16 +1239,17 @@ describe("runAgentSetup", () => {
 
     expect(code).toBe(1);
     expect(claudeProvider.install).toHaveBeenCalledTimes(1);
-    expect(mockInstallRuleForAgent).toHaveBeenCalledTimes(1);
+    expect(mockInstallProjectInstructions).toHaveBeenCalledTimes(1);
     expect(emittedEvents().at(-1)).toMatchObject({
       step: "skill_install",
       status: "error",
       reason: "install_failed",
       agent_next_steps: expect.stringContaining("idempotent"),
     });
+    expect(mockRunProjectScopeMigration).not.toHaveBeenCalled();
   });
 
-  it("reports an AGENTS.md failure after preserving the other bundled installs", async () => {
+  it("fails closed and reports receipt counts when safe legacy migration cannot finish", async () => {
     mockLoadConfig.mockReturnValue(
       makeBaseConfig({
         access_token: ticketAccessToken,
@@ -816,8 +1262,78 @@ describe("runAgentSetup", () => {
     );
     mockClient.doRequestRaw.mockResolvedValue(new Response(null, { status: 200 }));
     mockClient.validateAPIKey.mockResolvedValue(true);
-    mockInGitWorkTree.mockReturnValue(true);
-    mockUpsertDosuAgentsSection.mockImplementation(() => {
+    mockRunProjectScopeMigration.mockReturnValue({
+      ok: false,
+      cleanupAttempted: true,
+      runtimeVerified: true,
+      reason: "migration_failed",
+      receiptRoot: "/tmp/dosu-migration-receipts/run-1",
+      counts: { removed: 1, not_found: 2, preserved: 1, failed: 1, total: 5 },
+      warnings: ["ambiguous legacy entry preserved"],
+    });
+
+    const code = await runAgentSetup({ tool: "claude" });
+
+    expect(code).toBe(1);
+    expect(claudeProvider.install).toHaveBeenCalledTimes(1);
+    expect(mockInstallProjectInstructions).toHaveBeenCalledTimes(1);
+    expect(mockInstallSkill).toHaveBeenCalledTimes(1);
+    expect(emittedEvents().at(-1)).toMatchObject({
+      step: "legacy_migration",
+      status: "error",
+      reason: "migration_failed",
+      receipt_root: "/tmp/dosu-migration-receipts/run-1",
+      counts: { removed: 1, not_found: 2, preserved: 1, failed: 1, total: 5 },
+      agent_next_steps: expect.stringContaining("1 proven global item(s) were already backed up"),
+    });
+    expect(emittedEvents().some((event) => event.step === "done")).toBe(false);
+    expect(JSON.stringify(emittedEvents())).not.toContain("sk_existing");
+  });
+
+  it("preserves globals when the project cannot be re-proven after bundle installation", async () => {
+    mockLoadConfig.mockReturnValue(
+      makeBaseConfig({
+        access_token: ticketAccessToken,
+        refresh_token: "ref",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        deployment_id: "dep-locked",
+        deployment_name: "acme/locked",
+        api_key: "sk_existing",
+      }),
+    );
+    mockClient.doRequestRaw.mockResolvedValue(new Response(null, { status: 200 }));
+    mockClient.validateAPIKey.mockResolvedValue(true);
+    mockResolveProjectProof.mockReturnValue({ ok: false, reason: "git_probe_failed" });
+
+    const code = await runAgentSetup({ tool: "claude" });
+
+    expect(code).toBe(1);
+    expect(mockRunProjectScopeMigration).not.toHaveBeenCalled();
+    expect(emittedEvents().at(-1)).toMatchObject({
+      step: "legacy_migration",
+      status: "error",
+      reason: "project_reverification_failed",
+      project_reason: "git_probe_failed",
+      receipt_root: null,
+      counts: { removed: 0, not_found: 0, preserved: 0, failed: 0, total: 0 },
+    });
+    expect(emittedEvents().some((event) => event.step === "done")).toBe(false);
+  });
+
+  it("reports a project instruction failure before attempting the skill", async () => {
+    mockLoadConfig.mockReturnValue(
+      makeBaseConfig({
+        access_token: ticketAccessToken,
+        refresh_token: "ref",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        deployment_id: "dep-locked",
+        deployment_name: "acme/locked",
+        api_key: "sk_existing",
+      }),
+    );
+    mockClient.doRequestRaw.mockResolvedValue(new Response(null, { status: 200 }));
+    mockClient.validateAPIKey.mockResolvedValue(true);
+    mockInstallProjectInstructions.mockImplementation(() => {
       throw new Error("AGENTS.md is read-only");
     });
 
@@ -825,10 +1341,10 @@ describe("runAgentSetup", () => {
 
     expect(code).toBe(1);
     expect(claudeProvider.install).toHaveBeenCalledTimes(1);
-    expect(mockInstallRuleForAgent).toHaveBeenCalledTimes(1);
-    expect(mockInstallSkill).toHaveBeenCalledTimes(1);
+    expect(mockInstallProjectInstructions).toHaveBeenCalledTimes(1);
+    expect(mockInstallSkill).not.toHaveBeenCalled();
     expect(emittedEvents().at(-1)).toMatchObject({
-      step: "agents_md_install",
+      step: "rule_install",
       status: "error",
       reason: "install_failed",
       agent_next_steps: expect.stringContaining("idempotent"),

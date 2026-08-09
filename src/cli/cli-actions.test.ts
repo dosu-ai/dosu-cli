@@ -1075,6 +1075,27 @@ describe("CLI actions", () => {
         deploymentID: "dep_456",
       });
     });
+
+    it("passes a validated mode to agent setup", async () => {
+      mockRunAgentSetup.mockResolvedValue(0);
+
+      await run("setup", "--agent", "--tool", "codex", "--mode", "oss");
+
+      expect(mockRunAgentSetup).toHaveBeenCalledWith({
+        tool: "codex",
+        loginTicket: undefined,
+        deploymentID: undefined,
+        mode: "oss",
+      });
+    });
+
+    it("rejects an invalid mode before starting agent setup", async () => {
+      await expect(
+        run("setup", "--agent", "--tool", "codex", "--mode", "nonsense"),
+      ).rejects.toThrow("invalid --mode value 'nonsense'");
+
+      expect(mockRunAgentSetup).not.toHaveBeenCalled();
+    });
   });
 
   // ── logs ────────────────────────────────────────────────────────────────

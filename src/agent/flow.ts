@@ -19,21 +19,34 @@ import { installSkill, skillAgentIDsForProviders } from "../commands/skill";
 import {
   type Config,
   loadConfig,
+  MODE_OSS,
   replaceLoginSession,
+  type SetupMode,
   saveConfig,
   updateTarget,
 } from "../config/config";
 import { logger } from "../debug/logger";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
+import { recordProjectProxyEndpoint } from "../mcp/project-proxy";
+import { preflightProjectProxy } from "../mcp/project-proxy-preflight";
 import { allSetupProviders } from "../mcp/providers";
-import { fetchDosuRule, installRuleForAgent, isRuleAgent } from "../rules/installer";
-import { inGitWorkTree, upsertDosuAgentsSection } from "../setup/agents-md-step";
+import { type ProviderId, resolveProjectProof } from "../migration";
+import { fetchDosuRule } from "../rules/installer";
+import {
+  installProjectInstructions,
+  providerUsesProjectInstructions,
+} from "../setup/project-instructions";
+import { requireProjectRoot } from "../setup/project-root";
+import { runProjectScopeMigration } from "../setup/project-scope-migration";
+import { type RequestedProjectTarget, resolveProjectPinnedTarget } from "../setup/project-target";
+import { VERSION } from "../version/version";
 import { emitError, emitNeedUserAction, emitStep } from "./output";
 
 export interface AgentSetupOptions {
   tool: string;
   loginTicket?: string;
   deploymentID?: string;
+  mode?: SetupMode | "cloud";
 }
 
 const NPX_INVOCATION = "npx @dosu/cli@latest";
@@ -53,9 +66,13 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
   // 0. Resolve the requested tool up front. We do this before any auth so
   //    the agent gets a usage error immediately instead of after a login
   //    round-trip.
-  const provider = allSetupProviders().find((p) => p.id() === opts.tool.toLowerCase());
+  const setupProviders = allSetupProviders();
+  const provider = setupProviders.find(
+    (candidate) => candidate.id() === opts.tool.toLowerCase() && candidate.supportsLocal(),
+  );
   if (!provider) {
-    const available = allSetupProviders()
+    const available = setupProviders
+      .filter((candidate) => candidate.supportsLocal())
       .map((p) => p.id())
       .join(", ");
     emitError({
@@ -65,10 +82,38 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
     });
     return 2;
   }
+  let projectRoot: string;
+  try {
+    projectRoot = requireProjectRoot();
+  } catch (err) {
+    emitError({
+      step: "setup",
+      reason: "project_required",
+      agent_next_steps: err instanceof Error ? err.message : String(err),
+    });
+    return 1;
+  }
+  let cfg = loadConfig();
+  const requestedTarget = requestedProjectTarget(opts, cfg);
+  const projectTarget = requestedTarget
+    ? resolveProjectPinnedTarget(setupProviders, projectRoot, requestedTarget, [provider.id()])
+    : resolveProjectPinnedTarget(setupProviders, projectRoot);
+  if (!projectTarget.ok) {
+    emitError({
+      step: "project_target",
+      reason: projectTarget.reason,
+      providers: projectTarget.providers,
+      paths: projectTarget.paths,
+      agent_next_steps:
+        projectTarget.reason === "ambiguous_project_config"
+          ? "One or more project Dosu entries are foreign or invalid. Inspect the listed paths and remove or repair only those entries, then retry. No authentication or project write was attempted."
+          : "The project's clients do not all match one Dosu target. Make every listed client use the same target before retrying. No authentication or project write was attempted.",
+    });
+    return 1;
+  }
   // 1. Auth: redeem a ticket if one was provided, otherwise verify any
   //    existing session, otherwise mint a fresh ticket and exit so the
   //    agent can hand the URL to the user.
-  let cfg = loadConfig();
   if (opts.loginTicket) {
     const redeemed = await redeemTicket(opts.loginTicket, cfg);
     if (redeemed.code !== 0 || redeemed.exit) return redeemed.code;
@@ -79,10 +124,29 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
     cfg = verified.cfg;
   }
 
+  // Match the interactive contract: an explicit deployment always means
+  // Cloud; otherwise an explicit mode overrides saved/global state and
+  // authorizes retargeting this project's owned Dosu entry.
+  if (opts.deploymentID) {
+    cfg.mode = undefined;
+    saveConfig(cfg);
+  } else if (opts.mode) {
+    cfg.mode = opts.mode === "oss" ? MODE_OSS : undefined;
+    saveConfig(cfg);
+  }
+
   // 2. Resolve the deployment. Agent mode never prompts — if there are
   //    multiple options the agent must surface that to the user.
   const client = new Client(cfg);
-  const deploymentResult = await resolveDeployment(client, cfg, opts);
+  let deploymentOptions = opts;
+  if (!opts.deploymentID && opts.mode !== "oss") {
+    if (projectTarget.target?.deploymentID) {
+      deploymentOptions = { ...opts, deploymentID: projectTarget.target.deploymentID };
+    } else if (projectTarget.target?.oss) {
+      cfg.mode = MODE_OSS;
+    }
+  }
+  const deploymentResult = await resolveDeployment(client, cfg, deploymentOptions);
   if (deploymentResult.code !== 0) return deploymentResult.code;
   cfg = deploymentResult.cfg;
 
@@ -90,15 +154,31 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
   const keyResult = await ensureAPIKey(client, cfg);
   if (keyResult.code !== 0) return keyResult.code;
   cfg = keyResult.cfg;
+  recordProjectProxyEndpoint(cfg);
+  saveConfig(cfg);
+
+  const preflight = await preflightProjectProxy(cfg, projectRoot);
+  if (!preflight.ok) {
+    emitError({
+      step: "mcp_preflight",
+      reason: preflight.reason,
+      agent_next_steps:
+        "The exact project MCP command could not initialize, so no project files or legacy globals were changed. Check Node.js 22+ and npx, then retry.",
+    });
+    return 1;
+  }
 
   // 4. Install Dosu MCP into the requested tool.
   try {
-    provider.install(cfg, /* global */ true);
+    provider.install(cfg, /* global */ false, {
+      projectRoot,
+      allowProjectRetarget: Boolean(opts.deploymentID || opts.mode),
+    });
     emitStep({
       step: "mcp_install",
       tool: provider.id(),
       tool_name: provider.name(),
-      config_path: provider.globalConfigPath(),
+      config_path: provider.projectConfigPath(projectRoot) ?? "",
     });
   } catch (err: unknown) {
     emitError({
@@ -111,32 +191,35 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
     return 1;
   }
 
-  // 5. Install the matching always-on rule when this agent is part of the
-  // mainstream rule matrix. Unsupported MCP clients simply skip this step.
-  let instruction: string | undefined;
-  try {
-    if (isRuleAgent(provider.id())) {
-      instruction = await fetchDosuRule();
-      const rule = installRuleForAgent(provider.id(), instruction);
-      if (rule) {
-        emitStep({
-          step: "rule_install",
-          tool: provider.id(),
-          tool_name: provider.name(),
-          rule_path: rule.path,
-          action: rule.action,
-        });
-      }
+  // 5. Install the canonical project instructions plus the provider's thin adapter.
+  // Keep the exact fetched body: legacy cleanup re-verifies the checked-in
+  // project bundle against it before removing anything outside the project.
+  let instructionContent = "";
+  if (providerUsesProjectInstructions(provider.id())) {
+    try {
+      instructionContent = await fetchDosuRule();
+      const installed = installProjectInstructions({
+        projectRoot,
+        providerIDs: [provider.id()],
+        content: instructionContent,
+      });
+      emitStep({
+        step: "rule_install",
+        tool: provider.id(),
+        tool_name: provider.name(),
+        rule_path: installed.agentsMd.path,
+        action: installed.agentsMd.action,
+      });
+    } catch (err: unknown) {
+      emitError({
+        step: "rule_install",
+        reason: "install_failed",
+        agent_next_steps: `Dosu MCP was installed, but its rule could not be installed for ${provider.name()}: ${
+          err instanceof Error ? err.message : String(err)
+        }. Re-run this setup command; installation is idempotent.`,
+      });
+      return 1;
     }
-  } catch (err: unknown) {
-    emitError({
-      step: "rule_install",
-      reason: "install_failed",
-      agent_next_steps: `Dosu MCP was installed, but its rule could not be installed for ${provider.name()}: ${
-        err instanceof Error ? err.message : String(err)
-      }. Re-run this setup command; installation is idempotent.`,
-    });
-    return 1;
   }
 
   // 6. Install the remote Dosu skill only for the requested agent. Keep the
@@ -144,7 +227,7 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
   // stdout contract.
   if (skillAgentIDsForProviders([provider.id()]).length > 0) {
     try {
-      const skill = await installSkill([provider.id()], { quiet: true });
+      const skill = await installSkill([provider.id()], { quiet: true, projectRoot });
       if (!skill.success) {
         throw new Error("the skills installer failed");
       }
@@ -166,35 +249,80 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
     }
   }
 
-  // 7. Add the project-level pointer when setup runs from a git work tree.
-  // Use the low-level writer instead of the clack wrapper so stdout stays
-  // valid NDJSON.
-  if (inGitWorkTree()) {
-    try {
-      instruction ??= await fetchDosuRule();
-      const agentsMd = upsertDosuAgentsSection(process.cwd(), instruction);
-      emitStep({
-        step: "agents_md_install",
-        path: agentsMd.path,
-        action: agentsMd.action,
-      });
-    } catch (err: unknown) {
-      emitError({
-        step: "agents_md_install",
-        reason: "install_failed",
-        agent_next_steps: `Dosu's agent integrations were installed, but AGENTS.md could not be updated: ${
-          err instanceof Error ? err.message : String(err)
-        }. Re-run this setup command; installation is idempotent.`,
-      });
-      return 1;
-    }
+  // 7. Re-prove and re-verify the complete project bundle before touching any
+  // legacy global state. The successful runtime preflight above is the only
+  // authority that permits the migration layer to remove exact owned entries.
+  const project = resolveProjectProof(projectRoot);
+  if (!project.ok) {
+    emitError({
+      step: "legacy_migration",
+      reason: "project_reverification_failed",
+      project_reason: project.reason,
+      receipt_root: null,
+      counts: { removed: 0, not_found: 0, preserved: 0, failed: 0, total: 0 },
+      agent_next_steps:
+        "Project setup succeeded, but the Git project could not be re-verified, so legacy global configuration was preserved. Re-run setup from the same project root.",
+    });
+    return 1;
   }
+
+  const proxy =
+    cfg.mode === MODE_OSS
+      ? ({ packageVersion: VERSION, oss: true } as const)
+      : {
+          packageVersion: VERSION,
+          deploymentID: cfg.active_account?.target?.deployment_id as string,
+        };
+  const migration = runProjectScopeMigration({
+    project: project.proof,
+    providerIDs: [provider.id() as ProviderId],
+    proxy,
+    instructionContent,
+    runtimeVerified: true,
+  });
+  for (const warning of migration.warnings) logger.warn("agent.flow", warning);
+  if (!migration.ok) {
+    const cleanupProgress =
+      migration.counts.removed > 0
+        ? `${migration.counts.removed} proven global item(s) were already backed up and removed before cleanup stopped.`
+        : "No global item was removed.";
+    emitError({
+      step: "legacy_migration",
+      reason: migration.reason,
+      receipt_root: migration.receiptRoot,
+      counts: migration.counts,
+      agent_next_steps:
+        `Project setup succeeded, but safe legacy cleanup could not finish. ${cleanupProgress} ` +
+        "Nothing ambiguous was deleted. Re-run setup; use the receipt path for recovery if needed.",
+    });
+    return 1;
+  }
+  emitStep({
+    step: "legacy_migration",
+    receipt_root: migration.receiptRoot,
+    counts: migration.counts,
+  });
 
   emitStep({
     step: "done",
-    agent_next_steps: `Dosu is configured for ${provider.name()}. Tell the user setup is complete and they can ask their agent a Dosu question. Run 'dosu status --json' to verify.`,
+    agent_next_steps: `Dosu project files were written for ${provider.name()}. Tell the user to restart or reload the client, approve the project's MCP server if prompted, and then ask a Dosu question. 'dosu status --json' verifies authentication, not the client runtime.`,
   });
   return 0;
+}
+
+function requestedProjectTarget(
+  opts: AgentSetupOptions,
+  cfg: Config,
+): RequestedProjectTarget | undefined {
+  if (opts.deploymentID) return { mode: "cloud", deploymentID: opts.deploymentID };
+  if (opts.mode === "oss") return { mode: "oss" };
+  if (opts.mode === "cloud") {
+    return {
+      mode: "cloud",
+      deploymentID: cfg.active_account?.target?.deployment_id,
+    };
+  }
+  return undefined;
 }
 
 async function redeemTicket(
@@ -283,7 +411,7 @@ async function verifyOrMint(
       step: "auth",
       url: minted.url,
       ticket: minted.ticket,
-      resume_command: buildResumeCommand(opts.tool, minted.ticket, opts.deploymentID),
+      resume_command: buildResumeCommand(opts.tool, minted.ticket, opts.deploymentID, opts.mode),
       expires_in: minted.expires_in,
       agent_next_steps:
         "Give the URL to the user so they can sign in. Wait for the user to confirm they've signed in, then run resume_command to finish setup.",
@@ -484,15 +612,25 @@ async function ensureAPIKey(client: Client, cfg: Config): Promise<{ code: number
  * Build the exact command the agent should run after the user signs in.
  * Mirrors the marketing one-liner so the agent can copy/paste it back.
  */
-export function buildResumeCommand(tool: string, ticket: string, deploymentID?: string): string {
+export function buildResumeCommand(
+  tool: string,
+  ticket: string,
+  deploymentID?: string,
+  mode?: SetupMode | "cloud",
+): string {
   const parts = [NPX_INVOCATION, "setup", "--agent", "--tool", tool, "--login-ticket", ticket];
   if (deploymentID) {
     parts.push("--deployment", deploymentID);
+  }
+  if (mode) {
+    parts.push("--mode", mode);
   }
   return parts.join(" ");
 }
 
 /** Provider listing for `--tool` validation. Exported for tests. */
 export function listAgentSupportedToolIDs(): string[] {
-  return allSetupProviders().map((p) => p.id());
+  return allSetupProviders()
+    .filter((provider) => provider.supportsLocal())
+    .map((provider) => provider.id());
 }

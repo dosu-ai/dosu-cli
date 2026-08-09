@@ -546,6 +546,15 @@ export function createProgram(): Command {
         tool?: string;
         loginTicket?: string;
       }) => {
+        let mode: "oss" | "cloud" | undefined;
+        if (opts.mode !== undefined) {
+          const normalized = opts.mode.toLowerCase();
+          if (normalized !== "oss" && normalized !== "cloud") {
+            throw new Error(`invalid --mode value '${opts.mode}' (expected 'oss' or 'cloud')`);
+          }
+          mode = normalized;
+        }
+
         if (opts.agent) {
           if (!opts.tool) {
             const { emitError } = await import("../agent/output");
@@ -563,6 +572,7 @@ export function createProgram(): Command {
             tool: opts.tool,
             loginTicket: opts.loginTicket,
             deploymentID: opts.deployment,
+            mode,
           });
           return;
         }
@@ -573,14 +583,6 @@ export function createProgram(): Command {
         }
 
         const { runSetup } = await import("../setup/flow");
-        let mode: "oss" | "cloud" | undefined;
-        if (opts.mode !== undefined) {
-          const normalized = opts.mode.toLowerCase();
-          if (normalized !== "oss" && normalized !== "cloud") {
-            throw new Error(`invalid --mode value '${opts.mode}' (expected 'oss' or 'cloud')`);
-          }
-          mode = normalized;
-        }
         await runSetup({ deploymentID: opts.deployment, mode });
       },
     );
