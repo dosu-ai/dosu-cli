@@ -20,7 +20,7 @@ export interface MintedTicket {
   url: string;
 }
 
-export type TicketStatus = "pending" | "authenticated" | "expired";
+type TicketStatus = "pending" | "authenticated" | "expired";
 
 export interface ExchangedTicket {
   status: TicketStatus;

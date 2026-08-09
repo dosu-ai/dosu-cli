@@ -10,7 +10,6 @@ export const IconWarning = "\u26A0"; // ⚠
 export const IconQuestion = "?";
 export const IconAdd = "+";
 export const IconRemove = "-";
-export const IconCursor = "\u276F"; // ❯
 
 export function success(msg: string): string {
   return pc.green(`${IconSuccess} ${msg}`);

@@ -22,7 +22,7 @@ const CACHE_FILENAME = "pending-tasks.json";
 const CHECK_INTERVAL_MS = 60_000; // 60s between polls per task
 const FETCH_TIMEOUT_MS = 5_000;
 
-export interface PendingTask {
+interface PendingTask {
   task_id: string;
   doc_types: string[];
   repo: string;

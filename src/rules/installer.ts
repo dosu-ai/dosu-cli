@@ -35,7 +35,7 @@ export interface RuleResult {
   action: RuleAction;
 }
 
-export const DOSU_RULE_SECTION_VERSION = 1;
+const DOSU_RULE_SECTION_VERSION = 1;
 export const DOSU_RULE_SECTION_START = `<!-- dosu:rules:start v${DOSU_RULE_SECTION_VERSION} -->`;
 export const DOSU_RULE_SECTION_END = "<!-- dosu:rules:end -->";
 

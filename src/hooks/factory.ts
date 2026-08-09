@@ -50,7 +50,7 @@ const EVENT_SUBCOMMAND: Record<string, string> = {
  * the materialized runtime when there is no global install (see hooks/runtime.ts);
  * `--agent factory` attributes the resulting knowledge tickets to Factory sessions.
  */
-export function factoryHookCommand(
+function factoryHookCommand(
   subcommand: string,
   prefix: string = resolveHookCommandPrefix(),
 ): string {

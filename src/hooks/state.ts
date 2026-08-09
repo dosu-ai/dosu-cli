@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { getConfigDir } from "../config/config";
 
 /** Steady-state local lifecycle of a ticket. `ready` is transient and never persisted. */
-export type TicketLocalStatus = "pending" | "delivered" | "failed" | "expired";
+type TicketLocalStatus = "pending" | "delivered" | "failed" | "expired";
 
 export interface TicketState {
   ticketId: string;

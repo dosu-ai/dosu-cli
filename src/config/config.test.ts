@@ -6,7 +6,6 @@ import {
   bindAccountIdentity,
   CONFIG_SCHEMA_VERSION,
   type Config,
-  clearConfig,
   emptyConfig,
   getConfigPath,
   isAuthenticated,
@@ -342,19 +341,6 @@ describe("config", () => {
     ).toBe(false);
   });
 
-  it("clearConfig returns empty config", () => {
-    const cfg: Config = makeTestConfig({
-      access_token: "tok",
-      refresh_token: "ref",
-      expires_at: 123,
-      deployment_id: "dep",
-      deployment_name: "name",
-      api_key: "key",
-    });
-    const cleared = clearConfig(cfg);
-    expect(cleared).toEqual({ schema_version: CONFIG_SCHEMA_VERSION });
-  });
-
   it("emptyConfig returns exact default shape", () => {
     const cfg = emptyConfig();
     expect(cfg).toEqual({ schema_version: CONFIG_SCHEMA_VERSION });
@@ -365,18 +351,5 @@ describe("config", () => {
     writeFileSync(path, "NOT VALID JSON {{{{");
     const cfg = loadConfig();
     expect(cfg).toEqual({ schema_version: CONFIG_SCHEMA_VERSION });
-  });
-
-  it("clearConfig returns exact empty shape with undefined optional fields", () => {
-    const cfg: Config = makeTestConfig({
-      access_token: "tok",
-      refresh_token: "ref",
-      expires_at: 999,
-      deployment_id: "dep",
-      deployment_name: "name",
-      api_key: "key",
-    });
-    const cleared = clearConfig(cfg);
-    expect(cleared).toEqual({ schema_version: CONFIG_SCHEMA_VERSION });
   });
 });

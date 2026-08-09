@@ -477,7 +477,6 @@ describe("stepConfigureTools", () => {
 
   it("handles mixed install, remove, and skip in one call", () => {
     const cfg = makeCfg();
-    const _cursor = CursorProvider();
     const opencode = OpenCodeProvider();
 
     // Pre-install opencode so we can remove it
@@ -884,7 +883,7 @@ describe("runSetup integration", () => {
     const cfg = makeCfg({ api_key: "bad-key" });
     saveConfig(cfg);
 
-    const _clientMethods = setupAuthenticatedClient({
+    setupAuthenticatedClient({
       validateAPIKey: vi.fn().mockResolvedValue(false),
       createAPIKey: vi.fn().mockResolvedValue({ api_key: "fresh-key" }),
     });
