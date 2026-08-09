@@ -4,10 +4,22 @@
  */
 
 import { execute } from "./cli/cli";
+import {
+  CLI_SIGNALS,
+  dispatchCliSignal,
+  installsImmediateSigintHandler,
+} from "./cli/signal-policy";
 
-// Ensure Ctrl+C always exits immediately, even when @clack/prompts
-// intercepts SIGINT and swallows it as a cancel symbol.
-process.on("SIGINT", () => process.exit(0));
+// Ordinary prompt cancellation remains immediate. Short-lived guarded work
+// (currently the project MCP preflight) can delay exit only until its detached
+// process tree has been shut down.
+if (installsImmediateSigintHandler(process.argv)) {
+  for (const signal of CLI_SIGNALS) {
+    process.on(signal, () => {
+      void dispatchCliSignal(signal);
+    });
+  }
+}
 
 execute().catch((err) => {
   console.error(err.message ?? err);

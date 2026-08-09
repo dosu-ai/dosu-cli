@@ -15,6 +15,7 @@ import {
   replaceLoginSession,
   saveConfig,
 } from "../config/config";
+import { clearProjectMcpCredentials } from "../mcp/project-credential-store";
 import { runSetup } from "../setup/flow";
 import { browserFallbackHint } from "../setup/styles";
 
@@ -160,10 +161,12 @@ async function handleAuthenticate(cfg: ReturnType<typeof loadConfig>): Promise<v
 
 export function handleLogout(cfg: ReturnType<typeof loadConfig>): void {
   if (!isAuthenticated(cfg)) {
+    clearProjectMcpCredentials();
     p.log.warn("You are not logged in.");
     return;
   }
   clearConfigInPlace(cfg);
   saveConfig(cfg);
+  clearProjectMcpCredentials();
   p.log.success("Credentials cleared.");
 }

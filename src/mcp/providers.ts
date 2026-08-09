@@ -3,20 +3,29 @@
  */
 
 import type { Config } from "../config/config";
+import type { ProjectFileMutationReceipt } from "./config-helpers";
 
 /**
  * Provider is the base interface for MCP tool providers.
  */
 export interface ProviderInstallOptions {
   showSecret?: boolean;
+  /** Canonical Git worktree root for project-scoped configuration. */
+  projectRoot?: string;
+  /** Explicit user authorization to replace an owned project entry with a different target. */
+  allowProjectRetarget?: boolean;
 }
 
 export interface Provider {
   name(): string;
   id(): string;
   supportsLocal(): boolean;
-  install(cfg: Config, global: boolean, opts?: ProviderInstallOptions): void;
-  remove(global: boolean): void;
+  install(
+    cfg: Config,
+    global: boolean,
+    opts?: ProviderInstallOptions,
+  ): ProjectFileMutationReceipt | undefined;
+  remove(global: boolean, opts?: ProviderInstallOptions): ProjectFileMutationReceipt | undefined;
 }
 
 /**
@@ -27,6 +36,8 @@ export interface SetupProvider extends Provider {
   isInstalled(): boolean;
   isConfigured(): boolean;
   globalConfigPath(): string;
+  projectConfigPath(projectRoot: string): string | null;
+  isProjectConfigured(projectRoot: string): boolean;
   priority(): number;
 }
 

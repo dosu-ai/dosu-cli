@@ -8,6 +8,7 @@ export interface FlatTestConfig {
   deployment_id?: string;
   deployment_name?: string;
   api_key?: string;
+  mcp_endpoint?: string;
   org_id?: string;
   space_id?: string;
   mode?: SetupMode;
@@ -19,6 +20,7 @@ export function makeTestConfig(flat: FlatTestConfig): Config {
     deployment_id: flat.deployment_id,
     deployment_name: flat.deployment_name,
     api_key: flat.api_key,
+    mcp_endpoint: flat.mcp_endpoint,
     org_id: flat.org_id,
     space_id: flat.space_id,
   };

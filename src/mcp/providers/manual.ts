@@ -19,7 +19,7 @@ export const ManualProvider = (): Provider => ({
   id: () => "manual",
   supportsLocal: () => false,
 
-  install(cfg: Config, _global: boolean, opts: ProviderInstallOptions = {}): void {
+  install(cfg: Config, _global: boolean, opts: ProviderInstallOptions = {}) {
     const url = mcpEndpoint(cfg);
     const apiKey = mcpHeaders(cfg.active_account?.target?.api_key)["X-Dosu-API-Key"];
     const headerValue = opts.showSecret ? apiKey : maskSecret(apiKey);
@@ -33,11 +33,13 @@ export const ManualProvider = (): Provider => ({
       console.log("  Secret hidden. Re-run with --show-secret to print the full API key.");
     }
     console.log();
+    return undefined;
   },
 
-  remove(): void {
+  remove() {
     console.log(
       "\nTo remove the Dosu MCP server, manually delete the configuration from your client.",
     );
+    return undefined;
   },
 });

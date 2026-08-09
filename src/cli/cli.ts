@@ -34,7 +34,20 @@ import {
   saveConfig,
 } from "../config/config";
 import { logger } from "../debug/logger";
-import { allProviders, getProvider, type Provider } from "../mcp/providers";
+import { clearProjectMcpCredentials } from "../mcp/project-credential-store";
+import {
+  recordProjectProxyEndpoint,
+  runProjectProxy,
+  sameProjectProxyTarget,
+} from "../mcp/project-proxy";
+import { allProviders, allSetupProviders, getProvider, type Provider } from "../mcp/providers";
+import {
+  finalizeGlobalMcpIntent,
+  prepareGlobalMcpIntent,
+  releaseGlobalMcpIntent,
+} from "../migration/global-intent";
+import { requireProjectRoot } from "../setup/project-root";
+import { resolveProjectPinnedTarget } from "../setup/project-target";
 import { browserFallbackHint } from "../setup/styles";
 import { checkForReadyTasks } from "../version/pending-tasks-check";
 import { checkForSkillUpdates } from "../version/skill-update-check";
@@ -47,9 +60,11 @@ import { getVersionString } from "../version/version";
  * are noise on the hot path and the background fetch can delay process exit).
  */
 const HOOK_ENTRYPOINTS = new Set(["user-prompt-submit", "post-tool-use", "stop"]);
-function isHookEntrypointInvocation(argv: string[]): boolean {
+function isHotPathInvocation(argv: string[]): boolean {
   const i = argv.indexOf("hooks");
-  return i >= 0 && HOOK_ENTRYPOINTS.has(argv[i + 1] ?? "");
+  if (i >= 0 && HOOK_ENTRYPOINTS.has(argv[i + 1] ?? "")) return true;
+  const mcpIndex = argv.indexOf("mcp");
+  return mcpIndex >= 0 && argv[mcpIndex + 1] === "proxy";
 }
 
 /** Suggest the closest registered command name for a mistyped one, if any is close enough. */
@@ -94,7 +109,7 @@ export function createProgram(): Command {
     .hook("preAction", (thisCommand) => {
       const opts = thisCommand.optsWithGlobals();
       logger.init({ debug: opts.debug });
-      if (!isHookEntrypointInvocation(process.argv)) {
+      if (!isHotPathInvocation(process.argv)) {
         checkForUpdates();
         checkForSkillUpdates();
         checkForReadyTasks();
@@ -235,11 +250,13 @@ export function createProgram(): Command {
     .action(() => {
       const cfg = loadConfig();
       if (!isAuthenticated(cfg)) {
+        clearProjectMcpCredentials();
         console.log("You are not logged in.");
         return;
       }
       clearConfigInPlace(cfg);
       saveConfig(cfg);
+      clearProjectMcpCredentials();
       console.log("Successfully logged out.");
     });
 
@@ -333,52 +350,145 @@ export function createProgram(): Command {
     .command("add <agent>")
     .description("Add Dosu MCP to an AI tool")
     .option("-g, --global", "Add globally (all projects) instead of project-local", false)
+    .option("--retarget", "Replace this agent's existing project Dosu target", false)
     .option("--show-secret", "Print full manual configuration secrets", false)
-    .action(async (toolId: string, opts: { global: boolean; showSecret: boolean }) => {
-      let provider: Provider;
-      try {
-        provider = getProvider(toolId.toLowerCase());
-      } catch {
-        throw new Error(`unknown tool '${toolId}'. Use 'dosu mcp list' to see available tools`);
-      }
-      const cfg = loadConfig();
+    .action(
+      async (toolId: string, opts: { global: boolean; retarget: boolean; showSecret: boolean }) => {
+        let provider: Provider;
+        try {
+          provider = getProvider(toolId.toLowerCase());
+        } catch {
+          throw new Error(`unknown tool '${toolId}'. Use 'dosu mcp list' to see available tools`);
+        }
+        const cfg = loadConfig();
 
-      if (!isAuthenticated(cfg)) {
-        throw new Error("not logged in. Run 'dosu login' first");
-      }
-      if (isTokenExpired(cfg) && !(await ensureFreshSession(cfg))) {
-        throw new Error("session expired. Run 'dosu login' to re-authenticate");
-      }
-      if (cfg.mode !== MODE_OSS && !cfg.active_account?.target?.deployment_id) {
-        throw new Error("no MCP selected. Run 'dosu' to open the TUI and select an MCP");
-      }
-      if (!cfg.active_account?.target?.api_key) {
-        throw new Error("no API key available. Run 'dosu setup' to create one");
-      }
+        if (!isAuthenticated(cfg)) {
+          throw new Error("not logged in. Run 'dosu login' first");
+        }
+        if (isTokenExpired(cfg) && !(await ensureFreshSession(cfg))) {
+          throw new Error("session expired. Run 'dosu login' to re-authenticate");
+        }
+        if (cfg.mode !== MODE_OSS && !cfg.active_account?.target?.deployment_id) {
+          throw new Error("no MCP selected. Run 'dosu' to open the TUI and select an MCP");
+        }
+        if (!cfg.active_account?.target?.api_key) {
+          throw new Error("no API key available. Run 'dosu setup' to create one");
+        }
 
-      if (provider.id() === "manual") {
-        provider.install(cfg, false, { showSecret: opts.showSecret });
+        if (opts.retarget && (opts.global || provider.id() === "manual")) {
+          throw new Error("--retarget is only valid for a project-scoped agent configuration");
+        }
+
+        if (provider.id() === "manual") {
+          if (opts.global) {
+            throw new Error(
+              "--global cannot be recorded safely for manual configuration; choose a supported agent ID instead",
+            );
+          }
+          provider.install(cfg, false, { showSecret: opts.showSecret });
+          return;
+        }
+
+        if (!provider.supportsLocal() && !opts.global) {
+          throw new Error(
+            `${provider.name()} has no official project-scoped MCP config. ` +
+              "Dosu will not silently fall back to a global install; use --global explicitly if you accept that scope.",
+          );
+        }
+
+        let projectRoot: string | undefined;
+        if (!opts.global) {
+          projectRoot = requireProjectRoot();
+          const configuredTarget =
+            cfg.mode === MODE_OSS
+              ? ({ oss: true } as const)
+              : { deploymentID: cfg.active_account?.target?.deployment_id as string };
+          const projectTarget = opts.retarget
+            ? resolveProjectPinnedTarget(
+                allSetupProviders(),
+                projectRoot,
+                cfg.mode === MODE_OSS
+                  ? { mode: "oss" }
+                  : {
+                      mode: "cloud",
+                      deploymentID: cfg.active_account?.target?.deployment_id,
+                    },
+                [provider.id()],
+              )
+            : resolveProjectPinnedTarget(allSetupProviders(), projectRoot);
+          if (!projectTarget.ok) {
+            const locations = projectTarget.paths.join(", ");
+            throw new Error(
+              `Cannot safely update this project's Dosu MCP (${projectTarget.reason}): ${locations}. ` +
+                "Run `dosu setup` to reconcile every project agent together.",
+            );
+          }
+          if (
+            !opts.retarget &&
+            projectTarget.target &&
+            !sameProjectProxyTarget(projectTarget.target, configuredTarget)
+          ) {
+            throw new Error(
+              "This project is pinned to a different Dosu target. Run `dosu setup` to add this agent " +
+                "without splitting the project's MCP target, or pass --retarget only when no other project agent must stay on the old target.",
+            );
+          }
+          recordProjectProxyEndpoint(cfg);
+          saveConfig(cfg);
+        }
+
+        const global = opts.global;
+        const scope = global ? "global (all projects)" : "current project";
+        console.log(`Adding Dosu MCP to ${provider.name()} (${scope})...`);
+
+        if (global && !("globalConfigPath" in provider)) {
+          throw new Error(`${provider.name()} does not expose a canonical global config path`);
+        }
+        const globalIntent = global
+          ? prepareGlobalMcpIntent({
+              provider: provider.id(),
+              targetPath: (
+                provider as Provider & { globalConfigPath(): string }
+              ).globalConfigPath(),
+            })
+          : null;
+        try {
+          provider.install(cfg, global, {
+            showSecret: opts.showSecret,
+            projectRoot,
+            allowProjectRetarget: opts.retarget,
+          });
+        } catch (error) {
+          if (globalIntent) releaseGlobalMcpIntent(globalIntent);
+          throw error;
+        }
+        if (globalIntent) finalizeGlobalMcpIntent(globalIntent);
+
+        console.log(`\n✓ Successfully added Dosu MCP to ${provider.name()}!`);
+        if (global) {
+          console.log(`\nStart ${provider.name()} in any project to use the Dosu MCP.`);
+        } else {
+          console.log(`\nStart ${provider.name()} in this project directory to use the Dosu MCP.`);
+        }
+      },
+    );
+
+  const proxyCommand = new Command("proxy")
+    .description("Internal project MCP credential bridge")
+    .option("--deployment <id>", "Expected project deployment")
+    .option("--oss", "Use the configured public-libraries endpoint", false)
+    .action(async (opts: { deployment?: string; oss: boolean }) => {
+      if (Boolean(opts.deployment) === opts.oss) {
+        console.error("Exactly one of --deployment or --oss is required.");
+        process.exitCode = 2;
         return;
       }
-
-      let global = opts.global;
-      if (!provider.supportsLocal() && !global) {
-        console.log(`Note: ${provider.name()} only supports global installation.\n`);
-        global = true;
-      }
-
-      const scope = global ? "global (all projects)" : "project-local";
-      console.log(`Adding Dosu MCP to ${provider.name()} (${scope})...`);
-
-      provider.install(cfg, global, { showSecret: opts.showSecret });
-
-      console.log(`\n✓ Successfully added Dosu MCP to ${provider.name()}!`);
-      if (global) {
-        console.log(`\nStart ${provider.name()} in any project to use the Dosu MCP.`);
-      } else {
-        console.log(`\nStart ${provider.name()} in this project directory to use the Dosu MCP.`);
-      }
+      process.exitCode = await runProjectProxy({
+        deploymentID: opts.deployment,
+        oss: opts.oss,
+      });
     });
+  mcp.addCommand(proxyCommand, { hidden: true });
 
   mcp
     .command("list")
@@ -386,7 +496,7 @@ export function createProgram(): Command {
     .action(() => {
       console.log("Available AI tools:\n");
       for (const p of allProviders()) {
-        let scope = "(local + global)";
+        let scope = "(project + global)";
         if (!p.supportsLocal()) scope = "(global only)";
         if (p.id() === "manual") scope = "";
         console.log(`  ${p.id().padEnd(10)} ${p.name()} ${scope}`);
@@ -436,6 +546,15 @@ export function createProgram(): Command {
         tool?: string;
         loginTicket?: string;
       }) => {
+        let mode: "oss" | "cloud" | undefined;
+        if (opts.mode !== undefined) {
+          const normalized = opts.mode.toLowerCase();
+          if (normalized !== "oss" && normalized !== "cloud") {
+            throw new Error(`invalid --mode value '${opts.mode}' (expected 'oss' or 'cloud')`);
+          }
+          mode = normalized;
+        }
+
         if (opts.agent) {
           if (!opts.tool) {
             const { emitError } = await import("../agent/output");
@@ -453,6 +572,7 @@ export function createProgram(): Command {
             tool: opts.tool,
             loginTicket: opts.loginTicket,
             deploymentID: opts.deployment,
+            mode,
           });
           return;
         }
@@ -463,14 +583,6 @@ export function createProgram(): Command {
         }
 
         const { runSetup } = await import("../setup/flow");
-        let mode: "oss" | "cloud" | undefined;
-        if (opts.mode !== undefined) {
-          const normalized = opts.mode.toLowerCase();
-          if (normalized !== "oss" && normalized !== "cloud") {
-            throw new Error(`invalid --mode value '${opts.mode}' (expected 'oss' or 'cloud')`);
-          }
-          mode = normalized;
-        }
         await runSetup({ deploymentID: opts.deployment, mode });
       },
     );
