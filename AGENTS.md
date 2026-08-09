@@ -46,7 +46,7 @@ Key modules:
 - **`src/setup/`** — Interactive setup wizard (authenticate → select org → select deployment → mint API key → detect installed tools → configure). Uses `@clack/prompts`.
 - **`src/agent/`** — Non-interactive setup for coding agents (`setup --agent --tool <id>`) and the ticket-based login commands (`login --request`/`--check`). Emits machine-readable JSON via `output.ts` for agent consumption.
 - **`src/hooks/`** — Coding-agent hook entrypoints invoked as `dosu hooks <user-prompt-submit|post-tool-use|stop>`. They mint, poll, and inject Dosu "knowledge tickets" into an agent's turn. These run on the agent's hot path on every turn, so they must stay fast and keep stdout clean — `src/cli/cli.ts` deliberately skips the update checks for them.
-- **`src/telemetry/`** — Separate opt-in analytics and error-diagnostic lanes, persisted consent, safe payload builders, and fail-open transport. User controls live under `dosu telemetry status|enable|disable|reset`.
+- **`src/telemetry/`** — Default-on analytics and error diagnostics with one persisted global switch, safe payload builders, and fail-open transport. User controls live under `dosu telemetry status|enable|disable|reset`.
 - **`src/tui/`** — Main menu TUI when running `dosu` with no subcommand.
 - **`src/version/`** — Version string from the build-time `DOSU_VERSION` env var, plus background update checks (`update-check.ts`, `skill-update-check.ts`).
 
@@ -56,12 +56,13 @@ All tRPC calls MUST be typed through the generated contract (`CliApiClient` / `T
 
 ## Telemetry Contract
 
-Analytics and error diagnostics require separate explicit decisions; unset means disabled. General
-command events use a random installation ID; setup-funnel events are account/email-linked after sign-in.
+Telemetry is enabled by default and has one global enable/disable switch. General command events use
+a random installation ID; setup-funnel events are account/email-linked after sign-in.
 Setup analytics may include only the documented coarse fields. Never collect prompts, raw command
 lines, free-form argument or option values, user source code, file contents, local paths, environment
 variable names or values, credentials, raw error messages, or `debug.log`. Keep payloads allowlisted, transports
-bounded and fail-open, and stdout/JSON contracts unchanged. See
+bounded and fail-open, honor `DO_NOT_TRACK` and `DOSU_TELEMETRY_DISABLED`, and keep stdout/JSON
+contracts unchanged. See
 [docs/telemetry.md](docs/telemetry.md) for the field and privacy contract.
 
 ## Testing
@@ -173,7 +174,7 @@ npx @dosu/cli@alpha setup
 ### Other runtime env
 
 - `DOSU_DEV=true` — isolates the CLI's config dir to `~/.config/dosu-cli-dev/` so dev runs don't clobber prod credentials. Does **not** switch URLs (URLs are build-time-baked; use `*_OVERRIDE` for that).
-- `DO_NOT_TRACK=1` or `DOSU_TELEMETRY_DISABLED=1` — master disable for both telemetry lanes.
+- `DO_NOT_TRACK=1` or `DOSU_TELEMETRY_DISABLED=1` — master disable for all telemetry.
 - `DOSU_TELEMETRY_DEBUG=1` — print the exact safe payload to stderr and send nothing.
 
 <!-- dosu:mcp:start v1 -->

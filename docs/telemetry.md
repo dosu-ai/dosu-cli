@@ -5,20 +5,16 @@ does, what it must never do, and the operational work required before a producti
 
 ## Summary
 
-Dosu separates two optional telemetry lanes:
+Dosu sends two kinds of telemetry:
 
 1. **Usage analytics** measure whether coarse, named CLI workflows succeed.
 2. **Error diagnostics** send a minimal error fingerprint and Dosu-owned stack frames.
 
-Both lanes are **off by default**. An unset, unreadable, malformed, or unsupported telemetry
-settings file is treated as disabled. Each lane requires its own explicit persisted `true` value;
-enabling one never enables the other. `DO_NOT_TRACK` and `DOSU_TELEMETRY_DISABLED` are master
-switches that disable both lanes before a payload or network request is created.
-
-Interactive setup asks for any missing choice unless a master environment switch is active. The
-default highlighted choice is not to share. Cancelling the first prompt records both lanes as
-disabled; cancelling a later single-lane prompt disables only that missing lane. There is no prompt
-in coding-agent hooks or other non-interactive protocol paths.
+Telemetry is **on by default** and has one persisted global enable/disable switch. Interactive setup
+and non-interactive paths do not show a telemetry prompt. `DO_NOT_TRACK` and
+`DOSU_TELEMETRY_DISABLED` disable all telemetry before an installation ID, payload, or network
+request is created. An unreadable, malformed, or unsupported settings file also disables telemetry
+for that run without overwriting the file.
 
 Telemetry is not required for any Dosu command. Delivery failure never changes command output,
 exit status, or behavior.
@@ -30,24 +26,20 @@ These commands do not require login:
 ```text
 dosu telemetry status
 dosu telemetry status --json
-dosu telemetry enable analytics
-dosu telemetry enable errors
-dosu telemetry enable all
-dosu telemetry disable analytics
-dosu telemetry disable errors
-dosu telemetry disable all
+dosu telemetry enable
+dosu telemetry disable
 dosu telemetry reset
 ```
 
-The lane argument defaults to `all`. `reset` rotates the random installation ID; it does **not**
-delete events already retained by PostHog or Sentry.
+`reset` rotates the random installation ID; it does **not** delete events already retained by
+PostHog or Sentry.
 
 Environment controls:
 
 | Variable | Behavior |
 | --- | --- |
-| `DO_NOT_TRACK=1` | Disable both lanes for this process. |
-| `DOSU_TELEMETRY_DISABLED=1` | Disable both lanes for this process. |
+| `DO_NOT_TRACK=1` | Disable all telemetry for this process. |
+| `DOSU_TELEMETRY_DISABLED=1` | Disable all telemetry for this process. |
 | `DOSU_TELEMETRY_DEBUG=1` | Print the exact safe outbound payload to stderr and send nothing. |
 | `DOSU_POSTHOG_PROJECT_TOKEN` | Build-time public PostHog ingestion default. |
 | `DOSU_SENTRY_DSN` | Build-time public Sentry ingestion default. |
@@ -110,8 +102,8 @@ installation until the user rotates it.
 
 ### Error diagnostics: Sentry
 
-An error event is sent only when the error lane is enabled and an instrumented command throws or
-finishes with a non-validation, nonzero exit code. A nonzero completion becomes a message-free
+An error event is sent only when telemetry is enabled and an instrumented command throws or finishes
+with a non-validation, nonzero exit code. A nonzero completion becomes a message-free
 `CommandExitError`. The CLI builds a Sentry envelope directly; it does not initialize the Sentry SDK
 or its automatic integrations.
 
@@ -149,12 +141,12 @@ The random PostHog installation ID is not included in Sentry events.
 
 ### Setup/onboarding analytics
 
-Setup analytics use the same analytics consent but are a separate, existing path through the typed
-Dosu `/api/cli-trpc` endpoint. Pre-auth setup events carry a random per-run `onboarding_run_id`.
+Setup analytics use the same global switch but are a separate, existing path through the typed Dosu
+`/api/cli-trpc` endpoint. Pre-auth setup events carry a random per-run `onboarding_run_id`.
 They use a validated Dosu web-app URL rather than sending the PostHog token to that endpoint, but a
 valid configured `phc_` token is also required as the shared analytics release kill switch. `dosu
-telemetry status` reports command and setup destinations separately. Enabling analytics permits both
-paths only when the shared gate and respective destination are configured. Production URLs must use
+telemetry status` reports command and setup destinations separately. Both paths remain inert unless
+the shared gate and respective destination are configured. Production URLs must use
 HTTPS. An explicit `DOSU_DEV=true` permits HTTP only for `localhost`, `127.0.0.1`, or `::1`
 development origins.
 When authentication completes, the server aliases that run ID to the signed-in user ID, identifies
@@ -175,9 +167,8 @@ the typed setup input on the Sentry isolation scope for every call and creates a
 the current server trace sample rate is 10%, so successful sampled calls as well as captured errors
 can copy that input to the **server** Sentry project. For authenticated calls, the same scope can
 also contain user ID, email, username, and serialized user metadata. This happens independently of
-the CLI error-diagnostics choice. The CLI does not construct that server scope, but input and user
-scope must be scrubbed or disabled for these procedures before production launch; see the checklist
-below.
+CLI-built error diagnostics. The CLI does not construct that server scope, but input and user scope
+must be scrubbed or disabled for these procedures before production launch; see the checklist below.
 
 ## Data excluded from CLI-built telemetry fields
 
@@ -222,15 +213,15 @@ This owner-only file stores only:
 ```json
 {
   "schema_version": 1,
-  "analytics": false,
-  "errors": false,
+  "disabled": true,
   "install_id": "optional-random-uuid"
 }
 ```
 
-The two booleans and ID are optional. Writes use an owner-only temporary file and atomic rename;
-new directories are mode `0700` and files mode `0600`. The file contains no Dosu token, account
-profile, command history, or diagnostic event queue. There is no offline telemetry spool.
+`disabled` is present only after `dosu telemetry disable`; the ID is optional. Writes use an
+owner-only temporary file and atomic rename; new directories are mode `0700` and files mode `0600`.
+The file contains no Dosu token, account profile, command history, or diagnostic event queue. There
+is no offline telemetry spool.
 
 ### `debug.log`
 
@@ -260,7 +251,7 @@ setup/onboarding analytics
   -> authenticated or pre-auth Dosu API procedure
   -> PostHog
   -> on sampled calls or captured errors, existing Dosu server Sentry middleware may also receive
-     the typed setup input and authenticated user scope independently of CLI error consent
+     the typed setup input and authenticated user scope independently of CLI-built diagnostics
 ```
 
 Command telemetry has these delivery guarantees:
@@ -283,9 +274,9 @@ remain in controlled Dosu/vendor infrastructure or CI and are never placed in th
 - The auto-invoked `hooks user-prompt-submit`, `hooks post-tool-use`, and `hooks stop` entrypoints
   are excluded. They are latency-sensitive, high-volume protocol paths and must remain stdout-clean.
 - Human-invoked `dosu hooks install|uninstall|doctor|status` commands are ordinary commands and may
-  be measured after analytics consent.
-- `dosu telemetry ...` controls are themselves excluded, so opting in or out does not emit an
-  analytics event.
+  be measured while telemetry is enabled.
+- `dosu telemetry ...` controls are themselves excluded, so changing or inspecting the switch does
+  not emit an analytics event or create an installation ID.
 - Commander lifecycle telemetry can observe commands that return normally or set
   `process.exitCode`. Several legacy command modules still call `process.exit(...)` directly; those
   paths terminate before the completion/error flush and can be missing from analytics and Sentry.
@@ -317,10 +308,10 @@ Complete and record each item before enabling release destinations:
 - **Release variables:** after the remaining checklist is complete, populate the public GitHub
   Actions repository variables `DOSU_POSTHOG_PROJECT_TOKEN` and `DOSU_SENTRY_DSN`. The release job
   already passes them to the build; leaving either undefined bakes an empty value and keeps that
-  lane inert. Do not use a PostHog personal API key or Sentry auth token here.
+  destination inert. Do not use a PostHog personal API key or Sentry auth token here.
 - **Notice and legal review:** publish a user-facing privacy notice naming PostHog and Sentry,
   purposes, exact fields, pseudonymous installation ID, signed-in setup linkage, controls,
-  connection metadata, retention, deletion route, and contact. Confirm the consent wording and
+  connection metadata, retention, deletion route, and contact. Confirm the default-on notice and
   processor agreements with counsel.
 - **Retention:** configure and verify actual vendor retention, then put those exact values in the
   notice. A conservative starting cap is 90 days for raw analytics and 30 days for error events;

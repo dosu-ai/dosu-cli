@@ -166,18 +166,20 @@ Combine with `dosu login --request` / `--check <ticket>` for human-in-the-loop a
 
 ### Telemetry and privacy
 
-Usage analytics and error diagnostics are separate, explicit choices. Both stay off while unset.
+Dosu collects privacy-preserving usage analytics and error diagnostics by default. One global switch
+controls both; setup does not show a telemetry prompt.
 
 ```bash
 dosu telemetry status [--json]
-dosu telemetry enable [analytics|errors|all]
-dosu telemetry disable [analytics|errors|all]
+dosu telemetry enable
+dosu telemetry disable
 dosu telemetry reset
 ```
 
 `reset` rotates the local pseudonymous telemetry ID; it does not delete already retained events.
 General command analytics uses that ID; setup-funnel events can be linked to the user's Dosu account
-and email after sign-in and may include documented coarse setup choices. Dosu never collects
+and email after sign-in and may include documented coarse setup choices. `DO_NOT_TRACK=1` and
+`DOSU_TELEMETRY_DISABLED=1` disable all telemetry for the process. Dosu never collects
 prompts, raw command lines, free-form argument or option values, user source code, file contents,
 local paths, raw environment-variable names or values, credentials, raw error messages, or
 `debug.log`. See
