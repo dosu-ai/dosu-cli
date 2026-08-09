@@ -29,8 +29,7 @@ import {
   isTelemetryEnabled,
   loadTelemetrySettings,
   resetInstallID,
-  setTelemetryConsent,
-  setTelemetryConsents,
+  setTelemetryEnabled,
   telemetryDisabledByEnvironment,
 } from "./settings";
 
@@ -70,134 +69,104 @@ describe("telemetry settings", () => {
     rmSync(tempRoot, { recursive: true, force: true });
   });
 
-  it("stores an empty, fail-closed schema under the shared config directory", () => {
+  it("is enabled by default without creating a settings file", () => {
     expect(getTelemetrySettingsPath()).toBe(join(tempRoot, "dosu-cli", "telemetry.json"));
     expect(loadTelemetrySettings()).toEqual({ schema_version: 1 });
-    expect(isTelemetryEnabled("analytics")).toBe(false);
-    expect(isTelemetryEnabled("errors")).toBe(false);
+    expect(isTelemetryEnabled()).toBe(true);
     expect(existsSync(getTelemetrySettingsPath())).toBe(false);
   });
 
-  it("persists independent explicit consent decisions", () => {
-    expect(setTelemetryConsent("analytics", true)).toBe(true);
-    expect(loadTelemetrySettings()).toEqual({ schema_version: 1, analytics: true });
-    expect(isTelemetryEnabled("analytics")).toBe(true);
-    expect(isTelemetryEnabled("errors")).toBe(false);
+  it("persists one global disable and returns to the default when enabled", () => {
+    expect(setTelemetryEnabled(false)).toBe(true);
+    expect(loadTelemetrySettings()).toEqual({ schema_version: 1, disabled: true });
+    expect(isTelemetryEnabled()).toBe(false);
 
-    expect(setTelemetryConsent("errors", false)).toBe(true);
-    expect(loadTelemetrySettings()).toEqual({
-      schema_version: 1,
-      analytics: true,
-      errors: false,
-    });
-
-    expect(setTelemetryConsent("all", true)).toBe(true);
-    expect(loadTelemetrySettings()).toEqual({
-      schema_version: 1,
-      analytics: true,
-      errors: true,
-    });
-
-    expect(setTelemetryConsents({ analytics: false, errors: true })).toBe(true);
-    expect(loadTelemetrySettings()).toEqual({
-      schema_version: 1,
-      analytics: false,
-      errors: true,
-    });
+    expect(setTelemetryEnabled(true)).toBe(true);
+    expect(loadTelemetrySettings()).toEqual({ schema_version: 1 });
+    expect(isTelemetryEnabled()).toBe(true);
   });
 
-  it("lets either master environment override disable both lanes", () => {
-    setTelemetryConsent("all", true);
+  it("lets either master environment override disable telemetry", () => {
     expect(telemetryDisabledByEnvironment()).toBeUndefined();
-    expect(isTelemetryEnabled("analytics")).toBe(true);
-    expect(isTelemetryEnabled("errors")).toBe(true);
+    expect(isTelemetryEnabled()).toBe(true);
 
     process.env.DO_NOT_TRACK = "1";
     expect(telemetryDisabledByEnvironment()).toBe("DO_NOT_TRACK");
-    expect(isTelemetryEnabled("analytics")).toBe(false);
-    expect(isTelemetryEnabled("errors")).toBe(false);
+    expect(isTelemetryEnabled()).toBe(false);
 
     delete process.env.DO_NOT_TRACK;
     process.env.DOSU_TELEMETRY_DISABLED = "true";
     expect(telemetryDisabledByEnvironment()).toBe("DOSU_TELEMETRY_DISABLED");
-    expect(isTelemetryEnabled("analytics")).toBe(false);
+    expect(isTelemetryEnabled()).toBe(false);
 
     process.env.DOSU_TELEMETRY_DISABLED = "0";
     expect(telemetryDisabledByEnvironment()).toBeUndefined();
-    expect(isTelemetryEnabled("analytics")).toBe(true);
+    expect(isTelemetryEnabled()).toBe(true);
 
     process.env.DOSU_TELEMETRY_DISABLED = "unexpected-but-present";
-    expect(telemetryDisabledByEnvironment()).toBe("DOSU_TELEMETRY_DISABLED");
-    expect(isTelemetryEnabled("analytics")).toBe(false);
+    expect(isTelemetryEnabled()).toBe(false);
 
     process.env.DOSU_TELEMETRY_DISABLED = "   ";
-    expect(telemetryDisabledByEnvironment()).toBeUndefined();
+    expect(isTelemetryEnabled()).toBe(true);
   });
 
-  it("fails closed on corrupt or malformed settings", () => {
+  it("disables telemetry and preserves corrupt settings until an explicit enable", () => {
     const path = createSettingsFile("not json {{{");
-    expect(loadTelemetrySettings()).toEqual({ schema_version: 1 });
-    expect(isTelemetryEnabled("analytics")).toBe(false);
+    expect(loadTelemetrySettings()).toEqual({ schema_version: 1, disabled: true });
+    expect(isTelemetryEnabled()).toBe(false);
     expect(getOrCreateInstallID()).toBeUndefined();
     expect(readFileSync(path, "utf-8")).toBe("not json {{{");
 
-    expect(setTelemetryConsent("errors", true)).toBe(true);
-    expect(loadTelemetrySettings()).toEqual({ schema_version: 1, errors: true });
+    expect(setTelemetryEnabled(true)).toBe(true);
+    expect(loadTelemetrySettings()).toEqual({ schema_version: 1 });
+    expect(isTelemetryEnabled()).toBe(true);
   });
 
-  it("normalizes schema-one fields instead of trusting arbitrary JSON", () => {
+  it("accepts only the global flag and a valid installation id", () => {
     createSettingsFile(
       JSON.stringify({
         schema_version: 1,
-        analytics: "yes",
-        errors: false,
+        disabled: true,
+        analytics: true,
+        errors: true,
         install_id: "not-a-uuid",
         unexpected: "ignored",
       }),
     );
 
-    expect(loadTelemetrySettings()).toEqual({ schema_version: 1, errors: false });
-    expect(isTelemetryEnabled("analytics")).toBe(false);
-    expect(isTelemetryEnabled("errors")).toBe(false);
+    expect(loadTelemetrySettings()).toEqual({ schema_version: 1, disabled: true });
+
+    createSettingsFile(JSON.stringify({ schema_version: 1, disabled: "yes" }));
+    expect(loadTelemetrySettings()).toEqual({ schema_version: 1, disabled: true });
+    expect(isTelemetryEnabled()).toBe(false);
   });
 
-  it("rejects non-object, unversioned, and invalid runtime updates", () => {
+  it("rejects invalid runtime updates", () => {
     const path = createSettingsFile("[]");
-    expect(loadTelemetrySettings()).toEqual({ schema_version: 1 });
-    writeFileSync(path, "{}");
-    expect(loadTelemetrySettings()).toEqual({ schema_version: 1 });
-
-    expect(setTelemetryConsents({})).toBe(false);
-    expect(setTelemetryConsent("not-a-lane" as never, true)).toBe(false);
-    expect(setTelemetryConsent("analytics", "yes" as never)).toBe(false);
-    expect(readFileSync(path, "utf-8")).toBe("{}");
+    expect(loadTelemetrySettings()).toEqual({ schema_version: 1, disabled: true });
+    expect(setTelemetryEnabled("yes" as never)).toBe(false);
+    expect(readFileSync(path, "utf-8")).toBe("[]");
   });
 
-  it("does not overwrite an unknown future schema during reads or explicit writes", () => {
+  it("does not overwrite an unknown future schema", () => {
     const future = `${JSON.stringify({
       schema_version: 2,
-      analytics: true,
-      errors: true,
+      disabled: false,
       install_id: "future-owned-value",
       future_field: { keep: true },
     })}\n`;
     const path = createSettingsFile(future);
 
-    expect(loadTelemetrySettings()).toEqual({ schema_version: 1 });
-    expect(isTelemetryEnabled("analytics")).toBe(false);
+    expect(loadTelemetrySettings()).toEqual({ schema_version: 1, disabled: true });
+    expect(isTelemetryEnabled()).toBe(false);
     expect(getOrCreateInstallID()).toBeUndefined();
-    expect(readFileSync(path, "utf-8")).toBe(future);
-
     expect(resetInstallID()).toBeUndefined();
-    expect(setTelemetryConsent("analytics", true)).toBe(false);
+    expect(setTelemetryEnabled(true)).toBe(false);
     expect(readFileSync(path, "utf-8")).toBe(future);
   });
 
   it("writes atomically with owner-only file and directory permissions", () => {
-    vi.mocked(writeFileSync).mockClear();
-    vi.mocked(renameSync).mockClear();
-
-    expect(setTelemetryConsent("analytics", true)).toBe(true);
+    expect(setTelemetryEnabled(false)).toBe(true);
 
     const finalPath = getTelemetrySettingsPath();
     const writtenPaths = vi.mocked(writeFileSync).mock.calls.map((call) => String(call[0]));
@@ -211,56 +180,52 @@ describe("telemetry settings", () => {
     expect(readdirSync(dirname(finalPath))).toEqual(["telemetry.json"]);
   });
 
-  it("replaces a loosely-permissioned settings file with mode 0600", () => {
+  it("replaces a loosely permissioned settings file with mode 0600", () => {
     const path = createSettingsFile(JSON.stringify({ schema_version: 1 }), 0o644);
     expect(statSync(path).mode & 0o777).toBe(0o644);
 
-    expect(setTelemetryConsent("analytics", true)).toBe(true);
-
+    expect(setTelemetryEnabled(false)).toBe(true);
     expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 
-  it("creates, persists, and explicitly rotates a random installation UUID", () => {
-    setTelemetryConsent("analytics", true);
+  it("creates and rotates a random installation id while preserving the global switch", () => {
     const first = getOrCreateInstallID();
     expect(first).toMatch(UUID_V4);
     expect(getOrCreateInstallID()).toBe(first);
-    expect(loadTelemetrySettings()).toEqual({
-      schema_version: 1,
-      analytics: true,
-      install_id: first,
-    });
 
+    expect(setTelemetryEnabled(false)).toBe(true);
     const second = resetInstallID();
     expect(second).toMatch(UUID_V4);
     expect(second).not.toBe(first);
-    expect(getOrCreateInstallID()).toBe(second);
-    expect(loadTelemetrySettings().analytics).toBe(true);
+    expect(loadTelemetrySettings()).toEqual({
+      schema_version: 1,
+      disabled: true,
+      install_id: second,
+    });
   });
 
-  it("never throws and stays disabled when reads fail", () => {
-    createSettingsFile(JSON.stringify({ schema_version: 1, analytics: true }));
+  it("never throws and disables telemetry when reads fail", () => {
+    createSettingsFile(JSON.stringify({ schema_version: 1 }));
     vi.mocked(readFileSync).mockImplementationOnce(() => {
       throw new Error("read denied");
     });
+    expect(loadTelemetrySettings()).toEqual({ schema_version: 1, disabled: true });
 
-    expect(() => loadTelemetrySettings()).not.toThrow();
     vi.mocked(readFileSync).mockImplementationOnce(() => {
       throw new Error("read denied");
     });
-    expect(isTelemetryEnabled("analytics")).toBe(false);
+    expect(isTelemetryEnabled()).toBe(false);
 
     vi.mocked(existsSync).mockImplementationOnce(() => {
       throw new Error("stat denied");
     });
-    expect(loadTelemetrySettings()).toEqual({ schema_version: 1 });
+    expect(loadTelemetrySettings()).toEqual({ schema_version: 1, disabled: true });
   });
 
   it("preserves existing settings when a transient read fails", () => {
     const original = `${JSON.stringify({
       schema_version: 1,
-      analytics: true,
-      errors: false,
+      disabled: true,
       install_id: "11111111-1111-4111-8111-111111111111",
     })}\n`;
     const path = createSettingsFile(original);
@@ -268,7 +233,7 @@ describe("telemetry settings", () => {
     vi.mocked(readFileSync).mockImplementationOnce(() => {
       throw new Error("temporarily unreadable");
     });
-    expect(setTelemetryConsent("errors", true)).toBe(false);
+    expect(setTelemetryEnabled(true)).toBe(false);
     expect(readFileSync(path, "utf-8")).toBe(original);
 
     vi.mocked(readFileSync).mockImplementationOnce(() => {
@@ -278,15 +243,13 @@ describe("telemetry settings", () => {
     expect(readFileSync(path, "utf-8")).toBe(original);
   });
 
-  it("never throws or enables collection when data writes fail", () => {
+  it("never throws when writes fail", () => {
     vi.mocked(writeFileSync).mockImplementationOnce(() => {
       throw new Error("read-only filesystem");
     });
-    expect(setTelemetryConsent("analytics", true)).toBe(false);
-    expect(isTelemetryEnabled("analytics")).toBe(false);
-    expect(setTelemetryConsent("analytics", true)).toBe(true);
+    expect(setTelemetryEnabled(false)).toBe(false);
+    expect(isTelemetryEnabled()).toBe(true);
 
-    rmSync(getTelemetrySettingsPath(), { force: true });
     vi.mocked(writeFileSync).mockImplementationOnce(() => {
       throw new Error("read-only filesystem");
     });

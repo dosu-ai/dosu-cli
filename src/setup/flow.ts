@@ -20,7 +20,6 @@ import {
 import { logger } from "../debug/logger";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
-import { promptForTelemetryConsent } from "../telemetry/consent";
 import { inGitWorkTree, stepUpdateAgentsMd } from "./agents-md-step";
 import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
 import { launchAuditAgent, offerAuditHandoff } from "./audit-handoff";
@@ -86,7 +85,6 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     }`,
   );
   p.intro("Dosu CLI Setup");
-  await promptForTelemetryConsent();
   await trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_launch_attempted", {
     has_deployment_option: Boolean(opts.deploymentID),
     mode_option: opts.mode,

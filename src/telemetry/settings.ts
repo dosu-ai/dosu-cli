@@ -13,17 +13,13 @@ import { getConfigDir } from "../config/config";
 const TELEMETRY_SCHEMA_VERSION = 1 as const;
 const TELEMETRY_SETTINGS_FILENAME = "telemetry.json";
 
-export type TelemetryLane = "analytics" | "errors";
 export type TelemetryEnvironmentOverride = "DO_NOT_TRACK" | "DOSU_TELEMETRY_DISABLED";
 
 export interface TelemetrySettings {
   schema_version: typeof TELEMETRY_SCHEMA_VERSION;
-  analytics?: boolean;
-  errors?: boolean;
+  disabled?: true;
   install_id?: string;
 }
-
-export type TelemetryConsentUpdate = Partial<Record<TelemetryLane, boolean>>;
 
 type SettingsReadStatus = "current" | "missing" | "invalid" | "unsupported" | "error";
 
@@ -37,40 +33,26 @@ export function getTelemetrySettingsPath(): string {
 }
 
 /**
- * Load only the schema this CLI understands. Invalid, unreadable, and future
- * settings all fail closed without changing the file on disk.
+ * Load only the schema this CLI understands. Telemetry is enabled when the
+ * file is missing; invalid, unreadable, and future settings disable it for
+ * this run without changing the file on disk.
  */
 export function loadTelemetrySettings(): TelemetrySettings {
   return readTelemetrySettings().settings;
 }
 
-export function setTelemetryConsent(lane: TelemetryLane | "all", enabled: boolean): boolean {
+/** Telemetry is on by default; this persists the single global override. */
+export function setTelemetryEnabled(enabled: boolean): boolean {
   if (typeof enabled !== "boolean") return false;
-  if (lane === "all") return setTelemetryConsents({ analytics: enabled, errors: enabled });
-  if (lane !== "analytics" && lane !== "errors") return false;
-  return setTelemetryConsents({ [lane]: enabled });
-}
-
-/** Persist one or both explicit consent decisions while keeping the lanes independent. */
-export function setTelemetryConsents(consents: TelemetryConsentUpdate): boolean {
   const current = readTelemetrySettings();
   if (current.status === "unsupported" || current.status === "error") return false;
   const settings = current.status === "current" ? current.settings : emptyTelemetrySettings();
-  let hasDecision = false;
-
-  if (typeof consents.analytics === "boolean") {
-    settings.analytics = consents.analytics;
-    hasDecision = true;
-  }
-  if (typeof consents.errors === "boolean") {
-    settings.errors = consents.errors;
-    hasDecision = true;
-  }
-
-  return hasDecision ? writeTelemetrySettings(settings) : false;
+  if (enabled) delete settings.disabled;
+  else settings.disabled = true;
+  return writeTelemetrySettings(settings);
 }
 
-/** Environment overrides are master switches and take precedence over persisted consent. */
+/** Environment overrides are master switches and take precedence over persisted settings. */
 export function telemetryDisabledByEnvironment(): TelemetryEnvironmentOverride | undefined {
   if (isEnabledEnvironmentFlag(process.env.DO_NOT_TRACK)) return "DO_NOT_TRACK";
   if (isEnabledEnvironmentFlag(process.env.DOSU_TELEMETRY_DISABLED)) {
@@ -79,10 +61,10 @@ export function telemetryDisabledByEnvironment(): TelemetryEnvironmentOverride |
   return undefined;
 }
 
-/** Unset consent is disabled; collection starts only after an explicit persisted enable. */
-export function isTelemetryEnabled(lane: TelemetryLane): boolean {
+/** Missing settings mean enabled; explicit or defensive disables always win. */
+export function isTelemetryEnabled(settings = loadTelemetrySettings()): boolean {
   if (telemetryDisabledByEnvironment() !== undefined) return false;
-  return loadTelemetrySettings()[lane] === true;
+  return settings.disabled !== true;
 }
 
 /**
@@ -102,10 +84,10 @@ export function getOrCreateInstallID(): string | undefined {
   return writeTelemetrySettings(settings) ? installID : undefined;
 }
 
-/** Explicitly rotate the installation UUID, preserving understood consent decisions. */
+/** Explicitly rotate the installation UUID, preserving the understood global setting. */
 export function resetInstallID(): string | undefined {
   const current = readTelemetrySettings();
-  if (current.status === "unsupported" || current.status === "error") return undefined;
+  if (current.status !== "current" && current.status !== "missing") return undefined;
   const settings = current.status === "current" ? current.settings : emptyTelemetrySettings();
   const installID = randomUUID();
   settings.install_id = installID;
@@ -117,32 +99,34 @@ function readTelemetrySettings(): SettingsReadResult {
   try {
     if (!existsSync(path)) return { status: "missing", settings: emptyTelemetrySettings() };
   } catch {
-    return { status: "error", settings: emptyTelemetrySettings() };
+    return { status: "error", settings: disabledTelemetrySettings() };
   }
 
   let content: string;
   try {
     content = readFileSync(path, "utf-8");
   } catch {
-    return { status: "error", settings: emptyTelemetrySettings() };
+    return { status: "error", settings: disabledTelemetrySettings() };
   }
 
   let raw: unknown;
   try {
     raw = JSON.parse(content) as unknown;
   } catch {
-    return { status: "invalid", settings: emptyTelemetrySettings() };
+    return { status: "invalid", settings: disabledTelemetrySettings() };
   }
 
-  if (!isRecord(raw)) return { status: "invalid", settings: emptyTelemetrySettings() };
+  if (!isRecord(raw)) return { status: "invalid", settings: disabledTelemetrySettings() };
   if (raw.schema_version !== TELEMETRY_SCHEMA_VERSION) {
     const status = "schema_version" in raw ? "unsupported" : "invalid";
-    return { status, settings: emptyTelemetrySettings() };
+    return { status, settings: disabledTelemetrySettings() };
+  }
+  if ("disabled" in raw && typeof raw.disabled !== "boolean") {
+    return { status: "invalid", settings: disabledTelemetrySettings() };
   }
 
   const settings = emptyTelemetrySettings();
-  if (typeof raw.analytics === "boolean") settings.analytics = raw.analytics;
-  if (typeof raw.errors === "boolean") settings.errors = raw.errors;
+  if (raw.disabled === true) settings.disabled = true;
   if (typeof raw.install_id === "string" && isUUID(raw.install_id)) {
     settings.install_id = raw.install_id;
   }
@@ -174,6 +158,10 @@ function writeTelemetrySettings(settings: TelemetrySettings): boolean {
 
 function emptyTelemetrySettings(): TelemetrySettings {
   return { schema_version: TELEMETRY_SCHEMA_VERSION };
+}
+
+function disabledTelemetrySettings(): TelemetrySettings {
+  return { schema_version: TELEMETRY_SCHEMA_VERSION, disabled: true };
 }
 
 function isEnabledEnvironmentFlag(value: string | undefined): boolean {

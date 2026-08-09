@@ -487,7 +487,7 @@ describe("CommandTelemetry lifecycle", () => {
       },
     });
     const telemetry = createCommandTelemetry(
-      { schema_version: 1, analytics: true, errors: true },
+      { install_id: "11111111-1111-4111-8111-111111111111" },
       deps,
     );
     telemetry.start("status", SAFE_CONTEXT);
@@ -498,26 +498,32 @@ describe("CommandTelemetry lifecycle", () => {
     expect(deps.stderr).not.toHaveBeenCalled();
   });
 
-  it("requires explicit lane consent before creating payloads or network requests", async () => {
+  it("is enabled by default and a persisted global disable blocks both destinations", async () => {
     const deps = testDependencies();
-    const telemetry = createCommandTelemetry({ schema_version: 1 }, deps);
-    telemetry.start("status", SAFE_CONTEXT);
-    await telemetry.complete(0);
-
-    const errorDeps = testDependencies();
-    const errorTelemetry = createCommandTelemetry(
-      { schema_version: 1, analytics: false, errors: false },
-      errorDeps,
+    const telemetry = createCommandTelemetry(
+      { install_id: "11111111-1111-4111-8111-111111111111" },
+      deps,
     );
-    errorTelemetry.start("status", SAFE_CONTEXT);
-    await errorTelemetry.fail(new Error("private"));
+    telemetry.start("status", SAFE_CONTEXT);
+    await telemetry.fail(new Error("private"));
 
-    expect(deps.fetch).not.toHaveBeenCalled();
-    expect(deps.randomUUID).not.toHaveBeenCalled();
+    const disabledDeps = testDependencies();
+    const disabledTelemetry = createCommandTelemetry(
+      {
+        disabled: true,
+        install_id: "11111111-1111-4111-8111-111111111111",
+      },
+      disabledDeps,
+    );
+    disabledTelemetry.start("status", SAFE_CONTEXT);
+    await disabledTelemetry.fail(new Error("private"));
+
+    expect(deps.fetch).toHaveBeenCalledTimes(2);
+    expect(deps.randomUUID).toHaveBeenCalledOnce();
     expect(deps.stderr).not.toHaveBeenCalled();
-    expect(errorDeps.fetch).not.toHaveBeenCalled();
-    expect(errorDeps.randomUUID).not.toHaveBeenCalled();
-    expect(errorDeps.stderr).not.toHaveBeenCalled();
+    expect(disabledDeps.fetch).not.toHaveBeenCalled();
+    expect(disabledDeps.randomUUID).not.toHaveBeenCalled();
+    expect(disabledDeps.stderr).not.toHaveBeenCalled();
   });
 
   it("sends exactly one PostHog completion event", async () => {
@@ -526,9 +532,6 @@ describe("CommandTelemetry lifecycle", () => {
     });
     const telemetry = createCommandTelemetry(
       {
-        schema_version: 1,
-        analytics: true,
-        errors: false,
         install_id: "11111111-1111-4111-8111-111111111111",
       },
       deps,
@@ -562,7 +565,7 @@ describe("CommandTelemetry lifecycle", () => {
   it("classifies exit code 2 as validation_error", async () => {
     const deps = testDependencies();
     const telemetry = createCommandTelemetry(
-      { schema_version: 1, analytics: true, errors: false },
+      { install_id: "11111111-1111-4111-8111-111111111111" },
       deps,
     );
     telemetry.start("login", SAFE_CONTEXT);
@@ -577,9 +580,6 @@ describe("CommandTelemetry lifecycle", () => {
     const deps = testDependencies();
     const telemetry = createCommandTelemetry(
       {
-        schema_version: 1,
-        analytics: true,
-        errors: true,
         install_id: "11111111-1111-4111-8111-111111111111",
       },
       deps,
@@ -602,10 +602,7 @@ describe("CommandTelemetry lifecycle", () => {
 
   it("reports a non-validation nonzero completion as a message-free Sentry error", async () => {
     const deps = testDependencies();
-    const telemetry = createCommandTelemetry(
-      { schema_version: 1, analytics: false, errors: true },
-      deps,
-    );
+    const telemetry = createCommandTelemetry({}, deps);
     telemetry.start("login", SAFE_CONTEXT);
 
     await telemetry.complete(1);
@@ -621,9 +618,6 @@ describe("CommandTelemetry lifecycle", () => {
     const deps = testDependencies();
     const telemetry = createCommandTelemetry(
       {
-        schema_version: 1,
-        analytics: true,
-        errors: true,
         install_id: "11111111-1111-4111-8111-111111111111",
       },
       deps,
@@ -662,7 +656,7 @@ describe("CommandTelemetry lifecycle", () => {
       stderr,
     });
     const telemetry = createCommandTelemetry(
-      { schema_version: 1, analytics: true, errors: false },
+      { install_id: "11111111-1111-4111-8111-111111111111" },
       deps,
     );
     telemetry.start("status", SAFE_CONTEXT);
@@ -687,7 +681,7 @@ describe("CommandTelemetry lifecycle", () => {
       }),
     });
     const telemetry = createCommandTelemetry(
-      { schema_version: 1, analytics: true, errors: true },
+      { install_id: "11111111-1111-4111-8111-111111111111" },
       deps,
     );
     telemetry.start("status", SAFE_CONTEXT);
@@ -699,9 +693,6 @@ describe("CommandTelemetry lifecycle", () => {
     const deps = testDependencies({ webAppURL: vi.fn(() => "https://user:secret@evil.test") });
     const telemetry = createCommandTelemetry(
       {
-        schema_version: 1,
-        analytics: true,
-        errors: false,
         install_id: "11111111-1111-4111-8111-111111111111",
       },
       deps,

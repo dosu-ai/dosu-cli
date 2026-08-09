@@ -40,8 +40,8 @@ import { allProviders, getProvider, type Provider } from "../mcp/providers";
 import { browserFallbackHint } from "../setup/styles";
 import {
   getOrCreateInstallID,
+  isTelemetryEnabled,
   loadTelemetrySettings,
-  telemetryDisabledByEnvironment,
 } from "../telemetry/settings";
 import {
   type CommandTelemetry,
@@ -62,6 +62,10 @@ const HOOK_ENTRYPOINTS = new Set(["user-prompt-submit", "post-tool-use", "stop"]
 function isHookEntrypointInvocation(argv: string[]): boolean {
   const i = argv.indexOf("hooks");
   return i >= 0 && HOOK_ENTRYPOINTS.has(argv[i + 1] ?? "");
+}
+
+function isTelemetryControlInvocation(argv: string[]): boolean {
+  return argv.includes("telemetry");
 }
 
 export function shouldRunBackgroundChecks(actionName: string, argv: string[]): boolean {
@@ -644,9 +648,10 @@ async function ensureFreshSession(cfg: Config): Promise<boolean> {
 }
 
 export async function execute(): Promise<void> {
-  const telemetry = isHookEntrypointInvocation(process.argv)
-    ? undefined
-    : processCommandTelemetry();
+  const telemetry =
+    isHookEntrypointInvocation(process.argv) || isTelemetryControlInvocation(process.argv)
+      ? undefined
+      : processCommandTelemetry();
   const program = createProgram({ telemetry });
   try {
     await program.parseAsync(process.argv);
@@ -658,23 +663,11 @@ export async function execute(): Promise<void> {
 
 function processCommandTelemetry(): CommandTelemetry | undefined {
   try {
-    if (telemetryDisabledByEnvironment()) return undefined;
     const settings = loadTelemetrySettings();
-    let analytics = settings.analytics === true;
-    const errors = settings.errors === true;
-    if (!analytics && !errors) return undefined;
-
-    let installID = settings.install_id;
-    if (analytics && !installID) {
-      installID = getOrCreateInstallID();
-      if (!installID) analytics = false;
-    }
-    if (!analytics && !errors) return undefined;
+    if (!isTelemetryEnabled(settings)) return undefined;
+    const installID = settings.install_id ?? getOrCreateInstallID();
 
     return createCommandTelemetry({
-      schema_version: settings.schema_version,
-      analytics,
-      errors,
       ...(installID ? { install_id: installID } : {}),
     });
   } catch {

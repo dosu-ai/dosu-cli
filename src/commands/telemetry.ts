@@ -5,8 +5,7 @@ import {
   isTelemetryEnabled,
   loadTelemetrySettings,
   resetInstallID,
-  setTelemetryConsent,
-  type TelemetryLane,
+  setTelemetryEnabled,
   telemetryDisabledByEnvironment,
 } from "../telemetry/settings";
 import {
@@ -14,14 +13,6 @@ import {
   parseSentryDsn,
   parseTelemetryWebAppURL,
 } from "../telemetry/telemetry";
-
-type TelemetryTarget = TelemetryLane | "all";
-
-function parseTarget(value: string | undefined): TelemetryTarget {
-  const target = value ?? "all";
-  if (target === "analytics" || target === "errors" || target === "all") return target;
-  throw new Error("telemetry lane must be one of: analytics, errors, all");
-}
 
 function statusPayload() {
   const settings = loadTelemetrySettings();
@@ -34,17 +25,11 @@ function statusPayload() {
   );
   return {
     schema_version: settings.schema_version,
-    analytics: {
-      decision:
-        settings.analytics === undefined ? "unset" : settings.analytics ? "enabled" : "disabled",
-      effective: isTelemetryEnabled("analytics"),
-      command_destination_configured: Boolean(commandWebAppURL && analyticsReleaseToken),
-      setup_destination_configured: Boolean(setupWebAppURL && analyticsReleaseToken),
-    },
-    errors: {
-      decision: settings.errors === undefined ? "unset" : settings.errors ? "enabled" : "disabled",
-      effective: isTelemetryEnabled("errors"),
-      destination_configured: Boolean(
+    enabled: isTelemetryEnabled(settings),
+    destinations: {
+      command_analytics: Boolean(commandWebAppURL && analyticsReleaseToken),
+      setup_analytics: Boolean(setupWebAppURL && analyticsReleaseToken),
+      error_diagnostics: Boolean(
         parseSentryDsn(process.env.DOSU_SENTRY_DSN_OVERRIDE ?? process.env.DOSU_SENTRY_DSN),
       ),
     },
@@ -56,15 +41,9 @@ function statusPayload() {
 
 function printHumanStatus(): void {
   const status = statusPayload();
-  const effectiveSuffix = (effective: boolean) => (effective ? "on" : "off");
+  console.log(`Telemetry: ${status.enabled ? "enabled" : "disabled"}`);
   console.log(
-    `Usage analytics: ${status.analytics.decision} (effective ${effectiveSuffix(status.analytics.effective)})`,
-  );
-  console.log(
-    `Error diagnostics: ${status.errors.decision} (effective ${effectiveSuffix(status.errors.effective)})`,
-  );
-  console.log(
-    `Destinations: command analytics PostHog ${status.analytics.command_destination_configured ? "configured" : "not configured"}, setup analytics Dosu API ${status.analytics.setup_destination_configured ? "configured" : "not configured"}, error diagnostics Sentry ${status.errors.destination_configured ? "configured" : "not configured"}`,
+    `Destinations: command analytics PostHog ${status.destinations.command_analytics ? "configured" : "not configured"}, setup analytics Dosu API ${status.destinations.setup_analytics ? "configured" : "not configured"}, error diagnostics Sentry ${status.destinations.error_diagnostics ? "configured" : "not configured"}`,
   );
   if (status.environment_override) {
     console.log(`Environment override: ${status.environment_override}`);
@@ -76,24 +55,19 @@ function printHumanStatus(): void {
   );
 }
 
-function updateConsent(target: TelemetryTarget, enabled: boolean): void {
-  if (!setTelemetryConsent(target, enabled)) {
+function updateTelemetry(enabled: boolean): void {
+  if (!setTelemetryEnabled(enabled)) {
     throw new Error("Could not save telemetry settings");
   }
-  const verb = enabled ? "enabled" : "disabled";
-  console.log(
-    `Telemetry ${target === "all" ? "analytics and error diagnostics" : target} ${verb}.`,
-  );
+  console.log(`Telemetry ${enabled ? "enabled" : "disabled"}.`);
 }
 
 export function telemetryCommand(): Command {
-  const command = new Command("telemetry").description(
-    "Manage privacy-preserving usage analytics and error diagnostics",
-  );
+  const command = new Command("telemetry").description("Manage privacy-preserving telemetry");
 
   command
     .command("status")
-    .description("Show telemetry choices and effective configuration")
+    .description("Show telemetry state and destination configuration")
     .option("--json", "Output as JSON")
     .action((opts: { json?: boolean }) => {
       if (opts.json) {
@@ -104,14 +78,14 @@ export function telemetryCommand(): Command {
     });
 
   command
-    .command("enable [lane]")
-    .description("Enable analytics, errors, or all (default: all)")
-    .action((lane?: string) => updateConsent(parseTarget(lane), true));
+    .command("enable")
+    .description("Enable telemetry")
+    .action(() => updateTelemetry(true));
 
   command
-    .command("disable [lane]")
-    .description("Disable analytics, errors, or all (default: all)")
-    .action((lane?: string) => updateConsent(parseTarget(lane), false));
+    .command("disable")
+    .description("Disable telemetry")
+    .action(() => updateTelemetry(false));
 
   command
     .command("reset")

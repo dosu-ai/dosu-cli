@@ -71,7 +71,7 @@ export async function trackCliOnboardingEvent(
   properties: CliOnboardingProperties = {},
 ): Promise<void> {
   try {
-    if (!isTelemetryEnabled("analytics")) return;
+    if (!isTelemetryEnabled()) return;
     if (!analyticsReleaseEnabled()) return;
     if (!cfg.active_account?.session.access_token) return;
     if (!isUUID(onboardingRunID)) return;
@@ -104,7 +104,7 @@ export async function trackCliOnboardingPreAuthEvent(
   properties: CliOnboardingProperties = {},
 ): Promise<void> {
   try {
-    if (!isTelemetryEnabled("analytics")) return;
+    if (!isTelemetryEnabled()) return;
     if (!analyticsReleaseEnabled()) return;
     if (!isUUID(onboardingRunID)) return;
 

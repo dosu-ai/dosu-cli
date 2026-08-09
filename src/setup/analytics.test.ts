@@ -81,7 +81,7 @@ describe("setup analytics", () => {
     }
   });
 
-  it("does not initialize a client when analytics consent is absent", async () => {
+  it("does not initialize a client when telemetry is disabled", async () => {
     mockTelemetryEnabled.mockReturnValue(false);
 
     await trackCliOnboardingEvent(makeConfig(), RUN_ID, "cli_onboarding_started");

@@ -90,9 +90,7 @@ type CommandResult = "success" | "validation_error" | "failure";
 
 /** Compatible with the persisted settings shape without coupling to its I/O. */
 export interface TelemetrySettings {
-  schema_version?: number;
-  analytics?: boolean;
-  errors?: boolean;
+  disabled?: boolean;
   install_id?: string;
 }
 
@@ -700,7 +698,7 @@ function eventId(generate: () => string): string | undefined {
 
 /**
  * Command-scoped telemetry. The caller supplies only a canonical command name and coarse context.
- * Consent is checked independently for analytics and error diagnostics.
+ * Telemetry is enabled by default and controlled by one global switch.
  */
 export function createCommandTelemetry(
   settings: TelemetrySettings,
@@ -716,7 +714,9 @@ export function createCommandTelemetry(
   const runtime = resolveRuntime(dependencies, env);
   const debug = env.DOSU_TELEMETRY_DEBUG === "1";
   const disabled =
-    environmentFlag(env.DO_NOT_TRACK) || environmentFlag(env.DOSU_TELEMETRY_DISABLED);
+    settings.disabled === true ||
+    environmentFlag(env.DO_NOT_TRACK) ||
+    environmentFlag(env.DOSU_TELEMETRY_DISABLED);
   // Keep direct process.env references in production so buildDefines() can inline
   // the public release credentials; injected env objects isolate tests.
   const rawAnalyticsToken = dependencies.env
@@ -733,12 +733,9 @@ export function createCommandTelemetry(
   let startedAt = 0;
   let command = UNKNOWN_COMMAND;
   let context: NormalizedContext = normalizeContext(undefined);
-  let generatedInstallId: string | undefined;
 
   function installId(): string | undefined {
-    if (validInstallId(settings.install_id)) return settings.install_id;
-    generatedInstallId ??= safeUuid(generateUuid);
-    return generatedInstallId;
+    return validInstallId(settings.install_id) ? settings.install_id : undefined;
   }
 
   function debugPayload(payload: string): void {
@@ -756,7 +753,7 @@ export function createCommandTelemetry(
   ): Promise<void> {
     try {
       const tasks: Promise<unknown>[] = [];
-      if (!disabled && settings.analytics === true && analyticsToken) {
+      if (!disabled && analyticsToken) {
         const id = installId();
         if (id) {
           const payload = buildPostHogPayload({
@@ -792,7 +789,7 @@ export function createCommandTelemetry(
         }
       }
 
-      if (!disabled && settings.errors === true && result === "failure" && error && sentryDsn) {
+      if (!disabled && result === "failure" && error && sentryDsn) {
         const id = eventId(generateUuid);
         const envelope = id
           ? buildSentryEnvelope({

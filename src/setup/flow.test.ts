@@ -52,10 +52,6 @@ vi.mock("../debug/logger", () => ({
   },
 }));
 
-vi.mock("../telemetry/consent", () => ({
-  promptForTelemetryConsent: vi.fn().mockResolvedValue(undefined),
-}));
-
 vi.mock("../telemetry/settings", () => ({
   isTelemetryEnabled: vi.fn(() => true),
 }));
