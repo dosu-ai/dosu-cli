@@ -153,13 +153,14 @@ When authentication completes, the server aliases that run ID to the signed-in u
 the PostHog person with user ID and email, and captures subsequent events under the user ID.
 Authenticated events may also include `org_id`, `deployment_id`, and `space_id`.
 
-Current common setup properties are `cli_version`, `platform`, `arch`, and `mode`. Current callers
-also use only these workflow properties: `onboarding_run_id`, `has_deployment_option`,
-`mode_option`, `flow_kind`, `reason`, `provider_count`, `providers`, `completed_mcp`,
-`completed_skill`, and `completed_agents_md`. Setup events use stable names in the
+Current common setup properties are `cli_version`, `install_channel`, `platform`, `arch`, and `mode`.
+Current callers also use only these workflow properties: `onboarding_run_id`,
+`has_deployment_option`, `mode_option`, `flow_kind`, `reason`, `provider_count`, `providers`,
+`completed_mcp`, `completed_skill`, and `completed_agents_md`. Setup events use stable names in the
 `cli_onboarding_*` family. They do not include raw authentication errors. This path uses a dedicated
-no-refresh client, refuses redirects, and aborts its request after 500ms. The server procedure still
-accepts a generic property record, but the CLI constructs that record from the closed runtime
+no-refresh client, runs without blocking setup, refuses redirects, and aborts its request after
+500ms. The server procedure still accepts a generic property record, but the CLI constructs that
+record from the closed runtime
 allowlist above rather than forwarding arbitrary properties.
 
 The existing Dosu server tRPC middleware is a separate operational-observability boundary. It puts
@@ -275,6 +276,8 @@ remain in controlled Dosu/vendor infrastructure or CI and are never placed in th
   are excluded. They are latency-sensitive, high-volume protocol paths and must remain stdout-clean.
 - Human-invoked `dosu hooks install|uninstall|doctor|status` commands are ordinary commands and may
   be measured while telemetry is enabled.
+- `install_channel` measures active CLI executions from `npm`, `homebrew`, or `binary` builds; it is
+  not a download counter. Exact downloads remain in npm, Homebrew, and GitHub Release analytics.
 - `dosu telemetry ...` controls are themselves excluded, so changing or inspecting the switch does
   not emit an analytics event or create an installation ID.
 - Commander lifecycle telemetry can observe commands that return normally or set
