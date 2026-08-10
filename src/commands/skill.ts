@@ -12,8 +12,14 @@ import { fetchLatestSha, writeSkillCache } from "../version/skill-update-check";
 
 const SKILL_REPO = "dosu-ai/dosu-skill";
 const SKILL_NAME = "dosu";
-/** Names are interpolated into a shell command, so keep them boring. */
-const SAFE_SKILL_NAME = /^[a-zA-Z0-9._-]+$/;
+/**
+ * Names are interpolated into a shell command as positional arguments, so keep
+ * them boring. The leading character must be alphanumeric: `skills list` echoes
+ * the SKILL.md front-matter name verbatim without validating its shape, and a
+ * name like `--all` would be re-parsed as an option by `skills remove`, which
+ * treats it as "delete every installed skill from every source".
+ */
+const SAFE_SKILL_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 const SUPPORTED_SKILL_AGENTS = [
   "claude-code",
   "cursor",

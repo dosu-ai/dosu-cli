@@ -161,6 +161,19 @@ describe("skill remove", () => {
     });
   });
 
+  // `skills list` echoes the front-matter name without validating it, and
+  // `skills remove --all` deletes every skill from every source.
+  it("skips flag-shaped names so they cannot be re-parsed as options", async () => {
+    stubInventory([
+      { name: "dosu", source: "dosu-ai/dosu-skill" },
+      { name: "--all", source: "dosu-ai/dosu-skill" },
+    ]);
+    await run("remove");
+    expect(mockExecSync).toHaveBeenCalledWith("npx skills remove -g dosu -y", {
+      stdio: "inherit",
+    });
+  });
+
   it("falls back to the known skill when the inventory is unreadable", async () => {
     mockExecSync.mockImplementation((command: string) => {
       if (command.includes("skills list")) throw new Error("npx unavailable");
