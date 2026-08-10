@@ -12,6 +12,8 @@ import { fetchLatestSha, writeSkillCache } from "../version/skill-update-check";
 
 const SKILL_REPO = "dosu-ai/dosu-skill";
 const SKILL_NAME = "dosu";
+/** Names are interpolated into a shell command, so keep them boring. */
+const SAFE_SKILL_NAME = /^[a-zA-Z0-9._-]+$/;
 const SUPPORTED_SKILL_AGENTS = [
   "claude-code",
   "cursor",
@@ -137,6 +139,31 @@ export async function installSkill(
   return { success: true };
 }
 
+/**
+ * Names of the globally installed skills that came from {@link SKILL_REPO},
+ * as reported by the skills CLI's own inventory.
+ *
+ * `skills remove` resolves exact names and has no wildcard, so removing our
+ * whole set means enumerating it first. Returns an empty list if the inventory
+ * cannot be read.
+ */
+function installedSkillNames(): string[] {
+  try {
+    const json = execSync("npx skills list -g --json", {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const entries = JSON.parse(json) as { name?: unknown; source?: unknown }[];
+    return entries
+      .filter((entry) => entry.source === SKILL_REPO)
+      .map((entry) => entry.name)
+      .filter((name): name is string => typeof name === "string" && SAFE_SKILL_NAME.test(name));
+  } catch (err) {
+    logger.debug("skill", `Could not list installed skills: ${err}`);
+    return [];
+  }
+}
+
 export function skillCommand(): Command {
   const cmd = new Command("skill").description("Manage the Dosu agent skill");
 
@@ -156,16 +183,22 @@ export function skillCommand(): Command {
 
   cmd
     .command("remove")
-    .description("Remove the Dosu skill")
+    .description("Remove the Dosu skills")
     .action(() => {
-      console.log(`Removing ${SKILL_NAME} skill...`);
+      // Names go in positionally: the remove parser silently drops `-s`, and
+      // passing none at all opens an interactive picker. Falling back to the
+      // original skill keeps the command non-interactive when the inventory
+      // is unreadable.
+      const installed = installedSkillNames();
+      const targets = installed.length > 0 ? installed : [SKILL_NAME];
+      console.log(`Removing skills from ${SKILL_REPO}...`);
       try {
-        execSync(`npx skills remove -g -s ${SKILL_NAME} -y`, {
+        execSync(`npx skills remove -g ${targets.join(" ")} -y`, {
           stdio: "inherit",
         });
-        console.log(pc.green(`\n✓ Skill "${SKILL_NAME}" removed.`));
+        console.log(pc.green(`\n✓ Skills removed.`));
       } catch {
-        console.error(pc.red(`\nFailed to remove skill.`));
+        console.error(pc.red(`\nFailed to remove skills.`));
         process.exit(1);
       }
     });

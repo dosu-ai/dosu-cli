@@ -120,9 +120,54 @@ describe("skill install", () => {
 });
 
 describe("skill remove", () => {
-  it("runs npx skills remove with correct args", async () => {
+  /** Make `npx skills list -g --json` resolve to the given inventory. */
+  function stubInventory(entries: unknown[]): void {
+    mockExecSync.mockImplementation((command: string) =>
+      command.includes("skills list") ? JSON.stringify(entries) : undefined,
+    );
+  }
+
+  it("removes every skill installed from the Dosu repo", async () => {
+    stubInventory([
+      { name: "dosu", source: "dosu-ai/dosu-skill" },
+      { name: "dosu-review", source: "dosu-ai/dosu-skill" },
+    ]);
     await run("remove");
-    expect(mockExecSync).toHaveBeenCalledWith("npx skills remove -g -s dosu -y", {
+    expect(mockExecSync).toHaveBeenCalledWith("npx skills remove -g dosu dosu-review -y", {
+      stdio: "inherit",
+    });
+  });
+
+  it("leaves skills from other sources alone", async () => {
+    stubInventory([
+      { name: "dosu", source: "dosu-ai/dosu-skill" },
+      { name: "web-design", source: "vercel-labs/agent-skills" },
+      { name: "local-skill", source: null },
+    ]);
+    await run("remove");
+    expect(mockExecSync).toHaveBeenCalledWith("npx skills remove -g dosu -y", {
+      stdio: "inherit",
+    });
+  });
+
+  it("skips names that are unsafe to interpolate into a shell command", async () => {
+    stubInventory([
+      { name: "dosu", source: "dosu-ai/dosu-skill" },
+      { name: "evil; rm -rf /", source: "dosu-ai/dosu-skill" },
+    ]);
+    await run("remove");
+    expect(mockExecSync).toHaveBeenCalledWith("npx skills remove -g dosu -y", {
+      stdio: "inherit",
+    });
+  });
+
+  it("falls back to the known skill when the inventory is unreadable", async () => {
+    mockExecSync.mockImplementation((command: string) => {
+      if (command.includes("skills list")) throw new Error("npx unavailable");
+      return undefined;
+    });
+    await run("remove");
+    expect(mockExecSync).toHaveBeenCalledWith("npx skills remove -g dosu -y", {
       stdio: "inherit",
     });
   });
