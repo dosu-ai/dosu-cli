@@ -90,7 +90,7 @@ describe("skill install", () => {
         "npx skills add dosu-ai/dosu-skill -g",
         "-a claude-code -a cursor -a gemini-cli -a codex -a windsurf",
         "-a zed -a cline -a github-copilot -a opencode -a antigravity",
-        "-s dosu -y",
+        "-s dosu -s log-to-dosu-knowledge -y",
       ].join(" "),
       {
         stdio: "inherit",
@@ -108,6 +108,7 @@ describe("skill install", () => {
   it("prints success message", async () => {
     await run("install");
     expect(allOutput()).toContain("installed successfully");
+    expect(allOutput()).toContain("log-to-dosu-knowledge");
   });
 
   it("exits with error when execSync throws", async () => {
@@ -115,16 +116,19 @@ describe("skill install", () => {
       throw new Error("command failed");
     });
     await expect(run("install")).rejects.toThrow("exit");
-    expect(allErrors()).toContain("Failed to install skill");
+    expect(allErrors()).toContain("Failed to install skills");
   });
 });
 
 describe("skill remove", () => {
   it("runs npx skills remove with correct args", async () => {
     await run("remove");
-    expect(mockExecSync).toHaveBeenCalledWith("npx skills remove -g -s dosu -y", {
-      stdio: "inherit",
-    });
+    expect(mockExecSync).toHaveBeenCalledWith(
+      "npx skills remove -g -s dosu -s log-to-dosu-knowledge -y",
+      {
+        stdio: "inherit",
+      },
+    );
   });
 
   it("prints success message", async () => {
@@ -137,7 +141,7 @@ describe("skill remove", () => {
       throw new Error("command failed");
     });
     await expect(run("remove")).rejects.toThrow("exit");
-    expect(allErrors()).toContain("Failed to remove skill");
+    expect(allErrors()).toContain("Failed to remove skills");
   });
 });
 
@@ -164,7 +168,7 @@ describe("skill update", () => {
       throw new Error("command failed");
     });
     await expect(run("update")).rejects.toThrow("exit");
-    expect(allErrors()).toContain("Failed to update skill");
+    expect(allErrors()).toContain("Failed to update skills");
   });
 
   it("refreshes installedSha in cache after successful update", async () => {
@@ -190,7 +194,7 @@ describe("installSkill helper", () => {
 
     expect(result.success).toBe(true);
     expect(mockExecSync).toHaveBeenCalledWith(
-      "npx skills add dosu-ai/dosu-skill -g -a claude-code -a codex -s dosu -y",
+      "npx skills add dosu-ai/dosu-skill -g -a claude-code -a codex -s dosu -s log-to-dosu-knowledge -y",
       { stdio: "inherit" },
     );
   });

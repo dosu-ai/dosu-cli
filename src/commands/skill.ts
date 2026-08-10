@@ -1,5 +1,5 @@
 /**
- * `dosu skill` — manage the Dosu agent skill.
+ * `dosu skill` — manage Dosu agent skills from dosu-ai/dosu-skill.
  */
 
 import { exec, execSync } from "node:child_process";
@@ -11,7 +11,10 @@ import { logger } from "../debug/logger";
 import { fetchLatestSha, writeSkillCache } from "../version/skill-update-check";
 
 const SKILL_REPO = "dosu-ai/dosu-skill";
-const SKILL_NAME = "dosu";
+/** Skills shipped from SKILL_REPO. Install/update/remove apply to all of them. */
+const SKILL_NAMES = ["dosu", "log-to-dosu-knowledge"] as const;
+/** Primary skill path used for setup UI targets (symlink destination). */
+const PRIMARY_SKILL_NAME = "dosu";
 const SUPPORTED_SKILL_AGENTS = [
   "claude-code",
   "cursor",
@@ -40,6 +43,14 @@ const SKILL_AGENT_BY_PROVIDER: Readonly<Record<string, string>> = {
   antigravity: "antigravity",
 };
 
+function skillSelectArgs(): string {
+  return SKILL_NAMES.map((name) => `-s ${name}`).join(" ");
+}
+
+function skillNamesLabel(): string {
+  return SKILL_NAMES.join(", ");
+}
+
 export function skillAgentIDsForProviders(providerIDs: readonly string[]): string[] {
   return [
     ...new Set(
@@ -61,18 +72,18 @@ export function skillInstallTargetForProvider(providerID: string): SkillInstallT
 
   if (agentID === "claude-code") {
     const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), ".claude");
-    return { path: join(claudeConfigDir, "skills", SKILL_NAME), symlink: true };
+    return { path: join(claudeConfigDir, "skills", PRIMARY_SKILL_NAME), symlink: true };
   }
 
   if (agentID === "windsurf") {
     return {
-      path: join(homedir(), ".codeium", "windsurf", "skills", SKILL_NAME),
+      path: join(homedir(), ".codeium", "windsurf", "skills", PRIMARY_SKILL_NAME),
       symlink: true,
     };
   }
 
   return {
-    path: join(homedir(), ".agents", "skills", SKILL_NAME),
+    path: join(homedir(), ".agents", "skills", PRIMARY_SKILL_NAME),
     symlink: false,
   };
 }
@@ -93,9 +104,9 @@ function execQuiet(command: string): Promise<void> {
 }
 
 /**
- * Install the Dosu skill via `npx skills`. After a successful install we try
+ * Install Dosu skills via `npx skills`. After a successful install we try
  * to fetch the latest commit SHA and cache it so the update checker knows
- * what was installed. Network failure is non-fatal — the skill is still
+ * what was installed. Network failure is non-fatal — the skills are still
  * installed, the SHA is just not cached (the update checker will fill it
  * in on the next stale check).
  */
@@ -105,16 +116,16 @@ export async function installSkill(
 ): Promise<{ success: boolean; sha?: string }> {
   const agentArgs = skillAgentArgs(providerIDs);
   if (!agentArgs) {
-    logger.debug("skill", "No selected providers support the Dosu skill");
+    logger.debug("skill", "No selected providers support Dosu skills");
     return { success: true };
   }
 
   try {
-    const command = `npx skills add ${SKILL_REPO} -g ${agentArgs} -s ${SKILL_NAME} -y`;
+    const command = `npx skills add ${SKILL_REPO} -g ${agentArgs} ${skillSelectArgs()} -y`;
     if (options.quiet) await execQuiet(command);
     else execSync(command, { stdio: "inherit" });
   } catch (err) {
-    logger.error("skill", `Failed to install skill: ${err}`);
+    logger.error("skill", `Failed to install skills: ${err}`);
     return { success: false };
   }
 
@@ -127,48 +138,48 @@ export async function installSkill(
     });
     return { success: true, sha };
   }
-  logger.debug("skill", "Skill installed but could not fetch latest SHA");
+  logger.debug("skill", "Skills installed but could not fetch latest SHA");
   return { success: true };
 }
 
 export function skillCommand(): Command {
-  const cmd = new Command("skill").description("Manage the Dosu agent skill");
+  const cmd = new Command("skill").description("Manage Dosu agent skills");
 
   cmd
     .command("install")
-    .description("Install the Dosu skill for AI coding agents")
+    .description("Install Dosu skills for AI coding agents")
     .action(async () => {
-      console.log(`Installing ${SKILL_NAME} skill from ${SKILL_REPO}...`);
+      console.log(`Installing skills (${skillNamesLabel()}) from ${SKILL_REPO}...`);
       const result = await installSkill();
       if (result.success) {
-        console.log(pc.green(`\n✓ Skill "${SKILL_NAME}" installed successfully.`));
+        console.log(pc.green(`\n✓ Skills installed successfully: ${skillNamesLabel()}.`));
       } else {
-        console.error(pc.red(`\nFailed to install skill. Make sure npx is available.`));
+        console.error(pc.red(`\nFailed to install skills. Make sure npx is available.`));
         process.exit(1);
       }
     });
 
   cmd
     .command("remove")
-    .description("Remove the Dosu skill")
+    .description("Remove Dosu skills")
     .action(() => {
-      console.log(`Removing ${SKILL_NAME} skill...`);
+      console.log(`Removing skills (${skillNamesLabel()})...`);
       try {
-        execSync(`npx skills remove -g -s ${SKILL_NAME} -y`, {
+        execSync(`npx skills remove -g ${skillSelectArgs()} -y`, {
           stdio: "inherit",
         });
-        console.log(pc.green(`\n✓ Skill "${SKILL_NAME}" removed.`));
+        console.log(pc.green(`\n✓ Skills removed: ${skillNamesLabel()}.`));
       } catch {
-        console.error(pc.red(`\nFailed to remove skill.`));
+        console.error(pc.red(`\nFailed to remove skills.`));
         process.exit(1);
       }
     });
 
   cmd
     .command("update")
-    .description("Update the Dosu skill to the latest version")
+    .description("Update Dosu skills to the latest version")
     .action(async () => {
-      console.log(`Updating ${SKILL_NAME} skill...`);
+      console.log(`Updating skills (${skillNamesLabel()})...`);
       // Reinstall rather than `npx skills update`: update matches on the
       // skillPath recorded in the skills lockfile, so it can't follow the
       // skill across a repo-layout move (it reports "deleted upstream"
@@ -176,10 +187,10 @@ export function skillCommand(): Command {
       // entry, so it always converges on the latest layout.
       const result = await installSkill();
       if (!result.success) {
-        console.error(pc.red(`\nFailed to update skill.`));
+        console.error(pc.red(`\nFailed to update skills.`));
         process.exit(1);
       }
-      console.log(pc.green(`\n✓ Skill "${SKILL_NAME}" updated.`));
+      console.log(pc.green(`\n✓ Skills updated: ${skillNamesLabel()}.`));
     });
 
   return cmd;
