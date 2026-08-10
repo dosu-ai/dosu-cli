@@ -35,6 +35,11 @@ interface HookInput {
   hook_event_name?: string;
   prompt?: string;
   stop_hook_active?: boolean;
+  /** Set when the hook fired inside a subagent (shares the parent session_id). */
+  agent_id?: string;
+  /** PostToolUse only: the tool that just ran and what it returned. */
+  tool_name?: string;
+  tool_response?: unknown;
 }
 
 type HookEvent = "user-prompt-submit" | "post-tool-use" | "stop";
@@ -131,6 +136,23 @@ function gitContext(cwd?: string): { repo?: string; branch?: string } {
 }
 
 // ---------------------------------------------------------------------------
+// Status-line accounting (purely cosmetic — must never disturb the hook)
+// ---------------------------------------------------------------------------
+
+/** Explicit read_knowledge MCP calls, whatever the server registration name. */
+const READ_KNOWLEDGE_TOOL_RE = /^mcp__.*dosu.*__read_knowledge$/;
+
+/** Record a knowledge delivery for the `dosu statusline` row. Best-effort. */
+async function recordKnowledgeForStatusline(sessionId: string, text: string): Promise<void> {
+  try {
+    const { countKnowledge, recordKnowledgeCounts } = await import("../statusline/state");
+    recordKnowledgeCounts(sessionId, countKnowledge(text));
+  } catch (err) {
+    logger.debug("statusline", `record failed: ${errMsg(err)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Hook entrypoint handlers (exported for direct unit testing)
 // ---------------------------------------------------------------------------
 
@@ -196,6 +218,7 @@ export async function runUserPromptSubmit(
           old.result.context,
           old.result.save_recommended ?? false,
         )}`;
+        await recordKnowledgeForStatusline(sessionId, old.result.context);
         logger.info("hooks", `harvest tid=${claimed.ticketId} delivered=late`);
       }
     } catch {
@@ -245,6 +268,13 @@ export async function runUserPromptSubmit(
 export async function runPostToolUse(input: HookInput, now: number = Date.now()): Promise<void> {
   const sessionId = input.session_id;
   if (!sessionId) return;
+
+  // Status-line accounting for explicit read_knowledge calls. Subagents share
+  // the parent session_id — never let their lookups overwrite the main row.
+  if (!input.agent_id && input.tool_name && READ_KNOWLEDGE_TOOL_RE.test(input.tool_name)) {
+    const { loadToolResponseText } = await import("../statusline/state");
+    await recordKnowledgeForStatusline(sessionId, loadToolResponseText(input.tool_response));
+  }
 
   const state = loadState(sessionId);
   if (!state) {
@@ -324,6 +354,7 @@ export async function runPostToolUse(input: HookInput, now: number = Date.now())
   const context = buildReadyEnvelope(resp.result.context, resp.result.save_recommended ?? false);
   if (context) {
     printHookContext("PostToolUse", context);
+    await recordKnowledgeForStatusline(sessionId, resp.result.context);
     logger.info(
       "hooks",
       `deliver tid=${state.ticketId} latency=${Date.now() - startedAt}ms bytes=${context.length}`,
@@ -390,6 +421,7 @@ export async function runStop(input: HookInput, now: number = Date.now()): Promi
           resp.result.save_recommended ?? false,
         );
         console.log(JSON.stringify({ decision: "block", reason: `${STOP_PREFIX}\n\n${envelope}` }));
+        await recordKnowledgeForStatusline(sessionId, resp.result.context);
         logger.info("hooks", `stop tid=${claimed.ticketId} delivered=true`);
         return;
       }

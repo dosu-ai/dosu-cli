@@ -27,6 +27,7 @@ import { orgCommand } from "../commands/org";
 import { reviewCommand } from "../commands/review";
 import { skillCommand } from "../commands/skill";
 import { sourcesCommand } from "../commands/sources";
+import { statuslineCommand } from "../commands/statusline";
 import { suggestCommand } from "../commands/suggest";
 import { telemetryCommand } from "../commands/telemetry";
 import { threadsCommand } from "../commands/threads";
@@ -568,6 +569,7 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
   program.addCommand(orgCommand());
   program.addCommand(reviewCommand());
   program.addCommand(sourcesCommand());
+  program.addCommand(statuslineCommand());
   program.addCommand(suggestCommand());
   program.addCommand(telemetryCommand());
   program.addCommand(topicsCommand());
