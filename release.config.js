@@ -17,7 +17,7 @@ export default {
       "@semantic-release/exec",
       {
         prepareCmd:
-          "bash scripts/build-release.sh ${nextRelease.version} ${nextRelease.gitHead}",
+          "bun run build:npm && bun run upload:sourcemaps && bash scripts/build-release.sh ${nextRelease.version} ${nextRelease.gitHead}",
         successCmd:
           "echo 'released=true' >> $GITHUB_OUTPUT && echo 'version=${nextRelease.version}' >> $GITHUB_OUTPUT",
       },

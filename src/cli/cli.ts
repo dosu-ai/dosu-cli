@@ -2,7 +2,15 @@
  * CLI command definitions using Commander.
  */
 
-import { readFileSync, unlinkSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+  unlinkSync,
+} from "node:fs";
 import { Command } from "commander";
 import { Client } from "../client/client";
 import { analyticsCommand } from "../commands/analytics";
@@ -20,6 +28,7 @@ import { reviewCommand } from "../commands/review";
 import { skillCommand } from "../commands/skill";
 import { sourcesCommand } from "../commands/sources";
 import { suggestCommand } from "../commands/suggest";
+import { telemetryCommand } from "../commands/telemetry";
 import { threadsCommand } from "../commands/threads";
 import { topicsCommand } from "../commands/topics";
 import { upgradeCommand } from "../commands/upgrade";
@@ -27,16 +36,29 @@ import {
   type Config,
   clearConfigInPlace,
   getConfigPath,
+  getConfigUserID,
   isAuthenticated,
   isTokenExpired,
   loadConfig,
   MODE_OSS,
+  parseConfig,
   replaceLoginSession,
   saveConfig,
 } from "../config/config";
+import { getAccessTokenEmail, getAccessTokenUserID } from "../config/identity";
 import { logger } from "../debug/logger";
 import { allProviders, getProvider, type Provider } from "../mcp/providers";
 import { browserFallbackHint } from "../setup/styles";
+import {
+  getOrCreateInstallID,
+  isTelemetryEnabled,
+  loadTelemetrySettings,
+} from "../telemetry/settings";
+import {
+  type CommandTelemetry,
+  type CommandTelemetryContext,
+  createCommandTelemetry,
+} from "../telemetry/telemetry";
 import { checkForReadyTasks } from "../version/pending-tasks-check";
 import { checkForSkillUpdates } from "../version/skill-update-check";
 import { checkForUpdates } from "../version/update-check";
@@ -55,6 +77,115 @@ function isHookEntrypointInvocation(argv: string[]): boolean {
 
 export function shouldRunBackgroundChecks(actionName: string, argv: string[]): boolean {
   return actionName !== "upgrade" && !isHookEntrypointInvocation(argv);
+}
+
+const TELEMETRY_EXCLUDED_COMMANDS = new Set([
+  "hooks user-prompt-submit",
+  "hooks post-tool-use",
+  "hooks stop",
+]);
+const TELEMETRY_FLUSH_TIMEOUT_MS = 750;
+const MAX_TELEMETRY_CONFIG_BYTES = 64 * 1_024;
+
+class CliUsageError extends Error {
+  readonly exitCode = 1;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "CliUsageError";
+  }
+}
+
+function commandTelemetryName(actionCommand: Command): string {
+  const segments: string[] = [];
+  let current: Command | null = actionCommand;
+  while (current.parent) {
+    segments.unshift(current.name());
+    current = current.parent;
+  }
+  if (segments.length > 0) return segments.join(" ");
+  return actionCommand.args.length > 0 ? "unknown" : "tui";
+}
+
+function shouldTrackCommand(command: string): boolean {
+  if (command === "telemetry" || command.startsWith("telemetry ")) return false;
+  return !TELEMETRY_EXCLUDED_COMMANDS.has(command);
+}
+
+function commandTelemetryContext(): CommandTelemetryContext {
+  try {
+    const cfg = loadConfigForTelemetry();
+    if (!cfg) return { mode: "cloud", isAuthenticated: false };
+    const authenticated = isAuthenticated(cfg);
+    const accessToken = authenticated ? cfg.active_account.session.access_token : "";
+    const configUserID = getConfigUserID(cfg);
+    const tokenUserID = getAccessTokenUserID(accessToken);
+    const userID = configUserID && configUserID === tokenUserID ? configUserID : undefined;
+    const email = userID ? getAccessTokenEmail(accessToken) : undefined;
+    return {
+      mode: cfg.mode === MODE_OSS ? "oss" : "cloud",
+      isAuthenticated: authenticated,
+      ...(userID ? { user: { id: userID, ...(email ? { email } : {}) } } : {}),
+    };
+  } catch {
+    return { mode: "cloud", isAuthenticated: false };
+  }
+}
+
+/** Read only a bounded regular file so telemetry can never block a config-free command on a FIFO. */
+function loadConfigForTelemetry(): Config | undefined {
+  let fd: number | undefined;
+  try {
+    const nonblocking = typeof constants.O_NONBLOCK === "number" ? constants.O_NONBLOCK : 0;
+    fd = openSync(getConfigPath(), constants.O_RDONLY | nonblocking);
+    const file = fstatSync(fd);
+    if (!file.isFile() || file.size > MAX_TELEMETRY_CONFIG_BYTES) return undefined;
+
+    const content = Buffer.alloc(MAX_TELEMETRY_CONFIG_BYTES + 1);
+    const bytesRead = readSync(fd, content, 0, content.byteLength, 0);
+    if (bytesRead > MAX_TELEMETRY_CONFIG_BYTES) return undefined;
+    return parseConfig(JSON.parse(content.subarray(0, bytesRead).toString("utf8")) as unknown);
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Telemetry config cleanup must not affect the command.
+      }
+    }
+  }
+}
+
+function startTelemetry(
+  telemetry: CommandTelemetry | undefined,
+  command: string,
+  context: CommandTelemetryContext,
+): boolean {
+  if (!telemetry) return false;
+  try {
+    telemetry.start(command, context);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function finishTelemetry(operation: () => Promise<void>): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.resolve().then(operation),
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(resolve, TELEMETRY_FLUSH_TIMEOUT_MS);
+      }),
+    ]);
+  } catch {
+    // Telemetry must never change command output, exit codes, or behavior.
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 /** Suggest the closest registered command name for a mistyped one, if any is close enough. */
@@ -87,8 +218,10 @@ function editDistance(a: string, b: string): number {
   return prev[b.length];
 }
 
-export function createProgram(): Command {
+export function createProgram(options: { telemetry?: CommandTelemetry } = {}): Command {
   const program = new Command();
+  let telemetryStarted = false;
+  let telemetryValidationFailure = false;
 
   program
     .name("dosu")
@@ -106,6 +239,23 @@ export function createProgram(): Command {
         checkForSkillUpdates();
         checkForReadyTasks();
       }
+      const command = commandTelemetryName(actionCommand);
+      if (options.telemetry && shouldTrackCommand(command)) {
+        telemetryStarted = startTelemetry(options.telemetry, command, commandTelemetryContext());
+      }
+    })
+    .hook("postAction", async () => {
+      const exitCode = Number(process.exitCode ?? 0);
+      const telemetry = options.telemetry;
+      if (telemetryStarted && telemetry) {
+        if (telemetryValidationFailure) {
+          await finishTelemetry(() =>
+            telemetry.fail(new CliUsageError("expected CLI usage error")),
+          );
+        } else {
+          await finishTelemetry(() => telemetry.complete(Number.isFinite(exitCode) ? exitCode : 1));
+        }
+      }
     })
     .allowExcessArguments(true)
     .action(async () => {
@@ -118,6 +268,7 @@ export function createProgram(): Command {
         if (suggestion) message += `\n(Did you mean '${suggestion}'?)`;
         message += "\nRun 'dosu --help' to see available commands.";
         console.error(message);
+        telemetryValidationFailure = true;
         process.exitCode = 1;
         return;
       }
@@ -346,21 +497,23 @@ export function createProgram(): Command {
       try {
         provider = getProvider(toolId.toLowerCase());
       } catch {
-        throw new Error(`unknown tool '${toolId}'. Use 'dosu mcp list' to see available tools`);
+        throw new CliUsageError(
+          `unknown tool '${toolId}'. Use 'dosu mcp list' to see available tools`,
+        );
       }
       const cfg = loadConfig();
 
       if (!isAuthenticated(cfg)) {
-        throw new Error("not logged in. Run 'dosu login' first");
+        throw new CliUsageError("not logged in. Run 'dosu login' first");
       }
       if (isTokenExpired(cfg) && !(await ensureFreshSession(cfg))) {
-        throw new Error("session expired. Run 'dosu login' to re-authenticate");
+        throw new CliUsageError("session expired. Run 'dosu login' to re-authenticate");
       }
       if (cfg.mode !== MODE_OSS && !cfg.active_account?.target?.deployment_id) {
-        throw new Error("no MCP selected. Run 'dosu' to open the TUI and select an MCP");
+        throw new CliUsageError("no MCP selected. Run 'dosu' to open the TUI and select an MCP");
       }
       if (!cfg.active_account?.target?.api_key) {
-        throw new Error("no API key available. Run 'dosu setup' to create one");
+        throw new CliUsageError("no API key available. Run 'dosu setup' to create one");
       }
 
       if (provider.id() === "manual") {
@@ -416,6 +569,7 @@ export function createProgram(): Command {
   program.addCommand(reviewCommand());
   program.addCommand(sourcesCommand());
   program.addCommand(suggestCommand());
+  program.addCommand(telemetryCommand());
   program.addCommand(topicsCommand());
   program.addCommand(threadsCommand());
   program.addCommand(skillCommand());
@@ -467,7 +621,7 @@ export function createProgram(): Command {
 
         // Non-agent flags that only make sense with --agent.
         if (opts.tool || opts.loginTicket) {
-          throw new Error("--tool and --login-ticket require --agent");
+          throw new CliUsageError("--tool and --login-ticket require --agent");
         }
 
         const { runSetup } = await import("../setup/flow");
@@ -475,7 +629,9 @@ export function createProgram(): Command {
         if (opts.mode !== undefined) {
           const normalized = opts.mode.toLowerCase();
           if (normalized !== "oss" && normalized !== "cloud") {
-            throw new Error(`invalid --mode value '${opts.mode}' (expected 'oss' or 'cloud')`);
+            throw new CliUsageError(
+              `invalid --mode value '${opts.mode}' (expected 'oss' or 'cloud')`,
+            );
           }
           mode = normalized;
         }
@@ -534,6 +690,29 @@ async function ensureFreshSession(cfg: Config): Promise<boolean> {
 }
 
 export async function execute(): Promise<void> {
-  const program = createProgram();
-  await program.parseAsync(process.argv);
+  const telemetry = isHookEntrypointInvocation(process.argv)
+    ? undefined
+    : processCommandTelemetry();
+  const program = createProgram({ telemetry });
+  try {
+    await program.parseAsync(process.argv);
+  } catch (err: unknown) {
+    if (telemetry) await finishTelemetry(() => telemetry.fail(err));
+    throw err;
+  }
+}
+
+function processCommandTelemetry(): CommandTelemetry | undefined {
+  try {
+    const settings = loadTelemetrySettings();
+    if (!isTelemetryEnabled(settings)) return undefined;
+    return createCommandTelemetry(
+      {},
+      {
+        resolveInstallId: () => settings.install_id ?? getOrCreateInstallID(),
+      },
+    );
+  } catch {
+    return undefined;
+  }
 }
