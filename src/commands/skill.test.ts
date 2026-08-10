@@ -90,7 +90,7 @@ describe("skill install", () => {
         "npx skills add dosu-ai/dosu-skill -g",
         "-a claude-code -a cursor -a gemini-cli -a codex -a windsurf",
         "-a zed -a cline -a github-copilot -a opencode -a antigravity",
-        "-s dosu -y",
+        '-s "*" -y',
       ].join(" "),
       {
         stdio: "inherit",
@@ -190,7 +190,7 @@ describe("installSkill helper", () => {
 
     expect(result.success).toBe(true);
     expect(mockExecSync).toHaveBeenCalledWith(
-      "npx skills add dosu-ai/dosu-skill -g -a claude-code -a codex -s dosu -y",
+      'npx skills add dosu-ai/dosu-skill -g -a claude-code -a codex -s "*" -y',
       { stdio: "inherit" },
     );
   });

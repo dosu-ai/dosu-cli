@@ -110,7 +110,13 @@ export async function installSkill(
   }
 
   try {
-    const command = `npx skills add ${SKILL_REPO} -g ${agentArgs} -s ${SKILL_NAME} -y`;
+    // `-s "*"` installs every skill the repo exposes, so adding one upstream
+    // does not require a CLI release. The quoting is load-bearing and must be
+    // double quotes: this string is run through a shell, so on POSIX a bare `*`
+    // would glob-expand against cwd, while on Windows the shell is cmd.exe,
+    // which does not treat single quotes as delimiters and would forward a
+    // literal `'*'` that matches no skill name.
+    const command = `npx skills add ${SKILL_REPO} -g ${agentArgs} -s "*" -y`;
     if (options.quiet) await execQuiet(command);
     else execSync(command, { stdio: "inherit" });
   } catch (err) {
@@ -138,10 +144,10 @@ export function skillCommand(): Command {
     .command("install")
     .description("Install the Dosu skill for AI coding agents")
     .action(async () => {
-      console.log(`Installing ${SKILL_NAME} skill from ${SKILL_REPO}...`);
+      console.log(`Installing skills from ${SKILL_REPO}...`);
       const result = await installSkill();
       if (result.success) {
-        console.log(pc.green(`\n✓ Skill "${SKILL_NAME}" installed successfully.`));
+        console.log(pc.green(`\n✓ Skills installed successfully.`));
       } else {
         console.error(pc.red(`\nFailed to install skill. Make sure npx is available.`));
         process.exit(1);
@@ -168,7 +174,7 @@ export function skillCommand(): Command {
     .command("update")
     .description("Update the Dosu skill to the latest version")
     .action(async () => {
-      console.log(`Updating ${SKILL_NAME} skill...`);
+      console.log(`Updating skills from ${SKILL_REPO}...`);
       // Reinstall rather than `npx skills update`: update matches on the
       // skillPath recorded in the skills lockfile, so it can't follow the
       // skill across a repo-layout move (it reports "deleted upstream"
@@ -179,7 +185,7 @@ export function skillCommand(): Command {
         console.error(pc.red(`\nFailed to update skill.`));
         process.exit(1);
       }
-      console.log(pc.green(`\n✓ Skill "${SKILL_NAME}" updated.`));
+      console.log(pc.green(`\n✓ Skills updated.`));
     });
 
   return cmd;
