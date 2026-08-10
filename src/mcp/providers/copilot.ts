@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { type Config, MODE_OSS } from "../../config/config";
-import { assertSafeProjectPath } from "../../setup/project-root";
+import { assertSafeProjectPath, hasSymlinkInPath } from "../../setup/project-root";
 import {
   getJSONServer,
   installJSONServer,
@@ -11,6 +11,7 @@ import {
   removeJSONServer,
 } from "../config-helpers";
 import { expandHome, isInstalled } from "../detect";
+import { isReleasedLegacyGlobalMcpServer } from "../legacy-global";
 import { buildProjectProxyCommand, isDosuOwnedMcpServer } from "../project-proxy";
 import type { SetupProvider } from "../providers";
 
@@ -69,6 +70,18 @@ export const CopilotProvider = (): SetupProvider => ({
   isConfigured: () => isJSONKeyConfigured(globalPath(), "mcpServers"),
   projectConfigPath: (projectRoot: string) => join(projectRoot, ".mcp.json"),
   isProjectConfigured,
+  removeLegacyGlobal: () => {
+    const configPath = globalPath();
+    try {
+      if (hasSymlinkInPath(configPath)) return false;
+      const existing = getJSONServer(configPath, "mcpServers");
+      if (!isReleasedLegacyGlobalMcpServer("copilot", existing)) return false;
+      removeJSONServer(configPath, "mcpServers");
+      return true;
+    } catch {
+      return false;
+    }
+  },
 
   install(cfg: Config, global: boolean, opts = {}): void {
     if (global) {
