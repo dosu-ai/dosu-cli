@@ -1,3 +1,10 @@
+# [0.46.0](https://github.com/dosu-ai/dosu-cli/compare/v0.45.0...v0.46.0) (2026-08-10)
+
+
+### Features
+
+* install every skill in the dosu-skill repo ([#172](https://github.com/dosu-ai/dosu-cli/issues/172)) ([456a5ec](https://github.com/dosu-ai/dosu-cli/commit/456a5ec759901f10ec0777727468ffe0af6fce0e))
+
 # [0.45.0](https://github.com/dosu-ai/dosu-cli/compare/v0.44.0...v0.45.0) (2026-08-10)
 
 
