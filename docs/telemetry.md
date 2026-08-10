@@ -170,14 +170,13 @@ Current callers also use only these workflow properties: `onboarding_run_id`,
 `cli_onboarding_*` family. They do not include raw authentication errors. This path uses a dedicated
 no-refresh client, runs without blocking setup, refuses redirects, and aborts its request after
 500ms. The public API input remains a generic property record for generated-client compatibility,
-but the server independently parses it through the same strict allowlist and drops unknown or
-invalid fields before PostHog capture.
+so the CLI applies the strict allowlist and drops unknown or invalid fields before transport. The
+server does not repeat that filtering.
 
-The two dedicated Dosu server procedures disable Sentry's RPC-input attachment. The authenticated
-procedure sets only `{id, email}` on its isolated Sentry user scope; the pre-auth procedure sets no
-user. They still create the existing transaction span, and unrelated tRPC procedures keep their
-existing observability behavior. This boundary must be deployed before a telemetry-enabled CLI
-release.
+These procedures use the server's standard tRPC observability. Sampled server spans or errors can
+therefore include setup RPC input and the normal authenticated server user context. This is an
+accepted residual risk of keeping setup telemetry client-filtered rather than maintaining a
+separate server-side privacy boundary.
 
 ## Data excluded from CLI-built telemetry fields
 
@@ -203,8 +202,9 @@ The payloads constructed by the CLI never include:
 - the contents of `debug.log` or another local log file.
 
 Authenticated setup still uses a session-token transport header, and the Dosu server enriches
-successful setup analytics with the documented account identity. The dedicated server procedures
-do not attach RPC input to Sentry and restrict Sentry user context to ID/email.
+successful setup analytics with the documented account identity. The exclusions above describe
+fields constructed by the official CLI; standard server observability can also retain setup RPC
+input and its normal authenticated user context.
 
 The analytics payload itself does not contain an IP address. As with any HTTPS request, the network
 destination can observe connection metadata; production launch must verify the Vercel proxy and
@@ -259,7 +259,7 @@ setup/onboarding analytics
   -> HTTPS https://<Dosu web app>/api/cli-trpc
   -> authenticated or pre-auth Dosu API procedure
   -> PostHog
-  -> sampled server spans/errors omit RPC input; authenticated Sentry user is limited to ID/email
+  -> standard server observability can include setup RPC input and authenticated user context
 ```
 
 Command telemetry has these delivery guarantees:
@@ -337,9 +337,10 @@ Complete and record each item before enabling release destinations:
 - **PostHog proxy:** verify the Vercel rewrite, origin/host, rate limits, abuse controls, personless
   signed-out events, signed-in user association, and actual IP/GeoIP discard behavior in production.
 - **Sentry projects:** disable attachments, automatic request data, local variables, and unrelated
-  performance/session features. Verify project-side scrubbing as a second line of defense, not a
-  replacement for the client and server allowlists. Deploy the dedicated Dosu server procedures
-  before the CLI release so setup RPC input is not attached and Sentry user scope is ID/email only.
+  performance/session features. Verify project-side scrubbing as a second line of defense. Setup
+  telemetry currently trusts the official CLI allowlist; modified clients or future regressions can
+  send additional fields into the server's normal PostHog/Sentry path. Revisit this accepted risk if
+  the privacy or compliance requirements change.
 - **Source maps:** the release pipeline builds and uploads a debug-ID-matched external npm source map
   before publishing, then publishes the exact bundle without the map. Inspect a real processed event
   before release. Define and test a separate native-symbolication strategy before promising frames
