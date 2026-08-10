@@ -30,7 +30,7 @@ function statusPayload() {
       command_analytics: Boolean(commandWebAppURL && analyticsReleaseToken),
       setup_analytics: Boolean(setupWebAppURL && analyticsReleaseToken),
       error_diagnostics: Boolean(
-        parseSentryDsn(process.env.DOSU_SENTRY_DSN_OVERRIDE ?? process.env.DOSU_SENTRY_DSN),
+        parseSentryDsn(process.env.DOSU_CLI_SENTRY_DSN_OVERRIDE ?? process.env.DOSU_CLI_SENTRY_DSN),
       ),
     },
     environment_override: environmentOverride ?? null,

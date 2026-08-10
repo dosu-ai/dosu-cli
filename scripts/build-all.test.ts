@@ -31,7 +31,7 @@ describe("buildDefines", () => {
     envBackup.SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
     envBackup.DOSU_INSTALL_CHANNEL = process.env.DOSU_INSTALL_CHANNEL;
     envBackup.DOSU_POSTHOG_PROJECT_TOKEN = process.env.DOSU_POSTHOG_PROJECT_TOKEN;
-    envBackup.DOSU_SENTRY_DSN = process.env.DOSU_SENTRY_DSN;
+    envBackup.DOSU_CLI_SENTRY_DSN = process.env.DOSU_CLI_SENTRY_DSN;
     delete process.env.DOSU_VERSION;
     delete process.env.DOSU_WEB_APP_URL;
     delete process.env.DOSU_BACKEND_URL;
@@ -39,7 +39,7 @@ describe("buildDefines", () => {
     delete process.env.SUPABASE_ANON_KEY;
     delete process.env.DOSU_INSTALL_CHANNEL;
     delete process.env.DOSU_POSTHOG_PROJECT_TOKEN;
-    delete process.env.DOSU_SENTRY_DSN;
+    delete process.env.DOSU_CLI_SENTRY_DSN;
   });
 
   afterEach(() => {
@@ -62,7 +62,7 @@ describe("buildDefines", () => {
     expect(defines).toContain('process.env.SUPABASE_URL=""');
     expect(defines).toContain('process.env.SUPABASE_ANON_KEY=""');
     expect(defines).toContain('process.env.DOSU_POSTHOG_PROJECT_TOKEN=""');
-    expect(defines).toContain('process.env.DOSU_SENTRY_DSN=""');
+    expect(defines).toContain('process.env.DOSU_CLI_SENTRY_DSN=""');
   });
 
   it("should use env vars when set", () => {
@@ -73,7 +73,7 @@ describe("buildDefines", () => {
     process.env.SUPABASE_ANON_KEY = "anon-test-key";
     process.env.DOSU_INSTALL_CHANNEL = "homebrew";
     process.env.DOSU_POSTHOG_PROJECT_TOKEN = "phc_test";
-    process.env.DOSU_SENTRY_DSN = "https://public@sentry.test/1";
+    process.env.DOSU_CLI_SENTRY_DSN = "https://public@sentry.test/1";
 
     const defines = buildDefines();
     expect(defines).toEqual([
@@ -92,7 +92,7 @@ describe("buildDefines", () => {
       "--define",
       'process.env.DOSU_POSTHOG_PROJECT_TOKEN="phc_test"',
       "--define",
-      'process.env.DOSU_SENTRY_DSN="https://public@sentry.test/1"',
+      'process.env.DOSU_CLI_SENTRY_DSN="https://public@sentry.test/1"',
     ]);
   });
 
@@ -112,7 +112,7 @@ describe("buildDefines", () => {
     "sntrys_secret",
     "sntryu_secret",
   ])("refuses to bake Sentry auth token %s as a DSN", (token) => {
-    process.env.DOSU_SENTRY_DSN = `https://${token}@sentry.test/1`;
+    process.env.DOSU_CLI_SENTRY_DSN = `https://${token}@sentry.test/1`;
 
     expect(() => buildDefines()).toThrow("must be empty or a public HTTPS client DSN");
   });

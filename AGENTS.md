@@ -147,7 +147,7 @@ git push -u origin alpha
 These are read by `scripts/build-all.ts:buildDefines()` and inlined as string literals via `bun build --define` at compile time. The published npm bundle contains the build-time values verbatim — they cannot be changed at runtime.
 
 - `DOSU_WEB_APP_URL`, `DOSU_BACKEND_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY` — sourced from `.env.production` for prod builds, `.env.development` for `bun run dev:local`
-- `DOSU_POSTHOG_PROJECT_TOKEN`, `DOSU_SENTRY_DSN` — telemetry ingestion destinations. These must be public client-side project credentials, never PostHog personal API keys, Sentry auth tokens, or admin/management secrets.
+- `DOSU_POSTHOG_PROJECT_TOKEN`, `DOSU_CLI_SENTRY_DSN` — telemetry ingestion destinations. These must be public client-side project credentials, never PostHog personal API keys, Sentry auth tokens, or admin/management secrets.
 - `DOSU_VERSION` — injected at build time for version info
 
 ### Runtime overrides
@@ -159,7 +159,7 @@ These are read **on every CLI invocation** and take precedence over the baked-in
 - `SUPABASE_URL_OVERRIDE`
 - `SUPABASE_ANON_KEY_OVERRIDE`
 - `DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE`
-- `DOSU_SENTRY_DSN_OVERRIDE`
+- `DOSU_CLI_SENTRY_DSN_OVERRIDE`
 
 Example:
 

@@ -199,8 +199,8 @@ To repoint a published build at a different backend without rebuilding, set any 
 
 Telemetry destination settings are:
 
-- Build time: `DOSU_POSTHOG_PROJECT_TOKEN`, `DOSU_SENTRY_DSN`
-- Runtime overrides: `DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE`, `DOSU_SENTRY_DSN_OVERRIDE`
+- Build time: `DOSU_POSTHOG_PROJECT_TOKEN`, `DOSU_CLI_SENTRY_DSN`
+- Runtime overrides: `DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE`, `DOSU_CLI_SENTRY_DSN_OVERRIDE`
 - Privacy controls: `DO_NOT_TRACK=1`, `DOSU_TELEMETRY_DISABLED=1`,
   `DOSU_TELEMETRY_DEBUG=1` (print the exact payload to stderr without sending it)
 

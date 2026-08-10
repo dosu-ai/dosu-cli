@@ -49,7 +49,7 @@ export function buildDefines(): string[] {
   // PostHog project tokens and Sentry DSNs are public ingestion credentials,
   // but releases still inject them at build time so source builds stay inert.
   const rawPosthogProjectToken = process.env.DOSU_POSTHOG_PROJECT_TOKEN ?? "";
-  const rawSentryDsn = process.env.DOSU_SENTRY_DSN ?? "";
+  const rawSentryDsn = process.env.DOSU_CLI_SENTRY_DSN ?? "";
   const posthogProjectToken = parsePostHogProjectToken(rawPosthogProjectToken);
   const sentryDsn = parseSentryDsn(rawSentryDsn)?.dsn;
   if (rawPosthogProjectToken && !posthogProjectToken) {
@@ -59,7 +59,7 @@ export function buildDefines(): string[] {
   }
   if (rawSentryDsn && !sentryDsn) {
     throw new Error(
-      "DOSU_SENTRY_DSN must be empty or a public HTTPS client DSN; refusing to bake an auth token",
+      "DOSU_CLI_SENTRY_DSN must be empty or a public HTTPS client DSN; refusing to bake an auth token",
     );
   }
 
@@ -79,7 +79,7 @@ export function buildDefines(): string[] {
     "--define",
     `process.env.DOSU_POSTHOG_PROJECT_TOKEN=${JSON.stringify(posthogProjectToken ?? "")}`,
     "--define",
-    `process.env.DOSU_SENTRY_DSN=${JSON.stringify(sentryDsn ?? "")}`,
+    `process.env.DOSU_CLI_SENTRY_DSN=${JSON.stringify(sentryDsn ?? "")}`,
   ];
 }
 

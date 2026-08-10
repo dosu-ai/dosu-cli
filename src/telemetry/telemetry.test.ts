@@ -47,7 +47,7 @@ function testDependencies(overrides: Record<string, unknown> = {}) {
     randomUUID: vi.fn(() => "11111111-1111-4111-8111-111111111111"),
     env: {
       DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE: "phc_public_project_token",
-      DOSU_SENTRY_DSN_OVERRIDE: "https://public@sentry.example.test/42",
+      DOSU_CLI_SENTRY_DSN_OVERRIDE: "https://public@sentry.example.test/42",
     },
     stderr: vi.fn(),
     webAppURL: vi.fn(() => "https://dosu.dev"),
@@ -550,7 +550,7 @@ describe("CommandTelemetry lifecycle", () => {
     const deps = testDependencies({
       env: {
         DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE: "phc_public_project_token",
-        DOSU_SENTRY_DSN_OVERRIDE: "https://public@sentry.example.test/42",
+        DOSU_CLI_SENTRY_DSN_OVERRIDE: "https://public@sentry.example.test/42",
         [environmentVariable]: "1",
       },
     });

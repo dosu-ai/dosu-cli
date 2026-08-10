@@ -42,15 +42,15 @@ Environment controls:
 | `DOSU_TELEMETRY_DISABLED=1` | Disable all telemetry for this process. |
 | `DOSU_TELEMETRY_DEBUG=1` | Print the exact safe outbound payload to stderr and send nothing. |
 | `DOSU_POSTHOG_PROJECT_TOKEN` | Build-time public PostHog ingestion default. |
-| `DOSU_SENTRY_DSN` | Build-time public Sentry ingestion default. |
+| `DOSU_CLI_SENTRY_DSN` | Build-time public Sentry ingestion default. |
 | `DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE` | Override the build-time PostHog project token. |
-| `DOSU_SENTRY_DSN_OVERRIDE` | Override the build-time Sentry DSN. |
+| `DOSU_CLI_SENTRY_DSN_OVERRIDE` | Override the build-time Sentry DSN. |
 
 For the two disable variables, blank values and `0`, `false`, `no`, or `off` do not disable
 telemetry. Any other non-empty value does. A persisted enable never overrides an environment
 disable.
 
-`DOSU_POSTHOG_PROJECT_TOKEN` and `DOSU_SENTRY_DSN` are build-time defaults injected into release
+`DOSU_POSTHOG_PROJECT_TOKEN` and `DOSU_CLI_SENTRY_DSN` are build-time defaults injected into release
 artifacts. They and their runtime overrides must contain only public client-side ingestion
 credentials: a PostHog `phc_` project token and a public HTTPS Sentry client DSN. Known management
 credential formats are rejected at runtime, and release builds fail instead of baking invalid
@@ -309,7 +309,7 @@ This implementation is not proof that the production data pipeline or privacy pr
 Complete and record each item before enabling release destinations:
 
 - **Release variables:** after the remaining checklist is complete, populate the public GitHub
-  Actions repository variables `DOSU_POSTHOG_PROJECT_TOKEN` and `DOSU_SENTRY_DSN`. The release job
+  Actions repository variables `DOSU_POSTHOG_PROJECT_TOKEN` and `DOSU_CLI_SENTRY_DSN`. The release job
   already passes them to the build; leaving either undefined bakes an empty value and keeps that
   destination inert. Do not use a PostHog personal API key or Sentry auth token here.
 - **Notice and legal review:** publish a user-facing privacy notice naming PostHog and Sentry,

@@ -173,7 +173,7 @@ jobs:
           # Public ingestion credentials. Undefined repository variables resolve to empty strings,
           # which keeps both telemetry destinations inert until the production checklist is complete.
           DOSU_POSTHOG_PROJECT_TOKEN: ${{ vars.DOSU_POSTHOG_PROJECT_TOKEN }}
-          DOSU_SENTRY_DSN: ${{ vars.DOSU_SENTRY_DSN }}
+          DOSU_CLI_SENTRY_DSN: ${{ vars.DOSU_CLI_SENTRY_DSN }}
 
   update-homebrew:
     needs: release

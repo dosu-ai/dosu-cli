@@ -833,8 +833,8 @@ export function createCommandTelemetry(
     ? (env.DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE ?? env.DOSU_POSTHOG_PROJECT_TOKEN)
     : (process.env.DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE ?? process.env.DOSU_POSTHOG_PROJECT_TOKEN);
   const rawSentryDsn = dependencies.env
-    ? (env.DOSU_SENTRY_DSN_OVERRIDE ?? env.DOSU_SENTRY_DSN)
-    : (process.env.DOSU_SENTRY_DSN_OVERRIDE ?? process.env.DOSU_SENTRY_DSN);
+    ? (env.DOSU_CLI_SENTRY_DSN_OVERRIDE ?? env.DOSU_CLI_SENTRY_DSN)
+    : (process.env.DOSU_CLI_SENTRY_DSN_OVERRIDE ?? process.env.DOSU_CLI_SENTRY_DSN);
   const analyticsToken = parsePostHogProjectToken(rawAnalyticsToken) ?? undefined;
   const sentryDsn = parseSentryDsn(rawSentryDsn)?.dsn;
 

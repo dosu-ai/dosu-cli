@@ -15,8 +15,8 @@ const ENV_KEYS = [
   "DOSU_TELEMETRY_DEBUG",
   "DOSU_POSTHOG_PROJECT_TOKEN",
   "DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE",
-  "DOSU_SENTRY_DSN",
-  "DOSU_SENTRY_DSN_OVERRIDE",
+  "DOSU_CLI_SENTRY_DSN",
+  "DOSU_CLI_SENTRY_DSN_OVERRIDE",
   "DOSU_DEV",
   "DOSU_WEB_APP_URL",
   "DOSU_WEB_APP_URL_OVERRIDE",
@@ -53,7 +53,7 @@ afterEach(() => {
 describe("telemetry command", () => {
   it("reports default-on telemetry and configured destinations without exposing credentials", async () => {
     process.env.DOSU_POSTHOG_PROJECT_TOKEN = "phc_public-project-token";
-    process.env.DOSU_SENTRY_DSN = "https://public@example.ingest.sentry.io/1";
+    process.env.DOSU_CLI_SENTRY_DSN = "https://public@example.ingest.sentry.io/1";
     process.env.DOSU_WEB_APP_URL = "https://app.dosu.test";
 
     await run("status", "--json");
@@ -75,7 +75,7 @@ describe("telemetry command", () => {
 
   it("reports invalid or management destinations as not configured", async () => {
     process.env.DOSU_POSTHOG_PROJECT_TOKEN = "phx_personal-secret";
-    process.env.DOSU_SENTRY_DSN = "https://sntrys_secret@example.ingest.sentry.io/1";
+    process.env.DOSU_CLI_SENTRY_DSN = "https://sntrys_secret@example.ingest.sentry.io/1";
 
     await run("status", "--json");
 
