@@ -1,3 +1,10 @@
+# [0.45.0](https://github.com/dosu-ai/dosu-cli/compare/v0.44.0...v0.45.0) (2026-08-10)
+
+
+### Features
+
+* add privacy-safe CLI telemetry ([#168](https://github.com/dosu-ai/dosu-cli/issues/168)) ([a00c380](https://github.com/dosu-ai/dosu-cli/commit/a00c380807d4bd10cfc1c64f64a3c8cac81110ab))
+
 # [0.44.0](https://github.com/dosu-ai/dosu-cli/compare/v0.43.0...v0.44.0) (2026-08-09)
 
 
