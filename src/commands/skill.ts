@@ -110,10 +110,13 @@ export async function installSkill(
   }
 
   try {
-    // `-s '*'` installs every skill the repo exposes, so adding one upstream
-    // does not require a CLI release. The quotes matter: the command runs
-    // through a shell, and a bare `*` would be glob-expanded against cwd.
-    const command = `npx skills add ${SKILL_REPO} -g ${agentArgs} -s '*' -y`;
+    // `-s "*"` installs every skill the repo exposes, so adding one upstream
+    // does not require a CLI release. The quoting is load-bearing and must be
+    // double quotes: this string is run through a shell, so on POSIX a bare `*`
+    // would glob-expand against cwd, while on Windows the shell is cmd.exe,
+    // which does not treat single quotes as delimiters and would forward a
+    // literal `'*'` that matches no skill name.
+    const command = `npx skills add ${SKILL_REPO} -g ${agentArgs} -s "*" -y`;
     if (options.quiet) await execQuiet(command);
     else execSync(command, { stdio: "inherit" });
   } catch (err) {
