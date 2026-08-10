@@ -56,8 +56,10 @@ All tRPC calls MUST be typed through the generated contract (`CliApiClient` / `T
 
 ## Telemetry Contract
 
-Telemetry is enabled by default and has one global enable/disable switch. General command events use
-a random installation ID; setup-funnel events are account/email-linked after sign-in.
+Telemetry is enabled by default and has one global enable/disable switch. Signed-out command events
+use a random installation ID. Signed-in command and setup-funnel events use the stable Dosu user ID;
+Sentry errors may additionally include that user's email. Never alias prior installation history to
+an account.
 Setup analytics may include only the documented coarse fields. Never collect prompts, raw command
 lines, free-form argument or option values, user source code, file contents, local paths, environment
 variable names or values, credentials, raw error messages, or `debug.log`. Keep payloads allowlisted, transports

@@ -7,12 +7,14 @@ import { fileURLToPath } from "node:url";
 
 import { getWebAppURL } from "../config/constants";
 import { INSTALL_CHANNEL, VERSION } from "../version/version";
+import { BUNDLE_DEBUG_ID_PLACEHOLDER } from "./debug-id";
 
 const REQUEST_TIMEOUT_MS = 500;
 const MAX_RESPONSE_BYTES = 1_024 * 1_024;
 const MAX_STACK_FRAMES = 20;
 const UNKNOWN_COMMAND = "unknown";
 const FALLBACK_INSTALL_ID = "00000000-0000-4000-8000-000000000000";
+const BUNDLE_CODE_FILE = "app:///bin/dosu.js";
 const CLI_PACKAGE_ROOT = detectCliPackageRoot();
 const SAFE_ERROR_TYPES = new Set([
   "AbortError",
@@ -100,11 +102,19 @@ export interface TelemetrySettings {
 export interface CommandTelemetryContext {
   mode?: "cloud" | "oss";
   isAuthenticated?: boolean;
+  user?: {
+    id?: string;
+    email?: string;
+  };
 }
 
 interface NormalizedContext {
   mode: "cloud" | "oss";
   isAuthenticated: boolean;
+  user?: {
+    id: string;
+    email?: string;
+  };
 }
 
 interface RuntimeMetadata {
@@ -120,6 +130,7 @@ interface RuntimeMetadata {
 
 interface SafeStackFrame {
   filename: string;
+  abs_path?: typeof BUNDLE_CODE_FILE;
   lineno: number;
   colno: number;
   in_app: true;
@@ -135,7 +146,7 @@ export interface SafeError {
 
 interface PostHogProperties {
   $geoip_disable: true;
-  $process_person_profile: false;
+  $process_person_profile?: false;
   schema_version: 1;
   command: string;
   result: CommandResult;
@@ -163,7 +174,7 @@ export interface PostHogPayload {
 
 export interface PostHogPayloadInput {
   apiKey: string;
-  installId: string;
+  installId?: string;
   command: string;
   result: CommandResult;
   durationMs: number;
@@ -193,6 +204,7 @@ export interface SentryEnvelopeInput {
   error: SafeError;
   eventId: string;
   timestampMs: number;
+  debugId?: string;
 }
 
 export type TelemetryFetch = (input: string, init: RequestInit) => Promise<{ ok: boolean }>;
@@ -237,9 +249,17 @@ function canonicalCommand(value: unknown): string {
 }
 
 function normalizeContext(context: CommandTelemetryContext | undefined): NormalizedContext {
+  const isAuthenticated = context?.isAuthenticated === true;
+  const id = safeRead(context?.user, "id");
+  const email = safeRead(context?.user, "email");
+  const user =
+    isAuthenticated && validUserId(id)
+      ? { id, ...(validEmail(email) ? { email } : {}) }
+      : undefined;
   return {
     mode: context?.mode === "oss" ? "oss" : "cloud",
-    isAuthenticated: context?.isAuthenticated === true,
+    isAuthenticated,
+    ...(user ? { user } : {}),
   };
 }
 
@@ -268,8 +288,29 @@ function validInstallId(value: unknown): value is string {
   );
 }
 
+function validUserId(value: unknown): value is string {
+  return validInstallId(value);
+}
+
+function validEmail(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= 254 &&
+    /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/.test(
+      value,
+    )
+  );
+}
+
 function validEventId(value: unknown): value is string {
   return typeof value === "string" && /^[0-9a-f]{32}$/i.test(value);
+}
+
+function validDebugId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+  );
 }
 
 function validErrorType(value: unknown): value is string {
@@ -427,11 +468,12 @@ export function buildPostHogPayload(input: PostHogPayloadInput): PostHogPayload 
 
   return {
     api_key: input.apiKey,
-    distinct_id: validInstallId(input.installId) ? input.installId : FALLBACK_INSTALL_ID,
+    distinct_id:
+      context.user?.id ?? (validInstallId(input.installId) ? input.installId : FALLBACK_INSTALL_ID),
     event: "cli_command_completed",
     properties: {
       $geoip_disable: true,
-      $process_person_profile: false,
+      ...(context.user ? {} : { $process_person_profile: false as const }),
       schema_version: 1,
       command: canonicalCommand(input.command),
       result,
@@ -545,6 +587,7 @@ export function buildSentryEnvelope(input: SentryEnvelopeInput): SentryEnvelope 
   const context = normalizeContext(input.context);
   const runtime = normalizeRuntime(input.runtime);
   const command = canonicalCommand(input.command);
+  const debugId = validDebugId(input.debugId) ? input.debugId.toLowerCase() : undefined;
   const error: SafeError = {
     type: validErrorType(input.error.type) ? input.error.type : "Error",
     ...(validErrorCode(input.error.code) ? { code: input.error.code } : {}),
@@ -555,17 +598,21 @@ export function buildSentryEnvelope(input: SentryEnvelopeInput): SentryEnvelope 
     // V8 stacks are newest-first; Sentry expects oldest-first.
     frames: input.error.frames
       .slice(0, MAX_STACK_FRAMES)
-      .map((frame) => ({
-        filename:
+      .map((frame): SafeStackFrame => {
+        const filename =
           /^(?:src\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:[cm]?[jt]sx?)|bin\/dosu\.js)$/.test(
             frame.filename,
           )
             ? frame.filename
-            : "src/unknown.ts",
-        lineno: Math.min(10_000_000, Math.max(1, Math.trunc(frame.lineno) || 1)),
-        colno: Math.min(10_000_000, Math.max(1, Math.trunc(frame.colno) || 1)),
-        in_app: true as const,
-      }))
+            : "src/unknown.ts";
+        return {
+          filename,
+          ...(debugId && filename === "bin/dosu.js" ? { abs_path: BUNDLE_CODE_FILE } : {}),
+          lineno: Math.min(10_000_000, Math.max(1, Math.trunc(frame.lineno) || 1)),
+          colno: Math.min(10_000_000, Math.max(1, Math.trunc(frame.colno) || 1)),
+          in_app: true as const,
+        };
+      })
       .reverse(),
   };
   const exceptionValue = {
@@ -576,6 +623,7 @@ export function buildSentryEnvelope(input: SentryEnvelopeInput): SentryEnvelope 
   const newestFrame = error.frames.at(-1);
   const safeCallsite = newestFrame ? `${newestFrame.filename}:${newestFrame.lineno}` : "unknown";
   const timestampMs = Number.isFinite(input.timestampMs) ? Math.max(0, input.timestampMs) : 0;
+  const mappedBundle = debugId && error.frames.some((frame) => frame.abs_path === BUNDLE_CODE_FILE);
   const event = {
     event_id: input.eventId.toLowerCase(),
     timestamp: timestampMs / 1_000,
@@ -583,6 +631,14 @@ export function buildSentryEnvelope(input: SentryEnvelopeInput): SentryEnvelope 
     level: "error",
     release: `dosu-cli@${runtime.version}`,
     tags: sentryTags(command, context, runtime, error),
+    ...(context.user ? { user: context.user } : {}),
+    ...(mappedBundle
+      ? {
+          debug_meta: {
+            images: [{ type: "sourcemap", code_file: BUNDLE_CODE_FILE, debug_id: debugId }],
+          },
+        }
+      : {}),
     fingerprint: ["dosu-cli", command, error.type, error.code ?? "unknown", safeCallsite],
     exception: { values: [exceptionValue] },
   };
@@ -874,11 +930,11 @@ export function createCommandTelemetry(
     try {
       const tasks: Promise<unknown>[] = [];
       if (!disabled && analyticsToken) {
-        const id = installId();
+        const id = context.user?.id ?? installId();
         if (id) {
           const payload = buildPostHogPayload({
             apiKey: analyticsToken,
-            installId: id,
+            ...(context.user ? {} : { installId: id }),
             command,
             result,
             durationMs: safeNow(now) - startedAt,
@@ -920,6 +976,7 @@ export function createCommandTelemetry(
               error,
               eventId: id,
               timestampMs: safeNow(now),
+              debugId: BUNDLE_DEBUG_ID_PLACEHOLDER,
             })
           : null;
         if (envelope) {

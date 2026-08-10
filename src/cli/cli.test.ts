@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,6 +19,7 @@ vi.mock("../version/update-check", () => ({ checkForUpdates: vi.fn() }));
 vi.mock("../version/skill-update-check", () => ({ checkForSkillUpdates: vi.fn() }));
 vi.mock("../version/pending-tasks-check", () => ({ checkForReadyTasks: vi.fn() }));
 
+import { saveConfig } from "../config/config";
 import type { CommandTelemetry } from "../telemetry/telemetry";
 import { createProgram, shouldRunBackgroundChecks } from "./cli";
 
@@ -170,6 +172,81 @@ describe("CLI", () => {
       else process.env.XDG_CONFIG_HOME = originalConfigRoot;
     }
   });
+
+  it("passes the current JWT identity to telemetry without passing the token", async () => {
+    const configRoot = mkdtempSync(join(tmpdir(), "dosu-cli-telemetry-identity-"));
+    const originalConfigRoot = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = configRoot;
+    const userID = "22222222-2222-4222-8222-222222222222";
+    const payload = Buffer.from(
+      JSON.stringify({ sub: userID, email: "user@example.com", private: "must-not-leak" }),
+    ).toString("base64url");
+    const accessToken = `header.${payload}.signature`;
+    const telemetry: CommandTelemetry = {
+      start: vi.fn(),
+      complete: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      saveConfig({
+        schema_version: 2,
+        active_account: {
+          user_id: userID,
+          session: { access_token: accessToken, refresh_token: "refresh-secret", expires_at: 0 },
+        },
+      });
+
+      await createProgram({ telemetry }).parseAsync(["node", "dosu", "logs"]);
+
+      expect(telemetry.start).toHaveBeenCalledWith("logs", {
+        mode: "cloud",
+        isAuthenticated: true,
+        user: { id: userID, email: "user@example.com" },
+      });
+      const calls = JSON.stringify(vi.mocked(telemetry.start).mock.calls);
+      expect(calls).not.toContain(accessToken);
+      expect(calls).not.toContain("refresh-secret");
+      expect(calls).not.toContain("must-not-leak");
+    } finally {
+      logSpy.mockRestore();
+      rmSync(configRoot, { recursive: true, force: true });
+      if (originalConfigRoot === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = originalConfigRoot;
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "does not block a config-free command when config.json is a FIFO",
+    () => {
+      const configRoot = mkdtempSync(join(tmpdir(), "dosu-cli-telemetry-fifo-"));
+      const configDir = join(configRoot, "dosu-cli");
+      const configPath = join(configDir, "config.json");
+      mkdirSync(configDir, { recursive: true });
+      try {
+        expect(spawnSync("mkfifo", [configPath]).status).toBe(0);
+        const result = spawnSync("bun", ["run", "src/index.ts", "logs"], {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            CI: "1",
+            DOSU_DEV: "false",
+            DOSU_TELEMETRY_DISABLED: "0",
+            DO_NOT_TRACK: "0",
+            NODE_ENV: "test",
+            XDG_CONFIG_HOME: configRoot,
+          },
+          timeout: 1_000,
+        });
+
+        expect(result.error).toBeUndefined();
+        expect(result.status).toBe(0);
+      } finally {
+        rmSync(configRoot, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("preserves command output when telemetry start throws", async () => {
     const telemetry: CommandTelemetry = {

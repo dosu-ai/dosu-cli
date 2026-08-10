@@ -177,8 +177,10 @@ dosu telemetry reset
 ```
 
 `reset` rotates the local pseudonymous telemetry ID; it does not delete already retained events.
-General command analytics uses that ID; setup-funnel events can be linked to the user's Dosu account
-and email after sign-in and may include documented coarse setup choices. `DO_NOT_TRACK=1` and
+Signed-out command analytics uses that ID. Signed-in command analytics and minimal error diagnostics
+use the same Dosu user ID as the web app; Sentry may also receive the account email. Prior
+installation history is never aliased to an account. Setup-funnel events are linked after sign-in
+and may include documented coarse setup choices. `DO_NOT_TRACK=1` and
 `DOSU_TELEMETRY_DISABLED=1` disable all telemetry for the process. Dosu never collects
 prompts, raw command lines, free-form argument or option values, user source code, file contents,
 local paths, raw environment-variable names or values, credentials, raw error messages, or

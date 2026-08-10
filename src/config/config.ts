@@ -105,19 +105,26 @@ export function loadConfig(): Config {
     return emptyConfig();
   }
 
-  if (isConfigV2(raw)) return normalizeV2(raw);
+  const parsed = parseConfig(raw);
+  if (isConfigV2(raw)) return parsed;
   // Legacy configs were unversioned. Never rewrite a schema this version does
   // not understand, or downgrading could destroy newer config data.
-  if (isRecord(raw) && "schema_version" in raw) return emptyConfig();
+  if (isRecord(raw) && "schema_version" in raw) return parsed;
 
-  const migrated = migrateLegacyConfig(raw);
   try {
-    writeConfig(path, migrated);
+    writeConfig(path, parsed);
   } catch {
     // The parsed config is still usable even when its migration cannot be
     // persisted (for example, on a temporarily read-only filesystem).
   }
-  return migrated;
+  return parsed;
+}
+
+/** Parse config content without performing filesystem writes. */
+export function parseConfig(raw: unknown): Config {
+  if (isConfigV2(raw)) return normalizeV2(raw);
+  if (isRecord(raw) && "schema_version" in raw) return emptyConfig();
+  return migrateLegacyConfig(raw);
 }
 
 export function saveConfig(cfg: Config): void {

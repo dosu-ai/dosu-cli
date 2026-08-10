@@ -2,7 +2,15 @@
  * CLI command definitions using Commander.
  */
 
-import { readFileSync, unlinkSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+  unlinkSync,
+} from "node:fs";
 import { Command } from "commander";
 import { Client } from "../client/client";
 import { analyticsCommand } from "../commands/analytics";
@@ -28,13 +36,16 @@ import {
   type Config,
   clearConfigInPlace,
   getConfigPath,
+  getConfigUserID,
   isAuthenticated,
   isTokenExpired,
   loadConfig,
   MODE_OSS,
+  parseConfig,
   replaceLoginSession,
   saveConfig,
 } from "../config/config";
+import { getAccessTokenEmail, getAccessTokenUserID } from "../config/identity";
 import { logger } from "../debug/logger";
 import { allProviders, getProvider, type Provider } from "../mcp/providers";
 import { browserFallbackHint } from "../setup/styles";
@@ -74,6 +85,7 @@ const TELEMETRY_EXCLUDED_COMMANDS = new Set([
   "hooks stop",
 ]);
 const TELEMETRY_FLUSH_TIMEOUT_MS = 750;
+const MAX_TELEMETRY_CONFIG_BYTES = 64 * 1_024;
 
 class CliUsageError extends Error {
   readonly exitCode = 1;
@@ -102,13 +114,47 @@ function shouldTrackCommand(command: string): boolean {
 
 function commandTelemetryContext(): CommandTelemetryContext {
   try {
-    const cfg = loadConfig();
+    const cfg = loadConfigForTelemetry();
+    if (!cfg) return { mode: "cloud", isAuthenticated: false };
+    const authenticated = isAuthenticated(cfg);
+    const accessToken = authenticated ? cfg.active_account.session.access_token : "";
+    const configUserID = getConfigUserID(cfg);
+    const tokenUserID = getAccessTokenUserID(accessToken);
+    const userID = configUserID && configUserID === tokenUserID ? configUserID : undefined;
+    const email = userID ? getAccessTokenEmail(accessToken) : undefined;
     return {
       mode: cfg.mode === MODE_OSS ? "oss" : "cloud",
-      isAuthenticated: isAuthenticated(cfg),
+      isAuthenticated: authenticated,
+      ...(userID ? { user: { id: userID, ...(email ? { email } : {}) } } : {}),
     };
   } catch {
     return { mode: "cloud", isAuthenticated: false };
+  }
+}
+
+/** Read only a bounded regular file so telemetry can never block a config-free command on a FIFO. */
+function loadConfigForTelemetry(): Config | undefined {
+  let fd: number | undefined;
+  try {
+    const nonblocking = typeof constants.O_NONBLOCK === "number" ? constants.O_NONBLOCK : 0;
+    fd = openSync(getConfigPath(), constants.O_RDONLY | nonblocking);
+    const file = fstatSync(fd);
+    if (!file.isFile() || file.size > MAX_TELEMETRY_CONFIG_BYTES) return undefined;
+
+    const content = Buffer.alloc(MAX_TELEMETRY_CONFIG_BYTES + 1);
+    const bytesRead = readSync(fd, content, 0, content.byteLength, 0);
+    if (bytesRead > MAX_TELEMETRY_CONFIG_BYTES) return undefined;
+    return parseConfig(JSON.parse(content.subarray(0, bytesRead).toString("utf8")) as unknown);
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Telemetry config cleanup must not affect the command.
+      }
+    }
   }
 }
 

@@ -7,8 +7,10 @@ does, what it must never do, and the operational work required before a producti
 
 Dosu sends two kinds of telemetry:
 
-1. **Usage analytics** measure whether coarse, named CLI workflows succeed.
-2. **Error diagnostics** send a minimal error fingerprint and Dosu-owned stack frames.
+1. **Usage analytics** measure whether coarse, named CLI workflows succeed. Signed-in commands use
+   the same stable Dosu user ID as the web app; signed-out commands use a random installation ID.
+2. **Error diagnostics** send a minimal error fingerprint, Dosu-owned stack frames, and, when the
+   local session has a verified identity, only the user's ID and email.
 
 Telemetry is **on by default** and has one persisted global enable/disable switch. Interactive setup
 and non-interactive paths do not show a telemetry prompt. `DO_NOT_TRACK` and
@@ -31,8 +33,8 @@ dosu telemetry disable
 dosu telemetry reset
 ```
 
-`reset` rotates the random installation ID; it does **not** delete events already retained by
-PostHog or Sentry.
+`reset` rotates the random installation ID used while signed out; it does **not** change signed-in
+account identity or delete events already retained by PostHog or Sentry.
 
 Environment controls:
 
@@ -70,7 +72,7 @@ top-level fields are exactly:
 | Field | Value |
 | --- | --- |
 | `api_key` | Public PostHog project token. |
-| `distinct_id` | Random installation-scoped UUID from `telemetry.json`; never derived from a user, machine, or repository identifier. |
+| `distinct_id` | A validated Dosu user UUID when signed in; otherwise the random installation-scoped UUID from `telemetry.json`. Never a machine or repository identifier. |
 | `event` | Always `cli_command_completed`. |
 | `properties` | The closed property set below. |
 
@@ -79,7 +81,7 @@ The `properties` allowlist is:
 | Property | Rule |
 | --- | --- |
 | `$geoip_disable` | Always `true`. |
-| `$process_person_profile` | Always `false`; command events do not create PostHog person profiles. |
+| `$process_person_profile` | Omitted for a verified signed-in user so the event joins the existing web person; otherwise `false` so signed-out command events do not create profiles. |
 | `schema_version` | Always `1`. |
 | `command` | Canonical command/subcommand name only, up to four safe tokens; otherwise `unknown`. Never the raw command line. |
 | `result` | `success`, `validation_error`, or `failure`. |
@@ -93,12 +95,15 @@ The `properties` allowlist is:
 | `is_ci` | Boolean. |
 | `is_tty` | Boolean for stdout. |
 | `mode` | `cloud` or `oss`. |
-| `is_authenticated` | Boolean only; no account identifier. |
+| `is_authenticated` | Boolean only; it does not duplicate the top-level identity. |
 | `exit_code` | Integer clamped to `0..255`. |
 | `error_code` | Optional validated, stable, low-cardinality code; never a message. |
 
-`distinct_id` is pseudonymous rather than anonymous: it can link command events from one
-installation until the user rotates it.
+Signed-in command events join the existing PostHog person identified by the web app with the same
+Dosu user UUID. The CLI does not send email to PostHog on this path and does not alias prior
+installation history, avoiding cross-account linkage on shared machines. Signed-out `distinct_id`
+is pseudonymous rather than anonymous: it links command events from one installation until the
+user rotates it.
 
 ### Error diagnostics: Sentry
 
@@ -118,8 +123,10 @@ The envelope header contains exactly `dsn`, `event_id`, and `sent_at`. The item 
 | `level` | Always `error`. |
 | `release` | `dosu-cli@<cli_version>`. |
 | `tags` | The closed tag set below. |
+| `user` | Optional validated `{id, email?}` for the current authenticated Dosu user. |
 | `fingerprint` | `dosu-cli`, canonical command, safe error type, stable error code or `unknown`, and newest allowlisted Dosu callsite or `unknown`. |
 | `exception` | One value containing only safe type/code and optional Dosu-owned frames. |
+| `debug_meta` | Optional npm-bundle source-map debug ID; omitted unless the event has a mapped `bin/dosu.js` frame. |
 
 The exact tag allowlist is `schema_version`, `command`, `cli_version`, `install_channel`, `os`,
 `arch`, `runtime`, `runtime_major`, `is_ci`, `is_tty`, `mode`, and `is_authenticated`, plus optional
@@ -131,13 +138,16 @@ The exception value contains only:
 
 - `type`: a known allowlisted error-class name, otherwise `Error`;
 - `value`: the stable error code, otherwise the safe error type; and
-- optional `stacktrace.frames`: at most 20 frames with only `filename`, `lineno`, `colno`, and
-  `in_app: true`.
+- optional `stacktrace.frames`: at most 20 frames with only `filename`, `lineno`, `colno`,
+  `in_app: true`, and the fixed `app:///bin/dosu.js` `abs_path` for mapped npm-bundle frames.
 
 Frame filenames must be package-relative Dosu CLI paths under `src/` or `bin/dosu.js`. Absolute
 prefixes, function names, dependency frames, source context, and local variables are discarded.
-Frames are sent oldest-to-newest as required by Sentry.
-The random PostHog installation ID is not included in Sentry events.
+Frames are sent oldest-to-newest as required by Sentry. Release builds upload the npm bundle's
+external map with the same debug ID before publishing; the map and CI-only Sentry auth token are not
+included in the npm package. The random PostHog installation ID is not included in Sentry events.
+Authenticated events contain only the validated account ID and optional email; invalid, mismatched,
+or signed-out identity is omitted.
 
 ### Setup/onboarding analytics
 
@@ -159,17 +169,15 @@ Current callers also use only these workflow properties: `onboarding_run_id`,
 `completed_mcp`, `completed_skill`, and `completed_agents_md`. Setup events use stable names in the
 `cli_onboarding_*` family. They do not include raw authentication errors. This path uses a dedicated
 no-refresh client, runs without blocking setup, refuses redirects, and aborts its request after
-500ms. The server procedure still accepts a generic property record, but the CLI constructs that
-record from the closed runtime
-allowlist above rather than forwarding arbitrary properties.
+500ms. The public API input remains a generic property record for generated-client compatibility,
+but the server independently parses it through the same strict allowlist and drops unknown or
+invalid fields before PostHog capture.
 
-The existing Dosu server tRPC middleware is a separate operational-observability boundary. It puts
-the typed setup input on the Sentry isolation scope for every call and creates a transaction span;
-the current server trace sample rate is 10%, so successful sampled calls as well as captured errors
-can copy that input to the **server** Sentry project. For authenticated calls, the same scope can
-also contain user ID, email, username, and serialized user metadata. This happens independently of
-CLI-built error diagnostics. The CLI does not construct that server scope, but input and user scope
-must be scrubbed or disabled for these procedures before production launch; see the checklist below.
+The two dedicated Dosu server procedures disable Sentry's RPC-input attachment. The authenticated
+procedure sets only `{id, email}` on its isolated Sentry user scope; the pre-auth procedure sets no
+user. They still create the existing transaction span, and unrelated tRPC procedures keep their
+existing observability behavior. This boundary must be deployed before a telemetry-enabled CLI
+release.
 
 ## Data excluded from CLI-built telemetry fields
 
@@ -182,21 +190,21 @@ The payloads constructed by the CLI never include:
   remote, branch, diff, or directory listing;
 - arbitrary environment-variable names or values (the explicitly configured public PostHog token
   and Sentry DSN are transport metadata, not event properties);
-- configuration contents other than the setup identifiers listed above, cookies, vendor management
-  keys, or command/API request and response bodies. Telemetry event fields never contain Dosu
-  credentials; authenticated setup requests necessarily carry the existing Dosu session token as a
-  transport header to the Dosu API, where it is used for authorization and is not forwarded to
-  PostHog;
+- configuration contents other than the validated session user ID/email and setup identifiers
+  listed above, cookies, vendor management keys, or command/API request and response bodies.
+  Telemetry event fields never contain Dosu credentials; authenticated setup requests necessarily
+  carry the existing Dosu session token as a transport header to the Dosu API, where it is used for
+  authorization and is not forwarded to PostHog or Sentry;
 - raw error messages, raw stack lines, function names, local variables, source context,
   breadcrumbs, attachments, arbitrary `extra` data, or exception causes;
 - person name, username, hostname, MAC address, hardware serial, or a hash derived from any of them;
-  general command/error telemetry also sends no email or user ID (the account/email-linked setup
-  exception is documented above); or
+  signed-in command analytics uses only the validated user ID, and signed-in error diagnostics use
+  only that ID and optional email; or
 - the contents of `debug.log` or another local log file.
 
-This CLI-field contract does not erase the two separately disclosed boundaries: authenticated setup
-uses a session-token transport header, and the Dosu server enriches successful setup analytics with
-account identity and may attach input/user scope to sampled server transactions or captured errors.
+Authenticated setup still uses a session-token transport header, and the Dosu server enriches
+successful setup analytics with the documented account identity. The dedicated server procedures
+do not attach RPC input to Sentry and restrict Sentry user context to ID/email.
 
 The analytics payload itself does not contain an IP address. As with any HTTPS request, the network
 destination can observe connection metadata; production launch must verify the Vercel proxy and
@@ -251,8 +259,7 @@ setup/onboarding analytics
   -> HTTPS https://<Dosu web app>/api/cli-trpc
   -> authenticated or pre-auth Dosu API procedure
   -> PostHog
-  -> on sampled calls or captured errors, existing Dosu server Sentry middleware may also receive
-     the typed setup input and authenticated user scope independently of CLI-built diagnostics
+  -> sampled server spans/errors omit RPC input; authenticated Sentry user is limited to ID/email
 ```
 
 Command telemetry has these delivery guarantees:
@@ -293,7 +300,8 @@ remain in controlled Dosu/vendor infrastructure or CI and are never placed in th
   package-relative source files. The npm bundle can include allowlisted `bin/dosu.js` frames. Safe
   omission is preferred to guessing a path or symbolicating user-owned code.
 - There is no automatic raw-log upload, diagnostic bundle, performance tracing, session replay,
-  autocapture, or user/repository identity aliasing in command telemetry.
+  autocapture, or repository identity. Signed-in commands use the existing web user ID, but the CLI
+  deliberately never aliases prior installation history to an account.
 
 ## Maintainer contract
 
@@ -308,37 +316,35 @@ SDK defaults as policy.
 This implementation is not proof that the production data pipeline or privacy program is ready.
 Complete and record each item before enabling release destinations:
 
-- **Release variables:** after the remaining checklist is complete, populate the public GitHub
-  Actions repository variables `DOSU_POSTHOG_PROJECT_TOKEN` and `DOSU_CLI_SENTRY_DSN`. The release job
-  already passes them to the build; leaving either undefined bakes an empty value and keeps that
-  destination inert. Do not use a PostHog personal API key or Sentry auth token here.
+- **Release credentials:** the public GitHub Actions repository variables
+  `DOSU_POSTHOG_PROJECT_TOKEN` and `DOSU_CLI_SENTRY_DSN` are passed to release builds. The separate
+  `DOSU_CLI_SENTRY_AUTH_TOKEN` Actions secret is used only to upload source maps and is never baked
+  into an artifact. Do not put a PostHog personal API key or Sentry auth token in a public variable.
 - **Notice and legal review:** publish a user-facing privacy notice naming PostHog and Sentry,
-  purposes, exact fields, pseudonymous installation ID, signed-in setup linkage, controls,
+  purposes, exact fields, pseudonymous installation ID, signed-in account linkage, controls,
   connection metadata, retention, deletion route, and contact. Confirm the default-on notice and
   processor agreements with counsel.
 - **Retention:** configure and verify actual vendor retention, then put those exact values in the
   notice. A conservative starting cap is 90 days for raw analytics and 30 days for error events;
   these are recommendations, not current vendor guarantees.
-- **Deletion:** run a tested deletion drill. PostHog command events can be located by telemetry
-  `distinct_id`, including personless events. Sentry events intentionally do not contain that ID,
-  so define a separate support/deletion lookup procedure before promising per-install deletion.
-  Document that ID rotation stops future linkage but does not delete prior data.
+- **Deletion:** run a tested deletion drill. Signed-in PostHog/Sentry events can be found by user ID
+  (and Sentry by email); signed-out PostHog events use the installation `distinct_id`. Signed-out
+  Sentry errors intentionally have no install identifier. Document that ID rotation stops future
+  signed-out linkage but does not delete prior data.
 - **Access controls:** use separate development/staging/production projects, least-privilege RBAC,
   MFA/SSO where available, audited administrative access, and a small named support/engineering
   access group. Keep management tokens out of source, binaries, and developer-visible logs.
-- **PostHog proxy:** verify the Vercel rewrite, origin/host, rate limits, abuse controls,
-  `$process_person_profile: false`, and actual IP/GeoIP discard behavior in the production project.
-- **Sentry projects:** disable attachments, request/user context, breadcrumbs, local-variable and
-  source-context collection, and performance/session features. Verify project-side scrubbing as a
-  second line of defense, not a replacement for the client allowlist. On the Dosu server project,
-  disable or scrub attached RPC input and authenticated Sentry user metadata for the two setup
-  analytics procedures so sampled calls and errors do not create an undocumented copy.
-- **Source maps:** upload release-matched source maps for the npm bundle so its package-relative
-  frames are actionable. Define and test a separate native-symbolication strategy before promising
-  frames for binary/homebrew builds. Use a Sentry auth token only in CI, ensure
-  `release=dosu-cli@<version>` matches the event, inspect uploaded artifacts for secrets and user
-  data, and decide explicitly whether `sourcesContent` is acceptable. Never bake the upload token
-  into the CLI.
+- **PostHog proxy:** verify the Vercel rewrite, origin/host, rate limits, abuse controls, personless
+  signed-out events, signed-in user association, and actual IP/GeoIP discard behavior in production.
+- **Sentry projects:** disable attachments, automatic request data, local variables, and unrelated
+  performance/session features. Verify project-side scrubbing as a second line of defense, not a
+  replacement for the client and server allowlists. Deploy the dedicated Dosu server procedures
+  before the CLI release so setup RPC input is not attached and Sentry user scope is ID/email only.
+- **Source maps:** the release pipeline builds and uploads a debug-ID-matched external npm source map
+  before publishing, then publishes the exact bundle without the map. Inspect a real processed event
+  before release. Define and test a separate native-symbolication strategy before promising frames
+  for binary/homebrew builds. `sourcesContent` contains this public open-source repository and its
+  bundled dependencies; the CI auth token is never baked into the CLI.
 - **End-to-end evidence:** in isolated vendor projects, inspect real received payloads for enabled,
   disabled, `DO_NOT_TRACK`, debug, timeout, malformed-error, JSON/NDJSON, and all three hook cases.
   Confirm stdout and exit codes are unchanged and that disabled runs create neither IDs nor network

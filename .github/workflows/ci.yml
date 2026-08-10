@@ -170,10 +170,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
+          # The prepared npm bundle is uploaded to Sentry before publish. Do not let npm's
+          # prepack hook rebuild it with a different source-map artifact afterward.
+          NPM_CONFIG_IGNORE_SCRIPTS: "true"
           # Public ingestion credentials. Undefined repository variables resolve to empty strings,
           # which keeps both telemetry destinations inert until the production checklist is complete.
           DOSU_POSTHOG_PROJECT_TOKEN: ${{ vars.DOSU_POSTHOG_PROJECT_TOKEN }}
           DOSU_CLI_SENTRY_DSN: ${{ vars.DOSU_CLI_SENTRY_DSN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.DOSU_CLI_SENTRY_AUTH_TOKEN }}
 
   update-homebrew:
     needs: release

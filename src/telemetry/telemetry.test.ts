@@ -34,6 +34,15 @@ const SAFE_CONTEXT = {
   isAuthenticated: true,
 } as const;
 
+const AUTHENTICATED_CONTEXT = {
+  mode: "cloud",
+  isAuthenticated: true,
+  user: {
+    id: "22222222-2222-4222-8222-222222222222",
+    email: "user@example.com",
+  },
+} as const;
+
 const DOSU_SOURCE_FILE = fileURLToPath(new URL("../commands/ask.ts", import.meta.url));
 
 function response(ok: boolean): Response {
@@ -112,6 +121,43 @@ describe("safe payload builders", () => {
       is_authenticated: true,
       exit_code: 0,
     });
+  });
+
+  it("associates authenticated command events with the existing user person", () => {
+    const payload = buildPostHogPayload({
+      apiKey: "phc_public_project_token",
+      installId: "11111111-1111-4111-8111-111111111111",
+      command: "knowledge search",
+      result: "success",
+      durationMs: 812,
+      exitCode: 0,
+      context: AUTHENTICATED_CONTEXT,
+      runtime: SAFE_RUNTIME,
+    });
+
+    expect(payload.distinct_id).toBe("22222222-2222-4222-8222-222222222222");
+    expect(payload.properties).not.toHaveProperty("$process_person_profile");
+    expect(JSON.stringify(payload)).not.toContain("user@example.com");
+  });
+
+  it("keeps command events personless when authenticated identity is invalid", () => {
+    const payload = buildPostHogPayload({
+      apiKey: "phc_public_project_token",
+      installId: "11111111-1111-4111-8111-111111111111",
+      command: "status",
+      result: "success",
+      durationMs: 1,
+      exitCode: 0,
+      context: {
+        mode: "cloud",
+        isAuthenticated: true,
+        user: { id: "not-a-user-id", email: "user@example.com" },
+      },
+      runtime: SAFE_RUNTIME,
+    });
+
+    expect(payload.distinct_id).toBe("11111111-1111-4111-8111-111111111111");
+    expect(payload.properties.$process_person_profile).toBe(false);
   });
 
   it("adds only a validated stable error code", () => {
@@ -231,6 +277,93 @@ describe("safe payload builders", () => {
     expect(built?.body).not.toContain("raw secret message");
     expect(built?.body).not.toContain("/Users/alice/private");
     expect(built?.body).not.toContain("privateFunction");
+  });
+
+  it("adds only validated user id and email to authenticated Sentry errors", () => {
+    const built = buildSentryEnvelope({
+      dsn: "https://public@sentry.example.test/42",
+      command: "status",
+      context: {
+        ...AUTHENTICATED_CONTEXT,
+        user: {
+          ...AUTHENTICATED_CONTEXT.user,
+          token: "must-not-leak",
+          metadata: { name: "must-not-leak" },
+        },
+      } as typeof AUTHENTICATED_CONTEXT,
+      runtime: SAFE_RUNTIME,
+      error: { type: "Error", frames: [] },
+      eventId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      timestampMs: 2_000,
+    });
+
+    const event = JSON.parse(built?.body.split("\n")[2] ?? "{}") as Record<string, unknown>;
+    expect(event.user).toEqual({
+      id: "22222222-2222-4222-8222-222222222222",
+      email: "user@example.com",
+    });
+    expect(JSON.stringify(event)).not.toContain("must-not-leak");
+  });
+
+  it("links npm bundle frames to the exact uploaded source map debug id", () => {
+    const debugId = "99ff1efe-b52e-6f8f-6475-6e2164756e21";
+    const built = buildSentryEnvelope({
+      dsn: "https://public@sentry.example.test/42",
+      command: "status",
+      context: SAFE_CONTEXT,
+      runtime: SAFE_RUNTIME,
+      error: {
+        type: "Error",
+        frames: [{ filename: "bin/dosu.js", lineno: 120, colno: 9, in_app: true }],
+      },
+      eventId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      timestampMs: 2_000,
+      debugId,
+    });
+
+    const event = JSON.parse(built?.body.split("\n")[2] ?? "{}") as {
+      debug_meta?: { images?: Array<Record<string, unknown>> };
+      exception?: { values?: Array<{ stacktrace?: { frames?: Array<Record<string, unknown>> } }> };
+    };
+    expect(event.debug_meta).toEqual({
+      images: [{ type: "sourcemap", code_file: "app:///bin/dosu.js", debug_id: debugId }],
+    });
+    expect(event.exception?.values?.[0]?.stacktrace?.frames?.[0]).toEqual({
+      filename: "bin/dosu.js",
+      abs_path: "app:///bin/dosu.js",
+      lineno: 120,
+      colno: 9,
+      in_app: true,
+    });
+  });
+
+  it("omits Sentry user data unless authentication and identity are both valid", () => {
+    const contexts = [
+      {
+        mode: "cloud" as const,
+        isAuthenticated: false,
+        user: AUTHENTICATED_CONTEXT.user,
+      },
+      {
+        mode: "cloud" as const,
+        isAuthenticated: true,
+        user: { id: "invalid", email: "user@example.com" },
+      },
+    ];
+
+    for (const context of contexts) {
+      const built = buildSentryEnvelope({
+        dsn: "https://public@sentry.example.test/42",
+        command: "status",
+        context,
+        runtime: SAFE_RUNTIME,
+        error: { type: "Error", frames: [] },
+        eventId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        timestampMs: 2_000,
+      });
+      const event = JSON.parse(built?.body.split("\n")[2] ?? "{}") as Record<string, unknown>;
+      expect(event).not.toHaveProperty("user");
+    }
   });
 
   it("never serializes malicious messages, paths, emails, credentials, or raw arguments", () => {
@@ -613,6 +746,28 @@ describe("CommandTelemetry lifecycle", () => {
     inertTelemetry.start("status", SAFE_CONTEXT);
     await inertTelemetry.complete(0);
     expect(inertResolver).not.toHaveBeenCalled();
+  });
+
+  it("does not resolve or alias an installation id for an authenticated user", async () => {
+    const resolveInstallId = vi.fn(() => "11111111-1111-4111-8111-111111111111");
+    const deps = testDependencies({ resolveInstallId });
+    const telemetry = createCommandTelemetry({}, deps);
+
+    telemetry.start("status", AUTHENTICATED_CONTEXT);
+    await telemetry.complete(0);
+
+    expect(resolveInstallId).not.toHaveBeenCalled();
+    expect(deps.fetch).toHaveBeenCalledOnce();
+    const payload = JSON.parse(String(deps.fetch.mock.calls[0]?.[1]?.body)) as {
+      distinct_id: string;
+      event: string;
+      properties: Record<string, unknown>;
+    };
+    expect(payload).toMatchObject({
+      distinct_id: "22222222-2222-4222-8222-222222222222",
+      event: "cli_command_completed",
+    });
+    expect(payload.properties).not.toHaveProperty("$process_person_profile");
   });
 
   it("sends exactly one PostHog completion event", async () => {
