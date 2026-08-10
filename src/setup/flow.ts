@@ -20,9 +20,10 @@ import {
 import { logger } from "../debug/logger";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
-import { inGitWorkTree, stepUpdateAgentsMd } from "./agents-md-step";
+import { stepUpdateAgentsMd } from "./agents-md-step";
 import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
 import { launchAuditAgent, offerAuditHandoff } from "./audit-handoff";
+import { requireProjectRoot } from "./project-root";
 import { stepConfigureAgentRules } from "./rules-step";
 import { browserFallbackHint, dim, formatSetupSummary, IconRemove, info } from "./styles";
 
@@ -95,6 +96,14 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
       mode_option: opts.mode,
     }),
   );
+  let projectRoot: string;
+  try {
+    projectRoot = requireProjectRoot();
+  } catch (err: unknown) {
+    p.log.error(err instanceof Error ? err.message : String(err));
+    process.exitCode = 1;
+    return;
+  }
 
   let cfg = loadConfig();
 
@@ -230,7 +239,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
 
   // Agent selection is the only install choice. Every successfully configured
   // agent receives the full supported bundle: MCP, rules, and skill.
-  const configured = await stepConfigureMcpTools(cfg);
+  const configured = await stepConfigureMcpTools(cfg, projectRoot);
   if (configured === null) {
     trackInBackground(
       trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_cancelled", {
@@ -262,9 +271,9 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   let skillCompleted = false;
   const skillProviders = configuredProviders
     .map((result) => result.provider)
-    .filter((provider) => skillInstallTargetForProvider(provider.id()) !== null);
+    .filter((provider) => skillInstallTargetForProvider(provider.id(), projectRoot) !== null);
   if (skillProviders.length > 0) {
-    skillCompleted = await runInstallSkill(skillProviders);
+    skillCompleted = await runInstallSkill(skillProviders, projectRoot);
     if (skillCompleted) {
       trackInBackground(
         trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_skill_installed"),
@@ -272,11 +281,10 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     }
   }
 
-  // Project instructions are part of the bundle when setup runs inside a git
-  // work tree and at least one agent was configured.
+  // Project instructions are part of every successfully configured project bundle.
   let agentsMdCompleted = false;
-  if (mcpCompleted && inGitWorkTree()) {
-    agentsMdCompleted = await stepUpdateAgentsMd();
+  if (mcpCompleted) {
+    agentsMdCompleted = await stepUpdateAgentsMd(projectRoot);
   }
 
   // Codebase audit handoff (cloud mode only — it acts on the user's own
@@ -343,7 +351,10 @@ function applyModeOverride(cfg: Config, opts: SetupOptions): void {
  * Returns the ConfigResult array on success, or null if the user cancelled.
  * An empty detection pool is treated as success (nothing to do).
  */
-async function stepConfigureMcpTools(cfg: Config): Promise<ConfigResult[] | null> {
+async function stepConfigureMcpTools(
+  cfg: Config,
+  projectRoot: string,
+): Promise<ConfigResult[] | null> {
   const detected = stepDetectTools();
   if (detected.length === 0) {
     p.log.warn(
@@ -351,11 +362,11 @@ async function stepConfigureMcpTools(cfg: Config): Promise<ConfigResult[] | null
     );
     return [];
   }
-  const selection = await stepSelectTools(detected);
+  const selection = await stepSelectTools(detected, projectRoot);
   if (!selection) return null;
-  const results = stepConfigureTools(cfg, selection);
-  stepShowSummary(results);
-  await stepConfigureAgentRules(selection, results);
+  const results = stepConfigureTools(cfg, selection, projectRoot);
+  stepShowSummary(results, projectRoot);
+  await stepConfigureAgentRules(selection, results, projectRoot);
   return results;
 }
 
@@ -363,7 +374,10 @@ async function stepConfigureMcpTools(cfg: Config): Promise<ConfigResult[] | null
  * Install the skill for the same providers selected during MCP setup.
  * Returns `true` on success.
  */
-export async function runInstallSkill(providers: readonly SetupProvider[]): Promise<boolean> {
+export async function runInstallSkill(
+  providers: readonly SetupProvider[],
+  projectRoot: string,
+): Promise<boolean> {
   logger.info("setup", "Step: install skill");
   const spinner = p.spinner();
   const agentLabel = providers.length === 1 ? "agent" : "agents";
@@ -375,12 +389,12 @@ export async function runInstallSkill(providers: readonly SetupProvider[]): Prom
     // verbose.
     const result = await installSkill(
       providers.map((provider) => provider.id()),
-      { quiet: true },
+      { quiet: true, projectRoot },
     );
     if (result.success) {
       logger.info("setup", `Skill installed${result.sha ? ` sha=${result.sha}` : ""}`);
       const items = providers.flatMap((provider) => {
-        const target = skillInstallTargetForProvider(provider.id());
+        const target = skillInstallTargetForProvider(provider.id(), projectRoot);
         if (!target) return [];
         return [
           {
@@ -812,13 +826,18 @@ async function stepMintAPIKey(apiClient: Client, cfg: Config): Promise<string | 
 }
 
 export function stepDetectTools(): SetupProvider[] {
-  return allSetupProviders().filter((p) => p.isInstalled());
+  return allSetupProviders().filter((p) => p.supportsLocal() && p.isInstalled());
 }
 
-async function stepSelectTools(detected: SetupProvider[]): Promise<ToolSelection | null> {
+async function stepSelectTools(
+  detected: SetupProvider[],
+  projectRoot: string,
+): Promise<ToolSelection | null> {
   const configuredMap = new Map<string, boolean>();
+  const legacyGlobalMap = new Map<string, boolean>();
   for (const p of detected) {
-    configuredMap.set(p.id(), p.isConfigured());
+    configuredMap.set(p.id(), p.isProjectConfigured(projectRoot));
+    legacyGlobalMap.set(p.id(), p.isConfigured());
   }
 
   const options = detected.map((p) => {
@@ -826,11 +845,17 @@ async function stepSelectTools(detected: SetupProvider[]): Promise<ToolSelection
     return {
       label: p.name(),
       value: p.id(),
-      hint: configured ? "configured — untick to remove" : undefined,
+      hint: configured
+        ? "configured in this project — untick to remove"
+        : legacyGlobalMap.get(p.id())
+          ? "global config found — ticked to configure this project"
+          : undefined,
     };
   });
 
-  const preselected = detected.filter((p) => configuredMap.get(p.id())).map((p) => p.id());
+  const preselected = detected
+    .filter((p) => configuredMap.get(p.id()) || legacyGlobalMap.get(p.id()))
+    .map((p) => p.id());
 
   const selected = await p.multiselect({
     message: "Select agents — tick to configure, untick to remove",
@@ -854,12 +879,16 @@ async function stepSelectTools(detected: SetupProvider[]): Promise<ToolSelection
   return result;
 }
 
-export function stepConfigureTools(cfg: Config, selection: ToolSelection): ConfigResult[] {
+export function stepConfigureTools(
+  cfg: Config,
+  selection: ToolSelection,
+  projectRoot: string,
+): ConfigResult[] {
   const results: ConfigResult[] = [];
 
   for (const provider of selection.toInstall) {
     try {
-      provider.install(cfg, true);
+      provider.install(cfg, false, { projectRoot });
       logger.info("setup", `Configured ${provider.name()}`);
       results.push({ provider, action: "install" });
     } catch (err: unknown) {
@@ -876,7 +905,7 @@ export function stepConfigureTools(cfg: Config, selection: ToolSelection): Confi
 
   for (const provider of selection.toRemove) {
     try {
-      provider.remove(true);
+      provider.remove(false, { projectRoot });
       logger.info("setup", `Removed ${provider.name()}`);
       results.push({ provider, action: "remove" });
     } catch (err: unknown) {
@@ -898,7 +927,7 @@ export function stepConfigureTools(cfg: Config, selection: ToolSelection): Confi
   return results;
 }
 
-export function stepShowSummary(results: ConfigResult[]): void {
+export function stepShowSummary(results: ConfigResult[], projectRoot: string): void {
   const installed = results.filter((r) => r.action === "install" && !r.error);
   const removed = results.filter((r) => r.action === "remove" && !r.error);
   const skipped = results.filter((r) => r.action === "skip");
@@ -909,7 +938,7 @@ export function stepShowSummary(results: ConfigResult[]): void {
         `Configured ${installed.length} agent(s):`,
         installed.map((result) => ({
           label: result.provider.name(),
-          path: result.provider.globalConfigPath(),
+          path: result.provider.projectConfigPath(projectRoot) ?? "project configuration",
         })),
       ),
     );
@@ -921,7 +950,7 @@ export function stepShowSummary(results: ConfigResult[]): void {
         `Removed from ${removed.length} agent(s):`,
         removed.map((result) => ({
           label: result.provider.name(),
-          path: result.provider.globalConfigPath(),
+          path: result.provider.projectConfigPath(projectRoot) ?? "project configuration",
         })),
         IconRemove,
       ),

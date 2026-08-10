@@ -93,8 +93,8 @@ export function mcpRemoteServer(url: string, apiKey: string | undefined): McpRem
 }
 
 /**
- * Reads and unmarshals a JSON config file. Returns an empty object if the file doesn't exist.
- * For .jsonc files, comments are stripped before parsing.
+ * Reads and unmarshals a JSON config file. Returns an empty object if the file doesn't exist or
+ * is empty. For .jsonc files, comments are stripped before parsing.
  */
 export function loadJSONConfig(path: string): JsonConfig {
   if (!existsSync(path)) return {};
@@ -103,11 +103,7 @@ export function loadJSONConfig(path: string): JsonConfig {
   if (path.endsWith(".jsonc")) {
     data = stripJSONComments(data);
   }
-  try {
-    return JSON.parse(data);
-  } catch {
-    return {};
-  }
+  return JSON.parse(data);
 }
 
 /**
@@ -153,7 +149,8 @@ export function stripJSONComments(data: string): string {
     if (i + 1 < data.length && data[i] === "/" && data[i + 1] === "*") {
       i += 2;
       while (i + 1 < data.length && !(data[i] === "*" && data[i + 1] === "/")) i++;
-      if (i + 1 < data.length) i += 2;
+      if (i + 1 >= data.length) throw new SyntaxError("Unterminated JSONC block comment");
+      i += 2;
       continue;
     }
 
@@ -184,10 +181,22 @@ export function writeSecureFile(path: string, content: string): void {
  * Checks if "dosu" exists under the given top-level key in a JSON config file.
  */
 export function isJSONKeyConfigured(configPath: string, topLevelKey: string): boolean {
+  try {
+    const cfg = loadJSONConfig(configPath);
+    const section = cfg[topLevelKey];
+    if (typeof section !== "object" || section === null) return false;
+    return "dosu" in section;
+  } catch {
+    return false;
+  }
+}
+
+/** Returns the named Dosu entry without treating a foreign same-named entry as configured. */
+export function getJSONServer(configPath: string, topLevelKey: string): unknown {
   const cfg = loadJSONConfig(configPath);
   const section = cfg[topLevelKey];
-  if (typeof section !== "object" || section === null) return false;
-  return "dosu" in section;
+  if (typeof section !== "object" || section === null) return undefined;
+  return section.dosu;
 }
 
 /**

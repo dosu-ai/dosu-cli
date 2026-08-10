@@ -51,6 +51,8 @@ function makeProvider(id: string): SetupProvider {
     isInstalled: () => true,
     isConfigured: () => false,
     globalConfigPath: () => `/config/${id}`,
+    projectConfigPath: (root) => `${root}/config/${id}`,
+    isProjectConfigured: () => false,
     priority: () => 0,
   };
 }
@@ -77,6 +79,32 @@ beforeEach(() => {
 });
 
 describe("stepConfigureAgentRules", () => {
+  it("leaves Codex project instructions to the canonical AGENTS.md step", async () => {
+    const codex = makeProvider("codex");
+    mockRulePathForAgent.mockReturnValue(null);
+
+    const results = await stepConfigureAgentRules(
+      { toInstall: [codex], toRemove: [] },
+      [{ provider: codex, action: "install" }],
+      "/repo",
+    );
+
+    expect(results).toEqual([]);
+    expect(mockFetchDosuRule).not.toHaveBeenCalled();
+  });
+
+  it("passes the verified project root to rule installation", async () => {
+    const claude = makeProvider("claude");
+
+    await stepConfigureAgentRules(
+      { toInstall: [claude], toRemove: [] },
+      [{ provider: claude, action: "install" }],
+      "/repo",
+    );
+
+    expect(mockInstallRuleForAgent).toHaveBeenCalledWith("claude", "canonical rule\n", "/repo");
+  });
+
   it("installs one fetched rule for every successfully configured supported agent", async () => {
     const claude = makeProvider("claude");
     const cursor = makeProvider("cursor");
@@ -95,8 +123,8 @@ describe("stepConfigureAgentRules", () => {
 
     expect(mockFetchDosuRule).toHaveBeenCalledTimes(1);
     expect(mockInstallRuleForAgent).toHaveBeenCalledTimes(2);
-    expect(mockInstallRuleForAgent).toHaveBeenCalledWith("claude", "canonical rule\n");
-    expect(mockInstallRuleForAgent).toHaveBeenCalledWith("cursor", "canonical rule\n");
+    expect(mockInstallRuleForAgent).toHaveBeenCalledWith("claude", "canonical rule\n", undefined);
+    expect(mockInstallRuleForAgent).toHaveBeenCalledWith("cursor", "canonical rule\n", undefined);
     expect(results).toHaveLength(2);
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Rules ready for 2 agent"));
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Agent claude"));
@@ -122,7 +150,7 @@ describe("stepConfigureAgentRules", () => {
       { provider: codex, action: "remove" },
     ]);
 
-    expect(mockRemoveRuleForAgent).toHaveBeenCalledWith("codex");
+    expect(mockRemoveRuleForAgent).toHaveBeenCalledWith("codex", undefined);
     expect(results).toEqual([
       expect.objectContaining({ provider: codex, action: "removed", path: "/rules/codex.md" }),
     ]);
@@ -138,7 +166,7 @@ describe("stepConfigureAgentRules", () => {
       { provider: antigravity, action: "remove" },
     ]);
 
-    expect(mockInstallRuleForAgent).toHaveBeenCalledWith("gemini", "canonical rule\n");
+    expect(mockInstallRuleForAgent).toHaveBeenCalledWith("gemini", "canonical rule\n", undefined);
     expect(mockRemoveRuleForAgent).not.toHaveBeenCalled();
   });
 

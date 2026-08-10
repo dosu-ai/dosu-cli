@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../../config/config.test-utils";
 import { loadJSONConfig, MCP_REMOTE_VERSION } from "../config-helpers";
+import { allSetupProviders } from "../providers";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -127,7 +128,24 @@ describe("createJSONProvider (base)", () => {
     expect(() => provider.install(makeCfg(), false)).toThrow("does not support local installation");
   });
 
-  it("local install writes to localConfigPath when provided", async () => {
+  it("project install requires an explicit project root", async () => {
+    const { createJSONProvider } = await import("./base");
+    const provider = createJSONProvider({
+      providerName: "TestProvider",
+      providerID: "test",
+      local: true,
+      priorityValue: 1,
+      paths: [],
+      globalPath: join(tempDir, "g.json"),
+      topKey: "mcpServers",
+      localConfigPath: (projectRoot) => join(projectRoot, "local", "mcp.json"),
+    });
+
+    expect(() => provider.install(makeCfg(), false)).toThrow("explicit project root");
+    expect(() => provider.remove(false)).toThrow("explicit project root");
+  });
+
+  it("project install writes a secretless proxy entry to the explicit project root", async () => {
     const { createJSONProvider } = await import("./base");
     const localPath = join(tempDir, "local", "mcp.json");
     const provider = createJSONProvider({
@@ -141,11 +159,17 @@ describe("createJSONProvider (base)", () => {
       localConfigPath: () => localPath,
     });
 
-    provider.install(makeCfg(), false);
+    provider.install(makeCfg(), false, { projectRoot: tempDir });
 
     const cfg = loadJSONConfig(localPath);
-    expect(cfg.mcpServers.dosu).toBeDefined();
-    expect(cfg.mcpServers.dosu.url).toContain("dep-123");
+    expect(cfg.mcpServers.dosu).toMatchObject({
+      type: "stdio",
+      command: "npx",
+    });
+    expect(cfg.mcpServers.dosu.args.join(" ")).toContain("mcp proxy --deployment dep-123");
+    expect(JSON.stringify(cfg)).not.toContain("key-abc");
+    expect(provider.projectConfigPath(tempDir)).toBe(localPath);
+    expect(provider.isProjectConfigured(tempDir)).toBe(true);
   });
 
   it("global remove deletes dosu entry from JSON config", async () => {
@@ -193,9 +217,6 @@ describe("createJSONProvider (base)", () => {
   it("local remove deletes dosu entry when localConfigPath is provided", async () => {
     const { createJSONProvider } = await import("./base");
     const localPath = join(tempDir, "local-rm", "mcp.json");
-    mkdirSync(join(tempDir, "local-rm"), { recursive: true });
-    writeFileSync(localPath, JSON.stringify({ mcpServers: { dosu: { url: "x" } } }));
-
     const provider = createJSONProvider({
       providerName: "TestProvider",
       providerID: "test",
@@ -207,10 +228,36 @@ describe("createJSONProvider (base)", () => {
       localConfigPath: () => localPath,
     });
 
-    provider.remove(false);
+    provider.install(makeCfg(), false, { projectRoot: tempDir });
+    provider.remove(false, { projectRoot: tempDir });
 
     const cfg = loadJSONConfig(localPath);
     expect(cfg.mcpServers.dosu).toBeUndefined();
+  });
+
+  it("refuses to overwrite or remove a foreign project entry named dosu", async () => {
+    const { createJSONProvider } = await import("./base");
+    const localPath = join(tempDir, "foreign", "mcp.json");
+    mkdirSync(dirname(localPath), { recursive: true });
+    const foreign = { command: "other-server", args: ["serve"] };
+    writeFileSync(localPath, JSON.stringify({ mcpServers: { dosu: foreign } }));
+    const provider = createJSONProvider({
+      providerName: "TestProvider",
+      providerID: "test",
+      local: true,
+      priorityValue: 1,
+      paths: [],
+      globalPath: join(tempDir, "g.json"),
+      topKey: "mcpServers",
+      localConfigPath: () => localPath,
+    });
+
+    expect(provider.isProjectConfigured(tempDir)).toBe(false);
+    expect(() => provider.install(makeCfg(), false, { projectRoot: tempDir })).toThrow(
+      "refusing to overwrite",
+    );
+    expect(() => provider.remove(false, { projectRoot: tempDir })).toThrow("refusing to remove");
+    expect(loadJSONConfig(localPath).mcpServers.dosu).toEqual(foreign);
   });
 
   it("install with custom buildServer uses that shape", async () => {
@@ -303,16 +350,22 @@ describe("CodexProvider", () => {
     expect(content).not.toContain("http_headers");
   });
 
-  it("local install writes TOML config to .codex/config.toml in cwd", async () => {
+  it("project install writes a secretless TOML config to the explicit project root", async () => {
     const { CodexProvider } = await import("./codex");
     const provider = CodexProvider();
 
-    provider.install(makeCfg(), false);
+    provider.install(makeCfg(), false, { projectRoot: tempDir });
 
     const configPath = join(tempDir, ".codex", "config.toml");
     expect(existsSync(configPath)).toBe(true);
     const content = readFileSync(configPath, "utf-8");
     expect(content).toContain("[mcp_servers.dosu]");
+    expect(content).toContain('command = "npx"');
+    expect(content).toContain('"mcp", "proxy"');
+    expect(content).toContain("dep-123");
+    expect(content).not.toContain("key-abc");
+    expect(provider.projectConfigPath(tempDir)).toBe(configPath);
+    expect(provider.isProjectConfigured(tempDir)).toBe(true);
   });
 
   it("OSS mode install writes base MCP URL to TOML config", async () => {
@@ -431,12 +484,28 @@ describe("CodexProvider", () => {
     const { CodexProvider } = await import("./codex");
     const provider = CodexProvider();
 
-    provider.install(makeCfg(), false);
-    provider.remove(false);
+    provider.install(makeCfg(), false, { projectRoot: tempDir });
+    provider.remove(false, { projectRoot: tempDir });
 
     const configPath = join(tempDir, ".codex", "config.toml");
     const content = readFileSync(configPath, "utf-8");
     expect(content).not.toContain("[mcp_servers.dosu]");
+  });
+
+  it("refuses to overwrite or remove a foreign local dosu section", async () => {
+    const { CodexProvider } = await import("./codex");
+    const provider = CodexProvider();
+    const configPath = join(tempDir, ".codex", "config.toml");
+    mkdirSync(dirname(configPath), { recursive: true });
+    const foreign = '[mcp_servers.dosu]\ncommand = "other-server"\nargs = ["serve"]\n';
+    writeFileSync(configPath, foreign);
+
+    expect(provider.isProjectConfigured(tempDir)).toBe(false);
+    expect(() => provider.install(makeCfg(), false, { projectRoot: tempDir })).toThrow(
+      "refusing to overwrite",
+    );
+    expect(() => provider.remove(false, { projectRoot: tempDir })).toThrow("refusing to remove");
+    expect(readFileSync(configPath, "utf-8")).toBe(foreign);
   });
 
   it("remove does nothing when config file does not exist", async () => {
@@ -515,21 +584,20 @@ describe("CopilotProvider", () => {
     expect(cfg.mcpServers.dosu.headers["X-Dosu-API-Key"]).toBe("key-abc");
   });
 
-  it("local install writes to cwd/.vscode/mcp.json with servers key", async () => {
+  it("project install writes a secretless entry to root .mcp.json", async () => {
     const { CopilotProvider } = await import("./copilot");
     const provider = CopilotProvider();
 
-    provider.install(makeCfg(), false);
+    provider.install(makeCfg(), false, { projectRoot: tempDir });
 
-    const configPath = join(tempDir, ".vscode", "mcp.json");
+    const configPath = join(tempDir, ".mcp.json");
     expect(existsSync(configPath)).toBe(true);
     const cfg = loadJSONConfig(configPath);
-    expect(cfg.servers).toBeDefined();
-    expect(cfg.servers.dosu).toBeDefined();
-    expect(cfg.servers.dosu.type).toBe("http");
-    expect(cfg.servers.dosu.url).toContain("dep-123");
-    // local config should not have tools key
-    expect(cfg.servers.dosu.tools).toBeUndefined();
+    expect(cfg.mcpServers.dosu).toMatchObject({ type: "stdio", command: "npx" });
+    expect(cfg.mcpServers.dosu.args.join(" ")).toContain("mcp proxy --deployment dep-123");
+    expect(JSON.stringify(cfg)).not.toContain("key-abc");
+    expect(provider.projectConfigPath(tempDir)).toBe(configPath);
+    expect(provider.isProjectConfigured(tempDir)).toBe(true);
   });
 
   it("OSS mode install writes base MCP URL for global and local Copilot configs", async () => {
@@ -537,15 +605,17 @@ describe("CopilotProvider", () => {
     const provider = CopilotProvider();
 
     provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), true);
-    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), false);
+    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), false, {
+      projectRoot: tempDir,
+    });
 
     const globalCfg = loadJSONConfig(join(tempDir, "xdg-config", "mcp-config.json"));
     expect(globalCfg.mcpServers.dosu.url).toContain("/v1/mcp");
     expect(globalCfg.mcpServers.dosu.url).not.toContain("/deployments/");
 
-    const localCfg = loadJSONConfig(join(tempDir, ".vscode", "mcp.json"));
-    expect(localCfg.servers.dosu.url).toContain("/v1/mcp");
-    expect(localCfg.servers.dosu.url).not.toContain("/deployments/");
+    const localCfg = loadJSONConfig(join(tempDir, ".mcp.json"));
+    expect(localCfg.mcpServers.dosu.args).toContain("--oss");
+    expect(JSON.stringify(localCfg)).not.toContain("key-abc");
   });
 
   it("install throws when deployment_id is missing", async () => {
@@ -573,12 +643,12 @@ describe("CopilotProvider", () => {
     const { CopilotProvider } = await import("./copilot");
     const provider = CopilotProvider();
 
-    provider.install(makeCfg(), false);
-    provider.remove(false);
+    provider.install(makeCfg(), false, { projectRoot: tempDir });
+    provider.remove(false, { projectRoot: tempDir });
 
-    const configPath = join(tempDir, ".vscode", "mcp.json");
+    const configPath = join(tempDir, ".mcp.json");
     const cfg = loadJSONConfig(configPath);
-    expect(cfg.servers.dosu).toBeUndefined();
+    expect(cfg.mcpServers.dosu).toBeUndefined();
   });
 
   it("install preserves existing entries", async () => {
@@ -665,16 +735,20 @@ describe("MCPorterProvider", () => {
     expect(cfg.mcpServers.dosu).toBeDefined();
   });
 
-  it("local install writes to cwd/config/mcporter.json", async () => {
+  it("project install writes a secretless entry under the explicit project root", async () => {
     const { MCPorterProvider } = await import("./mcporter");
     const provider = MCPorterProvider();
 
-    provider.install(makeCfg(), false);
+    provider.install(makeCfg(), false, { projectRoot: tempDir });
 
     const configPath = join(tempDir, "config", "mcporter.json");
     expect(existsSync(configPath)).toBe(true);
     const cfg = loadJSONConfig(configPath);
-    expect(cfg.mcpServers.dosu).toBeDefined();
+    expect(cfg.mcpServers.dosu.command).toBe("npx");
+    expect(cfg.mcpServers.dosu.args.join(" ")).toContain("mcp proxy --deployment dep-123");
+    expect(JSON.stringify(cfg)).not.toContain("key-abc");
+    expect(provider.projectConfigPath(tempDir)).toBe(configPath);
+    expect(provider.isProjectConfigured(tempDir)).toBe(true);
   });
 
   it("OSS mode install writes base MCP URL for MCPorter", async () => {
@@ -714,8 +788,8 @@ describe("MCPorterProvider", () => {
     const { MCPorterProvider } = await import("./mcporter");
     const provider = MCPorterProvider();
 
-    provider.install(makeCfg(), false);
-    provider.remove(false);
+    provider.install(makeCfg(), false, { projectRoot: tempDir });
+    provider.remove(false, { projectRoot: tempDir });
 
     const configPath = join(tempDir, "config", "mcporter.json");
     const cfg = loadJSONConfig(configPath);
@@ -999,16 +1073,18 @@ describe("CursorProvider", () => {
     expect(cfg.mcpServers.dosu.type).toBeUndefined();
   });
 
-  it("local install writes to cwd/.cursor/mcp.json", async () => {
+  it("project install writes a secretless entry to the explicit project root", async () => {
     const { CursorProvider } = await import("./cursor");
     const provider = CursorProvider();
 
-    provider.install(makeCfg(), false);
+    provider.install(makeCfg(), false, { projectRoot: tempDir });
 
     const configPath = join(tempDir, ".cursor", "mcp.json");
     expect(existsSync(configPath)).toBe(true);
     const cfg = loadJSONConfig(configPath);
-    expect(cfg.mcpServers.dosu).toBeDefined();
+    expect(cfg.mcpServers.dosu.command).toBe("npx");
+    expect(cfg.mcpServers.dosu.args.join(" ")).toContain("mcp proxy --deployment dep-123");
+    expect(JSON.stringify(cfg)).not.toContain("key-abc");
   });
 
   it("remove deletes dosu entry", async () => {
@@ -1058,16 +1134,18 @@ describe("OpenCodeProvider", () => {
     expect(cfg.mcp.dosu.url).toContain("dep-123");
   });
 
-  it("local install writes to cwd/opencode.json", async () => {
+  it("project install writes OpenCode's local command shape without a secret", async () => {
     const { OpenCodeProvider } = await import("./opencode");
     const provider = OpenCodeProvider();
 
-    provider.install(makeCfg(), false);
+    provider.install(makeCfg(), false, { projectRoot: tempDir });
 
     const configPath = join(tempDir, "opencode.json");
     expect(existsSync(configPath)).toBe(true);
     const cfg = loadJSONConfig(configPath);
-    expect(cfg.mcp.dosu).toBeDefined();
+    expect(cfg.mcp.dosu).toMatchObject({ type: "local", enabled: true });
+    expect(cfg.mcp.dosu.command.join(" ")).toContain("mcp proxy --deployment dep-123");
+    expect(JSON.stringify(cfg)).not.toContain("key-abc");
   });
 
   it("remove deletes dosu entry", async () => {
@@ -1230,16 +1308,19 @@ describe("ZedProvider", () => {
     expect(cfg.context_servers.dosu.url).toContain("dep-123");
   });
 
-  it("local install writes to cwd/.zed/settings.json", async () => {
+  it("project install writes Zed's command shape without a secret", async () => {
     const { ZedProvider } = await import("./zed");
     const provider = ZedProvider();
 
-    provider.install(makeCfg(), false);
+    provider.install(makeCfg(), false, { projectRoot: tempDir });
 
     const configPath = join(tempDir, ".zed", "settings.json");
     expect(existsSync(configPath)).toBe(true);
     const cfg = loadJSONConfig(configPath);
-    expect(cfg.context_servers.dosu).toBeDefined();
+    expect(cfg.context_servers.dosu.command).toBe("npx");
+    expect(cfg.context_servers.dosu.args.join(" ")).toContain("mcp proxy --deployment dep-123");
+    expect(cfg.context_servers.dosu.env).toEqual({});
+    expect(JSON.stringify(cfg)).not.toContain("key-abc");
   });
 
   it("remove deletes dosu entry globally", async () => {
@@ -1258,11 +1339,79 @@ describe("ZedProvider", () => {
     const { ZedProvider } = await import("./zed");
     const provider = ZedProvider();
 
-    provider.install(makeCfg(), false);
-    provider.remove(false);
+    provider.install(makeCfg(), false, { projectRoot: tempDir });
+    provider.remove(false, { projectRoot: tempDir });
 
     const configPath = join(tempDir, ".zed", "settings.json");
     const cfg = loadJSONConfig(configPath);
     expect(cfg.context_servers.dosu).toBeUndefined();
+  });
+});
+
+describe("project-scoped provider matrix", () => {
+  let tempDir: string;
+  let originalHome: string | undefined;
+  let originalCodexHome: string | undefined;
+  let originalXdgConfigHome: string | undefined;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "dosu-project-provider-matrix-"));
+    originalHome = process.env.HOME;
+    originalCodexHome = process.env.CODEX_HOME;
+    originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
+    process.env.HOME = join(tempDir, "home");
+    process.env.CODEX_HOME = join(tempDir, "codex-home");
+    process.env.XDG_CONFIG_HOME = join(tempDir, "xdg-home");
+  });
+
+  afterEach(() => {
+    process.env.HOME = originalHome;
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = originalCodexHome;
+    if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("writes every supported project provider under the explicit root without the API key", () => {
+    const providers = allSetupProviders();
+    const localProviders = providers.filter((provider) => provider.supportsLocal());
+    expect(localProviders.map((provider) => provider.id())).toEqual([
+      "claude",
+      "cursor",
+      "vscode",
+      "gemini",
+      "codex",
+      "zed",
+      "copilot",
+      "opencode",
+      "mcporter",
+      "factory",
+    ]);
+
+    for (const provider of localProviders) {
+      const projectRoot = join(tempDir, "projects", provider.id());
+      provider.install(makeCfg(), false, { projectRoot });
+
+      const configPath = provider.projectConfigPath(projectRoot);
+      expect(configPath, provider.id()).not.toBeNull();
+      expect(configPath?.startsWith(`${projectRoot}/`), provider.id()).toBe(true);
+      expect(provider.isProjectConfigured(projectRoot), provider.id()).toBe(true);
+      expect(readFileSync(configPath as string, "utf-8"), provider.id()).not.toContain("key-abc");
+
+      provider.remove(false, { projectRoot });
+      expect(provider.isProjectConfigured(projectRoot), provider.id()).toBe(false);
+    }
+  });
+
+  it("keeps global-only providers global-only", () => {
+    const projectRoot = join(tempDir, "project");
+    for (const provider of allSetupProviders().filter((candidate) => !candidate.supportsLocal())) {
+      expect(provider.projectConfigPath(projectRoot), provider.id()).toBeNull();
+      expect(provider.isProjectConfigured(projectRoot), provider.id()).toBe(false);
+      expect(() => provider.install(makeCfg(), false, { projectRoot }), provider.id()).toThrow(
+        /does not support local installation/,
+      );
+    }
   });
 });

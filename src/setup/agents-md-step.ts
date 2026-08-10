@@ -8,12 +8,12 @@
  * rest of the file.
  */
 
-import { execSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as p from "@clack/prompts";
 import { logger } from "../debug/logger";
 import { FALLBACK_DOSU_RULE, fetchDosuRule } from "../rules/installer";
+import { assertSafeProjectPath } from "./project-root";
 import { formatSetupSummary } from "./styles";
 
 /**
@@ -38,25 +38,6 @@ export interface AgentsMdResult {
 interface SectionLocation {
   start: number;
   end: number;
-}
-
-/**
- * True when `cwd` is inside a git work tree. Gates whether setup offers the
- * AGENTS.md step at all — writing an AGENTS.md into an arbitrary directory
- * (home dir, /tmp) would just be litter.
- */
-export function inGitWorkTree(cwd: string = process.cwd()): boolean {
-  try {
-    // Exits 0 but prints "false" in bare repos and inside .git itself, so
-    // the stdout check matters — exit code alone is not enough.
-    const stdout = execSync("git rev-parse --is-inside-work-tree", {
-      cwd,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return stdout.toString().trim() === "true";
-  } catch {
-    return false;
-  }
 }
 
 function lineEndingFor(content: string): "\r\n" | "\n" {
@@ -93,6 +74,7 @@ export function upsertDosuAgentsSection(
   content: string = FALLBACK_DOSU_RULE,
 ): AgentsMdResult {
   const path = join(cwd, "AGENTS.md");
+  assertSafeProjectPath(cwd, path);
 
   if (!existsSync(path)) {
     const section = buildDosuAgentsSection(content);

@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { Command } from "commander";
 import pc from "picocolors";
 import { logger } from "../debug/logger";
+import { assertSafeProjectPath } from "../setup/project-root";
 import { fetchLatestSha, writeSkillCache } from "../version/skill-update-check";
 
 const SKILL_REPO = "dosu-ai/dosu-skill";
@@ -38,6 +39,7 @@ const SKILL_AGENT_BY_PROVIDER: Readonly<Record<string, string>> = {
   copilot: "github-copilot",
   opencode: "opencode",
   antigravity: "antigravity",
+  factory: "droid",
 };
 
 export function skillAgentIDsForProviders(providerIDs: readonly string[]): string[] {
@@ -55,37 +57,61 @@ export interface SkillInstallTarget {
   symlink: boolean;
 }
 
-export function skillInstallTargetForProvider(providerID: string): SkillInstallTarget | null {
+export function skillInstallTargetForProvider(
+  providerID: string,
+  projectRoot?: string,
+): SkillInstallTarget | null {
   const agentID = SKILL_AGENT_BY_PROVIDER[providerID];
   if (!agentID) return null;
 
   if (agentID === "claude-code") {
+    if (projectRoot) {
+      return { path: join(projectRoot, ".claude", "skills", SKILL_NAME), symlink: false };
+    }
     const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), ".claude");
     return { path: join(claudeConfigDir, "skills", SKILL_NAME), symlink: true };
   }
 
   if (agentID === "windsurf") {
+    if (projectRoot) {
+      return { path: join(projectRoot, ".windsurf", "skills", SKILL_NAME), symlink: false };
+    }
     return {
       path: join(homedir(), ".codeium", "windsurf", "skills", SKILL_NAME),
       symlink: true,
     };
   }
 
+  if (agentID === "droid") {
+    return {
+      path: projectRoot
+        ? join(projectRoot, ".factory", "skills", SKILL_NAME)
+        : join(homedir(), ".factory", "skills", SKILL_NAME),
+      symlink: !projectRoot,
+    };
+  }
+
   return {
-    path: join(homedir(), ".agents", "skills", SKILL_NAME),
+    path: projectRoot
+      ? join(projectRoot, ".agents", "skills", SKILL_NAME)
+      : join(homedir(), ".agents", "skills", SKILL_NAME),
     symlink: false,
   };
 }
 
-function skillAgentArgs(providerIDs?: readonly string[]): string {
+function skillAgentArgs(providerIDs?: readonly string[], project = false): string {
   const agents =
     providerIDs === undefined ? SUPPORTED_SKILL_AGENTS : skillAgentIDsForProviders(providerIDs);
-  return agents.map((agent) => `-a ${agent}`).join(" ");
+  return project
+    ? agents.length > 0
+      ? `-a ${agents.join(" ")}`
+      : ""
+    : agents.map((agent) => `-a ${agent}`).join(" ");
 }
 
-function execQuiet(command: string): Promise<void> {
+function execQuiet(command: string, cwd?: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    exec(command, { windowsHide: true }, (error) => {
+    exec(command, { windowsHide: true, ...(cwd ? { cwd } : {}) }, (error) => {
       if (error) reject(error);
       else resolve();
     });
@@ -101,12 +127,23 @@ function execQuiet(command: string): Promise<void> {
  */
 export async function installSkill(
   providerIDs?: readonly string[],
-  options: { quiet?: boolean } = {},
+  options: { quiet?: boolean; projectRoot?: string } = {},
 ): Promise<{ success: boolean; sha?: string }> {
-  const agentArgs = skillAgentArgs(providerIDs);
+  const agentArgs = skillAgentArgs(providerIDs, Boolean(options.projectRoot));
   if (!agentArgs) {
     logger.debug("skill", "No selected providers support the Dosu skill");
     return { success: true };
+  }
+
+  if (options.projectRoot) {
+    assertSafeProjectPath(options.projectRoot, join(options.projectRoot, "skills-lock.json"));
+    const targets = new Set(
+      (providerIDs ?? [])
+        .map((providerID) => skillInstallTargetForProvider(providerID, options.projectRoot))
+        .filter((target): target is SkillInstallTarget => target !== null)
+        .map((target) => target.path),
+    );
+    for (const target of targets) assertSafeProjectPath(options.projectRoot, target);
   }
 
   try {
@@ -116,9 +153,15 @@ export async function installSkill(
     // would glob-expand against cwd, while on Windows the shell is cmd.exe,
     // which does not treat single quotes as delimiters and would forward a
     // literal `'*'` that matches no skill name.
-    const command = `npx skills add ${SKILL_REPO} -g ${agentArgs} -s "*" -y`;
-    if (options.quiet) await execQuiet(command);
-    else execSync(command, { stdio: "inherit" });
+    const global = options.projectRoot ? "" : " -g";
+    const copy = options.projectRoot ? " --copy" : "";
+    const command = `npx skills add ${SKILL_REPO}${global} ${agentArgs} -s "*"${copy} -y`;
+    if (options.quiet) await execQuiet(command, options.projectRoot);
+    else
+      execSync(command, {
+        stdio: "inherit",
+        ...(options.projectRoot ? { cwd: options.projectRoot } : {}),
+      });
   } catch (err) {
     logger.error("skill", `Failed to install skill: ${err}`);
     return { success: false };
