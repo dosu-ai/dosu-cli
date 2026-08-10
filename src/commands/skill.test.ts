@@ -1,6 +1,6 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockExecSync = vi.fn();
@@ -168,6 +168,40 @@ describe("skill remove", () => {
       { name: "dosu", source: "dosu-ai/dosu-skill" },
       { name: "--all", source: "dosu-ai/dosu-skill" },
     ]);
+    await run("remove");
+    expect(mockExecSync).toHaveBeenCalledWith("npx skills remove -g dosu -y", {
+      stdio: "inherit",
+    });
+  });
+
+  it("does nothing when the inventory holds no skills of ours", async () => {
+    stubInventory([{ name: "web-design", source: "vercel-labs/agent-skills" }]);
+    await run("remove");
+    expect(mockExecSync).not.toHaveBeenCalledWith(
+      expect.stringContaining("skills remove"),
+      expect.anything(),
+    );
+    expect(allOutput()).toContain("No skills from dosu-ai/dosu-skill are installed");
+  });
+
+  it("stops the update notice by forgetting the installed SHA", async () => {
+    const cachePath = join(tempDir, "dosu-cli", "skill-update-check.json");
+    mkdirSync(dirname(cachePath), { recursive: true });
+    writeFileSync(
+      cachePath,
+      JSON.stringify({ lastCheck: 1, latestSha: "new-sha", installedSha: "old-sha" }),
+    );
+
+    stubInventory([{ name: "dosu", source: "dosu-ai/dosu-skill" }]);
+    await run("remove");
+
+    const cache = JSON.parse(readFileSync(cachePath, "utf-8"));
+    expect(cache.installedSha).toBe("");
+    expect(cache.latestSha).toBe("new-sha");
+  });
+
+  it("treats a non-array inventory as unreadable", async () => {
+    stubInventory({ unexpected: "shape" } as unknown as unknown[]);
     await run("remove");
     expect(mockExecSync).toHaveBeenCalledWith("npx skills remove -g dosu -y", {
       stdio: "inherit",

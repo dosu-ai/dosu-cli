@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { Command } from "commander";
 import pc from "picocolors";
 import { logger } from "../debug/logger";
-import { fetchLatestSha, writeSkillCache } from "../version/skill-update-check";
+import { clearInstalledSha, fetchLatestSha, writeSkillCache } from "../version/skill-update-check";
 
 const SKILL_REPO = "dosu-ai/dosu-skill";
 const SKILL_NAME = "dosu";
@@ -150,24 +150,35 @@ export async function installSkill(
  * as reported by the skills CLI's own inventory.
  *
  * `skills remove` resolves exact names and has no wildcard, so removing our
- * whole set means enumerating it first. Returns an empty list if the inventory
- * cannot be read.
+ * whole set means enumerating it first. An empty array means none of ours are
+ * installed; `null` means the inventory could not be read, which is a different
+ * situation and gets a different fallback.
  */
-function installedSkillNames(): string[] {
+function installedSkillNames(): string[] | null {
+  let entries: { name?: unknown; source?: unknown }[];
   try {
     const json = execSync("npx skills list -g --json", {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
     });
-    const entries = JSON.parse(json) as { name?: unknown; source?: unknown }[];
-    return entries
-      .filter((entry) => entry.source === SKILL_REPO)
-      .map((entry) => entry.name)
-      .filter((name): name is string => typeof name === "string" && SAFE_SKILL_NAME.test(name));
+    const parsed = JSON.parse(json);
+    if (!Array.isArray(parsed)) throw new Error("expected a JSON array");
+    entries = parsed;
   } catch (err) {
     logger.debug("skill", `Could not list installed skills: ${err}`);
-    return [];
+    return null;
   }
+
+  const names: string[] = [];
+  for (const entry of entries) {
+    if (entry.source !== SKILL_REPO || typeof entry.name !== "string") continue;
+    if (!SAFE_SKILL_NAME.test(entry.name)) {
+      logger.warn("skill", `Skipping skill with an unsupported name: ${entry.name}`);
+      continue;
+    }
+    names.push(entry.name);
+  }
+  return names;
 }
 
 export function skillCommand(): Command {
@@ -191,17 +202,21 @@ export function skillCommand(): Command {
     .command("remove")
     .description("Remove the Dosu skills")
     .action(() => {
-      // Names go in positionally: the remove parser silently drops `-s`, and
-      // passing none at all opens an interactive picker. Falling back to the
-      // original skill keeps the command non-interactive when the inventory
-      // is unreadable.
       const installed = installedSkillNames();
-      const targets = installed.length > 0 ? installed : [SKILL_NAME];
+      if (installed?.length === 0) {
+        console.log(`No skills from ${SKILL_REPO} are installed.`);
+        return;
+      }
+      // Names go in positionally: the remove parser silently drops `-s`, and
+      // passing none at all opens an interactive picker. When the inventory is
+      // unreadable, fall back to the one name we have always shipped.
+      const targets = installed ?? [SKILL_NAME];
       console.log(`Removing skills from ${SKILL_REPO}...`);
       try {
         execSync(`npx skills remove -g ${targets.join(" ")} -y`, {
           stdio: "inherit",
         });
+        clearInstalledSha();
         console.log(pc.green(`\n✓ Skills removed.`));
       } catch {
         console.error(pc.red(`\nFailed to remove skills.`));
