@@ -1,3 +1,10 @@
+# [0.47.0](https://github.com/dosu-ai/dosu-cli/compare/v0.46.1...v0.47.0) (2026-08-11)
+
+
+### Features
+
+* remove legacy coding-agent hooks ([#174](https://github.com/dosu-ai/dosu-cli/issues/174)) ([b037f69](https://github.com/dosu-ai/dosu-cli/commit/b037f692d83285c23f7add390ec86d3c4af771c2))
+
 ## [0.46.1](https://github.com/dosu-ai/dosu-cli/compare/v0.46.0...v0.46.1) (2026-08-11)
 
 
