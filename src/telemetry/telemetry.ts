@@ -28,7 +28,6 @@ const SAFE_ERROR_TYPES = new Set([
   "ReferenceError",
   "SessionExpiredError",
   "SyntaxError",
-  "TicketHttpError",
   "TRPCClientError",
   "TypeError",
 ]);
