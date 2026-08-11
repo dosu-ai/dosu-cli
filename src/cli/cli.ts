@@ -18,7 +18,6 @@ import { askCommand } from "../commands/ask";
 import { auditCommand } from "../commands/audit";
 import { deploymentsCommand } from "../commands/deployments";
 import { docsCommand } from "../commands/docs";
-import { hooksCommand } from "../commands/hooks";
 import { insightsCommand } from "../commands/insights";
 import { integrationsCommand } from "../commands/integrations";
 import { knowledgeCommand } from "../commands/knowledge";
@@ -64,26 +63,10 @@ import { checkForSkillUpdates } from "../version/skill-update-check";
 import { checkForUpdates } from "../version/update-check";
 import { getVersionString } from "../version/version";
 
-/**
- * Hook entrypoints are auto-invoked by Claude Code on every turn and must stay
- * fast and stdout-clean. Skip the update checks for them (their stderr notices
- * are noise on the hot path and a registry refresh would add latency).
- */
-const HOOK_ENTRYPOINTS = new Set(["user-prompt-submit", "post-tool-use", "stop"]);
-function isHookEntrypointInvocation(argv: string[]): boolean {
-  const i = argv.indexOf("hooks");
-  return i >= 0 && HOOK_ENTRYPOINTS.has(argv[i + 1] ?? "");
+export function shouldRunBackgroundChecks(actionName: string): boolean {
+  return actionName !== "upgrade";
 }
 
-export function shouldRunBackgroundChecks(actionName: string, argv: string[]): boolean {
-  return actionName !== "upgrade" && !isHookEntrypointInvocation(argv);
-}
-
-const TELEMETRY_EXCLUDED_COMMANDS = new Set([
-  "hooks user-prompt-submit",
-  "hooks post-tool-use",
-  "hooks stop",
-]);
 const TELEMETRY_FLUSH_TIMEOUT_MS = 750;
 const MAX_TELEMETRY_CONFIG_BYTES = 64 * 1_024;
 
@@ -108,8 +91,7 @@ function commandTelemetryName(actionCommand: Command): string {
 }
 
 function shouldTrackCommand(command: string): boolean {
-  if (command === "telemetry" || command.startsWith("telemetry ")) return false;
-  return !TELEMETRY_EXCLUDED_COMMANDS.has(command);
+  return command !== "telemetry" && !command.startsWith("telemetry ");
 }
 
 function commandTelemetryContext(): CommandTelemetryContext {
@@ -232,7 +214,7 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
     .hook("preAction", async (thisCommand, actionCommand) => {
       const opts = thisCommand.optsWithGlobals();
       logger.init({ debug: opts.debug });
-      if (shouldRunBackgroundChecks(actionCommand.name(), process.argv)) {
+      if (shouldRunBackgroundChecks(actionCommand.name())) {
         if (process.env.NODE_ENV !== "test" && !process.env.CI) {
           await checkForUpdates();
         }
@@ -560,7 +542,6 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
   program.addCommand(auditCommand());
   program.addCommand(deploymentsCommand());
   program.addCommand(docsCommand());
-  program.addCommand(hooksCommand());
   program.addCommand(insightsCommand());
   program.addCommand(integrationsCommand());
   program.addCommand(knowledgeCommand());
@@ -690,9 +671,7 @@ async function ensureFreshSession(cfg: Config): Promise<boolean> {
 }
 
 export async function execute(): Promise<void> {
-  const telemetry = isHookEntrypointInvocation(process.argv)
-    ? undefined
-    : processCommandTelemetry();
+  const telemetry = processCommandTelemetry();
   const program = createProgram({ telemetry });
   try {
     await program.parseAsync(process.argv);

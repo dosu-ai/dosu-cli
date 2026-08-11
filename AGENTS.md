@@ -34,7 +34,7 @@ bun run check                   # Biome lint + format check (used in CI)
 Running `dosu` with no args launches the interactive TUI (`src/tui/tui.ts`). Two broad families of subcommands are registered in `src/cli/cli.ts`:
 
 - **Local / MCP management** — `login`, `logout`, `status`, `setup`, `mcp add|list`, `logs`, `telemetry`.
-- **Dosu platform** (require an authenticated deployment) — `ask`, `knowledge`, `docs`, `suggest`, `threads`, `review`, `sources`, `integrations`, `tags`, `members`, `org`, `deployments`, `analytics`, `insights`, `skill`, `hooks`. Each lives in `src/commands/<name>.ts` and talks to the backend via `src/client/`.
+- **Dosu platform** (require an authenticated deployment) — `ask`, `knowledge`, `docs`, `suggest`, `threads`, `review`, `sources`, `integrations`, `tags`, `members`, `org`, `deployments`, `analytics`, `insights`, `skill`. Each lives in `src/commands/<name>.ts` and talks to the backend via `src/client/`.
 
 Key modules:
 
@@ -45,7 +45,6 @@ Key modules:
 - **`src/commands/`** — The Dosu platform command layer (the list above). Thin Commander wrappers over `src/client/` calls; `output.ts` standardizes human vs JSON output.
 - **`src/setup/`** — Interactive setup wizard (authenticate → select org → select deployment → mint API key → detect installed tools → configure). Uses `@clack/prompts`.
 - **`src/agent/`** — Non-interactive setup for coding agents (`setup --agent --tool <id>`) and the ticket-based login commands (`login --request`/`--check`). Emits machine-readable JSON via `output.ts` for agent consumption.
-- **`src/hooks/`** — Coding-agent hook entrypoints invoked as `dosu hooks <user-prompt-submit|post-tool-use|stop>`. They mint, poll, and inject Dosu "knowledge tickets" into an agent's turn. These run on the agent's hot path on every turn, so they must stay fast and keep stdout clean — `src/cli/cli.ts` deliberately skips the update checks for them.
 - **`src/telemetry/`** — Default-on analytics and error diagnostics with one persisted global switch, safe payload builders, and fail-open transport. User controls live under `dosu telemetry status|enable|disable|reset`.
 - **`src/tui/`** — Main menu TUI when running `dosu` with no subcommand.
 - **`src/version/`** — Version string from the build-time `DOSU_VERSION` env var, plus background update checks (`update-check.ts`, `skill-update-check.ts`).
