@@ -127,7 +127,6 @@ Once authenticated against a deployment, you can drive the Dosu platform without
 | `dosu analytics` | View usage statistics |
 | `dosu insights` | Open a visual report of your Dosu space activity |
 | `dosu skill` | Install / update / remove the Dosu agent skill |
-| `dosu hooks` | Install / remove / diagnose Dosu coding-agent hooks |
 
 Run `dosu <command> --help` for subcommands and flags.
 

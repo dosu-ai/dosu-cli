@@ -50,10 +50,9 @@ describe("CLI", () => {
     expect(cmd?.description()).toContain("latest version");
   });
 
-  it("skips background notices for upgrade and hook entrypoints", () => {
-    expect(shouldRunBackgroundChecks("upgrade", ["node", "dosu", "upgrade"])).toBe(false);
-    expect(shouldRunBackgroundChecks("stop", ["node", "dosu", "hooks", "stop"])).toBe(false);
-    expect(shouldRunBackgroundChecks("status", ["node", "dosu", "status"])).toBe(true);
+  it("skips background notices for upgrade", () => {
+    expect(shouldRunBackgroundChecks("upgrade")).toBe(false);
+    expect(shouldRunBackgroundChecks("status")).toBe(true);
   });
 
   it("has login command", () => {
@@ -378,23 +377,8 @@ describe("CLI", () => {
     }
   });
 
-  it("has hooks command with entrypoint and lifecycle subcommands", () => {
+  it("does not expose the removed hooks command", () => {
     const program = createProgram();
-    const cmd = program.commands.find((c) => c.name() === "hooks");
-    expect(cmd).toBeDefined();
-    const names = cmd?.commands.map((c) => c.name()) ?? [];
-    expect(names).toEqual(
-      expect.arrayContaining([
-        "user-prompt-submit",
-        "post-tool-use",
-        "stop",
-        "status",
-        "install",
-        "uninstall",
-        "doctor",
-      ]),
-    );
-    const install = cmd?.commands.find((c) => c.name() === "install");
-    expect(install?.options.find((o) => o.long === "--no-stop")).toBeDefined();
+    expect(program.commands.find((command) => command.name() === "hooks")).toBeUndefined();
   });
 });

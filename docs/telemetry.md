@@ -279,10 +279,6 @@ remain in controlled Dosu/vendor infrastructure or CI and are never placed in th
 
 ## Coverage and current limitations
 
-- The auto-invoked `hooks user-prompt-submit`, `hooks post-tool-use`, and `hooks stop` entrypoints
-  are excluded. They are latency-sensitive, high-volume protocol paths and must remain stdout-clean.
-- Human-invoked `dosu hooks install|uninstall|doctor|status` commands are ordinary commands and may
-  be measured while telemetry is enabled.
 - `install_channel` measures active CLI executions from `npm`, `homebrew`, or `binary` builds; it is
   not a download counter. Exact downloads remain in npm, Homebrew, and GitHub Release analytics.
 - `dosu telemetry ...` controls are themselves excluded, so changing or inspecting the switch does
@@ -347,7 +343,7 @@ Complete and record each item before enabling release destinations:
   for binary/homebrew builds. `sourcesContent` contains this public open-source repository and its
   bundled dependencies; the CI auth token is never baked into the CLI.
 - **End-to-end evidence:** in isolated vendor projects, inspect real received payloads for enabled,
-  disabled, `DO_NOT_TRACK`, debug, timeout, malformed-error, JSON/NDJSON, and all three hook cases.
+  disabled, `DO_NOT_TRACK`, debug, timeout, malformed-error, and JSON/NDJSON cases.
   Confirm stdout and exit codes are unchanged and that disabled runs create neither IDs nor network
   traffic.
 - **Operations:** document vendor outage behavior, public-key abuse response, a provider-side kill
