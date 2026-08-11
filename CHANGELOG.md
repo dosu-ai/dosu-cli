@@ -1,3 +1,10 @@
+## [0.46.1](https://github.com/dosu-ai/dosu-cli/compare/v0.46.0...v0.46.1) (2026-08-11)
+
+
+### Bug Fixes
+
+* remove every skill installed from the dosu-skill repo ([#173](https://github.com/dosu-ai/dosu-cli/issues/173)) ([f79608e](https://github.com/dosu-ai/dosu-cli/commit/f79608e9bb6fb587f6c7d6277903489f78fc93a3))
+
 # [0.46.0](https://github.com/dosu-ai/dosu-cli/compare/v0.45.0...v0.46.0) (2026-08-10)
 
 
