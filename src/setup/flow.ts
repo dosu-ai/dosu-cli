@@ -4,6 +4,7 @@
 
 import { randomUUID } from "node:crypto";
 import * as p from "@clack/prompts";
+import { OAuthCallbackError } from "../auth/errors";
 import { Client, type Deployment, type Org, SessionExpiredError } from "../client/client";
 import { installSkill, skillInstallTargetForProvider } from "../commands/skill";
 import {
@@ -64,6 +65,21 @@ interface CliOnboardingProfile {
   // the CLI deliberately no longer reads it.
 }
 
+const OAUTH_ANALYTICS_REASONS = new Set([
+  "access_denied",
+  "bad_oauth_state",
+  "invalid_request",
+  "invalid_scope",
+  "server_error",
+  "temporarily_unavailable",
+  "unauthorized_client",
+  "unsupported_response_type",
+]);
+
+function trackInBackground(tracking: Promise<void>): void {
+  void tracking.catch(() => {});
+}
+
 export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   const onboardingRunID = randomUUID();
   logger.info(
@@ -73,10 +89,12 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     }`,
   );
   p.intro("Dosu CLI Setup");
-  await trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_launch_attempted", {
-    has_deployment_option: Boolean(opts.deploymentID),
-    mode_option: opts.mode,
-  });
+  trackInBackground(
+    trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_launch_attempted", {
+      has_deployment_option: Boolean(opts.deploymentID),
+      mode_option: opts.mode,
+    }),
+  );
 
   let cfg = loadConfig();
 
@@ -94,7 +112,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   const authed = await stepAuthenticate(cfg, onboardingRunID);
   if (!authed) return;
   cfg = authed.cfg;
-  await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_auth_completed");
+  trackInBackground(trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_auth_completed"));
 
   let apiClient = new Client(cfg);
   let cloudSetupContext: CloudSetupContext | null = null;
@@ -104,21 +122,25 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     s.start("Loading your workspace...");
     cloudSetupContext = await resolveCloudSetupContext(cfg);
     if (!cloudSetupContext) {
-      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
-        reason: "cloud_setup_context_failed",
-      });
+      trackInBackground(
+        trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
+          reason: "cloud_setup_context_failed",
+        }),
+      );
       s.stop("Workspace load failed");
       return;
     }
     s.stop("Workspace loaded");
   }
-  await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_started", {
-    flow_kind: cloudSetupContext
-      ? cloudSetupContext.finishedOnboarding
-        ? "setup"
-        : "onboarding"
-      : "oss",
-  });
+  trackInBackground(
+    trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_started", {
+      flow_kind: cloudSetupContext
+        ? cloudSetupContext.finishedOnboarding
+          ? "setup"
+          : "onboarding"
+        : "oss",
+    }),
+  );
 
   // The CLI-side flag only TRIGGERS one browser handshake — the browser
   // decides whether the wizard is actually needed (it knows who is really
@@ -133,9 +155,11 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   if (needsHandshake) {
     const handshook = await stepSetupHandshake(cfg, onboardingRunID);
     if (!handshook) {
-      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
-        reason: "web_onboarding_incomplete",
-      });
+      trackInBackground(
+        trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
+          reason: "web_onboarding_incomplete",
+        }),
+      );
       return;
     }
     // The browser may have handed back a different account — that is the
@@ -146,9 +170,11 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     if (refreshed === null) {
       // Context load failed (it already printed the real error) — this is a
       // transient/API problem, not an onboarding state.
-      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
-        reason: "cloud_setup_context_failed",
-      });
+      trackInBackground(
+        trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
+          reason: "cloud_setup_context_failed",
+        }),
+      );
       return;
     }
     if (!refreshed.finishedOnboarding) {
@@ -158,9 +184,11 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
       p.log.warn(
         "Your account still needs onboarding. Finish it in the browser at the Dosu app, then re-run `dosu setup`.",
       );
-      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
-        reason: "onboarding_incomplete_after_handshake",
-      });
+      trackInBackground(
+        trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
+          reason: "onboarding_incomplete_after_handshake",
+        }),
+      );
       // The one deliberately non-zero setup exit: scripts chaining
       // `dosu setup && …` must not proceed on a half-onboarded account.
       process.exitCode = 1;
@@ -177,9 +205,11 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   if (!cfg.active_account?.target?.deployment_id || opts.deploymentID) {
     const ok = await resolveDeployment(apiClient, cfg, opts);
     if (!ok) {
-      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
-        reason: "deployment_resolution_failed",
-      });
+      trackInBackground(
+        trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
+          reason: "deployment_resolution_failed",
+        }),
+      );
       return;
     }
   }
@@ -188,9 +218,11 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   // before minting a new one, so it's safe to call on every run.
   const apiKey = await stepMintAPIKey(apiClient, cfg);
   if (!apiKey) {
-    await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
-      reason: "api_key_failed",
-    });
+    trackInBackground(
+      trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
+        reason: "api_key_failed",
+      }),
+    );
     return;
   }
   updateTarget(cfg, { api_key: apiKey });
@@ -200,9 +232,11 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   // agent receives the full supported bundle: MCP, rules, and skill.
   const configured = await stepConfigureMcpTools(cfg);
   if (configured === null) {
-    await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_cancelled", {
-      reason: "mcp_selection_cancelled",
-    });
+    trackInBackground(
+      trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_cancelled", {
+        reason: "mcp_selection_cancelled",
+      }),
+    );
     return;
   }
 
@@ -211,10 +245,12 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   );
   const mcpCompleted = configuredProviders.length > 0;
   if (mcpCompleted) {
-    await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_mcp_configured", {
-      provider_count: configuredProviders.length,
-      providers: configuredProviders.map((result) => result.provider.id()),
-    });
+    trackInBackground(
+      trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_mcp_configured", {
+        provider_count: configuredProviders.length,
+        providers: configuredProviders.map((result) => result.provider.id()),
+      }),
+    );
   }
 
   // Skill installation follows the same agent selection as MCP and rules.
@@ -227,7 +263,9 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   if (skillProviders.length > 0) {
     skillCompleted = await runInstallSkill(skillProviders);
     if (skillCompleted) {
-      await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_skill_installed");
+      trackInBackground(
+        trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_skill_installed"),
+      );
     }
   }
 
@@ -247,11 +285,13 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   }
 
   if (mcpCompleted || skillCompleted || agentsMdCompleted) {
-    await trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_completed", {
-      completed_mcp: mcpCompleted,
-      completed_skill: skillCompleted,
-      completed_agents_md: agentsMdCompleted,
-    });
+    trackInBackground(
+      trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_completed", {
+        completed_mcp: mcpCompleted,
+        completed_skill: skillCompleted,
+        completed_agents_md: agentsMdCompleted,
+      }),
+    );
   }
 
   if (cfg.mode === MODE_OSS) {
@@ -406,7 +446,9 @@ async function stepAuthenticate(
   }
 
   if (onboardingRunID) {
-    await trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_auth_started");
+    trackInBackground(
+      trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_auth_started"),
+    );
   }
   return await openBrowserForSetup(cfg, onboardingRunID);
 }
@@ -463,24 +505,34 @@ async function openBrowserForSetup(
     /* v8 ignore next 2 -- err is always Error in practice */
     const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
     logger.error("setup", `Auth failed: ${msg}`);
-    const { OAuthCallbackError } = await import("../auth/errors");
     if (err instanceof OAuthCallbackError) {
       p.log.error(err.userMessage);
       if (onboardingRunID) {
-        await trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_auth_failed", {
-          reason: err.errorCode ?? err.errorDescription ?? "oauth_callback_error",
-        });
+        trackInBackground(
+          trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_auth_failed", {
+            reason: cliAuthFailureReason(err),
+          }),
+        );
       }
       return null;
     }
     p.log.error(`Authentication failed: ${err instanceof Error ? err.message : String(err)}`);
     if (onboardingRunID) {
-      await trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_auth_failed", {
-        reason: err instanceof Error ? err.message : String(err),
-      });
+      trackInBackground(
+        trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_auth_failed", {
+          reason: cliAuthFailureReason(err),
+        }),
+      );
     }
     return null;
   }
+}
+
+/** Stable, low-cardinality analytics reason. Raw OAuth/error text may contain local data. */
+export function cliAuthFailureReason(err: unknown): string {
+  if (!(err instanceof OAuthCallbackError)) return "unexpected_auth_error";
+  const code = err.errorCode;
+  return code && OAUTH_ANALYTICS_REASONS.has(code) ? code : "oauth_callback_error";
 }
 
 /**

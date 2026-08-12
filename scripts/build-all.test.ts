@@ -30,12 +30,16 @@ describe("buildDefines", () => {
     envBackup.SUPABASE_URL = process.env.SUPABASE_URL;
     envBackup.SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
     envBackup.DOSU_INSTALL_CHANNEL = process.env.DOSU_INSTALL_CHANNEL;
+    envBackup.DOSU_POSTHOG_PROJECT_TOKEN = process.env.DOSU_POSTHOG_PROJECT_TOKEN;
+    envBackup.DOSU_CLI_SENTRY_DSN = process.env.DOSU_CLI_SENTRY_DSN;
     delete process.env.DOSU_VERSION;
     delete process.env.DOSU_WEB_APP_URL;
     delete process.env.DOSU_BACKEND_URL;
     delete process.env.SUPABASE_URL;
     delete process.env.SUPABASE_ANON_KEY;
     delete process.env.DOSU_INSTALL_CHANNEL;
+    delete process.env.DOSU_POSTHOG_PROJECT_TOKEN;
+    delete process.env.DOSU_CLI_SENTRY_DSN;
   });
 
   afterEach(() => {
@@ -57,6 +61,8 @@ describe("buildDefines", () => {
     expect(defines).toContain('process.env.DOSU_BACKEND_URL=""');
     expect(defines).toContain('process.env.SUPABASE_URL=""');
     expect(defines).toContain('process.env.SUPABASE_ANON_KEY=""');
+    expect(defines).toContain('process.env.DOSU_POSTHOG_PROJECT_TOKEN=""');
+    expect(defines).toContain('process.env.DOSU_CLI_SENTRY_DSN=""');
   });
 
   it("should use env vars when set", () => {
@@ -66,6 +72,8 @@ describe("buildDefines", () => {
     process.env.SUPABASE_URL = "https://db.test.dev";
     process.env.SUPABASE_ANON_KEY = "anon-test-key";
     process.env.DOSU_INSTALL_CHANNEL = "homebrew";
+    process.env.DOSU_POSTHOG_PROJECT_TOKEN = "phc_test";
+    process.env.DOSU_CLI_SENTRY_DSN = "https://public@sentry.test/1";
 
     const defines = buildDefines();
     expect(defines).toEqual([
@@ -81,7 +89,32 @@ describe("buildDefines", () => {
       'process.env.SUPABASE_ANON_KEY="anon-test-key"',
       "--define",
       'process.env.DOSU_INSTALL_CHANNEL="homebrew"',
+      "--define",
+      'process.env.DOSU_POSTHOG_PROJECT_TOKEN="phc_test"',
+      "--define",
+      'process.env.DOSU_CLI_SENTRY_DSN="https://public@sentry.test/1"',
     ]);
+  });
+
+  it.each([
+    "phx_personal_secret",
+    "phs_project_secret",
+    "pha_oauth_secret",
+    "phr_restricted_secret",
+    "arbitrary-secret",
+  ])("refuses to bake a non-public PostHog credential", (token) => {
+    process.env.DOSU_POSTHOG_PROJECT_TOKEN = token;
+
+    expect(() => buildDefines()).toThrow("must be empty or a public phc_ project token");
+  });
+
+  it.each([
+    "sntrys_secret",
+    "sntryu_secret",
+  ])("refuses to bake Sentry auth token %s as a DSN", (token) => {
+    process.env.DOSU_CLI_SENTRY_DSN = `https://${token}@sentry.test/1`;
+
+    expect(() => buildDefines()).toThrow("must be empty or a public HTTPS client DSN");
   });
 
   it("should produce valid JSON-stringified values", () => {
@@ -90,10 +123,12 @@ describe("buildDefines", () => {
     expect(defines[1]).toBe('process.env.DOSU_VERSION="has\\"quotes"');
   });
 
-  it("should return exactly 12 elements (6 pairs of --define + value)", () => {
+  it("should return exactly 16 elements (8 pairs of --define + value)", () => {
     const defines = buildDefines();
-    expect(defines).toHaveLength(12);
+    expect(defines).toHaveLength(16);
     expect(defines.filter((_, i) => i % 2 === 0)).toEqual([
+      "--define",
+      "--define",
       "--define",
       "--define",
       "--define",

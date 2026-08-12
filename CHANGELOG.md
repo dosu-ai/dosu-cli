@@ -1,3 +1,31 @@
+# [0.47.0](https://github.com/dosu-ai/dosu-cli/compare/v0.46.1...v0.47.0) (2026-08-11)
+
+
+### Features
+
+* remove legacy coding-agent hooks ([#174](https://github.com/dosu-ai/dosu-cli/issues/174)) ([b037f69](https://github.com/dosu-ai/dosu-cli/commit/b037f692d83285c23f7add390ec86d3c4af771c2))
+
+## [0.46.1](https://github.com/dosu-ai/dosu-cli/compare/v0.46.0...v0.46.1) (2026-08-11)
+
+
+### Bug Fixes
+
+* remove every skill installed from the dosu-skill repo ([#173](https://github.com/dosu-ai/dosu-cli/issues/173)) ([f79608e](https://github.com/dosu-ai/dosu-cli/commit/f79608e9bb6fb587f6c7d6277903489f78fc93a3))
+
+# [0.46.0](https://github.com/dosu-ai/dosu-cli/compare/v0.45.0...v0.46.0) (2026-08-10)
+
+
+### Features
+
+* install every skill in the dosu-skill repo ([#172](https://github.com/dosu-ai/dosu-cli/issues/172)) ([456a5ec](https://github.com/dosu-ai/dosu-cli/commit/456a5ec759901f10ec0777727468ffe0af6fce0e))
+
+# [0.45.0](https://github.com/dosu-ai/dosu-cli/compare/v0.44.0...v0.45.0) (2026-08-10)
+
+
+### Features
+
+* add privacy-safe CLI telemetry ([#168](https://github.com/dosu-ai/dosu-cli/issues/168)) ([a00c380](https://github.com/dosu-ai/dosu-cli/commit/a00c380807d4bd10cfc1c64f64a3c8cac81110ab))
+
 # [0.44.0](https://github.com/dosu-ai/dosu-cli/compare/v0.43.0...v0.44.0) (2026-08-09)
 
 

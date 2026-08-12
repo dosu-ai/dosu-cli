@@ -4,7 +4,7 @@
  * GoTrue rotates refresh tokens on every use, and replaying a stale token
  * outside the ~10s reuse interval can revoke the ENTIRE session (reuse
  * detection) — killing every client that shares it. Multiple CLI processes
- * (TUI, parallel commands, hooks-era installs) share one config file, so a
+ * (TUI and parallel commands) share one config file, so a
  * process holding a stale in-memory token can kill the session for all of
  * them. These tests pin the client's defenses:
  *

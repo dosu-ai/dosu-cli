@@ -1,6 +1,6 @@
 {
   "name": "@dosu/cli",
-  "version": "0.44.0",
+  "version": "0.47.0",
   "type": "module",
   "description": "Dosu CLI - Manage MCP servers for AI tools",
   "license": "MIT",
@@ -22,6 +22,7 @@
     "build": "bun --env-file=.env.production run scripts/build-compile.ts",
     "build:dev": "bun --env-file=.env.development run scripts/build-compile.ts",
     "build:npm": "DOSU_INSTALL_CHANNEL=npm bun --env-file=.env.production run scripts/build-npm.ts",
+    "upload:sourcemaps": "sentry-cli sourcemaps upload --org dosu-ai --project dosu-cli --validate --wait --strict --url-prefix app:///bin bin/dosu.js bin/dosu.js.map",
     "build:all": "bun --env-file=.env.production run scripts/build-all.ts",
     "test": "bunx vitest run",
     "test:watch": "bunx vitest",
@@ -42,6 +43,7 @@
     "@semantic-release/changelog": "^6.0.3",
     "@semantic-release/exec": "^7.1.0",
     "@semantic-release/git": "^10.0.1",
+    "@sentry/cli": "3.6.2",
     "@trpc/client": "11.18.0",
     "@trpc/server": "11.18.0",
     "@types/bun": "^1.3.14",

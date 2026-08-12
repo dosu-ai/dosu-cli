@@ -1,3 +1,7 @@
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../debug/logger", () => ({
@@ -11,6 +15,12 @@ vi.mock("../debug/logger", () => ({
   },
 }));
 
+vi.mock("../version/update-check", () => ({ checkForUpdates: vi.fn() }));
+vi.mock("../version/skill-update-check", () => ({ checkForSkillUpdates: vi.fn() }));
+vi.mock("../version/pending-tasks-check", () => ({ checkForReadyTasks: vi.fn() }));
+
+import { saveConfig } from "../config/config";
+import type { CommandTelemetry } from "../telemetry/telemetry";
 import { createProgram, shouldRunBackgroundChecks } from "./cli";
 
 describe("CLI", () => {
@@ -40,10 +50,9 @@ describe("CLI", () => {
     expect(cmd?.description()).toContain("latest version");
   });
 
-  it("skips background notices for upgrade and hook entrypoints", () => {
-    expect(shouldRunBackgroundChecks("upgrade", ["node", "dosu", "upgrade"])).toBe(false);
-    expect(shouldRunBackgroundChecks("stop", ["node", "dosu", "hooks", "stop"])).toBe(false);
-    expect(shouldRunBackgroundChecks("status", ["node", "dosu", "status"])).toBe(true);
+  it("skips background notices for upgrade", () => {
+    expect(shouldRunBackgroundChecks("upgrade")).toBe(false);
+    expect(shouldRunBackgroundChecks("status")).toBe(true);
   });
 
   it("has login command", () => {
@@ -123,23 +132,253 @@ describe("CLI", () => {
     expect(cmd?.options.find((o) => o.long === "--clear")).toBeDefined();
   });
 
-  it("has hooks command with entrypoint and lifecycle subcommands", () => {
+  it("has telemetry privacy controls", () => {
     const program = createProgram();
-    const cmd = program.commands.find((c) => c.name() === "hooks");
+    const cmd = program.commands.find((c) => c.name() === "telemetry");
     expect(cmd).toBeDefined();
-    const names = cmd?.commands.map((c) => c.name()) ?? [];
-    expect(names).toEqual(
-      expect.arrayContaining([
-        "user-prompt-submit",
-        "post-tool-use",
-        "stop",
-        "status",
-        "install",
-        "uninstall",
-        "doctor",
-      ]),
-    );
-    const install = cmd?.commands.find((c) => c.name() === "install");
-    expect(install?.options.find((o) => o.long === "--no-stop")).toBeDefined();
+    expect(cmd?.commands.map((subcommand) => subcommand.name())).toEqual([
+      "status",
+      "enable",
+      "disable",
+      "reset",
+    ]);
+  });
+
+  it("records only the canonical command name and completes after an action", async () => {
+    const configRoot = mkdtempSync(join(tmpdir(), "dosu-cli-telemetry-context-"));
+    const originalConfigRoot = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = configRoot;
+    const telemetry: CommandTelemetry = {
+      start: vi.fn(),
+      complete: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await createProgram({ telemetry }).parseAsync(["node", "dosu", "logs"]);
+
+      expect(telemetry.start).toHaveBeenCalledOnce();
+      expect(telemetry.start).toHaveBeenCalledWith("logs", {
+        mode: "cloud",
+        isAuthenticated: false,
+      });
+      expect(telemetry.complete).toHaveBeenCalledWith(0);
+      expect(telemetry.fail).not.toHaveBeenCalled();
+    } finally {
+      logSpy.mockRestore();
+      rmSync(configRoot, { recursive: true, force: true });
+      if (originalConfigRoot === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = originalConfigRoot;
+    }
+  });
+
+  it("passes the current JWT identity to telemetry without passing the token", async () => {
+    const configRoot = mkdtempSync(join(tmpdir(), "dosu-cli-telemetry-identity-"));
+    const originalConfigRoot = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = configRoot;
+    const userID = "22222222-2222-4222-8222-222222222222";
+    const payload = Buffer.from(
+      JSON.stringify({ sub: userID, email: "user@example.com", private: "must-not-leak" }),
+    ).toString("base64url");
+    const accessToken = `header.${payload}.signature`;
+    const telemetry: CommandTelemetry = {
+      start: vi.fn(),
+      complete: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      saveConfig({
+        schema_version: 2,
+        active_account: {
+          user_id: userID,
+          session: { access_token: accessToken, refresh_token: "refresh-secret", expires_at: 0 },
+        },
+      });
+
+      await createProgram({ telemetry }).parseAsync(["node", "dosu", "logs"]);
+
+      expect(telemetry.start).toHaveBeenCalledWith("logs", {
+        mode: "cloud",
+        isAuthenticated: true,
+        user: { id: userID, email: "user@example.com" },
+      });
+      const calls = JSON.stringify(vi.mocked(telemetry.start).mock.calls);
+      expect(calls).not.toContain(accessToken);
+      expect(calls).not.toContain("refresh-secret");
+      expect(calls).not.toContain("must-not-leak");
+    } finally {
+      logSpy.mockRestore();
+      rmSync(configRoot, { recursive: true, force: true });
+      if (originalConfigRoot === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = originalConfigRoot;
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "does not block a config-free command when config.json is a FIFO",
+    () => {
+      const configRoot = mkdtempSync(join(tmpdir(), "dosu-cli-telemetry-fifo-"));
+      const configDir = join(configRoot, "dosu-cli");
+      const configPath = join(configDir, "config.json");
+      mkdirSync(configDir, { recursive: true });
+      try {
+        expect(spawnSync("mkfifo", [configPath]).status).toBe(0);
+        const result = spawnSync("bun", ["run", "src/index.ts", "logs"], {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            CI: "1",
+            DOSU_DEV: "false",
+            DOSU_TELEMETRY_DISABLED: "0",
+            DO_NOT_TRACK: "0",
+            NODE_ENV: "test",
+            XDG_CONFIG_HOME: configRoot,
+          },
+          timeout: 1_000,
+        });
+
+        expect(result.error).toBeUndefined();
+        expect(result.status).toBe(0);
+      } finally {
+        rmSync(configRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("preserves command output when telemetry start throws", async () => {
+    const telemetry: CommandTelemetry = {
+      start: vi.fn(() => {
+        throw new Error("telemetry start failed");
+      }),
+      complete: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await expect(
+        createProgram({ telemetry }).parseAsync(["node", "dosu", "logs"]),
+      ).resolves.toBeDefined();
+      expect(logSpy).toHaveBeenCalledWith("/tmp/test-debug.log");
+      expect(telemetry.complete).not.toHaveBeenCalled();
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("preserves command output when telemetry completion rejects", async () => {
+    const telemetry: CommandTelemetry = {
+      start: vi.fn(),
+      complete: vi.fn().mockRejectedValue(new Error("telemetry completion failed")),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await expect(
+        createProgram({ telemetry }).parseAsync(["node", "dosu", "logs"]),
+      ).resolves.toBeDefined();
+      expect(logSpy).toHaveBeenCalledWith("/tmp/test-debug.log");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("bounds a telemetry completion that never settles", async () => {
+    vi.useFakeTimers();
+    const telemetry: CommandTelemetry = {
+      start: vi.fn(),
+      complete: vi.fn(() => new Promise<void>(() => {})),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const command = createProgram({ telemetry }).parseAsync(["node", "dosu", "logs"]);
+      await vi.advanceTimersByTimeAsync(750);
+      await expect(command).resolves.toBeDefined();
+      expect(logSpy).toHaveBeenCalledWith("/tmp/test-debug.log");
+    } finally {
+      logSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves validation behavior when telemetry failure reporting rejects", async () => {
+    const originalExitCode = process.exitCode;
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const telemetry: CommandTelemetry = {
+      start: vi.fn(),
+      complete: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockRejectedValue(new Error("telemetry failure reporting failed")),
+    };
+    try {
+      await expect(
+        createProgram({ telemetry }).parseAsync(["node", "dosu", "definitely-unknown"]),
+      ).resolves.toBeDefined();
+      expect(process.exitCode).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("unknown command"));
+    } finally {
+      process.exitCode = originalExitCode;
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("marks invalid CLI options as expected usage errors", async () => {
+    const telemetry: CommandTelemetry = {
+      start: vi.fn(),
+      complete: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await expect(
+      createProgram({ telemetry }).parseAsync(["node", "dosu", "setup", "--mode", "private"]),
+    ).rejects.toMatchObject({ name: "CliUsageError", exitCode: 1 });
+
+    expect(telemetry.start).toHaveBeenCalledWith("setup", expect.any(Object));
+    expect(telemetry.complete).not.toHaveBeenCalled();
+  });
+
+  it("preserves the unknown-command exit code while marking it as expected", async () => {
+    const originalExitCode = process.exitCode;
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const telemetry: CommandTelemetry = {
+      start: vi.fn(),
+      complete: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    try {
+      await createProgram({ telemetry }).parseAsync(["node", "dosu", "definitely-unknown"]);
+
+      expect(process.exitCode).toBe(1);
+      expect(telemetry.fail).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "CliUsageError", exitCode: 1 }),
+      );
+      expect(telemetry.complete).not.toHaveBeenCalled();
+    } finally {
+      process.exitCode = originalExitCode;
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("does not record telemetry-control commands", async () => {
+    const telemetry: CommandTelemetry = {
+      start: vi.fn(),
+      complete: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await createProgram({ telemetry }).parseAsync(["node", "dosu", "telemetry", "status"]);
+      expect(telemetry.start).not.toHaveBeenCalled();
+      expect(telemetry.complete).not.toHaveBeenCalled();
+      expect(telemetry.fail).not.toHaveBeenCalled();
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("does not expose the removed hooks command", () => {
+    const program = createProgram();
+    expect(program.commands.find((command) => command.name() === "hooks")).toBeUndefined();
   });
 });
