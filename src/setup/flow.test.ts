@@ -150,7 +150,6 @@ vi.mock("./rules-step", () => ({
 }));
 vi.mock("./github-step", () => ({
   stepConnectGitHubRepo: (...args: unknown[]) => mockStepConnectGitHubRepo(...args),
-  // Audit handoff never fires in these tests: not a git repo.
   detectGitRepo: vi.fn(() => null),
 }));
 
@@ -1399,8 +1398,8 @@ describe("runSetup integration", () => {
     expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("Removed from 1 agent"));
   });
 
-  it("OSS mode configures MCP but never offers the audit handoff", async () => {
-    // The audit acts on the user's own repo, so it's cloud-mode only.
+  it("OSS mode configures MCP but never offers the logs handoff", async () => {
+    // Log mining acts on the user's own histories / cloud deployment.
     const cfg = makeCfg({ mode: "oss" });
     saveConfig(cfg);
 
@@ -1413,7 +1412,9 @@ describe("runSetup integration", () => {
 
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 agent"));
     expect(p.confirm).not.toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Kick off the codebase audit in Claude Code now?" }),
+      expect.objectContaining({
+        message: expect.stringContaining("mine these into Dosu"),
+      }),
     );
   });
 
@@ -1648,7 +1649,7 @@ describe("runSetup checkpoint behavior", () => {
     }
   });
 
-  it("does not offer the audit handoff when the user selects no agents", async () => {
+  it("does not offer the logs handoff when the user selects no agents", async () => {
     saveConfig(makeCfg());
     setupAuthed();
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
@@ -1658,11 +1659,13 @@ describe("runSetup checkpoint behavior", () => {
     await runSetup();
 
     expect(p.confirm).not.toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Kick off the codebase audit in Claude Code now?" }),
+      expect.objectContaining({
+        message: expect.stringContaining("mine these into Dosu"),
+      }),
     );
   });
 
-  it("does not offer the audit handoff when no AI agents are detected", async () => {
+  it("does not offer the logs handoff when no AI agents are detected", async () => {
     // User ticked MCP but has no supported agents installed. stepConfigureMcpTools
     // returns an empty array (nothing to configure), so the handoff would be useless.
     saveConfig(makeCfg());
@@ -1675,7 +1678,9 @@ describe("runSetup checkpoint behavior", () => {
       expect.stringContaining("No supported AI agents detected"),
     );
     expect(p.confirm).not.toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Kick off the codebase audit in Claude Code now?" }),
+      expect.objectContaining({
+        message: expect.stringContaining("mine these into Dosu"),
+      }),
     );
   });
 
