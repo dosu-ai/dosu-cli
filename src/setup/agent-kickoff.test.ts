@@ -184,27 +184,15 @@ describe("launchKickoffAgent", () => {
     expect(launchKickoffAgent("cursor", "mine logs")).toBe(false);
   });
 
-  it("soft-opens Cursor IDE when agent CLI is missing", () => {
+  it("does not spawn a new Cursor window when agent CLI is missing", () => {
     mockWhich({ cursor: true, agent: false, "cursor-agent": false });
-    const unref = vi.fn();
-    mockSpawn.mockReturnValue({ unref });
     const soft = vi.fn();
     expect(launchKickoffAgent("cursor", "paste me", { onCursorSoftLaunch: soft })).toBe(true);
     expect(soft).toHaveBeenCalled();
-    expect(mockSpawn).toHaveBeenCalledWith(
-      "cursor",
-      [process.cwd()],
-      expect.objectContaining({ stdio: "ignore", detached: true, shell: false }),
-    );
-    expect(unref).toHaveBeenCalled();
-    expect(mockSpawnSync).not.toHaveBeenCalledWith(
-      "cursor",
-      expect.anything(),
-      expect.objectContaining({ stdio: "ignore" }),
-    );
+    expect(mockSpawn).not.toHaveBeenCalled();
   });
 
-  it("uses shell: true on Windows for interactive and soft launches", () => {
+  it("uses shell: true on Windows for interactive launches", () => {
     vi.stubGlobal("process", { ...process, platform: "win32", cwd: process.cwd });
     mockSpawnSync.mockReturnValue({ status: 0 });
     expect(launchKickoffAgent("claude", "do the thing")).toBe(true);
@@ -212,16 +200,6 @@ describe("launchKickoffAgent", () => {
       "claude",
       ["do the thing"],
       expect.objectContaining({ shell: true }),
-    );
-
-    mockWhich({ cursor: true, agent: false, "cursor-agent": false });
-    const unref = vi.fn();
-    mockSpawn.mockReturnValue({ unref });
-    expect(launchKickoffAgent("cursor", "paste me")).toBe(true);
-    expect(mockSpawn).toHaveBeenCalledWith(
-      "cursor",
-      [process.cwd()],
-      expect.objectContaining({ shell: true, detached: true }),
     );
   });
 

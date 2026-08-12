@@ -3,10 +3,12 @@
  *
  * Supports Claude Code (`claude`), Codex (`codex`), and Cursor Agent
  * (`agent` / `cursor-agent`). When only the Cursor IDE binary is on PATH,
- * we open the project and print a pasteable prompt (soft kickoff).
+ * print a pasteable prompt. Do not spawn `cursor <cwd>`: that opens a
+ * different window/project than a multi-root workspace that already
+ * contains this folder, so Agent history will not match.
  */
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { logger } from "../debug/logger";
 
 export type KickoffAgent = "cursor" | "claude" | "codex";
@@ -82,7 +84,7 @@ export function resolveKickoffAgent(
 export interface LaunchKickoffOptions {
   /** Extra argv before the prompt (e.g. Claude `--model haiku`). */
   extraArgs?: string[];
-  /** Called when we can only soft-open Cursor (IDE present, no agent CLI). */
+  /** Called when Cursor IDE is present but agent CLI is not (paste prompt). */
   onCursorSoftLaunch?: () => void;
 }
 
@@ -131,14 +133,7 @@ export function launchKickoffAgent(
   }
 
   if (cursorIdeAvailable()) {
-    logger.info("setup", "Opening Cursor IDE (agent CLI not on PATH); prompt printed for paste");
-    // GUI fire-and-forget: spawnSync would block until Cursor exits.
-    const child = spawn("cursor", [process.cwd()], {
-      stdio: "ignore",
-      shell,
-      detached: true,
-    });
-    child.unref();
+    logger.info("setup", "Cursor agent CLI not on PATH; prompt printed for paste");
     options.onCursorSoftLaunch?.();
     return true;
   }

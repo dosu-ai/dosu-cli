@@ -128,14 +128,10 @@ describe("formatLogSourceSummary", () => {
 });
 
 describe("buildLogsHandoffPrompt", () => {
-  it("scopes sources and asks for the HTML report", () => {
-    const prompt = buildLogsHandoffPrompt(["cursor", "codex"]);
-    expect(prompt).toContain("Please bootstrap my knowledge with Dosu");
-    expect(prompt).toContain("Only mine these sources: cursor, codex");
-    expect(prompt).toContain("dosu/log-backfill/[UTC-timestamp]");
-    expect(prompt).not.toContain("<UTC-timestamp>");
-    expect(prompt).toContain("Never ask how to attribute notes to branches");
-    expect(prompt).toContain("generate_report.py --open");
+  it("is only the skill trigger", () => {
+    expect(buildLogsHandoffPrompt()).toBe(
+      "Please bootstrap my knowledge with Dosu from my local agent logs.",
+    );
   });
 });
 
@@ -161,8 +157,25 @@ describe("offerLogsHandoff", () => {
     );
     expect(p.confirm).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "We're about to mine these into Dosu with Cursor. Continue?",
+        message: "We'll hand off to Cursor to mine these into Dosu. Continue?",
         initialValue: true,
+      }),
+    );
+  });
+
+  it("warns that Cursor CLI is missing before a paste-only continue", async () => {
+    const home = makeHome("dosu-logs-soft-");
+    seedLogs(home);
+    mockWhich({ cursor: true, agent: false, "cursor-agent": false });
+    vi.mocked(p.confirm).mockResolvedValue(true);
+
+    await expect(offerLogsHandoff({ home, preferredAgents: ["cursor"] })).resolves.toEqual({
+      agent: "cursor",
+      sources: ["cursor", "claude", "codex"],
+    });
+    expect(p.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("Cursor CLI isn't on PATH"),
       }),
     );
   });
@@ -213,7 +226,7 @@ describe("launchLogsAgent", () => {
 
     expect(mockSpawnSync).toHaveBeenCalledWith(
       "agent",
-      [buildLogsHandoffPrompt(["cursor", "claude"])],
+      [buildLogsHandoffPrompt()],
       expect.objectContaining({ stdio: "inherit" }),
     );
   });
@@ -224,7 +237,7 @@ describe("launchLogsAgent", () => {
     expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("bootstrap my knowledge"));
   });
 
-  it("prints the prompt when Cursor is soft-opened", () => {
+  it("prints the paste prompt without opening a new Cursor window", () => {
     mockSpawnSync.mockImplementation((cmd: string, args: string[]) => {
       if (cmd === "which" || cmd === "where") {
         const bin = args[0] ?? "";
@@ -233,11 +246,11 @@ describe("launchLogsAgent", () => {
       return { status: 0 };
     });
     launchLogsAgent({ agent: "cursor", sources: ["claude"] });
-    expect(mockSpawn).toHaveBeenCalledWith(
-      "cursor",
-      [process.cwd()],
-      expect.objectContaining({ detached: true, stdio: "ignore" }),
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(p.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("mining does not start on its own"),
     );
+    expect(p.log.warn).toHaveBeenCalledWith(expect.not.stringContaining("Opened Cursor"));
     expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("bootstrap my knowledge"));
   });
 });

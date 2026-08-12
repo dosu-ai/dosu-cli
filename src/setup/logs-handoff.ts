@@ -13,6 +13,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import * as p from "@clack/prompts";
 import {
+  cursorAgentBin,
   type KickoffAgent,
   kickoffAgentLabel,
   launchKickoffAgent,
@@ -20,7 +21,7 @@ import {
 } from "./agent-kickoff";
 import { info } from "./styles";
 
-export type LogSource = "cursor" | "claude" | "codex";
+type LogSource = "cursor" | "claude" | "codex";
 
 const LOG_SOURCES: readonly LogSource[] = ["cursor", "claude", "codex"] as const;
 
@@ -130,21 +131,27 @@ export function formatLogSourceSummary(hits: readonly LogSourceHit[]): string {
     .join(", ");
 }
 
-export function buildLogsHandoffPrompt(sources: readonly LogSource[]): string {
-  const sourceList = sources.join(", ");
-  return [
-    "Please bootstrap my knowledge with Dosu from my local agent logs.",
-    "1. Run the log-to-dosu-knowledge skill. Do not ask scope questions — use skill defaults.",
-    `2. Only mine these sources: ${sourceList}.`,
-    "3. Inventory sessions, extract durable learnings (not the user's prompts), and write each with write_knowledge on a single dosu/log-backfill/[UTC-timestamp] branch for this run.",
-    "4. Never ask how to attribute notes to branches (main / per-session / checkout). Always use that synthetic BACKFILL_BRANCH so the server auto-promotes.",
-    "5. Open the HTML report (generate_report.py --open) and tell me what was cached plus expected token savings.",
-  ].join("\n");
+export function buildLogsHandoffPrompt(): string {
+  return "Please bootstrap my knowledge with Dosu from my local agent logs.";
 }
 
-function printManualLogsNudge(sources: readonly LogSource[] = LOG_SOURCES): void {
-  const prompt = buildLogsHandoffPrompt(sources);
-  p.log.message(`Mine local agent logs into Dosu:\n\n${info(prompt)}`);
+function printManualLogsNudge(opts: { cursorPaste?: boolean } = {}): void {
+  const prompt = buildLogsHandoffPrompt();
+  if (opts.cursorPaste) {
+    p.log.warn(
+      "Paste this into a new Agent chat (Cmd+Shift+L) and send it — mining does not start on its own:",
+    );
+  } else {
+    p.log.message("Paste this into your coding agent to mine local logs into Dosu:");
+  }
+  p.log.message(info(prompt));
+}
+
+function confirmLogsHandoffMessage(agent: KickoffAgent): string {
+  if (agent === "cursor" && !cursorAgentBin()) {
+    return "We'll print a prompt to paste into Agent to mine these into Dosu. Cursor CLI isn't on PATH, so nothing runs until you send it. Continue?";
+  }
+  return `We'll hand off to ${kickoffAgentLabel(agent)} to mine these into Dosu. Continue?`;
 }
 
 export interface OfferLogsHandoffOptions {
@@ -166,19 +173,18 @@ export async function offerLogsHandoff(
   const sources = hits.map((hit) => hit.source);
   const agent = resolveKickoffAgent(options.preferredAgents ?? []);
   if (!agent) {
-    printManualLogsNudge(sources);
+    printManualLogsNudge();
     return null;
   }
 
   p.log.success(`MCP setup successful! Found logs: ${formatLogSourceSummary(hits)}`);
 
-  const label = kickoffAgentLabel(agent);
   const go = await p.confirm({
-    message: `We're about to mine these into Dosu with ${label}. Continue?`,
+    message: confirmLogsHandoffMessage(agent),
     initialValue: true,
   });
   if (p.isCancel(go) || !go) {
-    printManualLogsNudge(sources);
+    printManualLogsNudge();
     return null;
   }
 
@@ -187,11 +193,11 @@ export async function offerLogsHandoff(
 
 /** Launch the chosen agent with the log-mining prompt. */
 export function launchLogsAgent(plan: LogsHandoffPlan): void {
-  const prompt = buildLogsHandoffPrompt(plan.sources);
+  const prompt = buildLogsHandoffPrompt();
   const ok = launchKickoffAgent(plan.agent, prompt, {
-    onCursorSoftLaunch: () => printManualLogsNudge(plan.sources),
+    onCursorSoftLaunch: () => printManualLogsNudge({ cursorPaste: true }),
   });
   if (!ok) {
-    printManualLogsNudge(plan.sources);
+    printManualLogsNudge();
   }
 }
