@@ -4,8 +4,10 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockSpawnSync = vi.hoisted(() => vi.fn());
+const mockSpawn = vi.hoisted(() => vi.fn());
 vi.mock("node:child_process", () => ({
   spawnSync: mockSpawnSync,
+  spawn: mockSpawn,
 }));
 
 vi.mock("@clack/prompts", () => ({
@@ -72,6 +74,7 @@ function seedLogs(home: string): void {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(p.isCancel).mockReturnValue(false);
+  mockSpawn.mockReturnValue({ unref: vi.fn() });
 });
 
 afterEach(() => {
@@ -97,6 +100,20 @@ describe("detectLogSources", () => {
     const home = makeHome("dosu-logs-empty-");
     expect(detectLogSources(home)).toEqual([]);
   });
+
+  it("skips cursor projects without transcripts and caps large trees", () => {
+    const home = makeHome("dosu-logs-cap-");
+    const projects = join(home, ".cursor", "projects");
+    mkdirSync(join(projects, "plain-file"), { recursive: true });
+    writeFileSync(join(projects, "not-a-dir"), "nope");
+    const transcripts = join(projects, "big", "agent-transcripts", "nested");
+    mkdirSync(transcripts, { recursive: true });
+    for (let i = 0; i < 500; i++) {
+      writeFileSync(join(transcripts, `s${i}.jsonl`), "{}\n");
+    }
+    const hits = detectLogSources(home);
+    expect(hits).toEqual([{ source: "cursor", sessionCount: 500, capped: true }]);
+  });
 });
 
 describe("formatLogSourceSummary", () => {
@@ -115,7 +132,8 @@ describe("buildLogsHandoffPrompt", () => {
     const prompt = buildLogsHandoffPrompt(["cursor", "codex"]);
     expect(prompt).toContain("Please bootstrap my knowledge with Dosu");
     expect(prompt).toContain("Only mine these sources: cursor, codex");
-    expect(prompt).toContain("dosu/log-backfill/");
+    expect(prompt).toContain("dosu/log-backfill/[UTC-timestamp]");
+    expect(prompt).not.toContain("<UTC-timestamp>");
     expect(prompt).toContain("Never ask how to attribute notes to branches");
     expect(prompt).toContain("generate_report.py --open");
   });
@@ -159,6 +177,17 @@ describe("offerLogsHandoff", () => {
     expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("bootstrap my knowledge"));
   });
 
+  it("prints a nudge when the user cancels the continue prompt", async () => {
+    const home = makeHome("dosu-logs-cancel-");
+    seedLogs(home);
+    mockWhich({ claude: true });
+    vi.mocked(p.confirm).mockResolvedValue(true);
+    vi.mocked(p.isCancel).mockReturnValue(true);
+
+    await expect(offerLogsHandoff({ home, preferredAgents: ["claude"] })).resolves.toBeNull();
+    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("bootstrap my knowledge"));
+  });
+
   it("prints a nudge when no kickoff agent is available", async () => {
     const home = makeHome("dosu-logs-noagent-");
     seedLogs(home);
@@ -187,5 +216,28 @@ describe("launchLogsAgent", () => {
       [buildLogsHandoffPrompt(["cursor", "claude"])],
       expect.objectContaining({ stdio: "inherit" }),
     );
+  });
+
+  it("prints a nudge when launch fails", () => {
+    mockWhich({});
+    launchLogsAgent({ agent: "cursor", sources: ["cursor"] });
+    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("bootstrap my knowledge"));
+  });
+
+  it("prints the prompt when Cursor is soft-opened", () => {
+    mockSpawnSync.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "which" || cmd === "where") {
+        const bin = args[0] ?? "";
+        return { status: bin === "cursor" ? 0 : 1 };
+      }
+      return { status: 0 };
+    });
+    launchLogsAgent({ agent: "cursor", sources: ["claude"] });
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "cursor",
+      [process.cwd()],
+      expect.objectContaining({ detached: true, stdio: "ignore" }),
+    );
+    expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("bootstrap my knowledge"));
   });
 });

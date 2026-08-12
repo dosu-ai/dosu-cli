@@ -8,7 +8,7 @@
  * offer/launch split.
  */
 
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { type Dirent, existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import * as p from "@clack/prompts";
@@ -45,13 +45,17 @@ export interface LogsHandoffPlan {
 
 const COUNT_CAP = 500;
 
-function countJsonlFiles(root: string, cap: number = COUNT_CAP): { count: number; capped: boolean } {
+function countJsonlFiles(
+  root: string,
+  cap: number = COUNT_CAP,
+): { count: number; capped: boolean } {
   if (!existsSync(root)) return { count: 0, capped: false };
   let count = 0;
   const stack = [root];
   while (stack.length > 0) {
-    const dir = stack.pop()!;
-    let entries;
+    const dir = stack.pop();
+    if (dir === undefined) break;
+    let entries: Dirent[];
     try {
       entries = readdirSync(dir, { withFileTypes: true });
     } catch {
@@ -132,7 +136,7 @@ export function buildLogsHandoffPrompt(sources: readonly LogSource[]): string {
     "Please bootstrap my knowledge with Dosu from my local agent logs.",
     "1. Run the log-to-dosu-knowledge skill. Do not ask scope questions — use skill defaults.",
     `2. Only mine these sources: ${sourceList}.`,
-    "3. Inventory sessions, extract durable learnings (not the user's prompts), and write each with write_knowledge on a single dosu/log-backfill/<UTC-timestamp> branch for this run.",
+    "3. Inventory sessions, extract durable learnings (not the user's prompts), and write each with write_knowledge on a single dosu/log-backfill/[UTC-timestamp] branch for this run.",
     "4. Never ask how to attribute notes to branches (main / per-session / checkout). Always use that synthetic BACKFILL_BRANCH so the server auto-promotes.",
     "5. Open the HTML report (generate_report.py --open) and tell me what was cached plus expected token savings.",
   ].join("\n");

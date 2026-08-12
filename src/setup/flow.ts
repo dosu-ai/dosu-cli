@@ -206,9 +206,6 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     return;
   }
 
-  const mcpConfiguredThisRun = configured.some(
-    (result) => result.action === "install" || result.action === "skip",
-  );
   const configuredProviders = configured.filter(
     (result) => (result.action === "install" || result.action === "skip") && !result.error,
   );
@@ -245,7 +242,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   // CTA. Kickoff prefers agents the user just configured (Cursor / Claude / Codex).
   let logsPlan: LogsHandoffPlan | null = null;
   const preferredAgents = configuredProviders.map((result) => result.provider.id());
-  if (mcpConfiguredThisRun && cfg.mode !== MODE_OSS) {
+  if (mcpCompleted && cfg.mode !== MODE_OSS) {
     logsPlan = await offerLogsHandoff({ preferredAgents });
   }
 

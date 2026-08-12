@@ -6,7 +6,7 @@
  * we open the project and print a pasteable prompt (soft kickoff).
  */
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { logger } from "../debug/logger";
 
 export type KickoffAgent = "cursor" | "claude" | "codex";
@@ -52,6 +52,12 @@ export function listAvailableKickoffAgents(): KickoffAgent[] {
   return out;
 }
 
+function asKickoffAgent(id: string): KickoffAgent | null {
+  if (id === "cursor" || id === "claude" || id === "codex") return id;
+  if (id === "claude-desktop") return "claude";
+  return null;
+}
+
 /**
  * Pick a kickoff agent. Prefer providers the user just configured (in that
  * order), then fall back to cursor → claude → codex among what's on PATH.
@@ -63,9 +69,8 @@ export function resolveKickoffAgent(
   if (available.length === 0) return null;
 
   for (const id of preferredProviderIds) {
-    if (id === "cursor" || id === "claude" || id === "codex") {
-      if (available.includes(id)) return id;
-    }
+    const mapped = asKickoffAgent(id);
+    if (mapped && available.includes(mapped)) return mapped;
   }
 
   for (const agent of KICKOFF_AGENTS) {
@@ -127,11 +132,13 @@ export function launchKickoffAgent(
 
   if (cursorIdeAvailable()) {
     logger.info("setup", "Opening Cursor IDE (agent CLI not on PATH); prompt printed for paste");
-    // spawnSync has no `detached`; fire-and-forget via ignore stdio is enough.
-    spawnSync("cursor", [process.cwd()], {
+    // GUI fire-and-forget: spawnSync would block until Cursor exits.
+    const child = spawn("cursor", [process.cwd()], {
       stdio: "ignore",
       shell,
+      detached: true,
     });
+    child.unref();
     options.onCursorSoftLaunch?.();
     return true;
   }

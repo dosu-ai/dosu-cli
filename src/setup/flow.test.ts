@@ -12,6 +12,8 @@ vi.mock("node:child_process", () => ({
   execSync: vi.fn().mockImplementation(() => {
     throw new Error("git not available in tests");
   }),
+  spawnSync: vi.fn().mockReturnValue({ status: 1 }),
+  spawn: vi.fn().mockReturnValue({ unref: vi.fn() }),
 }));
 
 // Only mock true boundaries: terminal UI, auth (browser), and HTTP client
@@ -1677,6 +1679,27 @@ describe("runSetup checkpoint behavior", () => {
     expect(p.log.warn).toHaveBeenCalledWith(
       expect.stringContaining("No supported AI agents detected"),
     );
+    expect(p.confirm).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("mine these into Dosu"),
+      }),
+    );
+  });
+
+  it("does not offer the logs handoff when every MCP install errors", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    const cursor = CursorProvider();
+    vi.spyOn(cursor, "install").mockImplementation(() => {
+      throw new Error("disk full");
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [cursor]);
+    mockToolSelection(["cursor"]);
+
+    await runSetup();
+
+    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Failed to configure Cursor"));
     expect(p.confirm).not.toHaveBeenCalledWith(
       expect.objectContaining({
         message: expect.stringContaining("mine these into Dosu"),
