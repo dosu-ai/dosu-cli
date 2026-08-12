@@ -11,7 +11,7 @@ import { logger } from "../debug/logger";
 
 export type KickoffAgent = "cursor" | "claude" | "codex";
 
-export const KICKOFF_AGENTS: readonly KickoffAgent[] = ["cursor", "claude", "codex"] as const;
+const KICKOFF_AGENTS: readonly KickoffAgent[] = ["cursor", "claude", "codex"] as const;
 
 const AGENT_LABELS: Record<KickoffAgent, string> = {
   cursor: "Cursor",
@@ -40,7 +40,7 @@ export function cursorAgentBin(): string | null {
   return null;
 }
 
-export function cursorIdeAvailable(): boolean {
+function cursorIdeAvailable(): boolean {
   return binOnPath("cursor");
 }
 

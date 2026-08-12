@@ -22,7 +22,7 @@ import { info } from "./styles";
 
 export type LogSource = "cursor" | "claude" | "codex";
 
-export const LOG_SOURCES: readonly LogSource[] = ["cursor", "claude", "codex"] as const;
+const LOG_SOURCES: readonly LogSource[] = ["cursor", "claude", "codex"] as const;
 
 const SOURCE_LABELS: Record<LogSource, string> = {
   cursor: "Cursor",
@@ -142,7 +142,7 @@ export function buildLogsHandoffPrompt(sources: readonly LogSource[]): string {
   ].join("\n");
 }
 
-export function printManualLogsNudge(sources: readonly LogSource[] = LOG_SOURCES): void {
+function printManualLogsNudge(sources: readonly LogSource[] = LOG_SOURCES): void {
   const prompt = buildLogsHandoffPrompt(sources);
   p.log.message(`Mine local agent logs into Dosu:\n\n${info(prompt)}`);
 }
