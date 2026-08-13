@@ -1,3 +1,10 @@
+# [0.48.0](https://github.com/dosu-ai/dosu-cli/compare/v0.47.0...v0.48.0) (2026-08-13)
+
+
+### Features
+
+* **setup:** replace audit CTA with log-to-dosu-knowledge handoff ([#176](https://github.com/dosu-ai/dosu-cli/issues/176)) ([58dc9a4](https://github.com/dosu-ai/dosu-cli/commit/58dc9a41bb7cbd7de78a7b2682e37dceb77f08e6))
+
 # [0.47.0](https://github.com/dosu-ai/dosu-cli/compare/v0.46.1...v0.47.0) (2026-08-11)
 
 
