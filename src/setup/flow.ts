@@ -278,9 +278,12 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
 
   // Post-setup log mining (cloud mode only): replaces the old codebase-audit
   // CTA. Kickoff prefers agents the user just configured (Cursor / Claude / Codex).
+  // Gated on a git work tree, like the audit CTA it replaces: the handoff gives
+  // the terminal to a coding agent rooted at cwd, and `npx @dosu/cli setup` is
+  // routinely run straight from $HOME or a scratch directory.
   let logsPlan: LogsHandoffPlan | null = null;
-  const preferredAgents = configuredProviders.map((result) => result.provider.id());
-  if (mcpCompleted && cfg.mode !== MODE_OSS) {
+  if (mcpCompleted && cfg.mode !== MODE_OSS && inGitWorkTree()) {
+    const preferredAgents = configuredProviders.map((result) => result.provider.id());
     logsPlan = await offerLogsHandoff({ preferredAgents });
   }
 

@@ -148,6 +148,20 @@ vi.mock("./agents-md-step", () => ({
   stepUpdateAgentsMd: (...args: unknown[]) => mockStepUpdateAgentsMd(...args),
 }));
 
+// Log-mining handoff: mocked so flow tests never scan the real $HOME for agent
+// transcripts and never hand the terminal to a coding agent. Its own behaviour
+// lives in logs-handoff.test.ts; here we only assert the gate in runSetup.
+// Asserting on `p.confirm` instead would be vacuous — the unmocked module
+// returns early on an empty $HOME long before it prompts.
+const { mockOfferLogsHandoff, mockLaunchLogsAgent } = vi.hoisted(() => ({
+  mockOfferLogsHandoff: vi.fn(),
+  mockLaunchLogsAgent: vi.fn(),
+}));
+vi.mock("./logs-handoff", () => ({
+  offerLogsHandoff: (...args: unknown[]) => mockOfferLogsHandoff(...args),
+  launchLogsAgent: (...args: unknown[]) => mockLaunchLogsAgent(...args),
+}));
+
 const { mockStepConfigureAgentRules } = vi.hoisted(() => ({
   mockStepConfigureAgentRules: vi.fn(),
 }));
@@ -201,6 +215,7 @@ function installSetupStepDefaults() {
   mockInGitWorkTree.mockReturnValue(false);
   mockStepUpdateAgentsMd.mockReturnValue(true);
   mockStepConfigureAgentRules.mockResolvedValue([]);
+  mockOfferLogsHandoff.mockResolvedValue(null);
 }
 
 function installRemoteSetupDefaults() {
@@ -1478,6 +1493,8 @@ describe("runSetup integration", () => {
     saveConfig(cfg);
 
     setupAuthenticatedClient();
+    // Every other gate is open, so OSS mode is the only reason it stays quiet.
+    mockInGitWorkTree.mockReturnValue(true);
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
     mockToolSelection(["cursor"]);
@@ -1485,11 +1502,7 @@ describe("runSetup integration", () => {
     await runSetup();
 
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 agent"));
-    expect(p.confirm).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: expect.stringContaining("mine these into Dosu"),
-      }),
-    );
+    expect(mockOfferLogsHandoff).not.toHaveBeenCalled();
   });
 
   it("installs the skill automatically for the selected agent", async () => {
@@ -1726,17 +1739,14 @@ describe("runSetup checkpoint behavior", () => {
   it("does not offer the logs handoff when the user selects no agents", async () => {
     saveConfig(makeCfg());
     setupAuthed();
+    mockInGitWorkTree.mockReturnValue(true);
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
     mockToolSelection([]);
 
     await runSetup();
 
-    expect(p.confirm).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: expect.stringContaining("mine these into Dosu"),
-      }),
-    );
+    expect(mockOfferLogsHandoff).not.toHaveBeenCalled();
   });
 
   it("does not offer the logs handoff when no AI agents are detected", async () => {
@@ -1744,6 +1754,7 @@ describe("runSetup checkpoint behavior", () => {
     // returns an empty array (nothing to configure), so the handoff would be useless.
     saveConfig(makeCfg());
     setupAuthed();
+    mockInGitWorkTree.mockReturnValue(true);
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
 
     await runSetup();
@@ -1751,16 +1762,13 @@ describe("runSetup checkpoint behavior", () => {
     expect(p.log.warn).toHaveBeenCalledWith(
       expect.stringContaining("No supported AI agents detected"),
     );
-    expect(p.confirm).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: expect.stringContaining("mine these into Dosu"),
-      }),
-    );
+    expect(mockOfferLogsHandoff).not.toHaveBeenCalled();
   });
 
   it("does not offer the logs handoff when every MCP install errors", async () => {
     saveConfig(makeCfg());
     setupAuthed();
+    mockInGitWorkTree.mockReturnValue(true);
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
     const cursor = CursorProvider();
     vi.spyOn(cursor, "install").mockImplementation(() => {
@@ -1772,10 +1780,41 @@ describe("runSetup checkpoint behavior", () => {
     await runSetup();
 
     expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Failed to configure Cursor"));
-    expect(p.confirm).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: expect.stringContaining("mine these into Dosu"),
-      }),
+    expect(mockOfferLogsHandoff).not.toHaveBeenCalled();
+  });
+
+  it("does not offer the logs handoff outside a git work tree", async () => {
+    // `npx @dosu/cli setup` is routinely run from $HOME; the handoff hands the
+    // terminal to a coding agent rooted at cwd, so it stays inside a repo.
+    saveConfig(makeCfg());
+    setupAuthed();
+    mockInGitWorkTree.mockReturnValue(false);
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    mockToolSelection(["cursor"]);
+
+    await runSetup();
+
+    expect(mockOfferLogsHandoff).not.toHaveBeenCalled();
+  });
+
+  it("offers the logs handoff with the configured agents and launches after the outro", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    mockInGitWorkTree.mockReturnValue(true);
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    mockToolSelection(["cursor"]);
+    const plan = { agent: "cursor", sources: ["cursor"] };
+    mockOfferLogsHandoff.mockResolvedValue(plan);
+
+    await runSetup();
+
+    expect(mockOfferLogsHandoff).toHaveBeenCalledWith({ preferredAgents: ["cursor"] });
+    expect(mockLaunchLogsAgent).toHaveBeenCalledWith(plan);
+    // The agent must take over a finished clack session, never mid-session.
+    expect(vi.mocked(p.outro).mock.invocationCallOrder[0]).toBeLessThan(
+      mockLaunchLogsAgent.mock.invocationCallOrder[0],
     );
   });
 

@@ -46,9 +46,15 @@ function cursorIdeAvailable(): boolean {
   return binOnPath("cursor");
 }
 
+/**
+ * Agents we can actually hand the prompt to, i.e. whose CLI is on PATH. The
+ * Cursor IDE binary deliberately does not qualify: it can only print a prompt
+ * to paste (see the module header), so counting it here would let it preempt a
+ * Claude Code / Codex CLI that would have run the mining unattended.
+ */
 export function listAvailableKickoffAgents(): KickoffAgent[] {
   const out: KickoffAgent[] = [];
-  if (cursorAgentBin() || cursorIdeAvailable()) out.push("cursor");
+  if (cursorAgentBin()) out.push("cursor");
   if (binOnPath("claude")) out.push("claude");
   if (binOnPath("codex")) out.push("codex");
   return out;
@@ -63,12 +69,13 @@ function asKickoffAgent(id: string): KickoffAgent | null {
 /**
  * Pick a kickoff agent. Prefer providers the user just configured (in that
  * order), then fall back to cursor → claude → codex among what's on PATH.
+ * A Cursor IDE with no agent CLI is the last resort: it only prints a prompt
+ * to paste, so it must never win over an agent we can launch outright.
  */
 export function resolveKickoffAgent(
   preferredProviderIds: readonly string[] = [],
 ): KickoffAgent | null {
   const available = listAvailableKickoffAgents();
-  if (available.length === 0) return null;
 
   for (const id of preferredProviderIds) {
     const mapped = asKickoffAgent(id);
@@ -78,7 +85,8 @@ export function resolveKickoffAgent(
   for (const agent of KICKOFF_AGENTS) {
     if (available.includes(agent)) return agent;
   }
-  return null;
+
+  return cursorIdeAvailable() ? "cursor" : null;
 }
 
 export interface LaunchKickoffOptions {

@@ -71,8 +71,24 @@ describe("binOnPath", () => {
 });
 
 describe("listAvailableKickoffAgents / resolveKickoffAgent", () => {
-  it("includes cursor when the IDE binary is present", () => {
+  it("falls back to the Cursor IDE only when nothing else is launchable", () => {
     mockWhich({ cursor: true, claude: false, codex: false, agent: false, "cursor-agent": false });
+    expect(listAvailableKickoffAgents()).toEqual([]);
+    expect(resolveKickoffAgent()).toBe("cursor");
+  });
+
+  it("never lets the Cursor IDE preempt a launchable agent", () => {
+    // Cursor.app ships the `cursor` binary but not the agent CLI, so it can
+    // only print a prompt to paste. Claude Code must win even though the user
+    // configured Cursor and cursor sorts first in KICKOFF_AGENTS.
+    mockWhich({ cursor: true, claude: true, codex: false, agent: false, "cursor-agent": false });
+    expect(listAvailableKickoffAgents()).toEqual(["claude"]);
+    expect(resolveKickoffAgent()).toBe("claude");
+    expect(resolveKickoffAgent(["cursor"])).toBe("claude");
+  });
+
+  it("includes cursor when its agent CLI is present", () => {
+    mockWhich({ cursor: true, claude: false, codex: false, agent: true, "cursor-agent": false });
     expect(listAvailableKickoffAgents()).toEqual(["cursor"]);
     expect(resolveKickoffAgent()).toBe("cursor");
   });
