@@ -1,3 +1,10 @@
+## [0.48.1](https://github.com/dosu-ai/dosu-cli/compare/v0.48.0...v0.48.1) (2026-08-13)
+
+
+### Bug Fixes
+
+* **logs-handoff:** privacy logs handoff disclaimer ([#179](https://github.com/dosu-ai/dosu-cli/issues/179)) ([845c37b](https://github.com/dosu-ai/dosu-cli/commit/845c37bcf871423c638e52d1bc9e7e3473d427b0))
+
 # [0.48.0](https://github.com/dosu-ai/dosu-cli/compare/v0.47.0...v0.48.0) (2026-08-13)
 
 
