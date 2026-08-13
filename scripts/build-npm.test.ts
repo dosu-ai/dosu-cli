@@ -110,7 +110,16 @@ describe("build-npm script", () => {
     const releaseConfig = readFileSync("release.config.js", "utf8");
     const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
 
-    expect(releaseConfig).toContain("bun run build:npm && bun run upload:sourcemaps");
+    // Ordering: the upload runs against the freshly built npm bundle, before
+    // the release tarballs are cut.
+    expect(releaseConfig).toMatch(
+      /bun run build:npm &&.*bun run upload:sourcemaps.*&& bash scripts\/build-release\.sh/,
+    );
+    // ...but fail-open. `sentry-cli --wait` gave up on Sentry's server-side
+    // processing mid-release once and took the whole 0.48.0 publish down with
+    // it, even though the upload had succeeded. Source maps are observability,
+    // not a release artifact, so they must never gate shipping to npm.
+    expect(releaseConfig).toContain("(bun run upload:sourcemaps ||");
     expect(workflow).toContain(`SENTRY_AUTH_TOKEN: \${{ secrets.DOSU_CLI_SENTRY_AUTH_TOKEN }}`);
     expect(workflow).toContain('NPM_CONFIG_IGNORE_SCRIPTS: "true"');
   });
