@@ -147,11 +147,15 @@ function printManualLogsNudge(opts: { cursorPaste?: boolean } = {}): void {
   p.log.message(info(prompt));
 }
 
+const LOGS_HANDOFF_PRIVACY =
+  "To bootstrap Dosu's knowledge, we'll ask your local coding agent to analyze previous sessions and save useful insights to Dosu. We'll only save team-level knowledge for this repository. All session log data will remain local to your machine. Press Enter to continue or Ctrl+C to exit.";
+
 function confirmLogsHandoffMessage(agent: KickoffAgent): string {
-  if (agent === "cursor" && !cursorAgentBin()) {
-    return "We'll print a prompt to paste into Agent to mine these into Dosu. Cursor CLI isn't on PATH, so nothing runs until you send it. Continue?";
-  }
-  return `We'll hand off to ${kickoffAgentLabel(agent)} to mine these into Dosu. Continue?`;
+  const lead =
+    agent === "cursor" && !cursorAgentBin()
+      ? "We'll print a prompt to paste into Agent to mine these into Dosu. Cursor CLI isn't on PATH, so nothing runs until you send it."
+      : `We'll hand off to ${kickoffAgentLabel(agent)} to mine these into Dosu.`;
+  return `${lead} ${LOGS_HANDOFF_PRIVACY}`;
 }
 
 export interface OfferLogsHandoffOptions {

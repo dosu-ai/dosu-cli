@@ -157,7 +157,9 @@ describe("offerLogsHandoff", () => {
     );
     expect(p.confirm).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "We'll hand off to Cursor to mine these into Dosu. Continue?",
+        message: expect.stringMatching(
+          /We'll hand off to Cursor to mine these into Dosu\..*remain local to your machine/,
+        ),
         initialValue: true,
       }),
     );
