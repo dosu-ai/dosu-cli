@@ -22,7 +22,7 @@ import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { inGitWorkTree, stepUpdateAgentsMd } from "./agents-md-step";
 import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
-import { launchAuditAgent, offerAuditHandoff } from "./audit-handoff";
+import { type LogsHandoffPlan, launchLogsAgent, offerLogsHandoff } from "./logs-handoff";
 import { stepConfigureAgentRules } from "./rules-step";
 import { browserFallbackHint, dim, formatSetupSummary, IconRemove, info } from "./styles";
 
@@ -240,9 +240,6 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     return;
   }
 
-  const mcpConfiguredThisRun = configured.some(
-    (result) => result.action === "install" || result.action === "skip",
-  );
   const configuredProviders = configured.filter(
     (result) => (result.action === "install" || result.action === "skip") && !result.error,
   );
@@ -279,12 +276,15 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     agentsMdCompleted = await stepUpdateAgentsMd();
   }
 
-  // Codebase audit handoff (cloud mode only — it acts on the user's own
-  // repo): offer to launch Claude Code with the audit prompt so there's no
-  // gap between finishing setup and seeing what Dosu can generate.
-  let handoffToAudit = false;
-  if (mcpConfiguredThisRun && cfg.mode !== MODE_OSS) {
-    handoffToAudit = await offerAuditHandoff();
+  // Post-setup log mining (cloud mode only): replaces the old codebase-audit
+  // CTA. Kickoff prefers agents the user just configured (Cursor / Claude / Codex).
+  // Gated on a git work tree, like the audit CTA it replaces: the handoff gives
+  // the terminal to a coding agent rooted at cwd, and `npx @dosu/cli setup` is
+  // routinely run straight from $HOME or a scratch directory.
+  let logsPlan: LogsHandoffPlan | null = null;
+  if (mcpCompleted && cfg.mode !== MODE_OSS && inGitWorkTree()) {
+    const preferredAgents = configuredProviders.map((result) => result.provider.id());
+    logsPlan = await offerLogsHandoff({ preferredAgents });
   }
 
   if (mcpCompleted || skillCompleted || agentsMdCompleted) {
@@ -305,9 +305,9 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     p.outro("\uD83C\uDF89 Setup complete!");
   }
 
-  // Launch after the outro so Claude Code takes over a finished clack session.
-  if (handoffToAudit) {
-    launchAuditAgent();
+  // Launch after the outro so the agent takes over a finished clack session.
+  if (logsPlan) {
+    launchLogsAgent(logsPlan);
   }
 }
 

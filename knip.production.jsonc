@@ -15,6 +15,7 @@
     "scripts/**/*.ts!",
     "!scripts/**/*.test.ts!"
   ],
+  "ignoreBinaries": ["mkfifo", "codex"],
   "ignoreExportsUsedInFile": true,
   "ignoreUnresolved": ["bun-types"]
 }
