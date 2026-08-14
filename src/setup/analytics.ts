@@ -38,6 +38,8 @@ interface CliOnboardingProperties {
   completed_mcp?: boolean;
   completed_skill?: boolean;
   completed_agents_md?: boolean;
+  completed_logs_handoff?: boolean;
+  logs_handoff?: "accepted" | "declined" | "cancelled";
 }
 
 type SafePropertyValue = string | number | boolean | string[] | undefined;
@@ -202,8 +204,20 @@ function allowlistedWorkflowProperties(properties: CliOnboardingProperties): Saf
       )
       .slice(0, 50);
   }
-  for (const key of ["completed_mcp", "completed_skill", "completed_agents_md"] as const) {
+  for (const key of [
+    "completed_mcp",
+    "completed_skill",
+    "completed_agents_md",
+    "completed_logs_handoff",
+  ] as const) {
     if (typeof input[key] === "boolean") safe[key] = input[key];
+  }
+  if (
+    input.logs_handoff === "accepted" ||
+    input.logs_handoff === "declined" ||
+    input.logs_handoff === "cancelled"
+  ) {
+    safe.logs_handoff = input.logs_handoff;
   }
   return safe;
 }

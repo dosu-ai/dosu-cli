@@ -215,7 +215,7 @@ function installSetupStepDefaults() {
   mockInGitWorkTree.mockReturnValue(false);
   mockStepUpdateAgentsMd.mockReturnValue(true);
   mockStepConfigureAgentRules.mockResolvedValue([]);
-  mockOfferLogsHandoff.mockResolvedValue(null);
+  mockOfferLogsHandoff.mockResolvedValue({ plan: null });
 }
 
 function installRemoteSetupDefaults() {
@@ -1806,7 +1806,7 @@ describe("runSetup checkpoint behavior", () => {
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
     mockToolSelection(["cursor"]);
     const plan = { agent: "cursor", sources: ["cursor"] };
-    mockOfferLogsHandoff.mockResolvedValue(plan);
+    mockOfferLogsHandoff.mockResolvedValue({ plan, decision: "accepted" });
 
     await runSetup();
 
@@ -1815,6 +1815,42 @@ describe("runSetup checkpoint behavior", () => {
     // The agent must take over a finished clack session, never mid-session.
     expect(vi.mocked(p.outro).mock.invocationCallOrder[0]).toBeLessThan(
       mockLaunchLogsAgent.mock.invocationCallOrder[0],
+    );
+    expect(trackedCliOnboardingEvents()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "cli_onboarding_completed",
+          properties: expect.objectContaining({
+            completed_logs_handoff: true,
+            logs_handoff: "accepted",
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it("records a declined logs handoff without launching the agent", async () => {
+    saveConfig(makeCfg());
+    setupAuthed();
+    mockInGitWorkTree.mockReturnValue(true);
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    mockToolSelection(["cursor"]);
+    mockOfferLogsHandoff.mockResolvedValue({ plan: null, decision: "declined" });
+
+    await runSetup();
+
+    expect(mockLaunchLogsAgent).not.toHaveBeenCalled();
+    expect(trackedCliOnboardingEvents()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "cli_onboarding_completed",
+          properties: expect.objectContaining({
+            completed_logs_handoff: false,
+            logs_handoff: "declined",
+          }),
+        }),
+      ]),
     );
   });
 
