@@ -1,3 +1,10 @@
+## [0.48.2](https://github.com/dosu-ai/dosu-cli/compare/v0.48.1...v0.48.2) (2026-08-14)
+
+
+### Bug Fixes
+
+* **handoff:** telemetry on handoff ([#180](https://github.com/dosu-ai/dosu-cli/issues/180)) ([3862cb5](https://github.com/dosu-ai/dosu-cli/commit/3862cb5ac86d906a353075a5604bac809a0db262))
+
 ## [0.48.1](https://github.com/dosu-ai/dosu-cli/compare/v0.48.0...v0.48.1) (2026-08-13)
 
 
