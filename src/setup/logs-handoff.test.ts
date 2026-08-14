@@ -136,9 +136,9 @@ describe("buildLogsHandoffPrompt", () => {
 });
 
 describe("offerLogsHandoff", () => {
-  it("returns null when no log sources are present", async () => {
+  it("returns no plan when no log sources are present", async () => {
     const home = makeHome("dosu-logs-none-");
-    await expect(offerLogsHandoff({ home })).resolves.toBeNull();
+    await expect(offerLogsHandoff({ home })).resolves.toEqual({ plan: null });
     expect(p.confirm).not.toHaveBeenCalled();
   });
 
@@ -149,8 +149,8 @@ describe("offerLogsHandoff", () => {
     vi.mocked(p.confirm).mockResolvedValue(true);
 
     await expect(offerLogsHandoff({ home, preferredAgents: ["cursor"] })).resolves.toEqual({
-      agent: "cursor",
-      sources: ["cursor", "claude", "codex"],
+      plan: { agent: "cursor", sources: ["cursor", "claude", "codex"] },
+      decision: "accepted",
     });
     expect(p.log.success).toHaveBeenCalledWith(
       expect.stringContaining("MCP setup successful! Found logs:"),
@@ -172,8 +172,8 @@ describe("offerLogsHandoff", () => {
     vi.mocked(p.confirm).mockResolvedValue(true);
 
     await expect(offerLogsHandoff({ home, preferredAgents: ["cursor"] })).resolves.toEqual({
-      agent: "cursor",
-      sources: ["cursor", "claude", "codex"],
+      plan: { agent: "cursor", sources: ["cursor", "claude", "codex"] },
+      decision: "accepted",
     });
     expect(p.confirm).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -188,7 +188,10 @@ describe("offerLogsHandoff", () => {
     mockWhich({ claude: true });
     vi.mocked(p.confirm).mockResolvedValue(false);
 
-    await expect(offerLogsHandoff({ home, preferredAgents: ["claude"] })).resolves.toBeNull();
+    await expect(offerLogsHandoff({ home, preferredAgents: ["claude"] })).resolves.toEqual({
+      plan: null,
+      decision: "declined",
+    });
     expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("bootstrap my knowledge"));
   });
 
@@ -199,7 +202,10 @@ describe("offerLogsHandoff", () => {
     vi.mocked(p.confirm).mockResolvedValue(true);
     vi.mocked(p.isCancel).mockReturnValue(true);
 
-    await expect(offerLogsHandoff({ home, preferredAgents: ["claude"] })).resolves.toBeNull();
+    await expect(offerLogsHandoff({ home, preferredAgents: ["claude"] })).resolves.toEqual({
+      plan: null,
+      decision: "cancelled",
+    });
     expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("bootstrap my knowledge"));
   });
 
@@ -208,7 +214,7 @@ describe("offerLogsHandoff", () => {
     seedLogs(home);
     mockWhich({});
 
-    await expect(offerLogsHandoff({ home })).resolves.toBeNull();
+    await expect(offerLogsHandoff({ home })).resolves.toEqual({ plan: null });
     expect(p.confirm).not.toHaveBeenCalled();
     expect(p.log.message).toHaveBeenCalledWith(expect.stringContaining("bootstrap my knowledge"));
   });

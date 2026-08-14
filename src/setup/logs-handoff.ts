@@ -164,21 +164,30 @@ export interface OfferLogsHandoffOptions {
   home?: string;
 }
 
+/** Set only when the continue prompt was shown. */
+export type LogsHandoffDecision = "accepted" | "declined" | "cancelled";
+
+export interface OfferLogsHandoffResult {
+  plan: LogsHandoffPlan | null;
+  decision?: LogsHandoffDecision;
+}
+
 /**
- * Detect log sources and offer a single continue to mine them all. Returns a
- * plan to launch after outro, or null when skipped / declined / no logs.
+ * Detect log sources and offer a single continue to mine them all. `decision`
+ * is set only when the user saw the confirm — skipped offers omit it so
+ * analytics can tell "asked" from "never asked".
  */
 export async function offerLogsHandoff(
   options: OfferLogsHandoffOptions = {},
-): Promise<LogsHandoffPlan | null> {
+): Promise<OfferLogsHandoffResult> {
   const hits = detectLogSources(options.home);
-  if (hits.length === 0) return null;
+  if (hits.length === 0) return { plan: null };
 
   const sources = hits.map((hit) => hit.source);
   const agent = resolveKickoffAgent(options.preferredAgents ?? []);
   if (!agent) {
     printManualLogsNudge();
-    return null;
+    return { plan: null };
   }
 
   p.log.success(`MCP setup successful! Found logs: ${formatLogSourceSummary(hits)}`);
@@ -187,12 +196,16 @@ export async function offerLogsHandoff(
     message: confirmLogsHandoffMessage(agent),
     initialValue: true,
   });
-  if (p.isCancel(go) || !go) {
+  if (p.isCancel(go)) {
     printManualLogsNudge();
-    return null;
+    return { plan: null, decision: "cancelled" };
+  }
+  if (!go) {
+    printManualLogsNudge();
+    return { plan: null, decision: "declined" };
   }
 
-  return { agent, sources };
+  return { plan: { agent, sources }, decision: "accepted" };
 }
 
 /** Launch the chosen agent with the log-mining prompt. */

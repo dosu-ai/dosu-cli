@@ -22,7 +22,12 @@ import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { inGitWorkTree, stepUpdateAgentsMd } from "./agents-md-step";
 import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
-import { type LogsHandoffPlan, launchLogsAgent, offerLogsHandoff } from "./logs-handoff";
+import {
+  type LogsHandoffDecision,
+  type LogsHandoffPlan,
+  launchLogsAgent,
+  offerLogsHandoff,
+} from "./logs-handoff";
 import { stepConfigureAgentRules } from "./rules-step";
 import { browserFallbackHint, dim, formatSetupSummary, IconRemove, info } from "./styles";
 
@@ -282,9 +287,12 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   // the terminal to a coding agent rooted at cwd, and `npx @dosu/cli setup` is
   // routinely run straight from $HOME or a scratch directory.
   let logsPlan: LogsHandoffPlan | null = null;
+  let logsHandoff: LogsHandoffDecision | undefined;
   if (mcpCompleted && cfg.mode !== MODE_OSS && inGitWorkTree()) {
     const preferredAgents = configuredProviders.map((result) => result.provider.id());
-    logsPlan = await offerLogsHandoff({ preferredAgents });
+    const offer = await offerLogsHandoff({ preferredAgents });
+    logsPlan = offer.plan;
+    logsHandoff = offer.decision;
   }
 
   if (mcpCompleted || skillCompleted || agentsMdCompleted) {
@@ -293,6 +301,8 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
         completed_mcp: mcpCompleted,
         completed_skill: skillCompleted,
         completed_agents_md: agentsMdCompleted,
+        completed_logs_handoff: logsHandoff === "accepted",
+        ...(logsHandoff ? { logs_handoff: logsHandoff } : {}),
       }),
     );
   }
