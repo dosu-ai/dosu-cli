@@ -13,6 +13,7 @@ import {
   uploadPackage,
 } from "./client";
 import { scanWithDeja } from "./deja";
+import { runDriveSetup } from "./flows";
 import { createDriveHost, type DriveHost } from "./host";
 import { createRepositoryPackage, namespacedSessionId } from "./package";
 import { startPreview } from "./preview";
@@ -237,7 +238,11 @@ else process.exit(2);\n`,
       });
       const driveId = fixture.host.id;
       await fixture.host.close();
-      fixture.host = await createDriveHost({ name: "Ignored on restart", port: 0 });
+      fixture.host = await createDriveHost({
+        name: "Ignored on restart",
+        port: 0,
+        bonjour: false,
+      });
       const restarted = await fetchDriveStatus({ url: fixture.host.url });
       expect(restarted).toMatchObject({ id: driveId, ready: true, packages: 1, records: 2 });
     } finally {
@@ -250,7 +255,11 @@ else process.exit(2);\n`,
     cleanup.push(fixture.root);
     try {
       await fixture.host.close();
-      fixture.host = await createDriveHost({ name: "Ignored on restart", port: 0 });
+      fixture.host = await createDriveHost({
+        name: "Ignored on restart",
+        port: 0,
+        bonjour: false,
+      });
       const connection = { url: fixture.host.url };
       const results = await searchDrive(connection, "retry sentinel");
       expect(results).toHaveLength(1);
@@ -265,6 +274,44 @@ else process.exit(2);\n`,
       expect(JSON.stringify(evidence)).not.toContain("ghp_fixture_secret");
     } finally {
       await fixture.host.close();
+    }
+  });
+
+  it("gate 9: completes repository setup through upload and central indexing", async () => {
+    const root = await mkdtemp(join(tmpdir(), "dosu-drive-setup-"));
+    cleanup.push(root);
+    const repository = join(root, "repo-a");
+    const source = join(root, "source-session.jsonl");
+    const fake = join(root, "fake-setup-deja.mjs");
+    mkdirSync(repository, { recursive: true });
+    execFileSync("git", ["init", "-q", repository]);
+    writeFileSync(source, '{"sentinel":"unchanged"}\n');
+    writeFileSync(
+      fake,
+      `import { mkdirSync, writeFileSync } from "node:fs"; const args = process.argv.slice(2);
+if (args[0] === "version") console.log("deja 0.17.3");
+else if (args[0] === "index") mkdirSync(process.env.DEJA_INDEX_DIR, { recursive: true });
+else if (args[0] === "doctor") console.log(JSON.stringify({ ok: true }));
+else if (args[0] === "stats") console.log(JSON.stringify({ sessions: 1 }));
+else if (args[0] === "last") console.log(JSON.stringify({ schema_version: 2, sessions: [{ id: "setup-session", harness: "codex", project: "repo-a", path: ${JSON.stringify(source)}, touched: [${JSON.stringify(join(repository, "src/retry.ts"))}], started: "2026-08-20T06:00:00Z", updated: "2026-08-20T07:00:00Z" }] }));
+else if (args[0] === "sync" && args[1] === "export") { mkdirSync(args[2], { recursive: true }); writeFileSync(args[2] + "/deja-sync.jsonl", JSON.stringify({ harness: "codex", session_id: "setup-session", project: "repo-a", role: "user", text: "setup sentinel [redacted:github_token]", time: "2026-08-20T07:00:00Z" }) + "\\n"); }
+else if (args[0] === "sync" && args[1] === "import") console.log("deja: imported 1 record");
+else process.exit(2);\n`,
+    );
+    process.env.DOSU_DRIVE_HOME = join(root, "drive");
+    process.env.DOSU_DRIVE_DEJA_ENTRY = fake;
+    const host = await createDriveHost({ name: "Setup Drive", port: 0, bonjour: false });
+    try {
+      setActiveDrive(await joinDrive(host.url, "Alice", "setup-mac"));
+      await runDriveSetup({ repositories: [repository], yes: true, open: false });
+      expect(await fetchDriveStatus({ url: host.url })).toMatchObject({
+        ready: true,
+        packages: 1,
+        sessions: 1,
+      });
+      expect(readFileSync(source, "utf8")).toBe('{"sentinel":"unchanged"}\n');
+    } finally {
+      await host.close();
     }
   });
 });
@@ -291,7 +338,7 @@ else if (args[0] === "stats") console.log(JSON.stringify({ sessions: 1 }));
 else if (args[0] === "search") { const records = JSON.parse(readFileSync(join(index, "records.json"), "utf8")); const first = records[0]; console.log(JSON.stringify({ schema_version: 2, tier: "exact", total: 1, hits: [{ session: { id: "imported-fixture", orig_id: first.session_id, harness: first.harness, project: "imported:" + first.project, started: first.time, updated: first.time, touched: ["src/retry.ts"] }, count: 1, snippets: [first.text], score: 9, tier: "exact" }] })); }
 else process.exit(2);\n`,
   );
-  const host = await createDriveHost({ name: "Caspian's Drive", port: 0 });
+  const host = await createDriveHost({ name: "Caspian's Drive", port: 0, bonjour: false });
   const connection = await joinDrive(host.url, "Alice", "alice-mac");
   const exportDirectory = join(root, "export");
   mkdirSync(exportDirectory, { recursive: true });

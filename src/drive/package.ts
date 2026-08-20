@@ -25,12 +25,51 @@ interface CreatePackageOptions {
   now?: Date;
 }
 
+export interface ExportSessionSummary {
+  key: string;
+  records: number;
+  bytes: number;
+  redactions: number;
+  sample?: string;
+}
+
+export async function summarizeDejaExport(
+  exportDirectory: string,
+  sessions: readonly DejaSession[],
+): Promise<Map<string, ExportSessionSummary>> {
+  const summaries = new Map<string, ExportSessionSummary>(
+    sessions.map((session) => {
+      const key = dejaSessionKey(session.harness, session.id);
+      return [key, { key, records: 0, bytes: 0, redactions: 0 } satisfies ExportSessionSummary];
+    }),
+  );
+  for (const path of exportFiles(exportDirectory)) {
+    const lines = createInterface({
+      input: createReadStream(path),
+      crlfDelay: Number.POSITIVE_INFINITY,
+    });
+    for await (const line of lines) {
+      if (!line.trim()) continue;
+      const record = parseSyncRecord(line, path);
+      const summary = summaries.get(dejaSessionKey(record.harness, record.session_id));
+      if (!summary) continue;
+      summary.records++;
+      summary.bytes += Buffer.byteLength(`${line}\n`);
+      summary.redactions += [...record.text.matchAll(REDACTION_MARKER)].length;
+      if (!summary.sample && (record.role === "user" || record.role === "assistant")) {
+        summary.sample = record.text.slice(0, 500);
+      }
+    }
+  }
+  return summaries;
+}
+
 export async function createRepositoryPackage(
   options: CreatePackageOptions,
 ): Promise<RepositoryPackage> {
   await mkdir(options.outputDirectory, { recursive: true, mode: 0o700 });
   const approved = new Map(
-    options.sessions.map((session) => [sessionKey(session.harness, session.id), session]),
+    options.sessions.map((session) => [dejaSessionKey(session.harness, session.id), session]),
   );
   if (approved.size === 0) throw new Error(`No approved sessions for ${options.repository.name}`);
 
@@ -52,7 +91,7 @@ export async function createRepositoryPackage(
       for await (const line of lines) {
         if (!line.trim()) continue;
         const record = parseSyncRecord(line, path);
-        const session = approved.get(sessionKey(record.harness, record.session_id));
+        const session = approved.get(dejaSessionKey(record.harness, record.session_id));
         if (!session) continue;
         const transformed: DejaSyncRecord = {
           harness: record.harness,
@@ -71,7 +110,7 @@ export async function createRepositoryPackage(
         hash.update(serialized);
         recordBytes += Buffer.byteLength(serialized);
         recordCount++;
-        seen.add(sessionKey(record.harness, record.session_id));
+        seen.add(dejaSessionKey(record.harness, record.session_id));
         for (const match of record.text.matchAll(REDACTION_MARKER)) {
           const kind = match[1] ?? "unknown";
           redactions[kind] = (redactions[kind] ?? 0) + 1;
@@ -192,7 +231,7 @@ function parseSyncRecord(line: string, path: string): DejaSyncRecord {
   return value as unknown as DejaSyncRecord;
 }
 
-function sessionKey(harness: string, sessionId: string): string {
+export function dejaSessionKey(harness: string, sessionId: string): string {
   return `${harness}\0${sessionId}`;
 }
 
