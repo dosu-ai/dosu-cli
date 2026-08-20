@@ -1,3 +1,10 @@
+# [0.49.0](https://github.com/dosu-ai/dosu-cli/compare/v0.48.2...v0.49.0) (2026-08-20)
+
+
+### Features
+
+* **upgrade:** refresh agent skills after a successful CLI update ([#185](https://github.com/dosu-ai/dosu-cli/issues/185)) ([59e4e93](https://github.com/dosu-ai/dosu-cli/commit/59e4e93132af5adb9622682c317eab1949923dfd))
+
 ## [0.48.2](https://github.com/dosu-ai/dosu-cli/compare/v0.48.1...v0.48.2) (2026-08-14)
 
 
