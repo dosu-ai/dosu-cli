@@ -230,6 +230,15 @@ describe("Dosu Drive acceptance gates", () => {
     const keepKey = dejaSessionKey("claude", "keep");
     const excludeKey = dejaSessionKey("codex", "exclude");
     let safetyChecks = 0;
+    let markSafetyCheckStarted: () => void = () => undefined;
+    const safetyCheckStarted = new Promise<void>((resolve) => {
+      markSafetyCheckStarted = resolve;
+    });
+    let releaseSafetyCheck: () => void = () => undefined;
+    const blockedSafetyCheck = new Promise<void>((resolve) => {
+      releaseSafetyCheck = resolve;
+    });
+    let blockNextSafetyCheck = true;
     expect(keepKey).toMatch(/^[A-Za-z0-9_-]+$/);
     const preview = await startPreview(
       [
@@ -262,6 +271,11 @@ describe("Dosu Drive acceptance gates", () => {
       {
         onSafetyCheck: async (sessions) => {
           safetyChecks++;
+          if (blockNextSafetyCheck) {
+            blockNextSafetyCheck = false;
+            markSafetyCheckStarted();
+            await blockedSafetyCheck;
+          }
           return sessions;
         },
       },
@@ -284,11 +298,30 @@ describe("Dosu Drive acceptance gates", () => {
         body: JSON.stringify({ keys: [keepKey] }),
       });
       expect((await fetch(`${base}/api/approve`, { method: "POST" })).status).toBe(409);
+      const staleSafetyCheck = fetch(`${base}/api/safety-check`, { method: "POST" });
+      await safetyCheckStarted;
+      await fetch(`${base}/api/select`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ keys: [excludeKey] }),
+      });
+      releaseSafetyCheck();
+      expect((await staleSafetyCheck).status).toBe(409);
+      const staleState = (await fetch(`${base}/api/preview`).then((response) =>
+        response.json(),
+      )) as { safetyChecked: boolean; totals: { selected: number } };
+      expect(staleState).toMatchObject({ safetyChecked: false, totals: { selected: 1 } });
+      expect((await fetch(`${base}/api/approve`, { method: "POST" })).status).toBe(409);
+      await fetch(`${base}/api/select`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ keys: [keepKey] }),
+      });
       const checked = (await fetch(`${base}/api/safety-check`, { method: "POST" }).then(
         (response) => response.json(),
       )) as { safetyChecked: boolean; totals: { redactions: number } };
       expect(checked).toMatchObject({ safetyChecked: true, totals: { redactions: 1 } });
-      expect(safetyChecks).toBe(1);
+      expect(safetyChecks).toBe(2);
       await fetch(`${base}/api/approve`, { method: "POST" });
       expect(await preview.waitForDecision()).toEqual([keepKey]);
     } finally {

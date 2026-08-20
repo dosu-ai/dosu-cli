@@ -33,7 +33,8 @@ export async function startPreview(
 ): Promise<PreviewController> {
   let byKey = new Map(sessions.map((session) => [session.key, session]));
   let selected = new Set(byKey.keys());
-  let safetyChecked = false;
+  let selectionRevision = 0;
+  let safetyCheckedRevision = -1;
   let settled = false;
   let resolveDecision: (value: string[] | undefined) => void = () => undefined;
   const decision = new Promise<string[] | undefined>((resolve) => {
@@ -48,21 +49,35 @@ export async function startPreview(
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/preview") {
-        json(response, 200, summary([...byKey.values()], selected, safetyChecked));
+        json(
+          response,
+          200,
+          summary([...byKey.values()], selected, safetyCheckedRevision === selectionRevision),
+        );
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/select") {
+        const revision = ++selectionRevision;
+        safetyCheckedRevision = -1;
         const body = await readJSON(request);
         if (!isRecord(body) || !Array.isArray(body.keys)) throw new Error("Expected selected keys");
         const keys = body.keys.filter((key): key is string => typeof key === "string");
         if (keys.some((key) => !byKey.has(key))) throw new Error("Unknown session selection");
+        if (revision !== selectionRevision) {
+          json(response, 409, { error: "A newer session selection replaced this request" });
+          return;
+        }
         selected = new Set(keys);
-        safetyChecked = false;
-        json(response, 200, summary([...byKey.values()], selected, safetyChecked));
+        json(response, 200, summary([...byKey.values()], selected, false));
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/safety-check") {
+        const revision = selectionRevision;
         const checkedSessions = await options.onSafetyCheck?.([...byKey.values()]);
+        if (revision !== selectionRevision) {
+          json(response, 409, { error: "Session selection changed during the safety check" });
+          return;
+        }
         if (checkedSessions) {
           const checkedByKey = new Map(checkedSessions.map((session) => [session.key, session]));
           if (
@@ -73,12 +88,12 @@ export async function startPreview(
           }
           byKey = checkedByKey;
         }
-        safetyChecked = true;
-        json(response, 200, summary([...byKey.values()], selected, safetyChecked));
+        safetyCheckedRevision = revision;
+        json(response, 200, summary([...byKey.values()], selected, true));
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/approve") {
-        if (!safetyChecked) {
+        if (safetyCheckedRevision !== selectionRevision) {
           json(response, 409, { error: "Check and remove secrets before upload" });
           return;
         }
@@ -148,8 +163,8 @@ let data;let busy=false;let actionError='';const esc=s=>String(s).replace(/[&<>"
 async function request(path,options){const response=await fetch(path,options);const payload=await response.json();if(!response.ok)throw new Error(payload.error||'Request failed');return payload}
 async function load(){data=await request('/api/preview');render()}
 function render(){const t=data.totals;const parts=[count(t.selected,'session')+' selected'];if(data.safetyChecked){parts.push(count(t.records,'searchable record'));parts.push(count(t.redactions,'potential credential')+' removed')}parts.push(t.excluded+' excluded');document.querySelector('#summary').textContent=parts.join(' · ');document.querySelector('#sessions').innerHTML=data.sessions.map(s=>'<label class="session"><input type="checkbox" '+(s.selected?'checked':'')+' data-key="'+esc(s.key)+'"><div><strong>'+esc(s.title)+'</strong><div class="meta">'+esc(s.repository)+' · '+esc(s.harness)+' · '+esc(s.updated)+'</div>'+(data.safetyChecked&&s.sample?'<div class="sample">'+esc(s.sample)+'</div>':'')+'</div><span class="meta">'+(data.safetyChecked?count(s.records,'record'):'')+'</span></label>').join('');document.querySelectorAll('.session input').forEach(el=>el.onchange=select);renderActions()}
-function renderActions(){const t=data.totals;const primary=document.querySelector('#primary');primary.textContent=busy?(data.safetyChecked?'Starting upload…':'Checking & removing…'):(data.safetyChecked?'Upload '+count(t.selected,'Session'):'Check & Remove Secrets');primary.disabled=busy||t.selected===0;document.querySelector('#cancel').disabled=busy;const checked=t.redactions===0?'No potential credentials detected.':count(t.redactions,'potential credential')+' removed.';document.querySelector('#action-note').textContent=actionError||(data.safetyChecked?checked+' Nothing has been uploaded.':'Nothing will be uploaded yet.')}
-async function select(){const keys=[...document.querySelectorAll('.session input:checked')].map(el=>el.dataset.key);data=await request('/api/select',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({keys})});actionError='';render()}
+function renderActions(){const t=data.totals;const primary=document.querySelector('#primary');primary.textContent=busy?(data.safetyChecked?'Starting upload…':'Checking & removing…'):(data.safetyChecked?'Upload '+count(t.selected,'Session'):'Check & Remove Secrets');primary.disabled=busy||t.selected===0;document.querySelector('#cancel').disabled=busy;document.querySelectorAll('.session input').forEach(el=>el.disabled=busy);const checked=t.redactions===0?'No potential credentials detected.':count(t.redactions,'potential credential')+' removed.';document.querySelector('#action-note').textContent=actionError||(data.safetyChecked?checked+' Nothing has been uploaded.':'Nothing will be uploaded yet.')}
+async function select(){const keys=[...document.querySelectorAll('.session input:checked')].map(el=>el.dataset.key);busy=true;actionError='';renderActions();try{data=await request('/api/select',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({keys})});busy=false;render()}catch(error){busy=false;actionError=error instanceof Error?error.message:'Could not update the selection.';render()}}
 async function primaryAction(){busy=true;actionError='';renderActions();try{if(!data.safetyChecked){data=await request('/api/safety-check',{method:'POST'});busy=false;render();return}await request('/api/approve',{method:'POST'});document.body.innerHTML='<main class="complete"><div class="complete-mark">✓</div><h1>Upload started</h1><p>Return to the terminal to watch the Drive index finish.</p></main>'}catch(error){busy=false;actionError=error instanceof Error?error.message:'Could not continue. Try again.';renderActions()}}
 document.querySelector('#primary').onclick=primaryAction;document.querySelector('#cancel').onclick=async()=>{await request('/api/cancel',{method:'POST'});document.body.innerHTML='<main class="complete"><h1>Setup cancelled</h1><p>Nothing was uploaded. You can close this tab.</p></main>'};load();
 </script></body></html>`;
