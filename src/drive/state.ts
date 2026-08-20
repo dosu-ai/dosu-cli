@@ -87,6 +87,11 @@ function safeConnection(value: unknown): DriveConnection | undefined {
     url: value.url.replace(/\/$/, ""),
     protocolVersion: DRIVE_PROTOCOL_VERSION,
     local: value.local,
+    ...(typeof value.contributorId === "string" ? { contributorId: value.contributorId } : {}),
+    ...(typeof value.contributorName === "string"
+      ? { contributorName: value.contributorName }
+      : {}),
+    ...(typeof value.token === "string" ? { token: value.token } : {}),
   };
 }
 
