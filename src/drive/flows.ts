@@ -18,6 +18,7 @@ import { createRepositoryPackage, dejaSessionKey, summarizeDejaExport } from "./
 import { displayHarness, renderSessionSummary, scanStatus } from "./presentation";
 import { type PreviewSession, startPreview } from "./preview";
 import { dedupeRepositories, matchSessionRepository, repositoryIdentity } from "./repositories";
+import { createScanProgress } from "./scan-progress";
 import { clearActiveDrive, loadDriveState, rememberRepositories, setActiveDrive } from "./state";
 import type { DejaSession, DriveConnection, RepositoryIdentity } from "./types";
 
@@ -90,18 +91,17 @@ export async function runDriveSetup(options: {
   if (repositories.length === 0) return;
   rememberRepositories(repositories.map((repository) => repository.root));
 
-  const spinner = p.spinner();
-  spinner.start("Scanning local agent sessions on this Mac…");
+  const scanProgress = createScanProgress();
+  scanProgress.start("Scanning local agent sessions on this Mac…");
   let lastScanUpdate = 0;
   const workspace = await scanWithDeja(
     repositories.map((repository) => repository.root),
     {
       onScanPath: (path) => {
-        if (!process.stdout.isTTY) return;
         const now = performance.now();
         if (now - lastScanUpdate < 80) return;
         lastScanUpdate = now;
-        spinner.message(scanStatus(path));
+        scanProgress.update(scanStatus(path));
       },
     },
   );
@@ -114,7 +114,7 @@ export async function runDriveSetup(options: {
       if (repository) sessionsByRepository.get(repository.root)?.push(session);
     }
     const sessions = [...sessionsByRepository.values()].flat();
-    spinner.stop("Sessions found");
+    scanProgress.stop("Sessions found");
     if (sessions.length === 0) {
       throw new Error("No indexed agent sessions matched the selected repositories");
     }
