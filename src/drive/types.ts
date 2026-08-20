@@ -74,3 +74,33 @@ export interface RepositoryPackage {
   path: string;
   manifest: RepositoryPackageManifest;
 }
+
+export interface DriveStatus {
+  id: string;
+  name: string;
+  protocolVersion: typeof DRIVE_PROTOCOL_VERSION;
+  ready: boolean;
+  contributors: number;
+  packages: number;
+  sessions: number;
+  records: number;
+  dashboard: string;
+}
+
+export interface DriveSearchResult {
+  resultId: string;
+  contributor: string;
+  repository: string;
+  harness: string;
+  nativeSessionId: string;
+  title?: string;
+  updated: string;
+  touched: string[];
+  snippet: string;
+  score: number;
+}
+
+export interface DriveEvidence {
+  result: DriveSearchResult;
+  records: Array<{ role: string; text: string; time: string }>;
+}
