@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { writeSecureFile } from "../mcp/config-helpers";
 import { runDeja } from "./deja";
+import { advertiseDrive, type DriveAdvertisement } from "./discovery";
 import { hostedDriveDir, hostedDrivePointerPath } from "./paths";
 import { setActiveDrive } from "./state";
 import {
@@ -48,12 +49,14 @@ export interface DriveHost {
   url: string;
   lanUrl: string;
   status(): DriveStatus;
+  wait(): Promise<void>;
   close(): Promise<void>;
 }
 
 export async function createDriveHost(options: {
   name: string;
   port?: number;
+  bonjour?: boolean;
 }): Promise<DriveHost> {
   const manifest = loadOrCreateManifest(options.name);
   const directory = hostedDriveDir(manifest.id);
@@ -62,6 +65,11 @@ export async function createDriveHost(options: {
   let indexQueue = Promise.resolve();
   let localUrl = "";
   let lanUrl = "";
+  let advertisement: DriveAdvertisement | undefined;
+  let resolveClosed: () => void = () => undefined;
+  const closed = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
+  });
 
   const queueIndex = (packageId: string): Promise<void> => {
     const job = indexQueue.then(() => indexPackage(directory, manifest, packageId));
@@ -131,6 +139,13 @@ export async function createDriveHost(options: {
   const port = (server.address() as AddressInfo).port;
   localUrl = `http://127.0.0.1:${port}`;
   lanUrl = `http://${lanAddress()}:${port}`;
+  if (options.bonjour !== false) {
+    advertisement = advertiseDrive({ id: manifest.id, name: manifest.name, port });
+  }
+  server.once("close", () => {
+    void advertisement?.stop();
+    resolveClosed();
+  });
 
   const hostContributor = joinContributor(directory, manifest, `Host · ${manifest.name}`, "host");
   setActiveDrive({
@@ -150,8 +165,25 @@ export async function createDriveHost(options: {
     url: localUrl,
     lanUrl,
     status: () => hostStatus(manifest, lanUrl),
-    close: () => closeServer(server),
+    wait: () => closed,
+    close: async () => {
+      await advertisement?.stop();
+      await closeServer(server);
+    },
   };
+}
+
+export async function destroyHostedDrive(driveId: string): Promise<void> {
+  const directory = hostedDriveDir(driveId);
+  await rm(directory, { recursive: true, force: true });
+  const pointerPath = hostedDrivePointerPath();
+  if (!existsSync(pointerPath)) return;
+  try {
+    const pointer = JSON.parse(readFileSync(pointerPath, "utf8")) as { driveId?: unknown };
+    if (pointer.driveId === driveId) await rm(pointerPath, { force: true });
+  } catch {
+    // Do not remove a pointer whose ownership cannot be proven.
+  }
 }
 
 function loadOrCreateManifest(name: string): HostManifest {

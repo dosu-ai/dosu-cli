@@ -34,6 +34,13 @@ export function setActiveDrive(connection: DriveConnection): DriveState {
   return state;
 }
 
+export function clearActiveDrive(): DriveState {
+  const state = loadDriveState();
+  delete state.active;
+  saveDriveState(state);
+  return state;
+}
+
 export function rememberRepositories(paths: readonly string[]): DriveState {
   const state = loadDriveState();
   state.recentRepositories = [
