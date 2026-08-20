@@ -65,10 +65,11 @@ Select **Build Week Drive** from the nearby Host list and press Enter. Setup sta
 
 At **Choose repositories to add**:
 
-1. Press Space to toggle every repository you want to include.
-2. Press Enter to confirm the checked repositories.
-3. Choose **Continue** or **Add another repository…**. The add action immediately asks for a
-   local Git repository path, adds it as a checked row, and returns to the repository list.
+1. Repository rows use checkboxes; press Space to toggle every repository you want to include.
+2. **Add another repository…** is an action row without a checkbox. Select it and press Enter to
+   immediately provide a local Git repository path.
+3. Each added path returns as a checked **Added repo** row while the add action remains available.
+4. When the list is ready, place the cursor on a repository row and press Enter to continue.
 
 For an explicit multi-repository setup, use:
 

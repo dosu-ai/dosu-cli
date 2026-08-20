@@ -123,31 +123,50 @@ describe("Dosu Drive acceptance gates", () => {
     }
     process.env.DOSU_DRIVE_HOME = join(root, "drive");
     rememberRepositories([recent]);
+    const currentRoot = repositoryIdentity(current).root;
+    const addedRoot = repositoryIdentity(added).root;
 
     const events: string[] = [];
-    let selectionCount = 0;
-    let actionCount = 0;
+    let pickerCount = 0;
+    let pathCount = 0;
     const repositories = await selectRepositories(
       [],
       {
-        multiselect: async (options) => {
-          events.push("multiselect");
-          expect(options.options.every((option) => option.value !== "__browse__")).toBe(true);
-          expect(options.options.every((option) => !option.label.includes("Browse"))).toBe(true);
-          selectionCount++;
-          return selectionCount === 1 ? [current] : [current, added];
-        },
-        select: async (options) => {
-          events.push("select");
-          expect(options.options.map((option) => option.label)).toContain(
-            "Add another repository…",
+        pick: async (options) => {
+          events.push("pick");
+          const action = options.options.at(-1);
+          expect(action).toMatchObject({
+            kind: "action",
+            label: "Add another repository…",
+          });
+          expect(options.options.slice(0, -1).every((option) => option.kind === "repo")).toBe(true);
+          pickerCount++;
+          if (pickerCount === 1) {
+            return { result: "__add_repositories__", selected: [currentRoot] };
+          }
+          if (pickerCount === 2) {
+            expect(
+              options.options.filter(
+                (option) => option.kind === "repo" && option.value === currentRoot,
+              ),
+            ).toHaveLength(1);
+            expect(options.initialValues).toEqual([currentRoot]);
+            return { result: "__add_repositories__", selected: [currentRoot] };
+          }
+          expect(options.options).toContainEqual(
+            expect.objectContaining({
+              kind: "repo",
+              value: addedRoot,
+              label: expect.stringContaining("Added repo"),
+            }),
           );
-          actionCount++;
-          return actionCount === 1 ? "add" : "continue";
+          expect(options.initialValues).toEqual([currentRoot, addedRoot]);
+          return { result: [currentRoot, addedRoot], selected: [currentRoot, addedRoot] };
         },
         text: async () => {
           events.push("text");
-          return added;
+          pathCount++;
+          return pathCount === 1 ? current : added;
         },
         isCancel: () => false,
         cancel: () => undefined,
@@ -155,11 +174,8 @@ describe("Dosu Drive acceptance gates", () => {
       current,
     );
 
-    expect(events).toEqual(["multiselect", "select", "text", "multiselect", "select"]);
-    expect(repositories.map((repository) => repository.root)).toEqual([
-      repositoryIdentity(current).root,
-      repositoryIdentity(added).root,
-    ]);
+    expect(events).toEqual(["pick", "text", "pick", "text", "pick"]);
+    expect(repositories.map((repository) => repository.root)).toEqual([currentRoot, addedRoot]);
   });
 
   it("gate 4: packages only the immutable exact allowlist and namespaces sessions", async () => {

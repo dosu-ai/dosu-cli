@@ -3,6 +3,7 @@ import { userInfo } from "node:os";
 import { join } from "node:path";
 import * as p from "@clack/prompts";
 import open from "open";
+import { ADD_REPOSITORIES_VALUE, GitHubRepoPrompt } from "../setup/github-repo-prompt";
 import { fetchDriveStatus, joinDrive, searchDrive, stopDrive, uploadPackage } from "./client";
 import { scanWithDeja } from "./deja";
 import { discoverDrives } from "./discovery";
@@ -302,24 +303,26 @@ export function runDriveMcpRemove(agent: string): void {
   p.log.success(`Removed the \`dosu-drive\` MCP server from ${status.agent}.`);
 }
 
-type RepositorySelectionAction = "continue" | "add";
+type RepositoryPickerOption =
+  | { kind: "repo"; label: string; value: string }
+  | {
+      kind: "action";
+      label: string;
+      value: typeof ADD_REPOSITORIES_VALUE;
+      hint: string;
+    };
+
+interface RepositoryPickerOutput {
+  result: string[] | string | symbol;
+  selected: string[];
+}
 
 export interface RepositorySelectionPrompts {
-  multiselect(options: {
+  pick(options: {
     message: string;
-    options: Array<{ label: string; value: string }>;
+    options: RepositoryPickerOption[];
     initialValues: string[];
-    required: true;
-  }): Promise<string[] | symbol>;
-  select(options: {
-    message: string;
-    options: Array<{
-      label: string;
-      value: RepositorySelectionAction;
-      hint?: string;
-    }>;
-    initialValue: RepositorySelectionAction;
-  }): Promise<RepositorySelectionAction | symbol>;
+  }): Promise<RepositoryPickerOutput>;
   text(options: {
     message: string;
     placeholder: string;
@@ -330,8 +333,11 @@ export interface RepositorySelectionPrompts {
 }
 
 const defaultRepositorySelectionPrompts: RepositorySelectionPrompts = {
-  multiselect: (options) => p.multiselect(options),
-  select: (options) => p.select(options),
+  pick: async (options) => {
+    const prompt = new GitHubRepoPrompt(options);
+    const result = await prompt.prompt();
+    return { result: result as string[] | string | symbol, selected: prompt.selectedValues };
+  },
   text: (options) => p.text(options),
   isCancel: (value) => p.isCancel(value),
   cancel: (message) => p.cancel(message),
@@ -374,43 +380,36 @@ export async function selectRepositories(
       selectedRoots = [repository.root];
     }
 
-    const selected = await prompts.multiselect({
+    const picked = await prompts.pick({
       message: "Choose repositories to add",
-      options: [...candidates.values()].map(({ repository, source }) => ({
-        label: `${source === "current" ? "Current repo" : source === "recent" ? "Recent repo" : "Added repo"}   ${repository.root}`,
-        value: repository.root,
-      })),
-      initialValues: selectedRoots,
-      required: true,
-    });
-    if (prompts.isCancel(selected)) {
-      prompts.cancel("Setup cancelled");
-      return [];
-    }
-    selectedRoots = selected as string[];
-
-    const action = await prompts.select({
-      message: `${countLabel(selectedRoots.length, "repository", "repositories")} selected`,
       options: [
+        ...[...candidates.values()].map(({ repository, source }) => ({
+          kind: "repo" as const,
+          label: `${source === "current" ? "Current repo" : source === "recent" ? "Recent repo" : "Added repo"}   ${repository.root}`,
+          value: repository.root,
+        })),
         {
-          label: `Continue with ${countLabel(selectedRoots.length, "repository", "repositories")}`,
-          value: "continue",
-        },
-        {
+          kind: "action",
           label: "Add another repository…",
-          value: "add",
-          hint: "enter a local Git repository path",
+          value: ADD_REPOSITORIES_VALUE,
+          hint: "Enter a local Git repository path",
         },
       ],
-      initialValue: "continue",
+      initialValues: selectedRoots,
     });
-    if (prompts.isCancel(action)) {
+    if (prompts.isCancel(picked.result)) {
       prompts.cancel("Setup cancelled");
       return [];
     }
-    if (action === "continue") {
-      return dedupeRepositories(selectedRoots.map(repositoryIdentity));
+    selectedRoots = picked.selected;
+    if (Array.isArray(picked.result)) {
+      if (picked.result.length === 0) {
+        p.log.warn("Select at least one repository before continuing.");
+        continue;
+      }
+      return dedupeRepositories(picked.result.map(repositoryIdentity));
     }
+    if (picked.result !== ADD_REPOSITORIES_VALUE) throw new Error("Unknown repository action");
 
     const repository = await promptForRepository(prompts);
     if (!repository) return [];
