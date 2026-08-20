@@ -6,7 +6,6 @@ import {
   checkForSkillUpdates,
   fetchLatestSha,
   readSkillCache,
-  refreshInstalledSha,
   writeSkillCache,
 } from "./skill-update-check";
 
@@ -109,52 +108,6 @@ describe("readSkillCache / writeSkillCache", () => {
   it("creates config directory when writing cache", () => {
     writeSkillCache({ lastCheck: 1, latestSha: "abc", installedSha: "def" });
     expect(readSkillCache()).not.toBeNull();
-  });
-});
-
-describe("refreshInstalledSha", () => {
-  let tempDir: string;
-  let origXDG: string | undefined;
-
-  beforeEach(() => {
-    origXDG = process.env.XDG_CONFIG_HOME;
-    tempDir = mkdtempSync(join(tmpdir(), "dosu-skill-refresh-test-"));
-    process.env.XDG_CONFIG_HOME = tempDir;
-  });
-
-  afterEach(() => {
-    if (origXDG !== undefined) {
-      process.env.XDG_CONFIG_HOME = origXDG;
-    } else {
-      delete process.env.XDG_CONFIG_HOME;
-    }
-    rmSync(tempDir, { recursive: true, force: true });
-    vi.restoreAllMocks();
-  });
-
-  it("writes cache with installedSha === latestSha on fetch success", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({ sha: "newsha" }),
-      }),
-    );
-    await refreshInstalledSha();
-    const cache = readSkillCache();
-    expect(cache).not.toBeNull();
-    expect(cache?.latestSha).toBe("newsha");
-    expect(cache?.installedSha).toBe("newsha");
-  });
-
-  it("does not overwrite cache on fetch failure", async () => {
-    writeSkillCache({ lastCheck: 123, latestSha: "old", installedSha: "old" });
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false }));
-    await refreshInstalledSha();
-    const cache = readSkillCache();
-    expect(cache?.lastCheck).toBe(123);
-    expect(cache?.latestSha).toBe("old");
-    expect(cache?.installedSha).toBe("old");
   });
 });
 

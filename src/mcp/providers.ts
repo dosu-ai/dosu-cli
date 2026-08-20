@@ -83,13 +83,6 @@ export function allSetupProviders(): SetupProvider[] {
 }
 
 /**
- * Returns only providers that are detected on the system.
- */
-export function detectInstalledProviders(): SetupProvider[] {
-  return allSetupProviders().filter((p) => p.isInstalled());
-}
-
-/**
  * Returns a provider for the given tool ID.
  */
 export function getProvider(toolID: string): Provider {

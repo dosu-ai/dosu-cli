@@ -68,6 +68,10 @@ export class GitHubRepoPrompt extends Prompt<ActionValue | string[]> {
   cursor = 0;
   private selected: string[];
 
+  get selectedValues(): string[] {
+    return [...this.selected];
+  }
+
   constructor({ message, options, initialValues = [], maxItems }: PromptGitHubRepositoriesOptions) {
     super(
       {

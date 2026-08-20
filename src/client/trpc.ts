@@ -14,8 +14,6 @@ import type { CliApiClient } from "../generated/dosu-api-types";
 import { Client } from "./client";
 import { CLI_CONTRACT_HASH } from "./contract";
 
-export type { CliApiClient };
-
 /** CLI tRPC client — use this to type function parameters. */
 export type TypedClient = CliApiClient;
 

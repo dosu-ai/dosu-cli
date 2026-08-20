@@ -61,6 +61,17 @@ export function writeSkillCache(cache: SkillUpdateCache): void {
   }
 }
 
+/**
+ * Forget which SHA is installed, so the update notice stops firing.
+ *
+ * An empty `installedSha` is this cache's "unknown" state: `checkForSkillUpdates`
+ * stays quiet until the next install or update repopulates it.
+ */
+export function clearInstalledSha(): void {
+  const cache = readSkillCache();
+  if (cache) writeSkillCache({ ...cache, installedSha: "" });
+}
+
 /** Fetch the latest commit SHA from the dosu-skill GitHub repo. */
 export async function fetchLatestSha(): Promise<string | null> {
   const controller = new AbortController();
@@ -82,27 +93,6 @@ export async function fetchLatestSha(): Promise<string | null> {
   } finally {
     clearTimeout(timeout);
   }
-}
-
-/**
- * Refresh the installedSha in the cache to match the current latest upstream SHA.
- * Called after a successful `dosu skill install` or `dosu skill update`.
- *
- * On fetch failure we write a cache with empty installedSha only if no cache exists —
- * otherwise we leave the existing cache alone so later invocations can retry.
- */
-export async function refreshInstalledSha(): Promise<void> {
-  const sha = await fetchLatestSha();
-  if (!sha) {
-    logger.debug("skill-update-check", "Failed to fetch latest SHA during refresh");
-    return;
-  }
-  writeSkillCache({
-    lastCheck: Date.now(),
-    latestSha: sha,
-    installedSha: sha,
-  });
-  logger.debug("skill-update-check", `Refreshed installedSha=${sha}`);
 }
 
 function displayNotice(): void {

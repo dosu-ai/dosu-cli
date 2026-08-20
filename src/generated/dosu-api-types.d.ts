@@ -477,7 +477,7 @@ export type CliSlackChannelRow = {
 	topic?: string | null
 }
 
-export declare const CLI_CONTRACT_HASH: '663c43d2937c'
+export declare const CLI_CONTRACT_HASH: '22c5cd2ce534'
 
 export type AnalyticsGetUsageStatsInput = {
 	days?: number
@@ -647,6 +647,7 @@ export type DocImportsImportAzureDevopsFilesInput = {
 export type DocImportsImportAzureDevopsFilesOutput = CliAsyncImportResponse
 
 export type DocImportsImportCodaPagesInput = {
+	folder_page_ids?: Array<string>
 	knowledge_store_id: string
 	page_ids: Array<string>
 	space_id: string
@@ -655,6 +656,7 @@ export type DocImportsImportCodaPagesInput = {
 export type DocImportsImportCodaPagesOutput = CliAsyncImportResponse
 
 export type DocImportsImportConfluencePagesInput = {
+	folder_page_ids?: Array<string>
 	knowledge_store_id: string
 	page_ids: Array<string>
 	space_id: string
@@ -664,6 +666,10 @@ export type DocImportsImportConfluencePagesOutput = CliAsyncImportResponse
 
 export type DocImportsImportGithubFilesInput = {
 	file_ids: Array<string>
+	folders?: Array<{
+		path: string
+		repo: string
+	}>
 	knowledge_store_id: string
 	space_id: string
 }
@@ -672,6 +678,10 @@ export type DocImportsImportGithubFilesOutput = CliAsyncImportResponse
 
 export type DocImportsImportGitlabFilesInput = {
 	file_ids: Array<string>
+	folders?: Array<{
+		path: string
+		repo: string
+	}>
 	knowledge_store_id: string
 	space_id: string
 }
@@ -679,6 +689,7 @@ export type DocImportsImportGitlabFilesInput = {
 export type DocImportsImportGitlabFilesOutput = CliAsyncImportResponse
 
 export type DocImportsImportNotionPagesInput = {
+	folder_page_ids?: Array<string>
 	knowledge_store_id: string
 	page_ids: Array<string>
 	space_id: string

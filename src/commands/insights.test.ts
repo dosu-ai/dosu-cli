@@ -62,7 +62,7 @@ vi.mock("../config/constants", () => ({
 
 vi.mock("open", () => ({ default: vi.fn().mockResolvedValue(undefined) }));
 
-import type { InsightsReport } from "../insights";
+import type { InsightsReport } from "../insights/insights";
 import {
   type InsightsRunner,
   insightsCommand,

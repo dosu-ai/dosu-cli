@@ -1,6 +1,6 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockExecSync = vi.fn();
@@ -90,7 +90,7 @@ describe("skill install", () => {
         "npx skills add dosu-ai/dosu-skill -g",
         "-a claude-code -a cursor -a gemini-cli -a codex -a windsurf",
         "-a zed -a cline -a github-copilot -a opencode -a antigravity",
-        "-s dosu -y",
+        '-s "*" -y',
       ].join(" "),
       {
         stdio: "inherit",
@@ -120,9 +120,101 @@ describe("skill install", () => {
 });
 
 describe("skill remove", () => {
-  it("runs npx skills remove with correct args", async () => {
+  /** Make `npx skills list -g --json` resolve to the given inventory. */
+  function stubInventory(entries: unknown[]): void {
+    mockExecSync.mockImplementation((command: string) =>
+      command.includes("skills list") ? JSON.stringify(entries) : undefined,
+    );
+  }
+
+  it("removes every skill installed from the Dosu repo", async () => {
+    stubInventory([
+      { name: "dosu", source: "dosu-ai/dosu-skill" },
+      { name: "dosu-review", source: "dosu-ai/dosu-skill" },
+    ]);
     await run("remove");
-    expect(mockExecSync).toHaveBeenCalledWith("npx skills remove -g -s dosu -y", {
+    expect(mockExecSync).toHaveBeenCalledWith("npx skills remove -g dosu dosu-review -y", {
+      stdio: "inherit",
+    });
+  });
+
+  it("leaves skills from other sources alone", async () => {
+    stubInventory([
+      { name: "dosu", source: "dosu-ai/dosu-skill" },
+      { name: "web-design", source: "vercel-labs/agent-skills" },
+      { name: "local-skill", source: null },
+    ]);
+    await run("remove");
+    expect(mockExecSync).toHaveBeenCalledWith("npx skills remove -g dosu -y", {
+      stdio: "inherit",
+    });
+  });
+
+  it("skips names that are unsafe to interpolate into a shell command", async () => {
+    stubInventory([
+      { name: "dosu", source: "dosu-ai/dosu-skill" },
+      { name: "evil; rm -rf /", source: "dosu-ai/dosu-skill" },
+    ]);
+    await run("remove");
+    expect(mockExecSync).toHaveBeenCalledWith("npx skills remove -g dosu -y", {
+      stdio: "inherit",
+    });
+  });
+
+  // `skills list` echoes the front-matter name without validating it, and
+  // `skills remove --all` deletes every skill from every source.
+  it("skips flag-shaped names so they cannot be re-parsed as options", async () => {
+    stubInventory([
+      { name: "dosu", source: "dosu-ai/dosu-skill" },
+      { name: "--all", source: "dosu-ai/dosu-skill" },
+    ]);
+    await run("remove");
+    expect(mockExecSync).toHaveBeenCalledWith("npx skills remove -g dosu -y", {
+      stdio: "inherit",
+    });
+  });
+
+  it("does nothing when the inventory holds no skills of ours", async () => {
+    stubInventory([{ name: "web-design", source: "vercel-labs/agent-skills" }]);
+    await run("remove");
+    expect(mockExecSync).not.toHaveBeenCalledWith(
+      expect.stringContaining("skills remove"),
+      expect.anything(),
+    );
+    expect(allOutput()).toContain("No skills from dosu-ai/dosu-skill are installed");
+  });
+
+  it("stops the update notice by forgetting the installed SHA", async () => {
+    const cachePath = join(tempDir, "dosu-cli", "skill-update-check.json");
+    mkdirSync(dirname(cachePath), { recursive: true });
+    writeFileSync(
+      cachePath,
+      JSON.stringify({ lastCheck: 1, latestSha: "new-sha", installedSha: "old-sha" }),
+    );
+
+    stubInventory([{ name: "dosu", source: "dosu-ai/dosu-skill" }]);
+    await run("remove");
+
+    const cache = JSON.parse(readFileSync(cachePath, "utf-8"));
+    expect(cache.installedSha).toBe("");
+    expect(cache.latestSha).toBe("new-sha");
+  });
+
+  it("treats a non-array inventory as unreadable", async () => {
+    stubInventory({ unexpected: "shape" } as unknown as unknown[]);
+    await run("remove");
+    expect(mockExecSync).toHaveBeenCalledWith("npx skills remove -g dosu -y", {
+      stdio: "inherit",
+    });
+  });
+
+  it("falls back to the known skill when the inventory is unreadable", async () => {
+    mockExecSync.mockImplementation((command: string) => {
+      if (command.includes("skills list")) throw new Error("npx unavailable");
+      return undefined;
+    });
+    await run("remove");
+    expect(mockExecSync).toHaveBeenCalledWith("npx skills remove -g dosu -y", {
       stdio: "inherit",
     });
   });
@@ -190,7 +282,7 @@ describe("installSkill helper", () => {
 
     expect(result.success).toBe(true);
     expect(mockExecSync).toHaveBeenCalledWith(
-      "npx skills add dosu-ai/dosu-skill -g -a claude-code -a codex -s dosu -y",
+      'npx skills add dosu-ai/dosu-skill -g -a claude-code -a codex -s "*" -y',
       { stdio: "inherit" },
     );
   });

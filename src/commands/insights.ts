@@ -51,13 +51,13 @@ function shuffled<T>(arr: readonly T[]): T[] {
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_INTERVAL_MS = 80;
 
-export interface Spinner {
+interface Spinner {
   start(message: string): void;
   message(message: string): void;
   stop(message: string, code?: number): void;
 }
 
-export function createDotsSpinner(): Spinner {
+function createDotsSpinner(): Spinner {
   let frameIdx = 0;
   let timer: ReturnType<typeof setInterval> | undefined;
   let current = "";
@@ -105,7 +105,7 @@ function isFullConfig(cfg: Config): boolean {
   );
 }
 
-export async function ensureFullConfig(): Promise<Config | null> {
+async function ensureFullConfig(): Promise<Config | null> {
   let cfg = loadConfig();
   if (isFullConfig(cfg)) return cfg;
 
@@ -278,7 +278,7 @@ export async function runInsights(cfg: Config, runner: InsightsRunner): Promise<
   return snapshotPath;
 }
 
-export function defaultRunner(cfg: Config): InsightsRunner {
+function defaultRunner(cfg: Config): InsightsRunner {
   return {
     build: buildInsights,
     render: renderHTML,

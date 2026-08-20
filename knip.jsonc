@@ -1,0 +1,21 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema-jsonc.json",
+  // The production suffixes keep build entrypoints in the production-only file graph.
+  // Knip also discovers them from package scripts in its full graph, hence suppressed hints.
+  "entry": [
+    "src/index.ts!",
+    "scripts/build-all.ts!",
+    "scripts/build-compile.ts!",
+    "scripts/build-npm.ts!",
+    "scripts/drive-package-e2e.ts!"
+  ],
+  "project": [
+    "src/**/*.ts!",
+    "!src/**/*.test.ts!",
+    "!src/**/*.test-utils.ts!",
+    "scripts/**/*.ts!",
+    "!scripts/**/*.test.ts!"
+  ],
+  "ignoreBinaries": ["mkfifo", "codex"],
+  "ignoreUnresolved": ["bun-types"]
+}

@@ -23,6 +23,10 @@ export function getAccessTokenUserID(accessToken: string): string | undefined {
   return getAccessTokenClaim(accessToken, "sub");
 }
 
+export function getAccessTokenEmail(accessToken: string): string | undefined {
+  return getAccessTokenClaim(accessToken, "email");
+}
+
 /** OAuth 2.1 access tokens carry the public client id needed for refresh. */
 export function getAccessTokenOAuthClientID(accessToken: string): string | undefined {
   return getAccessTokenClaim(accessToken, "client_id");
