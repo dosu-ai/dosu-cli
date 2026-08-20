@@ -22,7 +22,15 @@ export async function scanWithDeja(): Promise<DejaWorkspace> {
   const root = await mkdtemp(join(temporaryParent, "setup-"));
   const indexDirectory = join(root, "index");
   const exportDirectory = join(root, "export");
-  const environment = { ...process.env, DEJA_INDEX_DIR: indexDirectory };
+  const environment = {
+    ...process.env,
+    DEJA_INDEX_DIR: indexDirectory,
+    DEJA_INDEX_COMMANDS: "1",
+    DEJA_INDEX_EDITS: "1",
+    DEJA_INDEX_PATHS: "1",
+    DEJA_INDEX_TOOL_OUTPUT: "1",
+    DEJA_NO_REDACT: "0",
+  };
   const cleanup = () => cleanupWorkspace(root, temporaryParent);
 
   try {
