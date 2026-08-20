@@ -3,11 +3,15 @@ import {
   runDriveDestroy,
   runDriveHost,
   runDriveJoin,
+  runDriveMcpAdd,
+  runDriveMcpRemove,
+  runDriveMcpStatus,
   runDriveSearch,
   runDriveSetup,
   runDriveStatus,
   runDriveStop,
 } from "../drive/flows";
+import { serveDriveMcp } from "../drive/mcp-server";
 
 function parsePort(value: string): number {
   const port = Number(value);
@@ -61,21 +65,13 @@ export function driveCommand(): Command {
   mcp
     .command("add")
     .argument("<agent>", "Agent to configure (codex or claude)")
-    .action(() => {
-      throw new Error("Drive MCP setup is not ready in this build");
-    });
-  mcp.command("status").action(() => {
-    throw new Error("Drive MCP setup is not ready in this build");
-  });
+    .action(runDriveMcpAdd);
+  mcp.command("status").action(runDriveMcpStatus);
   mcp
     .command("remove")
     .argument("<agent>", "Agent to remove (codex or claude)")
-    .action(() => {
-      throw new Error("Drive MCP setup is not ready in this build");
-    });
-  mcp.command("serve", { hidden: true }).action(() => {
-    throw new Error("Drive MCP setup is not ready in this build");
-  });
+    .action(runDriveMcpRemove);
+  mcp.command("serve", { hidden: true }).action(serveDriveMcp);
 
   return command;
 }

@@ -7,6 +7,12 @@ import { fetchDriveStatus, joinDrive, searchDrive, stopDrive, uploadPackage } fr
 import { scanWithDeja } from "./deja";
 import { discoverDrives } from "./discovery";
 import { createDriveHost, destroyHostedDrive } from "./host";
+import {
+  type DriveMcpAgent,
+  driveMcpConfigStatus,
+  installDriveMcp,
+  removeDriveMcp,
+} from "./mcp-config";
 import { createRepositoryPackage, dejaSessionKey, summarizeDejaExport } from "./package";
 import { type PreviewSession, startPreview } from "./preview";
 import { dedupeRepositories, matchSessionRepository, repositoryIdentity } from "./repositories";
@@ -262,6 +268,31 @@ export async function runDriveDestroy(options: { yes: boolean }): Promise<void> 
   await destroyHostedDrive(connection.id);
   clearActiveDrive();
   p.log.success("Drive data deleted. Local agent session files were not touched.");
+}
+
+export async function runDriveMcpAdd(agent: string): Promise<void> {
+  requireActiveDrive();
+  const status = installDriveMcp(agent);
+  p.log.success(`Configured ${status.agent} with the separate \`dosu-drive\` MCP server.`);
+  p.log.info(`Config: ${status.path}`);
+  p.log.info("Start a new agent session to use search_drive and read_drive_evidence.");
+}
+
+export async function runDriveMcpStatus(): Promise<void> {
+  const connection = requireActiveDrive();
+  const host = await fetchDriveStatus(connection);
+  for (const agent of ["codex", "claude"] satisfies DriveMcpAgent[]) {
+    const status = driveMcpConfigStatus(agent);
+    p.log.info(`${agent}: ${status.configured ? "configured" : "not configured"} · ${status.path}`);
+  }
+  p.log.info(
+    `Active Drive: ${host.name} · ${host.ready ? "Ready" : "Indexing"} · ${connection.url}`,
+  );
+}
+
+export function runDriveMcpRemove(agent: string): void {
+  const status = removeDriveMcp(agent);
+  p.log.success(`Removed the \`dosu-drive\` MCP server from ${status.agent}.`);
 }
 
 async function selectRepositories(explicit: string[]): Promise<RepositoryIdentity[]> {
