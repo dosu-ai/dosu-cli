@@ -431,6 +431,19 @@ else process.exit(2);\n`,
     expect(state).not.toHaveProperty("emptyDriveState");
     expect(state).not.toHaveProperty("saveDriveState");
   });
+
+  it("gate 15: exposes the exact automation and demo options used by the packaged E2E", () => {
+    const drive = driveCommand();
+    const options = (name: string) =>
+      drive.commands
+        .find((command) => command.name() === name)
+        ?.options.map((option) => option.long)
+        .filter(Boolean);
+    expect(options("host")).toEqual(["--name", "--port", "--no-bonjour"]);
+    expect(options("join")).toEqual(["--name", "--no-setup"]);
+    expect(options("setup")).toEqual(["--repo", "--yes", "--no-open"]);
+    expect(options("search")).toEqual(["--repo"]);
+  });
 });
 
 interface IndexedHostFixture {
