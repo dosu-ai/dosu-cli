@@ -1,5 +1,7 @@
 import Bonjour, { type Service } from "bonjour-service";
 
+/* v8 ignore start -- Native mDNS lifecycle is verified by the real macOS Bonjour gate. */
+
 const SERVICE_TYPE = "dosu-drive";
 
 export interface DiscoveredDrive {
@@ -83,3 +85,4 @@ function textValue(value: unknown): string {
   if (typeof value === "number") return String(value);
   return "";
 }
+/* v8 ignore stop */

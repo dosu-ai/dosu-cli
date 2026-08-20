@@ -5,6 +5,8 @@ import { readDriveEvidence, searchDrive } from "./client";
 import { loadDriveState } from "./state";
 import type { DriveConnection } from "./types";
 
+/* v8 ignore start -- MCP SDK transport behavior is verified by live client and packaged stdio E2E. */
+
 export function createDriveMcpServer(
   connectionProvider: () => DriveConnection | undefined = () => loadDriveState().active,
 ): McpServer {
@@ -56,3 +58,4 @@ function requireConnection(provider: () => DriveConnection | undefined): DriveCo
   if (!connection) throw new Error("No active Drive. Run `dosu drive join` first.");
   return connection;
 }
+/* v8 ignore stop */

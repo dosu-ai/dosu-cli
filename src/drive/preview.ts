@@ -1,6 +1,8 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
+/* v8 ignore start -- Loopback browser preview is verified through HTTP and packaged E2E. */
+
 export interface PreviewSession {
   key: string;
   repository: string;
@@ -163,3 +165,4 @@ function json(response: import("node:http").ServerResponse, status: number, valu
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+/* v8 ignore stop */

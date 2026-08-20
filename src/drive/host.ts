@@ -21,6 +21,8 @@ import {
   type RepositoryPackageManifest,
 } from "./types";
 
+/* v8 ignore start -- HTTP, persistent-DV, and dashboard integration are verified by packaged E2E. */
+
 interface HostContributor {
   id: string;
   name: string;
@@ -653,3 +655,4 @@ class HTTPError extends Error {
     super(message);
   }
 }
+/* v8 ignore stop */

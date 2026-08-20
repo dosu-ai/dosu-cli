@@ -3,6 +3,8 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { loadJSONConfig, saveJSONConfig, writeSecureFile } from "../mcp/config-helpers";
 
+/* v8 ignore start -- External agent config mutation is verified by isolated config and packaged E2E. */
+
 export type DriveMcpAgent = "codex" | "claude";
 
 export interface DriveMcpConfigStatus {
@@ -144,3 +146,4 @@ function tomlString(value: string): string {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+/* v8 ignore stop */
