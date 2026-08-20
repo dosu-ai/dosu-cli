@@ -221,7 +221,7 @@ export async function runDriveSetup(options: {
     }
     upload.stop("Drive index is ready");
     p.outro(
-      `Uploaded ${countLabel(uploadedSessions, "session")} from ${countLabel(uploadedRepositories, "repository")} to ${connection.name}. You may close this terminal or disconnect from the network.`,
+      `Uploaded ${countLabel(uploadedSessions, "session")} from ${countLabel(uploadedRepositories, "repository", "repositories")} to ${connection.name}. You may close this terminal or disconnect from the network.`,
     );
   } finally {
     await workspace.cleanup();
@@ -375,7 +375,7 @@ function displayHarness(harness: string): string {
     .join(" ");
 }
 
-function countLabel(count: number, label: string): string {
-  return `${count} ${label}${count === 1 ? "" : "s"}`;
+function countLabel(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
 }
 /* v8 ignore stop */

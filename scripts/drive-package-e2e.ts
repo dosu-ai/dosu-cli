@@ -130,6 +130,10 @@ async function main(): Promise<void> {
     writeFileSync(join(outputDirectory, "preview.json"), `${JSON.stringify(preview, null, 2)}\n`);
     await fetch(`${previewBase}/api/approve`, { method: "POST" });
     await setup.wait(60_000);
+    assert(
+      setup.text().includes("Uploaded 2 sessions from 2 repositories"),
+      "setup completion copy did not pluralize repositories correctly",
+    );
 
     const readyStatus = await getJSON<DriveStatus>(`${hostUrl}/api/status`);
     assert(readyStatus.ready, "Host index did not become ready");
