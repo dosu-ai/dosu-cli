@@ -7,6 +7,7 @@ import { posix, win32 } from "node:path";
 import { Command } from "commander";
 import pc from "picocolors";
 import { INSTALL_CHANNEL, isNpxInvocation } from "../version/version";
+import { installSkill } from "./skill";
 
 const PACKAGE_NAME = "@dosu/cli";
 const LATEST_PACKAGE = `${PACKAGE_NAME}@latest`;
@@ -268,9 +269,31 @@ export function runUpgrade(channel = INSTALL_CHANNEL, options: UpgradeOptions = 
   return 0;
 }
 
+export async function completeUpgrade(
+  channel = INSTALL_CHANNEL,
+  options: UpgradeOptions = {},
+): Promise<number> {
+  const status = runUpgrade(channel, options);
+  if (status !== 0) return status;
+  console.log("Updating Dosu skills...");
+  try {
+    const result = await installSkill();
+    if (result.success) {
+      console.log(pc.green("✓ Skills updated."));
+    } else {
+      console.error('Skills could not be refreshed. Run "dosu skill update" to retry.');
+    }
+  } catch {
+    console.error('Skills could not be refreshed. Run "dosu skill update" to retry.');
+  }
+  return 0;
+}
+
 export function upgradeCommand(): Command {
-  return new Command("upgrade").description("Update Dosu to the latest version").action(() => {
-    const status = runUpgrade();
-    if (status !== 0) process.exitCode = status;
-  });
+  return new Command("upgrade")
+    .description("Update Dosu to the latest version and refresh agent skills")
+    .action(async () => {
+      const status = await completeUpgrade();
+      if (status !== 0) process.exitCode = status;
+    });
 }
