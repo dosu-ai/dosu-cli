@@ -8,10 +8,18 @@ import { join } from "node:path";
 import { Command } from "commander";
 import pc from "picocolors";
 import { logger } from "../debug/logger";
-import { fetchLatestSha, writeSkillCache } from "../version/skill-update-check";
+import { clearInstalledSha, fetchLatestSha, writeSkillCache } from "../version/skill-update-check";
 
 const SKILL_REPO = "dosu-ai/dosu-skill";
 const SKILL_NAME = "dosu";
+/**
+ * Names are interpolated into a shell command as positional arguments, so keep
+ * them boring. The leading character must be alphanumeric: `skills list` echoes
+ * the SKILL.md front-matter name verbatim without validating its shape, and a
+ * name like `--all` would be re-parsed as an option by `skills remove`, which
+ * treats it as "delete every installed skill from every source".
+ */
+const SAFE_SKILL_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 const SUPPORTED_SKILL_AGENTS = [
   "claude-code",
   "cursor",
@@ -110,7 +118,13 @@ export async function installSkill(
   }
 
   try {
-    const command = `npx skills add ${SKILL_REPO} -g ${agentArgs} -s ${SKILL_NAME} -y`;
+    // `-s "*"` installs every skill the repo exposes, so adding one upstream
+    // does not require a CLI release. The quoting is load-bearing and must be
+    // double quotes: this string is run through a shell, so on POSIX a bare `*`
+    // would glob-expand against cwd, while on Windows the shell is cmd.exe,
+    // which does not treat single quotes as delimiters and would forward a
+    // literal `'*'` that matches no skill name.
+    const command = `npx skills add ${SKILL_REPO} -g ${agentArgs} -s "*" -y`;
     if (options.quiet) await execQuiet(command);
     else execSync(command, { stdio: "inherit" });
   } catch (err) {
@@ -131,6 +145,42 @@ export async function installSkill(
   return { success: true };
 }
 
+/**
+ * Names of the globally installed skills that came from {@link SKILL_REPO},
+ * as reported by the skills CLI's own inventory.
+ *
+ * `skills remove` resolves exact names and has no wildcard, so removing our
+ * whole set means enumerating it first. An empty array means none of ours are
+ * installed; `null` means the inventory could not be read, which is a different
+ * situation and gets a different fallback.
+ */
+function installedSkillNames(): string[] | null {
+  let entries: { name?: unknown; source?: unknown }[];
+  try {
+    const json = execSync("npx skills list -g --json", {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const parsed = JSON.parse(json);
+    if (!Array.isArray(parsed)) throw new Error("expected a JSON array");
+    entries = parsed;
+  } catch (err) {
+    logger.debug("skill", `Could not list installed skills: ${err}`);
+    return null;
+  }
+
+  const names: string[] = [];
+  for (const entry of entries) {
+    if (entry.source !== SKILL_REPO || typeof entry.name !== "string") continue;
+    if (!SAFE_SKILL_NAME.test(entry.name)) {
+      logger.warn("skill", `Skipping skill with an unsupported name: ${entry.name}`);
+      continue;
+    }
+    names.push(entry.name);
+  }
+  return names;
+}
+
 export function skillCommand(): Command {
   const cmd = new Command("skill").description("Manage the Dosu agent skill");
 
@@ -138,10 +188,10 @@ export function skillCommand(): Command {
     .command("install")
     .description("Install the Dosu skill for AI coding agents")
     .action(async () => {
-      console.log(`Installing ${SKILL_NAME} skill from ${SKILL_REPO}...`);
+      console.log(`Installing skills from ${SKILL_REPO}...`);
       const result = await installSkill();
       if (result.success) {
-        console.log(pc.green(`\n✓ Skill "${SKILL_NAME}" installed successfully.`));
+        console.log(pc.green(`\n✓ Skills installed successfully.`));
       } else {
         console.error(pc.red(`\nFailed to install skill. Make sure npx is available.`));
         process.exit(1);
@@ -150,16 +200,26 @@ export function skillCommand(): Command {
 
   cmd
     .command("remove")
-    .description("Remove the Dosu skill")
+    .description("Remove the Dosu skills")
     .action(() => {
-      console.log(`Removing ${SKILL_NAME} skill...`);
+      const installed = installedSkillNames();
+      if (installed?.length === 0) {
+        console.log(`No skills from ${SKILL_REPO} are installed.`);
+        return;
+      }
+      // Names go in positionally: the remove parser silently drops `-s`, and
+      // passing none at all opens an interactive picker. When the inventory is
+      // unreadable, fall back to the one name we have always shipped.
+      const targets = installed ?? [SKILL_NAME];
+      console.log(`Removing skills from ${SKILL_REPO}...`);
       try {
-        execSync(`npx skills remove -g -s ${SKILL_NAME} -y`, {
+        execSync(`npx skills remove -g ${targets.join(" ")} -y`, {
           stdio: "inherit",
         });
-        console.log(pc.green(`\n✓ Skill "${SKILL_NAME}" removed.`));
+        clearInstalledSha();
+        console.log(pc.green(`\n✓ Skills removed.`));
       } catch {
-        console.error(pc.red(`\nFailed to remove skill.`));
+        console.error(pc.red(`\nFailed to remove skills.`));
         process.exit(1);
       }
     });
@@ -168,7 +228,7 @@ export function skillCommand(): Command {
     .command("update")
     .description("Update the Dosu skill to the latest version")
     .action(async () => {
-      console.log(`Updating ${SKILL_NAME} skill...`);
+      console.log(`Updating skills from ${SKILL_REPO}...`);
       // Reinstall rather than `npx skills update`: update matches on the
       // skillPath recorded in the skills lockfile, so it can't follow the
       // skill across a repo-layout move (it reports "deleted upstream"
@@ -179,7 +239,7 @@ export function skillCommand(): Command {
         console.error(pc.red(`\nFailed to update skill.`));
         process.exit(1);
       }
-      console.log(pc.green(`\n✓ Skill "${SKILL_NAME}" updated.`));
+      console.log(pc.green(`\n✓ Skills updated.`));
     });
 
   return cmd;

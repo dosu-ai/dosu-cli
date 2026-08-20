@@ -17,9 +17,7 @@ import {
 
 export {
   type AccountTarget,
-  type ActiveAccount,
   type AuthenticatedConfig,
-  CONFIG_SCHEMA_VERSION,
   type Config,
   MODE_OSS,
   type SessionCredentials,
@@ -107,19 +105,26 @@ export function loadConfig(): Config {
     return emptyConfig();
   }
 
-  if (isConfigV2(raw)) return normalizeV2(raw);
+  const parsed = parseConfig(raw);
+  if (isConfigV2(raw)) return parsed;
   // Legacy configs were unversioned. Never rewrite a schema this version does
   // not understand, or downgrading could destroy newer config data.
-  if (isRecord(raw) && "schema_version" in raw) return emptyConfig();
+  if (isRecord(raw) && "schema_version" in raw) return parsed;
 
-  const migrated = migrateLegacyConfig(raw);
   try {
-    writeConfig(path, migrated);
+    writeConfig(path, parsed);
   } catch {
     // The parsed config is still usable even when its migration cannot be
     // persisted (for example, on a temporarily read-only filesystem).
   }
-  return migrated;
+  return parsed;
+}
+
+/** Parse config content without performing filesystem writes. */
+export function parseConfig(raw: unknown): Config {
+  if (isConfigV2(raw)) return normalizeV2(raw);
+  if (isRecord(raw) && "schema_version" in raw) return emptyConfig();
+  return migrateLegacyConfig(raw);
 }
 
 export function saveConfig(cfg: Config): void {
@@ -137,10 +142,6 @@ export function isTokenExpired(cfg: Config): boolean {
   const expiresAt = cfg.active_account?.session.expires_at ?? 0;
   if (expiresAt === 0) return false;
   return Math.floor(Date.now() / 1000) > expiresAt - 300;
-}
-
-export function clearConfig(_cfg: Config): Config {
-  return emptyConfig();
 }
 
 export function clearConfigInPlace(cfg: Config): void {

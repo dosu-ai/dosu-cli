@@ -8,9 +8,7 @@ import {
   buildDosuAgentsSection,
   DOSU_SECTION_END,
   DOSU_SECTION_START,
-  DOSU_SECTION_VERSION,
   inGitWorkTree,
-  installedDosuSectionVersion,
   stepUpdateAgentsMd,
   upsertDosuAgentsSection,
 } from "./agents-md-step";
@@ -150,24 +148,6 @@ describe("upsertDosuAgentsSection", () => {
       "Dosu AGENTS.md markers are incomplete",
     );
     expect(readFileSync(path, "utf-8")).toBe(existing);
-  });
-});
-
-describe("installedDosuSectionVersion", () => {
-  it("returns null when no section is present", () => {
-    expect(installedDosuSectionVersion("# Just a readme\n")).toBeNull();
-  });
-
-  it("returns 0 for the original unversioned marker", () => {
-    expect(installedDosuSectionVersion("<!-- dosu:mcp:start -->\nx\n<!-- dosu:mcp:end -->")).toBe(
-      0,
-    );
-  });
-
-  it("returns the stamped version for a generated section", () => {
-    expect(installedDosuSectionVersion(buildDosuAgentsSection("instruction"))).toBe(
-      DOSU_SECTION_VERSION,
-    );
   });
 });
 

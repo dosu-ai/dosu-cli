@@ -8,6 +8,7 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parsePostHogProjectToken, parseSentryDsn } from "../src/telemetry/telemetry";
 
 const SCRIPT_DIR =
   typeof import.meta.dir === "string" ? import.meta.dir : dirname(fileURLToPath(import.meta.url));
@@ -45,6 +46,22 @@ export function buildDefines(): string[] {
   const supabaseURL = process.env.SUPABASE_URL ?? "";
   const supabaseAnonKey = process.env.SUPABASE_ANON_KEY ?? "";
   const installChannel = process.env.DOSU_INSTALL_CHANNEL ?? "npm";
+  // PostHog project tokens and Sentry DSNs are public ingestion credentials,
+  // but releases still inject them at build time so source builds stay inert.
+  const rawPosthogProjectToken = process.env.DOSU_POSTHOG_PROJECT_TOKEN ?? "";
+  const rawSentryDsn = process.env.DOSU_CLI_SENTRY_DSN ?? "";
+  const posthogProjectToken = parsePostHogProjectToken(rawPosthogProjectToken);
+  const sentryDsn = parseSentryDsn(rawSentryDsn)?.dsn;
+  if (rawPosthogProjectToken && !posthogProjectToken) {
+    throw new Error(
+      "DOSU_POSTHOG_PROJECT_TOKEN must be empty or a public phc_ project token; refusing to bake a management credential",
+    );
+  }
+  if (rawSentryDsn && !sentryDsn) {
+    throw new Error(
+      "DOSU_CLI_SENTRY_DSN must be empty or a public HTTPS client DSN; refusing to bake an auth token",
+    );
+  }
 
   return [
     "--define",
@@ -59,6 +76,10 @@ export function buildDefines(): string[] {
     `process.env.SUPABASE_ANON_KEY=${JSON.stringify(supabaseAnonKey)}`,
     "--define",
     `process.env.DOSU_INSTALL_CHANNEL=${JSON.stringify(installChannel)}`,
+    "--define",
+    `process.env.DOSU_POSTHOG_PROJECT_TOKEN=${JSON.stringify(posthogProjectToken ?? "")}`,
+    "--define",
+    `process.env.DOSU_CLI_SENTRY_DSN=${JSON.stringify(sentryDsn ?? "")}`,
   ];
 }
 

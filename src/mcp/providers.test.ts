@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  allProviders,
-  allSetupProviders,
-  detectInstalledProviders,
-  getProvider,
-} from "./providers";
+import { allProviders, allSetupProviders, getProvider } from "./providers";
 
 describe("provider registry", () => {
   it("allProviders returns 16 providers", () => {
@@ -94,14 +89,6 @@ describe("provider registry", () => {
           expect(typeof p.isConfigured()).toBe("boolean");
         });
       });
-    }
-  });
-
-  it("detectInstalledProviders returns subset of allSetupProviders", () => {
-    const installed = detectInstalledProviders();
-    const allIds = allSetupProviders().map((p) => p.id());
-    for (const p of installed) {
-      expect(allIds).toContain(p.id());
     }
   });
 });

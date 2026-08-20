@@ -12,7 +12,6 @@ import {
   isRuleAgent,
   removeRuleForAgent,
   rulePathForAgent,
-  SUPPORTED_RULE_AGENT_IDS,
 } from "./installer";
 
 let tempDir: string;
@@ -77,14 +76,9 @@ describe("rule template", () => {
 
 describe("agent registry", () => {
   it("supports the same six mainstream agents as Context7 setup", () => {
-    expect(SUPPORTED_RULE_AGENT_IDS).toEqual([
-      "claude",
-      "cursor",
-      "codex",
-      "opencode",
-      "gemini",
-      "antigravity",
-    ]);
+    for (const agent of ["claude", "cursor", "codex", "opencode", "gemini", "antigravity"]) {
+      expect(isRuleAgent(agent)).toBe(true);
+    }
     expect(isRuleAgent("toString")).toBe(false);
   });
 

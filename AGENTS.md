@@ -33,8 +33,8 @@ bun run check                   # Biome lint + format check (used in CI)
 
 Running `dosu` with no args launches the interactive TUI (`src/tui/tui.ts`). Two broad families of subcommands are registered in `src/cli/cli.ts`:
 
-- **Local / MCP management** — `login`, `logout`, `status`, `setup`, `mcp add|list`, `logs`.
-- **Dosu platform** (require an authenticated deployment) — `ask`, `knowledge`, `docs`, `suggest`, `threads`, `review`, `sources`, `integrations`, `tags`, `members`, `org`, `deployments`, `analytics`, `insights`, `skill`, `hooks`. Each lives in `src/commands/<name>.ts` and talks to the backend via `src/client/`.
+- **Local / MCP management** — `login`, `logout`, `status`, `setup`, `mcp add|list`, `logs`, `telemetry`.
+- **Dosu platform** (require an authenticated deployment) — `ask`, `knowledge`, `docs`, `suggest`, `threads`, `review`, `sources`, `integrations`, `tags`, `members`, `org`, `deployments`, `analytics`, `insights`, `skill`. Each lives in `src/commands/<name>.ts` and talks to the backend via `src/client/`.
 
 Key modules:
 
@@ -45,13 +45,26 @@ Key modules:
 - **`src/commands/`** — The Dosu platform command layer (the list above). Thin Commander wrappers over `src/client/` calls; `output.ts` standardizes human vs JSON output.
 - **`src/setup/`** — Interactive setup wizard (authenticate → select org → select deployment → mint API key → detect installed tools → configure). Uses `@clack/prompts`.
 - **`src/agent/`** — Non-interactive setup for coding agents (`setup --agent --tool <id>`) and the ticket-based login commands (`login --request`/`--check`). Emits machine-readable JSON via `output.ts` for agent consumption.
-- **`src/hooks/`** — Coding-agent hook entrypoints invoked as `dosu hooks <user-prompt-submit|post-tool-use|stop>`. They mint, poll, and inject Dosu "knowledge tickets" into an agent's turn. These run on the agent's hot path on every turn, so they must stay fast and keep stdout clean — `src/cli/cli.ts` deliberately skips the update checks for them.
+- **`src/telemetry/`** — Default-on analytics and error diagnostics with one persisted global switch, safe payload builders, and fail-open transport. User controls live under `dosu telemetry status|enable|disable|reset`.
 - **`src/tui/`** — Main menu TUI when running `dosu` with no subcommand.
-- **`src/version/`** — Version string from build-time env vars (`DOSU_VERSION`, `DOSU_COMMIT`, `DOSU_DATE`), plus background update checks (`update-check.ts`, `skill-update-check.ts`).
+- **`src/version/`** — Version string from the build-time `DOSU_VERSION` env var, plus background update checks (`update-check.ts`, `skill-update-check.ts`).
 
 ## CLI Contract Discipline
 
 All tRPC calls MUST be typed through the generated contract (`CliApiClient` / `TypedClient` from `src/generated/dosu-api-types.d.ts`). Never hand-write client shapes — no `TypedClient & {...}` intersections and no local `{ query(input: ...) }` / `{ mutate(input: ...) }` interfaces. Hand shapes compile against procedures the backend may not serve, turning a missing route into a production 404 instead of a type error (how `dosu review` broke in v0.29.0). If a procedure is missing from the contract, register it in `cliRouter` (dosu repo, `frontend/packages/api/src/cli-root.ts`), regenerate, and re-vendor the contract. Enforced by `src/client/contract-discipline.test.ts`.
+
+## Telemetry Contract
+
+Telemetry is enabled by default and has one global enable/disable switch. Signed-out command events
+use a random installation ID. Signed-in command and setup-funnel events use the stable Dosu user ID;
+Sentry errors may additionally include that user's email. Never alias prior installation history to
+an account.
+Setup analytics may include only the documented coarse fields. Never collect prompts, raw command
+lines, free-form argument or option values, user source code, file contents, local paths, environment
+variable names or values, credentials, raw error messages, or `debug.log`. Keep payloads allowlisted, transports
+bounded and fail-open, honor `DO_NOT_TRACK` and `DOSU_TELEMETRY_DISABLED`, and keep stdout/JSON
+contracts unchanged. See
+[docs/telemetry.md](docs/telemetry.md) for the field and privacy contract.
 
 ## Testing
 
@@ -135,7 +148,8 @@ git push -u origin alpha
 These are read by `scripts/build-all.ts:buildDefines()` and inlined as string literals via `bun build --define` at compile time. The published npm bundle contains the build-time values verbatim — they cannot be changed at runtime.
 
 - `DOSU_WEB_APP_URL`, `DOSU_BACKEND_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY` — sourced from `.env.production` for prod builds, `.env.development` for `bun run dev:local`
-- `DOSU_VERSION`, `DOSU_COMMIT`, `DOSU_DATE` — injected at build time for version info
+- `DOSU_POSTHOG_PROJECT_TOKEN`, `DOSU_CLI_SENTRY_DSN` — telemetry ingestion destinations. These must be public client-side project credentials, never PostHog personal API keys, Sentry auth tokens, or admin/management secrets.
+- `DOSU_VERSION` — injected at build time for version info
 
 ### Runtime overrides
 
@@ -145,6 +159,8 @@ These are read **on every CLI invocation** and take precedence over the baked-in
 - `DOSU_BACKEND_URL_OVERRIDE`
 - `SUPABASE_URL_OVERRIDE`
 - `SUPABASE_ANON_KEY_OVERRIDE`
+- `DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE`
+- `DOSU_CLI_SENTRY_DSN_OVERRIDE`
 
 Example:
 
@@ -159,6 +175,8 @@ npx @dosu/cli@alpha setup
 ### Other runtime env
 
 - `DOSU_DEV=true` — isolates the CLI's config dir to `~/.config/dosu-cli-dev/` so dev runs don't clobber prod credentials. Does **not** switch URLs (URLs are build-time-baked; use `*_OVERRIDE` for that).
+- `DO_NOT_TRACK=1` or `DOSU_TELEMETRY_DISABLED=1` — master disable for all telemetry.
+- `DOSU_TELEMETRY_DEBUG=1` — print the exact safe payload to stderr and send nothing.
 
 <!-- dosu:mcp:start v1 -->
 ## Dosu
