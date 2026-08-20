@@ -137,22 +137,18 @@ function claimAndRemoveStaleLock(
   isProcessAlive: (pid: number) => boolean,
   ownerId: string,
 ): boolean {
-  let stale = false;
-  try {
-    const metadata = readLockMetadata(lockPath);
-    if (metadata && Number.isInteger(metadata.pid) && metadata.pid > 0) {
-      stale = !isProcessAlive(metadata.pid);
-    } else {
-      stale = now - statSync(lockPath).mtimeMs >= staleAgeMs;
-    }
-  } catch (cause) {
-    return hasErrorCode(cause, "ENOENT");
-  }
-  if (!stale) return false;
-
   const claimPath = `${lockPath}.stale.${process.pid}.${ownerId}`;
   try {
     linkSync(lockPath, claimPath);
+    const metadata = readLockMetadata(claimPath);
+    let stale = false;
+    if (metadata && Number.isInteger(metadata.pid) && metadata.pid > 0) {
+      stale = !isProcessAlive(metadata.pid);
+    } else {
+      stale = now - statSync(claimPath).mtimeMs >= staleAgeMs;
+    }
+    if (!stale) return false;
+
     const current = statSync(lockPath);
     const claimed = statSync(claimPath);
     if (current.dev !== claimed.dev || current.ino !== claimed.ino) return false;

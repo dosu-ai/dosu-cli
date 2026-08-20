@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   statSync,
   unlinkSync,
@@ -85,6 +86,53 @@ describe("config refresh lock", () => {
 
     expect(task).toHaveBeenCalledOnce();
     expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it("does not delete a live successor installed after classifying a stale owner", async () => {
+    getConfigPath();
+    const lockPath = join(getConfigDir(), CONFIG_REFRESH_LOCK_FILENAME);
+    const deadPid = process.pid + 1;
+    writeFileSync(lockPath, JSON.stringify({ owner_id: "dead", pid: deadPid, created_at: 1 }), {
+      mode: 0o600,
+    });
+    const task = vi.fn(async () => "should not run");
+    let installedSuccessor = false;
+
+    const outcome = await withConfigRefreshLock(task, {
+      isProcessAlive: (pid) => {
+        if (pid === deadPid && !installedSuccessor) {
+          installedSuccessor = true;
+          unlinkSync(lockPath);
+          writeFileSync(
+            lockPath,
+            JSON.stringify({
+              owner_id: "successor",
+              pid: process.pid,
+              created_at: Date.now(),
+            }),
+            { mode: 0o600 },
+          );
+        }
+        return pid !== deadPid;
+      },
+      ownerId: "waiting-owner",
+      timeoutMs: 0,
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    const remainingOwner = existsSync(lockPath)
+      ? (JSON.parse(readFileSync(lockPath, "utf8")) as { owner_id?: string }).owner_id
+      : undefined;
+    expect({ outcome, remainingOwner, taskCalls: task.mock.calls.length }).toMatchObject({
+      outcome: {
+        name: "SessionPersistenceError",
+        code: "SESSION_PERSISTENCE_ERROR",
+      },
+      remainingOwner: "successor",
+      taskCalls: 0,
+    });
   });
 
   it("wraps config-directory creation failures before running the task", async () => {
