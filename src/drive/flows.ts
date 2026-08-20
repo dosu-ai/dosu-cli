@@ -113,14 +113,17 @@ export async function runDriveSetup(options: {
     p.note(
       [...harnessCounts.entries()]
         .sort(([left], [right]) => left.localeCompare(right))
-        .map(([harness, count]) => `${displayHarness(harness).padEnd(14)} ${count} sessions`)
+        .map(
+          ([harness, count]) =>
+            `${displayHarness(harness).padEnd(14)} ${countLabel(count, "session")}`,
+        )
         .join("\n"),
       "Sessions found",
     );
     for (const repository of repositories) {
       const count = sessionsByRepository.get(repository.root)?.length ?? 0;
       p.log.info(
-        `Found ${count} sessions associated with ${repository.root}. Only these sessions can be uploaded; other projects are excluded.`,
+        `Found ${countLabel(count, "session")} associated with ${repository.root}. Only these sessions can be uploaded; other projects are excluded.`,
       );
     }
     p.log.info("Nothing has been uploaded.");
@@ -159,7 +162,9 @@ export async function runDriveSetup(options: {
       p.log.info(
         "Inspect every selected session and exclude anything before it leaves this computer.",
       );
-      p.log.info(`Safety check: ${redactions} potential credentials detected and replaced.`);
+      p.log.info(
+        `Safety check: ${countLabel(redactions, "potential credential")} detected and replaced.`,
+      );
       const preview = await startPreview(previewSessions);
       try {
         p.log.info(preview.url);
@@ -216,7 +221,7 @@ export async function runDriveSetup(options: {
     }
     upload.stop("Drive index is ready");
     p.outro(
-      `Uploaded ${uploadedSessions} sessions from ${uploadedRepositories} repositories to ${connection.name}. You may close this terminal or disconnect from the network.`,
+      `Uploaded ${countLabel(uploadedSessions, "session")} from ${countLabel(uploadedRepositories, "repository")} to ${connection.name}. You may close this terminal or disconnect from the network.`,
     );
   } finally {
     await workspace.cleanup();
@@ -368,5 +373,9 @@ function displayHarness(harness: string): string {
     .split(/[-_]/)
     .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
     .join(" ");
+}
+
+function countLabel(count: number, label: string): string {
+  return `${count} ${label}${count === 1 ? "" : "s"}`;
 }
 /* v8 ignore stop */
