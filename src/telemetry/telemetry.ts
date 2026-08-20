@@ -27,6 +27,8 @@ const SAFE_ERROR_TYPES = new Set([
   "RangeError",
   "ReferenceError",
   "SessionExpiredError",
+  "SessionPersistenceError",
+  "SessionRefreshError",
   "SyntaxError",
   "TRPCClientError",
   "TypeError",
@@ -73,6 +75,9 @@ const SAFE_ERROR_CODES = new Set([
   "PAYMENT_REQUIRED",
   "PRECONDITION_FAILED",
   "SERVICE_UNAVAILABLE",
+  "SESSION_EXPIRED",
+  "SESSION_PERSISTENCE_ERROR",
+  "SESSION_REFRESH_ERROR",
   "TIMEOUT",
   "TOO_MANY_REQUESTS",
   "UNAUTHORIZED",
@@ -423,15 +428,16 @@ function parseOwnedStackLine(
 
 /** Extracts only allowlisted, bounded diagnostics. Raw Error values are never retained. */
 export function sanitizeError(error: unknown): SafeError {
-  const data = safeRead(error, "data");
-  const typeCandidate = safeRead(error, "name");
-  const codeCandidates = [safeRead(data, "code"), safeRead(error, "code")];
+  const normalizedError = domainErrorFromCauseChain(error) ?? error;
+  const data = safeRead(normalizedError, "data");
+  const typeCandidate = safeRead(normalizedError, "name");
+  const codeCandidates = [safeRead(data, "code"), safeRead(normalizedError, "code")];
   const statusCandidates = [
     safeRead(data, "httpStatus"),
-    safeRead(error, "status"),
-    safeRead(error, "statusCode"),
+    safeRead(normalizedError, "status"),
+    safeRead(normalizedError, "statusCode"),
   ];
-  const exitCodeCandidate = safeRead(error, "exitCode");
+  const exitCodeCandidate = safeRead(normalizedError, "exitCode");
   const code = codeCandidates.find(validErrorCode);
   const status = statusCandidates.find(validStatus);
   const exitCode =
@@ -443,9 +449,28 @@ export function sanitizeError(error: unknown): SafeError {
     type: validErrorType(typeCandidate) ? typeCandidate : "Error",
     ...(code ? { code } : {}),
     ...(status ? { status } : {}),
-    frames: parseStack(safeRead(error, "stack")),
+    frames: parseStack(safeRead(normalizedError, "stack")),
     ...(exitCode === undefined ? {} : { exitCode }),
   };
+}
+
+function domainErrorFromCauseChain(error: unknown): unknown {
+  const seen = new Set<object>();
+  let current = error;
+  for (let depth = 0; depth < 5 && objectLike(current); depth += 1) {
+    if (seen.has(current)) return undefined;
+    seen.add(current);
+    const code = safeRead(current, "code");
+    if (
+      code === "SESSION_EXPIRED" ||
+      code === "SESSION_PERSISTENCE_ERROR" ||
+      code === "SESSION_REFRESH_ERROR"
+    ) {
+      return current;
+    }
+    current = safeRead(current, "cause");
+  }
+  return undefined;
 }
 
 export function durationBucket(durationMs: number): string {
@@ -964,7 +989,7 @@ export function createCommandTelemetry(
         }
       }
 
-      if (!disabled && result === "failure" && error && sentryDsn) {
+      if (!disabled && result === "failure" && error && shouldSendToSentry(error) && sentryDsn) {
         const id = eventId(generateUuid);
         const envelope = id
           ? buildSentryEnvelope({
@@ -1040,4 +1065,8 @@ export function createCommandTelemetry(
       await dispatch(result, exitCode, error);
     },
   };
+}
+
+function shouldSendToSentry(error: SafeError): boolean {
+  return !["SESSION_EXPIRED", "SESSION_PERSISTENCE_ERROR"].includes(error.code ?? "");
 }
