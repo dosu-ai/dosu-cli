@@ -3,8 +3,6 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { driveCommand } from "../commands/drive";
 import {
@@ -17,8 +15,6 @@ import {
 import { scanWithDeja } from "./deja";
 import { runDriveSetup } from "./flows";
 import { createDriveHost, type DriveHost } from "./host";
-import { installDriveMcp } from "./mcp-config";
-import { createDriveMcpServer } from "./mcp-server";
 import { createRepositoryPackage, namespacedSessionId } from "./package";
 import { startPreview } from "./preview";
 import { dedupeRepositories, matchSessionRepository, repositoryIdentity } from "./repositories";
@@ -31,9 +27,6 @@ afterEach(async () => {
   delete process.env.DOSU_DRIVE_HOME;
   delete process.env.DOSU_DRIVE_DEJA_ENTRY;
   delete process.env.DOSU_DRIVE_FAKE_LOG;
-  delete process.env.DOSU_DRIVE_EXECUTABLE;
-  delete process.env.CODEX_HOME;
-  delete process.env.CLAUDE_CONFIG_DIR;
   await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
@@ -321,58 +314,6 @@ else process.exit(2);\n`,
       await host.close();
     }
   });
-
-  it("gate 10: preserves existing Codex MCPs and serves both Drive tools", async () => {
-    const fixture = await indexedHostFixture();
-    cleanup.push(fixture.root);
-    const codexHome = join(fixture.root, "codex-home");
-    const configPath = join(codexHome, "config.toml");
-    mkdirSync(codexHome, { recursive: true });
-    const existing = 'model = "gpt-5"\n\n[mcp_servers.dosu]\nurl = "https://dosu.example/mcp"\n';
-    writeFileSync(configPath, existing);
-    process.env.CODEX_HOME = codexHome;
-    process.env.DOSU_DRIVE_EXECUTABLE = "/opt/dosu-alpha/bin/dosu";
-    setActiveDrive(fixture.connection);
-    try {
-      installDriveMcp("codex");
-      installDriveMcp("codex");
-      const configured = readFileSync(configPath, "utf8");
-      expect(configured.startsWith(existing)).toBe(true);
-      expect(configured).toContain("[mcp_servers.dosu-drive]");
-      expect(configured.match(/\[mcp_servers\.dosu-drive]/g)).toHaveLength(1);
-      expect(configured).toContain('command = "/opt/dosu-alpha/bin/dosu"');
-
-      const server = createDriveMcpServer(() => fixture.connection);
-      const client = new Client({ name: "drive-acceptance", version: "1.0.0" });
-      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-      await server.connect(serverTransport);
-      await client.connect(clientTransport);
-      try {
-        expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual([
-          "search_drive",
-          "read_drive_evidence",
-        ]);
-        const search = await client.callTool({
-          name: "search_drive",
-          arguments: { query: "retry sentinel" },
-        });
-        const searchPayload = toolText(search);
-        const first = searchPayload.results?.[0];
-        expect(first).toMatchObject({ contributor: "Alice", repository: "repo-a" });
-        if (!first) throw new Error("search_drive returned no results");
-        const evidence = await client.callTool({
-          name: "read_drive_evidence",
-          arguments: { result_id: first.resultId },
-        });
-        expect(toolText(evidence).records ?? []).toHaveLength(2);
-      } finally {
-        await client.close();
-        await server.close();
-      }
-    } finally {
-      await fixture.host.close();
-    }
-  });
 });
 
 interface IndexedHostFixture {
@@ -447,17 +388,4 @@ function syncRecord(
     text,
     time: "2026-08-20T07:00:00Z",
   };
-}
-
-interface ToolTextPayload {
-  results?: Array<{ resultId: string; contributor: string; repository: string }>;
-  records?: unknown[];
-}
-
-function toolText(result: { content?: unknown }): ToolTextPayload {
-  const content = Array.isArray(result.content) ? result.content[0] : undefined;
-  if (!content || typeof content !== "object" || !("text" in content)) {
-    throw new Error("MCP tool returned no text content");
-  }
-  return JSON.parse(String(content.text)) as ToolTextPayload;
 }

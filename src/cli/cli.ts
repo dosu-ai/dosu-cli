@@ -65,7 +65,7 @@ import { checkForUpdates } from "../version/update-check";
 import { getVersionString } from "../version/version";
 
 export function shouldRunBackgroundChecks(actionName: string): boolean {
-  return actionName !== "upgrade" && actionName !== "serve";
+  return actionName !== "upgrade";
 }
 
 const TELEMETRY_FLUSH_TIMEOUT_MS = 750;
@@ -92,9 +92,7 @@ function commandTelemetryName(actionCommand: Command): string {
 }
 
 function shouldTrackCommand(command: string): boolean {
-  return (
-    command !== "telemetry" && !command.startsWith("telemetry ") && command !== "drive mcp serve"
-  );
+  return command !== "telemetry" && !command.startsWith("telemetry ");
 }
 
 function commandTelemetryContext(): CommandTelemetryContext {
