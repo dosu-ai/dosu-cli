@@ -16,7 +16,7 @@ export function driveStatePath(): string {
   return join(driveHome(), "state.json");
 }
 
-export function hostedDrivesDir(): string {
+function hostedDrivesDir(): string {
   return join(driveHome(), "drives");
 }
 

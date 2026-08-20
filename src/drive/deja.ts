@@ -4,7 +4,7 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import { driveHome } from "./paths";
 import type { DejaSession } from "./types";
 
-export const DEJA_PACKAGE = "@vshulcz/deja-vu@0.17.3";
+const DEJA_PACKAGE = "@vshulcz/deja-vu@0.17.3";
 
 export interface DejaWorkspace {
   root: string;

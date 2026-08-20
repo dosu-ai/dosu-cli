@@ -419,6 +419,18 @@ else process.exit(2);\n`,
       }),
     ).rejects.toThrow("No approved sessions");
   });
+
+  it("gate 14: keeps implementation-only helpers out of the shipped module surface", async () => {
+    const [deja, paths, state] = await Promise.all([
+      import("./deja"),
+      import("./paths"),
+      import("./state"),
+    ]);
+    expect(deja).not.toHaveProperty("DEJA_PACKAGE");
+    expect(paths).not.toHaveProperty("hostedDrivesDir");
+    expect(state).not.toHaveProperty("emptyDriveState");
+    expect(state).not.toHaveProperty("saveDriveState");
+  });
 });
 
 interface IndexedHostFixture {

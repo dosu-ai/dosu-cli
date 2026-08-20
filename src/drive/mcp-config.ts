@@ -46,7 +46,7 @@ export function driveMcpConfigStatus(agent: DriveMcpAgent): DriveMcpConfigStatus
   };
 }
 
-export function removeDriveMcpFromToml(content: string): string {
+function removeDriveMcpFromToml(content: string): string {
   const lines = content.match(/[^\n]*(?:\n|$)/g)?.filter(Boolean) ?? [];
   let owned = false;
   let output = "";

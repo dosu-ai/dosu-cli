@@ -8,7 +8,7 @@ import {
   type DriveState,
 } from "./types";
 
-export function emptyDriveState(): DriveState {
+function emptyDriveState(): DriveState {
   return { schemaVersion: DRIVE_STATE_SCHEMA_VERSION, recentRepositories: [] };
 }
 
@@ -22,7 +22,7 @@ export function loadDriveState(): DriveState {
   }
 }
 
-export function saveDriveState(state: DriveState): void {
+function saveDriveState(state: DriveState): void {
   ensureDriveHome();
   writeSecureFile(driveStatePath(), `${JSON.stringify(parseDriveState(state), null, 2)}\n`);
 }
