@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { driveCommand } from "../commands/drive";
+import { scanWithDeja } from "./deja";
 import { createRepositoryPackage, namespacedSessionId } from "./package";
+import { startPreview } from "./preview";
 import { dedupeRepositories, matchSessionRepository, repositoryIdentity } from "./repositories";
 import { loadDriveState, rememberRepositories, setActiveDrive } from "./state";
 import type { DejaSession, DejaSyncRecord } from "./types";
@@ -14,6 +16,8 @@ const cleanup: string[] = [];
 
 afterEach(async () => {
   delete process.env.DOSU_DRIVE_HOME;
+  delete process.env.DOSU_DRIVE_DEJA_ENTRY;
+  delete process.env.DOSU_DRIVE_FAKE_LOG;
   await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
@@ -128,6 +132,87 @@ describe("Dosu Drive acceptance gates", () => {
     );
     expect(packaged.map((record) => record.text).join("\n")).not.toContain("must not leave");
     expect(packaged.map((record) => record.text).join("\n")).not.toContain("unrelated");
+  });
+
+  it("gate 5: keeps preview local and freezes the approved session selection", async () => {
+    const preview = await startPreview([
+      {
+        key: "claude\0keep",
+        repository: "repo-a",
+        harness: "claude",
+        nativeId: "keep",
+        title: "Keep this session",
+        started: "2026-08-20T06:00:00Z",
+        updated: "2026-08-20T07:00:00Z",
+        sample: "token [redacted:github_token]",
+        records: 3,
+        bytes: 120,
+        redactions: 1,
+      },
+      {
+        key: "codex\0exclude",
+        repository: "repo-b",
+        harness: "codex",
+        nativeId: "exclude",
+        title: "Exclude this session",
+        started: "2026-08-20T06:00:00Z",
+        updated: "2026-08-20T07:00:00Z",
+        records: 2,
+        bytes: 80,
+        redactions: 0,
+      },
+    ]);
+    try {
+      expect(preview.url).toMatch(/^http:\/\/127\.0\.0\.1:/);
+      const initial = (await fetch(`${preview.url.replace(/\/preview$/, "")}/api/preview`).then(
+        (r) => r.json(),
+      )) as { totals: { selected: number } };
+      expect(initial.totals.selected).toBe(2);
+      const base = preview.url.replace(/\/preview$/, "");
+      await fetch(`${base}/api/select`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ keys: ["claude\0keep"] }),
+      });
+      await fetch(`${base}/api/approve`, { method: "POST" });
+      expect(await preview.waitForDecision()).toEqual(["claude\0keep"]);
+    } finally {
+      await preview.close();
+    }
+  });
+
+  it("gate 6: runs pinned-style DV discovery and removes only its temporary workspace", async () => {
+    const root = await mkdtemp(join(tmpdir(), "dosu-drive-deja-"));
+    cleanup.push(root);
+    const driveHome = join(root, "drive");
+    const fake = join(root, "fake-deja.mjs");
+    const log = join(root, "calls.jsonl");
+    const source = join(root, "source-session.jsonl");
+    writeFileSync(source, '{"sentinel":"unchanged"}\n');
+    writeFileSync(
+      fake,
+      `import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+const args = process.argv.slice(2); appendFileSync(process.env.DOSU_DRIVE_FAKE_LOG, JSON.stringify(args) + "\\n");
+if (args[0] === "version") console.log("deja 0.17.3");
+else if (args[0] === "index") mkdirSync(process.env.DEJA_INDEX_DIR, { recursive: true });
+else if (args[0] === "doctor") console.log(JSON.stringify({ ok: true }));
+else if (args[0] === "last") console.log(JSON.stringify({ schema_version: 2, sessions: [{ id: "s1", harness: "codex", project: "repo-a", path: ${JSON.stringify(source)}, started: "2026-08-20T06:00:00Z", updated: "2026-08-20T07:00:00Z" }] }));
+else if (args[0] === "sync" && args[1] === "export") { mkdirSync(args[2], { recursive: true }); writeFileSync(args[2] + "/deja-sync.jsonl", JSON.stringify({ harness: "codex", session_id: "s1", project: "repo-a", role: "user", text: "fixture", time: "2026-08-20T07:00:00Z" }) + "\\n"); }
+else process.exit(2);\n`,
+    );
+    process.env.DOSU_DRIVE_HOME = driveHome;
+    process.env.DOSU_DRIVE_DEJA_ENTRY = fake;
+    process.env.DOSU_DRIVE_FAKE_LOG = log;
+
+    const workspace = await scanWithDeja();
+    expect(workspace.version).toBe("deja 0.17.3");
+    expect(workspace.sessions.map((session) => session.id)).toEqual(["s1"]);
+    expect(readFileSync(log, "utf8")).toContain('["sync","export"');
+    expect(readFileSync(log, "utf8")).toContain('"--full"');
+    await workspace.cleanup();
+
+    expect(existsSync(workspace.root)).toBe(false);
+    expect(readFileSync(source, "utf8")).toBe('{"sentinel":"unchanged"}\n');
   });
 });
 
