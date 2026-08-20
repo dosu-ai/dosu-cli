@@ -427,6 +427,27 @@ describe("safe payload builders", () => {
   });
 
   it.each([
+    ["SessionExpiredError", "SESSION_EXPIRED"],
+    ["SessionPersistenceError", "SESSION_PERSISTENCE_ERROR"],
+  ])("unwraps a tRPC cause as %s without retaining private details", (name, code) => {
+    const cause = Object.assign(new Error("private /Users/alice/.config/dosu-cli/config.json"), {
+      name,
+      code,
+      path: "/Users/alice/.config/dosu-cli/config.json",
+    });
+    const wrapped = Object.assign(new Error("wrapped private error"), {
+      name: "TRPCClientError",
+      cause,
+    });
+
+    const safeError = sanitizeError(wrapped);
+
+    expect(safeError).toMatchObject({ type: name, code });
+    expect(JSON.stringify(safeError)).not.toContain("alice");
+    expect(JSON.stringify(safeError)).not.toContain("config.json");
+  });
+
+  it.each([
     "EISDIR",
     "ELOOP",
     "EMFILE",
@@ -844,6 +865,71 @@ describe("CommandTelemetry lifecycle", () => {
     expect(payload.properties).toMatchObject({ result: "validation_error", exit_code: 1 });
   });
 
+  it.each([
+    ["SessionExpiredError", "SESSION_EXPIRED", false],
+    ["SessionExpiredError", "SESSION_EXPIRED", true],
+    ["SessionPersistenceError", "SESSION_PERSISTENCE_ERROR", false],
+    ["SessionPersistenceError", "SESSION_PERSISTENCE_ERROR", true],
+  ])("keeps %s (%s) out of Sentry when tRPC wrapped=%s", async (name, code, wrapped) => {
+    const deps = testDependencies();
+    const telemetry = createCommandTelemetry(
+      { install_id: "11111111-1111-4111-8111-111111111111" },
+      deps,
+    );
+    telemetry.start("review list", SAFE_CONTEXT);
+    const cause = Object.assign(new Error("private token and local path"), { name, code });
+    const error = wrapped
+      ? Object.assign(new Error("wrapped private error"), {
+          name: "TRPCClientError",
+          cause,
+        })
+      : cause;
+
+    await telemetry.fail(error);
+
+    expect(deps.fetch).toHaveBeenCalledOnce();
+    expect(deps.randomUUID).not.toHaveBeenCalled();
+    const [url, init] = deps.fetch.mock.calls[0] ?? [];
+    expect(url).toBe("https://dosu.dev/ph-api/i/v0/e/");
+    const payload = JSON.parse(String(init?.body)) as {
+      properties: Record<string, unknown>;
+    };
+    expect(payload.properties).toMatchObject({ result: "failure", error_code: code });
+    expect(JSON.stringify(payload)).not.toContain("private");
+  });
+
+  it("continues sending an unexpected wrapped session refresh failure to Sentry", async () => {
+    const deps = testDependencies();
+    const telemetry = createCommandTelemetry(
+      { install_id: "11111111-1111-4111-8111-111111111111" },
+      deps,
+    );
+    telemetry.start("review list", SAFE_CONTEXT);
+    const cause = Object.assign(new Error("private upstream response"), {
+      name: "SessionRefreshError",
+      code: "SESSION_REFRESH_ERROR",
+      status: 503,
+    });
+    const wrapped = Object.assign(new Error("wrapped private error"), {
+      name: "TRPCClientError",
+      cause,
+    });
+
+    await telemetry.fail(wrapped);
+
+    expect(deps.fetch).toHaveBeenCalledTimes(2);
+    expect(deps.randomUUID).toHaveBeenCalledOnce();
+    const bodies = deps.fetch.mock.calls.map((call) => String(call[1]?.body));
+    const analytics = JSON.parse(bodies.find((body) => body.startsWith("{")) ?? "{}") as {
+      properties: Record<string, unknown>;
+    };
+    const envelope = bodies.find((body) => body.includes("\n")) ?? "";
+    expect(analytics.properties.error_code).toBe("SESSION_REFRESH_ERROR");
+    expect(envelope).toContain('"type":"SessionRefreshError"');
+    expect(envelope).toContain('"http_status":"503"');
+    expect(envelope).not.toContain("private upstream");
+  });
+
   it("reports a non-validation nonzero completion as a message-free Sentry error", async () => {
     const deps = testDependencies();
     const telemetry = createCommandTelemetry({}, deps);
@@ -858,7 +944,7 @@ describe("CommandTelemetry lifecycle", () => {
     expect(envelope).not.toContain('"message"');
   });
 
-  it("sends a safe analytics failure and a manual Sentry envelope only once", async () => {
+  it("still sends an unrelated tRPC failure to analytics and Sentry exactly once", async () => {
     const deps = testDependencies();
     const telemetry = createCommandTelemetry(
       {

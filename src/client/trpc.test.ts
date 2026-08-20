@@ -62,6 +62,10 @@ function trpcError(status: number): Response {
   });
 }
 
+function sessionError(name: string, code: string, message: string): Error {
+  return Object.assign(new Error(message), { name, code });
+}
+
 describe("createTypedClient", () => {
   beforeEach(() => {
     mockFetch.mockReset();
@@ -107,16 +111,25 @@ describe("createTypedClient", () => {
       expect(fetchOpts.headers["x-dosu-cli-contract"]).toBe(CLI_CONTRACT_HASH);
     });
 
-    it("throws session expired when proactive refresh fails", async () => {
+    it("preserves a typed persistence error when proactive refresh fails", async () => {
       mockIsTokenExpired.mockReturnValue(true);
-      mockRefreshToken.mockRejectedValue(new Error("network error"));
+      const refreshError = sessionError(
+        "SessionPersistenceError",
+        "SESSION_PERSISTENCE_ERROR",
+        "Could not save refreshed credentials. Ensure the Dosu config directory is writable.",
+      );
+      mockRefreshToken.mockRejectedValue(refreshError);
 
       const client = createTypedClient(makeConfig());
 
-      await expect(
+      const request =
         // biome-ignore lint/suspicious/noExplicitAny: testing dynamic tRPC proxy
-        (client as any).thread.list.query({ space_id: "s1" }),
-      ).rejects.toThrow("session expired");
+        (client as any).thread.list.query({ space_id: "s1" });
+      await expect(request).rejects.toMatchObject({
+        name: "TRPCClientError",
+        message: expect.stringContaining("writable"),
+        cause: refreshError,
+      });
     });
   });
 
@@ -143,19 +156,27 @@ describe("createTypedClient", () => {
       expect(retryOpts.headers["x-dosu-cli-contract"]).toBe(CLI_CONTRACT_HASH);
     });
 
-    it("returns original response when 401 refresh fails", async () => {
-      mockRefreshToken.mockRejectedValue(new Error("refresh failed"));
+    it("throws the typed refresh error when a 401 refresh fails", async () => {
+      const refreshError = sessionError(
+        "SessionExpiredError",
+        "SESSION_EXPIRED",
+        "Session expired. Run 'dosu login' to re-authenticate.",
+      );
+      mockRefreshToken.mockRejectedValue(refreshError);
       mockFetch.mockResolvedValue(trpcError(401));
 
       const client = createTypedClient(makeConfig());
 
-      await expect(
+      const request =
         // biome-ignore lint/suspicious/noExplicitAny: testing dynamic tRPC proxy
-        (client as any).thread.list.query({ space_id: "s1" }),
-      ).rejects.toThrow();
+        (client as any).thread.list.query({ space_id: "s1" });
+      await expect(request).rejects.toMatchObject({
+        name: "TRPCClientError",
+        message: expect.stringContaining("dosu login"),
+        cause: refreshError,
+      });
 
       expect(mockRefreshToken).toHaveBeenCalledOnce();
-      // Should NOT have retried — only 1 fetch call
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
   });

@@ -2,6 +2,11 @@
  * HTTP client for making authenticated requests to the Dosu backend.
  */
 
+import {
+  SessionExpiredError,
+  SessionPersistenceError,
+  SessionRefreshError,
+} from "../auth/session-errors";
 import type { Config } from "../config/config";
 import {
   getConfigUserID,
@@ -10,15 +15,11 @@ import {
   loadConfig,
   saveConfig,
 } from "../config/config";
+import { withConfigRefreshLock } from "../config/config-lock";
 import { getBackendURL, getSupabaseAnonKey, getSupabaseURL } from "../config/constants";
 import { getAccessTokenOAuthClientID } from "../config/identity";
 
-export class SessionExpiredError extends Error {
-  constructor() {
-    super("session expired");
-    this.name = "SessionExpiredError";
-  }
-}
+export { SessionExpiredError };
 
 export interface Deployment {
   deployment_id: string;
@@ -69,11 +70,7 @@ export class Client {
 
     // If backend says unauthorized, try refresh + retry once
     if (resp.status === 401 || resp.status === 403) {
-      try {
-        await this.refreshToken();
-      } catch {
-        throw new SessionExpiredError();
-      }
+      await this.refreshToken();
       resp = await this.doRequestOnce(method, path, body);
     }
 
@@ -129,58 +126,43 @@ export class Client {
   /**
    * Public method to refresh token externally (used during auth step).
    *
-   * Multi-process self-healing: sibling CLI processes rotate the refresh
-   * token through the shared config file, and GoTrue refresh tokens are
-   * single-use — replaying a stale one outside the reuse interval can revoke
-   * the ENTIRE session for every client holding it. So: adopt the newest
-   * on-disk tokens before refreshing (a long-lived process may hold a stale
-   * in-memory copy), and on failure re-read the config once in case a
-   * sibling rotated mid-flight.
+   * The lock covers the complete read -> remote refresh -> atomic save cycle,
+   * so sibling processes cannot rotate the same refresh token concurrently.
+   * Refreshed credentials become visible in memory only after they are durable.
    */
   async refreshToken(): Promise<void> {
-    this.adoptNewerDiskTokens();
-    if (!this.config.active_account?.session.refresh_token) {
-      throw new Error("no refresh token available");
+    const refreshTokenAtStart = this.config.active_account?.session.refresh_token;
+    if (!refreshTokenAtStart) {
+      throw new SessionExpiredError();
     }
 
-    try {
-      await this.refreshTokenOnce();
-    } catch (err) {
-      // A sibling may have rotated the token between our config read and the
-      // request landing. If the file now holds a different token, retry once
-      // with it before declaring the session dead.
-      if (!this.adoptNewerDiskTokens()) {
-        throw err;
+    await withConfigRefreshLock(async () => {
+      const disk = loadConfig();
+      this.assertSameActiveAccount(disk);
+      const diskRefreshToken = disk.active_account?.session.refresh_token;
+      const diskHasNewerSession = Boolean(
+        diskRefreshToken && diskRefreshToken !== refreshTokenAtStart,
+      );
+
+      if (diskHasNewerSession && !isTokenExpired(disk)) {
+        this.adoptConfig(disk);
+        return;
       }
-      await this.refreshTokenOnce();
-    }
+
+      const source = diskRefreshToken ? disk : this.config;
+      const candidate = await this.refreshTokenOnce(source);
+      try {
+        saveConfig(candidate);
+      } catch (cause) {
+        throw new SessionPersistenceError({ cause });
+      }
+      this.adoptConfig(candidate);
+    });
   }
 
-  /**
-   * Sync in-memory tokens from the config file when a sibling process saved
-   * a different refresh token. Returns true when tokens were adopted.
-   */
-  private adoptNewerDiskTokens(): boolean {
-    const disk = loadConfig();
-    this.assertSameActiveAccount(disk);
-    const diskSession = disk.active_account?.session;
-    const memorySession = this.config.active_account?.session;
-    if (
-      !diskSession?.refresh_token ||
-      !memorySession ||
-      diskSession.refresh_token === memorySession.refresh_token
-    ) {
-      return false;
-    }
-    memorySession.access_token = diskSession.access_token;
-    memorySession.refresh_token = diskSession.refresh_token;
-    memorySession.expires_at = diskSession.expires_at;
-    return true;
-  }
-
-  private async refreshTokenOnce(): Promise<void> {
-    const session = this.config.active_account?.session;
-    if (!session?.refresh_token) throw new Error("no refresh token available");
+  private async refreshTokenOnce(source: Config): Promise<Config> {
+    const session = source.active_account?.session;
+    if (!session?.refresh_token) throw new SessionExpiredError();
 
     const supabaseURL = getSupabaseURL();
     const oauthClientID = getAccessTokenOAuthClientID(session.access_token);
@@ -198,32 +180,54 @@ export class Client {
         }).toString()
       : JSON.stringify({ refresh_token: session.refresh_token });
 
-    const resp = await fetch(endpoint, {
-      method: "POST",
-      headers,
-      body,
-    });
-
-    if (resp.status !== 200) {
-      throw new Error(`refresh failed with status ${resp.status}`);
+    let resp: Response;
+    try {
+      resp = await fetch(endpoint, {
+        method: "POST",
+        headers,
+        body,
+      });
+    } catch (cause) {
+      throw new SessionRefreshError({ cause });
     }
 
-    const data = (await resp.json()) as {
-      access_token: string;
-      refresh_token: string;
-      expires_in: number;
-    };
+    if (resp.status !== 200) {
+      const errorCode = await readAuthErrorCode(resp);
+      if (resp.status === 401 || REAUTHENTICATION_ERROR_CODES.has(errorCode ?? "")) {
+        throw new SessionExpiredError();
+      }
+      throw new SessionRefreshError({ status: resp.status });
+    }
+
+    const data = await readRefreshResponse(resp);
 
     // A browser login in another process may have switched accounts while the
     // refresh request was in flight. Never let this stale client overwrite the
     // new account aggregate with tokens from the previous account.
-    this.assertSameActiveAccount(loadConfig());
+    const latest = loadConfig();
+    this.assertSameActiveAccount(latest);
+    const latestSession = latest.active_account?.session;
+    if (latestSession?.refresh_token && latestSession.refresh_token !== session.refresh_token) {
+      return latest;
+    }
 
-    session.access_token = data.access_token;
-    session.refresh_token = data.refresh_token;
-    session.expires_at = Math.floor(Date.now() / 1000) + data.expires_in;
+    const base = latestSession?.refresh_token ? latest : source;
+    return configWithSession(base, {
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      expires_at: Math.floor(Date.now() / 1000) + data.expires_in,
+    });
+  }
 
-    saveConfig(this.config);
+  private adoptConfig(source: Config): void {
+    this.config.mode = source.mode;
+    this.config.active_account = source.active_account
+      ? {
+          ...source.active_account,
+          session: { ...source.active_account.session },
+          target: source.active_account.target ? { ...source.active_account.target } : undefined,
+        }
+      : undefined;
   }
 
   private assertSameActiveAccount(disk: Config): void {
@@ -289,6 +293,74 @@ export class Client {
     }
     return resp.json() as Promise<APIKeyResponse>;
   }
+}
+
+const REAUTHENTICATION_ERROR_CODES = new Set([
+  "invalid_grant",
+  "refresh_token_already_used",
+  "refresh_token_not_found",
+  "session_expired",
+  "session_not_found",
+]);
+
+interface RefreshResponse {
+  access_token: string;
+  refresh_token: string;
+  expires_in: number;
+}
+
+async function readAuthErrorCode(resp: Response): Promise<string | undefined> {
+  try {
+    const data = (await resp.json()) as unknown;
+    if (!isRecord(data)) return undefined;
+    const code = typeof data.error_code === "string" ? data.error_code : data.error;
+    return typeof code === "string" ? code : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function readRefreshResponse(resp: Response): Promise<RefreshResponse> {
+  let data: unknown;
+  try {
+    data = await resp.json();
+  } catch (cause) {
+    throw new SessionRefreshError({ cause, status: resp.status });
+  }
+  if (
+    !isRecord(data) ||
+    typeof data.access_token !== "string" ||
+    typeof data.refresh_token !== "string" ||
+    typeof data.expires_in !== "number" ||
+    !Number.isFinite(data.expires_in)
+  ) {
+    throw new SessionRefreshError({ status: resp.status });
+  }
+  return {
+    access_token: data.access_token,
+    refresh_token: data.refresh_token,
+    expires_in: data.expires_in,
+  };
+}
+
+function configWithSession(
+  source: Config,
+  session: NonNullable<Config["active_account"]>["session"],
+): Config {
+  const account = source.active_account;
+  if (!account) throw new SessionExpiredError();
+  return {
+    ...source,
+    active_account: {
+      ...account,
+      session,
+      target: account.target ? { ...account.target } : undefined,
+    },
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function readErrorBody(resp: Response): Promise<string> {

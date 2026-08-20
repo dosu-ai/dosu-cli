@@ -97,7 +97,7 @@ describe("Client", () => {
 
     it("throws SessionExpiredError when refresh fails", async () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({}, 401));
-      mockFetch.mockResolvedValueOnce(jsonResponse({}, 400)); // refresh fails
+      mockFetch.mockResolvedValueOnce(jsonResponse({ error_code: "refresh_token_not_found" }, 400)); // refresh fails
 
       const client = new Client(makeConfig());
       await expect(client.get("/test")).rejects.toBeInstanceOf(SessionExpiredError);
@@ -138,7 +138,11 @@ describe("Client", () => {
           expires_at: Math.floor(Date.now() / 1000) - 100,
         }),
       );
-      await expect(client.get("/test")).rejects.toThrow("no refresh token available");
+      await expect(client.get("/test")).rejects.toMatchObject({
+        name: "SessionExpiredError",
+        code: "SESSION_EXPIRED",
+        message: expect.stringContaining("dosu login"),
+      });
     });
   });
 
