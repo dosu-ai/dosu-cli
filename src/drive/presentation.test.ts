@@ -14,6 +14,14 @@ describe("Drive setup presentation", () => {
     expect([...status]).toHaveLength(54);
   });
 
+  it("renders short home and external paths without truncation", () => {
+    expect(scanStatus("/Users/alice", 80, "/Users/alice")).toBe("Scanning… ~");
+    expect(scanStatus("/tmp/session.jsonl", 80, "/Users/alice")).toBe(
+      "Scanning… /tmp/session.jsonl",
+    );
+    expect(scanStatus("/tmp/default-columns.jsonl")).toContain("default-columns.jsonl");
+  });
+
   it("groups harness counts under each repository and prints one total", () => {
     const repoA: RepositoryIdentity = { root: "/work/repo-a", name: "repo-a" };
     const repoB: RepositoryIdentity = { root: "/work/repo-b", name: "repo-b" };
@@ -31,6 +39,14 @@ describe("Drive setup presentation", () => {
         "│  └─ Claude Code    1 session",
         "└─ Total             4 sessions",
       ].join("\n"),
+    );
+  });
+
+  it("shows an empty selected repository without inventing sessions", () => {
+    const repository: RepositoryIdentity = { root: "/work/empty", name: "empty" };
+
+    expect(renderSessionSummary([repository], new Map())).toBe(
+      ["├─ /work/empty", "│  └─ No sessions", "└─ Total             0 sessions"].join("\n"),
     );
   });
 });

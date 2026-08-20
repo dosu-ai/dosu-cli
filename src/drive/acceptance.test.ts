@@ -14,7 +14,7 @@ import {
   searchDrive,
   uploadPackage,
 } from "./client";
-import { scanWithDeja } from "./deja";
+import { runDeja, scanWithDeja } from "./deja";
 import { discoverDrives } from "./discovery";
 import { runDriveSetup, selectRepositories } from "./flows";
 import { createDriveHost, type DriveHost } from "./host";
@@ -289,7 +289,7 @@ describe("Dosu Drive acceptance gates", () => {
       `import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 const args = process.argv.slice(2); appendFileSync(process.env.DOSU_DRIVE_FAKE_LOG, JSON.stringify(args) + "\\n");
 if (args[0] === "version") console.log("deja 0.17.3-dosu.1");
-else if (args[0] === "index") { process.stderr.write('@dosu-scan {"path":"/work/repo-a/.codex/session.jsonl"}\\n'); appendFileSync(process.env.DOSU_DRIVE_FAKE_LOG, JSON.stringify({ config: { commands: process.env.DEJA_INDEX_COMMANDS, edits: process.env.DEJA_INDEX_EDITS, paths: process.env.DEJA_INDEX_PATHS, toolOutput: process.env.DEJA_INDEX_TOOL_OUTPUT, noRedact: process.env.DEJA_NO_REDACT, projectRoots: process.env.DEJA_PROJECT_ROOTS, scanProgress: process.env.DEJA_SCAN_PROGRESS } }) + "\\n"); mkdirSync(process.env.DEJA_INDEX_DIR, { recursive: true }); }
+else if (args[0] === "index") { process.stderr.write('plain diagnostic\\n@dosu-scan not-json\\n@dosu-scan {"path":42}\\n@dosu-scan {"path":"/work/repo-a/.codex/session.jsonl"}\\n'); appendFileSync(process.env.DOSU_DRIVE_FAKE_LOG, JSON.stringify({ config: { commands: process.env.DEJA_INDEX_COMMANDS, edits: process.env.DEJA_INDEX_EDITS, paths: process.env.DEJA_INDEX_PATHS, toolOutput: process.env.DEJA_INDEX_TOOL_OUTPUT, noRedact: process.env.DEJA_NO_REDACT, projectRoots: process.env.DEJA_PROJECT_ROOTS, scanProgress: process.env.DEJA_SCAN_PROGRESS } }) + "\\n"); mkdirSync(process.env.DEJA_INDEX_DIR, { recursive: true }); }
 else if (args[0] === "doctor") console.log(JSON.stringify({ ok: true }));
 else if (args[0] === "last") console.log(JSON.stringify({ schema_version: 2, sessions: [{ id: "s1", harness: "codex", project: "repo-a", path: ${JSON.stringify(source)}, started: "2026-08-20T06:00:00Z", updated: "2026-08-20T07:00:00Z" }] }));
 else if (args[0] === "sync" && args[1] === "export") { mkdirSync(args[2], { recursive: true }); writeFileSync(args[2] + "/deja-sync.jsonl", JSON.stringify({ harness: "codex", session_id: "s1", project: "repo-a", role: "user", text: "fixture", time: "2026-08-20T07:00:00Z" }) + "\\n"); }
@@ -321,6 +321,23 @@ else process.exit(2);\n`,
 
     expect(existsSync(workspace.root)).toBe(false);
     expect(readFileSync(source, "utf8")).toBe('{"sentinel":"unchanged"}\n');
+
+    const direct = await runDeja(["index"], {
+      ...process.env,
+      DEJA_INDEX_DIR: join(root, "direct-index"),
+    });
+    expect(direct.stderr).toBe("plain diagnostic\n");
+    expect(
+      (
+        await runDeja(["version"], {
+          ...process.env,
+          DOSU_DRIVE_DEJA_ENTRY: undefined,
+        })
+      ).stdout.trim(),
+    ).toBe("deja 0.17.3-dosu.1");
+    await expect(runDeja(["unsupported"], process.env)).rejects.toThrow(
+      "deja-vu unsupported failed",
+    );
   });
 
   it("gate 7: streams a verified Package into a persistent central DV index", async () => {
