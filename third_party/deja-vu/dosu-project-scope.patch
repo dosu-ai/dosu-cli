@@ -1,7 +1,7 @@
 From 73638f3f88691ee8bdb2051c4fbe0e9a5bcf4011 Mon Sep 17 00:00:00 2001
 From: Caspian Zhao <caspian.zhao@outlook.com>
 Date: Thu, 20 Aug 2026 09:25:59 -0700
-Subject: [PATCH] feat: scope indexing to selected project roots
+Subject: [PATCH 1/2] feat: scope indexing to selected project roots
 
 ---
  internal/sources/claude.go             |  19 ++-
@@ -462,6 +462,386 @@ index bbf9081..e5dc6ba 100644
  				ss, err := safeParse(j.p, parse)
  				diagFileError(j.p, err)
  				outs <- struct {
+-- 
+2.50.1 (Apple Git-155)
+
+
+From e23e2af7b630aa864472db9fb28bec124a39cc04 Mon Sep 17 00:00:00 2001
+From: Caspian Zhao <caspian.zhao@outlook.com>
+Date: Thu, 20 Aug 2026 09:47:48 -0700
+Subject: [PATCH 2/2] fix: retain scoped repository identity
+
+---
+ internal/sources/claude.go             | 13 ++++
+ internal/sources/claude_decode.go      |  3 +
+ internal/sources/cursor.go             | 55 ++++++++++++++---
+ internal/sources/project_scope.go      | 51 ++++++++++++----
+ internal/sources/project_scope_test.go | 85 +++++++++++++++++++-------
+ 5 files changed, 163 insertions(+), 44 deletions(-)
+
+diff --git a/internal/sources/claude.go b/internal/sources/claude.go
+index ded140c..9d70991 100644
+--- a/internal/sources/claude.go
++++ b/internal/sources/claude.go
+@@ -136,9 +136,22 @@ func parseClaudeGenericFromOffset(path string, offset int64) ([]model.Session, e
+ 	if p := projectFromPaths(s.Messages); p != "" {
+ 		s.Project = p
+ 	}
++	if root := claudeScopeRoot(path); root != "" {
++		s.Project = root
++	}
+ 	return []model.Session{s}, err
+ }
+ 
++func claudeScopeRoot(path string) string {
++	if len(projectScopeRoots()) == 0 {
++		return ""
++	}
++	if resolved := ResolveEncodedPath(ClaudeProjectDirBase(path)); resolved != "" {
++		return projectScopeRootForPath(resolved)
++	}
++	return projectScopeRootForProject(claudeProjectName(claudeProjectDir(path)))
++}
++
+ func claudeProjectDir(path string) string {
+ 	return projectDir(ClaudeRoot(), path)
+ }
+diff --git a/internal/sources/claude_decode.go b/internal/sources/claude_decode.go
+index 85b2678..7651f53 100644
+--- a/internal/sources/claude_decode.go
++++ b/internal/sources/claude_decode.go
+@@ -103,6 +103,9 @@ func parseClaudeTypedFromOffset(path string, offset int64) ([]model.Session, err
+ 	if p := projectFromPaths(s.Messages); p != "" {
+ 		s.Project = p
+ 	}
++	if root := claudeScopeRoot(path); root != "" {
++		s.Project = root
++	}
+ 	return []model.Session{s}, err
+ }
+ 
+diff --git a/internal/sources/cursor.go b/internal/sources/cursor.go
+index 7899d4a..c4a24a5 100644
+--- a/internal/sources/cursor.go
++++ b/internal/sources/cursor.go
+@@ -95,7 +95,7 @@ func CursorTranscripts() []string {
+ 			return nil
+ 		}
+ 		if cursorPathHasDir(p, "agent-transcripts") {
+-			if len(projectScopeRoots()) > 0 && !projectScopeMatchesProject(cursorTranscriptProject(p)) {
++			if len(projectScopeRoots()) > 0 && cursorTranscriptScopeRoot(p) == "" {
+ 				return nil
+ 			}
+ 			out = append(out, p)
+@@ -199,6 +199,7 @@ func parseCursorDB(db string, sinceMS int64) ([]model.Session, error) {
+ 			cid = strings.TrimPrefix(str(c["key"]), "composerData:")
+ 		}
+ 		s := model.Session{Harness: "cursor", ID: cid, Project: "-", Path: db, Title: str(c["name"])}
++		workspace := ""
+ 		s.Touch(epochMS(c["created"]))
+ 		s.Touch(epochMS(c["updated"]))
+ 		bs := byComposer[cid]
+@@ -221,11 +222,19 @@ func parseCursorDB(db string, sinceMS int64) ([]model.Session, error) {
+ 			s.Messages = append(s.Messages, model.Message{Role: role, Text: text, Time: t})
+ 			if s.Project == "-" {
+ 				if ws := str(b["wsdir"]); ws != "" {
++					workspace = ws
+ 					s.Project = projectName(ws)
+ 				}
+ 			}
+ 		}
+ 		if len(s.Messages) > 0 {
++			if len(projectScopeRoots()) > 0 {
++				root := projectScopeRootForPath(workspace)
++				if root == "" {
++					continue
++				}
++				s.Project = root
++			}
+ 			out = append(out, s)
+ 		}
+ 	}
+@@ -284,7 +293,11 @@ var cursorDialect = toolDialect{
+ // JSONL; control lines (turn_ended etc.) carry no role and are skipped.
+ func ParseCursorTranscript(path string) ([]model.Session, error) {
+ 	id := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+-	s := model.Session{Harness: "cursor", ID: id, Project: cursorTranscriptProject(path), Path: path}
++	project := cursorTranscriptProject(path)
++	if root := cursorTranscriptScopeRoot(path); root != "" {
++		project = root
++	}
++	s := model.Session{Harness: "cursor", ID: id, Project: project, Path: path}
+ 	fi, err := os.Stat(path)
+ 	if err == nil {
+ 		s.Touch(fi.ModTime()) // transcripts carry no timestamps
+@@ -330,24 +343,46 @@ func ParseCursorTranscript(path string) ([]model.Session, error) {
+ // back to a path with a greedy existence-checked walk; hyphens in real dir
+ // names survive because the literal branch is tried when the split fails.
+ func cursorTranscriptProject(path string) string {
++	encoded := cursorTranscriptEncodedProject(path)
++	if encoded == "" {
++		return "-"
++	}
++	if resolved := resolveEncodedPath("-" + encoded); resolved != "" {
++		return projectName(resolved)
++	}
++	parts := strings.Split(encoded, "-")
++	if len(parts) >= 2 {
++		return filepath.Join(parts[len(parts)-2], parts[len(parts)-1])
++	}
++	return encoded
++}
++
++func cursorTranscriptEncodedProject(path string) string {
+ 	dir := filepath.Clean(path)
+ 	for !strings.EqualFold(filepath.Base(filepath.Dir(dir)), "projects") {
+ 		parent := filepath.Dir(dir)
+ 		if parent == dir {
+-			return "-"
++			return ""
+ 		}
+ 		dir = parent
+ 	}
+ 	encoded := filepath.Base(dir)
+ 	if encoded == "" || encoded == "." {
+-		return "-"
++		return ""
+ 	}
+-	if resolved := resolveEncodedPath("-" + encoded); resolved != "" {
+-		return projectName(resolved)
++	return encoded
++}
++
++func cursorTranscriptScopeRoot(path string) string {
++	if len(projectScopeRoots()) == 0 {
++		return ""
+ 	}
+-	parts := strings.Split(encoded, "-")
+-	if len(parts) >= 2 {
+-		return filepath.Join(parts[len(parts)-2], parts[len(parts)-1])
++	encoded := cursorTranscriptEncodedProject(path)
++	if encoded == "" {
++		return ""
+ 	}
+-	return encoded
++	if resolved := resolveEncodedPath("-" + encoded); resolved != "" {
++		return projectScopeRootForPath(resolved)
++	}
++	return projectScopeRootForProject(cursorTranscriptProject(path))
+ }
+diff --git a/internal/sources/project_scope.go b/internal/sources/project_scope.go
+index 78e6add..9cdd1de 100644
+--- a/internal/sources/project_scope.go
++++ b/internal/sources/project_scope.go
+@@ -52,37 +52,56 @@ func canonicalScopePath(path string) string {
+ }
+ 
+ func projectScopeMatchesPath(path string) bool {
++	return projectScopeRootForPath(path) != ""
++}
++
++// projectScopeRootForPath returns the one selected repository a source path
++// belongs to. Exact containment wins. A checkout elsewhere can still belong
++// through a shared Git common directory or normalized origin, but ambiguous
++// matches are rejected rather than assigned to an arbitrary selected root.
++func projectScopeRootForPath(path string) string {
+ 	path = canonicalScopePath(path)
+ 	if path == "" {
+-		return false
++		return ""
+ 	}
++	exact := ""
+ 	for _, root := range projectScopeRoots() {
+ 		if rel, err := filepath.Rel(root, path); err == nil &&
+ 			(rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel))) {
+-			return true
++			if len(root) > len(exact) {
++				exact = root
++			}
+ 		}
+ 	}
++	if exact != "" {
++		return exact
++	}
+ 	if candidate, ok := scopeRepositoryAt(path); ok {
++		matched := ""
+ 		for _, root := range projectScopeRoots() {
+ 			selected, selectedOK := scopeRepositoryAt(root)
+ 			if !selectedOK {
+ 				continue
+ 			}
+-			if candidate.commonDir != "" && candidate.commonDir == selected.commonDir {
+-				return true
+-			}
+-			if candidate.remote != "" && candidate.remote == selected.remote {
+-				return true
++			if (candidate.commonDir != "" && candidate.commonDir == selected.commonDir) ||
++				(candidate.remote != "" && candidate.remote == selected.remote) {
++				if matched != "" && matched != root {
++					return ""
++				}
++				matched = root
+ 			}
+ 		}
++		if matched != "" {
++			return matched
++		}
+ 		// An existing repository is identifiable. A different remote with the
+ 		// same basename is a different project, not a related worktree.
+-		return false
++		return ""
+ 	}
+ 	// Deleted worktrees no longer have Git metadata to prove. Keep the current
+ 	// whole-segment fallback so historical sessions from a removed worktree do
+ 	// not disappear merely because its checkout was cleaned up.
+-	return projectScopeMatchesProject(projectName(path))
++	return projectScopeRootForProject(projectName(path))
+ }
+ 
+ func scopeRepositoryAt(path string) (scopeRepositoryIdentity, bool) {
+@@ -139,18 +158,26 @@ func normalizeScopeRemote(remote string) string {
+ // "dosu" repository. Exact-path matching above wins first; this fallback is
+ // deliberately no broader than whole path segments.
+ func projectScopeMatchesProject(project string) bool {
++	return projectScopeRootForProject(project) != ""
++}
++
++func projectScopeRootForProject(project string) string {
+ 	project = normalizeScopeProject(project)
+ 	if project == "" || project == "-" {
+-		return false
++		return ""
+ 	}
++	matched := ""
+ 	for _, root := range projectScopeRoots() {
+ 		base := normalizeScopeProject(filepath.Base(root))
+ 		parentBase := normalizeScopeProject(filepath.Join(filepath.Base(filepath.Dir(root)), filepath.Base(root)))
+ 		if project == base || project == parentBase || strings.HasSuffix(project, "/"+base) {
+-			return true
++			if matched != "" && matched != root {
++				return ""
++			}
++			matched = root
+ 		}
+ 	}
+-	return false
++	return matched
+ }
+ 
+ func normalizeScopeProject(project string) string {
+diff --git a/internal/sources/project_scope_test.go b/internal/sources/project_scope_test.go
+index 9986630..ecd22a2 100644
+--- a/internal/sources/project_scope_test.go
++++ b/internal/sources/project_scope_test.go
+@@ -62,45 +62,86 @@ func TestScanProgressLineIsMachineReadableAndEscapesPaths(t *testing.T) {
+ func TestClaudeFilesHonorsProjectRootScopeBeforeParsing(t *testing.T) {
+ 	root := t.TempDir()
+ 	selected := filepath.Join(root, "work", "dosu")
+-	other := filepath.Join(root, "work", "other")
+-	for _, dir := range []string{selected, other} {
+-		if err := os.MkdirAll(dir, 0o755); err != nil {
+-			t.Fatal(err)
+-		}
+-	}
++	related := filepath.Join(root, "related", "dosu")
++	unrelatedSameName := filepath.Join(root, "unrelated", "dosu")
++	initScopeRepository(t, selected, "git@example.com:dosu-ai/dosu.git")
++	initScopeRepository(t, related, "https://example.com/dosu-ai/dosu.git")
++	initScopeRepository(t, unrelatedSameName, "https://example.com/someone-else/dosu.git")
+ 	claude := filepath.Join(root, "claude-projects")
+ 	t.Setenv("DEJA_CLAUDE_ROOT", claude)
+ 	t.Setenv("DEJA_PROJECT_ROOTS", selected)
+ 	want := filepath.Join(claude, strings.ReplaceAll(selected, string(filepath.Separator), "-"), "want.jsonl")
+-	reject := filepath.Join(claude, strings.ReplaceAll(other, string(filepath.Separator), "-"), "reject.jsonl")
+-	writeScopeFile(t, want, `{}`+"\n")
+-	writeScopeFile(t, reject, `{}`+"\n")
++	relatedTranscript := filepath.Join(claude, strings.ReplaceAll(related, string(filepath.Separator), "-"), "related.jsonl")
++	reject := filepath.Join(claude, strings.ReplaceAll(unrelatedSameName, string(filepath.Separator), "-"), "reject.jsonl")
++	writeClaudeScopeFixture(t, want, "want")
++	writeClaudeScopeFixture(t, relatedTranscript, "related")
++	writeClaudeScopeFixture(t, reject, "reject")
+ 
+-	if got := ClaudeFiles(); !slices.Equal(got, []string{want}) {
+-		t.Fatalf("ClaudeFiles() = %v, want [%s]", got, want)
++	got := ClaudeFiles()
++	slices.Sort(got)
++	wantFiles := []string{relatedTranscript, want}
++	slices.Sort(wantFiles)
++	if !slices.Equal(got, wantFiles) {
++		t.Fatalf("ClaudeFiles() = %v, want %v", got, wantFiles)
++	}
++	sessions := LoadClaude()
++	if len(sessions) != 2 {
++		t.Fatalf("LoadClaude() returned %d sessions, want 2", len(sessions))
++	}
++	selected = canonicalScopePath(selected)
++	for _, session := range sessions {
++		if session.Project != selected {
++			t.Errorf("Claude session %q project = %q, want selected root %q", session.ID, session.Project, selected)
++		}
+ 	}
+ }
+ 
+ func TestCursorTranscriptsHonorProjectRootScopeBeforeParsing(t *testing.T) {
+ 	root := t.TempDir()
+ 	selected := filepath.Join(root, "work", "dosu")
+-	other := filepath.Join(root, "work", "other")
+-	for _, dir := range []string{selected, other} {
+-		if err := os.MkdirAll(dir, 0o755); err != nil {
+-			t.Fatal(err)
+-		}
+-	}
++	related := filepath.Join(root, "related", "dosu")
++	unrelatedSameName := filepath.Join(root, "unrelated", "dosu")
++	initScopeRepository(t, selected, "git@example.com:dosu-ai/dosu.git")
++	initScopeRepository(t, related, "https://example.com/dosu-ai/dosu.git")
++	initScopeRepository(t, unrelatedSameName, "https://example.com/someone-else/dosu.git")
+ 	cursor := filepath.Join(root, "cursor")
+ 	t.Setenv("DEJA_CURSOR_CLI_ROOT", cursor)
++	t.Setenv("DEJA_CURSOR_ROOT", filepath.Join(root, "cursor-ide"))
+ 	t.Setenv("DEJA_PROJECT_ROOTS", selected)
+ 	want := filepath.Join(cursor, "projects", strings.TrimPrefix(strings.ReplaceAll(selected, string(filepath.Separator), "-"), "-"), "agent-transcripts", "want.jsonl")
+-	reject := filepath.Join(cursor, "projects", strings.TrimPrefix(strings.ReplaceAll(other, string(filepath.Separator), "-"), "-"), "agent-transcripts", "reject.jsonl")
+-	writeScopeFile(t, want, `{}`+"\n")
+-	writeScopeFile(t, reject, `{}`+"\n")
++	relatedTranscript := filepath.Join(cursor, "projects", strings.TrimPrefix(strings.ReplaceAll(related, string(filepath.Separator), "-"), "-"), "agent-transcripts", "related.jsonl")
++	reject := filepath.Join(cursor, "projects", strings.TrimPrefix(strings.ReplaceAll(unrelatedSameName, string(filepath.Separator), "-"), "-"), "agent-transcripts", "reject.jsonl")
++	writeCursorScopeFixture(t, want)
++	writeCursorScopeFixture(t, relatedTranscript)
++	writeCursorScopeFixture(t, reject)
+ 
+-	if got := CursorTranscripts(); !slices.Equal(got, []string{want}) {
+-		t.Fatalf("CursorTranscripts() = %v, want [%s]", got, want)
++	got := CursorTranscripts()
++	slices.Sort(got)
++	wantFiles := []string{relatedTranscript, want}
++	slices.Sort(wantFiles)
++	if !slices.Equal(got, wantFiles) {
++		t.Fatalf("CursorTranscripts() = %v, want %v", got, wantFiles)
+ 	}
++	sessions := LoadCursor()
++	if len(sessions) != 2 {
++		t.Fatalf("LoadCursor() returned %d sessions, want 2", len(sessions))
++	}
++	selected = canonicalScopePath(selected)
++	for _, session := range sessions {
++		if session.Project != selected {
++			t.Errorf("Cursor session %q project = %q, want selected root %q", session.ID, session.Project, selected)
++		}
++	}
++}
++
++func writeClaudeScopeFixture(t *testing.T, path, id string) {
++	t.Helper()
++	writeScopeFile(t, path, `{"type":"user","sessionId":"`+id+`","timestamp":"2026-08-20T12:00:00Z","message":{"role":"user","content":"hello"}}`+"\n")
++}
++
++func writeCursorScopeFixture(t *testing.T, path string) {
++	t.Helper()
++	writeScopeFile(t, path, `{"role":"user","message":{"content":"hello"}}`+"\n")
+ }
+ 
+ func writeCodexScopeFixture(t *testing.T, path, cwd, id string) {
 -- 
 2.50.1 (Apple Git-155)
 

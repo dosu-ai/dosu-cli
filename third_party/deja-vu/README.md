@@ -6,6 +6,7 @@ It does not replace or configure a user's own `deja` installation.
 
 - Upstream release: `v0.17.3`
 - Upstream commit: `8e6e440e70eca808d9f26e54e3f4eeaee6213277`
+- Dosu patch head: `e23e2af7b630aa864472db9fb28bec124a39cc04`
 - Dosu runtime version: `0.17.3-dosu.1`
 - Dosu changes: early selected-repository filtering, related Git
   checkout/worktree matching, and machine-readable scan-path progress
@@ -25,5 +26,5 @@ CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath \
 
 Bundled SHA-256:
 
-- arm64: `b9ed47eebb9ea84812c44775cc1d85be7587ca141a233fad5471f2a9ab0a8bdf`
-- x64: `19e1eb6bdd6565faf15461f5fb48669cba929ce1ff7a71249ff938f95f082b80`
+- arm64: `3b5beb9fd7d184bd57904f315d1475e74d88f3b2fac0429947e1a3f52ecd4c01`
+- x64: `cf8b212c64a687a366bfd0833ced31db4ba89444fe6b2ef9e3746773df87d97e`

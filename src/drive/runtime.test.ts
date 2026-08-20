@@ -9,11 +9,11 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const runtimes = {
   arm64: {
     path: join(root, "bin", "runtime", "deja-darwin-arm64"),
-    sha256: "b9ed47eebb9ea84812c44775cc1d85be7587ca141a233fad5471f2a9ab0a8bdf",
+    sha256: "3b5beb9fd7d184bd57904f315d1475e74d88f3b2fac0429947e1a3f52ecd4c01",
   },
   x64: {
     path: join(root, "bin", "runtime", "deja-darwin-x64"),
-    sha256: "19e1eb6bdd6565faf15461f5fb48669cba929ce1ff7a71249ff938f95f082b80",
+    sha256: "cf8b212c64a687a366bfd0833ced31db4ba89444fe6b2ef9e3746773df87d97e",
   },
 } as const;
 
