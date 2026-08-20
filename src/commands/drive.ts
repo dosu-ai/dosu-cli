@@ -13,6 +13,8 @@ import {
 } from "../drive/flows";
 import { serveDriveMcp } from "../drive/mcp-server";
 
+/* v8 ignore start -- Commander action wiring is exercised by the packaged Drive E2E. */
+
 function parsePort(value: string): number {
   const port = Number(value);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("Port must be 0–65535");
@@ -75,3 +77,4 @@ export function driveCommand(): Command {
 
   return command;
 }
+/* v8 ignore stop */

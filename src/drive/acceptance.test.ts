@@ -15,6 +15,7 @@ import {
   uploadPackage,
 } from "./client";
 import { scanWithDeja } from "./deja";
+import { discoverDrives } from "./discovery";
 import { runDriveSetup } from "./flows";
 import { createDriveHost, type DriveHost } from "./host";
 import { installDriveMcp } from "./mcp-config";
@@ -373,6 +374,28 @@ else process.exit(2);\n`,
       await fixture.host.close();
     }
   });
+
+  it.runIf(process.platform === "darwin")(
+    "gate 11: advertises and discovers the Host through real macOS Bonjour",
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), "dosu-drive-bonjour-"));
+      cleanup.push(root);
+      process.env.DOSU_DRIVE_HOME = join(root, "drive");
+      const host = await createDriveHost({ name: "Bonjour Acceptance Drive", port: 0 });
+      try {
+        const drives = await discoverDrives(2500);
+        expect(drives).toContainEqual(
+          expect.objectContaining({ id: host.id, name: "Bonjour Acceptance Drive" }),
+        );
+        const discovered = drives.find((drive) => drive.id === host.id);
+        if (!discovered) throw new Error("Bonjour did not return the hosted Drive");
+        expect(await fetchDriveStatus({ url: discovered.url })).toMatchObject({ id: host.id });
+      } finally {
+        await host.close();
+      }
+    },
+    10_000,
+  );
 });
 
 interface IndexedHostFixture {

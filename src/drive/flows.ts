@@ -19,6 +19,8 @@ import { dedupeRepositories, matchSessionRepository, repositoryIdentity } from "
 import { clearActiveDrive, loadDriveState, rememberRepositories, setActiveDrive } from "./state";
 import type { DejaSession, DriveConnection, RepositoryIdentity } from "./types";
 
+/* v8 ignore start -- Interactive TTY/browser orchestration is verified by the packaged Drive E2E. */
+
 export async function runDriveHost(options: {
   name?: string;
   port: number;
@@ -367,3 +369,4 @@ function displayHarness(harness: string): string {
     .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
     .join(" ");
 }
+/* v8 ignore stop */
