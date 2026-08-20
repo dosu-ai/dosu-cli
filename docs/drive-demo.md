@@ -97,16 +97,12 @@ not add one log line per file. The completed scan groups agent counts under each
 Existing checkouts and worktrees from the same Git remote are included. A different existing
 repository with the same directory name is excluded.
 
-## 4. Review and approve the local preview
+## 4. Review, remove secrets, and upload
 
-The terminal completes the credential check, prints the loopback-only preview URL, and opens it
-without another Yes/No prompt:
+The terminal prints the loopback-only preview URL and opens it without another Yes/No prompt.
+Nothing has been uploaded:
 
 ```text
-◇  Safety check
-│  3 potential credentials detected and replaced
-│
-◇  Preview ready
 │  Review every selected session and exclude anything before upload:
 │  http://127.0.0.1:<port>/preview
 ```
@@ -115,9 +111,10 @@ Pass `--no-open` to print the same URL without launching the browser.
 
 In the preview:
 
-1. Inspect the repository, agent, date, sample, record count, and redaction count.
-2. Clear the checkbox for any session you do not want to share.
-3. Click **Approve & Upload**.
+1. Inspect the repository, agent, and date. Clear any session you do not want to share.
+2. Use the fixed bottom action **Check & Remove Secrets**. This stays local and does not upload.
+3. Review the local record samples and the number of potential credentials removed.
+4. Click **Upload _N_ Sessions**.
 
 The terminal confirms the durable central index is ready:
 

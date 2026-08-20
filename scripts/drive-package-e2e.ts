@@ -118,16 +118,30 @@ async function main(): Promise<void> {
     assert(beforeApproval.packages === 0, "Host changed before preview approval");
     const preview = await getJSON<PreviewPayload>(`${previewBase}/api/preview`);
     assert(preview.totals.selected === 3, "preview did not contain the three matched sessions");
-    assert(preview.totals.redactions >= 1, "preview did not report DV redaction");
     const selectedKeys = preview.sessions
       .filter((session) => session.nativeId !== "claude-drop")
       .map((session) => session.key);
     await postJSON(`${previewBase}/api/select`, { keys: selectedKeys });
+    const prematureApproval = await fetch(`${previewBase}/api/approve`, { method: "POST" });
+    assert(prematureApproval.status === 409, "preview allowed upload before the safety check");
+    const checkedPreview = await fetch(`${previewBase}/api/safety-check`, {
+      method: "POST",
+    }).then(async (response) => {
+      if (!response.ok) throw new Error(`safety check returned ${response.status}`);
+      return (await response.json()) as PreviewPayload;
+    });
+    assert(checkedPreview.safetyChecked, "preview did not finish the local safety check");
+    assert(checkedPreview.totals.redactions >= 1, "preview did not report DV redaction");
+    const afterSafetyCheck = await getJSON<DriveStatus>(`${hostUrl}/api/status`);
+    assert(afterSafetyCheck.packages === 0, "safety check uploaded before final approval");
     writeFileSync(
       join(outputDirectory, "preview.html"),
       await fetch(previewURL).then((response) => response.text()),
     );
-    writeFileSync(join(outputDirectory, "preview.json"), `${JSON.stringify(preview, null, 2)}\n`);
+    writeFileSync(
+      join(outputDirectory, "preview.json"),
+      `${JSON.stringify(checkedPreview, null, 2)}\n`,
+    );
     await fetch(`${previewBase}/api/approve`, { method: "POST" });
     await setup.wait(60_000);
     assert(
@@ -312,6 +326,7 @@ interface DriveStatus {
 
 interface PreviewPayload {
   sessions: Array<{ key: string; nativeId: string }>;
+  safetyChecked: boolean;
   totals: { selected: number; redactions: number };
 }
 

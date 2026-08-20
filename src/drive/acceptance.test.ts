@@ -229,46 +229,66 @@ describe("Dosu Drive acceptance gates", () => {
   it("gate 5: keeps preview local and freezes the approved session selection", async () => {
     const keepKey = dejaSessionKey("claude", "keep");
     const excludeKey = dejaSessionKey("codex", "exclude");
+    let safetyChecks = 0;
     expect(keepKey).toMatch(/^[A-Za-z0-9_-]+$/);
-    const preview = await startPreview([
+    const preview = await startPreview(
+      [
+        {
+          key: keepKey,
+          repository: "repo-a",
+          harness: "claude",
+          nativeId: "keep",
+          title: "Keep this session",
+          started: "2026-08-20T06:00:00Z",
+          updated: "2026-08-20T07:00:00Z",
+          sample: "token [redacted:github_token]",
+          records: 3,
+          bytes: 120,
+          redactions: 1,
+        },
+        {
+          key: excludeKey,
+          repository: "repo-b",
+          harness: "codex",
+          nativeId: "exclude",
+          title: "Exclude this session",
+          started: "2026-08-20T06:00:00Z",
+          updated: "2026-08-20T07:00:00Z",
+          records: 2,
+          bytes: 80,
+          redactions: 0,
+        },
+      ],
       {
-        key: keepKey,
-        repository: "repo-a",
-        harness: "claude",
-        nativeId: "keep",
-        title: "Keep this session",
-        started: "2026-08-20T06:00:00Z",
-        updated: "2026-08-20T07:00:00Z",
-        sample: "token [redacted:github_token]",
-        records: 3,
-        bytes: 120,
-        redactions: 1,
+        onSafetyCheck: async (sessions) => {
+          safetyChecks++;
+          return sessions;
+        },
       },
-      {
-        key: excludeKey,
-        repository: "repo-b",
-        harness: "codex",
-        nativeId: "exclude",
-        title: "Exclude this session",
-        started: "2026-08-20T06:00:00Z",
-        updated: "2026-08-20T07:00:00Z",
-        records: 2,
-        bytes: 80,
-        redactions: 0,
-      },
-    ]);
+    );
     try {
       expect(preview.url).toMatch(/^http:\/\/127\.0\.0\.1:/);
       const initial = (await fetch(`${preview.url.replace(/\/preview$/, "")}/api/preview`).then(
         (r) => r.json(),
-      )) as { totals: { selected: number } };
-      expect(initial.totals.selected).toBe(2);
+      )) as { safetyChecked: boolean; totals: { selected: number } };
+      expect(initial).toMatchObject({ safetyChecked: false, totals: { selected: 2 } });
+      expect(safetyChecks).toBe(0);
       const base = preview.url.replace(/\/preview$/, "");
+      const page = await fetch(preview.url).then((response) => response.text());
+      expect(page).toContain("Check &amp; Remove Secrets");
+      expect(page).toContain("Nothing will be uploaded yet.");
+      expect(page).toContain("position:fixed");
       await fetch(`${base}/api/select`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ keys: [keepKey] }),
       });
+      expect((await fetch(`${base}/api/approve`, { method: "POST" })).status).toBe(409);
+      const checked = (await fetch(`${base}/api/safety-check`, { method: "POST" }).then(
+        (response) => response.json(),
+      )) as { safetyChecked: boolean; totals: { redactions: number } };
+      expect(checked).toMatchObject({ safetyChecked: true, totals: { redactions: 1 } });
+      expect(safetyChecks).toBe(1);
       await fetch(`${base}/api/approve`, { method: "POST" });
       expect(await preview.waitForDecision()).toEqual([keepKey]);
     } finally {
@@ -431,6 +451,7 @@ else process.exit(2);\n`,
             response.json(),
           )) as { totals: { selected: number } };
           expect(preview.totals.selected).toBe(1);
+          await fetch(`${base}/api/safety-check`, { method: "POST" });
           await fetch(`${base}/api/approve`, { method: "POST" });
         },
       });

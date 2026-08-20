@@ -14,7 +14,12 @@ import {
   installDriveMcp,
   removeDriveMcp,
 } from "./mcp-config";
-import { createRepositoryPackage, dejaSessionKey, summarizeDejaExport } from "./package";
+import {
+  createRepositoryPackage,
+  dejaSessionKey,
+  type ExportSessionSummary,
+  summarizeDejaExport,
+} from "./package";
 import { displayHarness, renderSessionSummary, scanStatus } from "./presentation";
 import { type PreviewSession, startPreview } from "./preview";
 import { dedupeRepositories, matchSessionRepository, repositoryIdentity } from "./repositories";
@@ -126,45 +131,52 @@ export async function runDriveSetup(options: {
       `${uploadScope} can be uploaded; other projects are excluded.\nNothing has been uploaded.`,
     );
 
-    const safety = p.spinner();
-    safety.start("Safety check");
-    const exportSummaries = await summarizeDejaExport(workspace.exportDirectory, sessions);
     const repositoryBySession = new Map<string, RepositoryIdentity>();
     for (const repository of repositories) {
       for (const session of sessionsByRepository.get(repository.root) ?? []) {
         repositoryBySession.set(dejaSessionKey(session.harness, session.id), repository);
       }
     }
-    const previewSessions: PreviewSession[] = sessions.map((session) => {
-      const key = dejaSessionKey(session.harness, session.id);
-      const summary = exportSummaries.get(key);
-      return {
-        key,
-        repository: repositoryBySession.get(key)?.name ?? session.project,
-        harness: session.harness,
-        nativeId: session.id,
-        title:
-          session.title || `${displayHarness(session.harness)} session ${session.id.slice(0, 8)}`,
-        started: session.started,
-        updated: session.updated,
-        ...(summary?.sample ? { sample: summary.sample } : {}),
-        records: summary?.records ?? 0,
-        bytes: summary?.bytes ?? 0,
-        redactions: summary?.redactions ?? 0,
-      };
-    });
-    const redactions = previewSessions.reduce((sum, session) => sum + session.redactions, 0);
-    safety.stop("Safety check");
-    p.log.message(`${countLabel(redactions, "potential credential")} detected and replaced`, {
-      spacing: 0,
-    });
+    const buildPreviewSessions = (
+      exportSummaries: ReadonlyMap<string, ExportSessionSummary>,
+    ): PreviewSession[] =>
+      sessions.map((session) => {
+        const key = dejaSessionKey(session.harness, session.id);
+        const summary = exportSummaries.get(key);
+        return {
+          key,
+          repository: repositoryBySession.get(key)?.name ?? session.project,
+          harness: session.harness,
+          nativeId: session.id,
+          title:
+            session.title || `${displayHarness(session.harness)} session ${session.id.slice(0, 8)}`,
+          started: session.started,
+          updated: session.updated,
+          ...(summary?.sample ? { sample: summary.sample } : {}),
+          records: summary?.records ?? 0,
+          bytes: summary?.bytes ?? 0,
+          redactions: summary?.redactions ?? 0,
+        };
+      });
     let approvedKeys: string[];
     if (options.yes) {
+      const safety = p.spinner();
+      safety.start("Safety check");
+      const previewSessions = buildPreviewSessions(
+        await summarizeDejaExport(workspace.exportDirectory, sessions),
+      );
+      const redactions = previewSessions.reduce((sum, session) => sum + session.redactions, 0);
+      safety.stop("Safety check complete");
+      p.log.message(`${countLabel(redactions, "potential credential")} detected and replaced`, {
+        spacing: 0,
+      });
       approvedKeys = previewSessions.map((session) => session.key);
     } else {
-      const preview = await startPreview(previewSessions);
+      const preview = await startPreview(buildPreviewSessions(new Map()), {
+        onSafetyCheck: async () =>
+          buildPreviewSessions(await summarizeDejaExport(workspace.exportDirectory, sessions)),
+      });
       try {
-        p.log.step("Preview ready");
         p.log.message(
           `Review every selected session and exclude anything before upload:\n${preview.url}`,
           { spacing: 0 },

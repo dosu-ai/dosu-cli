@@ -23,11 +23,17 @@ export interface PreviewController {
   close(): Promise<void>;
 }
 
+interface PreviewOptions {
+  onSafetyCheck?: (sessions: readonly PreviewSession[]) => Promise<readonly PreviewSession[]>;
+}
+
 export async function startPreview(
   sessions: readonly PreviewSession[],
+  options: PreviewOptions = {},
 ): Promise<PreviewController> {
-  const byKey = new Map(sessions.map((session) => [session.key, session]));
+  let byKey = new Map(sessions.map((session) => [session.key, session]));
   let selected = new Set(byKey.keys());
+  let safetyChecked = false;
   let settled = false;
   let resolveDecision: (value: string[] | undefined) => void = () => undefined;
   const decision = new Promise<string[] | undefined>((resolve) => {
@@ -42,7 +48,7 @@ export async function startPreview(
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/preview") {
-        json(response, 200, summary([...byKey.values()], selected));
+        json(response, 200, summary([...byKey.values()], selected, safetyChecked));
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/select") {
@@ -51,10 +57,31 @@ export async function startPreview(
         const keys = body.keys.filter((key): key is string => typeof key === "string");
         if (keys.some((key) => !byKey.has(key))) throw new Error("Unknown session selection");
         selected = new Set(keys);
-        json(response, 200, summary([...byKey.values()], selected));
+        safetyChecked = false;
+        json(response, 200, summary([...byKey.values()], selected, safetyChecked));
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/safety-check") {
+        const checkedSessions = await options.onSafetyCheck?.([...byKey.values()]);
+        if (checkedSessions) {
+          const checkedByKey = new Map(checkedSessions.map((session) => [session.key, session]));
+          if (
+            checkedByKey.size !== byKey.size ||
+            [...byKey.keys()].some((key) => !checkedByKey.has(key))
+          ) {
+            throw new Error("Safety check changed the preview session scope");
+          }
+          byKey = checkedByKey;
+        }
+        safetyChecked = true;
+        json(response, 200, summary([...byKey.values()], selected, safetyChecked));
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/approve") {
+        if (!safetyChecked) {
+          json(response, 409, { error: "Check and remove secrets before upload" });
+          return;
+        }
         json(response, 200, { approved: selected.size });
         if (!settled) {
           settled = true;
@@ -90,11 +117,12 @@ export async function startPreview(
   };
 }
 
-function summary(sessions: PreviewSession[], selected: Set<string>) {
+function summary(sessions: PreviewSession[], selected: Set<string>, safetyChecked: boolean) {
   const rows = sessions.map((session) => ({ ...session, selected: selected.has(session.key) }));
   const included = rows.filter((session) => session.selected);
   return {
     sessions: rows,
+    safetyChecked,
     totals: {
       selected: included.length,
       excluded: rows.length - included.length,
@@ -109,18 +137,21 @@ function previewHTML(): string {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>Dosu Drive preview</title><style>
-body{font:15px ui-sans-serif,system-ui;margin:40px auto;max-width:900px;color:#171717;padding:0 20px}h1{font-size:28px}p{line-height:1.5}.safe{background:#f1f8f4;border:1px solid #b7dfc5;padding:16px;border-radius:10px}.session{display:grid;grid-template-columns:28px 1fr auto;gap:12px;padding:14px 0;border-bottom:1px solid #e5e5e5}.meta{color:#666;font-size:13px}.sample{white-space:pre-wrap;background:#f7f7f7;padding:10px;border-radius:6px;margin-top:8px}button{border:0;border-radius:8px;padding:11px 16px;font-weight:600;cursor:pointer}.approve{background:#171717;color:white}.cancel{background:#eee;margin-left:8px}#actions{position:sticky;bottom:0;background:white;padding:18px 0;border-top:1px solid #ddd}
-</style></head><body><h1>Review exactly what will be uploaded</h1>
-<p>Inspect every selected session and exclude anything before it leaves this computer.</p>
-<div class="safe"><strong>Dosu will not modify or delete any local files.</strong><br>
-All searchable content from selected sessions will be copied to this Drive after credential redaction. Conversations, tool output, commands, file paths, edit history, and session metadata are included.</div>
-<p id="summary">Loading local preview…</p><main id="sessions"></main><div id="actions"><button class="approve" id="approve">Approve &amp; Upload</button><button class="cancel" id="cancel">Cancel</button></div>
+*{box-sizing:border-box}:root{color:#171717;background:#fafafa;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif}body{margin:0}.page{max-width:900px;margin:0 auto;padding:48px 24px 140px}h1{font-size:30px;letter-spacing:-.03em;margin:0 0 8px}p{line-height:1.5}.lede{color:#666;margin:0 0 28px}.safe{background:#f1f8f4;border:1px solid #b7dfc5;padding:16px 18px;border-radius:12px;line-height:1.5}#summary{font-weight:600;margin:26px 0 8px}.session{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:12px;padding:16px 0;border-bottom:1px solid #e5e5e5}.session input{margin-top:3px}.meta{color:#666;font-size:13px}.sample{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f2f2;padding:11px 12px;border-radius:8px;margin-top:9px;font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace}button{border:0;border-radius:9px;padding:12px 18px;font:600 15px/1 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;cursor:pointer;white-space:nowrap}button:disabled{cursor:default;opacity:.5}.primary{background:#171717;color:#fff;min-width:202px}.primary:not(:disabled):hover{background:#303030}.cancel{background:#ececec;color:#171717}.cancel:not(:disabled):hover{background:#e2e2e2}#actions{position:fixed;z-index:10;left:0;right:0;bottom:0;background:rgba(255,255,255,.96);border-top:1px solid #d8d8d8;box-shadow:0 -10px 30px rgba(0,0,0,.06);backdrop-filter:blur(16px)}#action-inner{max-width:900px;margin:0 auto;padding:16px 24px;display:flex;align-items:center;justify-content:space-between;gap:24px}.action-note{color:#666;font-size:13px}.buttons{display:flex;gap:10px}.complete{max-width:560px;margin:18vh auto;padding:0 24px;text-align:center}.complete-mark{display:grid;place-items:center;width:44px;height:44px;margin:0 auto 18px;border-radius:50%;background:#e7f5eb;color:#176b35;font-size:22px}@media(max-width:640px){.page{padding:32px 18px 176px}#action-inner{align-items:stretch;flex-direction:column;gap:10px;padding:12px 18px}.buttons{width:100%}.primary{flex:1}.cancel{min-width:92px}}
+</style></head><body><div class="page"><h1>Review sessions before upload</h1>
+<p class="lede">Choose exactly what this Drive can receive.</p>
+<div class="safe"><strong>Local review only.</strong><br>
+Dosu will not modify or delete local files. Detected credentials are removed from the selected session copies before upload.</div>
+<p id="summary">Loading local preview…</p><main id="sessions"></main></div><div id="actions"><div id="action-inner"><div class="action-note" id="action-note" aria-live="polite">Nothing will be uploaded yet.</div><div class="buttons"><button class="primary" id="primary" type="button">Check &amp; Remove Secrets</button><button class="cancel" id="cancel" type="button">Cancel</button></div></div></div>
 <script>
-let data; const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); const count=(n,label)=>n+' '+label+(n===1?'':'s');
-async function load(){data=await fetch('/api/preview').then(r=>r.json());render()}
-function render(){const t=data.totals;document.querySelector('#summary').textContent=count(t.selected,'session')+' · '+count(t.records,'searchable record')+' · '+count(t.redactions,'potential credential')+' replaced · '+t.excluded+' excluded';document.querySelector('#sessions').innerHTML=data.sessions.map(s=>'<label class="session"><input type="checkbox" '+(s.selected?'checked':'')+' data-key="'+esc(s.key)+'"><div><strong>'+esc(s.title)+'</strong><div class="meta">'+esc(s.repository)+' · '+esc(s.harness)+' · '+esc(s.updated)+'</div>'+(s.sample?'<div class="sample">'+esc(s.sample)+'</div>':'')+'</div><span class="meta">'+count(s.records,'record')+'</span></label>').join('');document.querySelectorAll('input').forEach(el=>el.onchange=select)}
-async function select(){const keys=[...document.querySelectorAll('input:checked')].map(el=>el.dataset.key);data=await fetch('/api/select',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({keys})}).then(r=>r.json());render()}
-document.querySelector('#approve').onclick=async()=>{await fetch('/api/approve',{method:'POST'});document.body.innerHTML='<h1>Approved</h1><p>Return to the terminal to watch the upload.</p>'};document.querySelector('#cancel').onclick=async()=>{await fetch('/api/cancel',{method:'POST'});window.close()};load();
+let data;let busy=false;let actionError='';const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const count=(n,label)=>n+' '+label+(n===1?'':'s');
+async function request(path,options){const response=await fetch(path,options);const payload=await response.json();if(!response.ok)throw new Error(payload.error||'Request failed');return payload}
+async function load(){data=await request('/api/preview');render()}
+function render(){const t=data.totals;const parts=[count(t.selected,'session')+' selected'];if(data.safetyChecked){parts.push(count(t.records,'searchable record'));parts.push(count(t.redactions,'potential credential')+' removed')}parts.push(t.excluded+' excluded');document.querySelector('#summary').textContent=parts.join(' · ');document.querySelector('#sessions').innerHTML=data.sessions.map(s=>'<label class="session"><input type="checkbox" '+(s.selected?'checked':'')+' data-key="'+esc(s.key)+'"><div><strong>'+esc(s.title)+'</strong><div class="meta">'+esc(s.repository)+' · '+esc(s.harness)+' · '+esc(s.updated)+'</div>'+(data.safetyChecked&&s.sample?'<div class="sample">'+esc(s.sample)+'</div>':'')+'</div><span class="meta">'+(data.safetyChecked?count(s.records,'record'):'')+'</span></label>').join('');document.querySelectorAll('.session input').forEach(el=>el.onchange=select);renderActions()}
+function renderActions(){const t=data.totals;const primary=document.querySelector('#primary');primary.textContent=busy?(data.safetyChecked?'Starting upload…':'Checking & removing…'):(data.safetyChecked?'Upload '+count(t.selected,'Session'):'Check & Remove Secrets');primary.disabled=busy||t.selected===0;document.querySelector('#cancel').disabled=busy;const checked=t.redactions===0?'No potential credentials detected.':count(t.redactions,'potential credential')+' removed.';document.querySelector('#action-note').textContent=actionError||(data.safetyChecked?checked+' Nothing has been uploaded.':'Nothing will be uploaded yet.')}
+async function select(){const keys=[...document.querySelectorAll('.session input:checked')].map(el=>el.dataset.key);data=await request('/api/select',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({keys})});actionError='';render()}
+async function primaryAction(){busy=true;actionError='';renderActions();try{if(!data.safetyChecked){data=await request('/api/safety-check',{method:'POST'});busy=false;render();return}await request('/api/approve',{method:'POST'});document.body.innerHTML='<main class="complete"><div class="complete-mark">✓</div><h1>Upload started</h1><p>Return to the terminal to watch the Drive index finish.</p></main>'}catch(error){busy=false;actionError=error instanceof Error?error.message:'Could not continue. Try again.';renderActions()}}
+document.querySelector('#primary').onclick=primaryAction;document.querySelector('#cancel').onclick=async()=>{await request('/api/cancel',{method:'POST'});document.body.innerHTML='<main class="complete"><h1>Setup cancelled</h1><p>Nothing was uploaded. You can close this tab.</p></main>'};load();
 </script></body></html>`;
 }
 
