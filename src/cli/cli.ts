@@ -18,6 +18,7 @@ import { askCommand } from "../commands/ask";
 import { auditCommand } from "../commands/audit";
 import { deploymentsCommand } from "../commands/deployments";
 import { docsCommand } from "../commands/docs";
+import { driveCommand } from "../commands/drive";
 import { insightsCommand } from "../commands/insights";
 import { integrationsCommand } from "../commands/integrations";
 import { knowledgeCommand } from "../commands/knowledge";
@@ -64,7 +65,7 @@ import { checkForUpdates } from "../version/update-check";
 import { getVersionString } from "../version/version";
 
 export function shouldRunBackgroundChecks(actionName: string): boolean {
-  return actionName !== "upgrade";
+  return actionName !== "upgrade" && actionName !== "serve";
 }
 
 const TELEMETRY_FLUSH_TIMEOUT_MS = 750;
@@ -91,7 +92,9 @@ function commandTelemetryName(actionCommand: Command): string {
 }
 
 function shouldTrackCommand(command: string): boolean {
-  return command !== "telemetry" && !command.startsWith("telemetry ");
+  return (
+    command !== "telemetry" && !command.startsWith("telemetry ") && command !== "drive mcp serve"
+  );
 }
 
 function commandTelemetryContext(): CommandTelemetryContext {
@@ -542,6 +545,7 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
   program.addCommand(auditCommand());
   program.addCommand(deploymentsCommand());
   program.addCommand(docsCommand());
+  program.addCommand(driveCommand());
   program.addCommand(insightsCommand());
   program.addCommand(integrationsCommand());
   program.addCommand(knowledgeCommand());
