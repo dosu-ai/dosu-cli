@@ -13,7 +13,17 @@ vi.mock("node:fs", async (importOriginal) => {
   return { ...actual, realpathSync: vi.fn(actual.realpathSync) };
 });
 
-import { buildPackageManagerInvocation, runUpgrade, upgradeCommand } from "./upgrade";
+vi.mock("./skill", () => ({ installSkill: vi.fn(async () => ({ success: true })) }));
+
+import { installSkill } from "./skill";
+import {
+  buildPackageManagerInvocation,
+  completeUpgrade,
+  runUpgrade,
+  upgradeCommand,
+} from "./upgrade";
+
+const mockInstallSkill = vi.mocked(installSkill);
 
 const mockSpawnSync = vi.mocked(spawnSync);
 const mockRealpathSync = vi.mocked(realpathSync);
@@ -79,6 +89,8 @@ function errors(): string {
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), "dosu-upgrade-test-"));
   mockSpawnSync.mockReset();
+  mockInstallSkill.mockReset();
+  mockInstallSkill.mockResolvedValue({ success: true });
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   originalArgv = process.argv;
@@ -432,6 +444,38 @@ describe("runUpgrade", () => {
     await upgradeCommand().parseAsync([], { from: "user" });
 
     expect(process.exitCode).toBe(expectedExitCode);
+  });
+});
+
+describe("completeUpgrade", () => {
+  it("refreshes skills after a successful Homebrew upgrade", async () => {
+    mockCommands({ "brew upgrade dosu-ai/dosu/dosu": { status: 0 } });
+
+    const status = await completeUpgrade("homebrew", { platform: "darwin" });
+
+    expect(status).toBe(0);
+    expect(mockInstallSkill).toHaveBeenCalledOnce();
+    expect(output()).toContain("Skills updated");
+  });
+
+  it("does not refresh skills after a failed Homebrew upgrade", async () => {
+    mockCommands({ "brew upgrade dosu-ai/dosu/dosu": { status: 7 } });
+
+    const status = await completeUpgrade("homebrew", { platform: "darwin" });
+
+    expect(status).toBe(7);
+    expect(mockInstallSkill).not.toHaveBeenCalled();
+  });
+
+  it("returns 0 and hints at dosu skill update when skill refresh fails", async () => {
+    mockCommands({ "brew upgrade dosu-ai/dosu/dosu": { status: 0 } });
+    mockInstallSkill.mockResolvedValue({ success: false });
+
+    const status = await completeUpgrade("homebrew", { platform: "darwin" });
+
+    expect(status).toBe(0);
+    expect(mockInstallSkill).toHaveBeenCalledOnce();
+    expect(errors()).toContain("dosu skill update");
   });
 });
 
