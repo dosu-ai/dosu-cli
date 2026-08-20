@@ -1,3 +1,10 @@
+## [0.49.1](https://github.com/dosu-ai/dosu-cli/compare/v0.49.0...v0.49.1) (2026-08-20)
+
+
+### Bug Fixes
+
+* make session refresh persistence safe ([#182](https://github.com/dosu-ai/dosu-cli/issues/182)) ([b3141a8](https://github.com/dosu-ai/dosu-cli/commit/b3141a84295fa38e9e1e48c514167b2c93055c86))
+
 # [0.49.0](https://github.com/dosu-ai/dosu-cli/compare/v0.48.2...v0.49.0) (2026-08-20)
 
 
