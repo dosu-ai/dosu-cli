@@ -396,6 +396,29 @@ else process.exit(2);\n`,
     },
     10_000,
   );
+
+  it("gate 13: fails closed on malformed state and invalid repository/package input", async () => {
+    const root = await mkdtemp(join(tmpdir(), "dosu-drive-fail-closed-"));
+    cleanup.push(root);
+    const driveHome = join(root, "drive");
+    mkdirSync(driveHome, { recursive: true });
+    process.env.DOSU_DRIVE_HOME = driveHome;
+    writeFileSync(join(driveHome, "state.json"), "not-json");
+    expect(loadDriveState()).toEqual({ schemaVersion: 1, recentRepositories: [] });
+    writeFileSync(join(driveHome, "state.json"), '{"schemaVersion":999}');
+    expect(loadDriveState()).toEqual({ schemaVersion: 1, recentRepositories: [] });
+    expect(() => repositoryIdentity(root)).toThrow("is not inside a Git repository");
+    await expect(
+      createRepositoryPackage({
+        exportDirectory: join(root, "missing-export"),
+        outputDirectory: join(root, "outgoing"),
+        driveId: "drive-1",
+        contributor: { id: "alice", name: "Alice" },
+        repository: { root: "/work/repo-a", name: "repo-a" },
+        sessions: [],
+      }),
+    ).rejects.toThrow("No approved sessions");
+  });
 });
 
 interface IndexedHostFixture {
