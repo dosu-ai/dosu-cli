@@ -18,7 +18,6 @@ import { askCommand } from "../commands/ask";
 import { auditCommand } from "../commands/audit";
 import { deploymentsCommand } from "../commands/deployments";
 import { docsCommand } from "../commands/docs";
-import { driveCommand } from "../commands/drive";
 import { insightsCommand } from "../commands/insights";
 import { integrationsCommand } from "../commands/integrations";
 import { knowledgeCommand } from "../commands/knowledge";
@@ -543,7 +542,6 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
   program.addCommand(auditCommand());
   program.addCommand(deploymentsCommand());
   program.addCommand(docsCommand());
-  program.addCommand(driveCommand());
   program.addCommand(insightsCommand());
   program.addCommand(integrationsCommand());
   program.addCommand(knowledgeCommand());
