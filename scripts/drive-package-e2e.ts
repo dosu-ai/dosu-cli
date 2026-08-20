@@ -145,6 +145,14 @@ async function main(): Promise<void> {
     assert(searchOutput.includes("quadratic walrus retry"), "CLI search missed fixture evidence");
     const dashboardHTML = await fetch(hostUrl).then((response) => response.text());
     assert(dashboardHTML.includes("Package E2E Drive"), "Dashboard did not load");
+    assert(
+      dashboardHTML.includes("setInterval(status,1000)"),
+      "Dashboard does not refresh contribution status",
+    );
+    assert(
+      dashboardHTML.includes("Waiting for contributions"),
+      "Dashboard has no empty-Drive state",
+    );
     writeFileSync(join(outputDirectory, "dashboard.html"), dashboardHTML);
 
     const codexHome = join(root, "codex-home");
