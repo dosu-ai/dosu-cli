@@ -1,3 +1,40 @@
+# [0.49.0-alpha.1](https://github.com/dosu-ai/dosu-cli/compare/v0.48.2...v0.49.0-alpha.1) (2026-08-20)
+
+
+### Bug Fixes
+
+* **drive:** enforce complete redacted DV exports ([6f11962](https://github.com/dosu-ai/dosu-cli/commit/6f11962609b112a2b985715d262188ce3d22d861))
+* **drive:** gate uploads behind local safety review ([caea151](https://github.com/dosu-ai/dosu-cli/commit/caea15169a81c1384b6597ead9c17432d18c2da2))
+* **drive:** invalidate stale preview safety checks ([37bb0d8](https://github.com/dosu-ai/dosu-cli/commit/37bb0d8ea8436a56c7e452c280fc497c33a3e19a))
+* **drive:** keep preview session keys DOM-safe ([e1d6614](https://github.com/dosu-ai/dosu-cli/commit/e1d6614bf8053f68246141f143d18818524d1446))
+* **drive:** keep repository add action in picker ([82565c4](https://github.com/dosu-ai/dosu-cli/commit/82565c408ad68783e1adbef96a6c79b729eb9779))
+* **drive:** keep scan progress on one line ([59bea15](https://github.com/dosu-ai/dosu-cli/commit/59bea15005bd348008f52a24fd4b75cc39fe2b49))
+* **drive:** make repository browsing an explicit action ([9292c6d](https://github.com/dosu-ai/dosu-cli/commit/9292c6d57fa8aaed20af8f28b38d97113db3292e))
+* **drive:** pluralize repository counts ([058bd1e](https://github.com/dosu-ai/dosu-cli/commit/058bd1ef4a6acd5010342bb68558be8c4ac7f7c4))
+* **drive:** polish session count copy ([8c4a7a1](https://github.com/dosu-ai/dosu-cli/commit/8c4a7a161d2fa6d7cff2cb1e3fc0c665d6a610be))
+* **drive:** preserve related agent session identity ([3a607ee](https://github.com/dosu-ai/dosu-cli/commit/3a607ee8f588ac77c42e1133eb1e744423b8b731))
+* **drive:** refresh Host dashboard status ([c0e4b7a](https://github.com/dosu-ai/dosu-cli/commit/c0e4b7a2dded0c0bc5389db36f46cbecc9b42076))
+* **drive:** report live Host status ([cbc4941](https://github.com/dosu-ai/dosu-cli/commit/cbc4941c641a8eb7bfa07779d2a09823c5fa8102))
+* **setup:** quiet nested skill installer ([997bcaa](https://github.com/dosu-ai/dosu-cli/commit/997bcaad9319f44f0aeace6c3ee451bfd42dbbee))
+* **setup:** show skill installation progress ([c0067cf](https://github.com/dosu-ai/dosu-cli/commit/c0067cf736cb16416f4ecb2b45d51b0fc9f96185))
+* **setup:** standardize installation summaries ([1e976a5](https://github.com/dosu-ai/dosu-cli/commit/1e976a56b3bc56d77cf59f630dd546931bd9b510))
+* **setup:** surface error callbacks and split the skew guard's failure modes ([0f3c94b](https://github.com/dosu-ai/dosu-cli/commit/0f3c94b9ffccd43e30988f19e9b812ac456a7f18))
+* **status:** support JSON output ([dc19349](https://github.com/dosu-ai/dosu-cli/commit/dc1934921066aa267765db95bc9f60d3cdc52baa))
+
+
+### Features
+
+* **drive:** add Dosu Drive alpha ([#184](https://github.com/dosu-ai/dosu-cli/issues/184)) ([7120b11](https://github.com/dosu-ai/dosu-cli/commit/7120b110a6cf7ddc97dba048e99e3877375cd392)), closes [#155](https://github.com/dosu-ai/dosu-cli/issues/155) [dosu#11968](https://github.com/dosu/issues/11968) [#167](https://github.com/dosu-ai/dosu-cli/issues/167) [#166](https://github.com/dosu-ai/dosu-cli/issues/166) [#168](https://github.com/dosu-ai/dosu-cli/issues/168) [#172](https://github.com/dosu-ai/dosu-cli/issues/172) [#173](https://github.com/dosu-ai/dosu-cli/issues/173) [#174](https://github.com/dosu-ai/dosu-cli/issues/174) [#175](https://github.com/dosu-ai/dosu-cli/issues/175) [#176](https://github.com/dosu-ai/dosu-cli/issues/176)
+* **drive:** add explicit Codex and Claude MCP ([e09c09e](https://github.com/dosu-ai/dosu-cli/commit/e09c09e42eb66382c1991a4396b1b1f17348a957))
+* **drive:** add isolated DV scan and local preview ([083a501](https://github.com/dosu-ai/dosu-cli/commit/083a501cf3979610631a5d9608ac408175e2cd11))
+* **drive:** build exact repository packages ([aa3d1c7](https://github.com/dosu-ai/dosu-cli/commit/aa3d1c7e0ab2fd3797094d5e4bf31130888e2b60))
+* **drive:** connect host join and setup flows ([4f5a107](https://github.com/dosu-ai/dosu-cli/commit/4f5a107770420f80a071d303eaec2e03924b2c04))
+* **drive:** establish isolated state and command surface ([21c95ec](https://github.com/dosu-ai/dosu-cli/commit/21c95eca5cfc1d47bd0243b16606bdab9f02a54a))
+* **drive:** persist and search central packages ([1f6553c](https://github.com/dosu-ai/dosu-cli/commit/1f6553cc1f0f3512156b001726c3ae11ca6754c5))
+* **drive:** scope and stream local session scans ([a2fb23f](https://github.com/dosu-ai/dosu-cli/commit/a2fb23f91c8489b84242fd80b2845df724694431))
+* **setup:** collapse setup onto the single /cli/auth handshake ([9c7fbea](https://github.com/dosu-ai/dosu-cli/commit/9c7fbeae05c7758e467035b36d8ff5b553877675)), closes [dosu#11968](https://github.com/dosu/issues/11968)
+* **setup:** install complete agent bundle ([349d9e0](https://github.com/dosu-ai/dosu-cli/commit/349d9e03d4b73aaa1c41869e71ca2d5b95959cc7))
+
 ## [0.48.2](https://github.com/dosu-ai/dosu-cli/compare/v0.48.1...v0.48.2) (2026-08-14)
 
 
