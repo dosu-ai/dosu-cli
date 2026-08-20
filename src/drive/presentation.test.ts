@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderSessionSummary, scanStatus } from "./presentation";
+import { renderHostStatus, renderSessionSummary, scanStatus } from "./presentation";
 import type { DejaSession, RepositoryIdentity } from "./types";
 
 describe("Drive setup presentation", () => {
@@ -47,6 +47,21 @@ describe("Drive setup presentation", () => {
 
     expect(renderSessionSummary([repository], new Map())).toBe(
       ["├─ /work/empty", "│  └─ No sessions", "└─ Total             0 sessions"].join("\n"),
+    );
+  });
+
+  it("describes each meaningful Host lifecycle state", () => {
+    expect(renderHostStatus({ contributors: 0, packages: 0, sessions: 0, ready: false })).toBe(
+      "Waiting for contributors…",
+    );
+    expect(renderHostStatus({ contributors: 1, packages: 0, sessions: 0, ready: false })).toBe(
+      "1 contributor joined · Waiting for sessions…",
+    );
+    expect(renderHostStatus({ contributors: 1, packages: 1, sessions: 64, ready: false })).toBe(
+      "1 contributor · 1 repository · 64 sessions · Indexing…",
+    );
+    expect(renderHostStatus({ contributors: 2, packages: 2, sessions: 64, ready: true })).toBe(
+      "2 contributors · 2 repositories · 64 sessions · Ready",
     );
   });
 });

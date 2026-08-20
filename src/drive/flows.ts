@@ -7,7 +7,7 @@ import { ADD_REPOSITORIES_VALUE, GitHubRepoPrompt } from "../setup/github-repo-p
 import { fetchDriveStatus, joinDrive, searchDrive, stopDrive, uploadPackage } from "./client";
 import { scanWithDeja } from "./deja";
 import { discoverDrives } from "./discovery";
-import { createDriveHost, destroyHostedDrive } from "./host";
+import { createDriveHost, type DriveHost, destroyHostedDrive } from "./host";
 import {
   type DriveMcpAgent,
   driveMcpConfigStatus,
@@ -20,7 +20,7 @@ import {
   type ExportSessionSummary,
   summarizeDejaExport,
 } from "./package";
-import { displayHarness, renderSessionSummary, scanStatus } from "./presentation";
+import { displayHarness, renderHostStatus, renderSessionSummary, scanStatus } from "./presentation";
 import { type PreviewSession, startPreview } from "./preview";
 import { dedupeRepositories, matchSessionRepository, repositoryIdentity } from "./repositories";
 import { createScanProgress } from "./scan-progress";
@@ -38,11 +38,34 @@ export async function runDriveHost(options: {
   const host = await createDriveHost({ name, port: options.port, bonjour: options.bonjour });
   p.intro("Dosu Drive");
   p.log.success("Dosu Drive is ready");
+  if (host.name !== name) {
+    p.log.info(`Restored existing Drive "${host.name}" (saved name kept).`);
+  }
   p.note(
     `Name: ${host.name}\nNetwork: Local\nDashboard: ${host.lanUrl}\n\nNearby join:\n  dosu drive join`,
-    "Waiting for contributors…",
+    "Host is live",
   );
-  await host.wait();
+  await reportHostStatus(host);
+}
+
+async function reportHostStatus(host: DriveHost): Promise<void> {
+  let previous = "";
+  const report = () => {
+    const status = host.status();
+    const message = renderHostStatus(status);
+    if (message === previous) return;
+    previous = message;
+    if (status.ready) p.log.success(message);
+    else if (status.packages > 0) p.log.step(message);
+    else p.log.info(message);
+  };
+  report();
+  const timer = setInterval(report, 250);
+  try {
+    await host.wait();
+  } finally {
+    clearInterval(timer);
+  }
 }
 
 export async function runDriveJoin(

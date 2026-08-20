@@ -39,7 +39,8 @@ On the Host Mac:
 dosu drive host --name "Build Week Drive"
 ```
 
-Leave this terminal running. It prints the dashboard URL and the command teammates use:
+Leave this terminal running. It prints the dashboard URL, the command teammates use, and a new
+line whenever the contribution state changes:
 
 ```text
 Dosu Drive is ready
@@ -47,6 +48,11 @@ Dashboard: http://<host-ip>:7777
 
 Nearby join:
   dosu drive join
+
+●  Waiting for contributors…
+●  1 contributor joined · Waiting for sessions…
+◇  1 contributor · 1 repository · 12 sessions · Indexing…
+◆  1 contributor · 1 repository · 12 sessions · Ready
 ```
 
 Open the dashboard URL to show that the Drive begins empty and is waiting for contributions.
@@ -180,8 +186,9 @@ Restart later with:
 dosu drive host
 ```
 
-The existing Drive name, Packages, contributors, and central index are restored. `dosu drive
-destroy` is intentionally not part of the demo because this Drive is long-lived.
+The existing Drive name, Packages, contributors, and central index are restored. If a different
+`--name` is supplied, the saved name is kept and the terminal explicitly reports the restore.
+`dosu drive destroy` is intentionally not part of the demo because this Drive is long-lived.
 
 ## Troubleshooting
 

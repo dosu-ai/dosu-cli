@@ -153,6 +153,14 @@ async function main(): Promise<void> {
     assert(readyStatus.ready, "Host index did not become ready");
     assert(readyStatus.packages === 2, "multi-repository setup did not upload two Packages");
     assert(readyStatus.sessions === 2, "preview exclusion did not produce exactly two sessions");
+    await waitFor(
+      async () =>
+        host?.text().includes("1 contributor · 2 repositories · 2 sessions · Ready")
+          ? true
+          : undefined,
+      5_000,
+      "Host terminal did not report the ready contribution",
+    );
     const searchOutput = await run(
       cli,
       ["drive", "search", "quadratic walrus retry"],
@@ -242,6 +250,12 @@ async function main(): Promise<void> {
       "Host restart",
     );
     await waitForActiveURL(hostDriveHome, restart, 15_000);
+    await waitFor(
+      async () =>
+        restart?.text().includes('Restored existing Drive "Package E2E Drive"') ? true : undefined,
+      5_000,
+      "Host restart did not explain the restored Drive name",
+    );
     const restartedStatus = await getJSON<DriveStatus>(`${hostUrl}/api/status`);
     assert(restartedStatus.ready && restartedStatus.sessions === 2, "Host restart lost its index");
     const restartedSearch = await run(

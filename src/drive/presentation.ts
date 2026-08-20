@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import type { DejaSession, RepositoryIdentity } from "./types";
+import type { DejaSession, DriveStatus, RepositoryIdentity } from "./types";
 
 const SPINNER_COLUMNS = 4;
 const SUMMARY_LABEL_WIDTH = 15;
@@ -14,6 +14,15 @@ export function scanStatus(
       ? `~${path.slice(homeDirectory.length)}`
       : path;
   return truncateMiddle(`Scanning… ${display}`, Math.max(24, columns - SPINNER_COLUMNS));
+}
+
+export function renderHostStatus(
+  status: Pick<DriveStatus, "contributors" | "packages" | "sessions" | "ready">,
+): string {
+  if (status.contributors === 0 && status.packages === 0) return "Waiting for contributors…";
+  const contributors = countLabel(status.contributors, "contributor");
+  if (status.packages === 0) return `${contributors} joined · Waiting for sessions…`;
+  return `${contributors} · ${countLabel(status.packages, "repository", "repositories")} · ${countLabel(status.sessions, "session")} · ${status.ready ? "Ready" : "Indexing…"}`;
 }
 
 export function renderSessionSummary(
