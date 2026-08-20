@@ -20,17 +20,16 @@ Send `dosu-cli-0.48.2.tgz` to each participant, then run:
 ```bash
 npm install -g ./dosu-cli-0.48.2.tgz
 dosu --version
-npx -y --package @vshulcz/deja-vu@0.17.3 deja version
 ```
 
-Expected versions:
+Expected version:
 
 ```text
 v0.48.2
-deja 0.17.3
 ```
 
-The final command downloads and warms the pinned session parser before the meeting.
+The alpha includes its own enhanced deja-vu runtime for macOS arm64 and x64. It is used only by
+Dosu Drive and does not replace or configure a participant's own `deja` command.
 
 ## 2. Start the Drive Host
 
@@ -77,26 +76,42 @@ For an explicit multi-repository setup, use:
 dosu drive setup --repo /path/to/repo-a /path/to/repo-b
 ```
 
-The scan reports only sessions associated with the selected repositories before anything uploads:
+While scanning, one terminal line updates in place with the current candidate session path. It does
+not add one log line per file. The completed scan groups agent counts under each selected repository:
 
 ```text
-Found 12 project-associated sessions
-Found 7 sessions associated with /path/to/repo-a. Only these sessions can be uploaded; other projects are excluded.
-Found 5 sessions associated with /path/to/repo-b. Only these sessions can be uploaded; other projects are excluded.
-Nothing has been uploaded.
+◒  Scanning… ~/.codex/sessions/…/rollout-example.jsonl
+
+◇  Sessions found
+│  ├─ /path/to/repo-a
+│  │  ├─ Codex          6 sessions
+│  │  └─ Cursor         1 session
+│  ├─ /path/to/repo-b
+│  │  └─ Claude         5 sessions
+│  └─ Total            12 sessions
+│
+●  Only these 12 sessions can be uploaded; other projects are excluded.
+│  Nothing has been uploaded.
 ```
+
+Existing checkouts and worktrees from the same Git remote are included. A different existing
+repository with the same directory name is excluded.
 
 ## 4. Review and approve the local preview
 
-The terminal prints the credential-redaction count, asks to open the preview, and shows its
-loopback-only URL:
+The terminal completes the credential check, prints the loopback-only preview URL, and opens it
+without another Yes/No prompt:
 
 ```text
-Review exactly what will be uploaded
-Inspect every selected session and exclude anything before it leaves this computer.
-Safety check: 3 potential credentials detected and replaced.
-http://127.0.0.1:<port>/preview
+◇  Safety check
+│  3 potential credentials detected and replaced
+│
+◇  Preview ready
+│  Review every selected session and exclude anything before upload:
+│  http://127.0.0.1:<port>/preview
 ```
+
+Pass `--no-open` to print the same URL without launching the browser.
 
 In the preview:
 
@@ -199,8 +214,9 @@ dosu drive setup --repo /absolute/path/to/repo-a /absolute/path/to/repo-b
 
 ### The first scan is slow
 
-deja-vu is fetched through `npx` on first use. Run the warm-up command from Step 1 on every Mac
-before the demo.
+The bundled runtime filters by the selected repositories before fully parsing transcripts. The
+changing `Scanning…` path confirms that it is still progressing. On a very large first scan, let it
+finish once; no separate deja-vu download or warm-up is required.
 
 ### Codex does not show the Drive tools
 

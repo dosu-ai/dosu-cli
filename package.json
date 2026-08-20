@@ -14,7 +14,12 @@
     "dosu": "bin/dosu.js"
   },
   "files": [
-    "bin/dosu.js"
+    "bin/dosu.js",
+    "bin/runtime/deja-darwin-arm64",
+    "bin/runtime/deja-darwin-x64",
+    "third_party/deja-vu/LICENSE",
+    "third_party/deja-vu/README.md",
+    "third_party/deja-vu/dosu-project-scope.patch"
   ],
   "scripts": {
     "dev": "bun run src/index.ts",

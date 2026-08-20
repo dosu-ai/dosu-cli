@@ -30,6 +30,7 @@ const cleanup: string[] = [];
 
 afterEach(async () => {
   delete process.env.DOSU_DRIVE_HOME;
+  delete process.env.DOSU_DRIVE_DEJA_BIN;
   delete process.env.DOSU_DRIVE_DEJA_ENTRY;
   delete process.env.DOSU_DRIVE_FAKE_LOG;
   delete process.env.DOSU_DRIVE_EXECUTABLE;
@@ -38,6 +39,8 @@ afterEach(async () => {
   delete process.env.DEJA_INDEX_PATHS;
   delete process.env.DEJA_INDEX_TOOL_OUTPUT;
   delete process.env.DEJA_NO_REDACT;
+  delete process.env.DEJA_PROJECT_ROOTS;
+  delete process.env.DEJA_SCAN_PROGRESS;
   delete process.env.CODEX_HOME;
   delete process.env.CLAUDE_CONFIG_DIR;
   await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true })));
@@ -285,8 +288,8 @@ describe("Dosu Drive acceptance gates", () => {
       fake,
       `import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 const args = process.argv.slice(2); appendFileSync(process.env.DOSU_DRIVE_FAKE_LOG, JSON.stringify(args) + "\\n");
-if (args[0] === "version") console.log("deja 0.17.3");
-else if (args[0] === "index") { appendFileSync(process.env.DOSU_DRIVE_FAKE_LOG, JSON.stringify({ config: { commands: process.env.DEJA_INDEX_COMMANDS, edits: process.env.DEJA_INDEX_EDITS, paths: process.env.DEJA_INDEX_PATHS, toolOutput: process.env.DEJA_INDEX_TOOL_OUTPUT, noRedact: process.env.DEJA_NO_REDACT } }) + "\\n"); mkdirSync(process.env.DEJA_INDEX_DIR, { recursive: true }); }
+if (args[0] === "version") console.log("deja 0.17.3-dosu.1");
+else if (args[0] === "index") { process.stderr.write('@dosu-scan {"path":"/work/repo-a/.codex/session.jsonl"}\\n'); appendFileSync(process.env.DOSU_DRIVE_FAKE_LOG, JSON.stringify({ config: { commands: process.env.DEJA_INDEX_COMMANDS, edits: process.env.DEJA_INDEX_EDITS, paths: process.env.DEJA_INDEX_PATHS, toolOutput: process.env.DEJA_INDEX_TOOL_OUTPUT, noRedact: process.env.DEJA_NO_REDACT, projectRoots: process.env.DEJA_PROJECT_ROOTS, scanProgress: process.env.DEJA_SCAN_PROGRESS } }) + "\\n"); mkdirSync(process.env.DEJA_INDEX_DIR, { recursive: true }); }
 else if (args[0] === "doctor") console.log(JSON.stringify({ ok: true }));
 else if (args[0] === "last") console.log(JSON.stringify({ schema_version: 2, sessions: [{ id: "s1", harness: "codex", project: "repo-a", path: ${JSON.stringify(source)}, started: "2026-08-20T06:00:00Z", updated: "2026-08-20T07:00:00Z" }] }));
 else if (args[0] === "sync" && args[1] === "export") { mkdirSync(args[2], { recursive: true }); writeFileSync(args[2] + "/deja-sync.jsonl", JSON.stringify({ harness: "codex", session_id: "s1", project: "repo-a", role: "user", text: "fixture", time: "2026-08-20T07:00:00Z" }) + "\\n"); }
@@ -301,13 +304,18 @@ else process.exit(2);\n`,
     process.env.DEJA_INDEX_TOOL_OUTPUT = "0";
     process.env.DEJA_NO_REDACT = "1";
 
-    const workspace = await scanWithDeja();
-    expect(workspace.version).toBe("deja 0.17.3");
+    const scanned: string[] = [];
+    const workspace = await scanWithDeja(["/work/repo-a", "/work/repo-b"], {
+      onScanPath: (path) => scanned.push(path),
+    });
+    expect(workspace.version).toBe("deja 0.17.3-dosu.1");
     expect(workspace.sessions.map((session) => session.id)).toEqual(["s1"]);
+    expect(scanned).toEqual(["/work/repo-a/.codex/session.jsonl"]);
     expect(readFileSync(log, "utf8")).toContain('["sync","export"');
     expect(readFileSync(log, "utf8")).toContain('"--full"');
+    expect(readFileSync(log, "utf8")).not.toContain('["doctor"');
     expect(readFileSync(log, "utf8")).toContain(
-      '"config":{"commands":"1","edits":"1","paths":"1","toolOutput":"1","noRedact":"0"}',
+      '"config":{"commands":"1","edits":"1","paths":"1","toolOutput":"1","noRedact":"0","projectRoots":"/work/repo-a:/work/repo-b","scanProgress":"1"}',
     );
     await workspace.cleanup();
 
@@ -380,7 +388,7 @@ else process.exit(2);\n`,
     writeFileSync(
       fake,
       `import { mkdirSync, writeFileSync } from "node:fs"; const args = process.argv.slice(2);
-if (args[0] === "version") console.log("deja 0.17.3");
+if (args[0] === "version") console.log("deja 0.17.3-dosu.1");
 else if (args[0] === "index") mkdirSync(process.env.DEJA_INDEX_DIR, { recursive: true });
 else if (args[0] === "doctor") console.log(JSON.stringify({ ok: true }));
 else if (args[0] === "stats") console.log(JSON.stringify({ sessions: 1 }));
@@ -394,7 +402,22 @@ else process.exit(2);\n`,
     const host = await createDriveHost({ name: "Setup Drive", port: 0, bonjour: false });
     try {
       setActiveDrive(await joinDrive(host.url, "Alice", "setup-mac"));
-      await runDriveSetup({ repositories: [repository], yes: true, open: false });
+      let openedPreview = "";
+      await runDriveSetup({
+        repositories: [repository],
+        yes: false,
+        open: true,
+        openURL: async (url) => {
+          openedPreview = url;
+          const base = url.replace(/\/preview$/, "");
+          const preview = (await fetch(`${base}/api/preview`).then((response) =>
+            response.json(),
+          )) as { totals: { selected: number } };
+          expect(preview.totals.selected).toBe(1);
+          await fetch(`${base}/api/approve`, { method: "POST" });
+        },
+      });
+      expect(openedPreview).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/preview$/);
       expect(await fetchDriveStatus({ url: host.url })).toMatchObject({
         ready: true,
         packages: 1,

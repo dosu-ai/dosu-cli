@@ -1,0 +1,467 @@
+From 73638f3f88691ee8bdb2051c4fbe0e9a5bcf4011 Mon Sep 17 00:00:00 2001
+From: Caspian Zhao <caspian.zhao@outlook.com>
+Date: Thu, 20 Aug 2026 09:25:59 -0700
+Subject: [PATCH] feat: scope indexing to selected project roots
+
+---
+ internal/sources/claude.go             |  19 ++-
+ internal/sources/codex.go              |  16 +++
+ internal/sources/cursor.go             |   4 +
+ internal/sources/project_scope.go      | 160 +++++++++++++++++++++++++
+ internal/sources/project_scope_test.go | 133 ++++++++++++++++++++
+ internal/sources/scan_progress.go      |  31 +++++
+ internal/sources/util.go               |   1 +
+ 7 files changed, 363 insertions(+), 1 deletion(-)
+ create mode 100644 internal/sources/project_scope.go
+ create mode 100644 internal/sources/project_scope_test.go
+ create mode 100644 internal/sources/scan_progress.go
+
+diff --git a/internal/sources/claude.go b/internal/sources/claude.go
+index 25258c9..ded140c 100644
+--- a/internal/sources/claude.go
++++ b/internal/sources/claude.go
+@@ -37,7 +37,24 @@ func LoadClaude() []model.Session {
+ // ClaudeFiles lists the transcript files under the Claude root without parsing
+ // them — a cheap count for diagnostics.
+ func ClaudeFiles() []string {
+-	return walkFiles(ClaudeRoot(), ClaudeFileWanted)
++	files := walkFiles(ClaudeRoot(), ClaudeFileWanted)
++	if len(projectScopeRoots()) == 0 {
++		return files
++	}
++	out := make([]string, 0, len(files))
++	for _, path := range files {
++		base := ClaudeProjectDirBase(path)
++		if resolved := ResolveEncodedPath(base); resolved != "" {
++			if projectScopeMatchesPath(resolved) {
++				out = append(out, path)
++			}
++			continue
++		}
++		if projectScopeMatchesProject(claudeProjectName(claudeProjectDir(path))) {
++			out = append(out, path)
++		}
++	}
++	return out
+ }
+ 
+ // ClaudeFileWanted reports whether a path under the Claude root belongs in
+diff --git a/internal/sources/codex.go b/internal/sources/codex.go
+index 6c924cc..4d02567 100644
+--- a/internal/sources/codex.go
++++ b/internal/sources/codex.go
+@@ -29,6 +29,7 @@ func CodexRoot() string {
+ func LoadCodex() []model.Session {
+ 	root := CodexRoot()
+ 	files := walkFiles(filepath.Join(root, "sessions"), codexRolloutWanted)
++	files = scopeCodexRollouts(files)
+ 	ss := parseFiles(files, ParseCodexRollout)
+ 	// history.jsonl repeats the prompts of sessions whose rollout deja has
+ 	// already read, with a coarser timestamp — so the ingest de-duplicator,
+@@ -58,12 +59,27 @@ func codexRolloutWanted(p string) bool {
+ func CodexFiles() []string {
+ 	root := CodexRoot()
+ 	files := walkFiles(filepath.Join(root, "sessions"), codexRolloutWanted)
++	files = scopeCodexRollouts(files)
+ 	if hist := filepath.Join(root, "history.jsonl"); fileExists(hist) {
+ 		files = append(files, hist)
+ 	}
+ 	return files
+ }
+ 
++func scopeCodexRollouts(files []string) []string {
++	if len(projectScopeRoots()) == 0 {
++		return files
++	}
++	out := make([]string, 0, len(files))
++	for _, path := range files {
++		_, cwd := codexRolloutHead(path)
++		if projectScopeMatchesPath(cwd) {
++			out = append(out, path)
++		}
++	}
++	return out
++}
++
+ func ParseCodexHistory(path string) ([]model.Session, error) {
+ 	return ParseCodexHistoryFromOffset(path, 0)
+ }
+diff --git a/internal/sources/cursor.go b/internal/sources/cursor.go
+index 3cb1568..7899d4a 100644
+--- a/internal/sources/cursor.go
++++ b/internal/sources/cursor.go
+@@ -95,6 +95,9 @@ func CursorTranscripts() []string {
+ 			return nil
+ 		}
+ 		if cursorPathHasDir(p, "agent-transcripts") {
++			if len(projectScopeRoots()) > 0 && !projectScopeMatchesProject(cursorTranscriptProject(p)) {
++				return nil
++			}
+ 			out = append(out, p)
+ 		}
+ 		return nil
+@@ -123,6 +126,7 @@ func fileExists(p string) bool {
+ func LoadCursor() []model.Session {
+ 	var ss []model.Session
+ 	for _, db := range CursorDBs() {
++		reportScanPath(db)
+ 		got, _ := ParseCursorDB(db)
+ 		ss = append(ss, got...)
+ 	}
+diff --git a/internal/sources/project_scope.go b/internal/sources/project_scope.go
+new file mode 100644
+index 0000000..78e6add
+--- /dev/null
++++ b/internal/sources/project_scope.go
+@@ -0,0 +1,160 @@
++package sources
++
++import (
++	"net/url"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"strings"
++	"sync"
++)
++
++type scopeRepositoryIdentity struct {
++	commonDir string
++	remote    string
++}
++
++var scopeRepositoryCache sync.Map
++
++// projectScopeRoots is the private runtime boundary used by Dosu Drive. An
++// empty value preserves deja's normal all-history behavior. Paths use the host
++// path-list separator so more than one selected repository can be supplied.
++func projectScopeRoots() []string {
++	raw := os.Getenv("DEJA_PROJECT_ROOTS")
++	if raw == "" {
++		return nil
++	}
++	var roots []string
++	seen := map[string]bool{}
++	for _, value := range filepath.SplitList(raw) {
++		value = canonicalScopePath(value)
++		if value == "" || seen[value] {
++			continue
++		}
++		seen[value] = true
++		roots = append(roots, value)
++	}
++	return roots
++}
++
++func canonicalScopePath(path string) string {
++	path = strings.TrimSpace(path)
++	if path == "" {
++		return ""
++	}
++	if absolute, err := filepath.Abs(path); err == nil {
++		path = absolute
++	}
++	if resolved, err := filepath.EvalSymlinks(path); err == nil {
++		path = resolved
++	}
++	return filepath.Clean(path)
++}
++
++func projectScopeMatchesPath(path string) bool {
++	path = canonicalScopePath(path)
++	if path == "" {
++		return false
++	}
++	for _, root := range projectScopeRoots() {
++		if rel, err := filepath.Rel(root, path); err == nil &&
++			(rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel))) {
++			return true
++		}
++	}
++	if candidate, ok := scopeRepositoryAt(path); ok {
++		for _, root := range projectScopeRoots() {
++			selected, selectedOK := scopeRepositoryAt(root)
++			if !selectedOK {
++				continue
++			}
++			if candidate.commonDir != "" && candidate.commonDir == selected.commonDir {
++				return true
++			}
++			if candidate.remote != "" && candidate.remote == selected.remote {
++				return true
++			}
++		}
++		// An existing repository is identifiable. A different remote with the
++		// same basename is a different project, not a related worktree.
++		return false
++	}
++	// Deleted worktrees no longer have Git metadata to prove. Keep the current
++	// whole-segment fallback so historical sessions from a removed worktree do
++	// not disappear merely because its checkout was cleaned up.
++	return projectScopeMatchesProject(projectName(path))
++}
++
++func scopeRepositoryAt(path string) (scopeRepositoryIdentity, bool) {
++	path = canonicalScopePath(path)
++	if path == "" {
++		return scopeRepositoryIdentity{}, false
++	}
++	if cached, ok := scopeRepositoryCache.Load(path); ok {
++		identity := cached.(scopeRepositoryIdentity)
++		return identity, identity.commonDir != "" || identity.remote != ""
++	}
++	if _, err := os.Stat(path); err != nil {
++		scopeRepositoryCache.Store(path, scopeRepositoryIdentity{})
++		return scopeRepositoryIdentity{}, false
++	}
++	identity := scopeRepositoryIdentity{
++		commonDir: gitScopeValue(path, "rev-parse", "--path-format=absolute", "--git-common-dir"),
++		remote:    normalizeScopeRemote(gitScopeValue(path, "config", "--get", "remote.origin.url")),
++	}
++	identity.commonDir = canonicalScopePath(identity.commonDir)
++	scopeRepositoryCache.Store(path, identity)
++	return identity, identity.commonDir != "" || identity.remote != ""
++}
++
++func gitScopeValue(path string, args ...string) string {
++	cmdArgs := append([]string{"-C", path}, args...)
++	out, err := exec.Command("git", cmdArgs...).Output()
++	if err != nil {
++		return ""
++	}
++	return strings.TrimSpace(string(out))
++}
++
++func normalizeScopeRemote(remote string) string {
++	remote = strings.TrimSpace(remote)
++	if remote == "" {
++		return ""
++	}
++	if parsed, err := url.Parse(remote); err == nil && parsed.Host != "" {
++		remote = parsed.Host + "/" + strings.TrimPrefix(parsed.Path, "/")
++	} else if colon := strings.Index(remote, ":"); colon > 0 && !filepath.IsAbs(remote) {
++		host := remote[:colon]
++		if at := strings.LastIndex(host, "@"); at >= 0 {
++			host = host[at+1:]
++		}
++		remote = host + "/" + strings.TrimPrefix(remote[colon+1:], "/")
++	}
++	remote = strings.TrimSuffix(strings.TrimSuffix(remote, "/"), ".git")
++	return strings.ToLower(remote)
++}
++
++// projectScopeMatchesProject keeps the project-name fallback deja and Dosu
++// already expose: another checkout/worktree named "dosu" belongs to a selected
++// "dosu" repository. Exact-path matching above wins first; this fallback is
++// deliberately no broader than whole path segments.
++func projectScopeMatchesProject(project string) bool {
++	project = normalizeScopeProject(project)
++	if project == "" || project == "-" {
++		return false
++	}
++	for _, root := range projectScopeRoots() {
++		base := normalizeScopeProject(filepath.Base(root))
++		parentBase := normalizeScopeProject(filepath.Join(filepath.Base(filepath.Dir(root)), filepath.Base(root)))
++		if project == base || project == parentBase || strings.HasSuffix(project, "/"+base) {
++			return true
++		}
++	}
++	return false
++}
++
++func normalizeScopeProject(project string) string {
++	project = strings.ReplaceAll(strings.TrimSpace(project), `\`, "/")
++	project = strings.TrimPrefix(project, "imported:")
++	return strings.ToLower(strings.Trim(project, "/"))
++}
+diff --git a/internal/sources/project_scope_test.go b/internal/sources/project_scope_test.go
+new file mode 100644
+index 0000000..9986630
+--- /dev/null
++++ b/internal/sources/project_scope_test.go
+@@ -0,0 +1,133 @@
++package sources
++
++import (
++	"encoding/json"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"slices"
++	"strings"
++	"testing"
++)
++
++func TestCodexFilesHonorsProjectRootScopeBeforeParsing(t *testing.T) {
++	root := t.TempDir()
++	selected := filepath.Join(root, "selected", "dosu")
++	related := filepath.Join(root, "another", "dosu")
++	unrelatedSameName := filepath.Join(root, "unrelated", "dosu")
++	deletedWorktree := filepath.Join(root, "deleted", "dosu")
++	initScopeRepository(t, selected, "git@example.com:dosu-ai/dosu.git")
++	initScopeRepository(t, related, "https://example.com/dosu-ai/dosu.git")
++	initScopeRepository(t, unrelatedSameName, "https://example.com/someone-else/dosu.git")
++	codex := filepath.Join(root, "codex")
++	t.Setenv("DEJA_CODEX_ROOT", codex)
++	t.Setenv("DEJA_PROJECT_ROOTS", selected)
++
++	want := filepath.Join(codex, "sessions", "2026", "08", "rollout-want.jsonl")
++	sameProjectOtherCheckout := filepath.Join(codex, "sessions", "2026", "08", "rollout-related.jsonl")
++	deletedProjectCheckout := filepath.Join(codex, "sessions", "2026", "08", "rollout-deleted.jsonl")
++	reject := filepath.Join(codex, "sessions", "2026", "08", "rollout-reject.jsonl")
++	writeCodexScopeFixture(t, want, selected, "want")
++	writeCodexScopeFixture(t, sameProjectOtherCheckout, related, "related")
++	writeCodexScopeFixture(t, deletedProjectCheckout, deletedWorktree, "deleted")
++	writeCodexScopeFixture(t, reject, unrelatedSameName, "reject")
++	history := filepath.Join(codex, "history.jsonl")
++	writeScopeFile(t, history, `{"session_id":"history-only","ts":1,"text":"keep history collision semantics"}`+"\n")
++
++	got := CodexFiles()
++	slices.Sort(got)
++	wantFiles := []string{deletedProjectCheckout, history, sameProjectOtherCheckout, want}
++	slices.Sort(wantFiles)
++	if !slices.Equal(got, wantFiles) {
++		t.Fatalf("CodexFiles() = %v, want %v", got, wantFiles)
++	}
++}
++
++func TestScanProgressLineIsMachineReadableAndEscapesPaths(t *testing.T) {
++	line := scanProgressLine("/tmp/a\nstrange.jsonl")
++	if !strings.HasPrefix(line, scanProgressPrefix) {
++		t.Fatalf("progress line = %q", line)
++	}
++	var event struct {
++		Path string `json:"path"`
++	}
++	if err := json.Unmarshal([]byte(strings.TrimPrefix(line, scanProgressPrefix)), &event); err != nil {
++		t.Fatal(err)
++	}
++	if event.Path != "/tmp/a\nstrange.jsonl" {
++		t.Fatalf("path = %q", event.Path)
++	}
++}
++
++func TestClaudeFilesHonorsProjectRootScopeBeforeParsing(t *testing.T) {
++	root := t.TempDir()
++	selected := filepath.Join(root, "work", "dosu")
++	other := filepath.Join(root, "work", "other")
++	for _, dir := range []string{selected, other} {
++		if err := os.MkdirAll(dir, 0o755); err != nil {
++			t.Fatal(err)
++		}
++	}
++	claude := filepath.Join(root, "claude-projects")
++	t.Setenv("DEJA_CLAUDE_ROOT", claude)
++	t.Setenv("DEJA_PROJECT_ROOTS", selected)
++	want := filepath.Join(claude, strings.ReplaceAll(selected, string(filepath.Separator), "-"), "want.jsonl")
++	reject := filepath.Join(claude, strings.ReplaceAll(other, string(filepath.Separator), "-"), "reject.jsonl")
++	writeScopeFile(t, want, `{}`+"\n")
++	writeScopeFile(t, reject, `{}`+"\n")
++
++	if got := ClaudeFiles(); !slices.Equal(got, []string{want}) {
++		t.Fatalf("ClaudeFiles() = %v, want [%s]", got, want)
++	}
++}
++
++func TestCursorTranscriptsHonorProjectRootScopeBeforeParsing(t *testing.T) {
++	root := t.TempDir()
++	selected := filepath.Join(root, "work", "dosu")
++	other := filepath.Join(root, "work", "other")
++	for _, dir := range []string{selected, other} {
++		if err := os.MkdirAll(dir, 0o755); err != nil {
++			t.Fatal(err)
++		}
++	}
++	cursor := filepath.Join(root, "cursor")
++	t.Setenv("DEJA_CURSOR_CLI_ROOT", cursor)
++	t.Setenv("DEJA_PROJECT_ROOTS", selected)
++	want := filepath.Join(cursor, "projects", strings.TrimPrefix(strings.ReplaceAll(selected, string(filepath.Separator), "-"), "-"), "agent-transcripts", "want.jsonl")
++	reject := filepath.Join(cursor, "projects", strings.TrimPrefix(strings.ReplaceAll(other, string(filepath.Separator), "-"), "-"), "agent-transcripts", "reject.jsonl")
++	writeScopeFile(t, want, `{}`+"\n")
++	writeScopeFile(t, reject, `{}`+"\n")
++
++	if got := CursorTranscripts(); !slices.Equal(got, []string{want}) {
++		t.Fatalf("CursorTranscripts() = %v, want [%s]", got, want)
++	}
++}
++
++func writeCodexScopeFixture(t *testing.T, path, cwd, id string) {
++	t.Helper()
++	writeScopeFile(t, path,
++		`{"type":"session_meta","payload":{"id":"`+id+`","cwd":"`+cwd+`"}}`+"\n"+
++			`{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"hello"}]}}`+"\n")
++}
++
++func writeScopeFile(t *testing.T, path, body string) {
++	t.Helper()
++	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func initScopeRepository(t *testing.T, path, remote string) {
++	t.Helper()
++	if err := os.MkdirAll(path, 0o755); err != nil {
++		t.Fatal(err)
++	}
++	for _, args := range [][]string{{"init", "-q", path}, {"-C", path, "remote", "add", "origin", remote}} {
++		if output, err := exec.Command("git", args...).CombinedOutput(); err != nil {
++			t.Fatalf("git %v: %v: %s", args, err, output)
++		}
++	}
++}
+diff --git a/internal/sources/scan_progress.go b/internal/sources/scan_progress.go
+new file mode 100644
+index 0000000..da03350
+--- /dev/null
++++ b/internal/sources/scan_progress.go
+@@ -0,0 +1,31 @@
++package sources
++
++import (
++	"encoding/json"
++	"fmt"
++	"os"
++	"sync"
++)
++
++const scanProgressPrefix = "@dosu-scan "
++
++var scanProgressMu sync.Mutex
++
++func scanProgressLine(path string) string {
++	payload, _ := json.Marshal(struct {
++		Path string `json:"path"`
++	}{Path: path})
++	return scanProgressPrefix + string(payload)
++}
++
++// reportScanPath is inert for normal deja users. Dosu's private runtime turns
++// it on and consumes the machine-readable stderr lines to update one spinner
++// in place; the paths never accumulate in the terminal scrollback.
++func reportScanPath(path string) {
++	if os.Getenv("DEJA_SCAN_PROGRESS") != "1" {
++		return
++	}
++	scanProgressMu.Lock()
++	defer scanProgressMu.Unlock()
++	fmt.Fprintln(os.Stderr, scanProgressLine(path))
++}
+diff --git a/internal/sources/util.go b/internal/sources/util.go
+index bbf9081..e5dc6ba 100644
+--- a/internal/sources/util.go
++++ b/internal/sources/util.go
+@@ -330,6 +330,7 @@ func parseFiles(files []string, parse func(string) ([]model.Session, error)) []m
+ 		go func() {
+ 			defer wg.Done()
+ 			for j := range jobs {
++				reportScanPath(j.p)
+ 				ss, err := safeParse(j.p, parse)
+ 				diagFileError(j.p, err)
+ 				outs <- struct {
+-- 
+2.50.1 (Apple Git-155)
+

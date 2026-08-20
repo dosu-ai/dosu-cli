@@ -16,7 +16,7 @@ afterEach(async () => {
 });
 
 it.runIf(process.env.DOSU_DRIVE_REAL_DV === "1")(
-  "gate 12: real deja-vu 0.17.3 preserves, redacts, and exactly filters native fixtures",
+  "gate 12: bundled deja-vu preserves, redacts, and exactly filters native fixtures",
   async () => {
     const root = await mkdtemp(join(tmpdir(), "dosu-drive-real-dv-"));
     roots.push(root);
@@ -52,8 +52,8 @@ it.runIf(process.env.DOSU_DRIVE_REAL_DV === "1")(
     Object.assign(process.env, overrides);
     let workspace: Awaited<ReturnType<typeof scanWithDeja>> | undefined;
     try {
-      workspace = await scanWithDeja();
-      expect(workspace.version).toBe("deja 0.17.3");
+      workspace = await scanWithDeja([repoA.root, repoB.root]);
+      expect(workspace.version).toBe("deja 0.17.3-dosu.1");
       const selectedRepositories = [repoA, repoB];
       const associated = workspace.sessions.filter((session) =>
         matchSessionRepository(session, selectedRepositories),

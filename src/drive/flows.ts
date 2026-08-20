@@ -15,6 +15,7 @@ import {
   removeDriveMcp,
 } from "./mcp-config";
 import { createRepositoryPackage, dejaSessionKey, summarizeDejaExport } from "./package";
+import { displayHarness, renderSessionSummary, scanStatus } from "./presentation";
 import { type PreviewSession, startPreview } from "./preview";
 import { dedupeRepositories, matchSessionRepository, repositoryIdentity } from "./repositories";
 import { clearActiveDrive, loadDriveState, rememberRepositories, setActiveDrive } from "./state";
@@ -79,6 +80,7 @@ export async function runDriveSetup(options: {
   repositories: string[];
   yes: boolean;
   open: boolean;
+  openURL?: (url: string) => Promise<unknown>;
 }): Promise<void> {
   const connection = requireActiveDrive();
   if (!connection.token || !connection.contributorId || !connection.contributorName) {
@@ -89,8 +91,20 @@ export async function runDriveSetup(options: {
   rememberRepositories(repositories.map((repository) => repository.root));
 
   const spinner = p.spinner();
-  spinner.start("Scanning supported agent history on this Mac…");
-  const workspace = await scanWithDeja();
+  spinner.start("Scanning local agent sessions on this Mac…");
+  let lastScanUpdate = 0;
+  const workspace = await scanWithDeja(
+    repositories.map((repository) => repository.root),
+    {
+      onScanPath: (path) => {
+        if (!process.stdout.isTTY) return;
+        const now = performance.now();
+        if (now - lastScanUpdate < 80) return;
+        lastScanUpdate = now;
+        spinner.message(scanStatus(path));
+      },
+    },
+  );
   try {
     const sessionsByRepository = new Map<string, DejaSession[]>(
       repositories.map((repository) => [repository.root, []]),
@@ -100,35 +114,20 @@ export async function runDriveSetup(options: {
       if (repository) sessionsByRepository.get(repository.root)?.push(session);
     }
     const sessions = [...sessionsByRepository.values()].flat();
-    spinner.stop(
-      `Found ${sessions.length} project-associated session${sessions.length === 1 ? "" : "s"}`,
-    );
+    spinner.stop("Sessions found");
     if (sessions.length === 0) {
       throw new Error("No indexed agent sessions matched the selected repositories");
     }
 
-    const harnessCounts = new Map<string, number>();
-    for (const session of sessions) {
-      harnessCounts.set(session.harness, (harnessCounts.get(session.harness) ?? 0) + 1);
-    }
-    p.note(
-      [...harnessCounts.entries()]
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(
-          ([harness, count]) =>
-            `${displayHarness(harness).padEnd(14)} ${countLabel(count, "session")}`,
-        )
-        .join("\n"),
-      "Sessions found",
+    p.log.message(renderSessionSummary(repositories, sessionsByRepository), { spacing: 0 });
+    const uploadScope =
+      sessions.length === 1 ? "Only this session" : `Only these ${sessions.length} sessions`;
+    p.log.info(
+      `${uploadScope} can be uploaded; other projects are excluded.\nNothing has been uploaded.`,
     );
-    for (const repository of repositories) {
-      const count = sessionsByRepository.get(repository.root)?.length ?? 0;
-      p.log.info(
-        `Found ${countLabel(count, "session")} associated with ${repository.root}. Only these sessions can be uploaded; other projects are excluded.`,
-      );
-    }
-    p.log.info("Nothing has been uploaded.");
 
+    const safety = p.spinner();
+    safety.start("Safety check");
     const exportSummaries = await summarizeDejaExport(workspace.exportDirectory, sessions);
     const repositoryBySession = new Map<string, RepositoryIdentity>();
     for (const repository of repositories) {
@@ -155,30 +154,27 @@ export async function runDriveSetup(options: {
       };
     });
     const redactions = previewSessions.reduce((sum, session) => sum + session.redactions, 0);
+    safety.stop("Safety check");
+    p.log.message(`${countLabel(redactions, "potential credential")} detected and replaced`, {
+      spacing: 0,
+    });
     let approvedKeys: string[];
     if (options.yes) {
       approvedKeys = previewSessions.map((session) => session.key);
     } else {
-      p.log.step("Review exactly what will be uploaded");
-      p.log.info(
-        "Inspect every selected session and exclude anything before it leaves this computer.",
-      );
-      p.log.info(
-        `Safety check: ${countLabel(redactions, "potential credential")} detected and replaced.`,
-      );
       const preview = await startPreview(previewSessions);
       try {
-        p.log.info(preview.url);
+        p.log.step("Preview ready");
+        p.log.message(
+          `Review every selected session and exclude anything before upload:\n${preview.url}`,
+          { spacing: 0 },
+        );
         if (options.open) {
-          const shouldOpen = await p.confirm({
-            message: "Open the local preview?",
-            initialValue: true,
-          });
-          if (p.isCancel(shouldOpen) || !shouldOpen) {
-            p.cancel("Setup cancelled. Nothing was uploaded.");
-            return;
+          try {
+            await (options.openURL ?? open)(preview.url);
+          } catch {
+            p.log.warn("The browser did not open; use the local preview link above.");
           }
-          await open(preview.url);
         }
         const approved = await preview.waitForDecision();
         if (!approved) {
@@ -455,13 +451,6 @@ function localUserName(): string {
   } catch {
     return process.env.USER || "Teammate";
   }
-}
-
-function displayHarness(harness: string): string {
-  return harness
-    .split(/[-_]/)
-    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
-    .join(" ");
 }
 
 function countLabel(count: number, singular: string, plural = `${singular}s`): string {

@@ -485,6 +485,8 @@ function hostDejaEnvironment(directory: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
     DEJA_INDEX_DIR: join(directory, "deja-index"),
+    DEJA_PROJECT_ROOTS: "",
+    DEJA_SCAN_PROGRESS: "0",
     DEJA_CLAUDE_ROOT: empty("claude"),
     DEJA_CODEX_ROOT: empty("codex"),
     DEJA_CURSOR_ROOT: empty("cursor"),

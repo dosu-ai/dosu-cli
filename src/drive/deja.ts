@@ -1,22 +1,33 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { isAbsolute, join, relative, sep } from "node:path";
+import { delimiter, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { driveHome } from "./paths";
 import type { DejaSession } from "./types";
 
-const DEJA_PACKAGE = "@vshulcz/deja-vu@0.17.3";
+const DEJA_VERSION = "deja 0.17.3-dosu.1";
+const SCAN_PROGRESS_PREFIX = "@dosu-scan ";
 
 export interface DejaWorkspace {
   root: string;
   indexDirectory: string;
   exportDirectory: string;
   version: string;
-  doctor: unknown;
   sessions: DejaSession[];
   cleanup(): Promise<void>;
 }
 
-export async function scanWithDeja(): Promise<DejaWorkspace> {
+interface DejaScanOptions {
+  onScanPath?: (path: string) => void;
+}
+
+interface RunDejaOptions extends DejaScanOptions {}
+
+export async function scanWithDeja(
+  projectRoots: readonly string[] = [],
+  options: DejaScanOptions = {},
+): Promise<DejaWorkspace> {
   const temporaryParent = join(driveHome(), "tmp");
   await mkdir(temporaryParent, { recursive: true, mode: 0o700 });
   const root = await mkdtemp(join(temporaryParent, "setup-"));
@@ -30,26 +41,26 @@ export async function scanWithDeja(): Promise<DejaWorkspace> {
     DEJA_INDEX_PATHS: "1",
     DEJA_INDEX_TOOL_OUTPUT: "1",
     DEJA_NO_REDACT: "0",
+    DEJA_PROJECT_ROOTS: projectRoots.join(delimiter),
+    DEJA_SCAN_PROGRESS: "1",
   };
   const cleanup = () => cleanupWorkspace(root, temporaryParent);
 
   try {
-    const version = (await runDeja(["version"], environment)).stdout.trim();
-    if (version !== "deja 0.17.3") {
-      throw new Error(`Expected deja-vu 0.17.3, received ${version || "no version"}`);
+    const version = (await runDeja(["version"], environment, options)).stdout.trim();
+    if (version !== DEJA_VERSION) {
+      throw new Error(`Expected ${DEJA_VERSION}, received ${version || "no version"}`);
     }
-    await runDeja(["index"], environment);
-    const doctor = parseJSON(
-      (await runDeja(["doctor", "--offline", "--deep", "--json"], environment)).stdout,
+    await runDeja(["index"], environment, options);
+    const recent = parseRecent(
+      (await runDeja(["last", "100000", "--json"], environment, options)).stdout,
     );
-    const recent = parseRecent((await runDeja(["last", "100000", "--json"], environment)).stdout);
-    await runDeja(["sync", "export", exportDirectory, "--full"], environment);
+    await runDeja(["sync", "export", exportDirectory, "--full"], environment, options);
     return {
       root,
       indexDirectory,
       exportDirectory,
       version,
-      doctor,
       sessions: recent,
       cleanup,
     };
@@ -62,10 +73,12 @@ export async function scanWithDeja(): Promise<DejaWorkspace> {
 export async function runDeja(
   args: string[],
   environment: NodeJS.ProcessEnv = process.env,
+  options: RunDejaOptions = {},
 ): Promise<{ stdout: string; stderr: string }> {
-  const entry = process.env.DOSU_DRIVE_DEJA_ENTRY;
-  const command = entry ? process.execPath : "npx";
-  const commandArgs = entry ? [entry, ...args] : ["-y", "--package", DEJA_PACKAGE, "deja", ...args];
+  const entry = environment.DOSU_DRIVE_DEJA_ENTRY ?? process.env.DOSU_DRIVE_DEJA_ENTRY;
+  const binary = environment.DOSU_DRIVE_DEJA_BIN ?? process.env.DOSU_DRIVE_DEJA_BIN;
+  const command = entry ? process.execPath : (binary ?? bundledDejaPath());
+  const commandArgs = entry ? [entry, ...args] : args;
   return new Promise((resolve, reject) => {
     const child = spawn(command, commandArgs, {
       env: environment,
@@ -73,12 +86,18 @@ export async function runDeja(
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
+    let progressBuffer = "";
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr.push(chunk);
+      progressBuffer += chunk.toString("utf8");
+      progressBuffer = consumeScanProgress(progressBuffer, options.onScanPath);
+    });
     child.once("error", reject);
     child.once("close", (code) => {
       const output = Buffer.concat(stdout).toString("utf8");
-      const errors = Buffer.concat(stderr).toString("utf8");
+      consumeScanProgress(`${progressBuffer}\n`, options.onScanPath);
+      const errors = stripScanProgress(Buffer.concat(stderr).toString("utf8"));
       if (code === 0) resolve({ stdout: output, stderr: errors });
       else
         reject(
@@ -86,6 +105,47 @@ export async function runDeja(
         );
     });
   });
+}
+
+function bundledDejaPath(): string {
+  if (process.platform !== "darwin" || (process.arch !== "arm64" && process.arch !== "x64")) {
+    throw new Error("Dosu Drive's bundled deja-vu runtime currently supports macOS only");
+  }
+  const filename = `deja-darwin-${process.arch}`;
+  const moduleDirectory = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    join(moduleDirectory, "runtime", filename),
+    join(moduleDirectory, "..", "..", "bin", "runtime", filename),
+    ...(process.argv[1] ? [join(dirname(process.argv[1]), "runtime", filename)] : []),
+  ];
+  const runtime = candidates.find(existsSync);
+  if (!runtime) {
+    throw new Error(`Dosu Drive is missing its bundled deja-vu runtime (${filename})`);
+  }
+  return runtime;
+}
+
+function consumeScanProgress(buffer: string, onScanPath?: (path: string) => void): string {
+  const lines = buffer.split("\n");
+  const pending = lines.pop() ?? "";
+  for (const line of lines) {
+    if (!line.startsWith(SCAN_PROGRESS_PREFIX)) continue;
+    try {
+      const event = JSON.parse(line.slice(SCAN_PROGRESS_PREFIX.length)) as { path?: unknown };
+      if (typeof event.path === "string") onScanPath?.(event.path);
+    } catch {
+      // A malformed private progress event is cosmetic; the DV command still
+      // determines success or failure through its exit status.
+    }
+  }
+  return pending;
+}
+
+function stripScanProgress(stderr: string): string {
+  return stderr
+    .split("\n")
+    .filter((line) => !line.startsWith(SCAN_PROGRESS_PREFIX))
+    .join("\n");
 }
 
 async function cleanupWorkspace(root: string, parent: string): Promise<void> {
