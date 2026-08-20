@@ -232,7 +232,7 @@ function parseSyncRecord(line: string, path: string): DejaSyncRecord {
 }
 
 export function dejaSessionKey(harness: string, sessionId: string): string {
-  return `${harness}\0${sessionId}`;
+  return Buffer.from(JSON.stringify([harness, sessionId])).toString("base64url");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

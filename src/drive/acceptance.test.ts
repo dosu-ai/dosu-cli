@@ -20,7 +20,7 @@ import { runDriveSetup } from "./flows";
 import { createDriveHost, type DriveHost } from "./host";
 import { installDriveMcp } from "./mcp-config";
 import { createDriveMcpServer } from "./mcp-server";
-import { createRepositoryPackage, namespacedSessionId } from "./package";
+import { createRepositoryPackage, dejaSessionKey, namespacedSessionId } from "./package";
 import { startPreview } from "./preview";
 import { dedupeRepositories, matchSessionRepository, repositoryIdentity } from "./repositories";
 import { loadDriveState, rememberRepositories, setActiveDrive } from "./state";
@@ -152,9 +152,12 @@ describe("Dosu Drive acceptance gates", () => {
   });
 
   it("gate 5: keeps preview local and freezes the approved session selection", async () => {
+    const keepKey = dejaSessionKey("claude", "keep");
+    const excludeKey = dejaSessionKey("codex", "exclude");
+    expect(keepKey).toMatch(/^[A-Za-z0-9_-]+$/);
     const preview = await startPreview([
       {
-        key: "claude\0keep",
+        key: keepKey,
         repository: "repo-a",
         harness: "claude",
         nativeId: "keep",
@@ -167,7 +170,7 @@ describe("Dosu Drive acceptance gates", () => {
         redactions: 1,
       },
       {
-        key: "codex\0exclude",
+        key: excludeKey,
         repository: "repo-b",
         harness: "codex",
         nativeId: "exclude",
@@ -189,10 +192,10 @@ describe("Dosu Drive acceptance gates", () => {
       await fetch(`${base}/api/select`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ keys: ["claude\0keep"] }),
+        body: JSON.stringify({ keys: [keepKey] }),
       });
       await fetch(`${base}/api/approve`, { method: "POST" });
-      expect(await preview.waitForDecision()).toEqual(["claude\0keep"]);
+      expect(await preview.waitForDecision()).toEqual([keepKey]);
     } finally {
       await preview.close();
     }
