@@ -447,6 +447,19 @@ describe("safe payload builders", () => {
     expect(JSON.stringify(safeError)).not.toContain("config.json");
   });
 
+  it("bounds cyclic cause chains without retaining private details", () => {
+    const error = Object.assign(new Error("private cyclic detail"), {
+      name: "TRPCClientError",
+      code: "NOT_FOUND",
+    }) as Error & { cause?: unknown; code: string };
+    error.cause = error;
+
+    const safeError = sanitizeError(error);
+
+    expect(safeError).toMatchObject({ type: "TRPCClientError", code: "NOT_FOUND" });
+    expect(JSON.stringify(safeError)).not.toContain("private");
+  });
+
   it.each([
     "EISDIR",
     "ELOOP",
