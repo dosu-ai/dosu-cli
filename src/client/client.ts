@@ -195,20 +195,26 @@ export class Client {
         signal: controller.signal,
       });
     } catch (cause) {
+      clearTimeout(timeout);
       throw new SessionRefreshError({ cause });
+    }
+
+    let data: RefreshResponse;
+    try {
+      if (resp.status !== 200) {
+        const errorCode = await readAuthErrorCode(resp);
+        if (
+          REAUTHENTICATION_ERROR_CODES.has(errorCode ?? "") ||
+          (!oauthClientID && errorCode === "validation_failed")
+        ) {
+          throw new SessionExpiredError();
+        }
+        throw new SessionRefreshError({ status: resp.status });
+      }
+      data = await readRefreshResponse(resp);
     } finally {
       clearTimeout(timeout);
     }
-
-    if (resp.status !== 200) {
-      const errorCode = await readAuthErrorCode(resp);
-      if (REAUTHENTICATION_ERROR_CODES.has(errorCode ?? "")) {
-        throw new SessionExpiredError();
-      }
-      throw new SessionRefreshError({ status: resp.status });
-    }
-
-    const data = await readRefreshResponse(resp);
 
     // A browser login in another process may have switched accounts while the
     // refresh request was in flight. Never let this stale client overwrite the

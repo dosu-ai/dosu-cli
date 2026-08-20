@@ -92,6 +92,45 @@ function oauthAccessToken(clientID: string): string {
   return `header.${payload}.signature`;
 }
 
+interface StalledJsonResponse {
+  deliver(value: unknown): void;
+  isTerminated(): boolean;
+  response: Response;
+}
+
+function stalledJsonResponse(status: number, signal?: AbortSignal): StalledJsonResponse {
+  let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+  let terminated = false;
+  const body = new ReadableStream<Uint8Array>({
+    start(streamController) {
+      controller = streamController;
+      signal?.addEventListener(
+        "abort",
+        () => {
+          if (terminated) return;
+          terminated = true;
+          streamController.error(signal.reason);
+        },
+        { once: true },
+      );
+    },
+    cancel() {
+      terminated = true;
+    },
+  });
+
+  return {
+    deliver(value: unknown) {
+      if (terminated || !controller) return;
+      terminated = true;
+      controller.enqueue(new TextEncoder().encode(JSON.stringify(value)));
+      controller.close();
+    },
+    isTerminated: () => terminated,
+    response: new Response(body, { status }),
+  };
+}
+
 describe("refresh self-healing", () => {
   const savedEnv: Record<string, string | undefined> = {};
   let tempDir: string;
@@ -253,6 +292,51 @@ describe("refresh self-healing", () => {
     expect(loadConfig().active_account?.session.refresh_token).toBe("rt-dead");
   });
 
+  it("requires reauthentication for a malformed legacy refresh token", async () => {
+    // Correct base64url shape and encoded length, but an invalid checksum.
+    // A client may reject it locally or let Supabase return validation_failed.
+    const malformedRefreshToken = Buffer.alloc(38).toString("base64url");
+    saveConfig(makeConfig({ refresh_token: malformedRefreshToken, expires_at: 1 }));
+    const cfg = loadConfig();
+    mockFetch.mockResolvedValue(
+      new Response(JSON.stringify({ error_code: "validation_failed" }), { status: 400 }),
+    );
+
+    await expect(new Client(cfg).refreshToken()).rejects.toMatchObject({
+      name: "SessionExpiredError",
+      code: "SESSION_EXPIRED",
+      message: expect.stringContaining("dosu login"),
+    });
+
+    expect(mockFetch.mock.calls.length).toBeLessThanOrEqual(1);
+    const refreshCall = mockFetch.mock.calls[0] as [string, RequestInit] | undefined;
+    if (refreshCall) {
+      expect(refreshCall[0]).toBe(
+        "https://test.supabase.co/auth/v1/token?grant_type=refresh_token",
+      );
+    }
+    expect(loadConfig().active_account?.session.refresh_token).toBe(malformedRefreshToken);
+  });
+
+  it("keeps an OAuth validation failure observable", async () => {
+    const accessToken = oauthAccessToken("cli-client-id");
+    saveConfig(makeConfig({ access_token: accessToken, refresh_token: "oauth-refresh" }));
+    const cfg = loadConfig();
+    mockFetch.mockResolvedValue(
+      new Response(JSON.stringify({ error_code: "validation_failed" }), { status: 400 }),
+    );
+
+    await expect(new Client(cfg).refreshToken()).rejects.toMatchObject({
+      name: "SessionRefreshError",
+      code: "SESSION_REFRESH_ERROR",
+      status: 400,
+    });
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://test.supabase.co/auth/v1/oauth/token");
+    expect(loadConfig().active_account?.session.refresh_token).toBe("oauth-refresh");
+  });
+
   it("keeps unexpected auth server failures observable and does not mutate credentials", async () => {
     saveConfig(makeConfig({ access_token: "at-old", refresh_token: "rt-old", expires_at: 1 }));
     const cfg = loadConfig();
@@ -387,6 +471,84 @@ describe("refresh self-healing", () => {
 
       expect(cfg.active_account?.session.refresh_token).toBe("rt-old");
       expect(loadConfig().active_account?.session.refresh_token).toBe("rt-old");
+      expect(readdirSync(getConfigDir())).toEqual(["config.json"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    200, 400,
+  ])("bounds response-body consumption and ignores a late body for status %i", async (status) => {
+    saveConfig(makeConfig({ access_token: "at-old", refresh_token: "rt-old", expires_at: 1 }));
+    const cfg = loadConfig();
+    vi.useFakeTimers();
+    try {
+      let stalled: StalledJsonResponse | undefined;
+      let markResponseReady: (() => void) | undefined;
+      const responseReady = new Promise<void>((resolve) => {
+        markResponseReady = resolve;
+      });
+      mockFetch.mockImplementation(async (_url: unknown, options?: RequestInit) => {
+        stalled = stalledJsonResponse(status, options?.signal ?? undefined);
+        markResponseReady?.();
+        return stalled.response;
+      });
+
+      let settled = false;
+      const result = new Client(cfg).refreshToken().then(
+        () => {
+          settled = true;
+          return undefined;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        },
+      );
+      await responseReady;
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      const settledByDeadline = settled;
+      const lockHeldAtDeadline = readdirSync(getConfigDir()).includes("session-refresh.lock");
+      if (!stalled?.isTerminated()) {
+        const responseBody =
+          status === 200
+            ? {
+                access_token: "at-new",
+                refresh_token: "rt-new",
+                expires_in: 3600,
+              }
+            : { error_code: "unexpected_failure" };
+        stalled?.deliver(responseBody);
+      }
+      const outcome = await result;
+
+      // A timeout implemented as an outer race can release the lock while the
+      // losing refresh continues. Give any late body continuation time to run.
+      vi.useRealTimers();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect({ lockHeldAtDeadline, outcome, settledByDeadline }).toMatchObject({
+        lockHeldAtDeadline: false,
+        outcome: {
+          name: "SessionRefreshError",
+          code: "SESSION_REFRESH_ERROR",
+        },
+        settledByDeadline: true,
+      });
+      expect(cfg.active_account?.session).toMatchObject({
+        access_token: "at-old",
+        refresh_token: "rt-old",
+        expires_at: 1,
+      });
+      expect(loadConfig().active_account?.session).toMatchObject({
+        access_token: "at-old",
+        refresh_token: "rt-old",
+        expires_at: 1,
+      });
       expect(readdirSync(getConfigDir())).toEqual(["config.json"]);
     } finally {
       vi.useRealTimers();
