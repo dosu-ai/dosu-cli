@@ -95,11 +95,6 @@ export async function readDriveEvidence(
   return (await responseJSON(response)) as DriveEvidence;
 }
 
-export async function stopDrive(connection: Pick<DriveConnection, "url">): Promise<void> {
-  const response = await fetch(`${normalizeURL(connection.url)}/api/stop`, { method: "POST" });
-  await responseJSON(response);
-}
-
 async function streamRequest(url: URL, path: string, token: string): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const request = (url.protocol === "https:" ? httpsRequest : httpRequest)(
