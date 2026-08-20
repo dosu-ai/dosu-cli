@@ -25,6 +25,7 @@
     "upload:sourcemaps": "sentry-cli sourcemaps upload --org dosu-ai --project dosu-cli --validate --wait --strict --url-prefix app:///bin bin/dosu.js bin/dosu.js.map",
     "build:all": "bun --env-file=.env.production run scripts/build-all.ts",
     "test": "bunx vitest run",
+    "test:drive-package": "bun run scripts/drive-package-e2e.ts",
     "test:watch": "bunx vitest",
     "typecheck": "bunx tsc --noEmit",
     "lint": "bunx biome lint .",
