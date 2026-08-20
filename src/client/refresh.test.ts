@@ -6,27 +6,30 @@
  * detection) — killing every client that shares it. Multiple CLI processes
  * (TUI and parallel commands) share one config file, so a
  * process holding a stale in-memory token can kill the session for all of
- * them. These tests pin the client's defenses:
+ * them. These tests pin the client's lock-based defenses:
  *
- * 1. adopt-before-refresh — refresh with the newest on-disk token, never a
- *    stale in-memory copy (long-lived TUI scenario).
- * 2. retry-after-rotation — when a refresh fails because a sibling rotated
- *    the token mid-flight, re-read the config and retry once with the newer
- *    token before declaring the session dead.
- * 3. two-client relay — a stale client adopts its sibling's rotation instead
- *    of replaying the dead token (which, against real GoTrue, would revoke
- *    the session for BOTH).
+ * 1. acquire a config-directory lock before contacting GoTrue;
+ * 2. adopt a valid session persisted by the lock holder instead of rotating
+ *    again; and
+ * 3. persist a candidate session before updating the caller's in-memory copy.
  *
  * The fake GoTrue mirrors hosted behavior outside the reuse interval: only
  * the CURRENT refresh token succeeds; anything else gets a 400
  * (refresh_token_already_used).
  */
 
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { type Config, loadConfig, saveConfig } from "../config/config";
+import {
+  type Config,
+  emptyConfig,
+  getConfigDir,
+  getConfigPath,
+  loadConfig,
+  saveConfig,
+} from "../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { Client } from "./client";
 
@@ -89,6 +92,45 @@ function oauthAccessToken(clientID: string): string {
   return `header.${payload}.signature`;
 }
 
+interface StalledJsonResponse {
+  deliver(value: unknown): void;
+  isTerminated(): boolean;
+  response: Response;
+}
+
+function stalledJsonResponse(status: number, signal?: AbortSignal): StalledJsonResponse {
+  let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+  let terminated = false;
+  const body = new ReadableStream<Uint8Array>({
+    start(streamController) {
+      controller = streamController;
+      signal?.addEventListener(
+        "abort",
+        () => {
+          if (terminated) return;
+          terminated = true;
+          streamController.error(signal.reason);
+        },
+        { once: true },
+      );
+    },
+    cancel() {
+      terminated = true;
+    },
+  });
+
+  return {
+    deliver(value: unknown) {
+      if (terminated || !controller) return;
+      terminated = true;
+      controller.enqueue(new TextEncoder().encode(JSON.stringify(value)));
+      controller.close();
+    },
+    isTerminated: () => terminated,
+    response: new Response(body, { status }),
+  };
+}
+
 describe("refresh self-healing", () => {
   const savedEnv: Record<string, string | undefined> = {};
   let tempDir: string;
@@ -121,7 +163,7 @@ describe("refresh self-healing", () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("refreshes with the newest on-disk token, not a stale in-memory copy", async () => {
+  it("adopts a newer valid on-disk session without another remote refresh", async () => {
     // A sibling process already rotated the token and saved it.
     saveConfig(makeConfig({ access_token: "at-disk", refresh_token: "rt-disk" }));
     const gotrue = new FakeGoTrue("rt-disk");
@@ -132,10 +174,10 @@ describe("refresh self-healing", () => {
     const cfg = makeConfig({ refresh_token: "rt-stale" });
     await new Client(cfg).refreshToken();
 
-    expect(gotrue.presented).toEqual(["rt-disk"]); // never "rt-stale"
+    expect(gotrue.presented).toEqual([]);
     expect(gotrue.rejections).toBe(0);
-    expect(cfg.active_account?.session.refresh_token).toBe("rt-1");
-    expect(loadConfig().active_account?.session.refresh_token).toBe("rt-1"); // rotation persisted
+    expect(cfg.active_account?.session.refresh_token).toBe("rt-disk");
+    expect(loadConfig().active_account?.session.refresh_token).toBe("rt-disk");
   });
 
   it("refreshes OAuth 2.1 sessions through the OAuth token endpoint", async () => {
@@ -164,33 +206,28 @@ describe("refresh self-healing", () => {
     expect(new URLSearchParams(init.body as string).get("client_id")).toBe("cli-client-id");
   });
 
-  it("retries once with the on-disk token when a sibling rotates mid-flight", async () => {
-    // Memory and disk agree when the refresh starts...
-    saveConfig(makeConfig({ refresh_token: "rt-a" }));
+  it("preserves the selected target while saving refreshed credentials", async () => {
+    saveConfig(makeConfig({ refresh_token: "rt-old", deployment_id: "dep-1" }));
     const cfg = loadConfig();
-
-    // ...but a sibling has ALREADY rotated rt-a -> rt-b server-side; its
-    // save lands while our (stale) request is in flight.
-    const gotrue = new FakeGoTrue("rt-b");
-    let siblingSaved = false;
-    mockFetch.mockImplementation(async (url: unknown, options?: { body?: string }) => {
-      const resp = await gotrue.handle(url, options);
-      if (!siblingSaved) {
-        siblingSaved = true;
-        saveConfig(makeConfig({ access_token: "at-b", refresh_token: "rt-b" }));
-      }
-      return resp;
-    });
+    mockFetch.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          access_token: "at-new",
+          refresh_token: "rt-new",
+          expires_in: 3600,
+        }),
+        { status: 200 },
+      ),
+    );
 
     await new Client(cfg).refreshToken();
 
-    expect(gotrue.presented).toEqual(["rt-a", "rt-b"]); // failed once, healed
-    expect(cfg.active_account?.session.refresh_token).toBe("rt-1");
-    expect(loadConfig().active_account?.session.refresh_token).toBe("rt-1");
+    expect(cfg.active_account?.target?.deployment_id).toBe("dep-1");
+    expect(loadConfig().active_account?.target?.deployment_id).toBe("dep-1");
   });
 
-  it("two clients sharing one config file relay the rotation instead of killing it", async () => {
-    saveConfig(makeConfig({ refresh_token: "rt-0" }));
+  it("serializes two concurrent clients so only one rotates and both adopt it", async () => {
+    saveConfig(makeConfig({ refresh_token: "rt-0", expires_at: 1 }));
     const gotrue = new FakeGoTrue("rt-0");
     mockFetch.mockImplementation(gotrue.handle);
 
@@ -198,28 +235,383 @@ describe("refresh self-healing", () => {
     const a = loadConfig();
     const b = loadConfig();
 
-    // ...A refreshes first (rt-0 -> rt-1), then B — whose in-memory token is
-    // now stale — must adopt A's rotation (rt-1 -> rt-2), not replay rt-0.
-    await new Client(a).refreshToken();
-    await new Client(b).refreshToken();
+    await Promise.all([new Client(a).refreshToken(), new Client(b).refreshToken()]);
 
-    expect(gotrue.presented).toEqual(["rt-0", "rt-1"]);
-    expect(gotrue.rejections).toBe(0); // a replayed token would kill the session
-    expect(loadConfig().active_account?.session.refresh_token).toBe("rt-2");
+    expect(gotrue.presented).toEqual(["rt-0"]);
+    expect(gotrue.rejections).toBe(0);
+    expect(a.active_account?.session.refresh_token).toBe("rt-1");
+    expect(b.active_account?.session.refresh_token).toBe("rt-1");
+    expect(loadConfig().active_account?.session.refresh_token).toBe("rt-1");
 
-    // The config dir contains exactly the config file — no stray tmp files.
+    // The config dir contains exactly the config file — no stale lock or temp files.
     expect(readdirSync(join(tempDir, "dosu-cli"))).toEqual(["config.json"]);
   });
 
-  it("still fails cleanly when the session is truly dead (no newer token on disk)", async () => {
+  it("coalesces concurrent refresh calls that share one in-memory config", async () => {
+    saveConfig(makeConfig({ refresh_token: "rt-0", expires_at: 1 }));
+    const gotrue = new FakeGoTrue("rt-0");
+    mockFetch.mockImplementation(gotrue.handle);
+    const cfg = loadConfig();
+    const client = new Client(cfg);
+
+    await Promise.all([client.refreshToken(), client.refreshToken()]);
+
+    expect(gotrue.presented).toEqual(["rt-0"]);
+    expect(cfg.active_account?.session.refresh_token).toBe("rt-1");
+    expect(loadConfig().active_account?.session.refresh_token).toBe("rt-1");
+  });
+
+  it("returns SessionExpiredError when the auth server rejects the refresh", async () => {
     saveConfig(makeConfig({ refresh_token: "rt-dead" }));
     const cfg = loadConfig();
     const gotrue = new FakeGoTrue("rt-elsewhere"); // nothing we hold will work
     mockFetch.mockImplementation(gotrue.handle);
 
-    await expect(new Client(cfg).refreshToken()).rejects.toThrow("refresh failed with status 400");
-    // One attempt only — disk has nothing newer to retry with.
+    await expect(new Client(cfg).refreshToken()).rejects.toMatchObject({
+      name: "SessionExpiredError",
+      code: "SESSION_EXPIRED",
+      message: expect.stringContaining("dosu login"),
+    });
     expect(gotrue.presented).toEqual(["rt-dead"]);
+    expect(readdirSync(getConfigDir())).toEqual(["config.json"]);
+  });
+
+  it("recognizes the OAuth error field when reauthentication is required", async () => {
+    saveConfig(makeConfig({ refresh_token: "rt-dead" }));
+    const cfg = loadConfig();
+    mockFetch.mockResolvedValue(
+      new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 }),
+    );
+
+    await expect(new Client(cfg).refreshToken()).rejects.toMatchObject({
+      name: "SessionExpiredError",
+      code: "SESSION_EXPIRED",
+    });
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(loadConfig().active_account?.session.refresh_token).toBe("rt-dead");
+  });
+
+  it("requires reauthentication for a malformed legacy refresh token", async () => {
+    // Correct base64url shape and encoded length, but an invalid checksum.
+    // A client may reject it locally or let Supabase return validation_failed.
+    const malformedRefreshToken = Buffer.alloc(38).toString("base64url");
+    saveConfig(makeConfig({ refresh_token: malformedRefreshToken, expires_at: 1 }));
+    const cfg = loadConfig();
+    mockFetch.mockResolvedValue(
+      new Response(JSON.stringify({ error_code: "validation_failed" }), { status: 400 }),
+    );
+
+    await expect(new Client(cfg).refreshToken()).rejects.toMatchObject({
+      name: "SessionExpiredError",
+      code: "SESSION_EXPIRED",
+      message: expect.stringContaining("dosu login"),
+    });
+
+    expect(mockFetch.mock.calls.length).toBeLessThanOrEqual(1);
+    const refreshCall = mockFetch.mock.calls[0] as [string, RequestInit] | undefined;
+    if (refreshCall) {
+      expect(refreshCall[0]).toBe(
+        "https://test.supabase.co/auth/v1/token?grant_type=refresh_token",
+      );
+    }
+    expect(loadConfig().active_account?.session.refresh_token).toBe(malformedRefreshToken);
+  });
+
+  it("keeps an OAuth validation failure observable", async () => {
+    const accessToken = oauthAccessToken("cli-client-id");
+    saveConfig(makeConfig({ access_token: accessToken, refresh_token: "oauth-refresh" }));
+    const cfg = loadConfig();
+    mockFetch.mockResolvedValue(
+      new Response(JSON.stringify({ error_code: "validation_failed" }), { status: 400 }),
+    );
+
+    await expect(new Client(cfg).refreshToken()).rejects.toMatchObject({
+      name: "SessionRefreshError",
+      code: "SESSION_REFRESH_ERROR",
+      status: 400,
+    });
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://test.supabase.co/auth/v1/oauth/token");
+    expect(loadConfig().active_account?.session.refresh_token).toBe("oauth-refresh");
+  });
+
+  it("keeps unexpected auth server failures observable and does not mutate credentials", async () => {
+    saveConfig(makeConfig({ access_token: "at-old", refresh_token: "rt-old", expires_at: 1 }));
+    const cfg = loadConfig();
+    mockFetch.mockResolvedValue(
+      new Response(JSON.stringify({ error_code: "unexpected_failure" }), { status: 503 }),
+    );
+
+    await expect(new Client(cfg).refreshToken()).rejects.toMatchObject({
+      name: "SessionRefreshError",
+      code: "SESSION_REFRESH_ERROR",
+      status: 503,
+    });
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(cfg.active_account?.session.refresh_token).toBe("rt-old");
+    expect(loadConfig().active_account?.session.refresh_token).toBe("rt-old");
+    expect(readdirSync(getConfigDir())).toEqual(["config.json"]);
+  });
+
+  it("does not classify an unknown auth-server 401 as an expired session", async () => {
+    saveConfig(makeConfig({ access_token: "at-old", refresh_token: "rt-old", expires_at: 1 }));
+    const cfg = loadConfig();
+    mockFetch.mockResolvedValue(
+      new Response(JSON.stringify({ error_code: "invalid_api_key" }), { status: 401 }),
+    );
+
+    await expect(new Client(cfg).refreshToken()).rejects.toMatchObject({
+      name: "SessionRefreshError",
+      code: "SESSION_REFRESH_ERROR",
+      status: 401,
+    });
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(cfg.active_account?.session.refresh_token).toBe("rt-old");
+    expect(loadConfig().active_account?.session.refresh_token).toBe("rt-old");
+  });
+
+  it.each([
+    ["invalid JSON", "not-json"],
+    ["a non-object error", "[]"],
+    ["a non-string error", JSON.stringify({ error: 42 })],
+  ])("keeps an auth-server failure with %s observable", async (_description, body) => {
+    saveConfig(makeConfig({ access_token: "at-old", refresh_token: "rt-old", expires_at: 1 }));
+    const cfg = loadConfig();
+    mockFetch.mockResolvedValue(new Response(body, { status: 502 }));
+
+    await expect(new Client(cfg).refreshToken()).rejects.toMatchObject({
+      name: "SessionRefreshError",
+      code: "SESSION_REFRESH_ERROR",
+      status: 502,
+    });
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(cfg.active_account?.session.refresh_token).toBe("rt-old");
+    expect(loadConfig().active_account?.session.refresh_token).toBe("rt-old");
+  });
+
+  it.each([
+    ["invalid JSON", "{"],
+    ["a non-object body", "[]"],
+    [
+      "a non-string access token",
+      JSON.stringify({ access_token: 1, refresh_token: "rt-new", expires_in: 3600 }),
+    ],
+    [
+      "a non-string refresh token",
+      JSON.stringify({ access_token: "at-new", refresh_token: 1, expires_in: 3600 }),
+    ],
+    [
+      "a non-numeric expiry",
+      JSON.stringify({ access_token: "at-new", refresh_token: "rt-new", expires_in: "3600" }),
+    ],
+    [
+      "a non-finite expiry",
+      '{"access_token":"at-new","refresh_token":"rt-new","expires_in":1e400}',
+    ],
+  ])("rejects a successful refresh response with %s", async (_description, body) => {
+    saveConfig(makeConfig({ access_token: "at-old", refresh_token: "rt-old", expires_at: 1 }));
+    const cfg = loadConfig();
+    mockFetch.mockResolvedValue(new Response(body, { status: 200 }));
+
+    await expect(new Client(cfg).refreshToken()).rejects.toMatchObject({
+      name: "SessionRefreshError",
+      code: "SESSION_REFRESH_ERROR",
+      status: 200,
+    });
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(cfg.active_account?.session.refresh_token).toBe("rt-old");
+    expect(loadConfig().active_account?.session.refresh_token).toBe("rt-old");
+    expect(readdirSync(getConfigDir())).toEqual(["config.json"]);
+  });
+
+  it("keeps network refresh failures observable with their cause", async () => {
+    saveConfig(makeConfig({ access_token: "at-old", refresh_token: "rt-old", expires_at: 1 }));
+    const cfg = loadConfig();
+    const cause = Object.assign(new Error("private network detail"), { code: "ECONNRESET" });
+    mockFetch.mockRejectedValue(cause);
+
+    await expect(new Client(cfg).refreshToken()).rejects.toMatchObject({
+      name: "SessionRefreshError",
+      code: "SESSION_REFRESH_ERROR",
+      cause,
+    });
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(cfg.active_account?.session.refresh_token).toBe("rt-old");
+    expect(loadConfig().active_account?.session.refresh_token).toBe("rt-old");
+  });
+
+  it("aborts a hung refresh request and releases the config lock", async () => {
+    saveConfig(makeConfig({ access_token: "at-old", refresh_token: "rt-old", expires_at: 1 }));
+    const cfg = loadConfig();
+    vi.useFakeTimers();
+    try {
+      mockFetch.mockImplementation(
+        async (_url: unknown, options?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            const signal = options?.signal;
+            signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+          }),
+      );
+
+      const refresh = new Client(cfg).refreshToken();
+      const rejection = expect(refresh).rejects.toMatchObject({
+        name: "SessionRefreshError",
+        code: "SESSION_REFRESH_ERROR",
+        cause: { name: "AbortError" },
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      await rejection;
+
+      expect(cfg.active_account?.session.refresh_token).toBe("rt-old");
+      expect(loadConfig().active_account?.session.refresh_token).toBe("rt-old");
+      expect(readdirSync(getConfigDir())).toEqual(["config.json"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    200, 400,
+  ])("bounds response-body consumption and ignores a late body for status %i", async (status) => {
+    saveConfig(makeConfig({ access_token: "at-old", refresh_token: "rt-old", expires_at: 1 }));
+    const cfg = loadConfig();
+    vi.useFakeTimers();
+    try {
+      let stalled: StalledJsonResponse | undefined;
+      let markResponseReady: (() => void) | undefined;
+      const responseReady = new Promise<void>((resolve) => {
+        markResponseReady = resolve;
+      });
+      mockFetch.mockImplementation(async (_url: unknown, options?: RequestInit) => {
+        stalled = stalledJsonResponse(status, options?.signal ?? undefined);
+        markResponseReady?.();
+        return stalled.response;
+      });
+
+      let settled = false;
+      const result = new Client(cfg).refreshToken().then(
+        () => {
+          settled = true;
+          return undefined;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        },
+      );
+      await responseReady;
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      const settledByDeadline = settled;
+      const lockHeldAtDeadline = readdirSync(getConfigDir()).includes("session-refresh.lock");
+      if (!stalled?.isTerminated()) {
+        const responseBody =
+          status === 200
+            ? {
+                access_token: "at-new",
+                refresh_token: "rt-new",
+                expires_in: 3600,
+              }
+            : { error_code: "unexpected_failure" };
+        stalled?.deliver(responseBody);
+      }
+      const outcome = await result;
+
+      // A timeout implemented as an outer race can release the lock while the
+      // losing refresh continues. Give any late body continuation time to run.
+      vi.useRealTimers();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect({ lockHeldAtDeadline, outcome, settledByDeadline }).toMatchObject({
+        lockHeldAtDeadline: false,
+        outcome: {
+          name: "SessionRefreshError",
+          code: "SESSION_REFRESH_ERROR",
+        },
+        settledByDeadline: true,
+      });
+      expect(cfg.active_account?.session).toMatchObject({
+        access_token: "at-old",
+        refresh_token: "rt-old",
+        expires_at: 1,
+      });
+      expect(loadConfig().active_account?.session).toMatchObject({
+        access_token: "at-old",
+        refresh_token: "rt-old",
+        expires_at: 1,
+      });
+      expect(readdirSync(getConfigDir())).toEqual(["config.json"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry or mutate memory when refreshed credentials cannot be persisted", async () => {
+    saveConfig(makeConfig({ access_token: "at-old", refresh_token: "rt-old", expires_at: 1 }));
+    const cfg = loadConfig();
+    mkdirSync(`${getConfigPath()}.${process.pid}.tmp`);
+    mockFetch.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          access_token: "at-new",
+          refresh_token: "rt-new",
+          expires_in: 3600,
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const failure = await new Client(cfg).refreshToken().catch((error: unknown) => error);
+    expect(failure).toMatchObject({
+      name: "SessionPersistenceError",
+      code: "SESSION_PERSISTENCE_ERROR",
+      message: expect.stringContaining("writable"),
+      cause: { code: "EISDIR" },
+    });
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(cfg.active_account?.session).toMatchObject({
+      access_token: "at-old",
+      refresh_token: "rt-old",
+      expires_at: 1,
+    });
+    expect(loadConfig().active_account?.session).toMatchObject({
+      access_token: "at-old",
+      refresh_token: "rt-old",
+      expires_at: 1,
+    });
+    expect(readdirSync(getConfigDir())).not.toContain("session-refresh.lock");
+  });
+
+  it("fails before contacting Supabase when the config directory is unwritable", async () => {
+    saveConfig(makeConfig({ access_token: "at-old", refresh_token: "rt-old", expires_at: 1 }));
+    const cfg = loadConfig();
+    chmodSync(getConfigDir(), 0o500);
+
+    try {
+      const failure = await new Client(cfg).refreshToken().catch((error: unknown) => error);
+      expect(failure).toMatchObject({
+        name: "SessionPersistenceError",
+        code: "SESSION_PERSISTENCE_ERROR",
+        message: expect.stringContaining("writable"),
+        cause: { code: expect.stringMatching(/^(?:EACCES|EPERM)$/) },
+      });
+    } finally {
+      chmodSync(getConfigDir(), 0o700);
+    }
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(cfg.active_account?.session.refresh_token).toBe("rt-old");
+    expect(loadConfig().active_account?.session.refresh_token).toBe("rt-old");
   });
 
   it("does not adopt tokens from a different account on disk", async () => {
@@ -232,6 +624,86 @@ describe("refresh self-healing", () => {
 
     expect(mockFetch).not.toHaveBeenCalled();
     expect(loadConfig().active_account?.user_id).toBe("account-b");
+  });
+
+  it("does not resurrect a session removed before refresh acquires the lock", async () => {
+    saveConfig(makeAccountConfig("account-a", { refresh_token: "rt-a" }));
+    const cfg = loadConfig();
+    saveConfig(emptyConfig());
+    mockFetch.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          access_token: "at-resurrected",
+          refresh_token: "rt-resurrected",
+          expires_in: 3600,
+        }),
+        { status: 200 },
+      ),
+    );
+
+    await expect(new Client(cfg).refreshToken()).rejects.toMatchObject({
+      name: "SessionExpiredError",
+      code: "SESSION_EXPIRED",
+    });
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(cfg.active_account?.session.refresh_token).toBe("rt-a");
+    expect(loadConfig().active_account).toBeUndefined();
+  });
+
+  it("does not restore a session removed while the refresh request is in flight", async () => {
+    saveConfig(makeAccountConfig("account-a", { refresh_token: "rt-a" }));
+    const cfg = loadConfig();
+    mockFetch.mockImplementation(async () => {
+      saveConfig(emptyConfig());
+      return new Response(
+        JSON.stringify({
+          access_token: "at-resurrected",
+          refresh_token: "rt-resurrected",
+          expires_in: 3600,
+        }),
+        { status: 200 },
+      );
+    });
+
+    await expect(new Client(cfg).refreshToken()).rejects.toMatchObject({
+      name: "SessionExpiredError",
+      code: "SESSION_EXPIRED",
+    });
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(cfg.active_account?.session.refresh_token).toBe("rt-a");
+    expect(loadConfig().active_account).toBeUndefined();
+    expect(readdirSync(getConfigDir())).toEqual(["config.json"]);
+  });
+
+  it("adopts a newer login for the same account instead of overwriting it", async () => {
+    saveConfig(makeAccountConfig("account-a", { refresh_token: "rt-a", deployment_id: "dep-old" }));
+    const cfg = loadConfig();
+    mockFetch.mockImplementation(async () => {
+      saveConfig(
+        makeAccountConfig("account-a", {
+          access_token: "at-login",
+          refresh_token: "rt-login",
+          deployment_id: "dep-login",
+        }),
+      );
+      return new Response(
+        JSON.stringify({
+          access_token: "at-a-refreshed",
+          refresh_token: "rt-a-refreshed",
+          expires_in: 3600,
+        }),
+        { status: 200 },
+      );
+    });
+
+    await new Client(cfg).refreshToken();
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(cfg.active_account?.session.refresh_token).toBe("rt-login");
+    expect(cfg.active_account?.target?.deployment_id).toBe("dep-login");
+    expect(loadConfig().active_account?.session.refresh_token).toBe("rt-login");
   });
 
   it("does not overwrite a different account that logs in during refresh", async () => {

@@ -50,11 +50,7 @@ export function createTypedClient<TClient extends object = TypedClient>(config: 
         async headers() {
           if (isTokenExpired(config)) {
             logger.debug("trpc", "token expired, refreshing before request");
-            try {
-              await httpClient.refreshToken();
-            } catch {
-              throw new Error("session expired. Run 'dosu login' to re-authenticate");
-            }
+            await httpClient.refreshToken();
           }
           return {
             "Supabase-Access-Token": config.active_account?.session.access_token ?? "",
@@ -62,14 +58,18 @@ export function createTypedClient<TClient extends object = TypedClient>(config: 
           };
         },
         async fetch(url, options) {
+          const requestAccessToken = new Headers(options?.headers).get("Supabase-Access-Token");
           const res = await globalThis.fetch(url, options);
 
           if (res.status === 401 || res.status === 403) {
             logger.debug("trpc", "got 401/403, attempting token refresh and retry");
-            try {
+            const currentAccessToken = config.active_account?.session.access_token;
+            if (
+              !currentAccessToken ||
+              requestAccessToken === null ||
+              currentAccessToken === requestAccessToken
+            ) {
               await httpClient.refreshToken();
-            } catch {
-              return res;
             }
             return globalThis.fetch(url, {
               ...options,
