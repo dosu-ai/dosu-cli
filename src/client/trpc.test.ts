@@ -179,5 +179,24 @@ describe("createTypedClient", () => {
       expect(mockRefreshToken).toHaveBeenCalledOnce();
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
+
+    it("does not refresh again when the request used older credentials", async () => {
+      const cfg = makeConfig({ access_token: "old-access", refresh_token: "old-refresh" });
+      mockFetch.mockImplementationOnce(async () => {
+        testSession(cfg).access_token = "new-access";
+        testSession(cfg).refresh_token = "new-refresh";
+        return trpcError(401);
+      });
+      mockFetch.mockResolvedValueOnce(trpcOk({ retried: true }));
+
+      const client = createTypedClient(cfg);
+      // biome-ignore lint/suspicious/noExplicitAny: testing dynamic tRPC proxy
+      await (client as any).thread.list.query({ space_id: "s1" });
+
+      expect(mockRefreshToken).not.toHaveBeenCalled();
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      const [, retryOpts] = mockFetch.mock.calls[1];
+      expect(retryOpts.headers["Supabase-Access-Token"]).toBe("new-access");
+    });
   });
 });

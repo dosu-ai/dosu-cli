@@ -22,7 +22,14 @@ import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { type Config, getConfigDir, getConfigPath, loadConfig, saveConfig } from "../config/config";
+import {
+  type Config,
+  emptyConfig,
+  getConfigDir,
+  getConfigPath,
+  loadConfig,
+  saveConfig,
+} from "../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { Client } from "./client";
 
@@ -229,6 +236,24 @@ describe("refresh self-healing", () => {
     expect(readdirSync(getConfigDir())).toEqual(["config.json"]);
   });
 
+  it("does not classify an unknown auth-server 401 as an expired session", async () => {
+    saveConfig(makeConfig({ access_token: "at-old", refresh_token: "rt-old", expires_at: 1 }));
+    const cfg = loadConfig();
+    mockFetch.mockResolvedValue(
+      new Response(JSON.stringify({ error_code: "invalid_api_key" }), { status: 401 }),
+    );
+
+    await expect(new Client(cfg).refreshToken()).rejects.toMatchObject({
+      name: "SessionRefreshError",
+      code: "SESSION_REFRESH_ERROR",
+      status: 401,
+    });
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(cfg.active_account?.session.refresh_token).toBe("rt-old");
+    expect(loadConfig().active_account?.session.refresh_token).toBe("rt-old");
+  });
+
   it("keeps network refresh failures observable with their cause", async () => {
     saveConfig(makeConfig({ access_token: "at-old", refresh_token: "rt-old", expires_at: 1 }));
     const cfg = loadConfig();
@@ -244,6 +269,36 @@ describe("refresh self-healing", () => {
     expect(mockFetch).toHaveBeenCalledOnce();
     expect(cfg.active_account?.session.refresh_token).toBe("rt-old");
     expect(loadConfig().active_account?.session.refresh_token).toBe("rt-old");
+  });
+
+  it("aborts a hung refresh request and releases the config lock", async () => {
+    saveConfig(makeConfig({ access_token: "at-old", refresh_token: "rt-old", expires_at: 1 }));
+    const cfg = loadConfig();
+    vi.useFakeTimers();
+    try {
+      mockFetch.mockImplementation(
+        async (_url: unknown, options?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            const signal = options?.signal;
+            signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+          }),
+      );
+
+      const refresh = new Client(cfg).refreshToken();
+      const rejection = expect(refresh).rejects.toMatchObject({
+        name: "SessionRefreshError",
+        code: "SESSION_REFRESH_ERROR",
+        cause: { name: "AbortError" },
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      await rejection;
+
+      expect(cfg.active_account?.session.refresh_token).toBe("rt-old");
+      expect(loadConfig().active_account?.session.refresh_token).toBe("rt-old");
+      expect(readdirSync(getConfigDir())).toEqual(["config.json"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not retry or mutate memory when refreshed credentials cannot be persisted", async () => {
@@ -315,6 +370,57 @@ describe("refresh self-healing", () => {
 
     expect(mockFetch).not.toHaveBeenCalled();
     expect(loadConfig().active_account?.user_id).toBe("account-b");
+  });
+
+  it("does not resurrect a session removed before refresh acquires the lock", async () => {
+    saveConfig(makeAccountConfig("account-a", { refresh_token: "rt-a" }));
+    const cfg = loadConfig();
+    saveConfig(emptyConfig());
+    mockFetch.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          access_token: "at-resurrected",
+          refresh_token: "rt-resurrected",
+          expires_in: 3600,
+        }),
+        { status: 200 },
+      ),
+    );
+
+    await expect(new Client(cfg).refreshToken()).rejects.toMatchObject({
+      name: "SessionExpiredError",
+      code: "SESSION_EXPIRED",
+    });
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(cfg.active_account?.session.refresh_token).toBe("rt-a");
+    expect(loadConfig().active_account).toBeUndefined();
+  });
+
+  it("does not restore a session removed while the refresh request is in flight", async () => {
+    saveConfig(makeAccountConfig("account-a", { refresh_token: "rt-a" }));
+    const cfg = loadConfig();
+    mockFetch.mockImplementation(async () => {
+      saveConfig(emptyConfig());
+      return new Response(
+        JSON.stringify({
+          access_token: "at-resurrected",
+          refresh_token: "rt-resurrected",
+          expires_in: 3600,
+        }),
+        { status: 200 },
+      );
+    });
+
+    await expect(new Client(cfg).refreshToken()).rejects.toMatchObject({
+      name: "SessionExpiredError",
+      code: "SESSION_EXPIRED",
+    });
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(cfg.active_account?.session.refresh_token).toBe("rt-a");
+    expect(loadConfig().active_account).toBeUndefined();
+    expect(readdirSync(getConfigDir())).toEqual(["config.json"]);
   });
 
   it("does not overwrite a different account that logs in during refresh", async () => {

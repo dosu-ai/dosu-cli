@@ -21,6 +21,8 @@ import { getAccessTokenOAuthClientID } from "../config/identity";
 
 export { SessionExpiredError };
 
+const REFRESH_REQUEST_TIMEOUT_MS = 10_000;
+
 export interface Deployment {
   deployment_id: string;
   name: string;
@@ -66,11 +68,15 @@ export class Client {
       await this.refreshToken();
     }
 
+    const requestAccessToken = this.config.active_account?.session.access_token;
     let resp = await this.doRequestOnce(method, path, body);
 
     // If backend says unauthorized, try refresh + retry once
     if (resp.status === 401 || resp.status === 403) {
-      await this.refreshToken();
+      const currentAccessToken = this.config.active_account?.session.access_token;
+      if (!currentAccessToken || currentAccessToken === requestAccessToken) {
+        await this.refreshToken();
+      }
       resp = await this.doRequestOnce(method, path, body);
     }
 
@@ -140,17 +146,15 @@ export class Client {
       const disk = loadConfig();
       this.assertSameActiveAccount(disk);
       const diskRefreshToken = disk.active_account?.session.refresh_token;
-      const diskHasNewerSession = Boolean(
-        diskRefreshToken && diskRefreshToken !== refreshTokenAtStart,
-      );
+      if (!diskRefreshToken) throw new SessionExpiredError();
+      const diskHasNewerSession = diskRefreshToken !== refreshTokenAtStart;
 
       if (diskHasNewerSession && !isTokenExpired(disk)) {
         this.adoptConfig(disk);
         return;
       }
 
-      const source = diskRefreshToken ? disk : this.config;
-      const candidate = await this.refreshTokenOnce(source);
+      const candidate = await this.refreshTokenOnce(disk);
       try {
         saveConfig(candidate);
       } catch (cause) {
@@ -180,20 +184,25 @@ export class Client {
         }).toString()
       : JSON.stringify({ refresh_token: session.refresh_token });
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REFRESH_REQUEST_TIMEOUT_MS);
     let resp: Response;
     try {
       resp = await fetch(endpoint, {
         method: "POST",
         headers,
         body,
+        signal: controller.signal,
       });
     } catch (cause) {
       throw new SessionRefreshError({ cause });
+    } finally {
+      clearTimeout(timeout);
     }
 
     if (resp.status !== 200) {
       const errorCode = await readAuthErrorCode(resp);
-      if (resp.status === 401 || REAUTHENTICATION_ERROR_CODES.has(errorCode ?? "")) {
+      if (REAUTHENTICATION_ERROR_CODES.has(errorCode ?? "")) {
         throw new SessionExpiredError();
       }
       throw new SessionRefreshError({ status: resp.status });
@@ -207,12 +216,12 @@ export class Client {
     const latest = loadConfig();
     this.assertSameActiveAccount(latest);
     const latestSession = latest.active_account?.session;
-    if (latestSession?.refresh_token && latestSession.refresh_token !== session.refresh_token) {
+    if (!latestSession?.refresh_token) throw new SessionExpiredError();
+    if (latestSession.refresh_token !== session.refresh_token) {
       return latest;
     }
 
-    const base = latestSession?.refresh_token ? latest : source;
-    return configWithSession(base, {
+    return configWithSession(latest, {
       access_token: data.access_token,
       refresh_token: data.refresh_token,
       expires_at: Math.floor(Date.now() / 1000) + data.expires_in,

@@ -1,16 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Config } from "../config/config";
+import { type Config, saveConfig } from "../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { Client, SessionExpiredError } from "./client";
-
-// Mock saveConfig to avoid filesystem writes (hoisted; applies to the whole file)
-vi.mock("../config/config", async () => {
-  const actual = await vi.importActual("../config/config");
-  return {
-    ...actual,
-    saveConfig: vi.fn(),
-  };
-});
 
 // Mock fetch globally
 const mockFetch = vi.fn();
@@ -88,6 +79,7 @@ describe("Client", () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({ data: "success" }));
 
       const cfg = makeConfig();
+      saveConfig(cfg);
 
       const client = new Client(cfg);
       const resp = await client.get("/test");
@@ -99,7 +91,9 @@ describe("Client", () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({}, 401));
       mockFetch.mockResolvedValueOnce(jsonResponse({ error_code: "refresh_token_not_found" }, 400)); // refresh fails
 
-      const client = new Client(makeConfig());
+      const cfg = makeConfig();
+      saveConfig(cfg);
+      const client = new Client(cfg);
       await expect(client.get("/test")).rejects.toBeInstanceOf(SessionExpiredError);
     });
 
@@ -118,6 +112,7 @@ describe("Client", () => {
       const cfg = makeConfig({
         expires_at: Math.floor(Date.now() / 1000) - 100, // already expired
       });
+      saveConfig(cfg);
       const client = new Client(cfg);
       const resp = await client.get("/test");
 
@@ -129,6 +124,26 @@ describe("Client", () => {
       // Config should be updated with new tokens
       expect(cfg.active_account?.session.access_token).toBe("refreshed-token");
       expect(cfg.active_account?.session.refresh_token).toBe("refreshed-refresh");
+    });
+
+    it("does not refresh again when credentials changed while a 401 was in flight", async () => {
+      const cfg = makeConfig({ access_token: "old-access", refresh_token: "old-refresh" });
+      saveConfig(cfg);
+      mockFetch.mockImplementationOnce(async () => {
+        if (cfg.active_account) {
+          cfg.active_account.session.access_token = "new-access";
+          cfg.active_account.session.refresh_token = "new-refresh";
+        }
+        saveConfig(cfg);
+        return jsonResponse({}, 401);
+      });
+      mockFetch.mockResolvedValueOnce(jsonResponse({ data: "success" }));
+
+      const resp = await new Client(cfg).get("/test");
+
+      expect(resp.status).toBe(200);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch.mock.calls[1]?.[1]?.headers["Supabase-Access-Token"]).toBe("new-access");
     });
 
     it("throws when refresh_token is missing and token is expired", async () => {
@@ -262,13 +277,16 @@ describe("Client", () => {
         }),
       );
 
-      const client = new Client(makeConfig());
+      const cfg = makeConfig();
+      saveConfig(cfg);
+      const client = new Client(cfg);
       await client.refreshToken();
 
       const [url, options] = mockFetch.mock.calls[0];
       expect(url).toContain("/auth/v1/token");
       expect(options.headers).toHaveProperty("apikey");
       expect(options.headers.apikey).toBeTruthy();
+      expect(options.signal).toBeInstanceOf(AbortSignal);
     });
   });
 
@@ -291,7 +309,9 @@ describe("Client", () => {
       // Retry still returns 500
       mockFetch.mockResolvedValueOnce(new Response("Server Error", { status: 500 }));
 
-      const client = new Client(makeConfig());
+      const cfg = makeConfig();
+      saveConfig(cfg);
+      const client = new Client(cfg);
       await expect(client.createAPIKey("dep-1", "cli")).rejects.toThrow("failed to create API key");
     });
   });

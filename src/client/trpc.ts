@@ -58,11 +58,19 @@ export function createTypedClient<TClient extends object = TypedClient>(config: 
           };
         },
         async fetch(url, options) {
+          const requestAccessToken = new Headers(options?.headers).get("Supabase-Access-Token");
           const res = await globalThis.fetch(url, options);
 
           if (res.status === 401 || res.status === 403) {
             logger.debug("trpc", "got 401/403, attempting token refresh and retry");
-            await httpClient.refreshToken();
+            const currentAccessToken = config.active_account?.session.access_token;
+            if (
+              !currentAccessToken ||
+              requestAccessToken === null ||
+              currentAccessToken === requestAccessToken
+            ) {
+              await httpClient.refreshToken();
+            }
             return globalThis.fetch(url, {
               ...options,
               headers: {
