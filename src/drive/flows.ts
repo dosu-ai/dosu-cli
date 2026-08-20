@@ -302,56 +302,146 @@ export function runDriveMcpRemove(agent: string): void {
   p.log.success(`Removed the \`dosu-drive\` MCP server from ${status.agent}.`);
 }
 
-async function selectRepositories(explicit: string[]): Promise<RepositoryIdentity[]> {
+type RepositorySelectionAction = "continue" | "add";
+
+export interface RepositorySelectionPrompts {
+  multiselect(options: {
+    message: string;
+    options: Array<{ label: string; value: string }>;
+    initialValues: string[];
+    required: true;
+  }): Promise<string[] | symbol>;
+  select(options: {
+    message: string;
+    options: Array<{
+      label: string;
+      value: RepositorySelectionAction;
+      hint?: string;
+    }>;
+    initialValue: RepositorySelectionAction;
+  }): Promise<RepositorySelectionAction | symbol>;
+  text(options: {
+    message: string;
+    placeholder: string;
+    validate(value: string | undefined): string | undefined;
+  }): Promise<string | symbol>;
+  isCancel(value: unknown): boolean;
+  cancel(message: string): void;
+}
+
+const defaultRepositorySelectionPrompts: RepositorySelectionPrompts = {
+  multiselect: (options) => p.multiselect(options),
+  select: (options) => p.select(options),
+  text: (options) => p.text(options),
+  isCancel: (value) => p.isCancel(value),
+  cancel: (message) => p.cancel(message),
+};
+
+export async function selectRepositories(
+  explicit: string[],
+  prompts: RepositorySelectionPrompts = defaultRepositorySelectionPrompts,
+  currentDirectory = process.cwd(),
+): Promise<RepositoryIdentity[]> {
   if (explicit.length > 0) return dedupeRepositories(explicit.map(repositoryIdentity));
   const state = loadDriveState();
-  const candidates: RepositoryIdentity[] = [];
-  for (const path of [process.cwd(), ...state.recentRepositories]) {
+  const candidates = new Map<
+    string,
+    { repository: RepositoryIdentity; source: "current" | "recent" | "added" }
+  >();
+  let currentRoot: string | undefined;
+  const sourcePaths: Array<readonly [string, "current" | "recent"]> = [
+    [currentDirectory, "current"],
+    ...state.recentRepositories.map((path) => [path, "recent"] as const),
+  ];
+  for (const [path, source] of sourcePaths) {
     if (!existsSync(path)) continue;
     try {
-      candidates.push(repositoryIdentity(path));
+      const repository = repositoryIdentity(path);
+      if (source === "current") currentRoot = repository.root;
+      if (!candidates.has(repository.root)) candidates.set(repository.root, { repository, source });
     } catch {
-      // Ignore stale recent paths; Browse remains available.
+      // Ignore stale recent paths; the add action remains available.
     }
   }
-  const repositories = dedupeRepositories(candidates);
-  const browse = "__browse__";
-  const selected = await p.multiselect({
-    message: "Choose repositories to add",
-    options: [
-      ...repositories.map((repository, index) => ({
-        label:
-          index === 0 ? `Current repo   ${repository.root}` : `Recent repo    ${repository.root}`,
+  const firstCandidateRoot = candidates.values().next().value?.repository.root;
+  let selectedRoots = currentRoot ? [currentRoot] : firstCandidateRoot ? [firstCandidateRoot] : [];
+
+  while (true) {
+    if (candidates.size === 0) {
+      const repository = await promptForRepository(prompts);
+      if (!repository) return [];
+      candidates.set(repository.root, { repository, source: "added" });
+      selectedRoots = [repository.root];
+    }
+
+    const selected = await prompts.multiselect({
+      message: "Choose repositories to add",
+      options: [...candidates.values()].map(({ repository, source }) => ({
+        label: `${source === "current" ? "Current repo" : source === "recent" ? "Recent repo" : "Added repo"}   ${repository.root}`,
         value: repository.root,
       })),
-      { label: "Browse…", value: browse },
-    ],
-    initialValues: repositories[0] ? [repositories[0].root] : [],
-    required: true,
-  });
-  if (p.isCancel(selected)) {
-    p.cancel("Setup cancelled");
-    return [];
-  }
-  const paths = selected as string[];
-  if (paths.includes(browse)) {
-    const browsed = await p.text({
-      message: "Repository path",
-      placeholder: "/Users/you/code/project",
-      validate: (value) => {
-        if (!value) return "Enter a repository path";
-        try {
-          repositoryIdentity(value);
-          return undefined;
-        } catch (error) {
-          return error instanceof Error ? error.message : String(error);
-        }
-      },
+      initialValues: selectedRoots,
+      required: true,
     });
-    if (p.isCancel(browsed)) return [];
-    paths.push(browsed as string);
+    if (prompts.isCancel(selected)) {
+      prompts.cancel("Setup cancelled");
+      return [];
+    }
+    selectedRoots = selected as string[];
+
+    const action = await prompts.select({
+      message: `${countLabel(selectedRoots.length, "repository", "repositories")} selected`,
+      options: [
+        {
+          label: `Continue with ${countLabel(selectedRoots.length, "repository", "repositories")}`,
+          value: "continue",
+        },
+        {
+          label: "Add another repository…",
+          value: "add",
+          hint: "enter a local Git repository path",
+        },
+      ],
+      initialValue: "continue",
+    });
+    if (prompts.isCancel(action)) {
+      prompts.cancel("Setup cancelled");
+      return [];
+    }
+    if (action === "continue") {
+      return dedupeRepositories(selectedRoots.map(repositoryIdentity));
+    }
+
+    const repository = await promptForRepository(prompts);
+    if (!repository) return [];
+    if (!candidates.has(repository.root)) {
+      candidates.set(repository.root, { repository, source: "added" });
+    }
+    selectedRoots = [...new Set([...selectedRoots, repository.root])];
   }
-  return dedupeRepositories(paths.filter((path) => path !== browse).map(repositoryIdentity));
+}
+
+async function promptForRepository(
+  prompts: RepositorySelectionPrompts,
+): Promise<RepositoryIdentity | undefined> {
+  const browsed = await prompts.text({
+    message: "Repository path",
+    placeholder: "/Users/you/code/project",
+    validate: (value) => {
+      if (!value) return "Enter a repository path";
+      try {
+        repositoryIdentity(value);
+        return undefined;
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    },
+  });
+  if (prompts.isCancel(browsed)) {
+    prompts.cancel("Setup cancelled");
+    return undefined;
+  }
+  return repositoryIdentity(browsed as string);
 }
 
 function requireActiveDrive(): DriveConnection {

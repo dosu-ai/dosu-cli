@@ -16,7 +16,7 @@ import {
 } from "./client";
 import { scanWithDeja } from "./deja";
 import { discoverDrives } from "./discovery";
-import { runDriveSetup } from "./flows";
+import { runDriveSetup, selectRepositories } from "./flows";
 import { createDriveHost, type DriveHost } from "./host";
 import { installDriveMcp } from "./mcp-config";
 import { createDriveMcpServer } from "./mcp-server";
@@ -109,6 +109,57 @@ describe("Dosu Drive acceptance gates", () => {
       repositoryIdentity(repoA).root,
     );
     expect(matchSessionRepository(ambiguous, repositories)).toBeUndefined();
+  });
+
+  it("gate 3b: adds a repository through an action instead of a multiselect checkbox", async () => {
+    const root = await mkdtemp(join(tmpdir(), "dosu-drive-repository-picker-"));
+    cleanup.push(root);
+    const current = join(root, "current");
+    const recent = join(root, "recent");
+    const added = join(root, "added");
+    for (const repository of [current, recent, added]) {
+      mkdirSync(repository, { recursive: true });
+      execFileSync("git", ["init", "-q", repository]);
+    }
+    process.env.DOSU_DRIVE_HOME = join(root, "drive");
+    rememberRepositories([recent]);
+
+    const events: string[] = [];
+    let selectionCount = 0;
+    let actionCount = 0;
+    const repositories = await selectRepositories(
+      [],
+      {
+        multiselect: async (options) => {
+          events.push("multiselect");
+          expect(options.options.every((option) => option.value !== "__browse__")).toBe(true);
+          expect(options.options.every((option) => !option.label.includes("Browse"))).toBe(true);
+          selectionCount++;
+          return selectionCount === 1 ? [current] : [current, added];
+        },
+        select: async (options) => {
+          events.push("select");
+          expect(options.options.map((option) => option.label)).toContain(
+            "Add another repository…",
+          );
+          actionCount++;
+          return actionCount === 1 ? "add" : "continue";
+        },
+        text: async () => {
+          events.push("text");
+          return added;
+        },
+        isCancel: () => false,
+        cancel: () => undefined,
+      },
+      current,
+    );
+
+    expect(events).toEqual(["multiselect", "select", "text", "multiselect", "select"]);
+    expect(repositories.map((repository) => repository.root)).toEqual([
+      repositoryIdentity(current).root,
+      repositoryIdentity(added).root,
+    ]);
   });
 
   it("gate 4: packages only the immutable exact allowlist and namespaces sessions", async () => {
