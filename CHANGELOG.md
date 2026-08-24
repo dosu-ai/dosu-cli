@@ -1,3 +1,10 @@
+## [0.49.2](https://github.com/dosu-ai/dosu-cli/compare/v0.49.1...v0.49.2) (2026-08-24)
+
+
+### Bug Fixes
+
+* **installer:** modify FALLBACK_DOSU_RULE ([#186](https://github.com/dosu-ai/dosu-cli/issues/186)) ([1712ef9](https://github.com/dosu-ai/dosu-cli/commit/1712ef962a90955930aa7983e18ac007233fbabd))
+
 ## [0.49.1](https://github.com/dosu-ai/dosu-cli/compare/v0.49.0...v0.49.1) (2026-08-20)
 
 
