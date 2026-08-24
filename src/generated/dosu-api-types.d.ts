@@ -397,6 +397,7 @@ export type CliMessage = {
 		user_id: string | null
 	}>
 	resolves_thread: boolean | null
+	retention_redacted_at: string | null
 	thread_id: string
 	title: string | null
 	url_descriptions: unknown | null
@@ -477,7 +478,7 @@ export type CliSlackChannelRow = {
 	topic?: string | null
 }
 
-export declare const CLI_CONTRACT_HASH: '22c5cd2ce534'
+export declare const CLI_CONTRACT_HASH: 'de4d34216f45'
 
 export type AnalyticsGetUsageStatsInput = {
 	days?: number
@@ -791,6 +792,7 @@ export type MessagesGetMessageOutput = {
 	posted: boolean
 	quality_checklist_problems: Array<string> | null
 	resolves_thread: boolean | null
+	retention_redacted_at: string | null
 	thread_id: string
 	title: string | null
 	url_descriptions: unknown | null
@@ -859,6 +861,7 @@ export type OrganizationGetOrganizationByIdOutput = {
 	overage_enabled: boolean
 	overage_monthly_cap_cents: number
 	pro_trial_used_at: string | null
+	slack_retention_days: number | null
 	updated_at: string
 } | null
 
