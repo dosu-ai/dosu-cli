@@ -22,6 +22,7 @@ import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { inGitWorkTree, stepUpdateAgentsMd } from "./agents-md-step";
 import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
+import { orgHasGitHubSource, stepConnectGitHubRepo } from "./github-step";
 import {
   type LogsHandoffDecision,
   type LogsHandoffPlan,
@@ -232,6 +233,21 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   }
   updateTarget(cfg, { api_key: apiKey });
   saveConfig(cfg);
+
+  // Already-onboarded cloud orgs with no GitHub source used to complete
+  // setup silently — `stepConnectGitHubRepo` only lived on `dosu audit`.
+  // First-run users still connect via the web wizard on the auth hop;
+  // this is the fallback for everyone else (and for a wizard that was skipped).
+  if (
+    cfg.mode !== MODE_OSS &&
+    cfg.active_account?.target?.org_id &&
+    cfg.active_account?.target?.space_id
+  ) {
+    const hasGithub = await orgHasGitHubSource(cfg);
+    if (!hasGithub) {
+      await stepConnectGitHubRepo(cfg);
+    }
+  }
 
   // Agent selection is the only install choice. Every successfully configured
   // agent receives the full supported bundle: MCP, rules, and skill.

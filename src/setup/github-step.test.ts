@@ -95,7 +95,14 @@ vi.mock("../client/trpc", () => ({
 import * as p from "@clack/prompts";
 import type { Config } from "../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
-import { detectGitRepo, stepConnectGitHubRepo, verifyDataSourcesPersist } from "./github-step";
+import {
+  connectGitHubForAgent,
+  detectGitRepo,
+  GITHUB_APP_INSTALL_URL,
+  orgHasGitHubSource,
+  stepConnectGitHubRepo,
+  verifyDataSourcesPersist,
+} from "./github-step";
 
 // Skip the post-connect verify-poll budget so each test resolves in real
 // time without needing fake timers to coexist with the install-flow promise
@@ -1094,5 +1101,163 @@ describe("verifyDataSourcesPersist", () => {
     expect(result.dropped.size).toBe(0);
     // Looped more than once (re-polled after sleeping) before the budget ran out.
     expect(mockTrpc.dataSource.list.query.mock.calls.length).toBeGreaterThan(1);
+  });
+});
+
+describe("orgHasGitHubSource", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockTrpc.dataSource.list.query.mockResolvedValue([]);
+  });
+
+  it("returns false when cfg has no org_id", async () => {
+    await expect(orgHasGitHubSource(makeCfg({ org_id: undefined }))).resolves.toBe(false);
+    expect(mockTrpc.dataSource.list.query).not.toHaveBeenCalled();
+  });
+
+  it("returns true when a github data source exists", async () => {
+    mockTrpc.dataSource.list.query.mockResolvedValue([
+      { data_source_id: "ds-1", provider_slug: "github" },
+    ]);
+    await expect(orgHasGitHubSource(makeCfg())).resolves.toBe(true);
+  });
+
+  it("returns false when only non-github sources exist", async () => {
+    mockTrpc.dataSource.list.query.mockResolvedValue([
+      { data_source_id: "ds-1", provider_slug: "confluence" },
+    ]);
+    await expect(orgHasGitHubSource(makeCfg())).resolves.toBe(false);
+  });
+
+  it("returns false when the list query fails", async () => {
+    mockTrpc.dataSource.list.query.mockRejectedValue(new Error("boom"));
+    await expect(orgHasGitHubSource(makeCfg())).resolves.toBe(false);
+  });
+});
+
+describe("connectGitHubForAgent", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockTrpc.dataSource.list.query.mockResolvedValue([]);
+    mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([]);
+    mockTrpc.workspaces.create.mutate.mockResolvedValue({ deployment_id: "dep-1" });
+    mockTrpc.dataSource.create.mutate.mockResolvedValue({ data_source_id: "ds-1" });
+    mockTrpc.dataSource.syncDataSource.mutate.mockResolvedValue({});
+    mockTrpc.dataSource.attachToSpace.mutate.mockResolvedValue({});
+    mockTrpc.workspaces.listForSpace.query.mockResolvedValue([{ deployment_id: "dep-1" }]);
+    mockTrpc.deploymentDataSource.create.mutate.mockResolvedValue({});
+  });
+
+  it("points at the production Dosu GitHub App", () => {
+    expect(GITHUB_APP_INSTALL_URL).toContain("github.com/apps/dosubot/installations/select_target");
+  });
+
+  it("fails when cfg is missing org or space", async () => {
+    await expect(connectGitHubForAgent(makeCfg({ org_id: undefined }), null)).resolves.toEqual({
+      status: "failed",
+      message: "missing org/space context",
+    });
+  });
+
+  it("returns already_connected when a github source exists", async () => {
+    mockTrpc.dataSource.list.query.mockResolvedValue([
+      { data_source_id: "ds-1", provider_slug: "github" },
+    ]);
+    await expect(connectGitHubForAgent(makeCfg(), null)).resolves.toEqual({
+      status: "already_connected",
+    });
+    expect(mockTrpc.githubRepository.listForOrg.query).not.toHaveBeenCalled();
+  });
+
+  it("returns needs_install when the App has no repos for the org", async () => {
+    await expect(connectGitHubForAgent(makeCfg(), null)).resolves.toEqual({
+      status: "needs_install",
+    });
+  });
+
+  it("returns already_connected when every listed repo is already deployed", async () => {
+    mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
+      { repository_id: 1, name: "api", slug: "acme/api", is_deployed: true },
+    ]);
+    await expect(connectGitHubForAgent(makeCfg(), null)).resolves.toEqual({
+      status: "already_connected",
+    });
+  });
+
+  it("returns needs_repo_choice when several undeployed repos exist and none match cwd", async () => {
+    mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
+      { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
+      { repository_id: 2, name: "core", slug: "acme/core", is_deployed: false },
+    ]);
+    await expect(connectGitHubForAgent(makeCfg(), null)).resolves.toEqual({
+      status: "needs_repo_choice",
+      candidates: [
+        { slug: "acme/api", repository_id: 1 },
+        { slug: "acme/core", repository_id: 2 },
+      ],
+    });
+  });
+
+  it("connects the lone undeployed repo", async () => {
+    mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
+      { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
+    ]);
+    mockTrpc.dataSource.list.query
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([{ data_source_id: "ds-1", provider_slug: "github" }]);
+
+    await expect(
+      connectGitHubForAgent(makeCfg(), null, { verify: { timeoutMs: 0, intervalMs: 0 } }),
+    ).resolves.toEqual({
+      status: "connected",
+      slugs: ["acme/api"],
+    });
+    expect(mockTrpc.workspaces.create.mutate).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefers the local git origin among several undeployed repos", async () => {
+    mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
+      { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
+      { repository_id: 2, name: "core", slug: "acme/core", is_deployed: false },
+    ]);
+    mockTrpc.dataSource.list.query
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([{ data_source_id: "ds-1", provider_slug: "github" }]);
+
+    await expect(
+      connectGitHubForAgent(
+        makeCfg(),
+        { owner: "Acme", name: "API", slug: "Acme/API" },
+        { verify: { timeoutMs: 0, intervalMs: 0 } },
+      ),
+    ).resolves.toEqual({ status: "connected", slugs: ["acme/api"] });
+    expect(mockTrpc.workspaces.create.mutate).toHaveBeenCalledTimes(1);
+    expect(mockTrpc.workspaces.create.mutate.mock.calls[0][0].name).toBe("acme/api");
+  });
+
+  it("fails when createDeploymentForRepo cannot attach the repo", async () => {
+    mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
+      { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
+    ]);
+    mockTrpc.workspaces.create.mutate.mockResolvedValue({});
+
+    await expect(connectGitHubForAgent(makeCfg(), null)).resolves.toEqual({
+      status: "failed",
+      message: "could not attach any GitHub repository as a source",
+    });
+  });
+
+  it("fails when the created source is deleted during sync", async () => {
+    mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
+      { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
+    ]);
+    mockTrpc.dataSource.list.query.mockResolvedValue([]);
+
+    await expect(
+      connectGitHubForAgent(makeCfg(), null, { verify: { timeoutMs: 0, intervalMs: 0 } }),
+    ).resolves.toEqual({
+      status: "failed",
+      message: "GitHub source was created then removed during sync",
+    });
   });
 });

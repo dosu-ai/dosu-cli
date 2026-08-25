@@ -132,8 +132,9 @@ vi.mock("../commands/skill", () => ({
   skillCommand: vi.fn(),
 }));
 
-const { mockStepConnectGitHubRepo } = vi.hoisted(() => ({
+const { mockStepConnectGitHubRepo, mockOrgHasGitHubSource } = vi.hoisted(() => ({
   mockStepConnectGitHubRepo: vi.fn(),
+  mockOrgHasGitHubSource: vi.fn(),
 }));
 
 // AGENTS.md step: mocked so flow tests never write an AGENTS.md into the real
@@ -170,6 +171,7 @@ vi.mock("./rules-step", () => ({
 }));
 vi.mock("./github-step", () => ({
   stepConnectGitHubRepo: (...args: unknown[]) => mockStepConnectGitHubRepo(...args),
+  orgHasGitHubSource: (...args: unknown[]) => mockOrgHasGitHubSource(...args),
   detectGitRepo: vi.fn(() => null),
 }));
 
@@ -212,6 +214,9 @@ function mockToolSelection(selection: string[]) {
 
 function installSetupStepDefaults() {
   mockStepConnectGitHubRepo.mockResolvedValue({ advance: false, has_connected_repo: false });
+  // Already-onboarded + already-connected is the everyday path. Tests that
+  // exercise the TTY GitHub step flip this to false.
+  mockOrgHasGitHubSource.mockResolvedValue(true);
   mockInGitWorkTree.mockReturnValue(false);
   mockStepUpdateAgentsMd.mockReturnValue(true);
   mockStepConfigureAgentRules.mockResolvedValue([]);
@@ -1942,13 +1947,37 @@ describe("runSetup checkpoint behavior", () => {
     expect(mockTrpc.user.updateProfile.mutate).not.toHaveBeenCalled();
   });
 
-  it("keeps ordinary setup free of GitHub when the remote profile is already onboarded", async () => {
-    saveConfig(makeCfg());
+  it("keeps ordinary setup free of GitHub when a GitHub source already exists", async () => {
+    saveConfig(makeCfg({ org_id: "o1", space_id: "s1" }));
     setupAuthed();
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
 
     await runSetup();
 
+    expect(mockOrgHasGitHubSource).toHaveBeenCalled();
+    expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
+  });
+
+  it("runs the TTY GitHub step for an already-onboarded org with no GitHub source", async () => {
+    mockOrgHasGitHubSource.mockResolvedValue(false);
+    saveConfig(makeCfg({ org_id: "o1", space_id: "s1" }));
+    setupAuthed();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(mockStepConnectGitHubRepo).toHaveBeenCalledOnce();
+  });
+
+  it("never runs the TTY GitHub step in OSS mode", async () => {
+    mockOrgHasGitHubSource.mockResolvedValue(false);
+    saveConfig(makeCfg({ mode: "oss", org_id: "o1", space_id: "s1" }));
+    setupAuthed();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(mockOrgHasGitHubSource).not.toHaveBeenCalled();
     expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
   });
 
