@@ -1,3 +1,10 @@
+## [0.49.3](https://github.com/dosu-ai/dosu-cli/compare/v0.49.2...v0.49.3) (2026-08-25)
+
+
+### Bug Fixes
+
+* **setup:** align GitHub deployment config with hosted schema ([#189](https://github.com/dosu-ai/dosu-cli/issues/189)) ([d0a994f](https://github.com/dosu-ai/dosu-cli/commit/d0a994f6f3b1dd2329d9f2ad4b989e38a45a5681))
+
 ## [0.49.2](https://github.com/dosu-ai/dosu-cli/compare/v0.49.1...v0.49.2) (2026-08-24)
 
 
