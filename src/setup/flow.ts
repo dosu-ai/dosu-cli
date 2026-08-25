@@ -894,10 +894,13 @@ export function stepConfigureTools(
   projectRoot: string,
 ): ConfigResult[] {
   const results: ConfigResult[] = [];
+  const retainedProjectConfigPaths = new Set<string>();
 
   for (const provider of selection.toInstall) {
     try {
       provider.install(cfg, false, { projectRoot });
+      const projectConfigPath = provider.projectConfigPath(projectRoot);
+      if (projectConfigPath) retainedProjectConfigPaths.add(projectConfigPath);
       logger.info("setup", `Configured ${provider.name()}`);
       results.push({ provider, action: "install" });
     } catch (err: unknown) {
@@ -914,7 +917,10 @@ export function stepConfigureTools(
 
   for (const provider of selection.toRemove) {
     try {
-      provider.remove(false, { projectRoot });
+      const projectConfigPath = provider.projectConfigPath(projectRoot);
+      if (!projectConfigPath || !retainedProjectConfigPaths.has(projectConfigPath)) {
+        provider.remove(false, { projectRoot });
+      }
       logger.info("setup", `Removed ${provider.name()}`);
       results.push({ provider, action: "remove" });
     } catch (err: unknown) {

@@ -196,6 +196,7 @@ import { loadJSONConfig, saveJSONConfig } from "../mcp/config-helpers";
 import * as providersModule from "../mcp/providers";
 import { ClaudeProvider } from "../mcp/providers/claude";
 import { ClaudeDesktopProvider } from "../mcp/providers/claude-desktop";
+import { CopilotProvider } from "../mcp/providers/copilot";
 import { CursorProvider } from "../mcp/providers/cursor";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
 import {
@@ -471,6 +472,47 @@ describe("stepConfigureTools", () => {
 
     // Verify the dosu entry was removed from disk
     written = loadJSONConfig(configPath);
+    expect(written.mcpServers.dosu).toBeUndefined();
+  });
+
+  it.each([
+    ["GitHub Copilot CLI", CopilotProvider, ClaudeProvider],
+    ["Claude Code", ClaudeProvider, CopilotProvider],
+  ])("preserves the shared project MCP config when keeping %s and removing the other provider", (_retainedName, retainedProvider, removedProvider) => {
+    const cfg = makeCfg();
+    const retained = retainedProvider();
+    const removed = removedProvider();
+    const selection: ToolSelection = {
+      toInstall: [retained],
+      toRemove: [removed],
+      skipped: [],
+    };
+
+    const results = stepConfigureTools(cfg, selection, tempDir);
+
+    expect(results).toHaveLength(2);
+    expect(results.map((result) => result.action)).toEqual(["install", "remove"]);
+    expect(results.every((result) => result.error === undefined)).toBe(true);
+    const written = loadJSONConfig(join(tempDir, ".mcp.json"));
+    expect(written.mcpServers.dosu).toBeDefined();
+  });
+
+  it("removes the shared project MCP config when neither provider is retained", () => {
+    const cfg = makeCfg();
+    const claude = ClaudeProvider();
+    const copilot = CopilotProvider();
+    claude.install(cfg, false, { projectRoot: tempDir });
+    const selection: ToolSelection = {
+      toInstall: [],
+      toRemove: [claude, copilot],
+      skipped: [],
+    };
+
+    const results = stepConfigureTools(cfg, selection, tempDir);
+
+    expect(results).toHaveLength(2);
+    expect(results.every((result) => result.error === undefined)).toBe(true);
+    const written = loadJSONConfig(join(tempDir, ".mcp.json"));
     expect(written.mcpServers.dosu).toBeUndefined();
   });
 
