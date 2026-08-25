@@ -28,6 +28,7 @@ import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders } from "../mcp/providers";
 import { fetchDosuRule, installRuleForAgent, isRuleAgent } from "../rules/installer";
 import { inGitWorkTree, upsertDosuAgentsSection } from "../setup/agents-md-step";
+import { connectGitHubForAgent, GITHUB_APP_INSTALL_URL } from "../setup/github-step";
 import { emitError, emitNeedUserAction, emitStep } from "./output";
 
 export interface AgentSetupOptions {
@@ -188,6 +189,48 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
       });
       return 1;
     }
+  }
+
+  const github = await connectGitHubForAgent(cfg);
+  if (github.status === "needs_install") {
+    const resume = buildResumeCommand(
+      opts.tool,
+      undefined,
+      opts.deploymentID ?? cfg.active_account?.target?.deployment_id,
+    );
+    emitNeedUserAction({
+      step: "github",
+      url: GITHUB_APP_INSTALL_URL,
+      resume_command: resume,
+      agent_next_steps:
+        "No GitHub repository is connected. Give the user this URL to install the Dosu GitHub App " +
+        "on their org and select the repos Dosu should access. After they confirm, wait about a " +
+        "minute for the install to sync, then re-run resume_command — the CLI will attach the " +
+        "local repo (or the only available repo) as a source.",
+    });
+    return 0;
+  }
+  if (github.status === "needs_repo_choice") {
+    emitError({
+      step: "github",
+      reason: "multiple_repos",
+      candidates: github.candidates,
+      agent_next_steps:
+        `User has ${github.candidates.length} GitHub repos available and none connected. ` +
+        "Show the slugs and have them run interactive `dosu setup` to pick one, then re-run this command.",
+    });
+    return 1;
+  }
+  if (github.status === "failed") {
+    emitError({
+      step: "github",
+      reason: "connect_failed",
+      agent_next_steps: `Could not connect GitHub: ${github.message}. Have the user run interactive \`dosu setup\` or retry.`,
+    });
+    return 1;
+  }
+  if (github.status === "connected") {
+    emitStep({ step: "github", slugs: github.slugs });
   }
 
   emitStep({
@@ -484,8 +527,11 @@ async function ensureAPIKey(client: Client, cfg: Config): Promise<{ code: number
  * Build the exact command the agent should run after the user signs in.
  * Mirrors the marketing one-liner so the agent can copy/paste it back.
  */
-export function buildResumeCommand(tool: string, ticket: string, deploymentID?: string): string {
-  const parts = [NPX_INVOCATION, "setup", "--agent", "--tool", tool, "--login-ticket", ticket];
+export function buildResumeCommand(tool: string, ticket?: string, deploymentID?: string): string {
+  const parts = [NPX_INVOCATION, "setup", "--agent", "--tool", tool];
+  if (ticket) {
+    parts.push("--login-ticket", ticket);
+  }
   if (deploymentID) {
     parts.push("--deployment", deploymentID);
   }

@@ -31,18 +31,18 @@ export function emitJSONLine(value: unknown): void {
 export function emitNeedUserAction(opts: {
   step: string;
   url: string;
-  ticket: string;
-  resume_command: string;
-  expires_in: number;
   agent_next_steps: string;
+  ticket?: string;
+  resume_command?: string;
+  expires_in?: number;
 }): void {
   emitJSONLine({
     step: opts.step,
     status: "need_user_action",
     url: opts.url,
-    ticket: opts.ticket,
-    resume_command: opts.resume_command,
-    expires_in: opts.expires_in,
+    ...(opts.ticket !== undefined ? { ticket: opts.ticket } : {}),
+    ...(opts.resume_command !== undefined ? { resume_command: opts.resume_command } : {}),
+    ...(opts.expires_in !== undefined ? { expires_in: opts.expires_in } : {}),
     agent_next_steps: opts.agent_next_steps,
   });
 }

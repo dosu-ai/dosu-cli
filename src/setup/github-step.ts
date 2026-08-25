@@ -100,6 +100,18 @@ export interface GithubStepResult {
   created_repository_slugs?: string[];
 }
 
+/** Production Dosu GitHub App. Override with DOSU_GITHUB_APP_INSTALL_URL_OVERRIDE. */
+export const GITHUB_APP_INSTALL_URL =
+  process.env.DOSU_GITHUB_APP_INSTALL_URL_OVERRIDE ??
+  "https://github.com/apps/dosubot/installations/select_target";
+
+export type AgentGitHubConnectResult =
+  | { status: "already_connected" }
+  | { status: "connected"; slugs: string[] }
+  | { status: "needs_install" }
+  | { status: "needs_repo_choice"; candidates: { slug: string; repository_id: number }[] }
+  | { status: "failed"; message: string };
+
 // Shape returned by tRPC `githubRepository.listForOrg`. Backend spreads
 // `...github.repository` so `created_at` rides along even though the
 // router type doesn't surface it explicitly.
@@ -133,6 +145,23 @@ export function detectGitRepo(cwd: string = process.cwd()): DetectedRepo | null 
 
   const [, owner, name] = m;
   return { owner, name, slug: `${owner}/${name}` };
+}
+
+export async function orgHasGitHubSource(cfg: Config): Promise<boolean> {
+  const orgID = cfg.active_account?.target?.org_id;
+  if (!orgID) return false;
+  const trpc = createTypedClient(cfg);
+  try {
+    const listed = await trpc.dataSource.list.query({
+      org_id: orgID,
+      excluded_provider_slugs: [],
+    });
+    return listed.some((d) => d.provider_slug === "github");
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn("setup", `dataSource.list github check failed: ${msg}`);
+    return false;
+  }
 }
 
 async function fetchListForOrg(trpc: TypedClient, orgID: string): Promise<AvailableRepo[]> {
@@ -465,6 +494,74 @@ async function deleteOrphanDeployment(
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn("setup", `Failed to revert orphan deployment for ${slug}: ${msg}`);
   }
+}
+
+/**
+ * Non-interactive GitHub connect for `dosu setup --agent`.
+ *
+ * Never opens a browser or prompts. If the App is not installed, the caller
+ * emits a need_user_action ticket with GITHUB_APP_INSTALL_URL. After the user
+ * installs, a later invocation attaches the local origin (or the lone
+ * undeployed repo) via the same tRPC path as the TTY step.
+ */
+export async function connectGitHubForAgent(
+  cfg: Config,
+  detected: DetectedRepo | null = detectGitRepo(),
+  opts: StepConnectGitHubRepoOptions = {},
+): Promise<AgentGitHubConnectResult> {
+  if (!cfg.active_account?.target?.org_id || !cfg.active_account?.target?.space_id) {
+    return { status: "failed", message: "missing org/space context" };
+  }
+  const orgID = cfg.active_account.target.org_id;
+  const spaceID = cfg.active_account.target.space_id;
+
+  if (await orgHasGitHubSource(cfg)) {
+    return { status: "already_connected" };
+  }
+
+  const trpc = createTypedClient(cfg);
+  const repos = await fetchListForOrg(trpc, orgID);
+  if (repos.length === 0) {
+    return { status: "needs_install" };
+  }
+
+  const undeployed = repos.filter((r) => !r.is_deployed);
+  if (undeployed.length === 0) {
+    return { status: "already_connected" };
+  }
+
+  const detectedMatch =
+    detected && undeployed.find((r) => r.slug.toLowerCase() === detected.slug.toLowerCase());
+  const toConnect = detectedMatch ? [detectedMatch] : undeployed.length === 1 ? undeployed : null;
+  if (!toConnect) {
+    return {
+      status: "needs_repo_choice",
+      candidates: undeployed.map((r) => ({ slug: r.slug, repository_id: r.repository_id })),
+    };
+  }
+
+  const created: { data_source_id: string; slug: string }[] = [];
+  for (const repo of toConnect) {
+    const result = await createDeploymentForRepo(trpc, orgID, spaceID, repo);
+    if (result) {
+      created.push({ data_source_id: result.data_source_id, slug: repo.slug });
+    }
+  }
+  if (created.length === 0) {
+    return { status: "failed", message: "could not attach any GitHub repository as a source" };
+  }
+
+  const survivors = await verifyDataSourcesPersist(
+    trpc,
+    orgID,
+    created.map((c) => c.data_source_id),
+    opts.verify,
+  );
+  const survived = created.filter((c) => survivors.alive.has(c.data_source_id));
+  if (survived.length === 0) {
+    return { status: "failed", message: "GitHub source was created then removed during sync" };
+  }
+  return { status: "connected", slugs: survived.map((c) => c.slug) };
 }
 
 export async function stepConnectGitHubRepo(

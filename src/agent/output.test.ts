@@ -45,6 +45,23 @@ describe("agent/output", () => {
     });
   });
 
+  it("omits ticket fields when emitNeedUserAction is used for GitHub install", () => {
+    emitNeedUserAction({
+      step: "github",
+      url: "https://github.com/apps/dosubot/installations/select_target",
+      resume_command: "npx @dosu/cli@latest setup --agent --tool claude",
+      agent_next_steps: "Give the user the install URL.",
+    });
+
+    expect(lastEmittedJSON()).toEqual({
+      step: "github",
+      status: "need_user_action",
+      url: "https://github.com/apps/dosubot/installations/select_target",
+      resume_command: "npx @dosu/cli@latest setup --agent --tool claude",
+      agent_next_steps: "Give the user the install URL.",
+    });
+  });
+
   it("emitError emits a structured error with reason + next steps", () => {
     emitError({
       step: "deployment",

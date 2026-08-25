@@ -24,6 +24,7 @@ const {
   mockSkillAgentIDsForProviders,
   mockInGitWorkTree,
   mockUpsertDosuAgentsSection,
+  mockConnectGitHubForAgent,
 } = vi.hoisted(() => {
   return {
     mockMintTicket: vi.fn(),
@@ -46,6 +47,7 @@ const {
     mockSkillAgentIDsForProviders: vi.fn(),
     mockInGitWorkTree: vi.fn(),
     mockUpsertDosuAgentsSection: vi.fn(),
+    mockConnectGitHubForAgent: vi.fn(),
   };
 });
 
@@ -78,6 +80,11 @@ vi.mock("../commands/skill", () => ({
 vi.mock("../setup/agents-md-step", () => ({
   inGitWorkTree: mockInGitWorkTree,
   upsertDosuAgentsSection: mockUpsertDosuAgentsSection,
+}));
+
+vi.mock("../setup/github-step", () => ({
+  connectGitHubForAgent: (...args: unknown[]) => mockConnectGitHubForAgent(...args),
+  GITHUB_APP_INSTALL_URL: "https://github.com/apps/dosubot/installations/select_target",
 }));
 
 vi.mock("../client/client", () => ({
@@ -137,6 +144,11 @@ describe("buildResumeCommand", () => {
       "npx @dosu/cli@latest setup --agent --tool cursor --login-ticket tkt-2 --deployment dep-9",
     );
   });
+
+  it("omits --login-ticket when resuming after a GitHub App install", () => {
+    const cmd = buildResumeCommand("claude", undefined, "dep-1");
+    expect(cmd).toBe("npx @dosu/cli@latest setup --agent --tool claude --deployment dep-1");
+  });
 });
 
 describe("listAgentSupportedToolIDs", () => {
@@ -175,6 +187,8 @@ describe("runAgentSetup", () => {
     mockSkillAgentIDsForProviders.mockReset();
     mockInGitWorkTree.mockReset();
     mockUpsertDosuAgentsSection.mockReset();
+    mockConnectGitHubForAgent.mockReset();
+    mockConnectGitHubForAgent.mockResolvedValue({ status: "already_connected" });
     for (const fn of Object.values(mockClient)) fn.mockReset();
 
     claudeProvider = makeProvider("claude", { name: () => "Claude Code" });
@@ -959,5 +973,116 @@ describe("runAgentSetup", () => {
       }),
     ]);
     expect(claudeProvider.install).not.toHaveBeenCalled();
+  });
+
+  function seedReadyAgentSession() {
+    mockExchangeTicket.mockResolvedValue({
+      status: "authenticated",
+      access_token: ticketAccessToken,
+      refresh_token: "ref",
+      expires_in: 3600,
+      email: "user@example.com",
+    });
+    mockClient.getDeployments.mockResolvedValue([
+      {
+        deployment_id: "dep-1",
+        name: "acme/main",
+        description: "",
+        provider_slug: "dosu_mcp",
+        enabled: true,
+        org_id: "org-1",
+        org_name: "acme",
+        space_id: "space-1",
+      },
+    ]);
+    mockClient.validateAPIKey.mockResolvedValue(false);
+    mockClient.createAPIKey.mockResolvedValue({
+      api_key: "sk_user_x",
+      id: "k1",
+      name: "dosu-cli",
+      key_prefix: "sk_user_x",
+    });
+  }
+
+  it("asks the user to install the GitHub App when no repos are available", async () => {
+    seedReadyAgentSession();
+    mockConnectGitHubForAgent.mockResolvedValue({ status: "needs_install" });
+
+    const code = await runAgentSetup({ tool: "claude", loginTicket: "tkt-good" });
+
+    expect(code).toBe(0);
+    expect(emittedEvents().at(-1)).toMatchObject({
+      step: "github",
+      status: "need_user_action",
+      url: "https://github.com/apps/dosubot/installations/select_target",
+      resume_command: "npx @dosu/cli@latest setup --agent --tool claude --deployment dep-1",
+    });
+    expect(emittedEvents().map((e) => e.step)).not.toContain("done");
+  });
+
+  it("emits multiple_repos when several undeployed repos exist", async () => {
+    seedReadyAgentSession();
+    mockConnectGitHubForAgent.mockResolvedValue({
+      status: "needs_repo_choice",
+      candidates: [
+        { slug: "acme/api", repository_id: 1 },
+        { slug: "acme/core", repository_id: 2 },
+      ],
+    });
+
+    const code = await runAgentSetup({ tool: "claude", loginTicket: "tkt-good" });
+
+    expect(code).toBe(1);
+    expect(emittedEvents().at(-1)).toMatchObject({
+      step: "github",
+      status: "error",
+      reason: "multiple_repos",
+      candidates: [
+        { slug: "acme/api", repository_id: 1 },
+        { slug: "acme/core", repository_id: 2 },
+      ],
+    });
+  });
+
+  it("emits connect_failed when GitHub attach fails", async () => {
+    seedReadyAgentSession();
+    mockConnectGitHubForAgent.mockResolvedValue({
+      status: "failed",
+      message: "missing org/space context",
+    });
+
+    const code = await runAgentSetup({ tool: "claude", loginTicket: "tkt-good" });
+
+    expect(code).toBe(1);
+    expect(emittedEvents().at(-1)).toMatchObject({
+      step: "github",
+      status: "error",
+      reason: "connect_failed",
+    });
+  });
+
+  it("emits a github step when a repo is attached automatically", async () => {
+    seedReadyAgentSession();
+    mockConnectGitHubForAgent.mockResolvedValue({
+      status: "connected",
+      slugs: ["acme/api"],
+    });
+
+    const code = await runAgentSetup({ tool: "claude", loginTicket: "tkt-good" });
+
+    expect(code).toBe(0);
+    expect(emittedEvents().map((e) => e.step)).toEqual([
+      "auth",
+      "deployment",
+      "api_key",
+      "mcp_install",
+      "rule_install",
+      "skill_install",
+      "github",
+      "done",
+    ]);
+    expect(emittedEvents()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ step: "github", slugs: ["acme/api"] })]),
+    );
   });
 });
