@@ -1,3 +1,10 @@
+# [0.50.0](https://github.com/dosu-ai/dosu-cli/compare/v0.49.4...v0.50.0) (2026-08-26)
+
+
+### Features
+
+* add library and agent management commands ([#191](https://github.com/dosu-ai/dosu-cli/issues/191)) ([4c35eda](https://github.com/dosu-ai/dosu-cli/commit/4c35eda0b3d6e54edbfd48ccb5ef183c9953c1dc))
+
 ## [0.49.4](https://github.com/dosu-ai/dosu-cli/compare/v0.49.3...v0.49.4) (2026-08-26)
 
 
