@@ -141,7 +141,7 @@ describe("cleanupLegacyGlobalMcp", () => {
     writeFileSync(jsoncPath, jsonc);
     expect(cleanupLegacyGlobalMcp(makeProvider("mcporter", jsoncPath))).toMatchObject({
       status: "preserved",
-      reason: "symlink_or_non_file",
+      reason: "shared_or_unsupported",
     });
     expect(readFileSync(jsoncPath, "utf-8")).toBe(jsonc);
   });
