@@ -116,6 +116,12 @@ describe("topics pages", () => {
     expect(call[1].limit).toBe(5);
   });
 
+  it("rejects an invalid page limit before calling tRPC", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    await expect(run("pages", "tag1", "--limit", "nope")).rejects.toThrow();
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
   it("outputs valid JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce({ data: [{ id: "p1", title: "Doc A" }] });

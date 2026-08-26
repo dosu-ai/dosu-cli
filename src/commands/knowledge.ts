@@ -2,9 +2,10 @@
  * `dosu knowledge` — knowledge base search and listing.
  */
 
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import pc from "picocolors";
 import { createTypedClient } from "../client/trpc";
+import { positiveInteger } from "./arguments";
 import { requireLoginConfig } from "./auth";
 import { printResult, printTable, truncate } from "./output";
 
@@ -25,8 +26,8 @@ export function knowledgeCommand(): Command {
     .description("Search the knowledge base")
     .argument("<query>", "Search query")
     .option("--json", "Output as JSON")
-    .option("--limit <n>", "Maximum results", "10")
-    .action(async (query: string, opts: { json?: boolean; limit?: string }) => {
+    .addOption(new Option("--limit <n>", "Maximum results").argParser(positiveInteger).default(10))
+    .action(async (query: string, opts: { json?: boolean; limit: number }) => {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
 
@@ -63,8 +64,7 @@ export function knowledgeCommand(): Command {
         return;
       }
 
-      const limit = Number.parseInt(opts.limit ?? "10", 10);
-      const limited = results.slice(0, limit);
+      const limited = results.slice(0, opts.limit);
 
       printTable(
         ["Title", "Type"],
@@ -75,8 +75,8 @@ export function knowledgeCommand(): Command {
         { json: false, rawData: limited },
       );
 
-      if (results.length > limit) {
-        console.log(pc.dim(`\n${results.length - limit} more results not shown.`));
+      if (results.length > opts.limit) {
+        console.log(pc.dim(`\n${results.length - opts.limit} more results not shown.`));
       }
     });
 

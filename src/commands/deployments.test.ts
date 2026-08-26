@@ -17,6 +17,13 @@ vi.mock("../client/trpc", () => ({
   createTypedClient: vi.fn().mockImplementation(() => createMockProxy()),
 }));
 
+const mockCreateAPIKey = vi.fn();
+vi.mock("../client/client", () => ({
+  Client: class {
+    createAPIKey = mockCreateAPIKey;
+  },
+}));
+
 const mockLoadConfig = vi.fn();
 const mockSaveConfig = vi.fn();
 vi.mock("../config/config", async (importOriginal) => ({
@@ -58,6 +65,8 @@ async function run(...args: string[]) {
 
 beforeEach(() => {
   mockQuery.mockReset();
+  mockCreateAPIKey.mockReset();
+  mockCreateAPIKey.mockResolvedValue({ api_key: "fresh-key" });
   mockLoadConfig.mockReset();
   mockSaveConfig.mockReset();
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -74,6 +83,20 @@ afterEach(() => {
 });
 
 describe("deployments list", () => {
+  it("only returns MCP deployments that the CLI can target", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce([
+      { deployment_id: "github-1", name: "Repo", provider_slug: "github" },
+      { deployment_id: "mcp-1", name: "Dosu MCP", provider_slug: "dosu_mcp" },
+    ]);
+
+    await run("list", "--json");
+
+    expect(JSON.parse(allOutput())).toEqual([
+      { deployment_id: "mcp-1", name: "Dosu MCP", provider_slug: "dosu_mcp" },
+    ]);
+  });
+
   it("calls workspaces.listForOrg when org_id exists", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce([]);
@@ -81,16 +104,29 @@ describe("deployments list", () => {
     expect(mockQuery).toHaveBeenCalledWith("workspaces.listForOrg", "org1");
   });
 
-  it("calls workspaces.listAll when org_id is missing", async () => {
+  it("lists each accessible org when no active org is selected", async () => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ org_id: undefined }));
-    mockQuery.mockResolvedValueOnce([]);
+    mockQuery.mockImplementation((path: string, input: unknown) => {
+      if (path === "organization.getOrganizations") {
+        return Promise.resolve([
+          { org_id: "org1", name: "One" },
+          { org_id: "org2", name: "Two" },
+        ]);
+      }
+      if (path === "workspaces.listForOrg") return Promise.resolve([]);
+      throw new Error(`unexpected query: ${path} ${String(input)}`);
+    });
     await run("list");
-    expect(mockQuery).toHaveBeenCalledWith("workspaces.listAll", {});
+    expect(mockQuery).toHaveBeenCalledWith("workspaces.listForOrg", "org1");
+    expect(mockQuery).toHaveBeenCalledWith("workspaces.listForOrg", "org2");
+    expect(mockQuery).not.toHaveBeenCalledWith("workspaces.listAll", expect.anything());
   });
 
   it("outputs valid JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ deployment_id: "d1", name: "Test" }]);
+    mockQuery.mockResolvedValueOnce([
+      { deployment_id: "d1", name: "Test", provider_slug: "dosu_mcp" },
+    ]);
     await run("list", "--json");
     const output = JSON.parse(allOutput());
     expect(output).toHaveLength(1);
@@ -107,7 +143,13 @@ describe("deployments list", () => {
   it("shows 'active' for enabled=true", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce([
-      { deployment_id: "d1", name: "Prod", enabled: true, org_id: "org1" },
+      {
+        deployment_id: "d1",
+        name: "Prod",
+        enabled: true,
+        org_id: "org1",
+        provider_slug: "dosu_mcp",
+      },
     ]);
     await run("list");
     expect(allOutput()).toContain("active");
@@ -116,7 +158,13 @@ describe("deployments list", () => {
   it("shows 'disabled' for enabled=false", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce([
-      { deployment_id: "d1", name: "Old", enabled: false, org_id: "org1" },
+      {
+        deployment_id: "d1",
+        name: "Old",
+        enabled: false,
+        org_id: "org1",
+        provider_slug: "dosu_mcp",
+      },
     ]);
     await run("list");
     expect(allOutput()).toContain("disabled");
@@ -125,7 +173,13 @@ describe("deployments list", () => {
   it("shows current deployment hint", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce([
-      { deployment_id: "d1", name: "Test", enabled: true, org_id: "org1" },
+      {
+        deployment_id: "d1",
+        name: "Test",
+        enabled: true,
+        org_id: "org1",
+        provider_slug: "dosu_mcp",
+      },
     ]);
     await run("list");
     expect(allOutput()).toContain("Current: My Deploy");
@@ -134,7 +188,13 @@ describe("deployments list", () => {
   it("shows truncated org_id", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce([
-      { deployment_id: "d1", name: "Prod", enabled: true, org_id: "0123456789abcdef" },
+      {
+        deployment_id: "d1",
+        name: "Prod",
+        enabled: true,
+        org_id: "0123456789abcdef",
+        provider_slug: "dosu_mcp",
+      },
     ]);
     await run("list");
     expect(allOutput()).toContain("01234567");
@@ -142,7 +202,9 @@ describe("deployments list", () => {
 
   it("shows '(unnamed)' for missing name and '—' for missing org_id", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ deployment_id: "d1", enabled: true }]);
+    mockQuery.mockResolvedValueOnce([
+      { deployment_id: "d1", enabled: true, provider_slug: "dosu_mcp" },
+    ]);
     await run("list");
     const output = allOutput();
     expect(output).toContain("(unnamed)");
@@ -157,7 +219,13 @@ describe("deployments list", () => {
       }),
     );
     mockQuery.mockResolvedValueOnce([
-      { deployment_id: "d1", name: "Test", enabled: true, org_id: "org1" },
+      {
+        deployment_id: "d1",
+        name: "Test",
+        enabled: true,
+        org_id: "org1",
+        provider_slug: "dosu_mcp",
+      },
     ]);
     await run("list");
     expect(allOutput()).toContain("Current: dep1");
@@ -261,6 +329,7 @@ describe("deployments switch", () => {
     name: "New Deploy",
     org_id: "org2",
     space_id: "sp2",
+    provider_slug: "dosu_mcp",
   };
 
   it("validates deployment via workspaces.get", async () => {
@@ -270,7 +339,7 @@ describe("deployments switch", () => {
     expect(mockQuery).toHaveBeenCalledWith("workspaces.get", "new-dep");
   });
 
-  it("saves all 4 fields to config", async () => {
+  it("saves the deployment fields with a newly scoped API key", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce(deployment);
     await run("switch", "new-dep");
@@ -280,6 +349,8 @@ describe("deployments switch", () => {
     expect(savedTarget.deployment_name).toBe("New Deploy");
     expect(savedTarget.org_id).toBe("org2");
     expect(savedTarget.space_id).toBe("sp2");
+    expect(savedTarget.api_key).toBe("fresh-key");
+    expect(mockCreateAPIKey).toHaveBeenCalledWith("new-dep", "dosu-cli");
   });
 
   it("outputs JSON with --json", async () => {
@@ -303,6 +374,16 @@ describe("deployments switch", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce(null);
     await expect(run("switch", "missing-dep")).rejects.toThrow("exit");
+    expect(mockSaveConfig).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-MCP workspace before creating an API key", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce({ ...deployment, provider_slug: "github" });
+
+    await expect(run("switch", "new-dep")).rejects.toThrow("exit");
+
+    expect(mockCreateAPIKey).not.toHaveBeenCalled();
     expect(mockSaveConfig).not.toHaveBeenCalled();
   });
 });

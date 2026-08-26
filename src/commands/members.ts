@@ -2,11 +2,11 @@
  * `dosu members` — team member management.
  */
 
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import pc from "picocolors";
 import { createTypedClient } from "../client/trpc";
 import { requireLoginConfig } from "./auth";
-import { printResult, printTable } from "./output";
+import { printResult } from "./output";
 
 function requireConfig() {
   const cfg = requireLoginConfig();
@@ -18,56 +18,28 @@ function requireConfig() {
 }
 
 export function membersCommand(): Command {
-  const cmd = new Command("members").description("Manage team members");
-
-  cmd
-    .command("list")
-    .description("List team members and invitations")
-    .option("--json", "Output as JSON")
-    .action(async (opts: { json?: boolean }) => {
-      const cfg = requireConfig();
-      const client = createTypedClient(cfg);
-
-      const data = await client.invitations.getInvitations.query();
-
-      if (opts.json) {
-        printResult(data, opts);
-        return;
-      }
-
-      if (!data.items || data.items.length === 0) {
-        console.log(pc.dim("No members or invitations found."));
-        return;
-      }
-
-      printTable(
-        ["Email", "Org"],
-        data.items.map((m: { email?: string | null; org?: { name?: string | null } | null }) => [
-          m.email ?? "—",
-          m.org?.name ?? "—",
-        ]),
-        { rawData: data },
-      );
-    });
+  const cmd = new Command("members").description("Invite organization members");
 
   cmd
     .command("invite")
     .description("Invite a member to the organization")
     .argument("<email>", "Email address to invite")
-    .option("--role <role>", "Role: admin or member", "member")
+    .addOption(
+      new Option("--role <role>", "Organization role")
+        .choices(["admin", "member"])
+        .default("member"),
+    )
     .option("--json", "Output as JSON")
-    .action(async (email: string, opts: { role: string; json?: boolean }) => {
+    .action(async (email: string, opts: { role: "admin" | "member"; json?: boolean }) => {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
 
-      // Role is a declared enum: ADMIN="ADMIN", MEMBER="MEMBER"
-      const role = opts.role.toUpperCase() === "ADMIN" ? "ADMIN" : "MEMBER";
+      const role = opts.role === "admin" ? "ADMIN" : "MEMBER";
       await client.invitations.invite.mutate({
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
         orgId: cfg.active_account!.target!.org_id!,
         email,
-        // biome-ignore lint/suspicious/noExplicitAny: Role enum requires cast from string
-        role: role as any,
+        role,
       });
 
       if (opts.json) {
@@ -75,80 +47,6 @@ export function membersCommand(): Command {
         return;
       }
       console.log(pc.green(`Invitation sent to ${email} as ${role}.`));
-    });
-
-  cmd
-    .command("requests")
-    .description("List pending access requests")
-    .option("--json", "Output as JSON")
-    .action(async (opts: { json?: boolean }) => {
-      const cfg = requireConfig();
-      const client = createTypedClient(cfg);
-
-      const data = await client.invitations.getInvitations.query();
-
-      if (opts.json) {
-        printResult(data, opts);
-        return;
-      }
-
-      if (!data.items || data.items.length === 0) {
-        console.log(pc.dim("No pending access requests."));
-        return;
-      }
-
-      printTable(
-        ["Email", "Org"],
-        data.items.map((r: { email?: string | null; org?: { name?: string | null } | null }) => [
-          r.email ?? "—",
-          r.org?.name ?? "—",
-        ]),
-        { rawData: data },
-      );
-    });
-
-  cmd
-    .command("approve")
-    .description("Approve an access request")
-    .argument("<email>", "Email of requester")
-    .option("--json", "Output as JSON")
-    .action(async (email: string, opts: { json?: boolean }) => {
-      const cfg = requireConfig();
-      const client = createTypedClient(cfg);
-
-      await client.invitations.acceptInvitation.mutate({
-        // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-        orgId: cfg.active_account!.target!.org_id!,
-        email,
-      });
-
-      if (opts.json) {
-        printResult({ success: true, email, action: "approved" }, opts);
-        return;
-      }
-      console.log(pc.green(`Access request from ${email} approved.`));
-    });
-
-  cmd
-    .command("deny")
-    .description("Deny an access request")
-    .argument("<email>", "Email of requester")
-    .option("--json", "Output as JSON")
-    .action(async (email: string, opts: { json?: boolean }) => {
-      const cfg = requireConfig();
-      const client = createTypedClient(cfg);
-
-      await client.invitations.rejectInvitation.mutate({
-        // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-        orgId: cfg.active_account!.target!.org_id!,
-        email,
-      });
-
-      if (opts.json) {
-        printResult({ success: true, email, action: "denied" }, opts);
-        return;
-      }
-      console.log(pc.green(`Access request from ${email} denied.`));
     });
 
   return cmd;

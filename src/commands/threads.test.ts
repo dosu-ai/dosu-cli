@@ -119,11 +119,22 @@ describe("threads list", () => {
     expect(mockQuery.mock.calls[0][1].search).toBe("bug fix");
   });
 
-  it("caps --limit at 100", async () => {
+  it("rejects --limit values above the tRPC maximum", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({ list: [], pageInfo: {} });
-    await run("list", "--limit", "200");
-    expect(mockQuery.mock.calls[0][1].limit).toBe(100);
+    await expect(run("list", "--limit", "200")).rejects.toThrow();
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unknown status before calling tRPC", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    await expect(run("list", "--status", "closed")).rejects.toThrow();
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it.each(["0", "-1", "1.5", "nope"])("rejects invalid list --limit %s", async (limit) => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    await expect(run("list", "--limit", limit)).rejects.toThrow();
+    expect(mockQuery).not.toHaveBeenCalled();
   });
 
   it("outputs valid JSON with --json", async () => {

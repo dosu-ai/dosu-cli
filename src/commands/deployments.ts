@@ -4,13 +4,30 @@
 
 import { Command } from "commander";
 import pc from "picocolors";
-import { createTypedClient } from "../client/trpc";
+import { Client } from "../client/client";
+import { createTypedClient, type TypedClient } from "../client/trpc";
 import { saveConfig, updateTarget } from "../config/config";
+import type { CliDeployment } from "../generated/dosu-api-types";
 import { requireLoginConfig } from "./auth";
 import { formatDate, printInfo, printResult, printTable } from "./output";
 
+const MCP_PROVIDER_SLUG = "dosu_mcp";
+
 function requireConfig() {
   return requireLoginConfig();
+}
+
+async function listAccessibleDeployments(
+  client: TypedClient,
+  activeOrgId: string | undefined,
+): Promise<CliDeployment[]> {
+  if (activeOrgId) return client.workspaces.listForOrg.query(activeOrgId);
+
+  const orgs = await client.organization.getOrganizations.query({});
+  const deployments = await Promise.all(
+    orgs.map((org) => client.workspaces.listForOrg.query(org.org_id)),
+  );
+  return deployments.flat();
 }
 
 export function deploymentsCommand(): Command {
@@ -24,9 +41,13 @@ export function deploymentsCommand(): Command {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
 
-      const deployments = cfg.active_account?.target?.org_id
-        ? await client.workspaces.listForOrg.query(cfg.active_account?.target?.org_id)
-        : await client.workspaces.listAll.query({});
+      const allDeployments = await listAccessibleDeployments(
+        client,
+        cfg.active_account?.target?.org_id,
+      );
+      const deployments = allDeployments.filter(
+        (deployment) => deployment.provider_slug === MCP_PROVIDER_SLUG,
+      );
 
       if (opts.json) {
         printResult(deployments, opts);
@@ -119,12 +140,19 @@ export function deploymentsCommand(): Command {
         console.error(pc.red(`Deployment not found: ${id}`));
         process.exit(1);
       }
+      if (deployment.provider_slug !== MCP_PROVIDER_SLUG) {
+        console.error(pc.red(`Not a Dosu MCP deployment: ${id}`));
+        process.exit(1);
+      }
+
+      const apiKey = await new Client(cfg).createAPIKey(deployment.deployment_id, "dosu-cli");
 
       updateTarget(cfg, {
         deployment_id: deployment.deployment_id,
         deployment_name: deployment.name,
         org_id: deployment.org_id,
         space_id: deployment.space_id,
+        api_key: apiKey.api_key,
       });
       saveConfig(cfg);
 

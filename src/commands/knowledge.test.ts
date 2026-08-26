@@ -135,6 +135,12 @@ describe("knowledge search", () => {
     const output = allOutput();
     expect(output).toContain("2 more results not shown");
   });
+
+  it("rejects an invalid limit before calling tRPC", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    await expect(run("search", "--limit", "0", "query")).rejects.toThrow();
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
 });
 
 describe("knowledge list", () => {
