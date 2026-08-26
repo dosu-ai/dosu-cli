@@ -35,6 +35,14 @@ vi.mock("../setup/flow", () => ({
   runSetup: vi.fn(),
 }));
 
+vi.mock("../setup/bulk-flow", () => ({
+  runBulkProjectSetup: vi.fn(),
+}));
+
+vi.mock("../commands/upgrade", () => ({
+  completeUpgrade: vi.fn(),
+}));
+
 vi.mock("../commands/insights", () => ({
   executeInsights: vi.fn(),
 }));
@@ -55,9 +63,11 @@ import { OAuthCallbackError } from "../auth/errors";
 import { startOAuthFlow } from "../auth/flow";
 import { Client } from "../client/client";
 import { executeInsights } from "../commands/insights";
+import { completeUpgrade } from "../commands/upgrade";
 import type { Config } from "../config/config";
 import { emptyConfig, loadConfig, saveConfig, updateTarget } from "../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
+import { runBulkProjectSetup } from "../setup/bulk-flow";
 import { runSetup } from "../setup/flow";
 import { handleLogout, runTUI } from "./tui";
 
@@ -67,6 +77,8 @@ const mockIsCancel = vi.mocked(p.isCancel);
 const mockOutro = vi.mocked(p.outro);
 const mockStartOAuthFlow = vi.mocked(startOAuthFlow);
 const mockRunSetup = vi.mocked(runSetup);
+const mockRunBulkProjectSetup = vi.mocked(runBulkProjectSetup);
+const mockCompleteUpgrade = vi.mocked(completeUpgrade);
 const mockExecuteInsights = vi.mocked(executeInsights);
 
 // ---------------------------------------------------------------------------
@@ -185,6 +197,27 @@ describe("handleLogout (direct)", () => {
 // ---------------------------------------------------------------------------
 
 describe("runTUI", () => {
+  it("keeps the three core project and upgrade entries in the main menu", async () => {
+    mockSelect.mockResolvedValueOnce("exit");
+    mockIsCancel.mockReturnValue(false);
+
+    await runTUI();
+
+    const opts = mockSelect.mock.calls[0]?.[0]?.options as Array<{
+      label: string;
+      value: string;
+    }>;
+    expect(opts.slice(0, 3)).toEqual([
+      { label: "Configure current project", value: "setup", hint: "Configure this Git project" },
+      {
+        label: "Configure projects in bulk",
+        value: "bulk-setup",
+        hint: "Scan selected directories and configure several Git projects",
+      },
+      { label: "Upgrade Dosu", value: "upgrade", hint: "Update the CLI and installed skills" },
+    ]);
+  });
+
   it("shows the main menu before authentication", async () => {
     mockSelect.mockResolvedValueOnce("exit");
     mockIsCancel.mockReturnValue(false);
@@ -484,5 +517,32 @@ describe("runTUI", () => {
 
     const nextOptions = mockSelect.mock.calls[1]?.[0]?.options as Array<{ value: string }>;
     expect(nextOptions.map((option) => option.value)).not.toContain("insights");
+  });
+
+  it("runs bulk project setup and reloads saved scan directories", async () => {
+    const cfg = makeCfg({ access_token: "tok" });
+    writeRealConfig(cfg);
+    mockIsCancel.mockReturnValue(false);
+    mockRunBulkProjectSetup.mockImplementation(async (current) => {
+      current.scan_directories = ["/work/repos"];
+      writeRealConfig(current);
+      return { status: "completed", repositories: [] };
+    });
+    mockSelect.mockResolvedValueOnce("bulk-setup").mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    expect(mockRunBulkProjectSetup).toHaveBeenCalled();
+    expect(readRealConfig().scan_directories).toEqual(["/work/repos"]);
+  });
+
+  it("runs the existing CLI upgrade path from the TUI", async () => {
+    mockIsCancel.mockReturnValue(false);
+    mockCompleteUpgrade.mockResolvedValue(0);
+    mockSelect.mockResolvedValueOnce("upgrade").mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    expect(mockCompleteUpgrade).toHaveBeenCalledOnce();
   });
 });

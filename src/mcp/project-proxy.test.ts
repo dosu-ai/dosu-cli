@@ -7,6 +7,7 @@ import {
   buildProjectProxyCommand,
   isDosuOwnedMcpServer,
   type ProjectProxyDependencies,
+  projectMcpTarget,
   resolveProjectProxyRuntime,
   runProjectProxy,
 } from "./project-proxy";
@@ -122,6 +123,21 @@ describe("project MCP proxy", () => {
       null,
     ])("rejects a foreign or ambiguous shape", (server) => {
       expect(isDosuOwnedMcpServer(server)).toBe(false);
+    });
+
+    it("extracts the project Library target from every released proxy shape", () => {
+      expect(
+        projectMcpTarget({
+          command: "dosu",
+          args: ["mcp", "proxy", "--deployment", "dep_123"],
+        }),
+      ).toEqual({ kind: "deployment", deploymentID: "dep_123" });
+      expect(
+        projectMcpTarget({
+          command: ["npx", "-y", "@dosu/cli@0.43.0", "mcp", "proxy", "--oss"],
+        }),
+      ).toEqual({ kind: "oss" });
+      expect(projectMcpTarget({ command: "other", args: [] })).toBeNull();
     });
   });
 

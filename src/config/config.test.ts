@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   bindAccountIdentity,
   type Config,
+  clearConfigInPlace,
   emptyConfig,
   getConfigPath,
   isAuthenticated,
@@ -183,6 +184,43 @@ describe("config", () => {
     const loaded = loadConfig();
     expect(targetForDeployment(loaded, "dep-a")?.api_key).toBe("key-a");
     expect(targetForDeployment(loaded, "dep-b")?.api_key).toBe("key-b");
+  });
+
+  it("round-trips only normalized scan directories outside account credentials", () => {
+    const cfg = makeTestConfig({
+      access_token: "tok",
+      refresh_token: "ref",
+      expires_at: 1,
+      user_id: "account-a",
+    });
+    cfg.scan_directories = ["/work/repos", "/work/repos", "", "/work/other"];
+
+    saveConfig(cfg);
+
+    expect(loadConfig().scan_directories).toEqual(["/work/repos", "/work/other"]);
+  });
+
+  it("keeps scan directories when login credentials are cleared or replaced", () => {
+    const cfg = makeTestConfig({
+      access_token: "old",
+      refresh_token: "old-ref",
+      expires_at: 1,
+      user_id: "account-a",
+    });
+    cfg.scan_directories = ["/work/repos"];
+
+    replaceLoginSession(cfg, {
+      access_token: "new",
+      refresh_token: "new-refresh",
+      expires_at: 2,
+      user_id: "account-b",
+    });
+
+    expect(cfg.scan_directories).toEqual(["/work/repos"]);
+
+    clearConfigInPlace(cfg);
+    expect(cfg.active_account).toBeUndefined();
+    expect(cfg.scan_directories).toEqual(["/work/repos"]);
   });
 
   it("switches deployments without carrying the previous deployment key across", () => {
