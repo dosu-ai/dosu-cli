@@ -1,3 +1,10 @@
+## [0.49.4](https://github.com/dosu-ai/dosu-cli/compare/v0.49.3...v0.49.4) (2026-08-26)
+
+
+### Bug Fixes
+
+* align CLI commands with App contracts ([#190](https://github.com/dosu-ai/dosu-cli/issues/190)) ([0330644](https://github.com/dosu-ai/dosu-cli/commit/0330644e541f36a2667018dfa0eca1f9cb195130))
+
 ## [0.49.3](https://github.com/dosu-ai/dosu-cli/compare/v0.49.2...v0.49.3) (2026-08-25)
 
 
