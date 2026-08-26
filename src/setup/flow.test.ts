@@ -175,6 +175,12 @@ const { mockStepConfigureAgentRules } = vi.hoisted(() => ({
 vi.mock("./rules-step", () => ({
   stepConfigureAgentRules: (...args: unknown[]) => mockStepConfigureAgentRules(...args),
 }));
+const { mockReconcileLegacyGlobalSetup } = vi.hoisted(() => ({
+  mockReconcileLegacyGlobalSetup: vi.fn(),
+}));
+vi.mock("./legacy-global-cleanup", () => ({
+  reconcileLegacyGlobalSetup: (...args: unknown[]) => mockReconcileLegacyGlobalSetup(...args),
+}));
 const { mockRequireProjectRoot } = vi.hoisted(() => ({
   mockRequireProjectRoot: vi.fn(),
 }));
@@ -230,6 +236,11 @@ function installSetupStepDefaults() {
   mockStepRemoveAgentsMd.mockReturnValue(true);
   mockStepUpdateAgentsMd.mockReturnValue(true);
   mockStepConfigureAgentRules.mockResolvedValue([]);
+  mockReconcileLegacyGlobalSetup.mockReturnValue({
+    outcomes: [],
+    removed: [],
+    preserved: [],
+  });
   mockOfferLogsHandoff.mockResolvedValue({ plan: null });
   mockRequireProjectRoot.mockImplementation(() => tempDir);
 }
@@ -1667,6 +1678,75 @@ describe("runSetup integration", () => {
     expect(completed?.properties.completed_agents_md).toBe(true);
   });
 
+  it("reconciles old global config only after the complete project bundle verifies", async () => {
+    const cfg = makeCfg();
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    const cursor = CursorProvider();
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [cursor]);
+    mockToolSelection(["cursor"]);
+    mockStepConfigureAgentRules.mockImplementationOnce(async (selection: ToolSelection) => [
+      {
+        provider: selection.toInstall[0],
+        action: "created",
+        path: join(tempDir, ".cursor", "rules", "dosu.mdc"),
+      },
+    ]);
+
+    await runSetup();
+
+    expect(mockReconcileLegacyGlobalSetup).toHaveBeenCalledTimes(1);
+    expect(mockReconcileLegacyGlobalSetup).toHaveBeenCalledWith([cursor], tempDir, [cursor]);
+  });
+
+  it("keeps global config when a required project rule cannot be verified", async () => {
+    const cfg = makeCfg();
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    const cursor = CursorProvider();
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [cursor]);
+    mockToolSelection(["cursor"]);
+    mockStepConfigureAgentRules.mockResolvedValueOnce([
+      {
+        provider: cursor,
+        action: "not_found",
+        path: join(tempDir, ".cursor", "rules", "dosu.mdc"),
+        error: new Error("disk full"),
+      },
+    ]);
+
+    await runSetup();
+
+    expect(mockReconcileLegacyGlobalSetup).not.toHaveBeenCalled();
+  });
+
+  it("keeps global config when AGENTS.md cannot be updated", async () => {
+    const cfg = makeCfg();
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    const cursor = CursorProvider();
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [cursor]);
+    mockToolSelection(["cursor"]);
+    mockStepConfigureAgentRules.mockResolvedValueOnce([
+      {
+        provider: cursor,
+        action: "created",
+        path: join(tempDir, ".cursor", "rules", "dosu.mdc"),
+      },
+    ]);
+    mockStepUpdateAgentsMd.mockReturnValueOnce(false);
+
+    await runSetup();
+
+    expect(mockReconcileLegacyGlobalSetup).not.toHaveBeenCalled();
+  });
+
   it("does not update AGENTS.md when no agent was configured", async () => {
     const cfg = makeCfg();
     saveConfig(cfg);
@@ -1716,6 +1796,7 @@ describe("runSetup integration", () => {
     await runSetup();
 
     expect(mockStepRemoveAgentsMd).not.toHaveBeenCalled();
+    expect(mockReconcileLegacyGlobalSetup).not.toHaveBeenCalled();
   });
 
   it("stops before authentication outside a Git project", async () => {
@@ -1921,6 +2002,7 @@ describe("runSetup checkpoint behavior", () => {
 
     expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Failed to configure Cursor"));
     expect(mockOfferLogsHandoff).not.toHaveBeenCalled();
+    expect(mockReconcileLegacyGlobalSetup).not.toHaveBeenCalled();
   });
 
   it("offers the logs handoff with the configured agents and launches after the outro", async () => {
@@ -2550,6 +2632,7 @@ describe("runSetup additional branches", () => {
     expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Failed to install skill"));
     const skillEvents = trackedCliOnboardingEvents().map((e) => e.event);
     expect(skillEvents).not.toContain("cli_onboarding_skill_installed");
+    expect(mockReconcileLegacyGlobalSetup).not.toHaveBeenCalled();
   });
 
   it("neither installs nor removes a detected tool that is unconfigured and left unticked", async () => {

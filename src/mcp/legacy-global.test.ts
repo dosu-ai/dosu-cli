@@ -1,22 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { isReleasedLegacyGlobalMcpServer } from "./legacy-global";
 
 const headers = { "X-Dosu-API-Key": "old-key" };
-const deploymentURL = "https://configured.example/v1/mcp/deployments/dep-123";
+const deploymentURL = "https://api.dosu.dev/v1/mcp/deployments/dep-123";
 
 describe("isReleasedLegacyGlobalMcpServer", () => {
-  let originalBackend: string | undefined;
-
-  beforeEach(() => {
-    originalBackend = process.env.DOSU_BACKEND_URL_OVERRIDE;
-    process.env.DOSU_BACKEND_URL_OVERRIDE = "https://configured.example";
-  });
-
-  afterEach(() => {
-    if (originalBackend === undefined) delete process.env.DOSU_BACKEND_URL_OVERRIDE;
-    else process.env.DOSU_BACKEND_URL_OVERRIDE = originalBackend;
-  });
-
   it.each([
     ["claude", { type: "http", url: deploymentURL, headers }],
     ["cursor", { url: deploymentURL, headers }],
@@ -30,18 +18,11 @@ describe("isReleasedLegacyGlobalMcpServer", () => {
     expect(isReleasedLegacyGlobalMcpServer(providerID, entry)).toBe(true);
   });
 
-  it("accepts the released OSS default shape and official production origin", () => {
+  it("accepts the released OSS default shape", () => {
     expect(
       isReleasedLegacyGlobalMcpServer("cursor", {
         type: "http",
-        url: "https://configured.example/v1/mcp",
-        headers,
-      }),
-    ).toBe(true);
-    expect(
-      isReleasedLegacyGlobalMcpServer("claude", {
-        type: "http",
-        url: "https://api.dosu.dev/v1/mcp/deployments/dep-123",
+        url: "https://api.dosu.dev/v1/mcp",
         headers,
       }),
     ).toBe(true);
@@ -49,6 +30,10 @@ describe("isReleasedLegacyGlobalMcpServer", () => {
 
   it.each([
     ["foreign origin", { type: "http", url: "https://foreign.example/v1/mcp", headers }],
+    [
+      "runtime override origin",
+      { type: "http", url: "https://api-staging.dosu.dev/v1/mcp", headers },
+    ],
     ["file URL", { type: "http", url: "file:///v1/mcp", headers }],
     [
       "wrong command",
