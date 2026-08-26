@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { SetupProvider } from "../mcp/providers";
 import { CodexProvider } from "../mcp/providers/codex";
 import { CursorProvider } from "../mcp/providers/cursor";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
@@ -116,5 +117,74 @@ describe("project MCP inspection", () => {
     ]);
     expect(repositoryNeedsTargetReplacement(state, "dep-a")).toBe(true);
     expect(repositoryNeedsTargetReplacement(state, "dep-c")).toBe(true);
+  });
+
+  it("treats missing paths and missing Dosu entries as absent", () => {
+    const noPath: SetupProvider = {
+      ...CursorProvider(),
+      id: () => "no-path",
+      projectConfigPath: () => null,
+    };
+    expect(inspectProjectProvider(noPath, tempDir)).toEqual({
+      providerID: "no-path",
+      path: null,
+      status: "absent",
+    });
+
+    const cursor = CursorProvider();
+    writeJSON(cursor.projectConfigPath(tempDir) ?? "", {
+      mcpServers: { other: { command: "other", args: [] } },
+    });
+    expect(inspectProjectProvider(cursor, tempDir)).toMatchObject({ status: "absent" });
+  });
+
+  it("blocks unsupported formats and normalizes non-Error inspection failures", () => {
+    const unsupportedPath = join(tempDir, ".unknown", "mcp.json");
+    const unsupported: SetupProvider = {
+      ...CursorProvider(),
+      id: () => "unknown-agent",
+      projectConfigPath: () => unsupportedPath,
+    };
+    writeJSON(unsupportedPath, { mcpServers: { dosu: {} } });
+
+    const throwing: SetupProvider = {
+      ...CursorProvider(),
+      id: () => "throwing-agent",
+      projectConfigPath: () => {
+        throw "path inspection failed";
+      },
+    };
+
+    const inspected = inspectRepositoryBindings(tempDir, [unsupported, throwing]);
+
+    expect(inspected.blockers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          providerID: "unknown-agent",
+          status: "malformed",
+          error: "unsupported project config format",
+        }),
+        expect.objectContaining({
+          providerID: "throwing-agent",
+          path: null,
+          status: "malformed",
+          error: "path inspection failed",
+        }),
+      ]),
+    );
+  });
+
+  it("recognizes an OSS project binding as requiring replacement for a cloud Library", () => {
+    const cursor = CursorProvider();
+    writeJSON(cursor.projectConfigPath(tempDir) ?? "", {
+      mcpServers: {
+        dosu: { command: "dosu", args: ["mcp", "proxy", "--oss"] },
+      },
+    });
+
+    const inspected = inspectRepositoryBindings(tempDir, [cursor]);
+
+    expect(inspected.targets).toEqual([{ kind: "oss" }]);
+    expect(repositoryNeedsTargetReplacement(inspected, "dep-cloud")).toBe(true);
   });
 });

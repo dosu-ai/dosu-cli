@@ -240,6 +240,262 @@ describe("bulk project setup flow", () => {
     expect(dependencies.configureRepository).not.toHaveBeenCalled();
     expect(dependencies.reconcileGlobal).not.toHaveBeenCalled();
   });
+
+  it("blocks before prompting when no complete Library credential exists", async () => {
+    const cfg = config();
+    if (!cfg.active_account) throw new Error("expected authenticated config");
+    cfg.active_account.targets = {
+      "dep-only": { deployment_id: "dep-only" },
+      "key-only": { api_key: "key-only" },
+    };
+    cfg.active_account.target = undefined;
+
+    const result = await runBulkProjectSetup(cfg, dependencies);
+
+    expect(result).toEqual({ status: "blocked", repositories: [] });
+    expect(p.select).not.toHaveBeenCalled();
+  });
+
+  it("uses deployment IDs when Library names are unavailable", async () => {
+    const cfg = config();
+    if (!cfg.active_account?.target || !cfg.active_account.targets) {
+      throw new Error("expected deployment targets");
+    }
+    cfg.active_account.target.deployment_name = undefined;
+    for (const target of Object.values(cfg.active_account.targets)) {
+      target.deployment_name = undefined;
+    }
+    vi.mocked(p.text).mockResolvedValue(" /scan,\n " as never);
+
+    const result = await runBulkProjectSetup(cfg, dependencies);
+
+    expect(result.status).toBe("completed");
+    expect(dependencies.validateDirectories).toHaveBeenCalledWith(["/scan"]);
+    expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("Library: dep-b"));
+  });
+
+  it("supports cancellation at every selection boundary", async () => {
+    const cancel = Symbol("cancel");
+    vi.mocked(p.isCancel).mockImplementation((value) => value === cancel);
+    const resetPromptResponses = () => {
+      vi.mocked(p.select)
+        .mockReset()
+        .mockResolvedValue("dep-b" as never);
+      vi.mocked(p.text)
+        .mockReset()
+        .mockResolvedValue("/scan" as never);
+      vi.mocked(p.multiselect)
+        .mockReset()
+        .mockResolvedValueOnce(repositories.map((repo) => repo.path) as never)
+        .mockResolvedValueOnce(["cursor"] as never);
+      vi.mocked(p.confirm)
+        .mockReset()
+        .mockResolvedValue(true as never);
+    };
+
+    resetPromptResponses();
+    vi.mocked(p.select).mockResolvedValueOnce(cancel as never);
+    await expect(runBulkProjectSetup(config(), dependencies)).resolves.toEqual({
+      status: "cancelled",
+      repositories: [],
+    });
+
+    resetPromptResponses();
+    vi.mocked(p.text).mockResolvedValueOnce(cancel as never);
+    await expect(runBulkProjectSetup(config(), dependencies)).resolves.toEqual({
+      status: "cancelled",
+      repositories: [],
+    });
+
+    resetPromptResponses();
+    vi.mocked(p.multiselect).mockReset();
+    vi.mocked(p.multiselect).mockResolvedValueOnce(cancel as never);
+    await expect(runBulkProjectSetup(config(), dependencies)).resolves.toEqual({
+      status: "cancelled",
+      repositories: [],
+    });
+
+    resetPromptResponses();
+    vi.mocked(p.multiselect)
+      .mockReset()
+      .mockResolvedValueOnce(repositories.map((repo) => repo.path) as never)
+      .mockResolvedValueOnce(cancel as never);
+    await expect(runBulkProjectSetup(config(), dependencies)).resolves.toEqual({
+      status: "cancelled",
+      repositories: [],
+    });
+
+    resetPromptResponses();
+    vi.mocked(p.confirm).mockResolvedValueOnce(cancel as never);
+    await expect(runBulkProjectSetup(config(), dependencies)).resolves.toEqual({
+      status: "cancelled",
+      repositories: [],
+    });
+
+    expect(dependencies.configureRepository).not.toHaveBeenCalled();
+  });
+
+  it("blocks when the selected Library disappears or scanning finds nothing", async () => {
+    vi.mocked(p.select).mockResolvedValueOnce("missing" as never);
+    await expect(runBulkProjectSetup(config(), dependencies)).resolves.toEqual({
+      status: "blocked",
+      repositories: [],
+    });
+
+    vi.mocked(p.select).mockResolvedValueOnce("dep-b" as never);
+    vi.mocked(p.text).mockResolvedValueOnce("/scan" as never);
+    vi.mocked(dependencies.scanRepositories).mockReturnValueOnce([]);
+    await expect(runBulkProjectSetup(config(), dependencies)).resolves.toEqual({
+      status: "blocked",
+      repositories: [],
+    });
+  });
+
+  it.each([
+    new Error("unsafe root"),
+    "unsafe root",
+  ])("blocks invalid scan directories without writing (%s)", async (failure) => {
+    vi.mocked(dependencies.validateDirectories).mockImplementationOnce(() => {
+      throw failure;
+    });
+
+    const result = await runBulkProjectSetup(config(), dependencies);
+
+    expect(result).toEqual({ status: "blocked", repositories: [] });
+    expect(dependencies.saveConfig).not.toHaveBeenCalled();
+  });
+
+  it("skips missing inspection state and unselected repositories", async () => {
+    vi.mocked(dependencies.inspectRepository).mockReturnValue(undefined as never);
+
+    const missingState = await runBulkProjectSetup(config(), dependencies);
+
+    expect(missingState).toEqual({ status: "cancelled", repositories: [] });
+    expect(dependencies.configureRepository).not.toHaveBeenCalled();
+
+    vi.mocked(dependencies.inspectRepository).mockImplementation((path: string) => state(path));
+    vi.mocked(p.multiselect)
+      .mockReset()
+      .mockResolvedValueOnce([repositories[0].path] as never)
+      .mockResolvedValueOnce(["cursor"] as never);
+
+    const selectedOne = await runBulkProjectSetup(config(), dependencies);
+
+    expect(selectedOne.status).toBe("completed");
+    expect(dependencies.configureRepository).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a replacement prompt and cancels when every replacement is declined", async () => {
+    vi.mocked(dependencies.inspectRepository).mockImplementation((path: string) =>
+      state(path, { targets: [{ kind: "deployment", deploymentID: "dep-old" }] }),
+    );
+    const cancel = Symbol("cancel");
+    vi.mocked(p.isCancel).mockImplementation((value) => value === cancel);
+    vi.mocked(p.confirm).mockResolvedValueOnce(cancel as never);
+
+    await expect(runBulkProjectSetup(config(), dependencies)).resolves.toEqual({
+      status: "cancelled",
+      repositories: [],
+    });
+
+    vi.mocked(p.multiselect)
+      .mockReset()
+      .mockResolvedValueOnce(repositories.map((repo) => repo.path) as never)
+      .mockResolvedValueOnce(["cursor"] as never);
+    vi.mocked(p.confirm).mockResolvedValue(false as never);
+    await expect(runBulkProjectSetup(config(), dependencies)).resolves.toEqual({
+      status: "cancelled",
+      repositories: [],
+    });
+    expect(dependencies.configureRepository).not.toHaveBeenCalled();
+  });
+
+  it("blocks when no installed project agent is available", async () => {
+    dependencies.providers = vi.fn(() => []);
+
+    const result = await runBulkProjectSetup(config(), dependencies);
+
+    expect(result).toEqual({ status: "blocked", repositories: [] });
+    expect(dependencies.installSkills).not.toHaveBeenCalled();
+  });
+
+  it("cancels when the selected agent set resolves to nothing", async () => {
+    vi.mocked(p.multiselect)
+      .mockReset()
+      .mockResolvedValueOnce(repositories.map((repo) => repo.path) as never)
+      .mockResolvedValueOnce(["missing-agent"] as never);
+
+    const result = await runBulkProjectSetup(config(), dependencies);
+
+    expect(result).toEqual({ status: "cancelled", repositories: [] });
+    expect(dependencies.installSkills).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when global skill installation fails", async () => {
+    vi.mocked(dependencies.installSkills).mockResolvedValueOnce(false);
+
+    const result = await runBulkProjectSetup(config(), dependencies);
+
+    expect(result).toEqual({ status: "failed", repositories: [] });
+    expect(dependencies.fetchInstruction).not.toHaveBeenCalled();
+    expect(dependencies.configureRepository).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    new Error("rule unavailable"),
+    "rule unavailable",
+  ])("fails closed when project preparation fails (%s)", async (failure) => {
+    vi.mocked(dependencies.fetchInstruction).mockRejectedValueOnce(failure);
+
+    const result = await runBulkProjectSetup(config(), dependencies);
+
+    expect(result).toEqual({ status: "failed", repositories: [] });
+    expect(dependencies.configureRepository).not.toHaveBeenCalled();
+  });
+
+  it("reports returned failures with and without provider details", async () => {
+    vi.mocked(dependencies.configureRepository)
+      .mockResolvedValueOnce({ projectRoot: "/scan/one", success: false, error: "explicit" })
+      .mockResolvedValueOnce({ projectRoot: "/scan/two", success: false });
+
+    const result = await runBulkProjectSetup(config(), dependencies);
+
+    expect(result.repositories).toHaveLength(2);
+    expect(p.log.error).toHaveBeenCalledWith("/scan/one: explicit");
+    expect(p.log.error).toHaveBeenCalledWith("/scan/two: project setup failed");
+    expect(dependencies.reconcileGlobal).not.toHaveBeenCalled();
+  });
+
+  it("normalizes a non-Error repository failure and preserves successful projects", async () => {
+    vi.mocked(dependencies.configureRepository)
+      .mockImplementationOnce(async () => {
+        throw "unexpected failure";
+      })
+      .mockResolvedValueOnce({ projectRoot: "/scan/two", success: true });
+
+    const result = await runBulkProjectSetup(config(), dependencies);
+
+    expect(result.repositories[0]).toEqual({
+      projectRoot: "/scan/one",
+      success: false,
+      error: "unexpected failure",
+    });
+    expect(dependencies.reconcileGlobal).not.toHaveBeenCalled();
+  });
+
+  it("leaves legacy global config unchanged when reconciliation itself fails", async () => {
+    vi.mocked(dependencies.reconcileGlobal).mockImplementationOnce(() => {
+      throw new Error("read-only filesystem");
+    });
+
+    const result = await runBulkProjectSetup(config(), dependencies);
+
+    expect(result.status).toBe("completed");
+    expect(result.repositories.every((repository) => repository.success)).toBe(true);
+    expect(p.log.warn).toHaveBeenCalledWith(
+      "Project setup succeeded, but old global configuration was left unchanged.",
+    );
+  });
 });
 
 describe("bulk repository execution", () => {
@@ -325,5 +581,145 @@ describe("bulk repository execution", () => {
     expect(readFileSync(rulePath, "utf8")).toBe("user-owned rule\n");
     expect(existsSync(join(projectRoot, ".cursor", "mcp.json"))).toBe(false);
     expect(existsSync(join(projectRoot, "AGENTS.md"))).toBe(false);
+  });
+
+  it("rejects a repository whose inspected state was already blocked", async () => {
+    const mcporter = provider("mcporter");
+
+    const result = await configureBulkRepository({
+      config: config(),
+      repository: { path: projectRoot, kind: "repository" },
+      selectedProviders: [mcporter],
+      knownProviders: [mcporter],
+      initialState: state(projectRoot, {
+        blockers: [
+          {
+            providerID: "mcporter",
+            path: join(projectRoot, "config", "mcporter.json"),
+            status: "foreign",
+          },
+        ],
+      }),
+      replaceExisting: false,
+      instruction: "canonical rule\n",
+    });
+
+    expect(result).toEqual({
+      projectRoot,
+      success: false,
+      error: "project configuration changed or cannot be safely replaced",
+    });
+    expect(mcporter.install).not.toHaveBeenCalled();
+  });
+
+  it("returns the MCP installation error without attempting later project writes", async () => {
+    const mcporter = provider("mcporter");
+    vi.mocked(mcporter.install).mockImplementation(() => {
+      throw new Error("MCP write failed");
+    });
+
+    const result = await configureBulkRepository({
+      config: config(),
+      repository: { path: projectRoot, kind: "repository" },
+      selectedProviders: [mcporter],
+      knownProviders: [mcporter],
+      initialState: state(projectRoot),
+      replaceExisting: false,
+      instruction: "canonical rule\n",
+    });
+
+    expect(result).toEqual({ projectRoot, success: false, error: "MCP write failed" });
+    expect(existsSync(join(projectRoot, "AGENTS.md"))).toBe(false);
+  });
+
+  it("fails when a required rule cannot be verified after MCP setup", async () => {
+    const cursor = provider("cursor");
+    vi.mocked(cursor.install).mockImplementation(() => {
+      mkdirSync(join(projectRoot, ".cursor", "rules"), { recursive: true });
+      writeFileSync(join(projectRoot, ".cursor", "rules", "dosu.mdc"), "foreign rule\n");
+    });
+
+    const result = await configureBulkRepository({
+      config: config(),
+      repository: { path: projectRoot, kind: "repository" },
+      selectedProviders: [cursor],
+      knownProviders: [cursor],
+      initialState: state(projectRoot),
+      replaceExisting: false,
+      instruction: "canonical rule\n",
+    });
+
+    expect(result).toEqual({
+      projectRoot,
+      success: false,
+      error: "a required project rule could not be verified",
+    });
+    expect(existsSync(join(projectRoot, "AGENTS.md"))).toBe(false);
+  });
+
+  it("fails when AGENTS.md becomes malformed after the write preflight", async () => {
+    const mcporter = provider("mcporter");
+    vi.mocked(mcporter.install).mockImplementation(() => {
+      writeFileSync(join(projectRoot, "AGENTS.md"), "<!-- dosu:mcp:start v3 -->\n");
+    });
+
+    const result = await configureBulkRepository({
+      config: config(),
+      repository: { path: projectRoot, kind: "repository" },
+      selectedProviders: [mcporter],
+      knownProviders: [mcporter],
+      initialState: state(projectRoot),
+      replaceExisting: false,
+      instruction: "canonical rule\n",
+    });
+
+    expect(result).toEqual({
+      projectRoot,
+      success: false,
+      error: "AGENTS.md could not be verified",
+    });
+  });
+
+  it("fails final verification when the provider did not create a project binding", async () => {
+    const mcporter = provider("mcporter");
+
+    const result = await configureBulkRepository({
+      config: config(),
+      repository: { path: projectRoot, kind: "repository" },
+      selectedProviders: [mcporter],
+      knownProviders: [mcporter],
+      initialState: state(projectRoot),
+      replaceExisting: false,
+      instruction: "canonical rule\n",
+    });
+
+    expect(result).toEqual({
+      projectRoot,
+      success: false,
+      error: "project MCP binding could not be verified",
+    });
+  });
+
+  it("normalizes a non-Error thrown during final provider verification", async () => {
+    const cursor = CursorProvider();
+    cursor.isProjectConfigured = () => {
+      throw "provider verification failed";
+    };
+
+    const result = await configureBulkRepository({
+      config: config(),
+      repository: { path: projectRoot, kind: "repository" },
+      selectedProviders: [cursor],
+      knownProviders: [cursor],
+      initialState: inspectRepositoryBindings(projectRoot, [cursor]),
+      replaceExisting: false,
+      instruction: "canonical rule\n",
+    });
+
+    expect(result).toEqual({
+      projectRoot,
+      success: false,
+      error: "provider verification failed",
+    });
   });
 });
