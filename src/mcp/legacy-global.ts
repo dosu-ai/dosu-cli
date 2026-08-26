@@ -1,5 +1,3 @@
-import { getBackendURL } from "../config/constants";
-
 type JsonObject = Record<string, unknown>;
 type EndpointKind = "deployment" | "oss";
 
@@ -33,23 +31,6 @@ function hasExactDosuHeader(value: unknown): boolean {
   return typeof value["X-Dosu-API-Key"] === "string" && value["X-Dosu-API-Key"].length > 0;
 }
 
-function configuredOrigins(): Set<string> {
-  const origins = new Set([OFFICIAL_BACKEND_ORIGIN]);
-  try {
-    const configured = new URL(getBackendURL());
-    if (
-      (configured.protocol === "http:" || configured.protocol === "https:") &&
-      !configured.username &&
-      !configured.password
-    ) {
-      origins.add(configured.origin);
-    }
-  } catch {
-    // An empty or malformed configured backend adds no destructive-cleanup authority.
-  }
-  return origins;
-}
-
 function endpointKind(value: unknown): EndpointKind | null {
   if (typeof value !== "string") return null;
   try {
@@ -60,7 +41,7 @@ function endpointKind(value: unknown): EndpointKind | null {
       endpoint.password ||
       endpoint.search ||
       endpoint.hash ||
-      !configuredOrigins().has(endpoint.origin)
+      endpoint.origin !== OFFICIAL_BACKEND_ORIGIN
     ) {
       return null;
     }

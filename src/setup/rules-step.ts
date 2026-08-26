@@ -17,7 +17,6 @@ import {
   removeRuleForAgent,
   rulePathForAgent,
 } from "../rules/installer";
-import { cleanupLegacyGlobalRule } from "./legacy-global-cleanup";
 import { formatSetupSummary, IconRemove } from "./styles";
 
 interface SetupSelection {
@@ -100,10 +99,7 @@ export async function stepConfigureAgentRules(
     for (const provider of toInstall) {
       try {
         const installed = installRuleForAgent(provider.id(), content, projectRoot);
-        if (installed) {
-          results.push({ provider, action: installed.action, path: installed.path });
-          cleanupLegacyGlobalRule(provider.id());
-        }
+        if (installed) results.push({ provider, action: installed.action, path: installed.path });
       } catch (err: unknown) {
         const error = err instanceof Error ? err : new Error(String(err));
         logger.error(

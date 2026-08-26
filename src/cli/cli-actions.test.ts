@@ -73,13 +73,6 @@ vi.mock("../setup/project-root", () => ({
   requireProjectRoot: mockRequireProjectRoot,
 }));
 
-const { mockCleanupLegacyGlobalMcp } = vi.hoisted(() => ({
-  mockCleanupLegacyGlobalMcp: vi.fn(),
-}));
-vi.mock("../setup/legacy-global-cleanup", () => ({
-  cleanupLegacyGlobalMcp: mockCleanupLegacyGlobalMcp,
-}));
-
 const { mockRunProjectProxy } = vi.hoisted(() => ({
   mockRunProjectProxy: vi.fn(),
 }));
@@ -737,7 +730,6 @@ describe("CLI actions", () => {
       expect(config.mcpServers.dosu.command).toBe("dosu");
       expect(config.mcpServers.dosu.args).toContain("dep_123");
       expect(JSON.stringify(config)).not.toContain("key_abc");
-      expect(mockCleanupLegacyGlobalMcp).toHaveBeenCalledOnce();
     });
 
     it("refuses a project MCP write from an ephemeral npx CLI", async () => {
@@ -770,7 +762,6 @@ describe("CLI actions", () => {
       await expect(run("mcp", "add", "cursor", "--global")).rejects.toThrow(
         "Cursor is project-scoped",
       );
-      expect(mockCleanupLegacyGlobalMcp).not.toHaveBeenCalled();
     });
 
     it("throws error for unknown tool", async () => {

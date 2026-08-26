@@ -7,18 +7,12 @@ const {
   mockRemoveRuleForAgent,
   mockIsRuleAgent,
   mockRulePathForAgent,
-  mockCleanupLegacyGlobalRule,
 } = vi.hoisted(() => ({
   mockFetchDosuRule: vi.fn(),
   mockInstallRuleForAgent: vi.fn(),
   mockRemoveRuleForAgent: vi.fn(),
   mockIsRuleAgent: vi.fn(),
   mockRulePathForAgent: vi.fn(),
-  mockCleanupLegacyGlobalRule: vi.fn(),
-}));
-
-vi.mock("./legacy-global-cleanup", () => ({
-  cleanupLegacyGlobalRule: mockCleanupLegacyGlobalRule,
 }));
 
 vi.mock("../rules/installer", () => ({
@@ -109,7 +103,6 @@ describe("stepConfigureAgentRules", () => {
     );
 
     expect(mockInstallRuleForAgent).toHaveBeenCalledWith("claude", "canonical rule\n", "/repo");
-    expect(mockCleanupLegacyGlobalRule).toHaveBeenCalledWith("claude");
   });
 
   it("installs one fetched rule for every successfully configured supported agent", async () => {
@@ -148,7 +141,6 @@ describe("stepConfigureAgentRules", () => {
     expect(results).toEqual([]);
     expect(mockFetchDosuRule).not.toHaveBeenCalled();
     expect(mockInstallRuleForAgent).not.toHaveBeenCalled();
-    expect(mockCleanupLegacyGlobalRule).not.toHaveBeenCalled();
   });
 
   it("removes the rule after a successful MCP removal", async () => {
