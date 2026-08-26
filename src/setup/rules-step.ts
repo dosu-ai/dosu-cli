@@ -77,6 +77,7 @@ export async function stepConfigureAgentRules(
   selection: SetupSelection,
   mcpResults: McpResult[],
   projectRoot?: string,
+  canonicalRule?: string,
 ): Promise<AgentRuleSetupResult[]> {
   const successfulInstalls = successfulAgentIDs(mcpResults, "install");
   const successfulRemovals = successfulAgentIDs(mcpResults, "remove");
@@ -95,7 +96,7 @@ export async function stepConfigureAgentRules(
   const results: AgentRuleSetupResult[] = [];
 
   if (toInstall.length > 0) {
-    const content = await fetchDosuRule();
+    const content = canonicalRule ?? (await fetchDosuRule());
     for (const provider of toInstall) {
       try {
         const installed = installRuleForAgent(provider.id(), content, projectRoot);

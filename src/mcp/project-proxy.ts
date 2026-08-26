@@ -19,6 +19,8 @@ export interface ProjectProxyRuntime {
   apiKey: string;
 }
 
+export type ProjectMcpTarget = { kind: "deployment"; deploymentID: string } | { kind: "oss" };
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -37,40 +39,56 @@ function projectCommand(value: unknown): { command: string; args: string[] } | n
   return null;
 }
 
-/** True only for an MCP entry shape written by a released Dosu CLI flow. */
-export function isDosuOwnedMcpServer(value: unknown): boolean {
-  if (!isRecord(value)) return false;
+/** Extract the target only from an MCP entry shape written by a released Dosu CLI flow. */
+export function projectMcpTarget(value: unknown): ProjectMcpTarget | null {
+  if (!isRecord(value)) return null;
 
   const command = projectCommand(value);
   if (command?.command === "dosu") {
     const [mcp, proxy, targetFlag, targetValue] = command.args;
-    const currentProxy =
-      mcp === "mcp" &&
-      proxy === "proxy" &&
-      ((targetFlag === "--oss" && targetValue === undefined && command.args.length === 3) ||
-        (targetFlag === "--deployment" &&
-          targetValue !== undefined &&
-          command.args.length === 4 &&
-          SAFE_DEPLOYMENT_ID.test(targetValue)));
-    if (currentProxy) return true;
+    if (mcp === "mcp" && proxy === "proxy") {
+      if (targetFlag === "--oss" && targetValue === undefined && command.args.length === 3) {
+        return { kind: "oss" };
+      }
+      if (
+        targetFlag === "--deployment" &&
+        targetValue !== undefined &&
+        command.args.length === 4 &&
+        SAFE_DEPLOYMENT_ID.test(targetValue)
+      ) {
+        return { kind: "deployment", deploymentID: targetValue };
+      }
+    }
   }
   if (command?.command === "npx") {
     const [yes, cliPackage, mcp, proxy, targetFlag, targetValue] = command.args;
-    const projectProxy =
+    const releasedPrefix =
       yes === "-y" &&
       typeof cliPackage === "string" &&
       /^@dosu\/cli@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(cliPackage) &&
       mcp === "mcp" &&
-      proxy === "proxy" &&
-      ((targetFlag === "--oss" && targetValue === undefined && command.args.length === 5) ||
-        (targetFlag === "--deployment" &&
-          targetValue !== undefined &&
-          command.args.length === 6 &&
-          SAFE_DEPLOYMENT_ID.test(targetValue)));
-    if (projectProxy) return true;
+      proxy === "proxy";
+    if (releasedPrefix) {
+      if (targetFlag === "--oss" && targetValue === undefined && command.args.length === 5) {
+        return { kind: "oss" };
+      }
+      if (
+        targetFlag === "--deployment" &&
+        targetValue !== undefined &&
+        command.args.length === 6 &&
+        SAFE_DEPLOYMENT_ID.test(targetValue)
+      ) {
+        return { kind: "deployment", deploymentID: targetValue };
+      }
+    }
   }
 
-  return false;
+  return null;
+}
+
+/** True only for an MCP entry shape written by a released Dosu CLI flow. */
+export function isDosuOwnedMcpServer(value: unknown): boolean {
+  return projectMcpTarget(value) !== null;
 }
 
 interface SpawnedProxy {

@@ -8,6 +8,7 @@ import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { Client } from "../client/client";
 import { executeInsights } from "../commands/insights";
+import { completeUpgrade } from "../commands/upgrade";
 import {
   clearConfigInPlace,
   isAuthenticated,
@@ -15,6 +16,7 @@ import {
   replaceLoginSession,
   saveConfig,
 } from "../config/config";
+import { runBulkProjectSetup } from "../setup/bulk-flow";
 import { runSetup } from "../setup/flow";
 import { browserFallbackHint } from "../setup/styles";
 
@@ -43,9 +45,19 @@ export async function runTUI(): Promise<void> {
     );
     const options: Array<{ label: string; value: string; hint?: string }> = [
       {
-        label: "Setup",
+        label: "Configure current project",
         value: "setup",
-        hint: "Configure MCP for your AI tools",
+        hint: "Configure this Git project",
+      },
+      {
+        label: "Configure projects in bulk",
+        value: "bulk-setup",
+        hint: "Scan selected directories and configure several Git projects",
+      },
+      {
+        label: "Upgrade Dosu",
+        value: "upgrade",
+        hint: "Update the CLI and installed skills",
       },
     ];
     if (insightsReady) {
@@ -86,6 +98,18 @@ export async function runTUI(): Promise<void> {
           cfg.mode = fresh.mode;
           cfg.active_account = fresh.active_account;
         }
+        break;
+      case "bulk-setup":
+        await runBulkProjectSetup(cfg);
+        {
+          const fresh = loadConfig();
+          cfg.mode = fresh.mode;
+          cfg.scan_directories = fresh.scan_directories;
+          cfg.active_account = fresh.active_account;
+        }
+        break;
+      case "upgrade":
+        await completeUpgrade();
         break;
       case "insights":
         await executeInsights(cfg);

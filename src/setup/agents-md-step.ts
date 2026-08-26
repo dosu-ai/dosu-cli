@@ -69,6 +69,13 @@ function findSection(content: string): SectionLocation | null {
   return { start: starts[0].index, end: ends[0].index };
 }
 
+/** Read-only preflight used before a bulk flow performs any project write. */
+export function validateAgentsMdMutation(cwd: string): void {
+  const path = join(cwd, "AGENTS.md");
+  assertSafeProjectPath(cwd, path);
+  if (existsSync(path)) findSection(readFileSync(path, "utf-8"));
+}
+
 /**
  * Create AGENTS.md with the Dosu section, or upsert the section into an
  * existing file (replace between markers when present, append otherwise).
