@@ -301,6 +301,94 @@ export type CliImportTaskStatus = {
 	updated_at: string | null
 }
 
+export type CliLibrary = {
+	created_at: string
+	created_by: string | null
+	deleted_at: string | null
+	description: string | null
+	id: string
+	name: string
+	org_id: string
+	updated_at: string
+	visibility: 'public' | 'internal' | 'private'
+}
+
+export type CliLibraryDataSource = {
+	azure_devops_repository: CliDataSourceAzureDevOpsRepository | null
+	azure_devops_repository_id: string | null
+	coda_workspace_id: string | null
+	confluence_space_id: string | null
+	created_at: string
+	created_by: string | null
+	data_source_id: string
+	description: string
+	enabled: boolean
+	generated_description: string | null
+	github_config: {
+		discussions_enabled: boolean
+		index_wikis: boolean
+		issues_enabled: boolean
+		pull_requests_enabled: boolean
+	} | null
+	gitlab_project: CliDataSourceGitlabProject | null
+	gitlab_project_id: string | null
+	grandfather: boolean
+	id: string
+	is_indexed: boolean
+	knowledge_store_id: string | null
+	last_indexed_at?: string
+	name: string
+	notion_workspace_id: string | null
+	org_id: string
+	paygated: boolean
+	provider_slug:
+		| 'github'
+		| 'slack'
+		| 'discord'
+		| 'web'
+		| 'linear'
+		| 'jira'
+		| 'memory'
+		| 'dosu_app'
+		| 'confluence'
+		| 'dosu_knowledge_store'
+		| 'notion'
+		| 'coda'
+		| 'gitlab'
+		| 'dosu_mcp'
+		| 'teams'
+		| 'azure_devops'
+	repository: CliDataSourceGithubRepository | null
+	repository_id: number | null
+	slack_channel: CliDataSourceSlackChannel | null
+	slack_channel_id: string | null
+	status: 'QUEUED' | 'SYNCING' | 'PARTIAL' | 'SYNCED' | 'ERROR'
+	teams_channel: CliDataSourceTeamsChannel | null
+	teams_channel_id: string | null
+	updated_at: string
+	website: CliDataSourceWebWebsite | null
+	website_id: string | null
+}
+
+export type CliLibraryDocumentationConfig = {
+	commit_to_trigger_pr: boolean
+	default_accept_review: boolean
+	default_save_publish: boolean
+	review_timeout_days: number
+}
+
+export type CliLibrarySourceMonitor = {
+	configured: boolean
+	data_source_id: string
+	deployment_id: string | null
+	enabled: boolean
+	monitored_paths: Array<string>
+	no_update_behavior: 'emoji' | 'comment' | 'silent'
+	provider_slug: 'github' | 'gitlab' | 'azure_devops'
+	setup_required: boolean
+	source_name: string
+}
+
 export type CliMessage = {
 	action: 'create' | 'edit' | 'delete'
 	author: string
@@ -478,7 +566,76 @@ export type CliSlackChannelRow = {
 	topic?: string | null
 }
 
-export declare const CLI_CONTRACT_HASH: 'de4d34216f45'
+export declare const CLI_CONTRACT_HASH: 'ac90a31489e1'
+
+export type AgentsCreateInput = {
+	data_source_id: string
+	name?: string
+	org_id: string
+	response_guidelines?: string | null
+	space_id: string
+}
+
+export type AgentsCreateOutput = CliDeployment
+
+export type AgentsDeleteInput = string
+
+export type AgentsDeleteOutput = {
+	deleted: true
+	deployment_id: string
+}
+
+export type AgentsGetInput = string
+
+export type AgentsGetOutput = CliDeployment
+
+export type AgentsGetConfigInput = string
+
+export type AgentsGetConfigOutput = {
+	config: CliJson
+	deployment_id: string
+	updated_at: string
+}
+
+export type AgentsListInput = {
+	org_id: string
+}
+
+export type AgentsListOutput = Array<CliDeployment>
+
+export type AgentsMoveInput = {
+	deployment_id: string
+	space_id: string
+}
+
+export type AgentsMoveOutput = CliDeployment & {
+	previous_space_id: string
+}
+
+export type AgentsSetConfigInput = {
+	deployment_id: string
+	expected_updated_at: string
+	path: string
+	value: CliJson
+}
+
+export type AgentsSetConfigOutput = {
+	config: CliJson
+	deployment_id: string
+	path: string
+	previous_value: CliJson
+	updated_at: string
+	value: CliJson
+}
+
+export type AgentsUpdateInput = {
+	deployment_id: string
+	enabled?: boolean
+	name?: string
+	response_guidelines?: string | null
+}
+
+export type AgentsUpdateOutput = CliDeployment
 
 export type AnalyticsGetUsageStatsInput = {
 	days?: number
@@ -768,6 +925,149 @@ export type KnowledgeStoreGetBySpaceIdOutput = {
 	space_id: string
 	updated_at: string
 } | null
+
+export type LibrariesConfigGetInput = string
+
+export type LibrariesConfigGetOutput = {
+	config: CliLibraryDocumentationConfig
+	deployment_id: string
+	space_id: string
+	updated_at: string
+}
+
+export type LibrariesConfigSetInput = {
+	expected_updated_at: string
+	setting:
+		| 'commit_to_trigger_pr'
+		| 'default_accept_review'
+		| 'default_save_publish'
+		| 'review_timeout_days'
+	space_id: string
+	value: CliJson
+}
+
+export type LibrariesConfigSetOutput = {
+	config: CliLibraryDocumentationConfig
+	previous_value: CliJson
+	setting:
+		| 'commit_to_trigger_pr'
+		| 'default_accept_review'
+		| 'default_save_publish'
+		| 'review_timeout_days'
+	updated_at: string
+	value: CliJson
+}
+
+export type LibrariesCreateInput = {
+	name: string
+	org_id: string
+	visibility?: 'public' | 'internal' | 'private'
+}
+
+export type LibrariesCreateOutput = CliLibrary
+
+export type LibrariesDeleteInput = string
+
+export type LibrariesDeleteOutput = {
+	deleted: true
+	id: string
+}
+
+export type LibrariesInfoInput = string
+
+export type LibrariesInfoOutput = CliLibrary
+
+export type LibrariesListInput = string
+
+export type LibrariesListOutput = Array<CliLibrary>
+
+export type LibrariesMonitorsListInput = string
+
+export type LibrariesMonitorsListOutput = Array<CliLibrarySourceMonitor>
+
+export type LibrariesMonitorsUpdateInput = {
+	data_source_id: string
+	enabled?: boolean
+	monitored_paths?: Array<string>
+	no_update_behavior?: 'emoji' | 'comment' | 'silent'
+	space_id: string
+}
+
+export type LibrariesMonitorsUpdateOutput = CliLibrarySourceMonitor
+
+export type LibrariesSourceConfigGetInput = {
+	data_source_id: string
+	space_id: string
+}
+
+export type LibrariesSourceConfigGetOutput =
+	| {
+			discussions_enabled: boolean
+			excluded_file_patterns: Array<string>
+			included_file_patterns: Array<string>
+			issues_enabled: boolean
+			provider_slug: 'github'
+			pull_requests_enabled: boolean
+			wiki_enabled: boolean
+	  }
+	| {
+			excluded_file_patterns: Array<string>
+			included_file_patterns: Array<string>
+			provider_slug: 'gitlab'
+	  }
+
+export type LibrariesSourceConfigUpdateInput = {
+	data_source_id: string
+	discussions_enabled?: boolean
+	excluded_file_patterns?: Array<string>
+	included_file_patterns?: Array<string>
+	issues_enabled?: boolean
+	pull_requests_enabled?: boolean
+	space_id: string
+	wiki_enabled?: boolean
+}
+
+export type LibrariesSourceConfigUpdateOutput =
+	| {
+			discussions_enabled: boolean
+			excluded_file_patterns: Array<string>
+			included_file_patterns: Array<string>
+			issues_enabled: boolean
+			provider_slug: 'github'
+			pull_requests_enabled: boolean
+			wiki_enabled: boolean
+	  }
+	| {
+			excluded_file_patterns: Array<string>
+			included_file_patterns: Array<string>
+			provider_slug: 'gitlab'
+	  }
+
+export type LibrariesSourcesAttachInput = {
+	data_source_ids: Array<string>
+	space_id: string
+}
+
+export type LibrariesSourcesAttachOutput = number
+
+export type LibrariesSourcesDetachInput = {
+	data_source_ids: Array<string>
+	space_id: string
+}
+
+export type LibrariesSourcesDetachOutput = number
+
+export type LibrariesSourcesListInput = string
+
+export type LibrariesSourcesListOutput = Array<CliLibraryDataSource>
+
+export type LibrariesUpdateInput = {
+	id: string
+	name?: string
+	visibility?: 'public' | 'internal' | 'private'
+}
+
+export type LibrariesUpdateOutput = CliLibrary
 
 export type MessagesDeleteMessageInput = string
 
@@ -1562,6 +1862,16 @@ export type WorkspacesListForSpaceInput = string
 export type WorkspacesListForSpaceOutput = any
 
 export interface CliApiClient {
+	agents: {
+		create: MutationProcedure<AgentsCreateInput, AgentsCreateOutput>
+		delete: MutationProcedure<AgentsDeleteInput, AgentsDeleteOutput>
+		get: QueryProcedure<AgentsGetInput, AgentsGetOutput>
+		getConfig: QueryProcedure<AgentsGetConfigInput, AgentsGetConfigOutput>
+		list: QueryProcedure<AgentsListInput, AgentsListOutput>
+		move: MutationProcedure<AgentsMoveInput, AgentsMoveOutput>
+		setConfig: MutationProcedure<AgentsSetConfigInput, AgentsSetConfigOutput>
+		update: MutationProcedure<AgentsUpdateInput, AgentsUpdateOutput>
+	}
 	analytics: {
 		getUsageStats: QueryProcedure<AnalyticsGetUsageStatsInput, AnalyticsGetUsageStatsOutput>
 	}
@@ -1632,6 +1942,25 @@ export interface CliApiClient {
 	}
 	knowledgeStore: {
 		getBySpaceId: QueryProcedure<KnowledgeStoreGetBySpaceIdInput, KnowledgeStoreGetBySpaceIdOutput>
+	}
+	libraries: {
+		configGet: QueryProcedure<LibrariesConfigGetInput, LibrariesConfigGetOutput>
+		configSet: MutationProcedure<LibrariesConfigSetInput, LibrariesConfigSetOutput>
+		create: MutationProcedure<LibrariesCreateInput, LibrariesCreateOutput>
+		delete: MutationProcedure<LibrariesDeleteInput, LibrariesDeleteOutput>
+		info: QueryProcedure<LibrariesInfoInput, LibrariesInfoOutput>
+		list: QueryProcedure<LibrariesListInput, LibrariesListOutput>
+		monitorsList: QueryProcedure<LibrariesMonitorsListInput, LibrariesMonitorsListOutput>
+		monitorsUpdate: MutationProcedure<LibrariesMonitorsUpdateInput, LibrariesMonitorsUpdateOutput>
+		sourceConfigGet: QueryProcedure<LibrariesSourceConfigGetInput, LibrariesSourceConfigGetOutput>
+		sourceConfigUpdate: MutationProcedure<
+			LibrariesSourceConfigUpdateInput,
+			LibrariesSourceConfigUpdateOutput
+		>
+		sourcesAttach: MutationProcedure<LibrariesSourcesAttachInput, LibrariesSourcesAttachOutput>
+		sourcesDetach: MutationProcedure<LibrariesSourcesDetachInput, LibrariesSourcesDetachOutput>
+		sourcesList: QueryProcedure<LibrariesSourcesListInput, LibrariesSourcesListOutput>
+		update: MutationProcedure<LibrariesUpdateInput, LibrariesUpdateOutput>
 	}
 	messages: {
 		deleteMessage: MutationProcedure<MessagesDeleteMessageInput, MessagesDeleteMessageOutput>
