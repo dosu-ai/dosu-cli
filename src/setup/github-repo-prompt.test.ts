@@ -3,6 +3,7 @@ import {
   ADD_REPOSITORIES_VALUE,
   GitHubRepoPrompt,
   type REFRESH_LIST_VALUE,
+  validateRepoSelection,
 } from "./github-repo-prompt";
 
 type PromptOption =
@@ -222,6 +223,18 @@ describe("GitHubRepoPrompt rendering", () => {
     expect(output).not.toContain("a/b");
   });
 
+  it("renders the validation message next to the footer in error state", () => {
+    const options = [ACTION_OPTION, ...repoOptions("a/b")];
+    const prompt = makePrompt(options);
+    const mutable = prompt as unknown as { state: string; error: string };
+    mutable.state = "error";
+    mutable.error = "Select at least one repository — Space to select, Enter to confirm.";
+    const output = render(prompt);
+    expect(output).toContain("Select at least one repository");
+    // The option list stays visible so the user can fix the selection in place.
+    expect(output).toContain("a/b");
+  });
+
   it("renders ellipsis markers when option count exceeds the visible viewport", () => {
     Object.defineProperty(process.stdout, "rows", { value: 12, configurable: true });
     const options: PromptOption[] = [ACTION_OPTION];
@@ -277,5 +290,20 @@ describe("GitHubRepoPrompt rendering", () => {
     expect(prompt.cursor).toBe(0);
     const output = render(prompt);
     expect(output).toContain("org/repo-0");
+  });
+});
+
+describe("validateRepoSelection", () => {
+  it("rejects an empty repo selection so Enter cannot submit nothing", () => {
+    expect(validateRepoSelection([])).toContain("Select at least one repository");
+  });
+
+  it("accepts a non-empty selection", () => {
+    expect(validateRepoSelection(["acme/api"])).toBeUndefined();
+  });
+
+  it("lets action options submit as usual", () => {
+    expect(validateRepoSelection(ADD_REPOSITORIES_VALUE)).toBeUndefined();
+    expect(validateRepoSelection(undefined)).toBeUndefined();
   });
 });

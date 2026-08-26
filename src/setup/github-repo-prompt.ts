@@ -20,6 +20,20 @@ export const REFRESH_LIST_VALUE = "__refresh_list__" as const;
 
 type ActionValue = typeof ADD_REPOSITORIES_VALUE | typeof REFRESH_LIST_VALUE;
 
+/**
+ * Submit guard: an empty repo selection is never a valid submission — Enter
+ * without any Space-selected repo re-renders with a hint instead of silently
+ * advancing (action options submit as strings and always pass).
+ */
+export function validateRepoSelection(
+  value: ActionValue | string[] | undefined,
+): string | undefined {
+  if (Array.isArray(value) && value.length === 0) {
+    return "Select at least one repository — Space to select, Enter to confirm.";
+  }
+  return undefined;
+}
+
 type PromptOption =
   | {
       kind: "action";
@@ -71,6 +85,7 @@ export class GitHubRepoPrompt extends Prompt<ActionValue | string[]> {
   constructor({ message, options, initialValues = [], maxItems }: PromptGitHubRepositoriesOptions) {
     super(
       {
+        validate: validateRepoSelection,
         render() {
           return (this as GitHubRepoPrompt).renderPrompt();
         },
@@ -203,8 +218,10 @@ ${symbolByState}  ${this.message}
       return `${pc.gray(BAR)}  ${marker} ${label}${hint}`;
     });
 
+    const footer =
+      this.state === "error" ? `${pc.cyan(FOOTER)}  ${pc.yellow(this.error)}` : pc.cyan(FOOTER);
     return `${header}${body.join("\n")}
-${pc.cyan(FOOTER)}`;
+${footer}`;
   }
 
   private submitLabel(): string {
