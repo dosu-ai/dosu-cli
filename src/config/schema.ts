@@ -2,7 +2,7 @@
 export const MODE_OSS = "oss" as const;
 export type SetupMode = typeof MODE_OSS;
 
-export const CONFIG_SCHEMA_VERSION = 2 as const;
+export const CONFIG_SCHEMA_VERSION = 3 as const;
 
 export interface SessionCredentials {
   access_token: string;
@@ -24,6 +24,9 @@ interface ActiveAccount {
   /** Missing only when a token does not expose a readable identity. */
   user_id?: string;
   session: Omit<SessionCredentials, "user_id">;
+  /** Cloud deployment credentials retained for project-scoped MCP routing. */
+  targets?: Record<string, AccountTarget>;
+  /** The deployment currently selected for interactive CLI commands. */
   target?: AccountTarget;
 }
 

@@ -61,7 +61,7 @@ function assertReplaceableProjectEntry(configPath: string): void {
 export const CopilotProvider = (): SetupProvider => ({
   name: () => "GitHub Copilot CLI",
   id: () => "copilot",
-  supportsLocal: () => true,
+  configurationKind: () => "project",
   priority: () => 13,
   detectPaths: () => [expandHome("~/.copilot")],
   isInstalled: () => isInstalled([expandHome("~/.copilot")]),
@@ -70,7 +70,8 @@ export const CopilotProvider = (): SetupProvider => ({
   projectConfigPath: (projectRoot: string) => join(projectRoot, ".mcp.json"),
   isProjectConfigured,
 
-  install(cfg: Config, global: boolean, opts = {}): void {
+  install(cfg: Config, opts): void {
+    const global = opts.scope === "global";
     if (global) {
       const url = mcpEndpoint(cfg);
       const server = {
@@ -94,7 +95,8 @@ export const CopilotProvider = (): SetupProvider => ({
     }
   },
 
-  remove(global: boolean, opts = {}): void {
+  remove(opts): void {
+    const global = opts.scope === "global";
     if (global) {
       removeJSONServer(globalPath(), "mcpServers");
     } else {

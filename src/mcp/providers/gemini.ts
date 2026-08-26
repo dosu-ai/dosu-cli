@@ -5,7 +5,7 @@ export const GeminiProvider = () =>
   createJSONProvider({
     providerName: "Gemini CLI",
     providerID: "gemini",
-    local: true,
+    configurationKind: "project",
     priorityValue: 7,
     paths: ["~/.gemini"],
     globalPath: "~/.gemini/settings.json",

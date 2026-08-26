@@ -20,8 +20,9 @@ import {
 import { logger } from "../debug/logger";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
-import { stepUpdateAgentsMd } from "./agents-md-step";
+import { stepRemoveAgentsMd, stepUpdateAgentsMd } from "./agents-md-step";
 import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
+import { GLOBAL_INSTALL_REQUIRED_MESSAGE, setupNeedsGlobalInstall } from "./global-install";
 import {
   type LogsHandoffDecision,
   type LogsHandoffPlan,
@@ -87,6 +88,11 @@ function trackInBackground(tracking: Promise<void>): void {
 }
 
 export async function runSetup(opts: SetupOptions = {}): Promise<void> {
+  if (setupNeedsGlobalInstall()) {
+    p.log.error(GLOBAL_INSTALL_REQUIRED_MESSAGE);
+    process.exitCode = 1;
+    return;
+  }
   const onboardingRunID = randomUUID();
   logger.info(
     "setup",
@@ -273,9 +279,9 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   let skillCompleted = false;
   const skillProviders = configuredProviders
     .map((result) => result.provider)
-    .filter((provider) => skillInstallTargetForProvider(provider.id(), projectRoot) !== null);
+    .filter((provider) => skillInstallTargetForProvider(provider.id()) !== null);
   if (skillProviders.length > 0) {
-    skillCompleted = await runInstallSkill(skillProviders, projectRoot);
+    skillCompleted = await runInstallSkill(skillProviders);
     if (skillCompleted) {
       trackInBackground(
         trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_skill_installed"),
@@ -283,10 +289,17 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     }
   }
 
-  // Project instructions are part of every successfully configured project bundle.
+  // Project instructions exist iff this project still has a Dosu MCP. Removing
+  // the last selected agent reconciles the exact marker-owned section too.
   let agentsMdCompleted = false;
   if (mcpCompleted) {
     agentsMdCompleted = await stepUpdateAgentsMd(projectRoot);
+  } else if (
+    configured.length > 0 &&
+    configured.every((result) => result.action === "remove" && !result.error) &&
+    !hasConfiguredProjectProvider(projectRoot)
+  ) {
+    agentsMdCompleted = stepRemoveAgentsMd(projectRoot);
   }
 
   // Post-setup log mining (cloud mode only): replaces the old codebase-audit
@@ -326,6 +339,13 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   if (logsPlan) {
     launchLogsAgent(logsPlan);
   }
+}
+
+function hasConfiguredProjectProvider(projectRoot: string): boolean {
+  return allSetupProviders().some(
+    (provider) =>
+      provider.configurationKind() === "project" && provider.isProjectConfigured(projectRoot),
+  );
 }
 
 /**
@@ -383,10 +403,7 @@ async function stepConfigureMcpTools(
  * Install the skill for the same providers selected during MCP setup.
  * Returns `true` on success.
  */
-export async function runInstallSkill(
-  providers: readonly SetupProvider[],
-  projectRoot: string,
-): Promise<boolean> {
+export async function runInstallSkill(providers: readonly SetupProvider[]): Promise<boolean> {
   logger.info("setup", "Step: install skill");
   const spinner = p.spinner();
   const agentLabel = providers.length === 1 ? "agent" : "agents";
@@ -398,12 +415,12 @@ export async function runInstallSkill(
     // verbose.
     const result = await installSkill(
       providers.map((provider) => provider.id()),
-      { quiet: true, projectRoot },
+      { quiet: true },
     );
     if (result.success) {
       logger.info("setup", `Skill installed${result.sha ? ` sha=${result.sha}` : ""}`);
       const items = providers.flatMap((provider) => {
-        const target = skillInstallTargetForProvider(provider.id(), projectRoot);
+        const target = skillInstallTargetForProvider(provider.id());
         if (!target) return [];
         return [
           {
@@ -835,7 +852,9 @@ async function stepMintAPIKey(apiClient: Client, cfg: Config): Promise<string | 
 }
 
 export function stepDetectTools(): SetupProvider[] {
-  return allSetupProviders().filter((p) => p.supportsLocal() && p.isInstalled());
+  return allSetupProviders().filter(
+    (provider) => provider.configurationKind() === "project" && provider.isInstalled(),
+  );
 }
 
 async function stepSelectTools(
@@ -898,7 +917,7 @@ export function stepConfigureTools(
 
   for (const provider of selection.toInstall) {
     try {
-      provider.install(cfg, false, { projectRoot });
+      provider.install(cfg, { scope: "project", projectRoot });
       const projectConfigPath = provider.projectConfigPath(projectRoot);
       if (projectConfigPath) retainedProjectConfigPaths.add(projectConfigPath);
       logger.info("setup", `Configured ${provider.name()}`);
@@ -919,7 +938,7 @@ export function stepConfigureTools(
     try {
       const projectConfigPath = provider.projectConfigPath(projectRoot);
       if (!projectConfigPath || !retainedProjectConfigPaths.has(projectConfigPath)) {
-        provider.remove(false, { projectRoot });
+        provider.remove({ scope: "project", projectRoot });
       }
       logger.info("setup", `Removed ${provider.name()}`);
       results.push({ provider, action: "remove" });

@@ -34,6 +34,7 @@ export function makeTestConfig(flat: FlatTestConfig): Config {
         expires_at: flat.expires_at,
       },
       target: Object.values(target).some((value) => value !== undefined) ? target : undefined,
+      targets: target.deployment_id ? { [target.deployment_id]: { ...target } } : {},
     },
   };
 }

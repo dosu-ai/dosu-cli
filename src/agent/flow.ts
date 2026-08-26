@@ -25,9 +25,11 @@ import {
 } from "../config/config";
 import { logger } from "../debug/logger";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
+import { isSafeDeploymentID } from "../mcp/project-proxy";
 import { allSetupProviders } from "../mcp/providers";
 import { fetchDosuRule, installRuleForAgent, isRuleAgent } from "../rules/installer";
 import { upsertDosuAgentsSection } from "../setup/agents-md-step";
+import { GLOBAL_INSTALL_REQUIRED_MESSAGE, setupNeedsGlobalInstall } from "../setup/global-install";
 import { requireProjectRoot } from "../setup/project-root";
 import { emitError, emitNeedUserAction, emitStep } from "./output";
 
@@ -37,7 +39,7 @@ export interface AgentSetupOptions {
   deploymentID?: string;
 }
 
-const NPX_INVOCATION = "npx @dosu/cli@latest";
+const NPX_INVOCATION = "dosu";
 
 /**
  * Run agent-mediated setup end-to-end. Returns the process exit code the
@@ -51,20 +53,37 @@ const NPX_INVOCATION = "npx @dosu/cli@latest";
  * - `2` — CLI usage error (unknown tool, invalid combination of flags).
  */
 export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
+  if (setupNeedsGlobalInstall()) {
+    emitError({
+      step: "setup",
+      reason: "global_install_required",
+      agent_next_steps: GLOBAL_INSTALL_REQUIRED_MESSAGE,
+    });
+    return 2;
+  }
   // 0. Resolve the requested tool up front. We do this before any auth so
   //    the agent gets a usage error immediately instead of after a login
   //    round-trip.
   const providers = allSetupProviders();
   const provider = providers.find((p) => p.id() === opts.tool.toLowerCase());
-  if (!provider?.supportsLocal()) {
+  if (provider?.configurationKind() !== "project") {
     const available = providers
-      .filter((candidate) => candidate.supportsLocal())
+      .filter((candidate) => candidate.configurationKind() === "project")
       .map((p) => p.id())
       .join(", ");
     emitError({
       step: "setup",
       reason: "unknown_tool",
       agent_next_steps: `'${opts.tool}' is not a supported tool. Choose one of: ${available}. Re-run with --tool <id>.`,
+    });
+    return 2;
+  }
+  if (opts.deploymentID !== undefined && !isSafeDeploymentID(opts.deploymentID)) {
+    emitError({
+      step: "setup",
+      reason: "invalid_deployment",
+      agent_next_steps:
+        "The deployment ID contains unsupported characters. Choose an ID reported by Dosu and retry.",
     });
     return 2;
   }
@@ -107,7 +126,7 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
 
   // 4. Install Dosu MCP into the requested tool.
   try {
-    provider.install(cfg, false, { projectRoot });
+    provider.install(cfg, { scope: "project", projectRoot });
     emitStep({
       step: "mcp_install",
       tool: provider.id(),
@@ -158,7 +177,7 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
   // stdout contract.
   if (skillAgentIDsForProviders([provider.id()]).length > 0) {
     try {
-      const skill = await installSkill([provider.id()], { quiet: true, projectRoot });
+      const skill = await installSkill([provider.id()], { quiet: true });
       if (!skill.success) {
         throw new Error("the skills installer failed");
       }
@@ -496,6 +515,13 @@ async function ensureAPIKey(client: Client, cfg: Config): Promise<{ code: number
  * Mirrors the marketing one-liner so the agent can copy/paste it back.
  */
 export function buildResumeCommand(tool: string, ticket: string, deploymentID?: string): string {
+  const safeToken = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,1023}$/;
+  if (!safeToken.test(tool) || !safeToken.test(ticket)) {
+    throw new Error("Cannot build a resume command with unsafe arguments");
+  }
+  if (deploymentID !== undefined && !isSafeDeploymentID(deploymentID)) {
+    throw new Error("Cannot build a resume command with an invalid deployment ID");
+  }
   const parts = [NPX_INVOCATION, "setup", "--agent", "--tool", tool, "--login-ticket", ticket];
   if (deploymentID) {
     parts.push("--deployment", deploymentID);
@@ -506,6 +532,6 @@ export function buildResumeCommand(tool: string, ticket: string, deploymentID?: 
 /** Provider listing for `--tool` validation. Exported for tests. */
 export function listAgentSupportedToolIDs(): string[] {
   return allSetupProviders()
-    .filter((provider) => provider.supportsLocal())
+    .filter((provider) => provider.configurationKind() === "project")
     .map((provider) => provider.id());
 }

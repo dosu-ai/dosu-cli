@@ -5,7 +5,7 @@ export const AntigravityProvider = () =>
   createJSONProvider({
     providerName: "Antigravity",
     providerID: "antigravity",
-    local: false,
+    configurationKind: "unsupported",
     priorityValue: 15,
     paths: ["~/.gemini"],
     globalPath: "~/.gemini/antigravity/mcp_config.json",

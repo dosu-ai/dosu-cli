@@ -11,7 +11,7 @@ export const ClineCliProvider = () =>
   createJSONProvider({
     providerName: "Cline CLI",
     providerID: "cline-cli",
-    local: false,
+    configurationKind: "unsupported",
     priorityValue: 12,
     paths: [clineDir()],
     globalPath: join(clineDir(), "data", "settings", "cline_mcp_settings.json"),

@@ -11,6 +11,7 @@ export function migrateLegacyConfig(value: unknown): Config {
   const hasSession = Boolean(accessToken || refreshToken || expiresAt);
   const userID = stringValue(value.user_id) ?? getAccessTokenUserID(accessToken);
 
+  const target = userID ? legacyTarget(value) : undefined;
   return {
     schema_version: CONFIG_SCHEMA_VERSION,
     mode: value.mode === MODE_OSS ? MODE_OSS : undefined,
@@ -23,7 +24,8 @@ export function migrateLegacyConfig(value: unknown): Config {
             expires_at: expiresAt,
           },
           // An unowned legacy target is unsafe to carry into a future login.
-          target: userID ? legacyTarget(value) : undefined,
+          target,
+          targets: target?.deployment_id ? { [target.deployment_id]: { ...target } } : {},
         }
       : undefined,
   };
