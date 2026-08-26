@@ -288,6 +288,35 @@ describe("Client", () => {
       expect(options.headers.apikey).toBeTruthy();
       expect(options.signal).toBeInstanceOf(AbortSignal);
     });
+
+    it("preserves credentials for every deployment while refreshing the account session", async () => {
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({
+          access_token: "new-tok",
+          refresh_token: "new-ref",
+          expires_in: 3600,
+        }),
+      );
+
+      const cfg = makeConfig({ deployment_id: "dep-a", api_key: "key-a" });
+      if (!cfg.active_account) throw new Error("test account missing");
+      cfg.active_account.targets = {
+        "dep-a": { deployment_id: "dep-a", api_key: "key-a" },
+        "dep-b": { deployment_id: "dep-b", api_key: "key-b" },
+      };
+      saveConfig(cfg);
+
+      await new Client(cfg).refreshToken();
+
+      expect(cfg.active_account.targets).toEqual({
+        "dep-a": { deployment_id: "dep-a", api_key: "key-a" },
+        "dep-b": { deployment_id: "dep-b", api_key: "key-b" },
+      });
+      expect(cfg.active_account.session).toMatchObject({
+        access_token: "new-tok",
+        refresh_token: "new-ref",
+      });
+    });
   });
 
   describe("createAPIKey", () => {

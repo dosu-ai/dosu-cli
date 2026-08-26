@@ -44,28 +44,29 @@ describe("provider registry", () => {
 
   describe("provider metadata", () => {
     const expectedProviders = [
-      { id: "claude", name: "Claude Code", local: true },
-      { id: "claude-desktop", name: "Claude Desktop", local: false },
-      { id: "cursor", name: "Cursor", local: true },
-      { id: "vscode", name: "VS Code", local: true },
-      { id: "gemini", name: "Gemini CLI", local: true },
-      { id: "codex", name: "Codex", local: true },
-      { id: "windsurf", name: "Windsurf", local: false },
-      { id: "zed", name: "Zed", local: true },
-      { id: "cline", name: "Cline", local: false },
-      { id: "cline-cli", name: "Cline CLI", local: false },
-      { id: "copilot", name: "GitHub Copilot CLI", local: true },
-      { id: "opencode", name: "OpenCode", local: true },
-      { id: "antigravity", name: "Antigravity", local: false },
-      { id: "mcporter", name: "MCPorter", local: true },
-      { id: "manual", name: "Manual Configuration", local: false },
+      { id: "claude", name: "Claude Code", kind: "project" },
+      { id: "claude-desktop", name: "Claude Desktop", kind: "global-connector" },
+      { id: "cursor", name: "Cursor", kind: "project" },
+      { id: "vscode", name: "VS Code", kind: "project" },
+      { id: "gemini", name: "Gemini CLI", kind: "project" },
+      { id: "codex", name: "Codex", kind: "project" },
+      { id: "windsurf", name: "Windsurf", kind: "unsupported" },
+      { id: "zed", name: "Zed", kind: "project" },
+      { id: "cline", name: "Cline", kind: "unsupported" },
+      { id: "cline-cli", name: "Cline CLI", kind: "unsupported" },
+      { id: "copilot", name: "GitHub Copilot CLI", kind: "project" },
+      { id: "opencode", name: "OpenCode", kind: "project" },
+      { id: "antigravity", name: "Antigravity", kind: "unsupported" },
+      { id: "mcporter", name: "MCPorter", kind: "project" },
+      { id: "factory", name: "Factory", kind: "project" },
+      { id: "manual", name: "Manual Configuration", kind: "global-connector" },
     ];
 
     for (const expected of expectedProviders) {
-      it(`${expected.id}: name="${expected.name}", local=${expected.local}`, () => {
+      it(`${expected.id}: name="${expected.name}", kind=${expected.kind}`, () => {
         const p = getProvider(expected.id);
         expect(p.name()).toBe(expected.name);
-        expect(p.supportsLocal()).toBe(expected.local);
+        expect(p.configurationKind()).toBe(expected.kind);
       });
     }
   });
@@ -91,7 +92,7 @@ describe("provider registry", () => {
 
         it("reports project configuration capability consistently", () => {
           const projectRoot = "/tmp/dosu-provider-project";
-          if (p.supportsLocal()) {
+          if (p.configurationKind() === "project") {
             expect(typeof p.projectConfigPath(projectRoot)).toBe("string");
             expect(typeof p.isProjectConfigured(projectRoot)).toBe("boolean");
           } else {

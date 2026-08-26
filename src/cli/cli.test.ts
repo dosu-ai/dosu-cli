@@ -20,6 +20,7 @@ vi.mock("../version/skill-update-check", () => ({ checkForSkillUpdates: vi.fn() 
 vi.mock("../version/pending-tasks-check", () => ({ checkForReadyTasks: vi.fn() }));
 
 import { saveConfig } from "../config/config";
+import { CONFIG_SCHEMA_VERSION } from "../config/schema";
 import type { CommandTelemetry } from "../telemetry/telemetry";
 import { createProgram, shouldRunBackgroundChecks } from "./cli";
 
@@ -195,7 +196,7 @@ describe("CLI", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
       saveConfig({
-        schema_version: 2,
+        schema_version: CONFIG_SCHEMA_VERSION,
         active_account: {
           user_id: userID,
           session: { access_token: accessToken, refresh_token: "refresh-secret", expires_at: 0 },

@@ -13,6 +13,8 @@ import {
   replaceLoginSession,
   type SessionCredentials,
   saveConfig,
+  targetForDeployment,
+  updateTarget,
 } from "./config";
 import { makeTestConfig } from "./config.test-utils";
 import { CONFIG_SCHEMA_VERSION } from "./schema";
@@ -131,7 +133,7 @@ describe("config", () => {
 
     const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8"));
     expect(persisted).toEqual({
-      schema_version: 2,
+      schema_version: 3,
       active_account: {
         user_id: "test-user-id",
         session: {
@@ -144,12 +146,94 @@ describe("config", () => {
           deployment_name: "My Deployment",
           api_key: "key-456",
         },
+        targets: {
+          "dep-123": {
+            deployment_id: "dep-123",
+            deployment_name: "My Deployment",
+            api_key: "key-456",
+          },
+        },
       },
     });
     expect(persisted.access_token).toBeUndefined();
   });
 
-  it("migrates a legacy flat config into the account-owned V2 schema", () => {
+  it("keeps credentials for multiple deployments owned by the same account", () => {
+    const cfg = makeTestConfig({
+      access_token: "tok_abc",
+      refresh_token: "ref_xyz",
+      expires_at: 1_700_000_000,
+      deployment_id: "dep-a",
+      deployment_name: "Library A",
+      api_key: "key-a",
+      user_id: "account-a",
+    });
+
+    updateTarget(cfg, {
+      deployment_id: "dep-b",
+      deployment_name: "Library B",
+      api_key: "key-b",
+    });
+
+    expect(cfg.active_account?.target?.deployment_id).toBe("dep-b");
+    expect(targetForDeployment(cfg, "dep-a")?.api_key).toBe("key-a");
+    expect(targetForDeployment(cfg, "dep-b")?.api_key).toBe("key-b");
+
+    saveConfig(cfg);
+    const loaded = loadConfig();
+    expect(targetForDeployment(loaded, "dep-a")?.api_key).toBe("key-a");
+    expect(targetForDeployment(loaded, "dep-b")?.api_key).toBe("key-b");
+  });
+
+  it("switches deployments without carrying the previous deployment key across", () => {
+    const cfg = makeTestConfig({
+      access_token: "tok_abc",
+      refresh_token: "ref_xyz",
+      expires_at: 1_700_000_000,
+      deployment_id: "dep-a",
+      api_key: "key-a",
+      user_id: "account-a",
+    });
+    updateTarget(cfg, { deployment_id: "dep-b", api_key: "key-b" });
+
+    updateTarget(cfg, { deployment_id: "dep-a", deployment_name: "Library A" });
+    expect(cfg.active_account?.target?.api_key).toBe("key-a");
+
+    updateTarget(cfg, { deployment_id: "dep-new", deployment_name: "New Library" });
+    expect(cfg.active_account?.target?.api_key).toBeUndefined();
+  });
+
+  it("migrates a V2 active target into the V3 deployment registry", () => {
+    const path = getConfigPath();
+    writeFileSync(
+      path,
+      JSON.stringify({
+        schema_version: 2,
+        active_account: {
+          user_id: "account-a",
+          session: {
+            access_token: "token-a",
+            refresh_token: "refresh-a",
+            expires_at: 1_700_000_000,
+          },
+          target: {
+            deployment_id: "dep-a",
+            deployment_name: "Library A",
+            api_key: "key-a",
+          },
+        },
+      }),
+    );
+
+    const loaded = loadConfig();
+
+    expect(loaded.schema_version).toBe(3);
+    expect(loaded.active_account?.target?.deployment_id).toBe("dep-a");
+    expect(targetForDeployment(loaded, "dep-a")?.api_key).toBe("key-a");
+    expect(JSON.parse(readFileSync(path, "utf8")).schema_version).toBe(3);
+  });
+
+  it("migrates a legacy flat config into the account-owned V3 schema", () => {
     const path = getConfigPath();
     writeFileSync(
       path,
@@ -185,6 +269,15 @@ describe("config", () => {
           api_key: "legacy-key",
           org_id: "legacy-org",
           space_id: "legacy-space",
+        },
+        targets: {
+          "legacy-deployment": {
+            deployment_id: "legacy-deployment",
+            deployment_name: "Legacy deployment",
+            api_key: "legacy-key",
+            org_id: "legacy-org",
+            space_id: "legacy-space",
+          },
         },
       },
     });
@@ -299,6 +392,7 @@ describe("config", () => {
     replaceLoginSession(cfg, session);
 
     expect(cfg.active_account?.target).toBeUndefined();
+    expect(cfg.active_account?.targets).toEqual({});
     expect(cfg.active_account?.user_id).toBe("account-b");
   });
 

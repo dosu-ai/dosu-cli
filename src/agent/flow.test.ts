@@ -111,7 +111,7 @@ function makeProvider(id: string, opts: Partial<SetupProvider> = {}): SetupProvi
   return {
     id: () => id,
     name: () => opts.name?.() ?? `Tool ${id}`,
-    supportsLocal: () => true,
+    configurationKind: () => "project",
     install: vi.fn(),
     remove: vi.fn(),
     detectPaths: () => [],
@@ -135,16 +135,28 @@ const makeBaseConfig = (overrides: Partial<FlatTestConfig> = {}) =>
 const ticketAccessToken = testAccessTokenFor("ticket-user");
 
 describe("buildResumeCommand", () => {
-  it("includes --tool and --login-ticket and uses the npx invocation", () => {
+  it("includes --tool and --login-ticket and uses the global CLI", () => {
     const cmd = buildResumeCommand("claude", "tkt-1");
-    expect(cmd).toBe("npx @dosu/cli@latest setup --agent --tool claude --login-ticket tkt-1");
+    expect(cmd).toBe("dosu setup --agent --tool claude --login-ticket tkt-1");
   });
 
   it("appends --deployment when provided", () => {
     const cmd = buildResumeCommand("cursor", "tkt-2", "dep-9");
-    expect(cmd).toBe(
-      "npx @dosu/cli@latest setup --agent --tool cursor --login-ticket tkt-2 --deployment dep-9",
+    expect(cmd).toBe("dosu setup --agent --tool cursor --login-ticket tkt-2 --deployment dep-9");
+  });
+
+  it.each([
+    "dep; echo PWNED",
+    "dep value",
+    "$(touch bad)",
+  ])("refuses a shell-active deployment ID: %s", (deploymentID) => {
+    expect(() => buildResumeCommand("cursor", "tkt-2", deploymentID)).toThrow(
+      /invalid deployment ID/,
     );
+  });
+
+  it("refuses an unsafe server ticket instead of emitting an executable command", () => {
+    expect(() => buildResumeCommand("cursor", "tkt-2;bad")).toThrow(/unsafe arguments/);
   });
 });
 
@@ -152,7 +164,7 @@ describe("listAgentSupportedToolIDs", () => {
   it("lists only providers with project-scoped configuration", () => {
     mockAllSetupProviders.mockReturnValue([
       makeProvider("claude"),
-      makeProvider("claude-desktop", { supportsLocal: () => false }),
+      makeProvider("claude-desktop", { configurationKind: () => "global-connector" }),
       makeProvider("cursor"),
     ]);
 
@@ -191,7 +203,7 @@ describe("runAgentSetup", () => {
     claudeProvider = makeProvider("claude", { name: () => "Claude Code" });
     desktopProvider = makeProvider("claude-desktop", {
       name: () => "Claude Desktop",
-      supportsLocal: () => false,
+      configurationKind: () => "global-connector",
     });
 
     mockAllSetupProviders.mockReturnValue([claudeProvider, desktopProvider]);
@@ -232,6 +244,34 @@ describe("runAgentSetup", () => {
     ]);
   });
 
+  it("refuses agent setup through temporary npx before touching the project", async () => {
+    const originalNpmCommand = process.env.npm_command;
+    const originalArgv = process.argv;
+    process.env.npm_command = "exec";
+    process.argv = [
+      process.execPath,
+      "/home/user/.npm/_npx/abc123/node_modules/.bin/dosu",
+      "setup",
+    ];
+    let code: number;
+    try {
+      code = await runAgentSetup({ tool: "claude" });
+    } finally {
+      if (originalNpmCommand === undefined) delete process.env.npm_command;
+      else process.env.npm_command = originalNpmCommand;
+      process.argv = originalArgv;
+    }
+
+    expect(code).toBe(2);
+    expect(mockRequireProjectRoot).not.toHaveBeenCalled();
+    expect(emittedEvents().at(-1)).toMatchObject({
+      step: "setup",
+      status: "error",
+      reason: "global_install_required",
+      agent_next_steps: expect.stringContaining("globally installed Dosu CLI"),
+    });
+  });
+
   it("rejects global-only tools before authentication", async () => {
     const code = await runAgentSetup({ tool: "claude-desktop" });
 
@@ -261,6 +301,19 @@ describe("runAgentSetup", () => {
     });
   });
 
+  it("rejects an unsafe deployment before authentication or ticket minting", async () => {
+    const code = await runAgentSetup({ tool: "claude", deploymentID: "dep; echo PWNED" });
+
+    expect(code).toBe(2);
+    expect(mockMintTicket).not.toHaveBeenCalled();
+    expect(mockLoadConfig).not.toHaveBeenCalled();
+    expect(emittedEvents()[0]).toMatchObject({
+      step: "setup",
+      status: "error",
+      reason: "invalid_deployment",
+    });
+  });
+
   it("mints a ticket and emits need_user_action when not authenticated", async () => {
     mockMintTicket.mockResolvedValue({
       ticket: "tkt-1",
@@ -278,7 +331,7 @@ describe("runAgentSetup", () => {
       status: "need_user_action",
       ticket: "tkt-1",
       url: "https://app.dosu.dev/cli/auth?ticket=tkt-1",
-      resume_command: "npx @dosu/cli@latest setup --agent --tool claude --login-ticket tkt-1",
+      resume_command: "dosu setup --agent --tool claude --login-ticket tkt-1",
     });
   });
 
@@ -326,7 +379,8 @@ describe("runAgentSetup", () => {
       "done",
     ]);
     expect(claudeProvider.install).toHaveBeenCalledTimes(1);
-    expect(claudeProvider.install).toHaveBeenCalledWith(expect.any(Object), false, {
+    expect(claudeProvider.install).toHaveBeenCalledWith(expect.any(Object), {
+      scope: "project",
       projectRoot: "/tmp/repo",
     });
     expect(mockSaveConfig).toHaveBeenCalled();
@@ -340,10 +394,7 @@ describe("runAgentSetup", () => {
       agent_next_steps: expect.stringMatching(/Claude Code.*dosu status --json/),
     });
     expect(mockInstallRuleForAgent).toHaveBeenCalledWith("claude", "canonical rule\n", "/tmp/repo");
-    expect(mockInstallSkill).toHaveBeenCalledWith(["claude"], {
-      quiet: true,
-      projectRoot: "/tmp/repo",
-    });
+    expect(mockInstallSkill).toHaveBeenCalledWith(["claude"], { quiet: true });
     expect(mockUpsertDosuAgentsSection).toHaveBeenCalledWith("/tmp/repo", "canonical rule\n");
   });
 

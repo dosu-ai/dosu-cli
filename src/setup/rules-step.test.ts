@@ -44,7 +44,7 @@ function makeProvider(id: string): SetupProvider {
   return {
     id: () => id,
     name: () => `Agent ${id}`,
-    supportsLocal: () => true,
+    configurationKind: () => "project",
     install: vi.fn(),
     remove: vi.fn(),
     detectPaths: () => [],
