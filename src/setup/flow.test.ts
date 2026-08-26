@@ -873,6 +873,23 @@ describe("runSetup integration", () => {
     expect(clientMethods.validateAPIKey).toHaveBeenCalled();
   });
 
+  it("treats a cancelled GitHub confirm as a decline and continues setup", async () => {
+    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
+    const clientMethods = setupAuthenticatedClient();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    // `null` list exercises the `?? []` fallback alongside the cancel path.
+    mockTrpc.dataSource.list.query.mockResolvedValue(null);
+    const cancelSentinel = Symbol("clack:cancel");
+    vi.mocked(p.confirm).mockResolvedValue(cancelSentinel as never);
+    vi.mocked(p.isCancel).mockImplementation((value: unknown) => value === cancelSentinel);
+
+    await runSetup();
+
+    expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
+    expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("Connect later at"));
+    expect(clientMethods.validateAPIKey).toHaveBeenCalled();
+  });
+
   it("stays quiet when the org already has a GitHub source", async () => {
     saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
     setupAuthenticatedClient();
@@ -896,6 +913,21 @@ describe("runSetup integration", () => {
     expect(p.confirm).not.toHaveBeenCalled();
     expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
     // Fail-open: setup still proceeds.
+    expect(clientMethods.validateAPIKey).toHaveBeenCalled();
+  });
+
+  it("skips the GitHub offer when the source lookup rejects with a non-Error", async () => {
+    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
+    const clientMethods = setupAuthenticatedClient();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    // tRPC boundaries can reject with plain values; the step must stringify
+    // them for the debug log without blowing up.
+    mockTrpc.dataSource.list.query.mockRejectedValue("backend down");
+
+    await runSetup();
+
+    expect(p.confirm).not.toHaveBeenCalled();
+    expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
     expect(clientMethods.validateAPIKey).toHaveBeenCalled();
   });
 
