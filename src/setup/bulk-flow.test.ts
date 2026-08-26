@@ -26,6 +26,7 @@ import { CursorProvider } from "../mcp/providers/cursor";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
 import {
   type BulkProjectSetupDependencies,
+  bulkSkillProviders,
   configureBulkRepository,
   runBulkProjectSetup,
 } from "./bulk-flow";
@@ -112,6 +113,12 @@ describe("bulk project setup flow", () => {
       .mockResolvedValueOnce(repositories.map((repo) => repo.path) as never)
       .mockResolvedValueOnce(["cursor"] as never);
     vi.mocked(p.confirm).mockResolvedValue(true as never);
+  });
+
+  it("skips the global skill installer for agents without a supported skill target", () => {
+    expect(
+      bulkSkillProviders([provider("mcporter"), provider("cursor")]).map((item) => item.id()),
+    ).toEqual(["cursor"]);
   });
 
   it("uses the fixed Library → repositories → agents → preview → execute order", async () => {
