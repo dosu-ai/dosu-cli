@@ -25,10 +25,12 @@ vi.mock("@clack/prompts", () => ({
   select: vi.fn(),
   multiselect: vi.fn(),
   isCancel: vi.fn(),
+  // Mirror the real @clack/prompts spinner API (start/stop/message only) so
+  // tests can't pass while calling methods the real spinner doesn't have.
   spinner: vi.fn(() => ({
     start: vi.fn(),
     stop: vi.fn(),
-    clear: vi.fn(),
+    message: vi.fn(),
   })),
   log: {
     warn: vi.fn(),
@@ -88,7 +90,7 @@ const mockTrpc = vi.hoisted(() => ({
     create: { mutate: vi.fn() },
     listForSpace: { query: vi.fn().mockResolvedValue([]) },
   },
-  dataSource: { create: { mutate: vi.fn() } },
+  dataSource: { create: { mutate: vi.fn() }, list: { query: vi.fn() } },
   deploymentDataSource: { create: { mutate: vi.fn().mockResolvedValue({}) } },
 }));
 vi.mock("@trpc/client", () => ({
@@ -230,6 +232,11 @@ function installRemoteSetupDefaults() {
   mockTrpc.user.updateProfile.mutate.mockResolvedValue(null);
   mockTrpc.user.trackCliOnboardingEvent.mutate.mockResolvedValue({ ok: true });
   mockTrpc.user.trackCliOnboardingPreAuthEvent.mutate.mockResolvedValue({ ok: true });
+  // Default: the org already has a GitHub source, so the connect offer stays
+  // quiet. Tests that exercise the offer override with an empty list.
+  mockTrpc.dataSource.list.query.mockResolvedValue([
+    { data_source_id: "ds-1", provider_slug: "github", name: "acme/repo" },
+  ]);
 }
 
 // ---------------------------------------------------------------------------
@@ -830,6 +837,81 @@ describe("runSetup integration", () => {
     const savedCfg = loadConfig();
     expect(savedCfg.active_account?.target?.deployment_id).toBe("d1");
     expect(savedCfg.active_account?.target?.deployment_name).toBe("Deploy1");
+  });
+
+  it("offers and runs the GitHub connect step when the org has no GitHub source", async () => {
+    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
+    setupAuthenticatedClient();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mockTrpc.dataSource.list.query.mockResolvedValue([]);
+    vi.mocked(p.confirm).mockResolvedValue(true as never);
+
+    await runSetup();
+
+    expect(mockTrpc.dataSource.list.query).toHaveBeenCalledWith({
+      org_id: "o1",
+      excluded_provider_slugs: [],
+    });
+    expect(p.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("No GitHub repos are connected"),
+    );
+    expect(mockStepConnectGitHubRepo).toHaveBeenCalledTimes(1);
+  });
+
+  it("points at the web app and continues setup when the GitHub offer is declined", async () => {
+    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
+    const clientMethods = setupAuthenticatedClient();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mockTrpc.dataSource.list.query.mockResolvedValue([]);
+    vi.mocked(p.confirm).mockResolvedValue(false as never);
+
+    await runSetup();
+
+    expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
+    expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("Connect later at"));
+    // Declining is not a failure — setup proceeds to the API key step.
+    expect(clientMethods.validateAPIKey).toHaveBeenCalled();
+  });
+
+  it("stays quiet when the org already has a GitHub source", async () => {
+    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
+    setupAuthenticatedClient();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    // installRemoteSetupDefaults() already returns a github data source.
+
+    await runSetup();
+
+    expect(p.confirm).not.toHaveBeenCalled();
+    expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
+  });
+
+  it("skips the GitHub offer silently when the source lookup fails", async () => {
+    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
+    const clientMethods = setupAuthenticatedClient();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mockTrpc.dataSource.list.query.mockRejectedValue(new Error("backend down"));
+
+    await runSetup();
+
+    expect(p.confirm).not.toHaveBeenCalled();
+    expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
+    // Fail-open: setup still proceeds.
+    expect(clientMethods.validateAPIKey).toHaveBeenCalled();
+  });
+
+  it("never offers the GitHub connect step in OSS mode", async () => {
+    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined, mode: "oss" }));
+    setupAuthenticatedClient();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mockStartOAuthFlow.mockResolvedValue({
+      browserOpened: true,
+      token: { access_token: "tok", refresh_token: "ref", expires_in: 3600 },
+    });
+
+    await runSetup();
+
+    expect(mockTrpc.dataSource.list.query).not.toHaveBeenCalled();
+    expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
   });
 
   it("completes full flow with tool install via real filesystem", async () => {
@@ -1641,7 +1723,7 @@ describe("runInstallSkill", () => {
 
     expect(result).toBe(true);
     expect(spinner?.start).toHaveBeenCalledWith("Installing skill for 1 agent");
-    expect(spinner?.clear).toHaveBeenCalledOnce();
+    expect(spinner?.stop).toHaveBeenCalledWith("Skill installed");
     expect(mockInstallSkill).toHaveBeenCalledWith(["claude"], { quiet: true });
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill ready for 1 agent"));
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Claude Code"));
@@ -1667,7 +1749,7 @@ describe("runInstallSkill", () => {
 
     expect(result).toBe(false);
     expect(spinner?.start).toHaveBeenCalledWith("Installing skill for 1 agent");
-    expect(spinner?.clear).toHaveBeenCalledOnce();
+    expect(spinner?.stop).toHaveBeenCalledWith("Skill install failed");
     expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Failed to install skill"));
   });
 
@@ -1679,7 +1761,7 @@ describe("runInstallSkill", () => {
 
     expect(result).toBe(false);
     expect(spinner?.start).toHaveBeenCalledWith("Installing skill for 1 agent");
-    expect(spinner?.clear).toHaveBeenCalledOnce();
+    expect(spinner?.stop).toHaveBeenCalledWith("Skill install failed");
     expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("boom"));
   });
 });

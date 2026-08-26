@@ -17,11 +17,13 @@ import {
   saveConfig,
   updateTarget,
 } from "../config/config";
+import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { inGitWorkTree, stepUpdateAgentsMd } from "./agents-md-step";
 import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
+import { stepConnectGitHubRepo } from "./github-step";
 import {
   type LogsHandoffDecision,
   type LogsHandoffPlan,
@@ -219,6 +221,13 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     }
   }
 
+  // GitHub guard (cloud only): an MCP whose workspace has no connected repo
+  // answers from nothing. Offer the interactive connect step; skippable and
+  // fail-open, so setup never blocks on it.
+  if (cfg.mode !== MODE_OSS) {
+    await stepOfferGithubConnect(cfg);
+  }
+
   // API key: `stepMintAPIKey` is idempotent — it validates an existing key
   // before minting a new one, so it's safe to call on every run.
   const apiKey = await stepMintAPIKey(apiClient, cfg);
@@ -400,18 +409,18 @@ export async function runInstallSkill(providers: readonly SetupProvider[]): Prom
           },
         ];
       });
-      spinner.clear();
+      spinner.stop("Skill installed");
       p.log.success(formatSetupSummary(`Skill ready for ${items.length} agent(s):`, items));
       return true;
     }
-    spinner.clear();
+    spinner.stop("Skill install failed");
     p.log.error("Failed to install skill. Run `dosu skill install` to retry.");
     return false;
   } catch (err: unknown) {
     /* v8 ignore next -- err is always Error in practice */
     const msg = err instanceof Error ? err.message : String(err);
     logger.error("setup", `Skill install failed: ${msg}`);
-    spinner.clear();
+    spinner.stop("Skill install failed");
     p.log.error(`Skill install failed: ${msg}`);
     return false;
   }
@@ -628,6 +637,47 @@ async function stepSetupHandshake(cfg: Config, onboardingRunID: string): Promise
     );
     return false;
   }
+}
+
+/**
+ * When the selected workspace has no GitHub data source yet, warn and offer
+ * the interactive GitHub connect step (`stepConnectGitHubRepo`: browser App
+ * install + repo multiselect). Declining prints where to do it later.
+ *
+ * Fail-open by design: a failed source lookup skips the offer silently —
+ * this step is a nudge, never a gate, so setup always proceeds.
+ */
+async function stepOfferGithubConnect(cfg: Config): Promise<void> {
+  const orgID = cfg.active_account?.target?.org_id;
+  if (!orgID) return;
+
+  try {
+    const { createTypedClient } = await import("../client/trpc");
+    const trpc = createTypedClient(cfg);
+    const dataSources: { provider_slug?: string | null }[] = await trpc.dataSource.list.query({
+      org_id: orgID,
+      excluded_provider_slugs: [],
+    });
+    if ((dataSources ?? []).some((ds) => ds.provider_slug === "github")) return;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn("setup", `GitHub source check failed, skipping offer: ${msg}`);
+    return;
+  }
+
+  logger.info("setup", "Step: offer GitHub connect (no github data source in org)");
+  p.log.warn("No GitHub repos are connected to this MCP yet — it can't answer from your code.");
+  const connectNow = await p.confirm({
+    message: "Connect a GitHub repo now?",
+    initialValue: true,
+  });
+  if (p.isCancel(connectNow) || !connectNow) {
+    p.log.info(
+      `Skipped. Connect later at ${info(`${getWebAppURL()}/libraries`)} or re-run ${info("dosu setup")}.`,
+    );
+    return;
+  }
+  await stepConnectGitHubRepo(cfg);
 }
 
 async function resolveCloudSetupContext(cfg: Config): Promise<CloudSetupContext | null> {
