@@ -104,7 +104,10 @@ export function cleanupLegacyGlobalMcp(provider: SetupProvider): LegacyGlobalOut
       : outcome(providerID, "mcp", path, "not_found");
   }
   if (!existsSync(path)) return outcome(providerID, "mcp", path, "not_found");
-  if (path.endsWith(".jsonc") || !isRegularUnlinkedFile(path)) {
+  if (path.endsWith(".jsonc")) {
+    return outcome(providerID, "mcp", path, "preserved", "shared_or_unsupported");
+  }
+  if (!isRegularUnlinkedFile(path)) {
     return outcome(providerID, "mcp", path, "preserved", "symlink_or_non_file");
   }
 
