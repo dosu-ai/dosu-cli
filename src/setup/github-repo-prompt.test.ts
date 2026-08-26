@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   ADD_REPOSITORIES_VALUE,
   GitHubRepoPrompt,
+  KEYS_HINT,
   type REFRESH_LIST_VALUE,
   validateRepoSelection,
 } from "./github-repo-prompt";
@@ -221,6 +222,23 @@ describe("GitHubRepoPrompt rendering", () => {
     const output = render(prompt);
     expect(output).toContain("Pick repositories");
     expect(output).not.toContain("a/b");
+  });
+
+  it("renders the key legend on the footer line in default state", () => {
+    const options = [ACTION_OPTION, ...repoOptions("a/b")];
+    const prompt = makePrompt(options);
+    const output = render(prompt);
+    expect(output).toContain(KEYS_HINT);
+  });
+
+  it("replaces the key legend with the validation message in error state", () => {
+    const options = [ACTION_OPTION, ...repoOptions("a/b")];
+    const prompt = makePrompt(options);
+    const mutable = prompt as unknown as { state: string; error: string };
+    mutable.state = "error";
+    mutable.error = "Select at least one repository — Space to select, Enter to confirm.";
+    const output = render(prompt);
+    expect(output).not.toContain(KEYS_HINT);
   });
 
   it("renders the validation message next to the footer in error state", () => {

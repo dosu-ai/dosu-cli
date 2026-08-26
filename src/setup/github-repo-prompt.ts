@@ -15,6 +15,9 @@ import {
 const ACTION_ARROW = symbol("→", ">");
 const SEPARATOR_LINE = "─".repeat(30);
 
+/** Always-visible key legend rendered on the footer line. */
+export const KEYS_HINT = "Space to select · A to select all · Enter to confirm";
+
 export const ADD_REPOSITORIES_VALUE = "__add_repositories__" as const;
 export const REFRESH_LIST_VALUE = "__refresh_list__" as const;
 
@@ -219,7 +222,9 @@ ${symbolByState}  ${this.message}
     });
 
     const footer =
-      this.state === "error" ? `${pc.cyan(FOOTER)}  ${pc.yellow(this.error)}` : pc.cyan(FOOTER);
+      this.state === "error"
+        ? `${pc.cyan(FOOTER)}  ${pc.yellow(this.error)}`
+        : `${pc.cyan(FOOTER)}  ${pc.dim(KEYS_HINT)}`;
     return `${header}${body.join("\n")}
 ${footer}`;
   }
