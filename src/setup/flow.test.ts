@@ -858,7 +858,7 @@ describe("runSetup integration", () => {
     expect(mockStepConnectGitHubRepo).toHaveBeenCalledTimes(1);
   });
 
-  it("points at the web app and continues setup when the GitHub offer is declined", async () => {
+  it("points at the web app and continues setup when the user continues without GitHub", async () => {
     saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
     const clientMethods = setupAuthenticatedClient();
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
@@ -869,7 +869,7 @@ describe("runSetup integration", () => {
 
     expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
     expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("Connect later at"));
-    // Declining is not a failure — setup proceeds to the API key step.
+    // Continuing without GitHub is not a failure — setup proceeds to the API key step.
     expect(clientMethods.validateAPIKey).toHaveBeenCalled();
   });
 

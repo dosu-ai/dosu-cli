@@ -222,8 +222,9 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   }
 
   // GitHub guard (cloud only): an MCP whose workspace has no connected repo
-  // answers from nothing. Offer the interactive connect step; skippable and
-  // fail-open, so setup never blocks on it.
+  // answers from nothing. Offer the interactive connect step; the user can
+  // choose to continue without it, and the source lookup is fail-open, so
+  // setup never blocks on this step.
   if (cfg.mode !== MODE_OSS) {
     await stepOfferGithubConnect(cfg);
   }
@@ -642,7 +643,8 @@ async function stepSetupHandshake(cfg: Config, onboardingRunID: string): Promise
 /**
  * When the selected workspace has no GitHub data source yet, warn and offer
  * the interactive GitHub connect step (`stepConnectGitHubRepo`: browser App
- * install + repo multiselect). Declining prints where to do it later.
+ * install + repo multiselect). Choosing "Skip for now" prints where to do
+ * it later and setup proceeds.
  *
  * Fail-open by design: a failed source lookup skips the offer silently —
  * this step is a nudge, never a gate, so setup always proceeds.
@@ -669,6 +671,8 @@ async function stepOfferGithubConnect(cfg: Config): Promise<void> {
   p.log.warn("No GitHub repos are connected to this MCP yet — it can't answer from your code.");
   const connectNow = await p.confirm({
     message: "Connect a GitHub repo now?",
+    active: "Connect now",
+    inactive: "Skip for now",
     initialValue: true,
   });
   if (p.isCancel(connectNow) || !connectNow) {
