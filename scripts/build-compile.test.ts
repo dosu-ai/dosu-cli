@@ -12,9 +12,16 @@ describe("build-compile script", () => {
     expect(content).toContain("--compile");
   });
 
+  it("disables implicit cwd dotenv and bunfig loading", () => {
+    const content = readFileSync(join(__dirname, "build-compile.ts"), "utf-8");
+    expect(content).toContain('"--no-compile-autoload-dotenv"');
+    expect(content).toContain('"--no-compile-autoload-bunfig"');
+  });
+
   it("uses --define via buildDefines from build-all", () => {
     const content = readFileSync(join(__dirname, "build-compile.ts"), "utf-8");
-    expect(content).toContain('import { buildDefines } from "./build-all"');
+    expect(content).toContain("buildDefines");
+    expect(content).toContain('from "./build-all"');
     expect(content).toContain("...defines");
   });
 

@@ -21,12 +21,12 @@ import {
   isDosuOwnedMcpServer,
   type ProjectProxyCommand,
 } from "../project-proxy";
-import type { SetupProvider } from "../providers";
+import type { ProviderConfigurationKind, SetupProvider } from "../providers";
 
 export interface BaseProviderConfig {
   providerName: string;
   providerID: string;
-  local: boolean;
+  configurationKind: ProviderConfigurationKind;
   priorityValue: number;
   paths: string[];
   globalPath: string;
@@ -80,7 +80,7 @@ export function createJSONProvider(opts: BaseProviderConfig): SetupProvider {
   return {
     name: () => opts.providerName,
     id: () => opts.providerID,
-    supportsLocal: () => opts.local,
+    configurationKind: () => opts.configurationKind,
     priority: () => opts.priorityValue,
     detectPaths: () => opts.paths,
     isInstalled: () => isInstalled(opts.paths),
@@ -110,9 +110,10 @@ export function createJSONProvider(opts: BaseProviderConfig): SetupProvider {
       }
     },
 
-    install(cfg: Config, global: boolean, installOpts = {}): void {
+    install(cfg: Config, installOpts): void {
       if (cfg.mode !== MODE_OSS && !cfg.active_account?.target?.deployment_id)
         throw new Error("deployment ID is required");
+      const global = installOpts.scope === "global";
       let configPath: string;
       if (global) {
         configPath = expandHome(opts.globalPath);
@@ -141,7 +142,8 @@ export function createJSONProvider(opts: BaseProviderConfig): SetupProvider {
       }
     },
 
-    remove(global: boolean, removeOpts = {}): void {
+    remove(removeOpts): void {
+      const global = removeOpts.scope === "global";
       let configPath: string;
       if (global) {
         configPath = expandHome(opts.globalPath);

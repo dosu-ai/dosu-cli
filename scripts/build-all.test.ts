@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildDefines } from "./build-all";
+import { assertSecureCompileRuntime, buildDefines } from "./build-all";
 
 describe("build-all script", () => {
   it("script file exists", () => {
@@ -17,6 +17,18 @@ describe("build-all script", () => {
     expect(content).toContain("bun-linux-x64-musl");
     expect(content).toContain("bun-linux-arm64-musl");
     expect(content).toContain("bun-windows-x64-baseline");
+  });
+
+  it("disables implicit cwd dotenv and bunfig loading in native binaries", () => {
+    const content = readFileSync(join(__dirname, "build-all.ts"), "utf-8");
+    expect(content).toContain('"--no-compile-autoload-dotenv"');
+    expect(content).toContain('"--no-compile-autoload-bunfig"');
+  });
+
+  it("refuses Bun versions that accept but do not enforce compile isolation", () => {
+    expect(() => assertSecureCompileRuntime("1.3.14")).toThrow("Bun >= 1.4.0");
+    expect(() => assertSecureCompileRuntime("1.4.0")).not.toThrow();
+    expect(() => assertSecureCompileRuntime("2.0.0")).not.toThrow();
   });
 });
 

@@ -16,7 +16,7 @@ export const ZedProvider = () =>
   createJSONProvider({
     providerName: "Zed",
     providerID: "zed",
-    local: true,
+    configurationKind: "project",
     priorityValue: 10,
     paths: [zedConfigDir()],
     globalPath: join(zedConfigDir(), "settings.json"),

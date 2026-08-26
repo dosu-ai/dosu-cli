@@ -48,6 +48,7 @@ export function replaceLoginSession(cfg: Config, session: SessionCredentials): v
     user_id: nextUserID,
     session: sessionWithoutIdentity(session),
     target: preserveTarget ? cloneTarget(cfg.active_account?.target) : undefined,
+    targets: preserveTarget ? cloneTargets(cfg.active_account?.targets) : {},
   };
 }
 
@@ -55,7 +56,10 @@ export function replaceLoginSession(cfg: Config, session: SessionCredentials): v
 export function bindAccountIdentity(cfg: Config, userID: string): void {
   const account = cfg.active_account;
   if (!account) throw new Error("cannot bind an identity without an authenticated session");
-  if (account.user_id && account.user_id !== userID) account.target = undefined;
+  if (account.user_id && account.user_id !== userID) {
+    account.target = undefined;
+    account.targets = {};
+  }
   account.user_id = userID;
 }
 
@@ -63,7 +67,28 @@ export function updateTarget(cfg: Config, target: AccountTarget): void {
   if (!cfg.active_account?.user_id) {
     throw new Error("cannot bind a target without a verified account identity");
   }
-  cfg.active_account.target = { ...cfg.active_account.target, ...target };
+  const current = cfg.active_account.target;
+  const switchingDeployment =
+    Boolean(target.deployment_id) && target.deployment_id !== current?.deployment_id;
+  const base = switchingDeployment
+    ? cfg.active_account.targets?.[target.deployment_id ?? ""]
+    : current;
+  const next = { ...base, ...target };
+  cfg.active_account.target = next;
+  if (next.deployment_id) {
+    cfg.active_account.targets = {
+      ...cfg.active_account.targets,
+      [next.deployment_id]: { ...next },
+    };
+  }
+}
+
+/** Return the private credential saved for one project deployment. */
+export function targetForDeployment(cfg: Config, deploymentID: string): AccountTarget | undefined {
+  const stored = cfg.active_account?.targets?.[deploymentID];
+  if (stored) return cloneTarget(stored);
+  const active = cfg.active_account?.target;
+  return active?.deployment_id === deploymentID ? cloneTarget(active) : undefined;
 }
 
 /**
@@ -106,10 +131,10 @@ export function loadConfig(): Config {
   }
 
   const parsed = parseConfig(raw);
-  if (isConfigV2(raw)) return parsed;
+  if (isConfigV3(raw)) return parsed;
   // Legacy configs were unversioned. Never rewrite a schema this version does
   // not understand, or downgrading could destroy newer config data.
-  if (isRecord(raw) && "schema_version" in raw) return parsed;
+  if (isRecord(raw) && "schema_version" in raw && !isConfigV2(raw)) return parsed;
 
   try {
     writeConfig(path, parsed);
@@ -122,7 +147,8 @@ export function loadConfig(): Config {
 
 /** Parse config content without performing filesystem writes. */
 export function parseConfig(raw: unknown): Config {
-  if (isConfigV2(raw)) return normalizeV2(raw);
+  if (isConfigV3(raw)) return normalizeV3(raw);
+  if (isConfigV2(raw)) return migrateV2(raw);
   if (isRecord(raw) && "schema_version" in raw) return emptyConfig();
   return migrateLegacyConfig(raw);
 }
@@ -165,11 +191,26 @@ function cloneTarget(target: AccountTarget | undefined): AccountTarget | undefin
   return target ? { ...target } : undefined;
 }
 
-function isConfigV2(value: unknown): value is Config {
+function cloneTargets(
+  targets: Record<string, AccountTarget> | undefined,
+): Record<string, AccountTarget> {
+  return Object.fromEntries(
+    Object.entries(targets ?? {}).map(([deploymentID, target]) => [
+      deploymentID,
+      cloneTarget(target) ?? {},
+    ]),
+  );
+}
+
+function isConfigV3(value: unknown): value is Config {
   return isRecord(value) && value.schema_version === CONFIG_SCHEMA_VERSION;
 }
 
-function normalizeV2(value: Config): Config {
+function isConfigV2(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && value.schema_version === 2;
+}
+
+function normalizeV3(value: Config): Config {
   const active = isRecord(value.active_account) ? value.active_account : undefined;
   const session = active && isRecord(active.session) ? active.session : undefined;
   if (!active || !session) {
@@ -181,6 +222,9 @@ function normalizeV2(value: Config): Config {
 
   const accessToken = stringValue(session.access_token) ?? "";
   const userID = stringValue(active.user_id) ?? getAccessTokenUserID(accessToken);
+  const target = userID ? normalizeTarget(active.target) : undefined;
+  const targets = userID ? normalizeTargets(active.targets) : {};
+  if (target?.deployment_id) targets[target.deployment_id] = { ...target };
   return {
     schema_version: CONFIG_SCHEMA_VERSION,
     mode: value.mode === MODE_OSS ? MODE_OSS : undefined,
@@ -191,7 +235,36 @@ function normalizeV2(value: Config): Config {
         refresh_token: stringValue(session.refresh_token) ?? "",
         expires_at: numberValue(session.expires_at) ?? 0,
       },
-      target: userID ? normalizeTarget(active.target) : undefined,
+      target,
+      targets,
+    },
+  };
+}
+
+function migrateV2(value: Record<string, unknown>): Config {
+  const active = isRecord(value.active_account) ? value.active_account : undefined;
+  const session = active && isRecord(active.session) ? active.session : undefined;
+  if (!active || !session) {
+    return {
+      schema_version: CONFIG_SCHEMA_VERSION,
+      mode: value.mode === MODE_OSS ? MODE_OSS : undefined,
+    };
+  }
+  const accessToken = stringValue(session.access_token) ?? "";
+  const userID = stringValue(active.user_id) ?? getAccessTokenUserID(accessToken);
+  const target = userID ? normalizeTarget(active.target) : undefined;
+  return {
+    schema_version: CONFIG_SCHEMA_VERSION,
+    mode: value.mode === MODE_OSS ? MODE_OSS : undefined,
+    active_account: {
+      user_id: userID,
+      session: {
+        access_token: accessToken,
+        refresh_token: stringValue(session.refresh_token) ?? "",
+        expires_at: numberValue(session.expires_at) ?? 0,
+      },
+      target,
+      targets: target?.deployment_id ? { [target.deployment_id]: { ...target } } : {},
     },
   };
 }
@@ -206,6 +279,17 @@ function normalizeTarget(value: unknown): AccountTarget | undefined {
     space_id: stringValue(value.space_id),
   };
   return Object.values(target).some((field) => field !== undefined) ? target : undefined;
+}
+
+function normalizeTargets(value: unknown): Record<string, AccountTarget> {
+  if (!isRecord(value)) return {};
+  const targets: Record<string, AccountTarget> = {};
+  for (const [deploymentID, rawTarget] of Object.entries(value)) {
+    const target = normalizeTarget(rawTarget);
+    if (!target || target.deployment_id !== deploymentID) continue;
+    targets[deploymentID] = target;
+  }
+  return targets;
 }
 
 function writeConfig(path: string, config: Config): void {

@@ -1,7 +1,6 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import { win32 } from "node:path";
-import { type Config, loadConfig, MODE_OSS } from "../config/config";
-import { VERSION } from "../version/version";
+import { type Config, loadConfig, MODE_OSS, targetForDeployment } from "../config/config";
 import { mcpBaseURL, mcpRemoteServer, mcpURL } from "./config-helpers";
 import { findNpx, npxPathEnv } from "./detect";
 
@@ -11,7 +10,7 @@ export interface ProjectProxyOptions {
 }
 
 export interface ProjectProxyCommand {
-  command: "npx";
+  command: "dosu";
   args: string[];
 }
 
@@ -38,49 +37,39 @@ function projectCommand(value: unknown): { command: string; args: string[] } | n
   return null;
 }
 
-function isDosuEndpoint(value: unknown): boolean {
-  if (typeof value !== "string") return false;
-  try {
-    const path = new URL(value, "https://dosu.invalid").pathname;
-    return path === "/v1/mcp" || path.startsWith("/v1/mcp/");
-  } catch {
-    return false;
-  }
-}
-
-function hasDosuHeader(value: unknown): boolean {
-  return (
-    isRecord(value) && Object.keys(value).some((key) => key.toLowerCase() === "x-dosu-api-key")
-  );
-}
-
 /** True only for an MCP entry shape written by a released Dosu CLI flow. */
 export function isDosuOwnedMcpServer(value: unknown): boolean {
   if (!isRecord(value)) return false;
 
   const command = projectCommand(value);
+  if (command?.command === "dosu") {
+    const [mcp, proxy, targetFlag, targetValue] = command.args;
+    const currentProxy =
+      mcp === "mcp" &&
+      proxy === "proxy" &&
+      ((targetFlag === "--oss" && targetValue === undefined && command.args.length === 3) ||
+        (targetFlag === "--deployment" &&
+          targetValue !== undefined &&
+          command.args.length === 4 &&
+          SAFE_DEPLOYMENT_ID.test(targetValue)));
+    if (currentProxy) return true;
+  }
   if (command?.command === "npx") {
     const [yes, cliPackage, mcp, proxy, targetFlag, targetValue] = command.args;
     const projectProxy =
       yes === "-y" &&
       typeof cliPackage === "string" &&
-      /^@dosu\/cli@[^\s]+$/.test(cliPackage) &&
+      /^@dosu\/cli@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(cliPackage) &&
       mcp === "mcp" &&
       proxy === "proxy" &&
-      ((targetFlag === "--oss" && targetValue === undefined) ||
+      ((targetFlag === "--oss" && targetValue === undefined && command.args.length === 5) ||
         (targetFlag === "--deployment" &&
           targetValue !== undefined &&
+          command.args.length === 6 &&
           SAFE_DEPLOYMENT_ID.test(targetValue)));
     if (projectProxy) return true;
   }
 
-  if (isDosuEndpoint(value.url) && hasDosuHeader(value.headers)) return true;
-
-  if (command?.args.some((arg) => /^mcp-remote@\d/.test(arg))) {
-    const hasEndpoint = command.args.some(isDosuEndpoint);
-    const hasHeaderArgument = command.args.some((arg) => arg.startsWith("X-Dosu-API-Key:"));
-    return hasEndpoint && hasHeaderArgument && isRecord(value.env) && "X_DOSU_API_KEY" in value.env;
-  }
   return false;
 }
 
@@ -107,8 +96,12 @@ export interface ProjectProxyDependencies {
 const SAFE_DEPLOYMENT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 const WINDOWS_SHELL_METACHARACTERS = /[\s"&|<>()^%!]/;
 
+export function isSafeDeploymentID(value: unknown): value is string {
+  return typeof value === "string" && SAFE_DEPLOYMENT_ID.test(value);
+}
+
 function requireSafeDeploymentID(value: unknown): string {
-  if (typeof value !== "string" || !SAFE_DEPLOYMENT_ID.test(value)) {
+  if (!isSafeDeploymentID(value)) {
     throw new Error("Invalid project deployment ID. Re-run `dosu setup` in this project.");
   }
   return value;
@@ -140,13 +133,13 @@ function requireSafeEndpoint(value: string): string {
 
 /** Build the exact, secretless command written into project MCP files. */
 export function buildProjectProxyCommand(cfg: Config): ProjectProxyCommand {
-  const args = ["-y", `@dosu/cli@${VERSION}`, "mcp", "proxy"];
+  const args = ["mcp", "proxy"];
   if (cfg.mode === MODE_OSS) {
     args.push("--oss");
   } else {
     args.push("--deployment", requireSafeDeploymentID(cfg.active_account?.target?.deployment_id));
   }
-  return { command: "npx", args };
+  return { command: "dosu", args };
 }
 
 /** Resolve runtime secrets only from the one active, private Dosu config. */
@@ -166,12 +159,17 @@ export function resolveProjectProxyRuntime(
     endpoint = requireSafeEndpoint(mcpBaseURL());
   } else {
     const deploymentID = requireSafeDeploymentID(options.deploymentID);
-    if (cfg.mode === MODE_OSS || cfg.active_account?.target?.deployment_id !== deploymentID) {
+    const target = targetForDeployment(cfg, deploymentID);
+    if (!target)
       throw new Error(
-        "This project's Dosu MCP does not match the active Dosu MCP. Re-run `dosu setup` in this project.",
+        "No credential is stored for this project's Dosu MCP. Re-run `dosu setup` in this project.",
       );
-    }
     endpoint = requireSafeEndpoint(mcpURL(deploymentID));
+    const apiKey = target.api_key;
+    if (!apiKey) {
+      throw new Error("Dosu API key is missing. Re-run `dosu setup` in this project.");
+    }
+    return { endpoint, apiKey };
   }
 
   const apiKey = cfg.active_account?.target?.api_key;
@@ -199,6 +197,7 @@ export async function runProjectProxy(
       shell: platform === "win32",
       env: {
         ...process.env,
+        ...(platform === "win32" ? { NoDefaultCurrentDirectoryInExePath: "1" } : {}),
         PATH: npxPathEnv(npx),
         ...remote.env,
       },

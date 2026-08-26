@@ -138,6 +138,15 @@ describe("JSON config file operations", () => {
 
       expect(() => loadJSONConfig(path)).toThrow("Unterminated JSONC block comment");
     });
+
+    it.each([[], "string", 7, null])("rejects a non-object config root: %j", (root) => {
+      const path = join(tempDir, "non-object-root.json");
+      const original = JSON.stringify(root);
+      writeFileSync(path, original);
+
+      expect(() => loadJSONConfig(path)).toThrow(/root must be an object/);
+      expect(readFileSync(path, "utf-8")).toBe(original);
+    });
   });
 
   describe("saveJSONConfig", () => {
@@ -217,6 +226,15 @@ describe("JSON config file operations", () => {
       expect(getJSONServer(path, "mcpServers")).toBeUndefined();
       expect(getJSONServer(path, "servers")).toBeUndefined();
     });
+
+    it.each(["string", 7, [], null])("rejects a non-object MCP section: %j", (section) => {
+      const path = join(tempDir, "foreign-section.json");
+      const original = JSON.stringify({ mcpServers: section });
+      writeFileSync(path, original);
+
+      expect(() => getJSONServer(path, "mcpServers")).toThrow(/must be an object/);
+      expect(readFileSync(path, "utf-8")).toBe(original);
+    });
   });
 
   describe("installJSONServer", () => {
@@ -242,6 +260,17 @@ describe("JSON config file operations", () => {
       installJSONServer(path, "mcpServers", { url: "new" });
       const result = loadJSONConfig(path);
       expect(result.mcpServers.dosu).toEqual({ url: "new" });
+    });
+
+    it.each(["string", 7, [], null])("preserves a non-object MCP section: %j", (section) => {
+      const path = join(tempDir, "foreign-section.json");
+      const original = JSON.stringify({ mcpServers: section });
+      writeFileSync(path, original);
+
+      expect(() => installJSONServer(path, "mcpServers", { url: "http://dosu" })).toThrow(
+        /must be an object/,
+      );
+      expect(readFileSync(path, "utf-8")).toBe(original);
     });
 
     it("throws without overwriting a malformed config file", () => {

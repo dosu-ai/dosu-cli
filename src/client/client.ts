@@ -241,6 +241,7 @@ export class Client {
           ...source.active_account,
           session: { ...source.active_account.session },
           target: source.active_account.target ? { ...source.active_account.target } : undefined,
+          targets: cloneAccountTargets(source.active_account.targets),
         }
       : undefined;
   }
@@ -370,8 +371,17 @@ function configWithSession(
       ...account,
       session,
       target: account.target ? { ...account.target } : undefined,
+      targets: cloneAccountTargets(account.targets),
     },
   };
+}
+
+function cloneAccountTargets(
+  targets: NonNullable<Config["active_account"]>["targets"],
+): NonNullable<Config["active_account"]>["targets"] {
+  return Object.fromEntries(
+    Object.entries(targets ?? {}).map(([deploymentID, target]) => [deploymentID, { ...target }]),
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

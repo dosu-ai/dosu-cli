@@ -103,7 +103,11 @@ export function loadJSONConfig(path: string): JsonConfig {
   if (path.endsWith(".jsonc")) {
     data = stripJSONComments(data);
   }
-  return JSON.parse(data);
+  const parsed: unknown = JSON.parse(data);
+  if (!isJSONObject(parsed)) {
+    throw new Error("Config root must be an object; refusing to modify the config file");
+  }
+  return parsed;
 }
 
 /**
@@ -195,7 +199,10 @@ export function isJSONKeyConfigured(configPath: string, topLevelKey: string): bo
 export function getJSONServer(configPath: string, topLevelKey: string): unknown {
   const cfg = loadJSONConfig(configPath);
   const section = cfg[topLevelKey];
-  if (typeof section !== "object" || section === null) return undefined;
+  if (section === undefined) return undefined;
+  if (!isJSONObject(section)) {
+    throw new Error(`${topLevelKey} must be an object; refusing to modify the config file`);
+  }
   return section.dosu;
 }
 
@@ -205,8 +212,10 @@ export function getJSONServer(configPath: string, topLevelKey: string): unknown 
 export function installJSONServer(configPath: string, topKey: string, server: JsonConfig): void {
   const jsonCfg = loadJSONConfig(configPath);
   let section = jsonCfg[topKey];
-  if (typeof section !== "object" || section === null) {
+  if (section === undefined) {
     section = {};
+  } else if (!isJSONObject(section)) {
+    throw new Error(`${topKey} must be an object; refusing to modify the config file`);
   }
   section.dosu = server;
   jsonCfg[topKey] = section;
@@ -224,8 +233,12 @@ export function removeJSONServer(configPath: string, topKey: string): void {
     return; // file doesn't exist or can't be read = nothing to remove
   }
   const section = jsonCfg[topKey];
-  if (typeof section === "object" && section !== null) {
-    delete section.dosu;
-  }
+  if (section === undefined) return;
+  if (!isJSONObject(section)) return;
+  delete section.dosu;
   saveJSONConfig(configPath, jsonCfg);
+}
+
+function isJSONObject(value: unknown): value is JsonConfig {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

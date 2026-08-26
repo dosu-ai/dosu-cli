@@ -20,16 +20,11 @@ const {
   mockFetchDosuRule,
   mockInstallRuleForAgent,
   mockIsRuleAgent,
-  mockRulePathForAgent,
   mockInstallSkill,
   mockSkillAgentIDsForProviders,
-  mockVerifiedProjectSkillProviderIDs,
   mockInGitWorkTree,
   mockUpsertDosuAgentsSection,
   mockRequireProjectRoot,
-  mockCleanupLegacyGlobalMcp,
-  mockCleanupLegacyGlobalRule,
-  mockCleanupLegacyGlobalSkill,
 } = vi.hoisted(() => {
   return {
     mockMintTicket: vi.fn(),
@@ -48,16 +43,11 @@ const {
     mockFetchDosuRule: vi.fn(),
     mockInstallRuleForAgent: vi.fn(),
     mockIsRuleAgent: vi.fn(),
-    mockRulePathForAgent: vi.fn(),
     mockInstallSkill: vi.fn(),
     mockSkillAgentIDsForProviders: vi.fn(),
-    mockVerifiedProjectSkillProviderIDs: vi.fn(),
     mockInGitWorkTree: vi.fn(),
     mockUpsertDosuAgentsSection: vi.fn(),
     mockRequireProjectRoot: vi.fn(),
-    mockCleanupLegacyGlobalMcp: vi.fn(),
-    mockCleanupLegacyGlobalRule: vi.fn(),
-    mockCleanupLegacyGlobalSkill: vi.fn(),
   };
 });
 
@@ -80,13 +70,11 @@ vi.mock("../rules/installer", () => ({
   fetchDosuRule: mockFetchDosuRule,
   installRuleForAgent: mockInstallRuleForAgent,
   isRuleAgent: mockIsRuleAgent,
-  rulePathForAgent: mockRulePathForAgent,
 }));
 
 vi.mock("../commands/skill", () => ({
   installSkill: mockInstallSkill,
   skillAgentIDsForProviders: mockSkillAgentIDsForProviders,
-  verifiedProjectSkillProviderIDs: mockVerifiedProjectSkillProviderIDs,
 }));
 
 vi.mock("../setup/agents-md-step", () => ({
@@ -97,12 +85,6 @@ vi.mock("../setup/agents-md-step", () => ({
 vi.mock("../setup/project-root", () => ({
   assertSafeProjectPath: vi.fn(),
   requireProjectRoot: mockRequireProjectRoot,
-}));
-
-vi.mock("../setup/legacy-global-cleanup", () => ({
-  cleanupLegacyGlobalMcp: mockCleanupLegacyGlobalMcp,
-  cleanupLegacyGlobalRule: mockCleanupLegacyGlobalRule,
-  cleanupLegacyGlobalSkill: mockCleanupLegacyGlobalSkill,
 }));
 
 vi.mock("../client/client", () => ({
@@ -129,7 +111,7 @@ function makeProvider(id: string, opts: Partial<SetupProvider> = {}): SetupProvi
   return {
     id: () => id,
     name: () => opts.name?.() ?? `Tool ${id}`,
-    supportsLocal: () => true,
+    configurationKind: () => "project",
     install: vi.fn(),
     remove: vi.fn(),
     detectPaths: () => [],
@@ -153,16 +135,28 @@ const makeBaseConfig = (overrides: Partial<FlatTestConfig> = {}) =>
 const ticketAccessToken = testAccessTokenFor("ticket-user");
 
 describe("buildResumeCommand", () => {
-  it("includes --tool and --login-ticket and uses the npx invocation", () => {
+  it("includes --tool and --login-ticket and uses the global CLI", () => {
     const cmd = buildResumeCommand("claude", "tkt-1");
-    expect(cmd).toBe("npx @dosu/cli@latest setup --agent --tool claude --login-ticket tkt-1");
+    expect(cmd).toBe("dosu setup --agent --tool claude --login-ticket tkt-1");
   });
 
   it("appends --deployment when provided", () => {
     const cmd = buildResumeCommand("cursor", "tkt-2", "dep-9");
-    expect(cmd).toBe(
-      "npx @dosu/cli@latest setup --agent --tool cursor --login-ticket tkt-2 --deployment dep-9",
+    expect(cmd).toBe("dosu setup --agent --tool cursor --login-ticket tkt-2 --deployment dep-9");
+  });
+
+  it.each([
+    "dep; echo PWNED",
+    "dep value",
+    "$(touch bad)",
+  ])("refuses a shell-active deployment ID: %s", (deploymentID) => {
+    expect(() => buildResumeCommand("cursor", "tkt-2", deploymentID)).toThrow(
+      /invalid deployment ID/,
     );
+  });
+
+  it("refuses an unsafe server ticket instead of emitting an executable command", () => {
+    expect(() => buildResumeCommand("cursor", "tkt-2;bad")).toThrow(/unsafe arguments/);
   });
 });
 
@@ -170,7 +164,7 @@ describe("listAgentSupportedToolIDs", () => {
   it("lists only providers with project-scoped configuration", () => {
     mockAllSetupProviders.mockReturnValue([
       makeProvider("claude"),
-      makeProvider("claude-desktop", { supportsLocal: () => false }),
+      makeProvider("claude-desktop", { configurationKind: () => "global-connector" }),
       makeProvider("cursor"),
     ]);
 
@@ -198,35 +192,24 @@ describe("runAgentSetup", () => {
     mockFetchDosuRule.mockReset();
     mockInstallRuleForAgent.mockReset();
     mockIsRuleAgent.mockReset();
-    mockRulePathForAgent.mockReset();
     mockInstallSkill.mockReset();
     mockSkillAgentIDsForProviders.mockReset();
-    mockVerifiedProjectSkillProviderIDs.mockReset();
     mockInGitWorkTree.mockReset();
     mockUpsertDosuAgentsSection.mockReset();
     mockRequireProjectRoot.mockReset();
-    mockCleanupLegacyGlobalMcp.mockReset();
-    mockCleanupLegacyGlobalRule.mockReset();
-    mockCleanupLegacyGlobalSkill.mockReset();
     mockRequireProjectRoot.mockReturnValue("/tmp/repo");
     for (const fn of Object.values(mockClient)) fn.mockReset();
 
-    claudeProvider = makeProvider("claude", {
-      name: () => "Claude Code",
-      isProjectConfigured: () => true,
-    });
+    claudeProvider = makeProvider("claude", { name: () => "Claude Code" });
     desktopProvider = makeProvider("claude-desktop", {
       name: () => "Claude Desktop",
-      supportsLocal: () => false,
+      configurationKind: () => "global-connector",
     });
 
     mockAllSetupProviders.mockReturnValue([claudeProvider, desktopProvider]);
     mockLoadConfig.mockReturnValue(makeBaseConfig());
     mockFetchDosuRule.mockResolvedValue("canonical rule\n");
     mockIsRuleAgent.mockImplementation((agent: string) => agent === "claude");
-    mockRulePathForAgent.mockImplementation((_agent: string, projectRoot?: string) =>
-      projectRoot ? `${projectRoot}/rule.md` : "/tmp/global-rule.md",
-    );
     mockInstallRuleForAgent.mockImplementation((agent: string) => ({
       agent,
       action: "created",
@@ -235,7 +218,6 @@ describe("runAgentSetup", () => {
     mockSkillAgentIDsForProviders.mockImplementation((agents: string[]) =>
       agents.includes("claude") ? ["claude-code"] : [],
     );
-    mockVerifiedProjectSkillProviderIDs.mockImplementation((agents: string[]) => agents);
     mockInstallSkill.mockResolvedValue({ success: true, sha: "skill-sha" });
     mockInGitWorkTree.mockReturnValue(false);
     mockUpsertDosuAgentsSection.mockReturnValue({
@@ -260,6 +242,34 @@ describe("runAgentSetup", () => {
         agent_next_steps: expect.stringContaining("'nope' is not"),
       }),
     ]);
+  });
+
+  it("refuses agent setup through temporary npx before touching the project", async () => {
+    const originalNpmCommand = process.env.npm_command;
+    const originalArgv = process.argv;
+    process.env.npm_command = "exec";
+    process.argv = [
+      process.execPath,
+      "/home/user/.npm/_npx/abc123/node_modules/.bin/dosu",
+      "setup",
+    ];
+    let code: number;
+    try {
+      code = await runAgentSetup({ tool: "claude" });
+    } finally {
+      if (originalNpmCommand === undefined) delete process.env.npm_command;
+      else process.env.npm_command = originalNpmCommand;
+      process.argv = originalArgv;
+    }
+
+    expect(code).toBe(2);
+    expect(mockRequireProjectRoot).not.toHaveBeenCalled();
+    expect(emittedEvents().at(-1)).toMatchObject({
+      step: "setup",
+      status: "error",
+      reason: "global_install_required",
+      agent_next_steps: expect.stringContaining("globally installed Dosu CLI"),
+    });
   });
 
   it("rejects global-only tools before authentication", async () => {
@@ -291,6 +301,19 @@ describe("runAgentSetup", () => {
     });
   });
 
+  it("rejects an unsafe deployment before authentication or ticket minting", async () => {
+    const code = await runAgentSetup({ tool: "claude", deploymentID: "dep; echo PWNED" });
+
+    expect(code).toBe(2);
+    expect(mockMintTicket).not.toHaveBeenCalled();
+    expect(mockLoadConfig).not.toHaveBeenCalled();
+    expect(emittedEvents()[0]).toMatchObject({
+      step: "setup",
+      status: "error",
+      reason: "invalid_deployment",
+    });
+  });
+
   it("mints a ticket and emits need_user_action when not authenticated", async () => {
     mockMintTicket.mockResolvedValue({
       ticket: "tkt-1",
@@ -308,7 +331,7 @@ describe("runAgentSetup", () => {
       status: "need_user_action",
       ticket: "tkt-1",
       url: "https://app.dosu.dev/cli/auth?ticket=tkt-1",
-      resume_command: "npx @dosu/cli@latest setup --agent --tool claude --login-ticket tkt-1",
+      resume_command: "dosu setup --agent --tool claude --login-ticket tkt-1",
     });
   });
 
@@ -356,7 +379,8 @@ describe("runAgentSetup", () => {
       "done",
     ]);
     expect(claudeProvider.install).toHaveBeenCalledTimes(1);
-    expect(claudeProvider.install).toHaveBeenCalledWith(expect.any(Object), false, {
+    expect(claudeProvider.install).toHaveBeenCalledWith(expect.any(Object), {
+      scope: "project",
       projectRoot: "/tmp/repo",
     });
     expect(mockSaveConfig).toHaveBeenCalled();
@@ -370,15 +394,8 @@ describe("runAgentSetup", () => {
       agent_next_steps: expect.stringMatching(/Claude Code.*dosu status --json/),
     });
     expect(mockInstallRuleForAgent).toHaveBeenCalledWith("claude", "canonical rule\n", "/tmp/repo");
-    expect(mockInstallSkill).toHaveBeenCalledWith(["claude"], {
-      quiet: true,
-      projectRoot: "/tmp/repo",
-    });
-    expect(mockVerifiedProjectSkillProviderIDs).toHaveBeenCalledWith(["claude"], "/tmp/repo");
+    expect(mockInstallSkill).toHaveBeenCalledWith(["claude"], { quiet: true });
     expect(mockUpsertDosuAgentsSection).toHaveBeenCalledWith("/tmp/repo", "canonical rule\n");
-    expect(mockCleanupLegacyGlobalMcp).toHaveBeenCalledWith(claudeProvider);
-    expect(mockCleanupLegacyGlobalRule).toHaveBeenCalledWith("claude");
-    expect(mockCleanupLegacyGlobalSkill).toHaveBeenCalledWith(["claude"]);
   });
 
   it("errors with multiple_deployments when the user has more than one dosu_mcp", async () => {
@@ -824,7 +841,6 @@ describe("runAgentSetup", () => {
     });
     expect(mockInstallRuleForAgent).not.toHaveBeenCalled();
     expect(mockInstallSkill).not.toHaveBeenCalled();
-    expect(mockCleanupLegacyGlobalMcp).not.toHaveBeenCalled();
   });
 
   it("reports a rule failure after preserving the installed MCP configuration", async () => {
@@ -855,7 +871,6 @@ describe("runAgentSetup", () => {
       agent_next_steps: expect.stringContaining("idempotent"),
     });
     expect(mockInstallSkill).not.toHaveBeenCalled();
-    expect(mockCleanupLegacyGlobalRule).not.toHaveBeenCalled();
   });
 
   it("reports a skill failure after preserving the MCP and rule installation", async () => {
@@ -884,7 +899,6 @@ describe("runAgentSetup", () => {
       reason: "install_failed",
       agent_next_steps: expect.stringContaining("idempotent"),
     });
-    expect(mockCleanupLegacyGlobalSkill).not.toHaveBeenCalled();
   });
 
   it("reports an AGENTS.md failure after preserving the other bundled installs", async () => {
@@ -901,7 +915,6 @@ describe("runAgentSetup", () => {
     mockClient.doRequestRaw.mockResolvedValue(new Response(null, { status: 200 }));
     mockClient.validateAPIKey.mockResolvedValue(true);
     mockInGitWorkTree.mockReturnValue(true);
-    mockVerifiedProjectSkillProviderIDs.mockReturnValue([]);
     mockUpsertDosuAgentsSection.mockImplementation(() => {
       throw new Error("AGENTS.md is read-only");
     });
@@ -912,7 +925,6 @@ describe("runAgentSetup", () => {
     expect(claudeProvider.install).toHaveBeenCalledTimes(1);
     expect(mockInstallRuleForAgent).toHaveBeenCalledTimes(1);
     expect(mockInstallSkill).toHaveBeenCalledTimes(1);
-    expect(mockCleanupLegacyGlobalSkill).not.toHaveBeenCalled();
     expect(emittedEvents().at(-1)).toMatchObject({
       step: "agents_md_install",
       status: "error",

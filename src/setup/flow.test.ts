@@ -113,11 +113,8 @@ vi.mock("../client/client", () => {
 });
 
 const mockInstallSkill = vi.fn();
-const mockVerifiedProjectSkillProviderIDs = vi.fn();
 vi.mock("../commands/skill", () => ({
   installSkill: (...args: unknown[]) => mockInstallSkill(...args),
-  verifiedProjectSkillProviderIDs: (...args: unknown[]) =>
-    mockVerifiedProjectSkillProviderIDs(...args),
   skillAgentIDsForProviders: (providerIDs: string[]) =>
     providerIDs
       .map(
@@ -149,10 +146,12 @@ const { mockStepConnectGitHubRepo } = vi.hoisted(() => ({
 // AGENTS.md step: mocked so flow tests never write an AGENTS.md into the real
 // repo cwd. Defaults (not in a git work tree) are installed by
 // `installSetupStepDefaults()`.
-const { mockStepUpdateAgentsMd } = vi.hoisted(() => ({
+const { mockStepRemoveAgentsMd, mockStepUpdateAgentsMd } = vi.hoisted(() => ({
+  mockStepRemoveAgentsMd: vi.fn(),
   mockStepUpdateAgentsMd: vi.fn(),
 }));
 vi.mock("./agents-md-step", () => ({
+  stepRemoveAgentsMd: (...args: unknown[]) => mockStepRemoveAgentsMd(...args),
   stepUpdateAgentsMd: (...args: unknown[]) => mockStepUpdateAgentsMd(...args),
 }));
 
@@ -175,17 +174,6 @@ const { mockStepConfigureAgentRules } = vi.hoisted(() => ({
 }));
 vi.mock("./rules-step", () => ({
   stepConfigureAgentRules: (...args: unknown[]) => mockStepConfigureAgentRules(...args),
-}));
-const { mockCleanupLegacyGlobalMcp, mockCleanupLegacyGlobalRule, mockCleanupLegacyGlobalSkill } =
-  vi.hoisted(() => ({
-    mockCleanupLegacyGlobalMcp: vi.fn(),
-    mockCleanupLegacyGlobalRule: vi.fn(),
-    mockCleanupLegacyGlobalSkill: vi.fn(),
-  }));
-vi.mock("./legacy-global-cleanup", () => ({
-  cleanupLegacyGlobalMcp: mockCleanupLegacyGlobalMcp,
-  cleanupLegacyGlobalRule: mockCleanupLegacyGlobalRule,
-  cleanupLegacyGlobalSkill: mockCleanupLegacyGlobalSkill,
 }));
 const { mockRequireProjectRoot } = vi.hoisted(() => ({
   mockRequireProjectRoot: vi.fn(),
@@ -239,11 +227,11 @@ function mockToolSelection(selection: string[]) {
 
 function installSetupStepDefaults() {
   mockStepConnectGitHubRepo.mockResolvedValue({ advance: false, has_connected_repo: false });
+  mockStepRemoveAgentsMd.mockReturnValue(true);
   mockStepUpdateAgentsMd.mockReturnValue(true);
   mockStepConfigureAgentRules.mockResolvedValue([]);
   mockOfferLogsHandoff.mockResolvedValue({ plan: null });
   mockRequireProjectRoot.mockImplementation(() => tempDir);
-  mockVerifiedProjectSkillProviderIDs.mockImplementation((providerIDs: string[]) => providerIDs);
 }
 
 function installRemoteSetupDefaults() {
@@ -308,7 +296,7 @@ function throwingProvider(): providersModule.SetupProvider {
   return {
     name: () => "Broken Tool",
     id: () => "broken",
-    supportsLocal: () => false,
+    configurationKind: () => "unsupported",
     priority: () => 99,
     detectPaths: () => [],
     isInstalled: () => true,
@@ -458,10 +446,9 @@ describe("stepConfigureTools", () => {
     const written = loadJSONConfig(configPath ?? "");
     expect(written.mcpServers).toBeDefined();
     expect(written.mcpServers.dosu).toBeDefined();
-    expect(written.mcpServers.dosu.command).toBe("npx");
+    expect(written.mcpServers.dosu.command).toBe("dosu");
     expect(written.mcpServers.dosu.args).toContain("dep-123");
     expect(JSON.stringify(written)).not.toContain("key-abc");
-    expect(mockCleanupLegacyGlobalMcp).toHaveBeenCalledWith(cursor);
   });
 
   it("removes a provider and deletes the dosu entry from disk", () => {
@@ -469,7 +456,7 @@ describe("stepConfigureTools", () => {
     const cursor = CursorProvider();
 
     // First install so there's something to remove
-    cursor.install(cfg, false, { projectRoot: tempDir });
+    cursor.install(cfg, { scope: "project", projectRoot: tempDir });
     const configPath = cursor.projectConfigPath(tempDir) ?? "";
     let written = loadJSONConfig(configPath);
     expect(written.mcpServers.dosu).toBeDefined();
@@ -517,7 +504,7 @@ describe("stepConfigureTools", () => {
     const cfg = makeCfg();
     const claude = ClaudeProvider();
     const copilot = CopilotProvider();
-    claude.install(cfg, false, { projectRoot: tempDir });
+    claude.install(cfg, { scope: "project", projectRoot: tempDir });
     const selection: ToolSelection = {
       toInstall: [],
       toRemove: [claude, copilot],
@@ -565,7 +552,6 @@ describe("stepConfigureTools", () => {
     expect(results[0].action).toBe("install");
     expect(results[0].error).toBeDefined();
     expect(results[0].error?.message).toContain("boom");
-    expect(mockCleanupLegacyGlobalMcp).not.toHaveBeenCalled();
     // p.log.error should have been called
     expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Broken Tool"));
   });
@@ -593,11 +579,11 @@ describe("stepConfigureTools", () => {
     const opencode = OpenCodeProvider();
 
     // Pre-install opencode so we can remove it
-    opencode.install(cfg, false, { projectRoot: tempDir });
+    opencode.install(cfg, { scope: "project", projectRoot: tempDir });
 
     const cursorForSkip = CursorProvider();
     // Pre-install cursor so the skip entry refers to an installed provider
-    cursorForSkip.install(cfg, false, { projectRoot: tempDir });
+    cursorForSkip.install(cfg, { scope: "project", projectRoot: tempDir });
 
     // Fresh providers for this call
     const freshCursor = CursorProvider();
@@ -934,7 +920,7 @@ describe("runSetup integration", () => {
     expect(existsSync(cursorConfigPath)).toBe(true);
     const cursorConfig = loadJSONConfig(cursorConfigPath);
     expect(cursorConfig.mcpServers.dosu).toBeDefined();
-    expect(cursorConfig.mcpServers.dosu.command).toBe("npx");
+    expect(cursorConfig.mcpServers.dosu.command).toBe("dosu");
     expect(cursorConfig.mcpServers.dosu.args).toContain("d1");
     expect(JSON.stringify(cursorConfig)).not.toContain("key-abc");
 
@@ -1024,11 +1010,15 @@ describe("runSetup integration", () => {
       validateAPIKey: vi.fn().mockResolvedValue(true),
     });
 
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    const projectRoot = join(tempDir, "repo");
+    mkdirSync(join(projectRoot, ".cursor"), { recursive: true });
+    mockRequireProjectRoot.mockReturnValue(projectRoot);
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
     mockToolSelection(["cursor"]);
 
-    CursorProvider().install(makeCfg({ mode: "oss", deployment_id: undefined }), true);
+    CursorProvider().install(makeCfg({ mode: "oss", deployment_id: undefined }), {
+      scope: "global",
+    });
     const ossConfig = loadJSONConfig(join(tempDir, ".cursor", "mcp.json"));
     expect(ossConfig.mcpServers.dosu.url).toContain("/v1/mcp");
     expect(ossConfig.mcpServers.dosu.url).not.toContain("/deployments/");
@@ -1043,9 +1033,12 @@ describe("runSetup integration", () => {
     const savedCfg = loadConfig();
     expect(savedCfg.mode).toBeUndefined();
     expect(savedCfg.active_account?.target?.deployment_id).toBe("d2");
-    expect(savedCfg.active_account?.target?.api_key).toBe("key-abc");
+    // An OSS key is not valid evidence for a different Cloud deployment.
+    // Switching scopes must mint a deployment-specific key instead of
+    // carrying the old credential across the boundary.
+    expect(savedCfg.active_account?.target?.api_key).toBe("new-key");
 
-    const cursorConfig = loadJSONConfig(join(tempDir, ".cursor", "mcp.json"));
+    const cursorConfig = loadJSONConfig(join(projectRoot, ".cursor", "mcp.json"));
     expect(cursorConfig.mcpServers.dosu.args).toContain("d2");
     expect(cursorConfig.mcpServers.dosu.args).not.toContain("--oss");
     expect(JSON.stringify(cursorConfig)).not.toContain("key-abc");
@@ -1073,10 +1066,12 @@ describe("runSetup integration", () => {
 
   it("reinstalls configured tools when only the API key changes", async () => {
     // Use deployment_id "d1" to match the mock so deployment doesn't change
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    const projectRoot = join(tempDir, "repo");
+    mkdirSync(join(projectRoot, ".cursor"), { recursive: true });
+    mockRequireProjectRoot.mockReturnValue(projectRoot);
     const cfg = makeCfg({ deployment_id: "d1", deployment_name: "Deploy1", api_key: "old-key" });
     saveConfig(cfg);
-    CursorProvider().install(cfg, true);
+    CursorProvider().install(cfg, { scope: "global" });
 
     // The old key is "invalid", so the flow will mint a new one
     setupAuthenticatedClient({
@@ -1090,7 +1085,7 @@ describe("runSetup integration", () => {
     await runSetup();
 
     // The project command is reinstalled but remains secretless when the key changes.
-    const cursorConfig = loadJSONConfig(join(tempDir, ".cursor", "mcp.json"));
+    const cursorConfig = loadJSONConfig(join(projectRoot, ".cursor", "mcp.json"));
     expect(cursorConfig.mcpServers.dosu.args).toContain("d1");
     expect(JSON.stringify(cursorConfig)).not.toContain("old-key");
     expect(JSON.stringify(cursorConfig)).not.toContain("new-key");
@@ -1105,11 +1100,9 @@ describe("runSetup integration", () => {
     saveJSONConfig(cursorConfigPath, {
       mcpServers: {
         dosu: {
-          type: "http",
-          url: "https://stale.example/v1/mcp/deployments/old-deployment",
-          headers: {
-            "X-Dosu-API-Key": "stale-key",
-          },
+          type: "stdio",
+          command: "npx",
+          args: ["-y", "@dosu/cli@0.49.4", "mcp", "proxy", "--deployment", "d1"],
         },
       },
     });
@@ -1124,9 +1117,9 @@ describe("runSetup integration", () => {
     await runSetup();
 
     const cursorConfig = loadJSONConfig(cursorConfigPath);
-    expect(cursorConfig.mcpServers.dosu.command).toBe("npx");
+    expect(cursorConfig.mcpServers.dosu.command).toBe("dosu");
     expect(cursorConfig.mcpServers.dosu.args).toContain("d1");
-    expect(JSON.stringify(cursorConfig)).not.toContain("stale-key");
+    expect(JSON.stringify(cursorConfig)).not.toContain("@dosu/cli@0.49.4");
     expect(JSON.stringify(cursorConfig)).not.toContain("key-abc");
   });
 
@@ -1556,8 +1549,8 @@ describe("runSetup integration", () => {
     ]);
 
     // Pre-configure both providers in this project.
-    CursorProvider().install(cfg, false, { projectRoot: tempDir });
-    OpenCodeProvider().install(cfg, false, { projectRoot: tempDir });
+    CursorProvider().install(cfg, { scope: "project", projectRoot: tempDir });
+    OpenCodeProvider().install(cfg, { scope: "project", projectRoot: tempDir });
 
     // User deselects opencode but keeps cursor
     mockToolSelection(["cursor"]);
@@ -1603,46 +1596,9 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(mockInstallSkill).toHaveBeenCalledWith(["cursor"], {
-      quiet: true,
-      projectRoot: tempDir,
-    });
+    expect(mockInstallSkill).toHaveBeenCalledWith(["cursor"], { quiet: true });
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill ready for 1 agent"));
-    expect(p.log.success).toHaveBeenCalledWith(
-      expect.stringContaining(`${tempDir}/.agents/skills/dosu`),
-    );
-    expect(mockVerifiedProjectSkillProviderIDs).toHaveBeenCalledWith(["cursor"], tempDir);
-    expect(mockCleanupLegacyGlobalSkill).toHaveBeenCalledWith(["cursor"]);
-  });
-
-  it("keeps the global skill when the project target cannot be verified", async () => {
-    const cfg = makeCfg();
-    saveConfig(cfg);
-
-    setupAuthenticatedClient();
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-    mockToolSelection(["cursor"]);
-    mockVerifiedProjectSkillProviderIDs.mockReturnValue([]);
-
-    await runSetup();
-
-    expect(mockCleanupLegacyGlobalSkill).not.toHaveBeenCalled();
-  });
-
-  it("cleans instruction-only global rules after the project AGENTS.md succeeds", async () => {
-    const cfg = makeCfg();
-    saveConfig(cfg);
-
-    setupAuthenticatedClient();
-    mkdirSync(join(tempDir, ".config", "opencode"), { recursive: true });
-    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [OpenCodeProvider()]);
-    mockToolSelection(["opencode"]);
-
-    await runSetup();
-
-    expect(mockStepUpdateAgentsMd).toHaveBeenCalledWith(tempDir);
-    expect(mockCleanupLegacyGlobalRule).toHaveBeenCalledWith("opencode");
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("/skills/cursor/dosu"));
   });
 
   it("does not install the skill when no agent is selected", async () => {
@@ -1671,10 +1627,7 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(mockInstallSkill).toHaveBeenCalledWith(["cursor"], {
-      quiet: true,
-      projectRoot: tempDir,
-    });
+    expect(mockInstallSkill).toHaveBeenCalledWith(["cursor"], { quiet: true });
   });
 
   it("goes directly to agent selection without a component-selection prompt", async () => {
@@ -1726,6 +1679,43 @@ describe("runSetup integration", () => {
     await runSetup();
 
     expect(mockStepUpdateAgentsMd).not.toHaveBeenCalled();
+    expect(mockStepRemoveAgentsMd).not.toHaveBeenCalled();
+  });
+
+  it("removes only the Dosu AGENTS.md section after the last configured agent is removed", async () => {
+    const cfg = makeCfg();
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    const cursor = CursorProvider();
+    cursor.install(cfg, { scope: "project", projectRoot: tempDir });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [cursor]);
+    mockToolSelection([]);
+
+    await runSetup();
+
+    expect(mockStepUpdateAgentsMd).not.toHaveBeenCalled();
+    expect(mockStepRemoveAgentsMd).toHaveBeenCalledWith(tempDir);
+  });
+
+  it("keeps AGENTS.md when removing the last agent fails", async () => {
+    const cfg = makeCfg();
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    const cursor = CursorProvider();
+    cursor.install(cfg, { scope: "project", projectRoot: tempDir });
+    vi.spyOn(cursor, "remove").mockImplementation(() => {
+      throw new Error("disk full");
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [cursor]);
+    mockToolSelection([]);
+
+    await runSetup();
+
+    expect(mockStepRemoveAgentsMd).not.toHaveBeenCalled();
   });
 
   it("stops before authentication outside a Git project", async () => {
@@ -1742,6 +1732,31 @@ describe("runSetup integration", () => {
     expect(mockOfferLogsHandoff).not.toHaveBeenCalled();
     expect(Client).not.toHaveBeenCalled();
     expect(p.log.error).toHaveBeenCalledWith("Run Dosu setup inside a Git project.");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("stops before project or credential writes when setup runs through temporary npx", async () => {
+    const originalNpmCommand = process.env.npm_command;
+    const originalArgv = process.argv;
+    process.env.npm_command = "exec";
+    process.argv = [
+      process.execPath,
+      "/home/user/.npm/_npx/abc123/node_modules/.bin/dosu",
+      "setup",
+    ];
+    try {
+      await runSetup();
+    } finally {
+      if (originalNpmCommand === undefined) delete process.env.npm_command;
+      else process.env.npm_command = originalNpmCommand;
+      process.argv = originalArgv;
+    }
+
+    expect(mockRequireProjectRoot).not.toHaveBeenCalled();
+    expect(Client).not.toHaveBeenCalled();
+    expect(p.log.error).toHaveBeenCalledWith(
+      expect.stringContaining("globally installed Dosu CLI"),
+    );
     expect(process.exitCode).toBe(1);
   });
 });
@@ -1764,28 +1779,23 @@ describe("runInstallSkill", () => {
   it("calls installSkill and returns true on success", async () => {
     mockInstallSkill.mockResolvedValue({ success: true, sha: "abc" });
 
-    const result = await runInstallSkill([ClaudeProvider()], tempDir);
+    const result = await runInstallSkill([ClaudeProvider()]);
     const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
 
     expect(result).toBe(true);
     expect(spinner?.start).toHaveBeenCalledWith("Installing skill for 1 agent");
     expect(spinner?.clear).toHaveBeenCalledOnce();
-    expect(mockInstallSkill).toHaveBeenCalledWith(["claude"], {
-      quiet: true,
-      projectRoot: tempDir,
-    });
+    expect(mockInstallSkill).toHaveBeenCalledWith(["claude"], { quiet: true });
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill ready for 1 agent"));
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Claude Code"));
-    expect(p.log.success).toHaveBeenCalledWith(
-      expect.stringContaining(`${tempDir}/.claude/skills/dosu`),
-    );
-    expect(p.log.success).not.toHaveBeenCalledWith(expect.stringContaining("(symlink)"));
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("/skills/claude/dosu"));
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("(symlink)"));
   });
 
   it("uses plural loading copy for multiple selected agents", async () => {
     mockInstallSkill.mockResolvedValue({ success: true });
 
-    await runInstallSkill([ClaudeProvider(), CursorProvider()], tempDir);
+    await runInstallSkill([ClaudeProvider(), CursorProvider()]);
     const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
 
     expect(spinner?.start).toHaveBeenCalledWith("Installing skill for 2 agents");
@@ -1795,7 +1805,7 @@ describe("runInstallSkill", () => {
   it("returns false and logs error when installSkill reports failure", async () => {
     mockInstallSkill.mockResolvedValue({ success: false });
 
-    const result = await runInstallSkill([ClaudeProvider()], tempDir);
+    const result = await runInstallSkill([ClaudeProvider()]);
     const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
 
     expect(result).toBe(false);
@@ -1807,7 +1817,7 @@ describe("runInstallSkill", () => {
   it("returns false and logs error when installSkill throws", async () => {
     mockInstallSkill.mockRejectedValue(new Error("boom"));
 
-    const result = await runInstallSkill([ClaudeProvider()], tempDir);
+    const result = await runInstallSkill([ClaudeProvider()]);
     const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
 
     expect(result).toBe(false);

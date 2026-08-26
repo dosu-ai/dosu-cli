@@ -1,30 +1,26 @@
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const mockExecSync = vi.fn();
-const mockExec = vi.fn();
+const mockSpawnSync = vi.fn();
+const mockSpawn = vi.fn();
 vi.mock("node:child_process", () => ({
-  exec: (...args: unknown[]) => mockExec(...args),
-  execSync: (...args: unknown[]) => mockExecSync(...args),
+  spawn: (...args: unknown[]) => mockSpawn(...args),
+  spawnSync: (...args: unknown[]) => mockSpawnSync(...args),
+}));
+vi.mock("../mcp/detect", () => ({
+  findNpx: () => "/trusted/bin/npx",
+  npxPathEnv: () => "/trusted/bin:/usr/bin:/bin",
 }));
 
 import {
+  installedDosuSkillState,
   installSkill,
-  removeGlobalSkillQuietly,
+  installSkillForAgents,
   skillAgentIDsForProviders,
   skillCommand,
   skillInstallTargetForProvider,
-  verifiedProjectSkillProviderIDs,
 } from "./skill";
 
 let logSpy: ReturnType<typeof vi.spyOn>;
@@ -33,22 +29,7 @@ let errorSpy: ReturnType<typeof vi.spyOn>;
 let exitSpy: any;
 
 let tempDir: string;
-let origHome: string | undefined;
 let origXDG: string | undefined;
-let origXDGState: string | undefined;
-
-function writeDosuSkill(path: string): void {
-  mkdirSync(path, { recursive: true });
-  writeFileSync(join(path, "SKILL.md"), "---\nname: dosu\n---\n# Using the Dosu CLI\n");
-}
-
-function writeOwnedSkillLock(path: string): void {
-  mkdirSync(join(path, ".."), { recursive: true });
-  writeFileSync(
-    path,
-    JSON.stringify({ version: 3, skills: { dosu: { source: "dosu-ai/dosu-skill" } } }),
-  );
-}
 
 function allOutput(): string {
   return logSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
@@ -65,12 +46,18 @@ async function run(...args: string[]) {
 }
 
 beforeEach(() => {
-  mockExec.mockReset();
-  mockExec.mockImplementation((...args: unknown[]) => {
-    const callback = args.at(-1) as (error: Error | null) => void;
-    callback(null);
+  mockSpawn.mockReset();
+  mockSpawn.mockImplementation(() => {
+    const child = {
+      once(event: string, callback: (...args: unknown[]) => void) {
+        if (event === "close") callback(0);
+        return child;
+      },
+    };
+    return child;
   });
-  mockExecSync.mockReset();
+  mockSpawnSync.mockReset();
+  mockSpawnSync.mockReturnValue({ status: 0, stdout: "" });
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
@@ -79,12 +66,8 @@ beforeEach(() => {
 
   // Isolate cache writes to a temp dir so they don't pollute $HOME
   origXDG = process.env.XDG_CONFIG_HOME;
-  origXDGState = process.env.XDG_STATE_HOME;
-  origHome = process.env.HOME;
-  tempDir = realpathSync(mkdtempSync(join(tmpdir(), "dosu-skill-test-")));
-  process.env.HOME = tempDir;
+  tempDir = mkdtempSync(join(tmpdir(), "dosu-skill-test-"));
   process.env.XDG_CONFIG_HOME = tempDir;
-  process.env.XDG_STATE_HOME = tempDir;
 
   // Default: fetch returns a SHA
   vi.stubGlobal(
@@ -106,16 +89,6 @@ afterEach(() => {
   } else {
     delete process.env.XDG_CONFIG_HOME;
   }
-  if (origXDGState !== undefined) {
-    process.env.XDG_STATE_HOME = origXDGState;
-  } else {
-    delete process.env.XDG_STATE_HOME;
-  }
-  if (origHome !== undefined) {
-    process.env.HOME = origHome;
-  } else {
-    delete process.env.HOME;
-  }
   rmSync(tempDir, { recursive: true, force: true });
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -124,24 +97,48 @@ afterEach(() => {
 describe("skill install", () => {
   it("runs npx skills add with correct args", async () => {
     await run("install");
-    expect(mockExecSync).toHaveBeenCalledWith(
+    expect(mockSpawnSync).toHaveBeenCalledWith(
+      "/trusted/bin/npx",
       [
-        "npx skills add dosu-ai/dosu-skill -g",
-        "-a claude-code -a cursor -a gemini-cli -a codex -a windsurf",
-        "-a zed -a cline -a github-copilot -a opencode -a antigravity",
-        '-s "*" -y',
-      ].join(" "),
-      {
-        stdio: "inherit",
-      },
+        "skills",
+        "add",
+        "dosu-ai/dosu-skill",
+        "-g",
+        "-a",
+        "claude-code",
+        "-a",
+        "cursor",
+        "-a",
+        "gemini-cli",
+        "-a",
+        "codex",
+        "-a",
+        "windsurf",
+        "-a",
+        "zed",
+        "-a",
+        "cline",
+        "-a",
+        "github-copilot",
+        "-a",
+        "opencode",
+        "-a",
+        "antigravity",
+        "-a",
+        "droid",
+        "-s",
+        "*",
+        "-y",
+      ],
+      expect.objectContaining({ cwd: homedir(), shell: false, stdio: "inherit" }),
     );
   });
 
   it("does not let skills auto-target PromptScript", async () => {
     await run("install");
-    const command = String(mockExecSync.mock.calls[0][0]);
-    expect(command).toContain("-a claude-code");
-    expect(command).not.toContain("promptscript");
+    const args = mockSpawnSync.mock.calls[0][1] as string[];
+    expect(args).toContain("claude-code");
+    expect(args).not.toContain("promptscript");
   });
 
   it("prints success message", async () => {
@@ -149,8 +146,8 @@ describe("skill install", () => {
     expect(allOutput()).toContain("installed successfully");
   });
 
-  it("exits with error when execSync throws", async () => {
-    mockExecSync.mockImplementation(() => {
+  it("exits with error when the installer throws", async () => {
+    mockSpawnSync.mockImplementation(() => {
       throw new Error("command failed");
     });
     await expect(run("install")).rejects.toThrow("exit");
@@ -158,112 +155,13 @@ describe("skill install", () => {
   });
 });
 
-describe("quiet global skill cleanup", () => {
-  it("removes only the historical global Dosu skill", async () => {
-    writeOwnedSkillLock(join(tempDir, "skills", ".skill-lock.json"));
-    const canonical = join(tempDir, ".agents", "skills", "dosu");
-    writeDosuSkill(canonical);
-    mkdirSync(join(tempDir, ".claude", "skills"), { recursive: true });
-    symlinkSync(canonical, join(tempDir, ".claude", "skills", "dosu"));
-
-    await expect(removeGlobalSkillQuietly(["claude", "cursor"])).resolves.toBe(true);
-
-    expect(mockExec).toHaveBeenCalledWith(
-      "npx -y skills@1.5.22 remove -g -a claude-code -s dosu -y",
-      { windowsHide: true },
-      expect.any(Function),
-    );
-  });
-
-  it("silently reports failure", async () => {
-    writeOwnedSkillLock(join(tempDir, "skills", ".skill-lock.json"));
-    const canonical = join(tempDir, ".agents", "skills", "dosu");
-    writeDosuSkill(canonical);
-    mkdirSync(join(tempDir, ".claude", "skills"), { recursive: true });
-    symlinkSync(canonical, join(tempDir, ".claude", "skills", "dosu"));
-    mockExec.mockImplementation((...args: unknown[]) => {
-      const callback = args.at(-1) as (error: Error | null) => void;
-      callback(new Error("remove failed"));
-    });
-
-    await expect(removeGlobalSkillQuietly(["claude"])).resolves.toBe(false);
-  });
-
-  it("preserves missing, malformed, and foreign global skills", async () => {
-    await expect(removeGlobalSkillQuietly(["claude"])).resolves.toBe(false);
-
-    const lockDir = join(tempDir, "skills");
-    mkdirSync(lockDir, { recursive: true });
-    const lockPath = join(lockDir, ".skill-lock.json");
-    writeFileSync(lockPath, "not-json");
-    await expect(removeGlobalSkillQuietly(["claude"])).resolves.toBe(false);
-
-    writeFileSync(
-      lockPath,
-      JSON.stringify({ version: 3, skills: { dosu: { source: "someone-else/dosu" } } }),
-    );
-    await expect(removeGlobalSkillQuietly(["claude"])).resolves.toBe(false);
-
-    expect(mockExec).not.toHaveBeenCalled();
-  });
-
-  it("does not run for a provider without a project skill target", async () => {
-    await expect(removeGlobalSkillQuietly(["manual"])).resolves.toBe(false);
-
-    expect(mockExec).not.toHaveBeenCalled();
-  });
-
-  it("preserves universal global skills shared by other agents", async () => {
-    writeOwnedSkillLock(join(tempDir, "skills", ".skill-lock.json"));
-    writeDosuSkill(join(tempDir, ".agents", "skills", "dosu"));
-
-    await expect(removeGlobalSkillQuietly(["cursor", "codex"])).resolves.toBe(false);
-
-    expect(mockExec).not.toHaveBeenCalled();
-  });
-
-  it("preserves a foreign canonical skill even when an isolated target is owned", async () => {
-    writeOwnedSkillLock(join(tempDir, "skills", ".skill-lock.json"));
-    const canonical = join(tempDir, ".agents", "skills", "dosu");
-    mkdirSync(canonical, { recursive: true });
-    writeFileSync(join(canonical, "SKILL.md"), "---\nname: dosu\n---\n# Foreign skill\n");
-    writeDosuSkill(join(tempDir, ".claude", "skills", "dosu"));
-
-    await expect(removeGlobalSkillQuietly(["claude"])).resolves.toBe(false);
-
-    rmSync(canonical, { recursive: true });
-    symlinkSync(join(tempDir, "missing-canonical"), canonical);
-    await expect(removeGlobalSkillQuietly(["claude"])).resolves.toBe(false);
-
-    expect(mockExec).not.toHaveBeenCalled();
-  });
-
-  it("preserves a global skill behind a symlinked parent or lock path", async () => {
-    const outside = join(tempDir, "outside");
-    writeDosuSkill(join(outside, "skills", "dosu"));
-    symlinkSync(outside, join(tempDir, ".agents"));
-    writeOwnedSkillLock(join(tempDir, "skills", ".skill-lock.json"));
-
-    await expect(removeGlobalSkillQuietly(["cursor"])).resolves.toBe(false);
-
-    rmSync(join(tempDir, ".agents"));
-    mkdirSync(join(tempDir, ".agents"));
-    const outsideLock = join(tempDir, "outside-lock.json");
-    writeOwnedSkillLock(outsideLock);
-    rmSync(join(tempDir, "skills", ".skill-lock.json"));
-    symlinkSync(outsideLock, join(tempDir, "skills", ".skill-lock.json"));
-
-    await expect(removeGlobalSkillQuietly(["cursor"])).resolves.toBe(false);
-    expect(mockExec).not.toHaveBeenCalled();
-  });
-});
-
 describe("skill remove", () => {
   /** Make `npx skills list -g --json` resolve to the given inventory. */
   function stubInventory(entries: unknown[]): void {
-    mockExecSync.mockImplementation((command: string) =>
-      command.includes("skills list") ? JSON.stringify(entries) : undefined,
-    );
+    mockSpawnSync.mockImplementation((_command: string, args: string[]) => ({
+      status: 0,
+      stdout: args.includes("list") ? JSON.stringify(entries) : "",
+    }));
   }
 
   it("removes every skill installed from the Dosu repo", async () => {
@@ -272,9 +170,11 @@ describe("skill remove", () => {
       { name: "dosu-review", source: "dosu-ai/dosu-skill" },
     ]);
     await run("remove");
-    expect(mockExecSync).toHaveBeenCalledWith("npx skills remove -g dosu dosu-review -y", {
-      stdio: "inherit",
-    });
+    expect(mockSpawnSync).toHaveBeenCalledWith(
+      "/trusted/bin/npx",
+      ["skills", "remove", "-g", "dosu", "dosu-review", "-y"],
+      expect.objectContaining({ cwd: homedir(), shell: false, stdio: "inherit" }),
+    );
   });
 
   it("leaves skills from other sources alone", async () => {
@@ -284,9 +184,11 @@ describe("skill remove", () => {
       { name: "local-skill", source: null },
     ]);
     await run("remove");
-    expect(mockExecSync).toHaveBeenCalledWith("npx skills remove -g dosu -y", {
-      stdio: "inherit",
-    });
+    expect(mockSpawnSync).toHaveBeenCalledWith(
+      "/trusted/bin/npx",
+      ["skills", "remove", "-g", "dosu", "-y"],
+      expect.objectContaining({ shell: false }),
+    );
   });
 
   it("skips names that are unsafe to interpolate into a shell command", async () => {
@@ -295,9 +197,11 @@ describe("skill remove", () => {
       { name: "evil; rm -rf /", source: "dosu-ai/dosu-skill" },
     ]);
     await run("remove");
-    expect(mockExecSync).toHaveBeenCalledWith("npx skills remove -g dosu -y", {
-      stdio: "inherit",
-    });
+    expect(mockSpawnSync).toHaveBeenCalledWith(
+      "/trusted/bin/npx",
+      ["skills", "remove", "-g", "dosu", "-y"],
+      expect.anything(),
+    );
   });
 
   // `skills list` echoes the front-matter name without validating it, and
@@ -308,17 +212,18 @@ describe("skill remove", () => {
       { name: "--all", source: "dosu-ai/dosu-skill" },
     ]);
     await run("remove");
-    expect(mockExecSync).toHaveBeenCalledWith("npx skills remove -g dosu -y", {
-      stdio: "inherit",
-    });
+    expect(mockSpawnSync).toHaveBeenCalledWith(
+      "/trusted/bin/npx",
+      ["skills", "remove", "-g", "dosu", "-y"],
+      expect.anything(),
+    );
   });
 
   it("does nothing when the inventory holds no skills of ours", async () => {
     stubInventory([{ name: "web-design", source: "vercel-labs/agent-skills" }]);
     await run("remove");
-    expect(mockExecSync).not.toHaveBeenCalledWith(
-      expect.stringContaining("skills remove"),
-      expect.anything(),
+    expect(mockSpawnSync.mock.calls.some((call) => (call[1] as string[]).includes("remove"))).toBe(
+      false,
     );
     expect(allOutput()).toContain("No skills from dosu-ai/dosu-skill are installed");
   });
@@ -342,20 +247,24 @@ describe("skill remove", () => {
   it("treats a non-array inventory as unreadable", async () => {
     stubInventory({ unexpected: "shape" } as unknown as unknown[]);
     await run("remove");
-    expect(mockExecSync).toHaveBeenCalledWith("npx skills remove -g dosu -y", {
-      stdio: "inherit",
-    });
+    expect(mockSpawnSync).toHaveBeenCalledWith(
+      "/trusted/bin/npx",
+      ["skills", "remove", "-g", "dosu", "-y"],
+      expect.anything(),
+    );
   });
 
   it("falls back to the known skill when the inventory is unreadable", async () => {
-    mockExecSync.mockImplementation((command: string) => {
-      if (command.includes("skills list")) throw new Error("npx unavailable");
-      return undefined;
+    mockSpawnSync.mockImplementation((_command: string, args: string[]) => {
+      if (args.includes("list")) throw new Error("npx unavailable");
+      return { status: 0, stdout: "" };
     });
     await run("remove");
-    expect(mockExecSync).toHaveBeenCalledWith("npx skills remove -g dosu -y", {
-      stdio: "inherit",
-    });
+    expect(mockSpawnSync).toHaveBeenCalledWith(
+      "/trusted/bin/npx",
+      ["skills", "remove", "-g", "dosu", "-y"],
+      expect.anything(),
+    );
   });
 
   it("prints success message", async () => {
@@ -363,8 +272,8 @@ describe("skill remove", () => {
     expect(allOutput()).toContain("removed");
   });
 
-  it("exits with error when execSync throws", async () => {
-    mockExecSync.mockImplementation(() => {
+  it("exits with error when the command throws", async () => {
+    mockSpawnSync.mockImplementation(() => {
       throw new Error("command failed");
     });
     await expect(run("remove")).rejects.toThrow("exit");
@@ -373,15 +282,42 @@ describe("skill remove", () => {
 });
 
 describe("skill update", () => {
+  beforeEach(() => {
+    mockSpawnSync.mockImplementation((_command: string, args: string[]) => ({
+      status: 0,
+      stdout: args.includes("list")
+        ? JSON.stringify([
+            {
+              name: "dosu",
+              source: "dosu-ai/dosu-skill",
+              agents: ["Claude Code", "Factory"],
+            },
+          ])
+        : "",
+    }));
+  });
+
   it("reinstalls via npx skills add (update can't follow repo-layout moves)", async () => {
     await run("update");
-    expect(mockExecSync).toHaveBeenCalledWith(
-      expect.stringContaining("npx skills add dosu-ai/dosu-skill -g"),
-      { stdio: "inherit" },
+    expect(mockSpawnSync).toHaveBeenCalledWith(
+      "/trusted/bin/npx",
+      [
+        "skills",
+        "add",
+        "dosu-ai/dosu-skill",
+        "-g",
+        "-a",
+        "claude-code",
+        "-a",
+        "droid",
+        "-s",
+        "*",
+        "-y",
+      ],
+      expect.objectContaining({ cwd: homedir(), shell: false }),
     );
-    expect(mockExecSync).not.toHaveBeenCalledWith(
-      expect.stringContaining("npx skills update"),
-      expect.anything(),
+    expect(mockSpawnSync.mock.calls.some((call) => (call[1] as string[]).includes("update"))).toBe(
+      false,
     );
   });
 
@@ -390,8 +326,16 @@ describe("skill update", () => {
     expect(allOutput()).toContain("updated");
   });
 
-  it("exits with error when execSync throws", async () => {
-    mockExecSync.mockImplementation(() => {
+  it("exits with error when the update command throws", async () => {
+    mockSpawnSync.mockImplementation((_command: string, args: string[]) => {
+      if (args.includes("list")) {
+        return {
+          status: 0,
+          stdout: JSON.stringify([
+            { name: "dosu", source: "dosu-ai/dosu-skill", agents: ["Claude Code"] },
+          ]),
+        };
+      }
       throw new Error("command failed");
     });
     await expect(run("update")).rejects.toThrow("exit");
@@ -420,9 +364,22 @@ describe("installSkill helper", () => {
     const result = await installSkill(["claude", "codex"]);
 
     expect(result.success).toBe(true);
-    expect(mockExecSync).toHaveBeenCalledWith(
-      'npx skills add dosu-ai/dosu-skill -g -a claude-code -a codex -s "*" -y',
-      { stdio: "inherit" },
+    expect(mockSpawnSync).toHaveBeenCalledWith(
+      "/trusted/bin/npx",
+      [
+        "skills",
+        "add",
+        "dosu-ai/dosu-skill",
+        "-g",
+        "-a",
+        "claude-code",
+        "-a",
+        "codex",
+        "-s",
+        "*",
+        "-y",
+      ],
+      expect.objectContaining({ cwd: homedir(), shell: false }),
     );
   });
 
@@ -448,23 +405,6 @@ describe("installSkill helper", () => {
     });
   });
 
-  it("reports project-local targets for Claude, Codex, and Factory", () => {
-    const root = "/tmp/project";
-
-    expect(skillInstallTargetForProvider("claude", root)).toEqual({
-      path: join(root, ".claude", "skills", "dosu"),
-      symlink: false,
-    });
-    expect(skillInstallTargetForProvider("codex", root)).toEqual({
-      path: join(root, ".agents", "skills", "dosu"),
-      symlink: false,
-    });
-    expect(skillInstallTargetForProvider("factory", root)).toEqual({
-      path: join(root, ".factory", "skills", "dosu"),
-      symlink: false,
-    });
-  });
-
   it("reports the Windsurf symlink target", () => {
     expect(skillInstallTargetForProvider("windsurf")).toEqual({
       path: join(homedir(), ".codeium", "windsurf", "skills", "dosu"),
@@ -476,78 +416,53 @@ describe("installSkill helper", () => {
     expect(skillInstallTargetForProvider("manual")).toBeNull();
   });
 
-  it("verifies each project skill target before legacy cleanup", () => {
-    const projectRoot = join(tempDir, "project");
-    mkdirSync(projectRoot);
-    writeOwnedSkillLock(join(projectRoot, "skills-lock.json"));
-    writeDosuSkill(join(projectRoot, ".claude", "skills", "dosu"));
-    writeDosuSkill(join(projectRoot, ".agents", "skills", "dosu"));
-
-    expect(verifiedProjectSkillProviderIDs(["claude", "cursor"], projectRoot)).toEqual([
-      "claude",
-      "cursor",
-    ]);
-
-    writeFileSync(
-      join(projectRoot, ".claude", "skills", "dosu", "SKILL.md"),
-      "---\nname: dosu\n---\n# Foreign skill\n",
-    );
-    expect(verifiedProjectSkillProviderIDs(["claude", "cursor"], projectRoot)).toEqual(["cursor"]);
-  });
-
-  it("does not verify a project skill without an owned lock or through a symlink", () => {
-    const projectRoot = join(tempDir, "project");
-    const outside = join(tempDir, "outside-skill");
-    mkdirSync(projectRoot);
-    writeDosuSkill(outside);
-    mkdirSync(join(projectRoot, ".claude", "skills"), { recursive: true });
-    symlinkSync(outside, join(projectRoot, ".claude", "skills", "dosu"));
-
-    expect(verifiedProjectSkillProviderIDs(["claude"], projectRoot)).toEqual([]);
-
-    writeOwnedSkillLock(join(projectRoot, "skills-lock.json"));
-    expect(verifiedProjectSkillProviderIDs(["claude"], projectRoot)).toEqual([]);
-  });
-
   it("keeps the installer quiet for agent-mediated setup", async () => {
     await installSkill(["claude"], { quiet: true });
 
-    expect(mockExec).toHaveBeenCalledWith(
-      expect.any(String),
-      { windowsHide: true },
-      expect.any(Function),
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "/trusted/bin/npx",
+      expect.any(Array),
+      expect.objectContaining({
+        cwd: homedir(),
+        shell: false,
+        stdio: "ignore",
+        windowsHide: true,
+      }),
     );
-    expect(mockExecSync).not.toHaveBeenCalled();
+    expect(mockSpawnSync).not.toHaveBeenCalled();
   });
 
-  it("installs selected skills in the project without the global flag", async () => {
-    await installSkill(["claude", "codex"], { quiet: true, projectRoot: "/tmp/project" });
+  it("always keeps quiet setup installs global", async () => {
+    await installSkill(["claude", "codex"], { quiet: true });
 
-    expect(mockExec).toHaveBeenCalledWith(
-      'npx skills add dosu-ai/dosu-skill -a claude-code codex -s "*" --copy -y',
-      { windowsHide: true, cwd: "/tmp/project" },
-      expect.any(Function),
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "/trusted/bin/npx",
+      [
+        "skills",
+        "add",
+        "dosu-ai/dosu-skill",
+        "-g",
+        "-a",
+        "claude-code",
+        "-a",
+        "codex",
+        "-s",
+        "*",
+        "-y",
+      ],
+      expect.objectContaining({ cwd: homedir(), shell: false }),
     );
-  });
-
-  it("refuses a symlinked project skills lock before running the installer", async () => {
-    const projectRoot = join(tempDir, "project");
-    mkdirSync(projectRoot);
-    const outsideLock = join(tempDir, "outside-skills-lock.json");
-    writeFileSync(outsideLock, "{}\n");
-    symlinkSync(outsideLock, join(projectRoot, "skills-lock.json"));
-
-    await expect(installSkill(["claude"], { quiet: true, projectRoot })).rejects.toThrow(
-      "symbolic link",
-    );
-    expect(mockExec).not.toHaveBeenCalled();
-    expect(readFileSync(outsideLock, "utf-8")).toBe("{}\n");
   });
 
   it("returns failure when the async quiet installer fails", async () => {
-    mockExec.mockImplementation((...args: unknown[]) => {
-      const callback = args.at(-1) as (error: Error | null) => void;
-      callback(new Error("command failed"));
+    mockSpawn.mockImplementation(() => {
+      const child = {
+        once(event: string, callback: (...args: unknown[]) => void) {
+          if (event === "error") callback(new Error("command failed"));
+          return child;
+        },
+      };
+      return child;
     });
 
     const result = await installSkill(["claude"], { quiet: true });
@@ -559,7 +474,53 @@ describe("installSkill helper", () => {
     const result = await installSkill(["manual"]);
 
     expect(result.success).toBe(true);
-    expect(mockExecSync).not.toHaveBeenCalled();
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+  });
+
+  it("installs an explicit agent set without broadening it", async () => {
+    const result = await installSkillForAgents(["claude-code", "droid"]);
+
+    expect(result.success).toBe(true);
+    expect(mockSpawnSync).toHaveBeenCalledWith(
+      "/trusted/bin/npx",
+      [
+        "skills",
+        "add",
+        "dosu-ai/dosu-skill",
+        "-g",
+        "-a",
+        "claude-code",
+        "-a",
+        "droid",
+        "-s",
+        "*",
+        "-y",
+      ],
+      expect.objectContaining({ shell: false }),
+    );
+  });
+
+  it("recovers the existing agent targets from the official skill inventory", () => {
+    mockSpawnSync.mockReturnValue({
+      status: 0,
+      stdout: JSON.stringify([
+        {
+          name: "dosu",
+          source: "dosu-ai/dosu-skill",
+          agents: ["Claude Code", "Codex", "Factory", "Unknown Agent"],
+        },
+        {
+          name: "foreign",
+          source: "other/repo",
+          agents: ["Cursor"],
+        },
+      ]),
+    });
+
+    expect(installedDosuSkillState()).toEqual({
+      names: ["dosu"],
+      agentIDs: ["claude-code", "codex", "droid"],
+    });
   });
 
   it("writes cache with SHA on success", async () => {
@@ -588,8 +549,8 @@ describe("installSkill helper", () => {
     expect(result.sha).toBeUndefined();
   });
 
-  it("returns failure when execSync throws", async () => {
-    mockExecSync.mockImplementation(() => {
+  it("returns failure when the process throws", async () => {
+    mockSpawnSync.mockImplementation(() => {
       throw new Error("command failed");
     });
     const result = await installSkill();

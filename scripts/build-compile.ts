@@ -9,19 +9,30 @@
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildDefines } from "./build-all";
+import { assertSecureCompileRuntime, buildDefines } from "./build-all";
 
 const SCRIPT_DIR =
   typeof import.meta.dir === "string" ? import.meta.dir : dirname(fileURLToPath(import.meta.url));
 const OUTFILE = join(SCRIPT_DIR, "..", "bin", "dosu");
 
 async function main() {
+  assertSecureCompileRuntime();
   mkdirSync(dirname(OUTFILE), { recursive: true });
 
   const defines = buildDefines();
 
   const proc = Bun.spawn(
-    ["bun", "build", "--compile", ...defines, "src/index.ts", "--outfile", OUTFILE],
+    [
+      "bun",
+      "build",
+      "--compile",
+      "--no-compile-autoload-dotenv",
+      "--no-compile-autoload-bunfig",
+      ...defines,
+      "src/index.ts",
+      "--outfile",
+      OUTFILE,
+    ],
     { stdout: "inherit", stderr: "inherit", env: process.env },
   );
 

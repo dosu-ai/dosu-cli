@@ -64,7 +64,7 @@ function assertReplaceableProjectEntry(configPath: string): void {
 export const MCPorterProvider = (): SetupProvider => ({
   name: () => "MCPorter",
   id: () => "mcporter",
-  supportsLocal: () => true,
+  configurationKind: () => "project",
   priority: () => 16,
   detectPaths: () => ["~/.mcporter"],
   isInstalled: () => isInstalled(["~/.mcporter"]),
@@ -86,7 +86,8 @@ export const MCPorterProvider = (): SetupProvider => ({
     }
   },
 
-  install(cfg: Config, global: boolean, opts = {}): void {
+  install(cfg: Config, opts): void {
+    const global = opts.scope === "global";
     const configPath = global ? resolveGlobalConfigPath() : projectPath(opts.projectRoot);
     if (!global) assertReplaceableProjectEntry(configPath);
     const server = global
@@ -100,7 +101,8 @@ export const MCPorterProvider = (): SetupProvider => ({
     installJSONServer(configPath, "mcpServers", server);
   },
 
-  remove(global: boolean, opts = {}): void {
+  remove(opts): void {
+    const global = opts.scope === "global";
     const configPath = global ? resolveGlobalConfigPath() : projectPath(opts.projectRoot);
     if (!global) {
       const existing = getJSONServer(configPath, "mcpServers");

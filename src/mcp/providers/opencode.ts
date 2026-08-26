@@ -6,7 +6,7 @@ export const OpenCodeProvider = () =>
   createJSONProvider({
     providerName: "OpenCode",
     providerID: "opencode",
-    local: true,
+    configurationKind: "project",
     priorityValue: 14,
     paths: ["~/.config/opencode"],
     globalPath: "~/.config/opencode/opencode.json",

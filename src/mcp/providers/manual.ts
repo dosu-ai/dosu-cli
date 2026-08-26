@@ -17,9 +17,10 @@ function maskSecret(secret: string): string {
 export const ManualProvider = (): Provider => ({
   name: () => "Manual Configuration",
   id: () => "manual",
-  supportsLocal: () => false,
+  configurationKind: () => "global-connector",
 
-  install(cfg: Config, _global: boolean, opts: ProviderInstallOptions = {}): void {
+  install(cfg: Config, opts: ProviderInstallOptions): void {
+    if (opts.scope !== "global") throw new Error("Manual configuration is a global connector");
     const url = mcpEndpoint(cfg);
     const apiKey = mcpHeaders(cfg.active_account?.target?.api_key)["X-Dosu-API-Key"];
     const headerValue = opts.showSecret ? apiKey : maskSecret(apiKey);

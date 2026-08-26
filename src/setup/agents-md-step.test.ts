@@ -7,6 +7,8 @@ import {
   buildDosuAgentsSection,
   DOSU_SECTION_END,
   DOSU_SECTION_START,
+  removeDosuAgentsSection,
+  stepRemoveAgentsMd,
   stepUpdateAgentsMd,
   upsertDosuAgentsSection,
 } from "./agents-md-step";
@@ -15,6 +17,7 @@ vi.mock("@clack/prompts", () => ({
   log: {
     success: vi.fn(),
     error: vi.fn(),
+    info: vi.fn(),
   },
 }));
 
@@ -126,6 +129,53 @@ describe("upsertDosuAgentsSection", () => {
     );
     expect(readFileSync(path, "utf-8")).toBe(existing);
   });
+
+  it("refuses to modify duplicate Dosu sections", () => {
+    const path = join(dir, "AGENTS.md");
+    const section = buildDosuAgentsSection("instruction");
+    const existing = `${section}\n\n${section}\n`;
+    writeFileSync(path, existing);
+
+    expect(() => upsertDosuAgentsSection(dir, "new instruction")).toThrow(/refusing/);
+    expect(readFileSync(path, "utf-8")).toBe(existing);
+  });
+});
+
+describe("removeDosuAgentsSection", () => {
+  it("removes only the owned section and preserves surrounding user instructions", () => {
+    const path = join(dir, "AGENTS.md");
+    writeFileSync(path, `# Before\n\n${buildDosuAgentsSection("instruction")}\n\n# After\n`);
+
+    expect(removeDosuAgentsSection(dir).action).toBe("removed");
+    expect(readFileSync(path, "utf-8")).toBe("# Before\n\n# After\n");
+  });
+
+  it("deletes AGENTS.md when the generated Dosu section is the only content", () => {
+    const path = join(dir, "AGENTS.md");
+    writeFileSync(path, `${buildDosuAgentsSection("instruction")}\n`);
+
+    expect(removeDosuAgentsSection(dir).action).toBe("removed");
+    expect(() => readFileSync(path, "utf-8")).toThrow();
+  });
+
+  it("leaves a foreign AGENTS.md byte-for-byte unchanged", () => {
+    const path = join(dir, "AGENTS.md");
+    const existing = "# User instructions\r\n";
+    writeFileSync(path, existing);
+
+    expect(removeDosuAgentsSection(dir).action).toBe("not_found");
+    expect(readFileSync(path, "utf-8")).toBe(existing);
+  });
+
+  it("refuses malformed or duplicate markers without changing the file", () => {
+    const path = join(dir, "AGENTS.md");
+    const section = buildDosuAgentsSection("instruction");
+    const existing = `${section}\n${section}\n`;
+    writeFileSync(path, existing);
+
+    expect(() => removeDosuAgentsSection(dir)).toThrow(/refusing/);
+    expect(readFileSync(path, "utf-8")).toBe(existing);
+  });
 });
 
 describe("stepUpdateAgentsMd", () => {
@@ -147,5 +197,14 @@ describe("stepUpdateAgentsMd", () => {
       stepUpdateAgentsMd(join(dir, "does-not-exist"), "canonical instruction"),
     ).resolves.toBe(false);
     expect(p.log.error).toHaveBeenCalled();
+  });
+});
+
+describe("stepRemoveAgentsMd", () => {
+  it("reports a safe removal and treats an absent section as success", () => {
+    upsertDosuAgentsSection(dir, "instruction");
+    expect(stepRemoveAgentsMd(dir)).toBe(true);
+    expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("removed"));
+    expect(stepRemoveAgentsMd(dir)).toBe(true);
   });
 });

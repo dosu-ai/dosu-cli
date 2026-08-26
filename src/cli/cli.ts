@@ -47,8 +47,8 @@ import {
 import { getAccessTokenEmail, getAccessTokenUserID } from "../config/identity";
 import { logger } from "../debug/logger";
 import { runProjectProxy } from "../mcp/project-proxy";
-import { allProviders, getProvider, type Provider, type SetupProvider } from "../mcp/providers";
-import { cleanupLegacyGlobalMcp } from "../setup/legacy-global-cleanup";
+import { allProviders, getProvider, type Provider } from "../mcp/providers";
+import { GLOBAL_INSTALL_REQUIRED_MESSAGE, setupNeedsGlobalInstall } from "../setup/global-install";
 import { requireProjectRoot } from "../setup/project-root";
 import { browserFallbackHint } from "../setup/styles";
 import {
@@ -180,10 +180,6 @@ async function finishTelemetry(operation: () => Promise<void>): Promise<void> {
   } finally {
     if (timeout) clearTimeout(timeout);
   }
-}
-
-function isSetupProvider(provider: Provider): provider is SetupProvider {
-  return "isProjectConfigured" in provider && typeof provider.isProjectConfigured === "function";
 }
 
 /** Suggest the closest registered command name for a mistyped one, if any is close enough. */
@@ -488,7 +484,7 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
   mcp
     .command("add <agent>")
     .description("Add Dosu MCP to an AI tool")
-    .option("-g, --global", "Add globally (all projects) instead of project-local", false)
+    .option("-g, --global", "Use an explicit global connector when the tool requires one", false)
     .option("--show-secret", "Print full manual configuration secrets", false)
     .action(async (toolId: string, opts: { global: boolean; showSecret: boolean }) => {
       let provider: Provider;
@@ -498,6 +494,10 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
         throw new CliUsageError(
           `unknown tool '${toolId}'. Use 'dosu mcp list' to see available tools`,
         );
+      }
+      const kind = provider.configurationKind();
+      if (kind === "project" && setupNeedsGlobalInstall()) {
+        throw new CliUsageError(GLOBAL_INSTALL_REQUIRED_MESSAGE);
       }
       const cfg = loadConfig();
 
@@ -514,30 +514,36 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
         throw new CliUsageError("no API key available. Run 'dosu setup' to create one");
       }
 
-      if (provider.id() === "manual") {
-        provider.install(cfg, false, { showSecret: opts.showSecret });
-        return;
-      }
-
       const global = opts.global;
-      if (!provider.supportsLocal() && !global) {
-        throw new Error(
-          `${provider.name()} does not support project-local MCP configuration. Use --global explicitly if you want a global install.`,
+      if (kind === "unsupported") {
+        throw new CliUsageError(
+          `${provider.name()} does not currently support project-scoped Dosu configuration`,
+        );
+      }
+      if (kind === "project" && global) {
+        throw new CliUsageError(
+          `${provider.name()} is project-scoped. Run this command inside the project without --global`,
+        );
+      }
+      if (kind === "global-connector" && !global) {
+        throw new CliUsageError(
+          `${provider.name()} is an explicit global connector. Re-run with --global`,
         );
       }
 
-      const projectRoot = global ? undefined : requireProjectRoot();
+      const projectRoot = kind === "project" ? requireProjectRoot() : undefined;
 
-      const scope = global ? "global (all projects)" : "project-local";
-      console.log(`Adding Dosu MCP to ${provider.name()} (${scope})...`);
+      const scopeLabel = kind === "project" ? "project-local" : "global connector";
+      console.log(`Adding Dosu MCP to ${provider.name()} (${scopeLabel})...`);
 
-      provider.install(cfg, global, { showSecret: opts.showSecret, projectRoot });
-      if (!global && projectRoot && isSetupProvider(provider)) {
-        if (provider.isProjectConfigured(projectRoot)) cleanupLegacyGlobalMcp(provider);
-      }
+      provider.install(cfg, {
+        scope: kind === "project" ? "project" : "global",
+        showSecret: opts.showSecret,
+        projectRoot,
+      });
 
       console.log(`\n✓ Successfully added Dosu MCP to ${provider.name()}!`);
-      if (global) {
+      if (kind === "global-connector") {
         console.log(`\nStart ${provider.name()} in any project to use the Dosu MCP.`);
       } else {
         console.log(`\nStart ${provider.name()} in this project directory to use the Dosu MCP.`);
@@ -567,9 +573,9 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
     .action(() => {
       console.log("Available AI tools:\n");
       for (const p of allProviders()) {
-        let scope = "(local + global)";
-        if (!p.supportsLocal()) scope = "(global only)";
-        if (p.id() === "manual") scope = "";
+        let scope = "(project)";
+        if (p.configurationKind() === "global-connector") scope = "(explicit global connector)";
+        if (p.configurationKind() === "unsupported") scope = "(project setup unavailable)";
         console.log(`  ${p.id().padEnd(10)} ${p.name()} ${scope}`);
       }
       console.log("\nUse 'dosu mcp add <agent>' to add Dosu MCP to a tool.");

@@ -6,7 +6,7 @@ export const VSCodeProvider = () =>
   createJSONProvider({
     providerName: "VS Code",
     providerID: "vscode",
-    local: true,
+    configurationKind: "project",
     priorityValue: 6,
     paths: [join(appSupportDir(), "Code")],
     globalPath: join(appSupportDir(), "Code", "User", "mcp.json"),

@@ -5,7 +5,7 @@ export const FactoryProvider = () =>
   createJSONProvider({
     providerName: "Factory",
     providerID: "factory",
-    local: true,
+    configurationKind: "project",
     priorityValue: 17,
     paths: ["~/.factory"],
     globalPath: "~/.factory/mcp.json",

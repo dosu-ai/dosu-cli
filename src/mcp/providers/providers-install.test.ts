@@ -59,14 +59,14 @@ describe("createJSONProvider (base)", () => {
     const provider = createJSONProvider({
       providerName: "TestProvider",
       providerID: "test",
-      local: false,
+      configurationKind: "unsupported",
       priorityValue: 1,
       paths: [],
       globalPath,
       topKey: "mcpServers",
     });
 
-    provider.install(makeCfg(), true);
+    provider.install(makeCfg(), { scope: "global" });
 
     const cfg = loadJSONConfig(globalPath);
     expect(cfg.mcpServers).toBeDefined();
@@ -82,14 +82,14 @@ describe("createJSONProvider (base)", () => {
     const provider = createJSONProvider({
       providerName: "TestProvider",
       providerID: "test",
-      local: false,
+      configurationKind: "unsupported",
       priorityValue: 1,
       paths: [],
       globalPath,
       topKey: "mcpServers",
     });
 
-    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), true);
+    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), { scope: "global" });
 
     const cfg = loadJSONConfig(globalPath);
     expect(cfg.mcpServers.dosu).toBeDefined();
@@ -104,16 +104,16 @@ describe("createJSONProvider (base)", () => {
     const provider = createJSONProvider({
       providerName: "TestProvider",
       providerID: "test",
-      local: false,
+      configurationKind: "unsupported",
       priorityValue: 1,
       paths: [],
       globalPath: join(tempDir, "nope.json"),
       topKey: "mcpServers",
     });
 
-    expect(() => provider.install(makeCfg({ deployment_id: undefined }), true)).toThrow(
-      "deployment ID is required",
-    );
+    expect(() =>
+      provider.install(makeCfg({ deployment_id: undefined }), { scope: "global" }),
+    ).toThrow("deployment ID is required");
   });
 
   it("local install throws when localConfigPath is not provided", async () => {
@@ -121,14 +121,16 @@ describe("createJSONProvider (base)", () => {
     const provider = createJSONProvider({
       providerName: "TestProvider",
       providerID: "test",
-      local: false,
+      configurationKind: "unsupported",
       priorityValue: 1,
       paths: [],
       globalPath: join(tempDir, "g.json"),
       topKey: "mcpServers",
     });
 
-    expect(() => provider.install(makeCfg(), false)).toThrow("does not support local installation");
+    expect(() => provider.install(makeCfg(), { scope: "project" })).toThrow(
+      "does not support local installation",
+    );
   });
 
   it("project install requires an explicit project root", async () => {
@@ -136,7 +138,7 @@ describe("createJSONProvider (base)", () => {
     const provider = createJSONProvider({
       providerName: "TestProvider",
       providerID: "test",
-      local: true,
+      configurationKind: "project",
       priorityValue: 1,
       paths: [],
       globalPath: join(tempDir, "g.json"),
@@ -144,8 +146,10 @@ describe("createJSONProvider (base)", () => {
       localConfigPath: (projectRoot) => join(projectRoot, "local", "mcp.json"),
     });
 
-    expect(() => provider.install(makeCfg(), false)).toThrow("explicit project root");
-    expect(() => provider.remove(false)).toThrow("explicit project root");
+    expect(() => provider.install(makeCfg(), { scope: "project" })).toThrow(
+      "explicit project root",
+    );
+    expect(() => provider.remove({ scope: "project" })).toThrow("explicit project root");
   });
 
   it("project install writes a secretless proxy entry to the explicit project root", async () => {
@@ -154,7 +158,7 @@ describe("createJSONProvider (base)", () => {
     const provider = createJSONProvider({
       providerName: "TestProvider",
       providerID: "test",
-      local: true,
+      configurationKind: "project",
       priorityValue: 1,
       paths: [],
       globalPath: join(tempDir, "g.json"),
@@ -162,12 +166,12 @@ describe("createJSONProvider (base)", () => {
       localConfigPath: () => localPath,
     });
 
-    provider.install(makeCfg(), false, { projectRoot: tempDir });
+    provider.install(makeCfg(), { scope: "project", projectRoot: tempDir });
 
     const cfg = loadJSONConfig(localPath);
     expect(cfg.mcpServers.dosu).toMatchObject({
       type: "stdio",
-      command: "npx",
+      command: "dosu",
     });
     expect(cfg.mcpServers.dosu.args.join(" ")).toContain("mcp proxy --deployment dep-123");
     expect(JSON.stringify(cfg)).not.toContain("key-abc");
@@ -188,14 +192,14 @@ describe("createJSONProvider (base)", () => {
     const provider = createJSONProvider({
       providerName: "TestProvider",
       providerID: "test",
-      local: false,
+      configurationKind: "unsupported",
       priorityValue: 1,
       paths: [],
       globalPath,
       topKey: "mcpServers",
     });
 
-    provider.remove(true);
+    provider.remove({ scope: "global" });
 
     const cfg = loadJSONConfig(globalPath);
     expect(cfg.mcpServers.dosu).toBeUndefined();
@@ -310,14 +314,14 @@ describe("createJSONProvider (base)", () => {
     const provider = createJSONProvider({
       providerName: "TestProvider",
       providerID: "test",
-      local: false,
+      configurationKind: "unsupported",
       priorityValue: 1,
       paths: [],
       globalPath: join(tempDir, "g.json"),
       topKey: "mcpServers",
     });
 
-    expect(() => provider.remove(false)).toThrow("does not support local removal");
+    expect(() => provider.remove({ scope: "project" })).toThrow("does not support local removal");
   });
 
   it("local remove deletes dosu entry when localConfigPath is provided", async () => {
@@ -326,7 +330,7 @@ describe("createJSONProvider (base)", () => {
     const provider = createJSONProvider({
       providerName: "TestProvider",
       providerID: "test",
-      local: true,
+      configurationKind: "project",
       priorityValue: 1,
       paths: [],
       globalPath: join(tempDir, "g.json"),
@@ -334,8 +338,8 @@ describe("createJSONProvider (base)", () => {
       localConfigPath: () => localPath,
     });
 
-    provider.install(makeCfg(), false, { projectRoot: tempDir });
-    provider.remove(false, { projectRoot: tempDir });
+    provider.install(makeCfg(), { scope: "project", projectRoot: tempDir });
+    provider.remove({ scope: "project", projectRoot: tempDir });
 
     const cfg = loadJSONConfig(localPath);
     expect(cfg.mcpServers.dosu).toBeUndefined();
@@ -350,7 +354,7 @@ describe("createJSONProvider (base)", () => {
     const provider = createJSONProvider({
       providerName: "TestProvider",
       providerID: "test",
-      local: true,
+      configurationKind: "project",
       priorityValue: 1,
       paths: [],
       globalPath: join(tempDir, "g.json"),
@@ -359,10 +363,12 @@ describe("createJSONProvider (base)", () => {
     });
 
     expect(provider.isProjectConfigured(tempDir)).toBe(false);
-    expect(() => provider.install(makeCfg(), false, { projectRoot: tempDir })).toThrow(
+    expect(() => provider.install(makeCfg(), { scope: "project", projectRoot: tempDir })).toThrow(
       "refusing to overwrite",
     );
-    expect(() => provider.remove(false, { projectRoot: tempDir })).toThrow("refusing to remove");
+    expect(() => provider.remove({ scope: "project", projectRoot: tempDir })).toThrow(
+      "refusing to remove",
+    );
     expect(loadJSONConfig(localPath).mcpServers.dosu).toEqual(foreign);
   });
 
@@ -373,7 +379,7 @@ describe("createJSONProvider (base)", () => {
     const provider = createJSONProvider({
       providerName: "Custom",
       providerID: "custom",
-      local: false,
+      configurationKind: "unsupported",
       priorityValue: 1,
       paths: [],
       globalPath,
@@ -383,7 +389,7 @@ describe("createJSONProvider (base)", () => {
       }),
     });
 
-    provider.install(makeCfg(), true);
+    provider.install(makeCfg(), { scope: "global" });
 
     const cfg = loadJSONConfig(globalPath);
     expect(cfg.servers.dosu).toEqual({ myUrl: "custom-dep-123" });
@@ -430,7 +436,7 @@ describe("CodexProvider", () => {
     const { CodexProvider } = await import("./codex");
     const provider = CodexProvider();
 
-    provider.install(makeCfg(), true);
+    provider.install(makeCfg(), { scope: "global" });
 
     const configPath = join(tempDir, "codex-home", "config.toml");
     expect(existsSync(configPath)).toBe(true);
@@ -460,13 +466,13 @@ describe("CodexProvider", () => {
     const { CodexProvider } = await import("./codex");
     const provider = CodexProvider();
 
-    provider.install(makeCfg(), false, { projectRoot: tempDir });
+    provider.install(makeCfg(), { scope: "project", projectRoot: tempDir });
 
     const configPath = join(tempDir, ".codex", "config.toml");
     expect(existsSync(configPath)).toBe(true);
     const content = readFileSync(configPath, "utf-8");
     expect(content).toContain("[mcp_servers.dosu]");
-    expect(content).toContain('command = "npx"');
+    expect(content).toContain('command = "dosu"');
     expect(content).toContain('"mcp", "proxy"');
     expect(content).toContain("dep-123");
     expect(content).not.toContain("key-abc");
@@ -478,7 +484,7 @@ describe("CodexProvider", () => {
     const { CodexProvider } = await import("./codex");
     const provider = CodexProvider();
 
-    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), true);
+    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), { scope: "global" });
 
     const configPath = join(tempDir, "codex-home", "config.toml");
     const content = readFileSync(configPath, "utf-8");
@@ -490,9 +496,9 @@ describe("CodexProvider", () => {
     const { CodexProvider } = await import("./codex");
     const provider = CodexProvider();
 
-    expect(() => provider.install(makeCfg({ deployment_id: undefined }), true)).toThrow(
-      "deployment ID is required",
-    );
+    expect(() =>
+      provider.install(makeCfg({ deployment_id: undefined }), { scope: "global" }),
+    ).toThrow("deployment ID is required");
   });
 
   it("install throws a clear error when npx is not on PATH", async () => {
@@ -501,7 +507,7 @@ describe("CodexProvider", () => {
 
     process.env.PATH = join(tempDir, "no-bin");
 
-    expect(() => provider.install(makeCfg(), true)).toThrow(/npx/);
+    expect(() => provider.install(makeCfg(), { scope: "global" })).toThrow(/npx/);
   });
 
   it("install replaces existing dosu section", async () => {
@@ -509,10 +515,14 @@ describe("CodexProvider", () => {
     const provider = CodexProvider();
 
     // First install
-    provider.install(makeCfg({ deployment_id: "old-dep", api_key: "old-key" }), true);
+    provider.install(makeCfg({ deployment_id: "old-dep", api_key: "old-key" }), {
+      scope: "global",
+    });
 
     // Second install should replace
-    provider.install(makeCfg({ deployment_id: "new-dep", api_key: "new-key" }), true);
+    provider.install(makeCfg({ deployment_id: "new-dep", api_key: "new-key" }), {
+      scope: "global",
+    });
 
     const configPath = join(tempDir, "codex-home", "config.toml");
     const content = readFileSync(configPath, "utf-8");
@@ -534,7 +544,7 @@ describe("CodexProvider", () => {
       '[mcp_servers.dosu]\ntype = "http"\nurl = "https://old.example"\n\n[mcp_servers.dosu.http_headers]\nX-Dosu-API-Key = "old-key"\n',
     );
 
-    provider.install(makeCfg(), true);
+    provider.install(makeCfg(), { scope: "global" });
 
     const content = readFileSync(configPath, "utf-8");
     expect(content).not.toContain('type = "http"');
@@ -552,7 +562,7 @@ describe("CodexProvider", () => {
     mkdirSync(join(tempDir, "codex-home"), { recursive: true });
     writeFileSync(configPath, '[other_section]\nkey = "value"\n');
 
-    provider.install(makeCfg(), true);
+    provider.install(makeCfg(), { scope: "global" });
 
     const content = readFileSync(configPath, "utf-8");
     expect(content).toContain("[other_section]");
@@ -568,7 +578,7 @@ describe("CodexProvider", () => {
     mkdirSync(join(tempDir, "codex-home"), { recursive: true });
     writeFileSync(configPath, '[other_section]\nkey = "value"\n', { mode: 0o644 });
 
-    provider.install(makeCfg(), true);
+    provider.install(makeCfg(), { scope: "global" });
 
     expect(readFileSync(configPath, "utf-8")).toContain("[mcp_servers.dosu]");
     expect(statSync(configPath).mode & 0o777).toBe(0o600);
@@ -578,8 +588,8 @@ describe("CodexProvider", () => {
     const { CodexProvider } = await import("./codex");
     const provider = CodexProvider();
 
-    provider.install(makeCfg(), true);
-    provider.remove(true);
+    provider.install(makeCfg(), { scope: "global" });
+    provider.remove({ scope: "global" });
 
     const configPath = join(tempDir, "codex-home", "config.toml");
     const content = readFileSync(configPath, "utf-8");
@@ -608,8 +618,8 @@ describe("CodexProvider", () => {
     const { CodexProvider } = await import("./codex");
     const provider = CodexProvider();
 
-    provider.install(makeCfg(), false, { projectRoot: tempDir });
-    provider.remove(false, { projectRoot: tempDir });
+    provider.install(makeCfg(), { scope: "project", projectRoot: tempDir });
+    provider.remove({ scope: "project", projectRoot: tempDir });
 
     const configPath = join(tempDir, ".codex", "config.toml");
     const content = readFileSync(configPath, "utf-8");
@@ -625,10 +635,107 @@ describe("CodexProvider", () => {
     writeFileSync(configPath, foreign);
 
     expect(provider.isProjectConfigured(tempDir)).toBe(false);
-    expect(() => provider.install(makeCfg(), false, { projectRoot: tempDir })).toThrow(
+    expect(() => provider.install(makeCfg(), { scope: "project", projectRoot: tempDir })).toThrow(
       "refusing to overwrite",
     );
-    expect(() => provider.remove(false, { projectRoot: tempDir })).toThrow("refusing to remove");
+    expect(() => provider.remove({ scope: "project", projectRoot: tempDir })).toThrow(
+      "refusing to remove",
+    );
+    expect(readFileSync(configPath, "utf-8")).toBe(foreign);
+  });
+
+  it("recognizes and replaces an owned multiline project section without rewriting neighbors", async () => {
+    const { CodexProvider } = await import("./codex");
+    const provider = CodexProvider();
+    const configPath = join(tempDir, ".codex", "config.toml");
+    mkdirSync(dirname(configPath), { recursive: true });
+    const existing = [
+      "# keep this heading",
+      "[mcp_servers.dosu]",
+      'command = "dosu"',
+      "args = [",
+      '  "mcp",',
+      '  "proxy",',
+      '  "--deployment",',
+      '  "old-deployment",',
+      "]",
+      "",
+      "[features]",
+      "# keep this comment",
+      "apps = true",
+      "",
+    ].join("\n");
+    writeFileSync(configPath, existing);
+
+    expect(provider.isProjectConfigured(tempDir)).toBe(true);
+    provider.install(makeCfg(), { scope: "project", projectRoot: tempDir });
+
+    const content = readFileSync(configPath, "utf-8");
+    expect(content).toContain("# keep this heading");
+    expect(content).toContain("# keep this comment");
+    expect(content).toContain("[features]");
+    expect(content).toContain("dep-123");
+    expect(content).not.toContain("old-deployment");
+  });
+
+  it("is byte-idempotent when the project target is unchanged", async () => {
+    const { CodexProvider } = await import("./codex");
+    const provider = CodexProvider();
+    const configPath = join(tempDir, ".codex", "config.toml");
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, "[features]\n# keep\napps = true\n");
+
+    provider.install(makeCfg(), { scope: "project", projectRoot: tempDir });
+    const first = readFileSync(configPath, "utf-8");
+    provider.install(makeCfg(), { scope: "project", projectRoot: tempDir });
+
+    expect(readFileSync(configPath, "utf-8")).toBe(first);
+  });
+
+  it("preserves CRLF throughout a project config", async () => {
+    const { CodexProvider } = await import("./codex");
+    const provider = CodexProvider();
+    const configPath = join(tempDir, ".codex", "config.toml");
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, "[features]\r\n# keep\r\napps = true\r\n");
+
+    provider.install(makeCfg(), { scope: "project", projectRoot: tempDir });
+    const first = readFileSync(configPath, "utf-8");
+    expect(first.replaceAll("\r\n", "")).not.toContain("\n");
+    provider.install(makeCfg(), { scope: "project", projectRoot: tempDir });
+    expect(readFileSync(configPath, "utf-8")).toBe(first);
+  });
+
+  it.each([
+    "[features\napps = true\n",
+    '[mcp_servers.dosu]\ncommand = "dosu"\nargs = ["mcp"]\n\n[mcp_servers.dosu]\ncommand = "dosu"\n',
+  ])("refuses malformed or duplicate TOML without changing bytes", async (invalid) => {
+    const { CodexProvider } = await import("./codex");
+    const provider = CodexProvider();
+    const configPath = join(tempDir, ".codex", "config.toml");
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, invalid);
+
+    expect(() => provider.install(makeCfg(), { scope: "project", projectRoot: tempDir })).toThrow(
+      /invalid|duplicate/i,
+    );
+    expect(readFileSync(configPath, "utf-8")).toBe(invalid);
+  });
+
+  it.each([
+    '[mcp_servers]\ndosu = { command = "other", args = [] }\n',
+    'mcp_servers.dosu.command = "other"\nmcp_servers.dosu.args = []\n',
+    'mcp_servers = { dosu = { command = "other", args = [] } }\n',
+  ])("refuses alternate TOML declarations of a foreign dosu entry", async (foreign) => {
+    const { CodexProvider } = await import("./codex");
+    const provider = CodexProvider();
+    const configPath = join(tempDir, ".codex", "config.toml");
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, foreign);
+
+    expect(() => provider.install(makeCfg(), { scope: "project", projectRoot: tempDir })).toThrow(
+      /non-Dosu|alternate/i,
+    );
     expect(readFileSync(configPath, "utf-8")).toBe(foreign);
   });
 
@@ -637,7 +744,7 @@ describe("CodexProvider", () => {
     const provider = CodexProvider();
 
     const configPath = join(tempDir, "codex-home", "config.toml");
-    expect(() => provider.remove(true)).not.toThrow();
+    expect(() => provider.remove({ scope: "global" })).not.toThrow();
     expect(existsSync(configPath)).toBe(false);
   });
 
@@ -645,7 +752,7 @@ describe("CodexProvider", () => {
     const { CodexProvider } = await import("./codex");
     const provider = CodexProvider();
 
-    provider.install(makeCfg(), true);
+    provider.install(makeCfg(), { scope: "global" });
     expect(provider.isConfigured()).toBe(true);
   });
 
@@ -695,7 +802,7 @@ describe("CopilotProvider", () => {
     const { CopilotProvider } = await import("./copilot");
     const provider = CopilotProvider();
 
-    provider.install(makeCfg(), true);
+    provider.install(makeCfg(), { scope: "global" });
 
     const configPath = join(tempDir, "xdg-config", "mcp-config.json");
     expect(existsSync(configPath)).toBe(true);
@@ -712,12 +819,12 @@ describe("CopilotProvider", () => {
     const { CopilotProvider } = await import("./copilot");
     const provider = CopilotProvider();
 
-    provider.install(makeCfg(), false, { projectRoot: tempDir });
+    provider.install(makeCfg(), { scope: "project", projectRoot: tempDir });
 
     const configPath = join(tempDir, ".mcp.json");
     expect(existsSync(configPath)).toBe(true);
     const cfg = loadJSONConfig(configPath);
-    expect(cfg.mcpServers.dosu).toMatchObject({ type: "stdio", command: "npx" });
+    expect(cfg.mcpServers.dosu).toMatchObject({ type: "stdio", command: "dosu" });
     expect(cfg.mcpServers.dosu.args.join(" ")).toContain("mcp proxy --deployment dep-123");
     expect(JSON.stringify(cfg)).not.toContain("key-abc");
     expect(provider.projectConfigPath(tempDir)).toBe(configPath);
@@ -728,8 +835,9 @@ describe("CopilotProvider", () => {
     const { CopilotProvider } = await import("./copilot");
     const provider = CopilotProvider();
 
-    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), true);
-    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), false, {
+    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), { scope: "global" });
+    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), {
+      scope: "project",
       projectRoot: tempDir,
     });
 
@@ -746,17 +854,17 @@ describe("CopilotProvider", () => {
     const { CopilotProvider } = await import("./copilot");
     const provider = CopilotProvider();
 
-    expect(() => provider.install(makeCfg({ deployment_id: undefined }), true)).toThrow(
-      "deployment ID is required",
-    );
+    expect(() =>
+      provider.install(makeCfg({ deployment_id: undefined }), { scope: "global" }),
+    ).toThrow("deployment ID is required");
   });
 
   it("global remove deletes dosu entry from mcpServers", async () => {
     const { CopilotProvider } = await import("./copilot");
     const provider = CopilotProvider();
 
-    provider.install(makeCfg(), true);
-    provider.remove(true);
+    provider.install(makeCfg(), { scope: "global" });
+    provider.remove({ scope: "global" });
 
     const configPath = join(tempDir, "xdg-config", "mcp-config.json");
     const cfg = loadJSONConfig(configPath);
@@ -822,8 +930,8 @@ describe("CopilotProvider", () => {
     const { CopilotProvider } = await import("./copilot");
     const provider = CopilotProvider();
 
-    provider.install(makeCfg(), false, { projectRoot: tempDir });
-    provider.remove(false, { projectRoot: tempDir });
+    provider.install(makeCfg(), { scope: "project", projectRoot: tempDir });
+    provider.remove({ scope: "project", projectRoot: tempDir });
 
     const configPath = join(tempDir, ".mcp.json");
     const cfg = loadJSONConfig(configPath);
@@ -838,7 +946,7 @@ describe("CopilotProvider", () => {
     mkdirSync(join(tempDir, "xdg-config"), { recursive: true });
     writeFileSync(configPath, JSON.stringify({ mcpServers: { other: { url: "http://other" } } }));
 
-    provider.install(makeCfg(), true);
+    provider.install(makeCfg(), { scope: "global" });
 
     const cfg = loadJSONConfig(configPath);
     expect(cfg.mcpServers.other).toEqual({ url: "http://other" });
@@ -873,7 +981,7 @@ describe("MCPorterProvider", () => {
     const { MCPorterProvider } = await import("./mcporter");
     const provider = MCPorterProvider();
 
-    provider.install(makeCfg(), true);
+    provider.install(makeCfg(), { scope: "global" });
 
     const configPath = join(tempDir, ".mcporter", "mcporter.json");
     expect(existsSync(configPath)).toBe(true);
@@ -892,7 +1000,7 @@ describe("MCPorterProvider", () => {
     const { MCPorterProvider } = await import("./mcporter");
     const provider = MCPorterProvider();
 
-    provider.install(makeCfg(), true);
+    provider.install(makeCfg(), { scope: "global" });
 
     const cfg = loadJSONConfig(jsoncPath);
     expect(cfg.mcpServers.dosu).toBeDefined();
@@ -908,7 +1016,7 @@ describe("MCPorterProvider", () => {
     const { MCPorterProvider } = await import("./mcporter");
     const provider = MCPorterProvider();
 
-    provider.install(makeCfg(), true);
+    provider.install(makeCfg(), { scope: "global" });
 
     const cfg = loadJSONConfig(jsonPath);
     expect(cfg.mcpServers.dosu).toBeDefined();
@@ -918,12 +1026,12 @@ describe("MCPorterProvider", () => {
     const { MCPorterProvider } = await import("./mcporter");
     const provider = MCPorterProvider();
 
-    provider.install(makeCfg(), false, { projectRoot: tempDir });
+    provider.install(makeCfg(), { scope: "project", projectRoot: tempDir });
 
     const configPath = join(tempDir, "config", "mcporter.json");
     expect(existsSync(configPath)).toBe(true);
     const cfg = loadJSONConfig(configPath);
-    expect(cfg.mcpServers.dosu.command).toBe("npx");
+    expect(cfg.mcpServers.dosu.command).toBe("dosu");
     expect(cfg.mcpServers.dosu.args.join(" ")).toContain("mcp proxy --deployment dep-123");
     expect(JSON.stringify(cfg)).not.toContain("key-abc");
     expect(provider.projectConfigPath(tempDir)).toBe(configPath);
@@ -934,7 +1042,7 @@ describe("MCPorterProvider", () => {
     const { MCPorterProvider } = await import("./mcporter");
     const provider = MCPorterProvider();
 
-    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), true);
+    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), { scope: "global" });
 
     const configPath = join(tempDir, ".mcporter", "mcporter.json");
     const cfg = loadJSONConfig(configPath);
@@ -946,17 +1054,17 @@ describe("MCPorterProvider", () => {
     const { MCPorterProvider } = await import("./mcporter");
     const provider = MCPorterProvider();
 
-    expect(() => provider.install(makeCfg({ deployment_id: undefined }), true)).toThrow(
-      "deployment ID is required",
-    );
+    expect(() =>
+      provider.install(makeCfg({ deployment_id: undefined }), { scope: "global" }),
+    ).toThrow("deployment ID is required");
   });
 
   it("global remove deletes dosu entry", async () => {
     const { MCPorterProvider } = await import("./mcporter");
     const provider = MCPorterProvider();
 
-    provider.install(makeCfg(), true);
-    provider.remove(true);
+    provider.install(makeCfg(), { scope: "global" });
+    provider.remove({ scope: "global" });
 
     const configPath = join(tempDir, ".mcporter", "mcporter.json");
     const cfg = loadJSONConfig(configPath);
@@ -1037,8 +1145,8 @@ describe("MCPorterProvider", () => {
     const { MCPorterProvider } = await import("./mcporter");
     const provider = MCPorterProvider();
 
-    provider.install(makeCfg(), false, { projectRoot: tempDir });
-    provider.remove(false, { projectRoot: tempDir });
+    provider.install(makeCfg(), { scope: "project", projectRoot: tempDir });
+    provider.remove({ scope: "project", projectRoot: tempDir });
 
     const configPath = join(tempDir, "config", "mcporter.json");
     const cfg = loadJSONConfig(configPath);
@@ -1057,7 +1165,7 @@ describe("ManualProvider", () => {
 
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
-    provider.install(makeCfg(), false);
+    provider.install(makeCfg(), { scope: "global" });
 
     const allOutput = logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
     expect(allOutput).toContain("dep-123");
@@ -1074,7 +1182,7 @@ describe("ManualProvider", () => {
 
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
-    provider.install(makeCfg(), false, { showSecret: true });
+    provider.install(makeCfg(), { scope: "global", showSecret: true });
 
     const allOutput = logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
     expect(allOutput).toContain("key-abc");
@@ -1088,7 +1196,7 @@ describe("ManualProvider", () => {
 
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
-    provider.install(makeCfg({ api_key: "shortkey" }), false);
+    provider.install(makeCfg({ api_key: "shortkey" }), { scope: "global" });
 
     const allOutput = logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
     expect(allOutput).toContain("X-Dosu-API-Key: [hidden]");
@@ -1103,7 +1211,7 @@ describe("ManualProvider", () => {
 
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
-    provider.install(makeCfg({ api_key: "abcdefghijkl" }), false);
+    provider.install(makeCfg({ api_key: "abcdefghijkl" }), { scope: "global" });
 
     const allOutput = logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
     expect(allOutput).toContain("X-Dosu-API-Key: abc...jkl");
@@ -1119,7 +1227,7 @@ describe("ManualProvider", () => {
 
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
-    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), false);
+    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), { scope: "global" });
 
     const allOutput = logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
     expect(allOutput).toContain("/v1/mcp");
@@ -1134,7 +1242,7 @@ describe("ManualProvider", () => {
 
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
-    provider.remove(false);
+    provider.remove({ scope: "global" });
 
     const allOutput = logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
     expect(allOutput).toContain("remove");
@@ -1183,7 +1291,7 @@ describe("ClaudeDesktopProvider", () => {
     const { ClaudeDesktopProvider } = await import("./claude-desktop");
     const provider = ClaudeDesktopProvider();
 
-    provider.install(makeCfg(), true);
+    provider.install(makeCfg(), { scope: "global" });
 
     const cfg = loadJSONConfig(provider.globalConfigPath());
     const dosu = cfg.mcpServers.dosu;
@@ -1208,7 +1316,7 @@ describe("ClaudeDesktopProvider", () => {
     const { ClaudeDesktopProvider } = await import("./claude-desktop");
     const provider = ClaudeDesktopProvider();
 
-    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), true);
+    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), { scope: "global" });
 
     const cfg = loadJSONConfig(provider.globalConfigPath());
     const args = cfg.mcpServers.dosu.args.join(" ");
@@ -1220,9 +1328,9 @@ describe("ClaudeDesktopProvider", () => {
     const { ClaudeDesktopProvider } = await import("./claude-desktop");
     const provider = ClaudeDesktopProvider();
 
-    expect(() => provider.install(makeCfg({ deployment_id: undefined }), true)).toThrow(
-      "deployment ID is required",
-    );
+    expect(() =>
+      provider.install(makeCfg({ deployment_id: undefined }), { scope: "global" }),
+    ).toThrow("deployment ID is required");
   });
 
   it("install throws a clear error when npx is not on PATH", async () => {
@@ -1231,22 +1339,24 @@ describe("ClaudeDesktopProvider", () => {
 
     process.env.PATH = join(tempDir, "no-bin");
 
-    expect(() => provider.install(makeCfg(), true)).toThrow(/npx/);
+    expect(() => provider.install(makeCfg(), { scope: "global" })).toThrow(/npx/);
   });
 
   it("local install throws because Claude Desktop is global-only", async () => {
     const { ClaudeDesktopProvider } = await import("./claude-desktop");
     const provider = ClaudeDesktopProvider();
 
-    expect(() => provider.install(makeCfg(), false)).toThrow("does not support local installation");
+    expect(() => provider.install(makeCfg(), { scope: "project" })).toThrow(
+      "does not support project installation",
+    );
   });
 
   it("remove deletes the dosu entry", async () => {
     const { ClaudeDesktopProvider } = await import("./claude-desktop");
     const provider = ClaudeDesktopProvider();
 
-    provider.install(makeCfg(), true);
-    provider.remove(true);
+    provider.install(makeCfg(), { scope: "global" });
+    provider.remove({ scope: "global" });
 
     const cfg = loadJSONConfig(provider.globalConfigPath());
     expect(cfg.mcpServers.dosu).toBeUndefined();
@@ -1256,7 +1366,7 @@ describe("ClaudeDesktopProvider", () => {
     const { ClaudeDesktopProvider } = await import("./claude-desktop");
     const provider = ClaudeDesktopProvider();
 
-    expect(() => provider.remove(false)).toThrow("does not support local removal");
+    expect(() => provider.remove({ scope: "project" })).toThrow("does not support project removal");
   });
 
   it("install skips empty PATH segments when resolving npx", async () => {
@@ -1264,7 +1374,7 @@ describe("ClaudeDesktopProvider", () => {
     const provider = ClaudeDesktopProvider();
 
     process.env.PATH = `:${dirname(npxPath)}`;
-    provider.install(makeCfg(), true);
+    provider.install(makeCfg(), { scope: "global" });
 
     const cfg = loadJSONConfig(provider.globalConfigPath());
     expect(cfg.mcpServers.dosu.command).toBe(npxPath);
@@ -1275,7 +1385,7 @@ describe("ClaudeDesktopProvider", () => {
     const provider = ClaudeDesktopProvider();
 
     expect(provider.isConfigured()).toBe(false);
-    provider.install(makeCfg(), true);
+    provider.install(makeCfg(), { scope: "global" });
     expect(provider.isConfigured()).toBe(true);
   });
 });
@@ -1310,7 +1420,7 @@ describe("CursorProvider", () => {
     const { CursorProvider } = await import("./cursor");
     const provider = CursorProvider();
 
-    provider.install(makeCfg(), true);
+    provider.install(makeCfg(), { scope: "global" });
 
     const configPath = join(tempDir, ".cursor", "mcp.json");
     expect(existsSync(configPath)).toBe(true);
@@ -1326,12 +1436,12 @@ describe("CursorProvider", () => {
     const { CursorProvider } = await import("./cursor");
     const provider = CursorProvider();
 
-    provider.install(makeCfg(), false, { projectRoot: tempDir });
+    provider.install(makeCfg(), { scope: "project", projectRoot: tempDir });
 
     const configPath = join(tempDir, ".cursor", "mcp.json");
     expect(existsSync(configPath)).toBe(true);
     const cfg = loadJSONConfig(configPath);
-    expect(cfg.mcpServers.dosu.command).toBe("npx");
+    expect(cfg.mcpServers.dosu.command).toBe("dosu");
     expect(cfg.mcpServers.dosu.args.join(" ")).toContain("mcp proxy --deployment dep-123");
     expect(JSON.stringify(cfg)).not.toContain("key-abc");
   });
@@ -1340,8 +1450,8 @@ describe("CursorProvider", () => {
     const { CursorProvider } = await import("./cursor");
     const provider = CursorProvider();
 
-    provider.install(makeCfg(), true);
-    provider.remove(true);
+    provider.install(makeCfg(), { scope: "global" });
+    provider.remove({ scope: "global" });
 
     const configPath = join(tempDir, ".cursor", "mcp.json");
     const cfg = loadJSONConfig(configPath);
@@ -1372,7 +1482,7 @@ describe("OpenCodeProvider", () => {
     const { OpenCodeProvider } = await import("./opencode");
     const provider = OpenCodeProvider();
 
-    provider.install(makeCfg(), true);
+    provider.install(makeCfg(), { scope: "global" });
 
     const configPath = join(tempDir, ".config", "opencode", "opencode.json");
     expect(existsSync(configPath)).toBe(true);
@@ -1387,7 +1497,7 @@ describe("OpenCodeProvider", () => {
     const { OpenCodeProvider } = await import("./opencode");
     const provider = OpenCodeProvider();
 
-    provider.install(makeCfg(), false, { projectRoot: tempDir });
+    provider.install(makeCfg(), { scope: "project", projectRoot: tempDir });
 
     const configPath = join(tempDir, "opencode.json");
     expect(existsSync(configPath)).toBe(true);
@@ -1401,8 +1511,8 @@ describe("OpenCodeProvider", () => {
     const { OpenCodeProvider } = await import("./opencode");
     const provider = OpenCodeProvider();
 
-    provider.install(makeCfg(), true);
-    provider.remove(true);
+    provider.install(makeCfg(), { scope: "global" });
+    provider.remove({ scope: "global" });
 
     const configPath = join(tempDir, ".config", "opencode", "opencode.json");
     const cfg = loadJSONConfig(configPath);
@@ -1433,7 +1543,7 @@ describe("ClineCliProvider", () => {
     const { ClineCliProvider } = await import("./cline-cli");
     const provider = ClineCliProvider();
 
-    provider.install(makeCfg(), true);
+    provider.install(makeCfg(), { scope: "global" });
 
     const configPath = join(tempDir, "cline-home", "data", "settings", "cline_mcp_settings.json");
     expect(existsSync(configPath)).toBe(true);
@@ -1448,17 +1558,17 @@ describe("ClineCliProvider", () => {
     const { ClineCliProvider } = await import("./cline-cli");
     const provider = ClineCliProvider();
 
-    expect(() => provider.install(makeCfg({ deployment_id: undefined }), true)).toThrow(
-      "deployment ID is required",
-    );
+    expect(() =>
+      provider.install(makeCfg({ deployment_id: undefined }), { scope: "global" }),
+    ).toThrow("deployment ID is required");
   });
 
   it("remove deletes dosu entry", async () => {
     const { ClineCliProvider } = await import("./cline-cli");
     const provider = ClineCliProvider();
 
-    provider.install(makeCfg(), true);
-    provider.remove(true);
+    provider.install(makeCfg(), { scope: "global" });
+    provider.remove({ scope: "global" });
 
     const configPath = join(tempDir, "cline-home", "data", "settings", "cline_mcp_settings.json");
     const cfg = loadJSONConfig(configPath);
@@ -1469,7 +1579,9 @@ describe("ClineCliProvider", () => {
     const { ClineCliProvider } = await import("./cline-cli");
     const provider = ClineCliProvider();
 
-    expect(() => provider.install(makeCfg(), false)).toThrow("does not support local installation");
+    expect(() => provider.install(makeCfg(), { scope: "project" })).toThrow(
+      "does not support local installation",
+    );
   });
 });
 
@@ -1492,7 +1604,7 @@ describe("AntigravityProvider", () => {
     const { AntigravityProvider } = await import("./antigravity");
     const provider = AntigravityProvider();
 
-    provider.install(makeCfg(), true);
+    provider.install(makeCfg(), { scope: "global" });
 
     const configPath = join(tempDir, ".gemini", "antigravity", "mcp_config.json");
     expect(existsSync(configPath)).toBe(true);
@@ -1507,15 +1619,17 @@ describe("AntigravityProvider", () => {
     const { AntigravityProvider } = await import("./antigravity");
     const provider = AntigravityProvider();
 
-    expect(() => provider.install(makeCfg(), false)).toThrow("does not support local installation");
+    expect(() => provider.install(makeCfg(), { scope: "project" })).toThrow(
+      "does not support local installation",
+    );
   });
 
   it("remove deletes dosu entry", async () => {
     const { AntigravityProvider } = await import("./antigravity");
     const provider = AntigravityProvider();
 
-    provider.install(makeCfg(), true);
-    provider.remove(true);
+    provider.install(makeCfg(), { scope: "global" });
+    provider.remove({ scope: "global" });
 
     const configPath = join(tempDir, ".gemini", "antigravity", "mcp_config.json");
     const cfg = loadJSONConfig(configPath);
@@ -1546,7 +1660,7 @@ describe("ZedProvider", () => {
     const { ZedProvider } = await import("./zed");
     const provider = ZedProvider();
 
-    provider.install(makeCfg(), true);
+    provider.install(makeCfg(), { scope: "global" });
 
     const globalCfgPath = provider.globalConfigPath();
     expect(existsSync(globalCfgPath)).toBe(true);
@@ -1561,12 +1675,12 @@ describe("ZedProvider", () => {
     const { ZedProvider } = await import("./zed");
     const provider = ZedProvider();
 
-    provider.install(makeCfg(), false, { projectRoot: tempDir });
+    provider.install(makeCfg(), { scope: "project", projectRoot: tempDir });
 
     const configPath = join(tempDir, ".zed", "settings.json");
     expect(existsSync(configPath)).toBe(true);
     const cfg = loadJSONConfig(configPath);
-    expect(cfg.context_servers.dosu.command).toBe("npx");
+    expect(cfg.context_servers.dosu.command).toBe("dosu");
     expect(cfg.context_servers.dosu.args.join(" ")).toContain("mcp proxy --deployment dep-123");
     expect(cfg.context_servers.dosu.env).toEqual({});
     expect(JSON.stringify(cfg)).not.toContain("key-abc");
@@ -1576,8 +1690,8 @@ describe("ZedProvider", () => {
     const { ZedProvider } = await import("./zed");
     const provider = ZedProvider();
 
-    provider.install(makeCfg(), true);
-    provider.remove(true);
+    provider.install(makeCfg(), { scope: "global" });
+    provider.remove({ scope: "global" });
 
     const globalCfgPath = provider.globalConfigPath();
     const cfg = loadJSONConfig(globalCfgPath);
@@ -1588,8 +1702,8 @@ describe("ZedProvider", () => {
     const { ZedProvider } = await import("./zed");
     const provider = ZedProvider();
 
-    provider.install(makeCfg(), false, { projectRoot: tempDir });
-    provider.remove(false, { projectRoot: tempDir });
+    provider.install(makeCfg(), { scope: "project", projectRoot: tempDir });
+    provider.remove({ scope: "project", projectRoot: tempDir });
 
     const configPath = join(tempDir, ".zed", "settings.json");
     const cfg = loadJSONConfig(configPath);
@@ -1624,7 +1738,9 @@ describe("project-scoped provider matrix", () => {
 
   it("writes every supported project provider under the explicit root without the API key", () => {
     const providers = allSetupProviders();
-    const localProviders = providers.filter((provider) => provider.supportsLocal());
+    const localProviders = providers.filter(
+      (provider) => provider.configurationKind() === "project",
+    );
     expect(localProviders.map((provider) => provider.id())).toEqual([
       "claude",
       "cursor",
@@ -1640,7 +1756,7 @@ describe("project-scoped provider matrix", () => {
 
     for (const provider of localProviders) {
       const projectRoot = join(tempDir, "projects", provider.id());
-      provider.install(makeCfg(), false, { projectRoot });
+      provider.install(makeCfg(), { scope: "project", projectRoot });
 
       const configPath = provider.projectConfigPath(projectRoot);
       expect(configPath, provider.id()).not.toBeNull();
@@ -1648,19 +1764,47 @@ describe("project-scoped provider matrix", () => {
       expect(provider.isProjectConfigured(projectRoot), provider.id()).toBe(true);
       expect(readFileSync(configPath as string, "utf-8"), provider.id()).not.toContain("key-abc");
 
-      provider.remove(false, { projectRoot });
+      provider.remove({ scope: "project", projectRoot });
       expect(provider.isProjectConfigured(projectRoot), provider.id()).toBe(false);
+    }
+  });
+
+  it("prevents project providers from creating or deleting global MCP entries", () => {
+    for (const provider of allSetupProviders().filter(
+      (candidate) => candidate.configurationKind() === "project",
+    )) {
+      expect(() => provider.install(makeCfg(), { scope: "global" }), provider.id()).toThrow(
+        /project-scoped/,
+      );
+      expect(() => provider.remove({ scope: "global" }), provider.id()).toThrow(/project-scoped/);
+    }
+  });
+
+  it("prevents unsupported providers from mutating either scope", () => {
+    const projectRoot = join(tempDir, "project");
+    for (const provider of allSetupProviders().filter(
+      (candidate) => candidate.configurationKind() === "unsupported",
+    )) {
+      expect(() => provider.install(makeCfg(), { scope: "global" }), provider.id()).toThrow(
+        /does not support Dosu MCP configuration/,
+      );
+      expect(() => provider.remove({ scope: "project", projectRoot }), provider.id()).toThrow(
+        /does not support Dosu MCP configuration/,
+      );
     }
   });
 
   it("keeps global-only providers global-only", () => {
     const projectRoot = join(tempDir, "project");
-    for (const provider of allSetupProviders().filter((candidate) => !candidate.supportsLocal())) {
+    for (const provider of allSetupProviders().filter(
+      (candidate) => candidate.configurationKind() !== "project",
+    )) {
       expect(provider.projectConfigPath(projectRoot), provider.id()).toBeNull();
       expect(provider.isProjectConfigured(projectRoot), provider.id()).toBe(false);
-      expect(() => provider.install(makeCfg(), false, { projectRoot }), provider.id()).toThrow(
-        /does not support local installation/,
-      );
+      expect(
+        () => provider.install(makeCfg(), { scope: "project", projectRoot }),
+        provider.id(),
+      ).toThrow(/does not support|cannot perform/);
     }
   });
 });

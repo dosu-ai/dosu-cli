@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MODE_OSS } from "../config/config";
+import { MODE_OSS, updateTarget } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
-import { VERSION } from "../version/version";
 import { mcpBaseURL, mcpRemoteServer, mcpURL } from "./config-helpers";
 import { npxPathEnv } from "./detect";
 import {
@@ -73,25 +72,15 @@ type SpawnProxy = NonNullable<ProjectProxyDependencies["spawn"]>;
 describe("project MCP proxy", () => {
   describe("Dosu entry ownership", () => {
     it.each([
+      { command: "dosu", args: ["mcp", "proxy", "--oss"] },
+      {
+        type: "local",
+        command: ["dosu", "mcp", "proxy", "--deployment", "dep_123"],
+      },
       { command: "npx", args: ["-y", "@dosu/cli@0.43.0", "mcp", "proxy", "--oss"] },
       {
         type: "local",
         command: ["npx", "-y", "@dosu/cli@0.43.0", "mcp", "proxy", "--deployment", "dep_123"],
-      },
-      {
-        url: "https://api.example.test/v1/mcp/deployments/dep_123",
-        headers: { "X-Dosu-API-Key": "secret" },
-      },
-      {
-        command: "/opt/node/bin/npx",
-        args: [
-          "-y",
-          "mcp-remote@0.1.38",
-          "https://api.example.test/v1/mcp",
-          "--header",
-          `X-Dosu-API-Key:\${X_DOSU_API_KEY}`,
-        ],
-        env: { X_DOSU_API_KEY: "secret" },
       },
     ])("recognizes a released Dosu shape", (server) => {
       expect(isDosuOwnedMcpServer(server)).toBe(true);
@@ -99,6 +88,35 @@ describe("project MCP proxy", () => {
 
     it.each([
       { command: "npx", args: ["-y", "other-cli", "mcp", "proxy", "--oss"] },
+      { command: "npx", args: ["-y", "@dosu/cli@latest", "mcp", "proxy", "--oss"] },
+      { command: "npx", args: ["-y", "@dosu/cli@file:../cli", "mcp", "proxy", "--oss"] },
+      { command: "dosu", args: ["mcp", "proxy", "--oss", "--foreign"] },
+      {
+        command: "dosu",
+        args: ["mcp", "proxy", "--deployment", "dep_123", "--foreign"],
+      },
+      {
+        command: "npx",
+        args: ["-y", "@dosu/cli@0.43.0", "mcp", "proxy", "--oss", "--foreign"],
+      },
+      {
+        command: "npx",
+        args: ["-y", "@dosu/cli@0.43.0", "mcp", "proxy", "--deployment", "dep_123", "--foreign"],
+      },
+      {
+        url: "https://foreign.example/v1/mcp/deployments/dep_123",
+        headers: { "X-Dosu-API-Key": "secret" },
+      },
+      {
+        command: "other",
+        args: [
+          "mcp-remote@9.9.9",
+          "https://foreign.example/v1/mcp",
+          "--header",
+          `X-Dosu-API-Key:\${X_DOSU_API_KEY}`,
+        ],
+        env: { X_DOSU_API_KEY: "secret" },
+      },
       { url: "https://other.example/v1/mcp", headers: { Authorization: "secret" } },
       { command: "npx", args: ["-y", "mcp-remote@0.1.38", "https://other.example"] },
       null,
@@ -108,12 +126,12 @@ describe("project MCP proxy", () => {
   });
 
   describe("project command", () => {
-    it("pins the CLI version and contains no Cloud secret or endpoint", () => {
+    it("uses the globally installed CLI and contains no Cloud secret or endpoint", () => {
       const command = buildProjectProxyCommand(cloudConfig());
 
       expect(command).toEqual({
-        command: "npx",
-        args: ["-y", `@dosu/cli@${VERSION}`, "mcp", "proxy", "--deployment", "dep_123"],
+        command: "dosu",
+        args: ["mcp", "proxy", "--deployment", "dep_123"],
       });
       const serialized = JSON.stringify(command);
       expect(serialized).not.toContain("key_secret");
@@ -122,8 +140,8 @@ describe("project MCP proxy", () => {
 
     it("builds the OSS command", () => {
       expect(buildProjectProxyCommand(ossConfig())).toEqual({
-        command: "npx",
-        args: ["-y", `@dosu/cli@${VERSION}`, "mcp", "proxy", "--oss"],
+        command: "dosu",
+        args: ["mcp", "proxy", "--oss"],
       });
     });
 
@@ -156,10 +174,20 @@ describe("project MCP proxy", () => {
       });
     });
 
-    it("fails closed when the project target is not the active target", () => {
+    it("resolves an earlier project after another deployment becomes active", () => {
+      const cfg = cloudConfig("dep_123", "key_first");
+      updateTarget(cfg, { deployment_id: "dep_other", api_key: "key_other" });
+
+      expect(resolveProjectProxyRuntime(cfg, { deploymentID: "dep_123" })).toEqual({
+        endpoint: mcpURL("dep_123"),
+        apiKey: "key_first",
+      });
+    });
+
+    it("fails closed when the project deployment has no stored credential", () => {
       expect(() =>
         resolveProjectProxyRuntime(cloudConfig("dep_other"), { deploymentID: "dep_123" }),
-      ).toThrow("does not match the active Dosu MCP");
+      ).toThrow("No credential is stored for this project's Dosu MCP");
     });
 
     it("fails closed when Cloud and OSS modes disagree", () => {
@@ -167,7 +195,7 @@ describe("project MCP proxy", () => {
         "is not configured for OSS mode",
       );
       expect(() => resolveProjectProxyRuntime(ossConfig(), { deploymentID: "dep_123" })).toThrow(
-        "does not match the active Dosu MCP",
+        "No credential is stored",
       );
     });
 
@@ -251,7 +279,14 @@ describe("project MCP proxy", () => {
       expect(spawn).toHaveBeenCalledWith(
         "npx.cmd",
         expect.any(Array),
-        expect.objectContaining({ shell: true, stdio: "inherit" }),
+        expect.objectContaining({
+          shell: true,
+          stdio: "inherit",
+          env: expect.objectContaining({
+            NoDefaultCurrentDirectoryInExePath: "1",
+            X_DOSU_API_KEY: "key_secret",
+          }),
+        }),
       );
     });
 
@@ -299,7 +334,7 @@ describe("project MCP proxy", () => {
             spawn,
           },
         ),
-      ).rejects.toThrow("does not match the active Dosu MCP");
+      ).rejects.toThrow("No credential is stored");
       expect(spawn).not.toHaveBeenCalled();
     });
   });
