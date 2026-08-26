@@ -1,4 +1,5 @@
 import * as p from "@clack/prompts";
+import { skillInstallTargetForProvider } from "../commands/skill";
 import type { AccountTarget, Config } from "../config/config";
 import { saveConfig } from "../config/config";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
@@ -210,13 +211,20 @@ function defaultDependencies(
     validateDirectories: validateScanDirectories,
     scanRepositories: scanGitRepositories,
     inspectRepository: inspectRepositoryBindings,
-    installSkills: runInstallSkill,
+    installSkills: async (providers) => {
+      const supported = bulkSkillProviders(providers);
+      return supported.length === 0 || runInstallSkill(supported);
+    },
     fetchInstruction: fetchDosuRule,
     configureRepository: configureBulkRepository,
     reconcileGlobal: reconcileLegacyGlobalSetup,
     saveConfig,
     ...overrides,
   };
+}
+
+export function bulkSkillProviders(providers: readonly SetupProvider[]): SetupProvider[] {
+  return providers.filter((provider) => skillInstallTargetForProvider(provider.id()) !== null);
 }
 
 function reloadableProjectProviders(providers: readonly SetupProvider[]): SetupProvider[] {
@@ -383,23 +391,27 @@ export async function runBulkProjectSetup(
   const results: BulkRepositoryResult[] = [];
   for (const selected of selectedRepositories) {
     try {
-      results.push(
-        await dependencies.configureRepository({
-          config: projectConfig,
-          repository: selected.repository,
-          selectedProviders,
-          knownProviders,
-          initialState: selected.state,
-          replaceExisting: selected.replaceExisting,
-          instruction,
-        }),
-      );
+      const result = await dependencies.configureRepository({
+        config: projectConfig,
+        repository: selected.repository,
+        selectedProviders,
+        knownProviders,
+        initialState: selected.state,
+        replaceExisting: selected.replaceExisting,
+        instruction,
+      });
+      results.push(result);
+      if (!result.success) {
+        p.log.error(`${result.projectRoot}: ${result.error ?? "project setup failed"}`);
+      }
     } catch (error: unknown) {
-      results.push({
+      const result = {
         projectRoot: selected.repository.path,
         success: false,
         error: error instanceof Error ? error.message : String(error),
-      });
+      };
+      results.push(result);
+      p.log.error(`${result.projectRoot}: ${result.error}`);
     }
   }
 
