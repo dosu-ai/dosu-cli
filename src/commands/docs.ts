@@ -5,12 +5,15 @@
 import { readFileSync } from "node:fs";
 import * as p from "@clack/prompts";
 import { isTRPCClientError } from "@trpc/client";
-import { Command } from "commander";
+import { Argument, Command, Option } from "commander";
 import pc from "picocolors";
+import { Client } from "../client/client";
 import { createTypedClient, type TypedClient } from "../client/trpc";
 import { getBackendURL } from "../config/constants";
 import { logger } from "../debug/logger";
+import { positiveInteger, uuid } from "./arguments";
 import { requireAPIKey, requireLoginConfig } from "./auth";
+import { IMPORT_PLATFORMS, type ImportPlatform, importDocuments } from "./doc-import";
 import { formatDate, printInfo, printResult, printTable, truncate } from "./output";
 
 function requireConfig() {
@@ -129,6 +132,10 @@ async function backendPost(
     headers: { "Content-Type": "application/json", "X-Dosu-API-Key": apiKey },
     body: JSON.stringify(body),
   });
+  return parseBackendResponse(resp);
+}
+
+async function parseBackendResponse(resp: Response): Promise<unknown> {
   if (!resp.ok) {
     let detail = `Request failed with status ${resp.status}`;
     try {
@@ -148,10 +155,10 @@ export function docsCommand(): Command {
     .command("list")
     .description("List documents")
     .option("--search <query>", "Search documents")
-    .option("--tag <id>", "Filter by tag ID")
-    .option("--limit <n>", "Maximum results", "20")
+    .option("--topic <id>", "Filter by topic ID")
+    .addOption(new Option("--limit <n>", "Maximum results").argParser(positiveInteger).default(20))
     .option("--json", "Output as JSON")
-    .action(async (opts: { search?: string; tag?: string; limit?: string; json?: boolean }) => {
+    .action(async (opts: { search?: string; topic?: string; limit: number; json?: boolean }) => {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
@@ -160,8 +167,8 @@ export function docsCommand(): Command {
       const result = await client.page.listWithTags.query({
         knowledge_store_id: ksId,
         searchTerm: opts.search,
-        topic_id: opts.tag,
-        limit: Number.parseInt(opts.limit ?? "20", 10),
+        topic_id: opts.topic,
+        limit: opts.limit,
       });
       const pages = result.data;
 
@@ -190,15 +197,15 @@ export function docsCommand(): Command {
     .command("get")
     .description("Get a document")
     .argument("<id>", "Page ID")
-    .option("--version <v>", "Specific version number")
+    .addOption(new Option("--revision <n>", "Specific revision number").argParser(positiveInteger))
     .option("--json", "Output as JSON")
-    .action(async (id: string, opts: { version?: string; json?: boolean }) => {
+    .action(async (id: string, opts: { revision?: number; json?: boolean }) => {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
 
       const page = await client.page.get.query({
         page_id: id,
-        version: opts.version ? Number.parseInt(opts.version, 10) : undefined,
+        version: opts.revision,
       });
 
       if (opts.json) {
@@ -228,7 +235,7 @@ export function docsCommand(): Command {
     .description("Create a new document")
     .requiredOption("--title <title>", "Document title")
     .option("--body <markdown>", "Document body (markdown)")
-    .option("--body-file <path>", "Read body from file")
+    .addOption(new Option("--body-file <path>", "Read body from file").conflicts("body"))
     .option("--json", "Output as JSON")
     .action(async (opts: { title: string; body?: string; bodyFile?: string; json?: boolean }) => {
       const cfg = requireConfig();
@@ -257,20 +264,23 @@ export function docsCommand(): Command {
     .argument("<id>", "Page ID")
     .option("--title <title>", "New title")
     .option("--body <markdown>", "New body (markdown)")
-    .option("--body-file <path>", "Read body from file")
+    .addOption(new Option("--body-file <path>", "Read body from file").conflicts("body"))
     .option("--json", "Output as JSON")
     .action(
       async (
         id: string,
         opts: { title?: string; body?: string; bodyFile?: string; json?: boolean },
       ) => {
+        if (opts.title === undefined && opts.body === undefined && opts.bodyFile === undefined) {
+          throw new Error("Specify at least one of --title, --body, or --body-file.");
+        }
         const cfg = requireConfig();
         const client = createTypedClient(cfg);
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
         const ksId = await getKnowledgeStoreId(client, cfg.active_account!.target!.space_id!);
 
         const body = readBody(opts);
-        const result = await client.page.update.mutate({
+        await client.page.update.mutate({
           id,
           knowledge_store_id: ksId,
           title: opts.title,
@@ -278,7 +288,7 @@ export function docsCommand(): Command {
         });
 
         if (opts.json) {
-          printResult(result, opts);
+          printResult({ success: true, id }, opts);
           return;
         }
         console.log(pc.green("Document updated."));
@@ -359,21 +369,25 @@ export function docsCommand(): Command {
     .command("restore")
     .description("Restore a document version")
     .argument("<id>", "Page ID")
-    .requiredOption("--version <n>", "Version number to restore")
+    .addOption(
+      new Option("--revision <n>", "Revision number to restore")
+        .argParser(positiveInteger)
+        .makeOptionMandatory(),
+    )
     .option("--json", "Output as JSON")
-    .action(async (id: string, opts: { version: string; json?: boolean }) => {
+    .action(async (id: string, opts: { revision: number; json?: boolean }) => {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
       await client.page.restoreVersion.mutate({
         page_id: id,
-        version_to_restore: Number.parseInt(opts.version, 10),
+        version_to_restore: opts.revision,
       });
 
       if (opts.json) {
-        printResult({ success: true, id, version: opts.version }, opts);
+        printResult({ success: true, id, revision: opts.revision }, opts);
         return;
       }
-      console.log(pc.green(`Document restored to version ${opts.version}.`));
+      console.log(pc.green(`Document restored to version ${opts.revision}.`));
     });
 
   // ── generate ──
@@ -423,47 +437,33 @@ export function docsCommand(): Command {
   cmd
     .command("import")
     .description("Import documents from an external platform")
-    .argument("<platform>", "Platform: github, gitlab, azure_devops, confluence, notion, coda")
+    .addArgument(new Argument("<platform>", "Import platform").choices([...IMPORT_PLATFORMS]))
     .requiredOption("--files <ids>", "Comma-separated file/page IDs to import")
     .option("--json", "Output as JSON")
-    .action(async (platform: string, opts: { files: string; json?: boolean }) => {
+    .action(async (platform: ImportPlatform, opts: { files: string; json?: boolean }) => {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
       const ksId = await getKnowledgeStoreId(client, cfg.active_account!.target!.space_id!);
-      const fileIds = opts.files.split(",").map((id) => id.trim());
-
-      // biome-ignore lint/suspicious/noExplicitAny: dynamic platform dispatch
-      const importFn: Record<string, (input: any) => Promise<any>> = {
-        github: (input) => client.docImports.importGithubFiles.mutate(input),
-        gitlab: (input) => client.docImports.importGitlabFiles.mutate(input),
-        azure_devops: (input) => client.docImports.importAzureDevopsFiles.mutate(input),
-        confluence: (input) => client.docImports.importConfluencePages.mutate(input),
-        notion: (input) => client.docImports.importNotionPages.mutate(input),
-        coda: (input) => client.docImports.importCodaPages.mutate(input),
-      };
-
-      const fn = importFn[platform.toLowerCase()];
-      if (!fn) {
-        console.error(
-          pc.red(
-            `Unknown platform: ${platform}. Use: github, gitlab, azure_devops, confluence, notion, coda`,
-          ),
-        );
-        process.exit(1);
+      const fileIds = opts.files
+        .split(",")
+        .map((id) => id.trim())
+        .filter(Boolean);
+      if (fileIds.length === 0) {
+        throw new Error("--files must contain at least one file or page ID.");
       }
 
-      const idField = ["confluence", "notion", "coda"].includes(platform.toLowerCase())
-        ? "page_ids"
-        : "file_ids";
-
       try {
-        const result = await fn({
-          knowledge_store_id: ksId,
-          // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-          space_id: cfg.active_account!.target!.space_id!,
-          [idField]: fileIds,
-        });
+        const result = await importDocuments(
+          client,
+          platform,
+          {
+            knowledgeStoreId: ksId,
+            // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
+            spaceId: cfg.active_account!.target!.space_id!,
+          },
+          fileIds,
+        );
 
         if (opts.json) {
           printResult(result, opts);
@@ -498,13 +498,16 @@ export function docsCommand(): Command {
   cmd
     .command("import-status")
     .description("Check import task status")
-    .argument("<task-id>", "Import task ID")
+    .addArgument(new Argument("<task-id>", "Import task ID").argParser(uuid))
     .option("--json", "Output as JSON")
     .action(async (taskId: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
-      const client = createTypedClient(cfg);
-
-      const status = await client.docImports.getImportStatus.query(taskId);
+      // Import creates backend UUIDv7 task IDs. Query the task owner directly;
+      // the App wrapper accepts UUIDv4 only and cannot consume its own output.
+      const response = await new Client(cfg).get(
+        `/doc-imports/status/${encodeURIComponent(taskId)}`,
+      );
+      const status = response.status === 404 ? null : await parseBackendResponse(response);
 
       if (opts.json) {
         printResult(status, opts);

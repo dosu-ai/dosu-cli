@@ -120,6 +120,9 @@ export function sourcesCommand(): Command {
     .option("--description <desc>", "New description")
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { name?: string; description?: string; json?: boolean }) => {
+      if (opts.name === undefined && opts.description === undefined) {
+        throw new Error("Specify at least one of --name or --description.");
+      }
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
 

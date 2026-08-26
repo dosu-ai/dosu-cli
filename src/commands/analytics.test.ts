@@ -99,6 +99,17 @@ describe("analytics", () => {
     expect(mockQuery.mock.calls[0][1].days).toBe(7);
   });
 
+  it.each([
+    "0",
+    "-1",
+    "1.5",
+    "nope",
+  ])("rejects invalid --days %s before calling tRPC", async (days) => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    await expect(run("--days", days)).rejects.toThrow();
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
   it("outputs valid JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce({

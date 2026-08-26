@@ -17,6 +17,11 @@ vi.mock("../client/trpc", () => ({
   createTypedClient: vi.fn().mockImplementation(() => createMockProxy()),
 }));
 
+const mockListSpaceDataSourceIds = vi.fn();
+vi.mock("../client/supabase", () => ({
+  listSpaceDataSourceIds: (...args: unknown[]) => mockListSpaceDataSourceIds(...args),
+}));
+
 const mockLoadConfig = vi.fn();
 vi.mock("../config/config", () => ({
   loadConfig: (...args: unknown[]) => mockLoadConfig(...args),
@@ -55,6 +60,8 @@ async function run(...args: string[]) {
 beforeEach(() => {
   mockQuery.mockReset();
   mockMutate.mockReset();
+  mockListSpaceDataSourceIds.mockReset();
+  mockListSpaceDataSourceIds.mockResolvedValue(["ds1"]);
   mockLoadConfig.mockReset();
   mockQuery.mockResolvedValueOnce({ id: "ks1" }); // knowledgeStore.getBySpaceId
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -100,22 +107,22 @@ describe("suggest list", () => {
 });
 
 describe("suggest generate", () => {
-  it("fetches data sources then calls suggestedDoc.generate", async () => {
+  it("sends only data sources attached to the active space", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "ds1" }, { id: "ds2" }]); // dataSource.list
+    mockListSpaceDataSourceIds.mockResolvedValueOnce(["ds1", "ds3"]);
     mockMutate.mockResolvedValueOnce({});
 
     await run("generate");
 
     expect(mockMutate).toHaveBeenCalledWith("suggestedDoc.generate", {
       knowledgeStoreId: "ks1",
-      dataSourceIds: ["ds1", "ds2"],
+      dataSourceIds: ["ds1", "ds3"],
     });
+    expect(mockListSpaceDataSourceIds).toHaveBeenCalledWith(validConfig, "sp1");
   });
 
   it("outputs JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "ds1" }]);
     mockMutate.mockResolvedValueOnce({ status: "generating" });
 
     await run("generate", "--json");
@@ -125,12 +132,19 @@ describe("suggest generate", () => {
 
   it("prints human-readable confirmation", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "ds1" }]);
     mockMutate.mockResolvedValueOnce({});
 
     await run("generate");
 
     expect(allOutput()).toContain("Document suggestions are being generated");
+  });
+
+  it("rejects when the active deployment has no attached source", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockListSpaceDataSourceIds.mockResolvedValueOnce([]);
+
+    await expect(run("generate")).rejects.toThrow("No data sources are connected");
+    expect(mockMutate).not.toHaveBeenCalled();
   });
 });
 

@@ -33,6 +33,13 @@ vi.mock("../client/trpc", () => ({
   createTypedClient: vi.fn().mockImplementation(() => createMockProxy()),
 }));
 
+const mockBackendGet = vi.fn();
+vi.mock("../client/client", () => ({
+  Client: class {
+    get = mockBackendGet;
+  },
+}));
+
 const mockLoadConfig = vi.fn();
 vi.mock("../config/config", () => ({
   loadConfig: (...args: unknown[]) => mockLoadConfig(...args),
@@ -102,6 +109,7 @@ beforeEach(() => {
   mockQuery.mockReset();
   mockMutate.mockReset();
   mockLoadConfig.mockReset();
+  mockBackendGet.mockReset();
   mockFetch.mockReset();
   mockClackLogError.mockReset();
   mockClackLogInfo.mockReset();
@@ -130,10 +138,10 @@ describe("docs list", () => {
     expect(call[1].knowledge_store_id).toBe("ks1");
   });
 
-  it("passes --search and --tag filters", async () => {
+  it("passes --search and --topic filters", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce({ data: [] });
-    await run("list", "--search", "api", "--tag", "t1");
+    await run("list", "--search", "api", "--topic", "t1");
 
     const input = mockQuery.mock.calls[1][1];
     expect(input.searchTerm).toBe("api");
@@ -192,11 +200,11 @@ describe("docs get", () => {
     });
   });
 
-  it("passes --version to page.get when provided", async () => {
+  it("passes --revision to page.get when provided", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockReset();
     mockQuery.mockResolvedValueOnce({ id: "p1", title: "V2" });
-    await run("get", "p1", "--version", "2");
+    await run("get", "p1", "--revision", "2");
     expect(mockQuery).toHaveBeenCalledWith("page.get", {
       page_id: "p1",
       version: 2,
@@ -281,6 +289,14 @@ describe("docs create", () => {
     }
   });
 
+  it("rejects --body with --body-file before calling tRPC", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    await expect(
+      run("create", "--title", "Conflict", "--body", "inline", "--body-file", "package.json"),
+    ).rejects.toThrow();
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
+
   it("outputs JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockMutate.mockResolvedValueOnce({ id: "new-p1", title: "T" });
@@ -312,10 +328,10 @@ describe("docs update", () => {
 
   it("outputs JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({ id: "p1", title: "Updated" });
+    mockMutate.mockResolvedValueOnce(undefined);
     await run("update", "--json", "p1", "--title", "Updated");
     const output = JSON.parse(allOutput());
-    expect(output).toMatchObject({ id: "p1", title: "Updated" });
+    expect(output).toEqual({ success: true, id: "p1" });
   });
 
   it("prints human-readable confirmation", async () => {
@@ -323,6 +339,12 @@ describe("docs update", () => {
     mockMutate.mockResolvedValueOnce({});
     await run("update", "p1", "--title", "Updated");
     expect(allOutput()).toContain("Document updated");
+  });
+
+  it("rejects an update with no changes before calling tRPC", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    await expect(run("update", "p1")).rejects.toThrow();
+    expect(mockMutate).not.toHaveBeenCalled();
   });
 });
 
@@ -461,7 +483,7 @@ describe("docs restore", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockMutate.mockResolvedValueOnce({});
     mockQuery.mockReset();
-    await run("restore", "p1", "--version", "3");
+    await run("restore", "p1", "--revision", "3");
     expect(mockMutate).toHaveBeenCalledWith("page.restoreVersion", {
       page_id: "p1",
       version_to_restore: 3,
@@ -472,17 +494,17 @@ describe("docs restore", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockMutate.mockResolvedValueOnce({});
     mockQuery.mockReset();
-    await run("restore", "--json", "p1", "--version", "3");
+    await run("restore", "--json", "p1", "--revision", "3");
     const output = JSON.parse(allOutput());
     expect(output.success).toBe(true);
-    expect(output.version).toBe("3");
+    expect(output.revision).toBe(3);
   });
 
   it("prints human-readable confirmation", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockMutate.mockResolvedValueOnce({});
     mockQuery.mockReset();
-    await run("restore", "p1", "--version", "3");
+    await run("restore", "p1", "--revision", "3");
     expect(allOutput()).toContain("restored to version 3");
   });
 });
@@ -579,6 +601,11 @@ describe("docs auto-tag", () => {
 });
 
 describe("docs import", () => {
+  it("rejects an empty --files list before calling tRPC", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    await expect(run("import", "github", "--files", " , ")).rejects.toThrow();
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
   it("calls docImports.importGithubFiles with file_ids", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockMutate.mockResolvedValueOnce({ task_id: "task-1" });
@@ -1054,36 +1081,35 @@ describe("docs import", () => {
 });
 
 describe("docs import-status", () => {
-  it("calls docImports.getImportStatus", async () => {
+  const taskId = "01a03ccd-23fd-70d3-8176-73a87b8fcc26";
+
+  it("calls the task backend with the UUIDv7 returned by import", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockReset();
-    mockQuery.mockResolvedValueOnce({ status: "completed" });
-    await run("import-status", "task-1");
-    expect(mockQuery).toHaveBeenCalledWith("docImports.getImportStatus", "task-1");
+    mockBackendGet.mockResolvedValueOnce(jsonResponse({ status: "completed" }));
+    await run("import-status", taskId);
+    expect(mockBackendGet).toHaveBeenCalledWith(`/doc-imports/status/${taskId}`);
+    expect(mockQuery).not.toHaveBeenCalled();
   });
 
   it("prints message when task not found", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockReset();
-    mockQuery.mockResolvedValueOnce(null);
-    await run("import-status", "bad-task");
+    mockBackendGet.mockResolvedValueOnce(new Response(null, { status: 404 }));
+    await run("import-status", taskId);
     expect(allOutput()).toContain("Import task not found");
   });
 
   it("outputs JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockReset();
-    mockQuery.mockResolvedValueOnce({ status: "completed" });
-    await run("import-status", "--json", "task-1");
+    mockBackendGet.mockResolvedValueOnce(jsonResponse({ status: "completed" }));
+    await run("import-status", "--json", taskId);
     const output = JSON.parse(allOutput());
     expect(output).toMatchObject({ status: "completed" });
   });
 
   it("prints status in human-readable format", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockReset();
-    mockQuery.mockResolvedValueOnce({ status: "completed" });
-    await run("import-status", "task-1");
+    mockBackendGet.mockResolvedValueOnce(jsonResponse({ status: "completed" }));
+    await run("import-status", taskId);
     expect(allOutput()).toContain('Status: {"status":"completed"}');
   });
 });

@@ -2,10 +2,11 @@
  * `dosu integrations` — integration status and management.
  */
 
-import { Command } from "commander";
+import { Argument, Command } from "commander";
 import pc from "picocolors";
 import { createTypedClient, type TypedClient } from "../client/trpc";
 import type { NangoGetConnectionInput } from "../generated/dosu-api-types";
+import { positiveInteger } from "./arguments";
 import { requireLoginConfig } from "./auth";
 import { printResult, printTable } from "./output";
 
@@ -20,49 +21,6 @@ function requireConfig() {
 
 type NangoProvider = NangoGetConnectionInput["provider"];
 
-/**
- * Nango probes per platform. A platform can be connectable under more than one
- * Nango provider, and a connection may exist under any of them; we report
- * connected if ANY probe returns a row.
- *
- * `nango.getConnection` exact-matches BOTH `provider` (the Nango DB provider
- * value) and `providerConfigKey` (the Nango integration id). These differ for
- * the alternate-auth integrations — the integration id is a distinct base, and
- * the DB provider stays the platform's canonical value. The primary auth method
- * (OAuth) is listed first so the common case short-circuits on the first probe;
- * the alternate (PAT / Basic) is the fallback:
- *   - GitLab: OAuth `{gitlab, gitlab}`, PAT `{gitlab, gitlab-pat}`
- *   - Confluence: OAuth `{confluence, confluence}`, Basic `{confluence, confluence-basic}`
- *   - Azure DevOps: OAuth `{microsoft-entra-id, microsoft-entra-id}`, PAT `{azure_devops, azure-devops}`
- * (Note `azure_devops` the DB provider vs `azure-devops` the integration id.)
- *
- * `gitlab-pat`/`confluence-basic` are also kept as standalone keys so
- * `status gitlab-pat` / `status confluence-basic` still work. Prod uses bare
- * integration ids (no env suffix), which is what the shipped CLI targets.
- */
-const NANGO_PROBES: Record<
-  string,
-  readonly { provider: NangoProvider; providerConfigKey: string }[]
-> = {
-  gitlab: [
-    { provider: "gitlab", providerConfigKey: "gitlab" },
-    { provider: "gitlab", providerConfigKey: "gitlab-pat" },
-  ],
-  "gitlab-pat": [{ provider: "gitlab", providerConfigKey: "gitlab-pat" }],
-  confluence: [
-    { provider: "confluence", providerConfigKey: "confluence" },
-    { provider: "confluence", providerConfigKey: "confluence-basic" },
-  ],
-  "confluence-basic": [{ provider: "confluence", providerConfigKey: "confluence-basic" }],
-  notion: [{ provider: "notion", providerConfigKey: "notion" }],
-  coda: [{ provider: "coda", providerConfigKey: "coda" }],
-  azure_devops: [
-    { provider: "microsoft-entra-id", providerConfigKey: "microsoft-entra-id" },
-    { provider: "azure_devops", providerConfigKey: "azure-devops" },
-  ],
-};
-
-/** All display platforms including those checked via other means */
 const DISPLAY_PLATFORMS = [
   "github",
   "gitlab",
@@ -73,34 +31,74 @@ const DISPLAY_PLATFORMS = [
   "coda",
   "teams",
 ] as const;
+type DisplayPlatform = (typeof DISPLAY_PLATFORMS)[number];
+
+type ConnectionProbeResult =
+  | { queryable: false; connected: null; connection: null }
+  | { queryable: true; connected: boolean; connection: unknown };
+
+/**
+ * Nango probes per platform. A platform can be connectable under more than one
+ * Nango provider, and a connection may exist under any of them; we report
+ * connected if ANY probe returns a row.
+ *
+ * `nango.getConnection` exact-matches BOTH `provider` (the Nango DB provider
+ * value) and `providerConfigKey` (the Nango integration id). These differ for
+ * the alternate-auth integrations — the integration id is a distinct base, and
+ * the DB provider stays the platform's canonical value. The primary auth method
+ * (OAuth) is listed first so the common case short-circuits on the first probe;
+ * the alternate (PAT / Basic) is the second supported auth method:
+ *   - GitLab: OAuth `{gitlab, gitlab}`, PAT `{gitlab, gitlab-pat}`
+ *   - Confluence: OAuth `{confluence, confluence}`, Basic `{confluence, confluence-basic}`
+ *   - Azure DevOps: OAuth `{microsoft-entra-id, microsoft-entra-id}`, PAT `{azure_devops, azure-devops}`
+ * (Note `azure_devops` the DB provider vs `azure-devops` the integration id.)
+ *
+ * Prod uses bare integration ids (no env suffix), which is what the shipped
+ * CLI targets.
+ */
+const NANGO_PROBES: Partial<
+  Record<DisplayPlatform, readonly { provider: NangoProvider; providerConfigKey: string }[]>
+> = {
+  gitlab: [
+    { provider: "gitlab", providerConfigKey: "gitlab" },
+    { provider: "gitlab", providerConfigKey: "gitlab-pat" },
+  ],
+  confluence: [
+    { provider: "confluence", providerConfigKey: "confluence" },
+    { provider: "confluence", providerConfigKey: "confluence-basic" },
+  ],
+  notion: [{ provider: "notion", providerConfigKey: "notion" }],
+  coda: [{ provider: "coda", providerConfigKey: "coda" }],
+  azure_devops: [
+    { provider: "microsoft-entra-id", providerConfigKey: "microsoft-entra-id" },
+    { provider: "azure_devops", providerConfigKey: "azure-devops" },
+  ],
+};
 
 /**
  * Probe a platform's Nango connection state. Platforms absent from
  * `NANGO_PROBES` (github, slack, teams) are reported as `queryable: false`.
  * Otherwise every probe is tried in order, short-circuiting on the first
- * connection found; a throwing probe is swallowed so the next one still runs.
+ * connection found. tRPC failures propagate so API drift and outages are not
+ * misreported as a disconnected integration.
  */
 async function probeConnection(
   client: TypedClient,
   orgId: string,
-  platform: string,
-): Promise<{ queryable: boolean; connected: boolean; connection: unknown }> {
+  platform: DisplayPlatform,
+): Promise<ConnectionProbeResult> {
   const probes = NANGO_PROBES[platform];
   if (!probes) {
-    return { queryable: false, connected: false, connection: null };
+    return { queryable: false, connected: null, connection: null };
   }
   for (const probe of probes) {
-    try {
-      const conn = await client.nango.getConnection.query({
-        provider: probe.provider,
-        providerConfigKey: probe.providerConfigKey,
-        orgId,
-      });
-      if (conn != null) {
-        return { queryable: true, connected: true, connection: conn };
-      }
-    } catch {
-      // Swallow and try the next probe.
+    const conn = await client.nango.getConnection.query({
+      provider: probe.provider,
+      providerConfigKey: probe.providerConfigKey,
+      orgId,
+    });
+    if (conn != null) {
+      return { queryable: true, connected: true, connection: conn };
     }
   }
   return { queryable: true, connected: false, connection: null };
@@ -141,7 +139,11 @@ export function integrationsCommand(): Command {
         ["Platform", "Status"],
         results.map((r) => [
           r.platform,
-          r.connected ? pc.green("connected") : pc.dim("not connected"),
+          r.connected === null
+            ? pc.dim("status unavailable")
+            : r.connected
+              ? pc.green("connected")
+              : pc.dim("not connected"),
         ]),
         { rawData: results },
       );
@@ -150,9 +152,9 @@ export function integrationsCommand(): Command {
   cmd
     .command("status")
     .description("Check connection status of a specific platform")
-    .argument("<platform>", `Platform: ${DISPLAY_PLATFORMS.join(", ")}`)
+    .addArgument(new Argument("<platform>", "Integration platform").choices([...DISPLAY_PLATFORMS]))
     .option("--json", "Output as JSON")
-    .action(async (platform: string, opts: { json?: boolean }) => {
+    .action(async (platform: DisplayPlatform, opts: { json?: boolean }) => {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
       const { queryable, connected, connection } = await probeConnection(
@@ -165,10 +167,13 @@ export function integrationsCommand(): Command {
       if (!queryable) {
         // github, slack, teams — not queryable via nango
         if (opts.json) {
-          printResult({ platform, connected: false, note: "not queryable via nango" }, opts);
+          printResult(
+            { platform, connected: null, note: "connection status unavailable via CLI" },
+            opts,
+          );
           return;
         }
-        console.log(`${platform}: ${pc.dim("not connected (not queryable)")}`);
+        console.log(`${platform}: ${pc.dim("connection status unavailable via CLI")}`);
         return;
       }
 
@@ -231,15 +236,15 @@ export function integrationsCommand(): Command {
   cmd
     .command("github-collaborators")
     .description("List GitHub repository collaborators")
+    .addArgument(
+      new Argument("<repository-id>", "Numeric GitHub repository ID").argParser(positiveInteger),
+    )
     .option("--json", "Output as JSON")
-    .action(async (opts: { json?: boolean }) => {
+    .action(async (repositoryId: number, opts: { json?: boolean }) => {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
 
-      // getCollaborators takes a number (repo ID), not an org_id object
-      // This requires a repo ID — for now we pass 0 as placeholder
-      // TODO: accept --repo-id argument
-      const collaborators = await client.githubRepository.getCollaborators.query(0);
+      const collaborators = await client.githubRepository.getCollaborators.query(repositoryId);
 
       if (opts.json) {
         printResult(collaborators, opts);

@@ -204,6 +204,12 @@ describe("sources update", () => {
     await run("update", "ds1", "--name", "New Name");
     expect(allOutput()).toContain("Data source updated");
   });
+
+  it("rejects an update with no changes before calling tRPC", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    await expect(run("update", "ds1")).rejects.toThrow();
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
 });
 
 describe("sources delete", () => {

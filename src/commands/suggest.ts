@@ -4,6 +4,7 @@
 
 import { Command } from "commander";
 import pc from "picocolors";
+import { listSpaceDataSourceIds } from "../client/supabase";
 import { createTypedClient, type TypedClient } from "../client/trpc";
 import { requireLoginConfig } from "./auth";
 import { printResult, printTable } from "./output";
@@ -75,19 +76,14 @@ export function suggestCommand(): Command {
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
       const ksId = await getKnowledgeStoreId(client, cfg.active_account!.target!.space_id!);
 
-      if (!cfg.active_account?.target?.org_id) {
-        console.error(pc.red("Missing org config. Run 'dosu setup' to reconfigure."));
-        process.exit(1);
+      const dataSourceIds = await listSpaceDataSourceIds(
+        cfg,
+        // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
+        cfg.active_account!.target!.space_id!,
+      );
+      if (dataSourceIds.length === 0) {
+        throw new Error("No data sources are connected to the active deployment.");
       }
-
-      // Get data source IDs
-      const dataSources = await client.dataSource.list.query({
-        org_id: cfg.active_account?.target?.org_id,
-        excluded_provider_slugs: [],
-      });
-      const dataSourceIds = dataSources
-        .map((ds) => ds.id)
-        .filter((id): id is string => id !== null);
 
       const result = await client.suggestedDoc.generate.mutate({
         knowledgeStoreId: ksId,

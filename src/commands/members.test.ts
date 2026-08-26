@@ -68,51 +68,9 @@ afterEach(() => {
   exitSpy.mockRestore();
 });
 
-describe("members list", () => {
-  it("calls invitations.getInvitations with no args", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({
-      items: [{ email: "a@b.com", org: { name: "Acme" } }],
-      tokenAvailable: true,
-      authProvider: "email",
-    });
-
-    await run("list");
-
-    expect(mockQuery).toHaveBeenCalledWith("invitations.getInvitations", undefined);
-  });
-
-  it("outputs valid JSON with --json", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({
-      items: [{ email: "a@b.com" }],
-      tokenAvailable: true,
-      authProvider: "email",
-    });
-    await run("list", "--json");
-    const output = JSON.parse(allOutput());
-    expect(output.items).toHaveLength(1);
-    expect(output.items[0]).toMatchObject({ email: "a@b.com" });
-  });
-
-  it("prints message for empty results", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({ items: [], tokenAvailable: true, authProvider: "email" });
-    await run("list");
-    expect(allOutput()).toContain("No members");
-  });
-
-  it("handles missing role and status fields", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({
-      items: [{ email: "a@b.com" }],
-      tokenAvailable: true,
-      authProvider: "email",
-    });
-    await run("list");
-    const output = allOutput();
-    expect(output).toContain("a@b.com");
-    expect(output).toContain("—");
+describe("members command surface", () => {
+  it("only exposes the organization invite operation supported by CLI tRPC", () => {
+    expect(membersCommand().commands.map((command) => command.name())).toEqual(["invite"]);
   });
 });
 
@@ -139,6 +97,12 @@ describe("members invite", () => {
     expect(mockMutate.mock.calls[0][1].role).toBe("ADMIN");
   });
 
+  it("rejects unsupported roles before calling tRPC", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    await expect(run("invite", "new@user.com", "--role", "owner")).rejects.toThrow();
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
+
   it("outputs JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockMutate.mockResolvedValueOnce({ id: "inv1" });
@@ -158,120 +122,14 @@ describe("members invite", () => {
   });
 });
 
-describe("members approve", () => {
-  it("calls invitations.acceptInvitation", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-
-    await run("approve", "req@user.com");
-
-    expect(mockMutate).toHaveBeenCalledWith("invitations.acceptInvitation", {
-      orgId: "org1",
-      email: "req@user.com",
-    });
-  });
-
-  it("outputs JSON with --json", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-    await run("approve", "--json", "req@user.com");
-    const output = JSON.parse(allOutput());
-    expect(output.success).toBe(true);
-    expect(output.action).toBe("approved");
-  });
-
-  it("prints human-readable confirmation", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-    await run("approve", "req@user.com");
-    expect(allOutput()).toContain("Access request from req@user.com approved");
-  });
-});
-
-describe("members deny", () => {
-  it("calls invitations.rejectInvitation", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-
-    await run("deny", "req@user.com");
-
-    expect(mockMutate).toHaveBeenCalledWith("invitations.rejectInvitation", {
-      orgId: "org1",
-      email: "req@user.com",
-    });
-  });
-
-  it("outputs JSON with --json", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-    await run("deny", "--json", "req@user.com");
-    const output = JSON.parse(allOutput());
-    expect(output.success).toBe(true);
-    expect(output.action).toBe("denied");
-  });
-
-  it("prints human-readable confirmation", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-    await run("deny", "req@user.com");
-    expect(allOutput()).toContain("Access request from req@user.com denied");
-  });
-});
-
-describe("members requests", () => {
-  it("lists pending access requests", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({
-      items: [{ email: "req@user.com", org: { name: "Acme" } }],
-      tokenAvailable: true,
-      authProvider: "email",
-    });
-    await run("requests");
-    expect(allOutput()).toContain("req@user.com");
-  });
-
-  it("prints message for empty requests", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({ items: [], tokenAvailable: true, authProvider: "email" });
-    await run("requests");
-    expect(allOutput()).toContain("No pending access requests");
-  });
-
-  it("handles missing org field", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({
-      items: [{ email: "req@user.com" }],
-      tokenAvailable: true,
-      authProvider: "email",
-    });
-    await run("requests");
-    const output = allOutput();
-    expect(output).toContain("req@user.com");
-    expect(output).toContain("—");
-  });
-
-  it("outputs valid JSON with --json", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({
-      items: [{ email: "req@user.com", org: { name: "Acme" } }],
-      tokenAvailable: true,
-      authProvider: "email",
-    });
-    await run("requests", "--json");
-    const output = JSON.parse(allOutput());
-    expect(output.items).toHaveLength(1);
-    expect(output.items[0]).toMatchObject({ email: "req@user.com" });
-  });
-});
-
 describe("requireConfig", () => {
   it("exits when org_id is missing", async () => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ org_id: undefined }));
-    await expect(run("list")).rejects.toThrow("exit");
+    await expect(run("invite", "new@user.com")).rejects.toThrow("exit");
   });
 
   it("exits when access_token is missing", async () => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ access_token: "" }));
-    await expect(run("list")).rejects.toThrow("exit");
+    await expect(run("invite", "new@user.com")).rejects.toThrow("exit");
   });
 });

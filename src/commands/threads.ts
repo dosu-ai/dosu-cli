@@ -2,10 +2,11 @@
  * `dosu threads` — list, view, and manage conversation threads.
  */
 
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import pc from "picocolors";
 import { createTypedClient } from "../client/trpc";
 import type { ThreadListInput } from "../generated/dosu-api-types";
+import { messageLimit, positiveIntegerAtMost } from "./arguments";
 import { requireLoginConfig } from "./auth";
 import { formatDate, printInfo, printResult, printTable, truncate } from "./output";
 
@@ -24,11 +25,21 @@ export function threadsCommand(): Command {
   cmd
     .command("list")
     .description("List threads")
-    .option("--status <status>", "Filter by status: pending, resolved, archived")
+    .addOption(
+      new Option("--status <status>", "Filter by status").choices([
+        "pending",
+        "resolved",
+        "archived",
+      ]),
+    )
     .option("--search <query>", "Search threads")
-    .option("--limit <n>", "Maximum results (default: 20)", "20")
+    .addOption(
+      new Option("--limit <n>", "Maximum results (default: 20; max: 100)")
+        .argParser(positiveIntegerAtMost(100))
+        .default(20),
+    )
     .option("--json", "Output as JSON")
-    .action(async (opts: { status?: string; search?: string; limit?: string; json?: boolean }) => {
+    .action(async (opts: { status?: string; search?: string; limit: number; json?: boolean }) => {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
 
@@ -48,7 +59,7 @@ export function threadsCommand(): Command {
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
         space_id: cfg.active_account!.target!.space_id!,
         workspaces: undefined,
-        limit: Math.min(Number.parseInt(opts.limit ?? "20", 10), 100),
+        limit: opts.limit,
       };
 
       if (opts.search) input.search = opts.search;
@@ -95,9 +106,13 @@ export function threadsCommand(): Command {
     .command("get")
     .description("View a thread and its messages")
     .argument("<id>", "Thread ID")
-    .option("--limit <n>", "Number of messages to show (default: 20)", "20")
+    .addOption(
+      new Option("--limit <n>", "Number of messages to show (default: 20; -1 for all)")
+        .argParser(messageLimit)
+        .default(20),
+    )
     .option("--json", "Output as JSON")
-    .action(async (id: string, opts: { limit?: string; json?: boolean }) => {
+    .action(async (id: string, opts: { limit: number; json?: boolean }) => {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
 
@@ -105,7 +120,7 @@ export function threadsCommand(): Command {
         client.thread.get.query(id),
         client.messages.list.query({
           thread_id: id,
-          limit: Number.parseInt(opts.limit ?? "20", 10),
+          limit: opts.limit,
         }),
       ]);
 

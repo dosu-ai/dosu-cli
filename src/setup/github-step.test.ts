@@ -95,7 +95,33 @@ vi.mock("../client/trpc", () => ({
 import * as p from "@clack/prompts";
 import type { Config } from "../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
-import { detectGitRepo, stepConnectGitHubRepo, verifyDataSourcesPersist } from "./github-step";
+import {
+  detectGitRepo,
+  parseAvailableRepos,
+  parseDeploymentIds,
+  stepConnectGitHubRepo,
+  verifyDataSourcesPersist,
+} from "./github-step";
+
+describe("parseAvailableRepos", () => {
+  it("validates the unguarded App output before setup uses it", () => {
+    expect(
+      parseAvailableRepos([
+        { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
+      ]),
+    ).toEqual([{ repository_id: 1, name: "api", slug: "acme/api", is_deployed: false }]);
+    expect(() => parseAvailableRepos([{ repository_id: "1" }])).toThrow("invalid repository");
+    expect(() => parseAvailableRepos(null)).toThrow("non-array");
+  });
+});
+
+describe("parseDeploymentIds", () => {
+  it("validates the unguarded App output before setup uses it", () => {
+    expect(parseDeploymentIds([{ deployment_id: "dep-1" }])).toEqual(["dep-1"]);
+    expect(() => parseDeploymentIds([{ id: "wrong-shape" }])).toThrow("invalid deployment");
+    expect(() => parseDeploymentIds(null)).toThrow("non-array");
+  });
+});
 
 // Skip the post-connect verify-poll budget so each test resolves in real
 // time without needing fake timers to coexist with the install-flow promise

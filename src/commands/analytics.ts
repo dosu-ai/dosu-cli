@@ -2,9 +2,10 @@
  * `dosu analytics` — usage statistics.
  */
 
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import pc from "picocolors";
 import { createTypedClient } from "../client/trpc";
+import { positiveInteger } from "./arguments";
 import { requireLoginConfig } from "./auth";
 import { printInfo, printResult } from "./output";
 
@@ -20,16 +21,20 @@ function requireConfig() {
 export function analyticsCommand(): Command {
   const cmd = new Command("analytics")
     .description("View usage statistics")
-    .option("--days <n>", "Number of days to analyze (default: 30)", "30")
+    .addOption(
+      new Option("--days <n>", "Number of days to analyze (default: 30)")
+        .argParser(positiveInteger)
+        .default(30),
+    )
     .option("--json", "Output as JSON")
-    .action(async (opts: { days?: string; json?: boolean }) => {
+    .action(async (opts: { days: number; json?: boolean }) => {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
 
       const stats = await client.analytics.getUsageStats.query({
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
         spaceId: cfg.active_account!.target!.space_id!,
-        days: Number.parseInt(opts.days ?? "30", 10),
+        days: opts.days,
       });
 
       if (opts.json) {

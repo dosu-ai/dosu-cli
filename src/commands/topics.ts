@@ -5,9 +5,10 @@
  * list them and the pages under each, but cannot create, edit, or remove them.
  */
 
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import pc from "picocolors";
 import { createTypedClient, type TypedClient } from "../client/trpc";
+import { positiveInteger } from "./arguments";
 import { requireLoginConfig } from "./auth";
 import { printResult, printTable } from "./output";
 
@@ -32,10 +33,7 @@ async function getKnowledgeStoreId(client: TypedClient, spaceId: string): Promis
 }
 
 export function topicsCommand(): Command {
-  // `tags` kept as a hidden alias for back-compat with the pre-rename CLI.
-  const cmd = new Command("topics")
-    .alias("tags")
-    .description("Browse Topics in your knowledge base");
+  const cmd = new Command("topics").description("Browse Topics in your knowledge base");
 
   cmd
     .command("list")
@@ -77,9 +75,9 @@ export function topicsCommand(): Command {
     .description("List pages with a specific topic")
     .argument("<topic-id>", "Topic ID")
     .option("--search <query>", "Search within the topic's pages")
-    .option("--limit <n>", "Maximum results", "10")
+    .addOption(new Option("--limit <n>", "Maximum results").argParser(positiveInteger).default(10))
     .option("--json", "Output as JSON")
-    .action(async (topicId: string, opts: { search?: string; limit?: string; json?: boolean }) => {
+    .action(async (topicId: string, opts: { search?: string; limit: number; json?: boolean }) => {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
@@ -89,7 +87,7 @@ export function topicsCommand(): Command {
         knowledge_store_id: ksId,
         topic_id: topicId,
         searchTerm: opts.search,
-        limit: Number.parseInt(opts.limit ?? "10", 10),
+        limit: opts.limit,
       });
       const pages = result.data;
 

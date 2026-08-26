@@ -284,7 +284,7 @@ export function reviewCommand(): Command {
   // message.saveDraft (body only). After editing, `dosu review approve` publishes.
   cmd
     .command("edit")
-    .description("Edit a pending review item in place (doc body/title, or draft reply body)")
+    .description("Edit a pending doc or Dosu App draft in place")
     .argument("<id>", "Review item ID (from `dosu review list`)")
     .option("--title <title>", "New title")
     .option("--body <markdown>", "New body (markdown)")
@@ -326,10 +326,14 @@ export function reviewCommand(): Command {
             console.error(pc.red("Draft replies support --body only (no --title)."));
             process.exit(1);
           }
+          if (body === undefined) {
+            console.error(pc.red("Draft replies require --body or --body-file."));
+            process.exit(1);
+          }
           await requireDraft(client, id);
           await client.messages.saveDraft.mutate({
             messageId: bareMessageId(id),
-            body: body as string,
+            body,
           });
         } else {
           try {
@@ -474,8 +478,8 @@ export function reviewCommand(): Command {
   // agent run — so a draft-prefixed id is refused here (ENG-524).
   cmd
     .command("revert")
-    .description("Revert a doc change to pending review (not supported for draft replies)")
-    .argument("<id>", "Review item ID (from `dosu review list`)")
+    .description("Reopen a previously accepted or declined doc change for review")
+    .argument("<id>", "Page version ID (not a pending item from `dosu review list`)")
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();

@@ -393,7 +393,7 @@ describe("review edit", () => {
 
   it("strips the prefix and saves a new draft revision for a draft id (body only)", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({ id: "msg-1", title: "Re: q", body: "old" }); // getMessage
+    mockQuery.mockResolvedValueOnce({ id: "msg-1", title: "Re: q", body: "old" });
     mockMutate.mockResolvedValueOnce(undefined);
 
     await run("edit", "draft_message:msg-1", "--body", "new body");

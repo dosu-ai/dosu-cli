@@ -111,6 +111,47 @@ interface AvailableRepo {
   created_at?: string;
 }
 
+export function parseAvailableRepos(value: unknown): AvailableRepo[] {
+  if (!Array.isArray(value)) throw new Error("githubRepository.listForOrg returned a non-array");
+  return value.map((repository, index) => {
+    if (
+      repository === null ||
+      typeof repository !== "object" ||
+      !("repository_id" in repository) ||
+      typeof repository.repository_id !== "number" ||
+      !("name" in repository) ||
+      typeof repository.name !== "string" ||
+      !("slug" in repository) ||
+      typeof repository.slug !== "string" ||
+      !("is_deployed" in repository) ||
+      typeof repository.is_deployed !== "boolean" ||
+      ("created_at" in repository &&
+        repository.created_at !== undefined &&
+        typeof repository.created_at !== "string")
+    ) {
+      throw new Error(
+        `githubRepository.listForOrg returned an invalid repository at index ${index}`,
+      );
+    }
+    return repository as AvailableRepo;
+  });
+}
+
+export function parseDeploymentIds(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new Error("workspaces.listForSpace returned a non-array");
+  return value.map((deployment, index) => {
+    if (
+      deployment === null ||
+      typeof deployment !== "object" ||
+      !("deployment_id" in deployment) ||
+      typeof deployment.deployment_id !== "string"
+    ) {
+      throw new Error(`workspaces.listForSpace returned an invalid deployment at index ${index}`);
+    }
+    return deployment.deployment_id;
+  });
+}
+
 export function detectGitRepo(cwd: string = process.cwd()): DetectedRepo | null {
   let url: string;
   try {
@@ -137,9 +178,11 @@ export function detectGitRepo(cwd: string = process.cwd()): DetectedRepo | null 
 
 async function fetchListForOrg(trpc: TypedClient, orgID: string): Promise<AvailableRepo[]> {
   try {
-    const repos = (await trpc.githubRepository.listForOrg.query({
-      org_id: orgID,
-    })) as AvailableRepo[];
+    const repos = parseAvailableRepos(
+      await trpc.githubRepository.listForOrg.query({
+        org_id: orgID,
+      }),
+    );
     return sortReposByRecency(repos);
   } catch (err: unknown) {
     /* v8 ignore next -- non-fatal; caller decides what to do with an empty list */
@@ -354,12 +397,13 @@ async function createDeploymentForRepo(
       space_id: spaceID,
       data_source_ids: [dataSourceID],
     });
-    const spaceDeployments: { deployment_id: string }[] =
-      await trpc.workspaces.listForSpace.query(spaceID);
+    const spaceDeploymentIds = parseDeploymentIds(
+      await trpc.workspaces.listForSpace.query(spaceID),
+    );
     await Promise.all(
-      spaceDeployments.map((d) =>
+      spaceDeploymentIds.map((deploymentID) =>
         trpc.deploymentDataSource.create.mutate({
-          deployment_id: d.deployment_id,
+          deployment_id: deploymentID,
           data_source_id: dataSourceID,
         }),
       ),

@@ -138,13 +138,17 @@ describe("integrations status", () => {
     expect(allOutput()).toContain("connected");
   });
 
-  it("shows not connected on error", async () => {
+  it("surfaces tRPC errors instead of reporting a false disconnected state", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockRejectedValueOnce(new Error("not found"));
 
-    await run("status", "gitlab");
+    await expect(run("status", "gitlab")).rejects.toThrow("not found");
+  });
 
-    expect(allOutput()).toContain("not connected");
+  it("rejects unknown platforms before calling tRPC", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    await expect(run("status", "unknown")).rejects.toThrow();
+    expect(mockQuery).not.toHaveBeenCalled();
   });
 
   it("shows not connected when connection is null", async () => {
@@ -203,18 +207,13 @@ describe("integrations status azure_devops", () => {
     expect(allOutput()).toContain("not connected");
   });
 
-  it("continues past a probe that throws", async () => {
+  it("propagates a probe error instead of reporting stale connection state", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery
-      .mockRejectedValueOnce(new Error("boom")) // OAuth throws
-      .mockResolvedValueOnce({ id: "ado-pat" }); // PAT - connected
+    mockQuery.mockRejectedValueOnce(new Error("boom"));
 
-    await run("status", "azure_devops");
+    await expect(run("status", "azure_devops")).rejects.toThrow("boom");
 
-    expect(mockQuery).toHaveBeenCalledTimes(2);
-    const output = allOutput();
-    expect(output).toContain("connected");
-    expect(output).not.toContain("not connected");
+    expect(mockQuery).toHaveBeenCalledTimes(1);
   });
 
   it("outputs JSON with the connection payload when connected", async () => {
@@ -249,29 +248,23 @@ describe("integrations status gitlab (multi-auth)", () => {
     expect(output).not.toContain("not connected");
   });
 
-  it("still supports `status gitlab-pat` as a standalone platform", async () => {
+  it("rejects the obsolete standalone gitlab-pat platform", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({ id: "gl-pat" });
 
-    await run("status", "gitlab-pat");
+    await expect(run("status", "gitlab-pat")).rejects.toThrow();
 
-    expect(mockQuery).toHaveBeenCalledTimes(1);
-    expect(mockQuery.mock.calls[0][1]).toMatchObject({
-      provider: "gitlab",
-      providerConfigKey: "gitlab-pat",
-    });
-    expect(allOutput()).toContain("connected");
+    expect(mockQuery).not.toHaveBeenCalled();
   });
 });
 
 describe("integrations status (not queryable via nango)", () => {
-  it("reports github as not connected without issuing a nango query", async () => {
+  it("reports github status as unavailable without issuing a nango query", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
 
     await run("status", "github");
 
     expect(mockQuery).not.toHaveBeenCalled();
-    expect(allOutput()).toContain("not connected");
+    expect(allOutput()).toContain("status unavailable");
   });
 
   it("outputs a JSON note for a not-queryable platform", async () => {
@@ -281,8 +274,8 @@ describe("integrations status (not queryable via nango)", () => {
 
     const output = JSON.parse(allOutput());
     expect(output.platform).toBe("github");
-    expect(output.connected).toBe(false);
-    expect(output.note).toContain("not queryable");
+    expect(output.connected).toBeNull();
+    expect(output.note).toContain("status unavailable");
     expect(mockQuery).not.toHaveBeenCalled();
   });
 });
@@ -324,7 +317,9 @@ describe("integrations github-collaborators", () => {
       { user_name: "octocat", full_name: "Mona", email: "mona@gh.com" },
     ]);
 
-    await run("github-collaborators");
+    await run("github-collaborators", "123");
+
+    expect(mockQuery).toHaveBeenCalledWith("githubRepository.getCollaborators", 123);
 
     const output = allOutput();
     expect(output).toContain("octocat");
@@ -334,14 +329,14 @@ describe("integrations github-collaborators", () => {
   it("prints message for empty results", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce([]);
-    await run("github-collaborators");
+    await run("github-collaborators", "123");
     expect(allOutput()).toContain("No collaborators found");
   });
 
   it("handles missing username, name, and email fields", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce([{}]);
-    await run("github-collaborators");
+    await run("github-collaborators", "123");
     // All undefined fields should be replaced with "—"
     const output = allOutput();
     expect(output).toContain("—");
@@ -361,15 +356,11 @@ describe("integrations status (JSON branches)", () => {
     expect(output.connection).toBeTruthy();
   });
 
-  it("outputs JSON for error/not connected", async () => {
+  it("propagates an error in JSON mode", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockRejectedValueOnce(new Error("fail"));
 
-    await run("status", "--json", "gitlab");
-
-    const output = JSON.parse(allOutput());
-    expect(output.platform).toBe("gitlab");
-    expect(output.connected).toBe(false);
+    await expect(run("status", "--json", "gitlab")).rejects.toThrow("fail");
   });
 });
 
@@ -415,7 +406,7 @@ describe("integrations github-collaborators (JSON branch)", () => {
       { user_name: "octocat", full_name: "Mona", email: "mona@gh.com" },
     ]);
 
-    await run("github-collaborators", "--json");
+    await run("github-collaborators", "123", "--json");
 
     const output = JSON.parse(allOutput());
     expect(Array.isArray(output)).toBe(true);
