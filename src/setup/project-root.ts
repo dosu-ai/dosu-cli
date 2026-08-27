@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { lstatSync, realpathSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 
 /** Resolve the repository root that project-scoped setup is allowed to modify. */
 export function resolveProjectRoot(cwd: string = process.cwd()): string | null {
@@ -23,6 +23,24 @@ export function requireProjectRoot(cwd: string = process.cwd()): string {
     throw new Error("Run Dosu setup inside a Git project.");
   }
   return root;
+}
+
+/** True when an existing component of an absolute or relative path is a symbolic link. */
+export function hasSymlinkInPath(targetPath: string): boolean {
+  const target = resolve(targetPath);
+  const root = parse(target).root;
+  let current = root;
+
+  for (const segment of relative(root, target).split(sep).filter(Boolean)) {
+    current = join(current, segment);
+    try {
+      if (lstatSync(current).isSymbolicLink()) return true;
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+      return true;
+    }
+  }
+  return false;
 }
 
 /**

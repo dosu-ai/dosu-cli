@@ -3,7 +3,12 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { assertSafeProjectPath, requireProjectRoot, resolveProjectRoot } from "./project-root";
+import {
+  assertSafeProjectPath,
+  hasSymlinkInPath,
+  requireProjectRoot,
+  resolveProjectRoot,
+} from "./project-root";
 
 const tempDirs: string[] = [];
 
@@ -94,5 +99,22 @@ describe("assertSafeProjectPath", () => {
     symlinkSync(outside, join(root, ".mcp.json"));
 
     expect(() => assertSafeProjectPath(root, join(root, ".mcp.json"))).toThrow("symbolic link");
+  });
+});
+
+describe("hasSymlinkInPath", () => {
+  it("detects a symlinked parent directory", () => {
+    const root = realpathSync(tempDir());
+    const outside = join(root, "outside");
+    mkdirSync(outside);
+    symlinkSync(outside, join(root, "linked"));
+
+    expect(hasSymlinkInPath(join(root, "linked", "config.json"))).toBe(true);
+  });
+
+  it("allows a regular path even when its final component is missing", () => {
+    const root = realpathSync(tempDir());
+
+    expect(hasSymlinkInPath(join(root, "regular", "config.json"))).toBe(false);
   });
 });

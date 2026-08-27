@@ -21,10 +21,15 @@ import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
+import { isRuleAgent, rulePathForAgent } from "../rules/installer";
 import { stepRemoveAgentsMd, stepUpdateAgentsMd } from "./agents-md-step";
 import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
 import { stepConnectGitHubRepo } from "./github-step";
 import { GLOBAL_INSTALL_REQUIRED_MESSAGE, setupNeedsGlobalInstall } from "./global-install";
+import {
+  type LegacyGlobalReconciliation,
+  reconcileLegacyGlobalSetup,
+} from "./legacy-global-cleanup";
 import {
   type LogsHandoffDecision,
   type LogsHandoffPlan,
@@ -32,7 +37,7 @@ import {
   offerLogsHandoff,
 } from "./logs-handoff";
 import { requireProjectRoot } from "./project-root";
-import { stepConfigureAgentRules } from "./rules-step";
+import { type AgentRuleSetupResult, stepConfigureAgentRules } from "./rules-step";
 import { browserFallbackHint, dim, formatSetupSummary, IconRemove, info } from "./styles";
 
 export interface SetupOptions {
@@ -53,6 +58,12 @@ export interface ToolSelection {
   toInstall: SetupProvider[];
   toRemove: SetupProvider[];
   skipped: SetupProvider[];
+}
+
+interface ProjectSetupResult {
+  selection: ToolSelection;
+  mcpResults: ConfigResult[];
+  ruleResults: AgentRuleSetupResult[];
 }
 
 interface CloudSetupContext {
@@ -260,8 +271,8 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
 
   // Agent selection is the only install choice. Every successfully configured
   // agent receives the full supported bundle: MCP, rules, and skill.
-  const configured = await stepConfigureMcpTools(cfg, projectRoot);
-  if (configured === null) {
+  const projectSetup = await stepConfigureMcpTools(cfg, projectRoot);
+  if (projectSetup === null) {
     trackInBackground(
       trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_cancelled", {
         reason: "mcp_selection_cancelled",
@@ -269,6 +280,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     );
     return;
   }
+  const configured = projectSetup.mcpResults;
 
   const configuredProviders = configured.filter(
     (result) => (result.action === "install" || result.action === "skip") && !result.error,
@@ -312,6 +324,37 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     agentsMdCompleted = stepRemoveAgentsMd(projectRoot);
   }
 
+  const selectedProviders = projectSetup.selection.toInstall;
+  const requiredRuleIDs = new Set(
+    selectedProviders
+      .filter(
+        (provider) =>
+          isRuleAgent(provider.id()) && rulePathForAgent(provider.id(), projectRoot) !== null,
+      )
+      .map((provider) => provider.id()),
+  );
+  const successfulRuleIDs = new Set(
+    projectSetup.ruleResults
+      .filter((result) => !result.error && result.action !== "not_found")
+      .map((result) => result.provider.id()),
+  );
+  const projectBundleVerified =
+    selectedProviders.length > 0 &&
+    configured.every((result) => !result.error) &&
+    selectedProviders.every((provider) => provider.isProjectConfigured(projectRoot)) &&
+    [...requiredRuleIDs].every((providerID) => successfulRuleIDs.has(providerID)) &&
+    (skillProviders.length === 0 || skillCompleted) &&
+    agentsMdCompleted;
+
+  if (projectBundleVerified) {
+    const reconciliation = reconcileLegacyGlobalSetup(
+      selectedProviders,
+      projectRoot,
+      allSetupProviders(),
+    );
+    logLegacyGlobalReconciliation(reconciliation);
+  }
+
   // Post-setup log mining (cloud mode only): replaces the old codebase-audit
   // CTA. Kickoff prefers agents the user just configured (Cursor / Claude / Codex).
   // Project-root validation at setup launch guarantees this handoff stays in a
@@ -348,6 +391,29 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   // Launch after the outro so the agent takes over a finished clack session.
   if (logsPlan) {
     launchLogsAgent(logsPlan);
+  }
+}
+
+function logLegacyGlobalReconciliation(report: LegacyGlobalReconciliation): void {
+  if (report.removed.length > 0) {
+    p.log.info(
+      formatSetupSummary(
+        "Removed old global Dosu configuration:",
+        report.removed.map((item) => ({
+          label: `${item.providerID} ${item.component}`,
+          path: item.path ?? "global configuration",
+        })),
+        IconRemove,
+      ),
+    );
+  }
+  if (report.preserved.length > 0) {
+    const labels = [
+      ...new Set(report.preserved.map((item) => `${item.providerID} ${item.component}`)),
+    ];
+    p.log.warn(
+      `Kept ${labels.join(", ")} global configuration because it was shared, unsupported, modified, or outside this project selection. Review it manually if you no longer need it.`,
+    );
   }
 }
 
@@ -393,20 +459,24 @@ function applyModeOverride(cfg: Config, opts: SetupOptions): void {
 async function stepConfigureMcpTools(
   cfg: Config,
   projectRoot: string,
-): Promise<ConfigResult[] | null> {
+): Promise<ProjectSetupResult | null> {
   const detected = stepDetectTools();
   if (detected.length === 0) {
     p.log.warn(
       `No supported AI agents detected on your system.\nRun ${info("dosu mcp add <agent>")} to manually configure an agent.`,
     );
-    return [];
+    return {
+      selection: { toInstall: [], toRemove: [], skipped: [] },
+      mcpResults: [],
+      ruleResults: [],
+    };
   }
   const selection = await stepSelectTools(detected, projectRoot);
   if (!selection) return null;
   const results = stepConfigureTools(cfg, selection, projectRoot);
   stepShowSummary(results, projectRoot);
-  await stepConfigureAgentRules(selection, results, projectRoot);
-  return results;
+  const ruleResults = await stepConfigureAgentRules(selection, results, projectRoot);
+  return { selection, mcpResults: results, ruleResults };
 }
 
 /**

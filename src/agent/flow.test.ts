@@ -25,6 +25,7 @@ const {
   mockInGitWorkTree,
   mockUpsertDosuAgentsSection,
   mockRequireProjectRoot,
+  mockReconcileLegacyGlobalSetup,
 } = vi.hoisted(() => {
   return {
     mockMintTicket: vi.fn(),
@@ -48,6 +49,7 @@ const {
     mockInGitWorkTree: vi.fn(),
     mockUpsertDosuAgentsSection: vi.fn(),
     mockRequireProjectRoot: vi.fn(),
+    mockReconcileLegacyGlobalSetup: vi.fn(),
   };
 });
 
@@ -85,6 +87,10 @@ vi.mock("../setup/agents-md-step", () => ({
 vi.mock("../setup/project-root", () => ({
   assertSafeProjectPath: vi.fn(),
   requireProjectRoot: mockRequireProjectRoot,
+}));
+
+vi.mock("../setup/legacy-global-cleanup", () => ({
+  reconcileLegacyGlobalSetup: mockReconcileLegacyGlobalSetup,
 }));
 
 vi.mock("../client/client", () => ({
@@ -197,10 +203,14 @@ describe("runAgentSetup", () => {
     mockInGitWorkTree.mockReset();
     mockUpsertDosuAgentsSection.mockReset();
     mockRequireProjectRoot.mockReset();
+    mockReconcileLegacyGlobalSetup.mockReset();
     mockRequireProjectRoot.mockReturnValue("/tmp/repo");
     for (const fn of Object.values(mockClient)) fn.mockReset();
 
-    claudeProvider = makeProvider("claude", { name: () => "Claude Code" });
+    claudeProvider = makeProvider("claude", {
+      name: () => "Claude Code",
+      isProjectConfigured: vi.fn(() => true),
+    });
     desktopProvider = makeProvider("claude-desktop", {
       name: () => "Claude Desktop",
       configurationKind: () => "global-connector",
@@ -223,6 +233,11 @@ describe("runAgentSetup", () => {
     mockUpsertDosuAgentsSection.mockReturnValue({
       action: "created",
       path: "/tmp/repo/AGENTS.md",
+    });
+    mockReconcileLegacyGlobalSetup.mockReturnValue({
+      outcomes: [],
+      removed: [],
+      preserved: [],
     });
   });
 
@@ -388,6 +403,10 @@ describe("runAgentSetup", () => {
     expect(testSession(lastSave).access_token).toBe(ticketAccessToken);
     expect(testTarget(lastSave).api_key).toBe("sk_user_x");
     expect(testTarget(lastSave).deployment_id).toBe("dep-1");
+    expect(mockReconcileLegacyGlobalSetup).toHaveBeenCalledWith([claudeProvider], "/tmp/repo", [
+      claudeProvider,
+      desktopProvider,
+    ]);
     expect(events.at(-1)).toMatchObject({
       step: "done",
       status: "ok",
@@ -841,6 +860,7 @@ describe("runAgentSetup", () => {
     });
     expect(mockInstallRuleForAgent).not.toHaveBeenCalled();
     expect(mockInstallSkill).not.toHaveBeenCalled();
+    expect(mockReconcileLegacyGlobalSetup).not.toHaveBeenCalled();
   });
 
   it("reports a rule failure after preserving the installed MCP configuration", async () => {
@@ -871,6 +891,7 @@ describe("runAgentSetup", () => {
       agent_next_steps: expect.stringContaining("idempotent"),
     });
     expect(mockInstallSkill).not.toHaveBeenCalled();
+    expect(mockReconcileLegacyGlobalSetup).not.toHaveBeenCalled();
   });
 
   it("reports a skill failure after preserving the MCP and rule installation", async () => {
@@ -899,6 +920,7 @@ describe("runAgentSetup", () => {
       reason: "install_failed",
       agent_next_steps: expect.stringContaining("idempotent"),
     });
+    expect(mockReconcileLegacyGlobalSetup).not.toHaveBeenCalled();
   });
 
   it("reports an AGENTS.md failure after preserving the other bundled installs", async () => {
@@ -925,12 +947,39 @@ describe("runAgentSetup", () => {
     expect(claudeProvider.install).toHaveBeenCalledTimes(1);
     expect(mockInstallRuleForAgent).toHaveBeenCalledTimes(1);
     expect(mockInstallSkill).toHaveBeenCalledTimes(1);
+    expect(mockReconcileLegacyGlobalSetup).not.toHaveBeenCalled();
     expect(emittedEvents().at(-1)).toMatchObject({
       step: "agents_md_install",
       status: "error",
       reason: "install_failed",
       agent_next_steps: expect.stringContaining("idempotent"),
     });
+  });
+
+  it("keeps global configuration when the project MCP cannot be verified", async () => {
+    mockLoadConfig.mockReturnValue(
+      makeBaseConfig({
+        access_token: ticketAccessToken,
+        refresh_token: "ref",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        deployment_id: "dep-locked",
+        deployment_name: "acme/locked",
+        api_key: "sk_existing",
+      }),
+    );
+    mockClient.doRequestRaw.mockResolvedValue(new Response(null, { status: 200 }));
+    mockClient.validateAPIKey.mockResolvedValue(true);
+    vi.mocked(claudeProvider.isProjectConfigured).mockReturnValue(false);
+
+    const code = await runAgentSetup({ tool: "claude" });
+
+    expect(code).toBe(1);
+    expect(emittedEvents().at(-1)).toMatchObject({
+      step: "project_verification",
+      status: "error",
+      reason: "project_config_not_verified",
+    });
+    expect(mockReconcileLegacyGlobalSetup).not.toHaveBeenCalled();
   });
 
   it("redeems a ticket whose response omits optional session fields", async () => {

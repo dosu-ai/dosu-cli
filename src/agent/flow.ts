@@ -30,6 +30,7 @@ import { allSetupProviders } from "../mcp/providers";
 import { fetchDosuRule, installRuleForAgent, isRuleAgent } from "../rules/installer";
 import { upsertDosuAgentsSection } from "../setup/agents-md-step";
 import { GLOBAL_INSTALL_REQUIRED_MESSAGE, setupNeedsGlobalInstall } from "../setup/global-install";
+import { reconcileLegacyGlobalSetup } from "../setup/legacy-global-cleanup";
 import { requireProjectRoot } from "../setup/project-root";
 import { emitError, emitNeedUserAction, emitStep } from "./output";
 
@@ -218,6 +219,36 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
       }. Re-run this setup command; installation is idempotent.`,
     });
     return 1;
+  }
+
+  if (!provider.isProjectConfigured(projectRoot)) {
+    emitError({
+      step: "project_verification",
+      reason: "project_config_not_verified",
+      agent_next_steps:
+        "Dosu wrote the project setup but could not verify the resulting MCP entry. Global configuration was left unchanged; inspect the project file and retry.",
+    });
+    return 1;
+  }
+
+  const reconciliation = reconcileLegacyGlobalSetup([provider], projectRoot, providers);
+  if (reconciliation.removed.length > 0 || reconciliation.preserved.length > 0) {
+    emitStep({
+      step: "legacy_global_reconciliation",
+      removed: reconciliation.removed.map(({ providerID, component }) => ({
+        provider: providerID,
+        component,
+      })),
+      preserved: reconciliation.preserved.map(({ providerID, component, reason }) => ({
+        provider: providerID,
+        component,
+        reason,
+      })),
+      agent_next_steps:
+        reconciliation.preserved.length > 0
+          ? "Tell the user that uncertain, shared, unsupported, or unselected global configuration was preserved and can be reviewed manually."
+          : "No action needed; exact historical Dosu global configuration was removed.",
+    });
   }
 
   emitStep({
