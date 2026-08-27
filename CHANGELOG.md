@@ -1,3 +1,10 @@
+# [0.51.0](https://github.com/dosu-ai/dosu-cli/compare/v0.50.0...v0.51.0) (2026-08-27)
+
+
+### Features
+
+* **setup:** offer GitHub connect when the MCP's space has no connected repo ([#192](https://github.com/dosu-ai/dosu-cli/issues/192)) ([a9487b4](https://github.com/dosu-ai/dosu-cli/commit/a9487b4b9f3ccfda722f866e022a812cbd70d2b4))
+
 # [0.50.0](https://github.com/dosu-ai/dosu-cli/compare/v0.49.4...v0.50.0) (2026-08-26)
 
 
