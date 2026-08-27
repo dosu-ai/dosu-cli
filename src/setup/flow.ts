@@ -221,7 +221,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     }
   }
 
-  // GitHub guard (cloud only): an MCP whose workspace has no connected repo
+  // GitHub guard (cloud only): an MCP whose space has no connected repo
   // answers from nothing. Offer the interactive connect step; the user can
   // choose to continue without it, and the source lookup is fail-open, so
   // setup never blocks on this step.
@@ -641,33 +641,38 @@ async function stepSetupHandshake(cfg: Config, onboardingRunID: string): Promise
 }
 
 /**
- * When the selected workspace has no GitHub data source yet, warn and offer
- * the interactive GitHub connect step (`stepConnectGitHubRepo`: browser App
- * install + repo multiselect). Choosing "Skip for now" prints where to do
+ * When the selected MCP's space has no connected GitHub repo yet, warn and
+ * offer the interactive GitHub connect step (`stepConnectGitHubRepo`: browser
+ * App install + repo multiselect). Choosing "Skip for now" prints where to do
  * it later and setup proceeds.
  *
- * Fail-open by design: a failed source lookup skips the offer silently —
+ * Repos connect at space level — the connect step creates a `github`
+ * deployment in the target space and links the source into every workspace
+ * there — so the guard checks the space this MCP serves. GitHub repos
+ * connected elsewhere in the org don't feed this MCP and don't count.
+ *
+ * Fail-open by design: a failed lookup skips the offer silently —
  * this step is a nudge, never a gate, so setup always proceeds.
  */
 async function stepOfferGithubConnect(cfg: Config): Promise<void> {
-  const orgID = cfg.active_account?.target?.org_id;
-  if (!orgID) return;
+  const target = cfg.active_account?.target;
+  // stepConnectGitHubRepo needs org+space context to connect anything, so
+  // without it the offer could only dead-end.
+  if (!target?.org_id || !target?.space_id) return;
 
   try {
     const { createTypedClient } = await import("../client/trpc");
     const trpc = createTypedClient(cfg);
-    const dataSources: { provider_slug?: string | null }[] = await trpc.dataSource.list.query({
-      org_id: orgID,
-      excluded_provider_slugs: [],
-    });
-    if ((dataSources ?? []).some((ds) => ds.provider_slug === "github")) return;
+    const spaceDeployments: { provider_slug?: string | null }[] | null =
+      await trpc.workspaces.listForSpace.query(target.space_id);
+    if ((spaceDeployments ?? []).some((d) => d.provider_slug === "github")) return;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn("setup", `GitHub source check failed, skipping offer: ${msg}`);
     return;
   }
 
-  logger.info("setup", "Step: offer GitHub connect (no github data source in org)");
+  logger.info("setup", "Step: offer GitHub connect (no github deployment in the MCP's space)");
   p.log.warn("No GitHub repos are connected to this MCP yet — it can't answer from your code.");
   const connectNow = await p.confirm({
     message: "Connect a GitHub repo now?",

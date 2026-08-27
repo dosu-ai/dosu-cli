@@ -88,9 +88,9 @@ const mockTrpc = vi.hoisted(() => ({
   githubRepository: { listForOrg: { query: vi.fn().mockResolvedValue([]) } },
   workspaces: {
     create: { mutate: vi.fn() },
-    listForSpace: { query: vi.fn().mockResolvedValue([]) },
+    listForSpace: { query: vi.fn() },
   },
-  dataSource: { create: { mutate: vi.fn() }, list: { query: vi.fn() } },
+  dataSource: { create: { mutate: vi.fn() } },
   deploymentDataSource: { create: { mutate: vi.fn().mockResolvedValue({}) } },
 }));
 vi.mock("@trpc/client", () => ({
@@ -232,10 +232,11 @@ function installRemoteSetupDefaults() {
   mockTrpc.user.updateProfile.mutate.mockResolvedValue(null);
   mockTrpc.user.trackCliOnboardingEvent.mutate.mockResolvedValue({ ok: true });
   mockTrpc.user.trackCliOnboardingPreAuthEvent.mutate.mockResolvedValue({ ok: true });
-  // Default: the org already has a GitHub source, so the connect offer stays
-  // quiet. Tests that exercise the offer override with an empty list.
-  mockTrpc.dataSource.list.query.mockResolvedValue([
-    { data_source_id: "ds-1", provider_slug: "github", name: "acme/repo" },
+  // Default: the MCP's space already has a connected GitHub repo (a `github`
+  // deployment), so the connect offer stays quiet. Tests that exercise the
+  // offer override with an empty list.
+  mockTrpc.workspaces.listForSpace.query.mockResolvedValue([
+    { deployment_id: "d-gh", provider_slug: "github", name: "acme/repo" },
   ]);
 }
 
@@ -839,19 +840,17 @@ describe("runSetup integration", () => {
     expect(savedCfg.active_account?.target?.deployment_name).toBe("Deploy1");
   });
 
-  it("offers and runs the GitHub connect step when the org has no GitHub source", async () => {
+  it("offers and runs the GitHub connect step when the MCP's space has no connected repo", async () => {
     saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
     setupAuthenticatedClient();
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockTrpc.dataSource.list.query.mockResolvedValue([]);
+    mockTrpc.workspaces.listForSpace.query.mockResolvedValue([]);
     vi.mocked(p.confirm).mockResolvedValue(true as never);
 
     await runSetup();
 
-    expect(mockTrpc.dataSource.list.query).toHaveBeenCalledWith({
-      org_id: "o1",
-      excluded_provider_slugs: [],
-    });
+    // Scoped to the selected MCP's space — not an org-wide source check.
+    expect(mockTrpc.workspaces.listForSpace.query).toHaveBeenCalledWith("s1");
     expect(p.log.warn).toHaveBeenCalledWith(
       expect.stringContaining("No GitHub repos are connected"),
     );
@@ -862,7 +861,7 @@ describe("runSetup integration", () => {
     saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
     const clientMethods = setupAuthenticatedClient();
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockTrpc.dataSource.list.query.mockResolvedValue([]);
+    mockTrpc.workspaces.listForSpace.query.mockResolvedValue([]);
     vi.mocked(p.confirm).mockResolvedValue(false as never);
 
     await runSetup();
@@ -878,7 +877,7 @@ describe("runSetup integration", () => {
     const clientMethods = setupAuthenticatedClient();
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
     // `null` list exercises the `?? []` fallback alongside the cancel path.
-    mockTrpc.dataSource.list.query.mockResolvedValue(null);
+    mockTrpc.workspaces.listForSpace.query.mockResolvedValue(null);
     const cancelSentinel = Symbol("clack:cancel");
     vi.mocked(p.confirm).mockResolvedValue(cancelSentinel as never);
     vi.mocked(p.isCancel).mockImplementation((value: unknown) => value === cancelSentinel);
@@ -890,11 +889,11 @@ describe("runSetup integration", () => {
     expect(clientMethods.validateAPIKey).toHaveBeenCalled();
   });
 
-  it("stays quiet when the org already has a GitHub source", async () => {
+  it("stays quiet when the MCP's space already has a connected GitHub repo", async () => {
     saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
     setupAuthenticatedClient();
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    // installRemoteSetupDefaults() already returns a github data source.
+    // installRemoteSetupDefaults() already puts a github deployment in the space.
 
     await runSetup();
 
@@ -906,7 +905,7 @@ describe("runSetup integration", () => {
     saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
     const clientMethods = setupAuthenticatedClient();
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockTrpc.dataSource.list.query.mockRejectedValue(new Error("backend down"));
+    mockTrpc.workspaces.listForSpace.query.mockRejectedValue(new Error("backend down"));
 
     await runSetup();
 
@@ -922,13 +921,26 @@ describe("runSetup integration", () => {
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
     // tRPC boundaries can reject with plain values; the step must stringify
     // them for the debug log without blowing up.
-    mockTrpc.dataSource.list.query.mockRejectedValue("backend down");
+    mockTrpc.workspaces.listForSpace.query.mockRejectedValue("backend down");
 
     await runSetup();
 
     expect(p.confirm).not.toHaveBeenCalled();
     expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
     expect(clientMethods.validateAPIKey).toHaveBeenCalled();
+  });
+
+  it("skips the GitHub offer when the target has an org but no space", async () => {
+    // Legacy/partial targets can carry org_id without space_id; the connect
+    // step couldn't run there, so the offer must not fire either.
+    saveConfig(makeCfg({ org_id: "o1", space_id: undefined }));
+    setupAuthenticatedClient();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(mockTrpc.workspaces.listForSpace.query).not.toHaveBeenCalled();
+    expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
   });
 
   it("never offers the GitHub connect step in OSS mode", async () => {
@@ -942,7 +954,7 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(mockTrpc.dataSource.list.query).not.toHaveBeenCalled();
+    expect(mockTrpc.workspaces.listForSpace.query).not.toHaveBeenCalled();
     expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
   });
 
