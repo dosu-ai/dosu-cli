@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { Command } from "commander";
 import { Client } from "../client/client";
+import { agentsCommand } from "../commands/agents";
 import { analyticsCommand } from "../commands/analytics";
 import { askCommand } from "../commands/ask";
 import { auditCommand } from "../commands/audit";
@@ -21,6 +22,7 @@ import { docsCommand } from "../commands/docs";
 import { insightsCommand } from "../commands/insights";
 import { integrationsCommand } from "../commands/integrations";
 import { knowledgeCommand } from "../commands/knowledge";
+import { librariesCommand } from "../commands/libraries";
 import { membersCommand } from "../commands/members";
 import { orgCommand } from "../commands/org";
 import { reviewCommand } from "../commands/review";
@@ -582,6 +584,7 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
     });
 
   // Agent-facing commands
+  program.addCommand(agentsCommand());
   program.addCommand(analyticsCommand());
   program.addCommand(askCommand());
   program.addCommand(auditCommand());
@@ -590,6 +593,7 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
   program.addCommand(insightsCommand());
   program.addCommand(integrationsCommand());
   program.addCommand(knowledgeCommand());
+  program.addCommand(librariesCommand());
   program.addCommand(membersCommand());
   program.addCommand(orgCommand());
   program.addCommand(reviewCommand());

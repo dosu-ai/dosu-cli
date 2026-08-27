@@ -11,6 +11,16 @@ export function requireLoginConfig(): Config {
   return cfg;
 }
 
+export function requireOrgConfig(): { cfg: Config; orgId: string } {
+  const cfg = requireLoginConfig();
+  const orgId = cfg.active_account?.target?.org_id;
+  if (!orgId) {
+    console.error(pc.red("Missing org config. Run 'dosu setup' to reconfigure."));
+    process.exit(1);
+  }
+  return { cfg, orgId };
+}
+
 export function requireAPIKey(cfg: Config): string {
   if (!cfg.active_account?.target?.api_key) {
     console.error(pc.red("API key not configured. Run 'dosu setup' first."));

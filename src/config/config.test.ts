@@ -7,10 +7,12 @@ import {
   type Config,
   clearConfigInPlace,
   emptyConfig,
+  getConfigDir,
   getConfigPath,
   isAuthenticated,
   isTokenExpired,
   loadConfig,
+  parseConfig,
   replaceLoginSession,
   type SessionCredentials,
   saveConfig,
@@ -449,6 +451,135 @@ describe("config", () => {
     expect(cfg.active_account?.user_id).toBe("account-b");
     expect(cfg.active_account?.session.access_token).toBe("account-a-token");
     expect(cfg.active_account?.target).toBeUndefined();
+  });
+
+  it("rejects account-bound mutations without an authenticated verified identity", () => {
+    expect(() => bindAccountIdentity(emptyConfig(), "account-a")).toThrow(
+      "cannot bind an identity without an authenticated session",
+    );
+
+    const unverified: Config = {
+      schema_version: CONFIG_SCHEMA_VERSION,
+      active_account: {
+        session: { access_token: "opaque", refresh_token: "refresh", expires_at: 1 },
+      },
+    };
+    expect(() => updateTarget(unverified, { deployment_id: "dep-a" })).toThrow(
+      "cannot bind a target without a verified account identity",
+    );
+  });
+
+  it("uses the active target only as a fallback when the deployment registry has no entry", () => {
+    const cfg = makeTestConfig({
+      access_token: "token-a",
+      refresh_token: "refresh-a",
+      expires_at: 1,
+      user_id: "account-a",
+      deployment_id: "dep-a",
+      api_key: "key-a",
+    });
+    if (!cfg.active_account) throw new Error("expected authenticated config");
+    cfg.active_account.targets = {};
+
+    expect(targetForDeployment(cfg, "dep-a")).toEqual({
+      deployment_id: "dep-a",
+      api_key: "key-a",
+    });
+    expect(targetForDeployment(cfg, "dep-b")).toBeUndefined();
+  });
+
+  it("normalizes malformed v3 account fields without retaining unowned targets", () => {
+    expect(
+      parseConfig({
+        schema_version: CONFIG_SCHEMA_VERSION,
+        mode: "oss",
+        active_account: { session: null },
+      }),
+    ).toEqual({ schema_version: CONFIG_SCHEMA_VERSION, mode: "oss" });
+
+    expect(
+      parseConfig({
+        schema_version: CONFIG_SCHEMA_VERSION,
+        mode: "oss",
+        active_account: {
+          user_id: "account-a",
+          session: { access_token: 42, refresh_token: null, expires_at: Number.POSITIVE_INFINITY },
+          target: { deployment_id: 7, api_key: "key-without-deployment" },
+          targets: {
+            "dep-mismatch": { deployment_id: "different", api_key: "drop-me" },
+            "dep-invalid": null,
+          },
+        },
+      }),
+    ).toEqual({
+      schema_version: CONFIG_SCHEMA_VERSION,
+      mode: "oss",
+      active_account: {
+        user_id: "account-a",
+        session: { access_token: "", refresh_token: "", expires_at: 0 },
+        target: { api_key: "key-without-deployment" },
+        targets: {},
+      },
+    });
+
+    const opaqueAccount = parseConfig({
+      schema_version: CONFIG_SCHEMA_VERSION,
+      active_account: {
+        session: { access_token: "opaque", refresh_token: "refresh", expires_at: 1 },
+        target: { deployment_id: "dep-a", api_key: "must-drop" },
+        targets: { "dep-a": { deployment_id: "dep-a", api_key: "must-drop" } },
+      },
+    });
+    expect(opaqueAccount.active_account?.user_id).toBeUndefined();
+    expect(opaqueAccount.active_account?.target).toBeUndefined();
+    expect(opaqueAccount.active_account?.targets).toEqual({});
+  });
+
+  it("normalizes incomplete v2 account shapes without inventing credentials", () => {
+    expect(
+      parseConfig({ schema_version: 2, mode: "oss", active_account: { session: null } }),
+    ).toEqual({ schema_version: CONFIG_SCHEMA_VERSION, mode: "oss" });
+
+    expect(
+      parseConfig({
+        schema_version: 2,
+        active_account: {
+          session: { access_token: "opaque", refresh_token: 4, expires_at: "later" },
+          target: { deployment_id: "dep-a", api_key: "must-drop" },
+        },
+      }),
+    ).toEqual({
+      schema_version: CONFIG_SCHEMA_VERSION,
+      active_account: {
+        user_id: undefined,
+        session: { access_token: "opaque", refresh_token: "", expires_at: 0 },
+        target: undefined,
+        targets: {},
+      },
+    });
+  });
+
+  it("falls back from XDG to HOME, USERPROFILE, and finally a relative config path", () => {
+    const originalHome = process.env.HOME;
+    const originalUserProfile = process.env.USERPROFILE;
+    try {
+      delete process.env.XDG_CONFIG_HOME;
+      process.env.HOME = "/tmp/dosu-home";
+      expect(getConfigDir()).toBe("/tmp/dosu-home/.config/dosu-cli");
+
+      delete process.env.HOME;
+      process.env.USERPROFILE = "/tmp/dosu-userprofile";
+      expect(getConfigDir()).toBe("/tmp/dosu-userprofile/.config/dosu-cli");
+
+      delete process.env.USERPROFILE;
+      expect(getConfigDir()).toBe(".config/dosu-cli");
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = originalUserProfile;
+      process.env.XDG_CONFIG_HOME = tempDir;
+    }
   });
 
   it("isTokenExpired returns false when expires_at is 0", () => {

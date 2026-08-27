@@ -70,6 +70,7 @@ describe("repository scanning", () => {
       /directory/i,
     );
     expect(() => validateScanDirectories([linkedRoot], fakeHome)).toThrow(/symbolic link/i);
+    expect(() => validateScanDirectories([], fakeHome)).toThrow(/at least one scan directory/i);
     expect(validateScanDirectories([safeRoot, safeRoot], fakeHome)).toEqual([
       realpathSync(safeRoot),
     ]);

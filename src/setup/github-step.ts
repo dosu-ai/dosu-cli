@@ -630,6 +630,9 @@ export async function stepConnectGitHubRepo(
     }
     const survived = created.filter((c) => survivors.alive.has(c.data_source_id));
 
+    // A failed attempt loops back to the multiselect instead of ending the
+    // step — the user can retry, grant access via "Add repositories...", or
+    // cancel (Ctrl+C) to move on.
     if (survived.length === 0) {
       s.stop("Failed");
       if (reverted.length > 0) {
@@ -641,7 +644,8 @@ export async function stepConnectGitHubRepo(
       } else {
         p.log.error("Could not connect any repos. Check `dosu logs --tail 50` for details.");
       }
-      return { advance: false, has_connected_repo: deployed.length > 0 };
+      p.log.info("Pick repositories to try again, or press Ctrl+C to continue without connecting.");
+      continue;
     }
 
     if (reverted.length > 0) {
