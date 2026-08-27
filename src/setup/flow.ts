@@ -394,7 +394,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   }
 }
 
-function logLegacyGlobalReconciliation(report: LegacyGlobalReconciliation): void {
+export function logLegacyGlobalReconciliation(report: LegacyGlobalReconciliation): void {
   if (report.removed.length > 0) {
     p.log.info(
       formatSetupSummary(

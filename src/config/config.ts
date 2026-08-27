@@ -213,11 +213,14 @@ function isConfigV2(value: unknown): value is Record<string, unknown> {
 function normalizeV3(value: Config): Config {
   const active = isRecord(value.active_account) ? value.active_account : undefined;
   const session = active && isRecord(active.session) ? active.session : undefined;
+  const scanDirectories = normalizeScanDirectories(value.scan_directories);
+  const base: Config = {
+    schema_version: CONFIG_SCHEMA_VERSION,
+    mode: value.mode === MODE_OSS ? MODE_OSS : undefined,
+    ...(scanDirectories.length > 0 ? { scan_directories: scanDirectories } : {}),
+  };
   if (!active || !session) {
-    return {
-      schema_version: CONFIG_SCHEMA_VERSION,
-      mode: value.mode === MODE_OSS ? MODE_OSS : undefined,
-    };
+    return base;
   }
 
   const accessToken = stringValue(session.access_token) ?? "";
@@ -226,8 +229,7 @@ function normalizeV3(value: Config): Config {
   const targets = userID ? normalizeTargets(active.targets) : {};
   if (target?.deployment_id) targets[target.deployment_id] = { ...target };
   return {
-    schema_version: CONFIG_SCHEMA_VERSION,
-    mode: value.mode === MODE_OSS ? MODE_OSS : undefined,
+    ...base,
     active_account: {
       user_id: userID,
       session: {
@@ -239,6 +241,18 @@ function normalizeV3(value: Config): Config {
       targets,
     },
   };
+}
+
+function normalizeScanDirectories(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [
+    ...new Set(
+      value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  ];
 }
 
 function migrateV2(value: Record<string, unknown>): Config {

@@ -182,15 +182,31 @@ function isOwnedProjectRuleFile(content: string, cursorFrontmatter: boolean): bo
 }
 
 function findSection(content: string): { start: number; end: number } | null {
-  const startMatch = content.match(DOSU_RULE_SECTION_START_RE);
-  const start = startMatch?.index ?? -1;
-  const end = content.indexOf(DOSU_RULE_SECTION_END, Math.max(start, 0));
-
-  if (start === -1 && end === -1) return null;
-  if (start === -1 || end < start) {
+  const starts = [...content.matchAll(new RegExp(DOSU_RULE_SECTION_START_RE.source, "g"))];
+  const ends = [...content.matchAll(new RegExp(DOSU_RULE_SECTION_END, "g"))];
+  if (starts.length === 0 && ends.length === 0) return null;
+  if (starts.length !== 1 || ends.length !== 1 || (ends[0]?.index ?? -1) < starts[0].index) {
     throw new Error("Dosu rule markers are incomplete; refusing to overwrite the instruction file");
   }
-  return { start, end };
+  return { start: starts[0].index, end: ends[0].index };
+}
+
+/** Read-only preflight used before a bulk flow performs any project write. */
+export function validateRuleForAgentMutation(agent: string, projectRoot: string): void {
+  if (!isRuleAgent(agent)) return;
+  const target = RULE_TARGETS[agent];
+  const path = target.path(projectRoot);
+  if (!path) return;
+  assertSafeProjectPath(projectRoot, path);
+  if (!existsSync(path)) return;
+  const content = readFileSync(path, "utf-8");
+  if (target.kind === "file") {
+    if (!isOwnedProjectRuleFile(content, Boolean(target.cursorFrontmatter))) {
+      throw new Error(`${path} contains a non-Dosu project rule; refusing to overwrite it`);
+    }
+    return;
+  }
+  findSection(content);
 }
 
 function lineEndingFor(content: string): "\r\n" | "\n" {

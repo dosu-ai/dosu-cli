@@ -124,6 +124,26 @@ function isOwnedProjectSection(program: AST.TOMLProgram): boolean {
   return Boolean(command && args && isDosuOwnedMcpServer({ command, args }));
 }
 
+/** Read the standard project section for bulk preflight without changing its bytes. */
+export function readCodexProjectMcpEntry(projectRoot: string): unknown | undefined {
+  const content = readTOML(getConfigPath(false, projectRoot));
+  if (!content) return undefined;
+  const parsed = parseConfigTOML(content);
+  if (hasAlternateDosuDefinition(parsed)) {
+    throw new Error('Codex declares "mcp_servers.dosu" in an alternate TOML form');
+  }
+  const baseTables = dosuTables(parsed).filter((table) => table.resolvedKey.length === 2);
+  if (baseTables.length === 0) return undefined;
+  if (baseTables.length !== 1) throw new Error("Codex has duplicate mcp_servers.dosu tables");
+  const base = baseTables[0];
+  const commandNode = base.body.find((node) => keyName(node) === "command");
+  const argsNode = base.body.find((node) => keyName(node) === "args");
+  return {
+    command: commandNode ? stringValue(commandNode.value) : undefined,
+    args: argsNode ? stringArray(argsNode.value) : undefined,
+  };
+}
+
 function removeDosuTables(content: string, tables: readonly AST.TOMLTable[]): string {
   let result = content;
   for (const table of [...tables].sort((left, right) => right.range[0] - left.range[0])) {

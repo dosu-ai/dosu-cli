@@ -34,6 +34,8 @@ interface ActiveAccount {
 export interface Config {
   schema_version: typeof CONFIG_SCHEMA_VERSION;
   mode?: SetupMode;
+  /** User-approved parents searched by the bulk project setup flow. */
+  scan_directories?: string[];
   active_account?: ActiveAccount;
 }
 

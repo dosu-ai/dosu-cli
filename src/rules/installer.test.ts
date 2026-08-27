@@ -263,6 +263,15 @@ describe("marker-delimited instruction sections", () => {
     );
   });
 
+  it("refuses duplicate rule sections without changing the file", () => {
+    const path = join(tempDir, "GEMINI.md");
+    const section = `${DOSU_RULE_SECTION_START}\nold\n${DOSU_RULE_SECTION_END}\n`;
+    writeFileSync(path, `${section}${section}`);
+
+    expect(() => installRuleForAgent("gemini", "new content", tempDir)).toThrow(/markers/i);
+    expect(readFileSync(path, "utf8")).toBe(`${section}${section}`);
+  });
+
   it("ignores unsupported agents", () => {
     expect(installRuleForAgent("windsurf", "rule")).toBeNull();
     expect(removeRuleForAgent("windsurf")).toBeNull();
