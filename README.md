@@ -99,12 +99,15 @@ Or right-click the binary, select "Open", and click "Open" in the dialog.
 | `dosu upgrade` | Update Dosu through the package manager that installed it |
 | `dosu mcp list` | List supported AI tools |
 | `dosu mcp add <tool>` | Add the Dosu MCP server to a specific tool |
+| `dosu drive` | Host, join, contribute to, and search a shared local-network Drive |
 | `dosu logs` | View or manage debug logs (`--tail`, `--clear`) |
 | `dosu telemetry` | Manage usage analytics and error diagnostics (`status`, `enable`, `disable`, `reset`) |
 
 `dosu mcp add` takes `-g, --global` to install for all projects instead of project-local, and `--show-secret` to print the full manual config.
 
 `dosu upgrade` delegates to npm, pnpm, Yarn Classic, or Homebrew only after confirming which manager owns the current installation. Temporary package-runner invocations stay ephemeral, ambiguous or local installs are left unchanged, and standalone binaries receive the latest safe manual download path.
+
+For the internal alpha walkthrough, see [How to demo Dosu Drive on macOS](docs/drive-demo.md).
 
 ### Platform commands
 
