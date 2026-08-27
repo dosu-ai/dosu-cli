@@ -178,6 +178,38 @@ describe("cleanupLegacyGlobalMcp", () => {
     });
     expect(getJSONServer(path, "mcpServers")).toEqual(legacyMcpEntry());
   });
+
+  it("reports absent supported and unsupported global MCP config without creating files", () => {
+    const supportedPath = join(tempDir, "missing-claude.json");
+    expect(cleanupLegacyGlobalMcp(makeProvider("claude", supportedPath))).toMatchObject({
+      status: "not_found",
+    });
+
+    const unsupportedPath = join(tempDir, "missing-gemini.json");
+    expect(cleanupLegacyGlobalMcp(makeProvider("gemini", unsupportedPath))).toMatchObject({
+      status: "not_found",
+    });
+
+    const throwing = makeProvider("unknown-agent", join(tempDir, "unknown.json"));
+    throwing.isConfigured = () => {
+      throw new Error("unreadable global config");
+    };
+    expect(cleanupLegacyGlobalMcp(throwing)).toMatchObject({ status: "not_found" });
+    expect(existsSync(supportedPath)).toBe(false);
+    expect(existsSync(unsupportedPath)).toBe(false);
+  });
+
+  it("treats a supported global file without a Dosu entry as not found", () => {
+    const path = join(tempDir, ".claude.json");
+    writeJSON(path, { mcpServers: { other: { command: "other" } } });
+
+    expect(cleanupLegacyGlobalMcp(makeProvider("claude", path))).toMatchObject({
+      status: "not_found",
+    });
+    expect(JSON.parse(readFileSync(path, "utf-8"))).toEqual({
+      mcpServers: { other: { command: "other" } },
+    });
+  });
 });
 
 describe("cleanupLegacyGlobalRule", () => {
@@ -236,6 +268,35 @@ describe("cleanupLegacyGlobalRule", () => {
       reason: "shared_or_unsupported",
     });
   });
+
+  it("reports missing rule paths and marker sections without writing", () => {
+    expect(cleanupLegacyGlobalRule("unknown-agent")).toBeNull();
+
+    const codexPath = rulePathForAgent("codex") ?? "";
+    expect(cleanupLegacyGlobalRule("codex")).toMatchObject({ status: "not_found" });
+    mkdirSync(dirname(codexPath), { recursive: true });
+    writeFileSync(codexPath, "# User-owned instructions\n");
+    expect(cleanupLegacyGlobalRule("codex")).toMatchObject({ status: "not_found" });
+
+    const geminiPath = rulePathForAgent("gemini") ?? "";
+    mkdirSync(dirname(geminiPath), { recursive: true });
+    writeFileSync(geminiPath, "# User-owned Gemini instructions\n");
+    expect(cleanupLegacyGlobalRule("gemini")).toMatchObject({ status: "not_found" });
+  });
+
+  it("preserves a symlinked marker rule", () => {
+    const path = rulePathForAgent("codex") ?? "";
+    const target = join(tempDir, "real-codex-agents.md");
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(target, "<!-- dosu:rules:start v1 -->\nlegacy\n<!-- dosu:rules:end -->\n");
+    symlinkSync(target, path);
+
+    expect(cleanupLegacyGlobalRule("codex")).toMatchObject({
+      status: "preserved",
+      reason: "symlink_or_non_file",
+    });
+    expect(readFileSync(target, "utf-8")).toContain("legacy");
+  });
 });
 
 describe("reconcileLegacyGlobalSetup", () => {
@@ -280,5 +341,19 @@ describe("reconcileLegacyGlobalSetup", () => {
     ]);
     expect(getJSONServer(unsupportedPath, "mcpServers")).toEqual(legacyMcpEntry());
     for (const path of [skill, hook, plugin]) expect(readFileSync(path, "utf-8")).toBe("keep\n");
+  });
+
+  it("does not invent cleanup outcomes for selected agents without a rule or inactive globals", () => {
+    const selected = makeProvider("windsurf", join(tempDir, "missing-windsurf.json"));
+    const inactive = makeProvider("gemini", join(tempDir, "missing-gemini.json"), {
+      globalConfigured: false,
+    });
+
+    const report = reconcileLegacyGlobalSetup([selected], tempDir, [selected, inactive]);
+
+    expect(report.outcomes).toEqual([
+      expect.objectContaining({ providerID: "windsurf", component: "mcp", status: "not_found" }),
+    ]);
+    expect(report.preserved).toEqual([]);
   });
 });

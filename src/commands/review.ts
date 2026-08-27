@@ -3,7 +3,6 @@
  */
 
 import { readFileSync } from "node:fs";
-import * as p from "@clack/prompts";
 import { isTRPCClientError } from "@trpc/client";
 import { Command } from "commander";
 import pc from "picocolors";
@@ -14,6 +13,7 @@ import type {
   ReviewGetChangeOutput,
 } from "../generated/dosu-api-types";
 import { requireLoginConfig } from "./auth";
+import { confirmAction } from "./confirmation";
 import { formatDate, printInfo, printResult, printTable, truncate } from "./output";
 
 // Contract-typed since dosu#11679: ChangeView, review-list items, and the raw
@@ -427,33 +427,21 @@ export function reviewCommand(): Command {
           else printDraftPreview(draft as DraftMessageRow);
         }
 
-        let proceed = opts.confirm === true;
-        if (!proceed && !opts.json && process.stdin?.isTTY) {
-          const answer = await p.confirm({
+        const preview = change ?? {
+          id,
+          kind: "draft_message",
+          title: draft?.title,
+          body: draft?.body,
+        };
+        if (
+          !(await confirmAction({
+            confirmed: opts.confirm,
+            json: opts.json,
             message: `${verb} this ${noun}?`,
-            initialValue: false,
-          });
-          if (p.isCancel(answer)) {
-            console.log(pc.dim("Cancelled."));
-            return;
-          }
-          proceed = answer === true;
-        }
-
-        if (!proceed) {
-          if (opts.json) {
-            const preview = change ?? {
-              id,
-              kind: "draft_message",
-              title: draft?.title,
-              body: draft?.body,
-            };
-            printResult({ ...preview, applied: false, confirmRequired: true }, opts);
-          } else {
-            console.log(pc.dim("Aborted. Re-run with --confirm to apply."));
-          }
+            preview,
+          }))
+        )
           return;
-        }
 
         if (change) {
           await client.page.updatePublicationStatus.mutate({ page_version_id: id, action });
