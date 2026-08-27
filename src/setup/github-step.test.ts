@@ -713,7 +713,11 @@ describe("stepConnectGitHubRepo", () => {
     mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
       { repository_id: 100, name: "stale", slug: "acme/stale", is_deployed: false },
     ]);
-    mockPromptGitHubRepositories.mockResolvedValue(["acme/stale"]);
+    const cancel = Symbol("cancel");
+    mockPromptGitHubRepositories
+      .mockResolvedValueOnce(["acme/stale"])
+      .mockResolvedValueOnce(cancel as unknown as string[]);
+    vi.mocked(p.isCancel).mockImplementation((v) => v === cancel);
     mockTrpc.workspaces.create.mutate.mockResolvedValue({ deployment_id: "dep-stale" });
     mockTrpc.dataSource.create.mutate.mockResolvedValue({ data_source_id: "ds-stale" });
     mockTrpc.workspaces.listForSpace.query.mockResolvedValue([{ deployment_id: "dep-stale" }]);
@@ -725,6 +729,33 @@ describe("stepConnectGitHubRepo", () => {
     expect(mockTrpc.workspaces.delete.mutate).toHaveBeenCalledWith("dep-stale");
     const errorCalls = vi.mocked(p.log.error).mock.calls.map((c) => String(c[0]));
     expect(errorCalls.some((m) => m.includes("acme/stale"))).toBe(true);
+  });
+
+  it("re-prompts after a failed attempt so the user can retry and succeed", async () => {
+    // First selection targets a ghost slug → the attempt fails and the step
+    // loops back to the multiselect instead of ending. The second selection
+    // succeeds, so the step still ends with a connected repo.
+    mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
+      { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
+    ]);
+    mockPromptGitHubRepositories
+      .mockResolvedValueOnce(["acme/ghost"])
+      .mockResolvedValueOnce(["acme/api"]);
+    mockTrpc.workspaces.create.mutate.mockResolvedValue({ deployment_id: "dep-api" });
+    mockTrpc.dataSource.create.mutate.mockResolvedValue({ data_source_id: "ds-api" });
+    mockTrpc.workspaces.listForSpace.query.mockResolvedValue([{ deployment_id: "dep-api" }]);
+    mockTrpc.dataSource.list.query.mockResolvedValue([
+      { data_source_id: "ds-api", provider_slug: "github", is_indexed: false },
+    ]);
+
+    const result = await stepConnectGitHubRepo(makeCfg(), null, NO_WAIT_VERIFY);
+
+    expect(mockPromptGitHubRepositories).toHaveBeenCalledTimes(2);
+    const infoCalls = vi.mocked(p.log.info).mock.calls.map((c) => String(c[0]));
+    expect(infoCalls.some((m) => m.includes("try again"))).toBe(true);
+    expect(result.advance).toBe(true);
+    expect(result.has_connected_repo).toBe(true);
+    expect(result.deployment_id).toBe("dep-api");
   });
 
   it("sorts repos most-recently-added-first so a fresh GitHub App install lands on top", async () => {
@@ -866,7 +897,11 @@ describe("stepConnectGitHubRepo", () => {
     mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
       { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
     ]);
-    mockPromptGitHubRepositories.mockResolvedValue(["acme/api"]);
+    const cancel = Symbol("cancel");
+    mockPromptGitHubRepositories
+      .mockResolvedValueOnce(["acme/api"])
+      .mockResolvedValueOnce(cancel as unknown as string[]);
+    vi.mocked(p.isCancel).mockImplementation((v) => v === cancel);
     mockTrpc.workspaces.create.mutate.mockResolvedValue(null);
 
     const result = await stepConnectGitHubRepo(makeCfg(), null, NO_WAIT_VERIFY);
@@ -884,7 +919,11 @@ describe("stepConnectGitHubRepo", () => {
     mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
       { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
     ]);
-    mockPromptGitHubRepositories.mockResolvedValue(["acme/api"]);
+    const cancel = Symbol("cancel");
+    mockPromptGitHubRepositories
+      .mockResolvedValueOnce(["acme/api"])
+      .mockResolvedValueOnce(cancel as unknown as string[]);
+    vi.mocked(p.isCancel).mockImplementation((v) => v === cancel);
     mockTrpc.workspaces.create.mutate.mockResolvedValue({ deployment_id: "dep-api" });
     mockTrpc.dataSource.create.mutate.mockResolvedValue({ data_source_id: "ds-api" });
     mockTrpc.dataSource.syncDataSource.mutate.mockRejectedValue(new Error("trpc 500"));
@@ -902,7 +941,11 @@ describe("stepConnectGitHubRepo", () => {
     mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
       { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
     ]);
-    mockPromptGitHubRepositories.mockResolvedValue(["acme/api"]);
+    const cancel = Symbol("cancel");
+    mockPromptGitHubRepositories
+      .mockResolvedValueOnce(["acme/api"])
+      .mockResolvedValueOnce(cancel as unknown as string[]);
+    vi.mocked(p.isCancel).mockImplementation((v) => v === cancel);
     mockTrpc.workspaces.create.mutate.mockResolvedValue({ deployment_id: "dep-api" });
     mockTrpc.dataSource.create.mutate.mockResolvedValue({ data_source_id: "ds-api" });
     mockTrpc.dataSource.syncDataSource.mutate.mockRejectedValue("trpc exploded");
@@ -919,7 +962,11 @@ describe("stepConnectGitHubRepo", () => {
     mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
       { repository_id: 1, name: "stale", slug: "acme/stale", is_deployed: false },
     ]);
-    mockPromptGitHubRepositories.mockResolvedValue(["acme/stale"]);
+    const cancel = Symbol("cancel");
+    mockPromptGitHubRepositories
+      .mockResolvedValueOnce(["acme/stale"])
+      .mockResolvedValueOnce(cancel as unknown as string[]);
+    vi.mocked(p.isCancel).mockImplementation((v) => v === cancel);
     mockTrpc.workspaces.create.mutate.mockResolvedValue({ deployment_id: "dep-stale" });
     mockTrpc.dataSource.create.mutate.mockResolvedValue({ data_source_id: "ds-stale" });
     mockTrpc.workspaces.listForSpace.query.mockResolvedValue([{ deployment_id: "dep-stale" }]);
@@ -938,7 +985,11 @@ describe("stepConnectGitHubRepo", () => {
     mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
       { repository_id: 1, name: "stale", slug: "acme/stale", is_deployed: false },
     ]);
-    mockPromptGitHubRepositories.mockResolvedValue(["acme/stale"]);
+    const cancel = Symbol("cancel");
+    mockPromptGitHubRepositories
+      .mockResolvedValueOnce(["acme/stale"])
+      .mockResolvedValueOnce(cancel as unknown as string[]);
+    vi.mocked(p.isCancel).mockImplementation((v) => v === cancel);
     mockTrpc.workspaces.create.mutate.mockResolvedValue({ deployment_id: "dep-stale" });
     mockTrpc.dataSource.create.mutate.mockResolvedValue({ data_source_id: "ds-stale" });
     mockTrpc.workspaces.listForSpace.query.mockResolvedValue([{ deployment_id: "dep-stale" }]);
@@ -958,7 +1009,11 @@ describe("stepConnectGitHubRepo", () => {
     mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
       { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
     ]);
-    mockPromptGitHubRepositories.mockResolvedValue(["acme/ghost"]);
+    const cancel = Symbol("cancel");
+    mockPromptGitHubRepositories
+      .mockResolvedValueOnce(["acme/ghost"])
+      .mockResolvedValueOnce(cancel as unknown as string[]);
+    vi.mocked(p.isCancel).mockImplementation((v) => v === cancel);
 
     const result = await stepConnectGitHubRepo(makeCfg(), null, NO_WAIT_VERIFY);
 
