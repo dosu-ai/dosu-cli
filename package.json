@@ -54,6 +54,7 @@
     "picocolors": "^1.1.1",
     "semantic-release": "^25.0.5",
     "superjson": "^2.2.6",
+    "toml-eslint-parser": "1.0.3",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9",
     "write-file-atomic": "^8.0.0"

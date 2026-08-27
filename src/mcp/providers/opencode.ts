@@ -6,7 +6,7 @@ export const OpenCodeProvider = () =>
   createJSONProvider({
     providerName: "OpenCode",
     providerID: "opencode",
-    local: true,
+    configurationKind: "project",
     priorityValue: 14,
     paths: ["~/.config/opencode"],
     globalPath: "~/.config/opencode/opencode.json",
@@ -18,6 +18,11 @@ export const OpenCodeProvider = () =>
       enabled: true,
       // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
       headers: mcpHeaders(cfg.active_account!.target!.api_key!),
+    }),
+    buildProjectServer: (command) => ({
+      type: "local",
+      command: [command.command, ...command.args],
+      enabled: true,
     }),
     localConfigPath: (cwd) => join(cwd, "opencode.json"),
   });

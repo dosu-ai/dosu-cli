@@ -74,7 +74,7 @@ describe("saveConfig atomicity", () => {
     // Result round-trips and leaves no stray temp files behind.
     const loaded = loadConfig();
     expect(loaded.active_account?.session).toEqual(cfg.active_account?.session);
-    expect(loaded.schema_version).toBe(2);
+    expect(loaded.schema_version).toBe(3);
     expect(readdirSync(dirname(finalPath))).toEqual(["config.json"]);
   });
 

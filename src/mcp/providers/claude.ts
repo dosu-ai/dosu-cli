@@ -5,7 +5,7 @@ export const ClaudeProvider = () =>
   createJSONProvider({
     providerName: "Claude Code",
     providerID: "claude",
-    local: true,
+    configurationKind: "project",
     priorityValue: 1,
     paths: ["~/.claude"],
     globalPath: "~/.claude.json",

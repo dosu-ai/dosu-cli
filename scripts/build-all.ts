@@ -24,6 +24,26 @@ const TARGETS = [
   { target: "bun-windows-x64-baseline", output: "dosu-windows-x64.exe" },
 ];
 
+const MINIMUM_ISOLATED_COMPILE_VERSION = [1, 4, 0] as const;
+
+/** Bun 1.3.x accepts the isolation flags but still autoloads cwd config. */
+export function assertSecureCompileRuntime(version: string = Bun.version): void {
+  const match = version.match(/^(\d+)\.(\d+)\.(\d+)/);
+  const current = match?.slice(1).map(Number) ?? [];
+  const firstDifference = current.findIndex(
+    (part, index) => part !== MINIMUM_ISOLATED_COMPILE_VERSION[index],
+  );
+  const supported =
+    current.length === 3 &&
+    (firstDifference === -1 ||
+      current[firstDifference] > MINIMUM_ISOLATED_COMPILE_VERSION[firstDifference]);
+  if (!supported) {
+    throw new Error(
+      `Bun >= ${MINIMUM_ISOLATED_COMPILE_VERSION.join(".")} is required to build a Dosu binary that ignores project .env and bunfig.toml files (found ${version}).`,
+    );
+  }
+}
+
 function readPackageVersion(): string {
   try {
     return JSON.parse(readFileSync(PACKAGE_JSON_PATH, "utf8")).version ?? "dev";
@@ -84,6 +104,7 @@ export function buildDefines(): string[] {
 }
 
 async function main() {
+  assertSecureCompileRuntime();
   const distDir = join(SCRIPT_DIR, "..", "dist");
   if (!existsSync(distDir)) mkdirSync(distDir, { recursive: true });
 
@@ -106,6 +127,8 @@ async function main() {
         "bun",
         "build",
         "--compile",
+        "--no-compile-autoload-dotenv",
+        "--no-compile-autoload-bunfig",
         ...defines,
         "--target",
         target,

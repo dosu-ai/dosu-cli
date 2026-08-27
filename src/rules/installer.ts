@@ -13,18 +13,19 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { assertSafeProjectPath } from "../setup/project-root";
 
 export type RuleAgentID = "claude" | "cursor" | "codex" | "opencode" | "gemini" | "antigravity";
 
 type RuleTarget =
   | {
       kind: "file";
-      path: () => string;
+      path: (projectRoot?: string) => string | null;
       cursorFrontmatter?: boolean;
     }
   | {
       kind: "section";
-      path: () => string;
+      path: (projectRoot?: string) => string | null;
     };
 
 export type RuleAction = "created" | "updated" | "unchanged" | "removed" | "not_found";
@@ -35,17 +36,21 @@ export interface RuleResult {
   action: RuleAction;
 }
 
-const DOSU_RULE_SECTION_VERSION = 1;
+const DOSU_RULE_SECTION_VERSION = 2;
 export const DOSU_RULE_SECTION_START = `<!-- dosu:rules:start v${DOSU_RULE_SECTION_VERSION} -->`;
 export const DOSU_RULE_SECTION_END = "<!-- dosu:rules:end -->";
 
 const DOSU_RULE_SECTION_START_RE = /<!-- dosu:rules:start(?: v\d+)? -->/;
 const CURSOR_FRONTMATTER = "---\nalwaysApply: true\n---\n\n";
+const PROJECT_RULE_FILE_MARKER = "<!-- dosu:project-rule v1 -->\n";
 
 export const DOSU_RULE_URLS = [
   "https://raw.githubusercontent.com/dosu-ai/dosu-cli/main/rules/dosu.md",
   "https://raw.githubusercontent.com/dosu-ai/dosu-cli/master/rules/dosu.md",
 ] as const;
+
+export const GLOBAL_DOSU_SKILLS_GUIDANCE =
+  "Use globally installed Dosu skills when their descriptions match the task. A skill does not make an unavailable MCP tool callable.";
 
 export const FALLBACK_DOSU_RULE = `The team you are assisting maintains shared knowledge in Dosu: consult it to build on prior work, and contribute durable knowledge so future teammates and agents do not have to rediscover it. Always use only tools currently listed by the server.
 
@@ -56,6 +61,8 @@ When \`write_knowledge\` is listed, use it after the task for durable, non-obvio
 Use \`review_knowledge\` only when the user asks to inspect or manage pending knowledge. Preview one item at a time and require explicit confirmation before making changes.
 
 When \`read_knowledge\` or \`write_knowledge\` returned a \`receipt_item_id\` this turn, call \`finalize_session_knowledge\` exactly once at the end of the turn — after completing the task, immediately before your final reply — passing all receipt_item_ids from this turn. Never call it when the current turn produced no receipt_item_id, and never call it more than once per turn.
+
+${GLOBAL_DOSU_SKILLS_GUIDANCE}
 `;
 
 function claudeConfigDir(): string {
@@ -69,28 +76,36 @@ function codexHome(): string {
 const RULE_TARGETS: Record<RuleAgentID, RuleTarget> = {
   claude: {
     kind: "file",
-    path: () => join(claudeConfigDir(), "rules", "dosu.md"),
+    path: (root) =>
+      root
+        ? join(root, ".claude", "rules", "dosu.md")
+        : join(claudeConfigDir(), "rules", "dosu.md"),
   },
   cursor: {
     kind: "file",
-    path: () => join(homedir(), ".cursor", "rules", "dosu.mdc"),
+    path: (root) =>
+      root
+        ? join(root, ".cursor", "rules", "dosu.mdc")
+        : join(homedir(), ".cursor", "rules", "dosu.mdc"),
     cursorFrontmatter: true,
   },
   codex: {
     kind: "section",
-    path: () => join(codexHome(), "AGENTS.md"),
+    // Project setup writes the canonical root AGENTS.md separately.
+    path: (root) => (root ? null : join(codexHome(), "AGENTS.md")),
   },
   opencode: {
     kind: "section",
-    path: () => join(homedir(), ".config", "opencode", "AGENTS.md"),
+    // OpenCode also reads the canonical project AGENTS.md.
+    path: (root) => (root ? null : join(homedir(), ".config", "opencode", "AGENTS.md")),
   },
   gemini: {
     kind: "section",
-    path: () => join(homedir(), ".gemini", "GEMINI.md"),
+    path: (root) => (root ? join(root, "GEMINI.md") : join(homedir(), ".gemini", "GEMINI.md")),
   },
   antigravity: {
     kind: "section",
-    path: () => join(homedir(), ".gemini", "GEMINI.md"),
+    path: (root) => (root ? null : join(homedir(), ".gemini", "GEMINI.md")),
   },
 };
 
@@ -98,12 +113,20 @@ export function isRuleAgent(agent: string): agent is RuleAgentID {
   return Object.hasOwn(RULE_TARGETS, agent);
 }
 
-export function rulePathForAgent(agent: string): string | null {
-  return isRuleAgent(agent) ? RULE_TARGETS[agent].path() : null;
+export function rulePathForAgent(agent: string, projectRoot?: string): string | null {
+  return isRuleAgent(agent) ? RULE_TARGETS[agent].path(projectRoot) : null;
 }
 
 function normalizeRule(content: string): string {
   return `${content.trim()}\n`;
+}
+
+function normalizeCanonicalRule(content: string): string {
+  const normalized = content.trim();
+  const canonical = normalized.includes(GLOBAL_DOSU_SKILLS_GUIDANCE)
+    ? normalized
+    : `${normalized}\n\n${GLOBAL_DOSU_SKILLS_GUIDANCE}`;
+  return `${canonical}\n`;
 }
 
 export async function fetchDosuRule(
@@ -114,12 +137,12 @@ export async function fetchDosuRule(
       const response = await fetchImpl(url);
       if (!response.ok) continue;
       const content = await response.text();
-      if (content.trim()) return normalizeRule(content);
+      if (content.trim()) return normalizeCanonicalRule(content);
     } catch {
       // Try the next source, then fall back to the bundled rule.
     }
   }
-  return normalizeRule(FALLBACK_DOSU_RULE);
+  return normalizeCanonicalRule(FALLBACK_DOSU_RULE);
 }
 
 function ensureParent(path: string): void {
@@ -136,6 +159,20 @@ function writeIfChanged(path: string, content: string): RuleAction {
   if (readFileSync(path, "utf-8") === content) return "unchanged";
   writeFileSync(path, content, "utf-8");
   return "updated";
+}
+
+function renderStandaloneRule(
+  normalized: string,
+  cursorFrontmatter: boolean,
+  projectOwned: boolean,
+): string {
+  const marker = projectOwned ? PROJECT_RULE_FILE_MARKER : "";
+  return `${cursorFrontmatter ? CURSOR_FRONTMATTER : ""}${marker}${normalized}`;
+}
+
+function isOwnedProjectRuleFile(content: string, cursorFrontmatter: boolean): boolean {
+  const prefix = `${cursorFrontmatter ? CURSOR_FRONTMATTER : ""}${PROJECT_RULE_FILE_MARKER}`;
+  return content.replaceAll("\r\n", "\n").startsWith(prefix);
 }
 
 function findSection(content: string): { start: number; end: number } | null {
@@ -193,31 +230,55 @@ function upsertSection(path: string, content: string): RuleAction {
   return "updated";
 }
 
-export function installRuleForAgent(agent: string, content: string): RuleResult | null {
+export function installRuleForAgent(
+  agent: string,
+  content: string,
+  projectRoot?: string,
+): RuleResult | null {
   if (!isRuleAgent(agent)) return null;
 
   const target = RULE_TARGETS[agent];
-  const path = target.path();
+  const path = target.path(projectRoot);
+  if (!path) return null;
+  if (projectRoot) assertSafeProjectPath(projectRoot, path);
   const normalized = normalizeRule(content);
-  const action =
-    target.kind === "file"
-      ? writeIfChanged(
-          path,
-          target.cursorFrontmatter ? `${CURSOR_FRONTMATTER}${normalized}` : normalized,
-        )
-      : upsertSection(path, normalized);
+  let action: RuleAction;
+  if (target.kind === "file") {
+    const cursorFrontmatter = Boolean(target.cursorFrontmatter);
+    if (
+      projectRoot &&
+      existsSync(path) &&
+      !isOwnedProjectRuleFile(readFileSync(path, "utf-8"), cursorFrontmatter)
+    ) {
+      throw new Error(`${path} contains a non-Dosu project rule; refusing to overwrite it`);
+    }
+    action = writeIfChanged(
+      path,
+      renderStandaloneRule(normalized, cursorFrontmatter, Boolean(projectRoot)),
+    );
+  } else {
+    action = upsertSection(path, normalized);
+  }
 
   return { agent, path, action };
 }
 
-export function removeRuleForAgent(agent: string): RuleResult | null {
+export function removeRuleForAgent(agent: string, projectRoot?: string): RuleResult | null {
   if (!isRuleAgent(agent)) return null;
 
   const target = RULE_TARGETS[agent];
-  const path = target.path();
+  const path = target.path(projectRoot);
+  if (!path) return null;
+  if (projectRoot) assertSafeProjectPath(projectRoot, path);
   if (!existsSync(path)) return { agent, path, action: "not_found" };
 
   if (target.kind === "file") {
+    if (
+      projectRoot &&
+      !isOwnedProjectRuleFile(readFileSync(path, "utf-8"), Boolean(target.cursorFrontmatter))
+    ) {
+      throw new Error(`${path} contains a non-Dosu project rule; refusing to remove it`);
+    }
     unlinkSync(path);
     return { agent, path, action: "removed" };
   }

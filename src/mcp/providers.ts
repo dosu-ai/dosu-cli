@@ -7,16 +7,27 @@ import type { Config } from "../config/config";
 /**
  * Provider is the base interface for MCP tool providers.
  */
+export type ProviderConfigurationKind = "project" | "global-connector" | "unsupported";
+
 export interface ProviderInstallOptions {
+  scope: "project" | "global";
   showSecret?: boolean;
+  /** Verified Git root used for project-scoped configuration. */
+  projectRoot?: string;
+}
+
+interface ProviderRemoveOptions {
+  scope: "project" | "global";
+  /** Verified Git root used for project-scoped configuration. */
+  projectRoot?: string;
 }
 
 export interface Provider {
   name(): string;
   id(): string;
-  supportsLocal(): boolean;
-  install(cfg: Config, global: boolean, opts?: ProviderInstallOptions): void;
-  remove(global: boolean): void;
+  configurationKind(): ProviderConfigurationKind;
+  install(cfg: Config, opts: ProviderInstallOptions): void;
+  remove(opts: ProviderRemoveOptions): void;
 }
 
 /**
@@ -27,7 +38,40 @@ export interface SetupProvider extends Provider {
   isInstalled(): boolean;
   isConfigured(): boolean;
   globalConfigPath(): string;
+  projectConfigPath(projectRoot: string): string | null;
+  isProjectConfigured(projectRoot: string): boolean;
   priority(): number;
+}
+
+function enforceDeclaredScope<T extends Provider>(provider: T): T {
+  const assertScope = (scope: "project" | "global", operation: string): void => {
+    const kind = provider.configurationKind();
+    if (kind === "unsupported") {
+      throw new Error(`${provider.name()} does not support Dosu MCP configuration`);
+    }
+    if (kind === "project" && scope !== "project") {
+      throw new Error(
+        `${provider.name()} is project-scoped and cannot perform global ${operation}`,
+      );
+    }
+    if (kind === "global-connector" && scope !== "global") {
+      throw new Error(
+        `${provider.name()} is an explicit global connector and cannot perform project ${operation}`,
+      );
+    }
+  };
+
+  return {
+    ...provider,
+    install(cfg, opts): void {
+      assertScope(opts.scope, "installation");
+      provider.install(cfg, opts);
+    },
+    remove(opts): void {
+      assertScope(opts.scope, "removal");
+      provider.remove(opts);
+    },
+  };
 }
 
 import { AntigravityProvider } from "./providers/antigravity";
@@ -69,7 +113,7 @@ export function allProviders(): Provider[] {
     MCPorterProvider(),
     FactoryProvider(),
     ManualProvider(),
-  ];
+  ].map(enforceDeclaredScope);
 }
 
 /**

@@ -8,6 +8,7 @@ import {
   DOSU_RULE_URLS,
   FALLBACK_DOSU_RULE,
   fetchDosuRule,
+  GLOBAL_DOSU_SKILLS_GUIDANCE,
   installRuleForAgent,
   isRuleAgent,
   removeRuleForAgent,
@@ -51,7 +52,9 @@ describe("rule template", () => {
       .fn<typeof fetch>()
       .mockResolvedValueOnce(new Response("remote rule", { status: 200 }));
 
-    await expect(fetchDosuRule(fetchImpl)).resolves.toBe("remote rule\n");
+    await expect(fetchDosuRule(fetchImpl)).resolves.toBe(
+      `remote rule\n\n${GLOBAL_DOSU_SKILLS_GUIDANCE}\n`,
+    );
     expect(fetchImpl).toHaveBeenCalledWith(DOSU_RULE_URLS[0]);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
@@ -62,7 +65,9 @@ describe("rule template", () => {
       .mockResolvedValueOnce(new Response("", { status: 404 }))
       .mockResolvedValueOnce(new Response("backup rule", { status: 200 }));
 
-    await expect(fetchDosuRule(fetchImpl)).resolves.toBe("backup rule\n");
+    await expect(fetchDosuRule(fetchImpl)).resolves.toBe(
+      `backup rule\n\n${GLOBAL_DOSU_SKILLS_GUIDANCE}\n`,
+    );
     expect(fetchImpl).toHaveBeenNthCalledWith(2, DOSU_RULE_URLS[1]);
   });
 
@@ -94,6 +99,17 @@ describe("agent registry", () => {
     expect(rulePathForAgent("antigravity")).toBe(join(tempDir, ".gemini", "GEMINI.md"));
     expect(rulePathForAgent("windsurf")).toBeNull();
   });
+
+  it("keeps project rules inside the repository", () => {
+    const root = join(tempDir, "repo");
+
+    expect(rulePathForAgent("claude", root)).toBe(join(root, ".claude", "rules", "dosu.md"));
+    expect(rulePathForAgent("cursor", root)).toBe(join(root, ".cursor", "rules", "dosu.mdc"));
+    expect(rulePathForAgent("gemini", root)).toBe(join(root, "GEMINI.md"));
+    expect(rulePathForAgent("codex", root)).toBeNull();
+    expect(rulePathForAgent("opencode", root)).toBeNull();
+    expect(rulePathForAgent("antigravity", root)).toBeNull();
+  });
 });
 
 describe("standalone rule files", () => {
@@ -118,6 +134,42 @@ describe("standalone rule files", () => {
       "---\nalwaysApply: true\n---\n\nshared rule\n",
     );
     expect(readFileSync(claude?.path ?? "", "utf-8")).toBe("shared rule\n");
+  });
+
+  it("writes project rules without touching global rule paths", () => {
+    const root = join(tempDir, "repo");
+    const installed = installRuleForAgent("claude", "project rule", root);
+
+    expect(installed?.path).toBe(join(root, ".claude", "rules", "dosu.md"));
+    expect(readFileSync(installed?.path ?? "", "utf-8")).toContain("project rule\n");
+    expect(existsSync(join(tempDir, ".claude", "rules", "dosu.md"))).toBe(false);
+  });
+
+  it.each([
+    "claude",
+    "cursor",
+  ])("preserves a foreign project rule for %s during install and removal", (agent) => {
+    const root = join(tempDir, "repo");
+    const path = rulePathForAgent(agent, root) ?? "";
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, "user-authored rule\n");
+
+    expect(() => installRuleForAgent(agent, "Dosu rule", root)).toThrow(/non-Dosu|refusing/);
+    expect(() => removeRuleForAgent(agent, root)).toThrow(/non-Dosu|refusing/);
+    expect(readFileSync(path, "utf-8")).toBe("user-authored rule\n");
+  });
+
+  it.each([
+    "claude",
+    "cursor",
+  ])("recognizes and removes its own CRLF project rule for %s", (agent) => {
+    const root = join(tempDir, "repo");
+    const installed = installRuleForAgent(agent, "Dosu rule", root);
+    const path = installed?.path ?? "";
+    writeFileSync(path, readFileSync(path, "utf-8").replaceAll("\n", "\r\n"));
+
+    expect(removeRuleForAgent(agent, root)?.action).toBe("removed");
+    expect(existsSync(path)).toBe(false);
   });
 
   it("removes a standalone rule idempotently", () => {
@@ -147,7 +199,7 @@ describe("marker-delimited instruction sections", () => {
     const updated = readFileSync(path ?? "", "utf-8");
     expect(updated).not.toContain("first rule");
     expect(updated).toContain("second rule");
-    expect(updated.match(/<!-- dosu:rules:start v1 -->/g)).toHaveLength(1);
+    expect(updated.match(new RegExp(DOSU_RULE_SECTION_START, "g"))).toHaveLength(1);
     expect(updated.match(/<!-- dosu:rules:end -->/g)).toHaveLength(1);
 
     expect(installRuleForAgent("codex", "second rule")?.action).toBe("unchanged");
@@ -160,7 +212,7 @@ describe("marker-delimited instruction sections", () => {
     expect(gemini?.path).toBe(antigravity?.path);
     expect(antigravity?.action).toBe("unchanged");
     const content = readFileSync(gemini?.path ?? "", "utf-8");
-    expect(content.match(/<!-- dosu:rules:start v1 -->/g)).toHaveLength(1);
+    expect(content.match(new RegExp(DOSU_RULE_SECTION_START, "g"))).toHaveLength(1);
   });
 
   it("removes only the marked section and preserves surrounding content", () => {

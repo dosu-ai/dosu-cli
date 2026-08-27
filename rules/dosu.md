@@ -7,3 +7,5 @@ When `write_knowledge` is listed, use it after the task for durable, non-obvious
 Use `review_knowledge` only when the user asks to inspect or manage pending knowledge. Preview one item at a time and require explicit confirmation before making changes.
 
 When `read_knowledge` or `write_knowledge` returned a `receipt_item_id` this turn, call `finalize_session_knowledge` exactly once at the end of the turn — after completing the task, immediately before your final reply — passing all receipt_item_ids from this turn. Never call it when the current turn produced no receipt_item_id, and never call it more than once per turn.
+
+Use globally installed Dosu skills when their descriptions match the task. A skill does not make an unavailable MCP tool callable.

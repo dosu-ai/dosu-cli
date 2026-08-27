@@ -93,8 +93,8 @@ export function mcpRemoteServer(url: string, apiKey: string | undefined): McpRem
 }
 
 /**
- * Reads and unmarshals a JSON config file. Returns an empty object if the file doesn't exist.
- * For .jsonc files, comments are stripped before parsing.
+ * Reads and unmarshals a JSON config file. Returns an empty object if the file doesn't exist or
+ * is empty. For .jsonc files, comments are stripped before parsing.
  */
 export function loadJSONConfig(path: string): JsonConfig {
   if (!existsSync(path)) return {};
@@ -103,11 +103,11 @@ export function loadJSONConfig(path: string): JsonConfig {
   if (path.endsWith(".jsonc")) {
     data = stripJSONComments(data);
   }
-  try {
-    return JSON.parse(data);
-  } catch {
-    return {};
+  const parsed: unknown = JSON.parse(data);
+  if (!isJSONObject(parsed)) {
+    throw new Error("Config root must be an object; refusing to modify the config file");
   }
+  return parsed;
 }
 
 /**
@@ -153,7 +153,8 @@ export function stripJSONComments(data: string): string {
     if (i + 1 < data.length && data[i] === "/" && data[i + 1] === "*") {
       i += 2;
       while (i + 1 < data.length && !(data[i] === "*" && data[i + 1] === "/")) i++;
-      if (i + 1 < data.length) i += 2;
+      if (i + 1 >= data.length) throw new SyntaxError("Unterminated JSONC block comment");
+      i += 2;
       continue;
     }
 
@@ -184,10 +185,25 @@ export function writeSecureFile(path: string, content: string): void {
  * Checks if "dosu" exists under the given top-level key in a JSON config file.
  */
 export function isJSONKeyConfigured(configPath: string, topLevelKey: string): boolean {
+  try {
+    const cfg = loadJSONConfig(configPath);
+    const section = cfg[topLevelKey];
+    if (typeof section !== "object" || section === null) return false;
+    return "dosu" in section;
+  } catch {
+    return false;
+  }
+}
+
+/** Returns the named Dosu entry without treating a foreign same-named entry as configured. */
+export function getJSONServer(configPath: string, topLevelKey: string): unknown {
   const cfg = loadJSONConfig(configPath);
   const section = cfg[topLevelKey];
-  if (typeof section !== "object" || section === null) return false;
-  return "dosu" in section;
+  if (section === undefined) return undefined;
+  if (!isJSONObject(section)) {
+    throw new Error(`${topLevelKey} must be an object; refusing to modify the config file`);
+  }
+  return section.dosu;
 }
 
 /**
@@ -196,8 +212,10 @@ export function isJSONKeyConfigured(configPath: string, topLevelKey: string): bo
 export function installJSONServer(configPath: string, topKey: string, server: JsonConfig): void {
   const jsonCfg = loadJSONConfig(configPath);
   let section = jsonCfg[topKey];
-  if (typeof section !== "object" || section === null) {
+  if (section === undefined) {
     section = {};
+  } else if (!isJSONObject(section)) {
+    throw new Error(`${topKey} must be an object; refusing to modify the config file`);
   }
   section.dosu = server;
   jsonCfg[topKey] = section;
@@ -215,8 +233,12 @@ export function removeJSONServer(configPath: string, topKey: string): void {
     return; // file doesn't exist or can't be read = nothing to remove
   }
   const section = jsonCfg[topKey];
-  if (typeof section === "object" && section !== null) {
-    delete section.dosu;
-  }
+  if (section === undefined) return;
+  if (!isJSONObject(section)) return;
+  delete section.dosu;
   saveJSONConfig(configPath, jsonCfg);
+}
+
+function isJSONObject(value: unknown): value is JsonConfig {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

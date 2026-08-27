@@ -7,7 +7,7 @@ import { posix, win32 } from "node:path";
 import { Command } from "commander";
 import pc from "picocolors";
 import { INSTALL_CHANNEL, isNpxInvocation } from "../version/version";
-import { installSkill } from "./skill";
+import { installedDosuSkillState, installSkillForAgents } from "./skill";
 
 const PACKAGE_NAME = "@dosu/cli";
 const LATEST_PACKAGE = `${PACKAGE_NAME}@latest`;
@@ -275,9 +275,24 @@ export async function completeUpgrade(
 ): Promise<number> {
   const status = runUpgrade(channel, options);
   if (status !== 0) return status;
+  const installed = installedDosuSkillState();
+  if (installed === null) {
+    console.error('Could not check installed Dosu skills. Run "dosu skill update" to retry.');
+    return 0;
+  }
+  if (installed.names.length === 0) {
+    console.log("No Dosu skills are installed; leaving them removed.");
+    return 0;
+  }
+  if (installed.agentIDs.length === 0) {
+    console.error(
+      'Could not determine which agents use the installed Dosu skills. Run "dosu skill update" to retry.',
+    );
+    return 0;
+  }
   console.log("Updating Dosu skills...");
   try {
-    const result = await installSkill();
+    const result = await installSkillForAgents(installed.agentIDs);
     if (result.success) {
       console.log(pc.green("✓ Skills updated."));
     } else {

@@ -6,7 +6,7 @@ export const CursorProvider = () =>
   createJSONProvider({
     providerName: "Cursor",
     providerID: "cursor",
-    local: true,
+    configurationKind: "project",
     priorityValue: 5,
     paths: ["~/.cursor"],
     globalPath: "~/.cursor/mcp.json",

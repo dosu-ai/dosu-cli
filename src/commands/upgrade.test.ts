@@ -13,9 +13,12 @@ vi.mock("node:fs", async (importOriginal) => {
   return { ...actual, realpathSync: vi.fn(actual.realpathSync) };
 });
 
-vi.mock("./skill", () => ({ installSkill: vi.fn(async () => ({ success: true })) }));
+vi.mock("./skill", () => ({
+  installSkillForAgents: vi.fn(async () => ({ success: true })),
+  installedDosuSkillState: vi.fn(() => ({ names: ["dosu"], agentIDs: ["claude-code"] })),
+}));
 
-import { installSkill } from "./skill";
+import { installedDosuSkillState, installSkillForAgents } from "./skill";
 import {
   buildPackageManagerInvocation,
   completeUpgrade,
@@ -23,7 +26,8 @@ import {
   upgradeCommand,
 } from "./upgrade";
 
-const mockInstallSkill = vi.mocked(installSkill);
+const mockInstallSkillForAgents = vi.mocked(installSkillForAgents);
+const mockInstalledDosuSkillState = vi.mocked(installedDosuSkillState);
 
 const mockSpawnSync = vi.mocked(spawnSync);
 const mockRealpathSync = vi.mocked(realpathSync);
@@ -89,8 +93,10 @@ function errors(): string {
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), "dosu-upgrade-test-"));
   mockSpawnSync.mockReset();
-  mockInstallSkill.mockReset();
-  mockInstallSkill.mockResolvedValue({ success: true });
+  mockInstallSkillForAgents.mockReset();
+  mockInstallSkillForAgents.mockResolvedValue({ success: true });
+  mockInstalledDosuSkillState.mockReset();
+  mockInstalledDosuSkillState.mockReturnValue({ names: ["dosu"], agentIDs: ["claude-code"] });
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   originalArgv = process.argv;
@@ -454,7 +460,7 @@ describe("completeUpgrade", () => {
     const status = await completeUpgrade("homebrew", { platform: "darwin" });
 
     expect(status).toBe(0);
-    expect(mockInstallSkill).toHaveBeenCalledOnce();
+    expect(mockInstallSkillForAgents).toHaveBeenCalledWith(["claude-code"]);
     expect(output()).toContain("Skills updated");
   });
 
@@ -464,17 +470,28 @@ describe("completeUpgrade", () => {
     const status = await completeUpgrade("homebrew", { platform: "darwin" });
 
     expect(status).toBe(7);
-    expect(mockInstallSkill).not.toHaveBeenCalled();
+    expect(mockInstallSkillForAgents).not.toHaveBeenCalled();
   });
 
-  it("returns 0 and hints at dosu skill update when skill refresh fails", async () => {
+  it("does not reinstall the official skill package after the user removed it", async () => {
     mockCommands({ "brew upgrade dosu-ai/dosu/dosu": { status: 0 } });
-    mockInstallSkill.mockResolvedValue({ success: false });
+    mockInstalledDosuSkillState.mockReturnValue({ names: [], agentIDs: [] });
 
     const status = await completeUpgrade("homebrew", { platform: "darwin" });
 
     expect(status).toBe(0);
-    expect(mockInstallSkill).toHaveBeenCalledOnce();
+    expect(mockInstallSkillForAgents).not.toHaveBeenCalled();
+    expect(output()).toContain("No Dosu skills are installed");
+  });
+
+  it("returns 0 and hints at dosu skill update when skill refresh fails", async () => {
+    mockCommands({ "brew upgrade dosu-ai/dosu/dosu": { status: 0 } });
+    mockInstallSkillForAgents.mockResolvedValue({ success: false });
+
+    const status = await completeUpgrade("homebrew", { platform: "darwin" });
+
+    expect(status).toBe(0);
+    expect(mockInstallSkillForAgents).toHaveBeenCalledWith(["claude-code"]);
     expect(errors()).toContain("dosu skill update");
   });
 });

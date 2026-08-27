@@ -8,19 +8,19 @@
  * rest of the file.
  */
 
-import { execSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as p from "@clack/prompts";
 import { logger } from "../debug/logger";
 import { FALLBACK_DOSU_RULE, fetchDosuRule } from "../rules/installer";
+import { assertSafeProjectPath } from "./project-root";
 import { formatSetupSummary } from "./styles";
 
 /**
  * Bump when the section content changes meaningfully. The version is stamped
  * into the start marker for compatibility across section revisions.
  */
-const DOSU_SECTION_VERSION = 2;
+const DOSU_SECTION_VERSION = 3;
 
 export const DOSU_SECTION_START = `<!-- dosu:mcp:start v${DOSU_SECTION_VERSION} -->`;
 export const DOSU_SECTION_END = "<!-- dosu:mcp:end -->";
@@ -29,34 +29,21 @@ export const DOSU_SECTION_END = "<!-- dosu:mcp:end -->";
 const SECTION_START_RE = /<!-- dosu:mcp:start(?: v(\d+))? -->/;
 
 type AgentsMdAction = "created" | "updated" | "unchanged";
+type AgentsMdRemoveAction = "removed" | "not_found";
 
 export interface AgentsMdResult {
   path: string;
   action: AgentsMdAction;
 }
 
+export interface AgentsMdRemoveResult {
+  path: string;
+  action: AgentsMdRemoveAction;
+}
+
 interface SectionLocation {
   start: number;
   end: number;
-}
-
-/**
- * True when `cwd` is inside a git work tree. Gates whether setup offers the
- * AGENTS.md step at all — writing an AGENTS.md into an arbitrary directory
- * (home dir, /tmp) would just be litter.
- */
-export function inGitWorkTree(cwd: string = process.cwd()): boolean {
-  try {
-    // Exits 0 but prints "false" in bare repos and inside .git itself, so
-    // the stdout check matters — exit code alone is not enough.
-    const stdout = execSync("git rev-parse --is-inside-work-tree", {
-      cwd,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return stdout.toString().trim() === "true";
-  } catch {
-    return false;
-  }
 }
 
 function lineEndingFor(content: string): "\r\n" | "\n" {
@@ -73,15 +60,13 @@ export function buildDosuAgentsSection(content: string = FALLBACK_DOSU_RULE): st
 }
 
 function findSection(content: string): SectionLocation | null {
-  const startMatch = content.match(SECTION_START_RE);
-  const start = startMatch?.index ?? -1;
-  const end = content.indexOf(DOSU_SECTION_END, Math.max(start, 0));
-
-  if (start === -1 && end === -1) return null;
-  if (start === -1 || end < start) {
+  const starts = [...content.matchAll(new RegExp(SECTION_START_RE.source, "g"))];
+  const ends = [...content.matchAll(new RegExp(DOSU_SECTION_END, "g"))];
+  if (starts.length === 0 && ends.length === 0) return null;
+  if (starts.length !== 1 || ends.length !== 1 || (ends[0]?.index ?? -1) < starts[0].index) {
     throw new Error("Dosu AGENTS.md markers are incomplete; refusing to overwrite the file");
   }
-  return { start, end };
+  return { start: starts[0].index, end: ends[0].index };
 }
 
 /**
@@ -93,6 +78,7 @@ export function upsertDosuAgentsSection(
   content: string = FALLBACK_DOSU_RULE,
 ): AgentsMdResult {
   const path = join(cwd, "AGENTS.md");
+  assertSafeProjectPath(cwd, path);
 
   if (!existsSync(path)) {
     const section = buildDosuAgentsSection(content);
@@ -120,6 +106,29 @@ export function upsertDosuAgentsSection(
   return { path, action: "updated" };
 }
 
+/** Remove only the marker-delimited Dosu section; preserve all user content. */
+export function removeDosuAgentsSection(cwd: string = process.cwd()): AgentsMdRemoveResult {
+  const path = join(cwd, "AGENTS.md");
+  assertSafeProjectPath(cwd, path);
+  if (!existsSync(path)) return { path, action: "not_found" };
+
+  const existing = readFileSync(path, "utf-8");
+  const location = findSection(existing);
+  if (!location) return { path, action: "not_found" };
+
+  const lineEnding = lineEndingFor(existing);
+  const next = (
+    existing.slice(0, location.start) + existing.slice(location.end + DOSU_SECTION_END.length)
+  )
+    .replace(/(?:\r?\n){3,}/g, `${lineEnding}${lineEnding}`)
+    .replace(/^(?:\r?\n)+/, "")
+    .trimEnd();
+
+  if (!next) unlinkSync(path);
+  else writeFileSync(path, `${next}${lineEnding}`);
+  return { path, action: "removed" };
+}
+
 /**
  * Setup-flow wrapper: upsert the section and report via clack. Returns
  * `true` when AGENTS.md ends up carrying the Dosu section (including the
@@ -141,6 +150,23 @@ export async function stepUpdateAgentsMd(
     const msg = err instanceof Error ? err.message : String(err);
     logger.error("setup", `AGENTS.md update failed: ${msg}`);
     p.log.error(`Could not update AGENTS.md: ${msg}`);
+    return false;
+  }
+}
+
+/** Setup-flow wrapper for removing an obsolete project instruction section. */
+export function stepRemoveAgentsMd(cwd: string = process.cwd()): boolean {
+  logger.info("setup", "Step: remove AGENTS.md section");
+  try {
+    const result = removeDosuAgentsSection(cwd);
+    if (result.action === "removed") {
+      p.log.info(formatSetupSummary("AGENTS.md", [{ path: result.path, status: "removed" }]));
+    }
+    return true;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error("setup", `AGENTS.md removal failed: ${msg}`);
+    p.log.error(`Could not remove the Dosu AGENTS.md section: ${msg}`);
     return false;
   }
 }

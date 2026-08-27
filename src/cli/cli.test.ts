@@ -20,6 +20,7 @@ vi.mock("../version/skill-update-check", () => ({ checkForSkillUpdates: vi.fn() 
 vi.mock("../version/pending-tasks-check", () => ({ checkForReadyTasks: vi.fn() }));
 
 import { saveConfig } from "../config/config";
+import { CONFIG_SCHEMA_VERSION } from "../config/schema";
 import type { CommandTelemetry } from "../telemetry/telemetry";
 import { createProgram, shouldRunBackgroundChecks } from "./cli";
 
@@ -50,9 +51,10 @@ describe("CLI", () => {
     expect(cmd?.description()).toContain("latest version");
   });
 
-  it("skips background notices for upgrade", () => {
-    expect(shouldRunBackgroundChecks("upgrade")).toBe(false);
-    expect(shouldRunBackgroundChecks("status")).toBe(true);
+  it("skips background notices for upgrade and the MCP proxy", () => {
+    expect(shouldRunBackgroundChecks("upgrade", ["node", "dosu", "upgrade"])).toBe(false);
+    expect(shouldRunBackgroundChecks("proxy", ["node", "dosu", "mcp", "proxy"])).toBe(false);
+    expect(shouldRunBackgroundChecks("status", ["node", "dosu", "status"])).toBe(true);
   });
 
   it("has login command", () => {
@@ -77,12 +79,17 @@ describe("CLI", () => {
     expect(cmd?.options.find((o) => o.long === "--json")).toBeDefined();
   });
 
-  it("has mcp command with add and list subcommands", () => {
+  it("has mcp command with add, list, and hidden proxy subcommands", () => {
     const program = createProgram();
     const mcpCmd = program.commands.find((c) => c.name() === "mcp");
     expect(mcpCmd).toBeDefined();
     expect(mcpCmd?.commands.find((c) => c.name() === "add")).toBeDefined();
     expect(mcpCmd?.commands.find((c) => c.name() === "list")).toBeDefined();
+    const proxy = mcpCmd?.commands.find((c) => c.name() === "proxy");
+    expect(proxy).toBeDefined();
+    expect(mcpCmd?.helpInformation()).not.toContain("proxy");
+    expect(proxy?.options.find((o) => o.long === "--deployment")).toBeDefined();
+    expect(proxy?.options.find((o) => o.long === "--oss")).toBeDefined();
   });
 
   it("has setup command with --deployment option", () => {
@@ -189,7 +196,7 @@ describe("CLI", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
       saveConfig({
-        schema_version: 2,
+        schema_version: CONFIG_SCHEMA_VERSION,
         active_account: {
           user_id: userID,
           session: { access_token: accessToken, refresh_token: "refresh-secret", expires_at: 0 },

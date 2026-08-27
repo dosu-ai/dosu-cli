@@ -33,20 +33,18 @@ To install a specific release tag:
 DOSU_INSTALL_VERSION=v0.2.0-rc1 curl -fsSL https://cli.dosu.dev/install | sh
 ```
 
-### npx / npm
+### npm
 
 Requires Node.js 22+.
-
-```bash
-npx @dosu/cli setup
-```
-
-Or install globally:
 
 ```bash
 npm install -g @dosu/cli
 dosu setup
 ```
+
+Project setup writes MCP entries that call the stable `dosu` command, so setup
+requires a global CLI installation. A temporary `npx @dosu/cli` invocation will
+stop before changing credentials or project files.
 
 ### Homebrew
 
@@ -102,7 +100,9 @@ Or right-click the binary, select "Open", and click "Open" in the dialog.
 | `dosu logs` | View or manage debug logs (`--tail`, `--clear`) |
 | `dosu telemetry` | Manage usage analytics and error diagnostics (`status`, `enable`, `disable`, `reset`) |
 
-`dosu mcp add` takes `-g, --global` to install for all projects instead of project-local, and `--show-secret` to print the full manual config.
+Coding-agent integrations are project-scoped. `dosu mcp add` accepts
+`-g, --global` only for explicit global connectors such as Claude Desktop and
+manual configuration; `--show-secret` prints the full manual config.
 
 `dosu upgrade` delegates to npm, pnpm, Yarn Classic, or Homebrew only after confirming which manager owns the current installation. Temporary package-runner invocations stay ephemeral, ambiguous or local installs are left unchanged, and standalone binaries receive the latest safe manual download path.
 
@@ -132,26 +132,29 @@ Run `dosu <command> --help` for subcommands and flags.
 
 ### Supported AI tools
 
-`dosu mcp add <id>` and the setup wizard support:
+`dosu setup` configures the project-capable tools below. Claude Desktop and
+manual configuration remain explicit global connectors; tools marked
+unavailable are detected but left unchanged until they support safe project
+configuration.
 
-| ID | Tool |
-|---|---|
-| `claude` | Claude Code |
-| `claude-desktop` | Claude Desktop |
-| `cursor` | Cursor |
-| `vscode` | VS Code |
-| `codex` | Codex CLI |
-| `gemini` | Gemini CLI |
-| `windsurf` | Windsurf |
-| `zed` | Zed |
-| `cline` | Cline |
-| `cline-cli` | Cline CLI |
-| `copilot` | GitHub Copilot CLI |
-| `opencode` | OpenCode |
-| `antigravity` | Antigravity |
-| `mcporter` | MCPorter |
-| `factory` | Factory |
-| `manual` | Manual Configuration (prints config to paste yourself) |
+| ID | Tool | Scope |
+|---|---|---|
+| `claude` | Claude Code | Project |
+| `claude-desktop` | Claude Desktop | Explicit global connector |
+| `cursor` | Cursor | Project |
+| `vscode` | VS Code | Project |
+| `codex` | Codex CLI | Project |
+| `gemini` | Gemini CLI | Project |
+| `windsurf` | Windsurf | Project setup unavailable |
+| `zed` | Zed | Project |
+| `cline` | Cline | Project setup unavailable |
+| `cline-cli` | Cline CLI | Project setup unavailable |
+| `copilot` | GitHub Copilot CLI | Project |
+| `opencode` | OpenCode | Project |
+| `antigravity` | Antigravity | Project setup unavailable |
+| `mcporter` | MCPorter | Project |
+| `factory` | Factory | Project |
+| `manual` | Manual Configuration | Explicit global connector |
 
 ### Non-interactive / agent setup
 
@@ -189,7 +192,14 @@ controls.
 
 ## Configuration
 
-Credentials and the selected deployment live in `~/.config/dosu-cli/config.json`. Set `DOSU_DEV=true` to isolate config under `~/.config/dosu-cli-dev/`.
+Login credentials and per-deployment API keys live in
+`~/.config/dosu-cli/config.json`. Project files contain only a secretless
+`dosu mcp proxy --deployment …` command, so one account can keep multiple
+projects connected to different Dosu deployments. Official Dosu skills are
+installed globally for the agents selected during setup; setup does not copy
+skills into the repository.
+
+Set `DOSU_DEV=true` to isolate config under `~/.config/dosu-cli-dev/`.
 
 To repoint a published build at a different backend without rebuilding, set any of these runtime overrides:
 

@@ -25,9 +25,12 @@ import {
 } from "../config/config";
 import { logger } from "../debug/logger";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
+import { isSafeDeploymentID } from "../mcp/project-proxy";
 import { allSetupProviders } from "../mcp/providers";
 import { fetchDosuRule, installRuleForAgent, isRuleAgent } from "../rules/installer";
-import { inGitWorkTree, upsertDosuAgentsSection } from "../setup/agents-md-step";
+import { upsertDosuAgentsSection } from "../setup/agents-md-step";
+import { GLOBAL_INSTALL_REQUIRED_MESSAGE, setupNeedsGlobalInstall } from "../setup/global-install";
+import { requireProjectRoot } from "../setup/project-root";
 import { emitError, emitNeedUserAction, emitStep } from "./output";
 
 export interface AgentSetupOptions {
@@ -36,7 +39,7 @@ export interface AgentSetupOptions {
   deploymentID?: string;
 }
 
-const NPX_INVOCATION = "npx @dosu/cli@latest";
+const NPX_INVOCATION = "dosu";
 
 /**
  * Run agent-mediated setup end-to-end. Returns the process exit code the
@@ -50,18 +53,48 @@ const NPX_INVOCATION = "npx @dosu/cli@latest";
  * - `2` — CLI usage error (unknown tool, invalid combination of flags).
  */
 export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
+  if (setupNeedsGlobalInstall()) {
+    emitError({
+      step: "setup",
+      reason: "global_install_required",
+      agent_next_steps: GLOBAL_INSTALL_REQUIRED_MESSAGE,
+    });
+    return 2;
+  }
   // 0. Resolve the requested tool up front. We do this before any auth so
   //    the agent gets a usage error immediately instead of after a login
   //    round-trip.
-  const provider = allSetupProviders().find((p) => p.id() === opts.tool.toLowerCase());
-  if (!provider) {
-    const available = allSetupProviders()
+  const providers = allSetupProviders();
+  const provider = providers.find((p) => p.id() === opts.tool.toLowerCase());
+  if (provider?.configurationKind() !== "project") {
+    const available = providers
+      .filter((candidate) => candidate.configurationKind() === "project")
       .map((p) => p.id())
       .join(", ");
     emitError({
       step: "setup",
       reason: "unknown_tool",
       agent_next_steps: `'${opts.tool}' is not a supported tool. Choose one of: ${available}. Re-run with --tool <id>.`,
+    });
+    return 2;
+  }
+  if (opts.deploymentID !== undefined && !isSafeDeploymentID(opts.deploymentID)) {
+    emitError({
+      step: "setup",
+      reason: "invalid_deployment",
+      agent_next_steps:
+        "The deployment ID contains unsupported characters. Choose an ID reported by Dosu and retry.",
+    });
+    return 2;
+  }
+  let projectRoot: string;
+  try {
+    projectRoot = requireProjectRoot();
+  } catch (err: unknown) {
+    emitError({
+      step: "setup",
+      reason: "not_in_git_project",
+      agent_next_steps: err instanceof Error ? err.message : String(err),
     });
     return 2;
   }
@@ -93,12 +126,12 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
 
   // 4. Install Dosu MCP into the requested tool.
   try {
-    provider.install(cfg, /* global */ true);
+    provider.install(cfg, { scope: "project", projectRoot });
     emitStep({
       step: "mcp_install",
       tool: provider.id(),
       tool_name: provider.name(),
-      config_path: provider.globalConfigPath(),
+      config_path: provider.projectConfigPath(projectRoot),
     });
   } catch (err: unknown) {
     emitError({
@@ -117,7 +150,7 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
   try {
     if (isRuleAgent(provider.id())) {
       instruction = await fetchDosuRule();
-      const rule = installRuleForAgent(provider.id(), instruction);
+      const rule = installRuleForAgent(provider.id(), instruction, projectRoot);
       if (rule) {
         emitStep({
           step: "rule_install",
@@ -166,28 +199,25 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
     }
   }
 
-  // 7. Add the project-level pointer when setup runs from a git work tree.
-  // Use the low-level writer instead of the clack wrapper so stdout stays
-  // valid NDJSON.
-  if (inGitWorkTree()) {
-    try {
-      instruction ??= await fetchDosuRule();
-      const agentsMd = upsertDosuAgentsSection(process.cwd(), instruction);
-      emitStep({
-        step: "agents_md_install",
-        path: agentsMd.path,
-        action: agentsMd.action,
-      });
-    } catch (err: unknown) {
-      emitError({
-        step: "agents_md_install",
-        reason: "install_failed",
-        agent_next_steps: `Dosu's agent integrations were installed, but AGENTS.md could not be updated: ${
-          err instanceof Error ? err.message : String(err)
-        }. Re-run this setup command; installation is idempotent.`,
-      });
-      return 1;
-    }
+  // 7. Add the canonical project instructions. Use the low-level writer so
+  // stdout stays valid NDJSON.
+  try {
+    instruction ??= await fetchDosuRule();
+    const agentsMd = upsertDosuAgentsSection(projectRoot, instruction);
+    emitStep({
+      step: "agents_md_install",
+      path: agentsMd.path,
+      action: agentsMd.action,
+    });
+  } catch (err: unknown) {
+    emitError({
+      step: "agents_md_install",
+      reason: "install_failed",
+      agent_next_steps: `Dosu's agent integrations were installed, but AGENTS.md could not be updated: ${
+        err instanceof Error ? err.message : String(err)
+      }. Re-run this setup command; installation is idempotent.`,
+    });
+    return 1;
   }
 
   emitStep({
@@ -485,6 +515,13 @@ async function ensureAPIKey(client: Client, cfg: Config): Promise<{ code: number
  * Mirrors the marketing one-liner so the agent can copy/paste it back.
  */
 export function buildResumeCommand(tool: string, ticket: string, deploymentID?: string): string {
+  const safeToken = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,1023}$/;
+  if (!safeToken.test(tool) || !safeToken.test(ticket)) {
+    throw new Error("Cannot build a resume command with unsafe arguments");
+  }
+  if (deploymentID !== undefined && !isSafeDeploymentID(deploymentID)) {
+    throw new Error("Cannot build a resume command with an invalid deployment ID");
+  }
   const parts = [NPX_INVOCATION, "setup", "--agent", "--tool", tool, "--login-ticket", ticket];
   if (deploymentID) {
     parts.push("--deployment", deploymentID);
@@ -494,5 +531,7 @@ export function buildResumeCommand(tool: string, ticket: string, deploymentID?: 
 
 /** Provider listing for `--tool` validation. Exported for tests. */
 export function listAgentSupportedToolIDs(): string[] {
-  return allSetupProviders().map((p) => p.id());
+  return allSetupProviders()
+    .filter((provider) => provider.configurationKind() === "project")
+    .map((provider) => provider.id());
 }

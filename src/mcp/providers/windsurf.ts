@@ -6,7 +6,7 @@ export const WindsurfProvider = () =>
   createJSONProvider({
     providerName: "Windsurf",
     providerID: "windsurf",
-    local: false,
+    configurationKind: "unsupported",
     priorityValue: 9,
     paths: [join(homedir(), ".codeium", "windsurf")],
     globalPath: join(homedir(), ".codeium", "windsurf", "mcp_config.json"),
