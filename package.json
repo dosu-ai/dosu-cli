@@ -57,6 +57,7 @@
     "superjson": "^2.2.6",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9",
-    "write-file-atomic": "^8.0.0"
+    "write-file-atomic": "^8.0.0",
+    "zod": "^4.5.1"
   }
 }

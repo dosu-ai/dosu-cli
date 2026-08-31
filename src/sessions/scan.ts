@@ -27,7 +27,7 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 
-export type SessionHarness = "claude" | "cursor" | "codex" | "opencode";
+type SessionHarness = "claude" | "cursor" | "codex" | "opencode";
 
 export interface AgentSession {
   /** Session id: the log filename stem, or the DB row id for opencode. */

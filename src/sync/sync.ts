@@ -43,7 +43,7 @@ const GATE_WINDOW = 200;
  */
 export const MINE_BATCH_LIMIT = 5;
 
-export type SyncStatus =
+type SyncStatus =
   | "backlog"
   | "nothing-new"
   | "skipped-backoff"

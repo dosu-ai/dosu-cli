@@ -17,9 +17,9 @@
  */
 
 /** Every replacement is `[redacted:<kind>]`; kinds mirror deja-vu's. */
-export const REDACTION_MARKER = "[redacted:";
+const REDACTION_MARKER = "[redacted:";
 
-export type RedactionCounts = Record<string, number>;
+type RedactionCounts = Record<string, number>;
 
 export interface RedactionResult {
   text: string;
