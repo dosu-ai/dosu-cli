@@ -32,3 +32,11 @@ export function getSupabaseURL(): string {
 export function getSupabaseAnonKey(): string {
   return process.env.SUPABASE_ANON_KEY_OVERRIDE ?? process.env.SUPABASE_ANON_KEY ?? "";
 }
+
+/**
+ * Base URL of the Dosu LLM gateway (the miner's ANTHROPIC_BASE_URL).
+ * Derived from the backend URL; the SDK binary appends `/v1/messages`.
+ */
+export function getLlmGatewayURL(): string {
+  return process.env.DOSU_LLM_GATEWAY_URL_OVERRIDE ?? `${getBackendURL()}/v1/llm-gateway`;
+}

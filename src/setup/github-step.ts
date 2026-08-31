@@ -17,8 +17,12 @@
  *      10 seconds, then return to the same multiselect with the updated
  *      repository list.
  *   6. For each selected repo, fan out tRPC:
- *      - `workspaces.create` (creates github deployment + fires welcome email)
- *      - `dataSource.create` (creates data_source + github_data_source_config trigger)
+ *      - `workspaces.create` (creates github deployment + fires welcome email),
+ *        unless the space already has a github deployment for the repo — an
+ *        orphan Monitor row from a detached/GC'd source — which is reused.
+ *      - `dataSource.create` (creates data_source + github_data_source_config
+ *        trigger), unless the org already has a github data_source for the
+ *        repo (e.g. attached to another Library) — which is reused unsynced.
  *      - `workspaces.listForSpace` + `deploymentDataSource.create` per deployment
  *        to link the new data_source into every workspace in the space
  *   7. Return success + the first created deployment_id.
@@ -109,6 +113,13 @@ interface AvailableRepo {
   slug: string; // "owner/repo"
   is_deployed: boolean;
   created_at?: string;
+  /**
+   * Forks can't be synced by the backend (`sync_github_data_source` targets
+   * the upstream), so the web attach modal disables them — the CLI mirrors
+   * that instead of letting the connect attempt fail after the fact.
+   */
+  is_fork?: boolean | null;
+  fork_parent_slug?: string | null;
 }
 
 export function parseAvailableRepos(value: unknown): AvailableRepo[] {
@@ -127,7 +138,15 @@ export function parseAvailableRepos(value: unknown): AvailableRepo[] {
       typeof repository.is_deployed !== "boolean" ||
       ("created_at" in repository &&
         repository.created_at !== undefined &&
-        typeof repository.created_at !== "string")
+        typeof repository.created_at !== "string") ||
+      ("is_fork" in repository &&
+        repository.is_fork !== undefined &&
+        repository.is_fork !== null &&
+        typeof repository.is_fork !== "boolean") ||
+      ("fork_parent_slug" in repository &&
+        repository.fork_parent_slug !== undefined &&
+        repository.fork_parent_slug !== null &&
+        typeof repository.fork_parent_slug !== "string")
     ) {
       throw new Error(
         `githubRepository.listForOrg returned an invalid repository at index ${index}`,
@@ -174,6 +193,119 @@ export function detectGitRepo(cwd: string = process.cwd()): DetectedRepo | null 
 
   const [, owner, name] = m;
   return { owner, name, slug: `${owner}/${name}` };
+}
+
+interface SpaceGithubSources {
+  repositoryIds: Set<number>;
+  slugs: Set<string>;
+}
+
+/**
+ * The space's Library sources are the truth for "connected" — the same truth
+ * `spaceHasGithubSource` (flow.ts) uses for the connect offer. `is_deployed`
+ * from `listForOrg` only says a github deployment row exists somewhere in the
+ * org; orphan Monitor rows (source detached or GC'd, deployment left behind)
+ * made the picker mark repos "Already connected" that this space can't
+ * actually read — and made them unselectable forever. Returns `null` when the
+ * backend can't answer (old backend, transient failure) so the caller can
+ * fall back to `is_deployed`.
+ */
+async function fetchSpaceGithubSources(
+  trpc: TypedClient,
+  spaceID: string,
+): Promise<SpaceGithubSources | null> {
+  try {
+    const sources = await trpc.libraries.sourcesList.query(spaceID);
+    const github = (sources ?? []).filter((source) => source.provider_slug === "github");
+    return {
+      repositoryIds: new Set(
+        github
+          .map((source) => source.repository_id)
+          .filter((id): id is number => typeof id === "number"),
+      ),
+      // Data source `name` is the repo slug for github sources — fallback
+      // match for rows missing repository_id.
+      slugs: new Set(github.map((source) => source.name).filter(Boolean)),
+    };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn("setup", `libraries.sourcesList failed, falling back to is_deployed: ${msg}`);
+    return null;
+  }
+}
+
+function isConnectedToSpace(repo: AvailableRepo, sources: SpaceGithubSources | null): boolean {
+  if (sources === null) return repo.is_deployed;
+  return sources.repositoryIds.has(repo.repository_id) || sources.slugs.has(repo.slug);
+}
+
+/**
+ * `repository_id` → `deployment_id` for github deployments already in the
+ * space. Lets the connect path reuse an orphan Monitor row instead of
+ * creating a duplicate deployment with the same name. Fail-open to an empty
+ * map — worst case we create a fresh deployment, the pre-fix behavior.
+ */
+async function fetchSpaceGithubDeployments(
+  trpc: TypedClient,
+  spaceID: string,
+): Promise<Map<number, string>> {
+  const map = new Map<number, string>();
+  try {
+    const rows: unknown = await trpc.workspaces.listForSpace.query(spaceID);
+    if (!Array.isArray(rows)) return map;
+    for (const row of rows) {
+      if (
+        row !== null &&
+        typeof row === "object" &&
+        "deployment_id" in row &&
+        typeof row.deployment_id === "string" &&
+        "provider_slug" in row &&
+        row.provider_slug === "github" &&
+        "repository_id" in row &&
+        typeof row.repository_id === "number" &&
+        !map.has(row.repository_id)
+      ) {
+        map.set(row.repository_id, row.deployment_id);
+      }
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn("setup", `listForSpace during connect failed: ${msg}`);
+  }
+  return map;
+}
+
+/**
+ * `repository_id` → `data_source_id` for github data sources anywhere in the
+ * org. A repo attached to another Library (or detached but not GC'd) already
+ * has a data_source — reuse it instead of creating a duplicate. Fail-open to
+ * an empty map.
+ */
+async function fetchOrgGithubDataSources(
+  trpc: TypedClient,
+  orgID: string,
+): Promise<Map<number, string>> {
+  const map = new Map<number, string>();
+  try {
+    const listed = await trpc.dataSource.list.query({
+      org_id: orgID,
+      excluded_provider_slugs: [],
+    });
+    for (const source of listed ?? []) {
+      if (
+        source.provider_slug === "github" &&
+        typeof source.repository_id === "number" &&
+        source.data_source_id &&
+        !map.has(source.repository_id)
+      ) {
+        map.set(source.repository_id, source.data_source_id);
+      }
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn("setup", `dataSource.list during connect failed: ${msg}`);
+  }
+  return map;
 }
 
 async function fetchListForOrg(trpc: TypedClient, orgID: string): Promise<AvailableRepo[]> {
@@ -225,7 +357,19 @@ function buildPromptOptions(
       hint: "Re-check Dosu for new repos",
     },
     { kind: "separator" as const },
-    ...repos.map((r) => ({ kind: "repo" as const, label: r.slug, value: r.slug })),
+    ...repos.map((r) =>
+      r.is_fork === true
+        ? {
+            kind: "repo" as const,
+            label: r.slug,
+            value: r.slug,
+            disabled: true,
+            hint: r.fork_parent_slug
+              ? `Forked repo — connect ${r.fork_parent_slug} instead`
+              : "Forked repo — can't be connected",
+          }
+        : { kind: "repo" as const, label: r.slug, value: r.slug },
+    ),
   ];
 }
 
@@ -342,56 +486,79 @@ async function openGitHubInstallFlow(
   }
 }
 
+/** Pre-existing rows the connect path should reuse instead of duplicating. */
+interface ExistingRepoWiring {
+  deploymentID?: string;
+  dataSourceID?: string;
+}
+
 /**
- * Create one github deployment + its data_source, then link the data_source
- * into every deployment in the space. Mirrors the web
+ * Create (or reuse) one github deployment + its data_source, then link the
+ * data_source into every deployment in the space. Mirrors the web
  * `OnboardingGithub.handleNext` + `useCreateDataSources` flow exactly.
  *
- * If `dataSource.create` returns nothing the deployment is rolled back so
- * downstream verify/report logic never has to reason about
- * deployment-without-data_source orphans.
+ * If `dataSource.create` returns nothing a deployment created in this run is
+ * rolled back so downstream verify/report logic never has to reason about
+ * deployment-without-data_source orphans. Reused deployments are left alone
+ * on that path — we didn't create them.
  */
 async function createDeploymentForRepo(
   trpc: TypedClient,
   orgID: string,
   spaceID: string,
   repo: AvailableRepo,
+  existing: ExistingRepoWiring = {},
 ): Promise<{ deployment_id: string; data_source_id: string } | null> {
   try {
-    const deployment = await trpc.workspaces.create.mutate({
-      org_id: orgID,
-      space_id: spaceID,
-      enabled: true,
-      name: repo.slug,
-      description: "",
-      provider_slug: "github",
-      repository_id: repo.repository_id,
-      metadata: {
-        app: { deployment_mode: "normal", setup_mode: "auto" },
+    let deploymentID = existing.deploymentID;
+    let createdDeployment = false;
+    if (deploymentID) {
+      logger.info("setup", `Reusing existing deployment ${deploymentID} for ${repo.slug}`);
+    } else {
+      const deployment = await trpc.workspaces.create.mutate({
+        org_id: orgID,
+        space_id: spaceID,
+        enabled: true,
+        name: repo.slug,
+        description: "",
         provider_slug: "github",
-      },
-      config: DEFAULT_DEPLOYMENT_CONFIG_GITHUB,
-    });
-    if (!deployment?.deployment_id) {
-      logger.warn("setup", `workspaces.create returned no deployment for ${repo.slug}`);
-      return null;
+        repository_id: repo.repository_id,
+        metadata: {
+          app: { deployment_mode: "normal", setup_mode: "auto" },
+          provider_slug: "github",
+        },
+        config: DEFAULT_DEPLOYMENT_CONFIG_GITHUB,
+      });
+      if (!deployment?.deployment_id) {
+        logger.warn("setup", `workspaces.create returned no deployment for ${repo.slug}`);
+        return null;
+      }
+      deploymentID = deployment.deployment_id;
+      createdDeployment = true;
     }
 
-    const dataSource = await trpc.dataSource.create.mutate({
-      org_id: orgID,
-      provider_slug: "github",
-      name: repo.slug,
-      description: "",
-      repository_id: repo.repository_id,
-    });
-    if (!dataSource?.data_source_id) {
-      logger.warn("setup", `dataSource.create returned no data_source for ${repo.slug}`);
-      await deleteOrphanDeployment(trpc, deployment.deployment_id, repo.slug);
-      return null;
+    let dataSourceID = existing.dataSourceID;
+    if (dataSourceID) {
+      // Deliberately no `syncDataSource` here: a failed sync makes the backend
+      // delete the data_source, which would break any other Library it's
+      // attached to. An existing source has already synced (or is syncing).
+      logger.info("setup", `Reusing existing data source ${dataSourceID} for ${repo.slug}`);
+    } else {
+      const dataSource = await trpc.dataSource.create.mutate({
+        org_id: orgID,
+        provider_slug: "github",
+        name: repo.slug,
+        description: "",
+        repository_id: repo.repository_id,
+      });
+      if (!dataSource?.data_source_id) {
+        logger.warn("setup", `dataSource.create returned no data_source for ${repo.slug}`);
+        if (createdDeployment) await deleteOrphanDeployment(trpc, deploymentID, repo.slug);
+        return null;
+      }
+      dataSourceID = dataSource.data_source_id;
+      await trpc.dataSource.syncDataSource.mutate({ data_source_id: dataSourceID });
     }
-    const dataSourceID = dataSource.data_source_id;
-
-    await trpc.dataSource.syncDataSource.mutate({ data_source_id: dataSourceID });
 
     await trpc.dataSource.attachToSpace.mutate({
       space_id: spaceID,
@@ -400,16 +567,26 @@ async function createDeploymentForRepo(
     const spaceDeploymentIds = parseDeploymentIds(
       await trpc.workspaces.listForSpace.query(spaceID),
     );
+    const finalDataSourceID = dataSourceID;
     await Promise.all(
-      spaceDeploymentIds.map((deploymentID) =>
-        trpc.deploymentDataSource.create.mutate({
-          deployment_id: deploymentID,
-          data_source_id: dataSourceID,
-        }),
-      ),
+      spaceDeploymentIds.map(async (linkDeploymentID) => {
+        try {
+          await trpc.deploymentDataSource.create.mutate({
+            deployment_id: linkDeploymentID,
+            data_source_id: finalDataSourceID,
+          });
+        } catch (err: unknown) {
+          // A link may already exist when reusing rows — non-fatal.
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn(
+            "setup",
+            `Failed to link data source into deployment ${linkDeploymentID}: ${msg}`,
+          );
+        }
+      }),
     );
     return {
-      deployment_id: deployment.deployment_id,
+      deployment_id: deploymentID,
       data_source_id: dataSourceID,
     };
   } catch (err: unknown) {
@@ -443,6 +620,12 @@ interface VerifyDataSourcesOptions {
  * a few seconds later. CLI-side this looks like a successful create, so
  * without a follow-up read the user sees "Connected N" even when the row
  * has already been GC'd server-side.
+ *
+ * "Missing from the list" is ambiguous right after creation — a fresh row can
+ * lag behind the create (the list reads a DB view), so absence on an early
+ * poll must NOT be read as "deleted". The only unambiguous early exit is
+ * success (every expected id visible); anything still missing when the
+ * budget runs out is reported as dropped.
  */
 export async function verifyDataSourcesPersist(
   trpc: TypedClient,
@@ -460,7 +643,6 @@ export async function verifyDataSourcesPersist(
 
   const startedAt = Date.now();
   let alive = new Set<string>();
-  let dropped = new Set<string>();
   let firstIteration = true;
 
   while (firstIteration || Date.now() - startedAt < timeoutMs) {
@@ -482,18 +664,20 @@ export async function verifyDataSourcesPersist(
     const presentNow = new Set(
       listed.map((d) => d.data_source_id).filter((id): id is string => Boolean(id)),
     );
-
     alive = new Set([...expected].filter((id) => presentNow.has(id)));
-    dropped = new Set([...expected].filter((id) => !presentNow.has(id)));
 
-    // Earliest exit: any expected id has already been GC'd by the backend.
-    // Once one is gone we don't gain anything by polling longer.
-    if (dropped.size > 0) return { alive, dropped };
+    // Every expected id is visible — unambiguous success, stop polling.
+    if (alive.size === expected.size) {
+      return { alive, dropped: new Set() };
+    }
 
     if (timeoutMs === 0) break;
     await sleep(intervalMs);
   }
 
+  // Still missing after the full budget: the backend GC'd them (or they never
+  // became visible, which is equally unusable) — report as dropped.
+  const dropped = new Set([...expected].filter((id) => !alive.has(id)));
   return { alive, dropped };
 }
 
@@ -534,29 +718,35 @@ export async function stepConnectGitHubRepo(
 
   const trpc = createTypedClient(cfg);
   let repos = await fetchListForOrg(trpc, orgID);
+  // Space-scoped truth for the "Already connected" split. `is_deployed` alone
+  // is org-scoped and counts orphan Monitor rows, which both mislabels repos
+  // as connected and makes them permanently unselectable (the 0-available
+  // dead end). Null → old backend, fall back to `is_deployed`.
+  const spaceSources = await fetchSpaceGithubSources(trpc, spaceID);
 
   while (true) {
-    const undeployed = repos.filter((r) => !r.is_deployed);
-    const deployed = repos.filter((r) => r.is_deployed);
+    const available = repos.filter((r) => !isConnectedToSpace(r, spaceSources));
+    const connected = repos.filter((r) => isConnectedToSpace(r, spaceSources));
 
     // Already-connected repos are shown as an informational block above the
     // multiselect so the user can see what's set up, but the cursor can't land
     // on them. Clack has no per-option `disabled`, so this is the only way to
     // make them truly non-interactive.
-    if (deployed.length > 0) {
-      const lines = deployed.map((r) => `  ${dim(r.slug)}`).join("\n");
+    if (connected.length > 0) {
+      const lines = connected.map((r) => `  ${dim(r.slug)}`).join("\n");
       p.log.info(`${dim("Already connected")}\n${lines}`);
     }
 
+    const selectableCount = available.filter((r) => r.is_fork !== true).length;
     const selected = await promptGitHubRepositories({
-      message: `Select repositories to connect ${dim(`(${undeployed.length} available)`)}`,
-      options: buildPromptOptions(undeployed),
+      message: `Select repositories to connect ${dim(`(${selectableCount} available)`)}`,
+      options: buildPromptOptions(available),
       initialValues: [],
       maxItems: REPO_MULTISELECT_MAX_ITEMS,
     });
     if (p.isCancel(selected)) {
       logger.info("setup", "Repository selection cancelled");
-      return { advance: false, has_connected_repo: deployed.length > 0 };
+      return { advance: false, has_connected_repo: connected.length > 0 };
     }
 
     if (selected === ADD_REPOSITORIES_VALUE) {
@@ -565,7 +755,7 @@ export async function stepConnectGitHubRepo(
         refresh = await waitForRepositoryRefresh(trpc, orgID, repos, opts.refresh);
       }, opts.install);
       if (installationID === null) {
-        return { advance: false, has_connected_repo: deployed.length > 0 };
+        return { advance: false, has_connected_repo: connected.length > 0 };
       }
       repos = refresh.repos;
       if (!refresh.foundNew) {
@@ -593,16 +783,25 @@ export async function stepConnectGitHubRepo(
     const slugs = selected as string[];
     if (slugs.length === 0) {
       p.log.info("No repositories selected.");
-      return { advance: true, has_connected_repo: deployed.length > 0 };
+      return { advance: true, has_connected_repo: connected.length > 0 };
     }
 
     const s = p.spinner();
     s.start(`Connecting ${slugs.length} repo${slugs.length === 1 ? "" : "s"}...`);
+    // A selectable repo may still have leftover rows: an orphan github
+    // deployment in this space, or a github data_source living in the org
+    // (attached to another Library, or detached). Reuse those instead of
+    // creating same-named duplicates.
+    const existingDeployments = await fetchSpaceGithubDeployments(trpc, spaceID);
+    const existingDataSources = await fetchOrgGithubDataSources(trpc, orgID);
     const created: { deployment_id: string; data_source_id: string; slug: string }[] = [];
     for (const slug of slugs) {
       const repo = repos.find((r) => r.slug === slug);
       if (!repo) continue;
-      const result = await createDeploymentForRepo(trpc, orgID, spaceID, repo);
+      const result = await createDeploymentForRepo(trpc, orgID, spaceID, repo, {
+        deploymentID: existingDeployments.get(repo.repository_id),
+        dataSourceID: existingDataSources.get(repo.repository_id),
+      });
       if (result) {
         created.push({
           deployment_id: result.deployment_id,

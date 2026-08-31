@@ -15,7 +15,7 @@ type PromptOption =
       hint?: string;
     }
   | { kind: "separator" }
-  | { kind: "repo"; value: string; label: string; hint?: string };
+  | { kind: "repo"; value: string; label: string; hint?: string; disabled?: boolean };
 
 const ACTION_OPTION: PromptOption = {
   kind: "action",
@@ -165,6 +165,57 @@ describe("GitHubRepoPrompt", () => {
     const prompt = makePrompt(options);
     expect(prompt.cursor).toBe(1);
   });
+
+  it("skips over a disabled repo when moving the cursor", () => {
+    const options: PromptOption[] = [
+      ACTION_OPTION,
+      { kind: "repo", value: "fork/one", label: "fork/one", disabled: true, hint: "Forked repo" },
+      ...repoOptions("a/b"),
+    ];
+    const prompt = makePrompt(options);
+    prompt.emit("cursor", "down");
+    expect(prompt.cursor).toBe(2);
+    prompt.emit("cursor", "up");
+    expect(prompt.cursor).toBe(0);
+  });
+
+  it("excludes disabled repos from select-all", () => {
+    const options: PromptOption[] = [
+      ACTION_OPTION,
+      { kind: "repo", value: "fork/one", label: "fork/one", disabled: true },
+      ...repoOptions("a/b", "c/d"),
+    ];
+    const prompt = makePrompt(options);
+    prompt.emit("cursor", "down");
+    prompt.emit("key", "a", {});
+    expect(prompt.value).toEqual(["a/b", "c/d"]);
+    prompt.emit("key", "a", {});
+    expect(prompt.value).toEqual([]);
+  });
+
+  it("ignores initialValues that point at a disabled repo", () => {
+    const options: PromptOption[] = [
+      ACTION_OPTION,
+      { kind: "repo", value: "fork/one", label: "fork/one", disabled: true },
+      ...repoOptions("a/b"),
+    ];
+    const prompt = makePrompt(options, { initialValues: ["fork/one"] });
+    expect(prompt.cursor).toBe(0);
+    expect(prompt.value).toBe(ADD_REPOSITORIES_VALUE);
+  });
+
+  it("does not toggle a disabled repo even if space fires while it is current", () => {
+    // The cursor normally can't land on a disabled option; force it there to
+    // cover the toggleCurrent guard directly.
+    const options: PromptOption[] = [
+      { kind: "repo", value: "fork/one", label: "fork/one", disabled: true },
+      ...repoOptions("a/b"),
+    ];
+    const prompt = makePrompt(options);
+    (prompt as unknown as { cursor: number }).cursor = 0;
+    prompt.emit("cursor", "space");
+    expect(prompt.value).toEqual([]);
+  });
 });
 
 describe("GitHubRepoPrompt rendering", () => {
@@ -265,6 +316,35 @@ describe("GitHubRepoPrompt rendering", () => {
     }
     const output = render(prompt);
     expect(output).toContain("...");
+  });
+
+  it("renders a disabled repo dimmed with its hint and no interactive checkbox states", () => {
+    const options: PromptOption[] = [
+      ACTION_OPTION,
+      {
+        kind: "repo",
+        value: "test-forker/driver",
+        label: "test-forker/driver",
+        disabled: true,
+        hint: "Forked repo — connect node-escpos/driver instead",
+      },
+      ...repoOptions("a/b"),
+    ];
+    const prompt = makePrompt(options);
+    const output = render(prompt);
+    expect(output).toContain("test-forker/driver");
+    expect(output).toContain("Forked repo — connect node-escpos/driver instead");
+  });
+
+  it("renders a disabled repo without a hint", () => {
+    const options: PromptOption[] = [
+      ACTION_OPTION,
+      { kind: "repo", value: "fork/one", label: "fork/one", disabled: true },
+      ...repoOptions("a/b"),
+    ];
+    const prompt = makePrompt(options);
+    const output = render(prompt);
+    expect(output).toContain("fork/one");
   });
 
   it("renders a dim horizontal line for separator options", () => {

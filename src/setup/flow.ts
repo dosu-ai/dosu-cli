@@ -4,8 +4,10 @@
 
 import { randomUUID } from "node:crypto";
 import * as p from "@clack/prompts";
+import { isTRPCClientError } from "@trpc/client";
 import { OAuthCallbackError } from "../auth/errors";
 import { Client, type Deployment, type Org, SessionExpiredError } from "../client/client";
+import type { TypedClient } from "../client/trpc";
 import { installSkill, skillInstallTargetForProvider } from "../commands/skill";
 import {
   bindAccountIdentity,
@@ -19,6 +21,7 @@ import {
 } from "../config/config";
 import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
+import { getHookAgent } from "../hooks/agents";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { inGitWorkTree, stepUpdateAgentsMd } from "./agents-md-step";
@@ -41,10 +44,18 @@ export interface SetupOptions {
 
 export type ConfigAction = "install" | "remove" | "skip";
 
+interface HookResult {
+  name: string;
+  path: string;
+  note?: string;
+}
+
 export interface ConfigResult {
   provider: SetupProvider;
   action: ConfigAction;
   error?: Error;
+  /** Set when a knowledge sync hook was enabled alongside this agent's MCP install. */
+  hook?: HookResult;
 }
 
 export interface ToolSelection {
@@ -641,15 +652,14 @@ async function stepSetupHandshake(cfg: Config, onboardingRunID: string): Promise
 }
 
 /**
- * When the selected MCP's space has no connected GitHub repo yet, warn and
- * offer the interactive GitHub connect step (`stepConnectGitHubRepo`: browser
- * App install + repo multiselect). Choosing "Skip for now" prints where to do
- * it later and setup proceeds.
+ * When the selected MCP's space has no GitHub source in its Library yet, warn
+ * and offer the interactive GitHub connect step (`stepConnectGitHubRepo`:
+ * browser App install + repo multiselect). Choosing "Skip for now" prints
+ * where to do it later and setup proceeds.
  *
- * Repos connect at space level — the connect step creates a `github`
- * deployment in the target space and links the source into every workspace
- * there — so the guard checks the space this MCP serves. GitHub repos
- * connected elsewhere in the org don't feed this MCP and don't count.
+ * Repos connect at space level, so the guard checks the space this MCP
+ * serves — GitHub sources connected elsewhere in the org don't feed this MCP
+ * and don't count.
  *
  * Fail-open by design: a failed lookup skips the offer silently —
  * this step is a nudge, never a gate, so setup always proceeds.
@@ -663,16 +673,14 @@ async function stepOfferGithubConnect(cfg: Config): Promise<void> {
   try {
     const { createTypedClient } = await import("../client/trpc");
     const trpc = createTypedClient(cfg);
-    const spaceDeployments: { provider_slug?: string | null }[] | null =
-      await trpc.workspaces.listForSpace.query(target.space_id);
-    if ((spaceDeployments ?? []).some((d) => d.provider_slug === "github")) return;
+    if (await spaceHasGithubSource(trpc, target.space_id)) return;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn("setup", `GitHub source check failed, skipping offer: ${msg}`);
     return;
   }
 
-  logger.info("setup", "Step: offer GitHub connect (no github deployment in the MCP's space)");
+  logger.info("setup", "Step: offer GitHub connect (no GitHub source in the MCP's Library)");
   p.log.warn("No GitHub repos are connected to this MCP yet — it can't answer from your code.");
   const connectNow = await p.confirm({
     message: "Connect a GitHub repo now?",
@@ -687,6 +695,28 @@ async function stepOfferGithubConnect(cfg: Config): Promise<void> {
     return;
   }
   await stepConnectGitHubRepo(cfg);
+}
+
+/**
+ * The Library's attached sources (`libraries.sourcesList` — the same list the
+ * web Library view shows) are the truth for "does this MCP answer from code".
+ * Deployments are the wrong signal: removing a source in the web UI leaves its
+ * Monitor (`github` deployment) row behind, and gating on deployments let that
+ * orphan suppress the connect offer forever. Backends that predate the
+ * libraries router fall back to the old deployment heuristic.
+ */
+async function spaceHasGithubSource(trpc: TypedClient, spaceID: string): Promise<boolean> {
+  try {
+    const sources = await trpc.libraries.sourcesList.query(spaceID);
+    return (sources ?? []).some((source) => source.provider_slug === "github");
+  } catch (err: unknown) {
+    const missingProcedure =
+      isTRPCClientError(err) && (err.data as { code?: string } | null)?.code === "NOT_FOUND";
+    if (!missingProcedure) throw err;
+    const spaceDeployments: { provider_slug?: string | null }[] | null =
+      await trpc.workspaces.listForSpace.query(spaceID);
+    return (spaceDeployments ?? []).some((d) => d.provider_slug === "github");
+  }
 }
 
 async function resolveCloudSetupContext(cfg: Config): Promise<CloudSetupContext | null> {
@@ -923,6 +953,31 @@ async function stepSelectTools(detected: SetupProvider[]): Promise<ToolSelection
   return result;
 }
 
+/**
+ * Session-end knowledge sync hooks ride along with the MCP bundle: an agent
+ * selected for install gets the hook enabled, an unticked agent gets it
+ * removed. Not every MCP provider is hook-capable — `getHookAgent` decides.
+ *
+ * Fail-open: a hook config problem (e.g. an unparseable settings file) is
+ * reported but never fails the agent's MCP setup.
+ */
+function syncSessionHook(providerID: string, action: "enable" | "disable"): HookResult | null {
+  const agent = getHookAgent(providerID);
+  if (!agent) return null;
+  try {
+    if (action === "enable") agent.enable();
+    else agent.disable();
+    logger.info("setup", `Knowledge sync hook ${action}d for ${providerID}`);
+    const note = agent.enableNote?.();
+    return { name: agent.name(), path: agent.configPath(), ...(note ? { note } : {}) };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn("setup", `Knowledge sync hook ${action} failed for ${providerID}: ${msg}`);
+    p.log.warn(`Could not ${action} the knowledge sync hook for ${agent.name()}: ${msg}`);
+    return null;
+  }
+}
+
 export function stepConfigureTools(cfg: Config, selection: ToolSelection): ConfigResult[] {
   const results: ConfigResult[] = [];
 
@@ -930,7 +985,8 @@ export function stepConfigureTools(cfg: Config, selection: ToolSelection): Confi
     try {
       provider.install(cfg, true);
       logger.info("setup", `Configured ${provider.name()}`);
-      results.push({ provider, action: "install" });
+      const hook = syncSessionHook(provider.id(), "enable");
+      results.push({ provider, action: "install", ...(hook ? { hook } : {}) });
     } catch (err: unknown) {
       /* v8 ignore next -- err is always Error in practice */
       const error = err instanceof Error ? err : new Error(String(err));
@@ -948,6 +1004,7 @@ export function stepConfigureTools(cfg: Config, selection: ToolSelection): Confi
       provider.remove(true);
       logger.info("setup", `Removed ${provider.name()}`);
       results.push({ provider, action: "remove" });
+      syncSessionHook(provider.id(), "disable");
     } catch (err: unknown) {
       /* v8 ignore next -- err is always Error in practice */
       const error = err instanceof Error ? err : new Error(String(err));
@@ -982,6 +1039,23 @@ export function stepShowSummary(results: ConfigResult[]): void {
         })),
       ),
     );
+  }
+
+  // Knowledge sync hooks ride along with the MCP install; show them as their
+  // own bundle item so users see exactly what was written where.
+  const hooked = installed.flatMap((result) => (result.hook ? [result.hook] : []));
+  if (hooked.length > 0) {
+    p.log.success(
+      `${formatSetupSummary(
+        `Knowledge sync hooks enabled for ${hooked.length} agent(s):`,
+        hooked.map((hook) => ({ label: hook.name, path: hook.path })),
+      )}\n${dim(
+        "Dosu scans finished agent sessions in the background. Disable anytime with 'dosu knowledge hooks disable'.",
+      )}`,
+    );
+    for (const hook of hooked) {
+      if (hook.note) p.log.info(dim(hook.note));
+    }
   }
 
   if (removed.length > 0) {

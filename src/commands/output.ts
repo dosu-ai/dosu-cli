@@ -8,15 +8,28 @@ import pc from "picocolors";
 const stripAnsi = (str: string): string => str.replace(/\x1b\[[0-9;]*m/g, "");
 
 /**
+ * Bun's console.log silently truncates strings beyond 64KB once
+ * `process.stdout` has been materialized (which Commander's constructor
+ * does), corrupting large `--json` payloads. `process.stdout.write` is not
+ * affected, so large emissions go through it; small ones stay on console.log,
+ * which the test suites capture.
+ */
+const CONSOLE_SAFE_CHARS = 32 * 1024;
+
+function printJSON(data: unknown): void {
+  const text = JSON.stringify(data, null, 2);
+  if (text.length <= CONSOLE_SAFE_CHARS) {
+    console.log(text);
+  } else {
+    process.stdout.write(`${text}\n`);
+  }
+}
+
+/**
  * Print data as JSON (for --json flag / agent consumption) or formatted text.
  */
-export function printResult(data: unknown, opts: { json?: boolean }): void {
-  if (opts.json) {
-    console.log(JSON.stringify(data, null, 2));
-    return;
-  }
-  // Fallback: pretty-print JSON when no custom formatter is used
-  console.log(JSON.stringify(data, null, 2));
+export function printResult(data: unknown, _opts: { json?: boolean }): void {
+  printJSON(data);
 }
 
 /**
@@ -28,7 +41,7 @@ export function printTable(
   opts: { json?: boolean; rawData?: unknown } = {},
 ): void {
   if (opts.json && opts.rawData !== undefined) {
-    console.log(JSON.stringify(opts.rawData, null, 2));
+    printJSON(opts.rawData);
     return;
   }
 
@@ -69,7 +82,7 @@ export function printInfo(
   opts: { json?: boolean; rawData?: unknown } = {},
 ): void {
   if (opts.json && opts.rawData !== undefined) {
-    console.log(JSON.stringify(opts.rawData, null, 2));
+    printJSON(opts.rawData);
     return;
   }
 

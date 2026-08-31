@@ -22,7 +22,62 @@ vi.mock("../config/config", () => ({
   loadConfig: (...args: unknown[]) => mockLoadConfig(...args),
 }));
 
+const mockRunSync = vi.fn();
+vi.mock("../sync/sync", () => ({
+  runKnowledgeSync: (...args: unknown[]) => mockRunSync(...args),
+}));
+
+const mockSpawnDetached = vi.fn();
+vi.mock("../sync/detach", () => ({
+  spawnDetachedSelf: (...args: unknown[]) => mockSpawnDetached(...args),
+}));
+
+interface FakeAgent {
+  id: string;
+  name: string;
+  installed: boolean;
+  enabled: boolean;
+  configPath: string;
+  enableError?: Error;
+  enabledError?: Error;
+  note?: string;
+}
+
+let fakeAgents: FakeAgent[] = [];
+const enableCalls: string[] = [];
+const disableCalls: string[] = [];
+
+function toHookAgent(agent: FakeAgent) {
+  return {
+    id: () => agent.id,
+    name: () => agent.name,
+    isInstalled: () => agent.installed,
+    configPath: () => agent.configPath,
+    isEnabled: () => {
+      if (agent.enabledError) throw agent.enabledError;
+      return agent.enabled;
+    },
+    enable: () => {
+      if (agent.enableError) throw agent.enableError;
+      enableCalls.push(agent.id);
+    },
+    disable: () => {
+      disableCalls.push(agent.id);
+    },
+    ...(agent.note ? { enableNote: () => agent.note } : {}),
+  };
+}
+
+vi.mock("../hooks/agents", () => ({
+  allHookAgents: () => fakeAgents.map(toHookAgent),
+  getHookAgent: (id: string) => {
+    const found = fakeAgents.find((a) => a.id === id);
+    return found ? toHookAgent(found) : undefined;
+  },
+}));
+
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
+import { HookConfigError } from "../hooks/formats";
 import { knowledgeCommand } from "./knowledge";
 
 let logSpy: ReturnType<typeof vi.spyOn>;
@@ -55,6 +110,11 @@ async function run(...args: string[]) {
 beforeEach(() => {
   mockQuery.mockReset();
   mockLoadConfig.mockReset();
+  mockRunSync.mockReset();
+  mockSpawnDetached.mockReset();
+  fakeAgents = [];
+  enableCalls.length = 0;
+  disableCalls.length = 0;
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
@@ -66,6 +126,7 @@ afterEach(() => {
   logSpy.mockRestore();
   errorSpy.mockRestore();
   exitSpy.mockRestore();
+  process.exitCode = undefined;
 });
 
 describe("knowledge search", () => {
@@ -187,5 +248,334 @@ describe("requireConfig", () => {
   it("exits when space_id is missing", async () => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ space_id: undefined }));
     await expect(run("search", "q")).rejects.toThrow("exit");
+  });
+});
+
+describe("knowledge sync", () => {
+  beforeEach(() => {
+    // Authenticated cloud-mode install: sync should build a miner.
+    mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: "dep1" }));
+  });
+
+  function syncDeps(call = 0): { mine?: unknown } {
+    return mockRunSync.mock.calls[call][0].deps;
+  }
+
+  it("prints the backlog after a successful run", async () => {
+    mockRunSync.mockResolvedValue({ status: "backlog", readySessions: 3, inFlightSessions: 1 });
+
+    await run("sync");
+
+    expect(mockRunSync.mock.calls[0][0].quiet).toBeUndefined();
+    expect(typeof syncDeps().mine).toBe("function");
+    expect(allOutput()).toContain("3 new sessions ready to mine");
+  });
+
+  it("does not build a miner when the install has no API key", async () => {
+    mockLoadConfig.mockReturnValue(makeValidConfig({ api_key: undefined }));
+    mockRunSync.mockResolvedValue({ status: "backlog", readySessions: 1, inFlightSessions: 0 });
+
+    await run("sync");
+
+    expect(syncDeps().mine).toBeUndefined();
+  });
+
+  it("does not build a miner in OSS mode", async () => {
+    mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: "dep1", mode: "oss" }));
+    mockRunSync.mockResolvedValue({ status: "backlog", readySessions: 1, inFlightSessions: 0 });
+
+    await run("sync");
+
+    expect(syncDeps().mine).toBeUndefined();
+  });
+
+  it("reports a mined run with the remaining backlog", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "mined",
+      readySessions: 8,
+      inFlightSessions: 0,
+      sessions: [],
+      minedSessions: 5,
+      miner: { outcome: "completed", notesWritten: 3, turns: 12 },
+    });
+
+    await run("sync");
+
+    const output = allOutput();
+    expect(output).toContain("Mined 5 sessions — 3 notes written");
+    expect(output).toContain("3 more in the backlog");
+  });
+
+  it("renders the gateway's refusal message on skipped-gateway", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "skipped-gateway",
+      readySessions: 2,
+      inFlightSessions: 0,
+      sessions: [],
+      minedSessions: 0,
+      miner: { outcome: "consent_off", notesWritten: 0, turns: 0, message: "org opt-in is off" },
+    });
+
+    await run("sync");
+
+    expect(allOutput()).toContain("org opt-in is off");
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("mine-failed prints the miner message and sets the exit code", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "mine-failed",
+      readySessions: 2,
+      inFlightSessions: 0,
+      sessions: [],
+      minedSessions: 0,
+      miner: { outcome: "error", notesWritten: 0, turns: 4, message: "run exploded" },
+    });
+
+    await run("sync");
+
+    expect(errorSpy.mock.calls.join(" ")).toContain("run exploded");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("mentions the concurrent run on skipped-lock", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "skipped-lock",
+      readySessions: 2,
+      inFlightSessions: 0,
+      sessions: [],
+    });
+
+    await run("sync");
+
+    expect(allOutput()).toContain("already in progress");
+  });
+
+  it("prints nothing-new when the gate is empty", async () => {
+    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
+
+    await run("sync");
+
+    expect(allOutput()).toContain("No new completed sessions");
+  });
+
+  it("reports errors and sets the exit code", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "error",
+      readySessions: 0,
+      inFlightSessions: 0,
+      error: "scan exploded",
+    });
+
+    await run("sync");
+
+    expect(errorSpy.mock.calls.join(" ")).toContain("scan exploded");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("mentions the backoff when a quiet failure is being waited out", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "skipped-backoff",
+      readySessions: 0,
+      inFlightSessions: 0,
+    });
+
+    await run("sync");
+
+    expect(allOutput()).toContain("backoff");
+  });
+
+  it("--quiet prints nothing and exits 0 even on error", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "error",
+      readySessions: 0,
+      inFlightSessions: 0,
+      error: "boom",
+    });
+
+    await run("sync", "--quiet");
+
+    expect(logSpy).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("--json emits the outcome as JSON", async () => {
+    mockRunSync.mockResolvedValue({ status: "backlog", readySessions: 2, inFlightSessions: 0 });
+
+    await run("sync", "--json");
+
+    expect(JSON.parse(allOutput())).toMatchObject({ status: "backlog", readySessions: 2 });
+  });
+
+  it("--list is a dry run: no miner even when credentials exist", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "backlog",
+      readySessions: 1,
+      inFlightSessions: 0,
+      sessions: [],
+    });
+
+    await run("sync", "--list");
+
+    expect(syncDeps().mine).toBeUndefined();
+  });
+
+  it("--list prints the selected sessions", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "backlog",
+      readySessions: 1,
+      inFlightSessions: 0,
+      sessions: [
+        {
+          id: "848b3896-fb07",
+          harness: "cursor",
+          path: "/home/u/.cursor/projects/p/agent-transcripts/848b3896-fb07/848b3896-fb07.jsonl",
+          project: "Users-james-dosu-cli",
+          updated: "2026-08-27T21:05:00.000Z",
+        },
+      ],
+    });
+
+    await run("sync", "--list");
+
+    const output = allOutput();
+    expect(output).toContain("cursor");
+    expect(output).toContain("2026-08-27 21:05");
+    expect(output).toContain("Users-james-dosu-cli");
+    expect(output).toContain("848b3896-fb07");
+  });
+
+  it("--list prints no table when the backlog is empty", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "nothing-new",
+      readySessions: 0,
+      inFlightSessions: 0,
+      sessions: [],
+    });
+
+    await run("sync", "--list");
+
+    expect(allOutput()).not.toContain("Agent");
+  });
+
+  it("--detach re-spawns and never runs the pipeline inline", async () => {
+    await run("sync", "--quiet", "--detach");
+
+    expect(mockSpawnDetached).toHaveBeenCalledWith(["knowledge", "sync", "--quiet"]);
+    expect(mockRunSync).not.toHaveBeenCalled();
+  });
+});
+
+describe("knowledge hooks", () => {
+  const claude = (): FakeAgent => ({
+    id: "claude",
+    name: "Claude Code",
+    installed: true,
+    enabled: false,
+    configPath: "/home/u/.claude/settings.json",
+  });
+  const cursor = (): FakeAgent => ({
+    id: "cursor",
+    name: "Cursor",
+    installed: false,
+    enabled: false,
+    configPath: "/home/u/.cursor/hooks.json",
+  });
+
+  it("status lists every agent with its state", async () => {
+    fakeAgents = [{ ...claude(), enabled: true }, cursor()];
+
+    await run("hooks", "status");
+
+    const output = allOutput();
+    expect(output).toContain("claude");
+    expect(output).toContain("enabled");
+    expect(output).toContain("not installed");
+  });
+
+  it("status --json emits rows", async () => {
+    fakeAgents = [claude()];
+
+    await run("hooks", "status", "--json");
+
+    const rows = JSON.parse(allOutput());
+    expect(rows).toEqual([
+      expect.objectContaining({ agent: "claude", installed: true, enabled: false }),
+    ]);
+  });
+
+  it("status surfaces per-agent config errors as notes", async () => {
+    fakeAgents = [
+      { ...claude(), enabledError: new HookConfigError("settings.json is not valid JSON") },
+    ];
+
+    await run("hooks", "status");
+
+    expect(allOutput()).toContain("not valid JSON");
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("enable targets named agents", async () => {
+    fakeAgents = [claude(), cursor()];
+
+    await run("hooks", "enable", "claude");
+
+    expect(enableCalls).toEqual(["claude"]);
+    expect(allOutput()).toContain("hook enabled");
+  });
+
+  it("enable with no args targets all installed agents", async () => {
+    fakeAgents = [claude(), cursor()];
+
+    await run("hooks", "enable");
+
+    expect(enableCalls).toEqual(["claude"]);
+  });
+
+  it("enable prints the agent's note when present", async () => {
+    fakeAgents = [{ ...claude(), id: "codex", name: "Codex", note: "Approve the trust prompt." }];
+
+    await run("hooks", "enable", "codex");
+
+    expect(allOutput()).toContain("Approve the trust prompt.");
+  });
+
+  it("enable reports unknown agents", async () => {
+    fakeAgents = [claude()];
+
+    await run("hooks", "enable", "zed");
+
+    expect(errorSpy.mock.calls.join(" ")).toContain("unknown agent 'zed'");
+    expect(process.exitCode).toBe(1);
+    expect(enableCalls).toEqual([]);
+  });
+
+  it("enable reports hook config failures without aborting the command", async () => {
+    fakeAgents = [
+      { ...claude(), enableError: new HookConfigError("settings.json is not valid JSON") },
+    ];
+
+    await run("hooks", "enable", "claude");
+
+    expect(errorSpy.mock.calls.join(" ")).toContain("not valid JSON");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("disable targets named agents", async () => {
+    fakeAgents = [claude(), cursor()];
+
+    await run("hooks", "disable", "claude");
+
+    expect(disableCalls).toEqual(["claude"]);
+    expect(allOutput()).toContain("hook disabled");
+  });
+
+  it("prints a hint when nothing is detected", async () => {
+    fakeAgents = [cursor()];
+
+    await run("hooks", "enable");
+
+    expect(allOutput()).toContain("No supported agents detected");
   });
 });

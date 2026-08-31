@@ -52,7 +52,17 @@ type PromptOption =
       value: string;
       label: string;
       hint?: string;
+      /**
+       * Rendered dimmed and skipped by cursor/selection — used for repos the
+       * backend can never sync (forks), mirroring the web attach modal.
+       */
+      disabled?: boolean;
     };
+
+function isFocusable(option: PromptOption): boolean {
+  if (option.kind === "separator") return false;
+  return !(option.kind === "repo" && option.disabled === true);
+}
 
 interface PromptGitHubRepositoriesOptions {
   message: string;
@@ -100,7 +110,9 @@ export class GitHubRepoPrompt extends Prompt<ActionValue | string[]> {
     this.options = options;
     this.maxItems = maxItems;
     this.selected = initialValues.filter((value) =>
-      options.some((option) => option.kind === "repo" && option.value === value),
+      options.some(
+        (option) => option.kind === "repo" && !option.disabled && option.value === value,
+      ),
     );
     const initialCursor = this.options.findIndex(
       (option) => option.kind === "repo" && this.selected.includes(option.value),
@@ -134,7 +146,7 @@ export class GitHubRepoPrompt extends Prompt<ActionValue | string[]> {
   }
 
   private firstFocusableIndex(): number {
-    const idx = this.options.findIndex((option) => option.kind !== "separator");
+    const idx = this.options.findIndex(isFocusable);
     return idx >= 0 ? idx : 0;
   }
 
@@ -144,7 +156,7 @@ export class GitHubRepoPrompt extends Prompt<ActionValue | string[]> {
     let next = this.cursor;
     for (let i = 0; i < total; i++) {
       next = (next + direction + total) % total;
-      if (this.options[next].kind !== "separator") return next;
+      if (isFocusable(this.options[next])) return next;
     }
     return this.cursor;
   }
@@ -160,7 +172,7 @@ export class GitHubRepoPrompt extends Prompt<ActionValue | string[]> {
 
   private toggleCurrent(): void {
     const current = this.currentOption;
-    if (current.kind !== "repo") return;
+    if (current.kind !== "repo" || current.disabled) return;
     const selected = this.selected.includes(current.value);
     this.selected = selected
       ? this.selected.filter((value) => value !== current.value)
@@ -169,7 +181,10 @@ export class GitHubRepoPrompt extends Prompt<ActionValue | string[]> {
 
   private toggleAll(): void {
     const repoValues = this.options
-      .filter((option): option is Extract<PromptOption, { kind: "repo" }> => option.kind === "repo")
+      .filter(
+        (option): option is Extract<PromptOption, { kind: "repo" }> =>
+          option.kind === "repo" && !option.disabled,
+      )
       .map((option) => option.value);
     this.selected = this.selected.length === repoValues.length ? [] : repoValues;
   }
@@ -201,6 +216,11 @@ ${symbolByState}  ${this.message}
       const current = this.options[option.index];
       if (current.kind === "separator") {
         return `${pc.gray(BAR)}  ${pc.dim(SEPARATOR_LINE)}`;
+      }
+
+      if (current.kind === "repo" && current.disabled) {
+        const hint = current.hint ? ` (${current.hint})` : "";
+        return `${pc.gray(BAR)}  ${pc.dim(`${CHECKBOX_OFF} ${current.label}${hint}`)}`;
       }
 
       const isActive = option.index === this.cursor;

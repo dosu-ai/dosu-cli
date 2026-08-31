@@ -1,10 +1,19 @@
 /**
- * `dosu knowledge` — knowledge base search and listing.
+ * `dosu knowledge` — knowledge base search and listing, plus the local
+ * knowledge-sync pipeline (`sync`) and its per-agent triggers (`hooks`).
  */
 
+import { existsSync } from "node:fs";
+import { delimiter, join } from "node:path";
 import { Command, Option } from "commander";
 import pc from "picocolors";
 import { createTypedClient } from "../client/trpc";
+import { loadConfig } from "../config/config";
+import { allHookAgents, getHookAgent, type HookAgent } from "../hooks/agents";
+import { HookConfigError, hookCommand } from "../hooks/formats";
+import type { AgentSession } from "../sessions/scan";
+import { spawnDetachedSelf } from "../sync/detach";
+import { runKnowledgeSync, type SyncDeps, type SyncOutcome } from "../sync/sync";
 import { positiveInteger } from "./arguments";
 import { requireLoginConfig } from "./auth";
 import { printResult, printTable, truncate } from "./output";
@@ -108,5 +117,262 @@ export function knowledgeCommand(): Command {
       console.log(`  Space ID: ${store.space_id}`);
     });
 
+  cmd
+    .command("sync")
+    .description("Scan local agent session history and report the mining backlog")
+    .option("--quiet", "Background mode for hooks: honor backoff, exit 0, print nothing")
+    .option("--detach", "Re-spawn detached and return immediately (used by agent hooks)")
+    .option("--list", "List the sessions selected for mining without mining them")
+    .option("--json", "Output as JSON")
+    .action(async (opts: { quiet?: boolean; detach?: boolean; list?: boolean; json?: boolean }) => {
+      if (opts.detach) {
+        // Hooks call `sync --quiet --detach`; the re-spawned child runs the
+        // actual pipeline so the hooking agent gets its exit immediately.
+        spawnDetachedSelf(["knowledge", "sync", ...(opts.quiet ? ["--quiet"] : [])]);
+        return;
+      }
+
+      // --list is a dry run: gate and report, never mine.
+      const deps: SyncDeps = opts.list ? {} : { mine: buildMiner(opts.quiet ? "hook" : "manual") };
+      const outcome = await runKnowledgeSync({ quiet: opts.quiet, deps });
+
+      if (opts.quiet) return; // Invisible by contract; details are in the debug log.
+
+      if (opts.json) {
+        printResult(outcome, opts);
+        if (outcome.status === "error") process.exitCode = 1;
+        return;
+      }
+
+      printSyncOutcome(outcome);
+      if (opts.list && outcome.sessions.length > 0) printSessionList(outcome.sessions);
+    });
+
+  cmd.addCommand(hooksCommand());
+
   return cmd;
+}
+
+/**
+ * The mining step for authenticated cloud-mode installs: a closure over the
+ * stored API key + deployment. Returns undefined (gate-and-report only) when
+ * the install can't mine — logged out, OSS mode, or setup never minted a key.
+ */
+function buildMiner(trigger: "hook" | "manual"): SyncDeps["mine"] {
+  const cfg = loadConfig();
+  if (cfg.mode === "oss") return undefined;
+  const target = cfg.active_account?.target;
+  if (!target?.api_key || !target.deployment_id) return undefined;
+  const { api_key, deployment_id } = target;
+  return async (sessions: AgentSession[]) => {
+    const { runMiner } = await import("../miner/runner");
+    return runMiner({ sessions, apiKey: api_key, deploymentID: deployment_id, trigger });
+  };
+}
+
+function printSyncOutcome(outcome: SyncOutcome): void {
+  switch (outcome.status) {
+    case "backlog": {
+      const inFlight =
+        outcome.inFlightSessions > 0
+          ? pc.dim(` (${outcome.inFlightSessions} more still in progress)`)
+          : "";
+      console.log(
+        `✓ Scanned. ${outcome.readySessions} new session${outcome.readySessions === 1 ? "" : "s"} ready to mine${inFlight}.`,
+      );
+      console.log(pc.dim("Sign in with 'dosu setup' to enable mining."));
+      break;
+    }
+    case "mined": {
+      const notes = outcome.miner?.notesWritten ?? 0;
+      const remaining = outcome.readySessions - (outcome.minedSessions ?? 0);
+      console.log(
+        `✓ Mined ${outcome.minedSessions} session${outcome.minedSessions === 1 ? "" : "s"} — ${notes} note${notes === 1 ? "" : "s"} written.`,
+      );
+      if (remaining > 0) {
+        console.log(pc.dim(`${remaining} more in the backlog; run sync again to continue.`));
+      }
+      break;
+    }
+    case "skipped-gateway": {
+      console.log(pc.yellow(outcome.miner?.message ?? "Mining unavailable right now."));
+      break;
+    }
+    case "mine-failed": {
+      console.error(pc.red(outcome.miner?.message ?? "Mining run failed."));
+      process.exitCode = 1;
+      break;
+    }
+    case "skipped-lock": {
+      console.log(pc.dim("Skipped — another sync run is already in progress."));
+      break;
+    }
+    case "nothing-new": {
+      const inFlight =
+        outcome.inFlightSessions > 0
+          ? ` ${outcome.inFlightSessions} session${outcome.inFlightSessions === 1 ? "" : "s"} still in progress.`
+          : "";
+      console.log(`✓ Scanned. No new completed sessions since the last run.${inFlight}`);
+      break;
+    }
+    case "error": {
+      console.error(pc.red(`Sync failed: ${outcome.error}`));
+      process.exitCode = 1;
+      break;
+    }
+    case "skipped-backoff": {
+      console.log(pc.dim("Skipped — a recent sync failed; waiting out the retry backoff."));
+      break;
+    }
+  }
+}
+
+/** `sync --list`: the gated backlog, newest first (scanner order). */
+function printSessionList(sessions: readonly AgentSession[]): void {
+  console.log();
+  printTable(
+    ["Agent", "Updated (UTC)", "Project", "Session"],
+    sessions.map((s) => [
+      s.harness,
+      s.updated.replace("T", " ").slice(0, 16),
+      truncate(s.project ?? "—", 48),
+      truncate(s.id, 24),
+    ]),
+    { json: false, rawData: sessions },
+  );
+}
+
+function resolveHookAgents(ids: string[]): HookAgent[] {
+  if (ids.length === 0) {
+    const installed = allHookAgents().filter((agent) => agent.isInstalled());
+    if (installed.length === 0) {
+      console.log(pc.dim("No supported agents detected on this machine."));
+    }
+    return installed;
+  }
+  const agents: HookAgent[] = [];
+  for (const id of ids) {
+    const agent = getHookAgent(id.toLowerCase());
+    if (!agent) {
+      console.error(
+        pc.red(
+          `unknown agent '${id}'. Supported: ${allHookAgents()
+            .map((a) => a.id())
+            .join(", ")}`,
+        ),
+      );
+      process.exitCode = 1;
+      return [];
+    }
+    agents.push(agent);
+  }
+  return agents;
+}
+
+function hooksCommand(): Command {
+  const cmd = new Command("hooks").description(
+    "Manage the session-end hooks that trigger knowledge sync",
+  );
+
+  cmd
+    .command("status")
+    .description("Show hook status for each supported agent")
+    .option("--json", "Output as JSON")
+    .action((opts: { json?: boolean }) => {
+      const rows = allHookAgents().map((agent) => {
+        let enabled = false;
+        let note: string | undefined;
+        try {
+          enabled = agent.isEnabled();
+        } catch (err) {
+          note = err instanceof Error ? err.message : String(err);
+        }
+        return {
+          agent: agent.id(),
+          name: agent.name(),
+          installed: agent.isInstalled(),
+          enabled,
+          config_path: agent.configPath(),
+          ...(note ? { note } : {}),
+        };
+      });
+
+      if (opts.json) {
+        printResult(rows, opts);
+        return;
+      }
+
+      for (const row of rows) {
+        const state = !row.installed
+          ? pc.dim("not installed")
+          : row.enabled
+            ? pc.green("enabled")
+            : "disabled";
+        console.log(`  ${row.agent.padEnd(8)} ${row.name.padEnd(14)} ${state}`);
+        if (row.note) console.log(pc.yellow(`    ${row.note}`));
+      }
+      console.log(
+        pc.dim("\nUse 'dosu knowledge hooks enable|disable [agent...]' to change these."),
+      );
+    });
+
+  cmd
+    .command("enable [agents...]")
+    .description("Install the sync hook for agents (default: all detected)")
+    .action((ids: string[]) => {
+      const agents = resolveHookAgents(ids);
+      const devMode = process.env.DOSU_DEV === "true";
+      // Dev hooks pin this working copy by absolute path, so PATH is moot.
+      if (agents.length > 0 && !devMode && !dosuOnPath()) {
+        console.log(
+          pc.yellow(
+            "Warning: 'dosu' is not on PATH — hooks run 'dosu knowledge sync' and will fail until it is.",
+          ),
+        );
+      }
+      if (agents.length > 0 && devMode) {
+        console.log(pc.dim(`Dev mode: hooks will run ${hookCommand()}`));
+      }
+      for (const agent of agents) {
+        try {
+          agent.enable();
+          console.log(`✓ ${agent.name()} — hook enabled (${agent.configPath()})`);
+          const note = agent.enableNote?.();
+          if (note) console.log(pc.dim(`  ${note}`));
+        } catch (err) {
+          reportHookFailure(agent, err);
+        }
+      }
+    });
+
+  cmd
+    .command("disable [agents...]")
+    .description("Remove the sync hook from agents (default: all detected)")
+    .action((ids: string[]) => {
+      for (const agent of resolveHookAgents(ids)) {
+        try {
+          agent.disable();
+          console.log(`✓ ${agent.name()} — hook disabled`);
+        } catch (err) {
+          reportHookFailure(agent, err);
+        }
+      }
+    });
+
+  return cmd;
+}
+
+function reportHookFailure(agent: HookAgent, err: unknown): void {
+  const message =
+    err instanceof HookConfigError ? err.message : err instanceof Error ? err.message : String(err);
+  console.error(pc.red(`✗ ${agent.name()} — ${message}`));
+  process.exitCode = 1;
+}
+
+/** Hooks invoke plain `dosu`; warn at enable time when that will not resolve. */
+function dosuOnPath(): boolean {
+  const bin = process.platform === "win32" ? "dosu.cmd" : "dosu";
+  return (process.env.PATH ?? "")
+    .split(delimiter)
+    .some((dir) => dir !== "" && existsSync(join(dir, bin)));
 }

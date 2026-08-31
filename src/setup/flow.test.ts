@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -90,12 +90,16 @@ const mockTrpc = vi.hoisted(() => ({
     create: { mutate: vi.fn() },
     listForSpace: { query: vi.fn() },
   },
+  libraries: { sourcesList: { query: vi.fn() } },
   dataSource: { create: { mutate: vi.fn() } },
   deploymentDataSource: { create: { mutate: vi.fn().mockResolvedValue({}) } },
 }));
 vi.mock("@trpc/client", () => ({
   createTRPCClient: vi.fn(() => mockTrpc),
   httpLink: vi.fn(() => ({})),
+  // Mirrors the real check closely enough for the NOT_FOUND fallback branch:
+  // tests mint errors with `name = "TRPCClientError"` to trip it.
+  isTRPCClientError: (err: unknown) => err instanceof Error && err.name === "TRPCClientError",
 }));
 vi.mock("../client/trpc", () => ({
   createTypedClient: vi.fn(() => mockTrpc),
@@ -186,6 +190,7 @@ import { loadJSONConfig, saveJSONConfig } from "../mcp/config-helpers";
 import * as providersModule from "../mcp/providers";
 import { ClaudeProvider } from "../mcp/providers/claude";
 import { ClaudeDesktopProvider } from "../mcp/providers/claude-desktop";
+import { CodexProvider } from "../mcp/providers/codex";
 import { CursorProvider } from "../mcp/providers/cursor";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
 import {
@@ -212,6 +217,19 @@ function mockToolSelection(selection: string[]) {
   vi.mocked(p.multiselect).mockResolvedValue(selection as unknown as never);
 }
 
+/**
+ * Shape of a tRPC "No procedure found" rejection, as seen from backends that
+ * predate a router — trips the mocked `isTRPCClientError` + NOT_FOUND check.
+ */
+function trpcNotFoundError(path: string): Error {
+  const err = new Error(`No procedure found on path "${path}"`) as Error & {
+    data: { code: string };
+  };
+  err.name = "TRPCClientError";
+  err.data = { code: "NOT_FOUND" };
+  return err;
+}
+
 function installSetupStepDefaults() {
   mockStepConnectGitHubRepo.mockResolvedValue({ advance: false, has_connected_repo: false });
   mockInGitWorkTree.mockReturnValue(false);
@@ -232,12 +250,13 @@ function installRemoteSetupDefaults() {
   mockTrpc.user.updateProfile.mutate.mockResolvedValue(null);
   mockTrpc.user.trackCliOnboardingEvent.mutate.mockResolvedValue({ ok: true });
   mockTrpc.user.trackCliOnboardingPreAuthEvent.mutate.mockResolvedValue({ ok: true });
-  // Default: the MCP's space already has a connected GitHub repo (a `github`
-  // deployment), so the connect offer stays quiet. Tests that exercise the
-  // offer override with an empty list.
-  mockTrpc.workspaces.listForSpace.query.mockResolvedValue([
-    { deployment_id: "d-gh", provider_slug: "github", name: "acme/repo" },
+  // Default: the MCP's Library already has a GitHub source attached, so the
+  // connect offer stays quiet. Tests that exercise the offer override with an
+  // empty list. `listForSpace` only backs the old-backend fallback path.
+  mockTrpc.libraries.sourcesList.query.mockResolvedValue([
+    { data_source_id: "ds-gh", provider_slug: "github", name: "acme/repo" },
   ]);
+  mockTrpc.workspaces.listForSpace.query.mockResolvedValue([]);
 }
 
 // ---------------------------------------------------------------------------
@@ -564,6 +583,95 @@ describe("stepConfigureTools", () => {
     const opencodeConfig = loadJSONConfig(freshOpencode.globalConfigPath());
     expect(opencodeConfig.mcp.dosu).toBeUndefined();
   });
+
+  // --- Knowledge sync hooks ride along with the MCP bundle ---
+
+  it("enables the knowledge sync hook alongside the MCP install", () => {
+    const cfg = makeCfg();
+    const selection: ToolSelection = { toInstall: [CursorProvider()], toRemove: [], skipped: [] };
+
+    const results = stepConfigureTools(cfg, selection);
+
+    expect(results[0].error).toBeUndefined();
+    const hooksPath = join(tempDir, ".cursor", "hooks.json");
+    expect(existsSync(hooksPath)).toBe(true);
+    const hooks = JSON.parse(readFileSync(hooksPath, "utf-8"));
+    expect(hooks.hooks.stop[0].command).toContain("knowledge sync");
+    expect(results[0].hook).toMatchObject({ name: "Cursor", path: hooksPath });
+
+    stepShowSummary(results);
+    expect(p.log.success).toHaveBeenCalledWith(
+      expect.stringContaining("Knowledge sync hooks enabled for 1 agent(s):"),
+    );
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining(hooksPath));
+  });
+
+  it("removes the knowledge sync hook when the agent is unticked", () => {
+    const cfg = makeCfg();
+    stepConfigureTools(cfg, { toInstall: [CursorProvider()], toRemove: [], skipped: [] });
+    const hooksPath = join(tempDir, ".cursor", "hooks.json");
+    expect(JSON.parse(readFileSync(hooksPath, "utf-8")).hooks.stop).toBeDefined();
+
+    stepConfigureTools(cfg, { toInstall: [], toRemove: [CursorProvider()], skipped: [] });
+
+    const hooks = JSON.parse(readFileSync(hooksPath, "utf-8"));
+    expect(hooks.hooks.stop).toBeUndefined();
+  });
+
+  it("does not touch hooks for agents without hook support", () => {
+    const cfg = makeCfg();
+
+    const results = stepConfigureTools(cfg, {
+      toInstall: [OpenCodeProvider()],
+      toRemove: [],
+      skipped: [],
+    });
+
+    expect(results[0].hook).toBeUndefined();
+    stepShowSummary(results);
+    expect(p.log.success).not.toHaveBeenCalledWith(
+      expect.stringContaining("Knowledge sync hooks enabled"),
+    );
+  });
+
+  it("keeps the MCP install successful when the hook config is broken", () => {
+    const cfg = makeCfg();
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    writeFileSync(join(tempDir, ".cursor", "hooks.json"), "not json {");
+
+    const results = stepConfigureTools(cfg, {
+      toInstall: [CursorProvider()],
+      toRemove: [],
+      skipped: [],
+    });
+
+    expect(results[0].error).toBeUndefined();
+    expect(results[0].hook).toBeUndefined();
+    expect(p.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Could not enable the knowledge sync hook for Cursor"),
+    );
+    stepShowSummary(results);
+    expect(p.log.success).not.toHaveBeenCalledWith(
+      expect.stringContaining("Knowledge sync hooks enabled"),
+    );
+  });
+
+  it("prints the Codex trust note after enabling its hook", () => {
+    const cfg = makeCfg();
+
+    const results = stepConfigureTools(cfg, {
+      toInstall: [CodexProvider()],
+      toRemove: [],
+      skipped: [],
+    });
+
+    const hooks = JSON.parse(readFileSync(join(tempDir, ".codex", "hooks.json"), "utf-8"));
+    expect(hooks.hooks.Stop).toBeDefined();
+    stepShowSummary(results);
+    expect(p.log.info).toHaveBeenCalledWith(
+      expect.stringContaining("approve the Dosu hook when prompted"),
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -840,28 +948,47 @@ describe("runSetup integration", () => {
     expect(savedCfg.active_account?.target?.deployment_name).toBe("Deploy1");
   });
 
-  it("offers and runs the GitHub connect step when the MCP's space has no connected repo", async () => {
+  it("offers and runs the GitHub connect step when the MCP's Library has no GitHub source", async () => {
     saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
     setupAuthenticatedClient();
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockTrpc.workspaces.listForSpace.query.mockResolvedValue([]);
+    mockTrpc.libraries.sourcesList.query.mockResolvedValue([]);
     vi.mocked(p.confirm).mockResolvedValue(true as never);
 
     await runSetup();
 
     // Scoped to the selected MCP's space — not an org-wide source check.
-    expect(mockTrpc.workspaces.listForSpace.query).toHaveBeenCalledWith("s1");
+    expect(mockTrpc.libraries.sourcesList.query).toHaveBeenCalledWith("s1");
     expect(p.log.warn).toHaveBeenCalledWith(
       expect.stringContaining("No GitHub repos are connected"),
     );
     expect(mockStepConnectGitHubRepo).toHaveBeenCalledTimes(1);
   });
 
+  it("still offers the connect step when only an orphaned github deployment remains", async () => {
+    // Removing a source in the web UI leaves its Monitor (`github` deployment)
+    // behind. That orphan must not suppress the offer — sources are the truth.
+    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
+    setupAuthenticatedClient();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mockTrpc.libraries.sourcesList.query.mockResolvedValue([]);
+    mockTrpc.workspaces.listForSpace.query.mockResolvedValue([
+      { deployment_id: "d-gh", provider_slug: "github", name: "acme/repo" },
+    ]);
+    vi.mocked(p.confirm).mockResolvedValue(true as never);
+
+    await runSetup();
+
+    expect(mockStepConnectGitHubRepo).toHaveBeenCalledTimes(1);
+    // Deployments are only consulted on the old-backend fallback path.
+    expect(mockTrpc.workspaces.listForSpace.query).not.toHaveBeenCalled();
+  });
+
   it("points at the web app and continues setup when the user continues without GitHub", async () => {
     saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
     const clientMethods = setupAuthenticatedClient();
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockTrpc.workspaces.listForSpace.query.mockResolvedValue([]);
+    mockTrpc.libraries.sourcesList.query.mockResolvedValue([]);
     vi.mocked(p.confirm).mockResolvedValue(false as never);
 
     await runSetup();
@@ -877,7 +1004,7 @@ describe("runSetup integration", () => {
     const clientMethods = setupAuthenticatedClient();
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
     // `null` list exercises the `?? []` fallback alongside the cancel path.
-    mockTrpc.workspaces.listForSpace.query.mockResolvedValue(null);
+    mockTrpc.libraries.sourcesList.query.mockResolvedValue(null);
     const cancelSentinel = Symbol("clack:cancel");
     vi.mocked(p.confirm).mockResolvedValue(cancelSentinel as never);
     vi.mocked(p.isCancel).mockImplementation((value: unknown) => value === cancelSentinel);
@@ -889,11 +1016,11 @@ describe("runSetup integration", () => {
     expect(clientMethods.validateAPIKey).toHaveBeenCalled();
   });
 
-  it("stays quiet when the MCP's space already has a connected GitHub repo", async () => {
+  it("stays quiet when the MCP's Library already has a GitHub source", async () => {
     saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
     setupAuthenticatedClient();
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    // installRemoteSetupDefaults() already puts a github deployment in the space.
+    // installRemoteSetupDefaults() already attaches a github source to the Library.
 
     await runSetup();
 
@@ -901,11 +1028,44 @@ describe("runSetup integration", () => {
     expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
   });
 
+  it("falls back to the deployment check on backends without the libraries router", async () => {
+    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
+    setupAuthenticatedClient();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mockTrpc.libraries.sourcesList.query.mockRejectedValue(
+      trpcNotFoundError("libraries.sourcesList"),
+    );
+    mockTrpc.workspaces.listForSpace.query.mockResolvedValue([
+      { deployment_id: "d-gh", provider_slug: "github", name: "acme/repo" },
+    ]);
+
+    await runSetup();
+
+    // Old heuristic: a `github` deployment in the space keeps the offer quiet.
+    expect(mockTrpc.workspaces.listForSpace.query).toHaveBeenCalledWith("s1");
+    expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
+  });
+
+  it("offers the connect step via the fallback when the old backend has no github deployment", async () => {
+    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
+    setupAuthenticatedClient();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mockTrpc.libraries.sourcesList.query.mockRejectedValue(
+      trpcNotFoundError("libraries.sourcesList"),
+    );
+    mockTrpc.workspaces.listForSpace.query.mockResolvedValue([]);
+    vi.mocked(p.confirm).mockResolvedValue(true as never);
+
+    await runSetup();
+
+    expect(mockStepConnectGitHubRepo).toHaveBeenCalledTimes(1);
+  });
+
   it("skips the GitHub offer silently when the source lookup fails", async () => {
     saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
     const clientMethods = setupAuthenticatedClient();
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockTrpc.workspaces.listForSpace.query.mockRejectedValue(new Error("backend down"));
+    mockTrpc.libraries.sourcesList.query.mockRejectedValue(new Error("backend down"));
 
     await runSetup();
 
@@ -921,7 +1081,7 @@ describe("runSetup integration", () => {
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
     // tRPC boundaries can reject with plain values; the step must stringify
     // them for the debug log without blowing up.
-    mockTrpc.workspaces.listForSpace.query.mockRejectedValue("backend down");
+    mockTrpc.libraries.sourcesList.query.mockRejectedValue("backend down");
 
     await runSetup();
 
@@ -939,7 +1099,7 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(mockTrpc.workspaces.listForSpace.query).not.toHaveBeenCalled();
+    expect(mockTrpc.libraries.sourcesList.query).not.toHaveBeenCalled();
     expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
   });
 
@@ -954,7 +1114,7 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(mockTrpc.workspaces.listForSpace.query).not.toHaveBeenCalled();
+    expect(mockTrpc.libraries.sourcesList.query).not.toHaveBeenCalled();
     expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
   });
 
