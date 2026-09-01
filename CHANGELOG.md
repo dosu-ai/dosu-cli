@@ -1,3 +1,17 @@
+# [0.52.0](https://github.com/dosu-ai/dosu-cli/compare/v0.51.1...v0.52.0) (2026-09-01)
+
+
+### Features
+
+* remove suggest command ([#201](https://github.com/dosu-ai/dosu-cli/issues/201)) ([328f60d](https://github.com/dosu-ai/dosu-cli/commit/328f60dba6fb0c82db6611f2c676d94080238a99))
+
+## [0.51.1](https://github.com/dosu-ai/dosu-cli/compare/v0.51.0...v0.51.1) (2026-08-31)
+
+
+### Bug Fixes
+
+* **setup:** drop retired label settings from default deployment config ([#198](https://github.com/dosu-ai/dosu-cli/issues/198)) ([1539887](https://github.com/dosu-ai/dosu-cli/commit/15398870159b6f775ab578c8d06ecbe99dbddde7))
+
 # [0.51.0](https://github.com/dosu-ai/dosu-cli/compare/v0.50.0...v0.51.0) (2026-08-27)
 
 
