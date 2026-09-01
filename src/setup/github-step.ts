@@ -341,7 +341,8 @@ function sortReposByRecency(repos: AvailableRepo[]): AvailableRepo[] {
 }
 
 function buildPromptOptions(
-  repos: AvailableRepo[],
+  available: AvailableRepo[],
+  connected: AvailableRepo[] = [],
 ): Parameters<typeof promptGitHubRepositories>[0]["options"] {
   return [
     {
@@ -357,7 +358,7 @@ function buildPromptOptions(
       hint: "Re-check Dosu for new repos",
     },
     { kind: "separator" as const },
-    ...repos.map((r) =>
+    ...available.map((r) =>
       r.is_fork === true
         ? {
             kind: "repo" as const,
@@ -370,6 +371,15 @@ function buildPromptOptions(
           }
         : { kind: "repo" as const, label: r.slug, value: r.slug },
     ),
+    // Repos already attached to this Library stay visible for context but
+    // can't be picked — rendered dimmed, skipped by the cursor.
+    ...connected.map((r) => ({
+      kind: "repo" as const,
+      label: r.slug,
+      value: r.slug,
+      disabled: true,
+      hint: "Connected",
+    })),
   ];
 }
 
@@ -728,19 +738,13 @@ export async function stepConnectGitHubRepo(
     const available = repos.filter((r) => !isConnectedToSpace(r, spaceSources));
     const connected = repos.filter((r) => isConnectedToSpace(r, spaceSources));
 
-    // Already-connected repos are shown as an informational block above the
-    // multiselect so the user can see what's set up, but the cursor can't land
-    // on them. Clack has no per-option `disabled`, so this is the only way to
-    // make them truly non-interactive.
-    if (connected.length > 0) {
-      const lines = connected.map((r) => `  ${dim(r.slug)}`).join("\n");
-      p.log.info(`${dim("Already connected")}\n${lines}`);
-    }
-
     const selectableCount = available.filter((r) => r.is_fork !== true).length;
+    // Already-connected repos ride along at the bottom of the list as
+    // disabled "(Connected)" entries — visible for context, skipped by the
+    // cursor, never selectable.
     const selected = await promptGitHubRepositories({
       message: `Select repositories to connect ${dim(`(${selectableCount} available)`)}`,
-      options: buildPromptOptions(available),
+      options: buildPromptOptions(available, connected),
       initialValues: [],
       maxItems: REPO_MULTISELECT_MAX_ITEMS,
     });

@@ -634,21 +634,18 @@ describe("stepConnectGitHubRepo", () => {
 
     await stepConnectGitHubRepo(makeCfg(), null, NO_WAIT_VERIFY);
 
-    // Multiselect only contains undeployed repos — deployed ones can't be
-    // navigated to because they're not in the options list at all.
+    // Connected repos ride along at the bottom as disabled "(Connected)"
+    // entries; only unconnected ones are selectable.
     const multiselectArgs = mockPromptGitHubRepositories.mock.calls[0][0] as {
-      options: { kind?: string; value?: string }[];
+      options: { kind?: string; value?: string; disabled?: boolean; hint?: string }[];
     };
-    expect(multiselectArgs.options.filter((o) => o.kind === "repo").map((o) => o.value)).toEqual([
-      "acme/core",
-      "acme/cli",
+    expect(multiselectArgs.options.filter((o) => o.kind === "repo")).toMatchObject([
+      { value: "acme/core" },
+      { value: "acme/cli" },
+      { value: "acme/api", disabled: true, hint: "Connected" },
+      { value: "acme/web", disabled: true, hint: "Connected" },
     ]);
-    // Deployed repos surface via a separate info log.
-    const infoCalls = vi.mocked(p.log.info).mock.calls.map((c) => String(c[0]));
-    expect(infoCalls.some((s) => s.includes("Already connected") && s.includes("acme/api"))).toBe(
-      true,
-    );
-    // Only the selected undeployed repo gets created.
+    // Only the selected unconnected repo gets created.
     expect(mockTrpc.workspaces.create.mutate).toHaveBeenCalledTimes(1);
     const [args] = mockTrpc.workspaces.create.mutate.mock.calls[0];
     expect(args.name).toBe("acme/core");
@@ -747,9 +744,14 @@ describe("stepConnectGitHubRepo", () => {
 
     const result = await stepConnectGitHubRepo(makeCfg(), null, NO_WAIT_VERIFY);
 
-    // Not labeled "Already connected" — the space's Library has no source.
-    const infoCalls = vi.mocked(p.log.info).mock.calls.map((c) => String(c[0]));
-    expect(infoCalls.some((s) => s.includes("Already connected"))).toBe(false);
+    // Not labeled connected — the space's Library has no source, so the repo
+    // is a normal selectable option despite its orphan deployment row.
+    const promptArgs = mockPromptGitHubRepositories.mock.calls[0][0] as {
+      options: { kind?: string; value?: string; disabled?: boolean }[];
+    };
+    expect(promptArgs.options.filter((o) => o.kind === "repo")).toMatchObject([
+      { value: "acme/api" },
+    ]);
     // The orphan deployment is reused instead of duplicated.
     expect(mockTrpc.workspaces.create.mutate).not.toHaveBeenCalled();
     expect(mockTrpc.dataSource.syncDataSource.mutate).toHaveBeenCalledWith({
@@ -810,15 +812,12 @@ describe("stepConnectGitHubRepo", () => {
     const result = await stepConnectGitHubRepo(makeCfg(), null, NO_WAIT_VERIFY);
 
     const promptArgs = mockPromptGitHubRepositories.mock.calls[0][0] as {
-      options: { kind?: string; value?: string }[];
+      options: { kind?: string; value?: string; disabled?: boolean; hint?: string }[];
     };
-    expect(promptArgs.options.filter((o) => o.kind === "repo").map((o) => o.value)).toEqual([
-      "acme/core",
+    expect(promptArgs.options.filter((o) => o.kind === "repo")).toMatchObject([
+      { value: "acme/core" },
+      { value: "acme/api", disabled: true, hint: "Connected" },
     ]);
-    const infoCalls = vi.mocked(p.log.info).mock.calls.map((c) => String(c[0]));
-    expect(infoCalls.some((s) => s.includes("Already connected") && s.includes("acme/api"))).toBe(
-      true,
-    );
     expect(result.advance).toBe(true);
   });
 
