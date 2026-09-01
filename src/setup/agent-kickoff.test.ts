@@ -19,7 +19,6 @@ vi.mock("../debug/logger", () => ({
 import {
   binOnPath,
   cursorAgentBin,
-  kickoffAgentLabel,
   launchKickoffAgent,
   listAvailableKickoffAgents,
   resolveKickoffAgent,
@@ -222,13 +221,5 @@ describe("launchKickoffAgent", () => {
   it("returns false when no Cursor binary is available", () => {
     mockWhich({});
     expect(launchKickoffAgent("cursor", "mine logs")).toBe(false);
-  });
-});
-
-describe("kickoffAgentLabel", () => {
-  it("returns human labels", () => {
-    expect(kickoffAgentLabel("cursor")).toBe("Cursor");
-    expect(kickoffAgentLabel("claude")).toBe("Claude Code");
-    expect(kickoffAgentLabel("codex")).toBe("Codex");
   });
 });
