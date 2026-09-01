@@ -15,7 +15,6 @@ import * as p from "@clack/prompts";
 import {
   cursorAgentBin,
   type KickoffAgent,
-  kickoffAgentLabel,
   launchKickoffAgent,
   resolveKickoffAgent,
 } from "./agent-kickoff";
@@ -154,8 +153,8 @@ function confirmLogsHandoffMessage(agent: KickoffAgent): string {
   const lead =
     agent === "cursor" && !cursorAgentBin()
       ? "We'll print a prompt to paste into Agent to mine these into Dosu. Cursor CLI isn't on PATH, so nothing runs until you send it."
-      : `We'll hand off to ${kickoffAgentLabel(agent)} to mine these into Dosu.`;
-  return `${lead} ${LOGS_HANDOFF_PRIVACY}`;
+      : null;
+  return lead ? `${lead} ${LOGS_HANDOFF_PRIVACY}` : LOGS_HANDOFF_PRIVACY;
 }
 
 export interface OfferLogsHandoffOptions {

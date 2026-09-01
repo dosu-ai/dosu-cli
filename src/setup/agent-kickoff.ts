@@ -15,12 +15,6 @@ export type KickoffAgent = "cursor" | "claude" | "codex";
 
 const KICKOFF_AGENTS: readonly KickoffAgent[] = ["cursor", "claude", "codex"] as const;
 
-const AGENT_LABELS: Record<KickoffAgent, string> = {
-  cursor: "Cursor",
-  claude: "Claude Code",
-  codex: "Codex",
-};
-
 /** True when `bin` is resolvable on PATH. */
 export function binOnPath(bin: string): boolean {
   const cmd = process.platform === "win32" ? "where" : "which";
@@ -29,10 +23,6 @@ export function binOnPath(bin: string): boolean {
   } catch {
     return false;
   }
-}
-
-export function kickoffAgentLabel(agent: KickoffAgent): string {
-  return AGENT_LABELS[agent];
 }
 
 /** Prefer `agent`, then `cursor-agent` (Cursor's terminal agent CLI). */
