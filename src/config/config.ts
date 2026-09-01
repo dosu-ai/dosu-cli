@@ -3,6 +3,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { migrateLegacyConfig } from "./config-v1-migration";
 import { getAccessTokenUserID } from "./identity";
@@ -82,7 +83,11 @@ export function getConfigDir(): string {
   const xdgConfig = process.env.XDG_CONFIG_HOME;
   if (xdgConfig) return join(xdgConfig, dirName);
 
-  const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+  // homedir() resolves from the OS user database even when the process env
+  // lacks HOME (e.g. editor-spawned hooks with a minimal env). The previous
+  // "" fallback made this a RELATIVE path, silently strewing .config/ dirs
+  // into whatever cwd the CLI happened to run from.
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? homedir();
   return join(home, ".config", dirName);
 }
 
