@@ -106,7 +106,7 @@ describe("runMiner", () => {
     expect(params.options.settingSources).toEqual([]);
     expect(params.options.persistSession).toBe(false);
     expect(params.options.sandbox).toEqual({ enabled: true, failIfUnavailable: false });
-    expect(Object.keys(params.options.mcpServers)).toEqual(["dosu-sessions", "dosu"]);
+    expect(Object.keys(params.options.mcpServers)).toEqual(["sessions", "dosu"]);
     expect(params.options.mcpServers.dosu.type).toBe("http");
     // No allowedTools: bare entries would auto-approve ahead of canUseTool
     // and bypass the note cap. The callback is the only gate.
@@ -123,9 +123,9 @@ describe("runMiner", () => {
 
     expect((await canUseTool("Bash", {}, signal)).behavior).toBe("deny");
     expect((await canUseTool("Read", {}, signal)).behavior).toBe("deny");
-    expect(
-      (await canUseTool("mcp__dosu-sessions__read_session", { id: "s1" }, signal)).behavior,
-    ).toBe("allow");
+    expect((await canUseTool("mcp__sessions__read_session", { id: "s1" }, signal)).behavior).toBe(
+      "allow",
+    );
     expect((await canUseTool("mcp__dosu__write_knowledge", {}, signal)).behavior).toBe("allow");
     expect((await canUseTool("mcp__dosu__write_knowledge", {}, signal)).behavior).toBe("allow");
     const third = await canUseTool("mcp__dosu__write_knowledge", {}, signal);
@@ -220,14 +220,14 @@ describe("traceAgentMessage", () => {
       message: {
         content: [
           { type: "text", text: "Reading the first session\nnow." },
-          { type: "tool_use", name: "mcp__dosu-sessions__read_session", input: { id: "s1" } },
+          { type: "tool_use", name: "mcp__sessions__read_session", input: { id: "s1" } },
         ],
       },
     });
 
     const logged = traced();
     expect(logged).toContain("[agent] Reading the first session now.");
-    expect(logged).toContain('[agent] → mcp__dosu-sessions__read_session {"id":"s1"}');
+    expect(logged).toContain('[agent] → mcp__sessions__read_session {"id":"s1"}');
   });
 
   it("logs tool results with size and error flag", () => {

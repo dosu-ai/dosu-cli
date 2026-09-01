@@ -131,7 +131,7 @@ describe("createSessionToolsServer", () => {
     const server = createSessionToolsServer([session("/tmp/a.jsonl")]);
 
     expect(server.type).toBe("sdk");
-    expect(server.name).toBe("dosu-sessions");
+    expect(server.name).toBe("sessions");
     expect(server.instance).toBeDefined();
   });
 });

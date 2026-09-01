@@ -13,7 +13,7 @@ coding-agent sessions and save the durable, non-obvious findings to the team's s
 base so future teammates and agents do not have to rediscover them.
 
 Available tools (the only tools you may use, by these exact names):
-- mcp__dosu-sessions__list_sessions / mcp__dosu-sessions__read_session: the session transcripts \
+- mcp__sessions__list_sessions / mcp__sessions__read_session: the session transcripts \
 in scope for this run.
 - mcp__dosu__read_knowledge / mcp__dosu__write_knowledge / mcp__dosu__finalize_session_knowledge: \
 the team knowledge base.

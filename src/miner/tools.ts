@@ -13,7 +13,11 @@ import { readSessionTurns } from "../sessions/read";
 import { redactSecrets } from "../sessions/redact";
 import type { AgentSession } from "../sessions/scan";
 
-export const SESSIONS_SERVER_NAME = "dosu-sessions";
+// No hyphens: the SDK exposes tools as `mcp__<server>__<tool>`, and a hyphen
+// inside the server segment ("dosu-sessions" → mcp__dosu-sessions__read_session)
+// made models normalize it to an underscore and burn turns on unknown-tool
+// errors before self-correcting.
+export const SESSIONS_SERVER_NAME = "sessions";
 
 /** Response budget per read_session call; the model pages with `offset`. */
 export const MAX_READ_CHARS = 30_000;
