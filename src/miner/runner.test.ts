@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../sessions/scan";
+import { getVersionString } from "../version/version";
 import { classifyGatewayError, runMiner, traceAgentMessage } from "./runner";
 
 const debugMock = vi.hoisted(() => vi.fn());
@@ -22,6 +23,11 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
 
 vi.mock("./conflicts", () => ({
   detectSettingsConflicts: () => conflictsMock(),
+}));
+
+const resolveExecutableMock = vi.hoisted(() => vi.fn());
+vi.mock("./executable", () => ({
+  resolveClaudeExecutable: () => resolveExecutableMock(),
 }));
 
 const sessions: AgentSession[] = [
@@ -59,6 +65,8 @@ beforeEach(() => {
   queryMock.mockReset();
   conflictsMock.mockReset();
   conflictsMock.mockReturnValue([]);
+  resolveExecutableMock.mockReset();
+  resolveExecutableMock.mockReturnValue(undefined);
 });
 
 describe("classifyGatewayError", () => {
@@ -97,7 +105,7 @@ describe("runMiner", () => {
   it("wires the gateway env, isolation options, and both MCP servers", async () => {
     queryReturning(successResult());
 
-    await runMiner(baseOptions);
+    await runMiner({ ...baseOptions, runID: "run-123" });
 
     const params = queryMock.mock.calls[0][0];
     expect(params.options.env.ANTHROPIC_BASE_URL).toBe("http://localhost:7001/v1/llm-gateway");
@@ -108,9 +116,32 @@ describe("runMiner", () => {
     expect(params.options.sandbox).toEqual({ enabled: true, failIfUnavailable: false });
     expect(Object.keys(params.options.mcpServers)).toEqual(["sessions", "dosu"]);
     expect(params.options.mcpServers.dosu.type).toBe("http");
+    // Session-context headers (dosu#12249) ride on every knowledge MCP
+    // request. No observed_repo/commit: a run spans many repos, so absent
+    // beats wrong.
+    expect(params.options.mcpServers.dosu.headers).toMatchObject({
+      "X-Dosu-API-Key": "sk_user_test",
+      "X-Dosu-Session-Id": "run-123",
+      "X-Dosu-Origin-Tool": "dosu-cli-miner",
+      "X-Dosu-Origin-Version": getVersionString(),
+    });
+    expect(params.options.mcpServers.dosu.headers).not.toHaveProperty("X-Dosu-Observed-Repo");
+    expect(params.options.mcpServers.dosu.headers).not.toHaveProperty("X-Dosu-Observed-Commit");
     // No allowedTools: bare entries would auto-approve ahead of canUseTool
     // and bypass the note cap. The callback is the only gate.
     expect(params.options.allowedTools).toBeUndefined();
+    // SDK resolves its own binary when available; no override passed.
+    expect(params.options.pathToClaudeCodeExecutable).toBeUndefined();
+  });
+
+  it("passes a fallback Claude executable when the SDK binary is unavailable", async () => {
+    resolveExecutableMock.mockReturnValue("/home/u/.local/bin/claude");
+    queryReturning(successResult());
+
+    await runMiner(baseOptions);
+
+    const params = queryMock.mock.calls[0][0];
+    expect(params.options.pathToClaudeCodeExecutable).toBe("/home/u/.local/bin/claude");
   });
 
   it("canUseTool denies non-allowlisted tools and enforces the note cap", async () => {

@@ -14,6 +14,7 @@ import { getVersionString } from "../version/version";
 import { createRunConfigDir } from "./config-dir";
 import { detectSettingsConflicts } from "./conflicts";
 import { buildMinerEnv, type MinerTrigger } from "./env";
+import { resolveClaudeExecutable } from "./executable";
 import { buildMinerPrompt, MINER_SYSTEM_PROMPT } from "./prompt";
 import { createSessionToolsServer, SESSIONS_SERVER_NAME } from "./tools";
 
@@ -146,6 +147,13 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
   // The SDK is dynamically imported so no other CLI path pays its cost.
   const { query } = await import("@anthropic-ai/claude-agent-sdk");
 
+  // Compiled/bundled installs don't carry the SDK's native binary; fall back
+  // to a system Claude Code so hook-triggered runs work outside a checkout.
+  const claudeExecutable = resolveClaudeExecutable();
+  if (claudeExecutable) {
+    logger.debug("miner", `using system Claude Code executable: ${claudeExecutable}`);
+  }
+
   const configDir = createRunConfigDir();
   const runID = options.runID ?? crypto.randomUUID();
   const allowed = allowedToolNames();
@@ -178,13 +186,25 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
         // reach the miner (managed policy is handled by the conflict check).
         settingSources: [],
         persistSession: false,
+        ...(claudeExecutable ? { pathToClaudeCodeExecutable: claudeExecutable } : {}),
         sandbox: { enabled: true, failIfUnavailable: false },
         mcpServers: {
           [SESSIONS_SERVER_NAME]: createSessionToolsServer(options.sessions),
           [KNOWLEDGE_SERVER_NAME]: {
             type: "http",
             url: mcpURL(options.deploymentID),
-            headers: mcpHeaders(options.apiKey),
+            // Session-context headers (dosu#12249): the backend reads these
+            // per request and stores them on each note; old backends ignore
+            // them. Session id = this mining run — the transcripts' own ids
+            // vary per note and ride in write_knowledge metadata instead.
+            // observed_repo/commit are deliberately omitted: one run mines
+            // sessions from many repos, and absent beats wrong.
+            headers: {
+              ...mcpHeaders(options.apiKey),
+              "X-Dosu-Session-Id": runID,
+              "X-Dosu-Origin-Tool": "dosu-cli-miner",
+              "X-Dosu-Origin-Version": getVersionString(),
+            },
           },
         },
         // Deliberately NO allowedTools: bare entries there auto-approve the
