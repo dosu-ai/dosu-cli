@@ -156,6 +156,9 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
 
   const configDir = createRunConfigDir();
   const runID = options.runID ?? crypto.randomUUID();
+  // ISO-8601 strings with identical precision compare correctly as strings;
+  // the oldest session's timestamp bounds the batch's learning window.
+  const sessionStartedAt = options.sessions.map((s) => s.updated).sort()[0];
   const allowed = allowedToolNames();
   const maxNotes = options.maxNotes ?? DEFAULT_MAX_NOTES;
   const abort = new AbortController();
@@ -193,17 +196,19 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
           [KNOWLEDGE_SERVER_NAME]: {
             type: "http",
             url: mcpURL(options.deploymentID),
-            // Session-context headers (dosu#12249): the backend reads these
-            // per request and stores them on each note; old backends ignore
-            // them. Session id = this mining run — the transcripts' own ids
-            // vary per note and ride in write_knowledge metadata instead.
-            // observed_repo/commit are deliberately omitted: one run mines
-            // sessions from many repos, and absent beats wrong.
+            // Session-context headers (dosu#12249/#12264): the backend reads
+            // these per request and stores them on each note; backends
+            // without the feature ignore them. Session id = this mining run —
+            // the transcripts' own ids vary per note. Session start = the
+            // oldest mined session, bounding the learning window. X-Dosu-Repo/
+            // -Branch/-Commit (the anchor attempt) are deliberately omitted:
+            // one run mines sessions from many repos, and absent beats wrong.
+            // X-Dosu-Model is the gateway's call, not ours.
             headers: {
               ...mcpHeaders(options.apiKey),
               "X-Dosu-Session-Id": runID,
-              "X-Dosu-Origin-Tool": "dosu-cli-miner",
-              "X-Dosu-Origin-Version": getVersionString(),
+              "X-Dosu-Client": `dosu-cli-miner/${getVersionString()}`,
+              ...(sessionStartedAt ? { "X-Dosu-Session-Started-At": sessionStartedAt } : {}),
             },
           },
         },

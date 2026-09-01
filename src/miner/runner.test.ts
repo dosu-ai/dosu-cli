@@ -116,17 +116,18 @@ describe("runMiner", () => {
     expect(params.options.sandbox).toEqual({ enabled: true, failIfUnavailable: false });
     expect(Object.keys(params.options.mcpServers)).toEqual(["sessions", "dosu"]);
     expect(params.options.mcpServers.dosu.type).toBe("http");
-    // Session-context headers (dosu#12249) ride on every knowledge MCP
-    // request. No observed_repo/commit: a run spans many repos, so absent
-    // beats wrong.
+    // Session-context headers (dosu#12249/#12264) ride on every knowledge
+    // MCP request. No X-Dosu-Repo/-Branch/-Commit (the anchor attempt): a
+    // run spans many repos, so absent beats wrong.
     expect(params.options.mcpServers.dosu.headers).toMatchObject({
       "X-Dosu-API-Key": "sk_user_test",
       "X-Dosu-Session-Id": "run-123",
-      "X-Dosu-Origin-Tool": "dosu-cli-miner",
-      "X-Dosu-Origin-Version": getVersionString(),
+      "X-Dosu-Client": `dosu-cli-miner/${getVersionString()}`,
+      "X-Dosu-Session-Started-At": "2026-08-27T00:00:00.000Z",
     });
-    expect(params.options.mcpServers.dosu.headers).not.toHaveProperty("X-Dosu-Observed-Repo");
-    expect(params.options.mcpServers.dosu.headers).not.toHaveProperty("X-Dosu-Observed-Commit");
+    expect(params.options.mcpServers.dosu.headers).not.toHaveProperty("X-Dosu-Repo");
+    expect(params.options.mcpServers.dosu.headers).not.toHaveProperty("X-Dosu-Branch");
+    expect(params.options.mcpServers.dosu.headers).not.toHaveProperty("X-Dosu-Commit");
     // No allowedTools: bare entries would auto-approve ahead of canUseTool
     // and bypass the note cap. The callback is the only gate.
     expect(params.options.allowedTools).toBeUndefined();
