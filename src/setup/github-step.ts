@@ -18,8 +18,9 @@
  *      repository list.
  *   6. For each selected repo, fan out tRPC:
  *      - `workspaces.create` (creates github deployment + fires welcome email),
- *        unless the space already has a github deployment for the repo — an
- *        orphan Monitor row from a detached/GC'd source — which is reused.
+ *        unless the org already has a github deployment for the repo — an
+ *        orphan Monitor row from a detached/GC'd source — which is reused
+ *        (`deployment.repository_id` is unique, so create would 23505 anyway).
  *      - `dataSource.create` (creates data_source + github_data_source_config
  *        trigger), unless the org already has a github data_source for the
  *        repo (e.g. attached to another Library) — which is reused unsynced.
@@ -240,28 +241,25 @@ function isConnectedToSpace(repo: AvailableRepo, sources: SpaceGithubSources | n
 }
 
 /**
- * `repository_id` → `deployment_id` for github deployments already in the
- * space. Lets the connect path reuse an orphan Monitor row instead of
- * creating a duplicate deployment with the same name. Fail-open to an empty
- * map — worst case we create a fresh deployment, the pre-fix behavior.
+ * `repository_id` → `deployment_id` for github deployments anywhere in the
+ * org. `deployment.repository_id` is globally unique in the backend — a repo
+ * gets exactly one deployment, ever — so when one exists, reusing it is the
+ * only move that can succeed (`workspaces.create` maps the unique violation
+ * to "Workspace exists for target"). Deliberately org-scoped via
+ * `listForOrg`: the space-scoped `listForSpace` resolves through the
+ * `deployment_space` junction, which can be missing rows for exactly the
+ * orphan deployments this lookup exists to find. Fail-open to an empty map.
  */
-async function fetchSpaceGithubDeployments(
+async function fetchOrgGithubDeployments(
   trpc: TypedClient,
-  spaceID: string,
+  orgID: string,
 ): Promise<Map<number, string>> {
   const map = new Map<number, string>();
   try {
-    const rows: unknown = await trpc.workspaces.listForSpace.query(spaceID);
-    if (!Array.isArray(rows)) return map;
-    for (const row of rows) {
+    const rows = await trpc.workspaces.listForOrg.query(orgID);
+    for (const row of rows ?? []) {
       if (
-        row !== null &&
-        typeof row === "object" &&
-        "deployment_id" in row &&
-        typeof row.deployment_id === "string" &&
-        "provider_slug" in row &&
         row.provider_slug === "github" &&
-        "repository_id" in row &&
         typeof row.repository_id === "number" &&
         !map.has(row.repository_id)
       ) {
@@ -270,7 +268,7 @@ async function fetchSpaceGithubDeployments(
     }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    logger.warn("setup", `listForSpace during connect failed: ${msg}`);
+    logger.warn("setup", `workspaces.listForOrg during connect failed: ${msg}`);
   }
   return map;
 }
@@ -793,10 +791,10 @@ export async function stepConnectGitHubRepo(
     const s = p.spinner();
     s.start(`Connecting ${slugs.length} repo${slugs.length === 1 ? "" : "s"}...`);
     // A selectable repo may still have leftover rows: an orphan github
-    // deployment in this space, or a github data_source living in the org
-    // (attached to another Library, or detached). Reuse those instead of
-    // creating same-named duplicates.
-    const existingDeployments = await fetchSpaceGithubDeployments(trpc, spaceID);
+    // deployment, or a github data_source living in the org (attached to
+    // another Library, or detached). Reuse those — creating duplicates is
+    // impossible anyway (both are unique per repo backend-side).
+    const existingDeployments = await fetchOrgGithubDeployments(trpc, orgID);
     const existingDataSources = await fetchOrgGithubDataSources(trpc, orgID);
     const created: { deployment_id: string; data_source_id: string; slug: string }[] = [];
     for (const slug of slugs) {

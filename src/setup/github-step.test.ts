@@ -22,6 +22,7 @@ const {
       create: { mutate: vi.fn() },
       delete: { mutate: vi.fn() },
       listForSpace: { query: vi.fn() },
+      listForOrg: { query: vi.fn() },
     },
     dataSource: {
       create: { mutate: vi.fn() },
@@ -241,6 +242,9 @@ describe("stepConnectGitHubRepo", () => {
     // truth for the "Already connected" split. Tests that need connected
     // repos return matching sources here.
     mockTrpc.libraries.sourcesList.query.mockResolvedValue([]);
+    // Default: no github deployments anywhere in the org — the reuse map
+    // stays empty and connect paths create fresh deployments.
+    mockTrpc.workspaces.listForOrg.query.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -725,14 +729,24 @@ describe("stepConnectGitHubRepo", () => {
   });
 
   it("keeps orphan-deployment repos selectable and reuses the deployment on connect", async () => {
-    // The dev-DB dead end: a github deployment row exists in the space
+    // The dev-DB dead end: a github deployment row exists in the org
     // (is_deployed=true) but its data_source was GC'd / never attached — the
     // Library has no github source. The repo must stay selectable, and
-    // connecting it must reuse the orphan deployment, not create a duplicate.
+    // connecting it must reuse the orphan deployment: `repository_id` is
+    // globally unique on `deployment`, so `workspaces.create` would be
+    // rejected with "Workspace exists for target" anyway. The reuse map is
+    // built from org-scoped `workspaces.listForOrg` because the space-scoped
+    // `listForSpace` resolves via the `deployment_space` junction, which can
+    // be missing rows for exactly these orphans.
     mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
       { repository_id: 7, name: "api", slug: "acme/api", is_deployed: true },
     ]);
     mockTrpc.libraries.sourcesList.query.mockResolvedValue([]);
+    mockTrpc.workspaces.listForOrg.query.mockResolvedValue([
+      { deployment_id: "dep-orphan", provider_slug: "github", repository_id: 7 },
+    ]);
+    // The junction is healthy in this test, so listForSpace also sees the
+    // orphan — the link step wires the new data_source into it.
     mockTrpc.workspaces.listForSpace.query.mockResolvedValue([
       { deployment_id: "dep-orphan", provider_slug: "github", repository_id: 7 },
     ]);
