@@ -17,9 +17,6 @@
 // - search.getMentions
 // - slackChannel.getAll
 // - slackChannel.join
-// - suggestedDoc.delete
-// - suggestedDoc.generate
-// - suggestedDoc.listForKnowledgeStore
 // - thread.archive
 // - topic.getPagesByTopicId
 // - topic.listTopicsByKnowledgeStore
@@ -566,7 +563,7 @@ export type CliSlackChannelRow = {
 	topic?: string | null
 }
 
-export declare const CLI_CONTRACT_HASH: 'ac90a31489e1'
+export declare const CLI_CONTRACT_HASH: '85b07f7689e2'
 
 export type AgentsCreateInput = {
 	data_source_id: string
@@ -1528,25 +1525,6 @@ export type SlackChannelJoinInput = string
 
 export type SlackChannelJoinOutput = any
 
-export type SuggestedDocDeleteInput = {
-	id: string
-}
-
-export type SuggestedDocDeleteOutput = any
-
-export type SuggestedDocGenerateInput = {
-	dataSourceIds: Array<string>
-	knowledgeStoreId: string
-}
-
-export type SuggestedDocGenerateOutput = any
-
-export type SuggestedDocListForKnowledgeStoreInput = {
-	knowledgeStoreId: string
-}
-
-export type SuggestedDocListForKnowledgeStoreOutput = any
-
 export type ThreadArchiveInput = {
 	archived: boolean
 	threadId: string
@@ -2009,14 +1987,6 @@ export interface CliApiClient {
 	slackChannel: {
 		getAll: QueryProcedure<SlackChannelGetAllInput, SlackChannelGetAllOutput>
 		join: MutationProcedure<SlackChannelJoinInput, SlackChannelJoinOutput>
-	}
-	suggestedDoc: {
-		delete: MutationProcedure<SuggestedDocDeleteInput, SuggestedDocDeleteOutput>
-		generate: MutationProcedure<SuggestedDocGenerateInput, SuggestedDocGenerateOutput>
-		listForKnowledgeStore: QueryProcedure<
-			SuggestedDocListForKnowledgeStoreInput,
-			SuggestedDocListForKnowledgeStoreOutput
-		>
 	}
 	thread: {
 		archive: MutationProcedure<ThreadArchiveInput, ThreadArchiveOutput>
