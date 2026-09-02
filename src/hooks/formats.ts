@@ -130,10 +130,21 @@ export function hasGroupedHook(config: JsonConfig, event: string): boolean {
 }
 
 export function addGroupedHook(config: JsonConfig, event: string): JsonConfig {
-  if (hasGroupedHook(config, event)) return config;
+  const desired = hookCommand();
+
+  let present = false;
+  for (const group of groupedEventArray(config, event)) {
+    if (!Array.isArray(group?.hooks)) continue;
+    for (const hook of group.hooks) {
+      if (!isDosuHookCommand(hook?.command)) continue;
+      present = true;
+      hook.command = desired;
+    }
+  }
+  if (present) return config;
   if (typeof config.hooks !== "object" || config.hooks === null) config.hooks = {};
   if (!Array.isArray(config.hooks[event])) config.hooks[event] = [];
-  config.hooks[event].push({ hooks: [{ type: "command", command: hookCommand() }] });
+  config.hooks[event].push({ hooks: [{ type: "command", command: desired }] });
   return config;
 }
 
@@ -173,11 +184,19 @@ export function hasCursorHook(config: JsonConfig, event: string): boolean {
 }
 
 export function addCursorHook(config: JsonConfig, event: string): JsonConfig {
-  if (hasCursorHook(config, event)) return config;
+  const desired = hookCommand();
+  // Same stale-command refresh as addGroupedHook.
+  let present = false;
+  for (const entry of cursorEventArray(config, event)) {
+    if (!isDosuHookCommand(entry?.command)) continue;
+    present = true;
+    entry.command = desired;
+  }
+  if (present) return config;
   if (config.version === undefined) config.version = 1;
   if (typeof config.hooks !== "object" || config.hooks === null) config.hooks = {};
   if (!Array.isArray(config.hooks[event])) config.hooks[event] = [];
-  config.hooks[event].push({ command: hookCommand() });
+  config.hooks[event].push({ command: desired });
   return config;
 }
 

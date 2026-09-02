@@ -47,13 +47,15 @@ export interface RunMinerOptions {
   maxTurns?: number;
   /** Cap on write_knowledge calls per run. */
   maxNotes?: number;
-  /** Wall-clock abort. Default 10 minutes. */
+  /** Wall-clock abort. Default 15 minutes. */
   timeoutMs?: number;
 }
 
-const DEFAULT_MAX_TURNS = 50;
-const DEFAULT_MAX_NOTES = 20;
-const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
+// Sized for MINE_BATCH_LIMIT-session batches: observed runs spend ~4-6 turns
+// and write up to ~3 notes per session, so 10 sessions fit with headroom.
+const DEFAULT_MAX_TURNS = 80;
+const DEFAULT_MAX_NOTES = 40;
+const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
 
 const KNOWLEDGE_SERVER_NAME = "dosu";
 

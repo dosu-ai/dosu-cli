@@ -117,4 +117,23 @@ describe("renderBanner", () => {
     const banner = renderBanner(makeContext({ width: undefined }));
     expect(stripAnsi(banner)).toContain("cli v0.52.0");
   });
+
+  it("includes the sync row only when a mining run is active", () => {
+    expect(stripAnsi(renderBanner(makeContext()))).not.toContain("mining now");
+
+    const active = stripAnsi(renderBanner(makeContext({ mining: true })));
+    expect(active).toContain("sync");
+    expect(active).toContain("mining now \u00B7 see Sync status");
+  });
+
+  it("includes the update row only when a newer version is known", () => {
+    expect(stripAnsi(renderBanner(makeContext()))).not.toContain("update");
+
+    const withUpdate = stripAnsi(
+      renderBanner(makeContext({ update: { version: "0.53.0", hint: 'Run "dosu upgrade"' } })),
+    );
+    expect(withUpdate).toContain("update");
+    expect(withUpdate).toContain("\u2191 0.53.0 available");
+    expect(withUpdate).toContain('Run "dosu upgrade"');
+  });
 });

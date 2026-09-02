@@ -86,6 +86,7 @@ vi.mock("../hooks/agents", () => ({
 
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { HookConfigError } from "../hooks/formats";
+import { MINE_BATCH_LIMIT } from "../sync/sync";
 import { knowledgeCommand } from "./knowledge";
 
 let logSpy: ReturnType<typeof vi.spyOn>;
@@ -549,13 +550,14 @@ describe("knowledge sync", () => {
   });
 
   it("--bootstrap is capped even if mining always reports more", async () => {
-    // Every round claims 20 sessions are still ready; the cap comes from the
-    // first round's backlog: ceil(20/5)+2 = 6 rounds total (initial + 5 drains).
-    mockRunSync.mockResolvedValue(minedOutcome(20));
+    // Every round claims two batches' worth of sessions are still ready; the
+    // cap comes from the first round's backlog: ceil(ready/batch)+2 rounds.
+    const ready = MINE_BATCH_LIMIT * 2;
+    mockRunSync.mockResolvedValue(minedOutcome(ready));
 
     await run("sync", "--bootstrap");
 
-    expect(mockRunSync).toHaveBeenCalledTimes(6);
+    expect(mockRunSync).toHaveBeenCalledTimes(Math.ceil(ready / MINE_BATCH_LIMIT) + 2);
   });
 
   it("--bootstrap without a miner stays single-shot", async () => {

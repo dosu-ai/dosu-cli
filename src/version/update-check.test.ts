@@ -13,6 +13,7 @@ import {
   buildUpdateNotice,
   checkForUpdates,
   fetchLatestVersion,
+  getAvailableUpdate,
   isNewerVersion,
 } from "./update-check";
 
@@ -34,29 +35,47 @@ describe("buildUpdateHint", () => {
 });
 
 describe("buildUpdateNotice", () => {
-  it("shows a standard square gold notice to an interactive user", () => {
-    const notice = buildUpdateNotice("0.43.0", "0.44.0", "npm", true);
-    const lines = notice
-      // biome-ignore lint/suspicious/noControlCharactersInRegex: Strip ANSI colors before measuring the frame.
-      .replaceAll(/\u001B\[[0-9;]*m/g, "")
-      .trim()
-      .split("\n");
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: Strip ANSI colors before measuring the frame.
+  const stripAnsi = (text: string) => text.replaceAll(/\u001B\[[0-9;]*m/g, "");
 
-    expect(notice).toContain("Update available: 0.43.0 → 0.44.0");
-    expect(notice).toContain('Run "dosu upgrade"');
+  it("shows a rounded gold notice with centered content to an interactive user", () => {
+    // width 0: no terminal margin, so the frame itself is easy to assert on.
+    const notice = buildUpdateNotice("0.43.0", "0.44.0", "npm", true, false, 0);
+    const stripped = stripAnsi(notice);
+    const lines = stripped.trim().split("\n");
+
+    expect(stripped).toContain("Update available: 0.43.0 → 0.44.0");
+    expect(stripped).toContain('Run "dosu upgrade"');
     expect(notice).not.toContain("Tell the user");
-    expect(notice.split("\u001B[33m").length - 1).toBe(6);
-    expect(notice).not.toContain("\u001B[36m");
-    expect(notice).not.toContain("\u001B[37m");
-    expect(notice).not.toContain("\u001B[2m");
-    expect(notice).not.toContain("═");
+    expect(notice).toContain("\u001B[33m"); // gold frame
+    expect(notice).toContain("\u001B[36m"); // highlighted upgrade command
+    expect(notice).toContain("\u001B[2m"); // dimmed context
     expect(lines).toHaveLength(6);
-    expect(lines[0]).toMatch(/^┌─+┐$/);
-    expect(lines.at(-1)).toMatch(/^└─+┘$/);
+    expect(lines[0]).toMatch(/^╭─+╮$/);
+    expect(lines.at(-1)).toMatch(/^╰─+╯$/);
     expect(lines.slice(1, -1).every((line) => line.startsWith("│") && line.endsWith("│"))).toBe(
       true,
     );
     expect(new Set(lines.map((line) => line.length)).size).toBe(1);
+
+    // Every content line is centered within the frame (balanced padding).
+    for (const line of lines.slice(1, -1)) {
+      const inner = line.slice(1, -1);
+      const left = inner.length - inner.trimStart().length;
+      const right = inner.length - inner.trimEnd().length;
+      expect(Math.abs(left - right)).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("centers the box in a wide terminal", () => {
+    const notice = buildUpdateNotice("0.43.0", "0.44.0", "npm", true, false, 100);
+    const lines = stripAnsi(notice)
+      .split("\n")
+      .filter((line) => line.trim() !== "");
+
+    const margins = lines.map((line) => line.length - line.trimStart().length);
+    expect(margins[0]).toBeGreaterThan(0);
+    expect(new Set(margins).size).toBe(1); // one shared left margin
   });
 
   it("tells an agent to get approval before updating", () => {
@@ -273,6 +292,56 @@ describe("checkForUpdates", () => {
 
     await checkForUpdates();
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("notify: false refreshes the cache but prints nothing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ latest: "99.0.0" }) }),
+    );
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await checkForUpdates({ notify: false });
+
+    expect(spy).not.toHaveBeenCalled();
+    const cachePath = join(tempDir, "dosu-cli", "update-check.json");
+    expect(JSON.parse(readFileSync(cachePath, "utf-8")).latestVersion).toBe("99.0.0");
+  });
+
+  it("notify: false also silences a fresh cached update", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { mkdirSync } = require("node:fs");
+    mkdirSync(join(tempDir, "dosu-cli"), { recursive: true });
+    writeFileSync(
+      join(tempDir, "dosu-cli", "update-check.json"),
+      JSON.stringify({ lastCheck: Date.now(), latestVersion: "99.0.0" }),
+    );
+
+    await checkForUpdates({ notify: false });
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("getAvailableUpdate reads the cached newer version without printing", () => {
+    const { mkdirSync } = require("node:fs");
+    mkdirSync(join(tempDir, "dosu-cli"), { recursive: true });
+    writeFileSync(
+      join(tempDir, "dosu-cli", "update-check.json"),
+      JSON.stringify({ lastCheck: Date.now(), latestVersion: "99.0.0" }),
+    );
+
+    expect(getAvailableUpdate()).toBe("99.0.0");
+  });
+
+  it("getAvailableUpdate is null with no cache or no newer version", () => {
+    expect(getAvailableUpdate()).toBeNull();
+
+    const { mkdirSync } = require("node:fs");
+    mkdirSync(join(tempDir, "dosu-cli"), { recursive: true });
+    writeFileSync(
+      join(tempDir, "dosu-cli", "update-check.json"),
+      JSON.stringify({ lastCheck: Date.now(), latestVersion: "0.0.1" }),
+    );
+    expect(getAvailableUpdate()).toBeNull();
   });
 
   it("refreshes the cache when it is stale", async () => {

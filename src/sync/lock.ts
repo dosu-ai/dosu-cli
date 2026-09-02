@@ -16,6 +16,19 @@ const LOCK_FILENAME = "knowledge-sync.lock";
 /** Locks older than this are considered abandoned (crashed run) and broken. */
 export const STALE_LOCK_MS = 15 * 60 * 1000;
 
+/**
+ * True when a process with this pid exists. EPERM means it exists but belongs
+ * to another user — still alive. Signal 0 performs the check without sending.
+ */
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 export interface SyncLock {
   /** True when this process now holds the lock. */
   acquire(): boolean;
@@ -51,7 +64,12 @@ export function fileLock(
       }
       try {
         const age = now().getTime() - statSync(path).mtimeMs;
-        if (age > STALE_LOCK_MS) {
+        // A dead holder is broken immediately: a mining run killed with its
+        // parent terminal would otherwise block every sync for the full
+        // stale window. An unparseable pid falls back to the age check.
+        const holder = Number.parseInt(readFileSync(path, "utf8"), 10);
+        const holderDead = Number.isInteger(holder) && holder > 0 && !processAlive(holder);
+        if (age > STALE_LOCK_MS || holderDead) {
           rmSync(path, { force: true });
           held = tryCreate();
           return held;

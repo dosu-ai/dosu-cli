@@ -40,8 +40,10 @@ const GATE_WINDOW = 200;
  * Sessions mined per run. Oldest-first, so the watermark advances
  * monotonically and the remaining (newer) backlog is picked up by the
  * next trigger. Keeps any single hook-triggered run's token cost bounded.
+ * Sized against the miner's per-run caps in runner.ts (observed cost is
+ * ~4-6 turns and up to ~3 notes per session); raise those together.
  */
-export const MINE_BATCH_LIMIT = 5;
+export const MINE_BATCH_LIMIT = 10;
 
 type SyncStatus =
   | "backlog"

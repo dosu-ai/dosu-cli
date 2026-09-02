@@ -144,6 +144,25 @@ describe("grouped hooks (Claude Code / Codex format)", () => {
     expect(config.hooks.SessionEnd).toHaveLength(1);
   });
 
+  it("refreshes a stale dosu command in place instead of keeping it", () => {
+    const config = {
+      hooks: {
+        SessionEnd: [
+          OTHER_GROUP,
+          {
+            hooks: [
+              { type: "command", command: "'/old/bin/dosu' knowledge sync --quiet --detach" },
+            ],
+          },
+        ],
+      },
+    };
+    addGroupedHook(config, "SessionEnd");
+    expect(config.hooks.SessionEnd).toHaveLength(2);
+    expect(config.hooks.SessionEnd[0]).toEqual(OTHER_GROUP);
+    expect(config.hooks.SessionEnd[1].hooks).toEqual([{ type: "command", command: HOOK_COMMAND }]);
+  });
+
   it("preserves unrelated settings keys", () => {
     const config = addGroupedHook({ theme: "auto", hooks: { Stop: [OTHER_GROUP] } }, "SessionEnd");
     expect(config.theme).toBe("auto");
@@ -205,6 +224,20 @@ describe("cursor hooks", () => {
   it("preserves other tools' entries and is idempotent", () => {
     const base = { version: 1, hooks: { stop: [OTHER_ENTRY] } };
     const config = addCursorHook(addCursorHook(base, "stop"), "stop");
+    expect(config.hooks.stop).toEqual([OTHER_ENTRY, { command: HOOK_COMMAND }]);
+  });
+
+  it("refreshes a stale dosu command in place instead of keeping it", () => {
+    const config = {
+      version: 1,
+      hooks: {
+        stop: [
+          OTHER_ENTRY,
+          { command: "DOSU_DEV=true '/old/bin/dosu' knowledge sync --quiet --detach" },
+        ],
+      },
+    };
+    addCursorHook(config, "stop");
     expect(config.hooks.stop).toEqual([OTHER_ENTRY, { command: HOOK_COMMAND }]);
   });
 

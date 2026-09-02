@@ -38,6 +38,23 @@ vi.mock("../setup/flow", () => ({
   runSetup: vi.fn(),
 }));
 
+// The live sync view needs a raw-mode TTY and polls the debug log.
+vi.mock("./sync-view", () => ({
+  runSyncView: vi.fn(),
+}));
+
+// Insights fetches from the backend and opens a browser report.
+vi.mock("../commands/insights", () => ({
+  executeInsights: vi.fn(),
+}));
+
+// The banner reads the update cache from disk; tests must not see the
+// developer machine's real cache file.
+vi.mock("../version/update-check", () => ({
+  getAvailableUpdate: vi.fn(() => null),
+  buildUpdateHint: vi.fn(() => 'Run "dosu upgrade"'),
+}));
+
 vi.mock("picocolors", () => ({
   default: {
     magenta: (s: string) => s,
@@ -62,12 +79,14 @@ vi.mock("../mcp/providers", () => ({
 import { OAuthCallbackError } from "../auth/errors";
 import { startOAuthFlow } from "../auth/flow";
 import { Client } from "../client/client";
+import { executeInsights } from "../commands/insights";
 import type { Config } from "../config/config";
 import { emptyConfig, loadConfig, saveConfig, updateTarget } from "../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { runSetup } from "../setup/flow";
 import { menuSelect } from "./menu";
 import * as p from "./prompts";
+import { runSyncView } from "./sync-view";
 import { handleLogout, runTUI } from "./tui";
 
 const mockMenuSelect = vi.mocked(menuSelect);
@@ -75,6 +94,8 @@ const mockConfirm = vi.mocked(p.confirm);
 const mockIsCancel = vi.mocked(p.isCancel);
 const mockStartOAuthFlow = vi.mocked(startOAuthFlow);
 const mockRunSetup = vi.mocked(runSetup);
+const mockRunSyncView = vi.mocked(runSyncView);
+const mockExecuteInsights = vi.mocked(executeInsights);
 
 // ---------------------------------------------------------------------------
 // Temp directory setup — real config on disk
@@ -419,16 +440,64 @@ describe("runTUI", () => {
     expect(p.log.success).toHaveBeenCalledWith("Credentials cleared.");
   });
 
-  it("keeps the menu to setup, auth, logout, and exit", async () => {
+  it("shows insights in the menu only for a fully set-up account", async () => {
     writeRealConfig(
       makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
     );
     mockMenuSelect.mockResolvedValueOnce("exit");
+    await runTUI();
+    const full = mockMenuSelect.mock.calls[0]?.[1] ?? [];
+    expect(full.map((o) => o.value)).toEqual([
+      "setup",
+      "sync",
+      "insights",
+      "auth",
+      "logout",
+      "exit",
+    ]);
+
+    mockMenuSelect.mockClear();
+    writeRealConfig(makeCfg({}));
+    mockMenuSelect.mockResolvedValueOnce("exit");
+    await runTUI();
+    const bare = mockMenuSelect.mock.calls[0]?.[1] ?? [];
+    expect(bare.map((o) => o.value)).toEqual(["setup", "sync", "auth", "logout", "exit"]);
+  });
+
+  it("clears the screen on a TTY so the banner starts at the top", async () => {
+    writeRealConfig(makeCfg({}));
+    mockMenuSelect.mockResolvedValueOnce("exit");
+    const original = process.stdout.isTTY;
+    Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+    try {
+      await runTUI();
+    } finally {
+      Object.defineProperty(process.stdout, "isTTY", { value: original, configurable: true });
+    }
+    const esc = String.fromCharCode(27);
+    expect(stdoutWrites[0]).toContain(`${esc}[2J${esc}[H`);
+  });
+
+  it("offers insights only for a fully set-up account, and runs it", async () => {
+    writeRealConfig(makeCfg({ space_id: "sp", deployment_id: "dep", api_key: "key" }));
+    mockExecuteInsights.mockResolvedValue();
+    mockMenuSelect.mockResolvedValueOnce("insights").mockResolvedValueOnce("exit");
 
     await runTUI();
 
     const opts = mockMenuSelect.mock.calls[0]?.[1] ?? [];
-    expect(opts.map((o) => o.value)).toEqual(["setup", "auth", "logout", "exit"]);
+    expect(opts.map((o) => o.value)).toContain("insights");
+    expect(mockExecuteInsights).toHaveBeenCalledOnce();
+  });
+
+  it("sync action opens the live sync view", async () => {
+    writeRealConfig(makeCfg({}));
+    mockRunSyncView.mockResolvedValue();
+    mockMenuSelect.mockResolvedValueOnce("sync").mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    expect(mockRunSyncView).toHaveBeenCalledOnce();
   });
 
   it("setup action calls runSetup and reloads config", async () => {
@@ -463,15 +532,15 @@ describe("runTUI", () => {
     mockRunSetup.mockImplementation(async () => {
       writeRealConfig(emptyConfig());
     });
-    mockMenuSelect.mockResolvedValueOnce("setup").mockResolvedValueOnce("exit");
+    mockMenuSelect
+      .mockResolvedValueOnce("setup")
+      .mockResolvedValueOnce("logout")
+      .mockResolvedValueOnce("exit");
 
     await runTUI();
 
-    // The auth hint is config-derived: it read "Re-authenticate" on the first
-    // render and must drop off once the reloaded config has no session.
-    const firstOptions = mockMenuSelect.mock.calls[0]?.[1] ?? [];
-    const nextOptions = mockMenuSelect.mock.calls[1]?.[1] ?? [];
-    expect(firstOptions.find((option) => option.value === "auth")?.hint).toBe("Re-authenticate");
-    expect(nextOptions.find((option) => option.value === "auth")?.hint).toBeUndefined();
+    // Logout after setup sees the reloaded (now empty) config: the session
+    // that was cleared on disk must be gone from the in-memory config too.
+    expect(p.log.warn).toHaveBeenCalledWith("You are not logged in.");
   });
 });

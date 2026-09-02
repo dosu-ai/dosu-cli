@@ -40,17 +40,18 @@ describe("fileLock", () => {
   });
 
   it("release without acquire is a no-op and never deletes a foreign lock", () => {
-    writeFileSync(lockPath(dir), "99999999");
+    // pid 1 (launchd/init) is always alive; kill(1, 0) fails with EPERM, not ESRCH.
+    writeFileSync(lockPath(dir), "1");
 
     const lock = fileLock(dir);
     expect(lock.acquire()).toBe(false);
     lock.release();
 
-    expect(readFileSync(lockPath(dir), "utf8")).toBe("99999999");
+    expect(readFileSync(lockPath(dir), "utf8")).toBe("1");
   });
 
   it("breaks a stale lock left by a crashed run", () => {
-    writeFileSync(lockPath(dir), "99999999");
+    writeFileSync(lockPath(dir), "1");
     const stale = new Date(Date.now() - STALE_LOCK_MS - 60 * 1000);
     utimesSync(lockPath(dir), stale, stale);
 
@@ -60,9 +61,29 @@ describe("fileLock", () => {
     expect(readFileSync(lockPath(dir), "utf8")).toBe(String(process.pid));
   });
 
-  it("a fresh foreign lock is respected", () => {
-    writeFileSync(lockPath(dir), "99999999");
+  it("a fresh lock held by a live process is respected", () => {
+    writeFileSync(lockPath(dir), "1");
 
     expect(fileLock(dir).acquire()).toBe(false);
+  });
+
+  it("breaks a fresh lock whose holder is dead", () => {
+    // Out of macOS/Linux pid range, so kill(pid, 0) reports no such process.
+    writeFileSync(lockPath(dir), "99999999");
+
+    const lock = fileLock(dir);
+
+    expect(lock.acquire()).toBe(true);
+    expect(readFileSync(lockPath(dir), "utf8")).toBe(String(process.pid));
+  });
+
+  it("a fresh lock with an unparseable pid is respected until stale", () => {
+    writeFileSync(lockPath(dir), "not-a-pid");
+
+    expect(fileLock(dir).acquire()).toBe(false);
+
+    const stale = new Date(Date.now() - STALE_LOCK_MS - 60 * 1000);
+    utimesSync(lockPath(dir), stale, stale);
+    expect(fileLock(dir).acquire()).toBe(true);
   });
 });

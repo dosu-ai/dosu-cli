@@ -6,6 +6,7 @@
 
 import { basename } from "node:path";
 import { Client } from "../client/client";
+import { executeInsights } from "../commands/insights";
 import {
   type Config,
   clearConfigInPlace,
@@ -18,11 +19,14 @@ import { getWebAppURL } from "../config/constants";
 import { allSetupProviders } from "../mcp/providers";
 import { runSetup } from "../setup/flow";
 import { browserFallbackHint, dim } from "../setup/styles";
-import { getVersionString } from "../version/version";
+import { getSyncStatus } from "../sync/status";
+import { buildUpdateHint, getAvailableUpdate } from "../version/update-check";
+import { getVersionString, INSTALL_CHANNEL, isNpxInvocation } from "../version/version";
 import { type BannerContext, renderBanner } from "./banner";
 import { center, contentWidth, installCenteredLayout } from "./layout";
 import { type MenuOption, menuSelect } from "./menu";
 import * as p from "./prompts";
+import { runSyncView } from "./sync-view";
 
 /** Gather the live machine state the welcome banner shows. */
 function bannerContext(cfg: Config): BannerContext {
@@ -41,6 +45,16 @@ function bannerContext(cfg: Config): BannerContext {
       }
     })
     .map((provider) => provider.name());
+  // The preAction hook already refreshed the update cache without printing;
+  // the banner is where a bare `dosu` run learns about a newer version.
+  const latest = getAvailableUpdate();
+  // Lock-file check only (no log read): is a mining run active right now?
+  let mining = false;
+  try {
+    mining = getSyncStatus({ readLog: () => "" }).running;
+  } catch {
+    // Status is cosmetic here; never block the banner on it.
+  }
   return {
     version: getVersionString(),
     webAppHost,
@@ -49,6 +63,10 @@ function bannerContext(cfg: Config): BannerContext {
     deploymentName: cfg.active_account?.target?.deployment_name,
     libraryName: cfg.active_account?.target?.library_name,
     agents,
+    mining,
+    ...(latest
+      ? { update: { version: latest, hint: buildUpdateHint(INSTALL_CHANNEL, isNpxInvocation()) } }
+      : {}),
     width: contentWidth(),
   };
 }
@@ -62,25 +80,34 @@ export async function runTUI(): Promise<void> {
   }
 }
 
+const ESC = String.fromCharCode(27);
+/**
+ * Clear the visible screen and home the cursor, so the TUI takes over from
+ * the terminal's top row (Claude Code-style) instead of rendering inline
+ * below the shell prompt. Scrollback above is preserved.
+ */
+const CLEAR_SCREEN = `${ESC}[2J${ESC}[H`;
+
 async function runMainMenu(): Promise<void> {
   const cfg = loadConfig();
+  if (process.stdout.isTTY) process.stdout.write(CLEAR_SCREEN);
   // Written via stream.write (not console.log) so the centered-layout margin
   // applies — Bun's console.log bypasses the patched process.stdout.write.
   process.stdout.write(`${renderBanner(bannerContext(cfg))}\n`);
 
   // Main menu
   while (true) {
+    // Insights needs a fully set-up account: space, deployment, and API key.
+    const insightsReady = Boolean(
+      cfg.active_account?.target?.space_id &&
+        cfg.active_account?.target?.deployment_id &&
+        cfg.active_account?.target?.api_key,
+    );
     const options: MenuOption[] = [
-      {
-        label: "Setup",
-        value: "setup",
-        hint: "Connect Dosu to your AI agents",
-      },
-      {
-        label: "Authenticate",
-        value: "auth",
-        hint: isAuthenticated(cfg) ? "Re-authenticate" : undefined,
-      },
+      { label: "Setup", value: "setup" },
+      { label: "Sync status", value: "sync" },
+      ...(insightsReady ? [{ label: "View insights", value: "insights" }] : []),
+      { label: "Authenticate", value: "auth" },
       { label: "Clear credentials", value: "logout" },
       { label: "Exit", value: "exit" },
     ];
@@ -92,6 +119,12 @@ async function runMainMenu(): Promise<void> {
     }
 
     switch (action) {
+      case "sync":
+        await runSyncView();
+        break;
+      case "insights":
+        await executeInsights(cfg);
+        break;
       case "auth":
         await handleAuthenticate(cfg);
         break;

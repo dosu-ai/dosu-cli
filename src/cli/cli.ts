@@ -218,7 +218,11 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
       logger.init({ debug: opts.debug });
       if (shouldRunBackgroundChecks(actionCommand.name())) {
         if (process.env.NODE_ENV !== "test" && !process.env.CI) {
-          await checkForUpdates();
+          // Bare `dosu` launches the TUI, whose welcome banner shows the
+          // update itself — the boxed stderr notice would tear across the
+          // TUI's redraws.
+          const launchesTUI = actionCommand.parent === null;
+          await checkForUpdates({ notify: !launchesTUI });
         }
         checkForSkillUpdates();
         checkForReadyTasks();

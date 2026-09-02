@@ -25,6 +25,10 @@ export interface BannerContext {
   libraryName?: string;
   /** Display names of agents that already have Dosu MCP configured. */
   agents: string[];
+  /** True when a knowledge-sync run is mining right now. */
+  mining?: boolean;
+  /** A newer published version, when the update check found one. */
+  update?: { version: string; hint: string };
   /** Terminal columns; defaults to the live terminal (or 80). */
   width?: number;
 }
@@ -35,27 +39,17 @@ const DOT = "\u00B7";
 
 /**
  * Compact block-art rendering of the Dosu logomark — the smiling "d" from
- * `logomark.svg` in the marketing site — colored like the app icon rather
- * than flat brand green: sage page edges along the spine, cream cover and
- * smile, darker moss bottom page block. Five rows is the floor: any smaller
- * and the smile stops reading.
+ * `logomark.svg` in the marketing site — in two greens from the app icon:
+ * sage for the spine, cover, and smile; darker moss for the bottom page
+ * block. Five rows is the floor: any smaller and the smile stops reading.
  */
-type LogoTone = "cream" | "sage" | "moss";
+type LogoTone = "sage" | "moss";
 
 const LOGO_ROWS: ReadonlyArray<ReadonlyArray<readonly [LogoTone, string]>> = [
-  [["cream", "▄▄▄▄▄▄"]],
-  [
-    ["sage", "██"],
-    ["cream", "    ▀▄"],
-  ],
-  [
-    ["sage", "██"],
-    ["cream", "▀▄▄▄▀█"],
-  ],
-  [
-    ["sage", "██"],
-    ["cream", "   ▄▄▀"],
-  ],
+  [["sage", "▄▄▄▄▄▄"]],
+  [["sage", "██    ▀▄"]],
+  [["sage", "██▀▄▄▄▀█"]],
+  [["sage", "██   ▄▄▀"]],
   [["moss", "█████▀"]],
 ];
 
@@ -66,9 +60,8 @@ export const LOGO_MARK: readonly string[] = LOGO_ROWS.map((row) =>
 
 const LOGO_WIDTH = Math.max(...LOGO_MARK.map((row) => row.length));
 
-/** App-icon palette (`dosu-icon.svg`): cream #F3F6F1, sage #B4BB91, moss #778561. */
+/** App-icon palette (`dosu-icon.svg`): sage #B4BB91, moss #778561. */
 const LOGO_TONES: Record<LogoTone, { fg: string; fallback: (art: string) => string }> = {
-  cream: { fg: "\u001B[38;2;243;246;241m", fallback: pc.white },
   sage: { fg: "\u001B[38;2;180;187;145m", fallback: pc.green },
   moss: { fg: "\u001B[38;2;119;133;97m", fallback: (art) => pc.dim(pc.green(art)) },
 };
@@ -95,6 +88,15 @@ function checklistRows(ctx: BannerContext): string[] {
   if (ctx.deploymentName) rows.push(["mcp", `${on} ${ctx.deploymentName}`]);
   if (ctx.libraryName) rows.push(["library", `${on} ${ctx.libraryName}`]);
   if (ctx.agents.length > 0) rows.push(["agents", `${on} ${ctx.agents.join(` ${DOT} `)}`]);
+  if (ctx.mining) {
+    rows.push(["sync", `${brand("\u25CF")} mining now ${pc.dim(`${DOT} see Sync status`)}`]);
+  }
+  if (ctx.update) {
+    rows.push([
+      "update",
+      `${pc.yellow(`\u2191 ${ctx.update.version} available`)} ${pc.dim(`${DOT} ${ctx.update.hint}`)}`,
+    ]);
+  }
 
   const labelWidth = Math.max(...rows.map(([label]) => label.length));
   return rows.map(([label, value]) => `${pc.dim(label.padEnd(labelWidth))}  ${value}`);

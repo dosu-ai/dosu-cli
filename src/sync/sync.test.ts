@@ -245,8 +245,8 @@ function makeMiningDeps(overrides: Partial<SyncDeps> = {}) {
 describe("runKnowledgeSync mining", () => {
   it("mines the oldest batch and advances the watermark to its newest session", async () => {
     const mine = vi.fn().mockResolvedValue(minerResult());
-    // 7 ready sessions, newest-first (scanner order).
-    const sessions = Array.from({ length: 7 }, (_, i) => session(30 + i * 10));
+    // Two more ready sessions than one batch holds, newest-first (scanner order).
+    const sessions = Array.from({ length: MINE_BATCH_LIMIT + 2 }, (_, i) => session(30 + i * 10));
     const { deps, saved } = makeMiningDeps({
       listSessions: vi.fn().mockResolvedValue(sessions),
       mine,
@@ -258,9 +258,14 @@ describe("runKnowledgeSync mining", () => {
     expect(outcome.status).toBe("mined");
     expect(outcome.minedSessions).toBe(MINE_BATCH_LIMIT);
     expect(outcome.miner?.notesWritten).toBe(2);
-    // Oldest 5 of the 7, in chronological order: offsets 90..50 minutes.
+    // The oldest MINE_BATCH_LIMIT sessions, in chronological order; the two
+    // newest (offsets 30 and 40) stay in the backlog for the next round.
     const batch = mine.mock.calls[0][0] as AgentSession[];
-    expect(batch.map((s) => s.id)).toEqual(["s-90", "s-80", "s-70", "s-60", "s-50"]);
+    const expectedIds = Array.from(
+      { length: MINE_BATCH_LIMIT },
+      (_, i) => `s-${30 + (MINE_BATCH_LIMIT + 1 - i) * 10}`,
+    );
+    expect(batch.map((s) => s.id)).toEqual(expectedIds);
     // Watermark = newest updated in the batch (s-50), not the newest ready (s-30).
     expect(saved[0].watermark).toBe(session(50).updated);
     expect(saved[0].consecutive_failures).toBe(0);
