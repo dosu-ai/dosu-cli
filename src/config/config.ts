@@ -209,6 +209,7 @@ function normalizeTarget(value: unknown): AccountTarget | undefined {
     api_key: stringValue(value.api_key),
     org_id: stringValue(value.org_id),
     space_id: stringValue(value.space_id),
+    library_name: stringValue(value.library_name),
   };
   return Object.values(target).some((field) => field !== undefined) ? target : undefined;
 }

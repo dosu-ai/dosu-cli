@@ -48,7 +48,7 @@ vi.mock("node:child_process", () => ({
   execSync: (...args: unknown[]) => mockExecSync(...args),
 }));
 
-vi.mock("@clack/prompts", () => ({
+vi.mock("../tui/prompts", () => ({
   confirm: vi.fn(),
   multiselect: vi.fn(),
   isCancel: vi.fn(),
@@ -94,9 +94,9 @@ vi.mock("../client/trpc", () => ({
   createTypedClient: vi.fn(() => mockTrpc),
 }));
 
-import * as p from "@clack/prompts";
 import type { Config } from "../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
+import * as p from "../tui/prompts";
 import {
   detectGitRepo,
   parseAvailableRepos,
@@ -682,7 +682,7 @@ describe("stepConnectGitHubRepo", () => {
       {
         value: "test-forker/driver",
         disabled: true,
-        hint: "Forked repo — connect node-escpos/driver instead",
+        hint: "Forked repo; connect node-escpos/driver instead",
       },
     ]);
     // Only the selectable repo counts as available.
@@ -707,7 +707,7 @@ describe("stepConnectGitHubRepo", () => {
       options: { kind?: string; hint?: string }[];
     };
     expect(promptArgs.options.filter((o) => o.kind === "repo")).toMatchObject([
-      { disabled: true, hint: "Forked repo — can't be connected" },
+      { disabled: true, hint: "Forked repo, can't be connected" },
     ]);
   });
 

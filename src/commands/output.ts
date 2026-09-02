@@ -106,7 +106,7 @@ export function truncate(str: string, maxLen: number): string {
  * Format a date string into a short readable format.
  */
 export function formatDate(dateStr: string | null | undefined): string {
-  if (!dateStr) return "—";
+  if (!dateStr) return "-";
   const d = new Date(dateStr);
   return d.toLocaleDateString("en-US", {
     month: "short",

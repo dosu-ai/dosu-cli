@@ -11,9 +11,9 @@
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import * as p from "@clack/prompts";
 import { logger } from "../debug/logger";
 import { FALLBACK_DOSU_RULE, fetchDosuRule } from "../rules/installer";
+import * as p from "../tui/prompts";
 import { formatSetupSummary } from "./styles";
 
 /**

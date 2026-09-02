@@ -26,16 +26,16 @@ describe("truncate", () => {
 });
 
 describe("formatDate", () => {
-  it('returns "—" for null', () => {
-    expect(formatDate(null)).toBe("—");
+  it('returns "-" for null', () => {
+    expect(formatDate(null)).toBe("-");
   });
 
-  it('returns "—" for undefined', () => {
-    expect(formatDate(undefined)).toBe("—");
+  it('returns "-" for undefined', () => {
+    expect(formatDate(undefined)).toBe("-");
   });
 
-  it('returns "—" for empty string', () => {
-    expect(formatDate("")).toBe("—");
+  it('returns "-" for empty string', () => {
+    expect(formatDate("")).toBe("-");
   });
 
   it("formats ISO date correctly", () => {

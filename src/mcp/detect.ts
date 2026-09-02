@@ -65,7 +65,7 @@ export function findNpx(): string {
     if (existsSync(candidate)) return candidate;
   }
   throw new Error(
-    "npx not found on PATH — Node.js is required (the MCP entry runs `npx mcp-remote`).",
+    "npx not found on PATH. Node.js is required (the MCP entry runs `npx mcp-remote`).",
   );
 }
 

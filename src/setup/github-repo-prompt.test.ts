@@ -1,11 +1,22 @@
+import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   ADD_REPOSITORIES_VALUE,
   GitHubRepoPrompt,
   KEYS_HINT,
+  promptGitHubRepositories,
   type REFRESH_LIST_VALUE,
   validateRepoSelection,
 } from "./github-repo-prompt";
+
+const ESC = String.fromCharCode(27);
+const UP = `${ESC}[A`;
+const DOWN = `${ESC}[B`;
+const LEFT = `${ESC}[D`;
+const RIGHT = `${ESC}[C`;
+const ENTER = "\r";
+const SPACE = " ";
+const CTRL_C = String.fromCharCode(3);
 
 type PromptOption =
   | {
@@ -45,8 +56,12 @@ function makePrompt(
   });
 }
 
+function stripAnsi(text: string): string {
+  return text.replace(new RegExp(`${ESC}\\[[0-9;?]*[A-Za-z]`, "g"), "");
+}
+
 function render(prompt: GitHubRepoPrompt): string {
-  return (prompt as unknown as { renderPrompt: () => string }).renderPrompt();
+  return stripAnsi(prompt.render().join("\n"));
 }
 
 describe("GitHubRepoPrompt", () => {
@@ -63,100 +78,92 @@ describe("GitHubRepoPrompt", () => {
   it("starts with no selections and cursor at 0 when no initialValues are given", () => {
     const prompt = makePrompt([ACTION_OPTION, ...repoOptions("acme/api", "acme/core")]);
     expect(prompt.cursor).toBe(0);
-    expect(prompt.value).toBe(ADD_REPOSITORIES_VALUE);
+    expect(prompt.selectedValues()).toEqual([]);
   });
 
   it("places the cursor on the first matching initialValue and pre-selects it", () => {
     const options = [ACTION_OPTION, ...repoOptions("acme/api", "acme/core")];
     const prompt = makePrompt(options, { initialValues: ["acme/core"] });
     expect(prompt.cursor).toBe(2);
-    expect(prompt.value).toEqual(["acme/core"]);
+    expect(prompt.selectedValues()).toEqual(["acme/core"]);
   });
 
   it("ignores initialValues that don't correspond to a repo option", () => {
     const options = [ACTION_OPTION, ...repoOptions("acme/api")];
     const prompt = makePrompt(options, { initialValues: ["bogus/repo"] });
     expect(prompt.cursor).toBe(0);
-    expect(prompt.value).toBe(ADD_REPOSITORIES_VALUE);
+    expect(prompt.selectedValues()).toEqual([]);
   });
 
   it("wraps cursor when moving up from index 0 and down from the last index", () => {
     const options = [ACTION_OPTION, ...repoOptions("a/b", "c/d")];
     const prompt = makePrompt(options);
-    prompt.emit("cursor", "up");
+    prompt.handle(UP);
     expect(prompt.cursor).toBe(options.length - 1);
-    prompt.emit("cursor", "down");
+    prompt.handle(DOWN);
     expect(prompt.cursor).toBe(0);
   });
 
-  it("treats left/up and right/down identically", () => {
+  it("treats left/up and right/down identically, plus vim keys", () => {
     const options = [ACTION_OPTION, ...repoOptions("a/b", "c/d")];
     const prompt = makePrompt(options);
-    prompt.emit("cursor", "right");
+    prompt.handle(RIGHT);
     expect(prompt.cursor).toBe(1);
-    prompt.emit("cursor", "left");
+    prompt.handle(LEFT);
     expect(prompt.cursor).toBe(0);
-    prompt.emit("cursor", "down");
+    prompt.handle("j");
     expect(prompt.cursor).toBe(1);
-    prompt.emit("cursor", "up");
+    prompt.handle("k");
     expect(prompt.cursor).toBe(0);
   });
 
   it("toggles a repo selection on space and untoggles on a second press", () => {
     const options = [ACTION_OPTION, ...repoOptions("a/b", "c/d")];
     const prompt = makePrompt(options);
-    prompt.emit("cursor", "down");
-    prompt.emit("cursor", "space");
-    expect(prompt.value).toEqual(["a/b"]);
-    prompt.emit("cursor", "space");
-    expect(prompt.value).toEqual([]);
+    prompt.handle(DOWN);
+    prompt.handle(SPACE);
+    expect(prompt.selectedValues()).toEqual(["a/b"]);
+    prompt.handle(SPACE);
+    expect(prompt.selectedValues()).toEqual([]);
   });
 
   it("does nothing when space is pressed on the action option", () => {
     const options = [ACTION_OPTION, ...repoOptions("a/b")];
     const prompt = makePrompt(options);
-    prompt.emit("cursor", "space");
-    expect(prompt.value).toBe(ADD_REPOSITORIES_VALUE);
+    prompt.handle(SPACE);
+    expect(prompt.selectedValues()).toEqual([]);
   });
 
   it("selects every repo with 'a' and clears them on a second 'a'", () => {
     const options = [ACTION_OPTION, ...repoOptions("a/b", "c/d", "e/f")];
     const prompt = makePrompt(options);
-    prompt.emit("cursor", "down");
-    prompt.emit("key", "a", {});
-    expect(prompt.value).toEqual(["a/b", "c/d", "e/f"]);
-    prompt.emit("key", "a", {});
-    expect(prompt.value).toEqual([]);
+    prompt.handle("a");
+    expect(prompt.selectedValues()).toEqual(["a/b", "c/d", "e/f"]);
+    prompt.handle("a");
+    expect(prompt.selectedValues()).toEqual([]);
   });
 
-  it("ignores keys other than 'a'", () => {
-    const options = [ACTION_OPTION, ...repoOptions("a/b")];
-    const prompt = makePrompt(options);
-    prompt.emit("cursor", "down");
-    prompt.emit("key", "z", {});
-    expect(prompt.value).toEqual([]);
-  });
-
-  it("ignores cursor events for unhandled keys", () => {
+  it("ignores unhandled keys", () => {
     const options = [ACTION_OPTION, ...repoOptions("a/b")];
     const prompt = makePrompt(options);
     const before = prompt.cursor;
-    (prompt.emit as (event: string, key: string) => void)("cursor", "tab");
+    expect(prompt.handle("z")).toEqual({ type: "none" });
     expect(prompt.cursor).toBe(before);
+    expect(prompt.selectedValues()).toEqual([]);
   });
 
   it("skips over a separator when moving the cursor down", () => {
     const options: PromptOption[] = [ACTION_OPTION, { kind: "separator" }, ...repoOptions("a/b")];
     const prompt = makePrompt(options);
     expect(prompt.cursor).toBe(0);
-    prompt.emit("cursor", "down");
+    prompt.handle(DOWN);
     expect(prompt.cursor).toBe(2);
   });
 
   it("skips over a separator when moving the cursor up (wrap-around)", () => {
     const options: PromptOption[] = [ACTION_OPTION, { kind: "separator" }, ...repoOptions("a/b")];
     const prompt = makePrompt(options);
-    prompt.emit("cursor", "up");
+    prompt.handle(UP);
     expect(prompt.cursor).toBe(2);
   });
 
@@ -173,9 +180,9 @@ describe("GitHubRepoPrompt", () => {
       ...repoOptions("a/b"),
     ];
     const prompt = makePrompt(options);
-    prompt.emit("cursor", "down");
+    prompt.handle(DOWN);
     expect(prompt.cursor).toBe(2);
-    prompt.emit("cursor", "up");
+    prompt.handle(UP);
     expect(prompt.cursor).toBe(0);
   });
 
@@ -186,11 +193,10 @@ describe("GitHubRepoPrompt", () => {
       ...repoOptions("a/b", "c/d"),
     ];
     const prompt = makePrompt(options);
-    prompt.emit("cursor", "down");
-    prompt.emit("key", "a", {});
-    expect(prompt.value).toEqual(["a/b", "c/d"]);
-    prompt.emit("key", "a", {});
-    expect(prompt.value).toEqual([]);
+    prompt.handle("a");
+    expect(prompt.selectedValues()).toEqual(["a/b", "c/d"]);
+    prompt.handle("a");
+    expect(prompt.selectedValues()).toEqual([]);
   });
 
   it("ignores initialValues that point at a disabled repo", () => {
@@ -201,7 +207,7 @@ describe("GitHubRepoPrompt", () => {
     ];
     const prompt = makePrompt(options, { initialValues: ["fork/one"] });
     expect(prompt.cursor).toBe(0);
-    expect(prompt.value).toBe(ADD_REPOSITORIES_VALUE);
+    expect(prompt.selectedValues()).toEqual([]);
   });
 
   it("does not toggle a disabled repo even if space fires while it is current", () => {
@@ -212,96 +218,104 @@ describe("GitHubRepoPrompt", () => {
       ...repoOptions("a/b"),
     ];
     const prompt = makePrompt(options);
-    (prompt as unknown as { cursor: number }).cursor = 0;
-    prompt.emit("cursor", "space");
-    expect(prompt.value).toEqual([]);
+    prompt.cursor = 0;
+    prompt.handle(SPACE);
+    expect(prompt.selectedValues()).toEqual([]);
+  });
+});
+
+describe("GitHubRepoPrompt submit and cancel", () => {
+  it("submits the action value with its label as the echo when the cursor is on an action", () => {
+    const options = [ACTION_OPTION, ...repoOptions("a/b")];
+    const prompt = makePrompt(options);
+    const action = prompt.handle(ENTER);
+    expect(action.type).toBe("done");
+    if (action.type !== "done") return;
+    expect(action.value).toBe(ADD_REPOSITORIES_VALUE);
+    expect(stripAnsi(action.echo ?? "")).toContain("Add repositories...");
+  });
+
+  it("submits the selected repos in option order", () => {
+    const options = [ACTION_OPTION, ...repoOptions("a/b", "c/d")];
+    const prompt = makePrompt(options);
+    // Select c/d first, then a/b — submission still lists a/b before c/d.
+    prompt.handle(DOWN);
+    prompt.handle(DOWN);
+    prompt.handle(SPACE);
+    prompt.handle(UP);
+    prompt.handle(SPACE);
+    const action = prompt.handle(ENTER);
+    expect(action.type).toBe("done");
+    if (action.type !== "done") return;
+    expect(action.value).toEqual(["a/b", "c/d"]);
+    expect(stripAnsi(action.echo ?? "")).toContain("a/b \u00B7 c/d");
+  });
+
+  it("counts the picks in the echo when more than three repos are selected", () => {
+    const options = repoOptions("a/b", "c/d", "e/f", "g/h");
+    const prompt = makePrompt(options);
+    prompt.handle("a");
+    const action = prompt.handle(ENTER);
+    expect(action.type).toBe("done");
+    if (action.type !== "done") return;
+    expect(stripAnsi(action.echo ?? "")).toContain("4 selected");
+  });
+
+  it("re-renders with a validation hint instead of submitting an empty selection", () => {
+    const options = [ACTION_OPTION, ...repoOptions("a/b")];
+    const prompt = makePrompt(options);
+    prompt.handle(DOWN);
+    expect(prompt.handle(ENTER)).toEqual({ type: "render" });
+    const output = render(prompt);
+    expect(output).toContain("Select at least one repository");
+    expect(output).not.toContain(KEYS_HINT);
+    // The option list stays visible so the user can fix the selection in place.
+    expect(output).toContain("a/b");
+  });
+
+  it("clears the validation hint on the next selection change", () => {
+    const options = [ACTION_OPTION, ...repoOptions("a/b")];
+    const prompt = makePrompt(options);
+    prompt.handle(DOWN);
+    prompt.handle(ENTER);
+    prompt.handle(SPACE);
+    expect(render(prompt)).toContain(KEYS_HINT);
+  });
+
+  it("cancels on ctrl-c, esc, and q", () => {
+    for (const key of [CTRL_C, ESC, "q"]) {
+      const prompt = makePrompt([ACTION_OPTION, ...repoOptions("a/b")]);
+      expect(prompt.handle(key)).toEqual({ type: "cancel" });
+    }
   });
 });
 
 describe("GitHubRepoPrompt rendering", () => {
-  it("renders the active option, checkbox markers, and hints in default state", () => {
+  const originalRows = process.stdout.rows;
+
+  beforeEach(() => {
+    Object.defineProperty(process.stdout, "rows", { value: 30, configurable: true });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process.stdout, "rows", { value: originalRows, configurable: true });
+  });
+
+  it("renders the message, options, checkbox markers, and hints", () => {
     const options = [ACTION_OPTION, ...repoOptions("acme/api", "acme/core")];
     const prompt = makePrompt(options, { initialValues: ["acme/core"] });
     const output = render(prompt);
     expect(output).toContain("Pick repositories");
     expect(output).toContain("acme/api");
-    expect(output).toContain("acme/core");
+    expect(output).toContain("\u25A0 acme/core");
     expect(output).toContain("(primary)");
-    expect(output).toContain("Add repositories...");
-  });
-
-  it("renders the submit label with the joined repo selection", () => {
-    const options = [ACTION_OPTION, ...repoOptions("a/b", "c/d")];
-    const prompt = makePrompt(options, { initialValues: ["a/b", "c/d"] });
-    (prompt as unknown as { state: string }).state = "submit";
-    const output = render(prompt);
-    expect(output).toContain("a/b, c/d");
-  });
-
-  it("renders the action label on submit when the action is the value", () => {
-    const options = [ACTION_OPTION, ...repoOptions("a/b")];
-    const prompt = makePrompt(options);
-    (prompt as unknown as { state: string }).state = "submit";
-    const output = render(prompt);
-    expect(output).toContain("Add repositories...");
-  });
-
-  it("falls back to a default action label when no action option is present", () => {
-    const options = [...repoOptions("a/b")];
-    const prompt = makePrompt(options);
-    (prompt as unknown as { state: string; value: unknown }).value = ADD_REPOSITORIES_VALUE;
-    (prompt as unknown as { state: string }).state = "submit";
-    const output = render(prompt);
-    expect(output).toContain("Add repositories...");
-  });
-
-  it("renders the empty-selection submit label", () => {
-    const options = [ACTION_OPTION, ...repoOptions("a/b")];
-    const prompt = makePrompt(options);
-    prompt.emit("cursor", "down");
-    prompt.emit("cursor", "space");
-    prompt.emit("cursor", "space");
-    (prompt as unknown as { state: string }).state = "submit";
-    const output = render(prompt);
-    expect(output).toContain("No repositories selected.");
-  });
-
-  it("renders only the header on cancel", () => {
-    const options = [ACTION_OPTION, ...repoOptions("a/b", "c/d")];
-    const prompt = makePrompt(options);
-    (prompt as unknown as { state: string }).state = "cancel";
-    const output = render(prompt);
-    expect(output).toContain("Pick repositories");
-    expect(output).not.toContain("a/b");
+    expect(output).toContain("\u2192 Add repositories...");
   });
 
   it("renders the key legend on the footer line in default state", () => {
     const options = [ACTION_OPTION, ...repoOptions("a/b")];
     const prompt = makePrompt(options);
-    const output = render(prompt);
-    expect(output).toContain(KEYS_HINT);
-  });
-
-  it("replaces the key legend with the validation message in error state", () => {
-    const options = [ACTION_OPTION, ...repoOptions("a/b")];
-    const prompt = makePrompt(options);
-    const mutable = prompt as unknown as { state: string; error: string };
-    mutable.state = "error";
-    mutable.error = "Select at least one repository — Space to select, Enter to confirm.";
-    const output = render(prompt);
-    expect(output).not.toContain(KEYS_HINT);
-  });
-
-  it("renders the validation message next to the footer in error state", () => {
-    const options = [ACTION_OPTION, ...repoOptions("a/b")];
-    const prompt = makePrompt(options);
-    const mutable = prompt as unknown as { state: string; error: string };
-    mutable.state = "error";
-    mutable.error = "Select at least one repository — Space to select, Enter to confirm.";
-    const output = render(prompt);
-    expect(output).toContain("Select at least one repository");
-    // The option list stays visible so the user can fix the selection in place.
-    expect(output).toContain("a/b");
+    expect(render(prompt)).toContain(KEYS_HINT);
   });
 
   it("renders ellipsis markers when option count exceeds the visible viewport", () => {
@@ -312,13 +326,12 @@ describe("GitHubRepoPrompt rendering", () => {
     }
     const prompt = makePrompt(options);
     for (let i = 0; i < 10; i += 1) {
-      prompt.emit("cursor", "down");
+      prompt.handle(DOWN);
     }
-    const output = render(prompt);
-    expect(output).toContain("...");
+    expect(render(prompt)).toContain("...");
   });
 
-  it("renders a disabled repo dimmed with its hint and no interactive checkbox states", () => {
+  it("renders a disabled repo dimmed with its hint", () => {
     const options: PromptOption[] = [
       ACTION_OPTION,
       {
@@ -326,14 +339,13 @@ describe("GitHubRepoPrompt rendering", () => {
         value: "test-forker/driver",
         label: "test-forker/driver",
         disabled: true,
-        hint: "Forked repo — connect node-escpos/driver instead",
+        hint: "Forked repo; connect node-escpos/driver instead",
       },
       ...repoOptions("a/b"),
     ];
-    const prompt = makePrompt(options);
-    const output = render(prompt);
+    const output = render(makePrompt(options));
     expect(output).toContain("test-forker/driver");
-    expect(output).toContain("Forked repo — connect node-escpos/driver instead");
+    expect(output).toContain("Forked repo; connect node-escpos/driver instead");
   });
 
   it("renders a disabled repo without a hint", () => {
@@ -342,26 +354,21 @@ describe("GitHubRepoPrompt rendering", () => {
       { kind: "repo", value: "fork/one", label: "fork/one", disabled: true },
       ...repoOptions("a/b"),
     ];
-    const prompt = makePrompt(options);
-    const output = render(prompt);
-    expect(output).toContain("fork/one");
+    expect(render(makePrompt(options))).toContain("fork/one");
   });
 
   it("renders a dim horizontal line for separator options", () => {
     const options: PromptOption[] = [ACTION_OPTION, { kind: "separator" }, ...repoOptions("a/b")];
-    const prompt = makePrompt(options);
-    const output = render(prompt);
-    expect(output).toContain("─");
+    expect(render(makePrompt(options))).toContain("\u2500");
   });
 
-  it("highlights the active action option with a colored arrow", () => {
+  it("marks the active row with the pointer", () => {
     const options = [ACTION_OPTION, ...repoOptions("a/b")];
     const prompt = makePrompt(options);
-    expect(prompt.cursor).toBe(0);
-    const output = render(prompt);
-    // Active arrow uses pc.cyan; check we render the active state somehow
-    expect(output).toContain("Add repositories...");
-    expect(output).toContain("a/b");
+    prompt.handle(DOWN);
+    const lines = prompt.render().map(stripAnsi);
+    expect(lines.find((line) => line.includes("a/b"))).toContain("\u25B8");
+    expect(lines.find((line) => line.includes("Add repositories"))).not.toContain("\u25B8");
   });
 
   it("renders selected-but-inactive and active-but-unselected checkbox states", () => {
@@ -369,12 +376,12 @@ describe("GitHubRepoPrompt rendering", () => {
     const prompt = makePrompt(options, { initialValues: ["c/d"] });
     // Cursor lands on the only selected item (c/d). Move it to a/b: that
     // exercises both "active unselected" (a/b) and "inactive selected" (c/d).
-    prompt.emit("cursor", "up");
+    prompt.handle(UP);
     expect(prompt.cursor).toBe(0);
     const output = render(prompt);
-    expect(output).toContain("a/b");
-    expect(output).toContain("c/d");
-    expect(output).toContain("e/f");
+    expect(output).toContain("\u25A1 a/b");
+    expect(output).toContain("\u25A0 c/d");
+    expect(output).toContain("\u25A1 e/f");
   });
 
   it("scrolls the viewport when the cursor sits near the start of a long list", () => {
@@ -386,8 +393,7 @@ describe("GitHubRepoPrompt rendering", () => {
     // maxItems=5 forces a small viewport, exercising the start-scrolling branch
     const prompt = makePrompt(options, { maxItems: 5 });
     expect(prompt.cursor).toBe(0);
-    const output = render(prompt);
-    expect(output).toContain("org/repo-0");
+    expect(render(prompt)).toContain("org/repo-0");
   });
 });
 
@@ -403,5 +409,53 @@ describe("validateRepoSelection", () => {
   it("lets action options submit as usual", () => {
     expect(validateRepoSelection(ADD_REPOSITORIES_VALUE)).toBeUndefined();
     expect(validateRepoSelection(undefined)).toBeUndefined();
+  });
+});
+
+describe("promptGitHubRepositories (frame runner wiring)", () => {
+  function fakeIO(overrides: { inputTTY?: boolean } = {}) {
+    const input = Object.assign(new EventEmitter(), {
+      isTTY: overrides.inputTTY ?? true,
+      isRaw: false,
+      setRawMode(raw: boolean) {
+        this.isRaw = raw;
+      },
+      resume() {},
+      pause() {},
+    }) as unknown as NodeJS.ReadStream;
+
+    const written: string[] = [];
+    const output = {
+      isTTY: true,
+      columns: 80,
+      write(chunk: string) {
+        written.push(chunk);
+        return true;
+      },
+    } as unknown as NodeJS.WriteStream;
+
+    return { input, output, text: () => stripAnsi(written.join("")) };
+  }
+
+  it("runs the full select-and-confirm flow over a TTY", async () => {
+    const { input, output, text } = fakeIO();
+    const result = promptGitHubRepositories(
+      { message: "Pick repositories", options: [ACTION_OPTION, ...repoOptions("a/b")] },
+      { input, output },
+    );
+    input.emit("data", DOWN);
+    input.emit("data", SPACE);
+    input.emit("data", ENTER);
+    await expect(result).resolves.toEqual(["a/b"]);
+    expect(text()).toContain("Pick repositories \u00B7 a/b");
+  });
+
+  it("resolves to the cancel symbol when stdin is not interactive", async () => {
+    const { input, output } = fakeIO({ inputTTY: false });
+    const result = await promptGitHubRepositories(
+      { message: "Pick repositories", options: [ACTION_OPTION, ...repoOptions("a/b")] },
+      { input, output },
+    );
+    expect(typeof result).toBe("symbol");
   });
 });

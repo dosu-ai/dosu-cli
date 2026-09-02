@@ -348,7 +348,9 @@ export function auditCommand(): Command {
             return;
           }
           for (const t of tasks) {
-            console.log(`${t.id}  ${pc.dim(`(${t.doc_type})`)}  ${t.label} — ${t.description}`);
+            console.log(
+              `${t.id}  ${pc.dim(`(${t.doc_type})`)}  ${t.label} \u00B7 ${t.description}`,
+            );
           }
           return;
         }
@@ -401,7 +403,7 @@ export function auditCommand(): Command {
             printResult({ task_ids: [] }, opts);
             return;
           }
-          p.log.info("Nothing to generate — no audit findings match Dosu's capabilities.");
+          p.log.info("Nothing to generate: no audit findings match Dosu's capabilities.");
           return;
         }
 
@@ -429,7 +431,7 @@ export function auditCommand(): Command {
             options: actionable.map((item) => ({
               value: item.task,
               label: `${item.file} ${pc.dim(`(${item.type})`)}`,
-              hint: `${item.status} — ${item.rationale}`,
+              hint: `${item.status} \u00B7 ${item.rationale}`,
             })),
             initialValues: actionable.filter(isPreselected).map((item) => item.task),
             required: false,
@@ -484,7 +486,7 @@ export function auditCommand(): Command {
           return;
         }
         p.log.success(
-          "Dosu is generating your docs — you'll be notified here when the PR is ready.",
+          "Dosu is generating your docs. You'll be notified here when the PR is ready.",
         );
       },
     );

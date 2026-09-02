@@ -4,73 +4,90 @@
  * The TUI launches when `dosu` is run without arguments.
  */
 
-import * as p from "@clack/prompts";
-import pc from "picocolors";
+import { basename } from "node:path";
 import { Client } from "../client/client";
-import { executeInsights } from "../commands/insights";
 import {
+  type Config,
   clearConfigInPlace,
   isAuthenticated,
   loadConfig,
   replaceLoginSession,
   saveConfig,
 } from "../config/config";
+import { getWebAppURL } from "../config/constants";
+import { allSetupProviders } from "../mcp/providers";
 import { runSetup } from "../setup/flow";
-import { browserFallbackHint } from "../setup/styles";
+import { browserFallbackHint, dim } from "../setup/styles";
+import { getVersionString } from "../version/version";
+import { type BannerContext, renderBanner } from "./banner";
+import { center, contentWidth, installCenteredLayout } from "./layout";
+import { type MenuOption, menuSelect } from "./menu";
+import * as p from "./prompts";
 
-const LOGO = `
- /$$$$$$$
-| $$__  $$
-| $$  \\ $$  /$$$$$$   /$$$$$$$ /$$   /$$
-| $$  | $$ /$$__  $$ /$$_____/| $$  | $$
-| $$  | $$| $$  \\ $$|  $$$$$$ | $$  | $$
-| $$  | $$| $$  | $$ \\____  $$| $$  | $$
-| $$$$$$$/|  $$$$$$/ /$$$$$$$/|  $$$$$$/
-|_______/  \\______/ |_______/  \\______/
-`;
+/** Gather the live machine state the welcome banner shows. */
+function bannerContext(cfg: Config): BannerContext {
+  let webAppHost = "app.dosu.dev";
+  try {
+    webAppHost = new URL(getWebAppURL()).host;
+  } catch {
+    // keep the default host when no web app URL is baked in
+  }
+  const agents = allSetupProviders()
+    .filter((provider) => {
+      try {
+        return provider.isInstalled() && provider.isConfigured();
+      } catch {
+        return false;
+      }
+    })
+    .map((provider) => provider.name());
+  return {
+    version: getVersionString(),
+    webAppHost,
+    directory: basename(process.cwd()),
+    signedIn: isAuthenticated(cfg),
+    deploymentName: cfg.active_account?.target?.deployment_name,
+    libraryName: cfg.active_account?.target?.library_name,
+    agents,
+    width: contentWidth(),
+  };
+}
 
 export async function runTUI(): Promise<void> {
-  console.log(pc.magenta(LOGO));
+  const restoreLayout = installCenteredLayout();
+  try {
+    await runMainMenu();
+  } finally {
+    restoreLayout();
+  }
+}
 
+async function runMainMenu(): Promise<void> {
   const cfg = loadConfig();
+  // Written via stream.write (not console.log) so the centered-layout margin
+  // applies — Bun's console.log bypasses the patched process.stdout.write.
+  process.stdout.write(`${renderBanner(bannerContext(cfg))}\n`);
 
   // Main menu
   while (true) {
-    const insightsReady = Boolean(
-      cfg.active_account?.target?.space_id &&
-        cfg.active_account?.target?.deployment_id &&
-        cfg.active_account?.target?.api_key,
-    );
-    const options: Array<{ label: string; value: string; hint?: string }> = [
+    const options: MenuOption[] = [
       {
         label: "Setup",
         value: "setup",
-        hint: "Configure MCP for your AI tools",
+        hint: "Connect Dosu to your AI agents",
       },
-    ];
-    if (insightsReady) {
-      options.push({
-        label: "View Insights",
-        value: "insights",
-        hint: "Open a fun report of your space's activity",
-      });
-    }
-    options.push(
       {
         label: "Authenticate",
         value: "auth",
         hint: isAuthenticated(cfg) ? "Re-authenticate" : undefined,
       },
-      { label: "Clear Credentials", value: "logout" },
+      { label: "Clear credentials", value: "logout" },
       { label: "Exit", value: "exit" },
-    );
+    ];
 
-    const action = await p.select({
-      message: "What would you like to do?",
-      options,
-    });
+    const action = await menuSelect("What would you like to do?", options);
 
-    if (p.isCancel(action) || action === "exit") {
+    if (action === null || action === "exit") {
       break;
     }
 
@@ -87,16 +104,13 @@ export async function runTUI(): Promise<void> {
           cfg.active_account = fresh.active_account;
         }
         break;
-      case "insights":
-        await executeInsights(cfg);
-        break;
       case "logout":
         handleLogout(cfg);
         break;
     }
   }
 
-  p.outro("Goodbye!");
+  process.stdout.write(`${center(dim("Goodbye!"), contentWidth())}\n\n`);
 }
 
 async function handleAuthenticate(cfg: ReturnType<typeof loadConfig>): Promise<void> {

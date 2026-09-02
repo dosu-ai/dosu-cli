@@ -258,7 +258,7 @@ export function integrationsCommand(): Command {
 
       printTable(
         ["Username", "Name", "Email"],
-        collaborators.map((c) => [c.user_name ?? "—", c.full_name ?? "—", c.email ?? "—"]),
+        collaborators.map((c) => [c.user_name ?? "-", c.full_name ?? "-", c.email ?? "-"]),
         { rawData: collaborators },
       );
     });

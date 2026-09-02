@@ -52,7 +52,7 @@ export function readSessionPage(session: AgentSession, offset = 0): ReadSessionP
   const turns = readSessionTurns(session);
   if (turns.length === 0) return { text: "(session has no readable conversation turns)" };
   if (offset >= turns.length) {
-    return { text: `(offset ${offset} is past the end — session has ${turns.length} turns)` };
+    return { text: `(offset ${offset} is past the end; session has ${turns.length} turns)` };
   }
 
   const parts: string[] = [];
@@ -72,10 +72,10 @@ export function readSessionPage(session: AgentSession, offset = 0): ReadSessionP
     if (used >= MAX_READ_CHARS) break;
   }
 
-  const header = `Session ${session.id} (${session.harness}) — turns ${offset}–${index - 1} of ${turns.length}`;
+  const header = `Session ${session.id} (${session.harness}) \u00B7 turns ${offset}–${index - 1} of ${turns.length}`;
   const footer =
     index < turns.length
-      ? `\n\n(more turns remain — call read_session again with offset=${index})`
+      ? `\n\n(more turns remain; call read_session again with offset=${index})`
       : "";
   return {
     text: `${header}\n\n${parts.join("\n\n")}${footer}`,
@@ -110,7 +110,7 @@ export function createSessionToolsServer(sessions: AgentSession[]) {
         async (args) => {
           const session = byId.get(args.id);
           if (!session) {
-            return errorResult(`Unknown session id ${args.id} — it is not in scope for this run.`);
+            return errorResult(`Unknown session id ${args.id}; it is not in scope for this run.`);
           }
           try {
             return textResult(readSessionPage(session, args.offset ?? 0).text);

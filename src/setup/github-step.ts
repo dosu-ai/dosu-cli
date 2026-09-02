@@ -32,11 +32,11 @@
  */
 
 import { execSync } from "node:child_process";
-import * as p from "@clack/prompts";
 import { createTypedClient, type TypedClient } from "../client/trpc";
 import type { Config } from "../config/config";
 import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
+import * as p from "../tui/prompts";
 import { DEFAULT_DEPLOYMENT_CONFIG_GITHUB } from "./default-deployment-config";
 import {
   ADD_REPOSITORIES_VALUE,
@@ -364,8 +364,8 @@ function buildPromptOptions(
             value: r.slug,
             disabled: true,
             hint: r.fork_parent_slug
-              ? `Forked repo — connect ${r.fork_parent_slug} instead`
-              : "Forked repo — can't be connected",
+              ? `Forked repo; connect ${r.fork_parent_slug} instead`
+              : "Forked repo, can't be connected",
           }
         : { kind: "repo" as const, label: r.slug, value: r.slug },
     ),
@@ -458,7 +458,7 @@ async function openGitHubInstallFlow(
       /* v8 ignore next 2 -- `open` rarely fails */
       const msg = err instanceof Error ? err.message : String(err);
       logger.warn("setup", `Failed to open browser: ${msg}`);
-      p.log.info(`Could not open browser — visit ${middleURL.toString()} manually.`);
+      p.log.info(`Could not open browser; visit ${middleURL.toString()} manually.`);
     }
 
     const timeout = new Promise<null>((resolve) => {
@@ -762,7 +762,7 @@ export async function stepConnectGitHubRepo(
       repos = refresh.repos;
       if (!refresh.foundNew) {
         p.log.warn(
-          "GitHub may still be syncing. Pick 'Refresh list' in a moment to re-check — sync usually completes within a minute.",
+          "GitHub may still be syncing. Pick 'Refresh list' in a moment to re-check; sync usually completes within a minute.",
         );
       }
       continue;
@@ -777,7 +777,7 @@ export async function stepConnectGitHubRepo(
       s.stop(
         newCount > 0
           ? `Found ${newCount} new repo${newCount === 1 ? "" : "s"}`
-          : "List refreshed — no new repos yet",
+          : "List refreshed, no new repos yet",
       );
       continue;
     }
@@ -838,7 +838,7 @@ export async function stepConnectGitHubRepo(
       s.stop("Failed");
       if (reverted.length > 0) {
         p.log.error(
-          `Couldn't sync any repos — Dosu doesn't have GitHub access to: ${reverted
+          `Couldn't sync any repos; Dosu doesn't have GitHub access to: ${reverted
             .map((r) => r.slug)
             .join(", ")}.`,
         );
@@ -861,7 +861,7 @@ export async function stepConnectGitHubRepo(
       s.stop(`Connected ${survived.length} repo${survived.length === 1 ? "" : "s"}`);
     }
     for (const { slug, deployment_id } of survived) {
-      p.log.success(`${slug}\n${dim(`deployment ${deployment_id}`)}`);
+      p.log.success(`${slug} ${dim(`\u00B7 deployment ${deployment_id}`)}`);
     }
 
     // Prefer the cwd repo's deployment as the primary; fall back to the first

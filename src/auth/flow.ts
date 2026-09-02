@@ -86,7 +86,7 @@ export async function startOAuthFlow(
     }
 
     if (!browserOpened && !options.waitWithoutBrowser) {
-      logger.debug("auth.flow", "Browser unavailable — returning to caller for fallback");
+      logger.debug("auth.flow", "Browser unavailable, returning to caller for fallback");
       return { browserOpened: false };
       // Note: server.close() is called by the finally block below
     }

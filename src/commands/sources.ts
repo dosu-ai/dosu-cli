@@ -55,7 +55,7 @@ export function sourcesCommand(): Command {
         list.map((ds) => [
           ds.id.slice(0, 8),
           ds.name ?? "(unnamed)",
-          ds.provider_slug ?? "—",
+          ds.provider_slug ?? "-",
           formatDate(ds.created_at),
         ]),
         { rawData: list },

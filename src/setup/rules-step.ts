@@ -6,7 +6,6 @@
  * agent removed from setup has its rule removed as well.
  */
 
-import * as p from "@clack/prompts";
 import { logger } from "../debug/logger";
 import type { SetupProvider } from "../mcp/providers";
 import {
@@ -17,6 +16,7 @@ import {
   removeRuleForAgent,
   rulePathForAgent,
 } from "../rules/installer";
+import * as p from "../tui/prompts";
 import { formatSetupSummary, IconRemove } from "./styles";
 
 interface SetupSelection {

@@ -293,6 +293,10 @@ describe("runAgentSetup", () => {
       status: "ok",
       agent_next_steps: expect.stringMatching(/Claude Code.*dosu status --json/),
     });
+    // The setup-feedback ask: the agent reports friction back to the user.
+    expect(events.at(-1)).toMatchObject({
+      agent_next_steps: expect.stringMatching(/wasted turns/),
+    });
     expect(mockInstallRuleForAgent).toHaveBeenCalledWith("claude", "canonical rule\n");
     expect(mockInstallSkill).toHaveBeenCalledWith(["claude"], { quiet: true });
     expect(mockUpsertDosuAgentsSection).toHaveBeenCalledWith(process.cwd(), "canonical rule\n");

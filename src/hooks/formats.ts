@@ -95,9 +95,7 @@ export function readHookConfig(path: string): JsonConfig {
     }
     return parsed;
   } catch {
-    throw new HookConfigError(
-      `${path} exists but is not valid JSON — fix or remove it, then retry`,
-    );
+    throw new HookConfigError(`${path} exists but is not valid JSON; fix or remove it, then retry`);
   }
 }
 

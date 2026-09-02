@@ -108,7 +108,7 @@ export function allHookAgents(): HookAgent[] {
       detectPath: "~/.codex",
       configPath: () => join(codexHome(), "hooks.json"),
       event: "Stop",
-      enableNote: "Codex asks you to trust new hooks — approve the Dosu hook when prompted.",
+      enableNote: "Codex asks you to trust new hooks; approve the Dosu hook when prompted.",
     }),
   ];
 }

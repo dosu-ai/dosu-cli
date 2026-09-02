@@ -23,13 +23,21 @@ vi.mock("../config/config", () => ({
 }));
 
 const mockRunSync = vi.fn();
-vi.mock("../sync/sync", () => ({
+// Spread the real module so the batch-size constant the command reads
+// (MINE_BATCH_LIMIT) keeps its production value.
+vi.mock("../sync/sync", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sync/sync")>()),
   runKnowledgeSync: (...args: unknown[]) => mockRunSync(...args),
 }));
 
 const mockSpawnDetached = vi.fn();
 vi.mock("../sync/detach", () => ({
   spawnDetachedSelf: (...args: unknown[]) => mockSpawnDetached(...args),
+}));
+
+const mockGetSyncStatus = vi.fn();
+vi.mock("../sync/status", () => ({
+  getSyncStatus: (...args: unknown[]) => mockGetSyncStatus(...args),
 }));
 
 interface FakeAgent {
@@ -112,6 +120,7 @@ beforeEach(() => {
   mockLoadConfig.mockReset();
   mockRunSync.mockReset();
   mockSpawnDetached.mockReset();
+  mockGetSyncStatus.mockReset();
   fakeAgents = [];
   enableCalls.length = 0;
   disableCalls.length = 0;
@@ -302,7 +311,7 @@ describe("knowledge sync", () => {
     await run("sync");
 
     const output = allOutput();
-    expect(output).toContain("Mined 5 sessions — 3 notes written");
+    expect(output).toContain("Mined 5 sessions, 3 notes written");
     expect(output).toContain("3 more in the backlog");
   });
 
@@ -463,6 +472,216 @@ describe("knowledge sync", () => {
     await run("sync", "--quiet", "--detach");
 
     expect(mockSpawnDetached).toHaveBeenCalledWith(["knowledge", "sync", "--quiet"]);
+    expect(mockRunSync).not.toHaveBeenCalled();
+  });
+
+  it("--detach forwards --bootstrap to the re-spawned run", async () => {
+    await run("sync", "--quiet", "--detach", "--bootstrap");
+
+    expect(mockSpawnDetached).toHaveBeenCalledWith(["knowledge", "sync", "--quiet", "--bootstrap"]);
+  });
+
+  function minedOutcome(remaining: number) {
+    return {
+      status: "mined",
+      readySessions: remaining,
+      inFlightSessions: 0,
+      sessions: [],
+      minedSessions: Math.min(remaining, 5),
+      miner: { outcome: "completed", notesWritten: 2, turns: 10 },
+    };
+  }
+
+  it("--bootstrap passes the bootstrap scope on every round", async () => {
+    mockRunSync
+      .mockResolvedValueOnce(minedOutcome(8))
+      .mockResolvedValueOnce(minedOutcome(3))
+      .mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
+
+    await run("sync", "--bootstrap");
+
+    expect(mockRunSync).toHaveBeenCalledTimes(3);
+    for (const call of mockRunSync.mock.calls) {
+      expect(call[0].bootstrap).toBe(true);
+    }
+  });
+
+  it("--bootstrap drains the backlog and reports each round", async () => {
+    mockRunSync
+      .mockResolvedValueOnce(minedOutcome(8))
+      .mockResolvedValueOnce(minedOutcome(3))
+      .mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
+
+    await run("sync", "--bootstrap");
+
+    const output = allOutput();
+    expect(output).toContain("Mined 5 sessions");
+    expect(output).toContain("Mined 3 sessions");
+    expect(output).toContain("No new completed sessions");
+  });
+
+  it("--bootstrap stops the drain on a failed round", async () => {
+    mockRunSync.mockResolvedValueOnce(minedOutcome(8)).mockResolvedValue({
+      status: "mine-failed",
+      readySessions: 3,
+      inFlightSessions: 0,
+      sessions: [],
+      minedSessions: 0,
+      miner: { outcome: "error", notesWritten: 0, turns: 1, message: "run exploded" },
+    });
+
+    await run("sync", "--bootstrap");
+
+    expect(mockRunSync).toHaveBeenCalledTimes(2);
+    expect(errorSpy.mock.calls.join(" ")).toContain("run exploded");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("--bootstrap --quiet drains silently", async () => {
+    mockRunSync
+      .mockResolvedValueOnce(minedOutcome(8))
+      .mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
+
+    await run("sync", "--quiet", "--bootstrap");
+
+    expect(mockRunSync).toHaveBeenCalledTimes(2);
+    expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  it("--bootstrap is capped even if mining always reports more", async () => {
+    // Every round claims 20 sessions are still ready; the cap comes from the
+    // first round's backlog: ceil(20/5)+2 = 6 rounds total (initial + 5 drains).
+    mockRunSync.mockResolvedValue(minedOutcome(20));
+
+    await run("sync", "--bootstrap");
+
+    expect(mockRunSync).toHaveBeenCalledTimes(6);
+  });
+
+  it("--bootstrap without a miner stays single-shot", async () => {
+    mockLoadConfig.mockReturnValue(makeValidConfig({ api_key: undefined }));
+    mockRunSync.mockResolvedValue({
+      status: "backlog",
+      readySessions: 4,
+      inFlightSessions: 0,
+      sessions: [],
+    });
+
+    await run("sync", "--bootstrap");
+
+    expect(mockRunSync).toHaveBeenCalledTimes(1);
+  });
+
+  it("--bootstrap --list stays single-shot with no miner", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "backlog",
+      readySessions: 4,
+      inFlightSessions: 0,
+      sessions: [],
+    });
+
+    await run("sync", "--list", "--bootstrap");
+
+    expect(mockRunSync).toHaveBeenCalledTimes(1);
+    expect(mockRunSync.mock.calls[0][0].bootstrap).toBe(true);
+    expect(syncDeps().mine).toBeUndefined();
+  });
+});
+
+describe("knowledge sync --status", () => {
+  const baseState = { schema_version: 1, watermark: null, consecutive_failures: 0 };
+
+  beforeEach(() => {
+    mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: "dep1" }));
+  });
+
+  it("reports a running sync without scanning or mining", async () => {
+    mockGetSyncStatus.mockReturnValue({
+      running: true,
+      pid: 4242,
+      startedAt: new Date(Date.now() - 3 * 60_000).toISOString(),
+      state: { ...baseState, watermark: new Date(Date.now() - 2 * 86_400_000).toISOString() },
+      recentActivity: ["[t] [sync] mined 5 sessions, 4 notes"],
+    });
+
+    await run("sync", "--status");
+
+    const output = allOutput();
+    expect(output).toContain("Sync running — pid 4242");
+    expect(output).toContain("3m ago");
+    expect(output).toContain("Mined through:");
+    expect(output).toContain("2d ago");
+    expect(output).toContain("mined 5 sessions, 4 notes");
+    expect(output).toContain("logs --follow");
+    expect(mockRunSync).not.toHaveBeenCalled();
+  });
+
+  it("reports idle with nothing mined yet", async () => {
+    mockGetSyncStatus.mockReturnValue({ running: false, state: baseState, recentActivity: [] });
+
+    await run("sync", "--status");
+
+    const output = allOutput();
+    expect(output).toContain("No sync running");
+    expect(output).toContain("nothing mined yet");
+    expect(output).not.toContain("Recent activity");
+  });
+
+  it("flags a stale lock left by a dead run", async () => {
+    mockGetSyncStatus.mockReturnValue({
+      running: false,
+      staleLock: true,
+      pid: 99,
+      startedAt: new Date().toISOString(),
+      state: baseState,
+      recentActivity: [],
+    });
+
+    await run("sync", "--status");
+
+    expect(allOutput()).toContain("Stale lock from pid 99");
+  });
+
+  it("shows the last attempt and the backoff window", async () => {
+    const lastAttempt = new Date(Date.now() - 90 * 60_000).toISOString();
+    mockGetSyncStatus.mockReturnValue({
+      running: false,
+      state: { ...baseState, last_attempt_at: lastAttempt, consecutive_failures: 2 },
+      backoffUntil: "2026-09-02T23:00:00.000Z",
+      recentActivity: [],
+    });
+
+    await run("sync", "--status");
+
+    const output = allOutput();
+    expect(output).toContain("Last attempt:");
+    expect(output).toContain("1h 30m ago");
+    expect(output).toContain("Backing off after 2 failures");
+    expect(output).toContain("2026-09-02T23:00:00.000Z");
+  });
+
+  it("renders very recent timestamps as 'just now'", async () => {
+    mockGetSyncStatus.mockReturnValue({
+      running: true,
+      pid: 7,
+      startedAt: new Date().toISOString(),
+      state: baseState,
+      recentActivity: [],
+    });
+
+    await run("sync", "--status");
+
+    expect(allOutput()).toContain("started just now");
+  });
+
+  it("--json emits the raw status object", async () => {
+    mockGetSyncStatus.mockReturnValue({ running: false, state: baseState, recentActivity: [] });
+
+    await run("sync", "--status", "--json");
+
+    const parsed = JSON.parse(allOutput());
+    expect(parsed.running).toBe(false);
+    expect(parsed.state.watermark).toBeNull();
     expect(mockRunSync).not.toHaveBeenCalled();
   });
 });

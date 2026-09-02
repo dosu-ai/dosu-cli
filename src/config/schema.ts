@@ -18,6 +18,8 @@ export interface AccountTarget {
   api_key?: string;
   org_id?: string;
   space_id?: string;
+  /** Display name of the Library (space) the MCP answers from. */
+  library_name?: string;
 }
 
 interface ActiveAccount {

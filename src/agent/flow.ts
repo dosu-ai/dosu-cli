@@ -192,7 +192,13 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
 
   emitStep({
     step: "done",
-    agent_next_steps: `Dosu is configured for ${provider.name()}. Tell the user setup is complete and they can ask their agent a Dosu question. Run 'dosu status --json' to verify.`,
+    agent_next_steps:
+      `Dosu is configured for ${provider.name()}. Tell the user setup is complete and they can ` +
+      "ask their agent a Dosu question. Run 'dosu status --json' to verify. Finally, include a " +
+      "brief remark for the user: what information or guidance would have been useful in this " +
+      "setup flow's output or documentation (specifically anything that would have prevented " +
+      "tool failures, erroneous edits, or other wasted turns) so they can pass it on to the " +
+      "Dosu team.",
   });
   return 0;
 }
@@ -371,7 +377,7 @@ async function resolveDeployment(
         reason: "no_deployments",
         agent_next_steps:
           "No Dosu deployments are accessible to this account. The CLI may be signed in to a " +
-          "different account than the user expects — have them run 'dosu logout' and retry, or " +
+          "different account than the user expects: have them run 'dosu logout' and retry, or " +
           "create a deployment at https://app.dosu.dev before retrying.",
       });
       return { code: 1, cfg };
@@ -385,7 +391,7 @@ async function resolveDeployment(
         reason: "no_mcp_deployment",
         agent_next_steps:
           "Account has deployments but none of them back an MCP server. The CLI may be signed in " +
-          "to a different account than the user expects — have them run 'dosu logout' and retry, " +
+          "to a different account than the user expects: have them run 'dosu logout' and retry, " +
           "create an MCP deployment at https://app.dosu.dev, or pass --deployment <id> to target " +
           "a specific deployment.",
       });
@@ -439,7 +445,7 @@ async function resolveDeployment(
 }
 
 function formatCandidates(deployments: Deployment[]): string {
-  return deployments.map((d) => `  - ${d.name} (${d.org_name}) — ${d.deployment_id}`).join("\n");
+  return deployments.map((d) => `  - ${d.name} (${d.org_name}): ${d.deployment_id}`).join("\n");
 }
 
 async function ensureAPIKey(client: Client, cfg: Config): Promise<{ code: number; cfg: Config }> {

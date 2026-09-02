@@ -46,6 +46,7 @@ import {
   saveConfig,
 } from "../config/config";
 import { getAccessTokenEmail, getAccessTokenUserID } from "../config/identity";
+import { createLogFollower } from "../debug/follow";
 import { logger } from "../debug/logger";
 import { allProviders, getProvider, type Provider } from "../mcp/providers";
 import { browserFallbackHint } from "../setup/styles";
@@ -270,7 +271,7 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
     )
     .option("--check <ticket>", "Exchange a login ticket created with --request for a token")
     .option("--json", "Emit machine-readable JSON output (use with --request or --check)")
-    .option("--no-browser", "Skip browser — print a URL to open on another machine and wait")
+    .option("--no-browser", "Skip browser: print a URL to open on another machine and wait")
     .action(
       async (opts: { request?: boolean; check?: string; json?: boolean; browser: boolean }) => {
         if (opts.request && opts.check !== undefined) {
@@ -627,8 +628,9 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
     .command("logs")
     .description("View or manage debug logs")
     .option("-t, --tail [n]", "Show last N lines (default: 50)")
+    .option("-f, --follow", "Show recent lines, then stream new ones as they arrive (Ctrl+C stops)")
     .option("--clear", "Delete the log file")
-    .action((opts: { tail?: string | true; clear?: boolean }) => {
+    .action((opts: { tail?: string | true; follow?: boolean; clear?: boolean }) => {
       const logPath = logger.getLogPath();
 
       if (opts.clear) {
@@ -638,6 +640,21 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
         } catch {
           console.log("No log file to delete.");
         }
+        return;
+      }
+
+      if (opts.follow) {
+        // Recent context first, then poll for appends. The interval keeps
+        // the process alive until the user interrupts it.
+        try {
+          const lines = readFileSync(logPath, "utf-8").split("\n");
+          if (lines.at(-1) === "") lines.pop(); // trailing newline
+          console.log(lines.slice(-followTailLines(opts.tail)).join("\n"));
+        } catch {
+          console.log(`No log file at ${logPath} yet; waiting for output...`);
+        }
+        const follower = createLogFollower(logPath, (chunk) => process.stdout.write(chunk));
+        setInterval(() => follower.poll(), FOLLOW_POLL_MS);
         return;
       }
 
@@ -658,6 +675,16 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
     });
 
   return program;
+}
+
+const FOLLOW_POLL_MS = 500;
+const DEFAULT_TAIL_LINES = 50;
+
+/** Lines of history `logs --follow` prints before streaming; -t overrides. */
+function followTailLines(tail?: string | true): number {
+  return typeof tail === "string"
+    ? Number.parseInt(tail, 10) || DEFAULT_TAIL_LINES
+    : DEFAULT_TAIL_LINES;
 }
 
 async function ensureFreshSession(cfg: Config): Promise<boolean> {

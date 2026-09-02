@@ -1,6 +1,13 @@
 /**
  * Instructions for the mining agent.
  *
+ * The write-knowledge rules are NOT authored here: the canonical copy lives in
+ * the dosu-skill repo (log-to-dosu-knowledge/references/miner-system-prompt.md)
+ * and is resolved at run time from the installed skill by prompt-source.ts,
+ * with a vendored fallback (prompt-core.generated.ts, regenerated via
+ * `bun run scripts/vendor-miner-prompt.ts`). This module only adds the runtime
+ * frame the skill cannot know: the miner's identity and its fenced tool names.
+ *
  * The prompt is the first line of defense for note quality: the backend
  * resolver has a matching transience REJECT, but a note that never gets
  * written is cheaper than one rejected server-side.
@@ -8,7 +15,9 @@
 
 import type { AgentSession } from "../sessions/scan";
 
-export const MINER_SYSTEM_PROMPT = `You are Dosu's knowledge miner. You read a developer's recent \
+/** System prompt framing the given canonical rules for the fenced miner. */
+export function buildMinerSystemPrompt(coreRules: string): string {
+  return `You are Dosu's knowledge miner. You read a developer's recent \
 coding-agent sessions and save the durable, non-obvious findings to the team's shared knowledge \
 base so future teammates and agents do not have to rediscover them.
 
@@ -18,22 +27,8 @@ in scope for this run.
 - mcp__dosu__read_knowledge / mcp__dosu__write_knowledge / mcp__dosu__finalize_session_knowledge: \
 the team knowledge base.
 
-Rules — non-negotiable:
-1. Before writing anything, call read_knowledge with the candidate topic to check whether the \
-knowledge already exists. Never write a duplicate or near-duplicate.
-2. Write ONLY durable, non-obvious knowledge: architecture decisions and their reasons, gotchas \
-and their fixes, environment/setup quirks, conventions, incident learnings, hard-won debugging \
-conclusions.
-3. Explicitly EXCLUDE in-flight state: task progress, plans, to-do lists, decisions that were \
-reversed later in the same session, unverified hypotheses, status updates, test results, and \
-anything a reader would only care about this week.
-4. Only pass repo/branch to write_knowledge when the session itself verifies them (an explicit \
-cwd, git remote, or branch mentioned in the transcript). Never infer or guess a repo. When not \
-verified, omit both.
-5. Populate write_knowledge metadata with source_agent and session_id for every note.
-6. Never quote credentials, tokens, or secrets — even redacted placeholders — and never include \
-long verbatim transcript spans. Summarize in your own words.
-7. A session with nothing durable is normal: skip it silently. Quality over volume.`;
+${coreRules}`;
+}
 
 /** Task prompt scoping the run to specific sessions. */
 export function buildMinerPrompt(sessions: AgentSession[]): string {

@@ -64,7 +64,7 @@ export function topicsCommand(): Command {
         topics.map((t: { topic_id: string; name: string; description?: string | null }) => [
           t.topic_id.slice(0, 8),
           t.name,
-          t.description ?? "—",
+          t.description ?? "-",
         ]),
         { rawData: topics },
       );

@@ -3,8 +3,8 @@
  */
 
 import { randomUUID } from "node:crypto";
-import * as p from "@clack/prompts";
 import { isTRPCClientError } from "@trpc/client";
+import pc from "picocolors";
 import { OAuthCallbackError } from "../auth/errors";
 import { Client, type Deployment, type Org, SessionExpiredError } from "../client/client";
 import type { TypedClient } from "../client/trpc";
@@ -21,20 +21,27 @@ import {
 } from "../config/config";
 import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
+import type { CliLibrary } from "../generated/dosu-api-types";
 import { getHookAgent } from "../hooks/agents";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
+import { spawnDetachedSelf } from "../sync/detach";
+import { runKnowledgeSync } from "../sync/sync";
+import { installCenteredLayout } from "../tui/layout";
+import * as p from "../tui/prompts";
 import { inGitWorkTree, stepUpdateAgentsMd } from "./agents-md-step";
 import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
 import { stepConnectGitHubRepo } from "./github-step";
-import {
-  type LogsHandoffDecision,
-  type LogsHandoffPlan,
-  launchLogsAgent,
-  offerLogsHandoff,
-} from "./logs-handoff";
 import { stepConfigureAgentRules } from "./rules-step";
-import { browserFallbackHint, dim, formatSetupSummary, IconRemove, info } from "./styles";
+import {
+  brand,
+  brandBadge,
+  browserFallbackHint,
+  dim,
+  formatSetupSummary,
+  IconRemove,
+  info,
+} from "./styles";
 
 export interface SetupOptions {
   deploymentID?: string;
@@ -99,6 +106,17 @@ function trackInBackground(tracking: Promise<void>): void {
 }
 
 export async function runSetup(opts: SetupOptions = {}): Promise<void> {
+  // Center the wizard in wide terminals; a no-op inside the TUI (which
+  // already installed the layout) and in non-TTY contexts.
+  const restoreLayout = installCenteredLayout();
+  try {
+    await runSetupFlow(opts);
+  } finally {
+    restoreLayout();
+  }
+}
+
+async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
   const onboardingRunID = randomUUID();
   logger.info(
     "setup",
@@ -106,7 +124,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
       opts.mode ? ` mode=${opts.mode}` : ""
     }`,
   );
-  p.intro("Dosu CLI Setup");
+  p.intro(`${brandBadge("dosu")} setup`);
   trackInBackground(
     trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_launch_attempted", {
       has_deployment_option: Boolean(opts.deploymentID),
@@ -232,6 +250,13 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     }
   }
 
+  // Library (cloud only): show which Library the MCP answers from, and
+  // persist its name so the welcome banner can display it. Fail-open — a
+  // missing name never blocks setup.
+  if (cfg.mode !== MODE_OSS) {
+    await stepShowLibrary(cfg);
+  }
+
   // GitHub guard (cloud only): an MCP whose space has no connected repo
   // answers from nothing. Offer the interactive connect step; the user can
   // choose to continue without it, and the source lookup is fail-open, so
@@ -302,30 +327,22 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
     agentsMdCompleted = await stepUpdateAgentsMd();
   }
 
-  // Post-setup log mining (cloud mode only): replaces the old codebase-audit
-  // CTA. Kickoff prefers agents the user just configured (Cursor / Claude / Codex).
-  // Gated on a git work tree, like the audit CTA it replaces: the handoff gives
-  // the terminal to a coding agent rooted at cwd, and `npx @dosu/cli setup` is
-  // routinely run straight from $HOME or a scratch directory.
-  let logsPlan: LogsHandoffPlan | null = null;
-  let logsHandoff: LogsHandoffDecision | undefined;
-  if (mcpCompleted && cfg.mode !== MODE_OSS && inGitWorkTree()) {
-    const preferredAgents = configuredProviders.map((result) => result.provider.id());
-    const offer = await offerLogsHandoff({ preferredAgents });
-    logsPlan = offer.plan;
-    logsHandoff = offer.decision;
-  }
-
   if (mcpCompleted || skillCompleted || agentsMdCompleted) {
     trackInBackground(
       trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_completed", {
         completed_mcp: mcpCompleted,
         completed_skill: skillCompleted,
         completed_agents_md: agentsMdCompleted,
-        completed_logs_handoff: logsHandoff === "accepted",
-        ...(logsHandoff ? { logs_handoff: logsHandoff } : {}),
       }),
     );
+  }
+
+  // Backfill offer: the hooks installed above only fire on FUTURE sessions,
+  // so a fresh install would otherwise wait for new activity before Dosu
+  // learns anything. Offer to mine the existing backlog now — with consent,
+  // never automatically.
+  if (mcpCompleted && cfg.mode !== MODE_OSS) {
+    await stepOfferInitialSync(cfg);
   }
 
   if (cfg.mode === MODE_OSS) {
@@ -333,12 +350,72 @@ export async function runSetup(opts: SetupOptions = {}): Promise<void> {
       "Setup complete! Using open-source libraries only.\n\nTips: Run `dosu setup --mode cloud` to connect your own repos.",
     );
   } else {
-    p.outro("\uD83C\uDF89 Setup complete!");
+    p.outro(setupOutroMessage(mcpCompleted));
+  }
+}
+
+/**
+ * Closing message for cloud setup. Knowledge syncs automatically via the
+ * session-end hooks installed with the MCP bundle, so the outro points at
+ * usage, not further setup chores.
+ */
+function setupOutroMessage(mcpCompleted: boolean): string {
+  if (!mcpCompleted) return `${brand("\u2714")} Setup complete!`;
+  const steps = [
+    `${brand("1.")} Restart your AI agent so it picks up the Dosu MCP server`,
+    `${brand("2.")} Ask it something, like ${info('"What does Dosu know about this repo?"')}`,
+    `${brand("3.")} Dosu keeps learning from your finished agent sessions automatically`,
+  ];
+  return `${brand("\u2714")} You're all set!\n\n${steps.join("\n")}`;
+}
+
+/**
+ * Offer to mine the existing session backlog right after the bundle is
+ * installed. Uses the bootstrap scope (the entire local session history —
+ * the hooks' rolling 30-day window would miss history that predates it).
+ * The scan is gate-and-report only (no miner, no tokens); the prompt
+ * appears only when there is actually something to mine, so everyday
+ * re-runs of `dosu setup` stay quiet once the watermark has caught up. On
+ * consent the sync runs fully detached and drains the whole backlog, so
+ * setup never blocks on a gateway run.
+ */
+export async function stepOfferInitialSync(cfg: Config): Promise<void> {
+  const target = cfg.active_account?.target;
+  // Without an API key + deployment the detached run couldn't mine anyway.
+  if (!target?.api_key || !target.deployment_id) return;
+
+  logger.info("setup", "Step: offer initial knowledge sync");
+  const s = p.spinner();
+  s.start("Checking for recent agent sessions...");
+  const outcome = await runKnowledgeSync({ bootstrap: true });
+  if (outcome.status !== "backlog" || outcome.readySessions === 0) {
+    s.stop("No unmined agent sessions found — Dosu will learn as you work.");
+    return;
+  }
+  const n = outcome.readySessions;
+  s.stop(`Found ${n} unmined agent session${n === 1 ? "" : "s"} on this machine.`);
+
+  const mineNow = await p.confirm({
+    message: `Mine ${n === 1 ? "it" : "them"} for team knowledge now? (runs in the background)`,
+    active: "Mine now",
+    inactive: "Skip",
+    initialValue: true,
+  });
+  if (p.isCancel(mineNow) || !mineNow) {
+    p.log.info(
+      `Skipped. Dosu picks sessions up in the background as you work, or run ${info("dosu knowledge sync")} anytime.`,
+    );
+    return;
   }
 
-  // Launch after the outro so the agent takes over a finished clack session.
-  if (logsPlan) {
-    launchLogsAgent(logsPlan);
+  if (spawnDetachedSelf(["knowledge", "sync", "--quiet", "--bootstrap"])) {
+    p.log.success(
+      `Background sync started — it works through the backlog a few sessions at a time.\n${dim(
+        `Watch progress with ${info("dosu knowledge sync --list")}.`,
+      )}`,
+    );
+  } else {
+    p.log.warn(`Could not start the background sync. Run ${info("dosu knowledge sync")} manually.`);
   }
 }
 
@@ -352,6 +429,9 @@ function applyDeployment(cfg: Config, d: Deployment): void {
     deployment_name: d.name,
     org_id: d.org_id,
     space_id: d.space_id,
+    // The Library belongs to the deployment's space; a stale name from a
+    // previous deployment must never survive a switch.
+    library_name: undefined,
   });
 }
 
@@ -592,7 +672,7 @@ const SETUP_HANDSHAKE_TIMEOUT_MS = 30 * 60 * 1000;
  */
 async function stepSetupHandshake(cfg: Config, onboardingRunID: string): Promise<boolean> {
   logger.info("setup", "Step: setup handshake");
-  p.log.info("Almost there — finish setting up in the browser and we'll pick up from here.");
+  p.log.info("Almost there. Finish setting up in the browser and we'll pick up from here.");
   const s = p.spinner();
   try {
     const { startOAuthFlow } = await import("../auth/flow");
@@ -644,7 +724,7 @@ async function stepSetupHandshake(cfg: Config, onboardingRunID: string): Promise
     }
     p.log.warn(
       "Didn't hear back from the browser. If it opened the Dosu app instead of the setup " +
-        "wizard, your CLI and browser may be signed in to different accounts — run " +
+        "wizard, your CLI and browser may be signed in to different accounts: run " +
         "`dosu logout`, then retry. Otherwise finish in the browser and re-run `dosu setup`.",
     );
     return false;
@@ -681,7 +761,7 @@ async function stepOfferGithubConnect(cfg: Config): Promise<void> {
   }
 
   logger.info("setup", "Step: offer GitHub connect (no GitHub source in the MCP's Library)");
-  p.log.warn("No GitHub repos are connected to this MCP yet — it can't answer from your code.");
+  p.log.warn("No GitHub repos are connected to this MCP yet, so it can't answer from your code.");
   const connectNow = await p.confirm({
     message: "Connect a GitHub repo now?",
     active: "Connect now",
@@ -750,6 +830,33 @@ async function resolveCloudSetupContext(cfg: Config): Promise<CloudSetupContext 
  *   - OSS mode → auto-pick the first deployment (used only for API-key issuance)
  *   - standard → interactive org + deployment select
  */
+/**
+ * Show which Library (space) the selected MCP answers from and persist its
+ * name for the welcome banner. The lookup is fail-open: on any error it
+ * falls back to a previously stored name, or stays silent.
+ */
+async function stepShowLibrary(cfg: Config): Promise<void> {
+  const target = cfg.active_account?.target;
+  if (!target?.space_id) return;
+
+  let name = target.library_name;
+  try {
+    const { createTypedClient } = await import("../client/trpc");
+    const library = await createTypedClient(cfg).libraries.info.query(target.space_id);
+    if (library?.name) {
+      name = library.name;
+      if (name !== target.library_name) {
+        updateTarget(cfg, { library_name: name });
+        saveConfig(cfg);
+      }
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn("setup", `Library lookup failed, showing stored name if any: ${msg}`);
+  }
+  if (name) p.log.success(`Library ${dim(`\u00B7 ${name}`)}`);
+}
+
 async function resolveDeployment(
   apiClient: Client,
   cfg: Config,
@@ -771,7 +878,7 @@ async function resolveDeployment(
   }
   const org = await stepSelectOrg(apiClient);
   if (!org) return false;
-  const d = await stepSelectDeployment(apiClient, org);
+  const d = await stepSelectDeployment(apiClient, cfg, org);
   if (!d) return false;
   cfg.mode = undefined;
   applyDeployment(cfg, d);
@@ -795,7 +902,7 @@ async function stepSelectOrg(apiClient: Client): Promise<Org | null> {
     }
     if (orgs.length === 1) {
       logger.info("setup", `Selected org: ${orgs[0].name} (auto, only one)`);
-      p.log.success(`Organization\n${dim(orgs[0].name)}`);
+      p.log.success(`Organization ${dim(`\u00B7 ${orgs[0].name}`)}`);
       return orgs[0];
     }
     const selected = await p.select({
@@ -832,7 +939,7 @@ async function stepResolveDeployment(apiClient: Client, id: string): Promise<Dep
       return null;
     }
     logger.info("setup", `Resolved deployment: ${d.name}`);
-    p.log.success(`Using MCP\n${dim(d.name)}`);
+    p.log.success(`MCP ${dim(`\u00B7 ${d.name}`)}`);
     return d;
   } catch (err: unknown) {
     /* v8 ignore next -- err is always Error in practice */
@@ -841,18 +948,81 @@ async function stepResolveDeployment(apiClient: Client, id: string): Promise<Dep
   }
 }
 
-async function stepSelectDeployment(apiClient: Client, org: Org): Promise<Deployment | null> {
+/** Sentinel: the user cancelled the Library picker (distinct from "no narrowing"). */
+const LIBRARY_SELECT_CANCELLED = Symbol("library-select-cancelled");
+
+/**
+ * When the org's deployments span more than one Library, ask which Library
+ * the MCP should answer from — listed by name, the same names the web
+ * Library switcher shows — and return it so the deployment choice can be
+ * narrowed to that Library's space. Libraries with no deployment are not
+ * offered (selecting one could only dead-end). Fail-open: if the libraries
+ * router is unavailable (old backend) or everything lives in one Library,
+ * return null and keep the previous behavior.
+ */
+async function stepSelectLibrary(
+  cfg: Config,
+  org: Org,
+  deployments: Deployment[],
+): Promise<CliLibrary | null | typeof LIBRARY_SELECT_CANCELLED> {
+  let libraries: CliLibrary[];
+  try {
+    const { createTypedClient } = await import("../client/trpc");
+    libraries = await createTypedClient(cfg).libraries.list.query(org.org_id);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn("setup", `Library list failed, skipping Library selection: ${msg}`);
+    return null;
+  }
+
+  const spacesWithDeployments = new Set(deployments.map((d) => d.space_id));
+  const candidates = (libraries ?? []).filter((l) => spacesWithDeployments.has(l.id));
+  if (candidates.length <= 1) return null;
+
+  const selected = await p.select({
+    message: "Select a Library",
+    options: candidates.map((l) => ({
+      label: l.name,
+      value: l.id,
+      ...(l.description ? { hint: l.description } : {}),
+    })),
+  });
+  if (p.isCancel(selected)) return LIBRARY_SELECT_CANCELLED;
+  const library = candidates.find((l) => l.id === selected) ?? null;
+  if (library) logger.info("setup", `Selected library: ${library.name}`);
+  return library;
+}
+
+async function stepSelectDeployment(
+  apiClient: Client,
+  cfg: Config,
+  org: Org,
+): Promise<Deployment | null> {
   try {
     const allDeployments = await apiClient.getDeployments();
-    const deployments = allDeployments.filter((d) => d.org_id === org.org_id);
+    const orgDeployments = allDeployments.filter((d) => d.org_id === org.org_id);
 
-    if (deployments.length === 0) {
+    if (orgDeployments.length === 0) {
       p.log.error(`No MCPs found for ${org.name}`);
       return null;
     }
+    if (orgDeployments.length === 1) {
+      logger.info("setup", `Selected deployment: ${orgDeployments[0].name} (auto, only one)`);
+      p.log.success(`MCP ${dim(`\u00B7 ${orgDeployments[0].name}`)}`);
+      return orgDeployments[0];
+    }
+
+    // Library-first: when the org's MCPs span several Libraries, ask which
+    // Library to answer from and narrow the choice to it.
+    const library = await stepSelectLibrary(cfg, org, orgDeployments);
+    if (library === LIBRARY_SELECT_CANCELLED) return null;
+    const deployments = library
+      ? orgDeployments.filter((d) => d.space_id === library.id)
+      : orgDeployments;
+
     if (deployments.length === 1) {
       logger.info("setup", `Selected deployment: ${deployments[0].name} (auto, only one)`);
-      p.log.success(`Using MCP\n${dim(deployments[0].name)}`);
+      p.log.success(`MCP ${dim(`\u00B7 ${deployments[0].name}`)}`);
       return deployments[0];
     }
     // The onboarding wizard creates one repo-deployment per connected repo,
@@ -862,7 +1032,7 @@ async function stepSelectDeployment(apiClient: Client, org: Org): Promise<Deploy
     const mcpDeployments = deployments.filter((d) => d.provider_slug === MCP_PROVIDER_SLUG);
     if (mcpDeployments.length === 1) {
       logger.info("setup", `Selected deployment: ${mcpDeployments[0].name} (auto, single MCP)`);
-      p.log.success(`Using MCP\n${dim(mcpDeployments[0].name)}`);
+      p.log.success(`MCP ${dim(`\u00B7 ${mcpDeployments[0].name}`)}`);
       return mcpDeployments[0];
     }
     const selected = await p.select({
@@ -892,7 +1062,7 @@ async function stepMintAPIKey(apiClient: Client, cfg: Config): Promise<string | 
     const valid = await apiClient.validateAPIKey(target.api_key, deploymentID);
     logger.debug("setup", `Existing API key valid=${valid}`);
     if (valid) {
-      p.log.success(`API key\n${dim("using existing")}`);
+      p.log.success(`API key ${dim("\u00B7 using existing")}`);
       return target.api_key;
     }
     p.log.warn("Existing API key is invalid, creating a new one...");
@@ -901,7 +1071,7 @@ async function stepMintAPIKey(apiClient: Client, cfg: Config): Promise<string | 
   try {
     const resp = await apiClient.createAPIKey(deploymentID, "dosu-cli");
     logger.info("setup", "API key created");
-    p.log.success(`API key\n${dim("created")}`);
+    p.log.success(`API key ${dim("\u00B7 created")}`);
     return resp.api_key;
   } catch (err: unknown) {
     /* v8 ignore next -- err is always Error in practice */
@@ -920,21 +1090,27 @@ async function stepSelectTools(detected: SetupProvider[]): Promise<ToolSelection
     configuredMap.set(p.id(), p.isConfigured());
   }
 
-  const options = detected.map((p) => {
-    const configured = configuredMap.get(p.id()) ?? false;
-    return {
-      label: p.name(),
-      value: p.id(),
-      hint: configured ? "configured — untick to remove" : undefined,
-    };
-  });
-
+  const options = detected.map((p) => ({ label: p.name(), value: p.id() }));
   const preselected = detected.filter((p) => configuredMap.get(p.id())).map((p) => p.id());
 
   const selected = await p.multiselect({
-    message: "Select agents — tick to configure, untick to remove",
+    message: "Select agents",
     options,
     initialValues: preselected,
+    // Each row previews the action confirming would take for that agent.
+    statusFor: (id, picked) => {
+      if (configuredMap.get(id)) return picked ? dim("configured") : pc.yellow("will remove");
+      return picked ? brand("will configure") : undefined;
+    },
+    summary: (picked) => {
+      const pickedSet = new Set(picked);
+      const toConfigure = picked.filter((id) => !configuredMap.get(id)).length;
+      const toRemove = preselected.filter((id) => !pickedSet.has(id)).length;
+      const parts: string[] = [];
+      if (toConfigure > 0) parts.push(`configure ${toConfigure}`);
+      if (toRemove > 0) parts.push(`remove ${toRemove}`);
+      return parts.length > 0 ? parts.join(" \u00B7 ") : "no changes";
+    },
   });
 
   if (p.isCancel(selected)) return null;

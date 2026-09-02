@@ -84,6 +84,14 @@ export interface SyncDeps {
 export interface SyncOptions {
   /** Background (hook-triggered) run: honor backoff, never fail loudly. */
   quiet?: boolean;
+  /**
+   * Initial-setup backfill scope: scan the entire local session history —
+   * no age cutoff, no count cap — instead of the rolling 30-day window.
+   * A fresh install's history predates the window by construction, and old
+   * sessions are exactly what the backfill exists to catch. Volume stays
+   * bounded downstream: mining happens MINE_BATCH_LIMIT sessions per round.
+   */
+  bootstrap?: boolean;
   deps?: SyncDeps;
 }
 
@@ -109,7 +117,7 @@ function logGateResult(
   logger.debug(
     "sync",
     `gate: ${ready.length} ready, ${inFlight} in flight (watermark ${watermark ?? "none"})${
-      preview ? ` — ${preview}${more}` : ""
+      preview ? ` \u00B7 ${preview}${more}` : ""
     }`,
   );
 }
@@ -134,7 +142,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
   if (options.quiet) {
     const retryAt = backoffUntil(state);
     if (retryAt && now() < retryAt) {
-      logger.debug("sync", `skipping quiet sync — backoff until ${retryAt.toISOString()}`);
+      logger.debug("sync", `skipping quiet sync: backoff until ${retryAt.toISOString()}`);
       return { status: "skipped-backoff", readySessions: 0, inFlightSessions: 0, sessions: [] };
     }
   }
@@ -145,10 +153,12 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     const listSessions =
       deps.listSessions ??
       (() =>
-        scanAgentSessions({
-          since: new Date(now().getTime() - GATE_WINDOW_DAYS * 24 * 60 * 60 * 1000),
-          limit: GATE_WINDOW,
-        }));
+        options.bootstrap
+          ? scanAgentSessions({})
+          : scanAgentSessions({
+              since: new Date(now().getTime() - GATE_WINDOW_DAYS * 24 * 60 * 60 * 1000),
+              limit: GATE_WINDOW,
+            }));
     const sessions = await listSessions();
     ({ ready, inFlight } = gateSessions(sessions, state.watermark, now()));
     logGateResult(ready, inFlight, state.watermark);
@@ -186,7 +196,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
   // winner owns this run's attempt bookkeeping.
   const lock = deps.lock ?? fileLock();
   if (!lock.acquire()) {
-    logger.debug("sync", "skipping — another sync run holds the lock");
+    logger.debug("sync", "skipping: another sync run holds the lock");
     return { status: "skipped-lock", ...base };
   }
 
@@ -218,7 +228,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
         last_attempt_at: now().toISOString(),
         consecutive_failures: 0,
       });
-      logger.debug("sync", `all ${trivial} examined sessions trivial — watermark advanced, no run`);
+      logger.debug("sync", `all ${trivial} examined sessions trivial; watermark advanced, no run`);
       return {
         status: "nothing-new",
         ...base,
@@ -246,7 +256,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
         });
         logger.debug(
           "sync",
-          `mined ${batch.length} sessions, ${miner.notesWritten} notes — watermark → ${watermark}`,
+          `mined ${batch.length} sessions, ${miner.notesWritten} notes; watermark → ${watermark}`,
         );
         return {
           status: "mined",
@@ -276,7 +286,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
           last_attempt_at: now().toISOString(),
           consecutive_failures: state.consecutive_failures + 1,
         });
-        logger.debug("sync", `mining failed: ${miner.outcome} — ${miner.message ?? ""}`);
+        logger.debug("sync", `mining failed: ${miner.outcome}; ${miner.message ?? ""}`);
         return {
           status: "mine-failed",
           ...base,

@@ -151,7 +151,7 @@ const SUCCESS_COPY: Record<SuccessVariant, { title: string; heading: string; clo
   onboarding: {
     title: "Dosu CLI - Onboarding Complete",
     heading: "Onboarding Complete",
-    close: "You're all set — return to your terminal, Dosu is finishing your setup there.",
+    close: "You're all set. Return to your terminal, where Dosu is finishing your setup.",
   },
 };
 

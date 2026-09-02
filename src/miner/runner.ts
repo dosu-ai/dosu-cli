@@ -15,7 +15,8 @@ import { createRunConfigDir } from "./config-dir";
 import { detectSettingsConflicts } from "./conflicts";
 import { buildMinerEnv, type MinerTrigger } from "./env";
 import { resolveClaudeExecutable } from "./executable";
-import { buildMinerPrompt, MINER_SYSTEM_PROMPT } from "./prompt";
+import { buildMinerPrompt, buildMinerSystemPrompt } from "./prompt";
+import { resolveMinerCoreRules } from "./prompt-source";
 import { createSessionToolsServer, SESSIONS_SERVER_NAME } from "./tools";
 
 export type MinerOutcome =
@@ -60,16 +61,16 @@ const KNOWLEDGE_SERVER_NAME = "dosu";
 const GATEWAY_ERRORS: Record<string, { outcome: MinerOutcome; message: string }> = {
   dosu_consent_off: {
     outcome: "consent_off",
-    message: "Your org hasn't enabled Dosu Remote Sessions — ask an org admin to turn it on.",
+    message: "Your org hasn't enabled Dosu Remote Sessions. Ask an org admin to turn it on.",
   },
   dosu_credit_limit_reached: {
     outcome: "credit_limit",
     message:
-      "Your org has used its Dosu credits for this billing period — an admin can enable overage or upgrade.",
+      "Your org has used its Dosu credits for this billing period. An admin can enable overage or upgrade.",
   },
   dosu_quota_exceeded: {
     outcome: "quota_exceeded",
-    message: "Daily Dosu Remote Sessions budget reached — runs resume tomorrow.",
+    message: "Daily Dosu Remote Sessions budget reached; runs resume tomorrow.",
   },
 };
 
@@ -140,7 +141,7 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
       outcome: "settings_conflict",
       notesWritten: 0,
       turns: 0,
-      message: `Refusing to run: conflicting Claude Code settings would override the miner's auth — ${detail}`,
+      message: `Refusing to run: conflicting Claude Code settings would override the miner's auth (${detail})`,
     };
   }
 
@@ -177,11 +178,16 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
     deploymentID: options.deploymentID,
   });
 
+  // Rules come from the installed Dosu skill when present, so skill-repo
+  // updates apply without a CLI release; the vendored copy is the fallback.
+  const coreRules = resolveMinerCoreRules();
+  logger.debug("miner", `write-knowledge rules source: ${coreRules.source}`);
+
   try {
     const run = query({
       prompt: buildMinerPrompt(options.sessions),
       options: {
-        systemPrompt: MINER_SYSTEM_PROMPT,
+        systemPrompt: buildMinerSystemPrompt(coreRules.rules),
         env: env as Record<string, string>,
         abortController: abort,
         maxTurns: options.maxTurns ?? DEFAULT_MAX_TURNS,
@@ -227,7 +233,7 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
             if (notesWritten >= maxNotes) {
               return {
                 behavior: "deny",
-                message: `Note cap reached (${maxNotes} per run) — stop writing and summarize.`,
+                message: `Note cap reached (${maxNotes} per run); stop writing and summarize.`,
               };
             }
             notesWritten += 1;
@@ -257,7 +263,7 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
             outcome: "error",
             notesWritten,
             turns,
-            message: "Mining run failed — see debug log for details.",
+            message: "Mining run failed; see debug log for details.",
           };
         }
         logger.debug("miner", `run ${runID} completed: ${turns} turns, ${notesWritten} notes`);
@@ -284,7 +290,7 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
       turns,
       message: abort.signal.aborted
         ? "Mining run timed out and was aborted."
-        : "Mining run failed — see debug log for details.",
+        : "Mining run failed; see debug log for details.",
     };
   } finally {
     clearTimeout(timer);

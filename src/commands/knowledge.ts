@@ -13,7 +13,8 @@ import { allHookAgents, getHookAgent, type HookAgent } from "../hooks/agents";
 import { HookConfigError, hookCommand } from "../hooks/formats";
 import type { AgentSession } from "../sessions/scan";
 import { spawnDetachedSelf } from "../sync/detach";
-import { runKnowledgeSync, type SyncDeps, type SyncOutcome } from "../sync/sync";
+import { getSyncStatus, type SyncStatus } from "../sync/status";
+import { MINE_BATCH_LIMIT, runKnowledgeSync, type SyncDeps, type SyncOutcome } from "../sync/sync";
 import { positiveInteger } from "./arguments";
 import { requireLoginConfig } from "./auth";
 import { printResult, printTable, truncate } from "./output";
@@ -79,7 +80,7 @@ export function knowledgeCommand(): Command {
         ["Title", "Type"],
         limited.map((r: { title?: string | null; entity_type?: string | null }) => [
           truncate(r.title ?? "(untitled)", 60),
-          r.entity_type ?? "—",
+          r.entity_type ?? "-",
         ]),
         { json: false, rawData: limited },
       );
@@ -123,30 +124,85 @@ export function knowledgeCommand(): Command {
     .option("--quiet", "Background mode for hooks: honor backoff, exit 0, print nothing")
     .option("--detach", "Re-spawn detached and return immediately (used by agent hooks)")
     .option("--list", "List the sessions selected for mining without mining them")
+    .option(
+      "--bootstrap",
+      "Backfill mode: mine the full local session history regardless of age and drain the backlog (used by setup)",
+    )
+    .option("--status", "Show whether a sync is running now, plus watermark and recent activity")
     .option("--json", "Output as JSON")
-    .action(async (opts: { quiet?: boolean; detach?: boolean; list?: boolean; json?: boolean }) => {
-      if (opts.detach) {
-        // Hooks call `sync --quiet --detach`; the re-spawned child runs the
-        // actual pipeline so the hooking agent gets its exit immediately.
-        spawnDetachedSelf(["knowledge", "sync", ...(opts.quiet ? ["--quiet"] : [])]);
-        return;
-      }
+    .action(
+      async (opts: {
+        quiet?: boolean;
+        detach?: boolean;
+        list?: boolean;
+        bootstrap?: boolean;
+        status?: boolean;
+        json?: boolean;
+      }) => {
+        // --status never scans or mines: it reads the lock, the persisted
+        // watermark state, and the tail of the debug log.
+        if (opts.status) {
+          const status = getSyncStatus();
+          if (opts.json) {
+            printResult(status, opts);
+            return;
+          }
+          printSyncStatus(status);
+          return;
+        }
 
-      // --list is a dry run: gate and report, never mine.
-      const deps: SyncDeps = opts.list ? {} : { mine: buildMiner(opts.quiet ? "hook" : "manual") };
-      const outcome = await runKnowledgeSync({ quiet: opts.quiet, deps });
+        if (opts.detach) {
+          // Hooks call `sync --quiet --detach`; the re-spawned child runs the
+          // actual pipeline so the hooking agent gets its exit immediately.
+          spawnDetachedSelf([
+            "knowledge",
+            "sync",
+            ...(opts.quiet ? ["--quiet"] : []),
+            ...(opts.bootstrap ? ["--bootstrap"] : []),
+          ]);
+          return;
+        }
 
-      if (opts.quiet) return; // Invisible by contract; details are in the debug log.
+        // --list is a dry run: gate and report, never mine.
+        const deps: SyncDeps = opts.list
+          ? {}
+          : { mine: buildMiner(opts.quiet ? "hook" : "manual") };
+        let outcome = await runKnowledgeSync({
+          quiet: opts.quiet,
+          bootstrap: opts.bootstrap,
+          deps,
+        });
 
-      if (opts.json) {
-        printResult(outcome, opts);
-        if (outcome.status === "error") process.exitCode = 1;
-        return;
-      }
+        // Bootstrap drains the whole backlog in this process instead of
+        // stopping after one batch — a fresh install shouldn't wait for
+        // future hook fires to work through its history. Each round is a
+        // full gate+mine pass, so failures, backoff (quiet mode), and the
+        // lock all apply per round; any non-mined status ends the drain.
+        // The round cap is sized from the backlog the first pass reported
+        // (bootstrap scans the full history, so there is no fixed scan
+        // limit to derive it from); every mined round advances the
+        // watermark by at least a full batch, so the cap only guards
+        // against a pathological miner that keeps reporting progress.
+        if (opts.bootstrap && !opts.list && deps.mine) {
+          const maxRounds = Math.ceil(outcome.readySessions / MINE_BATCH_LIMIT) + 2;
+          for (let round = 1; outcome.status === "mined" && round < maxRounds; round++) {
+            if (!opts.quiet && !opts.json) printSyncOutcome(outcome);
+            outcome = await runKnowledgeSync({ quiet: opts.quiet, bootstrap: true, deps });
+          }
+        }
 
-      printSyncOutcome(outcome);
-      if (opts.list && outcome.sessions.length > 0) printSessionList(outcome.sessions);
-    });
+        if (opts.quiet) return; // Invisible by contract; details are in the debug log.
+
+        if (opts.json) {
+          printResult(outcome, opts);
+          if (outcome.status === "error") process.exitCode = 1;
+          return;
+        }
+
+        printSyncOutcome(outcome);
+        if (opts.list && outcome.sessions.length > 0) printSessionList(outcome.sessions);
+      },
+    );
 
   cmd.addCommand(hooksCommand());
 
@@ -170,6 +226,56 @@ function buildMiner(trigger: "hook" | "manual"): SyncDeps["mine"] {
   };
 }
 
+/** "3m ago" / "2h 10m ago" for status timestamps; falls back to the raw value. */
+function formatAge(iso: string, now: Date): string {
+  const ms = now.getTime() - Date.parse(iso);
+  if (!Number.isFinite(ms) || ms < 0) return iso;
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${minutes % 60}m ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
+  if (status.running) {
+    console.log(
+      `${pc.green("●")} Sync running — pid ${status.pid}, started ${formatAge(status.startedAt ?? "", now)}.`,
+    );
+  } else if (status.staleLock) {
+    console.log(
+      `${pc.yellow("●")} Stale lock from pid ${status.pid} (process gone); syncs resume once it ages out.`,
+    );
+  } else {
+    console.log("○ No sync running.");
+  }
+
+  const wm = status.state.watermark;
+  console.log(`  Mined through: ${wm ? `${wm} (${formatAge(wm, now)})` : "nothing mined yet"}`);
+  if (status.state.last_attempt_at) {
+    console.log(
+      `  Last attempt:  ${status.state.last_attempt_at} (${formatAge(status.state.last_attempt_at, now)})`,
+    );
+  }
+  if (status.backoffUntil) {
+    const n = status.state.consecutive_failures;
+    console.log(
+      pc.yellow(
+        `  Backing off after ${n} failure${n === 1 ? "" : "s"}; background syncs retry after ${status.backoffUntil}.`,
+      ),
+    );
+  }
+
+  if (status.recentActivity.length > 0) {
+    console.log("\nRecent activity:");
+    for (const line of status.recentActivity) {
+      console.log(pc.dim(`  ${truncate(line, 160)}`));
+    }
+  }
+  console.log(pc.dim("\nFollow live with 'dosu logs --follow'."));
+}
+
 function printSyncOutcome(outcome: SyncOutcome): void {
   switch (outcome.status) {
     case "backlog": {
@@ -187,7 +293,7 @@ function printSyncOutcome(outcome: SyncOutcome): void {
       const notes = outcome.miner?.notesWritten ?? 0;
       const remaining = outcome.readySessions - (outcome.minedSessions ?? 0);
       console.log(
-        `✓ Mined ${outcome.minedSessions} session${outcome.minedSessions === 1 ? "" : "s"} — ${notes} note${notes === 1 ? "" : "s"} written.`,
+        `✓ Mined ${outcome.minedSessions} session${outcome.minedSessions === 1 ? "" : "s"}, ${notes} note${notes === 1 ? "" : "s"} written.`,
       );
       if (remaining > 0) {
         console.log(pc.dim(`${remaining} more in the backlog; run sync again to continue.`));
@@ -204,7 +310,7 @@ function printSyncOutcome(outcome: SyncOutcome): void {
       break;
     }
     case "skipped-lock": {
-      console.log(pc.dim("Skipped — another sync run is already in progress."));
+      console.log(pc.dim("Skipped: another sync run is already in progress."));
       break;
     }
     case "nothing-new": {
@@ -221,7 +327,7 @@ function printSyncOutcome(outcome: SyncOutcome): void {
       break;
     }
     case "skipped-backoff": {
-      console.log(pc.dim("Skipped — a recent sync failed; waiting out the retry backoff."));
+      console.log(pc.dim("Skipped: a recent sync failed; waiting out the retry backoff."));
       break;
     }
   }
@@ -235,7 +341,7 @@ function printSessionList(sessions: readonly AgentSession[]): void {
     sessions.map((s) => [
       s.harness,
       s.updated.replace("T", " ").slice(0, 16),
-      truncate(s.project ?? "—", 48),
+      truncate(s.project ?? "-", 48),
       truncate(s.id, 24),
     ]),
     { json: false, rawData: sessions },
@@ -326,7 +432,7 @@ function hooksCommand(): Command {
       if (agents.length > 0 && !devMode && !dosuOnPath()) {
         console.log(
           pc.yellow(
-            "Warning: 'dosu' is not on PATH — hooks run 'dosu knowledge sync' and will fail until it is.",
+            "Warning: 'dosu' is not on PATH; hooks run 'dosu knowledge sync' and will fail until it is.",
           ),
         );
       }
@@ -336,7 +442,7 @@ function hooksCommand(): Command {
       for (const agent of agents) {
         try {
           agent.enable();
-          console.log(`✓ ${agent.name()} — hook enabled (${agent.configPath()})`);
+          console.log(`✓ ${agent.name()} \u00B7 hook enabled (${agent.configPath()})`);
           const note = agent.enableNote?.();
           if (note) console.log(pc.dim(`  ${note}`));
         } catch (err) {
@@ -352,7 +458,7 @@ function hooksCommand(): Command {
       for (const agent of resolveHookAgents(ids)) {
         try {
           agent.disable();
-          console.log(`✓ ${agent.name()} — hook disabled`);
+          console.log(`✓ ${agent.name()} \u00B7 hook disabled`);
         } catch (err) {
           reportHookFailure(agent, err);
         }
@@ -365,7 +471,7 @@ function hooksCommand(): Command {
 function reportHookFailure(agent: HookAgent, err: unknown): void {
   const message =
     err instanceof HookConfigError ? err.message : err instanceof Error ? err.message : String(err);
-  console.error(pc.red(`✗ ${agent.name()} — ${message}`));
+  console.error(pc.red(`✗ ${agent.name()}: ${message}`));
   process.exitCode = 1;
 }
 

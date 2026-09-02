@@ -4,8 +4,38 @@
 
 import pc from "picocolors";
 
-export const IconAdd = "+";
+export const IconAdd = "\u2714";
 export const IconRemove = "-";
+
+/**
+ * Dosu brand green from the dosu.dev landing palette — rgb(82, 164, 15) —
+ * plus the matching "ink" dark used for text on green. Rendered as 24-bit
+ * color when the terminal advertises truecolor, else the nearest ANSI green.
+ */
+const BRAND_FG = "\u001B[38;2;82;164;15m";
+const BRAND_BG = "\u001B[48;2;82;164;15m";
+const INK_FG = "\u001B[38;2;14;14;14m";
+const RESET_FG = "\u001B[39m";
+const RESET_BG = "\u001B[49m";
+
+export function hasTruecolor(): boolean {
+  return /truecolor|24bit/i.test(process.env.COLORTERM ?? "");
+}
+
+/** Brand-green foreground text. */
+export function brand(msg: string): string {
+  if (!pc.isColorSupported) return msg;
+  return hasTruecolor() ? `${BRAND_FG}${msg}${RESET_FG}` : pc.green(msg);
+}
+
+/** The dosu wordmark chip: ink text on a solid brand-green block. */
+export function brandBadge(msg: string): string {
+  if (!pc.isColorSupported) return `[ ${msg} ]`;
+  const label = pc.bold(` ${msg} `);
+  return hasTruecolor()
+    ? `${BRAND_BG}${INK_FG}${label}${RESET_FG}${RESET_BG}`
+    : pc.bgGreen(pc.black(label));
+}
 
 export function dim(msg: string): string {
   return pc.dim(msg);
@@ -22,9 +52,10 @@ export function formatSetupSummary(
   items: readonly SetupSummaryItem[],
   marker: string = IconAdd,
 ): string {
+  const styled = marker === IconRemove ? pc.red(marker) : brand(marker);
   const lines = items.map((item) => {
     const path = `${item.path}${item.status ? ` (${item.status})` : ""}`;
-    return item.label ? `${marker} ${item.label}\n  ${dim(path)}` : `${marker} ${dim(path)}`;
+    return item.label ? `${styled} ${item.label}\n  ${dim(path)}` : `${styled} ${dim(path)}`;
   });
   return `${title}\n${lines.join("\n")}`;
 }

@@ -17,7 +17,7 @@ vi.mock("node:child_process", () => ({
 }));
 
 // Only mock true boundaries: terminal UI, auth (browser), and HTTP client
-vi.mock("@clack/prompts", () => ({
+vi.mock("../tui/prompts", () => ({
   intro: vi.fn(),
   outro: vi.fn(),
   cancel: vi.fn(),
@@ -90,7 +90,11 @@ const mockTrpc = vi.hoisted(() => ({
     create: { mutate: vi.fn() },
     listForSpace: { query: vi.fn() },
   },
-  libraries: { sourcesList: { query: vi.fn() } },
+  libraries: {
+    sourcesList: { query: vi.fn() },
+    info: { query: vi.fn() },
+    list: { query: vi.fn() },
+  },
   dataSource: { create: { mutate: vi.fn() } },
   deploymentDataSource: { create: { mutate: vi.fn().mockResolvedValue({}) } },
 }));
@@ -154,20 +158,6 @@ vi.mock("./agents-md-step", () => ({
   stepUpdateAgentsMd: (...args: unknown[]) => mockStepUpdateAgentsMd(...args),
 }));
 
-// Log-mining handoff: mocked so flow tests never scan the real $HOME for agent
-// transcripts and never hand the terminal to a coding agent. Its own behaviour
-// lives in logs-handoff.test.ts; here we only assert the gate in runSetup.
-// Asserting on `p.confirm` instead would be vacuous — the unmocked module
-// returns early on an empty $HOME long before it prompts.
-const { mockOfferLogsHandoff, mockLaunchLogsAgent } = vi.hoisted(() => ({
-  mockOfferLogsHandoff: vi.fn(),
-  mockLaunchLogsAgent: vi.fn(),
-}));
-vi.mock("./logs-handoff", () => ({
-  offerLogsHandoff: (...args: unknown[]) => mockOfferLogsHandoff(...args),
-  launchLogsAgent: (...args: unknown[]) => mockLaunchLogsAgent(...args),
-}));
-
 const { mockStepConfigureAgentRules } = vi.hoisted(() => ({
   mockStepConfigureAgentRules: vi.fn(),
 }));
@@ -179,7 +169,30 @@ vi.mock("./github-step", () => ({
   detectGitRepo: vi.fn(() => null),
 }));
 
-import * as p from "@clack/prompts";
+// Knowledge-sync boundary: the initial-sync offer must never scan the real
+// machine or spawn a real detached process from a test run. The wrapper falls
+// back to a quiet "nothing-new" outcome so full runSetup tests sail past the
+// offer step even after vi.resetAllMocks() wipes per-test values.
+const { mockRunKnowledgeSync, mockSpawnDetachedSelf } = vi.hoisted(() => ({
+  mockRunKnowledgeSync: vi.fn(),
+  mockSpawnDetachedSelf: vi.fn(),
+}));
+vi.mock("../sync/sync", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sync/sync")>()),
+  runKnowledgeSync: (...args: unknown[]) =>
+    mockRunKnowledgeSync(...args) ??
+    Promise.resolve({
+      status: "nothing-new",
+      readySessions: 0,
+      inFlightSessions: 0,
+      sessions: [],
+    }),
+}));
+vi.mock("../sync/detach", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sync/detach")>()),
+  spawnDetachedSelf: (...args: unknown[]) => mockSpawnDetachedSelf(...args),
+}));
+
 import { OAuthCallbackError } from "../auth/errors";
 import { startOAuthFlow } from "../auth/flow";
 import { Client } from "../client/client";
@@ -193,6 +206,7 @@ import { ClaudeDesktopProvider } from "../mcp/providers/claude-desktop";
 import { CodexProvider } from "../mcp/providers/codex";
 import { CursorProvider } from "../mcp/providers/cursor";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
+import * as p from "../tui/prompts";
 import {
   type ConfigResult,
   cliAuthFailureReason,
@@ -200,6 +214,7 @@ import {
   runSetup,
   stepConfigureTools,
   stepDetectTools,
+  stepOfferInitialSync,
   stepShowSummary,
   type ToolSelection,
 } from "./flow";
@@ -235,7 +250,6 @@ function installSetupStepDefaults() {
   mockInGitWorkTree.mockReturnValue(false);
   mockStepUpdateAgentsMd.mockReturnValue(true);
   mockStepConfigureAgentRules.mockResolvedValue([]);
-  mockOfferLogsHandoff.mockResolvedValue({ plan: null });
 }
 
 function installRemoteSetupDefaults() {
@@ -256,6 +270,10 @@ function installRemoteSetupDefaults() {
   mockTrpc.libraries.sourcesList.query.mockResolvedValue([
     { data_source_id: "ds-gh", provider_slug: "github", name: "acme/repo" },
   ]);
+  mockTrpc.libraries.info.query.mockResolvedValue({ id: "s1", name: "Main Library" });
+  // Default: one Library, so setup never asks which one. Tests that exercise
+  // the Library picker override with several.
+  mockTrpc.libraries.list.query.mockResolvedValue([{ id: "s1", name: "Main Library" }]);
   mockTrpc.workspaces.listForSpace.query.mockResolvedValue([]);
 }
 
@@ -948,6 +966,48 @@ describe("runSetup integration", () => {
     expect(savedCfg.active_account?.target?.deployment_name).toBe("Deploy1");
   });
 
+  it("shows and persists the Library the selected MCP answers from", async () => {
+    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
+    setupAuthenticatedClient();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(mockTrpc.libraries.info.query).toHaveBeenCalledWith("s1");
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Main Library"));
+    const savedCfg = loadConfig();
+    expect(savedCfg.active_account?.target?.library_name).toBe("Main Library");
+  });
+
+  it("continues setup quietly when the Library lookup fails and no name is stored", async () => {
+    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
+    const clientMethods = setupAuthenticatedClient();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    mockTrpc.libraries.info.query.mockRejectedValue(new Error("library lookup boom"));
+
+    await runSetup();
+
+    // Fail-open: no Library line, no error, setup proceeds to the API key step.
+    expect(p.log.success).not.toHaveBeenCalledWith(expect.stringContaining("Library"));
+    expect(clientMethods.validateAPIKey).toHaveBeenCalled();
+    expect(loadConfig().active_account?.target?.library_name).toBeUndefined();
+  });
+
+  it("falls back to the stored Library name when the lookup fails", async () => {
+    const cfg = makeCfg({ deployment_id: undefined, deployment_name: undefined });
+    saveConfig(cfg);
+    setupAuthenticatedClient();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+    // First run persists the name; second run's lookup fails but still shows it.
+    await runSetup();
+    vi.mocked(p.log.success).mockClear();
+    mockTrpc.libraries.info.query.mockRejectedValue(new Error("library lookup boom"));
+
+    await runSetup();
+
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Main Library"));
+  });
+
   it("offers and runs the GitHub connect step when the MCP's Library has no GitHub source", async () => {
     saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
     setupAuthenticatedClient();
@@ -1431,6 +1491,121 @@ describe("runSetup integration", () => {
     expect(saved.active_account?.target?.deployment_id).toBe("d2");
   });
 
+  it("asks which Library when the org's MCPs span several, listing them by name", async () => {
+    const cfg = makeCfg({ deployment_id: undefined, deployment_name: undefined });
+    saveConfig(cfg);
+
+    setupAuthenticatedClient({
+      getDeployments: vi.fn().mockResolvedValue([
+        { deployment_id: "d1", name: "Docs MCP", org_id: "o1", org_name: "Org1", space_id: "s1" },
+        { deployment_id: "d2", name: "Code MCP", org_id: "o1", org_name: "Org1", space_id: "s2" },
+      ]),
+    });
+    mockTrpc.libraries.list.query.mockResolvedValue([
+      { id: "s1", name: "Docs Library" },
+      { id: "s2", name: "Code Library", description: "everything code" },
+    ]);
+    // One select: the Library. Its space has a single MCP, so no MCP picker.
+    vi.mocked(p.select).mockResolvedValueOnce("s2");
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(mockTrpc.libraries.list.query).toHaveBeenCalledWith("o1");
+    expect(p.select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Select a Library",
+        options: [
+          { label: "Docs Library", value: "s1" },
+          { label: "Code Library", value: "s2", hint: "everything code" },
+        ],
+      }),
+    );
+    expect(p.select).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Select an MCP" }),
+    );
+    const saved = loadConfig();
+    expect(saved.active_account?.target?.deployment_id).toBe("d2");
+  });
+
+  it("does not offer Libraries that have no MCP, and skips the question for one Library", async () => {
+    const cfg = makeCfg({ deployment_id: undefined, deployment_name: undefined });
+    saveConfig(cfg);
+
+    setupAuthenticatedClient({
+      getDeployments: vi.fn().mockResolvedValue([
+        { deployment_id: "d1", name: "D1", org_id: "o1", org_name: "Org1", space_id: "s1" },
+        { deployment_id: "d2", name: "D2", org_id: "o1", org_name: "Org1", space_id: "s1" },
+      ]),
+    });
+    // Several Libraries exist, but only s1 has deployments — no question.
+    mockTrpc.libraries.list.query.mockResolvedValue([
+      { id: "s1", name: "Main Library" },
+      { id: "s-empty", name: "Empty Library" },
+    ]);
+    vi.mocked(p.select).mockResolvedValueOnce("d1");
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(p.select).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Select a Library" }),
+    );
+    expect(p.select).toHaveBeenCalledWith(expect.objectContaining({ message: "Select an MCP" }));
+  });
+
+  it("falls back to the plain MCP picker when the Library list is unavailable", async () => {
+    const cfg = makeCfg({ deployment_id: undefined, deployment_name: undefined });
+    saveConfig(cfg);
+
+    setupAuthenticatedClient({
+      getDeployments: vi.fn().mockResolvedValue([
+        { deployment_id: "d1", name: "D1", org_id: "o1", org_name: "Org1", space_id: "s1" },
+        { deployment_id: "d2", name: "D2", org_id: "o1", org_name: "Org1", space_id: "s2" },
+      ]),
+    });
+    mockTrpc.libraries.list.query.mockRejectedValue(trpcNotFoundError("libraries.list"));
+    vi.mocked(p.select).mockResolvedValueOnce("d2");
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(p.select).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Select a Library" }),
+    );
+    expect(p.select).toHaveBeenCalledWith(expect.objectContaining({ message: "Select an MCP" }));
+    const saved = loadConfig();
+    expect(saved.active_account?.target?.deployment_id).toBe("d2");
+  });
+
+  it("aborts deployment selection when the Library picker is cancelled", async () => {
+    const cfg = makeCfg({ deployment_id: undefined, deployment_name: undefined });
+    saveConfig(cfg);
+
+    setupAuthenticatedClient({
+      getDeployments: vi.fn().mockResolvedValue([
+        { deployment_id: "d1", name: "D1", org_id: "o1", org_name: "Org1", space_id: "s1" },
+        { deployment_id: "d2", name: "D2", org_id: "o1", org_name: "Org1", space_id: "s2" },
+      ]),
+    });
+    mockTrpc.libraries.list.query.mockResolvedValue([
+      { id: "s1", name: "Docs Library" },
+      { id: "s2", name: "Code Library" },
+    ]);
+    const cancelSymbol = Symbol("cancel");
+    vi.mocked(p.select).mockResolvedValueOnce(cancelSymbol as unknown);
+    vi.mocked(p.isCancel).mockImplementation((val) => val === cancelSymbol);
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(p.select).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Select an MCP" }),
+    );
+    const saved = loadConfig();
+    expect(saved.active_account?.target?.deployment_id).toBeUndefined();
+  });
+
   it("returns early when no deployments for org", async () => {
     const cfg = makeCfg({ deployment_id: undefined, deployment_name: undefined });
     saveConfig(cfg);
@@ -1773,13 +1948,11 @@ describe("runSetup integration", () => {
     expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("Removed from 1 agent"));
   });
 
-  it("OSS mode configures MCP but never offers the logs handoff", async () => {
-    // Log mining acts on the user's own histories / cloud deployment.
+  it("OSS mode configures MCP inside a git work tree", async () => {
     const cfg = makeCfg({ mode: "oss" });
     saveConfig(cfg);
 
     setupAuthenticatedClient();
-    // Every other gate is open, so OSS mode is the only reason it stays quiet.
     mockInGitWorkTree.mockReturnValue(true);
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
@@ -1788,7 +1961,6 @@ describe("runSetup integration", () => {
     await runSetup();
 
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 agent"));
-    expect(mockOfferLogsHandoff).not.toHaveBeenCalled();
   });
 
   it("installs the skill automatically for the selected agent", async () => {
@@ -1850,8 +2022,42 @@ describe("runSetup integration", () => {
     const messages = vi
       .mocked(p.multiselect)
       .mock.calls.map(([args]) => String((args as { message?: string }).message ?? ""));
-    expect(messages).toEqual(["Select agents — tick to configure, untick to remove"]);
+    expect(messages).toEqual(["Select agents"]);
     expect(messages.some((message) => message.includes("Dosu will set"))).toBe(false);
+  });
+
+  it("previews per-agent actions and a change summary in the agent selection", async () => {
+    const cfg = makeCfg();
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    mkdirSync(join(tempDir, ".config", "opencode"), { recursive: true });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [
+      CursorProvider(),
+      OpenCodeProvider(),
+    ]);
+    // Cursor starts configured; OpenCode starts unconfigured.
+    CursorProvider().install(cfg, true);
+    mockToolSelection(["cursor"]);
+
+    await runSetup();
+
+    const [args] = vi.mocked(p.multiselect).mock.calls.at(-1) ?? [];
+    const { statusFor, summary } = args as unknown as {
+      statusFor: (id: string, picked: boolean) => string | undefined;
+      summary: (picked: readonly string[]) => string | undefined;
+    };
+
+    expect(statusFor("cursor", true)).toContain("configured");
+    expect(statusFor("cursor", false)).toContain("will remove");
+    expect(statusFor("opencode", true)).toContain("will configure");
+    expect(statusFor("opencode", false)).toBeUndefined();
+
+    expect(summary(["cursor"])).toBe("no changes");
+    expect(summary(["cursor", "opencode"])).toBe("configure 1");
+    expect(summary([])).toBe("remove 1");
+    expect(summary(["opencode"])).toBe("configure 1 \u00B7 remove 1");
   });
 
   it("automatically updates AGENTS.md after configuring an agent in a git work tree", async () => {
@@ -2022,22 +2228,7 @@ describe("runSetup checkpoint behavior", () => {
     }
   });
 
-  it("does not offer the logs handoff when the user selects no agents", async () => {
-    saveConfig(makeCfg());
-    setupAuthed();
-    mockInGitWorkTree.mockReturnValue(true);
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-    mockToolSelection([]);
-
-    await runSetup();
-
-    expect(mockOfferLogsHandoff).not.toHaveBeenCalled();
-  });
-
-  it("does not offer the logs handoff when no AI agents are detected", async () => {
-    // User ticked MCP but has no supported agents installed. stepConfigureMcpTools
-    // returns an empty array (nothing to configure), so the handoff would be useless.
+  it("warns when no AI agents are detected", async () => {
     saveConfig(makeCfg());
     setupAuthed();
     mockInGitWorkTree.mockReturnValue(true);
@@ -2048,10 +2239,9 @@ describe("runSetup checkpoint behavior", () => {
     expect(p.log.warn).toHaveBeenCalledWith(
       expect.stringContaining("No supported AI agents detected"),
     );
-    expect(mockOfferLogsHandoff).not.toHaveBeenCalled();
   });
 
-  it("does not offer the logs handoff when every MCP install errors", async () => {
+  it("reports the failure when every MCP install errors", async () => {
     saveConfig(makeCfg());
     setupAuthed();
     mockInGitWorkTree.mockReturnValue(true);
@@ -2066,78 +2256,6 @@ describe("runSetup checkpoint behavior", () => {
     await runSetup();
 
     expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Failed to configure Cursor"));
-    expect(mockOfferLogsHandoff).not.toHaveBeenCalled();
-  });
-
-  it("does not offer the logs handoff outside a git work tree", async () => {
-    // `npx @dosu/cli setup` is routinely run from $HOME; the handoff hands the
-    // terminal to a coding agent rooted at cwd, so it stays inside a repo.
-    saveConfig(makeCfg());
-    setupAuthed();
-    mockInGitWorkTree.mockReturnValue(false);
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-    mockToolSelection(["cursor"]);
-
-    await runSetup();
-
-    expect(mockOfferLogsHandoff).not.toHaveBeenCalled();
-  });
-
-  it("offers the logs handoff with the configured agents and launches after the outro", async () => {
-    saveConfig(makeCfg());
-    setupAuthed();
-    mockInGitWorkTree.mockReturnValue(true);
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-    mockToolSelection(["cursor"]);
-    const plan = { agent: "cursor", sources: ["cursor"] };
-    mockOfferLogsHandoff.mockResolvedValue({ plan, decision: "accepted" });
-
-    await runSetup();
-
-    expect(mockOfferLogsHandoff).toHaveBeenCalledWith({ preferredAgents: ["cursor"] });
-    expect(mockLaunchLogsAgent).toHaveBeenCalledWith(plan);
-    // The agent must take over a finished clack session, never mid-session.
-    expect(vi.mocked(p.outro).mock.invocationCallOrder[0]).toBeLessThan(
-      mockLaunchLogsAgent.mock.invocationCallOrder[0],
-    );
-    expect(trackedCliOnboardingEvents()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          event: "cli_onboarding_completed",
-          properties: expect.objectContaining({
-            completed_logs_handoff: true,
-            logs_handoff: "accepted",
-          }),
-        }),
-      ]),
-    );
-  });
-
-  it("records a declined logs handoff without launching the agent", async () => {
-    saveConfig(makeCfg());
-    setupAuthed();
-    mockInGitWorkTree.mockReturnValue(true);
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-    mockToolSelection(["cursor"]);
-    mockOfferLogsHandoff.mockResolvedValue({ plan: null, decision: "declined" });
-
-    await runSetup();
-
-    expect(mockLaunchLogsAgent).not.toHaveBeenCalled();
-    expect(trackedCliOnboardingEvents()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          event: "cli_onboarding_completed",
-          properties: expect.objectContaining({
-            completed_logs_handoff: false,
-            logs_handoff: "declined",
-          }),
-        }),
-      ]),
-    );
   });
 
   it("persists a fresh token after successful authentication", async () => {
@@ -3040,5 +3158,96 @@ describe("runSetup single-handshake protocol", () => {
     // link the protocol endpoint.
     const source = readFileSync(new URL("./flow.ts", import.meta.url), "utf8");
     expect(source).not.toContain("/onboarding/");
+  });
+});
+
+describe("stepOfferInitialSync", () => {
+  beforeEach(() => {
+    setupTempEnv();
+    vi.resetAllMocks();
+    installSetupStepDefaults();
+    vi.mocked(p.isCancel).mockReturnValue(false);
+  });
+  afterEach(teardownTempEnv);
+
+  function backlogOutcome(readySessions: number) {
+    return { status: "backlog", readySessions, inFlightSessions: 0, sessions: [] };
+  }
+
+  it("does nothing without an API key or deployment", async () => {
+    await stepOfferInitialSync(makeCfg({ api_key: undefined }));
+    await stepOfferInitialSync(makeCfg({ deployment_id: undefined }));
+
+    expect(mockRunKnowledgeSync).not.toHaveBeenCalled();
+    expect(vi.mocked(p.confirm)).not.toHaveBeenCalled();
+  });
+
+  it("scans with the bootstrap scope (old sessions included)", async () => {
+    mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(3));
+    vi.mocked(p.confirm).mockResolvedValue(false);
+
+    await stepOfferInitialSync(makeCfg());
+
+    expect(mockRunKnowledgeSync).toHaveBeenCalledWith({ bootstrap: true });
+  });
+
+  it("stays quiet when there is nothing to mine", async () => {
+    mockRunKnowledgeSync.mockResolvedValue({
+      status: "nothing-new",
+      readySessions: 0,
+      inFlightSessions: 0,
+      sessions: [],
+    });
+
+    await stepOfferInitialSync(makeCfg());
+
+    expect(vi.mocked(p.confirm)).not.toHaveBeenCalled();
+    expect(mockSpawnDetachedSelf).not.toHaveBeenCalled();
+  });
+
+  it("spawns the detached bootstrap drain on consent", async () => {
+    mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(12));
+    vi.mocked(p.confirm).mockResolvedValue(true);
+    mockSpawnDetachedSelf.mockReturnValue(true);
+
+    await stepOfferInitialSync(makeCfg());
+
+    expect(mockSpawnDetachedSelf).toHaveBeenCalledWith([
+      "knowledge",
+      "sync",
+      "--quiet",
+      "--bootstrap",
+    ]);
+    expect(vi.mocked(p.log.success).mock.calls.join(" ")).toContain("Background sync started");
+  });
+
+  it("skips without spawning when the user declines", async () => {
+    mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(2));
+    vi.mocked(p.confirm).mockResolvedValue(false);
+
+    await stepOfferInitialSync(makeCfg());
+
+    expect(mockSpawnDetachedSelf).not.toHaveBeenCalled();
+    expect(vi.mocked(p.log.info).mock.calls.join(" ")).toContain("Skipped");
+  });
+
+  it("treats a cancelled prompt as a decline", async () => {
+    mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(2));
+    vi.mocked(p.confirm).mockResolvedValue(Symbol("cancel"));
+    vi.mocked(p.isCancel).mockReturnValue(true);
+
+    await stepOfferInitialSync(makeCfg());
+
+    expect(mockSpawnDetachedSelf).not.toHaveBeenCalled();
+  });
+
+  it("warns when the detached spawn fails", async () => {
+    mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(2));
+    vi.mocked(p.confirm).mockResolvedValue(true);
+    mockSpawnDetachedSelf.mockReturnValue(false);
+
+    await stepOfferInitialSync(makeCfg());
+
+    expect(vi.mocked(p.log.warn).mock.calls.join(" ")).toContain("Could not start");
   });
 });

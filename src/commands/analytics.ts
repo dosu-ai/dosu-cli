@@ -42,7 +42,7 @@ export function analyticsCommand(): Command {
         return;
       }
 
-      const pct = (v?: number) => (v !== undefined ? `${(v * 100).toFixed(1)}%` : "—");
+      const pct = (v?: number) => (v !== undefined ? `${(v * 100).toFixed(1)}%` : "-");
       const highConfidenceRate =
         stats.totalResponses > 0 ? stats.byConfidence.high / stats.totalResponses : undefined;
 

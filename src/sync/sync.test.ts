@@ -10,6 +10,11 @@ vi.mock("../debug/logger", () => ({
   logger: { debug: mockLoggerDebug, info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+const mockScanSessions = vi.hoisted(() => vi.fn());
+vi.mock("../sessions/scan", () => ({
+  scanAgentSessions: (...args: unknown[]) => mockScanSessions(...args),
+}));
+
 const NOW = new Date("2026-08-25T12:00:00Z");
 
 function session(updatedOffsetMinutes: number): AgentSession {
@@ -187,6 +192,40 @@ describe("runKnowledgeSync", () => {
     const outcome = await runKnowledgeSync({ deps });
 
     expect(outcome.status).toBe("error");
+  });
+});
+
+describe("runKnowledgeSync default scan scope", () => {
+  it("normal runs scan a rolling 30-day window", async () => {
+    mockScanSessions.mockReset().mockReturnValue([]);
+    const { deps } = makeDeps({ listSessions: undefined });
+
+    await runKnowledgeSync({ deps });
+
+    const arg = mockScanSessions.mock.calls[0][0] as { since: Date; limit: number };
+    expect(arg.limit).toBe(200);
+    expect(arg.since.toISOString()).toBe(
+      new Date(NOW.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString(),
+    );
+  });
+
+  it("bootstrap runs scan the entire history — no age cutoff, no count cap", async () => {
+    mockScanSessions.mockReset().mockReturnValue([]);
+    const { deps } = makeDeps({ listSessions: undefined });
+
+    await runKnowledgeSync({ bootstrap: true, deps });
+
+    expect(mockScanSessions).toHaveBeenCalledWith({});
+  });
+
+  it("an injected session lister overrides the bootstrap scope", async () => {
+    mockScanSessions.mockReset();
+    const { deps } = makeDeps({ listSessions: vi.fn().mockResolvedValue([session(60)]) });
+
+    const outcome = await runKnowledgeSync({ bootstrap: true, deps });
+
+    expect(outcome.status).toBe("backlog");
+    expect(mockScanSessions).not.toHaveBeenCalled();
   });
 });
 

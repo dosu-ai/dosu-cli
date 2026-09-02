@@ -7,12 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Mocks — only true I/O boundaries
 // ---------------------------------------------------------------------------
 
-vi.mock("@clack/prompts", () => ({
-  select: vi.fn(),
+vi.mock("./prompts", () => ({
   confirm: vi.fn(),
   isCancel: vi.fn(),
   cancel: vi.fn(),
-  outro: vi.fn(),
   spinner: vi.fn(() => ({ start: vi.fn(), stop: vi.fn() })),
   log: {
     warn: vi.fn(),
@@ -21,6 +19,11 @@ vi.mock("@clack/prompts", () => ({
     info: vi.fn(),
     message: vi.fn(),
   },
+}));
+
+// The custom menu needs a raw-mode TTY; tests drive it as a boundary.
+vi.mock("./menu", () => ({
+  menuSelect: vi.fn(),
 }));
 
 vi.mock("../client/client", () => ({
@@ -35,39 +38,43 @@ vi.mock("../setup/flow", () => ({
   runSetup: vi.fn(),
 }));
 
-vi.mock("../commands/insights", () => ({
-  executeInsights: vi.fn(),
-}));
-
 vi.mock("picocolors", () => ({
   default: {
     magenta: (s: string) => s,
+    magentaBright: (s: string) => s,
+    white: (s: string) => s,
+    bold: (s: string) => s,
     dim: (s: string) => s,
+    green: (s: string) => s,
+    bgMagenta: (s: string) => s,
   },
+}));
+
+// Provider detection scans the real filesystem; the banner only needs names.
+vi.mock("../mcp/providers", () => ({
+  allSetupProviders: () => [],
 }));
 
 // ---------------------------------------------------------------------------
 // Imports — config is REAL, not mocked
 // ---------------------------------------------------------------------------
 
-import * as p from "@clack/prompts";
 import { OAuthCallbackError } from "../auth/errors";
 import { startOAuthFlow } from "../auth/flow";
 import { Client } from "../client/client";
-import { executeInsights } from "../commands/insights";
 import type { Config } from "../config/config";
 import { emptyConfig, loadConfig, saveConfig, updateTarget } from "../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { runSetup } from "../setup/flow";
+import { menuSelect } from "./menu";
+import * as p from "./prompts";
 import { handleLogout, runTUI } from "./tui";
 
-const mockSelect = vi.mocked(p.select);
+const mockMenuSelect = vi.mocked(menuSelect);
 const mockConfirm = vi.mocked(p.confirm);
 const mockIsCancel = vi.mocked(p.isCancel);
-const mockOutro = vi.mocked(p.outro);
 const mockStartOAuthFlow = vi.mocked(startOAuthFlow);
 const mockRunSetup = vi.mocked(runSetup);
-const mockExecuteInsights = vi.mocked(executeInsights);
 
 // ---------------------------------------------------------------------------
 // Temp directory setup — real config on disk
@@ -76,6 +83,7 @@ const mockExecuteInsights = vi.mocked(executeInsights);
 let tempDir: string;
 let origHome: string | undefined;
 let origXdg: string | undefined;
+let stdoutWrites: string[];
 
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), "dosu-tui-test-"));
@@ -95,10 +103,16 @@ beforeEach(() => {
     clear: vi.fn(),
     isCancelled: false,
   } as ReturnType<typeof p.spinner>);
-  vi.spyOn(console, "log").mockImplementation(() => {});
+  // The banner and goodbye line write to stdout directly.
+  stdoutWrites = [];
+  vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+    stdoutWrites.push(String(chunk));
+    return true;
+  });
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   process.env.HOME = origHome;
   if (origXdg !== undefined) {
     process.env.XDG_CONFIG_HOME = origXdg;
@@ -186,34 +200,30 @@ describe("handleLogout (direct)", () => {
 
 describe("runTUI", () => {
   it("shows the main menu before authentication", async () => {
-    mockSelect.mockResolvedValueOnce("exit");
-    mockIsCancel.mockReturnValue(false);
+    mockMenuSelect.mockResolvedValueOnce("exit");
 
     await runTUI();
 
-    expect(mockSelect).toHaveBeenCalledOnce();
+    expect(mockMenuSelect).toHaveBeenCalledOnce();
     expect(mockConfirm).not.toHaveBeenCalled();
   });
 
-  it("exits loop and calls outro when user selects exit", async () => {
+  it("exits loop and says goodbye when user selects exit", async () => {
     writeRealConfig(makeCfg({ access_token: "tok" }));
-    mockSelect.mockResolvedValueOnce("exit");
-    mockIsCancel.mockReturnValue(false);
+    mockMenuSelect.mockResolvedValueOnce("exit");
 
     await runTUI();
 
-    expect(mockOutro).toHaveBeenCalledWith("Goodbye!");
+    expect(stdoutWrites.join("")).toContain("Goodbye!");
   });
 
-  it("exits loop when user cancels select", async () => {
+  it("exits loop when user cancels the menu", async () => {
     writeRealConfig(makeCfg({ access_token: "tok" }));
-    const cancelSymbol = Symbol("cancel");
-    mockSelect.mockResolvedValueOnce(cancelSymbol as unknown);
-    mockIsCancel.mockReturnValue(true);
+    mockMenuSelect.mockResolvedValueOnce(null);
 
     await runTUI();
 
-    expect(mockOutro).toHaveBeenCalledWith("Goodbye!");
+    expect(stdoutWrites.join("")).toContain("Goodbye!");
   });
 
   it("verifies session when user selects auth action with existing token", async () => {
@@ -225,12 +235,12 @@ describe("runTUI", () => {
       return { doRequestRaw: mockDoRequestRaw } as unknown as Client;
     });
 
-    mockSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
+    mockMenuSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
 
     await runTUI();
 
     expect(mockDoRequestRaw).toHaveBeenCalledWith("GET", "/v1/mcp/deployments");
-    expect(mockOutro).toHaveBeenCalledWith("Goodbye!");
+    expect(stdoutWrites.join("")).toContain("Goodbye!");
   });
 
   it("refreshes token when verification returns non-200", async () => {
@@ -246,7 +256,7 @@ describe("runTUI", () => {
       } as unknown as Client;
     });
 
-    mockSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
+    mockMenuSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
 
     await runTUI();
 
@@ -269,7 +279,7 @@ describe("runTUI", () => {
     // User declines to open browser
     mockConfirm.mockResolvedValueOnce(false);
 
-    mockSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
+    mockMenuSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
 
     await runTUI();
 
@@ -288,7 +298,7 @@ describe("runTUI", () => {
     // User declines to open browser
     mockConfirm.mockResolvedValueOnce(false);
 
-    mockSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
+    mockMenuSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
 
     await runTUI();
 
@@ -308,7 +318,7 @@ describe("runTUI", () => {
       };
     });
 
-    mockSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
+    mockMenuSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
 
     await runTUI();
 
@@ -333,7 +343,7 @@ describe("runTUI", () => {
     mockConfirm.mockResolvedValueOnce(true);
     mockStartOAuthFlow.mockRejectedValueOnce(new Error("auth timeout"));
     mockIsCancel.mockReturnValue(false);
-    mockSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
+    mockMenuSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
 
     await runTUI();
 
@@ -350,7 +360,7 @@ describe("runTUI", () => {
       }),
     );
     mockIsCancel.mockReturnValue(false);
-    mockSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
+    mockMenuSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
 
     await runTUI();
 
@@ -364,7 +374,7 @@ describe("runTUI", () => {
     mockIsCancel.mockReturnValue(false);
     mockConfirm.mockResolvedValueOnce(true);
     mockStartOAuthFlow.mockResolvedValueOnce({ browserOpened: false });
-    mockSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
+    mockMenuSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
 
     await runTUI();
 
@@ -378,7 +388,7 @@ describe("runTUI", () => {
     writeRealConfig(makeCfg({ access_token: "" }));
     mockIsCancel.mockReturnValue(true);
     mockConfirm.mockResolvedValueOnce(Symbol.for("cancel") as unknown as boolean);
-    mockSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
+    mockMenuSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
 
     await runTUI();
 
@@ -398,7 +408,7 @@ describe("runTUI", () => {
     writeRealConfig(cfg);
     mockIsCancel.mockReturnValue(false);
 
-    mockSelect.mockResolvedValueOnce("logout").mockResolvedValueOnce("exit");
+    mockMenuSelect.mockResolvedValueOnce("logout").mockResolvedValueOnce("exit");
 
     await runTUI();
 
@@ -409,41 +419,16 @@ describe("runTUI", () => {
     expect(p.log.success).toHaveBeenCalledWith("Credentials cleared.");
   });
 
-  it("includes 'View Insights' in the menu when fully configured", async () => {
+  it("keeps the menu to setup, auth, logout, and exit", async () => {
     writeRealConfig(
       makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
     );
-    mockIsCancel.mockReturnValue(false);
-    mockSelect.mockResolvedValueOnce("exit");
+    mockMenuSelect.mockResolvedValueOnce("exit");
 
     await runTUI();
 
-    const opts = mockSelect.mock.calls[0]?.[0]?.options as Array<{ value: string }>;
-    expect(opts.map((o) => o.value)).toContain("insights");
-  });
-
-  it("omits 'View Insights' when the deployment isn't configured yet", async () => {
-    writeRealConfig(makeCfg({ access_token: "tok" }));
-    mockIsCancel.mockReturnValue(false);
-    mockSelect.mockResolvedValueOnce("exit");
-
-    await runTUI();
-
-    const opts = mockSelect.mock.calls[0]?.[0]?.options as Array<{ value: string }>;
-    expect(opts.map((o) => o.value)).not.toContain("insights");
-  });
-
-  it("calls executeInsights when 'insights' is selected", async () => {
-    writeRealConfig(
-      makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
-    );
-    mockIsCancel.mockReturnValue(false);
-    mockExecuteInsights.mockResolvedValueOnce(undefined);
-    mockSelect.mockResolvedValueOnce("insights").mockResolvedValueOnce("exit");
-
-    await runTUI();
-
-    expect(mockExecuteInsights).toHaveBeenCalledTimes(1);
+    const opts = mockMenuSelect.mock.calls[0]?.[1] ?? [];
+    expect(opts.map((o) => o.value)).toEqual(["setup", "auth", "logout", "exit"]);
   });
 
   it("setup action calls runSetup and reloads config", async () => {
@@ -462,12 +447,12 @@ describe("runTUI", () => {
       writeRealConfig(cfg);
     });
 
-    mockSelect.mockResolvedValueOnce("setup").mockResolvedValueOnce("exit");
+    mockMenuSelect.mockResolvedValueOnce("setup").mockResolvedValueOnce("exit");
 
     await runTUI();
 
     expect(mockRunSetup).toHaveBeenCalled();
-    expect(mockOutro).toHaveBeenCalledWith("Goodbye!");
+    expect(stdoutWrites.join("")).toContain("Goodbye!");
   });
 
   it("setup reload removes account state that was cleared on disk", async () => {
@@ -478,11 +463,15 @@ describe("runTUI", () => {
     mockRunSetup.mockImplementation(async () => {
       writeRealConfig(emptyConfig());
     });
-    mockSelect.mockResolvedValueOnce("setup").mockResolvedValueOnce("exit");
+    mockMenuSelect.mockResolvedValueOnce("setup").mockResolvedValueOnce("exit");
 
     await runTUI();
 
-    const nextOptions = mockSelect.mock.calls[1]?.[0]?.options as Array<{ value: string }>;
-    expect(nextOptions.map((option) => option.value)).not.toContain("insights");
+    // The auth hint is config-derived: it read "Re-authenticate" on the first
+    // render and must drop off once the reloaded config has no session.
+    const firstOptions = mockMenuSelect.mock.calls[0]?.[1] ?? [];
+    const nextOptions = mockMenuSelect.mock.calls[1]?.[1] ?? [];
+    expect(firstOptions.find((option) => option.value === "auth")?.hint).toBe("Re-authenticate");
+    expect(nextOptions.find((option) => option.value === "auth")?.hint).toBeUndefined();
   });
 });

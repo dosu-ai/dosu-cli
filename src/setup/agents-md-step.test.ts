@@ -2,8 +2,8 @@ import { execSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import * as p from "@clack/prompts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as p from "../tui/prompts";
 import {
   buildDosuAgentsSection,
   DOSU_SECTION_END,
@@ -13,7 +13,7 @@ import {
   upsertDosuAgentsSection,
 } from "./agents-md-step";
 
-vi.mock("@clack/prompts", () => ({
+vi.mock("../tui/prompts", () => ({
   log: {
     success: vi.fn(),
     error: vi.fn(),
