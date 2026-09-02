@@ -29,6 +29,7 @@ import { spawnDetachedSelf } from "../sync/detach";
 import { runKnowledgeSync } from "../sync/sync";
 import { installCenteredLayout } from "../tui/layout";
 import * as p from "../tui/prompts";
+import { runSyncView } from "../tui/sync-view";
 import { inGitWorkTree, stepUpdateAgentsMd } from "./agents-md-step";
 import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
 import { stepConnectGitHubRepo } from "./github-step";
@@ -410,10 +411,15 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
 
   if (spawnDetachedSelf(["knowledge", "sync", "--quiet", "--bootstrap"])) {
     p.log.success(
-      `Background sync started — it works through the backlog a few sessions at a time.\n${dim(
-        `Watch progress with ${info("dosu knowledge sync --list")}.`,
-      )}`,
+      "Background sync started — it works through the backlog a few sessions at a time.",
     );
+    const watch = await p.confirm({
+      message: "Watch it work?",
+      active: "Sync status",
+      inactive: "Go back",
+      initialValue: true,
+    });
+    if (!p.isCancel(watch) && watch) await runSyncView();
   } else {
     p.log.warn(`Could not start the background sync. Run ${info("dosu knowledge sync")} manually.`);
   }

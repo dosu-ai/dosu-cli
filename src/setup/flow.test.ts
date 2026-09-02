@@ -193,6 +193,11 @@ vi.mock("../sync/detach", async (importOriginal) => ({
   spawnDetachedSelf: (...args: unknown[]) => mockSpawnDetachedSelf(...args),
 }));
 
+// The live sync view needs a raw-mode TTY and polls the debug log.
+vi.mock("../tui/sync-view", () => ({
+  runSyncView: vi.fn(),
+}));
+
 import { OAuthCallbackError } from "../auth/errors";
 import { startOAuthFlow } from "../auth/flow";
 import { Client } from "../client/client";
@@ -207,6 +212,7 @@ import { CodexProvider } from "../mcp/providers/codex";
 import { CursorProvider } from "../mcp/providers/cursor";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
 import * as p from "../tui/prompts";
+import { runSyncView } from "../tui/sync-view";
 import {
   type ConfigResult,
   cliAuthFailureReason,
@@ -3205,7 +3211,7 @@ describe("stepOfferInitialSync", () => {
     expect(mockSpawnDetachedSelf).not.toHaveBeenCalled();
   });
 
-  it("spawns the detached bootstrap drain on consent", async () => {
+  it("spawns the detached bootstrap drain on consent and offers the live view", async () => {
     mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(12));
     vi.mocked(p.confirm).mockResolvedValue(true);
     mockSpawnDetachedSelf.mockReturnValue(true);
@@ -3219,6 +3225,19 @@ describe("stepOfferInitialSync", () => {
       "--bootstrap",
     ]);
     expect(vi.mocked(p.log.success).mock.calls.join(" ")).toContain("Background sync started");
+    // Both prompts answered "yes": the live sync view opens.
+    expect(vi.mocked(runSyncView)).toHaveBeenCalledOnce();
+  });
+
+  it("goes straight back when the user declines the live view", async () => {
+    mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(12));
+    vi.mocked(p.confirm).mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    mockSpawnDetachedSelf.mockReturnValue(true);
+
+    await stepOfferInitialSync(makeCfg());
+
+    expect(mockSpawnDetachedSelf).toHaveBeenCalled();
+    expect(vi.mocked(runSyncView)).not.toHaveBeenCalled();
   });
 
   it("skips without spawning when the user declines", async () => {

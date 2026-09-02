@@ -13,7 +13,7 @@
 
 import pc from "picocolors";
 import { brand } from "../setup/styles";
-import { centerBlock, contentWidth } from "./layout";
+import { centerBlock, contentWidth, visibleWidth } from "./layout";
 
 const ESC = String.fromCharCode(27);
 const HIDE_CURSOR = `${ESC}[?25l`;
@@ -75,9 +75,10 @@ export function renderMenuFrame(
   selected: number,
   width: number,
 ): string {
-  const labelWidth = Math.max(...options.map((option) => option.label.length));
+  // Pad by visible width so colored labels (e.g. the mining dot) stay aligned.
+  const labelWidth = Math.max(...options.map((option) => visibleWidth(option.label)));
   const rows = options.map((option, index) => {
-    const label = option.label.padEnd(labelWidth);
+    const label = option.label + " ".repeat(labelWidth - visibleWidth(option.label));
     const hint = option.hint ? `   ${pc.dim(option.hint)}` : "";
     return index === selected
       ? `${brand(POINTER)} ${pc.bold(label)}${hint}`

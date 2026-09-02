@@ -18,7 +18,7 @@ import {
 import { getWebAppURL } from "../config/constants";
 import { allSetupProviders } from "../mcp/providers";
 import { runSetup } from "../setup/flow";
-import { browserFallbackHint, dim } from "../setup/styles";
+import { brand, browserFallbackHint, dim } from "../setup/styles";
 import { getSyncStatus } from "../sync/status";
 import { buildUpdateHint, getAvailableUpdate } from "../version/update-check";
 import { getVersionString, INSTALL_CHANNEL, isNpxInvocation } from "../version/version";
@@ -48,13 +48,6 @@ function bannerContext(cfg: Config): BannerContext {
   // The preAction hook already refreshed the update cache without printing;
   // the banner is where a bare `dosu` run learns about a newer version.
   const latest = getAvailableUpdate();
-  // Lock-file check only (no log read): is a mining run active right now?
-  let mining = false;
-  try {
-    mining = getSyncStatus({ readLog: () => "" }).running;
-  } catch {
-    // Status is cosmetic here; never block the banner on it.
-  }
   return {
     version: getVersionString(),
     webAppHost,
@@ -63,7 +56,7 @@ function bannerContext(cfg: Config): BannerContext {
     deploymentName: cfg.active_account?.target?.deployment_name,
     libraryName: cfg.active_account?.target?.library_name,
     agents,
-    mining,
+    mining: isMining(),
     ...(latest
       ? { update: { version: latest, hint: buildUpdateHint(INSTALL_CHANNEL, isNpxInvocation()) } }
       : {}),
@@ -88,6 +81,16 @@ const ESC = String.fromCharCode(27);
  */
 const CLEAR_SCREEN = `${ESC}[2J${ESC}[H`;
 
+/** Lock-file check only (no log read): is a mining run active right now? */
+function isMining(): boolean {
+  try {
+    return getSyncStatus({ readLog: () => "" }).running;
+  } catch {
+    // Mining state is cosmetic in the banner and menu; never block on it.
+    return false;
+  }
+}
+
 async function runMainMenu(): Promise<void> {
   const cfg = loadConfig();
   if (process.stdout.isTTY) process.stdout.write(CLEAR_SCREEN);
@@ -103,9 +106,14 @@ async function runMainMenu(): Promise<void> {
         cfg.active_account?.target?.deployment_id &&
         cfg.active_account?.target?.api_key,
     );
+    // Rechecked on every return to the menu, so mining kicked off mid-session
+    // (e.g. setup's "Mine now") becomes visible without relaunching.
     const options: MenuOption[] = [
       { label: "Setup", value: "setup" },
-      { label: "Sync status", value: "sync" },
+      {
+        label: isMining() ? `Sync status ${brand("\u25CF")} mining` : "Sync status",
+        value: "sync",
+      },
       ...(insightsReady ? [{ label: "View insights", value: "insights" }] : []),
       { label: "Authenticate", value: "auth" },
       { label: "Clear credentials", value: "logout" },

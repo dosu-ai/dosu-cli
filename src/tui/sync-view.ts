@@ -136,7 +136,9 @@ export function renderSyncFrame(
     : "Nothing mined yet";
   const detail = [mined];
   if (backlog) {
-    const inFlight = backlog.inFlight > 0 ? ` (+${backlog.inFlight} still active)` : "";
+    // inFlight = sessions with recent activity, skipped until they go quiet.
+    const inFlight =
+      backlog.inFlight > 0 ? ` (+${backlog.inFlight} open, queued when they finish)` : "";
     detail.push(
       backlog.ready > 0 ? `${backlog.ready} sessions queued${inFlight}` : `queue empty${inFlight}`,
     );

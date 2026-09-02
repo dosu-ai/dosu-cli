@@ -139,7 +139,7 @@ describe("renderSyncFrame", () => {
 
   it("shows the backlog when gate counts are known", () => {
     const queued = stripAnsi(renderSyncFrame(makeStatus(), [], 64, { ready: 44, inFlight: 1 }));
-    expect(queued).toContain("44 sessions queued (+1 still active)");
+    expect(queued).toContain("44 sessions queued (+1 open, queued when they finish)");
 
     const drained = stripAnsi(renderSyncFrame(makeStatus(), [], 64, { ready: 0, inFlight: 0 }));
     expect(drained).toContain("queue empty");

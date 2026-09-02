@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -81,9 +81,10 @@ import { startOAuthFlow } from "../auth/flow";
 import { Client } from "../client/client";
 import { executeInsights } from "../commands/insights";
 import type { Config } from "../config/config";
-import { emptyConfig, loadConfig, saveConfig, updateTarget } from "../config/config";
+import { emptyConfig, getConfigDir, loadConfig, saveConfig, updateTarget } from "../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { runSetup } from "../setup/flow";
+import { lockPath } from "../sync/lock";
 import { menuSelect } from "./menu";
 import * as p from "./prompts";
 import { runSyncView } from "./sync-view";
@@ -462,6 +463,22 @@ describe("runTUI", () => {
     await runTUI();
     const bare = mockMenuSelect.mock.calls[0]?.[1] ?? [];
     expect(bare.map((o) => o.value)).toEqual(["setup", "sync", "auth", "logout", "exit"]);
+  });
+
+  it("marks Sync status with a mining dot while a run is live", async () => {
+    writeRealConfig(makeCfg({}));
+    // A lock file naming a live pid (our own) = an active mining run.
+    const dir = getConfigDir();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(lockPath(dir), String(process.pid));
+    mockMenuSelect.mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    const opts = mockMenuSelect.mock.calls[0]?.[1] ?? [];
+    expect(opts.find((o) => o.value === "sync")?.label).toContain("mining");
+    // The welcome banner shows the sync row too.
+    expect(stdoutWrites.join("")).toContain("mining now");
   });
 
   it("clears the screen on a TTY so the banner starts at the top", async () => {
