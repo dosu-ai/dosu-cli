@@ -563,7 +563,24 @@ export type CliSlackChannelRow = {
 	topic?: string | null
 }
 
-export declare const CLI_CONTRACT_HASH: '85b07f7689e2'
+export declare const CLI_CONTRACT_HASH: '1d4be4b6214f'
+
+export type AgentsAddAdminsInput = {
+	deployment_id: string
+	users: Array<
+		| {
+				user_id: string
+		  }
+		| {
+				email: string
+		  }
+	>
+}
+
+export type AgentsAddAdminsOutput = {
+	added: number
+	requested: number
+}
 
 export type AgentsCreateInput = {
 	data_source_id: string
@@ -600,6 +617,39 @@ export type AgentsListInput = {
 
 export type AgentsListOutput = Array<CliDeployment>
 
+export type AgentsListAddableAdminsInput = string
+
+export type AgentsListAddableAdminsOutput = Array<{
+	profile: {
+		display_name: string | null
+		email: string | null
+		full_name: string | null
+		user_id: string
+	} | null
+	user_id: string
+}>
+
+export type AgentsListAdminsInput = string
+
+export type AgentsListAdminsOutput = Array<{
+	created_at: string
+	created_by: string | null
+	created_by_profile: {
+		display_name: string | null
+		email: string | null
+		full_name: string | null
+		user_id: string
+	} | null
+	deployment_id: string
+	profile: {
+		display_name: string | null
+		email: string | null
+		full_name: string | null
+		user_id: string
+	} | null
+	user_id: string
+}>
+
 export type AgentsMoveInput = {
 	deployment_id: string
 	space_id: string
@@ -607,6 +657,38 @@ export type AgentsMoveInput = {
 
 export type AgentsMoveOutput = CliDeployment & {
 	previous_space_id: string
+}
+
+export type AgentsMyAccessInput = string
+
+export type AgentsMyAccessOutput = {
+	can_manage: boolean
+	is_agent_admin: boolean
+	is_org_admin: boolean
+}
+
+export type AgentsRemoveAdminInput = {
+	deployment_id: string
+	user_id: string
+}
+
+export type AgentsRemoveAdminOutput = {
+	created_at: string
+	created_by: string | null
+	created_by_profile: {
+		display_name: string | null
+		email: string | null
+		full_name: string | null
+		user_id: string
+	} | null
+	deployment_id: string
+	profile: {
+		display_name: string | null
+		email: string | null
+		full_name: string | null
+		user_id: string
+	} | null
+	user_id: string
 }
 
 export type AgentsSetConfigInput = {
@@ -1841,12 +1923,17 @@ export type WorkspacesListForSpaceOutput = any
 
 export interface CliApiClient {
 	agents: {
+		addAdmins: MutationProcedure<AgentsAddAdminsInput, AgentsAddAdminsOutput>
 		create: MutationProcedure<AgentsCreateInput, AgentsCreateOutput>
 		delete: MutationProcedure<AgentsDeleteInput, AgentsDeleteOutput>
 		get: QueryProcedure<AgentsGetInput, AgentsGetOutput>
 		getConfig: QueryProcedure<AgentsGetConfigInput, AgentsGetConfigOutput>
 		list: QueryProcedure<AgentsListInput, AgentsListOutput>
+		listAddableAdmins: QueryProcedure<AgentsListAddableAdminsInput, AgentsListAddableAdminsOutput>
+		listAdmins: QueryProcedure<AgentsListAdminsInput, AgentsListAdminsOutput>
 		move: MutationProcedure<AgentsMoveInput, AgentsMoveOutput>
+		myAccess: QueryProcedure<AgentsMyAccessInput, AgentsMyAccessOutput>
+		removeAdmin: MutationProcedure<AgentsRemoveAdminInput, AgentsRemoveAdminOutput>
 		setConfig: MutationProcedure<AgentsSetConfigInput, AgentsSetConfigOutput>
 		update: MutationProcedure<AgentsUpdateInput, AgentsUpdateOutput>
 	}
