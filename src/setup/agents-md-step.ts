@@ -59,6 +59,28 @@ export function inGitWorkTree(cwd: string = process.cwd()): boolean {
   }
 }
 
+/** Repo-level setup state of the Dosu section in this work tree's AGENTS.md. */
+export type DosuSectionState = "current" | "outdated" | "missing";
+
+/**
+ * Read-only check for the welcome banner: does `cwd`'s AGENTS.md carry the
+ * Dosu section, and is it the current revision? Never throws — a malformed
+ * or unreadable section reads as "missing", which just points at Setup.
+ */
+export function dosuAgentsSectionState(cwd: string = process.cwd()): DosuSectionState {
+  try {
+    const path = join(cwd, "AGENTS.md");
+    if (!existsSync(path)) return "missing";
+    const content = readFileSync(path, "utf-8");
+    const startMatch = content.match(SECTION_START_RE);
+    if (!startMatch || !content.includes(DOSU_SECTION_END)) return "missing";
+    // An unversioned marker predates versioning entirely.
+    return Number(startMatch[1] ?? 0) >= DOSU_SECTION_VERSION ? "current" : "outdated";
+  } catch {
+    return "missing";
+  }
+}
+
 function lineEndingFor(content: string): "\r\n" | "\n" {
   return content.includes("\r\n") ? "\r\n" : "\n";
 }

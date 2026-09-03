@@ -183,6 +183,21 @@ export function readSessionTurns(session: AgentSession): SessionTurn[] {
   }
 }
 
+/** chars → tokens, the same coarse model the log-backfill report uses. */
+const CHARS_PER_TOKEN = 4;
+
+/**
+ * Estimated tokens of conversational content in a session — the "cost to
+ * learn" baseline the mining analytics accumulate. Same model as the
+ * log-backfill skill's report: text chars ÷ 4, over the user/assistant
+ * turns only (tool noise is excluded by readSessionTurns).
+ */
+export function estimateSessionTokens(session: AgentSession): number {
+  let chars = 0;
+  for (const turn of readSessionTurns(session)) chars += turn.text.length;
+  return Math.round(chars / CHARS_PER_TOKEN);
+}
+
 /** Fewer conversational turns than this and a session can't hold a real finding. */
 const MIN_WORTH_TURNS = 4;
 /** Total conversation text below this is a greeting, not an investigation. */

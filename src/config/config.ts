@@ -208,6 +208,7 @@ function normalizeTarget(value: unknown): AccountTarget | undefined {
     deployment_name: stringValue(value.deployment_name),
     api_key: stringValue(value.api_key),
     org_id: stringValue(value.org_id),
+    org_name: stringValue(value.org_name),
     space_id: stringValue(value.space_id),
     library_name: stringValue(value.library_name),
   };

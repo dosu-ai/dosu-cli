@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getSyncStatus } from "./status";
+import { formatTokenCount, getSyncStatus } from "./status";
 import { saveSyncState } from "./watermark";
 
 let dir: string;
@@ -16,6 +16,16 @@ afterEach(() => {
 });
 
 const lockFile = () => join(dir, "knowledge-sync.lock");
+
+describe("formatTokenCount", () => {
+  it("prints small counts verbatim and larger ones as ~k / ~M", () => {
+    expect(formatTokenCount(950)).toBe("950");
+    expect(formatTokenCount(12_400)).toBe("~12.4k");
+    expect(formatTokenCount(312_000)).toBe("~312k");
+    expect(formatTokenCount(1_200_000)).toBe("~1.2M");
+    expect(formatTokenCount(3_000_000)).toBe("~3M");
+  });
+});
 
 describe("getSyncStatus", () => {
   it("reports no run when there is no lock file", () => {

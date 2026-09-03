@@ -1,31 +1,17 @@
 /**
- * Centered terminal layout.
- *
- * Clack renders its prompts anchored to column 0 with no indent support, so
- * to center the TUI and setup wizard we patch `stdout.write` and inject a
- * left margin at the start of every rendered line. The injector understands
- * the cursor-control sequences clack emits when it re-renders a prompt
- * (cursor-left + erase + rewrite), so redrawn frames get re-padded too.
- *
- * Everything shares one nominal content column (`CONTENT_WIDTH`); the margin
- * centers that column in the terminal, and the banner centers itself within
- * it, so all output lines up.
+ * Centered terminal layout: patches `stdout.write` to inject a left margin
+ * on every rendered line (clack has no indent support), so all TUI output
+ * shares one centered content column.
  */
+
+import pc from "picocolors";
 
 const ESC = String.fromCharCode(27);
 
-/**
- * Nominal width of the centered content column. Narrow enough that the
- * clack rail sits near the terminal's center, and that even a standard
- * 80-column terminal gets a visible margin.
- */
+/** Nominal content-column width; even an 80-column terminal gets a margin. */
 const CONTENT_WIDTH = 64;
 
-/**
- * Splits terminal output into newlines, carriage returns, ANSI escape
- * sequences (including private modes like cursor hide/show), and runs of
- * visible text.
- */
+/** Splits output into line breaks, ANSI escape sequences, and visible text. */
 const TOKEN_PATTERN = new RegExp(`(\r\n|\r|\n|${ESC}\\[[0-9;?]*[A-Za-z])`);
 
 /** Escape finals that move the cursor back to a known column (line start). */
@@ -41,6 +27,27 @@ export function contentWidth(columns: number = process.stdout.columns ?? 80): nu
 /** Left margin that centers the content column in the terminal. */
 export function layoutMargin(columns: number = process.stdout.columns ?? 80): number {
   return Math.max(0, Math.floor((columns - contentWidth(columns)) / 2));
+}
+
+/**
+ * Blank rows above full-screen frames. A function of the terminal only,
+ * never the frame height: true vertical centering jiggled on live updates.
+ */
+export function frameTopMargin(rows: number = process.stdout.rows ?? 24): number {
+  return Math.max(2, Math.min(6, Math.floor(rows / 8)));
+}
+
+/**
+ * Breadcrumb header ("Home › Pages › <leaf>"): dim trail, bold leaf, leaf
+ * clipped so a long title can't push the trail off screen.
+ */
+export function breadcrumb(segments: readonly string[], width: number = contentWidth()): string {
+  const head = segments.slice(0, -1);
+  const leaf = segments[segments.length - 1] ?? "";
+  const trailWidth = head.reduce((total, segment) => total + segment.length + 3, 0);
+  const room = Math.max(8, width - trailWidth);
+  const clipped = leaf.length <= room ? leaf : `${leaf.slice(0, room - 1)}\u2026`;
+  return head.map((segment) => pc.dim(`${segment} \u203A `)).join("") + pc.bold(clipped);
 }
 
 const ANSI_PATTERN = new RegExp(`${ESC}\\[[0-9;?]*[A-Za-z]`, "g");
@@ -64,13 +71,8 @@ export function centerBlock(lines: readonly string[], width: number): string[] {
 }
 
 /**
- * Indent every rendered line of `text` by `pad`, tracking line starts across
- * calls via the returned state. Exposed for tests.
- *
- * Escape sequences seen at a line start are held back until the first
- * visible text so the pad lands *before* them — otherwise a line that opens
- * with a background color (e.g. the wordmark badge) would paint the whole
- * margin green.
+ * Indent every rendered line by `pad`. Escapes at a line start are held back
+ * so the pad lands before them (a leading background color would paint the margin).
  */
 export function padLines(text: string, pad: string, state: { atLineStart: boolean }): string {
   let out = "";
@@ -98,10 +100,8 @@ export function padLines(text: string, pad: string, state: { atLineStart: boolea
 }
 
 /**
- * Patch `stream.write` so all interactive output renders in a centered
- * column. Returns a restore function. No-ops (and restores nothing) when the
- * stream isn't a TTY, the terminal is too narrow for a margin, or a centered
- * layout is already installed (nested flows share the outer margin).
+ * Patch `stream.write` to center all interactive output; returns a restore
+ * function. No-ops on non-TTY, no-margin, or already-installed layouts.
  */
 export function installCenteredLayout(stream: NodeJS.WriteStream = process.stdout): () => void {
   if (active || !stream.isTTY) return () => {};

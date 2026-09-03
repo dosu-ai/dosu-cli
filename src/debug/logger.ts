@@ -38,6 +38,17 @@ let initialized = false;
 let debugToConsole = false;
 let logFilePath: string | null = null;
 
+/**
+ * ANSI escape sequences (colors, cursor movement) that agent/SDK output can
+ * carry. The log must stay plain text: viewers print log lines verbatim, and
+ * a clipped color code would bleed color across everything after it.
+ */
+const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`, "g");
+
+export function stripAnsiCodes(text: string): string {
+  return text.replace(ANSI_PATTERN, "");
+}
+
 export function redactSecrets(message: string): string {
   let redacted = message;
   for (const key of SECRET_QUERY_KEYS) {
@@ -120,7 +131,7 @@ function initLogger(opts: { debug?: boolean }): void {
 function writeEntry(level: LogLevel, mod: string, message: string): void {
   ensureInit();
   const timestamp = new Date().toISOString();
-  const safeMessage = redactSecrets(message);
+  const safeMessage = redactSecrets(stripAnsiCodes(message));
   const line = `[${timestamp}] [${level}] [${mod}] ${safeMessage}\n`;
 
   try {

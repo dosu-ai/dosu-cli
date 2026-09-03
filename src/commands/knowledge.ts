@@ -13,7 +13,7 @@ import { allHookAgents, getHookAgent, type HookAgent } from "../hooks/agents";
 import { HookConfigError, hookCommand } from "../hooks/formats";
 import type { AgentSession } from "../sessions/scan";
 import { spawnDetachedSelf } from "../sync/detach";
-import { getSyncStatus, type SyncStatus } from "../sync/status";
+import { formatTokenCount, getSyncStatus, type SyncStatus } from "../sync/status";
 import { MINE_BATCH_LIMIT, runKnowledgeSync, type SyncDeps, type SyncOutcome } from "../sync/sync";
 import { positiveInteger } from "./arguments";
 import { requireLoginConfig } from "./auth";
@@ -123,7 +123,6 @@ export function knowledgeCommand(): Command {
     .description("Scan local agent session history and report the mining backlog")
     .option("--quiet", "Background mode for hooks: honor backoff, exit 0, print nothing")
     .option("--detach", "Re-spawn detached and return immediately (used by agent hooks)")
-    .option("--list", "List the sessions selected for mining without mining them")
     .option(
       "--bootstrap",
       "Backfill mode: mine the full local session history regardless of age and drain the backlog (used by setup)",
@@ -134,7 +133,6 @@ export function knowledgeCommand(): Command {
       async (opts: {
         quiet?: boolean;
         detach?: boolean;
-        list?: boolean;
         bootstrap?: boolean;
         status?: boolean;
         json?: boolean;
@@ -163,10 +161,7 @@ export function knowledgeCommand(): Command {
           return;
         }
 
-        // --list is a dry run: gate and report, never mine.
-        const deps: SyncDeps = opts.list
-          ? {}
-          : { mine: buildMiner(opts.quiet ? "hook" : "manual") };
+        const deps: SyncDeps = { mine: buildMiner(opts.quiet ? "hook" : "manual") };
         let outcome = await runKnowledgeSync({
           quiet: opts.quiet,
           bootstrap: opts.bootstrap,
@@ -183,7 +178,7 @@ export function knowledgeCommand(): Command {
         // limit to derive it from); every mined round advances the
         // watermark by at least a full batch, so the cap only guards
         // against a pathological miner that keeps reporting progress.
-        if (opts.bootstrap && !opts.list && deps.mine) {
+        if (opts.bootstrap && deps.mine) {
           const maxRounds = Math.ceil(outcome.readySessions / MINE_BATCH_LIMIT) + 2;
           for (let round = 1; outcome.status === "mined" && round < maxRounds; round++) {
             if (!opts.quiet && !opts.json) printSyncOutcome(outcome);
@@ -200,7 +195,6 @@ export function knowledgeCommand(): Command {
         }
 
         printSyncOutcome(outcome);
-        if (opts.list && outcome.sessions.length > 0) printSessionList(outcome.sessions);
       },
     );
 
@@ -241,7 +235,7 @@ function formatAge(iso: string, now: Date): string {
 function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
   if (status.running) {
     console.log(
-      `${pc.green("●")} Sync running — pid ${status.pid}, started ${formatAge(status.startedAt ?? "", now)}.`,
+      `${pc.green("●")} Sync running \u00B7 pid ${status.pid}, started ${formatAge(status.startedAt ?? "", now)}.`,
     );
   } else if (status.staleLock) {
     console.log(
@@ -252,10 +246,17 @@ function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
   }
 
   const wm = status.state.watermark;
-  console.log(`  Mined through: ${wm ? `${wm} (${formatAge(wm, now)})` : "nothing mined yet"}`);
+  console.log(`  Mined through:   ${wm ? `${wm} (${formatAge(wm, now)})` : "nothing mined yet"}`);
+  if ((status.state.total_notes ?? 0) > 0) {
+    const tokens = status.state.total_learning_tokens ?? 0;
+    const distilled = tokens > 0 ? `, ${formatTokenCount(tokens)} tokens distilled` : "";
+    console.log(
+      `  Suggested pages: ${status.state.total_notes} (from ${status.state.total_mined ?? 0} sessions${distilled})`,
+    );
+  }
   if (status.state.last_attempt_at) {
     console.log(
-      `  Last attempt:  ${status.state.last_attempt_at} (${formatAge(status.state.last_attempt_at, now)})`,
+      `  Last attempt:    ${status.state.last_attempt_at} (${formatAge(status.state.last_attempt_at, now)})`,
     );
   }
   if (status.backoffUntil) {
@@ -263,6 +264,13 @@ function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
     console.log(
       pc.yellow(
         `  Backing off after ${n} failure${n === 1 ? "" : "s"}; background syncs retry after ${status.backoffUntil}.`,
+      ),
+    );
+  }
+  if (status.state.last_refusal) {
+    console.log(
+      pc.yellow(
+        `  Mining paused: ${status.state.last_refusal.message} (${formatAge(status.state.last_refusal.at, now)})`,
       ),
     );
   }
@@ -293,7 +301,7 @@ function printSyncOutcome(outcome: SyncOutcome): void {
       const notes = outcome.miner?.notesWritten ?? 0;
       const remaining = outcome.readySessions - (outcome.minedSessions ?? 0);
       console.log(
-        `✓ Mined ${outcome.minedSessions} session${outcome.minedSessions === 1 ? "" : "s"}, ${notes} note${notes === 1 ? "" : "s"} written.`,
+        `✓ Mined ${outcome.minedSessions} session${outcome.minedSessions === 1 ? "" : "s"}, ${notes} suggested page${notes === 1 ? "" : "s"} created.`,
       );
       if (remaining > 0) {
         console.log(pc.dim(`${remaining} more in the backlog; run sync again to continue.`));
@@ -331,21 +339,6 @@ function printSyncOutcome(outcome: SyncOutcome): void {
       break;
     }
   }
-}
-
-/** `sync --list`: the gated backlog, newest first (scanner order). */
-function printSessionList(sessions: readonly AgentSession[]): void {
-  console.log();
-  printTable(
-    ["Agent", "Updated (UTC)", "Project", "Session"],
-    sessions.map((s) => [
-      s.harness,
-      s.updated.replace("T", " ").slice(0, 16),
-      truncate(s.project ?? "-", 48),
-      truncate(s.id, 24),
-    ]),
-    { json: false, rawData: sessions },
-  );
 }
 
 function resolveHookAgents(ids: string[]): HookAgent[] {

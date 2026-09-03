@@ -5,8 +5,7 @@
  */
 
 import { basename } from "node:path";
-import { Client } from "../client/client";
-import { executeInsights } from "../commands/insights";
+import pc from "picocolors";
 import {
   type Config,
   clearConfigInPlace,
@@ -17,16 +16,20 @@ import {
 } from "../config/config";
 import { getWebAppURL } from "../config/constants";
 import { allSetupProviders } from "../mcp/providers";
-import { runSetup } from "../setup/flow";
+import { dosuAgentsSectionState, inGitWorkTree } from "../setup/agents-md-step";
+import { runSetup, runSwitchTarget } from "../setup/flow";
 import { brand, browserFallbackHint, dim } from "../setup/styles";
 import { getSyncStatus } from "../sync/status";
 import { buildUpdateHint, getAvailableUpdate } from "../version/update-check";
 import { getVersionString, INSTALL_CHANNEL, isNpxInvocation } from "../version/version";
+import { runActivityView } from "./activity-view";
+import { enterAltScreen } from "./alt-screen";
+import { runAnalyticsView } from "./analytics-view";
 import { type BannerContext, renderBanner } from "./banner";
-import { center, contentWidth, installCenteredLayout } from "./layout";
+import { frameTopMargin, installCenteredLayout } from "./layout";
 import { type MenuOption, menuSelect } from "./menu";
+import { runPagesView } from "./pages-view";
 import * as p from "./prompts";
-import { runSyncView } from "./sync-view";
 
 /** Gather the live machine state the welcome banner shows. */
 function bannerContext(cfg: Config): BannerContext {
@@ -45,8 +48,7 @@ function bannerContext(cfg: Config): BannerContext {
       }
     })
     .map((provider) => provider.name());
-  // The preAction hook already refreshed the update cache without printing;
-  // the banner is where a bare `dosu` run learns about a newer version.
+  // The preAction hook already refreshed the update cache without printing.
   const latest = getAvailableUpdate();
   return {
     version: getVersionString(),
@@ -55,31 +57,60 @@ function bannerContext(cfg: Config): BannerContext {
     signedIn: isAuthenticated(cfg),
     deploymentName: cfg.active_account?.target?.deployment_name,
     libraryName: cfg.active_account?.target?.library_name,
+    // Signed out, the account row already says "run Setup"; don't repeat it.
+    setupMissing: isAuthenticated(cfg) ? missingSetupSteps(cfg) : [],
+    ...(inGitWorkTree() ? { repoAgentsMd: dosuAgentsSectionState() } : {}),
     agents,
     mining: isMining(),
     ...(latest
       ? { update: { version: latest, hint: buildUpdateHint(INSTALL_CHANNEL, isNpxInvocation()) } }
       : {}),
-    width: contentWidth(),
   };
 }
 
 export async function runTUI(): Promise<void> {
   const restoreLayout = installCenteredLayout();
+  // The whole session lives in the alternate screen buffer (vim style), so
+  // the shell's scrollback stays untouched.
+  const leaveAltScreen = process.stdout.isTTY ? enterAltScreen(process.stdout) : () => {};
   try {
     await runMainMenu();
   } finally {
+    leaveAltScreen();
+    // Printed after leaving the alternate screen so it lands in the shell.
+    process.stdout.write(`${dim("Goodbye!")}\n\n`);
     restoreLayout();
   }
 }
 
 const ESC = String.fromCharCode(27);
-/**
- * Clear the visible screen and home the cursor, so the TUI takes over from
- * the terminal's top row (Claude Code-style) instead of rendering inline
- * below the shell prompt. Scrollback above is preserved.
- */
+/** Clear the visible screen and home the cursor; scrollback is preserved. */
 const CLEAR_SCREEN = `${ESC}[2J${ESC}[H`;
+
+/**
+ * Setup steps a completed wizard always persists, by user-facing name;
+ * missing ones keep Setup in the menu and flag the banner.
+ */
+export function missingSetupSteps(cfg: Config): string[] {
+  const target = cfg.active_account?.target;
+  const missing: string[] = [];
+  if (!target?.space_id) missing.push("Library");
+  if (!target?.deployment_id || !target?.api_key) missing.push("MCP");
+  return missing;
+}
+
+/** Complete target (Library + MCP + key): Setup moves into Settings. */
+function isSetUp(cfg: Config): boolean {
+  return isAuthenticated(cfg) && missingSetupSteps(cfg).length === 0;
+}
+
+/** The Setup row's warning hint: why it's still at the top of the menu. */
+function setupHint(cfg: Config): string {
+  const started = Boolean(cfg.active_account?.target);
+  return pc.yellow(
+    started ? `incomplete \u00B7 missing ${missingSetupSteps(cfg).join(" + ")}` : "not set up yet",
+  );
+}
 
 /** Lock-file check only (no log read): is a mining run active right now? */
 function isMining(): boolean {
@@ -91,93 +122,138 @@ function isMining(): boolean {
   }
 }
 
+/**
+ * Take over the screen and draw the welcome banner; called on launch and
+ * after flows that scrolled it away or changed the state it shows.
+ */
+function drawHome(cfg: Config): void {
+  if (process.stdout.isTTY) {
+    process.stdout.write(CLEAR_SCREEN);
+    // Fixed top margin; vertical centering jiggled as the menu height changed.
+    process.stdout.write("\n".repeat(frameTopMargin()));
+  }
+  // stream.write, not console.log: Bun's console.log bypasses the patched
+  // stdout.write that injects the centered-layout margin.
+  process.stdout.write(`${renderBanner(bannerContext(cfg))}\n`);
+}
+
 async function runMainMenu(): Promise<void> {
   const cfg = loadConfig();
-  if (process.stdout.isTTY) process.stdout.write(CLEAR_SCREEN);
-  // Written via stream.write (not console.log) so the centered-layout margin
-  // applies — Bun's console.log bypasses the patched process.stdout.write.
-  process.stdout.write(`${renderBanner(bannerContext(cfg))}\n`);
+
+  // Re-polled while the menu is open so background mining updates the label.
+  // Signed out, the menu is just the login door; Setup leads until complete.
+  const buildOptions = (): MenuOption[] => {
+    if (!isAuthenticated(cfg)) {
+      return [
+        { label: "Log in / Sign up", hint: "opens your browser", value: "auth" },
+        { label: "Exit", value: "exit" },
+      ];
+    }
+    const mining = isMining();
+    return [
+      ...(isSetUp(cfg) ? [] : [{ label: "Setup", hint: setupHint(cfg), value: "setup" }]),
+      {
+        label: mining ? `Activity \u26CF\uFE0F ${brand("mining sessions...")}` : "Activity",
+        value: "sync",
+      },
+      { label: "Analytics", value: "analytics" },
+      { label: "Pages", value: "pages" },
+      { label: "Settings", value: "settings" },
+      { label: "Exit", value: "exit" },
+    ];
+  };
+  const home = () => drawHome(cfg);
+
+  home();
 
   // Main menu
   while (true) {
-    // Insights needs a fully set-up account: space, deployment, and API key.
-    const insightsReady = Boolean(
-      cfg.active_account?.target?.space_id &&
-        cfg.active_account?.target?.deployment_id &&
-        cfg.active_account?.target?.api_key,
-    );
-    // Rechecked on every return to the menu, so mining kicked off mid-session
-    // (e.g. setup's "Mine now") becomes visible without relaunching.
-    const options: MenuOption[] = [
-      { label: "Setup", value: "setup" },
-      {
-        label: isMining() ? `Sync status ${brand("\u25CF")} mining` : "Sync status",
-        value: "sync",
-      },
-      ...(insightsReady ? [{ label: "View insights", value: "insights" }] : []),
-      { label: "Authenticate", value: "auth" },
-      { label: "Clear credentials", value: "logout" },
-      { label: "Exit", value: "exit" },
-    ];
-
-    const action = await menuSelect("What would you like to do?", options);
+    const action = await menuSelect("What would you like to do?", buildOptions(), {
+      // Repaint home when the mining lock flips so banner and label stay fresh.
+      refresh: { options: buildOptions, redrawScreen: home },
+    });
 
     if (action === null || action === "exit") {
       break;
     }
 
+    // Views share our alternate screen, so repaint home after each flow.
     switch (action) {
       case "sync":
-        await runSyncView();
+        await runActivityView();
+        home();
         break;
-      case "insights":
-        await executeInsights(cfg);
+      case "analytics":
+        await runAnalyticsView();
+        home();
+        break;
+      case "pages":
+        await runPagesView();
+        home();
+        break;
+      case "settings":
+        await runSettings(cfg);
+        home();
         break;
       case "auth":
         await handleAuthenticate(cfg);
+        home();
         break;
       case "setup":
         await runSetup();
-        // Reload config after setup (it may have changed deployment, api_key, etc.)
+        // Reload config: setup may have changed deployment, api_key, etc.
         {
           const fresh = loadConfig();
           cfg.mode = fresh.mode;
           cfg.active_account = fresh.active_account;
         }
-        break;
-      case "logout":
-        handleLogout(cfg);
+        home();
         break;
     }
   }
+}
 
-  process.stdout.write(`${center(dim("Goodbye!"), contentWidth())}\n\n`);
+/**
+ * Settings submenu: switch org/Library, rerun the wizard, or log out.
+ * Library switches stay in the current org; org switches run the full chain.
+ */
+async function runSettings(cfg: Config): Promise<void> {
+  while (true) {
+    const target = cfg.active_account?.target;
+    // Older configs predate org_name/library_name; fall back rather than show nothing.
+    const library = target?.library_name ?? target?.deployment_name ?? "not configured";
+    const action = await menuSelect("Settings", [
+      { label: "Switch organization", hint: target?.org_name, value: "switch-org" },
+      { label: "Switch Library", hint: library, value: "switch-library" },
+      { label: "Run setup", hint: "rerun the setup wizard", value: "setup" },
+      { label: "Log out", hint: "clear stored credentials", value: "logout" },
+      { label: "Back", value: "back" },
+    ]);
+    if (action === null || action === "back") return;
+    if (action === "setup") {
+      await runSetup();
+      // Reload so the submenu hints and banner reflect any target change.
+      const fresh = loadConfig();
+      cfg.mode = fresh.mode;
+      cfg.active_account = fresh.active_account;
+      continue;
+    }
+    if (action === "logout") {
+      handleLogout(cfg);
+      return;
+    }
+    if (action === "switch-org" || action === "switch-library") {
+      await runSwitchTarget(action === "switch-org" ? "org" : "library");
+      // Keep the in-memory config in step with the persisted new target.
+      const fresh = loadConfig();
+      cfg.mode = fresh.mode;
+      cfg.active_account = fresh.active_account;
+    }
+  }
 }
 
 async function handleAuthenticate(cfg: ReturnType<typeof loadConfig>): Promise<void> {
-  if (cfg.active_account?.session.access_token) {
-    const s = p.spinner();
-    s.start("Verifying session...");
-    try {
-      const apiClient = new Client(cfg);
-      const resp = await apiClient.doRequestRaw("GET", "/v1/mcp/deployments");
-      if (resp.status === 200) {
-        s.stop("Already authenticated.");
-        return;
-      }
-      try {
-        await apiClient.refreshToken();
-        s.stop("Session refreshed.");
-        return;
-      } catch {
-        // refresh failed, fall through to login
-      }
-      s.stop("Session expired.");
-    } catch {
-      s.stop("Verification failed.");
-    }
-  }
-
+  // The menu only offers this when signed out: straight to the browser login.
   const shouldLogin = await p.confirm({ message: "Open browser to log in?" });
   if (p.isCancel(shouldLogin) || !shouldLogin) return;
 

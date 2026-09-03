@@ -85,6 +85,36 @@ describe("isDosuHookCommand", () => {
 });
 
 describe("hookCommand", () => {
+  // Every env var the dev command's URL baking reads, cleared per test so the
+  // suite is hermetic even when bun auto-loads .env files into the test env.
+  const URL_ENV_VARS = [
+    "DOSU_WEB_APP_URL",
+    "DOSU_WEB_APP_URL_OVERRIDE",
+    "DOSU_BACKEND_URL",
+    "DOSU_BACKEND_URL_OVERRIDE",
+    "DOSU_LLM_GATEWAY_URL_OVERRIDE",
+    "SUPABASE_URL",
+    "SUPABASE_URL_OVERRIDE",
+    "SUPABASE_ANON_KEY",
+    "SUPABASE_ANON_KEY_OVERRIDE",
+  ] as const;
+  let savedEnv: Record<string, string | undefined>;
+
+  beforeEach(() => {
+    savedEnv = {};
+    for (const name of URL_ENV_VARS) {
+      savedEnv[name] = process.env[name];
+      delete process.env[name];
+    }
+  });
+
+  afterEach(() => {
+    for (const name of URL_ENV_VARS) {
+      if (savedEnv[name] === undefined) delete process.env[name];
+      else process.env[name] = savedEnv[name];
+    }
+  });
+
   it("returns the stable PATH-resolved command outside dev mode", () => {
     expect(hookCommand()).toBe(HOOK_COMMAND);
   });
@@ -105,18 +135,39 @@ describe("hookCommand", () => {
     expect(hasCursorHook(config, "stop")).toBe(true);
   });
 
-  it("bakes set *_OVERRIDE vars into the dev command", () => {
+  it("bakes the resolved dev URLs into the command, not just explicit overrides", () => {
+    // The common dev case: URLs arrive via .env.development under their
+    // build-time names. Hooks fire from other repos where that file is not
+    // loaded, so the resolved values must ride along as *_OVERRIDE vars.
     process.env.DOSU_DEV = "true";
+    process.env.DOSU_BACKEND_URL = "http://localhost:7001";
+    process.env.DOSU_WEB_APP_URL = "http://localhost:3001";
+    const command = hookCommand();
+    expect(command).toContain("DOSU_BACKEND_URL_OVERRIDE='http://localhost:7001'");
+    expect(command).toContain("DOSU_WEB_APP_URL_OVERRIDE='http://localhost:3001'");
+    // Unset URLs stay out of the command.
+    expect(command).not.toContain("SUPABASE_URL_OVERRIDE");
+    expect(isDosuHookCommand(command)).toBe(true);
+  });
+
+  it("prefers an explicit *_OVERRIDE over the build-time name", () => {
+    process.env.DOSU_DEV = "true";
+    process.env.DOSU_BACKEND_URL = "http://localhost:7001";
     process.env.DOSU_BACKEND_URL_OVERRIDE = "http://localhost:7002";
-    try {
-      const command = hookCommand();
-      expect(command).toContain("DOSU_BACKEND_URL_OVERRIDE='http://localhost:7002'");
-      // Unset overrides stay out of the command.
-      expect(command).not.toContain("SUPABASE_URL_OVERRIDE");
-      expect(isDosuHookCommand(command)).toBe(true);
-    } finally {
-      delete process.env.DOSU_BACKEND_URL_OVERRIDE;
-    }
+    expect(hookCommand()).toContain("DOSU_BACKEND_URL_OVERRIDE='http://localhost:7002'");
+  });
+
+  it("bakes the gateway URL only when explicitly overridden", () => {
+    // Unset: derived from the backend URL at hook runtime, so baking it would
+    // be redundant (and wrong when the backend URL itself is empty).
+    process.env.DOSU_DEV = "true";
+    process.env.DOSU_BACKEND_URL = "http://localhost:7001";
+    expect(hookCommand()).not.toContain("DOSU_LLM_GATEWAY_URL_OVERRIDE");
+
+    process.env.DOSU_LLM_GATEWAY_URL_OVERRIDE = "http://localhost:9000/gateway";
+    expect(hookCommand()).toContain(
+      "DOSU_LLM_GATEWAY_URL_OVERRIDE='http://localhost:9000/gateway'",
+    );
   });
 });
 

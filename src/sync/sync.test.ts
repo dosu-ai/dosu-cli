@@ -316,6 +316,27 @@ describe("runKnowledgeSync mining", () => {
     expect(result.miner?.message).toBe("nope");
     expect(saved[0].watermark).toBeNull();
     expect(saved[0].consecutive_failures).toBe(0);
+    // The reason is persisted so status surfaces can explain the pause.
+    expect(saved[0].last_refusal).toMatchObject({ outcome, message: "nope" });
+  });
+
+  it("clears a persisted refusal on the next successful run", async () => {
+    const { deps, saved } = makeMiningDeps({
+      listSessions: vi.fn().mockResolvedValue([session(30)]),
+      mine: vi.fn().mockResolvedValue(minerResult({ outcome: "completed", notesWritten: 1 })),
+      lock: openLock(),
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        last_refusal: { at: "2026-08-25T10:00:00Z", outcome: "credit_limit", message: "nope" },
+      }),
+    });
+
+    const result = await runKnowledgeSync({ deps });
+
+    expect(result.status).toBe("mined");
+    expect(saved[0].last_refusal).toBeUndefined();
   });
 
   it.each([
@@ -367,6 +388,95 @@ describe("runKnowledgeSync mining", () => {
     expect(batch.map((s) => s.id)).toEqual(["s-50", "s-30"]);
     // Watermark covers the trivial session too — it is never revisited.
     expect(saved[0].watermark).toBe(session(30).updated);
+  });
+
+  it("logs one line per mined session for status views to pick up", async () => {
+    mockLoggerDebug.mockClear();
+    const mine = vi.fn().mockResolvedValue(minerResult());
+    const { deps } = makeMiningDeps({
+      listSessions: vi.fn().mockResolvedValue([session(30), session(50)]),
+      mine,
+      lock: openLock(),
+    });
+
+    await runKnowledgeSync({ deps });
+
+    const logged = mockLoggerDebug.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(logged).toContain("mined session claude/s-50");
+    expect(logged).toContain("mined session claude/s-30");
+  });
+
+  it("persists mined-session history and the all-time count in state", async () => {
+    const mine = vi.fn().mockResolvedValue(minerResult());
+    const { deps, saved } = makeMiningDeps({
+      listSessions: vi
+        .fn()
+        .mockResolvedValue([session(30), { ...session(50), project: "dosu-cli" }]),
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        mined_sessions: [{ at: "2026-08-25T10:00:00.000Z", session: "cursor/earlier" }],
+        total_mined: 5,
+      }),
+      mine,
+      lock: openLock(),
+    });
+
+    await runKnowledgeSync({ deps });
+
+    // New records append to the existing history, oldest first.
+    expect(saved[0].mined_sessions?.map((r) => r.session)).toEqual([
+      "cursor/earlier",
+      "claude/s-50",
+      "claude/s-30",
+    ]);
+    // The session's project is recorded when the scanner knew it.
+    expect(saved[0].mined_sessions?.find((r) => r.session === "claude/s-50")?.project).toBe(
+      "dosu-cli",
+    );
+    expect(
+      saved[0].mined_sessions?.find((r) => r.session === "claude/s-30")?.project,
+    ).toBeUndefined();
+    expect(saved[0].total_mined).toBe(7);
+  });
+
+  it("accumulates all-time note and learning-token analytics on completed runs", async () => {
+    const mine = vi.fn().mockResolvedValue(minerResult({ notesWritten: 3 }));
+    const { deps, saved } = makeMiningDeps({
+      listSessions: vi.fn().mockResolvedValue([session(30), session(50)]),
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        total_notes: 4,
+        total_learning_tokens: 10_000,
+      }),
+      sessionTokens: () => 5_000,
+      mine,
+      lock: openLock(),
+    });
+
+    await runKnowledgeSync({ deps });
+
+    expect(saved[0].total_notes).toBe(7);
+    expect(saved[0].total_learning_tokens).toBe(20_000);
+  });
+
+  it("defaults the token estimator, degrading to zero for unreadable sessions", async () => {
+    const mine = vi.fn().mockResolvedValue(minerResult());
+    const { deps, saved } = makeMiningDeps({
+      // session() paths do not exist on disk: the default chars÷4 estimator
+      // must degrade to 0 instead of throwing.
+      listSessions: vi.fn().mockResolvedValue([session(30)]),
+      mine,
+      lock: openLock(),
+    });
+
+    await runKnowledgeSync({ deps });
+
+    expect(saved[0].total_learning_tokens).toBe(0);
+    expect(saved[0].total_notes).toBe(2);
   });
 
   it("advances the watermark without a gateway run when everything is trivial", async () => {

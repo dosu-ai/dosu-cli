@@ -17,6 +17,12 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
+import {
+  getBackendURL,
+  getSupabaseAnonKey,
+  getSupabaseURL,
+  getWebAppURL,
+} from "../config/constants";
 import { writeSecureFile } from "../mcp/config-helpers";
 import { selfInvocation } from "../sync/detach";
 
@@ -30,17 +36,28 @@ import { selfInvocation } from "../sync/detach";
 export const HOOK_COMMAND = "dosu knowledge sync --quiet --detach";
 
 /**
- * `*_OVERRIDE` env vars baked into dev hook commands when set at enable time.
- * Hooks run from arbitrary cwds where Bun does not load the repo's
- * `.env.development`, so without this a dev hook silently targets prod URLs.
+ * `*_OVERRIDE` env vars baked into dev hook commands, each resolved to the
+ * URL the enabling process is actually using. Hooks fire from arbitrary cwds
+ * where Bun does not load this repo's `.env.development`, so a dev hook that
+ * doesn't carry its URLs runs against empty ones — the miner's gateway URL
+ * degenerates to the relative path `/v1/llm-gateway` and every run fails
+ * with "Invalid URL". Resolving through the constants getters (not just
+ * echoing already-set `*_OVERRIDE` vars) covers the common dev case where
+ * the URLs came from `.env.development` under their build-time names.
+ * The LLM gateway URL is not baked: it derives from the backend URL at
+ * runtime, so inlining the backend override is enough — unless the developer
+ * explicitly set `DOSU_LLM_GATEWAY_URL_OVERRIDE`, which is passed through.
  */
-const DEV_HOOK_ENV_VARS = [
-  "DOSU_WEB_APP_URL_OVERRIDE",
-  "DOSU_BACKEND_URL_OVERRIDE",
-  "DOSU_LLM_GATEWAY_URL_OVERRIDE",
-  "SUPABASE_URL_OVERRIDE",
-  "SUPABASE_ANON_KEY_OVERRIDE",
-] as const;
+const DEV_HOOK_ENV: ReadonlyArray<{ name: string; resolve: () => string }> = [
+  { name: "DOSU_WEB_APP_URL_OVERRIDE", resolve: getWebAppURL },
+  { name: "DOSU_BACKEND_URL_OVERRIDE", resolve: getBackendURL },
+  {
+    name: "DOSU_LLM_GATEWAY_URL_OVERRIDE",
+    resolve: () => process.env.DOSU_LLM_GATEWAY_URL_OVERRIDE ?? "",
+  },
+  { name: "SUPABASE_URL_OVERRIDE", resolve: getSupabaseURL },
+  { name: "SUPABASE_ANON_KEY_OVERRIDE", resolve: getSupabaseAnonKey },
+];
 
 /**
  * The command `hooks enable` writes. Dev installs (`DOSU_DEV=true`) pin the
@@ -54,8 +71,8 @@ export function hookCommand(): string {
   const { command, baseArgs } = selfInvocation();
   const quoted = [command, ...baseArgs].map((part) => `'${part}'`).join(" ");
   const env = ["DOSU_DEV=true"];
-  for (const name of DEV_HOOK_ENV_VARS) {
-    const value = process.env[name];
+  for (const { name, resolve } of DEV_HOOK_ENV) {
+    const value = resolve();
     if (value) env.push(`${name}='${value}'`);
   }
   return `${env.join(" ")} ${quoted} knowledge sync --quiet --detach`;

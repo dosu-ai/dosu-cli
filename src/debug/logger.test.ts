@@ -56,6 +56,14 @@ describe("logger", () => {
       expect(match).not.toBeNull();
     });
 
+    it("strips ANSI escape codes so the log stays plain text", () => {
+      const ESC = String.fromCharCode(27);
+      logger.info("miner", `[sdk] ${ESC}[31mred error${ESC}[0m and ${ESC}[1;32mbold green${ESC}[m`);
+      const content = readFileSync(logPath(), "utf-8");
+      expect(content).toContain("[sdk] red error and bold green");
+      expect(content).not.toContain(`${ESC}[`);
+    });
+
     it("supports all four log levels", () => {
       logger.debug("m", "d");
       logger.info("m", "i");

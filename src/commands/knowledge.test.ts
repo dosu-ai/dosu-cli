@@ -36,7 +36,9 @@ vi.mock("../sync/detach", () => ({
 }));
 
 const mockGetSyncStatus = vi.fn();
-vi.mock("../sync/status", () => ({
+vi.mock("../sync/status", async (importOriginal) => ({
+  // Keep the real formatTokenCount: only the status source is faked.
+  ...(await importOriginal<typeof import("../sync/status")>()),
   getSyncStatus: (...args: unknown[]) => mockGetSyncStatus(...args),
 }));
 
@@ -312,7 +314,7 @@ describe("knowledge sync", () => {
     await run("sync");
 
     const output = allOutput();
-    expect(output).toContain("Mined 5 sessions, 3 notes written");
+    expect(output).toContain("Mined 5 sessions, 3 suggested pages created");
     expect(output).toContain("3 more in the backlog");
   });
 
@@ -416,57 +418,6 @@ describe("knowledge sync", () => {
     await run("sync", "--json");
 
     expect(JSON.parse(allOutput())).toMatchObject({ status: "backlog", readySessions: 2 });
-  });
-
-  it("--list is a dry run: no miner even when credentials exist", async () => {
-    mockRunSync.mockResolvedValue({
-      status: "backlog",
-      readySessions: 1,
-      inFlightSessions: 0,
-      sessions: [],
-    });
-
-    await run("sync", "--list");
-
-    expect(syncDeps().mine).toBeUndefined();
-  });
-
-  it("--list prints the selected sessions", async () => {
-    mockRunSync.mockResolvedValue({
-      status: "backlog",
-      readySessions: 1,
-      inFlightSessions: 0,
-      sessions: [
-        {
-          id: "848b3896-fb07",
-          harness: "cursor",
-          path: "/home/u/.cursor/projects/p/agent-transcripts/848b3896-fb07/848b3896-fb07.jsonl",
-          project: "Users-james-dosu-cli",
-          updated: "2026-08-27T21:05:00.000Z",
-        },
-      ],
-    });
-
-    await run("sync", "--list");
-
-    const output = allOutput();
-    expect(output).toContain("cursor");
-    expect(output).toContain("2026-08-27 21:05");
-    expect(output).toContain("Users-james-dosu-cli");
-    expect(output).toContain("848b3896-fb07");
-  });
-
-  it("--list prints no table when the backlog is empty", async () => {
-    mockRunSync.mockResolvedValue({
-      status: "nothing-new",
-      readySessions: 0,
-      inFlightSessions: 0,
-      sessions: [],
-    });
-
-    await run("sync", "--list");
-
-    expect(allOutput()).not.toContain("Agent");
   });
 
   it("--detach re-spawns and never runs the pipeline inline", async () => {
@@ -573,21 +524,6 @@ describe("knowledge sync", () => {
 
     expect(mockRunSync).toHaveBeenCalledTimes(1);
   });
-
-  it("--bootstrap --list stays single-shot with no miner", async () => {
-    mockRunSync.mockResolvedValue({
-      status: "backlog",
-      readySessions: 4,
-      inFlightSessions: 0,
-      sessions: [],
-    });
-
-    await run("sync", "--list", "--bootstrap");
-
-    expect(mockRunSync).toHaveBeenCalledTimes(1);
-    expect(mockRunSync.mock.calls[0][0].bootstrap).toBe(true);
-    expect(syncDeps().mine).toBeUndefined();
-  });
 });
 
 describe("knowledge sync --status", () => {
@@ -603,19 +539,39 @@ describe("knowledge sync --status", () => {
       pid: 4242,
       startedAt: new Date(Date.now() - 3 * 60_000).toISOString(),
       state: { ...baseState, watermark: new Date(Date.now() - 2 * 86_400_000).toISOString() },
-      recentActivity: ["[t] [sync] mined 5 sessions, 4 notes"],
+      recentActivity: ["[t] [sync] mined 5 sessions, 4 suggested pages"],
     });
 
     await run("sync", "--status");
 
     const output = allOutput();
-    expect(output).toContain("Sync running — pid 4242");
+    expect(output).toContain("Sync running \u00B7 pid 4242");
     expect(output).toContain("3m ago");
     expect(output).toContain("Mined through:");
     expect(output).toContain("2d ago");
-    expect(output).toContain("mined 5 sessions, 4 notes");
+    expect(output).toContain("mined 5 sessions, 4 suggested pages");
     expect(output).toContain("logs --follow");
     expect(mockRunSync).not.toHaveBeenCalled();
+  });
+
+  it("reports the all-time notes and token analytics when present", async () => {
+    mockGetSyncStatus.mockReturnValue({
+      running: false,
+      state: {
+        ...baseState,
+        watermark: "2026-08-25T11:00:00Z",
+        total_mined: 120,
+        total_notes: 47,
+        total_learning_tokens: 312_000,
+      },
+      recentActivity: [],
+    });
+
+    await run("sync", "--status");
+
+    expect(allOutput()).toContain(
+      "Suggested pages: 47 (from 120 sessions, ~312k tokens distilled)",
+    );
   });
 
   it("reports idle with nothing mined yet", async () => {
@@ -626,6 +582,7 @@ describe("knowledge sync --status", () => {
     const output = allOutput();
     expect(output).toContain("No sync running");
     expect(output).toContain("nothing mined yet");
+    expect(output).not.toContain("Suggested pages");
     expect(output).not.toContain("Recent activity");
   });
 
@@ -660,6 +617,27 @@ describe("knowledge sync --status", () => {
     expect(output).toContain("1h 30m ago");
     expect(output).toContain("Backing off after 2 failures");
     expect(output).toContain("2026-09-02T23:00:00.000Z");
+  });
+
+  it("explains a persisted gateway refusal", async () => {
+    mockGetSyncStatus.mockReturnValue({
+      running: false,
+      state: {
+        ...baseState,
+        last_refusal: {
+          at: new Date(Date.now() - 10 * 60_000).toISOString(),
+          outcome: "credit_limit",
+          message: "Your org has used its Dosu credits for this billing period.",
+        },
+      },
+      recentActivity: [],
+    });
+
+    await run("sync", "--status");
+
+    const output = allOutput();
+    expect(output).toContain("Mining paused: Your org has used its Dosu credits");
+    expect(output).toContain("10m ago");
   });
 
   it("renders very recent timestamps as 'just now'", async () => {

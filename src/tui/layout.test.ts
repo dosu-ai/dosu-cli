@@ -1,7 +1,38 @@
 import { describe, expect, it } from "vitest";
-import { contentWidth, installCenteredLayout, layoutMargin, padLines } from "./layout";
+import {
+  breadcrumb,
+  contentWidth,
+  frameTopMargin,
+  installCenteredLayout,
+  layoutMargin,
+  padLines,
+} from "./layout";
 
 const ESC = String.fromCharCode(27);
+
+function stripAnsi(text: string): string {
+  return text.replace(new RegExp(`${ESC}\\[[0-9;?]*[A-Za-z]`, "g"), "");
+}
+
+describe("breadcrumb", () => {
+  it("joins the trail with › separators, leaf last", () => {
+    expect(stripAnsi(breadcrumb(["Home", "Pages", "OAuth tokens"], 64))).toBe(
+      "Home \u203A Pages \u203A OAuth tokens",
+    );
+    expect(stripAnsi(breadcrumb(["Home", "Activity"], 64))).toBe("Home \u203A Activity");
+  });
+
+  it("clips a long leaf but keeps the trail whole", () => {
+    const line = stripAnsi(breadcrumb(["Home", "Pages", "x".repeat(100)], 40));
+    expect(line.startsWith("Home \u203A Pages \u203A ")).toBe(true);
+    expect(line.length).toBeLessThanOrEqual(40);
+    expect(line.endsWith("\u2026")).toBe(true);
+  });
+
+  it("renders a single segment as just the leaf", () => {
+    expect(stripAnsi(breadcrumb(["Home"], 64))).toBe("Home");
+  });
+});
 
 function fakeStream(overrides: Partial<{ isTTY: boolean; columns: number }> = {}) {
   const written: unknown[] = [];
@@ -26,6 +57,18 @@ describe("contentWidth / layoutMargin", () => {
   it("uses the full terminal when narrow", () => {
     expect(contentWidth(60)).toBe(60);
     expect(layoutMargin(60)).toBe(0);
+  });
+});
+
+describe("frameTopMargin", () => {
+  it("scales with terminal height", () => {
+    expect(frameTopMargin(24)).toBe(3);
+    expect(frameTopMargin(40)).toBe(5);
+  });
+
+  it("clamps to a floor on tiny terminals and a ceiling on tall ones", () => {
+    expect(frameTopMargin(10)).toBe(2);
+    expect(frameTopMargin(200)).toBe(6);
   });
 });
 

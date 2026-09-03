@@ -193,9 +193,9 @@ vi.mock("../sync/detach", async (importOriginal) => ({
   spawnDetachedSelf: (...args: unknown[]) => mockSpawnDetachedSelf(...args),
 }));
 
-// The live sync view needs a raw-mode TTY and polls the debug log.
-vi.mock("../tui/sync-view", () => ({
-  runSyncView: vi.fn(),
+// The live Activity view needs a raw-mode TTY and polls the debug log.
+vi.mock("../tui/activity-view", () => ({
+  runActivityView: vi.fn(),
 }));
 
 import { OAuthCallbackError } from "../auth/errors";
@@ -211,13 +211,14 @@ import { ClaudeDesktopProvider } from "../mcp/providers/claude-desktop";
 import { CodexProvider } from "../mcp/providers/codex";
 import { CursorProvider } from "../mcp/providers/cursor";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
+import { runActivityView } from "../tui/activity-view";
 import * as p from "../tui/prompts";
-import { runSyncView } from "../tui/sync-view";
 import {
   type ConfigResult,
   cliAuthFailureReason,
   runInstallSkill,
   runSetup,
+  runSwitchTarget,
   stepConfigureTools,
   stepDetectTools,
   stepOfferInitialSync,
@@ -970,6 +971,8 @@ describe("runSetup integration", () => {
     const savedCfg = loadConfig();
     expect(savedCfg.active_account?.target?.deployment_id).toBe("d1");
     expect(savedCfg.active_account?.target?.deployment_name).toBe("Deploy1");
+    // The org's display name rides along so the settings menu can show it.
+    expect(savedCfg.active_account?.target?.org_name).toBe("Org1");
   });
 
   it("shows and persists the Library the selected MCP answers from", async () => {
@@ -3224,9 +3227,9 @@ describe("stepOfferInitialSync", () => {
       "--quiet",
       "--bootstrap",
     ]);
-    expect(vi.mocked(p.log.success).mock.calls.join(" ")).toContain("Background sync started");
-    // Both prompts answered "yes": the live sync view opens.
-    expect(vi.mocked(runSyncView)).toHaveBeenCalledOnce();
+    expect(vi.mocked(p.log.success).mock.calls.join(" ")).toContain("Currently mining");
+    // Both prompts answered "yes": the live Activity view opens.
+    expect(vi.mocked(runActivityView)).toHaveBeenCalledOnce();
   });
 
   it("goes straight back when the user declines the live view", async () => {
@@ -3237,7 +3240,7 @@ describe("stepOfferInitialSync", () => {
     await stepOfferInitialSync(makeCfg());
 
     expect(mockSpawnDetachedSelf).toHaveBeenCalled();
-    expect(vi.mocked(runSyncView)).not.toHaveBeenCalled();
+    expect(vi.mocked(runActivityView)).not.toHaveBeenCalled();
   });
 
   it("skips without spawning when the user declines", async () => {
@@ -3268,5 +3271,283 @@ describe("stepOfferInitialSync", () => {
     await stepOfferInitialSync(makeCfg());
 
     expect(vi.mocked(p.log.warn).mock.calls.join(" ")).toContain("Could not start");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7. runSwitchTarget — the settings flow (re-pick org / Library / MCP)
+// ---------------------------------------------------------------------------
+
+describe("runSwitchTarget", () => {
+  const mockClient = vi.mocked(Client);
+
+  beforeEach(() => {
+    setupTempEnv();
+    vi.resetAllMocks();
+    installRemoteSetupDefaults();
+    vi.mocked(p.isCancel).mockReturnValue(false);
+  });
+  afterEach(teardownTempEnv);
+
+  function switchClient(overrides: Record<string, unknown> = {}) {
+    const methods = {
+      getOrgs: vi.fn().mockResolvedValue([{ org_id: "o1", name: "Org1" }]),
+      getDeployments: vi.fn().mockResolvedValue([makeDeployment()]),
+      validateAPIKey: vi.fn().mockResolvedValue(false),
+      createAPIKey: vi.fn().mockResolvedValue({ api_key: "switched-key" }),
+      ...overrides,
+    };
+    mockClient.mockImplementation(function () {
+      return methods as unknown as Client;
+    });
+    return methods;
+  }
+
+  function fakeProvider(
+    overrides: Partial<providersModule.SetupProvider> = {},
+  ): providersModule.SetupProvider {
+    return {
+      name: () => "FakeAgent",
+      id: () => "fake",
+      supportsLocal: () => false,
+      install: vi.fn(),
+      remove: vi.fn(),
+      detectPaths: () => [],
+      isInstalled: () => true,
+      isConfigured: () => true,
+      globalConfigPath: () => "/tmp/fake.json",
+      priority: () => 1,
+      ...overrides,
+    } as providersModule.SetupProvider;
+  }
+
+  it("switches the stored target, mints a key, and rewrites configured agents", async () => {
+    saveConfig(makeCfg()); // starts on dep-123 / key-abc
+    const client = switchClient();
+    const configured = fakeProvider();
+    // Installed but never configured: must be left alone.
+    const untouched = fakeProvider({ name: () => "Untouched", isConfigured: () => false });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([configured, untouched]);
+
+    await runSwitchTarget();
+
+    const saved = loadConfig();
+    expect(saved.active_account?.target?.deployment_id).toBe("d1");
+    expect(saved.active_account?.target?.org_id).toBe("o1");
+    expect(saved.active_account?.target?.api_key).toBe("switched-key");
+    expect(saved.active_account?.target?.library_name).toBe("Main Library");
+    // The old key never fits the new deployment silently — it is validated.
+    expect(client.validateAPIKey).toHaveBeenCalledWith("key-abc", "d1");
+    expect(configured.install).toHaveBeenCalledWith(expect.anything(), true);
+    expect(untouched.install).not.toHaveBeenCalled();
+    expect(vi.mocked(p.log.info).mock.calls.join(" ")).toContain("Restart your AI agents");
+  });
+
+  it("refuses in OSS mode", async () => {
+    saveConfig(makeCfg({ mode: "oss" }));
+
+    await runSwitchTarget();
+
+    expect(vi.mocked(p.log.warn).mock.calls.join(" ")).toContain("OSS mode");
+    expect(mockClient).not.toHaveBeenCalled();
+  });
+
+  it("refuses when not signed in", async () => {
+    saveConfig(makeCfg({ access_token: "" }));
+
+    await runSwitchTarget();
+
+    expect(vi.mocked(p.log.warn).mock.calls.join(" ")).toContain("Not signed in");
+    expect(mockClient).not.toHaveBeenCalled();
+  });
+
+  it("library scope resolves the stored org by id without an org prompt", async () => {
+    // Two orgs on the account: an org-scope switch would have to ask.
+    saveConfig(makeCfg({ org_id: "o1" }));
+    switchClient({
+      getOrgs: vi.fn().mockResolvedValue([
+        { org_id: "o1", name: "Org1" },
+        { org_id: "o2", name: "Org2" },
+      ]),
+    });
+    vi.mocked(p.select).mockResolvedValue("s1" as never);
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSwitchTarget("library");
+
+    expect(p.select).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Select an organization" }),
+    );
+    // Even a lone Library is offered as a list — an explicit "Switch
+    // Library" must never silently auto-pick.
+    expect(p.select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Select a Library",
+        options: [expect.objectContaining({ label: "Main Library", value: "s1" })],
+      }),
+    );
+    expect(vi.mocked(p.log.success).mock.calls.join(" ")).toContain("Org1");
+    expect(loadConfig().active_account?.target?.deployment_id).toBe("d1");
+  });
+
+  it("library scope warns instead of silently skipping when the list fails", async () => {
+    saveConfig(makeCfg({ org_id: "o1" }));
+    switchClient();
+    mockTrpc.libraries.list.query.mockRejectedValue(new Error("router down"));
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSwitchTarget("library");
+
+    expect(vi.mocked(p.log.warn).mock.calls.join(" ")).toContain("Could not list Libraries");
+    // One deployment left → still resolved, just not silently.
+    expect(loadConfig().active_account?.target?.deployment_id).toBe("d1");
+  });
+
+  it("library scope offers MCP-less Libraries and creates the deployment on confirm", async () => {
+    saveConfig(makeCfg({ org_id: "o1" }));
+    switchClient();
+    // Two Libraries: only s1 has an MCP; s-other must still be offered.
+    mockTrpc.libraries.list.query.mockResolvedValue([
+      { id: "s1", name: "Main Library" },
+      { id: "s-other", name: "Elsewhere" },
+    ]);
+    mockTrpc.libraries.info.query.mockResolvedValue({ id: "s-other", name: "Elsewhere" });
+    vi.mocked(p.select).mockResolvedValue("s-other" as never);
+    vi.mocked(p.confirm).mockResolvedValue(true as never);
+    mockTrpc.workspaces.create.mutate.mockResolvedValue({
+      deployment_id: "d-new",
+      name: "Elsewhere MCP Server",
+      description: "",
+      provider_slug: "dosu_mcp",
+      enabled: true,
+      org_id: "o1",
+      space_id: "s-other",
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSwitchTarget("library");
+
+    // The MCP-less Library is listed, marked so the create flow is no surprise.
+    expect(p.select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Select a Library",
+        options: [
+          expect.objectContaining({ label: "Main Library", value: "s1" }),
+          expect.objectContaining({
+            label: "Elsewhere",
+            value: "s-other",
+            hint: "no MCP yet \u00B7 select to create one",
+          }),
+        ],
+      }),
+    );
+    expect(mockTrpc.workspaces.create.mutate).toHaveBeenCalledWith({
+      org_id: "o1",
+      space_id: "s-other",
+      provider_slug: "dosu_mcp",
+      name: "Elsewhere MCP Server",
+      description: "",
+      enabled: true,
+      config: {},
+      metadata: {
+        app: { deployment_mode: "normal", setup_mode: "manual" },
+        provider_slug: "dosu_mcp",
+      },
+    });
+    expect(loadConfig().active_account?.target?.deployment_id).toBe("d-new");
+  });
+
+  it("library scope keeps the config when MCP creation is declined", async () => {
+    saveConfig(makeCfg({ org_id: "o1" }));
+    switchClient();
+    mockTrpc.libraries.list.query.mockResolvedValue([{ id: "s-other", name: "Elsewhere" }]);
+    vi.mocked(p.select).mockResolvedValue("s-other" as never);
+    vi.mocked(p.confirm).mockResolvedValue(false as never);
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSwitchTarget("library");
+
+    expect(mockTrpc.workspaces.create.mutate).not.toHaveBeenCalled();
+    expect(loadConfig().active_account?.target?.deployment_id).toBe("dep-123");
+  });
+
+  it("library scope surfaces the error when MCP creation fails", async () => {
+    saveConfig(makeCfg({ org_id: "o1" }));
+    switchClient();
+    mockTrpc.libraries.list.query.mockResolvedValue([{ id: "s-other", name: "Elsewhere" }]);
+    vi.mocked(p.select).mockResolvedValue("s-other" as never);
+    vi.mocked(p.confirm).mockResolvedValue(true as never);
+    mockTrpc.workspaces.create.mutate.mockRejectedValue(new Error("FORBIDDEN"));
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSwitchTarget("library");
+
+    expect(vi.mocked(p.log.error).mock.calls.join(" ")).toContain("FORBIDDEN");
+    expect(loadConfig().active_account?.target?.deployment_id).toBe("dep-123");
+  });
+
+  it("library scope keeps the config when the Library picker is cancelled", async () => {
+    saveConfig(makeCfg({ org_id: "o1" }));
+    switchClient();
+    vi.mocked(p.select).mockResolvedValue(Symbol("cancel") as never);
+    vi.mocked(p.isCancel).mockReturnValue(true);
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSwitchTarget("library");
+
+    expect(loadConfig().active_account?.target?.deployment_id).toBe("dep-123");
+  });
+
+  it("library scope falls back to the org picker when the stored org is gone", async () => {
+    saveConfig(makeCfg({ org_id: "o-deleted" }));
+    switchClient({
+      getOrgs: vi.fn().mockResolvedValue([
+        { org_id: "o1", name: "Org1" },
+        { org_id: "o2", name: "Org2" },
+      ]),
+    });
+    vi.mocked(p.select).mockResolvedValue("o1" as never);
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSwitchTarget("library");
+
+    expect(p.select).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Select an organization" }),
+    );
+    expect(loadConfig().active_account?.target?.deployment_id).toBe("d1");
+  });
+
+  it("leaves the config untouched when the org picker is cancelled", async () => {
+    saveConfig(makeCfg());
+    switchClient({
+      getOrgs: vi.fn().mockResolvedValue([
+        { org_id: "o1", name: "Org1" },
+        { org_id: "o2", name: "Org2" },
+      ]),
+    });
+    vi.mocked(p.select).mockResolvedValue(Symbol("cancel") as never);
+    vi.mocked(p.isCancel).mockReturnValue(true);
+
+    await runSwitchTarget();
+
+    expect(loadConfig().active_account?.target?.deployment_id).toBe("dep-123");
+  });
+
+  it("reports an agent whose config rewrite fails and still updates the rest", async () => {
+    saveConfig(makeCfg());
+    switchClient();
+    const bad = fakeProvider({
+      name: () => "BadAgent",
+      install: vi.fn(() => {
+        throw new Error("disk full");
+      }),
+    });
+    const good = fakeProvider({ name: () => "GoodAgent" });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([bad, good]);
+
+    await runSwitchTarget();
+
+    expect(vi.mocked(p.log.error).mock.calls.join(" ")).toContain("BadAgent");
+    expect(good.install).toHaveBeenCalled();
   });
 });

@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { isWorthMining, readSessionTurns } from "./read";
+import { estimateSessionTokens, isWorthMining, readSessionTurns } from "./read";
 import type { AgentSession } from "./scan";
 
 let dir: string;
@@ -289,5 +289,30 @@ describe("isWorthMining", () => {
 
   it("rejects an unreadable session", () => {
     expect(isWorthMining(session("claude", join(dir, "missing.jsonl")))).toBe(false);
+  });
+});
+
+describe("estimateSessionTokens", () => {
+  it("estimates chars ÷ 4 over the conversational turns only", () => {
+    const path = writeLog("est.jsonl", [
+      { type: "user", message: { role: "user", content: "x".repeat(400) } },
+      {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "y".repeat(600) },
+            // Tool noise must not count toward the learning estimate.
+            { type: "tool_use", name: "Read", input: { big: "z".repeat(10_000) } },
+          ],
+        },
+      },
+    ]);
+
+    expect(estimateSessionTokens(session("claude", path))).toBe(250);
+  });
+
+  it("returns 0 for an unreadable session", () => {
+    expect(estimateSessionTokens(session("claude", join(dir, "missing.jsonl")))).toBe(0);
   });
 });

@@ -47,15 +47,15 @@ export interface RunMinerOptions {
   maxTurns?: number;
   /** Cap on write_knowledge calls per run. */
   maxNotes?: number;
-  /** Wall-clock abort. Default 15 minutes. */
+  /** Wall-clock abort. Default 30 minutes. */
   timeoutMs?: number;
 }
 
 // Sized for MINE_BATCH_LIMIT-session batches: observed runs spend ~4-6 turns
-// and write up to ~3 notes per session, so 10 sessions fit with headroom.
-const DEFAULT_MAX_TURNS = 80;
-const DEFAULT_MAX_NOTES = 40;
-const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
+// and write up to ~3 notes per session, so 20 sessions fit with headroom.
+const DEFAULT_MAX_TURNS = 160;
+const DEFAULT_MAX_NOTES = 80;
+const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 
 const KNOWLEDGE_SERVER_NAME = "dosu";
 
@@ -268,7 +268,10 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
             message: "Mining run failed; see debug log for details.",
           };
         }
-        logger.debug("miner", `run ${runID} completed: ${turns} turns, ${notesWritten} notes`);
+        logger.debug(
+          "miner",
+          `run ${runID} completed: ${turns} turns, ${notesWritten} suggested pages`,
+        );
         return { outcome: "completed", notesWritten, turns, message: text };
       }
     }

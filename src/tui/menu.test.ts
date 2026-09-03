@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { type MenuOption, menuSelect, parseKeys, reduceMenuKey, renderMenuFrame } from "./menu";
 
 const ESC = String.fromCharCode(27);
@@ -57,7 +57,7 @@ describe("reduceMenuKey", () => {
 
 describe("renderMenuFrame", () => {
   it("marks the selected row with the pointer and shows hints", () => {
-    const frame = stripAnsi(renderMenuFrame("Pick one", OPTIONS, 0, 64));
+    const frame = stripAnsi(renderMenuFrame("Pick one", OPTIONS, 0));
     expect(frame).toContain("Pick one");
     expect(frame).toContain("\u25B8 Setup");
     expect(frame).toContain("Connect Dosu to your AI agents");
@@ -66,9 +66,14 @@ describe("renderMenuFrame", () => {
   });
 
   it("moves the pointer with the selection", () => {
-    const frame = stripAnsi(renderMenuFrame("Pick one", OPTIONS, 2, 64));
+    const frame = stripAnsi(renderMenuFrame("Pick one", OPTIONS, 2));
     expect(frame).toContain("\u25B8 Exit");
     expect(frame).not.toContain("\u25B8 Setup");
+  });
+
+  it("anchors the block to the content column's left edge (no self-centering)", () => {
+    const frame = stripAnsi(renderMenuFrame("Pick one", OPTIONS, 0));
+    expect(frame.split("\n")[0]).toBe("Pick one");
   });
 });
 
@@ -149,5 +154,44 @@ describe("menuSelect", () => {
     const { input, output, written } = fakeIO({ isTTY: false });
     await expect(menuSelect("Pick one", OPTIONS, { input, output })).resolves.toBeNull();
     expect(written).toEqual([]);
+  });
+
+  it("live-refreshes the frame when the polled options change", async () => {
+    vi.useFakeTimers();
+    try {
+      const { input, output, written } = fakeIO();
+      let mining = true;
+      const buildOptions = () => [
+        { label: mining ? "Activity (mining)" : "Activity", value: "sync" },
+        { label: "Exit", value: "exit" },
+      ];
+      const redrawScreen = vi.fn();
+      const result = menuSelect("Pick one", buildOptions(), {
+        input,
+        output,
+        refresh: { intervalMs: 100, options: buildOptions, redrawScreen },
+      });
+
+      // Same options → no repaint, no screen redraw.
+      vi.advanceTimersByTime(250);
+      expect(redrawScreen).not.toHaveBeenCalled();
+
+      // Mining ends → the next poll repaints banner + menu with fresh rows.
+      mining = false;
+      input.emit("data", DOWN); // move to Exit first: selection must survive
+      vi.advanceTimersByTime(150);
+      expect(redrawScreen).toHaveBeenCalledTimes(1);
+      const text = stripAnsi(written.join(""));
+      expect(text).toContain("Activity (mining)");
+      expect(text.split("Activity\n").length).toBeGreaterThan(1);
+
+      // Selection survived the repaint; the timer dies with the menu.
+      input.emit("data", "\r");
+      await expect(result).resolves.toBe("exit");
+      vi.advanceTimersByTime(500);
+      expect(redrawScreen).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

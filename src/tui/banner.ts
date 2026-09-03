@@ -1,15 +1,10 @@
 /**
- * TUI welcome screen: the logomark sitting beside a compact header — the dosu
- * wordmark chip with dim version/host metadata — and a checklist of what this
- * machine already has configured (workspace, account, mcp, library, agents).
- *
- * Pure string rendering: everything is injectable so tests can assert the
- * layout without a TTY.
+ * TUI welcome banner: the logomark beside a checklist of what this machine
+ * has configured, with a dosu-cli badge footer. Pure string rendering.
  */
 
 import pc from "picocolors";
 import { brand, brandBadge, hasTruecolor } from "../setup/styles";
-import { centerBlock } from "./layout";
 
 export interface BannerContext {
   /** e.g. "v0.52.0" */
@@ -25,12 +20,14 @@ export interface BannerContext {
   libraryName?: string;
   /** Display names of agents that already have Dosu MCP configured. */
   agents: string[];
+  /** Setup steps still missing ("Library", "MCP"); rendered as warning rows. */
+  setupMissing?: string[];
+  /** Dosu section state in this repo's AGENTS.md; only set inside a git work tree. */
+  repoAgentsMd?: "current" | "outdated" | "missing";
   /** True when a knowledge-sync run is mining right now. */
   mining?: boolean;
   /** A newer published version, when the update check found one. */
   update?: { version: string; hint: string };
-  /** Terminal columns; defaults to the live terminal (or 80). */
-  width?: number;
 }
 
 const CHECK = "\u2714";
@@ -38,10 +35,8 @@ const CIRCLE = "\u25CB";
 const DOT = "\u00B7";
 
 /**
- * Compact block-art rendering of the Dosu logomark — the smiling "d" from
- * `logomark.svg` in the marketing site — in two greens from the app icon:
- * sage for the spine, cover, and smile; darker moss for the bottom page
- * block. Five rows is the floor: any smaller and the smile stops reading.
+ * Block-art Dosu logomark (the smiling "d") in the two app-icon greens.
+ * Five rows is the floor: any smaller and the smile stops reading.
  */
 type LogoTone = "sage" | "moss";
 
@@ -85,11 +80,31 @@ function checklistRows(ctx: BannerContext): string[] {
     "account",
     ctx.signedIn ? `${on} signed in` : `${off} ${pc.dim("not signed in \u00B7 run Setup")}`,
   ]);
-  if (ctx.deploymentName) rows.push(["mcp", `${on} ${ctx.deploymentName}`]);
-  if (ctx.libraryName) rows.push(["library", `${on} ${ctx.libraryName}`]);
+  // A missing setup step outranks a stale display name.
+  const missing = new Set(ctx.setupMissing ?? []);
+  const warnRow = `${off} ${pc.yellow("not configured")} ${pc.dim(`${DOT} run Setup`)}`;
+  if (missing.has("MCP")) rows.push(["mcp", warnRow]);
+  else if (ctx.deploymentName) rows.push(["mcp", `${on} ${ctx.deploymentName}`]);
+  if (missing.has("Library")) rows.push(["library", warnRow]);
+  else if (ctx.libraryName) rows.push(["library", `${on} ${ctx.libraryName}`]);
+  if (ctx.repoAgentsMd) {
+    rows.push([
+      "repo",
+      ctx.repoAgentsMd === "current"
+        ? `${on} AGENTS.md has the Dosu section`
+        : `${off} ${pc.yellow(
+            ctx.repoAgentsMd === "outdated"
+              ? "AGENTS.md Dosu section outdated"
+              : "AGENTS.md missing the Dosu section",
+          )} ${pc.dim(`${DOT} run Setup`)}`,
+    ]);
+  }
   if (ctx.agents.length > 0) rows.push(["agents", `${on} ${ctx.agents.join(` ${DOT} `)}`]);
   if (ctx.mining) {
-    rows.push(["sync", `${brand("\u25CF")} mining now ${pc.dim(`${DOT} see Sync status`)}`]);
+    rows.push([
+      "sync",
+      `\u26CF\uFE0F ${brand("mining sessions...")} ${pc.dim(`${DOT} see Activity`)}`,
+    ]);
   }
   if (ctx.update) {
     rows.push([
@@ -105,18 +120,15 @@ function checklistRows(ctx: BannerContext): string[] {
 const COLUMN_GAP = "   ";
 
 /**
- * Banner lines: the logomark on the left, the header + checklist column on
- * the right, both top-aligned so the header sits beside the top of the logo
- * and every text row shares the same left edge. Side by side keeps the
- * welcome screen about half the height of stacking the logo above the text.
+ * Banner lines: logomark left, checklist right, top-aligned, with the
+ * dosu-cli badge and dim version/host metadata as the footer.
  */
 export function renderBanner(ctx: BannerContext): string {
-  const width = ctx.width ?? process.stdout.columns ?? 80;
   const logo = LOGO_ROWS.map(paintLogoRow);
   const text = [
-    `${brandBadge("dosu")}  ${pc.dim(`cli ${ctx.version} ${DOT} ${ctx.webAppHost}`)}`,
-    "",
     ...checklistRows(ctx),
+    "",
+    `${brandBadge("dosu-cli")} ${pc.dim(`${ctx.version} ${DOT} ${ctx.webAppHost}`)}`,
   ];
 
   const height = Math.max(logo.length, text.length);
@@ -128,5 +140,6 @@ export function renderBanner(ctx: BannerContext): string {
     combined.push(`${logoRow}${logoPad}${COLUMN_GAP}${textRow}`.trimEnd());
   }
 
-  return ["", ...centerBlock(combined, width), ""].join("\n");
+  // Left-anchored: self-centering made the banner drift as checklist rows changed.
+  return ["", ...combined, ""].join("\n");
 }

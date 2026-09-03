@@ -566,7 +566,7 @@ export type CliSlackChannelRow = {
 	topic?: string | null
 }
 
-export declare const CLI_CONTRACT_HASH: 'ac90a31489e1'
+export declare const CLI_CONTRACT_HASH: 'bb1ad28625bd'
 
 export type AgentsCreateInput = {
 	data_source_id: string
@@ -1424,6 +1424,18 @@ export type PageSyncBackInput = {
 
 export type PageSyncBackOutput = Record<string, unknown>
 
+export type PageTopCitedInput = {
+	days?: number
+	knowledge_store_id: string
+	limit?: number
+}
+
+export type PageTopCitedOutput = Array<{
+	citation_count: number
+	page_id: string
+	title: string
+}>
+
 export type PageUpdateInput = {
 	body?: string
 	id: string
@@ -1991,6 +2003,7 @@ export interface CliApiClient {
 		restoreVersion: MutationProcedure<PageRestoreVersionInput, PageRestoreVersionOutput>
 		setArchiveState: MutationProcedure<PageSetArchiveStateInput, PageSetArchiveStateOutput>
 		syncBack: MutationProcedure<PageSyncBackInput, PageSyncBackOutput>
+		topCited: QueryProcedure<PageTopCitedInput, PageTopCitedOutput>
 		update: MutationProcedure<PageUpdateInput, PageUpdateOutput>
 		updatePublicationStatus: MutationProcedure<
 			PageUpdatePublicationStatusInput,

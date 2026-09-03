@@ -12,6 +12,7 @@ import { installSkill, skillInstallTargetForProvider } from "../commands/skill";
 import {
   bindAccountIdentity,
   type Config,
+  isAuthenticated,
   loadConfig,
   MODE_OSS,
   replaceLoginSession,
@@ -27,9 +28,9 @@ import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { spawnDetachedSelf } from "../sync/detach";
 import { runKnowledgeSync } from "../sync/sync";
+import { runActivityView } from "../tui/activity-view";
 import { installCenteredLayout } from "../tui/layout";
 import * as p from "../tui/prompts";
-import { runSyncView } from "../tui/sync-view";
 import { inGitWorkTree, stepUpdateAgentsMd } from "./agents-md-step";
 import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
 import { stepConnectGitHubRepo } from "./github-step";
@@ -390,7 +391,7 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
   s.start("Checking for recent agent sessions...");
   const outcome = await runKnowledgeSync({ bootstrap: true });
   if (outcome.status !== "backlog" || outcome.readySessions === 0) {
-    s.stop("No unmined agent sessions found — Dosu will learn as you work.");
+    s.stop("No unmined agent sessions found. Dosu will learn as you work.");
     return;
   }
   const n = outcome.readySessions;
@@ -398,7 +399,7 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
 
   const mineNow = await p.confirm({
     message: `Mine ${n === 1 ? "it" : "them"} for team knowledge now? (runs in the background)`,
-    active: "Mine now",
+    active: "Mine now \u26CF\uFE0F",
     inactive: "Skip",
     initialValue: true,
   });
@@ -411,15 +412,15 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
 
   if (spawnDetachedSelf(["knowledge", "sync", "--quiet", "--bootstrap"])) {
     p.log.success(
-      "Background sync started — it works through the backlog a few sessions at a time.",
+      "\u26CF\uFE0F Currently mining... Dosu is distilling your past sessions into team knowledge, a few at a time in the background.",
     );
     const watch = await p.confirm({
-      message: "Watch it work?",
-      active: "Sync status",
-      inactive: "Go back",
+      message: "What next?",
+      active: "Watch it work",
+      inactive: "Go to home",
       initialValue: true,
     });
-    if (!p.isCancel(watch) && watch) await runSyncView();
+    if (!p.isCancel(watch) && watch) await runActivityView();
   } else {
     p.log.warn(`Could not start the background sync. Run ${info("dosu knowledge sync")} manually.`);
   }
@@ -434,6 +435,7 @@ function applyDeployment(cfg: Config, d: Deployment): void {
     deployment_id: d.deployment_id,
     deployment_name: d.name,
     org_id: d.org_id,
+    org_name: d.org_name,
     space_id: d.space_id,
     // The Library belongs to the deployment's space; a stale name from a
     // previous deployment must never survive a switch.
@@ -891,6 +893,103 @@ async function resolveDeployment(
   return true;
 }
 
+/** What the settings switch re-picks: the whole org chain, or just the Library/MCP within it. */
+export type SwitchScope = "org" | "library";
+
+/**
+ * Settings flow: re-pick the org / Library / MCP for an already-configured
+ * install. Reuses the setup pickers, then refreshes everything derived from
+ * the target — the API key and the Dosu MCP entries of agents that are
+ * already configured (their config files embed the deployment URL and API
+ * key, so a switch must rewrite them or they'd silently keep answering from
+ * the previous Library). Unlike setup it never touches agent selection,
+ * hooks, rules, skills, or mining.
+ *
+ * `scope` "library" keeps the current org and only re-picks the Library/MCP
+ * inside it; "org" runs the full chain starting from the org picker.
+ */
+export async function runSwitchTarget(scope: SwitchScope = "org"): Promise<void> {
+  const cfg = loadConfig();
+  if (cfg.mode === MODE_OSS) {
+    p.log.warn(
+      `OSS mode uses public libraries only. Run ${info("dosu setup --mode cloud")} to connect an organization.`,
+    );
+    return;
+  }
+  if (!isAuthenticated(cfg)) {
+    p.log.warn(`Not signed in. Run ${info("dosu setup")} to authenticate first.`);
+    return;
+  }
+  logger.info("setup", `Switch target flow started (scope: ${scope})`);
+
+  const apiClient = new Client(cfg);
+  const org =
+    scope === "library" ? await currentOrg(apiClient, cfg) : await stepSelectOrg(apiClient);
+  if (!org) return;
+  // An explicit Library switch always shows the Library list, even when only
+  // one qualifies — a silent auto-pick would look like the menu did nothing.
+  const d = await stepSelectDeployment(apiClient, cfg, org, {
+    alwaysAskLibrary: scope === "library",
+  });
+  if (!d) return;
+  applyDeployment(cfg, d);
+  saveConfig(cfg);
+  await stepShowLibrary(cfg);
+
+  // Keys are scoped to the deployment: validate the stored one against the
+  // new target and mint a replacement when it doesn't fit.
+  const apiKey = await stepMintAPIKey(apiClient, cfg);
+  if (!apiKey) return;
+  updateTarget(cfg, { api_key: apiKey });
+  saveConfig(cfg);
+
+  const configured = allSetupProviders().filter((provider) => {
+    try {
+      return provider.isInstalled() && provider.isConfigured();
+    } catch {
+      return false;
+    }
+  });
+  for (const provider of configured) {
+    try {
+      provider.install(cfg, true);
+      logger.info("setup", `Switch: updated ${provider.name()}`);
+      p.log.success(`${provider.name()} ${dim("\u00B7 updated")}`);
+    } catch (err: unknown) {
+      /* v8 ignore next -- err is always Error in practice */
+      const error = err instanceof Error ? err : new Error(String(err));
+      logger.error("setup", `Switch: update failed for ${provider.name()}: ${error.message}`);
+      p.log.error(`Failed to update ${provider.name()}: ${error.message}`);
+    }
+  }
+  if (configured.length > 0) {
+    p.log.info("Restart your AI agents so they pick up the new MCP target.");
+  }
+}
+
+/**
+ * The org the active target lives in, resolved by the stored org_id so a
+ * Library-only switch never re-asks which org. Falls back to the org picker
+ * when nothing is stored or the stored org is no longer accessible (e.g.
+ * the user was removed from it).
+ */
+async function currentOrg(apiClient: Client, cfg: Config): Promise<Org | null> {
+  const orgID = cfg.active_account?.target?.org_id;
+  if (orgID) {
+    try {
+      const org = (await apiClient.getOrgs()).find((o) => o.org_id === orgID);
+      if (org) {
+        p.log.success(`Organization ${dim(`\u00B7 ${org.name}`)}`);
+        return org;
+      }
+      logger.warn("setup", `Stored org ${orgID} not in the account's org list; asking`);
+    } catch {
+      // The picker path below surfaces list failures with proper messaging.
+    }
+  }
+  return stepSelectOrg(apiClient);
+}
+
 async function fetchDeployments(apiClient: Client): Promise<Deployment[]> {
   try {
     return await apiClient.getDeployments();
@@ -961,15 +1060,17 @@ const LIBRARY_SELECT_CANCELLED = Symbol("library-select-cancelled");
  * When the org's deployments span more than one Library, ask which Library
  * the MCP should answer from — listed by name, the same names the web
  * Library switcher shows — and return it so the deployment choice can be
- * narrowed to that Library's space. Libraries with no deployment are not
- * offered (selecting one could only dead-end). Fail-open: if the libraries
- * router is unavailable (old backend) or everything lives in one Library,
- * return null and keep the previous behavior.
+ * narrowed to that Library's space. Libraries without an MCP deployment are
+ * offered too, marked "no MCP yet": selecting one hands off to the create
+ * flow in stepSelectDeployment instead of dead-ending. Fail-open: if the
+ * libraries router is unavailable (old backend) or everything lives in one
+ * Library, return null and keep the previous behavior.
  */
 async function stepSelectLibrary(
   cfg: Config,
   org: Org,
   deployments: Deployment[],
+  opts: { alwaysAsk?: boolean } = {},
 ): Promise<CliLibrary | null | typeof LIBRARY_SELECT_CANCELLED> {
   let libraries: CliLibrary[];
   try {
@@ -978,41 +1079,111 @@ async function stepSelectLibrary(
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn("setup", `Library list failed, skipping Library selection: ${msg}`);
+    // An explicit switch must never fall through silently: say why the list
+    // is missing before the flow continues with the MCP picker.
+    if (opts.alwaysAsk) p.log.warn("Could not list Libraries; picking by MCP instead.");
     return null;
   }
 
+  const all = libraries ?? [];
   const spacesWithDeployments = new Set(deployments.map((d) => d.space_id));
-  const candidates = (libraries ?? []).filter((l) => spacesWithDeployments.has(l.id));
-  if (candidates.length <= 1) return null;
+  const candidates = all.filter((l) => spacesWithDeployments.has(l.id));
+  if (all.length === 0) {
+    if (opts.alwaysAsk) p.log.warn("No Libraries found; picking by MCP instead.");
+    return null;
+  }
+  // Setup auto-picks when at most one Library has an MCP, to stay quiet; the
+  // explicit "Switch Library" flow always shows the full list — including
+  // Libraries without an MCP, so the user can create one for them.
+  if (candidates.length <= 1 && !opts.alwaysAsk) return null;
 
   const selected = await p.select({
     message: "Select a Library",
-    options: candidates.map((l) => ({
+    options: all.map((l) => ({
       label: l.name,
       value: l.id,
-      ...(l.description ? { hint: l.description } : {}),
+      hint: spacesWithDeployments.has(l.id)
+        ? l.description || undefined
+        : "no MCP yet \u00B7 select to create one",
     })),
   });
   if (p.isCancel(selected)) return LIBRARY_SELECT_CANCELLED;
-  const library = candidates.find((l) => l.id === selected) ?? null;
+  const library = all.find((l) => l.id === selected) ?? null;
   if (library) logger.info("setup", `Selected library: ${library.name}`);
   return library;
+}
+
+/**
+ * Create an MCP deployment for a Library that has none yet, so selecting it
+ * in the picker doesn't dead-end. Mirrors the web MCP wizard's payload
+ * (`MCPDeploymentWizard.tsx` in the dosu repo): the backend mints the
+ * `mcp_deployment_id` itself for `dosu_mcp` creates, no target required.
+ * Returns null (with the error surfaced) on any failure.
+ */
+async function createMcpForLibrary(
+  cfg: Config,
+  org: Org,
+  library: CliLibrary,
+): Promise<Deployment | null> {
+  const spin = p.spinner();
+  spin.start(`Creating MCP for ${library.name}`);
+  try {
+    const { createTypedClient } = await import("../client/trpc");
+    const created = await createTypedClient(cfg).workspaces.create.mutate({
+      org_id: org.org_id,
+      space_id: library.id,
+      provider_slug: MCP_PROVIDER_SLUG,
+      name: `${library.name} MCP Server`,
+      description: "",
+      enabled: true,
+      config: {},
+      metadata: {
+        app: { deployment_mode: "normal", setup_mode: "manual" },
+        provider_slug: MCP_PROVIDER_SLUG,
+      },
+    });
+    if (!created) {
+      spin.stop("MCP creation failed", 1);
+      p.log.error("The backend did not return the created MCP. Try again.");
+      return null;
+    }
+    spin.stop(`MCP created ${dim(`\u00B7 ${created.name}`)}`);
+    logger.info("setup", `Created MCP deployment ${created.deployment_id} for ${library.name}`);
+    return {
+      deployment_id: created.deployment_id,
+      name: created.name,
+      description: created.description,
+      provider_slug: created.provider_slug,
+      enabled: created.enabled,
+      org_id: created.org_id,
+      org_name: org.name,
+      space_id: created.space_id,
+    };
+  } catch (err: unknown) {
+    spin.stop("MCP creation failed", 1);
+    p.log.error(`Could not create MCP: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
 }
 
 async function stepSelectDeployment(
   apiClient: Client,
   cfg: Config,
   org: Org,
+  opts: { alwaysAskLibrary?: boolean } = {},
 ): Promise<Deployment | null> {
   try {
     const allDeployments = await apiClient.getDeployments();
     const orgDeployments = allDeployments.filter((d) => d.org_id === org.org_id);
 
-    if (orgDeployments.length === 0) {
+    // Zero deployments is fatal only when the Library picker can't offer to
+    // create one (quiet setup path); the explicit Library flow continues so
+    // an MCP-less Library can get its first deployment created below.
+    if (orgDeployments.length === 0 && !opts.alwaysAskLibrary) {
       p.log.error(`No MCPs found for ${org.name}`);
       return null;
     }
-    if (orgDeployments.length === 1) {
+    if (orgDeployments.length === 1 && !opts.alwaysAskLibrary) {
       logger.info("setup", `Selected deployment: ${orgDeployments[0].name} (auto, only one)`);
       p.log.success(`MCP ${dim(`\u00B7 ${orgDeployments[0].name}`)}`);
       return orgDeployments[0];
@@ -1020,11 +1191,27 @@ async function stepSelectDeployment(
 
     // Library-first: when the org's MCPs span several Libraries, ask which
     // Library to answer from and narrow the choice to it.
-    const library = await stepSelectLibrary(cfg, org, orgDeployments);
+    const library = await stepSelectLibrary(cfg, org, orgDeployments, {
+      alwaysAsk: opts.alwaysAskLibrary,
+    });
     if (library === LIBRARY_SELECT_CANCELLED) return null;
     const deployments = library
       ? orgDeployments.filter((d) => d.space_id === library.id)
       : orgDeployments;
+
+    // The picker offers Libraries without an MCP; landing here with an empty
+    // list means the user chose one, so offer to create its deployment now.
+    if (library && deployments.length === 0) {
+      const ok = await p.confirm({
+        message: `${library.name} has no MCP yet. Create one now?`,
+      });
+      if (p.isCancel(ok) || !ok) return null;
+      return await createMcpForLibrary(cfg, org, library);
+    }
+    if (deployments.length === 0) {
+      p.log.error(`No MCPs found for ${org.name}`);
+      return null;
+    }
 
     if (deployments.length === 1) {
       logger.info("setup", `Selected deployment: ${deployments[0].name} (auto, only one)`);

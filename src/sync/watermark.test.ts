@@ -49,9 +49,31 @@ describe("loadSyncState / saveSyncState", () => {
       watermark: "2026-08-25T11:00:00Z",
       last_attempt_at: "2026-08-25T11:05:00Z",
       consecutive_failures: 2,
+      mined_sessions: [{ at: "2026-08-25T11:04:00Z", session: "cursor/abc", project: "dosu" }],
+      total_mined: 12,
+      total_notes: 5,
+      total_learning_tokens: 42_000,
+      last_refusal: {
+        at: "2026-08-25T11:05:00Z",
+        outcome: "credit_limit",
+        message: "Your org has used its Dosu credits for this billing period.",
+      },
     };
     saveSyncState(state, configDir);
     expect(loadSyncState(configDir)).toEqual(state);
+  });
+
+  it("drops a malformed last_refusal", () => {
+    writeFileSync(
+      syncStatePath(configDir),
+      JSON.stringify({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        last_refusal: { outcome: "credit_limit" },
+      }),
+    );
+    expect(loadSyncState(configDir).last_refusal).toBeUndefined();
   });
 
   it("writes owner-only files with no temp residue", () => {
@@ -81,6 +103,38 @@ describe("loadSyncState / saveSyncState", () => {
     const state = loadSyncState(configDir);
     expect(state.watermark).toBeNull();
     expect(state.consecutive_failures).toBe(0);
+    expect(state.mined_sessions).toEqual([]);
+    expect(state.total_mined).toBe(0);
+    // Analytics counters predating this schema addition default to zero.
+    expect(state.total_notes).toBe(0);
+    expect(state.total_learning_tokens).toBe(0);
+  });
+
+  it("drops malformed mined-session records and backfills the count", () => {
+    writeFileSync(
+      syncStatePath(configDir),
+      JSON.stringify({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        mined_sessions: [
+          { at: "2026-08-25T11:04:00Z", session: "cursor/abc" },
+          { at: "2026-08-25T11:05:00Z", session: "cursor/def", project: 42 },
+          { at: 42 },
+          "nope",
+          null,
+        ],
+        total_mined: "many",
+      }),
+    );
+    const state = loadSyncState(configDir);
+    // A non-string project is dropped from the surviving record.
+    expect(state.mined_sessions).toEqual([
+      { at: "2026-08-25T11:04:00Z", session: "cursor/abc" },
+      { at: "2026-08-25T11:05:00Z", session: "cursor/def" },
+    ]);
+    // A bad counter falls back to what the surviving history proves.
+    expect(state.total_mined).toBe(2);
   });
 });
 
@@ -123,14 +177,14 @@ describe("backoffUntil", () => {
 });
 
 describe("gateSessions", () => {
-  it("splits completed vs in-flight sessions on the quiet period", () => {
+  it("splits completed vs open sessions on the quiet period", () => {
     const fresh = session({ updated: new Date(NOW.getTime() - 60 * 1000).toISOString() });
     const settled = session({ updated: new Date(NOW.getTime() - 10 * 60 * 1000).toISOString() });
 
     const result = gateSessions([fresh, settled], null, NOW, DEFAULT_QUIET_PERIOD_MS);
 
     expect(result.ready.map((s) => s.id)).toEqual([settled.id]);
-    expect(result.inFlight).toBe(1);
+    expect(result.open.map((s) => s.id)).toEqual([fresh.id]);
   });
 
   it("excludes sessions at or below the watermark", () => {

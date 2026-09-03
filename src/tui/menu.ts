@@ -1,19 +1,12 @@
 /**
- * Custom interactive menu — the main-screen replacement for clack's select.
- *
- * Renders a centered block: bold prompt, options with a brand-green cursor
- * and aligned dim hints, and a key legend. Arrow keys / j / k move, enter
- * confirms, 1-9 jump-selects, and q / esc / ctrl-c cancel. On confirm the
- * menu erases itself completely — every choice launches a flow that renders
- * its own header, so an echo line would just duplicate it.
- *
- * The rendering and key handling are pure functions so tests can drive the
- * component without a TTY; `menuSelect` wires them to (injectable) streams.
+ * Custom interactive menu (the main-screen replacement for clack's select).
+ * Arrows/j/k move, enter confirms, 1-9 jump-select, q/esc/ctrl-c cancel; on
+ * confirm the menu erases itself. Pure render/reduce plus injectable IO.
  */
 
 import pc from "picocolors";
 import { brand } from "../setup/styles";
-import { centerBlock, contentWidth, visibleWidth } from "./layout";
+import { visibleWidth } from "./layout";
 
 const ESC = String.fromCharCode(27);
 const HIDE_CURSOR = `${ESC}[?25l`;
@@ -68,12 +61,11 @@ export function reduceMenuKey(key: string, selected: number, count: number): Men
   return { type: "none" };
 }
 
-/** Render the full menu block, centered within `width` columns. */
+/** Render the full menu block, anchored to the content column's left edge. */
 export function renderMenuFrame(
   message: string,
   options: readonly MenuOption[],
   selected: number,
-  width: number,
 ): string {
   // Pad by visible width so colored labels (e.g. the mining dot) stay aligned.
   const labelWidth = Math.max(...options.map((option) => visibleWidth(option.label)));
@@ -91,12 +83,36 @@ export function renderMenuFrame(
     "",
     pc.dim("\u2191\u2193 move \u00B7 enter select \u00B7 q quit"),
   ];
-  return centerBlock(lines, width).join("\n");
+  // Left-anchored like every other TUI surface; the injected margin centers
+  // the column as a whole.
+  return lines.join("\n");
 }
 
 export interface MenuIO {
   input?: NodeJS.ReadStream;
   output?: NodeJS.WriteStream;
+  /**
+   * Live refresh: poll `options()` and repaint in place (selection kept) when
+   * they change; `redrawScreen` runs first so the caller can repaint the banner.
+   */
+  refresh?: {
+    /** Poll cadence; defaults to 1s (matches the Activity view's poll). */
+    intervalMs?: number;
+    /** Rebuild the option rows from live state. */
+    options: () => MenuOption[];
+    /** Repaint the screen content above the menu (may clear the screen). */
+    redrawScreen?: () => void;
+  };
+}
+
+function sameOptions(a: readonly MenuOption[], b: readonly MenuOption[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every(
+      (option, i) =>
+        option.value === b[i].value && option.label === b[i].label && option.hint === b[i].hint,
+    )
+  );
 }
 
 /**
@@ -112,7 +128,7 @@ export function menuSelect(
   const output = io.output ?? process.stdout;
   if (!input.isTTY) return Promise.resolve(null);
 
-  const width = contentWidth(output.columns ?? 80);
+  let currentOptions = options;
   let selected = 0;
   let frameLines = 0;
 
@@ -121,7 +137,7 @@ export function menuSelect(
     frameLines = 0;
   };
   const draw = () => {
-    const frame = renderMenuFrame(message, options, selected, width);
+    const frame = renderMenuFrame(message, currentOptions, selected);
     erase();
     output.write(`${frame}\n`);
     frameLines = frame.split("\n").length;
@@ -130,12 +146,26 @@ export function menuSelect(
   output.write(HIDE_CURSOR);
   draw();
 
+  const timer = io.refresh
+    ? setInterval(() => {
+        const next = io.refresh?.options() ?? [];
+        if (next.length === 0 || sameOptions(next, currentOptions)) return;
+        currentOptions = next;
+        if (selected >= next.length) selected = next.length - 1;
+        // Erase the stale frame first; redrawScreen may or may not clear the screen.
+        erase();
+        io.refresh?.redrawScreen?.();
+        draw();
+      }, io.refresh.intervalMs ?? 1000)
+    : undefined;
+
   return new Promise((resolve) => {
     const wasRaw = input.isRaw ?? false;
     input.setRawMode?.(true);
     input.resume();
 
     const finish = (value: string | null) => {
+      if (timer) clearInterval(timer);
       input.off("data", onData);
       input.setRawMode?.(wasRaw);
       input.pause();
@@ -146,12 +176,12 @@ export function menuSelect(
 
     const onData = (chunk: Buffer | string) => {
       for (const key of parseKeys(chunk.toString())) {
-        const action = reduceMenuKey(key, selected, options.length);
+        const action = reduceMenuKey(key, selected, currentOptions.length);
         if (action.type === "move") {
           selected = action.index;
           draw();
         } else if (action.type === "submit") {
-          finish(options[action.index].value);
+          finish(currentOptions[action.index].value);
           return;
         } else if (action.type === "cancel") {
           finish(null);

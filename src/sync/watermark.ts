@@ -23,12 +23,52 @@ export const DEFAULT_QUIET_PERIOD_MS = 5 * 60 * 1000;
 const BACKOFF_BASE_MS = 15 * 60 * 1000;
 const BACKOFF_MAX_MS = 24 * 60 * 60 * 1000;
 
+/** One mined session, as recorded by a completed mining run. */
+export interface MinedSessionRecord {
+  /** When the run recorded this session (ISO). */
+  at: string;
+  /** The session's `harness/id`. */
+  session: string;
+  /** The session's project (workspace basename), when the scanner knew it. */
+  project?: string;
+}
+
+/** How many mined-session history records the state file keeps. */
+export const MINED_HISTORY_LIMIT = 500;
+
+/**
+ * A clean gateway refusal (consent off, credit limit, quota) from the most
+ * recent mining attempt. Persisted so status surfaces (Activity view, --status)
+ * can tell the user why mining is paused — quiet runs print nothing and the
+ * refusal deliberately never triggers backoff, so without this it would be
+ * visible only in the debug log. Cleared by the next successful run.
+ */
+export interface SyncRefusal {
+  at: string;
+  outcome: string;
+  message: string;
+}
+
 export interface SyncState {
   schema_version: number;
   /** ISO timestamp of the newest session already mined; null = never mined. */
   watermark: string | null;
   last_attempt_at?: string;
   consecutive_failures: number;
+  /** Rolling mined-session history, oldest first, capped at MINED_HISTORY_LIMIT. */
+  mined_sessions?: MinedSessionRecord[];
+  /** All-time mined-session count — survives the history cap above. */
+  total_mined?: number;
+  /** All-time knowledge notes written by completed mining runs. */
+  total_notes?: number;
+  /**
+   * All-time estimated tokens of investigation distilled: the chars÷4 token
+   * estimate of every mined session's conversation. The analytics baseline —
+   * future reads of the notes reuse this instead of re-learning it.
+   */
+  total_learning_tokens?: number;
+  /** Why the last mining attempt was refused by the gateway, if it was. */
+  last_refusal?: SyncRefusal;
 }
 
 export function syncStatePath(configDir: string = getConfigDir()): string {
@@ -46,6 +86,29 @@ export function loadSyncState(configDir: string = getConfigDir()): SyncState {
   try {
     const raw = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
     if (raw.schema_version !== STATE_SCHEMA_VERSION) return empty;
+    const minedSessions = Array.isArray(raw.mined_sessions)
+      ? (raw.mined_sessions as unknown[])
+          .filter(
+            (record): record is MinedSessionRecord =>
+              typeof record === "object" &&
+              record !== null &&
+              typeof (record as MinedSessionRecord).at === "string" &&
+              typeof (record as MinedSessionRecord).session === "string",
+          )
+          .map((record) => ({
+            at: record.at,
+            session: record.session,
+            ...(typeof record.project === "string" ? { project: record.project } : {}),
+          }))
+      : [];
+    const rawRefusal = raw.last_refusal as Partial<SyncRefusal> | undefined;
+    const lastRefusal =
+      rawRefusal &&
+      typeof rawRefusal.at === "string" &&
+      typeof rawRefusal.outcome === "string" &&
+      typeof rawRefusal.message === "string"
+        ? { at: rawRefusal.at, outcome: rawRefusal.outcome, message: rawRefusal.message }
+        : undefined;
     return {
       schema_version: STATE_SCHEMA_VERSION,
       watermark: typeof raw.watermark === "string" ? raw.watermark : null,
@@ -54,6 +117,18 @@ export function loadSyncState(configDir: string = getConfigDir()): SyncState {
         typeof raw.consecutive_failures === "number" && raw.consecutive_failures >= 0
           ? raw.consecutive_failures
           : 0,
+      mined_sessions: minedSessions,
+      total_mined:
+        typeof raw.total_mined === "number" && raw.total_mined >= 0
+          ? raw.total_mined
+          : minedSessions.length,
+      total_notes:
+        typeof raw.total_notes === "number" && raw.total_notes >= 0 ? raw.total_notes : 0,
+      total_learning_tokens:
+        typeof raw.total_learning_tokens === "number" && raw.total_learning_tokens >= 0
+          ? raw.total_learning_tokens
+          : 0,
+      ...(lastRefusal ? { last_refusal: lastRefusal } : {}),
     };
   } catch {
     return empty;
@@ -86,8 +161,11 @@ export function backoffUntil(state: SyncState): Date | null {
 export interface GateResult {
   /** Completed sessions newer than the watermark — the mining backlog. */
   ready: AgentSession[];
-  /** Sessions newer than the watermark but still inside the quiet period. */
-  inFlight: number;
+  /**
+   * Sessions newer than the watermark but still inside the quiet period —
+   * live right now, queued once they go quiet.
+   */
+  open: AgentSession[];
 }
 
 /**
@@ -105,15 +183,15 @@ export function gateSessions(
   const completedBefore = now.getTime() - quietPeriodMs;
 
   const ready: AgentSession[] = [];
-  let inFlight = 0;
+  const open: AgentSession[] = [];
   for (const session of sessions) {
     const updated = Date.parse(session.updated);
     if (Number.isNaN(updated) || updated <= watermarkMs) continue;
     if (updated > completedBefore) {
-      inFlight += 1;
+      open.push(session);
     } else {
       ready.push(session);
     }
   }
-  return { ready, inFlight };
+  return { ready, open };
 }

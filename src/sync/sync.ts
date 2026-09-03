@@ -15,13 +15,14 @@
 
 import { logger } from "../debug/logger";
 import type { MinerRunResult } from "../miner/runner";
-import { isWorthMining } from "../sessions/read";
+import { estimateSessionTokens, isWorthMining } from "../sessions/read";
 import { type AgentSession, scanAgentSessions } from "../sessions/scan";
 import { fileLock, type SyncLock } from "./lock";
 import {
   backoffUntil,
   gateSessions,
   loadSyncState,
+  MINED_HISTORY_LIMIT,
   type SyncState,
   saveSyncState,
 } from "./watermark";
@@ -43,7 +44,7 @@ const GATE_WINDOW = 200;
  * Sized against the miner's per-run caps in runner.ts (observed cost is
  * ~4-6 turns and up to ~3 notes per session); raise those together.
  */
-export const MINE_BATCH_LIMIT = 10;
+export const MINE_BATCH_LIMIT = 20;
 
 type SyncStatus =
   | "backlog"
@@ -79,6 +80,8 @@ export interface SyncDeps {
   mine?: (sessions: AgentSession[]) => Promise<MinerRunResult>;
   /** Local worthiness pre-filter; defaults to isWorthMining. */
   worthMining?: (session: AgentSession) => boolean;
+  /** Per-session learning-token estimate; defaults to estimateSessionTokens. */
+  sessionTokens?: (session: AgentSession) => number;
   lock?: SyncLock;
   now?: () => Date;
 }
@@ -150,7 +153,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
   }
 
   let ready: AgentSession[];
-  let inFlight: number;
+  let open: AgentSession[];
   try {
     const listSessions =
       deps.listSessions ??
@@ -162,8 +165,8 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
               limit: GATE_WINDOW,
             }));
     const sessions = await listSessions();
-    ({ ready, inFlight } = gateSessions(sessions, state.watermark, now()));
-    logGateResult(ready, inFlight, state.watermark);
+    ({ ready, open } = gateSessions(sessions, state.watermark, now()));
+    logGateResult(ready, open.length, state.watermark);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.debug("sync", `sync failed: ${message}`);
@@ -181,7 +184,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
 
   const base = {
     readySessions: ready.length,
-    inFlightSessions: inFlight,
+    inFlightSessions: open.length,
     sessions: ready,
   };
 
@@ -247,18 +250,44 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
 
     switch (miner.outcome) {
       case "completed": {
+        // One line per session so the activity feed narrates the run…
+        for (const s of batch) {
+          logger.debug("sync", `mined session ${s.harness}/${s.id}`);
+        }
+        // …and a durable history record per session, so status views can
+        // list everything ever mined (capped) with an all-time counter.
+        const minedAt = now().toISOString();
+        const history = [
+          ...(state.mined_sessions ?? []),
+          ...batch.map((s) => ({
+            at: minedAt,
+            session: `${s.harness}/${s.id}`,
+            ...(s.project ? { project: s.project } : {}),
+          })),
+        ].slice(-MINED_HISTORY_LIMIT);
         // The watermark covers everything examined — mined and trivial
         // alike — so neither is ever revisited.
         const watermark = batchWatermark(examined);
+        // Analytics: what this batch cost to learn originally (chars÷4 over
+        // the mined conversations) — future note reads reuse that learning.
+        const sessionTokens = deps.sessionTokens ?? estimateSessionTokens;
+        let batchTokens = 0;
+        for (const s of batch) batchTokens += sessionTokens(s);
         saveState({
           ...state,
           watermark,
-          last_attempt_at: now().toISOString(),
+          last_attempt_at: minedAt,
           consecutive_failures: 0,
+          mined_sessions: history,
+          total_mined: (state.total_mined ?? 0) + batch.length,
+          total_notes: (state.total_notes ?? 0) + miner.notesWritten,
+          total_learning_tokens: (state.total_learning_tokens ?? 0) + batchTokens,
+          // A successful run supersedes any earlier gateway refusal.
+          last_refusal: undefined,
         });
         logger.debug(
           "sync",
-          `mined ${batch.length} sessions, ${miner.notesWritten} notes; watermark → ${watermark}`,
+          `mined ${batch.length} sessions, ${miner.notesWritten} suggested pages; watermark → ${watermark}`,
         );
         return {
           status: "mined",
@@ -273,10 +302,18 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       case "quota_exceeded": {
         // Clean, expected refusals — not failures, so no backoff. The
         // watermark stays put and the backlog is retried once unblocked.
+        // Persist the reason: quiet runs print nothing, so this is how the
+        // Activity view and --status can explain why mining is paused.
+        const at = now().toISOString();
         saveState({
           ...state,
-          last_attempt_at: now().toISOString(),
+          last_attempt_at: at,
           consecutive_failures: 0,
+          last_refusal: {
+            at,
+            outcome: miner.outcome,
+            message: miner.message ?? "Mining unavailable right now.",
+          },
         });
         logger.debug("sync", `mining skipped by gateway: ${miner.outcome}`);
         return { status: "skipped-gateway", ...base, minedSessions: 0, miner };

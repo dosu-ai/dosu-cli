@@ -1,19 +1,7 @@
 /**
- * Dosu's own prompt kit — a drop-in replacement for the @clack/prompts
- * surface the setup wizard uses, rendered in the CLI's design language:
- *
- *   The whole flow is framed: the intro title sits on a thin rule and the
- *   outro closes with one, so the centered column reads as a deliberate
- *   panel instead of floating text.
- *
- *   Completed steps collapse into a tight ledger of "✔ Step · detail"
- *   lines. The *active* question is the only thing with weight on screen:
- *   every line of its frame carries a brand-green ▌ bar, which vanishes
- *   the moment the step commits.
- *
- * All components take an injectable `io` so tests can drive them without a
- * TTY; interactive prompts resolve to the cancel symbol when stdin isn't
- * interactive.
+ * Dosu's own prompt kit: a drop-in replacement for the @clack/prompts surface
+ * the setup wizard uses. Completed steps collapse into a "✔ Step · detail"
+ * ledger; the active question carries a brand-green ▌ bar. Injectable IO.
  */
 
 import pc from "picocolors";
