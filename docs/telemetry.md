@@ -8,7 +8,8 @@ does, what it must never do, and the operational work required before a producti
 Dosu sends two kinds of telemetry:
 
 1. **Usage analytics** measure whether coarse, named CLI workflows succeed. Signed-in commands use
-   the same stable Dosu user ID as the web app; signed-out commands use a random installation ID.
+   the same stable Dosu user ID as the web app and, when available, associate the event with the
+   selected organization UUID; signed-out commands use a random installation ID.
 2. **Error diagnostics** send a minimal error fingerprint, Dosu-owned stack frames, and, when the
    local session has a verified identity, only the user's ID and email.
 
@@ -95,15 +96,19 @@ The `properties` allowlist is:
 | `is_ci` | Boolean. |
 | `is_tty` | Boolean for stdout. |
 | `mode` | `cloud` or `oss`. |
+| `org_id` | Optional validated organization UUID from the authenticated account's selected target. |
+| `$groups` | Optional `{ "organization": "<org UUID>" }` PostHog group association, present only with a validated signed-in user and organization UUID. |
 | `is_authenticated` | Boolean only; it does not duplicate the top-level identity. |
 | `exit_code` | Integer clamped to `0..255`. |
 | `error_code` | Optional validated, stable, low-cardinality code; never a message. |
 
 Signed-in command events join the existing PostHog person identified by the web app with the same
-Dosu user UUID. The CLI does not send email to PostHog on this path and does not alias prior
-installation history, avoiding cross-account linkage on shared machines. Signed-out `distinct_id`
-is pseudonymous rather than anonymous: it links command events from one installation until the
-user rotates it.
+Dosu user UUID. When the current authenticated config has a selected organization UUID, the event
+also carries `org_id` for property-based queries and `$groups.organization` so PostHog organization
+funnels can aggregate it. The CLI does not send email to PostHog on this path and does not alias
+prior installation history, avoiding cross-account linkage on shared machines. Signed-out
+`distinct_id` is pseudonymous rather than anonymous: it links command events from one installation
+until the user rotates it.
 
 ### Error diagnostics: Sentry
 
@@ -162,6 +167,9 @@ development origins.
 When authentication completes, the server aliases that run ID to the signed-in user ID, identifies
 the PostHog person with user ID and email, and captures subsequent events under the user ID.
 Authenticated events may also include `org_id`, `deployment_id`, and `space_id`.
+When `org_id` is a UUID, they also include `$groups.organization` with the same value so PostHog
+organization funnels can aggregate those events. Pre-auth events and authenticated events without
+a selected organization do not include a group association.
 
 Current common setup properties are `cli_version`, `install_channel`, `platform`, `arch`, and `mode`.
 Current callers also use only these workflow properties: `onboarding_run_id`,
@@ -192,7 +200,8 @@ The payloads constructed by the CLI never include:
 - arbitrary environment-variable names or values (the explicitly configured public PostHog token
   and Sentry DSN are transport metadata, not event properties);
 - configuration contents other than the validated session user ID/email and setup identifiers
-  listed above, cookies, vendor management keys, or command/API request and response bodies.
+  listed above, including the selected organization UUID used for group association, cookies,
+  vendor management keys, or command/API request and response bodies.
   Telemetry event fields never contain Dosu credentials; authenticated setup requests necessarily
   carry the existing Dosu session token as a transport header to the Dosu API, where it is used for
   authorization and is not forwarded to PostHog or Sentry;

@@ -42,7 +42,11 @@ interface CliOnboardingProperties {
   logs_handoff?: "accepted" | "declined" | "cancelled";
 }
 
-type SafePropertyValue = string | number | boolean | string[] | undefined;
+interface OrganizationGroups {
+  organization: string;
+}
+
+type SafePropertyValue = string | number | boolean | string[] | OrganizationGroups | undefined;
 type SafeProperties = Record<string, SafePropertyValue>;
 
 const SETUP_FAILURE_REASONS = new Set([
@@ -157,13 +161,14 @@ function analyticsReleaseEnabled(): boolean {
 }
 
 function baseProperties(cfg: Config): SafeProperties {
+  const orgId = cfg.active_account?.target?.org_id;
   return {
     cli_version: safeIdentifier(VERSION, 32),
     install_channel: safeIdentifier(INSTALL_CHANNEL, 32),
     platform: safeIdentifier(process.platform, 24),
     arch: safeIdentifier(process.arch, 24),
     mode: cfg.mode ?? "cloud",
-    org_id: safeIdentifier(cfg.active_account?.target?.org_id, 128),
+    ...(orgId && isUUID(orgId) ? { org_id: orgId, $groups: { organization: orgId } } : {}),
     deployment_id: safeIdentifier(cfg.active_account?.target?.deployment_id, 128),
     space_id: safeIdentifier(cfg.active_account?.target?.space_id, 128),
   };

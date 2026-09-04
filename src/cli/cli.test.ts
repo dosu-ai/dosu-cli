@@ -177,6 +177,7 @@ describe("CLI", () => {
     const originalConfigRoot = process.env.XDG_CONFIG_HOME;
     process.env.XDG_CONFIG_HOME = configRoot;
     const userID = "22222222-2222-4222-8222-222222222222";
+    const orgID = "33333333-3333-4333-8333-333333333333";
     const payload = Buffer.from(
       JSON.stringify({ sub: userID, email: "user@example.com", private: "must-not-leak" }),
     ).toString("base64url");
@@ -193,6 +194,7 @@ describe("CLI", () => {
         active_account: {
           user_id: userID,
           session: { access_token: accessToken, refresh_token: "refresh-secret", expires_at: 0 },
+          target: { org_id: orgID },
         },
       });
 
@@ -202,6 +204,7 @@ describe("CLI", () => {
         mode: "cloud",
         isAuthenticated: true,
         user: { id: userID, email: "user@example.com" },
+        orgId: orgID,
       });
       const calls = JSON.stringify(vi.mocked(telemetry.start).mock.calls);
       expect(calls).not.toContain(accessToken);
