@@ -87,6 +87,11 @@ vi.mock("../sessions/scan", () => ({
   scanAgentSessions: vi.fn(() => []),
 }));
 
+// Hook detection reads the real agents' hook config files.
+vi.mock("../hooks/agents", () => ({
+  getHookAgent: vi.fn(),
+}));
+
 // ---------------------------------------------------------------------------
 // Imports — config is REAL, not mocked
 // ---------------------------------------------------------------------------
@@ -96,6 +101,8 @@ import { startOAuthFlow } from "../auth/flow";
 import type { Config } from "../config/config";
 import { emptyConfig, getConfigDir, loadConfig, saveConfig, updateTarget } from "../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
+import type { HookAgent } from "../hooks/agents";
+import { getHookAgent } from "../hooks/agents";
 import type { SetupProvider } from "../mcp/providers";
 import { allSetupProviders } from "../mcp/providers";
 import type { AgentSession } from "../sessions/scan";
@@ -126,6 +133,12 @@ const mockRunPagesView = vi.mocked(runPagesView);
 const mockAllSetupProviders = vi.mocked(allSetupProviders);
 const mockScanSessions = vi.mocked(scanAgentSessions);
 const mockMultiselect = vi.mocked(p.multiselect);
+const mockGetHookAgent = vi.mocked(getHookAgent);
+
+/** Hook agent stub: only the detection surface the TUI reads. */
+function fakeHookAgent(enabled: boolean): HookAgent {
+  return { isEnabled: () => enabled } as HookAgent;
+}
 
 function fakeSession(id: string, project?: string): AgentSession {
   return {
@@ -167,6 +180,7 @@ beforeEach(() => {
   // Default machine state: one agent installed with Dosu already configured,
   // so "target complete" configs count as fully set up.
   mockAllSetupProviders.mockImplementation(() => [fakeProvider(true, true)]);
+  mockGetHookAgent.mockImplementation(() => fakeHookAgent(true));
   mockScanSessions.mockImplementation(() => []);
   // Restore spinner factory cleared by resetAllMocks
   vi.mocked(p.spinner).mockReturnValue({
@@ -496,6 +510,39 @@ describe("runTUI", () => {
     // The banner flags the agents row instead of listing configured agents.
     expect(stdoutWrites.join("")).toContain("agents");
     expect(stdoutWrites.join("")).toContain("not configured");
+  });
+
+  it("stays in setup mode when a configured agent's hook is missing", async () => {
+    // Target complete and the MCP entry installed, but the session-end hook
+    // is gone (write failed or was removed by hand).
+    writeRealConfig(
+      makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
+    );
+    mockGetHookAgent.mockImplementation(() => fakeHookAgent(false));
+    mockMenuSelect.mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    expect(mockRunSetup).toHaveBeenCalledOnce();
+    const options = mockMenuSelect.mock.calls[0]?.[1] ?? [];
+    expect(options.map((o) => o.value)).toEqual(["setup", "exit"]);
+    expect(stripAnsi(options[0]?.hint ?? "")).toBe("incomplete \u00B7 missing hooks");
+    expect(stdoutWrites.join("")).toContain("hooks");
+  });
+
+  it("ignores hooks for agents that are not hook-capable", async () => {
+    writeRealConfig(
+      makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
+    );
+    // e.g. Zed: has an MCP entry but no hook support at all.
+    mockGetHookAgent.mockImplementation(() => undefined);
+    mockMenuSelect.mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    expect(mockRunSetup).not.toHaveBeenCalled();
+    const options = mockMenuSelect.mock.calls[0]?.[1] ?? [];
+    expect(options.map((o) => o.value)).not.toContain("setup");
   });
 
   it("does not require agents on a machine with none installed", async () => {

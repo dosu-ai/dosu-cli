@@ -15,6 +15,7 @@ import {
   saveConfig,
 } from "../config/config";
 import { getWebAppURL } from "../config/constants";
+import { getHookAgent } from "../hooks/agents";
 import { allSetupProviders } from "../mcp/providers";
 import { scanAgentSessions } from "../sessions/scan";
 import { dosuAgentsSectionState, inGitWorkTree } from "../setup/agents-md-step";
@@ -109,6 +110,19 @@ function agentSetupIncomplete(): boolean {
   });
 }
 
+/** A configured, hook-capable agent whose session-end hook is missing. */
+function hooksIncomplete(): boolean {
+  return allSetupProviders().some((provider) => {
+    try {
+      if (!provider.isInstalled() || !provider.isConfigured()) return false;
+      const hook = getHookAgent(provider.id());
+      return hook ? !hook.isEnabled() : false;
+    } catch {
+      return false;
+    }
+  });
+}
+
 /**
  * Setup steps a completed wizard always persists, by user-facing name;
  * missing ones keep the TUI in setup mode and flag the banner.
@@ -119,6 +133,7 @@ export function missingSetupSteps(cfg: Config): string[] {
   if (!target?.space_id) missing.push("Library");
   if (!target?.deployment_id || !target?.api_key) missing.push("MCP");
   if (agentSetupIncomplete()) missing.push("agents");
+  else if (hooksIncomplete()) missing.push("hooks");
   return missing;
 }
 

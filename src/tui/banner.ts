@@ -20,7 +20,7 @@ export interface BannerContext {
   libraryName?: string;
   /** Display names of agents that already have Dosu MCP configured. */
   agents: string[];
-  /** Setup steps still missing ("Library", "MCP", "agents"); rendered as warning rows. */
+  /** Setup steps still missing ("Library", "MCP", "agents", "hooks"); rendered as warning rows. */
   setupMissing?: string[];
   /** Dosu section state in this repo's AGENTS.md; only set inside a git work tree. */
   repoAgentsMd?: "current" | "outdated" | "missing";
@@ -101,6 +101,7 @@ function checklistRows(ctx: BannerContext): string[] {
   }
   if (missing.has("agents")) rows.push(["agents", warnRow]);
   else if (ctx.agents.length > 0) rows.push(["agents", `${on} ${ctx.agents.join(` ${DOT} `)}`]);
+  if (missing.has("hooks")) rows.push(["hooks", warnRow]);
   if (ctx.mining) {
     rows.push([
       "sync",
