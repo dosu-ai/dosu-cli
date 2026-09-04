@@ -56,6 +56,14 @@ describe("logger", () => {
       expect(match).not.toBeNull();
     });
 
+    it("strips ANSI escape codes so the log stays plain text", () => {
+      const ESC = String.fromCharCode(27);
+      logger.info("miner", `[sdk] ${ESC}[31mred error${ESC}[0m and ${ESC}[1;32mbold green${ESC}[m`);
+      const content = readFileSync(logPath(), "utf-8");
+      expect(content).toContain("[sdk] red error and bold green");
+      expect(content).not.toContain(`${ESC}[`);
+    });
+
     it("supports all four log levels", () => {
       logger.debug("m", "d");
       logger.info("m", "i");
@@ -131,9 +139,7 @@ describe("logger", () => {
       const spy = vi.spyOn(console, "error").mockImplementation(() => {});
       logger.init({ debug: false });
       logger.info("test", "invisible");
-      // spy should only be called for the session header, not for log entries
-      // Actually, console.error is only called by writeEntry, not writeSessionHeader
-      // So check that none of the calls contain "invisible"
+      // console.error is only called by writeEntry, so no call should contain "invisible"
       const calls = spy.mock.calls.map((c) => c.join(" "));
       expect(calls.every((c) => !c.includes("invisible"))).toBe(true);
       spy.mockRestore();

@@ -154,9 +154,9 @@ describe("analytics", () => {
     await run();
 
     const output = allOutput();
-    // Should show "0" for zero counts and "—" for undefined percentages
+    // Should show "0" for zero counts and "-" for undefined percentages
     expect(output).toContain("0");
-    expect(output).toContain("—");
+    expect(output).toContain("-");
   });
 });
 

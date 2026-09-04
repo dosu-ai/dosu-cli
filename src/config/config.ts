@@ -1,8 +1,7 @@
-/**
- * Config management — load/save JSON config from XDG config directory.
- */
+/** Config management: load/save JSON config from the XDG config directory. */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { migrateLegacyConfig } from "./config-v1-migration";
 import { getAccessTokenUserID } from "./identity";
@@ -31,14 +30,8 @@ export function getConfigUserID(cfg: Config): string | undefined {
   );
 }
 
-/**
- * Replace credentials obtained from an explicit login flow.
- *
- * Re-authenticating the same verified account preserves its target. Changing
- * accounts replaces the entire aggregate, so the previous account's org,
- * deployment, space, and API key cannot survive the transition. Token refresh
- * deliberately does not use this helper because it preserves the identity.
- */
+/** Replace credentials from an explicit login: same account preserves its target, a different
+ * account replaces the whole aggregate so nothing survives the transition. */
 export function replaceLoginSession(cfg: Config, session: SessionCredentials): void {
   const previousUserID = getConfigUserID(cfg);
   const nextUserID = session.user_id ?? getAccessTokenUserID(session.access_token);
@@ -66,23 +59,17 @@ export function updateTarget(cfg: Config, target: AccountTarget): void {
   cfg.active_account.target = { ...cfg.active_account.target, ...target };
 }
 
-/**
- * The CLI uses separate config directories for dev and production so that
- * testing against a local dev stack never clobbers a user's real credentials.
- *
- * - Production: `~/.config/dosu-cli/` (or `$XDG_CONFIG_HOME/dosu-cli/`)
- * - Dev (`DOSU_DEV=true`): `~/.config/dosu-cli-dev/`
- *
- * Everything that lives under `getConfigDir()` — `config.json`,
- * `update-check.json`, `skill-update-check.json` — is isolated between the two.
- */
+/** Separate config dirs for dev (`DOSU_DEV=true`, dosu-cli-dev) and production (dosu-cli) so
+ * testing against a dev stack never clobbers real credentials. */
 export function getConfigDir(): string {
   const dirName = process.env.DOSU_DEV === "true" ? "dosu-cli-dev" : "dosu-cli";
 
   const xdgConfig = process.env.XDG_CONFIG_HOME;
   if (xdgConfig) return join(xdgConfig, dirName);
 
-  const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+  // homedir() resolves even without HOME in env; a "" fallback would make this a relative path
+  // that strews .config/ dirs into random cwds.
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? homedir();
   return join(home, ".config", dirName);
 }
 
@@ -135,9 +122,7 @@ export function isAuthenticated(cfg: Config): cfg is AuthenticatedConfig {
   return Boolean(cfg.active_account?.session.access_token);
 }
 
-/**
- * Check if the token is expired or about to expire (within 5 minutes).
- */
+/** Check if the token is expired or about to expire (within 5 minutes). */
 export function isTokenExpired(cfg: Config): boolean {
   const expiresAt = cfg.active_account?.session.expires_at ?? 0;
   if (expiresAt === 0) return false;
@@ -203,7 +188,9 @@ function normalizeTarget(value: unknown): AccountTarget | undefined {
     deployment_name: stringValue(value.deployment_name),
     api_key: stringValue(value.api_key),
     org_id: stringValue(value.org_id),
+    org_name: stringValue(value.org_name),
     space_id: stringValue(value.space_id),
+    library_name: stringValue(value.library_name),
   };
   return Object.values(target).some((field) => field !== undefined) ? target : undefined;
 }
@@ -212,12 +199,8 @@ function writeConfig(path: string, config: Config): void {
   const dir = getConfigDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
 
-  // Write-then-rename so concurrent CLI processes never observe a partially
-  // written config and never interleave writes. A clobbered refresh token
-  // would be replayed on the next refresh, and GoTrue's reuse detection can
-  // revoke the whole session for a replayed token. The temp file lives in
-  // the same directory (rename is only atomic within one filesystem) and is
-  // pid-suffixed so sibling processes never share it.
+  // Write-then-rename: a clobbered refresh token can revoke the whole session under GoTrue
+  // reuse detection. Temp file is same-dir (rename atomicity) and pid-suffixed.
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(config, null, 2), { mode: 0o600 });
   renameSync(tmp, path);

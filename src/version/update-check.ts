@@ -1,17 +1,13 @@
-/**
- * Cached version update checker.
- *
- * Uses a cached, bounded check:
- * 1. On startup, reads a cached latest version from disk.
- * 2. If the cached version is newer than the running version, prints a notice to stderr.
- * 3. If the cache is stale (>6 h), waits up to one second and can print on the same run.
- */
+/** Cached version update checker: reads a cached latest version on startup, prints a stderr
+ * notice when newer, and refreshes a stale (>6 h) cache with a bounded one-second wait. */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import pc from "picocolors";
 import { getConfigDir } from "../config/config";
 import { logger } from "../debug/logger";
+import { brand } from "../setup/styles";
+import { centerBlock, visibleWidth } from "../tui/layout";
 import { INSTALL_CHANNEL, isNpxInvocation, VERSION } from "./version";
 
 const CACHE_FILENAME = "update-check.json";
@@ -103,30 +99,50 @@ export function buildUpdateHint(channel: string, npx = false): string {
   return 'Run "dosu upgrade"';
 }
 
+/** Spaces between the frame and the widest content line. */
+const BOX_PADDING = 3;
+
+/** Dim the hint but keep its quoted command bright, so the action pops. */
+function styleHint(hint: string): string {
+  const match = hint.match(/^(.*)("[^"]+")(.*)$/);
+  if (!match) return pc.dim(hint);
+  const [, before, command, after] = match;
+  return [before && pc.dim(before), pc.cyan(command), after && pc.dim(after)]
+    .filter(Boolean)
+    .join("");
+}
+
 export function buildUpdateNotice(
   current: string,
   latest: string,
   channel: string,
   interactive: boolean,
   npx = false,
+  width: number = process.stderr.columns ?? 80,
 ): string {
   const hint = buildUpdateHint(channel, npx);
   if (interactive) {
-    const versionMessage = `Update available: ${current} → ${latest}`;
-    const contentWidth = Math.max(versionMessage.length, hint.length);
-    const innerWidth = contentWidth + 4;
-    const horizontal = "─".repeat(innerWidth);
-    const emptyLine = `│${" ".repeat(innerWidth)}│`;
-
-    const frameLines = [
-      `┌${horizontal}┐`,
-      emptyLine,
-      `│  ${versionMessage}${" ".repeat(contentWidth - versionMessage.length)}  │`,
-      `│  ${hint}${" ".repeat(contentWidth - hint.length)}  │`,
-      emptyLine,
-      `└${horizontal}┘`,
+    const content = [
+      `Update available: ${pc.dim(current)} ${pc.dim("→")} ${pc.bold(brand(latest))}`,
+      styleHint(hint),
     ];
-    return `\n${frameLines.map((line) => pc.yellow(line)).join("\n")}\n`;
+    const innerWidth = Math.max(...content.map(visibleWidth)) + BOX_PADDING * 2;
+
+    // Center each line inside the frame, then the frame in the terminal, so
+    // the notice lines up with the centered TUI welcome screen beneath it.
+    const framed = (line: string): string => {
+      const pad = innerWidth - visibleWidth(line);
+      const left = Math.floor(pad / 2);
+      return `${pc.yellow("│")}${" ".repeat(left)}${line}${" ".repeat(pad - left)}${pc.yellow("│")}`;
+    };
+    const box = [
+      pc.yellow(`╭${"─".repeat(innerWidth)}╮`),
+      framed(""),
+      ...content.map(framed),
+      framed(""),
+      pc.yellow(`╰${"─".repeat(innerWidth)}╯`),
+    ];
+    return `\n${centerBlock(box, width).join("\n")}\n`;
   }
 
   const agentAction = hint[0].toLowerCase() + hint.slice(1);
@@ -136,6 +152,13 @@ export function buildUpdateNotice(
     `Tell the user Dosu CLI is outdated. After they approve, ${agentAction}, ` +
     `then verify with "${verifyCommand}".\n`
   );
+}
+
+/** The update the cache already knows about, if any, for surfaces (the TUI welcome banner)
+ * that render the notice themselves instead of printing the boxed stderr notice. */
+export function getAvailableUpdate(): string | null {
+  const cache = readCache();
+  return cache && isNewerVersion(cache.latestVersion, VERSION) ? cache.latestVersion : null;
 }
 
 function displayNotice(current: string, latest: string): void {
@@ -150,19 +173,15 @@ function displayNotice(current: string, latest: string): void {
   );
 }
 
-/**
- * Check for updates — awaited from the preAction hook.
- *
- * Reads cached version info and displays a notice if outdated.
- * Waits up to one second for a refresh if the cache is stale (>6 h), so short-lived
- * commands cannot exit before a newly discovered update is shown.
- */
-export async function checkForUpdates(): Promise<void> {
+/** Check for updates, awaited from the preAction hook. With `notify: false` the check still
+ * refreshes the cache but prints nothing; the TUI welcome banner shows the update itself. */
+export async function checkForUpdates(options: { notify?: boolean } = {}): Promise<void> {
+  const notify = options.notify ?? true;
   try {
     const cache = readCache();
     const isStale = !cache || Date.now() - cache.lastCheck > CHECK_INTERVAL_MS;
     if (!isStale) {
-      if (isNewerVersion(cache.latestVersion, VERSION)) {
+      if (notify && isNewerVersion(cache.latestVersion, VERSION)) {
         displayNotice(VERSION, cache.latestVersion);
       }
       return;
@@ -179,7 +198,7 @@ export async function checkForUpdates(): Promise<void> {
     if (latest) {
       logger.debug("update-check", `Cached latest version: ${latest}`);
     }
-    if (isNewerVersion(latestKnownVersion, VERSION)) {
+    if (notify && isNewerVersion(latestKnownVersion, VERSION)) {
       displayNotice(VERSION, latestKnownVersion);
     }
   } catch (err) {

@@ -1,25 +1,15 @@
-/**
- * AGENTS.md step — writes a marker-delimited Dosu section into the repo's
- * AGENTS.md during setup so coding agents receive the canonical Dosu
- * knowledge instructions.
- *
- * The section lives between HTML-comment markers so re-running setup updates
- * it in place instead of appending duplicates, and users can freely edit the
- * rest of the file.
- */
+/** AGENTS.md step: upserts a marker-delimited Dosu section so re-running setup updates the
+ * section in place instead of appending duplicates. */
 
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import * as p from "@clack/prompts";
 import { logger } from "../debug/logger";
 import { FALLBACK_DOSU_RULE, fetchDosuRule } from "../rules/installer";
+import * as p from "../tui/prompts";
 import { formatSetupSummary } from "./styles";
 
-/**
- * Bump when the section content changes meaningfully. The version is stamped
- * into the start marker for compatibility across section revisions.
- */
+/** Bump when the section content changes meaningfully; stamped into the start marker. */
 const DOSU_SECTION_VERSION = 2;
 
 export const DOSU_SECTION_START = `<!-- dosu:mcp:start v${DOSU_SECTION_VERSION} -->`;
@@ -40,11 +30,7 @@ interface SectionLocation {
   end: number;
 }
 
-/**
- * True when `cwd` is inside a git work tree. Gates whether setup offers the
- * AGENTS.md step at all — writing an AGENTS.md into an arbitrary directory
- * (home dir, /tmp) would just be litter.
- */
+/** True when `cwd` is inside a git work tree; gates whether setup offers the AGENTS.md step. */
 export function inGitWorkTree(cwd: string = process.cwd()): boolean {
   try {
     // Exits 0 but prints "false" in bare repos and inside .git itself, so
@@ -56,6 +42,25 @@ export function inGitWorkTree(cwd: string = process.cwd()): boolean {
     return stdout.toString().trim() === "true";
   } catch {
     return false;
+  }
+}
+
+/** Repo-level setup state of the Dosu section in this work tree's AGENTS.md. */
+export type DosuSectionState = "current" | "outdated" | "missing";
+
+/** Read-only Dosu-section check for the welcome banner. Never throws; a malformed or unreadable
+ * section reads as "missing". */
+export function dosuAgentsSectionState(cwd: string = process.cwd()): DosuSectionState {
+  try {
+    const path = join(cwd, "AGENTS.md");
+    if (!existsSync(path)) return "missing";
+    const content = readFileSync(path, "utf-8");
+    const startMatch = content.match(SECTION_START_RE);
+    if (!startMatch || !content.includes(DOSU_SECTION_END)) return "missing";
+    // An unversioned marker predates versioning entirely.
+    return Number(startMatch[1] ?? 0) >= DOSU_SECTION_VERSION ? "current" : "outdated";
+  } catch {
+    return "missing";
   }
 }
 
@@ -84,10 +89,7 @@ function findSection(content: string): SectionLocation | null {
   return { start, end };
 }
 
-/**
- * Create AGENTS.md with the Dosu section, or upsert the section into an
- * existing file (replace between markers when present, append otherwise).
- */
+/** Create AGENTS.md with the Dosu section, or upsert the section into an existing file. */
 export function upsertDosuAgentsSection(
   cwd: string = process.cwd(),
   content: string = FALLBACK_DOSU_RULE,
@@ -120,11 +122,8 @@ export function upsertDosuAgentsSection(
   return { path, action: "updated" };
 }
 
-/**
- * Setup-flow wrapper: upsert the section and report via clack. Returns
- * `true` when AGENTS.md ends up carrying the Dosu section (including the
- * already-up-to-date case).
- */
+/** Setup-flow wrapper: upsert the section and report via clack. Returns `true` when AGENTS.md
+ * carries the Dosu section, including the already-up-to-date case. */
 export async function stepUpdateAgentsMd(
   cwd: string = process.cwd(),
   content?: string,

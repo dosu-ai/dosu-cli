@@ -1,7 +1,4 @@
-/**
- * Version information — injected at build time via --define.
- * When running from source (bun run dev), falls back to package.json.
- */
+/** Version injected at build time via --define; from source it falls back to package.json. */
 
 function readPackageVersion(): string {
   try {
@@ -25,9 +22,7 @@ export function isNpxInvocation(
   return channel === "npm" && (env.npm_lifecycle_event === "npx" || env.npm_command === "exec");
 }
 
-/**
- * Returns a formatted version string, e.g. "dosu v0.3.1".
- */
+/** Returns a formatted version string, e.g. "dosu v0.3.1". */
 export function getVersionString(): string {
   return `v${VERSION}`;
 }

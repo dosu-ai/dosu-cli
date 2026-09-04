@@ -1,13 +1,5 @@
-/**
- * Non-blocking skill update checker.
- *
- * Uses a "check now, display next run" pattern:
- * 1. On startup, reads a cached latest skill SHA from disk.
- * 2. If the cached latest SHA differs from the installed SHA, prints a notice to stderr.
- * 3. If the cache is stale (>24 h), fires a background fetch to the GitHub API (not awaited).
- *
- * Mirrors `update-check.ts` but tracks git SHAs instead of semver versions.
- */
+/** Non-blocking skill update checker with a "check now, display next run" pattern. Mirrors
+ * `update-check.ts` but tracks git SHAs instead of semver versions. */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -61,12 +53,8 @@ export function writeSkillCache(cache: SkillUpdateCache): void {
   }
 }
 
-/**
- * Forget which SHA is installed, so the update notice stops firing.
- *
- * An empty `installedSha` is this cache's "unknown" state: `checkForSkillUpdates`
- * stays quiet until the next install or update repopulates it.
- */
+/** Forget which SHA is installed so the update notice stops firing; an empty `installedSha`
+ * means "unknown" and keeps `checkForSkillUpdates` quiet until the next install repopulates it. */
 export function clearInstalledSha(): void {
   const cache = readSkillCache();
   if (cache) writeSkillCache({ ...cache, installedSha: "" });
@@ -102,16 +90,8 @@ function displayNotice(): void {
   console.error(msg);
 }
 
-/**
- * Check for skill updates — called synchronously from the preAction hook.
- *
- * Reads cached SHA info and displays a notice if the latest differs from installed.
- * Fires a background fetch if the cache is stale (>24 h).
- *
- * Graceful degradation: if `installedSha` is empty (e.g., user installed skill before
- * this feature shipped), we only refresh `latestSha` and wait for the next install/update
- * to populate `installedSha`.
- */
+/** Check for skill updates, called synchronously from the preAction hook. When `installedSha`
+ * is empty, only `latestSha` is refreshed and no notice fires until a later install sets it. */
 export function checkForSkillUpdates(): void {
   try {
     const cache = readSkillCache();

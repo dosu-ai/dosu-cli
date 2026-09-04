@@ -1,38 +1,46 @@
-import { Prompt } from "@clack/core";
+/** GitHub repository picker in Dosu's own prompt language (tui/prompts.ts). The controller is
+ * pure (render + handle) so tests can drive it without a TTY. */
+
 import pc from "picocolors";
 import {
-  ACTIVE_SYMBOL,
-  BAR,
-  CANCEL_SYMBOL,
-  CHECKBOX_OFF,
-  CHECKBOX_ON,
-  ELLIPSIS,
-  FOOTER,
-  SUBMIT_SYMBOL,
-  symbol,
-} from "./prompt-symbols";
+  answeredEcho,
+  type FrameAction,
+  type FrameController,
+  type PromptIO,
+  runInteractive,
+} from "../tui/prompts";
+import { brand } from "./styles";
 
-const ACTION_ARROW = symbol("→", ">");
-const SEPARATOR_LINE = "─".repeat(30);
+const ESC = String.fromCharCode(27);
+const KEY_UP = `${ESC}[A`;
+const KEY_DOWN = `${ESC}[B`;
+const KEY_LEFT = `${ESC}[D`;
+const KEY_RIGHT = `${ESC}[C`;
+const CTRL_C = String.fromCharCode(3);
+
+const POINTER = "\u25B8";
+const BOX_ON = "\u25A0";
+const BOX_OFF = "\u25A1";
+const DOT = "\u00B7";
+const ACTION_ARROW = "\u2192";
+const ELLIPSIS = "...";
+const SEPARATOR_LINE = "\u2500".repeat(30);
 
 /** Always-visible key legend rendered on the footer line. */
-export const KEYS_HINT = "Space to select · A to select all · Enter to confirm";
+export const KEYS_HINT = `\u2191\u2193 move ${DOT} space toggle ${DOT} a all ${DOT} enter confirm ${DOT} esc cancel`;
 
 export const ADD_REPOSITORIES_VALUE = "__add_repositories__" as const;
 export const REFRESH_LIST_VALUE = "__refresh_list__" as const;
 
 type ActionValue = typeof ADD_REPOSITORIES_VALUE | typeof REFRESH_LIST_VALUE;
 
-/**
- * Submit guard: an empty repo selection is never a valid submission — Enter
- * without any Space-selected repo re-renders with a hint instead of silently
- * advancing (action options submit as strings and always pass).
- */
+/** Submit guard: an empty repo selection re-renders with a hint instead of submitting; action
+ * options submit as strings and always pass. */
 export function validateRepoSelection(
   value: ActionValue | string[] | undefined,
 ): string | undefined {
   if (Array.isArray(value) && value.length === 0) {
-    return "Select at least one repository — Space to select, Enter to confirm.";
+    return "Select at least one repository (space to select, enter to confirm).";
   }
   return undefined;
 }
@@ -52,7 +60,14 @@ type PromptOption =
       value: string;
       label: string;
       hint?: string;
+      /** Dimmed and skipped by cursor/selection; for repos the backend cannot sync (forks). */
+      disabled?: boolean;
     };
+
+function isFocusable(option: PromptOption): boolean {
+  if (option.kind === "separator") return false;
+  return !(option.kind === "repo" && option.disabled === true);
+}
 
 interface PromptGitHubRepositoriesOptions {
   message: string;
@@ -61,80 +76,131 @@ interface PromptGitHubRepositoriesOptions {
   maxItems?: number;
 }
 
-/* v8 ignore start -- TTY-only wrapper; logic covered via GitHubRepoPrompt tests */
-export async function promptGitHubRepositories({
-  message,
-  options,
-  initialValues = [],
-  maxItems,
-}: PromptGitHubRepositoriesOptions): Promise<symbol | ActionValue | string[]> {
-  const prompt = new GitHubRepoPrompt({
-    message,
-    options,
-    initialValues,
-    maxItems,
-  });
-  return (await prompt.prompt()) as symbol | ActionValue | string[];
+export function promptGitHubRepositories(
+  opts: PromptGitHubRepositoriesOptions,
+  io: PromptIO = {},
+): Promise<symbol | ActionValue | string[]> {
+  return runInteractive(new GitHubRepoPrompt(opts), io);
 }
-/* v8 ignore stop */
 
-export class GitHubRepoPrompt extends Prompt<ActionValue | string[]> {
-  options: PromptOption[];
-  message: string;
-  maxItems?: number;
+export class GitHubRepoPrompt implements FrameController<ActionValue | string[]> {
   cursor = 0;
+  private readonly message: string;
+  private readonly options: PromptOption[];
+  private readonly maxItems?: number;
   private selected: string[];
+  private error?: string;
 
   constructor({ message, options, initialValues = [], maxItems }: PromptGitHubRepositoriesOptions) {
-    super(
-      {
-        validate: validateRepoSelection,
-        render() {
-          return (this as GitHubRepoPrompt).renderPrompt();
-        },
-      },
-      false,
-    );
-
     this.message = message;
     this.options = options;
     this.maxItems = maxItems;
     this.selected = initialValues.filter((value) =>
-      options.some((option) => option.kind === "repo" && option.value === value),
+      options.some(
+        (option) => option.kind === "repo" && !option.disabled && option.value === value,
+      ),
     );
     const initialCursor = this.options.findIndex(
       (option) => option.kind === "repo" && this.selected.includes(option.value),
     );
     this.cursor = initialCursor >= 0 ? initialCursor : this.firstFocusableIndex();
-    this.syncValue();
+  }
 
-    this.on("key", (key) => {
-      if (key === "a") {
-        this.toggleAll();
-        this.syncValue();
+  /** Space-selected repo values, in option order (for tests and the echo line). */
+  selectedValues(): string[] {
+    return this.reposInOptionOrder().map((option) => option.value);
+  }
+
+  render(): string[] {
+    const rows = visibleOptions(this.cursor, this.options, this.maxItems).map((slot) => {
+      if (slot.kind === "ellipsis") return pc.dim(ELLIPSIS);
+
+      const option = this.options[slot.index];
+      if (option.kind === "separator") return pc.dim(SEPARATOR_LINE);
+
+      if (option.kind === "repo" && option.disabled) {
+        const hint = option.hint ? ` (${option.hint})` : "";
+        return pc.dim(`  ${BOX_OFF} ${option.label}${hint}`);
       }
+
+      const active = slot.index === this.cursor;
+      const pointer = active ? brand(POINTER) : " ";
+      const label = active ? pc.bold(brand(option.label)) : pc.dim(option.label);
+      const hint = option.hint ? `   ${pc.dim(`(${option.hint})`)}` : "";
+      const marker =
+        option.kind === "action"
+          ? active
+            ? brand(ACTION_ARROW)
+            : pc.dim(ACTION_ARROW)
+          : this.selected.includes(option.value)
+            ? brand(BOX_ON)
+            : pc.dim(BOX_OFF);
+      return `${pointer} ${marker} ${label}${hint}`;
     });
 
-    this.on("cursor", (key) => {
-      switch (key) {
-        case "left":
-        case "up":
-          this.cursor = this.advanceCursor(-1);
-          break;
-        case "down":
-        case "right":
-          this.cursor = this.advanceCursor(1);
-          break;
-        case "space":
-          this.toggleCurrent();
-          break;
-      }
-      this.syncValue();
-    });
+    return [
+      pc.bold(this.message),
+      "",
+      ...rows,
+      "",
+      this.error ? pc.yellow(this.error) : pc.dim(KEYS_HINT),
+    ];
+  }
+
+  handle(key: string): FrameAction<ActionValue | string[]> {
+    if (key === CTRL_C || key === ESC || key === "q") return { type: "cancel" };
+    if (key === KEY_UP || key === KEY_LEFT || key === "k") return this.move(-1);
+    if (key === KEY_DOWN || key === KEY_RIGHT || key === "j" || key === "\t") return this.move(1);
+    if (key === " ") {
+      this.toggleCurrent();
+      this.error = undefined;
+      return { type: "render" };
+    }
+    if (key === "a") {
+      this.toggleAll();
+      this.error = undefined;
+      return { type: "render" };
+    }
+    if (key === "\r" || key === "\n") return this.submit();
+    return { type: "none" };
+  }
+
+  private submit(): FrameAction<ActionValue | string[]> {
+    const current = this.options[this.cursor];
+    if (current?.kind === "action") {
+      return {
+        type: "done",
+        value: current.value,
+        echo: answeredEcho(this.message, current.label),
+      };
+    }
+
+    const chosen = this.reposInOptionOrder();
+    const invalid = validateRepoSelection(chosen.map((option) => option.value));
+    if (invalid) {
+      this.error = invalid;
+      return { type: "render" };
+    }
+    // Name the picks when they fit on a line; count them otherwise.
+    const answer =
+      chosen.length <= 3
+        ? chosen.map((option) => option.label).join(` ${DOT} `)
+        : `${chosen.length} selected`;
+    return {
+      type: "done",
+      value: chosen.map((option) => option.value),
+      echo: answeredEcho(this.message, answer),
+    };
+  }
+
+  private move(direction: 1 | -1): FrameAction<ActionValue | string[]> {
+    this.cursor = this.advanceCursor(direction);
+    this.error = undefined;
+    return { type: "render" };
   }
 
   private firstFocusableIndex(): number {
-    const idx = this.options.findIndex((option) => option.kind !== "separator");
+    const idx = this.options.findIndex(isFocusable);
     return idx >= 0 ? idx : 0;
   }
 
@@ -144,107 +210,34 @@ export class GitHubRepoPrompt extends Prompt<ActionValue | string[]> {
     let next = this.cursor;
     for (let i = 0; i < total; i++) {
       next = (next + direction + total) % total;
-      if (this.options[next].kind !== "separator") return next;
+      if (isFocusable(this.options[next])) return next;
     }
     return this.cursor;
   }
 
-  private get currentOption(): PromptOption {
-    return this.options[this.cursor] ?? this.options[0];
-  }
-
-  private syncValue(): void {
-    this.value =
-      this.currentOption.kind === "action" ? this.currentOption.value : [...this.selected];
+  private reposInOptionOrder(): Array<Extract<PromptOption, { kind: "repo" }>> {
+    return this.options.filter(
+      (option): option is Extract<PromptOption, { kind: "repo" }> =>
+        option.kind === "repo" && this.selected.includes(option.value),
+    );
   }
 
   private toggleCurrent(): void {
-    const current = this.currentOption;
-    if (current.kind !== "repo") return;
-    const selected = this.selected.includes(current.value);
-    this.selected = selected
+    const current = this.options[this.cursor];
+    if (current?.kind !== "repo" || current.disabled) return;
+    this.selected = this.selected.includes(current.value)
       ? this.selected.filter((value) => value !== current.value)
       : [...this.selected, current.value];
   }
 
   private toggleAll(): void {
     const repoValues = this.options
-      .filter((option): option is Extract<PromptOption, { kind: "repo" }> => option.kind === "repo")
+      .filter(
+        (option): option is Extract<PromptOption, { kind: "repo" }> =>
+          option.kind === "repo" && !option.disabled,
+      )
       .map((option) => option.value);
     this.selected = this.selected.length === repoValues.length ? [] : repoValues;
-  }
-
-  private renderPrompt(): string {
-    const symbolByState =
-      this.state === "submit"
-        ? pc.green(SUBMIT_SYMBOL)
-        : this.state === "cancel"
-          ? pc.red(CANCEL_SYMBOL)
-          : pc.cyan(ACTIVE_SYMBOL);
-    const header = `${pc.gray(BAR)}
-${symbolByState}  ${this.message}
-`;
-
-    if (this.state === "submit") {
-      return `${header}${pc.gray(BAR)}  ${pc.dim(this.submitLabel())}`;
-    }
-
-    if (this.state === "cancel") {
-      return `${header}${pc.gray(BAR)}`;
-    }
-
-    const body = visibleOptions(this.cursor, this.options, this.maxItems).map((option) => {
-      if (option.kind === "ellipsis") {
-        return `${pc.gray(BAR)}  ${pc.dim(ELLIPSIS)}`;
-      }
-
-      const current = this.options[option.index];
-      if (current.kind === "separator") {
-        return `${pc.gray(BAR)}  ${pc.dim(SEPARATOR_LINE)}`;
-      }
-
-      const isActive = option.index === this.cursor;
-      const marker =
-        current.kind === "action"
-          ? isActive
-            ? pc.cyan(ACTION_ARROW)
-            : pc.dim(ACTION_ARROW)
-          : this.selected.includes(current.value)
-            ? isActive
-              ? pc.cyan(CHECKBOX_ON)
-              : CHECKBOX_ON
-            : isActive
-              ? pc.cyan(CHECKBOX_OFF)
-              : CHECKBOX_OFF;
-      const label = isActive ? pc.cyan(current.label) : current.label;
-      const hint = current.hint ? ` ${pc.dim(`(${current.hint})`)}` : "";
-      return `${pc.gray(BAR)}  ${marker} ${label}${hint}`;
-    });
-
-    const footer =
-      this.state === "error"
-        ? `${pc.cyan(FOOTER)}  ${pc.yellow(this.error)}`
-        : `${pc.cyan(FOOTER)}  ${pc.dim(KEYS_HINT)}`;
-    return `${header}${body.join("\n")}
-${footer}`;
-  }
-
-  private submitLabel(): string {
-    if (typeof this.value === "string") {
-      const matched = this.options.find(
-        (option) => option.kind === "action" && option.value === this.value,
-      );
-      if (matched && matched.kind === "action") return matched.label;
-      const fallback = this.options.find((option) => option.kind === "action");
-      return fallback && fallback.kind === "action" ? fallback.label : "Add repositories...";
-    }
-
-    const selectedValues = Array.isArray(this.value) ? this.value : [];
-    if (selectedValues.length === 0) {
-      return "No repositories selected.";
-    }
-
-    return selectedValues.join(", ");
   }
 }
 

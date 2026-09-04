@@ -1,12 +1,33 @@
 import { stripVTControlCharacters } from "node:util";
 import { describe, expect, it } from "vitest";
-import { browserFallbackHint, dim, formatSetupSummary, IconAdd, IconRemove, info } from "./styles";
+import {
+  brand,
+  brandBadge,
+  browserFallbackHint,
+  dim,
+  formatSetupSummary,
+  IconAdd,
+  IconRemove,
+  info,
+} from "./styles";
 
 describe("styles", () => {
   describe("icons", () => {
     it("defines expected unicode icons", () => {
-      expect(IconAdd).toBe("+");
+      expect(IconAdd).toBe("\u2714");
       expect(IconRemove).toBe("-");
+    });
+  });
+
+  describe("brand", () => {
+    // Color support differs between local (non-TTY) and CI runs, so assert on the stripped text.
+    it("keeps the label intact whatever the color support", () => {
+      expect(stripVTControlCharacters(brand("dosu"))).toBe("dosu");
+    });
+
+    it("badge wraps the label: padded chip when colored, brackets when not", () => {
+      const badge = stripVTControlCharacters(brandBadge("dosu"));
+      expect(badge === "[ dosu ]" || badge === " dosu ").toBe(true);
     });
   });
 
@@ -34,8 +55,8 @@ describe("styles", () => {
       );
 
       expect(summary).toContain("Skill ready for 2 agent(s):");
-      expect(summary).toContain("+ Claude Code\n  /tmp/claude/skills/dosu (symlink)");
-      expect(summary).toContain("+ Codex CLI\n  /tmp/agents/skills/dosu");
+      expect(summary).toContain("\u2714 Claude Code\n  /tmp/claude/skills/dosu (symlink)");
+      expect(summary).toContain("\u2714 Codex CLI\n  /tmp/agents/skills/dosu");
     });
 
     it("formats an unlabeled path and supports a custom marker", () => {
@@ -45,7 +66,7 @@ describe("styles", () => {
             { path: "/tmp/project/AGENTS.md", status: "already up to date" },
           ]),
         ),
-      ).toContain("+ /tmp/project/AGENTS.md (already up to date)");
+      ).toContain("\u2714 /tmp/project/AGENTS.md (already up to date)");
       expect(
         stripVTControlCharacters(
           formatSetupSummary("Removed", [{ label: "Codex CLI", path: "/tmp/config" }], IconRemove),

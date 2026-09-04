@@ -1,9 +1,5 @@
-/**
- * `dosu audit` — consume a coding-agent's `.dosu/audit.json`, ensure the repo is
- * connected + indexed in Dosu, then fire server-side doc-generation tasks
- * NON-BLOCKING. The resulting PR is surfaced on a later CLI run via the
- * pending-tasks notifier (see `src/version/pending-tasks-check.ts`).
- */
+/** `dosu audit`: consume a coding-agent's `.dosu/audit.json`, ensure the repo is connected and
+ * indexed, then fire non-blocking doc-generation tasks; the PR surfaces via pending-tasks. */
 
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -122,10 +118,8 @@ async function listDataSources(client: TypedClient, orgId: string): Promise<Data
 
 function findMatch(sources: DataSourceLike[], detected: DetectedRepo): DataSourceLike | undefined {
   const github = sources.filter((ds) => ds.provider_slug === "github");
-  // Prefer an exact "owner/repo" slug match (how the CLI's own connect flow
-  // names data sources), but fall back to the bare repo name — repos connected
-  // via the dashboard or older flows are named just the repo (e.g. "repo", not
-  // "owner/repo").
+  // Prefer an exact "owner/repo" slug match; fall back to the bare repo name because sources
+  // connected via the dashboard or older flows are named with just the repo.
   return (
     github.find((ds) => ds.name === detected.slug) ?? github.find((ds) => ds.name === detected.name)
   );
@@ -135,10 +129,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/**
- * Poll `dataSource.list` until the matched data source for `detected` is
- * indexed. Returns the indexed data source, or `null` on timeout.
- */
+/** Poll `dataSource.list` until the matched data source is indexed; returns null on timeout. */
 async function waitForIndexed(
   client: TypedClient,
   orgId: string,
@@ -167,11 +158,8 @@ async function waitForIndexed(
   return null;
 }
 
-/**
- * Resolve the data_source_id for the detected repo, connecting + indexing it if
- * necessary. Exits the process on any blocking condition. Returns the
- * data_source_id on success.
- */
+/** Resolve the data_source_id for the detected repo, connecting and indexing it if necessary.
+ * Exits the process on any blocking condition. */
 async function ensureSyncedRepo(
   cfg: Config,
   client: TypedClient,
@@ -270,13 +258,8 @@ function loadFindings(findingsPath: string): AuditFindings {
   return parsed as AuditFindings;
 }
 
-/**
- * Post-generation cleanup: the findings file is a one-shot handoff artifact,
- * not something to keep (or commit). Once tasks are fired, remove the default
- * `.dosu/` dir — but never a user-specified `--findings` location outside it —
- * and make sure `.dosu/` is gitignored so future audit runs can't end up in a
- * commit. Both steps are best-effort; failing them never fails the audit.
- */
+/** The findings file is a one-shot handoff artifact: once tasks fire, remove the default
+ * `.dosu/` dir (never a custom --findings location) and gitignore it; both are best-effort. */
 export function cleanupFindings(findingsPath: string, cwd: string = process.cwd()): void {
   const gitignorePath = join(cwd, ".gitignore");
   try {
@@ -337,9 +320,8 @@ export function auditCommand(): Command {
         const cfg = requireConfig();
         const apiKey = requireAPIKey(cfg);
 
-        // Capability discovery — lets agents enumerate valid task ids through
-        // the CLI instead of hitting the backend with a raw API key. Doesn't
-        // need a repo or findings, so it runs before those checks.
+        // Capability discovery lets agents enumerate valid task ids; it needs no repo or
+        // findings, so it runs before those checks.
         if (opts.listTasks) {
           const resp = (await backendGet("/v1/cli/tasks", apiKey)) as CapabilitiesResponse;
           const tasks = resp.tasks ?? [];
@@ -348,7 +330,9 @@ export function auditCommand(): Command {
             return;
           }
           for (const t of tasks) {
-            console.log(`${t.id}  ${pc.dim(`(${t.doc_type})`)}  ${t.label} — ${t.description}`);
+            console.log(
+              `${t.id}  ${pc.dim(`(${t.doc_type})`)}  ${t.label} \u00B7 ${t.description}`,
+            );
           }
           return;
         }
@@ -360,8 +344,7 @@ export function auditCommand(): Command {
           process.exit(1);
         }
 
-        // `--tasks` is the agent-driven path: fire a specific subset without any
-        // interactive prompt. Treat it as non-interactive so the connect/index
+        // `--tasks` is the agent-driven path: treat it as non-interactive so the connect/index
         // steps never block on a clack prompt or open a browser.
         const nonInteractive = Boolean(opts.tasks);
 
@@ -374,9 +357,8 @@ export function auditCommand(): Command {
           nonInteractive,
         );
 
-        // 2. Load findings, then guarantee the PR targets the repo the audit
-        // skill actually ran on (recorded in findings.repo.slug) — never a
-        // different repo than the one audited, unless --data-source-id overrides.
+        // 2. Load findings and guarantee the PR targets the audited repo (findings.repo.slug),
+        // unless --data-source-id overrides.
         const findingsPath = opts.findings ?? join(process.cwd(), ".dosu", "audit.json");
         const findings = loadFindings(findingsPath);
 
@@ -401,7 +383,7 @@ export function auditCommand(): Command {
             printResult({ task_ids: [] }, opts);
             return;
           }
-          p.log.info("Nothing to generate — no audit findings match Dosu's capabilities.");
+          p.log.info("Nothing to generate: no audit findings match Dosu's capabilities.");
           return;
         }
 
@@ -429,7 +411,7 @@ export function auditCommand(): Command {
             options: actionable.map((item) => ({
               value: item.task,
               label: `${item.file} ${pc.dim(`(${item.type})`)}`,
-              hint: `${item.status} — ${item.rationale}`,
+              hint: `${item.status} \u00B7 ${item.rationale}`,
             })),
             initialValues: actionable.filter(isPreselected).map((item) => item.task),
             required: false,
@@ -484,7 +466,7 @@ export function auditCommand(): Command {
           return;
         }
         p.log.success(
-          "Dosu is generating your docs — you'll be notified here when the PR is ready.",
+          "Dosu is generating your docs. You'll be notified here when the PR is ready.",
         );
       },
     );

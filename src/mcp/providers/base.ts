@@ -1,7 +1,5 @@
-/**
- * Base provider class with shared JSON config operations.
- * Most providers follow the same install/remove pattern — only the config path and top-level key differ.
- */
+/** Base provider with shared JSON config operations; most providers only differ in config path
+ * and top-level key. */
 
 import { type Config, MODE_OSS } from "../../config/config";
 import {

@@ -1,12 +1,5 @@
-/**
- * Setup integration for agent rules.
- *
- * MCP configuration remains the source of agent selection. Every successfully
- * configured supported agent receives the same Dosu rule automatically; an
- * agent removed from setup has its rule removed as well.
- */
+/** Agent rules setup: MCP selection drives which agents get the Dosu rule added or removed. */
 
-import * as p from "@clack/prompts";
 import { logger } from "../debug/logger";
 import type { SetupProvider } from "../mcp/providers";
 import {
@@ -17,6 +10,7 @@ import {
   removeRuleForAgent,
   rulePathForAgent,
 } from "../rules/installer";
+import * as p from "../tui/prompts";
 import { formatSetupSummary, IconRemove } from "./styles";
 
 interface SetupSelection {

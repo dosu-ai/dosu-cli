@@ -19,6 +19,7 @@
   "scripts": {
     "dev": "bun run src/index.ts",
     "dev:local": "DOSU_DEV=true bun run src/index.ts",
+    "reset:dev": "bun run scripts/reset-dev.ts",
     "build": "bun --env-file=.env.production run scripts/build-compile.ts",
     "build:dev": "bun --env-file=.env.development run scripts/build-compile.ts",
     "build:npm": "DOSU_INSTALL_CHANNEL=npm bun --env-file=.env.production run scripts/build-npm.ts",
@@ -37,8 +38,8 @@
     "node": ">=22"
   },
   "devDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.246",
     "@biomejs/biome": "^2.5.0",
-    "@clack/core": "1.4.2",
     "@clack/prompts": "^1.6.0",
     "@semantic-release/changelog": "^6.0.3",
     "@semantic-release/exec": "^7.1.0",
@@ -56,6 +57,7 @@
     "superjson": "^2.2.6",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9",
-    "write-file-atomic": "^8.0.0"
+    "write-file-atomic": "^8.0.0",
+    "zod": "^4.5.1"
   }
 }

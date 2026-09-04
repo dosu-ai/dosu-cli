@@ -1,6 +1,4 @@
-/**
- * `dosu skill` — manage the Dosu agent skill.
- */
+/** `dosu skill`: manage the Dosu agent skill. */
 
 import { exec, execSync } from "node:child_process";
 import { homedir } from "node:os";
@@ -12,13 +10,8 @@ import { clearInstalledSha, fetchLatestSha, writeSkillCache } from "../version/s
 
 const SKILL_REPO = "dosu-ai/dosu-skill";
 const SKILL_NAME = "dosu";
-/**
- * Names are interpolated into a shell command as positional arguments, so keep
- * them boring. The leading character must be alphanumeric: `skills list` echoes
- * the SKILL.md front-matter name verbatim without validating its shape, and a
- * name like `--all` would be re-parsed as an option by `skills remove`, which
- * treats it as "delete every installed skill from every source".
- */
+/** Names are interpolated into a shell command; the leading character must be alphanumeric so
+ * a name like `--all` cannot be re-parsed as an option by `skills remove`. */
 const SAFE_SKILL_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 const SUPPORTED_SKILL_AGENTS = [
   "claude-code",
@@ -100,13 +93,8 @@ function execQuiet(command: string): Promise<void> {
   });
 }
 
-/**
- * Install the Dosu skill via `npx skills`. After a successful install we try
- * to fetch the latest commit SHA and cache it so the update checker knows
- * what was installed. Network failure is non-fatal — the skill is still
- * installed, the SHA is just not cached (the update checker will fill it
- * in on the next stale check).
- */
+/** Install the Dosu skill via `npx skills` and cache the installed SHA for the update checker.
+ * SHA fetch failure is non-fatal; the update checker fills it in on the next stale check. */
 export async function installSkill(
   providerIDs?: readonly string[],
   options: { quiet?: boolean } = {},
@@ -118,12 +106,8 @@ export async function installSkill(
   }
 
   try {
-    // `-s "*"` installs every skill the repo exposes, so adding one upstream
-    // does not require a CLI release. The quoting is load-bearing and must be
-    // double quotes: this string is run through a shell, so on POSIX a bare `*`
-    // would glob-expand against cwd, while on Windows the shell is cmd.exe,
-    // which does not treat single quotes as delimiters and would forward a
-    // literal `'*'` that matches no skill name.
+    // `-s "*"` installs every skill in the repo; the double quotes are load-bearing (POSIX
+    // would glob-expand a bare *, and cmd.exe forwards single-quoted '*' literally).
     const command = `npx skills add ${SKILL_REPO} -g ${agentArgs} -s "*" -y`;
     if (options.quiet) await execQuiet(command);
     else execSync(command, { stdio: "inherit" });
@@ -145,15 +129,8 @@ export async function installSkill(
   return { success: true };
 }
 
-/**
- * Names of the globally installed skills that came from {@link SKILL_REPO},
- * as reported by the skills CLI's own inventory.
- *
- * `skills remove` resolves exact names and has no wildcard, so removing our
- * whole set means enumerating it first. An empty array means none of ours are
- * installed; `null` means the inventory could not be read, which is a different
- * situation and gets a different fallback.
- */
+/** Names of globally installed skills from {@link SKILL_REPO}. `skills remove` has no wildcard,
+ * so removal enumerates first; [] means none installed, null means the inventory was unreadable. */
 function installedSkillNames(): string[] | null {
   let entries: { name?: unknown; source?: unknown }[];
   try {
@@ -207,8 +184,7 @@ export function skillCommand(): Command {
         console.log(`No skills from ${SKILL_REPO} are installed.`);
         return;
       }
-      // Names go in positionally: the remove parser silently drops `-s`, and
-      // passing none at all opens an interactive picker. When the inventory is
+      // Names go in positionally (the remove parser silently drops `-s`); if the inventory is
       // unreadable, fall back to the one name we have always shipped.
       const targets = installed ?? [SKILL_NAME];
       console.log(`Removing skills from ${SKILL_REPO}...`);
@@ -229,11 +205,8 @@ export function skillCommand(): Command {
     .description("Update the Dosu skill to the latest version")
     .action(async () => {
       console.log(`Updating skills from ${SKILL_REPO}...`);
-      // Reinstall rather than `npx skills update`: update matches on the
-      // skillPath recorded in the skills lockfile, so it can't follow the
-      // skill across a repo-layout move (it reports "deleted upstream"
-      // instead). `skills add` overwrites by name and refreshes the lock
-      // entry, so it always converges on the latest layout.
+      // Reinstall rather than `npx skills update`: update cannot follow the skill across a
+      // repo-layout move, while `skills add` overwrites by name and always converges.
       const result = await installSkill();
       if (!result.success) {
         console.error(pc.red(`\nFailed to update skill.`));

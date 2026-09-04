@@ -124,7 +124,6 @@ Once authenticated against a deployment, you can drive the Dosu platform without
 | `dosu org` | Show organization information |
 | `dosu deployments` | List / show / switch Dosu MCP deployments |
 | `dosu analytics` | View usage statistics |
-| `dosu insights` | Open a visual report of your Dosu space activity |
 | `dosu skill` | Install / update / remove the Dosu agent skill |
 
 Run `dosu <command> --help` for subcommands and flags.

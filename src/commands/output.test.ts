@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { formatDate, printInfo, printTable, truncate } from "./output";
+import { formatDate, printInfo, printResult, printTable, truncate } from "./output";
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -26,16 +26,16 @@ describe("truncate", () => {
 });
 
 describe("formatDate", () => {
-  it('returns "—" for null', () => {
-    expect(formatDate(null)).toBe("—");
+  it('returns "-" for null', () => {
+    expect(formatDate(null)).toBe("-");
   });
 
-  it('returns "—" for undefined', () => {
-    expect(formatDate(undefined)).toBe("—");
+  it('returns "-" for undefined', () => {
+    expect(formatDate(undefined)).toBe("-");
   });
 
-  it('returns "—" for empty string', () => {
-    expect(formatDate("")).toBe("—");
+  it('returns "-" for empty string', () => {
+    expect(formatDate("")).toBe("-");
   });
 
   it("formats ISO date correctly", () => {
@@ -50,6 +50,29 @@ describe("formatDate", () => {
     const result = formatDate("not-a-date");
     // toLocaleDateString on an invalid date returns "Invalid Date"
     expect(typeof result).toBe("string");
+  });
+});
+
+describe("printResult", () => {
+  it("emits small payloads via console.log", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const data = { status: "ok" };
+
+    printResult(data, { json: true });
+
+    expect(logSpy).toHaveBeenCalledWith(JSON.stringify(data, null, 2));
+  });
+
+  it("emits large payloads via process.stdout.write (Bun console.log truncates at 64KB)", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const data = { blob: "x".repeat(64 * 1024) };
+
+    printResult(data, { json: true });
+
+    expect(logSpy).not.toHaveBeenCalled();
+    expect(writeSpy).toHaveBeenCalledOnce();
+    expect(writeSpy.mock.calls[0][0]).toBe(`${JSON.stringify(data, null, 2)}\n`);
   });
 });
 

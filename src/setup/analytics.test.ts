@@ -257,22 +257,12 @@ describe("setup analytics", () => {
     expect(JSON.stringify(input)).not.toContain("/Users/alice");
   });
 
-  it("allowlists logs-handoff outcomes and drops unknown values", async () => {
+  it("drops non-allowlisted completion properties", async () => {
     await trackCliOnboardingEvent(makeConfig(), RUN_ID, "cli_onboarding_completed", {
-      completed_logs_handoff: true,
-      logs_handoff: "accepted",
-    });
-    expect(mutate.mock.calls[0]?.[0].properties).toMatchObject({
-      completed_logs_handoff: true,
-      logs_handoff: "accepted",
-    });
-
-    mutate.mockClear();
-    await trackCliOnboardingEvent(makeConfig(), RUN_ID, "cli_onboarding_completed", {
-      logs_handoff: "maybe-later",
+      completed_mcp: true,
       prompt: "Please bootstrap my knowledge",
     } as never);
-    expect(mutate.mock.calls[0]?.[0].properties).not.toHaveProperty("logs_handoff");
+    expect(mutate.mock.calls[0]?.[0].properties).toMatchObject({ completed_mcp: true });
     expect(mutate.mock.calls[0]?.[0].properties).not.toHaveProperty("prompt");
   });
 

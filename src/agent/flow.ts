@@ -1,17 +1,5 @@
-/**
- * Agent-mediated setup orchestration.
- *
- * Compared with the interactive wizard in `src/setup/flow.ts`, this:
- *
- * 1. Never prompts the user via `@clack/prompts` — every step is
- *    non-interactive and emits a single NDJSON event to stdout.
- * 2. Never holds a localhost OAuth callback open — auth happens via the
- *    login-ticket flow in `../auth/ticket.ts` so the CLI process exits
- *    in <2s and returns control to the agent's shell tool.
- * 3. Composes building blocks (Client, providers, config) from the same
- *    modules the wizard uses, so the actual install / API key / config
- *    behavior stays consistent.
- */
+/** Agent-mediated setup: fully non-interactive (one NDJSON event per step on stdout), with auth
+ * via the login-ticket flow so the process exits quickly instead of holding an OAuth callback. */
 
 import { exchangeTicket, mintTicket } from "../auth/ticket";
 import { Client, type Deployment } from "../client/client";
@@ -38,21 +26,10 @@ export interface AgentSetupOptions {
 
 const NPX_INVOCATION = "npx @dosu/cli@latest";
 
-/**
- * Run agent-mediated setup end-to-end. Returns the process exit code the
- * caller should use:
- *
- * - `0` — normal success **or** `need_user_action` / `pending` (the
- *   agent shell should not see these as failures; the JSON tells the
- *   agent what to do next).
- * - `1` — recoverable error the agent / user can act on (printed via
- *   `emitError` with `agent_next_steps`).
- * - `2` — CLI usage error (unknown tool, invalid combination of flags).
- */
+/** Run agent-mediated setup end-to-end. Exit code contract: 0 means success or
+ * need_user_action/pending, 1 means recoverable error, 2 means CLI usage error. */
 export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
-  // 0. Resolve the requested tool up front. We do this before any auth so
-  //    the agent gets a usage error immediately instead of after a login
-  //    round-trip.
+  // 0. Resolve the requested tool before auth so usage errors surface without a login round-trip.
   const provider = allSetupProviders().find((p) => p.id() === opts.tool.toLowerCase());
   if (!provider) {
     const available = allSetupProviders()
@@ -65,9 +42,7 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
     });
     return 2;
   }
-  // 1. Auth: redeem a ticket if one was provided, otherwise verify any
-  //    existing session, otherwise mint a fresh ticket and exit so the
-  //    agent can hand the URL to the user.
+  // 1. Auth: redeem the provided ticket, else verify the session, else mint a ticket and exit.
   let cfg = loadConfig();
   if (opts.loginTicket) {
     const redeemed = await redeemTicket(opts.loginTicket, cfg);
@@ -139,9 +114,7 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
     return 1;
   }
 
-  // 6. Install the remote Dosu skill only for the requested agent. Keep the
-  // child process quiet so agent mode preserves its one-JSON-line-per-step
-  // stdout contract.
+  // 6. Install the Dosu skill quietly to preserve the one-JSON-line-per-step stdout contract.
   if (skillAgentIDsForProviders([provider.id()]).length > 0) {
     try {
       const skill = await installSkill([provider.id()], { quiet: true });
@@ -166,9 +139,7 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
     }
   }
 
-  // 7. Add the project-level pointer when setup runs from a git work tree.
-  // Use the low-level writer instead of the clack wrapper so stdout stays
-  // valid NDJSON.
+  // 7. In a git work tree, update AGENTS.md via the low-level writer so stdout stays valid NDJSON.
   if (inGitWorkTree()) {
     try {
       instruction ??= await fetchDosuRule();
@@ -192,7 +163,13 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
 
   emitStep({
     step: "done",
-    agent_next_steps: `Dosu is configured for ${provider.name()}. Tell the user setup is complete and they can ask their agent a Dosu question. Run 'dosu status --json' to verify.`,
+    agent_next_steps:
+      `Dosu is configured for ${provider.name()}. Tell the user setup is complete and they can ` +
+      "ask their agent a Dosu question. Run 'dosu status --json' to verify. Finally, include a " +
+      "brief remark for the user: what information or guidance would have been useful in this " +
+      "setup flow's output or documentation (specifically anything that would have prevented " +
+      "tool failures, erroneous edits, or other wasted turns) so they can pass it on to the " +
+      "Dosu team.",
   });
   return 0;
 }
@@ -213,9 +190,7 @@ async function redeemTicket(
       return { code: 1, cfg };
     }
     if (result.status === "pending") {
-      // The flow stops here — there's nothing to do until the user signs in
-      // and a later invocation can redeem the ticket. We exit cleanly (0)
-      // so the agent treats this as "waiting" rather than "failed".
+      // Exit cleanly (0) so the agent treats pending sign-in as waiting, not as a failure.
       emitStep({
         step: "auth",
         status: "pending",
@@ -245,13 +220,8 @@ async function redeemTicket(
   }
 }
 
-/**
- * Either:
- *  - confirm the existing session works (returns `{code:0, exit:false}` and
- *    the agent flow continues), or
- *  - mint a fresh ticket, emit `need_user_action`, and signal that the
- *    process should exit cleanly (`{code:0, exit:true}`).
- */
+/** Confirm the existing session works, or mint a fresh ticket, emit need_user_action, and
+ * signal a clean exit (`{code:0, exit:true}`). */
 async function verifyOrMint(
   cfg: Config,
   opts: AgentSetupOptions,
@@ -358,11 +328,8 @@ async function resolveDeployment(
     return { code: 0, cfg };
   }
 
-  // No explicit --deployment and nothing locked in — try to find a unique
-  // MCP-backed deployment to auto-pick. An account can have many non-MCP
-  // deployments (in-app chat, knowledge stores, GitHub/Slack integrations)
-  // which are not valid targets for agent setup, so we filter to
-  // `dosu_mcp` slug before counting.
+  // Auto-pick a unique MCP-backed deployment; non-MCP deployments are not valid setup targets,
+  // so filter to the `dosu_mcp` slug before counting.
   try {
     const allDeployments = await client.getDeployments();
     if (allDeployments.length === 0) {
@@ -371,7 +338,7 @@ async function resolveDeployment(
         reason: "no_deployments",
         agent_next_steps:
           "No Dosu deployments are accessible to this account. The CLI may be signed in to a " +
-          "different account than the user expects — have them run 'dosu logout' and retry, or " +
+          "different account than the user expects: have them run 'dosu logout' and retry, or " +
           "create a deployment at https://app.dosu.dev before retrying.",
       });
       return { code: 1, cfg };
@@ -385,7 +352,7 @@ async function resolveDeployment(
         reason: "no_mcp_deployment",
         agent_next_steps:
           "Account has deployments but none of them back an MCP server. The CLI may be signed in " +
-          "to a different account than the user expects — have them run 'dosu logout' and retry, " +
+          "to a different account than the user expects: have them run 'dosu logout' and retry, " +
           "create an MCP deployment at https://app.dosu.dev, or pass --deployment <id> to target " +
           "a specific deployment.",
       });
@@ -410,9 +377,7 @@ async function resolveDeployment(
       return { code: 0, cfg };
     }
 
-    // Multiple MCP-backed deployments — agent must ask the user. We attach
-    // the filtered candidates inline so the driving agent doesn't need to
-    // call `dosu deployments list --json` and re-filter on its own.
+    // Multiple MCP deployments: attach candidates inline so the agent need not re-list and filter.
     const candidates = mcpDeployments.map((d) => ({
       deployment_id: d.deployment_id,
       name: d.name,
@@ -439,7 +404,7 @@ async function resolveDeployment(
 }
 
 function formatCandidates(deployments: Deployment[]): string {
-  return deployments.map((d) => `  - ${d.name} (${d.org_name}) — ${d.deployment_id}`).join("\n");
+  return deployments.map((d) => `  - ${d.name} (${d.org_name}): ${d.deployment_id}`).join("\n");
 }
 
 async function ensureAPIKey(client: Client, cfg: Config): Promise<{ code: number; cfg: Config }> {
@@ -480,10 +445,7 @@ async function ensureAPIKey(client: Client, cfg: Config): Promise<{ code: number
   }
 }
 
-/**
- * Build the exact command the agent should run after the user signs in.
- * Mirrors the marketing one-liner so the agent can copy/paste it back.
- */
+/** Build the exact command the agent should re-run after the user signs in. */
 export function buildResumeCommand(tool: string, ticket: string, deploymentID?: string): string {
   const parts = [NPX_INVOCATION, "setup", "--agent", "--tool", tool, "--login-ticket", ticket];
   if (deploymentID) {

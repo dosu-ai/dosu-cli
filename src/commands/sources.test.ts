@@ -109,13 +109,13 @@ describe("sources list", () => {
     expect(output).toContain("github");
   });
 
-  it("shows '—' when provider_slug is missing", async () => {
+  it("shows '-' when provider_slug is missing", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce([{ id: "ds1", name: "Unknown Source" }]);
     await run("list");
     const output = allOutput();
     expect(output).toContain("Unknown Source");
-    expect(output).toContain("—");
+    expect(output).toContain("-");
   });
 });
 

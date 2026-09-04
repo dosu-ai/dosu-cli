@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -123,13 +123,61 @@ describe("CLI", () => {
     expect(debugOpt).toBeDefined();
   });
 
-  it("has logs command with --tail and --clear options", () => {
+  it("has logs command with --tail, --follow, and --clear options", () => {
     const program = createProgram();
     const cmd = program.commands.find((c) => c.name() === "logs");
     expect(cmd).toBeDefined();
     expect(cmd?.description()).toContain("debug logs");
     expect(cmd?.options.find((o) => o.long === "--tail")).toBeDefined();
+    expect(cmd?.options.find((o) => o.long === "--follow")).toBeDefined();
     expect(cmd?.options.find((o) => o.long === "--clear")).toBeDefined();
+  });
+
+  it("logs --follow prints history then streams appended lines", async () => {
+    vi.useFakeTimers();
+    const dir = mkdtempSync(join(tmpdir(), "dosu-cli-follow-"));
+    const logPath = join(dir, "debug.log");
+    writeFileSync(logPath, "alpha\nbeta\n");
+    const { logger } = await import("../debug/logger");
+    const getLogPath = vi.mocked(logger.getLogPath);
+    getLogPath.mockReturnValue(logPath);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      await createProgram().parseAsync(["node", "dosu", "logs", "--follow", "-t", "1"]);
+      expect(logSpy.mock.calls.join("\n")).toContain("beta");
+
+      appendFileSync(logPath, "gamma\n");
+      vi.advanceTimersByTime(600);
+      expect(writeSpy.mock.calls.flat().join("")).toContain("gamma\n");
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+      logSpy.mockRestore();
+      writeSpy.mockRestore();
+      getLogPath.mockReturnValue("/tmp/test-debug.log");
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("logs --follow without a log file waits for output", async () => {
+    vi.useFakeTimers();
+    const dir = mkdtempSync(join(tmpdir(), "dosu-cli-follow-empty-"));
+    const logPath = join(dir, "debug.log");
+    const { logger } = await import("../debug/logger");
+    const getLogPath = vi.mocked(logger.getLogPath);
+    getLogPath.mockReturnValue(logPath);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await createProgram().parseAsync(["node", "dosu", "logs", "--follow"]);
+      expect(logSpy.mock.calls.join("\n")).toContain("waiting for output");
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+      logSpy.mockRestore();
+      getLogPath.mockReturnValue("/tmp/test-debug.log");
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("has telemetry privacy controls", () => {

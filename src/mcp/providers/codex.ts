@@ -1,8 +1,5 @@
-/**
- * Codex provider — CLI and desktop app share ~/.codex/config.toml (TOML format).
- * Simplified: we write JSON-style to a TOML-like structure using manual serialization.
- * For full parity, we'd need a TOML library. For now, use JSON config as Codex also supports it.
- */
+/** Codex provider: CLI and desktop share ~/.codex/config.toml, written via minimal manual TOML
+ * serialization instead of a TOML library. */
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -20,10 +17,7 @@ function getConfigPath(global: boolean): string {
   return join(process.cwd(), ".codex", "config.toml");
 }
 
-/**
- * Minimal TOML read/write for the Codex mcp_servers section.
- * We parse just enough to add/remove the [mcp_servers.dosu] entry.
- */
+/** Minimal TOML read/write, just enough to add/remove the [mcp_servers.dosu] entry. */
 function readTOML(path: string): string {
   if (!existsSync(path)) return "";
   return readFileSync(path, "utf-8");
@@ -48,16 +42,8 @@ function installDosuToTOML(path: string, cfg: Config): void {
   // Remove existing [mcp_servers.dosu] section if present (including the
   // legacy [mcp_servers.dosu.http_headers] subtable from the remote-HTTP form)
   content = removeDosuFromTOML(content);
-  // Codex desktop only renders MCP Apps (the Session Knowledge card) for
-  // locally spawned stdio servers — a remote-HTTP entry serves tools fine
-  // but never shows the card — so proxy the endpoint through `npx
-  // mcp-remote`. Revert to the remote-HTTP form (type = "http" + url +
-  // http_headers) once Codex desktop renders MCP Apps from remote servers
-  // (no upstream issue tracks that as of 2026-08; closest is the closed
-  // feature request openai/codex#28912). npx is written by absolute path
-  // with an explicit PATH because this config is shared with Codex desktop,
-  // which launches from the Dock with the minimal launchd PATH — the same
-  // pitfall as Claude Desktop.
+  // Codex desktop only renders MCP Apps for stdio servers, so proxy through `npx mcp-remote`;
+  // npx is absolute with explicit PATH because desktop launches with the minimal launchd PATH.
   const npx = findNpx();
   const remote = mcpRemoteServer(mcpEndpoint(cfg), cfg.active_account?.target?.api_key);
   const env: Record<string, string> = { PATH: npxPathEnv(npx), ...remote.env };

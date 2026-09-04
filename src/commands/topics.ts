@@ -1,9 +1,5 @@
-/**
- * `dosu topics` — browse Topics in your knowledge base (read-only).
- *
- * Topics are fully managed by Dosu (assigned during indexing); the CLI can
- * list them and the pages under each, but cannot create, edit, or remove them.
- */
+/** `dosu topics`: browse Topics (read-only); Dosu assigns topics during indexing, so the CLI
+ * can list them but never create, edit, or remove them. */
 
 import { Command, Option } from "commander";
 import pc from "picocolors";
@@ -64,7 +60,7 @@ export function topicsCommand(): Command {
         topics.map((t: { topic_id: string; name: string; description?: string | null }) => [
           t.topic_id.slice(0, 8),
           t.name,
-          t.description ?? "—",
+          t.description ?? "-",
         ]),
         { rawData: topics },
       );

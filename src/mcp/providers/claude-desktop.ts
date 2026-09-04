@@ -34,13 +34,8 @@ export const ClaudeDesktopProvider = (): SetupProvider => ({
         ? mcpBaseURL()
         : // biome-ignore lint/style/noNonNullAssertion: guaranteed by the guard above
           mcpURL(cfg.active_account!.target!.deployment_id!);
-    // Claude Desktop's chat surface launches only stdio servers from this
-    // config file (and only renders MCP Apps from them); remote HTTP goes
-    // through the Connectors UI, which cannot be automated. Proxy the remote
-    // endpoint through `npx mcp-remote`, with an absolute npx path and an
-    // explicit PATH because Claude Desktop spawns servers with the minimal
-    // launchd PATH. Revert to a plain remote-HTTP entry if
-    // claude_desktop_config.json ever accepts one.
+    // Claude Desktop only launches stdio servers from this file, so proxy through `npx
+    // mcp-remote` with absolute npx and explicit PATH (it spawns with the minimal launchd PATH).
     const npx = findNpx();
     const remote = mcpRemoteServer(url, cfg.active_account?.target?.api_key);
     installJSONServer(configPath(), "mcpServers", {
