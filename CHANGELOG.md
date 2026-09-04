@@ -1,3 +1,32 @@
+# [0.53.0-beta.1](https://github.com/dosu-ai/dosu-cli/compare/v0.52.0...v0.53.0-beta.1) (2026-09-04)
+
+
+### Bug Fixes
+
+* align session-context headers with the final dosu[#12264](https://github.com/dosu-ai/dosu-cli/issues/12264) contract ([3aa558b](https://github.com/dosu-ai/dosu-cli/commit/3aa558b3b51fd4ad4b35e933f301f253baed06bc))
+* build deployment reuse map org-wide so orphan repos connect ([613e84d](https://github.com/dosu-ai/dosu-cli/commit/613e84d474fab10b1b9a0b9676b32309ccf115b9))
+* commit the miner executable-fallback module ([7157aba](https://github.com/dosu-ai/dosu-cli/commit/7157aba73c3c766420e2b4edc47d03c01a32dd92))
+* fall back to os.homedir() when HOME is missing from the env ([fa42e1b](https://github.com/dosu-ai/dosu-cli/commit/fa42e1bdc845711be9ef0d2099750179828fbfe0))
+* rename miner sessions server so tool names have no hyphen ([8159cf5](https://github.com/dosu-ai/dosu-cli/commit/8159cf529abcca8ae54270e23c2abe42ffd8f328))
+* satisfy knip deadcode gate ([95dcc1d](https://github.com/dosu-ai/dosu-cli/commit/95dcc1d981649507f0f84eff277cd03fa636e4d3))
+* settings row reads 'Mining scope' and names the picked projects ([11cfbd3](https://github.com/dosu-ai/dosu-cli/commit/11cfbd3a39326ee2b5d4b19a71dfeb1ce7002002))
+* window the multiselect to the terminal height and clip long labels ([6e7c08a](https://github.com/dosu-ai/dosu-cli/commit/6e7c08ad1ce6bfe156029fb5f4b65ce9e9a51fbd))
+
+
+### Features
+
+* 'a' toggles select-all/none in the multiselect ([f4d2d88](https://github.com/dosu-ai/dosu-cli/commit/f4d2d8848285ead6e70aed1f22f4a1c9d65ae281))
+* add session-end knowledge sync hooks with local log mining ([0311747](https://github.com/dosu-ai/dosu-cli/commit/031174794b00f8bdcc4d32882505b62604850934))
+* resolve miner rules from the installed skill and drop the setup log-mining handoff ([cf9e88f](https://github.com/dosu-ai/dosu-cli/commit/cf9e88fbffbece3b10eb72a7d9900112543e5c4b))
+* scope mining by real working directory instead of session-store folder names ([161d231](https://github.com/dosu-ai/dosu-cli/commit/161d23124312705311a7eff73793ca4ef221cd39))
+* send session-context headers on the miner knowledge connection ([2067cbf](https://github.com/dosu-ai/dosu-cli/commit/2067cbf0d7b896971b90dbe5914672fd2610bcfb)), closes [dosu#12249](https://github.com/dosu/issues/12249)
+* setup-first TUI gating and per-project mining scope ([66f2599](https://github.com/dosu-ai/dosu-cli/commit/66f2599773b9c7adbaffa3b94cf6d09787bd842f))
+* show connected repos inline in the GitHub picker ([0e9ae36](https://github.com/dosu-ai/dosu-cli/commit/0e9ae369c6d6bd033bedf9c738e4b711315960ee))
+* **tui:** add live sync-status view and full-screen welcome screen ([a7e9d2f](https://github.com/dosu-ai/dosu-cli/commit/a7e9d2f56cbeb587044ef1a3f486b8b049ffcb31))
+* **tui:** rework home into Activity, Analytics, and Pages screens ([a7408a3](https://github.com/dosu-ai/dosu-cli/commit/a7408a39565148dc9f6a20ed04630733bc27b104))
+* **tui:** surface live mining state in the menu and after setup ([ddebe82](https://github.com/dosu-ai/dosu-cli/commit/ddebe82d7baecdb27457986cd511250074235be1))
+* **tui:** treat a missing session-end hook as incomplete setup ([8a514e0](https://github.com/dosu-ai/dosu-cli/commit/8a514e0ba6b5d1d180edb6ad685c064d88fa0c39))
+
 # [0.52.0](https://github.com/dosu-ai/dosu-cli/compare/v0.51.1...v0.52.0) (2026-09-01)
 
 
