@@ -69,6 +69,11 @@ export interface SyncState {
   total_learning_tokens?: number;
   /** Why the last mining attempt was refused by the gateway, if it was. */
   last_refusal?: SyncRefusal;
+  /**
+   * Projects whose sessions get mined. Absent = every project, including ones
+   * that appear later. Sessions without project info match UNKNOWN_PROJECT.
+   */
+  project_filter?: string[];
 }
 
 export function syncStatePath(configDir: string = getConfigDir()): string {
@@ -129,6 +134,13 @@ export function loadSyncState(configDir: string = getConfigDir()): SyncState {
           ? raw.total_learning_tokens
           : 0,
       ...(lastRefusal ? { last_refusal: lastRefusal } : {}),
+      ...(Array.isArray(raw.project_filter)
+        ? {
+            project_filter: (raw.project_filter as unknown[]).filter(
+              (p): p is string => typeof p === "string",
+            ),
+          }
+        : {}),
     };
   } catch {
     return empty;
@@ -156,6 +168,24 @@ export function backoffUntil(state: SyncState): Date | null {
   if (Number.isNaN(last)) return null;
   const delay = Math.min(BACKOFF_BASE_MS * 2 ** (state.consecutive_failures - 1), BACKOFF_MAX_MS);
   return new Date(last + delay);
+}
+
+/** Bucket for sessions whose scanner had no project info (e.g. Codex). */
+export const UNKNOWN_PROJECT = "(unknown)";
+
+/** The project bucket a session files under, for filtering and display. */
+export function sessionProject(session: AgentSession): string {
+  return session.project ?? UNKNOWN_PROJECT;
+}
+
+/** Apply the mining project filter; no/empty filter passes everything. */
+export function filterSessionsByProject(
+  sessions: readonly AgentSession[],
+  filter: readonly string[] | undefined,
+): AgentSession[] {
+  if (!filter || filter.length === 0) return [...sessions];
+  const allowed = new Set(filter);
+  return sessions.filter((session) => allowed.has(sessionProject(session)));
 }
 
 export interface GateResult {

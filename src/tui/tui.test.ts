@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./prompts", () => ({
   confirm: vi.fn(),
+  multiselect: vi.fn(),
   isCancel: vi.fn(),
   cancel: vi.fn(),
   spinner: vi.fn(() => ({ start: vi.fn(), stop: vi.fn() })),
@@ -70,15 +71,20 @@ vi.mock("picocolors", () => ({
   },
 }));
 
-// Provider detection scans the real filesystem; the banner only needs names.
+// Provider detection scans the real filesystem; tests control the result.
 vi.mock("../mcp/providers", () => ({
-  allSetupProviders: () => [],
+  allSetupProviders: vi.fn(() => []),
 }));
 
 // The repo row shells out to git and reads AGENTS.md; keep tests hermetic.
 vi.mock("../setup/agents-md-step", () => ({
   inGitWorkTree: vi.fn(() => false),
   dosuAgentsSectionState: vi.fn(() => "missing"),
+}));
+
+// The mining-projects picker scans the real session stores.
+vi.mock("../sessions/scan", () => ({
+  scanAgentSessions: vi.fn(() => []),
 }));
 
 // ---------------------------------------------------------------------------
@@ -90,9 +96,14 @@ import { startOAuthFlow } from "../auth/flow";
 import type { Config } from "../config/config";
 import { emptyConfig, getConfigDir, loadConfig, saveConfig, updateTarget } from "../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
+import type { SetupProvider } from "../mcp/providers";
+import { allSetupProviders } from "../mcp/providers";
+import type { AgentSession } from "../sessions/scan";
+import { scanAgentSessions } from "../sessions/scan";
 import { dosuAgentsSectionState, inGitWorkTree } from "../setup/agents-md-step";
 import { runSetup, runSwitchTarget } from "../setup/flow";
 import { lockPath } from "../sync/lock";
+import { loadSyncState, saveSyncState } from "../sync/watermark";
 import { runActivityView } from "./activity-view";
 import { runAnalyticsView } from "./analytics-view";
 import { frameTopMargin } from "./layout";
@@ -112,6 +123,29 @@ const mockRunSwitchTarget = vi.mocked(runSwitchTarget);
 const mockRunActivityView = vi.mocked(runActivityView);
 const mockRunAnalyticsView = vi.mocked(runAnalyticsView);
 const mockRunPagesView = vi.mocked(runPagesView);
+const mockAllSetupProviders = vi.mocked(allSetupProviders);
+const mockScanSessions = vi.mocked(scanAgentSessions);
+const mockMultiselect = vi.mocked(p.multiselect);
+
+function fakeSession(id: string, project?: string): AgentSession {
+  return {
+    id,
+    harness: "claude",
+    path: `/tmp/${id}.jsonl`,
+    updated: "2026-08-25T11:00:00Z",
+    ...(project ? { project } : {}),
+  };
+}
+
+/** Minimal provider stub: only the detection surface the TUI reads. */
+function fakeProvider(installed: boolean, configured: boolean, name = "Cursor"): SetupProvider {
+  return {
+    id: () => name.toLowerCase(),
+    name: () => name,
+    isInstalled: () => installed,
+    isConfigured: () => configured,
+  } as SetupProvider;
+}
 
 // ---------------------------------------------------------------------------
 // Temp directory setup — real config on disk
@@ -130,6 +164,10 @@ beforeEach(() => {
   process.env.HOME = tempDir;
 
   vi.resetAllMocks();
+  // Default machine state: one agent installed with Dosu already configured,
+  // so "target complete" configs count as fully set up.
+  mockAllSetupProviders.mockImplementation(() => [fakeProvider(true, true)]);
+  mockScanSessions.mockImplementation(() => []);
   // Restore spinner factory cleared by resetAllMocks
   vi.mocked(p.spinner).mockReturnValue({
     start: vi.fn(),
@@ -428,22 +466,50 @@ describe("runTUI", () => {
     expect(signedOut.map((o) => o.value)).toEqual(["auth", "exit"]);
     expect(signedOut[0]?.label).toBe("Log in / Sign up");
 
-    // Signed in but no target yet (login without setup): Setup still leads,
-    // flagged as never run.
+    // Signed in but no target yet (login without setup): setup mode — the
+    // other screens have nothing to show, so the menu is Setup or leave.
     mockMenuSelect.mockClear();
     writeRealConfig(makeCfg({ access_token: "tok" }));
     mockMenuSelect.mockResolvedValueOnce("exit");
     await runTUI();
     const unconfigured = mockMenuSelect.mock.calls[0]?.[1] ?? [];
-    expect(unconfigured.map((o) => o.value)).toEqual([
-      "setup",
-      "sync",
-      "analytics",
-      "pages",
-      "settings",
-      "exit",
-    ]);
+    expect(unconfigured.map((o) => o.value)).toEqual(["setup", "exit"]);
     expect(stripAnsi(unconfigured[0]?.hint ?? "")).toBe("not set up yet");
+  });
+
+  it("stays in setup mode when no installed agent is configured", async () => {
+    // Target complete, but the machine's agent has no Dosu MCP entry yet
+    // (e.g. the wizard was cancelled at the agent picker).
+    writeRealConfig(
+      makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
+    );
+    mockAllSetupProviders.mockImplementation(() => [fakeProvider(true, false)]);
+    mockMenuSelect.mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    // Auto-launched the wizard, and the menu is still just Setup + Exit.
+    expect(mockRunSetup).toHaveBeenCalledOnce();
+    const options = mockMenuSelect.mock.calls[0]?.[1] ?? [];
+    expect(options.map((o) => o.value)).toEqual(["setup", "exit"]);
+    expect(stripAnsi(options[0]?.hint ?? "")).toBe("incomplete \u00B7 missing agents");
+    // The banner flags the agents row instead of listing configured agents.
+    expect(stdoutWrites.join("")).toContain("agents");
+    expect(stdoutWrites.join("")).toContain("not configured");
+  });
+
+  it("does not require agents on a machine with none installed", async () => {
+    writeRealConfig(
+      makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
+    );
+    mockAllSetupProviders.mockImplementation(() => []);
+    mockMenuSelect.mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    expect(mockRunSetup).not.toHaveBeenCalled();
+    const options = mockMenuSelect.mock.calls[0]?.[1] ?? [];
+    expect(options.map((o) => o.value)).toEqual(["sync", "analytics", "pages", "settings", "exit"]);
   });
 
   it("flags the repo's AGENTS.md on the banner only inside a git work tree", async () => {
@@ -507,7 +573,9 @@ describe("runTUI", () => {
   });
 
   it("marks the Activity entry with a mining pickaxe while a run is live", async () => {
-    writeRealConfig(makeCfg({}));
+    writeRealConfig(
+      makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
+    );
     // A lock file naming a live pid (our own) = an active mining run.
     const dir = getConfigDir();
     mkdirSync(dir, { recursive: true });
@@ -627,15 +695,78 @@ describe("runTUI", () => {
     expect(settingsOptions.map((o) => o.value)).toEqual([
       "switch-org",
       "switch-library",
+      "projects",
       "setup",
       "logout",
       "back",
     ]);
     // Each entry hints its own current value: org name on the org row,
-    // Library name on the Library row.
+    // Library name on the Library row, mining scope on the projects row.
     expect(settingsOptions[0]?.hint).toBe("Acme");
     expect(settingsOptions[1]?.hint).toBe("Docs Library");
+    expect(settingsOptions[2]?.hint).toBe("all projects");
     expect(mockRunSwitchTarget).not.toHaveBeenCalled();
+  });
+
+  it("mining projects setting saves a subset filter", async () => {
+    writeRealConfig(
+      makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
+    );
+    mockIsCancel.mockReturnValue(false);
+    // Two dosu-cli sessions, one other, one with no project info.
+    mockScanSessions.mockImplementation(() => [
+      fakeSession("a", "dosu-cli"),
+      fakeSession("b", "dosu-cli"),
+      fakeSession("c", "other"),
+      fakeSession("d"),
+    ]);
+    mockMultiselect.mockResolvedValueOnce(["dosu-cli"]);
+    mockMenuSelect
+      .mockResolvedValueOnce("settings")
+      .mockResolvedValueOnce("projects")
+      .mockResolvedValueOnce("back")
+      .mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    // Options ordered by session count; unknown sessions get their own bucket.
+    const [args] = mockMultiselect.mock.calls.at(-1) ?? [];
+    const opts = (args as unknown as { options: Array<{ value: string }> }).options;
+    expect(opts.map((o) => o.value)).toEqual(["dosu-cli", "other", "(unknown)"]);
+    // The subset is persisted; the reopened settings row hints the new scope.
+    expect(loadSyncState().project_filter).toEqual(["dosu-cli"]);
+    const refreshed = mockMenuSelect.mock.calls[2]?.[1] ?? [];
+    expect(refreshed.find((o) => o.value === "projects")?.hint).toBe("1 project");
+  });
+
+  it("mining projects setting clears the filter when everything is picked", async () => {
+    writeRealConfig(
+      makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
+    );
+    saveSyncState({
+      schema_version: 1,
+      watermark: null,
+      consecutive_failures: 0,
+      project_filter: ["dosu-cli"],
+    });
+    mockIsCancel.mockReturnValue(false);
+    mockScanSessions.mockImplementation(() => [
+      fakeSession("a", "dosu-cli"),
+      fakeSession("b", "other"),
+    ]);
+    mockMultiselect.mockResolvedValueOnce(["dosu-cli", "other"]);
+    mockMenuSelect
+      .mockResolvedValueOnce("settings")
+      .mockResolvedValueOnce("projects")
+      .mockResolvedValueOnce("back")
+      .mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    // The saved filter preselects the picker; picking all clears it.
+    const [args] = mockMultiselect.mock.calls.at(-1) ?? [];
+    expect((args as { initialValues?: string[] }).initialValues).toEqual(["dosu-cli"]);
+    expect(loadSyncState().project_filter).toBeUndefined();
   });
 
   it("settings shows 'not configured' before any target exists", async () => {
@@ -764,6 +895,46 @@ describe("runTUI", () => {
     // deployment that setup just configured.
     expect(stdoutWrites.join("")).toContain("Setup Deploy");
     expect(stdoutWrites.join("")).toContain("Goodbye!");
+  });
+
+  it("launches straight into setup when signed in but not set up", async () => {
+    writeRealConfig(makeCfg({ access_token: "tok" }));
+    mockMenuSelect.mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    // The wizard ran before the menu ever appeared.
+    expect(mockRunSetup).toHaveBeenCalledOnce();
+    expect(mockMenuSelect).toHaveBeenCalledOnce();
+  });
+
+  it("does not auto-launch setup when already set up or signed out", async () => {
+    writeRealConfig(
+      makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
+    );
+    mockMenuSelect.mockResolvedValueOnce("exit");
+    await runTUI();
+    expect(mockRunSetup).not.toHaveBeenCalled();
+
+    writeRealConfig(makeCfg({ access_token: "" }));
+    mockMenuSelect.mockResolvedValueOnce("exit");
+    await runTUI();
+    expect(mockRunSetup).not.toHaveBeenCalled();
+  });
+
+  it("flows into setup right after a fresh login without a target", async () => {
+    writeRealConfig(makeCfg({ access_token: "" }));
+    mockIsCancel.mockReturnValue(false);
+    mockConfirm.mockResolvedValueOnce(true);
+    mockStartOAuthFlow.mockResolvedValueOnce({
+      browserOpened: true,
+      token: { access_token: "new-tok", refresh_token: "new-ref", expires_in: 3600 },
+    });
+    mockMenuSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    expect(mockRunSetup).toHaveBeenCalledOnce();
   });
 
   it("setup reload removes account state that was cleared on disk", async () => {

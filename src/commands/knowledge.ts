@@ -247,6 +247,9 @@ function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
 
   const wm = status.state.watermark;
   console.log(`  Mined through:   ${wm ? `${wm} (${formatAge(wm, now)})` : "nothing mined yet"}`);
+  if (status.state.project_filter?.length) {
+    console.log(`  Mining scope:    ${status.state.project_filter.join(", ")}`);
+  }
   if ((status.state.total_notes ?? 0) > 0) {
     const tokens = status.state.total_learning_tokens ?? 0;
     const distilled = tokens > 0 ? `, ${formatTokenCount(tokens)} tokens distilled` : "";

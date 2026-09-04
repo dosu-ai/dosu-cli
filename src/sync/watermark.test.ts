@@ -6,11 +6,14 @@ import type { AgentSession } from "../sessions/scan";
 import {
   backoffUntil,
   DEFAULT_QUIET_PERIOD_MS,
+  filterSessionsByProject,
   gateSessions,
   loadSyncState,
   type SyncState,
   saveSyncState,
+  sessionProject,
   syncStatePath,
+  UNKNOWN_PROJECT,
 } from "./watermark";
 
 let configDir: string;
@@ -135,6 +138,49 @@ describe("loadSyncState / saveSyncState", () => {
     ]);
     // A bad counter falls back to what the surviving history proves.
     expect(state.total_mined).toBe(2);
+  });
+});
+
+describe("project filter", () => {
+  it("round-trips through disk and drops non-string entries", () => {
+    saveSyncState(
+      {
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        project_filter: ["dosu-cli", UNKNOWN_PROJECT],
+      },
+      configDir,
+    );
+    expect(loadSyncState(configDir).project_filter).toEqual(["dosu-cli", UNKNOWN_PROJECT]);
+
+    writeFileSync(
+      syncStatePath(configDir),
+      JSON.stringify({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        project_filter: ["dosu", 42, null],
+      }),
+    );
+    expect(loadSyncState(configDir).project_filter).toEqual(["dosu"]);
+  });
+
+  it("filterSessionsByProject passes everything without a filter", () => {
+    const sessions = [session({ project: "a" }), session()];
+    expect(filterSessionsByProject(sessions, undefined)).toEqual(sessions);
+    expect(filterSessionsByProject(sessions, [])).toEqual(sessions);
+  });
+
+  it("filterSessionsByProject keeps matches, bucketing unknowns", () => {
+    const inScope = session({ project: "dosu-cli" });
+    const outScope = session({ project: "other" });
+    const unknown = session();
+    expect(sessionProject(unknown)).toBe(UNKNOWN_PROJECT);
+    expect(filterSessionsByProject([inScope, outScope, unknown], ["dosu-cli"])).toEqual([inScope]);
+    expect(
+      filterSessionsByProject([inScope, outScope, unknown], ["dosu-cli", UNKNOWN_PROJECT]),
+    ).toEqual([inScope, unknown]);
   });
 });
 

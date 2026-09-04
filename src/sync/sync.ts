@@ -20,6 +20,7 @@ import { type AgentSession, scanAgentSessions } from "../sessions/scan";
 import { fileLock, type SyncLock } from "./lock";
 import {
   backoffUntil,
+  filterSessionsByProject,
   gateSessions,
   loadSyncState,
   MINED_HISTORY_LIMIT,
@@ -164,8 +165,11 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
               since: new Date(now().getTime() - GATE_WINDOW_DAYS * 24 * 60 * 60 * 1000),
               limit: GATE_WINDOW,
             }));
-    const sessions = await listSessions();
+    const sessions = filterSessionsByProject(await listSessions(), state.project_filter);
     ({ ready, open } = gateSessions(sessions, state.watermark, now()));
+    if (state.project_filter?.length) {
+      logger.debug("sync", `project filter active: ${state.project_filter.join(", ")}`);
+    }
     logGateResult(ready, open.length, state.watermark);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

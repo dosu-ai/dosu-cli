@@ -249,6 +249,25 @@ describe("multiselect", () => {
     expect(isCancel(await result)).toBe(true);
   });
 
+  it("validate blocks confirm with a warning until the picks change", async () => {
+    const { input, output, text, written } = fakeIO();
+    const result = multiselect(
+      {
+        message: "Choose",
+        options: OPTIONS,
+        validate: (picked) => (picked.length === 0 ? "Pick at least one." : undefined),
+      },
+      { input, output },
+    );
+    input.emit("data", "\r"); // blocked: nothing picked
+    expect(text()).toContain("Pick at least one.");
+    input.emit("data", " "); // ticking clears the warning
+    const framesAfterToggle = written.length;
+    input.emit("data", "\r");
+    await expect(result).resolves.toEqual(["one"]);
+    expect(written.slice(framesAfterToggle).join("")).not.toContain("Pick at least one.");
+  });
+
   it("renders a live summary line above the legend", async () => {
     const { input, output, written, text } = fakeIO();
     const result = multiselect(

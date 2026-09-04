@@ -16,10 +16,12 @@ import {
 } from "../config/config";
 import { getWebAppURL } from "../config/constants";
 import { allSetupProviders } from "../mcp/providers";
+import { scanAgentSessions } from "../sessions/scan";
 import { dosuAgentsSectionState, inGitWorkTree } from "../setup/agents-md-step";
 import { runSetup, runSwitchTarget } from "../setup/flow";
 import { brand, browserFallbackHint, dim } from "../setup/styles";
 import { getSyncStatus } from "../sync/status";
+import { loadSyncState, saveSyncState, sessionProject } from "../sync/watermark";
 import { buildUpdateHint, getAvailableUpdate } from "../version/update-check";
 import { getVersionString, INSTALL_CHANNEL, isNpxInvocation } from "../version/version";
 import { runActivityView } from "./activity-view";
@@ -87,15 +89,36 @@ const ESC = String.fromCharCode(27);
 /** Clear the visible screen and home the cursor; scrollback is preserved. */
 const CLEAR_SCREEN = `${ESC}[2J${ESC}[H`;
 
+/** Installed agents on this machine, split by whether Dosu is configured. */
+function agentSetupIncomplete(): boolean {
+  const installed = allSetupProviders().filter((provider) => {
+    try {
+      return provider.isInstalled();
+    } catch {
+      return false;
+    }
+  });
+  // No supported agent on this machine: nothing to configure, don't block.
+  if (installed.length === 0) return false;
+  return !installed.some((provider) => {
+    try {
+      return provider.isConfigured();
+    } catch {
+      return false;
+    }
+  });
+}
+
 /**
  * Setup steps a completed wizard always persists, by user-facing name;
- * missing ones keep Setup in the menu and flag the banner.
+ * missing ones keep the TUI in setup mode and flag the banner.
  */
 export function missingSetupSteps(cfg: Config): string[] {
   const target = cfg.active_account?.target;
   const missing: string[] = [];
   if (!target?.space_id) missing.push("Library");
   if (!target?.deployment_id || !target?.api_key) missing.push("MCP");
+  if (agentSetupIncomplete()) missing.push("agents");
   return missing;
 }
 
@@ -140,6 +163,14 @@ function drawHome(cfg: Config): void {
 async function runMainMenu(): Promise<void> {
   const cfg = loadConfig();
 
+  // Setup may change deployment, api_key, etc.; keep the in-memory cfg in step.
+  const runSetupAndReload = async (): Promise<void> => {
+    await runSetup();
+    const fresh = loadConfig();
+    cfg.mode = fresh.mode;
+    cfg.active_account = fresh.active_account;
+  };
+
   // Re-polled while the menu is open so background mining updates the label.
   // Signed out, the menu is just the login door; Setup leads until complete.
   const buildOptions = (): MenuOption[] => {
@@ -149,9 +180,16 @@ async function runMainMenu(): Promise<void> {
         { label: "Exit", value: "exit" },
       ];
     }
+    // Setup mode: until the wizard completes (target + a configured agent),
+    // the other screens have nothing to show, so the menu is Setup or leave.
+    if (!isSetUp(cfg)) {
+      return [
+        { label: "Setup", hint: setupHint(cfg), value: "setup" },
+        { label: "Exit", value: "exit" },
+      ];
+    }
     const mining = isMining();
     return [
-      ...(isSetUp(cfg) ? [] : [{ label: "Setup", hint: setupHint(cfg), value: "setup" }]),
       {
         label: mining ? `Activity \u26CF\uFE0F ${brand("mining sessions...")}` : "Activity",
         value: "sync",
@@ -165,6 +203,13 @@ async function runMainMenu(): Promise<void> {
   const home = () => drawHome(cfg);
 
   home();
+
+  // Signed in without a complete target, every menu row is a dead end — go
+  // straight into the wizard. Cancelling out still lands on the menu.
+  if (isAuthenticated(cfg) && !isSetUp(cfg)) {
+    await runSetupAndReload();
+    home();
+  }
 
   // Main menu
   while (true) {
@@ -198,15 +243,14 @@ async function runMainMenu(): Promise<void> {
       case "auth":
         await handleAuthenticate(cfg);
         home();
+        // A fresh login without a target flows straight into the wizard too.
+        if (isAuthenticated(cfg) && !isSetUp(cfg)) {
+          await runSetupAndReload();
+          home();
+        }
         break;
       case "setup":
-        await runSetup();
-        // Reload config: setup may have changed deployment, api_key, etc.
-        {
-          const fresh = loadConfig();
-          cfg.mode = fresh.mode;
-          cfg.active_account = fresh.active_account;
-        }
+        await runSetupAndReload();
         home();
         break;
     }
@@ -222,14 +266,23 @@ async function runSettings(cfg: Config): Promise<void> {
     const target = cfg.active_account?.target;
     // Older configs predate org_name/library_name; fall back rather than show nothing.
     const library = target?.library_name ?? target?.deployment_name ?? "not configured";
+    const filter = loadSyncState().project_filter;
+    const scope = filter?.length
+      ? `${filter.length} project${filter.length === 1 ? "" : "s"}`
+      : "all projects";
     const action = await menuSelect("Settings", [
       { label: "Switch organization", hint: target?.org_name, value: "switch-org" },
       { label: "Switch Library", hint: library, value: "switch-library" },
+      { label: "Mining projects", hint: scope, value: "projects" },
       { label: "Run setup", hint: "rerun the setup wizard", value: "setup" },
       { label: "Log out", hint: "clear stored credentials", value: "logout" },
       { label: "Back", value: "back" },
     ]);
     if (action === null || action === "back") return;
+    if (action === "projects") {
+      await runMiningProjectsSetting();
+      continue;
+    }
     if (action === "setup") {
       await runSetup();
       // Reload so the submenu hints and banner reflect any target change.
@@ -250,6 +303,52 @@ async function runSettings(cfg: Config): Promise<void> {
       cfg.active_account = fresh.active_account;
     }
   }
+}
+
+/** Distinct session projects on this machine, most sessions first. */
+function discoverProjects(): string[] {
+  const counts = new Map<string, number>();
+  try {
+    for (const session of scanAgentSessions({})) {
+      const key = sessionProject(session);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+  } catch {
+    // An unreadable session store just yields an empty picker.
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([project]) => project);
+}
+
+/**
+ * Scope mining to selected projects. Picking everything clears the filter so
+ * projects that appear later are mined too; a subset is persisted verbatim.
+ */
+async function runMiningProjectsSetting(): Promise<void> {
+  const projects = discoverProjects();
+  if (projects.length === 0) {
+    p.log.info("No local agent sessions found yet; nothing to scope.");
+    return;
+  }
+  const current = loadSyncState().project_filter;
+  const selected = await p.multiselect({
+    message: "Mine sessions from which projects?",
+    options: projects.map((project) => ({ label: project, value: project })),
+    initialValues: current?.length ? current : projects,
+    summary: (picked) =>
+      picked.length === projects.length
+        ? "all projects \u00B7 new ones included automatically"
+        : `${picked.length} of ${projects.length} projects`,
+    validate: (picked) => (picked.length === 0 ? "Select at least one project." : undefined),
+  });
+  if (p.isCancel(selected)) return;
+
+  // Reload right before writing: a background sync may have advanced the state.
+  const { project_filter: _previous, ...state } = loadSyncState();
+  const all = selected.length === projects.length;
+  saveSyncState(all ? state : { ...state, project_filter: [...selected] });
+  p.log.success(
+    `Mining scope ${dim(`\u00B7 ${all ? "all projects" : (selected as string[]).join(", ")}`)}`,
+  );
 }
 
 async function handleAuthenticate(cfg: ReturnType<typeof loadConfig>): Promise<void> {

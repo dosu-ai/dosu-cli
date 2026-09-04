@@ -2053,9 +2053,10 @@ describe("runSetup integration", () => {
     await runSetup();
 
     const [args] = vi.mocked(p.multiselect).mock.calls.at(-1) ?? [];
-    const { statusFor, summary } = args as unknown as {
+    const { statusFor, summary, validate } = args as unknown as {
       statusFor: (id: string, picked: boolean) => string | undefined;
       summary: (picked: readonly string[]) => string | undefined;
+      validate: (picked: readonly string[]) => string | undefined;
     };
 
     expect(statusFor("cursor", true)).toContain("configured");
@@ -2067,6 +2068,29 @@ describe("runSetup integration", () => {
     expect(summary(["cursor", "opencode"])).toBe("configure 1");
     expect(summary([])).toBe("remove 1");
     expect(summary(["opencode"])).toBe("configure 1 \u00B7 remove 1");
+
+    // Cursor is already configured, so an empty pick means remove-all: allowed.
+    expect(validate([])).toBeUndefined();
+  });
+
+  it("requires at least one agent when nothing is configured yet", async () => {
+    const cfg = makeCfg();
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    mockToolSelection(["cursor"]);
+
+    await runSetup();
+
+    const [args] = vi.mocked(p.multiselect).mock.calls.at(-1) ?? [];
+    const { validate } = args as unknown as {
+      validate: (picked: readonly string[]) => string | undefined;
+    };
+    // Fresh setup: confirming an empty pick would be a no-op, so it's blocked.
+    expect(validate([])).toContain("Select at least one agent");
+    expect(validate(["cursor"])).toBeUndefined();
   });
 
   it("automatically updates AGENTS.md after configuring an agent in a git work tree", async () => {

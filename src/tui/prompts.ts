@@ -297,10 +297,13 @@ export function multiselect<T>(
     statusFor?: (value: T, picked: boolean) => string | undefined;
     /** Live one-line preview of what confirming would do, shown above the legend. */
     summary?: (picked: readonly T[]) => string | undefined;
+    /** Returns a message to block confirm with; undefined lets it through. */
+    validate?: (picked: readonly T[]) => string | undefined;
   },
   io: PromptIO = {},
 ): Promise<T[] | symbol> {
   let cursor = 0;
+  let error: string | undefined;
   const picked = new Set<T>(opts.initialValues ?? []);
   const labelWidth = Math.max(...opts.options.map((o) => optionLabel(o).length));
   const pickedValues = () =>
@@ -327,12 +330,13 @@ export function multiselect<T>(
           "",
           ...rows,
           "",
-          ...(summary ? [pc.dim(summary)] : []),
+          ...(error ? [pc.yellow(error)] : summary ? [pc.dim(summary)] : []),
           pc.dim(`\u2191\u2193 move ${DOT} space toggle ${DOT} enter confirm ${DOT} esc cancel`),
         ];
       },
       handle(key) {
         if (key === " ") {
+          error = undefined;
           const value = opts.options[cursor].value;
           if (picked.has(value)) picked.delete(value);
           else picked.add(value);
@@ -347,6 +351,11 @@ export function multiselect<T>(
           return { type: "render" };
         }
         if (key === "\r" || key === "\n") {
+          const blocked = opts.validate?.(pickedValues());
+          if (blocked) {
+            error = blocked;
+            return { type: "render" };
+          }
           const chosen = opts.options.filter((option) => picked.has(option.value));
           // Name the picks when they fit on a line; count them otherwise.
           const answer =

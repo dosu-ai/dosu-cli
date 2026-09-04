@@ -1304,6 +1304,12 @@ async function stepSelectTools(detected: SetupProvider[]): Promise<ToolSelection
       if (toRemove > 0) parts.push(`remove ${toRemove}`);
       return parts.length > 0 ? parts.join(" \u00B7 ") : "no changes";
     },
+    // Nothing picked and nothing configured to remove = a no-op confirm;
+    // require a pick. An empty pick with configured agents means remove all.
+    validate: (picked) =>
+      picked.length === 0 && preselected.length === 0
+        ? "Select at least one agent (space toggles)."
+        : undefined,
   });
 
   if (p.isCancel(selected)) return null;

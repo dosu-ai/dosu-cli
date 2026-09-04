@@ -12,7 +12,12 @@ import { type AgentSession, scanAgentSessions } from "../sessions/scan";
 import { brand } from "../setup/styles";
 import { spawnDetachedSelf } from "../sync/detach";
 import { getSyncStatus, type SyncStatus } from "../sync/status";
-import { gateSessions, loadSyncState, type MinedSessionRecord } from "../sync/watermark";
+import {
+  filterSessionsByProject,
+  gateSessions,
+  loadSyncState,
+  type MinedSessionRecord,
+} from "../sync/watermark";
 import { enterAltScreen } from "./alt-screen";
 import {
   breadcrumb,
@@ -150,7 +155,8 @@ export interface SessionBacklog {
 function defaultListBacklog(): SessionBacklog {
   try {
     const state = loadSyncState();
-    const gate = gateSessions(scanAgentSessions({}), state.watermark);
+    const sessions = filterSessionsByProject(scanAgentSessions({}), state.project_filter);
+    const gate = gateSessions(sessions, state.watermark);
     return { queued: gate.ready.reverse(), open: gate.open.reverse() };
   } catch {
     return { queued: [], open: [] };

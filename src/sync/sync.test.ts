@@ -69,6 +69,26 @@ describe("runKnowledgeSync", () => {
     expect(logged).toContain("(+2 more)");
   });
 
+  it("gates out sessions outside the project filter", async () => {
+    const inScope = { ...session(60), project: "dosu-cli" };
+    const outScope = { ...session(30), project: "other" };
+    const unknown = session(40); // no project info → "(unknown)"
+    const { deps } = makeDeps({
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        project_filter: ["dosu-cli"],
+      }),
+      listSessions: vi.fn().mockResolvedValue([inScope, outScope, unknown]),
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.status).toBe("backlog");
+    expect(outcome.sessions.map((s) => s.id)).toEqual([inScope.id]);
+  });
+
   it("reports nothing-new when the gate is empty", async () => {
     const { deps } = makeDeps();
     const outcome = await runKnowledgeSync({ deps });
