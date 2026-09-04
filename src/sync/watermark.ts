@@ -49,6 +49,20 @@ interface SyncRefusal {
   message: string;
 }
 
+/**
+ * The active mining run's baseline, written by the mining process when it
+ * starts a run. Status viewers subtract baseline_mined from total_mined for
+ * a run-scoped progress bar that survives reopening the TUI mid-run. Only
+ * meaningful while the recorded pid holds the sync lock; a later run
+ * overwrites it.
+ */
+interface SyncRun {
+  pid: number;
+  started_at: string;
+  /** total_mined when this run started. */
+  baseline_mined: number;
+}
+
 export interface SyncState {
   schema_version: number;
   /** ISO timestamp of the newest session already mined; null = never mined. */
@@ -69,6 +83,8 @@ export interface SyncState {
   total_learning_tokens?: number;
   /** Why the last mining attempt was refused by the gateway, if it was. */
   last_refusal?: SyncRefusal;
+  /** The active run's progress baseline; see SyncRun. */
+  run?: SyncRun;
   /**
    * Absolute directories whose sessions get mined (subdirectories included).
    * Absent = everywhere, including directories that appear later. Sessions
@@ -115,6 +131,15 @@ export function loadSyncState(configDir: string = getConfigDir()): SyncState {
       typeof rawRefusal.message === "string"
         ? { at: rawRefusal.at, outcome: rawRefusal.outcome, message: rawRefusal.message }
         : undefined;
+    const rawRun = raw.run as Partial<SyncRun> | undefined;
+    const run =
+      rawRun &&
+      typeof rawRun.pid === "number" &&
+      typeof rawRun.started_at === "string" &&
+      typeof rawRun.baseline_mined === "number" &&
+      rawRun.baseline_mined >= 0
+        ? { pid: rawRun.pid, started_at: rawRun.started_at, baseline_mined: rawRun.baseline_mined }
+        : undefined;
     return {
       schema_version: STATE_SCHEMA_VERSION,
       watermark: typeof raw.watermark === "string" ? raw.watermark : null,
@@ -135,6 +160,7 @@ export function loadSyncState(configDir: string = getConfigDir()): SyncState {
           ? raw.total_learning_tokens
           : 0,
       ...(lastRefusal ? { last_refusal: lastRefusal } : {}),
+      ...(run ? { run } : {}),
       ...(Array.isArray(raw.project_filter)
         ? {
             project_filter: (raw.project_filter as unknown[]).filter(

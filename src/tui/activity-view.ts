@@ -568,12 +568,19 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
 
   // Identical frames skip the terminal write entirely (most ticks change nothing).
   let lastFrame: string | null = null;
-  // total_mined when the run was first observed, so the bar is run-scoped.
+  // The run's total_mined baseline, so the bar is run-scoped. The mining
+  // process persists it in the sync state (survives closing and reopening
+  // this view mid-run); first-observation snapshot is the fallback.
   let minedBeforeRun: number | null = null;
   const draw = () => {
     status = getStatus();
     if (status.running) {
-      minedBeforeRun ??= status.state.total_mined ?? 0;
+      const run = status.state.run;
+      if (run && run.pid === status.pid) {
+        minedBeforeRun = run.baseline_mined;
+      } else {
+        minedBeforeRun ??= status.state.total_mined ?? 0;
+      }
     } else {
       minedBeforeRun = null;
     }

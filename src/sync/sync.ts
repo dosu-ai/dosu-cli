@@ -223,6 +223,19 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
   }
 
   try {
+    // Stamp this run's progress baseline into every state save below, so
+    // status viewers (the TUI bar, even one reopened mid-run) can compute
+    // run-scoped progress. No eager write needed: total_mined only diverges
+    // from the baseline when a batch commits, and commits persist state.
+    // Same-pid batches (a bootstrap drain) keep the first batch's baseline.
+    if (state.run?.pid !== process.pid) {
+      state.run = {
+        pid: process.pid,
+        started_at: now().toISOString(),
+        baseline_mined: state.total_mined ?? 0,
+      };
+    }
+
     // Ready is newest-first (scanner order); walk from the oldest so the
     // watermark can advance past everything examined without skipping newer
     // sessions. Trivial sessions are filtered locally — they never cost a

@@ -305,6 +305,62 @@ describe("runKnowledgeSync mining", () => {
     expect(lock.release).toHaveBeenCalled();
   });
 
+  it("stamps the run baseline into the committed state", async () => {
+    const { deps, saved } = makeMiningDeps({
+      listSessions: vi.fn().mockResolvedValue([session(30)]),
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        total_mined: 5,
+      }),
+      mine: vi.fn().mockResolvedValue(minerResult()),
+      lock: openLock(),
+    });
+
+    await runKnowledgeSync({ deps });
+
+    expect(saved[0].run).toEqual({
+      pid: process.pid,
+      started_at: NOW.toISOString(),
+      baseline_mined: 5,
+    });
+  });
+
+  it("keeps the first batch's baseline across same-pid batches, resets for a new run", async () => {
+    const { deps, saved } = makeMiningDeps({
+      listSessions: vi.fn().mockResolvedValue([session(30)]),
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        total_mined: 25,
+        // A later batch of this process's drain: baseline must not move.
+        run: { pid: process.pid, started_at: "2026-08-25T11:00:00Z", baseline_mined: 5 },
+      }),
+      mine: vi.fn().mockResolvedValue(minerResult()),
+      lock: openLock(),
+    });
+    await runKnowledgeSync({ deps });
+    expect(saved[0].run?.baseline_mined).toBe(5);
+
+    const fresh = makeMiningDeps({
+      listSessions: vi.fn().mockResolvedValue([session(30)]),
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        total_mined: 25,
+        // A dead previous run's record: this run starts its own baseline.
+        run: { pid: 99_999_999, started_at: "2026-08-25T09:00:00Z", baseline_mined: 5 },
+      }),
+      mine: vi.fn().mockResolvedValue(minerResult()),
+      lock: openLock(),
+    });
+    await runKnowledgeSync({ deps: fresh.deps });
+    expect(fresh.saved[0].run).toMatchObject({ pid: process.pid, baseline_mined: 25 });
+  });
+
   it("skips without touching state when another run holds the lock", async () => {
     const mine = vi.fn();
     const { deps, saved } = makeMiningDeps({

@@ -965,6 +965,69 @@ describe("runActivityView", () => {
     await view;
   });
 
+  it("uses the run baseline the mining process persisted (survives reopening mid-run)", async () => {
+    const { input, output, written } = fakeIO();
+
+    // The view opens mid-run: 8 sessions already mined this run (568 - 560),
+    // 2 still queued. Without the persisted baseline this would read 0/2.
+    const view = runActivityView({
+      input,
+      output,
+      getStatus: () =>
+        makeStatus({
+          running: true,
+          pid: 9,
+          state: {
+            schema_version: 1,
+            watermark: null,
+            consecutive_failures: 0,
+            total_mined: 568,
+            run: { pid: 9, started_at: "2026-09-03T16:00:00Z", baseline_mined: 560 },
+          },
+        }),
+      readLog: () =>
+        "[2026-09-03T16:05:00.000Z] [INFO] [sync] gate: 2 ready, 0 in flight (watermark x)\n",
+      createFollower: () => ({ poll() {} }),
+      pollMs: 100,
+    });
+
+    expect(stripAnsi(written.join(""))).toContain("8/10 mined \u00B7 80%");
+
+    input.emit("data", "q");
+    await view;
+  });
+
+  it("ignores a stale run record from a different pid (falls back to the snapshot)", async () => {
+    const { input, output, written } = fakeIO();
+
+    const view = runActivityView({
+      input,
+      output,
+      getStatus: () =>
+        makeStatus({
+          running: true,
+          pid: 9,
+          state: {
+            schema_version: 1,
+            watermark: null,
+            consecutive_failures: 0,
+            total_mined: 568,
+            // A crashed earlier run's record; this run hasn't written its own yet.
+            run: { pid: 7, started_at: "2026-09-03T15:00:00Z", baseline_mined: 500 },
+          },
+        }),
+      readLog: () =>
+        "[2026-09-03T16:05:00.000Z] [INFO] [sync] gate: 2 ready, 0 in flight (watermark x)\n",
+      createFollower: () => ({ poll() {} }),
+      pollMs: 100,
+    });
+
+    expect(stripAnsi(written.join(""))).toContain("0/2 mined \u00B7 0%");
+
+    input.emit("data", "q");
+    await view;
+  });
+
   it("steps the bar within a batch from the miner's tool-call traces", async () => {
     const { input, output, written } = fakeIO();
     let emitChunk: (chunk: string) => void = () => {};
