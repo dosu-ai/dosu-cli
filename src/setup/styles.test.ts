@@ -20,12 +20,16 @@ describe("styles", () => {
   });
 
   describe("brand", () => {
-    it("returns plain text when colors are unsupported", () => {
-      expect(brand("dosu")).toBe("dosu");
+    // Color support differs between local runs (non-TTY → off) and CI
+    // (picocolors turns color on under CI=true), so assert on the stripped
+    // text rather than the exact escape sequences.
+    it("keeps the label intact whatever the color support", () => {
+      expect(stripVTControlCharacters(brand("dosu"))).toBe("dosu");
     });
 
-    it("badge falls back to brackets when colors are unsupported", () => {
-      expect(brandBadge("dosu")).toBe("[ dosu ]");
+    it("badge wraps the label: padded chip when colored, brackets when not", () => {
+      const badge = stripVTControlCharacters(brandBadge("dosu"));
+      expect(badge === "[ dosu ]" || badge === " dosu ").toBe(true);
     });
   });
 
