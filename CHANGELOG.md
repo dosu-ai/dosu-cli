@@ -1,3 +1,10 @@
+## [0.52.2](https://github.com/dosu-ai/dosu-cli/compare/v0.52.1...v0.52.2) (2026-09-04)
+
+
+### Bug Fixes
+
+* **telemetry:** associate CLI events with organizations ([#207](https://github.com/dosu-ai/dosu-cli/issues/207)) ([9ea62b2](https://github.com/dosu-ai/dosu-cli/commit/9ea62b21a8a2e2b086c13b4deb475340a47cb10f))
+
 ## [0.52.1](https://github.com/dosu-ai/dosu-cli/compare/v0.52.0...v0.52.1) (2026-09-02)
 
 
