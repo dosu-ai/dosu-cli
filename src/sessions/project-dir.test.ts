@@ -149,6 +149,34 @@ describe("createProjectDirResolver", () => {
     expect(readHead).toHaveBeenCalledTimes(1);
   });
 
+  it("returns null for unreadable logs and unknown harnesses", () => {
+    const resolver = createProjectDirResolver(tempDir);
+    // Claude log gone and no project dir to fall back on.
+    expect(resolver.resolve(session({ harness: "claude" }))).toBeNull();
+    // Codex "log" that opens but can't be read as a file.
+    expect(resolver.resolve(session({ harness: "codex", path: tempDir }))).toBeNull();
+    expect(resolver.resolve(session({ harness: "future" as never }))).toBeNull();
+  });
+
+  it("ignores a corrupt or foreign-schema cache file", () => {
+    const cache = join(tempDir, "project-dirs.json");
+    writeFileSync(cache, "{not json");
+    const first = createProjectDirResolver(tempDir);
+    expect(first.resolve(session({ harness: "opencode", project: "/x" }))).toBe("/x");
+    writeFileSync(cache, JSON.stringify({ schema_version: 99, entries: {} }));
+    const second = createProjectDirResolver(tempDir);
+    expect(second.resolve(session({ harness: "opencode", project: "/y" }))).toBe("/y");
+  });
+
+  it("swallows persistence failures (cache is only an optimization)", () => {
+    // A config "dir" that is actually a file: the write must fail silently.
+    const bogusDir = join(tempDir, "not-a-dir");
+    writeFileSync(bogusDir, "occupied");
+    const resolver = createProjectDirResolver(bogusDir);
+    expect(resolver.resolve(session({ harness: "opencode", project: "/z" }))).toBe("/z");
+    expect(() => resolver.flush()).not.toThrow();
+  });
+
   it("flush is a no-op when nothing was resolved", () => {
     const resolver = createProjectDirResolver(tempDir);
     resolver.flush(); // must not throw or write
