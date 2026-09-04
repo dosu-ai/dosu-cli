@@ -27,6 +27,13 @@
 * **tui:** surface live mining state in the menu and after setup ([ddebe82](https://github.com/dosu-ai/dosu-cli/commit/ddebe82d7baecdb27457986cd511250074235be1))
 * **tui:** treat a missing session-end hook as incomplete setup ([8a514e0](https://github.com/dosu-ai/dosu-cli/commit/8a514e0ba6b5d1d180edb6ad685c064d88fa0c39))
 
+## [0.52.1](https://github.com/dosu-ai/dosu-cli/compare/v0.52.0...v0.52.1) (2026-09-02)
+
+
+### Bug Fixes
+
+* remove retired library auto-publish setting ([#204](https://github.com/dosu-ai/dosu-cli/issues/204)) ([9f46752](https://github.com/dosu-ai/dosu-cli/commit/9f467528475411d455128a30670766edc46fff05))
+
 # [0.52.0](https://github.com/dosu-ai/dosu-cli/compare/v0.51.1...v0.52.0) (2026-09-01)
 
 

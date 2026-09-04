@@ -20,9 +20,13 @@ import type { SyncState } from "../sync/watermark";
 import { ALT_SCREEN_ENTER, ALT_SCREEN_EXIT } from "./alt-screen";
 import {
   ANALYTICS_VIEW_LINES,
-  analyticsRows,
+  analyticsTabRows,
+  cycleAnalyticsTab,
   fetchPageStats,
+  overviewRows,
   type PageStats,
+  pageRows,
+  projectRows,
   reduceAnalyticsViewKey,
   renderAnalyticsFrame,
   runAnalyticsView,
@@ -58,6 +62,18 @@ function reportState(): SyncState {
   };
 }
 
+/** A state with enough per-project history to overflow the scroll window. */
+function overflowState(): SyncState {
+  return {
+    ...reportState(),
+    mined_sessions: Array.from({ length: ANALYTICS_VIEW_LINES + 3 }, (_, i) => ({
+      at: "2026-09-02T23:00:00.000Z",
+      session: `cursor/s${i}`,
+      project: `project-${i}`,
+    })),
+  };
+}
+
 function makeStatus(state: SyncState = emptyState()): SyncStatus {
   return { running: false, state, recentActivity: [] };
 }
@@ -83,6 +99,12 @@ describe("reduceAnalyticsViewKey", () => {
     expect(reduceAnalyticsViewKey(CTRL_C)).toBe("back");
   });
 
+  it("cycles tabs on tab and the horizontal arrows", () => {
+    expect(reduceAnalyticsViewKey("\t")).toBe("tab");
+    expect(reduceAnalyticsViewKey(`${ESC}[C`)).toBe("tab");
+    expect(reduceAnalyticsViewKey(`${ESC}[D`)).toBe("tab-back");
+  });
+
   it("scrolls on the up/down arrows and k/j", () => {
     expect(reduceAnalyticsViewKey(`${ESC}[A`)).toBe("up");
     expect(reduceAnalyticsViewKey("k")).toBe("up");
@@ -92,35 +114,56 @@ describe("reduceAnalyticsViewKey", () => {
 
   it("ignores other keys", () => {
     expect(reduceAnalyticsViewKey("x")).toBe("none");
-    expect(reduceAnalyticsViewKey("\t")).toBe("none");
+    expect(reduceAnalyticsViewKey("s")).toBe("none");
   });
 });
 
-describe("analyticsRows", () => {
-  it("renders the mining totals with per-project history", () => {
-    const rows = analyticsRows(reportState()).join("\n");
+describe("cycleAnalyticsTab", () => {
+  it("cycles overview → projects → pages and wraps both ways", () => {
+    expect(cycleAnalyticsTab("overview")).toBe("projects");
+    expect(cycleAnalyticsTab("projects")).toBe("pages");
+    expect(cycleAnalyticsTab("pages")).toBe("overview");
+    expect(cycleAnalyticsTab("overview", -1)).toBe("pages");
+  });
+});
+
+describe("overviewRows", () => {
+  it("renders the mining totals", () => {
+    const rows = overviewRows(reportState()).join("\n");
     expect(rows).toContain("Sessions mined");
     expect(rows).toContain("558");
     expect(rows).toContain("Suggested pages");
     expect(rows).toContain("42");
     expect(rows).toContain("Investigation distilled");
-    expect(rows).toContain("Mined by project");
-    expect(rows).toContain("dosu-cli");
-    expect(rows).toContain("(unknown)");
   });
 
   it("returns nothing before the first run has anything to report", () => {
-    expect(analyticsRows(emptyState())).toEqual([]);
+    expect(overviewRows(emptyState())).toEqual([]);
   });
 
   it("omits the token row when no learning tokens are known", () => {
-    const rows = analyticsRows({ ...emptyState(), total_mined: 3, total_notes: 2 }).join("\n");
+    const rows = overviewRows({ ...emptyState(), total_mined: 3, total_notes: 2 }).join("\n");
     expect(rows).toContain("Sessions mined");
     expect(rows).not.toContain("Investigation distilled");
   });
+});
 
-  it("appends the page sections when page stats are in", () => {
-    const rows = analyticsRows(reportState(), pageStats()).join("\n");
+describe("projectRows", () => {
+  it("buckets recent history by project, busiest first", () => {
+    const rows = projectRows(reportState());
+    expect(rows[0]).toContain("dosu-cli");
+    expect(rows[0]).toContain("2");
+    expect(rows[1]).toContain("(unknown)");
+  });
+
+  it("is empty without mined-session history", () => {
+    expect(projectRows(emptyState())).toEqual([]);
+  });
+});
+
+describe("pageRows", () => {
+  it("renders both page sections", () => {
+    const rows = pageRows(pageStats()).join("\n");
     expect(rows).toContain("Top cited pages (30d)");
     expect(rows).toContain("OAuth refresh token exp\u2026");
     expect(rows).toContain("12");
@@ -129,19 +172,24 @@ describe("analyticsRows", () => {
     expect(rows).toContain("2026-09-03");
   });
 
-  it("shows page sections even before the first mining run", () => {
-    const rows = analyticsRows(emptyState(), pageStats());
-    expect(rows[0]).toContain("Top cited pages");
-    expect(rows.join("\n")).not.toContain("Sessions mined");
+  it("omits empty sections and handles missing stats", () => {
+    expect(pageRows(null)).toEqual([]);
+    expect(pageRows({ topUpdated: [], topCited: [] })).toEqual([]);
+    const citedOnly = pageRows({ ...pageStats(), topUpdated: [] }).join("\n");
+    expect(citedOnly).toContain("Top cited pages");
+    expect(citedOnly).not.toContain("Recently updated pages");
   });
+});
 
-  it("omits empty page sections", () => {
-    const rows = analyticsRows(reportState(), {
-      topUpdated: [],
-      topCited: [],
-    }).join("\n");
-    expect(rows).not.toContain("Top cited pages");
-    expect(rows).not.toContain("Recently updated pages");
+describe("analyticsTabRows", () => {
+  it("routes each tab to its rows", () => {
+    expect(analyticsTabRows("overview", reportState(), null).join("\n")).toContain(
+      "Sessions mined",
+    );
+    expect(analyticsTabRows("projects", reportState(), null).join("\n")).toContain("dosu-cli");
+    expect(analyticsTabRows("pages", emptyState(), pageStats()).join("\n")).toContain(
+      "Top cited pages",
+    );
   });
 });
 
@@ -237,7 +285,7 @@ describe("fetchPageStats", () => {
 describe("windowReport", () => {
   const lines = Array.from({ length: 25 }, (_, i) => `row ${i}`);
 
-  it("anchors to the top at scroll 0 — a report reads top-down", () => {
+  it("anchors to the top at scroll 0 (a report reads top-down)", () => {
     const { visible, above, below } = windowReport(lines, 0, 10);
     expect(visible).toEqual(lines.slice(0, 10));
     expect(above).toBe(0);
@@ -267,34 +315,49 @@ describe("windowReport", () => {
 });
 
 describe("renderAnalyticsFrame", () => {
-  it("titles the screen and shows the report with the key legend", () => {
-    const frame = stripAnsi(renderAnalyticsFrame(reportState(), 0));
+  it("titles the screen and shows the tab strip with the key legend", () => {
+    const frame = stripAnsi(renderAnalyticsFrame(reportState(), "overview", 0));
     expect(frame).toContain("Analytics");
+    expect(frame).toContain("Overview");
+    expect(frame).toContain("Projects");
+    expect(frame).toContain("Pages");
     expect(frame).toContain("Sessions mined");
-    expect(frame).toContain("\u2191\u2193 scroll \u00B7 esc back");
+    expect(frame).toContain("tab switch \u00B7 \u2191\u2193 scroll \u00B7 esc back");
   });
 
-  it("shows an empty message before the first run", () => {
-    const frame = stripAnsi(renderAnalyticsFrame(emptyState(), 0));
-    expect(frame).toContain("No analytics yet");
+  it("underlines the active tab, keeping the strip compact instead of full width", () => {
+    const lines = stripAnsi(
+      renderAnalyticsFrame(reportState(), "projects", 0, null, false, 60),
+    ).split("\n");
+    const row = lines[2];
+    const rule = lines[3];
+    // Side by side with the minimum gap, not spread across the frame.
+    expect(row).toBe("Overview   Projects   Pages");
+    const start = row.indexOf("Projects");
+    expect(rule.indexOf("\u2501")).toBe(start);
+    expect(rule.lastIndexOf("\u2501")).toBe(start + "Projects".length - 1);
+    // The rule stops with the labels rather than running the frame width.
+    expect(rule.length).toBe(row.length);
   });
 
-  it("reports scrollback below when the report overflows the window", () => {
-    // Enough per-project rows to overflow: rows = 3 stat lines +
-    // blank + heading + 8 projects = 13 > the 12-line window.
-    const state: SyncState = {
-      ...reportState(),
-      mined_sessions: Array.from({ length: 9 }, (_, i) => ({
-        at: "2026-09-02T23:00:00.000Z",
-        session: `cursor/s${i}`,
-        project: `project-${i}`,
-      })),
-    };
-    const rows = analyticsRows(state);
+  it("shows per-tab empty messages, including the pages loading state", () => {
+    const overview = stripAnsi(renderAnalyticsFrame(emptyState(), "overview", 0));
+    expect(overview).toContain("No analytics yet");
+    const projects = stripAnsi(renderAnalyticsFrame(emptyState(), "projects", 0));
+    expect(projects).toContain("No per-project history yet");
+    const loading = stripAnsi(renderAnalyticsFrame(emptyState(), "pages", 0, null, true));
+    expect(loading).toContain("Loading page analytics...");
+    const settled = stripAnsi(renderAnalyticsFrame(emptyState(), "pages", 0, null, false));
+    expect(settled).toContain("No page analytics yet.");
+  });
+
+  it("reports scrollback below when the projects tab overflows the window", () => {
+    const state = overflowState();
+    const rows = projectRows(state);
     expect(rows.length).toBeGreaterThan(ANALYTICS_VIEW_LINES);
-    const top = stripAnsi(renderAnalyticsFrame(state, 0));
+    const top = stripAnsi(renderAnalyticsFrame(state, "projects", 0));
     expect(top).toContain(`\u2193 ${rows.length - ANALYTICS_VIEW_LINES} more`);
-    const scrolled = stripAnsi(renderAnalyticsFrame(state, 1));
+    const scrolled = stripAnsi(renderAnalyticsFrame(state, "projects", 1));
     expect(scrolled).toContain("\u2191 1 earlier");
   });
 });
@@ -351,7 +414,7 @@ describe("runAnalyticsView", () => {
     expect(written).toEqual([]);
   });
 
-  it("takes over the screen, renders the report, and exits on q", async () => {
+  it("takes over the screen, renders the overview, and exits on q", async () => {
     const { input, output, written } = fakeIO();
 
     const view = runAnalyticsView({
@@ -373,31 +436,54 @@ describe("runAnalyticsView", () => {
     expect(written.join("")).toContain(ALT_SCREEN_EXIT);
   });
 
-  it("scrolls the overflowing report with the arrows", async () => {
+  it("cycles overview → projects → pages on tab and back with ←", async () => {
     const { input, output, written } = fakeIO();
-    const state: SyncState = {
-      ...reportState(),
-      mined_sessions: Array.from({ length: 9 }, (_, i) => ({
-        at: "2026-09-02T23:00:00.000Z",
-        session: `cursor/s${i}`,
-        project: `project-${i}`,
-      })),
-    };
 
     const view = runAnalyticsView({
       input,
       output,
-      getStatus: () => makeStatus(state),
+      getStatus: () => makeStatus(reportState()),
+      loadPageStats: async () => pageStats(),
+      pollMs: 100,
+    });
+    // Let the page stats land before touring the tabs.
+    for (let i = 0; i < 4; i += 1) await Promise.resolve();
+
+    input.emit("data", "\t");
+    expect(stripAnsi(written.at(-1) ?? "")).toContain("dosu-cli");
+    input.emit("data", "\t");
+    expect(stripAnsi(written.at(-1) ?? "")).toContain("Top cited pages (30d)");
+    // ← walks backwards to Projects.
+    input.emit("data", `${ESC}[D`);
+    expect(stripAnsi(written.at(-1) ?? "")).toContain("(unknown)");
+
+    input.emit("data", "q");
+    await view;
+  });
+
+  it("scrolls the overflowing projects tab with the arrows", async () => {
+    const { input, output, written } = fakeIO();
+
+    const view = runAnalyticsView({
+      input,
+      output,
+      getStatus: () => makeStatus(overflowState()),
       loadPageStats: async () => null,
       pollMs: 100,
     });
 
-    // ↑ at the top is a no-op; ↓ walks toward the per-project tail.
+    input.emit("data", "\t"); // onto Projects
+    // ↑ at the top is a no-op; ↓ walks toward the tail.
     input.emit("data", `${ESC}[A`);
     expect(stripAnsi(written.join(""))).not.toContain("\u2191 1 earlier");
     input.emit("data", `${ESC}[B`);
     expect(stripAnsi(written.at(-1) ?? "")).toContain("\u2191 1 earlier");
     input.emit("data", `${ESC}[A`);
+    expect(stripAnsi(written.at(-1) ?? "")).not.toContain("\u2191 1 earlier");
+    // Switching tabs resets the scroll offset.
+    input.emit("data", `${ESC}[B`);
+    input.emit("data", "\t");
+    input.emit("data", `${ESC}[D`);
     expect(stripAnsi(written.at(-1) ?? "")).not.toContain("\u2191 1 earlier");
 
     input.emit("data", "q");
@@ -457,7 +543,7 @@ describe("runAnalyticsView", () => {
     expect(written.length).toBe(afterExit);
   });
 
-  it("pads a fixed top margin — no vertical centering, so the frame never jiggles", async () => {
+  it("pads a fixed top margin so the frame never jiggles", async () => {
     const { input, output, written } = fakeIO();
 
     const view = runAnalyticsView({
@@ -481,7 +567,7 @@ describe("runAnalyticsView", () => {
     await view;
   });
 
-  it("repaints with the page sections once the backend stats land", async () => {
+  it("flips the pages tab from loading to the report once the stats land", async () => {
     const { input, output, written } = fakeIO();
 
     const view = runAnalyticsView({
@@ -492,17 +578,32 @@ describe("runAnalyticsView", () => {
       pollMs: 100,
     });
 
-    // The first paint is local-only; the loader's microtask hasn't run yet.
-    expect(stripAnsi(written.join(""))).not.toContain("Top cited pages");
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    // Straight to Pages before the loader's microtask has run.
+    input.emit("data", `${ESC}[D`);
+    expect(stripAnsi(written.at(-1) ?? "")).toContain("Loading page analytics...");
+    for (let i = 0; i < 4; i += 1) await Promise.resolve();
     const rendered = stripAnsi(written.at(-1) ?? "");
     expect(rendered).toContain("Top cited pages (30d)");
-    // The report grew past the window; the tail is reachable by scrolling.
-    input.emit("data", `${ESC}[B`);
-    input.emit("data", `${ESC}[B`);
-    expect(stripAnsi(written.at(-1) ?? "")).toContain("Recently updated pages");
+    expect(rendered).toContain("Recently updated pages");
+
+    input.emit("data", "q");
+    await view;
+  });
+
+  it("settles to the empty message when the loader fails open", async () => {
+    const { input, output, written } = fakeIO();
+
+    const view = runAnalyticsView({
+      input,
+      output,
+      getStatus: () => makeStatus(reportState()),
+      loadPageStats: async () => null,
+      pollMs: 100,
+    });
+
+    for (let i = 0; i < 4; i += 1) await Promise.resolve();
+    input.emit("data", `${ESC}[D`);
+    expect(stripAnsi(written.at(-1) ?? "")).toContain("No page analytics yet.");
 
     input.emit("data", "q");
     await view;
@@ -583,7 +684,8 @@ describe("runAnalyticsView", () => {
     });
     await microtasks();
 
-    const rendered = stripAnsi(written.join(""));
+    input.emit("data", `${ESC}[D`); // onto Pages
+    const rendered = stripAnsi(written.at(-1) ?? "");
     expect(rendered).toContain("Top cited pages (30d)");
 
     input.emit("data", "q");
@@ -605,7 +707,8 @@ describe("runAnalyticsView", () => {
     });
     await microtasks();
     expect(mockCreateTypedClient).not.toHaveBeenCalled();
-    expect(stripAnsi(written.join(""))).not.toContain("Top cited pages");
+    input.emit("data", `${ESC}[D`);
+    expect(stripAnsi(written.at(-1) ?? "")).toContain("No page analytics yet.");
     input.emit("data", "q");
     await view;
 

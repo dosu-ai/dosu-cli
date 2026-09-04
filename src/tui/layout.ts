@@ -5,6 +5,7 @@
  */
 
 import pc from "picocolors";
+import { brand } from "../setup/styles";
 
 const ESC = String.fromCharCode(27);
 
@@ -55,6 +56,54 @@ const ANSI_PATTERN = new RegExp(`${ESC}\\[[0-9;?]*[A-Za-z]`, "g");
 /** Printable width, ignoring ANSI color codes. */
 export function visibleWidth(text: string): number {
   return text.replace(ANSI_PATTERN, "").length;
+}
+
+/**
+ * A tab strip shared by the tabbed screens: one row of labels over a rule
+ * whose heavier segment sits under the active label (visible even without
+ * color). Spread mode stretches the labels across `width` like flex
+ * space-between; compact mode sits them side by side over a rule that only
+ * runs as far as the labels do.
+ */
+export function tabStrip<Id extends string>(
+  labels: ReadonlyArray<readonly [Id, string]>,
+  active: Id,
+  width: number,
+  { spread = true }: { spread?: boolean } = {},
+): [string, string] {
+  // Narrow frames fall back to the minimum gap and let the row run long.
+  const GAP_MIN = 3;
+  const totalLen = labels.reduce((sum, [, label]) => sum + label.length, 0);
+  const slots = Math.max(1, labels.length - 1);
+  const spare = spread ? Math.max(GAP_MIN * slots, width - totalLen) : GAP_MIN * slots;
+  const baseGap = Math.floor(spare / slots);
+  const bonus = spare % slots; // first `bonus` gaps get one extra column
+  let row = "";
+  let col = 0;
+  let activeStart = 0;
+  let activeLen = 0;
+  labels.forEach(([id, label], i) => {
+    if (i > 0) {
+      const gap = baseGap + (i <= bonus ? 1 : 0);
+      row += " ".repeat(gap);
+      col += gap;
+    }
+    if (id === active) {
+      activeStart = col;
+      activeLen = label.length;
+      row += brand(pc.bold(label));
+    } else {
+      row += pc.dim(label);
+    }
+    col += label.length;
+  });
+  const ruleEnd = spread ? width : col;
+  const tail = Math.max(0, ruleEnd - activeStart - activeLen);
+  const rule =
+    pc.dim("\u2500".repeat(activeStart)) +
+    brand("\u2501".repeat(activeLen)) +
+    pc.dim("\u2500".repeat(tail));
+  return [row, rule];
 }
 
 /** Center a multi-line block as a unit so its rows stay left-aligned. */
