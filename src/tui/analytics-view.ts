@@ -220,6 +220,8 @@ export function renderAnalyticsFrame(
   const lines = [
     breadcrumb(["Home", "Analytics"], width),
     "",
+    // Compact, not spread: three short labels across the full frame read as
+    // disconnected islands.
     ...tabStrip(
       [
         ["overview", "Overview"],
@@ -228,6 +230,7 @@ export function renderAnalyticsFrame(
       ],
       tab,
       width,
+      { spread: false },
     ),
     ...listRows,
     ...(scrollParts.length > 0 ? [pc.dim(scrollParts.join(" \u00B7 "))] : []),

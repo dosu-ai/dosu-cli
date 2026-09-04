@@ -325,16 +325,19 @@ describe("renderAnalyticsFrame", () => {
     expect(frame).toContain("tab switch \u00B7 \u2191\u2193 scroll \u00B7 esc back");
   });
 
-  it("underlines the active tab with the heavy rule segment", () => {
+  it("underlines the active tab, keeping the strip compact instead of full width", () => {
     const lines = stripAnsi(
       renderAnalyticsFrame(reportState(), "projects", 0, null, false, 60),
     ).split("\n");
     const row = lines[2];
     const rule = lines[3];
+    // Side by side with the minimum gap, not spread across the frame.
+    expect(row).toBe("Overview   Projects   Pages");
     const start = row.indexOf("Projects");
     expect(rule.indexOf("\u2501")).toBe(start);
     expect(rule.lastIndexOf("\u2501")).toBe(start + "Projects".length - 1);
-    expect(rule.length).toBe(60);
+    // The rule stops with the labels rather than running the frame width.
+    expect(rule.length).toBe(row.length);
   });
 
   it("shows per-tab empty messages, including the pages loading state", () => {
