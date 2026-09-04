@@ -2,11 +2,12 @@
 export default {
   branches: [
     "main",
-    // Internal pre-release channel: commits to `alpha` publish to npm under
-    // dist-tag `alpha`, e.g. `0.11.0-alpha.1`. Users opt in via
-    // `npx @dosu/cli@alpha setup`. Homebrew is skipped for these (see
-    // ci.yml — `update-homebrew` filters out versions containing `-`).
+    // Internal pre-release channels: commits to `alpha`/`beta` publish to npm
+    // under the matching dist-tag, e.g. `0.11.0-alpha.1` / `0.11.0-beta.1`.
+    // Users opt in via `npx @dosu/cli@alpha setup` (or `@beta`). Homebrew is
+    // skipped for these (ci.yml — `update-homebrew` filters versions with `-`).
     { name: "alpha", prerelease: true },
+    { name: "beta", prerelease: true },
   ],
   plugins: [
     "@semantic-release/commit-analyzer",
