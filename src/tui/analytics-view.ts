@@ -1,7 +1,7 @@
 /**
- * Standalone Analytics screen: all-time mining numbers from local sync state
- * plus backend page analytics (top cited, recently updated) for the active
- * Library. Pure render/reduce functions wired to injectable IO.
+ * Standalone Analytics screen: tabbed report over all-time mining numbers
+ * from local sync state (Overview, Projects) plus backend page analytics
+ * (Pages). Pure render/reduce functions wired to injectable IO.
  */
 
 import pc from "picocolors";
@@ -10,7 +10,7 @@ import { loadConfig } from "../config/config";
 import { formatTokenCount, getSyncStatus, type SyncStatus } from "../sync/status";
 import type { SyncState } from "../sync/watermark";
 import { enterAltScreen } from "./alt-screen";
-import { breadcrumb, frameTopMargin } from "./layout";
+import { breadcrumb, contentWidth, frameTopMargin, tabStrip } from "./layout";
 import { parseKeys } from "./menu";
 
 const ESC = String.fromCharCode(27);
@@ -19,6 +19,8 @@ const SHOW_CURSOR = `${ESC}[?25h`;
 const CTRL_C = String.fromCharCode(3);
 const KEY_UP = `${ESC}[A`;
 const KEY_DOWN = `${ESC}[B`;
+const KEY_RIGHT = `${ESC}[C`;
+const KEY_LEFT = `${ESC}[D`;
 const CURSOR_HOME = `${ESC}[H`;
 const CLEAR_BELOW = `${ESC}[0J`;
 const CLEAR_EOL = `${ESC}[K`;
@@ -29,14 +31,28 @@ const ANALYTICS_VIEW_POLL_MS = 1000;
 /** How many report lines fit on screen at once (the scroll window). */
 export const ANALYTICS_VIEW_LINES = 12;
 
-export type AnalyticsViewAction = "back" | "up" | "down" | "none";
+export type AnalyticsViewTab = "overview" | "projects" | "pages";
 
-/** q / esc / ctrl-c go back, ↑/↓ (or k/j) scroll the report. */
+/** Tab order for cycling; ← walks it backwards. */
+const ANALYTICS_VIEW_TABS: readonly AnalyticsViewTab[] = ["overview", "projects", "pages"];
+
+export type AnalyticsViewAction = "back" | "tab" | "tab-back" | "up" | "down" | "none";
+
+/** q/esc/ctrl-c back, tab/→ and ← cycle tabs, ↑/↓ (or k/j) scroll. */
 export function reduceAnalyticsViewKey(key: string): AnalyticsViewAction {
   if (key === "q" || key === ESC || key === CTRL_C) return "back";
+  if (key === "\t" || key === KEY_RIGHT) return "tab";
+  if (key === KEY_LEFT) return "tab-back";
   if (key === KEY_UP || key === "k") return "up";
   if (key === KEY_DOWN || key === "j") return "down";
   return "none";
+}
+
+/** The next tab in cycle order; `delta` -1 walks backwards. */
+export function cycleAnalyticsTab(tab: AnalyticsViewTab, delta: 1 | -1 = 1): AnalyticsViewTab {
+  const index = ANALYTICS_VIEW_TABS.indexOf(tab);
+  const next = (index + delta + ANALYTICS_VIEW_TABS.length) % ANALYTICS_VIEW_TABS.length;
+  return ANALYTICS_VIEW_TABS[next];
 }
 
 function clip(text: string, max: number): string {
@@ -102,36 +118,41 @@ function loadPageStatsFromConfig(): Promise<PageStats | null> {
   }
 }
 
+const label = (text: string) => text.padEnd(26);
+
 /**
- * The report body. "Investigation distilled" is the tokens the mined
- * investigations originally cost to learn; future reads reuse that.
+ * Overview tab: the all-time totals. "Investigation distilled" is the tokens
+ * the mined investigations originally cost to learn; future reads reuse that.
  */
-export function analyticsRows(state: SyncState, pageStats: PageStats | null = null): string[] {
+export function overviewRows(state: SyncState): string[] {
   const minedTotal = state.total_mined ?? 0;
   const notes = state.total_notes ?? 0;
   const tokens = state.total_learning_tokens ?? 0;
-  const label = (text: string) => text.padEnd(26);
-  const rows: string[] = [];
-  if (minedTotal > 0 || notes > 0) {
-    rows.push(`${label("Sessions mined")}${minedTotal}`, `${label("Suggested pages")}${notes}`);
-    if (tokens > 0) {
-      rows.push(`${label("Investigation distilled")}${formatTokenCount(tokens)} tokens`);
-    }
-    const byProject = new Map<string, number>();
-    for (const record of state.mined_sessions ?? []) {
-      const key = record.project ?? "(unknown)";
-      byProject.set(key, (byProject.get(key) ?? 0) + 1);
-    }
-    if (byProject.size > 0) {
-      rows.push("", "Mined by project (recent history)");
-      const top = [...byProject.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
-      for (const [project, count] of top) {
-        rows.push(`${label(clip(project, 24))}${count}`);
-      }
-    }
+  if (minedTotal === 0 && notes === 0) return [];
+  const rows = [`${label("Sessions mined")}${minedTotal}`, `${label("Suggested pages")}${notes}`];
+  if (tokens > 0) {
+    rows.push(`${label("Investigation distilled")}${formatTokenCount(tokens)} tokens`);
   }
+  return rows;
+}
+
+/** Projects tab: recent mined-session history bucketed by project. */
+export function projectRows(state: SyncState): string[] {
+  const byProject = new Map<string, number>();
+  for (const record of state.mined_sessions ?? []) {
+    const key = record.project ?? "(unknown)";
+    byProject.set(key, (byProject.get(key) ?? 0) + 1);
+  }
+  return [...byProject.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([project, count]) => `${label(clip(project, 24))}${count}`);
+}
+
+/** Pages tab: the backend page sections, once the stats have landed. */
+export function pageRows(pageStats: PageStats | null): string[] {
+  const rows: string[] = [];
   if (pageStats && pageStats.topCited.length > 0) {
-    rows.push(...(rows.length > 0 ? [""] : []), `Top cited pages (${TOP_CITED_DAYS}d)`);
+    rows.push(`Top cited pages (${TOP_CITED_DAYS}d)`);
     for (const row of pageStats.topCited) {
       rows.push(`${label(clip(row.title, 24))}${row.citation_count}`);
     }
@@ -159,30 +180,59 @@ export function windowReport(
   };
 }
 
+/** The rows the given tab displays. */
+export function analyticsTabRows(
+  tab: AnalyticsViewTab,
+  state: SyncState,
+  pageStats: PageStats | null,
+): string[] {
+  if (tab === "overview") return overviewRows(state);
+  if (tab === "projects") return projectRows(state);
+  return pageRows(pageStats);
+}
+
 /** Render the full analytics block, anchored to the content column's left edge. */
 export function renderAnalyticsFrame(
   state: SyncState,
+  tab: AnalyticsViewTab,
   scroll: number,
   pageStats: PageStats | null = null,
+  /** True while the backend page-stats fetch hasn't settled yet. */
+  pagesPending = false,
+  width: number = contentWidth(),
 ): string {
-  const rows = analyticsRows(state, pageStats);
+  const rows = analyticsTabRows(tab, state, pageStats);
   const { visible, above, below } = windowReport(rows, scroll);
-  const listRows =
-    visible.length > 0
-      ? visible.map((row) => pc.dim(row))
-      : [pc.dim("No analytics yet. They appear after the first mining run.")];
+  const empty =
+    tab === "overview"
+      ? "No analytics yet. They appear after the first mining run."
+      : tab === "projects"
+        ? "No per-project history yet. It fills in as sessions are mined."
+        : pagesPending
+          ? "Loading page analytics..."
+          : "No page analytics yet.";
+  const listRows = visible.length > 0 ? visible.map((row) => pc.dim(row)) : [pc.dim(empty)];
 
   const scrollParts: string[] = [];
   if (above > 0) scrollParts.push(`\u2191 ${above} earlier`);
   if (below > 0) scrollParts.push(`\u2193 ${below} more`);
 
   const lines = [
-    breadcrumb(["Home", "Analytics"]),
+    breadcrumb(["Home", "Analytics"], width),
     "",
+    ...tabStrip(
+      [
+        ["overview", "Overview"],
+        ["projects", "Projects"],
+        ["pages", "Pages"],
+      ],
+      tab,
+      width,
+    ),
     ...listRows,
     ...(scrollParts.length > 0 ? [pc.dim(scrollParts.join(" \u00B7 "))] : []),
     "",
-    pc.dim("\u2191\u2193 scroll \u00B7 esc back"),
+    pc.dim("tab switch \u00B7 \u2191\u2193 scroll \u00B7 esc back"),
   ];
   return lines.join("\n");
 }
@@ -210,16 +260,19 @@ export function runAnalyticsView(io: AnalyticsViewIO = {}): Promise<void> {
   const loadPageStats = io.loadPageStats ?? loadPageStatsFromConfig;
   const pollMs = io.pollMs ?? ANALYTICS_VIEW_POLL_MS;
 
+  let tab: AnalyticsViewTab = "overview";
   let scroll = 0;
   let status = getStatus();
   let pageStats: PageStats | null = null;
+  let pagesPending = true;
   let closed = false;
 
   // Same painting discipline as the Activity view; identical frames skip the write.
   let lastFrame: string | null = null;
   const draw = () => {
     status = getStatus();
-    const frame = renderAnalyticsFrame(status.state, scroll, pageStats);
+    const width = Math.min(contentWidth(output.columns ?? 80), (output.columns ?? 80) - 1);
+    const frame = renderAnalyticsFrame(status.state, tab, scroll, pageStats, pagesPending, width);
     if (frame === lastFrame) return;
     lastFrame = frame;
     // Fixed top margin; +1 matches the home banner's leading blank line.
@@ -241,8 +294,9 @@ export function runAnalyticsView(io: AnalyticsViewIO = {}): Promise<void> {
 
   // Backend page analytics land after the local numbers paint; fails open to null.
   loadPageStats().then((stats) => {
-    if (closed || !stats) return;
+    if (closed) return;
     pageStats = stats;
+    pagesPending = false;
     draw();
   });
 
@@ -274,7 +328,11 @@ export function runAnalyticsView(io: AnalyticsViewIO = {}): Promise<void> {
           finish();
           return;
         }
-        if (action === "up") {
+        if (action === "tab" || action === "tab-back") {
+          tab = cycleAnalyticsTab(tab, action === "tab" ? 1 : -1);
+          scroll = 0;
+          draw();
+        } else if (action === "up") {
           if (scroll > 0) {
             scroll -= 1;
             draw();
@@ -282,7 +340,7 @@ export function runAnalyticsView(io: AnalyticsViewIO = {}): Promise<void> {
         } else if (action === "down") {
           const maxScroll = Math.max(
             0,
-            analyticsRows(status.state, pageStats).length - ANALYTICS_VIEW_LINES,
+            analyticsTabRows(tab, status.state, pageStats).length - ANALYTICS_VIEW_LINES,
           );
           if (scroll < maxScroll) {
             scroll += 1;

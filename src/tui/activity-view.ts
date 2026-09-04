@@ -26,6 +26,7 @@ import {
   contentWidth,
   frameTopMargin,
   layoutMargin,
+  tabStrip,
   visibleWidth,
 } from "./layout";
 import { parseKeys } from "./menu";
@@ -277,10 +278,7 @@ export function progressLine(done: number, ready: number, width: number, notes =
   return `${bar} ${done}/${total} mined \u00B7 ${pct}%${suffix}`;
 }
 
-/**
- * The tab strip: one row of labels over a rule, with the active segment in
- * bold brand color and a heavier rule mark (visible even without color).
- */
+/** The Activity tab strip: labels with live counts over the shared rule. */
 export function tabBar(
   tab: ActivityViewTab,
   queuedCount: number,
@@ -288,45 +286,16 @@ export function tabBar(
   minedCount: number,
   width: number,
 ): string[] {
-  const labels: Array<[ActivityViewTab, string]> = [
-    ["activity", "Activity"],
-    ["mined", `Mined (${minedCount})`],
-    ["queued", `Queued (${queuedCount})`],
-    ["open", `Open (${openCount})`],
-  ];
-  // Space-between across the frame width; narrow frames fall back to a
-  // minimum gap and let the row run long.
-  const GAP_MIN = 3;
-  const totalLen = labels.reduce((sum, [, label]) => sum + label.length, 0);
-  const slots = labels.length - 1;
-  const spare = Math.max(GAP_MIN * slots, width - totalLen);
-  const baseGap = Math.floor(spare / slots);
-  const bonus = spare % slots; // first `bonus` gaps get one extra column
-  let row = "";
-  let col = 0;
-  let activeStart = 0;
-  let activeLen = 0;
-  labels.forEach(([id, label], i) => {
-    if (i > 0) {
-      const gap = baseGap + (i <= bonus ? 1 : 0);
-      row += " ".repeat(gap);
-      col += gap;
-    }
-    if (id === tab) {
-      activeStart = col;
-      activeLen = label.length;
-      row += brand(pc.bold(label));
-    } else {
-      row += pc.dim(label);
-    }
-    col += label.length;
-  });
-  const tail = Math.max(0, width - activeStart - activeLen);
-  const rule =
-    pc.dim("\u2500".repeat(activeStart)) +
-    brand("\u2501".repeat(activeLen)) +
-    pc.dim("\u2500".repeat(tail));
-  return [row, rule];
+  return tabStrip(
+    [
+      ["activity", "Activity"],
+      ["mined", `Mined (${minedCount})`],
+      ["queued", `Queued (${queuedCount})`],
+      ["open", `Open (${openCount})`],
+    ],
+    tab,
+    width,
+  );
 }
 
 /**
