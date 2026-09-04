@@ -1,3 +1,10 @@
+# [0.53.0-beta.4](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.3...v0.53.0-beta.4) (2026-09-04)
+
+
+### Bug Fixes
+
+* **miner:** use the built-in write-knowledge rules for mining runs ([1858126](https://github.com/dosu-ai/dosu-cli/commit/1858126c08eb41ae73ced07fdb09b6b1aa80520e))
+
 # [0.53.0-beta.3](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.2...v0.53.0-beta.3) (2026-09-04)
 
 
