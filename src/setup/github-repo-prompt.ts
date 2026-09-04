@@ -1,14 +1,5 @@
-/**
- * The GitHub repository picker, rendered in Dosu's own prompt language
- * (tui/prompts.ts) instead of clack's: a multiselect over repos plus
- * action rows ("Add repositories...", "Refresh list") that submit on
- * enter, separator rows, disabled rows the cursor skips (forks and
- * already-connected repos), viewport windowing for long lists, and an
- * empty-selection guard so enter can never submit nothing.
- *
- * The controller is pure (render + handle) so tests drive it without a
- * TTY; `promptGitHubRepositories` wires it to the kit's frame runner.
- */
+/** GitHub repository picker in Dosu's own prompt language (tui/prompts.ts). The controller is
+ * pure (render + handle) so tests can drive it without a TTY. */
 
 import pc from "picocolors";
 import {
@@ -43,11 +34,8 @@ export const REFRESH_LIST_VALUE = "__refresh_list__" as const;
 
 type ActionValue = typeof ADD_REPOSITORIES_VALUE | typeof REFRESH_LIST_VALUE;
 
-/**
- * Submit guard: an empty repo selection is never a valid submission — enter
- * without any space-selected repo re-renders with a hint instead of silently
- * advancing (action options submit as strings and always pass).
- */
+/** Submit guard: an empty repo selection re-renders with a hint instead of submitting; action
+ * options submit as strings and always pass. */
 export function validateRepoSelection(
   value: ActionValue | string[] | undefined,
 ): string | undefined {
@@ -72,10 +60,7 @@ type PromptOption =
       value: string;
       label: string;
       hint?: string;
-      /**
-       * Rendered dimmed and skipped by cursor/selection — used for repos the
-       * backend can never sync (forks), mirroring the web attach modal.
-       */
+      /** Dimmed and skipped by cursor/selection; for repos the backend cannot sync (forks). */
       disabled?: boolean;
     };
 

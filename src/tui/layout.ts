@@ -1,8 +1,5 @@
-/**
- * Centered terminal layout: patches `stdout.write` to inject a left margin
- * on every rendered line (clack has no indent support), so all TUI output
- * shares one centered content column.
- */
+/** Centered terminal layout: patches `stdout.write` to inject a left margin on every line
+ * (clack has no indent support), so all TUI output shares one centered column. */
 
 import pc from "picocolors";
 import { brand } from "../setup/styles";
@@ -30,18 +27,13 @@ export function layoutMargin(columns: number = process.stdout.columns ?? 80): nu
   return Math.max(0, Math.floor((columns - contentWidth(columns)) / 2));
 }
 
-/**
- * Blank rows above full-screen frames. A function of the terminal only,
- * never the frame height: true vertical centering jiggled on live updates.
- */
+/** Blank rows above full-screen frames: a function of the terminal only, never the frame
+ * height, because true vertical centering jiggled on live updates. */
 export function frameTopMargin(rows: number = process.stdout.rows ?? 24): number {
   return Math.max(2, Math.min(6, Math.floor(rows / 8)));
 }
 
-/**
- * Breadcrumb header ("Home › Pages › <leaf>"): dim trail, bold leaf, leaf
- * clipped so a long title can't push the trail off screen.
- */
+/** Breadcrumb header: dim trail, bold leaf, clipped so a long title can't push the trail off. */
 export function breadcrumb(segments: readonly string[], width: number = contentWidth()): string {
   const head = segments.slice(0, -1);
   const leaf = segments[segments.length - 1] ?? "";
@@ -58,24 +50,34 @@ export function visibleWidth(text: string): number {
   return text.replace(ANSI_PATTERN, "").length;
 }
 
-/**
- * A tab strip shared by the tabbed screens: one row of labels over a rule
- * whose heavier segment sits under the active label (visible even without
- * color). Spread mode stretches the labels across `width` like flex
- * space-between; compact mode sits them side by side over a rule that only
- * runs as far as the labels do.
- */
+/** Padding inside each equal-width tab cell (cells mode). */
+const TAB_CELL_PAD = 2;
+
+/** Shared tab strip: labels over a rule whose heavier segment marks the active tab. Spread mode
+ * stretches labels across `width`; cells mode centers each label in equal-width cells. */
 export function tabStrip<Id extends string>(
   labels: ReadonlyArray<readonly [Id, string]>,
   active: Id,
   width: number,
   { spread = true }: { spread?: boolean } = {},
 ): [string, string] {
-  // Narrow frames fall back to the minimum gap and let the row run long.
+  if (!spread) {
+    const cellW = Math.max(...labels.map(([, label]) => label.length)) + 2 * TAB_CELL_PAD;
+    let row = "";
+    let rule = "";
+    for (const [id, label] of labels) {
+      const left = Math.floor((cellW - label.length) / 2);
+      const cell = " ".repeat(left) + label + " ".repeat(cellW - label.length - left);
+      row += id === active ? brand(pc.bold(cell)) : pc.dim(cell);
+      rule += id === active ? brand("\u2501".repeat(cellW)) : pc.dim("\u2500".repeat(cellW));
+    }
+    return [row, rule];
+  }
+  // Narrow frames fall back to a minimum gap and let the row run long.
   const GAP_MIN = 3;
   const totalLen = labels.reduce((sum, [, label]) => sum + label.length, 0);
   const slots = Math.max(1, labels.length - 1);
-  const spare = spread ? Math.max(GAP_MIN * slots, width - totalLen) : GAP_MIN * slots;
+  const spare = Math.max(GAP_MIN * slots, width - totalLen);
   const baseGap = Math.floor(spare / slots);
   const bonus = spare % slots; // first `bonus` gaps get one extra column
   let row = "";
@@ -97,8 +99,7 @@ export function tabStrip<Id extends string>(
     }
     col += label.length;
   });
-  const ruleEnd = spread ? width : col;
-  const tail = Math.max(0, ruleEnd - activeStart - activeLen);
+  const tail = Math.max(0, width - activeStart - activeLen);
   const rule =
     pc.dim("\u2500".repeat(activeStart)) +
     brand("\u2501".repeat(activeLen)) +
@@ -113,10 +114,8 @@ export function centerBlock(lines: readonly string[], width: number): string[] {
   return lines.map((line) => pad + line);
 }
 
-/**
- * Indent every rendered line by `pad`. Escapes at a line start are held back
- * so the pad lands before them (a leading background color would paint the margin).
- */
+/** Indent every rendered line by `pad`; escapes at a line start are held back so the pad lands
+ * before them (a leading background color would paint the margin). */
 export function padLines(text: string, pad: string, state: { atLineStart: boolean }): string {
   let out = "";
   let held = "";
@@ -142,10 +141,8 @@ export function padLines(text: string, pad: string, state: { atLineStart: boolea
   return out + held;
 }
 
-/**
- * Patch `stream.write` to center all interactive output; returns a restore
- * function. No-ops on non-TTY, no-margin, or already-installed layouts.
- */
+/** Patch `stream.write` to center all interactive output; returns a restore function. No-ops
+ * on non-TTY, no-margin, or already-installed layouts. */
 export function installCenteredLayout(stream: NodeJS.WriteStream = process.stdout): () => void {
   if (active || !stream.isTTY) return () => {};
   const margin = layoutMargin(stream.columns ?? 80);

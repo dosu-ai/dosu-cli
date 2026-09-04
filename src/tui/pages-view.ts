@@ -1,8 +1,5 @@
-/**
- * Read-only Pages screen: a lazily fetched, selectable list of the active
- * Library's pages, with a scrollable reader for the one under the cursor.
- * Pure render/reduce functions wired to injectable IO, like analytics-view.
- */
+/** Read-only Pages screen: lazily fetched selectable list of the Library's pages with a
+ * scrollable reader. Pure render/reduce functions wired to injectable IO. */
 
 import pc from "picocolors";
 import { createTypedClient, type TypedClient } from "../client/trpc";
@@ -67,10 +64,7 @@ export interface PagesBatch {
 /** Fetches one batch of pages starting at `offset`. */
 export type PagesBatchLoader = (offset: number) => Promise<PagesBatch>;
 
-/**
- * Batch loader for the Library behind `spaceId`: one request per screenful
- * scrolled, with the knowledge store resolved once and cached.
- */
+/** Batch loader: one request per screenful; the knowledge store is resolved once and cached. */
 export function makeLibraryPagesLoader(client: TypedClient, spaceId: string): PagesBatchLoader {
   let storeId: Promise<string> | null = null;
   return async (offset: number) => {
@@ -119,10 +113,7 @@ async function loadPageBodyFromConfig(id: string): Promise<string> {
   return page.body || "(this page has no content)";
 }
 
-/**
- * Word-wrap a page body to `width`, preserving line breaks; over-long tokens
- * (URLs, code) are hard-broken so nothing escapes the layout margin.
- */
+/** Word-wrap a page body to `width`; over-long tokens are hard-broken to stay in the margin. */
 export function wrapBody(text: string, width: number): string[] {
   const out: string[] = [];
   for (const raw of text.split("\n")) {
@@ -172,10 +163,7 @@ export function pageRows(pages: readonly LibraryPage[], width: number): string[]
   });
 }
 
-/**
- * List window that keeps `selected` visible; pure in `selected` so the
- * renderer needs no scroll state of its own.
- */
+/** List window keeping `selected` visible; pure, so the renderer needs no scroll state. */
 export function windowSelection(
   count: number,
   selected: number,
@@ -280,10 +268,7 @@ export interface PagesViewIO {
   loadPageBody?: (id: string) => Promise<string>;
 }
 
-/**
- * Show the Library's pages until the user goes back. Resolves immediately
- * when stdin isn't interactive.
- */
+/** Show the Library's pages until back; resolves immediately when stdin isn't interactive. */
 export function runPagesView(io: PagesViewIO = {}): Promise<void> {
   const input = io.input ?? process.stdin;
   const output = io.output ?? process.stdout;
@@ -330,12 +315,8 @@ export function runPagesView(io: PagesViewIO = {}): Promise<void> {
   output.write(HIDE_CURSOR);
   draw();
 
-  /**
-   * Fetch the next batch when the cursor is within one window of the end of
-   * the loaded list and the backend says more exist. One request in flight
-   * at a time; a failed batch is dropped silently and retried on the next
-   * cursor move (the list already on screen stays usable).
-   */
+  /** Fetch the next batch when the cursor nears the end and more exist; one request in flight,
+   * and a failed batch is silently retried on the next cursor move. */
   const maybeFetchMore = () => {
     if (model.phase !== "ready" || fetchingMore || closed) return;
     if (model.pages.length >= model.total) return;

@@ -1,10 +1,6 @@
 #!/usr/bin/env bun
-/**
- * Single-platform compile build.
- *
- * Produces a standalone binary for the current platform using `bun build --compile`.
- * Uses --define to bake env vars at compile time (same as build-all.ts).
- */
+/** Single-platform standalone binary via `bun build --compile`, with env vars baked at compile
+ * time through --define (same as build-all.ts). */
 
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";

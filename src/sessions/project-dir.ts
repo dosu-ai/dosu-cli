@@ -1,11 +1,5 @@
-/**
- * Session → working-directory resolution, the identity behind the mining
- * project filter. Each harness leaks the directory differently: Claude logs
- * carry `cwd` in their first lines, Codex in the session_meta line, opencode
- * stores the real path, and Cursor only a munged slug (`Users-james-...`)
- * that is resolved back against the live filesystem. Results are cached per
- * session (a session's cwd never changes) in the CLI config dir.
- */
+/** Session working-directory resolution for the mining project filter; each harness leaks the
+ * cwd differently. Results are cached per session (a session's cwd never changes). */
 
 import {
   closeSync,
@@ -105,13 +99,8 @@ export function cwdFromJsonlHead(text: string): string | null {
   return null;
 }
 
-/**
- * Resolve a munged path slug (`/` → `-`, e.g. `Users-james-Documents-dosu-cli`)
- * back to the real absolute path by trying both readings of every `-` against
- * the filesystem. Prefers new path segments and prunes on missing parents, so
- * lookups stay cheap; returns null when nothing on disk matches (e.g. the
- * directory was deleted).
- */
+/** Resolve a munged path slug (slashes replaced by hyphens) back to a real absolute path by
+ * trying both readings of every hyphen against the filesystem; null when nothing matches. */
 export function unmungeSlug(
   slug: string,
   exists: (path: string) => boolean = existsSync,
@@ -123,10 +112,8 @@ export function unmungeSlug(
   const walk = (prefix: string, index: number): string | null => {
     if (budget-- <= 0) return null;
     if (index === tokens.length) return exists(prefix) ? prefix : null;
-    // Descend into a new path segment only when the prefix is a real dir —
-    // but never prune the hyphen branch: the prefix may be a partial segment
-    // ("/tmp/dosu" on the way to "/tmp/dosu-cli") that exists only once the
-    // remaining hyphenated tokens are appended.
+    // Descend into a new segment only when the prefix is a real dir, but never prune the
+    // hyphen branch: the prefix may be a partial segment that only exists once completed.
     const asSegment =
       prefix === "" || exists(prefix) ? walk(`${prefix}/${tokens[index]}`, index + 1) : null;
     if (asSegment) return asSegment;
@@ -158,10 +145,8 @@ export interface ProjectDirResolver {
   flush(): void;
 }
 
-/**
- * Cached resolver over one loaded cache file. Cache hits are pure map reads;
- * misses read the session head or probe the filesystem, then are memoized.
- */
+/** Cached resolver over one loaded cache file; misses read the session head or probe the
+ * filesystem, then are memoized. */
 export function createProjectDirResolver(
   configDir: string = getConfigDir(),
   deps: ProjectDirDeps = {},

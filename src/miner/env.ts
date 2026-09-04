@@ -1,17 +1,5 @@
-/**
- * Environment isolation for the mining-agent subprocess.
- *
- * The miner spawns a Claude Code / Agent SDK binary pointed at the Dosu LLM
- * gateway. That binary reads a wide family of environment variables, and any
- * inherited `ANTHROPIC_*` / `CLAUDE_CODE_*` value — a developer's own API
- * key, a proxy URL, a model override — would silently reroute the run or
- * bill the wrong account. So the child env is built by *allowlist from a
- * stripped base*, never by patching `process.env`.
- *
- * The same applies to config: a stored claude.ai login in `~/.claude`
- * outranks env auth inside the binary, so `CLAUDE_CONFIG_DIR` must point at
- * a fresh, empty directory for every run (gateway contract I1).
- */
+/** Env isolation for the miner subprocess: the child env is built by allowlist from a stripped
+ * base, since any inherited ANTHROPIC_ or CLAUDE_CODE_ variable could reroute or misbill it. */
 
 export type MinerTrigger = "bootstrap" | "hook" | "manual";
 
@@ -41,10 +29,8 @@ function isStripped(name: string): boolean {
   return STRIPPED_NAMES.has(name) || STRIPPED_PREFIXES.some((p) => name.startsWith(p));
 }
 
-/**
- * Build the miner subprocess environment: the caller's env minus every
- * Anthropic/Claude-Code variable, plus the gateway wiring.
- */
+/** Build the miner subprocess env: the caller's env minus every Anthropic/Claude-Code variable,
+ * plus the gateway wiring. */
 export function buildMinerEnv(options: MinerEnvOptions): NodeJS.ProcessEnv {
   const base = options.baseEnv ?? process.env;
   const env: NodeJS.ProcessEnv = {};

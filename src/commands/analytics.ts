@@ -1,6 +1,4 @@
-/**
- * `dosu analytics` — usage statistics.
- */
+/** `dosu analytics`: usage statistics. */
 
 import { Command, Option } from "commander";
 import pc from "picocolors";

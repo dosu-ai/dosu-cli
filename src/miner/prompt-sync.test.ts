@@ -1,12 +1,5 @@
-/**
- * Drift guard for the vendored miner rules.
- *
- * The canonical rules live in the dosu-skill repo; this test compares the
- * committed generated copy against a sibling checkout (or DOSU_SKILL_REPO)
- * and fails when they diverge — re-run `bun run scripts/vendor-miner-prompt.ts`
- * to fix. When no checkout is present (e.g. CI of this repo alone), the
- * comparison is skipped and only the extraction/rendering logic is tested.
- */
+/** Drift guard: fails when the vendored miner rules diverge from a dosu-skill checkout; fix
+ * with `bun run scripts/vendor-miner-prompt.ts`. Skipped when no checkout is present. */
 
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";

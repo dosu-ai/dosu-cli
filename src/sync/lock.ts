@@ -1,11 +1,5 @@
-/**
- * Single-flight lock for knowledge sync.
- *
- * Hooks fire at every session end, so two syncs can easily overlap; a
- * second concurrent mining run would double-spend gateway tokens on the
- * same backlog. The loser of the lock race exits quietly — the next
- * trigger will pick up whatever is left.
- */
+/** Single-flight lock for knowledge sync: concurrent mining runs would double-spend gateway
+ * tokens on the same backlog. The loser of the lock race exits quietly. */
 
 import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -16,10 +10,7 @@ const LOCK_FILENAME = "knowledge-sync.lock";
 /** Locks older than this are considered abandoned (crashed run) and broken. */
 export const STALE_LOCK_MS = 15 * 60 * 1000;
 
-/**
- * True when a process with this pid exists. EPERM means it exists but belongs
- * to another user — still alive. Signal 0 performs the check without sending.
- */
+/** True when a process with this pid exists; EPERM means alive but owned by another user. */
 function processAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -64,9 +55,8 @@ export function fileLock(
       }
       try {
         const age = now().getTime() - statSync(path).mtimeMs;
-        // A dead holder is broken immediately: a mining run killed with its
-        // parent terminal would otherwise block every sync for the full
-        // stale window. An unparseable pid falls back to the age check.
+        // A dead holder is broken immediately so it can't block syncs for the full stale
+        // window; an unparseable pid falls back to the age check.
         const holder = Number.parseInt(readFileSync(path, "utf8"), 10);
         const holderDead = Number.isInteger(holder) && holder > 0 && !processAlive(holder);
         if (age > STALE_LOCK_MS || holderDead) {

@@ -1,15 +1,5 @@
-/**
- * Contract discipline: every tRPC call must be typed through the generated
- * contract (`CliApiClient` / `TypedClient`), never through hand-written client
- * shapes.
- *
- * Why this exists: `dosu review` shipped broken in v0.29.0 because its calls
- * were typed via a hand-written `TypedClient & {...}` shim claiming procedures
- * that were never registered in the backend's cliRouter — the one gap the
- * cross-repo consumer-typecheck gate cannot see. Once calls are typed from the
- * contract, calling an unregistered procedure is a compile error instead of a
- * production 404.
- */
+/** Every tRPC call must be typed through the generated contract, never hand-written shapes:
+ * hand shapes turned an unregistered procedure into a production 404 (dosu review, v0.29.0). */
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";

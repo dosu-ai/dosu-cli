@@ -1,17 +1,5 @@
-/**
- * Instructions for the mining agent.
- *
- * The write-knowledge rules are NOT authored here: the canonical copy lives in
- * the dosu-skill repo (log-to-dosu-knowledge/references/miner-system-prompt.md)
- * and is resolved at run time from the installed skill by prompt-source.ts,
- * with a vendored fallback (prompt-core.generated.ts, regenerated via
- * `bun run scripts/vendor-miner-prompt.ts`). This module only adds the runtime
- * frame the skill cannot know: the miner's identity and its fenced tool names.
- *
- * The prompt is the first line of defense for note quality: the backend
- * resolver has a matching transience REJECT, but a note that never gets
- * written is cheaper than one rejected server-side.
- */
+/** Runtime frame for the miner's system prompt; canonical write-knowledge rules are resolved
+ * from the installed skill by prompt-source.ts, with a vendored fallback. */
 
 import type { AgentSession } from "../sessions/scan";
 

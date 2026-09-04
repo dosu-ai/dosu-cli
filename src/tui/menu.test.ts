@@ -77,9 +77,7 @@ describe("renderMenuFrame", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// menuSelect — driven through fake streams
-// ---------------------------------------------------------------------------
+// --- menuSelect: driven through fake streams ---
 
 interface FakeInput extends EventEmitter {
   isTTY: boolean;

@@ -1,11 +1,4 @@
-/**
- * Detached re-spawn for hook-triggered syncs.
- *
- * Agent hooks run `dosu knowledge sync --quiet --detach`; that invocation
- * re-spawns `dosu knowledge sync --quiet` fully detached and exits
- * immediately, so the user's agent never waits on the pipeline — the scan is
- * cheap today, but the future mining step (a gateway-routed agent run) won't be.
- */
+/** Detached re-spawn for hook-triggered syncs so the user's agent never waits on the pipeline. */
 
 import { type ChildProcess, spawn } from "node:child_process";
 import { logger } from "../debug/logger";
@@ -15,13 +8,8 @@ export interface SelfInvocation {
   baseArgs: string[];
 }
 
-/**
- * How to re-invoke this CLI. Two shapes exist:
- * - Compiled binary (`bun build --compile`): argv[1] is a virtual `/$bunfs`
- *   path that must not be passed as an argument — execPath alone is the CLI.
- * - Script runtime (node bundle, `bun run dev`): execPath is the runtime and
- *   argv[1] is the real entry script.
- */
+/** How to re-invoke this CLI: a compiled binary must not pass argv[1] (a virtual /$bunfs path);
+ * a script runtime passes execPath plus the real entry script. */
 export function selfInvocation(
   execPath: string = process.execPath,
   argv1: string | undefined = process.argv[1],

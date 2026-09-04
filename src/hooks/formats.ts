@@ -1,20 +1,5 @@
-/**
- * Hook config file formats.
- *
- * Two shapes cover the v1 agents:
- * - Grouped (Claude Code `settings.json`, Codex `hooks.json`):
- *   `hooks.<Event>` is an array of groups, each `{ matcher?, hooks: [{type:
- *   "command", command}] }`.
- * - Cursor (`~/.cursor/hooks.json`): `{ version: 1, hooks: { <event>:
- *   [{command}] } }`.
- *
- * Discipline mirrors the MCP entries: merge non-destructively into existing
- * arrays, identify our own entries by command, uninstall cleanly. One
- * deliberate difference from the MCP helpers: these files (especially Claude's
- * settings.json) carry unrelated user settings, so an existing file that does
- * not parse ABORTS the operation instead of being treated as empty — silently
- * rewriting it would destroy the user's settings.
- */
+/** Hook config file formats (grouped Claude Code/Codex shape and Cursor shape). Unlike the MCP
+ * helpers, an existing file that does not parse ABORTS: rewriting would destroy user settings. */
 
 import { existsSync, readFileSync } from "node:fs";
 import {
@@ -26,28 +11,12 @@ import {
 import { writeSecureFile } from "../mcp/config-helpers";
 import { selfInvocation } from "../sync/detach";
 
-/**
- * What production hooks run. Plain `dosu` (PATH-resolved) rather than an
- * absolute path: hook commands run through a shell, absolute install paths
- * churn with version/node switches, and Codex pins a trust hash on the exact
- * command text — so the string must be stable. `hooks enable` warns when
- * `dosu` is not on PATH.
- */
+/** Plain PATH-resolved `dosu` rather than an absolute path: the command text must stay stable
+ * because Codex pins a trust hash on it. `hooks enable` warns when `dosu` is not on PATH. */
 export const HOOK_COMMAND = "dosu knowledge sync --quiet --detach";
 
-/**
- * `*_OVERRIDE` env vars baked into dev hook commands, each resolved to the
- * URL the enabling process is actually using. Hooks fire from arbitrary cwds
- * where Bun does not load this repo's `.env.development`, so a dev hook that
- * doesn't carry its URLs runs against empty ones — the miner's gateway URL
- * degenerates to the relative path `/v1/llm-gateway` and every run fails
- * with "Invalid URL". Resolving through the constants getters (not just
- * echoing already-set `*_OVERRIDE` vars) covers the common dev case where
- * the URLs came from `.env.development` under their build-time names.
- * The LLM gateway URL is not baked: it derives from the backend URL at
- * runtime, so inlining the backend override is enough — unless the developer
- * explicitly set `DOSU_LLM_GATEWAY_URL_OVERRIDE`, which is passed through.
- */
+/** `*_OVERRIDE` vars baked into dev hook commands. Hooks fire from cwds where this repo's
+ * `.env.development` is not loaded, so each URL is resolved now and inlined or runs fail. */
 const DEV_HOOK_ENV: ReadonlyArray<{ name: string; resolve: () => string }> = [
   { name: "DOSU_WEB_APP_URL_OVERRIDE", resolve: getWebAppURL },
   { name: "DOSU_BACKEND_URL_OVERRIDE", resolve: getBackendURL },
@@ -59,13 +28,8 @@ const DEV_HOOK_ENV: ReadonlyArray<{ name: string; resolve: () => string }> = [
   { name: "SUPABASE_ANON_KEY_OVERRIDE", resolve: getSupabaseAnonKey },
 ];
 
-/**
- * The command `hooks enable` writes. Dev installs (`DOSU_DEV=true`) pin the
- * current working copy by absolute path with the dev env inline, so
- * hook-triggered runs exercise the code under development and write to the
- * dev config dir — plain `dosu` would resolve to whatever published CLI is
- * on PATH, which may not even have this subcommand yet.
- */
+/** The command `hooks enable` writes. Dev installs pin the working copy by absolute path with
+ * env inline so hook-triggered runs exercise the code under development, not the PATH `dosu`. */
 export function hookCommand(): string {
   if (process.env.DOSU_DEV !== "true") return HOOK_COMMAND;
   const { command, baseArgs } = selfInvocation();
@@ -78,11 +42,8 @@ export function hookCommand(): string {
   return `${env.join(" ")} ${quoted} knowledge sync --quiet --detach`;
 }
 
-/**
- * Matches our entry even if flags evolve across CLI versions. The second
- * pattern covers dev-mode commands, where the invocation is an absolute
- * runtime/script path that need not contain the word `dosu`.
- */
+/** Matches our entry even if flags evolve; the second pattern covers dev-mode commands whose
+ * absolute runtime/script path need not contain the word `dosu`. */
 export function isDosuHookCommand(command: unknown): boolean {
   return (
     typeof command === "string" &&

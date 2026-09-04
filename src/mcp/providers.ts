@@ -1,12 +1,8 @@
-/**
- * Provider interface and registry.
- */
+/** Provider interface and registry. */
 
 import type { Config } from "../config/config";
 
-/**
- * Provider is the base interface for MCP tool providers.
- */
+/** Provider is the base interface for MCP tool providers. */
 export interface ProviderInstallOptions {
   showSecret?: boolean;
 }
@@ -19,9 +15,7 @@ export interface Provider {
   remove(global: boolean): void;
 }
 
-/**
- * SetupProvider extends Provider with detection and metadata for dosu setup.
- */
+/** SetupProvider extends Provider with detection and metadata for dosu setup. */
 export interface SetupProvider extends Provider {
   detectPaths(): string[];
   isInstalled(): boolean;
@@ -48,9 +42,7 @@ import { VSCodeProvider } from "./providers/vscode";
 import { WindsurfProvider } from "./providers/windsurf";
 import { ZedProvider } from "./providers/zed";
 
-/**
- * Returns all available providers.
- */
+/** Returns all available providers. */
 export function allProviders(): Provider[] {
   return [
     ClaudeProvider(),
@@ -72,9 +64,7 @@ export function allProviders(): Provider[] {
   ];
 }
 
-/**
- * Returns all providers that implement SetupProvider, sorted by priority.
- */
+/** Returns all providers that implement SetupProvider, sorted by priority. */
 export function allSetupProviders(): SetupProvider[] {
   const providers = allProviders().filter(
     (p): p is SetupProvider => "detectPaths" in p && "isInstalled" in p,
@@ -82,9 +72,7 @@ export function allSetupProviders(): SetupProvider[] {
   return providers.sort((a, b) => a.priority() - b.priority());
 }
 
-/**
- * Returns a provider for the given tool ID.
- */
+/** Returns a provider for the given tool ID. */
 export function getProvider(toolID: string): Provider {
   const provider = allProviders().find((p) => p.id() === toolID);
   if (!provider) throw new Error(`unknown tool: ${toolID}`);

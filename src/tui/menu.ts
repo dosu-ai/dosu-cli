@@ -1,8 +1,5 @@
-/**
- * Custom interactive menu (the main-screen replacement for clack's select).
- * Arrows/j/k move, enter confirms, 1-9 jump-select, q/esc/ctrl-c cancel; on
- * confirm the menu erases itself. Pure render/reduce plus injectable IO.
- */
+/** Custom interactive menu (main-screen replacement for clack's select): arrows/j/k, enter,
+ * 1-9 jump-select, q/esc/ctrl-c cancel; erases itself on confirm. */
 
 import pc from "picocolors";
 import { brand } from "../setup/styles";
@@ -91,10 +88,8 @@ export function renderMenuFrame(
 export interface MenuIO {
   input?: NodeJS.ReadStream;
   output?: NodeJS.WriteStream;
-  /**
-   * Live refresh: poll `options()` and repaint in place (selection kept) when
-   * they change; `redrawScreen` runs first so the caller can repaint the banner.
-   */
+  /** Live refresh: poll `options()` and repaint in place when they change; `redrawScreen` runs
+   * first so the caller can repaint the banner. */
   refresh?: {
     /** Poll cadence; defaults to 1s (matches the Activity view's poll). */
     intervalMs?: number;
@@ -115,10 +110,7 @@ function sameOptions(a: readonly MenuOption[], b: readonly MenuOption[]): boolea
   );
 }
 
-/**
- * Show the menu and resolve with the chosen option's value, or null when
- * the user cancels (q / esc / ctrl-c) or stdin isn't interactive.
- */
+/** Show the menu and resolve with the chosen value, or null on cancel or non-interactive stdin. */
 export function menuSelect(
   message: string,
   options: readonly MenuOption[],

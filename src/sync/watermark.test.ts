@@ -61,6 +61,7 @@ describe("loadSyncState / saveSyncState", () => {
         outcome: "credit_limit",
         message: "Your org has used its Dosu credits for this billing period.",
       },
+      run: { pid: 4321, started_at: "2026-08-25T11:03:00Z", baseline_mined: 7 },
     };
     saveSyncState(state, configDir);
     expect(loadSyncState(configDir)).toEqual(state);
@@ -77,6 +78,19 @@ describe("loadSyncState / saveSyncState", () => {
       }),
     );
     expect(loadSyncState(configDir).last_refusal).toBeUndefined();
+  });
+
+  it("drops a malformed run record", () => {
+    writeFileSync(
+      syncStatePath(configDir),
+      JSON.stringify({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        run: { pid: "not-a-pid", started_at: "2026-08-25T11:03:00Z", baseline_mined: -1 },
+      }),
+    );
+    expect(loadSyncState(configDir).run).toBeUndefined();
   });
 
   it("writes owner-only files with no temp residue", () => {

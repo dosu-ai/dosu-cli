@@ -14,9 +14,7 @@ import type { Config } from "../../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../../config/config.test-utils";
 import { loadJSONConfig, MCP_REMOTE_VERSION } from "../config-helpers";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+// --- Helpers ---
 
 function makeCfg(overrides: Partial<FlatTestConfig> = {}): Config {
   return makeTestConfig({
@@ -30,9 +28,7 @@ function makeCfg(overrides: Partial<FlatTestConfig> = {}): Config {
   });
 }
 
-// ---------------------------------------------------------------------------
-// 1. Base provider (createJSONProvider)
-// ---------------------------------------------------------------------------
+// --- 1. Base provider (createJSONProvider) ---
 
 describe("createJSONProvider (base)", () => {
   let tempDir: string;
@@ -237,9 +233,7 @@ describe("createJSONProvider (base)", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 2. Codex provider (TOML-based)
-// ---------------------------------------------------------------------------
+// --- 2. Codex provider (TOML-based) ---
 
 describe("CodexProvider", () => {
   let tempDir: string;
@@ -289,16 +283,14 @@ describe("CodexProvider", () => {
     expect(content).toContain(`mcp-remote@${MCP_REMOTE_VERSION}`);
     expect(content).toContain("/deployments/dep-123");
     expect(content).toContain("http-only");
-    // The API key rides in the env block as a ${VAR} placeholder the proxy
-    // expands — argv (visible via `ps`) never carries the raw key.
+    // The API key rides in the env block as a ${VAR} placeholder; argv never carries the raw key.
     // biome-ignore lint/suspicious/noTemplateCurlyInString: literal placeholder expanded by mcp-remote
     expect(content).toContain("X-Dosu-API-Key:${X_DOSU_API_KEY}");
     expect(content).toContain("[mcp_servers.dosu.env]");
     expect(content).toContain('X_DOSU_API_KEY = "key-abc"');
     expect(content).not.toContain("X-Dosu-API-Key:key-abc");
-    // Codex desktop only renders MCP Apps (the Session Knowledge card) for
-    // stdio servers — a remote-HTTP entry works for tools but never shows
-    // the card, so the provider must not write that form.
+    // Codex desktop only renders MCP Apps for stdio servers, so the provider
+    // must not write the remote-HTTP form.
     expect(content).not.toContain('type = "http"');
     expect(content).not.toContain("http_headers");
   });
@@ -471,9 +463,7 @@ describe("CodexProvider", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 3. Copilot provider
-// ---------------------------------------------------------------------------
+// --- 3. Copilot provider ---
 
 describe("CopilotProvider", () => {
   let tempDir: string;
@@ -597,9 +587,7 @@ describe("CopilotProvider", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 4. MCPorter provider
-// ---------------------------------------------------------------------------
+// --- 4. MCPorter provider ---
 
 describe("MCPorterProvider", () => {
   let tempDir: string;
@@ -723,9 +711,7 @@ describe("MCPorterProvider", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 5. Manual provider
-// ---------------------------------------------------------------------------
+// --- 5. Manual provider ---
 
 describe("ManualProvider", () => {
   it("install logs MCP config to console", async () => {
@@ -820,9 +806,7 @@ describe("ManualProvider", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 6. Claude Desktop provider
-// ---------------------------------------------------------------------------
+// --- 6. Claude Desktop provider ---
 
 describe("ClaudeDesktopProvider", () => {
   let tempDir: string;
@@ -865,9 +849,8 @@ describe("ClaudeDesktopProvider", () => {
     const cfg = loadJSONConfig(provider.globalConfigPath());
     const dosu = cfg.mcpServers.dosu;
     expect(dosu).toBeDefined();
-    // Claude Desktop chat launches MCP servers with a minimal PATH that has
-    // no Homebrew/nvm, so the entry needs an absolute npx plus a PATH env
-    // that lets npx's node shebang resolve.
+    // Claude Desktop launches servers with a minimal PATH, so the entry needs
+    // an absolute npx plus a PATH env that lets npx's node shebang resolve.
     expect(dosu.command).toBe(npxPath);
     expect(dosu.args).toContain(`mcp-remote@${MCP_REMOTE_VERSION}`);
     expect(dosu.args.join(" ")).toContain("/deployments/dep-123");
@@ -957,12 +940,8 @@ describe("ClaudeDesktopProvider", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 7. createJSONProvider-based providers: Cursor, OpenCode, ClineCli,
-//    Antigravity, Zed
-//    (Cline is excluded because it depends on appSupportDir which is
-//    platform-specific and hard to override via env)
-// ---------------------------------------------------------------------------
+// --- 7. createJSONProvider-based providers: Cursor, OpenCode, ClineCli, Antigravity, Zed ---
+// (Cline excluded: it depends on platform-specific appSupportDir, hard to override via env)
 
 describe("CursorProvider", () => {
   let tempDir: string;

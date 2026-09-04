@@ -3,10 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// CRITICAL: mock `open` so runSetup's github-step (imported dynamically) can
-// never actually pop a real browser tab to the Dosu App install URL when the
-// `repo_not_installed` code path fires. Also mock `git` lookup so
-// detectGitRepo() doesn't hit the real filesystem.
+// CRITICAL: mock `open` so tests never pop a real browser tab; mock git so detectGitRepo()
+// doesn't hit the real filesystem.
 vi.mock("open", () => ({ default: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("node:child_process", () => ({
   execSync: vi.fn().mockImplementation(() => {
@@ -60,10 +58,8 @@ vi.mock("../telemetry/settings", () => ({
   isTelemetryEnabled: vi.fn(() => true),
 }));
 
-// tRPC client used by:
-//   - completeOnboarding via `user.updateProfile`
-//   - github step via `workspaces.create`, `dataSource.create`, etc.
-// Tests can override any of these via `mockTrpc.<path>.mockResolvedValue(...)`.
+// tRPC client for onboarding and github-step calls; override any path via
+// `mockTrpc.<path>.mockResolvedValue(...)`.
 const mockTrpc = vi.hoisted(() => ({
   user: {
     getCliOnboardingContext: {
@@ -146,9 +142,7 @@ const { mockStepConnectGitHubRepo } = vi.hoisted(() => ({
   mockStepConnectGitHubRepo: vi.fn(),
 }));
 
-// AGENTS.md step: mocked so flow tests never write an AGENTS.md into the real
-// repo cwd. Defaults (not in a git work tree) are installed by
-// `installSetupStepDefaults()`.
+// AGENTS.md step: mocked so flow tests never write an AGENTS.md into the real repo cwd.
 const { mockInGitWorkTree, mockStepUpdateAgentsMd } = vi.hoisted(() => ({
   mockInGitWorkTree: vi.fn(),
   mockStepUpdateAgentsMd: vi.fn(),
@@ -169,10 +163,8 @@ vi.mock("./github-step", () => ({
   detectGitRepo: vi.fn(() => null),
 }));
 
-// Knowledge-sync boundary: the initial-sync offer must never scan the real
-// machine or spawn a real detached process from a test run. The wrapper falls
-// back to a quiet "nothing-new" outcome so full runSetup tests sail past the
-// offer step even after vi.resetAllMocks() wipes per-test values.
+// Knowledge-sync boundary: the initial-sync offer must never scan the real machine or spawn a
+// detached process; the wrapper defaults to a quiet "nothing-new" outcome.
 const { mockRunKnowledgeSync, mockSpawnDetachedSelf } = vi.hoisted(() => ({
   mockRunKnowledgeSync: vi.fn(),
   mockSpawnDetachedSelf: vi.fn(),
@@ -239,10 +231,7 @@ function mockToolSelection(selection: string[]) {
   vi.mocked(p.multiselect).mockResolvedValue(selection as unknown as never);
 }
 
-/**
- * Shape of a tRPC "No procedure found" rejection, as seen from backends that
- * predate a router — trips the mocked `isTRPCClientError` + NOT_FOUND check.
- */
+/** Shape of a tRPC "No procedure found" rejection; trips the isTRPCClientError NOT_FOUND check. */
 function trpcNotFoundError(path: string): Error {
   const err = new Error(`No procedure found on path "${path}"`) as Error & {
     data: { code: string };
@@ -271,9 +260,8 @@ function installRemoteSetupDefaults() {
   mockTrpc.user.updateProfile.mutate.mockResolvedValue(null);
   mockTrpc.user.trackCliOnboardingEvent.mutate.mockResolvedValue({ ok: true });
   mockTrpc.user.trackCliOnboardingPreAuthEvent.mutate.mockResolvedValue({ ok: true });
-  // Default: the MCP's Library already has a GitHub source attached, so the
-  // connect offer stays quiet. Tests that exercise the offer override with an
-  // empty list. `listForSpace` only backs the old-backend fallback path.
+  // Default: the MCP's Library already has a GitHub source, so the connect offer stays quiet;
+  // tests that exercise the offer override with an empty list.
   mockTrpc.libraries.sourcesList.query.mockResolvedValue([
     { data_source_id: "ds-gh", provider_slug: "github", name: "acme/repo" },
   ]);
@@ -284,9 +272,7 @@ function installRemoteSetupDefaults() {
   mockTrpc.workspaces.listForSpace.query.mockResolvedValue([]);
 }
 
-// ---------------------------------------------------------------------------
-// Shared helpers
-// ---------------------------------------------------------------------------
+// --- Shared helpers ---
 
 let tempDir: string;
 let origHome: string | undefined;
@@ -376,9 +362,7 @@ function trackedCliOnboardingEvents() {
   return mockTrpc.user.trackCliOnboardingEvent.mutate.mock.calls.map(([input]) => input);
 }
 
-// ---------------------------------------------------------------------------
-// 1. stepDetectTools — real providers, temp HOME
-// ---------------------------------------------------------------------------
+// --- 1. stepDetectTools: real providers, temp HOME ---
 
 describe("stepDetectTools", () => {
   beforeEach(() => {
@@ -444,9 +428,7 @@ describe("stepDetectTools", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 3. stepConfigureTools — real providers, real filesystem
-// ---------------------------------------------------------------------------
+// --- 3. stepConfigureTools: real providers, real filesystem ---
 
 describe("stepConfigureTools", () => {
   beforeEach(() => {
@@ -699,9 +681,7 @@ describe("stepConfigureTools", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 4. stepShowSummary — real providers, mocked clack log
-// ---------------------------------------------------------------------------
+// --- 4. stepShowSummary: real providers, mocked clack log ---
 
 describe("stepShowSummary", () => {
   beforeEach(() => {
@@ -814,11 +794,8 @@ describe("stepShowSummary", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 5. runSetup integration — thin tests for interactive routing
-//    Mocks: @clack/prompts, Client, auth/flow
-//    Real: config (temp dir), styles
-// ---------------------------------------------------------------------------
+// --- 5. runSetup integration: thin tests for interactive routing ---
+// Mocks: @clack/prompts, Client, auth/flow. Real: config (temp dir), styles.
 
 describe("runSetup integration", () => {
   const mockClient = vi.mocked(Client);
@@ -2143,9 +2120,7 @@ describe("runSetup integration", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 6. runInstallSkill — focused unit tests
-// ---------------------------------------------------------------------------
+// --- 6. runInstallSkill: focused unit tests ---
 
 describe("runInstallSkill", () => {
   beforeEach(() => {
@@ -2209,9 +2184,7 @@ describe("runInstallSkill", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 7. Checkpoint-aware resume (M1)
-// ---------------------------------------------------------------------------
+// --- 7. Checkpoint-aware resume (M1) ---
 
 describe("runSetup checkpoint behavior", () => {
   const mockClient = vi.mocked(Client);
@@ -2479,10 +2452,8 @@ describe("runSetup checkpoint behavior", () => {
   });
 
   it("re-resolves everything when the handshake hands back a different account", async () => {
-    // The twin-account incident shape: the CLI held account A's session and
-    // stale target; the browser is signed in as account B. The handshake
-    // returns B's minted session — the stale target must be dropped and B's
-    // MCP bound, with a fresh API key (never A's).
+    // Twin-account shape: the handshake returns account B's session, so A's stale target must
+    // be dropped and B's MCP bound with a fresh API key.
     saveConfig(
       makeCfg({
         access_token: "account-a-token",
@@ -2559,9 +2530,8 @@ describe("runSetup checkpoint behavior", () => {
   });
 
   it("completes a fresh first-run in a single browser trip (wizard rides the auth hop)", async () => {
-    // Fresh config → the auth hop itself carries `intent=setup`, so the web
-    // side routes the wizard inside that same trip. There is no second
-    // browser flow and no tab-steering machinery.
+    // Fresh config: the auth hop itself carries `intent=setup`, so the wizard rides that same
+    // trip with no second browser flow.
     saveConfig(makeCfg({ access_token: "", refresh_token: "", expires_at: 0 }));
     setupAuthed();
     // By the time the CLI queries its context, the browser-side wizard has
@@ -2586,9 +2556,8 @@ describe("runSetup checkpoint behavior", () => {
   });
 
   it("honors --deployment over the web onboarding handoff for unfinished profiles", async () => {
-    // `--deployment` is an explicit escape hatch: even a first-run profile
-    // must be wired straight to the requested deployment, never silently
-    // rerouted through the wizard and auto-bound elsewhere.
+    // `--deployment` is an explicit escape hatch: even a first-run profile is wired straight
+    // to the requested deployment.
     saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
     setupAuthed({
       getDeployments: vi
@@ -2612,9 +2581,7 @@ describe("runSetup checkpoint behavior", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 8. Additional branch coverage for runSetup error/edge paths
-// ---------------------------------------------------------------------------
+// --- 8. Additional branch coverage for runSetup error/edge paths ---
 
 describe("runSetup additional branches", () => {
   const mockClient = vi.mocked(Client);
@@ -2758,9 +2725,8 @@ describe("runSetup additional branches", () => {
   });
 
   it("asks instead of guessing when the org has several deployments but no dosu_mcp", async () => {
-    // The old flow silently grabbed the first deployment regardless of slug;
-    // with repo-deployments in the mix that guess is usually wrong. When no
-    // single MCP disambiguates, show the picker.
+    // The old flow silently grabbed the first deployment; when no single MCP disambiguates,
+    // show the picker.
     saveConfig(makeCfg());
     setupAuthed({
       getOrgs: vi.fn().mockResolvedValue([{ org_id: "org-b", name: "Org B" }]),
@@ -2867,9 +2833,8 @@ describe("runSetup additional branches", () => {
   });
 
   it("neither installs nor removes a detected tool that is unconfigured and left unticked", async () => {
-    // Cursor is detected but not configured, so it starts unticked. The default
-    // multiselect leaves it unticked → it lands in neither toInstall nor
-    // toRemove (the else arm of `else if (isConfigured)`).
+    // Cursor is detected but not configured and stays unticked, landing in neither toInstall
+    // nor toRemove.
     saveConfig(makeCfg());
     setupAuthed();
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
@@ -2955,14 +2920,8 @@ describe("runSetup additional branches", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 9. Single-handshake protocol: /cli/auth owns onboarding routing.
-//
-// The CLI no longer decides "first run" by itself and never deep-links a web
-// product page: it expresses `intent=setup` on the ONE browser entry
-// (/cli/auth) and the web routes by the *browser* user's state. The callback
-// always comes back — with a session for whoever is really in the browser.
-// ---------------------------------------------------------------------------
+// --- 9. Single-handshake protocol: /cli/auth owns onboarding routing ---
+// The CLI expresses `intent=setup` on the one browser entry; the web routes by browser state.
 
 describe("runSetup single-handshake protocol", () => {
   const mockClient = vi.mocked(Client);
@@ -3096,10 +3055,8 @@ describe("runSetup single-handshake protocol", () => {
   });
 
   it("keeps the same account's stored target after the handshake (everyday semantics)", async () => {
-    // The sibling branch of the cross-account rebind above: when the SAME
-    // account comes back (now onboarded), the stored deployment is
-    // deliberately reused — no picker, no re-resolution. Note: the token must
-    // be JWT-shaped so replaceLoginSession can see it is the same user.
+    // When the same account comes back the stored deployment is deliberately reused; the token
+    // must be JWT-shaped so replaceLoginSession can see it is the same user.
     saveConfig(makeCfg());
     setupAuthed();
     const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
@@ -3186,9 +3143,8 @@ describe("runSetup single-handshake protocol", () => {
   });
 
   it("keeps the setup flow's only web-app path /cli/auth (source contract)", () => {
-    // The 2026-08-05 deadlock began with the CLI deep-linking a web product
-    // page whose middleware owed it nothing. The setup flow may only ever
-    // link the protocol endpoint.
+    // The 2026-08-05 deadlock began with a deep link to a web product page; the setup flow may
+    // only ever link the protocol endpoint.
     const source = readFileSync(new URL("./flow.ts", import.meta.url), "utf8");
     expect(source).not.toContain("/onboarding/");
   });
@@ -3298,9 +3254,7 @@ describe("stepOfferInitialSync", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 7. runSwitchTarget — the settings flow (re-pick org / Library / MCP)
-// ---------------------------------------------------------------------------
+// --- 7. runSwitchTarget: the settings flow (re-pick org / Library / MCP) ---
 
 describe("runSwitchTarget", () => {
   const mockClient = vi.mocked(Client);

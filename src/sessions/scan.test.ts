@@ -46,11 +46,8 @@ function codexLog(id: string, mtime: Date): void {
   makeLog(join(home, ".codex", "sessions", "2026", "08", "25", `${id}.jsonl`), mtime);
 }
 
-/**
- * Builds an opencode fixture DB with the runtime's sqlite builtin, mirroring
- * the scanner's own fallback. Returns false when the runtime has none, so
- * DB-backed tests skip instead of failing.
- */
+/** Builds an opencode fixture DB with the runtime's sqlite builtin; returns false when the
+ * runtime has none, so DB-backed tests skip instead of failing. */
 function makeOpencodeDb(
   dbPath: string,
   rows: { id: string; parent_id?: string; directory?: string; time_updated: number }[],

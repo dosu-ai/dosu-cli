@@ -1,17 +1,5 @@
-/**
- * The knowledge-sync pipeline: scan local sessions → gate → mine.
- *
- * Every trigger (hook, manual `dosu knowledge sync`, future FTUE bootstrap)
- * converges here. When the caller supplies a miner (authenticated cloud-mode
- * runs), the gated backlog is mined in capped batches and the watermark
- * advances only after a successful run — failures always leave the backlog
- * intact for a later trigger. Without a miner the run ends at the gate and
- * reports the backlog.
- *
- * Hook-triggered runs (`quiet`) must be invisible: they honor failure
- * backoff, never throw, and never write to stdout/stderr — failures go to
- * the debug log only.
- */
+/** The knowledge-sync pipeline (scan, gate, mine): the watermark advances only after a
+ * successful mining run, and quiet hook-triggered runs never throw or write to stdout/stderr. */
 
 import { logger } from "../debug/logger";
 import type { MinerRunResult } from "../miner/runner";
@@ -29,23 +17,14 @@ import {
   saveSyncState,
 } from "./watermark";
 
-/**
- * The gate inspects sessions from the last 30 days — same window semantics as
- * the log-backfill skill's "last N days" scope. Older history is bootstrap's
- * job, not the background sync's.
- */
+/** The gate only inspects the last 30 days; older history is bootstrap's job. */
 const GATE_WINDOW_DAYS = 30;
 
 /** Safety cap per run, so a hyperactive machine can't unbound a quiet sync. */
 const GATE_WINDOW = 200;
 
-/**
- * Sessions mined per run. Oldest-first, so the watermark advances
- * monotonically and the remaining (newer) backlog is picked up by the
- * next trigger. Keeps any single hook-triggered run's token cost bounded.
- * Sized against the miner's per-run caps in runner.ts (observed cost is
- * ~4-6 turns and up to ~3 notes per session); raise those together.
- */
+/** Sessions mined per run, oldest first so the watermark advances monotonically; sized against
+ * the miner's per-run caps in runner.ts, raise the two together. */
 export const MINE_BATCH_LIMIT = 20;
 
 type SyncStatus =
@@ -93,13 +72,8 @@ export interface SyncDeps {
 export interface SyncOptions {
   /** Background (hook-triggered) run: honor backoff, never fail loudly. */
   quiet?: boolean;
-  /**
-   * Initial-setup backfill scope: scan the entire local session history —
-   * no age cutoff, no count cap — instead of the rolling 30-day window.
-   * A fresh install's history predates the window by construction, and old
-   * sessions are exactly what the backfill exists to catch. Volume stays
-   * bounded downstream: mining happens MINE_BATCH_LIMIT sessions per round.
-   */
+  /** Initial-setup backfill scope: scan the entire history with no age cutoff, since a fresh
+   * install's sessions predate the 30-day window by construction. */
   bootstrap?: boolean;
   deps?: SyncDeps;
 }
@@ -107,11 +81,7 @@ export interface SyncOptions {
 /** How many selected sessions a gate log line names before summarizing. */
 const LOG_PREVIEW_LIMIT = 10;
 
-/**
- * One debug-log line per run naming what the gate selected — the only
- * visibility a quiet (hook-triggered) run has, since it never writes to
- * stdout/stderr. Tail the debug log to watch hooks fire.
- */
+/** One debug-log line naming what the gate selected: the only visibility a quiet run has. */
 function logGateResult(
   ready: readonly AgentSession[],
   inFlight: number,
@@ -223,10 +193,18 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
   }
 
   try {
-    // Ready is newest-first (scanner order); walk from the oldest so the
-    // watermark can advance past everything examined without skipping newer
-    // sessions. Trivial sessions are filtered locally — they never cost a
-    // gateway run, and the watermark rolls over them for free.
+    // Stamp this run's progress baseline into every state save so status viewers can compute
+    // run-scoped progress; same-pid batches (a bootstrap drain) keep the first batch's baseline.
+    if (state.run?.pid !== process.pid) {
+      state.run = {
+        pid: process.pid,
+        started_at: now().toISOString(),
+        baseline_mined: state.total_mined ?? 0,
+      };
+    }
+
+    // Walk ready oldest-first so the watermark can advance without skipping newer sessions;
+    // trivial sessions are filtered locally and never cost a gateway run.
     const worthMining = deps.worthMining ?? isWorthMining;
     const examined: AgentSession[] = [];
     const batch: AgentSession[] = [];
@@ -317,10 +295,8 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       case "consent_off":
       case "credit_limit":
       case "quota_exceeded": {
-        // Clean, expected refusals — not failures, so no backoff. The
-        // watermark stays put and the backlog is retried once unblocked.
-        // Persist the reason: quiet runs print nothing, so this is how the
-        // Activity view and --status can explain why mining is paused.
+        // Clean refusals are not failures: no backoff, watermark stays put. Persist the reason
+        // so the Activity view and --status can explain why mining is paused.
         const at = now().toISOString();
         saveState({
           ...state,

@@ -1,11 +1,5 @@
-/**
- * In-process MCP tools exposing the run's scoped sessions to the miner.
- *
- * The model never touches the filesystem: these tools are the only path to
- * session content. Reads go through the native readers (`src/sessions/`),
- * and every string is routed through the secret scrubber before returning —
- * the readers' own redaction is belt one, this is belt two.
- */
+/** In-process MCP tools that are the miner's only path to session content; every returned
+ * string passes through the secret scrubber on top of the readers' own redaction. */
 
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
@@ -13,10 +7,8 @@ import { readSessionTurns } from "../sessions/read";
 import { redactSecrets } from "../sessions/redact";
 import type { AgentSession } from "../sessions/scan";
 
-// No hyphens: the SDK exposes tools as `mcp__<server>__<tool>`, and a hyphen
-// inside the server segment ("dosu-sessions" → mcp__dosu-sessions__read_session)
-// made models normalize it to an underscore and burn turns on unknown-tool
-// errors before self-correcting.
+// No hyphens: a hyphen in the server segment made models normalize the exposed
+// `mcp__<server>__<tool>` name to underscores and burn turns on unknown-tool errors.
 export const SESSIONS_SERVER_NAME = "sessions";
 
 /** Response budget per read_session call; the model pages with `offset`. */
@@ -44,10 +36,8 @@ export interface ReadSessionPage {
   nextOffset?: number;
 }
 
-/**
- * Render session turns from `offset`, redacted, within the response budget.
- * `nextOffset` is set when more turns remain.
- */
+/** Render session turns from `offset`, redacted, within the response budget; `nextOffset` is
+ * set when more turns remain. */
 export function readSessionPage(session: AgentSession, offset = 0): ReadSessionPage {
   const turns = readSessionTurns(session);
   if (turns.length === 0) return { text: "(session has no readable conversation turns)" };
@@ -83,9 +73,7 @@ export function readSessionPage(session: AgentSession, offset = 0): ReadSessionP
   };
 }
 
-/**
- * Build the in-process MCP server scoped to this run's sessions.
- */
+/** Build the in-process MCP server scoped to this run's sessions. */
 export function createSessionToolsServer(sessions: AgentSession[]) {
   const byId = new Map(sessions.map((s) => [s.id, s]));
 

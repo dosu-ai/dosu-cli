@@ -20,9 +20,7 @@ describe("styles", () => {
   });
 
   describe("brand", () => {
-    // Color support differs between local runs (non-TTY → off) and CI
-    // (picocolors turns color on under CI=true), so assert on the stripped
-    // text rather than the exact escape sequences.
+    // Color support differs between local (non-TTY) and CI runs, so assert on the stripped text.
     it("keeps the label intact whatever the color support", () => {
       expect(stripVTControlCharacters(brand("dosu"))).toBe("dosu");
     });

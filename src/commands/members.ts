@@ -1,6 +1,4 @@
-/**
- * `dosu members` — team member management.
- */
+/** `dosu members`: team member management. */
 
 import { Command, Option } from "commander";
 import pc from "picocolors";

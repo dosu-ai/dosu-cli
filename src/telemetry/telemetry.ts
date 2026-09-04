@@ -886,10 +886,8 @@ function eventId(generate: () => string): string | undefined {
   return uuid?.replaceAll("-", "");
 }
 
-/**
- * Command-scoped telemetry. The caller supplies only a canonical command name and coarse context.
- * Telemetry is enabled by default and controlled by one global switch.
- */
+/** Command-scoped telemetry; the caller supplies only a canonical command name and coarse
+ * context. Enabled by default, controlled by one global switch. */
 export function createCommandTelemetry(
   settings: TelemetrySettings,
   dependencies: TelemetryDependencies = {},

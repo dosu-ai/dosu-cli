@@ -677,9 +677,8 @@ describe("renderActivityFrame", () => {
     // Every row of the box paints the same width so the right border lines up.
     const widths = new Set(box.map((line) => line.trimEnd().length));
     expect(widths.size).toBe(1);
-    // No variation-selector emoji inside the box: xterm.js terminals advance
-    // one column for the U+26CF+U+FE0F pair while the padding counts two,
-    // which pushed the title row's right border one column off.
+    // No variation-selector emoji inside the box: xterm.js advances one column for the
+    // U+26CF+U+FE0F pair while the padding counts two, skewing the right border.
     expect(box.join("")).not.toContain("\uFE0F");
   });
 
@@ -780,9 +779,7 @@ describe("renderActivityFrame", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// runActivityView — driven through fake streams and timers
-// ---------------------------------------------------------------------------
+// --- runActivityView: driven through fake streams and timers ---
 
 interface FakeInput extends EventEmitter {
   isTTY: boolean;
@@ -858,9 +855,8 @@ describe("runActivityView", () => {
       pollMs: 100,
     });
 
-    // Takes over the terminal full-screen before the first frame,
-    // seeded with the log's activity and backlog counts (the gate's ready
-    // count drives the live run's progress bar).
+    // Takes over the terminal before the first frame, seeded with the log's activity and
+    // backlog counts (the gate's ready count drives the live run's progress bar).
     expect(written.join("")).toContain(ALT_SCREEN_ENTER);
     expect(stripAnsi(written.join(""))).toContain("[sync] gate: 49 ready");
     expect(stripAnsi(written.join(""))).toContain("0/49 mined");
@@ -965,6 +961,69 @@ describe("runActivityView", () => {
     await view;
   });
 
+  it("uses the run baseline the mining process persisted (survives reopening mid-run)", async () => {
+    const { input, output, written } = fakeIO();
+
+    // The view opens mid-run: 8 sessions already mined this run (568 - 560),
+    // 2 still queued. Without the persisted baseline this would read 0/2.
+    const view = runActivityView({
+      input,
+      output,
+      getStatus: () =>
+        makeStatus({
+          running: true,
+          pid: 9,
+          state: {
+            schema_version: 1,
+            watermark: null,
+            consecutive_failures: 0,
+            total_mined: 568,
+            run: { pid: 9, started_at: "2026-09-03T16:00:00Z", baseline_mined: 560 },
+          },
+        }),
+      readLog: () =>
+        "[2026-09-03T16:05:00.000Z] [INFO] [sync] gate: 2 ready, 0 in flight (watermark x)\n",
+      createFollower: () => ({ poll() {} }),
+      pollMs: 100,
+    });
+
+    expect(stripAnsi(written.join(""))).toContain("8/10 mined \u00B7 80%");
+
+    input.emit("data", "q");
+    await view;
+  });
+
+  it("ignores a stale run record from a different pid (falls back to the snapshot)", async () => {
+    const { input, output, written } = fakeIO();
+
+    const view = runActivityView({
+      input,
+      output,
+      getStatus: () =>
+        makeStatus({
+          running: true,
+          pid: 9,
+          state: {
+            schema_version: 1,
+            watermark: null,
+            consecutive_failures: 0,
+            total_mined: 568,
+            // A crashed earlier run's record; this run hasn't written its own yet.
+            run: { pid: 7, started_at: "2026-09-03T15:00:00Z", baseline_mined: 500 },
+          },
+        }),
+      readLog: () =>
+        "[2026-09-03T16:05:00.000Z] [INFO] [sync] gate: 2 ready, 0 in flight (watermark x)\n",
+      createFollower: () => ({ poll() {} }),
+      pollMs: 100,
+    });
+
+    expect(stripAnsi(written.join(""))).toContain("0/2 mined \u00B7 0%");
+
+    input.emit("data", "q");
+    await view;
+  });
+
   it("steps the bar within a batch from the miner's tool-call traces", async () => {
     const { input, output, written } = fakeIO();
     let emitChunk: (chunk: string) => void = () => {};
@@ -1035,9 +1094,8 @@ describe("runActivityView", () => {
     vi.advanceTimersByTime(100);
     expect(listBacklog).toHaveBeenCalledTimes(2);
 
-    // Entering Mined doesn't rescan (it reads persisted history), but the
-    // Queued tab does — open sessions drain into the queue without the
-    // watermark ever moving.
+    // Entering Mined reads persisted history without rescanning, but Queued rescans: open
+    // sessions drain into the queue without the watermark ever moving.
     input.emit("data", "\t");
     expect(listBacklog).toHaveBeenCalledTimes(2);
     input.emit("data", "\t");
@@ -1229,9 +1287,8 @@ describe("runActivityView", () => {
       pollMs: 100,
     });
 
-    // The paint starts at home followed by exactly the height-scaled cleared
-    // blank rows (+1 to match the home banner's leading blank) — the fake
-    // output has no rows, so the 24-row default applies.
+    // Home, then exactly the height-scaled cleared blank rows (+1 for the banner's leading
+    // blank); the fake output has no rows, so the 24-row default applies.
     const first = written.join("");
     const blankRun = first.match(new RegExp(`${ESC}\\[H((?:${ESC}\\[K\\n)+)`));
     expect(blankRun).not.toBeNull();

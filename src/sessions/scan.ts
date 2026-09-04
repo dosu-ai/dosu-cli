@@ -1,26 +1,5 @@
-/**
- * Native agent-session scanner — replaces the pinned deja-vu binary.
- *
- * The sync pipeline only ever needed "recent local sessions with updated
- * timestamps" for the watermark gate, so instead of downloading a Go binary
- * we enumerate each harness's session log files directly and use file mtime
- * as the session's `updated` time. No index, no download, no subprocess —
- * a scan is a handful of readdir/stat calls.
- *
- * Verified on-disk layouts (2026-08):
- * - Claude Code: `~/.claude/projects/<munged-cwd>/<uuid>.jsonl`
- * - Cursor:      `~/.cursor/projects/<slug>/agent-transcripts/<uuid>/<uuid>.jsonl`
- * - Codex:       `~/.codex/sessions/<yyyy>/<mm>/<dd>/rollout-<ts>-<uuid>.jsonl`
- *   (Codex honors `CODEX_HOME`, same as the hook registry.)
- * - opencode:    SQLite `session` table in `~/.local/share/opencode/opencode.db`
- *   (post file-storage migration; honors `XDG_DATA_HOME`). Read via the
- *   runtime's builtin sqlite — `bun:sqlite` in the compiled binary,
- *   `node:sqlite` on Node ≥22.13 — and silently skipped when neither exists,
- *   keeping the npm bundle dependency-free.
- *
- * Everything scanned here is by definition local-origin — the imported-vs-
- * local distinction deja tracked does not exist in this model.
- */
+/** Native agent-session scanner replacing the pinned deja-vu binary: enumerates each harness's
+ * session logs directly and uses file mtime as `updated`. No index, no download, no subprocess. */
 
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -33,10 +12,7 @@ export interface AgentSession {
   /** Session id: the log filename stem, or the DB row id for opencode. */
   id: string;
   harness: SessionHarness;
-  /**
-   * Absolute path to where the session content lives — the .jsonl log for
-   * file-based harnesses, the sqlite DB for opencode. What a miner would read.
-   */
+  /** Where the session content lives: the .jsonl log, or the sqlite DB for opencode. */
   path: string;
   /** Harness project directory/worktree, when the layout has one. */
   project?: string;
@@ -158,13 +134,8 @@ interface NodeSqliteModule {
   ) => { prepare(sql: string): { all(): SqliteRows }; close(): void };
 }
 
-/**
- * Read-only query against a sqlite file using whichever builtin the current
- * runtime has. `createRequire` keeps both module ids out of the bundler's
- * static graph, so the node bundle never hard-references `bun:sqlite` and
- * vice versa. Returns null when no builtin is available (Node <22.13) or the
- * file is not a readable database. Exported for the session reader.
- */
+/** Read-only sqlite query via the runtime's builtin; `createRequire` keeps both module ids out
+ * of the bundler's static graph. Null when no builtin exists or the file is not a database. */
 export function querySqlite(dbPath: string, sql: string): SqliteRows | null {
   const requireRuntime = createRequire(import.meta.url);
   /* v8 ignore start -- exercised only when the test runner is Bun */
@@ -204,11 +175,8 @@ export function querySqlite(dbPath: string, sql: string): SqliteRows | null {
   }
 }
 
-/**
- * opencode: sessions live as rows in a sqlite DB, not per-session files.
- * Top-level sessions only — rows with a parent_id are subagent children and
- * would inflate the backlog. `time_updated` is epoch milliseconds.
- */
+/** opencode: sqlite rows, top-level sessions only (parent_id rows are subagent children that
+ * would inflate the backlog). */
 function scanOpencode(home: string, env: NodeJS.ProcessEnv): AgentSession[] {
   const dataDir = env.XDG_DATA_HOME ?? join(home, ".local", "share");
   const dbPath = join(dataDir, "opencode", "opencode.db");
@@ -236,10 +204,8 @@ function scanOpencode(home: string, env: NodeJS.ProcessEnv): AgentSession[] {
   return sessions;
 }
 
-/**
- * All local agent sessions across supported harnesses, newest first.
- * Missing harnesses simply contribute nothing — no errors, no detection step.
- */
+/** All local agent sessions across supported harnesses, newest first; missing harnesses
+ * simply contribute nothing. */
 export function scanAgentSessions(options: ScanSessionsOptions = {}): AgentSession[] {
   const home = options.homeDir ?? homedir();
   const env = options.env ?? process.env;

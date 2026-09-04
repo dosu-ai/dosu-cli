@@ -325,19 +325,21 @@ describe("renderAnalyticsFrame", () => {
     expect(frame).toContain("tab switch \u00B7 \u2191\u2193 scroll \u00B7 esc back");
   });
 
-  it("underlines the active tab, keeping the strip compact instead of full width", () => {
+  it("lays the tabs out as equal-width cells and underlines the active cell", () => {
     const lines = stripAnsi(
       renderAnalyticsFrame(reportState(), "projects", 0, null, false, 60),
     ).split("\n");
     const row = lines[2];
     const rule = lines[3];
-    // Side by side with the minimum gap, not spread across the frame.
-    expect(row).toBe("Overview   Projects   Pages");
-    const start = row.indexOf("Projects");
-    expect(rule.indexOf("\u2501")).toBe(start);
-    expect(rule.lastIndexOf("\u2501")).toBe(start + "Projects".length - 1);
-    // The rule stops with the labels rather than running the frame width.
-    expect(rule.length).toBe(row.length);
+    // Three cells sized by the longest label ("Overview"/"Projects" = 8) + padding.
+    const cellW = 8 + 4;
+    expect(rule.length).toBe(3 * cellW);
+    // Each label is centered in its cell.
+    expect(row.indexOf("Overview")).toBe(2);
+    expect(row.indexOf("Projects")).toBe(cellW + 2);
+    // The heavy segment spans the whole active cell, not just its label.
+    expect(rule.slice(cellW, 2 * cellW)).toBe("\u2501".repeat(cellW));
+    expect(rule.slice(0, cellW)).toBe("\u2500".repeat(cellW));
   });
 
   it("shows per-tab empty messages, including the pages loading state", () => {
@@ -362,9 +364,7 @@ describe("renderAnalyticsFrame", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// runAnalyticsView — driven through fake streams and timers
-// ---------------------------------------------------------------------------
+// --- runAnalyticsView: driven through fake streams and timers ---
 
 interface FakeInput extends EventEmitter {
   isTTY: boolean;
@@ -554,9 +554,8 @@ describe("runAnalyticsView", () => {
       pollMs: 100,
     });
 
-    // The paint starts at home followed by exactly the height-scaled cleared
-    // blank rows (+1 to match the home banner's leading blank) — the fake
-    // output has no rows, so the 24-row default applies.
+    // Home, then exactly the height-scaled cleared blank rows (+1 for the banner's leading
+    // blank); the fake output has no rows, so the 24-row default applies.
     const first = written.join("");
     const blankRun = first.match(new RegExp(`${ESC}\\[H((?:${ESC}\\[K\\n)+)`));
     expect(blankRun).not.toBeNull();
@@ -632,9 +631,7 @@ describe("runAnalyticsView", () => {
     expect(stripAnsi(written.join(""))).not.toContain("Top cited pages");
   });
 
-  // -------------------------------------------------------------------------
-  // Default loader (no loadPageStats injected): stored login → typed client.
-  // -------------------------------------------------------------------------
+  // --- Default loader (no loadPageStats injected): stored login to typed client ---
 
   /** Let the default loader's promise chain settle under fake timers. */
   async function microtasks(): Promise<void> {

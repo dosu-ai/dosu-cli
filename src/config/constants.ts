@@ -1,21 +1,5 @@
-/**
- * URL constants and environment-aware getters.
- *
- * Build-time defaults are baked into the bundle via `bun build --define`
- * (see `scripts/build-all.ts:buildDefines`). For each URL we also accept a
- * `*_OVERRIDE` env var that is read **at runtime** so internal/alpha builds
- * can be repointed at staging or local backends without rebuilding:
- *
- *   DOSU_WEB_APP_URL_OVERRIDE=https://staging.dosu.dev \
- *   DOSU_BACKEND_URL_OVERRIDE=https://api-staging.dosu.dev \
- *   SUPABASE_URL_OVERRIDE=... \
- *   SUPABASE_ANON_KEY_OVERRIDE=... \
- *   npx @dosu/cli@alpha setup
- *
- * The override names intentionally differ from the build-time names —
- * `process.env.DOSU_WEB_APP_URL` is replaced with a string literal at build
- * time so reading it at runtime is impossible.
- */
+/** URL getters: build-time defaults are inlined via `bun build --define`, so runtime repointing
+ * needs the differently-named `*_OVERRIDE` env vars (the base names cannot be read at runtime). */
 
 export function getWebAppURL(): string {
   return process.env.DOSU_WEB_APP_URL_OVERRIDE ?? process.env.DOSU_WEB_APP_URL ?? "";
@@ -33,10 +17,8 @@ export function getSupabaseAnonKey(): string {
   return process.env.SUPABASE_ANON_KEY_OVERRIDE ?? process.env.SUPABASE_ANON_KEY ?? "";
 }
 
-/**
- * Base URL of the Dosu LLM gateway (the miner's ANTHROPIC_BASE_URL).
- * Derived from the backend URL; the SDK binary appends `/v1/messages`.
- */
+/** Base URL of the Dosu LLM gateway (the miner's ANTHROPIC_BASE_URL); the SDK binary appends
+ * `/v1/messages`. */
 export function getLlmGatewayURL(): string {
   return process.env.DOSU_LLM_GATEWAY_URL_OVERRIDE ?? `${getBackendURL()}/v1/llm-gateway`;
 }

@@ -1,27 +1,5 @@
-/**
- * Session content readers — the native replacement for deja's read path,
- * companion to the scanner in `scan.ts`.
- *
- * Turns a scanned `AgentSession` into an ordered list of conversational
- * turns (user/assistant text only). Tool calls, tool results, thinking
- * blocks, and system/developer scaffolding are deliberately dropped: the
- * miner wants what was said, and every byte excluded here is a byte that
- * cannot leak. Callers must still pass the result through `redactSecrets`
- * before it leaves the machine.
- *
- * Line shapes verified against real logs (2026-08):
- * - Claude Code: `{type: "user"|"assistant", message: {content: string |
- *   [{type: "text"|"thinking"|"tool_use"|"tool_result", …}]}}`, with
- *   `isSidechain: true` marking subagent traffic.
- * - Cursor: `{role, message: {content: [{type: "text"|"tool_use", …}]}}`
- *   plus role-less marker lines (`{type: "turn_ended"}`).
- * - Codex: `{type: "response_item", payload: {type: "message", role,
- *   content: [{type: "input_text"|"output_text", text}]}}`; roles include
- *   "developer" (base instructions), and user items may carry injected
- *   `<user_instructions>`/`<ENVIRONMENT_CONTEXT>` blocks.
- * - opencode: sqlite `message` rows (role inside the `data` JSON) with
- *   `part` rows holding the text chunks.
- */
+/** Turns a scanned `AgentSession` into user/assistant text turns; tool calls, thinking, and
+ * scaffolding are deliberately dropped. Callers must still redactSecrets before anything leaves. */
 
 import { readFileSync } from "node:fs";
 import { type AgentSession, querySqlite } from "./scan";
@@ -54,10 +32,7 @@ function jsonlRecords(raw: string): JsonRecord[] {
   return records;
 }
 
-/**
- * Extract the text of a message content field: either a bare string or an
- * array of typed items, keeping only the given item types.
- */
+/** Extract message content text: a bare string, or typed items filtered to the given types. */
 function textFromContent(content: unknown, textTypes: ReadonlySet<string>): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -161,11 +136,8 @@ function readOpencode(dbPath: string, sessionId: string): SessionTurn[] {
   return turns;
 }
 
-/**
- * Read the conversational turns of a scanned session. Unreadable files,
- * missing sqlite builtins, and malformed content all degrade to fewer (or
- * zero) turns — never an exception.
- */
+/** Read a session's conversational turns; any failure degrades to fewer (or zero) turns,
+ * never an exception. */
 export function readSessionTurns(session: AgentSession): SessionTurn[] {
   try {
     switch (session.harness) {
@@ -186,12 +158,8 @@ export function readSessionTurns(session: AgentSession): SessionTurn[] {
 /** chars → tokens, the same coarse model the log-backfill report uses. */
 const CHARS_PER_TOKEN = 4;
 
-/**
- * Estimated tokens of conversational content in a session — the "cost to
- * learn" baseline the mining analytics accumulate. Same model as the
- * log-backfill skill's report: text chars ÷ 4, over the user/assistant
- * turns only (tool noise is excluded by readSessionTurns).
- */
+/** Estimated tokens of conversational content, the mining analytics' "cost to learn" baseline:
+ * text chars / 4 over user/assistant turns only. */
 export function estimateSessionTokens(session: AgentSession): number {
   let chars = 0;
   for (const turn of readSessionTurns(session)) chars += turn.text.length;
@@ -203,13 +171,8 @@ const MIN_WORTH_TURNS = 4;
 /** Total conversation text below this is a greeting, not an investigation. */
 const MIN_WORTH_CHARS = 2000;
 
-/**
- * Cheap local pre-filter deciding whether a session could plausibly contain
- * durable knowledge — the gate that keeps trivial sessions (quick questions,
- * aborted starts, empty logs) from ever costing a gateway run. Deliberately
- * permissive: it only rejects sessions that are structurally too small,
- * never judges content. Unreadable sessions are not worth mining either.
- */
+/** Cheap pre-filter that keeps trivial sessions from costing a gateway run; deliberately
+ * permissive, rejecting only sessions that are structurally too small, never judging content. */
 export function isWorthMining(session: AgentSession): boolean {
   const turns = readSessionTurns(session);
   if (turns.length < MIN_WORTH_TURNS) return false;

@@ -1,35 +1,5 @@
-/**
- * Setup step: connect one or more GitHub repos to the caller's Dosu workspace.
- *
- * Flow:
- *   1. Detect the local git origin (for a helpful label only).
- *   2. Pre-flight `listForOrg`.
- *   3. Present a TUI multiselect of repos with an inline "Add repositories..."
- *      option. Nothing is preselected, so Enter can always skip straight to
- *      the next sub-step.
- *   4. If the user picks "Add repositories...", start a local HTTP server, open
- *      the web `/cli/connect-github`
- *      middle page, which sets the replay cookie and forwards the browser to
- *      GitHub's App-install page. GitHub's setup URL (`/redirect/replay`)
- *      writes the `user_installation` row and bounces to `/cli/connect-github-done`,
- *      which forwards `installation_id` back to our local HTTP server.
- *   5. Keep the install spinner alive while polling `listForOrg` for up to
- *      10 seconds, then return to the same multiselect with the updated
- *      repository list.
- *   6. For each selected repo, fan out tRPC:
- *      - `workspaces.create` (creates github deployment + fires welcome email),
- *        unless the org already has a github deployment for the repo — an
- *        orphan Monitor row from a detached/GC'd source — which is reused
- *        (`deployment.repository_id` is unique, so create would 23505 anyway).
- *      - `dataSource.create` (creates data_source + github_data_source_config
- *        trigger), unless the org already has a github data_source for the
- *        repo (e.g. attached to another Library) — which is reused unsynced.
- *      - `workspaces.listForSpace` + `deploymentDataSource.create` per deployment
- *        to link the new data_source into every workspace in the space
- *   7. Return success + the first created deployment_id.
- *
- * Never throws — returns `{advance: false}` on any failure so runSetup continues.
- */
+/** Setup step: connect one or more GitHub repos to the caller's Dosu workspace. Never throws;
+ * returns `{advance: false}` on any failure so runSetup continues. */
 
 import { execSync } from "node:child_process";
 import { createTypedClient, type TypedClient } from "../client/trpc";
@@ -49,14 +19,10 @@ import { browserFallbackHint, dim } from "./styles";
 const INSTALLATION_TIMEOUT_MS = 10 * 60 * 1000;
 const REPO_REFRESH_POLL_INTERVAL_MS = 500;
 const REPO_REFRESH_POLL_TIMEOUT_MS = 10_000;
-// Cap visible rows in the multiselect — orgs with hundreds of repos
-// otherwise blow past the terminal height. The prompt scrolls the rest
-// behind ellipsis markers (see github-repo-prompt.ts:198).
+// Cap visible rows so orgs with hundreds of repos don't blow past the terminal height.
 const REPO_MULTISELECT_MAX_ITEMS = 10;
-// Backend `sync_github_data_source` deletes the data_source row if it can't
-// reach the repo on GitHub (typical RepositoryNotFoundException turnaround is
-// 3–7s once the workflow picks up). We poll a little past that to detect the
-// drop before reporting Connected to the user.
+// Backend sync deletes the data_source if it can't reach the repo (usually within 3-7s); poll a
+// little past that to detect the drop before reporting Connected.
 const DATA_SOURCE_VERIFY_POLL_INTERVAL_MS = 1_000;
 const DATA_SOURCE_VERIFY_POLL_TIMEOUT_MS = 10_000;
 
@@ -66,13 +32,8 @@ export interface DetectedRepo {
   slug: string;
 }
 
-/**
- * Internal knobs for the post-connect data-source verification poll. Real
- * runs use the defaults (multi-second budget so we catch the backend's
- * async `RepositoryNotFoundException` deletion). Tests inject `0` so they
- * don't burn real time waiting on fake timers that don't pair cleanly with
- * the install-flow promise chain.
- */
+/** Knobs for the post-connect polls. Real runs use the defaults; tests inject `0` so they don't
+ * burn real time. */
 export interface StepConnectGitHubRepoOptions {
   verify?: {
     timeoutMs?: number;
@@ -92,33 +53,22 @@ export interface GithubStepResult {
   has_connected_repo?: boolean;
   deployment_id?: string;
   space_id?: string;
-  /**
-   * `data_source_id`s that the user just connected in this run AND that
-   * survived the backend's initial sync attempt. Empty when nothing connected
-   * or when every connection was reverted because Dosu couldn't reach the
-   * underlying GitHub repo. Downstream doc-import waits on exactly this set
-   * so a stale `is_indexed=false` data source elsewhere in the org doesn't
-   * stall it.
-   */
+  /** Data sources connected in this run that survived the backend's initial sync; downstream
+   * doc-import waits on exactly this set. */
   created_data_source_ids?: string[];
   /** Repository slugs for the data sources created in this run. */
   created_repository_slugs?: string[];
 }
 
-// Shape returned by tRPC `githubRepository.listForOrg`. Backend spreads
-// `...github.repository` so `created_at` rides along even though the
-// router type doesn't surface it explicitly.
+// Shape returned by tRPC `githubRepository.listForOrg`. Backend spreads `...github.repository`,
+// so `created_at` rides along even though the router type doesn't surface it.
 interface AvailableRepo {
   repository_id: number;
   name: string;
   slug: string; // "owner/repo"
   is_deployed: boolean;
   created_at?: string;
-  /**
-   * Forks can't be synced by the backend (`sync_github_data_source` targets
-   * the upstream), so the web attach modal disables them — the CLI mirrors
-   * that instead of letting the connect attempt fail after the fact.
-   */
+  /** Forks can't be synced by the backend, so the picker disables them like the web UI. */
   is_fork?: boolean | null;
   fork_parent_slug?: string | null;
 }
@@ -201,16 +151,8 @@ interface SpaceGithubSources {
   slugs: Set<string>;
 }
 
-/**
- * The space's Library sources are the truth for "connected" — the same truth
- * `spaceHasGithubSource` (flow.ts) uses for the connect offer. `is_deployed`
- * from `listForOrg` only says a github deployment row exists somewhere in the
- * org; orphan Monitor rows (source detached or GC'd, deployment left behind)
- * made the picker mark repos "Already connected" that this space can't
- * actually read — and made them unselectable forever. Returns `null` when the
- * backend can't answer (old backend, transient failure) so the caller can
- * fall back to `is_deployed`.
- */
+/** Space Library sources are the truth for "connected"; org-scoped `is_deployed` counts orphan
+ * rows. Returns `null` when the backend can't answer so the caller falls back to `is_deployed`. */
 async function fetchSpaceGithubSources(
   trpc: TypedClient,
   spaceID: string,
@@ -240,16 +182,8 @@ function isConnectedToSpace(repo: AvailableRepo, sources: SpaceGithubSources | n
   return sources.repositoryIds.has(repo.repository_id) || sources.slugs.has(repo.slug);
 }
 
-/**
- * `repository_id` → `deployment_id` for github deployments anywhere in the
- * org. `deployment.repository_id` is globally unique in the backend — a repo
- * gets exactly one deployment, ever — so when one exists, reusing it is the
- * only move that can succeed (`workspaces.create` maps the unique violation
- * to "Workspace exists for target"). Deliberately org-scoped via
- * `listForOrg`: the space-scoped `listForSpace` resolves through the
- * `deployment_space` junction, which can be missing rows for exactly the
- * orphan deployments this lookup exists to find. Fail-open to an empty map.
- */
+/** Map of repository_id to deployment_id for github deployments org-wide. A repo gets exactly
+ * one deployment ever, so an existing one must be reused. Fails open to an empty map. */
 async function fetchOrgGithubDeployments(
   trpc: TypedClient,
   orgID: string,
@@ -273,12 +207,8 @@ async function fetchOrgGithubDeployments(
   return map;
 }
 
-/**
- * `repository_id` → `data_source_id` for github data sources anywhere in the
- * org. A repo attached to another Library (or detached but not GC'd) already
- * has a data_source — reuse it instead of creating a duplicate. Fail-open to
- * an empty map.
- */
+/** Map of repository_id to data_source_id for github data sources org-wide; reuse instead of
+ * creating duplicates. Fails open to an empty map. */
 async function fetchOrgGithubDataSources(
   trpc: TypedClient,
   orgID: string,
@@ -322,14 +252,8 @@ async function fetchListForOrg(trpc: TypedClient, orgID: string): Promise<Availa
   }
 }
 
-/**
- * Sort repos with most recently added to the org first. The backend
- * sorts alphabetically — for orgs with hundreds of repos that buries the
- * one the user just installed via the GitHub App. Repos missing
- * `created_at` keep their incoming order (Array.prototype.sort is
- * stable), so callers and tests that don't supply timestamps stay
- * deterministic.
- */
+/** Most recently added repos first (the backend's alphabetical order buries fresh installs).
+ * Repos missing `created_at` keep their incoming order since sort is stable. */
 function sortReposByRecency(repos: AvailableRepo[]): AvailableRepo[] {
   return [...repos].sort((a, b) => {
     const ta = Date.parse(a.created_at ?? "") || 0;
@@ -419,19 +343,8 @@ async function waitForRepositoryRefresh(
   return { repos: latestRepos, foundNew: false };
 }
 
-/**
- * Open the web `/cli/connect-github` middle page and wait for the browser to
- * POST an installation_id back via our local HTTP listener. Returns the
- * installation_id on success, or `null` on timeout / failure.
- *
- * The middle page is responsible for:
- *   1. Setting the `REPLAY_AFTER_GITHUB_REPO_INSTALLATION_KEY` cookie so that
- *      when GitHub redirects to `/redirect/replay` after install, the existing
- *      web flow upserts the `user_installation` row.
- *   2. Redirecting the browser to GitHub's App-install page.
- *   3. After GitHub bounces through `/redirect/replay`, it hands control to
- *      `/cli/connect-github-done` which forwards `installation_id` here.
- */
+/** Open the web `/cli/connect-github` page and wait for the browser to send an installation_id
+ * back to the local listener. Returns the id on success, or `null` on timeout / failure. */
 async function openGitHubInstallFlow(
   onInstalled?: (installationID: number) => Promise<void>,
   opts?: { timeoutMs?: number },
@@ -500,16 +413,8 @@ interface ExistingRepoWiring {
   dataSourceID?: string;
 }
 
-/**
- * Create (or reuse) one github deployment + its data_source, then link the
- * data_source into every deployment in the space. Mirrors the web
- * `OnboardingGithub.handleNext` + `useCreateDataSources` flow exactly.
- *
- * If `dataSource.create` returns nothing a deployment created in this run is
- * rolled back so downstream verify/report logic never has to reason about
- * deployment-without-data_source orphans. Reused deployments are left alone
- * on that path — we didn't create them.
- */
+/** Create (or reuse) a repo's github deployment + data_source and link the source into every
+ * space deployment. Rolls back a deployment created here if `dataSource.create` fails. */
 async function createDeploymentForRepo(
   trpc: TypedClient,
   orgID: string,
@@ -547,9 +452,8 @@ async function createDeploymentForRepo(
 
     let dataSourceID = existing.dataSourceID;
     if (dataSourceID) {
-      // Deliberately no `syncDataSource` here: a failed sync makes the backend
-      // delete the data_source, which would break any other Library it's
-      // attached to. An existing source has already synced (or is syncing).
+      // Deliberately no `syncDataSource` here: a failed sync deletes the data_source, which
+      // would break any other Library it's attached to.
       logger.info("setup", `Reusing existing data source ${dataSourceID} for ${repo.slug}`);
     } else {
       const dataSource = await trpc.dataSource.create.mutate({
@@ -617,24 +521,8 @@ interface VerifyDataSourcesOptions {
   intervalMs?: number;
 }
 
-/**
- * Poll `dataSource.list` until each `expectedDataSourceIds` either shows up
- * (alive) or stays missing through the budget (dropped — backend sync
- * deleted it).
- *
- * Why we need this: `dataSource.create` is a synchronous insert, but
- * `syncDataSource` only enqueues the GitHub clone+index workflow. If that
- * workflow throws `RepositoryNotFoundException` it deletes the data_source
- * a few seconds later. CLI-side this looks like a successful create, so
- * without a follow-up read the user sees "Connected N" even when the row
- * has already been GC'd server-side.
- *
- * "Missing from the list" is ambiguous right after creation — a fresh row can
- * lag behind the create (the list reads a DB view), so absence on an early
- * poll must NOT be read as "deleted". The only unambiguous early exit is
- * success (every expected id visible); anything still missing when the
- * budget runs out is reported as dropped.
- */
+/** Poll `dataSource.list` until each expected id shows up (alive) or stays missing through the
+ * budget (dropped). Early absence is ambiguous, so success is the only early exit. */
 export async function verifyDataSourcesPersist(
   trpc: TypedClient,
   orgID: string,
@@ -726,10 +614,8 @@ export async function stepConnectGitHubRepo(
 
   const trpc = createTypedClient(cfg);
   let repos = await fetchListForOrg(trpc, orgID);
-  // Space-scoped truth for the "Already connected" split. `is_deployed` alone
-  // is org-scoped and counts orphan Monitor rows, which both mislabels repos
-  // as connected and makes them permanently unselectable (the 0-available
-  // dead end). Null → old backend, fall back to `is_deployed`.
+  // Space-scoped truth for the "Already connected" split; null means old backend, fall back to
+  // org-scoped `is_deployed` (which counts orphan rows).
   const spaceSources = await fetchSpaceGithubSources(trpc, spaceID);
 
   while (true) {
@@ -737,9 +623,7 @@ export async function stepConnectGitHubRepo(
     const connected = repos.filter((r) => isConnectedToSpace(r, spaceSources));
 
     const selectableCount = available.filter((r) => r.is_fork !== true).length;
-    // Already-connected repos ride along at the bottom of the list as
-    // disabled "(Connected)" entries — visible for context, skipped by the
-    // cursor, never selectable.
+    // Already-connected repos render at the bottom as disabled "(Connected)" entries.
     const selected = await promptGitHubRepositories({
       message: `Select repositories to connect ${dim(`(${selectableCount} available)`)}`,
       options: buildPromptOptions(available, connected),
@@ -790,10 +674,8 @@ export async function stepConnectGitHubRepo(
 
     const s = p.spinner();
     s.start(`Connecting ${slugs.length} repo${slugs.length === 1 ? "" : "s"}...`);
-    // A selectable repo may still have leftover rows: an orphan github
-    // deployment, or a github data_source living in the org (attached to
-    // another Library, or detached). Reuse those — creating duplicates is
-    // impossible anyway (both are unique per repo backend-side).
+    // Reuse leftover org rows (orphan deployment, existing data_source); both are unique per
+    // repo backend-side, so creating duplicates is impossible anyway.
     const existingDeployments = await fetchOrgGithubDeployments(trpc, orgID);
     const existingDataSources = await fetchOrgGithubDataSources(trpc, orgID);
     const created: { deployment_id: string; data_source_id: string; slug: string }[] = [];
@@ -813,11 +695,8 @@ export async function stepConnectGitHubRepo(
       }
     }
 
-    // The CLI just created data_sources synchronously, but the backend's
-    // GitHub sync workflow may have already deleted some of them if Dosu's
-    // GitHub App can't reach the repo. Verify before declaring success — and
-    // revert the orphan deployments so the multiselect doesn't keep showing
-    // those repos as `is_deployed=true` on the next run.
+    // The backend sync may already have deleted freshly created data_sources; verify before
+    // declaring success and revert the orphan deployments.
     const expectedDsIds = created.map((c) => c.data_source_id);
     const survivors = await verifyDataSourcesPersist(trpc, orgID, expectedDsIds, opts.verify);
 
@@ -831,9 +710,7 @@ export async function stepConnectGitHubRepo(
     }
     const survived = created.filter((c) => survivors.alive.has(c.data_source_id));
 
-    // A failed attempt loops back to the multiselect instead of ending the
-    // step — the user can retry, grant access via "Add repositories...", or
-    // cancel (Ctrl+C) to move on.
+    // A failed attempt loops back to the multiselect so the user can retry or cancel.
     if (survived.length === 0) {
       s.stop("Failed");
       if (reverted.length > 0) {

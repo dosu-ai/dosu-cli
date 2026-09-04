@@ -1,6 +1,4 @@
-/**
- * CLI command definitions using Commander.
- */
+/** CLI command definitions using Commander. */
 
 import {
   closeSync,
@@ -217,9 +215,8 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
       logger.init({ debug: opts.debug });
       if (shouldRunBackgroundChecks(actionCommand.name())) {
         if (process.env.NODE_ENV !== "test" && !process.env.CI) {
-          // Bare `dosu` launches the TUI, whose welcome banner shows the
-          // update itself — the boxed stderr notice would tear across the
-          // TUI's redraws.
+          // Bare `dosu` launches the TUI, whose welcome banner shows the update
+          // itself; the boxed stderr notice would tear across the TUI's redraws.
           const launchesTUI = actionCommand.parent === null;
           await checkForUpdates({ notify: !launchesTUI });
         }

@@ -1,7 +1,4 @@
-/**
- * TUI welcome banner: the logomark beside a checklist of what this machine
- * has configured, with a dosu-cli badge footer. Pure string rendering.
- */
+/** TUI welcome banner: logomark, configured checklist, badge footer. Pure string rendering. */
 
 import pc from "picocolors";
 import { brand, brandBadge, hasTruecolor } from "../setup/styles";
@@ -34,10 +31,7 @@ const CHECK = "\u2714";
 const CIRCLE = "\u25CB";
 const DOT = "\u00B7";
 
-/**
- * Block-art Dosu logomark (the smiling "d") in the two app-icon greens.
- * Five rows is the floor: any smaller and the smile stops reading.
- */
+/** Block-art Dosu logomark; five rows is the floor, any smaller and the smile stops reading. */
 type LogoTone = "sage" | "moss";
 
 const LOGO_ROWS: ReadonlyArray<ReadonlyArray<readonly [LogoTone, string]>> = [
@@ -121,10 +115,7 @@ function checklistRows(ctx: BannerContext): string[] {
 
 const COLUMN_GAP = "   ";
 
-/**
- * Banner lines: logomark left, checklist right, top-aligned, with the
- * dosu-cli badge and dim version/host metadata as the footer.
- */
+/** Banner lines: logomark left, checklist right, top-aligned, badge and metadata footer. */
 export function renderBanner(ctx: BannerContext): string {
   const logo = LOGO_ROWS.map(paintLogoRow);
   const text = [

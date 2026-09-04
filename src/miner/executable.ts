@@ -1,15 +1,5 @@
-/**
- * Locate a Claude Code executable for the Agent SDK.
- *
- * The SDK resolves its own version-matched native binary from the optional
- * platform package (`@anthropic-ai/claude-agent-sdk-<platform>-<arch>`), which
- * only works when running from a source checkout with node_modules present.
- * Compiled binaries (`bun build --compile`) and the npm bundle inline the
- * SDK's JS without the ~230 MB native binary, so the SDK's own lookup throws
- * before the miner starts. For those installs we fall back to a system-wide
- * Claude Code and pass it via `pathToClaudeCodeExecutable`, which makes the
- * SDK skip its own resolution entirely.
- */
+/** Locate a Claude Code executable for the Agent SDK: bundled installs lack the SDK's native
+ * binary, so we fall back to a system-wide Claude via `pathToClaudeCodeExecutable`. */
 
 import { accessSync, constants, existsSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -21,11 +11,7 @@ export function binaryNames(platform: NodeJS.Platform = process.platform): strin
   return platform === "win32" ? ["claude.exe", "claude.cmd"] : ["claude"];
 }
 
-/**
- * True when the SDK's own platform package (and the binary inside it) is
- * resolvable from this module — i.e. we are running from a checkout whose
- * node_modules carries the version-matched native binary.
- */
+/** True when the SDK's version-matched native binary is resolvable from this module. */
 export function sdkNativeBinaryExists(): boolean {
   try {
     const requireRuntime = createRequire(import.meta.url);
@@ -46,11 +32,8 @@ function isExecutable(path: string): boolean {
   }
 }
 
-/**
- * Find a system-wide Claude Code install: every PATH entry, then well-known
- * home-relative locations. The home-relative checks matter because agent
- * hooks often run with a minimal PATH that misses `~/.local/bin`.
- */
+/** Find a system-wide Claude Code on PATH, then home-relative dirs (agent hooks often run with
+ * a minimal PATH that misses `~/.local/bin`). */
 export function findSystemClaude(
   env: NodeJS.ProcessEnv = process.env,
   homeDir: string = homedir(),
@@ -74,10 +57,8 @@ export interface ResolveExecutableOptions {
   sdkBinaryExists?: () => boolean;
 }
 
-/**
- * Path to pass as `pathToClaudeCodeExecutable`, or undefined to let the SDK
- * resolve its own version-matched binary (preferred when available).
- */
+/** Path to pass as `pathToClaudeCodeExecutable`, or undefined to let the SDK resolve its own
+ * version-matched binary (preferred when available). */
 export function resolveClaudeExecutable(
   options: ResolveExecutableOptions = {},
 ): string | undefined {

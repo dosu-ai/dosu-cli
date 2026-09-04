@@ -1,19 +1,12 @@
-/**
- * Shared output formatting utilities for CLI commands.
- */
+/** Shared output formatting utilities for CLI commands. */
 
 import pc from "picocolors";
 
 // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escape code stripping requires matching control characters
 const stripAnsi = (str: string): string => str.replace(/\x1b\[[0-9;]*m/g, "");
 
-/**
- * Bun's console.log silently truncates strings beyond 64KB once
- * `process.stdout` has been materialized (which Commander's constructor
- * does), corrupting large `--json` payloads. `process.stdout.write` is not
- * affected, so large emissions go through it; small ones stay on console.log,
- * which the test suites capture.
- */
+/** Bun's console.log silently truncates strings beyond 64KB once process.stdout materializes,
+ * corrupting large --json payloads; large emissions use process.stdout.write instead. */
 const CONSOLE_SAFE_CHARS = 32 * 1024;
 
 function printJSON(data: unknown): void {
@@ -25,16 +18,12 @@ function printJSON(data: unknown): void {
   }
 }
 
-/**
- * Print data as JSON (for --json flag / agent consumption) or formatted text.
- */
+/** Print data as JSON (for --json flag / agent consumption) or formatted text. */
 export function printResult(data: unknown, _opts: { json?: boolean }): void {
   printJSON(data);
 }
 
-/**
- * Print a table of rows with headers.
- */
+/** Print a table of rows with headers. */
 export function printTable(
   headers: string[],
   rows: string[][],
@@ -74,9 +63,7 @@ export function printTable(
   }
 }
 
-/**
- * Print a labeled section with key-value pairs.
- */
+/** Print a labeled section with key-value pairs. */
 export function printInfo(
   entries: Array<[string, string | undefined]>,
   opts: { json?: boolean; rawData?: unknown } = {},
@@ -94,17 +81,13 @@ export function printInfo(
   }
 }
 
-/**
- * Truncate a string to a max length, adding ellipsis if needed.
- */
+/** Truncate a string to a max length, adding ellipsis if needed. */
 export function truncate(str: string, maxLen: number): string {
   if (str.length <= maxLen) return str;
   return `${str.slice(0, maxLen - 1)}…`;
 }
 
-/**
- * Format a date string into a short readable format.
- */
+/** Format a date string into a short readable format. */
 export function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return "-";
   const d = new Date(dateStr);

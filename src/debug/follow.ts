@@ -1,9 +1,5 @@
-/**
- * Incremental file tail for `dosu logs --follow`: each poll() emits whatever
- * was appended to the file since the previous call. Starts at the current end
- * of file (history is printed separately), and restarts from the new end when
- * the file shrinks (`logs --clear` or rotation while following).
- */
+/** Incremental file tail for `dosu logs --follow`: poll() emits what was appended since the
+ * previous call, and restarts from the new end when the file shrinks. */
 
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 

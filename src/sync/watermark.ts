@@ -1,13 +1,5 @@
-/**
- * Knowledge-sync watermark — which sessions have already been mined, and
- * retry/backoff state for failed runs.
- *
- * The watermark is the mining pipeline's commit point: it advances only after
- * a successful mining run (never in the index-and-gate-only milestone), so
- * missed content is always retried on a later trigger. State lives in its own
- * file under the CLI config dir — deliberately not in `config.json`, which is
- * credential-bearing and rewritten by auth flows.
- */
+/** Knowledge-sync watermark: the mining commit point, advancing only after a successful run.
+ * Kept out of config.json, which is credential-bearing and rewritten by auth flows. */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -36,17 +28,21 @@ export interface MinedSessionRecord {
 /** How many mined-session history records the state file keeps. */
 export const MINED_HISTORY_LIMIT = 500;
 
-/**
- * A clean gateway refusal (consent off, credit limit, quota) from the most
- * recent mining attempt. Persisted so status surfaces (Activity view, --status)
- * can tell the user why mining is paused — quiet runs print nothing and the
- * refusal deliberately never triggers backoff, so without this it would be
- * visible only in the debug log. Cleared by the next successful run.
- */
+/** A clean gateway refusal from the last mining attempt, persisted so status surfaces can say
+ * why mining is paused; never triggers backoff and is cleared by the next successful run. */
 interface SyncRefusal {
   at: string;
   outcome: string;
   message: string;
+}
+
+/** The active run's baseline; status viewers subtract baseline_mined from total_mined for a
+ * run-scoped progress bar. Only meaningful while the recorded pid holds the sync lock. */
+interface SyncRun {
+  pid: number;
+  started_at: string;
+  /** total_mined when this run started. */
+  baseline_mined: number;
 }
 
 export interface SyncState {
@@ -61,19 +57,15 @@ export interface SyncState {
   total_mined?: number;
   /** All-time knowledge notes written by completed mining runs. */
   total_notes?: number;
-  /**
-   * All-time estimated tokens of investigation distilled: the chars÷4 token
-   * estimate of every mined session's conversation. The analytics baseline —
-   * future reads of the notes reuse this instead of re-learning it.
-   */
+  /** All-time tokens of investigation distilled (chars/4 estimate of every mined conversation);
+   * future reads of the notes reuse this instead of re-learning it. */
   total_learning_tokens?: number;
   /** Why the last mining attempt was refused by the gateway, if it was. */
   last_refusal?: SyncRefusal;
-  /**
-   * Absolute directories whose sessions get mined (subdirectories included).
-   * Absent = everywhere, including directories that appear later. Sessions
-   * whose directory can't be determined match UNKNOWN_PROJECT.
-   */
+  /** The active run's progress baseline; see SyncRun. */
+  run?: SyncRun;
+  /** Absolute directories whose sessions get mined (subdirectories included); absent means
+   * everywhere. Undeterminable directories match UNKNOWN_PROJECT. */
   project_filter?: string[];
 }
 
@@ -115,6 +107,15 @@ export function loadSyncState(configDir: string = getConfigDir()): SyncState {
       typeof rawRefusal.message === "string"
         ? { at: rawRefusal.at, outcome: rawRefusal.outcome, message: rawRefusal.message }
         : undefined;
+    const rawRun = raw.run as Partial<SyncRun> | undefined;
+    const run =
+      rawRun &&
+      typeof rawRun.pid === "number" &&
+      typeof rawRun.started_at === "string" &&
+      typeof rawRun.baseline_mined === "number" &&
+      rawRun.baseline_mined >= 0
+        ? { pid: rawRun.pid, started_at: rawRun.started_at, baseline_mined: rawRun.baseline_mined }
+        : undefined;
     return {
       schema_version: STATE_SCHEMA_VERSION,
       watermark: typeof raw.watermark === "string" ? raw.watermark : null,
@@ -135,6 +136,7 @@ export function loadSyncState(configDir: string = getConfigDir()): SyncState {
           ? raw.total_learning_tokens
           : 0,
       ...(lastRefusal ? { last_refusal: lastRefusal } : {}),
+      ...(run ? { run } : {}),
       ...(Array.isArray(raw.project_filter)
         ? {
             project_filter: (raw.project_filter as unknown[]).filter(
@@ -158,11 +160,8 @@ export function saveSyncState(state: SyncState, configDir: string = getConfigDir
   renameSync(tmp, path);
 }
 
-/**
- * When the previous run failed, the earliest time a background (hook) run
- * should try again: 15min · 2^(failures−1), capped at 24h. Returns null when
- * there is no backoff in force. Manual runs ignore this.
- */
+/** Earliest time a background run should retry after failure: 15min * 2^(failures-1), capped
+ * at 24h; null when no backoff is in force. Manual runs ignore this. */
 export function backoffUntil(state: SyncState): Date | null {
   if (state.consecutive_failures === 0 || !state.last_attempt_at) return null;
   const last = Date.parse(state.last_attempt_at);
@@ -180,11 +179,8 @@ export function isUnderDir(dir: string, base: string): boolean {
   return dir === root || dir.startsWith(`${root}/`);
 }
 
-/**
- * Apply the mining directory filter; no/empty filter passes everything.
- * A session matches when its resolved directory sits at or under any picked
- * directory; unresolvable sessions match only the UNKNOWN_PROJECT entry.
- */
+/** Apply the mining directory filter (empty passes everything): a session matches at or under
+ * any picked directory; unresolvable sessions match only UNKNOWN_PROJECT. */
 export function filterSessionsByProject(
   sessions: readonly AgentSession[],
   filter: readonly string[] | undefined,
@@ -203,18 +199,12 @@ export function filterSessionsByProject(
 export interface GateResult {
   /** Completed sessions newer than the watermark — the mining backlog. */
   ready: AgentSession[];
-  /**
-   * Sessions newer than the watermark but still inside the quiet period —
-   * live right now, queued once they go quiet.
-   */
+  /** Sessions newer than the watermark but still inside the quiet period; queued once quiet. */
   open: AgentSession[];
 }
 
-/**
- * The gate that makes frequent hook triggers cheap: only sessions newer than
- * the watermark count, and only ones quiet long enough to be considered
- * complete — anything fresher is left for the next trigger.
- */
+/** The gate that makes frequent hook triggers cheap: only sessions newer than the watermark and
+ * quiet long enough to be complete count; fresher ones wait for the next trigger. */
 export function gateSessions(
   sessions: readonly AgentSession[],
   watermark: string | null,

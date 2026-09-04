@@ -1,8 +1,4 @@
-/**
- * TUI entry point.
- *
- * The TUI launches when `dosu` is run without arguments.
- */
+/** TUI entry point; launches when `dosu` is run without arguments. */
 
 import { homedir } from "node:os";
 import { basename } from "node:path";
@@ -125,10 +121,7 @@ function hooksIncomplete(): boolean {
   });
 }
 
-/**
- * Setup steps a completed wizard always persists, by user-facing name;
- * missing ones keep the TUI in setup mode and flag the banner.
- */
+/** Setup steps a completed wizard persists; missing ones keep the TUI in setup mode. */
 function missingSetupSteps(cfg: Config): string[] {
   const target = cfg.active_account?.target;
   const missing: string[] = [];
@@ -162,10 +155,7 @@ function isMining(): boolean {
   }
 }
 
-/**
- * Take over the screen and draw the welcome banner; called on launch and
- * after flows that scrolled it away or changed the state it shows.
- */
+/** Take over the screen and draw the banner, on launch and after flows that scrolled it away. */
 function drawHome(cfg: Config): void {
   if (process.stdout.isTTY) {
     process.stdout.write(CLEAR_SCREEN);
@@ -274,10 +264,8 @@ async function runMainMenu(): Promise<void> {
   }
 }
 
-/**
- * Settings submenu: switch org/Library, rerun the wizard, or log out.
- * Library switches stay in the current org; org switches run the full chain.
- */
+/** Settings submenu: switch org/Library, rerun the wizard, or log out. Library switches stay
+ * in the current org; org switches run the full chain. */
 async function runSettings(cfg: Config): Promise<void> {
   while (true) {
     const target = cfg.active_account?.target;
@@ -331,10 +319,7 @@ function displayDir(dir: string): string {
   return dir === home ? "~" : dir.startsWith(`${home}/`) ? `~${dir.slice(home.length)}` : dir;
 }
 
-/**
- * Distinct working directories across local sessions, most sessions first.
- * Sessions whose directory can't be determined bucket under UNKNOWN_PROJECT.
- */
+/** Distinct session working directories, most sessions first; unknowns get UNKNOWN_PROJECT. */
 function discoverProjectDirs(): string[] {
   const counts = new Map<string, number>();
   try {
@@ -350,11 +335,8 @@ function discoverProjectDirs(): string[] {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([dir]) => dir);
 }
 
-/**
- * Scope mining to selected folders (subdirectories included). Picking
- * everything clears the filter so new folders are mined too; a subset is
- * persisted as absolute paths.
- */
+/** Scope mining to selected folders (subdirectories included); picking everything clears the
+ * filter so new folders are mined too. */
 async function runMiningProjectsSetting(): Promise<void> {
   const dirs = discoverProjectDirs();
   if (dirs.length === 0) {
