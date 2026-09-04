@@ -364,9 +364,7 @@ describe("renderAnalyticsFrame", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// runAnalyticsView — driven through fake streams and timers
-// ---------------------------------------------------------------------------
+// --- runAnalyticsView: driven through fake streams and timers ---
 
 interface FakeInput extends EventEmitter {
   isTTY: boolean;
@@ -556,9 +554,8 @@ describe("runAnalyticsView", () => {
       pollMs: 100,
     });
 
-    // The paint starts at home followed by exactly the height-scaled cleared
-    // blank rows (+1 to match the home banner's leading blank) — the fake
-    // output has no rows, so the 24-row default applies.
+    // Home, then exactly the height-scaled cleared blank rows (+1 for the banner's leading
+    // blank); the fake output has no rows, so the 24-row default applies.
     const first = written.join("");
     const blankRun = first.match(new RegExp(`${ESC}\\[H((?:${ESC}\\[K\\n)+)`));
     expect(blankRun).not.toBeNull();
@@ -634,9 +631,7 @@ describe("runAnalyticsView", () => {
     expect(stripAnsi(written.join(""))).not.toContain("Top cited pages");
   });
 
-  // -------------------------------------------------------------------------
-  // Default loader (no loadPageStats injected): stored login → typed client.
-  // -------------------------------------------------------------------------
+  // --- Default loader (no loadPageStats injected): stored login to typed client ---
 
   /** Let the default loader's promise chain settle under fake timers. */
   async function microtasks(): Promise<void> {

@@ -1,20 +1,5 @@
-/**
- * Secret scrubbing for session transcripts — a TypeScript port of deja-vu's
- * redaction pass (github.com/vshulcz/deja-vu, `internal/redact/redact.go`,
- * MIT license). Ported instead of shipping the Go binary; the pattern set,
- * gates, and entropy heuristics are kept faithful so upstream fixes can be
- * re-ported by diffing that file.
- *
- * Everything the miner reads out of local session logs passes through here
- * before it can reach a model prompt or a knowledge write. The rules are
- * biased toward over-redaction: a false positive costs a little transcript
- * context, a false negative leaks a credential off the machine.
- *
- * Deliberate deviations from upstream:
- * - No `DEJA_NO_REDACT`-style disable switch — the miner's scrub pass must
- *   not be turnable-off.
- * - Dosu API keys (`sk_user_…`) are added to the provider pattern.
- */
+/** Faithful TypeScript port of deja-vu's redaction pass (internal/redact/redact.go, MIT) so
+ * upstream fixes re-port by diff. Biased toward over-redaction; deliberately no disable switch. */
 
 /** Every replacement is `[redacted:<kind>]`; kinds mirror deja-vu's. */
 const REDACTION_MARKER = "[redacted:";
@@ -32,16 +17,12 @@ export interface RedactionResult {
 const awsAccessKeyRE = /A(?:KIA|SIA)[0-9A-Z]{16}/g;
 const awsSecretRE =
   /\b(aws[_-]?secret[_-]?access[_-]?key)(\\*['"]?\s*[:=]\s*)(\\*['"]?)([A-Za-z0-9/+=_-]{32,})(\\*['"]?)/gi;
-// The key may be embedded in a larger identifier (ANTHROPIC_API_KEY,
-// x-api-key) and, in JSON, a closing quote can sit between the key and the
-// delimiter ("api_key": "..."). The `\\*` runs tolerate escaped-JSON quotes
-// (`api_key\":`) that agents paste constantly.
+// Matches keys embedded in larger identifiers; the `\\*` runs tolerate the escaped-JSON
+// quotes (`api_key\":`) that agents paste constantly.
 const genericKVRE =
   /\b([\w.-]{0,64}?(?:api[_-]?key|secret|token|passwd|password|authorization))(\\*['"]?\s*[:=]\s*)(\\*['"]?)([A-Za-z0-9/+=._-]{16,})(\\*['"]?)/gi;
-// An env var holding a credential does not have to say "api" or "token":
-// DEJA_EMBED_KEY, GROQ_KEY all end in plain _KEY. Case-sensitive on purpose —
-// this is the shell shape, and matching `cache_key:` too costs recall for no
-// secret.
+// Credential env vars can end in plain _KEY (GROQ_KEY); case-sensitive on purpose
+// so lowercase `cache_key:` never matches.
 const envKeyRE =
   /\b([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*_KEY)(\\*['"]?\s*[:=]\s*)(\\*['"]?)([A-Za-z0-9/+=._-]{16,})(\\*['"]?)/g;
 // The same shape in the languages people actually type in — an English-only
@@ -49,10 +30,8 @@ const envKeyRE =
 const genericKVIntlRE =
   /(парол[ьяею]|токен[ауы]?|секрет[ауы]?|ключ[аеиуом]?|contraseña|senha|passwort|密码|密碼|パスワード|비밀번호)(\\*['"]?\s*[:=]\s*)(\\*['"]?)([A-Za-z0-9/+=._-]{16,})(\\*['"]?)/gi;
 const bearerRE = /\b(Bearer|Basic)(\s+)([A-Za-z0-9._~+/=-]{16,})/gi;
-// A secret named in prose and quoted rather than assigned — tool output is
-// full of `password authentication failed … with password "S3cr3tP@ssw0rd!"`.
-// The quotes make it safe to be this loose: an unquoted mention matches
-// nothing.
+// A secret named in prose and quoted rather than assigned; the required quotes make it
+// safe to be this loose, since an unquoted mention matches nothing.
 const quotedSecretRE =
   /\b(password|passwd|pwd|secret|token|api[_-]?key)(\s+(?:is\s+|was\s+|for\s+)?)(\\*["'`])([^"'`\n]{6,80})(\\*["'`])/gi;
 const pemPrivateRE =
@@ -66,9 +45,8 @@ const jwtRE = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b/g;
 // the last '@' and is redacted whole.
 const connURLRE = /\b([A-Za-z][A-Za-z0-9+.-]*:\/\/)([^\s/@:]*):([^\s]+)@([^\s]+)/g;
 
-// kvHints are the substrings genericKVRE can anchor on; providerHints the
-// literal prefixes of providerRE. Checking them first keeps the regexes off
-// the vast majority of messages, which contain no credentials at all.
+// Cheap substring hints checked first, keeping the regexes off the vast majority
+// of messages, which contain no credentials at all.
 const kvHints = [
   "key",
   "secret",
@@ -124,12 +102,8 @@ function isSpaceChar(c: string): boolean {
   return c === " " || c === "\t" || c === "\n" || c === "\r" || c === "\f" || c === "\v";
 }
 
-/**
- * Reports whether any key-ish word in the text is followed by an assignment.
- * genericKVRE cannot match unless one is, so skipping on a negative cannot
- * change what is redacted — it only keeps the regexes off ordinary chatter,
- * where "token", "secret" and "key" are everyday words.
- */
+/** Reports whether any key-ish word is followed by an assignment; genericKVRE cannot match
+ * otherwise, so skipping on a negative cannot change what is redacted. */
 function kvAssignmentNearby(lower: string): boolean {
   for (const hint of kvHints) {
     let at = 0;
@@ -143,12 +117,8 @@ function kvAssignmentNearby(lower: string): boolean {
   return false;
 }
 
-/**
- * Skips what genericKVRE allows between the name and the value — the rest of
- * a longer name, spaces, and optional (possibly escaped) quotes — and looks
- * for the ':' or '=' the pattern requires. Chars >= 0x80 continue a
- * non-ASCII word so "парол" can reach the ':' behind "пароля".
- */
+/** Skips what genericKVRE allows between name and value, looking for the required ':' or '=';
+ * chars >= 0x80 continue a non-ASCII word so "парол" reaches the ':' behind "пароля". */
 function assignmentFollows(s: string, start: number): boolean {
   let i = start;
   while (i < s.length && (isWordChar(s.charCodeAt(i)) || s.charCodeAt(i) >= 0x80)) i++;
@@ -293,22 +263,15 @@ export function redactSecrets(text: string): RedactionResult {
   return { text: s, count, counts };
 }
 
-// ── entropy pass ────────────────────────────────────────────────────────────
-// Pattern matching only catches shapes we know. A bare high-entropy string is
-// caught here instead — but entropy alone fires on identifiers, hashes and
-// paths everywhere, so a token must also sit in a secret-shaped context: the
-// value side of an assignment, or alone on its own line.
+// Entropy pass: catches bare high-entropy strings no pattern knows, but only in a secret-shaped
+// context (the value side of an assignment, or alone on its own line) to avoid identifier noise.
 
 const entropyMinBits = 4.5;
 const entropyMinAssign = 20;
 const entropyMinStandalone = 28;
 
-/**
- * Query-time stop words from deja-vu's `internal/query`, used to reject
- * assignment keys that are ordinary prose ("moved to: <blob>"). Only the
- * English list is ported: assignment keys are ASCII word chars by
- * construction, so the non-ASCII entries could never appear here.
- */
+/** Stop words from deja-vu's `internal/query`, rejecting assignment keys that are ordinary
+ * prose ("moved to: <blob>"); only the English list can ever match ASCII keys. */
 const stopWords = new Set([
   "a",
   "an",
@@ -379,10 +342,7 @@ function isHexish(s: string): boolean {
   return /^[0-9a-fA-F-]+$/.test(s);
 }
 
-/**
- * A filesystem path is not a blob whatever its case: rooted, more than one
- * separator, and none of the punctuation a credential or URL brings with it.
- */
+/** A filesystem path is not a blob: rooted, multiple separators, no credential punctuation. */
 function looksLikePath(tok: string): boolean {
   if (
     !tok.startsWith("/") &&
@@ -407,11 +367,8 @@ function entropyCandidate(tok: string): boolean {
   return shannonBits(tok) >= entropyMinBits;
 }
 
-/**
- * Reports whether s[start] begins the value side of an assignment: a word,
- * then = or :, optional quote/space, then the token. Prose assigns nothing —
- * a key that is an English stop word ("moved to: <blob>") does not count.
- */
+/** Reports whether s[start] begins the value side of an assignment; a key that is an English
+ * stop word ("moved to: <blob>") does not count. */
 function assignmentValue(s: string, start: number): boolean {
   let i = start - 1;
   while (i >= 0 && (s[i] === '"' || s[i] === "'" || s[i] === " " || s[i] === "\t")) i--;
@@ -428,10 +385,7 @@ function assignmentValue(s: string, start: number): boolean {
   return !stopWords.has(key.toLowerCase());
 }
 
-/**
- * Reports whether the token is the only content on its line — the shape of a
- * pasted credential.
- */
+/** Reports whether the token is the only content on its line, the shape of a pasted credential. */
 function standaloneLine(s: string, start: number, end: number): boolean {
   for (let i = start - 1; i >= 0 && s[i] !== "\n"; i--) {
     if (s[i] !== " " && s[i] !== "\t" && s[i] !== "\r") return false;
@@ -454,10 +408,7 @@ function isEntropyChar(code: number): boolean {
   );
 }
 
-/**
- * Finds runs of twenty or more characters from [A-Za-z0-9+/_-], plus up to
- * two trailing '=' of base64 padding.
- */
+/** Finds runs of 20+ chars from [A-Za-z0-9+/_-], plus up to two trailing '=' of base64 padding. */
 function entropySpans(s: string): [number, number][] {
   const out: [number, number][] = [];
   for (let i = 0; i < s.length; ) {

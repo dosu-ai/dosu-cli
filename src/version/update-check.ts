@@ -1,11 +1,5 @@
-/**
- * Cached version update checker.
- *
- * Uses a cached, bounded check:
- * 1. On startup, reads a cached latest version from disk.
- * 2. If the cached version is newer than the running version, prints a notice to stderr.
- * 3. If the cache is stale (>6 h), waits up to one second and can print on the same run.
- */
+/** Cached version update checker: reads a cached latest version on startup, prints a stderr
+ * notice when newer, and refreshes a stale (>6 h) cache with a bounded one-second wait. */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -160,11 +154,8 @@ export function buildUpdateNotice(
   );
 }
 
-/**
- * The update the cache already knows about, if any — for surfaces that render
- * the notice themselves (the TUI welcome banner) instead of printing the
- * boxed stderr notice.
- */
+/** The update the cache already knows about, if any, for surfaces (the TUI welcome banner)
+ * that render the notice themselves instead of printing the boxed stderr notice. */
 export function getAvailableUpdate(): string | null {
   const cache = readCache();
   return cache && isNewerVersion(cache.latestVersion, VERSION) ? cache.latestVersion : null;
@@ -182,17 +173,8 @@ function displayNotice(current: string, latest: string): void {
   );
 }
 
-/**
- * Check for updates — awaited from the preAction hook.
- *
- * Reads cached version info and displays a notice if outdated.
- * Waits up to one second for a refresh if the cache is stale (>6 h), so short-lived
- * commands cannot exit before a newly discovered update is shown.
- *
- * With `notify: false` the check still refreshes the cache but prints
- * nothing — used when the TUI is about to render, since its welcome banner
- * shows the update itself (via `getAvailableUpdate`).
- */
+/** Check for updates, awaited from the preAction hook. With `notify: false` the check still
+ * refreshes the cache but prints nothing; the TUI welcome banner shows the update itself. */
 export async function checkForUpdates(options: { notify?: boolean } = {}): Promise<void> {
   const notify = options.notify ?? true;
   try {

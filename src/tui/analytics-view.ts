@@ -1,8 +1,5 @@
-/**
- * Standalone Analytics screen: tabbed report over all-time mining numbers
- * from local sync state (Overview, Projects) plus backend page analytics
- * (Pages). Pure render/reduce functions wired to injectable IO.
- */
+/** Standalone Analytics screen: all-time mining numbers plus backend page analytics. Pure
+ * render/reduce functions wired to injectable IO. */
 
 import pc from "picocolors";
 import { createTypedClient, type TypedClient } from "../client/trpc";
@@ -73,10 +70,8 @@ export interface PageStats {
   topCited: Array<{ title: string; citation_count: number }>;
 }
 
-/**
- * Fetch page analytics for the Library behind `spaceId`; null when it has no
- * knowledge store. Fail-open per section (old backends lack `page.topCited`).
- */
+/** Fetch page analytics for the Library behind `spaceId`; null when it has no knowledge store.
+ * Fail-open per section (old backends lack `page.topCited`). */
 export async function fetchPageStats(
   client: TypedClient,
   spaceId: string,
@@ -120,10 +115,8 @@ function loadPageStatsFromConfig(): Promise<PageStats | null> {
 
 const label = (text: string) => text.padEnd(26);
 
-/**
- * Overview tab: the all-time totals. "Investigation distilled" is the tokens
- * the mined investigations originally cost to learn; future reads reuse that.
- */
+/** Overview tab: all-time totals. "Investigation distilled" is what the mined investigations
+ * originally cost to learn; future reads reuse that. */
 export function overviewRows(state: SyncState): string[] {
   const minedTotal = state.total_mined ?? 0;
   const notes = state.total_notes ?? 0;
@@ -249,10 +242,7 @@ export interface AnalyticsViewIO {
   pollMs?: number;
 }
 
-/**
- * Show the analytics screen until the user goes back. Resolves immediately
- * when stdin isn't interactive.
- */
+/** Show the analytics screen until back; resolves immediately when stdin isn't interactive. */
 export function runAnalyticsView(io: AnalyticsViewIO = {}): Promise<void> {
   const input = io.input ?? process.stdin;
   const output = io.output ?? process.stdout;

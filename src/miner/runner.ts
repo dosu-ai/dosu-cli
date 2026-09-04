@@ -1,10 +1,5 @@
-/**
- * Mining-agent runner: spawns a Claude Agent SDK session whose model
- * traffic routes to the Dosu LLM gateway, fenced to exactly four tools —
- * the in-process session readers and the remote Dosu knowledge tools.
- *
- * This is the only module in the CLI that imports the Agent SDK.
- */
+/** Mining-agent runner: spawns an Agent SDK session routed to the Dosu LLM gateway, fenced to
+ * four tools. This is the only module in the CLI that imports the Agent SDK. */
 
 import { getLlmGatewayURL } from "../config/constants";
 import { logger } from "../debug/logger";
@@ -94,12 +89,8 @@ function snippet(value: unknown): string {
   return flat.length > TRACE_SNIPPET_LIMIT ? `${flat.slice(0, TRACE_SNIPPET_LIMIT)}…` : flat;
 }
 
-/**
- * Turn-by-turn trace of the mining agent in the debug log: what it says,
- * every tool call with its arguments, and the size of what came back.
- * `dosu knowledge sync` is quiet on stdout by design, so the debug log is
- * where a run can actually be watched.
- */
+/** Turn-by-turn trace of the mining agent in the debug log; `dosu knowledge sync` is quiet on
+ * stdout by design, so the debug log is where a run can actually be watched. */
 export function traceAgentMessage(message: unknown): void {
   const msg = message as {
     type?: string;
@@ -204,14 +195,8 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
           [KNOWLEDGE_SERVER_NAME]: {
             type: "http",
             url: mcpURL(options.deploymentID),
-            // Session-context headers (dosu#12249/#12264): the backend reads
-            // these per request and stores them on each note; backends
-            // without the feature ignore them. Session id = this mining run —
-            // the transcripts' own ids vary per note. Session start = the
-            // oldest mined session, bounding the learning window. X-Dosu-Repo/
-            // -Branch/-Commit (the anchor attempt) are deliberately omitted:
-            // one run mines sessions from many repos, and absent beats wrong.
-            // X-Dosu-Model is the gateway's call, not ours.
+            // Session-context headers the backend stores on each note; repo/branch/commit
+            // headers are omitted because one run mines many repos, and absent beats wrong.
             headers: {
               ...mcpHeaders(options.apiKey),
               "X-Dosu-Session-Id": runID,
@@ -220,9 +205,8 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
             },
           },
         },
-        // Deliberately NO allowedTools: bare entries there auto-approve the
-        // tool before canUseTool is consulted (CLAUDE_SDK_CAN_USE_TOOL_SHADOWED),
-        // which would bypass the note cap. canUseTool is the single hard gate.
+        // Deliberately NO allowedTools: bare entries auto-approve before canUseTool is
+        // consulted, bypassing the note cap. canUseTool is the single hard gate.
         stderr: (data) => logger.debug("miner", `[sdk] ${data}`),
         canUseTool: async (toolName, input) => {
           if (!allowed.has(toolName)) {

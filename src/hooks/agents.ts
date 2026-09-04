@@ -1,21 +1,5 @@
-/**
- * Hook agent registry — which coding agents get a session-end trigger and how.
- *
- * A parallel to `src/mcp/providers` rather than an extension of it:
- * hook-capable agents are not the same set as MCP-supported tools (Zed has an
- * MCP entry but no hooks; opencode needs a plugin, not a config entry), and
- * the operations differ (enable/disable a trigger vs install/remove a server
- * entry). Same registry pattern, same detection helpers, separate interface.
- *
- * v1 agents: Claude Code, Cursor, Codex. Event choice per agent:
- * - Claude Code: `SessionEnd` — fires on session termination and cannot block
- *   or steer the agent (unlike `Stop`, which can force continuation).
- * - Cursor: `stop` — fires when the agent loop finishes; Cursor has no
- *   session-end event. The watermark gate debounces per-turn firing.
- * - Codex: `Stop` in `~/.codex/hooks.json` (grouped format, verified against
- *   a live install). Codex records a trust hash per hook command in
- *   config.toml, so users are prompted to approve the hook on first run.
- */
+/** Hook agent registry: which coding agents get a session-end trigger and how. A parallel to
+ * `src/mcp/providers`, not an extension: hook-capable agents and their operations differ. */
 
 import { join } from "node:path";
 import { expandHome, isInstalled } from "../mcp/detect";

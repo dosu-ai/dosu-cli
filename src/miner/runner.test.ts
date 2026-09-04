@@ -116,9 +116,8 @@ describe("runMiner", () => {
     expect(params.options.sandbox).toEqual({ enabled: true, failIfUnavailable: false });
     expect(Object.keys(params.options.mcpServers)).toEqual(["sessions", "dosu"]);
     expect(params.options.mcpServers.dosu.type).toBe("http");
-    // Session-context headers (dosu#12249/#12264) ride on every knowledge
-    // MCP request. No X-Dosu-Repo/-Branch/-Commit (the anchor attempt): a
-    // run spans many repos, so absent beats wrong.
+    // Session-context headers ride on every knowledge MCP request; no repo/branch/commit
+    // headers because a run spans many repos.
     expect(params.options.mcpServers.dosu.headers).toMatchObject({
       "X-Dosu-API-Key": "sk_user_test",
       "X-Dosu-Session-Id": "run-123",

@@ -1,6 +1,4 @@
-/**
- * `dosu review` — review workflow for pending doc changes and draft replies.
- */
+/** `dosu review`: review workflow for pending doc changes and draft replies. */
 
 import { readFileSync } from "node:fs";
 import { isTRPCClientError } from "@trpc/client";
@@ -16,10 +14,8 @@ import { requireLoginConfig } from "./auth";
 import { confirmAction } from "./confirmation";
 import { formatDate, printInfo, printResult, printTable, truncate } from "./output";
 
-// Contract-typed since dosu#11679: ChangeView, review-list items, and the raw
-// message row all come from the vendored contract — no local mirror types, so a
-// contract-side shape change fails typecheck here instead of silently breaking
-// at runtime.
+// Contract-typed since dosu#11679: no local mirror types, so a contract-side shape change
+// fails typecheck here instead of silently breaking at runtime.
 type ChangeView = ReviewGetChangeOutput;
 type DraftMessageRow = NonNullable<MessagesGetMessageOutput>;
 type ReviewOrigin = CliPendingReviewItem["origin"];
@@ -32,10 +28,8 @@ function isNotFound(err: unknown): boolean {
   return isTRPCClientError(err) && (err.data as { code?: string } | null)?.code === "NOT_FOUND";
 }
 
-// The change-view endpoint types its id as a UUID, so a malformed/non-UUID id
-// (a typo, or a mangled draft prefix) fails FastAPI validation with 422 → tRPC
-// UNPROCESSABLE_CONTENT rather than 404. Treat it like NOT_FOUND so a bad id reads
-// as a clean "no such review item" instead of an uncaught crash.
+// A malformed id fails UUID validation with 422 (UNPROCESSABLE_CONTENT) rather than 404;
+// treat it like NOT_FOUND so a bad id reads as a clean "no such review item".
 function isInvalidId(err: unknown): boolean {
   return (
     isTRPCClientError(err) &&
@@ -43,26 +37,17 @@ function isInvalidId(err: unknown): boolean {
   );
 }
 
-// Prefix on draft-message review-item ids from `review.listPending` (ENG-547,
-// dosu-ai/dosu#11451). Mirror of DRAFT_MESSAGE_ID_PREFIX in dosu's
-// frontend/packages/api/src/routers/review.ts and DRAFT_MESSAGE_PREFIX in
-// backend/public_api/mcp/tools/review.py — keep all three in sync. Prefixing makes
-// the opaque id identical across MCP and tRPC/CLI so the same token is portable.
+// Draft-message id prefix; mirrors DRAFT_MESSAGE_ID_PREFIX in dosu's review router and
+// DRAFT_MESSAGE_PREFIX in the MCP review tool. Keep all three in sync.
 const DRAFT_MESSAGE_ID_PREFIX = "draft_message:";
 
-// Route an opaque review-item id to its kind, mirroring the MCP tool's
-// `_parse_item_id`: a prefixed id is a draft_message, a bare id is a doc_change
-// page-version UUID. We dispatch on the prefix rather than probing review.getChange
-// (the old ENG-524 approach) because the change-view endpoint types its id as a UUID
-// and now 422s — not 404s — on a prefixed id, so a 404-probe can no longer route drafts.
+// Route an id by prefix (draft_message vs doc-change UUID); getChange now 422s on prefixed
+// ids, so the old 404-probe routing no longer works.
 function isDraftId(id: string): boolean {
   return id.startsWith(DRAFT_MESSAGE_ID_PREFIX);
 }
 
-// Strip the draft prefix to recover the bare message UUID the `messages.*`
-// procedures expect (they're otherwise called by the web with bare, web-controlled
-// ids). Only called on ids already confirmed as drafts by isDraftId, so the prefix
-// is always present.
+// Strip the draft prefix to recover the bare message UUID the `messages.*` procedures expect.
 function bareMessageId(id: string): string {
   return id.slice(DRAFT_MESSAGE_ID_PREFIX.length);
 }
@@ -73,9 +58,7 @@ function truncateId(id: string): string {
   return (isDraftId(id) ? bareMessageId(id) : id).slice(0, 8);
 }
 
-// Fetch the doc-change view for a bare page-version id, or exit with a clear
-// message if it's unknown (404), inaccessible, or a malformed id (422). Other
-// errors propagate.
+// Fetch the doc-change view, or exit cleanly on an unknown (404) or malformed (422) id.
 async function requireChange(client: TypedClient, id: string): Promise<ChangeView> {
   try {
     return await client.review.getChange.query({ id });
@@ -90,9 +73,7 @@ async function requireChange(client: TypedClient, id: string): Promise<ChangeVie
   }
 }
 
-// Fetch the message row behind a draft id, or exit with a clear message if missing.
-// `messages.getMessage` wants the bare UUID, so strip the prefix for the lookup while
-// still echoing the id the user passed in any error.
+// Fetch the message row behind a draft id (bare-UUID lookup), or exit if missing.
 async function requireDraft(client: TypedClient, id: string): Promise<DraftMessageRow> {
   const draft = await client.messages.getMessage.query(bareMessageId(id));
   if (!draft) {
@@ -189,9 +170,8 @@ export function reviewCommand(): Command {
       const client = createTypedClient(cfg);
       const ksId = await getKnowledgeStoreId(client, cfg.active_account?.target?.space_id);
 
-      // Docs are knowledge-store-scoped; drafts are deployment-scoped. Passing
-      // deploymentId merges draft replies into the list (ENG-524) — omit it and
-      // the server returns doc changes only.
+      // Docs are knowledge-store-scoped, drafts are deployment-scoped; passing deploymentId
+      // merges draft replies into the list, omitting it returns doc changes only.
       const result = await client.review.listPending.query({
         knowledgeStoreId: ksId,
         deploymentId: cfg.active_account?.target?.deployment_id,
@@ -279,9 +259,8 @@ export function reviewCommand(): Command {
       console.log(change.diff);
     });
 
-  // In-place edit of a pending review item. doc changes go through page.updateReview
-  // (PENDING_REVIEW-guarded); draft replies save a new draft revision via
-  // message.saveDraft (body only). After editing, `dosu review approve` publishes.
+  // In-place edit: docs go through page.updateReview (PENDING_REVIEW-guarded), drafts save a
+  // new revision via message.saveDraft (body only); `dosu review approve` publishes afterward.
   cmd
     .command("edit")
     .description("Edit a pending doc or Dosu App draft in place")
@@ -395,9 +374,8 @@ export function reviewCommand(): Command {
       ]);
     });
 
-  // approve/reject mutate published content, so they're gated behind a diff
-  // preview + explicit confirmation — mirroring the MCP tool's confirm-gated
-  // accept/decline. `--confirm` (or an interactive y/N) is required to apply.
+  // approve/reject mutate published content, so they are gated behind a diff preview plus
+  // explicit confirmation (--confirm or an interactive y/N).
   const gated = [
     { name: "approve", action: "accept" as const, verb: "Approve" },
     { name: "reject", action: "decline" as const, verb: "Reject" },
@@ -461,9 +439,8 @@ export function reviewCommand(): Command {
       });
   }
 
-  // revert just re-opens a doc change for review (non-destructive), so it stays
-  // ungated. Drafts have no revert — a rejected draft is regenerated on the next
-  // agent run — so a draft-prefixed id is refused here (ENG-524).
+  // revert is non-destructive so it stays ungated; drafts have no revert (a rejected draft is
+  // regenerated on the next agent run), so a draft-prefixed id is refused.
   cmd
     .command("revert")
     .description("Reopen a previously accepted or declined doc change for review")
@@ -473,9 +450,8 @@ export function reviewCommand(): Command {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
 
-      // Route by prefix: drafts have no revert. requireDraft turns a truly-unknown
-      // id into a clean "no review item" error instead of a misleading "not
-      // supported" one; requireChange does the same for an unknown doc id.
+      // Route by prefix: drafts have no revert. requireDraft/requireChange turn an unknown id
+      // into a clean "no review item" error instead of a misleading "not supported" one.
       if (isDraftId(id)) {
         await requireDraft(client, id);
         console.error(

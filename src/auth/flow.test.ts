@@ -42,19 +42,12 @@ function createMockServer(): CallbackServer {
   };
 }
 
-/**
- * Deterministically wait until the flow under test has opened the browser
- * and armed its timeout/abort race. Fixed-duration sleeps flaked on slow CI
- * runners (coverage-instrumented dynamic import of "open" can take >10ms):
- * the assertion then saw zero open() calls, and the leaked unresolved flow
- * created its 8-minute timer under a later test's fake timers, cascading
- * into that test's timer-count assertion.
- */
+/** Deterministically wait until the flow has opened the browser and armed its timeout/abort
+ * race; fixed-duration sleeps flaked on slow CI and leaked timers into later tests. */
 async function flowReady(): Promise<void> {
   await vi.waitFor(() => expect(mockOpenDefault).toHaveBeenCalledOnce());
-  // open() resolving hands control back to the flow on the microtask queue;
-  // a macrotask barrier guarantees the timeout/abort race is armed before
-  // the test acts (e.g. fires an abort the flow must be listening for).
+  // open() resolves on the microtask queue; a macrotask barrier guarantees the timeout/abort
+  // race is armed before the test acts.
   await new Promise((r) => setImmediate(r));
 }
 

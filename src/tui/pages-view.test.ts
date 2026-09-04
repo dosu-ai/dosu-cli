@@ -268,9 +268,7 @@ describe("renderPageFrame", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// runPagesView — driven through fake streams and an injected loader
-// ---------------------------------------------------------------------------
+// --- runPagesView: driven through fake streams and an injected loader ---
 
 interface FakeInput extends EventEmitter {
   isTTY: boolean;

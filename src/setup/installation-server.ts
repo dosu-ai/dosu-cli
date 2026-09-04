@@ -1,11 +1,5 @@
-/**
- * Local HTTP server that receives the GitHub App installation callback from
- * the web `/cli/connect-github-done` page.
- *
- * Sibling of `auth/server.ts` (OAuth callback) — same shape, different payload.
- * Waits for exactly one GET on `/callback?installation_id=<int>` and resolves
- * the pending promise with the installation id.
- */
+/** Local HTTP server for the GitHub App installation callback: waits for one GET on
+ * `/callback?installation_id=<int>` and resolves the pending promise with the id. */
 
 import { logger } from "../debug/logger";
 

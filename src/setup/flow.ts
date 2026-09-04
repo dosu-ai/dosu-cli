@@ -1,6 +1,4 @@
-/**
- * Setup flow — interactive wizard.
- */
+/** Setup flow: interactive wizard. */
 
 import { randomUUID } from "node:crypto";
 import { isTRPCClientError } from "@trpc/client";
@@ -75,13 +73,8 @@ export interface ToolSelection {
 
 interface CloudSetupContext {
   profileUserID: string;
-  /**
-   * Analytics + handshake trigger only — never a flow decider. The CLI's
-   * view of this flag can be stale or belong to the wrong account (the
-   * 2026-08-05 twin-account deadlock); a wrong value here costs at most one
-   * redundant `/cli/auth` roundtrip, never a wrong irreversible branch. The
-   * browser side owns the real onboarding routing.
-   */
+  /** Analytics and handshake trigger only, never a flow decider; the browser side owns the real
+   * onboarding routing. */
   finishedOnboarding: boolean;
 }
 
@@ -144,9 +137,8 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
     saveConfig(cfg);
   }
 
-  // Authenticate — always runs so we can verify/refresh tokens. In cloud
-  // mode the browser hop carries `intent=setup`, so a first-run user
-  // completes the onboarding wizard inside that same trip.
+  // Authenticate always runs to verify/refresh tokens; in cloud mode the browser hop carries
+  // `intent=setup` so a first-run user onboards in the same trip.
   const authed = await stepAuthenticate(cfg, onboardingRunID);
   if (!authed) return;
   cfg = authed.cfg;
@@ -180,10 +172,8 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
     }),
   );
 
-  // The CLI-side flag only TRIGGERS one browser handshake — the browser
-  // decides whether the wizard is actually needed (it knows who is really
-  // signed in there). `--deployment` stays an explicit escape hatch that
-  // must never be overridden.
+  // The CLI-side flag only triggers one browser handshake; the browser decides whether the
+  // wizard is actually needed. `--deployment` stays an explicit escape hatch.
   const needsHandshake =
     cfg.mode !== MODE_OSS &&
     cloudSetupContext !== null &&
@@ -200,9 +190,8 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
       );
       return;
     }
-    // The browser may have handed back a different account — that is the
-    // point: it knows who is really signed in. Re-resolve with the returned
-    // session; never reuse anything across an authentication boundary.
+    // The browser may hand back a different account; re-resolve with the returned session and
+    // never reuse anything across an authentication boundary.
     apiClient = new Client(cfg);
     const refreshed = await resolveCloudSetupContext(cfg);
     if (refreshed === null) {
@@ -216,9 +205,8 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
       return;
     }
     if (!refreshed.finishedOnboarding) {
-      // At most one trip per process — never a handshake loop. This is the
-      // permanent guard for a web tier that didn't route the wizard
-      // (deploy skew): tell the user, exit cleanly, let a re-run retry.
+      // At most one trip per process, never a handshake loop: tell the user, exit cleanly,
+      // and let a re-run retry.
       p.log.warn(
         "Your account still needs onboarding. Finish it in the browser at the Dosu app, then re-run `dosu setup`.",
       );
@@ -235,11 +223,8 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
     cloudSetupContext = refreshed;
   }
 
-  // Deployment: run the picker only when nothing is locked in yet, or when
-  // `--deployment` explicitly asks to switch. Everyday re-runs reuse the
-  // stored deployment silently. (After an account change the handshake
-  // dropped the old target, so the fresh account resolves here —
-  // stepSelectDeployment auto-picks the single real MCP.)
+  // Run the deployment picker only when nothing is locked in yet or `--deployment` asks to
+  // switch; everyday re-runs reuse the stored deployment silently.
   if (!cfg.active_account?.target?.deployment_id || opts.deploymentID) {
     const ok = await resolveDeployment(apiClient, cfg, opts);
     if (!ok) {
@@ -252,17 +237,14 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
     }
   }
 
-  // Library (cloud only): show which Library the MCP answers from, and
-  // persist its name so the welcome banner can display it. Fail-open — a
-  // missing name never blocks setup.
+  // Library (cloud only): show and persist the Library name for the welcome banner. Fail-open;
+  // a missing name never blocks setup.
   if (cfg.mode !== MODE_OSS) {
     await stepShowLibrary(cfg);
   }
 
-  // GitHub guard (cloud only): an MCP whose space has no connected repo
-  // answers from nothing. Offer the interactive connect step; the user can
-  // choose to continue without it, and the source lookup is fail-open, so
-  // setup never blocks on this step.
+  // GitHub guard (cloud only): an MCP with no connected repo answers from nothing. The offer is
+  // fail-open, so setup never blocks on this step.
   if (cfg.mode !== MODE_OSS) {
     await stepOfferGithubConnect(cfg);
   }
@@ -306,9 +288,8 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
     );
   }
 
-  // Skill installation follows the same agent selection as MCP and rules.
-  // Unsupported clients are left alone rather than broadening the install
-  // to every agent on the machine.
+  // Skill installation follows the same agent selection as MCP and rules; unsupported clients
+  // are left alone.
   let skillCompleted = false;
   const skillProviders = configuredProviders
     .map((result) => result.provider)
@@ -339,10 +320,8 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
     );
   }
 
-  // Backfill offer: the hooks installed above only fire on FUTURE sessions,
-  // so a fresh install would otherwise wait for new activity before Dosu
-  // learns anything. Offer to mine the existing backlog now — with consent,
-  // never automatically.
+  // Backfill offer: hooks only fire on future sessions, so offer to mine the existing backlog
+  // now, with consent, never automatically.
   if (mcpCompleted && cfg.mode !== MODE_OSS) {
     await stepOfferInitialSync(cfg);
   }
@@ -356,11 +335,7 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
   }
 }
 
-/**
- * Closing message for cloud setup. Knowledge syncs automatically via the
- * session-end hooks installed with the MCP bundle, so the outro points at
- * usage, not further setup chores.
- */
+/** Closing message for cloud setup; knowledge syncs automatically, so it points at usage. */
 function setupOutroMessage(mcpCompleted: boolean): string {
   if (!mcpCompleted) return `${brand("\u2714")} Setup complete!`;
   const steps = [
@@ -371,16 +346,8 @@ function setupOutroMessage(mcpCompleted: boolean): string {
   return `${brand("\u2714")} You're all set!\n\n${steps.join("\n")}`;
 }
 
-/**
- * Offer to mine the existing session backlog right after the bundle is
- * installed. Uses the bootstrap scope (the entire local session history —
- * the hooks' rolling 30-day window would miss history that predates it).
- * The scan is gate-and-report only (no miner, no tokens); the prompt
- * appears only when there is actually something to mine, so everyday
- * re-runs of `dosu setup` stay quiet once the watermark has caught up. On
- * consent the sync runs fully detached and drains the whole backlog, so
- * setup never blocks on a gateway run.
- */
+/** Offer to mine the existing session backlog after install. The prompt only appears when there
+ * is something to mine; on consent the sync runs fully detached so setup never blocks. */
 export async function stepOfferInitialSync(cfg: Config): Promise<void> {
   const target = cfg.active_account?.target;
   // Without an API key + deployment the detached run couldn't mine anyway.
@@ -426,10 +393,7 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
   }
 }
 
-/**
- * Copy the four deployment fields onto cfg. Caller decides whether to also
- * clear `cfg.mode` (Cloud paths do; the OSS auto-pick path doesn't).
- */
+/** Copy the deployment fields onto cfg; the caller decides whether to also clear `cfg.mode`. */
 function applyDeployment(cfg: Config, d: Deployment): void {
   updateTarget(cfg, {
     deployment_id: d.deployment_id,
@@ -443,9 +407,7 @@ function applyDeployment(cfg: Config, d: Deployment): void {
   });
 }
 
-/**
- * Apply a user-supplied --mode flag against the current config.
- */
+/** Apply a user-supplied --mode flag against the current config. */
 function applyModeOverride(cfg: Config, opts: SetupOptions): void {
   if (!opts.mode) return;
   const newMode = opts.mode === "oss" ? MODE_OSS : undefined;
@@ -457,11 +419,8 @@ function applyModeOverride(cfg: Config, opts: SetupOptions): void {
   saveConfig(cfg);
 }
 
-/**
- * Runs MCP tool detection → selection → configuration as a single unit.
- * Returns the ConfigResult array on success, or null if the user cancelled.
- * An empty detection pool is treated as success (nothing to do).
- */
+/** MCP tool detection, selection, and configuration as a single unit. Returns null if the user
+ * cancelled; an empty detection pool is treated as success. */
 async function stepConfigureMcpTools(cfg: Config): Promise<ConfigResult[] | null> {
   const detected = stepDetectTools();
   if (detected.length === 0) {
@@ -478,20 +437,15 @@ async function stepConfigureMcpTools(cfg: Config): Promise<ConfigResult[] | null
   return results;
 }
 
-/**
- * Install the skill for the same providers selected during MCP setup.
- * Returns `true` on success.
- */
+/** Install the skill for the providers selected during MCP setup. Returns `true` on success. */
 export async function runInstallSkill(providers: readonly SetupProvider[]): Promise<boolean> {
   logger.info("setup", "Step: install skill");
   const spinner = p.spinner();
   const agentLabel = providers.length === 1 ? "agent" : "agents";
   spinner.start(`Installing skill for ${providers.length} ${agentLabel}`);
   try {
-    // Interactive setup owns the summary UI. Keep the nested skills installer
-    // quiet so its progress screens do not interrupt the standardized setup
-    // results below. The standalone `dosu skill install` command remains
-    // verbose.
+    // Keep the nested skills installer quiet so its progress screens don't interrupt setup's
+    // summary UI; the standalone `dosu skill install` command remains verbose.
     const result = await installSkill(
       providers.map((provider) => provider.id()),
       { quiet: true },
@@ -582,10 +536,8 @@ async function openBrowserForSetup(
   try {
     const { startOAuthFlow } = await import("../auth/flow");
     const s = p.spinner();
-    // Cloud mode declares `intent=setup`: the web side routes a first-run
-    // *browser* user through the onboarding wizard inside this same trip, so
-    // the window must be handshake-sized. OSS users may never onboard — no
-    // intent, plain auth timeout.
+    // Cloud mode declares `intent=setup` so the web side can run onboarding in this same trip;
+    // the window must be handshake-sized. OSS gets a plain auth timeout.
     const isCloud = cfg.mode !== MODE_OSS;
     const result = await startOAuthFlow(
       undefined,
@@ -610,9 +562,8 @@ async function openBrowserForSetup(
       return null;
     }
     const token = result.token;
-    // Show WHICH account authenticated — a stale or twin-account session is
-    // caught by eye here long before it can misroute anything. (SSO PKCE
-    // callbacks carry no email; fall back to the generic word.)
+    // Show which account authenticated so a stale or twin-account session is caught by eye;
+    // SSO PKCE callbacks carry no email, hence the generic fallback.
     s.stop(token.email ? `Authenticated as ${token.email}` : "Authenticated");
     logger.info("setup", "Browser auth completed");
 
@@ -657,27 +608,12 @@ export function cliAuthFailureReason(err: unknown): string {
   return code && OAUTH_ANALYTICS_REASONS.has(code) ? code : "oauth_callback_error";
 }
 
-/**
- * The setup handshake may contain the whole onboarding wizard — including a
- * GitHub App install that can sit on an org-admin approval — so it gets a
- * far longer window than a plain auth roundtrip.
- */
+/** The handshake may contain the whole onboarding wizard (even an org-admin approval), so it
+ * gets a far longer window than a plain auth roundtrip. */
 const SETUP_HANDSHAKE_TIMEOUT_MS = 30 * 60 * 1000;
 
-/**
- * One browser handshake against the ONE protocol endpoint, `/cli/auth`.
- *
- * `intent=setup` tells the web side to route the *browser* user through the
- * onboarding wizard first when that user still needs it; either way the
- * callback comes back with a freshly minted session for whoever is really
- * signed in there — possibly a different account than the CLI held (the
- * caller re-resolves everything after). The CLI never deep-links a web
- * product page: the 2026-08-05 deadlock began with a wizard URL whose
- * middleware owed the CLI nothing.
- *
- * Returns `true` once the browser handed a session back, `false` on
- * timeout/failure.
- */
+/** One browser handshake against `/cli/auth` with `intent=setup`; the callback returns a session
+ * for whoever is really signed in there. Returns `true` once a session came back. */
 async function stepSetupHandshake(cfg: Config, onboardingRunID: string): Promise<boolean> {
   logger.info("setup", "Step: setup handshake");
   p.log.info("Almost there. Finish setting up in the browser and we'll pick up from here.");
@@ -704,9 +640,8 @@ async function stepSetupHandshake(cfg: Config, onboardingRunID: string): Promise
       s.stop("Could not open a browser");
       return false;
     }
-    // The browser may hand back a session for a different account. Replace
-    // the account aggregate: same-account auth keeps its target, while an
-    // account change drops the old target before resolving the new one.
+    // Replace the account aggregate: same-account auth keeps its target, an account change
+    // drops the old target before resolving the new one.
     replaceLoginSession(cfg, {
       access_token: result.token.access_token,
       refresh_token: result.token.refresh_token,
@@ -739,19 +674,8 @@ async function stepSetupHandshake(cfg: Config, onboardingRunID: string): Promise
   }
 }
 
-/**
- * When the selected MCP's space has no GitHub source in its Library yet, warn
- * and offer the interactive GitHub connect step (`stepConnectGitHubRepo`:
- * browser App install + repo multiselect). Choosing "Skip for now" prints
- * where to do it later and setup proceeds.
- *
- * Repos connect at space level, so the guard checks the space this MCP
- * serves — GitHub sources connected elsewhere in the org don't feed this MCP
- * and don't count.
- *
- * Fail-open by design: a failed lookup skips the offer silently —
- * this step is a nudge, never a gate, so setup always proceeds.
- */
+/** Offer the interactive GitHub connect step when the MCP's space has no GitHub source yet.
+ * Fail-open by design: this step is a nudge, never a gate, so setup always proceeds. */
 async function stepOfferGithubConnect(cfg: Config): Promise<void> {
   const target = cfg.active_account?.target;
   // stepConnectGitHubRepo needs org+space context to connect anything, so
@@ -785,14 +709,8 @@ async function stepOfferGithubConnect(cfg: Config): Promise<void> {
   await stepConnectGitHubRepo(cfg);
 }
 
-/**
- * The Library's attached sources (`libraries.sourcesList` — the same list the
- * web Library view shows) are the truth for "does this MCP answer from code".
- * Deployments are the wrong signal: removing a source in the web UI leaves its
- * Monitor (`github` deployment) row behind, and gating on deployments let that
- * orphan suppress the connect offer forever. Backends that predate the
- * libraries router fall back to the old deployment heuristic.
- */
+/** Library sources are the truth for "answers from code"; deployment rows can be orphans that
+ * would suppress the offer forever. Old backends fall back to the deployment heuristic. */
 async function spaceHasGithubSource(trpc: TypedClient, spaceID: string): Promise<boolean> {
   try {
     const sources = await trpc.libraries.sourcesList.query(spaceID);
@@ -832,17 +750,9 @@ async function resolveCloudSetupContext(cfg: Config): Promise<CloudSetupContext 
   }
 }
 
-/**
- * Resolves the deployment according to the three branches:
- *   - --deployment flag → use that specific deployment
- *   - OSS mode → auto-pick the first deployment (used only for API-key issuance)
- *   - standard → interactive org + deployment select
- */
-/**
- * Show which Library (space) the selected MCP answers from and persist its
- * name for the welcome banner. The lookup is fail-open: on any error it
- * falls back to a previously stored name, or stays silent.
- */
+/** Resolve the deployment: --deployment flag, OSS auto-pick, or interactive org + MCP select. */
+/** Show which Library the selected MCP answers from and persist its name for the welcome banner.
+ * Fail-open: on any error it falls back to a stored name, or stays silent. */
 async function stepShowLibrary(cfg: Config): Promise<void> {
   const target = cfg.active_account?.target;
   if (!target?.space_id) return;
@@ -896,18 +806,8 @@ async function resolveDeployment(
 /** What the settings switch re-picks: the whole org chain, or just the Library/MCP within it. */
 export type SwitchScope = "org" | "library";
 
-/**
- * Settings flow: re-pick the org / Library / MCP for an already-configured
- * install. Reuses the setup pickers, then refreshes everything derived from
- * the target — the API key and the Dosu MCP entries of agents that are
- * already configured (their config files embed the deployment URL and API
- * key, so a switch must rewrite them or they'd silently keep answering from
- * the previous Library). Unlike setup it never touches agent selection,
- * hooks, rules, skills, or mining.
- *
- * `scope` "library" keeps the current org and only re-picks the Library/MCP
- * inside it; "org" runs the full chain starting from the org picker.
- */
+/** Settings flow: re-pick the org / Library / MCP, then rewrite the API key and configured
+ * agents' MCP entries (they embed the deployment URL and key). Scope "library" keeps the org. */
 export async function runSwitchTarget(scope: SwitchScope = "org"): Promise<void> {
   const cfg = loadConfig();
   if (cfg.mode === MODE_OSS) {
@@ -967,12 +867,8 @@ export async function runSwitchTarget(scope: SwitchScope = "org"): Promise<void>
   }
 }
 
-/**
- * The org the active target lives in, resolved by the stored org_id so a
- * Library-only switch never re-asks which org. Falls back to the org picker
- * when nothing is stored or the stored org is no longer accessible (e.g.
- * the user was removed from it).
- */
+/** The org the active target lives in, resolved by the stored org_id; falls back to the org
+ * picker when nothing is stored or the stored org is no longer accessible. */
 async function currentOrg(apiClient: Client, cfg: Config): Promise<Org | null> {
   const orgID = cfg.active_account?.target?.org_id;
   if (orgID) {
@@ -1056,16 +952,8 @@ async function stepResolveDeployment(apiClient: Client, id: string): Promise<Dep
 /** Sentinel: the user cancelled the Library picker (distinct from "no narrowing"). */
 const LIBRARY_SELECT_CANCELLED = Symbol("library-select-cancelled");
 
-/**
- * When the org's deployments span more than one Library, ask which Library
- * the MCP should answer from — listed by name, the same names the web
- * Library switcher shows — and return it so the deployment choice can be
- * narrowed to that Library's space. Libraries without an MCP deployment are
- * offered too, marked "no MCP yet": selecting one hands off to the create
- * flow in stepSelectDeployment instead of dead-ending. Fail-open: if the
- * libraries router is unavailable (old backend) or everything lives in one
- * Library, return null and keep the previous behavior.
- */
+/** Ask which Library the MCP should answer from when deployments span several; Libraries with
+ * no MCP are offered too and hand off to the create flow. Fail-open: returns null. */
 async function stepSelectLibrary(
   cfg: Config,
   org: Org,
@@ -1092,9 +980,8 @@ async function stepSelectLibrary(
     if (opts.alwaysAsk) p.log.warn("No Libraries found; picking by MCP instead.");
     return null;
   }
-  // Setup auto-picks when at most one Library has an MCP, to stay quiet; the
-  // explicit "Switch Library" flow always shows the full list — including
-  // Libraries without an MCP, so the user can create one for them.
+  // Setup auto-picks when at most one Library has an MCP; the explicit "Switch Library" flow
+  // always shows the full list, including Libraries without an MCP.
   if (candidates.length <= 1 && !opts.alwaysAsk) return null;
 
   const selected = await p.select({
@@ -1113,13 +1000,8 @@ async function stepSelectLibrary(
   return library;
 }
 
-/**
- * Create an MCP deployment for a Library that has none yet, so selecting it
- * in the picker doesn't dead-end. Mirrors the web MCP wizard's payload
- * (`MCPDeploymentWizard.tsx` in the dosu repo): the backend mints the
- * `mcp_deployment_id` itself for `dosu_mcp` creates, no target required.
- * Returns null (with the error surfaced) on any failure.
- */
+/** Create an MCP deployment for a Library that has none yet, mirroring the web MCP wizard's
+ * payload. Returns null (with the error surfaced) on any failure. */
 async function createMcpForLibrary(
   cfg: Config,
   org: Org,
@@ -1176,9 +1058,8 @@ async function stepSelectDeployment(
     const allDeployments = await apiClient.getDeployments();
     const orgDeployments = allDeployments.filter((d) => d.org_id === org.org_id);
 
-    // Zero deployments is fatal only when the Library picker can't offer to
-    // create one (quiet setup path); the explicit Library flow continues so
-    // an MCP-less Library can get its first deployment created below.
+    // Zero deployments is fatal only on the quiet setup path; the explicit Library flow
+    // continues so an MCP-less Library can get its first deployment created below.
     if (orgDeployments.length === 0 && !opts.alwaysAskLibrary) {
       p.log.error(`No MCPs found for ${org.name}`);
       return null;
@@ -1218,10 +1099,8 @@ async function stepSelectDeployment(
       p.log.success(`MCP ${dim(`\u00B7 ${deployments[0].name}`)}`);
       return deployments[0];
     }
-    // The onboarding wizard creates one repo-deployment per connected repo,
-    // so a freshly onboarded org always has several deployments — but only
-    // one real MCP. Never show users a picker full of their own repo names
-    // when the answer is unambiguous.
+    // A freshly onboarded org has one repo-deployment per connected repo but only one real MCP;
+    // never show a picker full of repo names when the answer is unambiguous.
     const mcpDeployments = deployments.filter((d) => d.provider_slug === MCP_PROVIDER_SLUG);
     if (mcpDeployments.length === 1) {
       logger.info("setup", `Selected deployment: ${mcpDeployments[0].name} (auto, single MCP)`);
@@ -1328,14 +1207,8 @@ async function stepSelectTools(detected: SetupProvider[]): Promise<ToolSelection
   return result;
 }
 
-/**
- * Session-end knowledge sync hooks ride along with the MCP bundle: an agent
- * selected for install gets the hook enabled, an unticked agent gets it
- * removed. Not every MCP provider is hook-capable — `getHookAgent` decides.
- *
- * Fail-open: a hook config problem (e.g. an unparseable settings file) is
- * reported but never fails the agent's MCP setup.
- */
+/** Session-end knowledge sync hooks ride along with the MCP bundle. Fail-open: a hook config
+ * problem is reported but never fails the agent's MCP setup. */
 function syncSessionHook(providerID: string, action: "enable" | "disable"): HookResult | null {
   const agent = getHookAgent(providerID);
   if (!agent) return null;

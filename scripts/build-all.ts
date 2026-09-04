@@ -1,9 +1,5 @@
 #!/usr/bin/env bun
-/**
- * Cross-platform build script.
- *
- * Builds standalone binaries for all supported platforms using `bun build --compile`.
- */
+/** Builds standalone binaries for all supported platforms using `bun build --compile`. */
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -32,13 +28,8 @@ function readPackageVersion(): string {
   }
 }
 
-/**
- * Build --define flags to bake config into compiled/bundled output.
- *
- * `bun build --compile` produces a standalone executable that does NOT inherit
- * the build-time environment, so `process.env.X` reads return undefined at
- * runtime. `--define` replaces identifiers at compile time.
- */
+/** Build --define flags to bake config into compiled output: compiled executables do NOT
+ * inherit the build-time environment, so identifiers must be replaced at compile time. */
 export function buildDefines(): string[] {
   const version = process.env.DOSU_VERSION ?? readPackageVersion();
   const webAppURL = process.env.DOSU_WEB_APP_URL ?? "";

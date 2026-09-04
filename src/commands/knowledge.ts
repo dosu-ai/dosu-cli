@@ -1,7 +1,5 @@
-/**
- * `dosu knowledge` — knowledge base search and listing, plus the local
- * knowledge-sync pipeline (`sync`) and its per-agent triggers (`hooks`).
- */
+/** `dosu knowledge`: knowledge base search/listing, plus the local sync pipeline and its
+ * per-agent hook triggers. */
 
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
@@ -169,16 +167,8 @@ export function knowledgeCommand(): Command {
           deps,
         });
 
-        // Bootstrap drains the whole backlog in this process instead of
-        // stopping after one batch — a fresh install shouldn't wait for
-        // future hook fires to work through its history. Each round is a
-        // full gate+mine pass, so failures, backoff (quiet mode), and the
-        // lock all apply per round; any non-mined status ends the drain.
-        // The round cap is sized from the backlog the first pass reported
-        // (bootstrap scans the full history, so there is no fixed scan
-        // limit to derive it from); every mined round advances the
-        // watermark by at least a full batch, so the cap only guards
-        // against a pathological miner that keeps reporting progress.
+        // Bootstrap drains the whole backlog in this process; any non-mined status ends the
+        // drain; the round cap guards against a miner that never stops reporting progress.
         if (opts.bootstrap && deps.mine) {
           const maxRounds = Math.ceil(outcome.readySessions / MINE_BATCH_LIMIT) + 2;
           for (let round = 1; outcome.status === "mined" && round < maxRounds; round++) {
@@ -204,11 +194,8 @@ export function knowledgeCommand(): Command {
   return cmd;
 }
 
-/**
- * The mining step for authenticated cloud-mode installs: a closure over the
- * stored API key + deployment. Returns undefined (gate-and-report only) when
- * the install can't mine — logged out, OSS mode, or setup never minted a key.
- */
+/** Mining step for authenticated cloud-mode installs; returns undefined (gate-and-report only)
+ * when the install can't mine: logged out, OSS mode, or no API key. */
 function buildMiner(trigger: "hook" | "manual"): SyncDeps["mine"] {
   const cfg = loadConfig();
   if (cfg.mode === "oss") return undefined;

@@ -1,15 +1,5 @@
-/**
- * Non-blocking PR-ready notifier for `dosu audit`.
- *
- * Uses the same "check now, display next run" pattern as `update-check.ts`:
- * 1. On startup, reads cached pending tasks from disk.
- * 2. For any task that already has a `prUrl` (or `error`) and hasn't been shown
- *    yet, prints a notice to stderr and latches it (`displayedAt`). Finished +
- *    displayed tasks are pruned from the cache.
- * 3. For tasks still in flight whose `lastCheck` is stale (>60 s), fires a
- *    background `GET /v1/cli/task/run/{task_id}` (not awaited) and records the
- *    result so the next CLI run can surface it.
- */
+/** Non-blocking PR-ready notifier for `dosu audit`, using the same "check now, display next
+ * run" pattern as `update-check.ts`: show finished tasks, background-poll stale in-flight ones. */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -120,10 +110,7 @@ function displayTask(task: PendingTask): void {
   }
 }
 
-/**
- * Surface ready PRs and poll in-flight tasks — called synchronously from the
- * preAction hook.
- */
+/** Surface ready PRs and poll in-flight tasks; called synchronously from the preAction hook. */
 export function checkForReadyTasks(): void {
   try {
     const cache = readPendingTasks();
@@ -167,10 +154,8 @@ export function checkForReadyTasks(): void {
   }
 }
 
-/**
- * Fire-and-forget poll. Re-reads + re-writes the cache inside the `.then` so a
- * concurrent write from `checkForReadyTasks` (step 1 pruning) isn't clobbered.
- */
+/** Fire-and-forget poll. Re-reads and re-writes the cache inside the `.then` so a concurrent
+ * write from `checkForReadyTasks` pruning isn't clobbered. */
 function pollTask(backendURL: string, apiKey: string, taskId: string): void {
   fetchTaskRun(backendURL, apiKey, taskId)
     .then((result) => {

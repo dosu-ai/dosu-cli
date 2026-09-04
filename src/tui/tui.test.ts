@@ -3,9 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// ---------------------------------------------------------------------------
-// Mocks — only true I/O boundaries
-// ---------------------------------------------------------------------------
+// --- Mocks: only true I/O boundaries ---
 
 vi.mock("./prompts", () => ({
   confirm: vi.fn(),
@@ -101,9 +99,7 @@ vi.mock("../hooks/agents", () => ({
   getHookAgent: vi.fn(),
 }));
 
-// ---------------------------------------------------------------------------
-// Imports — config is REAL, not mocked
-// ---------------------------------------------------------------------------
+// --- Imports: config is REAL, not mocked ---
 
 import { OAuthCallbackError } from "../auth/errors";
 import { startOAuthFlow } from "../auth/flow";
@@ -170,9 +166,7 @@ function fakeProvider(installed: boolean, configured: boolean, name = "Cursor"):
   } as SetupProvider;
 }
 
-// ---------------------------------------------------------------------------
-// Temp directory setup — real config on disk
-// ---------------------------------------------------------------------------
+// --- Temp directory setup: real config on disk ---
 
 let tempDir: string;
 let origHome: string | undefined;
@@ -228,9 +222,7 @@ afterEach(() => {
   rmSync(tempDir, { recursive: true, force: true });
 });
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+// --- Helpers ---
 
 const ANSI_ESC = String.fromCharCode(27);
 function stripAnsi(text: string): string {
@@ -257,9 +249,7 @@ function readRealConfig(): Config {
   return loadConfig();
 }
 
-// ---------------------------------------------------------------------------
-// 1. handleLogout — direct, high-fidelity tests
-// ---------------------------------------------------------------------------
+// --- 1. handleLogout: direct, high-fidelity tests ---
 
 describe("handleLogout (direct)", () => {
   it("clears credentials on disk when authenticated", () => {
@@ -305,9 +295,7 @@ describe("handleLogout (direct)", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 2. runTUI flow tests — mock prompts, real config
-// ---------------------------------------------------------------------------
+// --- 2. runTUI flow tests: mock prompts, real config ---
 
 describe("runTUI", () => {
   it("shows the main menu before authentication", async () => {
@@ -686,9 +674,8 @@ describe("runTUI", () => {
       Object.defineProperty(process.stdout, "isTTY", { value: origTTY, configurable: true });
     }
     const esc = String.fromCharCode(27);
-    // After the screen clear: exactly the height-scaled blank rows, then the
-    // banner — a function of terminal height only, never the frame's own
-    // height (that jiggled as the menu height changed).
+    // After the clear: exactly the height-scaled blank rows, then the banner; a function of
+    // terminal height only, never the frame's own height (that jiggled).
     const clearIndex = stdoutWrites.indexOf(`${esc}[2J${esc}[H`);
     expect(clearIndex).toBeGreaterThanOrEqual(0);
     expect(stdoutWrites[clearIndex + 1]).toBe("\n".repeat(frameTopMargin()));

@@ -1,6 +1,4 @@
-/**
- * `dosu deployments` — list, inspect, and switch deployments.
- */
+/** `dosu deployments`: list, inspect, and switch deployments. */
 
 import { Command } from "commander";
 import pc from "picocolors";

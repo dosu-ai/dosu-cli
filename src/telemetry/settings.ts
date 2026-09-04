@@ -34,11 +34,8 @@ export function getTelemetrySettingsPath(): string {
   return join(getConfigDir(), TELEMETRY_SETTINGS_FILENAME);
 }
 
-/**
- * Load only the schema this CLI understands. Telemetry is enabled when the
- * file is missing; invalid, unreadable, and future settings disable it for
- * this run without changing the file on disk.
- */
+/** Missing file means enabled; invalid, unreadable, and future settings disable telemetry for
+ * this run without changing the file on disk. */
 export function loadTelemetrySettings(): TelemetrySettings {
   return readTelemetrySettings().settings;
 }
@@ -69,10 +66,8 @@ export function isTelemetryEnabled(settings = loadTelemetrySettings()): boolean 
   return settings.disabled !== true;
 }
 
-/**
- * Return the installation UUID, creating it only for a missing or understood
- * settings file. Corrupt, unreadable, and future schemas are preserved.
- */
+/** Return the installation UUID, creating it only for a missing or understood settings file;
+ * corrupt, unreadable, and future schemas are preserved. */
 export function getOrCreateInstallID(): string | undefined {
   const current = readTelemetrySettings();
   if (current.status === "current" && current.settings.install_id) {

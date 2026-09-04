@@ -1,6 +1,4 @@
-/**
- * `dosu sources` — list and inspect connected data sources.
- */
+/** `dosu sources`: list and inspect connected data sources. */
 
 import { Command } from "commander";
 import pc from "picocolors";

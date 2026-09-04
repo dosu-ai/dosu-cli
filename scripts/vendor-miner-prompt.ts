@@ -1,18 +1,5 @@
-/**
- * Vendors the canonical background-miner rules from the dosu-skill repo into
- * `src/miner/prompt-core.generated.ts`. At run time the miner prefers the
- * rules from the *installed* skill (src/miner/prompt-source.ts); this vendored
- * copy is only the fallback for machines without the skill, so the published
- * bundle stays self-contained.
- *
- * Run from a checkout that has dosu-skill as a sibling directory (or set
- * DOSU_SKILL_REPO):
- *
- *   bun run scripts/vendor-miner-prompt.ts
- *
- * Drift is caught by `src/miner/prompt-sync.test.ts`, which compares the
- * generated copy against the sibling checkout when one exists.
- */
+/** Vendors the canonical background-miner rules from a sibling dosu-skill checkout into
+ * `src/miner/prompt-core.generated.ts` as the fallback for machines without the installed skill. */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";

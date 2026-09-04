@@ -1,17 +1,12 @@
-/**
- * Setup flow UI helpers and styled output.
- */
+/** Setup flow UI helpers and styled output. */
 
 import pc from "picocolors";
 
 export const IconAdd = "\u2714";
 export const IconRemove = "-";
 
-/**
- * Dosu brand green from the dosu.dev landing palette — rgb(82, 164, 15) —
- * plus the matching "ink" dark used for text on green. Rendered as 24-bit
- * color when the terminal advertises truecolor, else the nearest ANSI green.
- */
+/** Dosu brand green rgb(82, 164, 15); 24-bit when the terminal advertises truecolor, else the
+ * nearest ANSI green. */
 const BRAND_FG = "\u001B[38;2;82;164;15m";
 const BRAND_BG = "\u001B[48;2;82;164;15m";
 const INK_FG = "\u001B[38;2;14;14;14m";
@@ -60,11 +55,7 @@ export function formatSetupSummary(
   return `${title}\n${lines.join("\n")}`;
 }
 
-/**
- * Muted fallback hint shown whenever the CLI opens a browser, so a closed or
- * missing browser isn't a dead end. Single source of truth for the copy —
- * print via `console.log` in plain flows or `p.log.message` in clack flows.
- */
+/** Fallback hint shown whenever the CLI opens a browser; single source of truth for the copy. */
 export function browserFallbackHint(url: string): string {
   return dim(`If your browser doesn't open automatically, visit:\n${url}`);
 }

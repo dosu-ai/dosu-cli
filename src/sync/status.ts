@@ -1,10 +1,5 @@
-/**
- * Point-in-time status of the knowledge-sync pipeline, for
- * `dosu knowledge sync --status`: whether a run holds the single-flight
- * lock right now (and whether its process is actually alive), the
- * persisted watermark/backoff state, and the latest sync activity from
- * the debug log.
- */
+/** Point-in-time pipeline status for `dosu knowledge sync --status`: lock holder liveness,
+ * watermark/backoff state, and the latest sync activity from the debug log. */
 
 import { readFileSync, statSync } from "node:fs";
 import { getConfigDir } from "../config/config";

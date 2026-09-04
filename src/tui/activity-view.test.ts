@@ -677,9 +677,8 @@ describe("renderActivityFrame", () => {
     // Every row of the box paints the same width so the right border lines up.
     const widths = new Set(box.map((line) => line.trimEnd().length));
     expect(widths.size).toBe(1);
-    // No variation-selector emoji inside the box: xterm.js terminals advance
-    // one column for the U+26CF+U+FE0F pair while the padding counts two,
-    // which pushed the title row's right border one column off.
+    // No variation-selector emoji inside the box: xterm.js advances one column for the
+    // U+26CF+U+FE0F pair while the padding counts two, skewing the right border.
     expect(box.join("")).not.toContain("\uFE0F");
   });
 
@@ -780,9 +779,7 @@ describe("renderActivityFrame", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// runActivityView — driven through fake streams and timers
-// ---------------------------------------------------------------------------
+// --- runActivityView: driven through fake streams and timers ---
 
 interface FakeInput extends EventEmitter {
   isTTY: boolean;
@@ -858,9 +855,8 @@ describe("runActivityView", () => {
       pollMs: 100,
     });
 
-    // Takes over the terminal full-screen before the first frame,
-    // seeded with the log's activity and backlog counts (the gate's ready
-    // count drives the live run's progress bar).
+    // Takes over the terminal before the first frame, seeded with the log's activity and
+    // backlog counts (the gate's ready count drives the live run's progress bar).
     expect(written.join("")).toContain(ALT_SCREEN_ENTER);
     expect(stripAnsi(written.join(""))).toContain("[sync] gate: 49 ready");
     expect(stripAnsi(written.join(""))).toContain("0/49 mined");
@@ -1098,9 +1094,8 @@ describe("runActivityView", () => {
     vi.advanceTimersByTime(100);
     expect(listBacklog).toHaveBeenCalledTimes(2);
 
-    // Entering Mined doesn't rescan (it reads persisted history), but the
-    // Queued tab does — open sessions drain into the queue without the
-    // watermark ever moving.
+    // Entering Mined reads persisted history without rescanning, but Queued rescans: open
+    // sessions drain into the queue without the watermark ever moving.
     input.emit("data", "\t");
     expect(listBacklog).toHaveBeenCalledTimes(2);
     input.emit("data", "\t");
@@ -1292,9 +1287,8 @@ describe("runActivityView", () => {
       pollMs: 100,
     });
 
-    // The paint starts at home followed by exactly the height-scaled cleared
-    // blank rows (+1 to match the home banner's leading blank) — the fake
-    // output has no rows, so the 24-row default applies.
+    // Home, then exactly the height-scaled cleared blank rows (+1 for the banner's leading
+    // blank); the fake output has no rows, so the 24-row default applies.
     const first = written.join("");
     const blankRun = first.match(new RegExp(`${ESC}\\[H((?:${ESC}\\[K\\n)+)`));
     expect(blankRun).not.toBeNull();

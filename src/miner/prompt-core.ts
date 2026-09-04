@@ -1,9 +1,5 @@
-/**
- * Marker contract for the canonical miner rules maintained in the dosu-skill
- * repo (skills/log-to-dosu-knowledge/references/miner-system-prompt.md).
- * Shared by the runtime resolver (prompt-source.ts), the vendoring script
- * (scripts/vendor-miner-prompt.ts), and the drift test.
- */
+/** Marker contract for the canonical miner rules in the dosu-skill repo, shared by the runtime
+ * resolver, the vendoring script, and the drift test. */
 
 export const MINER_CORE_START = "<!-- dosu:miner-core:start -->";
 export const MINER_CORE_END = "<!-- dosu:miner-core:end -->";

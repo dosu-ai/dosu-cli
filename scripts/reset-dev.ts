@@ -1,20 +1,5 @@
-/**
- * Wipes the CLI's dev-mode state so local testing can start from scratch:
- *
- *   bun run reset:dev
- *
- * Deletes `~/.config/dosu-cli-dev/` — the config dir every `DOSU_DEV=true`
- * invocation uses (`bun run dev` sets it via .env.development). That removes
- * the dev credentials, the knowledge-sync watermark (so every local session
- * counts as unmined again), the sync lock, the debug log, and update caches.
- * The next `bun run dev` → Setup rebuilds everything, and the next sync
- * re-mines the full session history.
- *
- * The real install's state (`~/.config/dosu-cli/`) is deliberately never
- * touched — that dir belongs to the released `dosu` and its signed-in
- * account. Backend data (topics, notes) lives server-side and is not
- * affected; clear that in the web app or database.
- */
+/** Wipes dev-mode state (`~/.config/dosu-cli-dev/`) so local testing starts from scratch. The
+ * real install's `~/.config/dosu-cli/` is deliberately never touched. */
 
 import { existsSync, rmSync } from "node:fs";
 import { homedir } from "node:os";

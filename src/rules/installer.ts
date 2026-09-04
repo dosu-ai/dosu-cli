@@ -1,14 +1,5 @@
-/**
- * Agent rule installation.
- *
- * This follows Context7 CLI's file-vs-marker strategy:
- * - Claude Code and Cursor get standalone rule files.
- * - Codex, OpenCode, Gemini CLI, and Antigravity get a marker-delimited
- *   section in the instruction file their agent already reads.
- *
- * The canonical rule is fetched from GitHub during setup, with a bundled
- * fallback so a transient network failure never prevents installation.
- */
+/** Agent rule installation: standalone rule files or marker-delimited sections per agent. The
+ * rule is fetched from GitHub with a bundled fallback so a network failure never blocks install. */
 
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";

@@ -1,13 +1,5 @@
-/**
- * Settings-file conflict detection for the mining-agent subprocess.
- *
- * `buildMinerEnv` strips the environment and `CLAUDE_CONFIG_DIR` isolates
- * per-user config, but Claude Code also reads *managed settings* from a
- * system path outside the config dir. A managed `apiKeyHelper` or
- * `env.ANTHROPIC_BASE_URL` would silently reroute the miner's auth or
- * traffic no matter what the spawn env says — so when one is present the
- * miner must refuse to run (fail closed), not hope for the best.
- */
+/** Detects managed Claude Code settings (read from system paths outside CLAUDE_CONFIG_DIR) that
+ * would silently reroute the miner's auth or traffic; when present the miner fails closed. */
 
 import { existsSync, readFileSync } from "node:fs";
 
@@ -53,12 +45,8 @@ function conflictingKeysIn(settings: Record<string, unknown>): string[] {
   return keys;
 }
 
-/**
- * Scan managed settings files for keys that would hijack a miner run.
- * Returns one entry per conflicting file; an empty array means safe to
- * spawn. An unreadable or unparsable managed file is itself a conflict —
- * we cannot prove it is harmless.
- */
+/** Scan managed settings for keys that would hijack a miner run; an unreadable or unparsable
+ * managed file counts as a conflict. */
 export function detectSettingsConflicts(paths: string[] = managedSettingsPaths()): MinerConflict[] {
   const conflicts: MinerConflict[] = [];
   for (const file of paths) {

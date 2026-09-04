@@ -1,9 +1,5 @@
-/**
- * Resolves the miner's write-knowledge rules at run time from the installed
- * Dosu skill, so updates to the skill repo reach every miner run without a
- * CLI release. The vendored copy (prompt-core.generated.ts) is only the
- * fallback for machines where the skill isn't installed yet.
- */
+/** Resolves the miner's write-knowledge rules from the installed Dosu skill so skill updates
+ * reach miners without a CLI release; the vendored copy is only the fallback. */
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -20,13 +16,8 @@ export interface MinerCoreRules {
   source: string;
 }
 
-/**
- * Where an installed copy of the skill's miner prompt can live, in resolution
- * order. Mirrors the install targets in src/commands/skill.ts: `npx skills`
- * keeps its canonical copies in ~/.agents/skills and symlinks or copies into
- * agent-specific dirs. DOSU_SKILL_REPO points straight at a checkout for
- * development.
- */
+/** Installed-skill prompt locations in resolution order, mirroring install targets in
+ * src/commands/skill.ts; DOSU_SKILL_REPO points at a checkout for development. */
 export function candidateSkillPromptPaths(env: NodeJS.ProcessEnv = process.env): string[] {
   const paths: string[] = [];
   if (env.DOSU_SKILL_REPO?.trim()) {
@@ -39,12 +30,8 @@ export function candidateSkillPromptPaths(env: NodeJS.ProcessEnv = process.env):
   return paths;
 }
 
-/**
- * First readable installed copy wins; a file that exists but has broken
- * markers is skipped (debug-logged) rather than failing the run. Falls back
- * to the vendored copy so a fresh CLI install mines correctly before the
- * skill is installed.
- */
+/** First readable installed copy wins; broken markers are skipped, and a fresh CLI install
+ * falls back to the vendored copy. */
 export function resolveMinerCoreRules(env: NodeJS.ProcessEnv = process.env): MinerCoreRules {
   for (const path of candidateSkillPromptPaths(env)) {
     let markdown: string;

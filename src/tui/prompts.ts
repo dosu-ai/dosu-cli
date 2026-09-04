@@ -1,8 +1,5 @@
-/**
- * Dosu's own prompt kit: a drop-in replacement for the @clack/prompts surface
- * the setup wizard uses. Completed steps collapse into a "✔ Step · detail"
- * ledger; the active question carries a brand-green ▌ bar. Injectable IO.
- */
+/** Dosu's prompt kit, a drop-in for the @clack/prompts surface the wizard uses: completed steps
+ * collapse into a ledger, the active question carries a brand-green bar. Injectable IO. */
 
 import pc from "picocolors";
 import { brand } from "../setup/styles";
@@ -55,9 +52,7 @@ function resolveIO(io: PromptIO): { input: NodeJS.ReadStream; output: NodeJS.Wri
   return { input: io.input ?? process.stdin, output: io.output ?? process.stdout };
 }
 
-// ---------------------------------------------------------------------------
-// Static output
-// ---------------------------------------------------------------------------
+// --- Static output ---
 
 /** Thin rule that frames the wizard within the content column. */
 function rule(output: NodeJS.WriteStream): string {
@@ -99,9 +94,7 @@ export const log = {
   },
 };
 
-// ---------------------------------------------------------------------------
-// Spinner
-// ---------------------------------------------------------------------------
+// --- Spinner ---
 
 export interface Spinner {
   start(message?: string): void;
@@ -143,9 +136,7 @@ export function spinner(io: PromptIO = {}): Spinner {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Interactive prompts
-// ---------------------------------------------------------------------------
+// --- Interactive prompts ---
 
 export type FrameAction<T> =
   | { type: "render" }
@@ -158,11 +149,8 @@ export interface FrameController<T> {
   handle(key: string): FrameAction<T>;
 }
 
-/**
- * Draw/redraw a frame, route keys, and collapse or erase on finish.
- * Exported so bespoke prompts (e.g. the GitHub repo picker) can share the
- * kit's frame machinery and visual language.
- */
+/** Draw/redraw a frame, route keys, and collapse or erase on finish; exported so bespoke
+ * prompts can share the kit's frame machinery. */
 export function runInteractive<T>(
   controller: FrameController<T>,
   io: PromptIO = {},
@@ -290,10 +278,7 @@ export function multiselect<T>(
     message: string;
     options: readonly SelectOption<T>[];
     initialValues?: readonly T[];
-    /**
-     * Live per-row status that reacts to the checkbox, replacing the static
-     * `hint`. Returned strings are rendered as-is, so the caller owns color.
-     */
+    /** Live per-row status replacing `hint`; strings render as-is, so the caller owns color. */
     statusFor?: (value: T, picked: boolean) => string | undefined;
     /** Live one-line preview of what confirming would do, shown above the legend. */
     summary?: (picked: readonly T[]) => string | undefined;

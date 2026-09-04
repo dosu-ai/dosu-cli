@@ -136,9 +136,8 @@ describe("hookCommand", () => {
   });
 
   it("bakes the resolved dev URLs into the command, not just explicit overrides", () => {
-    // The common dev case: URLs arrive via .env.development under their
-    // build-time names. Hooks fire from other repos where that file is not
-    // loaded, so the resolved values must ride along as *_OVERRIDE vars.
+    // Hooks fire from repos where .env.development is not loaded, so resolved
+    // URLs must ride along as *_OVERRIDE vars.
     process.env.DOSU_DEV = "true";
     process.env.DOSU_BACKEND_URL = "http://localhost:7001";
     process.env.DOSU_WEB_APP_URL = "http://localhost:3001";

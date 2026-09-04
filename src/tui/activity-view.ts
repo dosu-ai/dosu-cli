@@ -1,8 +1,5 @@
-/**
- * Live Activity screen for the TUI: mining status plus tabbed lists (activity
- * feed, mined history, queued backlog, open sessions) and a manual sync
- * trigger. Pure render/reduce functions wired to injectable IO, like menu.ts.
- */
+/** Live Activity screen: mining status plus tabbed lists and a manual sync trigger. Pure
+ * render/reduce functions wired to injectable IO, like menu.ts. */
 
 import { readFileSync } from "node:fs";
 import pc from "picocolors";
@@ -86,10 +83,7 @@ export function reduceSyncConfirmKey(key: string): SyncConfirmAction {
   return "none";
 }
 
-/**
- * Strip ANSI (clipping mid-sequence would bleed color over the frame),
- * shorten the ISO timestamp to HH:MM:SS, and clip to the view width.
- */
+/** Strip ANSI (clipping mid-sequence would bleed color), shorten the timestamp, clip to width. */
 export function formatActivityLine(line: string, width: number): string {
   const compact = stripAnsiCodes(line).replace(
     /^\[(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})[^\]]*\]/,
@@ -142,10 +136,7 @@ interface SessionBacklog {
   open: AgentSession[];
 }
 
-/**
- * Full-history scan of the gated backlog (what a "sync now" would mine),
- * oldest first. Never throws; a failed scan reads as an empty backlog.
- */
+/** Full-history scan of the gated backlog, oldest first; a failed scan reads as empty. */
 function defaultListBacklog(): SessionBacklog {
   try {
     const state = loadSyncState();
@@ -162,10 +153,7 @@ function defaultListBacklog(): SessionBacklog {
   }
 }
 
-/**
- * Slice a scrollback window out of `lines`: `scroll` counts lines up from
- * the newest (bottom), clamped so the window never runs off either end.
- */
+/** Scrollback window over `lines`: `scroll` counts up from the bottom, clamped at both ends. */
 export function windowList(
   lines: readonly string[],
   scroll: number,
@@ -209,11 +197,8 @@ export interface RunProgress {
   notes: number;
 }
 
-/**
- * Fold a log chunk into within-batch progress. total_mined only commits per
- * batch, so the bar steps off the miner's tool traces instead; a settle line
- * clears the fold so stale steps never double-count against the counters.
- */
+/** Fold a log chunk into within-batch progress: the bar steps off the miner's tool traces, and
+ * a settle line clears the fold so stale steps never double-count. */
 export function foldRunProgress(progress: RunProgress | null, chunk: string): RunProgress | null {
   let current = progress;
   for (const line of chunk.split("\n")) {
@@ -261,10 +246,7 @@ function statusLine(status: SyncStatus): string {
   )}`;
 }
 
-/**
- * Drain-progress bar for an active run. `done` must be run-scoped (lifetime
- * total_mined pins the bar at ~100%); the caller subtracts the run baseline.
- */
+/** Drain-progress bar; `done` must be run-scoped, so the caller subtracts the run baseline. */
 export function progressLine(done: number, ready: number, width: number, notes = 0): string | null {
   const total = done + ready;
   if (total <= 0) return null;
@@ -298,18 +280,12 @@ export function tabBar(
   );
 }
 
-/**
- * Frame width: the centered column with symmetric margins, minus one column
- * so a full-width painted line never trips the terminal's auto-wrap.
- */
+/** Frame width: the centered column minus one so a full-width line never trips auto-wrap. */
 export function activityWidth(columns: number): number {
   return Math.max(20, columns - 2 * layoutMargin(columns) - 1);
 }
 
-/**
- * Word-wrap to `width` with hanging indent; unwrapped lines would hard-wrap
- * at the screen edge, outside the centered layout's margin.
- */
+/** Word-wrap to `width` with hanging indent; unwrapped lines would escape the centered margin. */
 export function wrapLine(text: string, width: number, indent = "  "): string[] {
   const out: string[] = [];
   let line = "";
@@ -335,10 +311,7 @@ export interface ActivityViewPane {
 
 const DEFAULT_PANE: ActivityViewPane = { tab: "activity", scroll: 0 };
 
-/**
- * The "start mining?" confirmation: a rounded-border box over the footer
- * saying what a run would mine right now, shown while `pane.confirm` is set.
- */
+/** The "start mining?" confirmation box over the footer, shown while `pane.confirm` is set. */
 export function confirmBox(
   queuedCount: number,
   backlog: SyncBacklog | null,
@@ -520,10 +493,7 @@ function defaultReadLog(): string {
   }
 }
 
-/**
- * Show the live sync-status screen until the user goes back. Resolves
- * immediately when stdin isn't interactive.
- */
+/** Show the sync-status screen until back; resolves immediately when stdin isn't interactive. */
 export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
   const input = io.input ?? process.stdin;
   const output = io.output ?? process.stdout;
@@ -568,9 +538,8 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
 
   // Identical frames skip the terminal write entirely (most ticks change nothing).
   let lastFrame: string | null = null;
-  // The run's total_mined baseline, so the bar is run-scoped. The mining
-  // process persists it in the sync state (survives closing and reopening
-  // this view mid-run); first-observation snapshot is the fallback.
+  // The run's total_mined baseline so the bar is run-scoped; persisted in sync state, with the
+  // first-observation snapshot as fallback.
   let minedBeforeRun: number | null = null;
   const draw = () => {
     status = getStatus();
