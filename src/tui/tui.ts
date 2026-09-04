@@ -129,7 +129,7 @@ function hooksIncomplete(): boolean {
  * Setup steps a completed wizard always persists, by user-facing name;
  * missing ones keep the TUI in setup mode and flag the banner.
  */
-export function missingSetupSteps(cfg: Config): string[] {
+function missingSetupSteps(cfg: Config): string[] {
   const target = cfg.active_account?.target;
   const missing: string[] = [];
   if (!target?.space_id) missing.push("Library");

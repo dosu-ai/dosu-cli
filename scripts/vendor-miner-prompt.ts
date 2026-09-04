@@ -24,7 +24,7 @@ export const SKILL_PROMPT_RELPATH = join(
   "references",
   "miner-system-prompt.md",
 );
-export const GENERATED_RELPATH = join("src", "miner", "prompt-core.generated.ts");
+const GENERATED_RELPATH = join("src", "miner", "prompt-core.generated.ts");
 
 /** The generated TypeScript module embedding the rules as a template literal. */
 export function renderModule(core: string): string {

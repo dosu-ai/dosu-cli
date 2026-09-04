@@ -43,7 +43,7 @@ export const MINED_HISTORY_LIMIT = 500;
  * refusal deliberately never triggers backoff, so without this it would be
  * visible only in the debug log. Cleared by the next successful run.
  */
-export interface SyncRefusal {
+interface SyncRefusal {
   at: string;
   outcome: string;
   message: string;

@@ -30,9 +30,6 @@ import {
 } from "./layout";
 import { parseKeys } from "./menu";
 
-// Re-exported so tests (and callers) can assert on the raw sequences.
-export { ALT_SCREEN_ENTER, ALT_SCREEN_EXIT } from "./alt-screen";
-
 const ESC = String.fromCharCode(27);
 const HIDE_CURSOR = `${ESC}[?25l`;
 const SHOW_CURSOR = `${ESC}[?25h`;
@@ -46,10 +43,10 @@ const CLEAR_BELOW = `${ESC}[0J`;
 const CLEAR_EOL = `${ESC}[K`;
 
 /** How often the view re-checks the lock and polls the log for new lines. */
-export const ACTIVITY_VIEW_POLL_MS = 500;
+const ACTIVITY_VIEW_POLL_MS = 500;
 
 /** How many list lines fit on screen at once (the scroll window). */
-export const ACTIVITY_VIEW_LIST_LINES = 10;
+const ACTIVITY_VIEW_LIST_LINES = 10;
 
 /** How much history each tab keeps in memory for scrolling back. */
 export const ACTIVITY_VIEW_BUFFER_LINES = 200;
@@ -57,12 +54,7 @@ export const ACTIVITY_VIEW_BUFFER_LINES = 200;
 export type ActivityViewTab = "activity" | "queued" | "open" | "mined";
 
 /** Tab order for cycling; ← walks it backwards. */
-export const ACTIVITY_VIEW_TABS: readonly ActivityViewTab[] = [
-  "activity",
-  "mined",
-  "queued",
-  "open",
-];
+const ACTIVITY_VIEW_TABS: readonly ActivityViewTab[] = ["activity", "mined", "queued", "open"];
 
 export type ActivityViewAction = "back" | "tab" | "tab-back" | "up" | "down" | "sync" | "none";
 
@@ -142,7 +134,7 @@ export function formatQueuedRow(session: AgentSession): string {
 }
 
 /** The scanned session backlog the Queued and Open tabs display. */
-export interface SessionBacklog {
+interface SessionBacklog {
   /** Gated (quiet, not yet mined) sessions, oldest first. */
   queued: AgentSession[];
   /** Sessions still inside the quiet period — queued once they go silent. */

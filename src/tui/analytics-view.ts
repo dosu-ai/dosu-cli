@@ -24,7 +24,7 @@ const CLEAR_BELOW = `${ESC}[0J`;
 const CLEAR_EOL = `${ESC}[K`;
 
 /** Relaxed poll: analytics only move when a mining batch completes. */
-export const ANALYTICS_VIEW_POLL_MS = 1000;
+const ANALYTICS_VIEW_POLL_MS = 1000;
 
 /** How many report lines fit on screen at once (the scroll window). */
 export const ANALYTICS_VIEW_LINES = 12;
@@ -44,10 +44,10 @@ function clip(text: string, max: number): string {
 }
 
 /** How many pages each "Top ..." section shows. */
-export const TOP_PAGES_LIMIT = 5;
+const TOP_PAGES_LIMIT = 5;
 
 /** The cited-pages window, in days. */
-export const TOP_CITED_DAYS = 30;
+const TOP_CITED_DAYS = 30;
 
 /** Backend page analytics: freshest pages and most-cited pages. */
 export interface PageStats {

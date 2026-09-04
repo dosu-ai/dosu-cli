@@ -57,12 +57,6 @@ export function visibleWidth(text: string): number {
   return text.replace(ANSI_PATTERN, "").length;
 }
 
-/** Center a (possibly colored) line within `width` columns. */
-export function center(text: string, width: number): string {
-  const pad = Math.max(0, Math.floor((width - visibleWidth(text)) / 2));
-  return " ".repeat(pad) + text;
-}
-
 /** Center a multi-line block as a unit so its rows stay left-aligned. */
 export function centerBlock(lines: readonly string[], width: number): string[] {
   const blockWidth = Math.max(...lines.map(visibleWidth));

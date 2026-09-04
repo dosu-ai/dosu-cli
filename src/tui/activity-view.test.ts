@@ -3,8 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SyncStatus } from "../sync/status";
 import {
   ACTIVITY_VIEW_BUFFER_LINES,
-  ALT_SCREEN_ENTER,
-  ALT_SCREEN_EXIT,
   activityWidth,
   appendSyncActivity,
   confirmBox,
@@ -24,6 +22,7 @@ import {
   windowList,
   wrapLine,
 } from "./activity-view";
+import { ALT_SCREEN_ENTER, ALT_SCREEN_EXIT } from "./alt-screen";
 import { frameTopMargin } from "./layout";
 
 const ESC = String.fromCharCode(27);

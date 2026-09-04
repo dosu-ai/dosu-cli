@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { brandBadge } from "../setup/styles";
 import { type BannerContext, LOGO_MARK, renderBanner } from "./banner";
-import { center, visibleWidth } from "./layout";
+import { visibleWidth } from "./layout";
 
 const ESC = String.fromCharCode(27);
 
@@ -24,16 +24,6 @@ describe("visibleWidth", () => {
   it("ignores ANSI color codes", () => {
     expect(visibleWidth(`${ESC}[32mdosu${ESC}[0m`)).toBe(4);
     expect(visibleWidth("plain")).toBe(5);
-  });
-});
-
-describe("center", () => {
-  it("pads a line to the middle of the width", () => {
-    expect(center("abcd", 10)).toBe("   abcd");
-  });
-
-  it("never pads negatively when the line overflows", () => {
-    expect(center("abcdefghij", 4)).toBe("abcdefghij");
   });
 });
 
