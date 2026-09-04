@@ -11,7 +11,7 @@ import { detectSettingsConflicts } from "./conflicts";
 import { buildMinerEnv, type MinerTrigger } from "./env";
 import { resolveClaudeExecutable } from "./executable";
 import { buildMinerPrompt, buildMinerSystemPrompt } from "./prompt";
-import { resolveMinerCoreRules } from "./prompt-source";
+import { MINER_CORE_RULES } from "./prompt-core";
 import { createSessionToolsServer, SESSIONS_SERVER_NAME } from "./tools";
 
 export type MinerOutcome =
@@ -171,16 +171,11 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
     deploymentID: options.deploymentID,
   });
 
-  // Rules come from the installed Dosu skill when present, so skill-repo
-  // updates apply without a CLI release; the vendored copy is the fallback.
-  const coreRules = resolveMinerCoreRules();
-  logger.debug("miner", `write-knowledge rules source: ${coreRules.source}`);
-
   try {
     const run = query({
       prompt: buildMinerPrompt(options.sessions),
       options: {
-        systemPrompt: buildMinerSystemPrompt(coreRules.rules),
+        systemPrompt: buildMinerSystemPrompt(MINER_CORE_RULES),
         env: env as Record<string, string>,
         abortController: abort,
         maxTurns: options.maxTurns ?? DEFAULT_MAX_TURNS,

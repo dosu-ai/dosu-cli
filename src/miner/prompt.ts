@@ -1,5 +1,5 @@
-/** Runtime frame for the miner's system prompt; canonical write-knowledge rules are resolved
- * from the installed skill by prompt-source.ts, with a vendored fallback. */
+/** Runtime frame for the miner's system prompt; the write-knowledge rules live in
+ * prompt-core.ts. */
 
 import type { AgentSession } from "../sessions/scan";
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AgentSession } from "../sessions/scan";
 import { buildMinerPrompt, buildMinerSystemPrompt } from "./prompt";
-import { MINER_CORE_RULES } from "./prompt-core.generated";
+import { MINER_CORE_RULES } from "./prompt-core";
 
 const sessions: AgentSession[] = [
   { id: "aaa", harness: "claude", path: "/x/a.jsonl", updated: "2026-08-27T00:00:00.000Z" },
