@@ -105,10 +105,12 @@ function commandTelemetryContext(): CommandTelemetryContext {
     const tokenUserID = getAccessTokenUserID(accessToken);
     const userID = configUserID && configUserID === tokenUserID ? configUserID : undefined;
     const email = userID ? getAccessTokenEmail(accessToken) : undefined;
+    const orgId = userID ? cfg.active_account?.target?.org_id : undefined;
     return {
       mode: cfg.mode === MODE_OSS ? "oss" : "cloud",
       isAuthenticated: authenticated,
       ...(userID ? { user: { id: userID, ...(email ? { email } : {}) } } : {}),
+      ...(orgId ? { orgId } : {}),
     };
   } catch {
     return { mode: "cloud", isAuthenticated: false };

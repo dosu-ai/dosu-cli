@@ -41,6 +41,7 @@ const AUTHENTICATED_CONTEXT = {
     id: "22222222-2222-4222-8222-222222222222",
     email: "user@example.com",
   },
+  orgId: "33333333-3333-4333-8333-333333333333",
 } as const;
 
 const DOSU_SOURCE_FILE = fileURLToPath(new URL("../commands/ask.ts", import.meta.url));
@@ -137,7 +138,50 @@ describe("safe payload builders", () => {
 
     expect(payload.distinct_id).toBe("22222222-2222-4222-8222-222222222222");
     expect(payload.properties).not.toHaveProperty("$process_person_profile");
+    expect(payload.properties).toMatchObject({
+      org_id: "33333333-3333-4333-8333-333333333333",
+      $groups: { organization: "33333333-3333-4333-8333-333333333333" },
+    });
     expect(JSON.stringify(payload)).not.toContain("user@example.com");
+  });
+
+  it("omits organization association unless both user and organization IDs are valid", () => {
+    const invalidUserPayload = buildPostHogPayload({
+      apiKey: "phc_public_project_token",
+      installId: "11111111-1111-4111-8111-111111111111",
+      command: "status",
+      result: "success",
+      durationMs: 1,
+      exitCode: 0,
+      context: {
+        mode: "cloud",
+        isAuthenticated: true,
+        user: { id: "not-a-user-id" },
+        orgId: "33333333-3333-4333-8333-333333333333",
+      },
+      runtime: SAFE_RUNTIME,
+    });
+
+    const invalidOrgPayload = buildPostHogPayload({
+      apiKey: "phc_public_project_token",
+      installId: "11111111-1111-4111-8111-111111111111",
+      command: "status",
+      result: "success",
+      durationMs: 1,
+      exitCode: 0,
+      context: {
+        mode: "cloud",
+        isAuthenticated: true,
+        user: { id: "22222222-2222-4222-8222-222222222222" },
+        orgId: "organization-name",
+      },
+      runtime: SAFE_RUNTIME,
+    });
+
+    for (const payload of [invalidUserPayload, invalidOrgPayload]) {
+      expect(payload.properties).not.toHaveProperty("org_id");
+      expect(payload.properties).not.toHaveProperty("$groups");
+    }
   });
 
   it("keeps command events personless when authenticated identity is invalid", () => {

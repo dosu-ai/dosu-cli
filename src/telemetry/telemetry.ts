@@ -106,6 +106,7 @@ export interface TelemetrySettings {
 export interface CommandTelemetryContext {
   mode?: "cloud" | "oss";
   isAuthenticated?: boolean;
+  orgId?: string;
   user?: {
     id?: string;
     email?: string;
@@ -115,6 +116,7 @@ export interface CommandTelemetryContext {
 interface NormalizedContext {
   mode: "cloud" | "oss";
   isAuthenticated: boolean;
+  orgId?: string;
   user?: {
     id: string;
     email?: string;
@@ -150,6 +152,7 @@ export interface SafeError {
 
 interface PostHogProperties {
   $geoip_disable: true;
+  $groups?: { organization: string };
   $process_person_profile?: false;
   schema_version: 1;
   command: string;
@@ -164,6 +167,7 @@ interface PostHogProperties {
   is_ci: boolean;
   is_tty: boolean;
   mode: "cloud" | "oss";
+  org_id?: string;
   is_authenticated: boolean;
   exit_code: number;
   error_code?: string;
@@ -256,14 +260,14 @@ function normalizeContext(context: CommandTelemetryContext | undefined): Normali
   const isAuthenticated = context?.isAuthenticated === true;
   const id = safeRead(context?.user, "id");
   const email = safeRead(context?.user, "email");
+  const orgId = safeRead(context, "orgId");
   const user =
-    isAuthenticated && validUserId(id)
-      ? { id, ...(validEmail(email) ? { email } : {}) }
-      : undefined;
+    isAuthenticated && isUUID(id) ? { id, ...(validEmail(email) ? { email } : {}) } : undefined;
   return {
     mode: context?.mode === "oss" ? "oss" : "cloud",
     isAuthenticated,
     ...(user ? { user } : {}),
+    ...(user && isUUID(orgId) ? { orgId } : {}),
   };
 }
 
@@ -285,15 +289,11 @@ function normalizeRuntime(runtime: RuntimeMetadata): RuntimeMetadata {
   };
 }
 
-function validInstallId(value: unknown): value is string {
+function isUUID(value: unknown): value is string {
   return (
     typeof value === "string" &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
   );
-}
-
-function validUserId(value: unknown): value is string {
-  return validInstallId(value);
 }
 
 function validEmail(value: unknown): value is string {
@@ -493,7 +493,7 @@ export function buildPostHogPayload(input: PostHogPayloadInput): PostHogPayload 
   return {
     api_key: input.apiKey,
     distinct_id:
-      context.user?.id ?? (validInstallId(input.installId) ? input.installId : FALLBACK_INSTALL_ID),
+      context.user?.id ?? (isUUID(input.installId) ? input.installId : FALLBACK_INSTALL_ID),
     event: "cli_command_completed",
     properties: {
       $geoip_disable: true,
@@ -511,6 +511,12 @@ export function buildPostHogPayload(input: PostHogPayloadInput): PostHogPayload 
       is_ci: runtime.isCi,
       is_tty: runtime.isTty,
       mode: context.mode,
+      ...(context.orgId
+        ? {
+            org_id: context.orgId,
+            $groups: { organization: context.orgId },
+          }
+        : {}),
       is_authenticated: context.isAuthenticated,
       exit_code: normalizeExitCode(input.exitCode),
       ...(errorCode ? { error_code: errorCode } : {}),
@@ -655,7 +661,14 @@ export function buildSentryEnvelope(input: SentryEnvelopeInput): SentryEnvelope 
     level: "error",
     release: `dosu-cli@${runtime.version}`,
     tags: sentryTags(command, context, runtime, error),
-    ...(context.user ? { user: context.user } : {}),
+    ...(context.user
+      ? {
+          user: {
+            id: context.user.id,
+            ...(context.user.email ? { email: context.user.email } : {}),
+          },
+        }
+      : {}),
     ...(mappedBundle
       ? {
           debug_meta: {
@@ -875,7 +888,7 @@ function safeNow(now: () => number): number {
 function safeUuid(generate: () => string): string | undefined {
   try {
     const value = generate();
-    return validInstallId(value) ? value : undefined;
+    return isUUID(value) ? value : undefined;
   } catch {
     return undefined;
   }
@@ -927,7 +940,7 @@ export function createCommandTelemetry(
   let resolvedInstallId = settings.install_id;
 
   function installId(): string | undefined {
-    if (validInstallId(resolvedInstallId)) return resolvedInstallId;
+    if (isUUID(resolvedInstallId)) return resolvedInstallId;
     if (installIdResolved) return undefined;
     installIdResolved = true;
     try {
@@ -935,7 +948,7 @@ export function createCommandTelemetry(
     } catch {
       resolvedInstallId = undefined;
     }
-    return validInstallId(resolvedInstallId) ? resolvedInstallId : undefined;
+    return isUUID(resolvedInstallId) ? resolvedInstallId : undefined;
   }
 
   function debugPayload(payload: string): void {
