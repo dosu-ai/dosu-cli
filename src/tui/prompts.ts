@@ -302,20 +302,36 @@ export function multiselect<T>(
   },
   io: PromptIO = {},
 ): Promise<T[] | symbol> {
+  const { output } = resolveIO(io);
   let cursor = 0;
+  let top = 0;
   let error: string | undefined;
   const picked = new Set<T>(opts.initialValues ?? []);
-  const labelWidth = Math.max(...opts.options.map((o) => optionLabel(o).length));
+  // Long values (folder paths) keep their tail — the distinguishing part —
+  // so a row can never wrap and corrupt the in-place repaint.
+  const maxLabel = Math.max(16, contentWidth(output.columns || 80) - 8);
+  const clipLabel = (text: string) =>
+    text.length <= maxLabel ? text : `\u2026${text.slice(text.length - maxLabel + 1)}`;
+  const labelWidth = Math.max(...opts.options.map((o) => clipLabel(optionLabel(o)).length));
   const pickedValues = () =>
     opts.options.filter((option) => picked.has(option.value)).map((option) => option.value);
 
   return runInteractive<T[]>(
     {
       render() {
-        const rows = opts.options.map((option, index) => {
+        // Scrolling viewport: never draw more rows than the terminal holds
+        // (an overflowing frame can't be erased and stacks on repaint).
+        const count = opts.options.length;
+        const visible = Math.min(count, Math.max(4, (output.rows ?? 24) - 9));
+        if (cursor < top) top = cursor;
+        if (cursor >= top + visible) top = cursor - visible + 1;
+        top = Math.max(0, Math.min(top, count - visible));
+
+        const rows = opts.options.slice(top, top + visible).map((option, offset) => {
+          const index = top + offset;
           const isPicked = picked.has(option.value);
           const box = isPicked ? brand(BOX_ON) : pc.dim(BOX_OFF);
-          const label = optionLabel(option).padEnd(labelWidth);
+          const label = clipLabel(optionLabel(option)).padEnd(labelWidth);
           const status = opts.statusFor
             ? opts.statusFor(option.value, isPicked)
             : option.hint && pc.dim(option.hint);
@@ -324,11 +340,15 @@ export function multiselect<T>(
             ? `${brand(POINTER)} ${box} ${pc.bold(brand(label))}${suffix}`
             : `  ${box} ${pc.dim(label)}${suffix}`;
         });
+        const above = top;
+        const below = count - top - visible;
         const summary = opts.summary?.(pickedValues());
         return [
           pc.bold(opts.message),
           "",
+          ...(above > 0 ? [pc.dim(`  \u2191 ${above} more`)] : []),
           ...rows,
+          ...(below > 0 ? [pc.dim(`  \u2193 ${below} more`)] : []),
           "",
           ...(error ? [pc.yellow(error)] : summary ? [pc.dim(summary)] : []),
           pc.dim(`\u2191\u2193 move ${DOT} space toggle ${DOT} enter confirm ${DOT} esc cancel`),

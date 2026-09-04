@@ -12,7 +12,7 @@ function stripAnsi(text: string): string {
   return text.replace(new RegExp(`${ESC}\\[[0-9;?]*[A-Za-z]`, "g"), "");
 }
 
-function fakeIO(overrides: { inputTTY?: boolean; outputTTY?: boolean } = {}) {
+function fakeIO(overrides: { inputTTY?: boolean; outputTTY?: boolean; rows?: number } = {}) {
   const input = Object.assign(new EventEmitter(), {
     isTTY: overrides.inputTTY ?? true,
     isRaw: false,
@@ -27,6 +27,7 @@ function fakeIO(overrides: { inputTTY?: boolean; outputTTY?: boolean } = {}) {
   const output = {
     isTTY: overrides.outputTTY ?? true,
     columns: 80,
+    rows: overrides.rows ?? 24,
     write(chunk: string) {
       written.push(chunk);
       return true;
@@ -266,6 +267,44 @@ describe("multiselect", () => {
     input.emit("data", "\r");
     await expect(result).resolves.toEqual(["one"]);
     expect(written.slice(framesAfterToggle).join("")).not.toContain("Pick at least one.");
+  });
+
+  it("windows long lists to the terminal height and follows the cursor", async () => {
+    const many = Array.from({ length: 10 }, (_, i) => ({ value: `v${i}`, label: `Option ${i}` }));
+    // rows=13 → 4 visible option rows.
+    const { input, output, written } = fakeIO({ rows: 13 });
+    const result = multiselect({ message: "Choose", options: many }, { input, output });
+
+    const first = stripAnsi(written.join(""));
+    expect(first).toContain("Option 0");
+    expect(first).toContain("Option 3");
+    expect(first).not.toContain("Option 4");
+    expect(first).toContain("\u2193 6 more");
+    expect(first).not.toMatch(/\u2191 \d+ more/);
+
+    for (let i = 0; i < 5; i++) input.emit("data", DOWN); // cursor → Option 5
+    const scrolled = stripAnsi(written.at(-1) ?? "");
+    expect(scrolled).toContain("Option 5");
+    expect(scrolled).not.toContain("Option 1 ");
+    expect(scrolled).toContain("\u2191 2 more");
+    expect(scrolled).toContain("\u2193 4 more");
+
+    input.emit("data", ESC);
+    expect(isCancel(await result)).toBe(true);
+  });
+
+  it("clips overlong labels to the content width, keeping the tail", async () => {
+    const longPath = `/private/var/folders/ab/xyz/T/some-extremely-long-temp-folder-name-here`;
+    const { input, output, text } = fakeIO();
+    const result = multiselect(
+      { message: "Choose", options: [{ value: longPath }] },
+      { input, output },
+    );
+    expect(text()).not.toContain(longPath);
+    expect(text()).toContain("\u2026");
+    expect(text()).toContain("some-extremely-long-temp-folder-name-here");
+    input.emit("data", ESC);
+    expect(isCancel(await result)).toBe(true);
   });
 
   it("renders a live summary line above the legend", async () => {
