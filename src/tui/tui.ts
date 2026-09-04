@@ -284,13 +284,16 @@ async function runSettings(cfg: Config): Promise<void> {
     // Older configs predate org_name/library_name; fall back rather than show nothing.
     const library = target?.library_name ?? target?.deployment_name ?? "not configured";
     const filter = loadSyncState().project_filter;
-    const scope = filter?.length
-      ? `${filter.length} folder${filter.length === 1 ? "" : "s"}`
-      : "all folders";
+    // Name the picked projects while they fit; count only when they don't.
+    const scope = !filter?.length
+      ? "all projects"
+      : filter.length <= 2
+        ? filter.map((dir) => (dir === UNKNOWN_PROJECT ? "unknown" : basename(dir))).join(", ")
+        : `${filter.length} projects`;
     const action = await menuSelect("Settings", [
       { label: "Switch organization", hint: target?.org_name, value: "switch-org" },
       { label: "Switch Library", hint: library, value: "switch-library" },
-      { label: "Mining projects", hint: scope, value: "projects" },
+      { label: "Mining scope", hint: scope, value: "projects" },
       { label: "Run setup", hint: "rerun the setup wizard", value: "setup" },
       { label: "Log out", hint: "clear stored credentials", value: "logout" },
       { label: "Back", value: "back" },

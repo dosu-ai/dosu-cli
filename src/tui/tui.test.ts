@@ -768,7 +768,7 @@ describe("runTUI", () => {
     // Library name on the Library row, mining scope on the projects row.
     expect(settingsOptions[0]?.hint).toBe("Acme");
     expect(settingsOptions[1]?.hint).toBe("Docs Library");
-    expect(settingsOptions[2]?.hint).toBe("all folders");
+    expect(settingsOptions[2]?.hint).toBe("all projects");
     expect(mockRunSwitchTarget).not.toHaveBeenCalled();
   });
 
@@ -801,7 +801,8 @@ describe("runTUI", () => {
     // The subset is persisted; the reopened settings row hints the new scope.
     expect(loadSyncState().project_filter).toEqual(["/repo/dosu-cli"]);
     const refreshed = mockMenuSelect.mock.calls[2]?.[1] ?? [];
-    expect(refreshed.find((o) => o.value === "projects")?.hint).toBe("1 folder");
+    // The single picked folder is named by its basename, not counted.
+    expect(refreshed.find((o) => o.value === "projects")?.hint).toBe("dosu-cli");
   });
 
   it("mining projects setting clears the filter when everything is picked", async () => {
