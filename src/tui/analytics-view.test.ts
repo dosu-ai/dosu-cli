@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The default page-stats loader reads the stored login and builds a real
 // client; override just those two entry points so the glue is testable.
@@ -14,14 +15,27 @@ vi.mock("../client/trpc", async (importOriginal) => ({
 }));
 
 import { makeTestConfig } from "../config/config.test-utils";
+import type { SyncStatus } from "../sync/status";
 import type { SyncState } from "../sync/watermark";
+import { ALT_SCREEN_ENTER, ALT_SCREEN_EXIT } from "./alt-screen";
 import {
+  ANALYTICS_VIEW_LINES,
   analyticsRows,
   fetchPageStats,
-  loadPageStatsFromConfig,
   type PageStats,
+  reduceAnalyticsViewKey,
+  renderAnalyticsFrame,
+  runAnalyticsView,
   windowReport,
 } from "./analytics-view";
+import { frameTopMargin } from "./layout";
+
+const ESC = String.fromCharCode(27);
+const CTRL_C = String.fromCharCode(3);
+
+function stripAnsi(text: string): string {
+  return text.replace(new RegExp(`${ESC}\\[[0-9;?]*[A-Za-z]`, "g"), "");
+}
 
 function emptyState(): SyncState {
   return { schema_version: 1, watermark: null, consecutive_failures: 0 };
@@ -44,6 +58,10 @@ function reportState(): SyncState {
   };
 }
 
+function makeStatus(state: SyncState = emptyState()): SyncStatus {
+  return { running: false, state, recentActivity: [] };
+}
+
 /** Page analytics as the backend loader returns them. */
 function pageStats(): PageStats {
   return {
@@ -57,6 +75,26 @@ function pageStats(): PageStats {
     ],
   };
 }
+
+describe("reduceAnalyticsViewKey", () => {
+  it("goes back on q, esc, and ctrl-c", () => {
+    expect(reduceAnalyticsViewKey("q")).toBe("back");
+    expect(reduceAnalyticsViewKey(ESC)).toBe("back");
+    expect(reduceAnalyticsViewKey(CTRL_C)).toBe("back");
+  });
+
+  it("scrolls on the up/down arrows and k/j", () => {
+    expect(reduceAnalyticsViewKey(`${ESC}[A`)).toBe("up");
+    expect(reduceAnalyticsViewKey("k")).toBe("up");
+    expect(reduceAnalyticsViewKey(`${ESC}[B`)).toBe("down");
+    expect(reduceAnalyticsViewKey("j")).toBe("down");
+  });
+
+  it("ignores other keys", () => {
+    expect(reduceAnalyticsViewKey("x")).toBe("none");
+    expect(reduceAnalyticsViewKey("\t")).toBe("none");
+  });
+});
 
 describe("analyticsRows", () => {
   it("renders the mining totals with per-project history", () => {
@@ -196,8 +234,313 @@ describe("fetchPageStats", () => {
   });
 });
 
-describe("loadPageStatsFromConfig", () => {
-  it("loads page stats from the stored login", async () => {
+describe("windowReport", () => {
+  const lines = Array.from({ length: 25 }, (_, i) => `row ${i}`);
+
+  it("anchors to the top at scroll 0 — a report reads top-down", () => {
+    const { visible, above, below } = windowReport(lines, 0, 10);
+    expect(visible).toEqual(lines.slice(0, 10));
+    expect(above).toBe(0);
+    expect(below).toBe(15);
+  });
+
+  it("scrolls down toward the tail", () => {
+    const { visible, above, below } = windowReport(lines, 5, 10);
+    expect(visible).toEqual(lines.slice(5, 15));
+    expect(above).toBe(5);
+    expect(below).toBe(10);
+  });
+
+  it("clamps scroll past the last line", () => {
+    const { visible, above, below } = windowReport(lines, 999, 10);
+    expect(visible).toEqual(lines.slice(15));
+    expect(above).toBe(15);
+    expect(below).toBe(0);
+  });
+
+  it("shows everything when the report fits the window", () => {
+    const { visible, above, below } = windowReport(["a", "b"], 3, 10);
+    expect(visible).toEqual(["a", "b"]);
+    expect(above).toBe(0);
+    expect(below).toBe(0);
+  });
+});
+
+describe("renderAnalyticsFrame", () => {
+  it("titles the screen and shows the report with the key legend", () => {
+    const frame = stripAnsi(renderAnalyticsFrame(reportState(), 0));
+    expect(frame).toContain("Analytics");
+    expect(frame).toContain("Sessions mined");
+    expect(frame).toContain("\u2191\u2193 scroll \u00B7 esc back");
+  });
+
+  it("shows an empty message before the first run", () => {
+    const frame = stripAnsi(renderAnalyticsFrame(emptyState(), 0));
+    expect(frame).toContain("No analytics yet");
+  });
+
+  it("reports scrollback below when the report overflows the window", () => {
+    // Enough per-project rows to overflow: rows = 3 stat lines +
+    // blank + heading + 8 projects = 13 > the 12-line window.
+    const state: SyncState = {
+      ...reportState(),
+      mined_sessions: Array.from({ length: 9 }, (_, i) => ({
+        at: "2026-09-02T23:00:00.000Z",
+        session: `cursor/s${i}`,
+        project: `project-${i}`,
+      })),
+    };
+    const rows = analyticsRows(state);
+    expect(rows.length).toBeGreaterThan(ANALYTICS_VIEW_LINES);
+    const top = stripAnsi(renderAnalyticsFrame(state, 0));
+    expect(top).toContain(`\u2193 ${rows.length - ANALYTICS_VIEW_LINES} more`);
+    const scrolled = stripAnsi(renderAnalyticsFrame(state, 1));
+    expect(scrolled).toContain("\u2191 1 earlier");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runAnalyticsView — driven through fake streams and timers
+// ---------------------------------------------------------------------------
+
+interface FakeInput extends EventEmitter {
+  isTTY: boolean;
+  isRaw?: boolean;
+  setRawMode: (raw: boolean) => void;
+  resume: () => void;
+  pause: () => void;
+}
+
+function fakeIO(inputOverrides: Partial<FakeInput> = {}) {
+  const input = Object.assign(new EventEmitter(), {
+    isTTY: true,
+    isRaw: false,
+    setRawMode(raw: boolean) {
+      this.isRaw = raw;
+    },
+    resume() {},
+    pause() {},
+    ...inputOverrides,
+  }) as unknown as NodeJS.ReadStream;
+
+  const written: string[] = [];
+  const output = Object.assign(new EventEmitter(), {
+    isTTY: true,
+    columns: 80,
+    write(chunk: string) {
+      written.push(chunk);
+      return true;
+    },
+  }) as unknown as NodeJS.WriteStream;
+
+  return { input, output, written };
+}
+
+describe("runAnalyticsView", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("resolves immediately for non-interactive stdin", async () => {
+    const { input, output, written } = fakeIO({ isTTY: false });
+    await runAnalyticsView({ input, output });
+    expect(written).toEqual([]);
+  });
+
+  it("takes over the screen, renders the report, and exits on q", async () => {
+    const { input, output, written } = fakeIO();
+
+    const view = runAnalyticsView({
+      input,
+      output,
+      getStatus: () => makeStatus(reportState()),
+      loadPageStats: async () => null,
+      pollMs: 100,
+    });
+
+    expect(written.join("")).toContain(ALT_SCREEN_ENTER);
+    const rendered = stripAnsi(written.join(""));
+    expect(rendered).toContain("Sessions mined");
+    expect(rendered).toContain("558");
+
+    input.emit("data", "q");
+    await view;
+    expect((input as unknown as FakeInput).isRaw).toBe(false);
+    expect(written.join("")).toContain(ALT_SCREEN_EXIT);
+  });
+
+  it("scrolls the overflowing report with the arrows", async () => {
+    const { input, output, written } = fakeIO();
+    const state: SyncState = {
+      ...reportState(),
+      mined_sessions: Array.from({ length: 9 }, (_, i) => ({
+        at: "2026-09-02T23:00:00.000Z",
+        session: `cursor/s${i}`,
+        project: `project-${i}`,
+      })),
+    };
+
+    const view = runAnalyticsView({
+      input,
+      output,
+      getStatus: () => makeStatus(state),
+      loadPageStats: async () => null,
+      pollMs: 100,
+    });
+
+    // ↑ at the top is a no-op; ↓ walks toward the per-project tail.
+    input.emit("data", `${ESC}[A`);
+    expect(stripAnsi(written.join(""))).not.toContain("\u2191 1 earlier");
+    input.emit("data", `${ESC}[B`);
+    expect(stripAnsi(written.at(-1) ?? "")).toContain("\u2191 1 earlier");
+    input.emit("data", `${ESC}[A`);
+    expect(stripAnsi(written.at(-1) ?? "")).not.toContain("\u2191 1 earlier");
+
+    input.emit("data", "q");
+    await view;
+  });
+
+  it("skips the terminal write when a poll produces an identical frame", async () => {
+    const { input, output, written } = fakeIO();
+    let notes = 1;
+
+    const view = runAnalyticsView({
+      input,
+      output,
+      getStatus: () => makeStatus({ ...emptyState(), total_mined: 1, total_notes: notes }),
+      loadPageStats: async () => null,
+      pollMs: 100,
+    });
+
+    const afterFirstDraw = written.length;
+    // Nothing changes across several polls: no new writes.
+    vi.advanceTimersByTime(300);
+    expect(written.length).toBe(afterFirstDraw);
+
+    // A completed batch changes the state: the next poll repaints.
+    notes = 2;
+    vi.advanceTimersByTime(100);
+    expect(written.length).toBeGreaterThan(afterFirstDraw);
+    expect(stripAnsi(written.join(""))).toContain("2");
+
+    input.emit("data", "q");
+    await view;
+  });
+
+  it("repaints on terminal resize even when the frame string is unchanged", async () => {
+    const { input, output, written } = fakeIO();
+
+    const view = runAnalyticsView({
+      input,
+      output,
+      getStatus: () => makeStatus(),
+      loadPageStats: async () => null,
+      pollMs: 100,
+    });
+
+    const afterFirstDraw = written.length;
+    vi.advanceTimersByTime(100);
+    expect(written.length).toBe(afterFirstDraw);
+
+    output.emit("resize");
+    expect(written.length).toBeGreaterThan(afterFirstDraw);
+
+    input.emit("data", "q");
+    await view;
+    // The listener is removed on exit: a late resize writes nothing more.
+    const afterExit = written.length;
+    output.emit("resize");
+    expect(written.length).toBe(afterExit);
+  });
+
+  it("pads a fixed top margin — no vertical centering, so the frame never jiggles", async () => {
+    const { input, output, written } = fakeIO();
+
+    const view = runAnalyticsView({
+      input,
+      output,
+      getStatus: () => makeStatus(),
+      loadPageStats: async () => null,
+      pollMs: 100,
+    });
+
+    // The paint starts at home followed by exactly the height-scaled cleared
+    // blank rows (+1 to match the home banner's leading blank) — the fake
+    // output has no rows, so the 24-row default applies.
+    const first = written.join("");
+    const blankRun = first.match(new RegExp(`${ESC}\\[H((?:${ESC}\\[K\\n)+)`));
+    expect(blankRun).not.toBeNull();
+    const blanks = (blankRun?.[1] ?? "").split("\n").length - 1;
+    expect(blanks).toBe(frameTopMargin(24) + 1);
+
+    input.emit("data", "q");
+    await view;
+  });
+
+  it("repaints with the page sections once the backend stats land", async () => {
+    const { input, output, written } = fakeIO();
+
+    const view = runAnalyticsView({
+      input,
+      output,
+      getStatus: () => makeStatus(reportState()),
+      loadPageStats: async () => pageStats(),
+      pollMs: 100,
+    });
+
+    // The first paint is local-only; the loader's microtask hasn't run yet.
+    expect(stripAnsi(written.join(""))).not.toContain("Top cited pages");
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    const rendered = stripAnsi(written.at(-1) ?? "");
+    expect(rendered).toContain("Top cited pages (30d)");
+    // The report grew past the window; the tail is reachable by scrolling.
+    input.emit("data", `${ESC}[B`);
+    input.emit("data", `${ESC}[B`);
+    expect(stripAnsi(written.at(-1) ?? "")).toContain("Recently updated pages");
+
+    input.emit("data", "q");
+    await view;
+  });
+
+  it("drops page stats that land after the user already left", async () => {
+    const { input, output, written } = fakeIO();
+    let resolveStats: (stats: PageStats) => void = () => {};
+
+    const view = runAnalyticsView({
+      input,
+      output,
+      getStatus: () => makeStatus(reportState()),
+      loadPageStats: () => new Promise((resolve) => (resolveStats = resolve)),
+      pollMs: 100,
+    });
+
+    input.emit("data", "q");
+    await view;
+    const afterExit = written.length;
+
+    resolveStats(pageStats());
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(written.length).toBe(afterExit);
+    expect(stripAnsi(written.join(""))).not.toContain("Top cited pages");
+  });
+
+  // -------------------------------------------------------------------------
+  // Default loader (no loadPageStats injected): stored login → typed client.
+  // -------------------------------------------------------------------------
+
+  /** Let the default loader's promise chain settle under fake timers. */
+  async function microtasks(): Promise<void> {
+    for (let i = 0; i < 8; i += 1) await Promise.resolve();
+  }
+
+  it("loads page stats from the stored login by default", async () => {
     mockLoadConfig.mockReturnValue(
       makeTestConfig({
         access_token: "a",
@@ -230,26 +573,57 @@ describe("loadPageStatsFromConfig", () => {
         },
       },
     });
+    const { input, output, written } = fakeIO();
 
-    const stats = await loadPageStatsFromConfig();
-    expect(stats?.topCited).toEqual([{ title: "Release process", citation_count: 3 }]);
-    expect(stats?.topUpdated).toHaveLength(1);
+    const view = runAnalyticsView({
+      input,
+      output,
+      getStatus: () => makeStatus(reportState()),
+      pollMs: 100,
+    });
+    await microtasks();
+
+    const rendered = stripAnsi(written.join(""));
+    expect(rendered).toContain("Top cited pages (30d)");
+
+    input.emit("data", "q");
+    await view;
   });
 
   it("fails open when there is no Library or the config is unreadable", async () => {
-    // No space configured → resolves null without ever building a client.
+    // No space configured → the loader resolves null without a client.
     mockLoadConfig.mockReturnValue(
       makeTestConfig({ access_token: "a", refresh_token: "r", expires_at: 0 }),
     );
     mockCreateTypedClient.mockClear();
-    expect(await loadPageStatsFromConfig()).toBeNull();
+    const { input, output, written } = fakeIO();
+    const view = runAnalyticsView({
+      input,
+      output,
+      getStatus: () => makeStatus(reportState()),
+      pollMs: 100,
+    });
+    await microtasks();
     expect(mockCreateTypedClient).not.toHaveBeenCalled();
+    expect(stripAnsi(written.join(""))).not.toContain("Top cited pages");
+    input.emit("data", "q");
+    await view;
 
     // Unreadable config → same silent degradation.
     mockLoadConfig.mockImplementation(() => {
       throw new Error("signed out");
     });
-    expect(await loadPageStatsFromConfig()).toBeNull();
+    const second = fakeIO();
+    const secondView = runAnalyticsView({
+      input: second.input,
+      output: second.output,
+      getStatus: () => makeStatus(reportState()),
+      pollMs: 100,
+    });
+    await microtasks();
+    expect(stripAnsi(second.written.join(""))).not.toContain("Top cited pages");
+    second.input.emit("data", "q");
+    await secondView;
   });
 
   it("fails open when the backend fetch rejects", async () => {
@@ -271,38 +645,35 @@ describe("loadPageStatsFromConfig", () => {
       },
       page: {},
     });
-    expect(await loadPageStatsFromConfig()).toBeNull();
-  });
-});
-
-describe("windowReport", () => {
-  const lines = Array.from({ length: 25 }, (_, i) => `row ${i}`);
-
-  it("anchors to the top at scroll 0 — a report reads top-down", () => {
-    const { visible, above, below } = windowReport(lines, 0, 10);
-    expect(visible).toEqual(lines.slice(0, 10));
-    expect(above).toBe(0);
-    expect(below).toBe(15);
-  });
-
-  it("scrolls down toward the tail", () => {
-    const { visible, above, below } = windowReport(lines, 5, 10);
-    expect(visible).toEqual(lines.slice(5, 15));
-    expect(above).toBe(5);
-    expect(below).toBe(10);
+    const { input, output, written } = fakeIO();
+    const view = runAnalyticsView({
+      input,
+      output,
+      getStatus: () => makeStatus(reportState()),
+      pollMs: 100,
+    });
+    await microtasks();
+    expect(stripAnsi(written.join(""))).not.toContain("Top cited pages");
+    input.emit("data", "q");
+    await view;
   });
 
-  it("clamps scroll past the last line", () => {
-    const { visible, above, below } = windowReport(lines, 999, 10);
-    expect(visible).toEqual(lines.slice(15));
-    expect(above).toBe(15);
-    expect(below).toBe(0);
-  });
+  it("stops polling after the user goes back", async () => {
+    const { input, output } = fakeIO();
+    const getStatus = vi.fn(() => makeStatus());
 
-  it("shows everything when the report fits the window", () => {
-    const { visible, above, below } = windowReport(["a", "b"], 3, 10);
-    expect(visible).toEqual(["a", "b"]);
-    expect(above).toBe(0);
-    expect(below).toBe(0);
+    const view = runAnalyticsView({
+      input,
+      output,
+      getStatus,
+      loadPageStats: async () => null,
+      pollMs: 100,
+    });
+
+    input.emit("data", ESC);
+    await view;
+    const callsAtExit = getStatus.mock.calls.length;
+    vi.advanceTimersByTime(1000);
+    expect(getStatus.mock.calls.length).toBe(callsAtExit);
   });
 });

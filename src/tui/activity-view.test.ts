@@ -99,13 +99,12 @@ describe("reduceActivityViewKey", () => {
     expect(reduceSyncConfirmKey(`${ESC}[A`)).toBe("none");
   });
 
-  it("cycles activity → mined → queued → open → analytics and wraps both ways", () => {
+  it("cycles activity → mined → queued → open and wraps both ways", () => {
     expect(cycleTab("activity")).toBe("mined");
     expect(cycleTab("mined")).toBe("queued");
     expect(cycleTab("queued")).toBe("open");
-    expect(cycleTab("open")).toBe("analytics");
-    expect(cycleTab("analytics")).toBe("activity");
-    expect(cycleTab("activity", -1)).toBe("analytics");
+    expect(cycleTab("open")).toBe("activity");
+    expect(cycleTab("activity", -1)).toBe("open");
   });
 
   it("ignores other keys", () => {
@@ -588,11 +587,10 @@ describe("renderActivityFrame", () => {
 
   it("underlines the active tab in the quiet two-line strip", () => {
     const [row, rule] = tabBar("mined", 3, 2, 577, 60).map(stripAnsi);
-    // Order: Activity, Mined, Queued, Open, Analytics.
+    // Order: Activity, Mined, Queued, Open.
     expect(row.indexOf("Activity")).toBeLessThan(row.indexOf("Mined (577)"));
     expect(row.indexOf("Mined (577)")).toBeLessThan(row.indexOf("Queued (3)"));
     expect(row.indexOf("Queued (3)")).toBeLessThan(row.indexOf("Open (2)"));
-    expect(row.indexOf("Open (2)")).toBeLessThan(row.indexOf("Analytics"));
     // No folder-tab chrome: just the labels and the rule.
     expect(row).not.toContain("\u2502");
     // The heavy segment of the rule sits exactly under the active label...
@@ -607,7 +605,7 @@ describe("renderActivityFrame", () => {
     const [row] = tabBar("activity", 3, 2, 577, 60).map(stripAnsi);
     // The last label ends flush with the frame edge...
     expect(row.length).toBe(60);
-    expect(row.endsWith("Analytics")).toBe(true);
+    expect(row.endsWith("Open (2)")).toBe(true);
     // ...and the gaps between labels are as even as integer columns allow.
     const gaps = row.split(/\S+ \S+|\S+/).filter((s) => s.length > 0);
     const sizes = gaps.map((g) => g.length);
@@ -631,56 +629,19 @@ describe("renderActivityFrame", () => {
     );
   });
 
-  it("keeps the analytics report off the feed tabs, showing it only on its own tab", () => {
+  it("keeps analytics content out of the sync frame — it has its own screen", () => {
     const withAnalytics = makeStatus({
       state: {
         schema_version: 1,
         watermark: null,
         consecutive_failures: 0,
-        total_mined: 47,
-        total_notes: 12,
+        total_notes: 47,
         total_learning_tokens: 312_000,
       },
     });
-    const feed = stripAnsi(renderActivityFrame(withAnalytics, [], 80));
-    expect(feed).not.toContain("Suggested pages");
-
-    const report = stripAnsi(
-      renderActivityFrame(withAnalytics, [], 80, null, { tab: "analytics", scroll: 0 }),
-    );
-    expect(report).toContain("Sessions mined");
-    expect(report).toContain("Suggested pages");
-    expect(report).toContain("Investigation distilled");
-  });
-
-  it("appends backend page stats to the analytics tab once they land", () => {
-    const stats = {
-      topUpdated: [{ title: "Release process", updated_at: "2026-09-03T10:00:00.000Z" }],
-      topCited: [{ title: "Release process", citation_count: 4 }],
-    };
-    const report = stripAnsi(
-      renderActivityFrame(
-        makeStatus(),
-        [],
-        80,
-        null,
-        { tab: "analytics", scroll: 0 },
-        [],
-        0,
-        [],
-        null,
-        stats,
-      ),
-    );
-    expect(report).toContain("Top cited pages");
-    expect(report).toContain("Recently updated pages");
-  });
-
-  it("shows the analytics empty message before the first run", () => {
-    const report = stripAnsi(
-      renderActivityFrame(makeStatus(), [], 80, null, { tab: "analytics", scroll: 0 }),
-    );
-    expect(report).toContain("No analytics yet. They appear after the first mining run.");
+    const frame = stripAnsi(renderActivityFrame(withAnalytics, [], 80));
+    expect(frame).not.toContain("Suggested pages");
+    expect(frame).not.toContain("Analytics");
   });
 
   it("offers the sync trigger only while idle", () => {
@@ -958,128 +919,6 @@ describe("runActivityView", () => {
 
     input.emit("data", "q");
     await view;
-  });
-
-  /** Let a resolved loadPageStats promise land under fake timers. */
-  async function microtasks(): Promise<void> {
-    for (let i = 0; i < 4; i += 1) await Promise.resolve();
-  }
-
-  it("opens on the analytics tab when deep-linked and lazily loads page stats", async () => {
-    const { input, output, written } = fakeIO();
-    const loadPageStats = vi.fn(async () => ({
-      topUpdated: [{ title: "Release process", updated_at: "2026-09-03T10:00:00.000Z" }],
-      topCited: [{ title: "Release process", citation_count: 4 }],
-    }));
-
-    const view = runActivityView({
-      input,
-      output,
-      getStatus: minedStatus,
-      readLog: () => "",
-      createFollower: () => ({ poll() {} }),
-      listBacklog: () => ({ queued: [], open: [] }),
-      loadPageStats,
-      initialTab: "analytics",
-      pollMs: 100,
-    });
-
-    // The report paints immediately from local state; stats arrive async.
-    expect(stripAnsi(written.join(""))).toContain("Sessions mined");
-    await microtasks();
-    expect(loadPageStats).toHaveBeenCalledOnce();
-    expect(stripAnsi(written.at(-1) ?? "")).toContain("Top cited pages");
-
-    input.emit("data", "q");
-    await view;
-  });
-
-  it("never fetches page stats while the analytics tab stays unvisited", async () => {
-    const { input, output } = fakeIO();
-    const loadPageStats = vi.fn(async () => null);
-
-    const view = runActivityView({
-      input,
-      output,
-      getStatus: minedStatus,
-      readLog: () => "",
-      createFollower: () => ({ poll() {} }),
-      listBacklog: () => ({ queued: [], open: [] }),
-      loadPageStats,
-      pollMs: 100,
-    });
-
-    await microtasks();
-    expect(loadPageStats).not.toHaveBeenCalled();
-
-    // Tabbing onto Analytics triggers the one-shot fetch.
-    for (let i = 0; i < 4; i += 1) input.emit("data", "\t");
-    await microtasks();
-    expect(loadPageStats).toHaveBeenCalledOnce();
-
-    input.emit("data", "q");
-    await view;
-  });
-
-  it("scrolls the analytics report top-down, unlike the bottom-pinned feeds", async () => {
-    const { input, output, written } = fakeIO();
-    // Enough per-project rows to overflow the 10-line window.
-    const state = {
-      ...minedStatus().state,
-      mined_sessions: Array.from({ length: 9 }, (_, i) => ({
-        at: "2026-09-02T23:00:00.000Z",
-        session: `cursor/s${i}`,
-        project: `project-${i}`,
-      })),
-    };
-
-    const view = runActivityView({
-      input,
-      output,
-      getStatus: () => makeStatus({ state }),
-      readLog: () => "",
-      createFollower: () => ({ poll() {} }),
-      listBacklog: () => ({ queued: [], open: [] }),
-      loadPageStats: async () => null,
-      initialTab: "analytics",
-      pollMs: 100,
-    });
-
-    // ↑ at the top is a no-op; ↓ walks toward the per-project tail.
-    input.emit("data", `${ESC}[A`);
-    expect(stripAnsi(written.join(""))).not.toContain("\u2191 1 earlier");
-    input.emit("data", `${ESC}[B`);
-    expect(stripAnsi(written.at(-1) ?? "")).toContain("\u2191 1 earlier");
-    input.emit("data", `${ESC}[A`);
-    expect(stripAnsi(written.at(-1) ?? "")).not.toContain("\u2191 1 earlier");
-
-    input.emit("data", "q");
-    await view;
-  });
-
-  it("drops page stats that land after the user already left", async () => {
-    const { input, output, written } = fakeIO();
-    let resolveStats: (stats: { topUpdated: []; topCited: [] } | null) => void = () => {};
-
-    const view = runActivityView({
-      input,
-      output,
-      getStatus: minedStatus,
-      readLog: () => "",
-      createFollower: () => ({ poll() {} }),
-      listBacklog: () => ({ queued: [], open: [] }),
-      loadPageStats: () => new Promise((resolve) => (resolveStats = resolve)),
-      initialTab: "analytics",
-      pollMs: 100,
-    });
-
-    input.emit("data", "q");
-    await view;
-    const afterExit = written.length;
-
-    resolveStats({ topUpdated: [], topCited: [] });
-    await microtasks();
-    expect(written.length).toBe(afterExit);
   });
 
   it("baselines run progress when the run appears and tracks it batch by batch", async () => {

@@ -1,7 +1,7 @@
 /**
- * Live Activity screen for the TUI: mining status plus tabs (activity feed,
- * mined history, queued backlog, open sessions, analytics report) and a
- * manual sync trigger. Pure render/reduce functions wired to injectable IO.
+ * Live Activity screen for the TUI: mining status plus tabbed lists (activity
+ * feed, mined history, queued backlog, open sessions) and a manual sync
+ * trigger. Pure render/reduce functions wired to injectable IO, like menu.ts.
  */
 
 import { readFileSync } from "node:fs";
@@ -20,12 +20,6 @@ import {
   type MinedSessionRecord,
 } from "../sync/watermark";
 import { enterAltScreen } from "./alt-screen";
-import {
-  analyticsRows,
-  loadPageStatsFromConfig,
-  type PageStats,
-  windowReport,
-} from "./analytics-view";
 import {
   breadcrumb,
   centerBlock,
@@ -57,16 +51,10 @@ const ACTIVITY_VIEW_LIST_LINES = 10;
 /** How much history each tab keeps in memory for scrolling back. */
 export const ACTIVITY_VIEW_BUFFER_LINES = 200;
 
-export type ActivityViewTab = "activity" | "queued" | "open" | "mined" | "analytics";
+export type ActivityViewTab = "activity" | "queued" | "open" | "mined";
 
 /** Tab order for cycling; ← walks it backwards. */
-const ACTIVITY_VIEW_TABS: readonly ActivityViewTab[] = [
-  "activity",
-  "mined",
-  "queued",
-  "open",
-  "analytics",
-];
+const ACTIVITY_VIEW_TABS: readonly ActivityViewTab[] = ["activity", "mined", "queued", "open"];
 
 export type ActivityViewAction = "back" | "tab" | "tab-back" | "up" | "down" | "sync" | "none";
 
@@ -305,7 +293,6 @@ export function tabBar(
     ["mined", `Mined (${minedCount})`],
     ["queued", `Queued (${queuedCount})`],
     ["open", `Open (${openCount})`],
-    ["analytics", "Analytics"],
   ];
   // Space-between across the frame width; narrow frames fall back to a
   // minimum gap and let the row run long.
@@ -428,8 +415,6 @@ export function renderActivityFrame(
   open: readonly AgentSession[] = [],
   /** Within-batch step progress folded from the miner's log traces. */
   runProgress: RunProgress | null = null,
-  /** Backend page analytics for the Analytics tab; null while loading. */
-  pageStats: PageStats | null = null,
 ): string {
   const mined = status.state.watermark
     ? `Mined sessions up to ${localTime(status.state.watermark)}`
@@ -480,9 +465,7 @@ export function renderActivityFrame(
         ? queuedRows
         : pane.tab === "open"
           ? openRows
-          : pane.tab === "analytics"
-            ? analyticsRows(status.state, pageStats).map((row) => formatActivityLine(row, width))
-            : minedRows;
+          : minedRows;
   // Pre-history runs only advanced the watermark, so mining may have
   // happened without leaving records — say so instead of denying it.
   const emptyMined = status.state.watermark
@@ -495,19 +478,13 @@ export function renderActivityFrame(
         ? "Queue empty. Finished agent sessions appear here."
         : pane.tab === "open"
           ? "No open sessions. Live agent sessions sit here until they go quiet."
-          : pane.tab === "analytics"
-            ? "No analytics yet. They appear after the first mining run."
-            : emptyMined;
-  // The feeds pin to the newest entry; the analytics report reads top-down.
-  const { visible, above, below } =
-    pane.tab === "analytics"
-      ? windowReport(source, pane.scroll, ACTIVITY_VIEW_LIST_LINES)
-      : windowList(source, pane.scroll);
+          : emptyMined;
+  const { visible, above, below } = windowList(source, pane.scroll);
   const listRows = visible.length > 0 ? visible.map((row) => pc.dim(row)) : [pc.dim(empty)];
 
   const scrollParts: string[] = [];
   if (above > 0) scrollParts.push(`\u2191 ${above} earlier`);
-  if (below > 0) scrollParts.push(`\u2193 ${below} ${pane.tab === "analytics" ? "more" : "newer"}`);
+  if (below > 0) scrollParts.push(`\u2193 ${below} newer`);
 
   const lines = [
     breadcrumb(["Home", "Activity"], width),
@@ -563,10 +540,6 @@ export interface ActivityViewIO {
   startSync?: () => boolean;
   /** The scanned backlog for the Queued and Open tabs; re-run when the watermark moves. */
   listBacklog?: () => SessionBacklog;
-  /** Backend page analytics for the Analytics tab; defaults to the backend. */
-  loadPageStats?: () => Promise<PageStats | null>;
-  /** Tab shown on entry; the Analytics menu entry deep-links here. */
-  initialTab?: ActivityViewTab;
   pollMs?: number;
 }
 
@@ -595,7 +568,6 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
   const startSync =
     io.startSync ?? (() => spawnDetachedSelf(["knowledge", "sync", "--quiet", "--bootstrap"]));
   const listBacklog = io.listBacklog ?? defaultListBacklog;
-  const loadPageStats = io.loadPageStats ?? loadPageStatsFromConfig;
   const pollMs = io.pollMs ?? ACTIVITY_VIEW_POLL_MS;
 
   const seed = readLog();
@@ -603,25 +575,10 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
   let backlog = latestBacklog(seed);
   // Seeded from the full log so a view opened mid-run starts at the true step.
   let runProgress = foldRunProgress(null, seed);
-  let tab: ActivityViewTab = io.initialTab ?? "activity";
+  let tab: ActivityViewTab = "activity";
   let scroll = 0;
   let confirmSync = false;
-  let closed = false;
   let status = getStatus();
-
-  // Page analytics are a backend call, so fetch once and only when the
-  // Analytics tab is actually visited; the result lands via a redraw.
-  let pageStats: PageStats | null = null;
-  let pageStatsRequested = false;
-  const ensurePageStats = () => {
-    if (pageStatsRequested) return;
-    pageStatsRequested = true;
-    loadPageStats().then((stats) => {
-      if (closed || !stats) return;
-      pageStats = stats;
-      draw();
-    });
-  };
   // Rescan on watermark moves and tab switches, not every poll (a scan
   // stats every local session file).
   let sessions = listBacklog();
@@ -637,7 +594,6 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
     if (tab === "activity") return activity.length;
     if (tab === "queued") return sessions.queued.length;
     if (tab === "open") return sessions.open.length;
-    if (tab === "analytics") return analyticsRows(status.state, pageStats).length;
     return (status.state.mined_sessions ?? []).length;
   };
 
@@ -669,7 +625,6 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
       minedBeforeRun ?? 0,
       sessions.open,
       runProgress,
-      pageStats,
     );
     if (frame === lastFrame) return;
     lastFrame = frame;
@@ -691,7 +646,6 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
   // refcount keeps the same buffer and the view paints over the menu.
   const leaveAltScreen = enterAltScreen(output);
   output.write(HIDE_CURSOR);
-  if (tab === "analytics") ensurePageStats();
   draw();
 
   return new Promise((resolve) => {
@@ -707,7 +661,6 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
     timer.unref?.();
 
     const finish = () => {
-      closed = true;
       clearInterval(timer);
       output.off?.("resize", onResize);
       input.off("data", onData);
@@ -758,17 +711,15 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
           // Rescan on entry: open sessions drain into the queue without the
           // watermark ever moving.
           if (tab === "queued" || tab === "open") sessions = listBacklog();
-          if (tab === "analytics") ensurePageStats();
           draw();
-        } else if (action === "up" || action === "down") {
-          // Feeds pin to the bottom (↑ walks back in time); the analytics
-          // report is top-anchored (↓ walks toward the bottom).
-          const deeper = tab === "analytics" ? action === "down" : action === "up";
+        } else if (action === "up") {
           const maxScroll = Math.max(0, activeListLength() - ACTIVITY_VIEW_LIST_LINES);
-          if (deeper && scroll < maxScroll) {
+          if (scroll < maxScroll) {
             scroll += 1;
             draw();
-          } else if (!deeper && scroll > 0) {
+          }
+        } else if (action === "down") {
+          if (scroll > 0) {
             scroll -= 1;
             draw();
           }

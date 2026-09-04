@@ -41,6 +41,11 @@ vi.mock("./activity-view", () => ({
   runActivityView: vi.fn(),
 }));
 
+// So does the standalone analytics screen.
+vi.mock("./analytics-view", () => ({
+  runAnalyticsView: vi.fn(),
+}));
+
 // And the Pages screen, which also fetches from the backend.
 vi.mock("./pages-view", () => ({
   runPagesView: vi.fn(),
@@ -117,6 +122,7 @@ import { runSetup, runSwitchTarget } from "../setup/flow";
 import { lockPath } from "../sync/lock";
 import { loadSyncState, saveSyncState } from "../sync/watermark";
 import { runActivityView } from "./activity-view";
+import { runAnalyticsView } from "./analytics-view";
 import { frameTopMargin } from "./layout";
 import { menuSelect } from "./menu";
 import { runPagesView } from "./pages-view";
@@ -132,6 +138,7 @@ const mockInGitWorkTree = vi.mocked(inGitWorkTree);
 const mockSectionState = vi.mocked(dosuAgentsSectionState);
 const mockRunSwitchTarget = vi.mocked(runSwitchTarget);
 const mockRunActivityView = vi.mocked(runActivityView);
+const mockRunAnalyticsView = vi.mocked(runAnalyticsView);
 const mockRunPagesView = vi.mocked(runPagesView);
 const mockAllSetupProviders = vi.mocked(allSetupProviders);
 const mockScanSessions = vi.mocked(scanAgentSessions);
@@ -708,14 +715,15 @@ describe("runTUI", () => {
     expect(mockRunActivityView).toHaveBeenCalledOnce();
   });
 
-  it("analytics action opens the Activity view on its Analytics tab", async () => {
+  it("analytics action opens the standalone analytics screen", async () => {
     writeRealConfig(makeCfg({}));
-    mockRunActivityView.mockResolvedValue();
+    mockRunAnalyticsView.mockResolvedValue();
     mockMenuSelect.mockResolvedValueOnce("analytics").mockResolvedValueOnce("exit");
 
     await runTUI();
 
-    expect(mockRunActivityView).toHaveBeenCalledExactlyOnceWith({ initialTab: "analytics" });
+    expect(mockRunAnalyticsView).toHaveBeenCalledOnce();
+    expect(mockRunActivityView).not.toHaveBeenCalled();
   });
 
   it("pages action opens the Library pages screen", async () => {
