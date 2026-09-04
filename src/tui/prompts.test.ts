@@ -307,6 +307,19 @@ describe("multiselect", () => {
     expect(isCancel(await result)).toBe(true);
   });
 
+  it("'a' toggles between all and none", async () => {
+    const { input, output } = fakeIO();
+    const result = multiselect(
+      { message: "Choose", options: OPTIONS, initialValues: ["two"] },
+      { input, output },
+    );
+    input.emit("data", "a"); // partial → all
+    input.emit("data", "a"); // all → none
+    input.emit("data", " "); // tick just One
+    input.emit("data", "\r");
+    await expect(result).resolves.toEqual(["one"]);
+  });
+
   it("renders a live summary line above the legend", async () => {
     const { input, output, written, text } = fakeIO();
     const result = multiselect(

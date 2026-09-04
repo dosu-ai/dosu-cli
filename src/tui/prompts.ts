@@ -351,7 +351,9 @@ export function multiselect<T>(
           ...(below > 0 ? [pc.dim(`  \u2193 ${below} more`)] : []),
           "",
           ...(error ? [pc.yellow(error)] : summary ? [pc.dim(summary)] : []),
-          pc.dim(`\u2191\u2193 move ${DOT} space toggle ${DOT} enter confirm ${DOT} esc cancel`),
+          pc.dim(
+            `\u2191\u2193 move ${DOT} space toggle ${DOT} a all ${DOT} enter confirm ${DOT} esc cancel`,
+          ),
         ];
       },
       handle(key) {
@@ -360,6 +362,13 @@ export function multiselect<T>(
           const value = opts.options[cursor].value;
           if (picked.has(value)) picked.delete(value);
           else picked.add(value);
+          return { type: "render" };
+        }
+        if (key === "a" || key === "A") {
+          // Toggle all: everything picked clears to none, anything less picks all.
+          error = undefined;
+          if (picked.size === opts.options.length) picked.clear();
+          else for (const option of opts.options) picked.add(option.value);
           return { type: "render" };
         }
         if (key === KEY_UP || key === "k") {
