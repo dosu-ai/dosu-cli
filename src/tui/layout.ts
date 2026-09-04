@@ -59,23 +59,20 @@ export function visibleWidth(text: string): number {
 }
 
 /**
- * A tab strip shared by the tabbed screens: one row of labels over a rule
- * whose heavier segment sits under the active label (visible even without
- * color). Spread mode stretches the labels across `width` like flex
- * space-between; compact mode sits them side by side over a rule that only
- * runs as far as the labels do.
+ * A tab strip shared by the tabbed screens: one row of labels spread across
+ * `width` like flex space-between, over a rule whose heavier segment sits
+ * under the active label (visible even without color).
  */
 export function tabStrip<Id extends string>(
   labels: ReadonlyArray<readonly [Id, string]>,
   active: Id,
   width: number,
-  { spread = true }: { spread?: boolean } = {},
 ): [string, string] {
-  // Narrow frames fall back to the minimum gap and let the row run long.
+  // Narrow frames fall back to a minimum gap and let the row run long.
   const GAP_MIN = 3;
   const totalLen = labels.reduce((sum, [, label]) => sum + label.length, 0);
   const slots = Math.max(1, labels.length - 1);
-  const spare = spread ? Math.max(GAP_MIN * slots, width - totalLen) : GAP_MIN * slots;
+  const spare = Math.max(GAP_MIN * slots, width - totalLen);
   const baseGap = Math.floor(spare / slots);
   const bonus = spare % slots; // first `bonus` gaps get one extra column
   let row = "";
@@ -97,8 +94,7 @@ export function tabStrip<Id extends string>(
     }
     col += label.length;
   });
-  const ruleEnd = spread ? width : col;
-  const tail = Math.max(0, ruleEnd - activeStart - activeLen);
+  const tail = Math.max(0, width - activeStart - activeLen);
   const rule =
     pc.dim("\u2500".repeat(activeStart)) +
     brand("\u2501".repeat(activeLen)) +
