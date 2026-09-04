@@ -72,15 +72,16 @@ describe("runKnowledgeSync", () => {
   it("gates out sessions outside the project filter", async () => {
     const inScope = { ...session(60), project: "dosu-cli" };
     const outScope = { ...session(30), project: "other" };
-    const unknown = session(40); // no project info → "(unknown)"
+    const unknown = session(40); // directory unresolvable → "(unknown)"
     const { deps } = makeDeps({
       loadState: () => ({
         schema_version: 1,
         watermark: null,
         consecutive_failures: 0,
-        project_filter: ["dosu-cli"],
+        project_filter: ["/repo/dosu-cli"],
       }),
       listSessions: vi.fn().mockResolvedValue([inScope, outScope, unknown]),
+      resolveProjectDir: (s) => (s.project ? `/repo/${s.project}` : null),
     });
 
     const outcome = await runKnowledgeSync({ deps });

@@ -8,10 +8,10 @@ import {
   DEFAULT_QUIET_PERIOD_MS,
   filterSessionsByProject,
   gateSessions,
+  isUnderDir,
   loadSyncState,
   type SyncState,
   saveSyncState,
-  sessionProject,
   syncStatePath,
   UNKNOWN_PROJECT,
 } from "./watermark";
@@ -168,19 +168,34 @@ describe("project filter", () => {
 
   it("filterSessionsByProject passes everything without a filter", () => {
     const sessions = [session({ project: "a" }), session()];
-    expect(filterSessionsByProject(sessions, undefined)).toEqual(sessions);
-    expect(filterSessionsByProject(sessions, [])).toEqual(sessions);
+    const resolve = () => "/anywhere";
+    expect(filterSessionsByProject(sessions, undefined, resolve)).toEqual(sessions);
+    expect(filterSessionsByProject(sessions, [], resolve)).toEqual(sessions);
   });
 
-  it("filterSessionsByProject keeps matches, bucketing unknowns", () => {
-    const inScope = session({ project: "dosu-cli" });
-    const outScope = session({ project: "other" });
+  it("filterSessionsByProject matches by directory, subfolders included", () => {
+    const inScope = session({ project: "/repo/dosu-cli" });
+    const worktree = session({ project: "/repo/dosu-cli/worktrees/fix" });
+    const sibling = session({ project: "/repo/dosu-cli-docs" });
     const unknown = session();
-    expect(sessionProject(unknown)).toBe(UNKNOWN_PROJECT);
-    expect(filterSessionsByProject([inScope, outScope, unknown], ["dosu-cli"])).toEqual([inScope]);
+    const resolve = (s: AgentSession) => s.project ?? null;
+
+    const picked = filterSessionsByProject(
+      [inScope, worktree, sibling, unknown],
+      ["/repo/dosu-cli"],
+      resolve,
+    );
+    // The sibling shares the string prefix but not the path boundary.
+    expect(picked).toEqual([inScope, worktree]);
     expect(
-      filterSessionsByProject([inScope, outScope, unknown], ["dosu-cli", UNKNOWN_PROJECT]),
+      filterSessionsByProject([inScope, unknown], ["/repo/dosu-cli", UNKNOWN_PROJECT], resolve),
     ).toEqual([inScope, unknown]);
+  });
+
+  it("isUnderDir respects path boundaries and trailing slashes", () => {
+    expect(isUnderDir("/a/b", "/a/b")).toBe(true);
+    expect(isUnderDir("/a/b/c", "/a/b/")).toBe(true);
+    expect(isUnderDir("/a/bc", "/a/b")).toBe(false);
   });
 });
 

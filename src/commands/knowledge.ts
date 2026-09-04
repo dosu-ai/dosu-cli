@@ -4,6 +4,7 @@
  */
 
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { Command, Option } from "commander";
 import pc from "picocolors";
@@ -248,7 +249,11 @@ function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
   const wm = status.state.watermark;
   console.log(`  Mined through:   ${wm ? `${wm} (${formatAge(wm, now)})` : "nothing mined yet"}`);
   if (status.state.project_filter?.length) {
-    console.log(`  Mining scope:    ${status.state.project_filter.join(", ")}`);
+    const home = homedir();
+    const scope = status.state.project_filter
+      .map((dir) => (dir.startsWith(`${home}/`) ? `~${dir.slice(home.length)}` : dir))
+      .join(", ");
+    console.log(`  Mining scope:    ${scope}`);
   }
   if ((status.state.total_notes ?? 0) > 0) {
     const tokens = status.state.total_learning_tokens ?? 0;

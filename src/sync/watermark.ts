@@ -70,8 +70,9 @@ export interface SyncState {
   /** Why the last mining attempt was refused by the gateway, if it was. */
   last_refusal?: SyncRefusal;
   /**
-   * Projects whose sessions get mined. Absent = every project, including ones
-   * that appear later. Sessions without project info match UNKNOWN_PROJECT.
+   * Absolute directories whose sessions get mined (subdirectories included).
+   * Absent = everywhere, including directories that appear later. Sessions
+   * whose directory can't be determined match UNKNOWN_PROJECT.
    */
   project_filter?: string[];
 }
@@ -170,22 +171,33 @@ export function backoffUntil(state: SyncState): Date | null {
   return new Date(last + delay);
 }
 
-/** Bucket for sessions whose scanner had no project info (e.g. Codex). */
+/** Bucket for sessions whose working directory can't be determined. */
 export const UNKNOWN_PROJECT = "(unknown)";
 
-/** The project bucket a session files under, for filtering and display. */
-export function sessionProject(session: AgentSession): string {
-  return session.project ?? UNKNOWN_PROJECT;
+/** Whether dir is at or under base (path-boundary-aware prefix match). */
+export function isUnderDir(dir: string, base: string): boolean {
+  const root = base.endsWith("/") ? base.slice(0, -1) : base;
+  return dir === root || dir.startsWith(`${root}/`);
 }
 
-/** Apply the mining project filter; no/empty filter passes everything. */
+/**
+ * Apply the mining directory filter; no/empty filter passes everything.
+ * A session matches when its resolved directory sits at or under any picked
+ * directory; unresolvable sessions match only the UNKNOWN_PROJECT entry.
+ */
 export function filterSessionsByProject(
   sessions: readonly AgentSession[],
   filter: readonly string[] | undefined,
+  resolveDir: (session: AgentSession) => string | null,
 ): AgentSession[] {
   if (!filter || filter.length === 0) return [...sessions];
-  const allowed = new Set(filter);
-  return sessions.filter((session) => allowed.has(sessionProject(session)));
+  const includeUnknown = filter.includes(UNKNOWN_PROJECT);
+  const dirs = filter.filter((entry) => entry !== UNKNOWN_PROJECT);
+  return sessions.filter((session) => {
+    const dir = resolveDir(session);
+    if (!dir) return includeUnknown;
+    return dirs.some((base) => isUnderDir(dir, base));
+  });
 }
 
 export interface GateResult {

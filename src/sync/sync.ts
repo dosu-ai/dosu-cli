@@ -15,6 +15,7 @@
 
 import { logger } from "../debug/logger";
 import type { MinerRunResult } from "../miner/runner";
+import { createProjectDirResolver } from "../sessions/project-dir";
 import { estimateSessionTokens, isWorthMining } from "../sessions/read";
 import { type AgentSession, scanAgentSessions } from "../sessions/scan";
 import { fileLock, type SyncLock } from "./lock";
@@ -81,6 +82,8 @@ export interface SyncDeps {
   mine?: (sessions: AgentSession[]) => Promise<MinerRunResult>;
   /** Local worthiness pre-filter; defaults to isWorthMining. */
   worthMining?: (session: AgentSession) => boolean;
+  /** Session → working directory, for the project filter; defaults to the cached resolver. */
+  resolveProjectDir?: (session: AgentSession) => string | null;
   /** Per-session learning-token estimate; defaults to estimateSessionTokens. */
   sessionTokens?: (session: AgentSession) => number;
   lock?: SyncLock;
@@ -165,11 +168,21 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
               since: new Date(now().getTime() - GATE_WINDOW_DAYS * 24 * 60 * 60 * 1000),
               limit: GATE_WINDOW,
             }));
-    const sessions = filterSessionsByProject(await listSessions(), state.project_filter);
-    ({ ready, open } = gateSessions(sessions, state.watermark, now()));
+    let sessions = await listSessions();
     if (state.project_filter?.length) {
+      // Resolver only when filtering: it reads session heads on cache misses.
+      let resolve = deps.resolveProjectDir;
+      let flush: (() => void) | undefined;
+      if (!resolve) {
+        const resolver = createProjectDirResolver();
+        resolve = resolver.resolve;
+        flush = resolver.flush;
+      }
+      sessions = filterSessionsByProject(sessions, state.project_filter, resolve);
+      flush?.();
       logger.debug("sync", `project filter active: ${state.project_filter.join(", ")}`);
     }
+    ({ ready, open } = gateSessions(sessions, state.watermark, now()));
     logGateResult(ready, open.length, state.watermark);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

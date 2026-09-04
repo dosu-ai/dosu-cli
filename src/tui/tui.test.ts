@@ -87,6 +87,15 @@ vi.mock("../sessions/scan", () => ({
   scanAgentSessions: vi.fn(() => []),
 }));
 
+// Directory resolution reads session files and probes the filesystem; tests
+// map a session's project field straight to a fake absolute path.
+vi.mock("../sessions/project-dir", () => ({
+  createProjectDirResolver: vi.fn(() => ({
+    resolve: (s: { project?: string }) => (s.project ? `/repo/${s.project}` : null),
+    flush: vi.fn(),
+  })),
+}));
+
 // Hook detection reads the real agents' hook config files.
 vi.mock("../hooks/agents", () => ({
   getHookAgent: vi.fn(),
@@ -105,6 +114,7 @@ import type { HookAgent } from "../hooks/agents";
 import { getHookAgent } from "../hooks/agents";
 import type { SetupProvider } from "../mcp/providers";
 import { allSetupProviders } from "../mcp/providers";
+import { createProjectDirResolver } from "../sessions/project-dir";
 import type { AgentSession } from "../sessions/scan";
 import { scanAgentSessions } from "../sessions/scan";
 import { dosuAgentsSectionState, inGitWorkTree } from "../setup/agents-md-step";
@@ -182,6 +192,13 @@ beforeEach(() => {
   mockAllSetupProviders.mockImplementation(() => [fakeProvider(true, true)]);
   mockGetHookAgent.mockImplementation(() => fakeHookAgent(true));
   mockScanSessions.mockImplementation(() => []);
+  vi.mocked(createProjectDirResolver).mockImplementation(
+    () =>
+      ({
+        resolve: (s: AgentSession) => (s.project ? `/repo/${s.project}` : null),
+        flush: vi.fn(),
+      }) as ReturnType<typeof createProjectDirResolver>,
+  );
   // Restore spinner factory cleared by resetAllMocks
   vi.mocked(p.spinner).mockReturnValue({
     start: vi.fn(),
@@ -751,23 +768,23 @@ describe("runTUI", () => {
     // Library name on the Library row, mining scope on the projects row.
     expect(settingsOptions[0]?.hint).toBe("Acme");
     expect(settingsOptions[1]?.hint).toBe("Docs Library");
-    expect(settingsOptions[2]?.hint).toBe("all projects");
+    expect(settingsOptions[2]?.hint).toBe("all folders");
     expect(mockRunSwitchTarget).not.toHaveBeenCalled();
   });
 
-  it("mining projects setting saves a subset filter", async () => {
+  it("mining projects setting saves a subset of folders", async () => {
     writeRealConfig(
       makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
     );
     mockIsCancel.mockReturnValue(false);
-    // Two dosu-cli sessions, one other, one with no project info.
+    // Two dosu-cli sessions, one other, one whose directory can't be resolved.
     mockScanSessions.mockImplementation(() => [
       fakeSession("a", "dosu-cli"),
       fakeSession("b", "dosu-cli"),
       fakeSession("c", "other"),
       fakeSession("d"),
     ]);
-    mockMultiselect.mockResolvedValueOnce(["dosu-cli"]);
+    mockMultiselect.mockResolvedValueOnce(["/repo/dosu-cli"]);
     mockMenuSelect
       .mockResolvedValueOnce("settings")
       .mockResolvedValueOnce("projects")
@@ -776,14 +793,15 @@ describe("runTUI", () => {
 
     await runTUI();
 
-    // Options ordered by session count; unknown sessions get their own bucket.
+    // Options are directories ordered by session count; unresolvable sessions
+    // get their own bucket.
     const [args] = mockMultiselect.mock.calls.at(-1) ?? [];
     const opts = (args as unknown as { options: Array<{ value: string }> }).options;
-    expect(opts.map((o) => o.value)).toEqual(["dosu-cli", "other", "(unknown)"]);
+    expect(opts.map((o) => o.value)).toEqual(["/repo/dosu-cli", "/repo/other", "(unknown)"]);
     // The subset is persisted; the reopened settings row hints the new scope.
-    expect(loadSyncState().project_filter).toEqual(["dosu-cli"]);
+    expect(loadSyncState().project_filter).toEqual(["/repo/dosu-cli"]);
     const refreshed = mockMenuSelect.mock.calls[2]?.[1] ?? [];
-    expect(refreshed.find((o) => o.value === "projects")?.hint).toBe("1 project");
+    expect(refreshed.find((o) => o.value === "projects")?.hint).toBe("1 folder");
   });
 
   it("mining projects setting clears the filter when everything is picked", async () => {
@@ -794,14 +812,14 @@ describe("runTUI", () => {
       schema_version: 1,
       watermark: null,
       consecutive_failures: 0,
-      project_filter: ["dosu-cli"],
+      project_filter: ["/repo/dosu-cli"],
     });
     mockIsCancel.mockReturnValue(false);
     mockScanSessions.mockImplementation(() => [
       fakeSession("a", "dosu-cli"),
       fakeSession("b", "other"),
     ]);
-    mockMultiselect.mockResolvedValueOnce(["dosu-cli", "other"]);
+    mockMultiselect.mockResolvedValueOnce(["/repo/dosu-cli", "/repo/other"]);
     mockMenuSelect
       .mockResolvedValueOnce("settings")
       .mockResolvedValueOnce("projects")
@@ -812,7 +830,7 @@ describe("runTUI", () => {
 
     // The saved filter preselects the picker; picking all clears it.
     const [args] = mockMultiselect.mock.calls.at(-1) ?? [];
-    expect((args as { initialValues?: string[] }).initialValues).toEqual(["dosu-cli"]);
+    expect((args as { initialValues?: string[] }).initialValues).toEqual(["/repo/dosu-cli"]);
     expect(loadSyncState().project_filter).toBeUndefined();
   });
 

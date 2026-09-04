@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import pc from "picocolors";
 import { createLogFollower } from "../debug/follow";
 import { logger, stripAnsiCodes } from "../debug/logger";
+import { createProjectDirResolver } from "../sessions/project-dir";
 import { type AgentSession, scanAgentSessions } from "../sessions/scan";
 import { brand } from "../setup/styles";
 import { spawnDetachedSelf } from "../sync/detach";
@@ -155,7 +156,12 @@ export interface SessionBacklog {
 function defaultListBacklog(): SessionBacklog {
   try {
     const state = loadSyncState();
-    const sessions = filterSessionsByProject(scanAgentSessions({}), state.project_filter);
+    let sessions = scanAgentSessions({});
+    if (state.project_filter?.length) {
+      const resolver = createProjectDirResolver();
+      sessions = filterSessionsByProject(sessions, state.project_filter, resolver.resolve);
+      resolver.flush();
+    }
     const gate = gateSessions(sessions, state.watermark);
     return { queued: gate.ready.reverse(), open: gate.open.reverse() };
   } catch {

@@ -4,6 +4,7 @@
  * The TUI launches when `dosu` is run without arguments.
  */
 
+import { homedir } from "node:os";
 import { basename } from "node:path";
 import pc from "picocolors";
 import {
@@ -17,12 +18,13 @@ import {
 import { getWebAppURL } from "../config/constants";
 import { getHookAgent } from "../hooks/agents";
 import { allSetupProviders } from "../mcp/providers";
+import { createProjectDirResolver } from "../sessions/project-dir";
 import { scanAgentSessions } from "../sessions/scan";
 import { dosuAgentsSectionState, inGitWorkTree } from "../setup/agents-md-step";
 import { runSetup, runSwitchTarget } from "../setup/flow";
 import { brand, browserFallbackHint, dim } from "../setup/styles";
 import { getSyncStatus } from "../sync/status";
-import { loadSyncState, saveSyncState, sessionProject } from "../sync/watermark";
+import { loadSyncState, saveSyncState, UNKNOWN_PROJECT } from "../sync/watermark";
 import { buildUpdateHint, getAvailableUpdate } from "../version/update-check";
 import { getVersionString, INSTALL_CHANNEL, isNpxInvocation } from "../version/version";
 import { runActivityView } from "./activity-view";
@@ -283,8 +285,8 @@ async function runSettings(cfg: Config): Promise<void> {
     const library = target?.library_name ?? target?.deployment_name ?? "not configured";
     const filter = loadSyncState().project_filter;
     const scope = filter?.length
-      ? `${filter.length} project${filter.length === 1 ? "" : "s"}`
-      : "all projects";
+      ? `${filter.length} folder${filter.length === 1 ? "" : "s"}`
+      : "all folders";
     const action = await menuSelect("Settings", [
       { label: "Switch organization", hint: target?.org_name, value: "switch-org" },
       { label: "Switch Library", hint: library, value: "switch-library" },
@@ -320,50 +322,64 @@ async function runSettings(cfg: Config): Promise<void> {
   }
 }
 
-/** Distinct session projects on this machine, most sessions first. */
-function discoverProjects(): string[] {
-  const counts = new Map<string, number>();
-  try {
-    for (const session of scanAgentSessions({})) {
-      const key = sessionProject(session);
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-  } catch {
-    // An unreadable session store just yields an empty picker.
-  }
-  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([project]) => project);
+/** Home-relative display form of an absolute directory. */
+function displayDir(dir: string): string {
+  const home = homedir();
+  return dir === home ? "~" : dir.startsWith(`${home}/`) ? `~${dir.slice(home.length)}` : dir;
 }
 
 /**
- * Scope mining to selected projects. Picking everything clears the filter so
- * projects that appear later are mined too; a subset is persisted verbatim.
+ * Distinct working directories across local sessions, most sessions first.
+ * Sessions whose directory can't be determined bucket under UNKNOWN_PROJECT.
+ */
+function discoverProjectDirs(): string[] {
+  const counts = new Map<string, number>();
+  try {
+    const resolver = createProjectDirResolver();
+    for (const session of scanAgentSessions({})) {
+      const key = resolver.resolve(session) ?? UNKNOWN_PROJECT;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    resolver.flush();
+  } catch {
+    // An unreadable session store just yields an empty picker.
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([dir]) => dir);
+}
+
+/**
+ * Scope mining to selected folders (subdirectories included). Picking
+ * everything clears the filter so new folders are mined too; a subset is
+ * persisted as absolute paths.
  */
 async function runMiningProjectsSetting(): Promise<void> {
-  const projects = discoverProjects();
-  if (projects.length === 0) {
+  const dirs = discoverProjectDirs();
+  if (dirs.length === 0) {
     p.log.info("No local agent sessions found yet; nothing to scope.");
     return;
   }
   const current = loadSyncState().project_filter;
   const selected = await p.multiselect({
-    message: "Mine sessions from which projects?",
-    options: projects.map((project) => ({ label: project, value: project })),
-    initialValues: current?.length ? current : projects,
+    message: "Mine sessions from which folders?",
+    options: dirs.map((dir) => ({
+      label: dir === UNKNOWN_PROJECT ? "(unknown folder)" : displayDir(dir),
+      value: dir,
+    })),
+    initialValues: current?.length ? current : dirs,
     summary: (picked) =>
-      picked.length === projects.length
-        ? "all projects \u00B7 new ones included automatically"
-        : `${picked.length} of ${projects.length} projects`,
-    validate: (picked) => (picked.length === 0 ? "Select at least one project." : undefined),
+      picked.length === dirs.length
+        ? "all folders \u00B7 new ones included automatically"
+        : `${picked.length} of ${dirs.length} folders \u00B7 subfolders included`,
+    validate: (picked) => (picked.length === 0 ? "Select at least one folder." : undefined),
   });
   if (p.isCancel(selected)) return;
 
   // Reload right before writing: a background sync may have advanced the state.
   const { project_filter: _previous, ...state } = loadSyncState();
-  const all = selected.length === projects.length;
+  const all = selected.length === dirs.length;
   saveSyncState(all ? state : { ...state, project_filter: [...selected] });
-  p.log.success(
-    `Mining scope ${dim(`\u00B7 ${all ? "all projects" : (selected as string[]).join(", ")}`)}`,
-  );
+  const scope = all ? "all folders" : (selected as string[]).map(displayDir).join(", ");
+  p.log.success(`Mining scope ${dim(`\u00B7 ${scope}`)}`);
 }
 
 async function handleAuthenticate(cfg: ReturnType<typeof loadConfig>): Promise<void> {
