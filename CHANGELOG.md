@@ -1,3 +1,10 @@
+## [0.52.1](https://github.com/dosu-ai/dosu-cli/compare/v0.52.0...v0.52.1) (2026-09-02)
+
+
+### Bug Fixes
+
+* remove retired library auto-publish setting ([#204](https://github.com/dosu-ai/dosu-cli/issues/204)) ([9f46752](https://github.com/dosu-ai/dosu-cli/commit/9f467528475411d455128a30670766edc46fff05))
+
 # [0.52.0](https://github.com/dosu-ai/dosu-cli/compare/v0.51.1...v0.52.0) (2026-09-01)
 
 

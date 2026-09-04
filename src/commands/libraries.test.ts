@@ -160,6 +160,14 @@ describe("libraries config", () => {
     expect(mockQuery).not.toHaveBeenCalled();
     expect(mockMutate).not.toHaveBeenCalled();
   });
+
+  it("rejects the removed default save-publish setting before any request", async () => {
+    await expect(
+      run("config", "set", LIBRARY, "default_save_publish", "--value", "true", "--confirm"),
+    ).rejects.toThrow();
+    expect(mockQuery).not.toHaveBeenCalled();
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
 });
 
 describe("libraries sources", () => {

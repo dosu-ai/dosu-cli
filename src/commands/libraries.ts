@@ -14,13 +14,13 @@ import { confirmAction } from "./confirmation";
 import { formatDate, printInfo, printResult, printTable } from "./output";
 
 const LIBRARY_VISIBILITIES = ["public", "internal", "private"] as const;
-const CONFIG_SETTINGS: Record<LibrariesConfigSetInput["setting"], true> = {
+type ConfigSetting = Exclude<LibrariesConfigSetInput["setting"], "default_save_publish">;
+const CONFIG_SETTINGS: Record<ConfigSetting, true> = {
   commit_to_trigger_pr: true,
   default_accept_review: true,
-  default_save_publish: true,
   review_timeout_days: true,
 };
-const CONFIG_SETTING_NAMES = Object.keys(CONFIG_SETTINGS) as LibrariesConfigSetInput["setting"][];
+const CONFIG_SETTING_NAMES = Object.keys(CONFIG_SETTINGS) as ConfigSetting[];
 
 function validatedDocumentationValue(
   setting: LibrariesConfigSetInput["setting"],
@@ -214,7 +214,7 @@ export function librariesCommand(): Command {
     .action(
       async (
         libraryId: string,
-        setting: LibrariesConfigSetInput["setting"],
+        setting: ConfigSetting,
         opts: { value: CliJson; confirm?: boolean; json?: boolean },
       ) => {
         const value = validatedDocumentationValue(setting, opts.value);
