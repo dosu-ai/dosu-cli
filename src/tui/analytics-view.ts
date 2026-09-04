@@ -220,6 +220,7 @@ export function renderAnalyticsFrame(
   const lines = [
     breadcrumb(["Home", "Analytics"], width),
     "",
+    // Cells, not spread: equal-width side-by-side tabs read as one table.
     ...tabStrip(
       [
         ["overview", "Overview"],
@@ -228,6 +229,7 @@ export function renderAnalyticsFrame(
       ],
       tab,
       width,
+      { spread: false },
     ),
     ...listRows,
     ...(scrollParts.length > 0 ? [pc.dim(scrollParts.join(" \u00B7 "))] : []),

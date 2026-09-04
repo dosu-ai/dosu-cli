@@ -325,16 +325,21 @@ describe("renderAnalyticsFrame", () => {
     expect(frame).toContain("tab switch \u00B7 \u2191\u2193 scroll \u00B7 esc back");
   });
 
-  it("underlines the active tab with the heavy rule segment", () => {
+  it("lays the tabs out as equal-width cells and underlines the active cell", () => {
     const lines = stripAnsi(
       renderAnalyticsFrame(reportState(), "projects", 0, null, false, 60),
     ).split("\n");
     const row = lines[2];
     const rule = lines[3];
-    const start = row.indexOf("Projects");
-    expect(rule.indexOf("\u2501")).toBe(start);
-    expect(rule.lastIndexOf("\u2501")).toBe(start + "Projects".length - 1);
-    expect(rule.length).toBe(60);
+    // Three cells sized by the longest label ("Overview"/"Projects" = 8) + padding.
+    const cellW = 8 + 4;
+    expect(rule.length).toBe(3 * cellW);
+    // Each label is centered in its cell.
+    expect(row.indexOf("Overview")).toBe(2);
+    expect(row.indexOf("Projects")).toBe(cellW + 2);
+    // The heavy segment spans the whole active cell, not just its label.
+    expect(rule.slice(cellW, 2 * cellW)).toBe("\u2501".repeat(cellW));
+    expect(rule.slice(0, cellW)).toBe("\u2500".repeat(cellW));
   });
 
   it("shows per-tab empty messages, including the pages loading state", () => {

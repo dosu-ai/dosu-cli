@@ -58,16 +58,34 @@ export function visibleWidth(text: string): number {
   return text.replace(ANSI_PATTERN, "").length;
 }
 
+/** Padding inside each equal-width tab cell (cells mode). */
+const TAB_CELL_PAD = 2;
+
 /**
- * A tab strip shared by the tabbed screens: one row of labels spread across
- * `width` like flex space-between, over a rule whose heavier segment sits
- * under the active label (visible even without color).
+ * A tab strip shared by the tabbed screens: one row of labels over a rule
+ * whose heavier segment sits under the active tab (visible even without
+ * color). Spread mode stretches the labels across `width` like flex
+ * space-between; cells mode sits them side by side in equal-width cells,
+ * each label centered, with the whole active cell underlined.
  */
 export function tabStrip<Id extends string>(
   labels: ReadonlyArray<readonly [Id, string]>,
   active: Id,
   width: number,
+  { spread = true }: { spread?: boolean } = {},
 ): [string, string] {
+  if (!spread) {
+    const cellW = Math.max(...labels.map(([, label]) => label.length)) + 2 * TAB_CELL_PAD;
+    let row = "";
+    let rule = "";
+    for (const [id, label] of labels) {
+      const left = Math.floor((cellW - label.length) / 2);
+      const cell = " ".repeat(left) + label + " ".repeat(cellW - label.length - left);
+      row += id === active ? brand(pc.bold(cell)) : pc.dim(cell);
+      rule += id === active ? brand("\u2501".repeat(cellW)) : pc.dim("\u2500".repeat(cellW));
+    }
+    return [row, rule];
+  }
   // Narrow frames fall back to a minimum gap and let the row run long.
   const GAP_MIN = 3;
   const totalLen = labels.reduce((sum, [, label]) => sum + label.length, 0);
