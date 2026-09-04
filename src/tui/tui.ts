@@ -29,7 +29,6 @@ import { buildUpdateHint, getAvailableUpdate } from "../version/update-check";
 import { getVersionString, INSTALL_CHANNEL, isNpxInvocation } from "../version/version";
 import { runActivityView } from "./activity-view";
 import { enterAltScreen } from "./alt-screen";
-import { runAnalyticsView } from "./analytics-view";
 import { type BannerContext, renderBanner } from "./banner";
 import { frameTopMargin, installCenteredLayout } from "./layout";
 import { type MenuOption, menuSelect } from "./menu";
@@ -246,7 +245,8 @@ async function runMainMenu(): Promise<void> {
         home();
         break;
       case "analytics":
-        await runAnalyticsView();
+        // The same Activity view, deep-linked to its Analytics tab.
+        await runActivityView({ initialTab: "analytics" });
         home();
         break;
       case "pages":

@@ -1,43 +1,16 @@
 /**
- * Standalone Analytics screen: all-time mining numbers from local sync state
- * plus backend page analytics (top cited, recently updated) for the active
- * Library. Pure render/reduce functions wired to injectable IO.
+ * The Analytics report shown as a tab of the Activity view: all-time mining
+ * numbers from local sync state plus backend page analytics (top cited,
+ * recently updated) for the active Library.
  */
 
-import pc from "picocolors";
 import { createTypedClient, type TypedClient } from "../client/trpc";
 import { loadConfig } from "../config/config";
-import { formatTokenCount, getSyncStatus, type SyncStatus } from "../sync/status";
+import { formatTokenCount } from "../sync/status";
 import type { SyncState } from "../sync/watermark";
-import { enterAltScreen } from "./alt-screen";
-import { breadcrumb, frameTopMargin } from "./layout";
-import { parseKeys } from "./menu";
 
-const ESC = String.fromCharCode(27);
-const HIDE_CURSOR = `${ESC}[?25l`;
-const SHOW_CURSOR = `${ESC}[?25h`;
-const CTRL_C = String.fromCharCode(3);
-const KEY_UP = `${ESC}[A`;
-const KEY_DOWN = `${ESC}[B`;
-const CURSOR_HOME = `${ESC}[H`;
-const CLEAR_BELOW = `${ESC}[0J`;
-const CLEAR_EOL = `${ESC}[K`;
-
-/** Relaxed poll: analytics only move when a mining batch completes. */
-const ANALYTICS_VIEW_POLL_MS = 1000;
-
-/** How many report lines fit on screen at once (the scroll window). */
-export const ANALYTICS_VIEW_LINES = 12;
-
-export type AnalyticsViewAction = "back" | "up" | "down" | "none";
-
-/** q / esc / ctrl-c go back, ↑/↓ (or k/j) scroll the report. */
-export function reduceAnalyticsViewKey(key: string): AnalyticsViewAction {
-  if (key === "q" || key === ESC || key === CTRL_C) return "back";
-  if (key === KEY_UP || key === "k") return "up";
-  if (key === KEY_DOWN || key === "j") return "down";
-  return "none";
-}
+/** Default scroll-window height for windowReport. */
+const ANALYTICS_VIEW_LINES = 12;
 
 function clip(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}\u2026`;
@@ -91,7 +64,7 @@ export async function fetchPageStats(
 }
 
 /** The default loader: stored login + target, failing open to "no section". */
-function loadPageStatsFromConfig(): Promise<PageStats | null> {
+export function loadPageStatsFromConfig(): Promise<PageStats | null> {
   try {
     const cfg = loadConfig();
     const spaceId = cfg.active_account?.target?.space_id;
@@ -157,140 +130,4 @@ export function windowReport(
     above: clamped,
     below: Math.max(0, lines.length - clamped - height),
   };
-}
-
-/** Render the full analytics block, anchored to the content column's left edge. */
-export function renderAnalyticsFrame(
-  state: SyncState,
-  scroll: number,
-  pageStats: PageStats | null = null,
-): string {
-  const rows = analyticsRows(state, pageStats);
-  const { visible, above, below } = windowReport(rows, scroll);
-  const listRows =
-    visible.length > 0
-      ? visible.map((row) => pc.dim(row))
-      : [pc.dim("No analytics yet. They appear after the first mining run.")];
-
-  const scrollParts: string[] = [];
-  if (above > 0) scrollParts.push(`\u2191 ${above} earlier`);
-  if (below > 0) scrollParts.push(`\u2193 ${below} more`);
-
-  const lines = [
-    breadcrumb(["Home", "Analytics"]),
-    "",
-    ...listRows,
-    ...(scrollParts.length > 0 ? [pc.dim(scrollParts.join(" \u00B7 "))] : []),
-    "",
-    pc.dim("\u2191\u2193 scroll \u00B7 esc back"),
-  ];
-  return lines.join("\n");
-}
-
-export interface AnalyticsViewIO {
-  input?: NodeJS.ReadStream;
-  output?: NodeJS.WriteStream;
-  /** Lock/watermark state without the log read; called every poll. */
-  getStatus?: () => SyncStatus;
-  /** Injectable page analytics fetch for tests; defaults to the backend. */
-  loadPageStats?: () => Promise<PageStats | null>;
-  pollMs?: number;
-}
-
-/**
- * Show the analytics screen until the user goes back. Resolves immediately
- * when stdin isn't interactive.
- */
-export function runAnalyticsView(io: AnalyticsViewIO = {}): Promise<void> {
-  const input = io.input ?? process.stdin;
-  const output = io.output ?? process.stdout;
-  if (!input.isTTY) return Promise.resolve();
-
-  const getStatus = io.getStatus ?? (() => getSyncStatus({ readLog: () => "" }));
-  const loadPageStats = io.loadPageStats ?? loadPageStatsFromConfig;
-  const pollMs = io.pollMs ?? ANALYTICS_VIEW_POLL_MS;
-
-  let scroll = 0;
-  let status = getStatus();
-  let pageStats: PageStats | null = null;
-  let closed = false;
-
-  // Same painting discipline as the Activity view; identical frames skip the write.
-  let lastFrame: string | null = null;
-  const draw = () => {
-    status = getStatus();
-    const frame = renderAnalyticsFrame(status.state, scroll, pageStats);
-    if (frame === lastFrame) return;
-    lastFrame = frame;
-    // Fixed top margin; +1 matches the home banner's leading blank line.
-    const blank = `${CLEAR_EOL}\n`.repeat(frameTopMargin(output.rows ?? 24) + 1);
-    const painted = frame.replaceAll("\n", `${CLEAR_EOL}\n`) + CLEAR_EOL;
-    output.write(`${CURSOR_HOME}${blank}${painted}\n${CLEAR_BELOW}`);
-  };
-
-  // A resize moves the layout margin even when the frame string is unchanged.
-  const onResize = () => {
-    lastFrame = null;
-    draw();
-  };
-  output.on?.("resize", onResize);
-
-  const leaveAltScreen = enterAltScreen(output);
-  output.write(HIDE_CURSOR);
-  draw();
-
-  // Backend page analytics land after the local numbers paint; fails open to null.
-  loadPageStats().then((stats) => {
-    if (closed || !stats) return;
-    pageStats = stats;
-    draw();
-  });
-
-  return new Promise((resolve) => {
-    const wasRaw = input.isRaw ?? false;
-    input.setRawMode?.(true);
-    input.resume();
-
-    const timer = setInterval(draw, pollMs);
-    // Never keep the process alive just to refresh the screen.
-    timer.unref?.();
-
-    const finish = () => {
-      closed = true;
-      clearInterval(timer);
-      output.off?.("resize", onResize);
-      input.off("data", onData);
-      input.setRawMode?.(wasRaw);
-      input.pause();
-      leaveAltScreen();
-      output.write(SHOW_CURSOR);
-      resolve();
-    };
-
-    const onData = (chunk: Buffer | string) => {
-      for (const key of parseKeys(chunk.toString())) {
-        const action = reduceAnalyticsViewKey(key);
-        if (action === "back") {
-          finish();
-          return;
-        }
-        if (action === "up") {
-          if (scroll > 0) {
-            scroll -= 1;
-            draw();
-          }
-        } else if (action === "down") {
-          const maxScroll = Math.max(
-            0,
-            analyticsRows(status.state, pageStats).length - ANALYTICS_VIEW_LINES,
-          );
-          if (scroll < maxScroll) {
-            scroll += 1;
-            draw();
-          }
-        }
-      }
-    };
-    input.on("data", onData);
-  });
 }
