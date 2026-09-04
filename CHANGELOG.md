@@ -1,3 +1,20 @@
+# [0.53.0-beta.3](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.2...v0.53.0-beta.3) (2026-09-04)
+
+
+### Bug Fixes
+
+* **tui:** persist the mining run's progress baseline so the bar survives reopening ([5f47c36](https://github.com/dosu-ai/dosu-cli/commit/5f47c3601bcafaf7121c5f95e8f9026b90d2d125))
+
+
+### Features
+
+* **tui:** analytics tabs as equal-width side-by-side cells ([566f6e6](https://github.com/dosu-ai/dosu-cli/commit/566f6e6220de152f66891f9bf1491d17c4842287))
+
+
+### Reverts
+
+* Revert "fix(tui): compact side-by-side analytics tabs instead of full-width spread" ([cad0f61](https://github.com/dosu-ai/dosu-cli/commit/cad0f6165f505beb808d17fdf8c07bc62b56f0b6))
+
 # [0.53.0-beta.2](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.1...v0.53.0-beta.2) (2026-09-04)
 
 
