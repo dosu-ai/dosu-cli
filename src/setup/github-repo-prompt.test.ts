@@ -71,6 +71,7 @@ describe("GitHubRepoPrompt", () => {
     const prompt = makePrompt(options, { initialValues: ["acme/core"] });
     expect(prompt.cursor).toBe(2);
     expect(prompt.value).toEqual(["acme/core"]);
+    expect(prompt.selectedValues).toEqual(["acme/core"]);
   });
 
   it("ignores initialValues that don't correspond to a repo option", () => {

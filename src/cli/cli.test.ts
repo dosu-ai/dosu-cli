@@ -52,6 +52,7 @@ describe("CLI", () => {
 
   it("skips background notices for upgrade", () => {
     expect(shouldRunBackgroundChecks("upgrade")).toBe(false);
+    expect(shouldRunBackgroundChecks("serve")).toBe(false);
     expect(shouldRunBackgroundChecks("status")).toBe(true);
   });
 
