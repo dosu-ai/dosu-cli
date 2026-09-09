@@ -6,13 +6,12 @@ import type { AgentSession } from "../sessions/scan";
 import {
   appendWrittenNotes,
   attributeRediscovery,
-  extractUserQueries,
   parseWriteKnowledgeInput,
   sessionIdFromReadInput,
   sessionsToInventory,
-  sessionTitleFromUserText,
   WRITTEN_NOTES_LIMIT,
 } from "./notes";
+import { extractUserQueries, sessionTitleFromUserText } from "./queries";
 
 let dir: string;
 

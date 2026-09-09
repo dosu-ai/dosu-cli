@@ -16,7 +16,6 @@ import { extractUserQueries, sessionTitleFromUserText } from "./queries";
 import type { CapturedNote, DigestTurn, ReportCandidate, ReportInventory } from "./types";
 
 export { digestsForSessions } from "./digest";
-export { extractUserQueries, sessionTitleFromUserText } from "./queries";
 
 export const WRITTEN_NOTES_LIMIT = 500;
 
