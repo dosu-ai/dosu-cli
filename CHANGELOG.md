@@ -1,3 +1,15 @@
+# [0.53.0-beta.5](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.4...v0.53.0-beta.5) (2026-09-09)
+
+
+### Bug Fixes
+
+* **tui:** drop unused export on syncConfirmMode ([8afb611](https://github.com/dosu-ai/dosu-cli/commit/8afb611b604affdf63a1372a48bcfaeb424847db))
+
+
+### Features
+
+* **tui:** stop/resume mining, knowledge sessions command, analytics column headers ([def38ad](https://github.com/dosu-ai/dosu-cli/commit/def38adfc690fbbec00d28bb77b0610069003210))
+
 # [0.53.0-beta.4](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.3...v0.53.0-beta.4) (2026-09-04)
 
 
