@@ -1,3 +1,10 @@
+# [0.53.0-beta.6](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.5...v0.53.0-beta.6) (2026-09-09)
+
+
+### Bug Fixes
+
+* **tui:** let manual sync from the Activity screen ignore failure backoff ([#210](https://github.com/dosu-ai/dosu-cli/issues/210)) ([c5cd8d7](https://github.com/dosu-ai/dosu-cli/commit/c5cd8d7254c62c83990c5bf840c3e30e688838c6))
+
 # [0.53.0-beta.5](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.4...v0.53.0-beta.5) (2026-09-09)
 
 
