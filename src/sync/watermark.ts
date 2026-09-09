@@ -67,6 +67,9 @@ export interface SyncState {
   /** Absolute directories whose sessions get mined (subdirectories included); absent means
    * everywhere. Undeterminable directories match UNKNOWN_PROJECT. */
   project_filter?: string[];
+  /** User pressed stop: quiet (hook-triggered) syncs skip until resumed. Cleared by the
+   * Activity screen's resume or any manual `dosu knowledge sync`. */
+  paused?: boolean;
 }
 
 export function syncStatePath(configDir: string = getConfigDir()): string {
@@ -137,6 +140,7 @@ export function loadSyncState(configDir: string = getConfigDir()): SyncState {
           : 0,
       ...(lastRefusal ? { last_refusal: lastRefusal } : {}),
       ...(run ? { run } : {}),
+      ...(raw.paused === true ? { paused: true } : {}),
       ...(Array.isArray(raw.project_filter)
         ? {
             project_filter: (raw.project_filter as unknown[]).filter(
@@ -148,6 +152,14 @@ export function loadSyncState(configDir: string = getConfigDir()): SyncState {
   } catch {
     return empty;
   }
+}
+
+/** Persist the pause switch: load-modify-save so concurrent counters are not clobbered. */
+export function setSyncPaused(paused: boolean, configDir: string = getConfigDir()): void {
+  const state = loadSyncState(configDir);
+  if (paused) state.paused = true;
+  else delete state.paused;
+  saveSyncState(state, configDir);
 }
 
 export function saveSyncState(state: SyncState, configDir: string = getConfigDir()): void {

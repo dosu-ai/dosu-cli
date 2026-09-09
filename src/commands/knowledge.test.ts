@@ -42,6 +42,17 @@ vi.mock("../sync/status", async (importOriginal) => ({
   getSyncStatus: (...args: unknown[]) => mockGetSyncStatus(...args),
 }));
 
+const mockListBacklog = vi.fn();
+vi.mock("../sync/backlog", () => ({
+  listSessionBacklog: (...args: unknown[]) => mockListBacklog(...args),
+}));
+
+const mockLoadSyncState = vi.fn();
+vi.mock("../sync/watermark", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sync/watermark")>()),
+  loadSyncState: (...args: unknown[]) => mockLoadSyncState(...args),
+}));
+
 interface FakeAgent {
   id: string;
   name: string;
@@ -124,6 +135,8 @@ beforeEach(() => {
   mockRunSync.mockReset();
   mockSpawnDetached.mockReset();
   mockGetSyncStatus.mockReset();
+  mockListBacklog.mockReset();
+  mockLoadSyncState.mockReset();
   fakeAgents = [];
   enableCalls.length = 0;
   disableCalls.length = 0;
@@ -260,6 +273,97 @@ describe("requireConfig", () => {
   it("exits when space_id is missing", async () => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ space_id: undefined }));
     await expect(run("search", "q")).rejects.toThrow("exit");
+  });
+});
+
+describe("knowledge sessions", () => {
+  const queuedSession = {
+    id: "3c2c12ad-b111-4444-8888-abcdefabcdef",
+    harness: "cursor",
+    path: "/tmp/a.jsonl",
+    project: "Users-james-Documents-dosu-global-dosu-cli",
+    updated: "2026-09-04T18:22:00.000Z",
+  };
+  const openSession = {
+    id: "086d98d5-3333-4444-8888-abcdefabcdef",
+    harness: "claude",
+    path: "/tmp/b.jsonl",
+    updated: "2026-09-04T19:59:00.000Z",
+  };
+  const syncState = {
+    schema_version: 1,
+    watermark: "2026-09-02T23:00:00.000Z",
+    consecutive_failures: 0,
+    mined_sessions: [
+      {
+        at: "2026-09-02T23:00:00.000Z",
+        session: "cursor/1d4b4ea0-e555-4444-8888-abcdefabcdef",
+        project: "dosu-cli",
+      },
+    ],
+  };
+
+  it("prints every section with full, untruncated projects and ids", async () => {
+    mockListBacklog.mockReturnValue({ queued: [queuedSession], open: [openSession] });
+    mockLoadSyncState.mockReturnValue(syncState);
+
+    await run("sessions");
+
+    const out = allOutput();
+    expect(out).toContain("Queued (1)");
+    expect(out).toContain("Open (1)");
+    expect(out).toContain("Mined (1)");
+    // The whole point of the command: nothing is clipped.
+    expect(out).toContain(queuedSession.id);
+    expect(out).toContain(queuedSession.project);
+    expect(out).toContain(openSession.id);
+    expect(out).toContain("1d4b4ea0-e555-4444-8888-abcdefabcdef");
+    expect(out).not.toContain("\u2026");
+    // Mined history's "harness/id" splits back into columns.
+    expect(out).not.toContain("cursor/1d4b4ea0");
+  });
+
+  it("shows per-section empty messages", async () => {
+    mockListBacklog.mockReturnValue({ queued: [], open: [] });
+    mockLoadSyncState.mockReturnValue({ ...syncState, mined_sessions: [] });
+
+    await run("sessions");
+
+    const out = allOutput();
+    expect(out).toContain("Queue empty.");
+    expect(out).toContain("No open sessions.");
+    expect(out).toContain("No mined sessions recorded yet.");
+  });
+
+  it("--queued lists only the queue and never reads the sync state", async () => {
+    mockListBacklog.mockReturnValue({ queued: [queuedSession], open: [openSession] });
+
+    await run("sessions", "--queued");
+
+    const out = allOutput();
+    expect(out).toContain("Queued (1)");
+    expect(out).not.toContain("Open (");
+    expect(out).not.toContain("Mined (");
+    expect(mockLoadSyncState).not.toHaveBeenCalled();
+  });
+
+  it("--mined alone skips the session scan", async () => {
+    mockLoadSyncState.mockReturnValue(syncState);
+
+    await run("sessions", "--mined");
+
+    expect(mockListBacklog).not.toHaveBeenCalled();
+    expect(allOutput()).toContain("Mined (1)");
+  });
+
+  it("--json emits only the requested sections", async () => {
+    mockListBacklog.mockReturnValue({ queued: [queuedSession], open: [openSession] });
+
+    await run("sessions", "--queued", "--open", "--json");
+
+    const parsed = JSON.parse(allOutput());
+    expect(parsed).toEqual({ queued: [queuedSession], open: [openSession] });
+    expect(parsed.mined).toBeUndefined();
   });
 });
 
@@ -531,6 +635,20 @@ describe("knowledge sync --status", () => {
 
   beforeEach(() => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: "dep1" }));
+  });
+
+  it("surfaces a user-paused pipeline with the resume paths", async () => {
+    mockGetSyncStatus.mockReturnValue({
+      running: false,
+      state: { ...baseState, paused: true },
+      recentActivity: [],
+    });
+
+    await run("sync", "--status");
+
+    const out = allOutput();
+    expect(out).toContain("Mining paused: stopped by you");
+    expect(out).toContain("'dosu knowledge sync'");
   });
 
   it("reports a running sync without scanning or mining", async () => {

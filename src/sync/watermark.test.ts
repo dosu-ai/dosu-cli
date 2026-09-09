@@ -12,6 +12,7 @@ import {
   loadSyncState,
   type SyncState,
   saveSyncState,
+  setSyncPaused,
   syncStatePath,
   UNKNOWN_PROJECT,
 } from "./watermark";
@@ -281,5 +282,43 @@ describe("gateSessions", () => {
     const offsetSession = session({ updated: "2026-08-25T04:00:00.758553246-07:00" });
     const result = gateSessions([offsetSession], null, NOW);
     expect(result.ready).toHaveLength(1);
+  });
+});
+
+describe("setSyncPaused", () => {
+  it("persists the pause flag and round-trips through load", () => {
+    setSyncPaused(true, configDir);
+    expect(loadSyncState(configDir).paused).toBe(true);
+  });
+
+  it("resume removes the key entirely instead of storing false", () => {
+    setSyncPaused(true, configDir);
+    setSyncPaused(false, configDir);
+    expect(loadSyncState(configDir).paused).toBeUndefined();
+    expect(readFileSync(syncStatePath(configDir), "utf-8")).not.toContain("paused");
+  });
+
+  it("pausing preserves the rest of the state", () => {
+    const state: SyncState = {
+      schema_version: 1,
+      watermark: "2026-09-02T23:00:00.000Z",
+      consecutive_failures: 2,
+      total_mined: 7,
+    };
+    saveSyncState(state, configDir);
+    setSyncPaused(true, configDir);
+    const loaded = loadSyncState(configDir);
+    expect(loaded.watermark).toBe(state.watermark);
+    expect(loaded.consecutive_failures).toBe(2);
+    expect(loaded.total_mined).toBe(7);
+    expect(loaded.paused).toBe(true);
+  });
+
+  it("loadSyncState ignores non-boolean paused values", () => {
+    saveSyncState({ schema_version: 1, watermark: null, consecutive_failures: 0 }, configDir);
+    const raw = JSON.parse(readFileSync(syncStatePath(configDir), "utf-8"));
+    raw.paused = "yes";
+    writeFileSync(syncStatePath(configDir), JSON.stringify(raw));
+    expect(loadSyncState(configDir).paused).toBeUndefined();
   });
 });

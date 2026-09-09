@@ -1,8 +1,8 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { fileLock, lockPath, STALE_LOCK_MS } from "./lock";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fileLock, lockPath, STALE_LOCK_MS, stopSyncRun } from "./lock";
 
 let dir: string;
 
@@ -85,5 +85,51 @@ describe("fileLock", () => {
     const stale = new Date(Date.now() - STALE_LOCK_MS - 60 * 1000);
     utimesSync(lockPath(dir), stale, stale);
     expect(fileLock(dir).acquire()).toBe(true);
+  });
+});
+
+describe("stopSyncRun", () => {
+  it("SIGTERMs the process group and clears the holder's lock", () => {
+    writeFileSync(lockPath(dir), "424242");
+    const kill = vi.fn();
+
+    expect(stopSyncRun(424242, dir, kill)).toBe(true);
+    expect(kill).toHaveBeenCalledWith(-424242, "SIGTERM");
+    expect(existsSync(lockPath(dir))).toBe(false);
+  });
+
+  it("falls back to a single-pid kill when the group kill fails", () => {
+    const kill = vi.fn((pid: number) => {
+      if (pid < 0) throw new Error("ESRCH");
+    });
+
+    expect(stopSyncRun(424242, dir, kill)).toBe(true);
+    expect(kill).toHaveBeenNthCalledWith(2, 424242, "SIGTERM");
+  });
+
+  it("still clears the lock when the process is already gone", () => {
+    writeFileSync(lockPath(dir), "424242");
+    const kill = vi.fn(() => {
+      throw new Error("ESRCH");
+    });
+
+    expect(stopSyncRun(424242, dir, kill)).toBe(false);
+    expect(existsSync(lockPath(dir))).toBe(false);
+  });
+
+  it("never touches a lock held by a different pid", () => {
+    writeFileSync(lockPath(dir), "777");
+    const kill = vi.fn();
+
+    expect(stopSyncRun(424242, dir, kill)).toBe(true);
+    expect(readFileSync(lockPath(dir), "utf8")).toBe("777");
+  });
+
+  it("rejects pids that could never name a run", () => {
+    const kill = vi.fn();
+    expect(stopSyncRun(0, dir, kill)).toBe(false);
+    expect(stopSyncRun(-5, dir, kill)).toBe(false);
+    expect(stopSyncRun(1.5, dir, kill)).toBe(false);
+    expect(kill).not.toHaveBeenCalled();
   });
 });

@@ -11,9 +11,11 @@ import { loadConfig } from "../config/config";
 import { allHookAgents, getHookAgent, type HookAgent } from "../hooks/agents";
 import { HookConfigError, hookCommand } from "../hooks/formats";
 import type { AgentSession } from "../sessions/scan";
+import { listSessionBacklog } from "../sync/backlog";
 import { spawnDetachedSelf } from "../sync/detach";
 import { formatTokenCount, getSyncStatus, type SyncStatus } from "../sync/status";
 import { MINE_BATCH_LIMIT, runKnowledgeSync, type SyncDeps, type SyncOutcome } from "../sync/sync";
+import { loadSyncState } from "../sync/watermark";
 import { positiveInteger } from "./arguments";
 import { requireLoginConfig } from "./auth";
 import { printResult, printTable, truncate } from "./output";
@@ -115,6 +117,79 @@ export function knowledgeCommand(): Command {
       console.log(pc.bold("Knowledge Store"));
       console.log(`  ID:       ${store.id}`);
       console.log(`  Space ID: ${store.space_id}`);
+    });
+
+  cmd
+    .command("sessions")
+    .description(
+      "List local agent sessions with full project and session ids (the untruncated view of the Activity screen's tabs)",
+    )
+    .option("--queued", "Only sessions queued for mining")
+    .option("--open", "Only live sessions still inside the quiet period")
+    .option("--mined", "Only recent mined-session history")
+    .option("--json", "Output as JSON")
+    .action((opts: { queued?: boolean; open?: boolean; mined?: boolean; json?: boolean }) => {
+      const all = !opts.queued && !opts.open && !opts.mined;
+      const wantQueued = all || Boolean(opts.queued);
+      const wantOpen = all || Boolean(opts.open);
+      const wantMined = all || Boolean(opts.mined);
+
+      const backlog = wantQueued || wantOpen ? listSessionBacklog() : { queued: [], open: [] };
+      const mined = wantMined ? (loadSyncState().mined_sessions ?? []) : [];
+
+      if (opts.json) {
+        printResult(
+          {
+            ...(wantQueued ? { queued: backlog.queued } : {}),
+            ...(wantOpen ? { open: backlog.open } : {}),
+            ...(wantMined ? { mined } : {}),
+          },
+          opts,
+        );
+        return;
+      }
+
+      const sessionRows = (sessions: AgentSession[]) =>
+        sessions.map((s) => [s.harness, s.updated, s.project ?? "-", s.id]);
+      // Mined history stores "harness/id" in one field; split it back into columns.
+      const minedRows = mined.map((record) => {
+        const slash = record.session.indexOf("/");
+        const harness = slash > 0 ? record.session.slice(0, slash) : "-";
+        const id = slash > 0 ? record.session.slice(slash + 1) : record.session;
+        return [harness, record.at, record.project ?? "-", id];
+      });
+
+      let first = true;
+      const section = (title: string, rows: string[][], stamp: string, emptyMsg: string) => {
+        if (!first) console.log();
+        first = false;
+        console.log(pc.bold(`${title} (${rows.length})`));
+        if (rows.length === 0) {
+          console.log(pc.dim(`  ${emptyMsg}`));
+          return;
+        }
+        printTable(["Agent", stamp, "Project", "Session"], rows);
+      };
+
+      if (wantQueued) {
+        section(
+          "Queued",
+          sessionRows(backlog.queued),
+          "Updated",
+          "Queue empty. Finished agent sessions appear here.",
+        );
+      }
+      if (wantOpen) {
+        section(
+          "Open",
+          sessionRows(backlog.open),
+          "Updated",
+          "No open sessions. Live agent sessions sit here until they go quiet.",
+        );
+      }
+      if (wantMined) {
+        section("Mined", minedRows, "Mined at", "No mined sessions recorded yet.");
+      }
     });
 
   cmd
@@ -233,6 +308,13 @@ function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
     console.log("○ No sync running.");
   }
 
+  if (status.state.paused) {
+    console.log(
+      pc.yellow(
+        "  Mining paused: stopped by you. Resume from the Activity screen or run 'dosu knowledge sync'.",
+      ),
+    );
+  }
   const wm = status.state.watermark;
   console.log(`  Mined through:   ${wm ? `${wm} (${formatAge(wm, now)})` : "nothing mined yet"}`);
   if (status.state.project_filter?.length) {
@@ -331,6 +413,10 @@ function printSyncOutcome(outcome: SyncOutcome): void {
     }
     case "skipped-backoff": {
       console.log(pc.dim("Skipped: a recent sync failed; waiting out the retry backoff."));
+      break;
+    }
+    case "skipped-paused": {
+      console.log(pc.dim("Skipped: mining is paused. Run 'dosu knowledge sync' to resume."));
       break;
     }
   }

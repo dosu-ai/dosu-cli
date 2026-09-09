@@ -30,6 +30,38 @@ export function lockPath(configDir: string = getConfigDir()): string {
   return join(configDir, LOCK_FILENAME);
 }
 
+/** Stop a live sync run: SIGTERM its process group (a detached run leads one, so the miner
+ * subprocess dies with it; a foreground run falls back to a single-pid kill), then clear the
+ * lock the dead process can no longer release. True when a signal was delivered. */
+export function stopSyncRun(
+  pid: number,
+  configDir: string = getConfigDir(),
+  kill: (pid: number, signal: NodeJS.Signals) => void = process.kill.bind(process),
+): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  let killed = false;
+  try {
+    kill(-pid, "SIGTERM");
+    killed = true;
+  } catch {
+    try {
+      kill(pid, "SIGTERM");
+      killed = true;
+    } catch {
+      // Already gone; still worth clearing a leftover lock below.
+    }
+  }
+  try {
+    const path = lockPath(configDir);
+    if (existsSync(path) && readFileSync(path, "utf8") === String(pid)) {
+      rmSync(path, { force: true });
+    }
+  } catch {
+    // Stale-lock breaking covers a failed cleanup.
+  }
+  return killed;
+}
+
 export function fileLock(
   configDir: string = getConfigDir(),
   now: () => Date = () => new Date(),

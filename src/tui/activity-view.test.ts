@@ -644,16 +644,23 @@ describe("renderActivityFrame", () => {
     expect(frame).not.toContain("Analytics");
   });
 
-  it("offers the sync trigger only while idle", () => {
+  it("keys s to the state: sync now while idle, stop while running, resume while paused", () => {
     const idle = stripAnsi(renderActivityFrame(makeStatus(), [], 64));
     expect(idle).toContain("s sync now");
 
     const running = stripAnsi(renderActivityFrame(makeStatus({ running: true, pid: 1 }), [], 64));
     expect(running).not.toContain("s sync now");
+    expect(running).toContain("s stop");
+
+    const paused = makeStatus();
+    paused.state.paused = true;
+    const pausedFrame = stripAnsi(renderActivityFrame(paused, [], 64));
+    expect(pausedFrame).toContain("Paused");
+    expect(pausedFrame).toContain("s resume");
   });
 
   it("replaces the key legend with the confirmation popup while confirm is pending", () => {
-    const pane = { tab: "activity" as const, scroll: 0, confirm: true };
+    const pane = { tab: "activity" as const, scroll: 0, confirm: "start" as const };
     const frame = stripAnsi(
       renderActivityFrame(makeStatus(), [], 64, { ready: 3, inFlight: 0 }, pane, [
         queuedSession("a"),
@@ -677,8 +684,9 @@ describe("renderActivityFrame", () => {
     // Every row of the box paints the same width so the right border lines up.
     const widths = new Set(box.map((line) => line.trimEnd().length));
     expect(widths.size).toBe(1);
-    // No variation-selector emoji inside the box: xterm.js advances one column for the
-    // U+26CF+U+FE0F pair while the padding counts two, skewing the right border.
+    // No emoji inside the box at all: U+26CF is ambiguous-width across terminals
+    // (1 column in xterm.js, 2 in Ghostty/kitty), so it always skews a border somewhere.
+    expect(box.join("")).not.toContain("\u26CF");
     expect(box.join("")).not.toContain("\uFE0F");
   });
 
@@ -1187,9 +1195,11 @@ describe("runActivityView", () => {
     await view;
   });
 
-  it("ignores s while a run already holds the lock", async () => {
-    const { input, output } = fakeIO();
+  it("s while running asks to stop; enter kills the run and pauses mining", async () => {
+    const { input, output, written } = fakeIO();
     const startSync = vi.fn(() => true);
+    const stopSync = vi.fn(() => true);
+    const setPaused = vi.fn();
 
     const view = runActivityView({
       input,
@@ -1198,11 +1208,79 @@ describe("runActivityView", () => {
       readLog: () => "",
       createFollower: () => ({ poll() {} }),
       startSync,
+      stopSync,
+      setPaused,
       pollMs: 100,
     });
 
     input.emit("data", "s");
+    expect(stopSync).not.toHaveBeenCalled();
+    const prompt = stripAnsi(written.join(""));
+    expect(prompt).toContain("Stop mining?");
+    expect(prompt).toContain("enter stop \u00B7 esc cancel");
+
+    input.emit("data", "\r");
+    expect(stopSync).toHaveBeenCalledWith(7);
+    expect(setPaused).toHaveBeenCalledWith(true);
     expect(startSync).not.toHaveBeenCalled();
+    expect(stripAnsi(written.join(""))).toContain(
+      "[sync] mining stopped \u00B7 paused until you resume",
+    );
+
+    input.emit("data", "q");
+    await view;
+  });
+
+  it("reports a stop that could not deliver a signal without pausing", async () => {
+    const { input, output, written } = fakeIO();
+    const setPaused = vi.fn();
+
+    const view = runActivityView({
+      input,
+      output,
+      getStatus: () => makeStatus({ running: true, pid: 7 }),
+      readLog: () => "",
+      createFollower: () => ({ poll() {} }),
+      stopSync: () => false,
+      setPaused,
+      pollMs: 100,
+    });
+
+    input.emit("data", "s");
+    input.emit("data", "\r");
+    expect(setPaused).not.toHaveBeenCalled();
+    expect(stripAnsi(written.join(""))).toContain("could not stop the run");
+
+    input.emit("data", "q");
+    await view;
+  });
+
+  it("s while paused asks to resume; enter clears the pause and starts a run", async () => {
+    const { input, output, written } = fakeIO();
+    const startSync = vi.fn(() => true);
+    const setPaused = vi.fn();
+    const paused = makeStatus();
+    paused.state.paused = true;
+
+    const view = runActivityView({
+      input,
+      output,
+      getStatus: () => paused,
+      readLog: () => "",
+      createFollower: () => ({ poll() {} }),
+      startSync,
+      setPaused,
+      pollMs: 100,
+    });
+
+    input.emit("data", "s");
+    const prompt = stripAnsi(written.join(""));
+    expect(prompt).toContain("Resume mining?");
+    expect(prompt).toContain("enter resume \u00B7 esc cancel");
+
+    input.emit("data", "\r");
+    expect(setPaused).toHaveBeenCalledWith(false);
+    expect(startSync).toHaveBeenCalledTimes(1);
 
     input.emit("data", "q");
     await view;

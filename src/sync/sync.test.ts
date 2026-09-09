@@ -593,3 +593,41 @@ describe("runKnowledgeSync mining", () => {
     expect(saved[0].watermark).toBe(session(30).updated);
   });
 });
+
+describe("runKnowledgeSync pause switch", () => {
+  it("quiet runs skip while paused, before any scan", async () => {
+    const listSessions = vi.fn().mockResolvedValue([session(60)]);
+    const { deps, saved } = makeDeps({
+      listSessions,
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        paused: true,
+      }),
+    });
+
+    const outcome = await runKnowledgeSync({ quiet: true, deps });
+
+    expect(outcome.status).toBe("skipped-paused");
+    expect(listSessions).not.toHaveBeenCalled();
+    expect(saved).toEqual([]);
+  });
+
+  it("a manual run acts as resume: the next state save drops the flag", async () => {
+    const { deps, saved } = makeDeps({
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        paused: true,
+      }),
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.status).toBe("nothing-new");
+    expect(saved).toHaveLength(1);
+    expect(saved[0].paused).toBeUndefined();
+  });
+});
