@@ -16,7 +16,7 @@ describe("buildMinerSystemPrompt", () => {
     expect(prompt).toContain("durable");
     expect(prompt).toContain("EXCLUDE in-flight state");
     expect(prompt).toContain("Never infer or guess a repo");
-    expect(prompt).toContain("source_agent and session_id");
+    expect(prompt).not.toContain("metadata");
     expect(prompt).toContain("Never quote credentials");
   });
 
