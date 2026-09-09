@@ -110,6 +110,48 @@ describe("emitKnowledgeReport", () => {
     expect(mockWrite).toHaveBeenCalled();
   });
 
+  it("merges backend backfill notes under the local window when none are injected", async () => {
+    mockLoadSyncState.mockReturnValue({
+      schema_version: 1,
+      watermark: null,
+      consecutive_failures: 0,
+      written_notes: [
+        {
+          title: "Local capture",
+          content: "From the gate.",
+          status: "written",
+          at: "2026-09-09T00:00:00.000Z",
+        },
+      ],
+    });
+    const fetchRemote = vi.fn().mockResolvedValue([
+      {
+        title: "Historical note",
+        content: "Mined before capture existed.",
+        status: "written",
+        at: "2026-08-01T00:00:00.000Z",
+      },
+    ]);
+    mockWrite.mockImplementation(async (opts: { html: string }) => {
+      expect(opts.html).toContain("Local capture");
+      expect(opts.html).toContain("Historical note");
+      return "/tmp/x.html";
+    });
+    await emitKnowledgeReport({ open: false, fetchRemote });
+    expect(fetchRemote).toHaveBeenCalledTimes(1);
+    expect(mockWrite).toHaveBeenCalled();
+  });
+
+  it("skips the backend fetch when notes are injected explicitly", async () => {
+    const fetchRemote = vi.fn();
+    await emitKnowledgeReport({
+      notes: [{ title: "Injected", content: "Direct." }],
+      open: false,
+      fetchRemote,
+    });
+    expect(fetchRemote).not.toHaveBeenCalled();
+  });
+
   it("renders an empty report when no notes were injected or persisted", async () => {
     mockLoadSyncState.mockReturnValue({
       schema_version: 1,

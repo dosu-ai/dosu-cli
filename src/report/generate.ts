@@ -3,10 +3,11 @@
  * and emit the skill-identical HTML report.
  */
 
-import { loadConfig } from "../config/config";
+import { type Config, loadConfig } from "../config/config";
 import type { AgentSession } from "../sessions/scan";
 import { scanAgentSessions } from "../sessions/scan";
 import { loadSyncState } from "../sync/watermark";
+import { fetchRemoteNotes, mergeRemoteNotes } from "./backfill";
 import { buildReportHtml } from "./html";
 import { attributeRediscovery, digestsForSessions, sessionsToInventory } from "./notes";
 import type { CapturedNote, WrittenNote } from "./types";
@@ -23,6 +24,8 @@ export interface EmitReportOptions {
   dryRun?: boolean;
   openUrl?: (url: string) => Promise<unknown>;
   generatedAt?: Date;
+  /** Backend note fetch for the history backfill; injectable for tests. */
+  fetchRemote?: (cfg: Config) => Promise<WrittenNote[]>;
 }
 
 function sessionsMatchingNotes(
@@ -46,7 +49,16 @@ function reportBranchFromNotes(notes: readonly CapturedNote[]): string | undefin
 export async function emitKnowledgeReport(options: EmitReportOptions = {}): Promise<string> {
   const cfg = loadConfig();
   const state = loadSyncState();
-  const notes: CapturedNote[] = options.notes ?? ((state.written_notes ?? []) as WrittenNote[]);
+  let notes: CapturedNote[];
+  if (options.notes) {
+    notes = options.notes;
+  } else {
+    // Persisted local window plus the backend backfill (notes mined before
+    // local capture existed, or from another machine). Fail-open: an empty
+    // remote result leaves the local window untouched.
+    const remote = await (options.fetchRemote ?? fetchRemoteNotes)(cfg);
+    notes = mergeRemoteNotes((state.written_notes ?? []) as WrittenNote[], remote);
+  }
   const scanned = options.sessions ?? scanAgentSessions();
   const sessions = sessionsMatchingNotes(notes, scanned);
   const candidates = attributeRediscovery(notes, sessions);
