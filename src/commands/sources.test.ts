@@ -22,6 +22,29 @@ vi.mock("../config/config", () => ({
   loadConfig: (...args: unknown[]) => mockLoadConfig(...args),
 }));
 
+const githubStep = vi.hoisted(() => ({
+  fetchListForOrg: vi.fn(),
+  waitForRepositoryRefresh: vi.fn(),
+  createDeploymentForRepo: vi.fn(),
+  fetchOrgGithubDeployments: vi.fn(),
+  fetchOrgGithubDataSources: vi.fn(),
+  verifyDataSourcesPersist: vi.fn(),
+  deleteOrphanDeployment: vi.fn(),
+}));
+vi.mock("../setup/github-step", () => githubStep);
+
+const installationServer = vi.hoisted(() => ({
+  startInstallationCallbackServer: vi.fn(),
+}));
+vi.mock("../setup/installation-server", () => installationServer);
+
+vi.mock("open", () => ({ default: vi.fn() }));
+
+vi.mock("../config/constants", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  getWebAppURL: () => "https://app.example.com",
+}));
+
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { sourcesCommand } from "./sources";
 
@@ -55,6 +78,8 @@ beforeEach(() => {
   mockQuery.mockReset();
   mockMutate.mockReset();
   mockLoadConfig.mockReset();
+  for (const fn of Object.values(githubStep)) fn.mockReset();
+  installationServer.startInstallationCallbackServer.mockReset();
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
@@ -248,5 +273,270 @@ describe("requireConfig", () => {
   it("exits when access_token is missing", async () => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ access_token: "" }));
     await expect(run("list")).rejects.toThrow("exit");
+  });
+});
+
+function allErrors(): string {
+  return errorSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
+}
+
+function jsonLines(): unknown[] {
+  return logSpy.mock.calls.map((c: unknown[]) => JSON.parse(String(c[0])));
+}
+
+function stubInstallServer(installationPromise: Promise<{ installation_id: number }>) {
+  const close = vi.fn();
+  installationServer.startInstallationCallbackServer.mockResolvedValue({
+    server: { port: 45678, close },
+    installationPromise,
+  });
+  return { close };
+}
+
+describe("sources connect", () => {
+  it("rejects web-only providers with a JSON handoff", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    await expect(run("connect", "slack", "--json")).rejects.toThrow("exit");
+    const output = JSON.parse(allOutput());
+    expect(output.cli_supported).toBe(false);
+    expect(output.connect_via).toBe("web");
+    expect(output.url).toContain("http");
+  });
+
+  it("rejects web-only providers with a human handoff message", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    await expect(run("connect", "notion")).rejects.toThrow("exit");
+    expect(allErrors()).toContain("web-only");
+  });
+
+  it("emits awaiting_install and installed NDJSON events", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    githubStep.fetchListForOrg.mockResolvedValue([]);
+    const { close } = stubInstallServer(Promise.resolve({ installation_id: 42 }));
+    githubStep.waitForRepositoryRefresh.mockResolvedValue({
+      repos: [{ slug: "acme/api", repository_id: 7 }],
+      foundNew: true,
+    });
+
+    await run("connect", "github", "--json");
+
+    const events = jsonLines();
+    expect(events[0]).toMatchObject({ event: "awaiting_install", provider: "github" });
+    expect(String((events[0] as { url: string }).url)).toContain("/cli/connect-github");
+    expect(String((events[0] as { url: string }).url)).toContain("45678");
+    expect(events[1]).toMatchObject({
+      event: "installed",
+      installation_id: 42,
+      new_repositories: [{ slug: "acme/api", repository_id: 7 }],
+    });
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("times out when the install never completes", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    githubStep.fetchListForOrg.mockResolvedValue([]);
+    const { close } = stubInstallServer(new Promise(() => {}));
+
+    await expect(run("connect", "github", "--json", "--timeout", "1")).rejects.toThrow("exit");
+
+    const events = jsonLines();
+    expect(events.at(-1)).toMatchObject({ event: "timeout", timeout_seconds: 1 });
+    expect(close).toHaveBeenCalled();
+  }, 10_000);
+
+  it("prints new repos and a next-step hint in human mode", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    githubStep.fetchListForOrg.mockResolvedValue([{ slug: "acme/old", repository_id: 1 }]);
+    stubInstallServer(Promise.resolve({ installation_id: 9 }));
+    githubStep.waitForRepositoryRefresh.mockResolvedValue({
+      repos: [
+        { slug: "acme/old", repository_id: 1 },
+        { slug: "acme/new", repository_id: 2 },
+      ],
+      foundNew: true,
+    });
+
+    await run("connect", "github", "--no-open");
+
+    const output = allOutput();
+    expect(output).toContain("GitHub App connected");
+    expect(output).toContain("acme/new");
+    expect(output).not.toContain("acme/old\n");
+    expect(output).toContain("dosu sources create github");
+  });
+
+  it("notes when no new repositories are visible yet", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    githubStep.fetchListForOrg.mockResolvedValue([]);
+    stubInstallServer(Promise.resolve({ installation_id: 9 }));
+    githubStep.waitForRepositoryRefresh.mockResolvedValue({ repos: [], foundNew: false });
+
+    await run("connect", "github", "--no-open");
+
+    expect(allOutput()).toContain("No new repositories visible yet");
+  });
+});
+
+describe("sources create", () => {
+  const repo = { slug: "acme/api", repository_id: 7, name: "api", is_deployed: false };
+
+  function stubHappyPath() {
+    githubStep.fetchListForOrg.mockResolvedValue([repo]);
+    githubStep.fetchOrgGithubDeployments.mockResolvedValue(new Map());
+    githubStep.fetchOrgGithubDataSources.mockResolvedValue(new Map());
+    githubStep.createDeploymentForRepo.mockResolvedValue({
+      deployment_id: "dep1",
+      data_source_id: "ds1",
+    });
+    githubStep.verifyDataSourcesPersist.mockResolvedValue({
+      alive: new Set(["ds1"]),
+      dropped: new Set(),
+    });
+  }
+
+  it("rejects web-only providers", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    await expect(run("create", "slack", "--repo", "x", "--confirm")).rejects.toThrow("exit");
+    expect(allErrors()).toContain("web-only");
+  });
+
+  it("creates and attaches with an explicit library", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    stubHappyPath();
+
+    await run("create", "github", "--repo", "acme/api", "--library", "lib1", "--confirm", "--json");
+
+    expect(githubStep.createDeploymentForRepo).toHaveBeenCalledWith(
+      expect.anything(),
+      "org1",
+      "lib1",
+      repo,
+      { deploymentID: undefined, dataSourceID: undefined },
+    );
+    const receipt = JSON.parse(allOutput());
+    expect(receipt).toMatchObject({
+      provider: "github",
+      repository: "acme/api",
+      repository_id: 7,
+      data_source_id: "ds1",
+      deployment_id: "dep1",
+      library_id: "lib1",
+      attached: true,
+    });
+  });
+
+  it("defaults to the active library", async () => {
+    mockLoadConfig.mockReturnValue(makeValidConfig({ space_id: "space9" }));
+    stubHappyPath();
+
+    await run("create", "github", "--repo", "acme/api", "--confirm", "--json");
+
+    expect(githubStep.createDeploymentForRepo).toHaveBeenCalledWith(
+      expect.anything(),
+      "org1",
+      "space9",
+      repo,
+      expect.anything(),
+    );
+  });
+
+  it("reuses existing deployment and data source rows", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    stubHappyPath();
+    githubStep.fetchOrgGithubDeployments.mockResolvedValue(new Map([[7, "dep-old"]]));
+    githubStep.fetchOrgGithubDataSources.mockResolvedValue(new Map([[7, "ds-old"]]));
+
+    await run("create", "github", "--repo", "acme/api", "--library", "lib1", "--confirm", "--json");
+
+    expect(githubStep.createDeploymentForRepo).toHaveBeenCalledWith(
+      expect.anything(),
+      "org1",
+      "lib1",
+      repo,
+      { deploymentID: "dep-old", dataSourceID: "ds-old" },
+    );
+  });
+
+  it("exits when no library is specified and none is active", async () => {
+    mockLoadConfig.mockReturnValue(makeValidConfig({ space_id: undefined }));
+    await expect(run("create", "github", "--repo", "acme/api", "--confirm")).rejects.toThrow(
+      "exit",
+    );
+    expect(allErrors()).toContain("--library");
+  });
+
+  it("exits when the repository is not visible to Dosu", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    githubStep.fetchListForOrg.mockResolvedValue([]);
+    await expect(
+      run("create", "github", "--repo", "acme/missing", "--library", "lib1", "--confirm"),
+    ).rejects.toThrow("exit");
+    expect(allErrors()).toContain("not visible");
+    expect(allErrors()).toContain("dosu sources connect github");
+  });
+
+  it("exits for forked repositories", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    githubStep.fetchListForOrg.mockResolvedValue([
+      { ...repo, is_fork: true, fork_parent_slug: "upstream/api" },
+    ]);
+    await expect(
+      run("create", "github", "--repo", "acme/api", "--library", "lib1", "--confirm"),
+    ).rejects.toThrow("exit");
+    expect(allErrors()).toContain("fork");
+    expect(allErrors()).toContain("upstream/api");
+  });
+
+  it("requires confirmation in JSON mode", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    githubStep.fetchListForOrg.mockResolvedValue([repo]);
+
+    await run("create", "github", "--repo", "acme/api", "--library", "lib1", "--json");
+
+    const output = JSON.parse(allOutput());
+    expect(output.confirmRequired).toBe(true);
+    expect(githubStep.createDeploymentForRepo).not.toHaveBeenCalled();
+  });
+
+  it("exits when the wiring fails", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    stubHappyPath();
+    githubStep.createDeploymentForRepo.mockResolvedValue(null);
+
+    await expect(
+      run("create", "github", "--repo", "acme/api", "--library", "lib1", "--confirm"),
+    ).rejects.toThrow("exit");
+    expect(allErrors()).toContain("Could not create the data source");
+  });
+
+  it("reverts the deployment when the backend drops the data source", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    stubHappyPath();
+    githubStep.verifyDataSourcesPersist.mockResolvedValue({
+      alive: new Set(),
+      dropped: new Set(["ds1"]),
+    });
+
+    await expect(
+      run("create", "github", "--repo", "acme/api", "--library", "lib1", "--confirm"),
+    ).rejects.toThrow("exit");
+    expect(githubStep.deleteOrphanDeployment).toHaveBeenCalledWith(
+      expect.anything(),
+      "dep1",
+      "acme/api",
+    );
+    expect(allErrors()).toContain("couldn't sync");
+  });
+
+  it("prints a human-readable receipt", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    stubHappyPath();
+
+    await run("create", "github", "--repo", "acme/api", "--library", "lib1", "--confirm");
+
+    const output = allOutput();
+    expect(output).toContain("Connected acme/api to library lib1");
+    expect(output).toContain("ds1");
+    expect(output).toContain("dep1");
   });
 });
