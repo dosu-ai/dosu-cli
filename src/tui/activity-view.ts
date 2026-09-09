@@ -82,7 +82,7 @@ export function reduceSyncConfirmKey(key: string): SyncConfirmAction {
 /** What pressing `s` means right now: stop a live run, resume a paused pipeline, or start. */
 export type SyncConfirmMode = "start" | "stop" | "resume";
 
-export function syncConfirmMode(status: SyncStatus): SyncConfirmMode {
+function syncConfirmMode(status: SyncStatus): SyncConfirmMode {
   if (status.running) return "stop";
   if (status.state.paused) return "resume";
   return "start";
