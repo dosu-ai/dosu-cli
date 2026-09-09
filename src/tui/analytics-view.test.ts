@@ -149,11 +149,13 @@ describe("overviewRows", () => {
 });
 
 describe("projectRows", () => {
-  it("buckets recent history by project, busiest first", () => {
+  it("buckets recent history by project, busiest first, under column labels", () => {
     const rows = projectRows(reportState());
-    expect(rows[0]).toContain("dosu-cli");
-    expect(rows[0]).toContain("2");
-    expect(rows[1]).toContain("(unknown)");
+    expect(rows[0]).toContain("Project");
+    expect(rows[0]).toContain("Sessions");
+    expect(rows[1]).toContain("dosu-cli");
+    expect(rows[1]).toContain("2");
+    expect(rows[2]).toContain("(unknown)");
   });
 
   it("is empty without mined-session history", () => {
@@ -162,12 +164,14 @@ describe("projectRows", () => {
 });
 
 describe("pageRows", () => {
-  it("renders both page sections", () => {
+  it("renders both page sections with named value columns", () => {
     const rows = pageRows(pageStats()).join("\n");
-    expect(rows).toContain("Top cited pages (30d)");
+    expect(rows).toContain("Top cited (30d)");
+    expect(rows).toContain("Citations");
     expect(rows).toContain("OAuth refresh token exp\u2026");
     expect(rows).toContain("12");
-    expect(rows).toContain("Recently updated pages");
+    expect(rows).toContain("Recently updated");
+    expect(rows).toContain("Updated");
     expect(rows).toContain("Release process");
     expect(rows).toContain("2026-09-03");
   });
@@ -176,8 +180,8 @@ describe("pageRows", () => {
     expect(pageRows(null)).toEqual([]);
     expect(pageRows({ topUpdated: [], topCited: [] })).toEqual([]);
     const citedOnly = pageRows({ ...pageStats(), topUpdated: [] }).join("\n");
-    expect(citedOnly).toContain("Top cited pages");
-    expect(citedOnly).not.toContain("Recently updated pages");
+    expect(citedOnly).toContain("Top cited (30d)");
+    expect(citedOnly).not.toContain("Recently updated");
   });
 });
 
@@ -188,7 +192,7 @@ describe("analyticsTabRows", () => {
     );
     expect(analyticsTabRows("projects", reportState(), null).join("\n")).toContain("dosu-cli");
     expect(analyticsTabRows("pages", emptyState(), pageStats()).join("\n")).toContain(
-      "Top cited pages",
+      "Top cited (",
     );
   });
 });
@@ -325,7 +329,7 @@ describe("renderAnalyticsFrame", () => {
     expect(frame).toContain("tab switch \u00B7 \u2191\u2193 scroll \u00B7 esc back");
   });
 
-  it("lays the tabs out as equal-width cells and underlines the active cell", () => {
+  it("lays the tabs out as equal-width cells above the labeled table", () => {
     const lines = stripAnsi(
       renderAnalyticsFrame(reportState(), "projects", 0, null, false, 60),
     ).split("\n");
@@ -340,6 +344,11 @@ describe("renderAnalyticsFrame", () => {
     // The heavy segment spans the whole active cell, not just its label.
     expect(rule.slice(cellW, 2 * cellW)).toBe("\u2501".repeat(cellW));
     expect(rule.slice(0, cellW)).toBe("\u2500".repeat(cellW));
+    // A blank line separates the strip from the table, whose column labels lead.
+    expect(lines[4]).toBe("");
+    expect(lines[5]).toContain("Project");
+    expect(lines[5]).toContain("Sessions");
+    expect(lines[6]).toContain("dosu-cli");
   });
 
   it("shows per-tab empty messages, including the pages loading state", () => {
@@ -452,7 +461,7 @@ describe("runAnalyticsView", () => {
     input.emit("data", "\t");
     expect(stripAnsi(written.at(-1) ?? "")).toContain("dosu-cli");
     input.emit("data", "\t");
-    expect(stripAnsi(written.at(-1) ?? "")).toContain("Top cited pages (30d)");
+    expect(stripAnsi(written.at(-1) ?? "")).toContain("Top cited (30d)");
     // ← walks backwards to Projects.
     input.emit("data", `${ESC}[D`);
     expect(stripAnsi(written.at(-1) ?? "")).toContain("(unknown)");
@@ -582,8 +591,8 @@ describe("runAnalyticsView", () => {
     expect(stripAnsi(written.at(-1) ?? "")).toContain("Loading page analytics...");
     for (let i = 0; i < 4; i += 1) await Promise.resolve();
     const rendered = stripAnsi(written.at(-1) ?? "");
-    expect(rendered).toContain("Top cited pages (30d)");
-    expect(rendered).toContain("Recently updated pages");
+    expect(rendered).toContain("Top cited (30d)");
+    expect(rendered).toContain("Recently updated");
 
     input.emit("data", "q");
     await view;
@@ -628,7 +637,7 @@ describe("runAnalyticsView", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(written.length).toBe(afterExit);
-    expect(stripAnsi(written.join(""))).not.toContain("Top cited pages");
+    expect(stripAnsi(written.join(""))).not.toContain("Top cited (");
   });
 
   // --- Default loader (no loadPageStats injected): stored login to typed client ---
@@ -683,7 +692,7 @@ describe("runAnalyticsView", () => {
 
     input.emit("data", `${ESC}[D`); // onto Pages
     const rendered = stripAnsi(written.at(-1) ?? "");
-    expect(rendered).toContain("Top cited pages (30d)");
+    expect(rendered).toContain("Top cited (30d)");
 
     input.emit("data", "q");
     await view;
@@ -721,7 +730,7 @@ describe("runAnalyticsView", () => {
       pollMs: 100,
     });
     await microtasks();
-    expect(stripAnsi(second.written.join(""))).not.toContain("Top cited pages");
+    expect(stripAnsi(second.written.join(""))).not.toContain("Top cited (");
     second.input.emit("data", "q");
     await secondView;
   });
@@ -753,7 +762,7 @@ describe("runAnalyticsView", () => {
       pollMs: 100,
     });
     await microtasks();
-    expect(stripAnsi(written.join(""))).not.toContain("Top cited pages");
+    expect(stripAnsi(written.join(""))).not.toContain("Top cited (");
     input.emit("data", "q");
     await view;
   });

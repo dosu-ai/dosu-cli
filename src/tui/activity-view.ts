@@ -5,17 +5,13 @@ import { readFileSync } from "node:fs";
 import pc from "picocolors";
 import { createLogFollower } from "../debug/follow";
 import { logger, stripAnsiCodes } from "../debug/logger";
-import { createProjectDirResolver } from "../sessions/project-dir";
-import { type AgentSession, scanAgentSessions } from "../sessions/scan";
+import type { AgentSession } from "../sessions/scan";
 import { brand } from "../setup/styles";
+import { listSessionBacklog, type SessionBacklog } from "../sync/backlog";
 import { spawnDetachedSelf } from "../sync/detach";
+import { stopSyncRun } from "../sync/lock";
 import { getSyncStatus, type SyncStatus } from "../sync/status";
-import {
-  filterSessionsByProject,
-  gateSessions,
-  loadSyncState,
-  type MinedSessionRecord,
-} from "../sync/watermark";
+import { type MinedSessionRecord, setSyncPaused } from "../sync/watermark";
 import { enterAltScreen } from "./alt-screen";
 import {
   breadcrumb,
@@ -76,11 +72,20 @@ export function cycleTab(tab: ActivityViewTab, delta: 1 | -1 = 1): ActivityViewT
 
 export type SyncConfirmAction = "start" | "cancel" | "none";
 
-/** Confirmation keys: enter/y/s start, esc/n/q cancel, everything else ignored. */
+/** Confirmation keys: enter/y/s confirm, esc/n/q cancel, everything else ignored. */
 export function reduceSyncConfirmKey(key: string): SyncConfirmAction {
   if (key === "\r" || key === "\n" || key === "y" || key === "s") return "start";
   if (key === ESC || key === "n" || key === "q" || key === CTRL_C) return "cancel";
   return "none";
+}
+
+/** What pressing `s` means right now: stop a live run, resume a paused pipeline, or start. */
+export type SyncConfirmMode = "start" | "stop" | "resume";
+
+export function syncConfirmMode(status: SyncStatus): SyncConfirmMode {
+  if (status.running) return "stop";
+  if (status.state.paused) return "resume";
+  return "start";
 }
 
 /** Strip ANSI (clipping mid-sequence would bleed color), shorten the timestamp, clip to width. */
@@ -126,31 +131,6 @@ export function formatQueuedRow(session: AgentSession): string {
   const stamp = session.updated.replace("T", " ").slice(5, 16);
   const project = clip(session.project ?? "-", 28);
   return `${session.harness.padEnd(8)}  ${stamp}  ${project}  ${clip(session.id, 24)}`;
-}
-
-/** The scanned session backlog the Queued and Open tabs display. */
-interface SessionBacklog {
-  /** Gated (quiet, not yet mined) sessions, oldest first. */
-  queued: AgentSession[];
-  /** Sessions still inside the quiet period — queued once they go silent. */
-  open: AgentSession[];
-}
-
-/** Full-history scan of the gated backlog, oldest first; a failed scan reads as empty. */
-function defaultListBacklog(): SessionBacklog {
-  try {
-    const state = loadSyncState();
-    let sessions = scanAgentSessions({});
-    if (state.project_filter?.length) {
-      const resolver = createProjectDirResolver();
-      sessions = filterSessionsByProject(sessions, state.project_filter, resolver.resolve);
-      resolver.flush();
-    }
-    const gate = gateSessions(sessions, state.watermark);
-    return { queued: gate.ready.reverse(), open: gate.open.reverse() };
-  } catch {
-    return { queued: [], open: [] };
-  }
 }
 
 /** Scrollback window over `lines`: `scroll` counts up from the bottom, clamped at both ends. */
@@ -236,6 +216,11 @@ function statusLine(status: SyncStatus): string {
     const pid = status.pid !== undefined ? ` (pid ${status.pid})` : "";
     return `\u26CF\uFE0F ${pc.bold(brand("Mining sessions..."))}${pc.dim(`${pid}${since}`)}`;
   }
+  if (status.state.paused) {
+    return `${pc.yellow("\u25CB")} ${pc.bold("Paused")} ${pc.dim(
+      "\u00B7 mining stays off until you resume",
+    )}`;
+  }
   if (status.staleLock) {
     return `${pc.yellow("\u25CB")} ${pc.bold("Not running")} ${pc.dim(
       "\u00B7 a previous run exited without cleaning up",
@@ -305,34 +290,41 @@ export interface ActivityViewPane {
   tab: ActivityViewTab;
   /** Lines scrolled up from the newest entry (0 = pinned to bottom). */
   scroll: number;
-  /** Pending "s" press: the start-mining confirmation popup is up. */
-  confirm?: boolean;
+  /** Pending "s" press: which confirmation popup is up, if any. */
+  confirm?: SyncConfirmMode;
 }
 
 const DEFAULT_PANE: ActivityViewPane = { tab: "activity", scroll: 0 };
 
-/** The "start mining?" confirmation box over the footer, shown while `pane.confirm` is set. */
+/** The confirmation box over the footer, shown while `pane.confirm` is set: start a run,
+ * stop the live one (pausing the pipeline), or resume a paused pipeline. */
 export function confirmBox(
   queuedCount: number,
   backlog: SyncBacklog | null,
   width: number,
+  mode: SyncConfirmMode = "start",
 ): string[] {
   const inFlight =
     backlog && backlog.inFlight > 0
       ? ` (+${backlog.inFlight} open, mined once ${backlog.inFlight === 1 ? "it goes" : "they go"} quiet)`
       : "";
   const scope =
-    queuedCount > 0
-      ? `${queuedCount} session${queuedCount === 1 ? "" : "s"} queued${inFlight} \u00B7 runs in the background`
-      : `queue empty${inFlight} \u00B7 a run would only pick up sessions that finish from here`;
+    mode === "stop"
+      ? "the run is killed mid-batch \u00B7 mining stays paused until you resume"
+      : queuedCount > 0
+        ? `${queuedCount} session${queuedCount === 1 ? "" : "s"} queued${inFlight} \u00B7 runs in the background`
+        : `queue empty${inFlight} \u00B7 a run would only pick up sessions that finish from here`;
+  const title =
+    mode === "stop" ? "Stop mining?" : mode === "resume" ? "Resume mining?" : "Start mining now?";
+  const verb = mode === "stop" ? "stop" : mode === "resume" ? "resume" : "start";
   const maxInner = Math.max(20, Math.min(width, contentWidth()) - 4);
   const rows = [
-    // Bare pickaxe, no U+FE0F: xterm.js advances one column for the emoji
-    // pair while visibleWidth counts two, skewing this row's right border.
-    `\u26CF ${pc.bold(brand("Start mining now?"))}`,
+    // No emoji inside the border: U+26CF is ambiguous-width (1 column in xterm.js, 2 in
+    // e.g. Ghostty/kitty), so any padding count skews the right border somewhere.
+    pc.bold(brand(title)),
     ...wrapLine(scope, maxInner, "").map((line) => pc.dim(line)),
     "",
-    `${pc.bold("enter")} start \u00B7 ${pc.bold("esc")} cancel`,
+    `${pc.bold("enter")} ${verb} \u00B7 ${pc.bold("esc")} cancel`,
   ];
   const inner = Math.min(maxInner, Math.max(...rows.map(visibleWidth)));
   const pad = (row: string) => row + " ".repeat(Math.max(0, inner - visibleWidth(row)));
@@ -427,6 +419,10 @@ export function renderActivityFrame(
   const scrollParts: string[] = [];
   if (above > 0) scrollParts.push(`\u2191 ${above} earlier`);
   if (below > 0) scrollParts.push(`\u2193 ${below} newer`);
+  // The session tabs clip projects and ids to fit; point at the copy/paste-friendly listing.
+  if (pane.tab !== "activity" && visible.length > 0) {
+    scrollParts.push(`full rows: dosu knowledge sessions --${pane.tab}`);
+  }
 
   const lines = [
     breadcrumb(["Home", "Activity"], width),
@@ -451,14 +447,14 @@ export function renderActivityFrame(
     "",
     // Pressing s swaps the key legend for the centered confirmation dialog.
     ...(pane.confirm
-      ? centerBlock(confirmBox(queued.length, backlog, width), width)
+      ? centerBlock(confirmBox(queued.length, backlog, width, pane.confirm), width)
       : [
-          // "s sync now" only while idle; a live run already holds the lock.
+          // s stops a live run, resumes a paused pipeline, or starts a sync while idle.
           pc.dim(
             [
               "tab switch",
               "\u2191\u2193 scroll",
-              ...(status.running ? [] : ["s sync now"]),
+              status.running ? "s stop" : status.state.paused ? "s resume" : "s sync now",
               "esc back",
             ].join(" \u00B7 "),
           ),
@@ -480,6 +476,10 @@ export interface ActivityViewIO {
   createFollower?: (emit: (chunk: string) => void) => { poll(): void };
   /** Spawns a detached background sync; pressing `s` while idle calls this. */
   startSync?: () => boolean;
+  /** Kills the live run by pid; pressing `s` while running calls this. */
+  stopSync?: (pid: number) => boolean;
+  /** Persists the pause switch hooks honor; stop sets it, resume clears it. */
+  setPaused?: (paused: boolean) => void;
   /** The scanned backlog for the Queued and Open tabs; re-run when the watermark moves. */
   listBacklog?: () => SessionBacklog;
   pollMs?: number;
@@ -506,7 +506,9 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
   // Bootstrap mode drains the whole displayed queue, not just one batch.
   const startSync =
     io.startSync ?? (() => spawnDetachedSelf(["knowledge", "sync", "--quiet", "--bootstrap"]));
-  const listBacklog = io.listBacklog ?? defaultListBacklog;
+  const stopSync = io.stopSync ?? stopSyncRun;
+  const setPaused = io.setPaused ?? setSyncPaused;
+  const listBacklog = io.listBacklog ?? listSessionBacklog;
   const pollMs = io.pollMs ?? ACTIVITY_VIEW_POLL_MS;
 
   const seed = readLog();
@@ -516,7 +518,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
   let runProgress = foldRunProgress(null, seed);
   let tab: ActivityViewTab = "activity";
   let scroll = 0;
-  let confirmSync = false;
+  let confirmSync: SyncConfirmMode | null = null;
   let status = getStatus();
   // Rescan on watermark moves and tab switches, not every poll (a scan
   // stats every local session file).
@@ -557,15 +559,16 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
       queuedWatermark = status.state.watermark;
       sessions = listBacklog();
     }
-    // A run starting elsewhere makes the pending confirmation moot.
-    if (confirmSync && status.running) confirmSync = false;
+    // A run starting or ending elsewhere makes the pending confirmation moot.
+    if ((confirmSync === "start" || confirmSync === "resume") && status.running) confirmSync = null;
+    if (confirmSync === "stop" && !status.running) confirmSync = null;
     const width = activityWidth(output.columns ?? 80);
     const frame = renderActivityFrame(
       status,
       activity,
       width,
       backlog,
-      { tab, scroll, confirm: confirmSync },
+      { tab, scroll, confirm: confirmSync ?? undefined },
       sessions.queued,
       minedBeforeRun ?? 0,
       sessions.open,
@@ -622,11 +625,24 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
         if (confirmSync) {
           const decision = reduceSyncConfirmKey(key);
           if (decision === "start") {
-            confirmSync = false;
-            const ok = startSync();
-            const note = ok
-              ? "[sync] sync requested \u00B7 starting a background run"
-              : "[sync] could not start a background run \u00B7 try `dosu knowledge sync`";
+            const mode = confirmSync;
+            confirmSync = null;
+            let note: string;
+            if (mode === "stop") {
+              // Kill first, then flip the pause switch: a dying run's last state save
+              // could otherwise overwrite the flag with its pre-pause snapshot.
+              const ok = status.pid !== undefined && stopSync(status.pid);
+              if (ok) setPaused(true);
+              note = ok
+                ? "[sync] mining stopped \u00B7 paused until you resume"
+                : "[sync] could not stop the run \u00B7 it may have just finished";
+            } else {
+              if (mode === "resume") setPaused(false);
+              const ok = startSync();
+              note = ok
+                ? "[sync] sync requested \u00B7 starting a background run"
+                : "[sync] could not start a background run \u00B7 try `dosu knowledge sync`";
+            }
             // Immediate feed feedback; the real run's log lines follow.
             activity = appendSyncActivity(
               activity,
@@ -634,7 +650,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
             );
             draw();
           } else if (decision === "cancel") {
-            confirmSync = false;
+            confirmSync = null;
             draw();
           }
           continue;
@@ -645,11 +661,8 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
           return;
         }
         if (action === "sync") {
-          // Ignore while a run is live — it already holds the sync lock.
-          if (!status.running) {
-            confirmSync = true;
-            draw();
-          }
+          confirmSync = syncConfirmMode(status);
+          draw();
         } else if (action === "tab" || action === "tab-back") {
           tab = cycleTab(tab, action === "tab" ? 1 : -1);
           scroll = 0;

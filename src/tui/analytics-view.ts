@@ -25,8 +25,9 @@ const CLEAR_EOL = `${ESC}[K`;
 /** Relaxed poll: analytics only move when a mining batch completes. */
 const ANALYTICS_VIEW_POLL_MS = 1000;
 
-/** How many report lines fit on screen at once (the scroll window). */
-export const ANALYTICS_VIEW_LINES = 12;
+/** How many report lines fit on screen at once (the scroll window). Sized so the pages tab's
+ * two sections (header + 5 rows each, plus the separator) fit without scrolling. */
+export const ANALYTICS_VIEW_LINES = 14;
 
 export type AnalyticsViewTab = "overview" | "projects" | "pages";
 
@@ -129,29 +130,31 @@ export function overviewRows(state: SyncState): string[] {
   return rows;
 }
 
-/** Projects tab: recent mined-session history bucketed by project. */
+/** Projects tab: recent mined-session history bucketed by project, under column labels. */
 export function projectRows(state: SyncState): string[] {
   const byProject = new Map<string, number>();
   for (const record of state.mined_sessions ?? []) {
     const key = record.project ?? "(unknown)";
     byProject.set(key, (byProject.get(key) ?? 0) + 1);
   }
-  return [...byProject.entries()]
+  const data = [...byProject.entries()]
     .sort((a, b) => b[1] - a[1])
     .map(([project, count]) => `${label(clip(project, 24))}${count}`);
+  return data.length > 0 ? [`${label("Project")}Sessions`, ...data] : [];
 }
 
-/** Pages tab: the backend page sections, once the stats have landed. */
+/** Pages tab: the backend page sections, once the stats have landed. Each section's title
+ * doubles as the first column's label so every value column is named. */
 export function pageRows(pageStats: PageStats | null): string[] {
   const rows: string[] = [];
   if (pageStats && pageStats.topCited.length > 0) {
-    rows.push(`Top cited pages (${TOP_CITED_DAYS}d)`);
+    rows.push(`${label(`Top cited (${TOP_CITED_DAYS}d)`)}Citations`);
     for (const row of pageStats.topCited) {
       rows.push(`${label(clip(row.title, 24))}${row.citation_count}`);
     }
   }
   if (pageStats && pageStats.topUpdated.length > 0) {
-    rows.push(...(rows.length > 0 ? [""] : []), "Recently updated pages");
+    rows.push(...(rows.length > 0 ? [""] : []), `${label("Recently updated")}Updated`);
     for (const row of pageStats.topUpdated) {
       rows.push(`${label(clip(row.title, 24))}${row.updated_at.slice(0, 10)}`);
     }
@@ -213,7 +216,8 @@ export function renderAnalyticsFrame(
   const lines = [
     breadcrumb(["Home", "Analytics"], width),
     "",
-    // Cells, not spread: equal-width side-by-side tabs read as one table.
+    // Cells, not spread: equal-width side-by-side tabs read as one control. The blank line
+    // below keeps them apart from the tables, whose own column labels head each list.
     ...tabStrip(
       [
         ["overview", "Overview"],
@@ -224,6 +228,7 @@ export function renderAnalyticsFrame(
       width,
       { spread: false },
     ),
+    "",
     ...listRows,
     ...(scrollParts.length > 0 ? [pc.dim(scrollParts.join(" \u00B7 "))] : []),
     "",

@@ -33,6 +33,7 @@ type SyncStatus =
   | "skipped-backoff"
   | "skipped-lock"
   | "skipped-gateway"
+  | "skipped-paused"
   | "mined"
   | "mine-failed"
   | "error";
@@ -119,11 +120,20 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
   const state = loadState();
 
   if (options.quiet) {
+    // The user's stop switch: hook-triggered runs stay off until resumed.
+    if (state.paused) {
+      logger.debug("sync", "skipping quiet sync: mining is paused");
+      return { status: "skipped-paused", readySessions: 0, inFlightSessions: 0, sessions: [] };
+    }
     const retryAt = backoffUntil(state);
     if (retryAt && now() < retryAt) {
       logger.debug("sync", `skipping quiet sync: backoff until ${retryAt.toISOString()}`);
       return { status: "skipped-backoff", readySessions: 0, inFlightSessions: 0, sessions: [] };
     }
+  } else if (state.paused) {
+    // An explicit run is an explicit resume; every later state save persists the clear.
+    delete state.paused;
+    logger.debug("sync", "manual sync resumes paused mining");
   }
 
   let ready: AgentSession[];
