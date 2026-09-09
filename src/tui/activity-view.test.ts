@@ -25,6 +25,11 @@ import {
 import { ALT_SCREEN_ENTER, ALT_SCREEN_EXIT } from "./alt-screen";
 import { frameTopMargin } from "./layout";
 
+const mockSpawnDetachedSelf = vi.fn((_args: string[]) => true);
+vi.mock("../sync/detach", () => ({
+  spawnDetachedSelf: (args: string[]) => mockSpawnDetachedSelf(args),
+}));
+
 const ESC = String.fromCharCode(27);
 const CTRL_C = String.fromCharCode(3);
 
@@ -539,7 +544,9 @@ describe("renderActivityFrame", () => {
       ),
     );
     expect(frame).toContain("Mined sessions up to");
+    // The backoff line must advertise the manual escape hatch: s ignores the backoff.
     expect(frame).toContain("retrying after");
+    expect(frame).toContain("s syncs now");
     expect(frame).toContain("[sync] run started");
   });
 
@@ -1142,6 +1149,29 @@ describe("runActivityView", () => {
     expect(stripAnsi(written.join(""))).toContain(
       "[sync] sync requested \u00B7 starting a background run",
     );
+
+    input.emit("data", "q");
+    await view;
+  });
+
+  it("the default sync spawn omits --quiet so a manual run ignores the failure backoff", async () => {
+    mockSpawnDetachedSelf.mockClear();
+    const { input, output } = fakeIO();
+
+    const view = runActivityView({
+      input,
+      output,
+      getStatus: () => makeStatus(),
+      readLog: () => "",
+      createFollower: () => ({ poll() {} }),
+      // No startSync injected: the view falls through to spawnDetachedSelf.
+      listBacklog: () => ({ queued: [queuedSession()], open: [] }),
+      pollMs: 100,
+    });
+
+    input.emit("data", "s");
+    input.emit("data", "\r");
+    expect(mockSpawnDetachedSelf).toHaveBeenCalledWith(["knowledge", "sync", "--bootstrap"]);
 
     input.emit("data", "q");
     await view;
