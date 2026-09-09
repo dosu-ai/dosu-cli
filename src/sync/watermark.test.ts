@@ -63,6 +63,15 @@ describe("loadSyncState / saveSyncState", () => {
         message: "Your org has used its Dosu credits for this billing period.",
       },
       run: { pid: 4321, started_at: "2026-08-25T11:03:00Z", baseline_mined: 7 },
+      written_notes: [
+        {
+          title: "OAuth refresh",
+          content: "Retry after 401.",
+          transcript_id: "s1",
+          status: "written",
+          at: "2026-08-25T11:04:00Z",
+        },
+      ],
     };
     saveSyncState(state, configDir);
     expect(loadSyncState(configDir)).toEqual(state);

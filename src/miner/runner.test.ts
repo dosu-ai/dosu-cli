@@ -81,6 +81,14 @@ describe("classifyGatewayError", () => {
 });
 
 describe("runMiner", () => {
+  it("fails closed when the gateway URL is not absolute", async () => {
+    const result = await runMiner({ ...baseOptions, gatewayURL: "/v1/llm-gateway" });
+
+    expect(result.outcome).toBe("error");
+    expect(result.message).toMatch(/gateway URL/i);
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
   it("fails closed on settings conflicts without spawning", async () => {
     conflictsMock.mockReturnValue([
       { file: "/etc/claude-code/managed-settings.json", keys: ["apiKeyHelper"] },
@@ -182,6 +190,31 @@ describe("runMiner", () => {
     const result = await runMiner(baseOptions);
 
     expect(result.notesWritten).toBe(2);
+  });
+
+  it("captures write_knowledge payloads against the last read session", async () => {
+    type GateParams = {
+      options: { canUseTool: (name: string, input: object, extra: object) => Promise<unknown> };
+    };
+    queryMock.mockImplementation((params: GateParams) => {
+      return (async function* () {
+        await params.options.canUseTool("mcp__sessions__read_session", { id: "s1" }, {});
+        // An id-less read (e.g. a paging call) keeps the last session attribution.
+        await params.options.canUseTool("mcp__sessions__read_session", { offset: 2 }, {});
+        await params.options.canUseTool(
+          "mcp__dosu__write_knowledge",
+          { title: "OAuth refresh", content: "Retry after 401." },
+          {},
+        );
+        yield successResult();
+      })();
+    });
+
+    const result = await runMiner(baseOptions);
+
+    expect(result.notes).toEqual([
+      { title: "OAuth refresh", content: "Retry after 401.", transcript_id: "s1" },
+    ]);
   });
 
   it("maps a consent-off gateway refusal from the result text", async () => {

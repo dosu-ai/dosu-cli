@@ -1,9 +1,11 @@
 /** Mining-agent runner: spawns an Agent SDK session routed to the Dosu LLM gateway, fenced to
  * four tools. This is the only module in the CLI that imports the Agent SDK. */
 
-import { getLlmGatewayURL } from "../config/constants";
+import { getLlmGatewayURL, isAbsoluteHttpUrl } from "../config/constants";
 import { logger } from "../debug/logger";
 import { mcpHeaders, mcpURL } from "../mcp/config-helpers";
+import { parseWriteKnowledgeInput, sessionIdFromReadInput } from "../report/notes";
+import type { CapturedNote } from "../report/types";
 import type { AgentSession } from "../sessions/scan";
 import { getVersionString } from "../version/version";
 import { createRunConfigDir } from "./config-dir";
@@ -26,6 +28,8 @@ export interface MinerRunResult {
   outcome: MinerOutcome;
   /** write_knowledge calls that were allowed through the gate. */
   notesWritten: number;
+  /** Payloads that passed the write_knowledge gate (for the harvest report). */
+  notes?: CapturedNote[];
   turns: number;
   /** One renderable line for error-ish outcomes; never a stack trace. */
   message?: string;
@@ -133,8 +137,21 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
     return {
       outcome: "settings_conflict",
       notesWritten: 0,
+      notes: [],
       turns: 0,
       message: `Refusing to run: conflicting Claude Code settings would override the miner's auth (${detail})`,
+    };
+  }
+
+  const gatewayURL = options.gatewayURL ?? getLlmGatewayURL();
+  if (!isAbsoluteHttpUrl(gatewayURL)) {
+    return {
+      outcome: "error",
+      notesWritten: 0,
+      notes: [],
+      turns: 0,
+      message:
+        "LLM gateway URL is not set. From source, use `bun run dev` (production endpoints) or `bun run dev:local` (local stack).",
     };
   }
 
@@ -159,11 +176,13 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
   const timer = setTimeout(() => abort.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 
   let notesWritten = 0;
+  const notes: CapturedNote[] = [];
+  let lastSessionId: string | undefined;
   let turns = 0;
 
   const env = buildMinerEnv({
     apiKey: options.apiKey,
-    gatewayURL: options.gatewayURL ?? getLlmGatewayURL(),
+    gatewayURL,
     configDir: configDir.path,
     runID,
     trigger: options.trigger,
@@ -210,6 +229,9 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
               message: `Tool ${toolName} is not permitted in mining runs.`,
             };
           }
+          if (toolName === `mcp__${SESSIONS_SERVER_NAME}__read_session`) {
+            lastSessionId = sessionIdFromReadInput(input) ?? lastSessionId;
+          }
           if (toolName === `mcp__${KNOWLEDGE_SERVER_NAME}__write_knowledge`) {
             if (notesWritten >= maxNotes) {
               return {
@@ -218,6 +240,8 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
               };
             }
             notesWritten += 1;
+            const captured = parseWriteKnowledgeInput(input, lastSessionId);
+            if (captured) notes.push(captured);
           }
           return { behavior: "allow", updatedInput: input };
         },
@@ -234,6 +258,7 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
           return {
             outcome: gatewayError.outcome,
             notesWritten,
+            notes,
             turns,
             message: gatewayError.message,
           };
@@ -243,6 +268,7 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
           return {
             outcome: "error",
             notesWritten,
+            notes,
             turns,
             message: "Mining run failed; see debug log for details.",
           };
@@ -251,13 +277,14 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
           "miner",
           `run ${runID} completed: ${turns} turns, ${notesWritten} suggested pages`,
         );
-        return { outcome: "completed", notesWritten, turns, message: text };
+        return { outcome: "completed", notesWritten, notes, turns, message: text };
       }
     }
 
     return {
       outcome: "error",
       notesWritten,
+      notes,
       turns,
       message: "Mining run ended without a result.",
     };
@@ -265,12 +292,19 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
     const text = error instanceof Error ? error.message : String(error);
     const gatewayError = classifyGatewayError(text);
     if (gatewayError) {
-      return { outcome: gatewayError.outcome, notesWritten, turns, message: gatewayError.message };
+      return {
+        outcome: gatewayError.outcome,
+        notesWritten,
+        notes,
+        turns,
+        message: gatewayError.message,
+      };
     }
     logger.debug("miner", `run ${runID} threw: ${text}`);
     return {
       outcome: "error",
       notesWritten,
+      notes,
       turns,
       message: abort.signal.aborted
         ? "Mining run timed out and was aborted."

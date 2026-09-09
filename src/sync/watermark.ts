@@ -4,6 +4,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config/config";
+import type { NoteStatus, WrittenNote } from "../report/types";
 import type { AgentSession } from "../sessions/scan";
 
 const STATE_FILENAME = "knowledge-sync.json";
@@ -70,10 +71,24 @@ export interface SyncState {
   /** User pressed stop: quiet (hook-triggered) syncs skip until resumed. Cleared by the
    * Activity screen's resume or any manual `dosu knowledge sync`. */
   paused?: boolean;
+  /** Rolling write_knowledge payloads captured for the harvest HTML report. */
+  written_notes?: WrittenNote[];
 }
 
 export function syncStatePath(configDir: string = getConfigDir()): string {
   return join(configDir, STATE_FILENAME);
+}
+
+function noteStatus(value: unknown): NoteStatus {
+  if (
+    value === "proposed" ||
+    value === "pending" ||
+    value === "already_in_library" ||
+    value === "written"
+  ) {
+    return value;
+  }
+  return "written";
 }
 
 export function loadSyncState(configDir: string = getConfigDir()): SyncState {
@@ -119,6 +134,28 @@ export function loadSyncState(configDir: string = getConfigDir()): SyncState {
       rawRun.baseline_mined >= 0
         ? { pid: rawRun.pid, started_at: rawRun.started_at, baseline_mined: rawRun.baseline_mined }
         : undefined;
+    const writtenNotes = Array.isArray(raw.written_notes)
+      ? (raw.written_notes as unknown[])
+          .filter(
+            (record): record is WrittenNote =>
+              typeof record === "object" &&
+              record !== null &&
+              typeof (record as WrittenNote).title === "string" &&
+              typeof (record as WrittenNote).content === "string" &&
+              typeof (record as WrittenNote).at === "string",
+          )
+          .map((record) => ({
+            title: record.title,
+            content: record.content,
+            at: record.at,
+            status: noteStatus(record.status),
+            ...(typeof record.transcript_id === "string"
+              ? { transcript_id: record.transcript_id }
+              : {}),
+            ...(typeof record.repo === "string" ? { repo: record.repo } : {}),
+            ...(typeof record.branch === "string" ? { branch: record.branch } : {}),
+          }))
+      : [];
     return {
       schema_version: STATE_SCHEMA_VERSION,
       watermark: typeof raw.watermark === "string" ? raw.watermark : null,
@@ -148,6 +185,7 @@ export function loadSyncState(configDir: string = getConfigDir()): SyncState {
             ),
           }
         : {}),
+      ...(writtenNotes.length > 0 ? { written_notes: writtenNotes } : {}),
     };
   } catch {
     return empty;

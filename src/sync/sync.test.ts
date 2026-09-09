@@ -327,6 +327,30 @@ describe("runKnowledgeSync mining", () => {
     });
   });
 
+  it("persists captured write_knowledge payloads for the harvest report", async () => {
+    const { deps, saved } = makeMiningDeps({
+      listSessions: vi.fn().mockResolvedValue([session(30)]),
+      mine: vi.fn().mockResolvedValue(
+        minerResult({
+          notes: [{ title: "OAuth refresh", content: "Retry after 401.", transcript_id: "s-30" }],
+        }),
+      ),
+      lock: openLock(),
+    });
+
+    await runKnowledgeSync({ deps });
+
+    expect(saved[0].written_notes).toEqual([
+      {
+        title: "OAuth refresh",
+        content: "Retry after 401.",
+        transcript_id: "s-30",
+        status: "written",
+        at: NOW.toISOString(),
+      },
+    ]);
+  });
+
   it("keeps the first batch's baseline across same-pid batches, resets for a new run", async () => {
     const { deps, saved } = makeMiningDeps({
       listSessions: vi.fn().mockResolvedValue([session(30)]),

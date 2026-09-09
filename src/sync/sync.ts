@@ -3,6 +3,7 @@
 
 import { logger } from "../debug/logger";
 import type { MinerRunResult } from "../miner/runner";
+import { appendWrittenNotes } from "../report/notes";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { estimateSessionTokens, isWorthMining } from "../sessions/read";
 import { type AgentSession, scanAgentSessions } from "../sessions/scan";
@@ -287,6 +288,14 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
           total_mined: (state.total_mined ?? 0) + batch.length,
           total_notes: (state.total_notes ?? 0) + miner.notesWritten,
           total_learning_tokens: (state.total_learning_tokens ?? 0) + batchTokens,
+          written_notes: appendWrittenNotes(
+            state.written_notes,
+            (miner.notes ?? []).map((note) => ({
+              ...note,
+              status: "written" as const,
+              at: minedAt,
+            })),
+          ),
           // A successful run supersedes any earlier gateway refusal.
           last_refusal: undefined,
         });
