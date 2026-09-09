@@ -356,7 +356,8 @@ export function renderActivityFrame(
   // Queue and open-session counts live in the tab bar, not a header line.
   const queueDetail: string[] = [];
   if (status.backoffUntil) {
-    queueDetail.push(`retrying after ${localTime(status.backoffUntil)}`);
+    // Manual runs skip the backoff, so point at the key instead of leaving a dead wait.
+    queueDetail.push(`retrying after ${localTime(status.backoffUntil)} \u00B7 s syncs now`);
   }
 
   // Run-scoped drain progress: batch commits advance it, and within a batch
@@ -503,9 +504,10 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
   const readLog = io.readLog ?? defaultReadLog;
   const createFollower =
     io.createFollower ?? ((emit) => createLogFollower(logger.getLogPath(), emit));
-  // Bootstrap mode drains the whole displayed queue, not just one batch.
-  const startSync =
-    io.startSync ?? (() => spawnDetachedSelf(["knowledge", "sync", "--quiet", "--bootstrap"]));
+  // Bootstrap mode drains the whole displayed queue, not just one batch. Deliberately not
+  // --quiet: quiet runs honor the failure backoff and would silently skip, but pressing s is
+  // an explicit request — manual runs retry immediately (stdio is detached, so no output leaks).
+  const startSync = io.startSync ?? (() => spawnDetachedSelf(["knowledge", "sync", "--bootstrap"]));
   const stopSync = io.stopSync ?? stopSyncRun;
   const setPaused = io.setPaused ?? setSyncPaused;
   const listBacklog = io.listBacklog ?? listSessionBacklog;
