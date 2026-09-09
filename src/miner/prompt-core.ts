@@ -29,7 +29,6 @@ useful.
 6. Only pass repo/branch to write_knowledge when the session itself verifies them (an explicit
 cwd, git remote, or branch mentioned in the transcript). Never infer or guess a repo. When not
 verified, omit both.
-7. Populate write_knowledge metadata with source_agent and session_id for every note.
-8. Never quote credentials, tokens, or secrets — even redacted placeholders — and never include
+7. Never quote credentials, tokens, or secrets — even redacted placeholders — and never include
 long verbatim transcript spans. Summarize in your own words.
-9. A trivial session with no real user query is normal: skip it silently.`;
+8. A trivial session with no real user query is normal: skip it silently.`;
