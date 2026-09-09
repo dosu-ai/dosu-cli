@@ -62,7 +62,7 @@ export interface GithubStepResult {
 
 // Shape returned by tRPC `githubRepository.listForOrg`. Backend spreads `...github.repository`,
 // so `created_at` rides along even though the router type doesn't surface it.
-interface AvailableRepo {
+export interface AvailableRepo {
   repository_id: number;
   name: string;
   slug: string; // "owner/repo"
@@ -184,7 +184,7 @@ function isConnectedToSpace(repo: AvailableRepo, sources: SpaceGithubSources | n
 
 /** Map of repository_id to deployment_id for github deployments org-wide. A repo gets exactly
  * one deployment ever, so an existing one must be reused. Fails open to an empty map. */
-async function fetchOrgGithubDeployments(
+export async function fetchOrgGithubDeployments(
   trpc: TypedClient,
   orgID: string,
 ): Promise<Map<number, string>> {
@@ -209,7 +209,7 @@ async function fetchOrgGithubDeployments(
 
 /** Map of repository_id to data_source_id for github data sources org-wide; reuse instead of
  * creating duplicates. Fails open to an empty map. */
-async function fetchOrgGithubDataSources(
+export async function fetchOrgGithubDataSources(
   trpc: TypedClient,
   orgID: string,
 ): Promise<Map<number, string>> {
@@ -236,7 +236,7 @@ async function fetchOrgGithubDataSources(
   return map;
 }
 
-async function fetchListForOrg(trpc: TypedClient, orgID: string): Promise<AvailableRepo[]> {
+export async function fetchListForOrg(trpc: TypedClient, orgID: string): Promise<AvailableRepo[]> {
   try {
     const repos = parseAvailableRepos(
       await trpc.githubRepository.listForOrg.query({
@@ -317,7 +317,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForRepositoryRefresh(
+export async function waitForRepositoryRefresh(
   trpc: TypedClient,
   orgID: string,
   previousRepos: AvailableRepo[],
@@ -415,7 +415,7 @@ interface ExistingRepoWiring {
 
 /** Create (or reuse) a repo's github deployment + data_source and link the source into every
  * space deployment. Rolls back a deployment created here if `dataSource.create` fails. */
-async function createDeploymentForRepo(
+export async function createDeploymentForRepo(
   trpc: TypedClient,
   orgID: string,
   spaceID: string,
@@ -577,7 +577,7 @@ export async function verifyDataSourcesPersist(
   return { alive, dropped };
 }
 
-async function deleteOrphanDeployment(
+export async function deleteOrphanDeployment(
   trpc: TypedClient,
   deploymentID: string,
   slug: string,
