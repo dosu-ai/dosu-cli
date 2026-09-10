@@ -48,7 +48,7 @@ describe("fetchRemoteNotes", () => {
           body: "Retry after 401.",
           repo: "git@x/y",
           branch: "main",
-          session_id: "sess-1",
+          session_id: "run-uuid-1",
           created_at: "2026-09-01T00:00:00+00:00",
         },
         {
@@ -74,7 +74,9 @@ describe("fetchRemoteNotes", () => {
         content: "Retry after 401.",
         status: "written",
         at: "2026-09-01T00:00:00+00:00",
-        transcript_id: "sess-1",
+        // The backend session_id is the miner's run id, never local transcript
+        // attribution — it must come through as run_id.
+        run_id: "run-uuid-1",
         repo: "git@x/y",
         branch: "main",
       },

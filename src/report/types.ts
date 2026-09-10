@@ -73,4 +73,7 @@ export interface CapturedNote {
 export interface WrittenNote extends CapturedNote {
   status: NoteStatus;
   at: string;
+  /** Miner run id from the backend's session context — groups a backfilled
+   * note with its batch; never a local transcript id. */
+  run_id?: string;
 }

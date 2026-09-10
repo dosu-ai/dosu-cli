@@ -103,20 +103,49 @@ function overlapCount(a: Set<string>, b: Set<string>): number {
   return n;
 }
 
-function userCycles(turns: readonly DigestTurn[]): { start: number; end: number }[] {
+/** A note's title/content vocabulary, precomputed once per note for scoring. */
+export interface NoteWords {
+  title: Set<string>;
+  content: Set<string>;
+}
+
+export function noteWords(note: Pick<CapturedNote, "title" | "content">): NoteWords {
+  return { title: significantWords(note.title), content: significantWords(note.content) };
+}
+
+/** One user-query cycle: a user turn and everything until the next user turn,
+ * flattened to matchable text (turn text plus tool paths/patterns/commands). */
+export interface SessionCycle {
+  start: number;
+  end: number;
+  text: string;
+}
+
+export function sessionCycles(turns: readonly DigestTurn[]): SessionCycle[] {
   const starts: number[] = [];
   for (let i = 0; i < turns.length; i++) {
     if (turns[i].role === "user" && digestTurnText(turns[i]).trim()) starts.push(i);
   }
-  return starts.map((start, i) => ({
-    start,
-    end: i + 1 < starts.length ? starts[i + 1] : turns.length,
-  }));
+  return starts.map((start, i) => {
+    const end = i + 1 < starts.length ? starts[i + 1] : turns.length;
+    const text = turns
+      .slice(start, end)
+      .map((t) => {
+        const paths = (t.tools ?? [])
+          .map((tool) => tool.path || tool.pattern || tool.command_preview || "")
+          .filter(Boolean)
+          .join(" ");
+        return `${digestTurnText(t)} ${paths}`;
+      })
+      .join("\n");
+    return { start, end, text };
+  });
 }
 
-function cycleScore(titleWords: Set<string>, contentWords: Set<string>, cycleText: string): number {
+/** Title words count double: the title is the note's identity, the body is corroboration. */
+export function cycleMatchScore(words: NoteWords, cycleText: string): number {
   const cycleWords = significantWords(cycleText);
-  return overlapCount(titleWords, cycleWords) * 2 + overlapCount(contentWords, cycleWords);
+  return overlapCount(words.title, cycleWords) * 2 + overlapCount(words.content, cycleWords);
 }
 
 function cleanedUserQuery(text: string): string {
@@ -166,30 +195,17 @@ export function attributeRediscovery(
     }
     if (turns.length === 0) continue;
 
-    const cycles = userCycles(turns).map((cycle) => ({
-      ...cycle,
-      text: turns
-        .slice(cycle.start, cycle.end)
-        .map((t) => {
-          const paths = (t.tools ?? [])
-            .map((tool) => tool.path || tool.pattern || tool.command_preview || "")
-            .filter(Boolean)
-            .join(" ");
-          return `${digestTurnText(t)} ${paths}`;
-        })
-        .join("\n"),
-    }));
+    const cycles = sessionCycles(turns);
     const taken = new Set<number>();
     const ranked = indexes
       .map((i) => {
-        const titleWords = significantWords(notes[i].title);
-        const contentWords = significantWords(notes[i].content);
+        const words = noteWords(notes[i]);
         let bestScore = 0;
         for (const cycle of cycles) {
-          const score = cycleScore(titleWords, contentWords, cycle.text);
+          const score = cycleMatchScore(words, cycle.text);
           if (score > bestScore) bestScore = score;
         }
-        return { i, titleWords, contentWords, bestScore };
+        return { i, words, bestScore };
       })
       .sort((a, b) => b.bestScore - a.bestScore);
 
@@ -199,7 +215,7 @@ export function attributeRediscovery(
       let pickScore = 0;
       for (let ci = 0; ci < cycles.length; ci++) {
         if (taken.has(ci)) continue;
-        const score = cycleScore(item.titleWords, item.contentWords, cycles[ci].text);
+        const score = cycleMatchScore(item.words, cycles[ci].text);
         if (score > pickScore) {
           pickScore = score;
           pick = ci;
