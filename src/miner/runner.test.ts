@@ -81,6 +81,14 @@ describe("classifyGatewayError", () => {
 });
 
 describe("runMiner", () => {
+  it("fails closed when the gateway URL is not absolute", async () => {
+    const result = await runMiner({ ...baseOptions, gatewayURL: "/v1/llm-gateway" });
+
+    expect(result.outcome).toBe("error");
+    expect(result.message).toMatch(/gateway URL/i);
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
   it("fails closed on settings conflicts without spawning", async () => {
     conflictsMock.mockReturnValue([
       { file: "/etc/claude-code/managed-settings.json", keys: ["apiKeyHelper"] },
@@ -182,6 +190,49 @@ describe("runMiner", () => {
     const result = await runMiner(baseOptions);
 
     expect(result.notesWritten).toBe(2);
+  });
+
+  it("injects the last-read session as transcript_id into write_knowledge payloads", async () => {
+    type GateResult = { behavior: string; updatedInput?: Record<string, unknown> };
+    type GateParams = {
+      options: { canUseTool: (name: string, input: object, extra: object) => Promise<GateResult> };
+    };
+    const gateResults: GateResult[] = [];
+    queryMock.mockImplementation((params: GateParams) => {
+      return (async function* () {
+        // Before any read there is nothing to inject: the payload passes as-is.
+        gateResults.push(
+          await params.options.canUseTool(
+            "mcp__dosu__write_knowledge",
+            { title: "Early", content: "No session read yet.", transcript_id: "model-invented" },
+            {},
+          ),
+        );
+        await params.options.canUseTool("mcp__sessions__read_session", { id: "s1" }, {});
+        // An id-less read (e.g. a paging call) keeps the last session attribution.
+        await params.options.canUseTool("mcp__sessions__read_session", { offset: 2 }, {});
+        gateResults.push(
+          await params.options.canUseTool(
+            "mcp__dosu__write_knowledge",
+            { title: "OAuth refresh", content: "Retry after 401.", transcript_id: "model-junk" },
+            {},
+          ),
+        );
+        yield successResult();
+      })();
+    });
+
+    const result = await runMiner(baseOptions);
+
+    expect(result.notesWritten).toBe(2);
+    // Pre-read write: untouched (nothing deterministic to inject).
+    expect(gateResults[0].updatedInput).toMatchObject({ transcript_id: "model-invented" });
+    // Post-read write: whatever the model authored is overwritten.
+    expect(gateResults[1].updatedInput).toEqual({
+      title: "OAuth refresh",
+      content: "Retry after 401.",
+      transcript_id: "s1",
+    });
   });
 
   it("maps a consent-off gateway refusal from the result text", async () => {

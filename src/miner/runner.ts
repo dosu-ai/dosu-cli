@@ -1,9 +1,10 @@
 /** Mining-agent runner: spawns an Agent SDK session routed to the Dosu LLM gateway, fenced to
  * four tools. This is the only module in the CLI that imports the Agent SDK. */
 
-import { getLlmGatewayURL } from "../config/constants";
+import { getLlmGatewayURL, isAbsoluteHttpUrl } from "../config/constants";
 import { logger } from "../debug/logger";
 import { mcpHeaders, mcpURL } from "../mcp/config-helpers";
+import { sessionIdFromReadInput } from "../report/notes";
 import type { AgentSession } from "../sessions/scan";
 import { getVersionString } from "../version/version";
 import { createRunConfigDir } from "./config-dir";
@@ -138,6 +139,17 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
     };
   }
 
+  const gatewayURL = options.gatewayURL ?? getLlmGatewayURL();
+  if (!isAbsoluteHttpUrl(gatewayURL)) {
+    return {
+      outcome: "error",
+      notesWritten: 0,
+      turns: 0,
+      message:
+        "LLM gateway URL is not set. From source, use `bun run dev` (production endpoints) or `bun run dev:local` (local stack).",
+    };
+  }
+
   // The SDK is dynamically imported so no other CLI path pays its cost.
   const { query } = await import("@anthropic-ai/claude-agent-sdk");
 
@@ -159,11 +171,12 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
   const timer = setTimeout(() => abort.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 
   let notesWritten = 0;
+  let lastSessionId: string | undefined;
   let turns = 0;
 
   const env = buildMinerEnv({
     apiKey: options.apiKey,
-    gatewayURL: options.gatewayURL ?? getLlmGatewayURL(),
+    gatewayURL,
     configDir: configDir.path,
     runID,
     trigger: options.trigger,
@@ -210,6 +223,9 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
               message: `Tool ${toolName} is not permitted in mining runs.`,
             };
           }
+          if (toolName === `mcp__${SESSIONS_SERVER_NAME}__read_session`) {
+            lastSessionId = sessionIdFromReadInput(input) ?? lastSessionId;
+          }
           if (toolName === `mcp__${KNOWLEDGE_SERVER_NAME}__write_knowledge`) {
             if (notesWritten >= maxNotes) {
               return {
@@ -218,6 +234,16 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
               };
             }
             notesWritten += 1;
+            // Per-note transcript identity: overwrite the argument with the
+            // last-read session id. The model never authors this field (its
+            // own value, if any, is discarded here), and the backend only
+            // trusts it from attested clients. Deterministic injection is
+            // what lets the DB be the single source of truth for the
+            // knowledge report.
+            return {
+              behavior: "allow",
+              updatedInput: lastSessionId ? { ...input, transcript_id: lastSessionId } : input,
+            };
           }
           return { behavior: "allow", updatedInput: input };
         },

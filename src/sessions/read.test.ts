@@ -3,7 +3,12 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { estimateSessionTokens, isWorthMining, readSessionTurns } from "./read";
+import {
+  countRediscoveryToolCalls,
+  estimateSessionTokens,
+  isWorthMining,
+  readSessionTurns,
+} from "./read";
 import type { AgentSession } from "./scan";
 
 let dir: string;
@@ -289,6 +294,61 @@ describe("isWorthMining", () => {
 
   it("rejects an unreadable session", () => {
     expect(isWorthMining(session("claude", join(dir, "missing.jsonl")))).toBe(false);
+  });
+});
+
+describe("countRediscoveryToolCalls", () => {
+  it("counts Cursor/Claude tool_use names in REDISCOVERY_TOOLS", () => {
+    const path = writeLog("tools.jsonl", [
+      { type: "user", message: { role: "user", content: "why?" } },
+      {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "looking" },
+            { type: "tool_use", name: "Read", input: {} },
+            { type: "tool_use", name: "Grep", input: {} },
+            { type: "tool_use", name: "TodoWrite", input: {} },
+          ],
+        },
+      },
+    ]);
+    expect(countRediscoveryToolCalls(session("claude", path))).toBe(2);
+  });
+
+  it("counts Cursor role/message tool_use the same way", () => {
+    const path = writeLog("cursor-tools.jsonl", [
+      {
+        role: "assistant",
+        message: {
+          content: [
+            { type: "text", text: "looking" },
+            { type: "tool_use", name: "Read" },
+            { type: "tool_use", name: "Grep" },
+            { type: "tool_use", name: "TodoWrite" },
+          ],
+        },
+      },
+    ]);
+    expect(countRediscoveryToolCalls(session("cursor", path))).toBe(2);
+  });
+
+  it("counts Codex function_call names", () => {
+    const path = writeLog("codex.jsonl", [
+      { type: "response_item", payload: { type: "function_call", name: "read_file" } },
+      { type: "response_item", payload: { type: "function_call", name: "exec_command" } },
+      { type: "response_item", payload: { type: "function_call", name: "unknown_tool" } },
+    ]);
+    expect(countRediscoveryToolCalls(session("codex", path))).toBe(2);
+  });
+
+  it("returns 0 for an unreadable session", () => {
+    expect(countRediscoveryToolCalls(session("claude", join(dir, "missing.jsonl")))).toBe(0);
+  });
+
+  it("returns 0 for opencode sessions", () => {
+    expect(countRediscoveryToolCalls(session("opencode", join(dir, "missing.db")))).toBe(0);
   });
 });
 

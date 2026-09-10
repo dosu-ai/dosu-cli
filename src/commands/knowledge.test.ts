@@ -53,6 +53,11 @@ vi.mock("../sync/watermark", async (importOriginal) => ({
   loadSyncState: (...args: unknown[]) => mockLoadSyncState(...args),
 }));
 
+const mockEmitReport = vi.fn();
+vi.mock("../report/generate", () => ({
+  emitKnowledgeReport: (...args: unknown[]) => mockEmitReport(...args),
+}));
+
 interface FakeAgent {
   id: string;
   name: string;
@@ -137,6 +142,8 @@ beforeEach(() => {
   mockGetSyncStatus.mockReset();
   mockListBacklog.mockReset();
   mockLoadSyncState.mockReset();
+  mockEmitReport.mockReset();
+  mockEmitReport.mockResolvedValue("/tmp/dosu-knowledge-report.html");
   fakeAgents = [];
   enableCalls.length = 0;
   disableCalls.length = 0;
@@ -522,6 +529,57 @@ describe("knowledge sync", () => {
     await run("sync", "--json");
 
     expect(JSON.parse(allOutput())).toMatchObject({ status: "backlog", readySessions: 2 });
+  });
+
+  it("--report writes and opens the harvest HTML after a foreground sync", async () => {
+    mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: "dep1" }));
+    mockRunSync.mockResolvedValue({
+      status: "mined",
+      readySessions: 2,
+      inFlightSessions: 0,
+      sessions: [],
+      minedSessions: 2,
+      miner: { outcome: "completed", notesWritten: 1, turns: 4 },
+    });
+
+    await run("sync", "--report", "--out", "/tmp/custom-report.html");
+
+    expect(mockEmitReport).toHaveBeenCalledWith({
+      out: "/tmp/custom-report.html",
+      open: true,
+    });
+    expect(allOutput()).toContain("Wrote /tmp/dosu-knowledge-report.html");
+  });
+
+  it("knowledge report writes the HTML without running sync", async () => {
+    mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: "dep1" }));
+    await run("report", "--no-open");
+    expect(mockRunSync).not.toHaveBeenCalled();
+    expect(mockEmitReport).toHaveBeenCalledWith({
+      out: undefined,
+      open: false,
+    });
+    expect(allOutput()).toContain("Wrote /tmp/dosu-knowledge-report.html");
+  });
+
+  it("--quiet --report stays silent and does not write HTML", async () => {
+    mockRunSync.mockResolvedValue({ status: "mined", readySessions: 0, inFlightSessions: 0 });
+    await run("sync", "--quiet", "--report");
+    expect(mockEmitReport).not.toHaveBeenCalled();
+    expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  it("--json --report includes the HTML path and does not open a browser", async () => {
+    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
+    await run("sync", "--json", "--report", "--out", "/tmp/custom-report.html");
+    expect(mockEmitReport).toHaveBeenCalledWith({
+      out: "/tmp/custom-report.html",
+      open: false,
+    });
+    expect(JSON.parse(allOutput())).toMatchObject({
+      status: "nothing-new",
+      report: "/tmp/dosu-knowledge-report.html",
+    });
   });
 
   it("--detach re-spawns and never runs the pipeline inline", async () => {

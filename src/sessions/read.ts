@@ -155,6 +155,80 @@ export function readSessionTurns(session: AgentSession): SessionTurn[] {
   }
 }
 
+/** Cursor + Claude Code + Codex names the skill report counts as rediscovery. */
+const REDISCOVERY_TOOLS = new Set([
+  "Read",
+  "Grep",
+  "Glob",
+  "Shell",
+  "WebSearch",
+  "WebFetch",
+  "Task",
+  "SemanticSearch",
+  "Bash",
+  "Edit",
+  "MultiEdit",
+  "NotebookEdit",
+  "Agent",
+  "exec_command",
+  "write_stdin",
+  "web_search",
+  "web_search_call",
+  "open_page",
+  "apply_patch",
+  "update_plan",
+  "list_dir",
+  "grep_files",
+  "read_file",
+]);
+
+function isRediscoveryTool(name: string): boolean {
+  return REDISCOVERY_TOOLS.has(name) || name.startsWith("web_search");
+}
+
+function toolNamesFromContent(content: unknown): string[] {
+  if (!Array.isArray(content)) return [];
+  const names: string[] = [];
+  for (const entry of content) {
+    const item = asRecord(entry);
+    if (item?.type === "tool_use" && typeof item.name === "string") names.push(item.name);
+  }
+  return names;
+}
+
+/** Count investigation tool calls the way parse_agent_logs.py does (Read/Grep/Bash/…). */
+export function countRediscoveryToolCalls(session: AgentSession): number {
+  try {
+    switch (session.harness) {
+      case "claude":
+      case "cursor": {
+        let n = 0;
+        for (const record of jsonlRecords(readFileSync(session.path, "utf8"))) {
+          const message = asRecord(record.message);
+          for (const name of toolNamesFromContent(message?.content)) {
+            if (isRediscoveryTool(name)) n += 1;
+          }
+        }
+        return n;
+      }
+      case "codex": {
+        let n = 0;
+        for (const record of jsonlRecords(readFileSync(session.path, "utf8"))) {
+          const payload = asRecord(record.payload);
+          if (payload?.type === "function_call" && typeof payload.name === "string") {
+            if (isRediscoveryTool(payload.name)) n += 1;
+          }
+        }
+        return n;
+      }
+      case "opencode":
+        return 0;
+    }
+  } catch {
+    return 0;
+  }
+}
+
 /** chars → tokens, the same coarse model the log-backfill report uses. */
 const CHARS_PER_TOKEN = 4;
 
