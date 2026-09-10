@@ -44,10 +44,18 @@ describe("parseWriteKnowledgeInput", () => {
     });
   });
 
-  it("rejects empty payloads", () => {
+  it("rejects empty payloads, arrays, and non-string fields", () => {
     expect(parseWriteKnowledgeInput({})).toBeNull();
     expect(parseWriteKnowledgeInput({ title: "  ", content: "" })).toBeNull();
     expect(parseWriteKnowledgeInput(null)).toBeNull();
+    expect(parseWriteKnowledgeInput(["title"])).toBeNull();
+    expect(parseWriteKnowledgeInput({ title: 42, content: 7 })).toBeNull();
+    expect(parseWriteKnowledgeInput({ title: "T", content: "C", repo: 1, branch: 2 })).toEqual({
+      title: "T",
+      content: "C",
+    });
+    expect(sessionIdFromReadInput(["id"])).toBeUndefined();
+    expect(sessionIdFromReadInput({ id: "  " })).toBeUndefined();
   });
 
   it("prefers an explicit transcript_id on the payload", () => {
@@ -188,6 +196,35 @@ describe("attributeRediscovery", () => {
     expect(note.user_query).toBeUndefined();
     expect(note.investigation_lines).toBeUndefined();
     expect(note.approx_rediscovery_tokens).toBeUndefined();
+  });
+
+  it("ignores notes whose transcript id matches no scanned session", () => {
+    const session = claudeSession("s1", [
+      { type: "user", message: { content: "why does oauth retry?" } },
+    ]);
+    const [unknown, bare] = attributeRediscovery(
+      [
+        { title: "OAuth retry", content: "Retry.", transcript_id: "not-scanned" },
+        { title: "No transcript", content: "Bare." },
+      ],
+      [session],
+    );
+    expect(unknown.approx_rediscovery_tokens).toBeUndefined();
+    expect(bare.approx_rediscovery_tokens).toBeUndefined();
+  });
+
+  it("keeps the session title but assigns no cycle when only scaffolding matches", () => {
+    const session = claudeSession("s1", [
+      { type: "user", message: { content: "# AGENTS.md\nrules" } },
+      { type: "user", message: { content: "find the oauth retry in tokens.py" } },
+      { type: "assistant", message: { content: [{ type: "text", text: "retry after 401" }] } },
+    ]);
+    const [note] = attributeRediscovery(
+      [{ title: "OAuth retry tokens.py", content: "Retry after 401.", transcript_id: "s1" }],
+      [session],
+    );
+    expect(note.session_title).toBe("find the oauth retry in tokens.py");
+    expect(note.approx_rediscovery_tokens).toBeGreaterThan(0);
   });
 });
 

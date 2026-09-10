@@ -202,6 +202,107 @@ describe("renderTraceHtml tools", () => {
   });
 });
 
+describe("trace preview fallback ladder", () => {
+  const digestFor = (tools: object[], text: string[] = []) => ({
+    "sess-1": {
+      turns: [
+        { role: "user", line: 1, est_tokens: 5, text: ["q"], tools: [] },
+        { role: "assistant", line: 2, est_tokens: 40, text, tools },
+      ],
+    },
+  });
+  const cand = { transcript_id: "sess-1", investigation_lines: "1-2" };
+
+  it("walks pattern, command, query, file_path, and prompt previews", () => {
+    const html = renderTraceHtml(
+      cand,
+      digestFor([
+        { name: "Grep", pattern: "retry after 401" },
+        { name: "Shell", command_preview: "rg refresh" },
+        { name: "Search", query: "token rotation" },
+        { name: "Read", file_path: "src/deep/leaf-file.ts" },
+        { name: "Read", file_path: "noslash.ts" },
+        { name: "Task", prompt: "trace the retry loop" },
+        { name: "Read", path: "bare-path.ts" },
+      ]),
+    );
+    for (const s of [
+      "retry after 401",
+      "rg refresh",
+      "token rotation",
+      "leaf-file.ts",
+      "noslash.ts",
+      "trace the retry loop",
+      "bare-path.ts",
+    ]) {
+      expect(html).toContain(s);
+    }
+  });
+
+  it("falls back to MCP knowledge args, arguments, tool_name/server, and canned labels", () => {
+    const html = renderTraceHtml(
+      cand,
+      digestFor([
+        { name: "CallMcpTool", knowledge: { tool: "query_logs", arguments: { sql: "select 2" } } },
+        { name: "mcp__srv__deep_tool", arguments: { description: "described call" } },
+        { name: "CallMcpTool", tool_name: "snake_tool", server: "dosu" },
+        { name: "GetMcpTools" },
+        { name: "CallMcpTool" },
+        { name: "CallMcpTool", knowledge: { tool: "some_tool" } },
+        { name: "mcp:inner_tool" },
+        {},
+      ]),
+    );
+    expect(html).toContain("select 2");
+    expect(html).toContain("described call");
+    expect(html).toContain("snake_tool · dosu");
+    expect(html).toContain("Look up available MCP tools");
+    expect(html).toContain("MCP call");
+    expect(html).toContain("MCP call · some_tool");
+    expect(html).toContain("inner_tool");
+    expect(html).toContain("No input recorded");
+    expect(html).toContain("Logs");
+    expect(html).toContain("MCP schema");
+  });
+
+  it("caps long traces with an omitted-steps row and counts reasoning turns", () => {
+    const turns = [
+      { role: "user", line: 1, est_tokens: 5, text: ["q"], tools: [] },
+      { role: "assistant", line: 2, est_tokens: 3, text: ["thinking it through"], tools: [] },
+      { role: "user", line: 3, est_tokens: 0, text: [""], tools: [] },
+      ...Array.from({ length: 60 }, (_, i) => ({
+        role: "assistant",
+        line: i + 4,
+        est_tokens: 0,
+        text: [],
+        tools: [{ name: "Read", path: `f${i}.ts` }],
+      })),
+    ];
+    const html = renderTraceHtml(
+      { transcript_id: "sess-1", investigation_lines: "1-70" },
+      { "sess-1": { turns } },
+    );
+    expect(html).toContain("earlier steps omitted");
+    expect(html).toContain("1 reasoning");
+  });
+
+  it("buckets write_knowledge as other and keeps two-status headings partial", () => {
+    const html = renderTraceHtml(
+      cand,
+      digestFor([{ name: "write_knowledge" }, { name: "finalize_session_knowledge" }]),
+    );
+    expect(html).toContain("Work to learn this");
+    const heading = buildReportHtml({
+      inventory,
+      candidates: [
+        { ...written, status: "written" },
+        { title: "Draft", content: "soon", status: "pending" },
+      ],
+    });
+    expect(heading).toContain("1 written, 1 pending —");
+  });
+});
+
 describe("presentation and inventory edges", () => {
   it("uses how_found and plain_english when present", () => {
     const html = buildReportHtml({

@@ -89,6 +89,11 @@ describe("fetchRemoteNotes", () => {
     expect(await fetchRemoteNotes(authedConfig())).toEqual([]);
   });
 
+  it("fails open on non-Error throwables too", async () => {
+    mockQuery.mockRejectedValue("string failure");
+    expect(await fetchRemoteNotes(authedConfig())).toEqual([]);
+  });
+
   it("fails open when the client cannot be constructed", async () => {
     mockCreateTypedClient.mockImplementation(() => {
       throw new Error("Web app URL not configured");

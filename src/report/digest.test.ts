@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentSession } from "../sessions/scan";
-import { sessionToDigest } from "./digest";
+import { digestTurnText, sessionToDigest } from "./digest";
 import { buildReportHtml } from "./html";
 import { attributeRediscovery } from "./notes";
 
@@ -199,6 +199,47 @@ describe("sessionToDigest", () => {
     const turns = sessionToDigest(s).turns;
     expect(turns).toHaveLength(1);
     expect(turns[0].line).toBe(3);
+  });
+
+  it("handles Codex records with missing payloads, empty user messages, and bare function_calls", () => {
+    const s = session("x2", "codex", [
+      "123",
+      { type: "event_msg" },
+      { type: "event_msg", payload: { type: "user_message", message: "" } },
+      { type: "event_msg", payload: { type: "user_message" } },
+      { type: "response_item", payload: { type: "function_call", name: "read_file" } },
+    ]);
+    const turns = sessionToDigest(s).turns;
+    expect(turns).toHaveLength(1);
+    expect(turns[0].tools).toEqual([{ name: "read_file", command_preview: '""' }]);
+  });
+
+  it("drops nameless tool_use blocks, tool_result-only user rows, and empty assistant turns", () => {
+    const s = claudeSession("edge1", [
+      { type: "user", message: { content: "# AGENTS.md\nrepo rules only" } },
+      { type: "user", message: { content: [{ type: "tool_result", content: null }] } },
+      {
+        type: "assistant",
+        message: {
+          content: [
+            { type: "tool_use", input: {} },
+            { type: "tool_use", name: 42, input: {} },
+            { type: "text", text: "" },
+            "not-a-record",
+          ],
+        },
+      },
+      { type: "assistant", message: {} },
+    ]);
+    // Only the plain-text user turn survives; nameless tools, empty text
+    // blocks, and content-less messages all drop.
+    expect(sessionToDigest(s).turns.map((t) => t.role)).toEqual(["user"]);
+  });
+
+  it("digestTurnText joins arrays, passes strings through, and tolerates missing text", () => {
+    expect(digestTurnText({ text: ["a", "", "b"] })).toBe("a\nb");
+    expect(digestTurnText({ text: "plain" })).toBe("plain");
+    expect(digestTurnText({})).toBe("");
   });
 
   it("degrades to zero turns for opencode sessions and unreadable files", () => {

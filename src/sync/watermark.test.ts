@@ -77,6 +77,43 @@ describe("loadSyncState / saveSyncState", () => {
     expect(loadSyncState(configDir)).toEqual(state);
   });
 
+  it("filters malformed written_notes entries and coerces unknown statuses", () => {
+    writeFileSync(
+      syncStatePath(configDir),
+      JSON.stringify({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        written_notes: [
+          "not-an-object",
+          { title: "no content" },
+          { title: "T", content: "C", at: "2026-08-25T11:04:00Z", status: "exotic", repo: 7 },
+          {
+            title: "Full",
+            content: "C",
+            at: "2026-08-25T11:05:00Z",
+            status: "proposed",
+            transcript_id: "s1",
+            repo: "git@x/y",
+            branch: "main",
+          },
+        ],
+      }),
+    );
+    expect(loadSyncState(configDir).written_notes).toEqual([
+      { title: "T", content: "C", at: "2026-08-25T11:04:00Z", status: "written" },
+      {
+        title: "Full",
+        content: "C",
+        at: "2026-08-25T11:05:00Z",
+        status: "proposed",
+        transcript_id: "s1",
+        repo: "git@x/y",
+        branch: "main",
+      },
+    ]);
+  });
+
   it("drops a malformed last_refusal", () => {
     writeFileSync(
       syncStatePath(configDir),
