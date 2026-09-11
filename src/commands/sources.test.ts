@@ -142,6 +142,13 @@ describe("sources list", () => {
     expect(output).toContain("Unknown Source");
     expect(output).toContain("-");
   });
+
+  it("treats a null response as an empty list", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce(null);
+    await run("list");
+    expect(allOutput()).toContain("No data sources connected");
+  });
 });
 
 describe("sources info", () => {
@@ -171,6 +178,13 @@ describe("sources info", () => {
     const output = allOutput();
     expect(output).toContain("GitHub");
     expect(output).toContain("github");
+  });
+
+  it("prints a not-found message when the data source does not exist", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce(undefined);
+    await run("info", "ds-missing");
+    expect(allOutput()).toContain("Data source not found");
   });
 });
 
@@ -375,6 +389,56 @@ describe("sources connect", () => {
 
     expect(allOutput()).toContain("No new repositories visible yet");
   });
+
+  it("opens the browser in human mode unless --no-open is passed", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    githubStep.fetchListForOrg.mockResolvedValue([]);
+    stubInstallServer(Promise.resolve({ installation_id: 9 }));
+    githubStep.waitForRepositoryRefresh.mockResolvedValue({ repos: [], foundNew: false });
+
+    await run("connect", "github");
+
+    const open = (await import("open")).default;
+    expect(open).toHaveBeenCalledWith(expect.stringContaining("/cli/connect-github"));
+  });
+
+  it("survives a failed browser open — the URL is already printed", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    githubStep.fetchListForOrg.mockResolvedValue([]);
+    stubInstallServer(Promise.resolve({ installation_id: 9 }));
+    githubStep.waitForRepositoryRefresh.mockResolvedValue({ repos: [], foundNew: false });
+    const open = (await import("open")).default as ReturnType<typeof vi.fn>;
+    open.mockRejectedValueOnce(new Error("no browser"));
+
+    await run("connect", "github");
+
+    expect(allOutput()).toContain("connect-github");
+    expect(allOutput()).toContain("GitHub App connected");
+  });
+
+  it("prints a human-readable timeout message", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    githubStep.fetchListForOrg.mockResolvedValue([]);
+    const { close } = stubInstallServer(new Promise(() => {}));
+
+    await expect(run("connect", "github", "--no-open", "--timeout", "1")).rejects.toThrow("exit");
+
+    expect(allErrors()).toContain("Timed out after 1s");
+    expect(allErrors()).toContain("re-run 'dosu sources connect github'");
+    expect(close).toHaveBeenCalled();
+  }, 10_000);
+
+  it("falls back to the default timeout when --timeout is not a number", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    githubStep.fetchListForOrg.mockResolvedValue([]);
+    stubInstallServer(Promise.resolve({ installation_id: 9 }));
+    githubStep.waitForRepositoryRefresh.mockResolvedValue({ repos: [], foundNew: false });
+
+    await run("connect", "github", "--json", "--timeout", "soon");
+
+    const events = jsonLines();
+    expect(events[0]).toMatchObject({ event: "awaiting_install", timeout_seconds: 600 });
+  });
 });
 
 describe("sources create", () => {
@@ -485,6 +549,16 @@ describe("sources create", () => {
     ).rejects.toThrow("exit");
     expect(allErrors()).toContain("fork");
     expect(allErrors()).toContain("upstream/api");
+  });
+
+  it("rejects a fork without naming a parent when the slug is unknown", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    githubStep.fetchListForOrg.mockResolvedValue([{ ...repo, is_fork: true }]);
+    await expect(
+      run("create", "github", "--repo", "acme/api", "--library", "lib1", "--confirm"),
+    ).rejects.toThrow("exit");
+    expect(allErrors()).toContain("fork");
+    expect(allErrors()).not.toContain("instead");
   });
 
   it("requires confirmation in JSON mode", async () => {
