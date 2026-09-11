@@ -1,6 +1,6 @@
 # Live Knowledge Skills — implementation plan
 
-Status: plan, not implemented. Prepared 2026-09-11 on branch `teedole/live-knowledge-skills`.
+Status: implemented on branch `teedole/live-knowledge-skills` and rehearsed against Claude Code 2.1.268 on 2026-09-11 (see §9). Plan prepared 2026-09-11.
 
 **The feature in one line.** `dosu skill link <document-id> --name migration-review --agent claude` installs a small Claude Code skill that, every time it runs, fetches the current *published* revision of one Dosu document through the CLI and follows it. Editing the document in Dosu changes what every agent using the skill does. `--revision N` pins a binding to one published revision instead.
 
@@ -294,3 +294,25 @@ Conditions that would push the estimate out:
 - Coverage thresholds force test scaffolding beyond the estimate: ship the prototype from a local build for the demo and land the PR the next day.
 
 Distinguish the four states when reporting: built prototype, passing PR, npm prerelease, stable release.
+
+## 9. Rehearsal outcome (2026-09-11)
+
+Environment: local build of this branch, Claude Code 2.1.268, the user's real `~/.claude/skills`, a scratch document created for the rehearsal and deleted afterwards. Deterministic results come from the CLI; behavioral results are single headless `claude -p` runs and model output varies.
+
+**Contract check (§1, "not verified live" item).** Confirmed with a scratch draft: `page.listVersions` returns drafts with `published: false` alongside published revisions, and `page.get` without `version` returns the newest revision even when it is an unpublished draft. `dosu docs update` produced an unpublished revision when the document's latest revision was a draft, so the rehearsal published through the typed client with `published: true`. The resolver's list → filter published → get(version) design is required, not optional.
+
+**Discovery and reload (§6 step 1).** An already-open Claude Code session listed the newly linked user skill without a restart, and fresh headless sessions saw it too. The `link` output therefore says "Invoke /<name> in Claude Code. If the skill does not appear, start a new session."
+
+**Pre-approval (§8 risk).** In `claude -p --permission-mode default`, with user allow rules that contain no `dosu` entry, the bare `dosu skill resolve …` command ran without a prompt. `allowed-tools: Bash(dosu skill resolve:*)` in the generated frontmatter is sufficient. The first (auto-mode) run wrapped the command in `command -v dosu … && … || npx -y @dosu/cli …`, which a prefix rule would not match; the template now asks for the bare command with no shell operators and the later runs complied.
+
+**Live update (§6 step 3).** Revision 4 (three checks): the review applied three checks and printed revision 4. After publishing revision 5 with a fourth check, a fresh session printed `Using Dosu procedure "…" (document …, revision 5, live)` as its first line and reported `CLI contract check: BLOCKED` with the regeneration command. Nothing was reinstalled.
+
+**Pinned (§6 step 4).** `--revision 4` linked after revision 5 existed printed `… revision 4, pinned` and applied only the three original checks.
+
+**Source line.** In one of four runs, before step 3 of the template was tightened to "begin your reply with this line", the agent omitted the source line while still resolving correctly. Both runs after the change began with it.
+
+**Failure paths (§6 step 5, via the CLI).** Pinned draft → `revision_not_published`; missing revision → `revision_unavailable`; unknown id → `document_not_found`; wrong `--library` → `library_mismatch` with both ids; `link --name writer --force` against a foreign skill → `name_taken` with the file hash unchanged; `unlink writer` → `not_a_dosu_link`; deleted document → `document_not_found`.
+
+**Preservation (§6 step 6).** `dosu skill links` listed exactly the two bindings. After unlinking both, a SHA-256 snapshot of every file under `~/.claude/skills` was identical to the snapshot taken before the rehearsal.
+
+Not rehearsed: `--project` scope in a real client session (covered by tests), and interactive permission prompting in a non-headless session.
