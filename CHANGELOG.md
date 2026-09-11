@@ -1,3 +1,10 @@
+# [0.53.0-beta.8](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.7...v0.53.0-beta.8) (2026-09-11)
+
+
+### Features
+
+* **knowledge:** dosu knowledge backfill-transcripts (self-serve history attribution) ([#213](https://github.com/dosu-ai/dosu-cli/issues/213)) ([20eec38](https://github.com/dosu-ai/dosu-cli/commit/20eec3815ebaf0cc2dad6f1d6e8ad5dd8b0095da))
+
 # [0.53.0-beta.7](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.6...v0.53.0-beta.7) (2026-09-11)
 
 
