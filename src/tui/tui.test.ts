@@ -49,6 +49,10 @@ vi.mock("./pages-view", () => ({
   runPagesView: vi.fn(),
 }));
 
+vi.mock("../report/generate", () => ({
+  emitKnowledgeReport: vi.fn(),
+}));
+
 // The banner reads the update cache from disk; tests must not see the
 // developer machine's real cache file.
 vi.mock("../version/update-check", () => ({
@@ -110,6 +114,7 @@ import type { HookAgent } from "../hooks/agents";
 import { getHookAgent } from "../hooks/agents";
 import type { SetupProvider } from "../mcp/providers";
 import { allSetupProviders } from "../mcp/providers";
+import { emitKnowledgeReport } from "../report/generate";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import type { AgentSession } from "../sessions/scan";
 import { scanAgentSessions } from "../sessions/scan";
@@ -136,6 +141,7 @@ const mockRunSwitchTarget = vi.mocked(runSwitchTarget);
 const mockRunActivityView = vi.mocked(runActivityView);
 const mockRunAnalyticsView = vi.mocked(runAnalyticsView);
 const mockRunPagesView = vi.mocked(runPagesView);
+const mockEmitReport = vi.mocked(emitKnowledgeReport);
 const mockAllSetupProviders = vi.mocked(allSetupProviders);
 const mockScanSessions = vi.mocked(scanAgentSessions);
 const mockMultiselect = vi.mocked(p.multiselect);
@@ -467,13 +473,16 @@ describe("runTUI", () => {
     const signedIn = mockMenuSelect.mock.calls[0]?.[1] ?? [];
     expect(signedIn.map((o) => o.value)).toEqual([
       "sync",
+      "report",
       "analytics",
       "pages",
       "settings",
       "exit",
     ]);
-    // Everyday rows are bare labels; only Setup carries a (warning) hint.
-    expect(signedIn.every((o) => o.hint === undefined)).toBe(true);
+    expect(signedIn.find((o) => o.value === "report")?.hint).toBe("(opens in browser)");
+    expect(signedIn.filter((o) => o.value !== "report").every((o) => o.hint === undefined)).toBe(
+      true,
+    );
 
     // Signed out: nothing works without an account, so the menu is just the
     // door — log in / sign up, or leave.
@@ -561,7 +570,14 @@ describe("runTUI", () => {
 
     expect(mockRunSetup).not.toHaveBeenCalled();
     const options = mockMenuSelect.mock.calls[0]?.[1] ?? [];
-    expect(options.map((o) => o.value)).toEqual(["sync", "analytics", "pages", "settings", "exit"]);
+    expect(options.map((o) => o.value)).toEqual([
+      "sync",
+      "report",
+      "analytics",
+      "pages",
+      "settings",
+      "exit",
+    ]);
   });
 
   it("flags the repo's AGENTS.md on the banner only inside a git work tree", async () => {
@@ -722,6 +738,27 @@ describe("runTUI", () => {
 
     expect(mockRunPagesView).toHaveBeenCalledOnce();
     expect(mockRunActivityView).not.toHaveBeenCalled();
+  });
+
+  it("report action writes and opens the harvest HTML", async () => {
+    writeRealConfig(makeCfg({}));
+    mockEmitReport.mockResolvedValue("/tmp/dosu-knowledge-report.html");
+    mockMenuSelect.mockResolvedValueOnce("report").mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    expect(mockEmitReport).toHaveBeenCalledWith({ open: true });
+    expect(mockRunActivityView).not.toHaveBeenCalled();
+  });
+
+  it("report action surfaces a write failure without leaving the TUI", async () => {
+    writeRealConfig(makeCfg({}));
+    mockEmitReport.mockRejectedValue(new Error("disk full"));
+    mockMenuSelect.mockResolvedValueOnce("report").mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    expect(p.log.error).toHaveBeenCalledWith("disk full");
   });
 
   it("settings submenu shows the active target and goes back", async () => {

@@ -10,6 +10,7 @@ import { createTypedClient } from "../client/trpc";
 import { loadConfig } from "../config/config";
 import { allHookAgents, getHookAgent, type HookAgent } from "../hooks/agents";
 import { HookConfigError, hookCommand } from "../hooks/formats";
+import { emitKnowledgeReport } from "../report/generate";
 import type { AgentSession } from "../sessions/scan";
 import { listSessionBacklog } from "../sync/backlog";
 import { spawnDetachedSelf } from "../sync/detach";
@@ -202,6 +203,11 @@ export function knowledgeCommand(): Command {
       "Backfill mode: mine the full local session history regardless of age and drain the backlog (used by setup)",
     )
     .option("--status", "Show whether a sync is running now, plus watermark and recent activity")
+    .option(
+      "--report",
+      "Write the same HTML harvest report as the log-to-dosu-knowledge skill and open it",
+    )
+    .option("--out <path>", "HTML report path (default: tmp/dosu-knowledge-report.html)")
     .option("--json", "Output as JSON")
     .action(
       async (opts: {
@@ -209,6 +215,8 @@ export function knowledgeCommand(): Command {
         detach?: boolean;
         bootstrap?: boolean;
         status?: boolean;
+        report?: boolean;
+        out?: string;
         json?: boolean;
       }) => {
         // --status never scans or mines: it reads the lock, the persisted
@@ -231,6 +239,8 @@ export function knowledgeCommand(): Command {
             "sync",
             ...(opts.quiet ? ["--quiet"] : []),
             ...(opts.bootstrap ? ["--bootstrap"] : []),
+            ...(opts.report ? ["--report"] : []),
+            ...(opts.out ? ["--out", opts.out] : []),
           ]);
           return;
         }
@@ -255,14 +265,53 @@ export function knowledgeCommand(): Command {
         if (opts.quiet) return; // Invisible by contract; details are in the debug log.
 
         if (opts.json) {
-          printResult(outcome, opts);
           if (outcome.status === "error") process.exitCode = 1;
+          if (opts.report) {
+            // The sync outcome must reach stdout even when the report fails:
+            // mining already happened and callers parse this JSON.
+            try {
+              const report = await emitKnowledgeReport({ out: opts.out, open: false });
+              printResult({ ...outcome, report }, opts);
+            } catch (err) {
+              const report_error = err instanceof Error ? err.message : String(err);
+              printResult({ ...outcome, report_error }, opts);
+            }
+          } else {
+            printResult(outcome, opts);
+          }
           return;
         }
 
         printSyncOutcome(outcome);
+        if (opts.report) {
+          try {
+            const report = await emitKnowledgeReport({ out: opts.out, open: true });
+            console.log(`Wrote ${report}`);
+          } catch (err) {
+            console.error(err instanceof Error ? err.message : String(err));
+            process.exitCode = 1;
+          }
+        }
       },
     );
+
+  cmd
+    .command("report")
+    .description("Render the knowledge report from your Dosu notes and the local session logs")
+    .option("--out <path>", "HTML report path (default: tmp/dosu-knowledge-report.html)")
+    .option("--json", "Output the report path as JSON")
+    .option("--no-open", "Write the file without opening a browser")
+    .action(async (opts: { out?: string; json?: boolean; open?: boolean }) => {
+      const path = await emitKnowledgeReport({
+        out: opts.out,
+        open: opts.json ? false : opts.open,
+      });
+      if (opts.json) {
+        printResult({ report: path }, opts);
+        return;
+      }
+      console.log(`Wrote ${path}`);
+    });
 
   cmd.addCommand(hooksCommand());
 

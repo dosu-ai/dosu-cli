@@ -14,6 +14,7 @@ import {
 import { getWebAppURL } from "../config/constants";
 import { getHookAgent } from "../hooks/agents";
 import { allSetupProviders } from "../mcp/providers";
+import { emitKnowledgeReport } from "../report/generate";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { scanAgentSessions } from "../sessions/scan";
 import { dosuAgentsSectionState, inGitWorkTree } from "../setup/agents-md-step";
@@ -183,7 +184,7 @@ async function runMainMenu(): Promise<void> {
   const buildOptions = (): MenuOption[] => {
     if (!isAuthenticated(cfg)) {
       return [
-        { label: "Log in / Sign up", hint: "opens your browser", value: "auth" },
+        { label: "Log in / Sign up", hint: "(opens your browser)", value: "auth" },
         { label: "Exit", value: "exit" },
       ];
     }
@@ -201,6 +202,7 @@ async function runMainMenu(): Promise<void> {
         label: mining ? `Activity \u26CF\uFE0F ${brand("mining sessions...")}` : "Activity",
         value: "sync",
       },
+      { label: "Knowledge report", hint: "(opens in browser)", value: "report" },
       { label: "Analytics", value: "analytics" },
       { label: "Pages", value: "pages" },
       { label: "Settings", value: "settings" },
@@ -235,6 +237,10 @@ async function runMainMenu(): Promise<void> {
         await runActivityView();
         home();
         break;
+      case "report":
+        await runKnowledgeReport();
+        home();
+        break;
       case "analytics":
         await runAnalyticsView();
         home();
@@ -261,6 +267,19 @@ async function runMainMenu(): Promise<void> {
         home();
         break;
     }
+  }
+}
+
+/** Write the harvest HTML from persisted notes and open it, same as `dosu knowledge report`. */
+async function runKnowledgeReport(): Promise<void> {
+  const s = p.spinner();
+  s.start("Writing knowledge report...");
+  try {
+    const path = await emitKnowledgeReport({ open: true });
+    s.stop(`Opened ${path}`);
+  } catch (err) {
+    s.stop("Could not write the report");
+    p.log.error(err instanceof Error ? err.message : String(err));
   }
 }
 
