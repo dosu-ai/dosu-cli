@@ -1,3 +1,10 @@
+# [0.53.0-beta.9](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.8...v0.53.0-beta.9) (2026-09-11)
+
+
+### Bug Fixes
+
+* **miner:** per-write transcript attribution (deterministic, no concentration) ([#214](https://github.com/dosu-ai/dosu-cli/issues/214)) ([b9ff358](https://github.com/dosu-ai/dosu-cli/commit/b9ff358d07bb5aaaa5024c45044a98a57d3f5db8))
+
 # [0.53.0-beta.8](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.7...v0.53.0-beta.8) (2026-09-11)
 
 
