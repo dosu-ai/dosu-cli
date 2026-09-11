@@ -561,7 +561,7 @@ export type CliSlackChannelRow = {
 	topic?: string | null
 }
 
-export declare const CLI_CONTRACT_HASH: '79ec0bbacf70'
+export declare const CLI_CONTRACT_HASH: 'd7c6f0f0e8d0'
 
 export type AgentsAddAdminsInput = {
 	deployment_id: string
@@ -1227,6 +1227,17 @@ export type NangoGetConnectionInput = {
 }
 
 export type NangoGetConnectionOutput = any
+
+export type NotesAttributeTranscriptsInput = {
+	mappings: Array<{
+		note_id: string
+		transcript_id: string
+	}>
+}
+
+export type NotesAttributeTranscriptsOutput = {
+	updated: number
+}
 
 export type NotesListMineInput = {
 	limit?: number
@@ -2066,6 +2077,10 @@ export interface CliApiClient {
 		getConnection: QueryProcedure<NangoGetConnectionInput, NangoGetConnectionOutput>
 	}
 	notes: {
+		attributeTranscripts: MutationProcedure<
+			NotesAttributeTranscriptsInput,
+			NotesAttributeTranscriptsOutput
+		>
 		listMine: QueryProcedure<NotesListMineInput, NotesListMineOutput>
 	}
 	organization: {

@@ -313,6 +313,30 @@ export function knowledgeCommand(): Command {
       console.log(`Wrote ${path}`);
     });
 
+  cmd
+    .command("backfill-transcripts")
+    .description(
+      "One-shot: attribute pre-existing notes to the local sessions that produced them, so the report can show their traces",
+    )
+    .option("--json", "Output the result as JSON")
+    .action(async (opts: { json?: boolean }) => {
+      const { runBackfill } = await import("../report/backfill-run");
+      const result = await runBackfill();
+      if (opts.json) {
+        printResult(result, opts);
+        return;
+      }
+      if (result.candidates === 0) {
+        console.log("All your notes already have a transcript — nothing to backfill.");
+        return;
+      }
+      console.log(
+        `Attributed ${result.updated} of ${result.candidates} notes ` +
+          `(${result.ambiguous} ambiguous, ${result.noBatch} without a local mining batch). ` +
+          "Run 'dosu knowledge report' to see their traces.",
+      );
+    });
+
   cmd.addCommand(hooksCommand());
 
   return cmd;
