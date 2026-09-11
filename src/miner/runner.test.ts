@@ -269,13 +269,10 @@ describe("runMiner", () => {
     const result = await runMiner(baseOptions);
 
     expect(result.notesWritten).toBe(1);
-    // No transcript_id key injected — the model's own value is left as-is,
-    // and the backend discards it (unattested for that field).
-    expect(g[0].updatedInput).toEqual({
-      title: "orphan",
-      content: "c",
-      transcript_id: "model-junk",
-    });
+    // No session to attribute → genuinely unattributed. Any transcript_id the
+    // model supplied is stripped so the attested backend stores null.
+    expect(g[0].updatedInput).toEqual({ title: "orphan", content: "c" });
+    expect(g[0].updatedInput).not.toHaveProperty("transcript_id");
   });
 
   it("ignores an id-less read (a paging call) so it doesn't count as a session", async () => {
@@ -293,11 +290,8 @@ describe("runMiner", () => {
     const result = await runMiner(baseOptions);
 
     expect(result.notesWritten).toBe(1);
-    expect(g[0].updatedInput).toEqual({
-      title: "no-real-read",
-      content: "c",
-      transcript_id: "model-junk",
-    });
+    // Stripped: an id-less read is no session, so the model's value must not survive.
+    expect(g[0].updatedInput).toEqual({ title: "no-real-read", content: "c" });
   });
 
   it("maps a consent-off gateway refusal from the result text", async () => {

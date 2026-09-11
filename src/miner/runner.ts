@@ -257,16 +257,19 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
               };
             }
             notesWritten += 1;
-            // Exactly one session read since the last write: that is the note's
-            // source, stamped deterministically. Zero reads (a stray write with
-            // no preceding read) leaves it unattributed rather than guessing.
-            // The model never authors this field; the backend trusts it only
-            // from attested clients. Cleared so the next note is judged fresh.
+            // Exactly one session read since the last write is the note's source,
+            // stamped deterministically. The model never authors this field, so
+            // strip any transcript_id it supplied FIRST — the backend trusts the
+            // argument from this attested client, so a stray model value would
+            // otherwise be stored. Zero reads (a stray write with no preceding
+            // read) then leaves the note genuinely unattributed (null) rather
+            // than guessing. Cleared so the next note is judged fresh.
             const [transcriptId] = readSinceWrite;
             readSinceWrite.clear();
+            const { transcript_id: _authoredByModel, ...clean } = input as Record<string, unknown>;
             return {
               behavior: "allow",
-              updatedInput: transcriptId ? { ...input, transcript_id: transcriptId } : input,
+              updatedInput: transcriptId ? { ...clean, transcript_id: transcriptId } : clean,
             };
           }
           return { behavior: "allow", updatedInput: input };
