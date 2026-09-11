@@ -152,6 +152,15 @@ describe("runMiner", () => {
     expect(params.options.pathToClaudeCodeExecutable).toBe("/home/u/.local/bin/claude");
   });
 
+  it("routes SDK stderr into the debug log", async () => {
+    queryReturning(successResult());
+
+    await runMiner(baseOptions);
+
+    queryMock.mock.calls[0][0].options.stderr("boom on the sdk");
+    expect(debugMock).toHaveBeenCalledWith("miner", "[sdk] boom on the sdk");
+  });
+
   it("canUseTool denies non-allowlisted tools and enforces the note cap", async () => {
     queryReturning(successResult());
 
