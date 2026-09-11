@@ -171,7 +171,14 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
   const timer = setTimeout(() => abort.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 
   let notesWritten = 0;
-  let lastSessionId: string | undefined;
+  // Sessions read since the previous write_knowledge. A note is attributed
+  // only when this holds exactly one session — the one the note was just
+  // learned from. If the model read several before writing (or none), the
+  // source is ambiguous, so the note is left unattributed rather than stamped
+  // with a guess. Cleared after each write so the next note is judged on its
+  // own reads. See the deny path below, which trains the model to write each
+  // session's notes before reading the next.
+  const readSinceWrite = new Set<string>();
   let turns = 0;
 
   const env = buildMinerEnv({
@@ -224,7 +231,8 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
             };
           }
           if (toolName === `mcp__${SESSIONS_SERVER_NAME}__read_session`) {
-            lastSessionId = sessionIdFromReadInput(input) ?? lastSessionId;
+            const id = sessionIdFromReadInput(input);
+            if (id) readSinceWrite.add(id);
           }
           if (toolName === `mcp__${KNOWLEDGE_SERVER_NAME}__write_knowledge`) {
             if (notesWritten >= maxNotes) {
@@ -233,16 +241,32 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
                 message: `Note cap reached (${maxNotes} per run); stop writing and summarize.`,
               };
             }
+            // Reading several sessions before writing makes the note's source
+            // ambiguous. Deny to steer the model back to one-session-at-a-time,
+            // and clear the read set so its re-read of the right session starts
+            // fresh (otherwise the stale accumulation would deny forever). The
+            // note is not lost, just re-issued after it narrows the session.
+            if (readSinceWrite.size > 1) {
+              readSinceWrite.clear();
+              return {
+                behavior: "deny",
+                message:
+                  "Write each session's notes right after reading THAT session, before reading the next. " +
+                  "You have read multiple sessions without writing, so a note cannot be attributed to one. " +
+                  "Re-read only the session this note is about, then write it.",
+              };
+            }
             notesWritten += 1;
-            // Per-note transcript identity: overwrite the argument with the
-            // last-read session id. The model never authors this field (its
-            // own value, if any, is discarded here), and the backend only
-            // trusts it from attested clients. Deterministic injection is
-            // what lets the DB be the single source of truth for the
-            // knowledge report.
+            // Exactly one session read since the last write: that is the note's
+            // source, stamped deterministically. Zero reads (a stray write with
+            // no preceding read) leaves it unattributed rather than guessing.
+            // The model never authors this field; the backend trusts it only
+            // from attested clients. Cleared so the next note is judged fresh.
+            const [transcriptId] = readSinceWrite;
+            readSinceWrite.clear();
             return {
               behavior: "allow",
-              updatedInput: lastSessionId ? { ...input, transcript_id: lastSessionId } : input,
+              updatedInput: transcriptId ? { ...input, transcript_id: transcriptId } : input,
             };
           }
           return { behavior: "allow", updatedInput: input };
