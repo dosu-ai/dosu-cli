@@ -25,7 +25,10 @@ export function buildMinerPrompt(sessions: AgentSession[]): string {
 
 ${list}
 
-Read each session with read_session, decide what (if anything) is durable per your rules, dedupe \
-against read_knowledge, then write the distilled notes with write_knowledge. When you are done, \
-reply with a one-line summary: how many sessions you read and how many notes you wrote.`;
+Work through them ONE AT A TIME: read a single session with read_session, decide what (if \
+anything) is durable per your rules, dedupe against read_knowledge, and write that session's \
+notes with write_knowledge BEFORE moving on to the next session. Each note is attributed to the \
+session you read just before writing it, so do not read the next session until you have written \
+this one's notes. When you are done, reply with a one-line summary: how many sessions you read \
+and how many notes you wrote.`;
 }

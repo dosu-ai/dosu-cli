@@ -152,6 +152,15 @@ describe("runMiner", () => {
     expect(params.options.pathToClaudeCodeExecutable).toBe("/home/u/.local/bin/claude");
   });
 
+  it("routes SDK stderr into the debug log", async () => {
+    queryReturning(successResult());
+
+    await runMiner(baseOptions);
+
+    queryMock.mock.calls[0][0].options.stderr("boom on the sdk");
+    expect(debugMock).toHaveBeenCalledWith("miner", "[sdk] boom on the sdk");
+  });
+
   it("canUseTool denies non-allowlisted tools and enforces the note cap", async () => {
     queryReturning(successResult());
 
@@ -192,32 +201,27 @@ describe("runMiner", () => {
     expect(result.notesWritten).toBe(2);
   });
 
-  it("injects the last-read session as transcript_id into write_knowledge payloads", async () => {
-    type GateResult = { behavior: string; updatedInput?: Record<string, unknown> };
-    type GateParams = {
-      options: { canUseTool: (name: string, input: object, extra: object) => Promise<GateResult> };
-    };
-    const gateResults: GateResult[] = [];
+  type GateResult = { behavior: string; updatedInput?: Record<string, unknown>; message?: string };
+  type GateParams = {
+    options: { canUseTool: (name: string, input: object, extra: object) => Promise<GateResult> };
+  };
+  const read = (id: string) => ["mcp__sessions__read_session", { id }, {}] as const;
+  const write = (title: string) =>
+    [
+      "mcp__dosu__write_knowledge",
+      { title, content: "c", transcript_id: "model-junk" },
+      {},
+    ] as const;
+
+  it("attributes each note to the session currently being mined", async () => {
+    const g: GateResult[] = [];
     queryMock.mockImplementation((params: GateParams) => {
       return (async function* () {
-        // Before any read there is nothing to inject: the payload passes as-is.
-        gateResults.push(
-          await params.options.canUseTool(
-            "mcp__dosu__write_knowledge",
-            { title: "Early", content: "No session read yet.", transcript_id: "model-invented" },
-            {},
-          ),
-        );
-        await params.options.canUseTool("mcp__sessions__read_session", { id: "s1" }, {});
-        // An id-less read (e.g. a paging call) keeps the last session attribution.
-        await params.options.canUseTool("mcp__sessions__read_session", { offset: 2 }, {});
-        gateResults.push(
-          await params.options.canUseTool(
-            "mcp__dosu__write_knowledge",
-            { title: "OAuth refresh", content: "Retry after 401.", transcript_id: "model-junk" },
-            {},
-          ),
-        );
+        // Interleaved read→write→read→write: each note gets its own session.
+        await params.options.canUseTool(...read("s1"));
+        g.push(await params.options.canUseTool(...write("note-a")));
+        await params.options.canUseTool(...read("s2"));
+        g.push(await params.options.canUseTool(...write("note-b")));
         yield successResult();
       })();
     });
@@ -225,14 +229,93 @@ describe("runMiner", () => {
     const result = await runMiner(baseOptions);
 
     expect(result.notesWritten).toBe(2);
-    // Pre-read write: untouched (nothing deterministic to inject).
-    expect(gateResults[0].updatedInput).toMatchObject({ transcript_id: "model-invented" });
-    // Post-read write: whatever the model authored is overwritten.
-    expect(gateResults[1].updatedInput).toEqual({
-      title: "OAuth refresh",
-      content: "Retry after 401.",
-      transcript_id: "s1",
+    expect(g[0].updatedInput).toEqual({ title: "note-a", content: "c", transcript_id: "s1" });
+    expect(g[1].updatedInput).toEqual({ title: "note-b", content: "c", transcript_id: "s2" });
+  });
+
+  it("attributes EVERY note of a session read once and mined for several notes", async () => {
+    const g: GateResult[] = [];
+    queryMock.mockImplementation((params: GateParams) => {
+      return (async function* () {
+        // One read, three writes (the common shape); then the next session.
+        await params.options.canUseTool(...read("s1"));
+        g.push(await params.options.canUseTool(...write("s1-a")));
+        g.push(await params.options.canUseTool(...write("s1-b")));
+        g.push(await params.options.canUseTool(...write("s1-c")));
+        await params.options.canUseTool(...read("s2"));
+        g.push(await params.options.canUseTool(...write("s2-a")));
+        g.push(await params.options.canUseTool(...write("s2-b")));
+        yield successResult();
+      })();
     });
+
+    const result = await runMiner(baseOptions);
+
+    expect(result.notesWritten).toBe(5);
+    // All three s1 notes → s1; both s2 notes → s2. No note goes null just for
+    // being the 2nd+ from its session (the bug real mining surfaced).
+    expect(g.map((r) => r.updatedInput?.transcript_id)).toEqual(["s1", "s1", "s1", "s2", "s2"]);
+  });
+
+  it("denies a write after reading several sessions, then attributes the re-read one", async () => {
+    const g: GateResult[] = [];
+    queryMock.mockImplementation((params: GateParams) => {
+      return (async function* () {
+        // Read-all-then-write: the source is ambiguous, so the write is denied.
+        await params.options.canUseTool(...read("s1"));
+        await params.options.canUseTool(...read("s2"));
+        g.push(await params.options.canUseTool(...write("ambiguous")));
+        // Model complies: re-reads only the right session, then writes.
+        await params.options.canUseTool(...read("s2"));
+        g.push(await params.options.canUseTool(...write("resolved")));
+        yield successResult();
+      })();
+    });
+
+    const result = await runMiner(baseOptions);
+
+    expect(g[0].behavior).toBe("deny");
+    expect(g[0].message).toMatch(/one session|before reading the next/i);
+    expect(g[1].updatedInput).toEqual({ title: "resolved", content: "c", transcript_id: "s2" });
+    // The denied write is not counted; only the resolved one is.
+    expect(result.notesWritten).toBe(1);
+  });
+
+  it("leaves a note unattributed when no session was read before it", async () => {
+    const g: GateResult[] = [];
+    queryMock.mockImplementation((params: GateParams) => {
+      return (async function* () {
+        g.push(await params.options.canUseTool(...write("orphan")));
+        yield successResult();
+      })();
+    });
+
+    const result = await runMiner(baseOptions);
+
+    expect(result.notesWritten).toBe(1);
+    // No session to attribute → genuinely unattributed. Any transcript_id the
+    // model supplied is stripped so the attested backend stores null.
+    expect(g[0].updatedInput).toEqual({ title: "orphan", content: "c" });
+    expect(g[0].updatedInput).not.toHaveProperty("transcript_id");
+  });
+
+  it("ignores an id-less read (a paging call) so it doesn't count as a session", async () => {
+    const g: GateResult[] = [];
+    queryMock.mockImplementation((params: GateParams) => {
+      return (async function* () {
+        // A read with no id (offset-only paging) adds nothing, so the following
+        // write has no session to attribute to.
+        await params.options.canUseTool("mcp__sessions__read_session", { offset: 2 }, {});
+        g.push(await params.options.canUseTool(...write("no-real-read")));
+        yield successResult();
+      })();
+    });
+
+    const result = await runMiner(baseOptions);
+
+    expect(result.notesWritten).toBe(1);
+    // Stripped: an id-less read is no session, so the model's value must not survive.
+    expect(g[0].updatedInput).toEqual({ title: "no-real-read", content: "c" });
   });
 
   it("maps a consent-off gateway refusal from the result text", async () => {

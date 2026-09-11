@@ -171,7 +171,17 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
   const timer = setTimeout(() => abort.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 
   let notesWritten = 0;
-  let lastSessionId: string | undefined;
+  // The session the miner is currently mining: the most recently read one. It
+  // persists across writes, so every note written after reading a session — a
+  // session commonly yields several — is attributed to it, until a different
+  // session is read.
+  let currentSession: string | undefined;
+  // Distinct sessions read since the previous write, for ambiguity detection.
+  // Reading several DIFFERENT sessions before writing means the note's source
+  // is unclear, so that write is denied (the model is steered to write each
+  // session's notes before reading the next). Reset after each write; reading
+  // one session and writing many notes is NOT ambiguous. See the deny path.
+  const readsSinceWrite = new Set<string>();
   let turns = 0;
 
   const env = buildMinerEnv({
@@ -224,7 +234,11 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
             };
           }
           if (toolName === `mcp__${SESSIONS_SERVER_NAME}__read_session`) {
-            lastSessionId = sessionIdFromReadInput(input) ?? lastSessionId;
+            const id = sessionIdFromReadInput(input);
+            if (id) {
+              currentSession = id;
+              readsSinceWrite.add(id);
+            }
           }
           if (toolName === `mcp__${KNOWLEDGE_SERVER_NAME}__write_knowledge`) {
             if (notesWritten >= maxNotes) {
@@ -233,16 +247,37 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
                 message: `Note cap reached (${maxNotes} per run); stop writing and summarize.`,
               };
             }
+            // Reading several DIFFERENT sessions before writing makes the note's
+            // source ambiguous. Deny to steer the model back to
+            // one-session-at-a-time, and reset the read set (and current
+            // session) so its re-read of the right session starts fresh —
+            // otherwise the stale accumulation would deny forever. The note is
+            // not lost, just re-issued after it narrows the session.
+            if (readsSinceWrite.size > 1) {
+              readsSinceWrite.clear();
+              currentSession = undefined;
+              return {
+                behavior: "deny",
+                message:
+                  "Write each session's notes right after reading THAT session, before reading the next. " +
+                  "You have read multiple sessions without writing, so a note cannot be attributed to one. " +
+                  "Re-read only the session this note is about, then write it.",
+              };
+            }
             notesWritten += 1;
-            // Per-note transcript identity: overwrite the argument with the
-            // last-read session id. The model never authors this field (its
-            // own value, if any, is discarded here), and the backend only
-            // trusts it from attested clients. Deterministic injection is
-            // what lets the DB be the single source of truth for the
-            // knowledge report.
+            // Attribute to the current session — the one being mined — which
+            // persists across the several notes a session usually yields. The
+            // model never authors this field, so strip any transcript_id it
+            // supplied FIRST: the backend trusts the argument from this attested
+            // client, so a stray model value would otherwise be stored. With no
+            // session read yet (a stray early write) the note is left genuinely
+            // unattributed (null) rather than guessed. Reset only the
+            // ambiguity set, not the current session.
+            readsSinceWrite.clear();
+            const { transcript_id: _authoredByModel, ...clean } = input as Record<string, unknown>;
             return {
               behavior: "allow",
-              updatedInput: lastSessionId ? { ...input, transcript_id: lastSessionId } : input,
+              updatedInput: currentSession ? { ...clean, transcript_id: currentSession } : clean,
             };
           }
           return { behavior: "allow", updatedInput: input };
