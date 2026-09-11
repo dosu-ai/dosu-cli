@@ -1,3 +1,11 @@
+# [0.53.0-beta.10](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.9...v0.53.0-beta.10) (2026-09-11)
+
+
+### Features
+
+* add 'sources connect' and 'sources create' commands ([a038092](https://github.com/dosu-ai/dosu-cli/commit/a038092f46bc37f20be1421f2797725ef7bd6bac))
+* **tui:** f toggles full untruncated session rows on the activity tabs ([9b3f3a2](https://github.com/dosu-ai/dosu-cli/commit/9b3f3a2399690ee45a718072ee8c609340fbc75a))
+
 # [0.53.0-beta.9](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.8...v0.53.0-beta.9) (2026-09-11)
 
 
