@@ -1,3 +1,10 @@
+# [0.53.0-beta.7](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.6...v0.53.0-beta.7) (2026-09-11)
+
+
+### Features
+
+* **knowledge:** transcript-attributed notes with the backend as source of truth ([#212](https://github.com/dosu-ai/dosu-cli/issues/212)) ([30a4bb2](https://github.com/dosu-ai/dosu-cli/commit/30a4bb28e996284c383830849332529271521ddc))
+
 # [0.53.0-beta.6](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.5...v0.53.0-beta.6) (2026-09-09)
 
 
