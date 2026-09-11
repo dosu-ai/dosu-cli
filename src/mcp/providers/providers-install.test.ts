@@ -95,6 +95,28 @@ describe("createJSONProvider (base)", () => {
     expect(cfg.mcpServers.dosu.headers["X-Dosu-API-Key"]).toBe("key-abc");
   });
 
+  it("OSS install uses buildOSSServer override when provided", async () => {
+    const { createJSONProvider } = await import("./base");
+    const globalPath = join(tempDir, "oss-override.json");
+    const provider = createJSONProvider({
+      providerName: "TestProvider",
+      providerID: "test",
+      local: false,
+      priorityValue: 1,
+      paths: [],
+      globalPath,
+      topKey: "mcpServers",
+      buildServer: () => ({ shape: "cloud" }),
+      buildOSSServer: () => ({ shape: "oss" }),
+    });
+
+    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), true);
+    expect(loadJSONConfig(globalPath).mcpServers.dosu).toEqual({ shape: "oss" });
+
+    provider.install(makeCfg(), true);
+    expect(loadJSONConfig(globalPath).mcpServers.dosu).toEqual({ shape: "cloud" });
+  });
+
   it("install throws when deployment_id is missing", async () => {
     const { createJSONProvider } = await import("./base");
     const provider = createJSONProvider({
@@ -1199,12 +1221,17 @@ describe("AntigravityProvider", () => {
 describe("ZedProvider", () => {
   let tempDir: string;
   let origHome: string | undefined;
+  let origXdg: string | undefined;
   let origCwd: string;
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), "dosu-zed-test-"));
     origHome = process.env.HOME;
     process.env.HOME = tempDir;
+    // Pin the Linux branch to ~/.config so the path assertion below holds on
+    // any POSIX runner regardless of the host's XDG_CONFIG_HOME.
+    origXdg = process.env.XDG_CONFIG_HOME;
+    delete process.env.XDG_CONFIG_HOME;
     origCwd = process.cwd();
     process.chdir(tempDir);
   });
@@ -1212,7 +1239,26 @@ describe("ZedProvider", () => {
   afterEach(() => {
     process.chdir(origCwd);
     process.env.HOME = origHome;
+    if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = origXdg;
     rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("global config lives in Zed's config dir, not its Application Support data dir", async () => {
+    const { ZedProvider } = await import("./zed");
+    const provider = ZedProvider();
+
+    const globalCfgPath = provider.globalConfigPath();
+    // Zed only reads settings.json from its config dir (~/.config/zed on
+    // macOS + Linux, %APPDATA%\Zed on Windows). Application Support is Zed's
+    // data dir and holds no settings file.
+    expect(globalCfgPath).not.toContain("Application Support");
+    /* v8 ignore next 3 -- win32 arm not exercised on POSIX CI */
+    if (process.platform === "win32") {
+      expect(globalCfgPath).toBe(join(process.env.APPDATA ?? "", "Zed", "settings.json"));
+    } else {
+      expect(globalCfgPath).toBe(join(tempDir, ".config", "zed", "settings.json"));
+    }
   });
 
   it("global install writes to settings.json with context_servers key", async () => {
@@ -1225,8 +1271,55 @@ describe("ZedProvider", () => {
     expect(existsSync(globalCfgPath)).toBe(true);
     const cfg = loadJSONConfig(globalCfgPath);
     expect(cfg.context_servers.dosu).toBeDefined();
-    expect(cfg.context_servers.dosu.source).toBe("custom");
-    expect(cfg.context_servers.dosu.type).toBe("http");
+    expect(cfg.context_servers.dosu.url).toContain("dep-123");
+    expect(cfg.context_servers.dosu.headers["X-Dosu-API-Key"]).toBe("key-abc");
+  });
+
+  it("writes Zed's remote-server shape: url + headers only, no source/type discriminator", async () => {
+    const { ZedProvider } = await import("./zed");
+    const provider = ZedProvider();
+
+    provider.install(makeCfg(), true);
+
+    const cfg = loadJSONConfig(provider.globalConfigPath());
+    // Zed's ContextServerSettingsContent::Http variant is { enabled?, url,
+    // headers?, timeout?, oauth? } — `source`/`type` are not in the schema.
+    expect(Object.keys(cfg.context_servers.dosu).sort()).toEqual(["headers", "url"]);
+    expect(cfg.context_servers.dosu.source).toBeUndefined();
+    expect(cfg.context_servers.dosu.type).toBeUndefined();
+  });
+
+  it("OSS mode also writes Zed's remote-server shape against the base MCP URL", async () => {
+    const { ZedProvider } = await import("./zed");
+    const provider = ZedProvider();
+
+    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), true);
+
+    const cfg = loadJSONConfig(provider.globalConfigPath());
+    expect(Object.keys(cfg.context_servers.dosu).sort()).toEqual(["headers", "url"]);
+    expect(cfg.context_servers.dosu.url).toContain("/v1/mcp");
+    expect(cfg.context_servers.dosu.url).not.toContain("/deployments/");
+    expect(cfg.context_servers.dosu.headers["X-Dosu-API-Key"]).toBe("key-abc");
+  });
+
+  it("preserves sibling context_servers entries when installing", async () => {
+    const { ZedProvider } = await import("./zed");
+    const provider = ZedProvider();
+    const globalCfgPath = provider.globalConfigPath();
+    mkdirSync(dirname(globalCfgPath), { recursive: true });
+    writeFileSync(
+      globalCfgPath,
+      JSON.stringify({
+        theme: "One Dark",
+        context_servers: { other: { command: "npx", args: ["-y", "some-mcp"] } },
+      }),
+    );
+
+    provider.install(makeCfg(), true);
+
+    const cfg = loadJSONConfig(globalCfgPath);
+    expect(cfg.theme).toBe("One Dark");
+    expect(cfg.context_servers.other.command).toBe("npx");
     expect(cfg.context_servers.dosu.url).toContain("dep-123");
   });
 

@@ -26,6 +26,13 @@ export interface BaseProviderConfig {
   /** Override the server entry shape if needed */
   // biome-ignore lint/suspicious/noExplicitAny: server entries are arbitrary JSON
   buildServer?: (cfg: Config) => Record<string, any>;
+  /**
+   * Override the OSS-mode server entry shape. Defaults to the same
+   * `{ type: "http", url, headers }` shape as the cloud default; providers
+   * whose config schema differs (e.g. Zed) must override both.
+   */
+  // biome-ignore lint/suspicious/noExplicitAny: server entries are arbitrary JSON
+  buildOSSServer?: (cfg: Config) => Record<string, any>;
   /** For providers that use a different local config path pattern */
   localConfigPath?: (cwd: string) => string;
 }
@@ -47,6 +54,7 @@ export function createJSONProvider(opts: BaseProviderConfig): SetupProvider {
   });
 
   const buildServer = opts.buildServer ?? defaultBuildServer;
+  const buildOSSServer = opts.buildOSSServer ?? defaultBuildOSSServer;
 
   return {
     name: () => opts.providerName,
@@ -69,7 +77,7 @@ export function createJSONProvider(opts: BaseProviderConfig): SetupProvider {
       } else {
         throw new Error(`${opts.providerName} does not support local installation`);
       }
-      const serverBuilder = cfg.mode === MODE_OSS ? defaultBuildOSSServer : buildServer;
+      const serverBuilder = cfg.mode === MODE_OSS ? buildOSSServer : buildServer;
       installJSONServer(configPath, opts.topKey, serverBuilder(cfg));
     },
 
