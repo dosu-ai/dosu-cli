@@ -171,14 +171,17 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
   const timer = setTimeout(() => abort.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 
   let notesWritten = 0;
-  // Sessions read since the previous write_knowledge. A note is attributed
-  // only when this holds exactly one session — the one the note was just
-  // learned from. If the model read several before writing (or none), the
-  // source is ambiguous, so the note is left unattributed rather than stamped
-  // with a guess. Cleared after each write so the next note is judged on its
-  // own reads. See the deny path below, which trains the model to write each
-  // session's notes before reading the next.
-  const readSinceWrite = new Set<string>();
+  // The session the miner is currently mining: the most recently read one. It
+  // persists across writes, so every note written after reading a session — a
+  // session commonly yields several — is attributed to it, until a different
+  // session is read.
+  let currentSession: string | undefined;
+  // Distinct sessions read since the previous write, for ambiguity detection.
+  // Reading several DIFFERENT sessions before writing means the note's source
+  // is unclear, so that write is denied (the model is steered to write each
+  // session's notes before reading the next). Reset after each write; reading
+  // one session and writing many notes is NOT ambiguous. See the deny path.
+  const readsSinceWrite = new Set<string>();
   let turns = 0;
 
   const env = buildMinerEnv({
@@ -232,7 +235,10 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
           }
           if (toolName === `mcp__${SESSIONS_SERVER_NAME}__read_session`) {
             const id = sessionIdFromReadInput(input);
-            if (id) readSinceWrite.add(id);
+            if (id) {
+              currentSession = id;
+              readsSinceWrite.add(id);
+            }
           }
           if (toolName === `mcp__${KNOWLEDGE_SERVER_NAME}__write_knowledge`) {
             if (notesWritten >= maxNotes) {
@@ -241,13 +247,15 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
                 message: `Note cap reached (${maxNotes} per run); stop writing and summarize.`,
               };
             }
-            // Reading several sessions before writing makes the note's source
-            // ambiguous. Deny to steer the model back to one-session-at-a-time,
-            // and clear the read set so its re-read of the right session starts
-            // fresh (otherwise the stale accumulation would deny forever). The
-            // note is not lost, just re-issued after it narrows the session.
-            if (readSinceWrite.size > 1) {
-              readSinceWrite.clear();
+            // Reading several DIFFERENT sessions before writing makes the note's
+            // source ambiguous. Deny to steer the model back to
+            // one-session-at-a-time, and reset the read set (and current
+            // session) so its re-read of the right session starts fresh —
+            // otherwise the stale accumulation would deny forever. The note is
+            // not lost, just re-issued after it narrows the session.
+            if (readsSinceWrite.size > 1) {
+              readsSinceWrite.clear();
+              currentSession = undefined;
               return {
                 behavior: "deny",
                 message:
@@ -257,19 +265,19 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
               };
             }
             notesWritten += 1;
-            // Exactly one session read since the last write is the note's source,
-            // stamped deterministically. The model never authors this field, so
-            // strip any transcript_id it supplied FIRST — the backend trusts the
-            // argument from this attested client, so a stray model value would
-            // otherwise be stored. Zero reads (a stray write with no preceding
-            // read) then leaves the note genuinely unattributed (null) rather
-            // than guessing. Cleared so the next note is judged fresh.
-            const [transcriptId] = readSinceWrite;
-            readSinceWrite.clear();
+            // Attribute to the current session — the one being mined — which
+            // persists across the several notes a session usually yields. The
+            // model never authors this field, so strip any transcript_id it
+            // supplied FIRST: the backend trusts the argument from this attested
+            // client, so a stray model value would otherwise be stored. With no
+            // session read yet (a stray early write) the note is left genuinely
+            // unattributed (null) rather than guessed. Reset only the
+            // ambiguity set, not the current session.
+            readsSinceWrite.clear();
             const { transcript_id: _authoredByModel, ...clean } = input as Record<string, unknown>;
             return {
               behavior: "allow",
-              updatedInput: transcriptId ? { ...clean, transcript_id: transcriptId } : clean,
+              updatedInput: currentSession ? { ...clean, transcript_id: currentSession } : clean,
             };
           }
           return { behavior: "allow", updatedInput: input };

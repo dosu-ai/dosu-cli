@@ -213,7 +213,7 @@ describe("runMiner", () => {
       {},
     ] as const;
 
-  it("attributes each note to the single session read just before it", async () => {
+  it("attributes each note to the session currently being mined", async () => {
     const g: GateResult[] = [];
     queryMock.mockImplementation((params: GateParams) => {
       return (async function* () {
@@ -231,6 +231,30 @@ describe("runMiner", () => {
     expect(result.notesWritten).toBe(2);
     expect(g[0].updatedInput).toEqual({ title: "note-a", content: "c", transcript_id: "s1" });
     expect(g[1].updatedInput).toEqual({ title: "note-b", content: "c", transcript_id: "s2" });
+  });
+
+  it("attributes EVERY note of a session read once and mined for several notes", async () => {
+    const g: GateResult[] = [];
+    queryMock.mockImplementation((params: GateParams) => {
+      return (async function* () {
+        // One read, three writes (the common shape); then the next session.
+        await params.options.canUseTool(...read("s1"));
+        g.push(await params.options.canUseTool(...write("s1-a")));
+        g.push(await params.options.canUseTool(...write("s1-b")));
+        g.push(await params.options.canUseTool(...write("s1-c")));
+        await params.options.canUseTool(...read("s2"));
+        g.push(await params.options.canUseTool(...write("s2-a")));
+        g.push(await params.options.canUseTool(...write("s2-b")));
+        yield successResult();
+      })();
+    });
+
+    const result = await runMiner(baseOptions);
+
+    expect(result.notesWritten).toBe(5);
+    // All three s1 notes → s1; both s2 notes → s2. No note goes null just for
+    // being the 2nd+ from its session (the bug real mining surfaced).
+    expect(g.map((r) => r.updatedInput?.transcript_id)).toEqual(["s1", "s1", "s1", "s2", "s2"]);
   });
 
   it("denies a write after reading several sessions, then attributes the re-read one", async () => {
