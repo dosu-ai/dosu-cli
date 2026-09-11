@@ -324,6 +324,23 @@ describe("docs update", () => {
     expect(call[0]).toBe("page.update");
     expect(call[1].id).toBe("p1");
     expect(call[1].title).toBe("Updated");
+    expect(call[1]).not.toHaveProperty("body");
+  });
+
+  it("omits title on a body-only update so the existing title is preserved", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockResolvedValueOnce(undefined);
+    await run("update", "p1", "--body", "New procedure");
+    const input = mockMutate.mock.calls[0][1];
+    expect(input.body).toBe("New procedure");
+    expect(input).not.toHaveProperty("title");
+  });
+
+  it("preserves explicitly empty fields in an update", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockResolvedValueOnce(undefined);
+    await run("update", "p1", "--title", "", "--body", "");
+    expect(mockMutate.mock.calls[0][1]).toMatchObject({ title: "", body: "" });
   });
 
   it("outputs JSON with --json", async () => {

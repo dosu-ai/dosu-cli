@@ -283,8 +283,9 @@ export function docsCommand(): Command {
         await client.page.update.mutate({
           id,
           knowledge_store_id: ksId,
-          title: opts.title,
-          body: body,
+          // The API checks key presence; explicit undefined can clear existing content.
+          ...(opts.title !== undefined ? { title: opts.title } : {}),
+          ...(body !== undefined ? { body } : {}),
         });
 
         if (opts.json) {
