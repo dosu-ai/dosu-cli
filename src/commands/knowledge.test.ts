@@ -58,6 +58,11 @@ vi.mock("../report/generate", () => ({
   emitKnowledgeReport: (...args: unknown[]) => mockEmitReport(...args),
 }));
 
+const mockRunBackfill = vi.fn();
+vi.mock("../report/backfill-run", () => ({
+  runBackfill: (...args: unknown[]) => mockRunBackfill(...args),
+}));
+
 interface FakeAgent {
   id: string;
   name: string;
@@ -144,6 +149,7 @@ beforeEach(() => {
   mockLoadSyncState.mockReset();
   mockEmitReport.mockReset();
   mockEmitReport.mockResolvedValue("/tmp/dosu-knowledge-report.html");
+  mockRunBackfill.mockReset();
   fakeAgents = [];
   enableCalls.length = 0;
   disableCalls.length = 0;
@@ -952,5 +958,51 @@ describe("knowledge hooks", () => {
     await run("hooks", "enable");
 
     expect(allOutput()).toContain("No supported agents detected");
+  });
+});
+
+describe("knowledge backfill-transcripts", () => {
+  it("reports the attribution counts after a run", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockRunBackfill.mockResolvedValue({
+      candidates: 10,
+      mappings: [{ note_id: "n1", transcript_id: "s1" }],
+      ambiguous: 3,
+      noBatch: 2,
+      updated: 5,
+    });
+
+    await run("backfill-transcripts");
+
+    expect(mockRunBackfill).toHaveBeenCalledTimes(1);
+    const out = allOutput();
+    expect(out).toContain("Attributed 5 of 10 notes");
+    expect(out).toContain("3 ambiguous");
+    expect(out).toContain("2 without a local mining batch");
+  });
+
+  it("says nothing to do when every note is already attributed", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockRunBackfill.mockResolvedValue({
+      candidates: 0,
+      mappings: [],
+      ambiguous: 0,
+      noBatch: 0,
+      updated: 0,
+    });
+
+    await run("backfill-transcripts");
+
+    expect(allOutput()).toContain("already have a transcript");
+  });
+
+  it("emits JSON with --json", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    const result = { candidates: 2, mappings: [], ambiguous: 1, noBatch: 1, updated: 0 };
+    mockRunBackfill.mockResolvedValue(result);
+
+    await run("backfill-transcripts", "--json");
+
+    expect(JSON.parse(allOutput())).toMatchObject(result);
   });
 });

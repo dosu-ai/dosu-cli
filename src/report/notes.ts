@@ -67,24 +67,24 @@ function overlapCount(a: Set<string>, b: Set<string>): number {
 }
 
 /** A note's title/content vocabulary, precomputed once per note for scoring. */
-interface NoteWords {
+export interface NoteWords {
   title: Set<string>;
   content: Set<string>;
 }
 
-function noteWords(note: Pick<ReportNote, "title" | "content">): NoteWords {
+export function noteWords(note: Pick<ReportNote, "title" | "content">): NoteWords {
   return { title: significantWords(note.title), content: significantWords(note.content) };
 }
 
 /** One user-query cycle: a user turn and everything until the next user turn,
  * flattened to matchable text (turn text plus tool paths/patterns/commands). */
-interface SessionCycle {
+export interface SessionCycle {
   start: number;
   end: number;
   text: string;
 }
 
-function sessionCycles(turns: readonly DigestTurn[]): SessionCycle[] {
+export function sessionCycles(turns: readonly DigestTurn[]): SessionCycle[] {
   const starts: number[] = [];
   for (let i = 0; i < turns.length; i++) {
     if (turns[i].role === "user" && digestTurnText(turns[i]).trim()) starts.push(i);
@@ -106,7 +106,7 @@ function sessionCycles(turns: readonly DigestTurn[]): SessionCycle[] {
 }
 
 /** Title words count double: the title is the note's identity, the body is corroboration. */
-function cycleMatchScore(words: NoteWords, cycleText: string): number {
+export function cycleMatchScore(words: NoteWords, cycleText: string): number {
   const cycleWords = significantWords(cycleText);
   return overlapCount(words.title, cycleWords) * 2 + overlapCount(words.content, cycleWords);
 }
