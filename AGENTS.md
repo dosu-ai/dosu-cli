@@ -45,6 +45,7 @@ Key modules:
 - **`src/commands/`** — The Dosu platform command layer (the list above). Thin Commander wrappers over `src/client/` calls; `output.ts` standardizes human vs JSON output.
 - **`src/setup/`** — Interactive setup wizard (authenticate → select org → select deployment → mint API key → detect installed tools → configure). Uses `@clack/prompts`.
 - **`src/agent/`** — Non-interactive setup for coding agents (`setup --agent --tool <id>`) and the ticket-based login commands (`login --request`/`--check`). Emits machine-readable JSON via `output.ts` for agent consumption.
+- **`src/skills/`** — Live knowledge skills (`dosu skill link|resolve|links|unlink`). `binding.ts` renders and parses the generated `SKILL.md` with its ownership marker, `resolve.ts` fetches the highest published (or pinned) revision of a document through the typed client and classifies failures, `store.ts` owns the filesystem layer (skill roots, containment, atomic write, list, remove). Pure modules; the Commander wiring lives in `src/commands/skill.ts`.
 - **`src/telemetry/`** — Default-on analytics and error diagnostics with one persisted global switch, safe payload builders, and fail-open transport. User controls live under `dosu telemetry status|enable|disable|reset`.
 - **`src/tui/`** — Main menu TUI when running `dosu` with no subcommand.
 - **`src/version/`** — Version string from the build-time `DOSU_VERSION` env var, plus background update checks (`update-check.ts`, `skill-update-check.ts`).

@@ -125,9 +125,13 @@ Once authenticated against a deployment, you can drive the Dosu platform without
 | `dosu deployments` | List / show / switch Dosu MCP deployments |
 | `dosu analytics` | View usage statistics |
 | `dosu insights` | Open a visual report of your Dosu space activity |
-| `dosu skill` | Install / update / remove the Dosu agent skill |
+| `dosu skill` | Install / update / remove the Dosu agent skill; link Dosu documents as live Claude Code skills (`link`, `resolve`, `links`, `unlink`) |
 
 Run `dosu <command> --help` for subcommands and flags.
+
+### Live knowledge skills
+
+`dosu skill link <document-id> --name <skill-name> --agent claude` writes a Claude Code skill that fetches the document's current published revision every time it runs, so editing the document in Dosu changes what every agent using the skill does. Add `--revision <n>` to pin a binding to one revision. See [docs/live-skills.md](docs/live-skills.md).
 
 ### Supported AI tools
 
