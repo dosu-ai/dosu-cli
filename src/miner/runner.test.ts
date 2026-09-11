@@ -278,6 +278,28 @@ describe("runMiner", () => {
     });
   });
 
+  it("ignores an id-less read (a paging call) so it doesn't count as a session", async () => {
+    const g: GateResult[] = [];
+    queryMock.mockImplementation((params: GateParams) => {
+      return (async function* () {
+        // A read with no id (offset-only paging) adds nothing, so the following
+        // write has no session to attribute to.
+        await params.options.canUseTool("mcp__sessions__read_session", { offset: 2 }, {});
+        g.push(await params.options.canUseTool(...write("no-real-read")));
+        yield successResult();
+      })();
+    });
+
+    const result = await runMiner(baseOptions);
+
+    expect(result.notesWritten).toBe(1);
+    expect(g[0].updatedInput).toEqual({
+      title: "no-real-read",
+      content: "c",
+      transcript_id: "model-junk",
+    });
+  });
+
   it("maps a consent-off gateway refusal from the result text", async () => {
     queryReturning(successResult({ is_error: true, result: "API error: dosu_consent_off: nope" }));
 
