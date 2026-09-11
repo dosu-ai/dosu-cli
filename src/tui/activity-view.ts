@@ -42,6 +42,10 @@ const ACTIVITY_VIEW_POLL_MS = 500;
 /** How many list lines fit on screen at once (the scroll window). */
 const ACTIVITY_VIEW_LIST_LINES = 10;
 
+/** Window height in full-rows mode: each row may wrap to 2–3 lines, so fewer rows keeps the
+ * frame from outgrowing a 24-row terminal. */
+export const ACTIVITY_VIEW_FULL_LIST_ROWS = 5;
+
 /** How much history each tab keeps in memory for scrolling back. */
 export const ACTIVITY_VIEW_BUFFER_LINES = 200;
 
@@ -50,9 +54,17 @@ export type ActivityViewTab = "activity" | "queued" | "open" | "mined";
 /** Tab order for cycling; ← walks it backwards. */
 const ACTIVITY_VIEW_TABS: readonly ActivityViewTab[] = ["activity", "mined", "queued", "open"];
 
-export type ActivityViewAction = "back" | "tab" | "tab-back" | "up" | "down" | "sync" | "none";
+export type ActivityViewAction =
+  | "back"
+  | "tab"
+  | "tab-back"
+  | "up"
+  | "down"
+  | "sync"
+  | "full"
+  | "none";
 
-/** q/esc/ctrl-c back, tab/→ and ← cycle tabs, ↑↓ (or k/j) scroll, s syncs. */
+/** q/esc/ctrl-c back, tab/→ and ← cycle tabs, ↑↓ (or k/j) scroll, s syncs, f toggles full rows. */
 export function reduceActivityViewKey(key: string): ActivityViewAction {
   if (key === "q" || key === ESC || key === CTRL_C) return "back";
   if (key === "\t" || key === KEY_RIGHT) return "tab";
@@ -60,6 +72,7 @@ export function reduceActivityViewKey(key: string): ActivityViewAction {
   if (key === KEY_UP || key === "k") return "up";
   if (key === KEY_DOWN || key === "j") return "down";
   if (key === "s") return "sync";
+  if (key === "f") return "full";
   return "none";
 }
 
@@ -115,22 +128,40 @@ function clip(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}\u2026`;
 }
 
-/** Mined-history record as a row ("cursor    09-02 23:00  dosu  abc"), same columns as Queued. */
-export function formatMinedRow(record: MinedSessionRecord): string {
+/** Mined-history record as a row ("cursor    09-02 23:00  dosu  abc"), same columns as Queued.
+ * `full` skips the per-column clipping (the f toggle's full-rows mode). */
+export function formatMinedRow(record: MinedSessionRecord, full = false): string {
   const match = record.at.match(/^\d{4}-(\d{2}-\d{2})T(\d{2}:\d{2})/);
   const stamp = match ? `${match[1]} ${match[2]}` : record.at;
   const slash = record.session.indexOf("/");
   const harness = slash > 0 ? record.session.slice(0, slash) : "-";
   const id = slash > 0 ? record.session.slice(slash + 1) : record.session;
-  const project = clip(record.project ?? "-", 28);
-  return `${harness.padEnd(8)}  ${stamp}  ${project}  ${clip(id, 24)}`;
+  const rawProject = record.project ?? "-";
+  const project = full ? rawProject : clip(rawProject, 28);
+  return `${harness.padEnd(8)}  ${stamp}  ${project}  ${full ? id : clip(id, 24)}`;
 }
 
-/** Queued session as a row: agent, updated (UTC), project, session id. */
-export function formatQueuedRow(session: AgentSession): string {
+/** Queued session as a row: agent, updated (UTC), project, session id.
+ * `full` skips the per-column clipping (the f toggle's full-rows mode). */
+export function formatQueuedRow(session: AgentSession, full = false): string {
   const stamp = session.updated.replace("T", " ").slice(5, 16);
-  const project = clip(session.project ?? "-", 28);
-  return `${session.harness.padEnd(8)}  ${stamp}  ${project}  ${clip(session.id, 24)}`;
+  const rawProject = session.project ?? "-";
+  const project = full ? rawProject : clip(rawProject, 28);
+  return `${session.harness.padEnd(8)}  ${stamp}  ${project}  ${full ? session.id : clip(session.id, 24)}`;
+}
+
+/** Hard-wrap one table row to `width`, indenting continuation lines. Projects and session ids
+ * contain no spaces, so word-based wrapLine cannot break them — this slices mid-word. */
+export function wrapRow(text: string, width: number, indent = "    "): string[] {
+  if (text.length <= width) return [text];
+  const out = [text.slice(0, width)];
+  let rest = text.slice(width);
+  const inner = Math.max(1, width - indent.length);
+  while (rest.length > 0) {
+    out.push(indent + rest.slice(0, inner));
+    rest = rest.slice(inner);
+  }
+  return out;
 }
 
 /** Scrollback window over `lines`: `scroll` counts up from the bottom, clamped at both ends. */
@@ -292,6 +323,8 @@ export interface ActivityViewPane {
   scroll: number;
   /** Pending "s" press: which confirmation popup is up, if any. */
   confirm?: SyncConfirmMode;
+  /** The f toggle: show session rows unclipped (wrapped to the frame width). */
+  fullRows?: boolean;
 }
 
 const DEFAULT_PANE: ActivityViewPane = { tab: "activity", scroll: 0 };
@@ -387,12 +420,16 @@ export function renderActivityFrame(
       )
     : [];
 
-  // Every list clips to the frame width so no row runs past the tab rule.
+  // Session rows clip to the frame width so no row runs past the tab rule — unless the f
+  // toggle asked for full rows, which render unclipped and wrap below instead.
+  const fullRows = Boolean(pane.fullRows) && pane.tab !== "activity";
   const minedRows = (status.state.mined_sessions ?? []).map((record) =>
-    formatActivityLine(formatMinedRow(record), width),
+    fullRows ? formatMinedRow(record, true) : formatActivityLine(formatMinedRow(record), width),
   );
-  const queuedRows = queued.map((session) => formatActivityLine(formatQueuedRow(session), width));
-  const openRows = open.map((session) => formatActivityLine(formatQueuedRow(session), width));
+  const sessionRow = (session: AgentSession) =>
+    fullRows ? formatQueuedRow(session, true) : formatActivityLine(formatQueuedRow(session), width);
+  const queuedRows = queued.map(sessionRow);
+  const openRows = open.map(sessionRow);
   const source =
     pane.tab === "activity"
       ? activity.map((line) => formatActivityLine(line, width))
@@ -414,15 +451,24 @@ export function renderActivityFrame(
         : pane.tab === "open"
           ? "No open sessions. Live agent sessions sit here until they go quiet."
           : emptyMined;
-  const { visible, above, below } = windowList(source, pane.scroll);
-  const listRows = visible.length > 0 ? visible.map((row) => pc.dim(row)) : [pc.dim(empty)];
+  // Full-rows mode windows fewer rows (each may wrap to several lines) and hard-wraps them.
+  const height = fullRows ? ACTIVITY_VIEW_FULL_LIST_ROWS : ACTIVITY_VIEW_LIST_LINES;
+  const { visible, above, below } = windowList(source, pane.scroll, height);
+  const display = fullRows ? visible.flatMap((row) => wrapRow(row, width)) : visible;
+  const listRows = display.length > 0 ? display.map((row) => pc.dim(row)) : [pc.dim(empty)];
 
   const scrollParts: string[] = [];
   if (above > 0) scrollParts.push(`\u2191 ${above} earlier`);
   if (below > 0) scrollParts.push(`\u2193 ${below} newer`);
-  // The session tabs clip projects and ids to fit; point at the copy/paste-friendly listing.
+  // The session tabs clip projects and ids to fit; f expands them in place, and the CLI
+  // listing stays advertised in both modes as the copy/paste-friendly escape hatch
+  // (wrapped full rows split ids across lines).
   if (pane.tab !== "activity" && visible.length > 0) {
-    scrollParts.push(`full rows: dosu knowledge sessions --${pane.tab}`);
+    scrollParts.push(
+      fullRows
+        ? `f clip \u00B7 copy: dosu knowledge sessions --${pane.tab}`
+        : `f full rows \u00B7 dosu knowledge sessions --${pane.tab}`,
+    );
   }
 
   const lines = [
@@ -444,7 +490,8 @@ export function renderActivityFrame(
       width,
     ),
     ...listRows,
-    ...(scrollParts.length > 0 ? [pc.dim(scrollParts.join(" \u00B7 "))] : []),
+    // Clipped, not wrapped: scroll counters plus both hints can outrun a narrow frame.
+    ...(scrollParts.length > 0 ? [pc.dim(clip(scrollParts.join(" \u00B7 "), width))] : []),
     "",
     // Pressing s swaps the key legend for the centered confirmation dialog.
     ...(pane.confirm
@@ -520,6 +567,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
   let runProgress = foldRunProgress(null, seed);
   let tab: ActivityViewTab = "activity";
   let scroll = 0;
+  let fullRows = false;
   let confirmSync: SyncConfirmMode | null = null;
   let status = getStatus();
   // Rescan on watermark moves and tab switches, not every poll (a scan
@@ -539,6 +587,9 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
     if (tab === "open") return sessions.open.length;
     return (status.state.mined_sessions ?? []).length;
   };
+  // Matches the render: full-rows mode windows fewer (taller) rows.
+  const listHeight = () =>
+    fullRows && tab !== "activity" ? ACTIVITY_VIEW_FULL_LIST_ROWS : ACTIVITY_VIEW_LIST_LINES;
 
   // Identical frames skip the terminal write entirely (most ticks change nothing).
   let lastFrame: string | null = null;
@@ -570,7 +621,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
       activity,
       width,
       backlog,
-      { tab, scroll, confirm: confirmSync ?? undefined },
+      { tab, scroll, confirm: confirmSync ?? undefined, fullRows },
       sessions.queued,
       minedBeforeRun ?? 0,
       sessions.open,
@@ -672,8 +723,15 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
           // watermark ever moving.
           if (tab === "queued" || tab === "open") sessions = listBacklog();
           draw();
+        } else if (action === "full") {
+          // Full rows only mean something on the session tabs; activity lines stay clipped.
+          if (tab !== "activity") {
+            fullRows = !fullRows;
+            scroll = 0;
+            draw();
+          }
         } else if (action === "up") {
-          const maxScroll = Math.max(0, activeListLength() - ACTIVITY_VIEW_LIST_LINES);
+          const maxScroll = Math.max(0, activeListLength() - listHeight());
           if (scroll < maxScroll) {
             scroll += 1;
             draw();

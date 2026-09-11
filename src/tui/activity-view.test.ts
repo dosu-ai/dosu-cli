@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SyncStatus } from "../sync/status";
 import {
   ACTIVITY_VIEW_BUFFER_LINES,
+  ACTIVITY_VIEW_FULL_LIST_ROWS,
   activityWidth,
   appendSyncActivity,
   confirmBox,
@@ -21,6 +22,7 @@ import {
   tabBar,
   windowList,
   wrapLine,
+  wrapRow,
 } from "./activity-view";
 import { ALT_SCREEN_ENTER, ALT_SCREEN_EXIT } from "./alt-screen";
 import { frameTopMargin } from "./layout";
@@ -92,6 +94,10 @@ describe("reduceActivityViewKey", () => {
 
   it("starts a sync on s", () => {
     expect(reduceActivityViewKey("s")).toBe("sync");
+  });
+
+  it("toggles full rows on f", () => {
+    expect(reduceActivityViewKey("f")).toBe("full");
   });
 
   it("confirmation keys: enter/y/s start, esc/n/q cancel, rest ignored", () => {
@@ -186,6 +192,17 @@ describe("formatMinedRow", () => {
       "cursor    whenever  -  abc",
     );
   });
+
+  it("keeps the full project and id in full mode", () => {
+    const record = {
+      at: "2026-09-02T23:00:00.000Z",
+      session: "cursor/a60cacd1-2d66-455d-b220-0123456789ab",
+      project: "Users-james-Documents-dosu-global-dosu-cli",
+    };
+    expect(formatMinedRow(record, true)).toBe(
+      "cursor    09-02 23:00  Users-james-Documents-dosu-global-dosu-cli  a60cacd1-2d66-455d-b220-0123456789ab",
+    );
+  });
 });
 
 describe("formatQueuedRow", () => {
@@ -203,6 +220,31 @@ describe("formatQueuedRow", () => {
     });
     expect(row).toContain("  -  ");
     expect(row).toContain(`${"a".repeat(23)}\u2026`);
+  });
+
+  it("keeps the full id and project in full mode", () => {
+    const row = formatQueuedRow(
+      { ...queuedSession(), id: "a".repeat(40), project: "p".repeat(40) },
+      true,
+    );
+    expect(row).toContain("a".repeat(40));
+    expect(row).toContain("p".repeat(40));
+    expect(row).not.toContain("\u2026");
+  });
+});
+
+describe("wrapRow", () => {
+  it("passes short rows through untouched", () => {
+    expect(wrapRow("cursor    09-02 23:00  dosu  abc", 64)).toEqual([
+      "cursor    09-02 23:00  dosu  abc",
+    ]);
+  });
+
+  it("hard-wraps long rows mid-word and indents continuation lines", () => {
+    const lines = wrapRow(`head  ${"x".repeat(30)}`, 20);
+    expect(lines).toEqual([`head  ${"x".repeat(14)}`, `    ${"x".repeat(16)}`]);
+    for (const line of lines) expect(line.length).toBeLessThanOrEqual(20);
+    expect(lines.join("").replaceAll(" ", "")).toContain("x".repeat(30));
   });
 });
 
@@ -741,6 +783,81 @@ describe("renderActivityFrame", () => {
     expect(row?.endsWith("\u2026")).toBe(true);
   });
 
+  it("hints at the f toggle and the CLI listing on session tabs, but not on the activity tab", () => {
+    const queuedFrame = stripAnsi(
+      renderActivityFrame(makeStatus(), [], 64, null, { tab: "queued", scroll: 0 }, [
+        queuedSession(),
+      ]),
+    );
+    expect(queuedFrame).toContain("f full rows \u00B7 dosu knowledge sessions --queued");
+
+    const activityFrame = stripAnsi(
+      renderActivityFrame(makeStatus(), ["[sync] line"], 64, null, { tab: "activity", scroll: 0 }),
+    );
+    expect(activityFrame).not.toContain("f full rows");
+  });
+
+  it("clips the footer hint line in a narrow frame instead of letting it wrap", () => {
+    const queued = Array.from({ length: 15 }, (_, i) => queuedSession(`session-${i}`));
+    const width = 40;
+    const frame = stripAnsi(
+      renderActivityFrame(makeStatus(), [], width, null, { tab: "queued", scroll: 0 }, queued),
+    );
+    const hint = frame.split("\n").find((line) => line.includes("earlier"));
+    expect(hint).toBeDefined();
+    expect(hint?.length).toBeLessThanOrEqual(width);
+    expect(hint?.endsWith("\u2026")).toBe(true);
+  });
+
+  it("shows full rows wrapped to the width in full mode, pointing at the CLI for copy/paste", () => {
+    const status = makeStatus({
+      state: {
+        schema_version: 1,
+        watermark: "x",
+        consecutive_failures: 0,
+        mined_sessions: [
+          {
+            at: "2026-09-02T23:00:00.000Z",
+            session: "cursor/a60cacd1-2d66-455d-b220-0123456789ab",
+            project: "Users-james-Documents-dosu-global-dosu-cli",
+          },
+        ],
+      },
+    });
+    const width = 63;
+    const frame = stripAnsi(
+      renderActivityFrame(status, [], width, null, { tab: "mined", scroll: 0, fullRows: true }),
+    );
+    // No line outruns the frame, nothing is clipped, and the whole id survives the wrap.
+    for (const line of frame.split("\n")) expect(line.length).toBeLessThanOrEqual(width);
+    expect(
+      frame.split("\n").some((line) => line.startsWith("cursor") && line.includes("\u2026")),
+    ).toBe(false);
+    const joined = frame.replaceAll("\n", "").replaceAll(" ", "");
+    expect(joined).toContain("a60cacd1-2d66-455d-b220-0123456789ab");
+    expect(joined).toContain("Users-james-Documents-dosu-global-dosu-cli");
+    // Wrapped rows are awkward to copy, so full mode still points at the CLI listing.
+    expect(frame).toContain("f clip \u00B7 copy: dosu knowledge sessions --mined");
+    expect(frame).not.toContain("f full rows");
+  });
+
+  it("windows fewer rows in full mode so wrapped rows fit the screen", () => {
+    const queued = Array.from({ length: 8 }, (_, i) => queuedSession(`session-${i}`));
+    const frame = stripAnsi(
+      renderActivityFrame(
+        makeStatus(),
+        [],
+        64,
+        null,
+        { tab: "queued", scroll: 0, fullRows: true },
+        queued,
+      ),
+    );
+    expect(frame).toContain(`session-${8 - ACTIVITY_VIEW_FULL_LIST_ROWS}`);
+    expect(frame).not.toContain(`session-${8 - ACTIVITY_VIEW_FULL_LIST_ROWS - 1}`);
+    expect(frame).toContain(`\u2191 ${8 - ACTIVITY_VIEW_FULL_LIST_ROWS} earlier`);
+  });
+
   it("shows an empty message on the mined tab before any history", () => {
     const frame = stripAnsi(
       renderActivityFrame(makeStatus(), [], 64, null, { tab: "mined", scroll: 0 }),
@@ -927,6 +1044,49 @@ describe("runActivityView", () => {
     const afterThirdTab = stripAnsi(written.at(-1) ?? "");
     expect(afterThirdTab).toContain("Open (1)");
     expect(afterThirdTab).toContain("open-1");
+
+    input.emit("data", "q");
+    await view;
+  });
+
+  it("toggles full rows with f on session tabs and ignores f on the activity tab", async () => {
+    const { input, output, written } = fakeIO();
+    const longId = "a60cacd1-2d66-455d-b220-0123456789ab";
+
+    const view = runActivityView({
+      input,
+      output,
+      getStatus: makeStatus,
+      readLog: () => "[2026-09-02T21:00:00.000Z] [INFO] [sync] activity line\n",
+      createFollower: () => ({ poll() {} }),
+      listBacklog: () => ({ queued: [queuedSession(longId)], open: [] }),
+      pollMs: 100,
+    });
+
+    // f on the activity tab is a no-op: no redraw, no full-rows hint.
+    const framesBefore = written.length;
+    input.emit("data", "f");
+    expect(written.length).toBe(framesBefore);
+
+    // Two tabs land on Queued, clipped by default (column clip plus the frame-width clip).
+    input.emit("data", "\t");
+    input.emit("data", "\t");
+    const clipped = stripAnsi(written.at(-1) ?? "");
+    expect(clipped).toContain(longId.slice(0, 10));
+    expect(clipped).not.toContain(longId);
+    expect(clipped).toContain("f full rows");
+
+    // f expands to the full id (the frame is 63 wide, so the row wraps).
+    input.emit("data", "f");
+    const full = stripAnsi(written.at(-1) ?? "");
+    expect(full.replaceAll("\n", "").replaceAll(" ", "")).toContain(longId);
+    expect(full).toContain("f clip \u00B7 copy: dosu knowledge sessions --queued");
+
+    // f again clips back.
+    input.emit("data", "f");
+    const reclipped = stripAnsi(written.at(-1) ?? "");
+    expect(reclipped).not.toContain(longId);
+    expect(reclipped).toContain("f full rows");
 
     input.emit("data", "q");
     await view;
