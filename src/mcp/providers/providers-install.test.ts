@@ -1302,6 +1302,35 @@ describe("ZedProvider", () => {
     expect(cfg.context_servers.dosu.headers["X-Dosu-API-Key"]).toBe("key-abc");
   });
 
+  it("preserves a settings.json that starts with Zed's default comment header", async () => {
+    const { ZedProvider } = await import("./zed");
+    const provider = ZedProvider();
+    const globalCfgPath = provider.globalConfigPath();
+    mkdirSync(dirname(globalCfgPath), { recursive: true });
+    writeFileSync(
+      globalCfgPath,
+      [
+        "// Zed settings",
+        "//",
+        "// For information on how to configure Zed, see the Zed",
+        "// documentation: https://zed.dev/docs/configuring-zed",
+        "{",
+        '  "ui_font_size": 16,',
+        '  "buffer_font_size": 16,',
+        '  "theme": { "mode": "system", "light": "One Light", "dark": "One Dark" },',
+        "}",
+      ].join("\n"),
+    );
+
+    provider.install(makeCfg(), true);
+
+    const cfg = loadJSONConfig(globalCfgPath);
+    expect(cfg.ui_font_size).toBe(16);
+    expect(cfg.buffer_font_size).toBe(16);
+    expect(cfg.theme.dark).toBe("One Dark");
+    expect(cfg.context_servers.dosu.url).toContain("dep-123");
+  });
+
   it("preserves sibling context_servers entries when installing", async () => {
     const { ZedProvider } = await import("./zed");
     const provider = ZedProvider();

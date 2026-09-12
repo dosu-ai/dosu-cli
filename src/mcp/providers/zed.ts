@@ -17,18 +17,26 @@ import { createJSONProvider } from "./base";
  * reads, so `dosu setup` appeared to succeed while Zed showed no Dosu server.
  */
 /* v8 ignore start -- platform dispatch: only one branch runs per CI runner */
-export function zedConfigDir(): string {
+function zedConfigDir(): string {
   const os = platform();
   if (os === "win32") return join(appSupportDir(), "Zed");
   if (os === "darwin") return join(homedir(), ".config", "zed");
   return join(appSupportDir(), "zed"); // Linux: appSupportDir() already honors XDG_CONFIG_HOME
 }
 
-/** Zed's data dir; used only for install detection alongside the config dir. */
+/**
+ * Zed's data dir (db/, extensions/, languages/); used only for install
+ * detection so a Zed that has never written settings.json is still found.
+ *
+ *   macOS   ~/Library/Application Support/Zed
+ *   Linux   $XDG_DATA_HOME/zed  (fallback ~/.local/share/zed)
+ *   Windows %LOCALAPPDATA%\Zed
+ */
 function zedDataDir(): string {
   const os = platform();
-  if (os === "darwin" || os === "win32") return join(appSupportDir(), "Zed");
-  return join(appSupportDir(), "zed");
+  if (os === "darwin") return join(appSupportDir(), "Zed");
+  if (os === "win32") return join(process.env.LOCALAPPDATA ?? "", "Zed");
+  return join(process.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share"), "zed");
 }
 /* v8 ignore stop */
 

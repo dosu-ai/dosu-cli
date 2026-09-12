@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -8,9 +8,11 @@ import {
   loadJSONConfig,
   mcpHeaders,
   mcpURL,
+  readJSONConfig,
   removeJSONServer,
   saveJSONConfig,
   stripJSONComments,
+  stripTrailingCommas,
   writeSecureFile,
 } from "./config-helpers";
 
@@ -90,6 +92,27 @@ describe("stripJSONComments", () => {
   });
 });
 
+describe("stripTrailingCommas", () => {
+  it("drops trailing commas before } and ] across whitespace", () => {
+    const input = '{\n  "a": [1, 2,\n  ],\n  "b": {"c": 1,},\n}';
+    expect(JSON.parse(stripTrailingCommas(input))).toEqual({ a: [1, 2], b: { c: 1 } });
+  });
+
+  it("leaves commas inside strings alone", () => {
+    const input = '{"a": ",}", "b": ",]", "c": "x\\",}"}';
+    expect(stripTrailingCommas(input)).toBe(input);
+  });
+
+  it("does not touch separating commas", () => {
+    const input = '{"a": 1, "b": [1, 2]}';
+    expect(stripTrailingCommas(input)).toBe(input);
+  });
+
+  it("handles empty input", () => {
+    expect(stripTrailingCommas("")).toBe("");
+  });
+});
+
 describe("JSON config file operations", () => {
   let tempDir: string;
 
@@ -117,6 +140,36 @@ describe("JSON config file operations", () => {
       const path = join(tempDir, "test.jsonc");
       writeFileSync(path, '{\n// comment\n"foo": "bar"\n}');
       expect(loadJSONConfig(path)).toEqual({ foo: "bar" });
+    });
+
+    it("tolerates comments and trailing commas in a .json file (Zed/VS Code style)", () => {
+      const path = join(tempDir, "settings.json");
+      writeFileSync(
+        path,
+        '// Zed settings\n// documentation: https://zed.dev/docs/configuring-zed\n{\n  "ui_font_size": 16, /* px */\n  "theme": { "mode": "system", },\n}',
+      );
+      expect(loadJSONConfig(path)).toEqual({ ui_font_size: 16, theme: { mode: "system" } });
+    });
+
+    it("returns empty object for an unparseable file", () => {
+      const path = join(tempDir, "broken.json");
+      writeFileSync(path, "{ not json");
+      expect(loadJSONConfig(path)).toEqual({});
+    });
+  });
+
+  describe("readJSONConfig", () => {
+    it("returns empty object for a missing or blank file", () => {
+      expect(readJSONConfig(join(tempDir, "missing.json"))).toEqual({});
+      const blank = join(tempDir, "blank.json");
+      writeFileSync(blank, "  \n");
+      expect(readJSONConfig(blank)).toEqual({});
+    });
+
+    it("throws a descriptive error for an unparseable file", () => {
+      const path = join(tempDir, "broken.json");
+      writeFileSync(path, "{ not json");
+      expect(() => readJSONConfig(path)).toThrow(/Could not parse .*broken\.json as JSON/);
     });
   });
 
@@ -200,6 +253,27 @@ describe("JSON config file operations", () => {
       const result = loadJSONConfig(path);
       expect(result.mcpServers.dosu).toEqual({ url: "new" });
     });
+
+    it("preserves the rest of a commented settings file (Zed's default template)", () => {
+      const path = join(tempDir, "settings.json");
+      writeFileSync(
+        path,
+        '// Zed settings\n{\n  "ui_font_size": 16,\n  "theme": { "mode": "system", "light": "One Light", "dark": "One Dark" },\n}',
+      );
+      installJSONServer(path, "context_servers", { url: "http://dosu" });
+      const result = loadJSONConfig(path);
+      expect(result.ui_font_size).toBe(16);
+      expect(result.theme).toEqual({ mode: "system", light: "One Light", dark: "One Dark" });
+      expect(result.context_servers.dosu).toEqual({ url: "http://dosu" });
+    });
+
+    it("refuses to overwrite a file it cannot parse", () => {
+      const path = join(tempDir, "broken.json");
+      const original = '{"mcpServers": { "other": ';
+      writeFileSync(path, original);
+      expect(() => installJSONServer(path, "mcpServers", { url: "x" })).toThrow(/Could not parse/);
+      expect(readFileSync(path, "utf-8")).toBe(original);
+    });
   });
 
   describe("removeJSONServer", () => {
@@ -215,6 +289,28 @@ describe("JSON config file operations", () => {
       const result = loadJSONConfig(path);
       expect(result.mcpServers.dosu).toBeUndefined();
       expect(result.mcpServers.other).toEqual({ url: "y" });
+    });
+
+    it("does not create the file when it is missing", () => {
+      const path = join(tempDir, "nope.json");
+      removeJSONServer(path, "mcpServers");
+      expect(existsSync(path)).toBe(false);
+    });
+
+    it("leaves an unparseable file untouched", () => {
+      const path = join(tempDir, "broken.json");
+      const original = "{ definitely not json";
+      writeFileSync(path, original);
+      removeJSONServer(path, "mcpServers");
+      expect(readFileSync(path, "utf-8")).toBe(original);
+    });
+
+    it("does not rewrite a file that has no dosu entry", () => {
+      const path = join(tempDir, "untouched.json");
+      const original = '// keep my comment\n{"mcpServers": {"other": {"url": "y"}}}';
+      writeFileSync(path, original);
+      removeJSONServer(path, "mcpServers");
+      expect(readFileSync(path, "utf-8")).toBe(original);
     });
   });
 });

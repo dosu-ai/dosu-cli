@@ -97,16 +97,31 @@ export function mcpRemoteServer(url: string, apiKey: string | undefined): McpRem
  * For .jsonc files, comments are stripped before parsing.
  */
 export function loadJSONConfig(path: string): JsonConfig {
-  if (!existsSync(path)) return {};
-  let data = readFileSync(path, "utf-8").trim();
-  if (!data) return {};
-  if (path.endsWith(".jsonc")) {
-    data = stripJSONComments(data);
-  }
   try {
-    return JSON.parse(data);
+    return readJSONConfig(path);
   } catch {
     return {};
+  }
+}
+
+/**
+ * Reads a JSON/JSONC config file. Returns `{}` for a missing or empty file and
+ * THROWS when a non-empty file cannot be parsed, so writers never mistake an
+ * unreadable file for an empty one and overwrite it.
+ *
+ * Comments and trailing commas are tolerated regardless of extension: several
+ * hosts (Zed's `settings.json`, VS Code's `mcp.json`) are JSONC-by-default and
+ * Zed's shipped template opens with `//` header lines.
+ */
+export function readJSONConfig(path: string): JsonConfig {
+  if (!existsSync(path)) return {};
+  const raw = readFileSync(path, "utf-8").trim();
+  if (!raw) return {};
+  try {
+    return JSON.parse(stripTrailingCommas(stripJSONComments(raw)));
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`Could not parse ${path} as JSON (${detail}). Fix the file and retry.`);
   }
 }
 
@@ -165,6 +180,41 @@ export function stripJSONComments(data: string): string {
 }
 
 /**
+ * Removes trailing commas before `}` / `]` outside of string literals
+ * (JSONC-lenient parsers such as Zed's accept them; `JSON.parse` does not).
+ * Run AFTER stripJSONComments so only whitespace can sit between the comma
+ * and the closing bracket.
+ */
+export function stripTrailingCommas(data: string): string {
+  const result: string[] = [];
+  let inString = false;
+  for (let i = 0; i < data.length; i++) {
+    const ch = data[i];
+    if (inString) {
+      result.push(ch);
+      if (ch === "\\" && i + 1 < data.length) {
+        result.push(data[++i]);
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      result.push(ch);
+      continue;
+    }
+    if (ch === ",") {
+      let j = i + 1;
+      while (j < data.length && /\s/.test(data[j])) j++;
+      if (data[j] === "}" || data[j] === "]") continue; // drop the comma
+    }
+    result.push(ch);
+  }
+  return result.join("");
+}
+
+/**
  * Writes a JSON config file, creating parent directories as needed.
  */
 export function saveJSONConfig(path: string, cfg: JsonConfig): void {
@@ -194,7 +244,8 @@ export function isJSONKeyConfigured(configPath: string, topLevelKey: string): bo
  * Writes the dosu MCP server entry into a JSON config file.
  */
 export function installJSONServer(configPath: string, topKey: string, server: JsonConfig): void {
-  const jsonCfg = loadJSONConfig(configPath);
+  // Strict read: an unparseable settings file must abort, never be replaced.
+  const jsonCfg = readJSONConfig(configPath);
   let section = jsonCfg[topKey];
   if (typeof section !== "object" || section === null) {
     section = {};
@@ -208,15 +259,15 @@ export function installJSONServer(configPath: string, topKey: string, server: Js
  * Removes the dosu entry from a JSON config file.
  */
 export function removeJSONServer(configPath: string, topKey: string): void {
+  if (!existsSync(configPath)) return; // nothing to remove, and don't create the file
   let jsonCfg: JsonConfig;
   try {
-    jsonCfg = loadJSONConfig(configPath);
+    jsonCfg = readJSONConfig(configPath);
   } catch {
-    return; // file doesn't exist or can't be read = nothing to remove
+    return; // unparseable: leave the user's file untouched rather than clobber it
   }
   const section = jsonCfg[topKey];
-  if (typeof section === "object" && section !== null) {
-    delete section.dosu;
-  }
+  if (typeof section !== "object" || section === null || !("dosu" in section)) return;
+  delete section.dosu;
   saveJSONConfig(configPath, jsonCfg);
 }
