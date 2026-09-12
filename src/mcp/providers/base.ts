@@ -3,17 +3,22 @@
  * Most providers follow the same install/remove pattern — only the config path and top-level key differ.
  */
 
-import { type Config, MODE_OSS } from "../../config/config";
+import type { Config } from "../../config/config";
 import {
   installJSONServer,
   isJSONKeyConfigured,
-  mcpBaseURL,
+  mcpEndpoint,
   mcpHeaders,
-  mcpURL,
   removeJSONServer,
 } from "../config-helpers";
 import { expandHome, isInstalled } from "../detect";
 import type { SetupProvider } from "../providers";
+
+/** The resolved Dosu MCP endpoint a provider writes into its config file. */
+interface McpEndpoint {
+  url: string;
+  headers: Record<string, string>;
+}
 
 export interface BaseProviderConfig {
   providerName: string;
@@ -23,29 +28,25 @@ export interface BaseProviderConfig {
   paths: string[];
   globalPath: string;
   topKey: string;
-  /** Override the server entry shape if needed */
+  /**
+   * Shapes the server entry for this tool's schema. Receives the endpoint
+   * already resolved for the active mode (OSS vs cloud), so overrides never
+   * need to know which mode they are in. Defaults to `{ type: "http", url, headers }`.
+   */
   // biome-ignore lint/suspicious/noExplicitAny: server entries are arbitrary JSON
-  buildServer?: (cfg: Config) => Record<string, any>;
+  buildServer?: (endpoint: McpEndpoint, cfg: Config) => Record<string, any>;
   /** For providers that use a different local config path pattern */
   localConfigPath?: (cwd: string) => string;
 }
 
+// biome-ignore lint/suspicious/noExplicitAny: server entries are arbitrary JSON
+const defaultBuildServer = ({ url, headers }: McpEndpoint): Record<string, any> => ({
+  type: "http",
+  url,
+  headers,
+});
+
 export function createJSONProvider(opts: BaseProviderConfig): SetupProvider {
-  // biome-ignore lint/suspicious/noExplicitAny: server entries are arbitrary JSON
-  const defaultBuildServer = (cfg: Config): Record<string, any> => ({
-    type: "http",
-    // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
-    url: mcpURL(cfg.active_account!.target!.deployment_id!),
-    headers: mcpHeaders(cfg.active_account?.target?.api_key),
-  });
-
-  // biome-ignore lint/suspicious/noExplicitAny: server entries are arbitrary JSON
-  const defaultBuildOSSServer = (cfg: Config): Record<string, any> => ({
-    type: "http",
-    url: mcpBaseURL(),
-    headers: mcpHeaders(cfg.active_account?.target?.api_key),
-  });
-
   const buildServer = opts.buildServer ?? defaultBuildServer;
 
   return {
@@ -59,8 +60,10 @@ export function createJSONProvider(opts: BaseProviderConfig): SetupProvider {
     isConfigured: () => isJSONKeyConfigured(expandHome(opts.globalPath), opts.topKey),
 
     install(cfg: Config, global: boolean): void {
-      if (cfg.mode !== MODE_OSS && !cfg.active_account?.target?.deployment_id)
-        throw new Error("deployment ID is required");
+      const endpoint: McpEndpoint = {
+        url: mcpEndpoint(cfg),
+        headers: mcpHeaders(cfg.active_account?.target?.api_key),
+      };
       let configPath: string;
       if (global) {
         configPath = expandHome(opts.globalPath);
@@ -69,8 +72,7 @@ export function createJSONProvider(opts: BaseProviderConfig): SetupProvider {
       } else {
         throw new Error(`${opts.providerName} does not support local installation`);
       }
-      const serverBuilder = cfg.mode === MODE_OSS ? defaultBuildOSSServer : buildServer;
-      installJSONServer(configPath, opts.topKey, serverBuilder(cfg));
+      installJSONServer(configPath, opts.topKey, buildServer(endpoint, cfg));
     },
 
     remove(global: boolean): void {

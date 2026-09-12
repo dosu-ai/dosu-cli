@@ -1,11 +1,10 @@
 import { join } from "node:path";
-import { type Config, MODE_OSS } from "../../config/config";
+import type { Config } from "../../config/config";
 import {
   installJSONServer,
   isJSONKeyConfigured,
-  mcpBaseURL,
+  mcpEndpoint,
   mcpRemoteServer,
-  mcpURL,
   removeJSONServer,
 } from "../config-helpers";
 import { appSupportDir, findNpx, isInstalled, npxPathEnv } from "../detect";
@@ -27,13 +26,7 @@ export const ClaudeDesktopProvider = (): SetupProvider => ({
 
   install(cfg: Config, global: boolean): void {
     if (!global) throw new Error("Claude Desktop does not support local installation");
-    if (cfg.mode !== MODE_OSS && !cfg.active_account?.target?.deployment_id)
-      throw new Error("deployment ID is required");
-    const url =
-      cfg.mode === MODE_OSS
-        ? mcpBaseURL()
-        : // biome-ignore lint/style/noNonNullAssertion: guaranteed by the guard above
-          mcpURL(cfg.active_account!.target!.deployment_id!);
+    const url = mcpEndpoint(cfg);
     // Claude Desktop's chat surface launches only stdio servers from this
     // config file (and only renders MCP Apps from them); remote HTTP goes
     // through the Connectors UI, which cannot be automated. Proxy the remote

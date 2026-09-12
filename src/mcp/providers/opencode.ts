@@ -1,5 +1,4 @@
 import { join } from "node:path";
-import { mcpHeaders, mcpURL } from "../config-helpers";
 import { createJSONProvider } from "./base";
 
 export const OpenCodeProvider = () =>
@@ -11,13 +10,11 @@ export const OpenCodeProvider = () =>
     paths: ["~/.config/opencode"],
     globalPath: "~/.config/opencode/opencode.json",
     topKey: "mcp",
-    buildServer: (cfg) => ({
+    buildServer: ({ url, headers }) => ({
       type: "remote",
-      // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
-      url: mcpURL(cfg.active_account!.target!.deployment_id!),
+      url,
       enabled: true,
-      // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
-      headers: mcpHeaders(cfg.active_account!.target!.api_key!),
+      headers,
     }),
     localConfigPath: (cwd) => join(cwd, "opencode.json"),
   });

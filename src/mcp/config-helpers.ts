@@ -10,6 +10,7 @@ import { dirname } from "node:path";
 // caller's CWD `node_modules` at runtime and fails outside this repo.
 // @ts-expect-error — write-file-atomic ships no types; shape is documented inline.
 import writeFileAtomicRaw from "write-file-atomic";
+import { type Config, MODE_OSS } from "../config/config";
 import { getBackendURL } from "../config/constants";
 
 type WriteFileAtomicOptions = {
@@ -34,8 +35,19 @@ export function mcpURL(deploymentID: string): string {
 /**
  * Returns the base MCP endpoint URL without a deployment ID (for OSS mode).
  */
-export function mcpBaseURL(): string {
+function mcpBaseURL(): string {
   return `${getBackendURL()}/v1/mcp`;
+}
+
+/**
+ * Returns the MCP endpoint for the active mode: the bare base URL in OSS mode,
+ * the deployment-scoped URL otherwise.
+ */
+export function mcpEndpoint(cfg: Config): string {
+  if (cfg.mode === MODE_OSS) return mcpBaseURL();
+  const deploymentID = cfg.active_account?.target?.deployment_id;
+  if (!deploymentID) throw new Error("deployment ID is required");
+  return mcpURL(deploymentID);
 }
 
 /**
@@ -92,21 +104,30 @@ export function mcpRemoteServer(url: string, apiKey: string | undefined): McpRem
   };
 }
 
-/**
- * Reads and unmarshals a JSON config file. Returns an empty object if the file doesn't exist.
- * For .jsonc files, comments are stripped before parsing.
- */
+/** Non-throwing wrapper around readJSONConfig: `{}` on any failure. */
 export function loadJSONConfig(path: string): JsonConfig {
-  if (!existsSync(path)) return {};
-  let data = readFileSync(path, "utf-8").trim();
-  if (!data) return {};
-  if (path.endsWith(".jsonc")) {
-    data = stripJSONComments(data);
-  }
   try {
-    return JSON.parse(data);
+    return readJSONConfig(path);
   } catch {
     return {};
+  }
+}
+
+/**
+ * Reads a JSON/JSONC config file: `{}` when missing or empty, throws when a
+ * non-empty file cannot be parsed so callers never overwrite an unreadable file.
+ * Comments and trailing commas are tolerated for every extension (Zed's and
+ * VS Code's settings files are JSONC by default).
+ */
+export function readJSONConfig(path: string): JsonConfig {
+  if (!existsSync(path)) return {};
+  const raw = readFileSync(path, "utf-8").trim();
+  if (!raw) return {};
+  try {
+    return JSON.parse(stripTrailingCommas(stripJSONComments(raw)));
+  } catch (err) {
+    const detail = (err as Error).message;
+    throw new Error(`Could not parse ${path} as JSON (${detail}). Fix the file and retry.`);
   }
 }
 
@@ -118,27 +139,8 @@ export function stripJSONComments(data: string): string {
   let i = 0;
 
   while (i < data.length) {
-    // String literal — copy verbatim, handling escapes
     if (data[i] === '"') {
-      result.push(data[i]);
-      i++;
-      while (i < data.length && data[i] !== '"') {
-        if (data[i] === "\\") {
-          result.push(data[i]);
-          i++;
-          if (i < data.length) {
-            result.push(data[i]);
-            i++;
-          }
-          continue;
-        }
-        result.push(data[i]);
-        i++;
-      }
-      if (i < data.length) {
-        result.push(data[i]);
-        i++;
-      }
+      i = copyStringLiteral(data, i, result);
       continue;
     }
 
@@ -153,7 +155,7 @@ export function stripJSONComments(data: string): string {
     if (i + 1 < data.length && data[i] === "/" && data[i + 1] === "*") {
       i += 2;
       while (i + 1 < data.length && !(data[i] === "*" && data[i + 1] === "/")) i++;
-      if (i + 1 < data.length) i += 2;
+      i = i + 1 < data.length ? i + 2 : data.length; // unterminated: swallow to EOF
       continue;
     }
 
@@ -161,6 +163,52 @@ export function stripJSONComments(data: string): string {
     i++;
   }
 
+  return result.join("");
+}
+
+/**
+ * Copies the string literal that opens at `data[start]` into `out`, honoring
+ * backslash escapes, and returns the index just past its closing quote (or
+ * `data.length` for an unterminated literal).
+ */
+function copyStringLiteral(data: string, start: number, out: string[]): number {
+  let i = start + 1;
+  out.push('"');
+  while (i < data.length && data[i] !== '"') {
+    out.push(data[i]);
+    if (data[i] === "\\" && i + 1 < data.length) out.push(data[++i]);
+    i++;
+  }
+  if (i < data.length) {
+    out.push('"');
+    i++;
+  }
+  return i;
+}
+
+/**
+ * Removes trailing commas before `}` / `]` outside string literals. Run after
+ * stripJSONComments so only whitespace can separate the comma and the bracket.
+ */
+export function stripTrailingCommas(data: string): string {
+  const result: string[] = [];
+  let i = 0;
+  while (i < data.length) {
+    if (data[i] === '"') {
+      i = copyStringLiteral(data, i, result);
+      continue;
+    }
+    if (data[i] === ",") {
+      let j = i + 1;
+      while (j < data.length && /\s/.test(data[j])) j++;
+      if (data[j] === "}" || data[j] === "]") {
+        i++;
+        continue;
+      }
+    }
+    result.push(data[i]);
+    i++;
+  }
   return result.join("");
 }
 
@@ -194,7 +242,7 @@ export function isJSONKeyConfigured(configPath: string, topLevelKey: string): bo
  * Writes the dosu MCP server entry into a JSON config file.
  */
 export function installJSONServer(configPath: string, topKey: string, server: JsonConfig): void {
-  const jsonCfg = loadJSONConfig(configPath);
+  const jsonCfg = readJSONConfig(configPath);
   let section = jsonCfg[topKey];
   if (typeof section !== "object" || section === null) {
     section = {};
@@ -210,13 +258,12 @@ export function installJSONServer(configPath: string, topKey: string, server: Js
 export function removeJSONServer(configPath: string, topKey: string): void {
   let jsonCfg: JsonConfig;
   try {
-    jsonCfg = loadJSONConfig(configPath);
+    jsonCfg = readJSONConfig(configPath);
   } catch {
-    return; // file doesn't exist or can't be read = nothing to remove
+    return; // never rewrite a file we could not parse
   }
   const section = jsonCfg[topKey];
-  if (typeof section === "object" && section !== null) {
-    delete section.dosu;
-  }
+  if (typeof section !== "object" || section === null || !("dosu" in section)) return;
+  delete section.dosu;
   saveJSONConfig(configPath, jsonCfg);
 }
