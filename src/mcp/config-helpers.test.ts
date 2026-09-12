@@ -108,6 +108,11 @@ describe("stripTrailingCommas", () => {
     expect(stripTrailingCommas(input)).toBe(input);
   });
 
+  it("passes through an unterminated string ending in a backslash", () => {
+    const input = '{"a": "abc\\';
+    expect(stripTrailingCommas(input)).toBe(input);
+  });
+
   it("handles empty input", () => {
     expect(stripTrailingCommas("")).toBe("");
   });

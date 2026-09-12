@@ -1,12 +1,6 @@
-import { type Config, MODE_OSS } from "../../config/config";
-import { mcpBaseURL, mcpHeaders, mcpURL } from "../config-helpers";
+import type { Config } from "../../config/config";
+import { mcpEndpoint, mcpHeaders } from "../config-helpers";
 import type { Provider, ProviderInstallOptions } from "../providers";
-
-function mcpEndpoint(cfg: Config): string {
-  if (cfg.mode === MODE_OSS) return mcpBaseURL();
-  if (!cfg.active_account?.target?.deployment_id) throw new Error("deployment ID is required");
-  return mcpURL(cfg.active_account?.target?.deployment_id);
-}
 
 function maskSecret(secret: string): string {
   if (secret.length <= 8) return "[hidden]";

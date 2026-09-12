@@ -95,9 +95,9 @@ describe("createJSONProvider (base)", () => {
     expect(cfg.mcpServers.dosu.headers["X-Dosu-API-Key"]).toBe("key-abc");
   });
 
-  it("OSS install uses buildOSSServer override when provided", async () => {
+  it("resolves the endpoint for the active mode before calling a custom buildServer", async () => {
     const { createJSONProvider } = await import("./base");
-    const globalPath = join(tempDir, "oss-override.json");
+    const globalPath = join(tempDir, "endpoint.json");
     const provider = createJSONProvider({
       providerName: "TestProvider",
       providerID: "test",
@@ -106,15 +106,18 @@ describe("createJSONProvider (base)", () => {
       paths: [],
       globalPath,
       topKey: "mcpServers",
-      buildServer: () => ({ shape: "cloud" }),
-      buildOSSServer: () => ({ shape: "oss" }),
+      buildServer: ({ url, headers }) => ({ endpoint: url, auth: headers["X-Dosu-API-Key"] }),
     });
 
     provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), true);
-    expect(loadJSONConfig(globalPath).mcpServers.dosu).toEqual({ shape: "oss" });
+    const oss = loadJSONConfig(globalPath).mcpServers.dosu;
+    expect(oss.endpoint).toMatch(/\/v1\/mcp$/);
+    expect(oss.auth).toBe("key-abc");
 
     provider.install(makeCfg(), true);
-    expect(loadJSONConfig(globalPath).mcpServers.dosu).toEqual({ shape: "cloud" });
+    const cloud = loadJSONConfig(globalPath).mcpServers.dosu;
+    expect(cloud.endpoint).toContain("/v1/mcp/deployments/dep-123");
+    expect(cloud.auth).toBe("key-abc");
   });
 
   it("install throws when deployment_id is missing", async () => {
@@ -247,7 +250,7 @@ describe("createJSONProvider (base)", () => {
       paths: [],
       globalPath,
       topKey: "servers",
-      buildServer: (cfg) => ({
+      buildServer: (_endpoint, cfg) => ({
         myUrl: `custom-${cfg.active_account?.target?.deployment_id}`,
       }),
     });
@@ -1044,6 +1047,17 @@ describe("CursorProvider", () => {
     const cfg = loadJSONConfig(configPath);
     expect(cfg.mcpServers.dosu).toBeUndefined();
   });
+
+  it("OSS mode writes the same shape against the base MCP URL", async () => {
+    const { CursorProvider } = await import("./cursor");
+    const provider = CursorProvider();
+
+    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), true);
+
+    const cfg = loadJSONConfig(join(tempDir, ".cursor", "mcp.json"));
+    expect(Object.keys(cfg.mcpServers.dosu).sort()).toEqual(["headers", "url"]);
+    expect(cfg.mcpServers.dosu.url).toMatch(/\/v1\/mcp$/);
+  });
 });
 
 describe("OpenCodeProvider", () => {
@@ -1102,6 +1116,59 @@ describe("OpenCodeProvider", () => {
     const configPath = join(tempDir, ".config", "opencode", "opencode.json");
     const cfg = loadJSONConfig(configPath);
     expect(cfg.mcp.dosu).toBeUndefined();
+  });
+
+  it("OSS mode keeps OpenCode's remote shape against the base MCP URL", async () => {
+    const { OpenCodeProvider } = await import("./opencode");
+    const provider = OpenCodeProvider();
+
+    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), true);
+
+    const cfg = loadJSONConfig(provider.globalConfigPath());
+    expect(cfg.mcp.dosu.type).toBe("remote");
+    expect(cfg.mcp.dosu.enabled).toBe(true);
+    expect(cfg.mcp.dosu.url).toMatch(/\/v1\/mcp$/);
+  });
+});
+
+describe("ClineProvider", () => {
+  let tempDir: string;
+  let origHome: string | undefined;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "dosu-cline-test-"));
+    origHome = process.env.HOME;
+    process.env.HOME = tempDir;
+  });
+
+  afterEach(() => {
+    process.env.HOME = origHome;
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("global install writes Cline's streamableHttp shape", async () => {
+    const { ClineProvider } = await import("./cline");
+    const provider = ClineProvider();
+
+    provider.install(makeCfg(), true);
+
+    const cfg = loadJSONConfig(provider.globalConfigPath());
+    expect(provider.globalConfigPath()).toMatch(/cline_mcp_settings\.json$/);
+    expect(cfg.mcpServers.dosu.type).toBe("streamableHttp");
+    expect(cfg.mcpServers.dosu.disabled).toBe(false);
+    expect(cfg.mcpServers.dosu.url).toContain("dep-123");
+    expect(cfg.mcpServers.dosu.headers["X-Dosu-API-Key"]).toBe("key-abc");
+  });
+
+  it("OSS mode keeps the same shape against the base MCP URL", async () => {
+    const { ClineProvider } = await import("./cline");
+    const provider = ClineProvider();
+
+    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), true);
+
+    const cfg = loadJSONConfig(provider.globalConfigPath());
+    expect(cfg.mcpServers.dosu.type).toBe("streamableHttp");
+    expect(cfg.mcpServers.dosu.url).toMatch(/\/v1\/mcp$/);
   });
 });
 
@@ -1166,6 +1233,18 @@ describe("ClineCliProvider", () => {
 
     expect(() => provider.install(makeCfg(), false)).toThrow("does not support local installation");
   });
+
+  it("OSS mode keeps Cline's streamableHttp shape against the base MCP URL", async () => {
+    const { ClineCliProvider } = await import("./cline-cli");
+    const provider = ClineCliProvider();
+
+    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), true);
+
+    const cfg = loadJSONConfig(provider.globalConfigPath());
+    expect(cfg.mcpServers.dosu.type).toBe("streamableHttp");
+    expect(cfg.mcpServers.dosu.disabled).toBe(false);
+    expect(cfg.mcpServers.dosu.url).toMatch(/\/v1\/mcp$/);
+  });
 });
 
 describe("AntigravityProvider", () => {
@@ -1216,6 +1295,17 @@ describe("AntigravityProvider", () => {
     const cfg = loadJSONConfig(configPath);
     expect(cfg.mcpServers.dosu).toBeUndefined();
   });
+
+  it("OSS mode keeps Antigravity's serverUrl key against the base MCP URL", async () => {
+    const { AntigravityProvider } = await import("./antigravity");
+    const provider = AntigravityProvider();
+
+    provider.install(makeCfg({ mode: "oss", deployment_id: undefined }), true);
+
+    const cfg = loadJSONConfig(join(tempDir, ".gemini", "antigravity", "mcp_config.json"));
+    expect(Object.keys(cfg.mcpServers.dosu).sort()).toEqual(["headers", "serverUrl"]);
+    expect(cfg.mcpServers.dosu.serverUrl).toMatch(/\/v1\/mcp$/);
+  });
 });
 
 describe("ZedProvider", () => {
@@ -1228,8 +1318,6 @@ describe("ZedProvider", () => {
     tempDir = mkdtempSync(join(tmpdir(), "dosu-zed-test-"));
     origHome = process.env.HOME;
     process.env.HOME = tempDir;
-    // Pin the Linux branch to ~/.config so the path assertion below holds on
-    // any POSIX runner regardless of the host's XDG_CONFIG_HOME.
     origXdg = process.env.XDG_CONFIG_HOME;
     delete process.env.XDG_CONFIG_HOME;
     origCwd = process.cwd();
@@ -1249,9 +1337,6 @@ describe("ZedProvider", () => {
     const provider = ZedProvider();
 
     const globalCfgPath = provider.globalConfigPath();
-    // Zed only reads settings.json from its config dir (~/.config/zed on
-    // macOS + Linux, %APPDATA%\Zed on Windows). Application Support is Zed's
-    // data dir and holds no settings file.
     expect(globalCfgPath).not.toContain("Application Support");
     /* v8 ignore next 3 -- win32 arm not exercised on POSIX CI */
     if (process.platform === "win32") {
@@ -1282,8 +1367,6 @@ describe("ZedProvider", () => {
     provider.install(makeCfg(), true);
 
     const cfg = loadJSONConfig(provider.globalConfigPath());
-    // Zed's ContextServerSettingsContent::Http variant is { enabled?, url,
-    // headers?, timeout?, oauth? } — `source`/`type` are not in the schema.
     expect(Object.keys(cfg.context_servers.dosu).sort()).toEqual(["headers", "url"]);
     expect(cfg.context_servers.dosu.source).toBeUndefined();
     expect(cfg.context_servers.dosu.type).toBeUndefined();
@@ -1386,5 +1469,58 @@ describe("ZedProvider", () => {
     const configPath = join(tempDir, ".zed", "settings.json");
     const cfg = loadJSONConfig(configPath);
     expect(cfg.context_servers.dosu).toBeUndefined();
+  });
+
+  it("strips the dosu entry from the legacy macOS data-dir file on global install and remove", async () => {
+    const { ZedProvider } = await import("./zed");
+    const legacyPath = join(tempDir, "Library", "Application Support", "Zed", "settings.json");
+    mkdirSync(dirname(legacyPath), { recursive: true });
+    writeFileSync(
+      legacyPath,
+      JSON.stringify({
+        context_servers: { dosu: { url: "old", headers: { "X-Dosu-API-Key": "k" } } },
+      }),
+    );
+    const provider = ZedProvider(legacyPath);
+
+    provider.install(makeCfg(), true);
+    expect(existsSync(legacyPath)).toBe(false);
+    expect(loadJSONConfig(provider.globalConfigPath()).context_servers.dosu.url).toContain(
+      "dep-123",
+    );
+
+    writeFileSync(
+      legacyPath,
+      JSON.stringify({ theme: "One Dark", context_servers: { dosu: { url: "old" }, other: {} } }),
+    );
+    provider.remove(true);
+    const legacy = loadJSONConfig(legacyPath);
+    expect(legacy.theme).toBe("One Dark");
+    expect(legacy.context_servers.other).toEqual({});
+    expect(legacy.context_servers.dosu).toBeUndefined();
+    expect(loadJSONConfig(provider.globalConfigPath()).context_servers.dosu).toBeUndefined();
+  });
+
+  it("local install/remove and a null legacy path leave legacy handling alone", async () => {
+    const { ZedProvider, removeLegacyDosuEntry } = await import("./zed");
+    const legacyPath = join(tempDir, "legacy.json");
+    writeFileSync(legacyPath, JSON.stringify({ context_servers: { dosu: { url: "old" } } }));
+
+    const provider = ZedProvider(legacyPath);
+    provider.install(makeCfg(), false);
+    provider.remove(false);
+    expect(existsSync(legacyPath)).toBe(true);
+
+    ZedProvider(null).install(makeCfg(), true);
+    expect(existsSync(legacyPath)).toBe(true);
+
+    // Missing, unparseable, and dosu-less files are all no-ops.
+    removeLegacyDosuEntry(join(tempDir, "missing.json"));
+    writeFileSync(legacyPath, "{ not json");
+    removeLegacyDosuEntry(legacyPath);
+    expect(readFileSync(legacyPath, "utf-8")).toBe("{ not json");
+    writeFileSync(legacyPath, JSON.stringify({ context_servers: { other: {} } }));
+    removeLegacyDosuEntry(legacyPath);
+    expect(loadJSONConfig(legacyPath).context_servers.other).toEqual({});
   });
 });

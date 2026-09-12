@@ -10,6 +10,7 @@ import { dirname } from "node:path";
 // caller's CWD `node_modules` at runtime and fails outside this repo.
 // @ts-expect-error — write-file-atomic ships no types; shape is documented inline.
 import writeFileAtomicRaw from "write-file-atomic";
+import { type Config, MODE_OSS } from "../config/config";
 import { getBackendURL } from "../config/constants";
 
 type WriteFileAtomicOptions = {
@@ -36,6 +37,17 @@ export function mcpURL(deploymentID: string): string {
  */
 export function mcpBaseURL(): string {
   return `${getBackendURL()}/v1/mcp`;
+}
+
+/**
+ * Returns the MCP endpoint for the active mode: the bare base URL in OSS mode,
+ * the deployment-scoped URL otherwise.
+ */
+export function mcpEndpoint(cfg: Config): string {
+  if (cfg.mode === MODE_OSS) return mcpBaseURL();
+  const deploymentID = cfg.active_account?.target?.deployment_id;
+  if (!deploymentID) throw new Error("deployment ID is required");
+  return mcpURL(deploymentID);
 }
 
 /**
@@ -105,13 +117,10 @@ export function loadJSONConfig(path: string): JsonConfig {
 }
 
 /**
- * Reads a JSON/JSONC config file. Returns `{}` for a missing or empty file and
- * THROWS when a non-empty file cannot be parsed, so writers never mistake an
- * unreadable file for an empty one and overwrite it.
- *
- * Comments and trailing commas are tolerated regardless of extension: several
- * hosts (Zed's `settings.json`, VS Code's `mcp.json`) are JSONC-by-default and
- * Zed's shipped template opens with `//` header lines.
+ * Reads a JSON/JSONC config file: `{}` when missing or empty, throws when a
+ * non-empty file cannot be parsed so callers never overwrite an unreadable file.
+ * Comments and trailing commas are tolerated for every extension (Zed's and
+ * VS Code's settings files are JSONC by default).
  */
 export function readJSONConfig(path: string): JsonConfig {
   if (!existsSync(path)) return {};
@@ -120,7 +129,7 @@ export function readJSONConfig(path: string): JsonConfig {
   try {
     return JSON.parse(stripTrailingCommas(stripJSONComments(raw)));
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
+    const detail = (err as Error).message;
     throw new Error(`Could not parse ${path} as JSON (${detail}). Fix the file and retry.`);
   }
 }
@@ -180,10 +189,8 @@ export function stripJSONComments(data: string): string {
 }
 
 /**
- * Removes trailing commas before `}` / `]` outside of string literals
- * (JSONC-lenient parsers such as Zed's accept them; `JSON.parse` does not).
- * Run AFTER stripJSONComments so only whitespace can sit between the comma
- * and the closing bracket.
+ * Removes trailing commas before `}` / `]` outside string literals. Run after
+ * stripJSONComments so only whitespace can separate the comma and the bracket.
  */
 export function stripTrailingCommas(data: string): string {
   const result: string[] = [];
@@ -207,7 +214,7 @@ export function stripTrailingCommas(data: string): string {
     if (ch === ",") {
       let j = i + 1;
       while (j < data.length && /\s/.test(data[j])) j++;
-      if (data[j] === "}" || data[j] === "]") continue; // drop the comma
+      if (data[j] === "}" || data[j] === "]") continue;
     }
     result.push(ch);
   }
@@ -244,7 +251,6 @@ export function isJSONKeyConfigured(configPath: string, topLevelKey: string): bo
  * Writes the dosu MCP server entry into a JSON config file.
  */
 export function installJSONServer(configPath: string, topKey: string, server: JsonConfig): void {
-  // Strict read: an unparseable settings file must abort, never be replaced.
   const jsonCfg = readJSONConfig(configPath);
   let section = jsonCfg[topKey];
   if (typeof section !== "object" || section === null) {
@@ -259,12 +265,11 @@ export function installJSONServer(configPath: string, topKey: string, server: Js
  * Removes the dosu entry from a JSON config file.
  */
 export function removeJSONServer(configPath: string, topKey: string): void {
-  if (!existsSync(configPath)) return; // nothing to remove, and don't create the file
   let jsonCfg: JsonConfig;
   try {
     jsonCfg = readJSONConfig(configPath);
   } catch {
-    return; // unparseable: leave the user's file untouched rather than clobber it
+    return; // never rewrite a file we could not parse
   }
   const section = jsonCfg[topKey];
   if (typeof section !== "object" || section === null || !("dosu" in section)) return;

@@ -1,5 +1,4 @@
 import { join } from "node:path";
-import { mcpHeaders, mcpURL } from "../config-helpers";
 import { appSupportDir } from "../detect";
 import { createJSONProvider } from "./base";
 
@@ -15,12 +14,10 @@ export const ClineProvider = () =>
     paths: [extensionDir()],
     globalPath: join(extensionDir(), "settings", "cline_mcp_settings.json"),
     topKey: "mcpServers",
-    buildServer: (cfg) => ({
-      // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
-      url: mcpURL(cfg.active_account!.target!.deployment_id!),
+    buildServer: ({ url, headers }) => ({
+      url,
       type: "streamableHttp",
       disabled: false,
-      // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
-      headers: mcpHeaders(cfg.active_account!.target!.api_key!),
+      headers,
     }),
   });
