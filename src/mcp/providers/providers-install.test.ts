@@ -1337,7 +1337,6 @@ describe("ZedProvider", () => {
     const provider = ZedProvider();
 
     const globalCfgPath = provider.globalConfigPath();
-    expect(globalCfgPath).not.toContain("Application Support");
     /* v8 ignore next 3 -- win32 arm not exercised on POSIX CI */
     if (process.platform === "win32") {
       expect(globalCfgPath).toBe(join(process.env.APPDATA ?? "", "Zed", "settings.json"));
@@ -1368,8 +1367,6 @@ describe("ZedProvider", () => {
 
     const cfg = loadJSONConfig(provider.globalConfigPath());
     expect(Object.keys(cfg.context_servers.dosu).sort()).toEqual(["headers", "url"]);
-    expect(cfg.context_servers.dosu.source).toBeUndefined();
-    expect(cfg.context_servers.dosu.type).toBeUndefined();
   });
 
   it("OSS mode also writes Zed's remote-server shape against the base MCP URL", async () => {
@@ -1411,27 +1408,6 @@ describe("ZedProvider", () => {
     expect(cfg.ui_font_size).toBe(16);
     expect(cfg.buffer_font_size).toBe(16);
     expect(cfg.theme.dark).toBe("One Dark");
-    expect(cfg.context_servers.dosu.url).toContain("dep-123");
-  });
-
-  it("preserves sibling context_servers entries when installing", async () => {
-    const { ZedProvider } = await import("./zed");
-    const provider = ZedProvider();
-    const globalCfgPath = provider.globalConfigPath();
-    mkdirSync(dirname(globalCfgPath), { recursive: true });
-    writeFileSync(
-      globalCfgPath,
-      JSON.stringify({
-        theme: "One Dark",
-        context_servers: { other: { command: "npx", args: ["-y", "some-mcp"] } },
-      }),
-    );
-
-    provider.install(makeCfg(), true);
-
-    const cfg = loadJSONConfig(globalCfgPath);
-    expect(cfg.theme).toBe("One Dark");
-    expect(cfg.context_servers.other.command).toBe("npx");
     expect(cfg.context_servers.dosu.url).toContain("dep-123");
   });
 

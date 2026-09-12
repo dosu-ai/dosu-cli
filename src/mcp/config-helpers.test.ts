@@ -87,6 +87,10 @@ describe("stripJSONComments", () => {
     expect(JSON.parse(result)).toEqual({ key: "value" });
   });
 
+  it("drops an unterminated block comment to end of input", () => {
+    expect(stripJSONComments('{"a": 1} /* open')).toBe('{"a": 1} ');
+  });
+
   it("handles empty input", () => {
     expect(stripJSONComments("")).toBe("");
   });

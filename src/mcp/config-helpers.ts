@@ -104,10 +104,7 @@ export function mcpRemoteServer(url: string, apiKey: string | undefined): McpRem
   };
 }
 
-/**
- * Reads and unmarshals a JSON config file. Returns an empty object if the file doesn't exist.
- * For .jsonc files, comments are stripped before parsing.
- */
+/** Non-throwing wrapper around readJSONConfig: `{}` on any failure. */
 export function loadJSONConfig(path: string): JsonConfig {
   try {
     return readJSONConfig(path);
@@ -142,27 +139,8 @@ export function stripJSONComments(data: string): string {
   let i = 0;
 
   while (i < data.length) {
-    // String literal — copy verbatim, handling escapes
     if (data[i] === '"') {
-      result.push(data[i]);
-      i++;
-      while (i < data.length && data[i] !== '"') {
-        if (data[i] === "\\") {
-          result.push(data[i]);
-          i++;
-          if (i < data.length) {
-            result.push(data[i]);
-            i++;
-          }
-          continue;
-        }
-        result.push(data[i]);
-        i++;
-      }
-      if (i < data.length) {
-        result.push(data[i]);
-        i++;
-      }
+      i = copyStringLiteral(data, i, result);
       continue;
     }
 
@@ -177,7 +155,7 @@ export function stripJSONComments(data: string): string {
     if (i + 1 < data.length && data[i] === "/" && data[i + 1] === "*") {
       i += 2;
       while (i + 1 < data.length && !(data[i] === "*" && data[i + 1] === "/")) i++;
-      if (i + 1 < data.length) i += 2;
+      i = i + 1 < data.length ? i + 2 : data.length; // unterminated: swallow to EOF
       continue;
     }
 
@@ -189,34 +167,47 @@ export function stripJSONComments(data: string): string {
 }
 
 /**
+ * Copies the string literal that opens at `data[start]` into `out`, honoring
+ * backslash escapes, and returns the index just past its closing quote (or
+ * `data.length` for an unterminated literal).
+ */
+function copyStringLiteral(data: string, start: number, out: string[]): number {
+  let i = start + 1;
+  out.push('"');
+  while (i < data.length && data[i] !== '"') {
+    out.push(data[i]);
+    if (data[i] === "\\" && i + 1 < data.length) out.push(data[++i]);
+    i++;
+  }
+  if (i < data.length) {
+    out.push('"');
+    i++;
+  }
+  return i;
+}
+
+/**
  * Removes trailing commas before `}` / `]` outside string literals. Run after
  * stripJSONComments so only whitespace can separate the comma and the bracket.
  */
 export function stripTrailingCommas(data: string): string {
   const result: string[] = [];
-  let inString = false;
-  for (let i = 0; i < data.length; i++) {
-    const ch = data[i];
-    if (inString) {
-      result.push(ch);
-      if (ch === "\\" && i + 1 < data.length) {
-        result.push(data[++i]);
-      } else if (ch === '"') {
-        inString = false;
-      }
+  let i = 0;
+  while (i < data.length) {
+    if (data[i] === '"') {
+      i = copyStringLiteral(data, i, result);
       continue;
     }
-    if (ch === '"') {
-      inString = true;
-      result.push(ch);
-      continue;
-    }
-    if (ch === ",") {
+    if (data[i] === ",") {
       let j = i + 1;
       while (j < data.length && /\s/.test(data[j])) j++;
-      if (data[j] === "}" || data[j] === "]") continue;
+      if (data[j] === "}" || data[j] === "]") {
+        i++;
+        continue;
+      }
     }
-    result.push(ch);
+    result.push(data[i]);
+    i++;
   }
   return result.join("");
 }
