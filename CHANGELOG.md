@@ -1,3 +1,10 @@
+## [0.52.3](https://github.com/dosu-ai/dosu-cli/compare/v0.52.2...v0.52.3) (2026-09-12)
+
+
+### Bug Fixes
+
+* **mcp:** write Zed config to ~/.config/zed with Zed's remote-server shape ([#217](https://github.com/dosu-ai/dosu-cli/issues/217)) ([0d0453d](https://github.com/dosu-ai/dosu-cli/commit/0d0453dc55cab1108ba02ddd2452e90177b059e3))
+
 ## [0.52.2](https://github.com/dosu-ai/dosu-cli/compare/v0.52.1...v0.52.2) (2026-09-04)
 
 
