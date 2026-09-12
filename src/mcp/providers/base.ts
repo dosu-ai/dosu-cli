@@ -15,7 +15,7 @@ import { expandHome, isInstalled } from "../detect";
 import type { SetupProvider } from "../providers";
 
 /** The resolved Dosu MCP endpoint a provider writes into its config file. */
-export interface McpEndpoint {
+interface McpEndpoint {
   url: string;
   headers: Record<string, string>;
 }

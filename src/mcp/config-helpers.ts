@@ -35,7 +35,7 @@ export function mcpURL(deploymentID: string): string {
 /**
  * Returns the base MCP endpoint URL without a deployment ID (for OSS mode).
  */
-export function mcpBaseURL(): string {
+function mcpBaseURL(): string {
   return `${getBackendURL()}/v1/mcp`;
 }
 
