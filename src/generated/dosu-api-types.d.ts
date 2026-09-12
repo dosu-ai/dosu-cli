@@ -84,7 +84,6 @@ export type CliDataSource = {
 	generated_description: string | null
 	gitlab_project: CliDataSourceGitlabProject | null
 	gitlab_project_id: string | null
-	grandfather: boolean
 	id: string
 	is_indexed: boolean
 	knowledge_store_id: string | null
@@ -329,7 +328,6 @@ export type CliLibraryDataSource = {
 	} | null
 	gitlab_project: CliDataSourceGitlabProject | null
 	gitlab_project_id: string | null
-	grandfather: boolean
 	id: string
 	is_indexed: boolean
 	knowledge_store_id: string | null
@@ -563,7 +561,7 @@ export type CliSlackChannelRow = {
 	topic?: string | null
 }
 
-export declare const CLI_CONTRACT_HASH: '1d4be4b6214f'
+export declare const CLI_CONTRACT_HASH: 'd7c6f0f0e8d0'
 
 export type AgentsAddAdminsInput = {
 	deployment_id: string
@@ -620,6 +618,7 @@ export type AgentsListOutput = Array<CliDeployment>
 export type AgentsListAddableAdminsInput = string
 
 export type AgentsListAddableAdminsOutput = Array<{
+	is_agent_admin: boolean
 	profile: {
 		display_name: string | null
 		email: string | null
@@ -1229,6 +1228,34 @@ export type NangoGetConnectionInput = {
 
 export type NangoGetConnectionOutput = any
 
+export type NotesAttributeTranscriptsInput = {
+	mappings: Array<{
+		note_id: string
+		transcript_id: string
+	}>
+}
+
+export type NotesAttributeTranscriptsOutput = {
+	updated: number
+}
+
+export type NotesListMineInput = {
+	limit?: number
+	org_id: string
+}
+
+export type NotesListMineOutput = {
+	notes: Array<{
+		body: string
+		branch: string | null
+		created_at: string
+		id: string
+		repo: string | null
+		title: string
+		transcript_id: string | null
+	}>
+}
+
 export type OrganizationGetOrganizationByIdInput = string
 
 export type OrganizationGetOrganizationByIdOutput = {
@@ -1297,7 +1324,7 @@ export type PageDeleteOutput = {
 	parent_id: string | null
 	sync_provider: 'github' | 'coda' | 'confluence' | 'notion' | 'gitlab' | 'azure_devops' | null
 	synced_from_document_source_id: string | null
-	title: string | null
+	title: string
 	type: 'document' | 'answer' | 'changelog' | 'template' | 'topic'
 	updated_at: string | null
 }
@@ -1502,6 +1529,18 @@ export type PageSyncBackInput = {
 }
 
 export type PageSyncBackOutput = Record<string, unknown>
+
+export type PageTopCitedInput = {
+	days?: number
+	knowledge_store_id: string
+	limit?: number
+}
+
+export type PageTopCitedOutput = Array<{
+	citation_count: number
+	page_id: string
+	title: string
+}>
 
 export type PageUpdateInput = {
 	body?: string
@@ -2037,6 +2076,13 @@ export interface CliApiClient {
 	nango: {
 		getConnection: QueryProcedure<NangoGetConnectionInput, NangoGetConnectionOutput>
 	}
+	notes: {
+		attributeTranscripts: MutationProcedure<
+			NotesAttributeTranscriptsInput,
+			NotesAttributeTranscriptsOutput
+		>
+		listMine: QueryProcedure<NotesListMineInput, NotesListMineOutput>
+	}
 	organization: {
 		getOrganizationById: QueryProcedure<
 			OrganizationGetOrganizationByIdInput,
@@ -2056,6 +2102,7 @@ export interface CliApiClient {
 		restoreVersion: MutationProcedure<PageRestoreVersionInput, PageRestoreVersionOutput>
 		setArchiveState: MutationProcedure<PageSetArchiveStateInput, PageSetArchiveStateOutput>
 		syncBack: MutationProcedure<PageSyncBackInput, PageSyncBackOutput>
+		topCited: QueryProcedure<PageTopCitedInput, PageTopCitedOutput>
 		update: MutationProcedure<PageUpdateInput, PageUpdateOutput>
 		updatePublicationStatus: MutationProcedure<
 			PageUpdatePublicationStatusInput,
