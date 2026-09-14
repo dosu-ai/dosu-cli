@@ -1,3 +1,10 @@
+# [0.53.0-beta.11](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.10...v0.53.0-beta.11) (2026-09-14)
+
+
+### Bug Fixes
+
+* **tui:** probe session at launch and extend the f full-rows toggle to Activity ([#218](https://github.com/dosu-ai/dosu-cli/issues/218)) ([f16c276](https://github.com/dosu-ai/dosu-cli/commit/f16c2768972025dcbc4e5754c8b0e67e7c0c7621))
+
 # [0.53.0-beta.10](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.9...v0.53.0-beta.10) (2026-09-11)
 
 
