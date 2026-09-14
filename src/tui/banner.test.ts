@@ -101,6 +101,13 @@ describe("renderBanner", () => {
     );
   });
 
+  it("flags an expired session over a stale signed-in token", () => {
+    const expired = stripAnsi(renderBanner(makeContext({ signedIn: true, sessionExpired: true })));
+    const accountRow = expired.split("\n").find((line) => line.includes("account"));
+    expect(accountRow).toContain("session expired \u00B7 run Log in");
+    expect(accountRow).not.toContain("signed in");
+  });
+
   it("includes mcp and agent rows only when configured", () => {
     const bare = stripAnsi(renderBanner(makeContext()));
     expect(bare).not.toContain("mcp");
