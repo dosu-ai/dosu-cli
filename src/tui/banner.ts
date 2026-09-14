@@ -11,6 +11,8 @@ export interface BannerContext {
   /** Basename of the working directory. */
   directory: string;
   signedIn: boolean;
+  /** Signed in on disk, but the server rejected the refresh: only a new login helps. */
+  sessionExpired?: boolean;
   /** Selected MCP deployment, when one is locked in. */
   deploymentName?: string;
   /** Library the MCP answers from, when known. */
@@ -72,7 +74,11 @@ function checklistRows(ctx: BannerContext): string[] {
   const rows: Array<[string, string]> = [["workspace", ctx.directory]];
   rows.push([
     "account",
-    ctx.signedIn ? `${on} signed in` : `${off} ${pc.dim("not signed in \u00B7 run Setup")}`,
+    ctx.sessionExpired
+      ? `${off} ${pc.yellow("session expired")} ${pc.dim(`${DOT} run Log in`)}`
+      : ctx.signedIn
+        ? `${on} signed in`
+        : `${off} ${pc.dim(`not signed in ${DOT} run Setup`)}`,
   ]);
   // A missing setup step outranks a stale display name.
   const missing = new Set(ctx.setupMissing ?? []);

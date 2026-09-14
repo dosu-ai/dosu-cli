@@ -103,10 +103,25 @@ vi.mock("../hooks/agents", () => ({
   getHookAgent: vi.fn(),
 }));
 
+// The launch-time session probe would otherwise call Supabase to refresh an expired token.
+const { mockRefreshToken } = vi.hoisted(() => ({ mockRefreshToken: vi.fn() }));
+vi.mock("../client/client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../client/client")>();
+  return {
+    ...actual,
+    // Constructed with `new`: a regular function, not an arrow (Vitest 4 cannot `new` an arrow).
+    Client: vi.fn(function () {
+      return { refreshToken: mockRefreshToken };
+    }),
+  };
+});
+
 // --- Imports: config is REAL, not mocked ---
 
 import { OAuthCallbackError } from "../auth/errors";
 import { startOAuthFlow } from "../auth/flow";
+import { SessionExpiredError, SessionRefreshError } from "../auth/session-errors";
+import { Client } from "../client/client";
 import type { Config } from "../config/config";
 import { emptyConfig, getConfigDir, loadConfig, saveConfig, updateTarget } from "../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
@@ -503,6 +518,130 @@ describe("runTUI", () => {
     const unconfigured = mockMenuSelect.mock.calls[0]?.[1] ?? [];
     expect(unconfigured.map((o) => o.value)).toEqual(["setup", "exit"]);
     expect(stripAnsi(unconfigured[0]?.hint ?? "")).toBe("not set up yet");
+  });
+
+  describe("launch-time session probe", () => {
+    const EXPIRED_AT = 1_000_000; // long past
+    const complete = { space_id: "sp", deployment_id: "d", api_key: "k" };
+
+    beforeEach(() => {
+      // resetAllMocks wipes the factory's implementation; restore it.
+      vi.mocked(Client).mockImplementation(function () {
+        return { refreshToken: mockRefreshToken } as unknown as Client;
+      });
+    });
+
+    it("skips the probe entirely while the stored token is still valid", async () => {
+      writeRealConfig(makeCfg({ access_token: "tok", expires_at: 9999999999, ...complete }));
+      mockMenuSelect.mockResolvedValueOnce("exit");
+
+      await runTUI();
+
+      expect(Client).not.toHaveBeenCalled();
+      expect(mockRefreshToken).not.toHaveBeenCalled();
+      expect(stripAnsi(stdoutWrites.join(""))).toContain("signed in");
+    });
+
+    it("flags the session expired when the server rejects the refresh", async () => {
+      writeRealConfig(makeCfg({ access_token: "tok", expires_at: EXPIRED_AT, ...complete }));
+      mockRefreshToken.mockRejectedValueOnce(new SessionExpiredError());
+      mockMenuSelect.mockResolvedValueOnce("exit");
+
+      await runTUI();
+
+      expect(mockRefreshToken).toHaveBeenCalledOnce();
+      const banner = stripAnsi(stdoutWrites.join(""));
+      const accountRow = banner.split("\n").find((line) => line.includes("account"));
+      expect(accountRow).toContain("session expired \u00B7 run Log in");
+      expect(accountRow).not.toContain("signed in");
+      // Every other screen would only echo the same error, so the menu is just the login door.
+      const options = mockMenuSelect.mock.calls[0]?.[1] ?? [];
+      expect(options.map((o) => o.value)).toEqual(["auth", "exit"]);
+      expect(options[0]?.label).toBe("Log in again");
+      expect(options[0]?.hint).toBe("(session expired \u00B7 opens your browser)");
+      expect(mockRunSetup).not.toHaveBeenCalled();
+    });
+
+    it("keeps the normal menu when the refresh brings the token up to date", async () => {
+      writeRealConfig(makeCfg({ access_token: "tok", expires_at: EXPIRED_AT, ...complete }));
+      // The real refresh rewrites the in-memory session; mirror that side effect.
+      mockRefreshToken.mockImplementationOnce(async function (this: void) {
+        const cfg = vi.mocked(Client).mock.calls[0]?.[0] as Config;
+        if (cfg.active_account) {
+          cfg.active_account.session = {
+            access_token: "fresh",
+            refresh_token: "fresh-ref",
+            expires_at: 9999999999,
+          };
+        }
+      });
+      mockMenuSelect.mockResolvedValueOnce("exit");
+
+      await runTUI();
+
+      expect(mockRefreshToken).toHaveBeenCalledOnce();
+      expect(stripAnsi(stdoutWrites.join(""))).toContain("signed in");
+      expect(stripAnsi(stdoutWrites.join(""))).not.toContain("session expired");
+      const options = mockMenuSelect.mock.calls[0]?.[1] ?? [];
+      expect(options.map((o) => o.value)).toEqual([
+        "sync",
+        "report",
+        "analytics",
+        "pages",
+        "settings",
+        "exit",
+      ]);
+    });
+
+    it("does not declare the session expired on a network or server hiccup", async () => {
+      writeRealConfig(makeCfg({ access_token: "tok", expires_at: EXPIRED_AT, ...complete }));
+      mockRefreshToken.mockRejectedValueOnce(new SessionRefreshError({ status: 503 }));
+      mockMenuSelect.mockResolvedValueOnce("exit");
+
+      await runTUI();
+
+      expect(stripAnsi(stdoutWrites.join(""))).not.toContain("session expired");
+      const options = mockMenuSelect.mock.calls[0]?.[1] ?? [];
+      expect(options.map((o) => o.value)).toContain("sync");
+    });
+
+    it("clears the expired state once the user logs in again", async () => {
+      writeRealConfig(makeCfg({ access_token: "tok", expires_at: EXPIRED_AT, ...complete }));
+      mockRefreshToken.mockRejectedValueOnce(new SessionExpiredError());
+      mockIsCancel.mockReturnValue(false);
+      mockConfirm.mockResolvedValueOnce(true);
+      mockStartOAuthFlow.mockResolvedValueOnce({
+        browserOpened: true,
+        token: { access_token: "new-tok", refresh_token: "new-ref", expires_in: 3600 },
+      });
+      mockMenuSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
+
+      await runTUI();
+
+      // Second menu render: out of the login door (the opaque test tokens carry no user id, so
+      // the target is dropped and the menu lands in setup mode), banner says signed in again.
+      const options = mockMenuSelect.mock.calls[1]?.[1] ?? [];
+      expect(options.map((o) => o.value)).toEqual(["setup", "exit"]);
+      const lastBanner = stripAnsi(stdoutWrites.join(""));
+      const accountRows = lastBanner.split("\n").filter((line) => line.includes("account"));
+      expect(accountRows.at(-1)).toContain("signed in");
+      expect(accountRows.at(-1)).not.toContain("session expired");
+      expect(readRealConfig().active_account?.session.access_token).toBe("new-tok");
+    });
+
+    it("stays expired when the user backs out of logging in again", async () => {
+      writeRealConfig(makeCfg({ access_token: "tok", expires_at: EXPIRED_AT, ...complete }));
+      mockRefreshToken.mockRejectedValueOnce(new SessionExpiredError());
+      mockIsCancel.mockReturnValue(false);
+      mockConfirm.mockResolvedValueOnce(false);
+      mockMenuSelect.mockResolvedValueOnce("auth").mockResolvedValueOnce("exit");
+
+      await runTUI();
+
+      const options = mockMenuSelect.mock.calls[1]?.[1] ?? [];
+      expect(options.map((o) => o.value)).toEqual(["auth", "exit"]);
+      expect(mockRefreshToken).toHaveBeenCalledOnce();
+    });
   });
 
   it("stays in setup mode when no installed agent is configured", async () => {

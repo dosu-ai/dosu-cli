@@ -3,10 +3,12 @@
 import { homedir } from "node:os";
 import { basename } from "node:path";
 import pc from "picocolors";
+import { Client, SessionExpiredError } from "../client/client";
 import {
   type Config,
   clearConfigInPlace,
   isAuthenticated,
+  isTokenExpired,
   loadConfig,
   replaceLoginSession,
   saveConfig,
@@ -33,8 +35,27 @@ import { type MenuOption, menuSelect } from "./menu";
 import { runPagesView } from "./pages-view";
 import * as p from "./prompts";
 
+/** Session state the banner and menu key off. `expired` means the tokens on disk are past
+ * their lifetime *and* the server refused to refresh them, so only a new login helps. */
+interface SessionState {
+  expired: boolean;
+}
+
+/** Bring an expired access token up to date before drawing anything, so the banner reflects
+ * the server's verdict rather than whatever token happens to be on disk. Network or disk
+ * hiccups leave the session as-is: the views retry the refresh on demand. */
+async function probeSession(cfg: Config): Promise<SessionState> {
+  if (!isAuthenticated(cfg) || !isTokenExpired(cfg)) return { expired: false };
+  try {
+    await new Client(cfg).refreshToken();
+    return { expired: false };
+  } catch (err: unknown) {
+    return { expired: err instanceof SessionExpiredError };
+  }
+}
+
 /** Gather the live machine state the welcome banner shows. */
-function bannerContext(cfg: Config): BannerContext {
+function bannerContext(cfg: Config, session: SessionState): BannerContext {
   let webAppHost = "app.dosu.dev";
   try {
     webAppHost = new URL(getWebAppURL()).host;
@@ -57,10 +78,11 @@ function bannerContext(cfg: Config): BannerContext {
     webAppHost,
     directory: basename(process.cwd()),
     signedIn: isAuthenticated(cfg),
+    sessionExpired: session.expired,
     deploymentName: cfg.active_account?.target?.deployment_name,
     libraryName: cfg.active_account?.target?.library_name,
-    // Signed out, the account row already says "run Setup"; don't repeat it.
-    setupMissing: isAuthenticated(cfg) ? missingSetupSteps(cfg) : [],
+    // Signed out or expired, the account row already names the next step; don't repeat it.
+    setupMissing: isAuthenticated(cfg) && !session.expired ? missingSetupSteps(cfg) : [],
     ...(inGitWorkTree() ? { repoAgentsMd: dosuAgentsSectionState() } : {}),
     agents,
     mining: isMining(),
@@ -157,7 +179,7 @@ function isMining(): boolean {
 }
 
 /** Take over the screen and draw the banner, on launch and after flows that scrolled it away. */
-function drawHome(cfg: Config): void {
+function drawHome(cfg: Config, session: SessionState): void {
   if (process.stdout.isTTY) {
     process.stdout.write(CLEAR_SCREEN);
     // Fixed top margin; vertical centering jiggled as the menu height changed.
@@ -165,11 +187,13 @@ function drawHome(cfg: Config): void {
   }
   // stream.write, not console.log: Bun's console.log bypasses the patched
   // stdout.write that injects the centered-layout margin.
-  process.stdout.write(`${renderBanner(bannerContext(cfg))}\n`);
+  process.stdout.write(`${renderBanner(bannerContext(cfg, session))}\n`);
 }
 
 async function runMainMenu(): Promise<void> {
   const cfg = loadConfig();
+  // Refresh mutates cfg in place, so a successful probe also leaves fresh tokens for the views.
+  const session = await probeSession(cfg);
 
   // Setup may change deployment, api_key, etc.; keep the in-memory cfg in step.
   const runSetupAndReload = async (): Promise<void> => {
@@ -180,8 +204,18 @@ async function runMainMenu(): Promise<void> {
   };
 
   // Re-polled while the menu is open so background mining updates the label.
-  // Signed out, the menu is just the login door; Setup leads until complete.
+  // Signed out (or expired), the menu is just the login door; Setup leads until complete.
   const buildOptions = (): MenuOption[] => {
+    if (session.expired) {
+      return [
+        {
+          label: "Log in again",
+          hint: "(session expired \u00B7 opens your browser)",
+          value: "auth",
+        },
+        { label: "Exit", value: "exit" },
+      ];
+    }
     if (!isAuthenticated(cfg)) {
       return [
         { label: "Log in / Sign up", hint: "(opens your browser)", value: "auth" },
@@ -209,13 +243,13 @@ async function runMainMenu(): Promise<void> {
       { label: "Exit", value: "exit" },
     ];
   };
-  const home = () => drawHome(cfg);
+  const home = () => drawHome(cfg, session);
 
   home();
 
   // Signed in without a complete target, every menu row is a dead end — go
   // straight into the wizard. Cancelling out still lands on the menu.
-  if (isAuthenticated(cfg) && !isSetUp(cfg)) {
+  if (isAuthenticated(cfg) && !session.expired && !isSetUp(cfg)) {
     await runSetupAndReload();
     home();
   }
@@ -255,6 +289,8 @@ async function runMainMenu(): Promise<void> {
         break;
       case "auth":
         await handleAuthenticate(cfg);
+        // A completed login replaced the session; a cancelled one leaves it expired.
+        session.expired = session.expired && isTokenExpired(cfg);
         home();
         // A fresh login without a target flows straight into the wizard too.
         if (isAuthenticated(cfg) && !isSetUp(cfg)) {
