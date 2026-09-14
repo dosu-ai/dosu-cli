@@ -1144,6 +1144,46 @@ describe("runActivityView", () => {
     await view;
   });
 
+  it("scrolls against the shorter full-rows window after f", async () => {
+    const { input, output, written } = fakeIO();
+    // 8 short lines: they all fit the default 10-line window but not the 5-row full window.
+    const seed = Array.from(
+      { length: 8 },
+      (_, i) => `[2026-09-02T23:01:0${i}.000Z] [INFO] [sync] activity ${i}`,
+    ).join("\n");
+
+    const view = runActivityView({
+      input,
+      output,
+      getStatus: makeStatus,
+      readLog: () => seed,
+      createFollower: () => ({ poll() {} }),
+      pollMs: 100,
+    });
+
+    // Clipped mode: everything is visible, so up has nothing to reveal and redraws nothing.
+    expect(stripAnsi(written.at(-1) ?? "")).toContain("activity 0");
+    const framesBefore = written.length;
+    input.emit("data", `${ESC}[A`);
+    expect(written.length).toBe(framesBefore);
+
+    // Full mode windows ACTIVITY_VIEW_FULL_LIST_ROWS rows, pinned to the newest.
+    input.emit("data", "f");
+    const full = stripAnsi(written.at(-1) ?? "");
+    expect(full).not.toContain("activity 0");
+    expect(full).toContain(`\u2191 ${8 - ACTIVITY_VIEW_FULL_LIST_ROWS} earlier`);
+
+    // Scrolling up walks back to the earliest row and then stops at the window's edge.
+    for (let i = 0; i < 8 - ACTIVITY_VIEW_FULL_LIST_ROWS; i++) input.emit("data", `${ESC}[A`);
+    expect(stripAnsi(written.at(-1) ?? "")).toContain("activity 0");
+    const framesAtTop = written.length;
+    input.emit("data", `${ESC}[A`);
+    expect(written.length).toBe(framesAtTop);
+
+    input.emit("data", "q");
+    await view;
+  });
+
   it("baselines run progress when the run appears and tracks it batch by batch", async () => {
     const { input, output, written } = fakeIO();
     let totalMined = 568;
