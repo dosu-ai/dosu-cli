@@ -674,7 +674,7 @@ describe("renderActivityFrame", () => {
     expect(frame).toContain("Queued (1)");
     expect(frame).toContain("Mined (7)");
     expect(frame).toContain(
-      "tab switch \u00B7 \u2191\u2193 scroll \u00B7 s sync now \u00B7 esc back",
+      "tab switch \u00B7 \u2191\u2193 scroll \u00B7 f full rows \u00B7 s sync now \u00B7 esc back",
     );
   });
 
@@ -783,25 +783,66 @@ describe("renderActivityFrame", () => {
     expect(row?.endsWith("\u2026")).toBe(true);
   });
 
-  it("hints at the f toggle and the CLI listing on session tabs, but not on the activity tab", () => {
+  it("lists the f toggle in the key legend on every tab, with no CLI hint clutter", () => {
     const queuedFrame = stripAnsi(
       renderActivityFrame(makeStatus(), [], 64, null, { tab: "queued", scroll: 0 }, [
         queuedSession(),
       ]),
     );
-    expect(queuedFrame).toContain("f full rows \u00B7 dosu knowledge sessions --queued");
+    expect(queuedFrame).toContain("\u2191\u2193 scroll \u00B7 f full rows \u00B7 s sync now");
+    expect(queuedFrame).not.toContain("dosu knowledge sessions");
 
     const activityFrame = stripAnsi(
       renderActivityFrame(makeStatus(), ["[sync] line"], 64, null, { tab: "activity", scroll: 0 }),
     );
-    expect(activityFrame).not.toContain("f full rows");
+    expect(activityFrame).toContain("\u00B7 f full rows \u00B7");
+    expect(activityFrame).not.toContain("dosu logs");
+
+    // The legend lists f even with nothing to expand yet.
+    const emptyFrame = stripAnsi(
+      renderActivityFrame(makeStatus(), [], 64, null, { tab: "activity", scroll: 0 }),
+    );
+    expect(emptyFrame).toContain("f full rows");
   });
 
-  it("clips the footer hint line in a narrow frame instead of letting it wrap", () => {
-    const queued = Array.from({ length: 15 }, (_, i) => queuedSession(`session-${i}`));
+  it("shows activity lines unclipped and wrapped in full mode", () => {
     const width = 40;
+    const tail = "/Users/james/Documents/dosu-global/dosu-cli/src/tui/activity-view.ts";
+    const line = `[2026-09-02T21:00:00.000Z] [INFO] [sync] wrote ${tail}`;
+
+    const clipped = stripAnsi(
+      renderActivityFrame(makeStatus(), [line], width, null, { tab: "activity", scroll: 0 }),
+    );
+    expect(clipped).not.toContain(tail);
+    expect(
+      clipped.split("\n").some((row) => row.startsWith("21:00:00") && row.endsWith("\u2026")),
+    ).toBe(true);
+
+    const full = stripAnsi(
+      renderActivityFrame(makeStatus(), [line], width, null, {
+        tab: "activity",
+        scroll: 0,
+        fullRows: true,
+      }),
+    );
+    // The log row wraps to the frame width (with the hanging indent) instead of clipping.
+    const rows = full.split("\n");
+    const start = rows.findIndex((row) => row.startsWith("21:00:00"));
+    expect(start).toBeGreaterThan(-1);
+    expect(rows[start].length).toBeLessThanOrEqual(width);
+    expect(rows[start + 1].startsWith("  ")).toBe(true);
+    expect(rows[start + 1].length).toBeLessThanOrEqual(width);
+    expect(full.replaceAll("\n", "").replaceAll(" ", "")).toContain(tail);
+    expect(full).not.toContain("\u2026");
+    expect(full).toContain("\u2191\u2193 scroll \u00B7 f clip \u00B7 s sync now");
+  });
+
+  it("clips the scroll counter line in a narrow frame instead of letting it wrap", () => {
+    // Scrolled into the middle so both counters render; at the 20-column floor they don't fit.
+    const queued = Array.from({ length: 30 }, (_, i) => queuedSession(`session-${i}`));
+    const width = 20;
     const frame = stripAnsi(
-      renderActivityFrame(makeStatus(), [], width, null, { tab: "queued", scroll: 0 }, queued),
+      renderActivityFrame(makeStatus(), [], width, null, { tab: "queued", scroll: 5 }, queued),
     );
     const hint = frame.split("\n").find((line) => line.includes("earlier"));
     expect(hint).toBeDefined();
@@ -809,7 +850,7 @@ describe("renderActivityFrame", () => {
     expect(hint?.endsWith("\u2026")).toBe(true);
   });
 
-  it("shows full rows wrapped to the width in full mode, pointing at the CLI for copy/paste", () => {
+  it("shows full rows wrapped to the width in full mode", () => {
     const status = makeStatus({
       state: {
         schema_version: 1,
@@ -836,8 +877,7 @@ describe("renderActivityFrame", () => {
     const joined = frame.replaceAll("\n", "").replaceAll(" ", "");
     expect(joined).toContain("a60cacd1-2d66-455d-b220-0123456789ab");
     expect(joined).toContain("Users-james-Documents-dosu-global-dosu-cli");
-    // Wrapped rows are awkward to copy, so full mode still points at the CLI listing.
-    expect(frame).toContain("f clip \u00B7 copy: dosu knowledge sessions --mined");
+    expect(frame).toContain("\u00B7 f clip \u00B7");
     expect(frame).not.toContain("f full rows");
   });
 
@@ -1049,28 +1089,40 @@ describe("runActivityView", () => {
     await view;
   });
 
-  it("toggles full rows with f on session tabs and ignores f on the activity tab", async () => {
+  it("toggles full rows with f on every tab, one shared state", async () => {
     const { input, output, written } = fakeIO();
     const longId = "a60cacd1-2d66-455d-b220-0123456789ab";
+    const longPath = "/Users/james/Documents/dosu-global/dosu-cli/src/tui/activity-view.ts";
 
     const view = runActivityView({
       input,
       output,
       getStatus: makeStatus,
-      readLog: () => "[2026-09-02T21:00:00.000Z] [INFO] [sync] activity line\n",
+      readLog: () => `[2026-09-02T21:00:00.000Z] [INFO] [sync] wrote ${longPath}\n`,
       createFollower: () => ({ poll() {} }),
       listBacklog: () => ({ queued: [queuedSession(longId)], open: [] }),
       pollMs: 100,
     });
 
-    // f on the activity tab is a no-op: no redraw, no full-rows hint.
-    const framesBefore = written.length;
-    input.emit("data", "f");
-    expect(written.length).toBe(framesBefore);
+    // The activity tab clips long log lines by default (frame is 63 wide)...
+    const activityClipped = stripAnsi(written.at(-1) ?? "");
+    expect(activityClipped).not.toContain(longPath);
+    expect(activityClipped).toContain("\u00B7 f full rows \u00B7");
 
-    // Two tabs land on Queued, clipped by default (column clip plus the frame-width clip).
+    // ...and f expands them in place, wrapped.
+    input.emit("data", "f");
+    const activityFull = stripAnsi(written.at(-1) ?? "");
+    expect(activityFull.replaceAll("\n", "").replaceAll(" ", "")).toContain(longPath);
+    expect(activityFull).toContain("\u00B7 f clip \u00B7");
+
+    // The toggle is shared: Queued opens already in full mode.
     input.emit("data", "\t");
     input.emit("data", "\t");
+    const queuedFull = stripAnsi(written.at(-1) ?? "");
+    expect(queuedFull.replaceAll("\n", "").replaceAll(" ", "")).toContain(longId);
+
+    // f back to clipped (column clip plus the frame-width clip).
+    input.emit("data", "f");
     const clipped = stripAnsi(written.at(-1) ?? "");
     expect(clipped).toContain(longId.slice(0, 10));
     expect(clipped).not.toContain(longId);
@@ -1080,7 +1132,7 @@ describe("runActivityView", () => {
     input.emit("data", "f");
     const full = stripAnsi(written.at(-1) ?? "");
     expect(full.replaceAll("\n", "").replaceAll(" ", "")).toContain(longId);
-    expect(full).toContain("f clip \u00B7 copy: dosu knowledge sessions --queued");
+    expect(full).toContain("\u00B7 f clip \u00B7");
 
     // f again clips back.
     input.emit("data", "f");
