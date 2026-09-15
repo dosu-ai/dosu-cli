@@ -183,3 +183,23 @@ describe("createProjectDirResolver", () => {
     expect(createProjectDirResolver(tempDir)).toBeDefined();
   });
 });
+
+describe("cached", () => {
+  it("returns previously resolved directories by harness/id key without a session", () => {
+    const dir = mkdtempSync(join(tmpdir(), "dosu-projdir-"));
+    const resolver = createProjectDirResolver(dir, {
+      exists: () => true,
+      readHead: () => JSON.stringify({ cwd: "/repos/dosu" }),
+      mtime: () => "m1",
+    });
+    expect(resolver.cached("claude/s1")).toBeNull();
+    resolver.resolve({
+      id: "s1",
+      harness: "claude",
+      path: "/logs/s1.jsonl",
+      updated: "2026-01-01T00:00:00.000Z",
+    });
+    expect(resolver.cached("claude/s1")).toBe("/repos/dosu");
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

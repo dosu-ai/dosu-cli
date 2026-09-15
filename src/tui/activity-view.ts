@@ -1,10 +1,12 @@
 /** Live Activity screen: studying status plus tabbed lists and a manual sync trigger. Pure
  * render/reduce functions wired to injectable IO, like menu.ts. */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { basename } from "node:path";
 import pc from "picocolors";
 import { createLogFollower } from "../debug/follow";
 import { logger, stripAnsiCodes } from "../debug/logger";
+import { createProjectDirResolver, unmungeSlug } from "../sessions/project-dir";
 import type { AgentSession } from "../sessions/scan";
 import { brand } from "../setup/styles";
 import { listSessionBacklog, type SessionBacklog } from "../sync/backlog";
@@ -261,7 +263,7 @@ function statusLine(status: SyncStatus): string {
     )}`;
   }
   return `${pc.dim("\u25CB")} ${pc.bold("Idle")} ${pc.dim(
-    "\u00B7 hooks mine new sessions automatically",
+    "\u00B7 hooks study new sessions automatically",
   )}`;
 }
 
@@ -389,6 +391,8 @@ export function renderActivityFrame(
   open: readonly AgentSession[] = [],
   /** Within-batch step progress folded from the learner's log traces. */
   runProgress: RunProgress | null = null,
+  /** Friendly project names by `harness/id` key; rows fall back to the stored slug. */
+  projectNames: Readonly<Record<string, string>> = {},
 ): string {
   const studied = status.state.watermark
     ? `Studied sessions up to ${localTime(status.state.watermark)}`
@@ -431,11 +435,18 @@ export function renderActivityFrame(
   // asked for full rows, which render unclipped and wrap below instead. One toggle, every tab:
   // log lines (paths, error text) lose their tails to the clip just like session ids do.
   const fullRows = Boolean(pane.fullRows);
-  const studiedRows = (status.state.mined_sessions ?? []).map((record) =>
-    fullRows ? formatStudiedRow(record, true) : formatActivityLine(formatStudiedRow(record), width),
-  );
-  const sessionRow = (session: AgentSession) =>
-    fullRows ? formatQueuedRow(session, true) : formatActivityLine(formatQueuedRow(session), width);
+  const withName = <T extends { project?: string }>(item: T, key: string): T =>
+    projectNames[key] ? { ...item, project: projectNames[key] } : item;
+  const studiedRows = (status.state.mined_sessions ?? []).map((r) => {
+    const record = withName(r, r.session);
+    return fullRows
+      ? formatStudiedRow(record, true)
+      : formatActivityLine(formatStudiedRow(record), width);
+  });
+  const sessionRow = (session: AgentSession) => {
+    const s = withName(session, `${session.harness}/${session.id}`);
+    return fullRows ? formatQueuedRow(s, true) : formatActivityLine(formatQueuedRow(s), width);
+  };
   const queuedRows = queued.map(sessionRow);
   const openRows = open.map(sessionRow);
   const source =
@@ -530,7 +541,42 @@ export interface ActivityViewIO {
   setPaused?: (paused: boolean) => void;
   /** The scanned backlog for the Queued and Open tabs; re-run when the watermark moves. */
   listBacklog?: () => SessionBacklog;
+  /** Friendly project names by `harness/id` key for the session rows. */
+  projectNames?: (status: SyncStatus, backlog: SessionBacklog) => Record<string, string>;
   pollMs?: number;
+}
+
+/** Default projectNames source: resolve real working directories (cached on disk) for live
+ * sessions, cache-only + slug un-munging for studied history, shown as the directory basename. */
+function createProjectNamer(): (
+  status: SyncStatus,
+  backlog: SessionBacklog,
+) => Record<string, string> {
+  const resolver = createProjectDirResolver();
+  const bySlug = new Map<string, string | null>();
+  const fromSlug = (slug: string): string | null => {
+    if (!bySlug.has(slug)) bySlug.set(slug, unmungeSlug(slug));
+    return bySlug.get(slug) ?? null;
+  };
+  return (status, backlog) => {
+    const names: Record<string, string> = {};
+    let resolved = false;
+    for (const s of [...backlog.queued, ...backlog.open]) {
+      if (!existsSync(s.path)) continue;
+      const dir = resolver.resolve(s);
+      if (dir) {
+        names[`${s.harness}/${s.id}`] = basename(dir);
+        resolved = true;
+      }
+    }
+    for (const r of status.state.mined_sessions ?? []) {
+      if (names[r.session]) continue;
+      const dir = resolver.cached(r.session) ?? (r.project ? fromSlug(r.project) : null);
+      if (dir) names[r.session] = basename(dir);
+    }
+    if (resolved) resolver.flush();
+    return names;
+  };
 }
 
 function defaultReadLog(): string {
@@ -558,6 +604,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
   const stopSync = io.stopSync ?? stopSyncRun;
   const setPaused = io.setPaused ?? setSyncPaused;
   const listBacklog = io.listBacklog ?? listSessionBacklog;
+  const projectNamesFor = io.projectNames ?? createProjectNamer();
   const pollMs = io.pollMs ?? ACTIVITY_VIEW_POLL_MS;
 
   const seed = readLog();
@@ -625,6 +672,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
       studiedBeforeRun ?? 0,
       sessions.open,
       runProgress,
+      projectNamesFor(status, sessions),
     );
     if (frame === lastFrame) return;
     lastFrame = frame;

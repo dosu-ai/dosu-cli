@@ -924,6 +924,51 @@ describe("renderActivityFrame", () => {
     expect(frame).not.toContain("[sync] activity line");
   });
 
+  it("shows the resolved project name instead of the stored slug when provided", () => {
+    const status = makeStatus({
+      state: {
+        schema_version: 1,
+        watermark: "2026-05-12T17:16:26.769Z",
+        consecutive_failures: 0,
+        mined_sessions: [
+          {
+            at: "2026-05-12T17:16:26.769Z",
+            session: "claude/abc123",
+            project: "Users-spencer-Documents-GitHub-dosu",
+          },
+        ],
+      },
+    });
+    const frame = stripAnsi(
+      renderActivityFrame(status, [], 80, null, { tab: "studied", scroll: 0 }, [], 0, [], null, {
+        "claude/abc123": "dosu",
+      }),
+    );
+    const row = frame.split("\n").find((line) => line.startsWith("claude"));
+    expect(row).toContain("dosu");
+    expect(row).not.toContain("Users-spencer");
+  });
+
+  it("names queued rows through the same lookup, falling back to the slug when absent", () => {
+    const session = queuedSession();
+    const frame = stripAnsi(
+      renderActivityFrame(
+        makeStatus(),
+        [],
+        80,
+        null,
+        { tab: "queued", scroll: 0 },
+        [session],
+        0,
+        [],
+        null,
+        { [`${session.harness}/${session.id}`]: "dosu-cli" },
+      ),
+    );
+    const row = frame.split("\n").find((line) => line.startsWith(session.harness));
+    expect(row).toContain("dosu-cli");
+  });
+
   it("shows an empty message on the queued tab when the backlog is drained", () => {
     const frame = stripAnsi(
       renderActivityFrame(makeStatus(), [], 64, null, { tab: "queued", scroll: 0 }),
