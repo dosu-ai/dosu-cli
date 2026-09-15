@@ -10,6 +10,7 @@ import {
   gateSessions,
   isUnderDir,
   loadSyncState,
+  resetSyncState,
   type SyncState,
   saveSyncState,
   setSyncPaused,
@@ -282,6 +283,53 @@ describe("gateSessions", () => {
     const offsetSession = session({ updated: "2026-08-25T04:00:00.758553246-07:00" });
     const result = gateSessions([offsetSession], null, NOW);
     expect(result.ready).toHaveLength(1);
+  });
+});
+
+describe("resetSyncState", () => {
+  it("forgets mining progress but keeps the project filter and pause switch", () => {
+    saveSyncState(
+      {
+        schema_version: 1,
+        watermark: "2026-09-02T23:00:00.000Z",
+        last_attempt_at: "2026-09-02T23:05:00.000Z",
+        consecutive_failures: 3,
+        mined_sessions: [{ at: "2026-09-02T23:00:00.000Z", session: "cursor/abc" }],
+        total_mined: 40,
+        total_notes: 12,
+        total_learning_tokens: 9000,
+        last_refusal: { at: "2026-09-02T23:05:00.000Z", outcome: "quota", message: "over" },
+        run: { pid: 1, started_at: "2026-09-02T23:00:00.000Z", baseline_mined: 39 },
+        project_filter: ["/Users/me/proj"],
+        paused: true,
+      },
+      configDir,
+    );
+
+    resetSyncState(configDir);
+
+    const state = loadSyncState(configDir);
+    expect(state.watermark).toBeNull();
+    expect(state.last_attempt_at).toBeUndefined();
+    expect(state.consecutive_failures).toBe(0);
+    expect(state.mined_sessions).toEqual([]);
+    expect(state.total_mined).toBe(0);
+    expect(state.total_notes).toBe(0);
+    expect(state.total_learning_tokens).toBe(0);
+    expect(state.last_refusal).toBeUndefined();
+    expect(state.run).toBeUndefined();
+    expect(backoffUntil(state)).toBeNull();
+    expect(state.project_filter).toEqual(["/Users/me/proj"]);
+    expect(state.paused).toBe(true);
+  });
+
+  it("writes a clean file when nothing was ever mined", () => {
+    resetSyncState(configDir);
+    const state = loadSyncState(configDir);
+    expect(state.watermark).toBeNull();
+    expect(state.paused).toBeUndefined();
+    expect(state.project_filter).toBeUndefined();
+    expect(readFileSync(syncStatePath(configDir), "utf-8")).not.toContain("paused");
   });
 });
 
