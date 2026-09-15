@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -102,6 +102,30 @@ describe("createSessionTitleResolver", () => {
       mtime: () => "m1",
     });
     expect(fresh.cached("claude/s1")).toBe("name me");
+  });
+});
+
+describe("default file boundaries", () => {
+  it("resolves a real claude file through the default reader and mtime", () => {
+    const path = join(tempDir, "real.jsonl");
+    writeFileSync(path, `${JSON.stringify({ type: "summary", summary: "Real file title" })}\n`);
+    const resolver = createSessionTitleResolver(tempDir);
+    expect(resolver.resolve({ id: "real", harness: "claude", path, updated: "" })).toBe(
+      "Real file title",
+    );
+  });
+
+  it("returns null (and keeps retrying) for a missing session file", () => {
+    const resolver = createSessionTitleResolver(tempDir);
+    const gone = {
+      id: "gone",
+      harness: "claude" as const,
+      path: join(tempDir, "gone.jsonl"),
+      updated: "",
+    };
+    expect(resolver.resolve(gone)).toBeNull();
+    expect(resolver.resolve(gone)).toBeNull();
+    expect(resolver.cached("claude/gone")).toBeNull();
   });
 });
 

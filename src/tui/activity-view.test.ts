@@ -1,4 +1,7 @@
 import { EventEmitter } from "node:events";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SyncStatus } from "../sync/status";
 import {
@@ -1107,6 +1110,77 @@ describe("runActivityView", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("names rows through the default resolver stack when no rowNames is injected", async () => {
+    const home = mkdtempSync(join(tmpdir(), "dosu-namer-"));
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("XDG_CONFIG_HOME", join(home, ".config"));
+    try {
+      // Studied claude session, reconstructable from slug + id, with a summary title.
+      const slug = "Users-u-repos-dosu";
+      const claudeDir = join(home, ".claude", "projects", slug);
+      mkdirSync(claudeDir, { recursive: true });
+      writeFileSync(
+        join(claudeDir, "abc.jsonl"),
+        `${JSON.stringify({ type: "summary", summary: "Fix the studying race" })}\n${JSON.stringify(
+          { cwd: join(home, "repos", "dosu") },
+        )}\n`,
+      );
+      // Queued cursor session with a real transcript carrying a tagged query.
+      const cursorDir = join(home, ".cursor", "projects", slug, "agent-transcripts", "q1");
+      mkdirSync(cursorDir, { recursive: true });
+      const cursorPath = join(cursorDir, "q1.jsonl");
+      writeFileSync(
+        cursorPath,
+        `${JSON.stringify({
+          role: "user",
+          message: { content: "<user_query>ship the studying rename</user_query>" },
+        })}\n`,
+      );
+      mkdirSync(join(home, "repos", "dosu"), { recursive: true });
+
+      const status = makeStatus({
+        state: {
+          schema_version: 1,
+          watermark: "2026-09-02T21:00:00.000Z",
+          consecutive_failures: 0,
+          mined_sessions: [
+            { at: "2026-09-02T21:00:00.000Z", session: "claude/abc", project: slug },
+          ],
+        },
+      });
+      const queued = {
+        id: "q1",
+        harness: "cursor" as const,
+        path: cursorPath,
+        project: slug,
+        updated: "2026-09-02T21:05:00.000Z",
+      };
+      const { input, output, written } = fakeIO();
+      const view = runActivityView({
+        input,
+        output,
+        getStatus: () => status,
+        readLog: () => "",
+        createFollower: () => ({ poll() {} }),
+        listBacklog: () => ({ queued: [queued], open: [] }),
+        pollMs: 100,
+      });
+      input.emit("data", "\t"); // Studied tab
+      input.emit("data", "\t"); // Queued tab
+      const rendered = stripAnsi(written.join(""));
+      // Studied row: title reconstructed from slug + id, claude summary wins
+      // (rows clip to the fake terminal width, so match a prefix).
+      expect(rendered).toContain("Fix the studying r");
+      // Queued row: the tagged user query names it.
+      expect(rendered).toContain("ship the studying");
+      input.emit("data", "q");
+      await view;
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it("resolves immediately for non-interactive stdin", async () => {
