@@ -14,7 +14,7 @@ import { listSessionBacklog, type SessionBacklog } from "../sync/backlog";
 import { spawnDetachedSelf } from "../sync/detach";
 import { stopSyncRun } from "../sync/lock";
 import { getSyncStatus, type SyncStatus } from "../sync/status";
-import { type StudiedSessionRecord, setSyncPaused } from "../sync/watermark";
+import { resetSyncState, type StudiedSessionRecord, setSyncPaused } from "../sync/watermark";
 import { enterAltScreen } from "./alt-screen";
 import {
   breadcrumb,
@@ -65,9 +65,11 @@ export type ActivityViewAction =
   | "down"
   | "sync"
   | "full"
+  | "clear"
   | "none";
 
-/** q/esc/ctrl-c back, tab/→ and ← cycle tabs, ↑↓ (or k/j) scroll, s syncs, f toggles full rows. */
+/** q/esc/ctrl-c back, tab/→ and ← cycle tabs, ↑↓ (or k/j) scroll, s syncs, f toggles full
+ * rows, c clears study history. */
 export function reduceActivityViewKey(key: string): ActivityViewAction {
   if (key === "q" || key === ESC || key === CTRL_C) return "back";
   if (key === "\t" || key === KEY_RIGHT) return "tab";
@@ -76,6 +78,7 @@ export function reduceActivityViewKey(key: string): ActivityViewAction {
   if (key === KEY_DOWN || key === "j") return "down";
   if (key === "s") return "sync";
   if (key === "f") return "full";
+  if (key === "c") return "clear";
   return "none";
 }
 
@@ -95,8 +98,9 @@ export function reduceSyncConfirmKey(key: string): SyncConfirmAction {
   return "none";
 }
 
-/** What pressing `s` means right now: stop a live run, resume a paused pipeline, or start. */
-export type SyncConfirmMode = "start" | "stop" | "resume";
+/** Which confirmation is up: `s` means stop a live run, resume a paused pipeline, or start;
+ * `c` means clear the study history so the next run starts from scratch. */
+export type SyncConfirmMode = "start" | "stop" | "resume" | "clear";
 
 function syncConfirmMode(status: SyncStatus): SyncConfirmMode {
   if (status.running) return "stop";
@@ -227,12 +231,16 @@ export interface RunProgress {
 export function foldRunProgress(progress: RunProgress | null, chunk: string): RunProgress | null {
   let current = progress;
   for (const line of chunk.split("\n")) {
-    const start = line.match(/\[sync\] studying (\d+) of \d+ ready sessions/);
+    const start = line.match(/\[sync\] (?:studying|mining) (\d+) of \d+ ready sessions/);
     if (start) {
       current = { batch: Number.parseInt(start[1], 10), read: new Set(), notes: 0 };
       continue;
     }
-    if (/\[sync\] (studied \d+ sessions|studying failed|studying skipped)/.test(line)) {
+    if (
+      /\[sync\] (?:studied|mined) \d+ sessions|\[sync\] (?:studying|mining) (?:failed|skipped)/.test(
+        line,
+      )
+    ) {
       current = null;
       continue;
     }
@@ -261,7 +269,7 @@ function statusLine(status: SyncStatus): string {
   if (status.running) {
     const since = status.startedAt ? ` \u00B7 since ${localTime(status.startedAt)}` : "";
     const pid = status.pid !== undefined ? ` (pid ${status.pid})` : "";
-    return `\u26CF\uFE0F ${pc.bold(brand("Studying sessions..."))}${pc.dim(`${pid}${since}`)}`;
+    return `\uD83D\uDCDA ${pc.bold(brand("Studying sessions..."))}${pc.dim(`${pid}${since}`)}`;
   }
   if (status.state.paused) {
     return `${pc.yellow("\u25CB")} ${pc.bold("Paused")} ${pc.dim(
@@ -346,7 +354,7 @@ export interface ActivityViewPane {
 const DEFAULT_PANE: ActivityViewPane = { tab: "activity", scroll: 0 };
 
 /** The confirmation box over the footer, shown while `pane.confirm` is set: start a run,
- * stop the live one (pausing the pipeline), or resume a paused pipeline. */
+ * stop the live one (pausing the pipeline), resume a paused pipeline, or clear the history. */
 export function confirmBox(
   queuedCount: number,
   backlog: SyncBacklog | null,
@@ -355,21 +363,30 @@ export function confirmBox(
 ): string[] {
   const inFlight =
     backlog && backlog.inFlight > 0
-      ? ` (+${backlog.inFlight} open, studied once ${backlog.inFlight === 1 ? "it goes" : "they go"} quiet)`
+      ? ` (+${backlog.inFlight} still open; ${backlog.inFlight === 1 ? "it joins" : "they join"} once quiet)`
       : "";
+  const sessions = `${queuedCount} session${queuedCount === 1 ? "" : "s"}`;
+  // Each dialog says what happens, why, and what to expect when it's done.
   const scope =
-    mode === "stop"
-      ? "the run is killed mid-batch \u00B7 studying stays paused until you resume"
-      : queuedCount > 0
-        ? `${queuedCount} session${queuedCount === 1 ? "" : "s"} queued${inFlight} \u00B7 runs in the background`
-        : `queue empty${inFlight} \u00B7 a run would only pick up sessions that finish from here`;
+    mode === "clear"
+      ? "Forgets which local sessions Dosu has already studied, so the next run reads them all again. Use this to rebuild knowledge from scratch. Notes already saved in Dosu are kept."
+      : mode === "stop"
+        ? "Kills the run mid-batch and pauses studying, so new sessions pile up in the queue instead of being read. Nothing is lost; press s again to resume from where it left off."
+        : mode === "resume"
+          ? `Studying picks up where it stopped: ${sessions} queued${inFlight}. Runs in the background; new notes appear in Dosu as each batch finishes.`
+          : queuedCount > 0
+            ? `Dosu reads ${sessions}${inFlight} and distills the durable decisions and gotchas into team knowledge. Runs in the background; new notes appear in Dosu as each batch finishes.`
+            : `Queue is empty${inFlight}. A run now would only pick up sessions that finish from here; hooks already do that automatically.`;
   const title =
-    mode === "stop"
-      ? "Stop studying?"
-      : mode === "resume"
-        ? "Resume studying?"
-        : "Start studying now?";
-  const verb = mode === "stop" ? "stop" : mode === "resume" ? "resume" : "start";
+    mode === "clear"
+      ? "Clear study history?"
+      : mode === "stop"
+        ? "Stop studying?"
+        : mode === "resume"
+          ? "Resume studying?"
+          : "Start studying now?";
+  const verb =
+    mode === "clear" ? "clear" : mode === "stop" ? "stop" : mode === "resume" ? "resume" : "start";
   const maxInner = Math.max(20, Math.min(width, contentWidth()) - 4);
   const rows = [
     // No emoji inside the border: U+26CF is ambiguous-width (1 column in xterm.js, 2 in
@@ -523,16 +540,21 @@ export function renderActivityFrame(
       ? centerBlock(confirmBox(queued.length, backlog, width, pane.confirm), width)
       : [
           // s stops a live run, resumes a paused pipeline, or starts a sync while idle;
-          // f flips between clipped and full (wrapped) rows.
-          pc.dim(
+          // f flips between clipped and full (wrapped) rows; c (idle, something studied)
+          // clears the history so the next run starts from scratch. Wrapped: on a narrow
+          // frame the full legend can outrun the width.
+          ...wrapLine(
             [
               "tab switch",
               "\u2191\u2193 scroll",
               fullRows ? "f clip" : "f full rows",
               status.running ? "s stop" : status.state.paused ? "s resume" : "s sync now",
+              ...(!status.running && status.state.watermark ? ["c clear"] : []),
               "esc back",
             ].join(" \u00B7 "),
-          ),
+            width,
+            "",
+          ).map((line) => pc.dim(line)),
         ]),
   ];
   // Left-anchored: centering on each frame's longest line would shove the
@@ -555,6 +577,8 @@ export interface ActivityViewIO {
   stopSync?: (pid: number) => boolean;
   /** Persists the pause switch hooks honor; stop sets it, resume clears it. */
   setPaused?: (paused: boolean) => void;
+  /** Forgets the watermark and study history; pressing `c` while idle calls this. */
+  clearHistory?: () => void;
   /** The scanned backlog for the Queued and Open tabs; re-run when the watermark moves. */
   listBacklog?: () => SessionBacklog;
   /** Friendly project and session names by `harness/id` key for the session rows. */
@@ -660,6 +684,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
   const startSync = io.startSync ?? (() => spawnDetachedSelf(["knowledge", "sync", "--bootstrap"]));
   const stopSync = io.stopSync ?? stopSyncRun;
   const setPaused = io.setPaused ?? setSyncPaused;
+  const clearHistory = io.clearHistory ?? resetSyncState;
   const listBacklog = io.listBacklog ?? listSessionBacklog;
   const rowNamesFor = io.rowNames ?? createRowNamer();
   const pollMs = io.pollMs ?? ACTIVITY_VIEW_POLL_MS;
@@ -716,7 +741,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
       sessions = listBacklog();
     }
     // A run starting or ending elsewhere makes the pending confirmation moot.
-    if ((confirmSync === "start" || confirmSync === "resume") && status.running) confirmSync = null;
+    if (confirmSync !== null && confirmSync !== "stop" && status.running) confirmSync = null;
     if (confirmSync === "stop" && !status.running) confirmSync = null;
     const width = activityWidth(output.columns ?? 80);
     const rowNames = rowNamesFor(status, sessions);
@@ -787,7 +812,14 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
             const mode = confirmSync;
             confirmSync = null;
             let note: string;
-            if (mode === "stop") {
+            if (mode === "clear") {
+              // The watermark going null re-gates every local session; draw() rescans on the
+              // change so the Queued tab fills immediately.
+              clearHistory();
+              studiedBeforeRun = null;
+              note =
+                "[sync] study history cleared \u00B7 the next run reads every local session again";
+            } else if (mode === "stop") {
               // Kill first, then flip the pause switch: a dying run's last state save
               // could otherwise overwrite the flag with its pre-pause snapshot.
               const ok = status.pid !== undefined && stopSync(status.pid);
@@ -822,6 +854,13 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
         if (action === "sync") {
           confirmSync = syncConfirmMode(status);
           draw();
+        } else if (action === "clear") {
+          // Only offered when idle with something studied; otherwise the key is inert, matching
+          // the legend.
+          if (!status.running && status.state.watermark) {
+            confirmSync = "clear";
+            draw();
+          }
         } else if (action === "tab" || action === "tab-back") {
           tab = cycleTab(tab, action === "tab" ? 1 : -1);
           scroll = 0;

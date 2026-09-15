@@ -233,7 +233,7 @@ async function runMainMenu(): Promise<void> {
     const studying = isStudying();
     return [
       {
-        label: studying ? `Activity \u26CF\uFE0F ${brand("studying sessions...")}` : "Activity",
+        label: studying ? `Activity \uD83D\uDCDA ${brand("studying sessions...")}` : "Activity",
         value: "sync",
       },
       { label: "Knowledge report", hint: "(opens in browser)", value: "report" },
@@ -400,7 +400,7 @@ async function runStudyingProjectsSetting(): Promise<void> {
   }
   const current = loadSyncState().project_filter;
   const selected = await p.multiselect({
-    message: "Mine sessions from which folders?",
+    message: "Study sessions from which folders?",
     options: dirs.map((dir) => ({
       label: dir === UNKNOWN_PROJECT ? "(unknown folder)" : displayDir(dir),
       value: dir,

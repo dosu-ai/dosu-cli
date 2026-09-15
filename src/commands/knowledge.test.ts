@@ -397,7 +397,7 @@ describe("knowledge sync", () => {
 
     expect(mockRunSync.mock.calls[0][0].quiet).toBeUndefined();
     expect(typeof syncDeps().mine).toBe("function");
-    expect(allOutput()).toContain("3 new sessions ready to mine");
+    expect(allOutput()).toContain("3 new sessions ready to study");
   });
 
   it("does not build a learner when the install has no API key", async () => {

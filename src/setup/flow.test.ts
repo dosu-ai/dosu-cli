@@ -3207,7 +3207,7 @@ describe("stepOfferInitialSync", () => {
       "--quiet",
       "--bootstrap",
     ]);
-    expect(vi.mocked(p.log.success).mock.calls.join(" ")).toContain("Currently studying");
+    expect(vi.mocked(p.log.success).mock.calls.join(" ")).toContain("Studying ");
     // Both prompts answered "yes": the live Activity view opens.
     expect(vi.mocked(runActivityView)).toHaveBeenCalledOnce();
   });

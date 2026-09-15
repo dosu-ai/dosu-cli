@@ -100,6 +100,10 @@ describe("reduceActivityViewKey", () => {
     expect(reduceActivityViewKey("f")).toBe("full");
   });
 
+  it("clears study history on c", () => {
+    expect(reduceActivityViewKey("c")).toBe("clear");
+  });
+
   it("confirmation keys: enter/y/s start, esc/n/q cancel, rest ignored", () => {
     expect(reduceSyncConfirmKey("\r")).toBe("start");
     expect(reduceSyncConfirmKey("y")).toBe("start");
@@ -401,7 +405,7 @@ describe("renderActivityFrame", () => {
         64,
       ),
     );
-    expect(frame).toContain("\u26CF\uFE0F Studying sessions...");
+    expect(frame).toContain("\uD83D\uDCDA Studying sessions...");
     expect(frame).toContain("pid 4242");
   });
 
@@ -545,14 +549,14 @@ describe("renderActivityFrame", () => {
     expect(withOpen).toContain("Queued (1)");
     expect(withOpen).toContain("Open (2)");
     expect(withOpen).not.toContain("\u00B7 2 open");
-    expect(withOpen).not.toContain("queue empty");
+    expect(withOpen).not.toContain("Queue is empty");
     expect(withOpen).not.toContain("queued when they finish");
 
     // No open sessions: plain zero counts, no noise.
     const drained = stripAnsi(renderActivityFrame(makeStatus(), [], 64, { ready: 0, inFlight: 0 }));
     expect(drained).toContain("Queued (0)");
     expect(drained).toContain("Open (0)");
-    expect(drained).not.toContain("queue empty");
+    expect(drained).not.toContain("Queue is empty");
   });
 
   it("lists open sessions on the Open tab with the queued-row layout", () => {
@@ -708,6 +712,42 @@ describe("renderActivityFrame", () => {
     expect(pausedFrame).toContain("s resume");
   });
 
+  it("offers c clear only while idle with something studied", () => {
+    const nothingMined = stripAnsi(renderActivityFrame(makeStatus(), [], 64));
+    expect(nothingMined).not.toContain("c clear");
+
+    const studied = makeStatus();
+    studied.state.watermark = "2026-09-02T21:00:00.000Z";
+    const idle = stripAnsi(renderActivityFrame(studied, [], 80));
+    expect(idle).toContain("s sync now \u00B7 c clear \u00B7 esc back");
+
+    const running = makeStatus({ running: true, pid: 1 });
+    running.state.watermark = "2026-09-02T21:00:00.000Z";
+    expect(stripAnsi(renderActivityFrame(running, [], 64))).not.toContain("c clear");
+  });
+
+  it("renders the clear confirmation with its own title, scope, and verb", () => {
+    const pane = { tab: "activity" as const, scroll: 0, confirm: "clear" as const };
+    const frame = stripAnsi(renderActivityFrame(makeStatus(), [], 64, null, pane));
+    expect(frame).toContain("Clear study history?");
+    // The scope wraps inside the box; compare with the box borders and breaks flattened.
+    const flat = frame.replace(/[\u2502\n]/g, " ").replace(/\s+/g, " ");
+    expect(flat).toContain("reads them all again");
+    expect(flat).toContain("Notes already saved in Dosu are kept");
+    expect(frame).toContain("enter clear \u00B7 esc cancel");
+    expect(frame).not.toContain("c clear");
+  });
+
+  it("wraps the key legend instead of outrunning a narrow frame", () => {
+    const studied = makeStatus();
+    studied.state.watermark = "2026-09-02T21:00:00.000Z";
+    const width = 50;
+    const frame = stripAnsi(renderActivityFrame(studied, [], width));
+    for (const line of frame.split("\n")) expect(line.length).toBeLessThanOrEqual(width);
+    const flat = frame.replace(/\n/g, " ").replace(/\s+/g, " ");
+    expect(flat).toContain("s sync now \u00B7 c clear \u00B7 esc back");
+  });
+
   it("replaces the key legend with the confirmation popup while confirm is pending", () => {
     const pane = { tab: "activity" as const, scroll: 0, confirm: "start" as const };
     const frame = stripAnsi(
@@ -718,7 +758,7 @@ describe("renderActivityFrame", () => {
       ]),
     );
     expect(frame).toContain("Start studying now?");
-    expect(frame).toContain("3 sessions queued \u00B7 runs in the background");
+    expect(frame).toContain("Dosu reads 3 sessions and distills");
     expect(frame).toContain("enter start \u00B7 esc cancel");
     expect(frame).not.toContain("s sync now");
     // The confirmation renders as a bordered popup box.
@@ -744,7 +784,7 @@ describe("renderActivityFrame", () => {
     for (const line of box) {
       expect(line.trimEnd().length).toBeLessThanOrEqual(40);
     }
-    expect(box.join("\n")).toContain("12 sessions queued");
+    expect(box.join("\n")).toContain("Dosu reads 12 sessions");
   });
 
   it("renders the studied-sessions tab from the state's history", () => {
@@ -834,7 +874,12 @@ describe("renderActivityFrame", () => {
     expect(rows[start + 1].length).toBeLessThanOrEqual(width);
     expect(full.replaceAll("\n", "").replaceAll(" ", "")).toContain(tail);
     expect(full).not.toContain("\u2026");
-    expect(full).toContain("\u2191\u2193 scroll \u00B7 f clip \u00B7 s sync now");
+    // The legend wraps to the narrow frame too, so compare it flattened.
+    const legendRows = rows.slice(-2);
+    expect(legendRows.join(" ").replace(/\s+/g, " ")).toContain(
+      "\u2191\u2193 scroll \u00B7 f clip \u00B7 s sync now",
+    );
+    for (const row of legendRows) expect(row.length).toBeLessThanOrEqual(width);
   });
 
   it("clips the scroll counter line in a narrow frame instead of letting it wrap", () => {
@@ -1462,7 +1507,7 @@ describe("runActivityView", () => {
     expect(startSync).not.toHaveBeenCalled();
     const prompt = stripAnsi(written.join(""));
     expect(prompt).toContain("Start studying now?");
-    expect(prompt).toContain("2 sessions queued (+1 open, studied once it goes quiet)");
+    expect(prompt).toContain("Dosu reads 2 sessions (+1 still open; it joins once quiet)");
     expect(prompt).toContain("enter start \u00B7 esc cancel");
 
     input.emit("data", "\r");
@@ -1514,7 +1559,7 @@ describe("runActivityView", () => {
     });
 
     input.emit("data", "s");
-    expect(stripAnsi(written.join(""))).toContain("queue empty");
+    expect(stripAnsi(written.join(""))).toContain("Queue is empty");
     input.emit("data", ESC);
     expect(startSync).not.toHaveBeenCalled();
     // The view is still open (esc consumed by the prompt): the legend is back.
@@ -1635,6 +1680,140 @@ describe("runActivityView", () => {
 
     input.emit("data", "q");
     await view;
+  });
+
+  it("c asks to clear history; enter resets the state and rescans the queue", async () => {
+    const { input, output, written } = fakeIO();
+    const clearHistory = vi.fn();
+    const startSync = vi.fn(() => true);
+    const listBacklog = vi.fn(() => ({ queued: [], open: [] }));
+    // The status reflects the reset once clearHistory has run, as the real state file would.
+    const getStatus = () => {
+      const status = makeStatus();
+      status.state.watermark = clearHistory.mock.calls.length > 0 ? null : "2026-09-02T21:00:00Z";
+      return status;
+    };
+
+    const view = runActivityView({
+      input,
+      output,
+      getStatus,
+      readLog: () => "",
+      createFollower: () => ({ poll() {} }),
+      startSync,
+      clearHistory,
+      listBacklog,
+      pollMs: 100,
+    });
+    const scansBefore = listBacklog.mock.calls.length;
+
+    input.emit("data", "c");
+    expect(clearHistory).not.toHaveBeenCalled();
+    const prompt = stripAnsi(written.join(""));
+    expect(prompt).toContain("Clear study history?");
+    expect(prompt).toContain("enter clear \u00B7 esc cancel");
+
+    input.emit("data", "\r");
+    expect(clearHistory).toHaveBeenCalledTimes(1);
+    expect(startSync).not.toHaveBeenCalled();
+    // The watermark moved (to null), so the queue was rescanned on the redraw.
+    expect(listBacklog.mock.calls.length).toBeGreaterThan(scansBefore);
+    const after = stripAnsi(written.join(""));
+    expect(after).toContain("[sync] study history cleared");
+    expect(after).toContain("Nothing studied yet");
+
+    input.emit("data", "q");
+    await view;
+  });
+
+  it("esc cancels the clear confirmation without touching the state", async () => {
+    const { input, output, written } = fakeIO();
+    const clearHistory = vi.fn();
+    const status = makeStatus();
+    status.state.watermark = "2026-09-02T21:00:00Z";
+
+    const view = runActivityView({
+      input,
+      output,
+      getStatus: () => status,
+      readLog: () => "",
+      createFollower: () => ({ poll() {} }),
+      clearHistory,
+      pollMs: 100,
+    });
+
+    input.emit("data", "c");
+    expect(stripAnsi(written.join(""))).toContain("Clear study history?");
+    input.emit("data", ESC);
+    expect(clearHistory).not.toHaveBeenCalled();
+    expect(stripAnsi(written.at(-1) ?? "")).toContain("c clear");
+
+    input.emit("data", "q");
+    await view;
+  });
+
+  it("c is inert while a run is live or nothing has been studied", async () => {
+    const { input, output, written } = fakeIO();
+    const clearHistory = vi.fn();
+    let status = makeStatus({ running: true, pid: 7 });
+    status.state.watermark = "2026-09-02T21:00:00Z";
+
+    const view = runActivityView({
+      input,
+      output,
+      getStatus: () => status,
+      readLog: () => "",
+      createFollower: () => ({ poll() {} }),
+      clearHistory,
+      stopSync: () => true,
+      setPaused: () => {},
+      pollMs: 100,
+    });
+
+    input.emit("data", "c");
+    expect(stripAnsi(written.join(""))).not.toContain("Clear study history?");
+
+    // Idle but never studied: still nothing to clear.
+    status = makeStatus();
+    input.emit("data", "c");
+    input.emit("data", "\r");
+    expect(clearHistory).not.toHaveBeenCalled();
+
+    input.emit("data", "q");
+    await view;
+  });
+
+  it("drops a pending clear confirmation when a run starts elsewhere", async () => {
+    vi.useFakeTimers();
+    const { input, output, written } = fakeIO();
+    const clearHistory = vi.fn();
+    let status = makeStatus();
+    status.state.watermark = "2026-09-02T21:00:00Z";
+
+    const view = runActivityView({
+      input,
+      output,
+      getStatus: () => status,
+      readLog: () => "",
+      createFollower: () => ({ poll() {} }),
+      clearHistory,
+      pollMs: 100,
+    });
+
+    input.emit("data", "c");
+    expect(stripAnsi(written.join(""))).toContain("Clear study history?");
+
+    status = makeStatus({ running: true, pid: 9 });
+    status.state.watermark = "2026-09-02T21:00:00Z";
+    vi.advanceTimersByTime(100);
+    expect(stripAnsi(written.at(-1) ?? "")).not.toContain("Clear study history?");
+    // Enter now has nothing to confirm.
+    input.emit("data", "\r");
+    expect(clearHistory).not.toHaveBeenCalled();
+
+    input.emit("data", "q");
+    await view;
+    vi.useRealTimers();
   });
 
   it("skips the terminal write when a poll produces an identical frame", async () => {

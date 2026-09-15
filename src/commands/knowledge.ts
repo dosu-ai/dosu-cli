@@ -200,7 +200,7 @@ export function knowledgeCommand(): Command {
     .option("--detach", "Re-spawn detached and return immediately (used by agent hooks)")
     .option(
       "--bootstrap",
-      "Backfill mode: mine the full local session history regardless of age and drain the backlog (used by setup)",
+      "Backfill mode: study the full local session history regardless of age and drain the backlog (used by setup)",
     )
     .option("--status", "Show whether a sync is running now, plus watermark and recent activity")
     .option(
@@ -389,15 +389,13 @@ function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
     );
   }
   const wm = status.state.watermark;
-  console.log(
-    `  Studied through:   ${wm ? `${wm} (${formatAge(wm, now)})` : "nothing studied yet"}`,
-  );
+  console.log(`  Studied through: ${wm ? `${wm} (${formatAge(wm, now)})` : "nothing studied yet"}`);
   if (status.state.project_filter?.length) {
     const home = homedir();
     const scope = status.state.project_filter
       .map((dir) => (dir.startsWith(`${home}/`) ? `~${dir.slice(home.length)}` : dir))
       .join(", ");
-    console.log(`  Study scope:    ${scope}`);
+    console.log(`  Study scope:     ${scope}`);
   }
   if ((status.state.total_notes ?? 0) > 0) {
     const tokens = status.state.total_learning_tokens ?? 0;
@@ -444,7 +442,7 @@ function printSyncOutcome(outcome: SyncOutcome): void {
           ? pc.dim(` (${outcome.inFlightSessions} more still in progress)`)
           : "";
       console.log(
-        `✓ Scanned. ${outcome.readySessions} new session${outcome.readySessions === 1 ? "" : "s"} ready to mine${inFlight}.`,
+        `✓ Scanned. ${outcome.readySessions} new session${outcome.readySessions === 1 ? "" : "s"} ready to study${inFlight}.`,
       );
       console.log(pc.dim("Sign in with 'dosu setup' to enable studying."));
       break;
@@ -465,7 +463,7 @@ function printSyncOutcome(outcome: SyncOutcome): void {
       break;
     }
     case "mine-failed": {
-      console.error(pc.red(outcome.learner?.message ?? "Studying run failed."));
+      console.error(pc.red(outcome.learner?.message ?? "Study run failed."));
       process.exitCode = 1;
       break;
     }

@@ -162,6 +162,21 @@ export function setSyncPaused(paused: boolean, configDir: string = getConfigDir(
   saveSyncState(state, configDir);
 }
 
+/** Forget everything studied so the next run starts from scratch: watermark, history, lifetime
+ * counters, failure backoff, and the last refusal. User settings survive — the project filter
+ * and the pause switch are choices, not progress. Notes already saved in Dosu are untouched. */
+export function resetSyncState(configDir: string = getConfigDir()): void {
+  const previous = loadSyncState(configDir);
+  const fresh: SyncState = {
+    schema_version: STATE_SCHEMA_VERSION,
+    watermark: null,
+    consecutive_failures: 0,
+    ...(previous.project_filter ? { project_filter: previous.project_filter } : {}),
+    ...(previous.paused ? { paused: true } : {}),
+  };
+  saveSyncState(fresh, configDir);
+}
+
 export function saveSyncState(state: SyncState, configDir: string = getConfigDir()): void {
   if (!existsSync(configDir)) mkdirSync(configDir, { recursive: true, mode: 0o700 });
   const path = syncStatePath(configDir);

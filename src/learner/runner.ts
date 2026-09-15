@@ -135,7 +135,7 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
       outcome: "settings_conflict",
       notesWritten: 0,
       turns: 0,
-      message: `Refusing to run: conflicting Claude Code settings would override the learner's auth (${detail})`,
+      message: `Refusing to run: conflicting Claude Code settings would override the study run's auth (${detail})`,
     };
   }
 
@@ -305,7 +305,7 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
             outcome: "error",
             notesWritten,
             turns,
-            message: "Studying run failed; see debug log for details.",
+            message: "Study run failed; see debug log for details.",
           };
         }
         logger.debug(
@@ -320,7 +320,7 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
       outcome: "error",
       notesWritten,
       turns,
-      message: "Studying run ended without a result.",
+      message: "Study run ended without a result.",
     };
   } catch (error) {
     const text = error instanceof Error ? error.message : String(error);
@@ -334,8 +334,8 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
       notesWritten,
       turns,
       message: abort.signal.aborted
-        ? "Studying run timed out and was aborted."
-        : "Studying run failed; see debug log for details.",
+        ? "Study run timed out and was aborted."
+        : "Study run failed; see debug log for details.",
     };
   } finally {
     clearTimeout(timer);
