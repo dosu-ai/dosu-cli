@@ -13,7 +13,7 @@ import type { AgentSession } from "./scan";
 type SessionHarness = AgentSession["harness"];
 
 const CACHE_FILENAME = "session-titles.json";
-const CACHE_SCHEMA_VERSION = 2;
+const CACHE_SCHEMA_VERSION = 3;
 const HEAD_LINES = 50;
 const SESSION_NAME_MAX = 80;
 
@@ -62,7 +62,11 @@ function saveCacheFile(configDir: string, entries: Record<string, CacheEntry>): 
 function extractUserQuery(text: string): string {
   const tagged = text.match(/<user_query>([\s\S]*?)<\/user_query>/);
   if (tagged) return tagged[1];
-  return text.replace(/^(\s*<(\w+)>[\s\S]*?<\/\2>\s*)+/, "");
+  // An injected wrapper that names itself (e.g. <scheduled-task name="daily-report">)
+  // IS the session's identity — the wrapped prompt body is machine-written.
+  const named = text.match(/^\s*<[\w-]+\s[^>]*\bname="([^"]+)"/);
+  if (named) return named[1];
+  return text.replace(/^(\s*<([\w-]+)(?:\s[^>]*)?>[\s\S]*?<\/\2>\s*)+/, "");
 }
 
 /** One-line cleanup: collapse whitespace and clip; empty becomes null. */

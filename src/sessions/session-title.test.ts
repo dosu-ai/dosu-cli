@@ -65,10 +65,25 @@ describe("createSessionTitleResolver", () => {
     const resolver = createSessionTitleResolver(tempDir, {
       readHead: () => "",
       readTurns: () =>
-        [{ role: "user", text: "<timestamp>Sep 15</timestamp> fix the flaky test" }] as SessionTurn[],
+        [
+          { role: "user", text: "<timestamp>Sep 15</timestamp> fix the flaky test" },
+        ] as SessionTurn[],
       mtime: () => "m1",
     });
     expect(resolver.resolve(session("cursor"))).toBe("fix the flaky test");
+  });
+
+  it("names a scheduled-task session after the task instead of its injected prompt", () => {
+    const wrapped =
+      '<scheduled-task name="dosu-cli-adoption-report" run="42">\n' +
+      "You are in the Dosu monorepo. Produce the daily report…\n" +
+      "</scheduled-task>";
+    const resolver = createSessionTitleResolver(tempDir, {
+      readHead: () => "",
+      readTurns: () => [{ role: "user", text: wrapped }] as SessionTurn[],
+      mtime: () => "m1",
+    });
+    expect(resolver.resolve(session())).toBe("dosu-cli-adoption-report");
   });
 
   it("caches by harness/id key and answers cache-only lookups", () => {
