@@ -513,13 +513,7 @@ export function renderActivityFrame(
     ...(progress ? [progress] : []),
     ...refusalLines,
     "",
-    ...tabBar(
-      pane.tab,
-      queued.length,
-      open.length,
-      latestPass.size,
-      width,
-    ),
+    ...tabBar(pane.tab, queued.length, open.length, latestPass.size, width),
     ...listRows,
     // Clipped, not wrapped: both scroll counters together can outrun a narrow frame.
     ...(scrollParts.length > 0 ? [pc.dim(clip(scrollParts.join(" \u00B7 "), width))] : []),

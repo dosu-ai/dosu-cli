@@ -32,8 +32,7 @@ describe("buildReportHtml", () => {
       inventory,
       candidates: [written],
       orgName: "Acme",
-      repo: "git@github.com:acme/api.git",
-      branch: "dosu/log-backfill/20260909-120000",
+      projects: ["dosu", "dosu-cli"],
       generatedAt: new Date("2026-09-09T19:00:00Z"),
     });
     expect(html).toContain("Dosu knowledge report — Acme");
@@ -44,7 +43,7 @@ describe("buildReportHtml", () => {
     expect(html).toContain("OAuth refresh token expiry");
     expect(html).toContain("Heaviest sessions");
     expect(html).toContain("Print / Save as PDF");
-    expect(html).toContain("git@github.com:acme/api.git");
+    expect(html).toContain("Projects <code>dosu</code>, <code>dosu-cli</code>");
     expect(html).toContain("why does auth retry?");
     expect(html).toContain("window.print()");
     expect(html).not.toContain("<code>sess-1</code>");
@@ -314,7 +313,6 @@ describe("presentation and inventory edges", () => {
     expect(html).toContain("Say it simply.");
     expect(html).toContain("To find this");
     expect(html).toContain("Read tokens.py then retried.");
-    expect(html).toContain("git@fallback/repo.git");
     expect(html).toContain("cursor");
   });
 

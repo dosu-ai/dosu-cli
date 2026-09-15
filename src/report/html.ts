@@ -24,8 +24,8 @@ export interface BuildReportOptions {
   inventory: ReportInventory;
   candidates?: ReportCandidate[];
   orgName?: string;
-  repo?: string;
-  branch?: string;
+  /** Distinct project names the run's sessions came from. */
+  projects?: string[];
   summary?: string;
   dryRun?: boolean;
   generatedAt?: Date;
@@ -435,8 +435,7 @@ export function buildReportHtml(options: BuildReportOptions): string {
   });
 
   const org = options.orgName || "Your team";
-  const repo = options.repo || inventory.cwd || "—";
-  const branch = options.branch || "—";
+  const projects = options.projects ?? [];
   const summary =
     options.summary ||
     "Local agent session logs were studied into Dosu notes so the next task can reuse them — reducing rediscovery cost.";
@@ -534,8 +533,7 @@ ${REPORT_CSS}
       <h1>${esc(org)}</h1>
       <p class="lede">${esc(summary)}</p>
       <p class="meta-line">
-        Repo <code>${esc(repo)}</code>
-        · branch <code>${esc(branch)}</code>
+        ${projects.length > 0 ? `Projects ${projects.map((p) => `<code>${esc(p)}</code>`).join(", ")} · ` : ""}${transcripts.length} session${transcripts.length === 1 ? "" : "s"}
         · generated ${esc(generated)}
       </p>
       <div class="toolbar no-print">

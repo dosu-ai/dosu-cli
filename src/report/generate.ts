@@ -4,7 +4,9 @@
  * against the local session logs, and emit the HTML.
  */
 
+import { basename } from "node:path";
 import { type Config, loadConfig } from "../config/config";
+import { createProjectDirResolver } from "../sessions/project-dir";
 import type { AgentSession } from "../sessions/scan";
 import { scanAgentSessions } from "../sessions/scan";
 import { loadSyncState } from "../sync/watermark";
@@ -19,8 +21,9 @@ export interface EmitReportOptions {
   notes?: ReportNote[];
   sessions?: AgentSession[];
   orgName?: string;
-  repo?: string;
-  branch?: string;
+  /** Injectable project-name source for a session; the default resolves the
+   * session's real working directory and uses its basename. */
+  projectName?: (session: AgentSession) => string | null;
   out?: string;
   open?: boolean;
   openUrl?: (url: string) => Promise<unknown>;
@@ -36,6 +39,14 @@ function sessionsForNotes(
 ): AgentSession[] {
   const ids = new Set(notes.map((n) => n.transcript_id).filter((id): id is string => Boolean(id)));
   return sessions.filter((s) => ids.has(s.id));
+}
+
+function defaultProjectName(): (session: AgentSession) => string | null {
+  const resolver = createProjectDirResolver();
+  return (session) => {
+    const dir = resolver.resolve(session);
+    return dir ? basename(dir) : null;
+  };
 }
 
 function noteTime(note: ReportNote): number {
@@ -57,12 +68,19 @@ export async function emitKnowledgeReport(options: EmitReportOptions = {}): Prom
     // All-time distilled baseline, when this machine has studied.
     inventory.totals.learning_tokens = state.total_learning_tokens;
   }
+  const projectName = options.projectName ?? defaultProjectName();
+  const projects = [
+    ...new Set(
+      sessions
+        .map((s) => projectName(s) ?? s.project)
+        .filter((name): name is string => Boolean(name)),
+    ),
+  ];
   const html = buildReportHtml({
     inventory,
     candidates,
     orgName: options.orgName ?? cfg.active_account?.target?.org_name ?? "Your team",
-    repo: options.repo ?? notes.find((n) => n.repo)?.repo,
-    branch: options.branch ?? notes.find((n) => n.branch)?.branch,
+    projects,
     generatedAt: options.generatedAt,
     digests: digestsForSessions(sessions),
   });

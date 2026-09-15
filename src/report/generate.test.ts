@@ -6,6 +6,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mockLoadConfig = vi.fn();
 vi.mock("../config/config", () => ({
   loadConfig: (...args: unknown[]) => mockLoadConfig(...args),
+  getConfigDir: () => "/tmp/dosu-report-test-config",
+}));
+
+vi.mock("../sessions/project-dir", () => ({
+  createProjectDirResolver: () => ({
+    resolve: (s: { project?: string }) => (s.project ? `/repos/${s.project}` : null),
+    cached: () => null,
+    flush: () => {},
+  }),
 }));
 
 const mockLoadSyncState = vi.fn();
@@ -115,7 +124,7 @@ describe("emitKnowledgeReport", () => {
     expect(mockWrite).not.toHaveBeenCalled();
   });
 
-  it("uses the all-time distilled baseline and note anchors for the header", async () => {
+  it("summarizes the run's projects in the header instead of a note anchor", async () => {
     mockLoadSyncState.mockReturnValue({
       schema_version: 1,
       watermark: null,
@@ -124,8 +133,8 @@ describe("emitKnowledgeReport", () => {
     });
     mockWrite.mockImplementation(async (opts: { html: string }) => {
       expect(opts.html).toContain("Dosu knowledge report — Acme");
-      expect(opts.html).toContain("git@x/y");
-      expect(opts.html).toContain("feat/report");
+      expect(opts.html).not.toContain("feat/report");
+      expect(opts.html).toContain("0 sessions");
       return "/tmp/x.html";
     });
     await emitKnowledgeReport({
