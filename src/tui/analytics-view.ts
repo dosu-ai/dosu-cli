@@ -1,4 +1,4 @@
-/** Standalone Analytics screen: all-time mining numbers plus backend page analytics. Pure
+/** Standalone Analytics screen: all-time studying numbers plus backend page analytics. Pure
  * render/reduce functions wired to injectable IO. */
 
 import pc from "picocolors";
@@ -22,7 +22,7 @@ const CURSOR_HOME = `${ESC}[H`;
 const CLEAR_BELOW = `${ESC}[0J`;
 const CLEAR_EOL = `${ESC}[K`;
 
-/** Relaxed poll: analytics only move when a mining batch completes. */
+/** Relaxed poll: analytics only move when a study batch completes. */
 const ANALYTICS_VIEW_POLL_MS = 1000;
 
 /** How many report lines fit on screen at once (the scroll window). Sized so the pages tab's
@@ -116,21 +116,24 @@ function loadPageStatsFromConfig(): Promise<PageStats | null> {
 
 const label = (text: string) => text.padEnd(26);
 
-/** Overview tab: all-time totals. "Investigation distilled" is what the mined investigations
+/** Overview tab: all-time totals. "Investigation distilled" is what the studied investigations
  * originally cost to learn; future reads reuse that. */
 export function overviewRows(state: SyncState): string[] {
-  const minedTotal = state.total_mined ?? 0;
+  const studiedTotal = state.total_mined ?? 0;
   const notes = state.total_notes ?? 0;
   const tokens = state.total_learning_tokens ?? 0;
-  if (minedTotal === 0 && notes === 0) return [];
-  const rows = [`${label("Sessions studied")}${minedTotal}`, `${label("Suggested pages")}${notes}`];
+  if (studiedTotal === 0 && notes === 0) return [];
+  const rows = [
+    `${label("Sessions studied")}${studiedTotal}`,
+    `${label("Suggested pages")}${notes}`,
+  ];
   if (tokens > 0) {
     rows.push(`${label("Investigation distilled")}${formatTokenCount(tokens)} tokens`);
   }
   return rows;
 }
 
-/** Projects tab: recent mined-session history bucketed by project, under column labels. */
+/** Projects tab: recent studied-session history bucketed by project, under column labels. */
 export function projectRows(state: SyncState): string[] {
   const byProject = new Map<string, number>();
   for (const record of state.mined_sessions ?? []) {

@@ -106,20 +106,20 @@ describe("getSyncStatus", () => {
     expect(status.backoffUntil).toBeUndefined();
   });
 
-  it("extracts recent sync/miner lines from the debug log, stripping the level", () => {
+  it("extracts recent sync/learner lines from the debug log, stripping the level", () => {
     const log = [
       "[2026-09-02T21:00:00Z] [DEBUG] [cli] starting",
       "[2026-09-02T21:00:01Z] [DEBUG] [sync] gate: 5 ready",
-      "[2026-09-02T21:05:00Z] [INFO] [miner] run completed",
-      "[2026-09-02T21:05:01Z] [DEBUG] [sync] mined 5 sessions",
+      "[2026-09-02T21:05:00Z] [INFO] [learner] run completed",
+      "[2026-09-02T21:05:01Z] [DEBUG] [sync] studied 5 sessions",
       "",
     ].join("\n");
 
     const status = getSyncStatus({ configDir: dir, readLog: () => log });
     expect(status.recentActivity).toEqual([
       "[2026-09-02T21:00:01Z] [sync] gate: 5 ready",
-      "[2026-09-02T21:05:00Z] [miner] run completed",
-      "[2026-09-02T21:05:01Z] [sync] mined 5 sessions",
+      "[2026-09-02T21:05:00Z] [learner] run completed",
+      "[2026-09-02T21:05:01Z] [sync] studied 5 sessions",
     ]);
   });
 

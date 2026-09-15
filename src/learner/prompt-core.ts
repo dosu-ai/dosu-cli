@@ -1,7 +1,7 @@
-/** The miner's write-knowledge rules — the full write/don't-write contract for the fenced
+/** The learner's write-knowledge rules — the full write/don't-write contract for the fenced
  * background agent. Hand-written here; changing them ships with a CLI release. */
 
-export const MINER_CORE_RULES = `Rules — non-negotiable:
+export const LEARNER_CORE_RULES = `Rules — non-negotiable:
 1. Before writing anything, call read_knowledge with the candidate topic. If the same fact is
 already recorded, skip it — never write a duplicate or near-duplicate. If the topic exists but
 the session shows it has changed or been superseded, do write: a note stating the current state
@@ -29,7 +29,6 @@ useful.
 6. Only pass repo/branch to write_knowledge when the session itself verifies them (an explicit
 cwd, git remote, or branch mentioned in the transcript). Never infer or guess a repo. When not
 verified, omit both.
-7. Populate write_knowledge metadata with source_agent and session_id for every note.
-8. Never quote credentials, tokens, or secrets — even redacted placeholders — and never include
+7. Never quote credentials, tokens, or secrets — even redacted placeholders — and never include
 long verbatim transcript spans. Summarize in your own words.
-9. A trivial session with no real user query is normal: skip it silently.`;
+8. A trivial session with no real user query is normal: skip it silently.`;

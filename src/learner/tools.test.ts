@@ -13,7 +13,7 @@ import {
 let dir: string;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "dosu-miner-tools-test-"));
+  dir = mkdtempSync(join(tmpdir(), "dosu-learner-tools-test-"));
 });
 
 afterEach(() => {

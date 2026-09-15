@@ -128,7 +128,7 @@ describe("cycleAnalyticsTab", () => {
 });
 
 describe("overviewRows", () => {
-  it("renders the mining totals", () => {
+  it("renders the studying totals", () => {
     const rows = overviewRows(reportState()).join("\n");
     expect(rows).toContain("Sessions studied");
     expect(rows).toContain("558");
@@ -158,7 +158,7 @@ describe("projectRows", () => {
     expect(rows[2]).toContain("(unknown)");
   });
 
-  it("is empty without mined-session history", () => {
+  it("is empty without studied-session history", () => {
     expect(projectRows(emptyState())).toEqual([]);
   });
 });

@@ -76,7 +76,7 @@ const ACTIVITY_LINES = 10;
 function recentSyncActivity(log: string): string[] {
   return log
     .split("\n")
-    .filter((line) => line.includes("[sync]") || line.includes("[miner]"))
+    .filter((line) => line.includes("[sync]") || line.includes("[learner]"))
     .slice(-ACTIVITY_LINES)
     .map((line) => line.replace(/ \[(DEBUG|INFO|WARN|ERROR)\]/, ""));
 }

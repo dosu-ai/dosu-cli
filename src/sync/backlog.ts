@@ -6,7 +6,7 @@ import { type AgentSession, scanAgentSessions } from "../sessions/scan";
 import { filterSessionsByProject, gateSessions, loadSyncState } from "./watermark";
 
 export interface SessionBacklog {
-  /** Gated (quiet, not yet mined) sessions, oldest first. */
+  /** Gated (quiet, not yet studied) sessions, oldest first. */
   queued: AgentSession[];
   /** Sessions still inside the quiet period — queued once they go silent. */
   open: AgentSession[];

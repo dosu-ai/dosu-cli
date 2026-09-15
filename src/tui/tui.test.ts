@@ -84,7 +84,7 @@ vi.mock("../setup/agents-md-step", () => ({
   dosuAgentsSectionState: vi.fn(() => "missing"),
 }));
 
-// The mining-projects picker scans the real session stores.
+// The studying-projects picker scans the real session stores.
 vi.mock("../sessions/scan", () => ({
   scanAgentSessions: vi.fn(() => []),
 }));
@@ -211,6 +211,7 @@ beforeEach(() => {
     () =>
       ({
         resolve: (s: AgentSession) => (s.project ? `/repo/${s.project}` : null),
+        cached: () => null,
         flush: vi.fn(),
       }) as ReturnType<typeof createProjectDirResolver>,
   );
@@ -783,7 +784,7 @@ describe("runTUI", () => {
     writeRealConfig(
       makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
     );
-    // A lock file naming a live pid (our own) = an active mining run.
+    // A lock file naming a live pid (our own) = an active study run.
     const dir = getConfigDir();
     mkdirSync(dir, { recursive: true });
     writeFileSync(lockPath(dir), String(process.pid));
@@ -928,14 +929,14 @@ describe("runTUI", () => {
       "back",
     ]);
     // Each entry hints its own current value: org name on the org row,
-    // Library name on the Library row, mining scope on the projects row.
+    // Library name on the Library row, studying scope on the projects row.
     expect(settingsOptions[0]?.hint).toBe("Acme");
     expect(settingsOptions[1]?.hint).toBe("Docs Library");
     expect(settingsOptions[2]?.hint).toBe("all projects");
     expect(mockRunSwitchTarget).not.toHaveBeenCalled();
   });
 
-  it("mining projects setting saves a subset of folders", async () => {
+  it("studying projects setting saves a subset of folders", async () => {
     writeRealConfig(
       makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
     );
@@ -968,7 +969,7 @@ describe("runTUI", () => {
     expect(refreshed.find((o) => o.value === "projects")?.hint).toBe("dosu-cli");
   });
 
-  it("mining projects setting clears the filter when everything is picked", async () => {
+  it("studying projects setting clears the filter when everything is picked", async () => {
     writeRealConfig(
       makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
     );

@@ -1,4 +1,4 @@
-/** Session working-directory resolution for the mining project filter; each harness leaks the
+/** Session working-directory resolution for the studying project filter; each harness leaks the
  * cwd differently. Results are cached per session (a session's cwd never changes). */
 
 import {
@@ -141,6 +141,8 @@ function fileMtime(path: string): string {
 export interface ProjectDirResolver {
   /** The session's working directory, or null when it can't be determined. */
   resolve(session: AgentSession): string | null;
+  /** Cache-only lookup by `harness/id` key — for history rows with no session file at hand. */
+  cached(key: string): string | null;
   /** Persist any newly resolved entries; call once after a batch. */
   flush(): void;
 }
@@ -181,6 +183,9 @@ export function createProjectDirResolver(
   };
 
   return {
+    cached(key) {
+      return entries[key]?.dir ?? null;
+    },
     resolve(session) {
       const key = `${session.harness}/${session.id}`;
       const cached = entries[key];

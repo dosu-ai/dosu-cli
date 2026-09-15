@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   countRediscoveryToolCalls,
   estimateSessionTokens,
-  isWorthMining,
+  isWorthStudying,
   readSessionTurns,
 } from "./read";
 import type { AgentSession } from "./scan";
@@ -255,7 +255,7 @@ describe("readSessionTurns", () => {
   });
 });
 
-describe("isWorthMining", () => {
+describe("isWorthStudying", () => {
   function claudeTurn(role: "user" | "assistant", text: string) {
     return { type: role, message: { role, content: text } };
   }
@@ -269,7 +269,7 @@ describe("isWorthMining", () => {
       claudeTurn("assistant", text),
     ]);
 
-    expect(isWorthMining(session("claude", path))).toBe(true);
+    expect(isWorthStudying(session("claude", path))).toBe(true);
   });
 
   it("rejects a session with too few turns, however long", () => {
@@ -278,7 +278,7 @@ describe("isWorthMining", () => {
       claudeTurn("assistant", "y".repeat(5000)),
     ]);
 
-    expect(isWorthMining(session("claude", path))).toBe(false);
+    expect(isWorthStudying(session("claude", path))).toBe(false);
   });
 
   it("rejects a chatty but tiny session", () => {
@@ -289,11 +289,11 @@ describe("isWorthMining", () => {
       claudeTurn("assistant", "any time"),
     ]);
 
-    expect(isWorthMining(session("claude", path))).toBe(false);
+    expect(isWorthStudying(session("claude", path))).toBe(false);
   });
 
   it("rejects an unreadable session", () => {
-    expect(isWorthMining(session("claude", join(dir, "missing.jsonl")))).toBe(false);
+    expect(isWorthStudying(session("claude", join(dir, "missing.jsonl")))).toBe(false);
   });
 });
 

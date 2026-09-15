@@ -1,17 +1,20 @@
-/** Live Activity screen: mining status plus tabbed lists and a manual sync trigger. Pure
+/** Live Activity screen: studying status plus tabbed lists and a manual sync trigger. Pure
  * render/reduce functions wired to injectable IO, like menu.ts. */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { basename } from "node:path";
 import pc from "picocolors";
 import { createLogFollower } from "../debug/follow";
 import { logger, stripAnsiCodes } from "../debug/logger";
+import { createProjectDirResolver, unmungeSlug } from "../sessions/project-dir";
 import type { AgentSession } from "../sessions/scan";
+import { createSessionTitleResolver, reconstructSession } from "../sessions/session-title";
 import { brand } from "../setup/styles";
 import { listSessionBacklog, type SessionBacklog } from "../sync/backlog";
 import { spawnDetachedSelf } from "../sync/detach";
 import { stopSyncRun } from "../sync/lock";
 import { getSyncStatus, type SyncStatus } from "../sync/status";
-import { type MinedSessionRecord, resetSyncState, setSyncPaused } from "../sync/watermark";
+import { resetSyncState, type StudiedSessionRecord, setSyncPaused } from "../sync/watermark";
 import { enterAltScreen } from "./alt-screen";
 import {
   breadcrumb,
@@ -49,10 +52,10 @@ export const ACTIVITY_VIEW_FULL_LIST_ROWS = 5;
 /** How much history each tab keeps in memory for scrolling back. */
 export const ACTIVITY_VIEW_BUFFER_LINES = 200;
 
-export type ActivityViewTab = "activity" | "queued" | "open" | "mined";
+export type ActivityViewTab = "activity" | "queued" | "open" | "studied";
 
 /** Tab order for cycling; ← walks it backwards. */
-const ACTIVITY_VIEW_TABS: readonly ActivityViewTab[] = ["activity", "mined", "queued", "open"];
+const ACTIVITY_VIEW_TABS: readonly ActivityViewTab[] = ["activity", "studied", "queued", "open"];
 
 export type ActivityViewAction =
   | "back"
@@ -116,7 +119,7 @@ export function formatActivityLine(line: string, width: number, full = false): s
   return `${compact.slice(0, Math.max(0, width - 1))}\u2026`;
 }
 
-/** Keep only [sync]/[miner] log lines (level tag stripped), newest `max`. */
+/** Keep only [sync]/[learner] log lines (level tag stripped), newest `max`. */
 export function appendSyncActivity(
   buffer: readonly string[],
   chunk: string,
@@ -124,7 +127,7 @@ export function appendSyncActivity(
 ): string[] {
   const fresh = chunk
     .split("\n")
-    .filter((line) => line.includes("[sync]") || line.includes("[miner]"))
+    .filter((line) => line.includes("[sync]") || line.includes("[learner]"))
     .map((line) => line.replace(/ \[(DEBUG|INFO|WARN|ERROR)\]/, ""));
   return [...buffer, ...fresh].slice(-max);
 }
@@ -133,9 +136,13 @@ function clip(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}\u2026`;
 }
 
-/** Mined-history record as a row ("cursor    09-02 23:00  dosu  abc"), same columns as Queued.
+/** Studied-history record as a row ("cursor    09-02 23:00  dosu  abc"), same columns as Queued.
  * `full` skips the per-column clipping (the f toggle's full-rows mode). */
-export function formatMinedRow(record: MinedSessionRecord, full = false): string {
+export function formatStudiedRow(
+  record: StudiedSessionRecord,
+  full = false,
+  name?: string,
+): string {
   const match = record.at.match(/^\d{4}-(\d{2}-\d{2})T(\d{2}:\d{2})/);
   const stamp = match ? `${match[1]} ${match[2]}` : record.at;
   const slash = record.session.indexOf("/");
@@ -143,16 +150,22 @@ export function formatMinedRow(record: MinedSessionRecord, full = false): string
   const id = slash > 0 ? record.session.slice(slash + 1) : record.session;
   const rawProject = record.project ?? "-";
   const project = full ? rawProject : clip(rawProject, 28);
-  return `${harness.padEnd(8)}  ${stamp}  ${project}  ${full ? id : clip(id, 24)}`;
+  const label = full ? (name ? `${name} \u00B7 ${id}` : id) : clip(name ?? id, 44);
+  return `${harness.padEnd(8)}  ${stamp}  ${project}  ${label}`;
 }
 
 /** Queued session as a row: agent, updated (UTC), project, session id.
  * `full` skips the per-column clipping (the f toggle's full-rows mode). */
-export function formatQueuedRow(session: AgentSession, full = false): string {
+export function formatQueuedRow(session: AgentSession, full = false, name?: string): string {
   const stamp = session.updated.replace("T", " ").slice(5, 16);
   const rawProject = session.project ?? "-";
   const project = full ? rawProject : clip(rawProject, 28);
-  return `${session.harness.padEnd(8)}  ${stamp}  ${project}  ${full ? session.id : clip(session.id, 24)}`;
+  const label = full
+    ? name
+      ? `${name} \u00B7 ${session.id}`
+      : session.id
+    : clip(name ?? session.id, 44);
+  return `${session.harness.padEnd(8)}  ${stamp}  ${project}  ${label}`;
 }
 
 /** Hard-wrap one table row to `width`, indenting continuation lines. Projects and session ids
@@ -203,17 +216,17 @@ export function latestBacklog(text: string): SyncBacklog | null {
   return latest;
 }
 
-/** Within-batch mining progress, folded live from the miner's log traces. */
+/** Within-batch studying progress, folded live from the learner's log traces. */
 export interface RunProgress {
-  /** Batch size from the latest "[sync] mining N of M" marker. */
+  /** Batch size from the latest "[sync] studying N of M" marker. */
   batch: number;
-  /** Distinct session ids the miner has opened so far this batch. */
+  /** Distinct session ids the learner has opened so far this batch. */
   read: Set<string>;
   /** write_knowledge calls traced so far this batch. */
   notes: number;
 }
 
-/** Fold a log chunk into within-batch progress: the bar steps off the miner's tool traces, and
+/** Fold a log chunk into within-batch progress: the bar steps off the learner's tool traces, and
  * a settle line clears the fold so stale steps never double-count. */
 export function foldRunProgress(progress: RunProgress | null, chunk: string): RunProgress | null {
   let current = progress;
@@ -233,12 +246,14 @@ export function foldRunProgress(progress: RunProgress | null, chunk: string): Ru
     }
     if (!current) continue;
     // Pagination and re-reads repeat an id; the set collapses them.
-    const read = line.match(/\[miner\] \[agent\] → mcp__sessions__read_session .*?"id":"([^"]+)"/);
+    const read = line.match(
+      /\[learner\] \[agent\] → mcp__sessions__read_session .*?"id":"([^"]+)"/,
+    );
     if (read) {
       current.read.add(read[1]);
       continue;
     }
-    if (line.includes("[miner] [agent] → mcp__dosu__write_knowledge")) {
+    if (line.includes("[learner] [agent] → mcp__dosu__write_knowledge")) {
       current.notes += 1;
     }
   }
@@ -275,7 +290,7 @@ function statusLine(status: SyncStatus): string {
 export function progressLine(done: number, ready: number, width: number, notes = 0): string | null {
   const total = done + ready;
   if (total <= 0) return null;
-  // Leave room for the " done/total mined · NN% · NN suggested pages" suffix.
+  // Leave room for the " done/total studied · NN% · NN suggested pages" suffix.
   const cells = Math.max(10, Math.min(30, width - 44));
   const ratio = Math.max(0, Math.min(1, done / total));
   const filled = Math.min(cells, Math.round(ratio * cells));
@@ -290,13 +305,13 @@ export function tabBar(
   tab: ActivityViewTab,
   queuedCount: number,
   openCount: number,
-  minedCount: number,
+  studiedCount: number,
   width: number,
 ): string[] {
   return tabStrip(
     [
       ["activity", "Activity"],
-      ["mined", `Studied (${minedCount})`],
+      ["studied", `Studied (${studiedCount})`],
       ["queued", `Queued (${queuedCount})`],
       ["open", `Open (${openCount})`],
     ],
@@ -399,13 +414,17 @@ export function renderActivityFrame(
   pane: ActivityViewPane = DEFAULT_PANE,
   queued: readonly AgentSession[] = [],
   /** Lifetime total_mined when the current run started; see progressLine. */
-  minedBeforeRun = 0,
+  studiedBeforeRun = 0,
   /** Live (still-active) sessions for the Open tab. */
   open: readonly AgentSession[] = [],
-  /** Within-batch step progress folded from the miner's log traces. */
+  /** Within-batch step progress folded from the learner's log traces. */
   runProgress: RunProgress | null = null,
+  /** Friendly project names by `harness/id` key; rows fall back to the stored slug. */
+  projectNames: Readonly<Record<string, string>> = {},
+  /** Session display names by `harness/id` key; rows fall back to the session id. */
+  sessionNames: Readonly<Record<string, string>> = {},
 ): string {
-  const mined = status.state.watermark
+  const studied = status.state.watermark
     ? `Studied sessions up to ${localTime(status.state.watermark)}`
     : "Nothing studied yet";
   // Queue and open-session counts live in the tab bar, not a header line.
@@ -416,17 +435,17 @@ export function renderActivityFrame(
   }
 
   // Run-scoped drain progress: batch commits advance it, and within a batch
-  // the miner's per-session steps do, so a one-batch queue still shows motion.
+  // the learner's per-session steps do, so a one-batch queue still shows motion.
   let progress: string | null = null;
   if (status.running && backlog) {
-    const minedDelta = Math.max(0, (status.state.total_mined ?? 0) - minedBeforeRun);
+    const studiedDelta = Math.max(0, (status.state.total_mined ?? 0) - studiedBeforeRun);
     // Distinct-opened minus the in-flight one, shifting ready → done rather
     // than growing the total (the gate only re-logs when a batch commits).
     const stepDone = runProgress
       ? Math.min(Math.max(0, runProgress.read.size - 1), runProgress.batch - 1, backlog.ready)
       : 0;
     progress = progressLine(
-      minedDelta + stepDone,
+      studiedDelta + stepDone,
       Math.max(0, backlog.ready - stepDone),
       width,
       runProgress?.notes ?? 0,
@@ -446,11 +465,27 @@ export function renderActivityFrame(
   // asked for full rows, which render unclipped and wrap below instead. One toggle, every tab:
   // log lines (paths, error text) lose their tails to the clip just like session ids do.
   const fullRows = Boolean(pane.fullRows);
-  const minedRows = (status.state.mined_sessions ?? []).map((record) =>
-    fullRows ? formatMinedRow(record, true) : formatActivityLine(formatMinedRow(record), width),
-  );
-  const sessionRow = (session: AgentSession) =>
-    fullRows ? formatQueuedRow(session, true) : formatActivityLine(formatQueuedRow(session), width);
+  const withName = <T extends { project?: string }>(item: T, key: string): T =>
+    projectNames[key] ? { ...item, project: projectNames[key] } : item;
+  // A session studied again after new activity appends another history record;
+  // the list shows only its latest pass (analytics still count every pass).
+  const latestPass = new Map<string, StudiedSessionRecord>();
+  for (const r of status.state.mined_sessions ?? []) latestPass.set(r.session, r);
+  const studiedRows = [...latestPass.values()].map((r) => {
+    const record = withName(r, r.session);
+    const name = sessionNames[r.session];
+    return fullRows
+      ? formatStudiedRow(record, true, name)
+      : formatActivityLine(formatStudiedRow(record, false, name), width);
+  });
+  const sessionRow = (session: AgentSession) => {
+    const key = `${session.harness}/${session.id}`;
+    const s = withName(session, key);
+    const name = sessionNames[key];
+    return fullRows
+      ? formatQueuedRow(s, true, name)
+      : formatActivityLine(formatQueuedRow(s, false, name), width);
+  };
   const queuedRows = queued.map(sessionRow);
   const openRows = open.map(sessionRow);
   const source =
@@ -460,10 +495,10 @@ export function renderActivityFrame(
         ? queuedRows
         : pane.tab === "open"
           ? openRows
-          : minedRows;
-  // Pre-history runs only advanced the watermark, so mining may have
+          : studiedRows;
+  // Pre-history runs only advanced the watermark, so studying may have
   // happened without leaving records — say so instead of denying it.
-  const emptyMined = status.state.watermark
+  const emptyStudied = status.state.watermark
     ? "No sessions recorded yet. History starts with the next study run."
     : "No studied sessions yet.";
   const empty =
@@ -473,7 +508,7 @@ export function renderActivityFrame(
         ? "Queue empty. Finished agent sessions appear here."
         : pane.tab === "open"
           ? "No open sessions. Live agent sessions sit here until they go quiet."
-          : emptyMined;
+          : emptyStudied;
   // Full-rows mode windows fewer rows (each may wrap to several lines) and hard-wraps them.
   const height = fullRows ? ACTIVITY_VIEW_FULL_LIST_ROWS : ACTIVITY_VIEW_LIST_LINES;
   const { visible, above, below } = windowList(source, pane.scroll, height);
@@ -488,20 +523,14 @@ export function renderActivityFrame(
     breadcrumb(["Home", "Activity"], width),
     "",
     statusLine(status),
-    pc.dim(mined),
+    pc.dim(studied),
     ...(queueDetail.length > 0
       ? wrapLine(queueDetail.join(" \u00B7 "), width).map((line) => pc.dim(line))
       : []),
     ...(progress ? [progress] : []),
     ...refusalLines,
     "",
-    ...tabBar(
-      pane.tab,
-      queued.length,
-      open.length,
-      status.state.total_mined ?? minedRows.length,
-      width,
-    ),
+    ...tabBar(pane.tab, queued.length, open.length, latestPass.size, width),
     ...listRows,
     // Clipped, not wrapped: both scroll counters together can outrun a narrow frame.
     ...(scrollParts.length > 0 ? [pc.dim(clip(scrollParts.join(" \u00B7 "), width))] : []),
@@ -511,7 +540,7 @@ export function renderActivityFrame(
       ? centerBlock(confirmBox(queued.length, backlog, width, pane.confirm), width)
       : [
           // s stops a live run, resumes a paused pipeline, or starts a sync while idle;
-          // f flips between clipped and full (wrapped) rows; c (idle, something mined)
+          // f flips between clipped and full (wrapped) rows; c (idle, something studied)
           // clears the history so the next run starts from scratch. Wrapped: on a narrow
           // frame the full legend can outrun the width.
           ...wrapLine(
@@ -552,7 +581,83 @@ export interface ActivityViewIO {
   clearHistory?: () => void;
   /** The scanned backlog for the Queued and Open tabs; re-run when the watermark moves. */
   listBacklog?: () => SessionBacklog;
+  /** Friendly project and session names by `harness/id` key for the session rows. */
+  rowNames?: (status: SyncStatus, backlog: SessionBacklog) => RowNames;
   pollMs?: number;
+}
+
+interface RowNames {
+  projects: Record<string, string>;
+  titles: Record<string, string>;
+}
+
+/** How many uncached session titles one draw resolves; the list fills over a few polls
+ * instead of stalling the first paint on hundreds of file reads. */
+const TITLE_READS_PER_DRAW = 25;
+
+/** Default projectNames source: resolve real working directories (cached on disk) for live
+ * sessions, cache-only + slug un-munging for studied history, shown as the directory basename. */
+function createRowNamer(): (status: SyncStatus, backlog: SessionBacklog) => RowNames {
+  const dirs = createProjectDirResolver();
+  const titles = createSessionTitleResolver();
+  const bySlug = new Map<string, string | null>();
+  const fromSlug = (slug: string): string | null => {
+    if (!bySlug.has(slug)) bySlug.set(slug, unmungeSlug(slug));
+    return bySlug.get(slug) ?? null;
+  };
+  return (status, backlog) => {
+    const names: RowNames = { projects: {}, titles: {} };
+    let budget = TITLE_READS_PER_DRAW;
+    let resolved = false;
+    const title = (key: string, session: AgentSession) => {
+      const hit = titles.cached(key);
+      if (hit) {
+        names.titles[key] = hit;
+        return;
+      }
+      if (budget <= 0) return;
+      budget--;
+      const t = titles.resolve(session);
+      resolved = true;
+      if (t) names.titles[key] = t;
+    };
+    for (const s of [...backlog.queued, ...backlog.open]) {
+      if (!existsSync(s.path)) continue;
+      const key = `${s.harness}/${s.id}`;
+      const dir = dirs.resolve(s);
+      if (dir) names.projects[key] = basename(dir);
+      title(key, s);
+      resolved = true;
+    }
+    // Newest first: the view shows the end of the history, so the visible
+    // rows must win the per-draw budget over the offscreen backlog.
+    for (const r of [...(status.state.mined_sessions ?? [])].reverse()) {
+      const key = r.session;
+      if (!names.projects[key]) {
+        const dir = dirs.cached(key) ?? (r.project ? fromSlug(r.project) : null);
+        if (dir) names.projects[key] = basename(dir);
+      }
+      if (!names.titles[key]) {
+        const hit = titles.cached(key);
+        if (hit) {
+          names.titles[key] = hit;
+        } else if (budget > 0) {
+          const slash = key.indexOf("/");
+          const session = reconstructSession(
+            key.slice(0, slash) as AgentSession["harness"],
+            key.slice(slash + 1),
+            r.project,
+          );
+          if (session) title(key, session);
+        }
+      }
+    }
+    if (resolved) {
+      dirs.flush();
+      titles.flush();
+    }
+    return names;
+  };
 }
 
 function defaultReadLog(): string {
@@ -581,6 +686,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
   const setPaused = io.setPaused ?? setSyncPaused;
   const clearHistory = io.clearHistory ?? resetSyncState;
   const listBacklog = io.listBacklog ?? listSessionBacklog;
+  const rowNamesFor = io.rowNames ?? createRowNamer();
   const pollMs = io.pollMs ?? ACTIVITY_VIEW_POLL_MS;
 
   const seed = readLog();
@@ -617,18 +723,18 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
   let lastFrame: string | null = null;
   // The run's total_mined baseline so the bar is run-scoped; persisted in sync state, with the
   // first-observation snapshot as fallback.
-  let minedBeforeRun: number | null = null;
+  let studiedBeforeRun: number | null = null;
   const draw = () => {
     status = getStatus();
     if (status.running) {
       const run = status.state.run;
       if (run && run.pid === status.pid) {
-        minedBeforeRun = run.baseline_mined;
+        studiedBeforeRun = run.baseline_mined;
       } else {
-        minedBeforeRun ??= status.state.total_mined ?? 0;
+        studiedBeforeRun ??= status.state.total_mined ?? 0;
       }
     } else {
-      minedBeforeRun = null;
+      studiedBeforeRun = null;
     }
     if (status.state.watermark !== queuedWatermark) {
       queuedWatermark = status.state.watermark;
@@ -638,6 +744,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
     if (confirmSync !== null && confirmSync !== "stop" && status.running) confirmSync = null;
     if (confirmSync === "stop" && !status.running) confirmSync = null;
     const width = activityWidth(output.columns ?? 80);
+    const rowNames = rowNamesFor(status, sessions);
     const frame = renderActivityFrame(
       status,
       activity,
@@ -645,9 +752,11 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
       backlog,
       { tab, scroll, confirm: confirmSync ?? undefined, fullRows },
       sessions.queued,
-      minedBeforeRun ?? 0,
+      studiedBeforeRun ?? 0,
       sessions.open,
       runProgress,
+      rowNames.projects,
+      rowNames.titles,
     );
     if (frame === lastFrame) return;
     lastFrame = frame;
@@ -707,7 +816,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
               // The watermark going null re-gates every local session; draw() rescans on the
               // change so the Queued tab fills immediately.
               clearHistory();
-              minedBeforeRun = null;
+              studiedBeforeRun = null;
               note =
                 "[sync] study history cleared \u00B7 the next run reads every local session again";
             } else if (mode === "stop") {
@@ -746,7 +855,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
           confirmSync = syncConfirmMode(status);
           draw();
         } else if (action === "clear") {
-          // Only offered when idle with something mined; otherwise the key is inert, matching
+          // Only offered when idle with something studied; otherwise the key is inert, matching
           // the legend.
           if (!status.running && status.state.watermark) {
             confirmSync = "clear";

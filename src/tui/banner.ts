@@ -23,8 +23,8 @@ export interface BannerContext {
   setupMissing?: string[];
   /** Dosu section state in this repo's AGENTS.md; only set inside a git work tree. */
   repoAgentsMd?: "current" | "outdated" | "missing";
-  /** True when a knowledge-sync run is mining right now. */
-  mining?: boolean;
+  /** True when a knowledge-sync run is studying right now. */
+  studying?: boolean;
   /** A newer published version, when the update check found one. */
   update?: { version: string; hint: string };
 }
@@ -102,7 +102,7 @@ function checklistRows(ctx: BannerContext): string[] {
   if (missing.has("agents")) rows.push(["agents", warnRow]);
   else if (ctx.agents.length > 0) rows.push(["agents", `${on} ${ctx.agents.join(` ${DOT} `)}`]);
   if (missing.has("hooks")) rows.push(["hooks", warnRow]);
-  if (ctx.mining) {
+  if (ctx.studying) {
     rows.push([
       "sync",
       `\uD83D\uDCDA ${brand("studying sessions...")} ${pc.dim(`${DOT} see Activity`)}`,

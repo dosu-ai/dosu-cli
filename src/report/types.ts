@@ -62,7 +62,7 @@ export interface ReportDigest {
 
 /** One knowledge note as the report consumes it. The backend is the single
  * source of truth: `transcript_id` is the agent conversation the note was
- * learned from, injected at the miner's tool gate at write time. */
+ * learned from, injected at the learner's tool gate at write time. */
 export interface ReportNote {
   title: string;
   content: string;

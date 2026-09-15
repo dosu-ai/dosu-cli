@@ -127,23 +127,23 @@ export function knowledgeCommand(): Command {
     )
     .option("--queued", "Only sessions queued for studying")
     .option("--open", "Only live sessions still inside the quiet period")
-    .option("--mined", "Only recent studied-session history")
+    .option("--studied", "Only recent studied-session history")
     .option("--json", "Output as JSON")
-    .action((opts: { queued?: boolean; open?: boolean; mined?: boolean; json?: boolean }) => {
-      const all = !opts.queued && !opts.open && !opts.mined;
+    .action((opts: { queued?: boolean; open?: boolean; studied?: boolean; json?: boolean }) => {
+      const all = !opts.queued && !opts.open && !opts.studied;
       const wantQueued = all || Boolean(opts.queued);
       const wantOpen = all || Boolean(opts.open);
-      const wantMined = all || Boolean(opts.mined);
+      const wantStudied = all || Boolean(opts.studied);
 
       const backlog = wantQueued || wantOpen ? listSessionBacklog() : { queued: [], open: [] };
-      const mined = wantMined ? (loadSyncState().mined_sessions ?? []) : [];
+      const studied = wantStudied ? (loadSyncState().mined_sessions ?? []) : [];
 
       if (opts.json) {
         printResult(
           {
             ...(wantQueued ? { queued: backlog.queued } : {}),
             ...(wantOpen ? { open: backlog.open } : {}),
-            ...(wantMined ? { mined } : {}),
+            ...(wantStudied ? { studied } : {}),
           },
           opts,
         );
@@ -152,8 +152,8 @@ export function knowledgeCommand(): Command {
 
       const sessionRows = (sessions: AgentSession[]) =>
         sessions.map((s) => [s.harness, s.updated, s.project ?? "-", s.id]);
-      // Mined history stores "harness/id" in one field; split it back into columns.
-      const minedRows = mined.map((record) => {
+      // Studied history stores "harness/id" in one field; split it back into columns.
+      const studiedRows = studied.map((record) => {
         const slash = record.session.indexOf("/");
         const harness = slash > 0 ? record.session.slice(0, slash) : "-";
         const id = slash > 0 ? record.session.slice(slash + 1) : record.session;
@@ -188,8 +188,8 @@ export function knowledgeCommand(): Command {
           "No open sessions. Live agent sessions sit here until they go quiet.",
         );
       }
-      if (wantMined) {
-        section("Studied", minedRows, "Studied at", "No studied sessions recorded yet.");
+      if (wantStudied) {
+        section("Studied", studiedRows, "Studied at", "No studied sessions recorded yet.");
       }
     });
 
@@ -245,18 +245,18 @@ export function knowledgeCommand(): Command {
           return;
         }
 
-        const deps: SyncDeps = { mine: buildMiner(opts.quiet ? "hook" : "manual") };
+        const deps: SyncDeps = { mine: buildLearner(opts.quiet ? "hook" : "manual") };
         let outcome = await runKnowledgeSync({
           quiet: opts.quiet,
           bootstrap: opts.bootstrap,
           deps,
         });
 
-        // Bootstrap drains the whole backlog in this process; any non-mined status ends the
-        // drain; the round cap guards against a miner that never stops reporting progress.
+        // Bootstrap drains the whole backlog in this process; any non-studied status ends the
+        // drain; the round cap guards against a learner that never stops reporting progress.
         if (opts.bootstrap && deps.mine) {
           const maxRounds = Math.ceil(outcome.readySessions / MINE_BATCH_LIMIT) + 2;
-          for (let round = 1; outcome.status === "mined" && round < maxRounds; round++) {
+          for (let round = 1; outcome.status === "studied" && round < maxRounds; round++) {
             if (!opts.quiet && !opts.json) printSyncOutcome(outcome);
             outcome = await runKnowledgeSync({ quiet: opts.quiet, bootstrap: true, deps });
           }
@@ -268,7 +268,7 @@ export function knowledgeCommand(): Command {
           if (outcome.status === "error") process.exitCode = 1;
           if (opts.report) {
             // The sync outcome must reach stdout even when the report fails:
-            // mining already happened and callers parse this JSON.
+            // studying already happened and callers parse this JSON.
             try {
               const report = await emitKnowledgeReport({ out: opts.out, open: false });
               printResult({ ...outcome, report }, opts);
@@ -342,17 +342,17 @@ export function knowledgeCommand(): Command {
   return cmd;
 }
 
-/** Mining step for authenticated cloud-mode installs; returns undefined (gate-and-report only)
+/** Studying step for authenticated cloud-mode installs; returns undefined (gate-and-report only)
  * when the install can't mine: logged out, OSS mode, or no API key. */
-function buildMiner(trigger: "hook" | "manual"): SyncDeps["mine"] {
+function buildLearner(trigger: "hook" | "manual"): SyncDeps["mine"] {
   const cfg = loadConfig();
   if (cfg.mode === "oss") return undefined;
   const target = cfg.active_account?.target;
   if (!target?.api_key || !target.deployment_id) return undefined;
   const { api_key, deployment_id } = target;
   return async (sessions: AgentSession[]) => {
-    const { runMiner } = await import("../miner/runner");
-    return runMiner({ sessions, apiKey: api_key, deploymentID: deployment_id, trigger });
+    const { runLearner } = await import("../learner/runner");
+    return runLearner({ sessions, apiKey: api_key, deploymentID: deployment_id, trigger });
   };
 }
 
@@ -447,11 +447,11 @@ function printSyncOutcome(outcome: SyncOutcome): void {
       console.log(pc.dim("Sign in with 'dosu setup' to enable studying."));
       break;
     }
-    case "mined": {
-      const notes = outcome.miner?.notesWritten ?? 0;
-      const remaining = outcome.readySessions - (outcome.minedSessions ?? 0);
+    case "studied": {
+      const notes = outcome.learner?.notesWritten ?? 0;
+      const remaining = outcome.readySessions - (outcome.studiedSessions ?? 0);
       console.log(
-        `✓ Studied ${outcome.minedSessions} session${outcome.minedSessions === 1 ? "" : "s"}, ${notes} suggested page${notes === 1 ? "" : "s"} created.`,
+        `✓ Studied ${outcome.studiedSessions} session${outcome.studiedSessions === 1 ? "" : "s"}, ${notes} suggested page${notes === 1 ? "" : "s"} created.`,
       );
       if (remaining > 0) {
         console.log(pc.dim(`${remaining} more in the backlog; run sync again to continue.`));
@@ -459,11 +459,11 @@ function printSyncOutcome(outcome: SyncOutcome): void {
       break;
     }
     case "skipped-gateway": {
-      console.log(pc.yellow(outcome.miner?.message ?? "Studying unavailable right now."));
+      console.log(pc.yellow(outcome.learner?.message ?? "Studying unavailable right now."));
       break;
     }
     case "mine-failed": {
-      console.error(pc.red(outcome.miner?.message ?? "Study run failed."));
+      console.error(pc.red(outcome.learner?.message ?? "Study run failed."));
       process.exitCode = 1;
       break;
     }

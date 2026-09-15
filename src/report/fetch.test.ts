@@ -50,11 +50,12 @@ describe("fetchReportNotes", () => {
       ],
     });
 
-    const notes = await fetchReportNotes(authedConfig());
+    const { notes, truncated } = await fetchReportNotes(authedConfig());
     expect(mockQuery).toHaveBeenCalledWith({
       org_id: "11111111-1111-4111-8111-111111111111",
       limit: REPORT_NOTES_LIMIT,
     });
+    expect(truncated).toBe(false);
     expect(notes).toEqual([
       {
         title: "OAuth refresh",
@@ -66,6 +67,56 @@ describe("fetchReportNotes", () => {
       },
       { title: "Bare", content: "No provenance.", at: "2026-09-02T00:00:00+00:00" },
     ]);
+  });
+
+  it("follows next_cursor until the last page and concatenates in order", async () => {
+    const cursorFor = (n: number) => ({
+      created_at: `2026-09-0${n}T00:00:00+00:00`,
+      id: `n${n}`,
+    });
+    const page = (n: number, next?: { created_at: string; id: string }) => ({
+      notes: [
+        {
+          id: `n${n}`,
+          title: `Note ${n}`,
+          body: "b",
+          repo: null,
+          branch: null,
+          transcript_id: null,
+          created_at: `2026-09-0${n}T00:00:00+00:00`,
+        },
+      ],
+      ...(next ? { next_cursor: next } : {}),
+    });
+    mockQuery
+      .mockResolvedValueOnce(page(3, cursorFor(3)))
+      .mockResolvedValueOnce(page(2, cursorFor(2)))
+      .mockResolvedValueOnce(page(1));
+
+    const { notes, truncated } = await fetchReportNotes(authedConfig());
+    expect(notes.map((n) => n.title)).toEqual(["Note 3", "Note 2", "Note 1"]);
+    expect(truncated).toBe(false);
+    expect(mockQuery).toHaveBeenNthCalledWith(2, expect.objectContaining({ cursor: cursorFor(3) }));
+    expect(mockQuery).toHaveBeenNthCalledWith(3, expect.objectContaining({ cursor: cursorFor(2) }));
+  });
+
+  it("flags truncation when a pre-pagination server returns a full page with no cursor", async () => {
+    mockQuery.mockResolvedValue({
+      notes: Array.from({ length: REPORT_NOTES_LIMIT }, (_, i) => ({
+        id: `n${i}`,
+        title: `Note ${i}`,
+        body: "b",
+        repo: null,
+        branch: null,
+        transcript_id: null,
+        created_at: "2026-09-01T00:00:00+00:00",
+      })),
+    });
+
+    const { notes, truncated } = await fetchReportNotes(authedConfig());
+    expect(notes).toHaveLength(REPORT_NOTES_LIMIT);
+    expect(truncated).toBe(true);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
   });
 
   it("rejects with an actionable message when signed out or missing an org", async () => {

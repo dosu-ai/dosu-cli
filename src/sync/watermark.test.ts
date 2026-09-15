@@ -129,7 +129,7 @@ describe("loadSyncState / saveSyncState", () => {
     expect(state.total_learning_tokens).toBe(0);
   });
 
-  it("drops malformed mined-session records and backfills the count", () => {
+  it("drops malformed studied-session records and backfills the count", () => {
     writeFileSync(
       syncStatePath(configDir),
       JSON.stringify({
@@ -287,7 +287,7 @@ describe("gateSessions", () => {
 });
 
 describe("resetSyncState", () => {
-  it("forgets mining progress but keeps the project filter and pause switch", () => {
+  it("forgets study progress but keeps the project filter and pause switch", () => {
     saveSyncState(
       {
         schema_version: 1,
@@ -323,7 +323,7 @@ describe("resetSyncState", () => {
     expect(state.paused).toBe(true);
   });
 
-  it("writes a clean file when nothing was ever mined", () => {
+  it("writes a clean file when nothing was ever studied", () => {
     resetSyncState(configDir);
     const state = loadSyncState(configDir);
     expect(state.watermark).toBeNull();

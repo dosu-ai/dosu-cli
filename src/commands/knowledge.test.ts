@@ -332,7 +332,7 @@ describe("knowledge sessions", () => {
     expect(out).toContain(openSession.id);
     expect(out).toContain("1d4b4ea0-e555-4444-8888-abcdefabcdef");
     expect(out).not.toContain("\u2026");
-    // Mined history's "harness/id" splits back into columns.
+    // Studied history's "harness/id" splits back into columns.
     expect(out).not.toContain("cursor/1d4b4ea0");
   });
 
@@ -356,14 +356,14 @@ describe("knowledge sessions", () => {
     const out = allOutput();
     expect(out).toContain("Queued (1)");
     expect(out).not.toContain("Open (");
-    expect(out).not.toContain("Mined (");
+    expect(out).not.toContain("Studied (");
     expect(mockLoadSyncState).not.toHaveBeenCalled();
   });
 
-  it("--mined alone skips the session scan", async () => {
+  it("--studied alone skips the session scan", async () => {
     mockLoadSyncState.mockReturnValue(syncState);
 
-    await run("sessions", "--mined");
+    await run("sessions", "--studied");
 
     expect(mockListBacklog).not.toHaveBeenCalled();
     expect(allOutput()).toContain("Studied (1)");
@@ -376,13 +376,13 @@ describe("knowledge sessions", () => {
 
     const parsed = JSON.parse(allOutput());
     expect(parsed).toEqual({ queued: [queuedSession], open: [openSession] });
-    expect(parsed.mined).toBeUndefined();
+    expect(parsed.studied).toBeUndefined();
   });
 });
 
 describe("knowledge sync", () => {
   beforeEach(() => {
-    // Authenticated cloud-mode install: sync should build a miner.
+    // Authenticated cloud-mode install: sync should build a learner.
     mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: "dep1" }));
   });
 
@@ -400,7 +400,7 @@ describe("knowledge sync", () => {
     expect(allOutput()).toContain("3 new sessions ready to study");
   });
 
-  it("does not build a miner when the install has no API key", async () => {
+  it("does not build a learner when the install has no API key", async () => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ api_key: undefined }));
     mockRunSync.mockResolvedValue({ status: "backlog", readySessions: 1, inFlightSessions: 0 });
 
@@ -409,7 +409,7 @@ describe("knowledge sync", () => {
     expect(syncDeps().mine).toBeUndefined();
   });
 
-  it("does not build a miner in OSS mode", async () => {
+  it("does not build a learner in OSS mode", async () => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: "dep1", mode: "oss" }));
     mockRunSync.mockResolvedValue({ status: "backlog", readySessions: 1, inFlightSessions: 0 });
 
@@ -418,14 +418,14 @@ describe("knowledge sync", () => {
     expect(syncDeps().mine).toBeUndefined();
   });
 
-  it("reports a mined run with the remaining backlog", async () => {
+  it("reports a studied run with the remaining backlog", async () => {
     mockRunSync.mockResolvedValue({
-      status: "mined",
+      status: "studied",
       readySessions: 8,
       inFlightSessions: 0,
       sessions: [],
-      minedSessions: 5,
-      miner: { outcome: "completed", notesWritten: 3, turns: 12 },
+      studiedSessions: 5,
+      learner: { outcome: "completed", notesWritten: 3, turns: 12 },
     });
 
     await run("sync");
@@ -441,8 +441,8 @@ describe("knowledge sync", () => {
       readySessions: 2,
       inFlightSessions: 0,
       sessions: [],
-      minedSessions: 0,
-      miner: { outcome: "consent_off", notesWritten: 0, turns: 0, message: "org opt-in is off" },
+      studiedSessions: 0,
+      learner: { outcome: "consent_off", notesWritten: 0, turns: 0, message: "org opt-in is off" },
     });
 
     await run("sync");
@@ -451,14 +451,14 @@ describe("knowledge sync", () => {
     expect(process.exitCode).toBeUndefined();
   });
 
-  it("mine-failed prints the miner message and sets the exit code", async () => {
+  it("mine-failed prints the learner message and sets the exit code", async () => {
     mockRunSync.mockResolvedValue({
       status: "mine-failed",
       readySessions: 2,
       inFlightSessions: 0,
       sessions: [],
-      minedSessions: 0,
-      miner: { outcome: "error", notesWritten: 0, turns: 4, message: "run exploded" },
+      studiedSessions: 0,
+      learner: { outcome: "error", notesWritten: 0, turns: 4, message: "run exploded" },
     });
 
     await run("sync");
@@ -540,12 +540,12 @@ describe("knowledge sync", () => {
   it("--report writes and opens the harvest HTML after a foreground sync", async () => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: "dep1" }));
     mockRunSync.mockResolvedValue({
-      status: "mined",
+      status: "studied",
       readySessions: 2,
       inFlightSessions: 0,
       sessions: [],
-      minedSessions: 2,
-      miner: { outcome: "completed", notesWritten: 1, turns: 4 },
+      studiedSessions: 2,
+      learner: { outcome: "completed", notesWritten: 1, turns: 4 },
     });
 
     await run("sync", "--report", "--out", "/tmp/custom-report.html");
@@ -569,7 +569,7 @@ describe("knowledge sync", () => {
   });
 
   it("--quiet --report stays silent and does not write HTML", async () => {
-    mockRunSync.mockResolvedValue({ status: "mined", readySessions: 0, inFlightSessions: 0 });
+    mockRunSync.mockResolvedValue({ status: "studied", readySessions: 0, inFlightSessions: 0 });
     await run("sync", "--quiet", "--report");
     expect(mockEmitReport).not.toHaveBeenCalled();
     expect(logSpy).not.toHaveBeenCalled();
@@ -601,21 +601,21 @@ describe("knowledge sync", () => {
     expect(mockSpawnDetached).toHaveBeenCalledWith(["knowledge", "sync", "--quiet", "--bootstrap"]);
   });
 
-  function minedOutcome(remaining: number) {
+  function studiedOutcome(remaining: number) {
     return {
-      status: "mined",
+      status: "studied",
       readySessions: remaining,
       inFlightSessions: 0,
       sessions: [],
-      minedSessions: Math.min(remaining, 5),
-      miner: { outcome: "completed", notesWritten: 2, turns: 10 },
+      studiedSessions: Math.min(remaining, 5),
+      learner: { outcome: "completed", notesWritten: 2, turns: 10 },
     };
   }
 
   it("--bootstrap passes the bootstrap scope on every round", async () => {
     mockRunSync
-      .mockResolvedValueOnce(minedOutcome(8))
-      .mockResolvedValueOnce(minedOutcome(3))
+      .mockResolvedValueOnce(studiedOutcome(8))
+      .mockResolvedValueOnce(studiedOutcome(3))
       .mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
 
     await run("sync", "--bootstrap");
@@ -628,8 +628,8 @@ describe("knowledge sync", () => {
 
   it("--bootstrap drains the backlog and reports each round", async () => {
     mockRunSync
-      .mockResolvedValueOnce(minedOutcome(8))
-      .mockResolvedValueOnce(minedOutcome(3))
+      .mockResolvedValueOnce(studiedOutcome(8))
+      .mockResolvedValueOnce(studiedOutcome(3))
       .mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
 
     await run("sync", "--bootstrap");
@@ -641,13 +641,13 @@ describe("knowledge sync", () => {
   });
 
   it("--bootstrap stops the drain on a failed round", async () => {
-    mockRunSync.mockResolvedValueOnce(minedOutcome(8)).mockResolvedValue({
+    mockRunSync.mockResolvedValueOnce(studiedOutcome(8)).mockResolvedValue({
       status: "mine-failed",
       readySessions: 3,
       inFlightSessions: 0,
       sessions: [],
-      minedSessions: 0,
-      miner: { outcome: "error", notesWritten: 0, turns: 1, message: "run exploded" },
+      studiedSessions: 0,
+      learner: { outcome: "error", notesWritten: 0, turns: 1, message: "run exploded" },
     });
 
     await run("sync", "--bootstrap");
@@ -659,7 +659,7 @@ describe("knowledge sync", () => {
 
   it("--bootstrap --quiet drains silently", async () => {
     mockRunSync
-      .mockResolvedValueOnce(minedOutcome(8))
+      .mockResolvedValueOnce(studiedOutcome(8))
       .mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
 
     await run("sync", "--quiet", "--bootstrap");
@@ -668,18 +668,18 @@ describe("knowledge sync", () => {
     expect(logSpy).not.toHaveBeenCalled();
   });
 
-  it("--bootstrap is capped even if mining always reports more", async () => {
+  it("--bootstrap is capped even if studying always reports more", async () => {
     // Every round claims two batches' worth of sessions are still ready; the
     // cap comes from the first round's backlog: ceil(ready/batch)+2 rounds.
     const ready = MINE_BATCH_LIMIT * 2;
-    mockRunSync.mockResolvedValue(minedOutcome(ready));
+    mockRunSync.mockResolvedValue(studiedOutcome(ready));
 
     await run("sync", "--bootstrap");
 
     expect(mockRunSync).toHaveBeenCalledTimes(Math.ceil(ready / MINE_BATCH_LIMIT) + 2);
   });
 
-  it("--bootstrap without a miner stays single-shot", async () => {
+  it("--bootstrap without a learner stays single-shot", async () => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ api_key: undefined }));
     mockRunSync.mockResolvedValue({
       status: "backlog",
@@ -715,7 +715,7 @@ describe("knowledge sync --status", () => {
     expect(out).toContain("'dosu knowledge sync'");
   });
 
-  it("reports a running sync without scanning or mining", async () => {
+  it("reports a running sync without scanning or studying", async () => {
     mockGetSyncStatus.mockReturnValue({
       running: true,
       pid: 4242,

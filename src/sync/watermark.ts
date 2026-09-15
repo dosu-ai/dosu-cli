@@ -1,4 +1,4 @@
-/** Knowledge-sync watermark: the mining commit point, advancing only after a successful run.
+/** Knowledge-sync watermark: the studying commit point, advancing only after a successful run.
  * Kept out of config.json, which is credential-bearing and rewritten by auth flows. */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -15,8 +15,8 @@ export const DEFAULT_QUIET_PERIOD_MS = 5 * 60 * 1000;
 const BACKOFF_BASE_MS = 15 * 60 * 1000;
 const BACKOFF_MAX_MS = 24 * 60 * 60 * 1000;
 
-/** One mined session, as recorded by a completed mining run. */
-export interface MinedSessionRecord {
+/** One studied session, as recorded by a completed study run. */
+export interface StudiedSessionRecord {
   /** When the run recorded this session (ISO). */
   at: string;
   /** The session's `harness/id`. */
@@ -25,11 +25,11 @@ export interface MinedSessionRecord {
   project?: string;
 }
 
-/** How many mined-session history records the state file keeps. */
-export const MINED_HISTORY_LIMIT = 500;
+/** How many studied-session history records the state file keeps. */
+export const STUDIED_HISTORY_LIMIT = 500;
 
-/** A clean gateway refusal from the last mining attempt, persisted so status surfaces can say
- * why mining is paused; never triggers backoff and is cleared by the next successful run. */
+/** A clean gateway refusal from the last studying attempt, persisted so status surfaces can say
+ * why studying is paused; never triggers backoff and is cleared by the next successful run. */
 interface SyncRefusal {
   at: string;
   outcome: string;
@@ -47,24 +47,24 @@ interface SyncRun {
 
 export interface SyncState {
   schema_version: number;
-  /** ISO timestamp of the newest session already mined; null = never mined. */
+  /** ISO timestamp of the newest session already studied; null = never studied. */
   watermark: string | null;
   last_attempt_at?: string;
   consecutive_failures: number;
-  /** Rolling mined-session history, oldest first, capped at MINED_HISTORY_LIMIT. */
-  mined_sessions?: MinedSessionRecord[];
-  /** All-time mined-session count — survives the history cap above. */
+  /** Rolling studied-session history, oldest first, capped at STUDIED_HISTORY_LIMIT. */
+  mined_sessions?: StudiedSessionRecord[];
+  /** All-time studied-session count — survives the history cap above. */
   total_mined?: number;
-  /** All-time knowledge notes written by completed mining runs. */
+  /** All-time knowledge notes written by completed study runs. */
   total_notes?: number;
-  /** All-time tokens of investigation distilled (chars/4 estimate of every mined conversation);
+  /** All-time tokens of investigation distilled (chars/4 estimate of every studied conversation);
    * future reads of the notes reuse this instead of re-learning it. */
   total_learning_tokens?: number;
-  /** Why the last mining attempt was refused by the gateway, if it was. */
+  /** Why the last studying attempt was refused by the gateway, if it was. */
   last_refusal?: SyncRefusal;
   /** The active run's progress baseline; see SyncRun. */
   run?: SyncRun;
-  /** Absolute directories whose sessions get mined (subdirectories included); absent means
+  /** Absolute directories whose sessions get studied (subdirectories included); absent means
    * everywhere. Undeterminable directories match UNKNOWN_PROJECT. */
   project_filter?: string[];
   /** User pressed stop: quiet (hook-triggered) syncs skip until resumed. Cleared by the
@@ -87,14 +87,14 @@ export function loadSyncState(configDir: string = getConfigDir()): SyncState {
   try {
     const raw = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
     if (raw.schema_version !== STATE_SCHEMA_VERSION) return empty;
-    const minedSessions = Array.isArray(raw.mined_sessions)
+    const studiedSessions = Array.isArray(raw.mined_sessions)
       ? (raw.mined_sessions as unknown[])
           .filter(
-            (record): record is MinedSessionRecord =>
+            (record): record is StudiedSessionRecord =>
               typeof record === "object" &&
               record !== null &&
-              typeof (record as MinedSessionRecord).at === "string" &&
-              typeof (record as MinedSessionRecord).session === "string",
+              typeof (record as StudiedSessionRecord).at === "string" &&
+              typeof (record as StudiedSessionRecord).session === "string",
           )
           .map((record) => ({
             at: record.at,
@@ -127,11 +127,11 @@ export function loadSyncState(configDir: string = getConfigDir()): SyncState {
         typeof raw.consecutive_failures === "number" && raw.consecutive_failures >= 0
           ? raw.consecutive_failures
           : 0,
-      mined_sessions: minedSessions,
+      mined_sessions: studiedSessions,
       total_mined:
         typeof raw.total_mined === "number" && raw.total_mined >= 0
           ? raw.total_mined
-          : minedSessions.length,
+          : studiedSessions.length,
       total_notes:
         typeof raw.total_notes === "number" && raw.total_notes >= 0 ? raw.total_notes : 0,
       total_learning_tokens:
@@ -162,7 +162,7 @@ export function setSyncPaused(paused: boolean, configDir: string = getConfigDir(
   saveSyncState(state, configDir);
 }
 
-/** Forget everything mined so the next run starts from scratch: watermark, history, lifetime
+/** Forget everything studied so the next run starts from scratch: watermark, history, lifetime
  * counters, failure backoff, and the last refusal. User settings survive — the project filter
  * and the pause switch are choices, not progress. Notes already saved in Dosu are untouched. */
 export function resetSyncState(configDir: string = getConfigDir()): void {
@@ -206,7 +206,7 @@ export function isUnderDir(dir: string, base: string): boolean {
   return dir === root || dir.startsWith(`${root}/`);
 }
 
-/** Apply the mining directory filter (empty passes everything): a session matches at or under
+/** Apply the studying directory filter (empty passes everything): a session matches at or under
  * any picked directory; unresolvable sessions match only UNKNOWN_PROJECT. */
 export function filterSessionsByProject(
   sessions: readonly AgentSession[],
@@ -224,7 +224,7 @@ export function filterSessionsByProject(
 }
 
 export interface GateResult {
-  /** Completed sessions newer than the watermark — the mining backlog. */
+  /** Completed sessions newer than the watermark — the study backlog. */
   ready: AgentSession[];
   /** Sessions newer than the watermark but still inside the quiet period; queued once quiet. */
   open: AgentSession[];

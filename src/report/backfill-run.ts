@@ -1,6 +1,6 @@
 /**
  * Orchestrates the local transcript backfill: fetch the caller's unattributed
- * notes, correlate them against the local mining ledger and session logs, and
+ * notes, correlate them against the local studying ledger and session logs, and
  * post the recovered {note_id -> transcript_id} pairs back. Injectable seams
  * keep it unit-testable without a backend or a real home directory.
  */

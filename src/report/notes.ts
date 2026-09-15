@@ -1,5 +1,5 @@
 /**
- * Capture write_knowledge payloads during a mining run, persist them, and
+ * Capture write_knowledge payloads during a study run, persist them, and
  * attribute rediscovery tokens the same way the skill report does: the cost
  * to learn THIS fact (the matching user-query cycle), never a session-sized
  * number and never an equal split of one session across notes.

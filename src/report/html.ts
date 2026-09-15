@@ -12,7 +12,6 @@ import type {
   ReportInventory,
 } from "./types";
 
-const CHARS_PER_TOKEN = 4;
 const MAX_TRACE_STEPS = 50;
 const PREVIEW_CHARS = 80;
 const SQL_DISPLAY = new Set(["execute_sql", "query_run", "list_tables"]);
@@ -25,8 +24,11 @@ export interface BuildReportOptions {
   inventory: ReportInventory;
   candidates?: ReportCandidate[];
   orgName?: string;
-  repo?: string;
-  branch?: string;
+  /** Distinct project names the run's sessions came from. */
+  projects?: string[];
+  /** True when the note fetch was capped (pre-pagination backend) — the
+   * report then covers only the newest notes, and must say so. */
+  truncated?: boolean;
   summary?: string;
   dryRun?: boolean;
   generatedAt?: Date;
@@ -54,45 +56,6 @@ function applyStatusDefaults(candidates: ReportCandidate[], dryRun: boolean): Re
     const current = (c.status ?? "").trim().toLowerCase();
     return { ...c, status: known.has(current) ? current : fallback };
   });
-}
-
-export function tokenTotalsFromCandidates(
-  candidates: ReportCandidate[],
-  inventory: ReportInventory,
-): {
-  baseline_tokens: number;
-  replaced_baseline_tokens: number;
-  read_knowledge_tokens: number;
-  tokens_saved: number;
-  pct_saved: number;
-} | null {
-  if (candidates.length === 0) return null;
-  let replaced = 0;
-  let hasRediscovery = false;
-  let readCost = 0;
-  for (const c of candidates) {
-    const raw = c.approx_rediscovery_tokens;
-    if (raw != null) {
-      hasRediscovery = true;
-      replaced += Math.max(0, Number(raw) || 0);
-    }
-    const blob = `${c.title ?? ""}\n${c.content ?? ""}`;
-    readCost += Math.round(blob.length / CHARS_PER_TOKEN);
-  }
-  if (!hasRediscovery) return null;
-  let baseline = inventory.totals?.learning_tokens ?? 0;
-  if (!baseline) {
-    baseline = inventory.transcripts.reduce((sum, t) => sum + (t.learning_tokens || 0), 0);
-  }
-  const saved = Math.max(0, replaced - readCost);
-  const pct = baseline ? Math.round((1000 * saved) / baseline) / 10 : 0;
-  return {
-    baseline_tokens: baseline,
-    replaced_baseline_tokens: replaced,
-    read_knowledge_tokens: readCost,
-    tokens_saved: saved,
-    pct_saved: pct,
-  };
 }
 
 function presentationCopy(c: ReportCandidate): [string, string] {
@@ -475,14 +438,12 @@ export function buildReportHtml(options: BuildReportOptions): string {
   });
 
   const org = options.orgName || "Your team";
-  const repo = options.repo || inventory.cwd || "—";
-  const branch = options.branch || "—";
+  const projects = options.projects ?? [];
   const summary =
     options.summary ||
     "Local agent session logs were studied and distilled into Dosu notes so the next task can reuse them — reducing rediscovery cost.";
   const generated = `${(options.generatedAt ?? new Date()).toISOString().replace("T", " ").slice(0, 16)} UTC`;
 
-  const derived = tokenTotalsFromCandidates(candidates, inventory);
   const [notesHeading, notesLede, footerTitle, footerBody] = notesSectionCopy(candidates);
 
   const candidateRows = candidates.map((c, i) => {
@@ -536,26 +497,22 @@ export function buildReportHtml(options: BuildReportOptions): string {
     })
     .join("");
 
-  let tokenSection: string;
-  if (derived) {
-    tokenSection = `
+  const scannedTokens =
+    inventory.totals?.learning_tokens ||
+    transcripts.reduce((sum, t) => sum + (t.learning_tokens || 0), 0);
+  const writtenCount = candidates.filter(
+    (c) => (c.status || "written").toLowerCase() === "written",
+  ).length;
+  const writtenLabel = options.dryRun ? "Notes proposed (dry run)" : "Notes written to Dosu";
+  const writtenValue = options.dryRun ? candidates.length : writtenCount;
+  const tokenSection = `
 <section>
-  <h2>Estimated context savings</h2>
-  <p class="lede">Counterfactual: replace rediscovery stretches with a Dosu <code>read_knowledge</code> hit.</p>
+  <h2>This run</h2>
   <div class="stats">
-    <div class="stat"><div class="label">Baseline (cost to learn)</div><div class="value">${fmtInt(derived.baseline_tokens)}</div></div>
-    <div class="stat"><div class="label">Learning replaced</div><div class="value">${fmtInt(derived.replaced_baseline_tokens)}</div></div>
-    <div class="stat"><div class="label">Read cost</div><div class="value">${fmtInt(derived.read_knowledge_tokens)}</div></div>
-    <div class="stat highlight"><div class="label">Est. tokens saved</div><div class="value">${fmtInt(derived.tokens_saved)} <span class="pct">(${esc(`${derived.pct_saved}%`)})</span></div></div>
+    <div class="stat"><div class="label">Tokens scanned</div><div class="value">${fmtInt(scannedTokens)}</div></div>
+    <div class="stat highlight"><div class="label">${esc(writtenLabel)}</div><div class="value">${fmtInt(writtenValue)}</div></div>
   </div>
 </section>`;
-  } else {
-    tokenSection = `
-<section>
-  <h2>Estimated context savings</h2>
-  <p class="muted">No rediscovery estimates on the notes yet — each candidate needs <code>approx_rediscovery_tokens</code>.</p>
-</section>`;
-  }
 
   const notesBody =
     candidateRows.join("") ||
@@ -579,9 +536,8 @@ ${REPORT_CSS}
       <h1>${esc(org)}</h1>
       <p class="lede">${esc(summary)}</p>
       <p class="meta-line">
-        Repo <code>${esc(repo)}</code>
-        · branch <code>${esc(branch)}</code>
-        · generated ${esc(generated)}
+        ${projects.length > 0 ? `Projects ${projects.map((p) => `<code>${esc(p)}</code>`).join(", ")} · ` : ""}${transcripts.length} session${transcripts.length === 1 ? "" : "s"} with notes
+        · generated ${esc(generated)}${options.truncated ? " · newest notes only (server capped the fetch)" : ""}
       </p>
       <div class="toolbar no-print">
         <button type="button" onclick="window.print()">Print / Save as PDF</button>

@@ -1,11 +1,11 @@
-/** Runtime frame for the miner's system prompt; the write-knowledge rules live in
+/** Runtime frame for the learner's system prompt; the write-knowledge rules live in
  * prompt-core.ts. */
 
 import type { AgentSession } from "../sessions/scan";
 
-/** System prompt framing the given canonical rules for the fenced miner. */
-export function buildMinerSystemPrompt(coreRules: string): string {
-  return `You are Dosu's knowledge miner. You read a developer's recent \
+/** System prompt framing the given canonical rules for the fenced learner. */
+export function buildLearnerSystemPrompt(coreRules: string): string {
+  return `You are Dosu's knowledge learner. You read a developer's recent \
 coding-agent sessions and save the durable, non-obvious findings to the team's shared knowledge \
 base so future teammates and agents do not have to rediscover them.
 
@@ -19,7 +19,7 @@ ${coreRules}`;
 }
 
 /** Task prompt scoping the run to specific sessions. */
-export function buildMinerPrompt(sessions: AgentSession[]): string {
+export function buildLearnerPrompt(sessions: AgentSession[]): string {
   const list = sessions.map((s) => `- ${s.id} (${s.harness})`).join("\n");
   return `Mine the following ${sessions.length} coding-agent session(s) for durable knowledge:
 

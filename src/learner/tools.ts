@@ -1,4 +1,4 @@
-/** In-process MCP tools that are the miner's only path to session content; every returned
+/** In-process MCP tools that are the learner's only path to session content; every returned
  * string passes through the secret scrubber on top of the readers' own redaction. */
 
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
@@ -83,7 +83,7 @@ export function createSessionToolsServer(sessions: AgentSession[]) {
     tools: [
       tool(
         "list_sessions",
-        "List the coding-agent sessions in scope for this mining run.",
+        "List the coding-agent sessions in scope for this study run.",
         {},
         async () => textResult(formatSessionList(sessions)),
       ),

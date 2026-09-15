@@ -64,7 +64,7 @@ export function renderMenuFrame(
   options: readonly MenuOption[],
   selected: number,
 ): string {
-  // Pad by visible width so colored labels (e.g. the mining dot) stay aligned.
+  // Pad by visible width so colored labels (e.g. the studying dot) stay aligned.
   const labelWidth = Math.max(...options.map((option) => visibleWidth(option.label)));
   const rows = options.map((option, index) => {
     const label = option.label + " ".repeat(labelWidth - visibleWidth(option.label));
