@@ -482,7 +482,6 @@ export function buildReportHtml(options: BuildReportOptions): string {
     "Local agent session logs were mined into Dosu notes so the next task can reuse them — reducing rediscovery cost.";
   const generated = `${(options.generatedAt ?? new Date()).toISOString().replace("T", " ").slice(0, 16)} UTC`;
 
-  const derived = tokenTotalsFromCandidates(candidates, inventory);
   const [notesHeading, notesLede, footerTitle, footerBody] = notesSectionCopy(candidates);
 
   const candidateRows = candidates.map((c, i) => {
@@ -536,26 +535,22 @@ export function buildReportHtml(options: BuildReportOptions): string {
     })
     .join("");
 
-  let tokenSection: string;
-  if (derived) {
-    tokenSection = `
+  const scannedTokens =
+    inventory.totals?.learning_tokens ||
+    transcripts.reduce((sum, t) => sum + (t.learning_tokens || 0), 0);
+  const writtenCount = candidates.filter(
+    (c) => (c.status || "written").toLowerCase() === "written",
+  ).length;
+  const writtenLabel = options.dryRun ? "Notes proposed (dry run)" : "Notes written to Dosu";
+  const writtenValue = options.dryRun ? candidates.length : writtenCount;
+  const tokenSection = `
 <section>
-  <h2>Estimated context savings</h2>
-  <p class="lede">Counterfactual: replace rediscovery stretches with a Dosu <code>read_knowledge</code> hit.</p>
+  <h2>This run</h2>
   <div class="stats">
-    <div class="stat"><div class="label">Baseline (cost to learn)</div><div class="value">${fmtInt(derived.baseline_tokens)}</div></div>
-    <div class="stat"><div class="label">Learning replaced</div><div class="value">${fmtInt(derived.replaced_baseline_tokens)}</div></div>
-    <div class="stat"><div class="label">Read cost</div><div class="value">${fmtInt(derived.read_knowledge_tokens)}</div></div>
-    <div class="stat highlight"><div class="label">Est. tokens saved</div><div class="value">${fmtInt(derived.tokens_saved)} <span class="pct">(${esc(`${derived.pct_saved}%`)})</span></div></div>
+    <div class="stat"><div class="label">Tokens scanned</div><div class="value">${fmtInt(scannedTokens)}</div></div>
+    <div class="stat highlight"><div class="label">${esc(writtenLabel)}</div><div class="value">${fmtInt(writtenValue)}</div></div>
   </div>
 </section>`;
-  } else {
-    tokenSection = `
-<section>
-  <h2>Estimated context savings</h2>
-  <p class="muted">No rediscovery estimates on the notes yet — each candidate needs <code>approx_rediscovery_tokens</code>.</p>
-</section>`;
-  }
 
   const notesBody =
     candidateRows.join("") ||

@@ -55,7 +55,7 @@ describe("buildReportHtml", () => {
     expect(html).toContain("Dosu knowledge report — Acme");
     expect(html).toContain("Dosu · Knowledge report");
     expect(html).toContain("Iowan Old Style");
-    expect(html).toContain("Estimated context savings");
+    expect(html).toContain("Tokens scanned");
     expect(html).toContain("Notes written to Dosu");
     expect(html).toContain("OAuth refresh token expiry");
     expect(html).toContain("Heaviest sessions");
@@ -132,7 +132,7 @@ describe("buildReportHtml empty and mixed", () => {
     const html = buildReportHtml({ inventory, candidates: [] });
     expect(html).toContain("write_knowledge notes");
     expect(html).toContain("No write_knowledge payloads yet");
-    expect(html).toContain("No rediscovery estimates");
+    expect(html).toContain("Tokens scanned");
   });
 
   it("falls back to transcript learning_tokens when inventory totals are missing", () => {
