@@ -28,7 +28,7 @@ export async function fetchReportNotes(cfg: Config): Promise<FetchedReportNotes>
   const { createTypedClient } = await import("../client/trpc");
   const client = createTypedClient(cfg);
   const notes: ReportNote[] = [];
-  let cursor: string | undefined;
+  let cursor: { created_at: string; id: string } | undefined;
   let truncated = false;
   for (let page = 0; page < REPORT_NOTES_MAX_PAGES; page++) {
     const result = await client.notes.listMine.query({

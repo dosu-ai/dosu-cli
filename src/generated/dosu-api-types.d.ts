@@ -1240,13 +1240,19 @@ export type NotesAttributeTranscriptsOutput = {
 }
 
 export type NotesListMineInput = {
-	cursor?: string
+	cursor?: {
+		created_at: string
+		id: string
+	}
 	limit?: number
 	org_id: string
 }
 
 export type NotesListMineOutput = {
-	next_cursor?: string
+	next_cursor?: {
+		created_at: string
+		id: string
+	}
 	notes: Array<{
 		body: string
 		branch: string | null

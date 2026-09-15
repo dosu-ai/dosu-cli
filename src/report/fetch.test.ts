@@ -70,7 +70,11 @@ describe("fetchReportNotes", () => {
   });
 
   it("follows next_cursor until the last page and concatenates in order", async () => {
-    const page = (n: number, next?: string) => ({
+    const cursorFor = (n: number) => ({
+      created_at: `2026-09-0${n}T00:00:00+00:00`,
+      id: `n${n}`,
+    });
+    const page = (n: number, next?: { created_at: string; id: string }) => ({
       notes: [
         {
           id: `n${n}`,
@@ -85,15 +89,15 @@ describe("fetchReportNotes", () => {
       ...(next ? { next_cursor: next } : {}),
     });
     mockQuery
-      .mockResolvedValueOnce(page(3, "c1"))
-      .mockResolvedValueOnce(page(2, "c2"))
+      .mockResolvedValueOnce(page(3, cursorFor(3)))
+      .mockResolvedValueOnce(page(2, cursorFor(2)))
       .mockResolvedValueOnce(page(1));
 
     const { notes, truncated } = await fetchReportNotes(authedConfig());
     expect(notes.map((n) => n.title)).toEqual(["Note 3", "Note 2", "Note 1"]);
     expect(truncated).toBe(false);
-    expect(mockQuery).toHaveBeenNthCalledWith(2, expect.objectContaining({ cursor: "c1" }));
-    expect(mockQuery).toHaveBeenNthCalledWith(3, expect.objectContaining({ cursor: "c2" }));
+    expect(mockQuery).toHaveBeenNthCalledWith(2, expect.objectContaining({ cursor: cursorFor(3) }));
+    expect(mockQuery).toHaveBeenNthCalledWith(3, expect.objectContaining({ cursor: cursorFor(2) }));
   });
 
   it("flags truncation when a pre-pagination server returns a full page with no cursor", async () => {
