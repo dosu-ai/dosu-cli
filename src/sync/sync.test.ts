@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { MinerRunResult } from "../miner/runner";
+import type { LearnerRunResult } from "../learner/runner";
 import type { AgentSession } from "../sessions/scan";
 import type { SyncLock } from "./lock";
 import { MINE_BATCH_LIMIT, runKnowledgeSync, type SyncDeps } from "./sync";
@@ -107,7 +107,7 @@ describe("runKnowledgeSync", () => {
     expect(outcome.readySessions).toBe(1);
   });
 
-  it("never advances the watermark on gate-and-report runs (no miner)", async () => {
+  it("never advances the watermark on gate-and-report runs (no learner)", async () => {
     const { deps, saved } = makeDeps({
       loadState: () => ({
         schema_version: 1,
@@ -250,7 +250,7 @@ describe("runKnowledgeSync default scan scope", () => {
   });
 });
 
-function minerResult(overrides: Partial<MinerRunResult> = {}): MinerRunResult {
+function learnerResult(overrides: Partial<LearnerRunResult> = {}): LearnerRunResult {
   return { outcome: "completed", notesWritten: 2, turns: 10, ...overrides };
 }
 
@@ -258,17 +258,17 @@ function openLock(): SyncLock {
   return { acquire: () => true, release: vi.fn() };
 }
 
-/** Mining deps with the worthiness filter defaulted open (tests use fake paths). */
-function makeMiningDeps(overrides: Partial<SyncDeps> = {}) {
-  return makeDeps({ worthMining: () => true, ...overrides });
+/** Studying deps with the worthiness filter defaulted open (tests use fake paths). */
+function makeStudyingDeps(overrides: Partial<SyncDeps> = {}) {
+  return makeDeps({ worthStudying: () => true, ...overrides });
 }
 
-describe("runKnowledgeSync mining", () => {
+describe("runKnowledgeSync studying", () => {
   it("mines the oldest batch and advances the watermark to its newest session", async () => {
-    const mine = vi.fn().mockResolvedValue(minerResult());
+    const mine = vi.fn().mockResolvedValue(learnerResult());
     // Two more ready sessions than one batch holds, newest-first (scanner order).
     const sessions = Array.from({ length: MINE_BATCH_LIMIT + 2 }, (_, i) => session(30 + i * 10));
-    const { deps, saved } = makeMiningDeps({
+    const { deps, saved } = makeStudyingDeps({
       listSessions: vi.fn().mockResolvedValue(sessions),
       mine,
       lock: openLock(),
@@ -276,9 +276,9 @@ describe("runKnowledgeSync mining", () => {
 
     const outcome = await runKnowledgeSync({ deps });
 
-    expect(outcome.status).toBe("mined");
-    expect(outcome.minedSessions).toBe(MINE_BATCH_LIMIT);
-    expect(outcome.miner?.notesWritten).toBe(2);
+    expect(outcome.status).toBe("studied");
+    expect(outcome.studiedSessions).toBe(MINE_BATCH_LIMIT);
+    expect(outcome.learner?.notesWritten).toBe(2);
     // The oldest MINE_BATCH_LIMIT sessions, in chronological order; the two
     // newest (offsets 30 and 40) stay in the backlog for the next round.
     const batch = mine.mock.calls[0][0] as AgentSession[];
@@ -292,11 +292,11 @@ describe("runKnowledgeSync mining", () => {
     expect(saved[0].consecutive_failures).toBe(0);
   });
 
-  it("releases the lock after mining", async () => {
+  it("releases the lock after studying", async () => {
     const lock = openLock();
-    const { deps } = makeMiningDeps({
+    const { deps } = makeStudyingDeps({
       listSessions: vi.fn().mockResolvedValue([session(30)]),
-      mine: vi.fn().mockResolvedValue(minerResult()),
+      mine: vi.fn().mockResolvedValue(learnerResult()),
       lock,
     });
 
@@ -306,7 +306,7 @@ describe("runKnowledgeSync mining", () => {
   });
 
   it("stamps the run baseline into the committed state", async () => {
-    const { deps, saved } = makeMiningDeps({
+    const { deps, saved } = makeStudyingDeps({
       listSessions: vi.fn().mockResolvedValue([session(30)]),
       loadState: () => ({
         schema_version: 1,
@@ -314,7 +314,7 @@ describe("runKnowledgeSync mining", () => {
         consecutive_failures: 0,
         total_mined: 5,
       }),
-      mine: vi.fn().mockResolvedValue(minerResult()),
+      mine: vi.fn().mockResolvedValue(learnerResult()),
       lock: openLock(),
     });
 
@@ -328,7 +328,7 @@ describe("runKnowledgeSync mining", () => {
   });
 
   it("keeps the first batch's baseline across same-pid batches, resets for a new run", async () => {
-    const { deps, saved } = makeMiningDeps({
+    const { deps, saved } = makeStudyingDeps({
       listSessions: vi.fn().mockResolvedValue([session(30)]),
       loadState: () => ({
         schema_version: 1,
@@ -338,13 +338,13 @@ describe("runKnowledgeSync mining", () => {
         // A later batch of this process's drain: baseline must not move.
         run: { pid: process.pid, started_at: "2026-08-25T11:00:00Z", baseline_mined: 5 },
       }),
-      mine: vi.fn().mockResolvedValue(minerResult()),
+      mine: vi.fn().mockResolvedValue(learnerResult()),
       lock: openLock(),
     });
     await runKnowledgeSync({ deps });
     expect(saved[0].run?.baseline_mined).toBe(5);
 
-    const fresh = makeMiningDeps({
+    const fresh = makeStudyingDeps({
       listSessions: vi.fn().mockResolvedValue([session(30)]),
       loadState: () => ({
         schema_version: 1,
@@ -354,7 +354,7 @@ describe("runKnowledgeSync mining", () => {
         // A dead previous run's record: this run starts its own baseline.
         run: { pid: 99_999_999, started_at: "2026-08-25T09:00:00Z", baseline_mined: 5 },
       }),
-      mine: vi.fn().mockResolvedValue(minerResult()),
+      mine: vi.fn().mockResolvedValue(learnerResult()),
       lock: openLock(),
     });
     await runKnowledgeSync({ deps: fresh.deps });
@@ -363,7 +363,7 @@ describe("runKnowledgeSync mining", () => {
 
   it("skips without touching state when another run holds the lock", async () => {
     const mine = vi.fn();
-    const { deps, saved } = makeMiningDeps({
+    const { deps, saved } = makeStudyingDeps({
       listSessions: vi.fn().mockResolvedValue([session(30)]),
       mine,
       lock: { acquire: () => false, release: vi.fn() },
@@ -381,16 +381,16 @@ describe("runKnowledgeSync mining", () => {
     "credit_limit",
     "quota_exceeded",
   ] as const)("%s is a clean skip: no watermark advance, no failure count", async (outcome) => {
-    const { deps, saved } = makeMiningDeps({
+    const { deps, saved } = makeStudyingDeps({
       listSessions: vi.fn().mockResolvedValue([session(30)]),
-      mine: vi.fn().mockResolvedValue(minerResult({ outcome, message: "nope" })),
+      mine: vi.fn().mockResolvedValue(learnerResult({ outcome, message: "nope" })),
       lock: openLock(),
     });
 
     const result = await runKnowledgeSync({ deps });
 
     expect(result.status).toBe("skipped-gateway");
-    expect(result.miner?.message).toBe("nope");
+    expect(result.learner?.message).toBe("nope");
     expect(saved[0].watermark).toBeNull();
     expect(saved[0].consecutive_failures).toBe(0);
     // The reason is persisted so status surfaces can explain the pause.
@@ -398,9 +398,9 @@ describe("runKnowledgeSync mining", () => {
   });
 
   it("clears a persisted refusal on the next successful run", async () => {
-    const { deps, saved } = makeMiningDeps({
+    const { deps, saved } = makeStudyingDeps({
       listSessions: vi.fn().mockResolvedValue([session(30)]),
-      mine: vi.fn().mockResolvedValue(minerResult({ outcome: "completed", notesWritten: 1 })),
+      mine: vi.fn().mockResolvedValue(learnerResult({ outcome: "completed", notesWritten: 1 })),
       lock: openLock(),
       loadState: () => ({
         schema_version: 1,
@@ -412,7 +412,7 @@ describe("runKnowledgeSync mining", () => {
 
     const result = await runKnowledgeSync({ deps });
 
-    expect(result.status).toBe("mined");
+    expect(result.status).toBe("studied");
     expect(saved[0].last_refusal).toBeUndefined();
   });
 
@@ -420,10 +420,10 @@ describe("runKnowledgeSync mining", () => {
     "error",
     "settings_conflict",
   ] as const)("%s counts as a failure and keeps the watermark", async (outcome) => {
-    const { deps, saved } = makeMiningDeps({
+    const { deps, saved } = makeStudyingDeps({
       listSessions: vi.fn().mockResolvedValue([session(30)]),
       loadState: () => ({ schema_version: 1, watermark: null, consecutive_failures: 1 }),
-      mine: vi.fn().mockResolvedValue(minerResult({ outcome, message: "bad run" })),
+      mine: vi.fn().mockResolvedValue(learnerResult({ outcome, message: "bad run" })),
       lock: openLock(),
     });
 
@@ -437,7 +437,7 @@ describe("runKnowledgeSync mining", () => {
 
   it("does not mine when the gate is empty", async () => {
     const mine = vi.fn();
-    const { deps } = makeMiningDeps({ mine, lock: openLock() });
+    const { deps } = makeStudyingDeps({ mine, lock: openLock() });
 
     const outcome = await runKnowledgeSync({ deps });
 
@@ -446,20 +446,20 @@ describe("runKnowledgeSync mining", () => {
   });
 
   it("filters trivial sessions out of the batch but rolls the watermark over them", async () => {
-    const mine = vi.fn().mockResolvedValue(minerResult());
+    const mine = vi.fn().mockResolvedValue(learnerResult());
     // Newest-first: s-30 (worthy), s-40 (trivial), s-50 (worthy).
     const sessions = [session(30), session(40), session(50)];
     const { deps, saved } = makeDeps({
       listSessions: vi.fn().mockResolvedValue(sessions),
-      worthMining: (s) => s.id !== "s-40",
+      worthStudying: (s) => s.id !== "s-40",
       mine,
       lock: openLock(),
     });
 
     const outcome = await runKnowledgeSync({ deps });
 
-    expect(outcome.status).toBe("mined");
-    expect(outcome.minedSessions).toBe(2);
+    expect(outcome.status).toBe("studied");
+    expect(outcome.studiedSessions).toBe(2);
     expect(outcome.trivialSessions).toBe(1);
     const batch = mine.mock.calls[0][0] as AgentSession[];
     expect(batch.map((s) => s.id)).toEqual(["s-50", "s-30"]);
@@ -467,10 +467,10 @@ describe("runKnowledgeSync mining", () => {
     expect(saved[0].watermark).toBe(session(30).updated);
   });
 
-  it("logs one line per mined session for status views to pick up", async () => {
+  it("logs one line per studied session for status views to pick up", async () => {
     mockLoggerDebug.mockClear();
-    const mine = vi.fn().mockResolvedValue(minerResult());
-    const { deps } = makeMiningDeps({
+    const mine = vi.fn().mockResolvedValue(learnerResult());
+    const { deps } = makeStudyingDeps({
       listSessions: vi.fn().mockResolvedValue([session(30), session(50)]),
       mine,
       lock: openLock(),
@@ -479,13 +479,13 @@ describe("runKnowledgeSync mining", () => {
     await runKnowledgeSync({ deps });
 
     const logged = mockLoggerDebug.mock.calls.map((c) => c.join(" ")).join("\n");
-    expect(logged).toContain("mined session claude/s-50");
-    expect(logged).toContain("mined session claude/s-30");
+    expect(logged).toContain("studied session claude/s-50");
+    expect(logged).toContain("studied session claude/s-30");
   });
 
-  it("persists mined-session history and the all-time count in state", async () => {
-    const mine = vi.fn().mockResolvedValue(minerResult());
-    const { deps, saved } = makeMiningDeps({
+  it("persists studied-session history and the all-time count in state", async () => {
+    const mine = vi.fn().mockResolvedValue(learnerResult());
+    const { deps, saved } = makeStudyingDeps({
       listSessions: vi
         .fn()
         .mockResolvedValue([session(30), { ...session(50), project: "dosu-cli" }]),
@@ -519,8 +519,8 @@ describe("runKnowledgeSync mining", () => {
   });
 
   it("accumulates all-time note and learning-token analytics on completed runs", async () => {
-    const mine = vi.fn().mockResolvedValue(minerResult({ notesWritten: 3 }));
-    const { deps, saved } = makeMiningDeps({
+    const mine = vi.fn().mockResolvedValue(learnerResult({ notesWritten: 3 }));
+    const { deps, saved } = makeStudyingDeps({
       listSessions: vi.fn().mockResolvedValue([session(30), session(50)]),
       loadState: () => ({
         schema_version: 1,
@@ -541,8 +541,8 @@ describe("runKnowledgeSync mining", () => {
   });
 
   it("defaults the token estimator, degrading to zero for unreadable sessions", async () => {
-    const mine = vi.fn().mockResolvedValue(minerResult());
-    const { deps, saved } = makeMiningDeps({
+    const mine = vi.fn().mockResolvedValue(learnerResult());
+    const { deps, saved } = makeStudyingDeps({
       // session() paths do not exist on disk: the default chars÷4 estimator
       // must degrade to 0 instead of throwing.
       listSessions: vi.fn().mockResolvedValue([session(30)]),
@@ -560,7 +560,7 @@ describe("runKnowledgeSync mining", () => {
     const mine = vi.fn();
     const { deps, saved } = makeDeps({
       listSessions: vi.fn().mockResolvedValue([session(30), session(40)]),
-      worthMining: () => false,
+      worthStudying: () => false,
       mine,
       lock: openLock(),
     });
@@ -575,20 +575,20 @@ describe("runKnowledgeSync mining", () => {
   });
 
   it("keeps examining past trivial sessions until the batch is full", async () => {
-    const mine = vi.fn().mockResolvedValue(minerResult());
+    const mine = vi.fn().mockResolvedValue(learnerResult());
     // 8 ready; every second one trivial. Batch should fill with 4 worthy,
     // having examined all 8.
     const sessions = Array.from({ length: 8 }, (_, i) => session(30 + i * 10));
     const { deps, saved } = makeDeps({
       listSessions: vi.fn().mockResolvedValue(sessions),
-      worthMining: (s) => Number.parseInt(s.id.slice(2), 10) % 20 === 10, // s-30, s-50, s-70, s-90
+      worthStudying: (s) => Number.parseInt(s.id.slice(2), 10) % 20 === 10, // s-30, s-50, s-70, s-90
       mine,
       lock: openLock(),
     });
 
     const outcome = await runKnowledgeSync({ deps });
 
-    expect(outcome.minedSessions).toBe(4);
+    expect(outcome.studiedSessions).toBe(4);
     expect(outcome.trivialSessions).toBe(4);
     expect(saved[0].watermark).toBe(session(30).updated);
   });

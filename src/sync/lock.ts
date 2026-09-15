@@ -1,4 +1,4 @@
-/** Single-flight lock for knowledge sync: concurrent mining runs would double-spend gateway
+/** Single-flight lock for knowledge sync: concurrent study runs would double-spend gateway
  * tokens on the same backlog. The loser of the lock race exits quietly. */
 
 import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -30,7 +30,7 @@ export function lockPath(configDir: string = getConfigDir()): string {
   return join(configDir, LOCK_FILENAME);
 }
 
-/** Stop a live sync run: SIGTERM its process group (a detached run leads one, so the miner
+/** Stop a live sync run: SIGTERM its process group (a detached run leads one, so the learner
  * subprocess dies with it; a foreground run falls back to a single-pid kill), then clear the
  * lock the dead process can no longer release. True when a signal was delivered. */
 export function stopSyncRun(

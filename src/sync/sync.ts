@@ -1,10 +1,10 @@
 /** The knowledge-sync pipeline (scan, gate, mine): the watermark advances only after a
- * successful mining run, and quiet hook-triggered runs never throw or write to stdout/stderr. */
+ * successful study run, and quiet hook-triggered runs never throw or write to stdout/stderr. */
 
 import { logger } from "../debug/logger";
-import type { MinerRunResult } from "../miner/runner";
+import type { LearnerRunResult } from "../learner/runner";
 import { createProjectDirResolver } from "../sessions/project-dir";
-import { estimateSessionTokens, isWorthMining } from "../sessions/read";
+import { estimateSessionTokens, isWorthStudying } from "../sessions/read";
 import { type AgentSession, scanAgentSessions } from "../sessions/scan";
 import { fileLock, type SyncLock } from "./lock";
 import {
@@ -12,7 +12,7 @@ import {
   filterSessionsByProject,
   gateSessions,
   loadSyncState,
-  MINED_HISTORY_LIMIT,
+  STUDIED_HISTORY_LIMIT,
   type SyncState,
   saveSyncState,
 } from "./watermark";
@@ -23,8 +23,8 @@ const GATE_WINDOW_DAYS = 30;
 /** Safety cap per run, so a hyperactive machine can't unbound a quiet sync. */
 const GATE_WINDOW = 200;
 
-/** Sessions mined per run, oldest first so the watermark advances monotonically; sized against
- * the miner's per-run caps in runner.ts, raise the two together. */
+/** Sessions studied per run, oldest first so the watermark advances monotonically; sized against
+ * the learner's per-run caps in runner.ts, raise the two together. */
 export const MINE_BATCH_LIMIT = 20;
 
 type SyncStatus =
@@ -34,7 +34,7 @@ type SyncStatus =
   | "skipped-lock"
   | "skipped-gateway"
   | "skipped-paused"
-  | "mined"
+  | "studied"
   | "mine-failed"
   | "error";
 
@@ -44,13 +44,13 @@ export interface SyncOutcome {
   readySessions: number;
   /** Sessions still inside the quiet period. */
   inFlightSessions: number;
-  /** The gated backlog itself — what the mining step picks up. */
+  /** The gated backlog itself — what the studying step picks up. */
   sessions: AgentSession[];
-  /** Sessions handed to the miner this run (≤ MINE_BATCH_LIMIT). */
-  minedSessions?: number;
+  /** Sessions handed to the learner this run (≤ MINE_BATCH_LIMIT). */
+  studiedSessions?: number;
   /** Sessions skipped locally as too small to plausibly hold knowledge. */
   trivialSessions?: number;
-  miner?: MinerRunResult;
+  learner?: LearnerRunResult;
   error?: string;
 }
 
@@ -58,10 +58,10 @@ export interface SyncDeps {
   listSessions?: () => AgentSession[] | Promise<AgentSession[]>;
   loadState?: () => SyncState;
   saveState?: (state: SyncState) => void;
-  /** When present, gated sessions are mined; absent = gate-and-report only. */
-  mine?: (sessions: AgentSession[]) => Promise<MinerRunResult>;
-  /** Local worthiness pre-filter; defaults to isWorthMining. */
-  worthMining?: (session: AgentSession) => boolean;
+  /** When present, gated sessions are studied; absent = gate-and-report only. */
+  mine?: (sessions: AgentSession[]) => Promise<LearnerRunResult>;
+  /** Local worthiness pre-filter; defaults to isWorthStudying. */
+  worthStudying?: (session: AgentSession) => boolean;
   /** Session → working directory, for the project filter; defaults to the cached resolver. */
   resolveProjectDir?: (session: AgentSession) => string | null;
   /** Per-session learning-token estimate; defaults to estimateSessionTokens. */
@@ -122,7 +122,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
   if (options.quiet) {
     // The user's stop switch: hook-triggered runs stay off until resumed.
     if (state.paused) {
-      logger.debug("sync", "skipping quiet sync: mining is paused");
+      logger.debug("sync", "skipping quiet sync: studying is paused");
       return { status: "skipped-paused", readySessions: 0, inFlightSessions: 0, sessions: [] };
     }
     const retryAt = backoffUntil(state);
@@ -133,7 +133,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
   } else if (state.paused) {
     // An explicit run is an explicit resume; every later state save persists the clear.
     delete state.paused;
-    logger.debug("sync", "manual sync resumes paused mining");
+    logger.debug("sync", "manual sync resumes paused studying");
   }
 
   let ready: AgentSession[];
@@ -194,7 +194,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     return { status: ready.length > 0 ? "backlog" : "nothing-new", ...base };
   }
 
-  // Mining: single-flight. The lock loser leaves state untouched — the
+  // Studying: single-flight. The lock loser leaves state untouched — the
   // winner owns this run's attempt bookkeeping.
   const lock = deps.lock ?? fileLock();
   if (!lock.acquire()) {
@@ -215,14 +215,14 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
 
     // Walk ready oldest-first so the watermark can advance without skipping newer sessions;
     // trivial sessions are filtered locally and never cost a gateway run.
-    const worthMining = deps.worthMining ?? isWorthMining;
+    const worthStudying = deps.worthStudying ?? isWorthStudying;
     const examined: AgentSession[] = [];
     const batch: AgentSession[] = [];
     let trivial = 0;
     for (let i = ready.length - 1; i >= 0 && batch.length < MINE_BATCH_LIMIT; i--) {
       const candidate = ready[i];
       examined.push(candidate);
-      if (worthMining(candidate)) {
+      if (worthStudying(candidate)) {
         batch.push(candidate);
       } else {
         trivial += 1;
@@ -242,71 +242,71 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       return {
         status: "nothing-new",
         ...base,
-        minedSessions: 0,
+        studiedSessions: 0,
         trivialSessions: trivial,
       };
     }
 
     logger.debug(
       "sync",
-      `mining ${batch.length} of ${ready.length} ready sessions (${trivial} trivial skipped)`,
+      `studying ${batch.length} of ${ready.length} ready sessions (${trivial} trivial skipped)`,
     );
-    const miner = await deps.mine(batch);
+    const learner = await deps.mine(batch);
 
-    switch (miner.outcome) {
+    switch (learner.outcome) {
       case "completed": {
         // One line per session so the activity feed narrates the run…
         for (const s of batch) {
-          logger.debug("sync", `mined session ${s.harness}/${s.id}`);
+          logger.debug("sync", `studied session ${s.harness}/${s.id}`);
         }
         // …and a durable history record per session, so status views can
-        // list everything ever mined (capped) with an all-time counter.
-        const minedAt = now().toISOString();
+        // list everything ever studied (capped) with an all-time counter.
+        const studiedAt = now().toISOString();
         const history = [
           ...(state.mined_sessions ?? []),
           ...batch.map((s) => ({
-            at: minedAt,
+            at: studiedAt,
             session: `${s.harness}/${s.id}`,
             ...(s.project ? { project: s.project } : {}),
           })),
-        ].slice(-MINED_HISTORY_LIMIT);
-        // The watermark covers everything examined — mined and trivial
+        ].slice(-STUDIED_HISTORY_LIMIT);
+        // The watermark covers everything examined — studied and trivial
         // alike — so neither is ever revisited.
         const watermark = batchWatermark(examined);
         // Analytics: what this batch cost to learn originally (chars÷4 over
-        // the mined conversations) — future note reads reuse that learning.
+        // the studied conversations) — future note reads reuse that learning.
         const sessionTokens = deps.sessionTokens ?? estimateSessionTokens;
         let batchTokens = 0;
         for (const s of batch) batchTokens += sessionTokens(s);
         saveState({
           ...state,
           watermark,
-          last_attempt_at: minedAt,
+          last_attempt_at: studiedAt,
           consecutive_failures: 0,
           mined_sessions: history,
           total_mined: (state.total_mined ?? 0) + batch.length,
-          total_notes: (state.total_notes ?? 0) + miner.notesWritten,
+          total_notes: (state.total_notes ?? 0) + learner.notesWritten,
           total_learning_tokens: (state.total_learning_tokens ?? 0) + batchTokens,
           // A successful run supersedes any earlier gateway refusal.
           last_refusal: undefined,
         });
         logger.debug(
           "sync",
-          `mined ${batch.length} sessions, ${miner.notesWritten} suggested pages; watermark → ${watermark}`,
+          `studied ${batch.length} sessions, ${learner.notesWritten} suggested pages; watermark → ${watermark}`,
         );
         return {
-          status: "mined",
+          status: "studied",
           ...base,
-          minedSessions: batch.length,
+          studiedSessions: batch.length,
           trivialSessions: trivial,
-          miner,
+          learner,
         };
       }
       case "consent_off":
       case "credit_limit":
       case "quota_exceeded": {
         // Clean refusals are not failures: no backoff, watermark stays put. Persist the reason
-        // so the Activity view and --status can explain why mining is paused.
+        // so the Activity view and --status can explain why studying is paused.
         const at = now().toISOString();
         saveState({
           ...state,
@@ -314,12 +314,12 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
           consecutive_failures: 0,
           last_refusal: {
             at,
-            outcome: miner.outcome,
-            message: miner.message ?? "Mining unavailable right now.",
+            outcome: learner.outcome,
+            message: learner.message ?? "Studying unavailable right now.",
           },
         });
-        logger.debug("sync", `mining skipped by gateway: ${miner.outcome}`);
-        return { status: "skipped-gateway", ...base, minedSessions: 0, miner };
+        logger.debug("sync", `studying skipped by gateway: ${learner.outcome}`);
+        return { status: "skipped-gateway", ...base, studiedSessions: 0, learner };
       }
       default: {
         // settings_conflict / error: real failures — back off before retrying.
@@ -328,13 +328,13 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
           last_attempt_at: now().toISOString(),
           consecutive_failures: state.consecutive_failures + 1,
         });
-        logger.debug("sync", `mining failed: ${miner.outcome}; ${miner.message ?? ""}`);
+        logger.debug("sync", `studying failed: ${learner.outcome}; ${learner.message ?? ""}`);
         return {
           status: "mine-failed",
           ...base,
-          minedSessions: 0,
-          miner,
-          error: miner.message,
+          studiedSessions: 0,
+          learner,
+          error: learner.message,
         };
       }
     }

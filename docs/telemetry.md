@@ -167,7 +167,7 @@ Current common setup properties are `cli_version`, `install_channel`, `platform`
 Current callers also use only these workflow properties: `onboarding_run_id`,
 `has_deployment_option`, `mode_option`, `flow_kind`, `reason`, `provider_count`, `providers`,
 `completed_mcp`, `completed_skill`, `completed_agents_md`, `completed_logs_handoff`, and
-`logs_handoff` (`accepted` / `declined` / `cancelled`, only when the post-setup log-mining
+`logs_handoff` (`accepted` / `declined` / `cancelled`, only when the post-setup log-study
 confirm was shown). Setup events use stable names in the
 `cli_onboarding_*` family. They do not include raw authentication errors. This path uses a dedicated
 no-refresh client, runs without blocking setup, refuses redirects, and aborts its request after

@@ -158,9 +158,9 @@ describe("menuSelect", () => {
     vi.useFakeTimers();
     try {
       const { input, output, written } = fakeIO();
-      let mining = true;
+      let studying = true;
       const buildOptions = () => [
-        { label: mining ? "Activity (mining)" : "Activity", value: "sync" },
+        { label: studying ? "Activity (studying)" : "Activity", value: "sync" },
         { label: "Exit", value: "exit" },
       ];
       const redrawScreen = vi.fn();
@@ -174,13 +174,13 @@ describe("menuSelect", () => {
       vi.advanceTimersByTime(250);
       expect(redrawScreen).not.toHaveBeenCalled();
 
-      // Mining ends → the next poll repaints banner + menu with fresh rows.
-      mining = false;
+      // Studying ends → the next poll repaints banner + menu with fresh rows.
+      studying = false;
       input.emit("data", DOWN); // move to Exit first: selection must survive
       vi.advanceTimersByTime(150);
       expect(redrawScreen).toHaveBeenCalledTimes(1);
       const text = stripAnsi(written.join(""));
-      expect(text).toContain("Activity (mining)");
+      expect(text).toContain("Activity (studying)");
       expect(text.split("Activity\n").length).toBeGreaterThan(1);
 
       // Selection survived the repaint; the timer dies with the menu.

@@ -128,7 +128,7 @@ describe("loadSyncState / saveSyncState", () => {
     expect(state.total_learning_tokens).toBe(0);
   });
 
-  it("drops malformed mined-session records and backfills the count", () => {
+  it("drops malformed studied-session records and backfills the count", () => {
     writeFileSync(
       syncStatePath(configDir),
       JSON.stringify({

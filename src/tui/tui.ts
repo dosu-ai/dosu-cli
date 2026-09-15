@@ -85,7 +85,7 @@ function bannerContext(cfg: Config, session: SessionState): BannerContext {
     setupMissing: isAuthenticated(cfg) && !session.expired ? missingSetupSteps(cfg) : [],
     ...(inGitWorkTree() ? { repoAgentsMd: dosuAgentsSectionState() } : {}),
     agents,
-    mining: isMining(),
+    studying: isStudying(),
     ...(latest
       ? { update: { version: latest, hint: buildUpdateHint(INSTALL_CHANNEL, isNpxInvocation()) } }
       : {}),
@@ -168,12 +168,12 @@ function setupHint(cfg: Config): string {
   );
 }
 
-/** Lock-file check only (no log read): is a mining run active right now? */
-function isMining(): boolean {
+/** Lock-file check only (no log read): is a study run active right now? */
+function isStudying(): boolean {
   try {
     return getSyncStatus({ readLog: () => "" }).running;
   } catch {
-    // Mining state is cosmetic in the banner and menu; never block on it.
+    // Studying state is cosmetic in the banner and menu; never block on it.
     return false;
   }
 }
@@ -203,7 +203,7 @@ async function runMainMenu(): Promise<void> {
     cfg.active_account = fresh.active_account;
   };
 
-  // Re-polled while the menu is open so background mining updates the label.
+  // Re-polled while the menu is open so background studying updates the label.
   // Signed out (or expired), the menu is just the login door; Setup leads until complete.
   const buildOptions = (): MenuOption[] => {
     if (session.expired) {
@@ -230,10 +230,10 @@ async function runMainMenu(): Promise<void> {
         { label: "Exit", value: "exit" },
       ];
     }
-    const mining = isMining();
+    const studying = isStudying();
     return [
       {
-        label: mining ? `Activity \u26CF\uFE0F ${brand("mining sessions...")}` : "Activity",
+        label: studying ? `Activity \u26CF\uFE0F ${brand("studying sessions...")}` : "Activity",
         value: "sync",
       },
       { label: "Knowledge report", hint: "(opens in browser)", value: "report" },
@@ -257,7 +257,7 @@ async function runMainMenu(): Promise<void> {
   // Main menu
   while (true) {
     const action = await menuSelect("What would you like to do?", buildOptions(), {
-      // Repaint home when the mining lock flips so banner and label stay fresh.
+      // Repaint home when the studying lock flips so banner and label stay fresh.
       refresh: { options: buildOptions, redrawScreen: home },
     });
 
@@ -336,14 +336,14 @@ async function runSettings(cfg: Config): Promise<void> {
     const action = await menuSelect("Settings", [
       { label: "Switch organization", hint: target?.org_name, value: "switch-org" },
       { label: "Switch Library", hint: library, value: "switch-library" },
-      { label: "Mining scope", hint: scope, value: "projects" },
+      { label: "Study scope", hint: scope, value: "projects" },
       { label: "Run setup", hint: "rerun the setup wizard", value: "setup" },
       { label: "Log out", hint: "clear stored credentials", value: "logout" },
       { label: "Back", value: "back" },
     ]);
     if (action === null || action === "back") return;
     if (action === "projects") {
-      await runMiningProjectsSetting();
+      await runStudyingProjectsSetting();
       continue;
     }
     if (action === "setup") {
@@ -390,9 +390,9 @@ function discoverProjectDirs(): string[] {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([dir]) => dir);
 }
 
-/** Scope mining to selected folders (subdirectories included); picking everything clears the
- * filter so new folders are mined too. */
-async function runMiningProjectsSetting(): Promise<void> {
+/** Scope studying to selected folders (subdirectories included); picking everything clears the
+ * filter so new folders are studied too. */
+async function runStudyingProjectsSetting(): Promise<void> {
   const dirs = discoverProjectDirs();
   if (dirs.length === 0) {
     p.log.info("No local agent sessions found yet; nothing to scope.");
@@ -419,7 +419,7 @@ async function runMiningProjectsSetting(): Promise<void> {
   const all = selected.length === dirs.length;
   saveSyncState(all ? state : { ...state, project_filter: [...selected] });
   const scope = all ? "all folders" : (selected as string[]).map(displayDir).join(", ");
-  p.log.success(`Mining scope ${dim(`\u00B7 ${scope}`)}`);
+  p.log.success(`Study scope ${dim(`\u00B7 ${scope}`)}`);
 }
 
 async function handleAuthenticate(cfg: ReturnType<typeof loadConfig>): Promise<void> {

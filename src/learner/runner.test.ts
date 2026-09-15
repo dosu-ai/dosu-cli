@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../sessions/scan";
 import { getVersionString } from "../version/version";
-import { classifyGatewayError, runMiner, traceAgentMessage } from "./runner";
+import { classifyGatewayError, runLearner, traceAgentMessage } from "./runner";
 
 const debugMock = vi.hoisted(() => vi.fn());
 vi.mock("../debug/logger", () => ({
@@ -80,9 +80,9 @@ describe("classifyGatewayError", () => {
   });
 });
 
-describe("runMiner", () => {
+describe("runLearner", () => {
   it("fails closed when the gateway URL is not absolute", async () => {
-    const result = await runMiner({ ...baseOptions, gatewayURL: "/v1/llm-gateway" });
+    const result = await runLearner({ ...baseOptions, gatewayURL: "/v1/llm-gateway" });
 
     expect(result.outcome).toBe("error");
     expect(result.message).toMatch(/gateway URL/i);
@@ -94,7 +94,7 @@ describe("runMiner", () => {
       { file: "/etc/claude-code/managed-settings.json", keys: ["apiKeyHelper"] },
     ]);
 
-    const result = await runMiner(baseOptions);
+    const result = await runLearner(baseOptions);
 
     expect(result.outcome).toBe("settings_conflict");
     expect(result.message).toContain("managed-settings.json");
@@ -105,7 +105,7 @@ describe("runMiner", () => {
   it("completes on a success result and reports turns", async () => {
     queryReturning(successResult());
 
-    const result = await runMiner(baseOptions);
+    const result = await runLearner(baseOptions);
 
     expect(result).toMatchObject({ outcome: "completed", turns: 3, notesWritten: 0 });
   });
@@ -113,12 +113,12 @@ describe("runMiner", () => {
   it("wires the gateway env, isolation options, and both MCP servers", async () => {
     queryReturning(successResult());
 
-    await runMiner({ ...baseOptions, runID: "run-123" });
+    await runLearner({ ...baseOptions, runID: "run-123" });
 
     const params = queryMock.mock.calls[0][0];
     expect(params.options.env.ANTHROPIC_BASE_URL).toBe("http://localhost:7001/v1/llm-gateway");
     expect(params.options.env.ANTHROPIC_AUTH_TOKEN).toBe("sk_user_test");
-    expect(params.options.env.CLAUDE_CONFIG_DIR).toContain("dosu-miner-");
+    expect(params.options.env.CLAUDE_CONFIG_DIR).toContain("dosu-learner-");
     expect(params.options.settingSources).toEqual([]);
     expect(params.options.persistSession).toBe(false);
     expect(params.options.sandbox).toEqual({ enabled: true, failIfUnavailable: false });
@@ -129,7 +129,7 @@ describe("runMiner", () => {
     expect(params.options.mcpServers.dosu.headers).toMatchObject({
       "X-Dosu-API-Key": "sk_user_test",
       "X-Dosu-Session-Id": "run-123",
-      "X-Dosu-Client": `dosu-cli-miner/${getVersionString()}`,
+      "X-Dosu-Client": `dosu-cli-learner/${getVersionString()}`,
       "X-Dosu-Session-Started-At": "2026-08-27T00:00:00.000Z",
     });
     expect(params.options.mcpServers.dosu.headers).not.toHaveProperty("X-Dosu-Repo");
@@ -146,7 +146,7 @@ describe("runMiner", () => {
     resolveExecutableMock.mockReturnValue("/home/u/.local/bin/claude");
     queryReturning(successResult());
 
-    await runMiner(baseOptions);
+    await runLearner(baseOptions);
 
     const params = queryMock.mock.calls[0][0];
     expect(params.options.pathToClaudeCodeExecutable).toBe("/home/u/.local/bin/claude");
@@ -155,16 +155,16 @@ describe("runMiner", () => {
   it("routes SDK stderr into the debug log", async () => {
     queryReturning(successResult());
 
-    await runMiner(baseOptions);
+    await runLearner(baseOptions);
 
     queryMock.mock.calls[0][0].options.stderr("boom on the sdk");
-    expect(debugMock).toHaveBeenCalledWith("miner", "[sdk] boom on the sdk");
+    expect(debugMock).toHaveBeenCalledWith("learner", "[sdk] boom on the sdk");
   });
 
   it("canUseTool denies non-allowlisted tools and enforces the note cap", async () => {
     queryReturning(successResult());
 
-    await runMiner({ ...baseOptions, maxNotes: 2 });
+    await runLearner({ ...baseOptions, maxNotes: 2 });
 
     const { canUseTool } = queryMock.mock.calls[0][0].options;
     const signal = { signal: new AbortController().signal, suggestions: [] };
@@ -183,7 +183,7 @@ describe("runMiner", () => {
 
   it("counts allowed write_knowledge calls in the result", async () => {
     queryReturning(successResult());
-    // Invoke the gate before the iterator is consumed: runMiner awaits the
+    // Invoke the gate before the iterator is consumed: runLearner awaits the
     // full stream, so trigger writes from inside a queued microtask.
     type GateParams = {
       options: { canUseTool: (name: string, input: object, extra: object) => Promise<unknown> };
@@ -196,7 +196,7 @@ describe("runMiner", () => {
       })();
     });
 
-    const result = await runMiner(baseOptions);
+    const result = await runLearner(baseOptions);
 
     expect(result.notesWritten).toBe(2);
   });
@@ -213,7 +213,7 @@ describe("runMiner", () => {
       {},
     ] as const;
 
-  it("attributes each note to the session currently being mined", async () => {
+  it("attributes each note to the session currently being studied", async () => {
     const g: GateResult[] = [];
     queryMock.mockImplementation((params: GateParams) => {
       return (async function* () {
@@ -226,14 +226,14 @@ describe("runMiner", () => {
       })();
     });
 
-    const result = await runMiner(baseOptions);
+    const result = await runLearner(baseOptions);
 
     expect(result.notesWritten).toBe(2);
     expect(g[0].updatedInput).toEqual({ title: "note-a", content: "c", transcript_id: "s1" });
     expect(g[1].updatedInput).toEqual({ title: "note-b", content: "c", transcript_id: "s2" });
   });
 
-  it("attributes EVERY note of a session read once and mined for several notes", async () => {
+  it("attributes EVERY note of a session read once and studied for several notes", async () => {
     const g: GateResult[] = [];
     queryMock.mockImplementation((params: GateParams) => {
       return (async function* () {
@@ -249,11 +249,11 @@ describe("runMiner", () => {
       })();
     });
 
-    const result = await runMiner(baseOptions);
+    const result = await runLearner(baseOptions);
 
     expect(result.notesWritten).toBe(5);
     // All three s1 notes → s1; both s2 notes → s2. No note goes null just for
-    // being the 2nd+ from its session (the bug real mining surfaced).
+    // being the 2nd+ from its session (the bug real studying surfaced).
     expect(g.map((r) => r.updatedInput?.transcript_id)).toEqual(["s1", "s1", "s1", "s2", "s2"]);
   });
 
@@ -272,7 +272,7 @@ describe("runMiner", () => {
       })();
     });
 
-    const result = await runMiner(baseOptions);
+    const result = await runLearner(baseOptions);
 
     expect(g[0].behavior).toBe("deny");
     expect(g[0].message).toMatch(/one session|before reading the next/i);
@@ -290,7 +290,7 @@ describe("runMiner", () => {
       })();
     });
 
-    const result = await runMiner(baseOptions);
+    const result = await runLearner(baseOptions);
 
     expect(result.notesWritten).toBe(1);
     // No session to attribute → genuinely unattributed. Any transcript_id the
@@ -311,7 +311,7 @@ describe("runMiner", () => {
       })();
     });
 
-    const result = await runMiner(baseOptions);
+    const result = await runLearner(baseOptions);
 
     expect(result.notesWritten).toBe(1);
     // Stripped: an id-less read is no session, so the model's value must not survive.
@@ -321,7 +321,7 @@ describe("runMiner", () => {
   it("maps a consent-off gateway refusal from the result text", async () => {
     queryReturning(successResult({ is_error: true, result: "API error: dosu_consent_off: nope" }));
 
-    const result = await runMiner(baseOptions);
+    const result = await runLearner(baseOptions);
 
     expect(result.outcome).toBe("consent_off");
     expect(result.message).toContain("org admin");
@@ -336,7 +336,7 @@ describe("runMiner", () => {
       })();
     });
 
-    const result = await runMiner(baseOptions);
+    const result = await runLearner(baseOptions);
 
     expect(result.outcome).toBe("quota_exceeded");
     expect(result.message).toContain("resume tomorrow");
@@ -347,7 +347,7 @@ describe("runMiner", () => {
       successResult({ subtype: "error_during_execution", is_error: true, result: undefined }),
     );
 
-    const result = await runMiner(baseOptions);
+    const result = await runLearner(baseOptions);
 
     expect(result.outcome).toBe("error");
   });
@@ -355,7 +355,7 @@ describe("runMiner", () => {
   it("returns an error when the stream ends without a result", async () => {
     queryReturning({ type: "assistant" });
 
-    const result = await runMiner(baseOptions);
+    const result = await runLearner(baseOptions);
 
     expect(result.outcome).toBe("error");
     expect(result.message).toContain("without a result");
@@ -366,7 +366,7 @@ describe("runMiner", () => {
       throw new Error("spawn ENOENT");
     });
 
-    const result = await runMiner(baseOptions);
+    const result = await runLearner(baseOptions);
 
     expect(result.outcome).toBe("error");
   });
