@@ -672,7 +672,7 @@ describe("renderActivityFrame", () => {
     );
     expect(frame).toContain("Activity");
     expect(frame).toContain("Queued (1)");
-    expect(frame).toContain("Studied (7)");
+    expect(frame).toContain("Studied (1)"); // unique sessions in history, not lifetime passes
     expect(frame).toContain(
       "tab switch \u00B7 \u2191\u2193 scroll \u00B7 f full rows \u00B7 s sync now \u00B7 esc back",
     );
@@ -924,6 +924,28 @@ describe("renderActivityFrame", () => {
     expect(frame).not.toContain("[sync] activity line");
   });
 
+  it("collapses repeat study passes to the session's latest row and counts unique sessions", () => {
+    const status = makeStatus({
+      state: {
+        schema_version: 1,
+        watermark: "2026-05-12T19:00:00.000Z",
+        consecutive_failures: 0,
+        mined_sessions: [
+          { at: "2026-05-12T17:00:00.000Z", session: "cursor/dup-1", project: "p" },
+          { at: "2026-05-12T18:00:00.000Z", session: "claude/solo-1", project: "p" },
+          { at: "2026-05-12T19:00:00.000Z", session: "cursor/dup-1", project: "p" },
+        ],
+      },
+    });
+    const frame = stripAnsi(
+      renderActivityFrame(status, [], 80, null, { tab: "studied", scroll: 0 }),
+    );
+    expect(frame).toContain("Studied (2)");
+    const dupRows = frame.split("\n").filter((line) => line.includes("dup-1"));
+    expect(dupRows).toHaveLength(1);
+    expect(dupRows[0]).toContain("05-12 19:00");
+  });
+
   it("shows the resolved project name instead of the stored slug when provided", () => {
     const status = makeStatus({
       state: {
@@ -1117,7 +1139,7 @@ describe("runActivityView", () => {
     // First tab flips to the studied-sessions history from the persisted state.
     input.emit("data", "\t");
     const afterFirstTab = stripAnsi(written.at(-1) ?? "");
-    expect(afterFirstTab).toContain("Studied (7)");
+    expect(afterFirstTab).toContain("Studied (1)");
     expect(afterFirstTab).toContain("cursor    09-02 23:00  -  abc");
 
     // Second tab lands on the queued backlog from the injected scanner.

@@ -450,7 +450,11 @@ export function renderActivityFrame(
   const fullRows = Boolean(pane.fullRows);
   const withName = <T extends { project?: string }>(item: T, key: string): T =>
     projectNames[key] ? { ...item, project: projectNames[key] } : item;
-  const studiedRows = (status.state.mined_sessions ?? []).map((r) => {
+  // A session studied again after new activity appends another history record;
+  // the list shows only its latest pass (analytics still count every pass).
+  const latestPass = new Map<string, StudiedSessionRecord>();
+  for (const r of status.state.mined_sessions ?? []) latestPass.set(r.session, r);
+  const studiedRows = [...latestPass.values()].map((r) => {
     const record = withName(r, r.session);
     const name = sessionNames[r.session];
     return fullRows
@@ -513,7 +517,7 @@ export function renderActivityFrame(
       pane.tab,
       queued.length,
       open.length,
-      status.state.total_mined ?? studiedRows.length,
+      latestPass.size,
       width,
     ),
     ...listRows,
@@ -607,7 +611,9 @@ function createRowNamer(): (status: SyncStatus, backlog: SessionBacklog) => RowN
       title(key, s);
       resolved = true;
     }
-    for (const r of status.state.mined_sessions ?? []) {
+    // Newest first: the view shows the end of the history, so the visible
+    // rows must win the per-draw budget over the offscreen backlog.
+    for (const r of [...(status.state.mined_sessions ?? [])].reverse()) {
       const key = r.session;
       if (!names.projects[key]) {
         const dir = dirs.cached(key) ?? (r.project ? fromSlug(r.project) : null);
