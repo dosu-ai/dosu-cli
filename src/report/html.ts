@@ -12,7 +12,6 @@ import type {
   ReportInventory,
 } from "./types";
 
-const CHARS_PER_TOKEN = 4;
 const MAX_TRACE_STEPS = 50;
 const PREVIEW_CHARS = 80;
 const SQL_DISPLAY = new Set(["execute_sql", "query_run", "list_tables"]);
@@ -54,45 +53,6 @@ function applyStatusDefaults(candidates: ReportCandidate[], dryRun: boolean): Re
     const current = (c.status ?? "").trim().toLowerCase();
     return { ...c, status: known.has(current) ? current : fallback };
   });
-}
-
-export function tokenTotalsFromCandidates(
-  candidates: ReportCandidate[],
-  inventory: ReportInventory,
-): {
-  baseline_tokens: number;
-  replaced_baseline_tokens: number;
-  read_knowledge_tokens: number;
-  tokens_saved: number;
-  pct_saved: number;
-} | null {
-  if (candidates.length === 0) return null;
-  let replaced = 0;
-  let hasRediscovery = false;
-  let readCost = 0;
-  for (const c of candidates) {
-    const raw = c.approx_rediscovery_tokens;
-    if (raw != null) {
-      hasRediscovery = true;
-      replaced += Math.max(0, Number(raw) || 0);
-    }
-    const blob = `${c.title ?? ""}\n${c.content ?? ""}`;
-    readCost += Math.round(blob.length / CHARS_PER_TOKEN);
-  }
-  if (!hasRediscovery) return null;
-  let baseline = inventory.totals?.learning_tokens ?? 0;
-  if (!baseline) {
-    baseline = inventory.transcripts.reduce((sum, t) => sum + (t.learning_tokens || 0), 0);
-  }
-  const saved = Math.max(0, replaced - readCost);
-  const pct = baseline ? Math.round((1000 * saved) / baseline) / 10 : 0;
-  return {
-    baseline_tokens: baseline,
-    replaced_baseline_tokens: replaced,
-    read_knowledge_tokens: readCost,
-    tokens_saved: saved,
-    pct_saved: pct,
-  };
 }
 
 function presentationCopy(c: ReportCandidate): [string, string] {
