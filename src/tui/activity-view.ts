@@ -700,7 +700,8 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
               // change so the Queued tab fills immediately.
               clearHistory();
               minedBeforeRun = null;
-              note = "[sync] mining history cleared \u00B7 the next run re-mines every local session";
+              note =
+                "[sync] mining history cleared \u00B7 the next run re-mines every local session";
             } else if (mode === "stop") {
               // Kill first, then flip the pause switch: a dying run's last state save
               // could otherwise overwrite the flag with its pre-pause snapshot.
