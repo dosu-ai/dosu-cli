@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildReportHtml, parseLineSpec, renderTraceHtml, tokenTotalsFromCandidates } from "./html";
+import { buildReportHtml, parseLineSpec, renderTraceHtml } from "./html";
 import type { ReportCandidate, ReportInventory } from "./types";
 
 const inventory: ReportInventory = {
@@ -26,22 +26,6 @@ const written: ReportCandidate = {
   user_query: "why does auth retry?",
 };
 
-describe("tokenTotalsFromCandidates", () => {
-  it("uses rediscovery minus note read cost against inventory learning_tokens", () => {
-    const totals = tokenTotalsFromCandidates([written], inventory);
-    expect(totals?.baseline_tokens).toBe(20_000);
-    expect(totals?.replaced_baseline_tokens).toBe(12_000);
-    expect(totals?.read_knowledge_tokens).toBeGreaterThan(0);
-    expect(totals?.tokens_saved).toBe(12_000 - (totals?.read_knowledge_tokens ?? 0));
-  });
-
-  it("returns null when no note has a rediscovery estimate", () => {
-    expect(
-      tokenTotalsFromCandidates([{ title: "x", content: "y", status: "written" }], inventory),
-    ).toBeNull();
-  });
-});
-
 describe("buildReportHtml", () => {
   it("renders the skill report sections for written notes", () => {
     const html = buildReportHtml({
@@ -55,7 +39,7 @@ describe("buildReportHtml", () => {
     expect(html).toContain("Dosu knowledge report — Acme");
     expect(html).toContain("Dosu · Knowledge report");
     expect(html).toContain("Iowan Old Style");
-    expect(html).toContain("Estimated context savings");
+    expect(html).toContain("Tokens scanned");
     expect(html).toContain("Notes written to Dosu");
     expect(html).toContain("OAuth refresh token expiry");
     expect(html).toContain("Heaviest sessions");
@@ -132,12 +116,15 @@ describe("buildReportHtml empty and mixed", () => {
     const html = buildReportHtml({ inventory, candidates: [] });
     expect(html).toContain("write_knowledge notes");
     expect(html).toContain("No write_knowledge payloads yet");
-    expect(html).toContain("No rediscovery estimates");
+    expect(html).toContain("Tokens scanned");
   });
 
   it("falls back to transcript learning_tokens when inventory totals are missing", () => {
-    const totals = tokenTotalsFromCandidates([written], { transcripts: inventory.transcripts });
-    expect(totals?.baseline_tokens).toBe(20_000);
+    const html = buildReportHtml({
+      inventory: { transcripts: inventory.transcripts },
+      candidates: [written],
+    });
+    expect(html).toContain("20,000");
   });
 
   it("labels mixed statuses in the notes heading", () => {
@@ -477,20 +464,6 @@ describe("renderTraceHtml coverage", () => {
 describe("remaining html branches", () => {
   it("parses invalid fragments without throwing", () => {
     expect([...parseLineSpec(" , ,1-x, foo, 8")]).toEqual([8]);
-  });
-
-  it("computes 0% savings when the inventory has no baseline", () => {
-    const totals = tokenTotalsFromCandidates(
-      [{ title: "n", content: "c", approx_rediscovery_tokens: 0 }],
-      { transcripts: [] },
-    );
-    expect(totals).toEqual({
-      baseline_tokens: 0,
-      replaced_baseline_tokens: 0,
-      read_knowledge_tokens: Math.round("n\nc".length / 4),
-      tokens_saved: 0,
-      pct_saved: 0,
-    });
   });
 
   it("renders untitled notes, mixed statuses, and missing inventory rows", () => {
