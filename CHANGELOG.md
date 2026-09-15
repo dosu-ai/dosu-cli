@@ -1,3 +1,10 @@
+# [0.53.0-beta.12](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.11...v0.53.0-beta.12) (2026-09-15)
+
+
+### Bug Fixes
+
+* **tui:** window select() to the terminal height like multiselect ([#219](https://github.com/dosu-ai/dosu-cli/issues/219)) ([baf8153](https://github.com/dosu-ai/dosu-cli/commit/baf8153941c6bcacf2b8fcbf2ddde3b9fae08b0b))
+
 # [0.53.0-beta.11](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.10...v0.53.0-beta.11) (2026-09-14)
 
 
