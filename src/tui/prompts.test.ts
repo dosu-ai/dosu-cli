@@ -198,6 +198,22 @@ describe("select", () => {
     input.emit("data", "\r");
     await expect(result).resolves.toBe("v9");
   });
+
+  it("assumes 24 rows when the output does not report a height", async () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ value: `v${i}`, label: `Option ${i}` }));
+    const { input, output, written } = fakeIO();
+    (output as { rows?: number }).rows = undefined;
+    const result = select({ message: "Pick", options: many }, { input, output });
+
+    // 24 - 8 chrome → 16 visible option rows.
+    const first = stripAnsi(written.join(""));
+    expect(first).toContain("Option 15");
+    expect(first).not.toContain("Option 16");
+    expect(first).toContain("\u2193 14 more");
+
+    input.emit("data", ESC);
+    expect(isCancel(await result)).toBe(true);
+  });
 });
 
 describe("multiselect", () => {
