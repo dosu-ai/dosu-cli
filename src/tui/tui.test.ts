@@ -211,6 +211,7 @@ beforeEach(() => {
     () =>
       ({
         resolve: (s: AgentSession) => (s.project ? `/repo/${s.project}` : null),
+        cached: () => null,
         flush: vi.fn(),
       }) as ReturnType<typeof createProjectDirResolver>,
   );
