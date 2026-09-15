@@ -8,6 +8,7 @@ import { createLogFollower } from "../debug/follow";
 import { logger, stripAnsiCodes } from "../debug/logger";
 import { createProjectDirResolver, unmungeSlug } from "../sessions/project-dir";
 import type { AgentSession } from "../sessions/scan";
+import { createSessionTitleResolver, reconstructSession } from "../sessions/session-title";
 import { brand } from "../setup/styles";
 import { listSessionBacklog, type SessionBacklog } from "../sync/backlog";
 import { spawnDetachedSelf } from "../sync/detach";
@@ -133,7 +134,11 @@ function clip(text: string, max: number): string {
 
 /** Studied-history record as a row ("cursor    09-02 23:00  dosu  abc"), same columns as Queued.
  * `full` skips the per-column clipping (the f toggle's full-rows mode). */
-export function formatStudiedRow(record: StudiedSessionRecord, full = false): string {
+export function formatStudiedRow(
+  record: StudiedSessionRecord,
+  full = false,
+  name?: string,
+): string {
   const match = record.at.match(/^\d{4}-(\d{2}-\d{2})T(\d{2}:\d{2})/);
   const stamp = match ? `${match[1]} ${match[2]}` : record.at;
   const slash = record.session.indexOf("/");
@@ -141,16 +146,22 @@ export function formatStudiedRow(record: StudiedSessionRecord, full = false): st
   const id = slash > 0 ? record.session.slice(slash + 1) : record.session;
   const rawProject = record.project ?? "-";
   const project = full ? rawProject : clip(rawProject, 28);
-  return `${harness.padEnd(8)}  ${stamp}  ${project}  ${full ? id : clip(id, 24)}`;
+  const label = full ? (name ? `${name} \u00B7 ${id}` : id) : clip(name ?? id, 44);
+  return `${harness.padEnd(8)}  ${stamp}  ${project}  ${label}`;
 }
 
 /** Queued session as a row: agent, updated (UTC), project, session id.
  * `full` skips the per-column clipping (the f toggle's full-rows mode). */
-export function formatQueuedRow(session: AgentSession, full = false): string {
+export function formatQueuedRow(session: AgentSession, full = false, name?: string): string {
   const stamp = session.updated.replace("T", " ").slice(5, 16);
   const rawProject = session.project ?? "-";
   const project = full ? rawProject : clip(rawProject, 28);
-  return `${session.harness.padEnd(8)}  ${stamp}  ${project}  ${full ? session.id : clip(session.id, 24)}`;
+  const label = full
+    ? name
+      ? `${name} \u00B7 ${session.id}`
+      : session.id
+    : clip(name ?? session.id, 44);
+  return `${session.harness.padEnd(8)}  ${stamp}  ${project}  ${label}`;
 }
 
 /** Hard-wrap one table row to `width`, indenting continuation lines. Projects and session ids
@@ -393,6 +404,8 @@ export function renderActivityFrame(
   runProgress: RunProgress | null = null,
   /** Friendly project names by `harness/id` key; rows fall back to the stored slug. */
   projectNames: Readonly<Record<string, string>> = {},
+  /** Session display names by `harness/id` key; rows fall back to the session id. */
+  sessionNames: Readonly<Record<string, string>> = {},
 ): string {
   const studied = status.state.watermark
     ? `Studied sessions up to ${localTime(status.state.watermark)}`
@@ -439,13 +452,18 @@ export function renderActivityFrame(
     projectNames[key] ? { ...item, project: projectNames[key] } : item;
   const studiedRows = (status.state.mined_sessions ?? []).map((r) => {
     const record = withName(r, r.session);
+    const name = sessionNames[r.session];
     return fullRows
-      ? formatStudiedRow(record, true)
-      : formatActivityLine(formatStudiedRow(record), width);
+      ? formatStudiedRow(record, true, name)
+      : formatActivityLine(formatStudiedRow(record, false, name), width);
   });
   const sessionRow = (session: AgentSession) => {
-    const s = withName(session, `${session.harness}/${session.id}`);
-    return fullRows ? formatQueuedRow(s, true) : formatActivityLine(formatQueuedRow(s), width);
+    const key = `${session.harness}/${session.id}`;
+    const s = withName(session, key);
+    const name = sessionNames[key];
+    return fullRows
+      ? formatQueuedRow(s, true, name)
+      : formatActivityLine(formatQueuedRow(s, false, name), width);
   };
   const queuedRows = queued.map(sessionRow);
   const openRows = open.map(sessionRow);
@@ -541,40 +559,79 @@ export interface ActivityViewIO {
   setPaused?: (paused: boolean) => void;
   /** The scanned backlog for the Queued and Open tabs; re-run when the watermark moves. */
   listBacklog?: () => SessionBacklog;
-  /** Friendly project names by `harness/id` key for the session rows. */
-  projectNames?: (status: SyncStatus, backlog: SessionBacklog) => Record<string, string>;
+  /** Friendly project and session names by `harness/id` key for the session rows. */
+  rowNames?: (status: SyncStatus, backlog: SessionBacklog) => RowNames;
   pollMs?: number;
 }
 
+interface RowNames {
+  projects: Record<string, string>;
+  titles: Record<string, string>;
+}
+
+/** How many uncached session titles one draw resolves; the list fills over a few polls
+ * instead of stalling the first paint on hundreds of file reads. */
+const TITLE_READS_PER_DRAW = 25;
+
 /** Default projectNames source: resolve real working directories (cached on disk) for live
  * sessions, cache-only + slug un-munging for studied history, shown as the directory basename. */
-function createProjectNamer(): (
-  status: SyncStatus,
-  backlog: SessionBacklog,
-) => Record<string, string> {
-  const resolver = createProjectDirResolver();
+function createRowNamer(): (status: SyncStatus, backlog: SessionBacklog) => RowNames {
+  const dirs = createProjectDirResolver();
+  const titles = createSessionTitleResolver();
   const bySlug = new Map<string, string | null>();
   const fromSlug = (slug: string): string | null => {
     if (!bySlug.has(slug)) bySlug.set(slug, unmungeSlug(slug));
     return bySlug.get(slug) ?? null;
   };
   return (status, backlog) => {
-    const names: Record<string, string> = {};
+    const names: RowNames = { projects: {}, titles: {} };
+    let budget = TITLE_READS_PER_DRAW;
     let resolved = false;
+    const title = (key: string, session: AgentSession) => {
+      const hit = titles.cached(key);
+      if (hit) {
+        names.titles[key] = hit;
+        return;
+      }
+      if (budget <= 0) return;
+      budget--;
+      const t = titles.resolve(session);
+      resolved = true;
+      if (t) names.titles[key] = t;
+    };
     for (const s of [...backlog.queued, ...backlog.open]) {
       if (!existsSync(s.path)) continue;
-      const dir = resolver.resolve(s);
-      if (dir) {
-        names[`${s.harness}/${s.id}`] = basename(dir);
-        resolved = true;
-      }
+      const key = `${s.harness}/${s.id}`;
+      const dir = dirs.resolve(s);
+      if (dir) names.projects[key] = basename(dir);
+      title(key, s);
+      resolved = true;
     }
     for (const r of status.state.mined_sessions ?? []) {
-      if (names[r.session]) continue;
-      const dir = resolver.cached(r.session) ?? (r.project ? fromSlug(r.project) : null);
-      if (dir) names[r.session] = basename(dir);
+      const key = r.session;
+      if (!names.projects[key]) {
+        const dir = dirs.cached(key) ?? (r.project ? fromSlug(r.project) : null);
+        if (dir) names.projects[key] = basename(dir);
+      }
+      if (!names.titles[key]) {
+        const hit = titles.cached(key);
+        if (hit) {
+          names.titles[key] = hit;
+        } else if (budget > 0) {
+          const slash = key.indexOf("/");
+          const session = reconstructSession(
+            key.slice(0, slash) as AgentSession["harness"],
+            key.slice(slash + 1),
+            r.project,
+          );
+          if (session) title(key, session);
+        }
+      }
     }
-    if (resolved) resolver.flush();
+    if (resolved) {
+      dirs.flush();
+      titles.flush();
+    }
     return names;
   };
 }
@@ -604,7 +661,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
   const stopSync = io.stopSync ?? stopSyncRun;
   const setPaused = io.setPaused ?? setSyncPaused;
   const listBacklog = io.listBacklog ?? listSessionBacklog;
-  const projectNamesFor = io.projectNames ?? createProjectNamer();
+  const rowNamesFor = io.rowNames ?? createRowNamer();
   const pollMs = io.pollMs ?? ACTIVITY_VIEW_POLL_MS;
 
   const seed = readLog();
@@ -662,6 +719,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
     if ((confirmSync === "start" || confirmSync === "resume") && status.running) confirmSync = null;
     if (confirmSync === "stop" && !status.running) confirmSync = null;
     const width = activityWidth(output.columns ?? 80);
+    const rowNames = rowNamesFor(status, sessions);
     const frame = renderActivityFrame(
       status,
       activity,
@@ -672,7 +730,8 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
       studiedBeforeRun ?? 0,
       sessions.open,
       runProgress,
-      projectNamesFor(status, sessions),
+      rowNames.projects,
+      rowNames.titles,
     );
     if (frame === lastFrame) return;
     lastFrame = frame;

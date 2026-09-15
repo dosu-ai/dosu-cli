@@ -216,10 +216,10 @@ describe("formatQueuedRow", () => {
     const row = formatQueuedRow({
       ...queuedSession(),
       project: undefined,
-      id: "a".repeat(40),
+      id: "a".repeat(50),
     });
     expect(row).toContain("  -  ");
-    expect(row).toContain(`${"a".repeat(23)}\u2026`);
+    expect(row).toContain(`${"a".repeat(43)}\u2026`);
   });
 
   it("keeps the full id and project in full mode", () => {
