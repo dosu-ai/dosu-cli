@@ -479,8 +479,8 @@ describe("runKnowledgeSync mining", () => {
     await runKnowledgeSync({ deps });
 
     const logged = mockLoggerDebug.mock.calls.map((c) => c.join(" ")).join("\n");
-    expect(logged).toContain("mined session claude/s-50");
-    expect(logged).toContain("mined session claude/s-30");
+    expect(logged).toContain("studied session claude/s-50");
+    expect(logged).toContain("studied session claude/s-30");
   });
 
   it("persists mined-session history and the all-time count in state", async () => {

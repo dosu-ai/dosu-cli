@@ -233,7 +233,7 @@ async function runMainMenu(): Promise<void> {
     const mining = isMining();
     return [
       {
-        label: mining ? `Activity \u26CF\uFE0F ${brand("mining sessions...")}` : "Activity",
+        label: mining ? `Activity \uD83D\uDCDA ${brand("studying sessions...")}` : "Activity",
         value: "sync",
       },
       { label: "Knowledge report", hint: "(opens in browser)", value: "report" },
@@ -336,7 +336,7 @@ async function runSettings(cfg: Config): Promise<void> {
     const action = await menuSelect("Settings", [
       { label: "Switch organization", hint: target?.org_name, value: "switch-org" },
       { label: "Switch Library", hint: library, value: "switch-library" },
-      { label: "Mining scope", hint: scope, value: "projects" },
+      { label: "Study scope", hint: scope, value: "projects" },
       { label: "Run setup", hint: "rerun the setup wizard", value: "setup" },
       { label: "Log out", hint: "clear stored credentials", value: "logout" },
       { label: "Back", value: "back" },
@@ -400,7 +400,7 @@ async function runMiningProjectsSetting(): Promise<void> {
   }
   const current = loadSyncState().project_filter;
   const selected = await p.multiselect({
-    message: "Mine sessions from which folders?",
+    message: "Study sessions from which folders?",
     options: dirs.map((dir) => ({
       label: dir === UNKNOWN_PROJECT ? "(unknown folder)" : displayDir(dir),
       value: dir,
@@ -419,7 +419,7 @@ async function runMiningProjectsSetting(): Promise<void> {
   const all = selected.length === dirs.length;
   saveSyncState(all ? state : { ...state, project_filter: [...selected] });
   const scope = all ? "all folders" : (selected as string[]).map(displayDir).join(", ");
-  p.log.success(`Mining scope ${dim(`\u00B7 ${scope}`)}`);
+  p.log.success(`Study scope ${dim(`\u00B7 ${scope}`)}`);
 }
 
 async function handleAuthenticate(cfg: ReturnType<typeof loadConfig>): Promise<void> {

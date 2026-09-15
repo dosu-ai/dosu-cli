@@ -779,7 +779,7 @@ describe("runTUI", () => {
     expect(afterLogout.map((o) => o.value)).toContain("auth");
   });
 
-  it("marks the Activity entry with a mining pickaxe while a run is live", async () => {
+  it("marks the Activity entry with the studying books while a run is live", async () => {
     writeRealConfig(
       makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
     );
@@ -792,9 +792,9 @@ describe("runTUI", () => {
     await runTUI();
 
     const opts = mockMenuSelect.mock.calls[0]?.[1] ?? [];
-    expect(opts.find((o) => o.value === "sync")?.label).toContain("\u26CF\uFE0F mining sessions");
+    expect(opts.find((o) => o.value === "sync")?.label).toContain("\uD83D\uDCDA studying sessions");
     // The welcome banner shows the sync row too.
-    expect(stdoutWrites.join("")).toContain("mining sessions...");
+    expect(stdoutWrites.join("")).toContain("studying sessions...");
   });
 
   it("runs in the alternate screen on a TTY and restores the shell on exit", async () => {

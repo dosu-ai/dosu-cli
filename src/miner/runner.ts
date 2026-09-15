@@ -135,7 +135,7 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
       outcome: "settings_conflict",
       notesWritten: 0,
       turns: 0,
-      message: `Refusing to run: conflicting Claude Code settings would override the miner's auth (${detail})`,
+      message: `Refusing to run: conflicting Claude Code settings would override the study run's auth (${detail})`,
     };
   }
 
@@ -230,7 +230,7 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
           if (!allowed.has(toolName)) {
             return {
               behavior: "deny",
-              message: `Tool ${toolName} is not permitted in mining runs.`,
+              message: `Tool ${toolName} is not permitted in study runs.`,
             };
           }
           if (toolName === `mcp__${SESSIONS_SERVER_NAME}__read_session`) {
@@ -305,7 +305,7 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
             outcome: "error",
             notesWritten,
             turns,
-            message: "Mining run failed; see debug log for details.",
+            message: "Study run failed; see debug log for details.",
           };
         }
         logger.debug(
@@ -320,7 +320,7 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
       outcome: "error",
       notesWritten,
       turns,
-      message: "Mining run ended without a result.",
+      message: "Study run ended without a result.",
     };
   } catch (error) {
     const text = error instanceof Error ? error.message : String(error);
@@ -334,8 +334,8 @@ export async function runMiner(options: RunMinerOptions): Promise<MinerRunResult
       notesWritten,
       turns,
       message: abort.signal.aborted
-        ? "Mining run timed out and was aborted."
-        : "Mining run failed; see debug log for details.",
+        ? "Study run timed out and was aborted."
+        : "Study run failed; see debug log for details.",
     };
   } finally {
     clearTimeout(timer);

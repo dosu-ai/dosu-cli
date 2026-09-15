@@ -66,7 +66,7 @@ export type ActivityViewAction =
   | "none";
 
 /** q/esc/ctrl-c back, tab/→ and ← cycle tabs, ↑↓ (or k/j) scroll, s syncs, f toggles full
- * rows, c clears mining history. */
+ * rows, c clears study history. */
 export function reduceActivityViewKey(key: string): ActivityViewAction {
   if (key === "q" || key === ESC || key === CTRL_C) return "back";
   if (key === "\t" || key === KEY_RIGHT) return "tab";
@@ -96,7 +96,7 @@ export function reduceSyncConfirmKey(key: string): SyncConfirmAction {
 }
 
 /** Which confirmation is up: `s` means stop a live run, resume a paused pipeline, or start;
- * `c` means clear the mining history so the next run starts from scratch. */
+ * `c` means clear the study history so the next run starts from scratch. */
 export type SyncConfirmMode = "start" | "stop" | "resume" | "clear";
 
 function syncConfirmMode(status: SyncStatus): SyncConfirmMode {
@@ -218,12 +218,16 @@ export interface RunProgress {
 export function foldRunProgress(progress: RunProgress | null, chunk: string): RunProgress | null {
   let current = progress;
   for (const line of chunk.split("\n")) {
-    const start = line.match(/\[sync\] mining (\d+) of \d+ ready sessions/);
+    const start = line.match(/\[sync\] (?:studying|mining) (\d+) of \d+ ready sessions/);
     if (start) {
       current = { batch: Number.parseInt(start[1], 10), read: new Set(), notes: 0 };
       continue;
     }
-    if (/\[sync\] (mined \d+ sessions|mining failed|mining skipped)/.test(line)) {
+    if (
+      /\[sync\] (?:studied|mined) \d+ sessions|\[sync\] (?:studying|mining) (?:failed|skipped)/.test(
+        line,
+      )
+    ) {
       current = null;
       continue;
     }
@@ -250,11 +254,11 @@ function statusLine(status: SyncStatus): string {
   if (status.running) {
     const since = status.startedAt ? ` \u00B7 since ${localTime(status.startedAt)}` : "";
     const pid = status.pid !== undefined ? ` (pid ${status.pid})` : "";
-    return `\u26CF\uFE0F ${pc.bold(brand("Mining sessions..."))}${pc.dim(`${pid}${since}`)}`;
+    return `\uD83D\uDCDA ${pc.bold(brand("Studying sessions..."))}${pc.dim(`${pid}${since}`)}`;
   }
   if (status.state.paused) {
     return `${pc.yellow("\u25CB")} ${pc.bold("Paused")} ${pc.dim(
-      "\u00B7 mining stays off until you resume",
+      "\u00B7 studying stays off until you resume",
     )}`;
   }
   if (status.staleLock) {
@@ -263,7 +267,7 @@ function statusLine(status: SyncStatus): string {
     )}`;
   }
   return `${pc.dim("\u25CB")} ${pc.bold("Idle")} ${pc.dim(
-    "\u00B7 hooks mine new sessions automatically",
+    "\u00B7 hooks study new sessions automatically",
   )}`;
 }
 
@@ -278,7 +282,7 @@ export function progressLine(done: number, ready: number, width: number, notes =
   const bar = brand("\u2588".repeat(filled)) + pc.dim("\u2591".repeat(cells - filled));
   const pct = Math.floor(ratio * 100);
   const suffix = notes > 0 ? ` \u00B7 ${notes} suggested page${notes === 1 ? "" : "s"}` : "";
-  return `${bar} ${done}/${total} mined \u00B7 ${pct}%${suffix}`;
+  return `${bar} ${done}/${total} studied \u00B7 ${pct}%${suffix}`;
 }
 
 /** The Activity tab strip: labels with live counts over the shared rule. */
@@ -292,7 +296,7 @@ export function tabBar(
   return tabStrip(
     [
       ["activity", "Activity"],
-      ["mined", `Mined (${minedCount})`],
+      ["mined", `Studied (${minedCount})`],
       ["queued", `Queued (${queuedCount})`],
       ["open", `Open (${openCount})`],
     ],
@@ -344,24 +348,28 @@ export function confirmBox(
 ): string[] {
   const inFlight =
     backlog && backlog.inFlight > 0
-      ? ` (+${backlog.inFlight} open, mined once ${backlog.inFlight === 1 ? "it goes" : "they go"} quiet)`
+      ? ` (+${backlog.inFlight} still open; ${backlog.inFlight === 1 ? "it joins" : "they join"} once quiet)`
       : "";
+  const sessions = `${queuedCount} session${queuedCount === 1 ? "" : "s"}`;
+  // Each dialog says what happens, why, and what to expect when it's done.
   const scope =
     mode === "clear"
-      ? "forgets what was mined so the next run re-mines every local session \u00B7 notes already saved in Dosu are kept"
+      ? "Forgets which local sessions Dosu has already studied, so the next run reads them all again. Use this to rebuild knowledge from scratch. Notes already saved in Dosu are kept."
       : mode === "stop"
-        ? "the run is killed mid-batch \u00B7 mining stays paused until you resume"
-        : queuedCount > 0
-          ? `${queuedCount} session${queuedCount === 1 ? "" : "s"} queued${inFlight} \u00B7 runs in the background`
-          : `queue empty${inFlight} \u00B7 a run would only pick up sessions that finish from here`;
+        ? "Kills the run mid-batch and pauses studying, so new sessions pile up in the queue instead of being read. Nothing is lost; press s again to resume from where it left off."
+        : mode === "resume"
+          ? `Studying picks up where it stopped: ${sessions} queued${inFlight}. Runs in the background; new notes appear in Dosu as each batch finishes.`
+          : queuedCount > 0
+            ? `Dosu reads ${sessions}${inFlight} and distills the durable decisions and gotchas into team knowledge. Runs in the background; new notes appear in Dosu as each batch finishes.`
+            : `Queue is empty${inFlight}. A run now would only pick up sessions that finish from here; hooks already do that automatically.`;
   const title =
     mode === "clear"
-      ? "Clear mining history?"
+      ? "Clear study history?"
       : mode === "stop"
-        ? "Stop mining?"
+        ? "Stop studying?"
         : mode === "resume"
-          ? "Resume mining?"
-          : "Start mining now?";
+          ? "Resume studying?"
+          : "Start studying now?";
   const verb =
     mode === "clear" ? "clear" : mode === "stop" ? "stop" : mode === "resume" ? "resume" : "start";
   const maxInner = Math.max(20, Math.min(width, contentWidth()) - 4);
@@ -398,8 +406,8 @@ export function renderActivityFrame(
   runProgress: RunProgress | null = null,
 ): string {
   const mined = status.state.watermark
-    ? `Mined sessions up to ${localTime(status.state.watermark)}`
-    : "Nothing mined yet";
+    ? `Studied sessions up to ${localTime(status.state.watermark)}`
+    : "Nothing studied yet";
   // Queue and open-session counts live in the tab bar, not a header line.
   const queueDetail: string[] = [];
   if (status.backoffUntil) {
@@ -429,7 +437,7 @@ export function renderActivityFrame(
   // backlog view; the message is prose and easily outruns the frame, so wrap.
   const refusal = !status.running && status.state.last_refusal;
   const refusalLines = refusal
-    ? wrapLine(`! Mining paused: ${refusal.message} (${localTime(refusal.at)})`, width).map(
+    ? wrapLine(`! Studying paused: ${refusal.message} (${localTime(refusal.at)})`, width).map(
         (line) => pc.yellow(line),
       )
     : [];
@@ -456,8 +464,8 @@ export function renderActivityFrame(
   // Pre-history runs only advanced the watermark, so mining may have
   // happened without leaving records — say so instead of denying it.
   const emptyMined = status.state.watermark
-    ? "No sessions recorded yet. History starts with the next mining run."
-    : "No mined sessions yet.";
+    ? "No sessions recorded yet. History starts with the next study run."
+    : "No studied sessions yet.";
   const empty =
     pane.tab === "activity"
       ? "No sync activity in the log yet."
@@ -540,7 +548,7 @@ export interface ActivityViewIO {
   stopSync?: (pid: number) => boolean;
   /** Persists the pause switch hooks honor; stop sets it, resume clears it. */
   setPaused?: (paused: boolean) => void;
-  /** Forgets the watermark and mining history; pressing `c` while idle calls this. */
+  /** Forgets the watermark and study history; pressing `c` while idle calls this. */
   clearHistory?: () => void;
   /** The scanned backlog for the Queued and Open tabs; re-run when the watermark moves. */
   listBacklog?: () => SessionBacklog;
@@ -701,14 +709,14 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
               clearHistory();
               minedBeforeRun = null;
               note =
-                "[sync] mining history cleared \u00B7 the next run re-mines every local session";
+                "[sync] study history cleared \u00B7 the next run reads every local session again";
             } else if (mode === "stop") {
               // Kill first, then flip the pause switch: a dying run's last state save
               // could otherwise overwrite the flag with its pre-pause snapshot.
               const ok = status.pid !== undefined && stopSync(status.pid);
               if (ok) setPaused(true);
               note = ok
-                ? "[sync] mining stopped \u00B7 paused until you resume"
+                ? "[sync] studying stopped \u00B7 paused until you resume"
                 : "[sync] could not stop the run \u00B7 it may have just finished";
             } else {
               if (mode === "resume") setPaused(false);

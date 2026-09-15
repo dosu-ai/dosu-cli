@@ -123,7 +123,7 @@ export function overviewRows(state: SyncState): string[] {
   const notes = state.total_notes ?? 0;
   const tokens = state.total_learning_tokens ?? 0;
   if (minedTotal === 0 && notes === 0) return [];
-  const rows = [`${label("Sessions mined")}${minedTotal}`, `${label("Suggested pages")}${notes}`];
+  const rows = [`${label("Sessions studied")}${minedTotal}`, `${label("Suggested pages")}${notes}`];
   if (tokens > 0) {
     rows.push(`${label("Investigation distilled")}${formatTokenCount(tokens)} tokens`);
   }
@@ -201,9 +201,9 @@ export function renderAnalyticsFrame(
   const { visible, above, below } = windowReport(rows, scroll);
   const empty =
     tab === "overview"
-      ? "No analytics yet. They appear after the first mining run."
+      ? "No analytics yet. They appear after the first study run."
       : tab === "projects"
-        ? "No per-project history yet. It fills in as sessions are mined."
+        ? "No per-project history yet. It fills in as sessions are studied."
         : pagesPending
           ? "Loading page analytics..."
           : "No page analytics yet.";

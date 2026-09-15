@@ -325,7 +325,7 @@ describe("knowledge sessions", () => {
     const out = allOutput();
     expect(out).toContain("Queued (1)");
     expect(out).toContain("Open (1)");
-    expect(out).toContain("Mined (1)");
+    expect(out).toContain("Studied (1)");
     // The whole point of the command: nothing is clipped.
     expect(out).toContain(queuedSession.id);
     expect(out).toContain(queuedSession.project);
@@ -345,7 +345,7 @@ describe("knowledge sessions", () => {
     const out = allOutput();
     expect(out).toContain("Queue empty.");
     expect(out).toContain("No open sessions.");
-    expect(out).toContain("No mined sessions recorded yet.");
+    expect(out).toContain("No studied sessions recorded yet.");
   });
 
   it("--queued lists only the queue and never reads the sync state", async () => {
@@ -366,7 +366,7 @@ describe("knowledge sessions", () => {
     await run("sessions", "--mined");
 
     expect(mockListBacklog).not.toHaveBeenCalled();
-    expect(allOutput()).toContain("Mined (1)");
+    expect(allOutput()).toContain("Studied (1)");
   });
 
   it("--json emits only the requested sections", async () => {
@@ -397,7 +397,7 @@ describe("knowledge sync", () => {
 
     expect(mockRunSync.mock.calls[0][0].quiet).toBeUndefined();
     expect(typeof syncDeps().mine).toBe("function");
-    expect(allOutput()).toContain("3 new sessions ready to mine");
+    expect(allOutput()).toContain("3 new sessions ready to study");
   });
 
   it("does not build a miner when the install has no API key", async () => {
@@ -431,7 +431,7 @@ describe("knowledge sync", () => {
     await run("sync");
 
     const output = allOutput();
-    expect(output).toContain("Mined 5 sessions, 3 suggested pages created");
+    expect(output).toContain("Studied 5 sessions, 3 suggested pages created");
     expect(output).toContain("3 more in the backlog");
   });
 
@@ -635,8 +635,8 @@ describe("knowledge sync", () => {
     await run("sync", "--bootstrap");
 
     const output = allOutput();
-    expect(output).toContain("Mined 5 sessions");
-    expect(output).toContain("Mined 3 sessions");
+    expect(output).toContain("Studied 5 sessions");
+    expect(output).toContain("Studied 3 sessions");
     expect(output).toContain("No new completed sessions");
   });
 
@@ -711,7 +711,7 @@ describe("knowledge sync --status", () => {
     await run("sync", "--status");
 
     const out = allOutput();
-    expect(out).toContain("Mining paused: stopped by you");
+    expect(out).toContain("Studying paused: stopped by you");
     expect(out).toContain("'dosu knowledge sync'");
   });
 
@@ -721,7 +721,7 @@ describe("knowledge sync --status", () => {
       pid: 4242,
       startedAt: new Date(Date.now() - 3 * 60_000).toISOString(),
       state: { ...baseState, watermark: new Date(Date.now() - 2 * 86_400_000).toISOString() },
-      recentActivity: ["[t] [sync] mined 5 sessions, 4 suggested pages"],
+      recentActivity: ["[t] [sync] studied 5 sessions, 4 suggested pages"],
     });
 
     await run("sync", "--status");
@@ -729,9 +729,9 @@ describe("knowledge sync --status", () => {
     const output = allOutput();
     expect(output).toContain("Sync running \u00B7 pid 4242");
     expect(output).toContain("3m ago");
-    expect(output).toContain("Mined through:");
+    expect(output).toContain("Studied through:");
     expect(output).toContain("2d ago");
-    expect(output).toContain("mined 5 sessions, 4 suggested pages");
+    expect(output).toContain("studied 5 sessions, 4 suggested pages");
     expect(output).toContain("logs --follow");
     expect(mockRunSync).not.toHaveBeenCalled();
   });
@@ -756,14 +756,14 @@ describe("knowledge sync --status", () => {
     );
   });
 
-  it("reports idle with nothing mined yet", async () => {
+  it("reports idle with nothing studied yet", async () => {
     mockGetSyncStatus.mockReturnValue({ running: false, state: baseState, recentActivity: [] });
 
     await run("sync", "--status");
 
     const output = allOutput();
     expect(output).toContain("No sync running");
-    expect(output).toContain("nothing mined yet");
+    expect(output).toContain("nothing studied yet");
     expect(output).not.toContain("Suggested pages");
     expect(output).not.toContain("Recent activity");
   });
@@ -818,7 +818,7 @@ describe("knowledge sync --status", () => {
     await run("sync", "--status");
 
     const output = allOutput();
-    expect(output).toContain("Mining paused: Your org has used its Dosu credits");
+    expect(output).toContain("Studying paused: Your org has used its Dosu credits");
     expect(output).toContain("10m ago");
   });
 
@@ -978,7 +978,7 @@ describe("knowledge backfill-transcripts", () => {
     const out = allOutput();
     expect(out).toContain("Attributed 5 of 10 notes");
     expect(out).toContain("3 ambiguous");
-    expect(out).toContain("2 without a local mining batch");
+    expect(out).toContain("2 without a local study batch");
   });
 
   it("says nothing to do when every note is already attributed", async () => {

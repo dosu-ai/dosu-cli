@@ -125,9 +125,9 @@ export function knowledgeCommand(): Command {
     .description(
       "List local agent sessions with full project and session ids (the untruncated view of the Activity screen's tabs)",
     )
-    .option("--queued", "Only sessions queued for mining")
+    .option("--queued", "Only sessions queued for studying")
     .option("--open", "Only live sessions still inside the quiet period")
-    .option("--mined", "Only recent mined-session history")
+    .option("--mined", "Only recent studied-session history")
     .option("--json", "Output as JSON")
     .action((opts: { queued?: boolean; open?: boolean; mined?: boolean; json?: boolean }) => {
       const all = !opts.queued && !opts.open && !opts.mined;
@@ -189,18 +189,18 @@ export function knowledgeCommand(): Command {
         );
       }
       if (wantMined) {
-        section("Mined", minedRows, "Mined at", "No mined sessions recorded yet.");
+        section("Studied", minedRows, "Studied at", "No studied sessions recorded yet.");
       }
     });
 
   cmd
     .command("sync")
-    .description("Scan local agent session history and report the mining backlog")
+    .description("Scan local agent session history and report the study backlog")
     .option("--quiet", "Background mode for hooks: honor backoff, exit 0, print nothing")
     .option("--detach", "Re-spawn detached and return immediately (used by agent hooks)")
     .option(
       "--bootstrap",
-      "Backfill mode: mine the full local session history regardless of age and drain the backlog (used by setup)",
+      "Backfill mode: study the full local session history regardless of age and drain the backlog (used by setup)",
     )
     .option("--status", "Show whether a sync is running now, plus watermark and recent activity")
     .option(
@@ -332,7 +332,7 @@ export function knowledgeCommand(): Command {
       }
       console.log(
         `Attributed ${result.updated} of ${result.candidates} notes ` +
-          `(${result.ambiguous} ambiguous, ${result.noBatch} without a local mining batch). ` +
+          `(${result.ambiguous} ambiguous, ${result.noBatch} without a local study batch). ` +
           "Run 'dosu knowledge report' to see their traces.",
       );
     });
@@ -384,18 +384,18 @@ function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
   if (status.state.paused) {
     console.log(
       pc.yellow(
-        "  Mining paused: stopped by you. Resume from the Activity screen or run 'dosu knowledge sync'.",
+        "  Studying paused: stopped by you. Resume from the Activity screen or run 'dosu knowledge sync'.",
       ),
     );
   }
   const wm = status.state.watermark;
-  console.log(`  Mined through:   ${wm ? `${wm} (${formatAge(wm, now)})` : "nothing mined yet"}`);
+  console.log(`  Studied through: ${wm ? `${wm} (${formatAge(wm, now)})` : "nothing studied yet"}`);
   if (status.state.project_filter?.length) {
     const home = homedir();
     const scope = status.state.project_filter
       .map((dir) => (dir.startsWith(`${home}/`) ? `~${dir.slice(home.length)}` : dir))
       .join(", ");
-    console.log(`  Mining scope:    ${scope}`);
+    console.log(`  Study scope:     ${scope}`);
   }
   if ((status.state.total_notes ?? 0) > 0) {
     const tokens = status.state.total_learning_tokens ?? 0;
@@ -420,7 +420,7 @@ function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
   if (status.state.last_refusal) {
     console.log(
       pc.yellow(
-        `  Mining paused: ${status.state.last_refusal.message} (${formatAge(status.state.last_refusal.at, now)})`,
+        `  Studying paused: ${status.state.last_refusal.message} (${formatAge(status.state.last_refusal.at, now)})`,
       ),
     );
   }
@@ -442,16 +442,16 @@ function printSyncOutcome(outcome: SyncOutcome): void {
           ? pc.dim(` (${outcome.inFlightSessions} more still in progress)`)
           : "";
       console.log(
-        `✓ Scanned. ${outcome.readySessions} new session${outcome.readySessions === 1 ? "" : "s"} ready to mine${inFlight}.`,
+        `✓ Scanned. ${outcome.readySessions} new session${outcome.readySessions === 1 ? "" : "s"} ready to study${inFlight}.`,
       );
-      console.log(pc.dim("Sign in with 'dosu setup' to enable mining."));
+      console.log(pc.dim("Sign in with 'dosu setup' to enable studying."));
       break;
     }
     case "mined": {
       const notes = outcome.miner?.notesWritten ?? 0;
       const remaining = outcome.readySessions - (outcome.minedSessions ?? 0);
       console.log(
-        `✓ Mined ${outcome.minedSessions} session${outcome.minedSessions === 1 ? "" : "s"}, ${notes} suggested page${notes === 1 ? "" : "s"} created.`,
+        `✓ Studied ${outcome.minedSessions} session${outcome.minedSessions === 1 ? "" : "s"}, ${notes} suggested page${notes === 1 ? "" : "s"} created.`,
       );
       if (remaining > 0) {
         console.log(pc.dim(`${remaining} more in the backlog; run sync again to continue.`));
@@ -459,11 +459,11 @@ function printSyncOutcome(outcome: SyncOutcome): void {
       break;
     }
     case "skipped-gateway": {
-      console.log(pc.yellow(outcome.miner?.message ?? "Mining unavailable right now."));
+      console.log(pc.yellow(outcome.miner?.message ?? "Studying unavailable right now."));
       break;
     }
     case "mine-failed": {
-      console.error(pc.red(outcome.miner?.message ?? "Mining run failed."));
+      console.error(pc.red(outcome.miner?.message ?? "Study run failed."));
       process.exitCode = 1;
       break;
     }
@@ -489,7 +489,7 @@ function printSyncOutcome(outcome: SyncOutcome): void {
       break;
     }
     case "skipped-paused": {
-      console.log(pc.dim("Skipped: mining is paused. Run 'dosu knowledge sync' to resume."));
+      console.log(pc.dim("Skipped: studying is paused. Run 'dosu knowledge sync' to resume."));
       break;
     }
   }

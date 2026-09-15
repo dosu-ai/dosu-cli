@@ -313,7 +313,7 @@ describe("latestBacklog", () => {
 
 describe("foldRunProgress", () => {
   const marker =
-    "[2026-09-03T16:00:01.000Z] [DEBUG] [sync] mining 2 of 5 ready sessions (1 trivial skipped)\n";
+    "[2026-09-03T16:00:01.000Z] [DEBUG] [sync] studying 2 of 5 ready sessions (1 trivial skipped)\n";
   const read = (id: string, offset = 0) =>
     `[2026-09-03T16:00:05.000Z] [DEBUG] [miner] [agent] \u2192 mcp__sessions__read_session {"id":"${id}","offset":${offset}}\n`;
   const note =
@@ -344,19 +344,19 @@ describe("foldRunProgress", () => {
     expect(
       foldRunProgress(
         live,
-        "[2026-09-03T16:00:30.000Z] [DEBUG] [sync] mined 2 sessions, 4 suggested pages; watermark \u2192 y\n",
+        "[2026-09-03T16:00:30.000Z] [DEBUG] [sync] studied 2 sessions, 4 suggested pages; watermark \u2192 y\n",
       ),
     ).toBeNull();
     expect(
       foldRunProgress(
         foldRunProgress(null, marker),
-        "[2026-09-03T16:00:30.000Z] [DEBUG] [sync] mining failed: error; boom\n",
+        "[2026-09-03T16:00:30.000Z] [DEBUG] [sync] studying failed: error; boom\n",
       ),
     ).toBeNull();
     expect(
       foldRunProgress(
         foldRunProgress(null, marker),
-        "[2026-09-03T16:00:30.000Z] [DEBUG] [sync] mining skipped by gateway: credit_limit\n",
+        "[2026-09-03T16:00:30.000Z] [DEBUG] [sync] studying skipped by gateway: credit_limit\n",
       ),
     ).toBeNull();
   });
@@ -386,8 +386,8 @@ describe("activityWidth", () => {
 
 describe("wrapLine", () => {
   it("wraps on word boundaries and indents continuation lines", () => {
-    const lines = wrapLine("! Mining paused: credits are gone for now", 20);
-    expect(lines).toEqual(["! Mining paused:", "  credits are gone", "  for now"]);
+    const lines = wrapLine("! Studying paused: credits are gone for now", 20);
+    expect(lines).toEqual(["! Studying paused:", "  credits are gone", "  for now"]);
     for (const line of lines) expect(line.length).toBeLessThanOrEqual(20);
   });
 
@@ -405,14 +405,14 @@ describe("renderActivityFrame", () => {
         64,
       ),
     );
-    expect(frame).toContain("\u26CF\uFE0F Mining sessions...");
+    expect(frame).toContain("\uD83D\uDCDA Studying sessions...");
     expect(frame).toContain("pid 4242");
   });
 
   it("shows idle state and the never-mined watermark", () => {
     const frame = stripAnsi(renderActivityFrame(makeStatus(), [], 64));
     expect(frame).toContain("Idle");
-    expect(frame).toContain("Nothing mined yet");
+    expect(frame).toContain("Nothing studied yet");
     expect(frame).toContain("No sync activity in the log yet.");
   });
 
@@ -425,7 +425,7 @@ describe("renderActivityFrame", () => {
   it("renders a progress bar proportional to the drained backlog", () => {
     // 20 mined, 60 queued → 25% of an 80-session drain.
     const line = stripAnsi(progressLine(20, 60, 64) ?? "");
-    expect(line).toContain("20/80 mined \u00B7 25%");
+    expect(line).toContain("20/80 studied \u00B7 25%");
     const cells = 20; // width 64 minus the room reserved for the suffix
     expect(line).toContain("\u2588".repeat(Math.round(0.25 * cells)));
     expect(line).toContain("\u2591".repeat(cells - Math.round(0.25 * cells)));
@@ -437,10 +437,10 @@ describe("renderActivityFrame", () => {
 
   it("appends a live suggested-page count to the bar", () => {
     expect(stripAnsi(progressLine(0, 2, 64, 1) ?? "")).toContain(
-      "0/2 mined \u00B7 0% \u00B7 1 suggested page",
+      "0/2 studied \u00B7 0% \u00B7 1 suggested page",
     );
     expect(stripAnsi(progressLine(1, 1, 64, 7) ?? "")).toContain(
-      "1/2 mined \u00B7 50% \u00B7 7 suggested pages",
+      "1/2 studied \u00B7 50% \u00B7 7 suggested pages",
     );
     expect(stripAnsi(progressLine(0, 2, 64, 0) ?? "")).not.toContain("suggested");
   });
@@ -467,7 +467,7 @@ describe("renderActivityFrame", () => {
         { batch: 2, read: new Set(["s-1", "s-2"]), notes: 3 },
       ),
     );
-    expect(frame).toContain("1/2 mined \u00B7 50% \u00B7 3 suggested pages");
+    expect(frame).toContain("1/2 studied \u00B7 50% \u00B7 3 suggested pages");
   });
 
   it("never counts the in-flight session as done — one open session stays 0/N", () => {
@@ -485,7 +485,7 @@ describe("renderActivityFrame", () => {
         { batch: 2, read: new Set(["s-1"]), notes: 1 },
       ),
     );
-    expect(frame).toContain("0/2 mined \u00B7 0% \u00B7 1 suggested page");
+    expect(frame).toContain("0/2 studied \u00B7 0% \u00B7 1 suggested page");
   });
 
   it("scopes the bar to the run: lifetime history does not pin it at ~100%", () => {
@@ -508,7 +508,7 @@ describe("renderActivityFrame", () => {
         568,
       ),
     );
-    expect(frame).toContain("0/1 mined \u00B7 0%");
+    expect(frame).toContain("0/1 studied \u00B7 0%");
     expect(frame).not.toContain("568/569");
   });
 
@@ -525,7 +525,7 @@ describe("renderActivityFrame", () => {
         inFlight: 0,
       }),
     );
-    expect(running).toContain("20/80 mined \u00B7 25%");
+    expect(running).toContain("20/80 studied \u00B7 25%");
 
     const idle = stripAnsi(
       renderActivityFrame(makeStatus({ state }), [], 64, { ready: 60, inFlight: 0 }),
@@ -549,14 +549,14 @@ describe("renderActivityFrame", () => {
     expect(withOpen).toContain("Queued (1)");
     expect(withOpen).toContain("Open (2)");
     expect(withOpen).not.toContain("\u00B7 2 open");
-    expect(withOpen).not.toContain("queue empty");
+    expect(withOpen).not.toContain("Queue is empty");
     expect(withOpen).not.toContain("queued when they finish");
 
     // No open sessions: plain zero counts, no noise.
     const drained = stripAnsi(renderActivityFrame(makeStatus(), [], 64, { ready: 0, inFlight: 0 }));
     expect(drained).toContain("Queued (0)");
     expect(drained).toContain("Open (0)");
-    expect(drained).not.toContain("queue empty");
+    expect(drained).not.toContain("Queue is empty");
   });
 
   it("lists open sessions on the Open tab with the queued-row layout", () => {
@@ -589,7 +589,7 @@ describe("renderActivityFrame", () => {
         64,
       ),
     );
-    expect(frame).toContain("Mined sessions up to");
+    expect(frame).toContain("Studied sessions up to");
     // The backoff line must advertise the manual escape hatch: s ignores the backoff.
     expect(frame).toContain("retrying after");
     expect(frame).toContain("s syncs now");
@@ -615,7 +615,7 @@ describe("renderActivityFrame", () => {
         64,
       ),
     );
-    expect(frame).toContain("Mining paused: Your org has used its Dosu credits");
+    expect(frame).toContain("Studying paused: Your org has used its Dosu credits");
   });
 
   it("hides the refusal line while a run is live", () => {
@@ -641,15 +641,15 @@ describe("renderActivityFrame", () => {
   it("underlines the active tab in the quiet two-line strip", () => {
     const [row, rule] = tabBar("mined", 3, 2, 577, 60).map(stripAnsi);
     // Order: Activity, Mined, Queued, Open.
-    expect(row.indexOf("Activity")).toBeLessThan(row.indexOf("Mined (577)"));
-    expect(row.indexOf("Mined (577)")).toBeLessThan(row.indexOf("Queued (3)"));
+    expect(row.indexOf("Activity")).toBeLessThan(row.indexOf("Studied (577)"));
+    expect(row.indexOf("Studied (577)")).toBeLessThan(row.indexOf("Queued (3)"));
     expect(row.indexOf("Queued (3)")).toBeLessThan(row.indexOf("Open (2)"));
     // No folder-tab chrome: just the labels and the rule.
     expect(row).not.toContain("\u2502");
     // The heavy segment of the rule sits exactly under the active label...
-    const start = row.indexOf("Mined (577)");
+    const start = row.indexOf("Studied (577)");
     expect(rule.indexOf("\u2501")).toBe(start);
-    expect(rule.lastIndexOf("\u2501")).toBe(start + "Mined (577)".length - 1);
+    expect(rule.lastIndexOf("\u2501")).toBe(start + "Studied (577)".length - 1);
     // ...and the rule runs the full frame width.
     expect(rule.length).toBe(60);
   });
@@ -667,7 +667,7 @@ describe("renderActivityFrame", () => {
 
   it("keeps a minimum gap when the frame is too narrow to spread", () => {
     const [row] = tabBar("activity", 3, 2, 577, 20).map(stripAnsi);
-    expect(row).toContain("Activity   Mined (577)");
+    expect(row).toContain("Activity   Studied (577)");
   });
 
   it("shows all three tabs with counts, activity active by default", () => {
@@ -676,7 +676,7 @@ describe("renderActivityFrame", () => {
     );
     expect(frame).toContain("Activity");
     expect(frame).toContain("Queued (1)");
-    expect(frame).toContain("Mined (7)");
+    expect(frame).toContain("Studied (7)");
     expect(frame).toContain(
       "tab switch \u00B7 \u2191\u2193 scroll \u00B7 f full rows \u00B7 s sync now \u00B7 esc back",
     );
@@ -729,11 +729,11 @@ describe("renderActivityFrame", () => {
   it("renders the clear confirmation with its own title, scope, and verb", () => {
     const pane = { tab: "activity" as const, scroll: 0, confirm: "clear" as const };
     const frame = stripAnsi(renderActivityFrame(makeStatus(), [], 64, null, pane));
-    expect(frame).toContain("Clear mining history?");
+    expect(frame).toContain("Clear study history?");
     // The scope wraps inside the box; compare with the box borders and breaks flattened.
     const flat = frame.replace(/[\u2502\n]/g, " ").replace(/\s+/g, " ");
-    expect(flat).toContain("re-mines every local session");
-    expect(flat).toContain("notes already saved in Dosu are kept");
+    expect(flat).toContain("reads them all again");
+    expect(flat).toContain("Notes already saved in Dosu are kept");
     expect(frame).toContain("enter clear \u00B7 esc cancel");
     expect(frame).not.toContain("c clear");
   });
@@ -757,8 +757,8 @@ describe("renderActivityFrame", () => {
         queuedSession("c"),
       ]),
     );
-    expect(frame).toContain("Start mining now?");
-    expect(frame).toContain("3 sessions queued \u00B7 runs in the background");
+    expect(frame).toContain("Start studying now?");
+    expect(frame).toContain("Dosu reads 3 sessions and distills");
     expect(frame).toContain("enter start \u00B7 esc cancel");
     expect(frame).not.toContain("s sync now");
     // The confirmation renders as a bordered popup box.
@@ -784,7 +784,7 @@ describe("renderActivityFrame", () => {
     for (const line of box) {
       expect(line.trimEnd().length).toBeLessThanOrEqual(40);
     }
-    expect(box.join("\n")).toContain("12 sessions queued");
+    expect(box.join("\n")).toContain("Dosu reads 12 sessions");
   });
 
   it("renders the mined-sessions tab from the state's history", () => {
@@ -947,8 +947,8 @@ describe("renderActivityFrame", () => {
     const frame = stripAnsi(
       renderActivityFrame(makeStatus(), [], 64, null, { tab: "mined", scroll: 0 }),
     );
-    expect(frame).toContain("Mined (0)");
-    expect(frame).toContain("No mined sessions yet.");
+    expect(frame).toContain("Studied (0)");
+    expect(frame).toContain("No studied sessions yet.");
   });
 
   it("renders the queued tab with agent, updated, project, and session id", () => {
@@ -982,7 +982,7 @@ describe("renderActivityFrame", () => {
       state: { schema_version: 1, watermark: "2026-05-12T17:16:26.769Z", consecutive_failures: 0 },
     });
     const frame = stripAnsi(renderActivityFrame(status, [], 64, null, { tab: "mined", scroll: 0 }));
-    expect(frame).toContain("History starts with the next mining run");
+    expect(frame).toContain("History starts with the next study run");
   });
 
   it("windows long lists and reports scrollback on both sides", () => {
@@ -1076,12 +1076,12 @@ describe("runActivityView", () => {
     // backlog counts (the gate's ready count drives the live run's progress bar).
     expect(written.join("")).toContain(ALT_SCREEN_ENTER);
     expect(stripAnsi(written.join(""))).toContain("[sync] gate: 49 ready");
-    expect(stripAnsi(written.join(""))).toContain("0/49 mined");
+    expect(stripAnsi(written.join(""))).toContain("0/49 studied");
 
     vi.advanceTimersByTime(100);
     const rendered = stripAnsi(written.join(""));
     expect(rendered).toContain("[miner] wrote note 1/20");
-    expect(rendered).toContain("0/44 mined");
+    expect(rendered).toContain("0/44 studied");
 
     input.emit("data", "q");
     await view;
@@ -1115,7 +1115,7 @@ describe("runActivityView", () => {
     // First tab flips to the mined-sessions history from the persisted state.
     input.emit("data", "\t");
     const afterFirstTab = stripAnsi(written.at(-1) ?? "");
-    expect(afterFirstTab).toContain("Mined (7)");
+    expect(afterFirstTab).toContain("Studied (7)");
     expect(afterFirstTab).toContain("cursor    09-02 23:00  -  abc");
 
     // Second tab lands on the queued backlog from the injected scanner.
@@ -1259,7 +1259,7 @@ describe("runActivityView", () => {
 
     // First frame: run live on an install with 568 lifetime sessions and a
     // 1-session queue — the bar is run-scoped, not 568/569 ≈ 99%.
-    expect(stripAnsi(written.join(""))).toContain("0/1 mined \u00B7 0%");
+    expect(stripAnsi(written.join(""))).toContain("0/1 studied \u00B7 0%");
 
     // The run mines the session: lifetime counter bumps, gate drains.
     totalMined = 569;
@@ -1267,7 +1267,7 @@ describe("runActivityView", () => {
       "[2026-09-03T16:00:20.000Z] [INFO] [sync] gate: 0 ready, 0 in flight (watermark y)\n",
     );
     vi.advanceTimersByTime(100);
-    expect(stripAnsi(written.join(""))).toContain("1/1 mined \u00B7 100%");
+    expect(stripAnsi(written.join(""))).toContain("1/1 studied \u00B7 100%");
 
     input.emit("data", "q");
     await view;
@@ -1299,7 +1299,7 @@ describe("runActivityView", () => {
       pollMs: 100,
     });
 
-    expect(stripAnsi(written.join(""))).toContain("8/10 mined \u00B7 80%");
+    expect(stripAnsi(written.join(""))).toContain("8/10 studied \u00B7 80%");
 
     input.emit("data", "q");
     await view;
@@ -1330,7 +1330,7 @@ describe("runActivityView", () => {
       pollMs: 100,
     });
 
-    expect(stripAnsi(written.join(""))).toContain("0/2 mined \u00B7 0%");
+    expect(stripAnsi(written.join(""))).toContain("0/2 studied \u00B7 0%");
 
     input.emit("data", "q");
     await view;
@@ -1351,7 +1351,7 @@ describe("runActivityView", () => {
         }),
       readLog: () =>
         "[2026-09-03T16:00:00.000Z] [INFO] [sync] gate: 2 ready, 0 in flight (watermark x)\n" +
-        "[2026-09-03T16:00:01.000Z] [DEBUG] [sync] mining 2 of 2 ready sessions (0 trivial skipped)\n",
+        "[2026-09-03T16:00:01.000Z] [DEBUG] [sync] studying 2 of 2 ready sessions (0 trivial skipped)\n",
       createFollower: (handler) => {
         emitChunk = handler;
         return { poll() {} };
@@ -1364,7 +1364,7 @@ describe("runActivityView", () => {
       '[2026-09-03T16:00:05.000Z] [DEBUG] [miner] [agent] \u2192 mcp__sessions__read_session {"id":"s-1"}\n',
     );
     vi.advanceTimersByTime(100);
-    expect(stripAnsi(written.join(""))).toContain("0/2 mined \u00B7 0%");
+    expect(stripAnsi(written.join(""))).toContain("0/2 studied \u00B7 0%");
 
     // A note lands and the miner moves on to the second session: 1/2.
     emitChunk(
@@ -1372,7 +1372,7 @@ describe("runActivityView", () => {
         '[2026-09-03T16:00:09.000Z] [DEBUG] [miner] [agent] \u2192 mcp__sessions__read_session {"id":"s-2"}\n',
     );
     vi.advanceTimersByTime(100);
-    expect(stripAnsi(written.join(""))).toContain("1/2 mined \u00B7 50% \u00B7 1 suggested page");
+    expect(stripAnsi(written.join(""))).toContain("1/2 studied \u00B7 50% \u00B7 1 suggested page");
 
     input.emit("data", "q");
     await view;
@@ -1437,8 +1437,8 @@ describe("runActivityView", () => {
     input.emit("data", "s");
     expect(startSync).not.toHaveBeenCalled();
     const prompt = stripAnsi(written.join(""));
-    expect(prompt).toContain("Start mining now?");
-    expect(prompt).toContain("2 sessions queued (+1 open, mined once it goes quiet)");
+    expect(prompt).toContain("Start studying now?");
+    expect(prompt).toContain("Dosu reads 2 sessions (+1 still open; it joins once quiet)");
     expect(prompt).toContain("enter start \u00B7 esc cancel");
 
     input.emit("data", "\r");
@@ -1490,7 +1490,7 @@ describe("runActivityView", () => {
     });
 
     input.emit("data", "s");
-    expect(stripAnsi(written.join(""))).toContain("queue empty");
+    expect(stripAnsi(written.join(""))).toContain("Queue is empty");
     input.emit("data", ESC);
     expect(startSync).not.toHaveBeenCalled();
     // The view is still open (esc consumed by the prompt): the legend is back.
@@ -1543,7 +1543,7 @@ describe("runActivityView", () => {
     input.emit("data", "s");
     expect(stopSync).not.toHaveBeenCalled();
     const prompt = stripAnsi(written.join(""));
-    expect(prompt).toContain("Stop mining?");
+    expect(prompt).toContain("Stop studying?");
     expect(prompt).toContain("enter stop \u00B7 esc cancel");
 
     input.emit("data", "\r");
@@ -1551,7 +1551,7 @@ describe("runActivityView", () => {
     expect(setPaused).toHaveBeenCalledWith(true);
     expect(startSync).not.toHaveBeenCalled();
     expect(stripAnsi(written.join(""))).toContain(
-      "[sync] mining stopped \u00B7 paused until you resume",
+      "[sync] studying stopped \u00B7 paused until you resume",
     );
 
     input.emit("data", "q");
@@ -1602,7 +1602,7 @@ describe("runActivityView", () => {
 
     input.emit("data", "s");
     const prompt = stripAnsi(written.join(""));
-    expect(prompt).toContain("Resume mining?");
+    expect(prompt).toContain("Resume studying?");
     expect(prompt).toContain("enter resume \u00B7 esc cancel");
 
     input.emit("data", "\r");
@@ -1641,7 +1641,7 @@ describe("runActivityView", () => {
     input.emit("data", "c");
     expect(clearHistory).not.toHaveBeenCalled();
     const prompt = stripAnsi(written.join(""));
-    expect(prompt).toContain("Clear mining history?");
+    expect(prompt).toContain("Clear study history?");
     expect(prompt).toContain("enter clear \u00B7 esc cancel");
 
     input.emit("data", "\r");
@@ -1650,8 +1650,8 @@ describe("runActivityView", () => {
     // The watermark moved (to null), so the queue was rescanned on the redraw.
     expect(listBacklog.mock.calls.length).toBeGreaterThan(scansBefore);
     const after = stripAnsi(written.join(""));
-    expect(after).toContain("[sync] mining history cleared");
-    expect(after).toContain("Nothing mined yet");
+    expect(after).toContain("[sync] study history cleared");
+    expect(after).toContain("Nothing studied yet");
 
     input.emit("data", "q");
     await view;
@@ -1674,7 +1674,7 @@ describe("runActivityView", () => {
     });
 
     input.emit("data", "c");
-    expect(stripAnsi(written.join(""))).toContain("Clear mining history?");
+    expect(stripAnsi(written.join(""))).toContain("Clear study history?");
     input.emit("data", ESC);
     expect(clearHistory).not.toHaveBeenCalled();
     expect(stripAnsi(written.at(-1) ?? "")).toContain("c clear");
@@ -1702,7 +1702,7 @@ describe("runActivityView", () => {
     });
 
     input.emit("data", "c");
-    expect(stripAnsi(written.join(""))).not.toContain("Clear mining history?");
+    expect(stripAnsi(written.join(""))).not.toContain("Clear study history?");
 
     // Idle but never mined: still nothing to clear.
     status = makeStatus();
@@ -1732,12 +1732,12 @@ describe("runActivityView", () => {
     });
 
     input.emit("data", "c");
-    expect(stripAnsi(written.join(""))).toContain("Clear mining history?");
+    expect(stripAnsi(written.join(""))).toContain("Clear study history?");
 
     status = makeStatus({ running: true, pid: 9 });
     status.state.watermark = "2026-09-02T21:00:00Z";
     vi.advanceTimersByTime(100);
-    expect(stripAnsi(written.at(-1) ?? "")).not.toContain("Clear mining history?");
+    expect(stripAnsi(written.at(-1) ?? "")).not.toContain("Clear study history?");
     // Enter now has nothing to confirm.
     input.emit("data", "\r");
     expect(clearHistory).not.toHaveBeenCalled();

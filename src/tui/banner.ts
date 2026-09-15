@@ -105,7 +105,7 @@ function checklistRows(ctx: BannerContext): string[] {
   if (ctx.mining) {
     rows.push([
       "sync",
-      `\u26CF\uFE0F ${brand("mining sessions...")} ${pc.dim(`${DOT} see Activity`)}`,
+      `\uD83D\uDCDA ${brand("studying sessions...")} ${pc.dim(`${DOT} see Activity`)}`,
     ]);
   }
   if (ctx.update) {
