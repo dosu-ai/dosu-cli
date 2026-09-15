@@ -166,6 +166,54 @@ describe("select", () => {
     const result = await select({ message: "Pick", options: OPTIONS }, { input, output });
     expect(isCancel(result)).toBe(true);
   });
+
+  it("windows long lists to the terminal height and follows the cursor", async () => {
+    const many = Array.from({ length: 10 }, (_, i) => ({ value: `v${i}`, label: `Option ${i}` }));
+    // rows=12 → 4 visible option rows.
+    const { input, output, written } = fakeIO({ rows: 12 });
+    const result = select({ message: "Pick", options: many }, { input, output });
+
+    const first = stripAnsi(written.join(""));
+    expect(first).toContain("Option 0");
+    expect(first).toContain("Option 3");
+    expect(first).not.toContain("Option 4");
+    expect(first).toContain("\u2193 6 more");
+    expect(first).not.toMatch(/\u2191 \d+ more/);
+
+    for (let i = 0; i < 5; i++) input.emit("data", DOWN); // cursor → Option 5
+    const scrolled = stripAnsi(written.at(-1) ?? "");
+    expect(scrolled).toContain("Option 5");
+    expect(scrolled).not.toContain("Option 1 ");
+    expect(scrolled).toContain("\u2191 2 more");
+    expect(scrolled).toContain("\u2193 4 more");
+
+    // Wrapping from the top to the last option jumps the window to the end.
+    for (let i = 0; i < 5; i++) input.emit("data", UP); // back to Option 0
+    input.emit("data", UP); // wraps → Option 9
+    const wrapped = stripAnsi(written.at(-1) ?? "");
+    expect(wrapped).toContain("Option 9");
+    expect(wrapped).toContain("\u2191 6 more");
+    expect(wrapped).not.toMatch(/\u2193 \d+ more/);
+
+    input.emit("data", "\r");
+    await expect(result).resolves.toBe("v9");
+  });
+
+  it("assumes 24 rows when the output does not report a height", async () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ value: `v${i}`, label: `Option ${i}` }));
+    const { input, output, written } = fakeIO();
+    (output as { rows?: number }).rows = undefined;
+    const result = select({ message: "Pick", options: many }, { input, output });
+
+    // 24 - 8 chrome → 16 visible option rows.
+    const first = stripAnsi(written.join(""));
+    expect(first).toContain("Option 15");
+    expect(first).not.toContain("Option 16");
+    expect(first).toContain("\u2193 14 more");
+
+    input.emit("data", ESC);
+    expect(isCancel(await result)).toBe(true);
+  });
 });
 
 describe("multiselect", () => {

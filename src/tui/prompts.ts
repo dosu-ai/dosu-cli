@@ -226,17 +226,50 @@ function optionLabel<T>(option: SelectOption<T>): string {
   return option.label ?? String(option.value);
 }
 
+/** Scrolling viewport over a list: never draw more rows than the terminal holds (an
+ * overflowing frame can't be erased and stacks on repaint). `chrome` is the number of
+ * non-option lines the frame draws around the list; `top` is the caller's scroll offset. */
+function viewport(
+  count: number,
+  cursor: number,
+  top: number,
+  rows: number | undefined,
+  chrome: number,
+): { top: number; visible: number; above: number; below: number } {
+  const visible = Math.min(count, Math.max(4, (rows ?? 24) - chrome));
+  let next = top;
+  if (cursor < next) next = cursor;
+  if (cursor >= next + visible) next = cursor - visible + 1;
+  next = Math.max(0, Math.min(next, count - visible));
+  return { top: next, visible, above: next, below: count - next - visible };
+}
+
+function moreAbove(n: number): string[] {
+  return n > 0 ? [pc.dim(`  \u2191 ${n} more`)] : [];
+}
+
+function moreBelow(n: number): string[] {
+  return n > 0 ? [pc.dim(`  \u2193 ${n} more`)] : [];
+}
+
 export function select<T>(
   opts: { message: string; options: readonly SelectOption<T>[] },
   io: PromptIO = {},
 ): Promise<T | symbol> {
+  const { output } = resolveIO(io);
   let selected = 0;
+  let top = 0;
   const labelWidth = Math.max(...opts.options.map((o) => optionLabel(o).length));
 
   return runInteractive<T>(
     {
       render() {
-        const rows = opts.options.map((option, index) => {
+        const count = opts.options.length;
+        const view = viewport(count, selected, top, output.rows, 8);
+        top = view.top;
+
+        const rows = opts.options.slice(top, top + view.visible).map((option, offset) => {
+          const index = top + offset;
           const label = optionLabel(option).padEnd(labelWidth);
           const hint = option.hint ? `   ${pc.dim(option.hint)}` : "";
           return index === selected
@@ -246,7 +279,9 @@ export function select<T>(
         return [
           pc.bold(opts.message),
           "",
+          ...moreAbove(view.above),
           ...rows,
+          ...moreBelow(view.below),
           "",
           pc.dim(`\u2191\u2193 move ${DOT} enter select ${DOT} esc cancel`),
         ];
@@ -304,15 +339,11 @@ export function multiselect<T>(
   return runInteractive<T[]>(
     {
       render() {
-        // Scrolling viewport: never draw more rows than the terminal holds
-        // (an overflowing frame can't be erased and stacks on repaint).
         const count = opts.options.length;
-        const visible = Math.min(count, Math.max(4, (output.rows ?? 24) - 9));
-        if (cursor < top) top = cursor;
-        if (cursor >= top + visible) top = cursor - visible + 1;
-        top = Math.max(0, Math.min(top, count - visible));
+        const view = viewport(count, cursor, top, output.rows, 9);
+        top = view.top;
 
-        const rows = opts.options.slice(top, top + visible).map((option, offset) => {
+        const rows = opts.options.slice(top, top + view.visible).map((option, offset) => {
           const index = top + offset;
           const isPicked = picked.has(option.value);
           const box = isPicked ? brand(BOX_ON) : pc.dim(BOX_OFF);
@@ -325,15 +356,13 @@ export function multiselect<T>(
             ? `${brand(POINTER)} ${box} ${pc.bold(brand(label))}${suffix}`
             : `  ${box} ${pc.dim(label)}${suffix}`;
         });
-        const above = top;
-        const below = count - top - visible;
         const summary = opts.summary?.(pickedValues());
         return [
           pc.bold(opts.message),
           "",
-          ...(above > 0 ? [pc.dim(`  \u2191 ${above} more`)] : []),
+          ...moreAbove(view.above),
           ...rows,
-          ...(below > 0 ? [pc.dim(`  \u2193 ${below} more`)] : []),
+          ...moreBelow(view.below),
           "",
           ...(error ? [pc.yellow(error)] : summary ? [pc.dim(summary)] : []),
           pc.dim(
