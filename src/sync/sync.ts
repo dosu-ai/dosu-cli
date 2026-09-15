@@ -122,7 +122,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
   if (options.quiet) {
     // The user's stop switch: hook-triggered runs stay off until resumed.
     if (state.paused) {
-      logger.debug("sync", "skipping quiet sync: mining is paused");
+      logger.debug("sync", "skipping quiet sync: studying is paused");
       return { status: "skipped-paused", readySessions: 0, inFlightSessions: 0, sessions: [] };
     }
     const retryAt = backoffUntil(state);
@@ -133,7 +133,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
   } else if (state.paused) {
     // An explicit run is an explicit resume; every later state save persists the clear.
     delete state.paused;
-    logger.debug("sync", "manual sync resumes paused mining");
+    logger.debug("sync", "manual sync resumes paused studying");
   }
 
   let ready: AgentSession[];
@@ -249,7 +249,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
 
     logger.debug(
       "sync",
-      `mining ${batch.length} of ${ready.length} ready sessions (${trivial} trivial skipped)`,
+      `studying ${batch.length} of ${ready.length} ready sessions (${trivial} trivial skipped)`,
     );
     const miner = await deps.mine(batch);
 
@@ -257,7 +257,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       case "completed": {
         // One line per session so the activity feed narrates the run…
         for (const s of batch) {
-          logger.debug("sync", `mined session ${s.harness}/${s.id}`);
+          logger.debug("sync", `studied session ${s.harness}/${s.id}`);
         }
         // …and a durable history record per session, so status views can
         // list everything ever mined (capped) with an all-time counter.
@@ -292,7 +292,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
         });
         logger.debug(
           "sync",
-          `mined ${batch.length} sessions, ${miner.notesWritten} suggested pages; watermark → ${watermark}`,
+          `studied ${batch.length} sessions, ${miner.notesWritten} suggested pages; watermark → ${watermark}`,
         );
         return {
           status: "mined",
@@ -315,10 +315,10 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
           last_refusal: {
             at,
             outcome: miner.outcome,
-            message: miner.message ?? "Mining unavailable right now.",
+            message: miner.message ?? "Studying unavailable right now.",
           },
         });
-        logger.debug("sync", `mining skipped by gateway: ${miner.outcome}`);
+        logger.debug("sync", `studying skipped by gateway: ${miner.outcome}`);
         return { status: "skipped-gateway", ...base, minedSessions: 0, miner };
       }
       default: {
@@ -328,7 +328,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
           last_attempt_at: now().toISOString(),
           consecutive_failures: state.consecutive_failures + 1,
         });
-        logger.debug("sync", `mining failed: ${miner.outcome}; ${miner.message ?? ""}`);
+        logger.debug("sync", `studying failed: ${miner.outcome}; ${miner.message ?? ""}`);
         return {
           status: "mine-failed",
           ...base,

@@ -358,28 +358,40 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
   s.start("Checking for recent agent sessions...");
   const outcome = await runKnowledgeSync({ bootstrap: true });
   if (outcome.status !== "backlog" || outcome.readySessions === 0) {
-    s.stop("No unmined agent sessions found. Dosu will learn as you work.");
+    s.stop("No past agent sessions to study. Dosu will learn from new ones as you work.");
     return;
   }
   const n = outcome.readySessions;
-  s.stop(`Found ${n} unmined agent session${n === 1 ? "" : "s"} on this machine.`);
+  const them = n === 1 ? "it" : "them";
+  s.stop(
+    `Found ${n} past agent session${n === 1 ? "" : "s"} on this machine that Dosu hasn't studied.`,
+  );
+  // What Dosu is about to do, why it's worth it, and what to expect when it's done.
+  p.log.message(
+    [
+      `Dosu can read ${them} and pull out the durable knowledge: decisions, gotchas, and`,
+      "how-things-work that your team and agents would otherwise rediscover.",
+      "Only distilled notes are saved to Dosu; your session logs stay on this machine.",
+      "It runs in the background a few sessions at a time; notes appear in Dosu as each batch finishes.",
+    ].join("\n"),
+  );
 
   const mineNow = await p.confirm({
-    message: `Mine ${n === 1 ? "it" : "them"} for team knowledge now? (runs in the background)`,
-    active: "Mine now \u26CF\uFE0F",
-    inactive: "Skip",
+    message: `Study ${them} now?`,
+    active: "Study now \uD83D\uDCDA",
+    inactive: "Skip for now",
     initialValue: true,
   });
   if (p.isCancel(mineNow) || !mineNow) {
     p.log.info(
-      `Skipped. Dosu picks sessions up in the background as you work, or run ${info("dosu knowledge sync")} anytime.`,
+      `Skipped. Dosu studies new sessions in the background as you work; run ${info("dosu knowledge sync")} anytime to study these too.`,
     );
     return;
   }
 
   if (spawnDetachedSelf(["knowledge", "sync", "--quiet", "--bootstrap"])) {
     p.log.success(
-      "\u26CF\uFE0F Currently mining... Dosu is distilling your past sessions into team knowledge, a few at a time in the background.",
+      `\uD83D\uDCDA Studying ${n} session${n === 1 ? "" : "s"} in the background. Watch progress on the Activity screen; when it finishes, the new notes are in Dosu and agents connected to this MCP can use them.`,
     );
     const watch = await p.confirm({
       message: "What next?",
