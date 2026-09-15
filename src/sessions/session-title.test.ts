@@ -49,6 +49,28 @@ describe("createSessionTitleResolver", () => {
     expect(name?.length).toBeLessThanOrEqual(80);
   });
 
+  it("unwraps cursor's tagged user query instead of showing the timestamp", () => {
+    const wrapped =
+      "<timestamp>Monday, Sep 14, 2026, 4:16 PM (UTC-7)</timestamp>\n" +
+      "<user_query>\nhelp me test this pr\n</user_query>";
+    const resolver = createSessionTitleResolver(tempDir, {
+      readHead: () => "",
+      readTurns: () => [{ role: "user", text: wrapped }] as SessionTurn[],
+      mtime: () => "m1",
+    });
+    expect(resolver.resolve(session("cursor"))).toBe("help me test this pr");
+  });
+
+  it("strips leading metadata tags when no user_query wrapper exists", () => {
+    const resolver = createSessionTitleResolver(tempDir, {
+      readHead: () => "",
+      readTurns: () =>
+        [{ role: "user", text: "<timestamp>Sep 15</timestamp> fix the flaky test" }] as SessionTurn[],
+      mtime: () => "m1",
+    });
+    expect(resolver.resolve(session("cursor"))).toBe("fix the flaky test");
+  });
+
   it("caches by harness/id key and answers cache-only lookups", () => {
     const resolver = createSessionTitleResolver(tempDir, {
       readHead: () => "",

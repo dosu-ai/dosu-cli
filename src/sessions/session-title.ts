@@ -13,7 +13,7 @@ import type { AgentSession } from "./scan";
 type SessionHarness = AgentSession["harness"];
 
 const CACHE_FILENAME = "session-titles.json";
-const CACHE_SCHEMA_VERSION = 1;
+const CACHE_SCHEMA_VERSION = 2;
 const HEAD_LINES = 50;
 const SESSION_NAME_MAX = 80;
 
@@ -54,6 +54,15 @@ function saveCacheFile(configDir: string, entries: Record<string, CacheEntry>): 
   } catch {
     // Cache persistence is best-effort; next view recomputes.
   }
+}
+
+/** Some harnesses wrap the typed query in metadata tags (Cursor:
+ * `<timestamp>…</timestamp>\n<user_query>…</user_query>`). Prefer the tagged
+ * query; otherwise strip any leading `<tag>…</tag>` blocks. */
+function extractUserQuery(text: string): string {
+  const tagged = text.match(/<user_query>([\s\S]*?)<\/user_query>/);
+  if (tagged) return tagged[1];
+  return text.replace(/^(\s*<(\w+)>[\s\S]*?<\/\2>\s*)+/, "");
 }
 
 /** One-line cleanup: collapse whitespace and clip; empty becomes null. */
@@ -157,7 +166,7 @@ export function createSessionTitleResolver(
       if (summary) return summary;
     }
     const firstUser = turns(session).find((t) => t.role === "user");
-    return firstUser ? cleanSessionName(firstUser.text) : null;
+    return firstUser ? cleanSessionName(extractUserQuery(firstUser.text)) : null;
   };
 
   return {
