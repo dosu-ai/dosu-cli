@@ -1,3 +1,11 @@
+# [0.53.0-beta.13](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.12...v0.53.0-beta.13) (2026-09-15)
+
+
+### Features
+
+* **tui:** c clears mining history on the Activity screen ([#220](https://github.com/dosu-ai/dosu-cli/issues/220)) ([ac7a5b6](https://github.com/dosu-ai/dosu-cli/commit/ac7a5b6140b88461ac7c8648765f09aca7dd702b))
+* **ux:** say Studying instead of Mining, with 📚, and explain each study action ([#221](https://github.com/dosu-ai/dosu-cli/issues/221)) ([5ba3080](https://github.com/dosu-ai/dosu-cli/commit/5ba3080a0a03cca88f2bd80e32491c0507d35a90))
+
 # [0.53.0-beta.12](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.11...v0.53.0-beta.12) (2026-09-15)
 
 
