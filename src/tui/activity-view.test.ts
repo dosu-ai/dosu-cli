@@ -100,6 +100,10 @@ describe("reduceActivityViewKey", () => {
     expect(reduceActivityViewKey("f")).toBe("full");
   });
 
+  it("clears mining history on c", () => {
+    expect(reduceActivityViewKey("c")).toBe("clear");
+  });
+
   it("confirmation keys: enter/y/s start, esc/n/q cancel, rest ignored", () => {
     expect(reduceSyncConfirmKey("\r")).toBe("start");
     expect(reduceSyncConfirmKey("y")).toBe("start");
@@ -708,6 +712,42 @@ describe("renderActivityFrame", () => {
     expect(pausedFrame).toContain("s resume");
   });
 
+  it("offers c clear only while idle with something mined", () => {
+    const nothingMined = stripAnsi(renderActivityFrame(makeStatus(), [], 64));
+    expect(nothingMined).not.toContain("c clear");
+
+    const mined = makeStatus();
+    mined.state.watermark = "2026-09-02T21:00:00.000Z";
+    const idle = stripAnsi(renderActivityFrame(mined, [], 80));
+    expect(idle).toContain("s sync now \u00B7 c clear \u00B7 esc back");
+
+    const running = makeStatus({ running: true, pid: 1 });
+    running.state.watermark = "2026-09-02T21:00:00.000Z";
+    expect(stripAnsi(renderActivityFrame(running, [], 64))).not.toContain("c clear");
+  });
+
+  it("renders the clear confirmation with its own title, scope, and verb", () => {
+    const pane = { tab: "activity" as const, scroll: 0, confirm: "clear" as const };
+    const frame = stripAnsi(renderActivityFrame(makeStatus(), [], 64, null, pane));
+    expect(frame).toContain("Clear mining history?");
+    // The scope wraps inside the box; compare with the box borders and breaks flattened.
+    const flat = frame.replace(/[\u2502\n]/g, " ").replace(/\s+/g, " ");
+    expect(flat).toContain("re-mines every local session");
+    expect(flat).toContain("notes already saved in Dosu are kept");
+    expect(frame).toContain("enter clear \u00B7 esc cancel");
+    expect(frame).not.toContain("c clear");
+  });
+
+  it("wraps the key legend instead of outrunning a narrow frame", () => {
+    const mined = makeStatus();
+    mined.state.watermark = "2026-09-02T21:00:00.000Z";
+    const width = 50;
+    const frame = stripAnsi(renderActivityFrame(mined, [], width));
+    for (const line of frame.split("\n")) expect(line.length).toBeLessThanOrEqual(width);
+    const flat = frame.replace(/\n/g, " ").replace(/\s+/g, " ");
+    expect(flat).toContain("s sync now \u00B7 c clear \u00B7 esc back");
+  });
+
   it("replaces the key legend with the confirmation popup while confirm is pending", () => {
     const pane = { tab: "activity" as const, scroll: 0, confirm: "start" as const };
     const frame = stripAnsi(
@@ -834,7 +874,12 @@ describe("renderActivityFrame", () => {
     expect(rows[start + 1].length).toBeLessThanOrEqual(width);
     expect(full.replaceAll("\n", "").replaceAll(" ", "")).toContain(tail);
     expect(full).not.toContain("\u2026");
-    expect(full).toContain("\u2191\u2193 scroll \u00B7 f clip \u00B7 s sync now");
+    // The legend wraps to the narrow frame too, so compare it flattened.
+    const legendRows = rows.slice(-2);
+    expect(legendRows.join(" ").replace(/\s+/g, " ")).toContain(
+      "\u2191\u2193 scroll \u00B7 f clip \u00B7 s sync now",
+    );
+    for (const row of legendRows) expect(row.length).toBeLessThanOrEqual(width);
   });
 
   it("clips the scroll counter line in a narrow frame instead of letting it wrap", () => {
@@ -1566,6 +1611,140 @@ describe("runActivityView", () => {
 
     input.emit("data", "q");
     await view;
+  });
+
+  it("c asks to clear history; enter resets the state and rescans the queue", async () => {
+    const { input, output, written } = fakeIO();
+    const clearHistory = vi.fn();
+    const startSync = vi.fn(() => true);
+    const listBacklog = vi.fn(() => ({ queued: [], open: [] }));
+    // The status reflects the reset once clearHistory has run, as the real state file would.
+    const getStatus = () => {
+      const status = makeStatus();
+      status.state.watermark = clearHistory.mock.calls.length > 0 ? null : "2026-09-02T21:00:00Z";
+      return status;
+    };
+
+    const view = runActivityView({
+      input,
+      output,
+      getStatus,
+      readLog: () => "",
+      createFollower: () => ({ poll() {} }),
+      startSync,
+      clearHistory,
+      listBacklog,
+      pollMs: 100,
+    });
+    const scansBefore = listBacklog.mock.calls.length;
+
+    input.emit("data", "c");
+    expect(clearHistory).not.toHaveBeenCalled();
+    const prompt = stripAnsi(written.join(""));
+    expect(prompt).toContain("Clear mining history?");
+    expect(prompt).toContain("enter clear \u00B7 esc cancel");
+
+    input.emit("data", "\r");
+    expect(clearHistory).toHaveBeenCalledTimes(1);
+    expect(startSync).not.toHaveBeenCalled();
+    // The watermark moved (to null), so the queue was rescanned on the redraw.
+    expect(listBacklog.mock.calls.length).toBeGreaterThan(scansBefore);
+    const after = stripAnsi(written.join(""));
+    expect(after).toContain("[sync] mining history cleared");
+    expect(after).toContain("Nothing mined yet");
+
+    input.emit("data", "q");
+    await view;
+  });
+
+  it("esc cancels the clear confirmation without touching the state", async () => {
+    const { input, output, written } = fakeIO();
+    const clearHistory = vi.fn();
+    const status = makeStatus();
+    status.state.watermark = "2026-09-02T21:00:00Z";
+
+    const view = runActivityView({
+      input,
+      output,
+      getStatus: () => status,
+      readLog: () => "",
+      createFollower: () => ({ poll() {} }),
+      clearHistory,
+      pollMs: 100,
+    });
+
+    input.emit("data", "c");
+    expect(stripAnsi(written.join(""))).toContain("Clear mining history?");
+    input.emit("data", ESC);
+    expect(clearHistory).not.toHaveBeenCalled();
+    expect(stripAnsi(written.at(-1) ?? "")).toContain("c clear");
+
+    input.emit("data", "q");
+    await view;
+  });
+
+  it("c is inert while a run is live or nothing has been mined", async () => {
+    const { input, output, written } = fakeIO();
+    const clearHistory = vi.fn();
+    let status = makeStatus({ running: true, pid: 7 });
+    status.state.watermark = "2026-09-02T21:00:00Z";
+
+    const view = runActivityView({
+      input,
+      output,
+      getStatus: () => status,
+      readLog: () => "",
+      createFollower: () => ({ poll() {} }),
+      clearHistory,
+      stopSync: () => true,
+      setPaused: () => {},
+      pollMs: 100,
+    });
+
+    input.emit("data", "c");
+    expect(stripAnsi(written.join(""))).not.toContain("Clear mining history?");
+
+    // Idle but never mined: still nothing to clear.
+    status = makeStatus();
+    input.emit("data", "c");
+    input.emit("data", "\r");
+    expect(clearHistory).not.toHaveBeenCalled();
+
+    input.emit("data", "q");
+    await view;
+  });
+
+  it("drops a pending clear confirmation when a run starts elsewhere", async () => {
+    vi.useFakeTimers();
+    const { input, output, written } = fakeIO();
+    const clearHistory = vi.fn();
+    let status = makeStatus();
+    status.state.watermark = "2026-09-02T21:00:00Z";
+
+    const view = runActivityView({
+      input,
+      output,
+      getStatus: () => status,
+      readLog: () => "",
+      createFollower: () => ({ poll() {} }),
+      clearHistory,
+      pollMs: 100,
+    });
+
+    input.emit("data", "c");
+    expect(stripAnsi(written.join(""))).toContain("Clear mining history?");
+
+    status = makeStatus({ running: true, pid: 9 });
+    status.state.watermark = "2026-09-02T21:00:00Z";
+    vi.advanceTimersByTime(100);
+    expect(stripAnsi(written.at(-1) ?? "")).not.toContain("Clear mining history?");
+    // Enter now has nothing to confirm.
+    input.emit("data", "\r");
+    expect(clearHistory).not.toHaveBeenCalled();
+
+    input.emit("data", "q");
+    await view;
+    vi.useRealTimers();
   });
 
   it("skips the terminal write when a poll produces an identical frame", async () => {

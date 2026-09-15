@@ -11,7 +11,7 @@ import { listSessionBacklog, type SessionBacklog } from "../sync/backlog";
 import { spawnDetachedSelf } from "../sync/detach";
 import { stopSyncRun } from "../sync/lock";
 import { getSyncStatus, type SyncStatus } from "../sync/status";
-import { type MinedSessionRecord, setSyncPaused } from "../sync/watermark";
+import { type MinedSessionRecord, resetSyncState, setSyncPaused } from "../sync/watermark";
 import { enterAltScreen } from "./alt-screen";
 import {
   breadcrumb,
@@ -62,9 +62,11 @@ export type ActivityViewAction =
   | "down"
   | "sync"
   | "full"
+  | "clear"
   | "none";
 
-/** q/esc/ctrl-c back, tab/→ and ← cycle tabs, ↑↓ (or k/j) scroll, s syncs, f toggles full rows. */
+/** q/esc/ctrl-c back, tab/→ and ← cycle tabs, ↑↓ (or k/j) scroll, s syncs, f toggles full
+ * rows, c clears mining history. */
 export function reduceActivityViewKey(key: string): ActivityViewAction {
   if (key === "q" || key === ESC || key === CTRL_C) return "back";
   if (key === "\t" || key === KEY_RIGHT) return "tab";
@@ -73,6 +75,7 @@ export function reduceActivityViewKey(key: string): ActivityViewAction {
   if (key === KEY_DOWN || key === "j") return "down";
   if (key === "s") return "sync";
   if (key === "f") return "full";
+  if (key === "c") return "clear";
   return "none";
 }
 
@@ -92,8 +95,9 @@ export function reduceSyncConfirmKey(key: string): SyncConfirmAction {
   return "none";
 }
 
-/** What pressing `s` means right now: stop a live run, resume a paused pipeline, or start. */
-export type SyncConfirmMode = "start" | "stop" | "resume";
+/** Which confirmation is up: `s` means stop a live run, resume a paused pipeline, or start;
+ * `c` means clear the mining history so the next run starts from scratch. */
+export type SyncConfirmMode = "start" | "stop" | "resume" | "clear";
 
 function syncConfirmMode(status: SyncStatus): SyncConfirmMode {
   if (status.running) return "stop";
@@ -331,7 +335,7 @@ export interface ActivityViewPane {
 const DEFAULT_PANE: ActivityViewPane = { tab: "activity", scroll: 0 };
 
 /** The confirmation box over the footer, shown while `pane.confirm` is set: start a run,
- * stop the live one (pausing the pipeline), or resume a paused pipeline. */
+ * stop the live one (pausing the pipeline), resume a paused pipeline, or clear the history. */
 export function confirmBox(
   queuedCount: number,
   backlog: SyncBacklog | null,
@@ -343,14 +347,23 @@ export function confirmBox(
       ? ` (+${backlog.inFlight} open, mined once ${backlog.inFlight === 1 ? "it goes" : "they go"} quiet)`
       : "";
   const scope =
-    mode === "stop"
-      ? "the run is killed mid-batch \u00B7 mining stays paused until you resume"
-      : queuedCount > 0
-        ? `${queuedCount} session${queuedCount === 1 ? "" : "s"} queued${inFlight} \u00B7 runs in the background`
-        : `queue empty${inFlight} \u00B7 a run would only pick up sessions that finish from here`;
+    mode === "clear"
+      ? "forgets what was mined so the next run re-mines every local session \u00B7 notes already saved in Dosu are kept"
+      : mode === "stop"
+        ? "the run is killed mid-batch \u00B7 mining stays paused until you resume"
+        : queuedCount > 0
+          ? `${queuedCount} session${queuedCount === 1 ? "" : "s"} queued${inFlight} \u00B7 runs in the background`
+          : `queue empty${inFlight} \u00B7 a run would only pick up sessions that finish from here`;
   const title =
-    mode === "stop" ? "Stop mining?" : mode === "resume" ? "Resume mining?" : "Start mining now?";
-  const verb = mode === "stop" ? "stop" : mode === "resume" ? "resume" : "start";
+    mode === "clear"
+      ? "Clear mining history?"
+      : mode === "stop"
+        ? "Stop mining?"
+        : mode === "resume"
+          ? "Resume mining?"
+          : "Start mining now?";
+  const verb =
+    mode === "clear" ? "clear" : mode === "stop" ? "stop" : mode === "resume" ? "resume" : "start";
   const maxInner = Math.max(20, Math.min(width, contentWidth()) - 4);
   const rows = [
     // No emoji inside the border: U+26CF is ambiguous-width (1 column in xterm.js, 2 in
@@ -490,16 +503,21 @@ export function renderActivityFrame(
       ? centerBlock(confirmBox(queued.length, backlog, width, pane.confirm), width)
       : [
           // s stops a live run, resumes a paused pipeline, or starts a sync while idle;
-          // f flips between clipped and full (wrapped) rows.
-          pc.dim(
+          // f flips between clipped and full (wrapped) rows; c (idle, something mined)
+          // clears the history so the next run starts from scratch. Wrapped: on a narrow
+          // frame the full legend can outrun the width.
+          ...wrapLine(
             [
               "tab switch",
               "\u2191\u2193 scroll",
               fullRows ? "f clip" : "f full rows",
               status.running ? "s stop" : status.state.paused ? "s resume" : "s sync now",
+              ...(!status.running && status.state.watermark ? ["c clear"] : []),
               "esc back",
             ].join(" \u00B7 "),
-          ),
+            width,
+            "",
+          ).map((line) => pc.dim(line)),
         ]),
   ];
   // Left-anchored: centering on each frame's longest line would shove the
@@ -522,6 +540,8 @@ export interface ActivityViewIO {
   stopSync?: (pid: number) => boolean;
   /** Persists the pause switch hooks honor; stop sets it, resume clears it. */
   setPaused?: (paused: boolean) => void;
+  /** Forgets the watermark and mining history; pressing `c` while idle calls this. */
+  clearHistory?: () => void;
   /** The scanned backlog for the Queued and Open tabs; re-run when the watermark moves. */
   listBacklog?: () => SessionBacklog;
   pollMs?: number;
@@ -551,6 +571,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
   const startSync = io.startSync ?? (() => spawnDetachedSelf(["knowledge", "sync", "--bootstrap"]));
   const stopSync = io.stopSync ?? stopSyncRun;
   const setPaused = io.setPaused ?? setSyncPaused;
+  const clearHistory = io.clearHistory ?? resetSyncState;
   const listBacklog = io.listBacklog ?? listSessionBacklog;
   const pollMs = io.pollMs ?? ACTIVITY_VIEW_POLL_MS;
 
@@ -606,7 +627,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
       sessions = listBacklog();
     }
     // A run starting or ending elsewhere makes the pending confirmation moot.
-    if ((confirmSync === "start" || confirmSync === "resume") && status.running) confirmSync = null;
+    if (confirmSync !== null && confirmSync !== "stop" && status.running) confirmSync = null;
     if (confirmSync === "stop" && !status.running) confirmSync = null;
     const width = activityWidth(output.columns ?? 80);
     const frame = renderActivityFrame(
@@ -674,7 +695,14 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
             const mode = confirmSync;
             confirmSync = null;
             let note: string;
-            if (mode === "stop") {
+            if (mode === "clear") {
+              // The watermark going null re-gates every local session; draw() rescans on the
+              // change so the Queued tab fills immediately.
+              clearHistory();
+              minedBeforeRun = null;
+              note =
+                "[sync] mining history cleared \u00B7 the next run re-mines every local session";
+            } else if (mode === "stop") {
               // Kill first, then flip the pause switch: a dying run's last state save
               // could otherwise overwrite the flag with its pre-pause snapshot.
               const ok = status.pid !== undefined && stopSync(status.pid);
@@ -709,6 +737,13 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
         if (action === "sync") {
           confirmSync = syncConfirmMode(status);
           draw();
+        } else if (action === "clear") {
+          // Only offered when idle with something mined; otherwise the key is inert, matching
+          // the legend.
+          if (!status.running && status.state.watermark) {
+            confirmSync = "clear";
+            draw();
+          }
         } else if (action === "tab" || action === "tab-back") {
           tab = cycleTab(tab, action === "tab" ? 1 : -1);
           scroll = 0;
