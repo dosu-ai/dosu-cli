@@ -26,6 +26,9 @@ export interface BuildReportOptions {
   orgName?: string;
   /** Distinct project names the run's sessions came from. */
   projects?: string[];
+  /** True when the note fetch was capped (pre-pagination backend) — the
+   * report then covers only the newest notes, and must say so. */
+  truncated?: boolean;
   summary?: string;
   dryRun?: boolean;
   generatedAt?: Date;
@@ -533,8 +536,8 @@ ${REPORT_CSS}
       <h1>${esc(org)}</h1>
       <p class="lede">${esc(summary)}</p>
       <p class="meta-line">
-        ${projects.length > 0 ? `Projects ${projects.map((p) => `<code>${esc(p)}</code>`).join(", ")} · ` : ""}${transcripts.length} session${transcripts.length === 1 ? "" : "s"}
-        · generated ${esc(generated)}
+        ${projects.length > 0 ? `Projects ${projects.map((p) => `<code>${esc(p)}</code>`).join(", ")} · ` : ""}${transcripts.length} session${transcripts.length === 1 ? "" : "s"} with notes
+        · generated ${esc(generated)}${options.truncated ? " · newest notes only (server capped the fetch)" : ""}
       </p>
       <div class="toolbar no-print">
         <button type="button" onclick="window.print()">Print / Save as PDF</button>

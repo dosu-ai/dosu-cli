@@ -10,7 +10,7 @@ import { createProjectDirResolver } from "../sessions/project-dir";
 import type { AgentSession } from "../sessions/scan";
 import { scanAgentSessions } from "../sessions/scan";
 import { loadSyncState } from "../sync/watermark";
-import { fetchReportNotes } from "./fetch";
+import { type FetchedReportNotes, fetchReportNotes } from "./fetch";
 import { buildReportHtml } from "./html";
 import { attributeRediscovery, digestsForSessions, sessionsToInventory } from "./notes";
 import type { ReportNote } from "./types";
@@ -28,7 +28,7 @@ export interface EmitReportOptions {
   open?: boolean;
   openUrl?: (url: string) => Promise<unknown>;
   generatedAt?: Date;
-  fetchNotes?: (cfg: Config) => Promise<ReportNote[]>;
+  fetchNotes?: (cfg: Config) => Promise<FetchedReportNotes>;
 }
 
 /** Only the sessions the notes actually reference: traces and inventory must
@@ -56,9 +56,10 @@ function noteTime(note: ReportNote): number {
 
 export async function emitKnowledgeReport(options: EmitReportOptions = {}): Promise<string> {
   const cfg = loadConfig();
-  const notes = [...(options.notes ?? (await (options.fetchNotes ?? fetchReportNotes)(cfg)))].sort(
-    (a, b) => noteTime(a) - noteTime(b),
-  );
+  const fetched = options.notes
+    ? { notes: options.notes, truncated: false }
+    : await (options.fetchNotes ?? fetchReportNotes)(cfg);
+  const notes = [...fetched.notes].sort((a, b) => noteTime(a) - noteTime(b));
   const scanned = options.sessions ?? scanAgentSessions();
   const sessions = sessionsForNotes(notes, scanned);
   const candidates = attributeRediscovery(notes, sessions);
@@ -81,6 +82,7 @@ export async function emitKnowledgeReport(options: EmitReportOptions = {}): Prom
     candidates,
     orgName: options.orgName ?? cfg.active_account?.target?.org_name ?? "Your team",
     projects,
+    truncated: fetched.truncated,
     generatedAt: options.generatedAt,
     digests: digestsForSessions(sessions),
   });

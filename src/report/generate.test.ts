@@ -17,6 +17,10 @@ vi.mock("../sessions/project-dir", () => ({
   }),
 }));
 
+function wrapNotes<T>(notes: T[]) {
+  return { notes, truncated: false };
+}
+
 const mockLoadSyncState = vi.fn();
 vi.mock("../sync/watermark", () => ({
   loadSyncState: (...args: unknown[]) => mockLoadSyncState(...args),
@@ -83,14 +87,15 @@ describe("emitKnowledgeReport", () => {
     });
 
     const out = await emitKnowledgeReport({
-      fetchNotes: async () => [
-        {
-          title: "OAuth retry",
-          content: "Retry after 401.",
-          transcript_id: "s1",
-          at: "2026-09-09T10:00:00Z",
-        },
-      ],
+      fetchNotes: async () =>
+        wrapNotes([
+          {
+            title: "OAuth retry",
+            content: "Retry after 401.",
+            transcript_id: "s1",
+            at: "2026-09-09T10:00:00Z",
+          },
+        ]),
       out: join(dir, "report.html"),
       open: false,
     });
@@ -103,10 +108,11 @@ describe("emitKnowledgeReport", () => {
       return "/tmp/x.html";
     });
     await emitKnowledgeReport({
-      fetchNotes: async () => [
-        { title: "Newer note", content: "b", at: "2026-09-02T00:00:00Z" },
-        { title: "Older note", content: "a", at: "2026-09-01T00:00:00Z" },
-      ],
+      fetchNotes: async () =>
+        wrapNotes([
+          { title: "Newer note", content: "b", at: "2026-09-02T00:00:00Z" },
+          { title: "Older note", content: "a", at: "2026-09-01T00:00:00Z" },
+        ]),
       open: false,
     });
     expect(mockWrite).toHaveBeenCalled();
@@ -138,9 +144,10 @@ describe("emitKnowledgeReport", () => {
       return "/tmp/x.html";
     });
     await emitKnowledgeReport({
-      fetchNotes: async () => [
-        { title: "Anchored", content: "Body.", repo: "git@x/y", branch: "feat/report" },
-      ],
+      fetchNotes: async () =>
+        wrapNotes([
+          { title: "Anchored", content: "Body.", repo: "git@x/y", branch: "feat/report" },
+        ]),
       open: false,
     });
     expect(mockWrite).toHaveBeenCalled();
@@ -153,9 +160,8 @@ describe("emitKnowledgeReport", () => {
       return "/tmp/x.html";
     });
     await emitKnowledgeReport({
-      fetchNotes: async () => [
-        { title: "Unattributed", content: "No transcript.", at: "garbage-date" },
-      ],
+      fetchNotes: async () =>
+        wrapNotes([{ title: "Unattributed", content: "No transcript.", at: "garbage-date" }]),
       open: false,
     });
     expect(mockWrite).toHaveBeenCalled();
