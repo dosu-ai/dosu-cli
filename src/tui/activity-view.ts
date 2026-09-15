@@ -1,4 +1,4 @@
-/** Live Activity screen: mining status plus tabbed lists and a manual sync trigger. Pure
+/** Live Activity screen: studying status plus tabbed lists and a manual sync trigger. Pure
  * render/reduce functions wired to injectable IO, like menu.ts. */
 
 import { readFileSync } from "node:fs";
@@ -11,7 +11,7 @@ import { listSessionBacklog, type SessionBacklog } from "../sync/backlog";
 import { spawnDetachedSelf } from "../sync/detach";
 import { stopSyncRun } from "../sync/lock";
 import { getSyncStatus, type SyncStatus } from "../sync/status";
-import { type MinedSessionRecord, setSyncPaused } from "../sync/watermark";
+import { type StudiedSessionRecord, setSyncPaused } from "../sync/watermark";
 import { enterAltScreen } from "./alt-screen";
 import {
   breadcrumb,
@@ -49,10 +49,10 @@ export const ACTIVITY_VIEW_FULL_LIST_ROWS = 5;
 /** How much history each tab keeps in memory for scrolling back. */
 export const ACTIVITY_VIEW_BUFFER_LINES = 200;
 
-export type ActivityViewTab = "activity" | "queued" | "open" | "mined";
+export type ActivityViewTab = "activity" | "queued" | "open" | "studied";
 
 /** Tab order for cycling; ← walks it backwards. */
-const ACTIVITY_VIEW_TABS: readonly ActivityViewTab[] = ["activity", "mined", "queued", "open"];
+const ACTIVITY_VIEW_TABS: readonly ActivityViewTab[] = ["activity", "studied", "queued", "open"];
 
 export type ActivityViewAction =
   | "back"
@@ -112,7 +112,7 @@ export function formatActivityLine(line: string, width: number, full = false): s
   return `${compact.slice(0, Math.max(0, width - 1))}\u2026`;
 }
 
-/** Keep only [sync]/[miner] log lines (level tag stripped), newest `max`. */
+/** Keep only [sync]/[learner] log lines (level tag stripped), newest `max`. */
 export function appendSyncActivity(
   buffer: readonly string[],
   chunk: string,
@@ -120,7 +120,7 @@ export function appendSyncActivity(
 ): string[] {
   const fresh = chunk
     .split("\n")
-    .filter((line) => line.includes("[sync]") || line.includes("[miner]"))
+    .filter((line) => line.includes("[sync]") || line.includes("[learner]"))
     .map((line) => line.replace(/ \[(DEBUG|INFO|WARN|ERROR)\]/, ""));
   return [...buffer, ...fresh].slice(-max);
 }
@@ -129,9 +129,9 @@ function clip(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}\u2026`;
 }
 
-/** Mined-history record as a row ("cursor    09-02 23:00  dosu  abc"), same columns as Queued.
+/** Studied-history record as a row ("cursor    09-02 23:00  dosu  abc"), same columns as Queued.
  * `full` skips the per-column clipping (the f toggle's full-rows mode). */
-export function formatMinedRow(record: MinedSessionRecord, full = false): string {
+export function formatStudiedRow(record: StudiedSessionRecord, full = false): string {
   const match = record.at.match(/^\d{4}-(\d{2}-\d{2})T(\d{2}:\d{2})/);
   const stamp = match ? `${match[1]} ${match[2]}` : record.at;
   const slash = record.session.indexOf("/");
@@ -199,38 +199,40 @@ export function latestBacklog(text: string): SyncBacklog | null {
   return latest;
 }
 
-/** Within-batch mining progress, folded live from the miner's log traces. */
+/** Within-batch studying progress, folded live from the learner's log traces. */
 export interface RunProgress {
-  /** Batch size from the latest "[sync] mining N of M" marker. */
+  /** Batch size from the latest "[sync] studying N of M" marker. */
   batch: number;
-  /** Distinct session ids the miner has opened so far this batch. */
+  /** Distinct session ids the learner has opened so far this batch. */
   read: Set<string>;
   /** write_knowledge calls traced so far this batch. */
   notes: number;
 }
 
-/** Fold a log chunk into within-batch progress: the bar steps off the miner's tool traces, and
+/** Fold a log chunk into within-batch progress: the bar steps off the learner's tool traces, and
  * a settle line clears the fold so stale steps never double-count. */
 export function foldRunProgress(progress: RunProgress | null, chunk: string): RunProgress | null {
   let current = progress;
   for (const line of chunk.split("\n")) {
-    const start = line.match(/\[sync\] mining (\d+) of \d+ ready sessions/);
+    const start = line.match(/\[sync\] studying (\d+) of \d+ ready sessions/);
     if (start) {
       current = { batch: Number.parseInt(start[1], 10), read: new Set(), notes: 0 };
       continue;
     }
-    if (/\[sync\] (mined \d+ sessions|mining failed|mining skipped)/.test(line)) {
+    if (/\[sync\] (studied \d+ sessions|studying failed|studying skipped)/.test(line)) {
       current = null;
       continue;
     }
     if (!current) continue;
     // Pagination and re-reads repeat an id; the set collapses them.
-    const read = line.match(/\[miner\] \[agent\] → mcp__sessions__read_session .*?"id":"([^"]+)"/);
+    const read = line.match(
+      /\[learner\] \[agent\] → mcp__sessions__read_session .*?"id":"([^"]+)"/,
+    );
     if (read) {
       current.read.add(read[1]);
       continue;
     }
-    if (line.includes("[miner] [agent] → mcp__dosu__write_knowledge")) {
+    if (line.includes("[learner] [agent] → mcp__dosu__write_knowledge")) {
       current.notes += 1;
     }
   }
@@ -246,11 +248,11 @@ function statusLine(status: SyncStatus): string {
   if (status.running) {
     const since = status.startedAt ? ` \u00B7 since ${localTime(status.startedAt)}` : "";
     const pid = status.pid !== undefined ? ` (pid ${status.pid})` : "";
-    return `\u26CF\uFE0F ${pc.bold(brand("Mining sessions..."))}${pc.dim(`${pid}${since}`)}`;
+    return `\u26CF\uFE0F ${pc.bold(brand("Studying sessions..."))}${pc.dim(`${pid}${since}`)}`;
   }
   if (status.state.paused) {
     return `${pc.yellow("\u25CB")} ${pc.bold("Paused")} ${pc.dim(
-      "\u00B7 mining stays off until you resume",
+      "\u00B7 studying stays off until you resume",
     )}`;
   }
   if (status.staleLock) {
@@ -267,14 +269,14 @@ function statusLine(status: SyncStatus): string {
 export function progressLine(done: number, ready: number, width: number, notes = 0): string | null {
   const total = done + ready;
   if (total <= 0) return null;
-  // Leave room for the " done/total mined · NN% · NN suggested pages" suffix.
+  // Leave room for the " done/total studied · NN% · NN suggested pages" suffix.
   const cells = Math.max(10, Math.min(30, width - 44));
   const ratio = Math.max(0, Math.min(1, done / total));
   const filled = Math.min(cells, Math.round(ratio * cells));
   const bar = brand("\u2588".repeat(filled)) + pc.dim("\u2591".repeat(cells - filled));
   const pct = Math.floor(ratio * 100);
   const suffix = notes > 0 ? ` \u00B7 ${notes} suggested page${notes === 1 ? "" : "s"}` : "";
-  return `${bar} ${done}/${total} mined \u00B7 ${pct}%${suffix}`;
+  return `${bar} ${done}/${total} studied \u00B7 ${pct}%${suffix}`;
 }
 
 /** The Activity tab strip: labels with live counts over the shared rule. */
@@ -282,13 +284,13 @@ export function tabBar(
   tab: ActivityViewTab,
   queuedCount: number,
   openCount: number,
-  minedCount: number,
+  studiedCount: number,
   width: number,
 ): string[] {
   return tabStrip(
     [
       ["activity", "Activity"],
-      ["mined", `Mined (${minedCount})`],
+      ["studied", `Studied (${studiedCount})`],
       ["queued", `Queued (${queuedCount})`],
       ["open", `Open (${openCount})`],
     ],
@@ -340,16 +342,20 @@ export function confirmBox(
 ): string[] {
   const inFlight =
     backlog && backlog.inFlight > 0
-      ? ` (+${backlog.inFlight} open, mined once ${backlog.inFlight === 1 ? "it goes" : "they go"} quiet)`
+      ? ` (+${backlog.inFlight} open, studied once ${backlog.inFlight === 1 ? "it goes" : "they go"} quiet)`
       : "";
   const scope =
     mode === "stop"
-      ? "the run is killed mid-batch \u00B7 mining stays paused until you resume"
+      ? "the run is killed mid-batch \u00B7 studying stays paused until you resume"
       : queuedCount > 0
         ? `${queuedCount} session${queuedCount === 1 ? "" : "s"} queued${inFlight} \u00B7 runs in the background`
         : `queue empty${inFlight} \u00B7 a run would only pick up sessions that finish from here`;
   const title =
-    mode === "stop" ? "Stop mining?" : mode === "resume" ? "Resume mining?" : "Start mining now?";
+    mode === "stop"
+      ? "Stop studying?"
+      : mode === "resume"
+        ? "Resume studying?"
+        : "Start studying now?";
   const verb = mode === "stop" ? "stop" : mode === "resume" ? "resume" : "start";
   const maxInner = Math.max(20, Math.min(width, contentWidth()) - 4);
   const rows = [
@@ -378,15 +384,15 @@ export function renderActivityFrame(
   pane: ActivityViewPane = DEFAULT_PANE,
   queued: readonly AgentSession[] = [],
   /** Lifetime total_mined when the current run started; see progressLine. */
-  minedBeforeRun = 0,
+  studiedBeforeRun = 0,
   /** Live (still-active) sessions for the Open tab. */
   open: readonly AgentSession[] = [],
-  /** Within-batch step progress folded from the miner's log traces. */
+  /** Within-batch step progress folded from the learner's log traces. */
   runProgress: RunProgress | null = null,
 ): string {
-  const mined = status.state.watermark
-    ? `Mined sessions up to ${localTime(status.state.watermark)}`
-    : "Nothing mined yet";
+  const studied = status.state.watermark
+    ? `Studied sessions up to ${localTime(status.state.watermark)}`
+    : "Nothing studied yet";
   // Queue and open-session counts live in the tab bar, not a header line.
   const queueDetail: string[] = [];
   if (status.backoffUntil) {
@@ -395,17 +401,17 @@ export function renderActivityFrame(
   }
 
   // Run-scoped drain progress: batch commits advance it, and within a batch
-  // the miner's per-session steps do, so a one-batch queue still shows motion.
+  // the learner's per-session steps do, so a one-batch queue still shows motion.
   let progress: string | null = null;
   if (status.running && backlog) {
-    const minedDelta = Math.max(0, (status.state.total_mined ?? 0) - minedBeforeRun);
+    const studiedDelta = Math.max(0, (status.state.total_mined ?? 0) - studiedBeforeRun);
     // Distinct-opened minus the in-flight one, shifting ready → done rather
     // than growing the total (the gate only re-logs when a batch commits).
     const stepDone = runProgress
       ? Math.min(Math.max(0, runProgress.read.size - 1), runProgress.batch - 1, backlog.ready)
       : 0;
     progress = progressLine(
-      minedDelta + stepDone,
+      studiedDelta + stepDone,
       Math.max(0, backlog.ready - stepDone),
       width,
       runProgress?.notes ?? 0,
@@ -416,7 +422,7 @@ export function renderActivityFrame(
   // backlog view; the message is prose and easily outruns the frame, so wrap.
   const refusal = !status.running && status.state.last_refusal;
   const refusalLines = refusal
-    ? wrapLine(`! Mining paused: ${refusal.message} (${localTime(refusal.at)})`, width).map(
+    ? wrapLine(`! Studying paused: ${refusal.message} (${localTime(refusal.at)})`, width).map(
         (line) => pc.yellow(line),
       )
     : [];
@@ -425,8 +431,8 @@ export function renderActivityFrame(
   // asked for full rows, which render unclipped and wrap below instead. One toggle, every tab:
   // log lines (paths, error text) lose their tails to the clip just like session ids do.
   const fullRows = Boolean(pane.fullRows);
-  const minedRows = (status.state.mined_sessions ?? []).map((record) =>
-    fullRows ? formatMinedRow(record, true) : formatActivityLine(formatMinedRow(record), width),
+  const studiedRows = (status.state.mined_sessions ?? []).map((record) =>
+    fullRows ? formatStudiedRow(record, true) : formatActivityLine(formatStudiedRow(record), width),
   );
   const sessionRow = (session: AgentSession) =>
     fullRows ? formatQueuedRow(session, true) : formatActivityLine(formatQueuedRow(session), width);
@@ -439,12 +445,12 @@ export function renderActivityFrame(
         ? queuedRows
         : pane.tab === "open"
           ? openRows
-          : minedRows;
-  // Pre-history runs only advanced the watermark, so mining may have
+          : studiedRows;
+  // Pre-history runs only advanced the watermark, so studying may have
   // happened without leaving records — say so instead of denying it.
-  const emptyMined = status.state.watermark
-    ? "No sessions recorded yet. History starts with the next mining run."
-    : "No mined sessions yet.";
+  const emptyStudied = status.state.watermark
+    ? "No sessions recorded yet. History starts with the next study run."
+    : "No studied sessions yet.";
   const empty =
     pane.tab === "activity"
       ? "No sync activity in the log yet."
@@ -452,7 +458,7 @@ export function renderActivityFrame(
         ? "Queue empty. Finished agent sessions appear here."
         : pane.tab === "open"
           ? "No open sessions. Live agent sessions sit here until they go quiet."
-          : emptyMined;
+          : emptyStudied;
   // Full-rows mode windows fewer rows (each may wrap to several lines) and hard-wraps them.
   const height = fullRows ? ACTIVITY_VIEW_FULL_LIST_ROWS : ACTIVITY_VIEW_LIST_LINES;
   const { visible, above, below } = windowList(source, pane.scroll, height);
@@ -467,7 +473,7 @@ export function renderActivityFrame(
     breadcrumb(["Home", "Activity"], width),
     "",
     statusLine(status),
-    pc.dim(mined),
+    pc.dim(studied),
     ...(queueDetail.length > 0
       ? wrapLine(queueDetail.join(" \u00B7 "), width).map((line) => pc.dim(line))
       : []),
@@ -478,7 +484,7 @@ export function renderActivityFrame(
       pane.tab,
       queued.length,
       open.length,
-      status.state.total_mined ?? minedRows.length,
+      status.state.total_mined ?? studiedRows.length,
       width,
     ),
     ...listRows,
@@ -588,18 +594,18 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
   let lastFrame: string | null = null;
   // The run's total_mined baseline so the bar is run-scoped; persisted in sync state, with the
   // first-observation snapshot as fallback.
-  let minedBeforeRun: number | null = null;
+  let studiedBeforeRun: number | null = null;
   const draw = () => {
     status = getStatus();
     if (status.running) {
       const run = status.state.run;
       if (run && run.pid === status.pid) {
-        minedBeforeRun = run.baseline_mined;
+        studiedBeforeRun = run.baseline_mined;
       } else {
-        minedBeforeRun ??= status.state.total_mined ?? 0;
+        studiedBeforeRun ??= status.state.total_mined ?? 0;
       }
     } else {
-      minedBeforeRun = null;
+      studiedBeforeRun = null;
     }
     if (status.state.watermark !== queuedWatermark) {
       queuedWatermark = status.state.watermark;
@@ -616,7 +622,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
       backlog,
       { tab, scroll, confirm: confirmSync ?? undefined, fullRows },
       sessions.queued,
-      minedBeforeRun ?? 0,
+      studiedBeforeRun ?? 0,
       sessions.open,
       runProgress,
     );
@@ -680,7 +686,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
               const ok = status.pid !== undefined && stopSync(status.pid);
               if (ok) setPaused(true);
               note = ok
-                ? "[sync] mining stopped \u00B7 paused until you resume"
+                ? "[sync] studying stopped \u00B7 paused until you resume"
                 : "[sync] could not stop the run \u00B7 it may have just finished";
             } else {
               if (mode === "resume") setPaused(false);

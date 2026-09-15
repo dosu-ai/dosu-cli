@@ -479,7 +479,7 @@ export function buildReportHtml(options: BuildReportOptions): string {
   const branch = options.branch || "—";
   const summary =
     options.summary ||
-    "Local agent session logs were mined into Dosu notes so the next task can reuse them — reducing rediscovery cost.";
+    "Local agent session logs were studied into Dosu notes so the next task can reuse them — reducing rediscovery cost.";
   const generated = `${(options.generatedAt ?? new Date()).toISOString().replace("T", " ").slice(0, 16)} UTC`;
 
   const derived = tokenTotalsFromCandidates(candidates, inventory);
@@ -559,7 +559,7 @@ export function buildReportHtml(options: BuildReportOptions): string {
 
   const notesBody =
     candidateRows.join("") ||
-    '<p class="muted">No write_knowledge payloads yet. Run knowledge sync so the miner extracts learnings.</p>';
+    '<p class="muted">No write_knowledge payloads yet. Run knowledge sync so the learner extracts learnings.</p>';
   const lede = notesLede ? `<p class="lede">${esc(notesLede)}</p>` : "";
 
   return `<!DOCTYPE html>

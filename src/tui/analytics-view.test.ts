@@ -128,9 +128,9 @@ describe("cycleAnalyticsTab", () => {
 });
 
 describe("overviewRows", () => {
-  it("renders the mining totals", () => {
+  it("renders the studying totals", () => {
     const rows = overviewRows(reportState()).join("\n");
-    expect(rows).toContain("Sessions mined");
+    expect(rows).toContain("Sessions studied");
     expect(rows).toContain("558");
     expect(rows).toContain("Suggested pages");
     expect(rows).toContain("42");
@@ -143,7 +143,7 @@ describe("overviewRows", () => {
 
   it("omits the token row when no learning tokens are known", () => {
     const rows = overviewRows({ ...emptyState(), total_mined: 3, total_notes: 2 }).join("\n");
-    expect(rows).toContain("Sessions mined");
+    expect(rows).toContain("Sessions studied");
     expect(rows).not.toContain("Investigation distilled");
   });
 });
@@ -158,7 +158,7 @@ describe("projectRows", () => {
     expect(rows[2]).toContain("(unknown)");
   });
 
-  it("is empty without mined-session history", () => {
+  it("is empty without studied-session history", () => {
     expect(projectRows(emptyState())).toEqual([]);
   });
 });
@@ -188,7 +188,7 @@ describe("pageRows", () => {
 describe("analyticsTabRows", () => {
   it("routes each tab to its rows", () => {
     expect(analyticsTabRows("overview", reportState(), null).join("\n")).toContain(
-      "Sessions mined",
+      "Sessions studied",
     );
     expect(analyticsTabRows("projects", reportState(), null).join("\n")).toContain("dosu-cli");
     expect(analyticsTabRows("pages", emptyState(), pageStats()).join("\n")).toContain(
@@ -325,7 +325,7 @@ describe("renderAnalyticsFrame", () => {
     expect(frame).toContain("Overview");
     expect(frame).toContain("Projects");
     expect(frame).toContain("Pages");
-    expect(frame).toContain("Sessions mined");
+    expect(frame).toContain("Sessions studied");
     expect(frame).toContain("tab switch \u00B7 \u2191\u2193 scroll \u00B7 esc back");
   });
 
@@ -436,7 +436,7 @@ describe("runAnalyticsView", () => {
 
     expect(written.join("")).toContain(ALT_SCREEN_ENTER);
     const rendered = stripAnsi(written.join(""));
-    expect(rendered).toContain("Sessions mined");
+    expect(rendered).toContain("Sessions studied");
     expect(rendered).toContain("558");
 
     input.emit("data", "q");

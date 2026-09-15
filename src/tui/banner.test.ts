@@ -170,12 +170,12 @@ describe("renderBanner", () => {
     expect(rows[0].startsWith(LOGO_MARK[0])).toBe(true);
   });
 
-  it("includes the sync row only when a mining run is active", () => {
-    expect(stripAnsi(renderBanner(makeContext()))).not.toContain("mining sessions");
+  it("includes the sync row only when a study run is active", () => {
+    expect(stripAnsi(renderBanner(makeContext()))).not.toContain("studying sessions");
 
-    const active = stripAnsi(renderBanner(makeContext({ mining: true })));
+    const active = stripAnsi(renderBanner(makeContext({ studying: true })));
     expect(active).toContain("sync");
-    expect(active).toContain("\u26CF\uFE0F mining sessions... \u00B7 see Activity");
+    expect(active).toContain("\u26CF\uFE0F studying sessions... \u00B7 see Activity");
   });
 
   it("includes the update row only when a newer version is known", () => {

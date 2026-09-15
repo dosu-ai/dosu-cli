@@ -325,14 +325,14 @@ describe("knowledge sessions", () => {
     const out = allOutput();
     expect(out).toContain("Queued (1)");
     expect(out).toContain("Open (1)");
-    expect(out).toContain("Mined (1)");
+    expect(out).toContain("Studied (1)");
     // The whole point of the command: nothing is clipped.
     expect(out).toContain(queuedSession.id);
     expect(out).toContain(queuedSession.project);
     expect(out).toContain(openSession.id);
     expect(out).toContain("1d4b4ea0-e555-4444-8888-abcdefabcdef");
     expect(out).not.toContain("\u2026");
-    // Mined history's "harness/id" splits back into columns.
+    // Studied history's "harness/id" splits back into columns.
     expect(out).not.toContain("cursor/1d4b4ea0");
   });
 
@@ -345,7 +345,7 @@ describe("knowledge sessions", () => {
     const out = allOutput();
     expect(out).toContain("Queue empty.");
     expect(out).toContain("No open sessions.");
-    expect(out).toContain("No mined sessions recorded yet.");
+    expect(out).toContain("No studied sessions recorded yet.");
   });
 
   it("--queued lists only the queue and never reads the sync state", async () => {
@@ -356,17 +356,17 @@ describe("knowledge sessions", () => {
     const out = allOutput();
     expect(out).toContain("Queued (1)");
     expect(out).not.toContain("Open (");
-    expect(out).not.toContain("Mined (");
+    expect(out).not.toContain("Studied (");
     expect(mockLoadSyncState).not.toHaveBeenCalled();
   });
 
-  it("--mined alone skips the session scan", async () => {
+  it("--studied alone skips the session scan", async () => {
     mockLoadSyncState.mockReturnValue(syncState);
 
-    await run("sessions", "--mined");
+    await run("sessions", "--studied");
 
     expect(mockListBacklog).not.toHaveBeenCalled();
-    expect(allOutput()).toContain("Mined (1)");
+    expect(allOutput()).toContain("Studied (1)");
   });
 
   it("--json emits only the requested sections", async () => {
@@ -376,13 +376,13 @@ describe("knowledge sessions", () => {
 
     const parsed = JSON.parse(allOutput());
     expect(parsed).toEqual({ queued: [queuedSession], open: [openSession] });
-    expect(parsed.mined).toBeUndefined();
+    expect(parsed.studied).toBeUndefined();
   });
 });
 
 describe("knowledge sync", () => {
   beforeEach(() => {
-    // Authenticated cloud-mode install: sync should build a miner.
+    // Authenticated cloud-mode install: sync should build a learner.
     mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: "dep1" }));
   });
 
@@ -400,7 +400,7 @@ describe("knowledge sync", () => {
     expect(allOutput()).toContain("3 new sessions ready to mine");
   });
 
-  it("does not build a miner when the install has no API key", async () => {
+  it("does not build a learner when the install has no API key", async () => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ api_key: undefined }));
     mockRunSync.mockResolvedValue({ status: "backlog", readySessions: 1, inFlightSessions: 0 });
 
@@ -409,7 +409,7 @@ describe("knowledge sync", () => {
     expect(syncDeps().mine).toBeUndefined();
   });
 
-  it("does not build a miner in OSS mode", async () => {
+  it("does not build a learner in OSS mode", async () => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: "dep1", mode: "oss" }));
     mockRunSync.mockResolvedValue({ status: "backlog", readySessions: 1, inFlightSessions: 0 });
 
@@ -418,20 +418,20 @@ describe("knowledge sync", () => {
     expect(syncDeps().mine).toBeUndefined();
   });
 
-  it("reports a mined run with the remaining backlog", async () => {
+  it("reports a studied run with the remaining backlog", async () => {
     mockRunSync.mockResolvedValue({
-      status: "mined",
+      status: "studied",
       readySessions: 8,
       inFlightSessions: 0,
       sessions: [],
-      minedSessions: 5,
-      miner: { outcome: "completed", notesWritten: 3, turns: 12 },
+      studiedSessions: 5,
+      learner: { outcome: "completed", notesWritten: 3, turns: 12 },
     });
 
     await run("sync");
 
     const output = allOutput();
-    expect(output).toContain("Mined 5 sessions, 3 suggested pages created");
+    expect(output).toContain("Studied 5 sessions, 3 suggested pages created");
     expect(output).toContain("3 more in the backlog");
   });
 
@@ -441,8 +441,8 @@ describe("knowledge sync", () => {
       readySessions: 2,
       inFlightSessions: 0,
       sessions: [],
-      minedSessions: 0,
-      miner: { outcome: "consent_off", notesWritten: 0, turns: 0, message: "org opt-in is off" },
+      studiedSessions: 0,
+      learner: { outcome: "consent_off", notesWritten: 0, turns: 0, message: "org opt-in is off" },
     });
 
     await run("sync");
@@ -451,14 +451,14 @@ describe("knowledge sync", () => {
     expect(process.exitCode).toBeUndefined();
   });
 
-  it("mine-failed prints the miner message and sets the exit code", async () => {
+  it("mine-failed prints the learner message and sets the exit code", async () => {
     mockRunSync.mockResolvedValue({
       status: "mine-failed",
       readySessions: 2,
       inFlightSessions: 0,
       sessions: [],
-      minedSessions: 0,
-      miner: { outcome: "error", notesWritten: 0, turns: 4, message: "run exploded" },
+      studiedSessions: 0,
+      learner: { outcome: "error", notesWritten: 0, turns: 4, message: "run exploded" },
     });
 
     await run("sync");
@@ -540,12 +540,12 @@ describe("knowledge sync", () => {
   it("--report writes and opens the harvest HTML after a foreground sync", async () => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: "dep1" }));
     mockRunSync.mockResolvedValue({
-      status: "mined",
+      status: "studied",
       readySessions: 2,
       inFlightSessions: 0,
       sessions: [],
-      minedSessions: 2,
-      miner: { outcome: "completed", notesWritten: 1, turns: 4 },
+      studiedSessions: 2,
+      learner: { outcome: "completed", notesWritten: 1, turns: 4 },
     });
 
     await run("sync", "--report", "--out", "/tmp/custom-report.html");
@@ -569,7 +569,7 @@ describe("knowledge sync", () => {
   });
 
   it("--quiet --report stays silent and does not write HTML", async () => {
-    mockRunSync.mockResolvedValue({ status: "mined", readySessions: 0, inFlightSessions: 0 });
+    mockRunSync.mockResolvedValue({ status: "studied", readySessions: 0, inFlightSessions: 0 });
     await run("sync", "--quiet", "--report");
     expect(mockEmitReport).not.toHaveBeenCalled();
     expect(logSpy).not.toHaveBeenCalled();
@@ -601,21 +601,21 @@ describe("knowledge sync", () => {
     expect(mockSpawnDetached).toHaveBeenCalledWith(["knowledge", "sync", "--quiet", "--bootstrap"]);
   });
 
-  function minedOutcome(remaining: number) {
+  function studiedOutcome(remaining: number) {
     return {
-      status: "mined",
+      status: "studied",
       readySessions: remaining,
       inFlightSessions: 0,
       sessions: [],
-      minedSessions: Math.min(remaining, 5),
-      miner: { outcome: "completed", notesWritten: 2, turns: 10 },
+      studiedSessions: Math.min(remaining, 5),
+      learner: { outcome: "completed", notesWritten: 2, turns: 10 },
     };
   }
 
   it("--bootstrap passes the bootstrap scope on every round", async () => {
     mockRunSync
-      .mockResolvedValueOnce(minedOutcome(8))
-      .mockResolvedValueOnce(minedOutcome(3))
+      .mockResolvedValueOnce(studiedOutcome(8))
+      .mockResolvedValueOnce(studiedOutcome(3))
       .mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
 
     await run("sync", "--bootstrap");
@@ -628,26 +628,26 @@ describe("knowledge sync", () => {
 
   it("--bootstrap drains the backlog and reports each round", async () => {
     mockRunSync
-      .mockResolvedValueOnce(minedOutcome(8))
-      .mockResolvedValueOnce(minedOutcome(3))
+      .mockResolvedValueOnce(studiedOutcome(8))
+      .mockResolvedValueOnce(studiedOutcome(3))
       .mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
 
     await run("sync", "--bootstrap");
 
     const output = allOutput();
-    expect(output).toContain("Mined 5 sessions");
-    expect(output).toContain("Mined 3 sessions");
+    expect(output).toContain("Studied 5 sessions");
+    expect(output).toContain("Studied 3 sessions");
     expect(output).toContain("No new completed sessions");
   });
 
   it("--bootstrap stops the drain on a failed round", async () => {
-    mockRunSync.mockResolvedValueOnce(minedOutcome(8)).mockResolvedValue({
+    mockRunSync.mockResolvedValueOnce(studiedOutcome(8)).mockResolvedValue({
       status: "mine-failed",
       readySessions: 3,
       inFlightSessions: 0,
       sessions: [],
-      minedSessions: 0,
-      miner: { outcome: "error", notesWritten: 0, turns: 1, message: "run exploded" },
+      studiedSessions: 0,
+      learner: { outcome: "error", notesWritten: 0, turns: 1, message: "run exploded" },
     });
 
     await run("sync", "--bootstrap");
@@ -659,7 +659,7 @@ describe("knowledge sync", () => {
 
   it("--bootstrap --quiet drains silently", async () => {
     mockRunSync
-      .mockResolvedValueOnce(minedOutcome(8))
+      .mockResolvedValueOnce(studiedOutcome(8))
       .mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
 
     await run("sync", "--quiet", "--bootstrap");
@@ -668,18 +668,18 @@ describe("knowledge sync", () => {
     expect(logSpy).not.toHaveBeenCalled();
   });
 
-  it("--bootstrap is capped even if mining always reports more", async () => {
+  it("--bootstrap is capped even if studying always reports more", async () => {
     // Every round claims two batches' worth of sessions are still ready; the
     // cap comes from the first round's backlog: ceil(ready/batch)+2 rounds.
     const ready = MINE_BATCH_LIMIT * 2;
-    mockRunSync.mockResolvedValue(minedOutcome(ready));
+    mockRunSync.mockResolvedValue(studiedOutcome(ready));
 
     await run("sync", "--bootstrap");
 
     expect(mockRunSync).toHaveBeenCalledTimes(Math.ceil(ready / MINE_BATCH_LIMIT) + 2);
   });
 
-  it("--bootstrap without a miner stays single-shot", async () => {
+  it("--bootstrap without a learner stays single-shot", async () => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ api_key: undefined }));
     mockRunSync.mockResolvedValue({
       status: "backlog",
@@ -711,17 +711,17 @@ describe("knowledge sync --status", () => {
     await run("sync", "--status");
 
     const out = allOutput();
-    expect(out).toContain("Mining paused: stopped by you");
+    expect(out).toContain("Studying paused: stopped by you");
     expect(out).toContain("'dosu knowledge sync'");
   });
 
-  it("reports a running sync without scanning or mining", async () => {
+  it("reports a running sync without scanning or studying", async () => {
     mockGetSyncStatus.mockReturnValue({
       running: true,
       pid: 4242,
       startedAt: new Date(Date.now() - 3 * 60_000).toISOString(),
       state: { ...baseState, watermark: new Date(Date.now() - 2 * 86_400_000).toISOString() },
-      recentActivity: ["[t] [sync] mined 5 sessions, 4 suggested pages"],
+      recentActivity: ["[t] [sync] studied 5 sessions, 4 suggested pages"],
     });
 
     await run("sync", "--status");
@@ -729,9 +729,9 @@ describe("knowledge sync --status", () => {
     const output = allOutput();
     expect(output).toContain("Sync running \u00B7 pid 4242");
     expect(output).toContain("3m ago");
-    expect(output).toContain("Mined through:");
+    expect(output).toContain("Studied through:");
     expect(output).toContain("2d ago");
-    expect(output).toContain("mined 5 sessions, 4 suggested pages");
+    expect(output).toContain("studied 5 sessions, 4 suggested pages");
     expect(output).toContain("logs --follow");
     expect(mockRunSync).not.toHaveBeenCalled();
   });
@@ -756,14 +756,14 @@ describe("knowledge sync --status", () => {
     );
   });
 
-  it("reports idle with nothing mined yet", async () => {
+  it("reports idle with nothing studied yet", async () => {
     mockGetSyncStatus.mockReturnValue({ running: false, state: baseState, recentActivity: [] });
 
     await run("sync", "--status");
 
     const output = allOutput();
     expect(output).toContain("No sync running");
-    expect(output).toContain("nothing mined yet");
+    expect(output).toContain("nothing studied yet");
     expect(output).not.toContain("Suggested pages");
     expect(output).not.toContain("Recent activity");
   });
@@ -818,7 +818,7 @@ describe("knowledge sync --status", () => {
     await run("sync", "--status");
 
     const output = allOutput();
-    expect(output).toContain("Mining paused: Your org has used its Dosu credits");
+    expect(output).toContain("Studying paused: Your org has used its Dosu credits");
     expect(output).toContain("10m ago");
   });
 
@@ -978,7 +978,7 @@ describe("knowledge backfill-transcripts", () => {
     const out = allOutput();
     expect(out).toContain("Attributed 5 of 10 notes");
     expect(out).toContain("3 ambiguous");
-    expect(out).toContain("2 without a local mining batch");
+    expect(out).toContain("2 without a local study batch");
   });
 
   it("says nothing to do when every note is already attributed", async () => {

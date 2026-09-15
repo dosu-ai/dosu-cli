@@ -58,7 +58,10 @@ describe("logger", () => {
 
     it("strips ANSI escape codes so the log stays plain text", () => {
       const ESC = String.fromCharCode(27);
-      logger.info("miner", `[sdk] ${ESC}[31mred error${ESC}[0m and ${ESC}[1;32mbold green${ESC}[m`);
+      logger.info(
+        "learner",
+        `[sdk] ${ESC}[31mred error${ESC}[0m and ${ESC}[1;32mbold green${ESC}[m`,
+      );
       const content = readFileSync(logPath(), "utf-8");
       expect(content).toContain("[sdk] red error and bold green");
       expect(content).not.toContain(`${ESC}[`);

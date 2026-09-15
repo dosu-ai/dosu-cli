@@ -232,7 +232,7 @@ export function countRediscoveryToolCalls(session: AgentSession): number {
 /** chars → tokens, the same coarse model the log-backfill report uses. */
 const CHARS_PER_TOKEN = 4;
 
-/** Estimated tokens of conversational content, the mining analytics' "cost to learn" baseline:
+/** Estimated tokens of conversational content, the studying analytics' "cost to learn" baseline:
  * text chars / 4 over user/assistant turns only. */
 export function estimateSessionTokens(session: AgentSession): number {
   let chars = 0;
@@ -247,7 +247,7 @@ const MIN_WORTH_CHARS = 2000;
 
 /** Cheap pre-filter that keeps trivial sessions from costing a gateway run; deliberately
  * permissive, rejecting only sessions that are structurally too small, never judging content. */
-export function isWorthMining(session: AgentSession): boolean {
+export function isWorthStudying(session: AgentSession): boolean {
   const turns = readSessionTurns(session);
   if (turns.length < MIN_WORTH_TURNS) return false;
   let chars = 0;

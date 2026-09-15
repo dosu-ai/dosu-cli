@@ -1,13 +1,13 @@
 /**
  * One-shot local backfill of per-note transcript_id for notes written before
- * the miner injected it. Everything happens on the user's machine: their notes
+ * the learner injected it. Everything happens on the user's machine: their notes
  * come from the backend (content only), and the conversation each was learned
  * from is recovered by matching the note against the local session logs its
- * mining run read — the mining ledger and the logs never leave the machine.
+ * study run read — the studying ledger and the logs never leave the machine.
  * Only the resulting {note_id -> transcript_id} pairs are sent back.
  *
  * Run identity is gone from the backend (session_id was dropped), so notes are
- * grouped to a mining batch by write time rather than by run id: each note is
+ * grouped to a study batch by write time rather than by run id: each note is
  * matched to the nearest ledger batch, then content-scored against that batch's
  * sessions, and attributed only on a clear win — an ambiguous note stays
  * unattributed rather than getting a wrong trace.
@@ -56,7 +56,7 @@ function noteTime(at: string | undefined): number {
   return Number.isNaN(parsed) ? Number.NaN : parsed;
 }
 
-/** Recover transcript ids for notes, matching each against its nearest mining
+/** Recover transcript ids for notes, matching each against its nearest studying
  * batch's local sessions. Pure: no I/O, no network — the caller supplies the
  * ledger and scanned sessions and sends the mappings. */
 export function correlateBackfill(input: BackfillInput): BackfillResult {

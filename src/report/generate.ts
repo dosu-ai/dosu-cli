@@ -54,7 +54,7 @@ export async function emitKnowledgeReport(options: EmitReportOptions = {}): Prom
   const inventory = sessionsToInventory(sessions);
   const state = loadSyncState();
   if (inventory.totals && state.total_learning_tokens && !options.sessions) {
-    // All-time distilled baseline, when this machine has mined.
+    // All-time distilled baseline, when this machine has studied.
     inventory.totals.learning_tokens = state.total_learning_tokens;
   }
   const html = buildReportHtml({

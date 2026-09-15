@@ -1,4 +1,4 @@
-/** Session working-directory resolution for the mining project filter; each harness leaks the
+/** Session working-directory resolution for the studying project filter; each harness leaks the
  * cwd differently. Results are cached per session (a session's cwd never changes). */
 
 import {

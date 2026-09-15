@@ -1,7 +1,7 @@
-/** The miner's write-knowledge rules — the full write/don't-write contract for the fenced
+/** The learner's write-knowledge rules — the full write/don't-write contract for the fenced
  * background agent. Hand-written here; changing them ships with a CLI release. */
 
-export const MINER_CORE_RULES = `Rules — non-negotiable:
+export const LEARNER_CORE_RULES = `Rules — non-negotiable:
 1. Before writing anything, call read_knowledge with the candidate topic. If the same fact is
 already recorded, skip it — never write a duplicate or near-duplicate. If the topic exists but
 the session shows it has changed or been superseded, do write: a note stating the current state

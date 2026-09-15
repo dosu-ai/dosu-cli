@@ -358,11 +358,11 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
   s.start("Checking for recent agent sessions...");
   const outcome = await runKnowledgeSync({ bootstrap: true });
   if (outcome.status !== "backlog" || outcome.readySessions === 0) {
-    s.stop("No unmined agent sessions found. Dosu will learn as you work.");
+    s.stop("No unstudied agent sessions found. Dosu will learn as you work.");
     return;
   }
   const n = outcome.readySessions;
-  s.stop(`Found ${n} unmined agent session${n === 1 ? "" : "s"} on this machine.`);
+  s.stop(`Found ${n} unstudied agent session${n === 1 ? "" : "s"} on this machine.`);
 
   const mineNow = await p.confirm({
     message: `Mine ${n === 1 ? "it" : "them"} for team knowledge now? (runs in the background)`,
@@ -379,7 +379,7 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
 
   if (spawnDetachedSelf(["knowledge", "sync", "--quiet", "--bootstrap"])) {
     p.log.success(
-      "\u26CF\uFE0F Currently mining... Dosu is distilling your past sessions into team knowledge, a few at a time in the background.",
+      "\u26CF\uFE0F Currently studying... Dosu is distilling your past sessions into team knowledge, a few at a time in the background.",
     );
     const watch = await p.confirm({
       message: "What next?",

@@ -1,5 +1,5 @@
 /** Detects managed Claude Code settings (read from system paths outside CLAUDE_CONFIG_DIR) that
- * would silently reroute the miner's auth or traffic; when present the miner fails closed. */
+ * would silently reroute the learner's auth or traffic; when present the learner fails closed. */
 
 import { existsSync, readFileSync } from "node:fs";
 
@@ -25,7 +25,7 @@ const CONFLICTING_KEYS = [
 
 const CONFLICTING_ENV_PREFIXES = ["ANTHROPIC_", "CLAUDE_CODE_", "AWS_"];
 
-export interface MinerConflict {
+export interface LearnerConflict {
   file: string;
   /** The offending keys, e.g. `["apiKeyHelper", "env.ANTHROPIC_BASE_URL"]`. */
   keys: string[];
@@ -45,10 +45,12 @@ function conflictingKeysIn(settings: Record<string, unknown>): string[] {
   return keys;
 }
 
-/** Scan managed settings for keys that would hijack a miner run; an unreadable or unparsable
+/** Scan managed settings for keys that would hijack a learner run; an unreadable or unparsable
  * managed file counts as a conflict. */
-export function detectSettingsConflicts(paths: string[] = managedSettingsPaths()): MinerConflict[] {
-  const conflicts: MinerConflict[] = [];
+export function detectSettingsConflicts(
+  paths: string[] = managedSettingsPaths(),
+): LearnerConflict[] {
+  const conflicts: LearnerConflict[] = [];
   for (const file of paths) {
     if (!existsSync(file)) continue;
     let settings: unknown;
