@@ -310,10 +310,10 @@ export function tabBar(
 ): string[] {
   return tabStrip(
     [
-      ["activity", "Activity"],
-      ["studied", `Studied (${studiedCount})`],
-      ["queued", `Queued (${queuedCount})`],
-      ["open", `Open (${openCount})`],
+      ["activity", "activity"],
+      ["studied", `studied (${studiedCount})`],
+      ["queued", `queued (${queuedCount})`],
+      ["open", `open (${openCount})`],
     ],
     tab,
     width,
@@ -520,7 +520,7 @@ export function renderActivityFrame(
   if (below > 0) scrollParts.push(`\u2193 ${below} newer`);
 
   const lines = [
-    breadcrumb(["Home", "Activity"], width),
+    breadcrumb(["home", "activity"], width),
     "",
     statusLine(status),
     pc.dim(studied),

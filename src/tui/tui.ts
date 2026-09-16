@@ -209,38 +209,38 @@ async function runMainMenu(): Promise<void> {
     if (session.expired) {
       return [
         {
-          label: "Log in again",
+          label: "log in again",
           hint: "(session expired \u00B7 opens your browser)",
           value: "auth",
         },
-        { label: "Exit", value: "exit" },
+        { label: "exit", value: "exit" },
       ];
     }
     if (!isAuthenticated(cfg)) {
       return [
-        { label: "Log in / Sign up", hint: "(opens your browser)", value: "auth" },
-        { label: "Exit", value: "exit" },
+        { label: "log in / sign up", hint: "(opens your browser)", value: "auth" },
+        { label: "exit", value: "exit" },
       ];
     }
     // Setup mode: until the wizard completes (target + a configured agent),
     // the other screens have nothing to show, so the menu is Setup or leave.
     if (!isSetUp(cfg)) {
       return [
-        { label: "Setup", hint: setupHint(cfg), value: "setup" },
-        { label: "Exit", value: "exit" },
+        { label: "setup", hint: setupHint(cfg), value: "setup" },
+        { label: "exit", value: "exit" },
       ];
     }
     const studying = isStudying();
     return [
       {
-        label: studying ? `Activity \uD83D\uDCDA ${brand("studying sessions...")}` : "Activity",
+        label: studying ? `activity \uD83D\uDCDA ${brand("studying sessions...")}` : "activity",
         value: "sync",
       },
-      { label: "Knowledge report", hint: "(opens in browser)", value: "report" },
-      { label: "Analytics", value: "analytics" },
-      { label: "Pages", value: "pages" },
-      { label: "Settings", value: "settings" },
-      { label: "Exit", value: "exit" },
+      { label: "knowledge report", hint: "(opens in browser)", value: "report" },
+      { label: "analytics", value: "analytics" },
+      { label: "pages", value: "pages" },
+      { label: "settings", value: "settings" },
+      { label: "exit", value: "exit" },
     ];
   };
   const home = () => drawHome(cfg, session);
@@ -333,13 +333,13 @@ async function runSettings(cfg: Config): Promise<void> {
       : filter.length <= 2
         ? filter.map((dir) => (dir === UNKNOWN_PROJECT ? "unknown" : basename(dir))).join(", ")
         : `${filter.length} projects`;
-    const action = await menuSelect("Settings", [
-      { label: "Switch organization", hint: target?.org_name, value: "switch-org" },
-      { label: "Switch Library", hint: library, value: "switch-library" },
-      { label: "Study scope", hint: scope, value: "projects" },
-      { label: "Run setup", hint: "rerun the setup wizard", value: "setup" },
-      { label: "Log out", hint: "clear stored credentials", value: "logout" },
-      { label: "Back", value: "back" },
+    const action = await menuSelect("settings", [
+      { label: "switch organization", hint: target?.org_name, value: "switch-org" },
+      { label: "switch library", hint: library, value: "switch-library" },
+      { label: "study scope", hint: scope, value: "projects" },
+      { label: "run setup", hint: "rerun the setup wizard", value: "setup" },
+      { label: "log out", hint: "clear stored credentials", value: "logout" },
+      { label: "back", value: "back" },
     ]);
     if (action === null || action === "back") return;
     if (action === "projects") {

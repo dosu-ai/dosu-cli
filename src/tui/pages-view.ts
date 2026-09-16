@@ -212,7 +212,7 @@ export function renderPagesFrame(model: PagesViewModel, width: number, selected:
         )}`
       : "";
   const lines = [
-    `${breadcrumb(["Home", "Pages"], width)}${count}`,
+    `${breadcrumb(["home", "pages"], width)}${count}`,
     "",
     ...body,
     ...(scrollHint ? [pc.dim(scrollHint)] : []),
@@ -248,7 +248,7 @@ export function renderPageFrame(
 
   const meta = `${page.type} \u00B7 ${page.published ? "published" : "draft"} \u00B7 updated ${page.updated_at.slice(0, 10)}`;
   const lines = [
-    breadcrumb(["Home", "Pages", page.title], width),
+    breadcrumb(["home", "pages", page.title], width),
     pc.dim(clip(meta, width)),
     "",
     ...body,

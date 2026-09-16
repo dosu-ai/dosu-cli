@@ -549,16 +549,16 @@ describe("renderActivityFrame", () => {
         [queuedSession("o1"), queuedSession("o2")],
       ),
     );
-    expect(withOpen).toContain("Queued (1)");
-    expect(withOpen).toContain("Open (2)");
+    expect(withOpen).toContain("queued (1)");
+    expect(withOpen).toContain("open (2)");
     expect(withOpen).not.toContain("\u00B7 2 open");
     expect(withOpen).not.toContain("Queue is empty");
     expect(withOpen).not.toContain("queued when they finish");
 
     // No open sessions: plain zero counts, no noise.
     const drained = stripAnsi(renderActivityFrame(makeStatus(), [], 64, { ready: 0, inFlight: 0 }));
-    expect(drained).toContain("Queued (0)");
-    expect(drained).toContain("Open (0)");
+    expect(drained).toContain("queued (0)");
+    expect(drained).toContain("open (0)");
     expect(drained).not.toContain("Queue is empty");
   });
 
@@ -644,15 +644,15 @@ describe("renderActivityFrame", () => {
   it("underlines the active tab in the quiet two-line strip", () => {
     const [row, rule] = tabBar("studied", 3, 2, 577, 60).map(stripAnsi);
     // Order: Activity, Studied, Queued, Open.
-    expect(row.indexOf("Activity")).toBeLessThan(row.indexOf("Studied (577)"));
-    expect(row.indexOf("Studied (577)")).toBeLessThan(row.indexOf("Queued (3)"));
-    expect(row.indexOf("Queued (3)")).toBeLessThan(row.indexOf("Open (2)"));
+    expect(row.indexOf("activity")).toBeLessThan(row.indexOf("studied (577)"));
+    expect(row.indexOf("studied (577)")).toBeLessThan(row.indexOf("queued (3)"));
+    expect(row.indexOf("queued (3)")).toBeLessThan(row.indexOf("open (2)"));
     // No folder-tab chrome: just the labels and the rule.
     expect(row).not.toContain("\u2502");
     // The heavy segment of the rule sits exactly under the active label...
-    const start = row.indexOf("Studied (577)");
+    const start = row.indexOf("studied (577)");
     expect(rule.indexOf("\u2501")).toBe(start);
-    expect(rule.lastIndexOf("\u2501")).toBe(start + "Studied (577)".length - 1);
+    expect(rule.lastIndexOf("\u2501")).toBe(start + "studied (577)".length - 1);
     // ...and the rule runs the full frame width.
     expect(rule.length).toBe(60);
   });
@@ -661,7 +661,7 @@ describe("renderActivityFrame", () => {
     const [row] = tabBar("activity", 3, 2, 577, 60).map(stripAnsi);
     // The last label ends flush with the frame edge...
     expect(row.length).toBe(60);
-    expect(row.endsWith("Open (2)")).toBe(true);
+    expect(row.endsWith("open (2)")).toBe(true);
     // ...and the gaps between labels are as even as integer columns allow.
     const gaps = row.split(/\S+ \S+|\S+/).filter((s) => s.length > 0);
     const sizes = gaps.map((g) => g.length);
@@ -670,16 +670,16 @@ describe("renderActivityFrame", () => {
 
   it("keeps a minimum gap when the frame is too narrow to spread", () => {
     const [row] = tabBar("activity", 3, 2, 577, 20).map(stripAnsi);
-    expect(row).toContain("Activity   Studied (577)");
+    expect(row).toContain("activity   studied (577)");
   });
 
   it("shows all three tabs with counts, activity active by default", () => {
     const frame = stripAnsi(
       renderActivityFrame(studiedStatus(), [], 64, null, undefined, [queuedSession()]),
     );
-    expect(frame).toContain("Activity");
-    expect(frame).toContain("Queued (1)");
-    expect(frame).toContain("Studied (1)"); // unique sessions in history, not lifetime passes
+    expect(frame).toContain("activity");
+    expect(frame).toContain("queued (1)");
+    expect(frame).toContain("studied (1)"); // unique sessions in history, not lifetime passes
     expect(frame).toContain(
       "tab switch \u00B7 \u2191\u2193 scroll \u00B7 f full rows \u00B7 s sync now \u00B7 esc back",
     );
@@ -697,7 +697,7 @@ describe("renderActivityFrame", () => {
     });
     const frame = stripAnsi(renderActivityFrame(withAnalytics, [], 80));
     expect(frame).not.toContain("Suggested pages");
-    expect(frame).not.toContain("Analytics");
+    expect(frame).not.toContain("analytics");
   });
 
   it("keys s to the state: sync now while idle, stop while running, resume while paused", () => {
@@ -950,7 +950,7 @@ describe("renderActivityFrame", () => {
     const frame = stripAnsi(
       renderActivityFrame(makeStatus(), [], 64, null, { tab: "studied", scroll: 0 }),
     );
-    expect(frame).toContain("Studied (0)");
+    expect(frame).toContain("studied (0)");
     expect(frame).toContain("No studied sessions yet.");
   });
 
@@ -988,7 +988,7 @@ describe("renderActivityFrame", () => {
     const frame = stripAnsi(
       renderActivityFrame(status, [], 80, null, { tab: "studied", scroll: 0 }),
     );
-    expect(frame).toContain("Studied (2)");
+    expect(frame).toContain("studied (2)");
     const dupRows = frame.split("\n").filter((line) => line.includes("dup-1"));
     expect(dupRows).toHaveLength(1);
     expect(dupRows[0]).toContain("05-12 19:00");
@@ -1043,7 +1043,7 @@ describe("renderActivityFrame", () => {
     const frame = stripAnsi(
       renderActivityFrame(makeStatus(), [], 64, null, { tab: "queued", scroll: 0 }),
     );
-    expect(frame).toContain("Queued (0)");
+    expect(frame).toContain("queued (0)");
     expect(frame).toContain("Queue empty");
   });
 
@@ -1258,7 +1258,7 @@ describe("runActivityView", () => {
     // First tab flips to the studied-sessions history from the persisted state.
     input.emit("data", "\t");
     const afterFirstTab = stripAnsi(written.at(-1) ?? "");
-    expect(afterFirstTab).toContain("Studied (1)");
+    expect(afterFirstTab).toContain("studied (1)");
     expect(afterFirstTab).toContain("cursor    09-02 23:00  -  abc");
 
     // Second tab lands on the queued backlog from the injected scanner.
@@ -1270,7 +1270,7 @@ describe("runActivityView", () => {
     // Third tab shows the still-open sessions from the same scan.
     input.emit("data", "\t");
     const afterThirdTab = stripAnsi(written.at(-1) ?? "");
-    expect(afterThirdTab).toContain("Open (1)");
+    expect(afterThirdTab).toContain("open (1)");
     expect(afterThirdTab).toContain("open-1");
 
     input.emit("data", "q");

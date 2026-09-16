@@ -508,7 +508,7 @@ describe("runTUI", () => {
     await runTUI();
     const signedOut = mockMenuSelect.mock.calls[0]?.[1] ?? [];
     expect(signedOut.map((o) => o.value)).toEqual(["auth", "exit"]);
-    expect(signedOut[0]?.label).toBe("Log in / Sign up");
+    expect(signedOut[0]?.label).toBe("log in / sign up");
 
     // Signed in but no target yet (login without setup): setup mode — the
     // other screens have nothing to show, so the menu is Setup or leave.
@@ -558,7 +558,7 @@ describe("runTUI", () => {
       // Every other screen would only echo the same error, so the menu is just the login door.
       const options = mockMenuSelect.mock.calls[0]?.[1] ?? [];
       expect(options.map((o) => o.value)).toEqual(["auth", "exit"]);
-      expect(options[0]?.label).toBe("Log in again");
+      expect(options[0]?.label).toBe("log in again");
       expect(options[0]?.hint).toBe("(session expired \u00B7 opens your browser)");
       expect(mockRunSetup).not.toHaveBeenCalled();
     });

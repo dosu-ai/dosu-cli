@@ -170,7 +170,7 @@ describe("windowSelection", () => {
 describe("renderPagesFrame", () => {
   it("shows the breadcrumb header and a loading line before the fetch resolves", () => {
     const frame = stripAnsi(renderPagesFrame({ phase: "loading" }, 64, 0));
-    expect(frame).toContain("Home \u203A Pages");
+    expect(frame).toContain("home \u203A pages");
     expect(frame).toContain("Loading pages");
     expect(frame).toContain("\u2191\u2193 move \u00B7 enter open \u00B7 esc back");
   });
@@ -244,7 +244,7 @@ describe("wrapBody", () => {
 describe("renderPageFrame", () => {
   it("shows the breadcrumb with the page title, meta line, and a loading state", () => {
     const frame = stripAnsi(renderPageFrame(page(), { phase: "loading" }, 64, 0));
-    expect(frame).toContain("Home \u203A Pages \u203A OAuth refresh token expiry");
+    expect(frame).toContain("home \u203A pages \u203A OAuth refresh token expiry");
     expect(frame).toContain("document \u00B7 published \u00B7 updated 2026-09-01");
     expect(frame).toContain("Loading page");
     expect(frame).toContain("\u2191\u2193 scroll \u00B7 esc back to pages");
@@ -420,7 +420,7 @@ describe("runPagesView", () => {
     // esc closes the reader, not the view: the list is back, cursor kept.
     input.emit("data", ESC);
     const list = stripAnsi(written.at(-1) ?? "");
-    expect(list).toContain("Pages");
+    expect(list).toContain("pages");
     expect(list).toContain("\u25B8 Second");
 
     input.emit("data", "q");

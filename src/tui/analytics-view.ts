@@ -217,15 +217,15 @@ export function renderAnalyticsFrame(
   if (below > 0) scrollParts.push(`\u2193 ${below} more`);
 
   const lines = [
-    breadcrumb(["Home", "Analytics"], width),
+    breadcrumb(["home", "analytics"], width),
     "",
     // Cells, not spread: equal-width side-by-side tabs read as one control. The blank line
     // below keeps them apart from the tables, whose own column labels head each list.
     ...tabStrip(
       [
-        ["overview", "Overview"],
-        ["projects", "Projects"],
-        ["pages", "Pages"],
+        ["overview", "overview"],
+        ["projects", "projects"],
+        ["pages", "pages"],
       ],
       tab,
       width,
