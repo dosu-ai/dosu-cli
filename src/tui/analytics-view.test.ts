@@ -321,10 +321,10 @@ describe("windowReport", () => {
 describe("renderAnalyticsFrame", () => {
   it("titles the screen and shows the tab strip with the key legend", () => {
     const frame = stripAnsi(renderAnalyticsFrame(reportState(), "overview", 0));
-    expect(frame).toContain("Analytics");
-    expect(frame).toContain("Overview");
-    expect(frame).toContain("Projects");
-    expect(frame).toContain("Pages");
+    expect(frame).toContain("analytics");
+    expect(frame).toContain("overview");
+    expect(frame).toContain("projects");
+    expect(frame).toContain("pages");
     expect(frame).toContain("Sessions studied");
     expect(frame).toContain("tab switch \u00B7 \u2191\u2193 scroll \u00B7 esc back");
   });
@@ -335,12 +335,12 @@ describe("renderAnalyticsFrame", () => {
     ).split("\n");
     const row = lines[2];
     const rule = lines[3];
-    // Three cells sized by the longest label ("Overview"/"Projects" = 8) + padding.
+    // Three cells sized by the longest label ("overview"/"projects" = 8) + padding.
     const cellW = 8 + 4;
     expect(rule.length).toBe(3 * cellW);
     // Each label is centered in its cell.
-    expect(row.indexOf("Overview")).toBe(2);
-    expect(row.indexOf("Projects")).toBe(cellW + 2);
+    expect(row.indexOf("overview")).toBe(2);
+    expect(row.indexOf("projects")).toBe(cellW + 2);
     // The heavy segment spans the whole active cell, not just its label.
     expect(rule.slice(cellW, 2 * cellW)).toBe("\u2501".repeat(cellW));
     expect(rule.slice(0, cellW)).toBe("\u2500".repeat(cellW));

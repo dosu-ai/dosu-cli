@@ -175,7 +175,7 @@ describe("renderBanner", () => {
 
     const active = stripAnsi(renderBanner(makeContext({ studying: true })));
     expect(active).toContain("sync");
-    expect(active).toContain("\uD83D\uDCDA studying sessions... \u00B7 see Activity");
+    expect(active).toContain("\uD83D\uDCDA studying sessions... \u00B7 see activity");
   });
 
   it("includes the update row only when a newer version is known", () => {
