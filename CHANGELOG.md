@@ -1,3 +1,10 @@
+# [0.53.0-beta.15](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.14...v0.53.0-beta.15) (2026-09-16)
+
+
+### Bug Fixes
+
+* **tui:** lowercase menu, tab, and breadcrumb labels for consistent casing ([#225](https://github.com/dosu-ai/dosu-cli/issues/225)) ([0f0f23f](https://github.com/dosu-ai/dosu-cli/commit/0f0f23fd01c44cd6292994eb29b17cbfa5896682))
+
 # [0.53.0-beta.14](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.13...v0.53.0-beta.14) (2026-09-16)
 
 
