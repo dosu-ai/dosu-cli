@@ -1,3 +1,10 @@
+# [0.53.0-beta.14](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.13...v0.53.0-beta.14) (2026-09-16)
+
+
+### Features
+
+* studying terminology, named session rows, and a complete knowledge report ([f0ae47b](https://github.com/dosu-ai/dosu-cli/commit/f0ae47b6fc3692bdfe1f2beadadb838901b82c91)), closes [221/#220](https://github.com/dosu-ai/dosu-cli/issues/220) [dosu-ai/dosu#12484](https://github.com/dosu-ai/dosu/issues/12484)
+
 # [0.53.0-beta.13](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.12...v0.53.0-beta.13) (2026-09-15)
 
 
