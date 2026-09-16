@@ -22,8 +22,10 @@ import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
 import type { CliLibrary } from "../generated/dosu-api-types";
 import { getHookAgent } from "../hooks/agents";
+import { getIncognitoAgent } from "../incognito/agents";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
+import { getStatuslineAgent, StatuslineConflictError } from "../statusline/agents";
 import { spawnDetachedSelf } from "../sync/detach";
 import { runKnowledgeSync } from "../sync/sync";
 import { runActivityView } from "../tui/activity-view";
@@ -41,6 +43,7 @@ import {
   formatSetupSummary,
   IconRemove,
   info,
+  wrapLog,
 } from "./styles";
 
 export interface SetupOptions {
@@ -57,12 +60,24 @@ interface HookResult {
   note?: string;
 }
 
+/** One file written as part of the studying bundle (status line, slash command). */
+interface BundleItem {
+  name: string;
+  path: string;
+}
+
 export interface ConfigResult {
   provider: SetupProvider;
   action: ConfigAction;
   error?: Error;
   /** Set when a knowledge sync hook was enabled alongside this agent's MCP install. */
   hook?: HookResult;
+  /** Set when the Dosu status line was installed alongside the hook. */
+  statusline?: BundleItem;
+  /** Set when the agent already had a status line: the one-liner to add to their script. */
+  statuslineSuggestion?: string;
+  /** Set when the `/dosu-incognito` slash command was installed alongside the hook. */
+  incognito?: BundleItem;
 }
 
 export interface ToolSelection {
@@ -368,12 +383,13 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
   );
   // What Dosu is about to do, why it's worth it, and what to expect when it's done.
   p.log.message(
-    [
-      `Dosu can read ${them} and pull out the durable knowledge: decisions, gotchas, and`,
-      "how-things-work that your team and agents would otherwise rediscover.",
-      "Only distilled notes are saved to Dosu; your session logs stay on this machine.",
-      "It runs in the background a few sessions at a time; notes appear in Dosu as each batch finishes.",
-    ].join("\n"),
+    wrapLog(
+      [
+        `Dosu can read ${them} and pull out the durable knowledge: decisions, gotchas, and how-things-work that your team and agents would otherwise rediscover.`,
+        "Only distilled notes are saved to Dosu; your session logs stay on this machine.",
+        "It runs in the background a few sessions at a time; notes appear in Dosu as each batch finishes.",
+      ].join("\n"),
+    ),
   );
 
   const mineNow = await p.confirm({
@@ -384,14 +400,18 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
   });
   if (p.isCancel(mineNow) || !mineNow) {
     p.log.info(
-      `Skipped. Dosu studies new sessions in the background as you work; run ${info("dosu knowledge sync")} anytime to study these too.`,
+      wrapLog(
+        `Skipped. Dosu studies new sessions in the background as you work; run ${info("dosu knowledge sync")} anytime to study these too.`,
+      ),
     );
     return;
   }
 
   if (spawnDetachedSelf(["knowledge", "sync", "--quiet", "--bootstrap"])) {
     p.log.success(
-      `\uD83D\uDCDA Studying ${n} session${n === 1 ? "" : "s"} in the background. Watch progress on the Activity screen; when it finishes, the new notes are in Dosu and agents connected to this MCP can use them.`,
+      wrapLog(
+        `\uD83D\uDCDA Studying ${n} session${n === 1 ? "" : "s"} in the background. Watch progress on the Activity screen; when it finishes, the new notes are in Dosu and agents connected to this MCP can use them.`,
+      ),
     );
     const watch = await p.confirm({
       message: "What next?",
@@ -1238,6 +1258,59 @@ function syncSessionHook(providerID: string, action: "enable" | "disable"): Hook
   }
 }
 
+/** The status line rides along with the hook: it only has something to say once sessions are
+ * being studied. A status line the user already has is left alone, and its one-liner is
+ * returned as a suggestion. Fail-open like the hook. */
+function setupStatusline(
+  providerID: string,
+  action: "enable" | "disable",
+): Pick<ConfigResult, "statusline" | "statuslineSuggestion"> {
+  const agent = getStatuslineAgent(providerID);
+  if (!agent) return {};
+  try {
+    if (action === "disable") {
+      agent.disable();
+      return {};
+    }
+    agent.enable();
+    logger.info("setup", `Status line enabled for ${providerID}`);
+    return { statusline: { name: agent.name(), path: agent.configPath() } };
+  } catch (err: unknown) {
+    if (err instanceof StatuslineConflictError) {
+      logger.info("setup", `Status line left alone for ${providerID}: ${err.existingCommand}`);
+      return { statuslineSuggestion: err.suggestion };
+    }
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn("setup", `Status line ${action} failed for ${providerID}: ${msg}`);
+    p.log.warn(`Could not ${action} the Dosu status line for ${agent.name()}: ${msg}`);
+    return {};
+  }
+}
+
+/** The `/dosu-incognito` slash command rides along too: without it the status line has an
+ * incognito state nobody can reach. Fail-open like the hook. */
+function setupIncognito(
+  providerID: string,
+  action: "enable" | "disable",
+): Pick<ConfigResult, "incognito"> {
+  const agent = getIncognitoAgent(providerID);
+  if (!agent) return {};
+  try {
+    if (action === "disable") {
+      agent.disable();
+      return {};
+    }
+    agent.enable();
+    logger.info("setup", `/dosu-incognito installed for ${providerID}`);
+    return { incognito: { name: agent.name(), path: agent.commandPath() } };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn("setup", `/dosu-incognito ${action} failed for ${providerID}: ${msg}`);
+    p.log.warn(`Could not ${action} the /dosu-incognito command for ${agent.name()}: ${msg}`);
+    return {};
+  }
+}
+
 export function stepConfigureTools(cfg: Config, selection: ToolSelection): ConfigResult[] {
   const results: ConfigResult[] = [];
 
@@ -1246,7 +1319,14 @@ export function stepConfigureTools(cfg: Config, selection: ToolSelection): Confi
       provider.install(cfg, true);
       logger.info("setup", `Configured ${provider.name()}`);
       const hook = syncSessionHook(provider.id(), "enable");
-      results.push({ provider, action: "install", ...(hook ? { hook } : {}) });
+      // Status line and slash command only make sense once the hook is studying sessions.
+      const bundle = hook
+        ? {
+            ...setupStatusline(provider.id(), "enable"),
+            ...setupIncognito(provider.id(), "enable"),
+          }
+        : {};
+      results.push({ provider, action: "install", ...(hook ? { hook } : {}), ...bundle });
     } catch (err: unknown) {
       /* v8 ignore next -- err is always Error in practice */
       const error = err instanceof Error ? err : new Error(String(err));
@@ -1265,6 +1345,8 @@ export function stepConfigureTools(cfg: Config, selection: ToolSelection): Confi
       logger.info("setup", `Removed ${provider.name()}`);
       results.push({ provider, action: "remove" });
       syncSessionHook(provider.id(), "disable");
+      setupStatusline(provider.id(), "disable");
+      setupIncognito(provider.id(), "disable");
     } catch (err: unknown) {
       /* v8 ignore next -- err is always Error in practice */
       const error = err instanceof Error ? err : new Error(String(err));
@@ -1310,12 +1392,51 @@ export function stepShowSummary(results: ConfigResult[]): void {
         `Knowledge sync hooks enabled for ${hooked.length} agent(s):`,
         hooked.map((hook) => ({ label: hook.name, path: hook.path })),
       )}\n${dim(
-        "Dosu scans finished agent sessions in the background. Disable anytime with 'dosu knowledge hooks disable'.",
+        wrapLog(
+          "Dosu scans finished agent sessions in the background. Disable anytime with 'dosu knowledge hooks disable'.",
+        ),
       )}`,
     );
     for (const hook of hooked) {
       if (hook.note) p.log.info(dim(hook.note));
     }
+  }
+
+  const statuslines = installed.flatMap((r) => (r.statusline ? [r.statusline] : []));
+  if (statuslines.length > 0) {
+    p.log.success(
+      `${formatSetupSummary(
+        `Status line enabled for ${statuslines.length} agent(s):`,
+        statuslines.map((item) => ({ label: item.name, path: item.path })),
+      )}\n${dim(
+        wrapLog(
+          "Shows 📚 Dosu studying…, 👻 Dosu incognito, or ⚪ Dosu off/paused. Remove with 'dosu knowledge statusline disable'.",
+        ),
+      )}`,
+    );
+  }
+  for (const result of installed) {
+    if (result.statuslineSuggestion) {
+      p.log.info(
+        `${wrapLog(
+          `${result.provider.name()} already has a status line; left as is. To show Dosu alongside it, add to your script:`,
+        )}\n  ${dim(result.statuslineSuggestion)}`,
+      );
+    }
+  }
+
+  const incognitos = installed.flatMap((r) => (r.incognito ? [r.incognito] : []));
+  if (incognitos.length > 0) {
+    p.log.success(
+      `${formatSetupSummary(
+        `/dosu-incognito installed for ${incognitos.length} agent(s):`,
+        incognitos.map((item) => ({ label: item.name, path: item.path })),
+      )}\n${dim(
+        wrapLog(
+          "Run it inside a session to keep that session out of studying. Remove with 'dosu knowledge incognito disable'.",
+        ),
+      )}`,
+    );
   }
 
   if (removed.length > 0) {
