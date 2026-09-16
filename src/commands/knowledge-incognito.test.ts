@@ -8,7 +8,8 @@ interface FakeAgent {
   enabled: boolean;
   enableResult?: IncognitoAction;
   disableResult?: IncognitoAction;
-  enableError?: Error;
+  enableError?: unknown;
+  disableError?: unknown;
 }
 
 let fakeAgents: FakeAgent[] = [];
@@ -28,6 +29,7 @@ function toAgent(agent: FakeAgent): IncognitoAgent {
       return agent.enableResult ?? "created";
     },
     disable: () => {
+      if (agent.disableError) throw agent.disableError;
       disableCalls.push(agent.id);
       return agent.disableResult ?? "removed";
     },
@@ -95,6 +97,12 @@ describe("knowledge incognito status", () => {
     expect(output).toContain("/dosu-incognito");
   });
 
+  it("shows an installed agent without the command as disabled", async () => {
+    fakeAgents = [claude()];
+    await run("status");
+    expect(allOutput()).toMatch(/claude\s+Claude Code\s+disabled/);
+  });
+
   it("--json emits rows", async () => {
     fakeAgents = [claude()];
     await run("status", "--json");
@@ -138,6 +146,13 @@ describe("knowledge incognito enable", () => {
     expect(errorSpy.mock.calls.join(" ")).toContain("EACCES");
     expect(process.exitCode).toBe(1);
   });
+
+  it("stringifies non-Error failures", async () => {
+    fakeAgents = [{ ...claude(), enableError: "disk full" }];
+    await run("enable", "claude");
+    expect(errorSpy.mock.calls.join(" ")).toContain("disk full");
+    expect(process.exitCode).toBe(1);
+  });
 });
 
 describe("knowledge incognito disable", () => {
@@ -158,5 +173,16 @@ describe("knowledge incognito disable", () => {
     fakeAgents = [cursor()];
     await run("disable");
     expect(allOutput()).toContain("No supported agents detected");
+  });
+
+  it("reports removal failures without aborting", async () => {
+    fakeAgents = [
+      { ...claude(), disableError: new Error("EPERM") },
+      { ...cursor(), installed: true },
+    ];
+    await run("disable");
+    expect(errorSpy.mock.calls.join(" ")).toContain("EPERM");
+    expect(process.exitCode).toBe(1);
+    expect(disableCalls).toEqual(["cursor"]);
   });
 });

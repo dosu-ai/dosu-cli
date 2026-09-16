@@ -3,7 +3,6 @@
 
 import { Command } from "commander";
 import pc from "picocolors";
-import { HookConfigError } from "../hooks/formats";
 import {
   allStatuslineAgents,
   getStatuslineAgent,
@@ -122,8 +121,7 @@ export function statuslineCommand(renderDeps: RenderRunDeps = {}): Command {
 }
 
 function reportFailure(agentName: string, err: unknown): void {
-  const message =
-    err instanceof HookConfigError ? err.message : err instanceof Error ? err.message : String(err);
+  const message = err instanceof Error ? err.message : String(err);
   console.error(pc.red(`✗ ${agentName}: ${message}`));
   process.exitCode = 1;
 }

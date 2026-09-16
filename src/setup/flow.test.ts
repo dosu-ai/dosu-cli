@@ -782,6 +782,27 @@ describe("stepConfigureTools", () => {
     );
   });
 
+  it("keeps the install successful when the slash command cannot be written", () => {
+    const cfg = makeCfg();
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    // A file where the commands directory should be: mkdir fails, the command cannot be written.
+    writeFileSync(join(tempDir, ".cursor", "commands"), "not a directory");
+
+    const results = stepConfigureTools(cfg, {
+      toInstall: [CursorProvider()],
+      toRemove: [],
+      skipped: [],
+    });
+
+    expect(results[0].error).toBeUndefined();
+    expect(results[0].hook).toBeDefined();
+    expect(results[0].statusline).toBeDefined();
+    expect(results[0].incognito).toBeUndefined();
+    expect(p.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Could not enable the /dosu-incognito command for Cursor"),
+    );
+  });
+
   it("prints the Codex trust note after enabling its hook", () => {
     const cfg = makeCfg();
 
@@ -3340,6 +3361,16 @@ describe("stepOfferInitialSync", () => {
 
     expect(mockSpawnDetachedSelf).toHaveBeenCalled();
     expect(vi.mocked(runActivityView)).not.toHaveBeenCalled();
+  });
+
+  it("uses the singular for a single session", async () => {
+    mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(1));
+    vi.mocked(p.confirm).mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    mockSpawnDetachedSelf.mockReturnValue(true);
+
+    await stepOfferInitialSync(makeCfg());
+
+    expect(vi.mocked(p.log.success).mock.calls.join(" ")).toContain("Studying 1 session in");
   });
 
   it("skips without spawning when the user declines", async () => {

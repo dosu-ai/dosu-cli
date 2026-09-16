@@ -34,6 +34,12 @@ describe("agentFromArgv", () => {
     expect(agentFromArgv(["--agent=cursor"])).toBe("cursor");
   });
 
+  it("skips unrelated arguments before the flag", () => {
+    expect(agentFromArgv(["--quiet", "--agent", "claude"])).toBe("claude");
+    expect(agentFromArgv(["render", "--agent=cursor"])).toBe("cursor");
+    expect(agentFromArgv(["--quiet", "--verbose"])).toBe("");
+  });
+
   it("is empty when the flag is missing or dangling", () => {
     expect(agentFromArgv([])).toBe("");
     expect(agentFromArgv(["--agent"])).toBe("");

@@ -99,6 +99,12 @@ describe("claude agent", () => {
 });
 
 describe("cursor agent", () => {
+  it("detects Cursor from ~/.cursor", () => {
+    expect(getIncognitoAgent("cursor")?.isInstalled()).toBe(false);
+    mkdirSync(join(fakeHome, ".cursor"));
+    expect(getIncognitoAgent("cursor")?.isInstalled()).toBe(true);
+  });
+
   it("writes plain markdown under ~/.cursor/commands", () => {
     const agent = getIncognitoAgent("cursor");
     if (!agent) throw new Error("missing agent");

@@ -19,7 +19,7 @@ const COMMAND_NAME_MARKER = `/${INCOGNITO_COMMAND_NAME}</command-name>`;
 
 /** Transcripts larger than this are only scanned up to the cap: a session that big is an
  * outlier, and the marker is normally near the start of whatever turn set it. */
-export const MAX_SCAN_BYTES = 64 * 1024 * 1024;
+const MAX_SCAN_BYTES = 64 * 1024 * 1024;
 
 export function textHasIncognitoMarker(text: string): boolean {
   return text.includes(INCOGNITO_MARKER) || text.includes(COMMAND_NAME_MARKER);

@@ -56,6 +56,22 @@ describe("runStatuslineRender", () => {
       write.mockRestore();
     }
   });
+
+  it("defaults to draining process.stdin", async () => {
+    mockRender.mockReturnValue("");
+    const original = Object.getOwnPropertyDescriptor(process, "stdin");
+    if (!original) throw new Error("process.stdin descriptor missing");
+    Object.defineProperty(process, "stdin", {
+      value: piped('{"cwd":"/from-stdin"}'),
+      configurable: true,
+    });
+    try {
+      await runStatuslineRender("claude", { write: () => {} });
+      expect(mockRender).toHaveBeenCalledWith('{"cwd":"/from-stdin"}', "claude");
+    } finally {
+      Object.defineProperty(process, "stdin", original);
+    }
+  });
 });
 
 describe("runStatuslineRenderFromArgv", () => {

@@ -9,6 +9,23 @@ vi.mock("../sessions/read", () => ({
   readSessionTurns: (...args: unknown[]) => mockReadTurns(...args),
 }));
 
+/** When set, fstatSync over-reports the file size to simulate a file that shrank between
+ * fstat and read (readSync then returns 0 before the expected byte count). */
+const fstatSizeOverride = vi.hoisted(() => ({ size: undefined as number | undefined }));
+vi.mock("node:fs", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...original,
+    fstatSync: (...args: Parameters<typeof original.fstatSync>) => {
+      const stats = original.fstatSync(...args);
+      if (fstatSizeOverride.size !== undefined && stats) {
+        Object.defineProperty(stats, "size", { value: fstatSizeOverride.size });
+      }
+      return stats;
+    },
+  };
+});
+
 import {
   INCOGNITO_COMMAND_NAME,
   INCOGNITO_MARKER,
@@ -26,6 +43,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  fstatSizeOverride.size = undefined;
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -126,6 +144,16 @@ describe("transcriptHasIncognitoMarker", () => {
     ]);
     expect(transcriptHasIncognitoMarker(path, 100)).toBe(false);
     expect(transcriptHasIncognitoMarker(path)).toBe(true);
+  });
+
+  it("stops at EOF when the file shrank after fstat, and still scans what was read", () => {
+    const marked = write("shrunk.jsonl", [CURSOR_EXPANDED_TURN]);
+    const plain = write("shrunk-plain.jsonl", [
+      { type: "user", message: { role: "user", content: "hello" } },
+    ]);
+    fstatSizeOverride.size = 1_000_000;
+    expect(transcriptHasIncognitoMarker(marked)).toBe(true);
+    expect(transcriptHasIncognitoMarker(plain)).toBe(false);
   });
 });
 

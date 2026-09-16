@@ -6,10 +6,10 @@ interface FakeAgent {
   name: string;
   installed: boolean;
   enabled: boolean;
-  enabledError?: Error;
-  enableError?: Error;
+  enabledError?: unknown;
+  enableError?: unknown;
   disableResult?: boolean;
-  disableError?: Error;
+  disableError?: unknown;
 }
 
 let fakeAgents: FakeAgent[] = [];
@@ -122,6 +122,12 @@ describe("knowledge statusline status", () => {
     expect(allOutput()).toContain("not valid JSON");
     expect(process.exitCode).toBeUndefined();
   });
+
+  it("stringifies non-Error config failures", async () => {
+    fakeAgents = [{ ...claude(), enabledError: "boom" }];
+    await run("status");
+    expect(allOutput()).toContain("boom");
+  });
 });
 
 describe("knowledge statusline enable", () => {
@@ -190,6 +196,13 @@ describe("knowledge statusline disable", () => {
     fakeAgents = [{ ...claude(), disableError: new Error("EACCES") }];
     await run("disable", "claude");
     expect(errorSpy.mock.calls.join(" ")).toContain("EACCES");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("stringifies non-Error failures", async () => {
+    fakeAgents = [{ ...claude(), disableError: "disk full" }];
+    await run("disable", "claude");
+    expect(errorSpy.mock.calls.join(" ")).toContain("disk full");
     expect(process.exitCode).toBe(1);
   });
 });

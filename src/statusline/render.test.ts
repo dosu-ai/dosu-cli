@@ -120,6 +120,14 @@ describe("default dependencies", () => {
     expect(mockTranscriptMarker).toHaveBeenCalledWith(payload.transcript_path);
   });
 
+  it("fall through to the persisted sync state when the transcript is not incognito", () => {
+    mockGetHookAgent.mockReturnValue({ isEnabled: () => true });
+    mockLoadSyncState.mockReturnValue({ ...baseState, paused: true });
+    mockTranscriptMarker.mockReturnValue(false);
+    expect(resolveStatuslineState(payload, "cursor")).toBe("paused");
+    expect(mockLoadSyncState).toHaveBeenCalled();
+  });
+
   it("read an unknown agent or an unparseable hook config as off", () => {
     mockGetHookAgent.mockReturnValue(undefined);
     expect(resolveStatuslineState(payload, "zed")).toBe("off");
