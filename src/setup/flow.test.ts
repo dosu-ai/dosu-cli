@@ -190,6 +190,28 @@ vi.mock("../tui/activity-view", () => ({
   runActivityView: vi.fn(),
 }));
 
+// Status line and slash command installers run for real against the temp home; these overrides
+// stay inert (undefined → real registry) unless a test needs an installer that misbehaves.
+const { mockGetStatuslineAgent, mockGetIncognitoAgent } = vi.hoisted(() => ({
+  mockGetStatuslineAgent: vi.fn(),
+  mockGetIncognitoAgent: vi.fn(),
+}));
+vi.mock("../statusline/agents", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../statusline/agents")>();
+  return {
+    ...original,
+    getStatuslineAgent: (id: string) =>
+      mockGetStatuslineAgent(id) ?? original.getStatuslineAgent(id),
+  };
+});
+vi.mock("../incognito/agents", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../incognito/agents")>();
+  return {
+    ...original,
+    getIncognitoAgent: (id: string) => mockGetIncognitoAgent(id) ?? original.getIncognitoAgent(id),
+  };
+});
+
 import { OAuthCallbackError } from "../auth/errors";
 import { startOAuthFlow } from "../auth/flow";
 import { Client } from "../client/client";
@@ -800,6 +822,41 @@ describe("stepConfigureTools", () => {
     expect(results[0].incognito).toBeUndefined();
     expect(p.log.warn).toHaveBeenCalledWith(
       expect.stringContaining("Could not enable the /dosu-incognito command for Cursor"),
+    );
+  });
+
+  it("reports a non-Error thrown by either bundle installer without failing the install", () => {
+    const cfg = makeCfg();
+    const throwing = {
+      id: () => "cursor",
+      name: () => "Cursor",
+      isInstalled: () => true,
+      configPath: () => "/dev/null",
+      commandPath: () => "/dev/null",
+      isEnabled: () => false,
+      enable: () => {
+        throw "disk full";
+      },
+      disable: () => false,
+    };
+    mockGetStatuslineAgent.mockReturnValue(throwing);
+    mockGetIncognitoAgent.mockReturnValue(throwing);
+
+    const results = stepConfigureTools(cfg, {
+      toInstall: [CursorProvider()],
+      toRemove: [],
+      skipped: [],
+    });
+
+    expect(results[0].error).toBeUndefined();
+    expect(results[0].hook).toBeDefined();
+    expect(results[0].statusline).toBeUndefined();
+    expect(results[0].incognito).toBeUndefined();
+    expect(p.log.warn).toHaveBeenCalledWith(
+      "Could not enable the Dosu status line for Cursor: disk full",
+    );
+    expect(p.log.warn).toHaveBeenCalledWith(
+      "Could not enable the /dosu-incognito command for Cursor: disk full",
     );
   });
 
