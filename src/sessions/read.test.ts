@@ -81,6 +81,60 @@ describe("readSessionTurns", () => {
         { role: "user", text: "real prompt" },
       ]);
     });
+
+    it("skips blank and whitespace-only lines", () => {
+      const path = writeLog("c.jsonl", [
+        "",
+        { type: "user", message: { role: "user", content: "first" } },
+        "   ",
+        "\t",
+        { type: "assistant", message: { role: "assistant", content: "second" } },
+        "",
+      ]);
+
+      expect(readSessionTurns(session("claude", path))).toEqual([
+        { role: "user", text: "first" },
+        { role: "assistant", text: "second" },
+      ]);
+    });
+
+    it("yields no text for content that is neither a string nor an array", () => {
+      const path = writeLog("c.jsonl", [
+        { type: "user", message: { role: "user", content: 42 } },
+        { type: "user", message: { role: "user", content: { type: "text", text: "nested" } } },
+        { type: "user", message: { role: "user" } },
+        { type: "assistant", message: { role: "assistant", content: "only me" } },
+      ]);
+
+      expect(readSessionTurns(session("claude", path))).toEqual([
+        { role: "assistant", text: "only me" },
+      ]);
+    });
+
+    it("ignores non-object and text-less items inside a content array", () => {
+      const path = writeLog("c.jsonl", [
+        {
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              "a bare string item",
+              null,
+              7,
+              ["nested", "array"],
+              { type: "text" },
+              { type: "text", text: 99 },
+              { text: "no type" },
+              { type: "text", text: "kept" },
+            ],
+          },
+        },
+      ]);
+
+      expect(readSessionTurns(session("claude", path))).toEqual([
+        { role: "assistant", text: "kept" },
+      ]);
+    });
   });
 
   describe("cursor", () => {
@@ -107,6 +161,18 @@ describe("readSessionTurns", () => {
         { role: "user", text: "<user_query>hello</user_query>" },
         { role: "assistant", text: "hi" },
       ]);
+    });
+
+    it("skips role records whose message is missing or not an object", () => {
+      const path = writeLog("c.jsonl", [
+        { role: "user" },
+        { role: "user", message: "a bare string" },
+        { role: "assistant", message: null },
+        { role: "assistant", message: [{ type: "text", text: "array, not object" }] },
+        { role: "user", message: { content: "kept" } },
+      ]);
+
+      expect(readSessionTurns(session("cursor", path))).toEqual([{ role: "user", text: "kept" }]);
     });
   });
 
@@ -157,13 +223,32 @@ describe("readSessionTurns", () => {
         { role: "assistant", text: "It parses the config." },
       ]);
     });
+
+    it("skips response_items with a missing or non-object payload", () => {
+      const path = writeLog("c.jsonl", [
+        { type: "response_item" },
+        { type: "response_item", payload: "message" },
+        { type: "response_item", payload: { type: "message", role: "user", content: "kept" } },
+      ]);
+
+      expect(readSessionTurns(session("codex", path))).toEqual([{ role: "user", text: "kept" }]);
+    });
   });
 
   describe("opencode", () => {
     /** Build a fixture DB with the runtime's sqlite builtin, like scan.test.ts. */
-    function makeDb(
-      rows: { sessionId: string; messageId: string; role: string; part: unknown; t: number }[],
-    ): string | null {
+    interface DbRow {
+      sessionId: string;
+      messageId: string;
+      role: string;
+      part: unknown;
+      t: number;
+      /** Raw SQL literals overriding the JSON-encoded `data` columns (e.g. `NULL`). */
+      messageSql?: string;
+      partSql?: string;
+    }
+
+    function makeDb(rows: DbRow[]): string | null {
       const dbPath = join(dir, "opencode.db");
       const requireRuntime = createRequire(import.meta.url);
       let exec: ((sql: string) => void) | null = null;
@@ -189,11 +274,13 @@ describe("readSessionTurns", () => {
         "CREATE TABLE part (id text PRIMARY KEY, message_id text, session_id text, time_created integer, data text)",
       );
       rows.forEach((row, i) => {
+        const message = row.messageSql ?? `'${JSON.stringify({ role: row.role })}'`;
+        const part = row.partSql ?? `'${JSON.stringify(row.part)}'`;
         exec(
-          `INSERT OR IGNORE INTO message VALUES ('${row.messageId}', '${row.sessionId}', '${JSON.stringify({ role: row.role })}')`,
+          `INSERT OR IGNORE INTO message VALUES ('${row.messageId}', '${row.sessionId}', ${message})`,
         );
         exec(
-          `INSERT INTO part VALUES ('p${i}', '${row.messageId}', '${row.sessionId}', ${row.t}, '${JSON.stringify(row.part)}')`,
+          `INSERT INTO part VALUES ('p${i}', '${row.messageId}', '${row.sessionId}', ${row.t}, ${part})`,
         );
       });
       close?.();
@@ -236,6 +323,54 @@ describe("readSessionTurns", () => {
       expect(readSessionTurns(session("opencode", dbPath, "ses_a"))).toEqual([
         { role: "user", text: "do it" },
         { role: "assistant", text: "done" },
+      ]);
+    });
+
+    it("skips rows with non-string data, unknown roles, and malformed JSON", () => {
+      const dbPath = makeDb([
+        {
+          sessionId: "ses_a",
+          messageId: "m_null_part",
+          role: "user",
+          part: null,
+          partSql: "NULL",
+          t: 1,
+        },
+        {
+          sessionId: "ses_a",
+          messageId: "m_null_msg",
+          role: "user",
+          part: { type: "text", text: "orphaned part" },
+          messageSql: "NULL",
+          t: 2,
+        },
+        {
+          sessionId: "ses_a",
+          messageId: "m_system",
+          role: "system",
+          part: { type: "text", text: "system prompt" },
+          t: 3,
+        },
+        {
+          sessionId: "ses_a",
+          messageId: "m_broken",
+          role: "user",
+          part: { type: "text", text: "unparseable message" },
+          messageSql: "'{not json'",
+          t: 4,
+        },
+        {
+          sessionId: "ses_a",
+          messageId: "m_ok",
+          role: "user",
+          part: { type: "text", text: "kept" },
+          t: 5,
+        },
+      ]);
+      if (!dbPath) return;
+
+      expect(readSessionTurns(session("opencode", dbPath, "ses_a"))).toEqual([
+        { role: "user", text: "kept" },
       ]);
     });
 
@@ -341,6 +476,28 @@ describe("countRediscoveryToolCalls", () => {
       { type: "response_item", payload: { type: "function_call", name: "unknown_tool" } },
     ]);
     expect(countRediscoveryToolCalls(session("codex", path))).toBe(2);
+  });
+
+  it("ignores Codex records that are not named function_calls", () => {
+    const path = writeLog("codex-mixed.jsonl", [
+      { type: "response_item", payload: { type: "message", role: "user", content: "hi" } },
+      { type: "response_item", payload: { type: "function_call" } },
+      { type: "response_item", payload: { type: "function_call", name: 42 } },
+      { type: "response_item" },
+      { type: "event_msg", payload: { type: "token_count" } },
+      { type: "response_item", payload: { type: "function_call", name: "web_search_preview" } },
+    ]);
+    expect(countRediscoveryToolCalls(session("codex", path))).toBe(1);
+  });
+
+  it("ignores Claude/Cursor records without an object message or array content", () => {
+    const path = writeLog("no-tools.jsonl", [
+      { type: "user", message: "bare" },
+      { type: "assistant", message: { role: "assistant", content: "text only" } },
+      { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use" }, 3] } },
+      { type: "file-history-snapshot" },
+    ]);
+    expect(countRediscoveryToolCalls(session("claude", path))).toBe(0);
   });
 
   it("returns 0 for an unreadable session", () => {

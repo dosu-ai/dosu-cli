@@ -1,11 +1,19 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readSessionTurns } from "../sessions/read";
 import type { AgentSession } from "../sessions/scan";
-import { digestTurnText, sessionToDigest } from "./digest";
+import { digestsForSessions, digestTurnText, sessionToDigest } from "./digest";
 import { buildReportHtml } from "./html";
 import { attributeRediscovery } from "./notes";
+
+// Only the opencode branch goes through readSessionTurns (the JSONL harnesses
+// read their files directly); keep the real implementation and override per test.
+vi.mock("../sessions/read", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../sessions/read")>();
+  return { ...actual, readSessionTurns: vi.fn(actual.readSessionTurns) };
+});
 
 let dir: string;
 
@@ -257,5 +265,86 @@ describe("sessionToDigest", () => {
       updated: "2026-09-09T00:00:00.000Z",
     };
     expect(sessionToDigest(opencode).turns).toEqual([]);
+  });
+
+  it("skips blank lines, sidechain rows, and non-record tool input in Claude logs", () => {
+    const s = claudeSession("edge2", [
+      "",
+      { type: "user", message: { content: "start here" } },
+      {
+        type: "assistant",
+        isSidechain: true,
+        message: { content: [{ type: "text", text: "subagent chatter" }] },
+      },
+      {
+        type: "assistant",
+        message: {
+          content: [
+            { type: "tool_use", name: "Read", input: "not-a-record" },
+            { type: "tool_use", name: "Grep" },
+          ],
+        },
+      },
+    ]);
+    const turns = sessionToDigest(s).turns;
+    expect(turns.map((t) => [t.role, t.line])).toEqual([
+      ["user", 2],
+      ["assistant", 4],
+    ]);
+    expect(turns[1].tools).toEqual([{ name: "Read" }, { name: "Grep" }]);
+    expect(turns[1].text).toEqual([]);
+  });
+
+  it("skips blank and non-object lines in Cursor logs", () => {
+    const s = session("c2", "cursor", [
+      "",
+      "123",
+      { role: "user", message: { content: "hi there" } },
+    ]);
+    const turns = sessionToDigest(s).turns;
+    expect(turns).toHaveLength(1);
+    expect(turns[0]).toMatchObject({ role: "user", line: 3, text: ["hi there"] });
+  });
+
+  it("skips blank lines and message-less agent rows in Codex logs", () => {
+    const s = session("x3", "codex", [
+      "",
+      { type: "event_msg", payload: { type: "agent_message" } },
+      { type: "event_msg", payload: { type: "user_message", message: "q here" } },
+    ]);
+    const turns = sessionToDigest(s).turns;
+    expect(turns).toHaveLength(1);
+    expect(turns[0]).toMatchObject({ role: "user", line: 3, text: ["q here"] });
+  });
+
+  it("maps opencode turns to sequential lines with no tools", () => {
+    vi.mocked(readSessionTurns).mockReturnValueOnce([
+      { role: "user", text: "ask this" },
+      { role: "assistant", text: "answer" },
+    ]);
+    const opencode: AgentSession = {
+      id: "oc2",
+      harness: "opencode",
+      path: join(dir, "opencode.db"),
+      updated: "2026-09-09T00:00:00.000Z",
+    };
+    expect(sessionToDigest(opencode).turns).toEqual([
+      { role: "user", line: 1, est_tokens: 2, text: ["ask this"], tools: [] },
+      { role: "assistant", line: 2, est_tokens: 2, text: ["answer"], tools: [] },
+    ]);
+  });
+
+  it("digestsForSessions keys one digest per session id", () => {
+    const readable = claudeSession("d1", [{ type: "user", message: { content: "hello" } }]);
+    const missing: AgentSession = {
+      id: "gone",
+      harness: "claude",
+      path: join(dir, "missing.jsonl"),
+      updated: "2026-09-09T00:00:00.000Z",
+    };
+    const out = digestsForSessions([readable, missing]);
+    expect(Object.keys(out)).toEqual(["d1", "gone"]);
+    expect(out.d1.turns).toHaveLength(1);
+    expect(out.gone.turns).toEqual([]);
   });
 });

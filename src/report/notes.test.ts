@@ -3,7 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentSession } from "../sessions/scan";
-import { attributeRediscovery, sessionIdFromReadInput, sessionsToInventory } from "./notes";
+import {
+  attributeRediscovery,
+  cycleMatchScore,
+  noteWords,
+  sessionCycles,
+  sessionIdFromReadInput,
+  sessionsToInventory,
+} from "./notes";
 import { extractUserQueries, sessionTitleFromUserText } from "./queries";
 
 let dir: string;
@@ -16,10 +23,18 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-function claudeSession(id: string, lines: unknown[]): AgentSession {
+function jsonlSession(
+  id: string,
+  harness: AgentSession["harness"],
+  lines: unknown[],
+): AgentSession {
   const path = join(dir, `${id}.jsonl`);
   writeFileSync(path, lines.map((l) => JSON.stringify(l)).join("\n"));
-  return { id, harness: "claude", path, updated: "2026-09-09T00:00:00.000Z" };
+  return { id, harness, path, updated: "2026-09-09T00:00:00.000Z" };
+}
+
+function claudeSession(id: string, lines: unknown[]): AgentSession {
+  return jsonlSession(id, "claude", lines);
 }
 
 describe("sessionIdFromReadInput", () => {
@@ -160,6 +175,54 @@ describe("attributeRediscovery", () => {
     expect(note.session_title).toBe("find the oauth retry in tokens.py");
     expect(note.approx_rediscovery_tokens).toBeGreaterThan(0);
   });
+
+  it("counts a zero-token user turn as zero, not as a missing cycle", () => {
+    // A one-character Codex prompt estimates to 0 tokens; the cycle total must
+    // still be the assistant's cost, not NaN and not undefined.
+    const answer = "retry after 401 lives in tokens.py";
+    const session = jsonlSession("cx", "codex", [
+      { type: "event_msg", payload: { type: "user_message", message: "a" } },
+      { type: "event_msg", payload: { type: "agent_message", message: answer } },
+    ]);
+    const [note] = attributeRediscovery(
+      [{ title: "OAuth retry tokens.py", content: "Retry after 401.", transcript_id: "cx" }],
+      [session],
+    );
+    expect(note.approx_rediscovery_tokens).toBe(Math.round(answer.length / 4));
+    expect(note.investigation_lines).toBe("1-2");
+    expect(note.user_query).toBe("a");
+    expect(note.session_title).toBe("a");
+  });
+});
+
+describe("sessionCycles and noteWords", () => {
+  it("flattens tool previews into cycle text and tolerates turns without tools", () => {
+    const cycles = sessionCycles([
+      { role: "user", text: ["where is retry"] },
+      { role: "assistant", text: [], tools: [{ name: "Search", query: "retry" }] },
+      {
+        role: "assistant",
+        text: ["in tokens.py"],
+        tools: [
+          { name: "Grep", pattern: "refresh_grant" },
+          { name: "Shell", command_preview: "rg refresh_grant" },
+          { name: "Read", path: "src/auth/tokens.py" },
+        ],
+      },
+      { role: "user", text: "   " },
+    ]);
+    expect(cycles).toHaveLength(1);
+    expect(cycles[0]).toMatchObject({ start: 0, end: 4 });
+    expect(cycles[0].text).toContain("refresh_grant rg refresh_grant src/auth/tokens.py");
+    expect(cycles[0].text).not.toContain("Search");
+  });
+
+  it("returns empty vocabularies for titles and bodies with no words", () => {
+    const words = noteWords({ title: "", content: "!!! 42" });
+    expect(words.title.size).toBe(0);
+    expect(words.content.size).toBe(0);
+    expect(cycleMatchScore(words, "anything at all")).toBe(0);
+  });
 });
 
 describe("extractUserQueries", () => {
@@ -213,5 +276,15 @@ describe("sessionsToInventory", () => {
     expect(row.title).toBe("check out how slack is implemented");
     expect(row.user_queries).toEqual(["check out how slack is implemented"]);
     expect(row.rediscovery_tool_calls).toBe(2);
+  });
+
+  it("omits the title key entirely when a session has no user query", () => {
+    const session = claudeSession("s3", [
+      { type: "assistant", message: { content: [{ type: "text", text: "unprompted note" }] } },
+    ]);
+    const row = sessionsToInventory([session]).transcripts[0];
+    expect("title" in row).toBe(false);
+    expect(row.user_queries).toEqual([]);
+    expect(row.learning_tokens).toBe(Math.round("unprompted note".length / 4));
   });
 });
