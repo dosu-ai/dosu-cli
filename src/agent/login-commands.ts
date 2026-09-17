@@ -1,11 +1,5 @@
-/**
- * Implementations for `dosu login --request` and `dosu login --check`.
- *
- * These are the low-level primitives that `dosu setup --agent` composes
- * internally. Exposing them on `login` mirrors Netlify CLI's
- * `login --request` / `login --check` flags so agents and scripts can
- * drive auth without touching the setup wizard.
- */
+/** Implements `dosu login --request` / `--check`: the ticket-auth primitives that let agents and
+ * scripts drive auth without the setup wizard. */
 
 import { exchangeTicket, mintTicket } from "../auth/ticket";
 import { loadConfig, replaceLoginSession, saveConfig } from "../config/config";

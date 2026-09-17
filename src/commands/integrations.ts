@@ -1,6 +1,4 @@
-/**
- * `dosu integrations` — integration status and management.
- */
+/** `dosu integrations`: integration status and management. */
 
 import { Argument, Command } from "commander";
 import pc from "picocolors";
@@ -37,25 +35,8 @@ type ConnectionProbeResult =
   | { queryable: false; connected: null; connection: null }
   | { queryable: true; connected: boolean; connection: unknown };
 
-/**
- * Nango probes per platform. A platform can be connectable under more than one
- * Nango provider, and a connection may exist under any of them; we report
- * connected if ANY probe returns a row.
- *
- * `nango.getConnection` exact-matches BOTH `provider` (the Nango DB provider
- * value) and `providerConfigKey` (the Nango integration id). These differ for
- * the alternate-auth integrations — the integration id is a distinct base, and
- * the DB provider stays the platform's canonical value. The primary auth method
- * (OAuth) is listed first so the common case short-circuits on the first probe;
- * the alternate (PAT / Basic) is the second supported auth method:
- *   - GitLab: OAuth `{gitlab, gitlab}`, PAT `{gitlab, gitlab-pat}`
- *   - Confluence: OAuth `{confluence, confluence}`, Basic `{confluence, confluence-basic}`
- *   - Azure DevOps: OAuth `{microsoft-entra-id, microsoft-entra-id}`, PAT `{azure_devops, azure-devops}`
- * (Note `azure_devops` the DB provider vs `azure-devops` the integration id.)
- *
- * Prod uses bare integration ids (no env suffix), which is what the shipped
- * CLI targets.
- */
+/** Nango probes per platform: connected if ANY probe returns a row (OAuth listed first to
+ * short-circuit); `nango.getConnection` exact-matches both `provider` and `providerConfigKey`. */
 const NANGO_PROBES: Partial<
   Record<DisplayPlatform, readonly { provider: NangoProvider; providerConfigKey: string }[]>
 > = {
@@ -75,13 +56,8 @@ const NANGO_PROBES: Partial<
   ],
 };
 
-/**
- * Probe a platform's Nango connection state. Platforms absent from
- * `NANGO_PROBES` (github, slack, teams) are reported as `queryable: false`.
- * Otherwise every probe is tried in order, short-circuiting on the first
- * connection found. tRPC failures propagate so API drift and outages are not
- * misreported as a disconnected integration.
- */
+/** Probe a platform's Nango connection state; platforms absent from `NANGO_PROBES` report
+ * `queryable: false`. tRPC failures propagate so outages are not misreported as disconnected. */
 async function probeConnection(
   client: TypedClient,
   orgId: string,
@@ -115,9 +91,7 @@ export function integrationsCommand(): Command {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
 
-      // Probe platforms in parallel — each is independent — so the command
-      // isn't gated on the sum of every platform's network round-trips.
-      // Promise.all preserves order, so the table still follows DISPLAY_PLATFORMS.
+      // Probe platforms in parallel; Promise.all preserves DISPLAY_PLATFORMS order for the table.
       const results = await Promise.all(
         DISPLAY_PLATFORMS.map(async (platform) => {
           const { connected } = await probeConnection(
@@ -258,7 +232,7 @@ export function integrationsCommand(): Command {
 
       printTable(
         ["Username", "Name", "Email"],
-        collaborators.map((c) => [c.user_name ?? "—", c.full_name ?? "—", c.email ?? "—"]),
+        collaborators.map((c) => [c.user_name ?? "-", c.full_name ?? "-", c.email ?? "-"]),
         { rawData: collaborators },
       );
     });

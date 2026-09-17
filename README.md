@@ -117,14 +117,13 @@ Once authenticated against a deployment, you can drive the Dosu platform without
 | `dosu docs` | Manage documents (list, create, update, import, publish, AI-generate) |
 | `dosu threads` | List and manage conversation threads |
 | `dosu review` | Document review workflow |
-| `dosu sources` | Manage connected data sources (list, sync, update) |
+| `dosu sources` | Manage connected data sources (list, connect, create, sync, update) |
 | `dosu integrations` | List and inspect platform integrations (Slack, GitHub, …) |
 | `dosu topics` | List knowledge base topics and their pages |
 | `dosu members` | Invite organization members |
 | `dosu org` | Show organization information |
 | `dosu deployments` | List / show / switch Dosu MCP deployments |
 | `dosu analytics` | View usage statistics |
-| `dosu insights` | Open a visual report of your Dosu space activity |
 | `dosu skill` | Install / update / remove the Dosu agent skill |
 
 Run `dosu <command> --help` for subcommands and flags.

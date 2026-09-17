@@ -1,9 +1,5 @@
-/**
- * Debug logger — persistent file logging with optional stderr output.
- *
- * Always writes to ~/.config/dosu-cli/debug.log (or XDG equivalent).
- * When --debug is passed, also prints to stderr.
- */
+/** Debug logger: always writes to ~/.config/dosu-cli/debug.log; with --debug it also prints
+ * to stderr. */
 
 import {
   appendFileSync,
@@ -37,6 +33,14 @@ const SECRET_QUERY_KEYS = [
 let initialized = false;
 let debugToConsole = false;
 let logFilePath: string | null = null;
+
+/** ANSI escapes stripped so the log stays plain text; a clipped color code would bleed color
+ * across everything after it. */
+const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`, "g");
+
+export function stripAnsiCodes(text: string): string {
+  return text.replace(ANSI_PATTERN, "");
+}
 
 export function redactSecrets(message: string): string {
   let redacted = message;
@@ -120,7 +124,7 @@ function initLogger(opts: { debug?: boolean }): void {
 function writeEntry(level: LogLevel, mod: string, message: string): void {
   ensureInit();
   const timestamp = new Date().toISOString();
-  const safeMessage = redactSecrets(message);
+  const safeMessage = redactSecrets(stripAnsiCodes(message));
   const line = `[${timestamp}] [${level}] [${mod}] ${safeMessage}\n`;
 
   try {

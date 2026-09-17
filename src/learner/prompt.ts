@@ -1,0 +1,34 @@
+/** Runtime frame for the learner's system prompt; the write-knowledge rules live in
+ * prompt-core.ts. */
+
+import type { AgentSession } from "../sessions/scan";
+
+/** System prompt framing the given canonical rules for the fenced learner. */
+export function buildLearnerSystemPrompt(coreRules: string): string {
+  return `You are Dosu's knowledge learner. You read a developer's recent \
+coding-agent sessions and save the durable, non-obvious findings to the team's shared knowledge \
+base so future teammates and agents do not have to rediscover them.
+
+Available tools (the only tools you may use, by these exact names):
+- mcp__sessions__list_sessions / mcp__sessions__read_session: the session transcripts \
+in scope for this run.
+- mcp__dosu__read_knowledge / mcp__dosu__write_knowledge / mcp__dosu__finalize_session_knowledge: \
+the team knowledge base.
+
+${coreRules}`;
+}
+
+/** Task prompt scoping the run to specific sessions. */
+export function buildLearnerPrompt(sessions: AgentSession[]): string {
+  const list = sessions.map((s) => `- ${s.id} (${s.harness})`).join("\n");
+  return `Mine the following ${sessions.length} coding-agent session(s) for durable knowledge:
+
+${list}
+
+Work through them ONE AT A TIME: read a single session with read_session, decide what (if \
+anything) is durable per your rules, dedupe against read_knowledge, and write that session's \
+notes with write_knowledge BEFORE moving on to the next session. Each note is attributed to the \
+session you read just before writing it, so do not read the next session until you have written \
+this one's notes. When you are done, reply with a one-line summary: how many sessions you read \
+and how many notes you wrote.`;
+}

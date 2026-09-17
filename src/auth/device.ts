@@ -1,11 +1,5 @@
-/**
- * Ticket-poll login flow for headless / browser-less environments.
- *
- * Mints a login ticket, prints the auth URL the user should open in any
- * browser, then polls the backend every 5 seconds until the user authorizes
- * or the ticket expires. Works over SSH, in CI, or in any environment where
- * a localhost callback server cannot receive the browser redirect.
- */
+/** Ticket-poll login for headless environments: mints a ticket, prints the auth URL, and polls
+ * until authorized or expired. Works where a localhost callback cannot receive the redirect. */
 
 import type { TokenResponse } from "./server";
 import { exchangeTicket, mintTicket } from "./ticket";

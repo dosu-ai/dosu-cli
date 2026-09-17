@@ -1,6 +1,4 @@
-/**
- * HTTP client for making authenticated requests to the Dosu backend.
- */
+/** HTTP client for making authenticated requests to the Dosu backend. */
 
 import {
   SessionExpiredError,
@@ -55,9 +53,7 @@ export class Client {
     this.config = cfg;
   }
 
-  /**
-   * Performs an authenticated HTTP request with auto-refresh on 401/403.
-   */
+  /** Performs an authenticated HTTP request with auto-refresh on 401/403. */
   async doRequest(method: string, path: string, body?: unknown): Promise<Response> {
     if (!isAuthenticated(this.config)) {
       throw new Error("not authenticated - please run setup first");
@@ -83,9 +79,7 @@ export class Client {
     return resp;
   }
 
-  /**
-   * Performs a single authenticated request without any retry/refresh logic.
-   */
+  /** Performs a single authenticated request without any retry/refresh logic. */
   async doRequestRaw(method: string, path: string): Promise<Response> {
     return this.doRequestOnce(method, path);
   }
@@ -129,13 +123,8 @@ export class Client {
     return this.doRequest("DELETE", path);
   }
 
-  /**
-   * Public method to refresh token externally (used during auth step).
-   *
-   * The lock covers the complete read -> remote refresh -> atomic save cycle,
-   * so sibling processes cannot rotate the same refresh token concurrently.
-   * Refreshed credentials become visible in memory only after they are durable.
-   */
+  /** Refresh the token under a lock covering the read -> remote refresh -> atomic save cycle,
+   * so sibling processes cannot rotate the same refresh token concurrently. */
   async refreshToken(): Promise<void> {
     const refreshTokenAtStart = this.config.active_account?.session.refresh_token;
     if (!refreshTokenAtStart) {
@@ -216,9 +205,8 @@ export class Client {
       clearTimeout(timeout);
     }
 
-    // A browser login in another process may have switched accounts while the
-    // refresh request was in flight. Never let this stale client overwrite the
-    // new account aggregate with tokens from the previous account.
+    // Another process may have switched accounts mid-refresh; never overwrite the new account
+    // aggregate with tokens from the previous account.
     const latest = loadConfig();
     this.assertSameActiveAccount(latest);
     const latestSession = latest.active_account?.session;
@@ -274,10 +262,7 @@ export class Client {
     return resp.json() as Promise<Org[]>;
   }
 
-  /**
-   * Validates an API key against the current backend.
-   * Returns true if valid, false if invalid. On network errors, assumes valid (optimistic).
-   */
+  /** Validates an API key against the backend; on network errors, assumes valid (optimistic). */
   async validateAPIKey(apiKey: string, deploymentID: string): Promise<boolean> {
     try {
       const endpoint = `${this.baseURL}/v1/mcp/deployments/${encodeURIComponent(deploymentID)}`;

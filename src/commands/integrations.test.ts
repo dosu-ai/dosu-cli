@@ -337,9 +337,9 @@ describe("integrations github-collaborators", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce([{}]);
     await run("github-collaborators", "123");
-    // All undefined fields should be replaced with "—"
+    // All undefined fields should be replaced with "-"
     const output = allOutput();
-    expect(output).toContain("—");
+    expect(output).toContain("-");
   });
 });
 

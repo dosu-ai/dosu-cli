@@ -1,6 +1,4 @@
-/**
- * `dosu deployments` — list, inspect, and switch deployments.
- */
+/** `dosu deployments`: list, inspect, and switch deployments. */
 
 import { Command } from "commander";
 import pc from "picocolors";
@@ -65,7 +63,7 @@ export function deploymentsCommand(): Command {
           (d: { deployment_id: string; name?: string; org_id?: string; enabled?: boolean }) => [
             d.deployment_id.slice(0, 8),
             d.name ?? "(unnamed)",
-            d.org_id ? d.org_id.slice(0, 8) : "—",
+            d.org_id ? d.org_id.slice(0, 8) : "-",
             d.enabled ? pc.green("active") : pc.dim("disabled"),
           ],
         ),

@@ -1,9 +1,5 @@
-/**
- * Read the stable identity carried by a Supabase JWT.
- *
- * This only correlates local state with an account. It is never an
- * authorization decision; the backend still validates every token.
- */
+/** Read the stable identity carried by a Supabase JWT; only correlates local state, never an
+ * authorization decision (the backend validates every token). */
 function getAccessTokenClaim(accessToken: string, claim: string): string | undefined {
   try {
     const payload = accessToken.split(".")[1];

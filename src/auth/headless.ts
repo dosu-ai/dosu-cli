@@ -1,9 +1,5 @@
-/**
- * Detect whether the CLI is running in a headless / browser-less environment.
- *
- * Used to auto-select the ticket-poll login flow instead of the localhost
- * callback flow, which requires a reachable loopback address.
- */
+/** Detect a headless / browser-less environment, used to auto-select the ticket-poll login flow
+ * over the localhost callback flow. */
 
 export function isHeadless(): boolean {
   if (!process.stdin?.isTTY) return true;

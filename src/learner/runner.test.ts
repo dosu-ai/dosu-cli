@@ -1,0 +1,431 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentSession } from "../sessions/scan";
+import { getVersionString } from "../version/version";
+import { classifyGatewayError, runLearner, traceAgentMessage } from "./runner";
+
+const debugMock = vi.hoisted(() => vi.fn());
+vi.mock("../debug/logger", () => ({
+  logger: { debug: debugMock, info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
+const queryMock = vi.fn();
+const conflictsMock = vi.fn();
+
+vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
+  query: (params: unknown) => queryMock(params),
+  createSdkMcpServer: (options: { name: string }) => ({
+    type: "sdk",
+    name: options.name,
+    instance: {},
+  }),
+  tool: (name: string) => ({ name }),
+}));
+
+vi.mock("./conflicts", () => ({
+  detectSettingsConflicts: () => conflictsMock(),
+}));
+
+const resolveExecutableMock = vi.hoisted(() => vi.fn());
+vi.mock("./executable", () => ({
+  resolveClaudeExecutable: () => resolveExecutableMock(),
+}));
+
+const sessions: AgentSession[] = [
+  { id: "s1", harness: "claude", path: "/x/a.jsonl", updated: "2026-08-27T00:00:00.000Z" },
+];
+
+const baseOptions = {
+  sessions,
+  apiKey: "sk_user_test",
+  deploymentID: "dep-1",
+  trigger: "manual" as const,
+  gatewayURL: "http://localhost:7001/v1/llm-gateway",
+};
+
+function successResult(overrides: Record<string, unknown> = {}) {
+  return {
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    num_turns: 3,
+    result: "Read 1 session, wrote 1 note.",
+    ...overrides,
+  };
+}
+
+function queryReturning(...messages: unknown[]) {
+  queryMock.mockReturnValue(
+    (async function* () {
+      yield* messages;
+    })(),
+  );
+}
+
+beforeEach(() => {
+  queryMock.mockReset();
+  conflictsMock.mockReset();
+  conflictsMock.mockReturnValue([]);
+  resolveExecutableMock.mockReset();
+  resolveExecutableMock.mockReturnValue(undefined);
+});
+
+describe("classifyGatewayError", () => {
+  it("maps the three machine-readable gateway tokens", () => {
+    expect(classifyGatewayError("403 dosu_consent_off: not enabled")?.outcome).toBe("consent_off");
+    expect(classifyGatewayError("dosu_credit_limit_reached")?.outcome).toBe("credit_limit");
+    expect(classifyGatewayError("429 dosu_quota_exceeded, retry later")?.outcome).toBe(
+      "quota_exceeded",
+    );
+    expect(classifyGatewayError("some other failure")).toBeNull();
+  });
+});
+
+describe("runLearner", () => {
+  it("fails closed when the gateway URL is not absolute", async () => {
+    const result = await runLearner({ ...baseOptions, gatewayURL: "/v1/llm-gateway" });
+
+    expect(result.outcome).toBe("error");
+    expect(result.message).toMatch(/gateway URL/i);
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on settings conflicts without spawning", async () => {
+    conflictsMock.mockReturnValue([
+      { file: "/etc/claude-code/managed-settings.json", keys: ["apiKeyHelper"] },
+    ]);
+
+    const result = await runLearner(baseOptions);
+
+    expect(result.outcome).toBe("settings_conflict");
+    expect(result.message).toContain("managed-settings.json");
+    expect(result.message).toContain("apiKeyHelper");
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
+  it("completes on a success result and reports turns", async () => {
+    queryReturning(successResult());
+
+    const result = await runLearner(baseOptions);
+
+    expect(result).toMatchObject({ outcome: "completed", turns: 3, notesWritten: 0 });
+  });
+
+  it("wires the gateway env, isolation options, and both MCP servers", async () => {
+    queryReturning(successResult());
+
+    await runLearner({ ...baseOptions, runID: "run-123" });
+
+    const params = queryMock.mock.calls[0][0];
+    expect(params.options.env.ANTHROPIC_BASE_URL).toBe("http://localhost:7001/v1/llm-gateway");
+    expect(params.options.env.ANTHROPIC_AUTH_TOKEN).toBe("sk_user_test");
+    expect(params.options.env.CLAUDE_CONFIG_DIR).toContain("dosu-learner-");
+    expect(params.options.settingSources).toEqual([]);
+    expect(params.options.persistSession).toBe(false);
+    expect(params.options.sandbox).toEqual({ enabled: true, failIfUnavailable: false });
+    expect(Object.keys(params.options.mcpServers)).toEqual(["sessions", "dosu"]);
+    expect(params.options.mcpServers.dosu.type).toBe("http");
+    // Session-context headers ride on every knowledge MCP request; no repo/branch/commit
+    // headers because a run spans many repos.
+    expect(params.options.mcpServers.dosu.headers).toMatchObject({
+      "X-Dosu-API-Key": "sk_user_test",
+      "X-Dosu-Session-Id": "run-123",
+      "X-Dosu-Client": `dosu-cli-learner/${getVersionString()}`,
+      "X-Dosu-Session-Started-At": "2026-08-27T00:00:00.000Z",
+    });
+    expect(params.options.mcpServers.dosu.headers).not.toHaveProperty("X-Dosu-Repo");
+    expect(params.options.mcpServers.dosu.headers).not.toHaveProperty("X-Dosu-Branch");
+    expect(params.options.mcpServers.dosu.headers).not.toHaveProperty("X-Dosu-Commit");
+    // No allowedTools: bare entries would auto-approve ahead of canUseTool
+    // and bypass the note cap. The callback is the only gate.
+    expect(params.options.allowedTools).toBeUndefined();
+    // SDK resolves its own binary when available; no override passed.
+    expect(params.options.pathToClaudeCodeExecutable).toBeUndefined();
+  });
+
+  it("passes a fallback Claude executable when the SDK binary is unavailable", async () => {
+    resolveExecutableMock.mockReturnValue("/home/u/.local/bin/claude");
+    queryReturning(successResult());
+
+    await runLearner(baseOptions);
+
+    const params = queryMock.mock.calls[0][0];
+    expect(params.options.pathToClaudeCodeExecutable).toBe("/home/u/.local/bin/claude");
+  });
+
+  it("routes SDK stderr into the debug log", async () => {
+    queryReturning(successResult());
+
+    await runLearner(baseOptions);
+
+    queryMock.mock.calls[0][0].options.stderr("boom on the sdk");
+    expect(debugMock).toHaveBeenCalledWith("learner", "[sdk] boom on the sdk");
+  });
+
+  it("canUseTool denies non-allowlisted tools and enforces the note cap", async () => {
+    queryReturning(successResult());
+
+    await runLearner({ ...baseOptions, maxNotes: 2 });
+
+    const { canUseTool } = queryMock.mock.calls[0][0].options;
+    const signal = { signal: new AbortController().signal, suggestions: [] };
+
+    expect((await canUseTool("Bash", {}, signal)).behavior).toBe("deny");
+    expect((await canUseTool("Read", {}, signal)).behavior).toBe("deny");
+    expect((await canUseTool("mcp__sessions__read_session", { id: "s1" }, signal)).behavior).toBe(
+      "allow",
+    );
+    expect((await canUseTool("mcp__dosu__write_knowledge", {}, signal)).behavior).toBe("allow");
+    expect((await canUseTool("mcp__dosu__write_knowledge", {}, signal)).behavior).toBe("allow");
+    const third = await canUseTool("mcp__dosu__write_knowledge", {}, signal);
+    expect(third.behavior).toBe("deny");
+    expect(third.message).toContain("Note cap reached");
+  });
+
+  it("counts allowed write_knowledge calls in the result", async () => {
+    queryReturning(successResult());
+    // Invoke the gate before the iterator is consumed: runLearner awaits the
+    // full stream, so trigger writes from inside a queued microtask.
+    type GateParams = {
+      options: { canUseTool: (name: string, input: object, extra: object) => Promise<unknown> };
+    };
+    queryMock.mockImplementation((params: GateParams) => {
+      return (async function* () {
+        await params.options.canUseTool("mcp__dosu__write_knowledge", {}, {});
+        await params.options.canUseTool("mcp__dosu__write_knowledge", {}, {});
+        yield successResult();
+      })();
+    });
+
+    const result = await runLearner(baseOptions);
+
+    expect(result.notesWritten).toBe(2);
+  });
+
+  type GateResult = { behavior: string; updatedInput?: Record<string, unknown>; message?: string };
+  type GateParams = {
+    options: { canUseTool: (name: string, input: object, extra: object) => Promise<GateResult> };
+  };
+  const read = (id: string) => ["mcp__sessions__read_session", { id }, {}] as const;
+  const write = (title: string) =>
+    [
+      "mcp__dosu__write_knowledge",
+      { title, content: "c", transcript_id: "model-junk" },
+      {},
+    ] as const;
+
+  it("attributes each note to the session currently being studied", async () => {
+    const g: GateResult[] = [];
+    queryMock.mockImplementation((params: GateParams) => {
+      return (async function* () {
+        // Interleaved read→write→read→write: each note gets its own session.
+        await params.options.canUseTool(...read("s1"));
+        g.push(await params.options.canUseTool(...write("note-a")));
+        await params.options.canUseTool(...read("s2"));
+        g.push(await params.options.canUseTool(...write("note-b")));
+        yield successResult();
+      })();
+    });
+
+    const result = await runLearner(baseOptions);
+
+    expect(result.notesWritten).toBe(2);
+    expect(g[0].updatedInput).toEqual({ title: "note-a", content: "c", transcript_id: "s1" });
+    expect(g[1].updatedInput).toEqual({ title: "note-b", content: "c", transcript_id: "s2" });
+  });
+
+  it("attributes EVERY note of a session read once and studied for several notes", async () => {
+    const g: GateResult[] = [];
+    queryMock.mockImplementation((params: GateParams) => {
+      return (async function* () {
+        // One read, three writes (the common shape); then the next session.
+        await params.options.canUseTool(...read("s1"));
+        g.push(await params.options.canUseTool(...write("s1-a")));
+        g.push(await params.options.canUseTool(...write("s1-b")));
+        g.push(await params.options.canUseTool(...write("s1-c")));
+        await params.options.canUseTool(...read("s2"));
+        g.push(await params.options.canUseTool(...write("s2-a")));
+        g.push(await params.options.canUseTool(...write("s2-b")));
+        yield successResult();
+      })();
+    });
+
+    const result = await runLearner(baseOptions);
+
+    expect(result.notesWritten).toBe(5);
+    // All three s1 notes → s1; both s2 notes → s2. No note goes null just for
+    // being the 2nd+ from its session (the bug real studying surfaced).
+    expect(g.map((r) => r.updatedInput?.transcript_id)).toEqual(["s1", "s1", "s1", "s2", "s2"]);
+  });
+
+  it("denies a write after reading several sessions, then attributes the re-read one", async () => {
+    const g: GateResult[] = [];
+    queryMock.mockImplementation((params: GateParams) => {
+      return (async function* () {
+        // Read-all-then-write: the source is ambiguous, so the write is denied.
+        await params.options.canUseTool(...read("s1"));
+        await params.options.canUseTool(...read("s2"));
+        g.push(await params.options.canUseTool(...write("ambiguous")));
+        // Model complies: re-reads only the right session, then writes.
+        await params.options.canUseTool(...read("s2"));
+        g.push(await params.options.canUseTool(...write("resolved")));
+        yield successResult();
+      })();
+    });
+
+    const result = await runLearner(baseOptions);
+
+    expect(g[0].behavior).toBe("deny");
+    expect(g[0].message).toMatch(/one session|before reading the next/i);
+    expect(g[1].updatedInput).toEqual({ title: "resolved", content: "c", transcript_id: "s2" });
+    // The denied write is not counted; only the resolved one is.
+    expect(result.notesWritten).toBe(1);
+  });
+
+  it("leaves a note unattributed when no session was read before it", async () => {
+    const g: GateResult[] = [];
+    queryMock.mockImplementation((params: GateParams) => {
+      return (async function* () {
+        g.push(await params.options.canUseTool(...write("orphan")));
+        yield successResult();
+      })();
+    });
+
+    const result = await runLearner(baseOptions);
+
+    expect(result.notesWritten).toBe(1);
+    // No session to attribute → genuinely unattributed. Any transcript_id the
+    // model supplied is stripped so the attested backend stores null.
+    expect(g[0].updatedInput).toEqual({ title: "orphan", content: "c" });
+    expect(g[0].updatedInput).not.toHaveProperty("transcript_id");
+  });
+
+  it("ignores an id-less read (a paging call) so it doesn't count as a session", async () => {
+    const g: GateResult[] = [];
+    queryMock.mockImplementation((params: GateParams) => {
+      return (async function* () {
+        // A read with no id (offset-only paging) adds nothing, so the following
+        // write has no session to attribute to.
+        await params.options.canUseTool("mcp__sessions__read_session", { offset: 2 }, {});
+        g.push(await params.options.canUseTool(...write("no-real-read")));
+        yield successResult();
+      })();
+    });
+
+    const result = await runLearner(baseOptions);
+
+    expect(result.notesWritten).toBe(1);
+    // Stripped: an id-less read is no session, so the model's value must not survive.
+    expect(g[0].updatedInput).toEqual({ title: "no-real-read", content: "c" });
+  });
+
+  it("maps a consent-off gateway refusal from the result text", async () => {
+    queryReturning(successResult({ is_error: true, result: "API error: dosu_consent_off: nope" }));
+
+    const result = await runLearner(baseOptions);
+
+    expect(result.outcome).toBe("consent_off");
+    expect(result.message).toContain("org admin");
+  });
+
+  it("maps a quota error thrown by the SDK", async () => {
+    queryMock.mockImplementation(() => {
+      return (async function* () {
+        yield await Promise.reject(
+          new Error("stream failed: 429 dosu_quota_exceeded try tomorrow"),
+        );
+      })();
+    });
+
+    const result = await runLearner(baseOptions);
+
+    expect(result.outcome).toBe("quota_exceeded");
+    expect(result.message).toContain("resume tomorrow");
+  });
+
+  it("returns an error outcome for non-success results", async () => {
+    queryReturning(
+      successResult({ subtype: "error_during_execution", is_error: true, result: undefined }),
+    );
+
+    const result = await runLearner(baseOptions);
+
+    expect(result.outcome).toBe("error");
+  });
+
+  it("returns an error when the stream ends without a result", async () => {
+    queryReturning({ type: "assistant" });
+
+    const result = await runLearner(baseOptions);
+
+    expect(result.outcome).toBe("error");
+    expect(result.message).toContain("without a result");
+  });
+
+  it("returns an error outcome when the SDK throws a non-gateway error", async () => {
+    queryMock.mockImplementation(() => {
+      throw new Error("spawn ENOENT");
+    });
+
+    const result = await runLearner(baseOptions);
+
+    expect(result.outcome).toBe("error");
+  });
+});
+
+describe("traceAgentMessage", () => {
+  beforeEach(() => debugMock.mockClear());
+
+  function traced(): string {
+    return debugMock.mock.calls.map((c) => c.join(" ")).join("\n");
+  }
+
+  it("logs assistant text and tool calls with their arguments", () => {
+    traceAgentMessage({
+      type: "assistant",
+      message: {
+        content: [
+          { type: "text", text: "Reading the first session\nnow." },
+          { type: "tool_use", name: "mcp__sessions__read_session", input: { id: "s1" } },
+        ],
+      },
+    });
+
+    const logged = traced();
+    expect(logged).toContain("[agent] Reading the first session now.");
+    expect(logged).toContain('[agent] → mcp__sessions__read_session {"id":"s1"}');
+  });
+
+  it("logs tool results with size and error flag", () => {
+    traceAgentMessage({
+      type: "user",
+      message: {
+        content: [
+          { type: "tool_result", content: "session transcript here" },
+          { type: "tool_result", content: "denied", is_error: true },
+        ],
+      },
+    });
+
+    const logged = traced();
+    expect(logged).toMatch(/\[agent\] ← result \d+ chars: session transcript here/);
+    expect(logged).toContain("(error): denied");
+  });
+
+  it("truncates oversized snippets", () => {
+    traceAgentMessage({
+      type: "assistant",
+      message: { content: [{ type: "text", text: "x".repeat(1000) }] },
+    });
+
+    const line = debugMock.mock.calls[0].join(" ");
+    expect(line.length).toBeLessThan(500);
+    expect(line).toContain("…");
+  });
+
+  it("ignores messages without array content", () => {
+    traceAgentMessage({ type: "result", subtype: "success" });
+    traceAgentMessage({ type: "assistant", message: { content: "plain string" } });
+
+    expect(debugMock).not.toHaveBeenCalled();
+  });
+});

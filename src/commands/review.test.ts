@@ -52,18 +52,14 @@ const makeValidConfig = (overrides: Partial<FlatTestConfig> = {}) =>
   makeTestConfig({ ...validFlatConfig, ...overrides });
 const validConfig = makeValidConfig();
 
-// A tRPC NOT_FOUND error, as the client surfaces it. Verbs route by the opaque
-// id's prefix (draft_message:<uuid> → draft, bare uuid → doc_change), so a
-// NOT_FOUND now only signals a genuinely unknown/inaccessible doc-change id.
+// A tRPC NOT_FOUND error; with prefix-based routing it only signals an unknown doc-change id.
 function notFound() {
   return new TRPCClientError("not found", {
     result: { error: { code: -32004, message: "not found", data: { code: "NOT_FOUND" } } },
   });
 }
 
-// A tRPC UNPROCESSABLE_CONTENT error — what review.getChange surfaces for a
-// malformed (non-UUID) id, since the change-view endpoint types its path param
-// as a UUID and FastAPI 422s before any lookup.
+// A tRPC UNPROCESSABLE_CONTENT error: review.getChange 422s on a malformed (non-UUID) id.
 function unprocessable() {
   return new TRPCClientError("invalid id", {
     result: {

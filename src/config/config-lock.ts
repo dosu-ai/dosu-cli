@@ -126,10 +126,8 @@ function releaseOwnedLock(lockPath: string, ownerId: string): void {
   }
 }
 
-/**
- * Claim a stale inode with a hard link before unlinking the public lock path.
- * This prevents one waiter from deleting a replacement lock created by another waiter.
- */
+/** Claim a stale inode with a hard link before unlinking the public lock path, so one waiter
+ * cannot delete a replacement lock created by another waiter. */
 function claimAndRemoveStaleLock(
   lockPath: string,
   staleAgeMs: number,

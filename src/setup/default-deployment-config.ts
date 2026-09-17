@@ -1,13 +1,5 @@
-/**
- * Default `config` payload used when creating a new GitHub deployment via
- * `workspaces.create`. Mirrors
- * `DEFAULT_DEPLOYMENT_CONFIG_GITHUB_TEST` from
- * `frontend/packages/core/src/utils/deployments.ts` in the Dosu main repo.
- *
- * The CLI copies it verbatim so CLI-created deployments use the same supported
- * feature defaults as web-created deployments. The hosted schema rejects
- * unknown fields, so keep this copy synchronized with the web default.
- */
+/** Mirrors `DEFAULT_DEPLOYMENT_CONFIG_GITHUB_TEST` in the Dosu main repo; the hosted schema
+ * rejects unknown fields, so keep this copy synchronized with the web default. */
 export const DEFAULT_DEPLOYMENT_CONFIG_GITHUB: Readonly<Record<string, unknown>> = {
   default_maintainer: "",
   issues: {

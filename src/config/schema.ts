@@ -17,7 +17,11 @@ export interface AccountTarget {
   deployment_name?: string;
   api_key?: string;
   org_id?: string;
+  /** Display name of the organization the target lives in. */
+  org_name?: string;
   space_id?: string;
+  /** Display name of the Library (space) the MCP answers from. */
+  library_name?: string;
 }
 
 interface ActiveAccount {

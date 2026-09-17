@@ -200,7 +200,7 @@ describe("deployments list", () => {
     expect(allOutput()).toContain("01234567");
   });
 
-  it("shows '(unnamed)' for missing name and '—' for missing org_id", async () => {
+  it("shows '(unnamed)' for missing name and '-' for missing org_id", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce([
       { deployment_id: "d1", enabled: true, provider_slug: "dosu_mcp" },
@@ -208,7 +208,7 @@ describe("deployments list", () => {
     await run("list");
     const output = allOutput();
     expect(output).toContain("(unnamed)");
-    expect(output).toContain("—");
+    expect(output).toContain("-");
   });
 
   it("shows deployment_id when deployment_name is missing", async () => {

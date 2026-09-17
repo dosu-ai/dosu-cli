@@ -2,18 +2,19 @@ import { execSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import * as p from "@clack/prompts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as p from "../tui/prompts";
 import {
   buildDosuAgentsSection,
   DOSU_SECTION_END,
   DOSU_SECTION_START,
+  dosuAgentsSectionState,
   inGitWorkTree,
   stepUpdateAgentsMd,
   upsertDosuAgentsSection,
 } from "./agents-md-step";
 
-vi.mock("@clack/prompts", () => ({
+vi.mock("../tui/prompts", () => ({
   log: {
     success: vi.fn(),
     error: vi.fn(),
@@ -66,6 +67,33 @@ describe("inGitWorkTree", () => {
   it("returns false in a bare repository", () => {
     execSync("git init --bare", { cwd: dir, stdio: "ignore" });
     expect(inGitWorkTree(dir)).toBe(false);
+  });
+});
+
+describe("dosuAgentsSectionState", () => {
+  it("reads missing when there is no AGENTS.md or no Dosu section", () => {
+    expect(dosuAgentsSectionState(dir)).toBe("missing");
+
+    writeFileSync(join(dir, "AGENTS.md"), "# My rules\n");
+    expect(dosuAgentsSectionState(dir)).toBe("missing");
+  });
+
+  it("reads current for the section setup writes today", () => {
+    upsertDosuAgentsSection(dir, "canonical instruction");
+    expect(dosuAgentsSectionState(dir)).toBe("current");
+  });
+
+  it("reads outdated for older or unversioned markers", () => {
+    writeFileSync(join(dir, "AGENTS.md"), `<!-- dosu:mcp:start v1 -->\nold\n${DOSU_SECTION_END}\n`);
+    expect(dosuAgentsSectionState(dir)).toBe("outdated");
+
+    writeFileSync(join(dir, "AGENTS.md"), `<!-- dosu:mcp:start -->\nold\n${DOSU_SECTION_END}\n`);
+    expect(dosuAgentsSectionState(dir)).toBe("outdated");
+  });
+
+  it("reads missing for incomplete markers instead of throwing", () => {
+    writeFileSync(join(dir, "AGENTS.md"), "<!-- dosu:mcp:start v2 -->\nno end marker\n");
+    expect(dosuAgentsSectionState(dir)).toBe("missing");
   });
 });
 

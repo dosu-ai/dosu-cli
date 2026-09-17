@@ -1,14 +1,5 @@
-/**
- * NDJSON event output for agent-mode commands.
- *
- * Every line written to stdout in `--agent` / `--json` mode is a single
- * JSON object on its own line. The `agent_next_steps` field is the
- * crucial bit — it tells the coding agent driving the CLI what to do
- * next without needing it to parse status codes or guess.
- *
- * This pattern is borrowed directly from Netlify CLI's `login --request`
- * output, which returns an `agent_next_steps` string aimed at AI agents.
- */
+/** NDJSON output for agent mode: one JSON object per stdout line, where `agent_next_steps`
+ * tells the driving agent what to do next without parsing status codes. */
 
 export type AgentStatus =
   | "ok"
@@ -23,11 +14,7 @@ export function emitJSONLine(value: unknown): void {
   console.log(JSON.stringify(value));
 }
 
-/**
- * The CLI exits but the user still has to do something out-of-band —
- * typically open a URL in a browser. The agent should relay `url` to the
- * user and re-run `resume_command` when the user confirms they're done.
- */
+/** The user must act out-of-band: the agent relays `url`, then re-runs `resume_command`. */
 export function emitNeedUserAction(opts: {
   step: string;
   url: string;
@@ -47,16 +34,8 @@ export function emitNeedUserAction(opts: {
   });
 }
 
-/**
- * Emit a structured error with a `reason` machine code and a human/agent
- * remediation string. `reason` is for telemetry / agents to switch on;
- * `agent_next_steps` is what the calling agent should tell the user.
- *
- * Additional fields can be attached (e.g. `candidates` for a list of
- * deployments to pick from) — they're spread into the JSON line so the
- * driving agent can consume them programmatically without parsing
- * `agent_next_steps` prose.
- */
+/** Emit a structured error: `reason` is a machine code to switch on, `agent_next_steps` is the
+ * remediation to relay, and any extra fields are spread into the JSON line. */
 export function emitError(opts: {
   step: string;
   reason: string;

@@ -17,10 +17,12 @@ const {
   mockStartInstallationCallbackServer: vi.fn(),
   mockTrpc: {
     githubRepository: { listForOrg: { query: vi.fn() } },
+    libraries: { sourcesList: { query: vi.fn() } },
     workspaces: {
       create: { mutate: vi.fn() },
       delete: { mutate: vi.fn() },
       listForSpace: { query: vi.fn() },
+      listForOrg: { query: vi.fn() },
     },
     dataSource: {
       create: { mutate: vi.fn() },
@@ -32,9 +34,7 @@ const {
   },
 }));
 
-// The hoisted mock only models the routers this step touches; functions under
-// test take the full contract client, so cast once here (standard partial-mock
-// pattern in this repo).
+// The mock only models the routers this step touches; cast once to the full contract client.
 const mockTrpcClient = mockTrpc as unknown as TypedClient;
 
 // `open` module — MUST be mocked, or the fallback "open browser" path in
@@ -46,7 +46,7 @@ vi.mock("node:child_process", () => ({
   execSync: (...args: unknown[]) => mockExecSync(...args),
 }));
 
-vi.mock("@clack/prompts", () => ({
+vi.mock("../tui/prompts", () => ({
   confirm: vi.fn(),
   multiselect: vi.fn(),
   isCancel: vi.fn(),
@@ -92,9 +92,9 @@ vi.mock("../client/trpc", () => ({
   createTypedClient: vi.fn(() => mockTrpc),
 }));
 
-import * as p from "@clack/prompts";
 import type { Config } from "../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
+import * as p from "../tui/prompts";
 import {
   detectGitRepo,
   parseAvailableRepos,
@@ -113,6 +113,36 @@ describe("parseAvailableRepos", () => {
     expect(() => parseAvailableRepos([{ repository_id: "1" }])).toThrow("invalid repository");
     expect(() => parseAvailableRepos(null)).toThrow("non-array");
   });
+
+  it("passes through fork metadata and rejects malformed fork fields", () => {
+    // `is_fork` / `fork_parent_slug` ride along from the backend's
+    // `...github.repository` spread; both are nullable in the DB row.
+    const fork = {
+      repository_id: 2,
+      name: "driver",
+      slug: "test-forker/driver",
+      is_deployed: false,
+      is_fork: true,
+      fork_parent_slug: "node-escpos/driver",
+    };
+    expect(parseAvailableRepos([fork])).toEqual([fork]);
+    expect(
+      parseAvailableRepos([
+        {
+          repository_id: 3,
+          name: "api",
+          slug: "acme/api",
+          is_deployed: false,
+          is_fork: null,
+          fork_parent_slug: null,
+        },
+      ]),
+    ).toHaveLength(1);
+    expect(() => parseAvailableRepos([{ ...fork, is_fork: "yes" }])).toThrow("invalid repository");
+    expect(() => parseAvailableRepos([{ ...fork, fork_parent_slug: 42 }])).toThrow(
+      "invalid repository",
+    );
+  });
 });
 
 describe("parseDeploymentIds", () => {
@@ -123,14 +153,10 @@ describe("parseDeploymentIds", () => {
   });
 });
 
-// Skip the post-connect verify-poll budget so each test resolves in real
-// time without needing fake timers to coexist with the install-flow promise
-// chain. The verify behaviour itself is still exercised — the loop runs
-// once and exits — just without any sleep between checks.
+// Skip the verify-poll budget so tests resolve in real time; the verify loop still runs once
+// and exits, just without sleeping between checks.
 const NO_WAIT_VERIFY = { verify: { timeoutMs: 0, intervalMs: 0 } } as const;
-// Same idea for the post-install repo refresh poll: in tests the loop runs
-// at most once. Use this when a test wants to exercise the timeout branch
-// without burning 10s of real time.
+// Same idea for the repo refresh poll: exercise the timeout branch without burning 10s.
 const NO_WAIT_REFRESH = {
   verify: { timeoutMs: 0, intervalMs: 0 },
   refresh: { timeoutMs: 0, intervalMs: 0 },
@@ -201,11 +227,14 @@ describe("stepConnectGitHubRepo", () => {
     vi.mocked(p.isCancel).mockReturnValue(false);
     mockPromptGitHubRepositories.mockResolvedValue([]);
     mockStartInstallationCallbackServer.mockResolvedValue(installationServerReturning(12345));
-    // Default: dataSource.list returns whatever's in mockTrpc state. Tests
-    // that exercise the verify step set their own mock; the rest stub it
-    // empty so verifyDataSourcesPersist completes immediately.
+    // Default: stub dataSource.list empty so verifyDataSourcesPersist completes immediately.
     mockTrpc.dataSource.list.query.mockResolvedValue([]);
     mockTrpc.workspaces.delete.mutate.mockResolvedValue({});
+    // Default: the space's Library has no github sources (the "Already connected" truth).
+    mockTrpc.libraries.sourcesList.query.mockResolvedValue([]);
+    // Default: no github deployments anywhere in the org — the reuse map
+    // stays empty and connect paths create fresh deployments.
+    mockTrpc.workspaces.listForOrg.query.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -293,7 +322,10 @@ describe("stepConnectGitHubRepo", () => {
   });
 
   it("opens the web middle page and refetches after installation callback", async () => {
-    // Pre-flight: all already deployed → triggers the install handshake.
+    // Pre-flight: all already connected to the space → triggers the install handshake.
+    mockTrpc.libraries.sourcesList.query.mockResolvedValue([
+      { provider_slug: "github", repository_id: 1, name: "acme/api" },
+    ]);
     mockTrpc.githubRepository.listForOrg.query
       .mockResolvedValueOnce([
         { repository_id: 1, name: "api", slug: "acme/api", is_deployed: true },
@@ -369,9 +401,7 @@ describe("stepConnectGitHubRepo", () => {
   });
 
   it("returns advance=false when the GitHub install times out", async () => {
-    // installationPromise never resolves; with install.timeoutMs = 1, the
-    // race resolves to null and the flow bails. Covers the
-    // `installationID === null` branch.
+    // installationPromise never resolves; with install.timeoutMs = 1 the race resolves to null.
     mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([]);
     mockStartInstallationCallbackServer.mockResolvedValue({
       server: { port: 0, close: vi.fn() },
@@ -392,9 +422,7 @@ describe("stepConnectGitHubRepo", () => {
   });
 
   it("warns when add-repositories install completes but no new repo appears", async () => {
-    // Same repo list before and after install — backend still syncing, polling
-    // budget elapses without seeing a new repo. We expect a warn pointing the
-    // user at "Refresh list" to retry.
+    // Same repo list before and after install; expect a warn pointing at "Refresh list".
     mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
       { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
     ]);
@@ -470,9 +498,7 @@ describe("stepConnectGitHubRepo", () => {
   });
 
   it("falls back to previous repos when polling returns an empty list", async () => {
-    // Covers the `polledRepos.length === 0 && previousRepos.length > 0` ternary
-    // in waitForRepositoryRefresh — a transient empty response shouldn't wipe
-    // the in-memory list before the next prompt.
+    // A transient empty poll response shouldn't wipe the in-memory list before the next prompt.
     mockTrpc.githubRepository.listForOrg.query
       .mockResolvedValueOnce([
         { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
@@ -574,12 +600,17 @@ describe("stepConnectGitHubRepo", () => {
     expect(mockTrpc.workspaces.delete.mutate).not.toHaveBeenCalled();
   });
 
-  it("shows already-deployed repos in a separate info block, excludes them from multiselect", async () => {
+  it("shows space-connected repos in a separate info block, excludes them from multiselect", async () => {
     mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
       { repository_id: 1, name: "api", slug: "acme/api", is_deployed: true },
       { repository_id: 2, name: "core", slug: "acme/core", is_deployed: false },
       { repository_id: 3, name: "web", slug: "acme/web", is_deployed: true },
       { repository_id: 4, name: "cli", slug: "acme/cli", is_deployed: false },
+    ]);
+    // "Connected" comes from the space's Library sources, not is_deployed.
+    mockTrpc.libraries.sourcesList.query.mockResolvedValue([
+      { provider_slug: "github", repository_id: 1, name: "acme/api" },
+      { provider_slug: "github", repository_id: 3, name: "acme/web" },
     ]);
     mockPromptGitHubRepositories.mockResolvedValue(["acme/core"]);
     mockTrpc.workspaces.create.mutate.mockResolvedValue({ deployment_id: "dep-X" });
@@ -591,37 +622,193 @@ describe("stepConnectGitHubRepo", () => {
 
     await stepConnectGitHubRepo(makeCfg(), null, NO_WAIT_VERIFY);
 
-    // Multiselect only contains undeployed repos — deployed ones can't be
-    // navigated to because they're not in the options list at all.
+    // Connected repos ride along at the bottom as disabled "(Connected)"
+    // entries; only unconnected ones are selectable.
     const multiselectArgs = mockPromptGitHubRepositories.mock.calls[0][0] as {
-      options: { kind?: string; value?: string }[];
+      options: { kind?: string; value?: string; disabled?: boolean; hint?: string }[];
     };
-    expect(multiselectArgs.options.filter((o) => o.kind === "repo").map((o) => o.value)).toEqual([
-      "acme/core",
-      "acme/cli",
+    expect(multiselectArgs.options.filter((o) => o.kind === "repo")).toMatchObject([
+      { value: "acme/core" },
+      { value: "acme/cli" },
+      { value: "acme/api", disabled: true, hint: "Connected" },
+      { value: "acme/web", disabled: true, hint: "Connected" },
     ]);
-    // Deployed repos surface via a separate info log.
-    const infoCalls = vi.mocked(p.log.info).mock.calls.map((c) => String(c[0]));
-    expect(infoCalls.some((s) => s.includes("Already connected") && s.includes("acme/api"))).toBe(
-      true,
-    );
-    // Only the selected undeployed repo gets created.
+    // Only the selected unconnected repo gets created.
     expect(mockTrpc.workspaces.create.mutate).toHaveBeenCalledTimes(1);
     const [args] = mockTrpc.workspaces.create.mutate.mock.calls[0];
     expect(args.name).toBe("acme/core");
   });
 
-  it("advances silently when every repo is already deployed", async () => {
+  it("renders forked repos as disabled options and excludes them from the available count", async () => {
+    mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
+      { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
+      {
+        repository_id: 2,
+        name: "driver",
+        slug: "test-forker/driver",
+        is_deployed: false,
+        is_fork: true,
+        fork_parent_slug: "node-escpos/driver",
+      },
+    ]);
+    mockPromptGitHubRepositories.mockResolvedValue([]);
+
+    const result = await stepConnectGitHubRepo(makeCfg(), null, NO_WAIT_VERIFY);
+
+    expect(result.advance).toBe(true);
+    const promptArgs = mockPromptGitHubRepositories.mock.calls[0][0] as {
+      message: string;
+      options: { kind?: string; value?: string; disabled?: boolean; hint?: string }[];
+    };
+    // The fork stays visible (mirrors the web attach modal) but can't be picked.
+    expect(promptArgs.options.filter((o) => o.kind === "repo")).toMatchObject([
+      { value: "acme/api" },
+      {
+        value: "test-forker/driver",
+        disabled: true,
+        hint: "Forked repo; connect node-escpos/driver instead",
+      },
+    ]);
+    // Only the selectable repo counts as available.
+    expect(promptArgs.message).toContain("(1 available)");
+  });
+
+  it("labels a fork without a known parent with the generic fork hint", async () => {
+    mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
+      {
+        repository_id: 2,
+        name: "driver",
+        slug: "test-forker/driver",
+        is_deployed: false,
+        is_fork: true,
+      },
+    ]);
+    mockPromptGitHubRepositories.mockResolvedValue([]);
+
+    await stepConnectGitHubRepo(makeCfg(), null, NO_WAIT_VERIFY);
+
+    const promptArgs = mockPromptGitHubRepositories.mock.calls[0][0] as {
+      options: { kind?: string; hint?: string }[];
+    };
+    expect(promptArgs.options.filter((o) => o.kind === "repo")).toMatchObject([
+      { disabled: true, hint: "Forked repo, can't be connected" },
+    ]);
+  });
+
+  it("advances silently when every repo is already connected to the space", async () => {
     mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
       { repository_id: 1, name: "api", slug: "acme/api", is_deployed: true },
+    ]);
+    mockTrpc.libraries.sourcesList.query.mockResolvedValue([
+      { provider_slug: "github", repository_id: 1, name: "acme/api" },
     ]);
     mockPromptGitHubRepositories.mockResolvedValue([]);
 
     const result = await stepConnectGitHubRepo(makeCfg(), null);
 
     expect(result.advance).toBe(true);
+    expect(result.has_connected_repo).toBe(true);
     expect(mockPromptGitHubRepositories).toHaveBeenCalledOnce();
     expect(mockTrpc.workspaces.create.mutate).not.toHaveBeenCalled();
+  });
+
+  it("keeps orphan-deployment repos selectable and reuses the deployment on connect", async () => {
+    // An orphan github deployment (data_source GC'd) must stay selectable, and connecting must
+    // reuse the deployment: repository_id is globally unique on deployment.
+    mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
+      { repository_id: 7, name: "api", slug: "acme/api", is_deployed: true },
+    ]);
+    mockTrpc.libraries.sourcesList.query.mockResolvedValue([]);
+    mockTrpc.workspaces.listForOrg.query.mockResolvedValue([
+      { deployment_id: "dep-orphan", provider_slug: "github", repository_id: 7 },
+    ]);
+    // The junction is healthy in this test, so listForSpace also sees the
+    // orphan — the link step wires the new data_source into it.
+    mockTrpc.workspaces.listForSpace.query.mockResolvedValue([
+      { deployment_id: "dep-orphan", provider_slug: "github", repository_id: 7 },
+    ]);
+    mockPromptGitHubRepositories.mockResolvedValue(["acme/api"]);
+    mockTrpc.dataSource.create.mutate.mockResolvedValue({ data_source_id: "ds-new" });
+    mockTrpc.dataSource.list.query.mockResolvedValue([
+      { data_source_id: "ds-new", provider_slug: "github", is_indexed: false },
+    ]);
+
+    const result = await stepConnectGitHubRepo(makeCfg(), null, NO_WAIT_VERIFY);
+
+    // Not labeled connected — the space's Library has no source, so the repo
+    // is a normal selectable option despite its orphan deployment row.
+    const promptArgs = mockPromptGitHubRepositories.mock.calls[0][0] as {
+      options: { kind?: string; value?: string; disabled?: boolean }[];
+    };
+    expect(promptArgs.options.filter((o) => o.kind === "repo")).toMatchObject([
+      { value: "acme/api" },
+    ]);
+    // The orphan deployment is reused instead of duplicated.
+    expect(mockTrpc.workspaces.create.mutate).not.toHaveBeenCalled();
+    expect(mockTrpc.dataSource.syncDataSource.mutate).toHaveBeenCalledWith({
+      data_source_id: "ds-new",
+    });
+    expect(mockTrpc.deploymentDataSource.create.mutate).toHaveBeenCalledWith({
+      deployment_id: "dep-orphan",
+      data_source_id: "ds-new",
+    });
+    expect(result.advance).toBe(true);
+    expect(result.deployment_id).toBe("dep-orphan");
+    expect(result.created_data_source_ids).toEqual(["ds-new"]);
+  });
+
+  it("reuses a detached org data source without re-syncing it", async () => {
+    // Reuse the org's existing data_source and skip syncDataSource, whose failure path would
+    // delete the row out from under any other Library using it.
+    mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
+      { repository_id: 9, name: "core", slug: "acme/core", is_deployed: true },
+    ]);
+    mockTrpc.libraries.sourcesList.query.mockResolvedValue([]);
+    mockTrpc.workspaces.listForSpace.query.mockResolvedValue([]);
+    mockPromptGitHubRepositories.mockResolvedValue(["acme/core"]);
+    mockTrpc.workspaces.create.mutate.mockResolvedValue({ deployment_id: "dep-new" });
+    mockTrpc.dataSource.list.query.mockResolvedValue([
+      {
+        data_source_id: "ds-existing",
+        provider_slug: "github",
+        repository_id: 9,
+        is_indexed: true,
+      },
+    ]);
+
+    const result = await stepConnectGitHubRepo(makeCfg(), null, NO_WAIT_VERIFY);
+
+    expect(mockTrpc.dataSource.create.mutate).not.toHaveBeenCalled();
+    expect(mockTrpc.dataSource.syncDataSource.mutate).not.toHaveBeenCalled();
+    expect(mockTrpc.dataSource.attachToSpace.mutate).toHaveBeenCalledWith({
+      space_id: "space-1",
+      data_source_ids: ["ds-existing"],
+    });
+    expect(result.advance).toBe(true);
+    expect(result.deployment_id).toBe("dep-new");
+    expect(result.created_data_source_ids).toEqual(["ds-existing"]);
+  });
+
+  it("falls back to is_deployed when the sources list is unavailable", async () => {
+    // Old backends without libraries.sourcesList must keep the pre-fix
+    // behavior instead of offering every deployed repo for re-connection.
+    mockTrpc.libraries.sourcesList.query.mockRejectedValue(new Error("NOT_FOUND"));
+    mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
+      { repository_id: 1, name: "api", slug: "acme/api", is_deployed: true },
+      { repository_id: 2, name: "core", slug: "acme/core", is_deployed: false },
+    ]);
+    mockPromptGitHubRepositories.mockResolvedValue([]);
+
+    const result = await stepConnectGitHubRepo(makeCfg(), null, NO_WAIT_VERIFY);
+
+    const promptArgs = mockPromptGitHubRepositories.mock.calls[0][0] as {
+      options: { kind?: string; value?: string; disabled?: boolean; hint?: string }[];
+    };
+    expect(promptArgs.options.filter((o) => o.kind === "repo")).toMatchObject([
+      { value: "acme/core" },
+      { value: "acme/api", disabled: true, hint: "Connected" },
+    ]);
+    expect(result.advance).toBe(true);
   });
 
   it("returns advance=true when no selection (all already deployed)", async () => {
@@ -639,11 +826,8 @@ describe("stepConnectGitHubRepo", () => {
   });
 
   it("reverts orphan deployment when backend deletes its data_source mid-sync", async () => {
-    // Reproduces the staging case: `dataSource.create` succeeds, but
-    // `sync_github_data_source` fires `RepositoryNotFoundException` because
-    // Dosu's GitHub App can't reach the repo, so the backend deletes the
-    // data_source row a few seconds later. The CLI must detect that and
-    // tear down the orphan deployment instead of reporting "Connected".
+    // Backend sync deletes the data_source when the GitHub App can't reach the repo; the CLI
+    // must tear down the orphan deployment instead of reporting "Connected".
     mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
       { repository_id: 100, name: "good", slug: "acme/good", is_deployed: false },
       { repository_id: 200, name: "stale", slug: "acme/stale", is_deployed: false },
@@ -660,9 +844,8 @@ describe("stepConnectGitHubRepo", () => {
       { deployment_id: "dep-stale" },
     ]);
     mockTrpc.deploymentDataSource.create.mutate.mockResolvedValue({});
-    // Verify-poll sees ds-good present and ds-stale missing (backend already
-    // deleted it after RepositoryNotFoundException) — single-iteration mock
-    // is sufficient because NO_WAIT_VERIFY exits as soon as a drop appears.
+    // Verify-poll sees ds-good present and ds-stale missing; NO_WAIT_VERIFY's zero budget
+    // classifies anything still missing after one poll as dropped.
     mockTrpc.dataSource.list.query.mockResolvedValue([
       { data_source_id: "ds-good", provider_slug: "github", is_indexed: false },
     ]);
@@ -679,10 +862,8 @@ describe("stepConnectGitHubRepo", () => {
   });
 
   it("rolls back the deployment when dataSource.create returns nothing", async () => {
-    // dataSource.create occasionally returns null on the staging tRPC router
-    // (transient validation failure). Without rollback the deployment row
-    // would be left orphaned and reported as Connected, then leak into
-    // cfg.deployment_id as primary on first-run onboarding.
+    // dataSource.create can return null; without rollback the orphaned deployment would be
+    // reported as Connected and leak into cfg.deployment_id as primary.
     mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
       { repository_id: 1, name: "good", slug: "acme/good", is_deployed: false },
       { repository_id: 2, name: "broken", slug: "acme/broken", is_deployed: false },
@@ -732,9 +913,8 @@ describe("stepConnectGitHubRepo", () => {
   });
 
   it("re-prompts after a failed attempt so the user can retry and succeed", async () => {
-    // First selection targets a ghost slug → the attempt fails and the step
-    // loops back to the multiselect instead of ending. The second selection
-    // succeeds, so the step still ends with a connected repo.
+    // A failed first selection loops back to the multiselect; the second selection succeeds,
+    // so the step still ends with a connected repo.
     mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
       { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
     ]);
@@ -759,10 +939,8 @@ describe("stepConnectGitHubRepo", () => {
   });
 
   it("sorts repos most-recently-added-first so a fresh GitHub App install lands on top", async () => {
-    // Backend sorts alphabetically; for orgs with hundreds of repos that
-    // buries the one the user just added. The CLI re-sorts by created_at
-    // desc so the freshly installed repo is the first thing the cursor
-    // can reach.
+    // The CLI re-sorts by created_at desc so the freshly installed repo lands on top instead of
+    // being buried by the backend's alphabetical order.
     mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
       {
         repository_id: 1,
@@ -801,10 +979,8 @@ describe("stepConnectGitHubRepo", () => {
   });
 
   it("keeps the prior repo list when a post-install poll returns empty", async () => {
-    // A non-zero refresh budget lets the poll loop body run. The poll returns
-    // an empty list while the previous list was non-empty, so the
-    // `polledRepos.length === 0 && previousRepos.length > 0` ternary keeps the
-    // previous repos rather than wiping them.
+    // With a non-zero refresh budget an empty poll keeps the previous non-empty repo list
+    // rather than wiping it.
     mockTrpc.githubRepository.listForOrg.query
       .mockResolvedValueOnce([
         { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
@@ -830,9 +1006,8 @@ describe("stepConnectGitHubRepo", () => {
   });
 
   it("treats listForOrg failures as an empty list (catch path)", async () => {
-    // The pre-flight `fetchListForOrg` swallows errors and returns []. With no
-    // repos and an empty selection the step advances. Covers the catch block
-    // in fetchListForOrg.
+    // fetchListForOrg swallows errors and returns []; with no repos and an empty selection the
+    // step advances.
     mockTrpc.githubRepository.listForOrg.query.mockRejectedValue(new Error("network down"));
     mockPromptGitHubRepositories.mockResolvedValue([]);
 
@@ -854,9 +1029,7 @@ describe("stepConnectGitHubRepo", () => {
   });
 
   it("falls back to a manual URL message when the browser fails to open", async () => {
-    // `open` throwing should not abort the install flow — it logs a manual URL
-    // and keeps waiting for the callback. Covers the openGitHubInstallFlow
-    // open-failure catch block.
+    // `open` throwing must not abort the install flow; it logs a manual URL and keeps waiting.
     mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
       { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
     ]);
@@ -891,9 +1064,8 @@ describe("stepConnectGitHubRepo", () => {
   });
 
   it("rolls back when workspaces.create returns no deployment_id", async () => {
-    // A null/empty deployment from workspaces.create must short-circuit
-    // createDeploymentForRepo without creating a data_source. With the only
-    // selected repo failing, `created` is empty so the step reports failure.
+    // A null deployment from workspaces.create must short-circuit createDeploymentForRepo
+    // without creating a data_source.
     mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
       { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
     ]);
@@ -913,9 +1085,8 @@ describe("stepConnectGitHubRepo", () => {
   });
 
   it("swallows tRPC errors mid-wireup and reports the repo as failed", async () => {
-    // A throw from any mutate inside createDeploymentForRepo (here:
-    // syncDataSource) is caught and logged, yielding null for that repo.
-    // With the only repo failing, `created` is empty → no survivors → failure.
+    // A throw from any mutate inside createDeploymentForRepo is caught and logged, yielding
+    // null for that repo; with no survivors the step reports failure.
     mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
       { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
     ]);
@@ -956,9 +1127,7 @@ describe("stepConnectGitHubRepo", () => {
   });
 
   it("tolerates an orphan-deployment delete that throws (Error)", async () => {
-    // The single connected repo is dropped by backend sync, triggering an
-    // orphan delete. `workspaces.delete.mutate` rejecting must be swallowed
-    // (best-effort cleanup) — covers the deleteOrphanDeployment catch.
+    // A rejecting workspaces.delete.mutate must be swallowed; orphan cleanup is best-effort.
     mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
       { repository_id: 1, name: "stale", slug: "acme/stale", is_deployed: false },
     ]);
@@ -1003,9 +1172,8 @@ describe("stepConnectGitHubRepo", () => {
   });
 
   it("skips selected slugs that are no longer in the repo list", async () => {
-    // The prompt returns a slug that's vanished from `repos` (e.g. removed
-    // between prompt render and selection). `repos.find` misses → `continue`.
-    // Nothing gets created, so the step fails with the no-reverts error.
+    // A selected slug that vanished from `repos` is skipped; nothing gets created, so the step
+    // fails with the no-reverts error.
     mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
       { repository_id: 1, name: "api", slug: "acme/api", is_deployed: false },
     ]);
@@ -1024,9 +1192,8 @@ describe("stepConnectGitHubRepo", () => {
   });
 
   it("reports skipped + connected counts when some repos survive and others are reverted", async () => {
-    // Two survive, two are reverted → exercises the plural `repo${...}s`
-    // branches in both the spinner "· N skipped" stop label and the warn line,
-    // and the `reverted.length > 0` summary branch.
+    // Two survive, two are reverted: exercises the plural label branches and the
+    // `reverted.length > 0` summary branch.
     mockTrpc.githubRepository.listForOrg.query.mockResolvedValue([
       { repository_id: 1, name: "a", slug: "acme/a", is_deployed: false },
       { repository_id: 2, name: "b", slug: "acme/b", is_deployed: false },
@@ -1091,20 +1258,22 @@ describe("verifyDataSourcesPersist", () => {
     expect(mockTrpc.dataSource.list.query).not.toHaveBeenCalled();
   });
 
-  it("uses the default poll budget and exits on the first dropped id", async () => {
-    // No opts → exercises the `timeoutMs ??` / `intervalMs ??` default
-    // branches. A drop on the first poll triggers the `dropped.size > 0` early
-    // return, so the real 10s default budget is never actually waited on.
-    mockTrpc.dataSource.list.query.mockResolvedValue([{ data_source_id: "ds-1" }]);
+  it("uses the default poll budget and exits early when every id is visible", async () => {
+    // No opts exercises the default-budget branches; all ids alive on the first poll triggers
+    // the success early return, so the 10s default is never waited on.
+    mockTrpc.dataSource.list.query.mockResolvedValue([
+      { data_source_id: "ds-1" },
+      { data_source_id: "ds-2" },
+    ]);
 
     const result = await verifyDataSourcesPersist(mockTrpcClient, "org-1", ["ds-1", "ds-2"]);
 
-    expect([...result.alive]).toEqual(["ds-1"]);
-    expect([...result.dropped]).toEqual(["ds-2"]);
+    expect([...result.alive]).toEqual(["ds-1", "ds-2"]);
+    expect(result.dropped.size).toBe(0);
     expect(mockTrpc.dataSource.list.query).toHaveBeenCalledTimes(1);
   });
 
-  it("reports dropped ids and exits on the first poll that misses one", async () => {
+  it("reports ids still missing when the poll budget runs out as dropped", async () => {
     mockTrpc.dataSource.list.query.mockResolvedValue([{ data_source_id: "ds-1" }]);
 
     const result = await verifyDataSourcesPersist(mockTrpcClient, "org-1", ["ds-1", "ds-2"], {
@@ -1116,9 +1285,26 @@ describe("verifyDataSourcesPersist", () => {
     expect([...result.dropped]).toEqual(["ds-2"]);
   });
 
+  it("does not misread list-visibility lag on early polls as a backend deletion", async () => {
+    // Regression: a fresh data_source can lag behind dataSource.list, so absence must only
+    // count at the end of the budget, never on an early poll.
+    mockTrpc.dataSource.list.query
+      .mockResolvedValueOnce([]) // not visible yet
+      .mockResolvedValue([{ data_source_id: "ds-1" }]); // appears on a later poll
+
+    const result = await verifyDataSourcesPersist(mockTrpcClient, "org-1", ["ds-1"], {
+      timeoutMs: 5_000,
+      intervalMs: 0,
+    });
+
+    expect([...result.alive]).toEqual(["ds-1"]);
+    expect(result.dropped.size).toBe(0);
+    expect(mockTrpc.dataSource.list.query.mock.calls.length).toBeGreaterThan(1);
+  });
+
   it("treats a list query failure as no rows present and retries within budget", async () => {
-    // First poll throws (caught + logged → listed stays []), so both ids look
-    // dropped and we exit immediately. Covers the dataSource.list catch block.
+    // A throwing poll leaves listed empty; with a zero budget the id is still missing at the
+    // end and reported dropped.
     mockTrpc.dataSource.list.query.mockRejectedValue(new Error("transient 503"));
 
     const result = await verifyDataSourcesPersist(mockTrpcClient, "org-1", ["ds-1"], {
@@ -1159,20 +1345,18 @@ describe("verifyDataSourcesPersist", () => {
     expect(mockTrpc.dataSource.list.query).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps polling past the first iteration when timeoutMs is non-zero", async () => {
-    // A small non-zero budget with zero interval: nothing is ever dropped, so
-    // the `timeoutMs === 0` break is skipped and the loop sleeps and re-polls
-    // until the while-condition budget elapses. Exercises the non-zero
-    // timeout path through the loop without burning real time.
-    mockTrpc.dataSource.list.query.mockResolvedValue([{ data_source_id: "ds-1" }]);
+  it("keeps polling past the first iteration when an id stays missing", async () => {
+    // A small non-zero budget with an id that never shows up: the loop re-polls until the
+    // budget elapses, then classifies the id as dropped.
+    mockTrpc.dataSource.list.query.mockResolvedValue([]);
 
     const result = await verifyDataSourcesPersist(mockTrpcClient, "org-1", ["ds-1"], {
       timeoutMs: 25,
       intervalMs: 0,
     });
 
-    expect([...result.alive]).toEqual(["ds-1"]);
-    expect(result.dropped.size).toBe(0);
+    expect(result.alive.size).toBe(0);
+    expect([...result.dropped]).toEqual(["ds-1"]);
     // Looped more than once (re-polled after sleeping) before the budget ran out.
     expect(mockTrpc.dataSource.list.query.mock.calls.length).toBeGreaterThan(1);
   });

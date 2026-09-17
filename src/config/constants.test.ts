@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getBackendURL, getSupabaseAnonKey, getSupabaseURL, getWebAppURL } from "./constants";
+import {
+  getBackendURL,
+  getLlmGatewayURL,
+  getSupabaseAnonKey,
+  getSupabaseURL,
+  getWebAppURL,
+  isAbsoluteHttpUrl,
+} from "./constants";
 
 describe("constants", () => {
   const savedEnv: Record<string, string | undefined> = {};
@@ -10,6 +17,7 @@ describe("constants", () => {
     "SUPABASE_ANON_KEY",
     "DOSU_WEB_APP_URL_OVERRIDE",
     "DOSU_BACKEND_URL_OVERRIDE",
+    "DOSU_LLM_GATEWAY_URL_OVERRIDE",
     "SUPABASE_URL_OVERRIDE",
     "SUPABASE_ANON_KEY_OVERRIDE",
   ];
@@ -79,6 +87,32 @@ describe("constants", () => {
       process.env.SUPABASE_URL = "https://prod.supabase.co";
       process.env.SUPABASE_URL_OVERRIDE = "https://staging.supabase.co";
       expect(getSupabaseURL()).toBe("https://staging.supabase.co");
+    });
+  });
+
+  describe("getLlmGatewayURL", () => {
+    it("returns empty when the backend URL is unset", () => {
+      expect(getLlmGatewayURL()).toBe("");
+    });
+
+    it("appends /v1/llm-gateway to the backend URL", () => {
+      process.env.DOSU_BACKEND_URL = "https://api.dosu.dev";
+      expect(getLlmGatewayURL()).toBe("https://api.dosu.dev/v1/llm-gateway");
+    });
+
+    it("DOSU_LLM_GATEWAY_URL_OVERRIDE wins over the backend URL", () => {
+      process.env.DOSU_BACKEND_URL = "https://api.dosu.dev";
+      process.env.DOSU_LLM_GATEWAY_URL_OVERRIDE = "https://gw.example/v1";
+      expect(getLlmGatewayURL()).toBe("https://gw.example/v1");
+    });
+  });
+
+  describe("isAbsoluteHttpUrl", () => {
+    it("accepts http(s) URLs and rejects relative paths", () => {
+      expect(isAbsoluteHttpUrl("https://api.dosu.dev/v1/llm-gateway")).toBe(true);
+      expect(isAbsoluteHttpUrl("http://localhost:7001/v1/llm-gateway")).toBe(true);
+      expect(isAbsoluteHttpUrl("/v1/llm-gateway")).toBe(false);
+      expect(isAbsoluteHttpUrl("")).toBe(false);
     });
   });
 

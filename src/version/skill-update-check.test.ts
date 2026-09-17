@@ -227,9 +227,8 @@ describe("checkForSkillUpdates", () => {
   });
 
   it("background fetch does not clobber installedSha refreshed mid-flight", async () => {
-    // Reproduces the race where preAction's stale `checkForSkillUpdates` fetch
-    // resolves AFTER `dosu skill update` has already written a fresh
-    // installedSha. The closure-captured `cache.installedSha` must not win.
+    // The stale preAction fetch resolves AFTER `dosu skill update` wrote a fresh
+    // installedSha; the closure-captured `cache.installedSha` must not win.
     let resolveFetch: ((value: { ok: boolean; json: () => unknown }) => void) | undefined;
     const fetchMock = vi.fn().mockImplementation(
       () =>

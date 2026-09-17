@@ -1,0 +1,892 @@
+/** Live Activity screen: studying status plus tabbed lists and a manual sync trigger. Pure
+ * render/reduce functions wired to injectable IO, like menu.ts. */
+
+import { existsSync, readFileSync } from "node:fs";
+import { basename } from "node:path";
+import pc from "picocolors";
+import { createLogFollower } from "../debug/follow";
+import { logger, stripAnsiCodes } from "../debug/logger";
+import { createProjectDirResolver, unmungeSlug } from "../sessions/project-dir";
+import type { AgentSession } from "../sessions/scan";
+import { createSessionTitleResolver, reconstructSession } from "../sessions/session-title";
+import { brand } from "../setup/styles";
+import { listSessionBacklog, type SessionBacklog } from "../sync/backlog";
+import { spawnDetachedSelf } from "../sync/detach";
+import { stopSyncRun } from "../sync/lock";
+import { getSyncStatus, type SyncStatus } from "../sync/status";
+import { resetSyncState, type StudiedSessionRecord, setSyncPaused } from "../sync/watermark";
+import { enterAltScreen } from "./alt-screen";
+import {
+  breadcrumb,
+  centerBlock,
+  contentWidth,
+  frameTopMargin,
+  layoutMargin,
+  tabStrip,
+  visibleWidth,
+} from "./layout";
+import { parseKeys } from "./menu";
+
+const ESC = String.fromCharCode(27);
+const HIDE_CURSOR = `${ESC}[?25l`;
+const SHOW_CURSOR = `${ESC}[?25h`;
+const CTRL_C = String.fromCharCode(3);
+const KEY_UP = `${ESC}[A`;
+const KEY_DOWN = `${ESC}[B`;
+const KEY_RIGHT = `${ESC}[C`;
+const KEY_LEFT = `${ESC}[D`;
+const CURSOR_HOME = `${ESC}[H`;
+const CLEAR_BELOW = `${ESC}[0J`;
+const CLEAR_EOL = `${ESC}[K`;
+
+/** How often the view re-checks the lock and polls the log for new lines. */
+const ACTIVITY_VIEW_POLL_MS = 500;
+
+/** How many list lines fit on screen at once (the scroll window). */
+const ACTIVITY_VIEW_LIST_LINES = 10;
+
+/** Window height in full-rows mode: each row may wrap to 2–3 lines, so fewer rows keeps the
+ * frame from outgrowing a 24-row terminal. */
+export const ACTIVITY_VIEW_FULL_LIST_ROWS = 5;
+
+/** How much history each tab keeps in memory for scrolling back. */
+export const ACTIVITY_VIEW_BUFFER_LINES = 200;
+
+export type ActivityViewTab = "activity" | "queued" | "open" | "studied";
+
+/** Tab order for cycling; ← walks it backwards. */
+const ACTIVITY_VIEW_TABS: readonly ActivityViewTab[] = ["activity", "studied", "queued", "open"];
+
+export type ActivityViewAction =
+  | "back"
+  | "tab"
+  | "tab-back"
+  | "up"
+  | "down"
+  | "sync"
+  | "full"
+  | "clear"
+  | "none";
+
+/** q/esc/ctrl-c back, tab/→ and ← cycle tabs, ↑↓ (or k/j) scroll, s syncs, f toggles full
+ * rows, c clears study history. */
+export function reduceActivityViewKey(key: string): ActivityViewAction {
+  if (key === "q" || key === ESC || key === CTRL_C) return "back";
+  if (key === "\t" || key === KEY_RIGHT) return "tab";
+  if (key === KEY_LEFT) return "tab-back";
+  if (key === KEY_UP || key === "k") return "up";
+  if (key === KEY_DOWN || key === "j") return "down";
+  if (key === "s") return "sync";
+  if (key === "f") return "full";
+  if (key === "c") return "clear";
+  return "none";
+}
+
+/** The next tab in cycle order; `delta` -1 walks backwards. */
+export function cycleTab(tab: ActivityViewTab, delta: 1 | -1 = 1): ActivityViewTab {
+  const index = ACTIVITY_VIEW_TABS.indexOf(tab);
+  const next = (index + delta + ACTIVITY_VIEW_TABS.length) % ACTIVITY_VIEW_TABS.length;
+  return ACTIVITY_VIEW_TABS[next];
+}
+
+export type SyncConfirmAction = "start" | "cancel" | "none";
+
+/** Confirmation keys: enter/y/s confirm, esc/n/q cancel, everything else ignored. */
+export function reduceSyncConfirmKey(key: string): SyncConfirmAction {
+  if (key === "\r" || key === "\n" || key === "y" || key === "s") return "start";
+  if (key === ESC || key === "n" || key === "q" || key === CTRL_C) return "cancel";
+  return "none";
+}
+
+/** Which confirmation is up: `s` means stop a live run, resume a paused pipeline, or start;
+ * `c` means clear the study history so the next run starts from scratch. */
+export type SyncConfirmMode = "start" | "stop" | "resume" | "clear";
+
+function syncConfirmMode(status: SyncStatus): SyncConfirmMode {
+  if (status.running) return "stop";
+  if (status.state.paused) return "resume";
+  return "start";
+}
+
+/** Strip ANSI (clipping mid-sequence would bleed color), shorten the timestamp, clip to width.
+ * `full` skips the clip (the f toggle's full-rows mode; the caller wraps instead). */
+export function formatActivityLine(line: string, width: number, full = false): string {
+  const compact = stripAnsiCodes(line).replace(
+    /^\[(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})[^\]]*\]/,
+    (_match, _date, time: string) => time,
+  );
+  if (full || compact.length <= width) return compact;
+  return `${compact.slice(0, Math.max(0, width - 1))}\u2026`;
+}
+
+/** Keep only [sync]/[learner] log lines (level tag stripped), newest `max`. */
+export function appendSyncActivity(
+  buffer: readonly string[],
+  chunk: string,
+  max: number = ACTIVITY_VIEW_BUFFER_LINES,
+): string[] {
+  const fresh = chunk
+    .split("\n")
+    .filter((line) => line.includes("[sync]") || line.includes("[learner]"))
+    .map((line) => line.replace(/ \[(DEBUG|INFO|WARN|ERROR)\]/, ""));
+  return [...buffer, ...fresh].slice(-max);
+}
+
+function clip(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max - 1)}\u2026`;
+}
+
+/** Studied-history record as a row ("cursor    09-02 23:00  dosu  abc"), same columns as Queued.
+ * `full` skips the per-column clipping (the f toggle's full-rows mode). */
+export function formatStudiedRow(
+  record: StudiedSessionRecord,
+  full = false,
+  name?: string,
+): string {
+  const match = record.at.match(/^\d{4}-(\d{2}-\d{2})T(\d{2}:\d{2})/);
+  const stamp = match ? `${match[1]} ${match[2]}` : record.at;
+  const slash = record.session.indexOf("/");
+  const harness = slash > 0 ? record.session.slice(0, slash) : "-";
+  const id = slash > 0 ? record.session.slice(slash + 1) : record.session;
+  const rawProject = record.project ?? "-";
+  const project = full ? rawProject : clip(rawProject, 28);
+  const label = full ? (name ? `${name} \u00B7 ${id}` : id) : clip(name ?? id, 44);
+  return `${harness.padEnd(8)}  ${stamp}  ${project}  ${label}`;
+}
+
+/** Queued session as a row: agent, updated (UTC), project, session id.
+ * `full` skips the per-column clipping (the f toggle's full-rows mode). */
+export function formatQueuedRow(session: AgentSession, full = false, name?: string): string {
+  const stamp = session.updated.replace("T", " ").slice(5, 16);
+  const rawProject = session.project ?? "-";
+  const project = full ? rawProject : clip(rawProject, 28);
+  const label = full
+    ? name
+      ? `${name} \u00B7 ${session.id}`
+      : session.id
+    : clip(name ?? session.id, 44);
+  return `${session.harness.padEnd(8)}  ${stamp}  ${project}  ${label}`;
+}
+
+/** Hard-wrap one table row to `width`, indenting continuation lines. Projects and session ids
+ * contain no spaces, so word-based wrapLine cannot break them — this slices mid-word. */
+export function wrapRow(text: string, width: number, indent = "    "): string[] {
+  if (text.length <= width) return [text];
+  const out = [text.slice(0, width)];
+  let rest = text.slice(width);
+  const inner = Math.max(1, width - indent.length);
+  while (rest.length > 0) {
+    out.push(indent + rest.slice(0, inner));
+    rest = rest.slice(inner);
+  }
+  return out;
+}
+
+/** Scrollback window over `lines`: `scroll` counts up from the bottom, clamped at both ends. */
+export function windowList(
+  lines: readonly string[],
+  scroll: number,
+  height: number = ACTIVITY_VIEW_LIST_LINES,
+): { visible: string[]; above: number; below: number } {
+  const clamped = Math.max(0, Math.min(scroll, Math.max(0, lines.length - height)));
+  const end = lines.length - clamped;
+  const start = Math.max(0, end - height);
+  return { visible: lines.slice(start, end), above: start, below: clamped };
+}
+
+export interface SyncBacklog {
+  ready: number;
+  inFlight: number;
+}
+
+/** Backlog counts from a "[sync] gate: N ready, M in flight" log line. */
+export function parseGateLine(line: string): SyncBacklog | null {
+  const match = line.match(/\[sync\] gate: (\d+) ready, (\d+) in flight/);
+  if (!match) return null;
+  return { ready: Number.parseInt(match[1], 10), inFlight: Number.parseInt(match[2], 10) };
+}
+
+/** The latest backlog counts mentioned anywhere in `text`, or null. */
+export function latestBacklog(text: string): SyncBacklog | null {
+  let latest: SyncBacklog | null = null;
+  for (const line of text.split("\n")) {
+    const parsed = parseGateLine(line);
+    if (parsed) latest = parsed;
+  }
+  return latest;
+}
+
+/** Within-batch studying progress, folded live from the learner's log traces. */
+export interface RunProgress {
+  /** Batch size from the latest "[sync] studying N of M" marker. */
+  batch: number;
+  /** Distinct session ids the learner has opened so far this batch. */
+  read: Set<string>;
+  /** write_knowledge calls traced so far this batch. */
+  notes: number;
+}
+
+/** Fold a log chunk into within-batch progress: the bar steps off the learner's tool traces, and
+ * a settle line clears the fold so stale steps never double-count. */
+export function foldRunProgress(progress: RunProgress | null, chunk: string): RunProgress | null {
+  let current = progress;
+  for (const line of chunk.split("\n")) {
+    const start = line.match(/\[sync\] (?:studying|mining) (\d+) of \d+ ready sessions/);
+    if (start) {
+      current = { batch: Number.parseInt(start[1], 10), read: new Set(), notes: 0 };
+      continue;
+    }
+    if (
+      /\[sync\] (?:studied|mined) \d+ sessions|\[sync\] (?:studying|mining) (?:failed|skipped)/.test(
+        line,
+      )
+    ) {
+      current = null;
+      continue;
+    }
+    if (!current) continue;
+    // Pagination and re-reads repeat an id; the set collapses them.
+    const read = line.match(
+      /\[learner\] \[agent\] → mcp__sessions__read_session .*?"id":"([^"]+)"/,
+    );
+    if (read) {
+      current.read.add(read[1]);
+      continue;
+    }
+    if (line.includes("[learner] [agent] → mcp__dosu__write_knowledge")) {
+      current.notes += 1;
+    }
+  }
+  return current;
+}
+
+function localTime(iso: string): string {
+  const parsed = new Date(iso);
+  return Number.isNaN(parsed.getTime()) ? iso : parsed.toLocaleTimeString();
+}
+
+function statusLine(status: SyncStatus): string {
+  if (status.running) {
+    const since = status.startedAt ? ` \u00B7 since ${localTime(status.startedAt)}` : "";
+    const pid = status.pid !== undefined ? ` (pid ${status.pid})` : "";
+    return `\uD83D\uDCDA ${pc.bold(brand("Studying sessions..."))}${pc.dim(`${pid}${since}`)}`;
+  }
+  if (status.state.paused) {
+    return `${pc.yellow("\u25CB")} ${pc.bold("Paused")} ${pc.dim(
+      "\u00B7 studying stays off until you resume",
+    )}`;
+  }
+  if (status.staleLock) {
+    return `${pc.yellow("\u25CB")} ${pc.bold("Not running")} ${pc.dim(
+      "\u00B7 a previous run exited without cleaning up",
+    )}`;
+  }
+  return `${pc.dim("\u25CB")} ${pc.bold("Idle")} ${pc.dim(
+    "\u00B7 hooks study new sessions automatically",
+  )}`;
+}
+
+/** Drain-progress bar; `done` must be run-scoped, so the caller subtracts the run baseline. */
+export function progressLine(done: number, ready: number, width: number, notes = 0): string | null {
+  const total = done + ready;
+  if (total <= 0) return null;
+  // Leave room for the " done/total studied · NN% · NN suggested pages" suffix.
+  const cells = Math.max(10, Math.min(30, width - 44));
+  const ratio = Math.max(0, Math.min(1, done / total));
+  const filled = Math.min(cells, Math.round(ratio * cells));
+  const bar = brand("\u2588".repeat(filled)) + pc.dim("\u2591".repeat(cells - filled));
+  const pct = Math.floor(ratio * 100);
+  const suffix = notes > 0 ? ` \u00B7 ${notes} suggested page${notes === 1 ? "" : "s"}` : "";
+  return `${bar} ${done}/${total} studied \u00B7 ${pct}%${suffix}`;
+}
+
+/** The Activity tab strip: labels with live counts over the shared rule. */
+export function tabBar(
+  tab: ActivityViewTab,
+  queuedCount: number,
+  openCount: number,
+  studiedCount: number,
+  width: number,
+): string[] {
+  return tabStrip(
+    [
+      ["activity", "activity"],
+      ["studied", `studied (${studiedCount})`],
+      ["queued", `queued (${queuedCount})`],
+      ["open", `open (${openCount})`],
+    ],
+    tab,
+    width,
+  );
+}
+
+/** Frame width: the centered column minus one so a full-width line never trips auto-wrap. */
+export function activityWidth(columns: number): number {
+  return Math.max(20, columns - 2 * layoutMargin(columns) - 1);
+}
+
+/** Word-wrap to `width` with hanging indent; unwrapped lines would escape the centered margin. */
+export function wrapLine(text: string, width: number, indent = "  "): string[] {
+  const out: string[] = [];
+  let line = "";
+  for (const word of text.split(" ")) {
+    if (line !== "" && line.length + 1 + word.length > width) {
+      out.push(line);
+      line = indent + word;
+    } else {
+      line = line === "" ? word : `${line} ${word}`;
+    }
+  }
+  if (line !== "") out.push(line);
+  return out;
+}
+
+export interface ActivityViewPane {
+  tab: ActivityViewTab;
+  /** Lines scrolled up from the newest entry (0 = pinned to bottom). */
+  scroll: number;
+  /** Pending "s" press: which confirmation popup is up, if any. */
+  confirm?: SyncConfirmMode;
+  /** The f toggle: show rows unclipped (wrapped to the frame width) on every tab. */
+  fullRows?: boolean;
+}
+
+const DEFAULT_PANE: ActivityViewPane = { tab: "activity", scroll: 0 };
+
+/** The confirmation box over the footer, shown while `pane.confirm` is set: start a run,
+ * stop the live one (pausing the pipeline), resume a paused pipeline, or clear the history. */
+export function confirmBox(
+  queuedCount: number,
+  backlog: SyncBacklog | null,
+  width: number,
+  mode: SyncConfirmMode = "start",
+): string[] {
+  const inFlight =
+    backlog && backlog.inFlight > 0
+      ? ` (+${backlog.inFlight} still open; ${backlog.inFlight === 1 ? "it joins" : "they join"} once quiet)`
+      : "";
+  const sessions = `${queuedCount} session${queuedCount === 1 ? "" : "s"}`;
+  // Each dialog says what happens, why, and what to expect when it's done.
+  const scope =
+    mode === "clear"
+      ? "Forgets which local sessions Dosu has already studied, so the next run reads them all again. Use this to rebuild knowledge from scratch. Notes already saved in Dosu are kept."
+      : mode === "stop"
+        ? "Kills the run mid-batch and pauses studying, so new sessions pile up in the queue instead of being read. Nothing is lost; press s again to resume from where it left off."
+        : mode === "resume"
+          ? `Studying picks up where it stopped: ${sessions} queued${inFlight}. Runs in the background; new notes appear in Dosu as each batch finishes.`
+          : queuedCount > 0
+            ? `Dosu reads ${sessions}${inFlight} and distills the durable decisions and gotchas into team knowledge. Runs in the background; new notes appear in Dosu as each batch finishes.`
+            : `Queue is empty${inFlight}. A run now would only pick up sessions that finish from here; hooks already do that automatically.`;
+  const title =
+    mode === "clear"
+      ? "Clear study history?"
+      : mode === "stop"
+        ? "Stop studying?"
+        : mode === "resume"
+          ? "Resume studying?"
+          : "Start studying now?";
+  const verb =
+    mode === "clear" ? "clear" : mode === "stop" ? "stop" : mode === "resume" ? "resume" : "start";
+  const maxInner = Math.max(20, Math.min(width, contentWidth()) - 4);
+  const rows = [
+    // No emoji inside the border: U+26CF is ambiguous-width (1 column in xterm.js, 2 in
+    // e.g. Ghostty/kitty), so any padding count skews the right border somewhere.
+    pc.bold(brand(title)),
+    ...wrapLine(scope, maxInner, "").map((line) => pc.dim(line)),
+    "",
+    `${pc.bold("enter")} ${verb} \u00B7 ${pc.bold("esc")} cancel`,
+  ];
+  const inner = Math.min(maxInner, Math.max(...rows.map(visibleWidth)));
+  const pad = (row: string) => row + " ".repeat(Math.max(0, inner - visibleWidth(row)));
+  return [
+    pc.dim(`\u256D${"\u2500".repeat(inner + 2)}\u256E`),
+    ...rows.map((row) => `${pc.dim("\u2502")} ${pad(row)} ${pc.dim("\u2502")}`),
+    pc.dim(`\u2570${"\u2500".repeat(inner + 2)}\u256F`),
+  ];
+}
+
+/** Render the full sync-status block, centered within `width` columns. */
+export function renderActivityFrame(
+  status: SyncStatus,
+  activity: readonly string[],
+  width: number,
+  backlog: SyncBacklog | null = null,
+  pane: ActivityViewPane = DEFAULT_PANE,
+  queued: readonly AgentSession[] = [],
+  /** Lifetime total_mined when the current run started; see progressLine. */
+  studiedBeforeRun = 0,
+  /** Live (still-active) sessions for the Open tab. */
+  open: readonly AgentSession[] = [],
+  /** Within-batch step progress folded from the learner's log traces. */
+  runProgress: RunProgress | null = null,
+  /** Friendly project names by `harness/id` key; rows fall back to the stored slug. */
+  projectNames: Readonly<Record<string, string>> = {},
+  /** Session display names by `harness/id` key; rows fall back to the session id. */
+  sessionNames: Readonly<Record<string, string>> = {},
+): string {
+  const studied = status.state.watermark
+    ? `Studied sessions up to ${localTime(status.state.watermark)}`
+    : "Nothing studied yet";
+  // Queue and open-session counts live in the tab bar, not a header line.
+  const queueDetail: string[] = [];
+  if (status.backoffUntil) {
+    // Manual runs skip the backoff, so point at the key instead of leaving a dead wait.
+    queueDetail.push(`retrying after ${localTime(status.backoffUntil)} \u00B7 s syncs now`);
+  }
+
+  // Run-scoped drain progress: batch commits advance it, and within a batch
+  // the learner's per-session steps do, so a one-batch queue still shows motion.
+  let progress: string | null = null;
+  if (status.running && backlog) {
+    const studiedDelta = Math.max(0, (status.state.total_mined ?? 0) - studiedBeforeRun);
+    // Distinct-opened minus the in-flight one, shifting ready → done rather
+    // than growing the total (the gate only re-logs when a batch commits).
+    const stepDone = runProgress
+      ? Math.min(Math.max(0, runProgress.read.size - 1), runProgress.batch - 1, backlog.ready)
+      : 0;
+    progress = progressLine(
+      studiedDelta + stepDone,
+      Math.max(0, backlog.ready - stepDone),
+      width,
+      runProgress?.notes ?? 0,
+    );
+  }
+
+  // A gateway refusal (consent off, credit limit) explains an Idle-with-
+  // backlog view; the message is prose and easily outruns the frame, so wrap.
+  const refusal = !status.running && status.state.last_refusal;
+  const refusalLines = refusal
+    ? wrapLine(`! Studying paused: ${refusal.message} (${localTime(refusal.at)})`, width).map(
+        (line) => pc.yellow(line),
+      )
+    : [];
+
+  // Rows clip to the frame width so nothing runs past the tab rule — unless the f toggle
+  // asked for full rows, which render unclipped and wrap below instead. One toggle, every tab:
+  // log lines (paths, error text) lose their tails to the clip just like session ids do.
+  const fullRows = Boolean(pane.fullRows);
+  const withName = <T extends { project?: string }>(item: T, key: string): T =>
+    projectNames[key] ? { ...item, project: projectNames[key] } : item;
+  // A session studied again after new activity appends another history record;
+  // the list shows only its latest pass (analytics still count every pass).
+  const latestPass = new Map<string, StudiedSessionRecord>();
+  for (const r of status.state.mined_sessions ?? []) latestPass.set(r.session, r);
+  const studiedRows = [...latestPass.values()].map((r) => {
+    const record = withName(r, r.session);
+    const name = sessionNames[r.session];
+    return fullRows
+      ? formatStudiedRow(record, true, name)
+      : formatActivityLine(formatStudiedRow(record, false, name), width);
+  });
+  const sessionRow = (session: AgentSession) => {
+    const key = `${session.harness}/${session.id}`;
+    const s = withName(session, key);
+    const name = sessionNames[key];
+    return fullRows
+      ? formatQueuedRow(s, true, name)
+      : formatActivityLine(formatQueuedRow(s, false, name), width);
+  };
+  const queuedRows = queued.map(sessionRow);
+  const openRows = open.map(sessionRow);
+  const source =
+    pane.tab === "activity"
+      ? activity.map((line) => formatActivityLine(line, width, fullRows))
+      : pane.tab === "queued"
+        ? queuedRows
+        : pane.tab === "open"
+          ? openRows
+          : studiedRows;
+  // Pre-history runs only advanced the watermark, so studying may have
+  // happened without leaving records — say so instead of denying it.
+  const emptyStudied = status.state.watermark
+    ? "No sessions recorded yet. History starts with the next study run."
+    : "No studied sessions yet.";
+  const empty =
+    pane.tab === "activity"
+      ? "No sync activity in the log yet."
+      : pane.tab === "queued"
+        ? "Queue empty. Finished agent sessions appear here."
+        : pane.tab === "open"
+          ? "No open sessions. Live agent sessions sit here until they go quiet."
+          : emptyStudied;
+  // Full-rows mode windows fewer rows (each may wrap to several lines) and hard-wraps them.
+  const height = fullRows ? ACTIVITY_VIEW_FULL_LIST_ROWS : ACTIVITY_VIEW_LIST_LINES;
+  const { visible, above, below } = windowList(source, pane.scroll, height);
+  const display = fullRows ? visible.flatMap((row) => wrapRow(row, width)) : visible;
+  const listRows = display.length > 0 ? display.map((row) => pc.dim(row)) : [pc.dim(empty)];
+
+  const scrollParts: string[] = [];
+  if (above > 0) scrollParts.push(`\u2191 ${above} earlier`);
+  if (below > 0) scrollParts.push(`\u2193 ${below} newer`);
+
+  const lines = [
+    breadcrumb(["home", "activity"], width),
+    "",
+    statusLine(status),
+    pc.dim(studied),
+    ...(queueDetail.length > 0
+      ? wrapLine(queueDetail.join(" \u00B7 "), width).map((line) => pc.dim(line))
+      : []),
+    ...(progress ? [progress] : []),
+    ...refusalLines,
+    "",
+    ...tabBar(pane.tab, queued.length, open.length, latestPass.size, width),
+    ...listRows,
+    // Clipped, not wrapped: both scroll counters together can outrun a narrow frame.
+    ...(scrollParts.length > 0 ? [pc.dim(clip(scrollParts.join(" \u00B7 "), width))] : []),
+    "",
+    // Pressing s swaps the key legend for the centered confirmation dialog.
+    ...(pane.confirm
+      ? centerBlock(confirmBox(queued.length, backlog, width, pane.confirm), width)
+      : [
+          // s stops a live run, resumes a paused pipeline, or starts a sync while idle;
+          // f flips between clipped and full (wrapped) rows; c (idle, something studied)
+          // clears the history so the next run starts from scratch. Wrapped: on a narrow
+          // frame the full legend can outrun the width.
+          ...wrapLine(
+            [
+              "tab switch",
+              "\u2191\u2193 scroll",
+              fullRows ? "f clip" : "f full rows",
+              status.running ? "s stop" : status.state.paused ? "s resume" : "s sync now",
+              ...(!status.running && status.state.watermark ? ["c clear"] : []),
+              "esc back",
+            ].join(" \u00B7 "),
+            width,
+            "",
+          ).map((line) => pc.dim(line)),
+        ]),
+  ];
+  // Left-anchored: centering on each frame's longest line would shove the
+  // block sideways on every poll.
+  return lines.join("\n");
+}
+
+export interface ActivityViewIO {
+  input?: NodeJS.ReadStream;
+  output?: NodeJS.WriteStream;
+  /** Lock/watermark state without the log read; called every poll. */
+  getStatus?: () => SyncStatus;
+  /** Full debug-log contents; read once to seed activity and backlog. */
+  readLog?: () => string;
+  /** Incremental log tail; called once with the append handler. */
+  createFollower?: (emit: (chunk: string) => void) => { poll(): void };
+  /** Spawns a detached background sync; pressing `s` while idle calls this. */
+  startSync?: () => boolean;
+  /** Kills the live run by pid; pressing `s` while running calls this. */
+  stopSync?: (pid: number) => boolean;
+  /** Persists the pause switch hooks honor; stop sets it, resume clears it. */
+  setPaused?: (paused: boolean) => void;
+  /** Forgets the watermark and study history; pressing `c` while idle calls this. */
+  clearHistory?: () => void;
+  /** The scanned backlog for the Queued and Open tabs; re-run when the watermark moves. */
+  listBacklog?: () => SessionBacklog;
+  /** Friendly project and session names by `harness/id` key for the session rows. */
+  rowNames?: (status: SyncStatus, backlog: SessionBacklog) => RowNames;
+  pollMs?: number;
+}
+
+interface RowNames {
+  projects: Record<string, string>;
+  titles: Record<string, string>;
+}
+
+/** How many uncached session titles one draw resolves; the list fills over a few polls
+ * instead of stalling the first paint on hundreds of file reads. */
+const TITLE_READS_PER_DRAW = 25;
+
+/** Default projectNames source: resolve real working directories (cached on disk) for live
+ * sessions, cache-only + slug un-munging for studied history, shown as the directory basename. */
+function createRowNamer(): (status: SyncStatus, backlog: SessionBacklog) => RowNames {
+  const dirs = createProjectDirResolver();
+  const titles = createSessionTitleResolver();
+  const bySlug = new Map<string, string | null>();
+  const fromSlug = (slug: string): string | null => {
+    if (!bySlug.has(slug)) bySlug.set(slug, unmungeSlug(slug));
+    return bySlug.get(slug) ?? null;
+  };
+  return (status, backlog) => {
+    const names: RowNames = { projects: {}, titles: {} };
+    let budget = TITLE_READS_PER_DRAW;
+    let resolved = false;
+    const title = (key: string, session: AgentSession) => {
+      const hit = titles.cached(key);
+      if (hit) {
+        names.titles[key] = hit;
+        return;
+      }
+      if (budget <= 0) return;
+      budget--;
+      const t = titles.resolve(session);
+      resolved = true;
+      if (t) names.titles[key] = t;
+    };
+    for (const s of [...backlog.queued, ...backlog.open]) {
+      if (!existsSync(s.path)) continue;
+      const key = `${s.harness}/${s.id}`;
+      const dir = dirs.resolve(s);
+      if (dir) names.projects[key] = basename(dir);
+      title(key, s);
+      resolved = true;
+    }
+    // Newest first: the view shows the end of the history, so the visible
+    // rows must win the per-draw budget over the offscreen backlog.
+    for (const r of [...(status.state.mined_sessions ?? [])].reverse()) {
+      const key = r.session;
+      if (!names.projects[key]) {
+        const dir = dirs.cached(key) ?? (r.project ? fromSlug(r.project) : null);
+        if (dir) names.projects[key] = basename(dir);
+      }
+      if (!names.titles[key]) {
+        const hit = titles.cached(key);
+        if (hit) {
+          names.titles[key] = hit;
+        } else if (budget > 0) {
+          const slash = key.indexOf("/");
+          const session = reconstructSession(
+            key.slice(0, slash) as AgentSession["harness"],
+            key.slice(slash + 1),
+            r.project,
+          );
+          if (session) title(key, session);
+        }
+      }
+    }
+    if (resolved) {
+      dirs.flush();
+      titles.flush();
+    }
+    return names;
+  };
+}
+
+function defaultReadLog(): string {
+  try {
+    return readFileSync(logger.getLogPath(), "utf-8");
+  } catch {
+    return "";
+  }
+}
+
+/** Show the sync-status screen until back; resolves immediately when stdin isn't interactive. */
+export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
+  const input = io.input ?? process.stdin;
+  const output = io.output ?? process.stdout;
+  if (!input.isTTY) return Promise.resolve();
+
+  const getStatus = io.getStatus ?? (() => getSyncStatus({ readLog: () => "" }));
+  const readLog = io.readLog ?? defaultReadLog;
+  const createFollower =
+    io.createFollower ?? ((emit) => createLogFollower(logger.getLogPath(), emit));
+  // Bootstrap mode drains the whole displayed queue, not just one batch. Deliberately not
+  // --quiet: quiet runs honor the failure backoff and would silently skip, but pressing s is
+  // an explicit request — manual runs retry immediately (stdio is detached, so no output leaks).
+  const startSync = io.startSync ?? (() => spawnDetachedSelf(["knowledge", "sync", "--bootstrap"]));
+  const stopSync = io.stopSync ?? stopSyncRun;
+  const setPaused = io.setPaused ?? setSyncPaused;
+  const clearHistory = io.clearHistory ?? resetSyncState;
+  const listBacklog = io.listBacklog ?? listSessionBacklog;
+  const rowNamesFor = io.rowNames ?? createRowNamer();
+  const pollMs = io.pollMs ?? ACTIVITY_VIEW_POLL_MS;
+
+  const seed = readLog();
+  let activity = appendSyncActivity([], seed);
+  let backlog = latestBacklog(seed);
+  // Seeded from the full log so a view opened mid-run starts at the true step.
+  let runProgress = foldRunProgress(null, seed);
+  let tab: ActivityViewTab = "activity";
+  let scroll = 0;
+  let fullRows = false;
+  let confirmSync: SyncConfirmMode | null = null;
+  let status = getStatus();
+  // Rescan on watermark moves and tab switches, not every poll (a scan
+  // stats every local session file).
+  let sessions = listBacklog();
+  let queuedWatermark = status.state.watermark;
+
+  const follower = createFollower((chunk) => {
+    activity = appendSyncActivity(activity, chunk);
+    backlog = latestBacklog(chunk) ?? backlog;
+    runProgress = foldRunProgress(runProgress, chunk);
+  });
+
+  const activeListLength = () => {
+    if (tab === "activity") return activity.length;
+    if (tab === "queued") return sessions.queued.length;
+    if (tab === "open") return sessions.open.length;
+    return (status.state.mined_sessions ?? []).length;
+  };
+  // Matches the render: full-rows mode windows fewer (taller) rows.
+  const listHeight = () => (fullRows ? ACTIVITY_VIEW_FULL_LIST_ROWS : ACTIVITY_VIEW_LIST_LINES);
+
+  // Identical frames skip the terminal write entirely (most ticks change nothing).
+  let lastFrame: string | null = null;
+  // The run's total_mined baseline so the bar is run-scoped; persisted in sync state, with the
+  // first-observation snapshot as fallback.
+  let studiedBeforeRun: number | null = null;
+  const draw = () => {
+    status = getStatus();
+    if (status.running) {
+      const run = status.state.run;
+      if (run && run.pid === status.pid) {
+        studiedBeforeRun = run.baseline_mined;
+      } else {
+        studiedBeforeRun ??= status.state.total_mined ?? 0;
+      }
+    } else {
+      studiedBeforeRun = null;
+    }
+    if (status.state.watermark !== queuedWatermark) {
+      queuedWatermark = status.state.watermark;
+      sessions = listBacklog();
+    }
+    // A run starting or ending elsewhere makes the pending confirmation moot.
+    if (confirmSync !== null && confirmSync !== "stop" && status.running) confirmSync = null;
+    if (confirmSync === "stop" && !status.running) confirmSync = null;
+    const width = activityWidth(output.columns ?? 80);
+    const rowNames = rowNamesFor(status, sessions);
+    const frame = renderActivityFrame(
+      status,
+      activity,
+      width,
+      backlog,
+      { tab, scroll, confirm: confirmSync ?? undefined, fullRows },
+      sessions.queued,
+      studiedBeforeRun ?? 0,
+      sessions.open,
+      runProgress,
+      rowNames.projects,
+      rowNames.titles,
+    );
+    if (frame === lastFrame) return;
+    lastFrame = frame;
+    // Fixed top margin, not vertical centering (which jiggles as the frame's
+    // height changes); +1 matches the home banner's leading blank line.
+    const blank = `${CLEAR_EOL}\n`.repeat(frameTopMargin(output.rows ?? 24) + 1);
+    const painted = frame.replaceAll("\n", `${CLEAR_EOL}\n`) + CLEAR_EOL;
+    output.write(`${CURSOR_HOME}${blank}${painted}\n${CLEAR_BELOW}`);
+  };
+
+  // A resize moves the layout margin even when the frame string is unchanged.
+  const onResize = () => {
+    lastFrame = null;
+    draw();
+  };
+  output.on?.("resize", onResize);
+
+  // Full-screen app takeover; nested in the TUI the shared alt-screen
+  // refcount keeps the same buffer and the view paints over the menu.
+  const leaveAltScreen = enterAltScreen(output);
+  output.write(HIDE_CURSOR);
+  draw();
+
+  return new Promise((resolve) => {
+    const wasRaw = input.isRaw ?? false;
+    input.setRawMode?.(true);
+    input.resume();
+
+    const timer = setInterval(() => {
+      follower.poll();
+      draw();
+    }, pollMs);
+    // Never keep the process alive just to refresh the screen.
+    timer.unref?.();
+
+    const finish = () => {
+      clearInterval(timer);
+      output.off?.("resize", onResize);
+      input.off("data", onData);
+      input.setRawMode?.(wasRaw);
+      input.pause();
+      leaveAltScreen();
+      output.write(SHOW_CURSOR);
+      resolve();
+    };
+
+    const onData = (chunk: Buffer | string) => {
+      for (const key of parseKeys(chunk.toString())) {
+        // A pending confirmation captures the keys (esc must not exit the view).
+        if (confirmSync) {
+          const decision = reduceSyncConfirmKey(key);
+          if (decision === "start") {
+            const mode = confirmSync;
+            confirmSync = null;
+            let note: string;
+            if (mode === "clear") {
+              // The watermark going null re-gates every local session; draw() rescans on the
+              // change so the Queued tab fills immediately.
+              clearHistory();
+              studiedBeforeRun = null;
+              note =
+                "[sync] study history cleared \u00B7 the next run reads every local session again";
+            } else if (mode === "stop") {
+              // Kill first, then flip the pause switch: a dying run's last state save
+              // could otherwise overwrite the flag with its pre-pause snapshot.
+              const ok = status.pid !== undefined && stopSync(status.pid);
+              if (ok) setPaused(true);
+              note = ok
+                ? "[sync] studying stopped \u00B7 paused until you resume"
+                : "[sync] could not stop the run \u00B7 it may have just finished";
+            } else {
+              if (mode === "resume") setPaused(false);
+              const ok = startSync();
+              note = ok
+                ? "[sync] sync requested \u00B7 starting a background run"
+                : "[sync] could not start a background run \u00B7 try `dosu knowledge sync`";
+            }
+            // Immediate feed feedback; the real run's log lines follow.
+            activity = appendSyncActivity(
+              activity,
+              `[${new Date().toISOString()}] [INFO] ${note}\n`,
+            );
+            draw();
+          } else if (decision === "cancel") {
+            confirmSync = null;
+            draw();
+          }
+          continue;
+        }
+        const action = reduceActivityViewKey(key);
+        if (action === "back") {
+          finish();
+          return;
+        }
+        if (action === "sync") {
+          confirmSync = syncConfirmMode(status);
+          draw();
+        } else if (action === "clear") {
+          // Only offered when idle with something studied; otherwise the key is inert, matching
+          // the legend.
+          if (!status.running && status.state.watermark) {
+            confirmSync = "clear";
+            draw();
+          }
+        } else if (action === "tab" || action === "tab-back") {
+          tab = cycleTab(tab, action === "tab" ? 1 : -1);
+          scroll = 0;
+          // Rescan on entry: open sessions drain into the queue without the
+          // watermark ever moving.
+          if (tab === "queued" || tab === "open") sessions = listBacklog();
+          draw();
+        } else if (action === "full") {
+          // One toggle for every tab; the list height changes, so re-pin to the bottom.
+          fullRows = !fullRows;
+          scroll = 0;
+          draw();
+        } else if (action === "up") {
+          const maxScroll = Math.max(0, activeListLength() - listHeight());
+          if (scroll < maxScroll) {
+            scroll += 1;
+            draw();
+          }
+        } else if (action === "down") {
+          if (scroll > 0) {
+            scroll -= 1;
+            draw();
+          }
+        }
+      }
+    };
+    input.on("data", onData);
+  });
+}

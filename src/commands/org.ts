@@ -1,6 +1,4 @@
-/**
- * `dosu org` — organization information.
- */
+/** `dosu org`: organization information. */
 
 import { Command } from "commander";
 import pc from "picocolors";

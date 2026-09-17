@@ -22,7 +22,94 @@ vi.mock("../config/config", () => ({
   loadConfig: (...args: unknown[]) => mockLoadConfig(...args),
 }));
 
+const mockRunSync = vi.fn();
+// Spread the real module so the batch-size constant the command reads
+// (MINE_BATCH_LIMIT) keeps its production value.
+vi.mock("../sync/sync", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sync/sync")>()),
+  runKnowledgeSync: (...args: unknown[]) => mockRunSync(...args),
+}));
+
+const mockSpawnDetached = vi.fn();
+vi.mock("../sync/detach", () => ({
+  spawnDetachedSelf: (...args: unknown[]) => mockSpawnDetached(...args),
+}));
+
+const mockGetSyncStatus = vi.fn();
+vi.mock("../sync/status", async (importOriginal) => ({
+  // Keep the real formatTokenCount: only the status source is faked.
+  ...(await importOriginal<typeof import("../sync/status")>()),
+  getSyncStatus: (...args: unknown[]) => mockGetSyncStatus(...args),
+}));
+
+const mockListBacklog = vi.fn();
+vi.mock("../sync/backlog", () => ({
+  listSessionBacklog: (...args: unknown[]) => mockListBacklog(...args),
+}));
+
+const mockLoadSyncState = vi.fn();
+vi.mock("../sync/watermark", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sync/watermark")>()),
+  loadSyncState: (...args: unknown[]) => mockLoadSyncState(...args),
+}));
+
+const mockEmitReport = vi.fn();
+vi.mock("../report/generate", () => ({
+  emitKnowledgeReport: (...args: unknown[]) => mockEmitReport(...args),
+}));
+
+const mockRunBackfill = vi.fn();
+vi.mock("../report/backfill-run", () => ({
+  runBackfill: (...args: unknown[]) => mockRunBackfill(...args),
+}));
+
+interface FakeAgent {
+  id: string;
+  name: string;
+  installed: boolean;
+  enabled: boolean;
+  configPath: string;
+  enableError?: Error;
+  enabledError?: Error;
+  note?: string;
+}
+
+let fakeAgents: FakeAgent[] = [];
+const enableCalls: string[] = [];
+const disableCalls: string[] = [];
+
+function toHookAgent(agent: FakeAgent) {
+  return {
+    id: () => agent.id,
+    name: () => agent.name,
+    isInstalled: () => agent.installed,
+    configPath: () => agent.configPath,
+    isEnabled: () => {
+      if (agent.enabledError) throw agent.enabledError;
+      return agent.enabled;
+    },
+    enable: () => {
+      if (agent.enableError) throw agent.enableError;
+      enableCalls.push(agent.id);
+    },
+    disable: () => {
+      disableCalls.push(agent.id);
+    },
+    ...(agent.note ? { enableNote: () => agent.note } : {}),
+  };
+}
+
+vi.mock("../hooks/agents", () => ({
+  allHookAgents: () => fakeAgents.map(toHookAgent),
+  getHookAgent: (id: string) => {
+    const found = fakeAgents.find((a) => a.id === id);
+    return found ? toHookAgent(found) : undefined;
+  },
+}));
+
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
+import { HookConfigError } from "../hooks/formats";
+import { MINE_BATCH_LIMIT } from "../sync/sync";
 import { knowledgeCommand } from "./knowledge";
 
 let logSpy: ReturnType<typeof vi.spyOn>;
@@ -55,6 +142,17 @@ async function run(...args: string[]) {
 beforeEach(() => {
   mockQuery.mockReset();
   mockLoadConfig.mockReset();
+  mockRunSync.mockReset();
+  mockSpawnDetached.mockReset();
+  mockGetSyncStatus.mockReset();
+  mockListBacklog.mockReset();
+  mockLoadSyncState.mockReset();
+  mockEmitReport.mockReset();
+  mockEmitReport.mockResolvedValue("/tmp/dosu-knowledge-report.html");
+  mockRunBackfill.mockReset();
+  fakeAgents = [];
+  enableCalls.length = 0;
+  disableCalls.length = 0;
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
@@ -66,6 +164,7 @@ afterEach(() => {
   logSpy.mockRestore();
   errorSpy.mockRestore();
   exitSpy.mockRestore();
+  process.exitCode = undefined;
 });
 
 describe("knowledge search", () => {
@@ -187,5 +286,723 @@ describe("requireConfig", () => {
   it("exits when space_id is missing", async () => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ space_id: undefined }));
     await expect(run("search", "q")).rejects.toThrow("exit");
+  });
+});
+
+describe("knowledge sessions", () => {
+  const queuedSession = {
+    id: "3c2c12ad-b111-4444-8888-abcdefabcdef",
+    harness: "cursor",
+    path: "/tmp/a.jsonl",
+    project: "Users-james-Documents-dosu-global-dosu-cli",
+    updated: "2026-09-04T18:22:00.000Z",
+  };
+  const openSession = {
+    id: "086d98d5-3333-4444-8888-abcdefabcdef",
+    harness: "claude",
+    path: "/tmp/b.jsonl",
+    updated: "2026-09-04T19:59:00.000Z",
+  };
+  const syncState = {
+    schema_version: 1,
+    watermark: "2026-09-02T23:00:00.000Z",
+    consecutive_failures: 0,
+    mined_sessions: [
+      {
+        at: "2026-09-02T23:00:00.000Z",
+        session: "cursor/1d4b4ea0-e555-4444-8888-abcdefabcdef",
+        project: "dosu-cli",
+      },
+    ],
+  };
+
+  it("prints every section with full, untruncated projects and ids", async () => {
+    mockListBacklog.mockReturnValue({ queued: [queuedSession], open: [openSession] });
+    mockLoadSyncState.mockReturnValue(syncState);
+
+    await run("sessions");
+
+    const out = allOutput();
+    expect(out).toContain("Queued (1)");
+    expect(out).toContain("Open (1)");
+    expect(out).toContain("Studied (1)");
+    // The whole point of the command: nothing is clipped.
+    expect(out).toContain(queuedSession.id);
+    expect(out).toContain(queuedSession.project);
+    expect(out).toContain(openSession.id);
+    expect(out).toContain("1d4b4ea0-e555-4444-8888-abcdefabcdef");
+    expect(out).not.toContain("\u2026");
+    // Studied history's "harness/id" splits back into columns.
+    expect(out).not.toContain("cursor/1d4b4ea0");
+  });
+
+  it("shows per-section empty messages", async () => {
+    mockListBacklog.mockReturnValue({ queued: [], open: [] });
+    mockLoadSyncState.mockReturnValue({ ...syncState, mined_sessions: [] });
+
+    await run("sessions");
+
+    const out = allOutput();
+    expect(out).toContain("Queue empty.");
+    expect(out).toContain("No open sessions.");
+    expect(out).toContain("No studied sessions recorded yet.");
+  });
+
+  it("--queued lists only the queue and never reads the sync state", async () => {
+    mockListBacklog.mockReturnValue({ queued: [queuedSession], open: [openSession] });
+
+    await run("sessions", "--queued");
+
+    const out = allOutput();
+    expect(out).toContain("Queued (1)");
+    expect(out).not.toContain("Open (");
+    expect(out).not.toContain("Studied (");
+    expect(mockLoadSyncState).not.toHaveBeenCalled();
+  });
+
+  it("--studied alone skips the session scan", async () => {
+    mockLoadSyncState.mockReturnValue(syncState);
+
+    await run("sessions", "--studied");
+
+    expect(mockListBacklog).not.toHaveBeenCalled();
+    expect(allOutput()).toContain("Studied (1)");
+  });
+
+  it("--json emits only the requested sections", async () => {
+    mockListBacklog.mockReturnValue({ queued: [queuedSession], open: [openSession] });
+
+    await run("sessions", "--queued", "--open", "--json");
+
+    const parsed = JSON.parse(allOutput());
+    expect(parsed).toEqual({ queued: [queuedSession], open: [openSession] });
+    expect(parsed.studied).toBeUndefined();
+  });
+});
+
+describe("knowledge sync", () => {
+  beforeEach(() => {
+    // Authenticated cloud-mode install: sync should build a learner.
+    mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: "dep1" }));
+  });
+
+  function syncDeps(call = 0): { mine?: unknown } {
+    return mockRunSync.mock.calls[call][0].deps;
+  }
+
+  it("prints the backlog after a successful run", async () => {
+    mockRunSync.mockResolvedValue({ status: "backlog", readySessions: 3, inFlightSessions: 1 });
+
+    await run("sync");
+
+    expect(mockRunSync.mock.calls[0][0].quiet).toBeUndefined();
+    expect(typeof syncDeps().mine).toBe("function");
+    expect(allOutput()).toContain("3 new sessions ready to study");
+  });
+
+  it("does not build a learner when the install has no API key", async () => {
+    mockLoadConfig.mockReturnValue(makeValidConfig({ api_key: undefined }));
+    mockRunSync.mockResolvedValue({ status: "backlog", readySessions: 1, inFlightSessions: 0 });
+
+    await run("sync");
+
+    expect(syncDeps().mine).toBeUndefined();
+  });
+
+  it("does not build a learner in OSS mode", async () => {
+    mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: "dep1", mode: "oss" }));
+    mockRunSync.mockResolvedValue({ status: "backlog", readySessions: 1, inFlightSessions: 0 });
+
+    await run("sync");
+
+    expect(syncDeps().mine).toBeUndefined();
+  });
+
+  it("reports a studied run with the remaining backlog", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "studied",
+      readySessions: 8,
+      inFlightSessions: 0,
+      sessions: [],
+      studiedSessions: 5,
+      learner: { outcome: "completed", notesWritten: 3, turns: 12 },
+    });
+
+    await run("sync");
+
+    const output = allOutput();
+    expect(output).toContain("Studied 5 sessions, 3 suggested pages created");
+    expect(output).toContain("3 more in the backlog");
+  });
+
+  it("renders the gateway's refusal message on skipped-gateway", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "skipped-gateway",
+      readySessions: 2,
+      inFlightSessions: 0,
+      sessions: [],
+      studiedSessions: 0,
+      learner: { outcome: "consent_off", notesWritten: 0, turns: 0, message: "org opt-in is off" },
+    });
+
+    await run("sync");
+
+    expect(allOutput()).toContain("org opt-in is off");
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("mine-failed prints the learner message and sets the exit code", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "mine-failed",
+      readySessions: 2,
+      inFlightSessions: 0,
+      sessions: [],
+      studiedSessions: 0,
+      learner: { outcome: "error", notesWritten: 0, turns: 4, message: "run exploded" },
+    });
+
+    await run("sync");
+
+    expect(errorSpy.mock.calls.join(" ")).toContain("run exploded");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("mentions the concurrent run on skipped-lock", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "skipped-lock",
+      readySessions: 2,
+      inFlightSessions: 0,
+      sessions: [],
+    });
+
+    await run("sync");
+
+    expect(allOutput()).toContain("already in progress");
+  });
+
+  it("prints nothing-new when the gate is empty", async () => {
+    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
+
+    await run("sync");
+
+    expect(allOutput()).toContain("No new completed sessions");
+  });
+
+  it("reports errors and sets the exit code", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "error",
+      readySessions: 0,
+      inFlightSessions: 0,
+      error: "scan exploded",
+    });
+
+    await run("sync");
+
+    expect(errorSpy.mock.calls.join(" ")).toContain("scan exploded");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("mentions the backoff when a quiet failure is being waited out", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "skipped-backoff",
+      readySessions: 0,
+      inFlightSessions: 0,
+    });
+
+    await run("sync");
+
+    expect(allOutput()).toContain("backoff");
+  });
+
+  it("--quiet prints nothing and exits 0 even on error", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "error",
+      readySessions: 0,
+      inFlightSessions: 0,
+      error: "boom",
+    });
+
+    await run("sync", "--quiet");
+
+    expect(logSpy).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("--json emits the outcome as JSON", async () => {
+    mockRunSync.mockResolvedValue({ status: "backlog", readySessions: 2, inFlightSessions: 0 });
+
+    await run("sync", "--json");
+
+    expect(JSON.parse(allOutput())).toMatchObject({ status: "backlog", readySessions: 2 });
+  });
+
+  it("--report writes and opens the harvest HTML after a foreground sync", async () => {
+    mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: "dep1" }));
+    mockRunSync.mockResolvedValue({
+      status: "studied",
+      readySessions: 2,
+      inFlightSessions: 0,
+      sessions: [],
+      studiedSessions: 2,
+      learner: { outcome: "completed", notesWritten: 1, turns: 4 },
+    });
+
+    await run("sync", "--report", "--out", "/tmp/custom-report.html");
+
+    expect(mockEmitReport).toHaveBeenCalledWith({
+      out: "/tmp/custom-report.html",
+      open: true,
+    });
+    expect(allOutput()).toContain("Wrote /tmp/dosu-knowledge-report.html");
+  });
+
+  it("knowledge report writes the HTML without running sync", async () => {
+    mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: "dep1" }));
+    await run("report", "--no-open");
+    expect(mockRunSync).not.toHaveBeenCalled();
+    expect(mockEmitReport).toHaveBeenCalledWith({
+      out: undefined,
+      open: false,
+    });
+    expect(allOutput()).toContain("Wrote /tmp/dosu-knowledge-report.html");
+  });
+
+  it("--quiet --report stays silent and does not write HTML", async () => {
+    mockRunSync.mockResolvedValue({ status: "studied", readySessions: 0, inFlightSessions: 0 });
+    await run("sync", "--quiet", "--report");
+    expect(mockEmitReport).not.toHaveBeenCalled();
+    expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  it("--json --report includes the HTML path and does not open a browser", async () => {
+    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
+    await run("sync", "--json", "--report", "--out", "/tmp/custom-report.html");
+    expect(mockEmitReport).toHaveBeenCalledWith({
+      out: "/tmp/custom-report.html",
+      open: false,
+    });
+    expect(JSON.parse(allOutput())).toMatchObject({
+      status: "nothing-new",
+      report: "/tmp/dosu-knowledge-report.html",
+    });
+  });
+
+  it("--detach re-spawns and never runs the pipeline inline", async () => {
+    await run("sync", "--quiet", "--detach");
+
+    expect(mockSpawnDetached).toHaveBeenCalledWith(["knowledge", "sync", "--quiet"]);
+    expect(mockRunSync).not.toHaveBeenCalled();
+  });
+
+  it("--detach forwards --bootstrap to the re-spawned run", async () => {
+    await run("sync", "--quiet", "--detach", "--bootstrap");
+
+    expect(mockSpawnDetached).toHaveBeenCalledWith(["knowledge", "sync", "--quiet", "--bootstrap"]);
+  });
+
+  function studiedOutcome(remaining: number) {
+    return {
+      status: "studied",
+      readySessions: remaining,
+      inFlightSessions: 0,
+      sessions: [],
+      studiedSessions: Math.min(remaining, 5),
+      learner: { outcome: "completed", notesWritten: 2, turns: 10 },
+    };
+  }
+
+  it("--bootstrap passes the bootstrap scope on every round", async () => {
+    mockRunSync
+      .mockResolvedValueOnce(studiedOutcome(8))
+      .mockResolvedValueOnce(studiedOutcome(3))
+      .mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
+
+    await run("sync", "--bootstrap");
+
+    expect(mockRunSync).toHaveBeenCalledTimes(3);
+    for (const call of mockRunSync.mock.calls) {
+      expect(call[0].bootstrap).toBe(true);
+    }
+  });
+
+  it("--bootstrap drains the backlog and reports each round", async () => {
+    mockRunSync
+      .mockResolvedValueOnce(studiedOutcome(8))
+      .mockResolvedValueOnce(studiedOutcome(3))
+      .mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
+
+    await run("sync", "--bootstrap");
+
+    const output = allOutput();
+    expect(output).toContain("Studied 5 sessions");
+    expect(output).toContain("Studied 3 sessions");
+    expect(output).toContain("No new completed sessions");
+  });
+
+  it("--bootstrap stops the drain on a failed round", async () => {
+    mockRunSync.mockResolvedValueOnce(studiedOutcome(8)).mockResolvedValue({
+      status: "mine-failed",
+      readySessions: 3,
+      inFlightSessions: 0,
+      sessions: [],
+      studiedSessions: 0,
+      learner: { outcome: "error", notesWritten: 0, turns: 1, message: "run exploded" },
+    });
+
+    await run("sync", "--bootstrap");
+
+    expect(mockRunSync).toHaveBeenCalledTimes(2);
+    expect(errorSpy.mock.calls.join(" ")).toContain("run exploded");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("--bootstrap --quiet drains silently", async () => {
+    mockRunSync
+      .mockResolvedValueOnce(studiedOutcome(8))
+      .mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
+
+    await run("sync", "--quiet", "--bootstrap");
+
+    expect(mockRunSync).toHaveBeenCalledTimes(2);
+    expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  it("--bootstrap is capped even if studying always reports more", async () => {
+    // Every round claims two batches' worth of sessions are still ready; the
+    // cap comes from the first round's backlog: ceil(ready/batch)+2 rounds.
+    const ready = MINE_BATCH_LIMIT * 2;
+    mockRunSync.mockResolvedValue(studiedOutcome(ready));
+
+    await run("sync", "--bootstrap");
+
+    expect(mockRunSync).toHaveBeenCalledTimes(Math.ceil(ready / MINE_BATCH_LIMIT) + 2);
+  });
+
+  it("--bootstrap without a learner stays single-shot", async () => {
+    mockLoadConfig.mockReturnValue(makeValidConfig({ api_key: undefined }));
+    mockRunSync.mockResolvedValue({
+      status: "backlog",
+      readySessions: 4,
+      inFlightSessions: 0,
+      sessions: [],
+    });
+
+    await run("sync", "--bootstrap");
+
+    expect(mockRunSync).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("knowledge sync --status", () => {
+  const baseState = { schema_version: 1, watermark: null, consecutive_failures: 0 };
+
+  beforeEach(() => {
+    mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: "dep1" }));
+  });
+
+  it("surfaces a user-paused pipeline with the resume paths", async () => {
+    mockGetSyncStatus.mockReturnValue({
+      running: false,
+      state: { ...baseState, paused: true },
+      recentActivity: [],
+    });
+
+    await run("sync", "--status");
+
+    const out = allOutput();
+    expect(out).toContain("Studying paused: stopped by you");
+    expect(out).toContain("'dosu knowledge sync'");
+  });
+
+  it("reports a running sync without scanning or studying", async () => {
+    mockGetSyncStatus.mockReturnValue({
+      running: true,
+      pid: 4242,
+      startedAt: new Date(Date.now() - 3 * 60_000).toISOString(),
+      state: { ...baseState, watermark: new Date(Date.now() - 2 * 86_400_000).toISOString() },
+      recentActivity: ["[t] [sync] studied 5 sessions, 4 suggested pages"],
+    });
+
+    await run("sync", "--status");
+
+    const output = allOutput();
+    expect(output).toContain("Sync running \u00B7 pid 4242");
+    expect(output).toContain("3m ago");
+    expect(output).toContain("Studied through:");
+    expect(output).toContain("2d ago");
+    expect(output).toContain("studied 5 sessions, 4 suggested pages");
+    expect(output).toContain("logs --follow");
+    expect(mockRunSync).not.toHaveBeenCalled();
+  });
+
+  it("reports the all-time notes and token analytics when present", async () => {
+    mockGetSyncStatus.mockReturnValue({
+      running: false,
+      state: {
+        ...baseState,
+        watermark: "2026-08-25T11:00:00Z",
+        total_mined: 120,
+        total_notes: 47,
+        total_learning_tokens: 312_000,
+      },
+      recentActivity: [],
+    });
+
+    await run("sync", "--status");
+
+    expect(allOutput()).toContain(
+      "Suggested pages: 47 (from 120 sessions, ~312k tokens distilled)",
+    );
+  });
+
+  it("reports idle with nothing studied yet", async () => {
+    mockGetSyncStatus.mockReturnValue({ running: false, state: baseState, recentActivity: [] });
+
+    await run("sync", "--status");
+
+    const output = allOutput();
+    expect(output).toContain("No sync running");
+    expect(output).toContain("nothing studied yet");
+    expect(output).not.toContain("Suggested pages");
+    expect(output).not.toContain("Recent activity");
+  });
+
+  it("flags a stale lock left by a dead run", async () => {
+    mockGetSyncStatus.mockReturnValue({
+      running: false,
+      staleLock: true,
+      pid: 99,
+      startedAt: new Date().toISOString(),
+      state: baseState,
+      recentActivity: [],
+    });
+
+    await run("sync", "--status");
+
+    expect(allOutput()).toContain("Stale lock from pid 99");
+  });
+
+  it("shows the last attempt and the backoff window", async () => {
+    const lastAttempt = new Date(Date.now() - 90 * 60_000).toISOString();
+    mockGetSyncStatus.mockReturnValue({
+      running: false,
+      state: { ...baseState, last_attempt_at: lastAttempt, consecutive_failures: 2 },
+      backoffUntil: "2026-09-02T23:00:00.000Z",
+      recentActivity: [],
+    });
+
+    await run("sync", "--status");
+
+    const output = allOutput();
+    expect(output).toContain("Last attempt:");
+    expect(output).toContain("1h 30m ago");
+    expect(output).toContain("Backing off after 2 failures");
+    expect(output).toContain("2026-09-02T23:00:00.000Z");
+  });
+
+  it("explains a persisted gateway refusal", async () => {
+    mockGetSyncStatus.mockReturnValue({
+      running: false,
+      state: {
+        ...baseState,
+        last_refusal: {
+          at: new Date(Date.now() - 10 * 60_000).toISOString(),
+          outcome: "credit_limit",
+          message: "Your org has used its Dosu credits for this billing period.",
+        },
+      },
+      recentActivity: [],
+    });
+
+    await run("sync", "--status");
+
+    const output = allOutput();
+    expect(output).toContain("Studying paused: Your org has used its Dosu credits");
+    expect(output).toContain("10m ago");
+  });
+
+  it("renders very recent timestamps as 'just now'", async () => {
+    mockGetSyncStatus.mockReturnValue({
+      running: true,
+      pid: 7,
+      startedAt: new Date().toISOString(),
+      state: baseState,
+      recentActivity: [],
+    });
+
+    await run("sync", "--status");
+
+    expect(allOutput()).toContain("started just now");
+  });
+
+  it("--json emits the raw status object", async () => {
+    mockGetSyncStatus.mockReturnValue({ running: false, state: baseState, recentActivity: [] });
+
+    await run("sync", "--status", "--json");
+
+    const parsed = JSON.parse(allOutput());
+    expect(parsed.running).toBe(false);
+    expect(parsed.state.watermark).toBeNull();
+    expect(mockRunSync).not.toHaveBeenCalled();
+  });
+});
+
+describe("knowledge hooks", () => {
+  const claude = (): FakeAgent => ({
+    id: "claude",
+    name: "Claude Code",
+    installed: true,
+    enabled: false,
+    configPath: "/home/u/.claude/settings.json",
+  });
+  const cursor = (): FakeAgent => ({
+    id: "cursor",
+    name: "Cursor",
+    installed: false,
+    enabled: false,
+    configPath: "/home/u/.cursor/hooks.json",
+  });
+
+  it("status lists every agent with its state", async () => {
+    fakeAgents = [{ ...claude(), enabled: true }, cursor()];
+
+    await run("hooks", "status");
+
+    const output = allOutput();
+    expect(output).toContain("claude");
+    expect(output).toContain("enabled");
+    expect(output).toContain("not installed");
+  });
+
+  it("status --json emits rows", async () => {
+    fakeAgents = [claude()];
+
+    await run("hooks", "status", "--json");
+
+    const rows = JSON.parse(allOutput());
+    expect(rows).toEqual([
+      expect.objectContaining({ agent: "claude", installed: true, enabled: false }),
+    ]);
+  });
+
+  it("status surfaces per-agent config errors as notes", async () => {
+    fakeAgents = [
+      { ...claude(), enabledError: new HookConfigError("settings.json is not valid JSON") },
+    ];
+
+    await run("hooks", "status");
+
+    expect(allOutput()).toContain("not valid JSON");
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("enable targets named agents", async () => {
+    fakeAgents = [claude(), cursor()];
+
+    await run("hooks", "enable", "claude");
+
+    expect(enableCalls).toEqual(["claude"]);
+    expect(allOutput()).toContain("hook enabled");
+  });
+
+  it("enable with no args targets all installed agents", async () => {
+    fakeAgents = [claude(), cursor()];
+
+    await run("hooks", "enable");
+
+    expect(enableCalls).toEqual(["claude"]);
+  });
+
+  it("enable prints the agent's note when present", async () => {
+    fakeAgents = [{ ...claude(), id: "codex", name: "Codex", note: "Approve the trust prompt." }];
+
+    await run("hooks", "enable", "codex");
+
+    expect(allOutput()).toContain("Approve the trust prompt.");
+  });
+
+  it("enable reports unknown agents", async () => {
+    fakeAgents = [claude()];
+
+    await run("hooks", "enable", "zed");
+
+    expect(errorSpy.mock.calls.join(" ")).toContain("unknown agent 'zed'");
+    expect(process.exitCode).toBe(1);
+    expect(enableCalls).toEqual([]);
+  });
+
+  it("enable reports hook config failures without aborting the command", async () => {
+    fakeAgents = [
+      { ...claude(), enableError: new HookConfigError("settings.json is not valid JSON") },
+    ];
+
+    await run("hooks", "enable", "claude");
+
+    expect(errorSpy.mock.calls.join(" ")).toContain("not valid JSON");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("disable targets named agents", async () => {
+    fakeAgents = [claude(), cursor()];
+
+    await run("hooks", "disable", "claude");
+
+    expect(disableCalls).toEqual(["claude"]);
+    expect(allOutput()).toContain("hook disabled");
+  });
+
+  it("prints a hint when nothing is detected", async () => {
+    fakeAgents = [cursor()];
+
+    await run("hooks", "enable");
+
+    expect(allOutput()).toContain("No supported agents detected");
+  });
+});
+
+describe("knowledge backfill-transcripts", () => {
+  it("reports the attribution counts after a run", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockRunBackfill.mockResolvedValue({
+      candidates: 10,
+      mappings: [{ note_id: "n1", transcript_id: "s1" }],
+      ambiguous: 3,
+      noBatch: 2,
+      updated: 5,
+    });
+
+    await run("backfill-transcripts");
+
+    expect(mockRunBackfill).toHaveBeenCalledTimes(1);
+    const out = allOutput();
+    expect(out).toContain("Attributed 5 of 10 notes");
+    expect(out).toContain("3 ambiguous");
+    expect(out).toContain("2 without a local study batch");
+  });
+
+  it("says nothing to do when every note is already attributed", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockRunBackfill.mockResolvedValue({
+      candidates: 0,
+      mappings: [],
+      ambiguous: 0,
+      noBatch: 0,
+      updated: 0,
+    });
+
+    await run("backfill-transcripts");
+
+    expect(allOutput()).toContain("already have a transcript");
+  });
+
+  it("emits JSON with --json", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    const result = { candidates: 2, mappings: [], ambiguous: 1, noBatch: 1, updated: 0 };
+    mockRunBackfill.mockResolvedValue(result);
+
+    await run("backfill-transcripts", "--json");
+
+    expect(JSON.parse(allOutput())).toMatchObject(result);
   });
 });

@@ -1,6 +1,4 @@
-/**
- * `dosu threads` — list, view, and manage conversation threads.
- */
+/** `dosu threads`: list, view, and manage conversation threads. */
 
 import { Command, Option } from "commander";
 import pc from "picocolors";
@@ -75,9 +73,8 @@ export function threadsCommand(): Command {
       }
 
       const data = await client.thread.list.query(input);
-      // Contract-typed since dosu#11679 — no local mirror type or cast, so a
-      // contract-side field change fails this file's typecheck instead of
-      // silently returning undefined at runtime.
+      // Contract-typed since dosu#11679: a contract-side field change fails typecheck here
+      // instead of silently returning undefined at runtime.
       const threads = data.list;
 
       if (opts.json) {

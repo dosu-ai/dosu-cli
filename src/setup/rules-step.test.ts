@@ -29,7 +29,7 @@ vi.mock("../debug/logger", () => ({
   },
 }));
 
-vi.mock("@clack/prompts", () => ({
+vi.mock("../tui/prompts", () => ({
   log: {
     success: vi.fn(),
     info: vi.fn(),
@@ -37,7 +37,7 @@ vi.mock("@clack/prompts", () => ({
   },
 }));
 
-import * as p from "@clack/prompts";
+import * as p from "../tui/prompts";
 import { stepConfigureAgentRules } from "./rules-step";
 
 function makeProvider(id: string): SetupProvider {

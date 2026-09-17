@@ -1,13 +1,5 @@
-/**
- * saveConfig atomicity tests.
- *
- * Concurrent CLI processes share one config file. A direct write to the
- * final path can interleave with a sibling's write or be observed half
- * written; a clobbered/corrupt refresh token gets replayed on the next
- * refresh and can revoke the whole session under GoTrue reuse detection.
- * saveConfig must therefore write a temp file and atomically rename it
- * over the final path.
- */
+/** saveConfig must write a temp file and atomically rename it: a half-written refresh token
+ * replayed later can revoke the whole session under GoTrue reuse detection. */
 
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

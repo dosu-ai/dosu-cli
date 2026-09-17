@@ -1,22 +1,5 @@
-/**
- * Refresh self-healing tests.
- *
- * GoTrue rotates refresh tokens on every use, and replaying a stale token
- * outside the ~10s reuse interval can revoke the ENTIRE session (reuse
- * detection) — killing every client that shares it. Multiple CLI processes
- * (TUI and parallel commands) share one config file, so a
- * process holding a stale in-memory token can kill the session for all of
- * them. These tests pin the client's lock-based defenses:
- *
- * 1. acquire a config-directory lock before contacting GoTrue;
- * 2. adopt a valid session persisted by the lock holder instead of rotating
- *    again; and
- * 3. persist a candidate session before updating the caller's in-memory copy.
- *
- * The fake GoTrue mirrors hosted behavior outside the reuse interval: only
- * the CURRENT refresh token succeeds; anything else gets a 400
- * (refresh_token_already_used).
- */
+/** Pins the client's lock-based refresh defenses: GoTrue rotates refresh tokens on use, and a
+ * stale replay outside the ~10s reuse interval can revoke the whole shared session. */
 
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

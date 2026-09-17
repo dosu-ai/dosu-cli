@@ -1,10 +1,22 @@
-/**
- * `dosu knowledge` — knowledge base search and listing.
- */
+/** `dosu knowledge`: knowledge base search/listing, plus the local sync pipeline and its
+ * per-agent hook triggers. */
 
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { delimiter, join } from "node:path";
 import { Command, Option } from "commander";
 import pc from "picocolors";
 import { createTypedClient } from "../client/trpc";
+import { loadConfig } from "../config/config";
+import { allHookAgents, getHookAgent, type HookAgent } from "../hooks/agents";
+import { HookConfigError, hookCommand } from "../hooks/formats";
+import { emitKnowledgeReport } from "../report/generate";
+import type { AgentSession } from "../sessions/scan";
+import { listSessionBacklog } from "../sync/backlog";
+import { spawnDetachedSelf } from "../sync/detach";
+import { formatTokenCount, getSyncStatus, type SyncStatus } from "../sync/status";
+import { MINE_BATCH_LIMIT, runKnowledgeSync, type SyncDeps, type SyncOutcome } from "../sync/sync";
+import { loadSyncState } from "../sync/watermark";
 import { positiveInteger } from "./arguments";
 import { requireLoginConfig } from "./auth";
 import { printResult, printTable, truncate } from "./output";
@@ -70,7 +82,7 @@ export function knowledgeCommand(): Command {
         ["Title", "Type"],
         limited.map((r: { title?: string | null; entity_type?: string | null }) => [
           truncate(r.title ?? "(untitled)", 60),
-          r.entity_type ?? "—",
+          r.entity_type ?? "-",
         ]),
         { json: false, rawData: limited },
       );
@@ -108,5 +120,512 @@ export function knowledgeCommand(): Command {
       console.log(`  Space ID: ${store.space_id}`);
     });
 
+  cmd
+    .command("sessions")
+    .description(
+      "List local agent sessions with full project and session ids (the untruncated view of the Activity screen's tabs)",
+    )
+    .option("--queued", "Only sessions queued for studying")
+    .option("--open", "Only live sessions still inside the quiet period")
+    .option("--studied", "Only recent studied-session history")
+    .option("--json", "Output as JSON")
+    .action((opts: { queued?: boolean; open?: boolean; studied?: boolean; json?: boolean }) => {
+      const all = !opts.queued && !opts.open && !opts.studied;
+      const wantQueued = all || Boolean(opts.queued);
+      const wantOpen = all || Boolean(opts.open);
+      const wantStudied = all || Boolean(opts.studied);
+
+      const backlog = wantQueued || wantOpen ? listSessionBacklog() : { queued: [], open: [] };
+      const studied = wantStudied ? (loadSyncState().mined_sessions ?? []) : [];
+
+      if (opts.json) {
+        printResult(
+          {
+            ...(wantQueued ? { queued: backlog.queued } : {}),
+            ...(wantOpen ? { open: backlog.open } : {}),
+            ...(wantStudied ? { studied } : {}),
+          },
+          opts,
+        );
+        return;
+      }
+
+      const sessionRows = (sessions: AgentSession[]) =>
+        sessions.map((s) => [s.harness, s.updated, s.project ?? "-", s.id]);
+      // Studied history stores "harness/id" in one field; split it back into columns.
+      const studiedRows = studied.map((record) => {
+        const slash = record.session.indexOf("/");
+        const harness = slash > 0 ? record.session.slice(0, slash) : "-";
+        const id = slash > 0 ? record.session.slice(slash + 1) : record.session;
+        return [harness, record.at, record.project ?? "-", id];
+      });
+
+      let first = true;
+      const section = (title: string, rows: string[][], stamp: string, emptyMsg: string) => {
+        if (!first) console.log();
+        first = false;
+        console.log(pc.bold(`${title} (${rows.length})`));
+        if (rows.length === 0) {
+          console.log(pc.dim(`  ${emptyMsg}`));
+          return;
+        }
+        printTable(["Agent", stamp, "Project", "Session"], rows);
+      };
+
+      if (wantQueued) {
+        section(
+          "Queued",
+          sessionRows(backlog.queued),
+          "Updated",
+          "Queue empty. Finished agent sessions appear here.",
+        );
+      }
+      if (wantOpen) {
+        section(
+          "Open",
+          sessionRows(backlog.open),
+          "Updated",
+          "No open sessions. Live agent sessions sit here until they go quiet.",
+        );
+      }
+      if (wantStudied) {
+        section("Studied", studiedRows, "Studied at", "No studied sessions recorded yet.");
+      }
+    });
+
+  cmd
+    .command("sync")
+    .description("Scan local agent session history and report the study backlog")
+    .option("--quiet", "Background mode for hooks: honor backoff, exit 0, print nothing")
+    .option("--detach", "Re-spawn detached and return immediately (used by agent hooks)")
+    .option(
+      "--bootstrap",
+      "Backfill mode: study the full local session history regardless of age and drain the backlog (used by setup)",
+    )
+    .option("--status", "Show whether a sync is running now, plus watermark and recent activity")
+    .option(
+      "--report",
+      "Write the same HTML harvest report as the log-to-dosu-knowledge skill and open it",
+    )
+    .option("--out <path>", "HTML report path (default: tmp/dosu-knowledge-report.html)")
+    .option("--json", "Output as JSON")
+    .action(
+      async (opts: {
+        quiet?: boolean;
+        detach?: boolean;
+        bootstrap?: boolean;
+        status?: boolean;
+        report?: boolean;
+        out?: string;
+        json?: boolean;
+      }) => {
+        // --status never scans or mines: it reads the lock, the persisted
+        // watermark state, and the tail of the debug log.
+        if (opts.status) {
+          const status = getSyncStatus();
+          if (opts.json) {
+            printResult(status, opts);
+            return;
+          }
+          printSyncStatus(status);
+          return;
+        }
+
+        if (opts.detach) {
+          // Hooks call `sync --quiet --detach`; the re-spawned child runs the
+          // actual pipeline so the hooking agent gets its exit immediately.
+          spawnDetachedSelf([
+            "knowledge",
+            "sync",
+            ...(opts.quiet ? ["--quiet"] : []),
+            ...(opts.bootstrap ? ["--bootstrap"] : []),
+            ...(opts.report ? ["--report"] : []),
+            ...(opts.out ? ["--out", opts.out] : []),
+          ]);
+          return;
+        }
+
+        const deps: SyncDeps = { mine: buildLearner(opts.quiet ? "hook" : "manual") };
+        let outcome = await runKnowledgeSync({
+          quiet: opts.quiet,
+          bootstrap: opts.bootstrap,
+          deps,
+        });
+
+        // Bootstrap drains the whole backlog in this process; any non-studied status ends the
+        // drain; the round cap guards against a learner that never stops reporting progress.
+        if (opts.bootstrap && deps.mine) {
+          const maxRounds = Math.ceil(outcome.readySessions / MINE_BATCH_LIMIT) + 2;
+          for (let round = 1; outcome.status === "studied" && round < maxRounds; round++) {
+            if (!opts.quiet && !opts.json) printSyncOutcome(outcome);
+            outcome = await runKnowledgeSync({ quiet: opts.quiet, bootstrap: true, deps });
+          }
+        }
+
+        if (opts.quiet) return; // Invisible by contract; details are in the debug log.
+
+        if (opts.json) {
+          if (outcome.status === "error") process.exitCode = 1;
+          if (opts.report) {
+            // The sync outcome must reach stdout even when the report fails:
+            // studying already happened and callers parse this JSON.
+            try {
+              const report = await emitKnowledgeReport({ out: opts.out, open: false });
+              printResult({ ...outcome, report }, opts);
+            } catch (err) {
+              const report_error = err instanceof Error ? err.message : String(err);
+              printResult({ ...outcome, report_error }, opts);
+            }
+          } else {
+            printResult(outcome, opts);
+          }
+          return;
+        }
+
+        printSyncOutcome(outcome);
+        if (opts.report) {
+          try {
+            const report = await emitKnowledgeReport({ out: opts.out, open: true });
+            console.log(`Wrote ${report}`);
+          } catch (err) {
+            console.error(err instanceof Error ? err.message : String(err));
+            process.exitCode = 1;
+          }
+        }
+      },
+    );
+
+  cmd
+    .command("report")
+    .description("Render the knowledge report from your Dosu notes and the local session logs")
+    .option("--out <path>", "HTML report path (default: tmp/dosu-knowledge-report.html)")
+    .option("--json", "Output the report path as JSON")
+    .option("--no-open", "Write the file without opening a browser")
+    .action(async (opts: { out?: string; json?: boolean; open?: boolean }) => {
+      const path = await emitKnowledgeReport({
+        out: opts.out,
+        open: opts.json ? false : opts.open,
+      });
+      if (opts.json) {
+        printResult({ report: path }, opts);
+        return;
+      }
+      console.log(`Wrote ${path}`);
+    });
+
+  cmd
+    .command("backfill-transcripts")
+    .description(
+      "One-shot: attribute pre-existing notes to the local sessions that produced them, so the report can show their traces",
+    )
+    .option("--json", "Output the result as JSON")
+    .action(async (opts: { json?: boolean }) => {
+      const { runBackfill } = await import("../report/backfill-run");
+      const result = await runBackfill();
+      if (opts.json) {
+        printResult(result, opts);
+        return;
+      }
+      if (result.candidates === 0) {
+        console.log("All your notes already have a transcript — nothing to backfill.");
+        return;
+      }
+      console.log(
+        `Attributed ${result.updated} of ${result.candidates} notes ` +
+          `(${result.ambiguous} ambiguous, ${result.noBatch} without a local study batch). ` +
+          "Run 'dosu knowledge report' to see their traces.",
+      );
+    });
+
+  cmd.addCommand(hooksCommand());
+
   return cmd;
+}
+
+/** Studying step for authenticated cloud-mode installs; returns undefined (gate-and-report only)
+ * when the install can't mine: logged out, OSS mode, or no API key. */
+function buildLearner(trigger: "hook" | "manual"): SyncDeps["mine"] {
+  const cfg = loadConfig();
+  if (cfg.mode === "oss") return undefined;
+  const target = cfg.active_account?.target;
+  if (!target?.api_key || !target.deployment_id) return undefined;
+  const { api_key, deployment_id } = target;
+  return async (sessions: AgentSession[]) => {
+    const { runLearner } = await import("../learner/runner");
+    return runLearner({ sessions, apiKey: api_key, deploymentID: deployment_id, trigger });
+  };
+}
+
+/** "3m ago" / "2h 10m ago" for status timestamps; falls back to the raw value. */
+function formatAge(iso: string, now: Date): string {
+  const ms = now.getTime() - Date.parse(iso);
+  if (!Number.isFinite(ms) || ms < 0) return iso;
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${minutes % 60}m ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
+  if (status.running) {
+    console.log(
+      `${pc.green("●")} Sync running \u00B7 pid ${status.pid}, started ${formatAge(status.startedAt ?? "", now)}.`,
+    );
+  } else if (status.staleLock) {
+    console.log(
+      `${pc.yellow("●")} Stale lock from pid ${status.pid} (process gone); syncs resume once it ages out.`,
+    );
+  } else {
+    console.log("○ No sync running.");
+  }
+
+  if (status.state.paused) {
+    console.log(
+      pc.yellow(
+        "  Studying paused: stopped by you. Resume from the Activity screen or run 'dosu knowledge sync'.",
+      ),
+    );
+  }
+  const wm = status.state.watermark;
+  console.log(`  Studied through: ${wm ? `${wm} (${formatAge(wm, now)})` : "nothing studied yet"}`);
+  if (status.state.project_filter?.length) {
+    const home = homedir();
+    const scope = status.state.project_filter
+      .map((dir) => (dir.startsWith(`${home}/`) ? `~${dir.slice(home.length)}` : dir))
+      .join(", ");
+    console.log(`  Study scope:     ${scope}`);
+  }
+  if ((status.state.total_notes ?? 0) > 0) {
+    const tokens = status.state.total_learning_tokens ?? 0;
+    const distilled = tokens > 0 ? `, ${formatTokenCount(tokens)} tokens distilled` : "";
+    console.log(
+      `  Suggested pages: ${status.state.total_notes} (from ${status.state.total_mined ?? 0} sessions${distilled})`,
+    );
+  }
+  if (status.state.last_attempt_at) {
+    console.log(
+      `  Last attempt:    ${status.state.last_attempt_at} (${formatAge(status.state.last_attempt_at, now)})`,
+    );
+  }
+  if (status.backoffUntil) {
+    const n = status.state.consecutive_failures;
+    console.log(
+      pc.yellow(
+        `  Backing off after ${n} failure${n === 1 ? "" : "s"}; background syncs retry after ${status.backoffUntil}.`,
+      ),
+    );
+  }
+  if (status.state.last_refusal) {
+    console.log(
+      pc.yellow(
+        `  Studying paused: ${status.state.last_refusal.message} (${formatAge(status.state.last_refusal.at, now)})`,
+      ),
+    );
+  }
+
+  if (status.recentActivity.length > 0) {
+    console.log("\nRecent activity:");
+    for (const line of status.recentActivity) {
+      console.log(pc.dim(`  ${truncate(line, 160)}`));
+    }
+  }
+  console.log(pc.dim("\nFollow live with 'dosu logs --follow'."));
+}
+
+function printSyncOutcome(outcome: SyncOutcome): void {
+  switch (outcome.status) {
+    case "backlog": {
+      const inFlight =
+        outcome.inFlightSessions > 0
+          ? pc.dim(` (${outcome.inFlightSessions} more still in progress)`)
+          : "";
+      console.log(
+        `✓ Scanned. ${outcome.readySessions} new session${outcome.readySessions === 1 ? "" : "s"} ready to study${inFlight}.`,
+      );
+      console.log(pc.dim("Sign in with 'dosu setup' to enable studying."));
+      break;
+    }
+    case "studied": {
+      const notes = outcome.learner?.notesWritten ?? 0;
+      const remaining = outcome.readySessions - (outcome.studiedSessions ?? 0);
+      console.log(
+        `✓ Studied ${outcome.studiedSessions} session${outcome.studiedSessions === 1 ? "" : "s"}, ${notes} suggested page${notes === 1 ? "" : "s"} created.`,
+      );
+      if (remaining > 0) {
+        console.log(pc.dim(`${remaining} more in the backlog; run sync again to continue.`));
+      }
+      break;
+    }
+    case "skipped-gateway": {
+      console.log(pc.yellow(outcome.learner?.message ?? "Studying unavailable right now."));
+      break;
+    }
+    case "mine-failed": {
+      console.error(pc.red(outcome.learner?.message ?? "Study run failed."));
+      process.exitCode = 1;
+      break;
+    }
+    case "skipped-lock": {
+      console.log(pc.dim("Skipped: another sync run is already in progress."));
+      break;
+    }
+    case "nothing-new": {
+      const inFlight =
+        outcome.inFlightSessions > 0
+          ? ` ${outcome.inFlightSessions} session${outcome.inFlightSessions === 1 ? "" : "s"} still in progress.`
+          : "";
+      console.log(`✓ Scanned. No new completed sessions since the last run.${inFlight}`);
+      break;
+    }
+    case "error": {
+      console.error(pc.red(`Sync failed: ${outcome.error}`));
+      process.exitCode = 1;
+      break;
+    }
+    case "skipped-backoff": {
+      console.log(pc.dim("Skipped: a recent sync failed; waiting out the retry backoff."));
+      break;
+    }
+    case "skipped-paused": {
+      console.log(pc.dim("Skipped: studying is paused. Run 'dosu knowledge sync' to resume."));
+      break;
+    }
+  }
+}
+
+function resolveHookAgents(ids: string[]): HookAgent[] {
+  if (ids.length === 0) {
+    const installed = allHookAgents().filter((agent) => agent.isInstalled());
+    if (installed.length === 0) {
+      console.log(pc.dim("No supported agents detected on this machine."));
+    }
+    return installed;
+  }
+  const agents: HookAgent[] = [];
+  for (const id of ids) {
+    const agent = getHookAgent(id.toLowerCase());
+    if (!agent) {
+      console.error(
+        pc.red(
+          `unknown agent '${id}'. Supported: ${allHookAgents()
+            .map((a) => a.id())
+            .join(", ")}`,
+        ),
+      );
+      process.exitCode = 1;
+      return [];
+    }
+    agents.push(agent);
+  }
+  return agents;
+}
+
+function hooksCommand(): Command {
+  const cmd = new Command("hooks").description(
+    "Manage the session-end hooks that trigger knowledge sync",
+  );
+
+  cmd
+    .command("status")
+    .description("Show hook status for each supported agent")
+    .option("--json", "Output as JSON")
+    .action((opts: { json?: boolean }) => {
+      const rows = allHookAgents().map((agent) => {
+        let enabled = false;
+        let note: string | undefined;
+        try {
+          enabled = agent.isEnabled();
+        } catch (err) {
+          note = err instanceof Error ? err.message : String(err);
+        }
+        return {
+          agent: agent.id(),
+          name: agent.name(),
+          installed: agent.isInstalled(),
+          enabled,
+          config_path: agent.configPath(),
+          ...(note ? { note } : {}),
+        };
+      });
+
+      if (opts.json) {
+        printResult(rows, opts);
+        return;
+      }
+
+      for (const row of rows) {
+        const state = !row.installed
+          ? pc.dim("not installed")
+          : row.enabled
+            ? pc.green("enabled")
+            : "disabled";
+        console.log(`  ${row.agent.padEnd(8)} ${row.name.padEnd(14)} ${state}`);
+        if (row.note) console.log(pc.yellow(`    ${row.note}`));
+      }
+      console.log(
+        pc.dim("\nUse 'dosu knowledge hooks enable|disable [agent...]' to change these."),
+      );
+    });
+
+  cmd
+    .command("enable [agents...]")
+    .description("Install the sync hook for agents (default: all detected)")
+    .action((ids: string[]) => {
+      const agents = resolveHookAgents(ids);
+      const devMode = process.env.DOSU_DEV === "true";
+      // Dev hooks pin this working copy by absolute path, so PATH is moot.
+      if (agents.length > 0 && !devMode && !dosuOnPath()) {
+        console.log(
+          pc.yellow(
+            "Warning: 'dosu' is not on PATH; hooks run 'dosu knowledge sync' and will fail until it is.",
+          ),
+        );
+      }
+      if (agents.length > 0 && devMode) {
+        console.log(pc.dim(`Dev mode: hooks will run ${hookCommand()}`));
+      }
+      for (const agent of agents) {
+        try {
+          agent.enable();
+          console.log(`✓ ${agent.name()} \u00B7 hook enabled (${agent.configPath()})`);
+          const note = agent.enableNote?.();
+          if (note) console.log(pc.dim(`  ${note}`));
+        } catch (err) {
+          reportHookFailure(agent, err);
+        }
+      }
+    });
+
+  cmd
+    .command("disable [agents...]")
+    .description("Remove the sync hook from agents (default: all detected)")
+    .action((ids: string[]) => {
+      for (const agent of resolveHookAgents(ids)) {
+        try {
+          agent.disable();
+          console.log(`✓ ${agent.name()} \u00B7 hook disabled`);
+        } catch (err) {
+          reportHookFailure(agent, err);
+        }
+      }
+    });
+
+  return cmd;
+}
+
+function reportHookFailure(agent: HookAgent, err: unknown): void {
+  const message =
+    err instanceof HookConfigError ? err.message : err instanceof Error ? err.message : String(err);
+  console.error(pc.red(`✗ ${agent.name()}: ${message}`));
+  process.exitCode = 1;
+}
+
+/** Hooks invoke plain `dosu`; warn at enable time when that will not resolve. */
+function dosuOnPath(): boolean {
+  const bin = process.platform === "win32" ? "dosu.cmd" : "dosu";
+  return (process.env.PATH ?? "")
+    .split(delimiter)
+    .some((dir) => dir !== "" && existsSync(join(dir, bin)));
 }

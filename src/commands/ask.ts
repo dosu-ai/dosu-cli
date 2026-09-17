@@ -1,9 +1,5 @@
-/**
- * `dosu ask` — ask a question and get an AI-generated answer.
- *
- * Calls the Python backend's /ask endpoint which runs the research workflow
- * synchronously and returns the answer.
- */
+/** `dosu ask`: ask a question and get an AI-generated answer from the backend's synchronous
+ * /ask research workflow. */
 
 import { Command } from "commander";
 import pc from "picocolors";

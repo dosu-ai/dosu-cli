@@ -1,9 +1,5 @@
-/**
- * tRPC client for calling the Dosu app's tRPC API.
- *
- * Uses `@trpc/client` with the CLI-facing API contract.
- * Provides automatic token refresh via async headers + fetch-level 401 retry.
- */
+/** tRPC client for the Dosu app's CLI-facing API, with automatic token refresh via async headers
+ * plus fetch-level 401 retry. */
 
 import { createTRPCClient, httpLink } from "@trpc/client";
 import superjson from "superjson";
@@ -17,20 +13,8 @@ import { CLI_CONTRACT_HASH } from "./contract";
 /** CLI tRPC client — use this to type function parameters. */
 export type TypedClient = CliApiClient;
 
-/**
- * Create a type-safe tRPC client for the app's CLI router.
- *
- * Features:
- * - Proactive token refresh via async headers (checks expiry before each request)
- * - 401/403 retry via custom fetch (safety net for server-side token revocation)
- *
- * Usage:
- * ```typescript
- * const client = createTypedClient(config);
- * const threads = await client.thread.list.query({ space_id: "..." });
- * const result = await client.page.create.mutate({ title: "...", body: "..." });
- * ```
- */
+/** Create a type-safe tRPC client for the app's CLI router, with proactive token refresh and a
+ * 401/403 retry safety net for server-side revocation. */
 export function createTypedClient<TClient extends object = TypedClient>(config: Config): TClient {
   const webAppURL = getWebAppURL();
   if (!webAppURL) {

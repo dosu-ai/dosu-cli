@@ -1,6 +1,4 @@
-/**
- * `dosu docs` — document/page management.
- */
+/** `dosu docs`: document/page management. */
 
 import { readFileSync } from "node:fs";
 import * as p from "@clack/prompts";
@@ -47,12 +45,8 @@ const IMPORT_ALREADY_IN_PROGRESS_CODE = "IMPORT_ALREADY_IN_PROGRESS";
 /** Fallback when API returns only human `detail` (no structured `code` yet). */
 const IMPORT_ALREADY_IN_PROGRESS_LEGACY_DETAIL_PHRASE = "import operation is already in progress";
 
-/**
- * Parse `Error.message` when it looks like JSON (tRPC / HTTP error bodies).
- * Supports:
- * - `{"detail":"…","code":"…"}` (flat)
- * - `{"detail":{"detail":"…","code":"…"}}` (FastAPI `HTTPException(detail={...})` → JSON)
- */
+/** Parse `Error.message` when it looks like JSON; handles flat {"detail","code"} bodies and
+ * nested FastAPI {"detail":{...}} shapes. */
 function parseSerializedImportError(message: string): { detail: string; appCode?: string } {
   let text = message;
   let appCode: string | undefined;

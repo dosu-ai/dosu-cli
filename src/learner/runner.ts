@@ -1,0 +1,344 @@
+/** Studying-agent runner: spawns an Agent SDK session routed to the Dosu LLM gateway, fenced to
+ * four tools. This is the only module in the CLI that imports the Agent SDK. */
+
+import { getLlmGatewayURL, isAbsoluteHttpUrl } from "../config/constants";
+import { logger } from "../debug/logger";
+import { mcpHeaders, mcpURL } from "../mcp/config-helpers";
+import { sessionIdFromReadInput } from "../report/notes";
+import type { AgentSession } from "../sessions/scan";
+import { getVersionString } from "../version/version";
+import { createRunConfigDir } from "./config-dir";
+import { detectSettingsConflicts } from "./conflicts";
+import { buildLearnerEnv, type LearnerTrigger } from "./env";
+import { resolveClaudeExecutable } from "./executable";
+import { buildLearnerPrompt, buildLearnerSystemPrompt } from "./prompt";
+import { LEARNER_CORE_RULES } from "./prompt-core";
+import { createSessionToolsServer, SESSIONS_SERVER_NAME } from "./tools";
+
+export type LearnerOutcome =
+  | "completed"
+  | "settings_conflict"
+  | "consent_off"
+  | "credit_limit"
+  | "quota_exceeded"
+  | "error";
+
+export interface LearnerRunResult {
+  outcome: LearnerOutcome;
+  /** write_knowledge calls that were allowed through the gate. */
+  notesWritten: number;
+  turns: number;
+  /** One renderable line for error-ish outcomes; never a stack trace. */
+  message?: string;
+}
+
+export interface RunLearnerOptions {
+  sessions: AgentSession[];
+  apiKey: string;
+  deploymentID: string;
+  trigger: LearnerTrigger;
+  runID?: string;
+  /** Defaults to getLlmGatewayURL(). */
+  gatewayURL?: string;
+  maxTurns?: number;
+  /** Cap on write_knowledge calls per run. */
+  maxNotes?: number;
+  /** Wall-clock abort. Default 30 minutes. */
+  timeoutMs?: number;
+}
+
+// Sized for MINE_BATCH_LIMIT-session batches: observed runs spend ~4-6 turns
+// and write up to ~3 notes per session, so 20 sessions fit with headroom.
+const DEFAULT_MAX_TURNS = 160;
+const DEFAULT_MAX_NOTES = 80;
+const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
+
+const KNOWLEDGE_SERVER_NAME = "dosu";
+
+/** Renderable copy for the gateway's machine-readable refusals. */
+const GATEWAY_ERRORS: Record<string, { outcome: LearnerOutcome; message: string }> = {
+  dosu_consent_off: {
+    outcome: "consent_off",
+    message: "Your org hasn't enabled Dosu Remote Sessions. Ask an org admin to turn it on.",
+  },
+  dosu_credit_limit_reached: {
+    outcome: "credit_limit",
+    message:
+      "Your org has used its Dosu credits for this billing period. An admin can enable overage or upgrade.",
+  },
+  dosu_quota_exceeded: {
+    outcome: "quota_exceeded",
+    message: "Daily Dosu Remote Sessions budget reached; runs resume tomorrow.",
+  },
+};
+
+export function classifyGatewayError(
+  text: string,
+): { outcome: LearnerOutcome; message: string } | null {
+  for (const [token, mapped] of Object.entries(GATEWAY_ERRORS)) {
+    if (text.includes(token)) return mapped;
+  }
+  return null;
+}
+
+/** Longest snippet a single trace line quotes from agent text or tool args. */
+const TRACE_SNIPPET_LIMIT = 400;
+
+function snippet(value: unknown): string {
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  const flat = (text ?? "").replace(/\s+/g, " ").trim();
+  return flat.length > TRACE_SNIPPET_LIMIT ? `${flat.slice(0, TRACE_SNIPPET_LIMIT)}…` : flat;
+}
+
+/** Turn-by-turn trace of the studying agent in the debug log; `dosu knowledge sync` is quiet on
+ * stdout by design, so the debug log is where a run can actually be watched. */
+export function traceAgentMessage(message: unknown): void {
+  const msg = message as {
+    type?: string;
+    message?: { content?: unknown };
+  };
+  const content = msg.message?.content;
+  if (!Array.isArray(content)) return;
+
+  for (const block of content as Array<Record<string, unknown>>) {
+    if (msg.type === "assistant" && block.type === "text") {
+      logger.debug("learner", `[agent] ${snippet(block.text)}`);
+    } else if (msg.type === "assistant" && block.type === "tool_use") {
+      logger.debug("learner", `[agent] → ${block.name} ${snippet(block.input)}`);
+    } else if (msg.type === "user" && block.type === "tool_result") {
+      const full = JSON.stringify(block.content ?? "");
+      logger.debug(
+        "learner",
+        `[agent] ← result ${full.length} chars${block.is_error ? " (error)" : ""}: ${snippet(block.content).slice(0, 120)}`,
+      );
+    }
+  }
+}
+
+function allowedToolNames(): Set<string> {
+  return new Set([
+    `mcp__${SESSIONS_SERVER_NAME}__list_sessions`,
+    `mcp__${SESSIONS_SERVER_NAME}__read_session`,
+    `mcp__${KNOWLEDGE_SERVER_NAME}__read_knowledge`,
+    `mcp__${KNOWLEDGE_SERVER_NAME}__write_knowledge`,
+    `mcp__${KNOWLEDGE_SERVER_NAME}__finalize_session_knowledge`,
+  ]);
+}
+
+export async function runLearner(options: RunLearnerOptions): Promise<LearnerRunResult> {
+  // Fail closed before spawning anything: a managed settings file can
+  // reroute the binary's auth no matter what env we build.
+  const conflicts = detectSettingsConflicts();
+  if (conflicts.length > 0) {
+    const detail = conflicts.map((c) => `${c.file} (${c.keys.join(", ")})`).join("; ");
+    return {
+      outcome: "settings_conflict",
+      notesWritten: 0,
+      turns: 0,
+      message: `Refusing to run: conflicting Claude Code settings would override the study run's auth (${detail})`,
+    };
+  }
+
+  const gatewayURL = options.gatewayURL ?? getLlmGatewayURL();
+  if (!isAbsoluteHttpUrl(gatewayURL)) {
+    return {
+      outcome: "error",
+      notesWritten: 0,
+      turns: 0,
+      message:
+        "LLM gateway URL is not set. From source, use `bun run dev` (production endpoints) or `bun run dev:local` (local stack).",
+    };
+  }
+
+  // The SDK is dynamically imported so no other CLI path pays its cost.
+  const { query } = await import("@anthropic-ai/claude-agent-sdk");
+
+  // Compiled/bundled installs don't carry the SDK's native binary; fall back
+  // to a system Claude Code so hook-triggered runs work outside a checkout.
+  const claudeExecutable = resolveClaudeExecutable();
+  if (claudeExecutable) {
+    logger.debug("learner", `using system Claude Code executable: ${claudeExecutable}`);
+  }
+
+  const configDir = createRunConfigDir();
+  const runID = options.runID ?? crypto.randomUUID();
+  // ISO-8601 strings with identical precision compare correctly as strings;
+  // the oldest session's timestamp bounds the batch's learning window.
+  const sessionStartedAt = options.sessions.map((s) => s.updated).sort()[0];
+  const allowed = allowedToolNames();
+  const maxNotes = options.maxNotes ?? DEFAULT_MAX_NOTES;
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+
+  let notesWritten = 0;
+  // The session the learner is currently studying: the most recently read one. It
+  // persists across writes, so every note written after reading a session — a
+  // session commonly yields several — is attributed to it, until a different
+  // session is read.
+  let currentSession: string | undefined;
+  // Distinct sessions read since the previous write, for ambiguity detection.
+  // Reading several DIFFERENT sessions before writing means the note's source
+  // is unclear, so that write is denied (the model is steered to write each
+  // session's notes before reading the next). Reset after each write; reading
+  // one session and writing many notes is NOT ambiguous. See the deny path.
+  const readsSinceWrite = new Set<string>();
+  let turns = 0;
+
+  const env = buildLearnerEnv({
+    apiKey: options.apiKey,
+    gatewayURL,
+    configDir: configDir.path,
+    runID,
+    trigger: options.trigger,
+    cliVersion: getVersionString(),
+    deploymentID: options.deploymentID,
+  });
+
+  try {
+    const run = query({
+      prompt: buildLearnerPrompt(options.sessions),
+      options: {
+        systemPrompt: buildLearnerSystemPrompt(LEARNER_CORE_RULES),
+        env: env as Record<string, string>,
+        abortController: abort,
+        maxTurns: options.maxTurns ?? DEFAULT_MAX_TURNS,
+        // No filesystem settings: user/project/local settings files must not
+        // reach the learner (managed policy is handled by the conflict check).
+        settingSources: [],
+        persistSession: false,
+        ...(claudeExecutable ? { pathToClaudeCodeExecutable: claudeExecutable } : {}),
+        sandbox: { enabled: true, failIfUnavailable: false },
+        mcpServers: {
+          [SESSIONS_SERVER_NAME]: createSessionToolsServer(options.sessions),
+          [KNOWLEDGE_SERVER_NAME]: {
+            type: "http",
+            url: mcpURL(options.deploymentID),
+            // Session-context headers the backend stores on each note; repo/branch/commit
+            // headers are omitted because one run mines many repos, and absent beats wrong.
+            headers: {
+              ...mcpHeaders(options.apiKey),
+              "X-Dosu-Session-Id": runID,
+              "X-Dosu-Client": `dosu-cli-learner/${getVersionString()}`,
+              ...(sessionStartedAt ? { "X-Dosu-Session-Started-At": sessionStartedAt } : {}),
+            },
+          },
+        },
+        // Deliberately NO allowedTools: bare entries auto-approve before canUseTool is
+        // consulted, bypassing the note cap. canUseTool is the single hard gate.
+        stderr: (data) => logger.debug("learner", `[sdk] ${data}`),
+        canUseTool: async (toolName, input) => {
+          if (!allowed.has(toolName)) {
+            return {
+              behavior: "deny",
+              message: `Tool ${toolName} is not permitted in study runs.`,
+            };
+          }
+          if (toolName === `mcp__${SESSIONS_SERVER_NAME}__read_session`) {
+            const id = sessionIdFromReadInput(input);
+            if (id) {
+              currentSession = id;
+              readsSinceWrite.add(id);
+            }
+          }
+          if (toolName === `mcp__${KNOWLEDGE_SERVER_NAME}__write_knowledge`) {
+            if (notesWritten >= maxNotes) {
+              return {
+                behavior: "deny",
+                message: `Note cap reached (${maxNotes} per run); stop writing and summarize.`,
+              };
+            }
+            // Reading several DIFFERENT sessions before writing makes the note's
+            // source ambiguous. Deny to steer the model back to
+            // one-session-at-a-time, and reset the read set (and current
+            // session) so its re-read of the right session starts fresh —
+            // otherwise the stale accumulation would deny forever. The note is
+            // not lost, just re-issued after it narrows the session.
+            if (readsSinceWrite.size > 1) {
+              readsSinceWrite.clear();
+              currentSession = undefined;
+              return {
+                behavior: "deny",
+                message:
+                  "Write each session's notes right after reading THAT session, before reading the next. " +
+                  "You have read multiple sessions without writing, so a note cannot be attributed to one. " +
+                  "Re-read only the session this note is about, then write it.",
+              };
+            }
+            notesWritten += 1;
+            // Attribute to the current session — the one being studied — which
+            // persists across the several notes a session usually yields. The
+            // model never authors this field, so strip any transcript_id it
+            // supplied FIRST: the backend trusts the argument from this attested
+            // client, so a stray model value would otherwise be stored. With no
+            // session read yet (a stray early write) the note is left genuinely
+            // unattributed (null) rather than guessed. Reset only the
+            // ambiguity set, not the current session.
+            readsSinceWrite.clear();
+            const { transcript_id: _authoredByModel, ...clean } = input as Record<string, unknown>;
+            return {
+              behavior: "allow",
+              updatedInput: currentSession ? { ...clean, transcript_id: currentSession } : clean,
+            };
+          }
+          return { behavior: "allow", updatedInput: input };
+        },
+      },
+    });
+
+    for await (const message of run) {
+      traceAgentMessage(message);
+      if (message.type === "result") {
+        turns = message.num_turns;
+        const text = message.subtype === "success" ? message.result : message.subtype;
+        const gatewayError = classifyGatewayError(text ?? "");
+        if (gatewayError) {
+          return {
+            outcome: gatewayError.outcome,
+            notesWritten,
+            turns,
+            message: gatewayError.message,
+          };
+        }
+        if (message.subtype !== "success" || message.is_error) {
+          logger.debug("learner", `run ${runID} failed: ${text}`);
+          return {
+            outcome: "error",
+            notesWritten,
+            turns,
+            message: "Study run failed; see debug log for details.",
+          };
+        }
+        logger.debug(
+          "learner",
+          `run ${runID} completed: ${turns} turns, ${notesWritten} suggested pages`,
+        );
+        return { outcome: "completed", notesWritten, turns, message: text };
+      }
+    }
+
+    return {
+      outcome: "error",
+      notesWritten,
+      turns,
+      message: "Study run ended without a result.",
+    };
+  } catch (error) {
+    const text = error instanceof Error ? error.message : String(error);
+    const gatewayError = classifyGatewayError(text);
+    if (gatewayError) {
+      return { outcome: gatewayError.outcome, notesWritten, turns, message: gatewayError.message };
+    }
+    logger.debug("learner", `run ${runID} threw: ${text}`);
+    return {
+      outcome: "error",
+      notesWritten,
+      turns,
+      message: abort.signal.aborted
+        ? "Study run timed out and was aborted."
+        : "Study run failed; see debug log for details.",
+    };
+  } finally {
+    clearTimeout(timer);
+    configDir.cleanup();
+  }
+}

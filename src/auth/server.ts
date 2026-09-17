@@ -1,6 +1,4 @@
-/**
- * Local OAuth callback server.
- */
+/** Local OAuth callback server. */
 
 import { logger } from "../debug/logger";
 import { OAuthCallbackError } from "./errors";
@@ -135,11 +133,8 @@ if (hash) {
 </body>
 </html>`;
 
-/**
- * Success-page copy variants. "auth" is the classic login confirmation;
- * "onboarding" is served when the web onboarding wizard hands control back
- * to the terminal, so the page should say setup finished — not "authentication".
- */
+/** Success-page copy variants: "auth" is the login confirmation; "onboarding" is served when
+ * the web wizard hands control back, so the page says setup finished. */
 export type SuccessVariant = "auth" | "onboarding";
 
 const SUCCESS_COPY: Record<SuccessVariant, { title: string; heading: string; close: string }> = {
@@ -151,7 +146,7 @@ const SUCCESS_COPY: Record<SuccessVariant, { title: string; heading: string; clo
   onboarding: {
     title: "Dosu CLI - Onboarding Complete",
     heading: "Onboarding Complete",
-    close: "You're all set — return to your terminal, Dosu is finishing your setup there.",
+    close: "You're all set. Return to your terminal, where Dosu is finishing your setup.",
   },
 };
 
@@ -291,10 +286,8 @@ export interface CallbackServerOptions {
   successVariant?: SuccessVariant;
 }
 
-/**
- * Starts a local HTTP server to receive the OAuth callback.
- * Returns a promise that resolves with the token when received.
- */
+/** Starts a local HTTP server to receive the OAuth callback; the returned promise resolves with
+ * the token. */
 export async function startCallbackServer(opts: CallbackServerOptions = {}): Promise<{
   server: CallbackServer;
   tokenPromise: Promise<TokenResponse>;
@@ -387,9 +380,8 @@ export async function startCallbackServer(opts: CallbackServerOptions = {}): Pro
   await new Promise<void>((resolve) => {
     httpServer.listen(0, "localhost", () => resolve());
   });
-  // Never let this server keep the process alive on its own: the flows that
-  // wait on it always hold a ref'd timer, and a leaked server (error path
-  // that skipped close) must not turn into a hung CLI at exit.
+  // Never let this server keep the process alive on its own: a leaked server on an error path
+  // must not turn into a hung CLI at exit.
   httpServer.unref();
   const addr = httpServer.address() as import("node:net").AddressInfo;
   logger.info("auth.server", `Callback server listening on port ${addr.port}`);

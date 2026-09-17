@@ -1,14 +1,5 @@
-/**
- * Login-ticket primitives for agent / human-in-the-loop authentication.
- *
- * Unlike the localhost-callback OAuth flow in `flow.ts`, this never holds an
- * HTTP server open. The CLI mints a ticket via the backend, prints the URL
- * the user should open, and exits. After the user signs in on the Dosu web
- * app, a second CLI invocation (`dosu login --check <ticket>`) exchanges the
- * ticket for tokens.
- *
- * Mirrors the shape of Netlify CLI's `login --request` / `--check`.
- */
+/** Login-ticket primitives: unlike flow.ts this never holds an HTTP server open; a second CLI
+ * invocation (`dosu login --check <ticket>`) exchanges the ticket after browser sign-in. */
 
 import { getBackendURL, getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
@@ -43,22 +34,16 @@ interface ExchangeTicketResponse {
   email?: string | null;
 }
 
-/**
- * Build the URL the user should open in their browser to authorize the
- * ticket. The page reads `?ticket=…`, asks the user to sign in if needed,
- * then binds their Supabase session to the ticket.
- */
+/** Build the browser URL that authorizes the ticket; the page binds the user's Supabase session
+ * to it. */
 export function buildTicketAuthURL(ticket: string): string {
   const base = getWebAppURL();
   const params = new URLSearchParams({ ticket });
   return `${base}/cli/auth?${params}`;
 }
 
-/**
- * Ask the Dosu backend for a fresh login ticket. The returned ticket is a
- * single-use, short-lived (10 minutes) handle that becomes useful once a
- * signed-in browser binds a Supabase session to it.
- */
+/** Mint a single-use, short-lived (10 minutes) login ticket that becomes useful once a
+ * signed-in browser binds a Supabase session to it. */
 export async function mintTicket(): Promise<MintedTicket> {
   const url = `${getBackendURL()}/v1/cli/auth/tickets`;
   logger.debug("auth.ticket", `Minting ticket via ${url}`);
@@ -79,14 +64,8 @@ export async function mintTicket(): Promise<MintedTicket> {
   };
 }
 
-/**
- * Attempt to redeem a ticket for tokens. Returns one of three statuses:
- *
- * - `authenticated`: tokens are returned and the ticket is consumed.
- * - `pending`: ticket exists but the user has not signed in yet — caller
- *   should wait and retry.
- * - `expired`: ticket not found (TTL elapsed or already redeemed).
- */
+/** Redeem a ticket for tokens: `authenticated` consumes it, `pending` means wait and retry,
+ * `expired` means TTL elapsed or already redeemed. */
 export async function exchangeTicket(ticket: string): Promise<ExchangedTicket> {
   const path = `/v1/cli/auth/tickets/${encodeURIComponent(ticket)}/exchange`;
   const url = `${getBackendURL()}${path}`;
