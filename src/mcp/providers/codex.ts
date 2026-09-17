@@ -4,7 +4,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { type Config, MODE_OSS } from "../../config/config";
-import { mcpBaseURL, mcpRemoteServer, mcpURL, writeSecureFile } from "../config-helpers";
+import { mcpEndpoint, mcpRemoteServer, writeSecureFile } from "../config-helpers";
 import { expandHome, findNpx, isInstalled, npxPathEnv } from "../detect";
 import type { SetupProvider } from "../providers";
 
@@ -25,12 +25,6 @@ function readTOML(path: string): string {
 
 function writeTOML(path: string, content: string): void {
   writeSecureFile(path, content);
-}
-
-function mcpEndpoint(cfg: Config): string {
-  if (cfg.mode === MODE_OSS) return mcpBaseURL();
-  if (!cfg.active_account?.target?.deployment_id) throw new Error("deployment ID is required");
-  return mcpURL(cfg.active_account?.target?.deployment_id);
 }
 
 function tomlString(value: string): string {

@@ -1,11 +1,10 @@
 import { join } from "node:path";
-import { type Config, MODE_OSS } from "../../config/config";
+import type { Config } from "../../config/config";
 import {
   installJSONServer,
   isJSONKeyConfigured,
-  mcpBaseURL,
+  mcpEndpoint,
   mcpHeaders,
-  mcpURL,
   removeJSONServer,
 } from "../config-helpers";
 import { expandHome, isInstalled } from "../detect";
@@ -16,12 +15,6 @@ function globalPath(): string {
     return join(process.env.XDG_CONFIG_HOME, "mcp-config.json");
   }
   return expandHome("~/.copilot/mcp-config.json");
-}
-
-function mcpEndpoint(cfg: Config): string {
-  if (cfg.mode === MODE_OSS) return mcpBaseURL();
-  if (!cfg.active_account?.target?.deployment_id) throw new Error("deployment ID is required");
-  return mcpURL(cfg.active_account?.target?.deployment_id);
 }
 
 export const CopilotProvider = (): SetupProvider => ({

@@ -35,6 +35,7 @@ import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analy
 const mutate = vi.fn();
 const RUN_ID = "11111111-1111-4111-8111-111111111111";
 const OTHER_RUN_ID = "22222222-2222-4222-8222-222222222222";
+const ORG_ID = "33333333-3333-4333-8333-333333333333";
 let originalPostHogOverride: string | undefined;
 
 function makeConfig(overrides: Partial<FlatTestConfig> = {}): Config {
@@ -42,7 +43,7 @@ function makeConfig(overrides: Partial<FlatTestConfig> = {}): Config {
     access_token: "token",
     refresh_token: "refresh",
     expires_at: 0,
-    org_id: "org-1",
+    org_id: ORG_ID,
     deployment_id: "dep-1",
     space_id: "space-1",
     ...overrides,
@@ -170,12 +171,25 @@ describe("setup analytics", () => {
         onboarding_run_id: RUN_ID,
         install_channel: "npm",
         mode: "oss",
-        org_id: "org-1",
+        org_id: ORG_ID,
+        $groups: { organization: ORG_ID },
         deployment_id: "dep-1",
         space_id: "space-1",
         completed_mcp: true,
       }),
     });
+  });
+
+  it("does not associate onboarding events with a non-UUID organization identifier", async () => {
+    await trackCliOnboardingEvent(
+      makeConfig({ org_id: "organization-name" }),
+      RUN_ID,
+      "cli_onboarding_started",
+    );
+
+    const properties = mutate.mock.calls[0]?.[0].properties;
+    expect(properties).not.toHaveProperty("org_id");
+    expect(properties).not.toHaveProperty("$groups");
   });
 
   it("logs and swallows authenticated tracking failures", async () => {
