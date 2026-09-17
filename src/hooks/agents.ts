@@ -30,7 +30,7 @@ export interface HookAgent {
 function groupedAgent(options: {
   id: string;
   name: string;
-  detectPath: string;
+  detectPath: () => string;
   configPath: () => string;
   event: string;
   enableNote?: string;
@@ -38,7 +38,7 @@ function groupedAgent(options: {
   return {
     id: () => options.id,
     name: () => options.name,
-    isInstalled: () => isInstalled([options.detectPath]),
+    isInstalled: () => isInstalled([options.detectPath()]),
     configPath: options.configPath,
     isEnabled: () => hasGroupedHook(readHookConfig(options.configPath()), options.event),
     enable: () => {
@@ -55,6 +55,11 @@ function groupedAgent(options: {
 
 function codexHome(): string {
   return process.env.CODEX_HOME ?? expandHome("~/.codex");
+}
+
+/** Same override the rules and slash-command installers honor. */
+function claudeConfigDir(): string {
+  return process.env.CLAUDE_CONFIG_DIR || expandHome("~/.claude");
 }
 
 const CURSOR_EVENT = "stop";
@@ -81,15 +86,15 @@ export function allHookAgents(): HookAgent[] {
     groupedAgent({
       id: "claude",
       name: "Claude Code",
-      detectPath: "~/.claude",
-      configPath: () => expandHome("~/.claude/settings.json"),
+      detectPath: claudeConfigDir,
+      configPath: () => join(claudeConfigDir(), "settings.json"),
       event: "SessionEnd",
     }),
     cursorAgent(),
     groupedAgent({
       id: "codex",
       name: "Codex",
-      detectPath: "~/.codex",
+      detectPath: codexHome,
       configPath: () => join(codexHome(), "hooks.json"),
       event: "Stop",
       enableNote: "Codex asks you to trust new hooks; approve the Dosu hook when prompted.",

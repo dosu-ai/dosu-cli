@@ -6,6 +6,7 @@ import type { LearnerRunResult } from "../learner/runner";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { estimateSessionTokens, isWorthStudying } from "../sessions/read";
 import { type AgentSession, scanAgentSessions } from "../sessions/scan";
+import { isIncognitoSession } from "./incognito";
 import { fileLock, type SyncLock } from "./lock";
 import {
   backoffUntil,
@@ -50,6 +51,8 @@ export interface SyncOutcome {
   studiedSessions?: number;
   /** Sessions skipped locally as too small to plausibly hold knowledge. */
   trivialSessions?: number;
+  /** Sessions skipped because the user ran `/dosu-incognito` in them. */
+  incognitoSessions?: number;
   learner?: LearnerRunResult;
   error?: string;
 }
@@ -62,6 +65,8 @@ export interface SyncDeps {
   mine?: (sessions: AgentSession[]) => Promise<LearnerRunResult>;
   /** Local worthiness pre-filter; defaults to isWorthStudying. */
   worthStudying?: (session: AgentSession) => boolean;
+  /** Per-session opt-out check; defaults to isIncognitoSession (transcript marker). */
+  isIncognito?: (session: AgentSession) => boolean;
   /** Session → working directory, for the project filter; defaults to the cached resolver. */
   resolveProjectDir?: (session: AgentSession) => string | null;
   /** Per-session learning-token estimate; defaults to estimateSessionTokens. */
@@ -214,23 +219,30 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     }
 
     // Walk ready oldest-first so the watermark can advance without skipping newer sessions;
-    // trivial sessions are filtered locally and never cost a gateway run.
+    // incognito and trivial sessions are filtered locally and never cost a gateway run. Both
+    // count as examined so the watermark passes them and they are never re-read.
     const worthStudying = deps.worthStudying ?? isWorthStudying;
+    const isIncognito = deps.isIncognito ?? isIncognitoSession;
     const examined: AgentSession[] = [];
     const batch: AgentSession[] = [];
     let trivial = 0;
+    let incognito = 0;
     for (let i = ready.length - 1; i >= 0 && batch.length < MINE_BATCH_LIMIT; i--) {
       const candidate = ready[i];
       examined.push(candidate);
-      if (worthStudying(candidate)) {
+      if (isIncognito(candidate)) {
+        incognito += 1;
+        logger.debug("sync", `skipping incognito session ${candidate.harness}/${candidate.id}`);
+      } else if (worthStudying(candidate)) {
         batch.push(candidate);
       } else {
         trivial += 1;
       }
     }
+    const skippedNote = `${trivial} trivial, ${incognito} incognito skipped`;
 
     if (batch.length === 0) {
-      // Everything examined was trivial: commit the watermark past it
+      // Everything examined was trivial or incognito: commit the watermark past it
       // without spending a single gateway token.
       saveState({
         ...state,
@@ -238,18 +250,22 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
         last_attempt_at: now().toISOString(),
         consecutive_failures: 0,
       });
-      logger.debug("sync", `all ${trivial} examined sessions trivial; watermark advanced, no run`);
+      logger.debug(
+        "sync",
+        `nothing to study in ${examined.length} examined sessions (${skippedNote}); watermark advanced, no run`,
+      );
       return {
         status: "nothing-new",
         ...base,
         studiedSessions: 0,
         trivialSessions: trivial,
+        incognitoSessions: incognito,
       };
     }
 
     logger.debug(
       "sync",
-      `studying ${batch.length} of ${ready.length} ready sessions (${trivial} trivial skipped)`,
+      `studying ${batch.length} of ${ready.length} ready sessions (${skippedNote})`,
     );
     const learner = await deps.mine(batch);
 
@@ -299,6 +315,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
           ...base,
           studiedSessions: batch.length,
           trivialSessions: trivial,
+          incognitoSessions: incognito,
           learner,
         };
       }

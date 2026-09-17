@@ -28,18 +28,28 @@ const DEV_HOOK_ENV: ReadonlyArray<{ name: string; resolve: () => string }> = [
   { name: "SUPABASE_ANON_KEY_OVERRIDE", resolve: getSupabaseAnonKey },
 ];
 
-/** The command `hooks enable` writes. Dev installs pin the working copy by absolute path with
- * env inline so hook-triggered runs exercise the code under development, not the PATH `dosu`. */
-export function hookCommand(): string {
-  if (process.env.DOSU_DEV !== "true") return HOOK_COMMAND;
-  const { command, baseArgs } = selfInvocation();
-  const quoted = [command, ...baseArgs].map((part) => `'${part}'`).join(" ");
+/** `NAME='value'` assignments a dev-mode command needs so a run from any cwd hits the same
+ * endpoints as this working copy. Shared by the hook and status-line installers. */
+export function devEnvAssignments(): string[] {
   const env = ["DOSU_DEV=true"];
   for (const { name, resolve } of DEV_HOOK_ENV) {
     const value = resolve();
     if (value) env.push(`${name}='${value}'`);
   }
-  return `${env.join(" ")} ${quoted} knowledge sync --quiet --detach`;
+  return env;
+}
+
+/** This working copy's entry point, single-quoted for a shell or a shell-style splitter. */
+export function devSelfCommand(): string {
+  const { command, baseArgs } = selfInvocation();
+  return [command, ...baseArgs].map((part) => `'${part}'`).join(" ");
+}
+
+/** The command `hooks enable` writes. Dev installs pin the working copy by absolute path with
+ * env inline so hook-triggered runs exercise the code under development, not the PATH `dosu`. */
+export function hookCommand(): string {
+  if (process.env.DOSU_DEV !== "true") return HOOK_COMMAND;
+  return `${devEnvAssignments().join(" ")} ${devSelfCommand()} knowledge sync --quiet --detach`;
 }
 
 /** Matches our entry even if flags evolve; the second pattern covers dev-mode commands whose
