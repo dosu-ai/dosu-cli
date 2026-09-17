@@ -12,9 +12,13 @@ import {
   filterSessionsByProject,
   gateSessions,
   loadSyncState,
+  SHIPPED_HISTORY_LIMIT,
+  type ShippedSessionRecord,
+  type ShipState,
   STUDIED_HISTORY_LIMIT,
   type SyncState,
   saveSyncState,
+  shipBackoffUntil,
 } from "./watermark";
 
 /** The gate only inspects the last 30 days; older history is bootstrap's job. */
@@ -27,6 +31,9 @@ const GATE_WINDOW = 200;
  * the learner's per-run caps in runner.ts, raise the two together. */
 export const MINE_BATCH_LIMIT = 20;
 
+/** Sessions shipped per run, oldest first; the backlog drains across runs like studying. */
+export const SHIP_BATCH_LIMIT = 20;
+
 type SyncStatus =
   | "backlog"
   | "nothing-new"
@@ -37,6 +44,27 @@ type SyncStatus =
   | "studied"
   | "mine-failed"
   | "error";
+
+export interface ShipSessionResult {
+  session: AgentSession;
+  /** How the ship step disposed of this session. `incognito` and `skipped` still advance the
+   * ship watermark; `failed` stops the batch and leaves the watermark for a retry. */
+  outcome: "shipped" | "incognito" | "skipped" | "failed";
+  /** The accepted ingest task id, on `shipped`. */
+  taskId?: string;
+  /** Shareable memory-session page, when the backend returned one. */
+  sessionUrl?: string;
+  /** One renderable line for skipped/failed results. */
+  message?: string;
+}
+
+/** What the ship phase did this run, for outcome printers and tests. */
+interface ShipPhaseOutcome {
+  shipped: number;
+  incognito: number;
+  skipped: number;
+  failed: number;
+}
 
 export interface SyncOutcome {
   status: SyncStatus;
@@ -51,6 +79,8 @@ export interface SyncOutcome {
   /** Sessions skipped locally as too small to plausibly hold knowledge. */
   trivialSessions?: number;
   learner?: LearnerRunResult;
+  /** Ship-phase counts, when the ship step ran this run. */
+  ship?: ShipPhaseOutcome;
   error?: string;
 }
 
@@ -60,6 +90,10 @@ export interface SyncDeps {
   saveState?: (state: SyncState) => void;
   /** When present, gated sessions are studied; absent = gate-and-report only. */
   mine?: (sessions: AgentSession[]) => Promise<LearnerRunResult>;
+  /** When present AND the user opted in (`ship_transcripts`), gated sessions are shipped to the
+   * Dosu memory ingest API under the ship phase's own watermark. Must process oldest-first and
+   * stop after the first failed result. */
+  ship?: (sessions: AgentSession[]) => Promise<ShipSessionResult[]>;
   /** Local worthiness pre-filter; defaults to isWorthStudying. */
   worthStudying?: (session: AgentSession) => boolean;
   /** Session → working directory, for the project filter; defaults to the cached resolver. */
@@ -111,6 +145,104 @@ function batchWatermark(batch: readonly AgentSession[]): string {
   return newest;
 }
 
+/** The transcript-shipping phase: gates the same scanned sessions under its OWN watermark,
+ * ships oldest-first, and keeps its own failure backoff. Mutates `state.ship` in place (so the
+ * mine phase's later saves carry it) and persists immediately. Never throws. */
+async function runShipPhase(
+  state: SyncState,
+  sessions: readonly AgentSession[],
+  ship: NonNullable<SyncDeps["ship"]>,
+  saveState: (state: SyncState) => void,
+  now: () => Date,
+  quiet: boolean,
+): Promise<ShipPhaseOutcome | undefined> {
+  if (quiet) {
+    const retryAt = shipBackoffUntil(state);
+    if (retryAt && now() < retryAt) {
+      logger.debug("sync", `skipping ship phase: backoff until ${retryAt.toISOString()}`);
+      return undefined;
+    }
+  }
+  const { ready } = gateSessions(sessions, state.ship?.watermark ?? null, now());
+  if (ready.length === 0) return undefined;
+
+  // Oldest-first, like studying, so the ship watermark advances monotonically.
+  const batch = ready.slice(-SHIP_BATCH_LIMIT).reverse();
+  logger.debug(
+    "sync",
+    `shipping ${batch.length} of ${ready.length} sessions ready to ship (watermark ${state.ship?.watermark ?? "none"})`,
+  );
+
+  let results: ShipSessionResult[];
+  try {
+    results = await ship(batch);
+  } catch (err) {
+    // The ship step reports failures per session; a throw is a step bug — treat it as one
+    // failed attempt so backoff still engages instead of crashing the sync run.
+    const message = err instanceof Error ? err.message : String(err);
+    logger.debug("sync", `ship step threw: ${message}`);
+    results = [{ session: batch[0], outcome: "failed", message }];
+  }
+
+  const at = now().toISOString();
+  const counts: ShipPhaseOutcome = { shipped: 0, incognito: 0, skipped: 0, failed: 0 };
+  const processed: AgentSession[] = [];
+  const records: ShippedSessionRecord[] = [];
+  for (const result of results) {
+    const key = `${result.session.harness}/${result.session.id}`;
+    if (result.outcome === "failed") {
+      counts.failed += 1;
+      logger.debug("sync", `shipping failed at ${key}: ${result.message ?? "unknown error"}`);
+      break;
+    }
+    processed.push(result.session);
+    if (result.outcome === "shipped") {
+      counts.shipped += 1;
+      records.push({
+        at,
+        session: key,
+        task_id: result.taskId ?? "unknown",
+        ...(result.sessionUrl ? { session_url: result.sessionUrl } : {}),
+        ...(result.session.project ? { project: result.session.project } : {}),
+      });
+      logger.debug(
+        "sync",
+        `shipped session ${key} → task ${result.taskId ?? "unknown"}${
+          result.sessionUrl ? ` \u00B7 ${result.sessionUrl}` : ""
+        }`,
+      );
+    } else if (result.outcome === "incognito") {
+      counts.incognito += 1;
+      logger.debug("sync", `not shipping incognito session ${key}`);
+    } else {
+      counts.skipped += 1;
+      logger.debug("sync", `not shipping session ${key}: ${result.message ?? "skipped"}`);
+    }
+  }
+
+  const shipState: ShipState = {
+    // Everything processed — shipped, incognito, and skipped alike — is never revisited.
+    watermark: processed.length > 0 ? batchWatermark(processed) : (state.ship?.watermark ?? null),
+    last_attempt_at: at,
+    consecutive_failures: counts.failed > 0 ? (state.ship?.consecutive_failures ?? 0) + 1 : 0,
+    shipped_sessions: [...(state.ship?.shipped_sessions ?? []), ...records].slice(
+      -SHIPPED_HISTORY_LIMIT,
+    ),
+    total_shipped: (state.ship?.total_shipped ?? 0) + counts.shipped,
+  };
+  state.ship = shipState;
+  try {
+    saveState({ ...state });
+  } catch {
+    // Persisting ship progress is best-effort; the accepted tasks are already server-side.
+  }
+  logger.debug(
+    "sync",
+    `ship phase: ${counts.shipped} shipped, ${counts.incognito} incognito, ${counts.skipped} skipped, ${counts.failed} failed; ship watermark → ${shipState.watermark ?? "none"}`,
+  );
+  return counts;
+}
+
 export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncOutcome> {
   const deps = options.deps ?? {};
   const loadState = deps.loadState ?? loadSyncState;
@@ -138,6 +270,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
 
   let ready: AgentSession[];
   let open: AgentSession[];
+  let scanned: AgentSession[] = [];
   try {
     const listSessions =
       deps.listSessions ??
@@ -162,6 +295,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       flush?.();
       logger.debug("sync", `project filter active: ${state.project_filter.join(", ")}`);
     }
+    scanned = sessions;
     ({ ready, open } = gateSessions(sessions, state.watermark, now()));
     logGateResult(ready, open.length, state.watermark);
   } catch (err) {
@@ -185,7 +319,12 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     sessions: ready,
   };
 
-  if (ready.length === 0 || !deps.mine) {
+  // Shipping is opt-in and gated here, on the state the pipeline already loaded, so a stale
+  // step built before the user disabled the flag can never ship anything.
+  const shipStep = state.ship_transcripts === true ? deps.ship : undefined;
+  const willMine = ready.length > 0 && Boolean(deps.mine);
+
+  if (!willMine && !shipStep) {
     saveState({
       ...state,
       last_attempt_at: now().toISOString(),
@@ -194,7 +333,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     return { status: ready.length > 0 ? "backlog" : "nothing-new", ...base };
   }
 
-  // Studying: single-flight. The lock loser leaves state untouched — the
+  // Studying and shipping: single-flight. The lock loser leaves state untouched — the
   // winner owns this run's attempt bookkeeping.
   const lock = deps.lock ?? fileLock();
   if (!lock.acquire()) {
@@ -203,6 +342,22 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
   }
 
   try {
+    // Ship first: fire-and-forget HTTP, cheap next to a study run, and its own watermark and
+    // backoff keep it fully independent of everything the mine path does below.
+    const shipOutcome = shipStep
+      ? await runShipPhase(state, scanned, shipStep, saveState, now, options.quiet === true)
+      : undefined;
+    const withShip = shipOutcome ? { ship: shipOutcome } : {};
+
+    if (!willMine || !deps.mine) {
+      saveState({
+        ...state,
+        last_attempt_at: now().toISOString(),
+        consecutive_failures: 0,
+      });
+      return { status: ready.length > 0 ? "backlog" : "nothing-new", ...base, ...withShip };
+    }
+
     // Stamp this run's progress baseline into every state save so status viewers can compute
     // run-scoped progress; same-pid batches (a bootstrap drain) keep the first batch's baseline.
     if (state.run?.pid !== process.pid) {
@@ -242,6 +397,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       return {
         status: "nothing-new",
         ...base,
+        ...withShip,
         studiedSessions: 0,
         trivialSessions: trivial,
       };
@@ -297,6 +453,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
         return {
           status: "studied",
           ...base,
+          ...withShip,
           studiedSessions: batch.length,
           trivialSessions: trivial,
           learner,
@@ -319,7 +476,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
           },
         });
         logger.debug("sync", `studying skipped by gateway: ${learner.outcome}`);
-        return { status: "skipped-gateway", ...base, studiedSessions: 0, learner };
+        return { status: "skipped-gateway", ...base, ...withShip, studiedSessions: 0, learner };
       }
       default: {
         // settings_conflict / error: real failures — back off before retrying.
@@ -332,6 +489,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
         return {
           status: "mine-failed",
           ...base,
+          ...withShip,
           studiedSessions: 0,
           learner,
           error: learner.message,

@@ -435,7 +435,9 @@ function redactEntropy(s: string, counts: RedactionCounts): string {
   let last = 0;
   for (const [start, end] of spans) {
     const tok = s.slice(start, end);
+    /* v8 ignore start -- spans hold only [A-Za-z0-9+/_-=], so a marker can never appear */
     if (tok.includes(REDACTION_MARKER)) continue;
+    /* v8 ignore stop */
     const hit =
       (tok.length >= entropyMinAssign && assignmentValue(s, start) && entropyCandidate(tok)) ||
       (tok.length >= entropyMinStandalone &&

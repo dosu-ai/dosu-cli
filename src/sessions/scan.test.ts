@@ -1,17 +1,26 @@
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { scanAgentSessions } from "./scan";
+
+/** `homedir()` target for the default-home test; every other test passes `homeDir` explicitly. */
+const mockedOs = vi.hoisted(() => ({ home: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, homedir: () => mockedOs.home };
+});
 
 let home: string;
 
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "dosu-scan-test-"));
+  mockedOs.home = home;
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   rmSync(home, { recursive: true, force: true });
 });
 
@@ -46,12 +55,19 @@ function codexLog(id: string, mtime: Date): void {
   makeLog(join(home, ".codex", "sessions", "2026", "08", "25", `${id}.jsonl`), mtime);
 }
 
+interface OpencodeRow {
+  id: string;
+  parent_id?: string;
+  directory?: string;
+  /** A string is stored as TEXT — sqlite's integer affinity keeps non-numeric text as-is. */
+  time_updated: number | string;
+  /** Raw SQL literal for the id column (e.g. a BLOB), overriding `id`. */
+  idSql?: string;
+}
+
 /** Builds an opencode fixture DB with the runtime's sqlite builtin; returns false when the
  * runtime has none, so DB-backed tests skip instead of failing. */
-function makeOpencodeDb(
-  dbPath: string,
-  rows: { id: string; parent_id?: string; directory?: string; time_updated: number }[],
-): boolean {
+function makeOpencodeDb(dbPath: string, rows: OpencodeRow[]): boolean {
   const requireRuntime = createRequire(import.meta.url);
   let exec: ((sql: string) => void) | null = null;
   let close: (() => void) | null = null;
@@ -75,10 +91,13 @@ function makeOpencodeDb(
     "CREATE TABLE session (id text PRIMARY KEY, parent_id text, directory text NOT NULL, time_updated integer NOT NULL)",
   );
   for (const row of rows) {
+    const id = row.idSql ?? `'${row.id}'`;
+    const time =
+      typeof row.time_updated === "number" ? String(row.time_updated) : `'${row.time_updated}'`;
     exec(
-      `INSERT INTO session VALUES ('${row.id}', ${
+      `INSERT INTO session VALUES (${id}, ${
         row.parent_id ? `'${row.parent_id}'` : "NULL"
-      }, '${row.directory ?? ""}', ${row.time_updated})`,
+      }, '${row.directory ?? ""}', ${time})`,
     );
   }
   close?.();
@@ -137,6 +156,74 @@ describe("scanAgentSessions", () => {
     const sessions = scan();
 
     expect(sessions.map((s) => [s.harness, s.id])).toEqual([["cursor", "flat"]]);
+  });
+
+  it("skips stray files at the project level and non-jsonl files inside transcript dirs", () => {
+    claudeLog("-Users-me-proj", "aaa", T1);
+    cursorLog("Users-me-proj", "bbb", T2);
+    // Files where only project directories are expected.
+    writeFileSync(join(home, ".claude", "projects", "README.md"), "x");
+    writeFileSync(join(home, ".cursor", "projects", ".DS_Store"), "x");
+    // A sidecar file inside a Cursor transcript directory.
+    writeFileSync(
+      join(home, ".cursor", "projects", "Users-me-proj", "agent-transcripts", "bbb", "meta.json"),
+      "{}",
+    );
+
+    const sessions = scan();
+
+    expect(sessions.map((s) => [s.harness, s.id])).toEqual([
+      ["cursor", "bbb"],
+      ["claude", "aaa"],
+    ]);
+  });
+
+  it("drops a .jsonl entry whose stat fails (dangling symlink)", () => {
+    claudeLog("-p", "real", T1);
+    symlinkSync(join(home, "nowhere.jsonl"), join(home, ".claude", "projects", "-p", "gone.jsonl"));
+
+    const sessions = scan();
+
+    expect(sessions.map((s) => s.id)).toEqual(["real"]);
+  });
+
+  it("keeps sessions with identical mtimes without reordering failures", () => {
+    claudeLog("-p", "one", T1);
+    claudeLog("-p", "two", T1);
+
+    const sessions = scan();
+
+    expect(sessions.map((s) => s.id).sort()).toEqual(["one", "two"]);
+    expect(sessions.every((s) => s.updated === T1.toISOString())).toBe(true);
+  });
+
+  it("ignores files and extra directories at each Codex date level", () => {
+    codexLog("rollout-ok", T1);
+    const sessionsDir = join(home, ".codex", "sessions");
+    writeFileSync(join(sessionsDir, "index.json"), "{}");
+    writeFileSync(join(sessionsDir, "2026", "notes.txt"), "x");
+    writeFileSync(join(sessionsDir, "2026", "08", "notes.txt"), "x");
+    mkdirSync(join(sessionsDir, "2026", "08", "25", "attachments"), { recursive: true });
+    writeFileSync(join(sessionsDir, "2026", "08", "25", "rollout-ok.meta"), "x");
+
+    const sessions = scan();
+
+    expect(sessions.map((s) => [s.harness, s.id])).toEqual([["codex", "rollout-ok"]]);
+  });
+
+  it("defaults to the real home directory and process env", () => {
+    claudeLog("-p", "from-home", T1);
+    const codexHome = join(home, "codex-from-env");
+    makeLog(join(codexHome, "sessions", "2026", "08", "25", "rollout-env.jsonl"), T2);
+    vi.stubEnv("CODEX_HOME", codexHome);
+    vi.stubEnv("XDG_DATA_HOME", join(home, "xdg-from-env"));
+
+    const sessions = scanAgentSessions();
+
+    expect(sessions.map((s) => [s.harness, s.id])).toEqual([
+      ["codex", "rollout-env"],
+      ["claude", "from-home"],
+    ]);
   });
 
   it("honors CODEX_HOME", () => {
@@ -201,6 +288,20 @@ describe("scanAgentSessions", () => {
       const sessions = scan({ env: { XDG_DATA_HOME: xdg } });
 
       expect(sessions.map((s) => s.id)).toEqual(["ses_xdg"]);
+    });
+
+    it("skips rows whose id or time_updated has an unexpected type", () => {
+      mkdirSync(join(home, ".local", "share", "opencode"), { recursive: true });
+      const created = makeOpencodeDb(opencodeDbPath(), [
+        { id: "ses_ok", directory: "/p", time_updated: T1.getTime() },
+        { id: "ses_bad_time", directory: "/p", time_updated: "yesterday" },
+        { id: "ignored", idSql: "X'DEADBEEF'", directory: "/p", time_updated: T2.getTime() },
+      ]);
+      if (!created) return;
+
+      const sessions = scan();
+
+      expect(sessions.map((s) => s.id)).toEqual(["ses_ok"]);
     });
 
     it("silently skips an unreadable or corrupt DB", () => {

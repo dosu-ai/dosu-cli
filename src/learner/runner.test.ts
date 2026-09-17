@@ -369,6 +369,78 @@ describe("runLearner", () => {
     const result = await runLearner(baseOptions);
 
     expect(result.outcome).toBe("error");
+    expect(result.message).toBe("Study run failed; see debug log for details.");
+    expect(debugMock).toHaveBeenCalledWith("learner", expect.stringContaining("spawn ENOENT"));
+  });
+
+  it("stringifies a non-Error throw from the SDK", async () => {
+    queryMock.mockImplementation(() => {
+      throw "socket hang up";
+    });
+
+    const result = await runLearner(baseOptions);
+
+    expect(result.outcome).toBe("error");
+    expect(debugMock).toHaveBeenCalledWith("learner", expect.stringContaining("socket hang up"));
+  });
+
+  it("treats a success result with no result text as completed with no message", async () => {
+    queryReturning(successResult({ result: undefined }));
+
+    const result = await runLearner(baseOptions);
+
+    expect(result).toMatchObject({ outcome: "completed", turns: 3 });
+    expect(result.message).toBeUndefined();
+  });
+
+  it("falls back to the configured LLM gateway URL when none is passed", async () => {
+    const previous = process.env.DOSU_LLM_GATEWAY_URL_OVERRIDE;
+    process.env.DOSU_LLM_GATEWAY_URL_OVERRIDE = "https://gateway.example.test/v1/llm-gateway";
+    try {
+      queryReturning(successResult());
+
+      const { gatewayURL: _omitted, ...withoutGateway } = baseOptions;
+      const result = await runLearner(withoutGateway);
+
+      expect(result.outcome).toBe("completed");
+      const params = queryMock.mock.calls[0][0];
+      expect(params.options.env.ANTHROPIC_BASE_URL).toBe(
+        "https://gateway.example.test/v1/llm-gateway",
+      );
+    } finally {
+      if (previous === undefined) delete process.env.DOSU_LLM_GATEWAY_URL_OVERRIDE;
+      else process.env.DOSU_LLM_GATEWAY_URL_OVERRIDE = previous;
+    }
+  });
+
+  it("omits the session-started header when the run has no sessions", async () => {
+    queryReturning(successResult());
+
+    await runLearner({ ...baseOptions, sessions: [] });
+
+    const headers = queryMock.mock.calls[0][0].options.mcpServers.dosu.headers;
+    expect(headers).not.toHaveProperty("X-Dosu-Session-Started-At");
+    expect(headers).toHaveProperty("X-Dosu-Session-Id");
+  });
+
+  it("aborts the run on the wall-clock timeout and reports it as timed out", async () => {
+    type AbortParams = { options: { abortController: AbortController } };
+    queryMock.mockImplementation((params: AbortParams) => {
+      const { signal } = params.options.abortController;
+      return (async function* () {
+        // Hang until the runner's timer fires, then fail the way the SDK would.
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) resolve();
+          else signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        throw new Error("Request was aborted.");
+      })();
+    });
+
+    const result = await runLearner({ ...baseOptions, timeoutMs: 5 });
+
+    expect(result.outcome).toBe("error");
+    expect(result.message).toBe("Study run timed out and was aborted.");
   });
 });
 
@@ -425,6 +497,35 @@ describe("traceAgentMessage", () => {
   it("ignores messages without array content", () => {
     traceAgentMessage({ type: "result", subtype: "success" });
     traceAgentMessage({ type: "assistant", message: { content: "plain string" } });
+
+    expect(debugMock).not.toHaveBeenCalled();
+  });
+
+  it("logs a tool call with no arguments and a result with no content", () => {
+    traceAgentMessage({
+      type: "assistant",
+      message: { content: [{ type: "tool_use", name: "mcp__sessions__list_sessions" }] },
+    });
+    traceAgentMessage({
+      type: "user",
+      message: { content: [{ type: "tool_result" }] },
+    });
+
+    const lines = debugMock.mock.calls.map((c) => c.join(" "));
+    expect(lines[0]).toBe("learner [agent] → mcp__sessions__list_sessions ");
+    // Missing content is treated as an empty string: 2 chars once JSON-quoted.
+    expect(lines[1]).toBe("learner [agent] ← result 2 chars: ");
+  });
+
+  it("skips blocks whose type does not match the message role", () => {
+    traceAgentMessage({
+      type: "user",
+      message: { content: [{ type: "text", text: "a user typed this" }] },
+    });
+    traceAgentMessage({
+      type: "assistant",
+      message: { content: [{ type: "tool_result", content: "misplaced" }] },
+    });
 
     expect(debugMock).not.toHaveBeenCalled();
   });

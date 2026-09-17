@@ -28,6 +28,36 @@ export interface StudiedSessionRecord {
 /** How many studied-session history records the state file keeps. */
 export const STUDIED_HISTORY_LIMIT = 500;
 
+/** One shipped session, as recorded by a completed ship phase. */
+export interface ShippedSessionRecord {
+  /** When the phase shipped this session (ISO). */
+  at: string;
+  /** The session's `harness/id`. */
+  session: string;
+  /** The ingest task the backend accepted (202) for this session. */
+  task_id: string;
+  /** Shareable memory-session page, when the backend returned one. */
+  session_url?: string;
+  /** The session's project (workspace basename), when the scanner knew it. */
+  project?: string;
+}
+
+/** How many shipped-session history records the state file keeps. */
+export const SHIPPED_HISTORY_LIMIT = 500;
+
+/** Transcript-shipping progress: its own watermark and backoff, independent of the studying
+ * watermark so shipping and studying can trail each other freely. */
+export interface ShipState {
+  /** ISO timestamp of the newest session already shipped past (incl. deliberate skips). */
+  watermark: string | null;
+  last_attempt_at?: string;
+  consecutive_failures: number;
+  /** Rolling shipped-session history, oldest first, capped at SHIPPED_HISTORY_LIMIT. */
+  shipped_sessions?: ShippedSessionRecord[];
+  /** All-time shipped-session count — survives the history cap above. */
+  total_shipped?: number;
+}
+
 /** A clean gateway refusal from the last studying attempt, persisted so status surfaces can say
  * why studying is paused; never triggers backoff and is cleared by the next successful run. */
 interface SyncRefusal {
@@ -70,6 +100,11 @@ export interface SyncState {
   /** User pressed stop: quiet (hook-triggered) syncs skip until resumed. Cleared by the
    * Activity screen's resume or any manual `dosu knowledge sync`. */
   paused?: boolean;
+  /** User opt-in: finished sessions are shipped to the Dosu memory ingest API. Default off;
+   * toggled by `dosu knowledge transcripts enable|disable`. */
+  ship_transcripts?: boolean;
+  /** Transcript-shipping progress; absent until the first ship phase runs. */
+  ship?: ShipState;
 }
 
 export function syncStatePath(configDir: string = getConfigDir()): string {
@@ -110,6 +145,34 @@ export function loadSyncState(configDir: string = getConfigDir()): SyncState {
       typeof rawRefusal.message === "string"
         ? { at: rawRefusal.at, outcome: rawRefusal.outcome, message: rawRefusal.message }
         : undefined;
+    const rawShip = raw.ship as (Partial<ShipState> & { shipped_sessions?: unknown }) | undefined;
+    const ship: ShipState | undefined =
+      rawShip && (typeof rawShip.watermark === "string" || rawShip.watermark === null)
+        ? {
+            watermark: rawShip.watermark,
+            ...(typeof rawShip.last_attempt_at === "string"
+              ? { last_attempt_at: rawShip.last_attempt_at }
+              : {}),
+            consecutive_failures:
+              typeof rawShip.consecutive_failures === "number" && rawShip.consecutive_failures >= 0
+                ? rawShip.consecutive_failures
+                : 0,
+            shipped_sessions: Array.isArray(rawShip.shipped_sessions)
+              ? (rawShip.shipped_sessions as unknown[]).filter(
+                  (record): record is ShippedSessionRecord =>
+                    typeof record === "object" &&
+                    record !== null &&
+                    typeof (record as ShippedSessionRecord).at === "string" &&
+                    typeof (record as ShippedSessionRecord).session === "string" &&
+                    typeof (record as ShippedSessionRecord).task_id === "string",
+                )
+              : [],
+            total_shipped:
+              typeof rawShip.total_shipped === "number" && rawShip.total_shipped >= 0
+                ? rawShip.total_shipped
+                : 0,
+          }
+        : undefined;
     const rawRun = raw.run as Partial<SyncRun> | undefined;
     const run =
       rawRun &&
@@ -141,6 +204,8 @@ export function loadSyncState(configDir: string = getConfigDir()): SyncState {
       ...(lastRefusal ? { last_refusal: lastRefusal } : {}),
       ...(run ? { run } : {}),
       ...(raw.paused === true ? { paused: true } : {}),
+      ...(raw.ship_transcripts === true ? { ship_transcripts: true } : {}),
+      ...(ship ? { ship } : {}),
       ...(Array.isArray(raw.project_filter)
         ? {
             project_filter: (raw.project_filter as unknown[]).filter(
@@ -163,8 +228,10 @@ export function setSyncPaused(paused: boolean, configDir: string = getConfigDir(
 }
 
 /** Forget everything studied so the next run starts from scratch: watermark, history, lifetime
- * counters, failure backoff, and the last refusal. User settings survive — the project filter
- * and the pause switch are choices, not progress. Notes already saved in Dosu are untouched. */
+ * counters, failure backoff, and the last refusal. Shipping progress resets too (the backend
+ * dedupes re-shipped traces on content hash). User settings survive — the project filter, the
+ * pause switch, and the ship_transcripts opt-in are choices, not progress. Notes already saved
+ * in Dosu are untouched. */
 export function resetSyncState(configDir: string = getConfigDir()): void {
   const previous = loadSyncState(configDir);
   const fresh: SyncState = {
@@ -173,8 +240,17 @@ export function resetSyncState(configDir: string = getConfigDir()): void {
     consecutive_failures: 0,
     ...(previous.project_filter ? { project_filter: previous.project_filter } : {}),
     ...(previous.paused ? { paused: true } : {}),
+    ...(previous.ship_transcripts ? { ship_transcripts: true } : {}),
   };
   saveSyncState(fresh, configDir);
+}
+
+/** Persist the transcript-shipping opt-in: load-modify-save so counters are not clobbered. */
+export function setShipTranscripts(enabled: boolean, configDir: string = getConfigDir()): void {
+  const state = loadSyncState(configDir);
+  if (enabled) state.ship_transcripts = true;
+  else delete state.ship_transcripts;
+  saveSyncState(state, configDir);
 }
 
 export function saveSyncState(state: SyncState, configDir: string = getConfigDir()): void {
@@ -187,14 +263,26 @@ export function saveSyncState(state: SyncState, configDir: string = getConfigDir
   renameSync(tmp, path);
 }
 
+/** 15min * 2^(failures-1), capped at 24h; null when no backoff is in force. */
+function backoffFrom(failures: number, lastAttemptAt: string | undefined): Date | null {
+  if (failures === 0 || !lastAttemptAt) return null;
+  const last = Date.parse(lastAttemptAt);
+  if (Number.isNaN(last)) return null;
+  const delay = Math.min(BACKOFF_BASE_MS * 2 ** (failures - 1), BACKOFF_MAX_MS);
+  return new Date(last + delay);
+}
+
 /** Earliest time a background run should retry after failure: 15min * 2^(failures-1), capped
  * at 24h; null when no backoff is in force. Manual runs ignore this. */
 export function backoffUntil(state: SyncState): Date | null {
-  if (state.consecutive_failures === 0 || !state.last_attempt_at) return null;
-  const last = Date.parse(state.last_attempt_at);
-  if (Number.isNaN(last)) return null;
-  const delay = Math.min(BACKOFF_BASE_MS * 2 ** (state.consecutive_failures - 1), BACKOFF_MAX_MS);
-  return new Date(last + delay);
+  return backoffFrom(state.consecutive_failures, state.last_attempt_at);
+}
+
+/** The ship phase's own backoff, driven by its own failure count so a broken ingest endpoint
+ * never delays studying (and vice versa). Manual runs ignore this. */
+export function shipBackoffUntil(state: SyncState): Date | null {
+  if (!state.ship) return null;
+  return backoffFrom(state.ship.consecutive_failures, state.ship.last_attempt_at);
 }
 
 /** Bucket for sessions whose working directory can't be determined. */

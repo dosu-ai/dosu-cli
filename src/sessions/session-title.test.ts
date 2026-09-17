@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -103,6 +103,93 @@ describe("createSessionTitleResolver", () => {
     });
     expect(fresh.cached("claude/s1")).toBe("name me");
   });
+
+  it("skips non-summary, malformed, and mistyped head lines before falling back", () => {
+    const head = [
+      JSON.stringify({ type: "user", message: { role: "user", content: "hi" } }),
+      '{"type":"summary","summary":"truncated mid-wr',
+      JSON.stringify({ type: "other", summary: "not a summary record" }),
+      JSON.stringify({ type: "summary", summary: 7 }),
+    ].join("\n");
+    const resolver = createSessionTitleResolver(tempDir, {
+      readHead: () => head,
+      readTurns: () => [{ role: "user", text: "fallback prompt" }] as SessionTurn[],
+      mtime: () => "m1",
+    });
+    expect(resolver.resolve(session())).toBe("fallback prompt");
+  });
+
+  it("falls back to the first user message when the claude summary is blank", () => {
+    const resolver = createSessionTitleResolver(tempDir, {
+      readHead: () => `${JSON.stringify({ type: "summary", summary: " \n\t " })}\n`,
+      readTurns: () => [{ role: "user", text: "typed prompt" }] as SessionTurn[],
+      mtime: () => "m1",
+    });
+    expect(resolver.resolve(session())).toBe("typed prompt");
+  });
+
+  it("returns null when the first user message is only metadata tags", () => {
+    const resolver = createSessionTitleResolver(tempDir, {
+      readHead: () => "",
+      readTurns: () =>
+        [{ role: "user", text: "<timestamp>Sep 15</timestamp>\n  \n" }] as SessionTurn[],
+      mtime: () => "m1",
+    });
+    expect(resolver.resolve(session("cursor"))).toBeNull();
+  });
+
+  it("retries a failed resolution once the session file's mtime moves", () => {
+    let turns: SessionTurn[] = [];
+    let stamp = "m1";
+    const resolver = createSessionTitleResolver(tempDir, {
+      readHead: () => "",
+      readTurns: () => turns,
+      mtime: () => stamp,
+    });
+    expect(resolver.resolve(session())).toBeNull();
+    turns = [{ role: "user", text: "arrived late" }];
+    // Same mtime: the cached failure stands.
+    expect(resolver.resolve(session())).toBeNull();
+    stamp = "m2";
+    expect(resolver.resolve(session())).toBe("arrived late");
+  });
+
+  it("flush is a no-op when nothing new was resolved", () => {
+    const resolver = createSessionTitleResolver(tempDir);
+    resolver.flush();
+    expect(existsSync(join(tempDir, "session-titles.json"))).toBe(false);
+  });
+
+  it("creates the config directory on flush when it does not exist yet", () => {
+    const configDir = join(tempDir, "nested", "cfg");
+    const resolver = createSessionTitleResolver(configDir, {
+      readHead: () => "",
+      readTurns: () => [{ role: "user", text: "persist me" }] as SessionTurn[],
+      mtime: () => "m1",
+    });
+    resolver.resolve(session());
+    resolver.flush();
+    const written = JSON.parse(readFileSync(join(configDir, "session-titles.json"), "utf-8"));
+    expect(written).toEqual({
+      schema_version: 3,
+      entries: { "claude/s1": { title: "persist me", mtime: "m1" } },
+    });
+  });
+
+  it.each([
+    ["an older schema version", { schema_version: 1, entries: { "claude/s1": { title: "old" } } }],
+    ["entries that are not an object", { schema_version: 3, entries: "nope" }],
+  ])("discards a cache file with %s", (_label, contents) => {
+    writeFileSync(join(tempDir, "session-titles.json"), JSON.stringify(contents));
+    const resolver = createSessionTitleResolver(tempDir);
+    expect(resolver.cached("claude/s1")).toBeNull();
+  });
+
+  it("discards a cache file that is not valid JSON", () => {
+    writeFileSync(join(tempDir, "session-titles.json"), "{not json");
+    const resolver = createSessionTitleResolver(tempDir);
+    expect(resolver.cached("claude/s1")).toBeNull();
+  });
 });
 
 describe("default file boundaries", () => {
@@ -144,6 +231,24 @@ describe("reconstructSession", () => {
 
   it("returns null for harnesses whose layout does not encode the slug", () => {
     expect(reconstructSession("codex", "abc", "slug", "/home/u", () => true)).toBeNull();
+    expect(reconstructSession("opencode", "abc", "slug")).toBeNull();
     expect(reconstructSession("claude", "abc", undefined, "/home/u", () => true)).toBeNull();
+  });
+
+  it("returns null when no candidate path exists", () => {
+    expect(reconstructSession("claude", "abc", "slug", "/home/u", () => false)).toBeNull();
+    expect(reconstructSession("cursor", "abc", "slug", "/home/u", () => false)).toBeNull();
+  });
+
+  it("falls back to the flattened cursor layout when the nested transcript is absent", () => {
+    const flat = "/home/u/.cursor/projects/slug/agent-transcripts/abc.jsonl";
+    const found = reconstructSession("cursor", "abc", "slug", "/home/u", (p) => p === flat);
+    expect(found).toEqual({
+      id: "abc",
+      harness: "cursor",
+      path: flat,
+      project: "slug",
+      updated: "",
+    });
   });
 });
