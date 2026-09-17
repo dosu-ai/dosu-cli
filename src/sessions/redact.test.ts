@@ -193,6 +193,71 @@ describe("redactSecrets", () => {
       expect(counts).toEqual({ jwt: 1 });
       expect(text).toBe("token: [redacted:jwt]");
     });
+
+    it("skips the pass entirely for text shorter than any candidate token", () => {
+      const input = "ok, thanks!";
+
+      expect(redactSecrets(input)).toEqual({ text: input, count: 0, counts: {} });
+    });
+
+    it("leaves hex digests and single-class values alone even as assignment values", () => {
+      const hex = "SHA=d3b07384d113edec49eaa6238ad5ff00d3b07384";
+      const lowerOnly = "CRED=abcdefghijklmnopqrstuvwxyz";
+
+      expect(redactSecrets(hex).text).toBe(hex);
+      expect(redactSecrets(lowerOnly).text).toBe(lowerOnly);
+    });
+
+    it("leaves a lowercase slash-separated value alone (a path segment, not base64)", () => {
+      const input = "dir=/usr/local/lib/python3-site-packages9";
+
+      expect(redactSecrets(input).text).toBe(input);
+    });
+
+    it("treats a rooted value with a single separator as a blob rather than a path", () => {
+      const { text, counts } = redactSecrets("CRED=/aB3xY7pQ9zK2mN8vR4tWcD5f");
+
+      expect(counts).toEqual({ entropy: 1 });
+      expect(text).toBe("CRED=[redacted:entropy]");
+    });
+
+    it("treats a slash-laden token carrying base64 padding as a blob, not a path", () => {
+      const { text, counts } = redactSecrets("/tmp/aB3xY7pQ9zK2mN8vR4tWcD5f/blob==");
+
+      expect(counts).toEqual({ entropy: 1 });
+      expect(text).toBe("[redacted:entropy]");
+    });
+
+    it("tolerates whitespace and quotes between the key and the assignment", () => {
+      const { text, counts } = redactSecrets('"DEPLOY_CRED" = aB3xY7pQ9zK2mN8vR4tWcD5f');
+
+      expect(counts).toEqual({ entropy: 1 });
+      expect(text).toBe('"DEPLOY_CRED" = [redacted:entropy]');
+    });
+
+    it("accepts a long pure-digit key (Telegram bot-token shape) but not a short one", () => {
+      const bot = redactSecrets("123456789:AAH4Qk7pZxTyW3mN9vRbC2dLg8sJ1e");
+      expect(bot.counts).toEqual({ entropy: 1 });
+      expect(bot.text).toBe("123456789:[redacted:entropy]");
+
+      const noise = "42:AAH4Qk7pZxTyW3mN9vRbC2dLg8sJ1e";
+      expect(redactSecrets(noise).text).toBe(noise);
+    });
+
+    it("rejects two-letter keys as log noise", () => {
+      const input = "ab=aB3xY7pQ9zK2mN8vR4tWcD5f";
+
+      expect(redactSecrets(input).text).toBe(input);
+    });
+
+    it("requires a standalone token to be alone on its line, ignoring trailing whitespace", () => {
+      const trailingText = "paste:\n  aB3xY7pQ9zK2mN8vR4tWcD5fGh6J done";
+      expect(redactSecrets(trailingText).text).toBe(trailingText);
+
+      const trailingSpace = redactSecrets("paste:\n  aB3xY7pQ9zK2mN8vR4tWcD5fGh6J  \t\r\ndone");
+      expect(trailingSpace.counts).toEqual({ entropy: 1 });
+      expect(trailingSpace.text).toBe("paste:\n  [redacted:entropy]  \t\r\ndone");
+    });
   });
 
   it("counts every match across kinds and reports a total", () => {

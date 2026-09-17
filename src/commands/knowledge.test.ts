@@ -31,7 +31,9 @@ vi.mock("../sync/sync", async (importOriginal) => ({
 }));
 
 const mockSpawnDetached = vi.fn();
-vi.mock("../sync/detach", () => ({
+// Keep the real selfInvocation: the dev-mode hook command is built from it.
+vi.mock("../sync/detach", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sync/detach")>()),
   spawnDetachedSelf: (...args: unknown[]) => mockSpawnDetached(...args),
 }));
 
@@ -63,14 +65,21 @@ vi.mock("../report/backfill-run", () => ({
   runBackfill: (...args: unknown[]) => mockRunBackfill(...args),
 }));
 
+const mockRunLearner = vi.fn();
+vi.mock("../learner/runner", () => ({
+  runLearner: (...args: unknown[]) => mockRunLearner(...args),
+}));
+
 interface FakeAgent {
   id: string;
   name: string;
   installed: boolean;
   enabled: boolean;
   configPath: string;
-  enableError?: Error;
-  enabledError?: Error;
+  // `unknown` so tests can throw non-Error values through the reporting paths.
+  enableError?: unknown;
+  enabledError?: unknown;
+  disableError?: unknown;
   note?: string;
 }
 
@@ -93,6 +102,7 @@ function toHookAgent(agent: FakeAgent) {
       enableCalls.push(agent.id);
     },
     disable: () => {
+      if (agent.disableError) throw agent.disableError;
       disableCalls.push(agent.id);
     },
     ...(agent.note ? { enableNote: () => agent.note } : {}),
@@ -107,6 +117,9 @@ vi.mock("../hooks/agents", () => ({
   },
 }));
 
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { HookConfigError } from "../hooks/formats";
 import { MINE_BATCH_LIMIT } from "../sync/sync";
@@ -150,6 +163,7 @@ beforeEach(() => {
   mockEmitReport.mockReset();
   mockEmitReport.mockResolvedValue("/tmp/dosu-knowledge-report.html");
   mockRunBackfill.mockReset();
+  mockRunLearner.mockReset();
   fakeAgents = [];
   enableCalls.length = 0;
   disableCalls.length = 0;
@@ -239,6 +253,34 @@ describe("knowledge search", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     await expect(run("search", "--limit", "0", "query")).rejects.toThrow();
     expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it("falls back to placeholders for untitled or untyped results", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce([{ id: "ds1" }, { id: null }]).mockResolvedValueOnce({
+      documents: [
+        { title: null, entity_type: null },
+        { title: "Typed", entity_type: "issue" },
+      ],
+    });
+
+    await run("search", "query");
+
+    // Null data source IDs are dropped before the search call.
+    expect(mockQuery.mock.calls[1][1].dataSourceIds).toEqual(["ds1"]);
+    const output = allOutput();
+    expect(output).toContain("(untitled)");
+    expect(output).toContain("issue");
+    expect(output).not.toContain("more results not shown");
+  });
+
+  it("treats a missing documents field as no results", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce([{ id: "ds1" }]).mockResolvedValueOnce({});
+
+    await run("search", "query");
+
+    expect(allOutput()).toContain("No results found");
   });
 });
 
@@ -378,6 +420,42 @@ describe("knowledge sessions", () => {
     expect(parsed).toEqual({ queued: [queuedSession], open: [openSession] });
     expect(parsed.studied).toBeUndefined();
   });
+
+  it("--studied --json emits only the studied history", async () => {
+    mockLoadSyncState.mockReturnValue(syncState);
+
+    await run("sessions", "--studied", "--json");
+
+    expect(JSON.parse(allOutput())).toEqual({ studied: syncState.mined_sessions });
+    expect(mockListBacklog).not.toHaveBeenCalled();
+  });
+
+  it("treats a sync state without mined_sessions as empty history", async () => {
+    mockListBacklog.mockReturnValue({ queued: [], open: [] });
+    mockLoadSyncState.mockReturnValue({ schema_version: 1, watermark: null });
+
+    await run("sessions");
+
+    expect(allOutput()).toContain("Studied (0)");
+  });
+
+  it("keeps legacy studied records that lack a harness prefix or project", async () => {
+    mockLoadSyncState.mockReturnValue({
+      ...syncState,
+      mined_sessions: [{ at: "2026-09-01T00:00:00.000Z", session: "bare-session-id" }],
+    });
+
+    await run("sessions", "--studied");
+
+    const out = allOutput();
+    expect(out).toContain("Studied (1)");
+    expect(out).toContain("bare-session-id");
+    // No "/" means no harness column and no project: both render as "-".
+    const row = logSpy.mock.calls
+      .map((c: unknown[]) => c.join(" "))
+      .find((line: string) => line.includes("bare-session-id"));
+    expect(row).toMatch(/^-\s+2026-09-01T00:00:00\.000Z\s+-\s+bare-session-id/);
+  });
 });
 
 describe("knowledge sync", () => {
@@ -416,6 +494,35 @@ describe("knowledge sync", () => {
     await run("sync");
 
     expect(syncDeps().mine).toBeUndefined();
+  });
+
+  it("the learner forwards the install's credentials and a manual trigger", async () => {
+    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
+    const result = { outcome: "completed", notesWritten: 2, turns: 3 };
+    mockRunLearner.mockResolvedValue(result);
+
+    await run("sync");
+
+    const mine = syncDeps().mine as (sessions: unknown[]) => Promise<unknown>;
+    const sessions = [{ id: "s1", harness: "cursor", path: "/tmp/s1.jsonl", updated: "now" }];
+    await expect(mine(sessions)).resolves.toEqual(result);
+    expect(mockRunLearner).toHaveBeenCalledWith({
+      sessions,
+      apiKey: "sk_user_test",
+      deploymentID: "dep1",
+      trigger: "manual",
+    });
+  });
+
+  it("--quiet builds the learner with a hook trigger", async () => {
+    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
+    mockRunLearner.mockResolvedValue({ outcome: "completed", notesWritten: 0, turns: 0 });
+
+    await run("sync", "--quiet");
+
+    const mine = syncDeps().mine as (sessions: unknown[]) => Promise<unknown>;
+    await mine([]);
+    expect(mockRunLearner).toHaveBeenCalledWith(expect.objectContaining({ trigger: "hook" }));
   });
 
   it("reports a studied run with the remaining backlog", async () => {
@@ -488,6 +595,106 @@ describe("knowledge sync", () => {
     expect(allOutput()).toContain("No new completed sessions");
   });
 
+  it("nothing-new mentions a single session still in progress", async () => {
+    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 1 });
+
+    await run("sync");
+
+    expect(allOutput()).toContain("1 session still in progress.");
+  });
+
+  it("nothing-new pluralizes several sessions still in progress", async () => {
+    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 3 });
+
+    await run("sync");
+
+    expect(allOutput()).toContain("3 sessions still in progress.");
+  });
+
+  it("backlog uses the singular for one ready session and omits the in-flight note", async () => {
+    mockRunSync.mockResolvedValue({ status: "backlog", readySessions: 1, inFlightSessions: 0 });
+
+    await run("sync");
+
+    const output = allOutput();
+    expect(output).toContain("1 new session ready to study.");
+    expect(output).not.toContain("still in progress");
+  });
+
+  it("studied uses singulars and tolerates a missing learner summary", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "studied",
+      readySessions: 1,
+      inFlightSessions: 0,
+      sessions: [],
+      studiedSessions: 1,
+    });
+
+    await run("sync");
+
+    const output = allOutput();
+    expect(output).toContain("Studied 1 session, 0 suggested pages created.");
+    expect(output).not.toContain("more in the backlog");
+  });
+
+  it("studied treats a missing studiedSessions count as zero when sizing the backlog", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "studied",
+      readySessions: 4,
+      inFlightSessions: 0,
+      sessions: [],
+      learner: { outcome: "completed", notesWritten: 1, turns: 2 },
+    });
+
+    await run("sync");
+
+    const output = allOutput();
+    expect(output).toContain("1 suggested page created.");
+    expect(output).toContain("4 more in the backlog");
+  });
+
+  it("skipped-gateway falls back to a generic message without a learner reason", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "skipped-gateway",
+      readySessions: 2,
+      inFlightSessions: 0,
+      sessions: [],
+      studiedSessions: 0,
+    });
+
+    await run("sync");
+
+    expect(allOutput()).toContain("Studying unavailable right now.");
+  });
+
+  it("mine-failed falls back to a generic message without a learner reason", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "mine-failed",
+      readySessions: 2,
+      inFlightSessions: 0,
+      sessions: [],
+      studiedSessions: 0,
+    });
+
+    await run("sync");
+
+    expect(errorSpy.mock.calls.join(" ")).toContain("Study run failed.");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("explains a skipped-paused run", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "skipped-paused",
+      readySessions: 0,
+      inFlightSessions: 0,
+    });
+
+    await run("sync");
+
+    expect(allOutput()).toContain("studying is paused");
+    expect(process.exitCode).toBeUndefined();
+  });
+
   it("reports errors and sets the exit code", async () => {
     mockRunSync.mockResolvedValue({
       status: "error",
@@ -535,6 +742,81 @@ describe("knowledge sync", () => {
     await run("sync", "--json");
 
     expect(JSON.parse(allOutput())).toMatchObject({ status: "backlog", readySessions: 2 });
+  });
+
+  it("--json still sets the exit code on a sync error", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "error",
+      readySessions: 0,
+      inFlightSessions: 0,
+      error: "scan exploded",
+    });
+
+    await run("sync", "--json");
+
+    expect(JSON.parse(allOutput())).toMatchObject({ status: "error", error: "scan exploded" });
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("--json --report keeps the outcome on stdout when the report fails", async () => {
+    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
+    mockEmitReport.mockRejectedValue(new Error("no notes to render"));
+
+    await run("sync", "--json", "--report");
+
+    expect(JSON.parse(allOutput())).toEqual({
+      status: "nothing-new",
+      readySessions: 0,
+      inFlightSessions: 0,
+      report_error: "no notes to render",
+    });
+    // Studying succeeded; a report failure alone does not fail the command.
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("--json --report stringifies non-Error report failures", async () => {
+    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
+    mockEmitReport.mockRejectedValue("disk full");
+
+    await run("sync", "--json", "--report");
+
+    expect(JSON.parse(allOutput())).toMatchObject({ report_error: "disk full" });
+  });
+
+  it("--report prints the failure and sets the exit code after a foreground sync", async () => {
+    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
+    mockEmitReport.mockRejectedValue(new Error("browser missing"));
+
+    await run("sync", "--report");
+
+    expect(allOutput()).toContain("No new completed sessions");
+    expect(allOutput()).not.toContain("Wrote ");
+    expect(errorSpy.mock.calls.join(" ")).toContain("browser missing");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("--report stringifies non-Error failures", async () => {
+    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
+    mockEmitReport.mockRejectedValue("disk full");
+
+    await run("sync", "--report");
+
+    expect(errorSpy.mock.calls.join(" ")).toContain("disk full");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("knowledge report --json prints the path and never opens a browser", async () => {
+    await run("report", "--json", "--out", "/tmp/custom-report.html");
+
+    expect(mockEmitReport).toHaveBeenCalledWith({ out: "/tmp/custom-report.html", open: false });
+    expect(JSON.parse(allOutput())).toEqual({ report: "/tmp/dosu-knowledge-report.html" });
+  });
+
+  it("knowledge report opens the browser by default", async () => {
+    await run("report");
+
+    expect(mockEmitReport).toHaveBeenCalledWith({ out: undefined, open: true });
   });
 
   it("--report writes and opens the harvest HTML after a foreground sync", async () => {
@@ -599,6 +881,26 @@ describe("knowledge sync", () => {
     await run("sync", "--quiet", "--detach", "--bootstrap");
 
     expect(mockSpawnDetached).toHaveBeenCalledWith(["knowledge", "sync", "--quiet", "--bootstrap"]);
+  });
+
+  it("--detach without --quiet omits the flag", async () => {
+    await run("sync", "--detach");
+
+    expect(mockSpawnDetached).toHaveBeenCalledWith(["knowledge", "sync"]);
+    expect(mockRunSync).not.toHaveBeenCalled();
+  });
+
+  it("--detach forwards --report and --out to the re-spawned run", async () => {
+    await run("sync", "--detach", "--report", "--out", "/tmp/custom-report.html");
+
+    expect(mockSpawnDetached).toHaveBeenCalledWith([
+      "knowledge",
+      "sync",
+      "--report",
+      "--out",
+      "/tmp/custom-report.html",
+    ]);
+    expect(mockEmitReport).not.toHaveBeenCalled();
   });
 
   function studiedOutcome(remaining: number) {
@@ -846,6 +1148,97 @@ describe("knowledge sync --status", () => {
     expect(parsed.state.watermark).toBeNull();
     expect(mockRunSync).not.toHaveBeenCalled();
   });
+
+  it("tolerates a running lock without a start time", async () => {
+    mockGetSyncStatus.mockReturnValue({
+      running: true,
+      pid: 11,
+      state: baseState,
+      recentActivity: [],
+    });
+
+    await run("sync", "--status");
+
+    // An unparseable timestamp is echoed back verbatim (here: empty).
+    expect(allOutput()).toContain("Sync running \u00B7 pid 11, started .");
+  });
+
+  it("echoes a future timestamp instead of a negative age", async () => {
+    const future = new Date(Date.now() + 60 * 60_000).toISOString();
+    mockGetSyncStatus.mockReturnValue({
+      running: false,
+      state: { ...baseState, watermark: future },
+      recentActivity: [],
+    });
+
+    await run("sync", "--status");
+
+    expect(allOutput()).toContain(`Studied through: ${future} (${future})`);
+  });
+
+  it("renders an hours-old timestamp with the minute remainder", async () => {
+    mockGetSyncStatus.mockReturnValue({
+      running: false,
+      state: { ...baseState, watermark: new Date(Date.now() - 125 * 60_000).toISOString() },
+      recentActivity: [],
+    });
+
+    await run("sync", "--status");
+
+    expect(allOutput()).toContain("2h 5m ago");
+  });
+
+  it("shows the study scope with the home directory abbreviated", async () => {
+    const home = homedir();
+    mockGetSyncStatus.mockReturnValue({
+      running: false,
+      state: { ...baseState, project_filter: [`${home}/work/dosu-cli`, "/srv/other"] },
+      recentActivity: [],
+    });
+
+    await run("sync", "--status");
+
+    expect(allOutput()).toContain("Study scope:     ~/work/dosu-cli, /srv/other");
+  });
+
+  it("omits the study scope when the project filter is empty", async () => {
+    mockGetSyncStatus.mockReturnValue({
+      running: false,
+      state: { ...baseState, project_filter: [] },
+      recentActivity: [],
+    });
+
+    await run("sync", "--status");
+
+    expect(allOutput()).not.toContain("Study scope");
+  });
+
+  it("omits the token tally when nothing has been distilled yet", async () => {
+    mockGetSyncStatus.mockReturnValue({
+      running: false,
+      state: { ...baseState, total_notes: 3 },
+      recentActivity: [],
+    });
+
+    await run("sync", "--status");
+
+    const output = allOutput();
+    expect(output).toContain("Suggested pages: 3 (from 0 sessions)");
+    expect(output).not.toContain("tokens distilled");
+  });
+
+  it("uses the singular for a single failure in the backoff notice", async () => {
+    mockGetSyncStatus.mockReturnValue({
+      running: false,
+      state: { ...baseState, consecutive_failures: 1 },
+      backoffUntil: "2026-09-02T23:00:00.000Z",
+      recentActivity: [],
+    });
+
+    await run("sync", "--status");
+
+    expect(allOutput()).toContain("Backing off after 1 failure;");
+  });
 });
 
 describe("knowledge hooks", () => {
@@ -862,6 +1255,29 @@ describe("knowledge hooks", () => {
     installed: false,
     enabled: false,
     configPath: "/home/u/.cursor/hooks.json",
+  });
+
+  // The PATH warning depends on the machine running the tests; pin PATH to a
+  // scratch bin dir that does contain `dosu` so every test starts from "on PATH".
+  const savedEnv: { PATH?: string; DOSU_DEV?: string } = {};
+  let binDir: string;
+
+  beforeEach(() => {
+    savedEnv.PATH = process.env.PATH;
+    savedEnv.DOSU_DEV = process.env.DOSU_DEV;
+    binDir = mkdtempSync(join(tmpdir(), "dosu-hooks-test-"));
+    writeFileSync(join(binDir, "dosu"), "");
+    writeFileSync(join(binDir, "dosu.cmd"), "");
+    process.env.PATH = binDir;
+    delete process.env.DOSU_DEV;
+  });
+
+  afterEach(() => {
+    if (savedEnv.PATH === undefined) delete process.env.PATH;
+    else process.env.PATH = savedEnv.PATH;
+    if (savedEnv.DOSU_DEV === undefined) delete process.env.DOSU_DEV;
+    else process.env.DOSU_DEV = savedEnv.DOSU_DEV;
+    rmSync(binDir, { recursive: true, force: true });
   });
 
   it("status lists every agent with its state", async () => {
@@ -895,6 +1311,16 @@ describe("knowledge hooks", () => {
 
     expect(allOutput()).toContain("not valid JSON");
     expect(process.exitCode).toBeUndefined();
+  });
+
+  it("status stringifies non-Error probe failures", async () => {
+    fakeAgents = [{ ...claude(), enabledError: "permission denied" }];
+
+    await run("hooks", "status", "--json");
+
+    expect(JSON.parse(allOutput())).toEqual([
+      expect.objectContaining({ agent: "claude", enabled: false, note: "permission denied" }),
+    ]);
   });
 
   it("enable targets named agents", async () => {
@@ -935,12 +1361,97 @@ describe("knowledge hooks", () => {
   it("enable reports hook config failures without aborting the command", async () => {
     fakeAgents = [
       { ...claude(), enableError: new HookConfigError("settings.json is not valid JSON") },
+      cursor(),
     ];
 
-    await run("hooks", "enable", "claude");
+    await run("hooks", "enable", "claude", "cursor");
 
-    expect(errorSpy.mock.calls.join(" ")).toContain("not valid JSON");
+    expect(errorSpy.mock.calls.join(" ")).toContain(
+      "✗ Claude Code: settings.json is not valid JSON",
+    );
     expect(process.exitCode).toBe(1);
+    // The failure is per-agent: the next agent is still enabled.
+    expect(enableCalls).toEqual(["cursor"]);
+  });
+
+  it("enable reports plain errors and non-Error throws", async () => {
+    fakeAgents = [
+      { ...claude(), enableError: new Error("EACCES: permission denied") },
+      { ...cursor(), installed: true, enableError: "weird failure" },
+    ];
+
+    await run("hooks", "enable", "claude", "cursor");
+
+    const errors = errorSpy.mock.calls.join("\n");
+    expect(errors).toContain("✗ Claude Code: EACCES: permission denied");
+    expect(errors).toContain("✗ Cursor: weird failure");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("enable does not warn when dosu resolves on PATH", async () => {
+    fakeAgents = [claude()];
+
+    await run("hooks", "enable");
+
+    expect(allOutput()).not.toContain("not on PATH");
+    expect(allOutput()).not.toContain("Dev mode");
+  });
+
+  it("enable warns when dosu is not on PATH", async () => {
+    fakeAgents = [claude()];
+    process.env.PATH = `${tmpdir()}${delimiter}`;
+
+    await run("hooks", "enable");
+
+    expect(allOutput()).toContain("'dosu' is not on PATH");
+    expect(enableCalls).toEqual(["claude"]);
+  });
+
+  it("enable treats an unset PATH as empty", async () => {
+    fakeAgents = [claude()];
+    delete process.env.PATH;
+
+    await run("hooks", "enable");
+
+    expect(allOutput()).toContain("'dosu' is not on PATH");
+  });
+
+  it("enable looks for dosu.cmd on Windows", async () => {
+    fakeAgents = [claude()];
+    rmSync(join(binDir, "dosu"));
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      await run("hooks", "enable");
+    } finally {
+      if (platform) Object.defineProperty(process, "platform", platform);
+    }
+
+    expect(allOutput()).not.toContain("not on PATH");
+  });
+
+  it("enable skips the PATH warning when no agents were resolved", async () => {
+    fakeAgents = [claude()];
+    process.env.PATH = "";
+
+    await run("hooks", "enable", "zed");
+
+    expect(allOutput()).not.toContain("not on PATH");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("enable in dev mode announces the pinned hook command instead of checking PATH", async () => {
+    fakeAgents = [claude()];
+    process.env.DOSU_DEV = "true";
+    process.env.PATH = "";
+
+    await run("hooks", "enable");
+
+    const output = allOutput();
+    expect(output).toContain("Dev mode: hooks will run ");
+    expect(output).toContain("knowledge sync --quiet --detach");
+    expect(output).not.toContain("not on PATH");
+    expect(enableCalls).toEqual(["claude"]);
   });
 
   it("disable targets named agents", async () => {
@@ -950,6 +1461,21 @@ describe("knowledge hooks", () => {
 
     expect(disableCalls).toEqual(["claude"]);
     expect(allOutput()).toContain("hook disabled");
+  });
+
+  it("disable reports per-agent failures and keeps going", async () => {
+    fakeAgents = [
+      { ...claude(), disableError: new HookConfigError("settings.json is not valid JSON") },
+      { ...cursor(), installed: true },
+    ];
+
+    await run("hooks", "disable");
+
+    expect(errorSpy.mock.calls.join(" ")).toContain(
+      "✗ Claude Code: settings.json is not valid JSON",
+    );
+    expect(disableCalls).toEqual(["cursor"]);
+    expect(process.exitCode).toBe(1);
   });
 
   it("prints a hint when nothing is detected", async () => {

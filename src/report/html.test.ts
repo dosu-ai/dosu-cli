@@ -585,3 +585,124 @@ it("uses turn text as the tool preview and empty-step traces", () => {
   expect(html).toContain("looked at the retry loop");
   expect(html).toContain("MCP call");
 });
+
+describe("optional-field fallbacks", () => {
+  type Transcript = ReportInventory["transcripts"][number];
+
+  it("flags a capped fetch, treats zero rediscovery tokens as unmeasured, and tolerates bare rows", () => {
+    const html = buildReportHtml({
+      inventory: {
+        transcripts: [
+          { transcript_id: "a", learning_tokens: 0 } as unknown as Transcript,
+          { source: "cursor", transcript_id: "b" } as unknown as Transcript,
+        ],
+      },
+      candidates: [{ title: "Zero", content: "Zero", approx_rediscovery_tokens: 0 }],
+      truncated: true,
+    });
+    expect(html).toContain("newest notes only (server capped the fetch)");
+    expect(html).toContain("Investigation stretch was not measured.");
+    expect(html).toContain("rediscovery ~0 tok");
+    expect(html).toContain('<div class="label">Tokens scanned</div><div class="value">0</div>');
+    // A transcript without a source renders an empty host cell rather than "undefined".
+    expect(html).toContain("<td></td>");
+    expect(html).not.toContain("undefined");
+    expect(html).toContain("2 sessions with notes");
+  });
+
+  it("omits the truncation notice and pluralizes a single session", () => {
+    const html = buildReportHtml({ inventory, candidates: [] });
+    expect(html).not.toContain("newest notes only");
+    expect(html).toContain("1 session with notes");
+  });
+
+  it("leaves out zero-count status bits in the mixed heading", () => {
+    const noWritten = buildReportHtml({
+      inventory,
+      candidates: [
+        { title: "P", content: "p", status: "pending" },
+        { title: "Q", content: "q", status: "proposed" },
+      ],
+    });
+    expect(noWritten).toContain("1 proposed, 1 pending —");
+    expect(noWritten).not.toContain("written,");
+
+    const noPending = buildReportHtml({
+      inventory,
+      candidates: [
+        { title: "W", content: "w", status: "written" },
+        { title: "Q", content: "q", status: "proposed" },
+      ],
+    });
+    expect(noPending).toContain("1 written, 1 proposed —");
+    expect(noPending).not.toContain("1 pending");
+  });
+});
+
+describe("trace edge shapes", () => {
+  it("renders no trace when the digest has no turns even with a line spec", () => {
+    expect(
+      renderTraceHtml(
+        { transcript_id: "sess-1", investigation_lines: "1-2" },
+        { "sess-1": { turns: [] } },
+      ),
+    ).toBe("");
+  });
+
+  it("handles turns missing line, role, text, and est_tokens with a zero-width bar", () => {
+    const html = renderTraceHtml(
+      { transcript_id: "sess-1", investigation_lines: "1-2" },
+      {
+        "sess-1": {
+          turns: [
+            { role: "user", text: ["q"] },
+            { tools: [{ name: "Read", path: "a.ts" }] },
+            { text: ["thought it over"] },
+          ],
+        },
+      },
+    );
+    expect(html).toContain("Question");
+    expect(html).toContain("a.ts");
+    expect(html).toContain("thought it over");
+    expect(html).toContain("1 reasoning");
+    expect(html).toContain("~0 tok");
+    // No learning tokens at all: every bar segment collapses to zero width and
+    // the legend stays empty rather than dividing by zero.
+    expect(html).toContain('class="tb context" style="width:0.0%"');
+    expect(html).toContain('<p class="trace-legend"></p>');
+    expect(html).toContain('<span class="tok"></span></li>');
+  });
+
+  it("falls through whitespace-only and trailing-slash preview fields", () => {
+    const html = renderTraceHtml(
+      { transcript_id: "sess-1", investigation_lines: "1-2" },
+      {
+        "sess-1": {
+          turns: [
+            { role: "user", line: 1, est_tokens: 1, text: ["q"] },
+            {
+              role: "assistant",
+              line: 2,
+              est_tokens: 7,
+              text: [],
+              tools: [
+                { name: "Read", path: "dir/" },
+                { name: "Grep", pattern: "   " },
+                { name: "Shell", command_preview: "  " },
+                { name: "Search", query: " " },
+                { name: "Read", file_path: "nested/" },
+                { name: "Task", prompt: "\t" },
+                { name: "Tool", arguments: { query: "   ", sql: "select 9" } },
+              ],
+            },
+          ],
+        },
+      },
+    );
+    expect(html.match(/No input recorded/g)).toHaveLength(6);
+    expect(html).toContain("select 9");
+    expect(html).not.toContain("dir/");
+    expect(html).not.toContain("nested/");
+  });
+});
