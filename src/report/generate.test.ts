@@ -174,3 +174,56 @@ describe("emitKnowledgeReport", () => {
     expect(mockWrite).toHaveBeenCalled();
   });
 });
+
+describe("emitKnowledgeReport shipped sessions", () => {
+  it("surfaces the ship watermark history's session links in the report", async () => {
+    mockLoadSyncState.mockReturnValue({
+      schema_version: 1,
+      watermark: null,
+      consecutive_failures: 0,
+      ship_transcripts: true,
+      ship: {
+        watermark: "2026-09-01T00:00:00.000Z",
+        consecutive_failures: 0,
+        total_shipped: 1,
+        shipped_sessions: [
+          {
+            at: "2026-09-01T00:00:00.000Z",
+            session: "claude/s1",
+            task_id: "task-1",
+            session_url: "https://app/memories/sessions/s1",
+          },
+        ],
+      },
+    });
+
+    await emitKnowledgeReport({ notes: [] });
+
+    const html = mockWrite.mock.calls[0][0].html as string;
+    expect(html).toContain("Shipped to Dosu memory");
+    expect(html).toContain("https://app/memories/sessions/s1");
+  });
+
+  it("an injected shipped list overrides the state file", async () => {
+    await emitKnowledgeReport({
+      notes: [],
+      shipped: [
+        {
+          at: "2026-09-01T00:00:00.000Z",
+          session: "cursor/injected",
+          task_id: "task-9",
+        },
+      ],
+    });
+
+    const html = mockWrite.mock.calls[0][0].html as string;
+    expect(html).toContain("cursor/injected");
+  });
+
+  it("renders no shipped section when nothing was ever shipped", async () => {
+    await emitKnowledgeReport({ notes: [] });
+
+    const html = mockWrite.mock.calls[0][0].html as string;
+    expect(html).not.toContain("Shipped to Dosu memory");
+  });
+});

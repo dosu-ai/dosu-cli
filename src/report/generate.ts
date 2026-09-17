@@ -9,7 +9,7 @@ import { type Config, loadConfig } from "../config/config";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import type { AgentSession } from "../sessions/scan";
 import { scanAgentSessions } from "../sessions/scan";
-import { loadSyncState } from "../sync/watermark";
+import { loadSyncState, type ShippedSessionRecord } from "../sync/watermark";
 import { type FetchedReportNotes, fetchReportNotes } from "./fetch";
 import { buildReportHtml } from "./html";
 import { attributeRediscovery, digestsForSessions, sessionsToInventory } from "./notes";
@@ -20,6 +20,8 @@ export interface EmitReportOptions {
   /** Injectable for tests; the default fetches from the backend. */
   notes?: ReportNote[];
   sessions?: AgentSession[];
+  /** Injectable for tests; the default reads the ship watermark state. */
+  shipped?: ShippedSessionRecord[];
   orgName?: string;
   /** Injectable project-name source for a session; the default resolves the
    * session's real working directory and uses its basename. */
@@ -85,6 +87,7 @@ export async function emitKnowledgeReport(options: EmitReportOptions = {}): Prom
     truncated: fetched.truncated,
     generatedAt: options.generatedAt,
     digests: digestsForSessions(sessions),
+    shipped: options.shipped ?? state.ship?.shipped_sessions ?? [],
   });
   return writeAndOpenReport({
     html,
