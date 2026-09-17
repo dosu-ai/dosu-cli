@@ -103,7 +103,14 @@ describe("build-npm script", () => {
     expect(packageJson.scripts["upload:sourcemaps"]).toBe(
       "sentry-cli sourcemaps upload --org dosu-ai --project dosu-cli --validate --wait --strict --url-prefix app:///bin bin/dosu.js bin/dosu.js.map",
     );
-    expect(packageJson.files).toEqual(["bin/dosu.js"]);
+    expect(packageJson.files).toEqual([
+      "bin/dosu.js",
+      "bin/runtime/deja-darwin-arm64",
+      "bin/runtime/deja-darwin-x64",
+      "third_party/deja-vu/LICENSE",
+      "third_party/deja-vu/README.md",
+      "third_party/deja-vu/dosu-project-scope.patch",
+    ]);
   });
 
   it("uploads source maps during release with the CI-only auth token", () => {

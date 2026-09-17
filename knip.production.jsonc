@@ -6,7 +6,8 @@
     "src/index.ts!",
     "scripts/build-all.ts!",
     "scripts/build-compile.ts!",
-    "scripts/build-npm.ts!"
+    "scripts/build-npm.ts!",
+    "scripts/drive-package-e2e.ts!"
   ],
   "project": [
     "src/**/*.ts!",
