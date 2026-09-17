@@ -1,3 +1,11 @@
+# [0.53.0-beta.16](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.15...v0.53.0-beta.16) (2026-09-17)
+
+
+### Bug Fixes
+
+* **mcp:** write Zed config to ~/.config/zed with Zed's remote-server shape ([#217](https://github.com/dosu-ai/dosu-cli/issues/217)) ([0d0453d](https://github.com/dosu-ai/dosu-cli/commit/0d0453dc55cab1108ba02ddd2452e90177b059e3))
+* **telemetry:** associate CLI events with organizations ([#207](https://github.com/dosu-ai/dosu-cli/issues/207)) ([9ea62b2](https://github.com/dosu-ai/dosu-cli/commit/9ea62b21a8a2e2b086c13b4deb475340a47cb10f))
+
 # [0.53.0-beta.15](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.14...v0.53.0-beta.15) (2026-09-16)
 
 
