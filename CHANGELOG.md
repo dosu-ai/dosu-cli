@@ -1,3 +1,10 @@
+# [0.53.0](https://github.com/dosu-ai/dosu-cli/compare/v0.52.3...v0.53.0) (2026-09-17)
+
+
+### Features
+
+* 0.53.0 - Beta -> main ([#226](https://github.com/dosu-ai/dosu-cli/issues/226)) ([5d56fb5](https://github.com/dosu-ai/dosu-cli/commit/5d56fb565b948c0177daedcb4def766b5dc96456))
+
 # [0.53.0-beta.16](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0-beta.15...v0.53.0-beta.16) (2026-09-17)
 
 
