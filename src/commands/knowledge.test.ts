@@ -50,9 +50,11 @@ vi.mock("../sync/backlog", () => ({
 }));
 
 const mockLoadSyncState = vi.fn();
+const mockSetShipTranscripts = vi.fn();
 vi.mock("../sync/watermark", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../sync/watermark")>()),
   loadSyncState: (...args: unknown[]) => mockLoadSyncState(...args),
+  setShipTranscripts: (...args: unknown[]) => mockSetShipTranscripts(...args),
 }));
 
 const mockEmitReport = vi.fn();
@@ -68,6 +70,11 @@ vi.mock("../report/backfill-run", () => ({
 const mockRunLearner = vi.fn();
 vi.mock("../learner/runner", () => ({
   runLearner: (...args: unknown[]) => mockRunLearner(...args),
+}));
+
+const mockCreateShipStep = vi.fn();
+vi.mock("../shipper/runner", () => ({
+  createShipStep: (...args: unknown[]) => mockCreateShipStep(...args),
 }));
 
 interface FakeAgent {
@@ -164,6 +171,8 @@ beforeEach(() => {
   mockEmitReport.mockResolvedValue("/tmp/dosu-knowledge-report.html");
   mockRunBackfill.mockReset();
   mockRunLearner.mockReset();
+  mockSetShipTranscripts.mockReset();
+  mockCreateShipStep.mockReset();
   fakeAgents = [];
   enableCalls.length = 0;
   disableCalls.length = 0;
@@ -1530,5 +1539,183 @@ describe("knowledge backfill-transcripts", () => {
     await run("backfill-transcripts", "--json");
 
     expect(JSON.parse(allOutput())).toMatchObject(result);
+  });
+});
+
+describe("knowledge sync shipping wiring", () => {
+  beforeEach(() => {
+    mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: "dep1" }));
+    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
+    process.env.DOSU_BACKEND_URL_OVERRIDE = "https://api.dosu.test";
+  });
+
+  afterEach(() => {
+    delete process.env.DOSU_BACKEND_URL_OVERRIDE;
+  });
+
+  function syncDeps(call = 0): { ship?: unknown } {
+    return mockRunSync.mock.calls[call][0].deps;
+  }
+
+  it("builds a ship step for an authenticated cloud install", async () => {
+    await run("sync");
+    expect(typeof syncDeps().ship).toBe("function");
+  });
+
+  it("does not build a ship step without an API key", async () => {
+    mockLoadConfig.mockReturnValue(makeValidConfig({ api_key: undefined }));
+    await run("sync");
+    expect(syncDeps().ship).toBeUndefined();
+  });
+
+  it("does not build a ship step without a deployment", async () => {
+    mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: undefined }));
+    await run("sync");
+    expect(syncDeps().ship).toBeUndefined();
+  });
+
+  it("does not build a ship step in OSS mode", async () => {
+    mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: "dep1", mode: "oss" }));
+    await run("sync");
+    expect(syncDeps().ship).toBeUndefined();
+  });
+
+  it("does not build a ship step without a backend URL", async () => {
+    delete process.env.DOSU_BACKEND_URL_OVERRIDE;
+    await run("sync");
+    expect(syncDeps().ship).toBeUndefined();
+  });
+
+  it("the ship step forwards the install's credentials to the shipper", async () => {
+    const inner = vi.fn().mockResolvedValue([]);
+    mockCreateShipStep.mockReturnValue(inner);
+
+    await run("sync");
+
+    const ship = syncDeps().ship as (sessions: unknown[]) => Promise<unknown>;
+    const sessions = [{ id: "s1", harness: "claude", path: "/tmp/s1.jsonl", updated: "now" }];
+    await expect(ship(sessions)).resolves.toEqual([]);
+    expect(mockCreateShipStep).toHaveBeenCalledWith({
+      apiKey: "sk_user_test",
+      deploymentId: "dep1",
+    });
+    expect(inner).toHaveBeenCalledWith(sessions);
+  });
+
+  it("prints the shipped count when the ship phase ran", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "nothing-new",
+      readySessions: 0,
+      inFlightSessions: 0,
+      ship: { shipped: 2, incognito: 1, skipped: 0, failed: 0 },
+    });
+
+    await run("sync");
+
+    expect(allOutput()).toContain("Shipped 2 session transcripts to Dosu memory.");
+  });
+
+  it("warns when some transcripts failed to ship", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "nothing-new",
+      readySessions: 0,
+      inFlightSessions: 0,
+      ship: { shipped: 1, incognito: 0, skipped: 0, failed: 1 },
+    });
+
+    await run("sync");
+
+    const output = allOutput();
+    expect(output).toContain("Shipped 1 session transcript to Dosu memory.");
+    expect(output).toContain("Some transcripts failed to ship; they will be retried.");
+  });
+});
+
+describe("knowledge transcripts", () => {
+  it("enable persists the opt-in and explains the consent posture", async () => {
+    await run("transcripts", "enable");
+
+    expect(mockSetShipTranscripts).toHaveBeenCalledWith(true);
+    const output = allOutput();
+    expect(output).toContain("Transcript shipping enabled.");
+    expect(output).toContain("redacted locally");
+    expect(output).toContain("/dosu-incognito");
+  });
+
+  it("disable removes the opt-in", async () => {
+    await run("transcripts", "disable");
+
+    expect(mockSetShipTranscripts).toHaveBeenCalledWith(false);
+    expect(allOutput()).toContain("Transcript shipping disabled.");
+  });
+
+  it("status shows the default-off posture", async () => {
+    mockLoadSyncState.mockReturnValue({
+      schema_version: 1,
+      watermark: null,
+      consecutive_failures: 0,
+    });
+
+    await run("transcripts", "status");
+
+    expect(allOutput()).toContain("Transcript shipping is disabled (the default).");
+  });
+
+  it("status shows progress and recent session links when enabled", async () => {
+    mockLoadSyncState.mockReturnValue({
+      schema_version: 1,
+      watermark: null,
+      consecutive_failures: 0,
+      ship_transcripts: true,
+      ship: {
+        watermark: "2026-09-01T00:00:00.000Z",
+        consecutive_failures: 0,
+        total_shipped: 3,
+        shipped_sessions: [
+          {
+            at: "2026-09-01T00:00:00.000Z",
+            session: "claude/abc",
+            task_id: "task-1",
+            session_url: "https://app/memories/sessions/abc",
+          },
+        ],
+      },
+    });
+
+    await run("transcripts", "status");
+
+    const output = allOutput();
+    expect(output).toContain("Transcript shipping is enabled.");
+    expect(output).toContain("Shipped:         3 sessions");
+    expect(output).toContain("Shipped through: 2026-09-01T00:00:00.000Z");
+    expect(output).toContain("claude/abc · https://app/memories/sessions/abc");
+  });
+
+  it("status --json emits the machine-readable state", async () => {
+    mockLoadSyncState.mockReturnValue({
+      schema_version: 1,
+      watermark: null,
+      consecutive_failures: 0,
+      ship_transcripts: true,
+      ship: {
+        watermark: "2026-09-01T00:00:00.000Z",
+        consecutive_failures: 0,
+        total_shipped: 1,
+        shipped_sessions: [
+          { at: "2026-09-01T00:00:00.000Z", session: "claude/abc", task_id: "task-1" },
+        ],
+      },
+    });
+
+    await run("transcripts", "status", "--json");
+
+    expect(JSON.parse(allOutput())).toEqual({
+      enabled: true,
+      total_shipped: 1,
+      watermark: "2026-09-01T00:00:00.000Z",
+      shipped_sessions: [
+        { at: "2026-09-01T00:00:00.000Z", session: "claude/abc", task_id: "task-1" },
+      ],
+    });
   });
 });

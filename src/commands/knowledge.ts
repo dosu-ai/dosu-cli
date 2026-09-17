@@ -8,6 +8,7 @@ import { Command, Option } from "commander";
 import pc from "picocolors";
 import { createTypedClient } from "../client/trpc";
 import { loadConfig } from "../config/config";
+import { getBackendURL, isAbsoluteHttpUrl } from "../config/constants";
 import { allHookAgents, getHookAgent, type HookAgent } from "../hooks/agents";
 import { HookConfigError, hookCommand } from "../hooks/formats";
 import { emitKnowledgeReport } from "../report/generate";
@@ -16,7 +17,7 @@ import { listSessionBacklog } from "../sync/backlog";
 import { spawnDetachedSelf } from "../sync/detach";
 import { formatTokenCount, getSyncStatus, type SyncStatus } from "../sync/status";
 import { MINE_BATCH_LIMIT, runKnowledgeSync, type SyncDeps, type SyncOutcome } from "../sync/sync";
-import { loadSyncState } from "../sync/watermark";
+import { loadSyncState, setShipTranscripts } from "../sync/watermark";
 import { positiveInteger } from "./arguments";
 import { requireLoginConfig } from "./auth";
 import { printResult, printTable, truncate } from "./output";
@@ -245,7 +246,10 @@ export function knowledgeCommand(): Command {
           return;
         }
 
-        const deps: SyncDeps = { mine: buildLearner(opts.quiet ? "hook" : "manual") };
+        const deps: SyncDeps = {
+          mine: buildLearner(opts.quiet ? "hook" : "manual"),
+          ship: buildShipper(),
+        };
         let outcome = await runKnowledgeSync({
           quiet: opts.quiet,
           bootstrap: opts.bootstrap,
@@ -338,6 +342,7 @@ export function knowledgeCommand(): Command {
     });
 
   cmd.addCommand(hooksCommand());
+  cmd.addCommand(transcriptsCommand());
 
   return cmd;
 }
@@ -354,6 +359,97 @@ function buildLearner(trigger: "hook" | "manual"): SyncDeps["mine"] {
     const { runLearner } = await import("../learner/runner");
     return runLearner({ sessions, apiKey: api_key, deploymentID: deployment_id, trigger });
   };
+}
+
+/** Transcript-shipping step for authenticated cloud-mode installs; undefined when the install
+ * cannot ship: logged out, OSS mode, no API key/deployment, or no backend URL. The
+ * `ship_transcripts` opt-in itself is enforced inside the sync pipeline, against the same state
+ * file it already loads. */
+function buildShipper(): SyncDeps["ship"] {
+  const cfg = loadConfig();
+  if (cfg.mode === "oss") return undefined;
+  const target = cfg.active_account?.target;
+  if (!target?.api_key || !target.deployment_id) return undefined;
+  if (!isAbsoluteHttpUrl(getBackendURL())) return undefined;
+  const { api_key, deployment_id } = target;
+  return async (sessions: AgentSession[]) => {
+    const { createShipStep } = await import("../shipper/runner");
+    return createShipStep({ apiKey: api_key, deploymentId: deployment_id })(sessions);
+  };
+}
+
+/** `dosu knowledge transcripts`: the opt-in switch for shipping finished session transcripts to
+ * Dosu memory. Off by default — you control which transcripts Dosu collects (this switch plus
+ * the per-session /dosu-incognito opt-out); secrets are redacted locally before anything ships. */
+function transcriptsCommand(): Command {
+  const cmd = new Command("transcripts").description(
+    "Control shipping finished session transcripts to Dosu memory (default: off)",
+  );
+
+  cmd
+    .command("status")
+    .description("Show whether transcript shipping is enabled, plus shipping progress")
+    .option("--json", "Output as JSON")
+    .action((opts: { json?: boolean }) => {
+      const state = loadSyncState();
+      const enabled = state.ship_transcripts === true;
+      if (opts.json) {
+        printResult(
+          {
+            enabled,
+            total_shipped: state.ship?.total_shipped ?? 0,
+            watermark: state.ship?.watermark ?? null,
+            shipped_sessions: state.ship?.shipped_sessions ?? [],
+          },
+          opts,
+        );
+        return;
+      }
+      console.log(
+        enabled
+          ? `${pc.green("●")} Transcript shipping is enabled.`
+          : "○ Transcript shipping is disabled (the default).",
+      );
+      const total = state.ship?.total_shipped ?? 0;
+      if (total > 0) {
+        console.log(`  Shipped:         ${total} session${total === 1 ? "" : "s"}`);
+      }
+      const wm = state.ship?.watermark;
+      if (wm) console.log(`  Shipped through: ${wm}`);
+      const recent = (state.ship?.shipped_sessions ?? []).slice(-5);
+      if (recent.length > 0) {
+        console.log("\nRecent shipments:");
+        for (const record of recent) {
+          console.log(
+            `  ${record.session}${record.session_url ? ` \u00B7 ${record.session_url}` : ""}`,
+          );
+        }
+      }
+    });
+
+  cmd
+    .command("enable")
+    .description("Ship finished sessions to Dosu memory (redacted locally before upload)")
+    .action(() => {
+      setShipTranscripts(true);
+      console.log("✓ Transcript shipping enabled.");
+      console.log(
+        pc.dim(
+          "Finished agent sessions are redacted locally, then shipped to Dosu memory on the next sync. " +
+            "Use /dosu-incognito in a session to keep that session out.",
+        ),
+      );
+    });
+
+  cmd
+    .command("disable")
+    .description("Stop shipping session transcripts (the default)")
+    .action(() => {
+      setShipTranscripts(false);
+      console.log("✓ Transcript shipping disabled.");
+    });
+
+  return cmd;
 }
 
 /** "3m ago" / "2h 10m ago" for status timestamps; falls back to the raw value. */
@@ -435,6 +531,17 @@ function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
 }
 
 function printSyncOutcome(outcome: SyncOutcome): void {
+  if (outcome.ship) {
+    const { shipped, failed } = outcome.ship;
+    if (shipped > 0) {
+      console.log(
+        `✓ Shipped ${shipped} session transcript${shipped === 1 ? "" : "s"} to Dosu memory.`,
+      );
+    }
+    if (failed > 0) {
+      console.log(pc.yellow("Some transcripts failed to ship; they will be retried."));
+    }
+  }
   switch (outcome.status) {
     case "backlog": {
       const inFlight =

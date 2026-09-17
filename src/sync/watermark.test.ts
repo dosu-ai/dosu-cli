@@ -13,7 +13,9 @@ import {
   resetSyncState,
   type SyncState,
   saveSyncState,
+  setShipTranscripts,
   setSyncPaused,
+  shipBackoffUntil,
   syncStatePath,
   UNKNOWN_PROJECT,
 } from "./watermark";
@@ -368,5 +370,159 @@ describe("setSyncPaused", () => {
     raw.paused = "yes";
     writeFileSync(syncStatePath(configDir), JSON.stringify(raw));
     expect(loadSyncState(configDir).paused).toBeUndefined();
+  });
+});
+
+describe("ship state", () => {
+  const shipState: SyncState = {
+    schema_version: 1,
+    watermark: null,
+    consecutive_failures: 0,
+    ship_transcripts: true,
+    ship: {
+      watermark: "2026-08-25T11:00:00Z",
+      last_attempt_at: "2026-08-25T11:05:00Z",
+      consecutive_failures: 1,
+      shipped_sessions: [
+        {
+          at: "2026-08-25T11:04:00Z",
+          session: "claude/abc",
+          task_id: "task-1",
+          session_url: "https://app/memories/sessions/abc",
+          project: "dosu",
+        },
+      ],
+      total_shipped: 3,
+    },
+  };
+
+  it("round-trips the ship watermark, history, and opt-in flag through disk", () => {
+    saveSyncState(shipState, configDir);
+    const loaded = loadSyncState(configDir);
+    expect(loaded.ship_transcripts).toBe(true);
+    expect(loaded.ship).toEqual(shipState.ship);
+  });
+
+  it("drops malformed shipped-session records and defaults the counters", () => {
+    writeFileSync(
+      syncStatePath(configDir),
+      JSON.stringify({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        ship_transcripts: "yes",
+        ship: {
+          watermark: null,
+          consecutive_failures: -2,
+          shipped_sessions: [
+            { at: "2026-08-25T11:04:00Z", session: "claude/abc", task_id: "task-1" },
+            { at: "2026-08-25T11:04:00Z", session: "claude/no-task" },
+            "junk",
+          ],
+          total_shipped: -1,
+        },
+      }),
+    );
+    const loaded = loadSyncState(configDir);
+    // Only a literal true opts in.
+    expect(loaded.ship_transcripts).toBeUndefined();
+    expect(loaded.ship?.consecutive_failures).toBe(0);
+    expect(loaded.ship?.total_shipped).toBe(0);
+    expect(loaded.ship?.shipped_sessions).toEqual([
+      { at: "2026-08-25T11:04:00Z", session: "claude/abc", task_id: "task-1" },
+    ]);
+  });
+
+  it("ignores a ship object without a usable watermark", () => {
+    writeFileSync(
+      syncStatePath(configDir),
+      JSON.stringify({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        ship: { consecutive_failures: 2 },
+      }),
+    );
+    expect(loadSyncState(configDir).ship).toBeUndefined();
+  });
+
+  it("resetSyncState forgets shipping progress but keeps the opt-in", () => {
+    saveSyncState(shipState, configDir);
+    resetSyncState(configDir);
+    const state = loadSyncState(configDir);
+    expect(state.ship_transcripts).toBe(true);
+    expect(state.ship).toBeUndefined();
+  });
+});
+
+describe("setShipTranscripts", () => {
+  it("persists the opt-in and round-trips through load", () => {
+    setShipTranscripts(true, configDir);
+    expect(loadSyncState(configDir).ship_transcripts).toBe(true);
+  });
+
+  it("disable removes the key entirely instead of storing false", () => {
+    setShipTranscripts(true, configDir);
+    setShipTranscripts(false, configDir);
+    expect(loadSyncState(configDir).ship_transcripts).toBeUndefined();
+    expect(readFileSync(syncStatePath(configDir), "utf-8")).not.toContain("ship_transcripts");
+  });
+
+  it("toggling preserves the rest of the state", () => {
+    saveSyncState(
+      { schema_version: 1, watermark: "2026-09-02T23:00:00.000Z", consecutive_failures: 2 },
+      configDir,
+    );
+    setShipTranscripts(true, configDir);
+    const loaded = loadSyncState(configDir);
+    expect(loaded.watermark).toBe("2026-09-02T23:00:00.000Z");
+    expect(loaded.consecutive_failures).toBe(2);
+  });
+});
+
+describe("shipBackoffUntil", () => {
+  it("is null without ship state or after a clean run", () => {
+    expect(
+      shipBackoffUntil({ schema_version: 1, watermark: null, consecutive_failures: 0 }),
+    ).toBeNull();
+    expect(
+      shipBackoffUntil({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        ship: { watermark: null, consecutive_failures: 0, last_attempt_at: NOW.toISOString() },
+      }),
+    ).toBeNull();
+  });
+
+  it("doubles from 15 minutes per consecutive ship failure, independent of study failures", () => {
+    const state: SyncState = {
+      schema_version: 1,
+      watermark: null,
+      // Five study failures must not affect the ship backoff.
+      consecutive_failures: 5,
+      last_attempt_at: NOW.toISOString(),
+      ship: { watermark: null, consecutive_failures: 2, last_attempt_at: NOW.toISOString() },
+    };
+    expect(shipBackoffUntil(state)?.getTime()).toBe(NOW.getTime() + 30 * 60 * 1000);
+  });
+
+  it("is null when the ship attempt timestamp is missing or unparseable", () => {
+    expect(
+      shipBackoffUntil({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        ship: { watermark: null, consecutive_failures: 2 },
+      }),
+    ).toBeNull();
+    expect(
+      shipBackoffUntil({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        ship: { watermark: null, consecutive_failures: 2, last_attempt_at: "not-a-date" },
+      }),
+    ).toBeNull();
   });
 });

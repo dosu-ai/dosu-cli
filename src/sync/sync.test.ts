@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { LearnerRunResult } from "../learner/runner";
 import type { AgentSession } from "../sessions/scan";
 import type { SyncLock } from "./lock";
-import { MINE_BATCH_LIMIT, runKnowledgeSync, type SyncDeps } from "./sync";
+import { MINE_BATCH_LIMIT, runKnowledgeSync, SHIP_BATCH_LIMIT, type SyncDeps } from "./sync";
 import type { SyncState } from "./watermark";
 
 const mockLoggerDebug = vi.hoisted(() => vi.fn());
@@ -629,5 +629,245 @@ describe("runKnowledgeSync pause switch", () => {
     expect(outcome.status).toBe("nothing-new");
     expect(saved).toHaveLength(1);
     expect(saved[0].paused).toBeUndefined();
+  });
+});
+
+describe("runKnowledgeSync shipping", () => {
+  const shippedResult = (s: AgentSession) => ({
+    session: s,
+    outcome: "shipped" as const,
+    taskId: `task-${s.id}`,
+    sessionUrl: `https://app/memories/sessions/${s.id}`,
+  });
+
+  function shipDeps(overrides: Partial<SyncDeps> = {}, state: Partial<SyncState> = {}) {
+    return makeDeps({
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        ship_transcripts: true,
+        ...state,
+      }),
+      lock: openLock(),
+      ...overrides,
+    });
+  }
+
+  it("never ships unless the user opted in — the flag defaults off", async () => {
+    const ship = vi.fn();
+    const { deps, saved } = makeDeps({
+      listSessions: vi.fn().mockResolvedValue([session(30)]),
+      ship,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.status).toBe("backlog");
+    expect(outcome.ship).toBeUndefined();
+    expect(ship).not.toHaveBeenCalled();
+    expect(saved[0].ship).toBeUndefined();
+  });
+
+  it("ships the gated backlog oldest-first under its own watermark and records the tasks", async () => {
+    const ship = vi.fn().mockImplementation(async (sessions: AgentSession[]) => {
+      return sessions.map(shippedResult);
+    });
+    const { deps, saved } = shipDeps({
+      listSessions: vi.fn().mockResolvedValue([session(30), session(50)]),
+      ship,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    // No learner: the run is still a backlog report, with the ship phase's counts attached.
+    expect(outcome.status).toBe("backlog");
+    expect(outcome.ship).toEqual({ shipped: 2, incognito: 0, skipped: 0, failed: 0 });
+    const batch = ship.mock.calls[0][0] as AgentSession[];
+    expect(batch.map((s) => s.id)).toEqual(["s-50", "s-30"]);
+    // The ship save carries watermark, history, and the all-time counter…
+    expect(saved[0].ship?.watermark).toBe(session(30).updated);
+    expect(saved[0].ship?.total_shipped).toBe(2);
+    expect(saved[0].ship?.shipped_sessions).toEqual([
+      expect.objectContaining({
+        session: "claude/s-50",
+        task_id: "task-s-50",
+        session_url: "https://app/memories/sessions/s-50",
+      }),
+      expect.objectContaining({ session: "claude/s-30", task_id: "task-s-30" }),
+    ]);
+    // …while the STUDY watermark is untouched: the two are independent.
+    expect(saved.at(-1)?.watermark).toBeNull();
+  });
+
+  it("studying advances its watermark without moving the ship watermark", async () => {
+    const ship = vi.fn();
+    const { deps, saved } = shipDeps(
+      {
+        listSessions: vi.fn().mockResolvedValue([session(30)]),
+        worthStudying: () => true,
+        mine: vi.fn().mockResolvedValue(learnerResult()),
+        ship,
+      },
+      // Ship already past this session: its gate is empty, so the step is never called.
+      { ship: { watermark: session(20).updated, consecutive_failures: 0 } },
+    );
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.status).toBe("studied");
+    expect(outcome.ship).toBeUndefined();
+    expect(ship).not.toHaveBeenCalled();
+    expect(saved.at(-1)?.watermark).toBe(session(30).updated);
+    expect(saved.at(-1)?.ship?.watermark).toBe(session(20).updated);
+  });
+
+  it("a ship failure backs off shipping without failing the run or advancing past the failure", async () => {
+    const sessions = [session(30), session(50)];
+    const ship = vi
+      .fn()
+      .mockImplementation(async (batch: AgentSession[]) => [
+        shippedResult(batch[0]),
+        { session: batch[1], outcome: "failed" as const, message: "HTTP 503" },
+      ]);
+    const { deps, saved } = shipDeps({
+      listSessions: vi.fn().mockResolvedValue(sessions),
+      ship,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.status).toBe("backlog");
+    expect(outcome.ship).toEqual({ shipped: 1, incognito: 0, skipped: 0, failed: 1 });
+    // The watermark covers only the shipped prefix, so s-30 is retried after backoff.
+    expect(saved[0].ship?.watermark).toBe(session(50).updated);
+    expect(saved[0].ship?.consecutive_failures).toBe(1);
+    // The study side's failure counter is untouched.
+    expect(saved.at(-1)?.consecutive_failures).toBe(0);
+  });
+
+  it("incognito and skipped sessions advance the ship watermark without a recorded task", async () => {
+    const ship = vi.fn().mockImplementation(async (batch: AgentSession[]) => [
+      { session: batch[0], outcome: "incognito" as const },
+      { session: batch[1], outcome: "skipped" as const, message: "no shippable transcript" },
+    ]);
+    const { deps, saved } = shipDeps({
+      listSessions: vi.fn().mockResolvedValue([session(30), session(50)]),
+      ship,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.ship).toEqual({ shipped: 0, incognito: 1, skipped: 1, failed: 0 });
+    expect(saved[0].ship?.watermark).toBe(session(30).updated);
+    expect(saved[0].ship?.shipped_sessions).toEqual([]);
+    expect(saved[0].ship?.total_shipped).toBe(0);
+  });
+
+  it("quiet runs honor the ship phase's own backoff while studying proceeds", async () => {
+    const ship = vi.fn();
+    const mine = vi.fn().mockResolvedValue(learnerResult());
+    const { deps, saved } = shipDeps(
+      {
+        listSessions: vi.fn().mockResolvedValue([session(30)]),
+        worthStudying: () => true,
+        mine,
+        ship,
+      },
+      {
+        ship: {
+          watermark: null,
+          consecutive_failures: 1,
+          last_attempt_at: new Date(NOW.getTime() - 60 * 1000).toISOString(),
+        },
+      },
+    );
+
+    const outcome = await runKnowledgeSync({ quiet: true, deps });
+
+    expect(ship).not.toHaveBeenCalled();
+    expect(mine).toHaveBeenCalled();
+    expect(outcome.status).toBe("studied");
+    expect(saved.at(-1)?.ship?.consecutive_failures).toBe(1);
+  });
+
+  it("manual runs ignore the ship backoff", async () => {
+    const ship = vi
+      .fn()
+      .mockImplementation(async (batch: AgentSession[]) => batch.map(shippedResult));
+    const { deps } = shipDeps(
+      {
+        listSessions: vi.fn().mockResolvedValue([session(30)]),
+        ship,
+      },
+      {
+        ship: {
+          watermark: null,
+          consecutive_failures: 3,
+          last_attempt_at: new Date(NOW.getTime() - 60 * 1000).toISOString(),
+        },
+      },
+    );
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(ship).toHaveBeenCalled();
+    expect(outcome.ship?.shipped).toBe(1);
+  });
+
+  it("a throwing ship step counts as one failed attempt instead of crashing the sync", async () => {
+    const ship = vi.fn().mockRejectedValue(new Error("step bug"));
+    const { deps, saved } = shipDeps({
+      listSessions: vi.fn().mockResolvedValue([session(30)]),
+      ship,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.status).toBe("backlog");
+    expect(outcome.ship).toEqual({ shipped: 0, incognito: 0, skipped: 0, failed: 1 });
+    expect(saved[0].ship?.consecutive_failures).toBe(1);
+    expect(saved[0].ship?.watermark).toBeNull();
+  });
+
+  it("ships at most SHIP_BATCH_LIMIT sessions per run, oldest first", async () => {
+    const ship = vi
+      .fn()
+      .mockImplementation(async (batch: AgentSession[]) => batch.map(shippedResult));
+    const sessions = Array.from({ length: SHIP_BATCH_LIMIT + 2 }, (_, i) => session(30 + i * 10));
+    const { deps, saved } = shipDeps({
+      listSessions: vi.fn().mockResolvedValue(sessions),
+      ship,
+    });
+
+    await runKnowledgeSync({ deps });
+
+    const batch = ship.mock.calls[0][0] as AgentSession[];
+    expect(batch).toHaveLength(SHIP_BATCH_LIMIT);
+    expect(batch[0].id).toBe(`s-${30 + (SHIP_BATCH_LIMIT + 1) * 10}`);
+    // Watermark = newest shipped (the oldest two newest stay for the next round).
+    expect(saved[0].ship?.watermark).toBe(session(50).updated);
+  });
+
+  it("the ship phase keeps the sync watermark save intact when shipping and studying both run", async () => {
+    const ship = vi
+      .fn()
+      .mockImplementation(async (batch: AgentSession[]) => batch.map(shippedResult));
+    const mine = vi.fn().mockResolvedValue(learnerResult());
+    const { deps, saved } = shipDeps({
+      listSessions: vi.fn().mockResolvedValue([session(30)]),
+      worthStudying: () => true,
+      mine,
+      ship,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.status).toBe("studied");
+    expect(outcome.ship?.shipped).toBe(1);
+    const final = saved.at(-1);
+    expect(final?.watermark).toBe(session(30).updated);
+    expect(final?.ship?.watermark).toBe(session(30).updated);
+    expect(final?.ship?.total_shipped).toBe(1);
   });
 });
