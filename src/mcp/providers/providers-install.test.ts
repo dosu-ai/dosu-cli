@@ -487,6 +487,31 @@ describe("CodexProvider", () => {
     expect(provider.globalConfigPath()).toBe(join(tempDir, "codex-home", "config.toml"));
   });
 
+  it.each([
+    "install",
+    "remove",
+    "prune",
+  ])("%s preserves unrelated TOML arrays of tables after Dosu", async (operation) => {
+    const { CodexProvider } = await import("./codex");
+    const provider = CodexProvider();
+    const path = join(tempDir, ".codex", "config.toml");
+    const hooks = `[[hooks.PreToolUse]] # command hooks
+matcher = "Bash"
+[[ hooks.PreToolUse.hooks ]] # preserve inner whitespace too
+type = "command"
+command = "echo check"
+`;
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `[mcp_servers.dosu]\nurl = "https://example.com/mcp"\n${hooks}`);
+
+    if (operation === "remove") provider.remove(false);
+    else provider.install(makeCfg(), operation === "prune");
+
+    const content = readFileSync(path, "utf-8");
+    expect(content).toContain(hooks);
+    expect(content).not.toContain('url = "https://example.com/mcp"');
+  });
+
   // Codex merges `mcp_servers.dosu` per-key across the global and project-local
   // configs, so a legacy remote-HTTP entry left in the scope we are NOT writing
   // merges into ours as a stray `url` beside `command`. Codex rejects that with

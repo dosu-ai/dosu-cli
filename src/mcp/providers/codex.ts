@@ -54,10 +54,12 @@ function installDosuToTOML(path: string, cfg: Config): void {
   writeTOML(path, content);
 }
 
-/** The table name from a TOML section header, tolerating a trailing comment and TOML's optional
- * inner whitespace: `[ mcp_servers.dosu ] # override` -> `mcp_servers.dosu`. Null if not a header. */
+/** The table name from a TOML table or array-of-tables header, tolerating a trailing comment and
+ * TOML's optional inner whitespace: `[ mcp_servers.dosu ] # override` -> `mcp_servers.dosu`. Null if not a header. */
 function sectionName(line: string): string | null {
-  const match = line.trim().match(/^\[([^\]]*)]\s*(?:#.*)?$/);
+  const header = line.trim();
+  const match =
+    header.match(/^\[\[([^\]]*)]]\s*(?:#.*)?$/) ?? header.match(/^\[([^\]]*)]\s*(?:#.*)?$/);
   return match ? match[1].trim() : null;
 }
 
