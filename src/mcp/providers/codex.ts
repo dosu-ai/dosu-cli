@@ -4,7 +4,7 @@
  * minimal manual TOML serialization instead of a TOML library. */
 
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { type Config, MODE_OSS } from "../../config/config";
 import { mcpEndpoint, mcpRemoteServer, writeSecureFile } from "../config-helpers";
 import { expandHome, findNpx, isInstalled, npxPathEnv } from "../detect";
@@ -54,20 +54,27 @@ function installDosuToTOML(path: string, cfg: Config): void {
   writeTOML(path, content);
 }
 
+/** The table name from a TOML section header, tolerating a trailing comment and TOML's optional
+ * inner whitespace: `[ mcp_servers.dosu ] # override` -> `mcp_servers.dosu`. Null if not a header. */
+function sectionName(line: string): string | null {
+  const match = line.trim().match(/^\[([^\]]*)]\s*(?:#.*)?$/);
+  return match ? match[1].trim() : null;
+}
+
+function isDosuSection(name: string): boolean {
+  return name === "mcp_servers.dosu" || name.startsWith("mcp_servers.dosu.");
+}
+
 function removeDosuFromTOML(content: string): string {
   // Remove [mcp_servers.dosu] and [mcp_servers.dosu.*] sections
-  const lines = content.split("\n");
   const result: string[] = [];
   let inDosuSection = false;
 
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (trimmed.match(/^\[mcp_servers\.dosu(\..*)?]$/)) {
-      inDosuSection = true;
-      continue;
-    }
-    if (inDosuSection && trimmed.startsWith("[")) {
-      inDosuSection = false;
+  for (const line of content.split("\n")) {
+    const name = sectionName(line);
+    if (name !== null) {
+      inDosuSection = isDosuSection(name);
+      if (inDosuSection) continue;
     }
     if (!inDosuSection) {
       result.push(line);
@@ -84,23 +91,40 @@ const REMOTE_HTTP_KEY = /^(url|type|bearer_token_env_var)\s*=/;
 function hasRemoteHTTPForm(content: string): boolean {
   let inDosuRoot = false;
   for (const line of content.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith("[")) {
+    const name = sectionName(line);
+    if (name !== null) {
       // The http_headers subtable exists only on the remote-HTTP form.
-      if (/^\[mcp_servers\.dosu\.http_headers]$/.test(trimmed)) return true;
-      inDosuRoot = /^\[mcp_servers\.dosu]$/.test(trimmed);
+      if (name === "mcp_servers.dosu.http_headers") return true;
+      inDosuRoot = name === "mcp_servers.dosu";
       continue;
     }
-    if (inDosuRoot && REMOTE_HTTP_KEY.test(trimmed)) return true;
+    if (inDosuRoot && REMOTE_HTTP_KEY.test(line.trim())) return true;
   }
   return false;
 }
 
-/** Drop a legacy remote-HTTP dosu entry from the scope we are *not* writing. Codex merges
- * mcp_servers.dosu per-key across both configs, so such a leftover lands in the same table as the
+/** Every .codex/config.toml Codex merges for the cwd. Codex walks from the project root — the
+ * nearest ancestor holding a .git marker — down to the working directory and loads each one, so a
+ * legacy entry at the repo root still conflicts when setup runs from a subdirectory. */
+function projectConfigPaths(): string[] {
+  const cwd = process.cwd();
+  const chain: string[] = [];
+  for (let dir = cwd; ; ) {
+    chain.push(dir);
+    if (existsSync(join(dir, ".git"))) break;
+    const parent = dirname(dir);
+    // No project root marker anywhere above: Codex treats the cwd as the only project layer.
+    if (parent === dir) return [join(cwd, ".codex", "config.toml")];
+    dir = parent;
+  }
+  return chain.reverse().map((dir) => join(dir, ".codex", "config.toml"));
+}
+
+/** Drop a legacy remote-HTTP dosu entry from a config layer we are not writing. Codex merges
+ * mcp_servers.dosu per-key across every layer, so such a leftover lands in the same table as the
  * stdio entry we just wrote; Codex resolves that table as stdio, rejects the stray `url`, and fails
  * to load the whole bootstrap config — taking every MCP server down, not just dosu. A *stdio* entry
- * in the other scope is left alone: it merges cleanly, and a local one is a per-repo override. */
+ * in another layer is left alone: it merges cleanly, and a project one is a per-repo override. */
 function pruneLegacyRemoteEntry(path: string): void {
   if (!existsSync(path)) return;
   const content = readTOML(path);
@@ -123,8 +147,21 @@ export const CodexProvider = (): SetupProvider => ({
   install(cfg: Config, global: boolean): void {
     if (cfg.mode !== MODE_OSS && !cfg.active_account?.target?.deployment_id)
       throw new Error("deployment ID is required");
-    installDosuToTOML(getConfigPath(global), cfg);
-    pruneLegacyRemoteEntry(getConfigPath(!global));
+    // A project-local install must never rewrite the global config — other projects rely on that
+    // entry and on its deployment — but a legacy entry there merges into ours and breaks Codex
+    // outright. Stop with the remedy rather than silently deleting it or writing a broken config.
+    if (!global && hasRemoteHTTPForm(readTOML(getConfigPath(true)))) {
+      throw new Error(
+        "the global Codex config still holds the legacy remote-HTTP Dosu entry, which Codex would " +
+          "merge with a project-local entry and reject. Migrate it first with " +
+          "`dosu mcp add codex --global`, then re-run this.",
+      );
+    }
+    const written = getConfigPath(global);
+    installDosuToTOML(written, cfg);
+    for (const path of projectConfigPaths()) {
+      if (path !== written) pruneLegacyRemoteEntry(path);
+    }
   },
   remove(global: boolean): void {
     const path = getConfigPath(global);

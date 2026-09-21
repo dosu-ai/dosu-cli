@@ -524,24 +524,6 @@ X-Deployment-ID = "old-dep"
     expect(global).toContain("mcp-remote@");
   });
 
-  it("local install strips a legacy remote-HTTP entry from the global scope", async () => {
-    const { CodexProvider } = await import("./codex");
-    const provider = CodexProvider();
-    const globalPath = join(tempDir, "codex-home", "config.toml");
-    mkdirSync(join(tempDir, "codex-home"), { recursive: true });
-    writeFileSync(globalPath, LEGACY_REMOTE_TOML);
-
-    provider.install(makeCfg(), false);
-
-    const global = readFileSync(globalPath, "utf-8");
-    expect(global).not.toContain("[mcp_servers.dosu]");
-    expect(global).not.toContain("http_headers");
-    expect(global).toContain("[mcp_servers.other]");
-
-    const local = readFileSync(join(tempDir, ".codex", "config.toml"), "utf-8");
-    expect(local).toContain("[mcp_servers.dosu]");
-  });
-
   it("install leaves a stdio entry in the other scope alone", async () => {
     const { CodexProvider } = await import("./codex");
     const provider = CodexProvider();
@@ -563,6 +545,71 @@ X-Deployment-ID = "old-dep"
     provider.install(makeCfg(), true);
 
     expect(existsSync(join(tempDir, ".codex", "config.toml"))).toBe(false);
+  });
+
+  // Codex walks from the project root to the cwd and loads every .codex/config.toml it finds,
+  // so a legacy entry at the repo root still merges when setup runs from a subdirectory.
+  it("global install prunes a legacy entry at the project root from a subdirectory", async () => {
+    const { CodexProvider } = await import("./codex");
+    const provider = CodexProvider();
+    mkdirSync(join(tempDir, ".git"), { recursive: true });
+    mkdirSync(join(tempDir, ".codex"), { recursive: true });
+    writeFileSync(join(tempDir, ".codex", "config.toml"), LEGACY_REMOTE_TOML);
+    const sub = join(tempDir, "packages", "app");
+    mkdirSync(sub, { recursive: true });
+    process.chdir(sub);
+
+    provider.install(makeCfg(), true);
+
+    const root = readFileSync(join(tempDir, ".codex", "config.toml"), "utf-8");
+    expect(root).not.toContain("[mcp_servers.dosu]");
+    expect(root).toContain("[mcp_servers.other]");
+  });
+
+  // A project-local install must never rewrite the global config: other projects rely on it.
+  it("local install leaves a legacy global entry untouched and fails with a remedy", async () => {
+    const { CodexProvider } = await import("./codex");
+    const provider = CodexProvider();
+    const globalPath = join(tempDir, "codex-home", "config.toml");
+    mkdirSync(join(tempDir, "codex-home"), { recursive: true });
+    writeFileSync(globalPath, LEGACY_REMOTE_TOML);
+
+    expect(() => provider.install(makeCfg(), false)).toThrow(/--global/);
+
+    // Global config preserved verbatim, and no half-written local entry left behind.
+    expect(readFileSync(globalPath, "utf-8")).toBe(LEGACY_REMOTE_TOML);
+    expect(existsSync(join(tempDir, ".codex", "config.toml"))).toBe(false);
+  });
+
+  it("local install proceeds when the global entry is already the stdio form", async () => {
+    const { CodexProvider } = await import("./codex");
+    const provider = CodexProvider();
+
+    provider.install(makeCfg(), true);
+    expect(() => provider.install(makeCfg({ deployment_id: "repo-dep" }), false)).not.toThrow();
+
+    const global = readFileSync(join(tempDir, "codex-home", "config.toml"), "utf-8");
+    expect(global).toContain("/deployments/dep-123");
+    const local = readFileSync(join(tempDir, ".codex", "config.toml"), "utf-8");
+    expect(local).toContain("/deployments/repo-dep");
+  });
+
+  // `[mcp_servers.dosu] # note` is valid TOML; detection and removal must both handle it.
+  it("detects and removes a dosu section carrying a trailing TOML comment", async () => {
+    const { CodexProvider } = await import("./codex");
+    const provider = CodexProvider();
+    const localPath = join(tempDir, ".codex", "config.toml");
+    mkdirSync(join(tempDir, ".codex"), { recursive: true });
+    writeFileSync(
+      localPath,
+      '[mcp_servers.dosu] # deployment override\nurl = "https://api.dosu.dev/v1/mcp"\n',
+    );
+
+    provider.install(makeCfg(), true);
+
+    const local = readFileSync(localPath, "utf-8");
+    expect(local).not.toContain("mcp_servers.dosu");
+    expect(local).not.toContain("url =");
   });
 });
 
