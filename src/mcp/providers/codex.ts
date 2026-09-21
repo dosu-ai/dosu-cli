@@ -1,5 +1,7 @@
-/** Codex provider: CLI and desktop share ~/.codex/config.toml, written via minimal manual TOML
- * serialization instead of a TOML library. */
+/** Codex provider: CLI and desktop share ~/.codex/config.toml, plus a project-local
+ * .codex/config.toml when the cwd has one. Codex merges the two per-key *inside* each
+ * `mcp_servers.<name>` table, so both scopes must agree on the entry's shape. Written via
+ * minimal manual TOML serialization instead of a TOML library. */
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -74,6 +76,38 @@ function removeDosuFromTOML(content: string): string {
   return result.join("\n");
 }
 
+/** Keys that only ever appear on the remote-HTTP form of an MCP entry. */
+const REMOTE_HTTP_KEY = /^(url|type|bearer_token_env_var)\s*=/;
+
+/** Is the dosu entry here the legacy remote-HTTP form? Only the root [mcp_servers.dosu] table is
+ * scanned for marker keys — [.env] holds arbitrary variable names and must not match against them. */
+function hasRemoteHTTPForm(content: string): boolean {
+  let inDosuRoot = false;
+  for (const line of content.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("[")) {
+      // The http_headers subtable exists only on the remote-HTTP form.
+      if (/^\[mcp_servers\.dosu\.http_headers]$/.test(trimmed)) return true;
+      inDosuRoot = /^\[mcp_servers\.dosu]$/.test(trimmed);
+      continue;
+    }
+    if (inDosuRoot && REMOTE_HTTP_KEY.test(trimmed)) return true;
+  }
+  return false;
+}
+
+/** Drop a legacy remote-HTTP dosu entry from the scope we are *not* writing. Codex merges
+ * mcp_servers.dosu per-key across both configs, so such a leftover lands in the same table as the
+ * stdio entry we just wrote; Codex resolves that table as stdio, rejects the stray `url`, and fails
+ * to load the whole bootstrap config — taking every MCP server down, not just dosu. A *stdio* entry
+ * in the other scope is left alone: it merges cleanly, and a local one is a per-repo override. */
+function pruneLegacyRemoteEntry(path: string): void {
+  if (!existsSync(path)) return;
+  const content = readTOML(path);
+  if (!hasRemoteHTTPForm(content)) return;
+  writeTOML(path, removeDosuFromTOML(content));
+}
+
 export const CodexProvider = (): SetupProvider => ({
   name: () => "Codex (CLI + Desktop)",
   id: () => "codex",
@@ -90,6 +124,7 @@ export const CodexProvider = (): SetupProvider => ({
     if (cfg.mode !== MODE_OSS && !cfg.active_account?.target?.deployment_id)
       throw new Error("deployment ID is required");
     installDosuToTOML(getConfigPath(global), cfg);
+    pruneLegacyRemoteEntry(getConfigPath(!global));
   },
   remove(global: boolean): void {
     const path = getConfigPath(global);

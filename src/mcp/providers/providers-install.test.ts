@@ -486,6 +486,84 @@ describe("CodexProvider", () => {
 
     expect(provider.globalConfigPath()).toBe(join(tempDir, "codex-home", "config.toml"));
   });
+
+  // Codex merges `mcp_servers.dosu` per-key across the global and project-local
+  // configs, so a legacy remote-HTTP entry left in the scope we are NOT writing
+  // merges into ours as a stray `url` beside `command`. Codex rejects that with
+  // "url is not supported for stdio" and refuses to load the entire config —
+  // every MCP server goes down, not just dosu.
+  const LEGACY_REMOTE_TOML = `[mcp_servers.other]
+command = "other-cmd"
+
+[mcp_servers.dosu]
+url = "https://api.dosu.dev/v1/mcp"
+
+[mcp_servers.dosu.http_headers]
+X-Deployment-ID = "old-dep"
+`;
+
+  it("global install strips a legacy remote-HTTP entry from the local scope", async () => {
+    const { CodexProvider } = await import("./codex");
+    const provider = CodexProvider();
+    const localPath = join(tempDir, ".codex", "config.toml");
+    mkdirSync(join(tempDir, ".codex"), { recursive: true });
+    writeFileSync(localPath, LEGACY_REMOTE_TOML);
+
+    provider.install(makeCfg(), true);
+
+    const local = readFileSync(localPath, "utf-8");
+    expect(local).not.toContain("[mcp_servers.dosu]");
+    expect(local).not.toContain("http_headers");
+    expect(local).not.toContain("url =");
+    // Only the dosu entry is pruned; unrelated servers survive untouched.
+    expect(local).toContain("[mcp_servers.other]");
+    expect(local).toContain('command = "other-cmd"');
+
+    const global = readFileSync(join(tempDir, "codex-home", "config.toml"), "utf-8");
+    expect(global).toContain("[mcp_servers.dosu]");
+    expect(global).toContain("mcp-remote@");
+  });
+
+  it("local install strips a legacy remote-HTTP entry from the global scope", async () => {
+    const { CodexProvider } = await import("./codex");
+    const provider = CodexProvider();
+    const globalPath = join(tempDir, "codex-home", "config.toml");
+    mkdirSync(join(tempDir, "codex-home"), { recursive: true });
+    writeFileSync(globalPath, LEGACY_REMOTE_TOML);
+
+    provider.install(makeCfg(), false);
+
+    const global = readFileSync(globalPath, "utf-8");
+    expect(global).not.toContain("[mcp_servers.dosu]");
+    expect(global).not.toContain("http_headers");
+    expect(global).toContain("[mcp_servers.other]");
+
+    const local = readFileSync(join(tempDir, ".codex", "config.toml"), "utf-8");
+    expect(local).toContain("[mcp_servers.dosu]");
+  });
+
+  it("install leaves a stdio entry in the other scope alone", async () => {
+    const { CodexProvider } = await import("./codex");
+    const provider = CodexProvider();
+
+    // A project-local stdio entry is a deliberate per-repo deployment override:
+    // it merges cleanly with ours, so the CLI must not delete it.
+    provider.install(makeCfg({ deployment_id: "repo-dep" }), false);
+    provider.install(makeCfg(), true);
+
+    const local = readFileSync(join(tempDir, ".codex", "config.toml"), "utf-8");
+    expect(local).toContain("[mcp_servers.dosu]");
+    expect(local).toContain("/deployments/repo-dep");
+  });
+
+  it("install does not create the other scope's config file", async () => {
+    const { CodexProvider } = await import("./codex");
+    const provider = CodexProvider();
+
+    provider.install(makeCfg(), true);
+
+    expect(existsSync(join(tempDir, ".codex", "config.toml"))).toBe(false);
+  });
 });
 
 // --- 3. Copilot provider ---
