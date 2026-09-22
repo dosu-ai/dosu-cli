@@ -101,6 +101,18 @@ The `properties` allowlist is:
 | `is_authenticated` | Boolean only; it does not duplicate the top-level identity. |
 | `exit_code` | Integer clamped to `0..255`. |
 | `error_code` | Optional validated, stable, low-cardinality code; never a message. |
+| `sync_trigger` | Optional, `knowledge sync` only: `hook`, `manual`, or `bootstrap`. |
+| `sync_status` | Optional, `knowledge sync` only: the pipeline status (`backlog`, `nothing-new`, `skipped-backoff`, `skipped-lock`, `skipped-gateway`, `skipped-paused`, `studied`, `mine-failed`, `error`) or a command-level outcome (`detached` for the hook parent that only re-spawns, `detach-failed`, `status-only` for `--status`). |
+| `sessions_studied` | Optional, `knowledge sync` only: sessions handed to the learner this invocation, bucketed to `0`, `1-4`, `5-9`, `10-19`, `20-49`, or `50+`. Summed across bootstrap rounds. |
+| `notes_written` | Optional, `knowledge sync` only: `write_knowledge` calls allowed through this invocation, same buckets. |
+| `learner_outcome` | Optional, `knowledge sync` only: `completed`, `settings_conflict`, `consent_off`, `credit_limit`, `quota_exceeded`, or `error`. |
+| `backfill_offer` | Optional, `setup`/`tui` only: what happened to the post-install "study past sessions" prompt — `not-offered` (empty backlog), `accepted`, `declined`, `cancelled`, or `spawn-failed`. |
+
+The optional per-command facets are recorded by the running command through
+`recordCommandFacets()` and attached to its single completion event. Every value is checked against
+a closed vocabulary in `src/telemetry/telemetry.ts` and counts are bucketed before transport, so a
+new status string cannot reach PostHog until it is added to the allowlist. Facets never include
+session identifiers, project names, note titles, or note content.
 
 Signed-in command events join the existing PostHog person identified by the web app with the same
 Dosu user UUID. When the current authenticated config has a selected organization UUID, the event
@@ -174,9 +186,10 @@ a selected organization do not include a group association.
 Current common setup properties are `cli_version`, `install_channel`, `platform`, `arch`, and `mode`.
 Current callers also use only these workflow properties: `onboarding_run_id`,
 `has_deployment_option`, `mode_option`, `flow_kind`, `reason`, `provider_count`, `providers`,
-`completed_mcp`, `completed_skill`, `completed_agents_md`, `completed_logs_handoff`, and
-`logs_handoff` (`accepted` / `declined` / `cancelled`, only when the post-setup log-study
-confirm was shown). Setup events use stable names in the
+`completed_mcp`, `completed_skill`, and `completed_agents_md`. The post-install "study past
+sessions" offer is not a setup event; its outcome rides on the `setup` command's
+`cli_command_completed` event as `backfill_offer` (see the command telemetry table above). Setup
+events use stable names in the
 `cli_onboarding_*` family. They do not include raw authentication errors. This path uses a dedicated
 no-refresh client, runs without blocking setup, refuses redirects, and aborts its request after
 500ms. The public API input remains a generic property record for generated-client compatibility,

@@ -203,6 +203,7 @@ import { ClaudeDesktopProvider } from "../mcp/providers/claude-desktop";
 import { CodexProvider } from "../mcp/providers/codex";
 import { CursorProvider } from "../mcp/providers/cursor";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
+import { consumeCommandFacets } from "../telemetry/telemetry";
 import { runActivityView } from "../tui/activity-view";
 import * as p from "../tui/prompts";
 import {
@@ -3251,6 +3252,63 @@ describe("stepOfferInitialSync", () => {
     await stepOfferInitialSync(makeCfg());
 
     expect(vi.mocked(p.log.warn).mock.calls.join(" ")).toContain("Could not start");
+  });
+
+  describe("analytics facet on the setup completion event", () => {
+    beforeEach(() => {
+      consumeCommandFacets();
+    });
+
+    it("records nothing when the step is skipped for a missing credential", async () => {
+      await stepOfferInitialSync(makeCfg({ api_key: undefined }));
+
+      expect(consumeCommandFacets()).toBeUndefined();
+    });
+
+    it("records not-offered when there is no backlog", async () => {
+      mockRunKnowledgeSync.mockResolvedValue({
+        status: "nothing-new",
+        readySessions: 0,
+        inFlightSessions: 0,
+        sessions: [],
+      });
+
+      await stepOfferInitialSync(makeCfg());
+
+      expect(consumeCommandFacets()).toEqual({ backfill_offer: "not-offered" });
+    });
+
+    it("records accepted once the drain is spawned", async () => {
+      mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(4));
+      vi.mocked(p.confirm).mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+      mockSpawnDetachedSelf.mockReturnValue(true);
+
+      await stepOfferInitialSync(makeCfg());
+
+      expect(consumeCommandFacets()).toEqual({ backfill_offer: "accepted" });
+    });
+
+    it("records declined vs cancelled separately", async () => {
+      mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(2));
+      vi.mocked(p.confirm).mockResolvedValue(false);
+      await stepOfferInitialSync(makeCfg());
+      expect(consumeCommandFacets()).toEqual({ backfill_offer: "declined" });
+
+      vi.mocked(p.confirm).mockResolvedValue(Symbol("cancel"));
+      vi.mocked(p.isCancel).mockReturnValue(true);
+      await stepOfferInitialSync(makeCfg());
+      expect(consumeCommandFacets()).toEqual({ backfill_offer: "cancelled" });
+    });
+
+    it("records spawn-failed when the detached drain cannot start", async () => {
+      mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(2));
+      vi.mocked(p.confirm).mockResolvedValue(true);
+      mockSpawnDetachedSelf.mockReturnValue(false);
+
+      await stepOfferInitialSync(makeCfg());
+
+      expect(consumeCommandFacets()).toEqual({ backfill_offer: "spawn-failed" });
+    });
   });
 });
 
