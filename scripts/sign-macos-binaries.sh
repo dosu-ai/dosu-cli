@@ -17,5 +17,5 @@ for binary in "$@"; do
     exit 1
   fi
   codesign --force --sign - "$binary"
-  codesign --verify --verbose=2 "$binary"
+  codesign --verify --strict --verbose=2 "$binary"
 done

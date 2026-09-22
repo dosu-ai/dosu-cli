@@ -145,11 +145,15 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build, sign, and launch macOS binary
+      - name: Build, sign, and launch macOS binaries
         run: |
           bun run build:all
-          bash scripts/sign-macos-binaries.sh dist/dosu-darwin-arm64 dist/dosu-darwin-x64
+          DOSU_INSTALL_CHANNEL=homebrew DOSU_OUTPUT_SUFFIX=-homebrew bun run build:all
+          bash scripts/sign-macos-binaries.sh \
+            dist/dosu-darwin-arm64 dist/dosu-darwin-x64 \
+            dist/dosu-darwin-arm64-homebrew dist/dosu-darwin-x64-homebrew
           ./dist/dosu-darwin-arm64 --version
+          ./dist/dosu-darwin-arm64-homebrew --version
 
       - name: Verify npm bundle on macOS
         run: |
