@@ -123,6 +123,7 @@ import { delimiter, join } from "node:path";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { HookConfigError } from "../hooks/formats";
 import { MINE_BATCH_LIMIT } from "../sync/sync";
+import { consumeCommandFacets } from "../telemetry/telemetry";
 import { knowledgeCommand } from "./knowledge";
 
 let logSpy: ReturnType<typeof vi.spyOn>;
@@ -172,6 +173,7 @@ beforeEach(() => {
   exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
     throw new Error("exit");
   }) as never);
+  consumeCommandFacets(); // start each test with an empty analytics facet store
 });
 
 afterEach(() => {
@@ -913,6 +915,92 @@ describe("knowledge sync", () => {
       learner: { outcome: "completed", notesWritten: 2, turns: 10 },
     };
   }
+
+  describe("analytics facets", () => {
+    it("tags a hook-triggered study run with its status and bucketable counts", async () => {
+      mockRunSync.mockResolvedValue({
+        status: "studied",
+        readySessions: 8,
+        inFlightSessions: 0,
+        sessions: [],
+        studiedSessions: 5,
+        learner: { outcome: "completed", notesWritten: 3, turns: 12 },
+      });
+
+      await run("sync", "--quiet");
+
+      expect(consumeCommandFacets()).toEqual({
+        sync_trigger: "hook",
+        sync_status: "studied",
+        sessions_studied: 5,
+        notes_written: 3,
+        learner_outcome: "completed",
+      });
+    });
+
+    it("tags a manual run that only reported the backlog", async () => {
+      mockRunSync.mockResolvedValue({ status: "backlog", readySessions: 3, inFlightSessions: 1 });
+
+      await run("sync");
+
+      expect(consumeCommandFacets()).toEqual({
+        sync_trigger: "manual",
+        sync_status: "backlog",
+        sessions_studied: 0,
+        notes_written: 0,
+      });
+    });
+
+    it("sums sessions and notes across bootstrap rounds and keeps the final status", async () => {
+      mockRunSync
+        .mockResolvedValueOnce(studiedOutcome(8))
+        .mockResolvedValueOnce(studiedOutcome(3))
+        .mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
+
+      await run("sync", "--bootstrap");
+
+      expect(consumeCommandFacets()).toEqual({
+        sync_trigger: "bootstrap",
+        sync_status: "nothing-new",
+        sessions_studied: 8,
+        notes_written: 4,
+      });
+    });
+
+    it("tags the --detach parent so it is never counted as a pipeline run", async () => {
+      mockSpawnDetached.mockReturnValue(true);
+
+      await run("sync", "--quiet", "--detach");
+
+      expect(consumeCommandFacets()).toEqual({ sync_trigger: "hook", sync_status: "detached" });
+    });
+
+    it("reports a failed detached spawn", async () => {
+      mockSpawnDetached.mockReturnValue(false);
+
+      await run("sync", "--detach", "--bootstrap");
+
+      expect(consumeCommandFacets()).toEqual({
+        sync_trigger: "bootstrap",
+        sync_status: "detach-failed",
+      });
+    });
+
+    it("tags --status as a read-only invocation", async () => {
+      mockGetSyncStatus.mockReturnValue({
+        running: false,
+        state: { schema_version: 1, watermark: null, consecutive_failures: 0 },
+        recentActivity: [],
+      });
+
+      await run("sync", "--status");
+
+      expect(consumeCommandFacets()).toEqual({
+        sync_trigger: "manual",
+        sync_status: "status-only",
+      });
+    });
+  });
 
   it("--bootstrap passes the bootstrap scope on every round", async () => {
     mockRunSync

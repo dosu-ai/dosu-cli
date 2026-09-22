@@ -1,3 +1,17 @@
+# [0.54.0](https://github.com/dosu-ai/dosu-cli/compare/v0.53.1...v0.54.0) (2026-09-22)
+
+
+### Features
+
+* **telemetry:** add knowledge sync and backfill-offer facets ([#230](https://github.com/dosu-ai/dosu-cli/issues/230)) ([96db407](https://github.com/dosu-ai/dosu-cli/commit/96db407be398af20d83d549da0255f5a15cd8b1d))
+
+## [0.53.1](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0...v0.53.1) (2026-09-21)
+
+
+### Bug Fixes
+
+* **codex:** strip legacy remote-HTTP entry from the other config scope ([#229](https://github.com/dosu-ai/dosu-cli/issues/229)) ([003b7ec](https://github.com/dosu-ai/dosu-cli/commit/003b7ece8688910b2bb438e75c5dd9c0a4d2fbef))
+
 # [0.53.0](https://github.com/dosu-ai/dosu-cli/compare/v0.52.3...v0.53.0) (2026-09-17)
 
 

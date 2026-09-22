@@ -28,6 +28,7 @@ import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { getStatuslineAgent, StatuslineConflictError } from "../statusline/agents";
 import { spawnDetachedSelf } from "../sync/detach";
 import { runKnowledgeSync } from "../sync/sync";
+import { recordCommandFacets } from "../telemetry/telemetry";
 import { runActivityView } from "../tui/activity-view";
 import { installCenteredLayout } from "../tui/layout";
 import * as p from "../tui/prompts";
@@ -374,6 +375,7 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
   const outcome = await runKnowledgeSync({ bootstrap: true });
   if (outcome.status !== "backlog" || outcome.readySessions === 0) {
     s.stop("No past agent sessions to study. Dosu will learn from new ones as you work.");
+    recordCommandFacets({ backfill_offer: "not-offered" });
     return;
   }
   const n = outcome.readySessions;
@@ -399,6 +401,7 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
     initialValue: true,
   });
   if (p.isCancel(mineNow) || !mineNow) {
+    recordCommandFacets({ backfill_offer: p.isCancel(mineNow) ? "cancelled" : "declined" });
     p.log.info(
       wrapLog(
         `Skipped. Dosu studies new sessions in the background as you work; run ${info("dosu knowledge sync")} anytime to study these too.`,
@@ -408,6 +411,7 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
   }
 
   if (spawnDetachedSelf(["knowledge", "sync", "--quiet", "--bootstrap"])) {
+    recordCommandFacets({ backfill_offer: "accepted" });
     p.log.success(
       wrapLog(
         `\uD83D\uDCDA Studying ${n} session${n === 1 ? "" : "s"} in the background. Watch progress on the Activity screen; when it finishes, the new notes are in Dosu and agents connected to this MCP can use them.`,
@@ -421,6 +425,7 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
     });
     if (!p.isCancel(watch) && watch) await runActivityView();
   } else {
+    recordCommandFacets({ backfill_offer: "spawn-failed" });
     p.log.warn(`Could not start the background sync. Run ${info("dosu knowledge sync")} manually.`);
   }
 }

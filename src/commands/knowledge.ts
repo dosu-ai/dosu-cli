@@ -17,6 +17,7 @@ import { spawnDetachedSelf } from "../sync/detach";
 import { formatTokenCount, getSyncStatus, type SyncStatus } from "../sync/status";
 import { MINE_BATCH_LIMIT, runKnowledgeSync, type SyncDeps, type SyncOutcome } from "../sync/sync";
 import { loadSyncState } from "../sync/watermark";
+import { recordCommandFacets } from "../telemetry/telemetry";
 import { resolveAgents } from "./agent-select";
 import { positiveInteger } from "./arguments";
 import { requireLoginConfig } from "./auth";
@@ -222,9 +223,14 @@ export function knowledgeCommand(): Command {
         out?: string;
         json?: boolean;
       }) => {
+        // Analytics facets on this command's completion event: coarse trigger/status only, so
+        // dashboards can tell hook fires, detached parents, and real study runs apart.
+        const trigger = opts.bootstrap ? "bootstrap" : opts.quiet ? "hook" : "manual";
+
         // --status never scans or mines: it reads the lock, the persisted
         // watermark state, and the tail of the debug log.
         if (opts.status) {
+          recordCommandFacets({ sync_trigger: trigger, sync_status: "status-only" });
           const status = getSyncStatus();
           if (opts.json) {
             printResult(status, opts);
@@ -237,7 +243,7 @@ export function knowledgeCommand(): Command {
         if (opts.detach) {
           // Hooks call `sync --quiet --detach`; the re-spawned child runs the
           // actual pipeline so the hooking agent gets its exit immediately.
-          spawnDetachedSelf([
+          const spawned = spawnDetachedSelf([
             "knowledge",
             "sync",
             ...(opts.quiet ? ["--quiet"] : []),
@@ -245,6 +251,11 @@ export function knowledgeCommand(): Command {
             ...(opts.report ? ["--report"] : []),
             ...(opts.out ? ["--out", opts.out] : []),
           ]);
+          // The parent's own event is tagged so it is never mistaken for a pipeline run.
+          recordCommandFacets({
+            sync_trigger: trigger,
+            sync_status: spawned ? "detached" : "detach-failed",
+          });
           return;
         }
 
@@ -254,6 +265,8 @@ export function knowledgeCommand(): Command {
           bootstrap: opts.bootstrap,
           deps,
         });
+        let sessionsStudied = outcome.studiedSessions ?? 0;
+        let notesWritten = outcome.learner?.notesWritten ?? 0;
 
         // Bootstrap drains the whole backlog in this process; any non-studied status ends the
         // drain; the round cap guards against a learner that never stops reporting progress.
@@ -262,8 +275,18 @@ export function knowledgeCommand(): Command {
           for (let round = 1; outcome.status === "studied" && round < maxRounds; round++) {
             if (!opts.quiet && !opts.json) printSyncOutcome(outcome);
             outcome = await runKnowledgeSync({ quiet: opts.quiet, bootstrap: true, deps });
+            sessionsStudied += outcome.studiedSessions ?? 0;
+            notesWritten += outcome.learner?.notesWritten ?? 0;
           }
         }
+
+        recordCommandFacets({
+          sync_trigger: trigger,
+          sync_status: outcome.status,
+          sessions_studied: sessionsStudied,
+          notes_written: notesWritten,
+          ...(outcome.learner ? { learner_outcome: outcome.learner.outcome } : {}),
+        });
 
         if (opts.quiet) return; // Invisible by contract; details are in the debug log.
 
