@@ -69,6 +69,15 @@ describe("buildLearnerEnv", () => {
     expect(env.DISABLE_ERROR_REPORTING).toBe("1");
   });
 
+  it("caps subprocess output tokens even when the base env sets its own cap", () => {
+    const env = buildLearnerEnv({
+      ...baseOptions,
+      baseEnv: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: "128000" },
+    });
+
+    expect(env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe("32000");
+  });
+
   it("drops undefined base values instead of stringifying them", () => {
     const env = buildLearnerEnv({
       ...baseOptions,

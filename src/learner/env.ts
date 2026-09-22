@@ -49,6 +49,9 @@ export function buildLearnerEnv(options: LearnerEnvOptions): NodeJS.ProcessEnv {
   env.ANTHROPIC_AUTH_TOKEN = options.apiKey;
   env.ANTHROPIC_CUSTOM_HEADERS = headers.join("\n");
   env.CLAUDE_CONFIG_DIR = options.configDir;
+  // Claude Code's default output cap follows its default model and can exceed what the model the
+  // gateway actually routes to accepts; study runs stay far below this cap.
+  env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = "32000";
   // No update checks, error reporting, or telemetry from the subprocess —
   // the only network traffic a learner run should produce is gateway calls.
   env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";

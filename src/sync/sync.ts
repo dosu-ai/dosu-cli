@@ -339,11 +339,17 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
         return { status: "skipped-gateway", ...base, studiedSessions: 0, learner };
       }
       default: {
-        // settings_conflict / error: real failures — back off before retrying.
+        // settings_conflict / gateway_rejected / error: real failures — back off before retrying.
+        // Any 400 counts, including one the batch's own content triggers, so it can't skip the
+        // backoff; its quoted reason is still persisted for the status views.
+        const at = now().toISOString();
         saveState({
           ...state,
-          last_attempt_at: now().toISOString(),
+          last_attempt_at: at,
           consecutive_failures: state.consecutive_failures + 1,
+          ...(learner.outcome === "gateway_rejected" && learner.message
+            ? { last_refusal: { at, outcome: learner.outcome, message: learner.message } }
+            : {}),
         });
         logger.debug("sync", `studying failed: ${learner.outcome}; ${learner.message ?? ""}`);
         return {
