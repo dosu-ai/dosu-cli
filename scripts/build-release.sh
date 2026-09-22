@@ -16,6 +16,14 @@ DOSU_VERSION="$VERSION" DOSU_INSTALL_CHANNEL=binary \
 DOSU_VERSION="$VERSION" DOSU_INSTALL_CHANNEL=homebrew DOSU_OUTPUT_SUFFIX=-homebrew \
   bun --env-file=.env.production run scripts/build-all.ts
 
+# Bun's embedded macOS signature can fail verification and cause a launch-time
+# SIGKILL. Sign both download and Homebrew binaries before archiving them.
+bash scripts/sign-macos-binaries.sh \
+  dist/dosu-darwin-arm64 dist/dosu-darwin-x64 \
+  dist/dosu-darwin-arm64-homebrew dist/dosu-darwin-x64-homebrew
+./dist/dosu-darwin-arm64 --version
+./dist/dosu-darwin-arm64-homebrew --version
+
 # Create archives
 cd dist
 for f in dosu-*; do
@@ -28,4 +36,4 @@ done
 
 echo ""
 echo "==> Release archives:"
-ls -lh *.tar.gz *.zip
+ls -lh ./*.tar.gz ./*.zip
