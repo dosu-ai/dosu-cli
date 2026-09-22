@@ -112,7 +112,7 @@ describe("createJSONProvider (base)", () => {
 
     provider.install(makeCfg(), true);
     const cloud = loadJSONConfig(globalPath).mcpServers.dosu;
-    expect(cloud.endpoint).toContain("/v1/mcp/deployments/dep-123");
+    expect(cloud.endpoint).toContain("/v2/mcp/deployments/dep-123");
     expect(cloud.auth).toBe("key-abc");
   });
 

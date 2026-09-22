@@ -1493,7 +1493,7 @@ describe("runSetup integration", () => {
     expect(savedCfg.active_account?.target?.api_key).toBe("key-abc");
 
     const cursorConfig = loadJSONConfig(join(tempDir, ".cursor", "mcp.json"));
-    expect(cursorConfig.mcpServers.dosu.url).toContain("/v1/mcp/deployments/d2");
+    expect(cursorConfig.mcpServers.dosu.url).toContain("/v2/mcp/deployments/d2");
     expect(cursorConfig.mcpServers.dosu.url).not.toBe(ossConfig.mcpServers.dosu.url);
   });
 
@@ -1568,7 +1568,7 @@ describe("runSetup integration", () => {
     await runSetup();
 
     const cursorConfig = loadJSONConfig(cursorConfigPath);
-    expect(cursorConfig.mcpServers.dosu.url).toContain("/v1/mcp/deployments/d1");
+    expect(cursorConfig.mcpServers.dosu.url).toContain("/v2/mcp/deployments/d1");
     expect(cursorConfig.mcpServers.dosu.headers["X-Dosu-API-Key"]).toBe("key-abc");
   });
 

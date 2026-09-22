@@ -237,7 +237,8 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
           [SESSIONS_SERVER_NAME]: createSessionToolsServer(options.sessions),
           [KNOWLEDGE_SERVER_NAME]: {
             type: "http",
-            url: mcpURL(options.deploymentID),
+            // v1 explicitly: studying writes notes through write_knowledge, which v2 does not serve.
+            url: mcpURL(options.deploymentID, "v1"),
             // Session-context headers the backend stores on each note; repo/branch/commit
             // headers are omitted because one run mines many repos, and absent beats wrong.
             headers: {

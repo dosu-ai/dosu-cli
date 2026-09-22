@@ -31,10 +31,14 @@ describe("mcpURL", () => {
     }
   });
 
-  it("builds correct URL with deployment ID", () => {
+  it("installs the v2 memory surface by default", () => {
     const url = mcpURL("deploy-abc");
-    expect(url).toContain("/v1/mcp/deployments/deploy-abc");
+    expect(url).toContain("/v2/mcp/deployments/deploy-abc");
     expect(url).toMatch(/^https?:\/\//);
+  });
+
+  it("still reaches v1 when a caller needs write_knowledge", () => {
+    expect(mcpURL("deploy-abc", "v1")).toContain("/v1/mcp/deployments/deploy-abc");
   });
 });
 
