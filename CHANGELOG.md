@@ -1,3 +1,10 @@
+# [0.55.0](https://github.com/dosu-ai/dosu-cli/compare/v0.54.1...v0.55.0) (2026-09-22)
+
+
+### Features
+
+* **knowledge:** status-line indicator and /dosu-incognito per-session opt-out ([#224](https://github.com/dosu-ai/dosu-cli/issues/224)) ([79bac65](https://github.com/dosu-ai/dosu-cli/commit/79bac654e70a9aa5845c641609007c4153395053))
+
 ## [0.54.1](https://github.com/dosu-ai/dosu-cli/compare/v0.54.0...v0.54.1) (2026-09-22)
 
 
