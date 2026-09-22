@@ -486,6 +486,15 @@ describe("runLearner", () => {
     expect(result.message).toBeUndefined();
   });
 
+  it("treats an error result with no result text as a generic failure", async () => {
+    queryReturning(successResult({ is_error: true, result: undefined }));
+
+    const result = await runLearner(baseOptions);
+
+    expect(result.outcome).toBe("error");
+    expect(result.message).toBe("Study run failed; see debug log for details.");
+  });
+
   it("falls back to the configured LLM gateway URL when none is passed", async () => {
     const previous = process.env.DOSU_LLM_GATEWAY_URL_OVERRIDE;
     process.env.DOSU_LLM_GATEWAY_URL_OVERRIDE = "https://gateway.example.test/v1/llm-gateway";
