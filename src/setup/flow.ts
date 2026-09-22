@@ -312,11 +312,16 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
   }
 
   if (mcpCompleted || skillCompleted || agentsMdCompleted) {
+    // Hooks are what make the new CLI learn continuously, so activation needs to know whether
+    // any were enabled alongside the MCP installs — not just that MCP was configured.
+    const hookCount = configuredProviders.filter((result) => result.hook).length;
     trackInBackground(
       trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_completed", {
         completed_mcp: mcpCompleted,
         completed_skill: skillCompleted,
         completed_agents_md: agentsMdCompleted,
+        completed_hooks: hookCount > 0,
+        hook_count: hookCount,
       }),
     );
   }

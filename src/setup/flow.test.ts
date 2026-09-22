@@ -2089,6 +2089,31 @@ describe("runSetup integration", () => {
       (e) => e.event === "cli_onboarding_completed",
     );
     expect(completed?.properties.completed_agents_md).toBe(true);
+    // Cursor's knowledge sync hook rode along with the MCP install.
+    expect(completed?.properties).toMatchObject({ completed_hooks: true, hook_count: 1 });
+  });
+
+  it("reports completed_hooks=false when the hook could not be enabled", async () => {
+    const cfg = makeCfg();
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    // An unparseable hooks file makes the hook step fail open while MCP still installs.
+    writeFileSync(join(tempDir, ".cursor", "hooks.json"), "not json {");
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    mockToolSelection(["cursor"]);
+
+    await runSetup();
+
+    const completed = trackedCliOnboardingEvents().find(
+      (e) => e.event === "cli_onboarding_completed",
+    );
+    expect(completed?.properties).toMatchObject({
+      completed_mcp: true,
+      completed_hooks: false,
+      hook_count: 0,
+    });
   });
 
   it("does not update AGENTS.md when no agent was configured", async () => {
