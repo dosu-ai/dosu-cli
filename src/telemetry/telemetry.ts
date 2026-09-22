@@ -122,6 +122,7 @@ const LEARNER_OUTCOMES = new Set([
   "consent_off",
   "credit_limit",
   "quota_exceeded",
+  "gateway_rejected",
   "error",
 ]);
 const BACKFILL_OFFERS = new Set([

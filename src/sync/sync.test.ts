@@ -3,7 +3,7 @@ import type { LearnerRunResult } from "../learner/runner";
 import type { AgentSession } from "../sessions/scan";
 import type { SyncLock } from "./lock";
 import { MINE_BATCH_LIMIT, runKnowledgeSync, type SyncDeps } from "./sync";
-import type { SyncState } from "./watermark";
+import { backoffUntil, type SyncState } from "./watermark";
 
 const mockLoggerDebug = vi.hoisted(() => vi.fn());
 vi.mock("../debug/logger", () => ({
@@ -395,6 +395,59 @@ describe("runKnowledgeSync studying", () => {
     expect(saved[0].consecutive_failures).toBe(0);
     // The reason is persisted so status surfaces can explain the pause.
     expect(saved[0].last_refusal).toMatchObject({ outcome, message: "nope" });
+  });
+
+  it("backs off after a gateway rejection but keeps its reason for status views", async () => {
+    const message =
+      "LLM gateway rejected the study run: max_tokens: 128000 > 64000, which is the maximum allowed number of output tokens for claude-haiku-4-5-20251001";
+    const { deps, saved } = makeStudyingDeps({
+      listSessions: vi.fn().mockResolvedValue([session(30)]),
+      loadState: () => ({ schema_version: 1, watermark: null, consecutive_failures: 1 }),
+      mine: vi.fn().mockResolvedValue(learnerResult({ outcome: "gateway_rejected", message })),
+      lock: openLock(),
+    });
+
+    const result = await runKnowledgeSync({ deps });
+
+    // Any 400 lands here, including ones a batch's own content triggers, so it must back off
+    // like a failure rather than re-running the same batch on every hook.
+    expect(result.status).toBe("mine-failed");
+    expect(result.error).toBe(message);
+    expect(saved[0].watermark).toBeNull();
+    expect(saved[0].consecutive_failures).toBe(2);
+    expect(backoffUntil(saved[0])).toEqual(new Date(NOW.getTime() + 30 * 60 * 1000));
+    expect(saved[0].last_refusal).toEqual({
+      at: NOW.toISOString(),
+      outcome: "gateway_rejected",
+      message,
+    });
+  });
+
+  it("a manual run studies through a gateway-rejection backoff and clears the reason", async () => {
+    const mine = vi.fn().mockResolvedValue(learnerResult());
+    const { deps, saved } = makeStudyingDeps({
+      listSessions: vi.fn().mockResolvedValue([session(30)]),
+      mine,
+      lock: openLock(),
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        last_attempt_at: new Date(NOW.getTime() - 60 * 1000).toISOString(),
+        consecutive_failures: 3,
+        last_refusal: {
+          at: new Date(NOW.getTime() - 60 * 1000).toISOString(),
+          outcome: "gateway_rejected",
+          message: "LLM gateway rejected the study run: max_tokens too large",
+        },
+      }),
+    });
+
+    const result = await runKnowledgeSync({ deps });
+
+    expect(mine).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe("studied");
+    expect(saved[0].consecutive_failures).toBe(0);
+    expect(saved[0].last_refusal).toBeUndefined();
   });
 
   it("clears a persisted refusal on the next successful run", async () => {

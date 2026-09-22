@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../sessions/scan";
 import { getVersionString } from "../version/version";
-import { classifyGatewayError, runLearner, traceAgentMessage } from "./runner";
+import {
+  classifyGatewayError,
+  classifyGatewayRejection,
+  runLearner,
+  traceAgentMessage,
+} from "./runner";
 
 const debugMock = vi.hoisted(() => vi.fn());
 vi.mock("../debug/logger", () => ({
@@ -77,6 +82,43 @@ describe("classifyGatewayError", () => {
       "quota_exceeded",
     );
     expect(classifyGatewayError("some other failure")).toBeNull();
+  });
+});
+
+describe("classifyGatewayRejection", () => {
+  it("quotes the upstream text of a 400 the way Claude Code renders it", () => {
+    expect(
+      classifyGatewayRejection(
+        "API Error: 400 max_tokens: 128000 > 64000, which is the maximum allowed number of output tokens for claude-haiku-4-5-20251001",
+      ),
+    ).toEqual({
+      outcome: "gateway_rejected",
+      message:
+        "LLM gateway rejected the study run: max_tokens: 128000 > 64000, which is the maximum allowed number of output tokens for claude-haiku-4-5-20251001",
+    });
+  });
+
+  it("unwraps the raw JSON error body older Claude Code builds print", () => {
+    const result = classifyGatewayRejection(
+      'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: 128000 > 64000, which is the maximum allowed number of output tokens for claude-haiku-4-5-20251001"}}',
+    );
+
+    expect(result?.message).toBe(
+      "LLM gateway rejected the study run: max_tokens: 128000 > 64000, which is the maximum allowed number of output tokens for claude-haiku-4-5-20251001",
+    );
+  });
+
+  it("bounds the quoted text to one line", () => {
+    const result = classifyGatewayRejection(`API Error: 400 bad\n${"x".repeat(1000)}`);
+
+    expect(result?.message).not.toContain("\n");
+    expect(result?.message.length).toBeLessThan(500);
+    expect(result?.message).toContain("…");
+  });
+
+  it("ignores other statuses and non-API text", () => {
+    expect(classifyGatewayRejection("API Error: 500 upstream exploded")).toBeNull();
+    expect(classifyGatewayRejection("spawn ENOENT")).toBeNull();
   });
 });
 
@@ -325,6 +367,57 @@ describe("runLearner", () => {
 
     expect(result.outcome).toBe("consent_off");
     expect(result.message).toContain("org admin");
+  });
+
+  it("maps an upstream 400 error result to gateway_rejected with the quoted text", async () => {
+    queryReturning(
+      successResult({
+        is_error: true,
+        api_error_status: 400,
+        result:
+          "API Error: 400 max_tokens: 128000 > 64000, which is the maximum allowed number of output tokens for claude-haiku-4-5-20251001",
+      }),
+    );
+
+    const result = await runLearner(baseOptions);
+
+    expect(result.outcome).toBe("gateway_rejected");
+    expect(result.message).toBe(
+      "LLM gateway rejected the study run: max_tokens: 128000 > 64000, which is the maximum allowed number of output tokens for claude-haiku-4-5-20251001",
+    );
+  });
+
+  it("lets a dosu_* refusal token win over a 400", async () => {
+    queryReturning(
+      successResult({ is_error: true, result: "API Error: 400 dosu_credit_limit_reached" }),
+    );
+
+    const result = await runLearner(baseOptions);
+
+    expect(result.outcome).toBe("credit_limit");
+  });
+
+  it("keeps a completed run whose summary mentions a 400 completed", async () => {
+    queryReturning(successResult({ result: "API Error: 400 was the bug this session fixed." }));
+
+    const result = await runLearner(baseOptions);
+
+    expect(result.outcome).toBe("completed");
+  });
+
+  it("maps a 400 thrown by the SDK", async () => {
+    queryMock.mockImplementation(() => {
+      return (async function* () {
+        yield await Promise.reject(
+          new Error("Claude Code returned an error result: API Error: 400 max_tokens too large"),
+        );
+      })();
+    });
+
+    const result = await runLearner(baseOptions);
+
+    expect(result.outcome).toBe("gateway_rejected");
+    expect(result.message).toBe("LLM gateway rejected the study run: max_tokens too large");
   });
 
   it("maps a quota error thrown by the SDK", async () => {

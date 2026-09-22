@@ -21,6 +21,7 @@ export type LearnerOutcome =
   | "consent_off"
   | "credit_limit"
   | "quota_exceeded"
+  | "gateway_rejected"
   | "error";
 
 export interface LearnerRunResult {
@@ -88,6 +89,30 @@ function snippet(value: unknown): string {
   const text = typeof value === "string" ? value : JSON.stringify(value);
   const flat = (text ?? "").replace(/\s+/g, " ").trim();
   return flat.length > TRACE_SNIPPET_LIMIT ? `${flat.slice(0, TRACE_SNIPPET_LIMIT)}…` : flat;
+}
+
+/** Claude Code's rendering of a 400 the gateway passed back, e.g. `API Error: 400 max_tokens: …`;
+ * older builds print the raw JSON error body instead of its message. */
+const API_400_PATTERN = /API Error: 400\b\s*(.*)/s;
+
+/** Map a 400 from the gateway to a renderable line quoting the upstream text. Only for text known
+ * to be an error: a successful run's summary can mention a 400 too. */
+export function classifyGatewayRejection(
+  text: string,
+): { outcome: LearnerOutcome; message: string } | null {
+  const match = API_400_PATTERN.exec(text);
+  if (!match) return null;
+  let detail = match[1];
+  try {
+    const body = JSON.parse(detail) as { error?: { message?: unknown } };
+    if (typeof body.error?.message === "string") detail = body.error.message;
+  } catch {
+    // Not a JSON body; quote the text as-is.
+  }
+  return {
+    outcome: "gateway_rejected",
+    message: `LLM gateway rejected the study run: ${snippet(detail)}`,
+  };
 }
 
 /** Turn-by-turn trace of the studying agent in the debug log; `dosu knowledge sync` is quiet on
@@ -290,7 +315,9 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
       if (message.type === "result") {
         turns = message.num_turns;
         const text = message.subtype === "success" ? message.result : message.subtype;
-        const gatewayError = classifyGatewayError(text ?? "");
+        const gatewayError =
+          classifyGatewayError(text ?? "") ??
+          (message.is_error ? classifyGatewayRejection(text ?? "") : null);
         if (gatewayError) {
           return {
             outcome: gatewayError.outcome,
@@ -324,7 +351,7 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
     };
   } catch (error) {
     const text = error instanceof Error ? error.message : String(error);
-    const gatewayError = classifyGatewayError(text);
+    const gatewayError = classifyGatewayError(text) ?? classifyGatewayRejection(text);
     if (gatewayError) {
       return { outcome: gatewayError.outcome, notesWritten, turns, message: gatewayError.message };
     }

@@ -1191,6 +1191,33 @@ describe("knowledge sync --status", () => {
     expect(output).toContain("2026-09-02T23:00:00.000Z");
   });
 
+  it("shows a gateway rejection's reason next to its backoff window", async () => {
+    const at = new Date(Date.now() - 5 * 60_000).toISOString();
+    mockGetSyncStatus.mockReturnValue({
+      running: false,
+      state: {
+        ...baseState,
+        last_attempt_at: at,
+        consecutive_failures: 1,
+        last_refusal: {
+          at,
+          outcome: "gateway_rejected",
+          message: "LLM gateway rejected the study run: max_tokens: 128000 > 64000",
+        },
+      },
+      backoffUntil: "2026-09-02T23:00:00.000Z",
+      recentActivity: [],
+    });
+
+    await run("sync", "--status");
+
+    const output = allOutput();
+    expect(output).toContain("Backing off after 1 failure;");
+    expect(output).toContain(
+      "Studying paused: LLM gateway rejected the study run: max_tokens: 128000 > 64000 (5m ago)",
+    );
+  });
+
   it("explains a persisted gateway refusal", async () => {
     mockGetSyncStatus.mockReturnValue({
       running: false,
