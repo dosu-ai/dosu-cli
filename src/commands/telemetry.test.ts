@@ -73,9 +73,8 @@ describe("telemetry command", () => {
     expect(output()).not.toContain("example.ingest.sentry.io");
   });
 
-  it("reports invalid or management destinations as not configured", async () => {
+  it("reports a management PostHog credential and a missing DSN as not configured", async () => {
     process.env.DOSU_POSTHOG_PROJECT_TOKEN = "phx_personal-secret";
-    process.env.DOSU_CLI_SENTRY_DSN = "https://sntrys_secret@example.ingest.sentry.io/1";
 
     await run("status", "--json");
 
@@ -87,7 +86,6 @@ describe("telemetry command", () => {
       },
     });
     expect(output()).not.toContain("personal-secret");
-    expect(output()).not.toContain("sntrys_secret");
   });
 
   it("reports loopback setup separately from HTTPS command analytics in development", async () => {

@@ -8,11 +8,7 @@ import {
   setTelemetryEnabled,
   telemetryDisabledByEnvironment,
 } from "../telemetry/settings";
-import {
-  parsePostHogProjectToken,
-  parseSentryDsn,
-  parseTelemetryWebAppURL,
-} from "../telemetry/telemetry";
+import { parsePostHogProjectToken, parseTelemetryWebAppURL } from "../telemetry/telemetry";
 
 function statusPayload() {
   const settings = loadTelemetrySettings();
@@ -30,7 +26,7 @@ function statusPayload() {
       command_analytics: Boolean(commandWebAppURL && analyticsReleaseToken),
       setup_analytics: Boolean(setupWebAppURL && analyticsReleaseToken),
       error_diagnostics: Boolean(
-        parseSentryDsn(process.env.DOSU_CLI_SENTRY_DSN_OVERRIDE ?? process.env.DOSU_CLI_SENTRY_DSN),
+        process.env.DOSU_CLI_SENTRY_DSN_OVERRIDE ?? process.env.DOSU_CLI_SENTRY_DSN,
       ),
     },
     environment_override: environmentOverride ?? null,
@@ -51,7 +47,7 @@ function printHumanStatus(): void {
   if (status.debug_mode) console.log("Debug mode: on (payloads are printed to stderr, not sent)");
   if (status.telemetry_id) console.log(`Telemetry ID: ${status.telemetry_id}`);
   console.log(
-    "Telemetry fields never include raw command lines, free-form arguments or option values, user source files, local paths, credentials, error messages, or debug.log; setup analytics uses only documented coarse fields and its existing Dosu session header only for API authorization.",
+    "Analytics fields never include raw command lines, free-form arguments or option values, user source files, local paths, credentials, error messages, or debug.log; setup analytics uses only documented coarse fields and its existing Dosu session header only for API authorization. Error diagnostics use the Sentry SDK's default event, which includes the error message and stack trace.",
   );
 }
 

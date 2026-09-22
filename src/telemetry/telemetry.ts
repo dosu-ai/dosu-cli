@@ -1,38 +1,14 @@
-import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { request as httpsRequest } from "node:https";
-import { isAbsolute, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { getWebAppURL } from "../config/constants";
 import { INSTALL_CHANNEL, VERSION } from "../version/version";
-import { BUNDLE_DEBUG_ID_PLACEHOLDER } from "./debug-id";
+import { type ErrorReport, reportError } from "./sentry";
 
 const REQUEST_TIMEOUT_MS = 500;
 const MAX_RESPONSE_BYTES = 1_024 * 1_024;
-const MAX_STACK_FRAMES = 20;
 const UNKNOWN_COMMAND = "unknown";
 const FALLBACK_INSTALL_ID = "00000000-0000-4000-8000-000000000000";
-const BUNDLE_CODE_FILE = "app:///bin/dosu.js";
-const CLI_PACKAGE_ROOT = detectCliPackageRoot();
-const SAFE_ERROR_TYPES = new Set([
-  "AbortError",
-  "AggregateError",
-  "CommanderError",
-  "CliUsageError",
-  "CommandExitError",
-  "Error",
-  "OAuthCallbackError",
-  "RangeError",
-  "ReferenceError",
-  "SessionExpiredError",
-  "SessionPersistenceError",
-  "SessionRefreshError",
-  "SyntaxError",
-  "TRPCClientError",
-  "TypeError",
-]);
 const SAFE_ERROR_CODES = new Set([
   "ABORT_ERR",
   "BAD_GATEWAY",
@@ -196,20 +172,11 @@ interface RuntimeMetadata {
   isTty: boolean;
 }
 
-interface SafeStackFrame {
-  filename: string;
-  abs_path?: typeof BUNDLE_CODE_FILE;
-  lineno: number;
-  colno: number;
-  in_app: true;
-}
-
 export interface SafeError {
-  type: string;
   code?: string;
-  status?: number;
-  frames: SafeStackFrame[];
   exitCode?: number;
+  /** A CliUsageError: the user's input was wrong, not the CLI. */
+  usageError?: true;
 }
 
 interface PostHogProperties {
@@ -261,36 +228,14 @@ export interface PostHogPayloadInput {
   runtime: RuntimeMetadata;
 }
 
-export interface ParsedSentryDsn {
-  dsn: string;
-  endpoint: string;
-  projectId: string;
-  publicKey: string;
-}
-
-export interface SentryEnvelope {
-  endpoint: string;
-  body: string;
-}
-
-export interface SentryEnvelopeInput {
-  dsn: string;
-  command: string;
-  context: CommandTelemetryContext;
-  runtime: RuntimeMetadata;
-  error: SafeError;
-  eventId: string;
-  timestampMs: number;
-  debugId?: string;
-}
-
 export type TelemetryFetch = (input: string, init: RequestInit) => Promise<{ ok: boolean }>;
 
 export interface TelemetryDependencies {
   fetch?: TelemetryFetch;
   resolveInstallId?: () => string | undefined;
   now?: () => number;
-  randomUUID?: () => string;
+  /** Replaces the Sentry SDK reporter. */
+  reportError?: (report: ErrorReport) => Promise<void>;
   env?: Readonly<Record<string, string | undefined>>;
   stderr?: (payload: string) => void;
   webAppURL?: () => string;
@@ -377,27 +322,8 @@ function validEmail(value: unknown): value is string {
   );
 }
 
-function validEventId(value: unknown): value is string {
-  return typeof value === "string" && /^[0-9a-f]{32}$/i.test(value);
-}
-
-function validDebugId(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
-  );
-}
-
-function validErrorType(value: unknown): value is string {
-  return typeof value === "string" && SAFE_ERROR_TYPES.has(value);
-}
-
 function validErrorCode(value: unknown): value is string {
   return typeof value === "string" && SAFE_ERROR_CODES.has(value);
-}
-
-function validStatus(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 100 && value <= 599;
 }
 
 function objectLike(value: unknown): value is object {
@@ -413,115 +339,23 @@ function safeRead(value: unknown, key: string): unknown {
   }
 }
 
-function parseStack(stack: unknown): SafeStackFrame[] {
-  if (typeof stack !== "string" || !CLI_PACKAGE_ROOT) return [];
-  const frames: SafeStackFrame[] = [];
-  const lines = stack.slice(0, 100_000).split("\n", 200);
-
-  for (const originalLine of lines) {
-    if (frames.length >= MAX_STACK_FRAMES) break;
-    const parsed = parseOwnedStackLine(originalLine, CLI_PACKAGE_ROOT);
-    if (!parsed) continue;
-    const { filename, lineno, colno } = parsed;
-    if (
-      !Number.isSafeInteger(lineno) ||
-      !Number.isSafeInteger(colno) ||
-      lineno < 1 ||
-      colno < 1 ||
-      lineno > 10_000_000 ||
-      colno > 10_000_000
-    ) {
-      continue;
-    }
-    frames.push({ filename, lineno, colno, in_app: true });
-  }
-
-  return frames;
-}
-
-function detectCliPackageRoot(): string | undefined {
-  try {
-    const modulePath = fileURLToPath(import.meta.url).replaceAll("\\", "/");
-    for (const suffix of ["/src/telemetry/telemetry.ts", "/bin/dosu.js"]) {
-      if (modulePath.endsWith(suffix)) return modulePath.slice(0, -suffix.length);
-    }
-  } catch {
-    // Unknown bundle layouts omit frames rather than guessing ownership.
-  }
-  return undefined;
-}
-
-function parseOwnedStackLine(
-  originalLine: string,
-  packageRoot: string,
-): Omit<SafeStackFrame, "in_app"> | undefined {
-  const line = originalLine.replaceAll("\\", "/");
-  const match =
-    line.match(/^\s*at\s+.*\s+\((.+):(\d+):(\d+)\)\s*$/) ??
-    line.match(/^\s*at\s+(.+):(\d+):(\d+)\s*$/);
-  if (!match?.[1] || !match[2] || !match[3]) return undefined;
-
-  let absolutePath = match[1];
-  try {
-    if (absolutePath.startsWith("file://")) absolutePath = fileURLToPath(absolutePath);
-  } catch {
-    return undefined;
-  }
-  if (!isAbsolute(absolutePath)) return undefined;
-
-  const resolvedPath = resolve(absolutePath);
-  const relativePath = relative(packageRoot, resolvedPath);
-  if (
-    relativePath === "" ||
-    relativePath === ".." ||
-    relativePath.startsWith(`..${sep}`) ||
-    isAbsolute(relativePath)
-  ) {
-    return undefined;
-  }
-
-  const filename = relativePath.replaceAll("\\", "/");
-  if (
-    !/^(?:src\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:[cm]?[jt]sx?)|bin\/dosu\.js)$/.test(
-      filename,
-    )
-  ) {
-    return undefined;
-  }
-  try {
-    if (!existsSync(resolvedPath)) return undefined;
-  } catch {
-    return undefined;
-  }
-
-  return { filename, lineno: Number(match[2]), colno: Number(match[3]) };
-}
-
-/** Extracts only allowlisted, bounded diagnostics. Raw Error values are never retained. */
+/** Extracts the allowlisted error code, exit code, and usage flag that classify a failure. */
 export function sanitizeError(error: unknown): SafeError {
   const normalizedError = domainErrorFromCauseChain(error) ?? error;
   const data = safeRead(normalizedError, "data");
-  const typeCandidate = safeRead(normalizedError, "name");
+  const usageError = safeRead(normalizedError, "name") === "CliUsageError";
   const codeCandidates = [safeRead(data, "code"), safeRead(normalizedError, "code")];
-  const statusCandidates = [
-    safeRead(data, "httpStatus"),
-    safeRead(normalizedError, "status"),
-    safeRead(normalizedError, "statusCode"),
-  ];
   const exitCodeCandidate = safeRead(normalizedError, "exitCode");
   const code = codeCandidates.find(validErrorCode);
-  const status = statusCandidates.find(validStatus);
   const exitCode =
     typeof exitCodeCandidate === "number" && Number.isFinite(exitCodeCandidate)
       ? normalizeExitCode(exitCodeCandidate)
       : undefined;
 
   return {
-    type: validErrorType(typeCandidate) ? typeCandidate : "Error",
     ...(code ? { code } : {}),
-    ...(status ? { status } : {}),
-    frames: parseStack(safeRead(normalizedError, "stack")),
     ...(exitCode === undefined ? {} : { exitCode }),
+    ...(usageError ? { usageError } : {}),
   };
 }
 
@@ -675,146 +509,6 @@ export function parseTelemetryWebAppURL(
   } catch {
     return null;
   }
-}
-
-export function parseSentryDsn(value: unknown): ParsedSentryDsn | null {
-  if (typeof value !== "string" || value.length === 0 || value.length > 2_048) return null;
-  const dsn = value.trim();
-  try {
-    const url = new URL(dsn);
-    if (
-      url.protocol !== "https:" ||
-      !url.hostname ||
-      !url.username ||
-      url.password ||
-      url.search ||
-      url.hash ||
-      !/^[A-Za-z0-9_.-]{1,128}$/.test(url.username) ||
-      url.username.toLowerCase().startsWith("sntry")
-    ) {
-      return null;
-    }
-
-    const segments = url.pathname.split("/").filter(Boolean);
-    const projectId = segments.pop();
-    if (!projectId || !/^[A-Za-z0-9_-]{1,128}$/.test(projectId)) return null;
-    if (segments.some((segment) => !/^[A-Za-z0-9._~-]{1,128}$/.test(segment))) return null;
-    const prefix = segments.length > 0 ? `/${segments.join("/")}` : "";
-
-    return {
-      dsn,
-      endpoint: `${url.protocol}//${url.host}${prefix}/api/${projectId}/envelope/`,
-      projectId,
-      publicKey: url.username,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function sentryTags(
-  command: string,
-  context: NormalizedContext,
-  runtime: RuntimeMetadata,
-  error: SafeError,
-): Record<string, string> {
-  return {
-    schema_version: "1",
-    command,
-    cli_version: runtime.version,
-    install_channel: runtime.installChannel,
-    os: runtime.platform,
-    arch: runtime.arch,
-    runtime: runtime.runtime,
-    runtime_major: String(runtime.runtimeMajor),
-    is_ci: String(runtime.isCi),
-    is_tty: String(runtime.isTty),
-    mode: context.mode,
-    is_authenticated: String(context.isAuthenticated),
-    ...(error.code ? { error_code: error.code } : {}),
-    ...(error.status ? { http_status: String(error.status) } : {}),
-    ...(error.exitCode === undefined ? {} : { exit_code: String(error.exitCode) }),
-  };
-}
-
-export function buildSentryEnvelope(input: SentryEnvelopeInput): SentryEnvelope | null {
-  const parsedDsn = parseSentryDsn(input.dsn);
-  if (!parsedDsn || !validEventId(input.eventId)) return null;
-  const context = normalizeContext(input.context);
-  const runtime = normalizeRuntime(input.runtime);
-  const command = canonicalCommand(input.command);
-  const debugId = validDebugId(input.debugId) ? input.debugId.toLowerCase() : undefined;
-  const error: SafeError = {
-    type: validErrorType(input.error.type) ? input.error.type : "Error",
-    ...(validErrorCode(input.error.code) ? { code: input.error.code } : {}),
-    ...(validStatus(input.error.status) ? { status: input.error.status } : {}),
-    ...(typeof input.error.exitCode === "number" && Number.isFinite(input.error.exitCode)
-      ? { exitCode: normalizeExitCode(input.error.exitCode) }
-      : {}),
-    // V8 stacks are newest-first; Sentry expects oldest-first.
-    frames: input.error.frames
-      .slice(0, MAX_STACK_FRAMES)
-      .map((frame): SafeStackFrame => {
-        const filename =
-          /^(?:src\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:[cm]?[jt]sx?)|bin\/dosu\.js)$/.test(
-            frame.filename,
-          )
-            ? frame.filename
-            : "src/unknown.ts";
-        return {
-          filename,
-          ...(debugId && filename === "bin/dosu.js" ? { abs_path: BUNDLE_CODE_FILE } : {}),
-          lineno: Math.min(10_000_000, Math.max(1, Math.trunc(frame.lineno) || 1)),
-          colno: Math.min(10_000_000, Math.max(1, Math.trunc(frame.colno) || 1)),
-          in_app: true as const,
-        };
-      })
-      .reverse(),
-  };
-  const exceptionValue = {
-    type: error.type,
-    value: error.code ?? error.type,
-    ...(error.frames.length > 0 ? { stacktrace: { frames: error.frames } } : {}),
-  };
-  const newestFrame = error.frames.at(-1);
-  const safeCallsite = newestFrame ? `${newestFrame.filename}:${newestFrame.lineno}` : "unknown";
-  const timestampMs = Number.isFinite(input.timestampMs) ? Math.max(0, input.timestampMs) : 0;
-  const mappedBundle = debugId && error.frames.some((frame) => frame.abs_path === BUNDLE_CODE_FILE);
-  const event = {
-    event_id: input.eventId.toLowerCase(),
-    timestamp: timestampMs / 1_000,
-    platform: "node",
-    level: "error",
-    release: `dosu-cli@${runtime.version}`,
-    tags: sentryTags(command, context, runtime, error),
-    ...(context.user
-      ? {
-          user: {
-            id: context.user.id,
-            ...(context.user.email ? { email: context.user.email } : {}),
-          },
-        }
-      : {}),
-    ...(mappedBundle
-      ? {
-          debug_meta: {
-            images: [{ type: "sourcemap", code_file: BUNDLE_CODE_FILE, debug_id: debugId }],
-          },
-        }
-      : {}),
-    fingerprint: ["dosu-cli", command, error.type, error.code ?? "unknown", safeCallsite],
-    exception: { values: [exceptionValue] },
-  };
-  const envelopeHeader = {
-    event_id: input.eventId.toLowerCase(),
-    dsn: parsedDsn.dsn,
-    sent_at: new Date(timestampMs).toISOString(),
-  };
-
-  return {
-    endpoint: parsedDsn.endpoint,
-    body: `${JSON.stringify(envelopeHeader)}\n${JSON.stringify({ type: "event" })}\n${JSON.stringify(event)}`,
-  };
 }
 
 /** Fetch without redirects or pooled sockets; abort always destroys the underlying request. */
@@ -992,7 +686,7 @@ function resolveRuntime(
 
 function validationFailure(exitCode: number, error: SafeError | undefined): boolean {
   if (exitCode === 2) return true;
-  if (error?.type === "CliUsageError") return true;
+  if (error?.usageError) return true;
   if (!error?.code) return false;
   return (
     error.code.startsWith("commander.") ||
@@ -1011,20 +705,6 @@ function safeNow(now: () => number): number {
   }
 }
 
-function safeUuid(generate: () => string): string | undefined {
-  try {
-    const value = generate();
-    return isUUID(value) ? value : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function eventId(generate: () => string): string | undefined {
-  const uuid = safeUuid(generate);
-  return uuid?.replaceAll("-", "");
-}
-
 /** Command-scoped telemetry; the caller supplies only a canonical command name and coarse
  * context. Enabled by default, controlled by one global switch. */
 export function createCommandTelemetry(
@@ -1034,7 +714,6 @@ export function createCommandTelemetry(
   const env = dependencies.env ?? process.env;
   const fetcher = dependencies.fetch;
   const now = dependencies.now ?? Date.now;
-  const generateUuid = dependencies.randomUUID ?? randomUUID;
   const writeStderr =
     dependencies.stderr ?? ((payload: string) => process.stderr.write(`${payload}\n`));
   const webAppURL = dependencies.webAppURL ?? getWebAppURL;
@@ -1050,11 +729,10 @@ export function createCommandTelemetry(
   const rawAnalyticsToken = dependencies.env
     ? (env.DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE ?? env.DOSU_POSTHOG_PROJECT_TOKEN)
     : (process.env.DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE ?? process.env.DOSU_POSTHOG_PROJECT_TOKEN);
-  const rawSentryDsn = dependencies.env
+  const sentryDsn = dependencies.env
     ? (env.DOSU_CLI_SENTRY_DSN_OVERRIDE ?? env.DOSU_CLI_SENTRY_DSN)
     : (process.env.DOSU_CLI_SENTRY_DSN_OVERRIDE ?? process.env.DOSU_CLI_SENTRY_DSN);
   const analyticsToken = parsePostHogProjectToken(rawAnalyticsToken) ?? undefined;
-  const sentryDsn = parseSentryDsn(rawSentryDsn)?.dsn;
 
   let started = false;
   let terminal = false;
@@ -1084,92 +762,74 @@ export function createCommandTelemetry(
     }
   }
 
-  async function dispatch(
+  async function sendCommandEvent(
     result: CommandResult,
     exitCode: number,
-    error: SafeError | undefined,
+    errorCode?: string,
   ): Promise<void> {
+    if (disabled || !analyticsToken) return;
     try {
-      const tasks: Promise<unknown>[] = [];
-      if (!disabled && analyticsToken) {
-        const id = context.user?.id ?? installId();
-        if (id) {
-          let facets: CommandFacets | undefined;
-          try {
-            facets = resolveFacets();
-          } catch {
-            facets = undefined;
-          }
-          const payload = buildPostHogPayload({
-            apiKey: analyticsToken,
-            ...(context.user ? {} : { installId: id }),
-            command,
-            result,
-            durationMs: safeNow(now) - startedAt,
-            exitCode,
-            errorCode: error?.code,
-            ...(facets ? { facets } : {}),
-            context,
-            runtime,
-          });
-          const body = JSON.stringify(payload);
-          if (debug) {
-            debugPayload(body);
-          } else {
-            const base = parseTelemetryWebAppURL(webAppURL());
-            if (base) {
-              tasks.push(
-                sendHttpsRequest(
-                  `${base}/ph-api/i/v0/e/`,
-                  {
-                    method: "POST",
-                    headers: { "content-type": "application/json" },
-                    body,
-                  },
-                  fetcher,
-                ),
-              );
-            }
-          }
-        }
+      const id = context.user?.id ?? installId();
+      if (!id) return;
+      let facets: CommandFacets | undefined;
+      try {
+        facets = resolveFacets();
+      } catch {
+        facets = undefined;
       }
-
-      if (!disabled && result === "failure" && error && shouldSendToSentry(error) && sentryDsn) {
-        const id = eventId(generateUuid);
-        const envelope = id
-          ? buildSentryEnvelope({
-              dsn: sentryDsn,
-              command,
-              context,
-              runtime,
-              error,
-              eventId: id,
-              timestampMs: safeNow(now),
-              debugId: BUNDLE_DEBUG_ID_PLACEHOLDER,
-            })
-          : null;
-        if (envelope) {
-          if (debug) {
-            debugPayload(envelope.body);
-          } else {
-            tasks.push(
-              sendHttpsRequest(
-                envelope.endpoint,
-                {
-                  method: "POST",
-                  headers: { "content-type": "application/x-sentry-envelope" },
-                  body: envelope.body,
-                },
-                fetcher,
-              ),
-            );
-          }
-        }
+      const body = JSON.stringify(
+        buildPostHogPayload({
+          apiKey: analyticsToken,
+          ...(context.user ? {} : { installId: id }),
+          command,
+          result,
+          durationMs: safeNow(now) - startedAt,
+          exitCode,
+          errorCode,
+          ...(facets ? { facets } : {}),
+          context,
+          runtime,
+        }),
+      );
+      if (debug) {
+        debugPayload(body);
+        return;
       }
-
-      await Promise.all(tasks);
+      const base = parseTelemetryWebAppURL(webAppURL());
+      if (!base) return;
+      await sendHttpsRequest(
+        `${base}/ph-api/i/v0/e/`,
+        { method: "POST", headers: { "content-type": "application/json" }, body },
+        fetcher,
+      );
     } catch {
       // Telemetry is intentionally fail-open and must never affect CLI behavior.
+    }
+  }
+
+  async function sendErrorReport(
+    rawError: unknown,
+    result: CommandResult,
+    errorCode?: string,
+  ): Promise<void> {
+    if (disabled || !sentryDsn || result !== "failure") return;
+    // Expired or unreadable sessions are expected; the user fixes them by logging in again.
+    if (errorCode === "SESSION_EXPIRED" || errorCode === "SESSION_PERSISTENCE_ERROR") return;
+    try {
+      await (dependencies.reportError ?? reportError)({
+        dsn: sentryDsn,
+        error: rawError,
+        release: `dosu-cli@${runtime.version}`,
+        tags: {
+          command,
+          install_channel: runtime.installChannel,
+          ...(errorCode ? { error_code: errorCode } : {}),
+        },
+        ...(context.user ? { user: context.user } : {}),
+        ...(debug ? { print: debugPayload } : {}),
+      });
+    } catch {
+      // Error reporting is fail-open like the rest of telemetry.
     }
   }
 
@@ -1192,11 +852,7 @@ export function createCommandTelemetry(
           : validationFailure(normalizedExitCode, undefined)
             ? "validation_error"
             : "failure";
-      const error: SafeError | undefined =
-        result === "failure"
-          ? { type: "CommandExitError", frames: [], exitCode: normalizedExitCode }
-          : undefined;
-      await dispatch(result, normalizedExitCode, error);
+      await sendCommandEvent(result, normalizedExitCode);
     },
 
     async fail(rawError) {
@@ -1207,11 +863,10 @@ export function createCommandTelemetry(
       const result: CommandResult = validationFailure(exitCode, error)
         ? "validation_error"
         : "failure";
-      await dispatch(result, exitCode, error);
+      await Promise.all([
+        sendCommandEvent(result, exitCode, error.code),
+        sendErrorReport(rawError, result, error.code),
+      ]);
     },
   };
-}
-
-function shouldSendToSentry(error: SafeError): boolean {
-  return !["SESSION_EXPIRED", "SESSION_PERSISTENCE_ERROR"].includes(error.code ?? "");
 }

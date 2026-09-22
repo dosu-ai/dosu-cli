@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
 /** Builds standalone binaries for all supported platforms using `bun build --compile`. */
 
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parsePostHogProjectToken, parseSentryDsn } from "../src/telemetry/telemetry";
+import { parsePostHogProjectToken } from "../src/telemetry/telemetry";
 
 const SCRIPT_DIR =
   typeof import.meta.dir === "string" ? import.meta.dir : dirname(fileURLToPath(import.meta.url));
@@ -28,6 +28,21 @@ function readPackageVersion(): string {
   }
 }
 
+/** `https://<public key>@<host>/<project>`, with no secret key and no auth token in the key slot. */
+function isPublicClientDsn(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      url.username !== "" &&
+      url.password === "" &&
+      !url.username.toLowerCase().startsWith("sntry")
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Build --define flags to bake config into compiled output: compiled executables do NOT
  * inherit the build-time environment, so identifiers must be replaced at compile time. */
 export function buildDefines(): string[] {
@@ -40,17 +55,16 @@ export function buildDefines(): string[] {
   // PostHog project tokens and Sentry DSNs are public ingestion credentials,
   // but releases still inject them at build time so source builds stay inert.
   const rawPosthogProjectToken = process.env.DOSU_POSTHOG_PROJECT_TOKEN ?? "";
-  const rawSentryDsn = process.env.DOSU_CLI_SENTRY_DSN ?? "";
+  const sentryDsn = process.env.DOSU_CLI_SENTRY_DSN?.trim() ?? "";
   const posthogProjectToken = parsePostHogProjectToken(rawPosthogProjectToken);
-  const sentryDsn = parseSentryDsn(rawSentryDsn)?.dsn;
   if (rawPosthogProjectToken && !posthogProjectToken) {
     throw new Error(
       "DOSU_POSTHOG_PROJECT_TOKEN must be empty or a public phc_ project token; refusing to bake a management credential",
     );
   }
-  if (rawSentryDsn && !sentryDsn) {
+  if (sentryDsn && !isPublicClientDsn(sentryDsn)) {
     throw new Error(
-      "DOSU_CLI_SENTRY_DSN must be empty or a public HTTPS client DSN; refusing to bake an auth token",
+      "DOSU_CLI_SENTRY_DSN must be empty or a public https:// client DSN; refusing to bake a secret",
     );
   }
 
@@ -70,7 +84,7 @@ export function buildDefines(): string[] {
     "--define",
     `process.env.DOSU_POSTHOG_PROJECT_TOKEN=${JSON.stringify(posthogProjectToken ?? "")}`,
     "--define",
-    `process.env.DOSU_CLI_SENTRY_DSN=${JSON.stringify(sentryDsn ?? "")}`,
+    `process.env.DOSU_CLI_SENTRY_DSN=${JSON.stringify(sentryDsn)}`,
   ];
 }
 
@@ -78,7 +92,6 @@ async function main() {
   const distDir = join(SCRIPT_DIR, "..", "dist");
   if (!existsSync(distDir)) mkdirSync(distDir, { recursive: true });
 
-  const defines = buildDefines();
   const outputSuffix = process.env.DOSU_OUTPUT_SUFFIX ?? "";
   console.log(
     `Building for ${TARGETS.length} platforms...${outputSuffix ? ` (suffix: ${outputSuffix})` : ""}\n`,
@@ -92,24 +105,8 @@ async function main() {
     const outPath = join(distDir, output);
     console.log(`  Building ${target} → ${output}`);
 
-    const proc = Bun.spawn(
-      [
-        "bun",
-        "build",
-        "--compile",
-        ...defines,
-        "--target",
-        target,
-        "src/index.ts",
-        "--outfile",
-        outPath,
-      ],
-      { stdout: "pipe", stderr: "pipe", env: process.env },
-    );
-
-    const exitCode = await proc.exited;
+    const { exitCode, stderr } = await compileBinary(outPath, target);
     if (exitCode !== 0) {
-      const stderr = await new Response(proc.stderr).text();
       console.error(`  ✗ Failed: ${stderr}`);
       process.exit(1);
     }
@@ -117,6 +114,32 @@ async function main() {
   }
 
   console.log(`\nAll binaries built in ${distDir}`);
+}
+
+/** Compile one standalone binary. `--sourcemap` embeds the map, so stack traces and the Sentry
+ * events built from them point at src/ files. Bun also writes that map next to the binary, where
+ * nothing reads it and it must not be archived as a release asset, so it is removed. */
+export async function compileBinary(
+  outfile: string,
+  target?: string,
+): Promise<{ exitCode: number; stderr: string }> {
+  const proc = Bun.spawn(
+    [
+      "bun",
+      "build",
+      "--compile",
+      "--sourcemap",
+      ...buildDefines(),
+      ...(target ? ["--target", target] : []),
+      "src/index.ts",
+      "--outfile",
+      outfile,
+    ],
+    { stdout: "ignore", stderr: "pipe", env: process.env },
+  );
+  const [exitCode, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
+  rmSync(`${outfile}.map`, { force: true });
+  return { exitCode, stderr };
 }
 
 // Only run when executed directly (not imported by tests)

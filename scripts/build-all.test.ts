@@ -110,11 +110,23 @@ describe("buildDefines", () => {
 
   it.each([
     "sntrys_secret",
-    "sntryu_secret",
-  ])("refuses to bake Sentry auth token %s as a DSN", (token) => {
-    process.env.DOSU_CLI_SENTRY_DSN = `https://${token}@sentry.test/1`;
+    "https://sntrys_secret@sentry.test/1",
+    "https://sntryu_secret@sentry.test/1",
+    "https://public:secret@sentry.test/1",
+    "http://public@sentry.test/1",
+    "https://sentry.test/1",
+  ])("refuses to bake %s as the Sentry DSN", (value) => {
+    process.env.DOSU_CLI_SENTRY_DSN = value;
 
-    expect(() => buildDefines()).toThrow("must be empty or a public HTTPS client DSN");
+    expect(() => buildDefines()).toThrow("must be empty or a public https:// client DSN");
+  });
+
+  it("bakes a trimmed public client DSN", () => {
+    process.env.DOSU_CLI_SENTRY_DSN = " https://public@sentry.test/1\n";
+
+    expect(buildDefines()).toContain(
+      'process.env.DOSU_CLI_SENTRY_DSN="https://public@sentry.test/1"',
+    );
   });
 
   it("should produce valid JSON-stringified values", () => {
