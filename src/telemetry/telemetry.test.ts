@@ -8,12 +8,15 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildPostHogPayload,
   buildSentryEnvelope,
+  consumeCommandFacets,
+  countBucket,
   createCommandTelemetry,
   durationBucket,
   fetchWithoutRedirect,
   parsePostHogProjectToken,
   parseSentryDsn,
   parseTelemetryWebAppURL,
+  recordCommandFacets,
   sanitizeError,
   sendHttpsRequest,
 } from "./telemetry";
@@ -234,6 +237,89 @@ describe("safe payload builders", () => {
     [60_000, "60s+"],
   ])("buckets duration %i without exposing exact timings", (duration, bucket) => {
     expect(durationBucket(duration)).toBe(bucket);
+  });
+
+  it("adds only allowlisted command facets and buckets their counts", () => {
+    const payload = buildPostHogPayload({
+      apiKey: "public",
+      installId: "11111111-1111-4111-8111-111111111111",
+      command: "knowledge sync",
+      result: "success",
+      durationMs: 2,
+      exitCode: 0,
+      facets: {
+        sync_trigger: "hook",
+        sync_status: "studied",
+        sessions_studied: 7,
+        notes_written: 23,
+        learner_outcome: "completed",
+      },
+      context: SAFE_CONTEXT,
+      runtime: SAFE_RUNTIME,
+    });
+
+    expect(payload.properties).toMatchObject({
+      sync_trigger: "hook",
+      sync_status: "studied",
+      sessions_studied: "5-9",
+      notes_written: "20-49",
+      learner_outcome: "completed",
+    });
+    expect(payload.properties.backfill_offer).toBeUndefined();
+  });
+
+  it("drops facet values outside the closed vocabularies", () => {
+    const payload = buildPostHogPayload({
+      apiKey: "public",
+      installId: "11111111-1111-4111-8111-111111111111",
+      command: "setup",
+      result: "success",
+      durationMs: 2,
+      exitCode: 0,
+      facets: {
+        sync_trigger: "/Users/me/secret",
+        sync_status: "studied; rm -rf /",
+        learner_outcome: "user@example.com",
+        backfill_offer: "declined",
+        // Unknown keys never survive, even when injected past the type system.
+        ...({ raw_prompt: "delete everything" } as object),
+      },
+      context: SAFE_CONTEXT,
+      runtime: SAFE_RUNTIME,
+    });
+
+    expect(payload.properties.backfill_offer).toBe("declined");
+    expect(payload.properties.sync_trigger).toBeUndefined();
+    expect(payload.properties.sync_status).toBeUndefined();
+    expect(payload.properties.learner_outcome).toBeUndefined();
+    expect(payload.properties.sessions_studied).toBeUndefined();
+    expect(payload.properties.notes_written).toBeUndefined();
+    expect("raw_prompt" in payload.properties).toBe(false);
+    expect(JSON.stringify(payload)).not.toContain("secret");
+    expect(JSON.stringify(payload)).not.toContain("rm -rf");
+  });
+
+  it.each([
+    [0, "0"],
+    [1, "1-4"],
+    [4, "1-4"],
+    [5, "5-9"],
+    [19, "10-19"],
+    [20, "20-49"],
+    [80, "50+"],
+    [-3, "0"],
+    [Number.NaN, "0"],
+    ["12", "0"],
+  ])("buckets count %s without exposing exact values", (count, bucket) => {
+    expect(countBucket(count)).toBe(bucket);
+  });
+
+  it("merges recorded facets and consumes them exactly once", () => {
+    expect(consumeCommandFacets()).toBeUndefined();
+    recordCommandFacets({ sync_trigger: "manual" });
+    recordCommandFacets({ sync_status: "backlog", sync_trigger: "bootstrap" });
+    expect(consumeCommandFacets()).toEqual({ sync_trigger: "bootstrap", sync_status: "backlog" });
+    expect(consumeCommandFacets()).toBeUndefined();
   });
 
   it("constructs a minimal Sentry envelope with normalized Dosu-owned frames", () => {
@@ -882,6 +968,48 @@ describe("CommandTelemetry lifecycle", () => {
       duration_bucket: "500ms-1.9s",
       exit_code: 0,
     });
+  });
+
+  it("attaches the command's recorded facets to its completion event", async () => {
+    consumeCommandFacets(); // isolate from any facets a prior test left behind
+    const deps = testDependencies();
+    const telemetry = createCommandTelemetry(
+      { install_id: "11111111-1111-4111-8111-111111111111" },
+      deps,
+    );
+    telemetry.start("knowledge sync", SAFE_CONTEXT);
+    // Commander actions record facets through the module store, not the telemetry object.
+    recordCommandFacets({ sync_trigger: "hook", sync_status: "detached" });
+    await telemetry.complete(0);
+
+    const [, init] = deps.fetch.mock.calls[0] ?? [];
+    const payload = JSON.parse(String(init?.body)) as { properties: Record<string, unknown> };
+    expect(payload.properties).toMatchObject({
+      command: "knowledge sync",
+      sync_trigger: "hook",
+      sync_status: "detached",
+    });
+    // Consumed on dispatch: nothing leaks into a later telemetry instance.
+    expect(consumeCommandFacets()).toBeUndefined();
+  });
+
+  it("fails open when the facet resolver throws", async () => {
+    const deps = testDependencies({
+      facets: vi.fn(() => {
+        throw new Error("boom");
+      }),
+    });
+    const telemetry = createCommandTelemetry(
+      { install_id: "11111111-1111-4111-8111-111111111111" },
+      deps,
+    );
+    telemetry.start("knowledge sync", SAFE_CONTEXT);
+    await telemetry.complete(0);
+
+    expect(deps.fetch).toHaveBeenCalledOnce();
+    const [, init] = deps.fetch.mock.calls[0] ?? [];
+    const payload = JSON.parse(String(init?.body)) as { properties: Record<string, unknown> };
+    expect(payload.properties.sync_trigger).toBeUndefined();
   });
 
   it("classifies exit code 2 as validation_error", async () => {
