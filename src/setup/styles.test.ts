@@ -9,7 +9,40 @@ import {
   IconAdd,
   IconRemove,
   info,
+  wrapLog,
 } from "./styles";
+
+describe("wrapLog", () => {
+  it("leaves lines that fit alone", () => {
+    expect(wrapLog("short line", 80)).toBe("short line");
+    expect(wrapLog("a\nb", 80)).toBe("a\nb");
+  });
+
+  it("word-wraps to the terminal width minus the clack gutter", () => {
+    const wrapped = wrapLog("one two three four five six seven eight nine ten", 24);
+    for (const line of wrapped.split("\n")) expect(line.length).toBeLessThanOrEqual(20);
+    expect(wrapped.replace(/\n/g, " ")).toBe("one two three four five six seven eight nine ten");
+  });
+
+  it("keeps existing newlines and wraps each paragraph independently", () => {
+    const wrapped = wrapLog("fits\nthis paragraph is too long to fit on one line", 30);
+    expect(wrapped.split("\n")[0]).toBe("fits");
+    expect(wrapped.split("\n").length).toBeGreaterThan(2);
+  });
+
+  it("does not count ANSI codes toward the width", () => {
+    const styled = `${info("dosu knowledge sync")} anytime`;
+    // 27 visible chars in a 30-wide (26 usable) terminal: wraps once, at the space.
+    expect(wrapLog(styled, 30)).toBe(`${info("dosu knowledge sync")}\nanytime`);
+    expect(wrapLog(styled, 40)).toBe(styled);
+  });
+
+  it("never wraps narrower than 20 columns and defaults to stdout width", () => {
+    const wrapped = wrapLog("aaaa bbbb cccc dddd eeee ffff", 10);
+    expect(wrapped).toBe("aaaa bbbb cccc dddd\neeee ffff");
+    expect(wrapLog("x")).toBe("x");
+  });
+});
 
 describe("styles", () => {
   describe("icons", () => {

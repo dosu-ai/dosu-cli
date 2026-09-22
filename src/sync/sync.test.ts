@@ -536,6 +536,52 @@ describe("runKnowledgeSync studying", () => {
     expect(saved[0].watermark).toBe(session(30).updated);
   });
 
+  it("skips incognito sessions, rolls the watermark over them, and logs the skip", async () => {
+    mockLoggerDebug.mockClear();
+    const mine = vi.fn().mockResolvedValue(learnerResult());
+    // Newest-first: s-30 (incognito), s-40 (worthy), s-50 (worthy).
+    const sessions = [session(30), session(40), session(50)];
+    const { deps, saved } = makeDeps({
+      listSessions: vi.fn().mockResolvedValue(sessions),
+      worthStudying: () => true,
+      isIncognito: (s) => s.id === "s-30",
+      mine,
+      lock: openLock(),
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.status).toBe("studied");
+    expect(outcome.studiedSessions).toBe(2);
+    expect(outcome.incognitoSessions).toBe(1);
+    expect(outcome.trivialSessions).toBe(0);
+    const batch = mine.mock.calls[0][0] as AgentSession[];
+    expect(batch.map((s) => s.id)).toEqual(["s-50", "s-40"]);
+    // The incognito session is examined, so the watermark passes it and never re-reads it.
+    expect(saved[0].watermark).toBe(session(30).updated);
+    const logged = mockLoggerDebug.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(logged).toContain("skipping incognito session claude/s-30");
+    expect(logged).toContain("(0 trivial, 1 incognito skipped)");
+  });
+
+  it("advances the watermark without a run when everything ready is incognito", async () => {
+    const mine = vi.fn();
+    const { deps, saved } = makeDeps({
+      listSessions: vi.fn().mockResolvedValue([session(30), session(50)]),
+      worthStudying: () => true,
+      isIncognito: () => true,
+      mine,
+      lock: openLock(),
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.status).toBe("nothing-new");
+    expect(outcome.incognitoSessions).toBe(2);
+    expect(mine).not.toHaveBeenCalled();
+    expect(saved[0].watermark).toBe(session(30).updated);
+  });
+
   it("logs one line per studied session for status views to pick up", async () => {
     mockLoggerDebug.mockClear();
     const mine = vi.fn().mockResolvedValue(learnerResult());

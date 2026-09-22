@@ -23,6 +23,7 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(fakeHome, { recursive: true, force: true });
   delete process.env.CODEX_HOME;
+  delete process.env.CLAUDE_CONFIG_DIR;
 });
 
 function readJSON(path: string): Record<string, unknown> {
@@ -89,6 +90,18 @@ describe("claude agent", () => {
 
     expect(() => getHookAgent("claude")?.enable()).toThrow(HookConfigError);
     expect(readFileSync(settingsPath, "utf-8")).toBe("{broken");
+  });
+
+  it("honors CLAUDE_CONFIG_DIR", () => {
+    const altDir = join(fakeHome, "claude-alt");
+    process.env.CLAUDE_CONFIG_DIR = altDir;
+
+    const claude = getHookAgent("claude");
+    expect(claude?.isInstalled()).toBe(false);
+    expect(claude?.configPath()).toBe(join(altDir, "settings.json"));
+    claude?.enable();
+    expect(claude?.isInstalled()).toBe(true);
+    expect(existsSync(join(altDir, "settings.json"))).toBe(true);
   });
 });
 
