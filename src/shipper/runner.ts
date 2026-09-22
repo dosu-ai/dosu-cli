@@ -7,8 +7,8 @@ import type { NormalizedRecord } from "@letta-ai/trajectory";
 import { getBackendURL } from "../config/constants";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import type { AgentSession } from "../sessions/scan";
-import type { ShipSessionResult } from "../sync/sync";
 import { isIncognitoSession } from "../sync/incognito";
+import type { ShipSessionResult } from "../sync/sync";
 import { normalizeSessionRecords } from "./normalize";
 
 /** Statuses where re-sending identical records cannot succeed (bad/oversized/unparseable
