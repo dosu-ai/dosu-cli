@@ -1,3 +1,10 @@
+## [0.54.1](https://github.com/dosu-ai/dosu-cli/compare/v0.54.0...v0.54.1) (2026-09-22)
+
+
+### Bug Fixes
+
+* sign macOS release binaries before packaging ([#232](https://github.com/dosu-ai/dosu-cli/issues/232)) ([ae6f9b3](https://github.com/dosu-ai/dosu-cli/commit/ae6f9b3abd120c2d1d1e8c8e92d83e1297d4cb65))
+
 # [0.54.0](https://github.com/dosu-ai/dosu-cli/compare/v0.53.1...v0.54.0) (2026-09-22)
 
 
