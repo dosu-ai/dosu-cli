@@ -1,6 +1,7 @@
 /** `dosu knowledge`: knowledge base search/listing, plus the local sync pipeline and its
  * per-agent hook triggers. */
 
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -10,6 +11,7 @@ import { createTypedClient } from "../client/trpc";
 import { loadConfig } from "../config/config";
 import { getBackendURL, isAbsoluteHttpUrl } from "../config/constants";
 import { allHookAgents, getHookAgent, type HookAgent } from "../hooks/agents";
+import { disableClaudeContextHook, enableClaudeContextHook } from "../hooks/context";
 import { HookConfigError, hookCommand } from "../hooks/formats";
 import { emitKnowledgeReport } from "../report/generate";
 import type { AgentSession } from "../sessions/scan";
@@ -371,6 +373,7 @@ export function knowledgeCommand(): Command {
   cmd.addCommand(incognitoCommand());
   cmd.addCommand(statuslineCommand());
   cmd.addCommand(transcriptsCommand());
+  cmd.addCommand(contextCommand(), { hidden: true });
 
   return cmd;
 }
@@ -404,6 +407,49 @@ function buildShipper(): SyncDeps["ship"] {
     const { createShipStep } = await import("../shipper/runner");
     return createShipStep({ apiKey: api_key, deploymentId: deployment_id })(sessions);
   };
+}
+
+/** The git branch checked out in `cwd`, or null. Bounded, because the user's prompt waits. */
+function currentBranch(cwd: string): string | null {
+  try {
+    const out = execFileSync("git", ["-C", cwd, "branch", "--show-current"], {
+      encoding: "utf-8",
+      timeout: 500,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return out || null;
+  } catch {
+    return null;
+  }
+}
+
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks).toString("utf-8");
+}
+
+/** `dosu knowledge context`: the Claude Code UserPromptSubmit hook. Hidden -- it is invoked by
+ * the agent, not by people. Prints nothing and exits 0 unless there is a digest to add, so a
+ * logged-out install, OSS mode or a down server all look like Dosu not being there. */
+function contextCommand(): Command {
+  return new Command("context")
+    .description("Prompt-submit hook: add task memory to the agent's context")
+    .action(async () => {
+      const cfg = loadConfig();
+      const target = cfg.active_account?.target;
+      const backendUrl = getBackendURL();
+      if (cfg.mode === "oss" || !target?.api_key || !target.deployment_id) return;
+      if (!isAbsoluteHttpUrl(backendUrl)) return;
+      const { contextHookOutput } = await import("../memory/context-hook");
+      const out = await contextHookOutput(await readStdin(), {
+        apiKey: target.api_key,
+        deploymentId: target.deployment_id,
+        backendUrl,
+        branchOf: currentBranch,
+      });
+      if (out) process.stdout.write(out);
+    });
 }
 
 /** `dosu knowledge transcripts`: the opt-in switch for shipping finished session transcripts to
@@ -461,6 +507,16 @@ function transcriptsCommand(): Command {
     .action(() => {
       setShipTranscripts(true);
       console.log("✓ Transcript shipping enabled.");
+      try {
+        if (enableClaudeContextHook()) {
+          console.log("✓ Claude Code will receive task memory when a prompt warrants it.");
+        }
+      } catch (err) {
+        // Shipping is on either way; only the prompt hook could not be written.
+        console.log(
+          `! Prompt-time memory not installed: ${err instanceof Error ? err.message : err}`,
+        );
+      }
       console.log(
         pc.dim(
           "Finished agent sessions are redacted locally, then shipped to Dosu memory on the next sync. " +
@@ -475,6 +531,11 @@ function transcriptsCommand(): Command {
     .action(() => {
       setShipTranscripts(false);
       console.log("✓ Transcript shipping disabled.");
+      try {
+        disableClaudeContextHook();
+      } catch {
+        // An unparseable settings file is the user's to fix; shipping is already off.
+      }
     });
 
   return cmd;

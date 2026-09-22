@@ -1834,3 +1834,23 @@ describe("knowledge transcripts", () => {
     });
   });
 });
+
+describe("knowledge context (prompt-submit hook)", () => {
+  // The hook runs while the user's prompt waits. An install that cannot ask Dosu anything must
+  // say nothing and never touch stdin or the network.
+  it.each([
+    ["OSS mode", { mode: "oss", active_account: { target: { api_key: "k", deployment_id: "d" } } }],
+    ["no API key", { mode: "cloud", active_account: { target: { deployment_id: "d" } } }],
+    ["no deployment", { mode: "cloud", active_account: { target: { api_key: "k" } } }],
+    ["logged out", { mode: "cloud" }],
+  ])("is silent with %s", async (_label, config) => {
+    mockLoadConfig.mockReturnValue(config);
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    await run("context");
+    expect(write).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    write.mockRestore();
+    fetchSpy.mockRestore();
+  });
+});

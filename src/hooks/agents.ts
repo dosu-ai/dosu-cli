@@ -58,7 +58,7 @@ function codexHome(): string {
 }
 
 /** Same override the rules and slash-command installers honor. */
-function claudeConfigDir(): string {
+export function claudeConfigDir(): string {
   return process.env.CLAUDE_CONFIG_DIR || expandHome("~/.claude");
 }
 

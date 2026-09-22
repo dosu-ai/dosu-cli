@@ -61,6 +61,16 @@ export function isDosuHookCommand(command: unknown): boolean {
   );
 }
 
+/** Which Dosu hook an entry is. Each is recognized by its own matcher, so enabling or refreshing
+ * one never rewrites another that shares an event file. */
+export interface HookSpec {
+  command: () => string;
+  isOurs: (command: unknown) => boolean;
+}
+
+/** The session-end sync hook -- the default, and the only one that existed before memory. */
+export const SYNC_HOOK: HookSpec = { command: hookCommand, isOurs: isDosuHookCommand };
+
 export class HookConfigError extends Error {
   constructor(message: string) {
     super(message);
@@ -110,21 +120,28 @@ function groupedEventArray(config: JsonConfig, event: string): GroupedHookGroup[
   return Array.isArray(groups) ? groups : [];
 }
 
-export function hasGroupedHook(config: JsonConfig, event: string): boolean {
+export function hasGroupedHook(
+  config: JsonConfig,
+  event: string,
+  spec: HookSpec = SYNC_HOOK,
+): boolean {
   return groupedEventArray(config, event).some(
-    (group) =>
-      Array.isArray(group?.hooks) && group.hooks.some((h) => isDosuHookCommand(h?.command)),
+    (group) => Array.isArray(group?.hooks) && group.hooks.some((h) => spec.isOurs(h?.command)),
   );
 }
 
-export function addGroupedHook(config: JsonConfig, event: string): JsonConfig {
-  const desired = hookCommand();
+export function addGroupedHook(
+  config: JsonConfig,
+  event: string,
+  spec: HookSpec = SYNC_HOOK,
+): JsonConfig {
+  const desired = spec.command();
 
   let present = false;
   for (const group of groupedEventArray(config, event)) {
     if (!Array.isArray(group?.hooks)) continue;
     for (const hook of group.hooks) {
-      if (!isDosuHookCommand(hook?.command)) continue;
+      if (!spec.isOurs(hook?.command)) continue;
       present = true;
       hook.command = desired;
     }
@@ -136,13 +153,17 @@ export function addGroupedHook(config: JsonConfig, event: string): JsonConfig {
   return config;
 }
 
-export function removeGroupedHook(config: JsonConfig, event: string): JsonConfig {
+export function removeGroupedHook(
+  config: JsonConfig,
+  event: string,
+  spec: HookSpec = SYNC_HOOK,
+): JsonConfig {
   const groups = groupedEventArray(config, event);
   if (groups.length === 0) return config;
   const kept = groups
     .map((group) => {
       if (!Array.isArray(group?.hooks)) return group;
-      const hooks = group.hooks.filter((h) => !isDosuHookCommand(h?.command));
+      const hooks = group.hooks.filter((h) => !spec.isOurs(h?.command));
       return { ...group, hooks };
     })
     .filter((group) => !Array.isArray(group?.hooks) || group.hooks.length > 0);
