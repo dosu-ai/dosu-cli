@@ -1,3 +1,10 @@
+## [0.55.1](https://github.com/dosu-ai/dosu-cli/compare/v0.55.0...v0.55.1) (2026-09-22)
+
+
+### Bug Fixes
+
+* **learner:** cap study-run output tokens and surface gateway 400s ([#233](https://github.com/dosu-ai/dosu-cli/issues/233)) ([a873a6a](https://github.com/dosu-ai/dosu-cli/commit/a873a6a77c5de80423df83f66fd54c3709c51793))
+
 # [0.55.0](https://github.com/dosu-ai/dosu-cli/compare/v0.54.1...v0.55.0) (2026-09-22)
 
 
