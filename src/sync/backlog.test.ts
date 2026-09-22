@@ -18,8 +18,12 @@ vi.mock("./watermark", async (importOriginal) => ({
   loadSyncState: (...args: unknown[]) => mockLoadSyncState(...args),
 }));
 
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AgentSession } from "../sessions/scan";
 import { listSessionBacklog } from "./backlog";
+import { INCOGNITO_MARKER } from "./incognito";
 
 function session(overrides: Partial<AgentSession>): AgentSession {
   return {
@@ -73,10 +77,30 @@ describe("listSessionBacklog", () => {
     expect(mockFlush).toHaveBeenCalled();
   });
 
+  it("sets incognito sessions aside from the queue", () => {
+    const dir = mkdtempSync(join(tmpdir(), "dosu-backlog-"));
+    try {
+      const markedPath = join(dir, "marked.jsonl");
+      writeFileSync(
+        markedPath,
+        `${JSON.stringify({ role: "user", message: { content: `go ${INCOGNITO_MARKER}` } })}\n`,
+      );
+      const plain = session({ id: "plain" }); // path does not exist → not incognito
+      const marked = session({ id: "marked", path: markedPath });
+      mockScan.mockReturnValue([plain, marked]);
+
+      const backlog = listSessionBacklog();
+      expect(backlog.queued.map((s) => s.id)).toEqual(["plain"]);
+      expect(backlog.incognito?.map((s) => s.id)).toEqual(["marked"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("reads a failed scan as an empty backlog", () => {
     mockScan.mockImplementation(() => {
       throw new Error("fs exploded");
     });
-    expect(listSessionBacklog()).toEqual({ queued: [], open: [] });
+    expect(listSessionBacklog()).toEqual({ queued: [], open: [], incognito: [] });
   });
 });

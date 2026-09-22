@@ -18,8 +18,11 @@ import { formatTokenCount, getSyncStatus, type SyncStatus } from "../sync/status
 import { MINE_BATCH_LIMIT, runKnowledgeSync, type SyncDeps, type SyncOutcome } from "../sync/sync";
 import { loadSyncState } from "../sync/watermark";
 import { recordCommandFacets } from "../telemetry/telemetry";
+import { resolveAgents } from "./agent-select";
 import { positiveInteger } from "./arguments";
 import { requireLoginConfig } from "./auth";
+import { incognitoCommand } from "./knowledge-incognito";
+import { statuslineCommand } from "./knowledge-statusline";
 import { printResult, printTable, truncate } from "./output";
 
 function requireConfig() {
@@ -361,6 +364,8 @@ export function knowledgeCommand(): Command {
     });
 
   cmd.addCommand(hooksCommand());
+  cmd.addCommand(incognitoCommand());
+  cmd.addCommand(statuslineCommand());
 
   return cmd;
 }
@@ -519,30 +524,7 @@ function printSyncOutcome(outcome: SyncOutcome): void {
 }
 
 function resolveHookAgents(ids: string[]): HookAgent[] {
-  if (ids.length === 0) {
-    const installed = allHookAgents().filter((agent) => agent.isInstalled());
-    if (installed.length === 0) {
-      console.log(pc.dim("No supported agents detected on this machine."));
-    }
-    return installed;
-  }
-  const agents: HookAgent[] = [];
-  for (const id of ids) {
-    const agent = getHookAgent(id.toLowerCase());
-    if (!agent) {
-      console.error(
-        pc.red(
-          `unknown agent '${id}'. Supported: ${allHookAgents()
-            .map((a) => a.id())
-            .join(", ")}`,
-        ),
-      );
-      process.exitCode = 1;
-      return [];
-    }
-    agents.push(agent);
-  }
-  return agents;
+  return resolveAgents(ids, allHookAgents, getHookAgent);
 }
 
 function hooksCommand(): Command {
