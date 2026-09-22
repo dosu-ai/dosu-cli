@@ -423,6 +423,22 @@ describe("runKnowledgeSync studying", () => {
     });
   });
 
+  it("backs off after a gateway rejection with no message without storing an empty reason", async () => {
+    const { deps, saved } = makeStudyingDeps({
+      listSessions: vi.fn().mockResolvedValue([session(30)]),
+      mine: vi
+        .fn()
+        .mockResolvedValue(learnerResult({ outcome: "gateway_rejected", message: undefined })),
+      lock: openLock(),
+    });
+
+    const result = await runKnowledgeSync({ deps });
+
+    expect(result.status).toBe("mine-failed");
+    expect(saved[0].consecutive_failures).toBe(1);
+    expect(saved[0].last_refusal).toBeUndefined();
+  });
+
   it("a manual run studies through a gateway-rejection backoff and clears the reason", async () => {
     const mine = vi.fn().mockResolvedValue(learnerResult());
     const { deps, saved } = makeStudyingDeps({
