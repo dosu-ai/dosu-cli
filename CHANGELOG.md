@@ -1,3 +1,10 @@
+# [0.54.0](https://github.com/dosu-ai/dosu-cli/compare/v0.53.1...v0.54.0) (2026-09-22)
+
+
+### Features
+
+* **telemetry:** add knowledge sync and backfill-offer facets ([#230](https://github.com/dosu-ai/dosu-cli/issues/230)) ([96db407](https://github.com/dosu-ai/dosu-cli/commit/96db407be398af20d83d549da0255f5a15cd8b1d))
+
 ## [0.53.1](https://github.com/dosu-ai/dosu-cli/compare/v0.53.0...v0.53.1) (2026-09-21)
 
 
