@@ -397,6 +397,24 @@ describe("runKnowledgeSync studying", () => {
     expect(saved[0].last_refusal).toMatchObject({ outcome, message: "nope" });
   });
 
+  it("stores a default reason for a refusal that carries no message", async () => {
+    const { deps, saved } = makeStudyingDeps({
+      listSessions: vi.fn().mockResolvedValue([session(30)]),
+      mine: vi
+        .fn()
+        .mockResolvedValue(learnerResult({ outcome: "credit_limit", message: undefined })),
+      lock: openLock(),
+    });
+
+    const result = await runKnowledgeSync({ deps });
+
+    expect(result.status).toBe("skipped-gateway");
+    expect(saved[0].last_refusal).toMatchObject({
+      outcome: "credit_limit",
+      message: "Studying unavailable right now.",
+    });
+  });
+
   it("backs off after a gateway rejection but keeps its reason for status views", async () => {
     const message =
       "LLM gateway rejected the study run: max_tokens: 128000 > 64000, which is the maximum allowed number of output tokens for claude-haiku-4-5-20251001";
