@@ -10,13 +10,13 @@ import { getVersionString } from "../version/version";
 import { createRunConfigDir } from "./config-dir";
 import { detectSettingsConflicts } from "./conflicts";
 import { buildLearnerEnv, type LearnerTrigger } from "./env";
-import { resolveClaudeExecutable } from "./executable";
+import { type ClaudeExecutable, resolveClaudeExecutable } from "./executable";
 import { resolveServedModel } from "./model";
 import { buildLearnerPrompt, buildLearnerSystemPrompt } from "./prompt";
 import { LEARNER_CORE_RULES } from "./prompt-core";
 import { createSessionToolsServer, SESSIONS_SERVER_NAME } from "./tools";
 
-export type LearnerOutcome =
+type LearnerOutcome =
   | "completed"
   | "settings_conflict"
   | "consent_off"
@@ -25,6 +25,16 @@ export type LearnerOutcome =
   | "gateway_rejected"
   | "claude_code_missing"
   | "error";
+
+/** Coarse category of a gateway 400, for telemetry grouping; the quoted text stays local. */
+export type GatewayRejectionReason =
+  | "system_role_unsupported"
+  | "adaptive_thinking_unsupported"
+  | "effort_unsupported"
+  | "unsupported_request"
+  | "max_tokens"
+  | "context_length"
+  | "other";
 
 export interface LearnerRunResult {
   outcome: LearnerOutcome;
@@ -36,6 +46,14 @@ export interface LearnerRunResult {
   notedSessions?: string[];
   /** One renderable line for error-ish outcomes; never a stack trace. */
   message?: string;
+  /** Set with `gateway_rejected`. The remaining fields are diagnostics for telemetry, each set
+   * once known; telemetry re-validates every one against its own allowlist. */
+  gatewayReason?: GatewayRejectionReason;
+  claudeCodeSource?: ClaudeExecutable["kind"];
+  /** As reported by the spawned Claude Code's init message. */
+  claudeCodeVersion?: string;
+  /** The model the run pinned (see model.ts). */
+  model?: string;
 }
 
 export interface RunLearnerOptions {
@@ -78,9 +96,13 @@ const GATEWAY_ERRORS: Record<string, { outcome: LearnerOutcome; message: string 
   },
 };
 
-export function classifyGatewayError(
-  text: string,
-): { outcome: LearnerOutcome; message: string } | null {
+interface GatewayClassification {
+  outcome: LearnerOutcome;
+  message: string;
+  reason?: GatewayRejectionReason;
+}
+
+export function classifyGatewayError(text: string): GatewayClassification | null {
   for (const [token, mapped] of Object.entries(GATEWAY_ERRORS)) {
     if (text.includes(token)) return mapped;
   }
@@ -96,15 +118,32 @@ function snippet(value: unknown): string {
   return flat.length > TRACE_SNIPPET_LIMIT ? `${flat.slice(0, TRACE_SNIPPET_LIMIT)}…` : flat;
 }
 
+/** Ordered: the gateway's own refusal prefix first; per-turn output_config (the effort control)
+ * before system roles, since its error names role 'system'; and context length before
+ * max_tokens, since context-limit errors mention max_tokens too. */
+const REJECTION_REASONS: Array<[RegExp, GatewayRejectionReason]> = [
+  [/^dosu_unsupported_request:/, "unsupported_request"],
+  [/\beffort\b|output_config/i, "effort_unsupported"],
+  [/\brole\b.*\bsystem\b|\bsystem\b.*\brole\b|messages\.\d+\.role/i, "system_role_unsupported"],
+  [/\badaptive\b/i, "adaptive_thinking_unsupported"],
+  [/prompt is too long|context (?:limit|length|window)/i, "context_length"],
+  [/max_tokens/i, "max_tokens"],
+];
+
+export function classifyRejectionReason(detail: string): GatewayRejectionReason {
+  for (const [pattern, reason] of REJECTION_REASONS) {
+    if (pattern.test(detail)) return reason;
+  }
+  return "other";
+}
+
 /** Claude Code's rendering of a 400 the gateway passed back, e.g. `API Error: 400 max_tokens: …`;
  * older builds print the raw JSON error body instead of its message. */
 const API_400_PATTERN = /API Error: 400\b\s*(.*)/s;
 
 /** Map a 400 from the gateway to a renderable line quoting the upstream text. Only for text known
  * to be an error: a successful run's summary can mention a 400 too. */
-export function classifyGatewayRejection(
-  text: string,
-): { outcome: LearnerOutcome; message: string } | null {
+export function classifyGatewayRejection(text: string): GatewayClassification | null {
   const match = API_400_PATTERN.exec(text);
   if (!match) return null;
   let detail = match[1];
@@ -117,6 +156,7 @@ export function classifyGatewayRejection(
   return {
     outcome: "gateway_rejected",
     message: `LLM gateway rejected the study run: ${snippet(detail)}`,
+    reason: classifyRejectionReason(detail.trim()),
   };
 }
 
@@ -190,6 +230,7 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
       outcome: "claude_code_missing",
       notesWritten: 0,
       turns: 0,
+      claudeCodeSource: "missing",
       message:
         "Studying runs on Claude Code, which isn't installed here. Install Claude Code, then run `dosu knowledge sync`.",
     };
@@ -202,6 +243,10 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
   // model (system-role messages, adaptive thinking), which the served model can reject.
   const model = await resolveServedModel({ gatewayURL, apiKey: options.apiKey });
   logger.debug("learner", `study run model: ${model}`);
+  const diagnostics: Pick<LearnerRunResult, "claudeCodeSource" | "claudeCodeVersion" | "model"> = {
+    claudeCodeSource: claudeExecutable.kind,
+    model,
+  };
 
   // The SDK is dynamically imported so no other CLI path pays its cost.
   const { query } = await import("@anthropic-ai/claude-agent-sdk");
@@ -232,6 +277,19 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
   const sessionKeys = new Map(options.sessions.map((s) => [s.id, `${s.harness}/${s.id}`]));
   const notedSessions = new Set<string>();
   let turns = 0;
+  const finish = (
+    outcome: LearnerOutcome,
+    message: string | undefined,
+    gatewayReason?: GatewayRejectionReason,
+  ): LearnerRunResult => ({
+    outcome,
+    notesWritten,
+    notedSessions: [...notedSessions],
+    turns,
+    ...(message === undefined ? {} : { message }),
+    ...(gatewayReason ? { gatewayReason } : {}),
+    ...diagnostics,
+  });
 
   const env = buildLearnerEnv({
     apiKey: options.apiKey,
@@ -342,6 +400,13 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
 
     for await (const message of run) {
       traceAgentMessage(message);
+      if (
+        message.type === "system" &&
+        message.subtype === "init" &&
+        typeof message.claude_code_version === "string"
+      ) {
+        diagnostics.claudeCodeVersion = message.claude_code_version;
+      }
       if (message.type === "result") {
         turns = message.num_turns;
         const text = message.subtype === "success" ? message.result : message.subtype;
@@ -349,67 +414,34 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
           classifyGatewayError(text ?? "") ??
           (message.is_error ? classifyGatewayRejection(text ?? "") : null);
         if (gatewayError) {
-          return {
-            outcome: gatewayError.outcome,
-            notesWritten,
-            notedSessions: [...notedSessions],
-            turns,
-            message: gatewayError.message,
-          };
+          return finish(gatewayError.outcome, gatewayError.message, gatewayError.reason);
         }
         if (message.subtype !== "success" || message.is_error) {
           logger.debug("learner", `run ${runID} failed: ${text}`);
-          return {
-            outcome: "error",
-            notesWritten,
-            notedSessions: [...notedSessions],
-            turns,
-            message: "Study run failed; see debug log for details.",
-          };
+          return finish("error", "Study run failed; see debug log for details.");
         }
         logger.debug(
           "learner",
           `run ${runID} completed: ${turns} turns, ${notesWritten} suggested pages`,
         );
-        return {
-          outcome: "completed",
-          notesWritten,
-          notedSessions: [...notedSessions],
-          turns,
-          message: text,
-        };
+        return finish("completed", text);
       }
     }
 
-    return {
-      outcome: "error",
-      notesWritten,
-      notedSessions: [...notedSessions],
-      turns,
-      message: "Study run ended without a result.",
-    };
+    return finish("error", "Study run ended without a result.");
   } catch (error) {
     const text = error instanceof Error ? error.message : String(error);
     const gatewayError = classifyGatewayError(text) ?? classifyGatewayRejection(text);
     if (gatewayError) {
-      return {
-        outcome: gatewayError.outcome,
-        notesWritten,
-        notedSessions: [...notedSessions],
-        turns,
-        message: gatewayError.message,
-      };
+      return finish(gatewayError.outcome, gatewayError.message, gatewayError.reason);
     }
     logger.debug("learner", `run ${runID} threw: ${text}`);
-    return {
-      outcome: "error",
-      notesWritten,
-      notedSessions: [...notedSessions],
-      turns,
-      message: abort.signal.aborted
+    return finish(
+      "error",
+      abort.signal.aborted
         ? "Study run timed out and was aborted."
         : "Study run failed; see debug log for details.",
-    };
+    );
   } finally {
     clearTimeout(timer);
     configDir.cleanup();

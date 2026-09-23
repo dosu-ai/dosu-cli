@@ -10,6 +10,7 @@ import { createTypedClient } from "../client/trpc";
 import { loadConfig } from "../config/config";
 import { allHookAgents, getHookAgent, type HookAgent } from "../hooks/agents";
 import { HookConfigError, hookCommand } from "../hooks/formats";
+import type { LearnerRunResult } from "../learner/runner";
 import { emitKnowledgeReport } from "../report/generate";
 import type { AgentSession } from "../sessions/scan";
 import { listSessionBacklog } from "../sync/backlog";
@@ -17,7 +18,7 @@ import { spawnDetachedSelf } from "../sync/detach";
 import { formatTokenCount, getSyncStatus, type SyncStatus } from "../sync/status";
 import { MINE_BATCH_LIMIT, runKnowledgeSync, type SyncDeps, type SyncOutcome } from "../sync/sync";
 import { loadSyncState } from "../sync/watermark";
-import { recordCommandFacets } from "../telemetry/telemetry";
+import { type CommandFacets, recordCommandFacets } from "../telemetry/telemetry";
 import { resolveAgents } from "./agent-select";
 import { positiveInteger } from "./arguments";
 import { requireLoginConfig } from "./auth";
@@ -285,7 +286,7 @@ export function knowledgeCommand(): Command {
           sync_status: outcome.status,
           sessions_studied: sessionsStudied,
           notes_written: notesWritten,
-          ...(outcome.learner ? { learner_outcome: outcome.learner.outcome } : {}),
+          ...(outcome.learner ? learnerFacets(outcome.learner) : {}),
         });
 
         if (opts.quiet) return; // Invisible by contract; details are in the debug log.
@@ -372,6 +373,17 @@ export function knowledgeCommand(): Command {
 
 /** Studying step for authenticated cloud-mode installs; returns undefined (gate-and-report only)
  * when the install can't mine: logged out, OSS mode, or no API key. */
+/** The learner's coarse diagnostics as telemetry facets; telemetry re-validates each one. */
+function learnerFacets(learner: LearnerRunResult): CommandFacets {
+  return {
+    learner_outcome: learner.outcome,
+    ...(learner.gatewayReason ? { gateway_reason: learner.gatewayReason } : {}),
+    ...(learner.claudeCodeSource ? { claude_code_source: learner.claudeCodeSource } : {}),
+    ...(learner.claudeCodeVersion ? { claude_code_version: learner.claudeCodeVersion } : {}),
+    ...(learner.model ? { learner_model: learner.model } : {}),
+  };
+}
+
 function buildLearner(trigger: "hook" | "manual"): SyncDeps["mine"] {
   const cfg = loadConfig();
   if (cfg.mode === "oss") return undefined;

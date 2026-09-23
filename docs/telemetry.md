@@ -106,13 +106,19 @@ The `properties` allowlist is:
 | `sessions_studied` | Optional, `knowledge sync` only: sessions handed to the learner this invocation, bucketed to `0`, `1-4`, `5-9`, `10-19`, `20-49`, or `50+`. Summed across bootstrap rounds. |
 | `notes_written` | Optional, `knowledge sync` only: `write_knowledge` calls allowed through this invocation, same buckets. |
 | `learner_outcome` | Optional, `knowledge sync` only: `completed`, `settings_conflict`, `consent_off`, `credit_limit`, `quota_exceeded`, `gateway_rejected`, `claude_code_missing`, or `error`. |
+| `gateway_reason` | Optional, `knowledge sync` only: fixed category of the LLM gateway's 400, derived locally from its text — `system_role_unsupported`, `adaptive_thinking_unsupported`, `effort_unsupported`, `unsupported_request` (the gateway's own `dosu_unsupported_request:` refusal), `max_tokens`, `context_length`, or `other`. The rejection text itself is never sent. |
+| `claude_code_source` | Optional, `knowledge sync` only: where the studying agent's Claude Code came from — `sdk` (the Agent SDK's bundled binary), `system` (a system install), or `missing`. Never the executable path. |
+| `claude_code_version` | Optional, `knowledge sync` only: the spawned Claude Code's self-reported version, kept only when it is a plain release version (`1.2.3` with an optional short dotted pre-release). |
+| `learner_model` | Optional, `knowledge sync` only: the model the study run pinned, kept only when it is a `claude-` model id of lowercase letters, digits, `.`, and `-` (at most 63 characters). |
 | `backfill_offer` | Optional, `setup`/`tui` only: what happened to the post-install "study past sessions" prompt — `not-offered` (empty backlog), `accepted`, `declined`, `cancelled`, or `spawn-failed`. |
 
 The optional per-command facets are recorded by the running command through
 `recordCommandFacets()` and attached to its single completion event. Every value is checked against
 a closed vocabulary in `src/telemetry/telemetry.ts` and counts are bucketed before transport, so a
-new status string cannot reach PostHog until it is added to the allowlist. Facets never include
-session identifiers, project names, note titles, or note content.
+new status string cannot reach PostHog until it is added to the allowlist; the two open-ended facets
+(`claude_code_version`, `learner_model`) must match a strict shape instead. Facets never include
+session identifiers, project names, note titles, note content, executable paths, or learner or
+gateway message text.
 
 Signed-in command events join the existing PostHog person identified by the web app with the same
 Dosu user UUID. When the current authenticated config has a selected organization UUID, the event
@@ -141,20 +147,26 @@ The envelope header contains exactly `dsn`, `event_id`, and `sent_at`. The item 
 | `release` | `dosu-cli@<cli_version>`. |
 | `tags` | The closed tag set below. |
 | `user` | Optional validated `{id, email?}` for the current authenticated Dosu user. |
-| `fingerprint` | `dosu-cli`, canonical command, safe error type, stable error code or `unknown`, and newest allowlisted Dosu callsite or `unknown`. |
-| `exception` | One value containing only safe type/code and optional Dosu-owned frames. |
+| `fingerprint` | `dosu-cli`, canonical command, safe error type, stable error code or `unknown`, and newest allowlisted Dosu callsite or `unknown`, then the validated `learner_outcome` and `gateway_reason` facets when present, so distinct study-run failure modes group separately. |
+| `exception` | One value containing only safe type, a summary built from allowlisted values, and optional Dosu-owned frames. |
 | `debug_meta` | Optional npm-bundle source-map debug ID; omitted unless the event has a mapped `bin/dosu.js` frame. |
 
 The exact tag allowlist is `schema_version`, `command`, `cli_version`, `install_channel`, `os`,
 `arch`, `runtime`, `runtime_major`, `is_ci`, `is_tty`, `mode`, and `is_authenticated`, plus optional
-`error_code`, `http_status`, and `exit_code`. Values are bounded and validated. `error_code` and
+`error_code`, `http_status`, and `exit_code`, plus these command facets when the failing command
+recorded them and they pass the same validation as for PostHog: `sync_trigger`, `sync_status`,
+`learner_outcome`, `gateway_reason`, `claude_code_source`, `claude_code_version`, and
+`learner_model`. Values are bounded and validated. `error_code` and
 error types come from closed known-value allowlists, and `http_status` is an integer from 100
 through 599.
 
 The exception value contains only:
 
 - `type`: a known allowlisted error-class name, otherwise `Error`;
-- `value`: the stable error code, otherwise the safe error type; and
+- `value`: when the command recorded a validated `learner_outcome` (or, failing that, `sync_status`)
+  facet, `<command>: <outcome>` with ` (<gateway_reason>)` appended when present — for example
+  `knowledge sync: gateway_rejected (system_role_unsupported)`; otherwise the stable error code, or
+  the safe error type; and
 - optional `stacktrace.frames`: at most 20 frames with only `filename`, `lineno`, `colno`,
   `in_app: true`, and the fixed `app:///bin/dosu.js` `abs_path` for mapped npm-bundle frames.
 

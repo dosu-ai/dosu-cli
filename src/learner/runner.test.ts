@@ -4,6 +4,7 @@ import { getVersionString } from "../version/version";
 import {
   classifyGatewayError,
   classifyGatewayRejection,
+  classifyRejectionReason,
   runLearner,
   traceAgentMessage,
 } from "./runner";
@@ -105,6 +106,7 @@ describe("classifyGatewayRejection", () => {
       outcome: "gateway_rejected",
       message:
         "LLM gateway rejected the study run: max_tokens: 128000 > 64000, which is the maximum allowed number of output tokens for claude-haiku-4-5-20251001",
+      reason: "max_tokens",
     });
   });
 
@@ -129,6 +131,38 @@ describe("classifyGatewayRejection", () => {
   it("ignores other statuses and non-API text", () => {
     expect(classifyGatewayRejection("API Error: 500 upstream exploded")).toBeNull();
     expect(classifyGatewayRejection("spawn ENOENT")).toBeNull();
+  });
+});
+
+describe("classifyRejectionReason", () => {
+  it.each([
+    ["dosu_unsupported_request: system-role messages need claude-opus-5-5", "unsupported_request"],
+    ["messages.0.role: Input should be 'user' or 'assistant'", "system_role_unsupported"],
+    [
+      'Unexpected role "system". The Messages API accepts a top-level `system` parameter',
+      "system_role_unsupported",
+    ],
+    [
+      "thinking.type: Input tag 'adaptive' found using 'type' does not match",
+      "adaptive_thinking_unsupported",
+    ],
+    ["adaptive thinking is not supported on this model", "adaptive_thinking_unsupported"],
+    ["output_config.effort: Extra inputs are not permitted", "effort_unsupported"],
+    [
+      "messages.1.output_config: output_config is only permitted on role 'system' messages",
+      "effort_unsupported",
+    ],
+    ["`max_tokens` must be greater than `thinking.budget_tokens`", "max_tokens"],
+    ["thinking.budget_tokens: Input should be greater than or equal to 1024", "other"],
+    ["max_tokens: 128000 > 64000, which is the maximum allowed", "max_tokens"],
+    ["prompt is too long: 250000 tokens > 200000 maximum", "context_length"],
+    [
+      "input length and `max_tokens` exceed context limit: 190000 + 32000 > 200000",
+      "context_length",
+    ],
+    ["something nobody anticipated", "other"],
+  ])("maps %j to %s", (text, reason) => {
+    expect(classifyRejectionReason(text)).toBe(reason);
   });
 });
 
@@ -190,6 +224,42 @@ describe("runLearner", () => {
       "x-dosu-expected-model: claude-sonnet-5",
     );
     expect(debugMock).toHaveBeenCalledWith("learner", "study run model: claude-sonnet-5");
+  });
+
+  it("reports coarse diagnostics: executable source, init version, and pinned model", async () => {
+    resolveExecutableMock.mockReturnValue({ kind: "system", path: "/home/u/.local/bin/claude" });
+    queryReturning(
+      { type: "system", subtype: "init", claude_code_version: "2.1.280" },
+      successResult(),
+    );
+
+    const result = await runLearner(baseOptions);
+
+    expect(result).toMatchObject({
+      outcome: "completed",
+      claudeCodeSource: "system",
+      claudeCodeVersion: "2.1.280",
+      model: "claude-haiku-4-5",
+    });
+    expect(result.gatewayReason).toBeUndefined();
+  });
+
+  it("reports a missing Claude Code as the executable source", async () => {
+    resolveExecutableMock.mockReturnValue({ kind: "missing" });
+
+    const result = await runLearner(baseOptions);
+
+    expect(result.claudeCodeSource).toBe("missing");
+    expect(result.model).toBeUndefined();
+  });
+
+  it("ignores a non-string Claude Code version on the init message", async () => {
+    queryReturning({ type: "system", subtype: "init", claude_code_version: 7 }, successResult());
+
+    const result = await runLearner(baseOptions);
+
+    expect(result.claudeCodeSource).toBe("sdk");
+    expect(result.claudeCodeVersion).toBeUndefined();
   });
 
   it("pins the default model when the gateway can't report one", async () => {
@@ -528,6 +598,7 @@ describe("runLearner", () => {
     expect(result.message).toBe(
       "LLM gateway rejected the study run: max_tokens: 128000 > 64000, which is the maximum allowed number of output tokens for claude-haiku-4-5-20251001",
     );
+    expect(result.gatewayReason).toBe("max_tokens");
   });
 
   it("lets a dosu_* refusal token win over a 400", async () => {
@@ -561,6 +632,7 @@ describe("runLearner", () => {
 
     expect(result.outcome).toBe("gateway_rejected");
     expect(result.message).toBe("LLM gateway rejected the study run: max_tokens too large");
+    expect(result.gatewayReason).toBe("max_tokens");
   });
 
   it("maps a quota error thrown by the SDK", async () => {
