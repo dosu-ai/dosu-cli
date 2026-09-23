@@ -126,6 +126,8 @@ const MAX_BACKGROUND_CONFIG_BYTES = 64 * 1_024;
 export function loadConfigNonBlocking(): Config | undefined {
   let fd: number | undefined;
   try {
+    // O_NONBLOCK is undefined on Windows, where opening a pipe path cannot block anyway.
+    /* v8 ignore next -- platform dispatch, win32 arm not exercised on POSIX CI */
     const nonblocking = typeof constants.O_NONBLOCK === "number" ? constants.O_NONBLOCK : 0;
     fd = openSync(getConfigPath(), constants.O_RDONLY | nonblocking);
     const file = fstatSync(fd);
@@ -133,6 +135,7 @@ export function loadConfigNonBlocking(): Config | undefined {
 
     const content = Buffer.alloc(MAX_BACKGROUND_CONFIG_BYTES + 1);
     const bytesRead = readSync(fd, content, 0, content.byteLength, 0);
+    /* v8 ignore next -- only reachable if the file grew between fstat and read */
     if (bytesRead > MAX_BACKGROUND_CONFIG_BYTES) return undefined;
     return parseConfig(JSON.parse(content.subarray(0, bytesRead).toString("utf8")) as unknown);
   } catch {
@@ -149,7 +152,7 @@ export function loadConfigNonBlocking(): Config | undefined {
 }
 
 /** Parse config content without performing filesystem writes. */
-export function parseConfig(raw: unknown): Config {
+function parseConfig(raw: unknown): Config {
   if (isConfigV2(raw)) return normalizeV2(raw);
   if (isRecord(raw) && "schema_version" in raw) return emptyConfig();
   return migrateLegacyConfig(raw);

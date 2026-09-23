@@ -6,7 +6,7 @@ import type { Config } from "../config/config";
 import { logger } from "../debug/logger";
 import { allSetupProviders, type SetupProvider } from "./providers";
 
-export interface ProviderRefreshFailure {
+interface ProviderRefreshFailure {
   provider: SetupProvider;
   error: Error;
 }
