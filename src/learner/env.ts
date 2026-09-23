@@ -15,6 +15,8 @@ export interface LearnerEnvOptions {
   trigger: LearnerTrigger;
   cliVersion: string;
   deploymentID?: string;
+  /** The model the gateway serves (see model.ts); Claude Code shapes every request for it. */
+  model: string;
   /** Base environment; defaults to `process.env`. */
   baseEnv?: NodeJS.ProcessEnv;
 }
@@ -42,11 +44,14 @@ export function buildLearnerEnv(options: LearnerEnvOptions): NodeJS.ProcessEnv {
     `x-dosu-run-id: ${options.runID}`,
     `x-dosu-trigger: ${options.trigger}`,
     `x-dosu-cli-version: ${options.cliVersion}`,
+    // Lets the gateway refuse a request shaped for a model other than the one it serves.
+    `x-dosu-expected-model: ${options.model}`,
   ];
   if (options.deploymentID) headers.push(`x-dosu-deployment-id: ${options.deploymentID}`);
 
   env.ANTHROPIC_BASE_URL = options.gatewayURL;
   env.ANTHROPIC_AUTH_TOKEN = options.apiKey;
+  env.ANTHROPIC_MODEL = options.model;
   env.ANTHROPIC_CUSTOM_HEADERS = headers.join("\n");
   env.CLAUDE_CONFIG_DIR = options.configDir;
   // Claude Code's default output cap follows its default model and can exceed what the model the

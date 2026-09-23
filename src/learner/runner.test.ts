@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../sessions/scan";
 import { getVersionString } from "../version/version";
 import {
@@ -66,12 +66,22 @@ function queryReturning(...messages: unknown[]) {
   );
 }
 
+/** The gateway's capabilities endpoint, as the runner's model resolution sees it. */
+const fetchMock = vi.hoisted(() => vi.fn());
+
 beforeEach(() => {
+  fetchMock.mockReset();
+  fetchMock.mockResolvedValue(new Response("not found", { status: 404 }));
+  vi.stubGlobal("fetch", fetchMock);
   queryMock.mockReset();
   conflictsMock.mockReset();
   conflictsMock.mockReturnValue([]);
   resolveExecutableMock.mockReset();
   resolveExecutableMock.mockReturnValue(undefined);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe("classifyGatewayError", () => {
@@ -129,6 +139,7 @@ describe("runLearner", () => {
     expect(result.outcome).toBe("error");
     expect(result.message).toMatch(/gateway URL/i);
     expect(queryMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("fails closed on settings conflicts without spawning", async () => {
@@ -142,6 +153,40 @@ describe("runLearner", () => {
     expect(result.message).toContain("managed-settings.json");
     expect(result.message).toContain("apiKeyHelper");
     expect(queryMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("pins the model the gateway serves in both the env and the SDK options", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ model: "claude-sonnet-5", max_output_tokens: 64000 }), {
+        status: 200,
+      }),
+    );
+    queryReturning(successResult());
+
+    await runLearner(baseOptions);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:7001/v1/llm-gateway/capabilities",
+      expect.objectContaining({ headers: { Authorization: "Bearer sk_user_test" } }),
+    );
+    const params = queryMock.mock.calls[0][0];
+    expect(params.options.model).toBe("claude-sonnet-5");
+    expect(params.options.env.ANTHROPIC_MODEL).toBe("claude-sonnet-5");
+    expect(params.options.env.ANTHROPIC_CUSTOM_HEADERS).toContain(
+      "x-dosu-expected-model: claude-sonnet-5",
+    );
+    expect(debugMock).toHaveBeenCalledWith("learner", "study run model: claude-sonnet-5");
+  });
+
+  it("pins the default model when the gateway can't report one", async () => {
+    queryReturning(successResult());
+
+    await runLearner(baseOptions);
+
+    const params = queryMock.mock.calls[0][0];
+    expect(params.options.model).toBe("claude-haiku-4-5");
+    expect(params.options.env.ANTHROPIC_MODEL).toBe("claude-haiku-4-5");
   });
 
   it("completes on a success result and reports turns", async () => {

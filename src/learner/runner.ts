@@ -11,6 +11,7 @@ import { createRunConfigDir } from "./config-dir";
 import { detectSettingsConflicts } from "./conflicts";
 import { buildLearnerEnv, type LearnerTrigger } from "./env";
 import { resolveClaudeExecutable } from "./executable";
+import { resolveServedModel } from "./model";
 import { buildLearnerPrompt, buildLearnerSystemPrompt } from "./prompt";
 import { LEARNER_CORE_RULES } from "./prompt-core";
 import { createSessionToolsServer, SESSIONS_SERVER_NAME } from "./tools";
@@ -175,6 +176,11 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
     };
   }
 
+  // Pin the model the gateway serves: unpinned, Claude Code shapes requests for its own default
+  // model (system-role messages, adaptive thinking), which the served model can reject.
+  const model = await resolveServedModel({ gatewayURL, apiKey: options.apiKey });
+  logger.debug("learner", `study run model: ${model}`);
+
   // The SDK is dynamically imported so no other CLI path pays its cost.
   const { query } = await import("@anthropic-ai/claude-agent-sdk");
 
@@ -217,6 +223,7 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
     trigger: options.trigger,
     cliVersion: getVersionString(),
     deploymentID: options.deploymentID,
+    model,
   });
 
   try {
@@ -224,6 +231,7 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
       prompt: buildLearnerPrompt(options.sessions),
       options: {
         systemPrompt: buildLearnerSystemPrompt(LEARNER_CORE_RULES),
+        model,
         env: env as Record<string, string>,
         abortController: abort,
         maxTurns: options.maxTurns ?? DEFAULT_MAX_TURNS,
