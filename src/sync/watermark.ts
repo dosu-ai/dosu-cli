@@ -21,6 +21,9 @@ export interface StudiedSessionRecord {
   at: string;
   /** The session's `harness/id`. */
   session: string;
+  /** The session's `updated` as studied; later activity means it is due again. Absent on
+   * records written before this was stored. */
+  updated?: string;
   /** The session's project (workspace basename), when the scanner knew it. */
   project?: string;
 }
@@ -99,6 +102,7 @@ export function loadSyncState(configDir: string = getConfigDir()): SyncState {
           .map((record) => ({
             at: record.at,
             session: record.session,
+            ...(typeof record.updated === "string" ? { updated: record.updated } : {}),
             ...(typeof record.project === "string" ? { project: record.project } : {}),
           }))
       : [];

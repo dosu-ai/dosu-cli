@@ -284,6 +284,22 @@ describe("safe payload builders", () => {
     expect(payload.properties.learner_outcome).toBe("gateway_rejected");
   });
 
+  it("keeps the claude_code_missing learner outcome", () => {
+    const payload = buildPostHogPayload({
+      apiKey: "public",
+      installId: "11111111-1111-4111-8111-111111111111",
+      command: "knowledge sync",
+      result: "success",
+      durationMs: 2,
+      exitCode: 0,
+      facets: { sync_status: "skipped-gateway", learner_outcome: "claude_code_missing" },
+      context: SAFE_CONTEXT,
+      runtime: SAFE_RUNTIME,
+    });
+
+    expect(payload.properties.learner_outcome).toBe("claude_code_missing");
+  });
+
   it("drops facet values outside the closed vocabularies", () => {
     const payload = buildPostHogPayload({
       apiKey: "public",
@@ -313,6 +329,60 @@ describe("safe payload builders", () => {
     expect("raw_prompt" in payload.properties).toBe(false);
     expect(JSON.stringify(payload)).not.toContain("secret");
     expect(JSON.stringify(payload)).not.toContain("rm -rf");
+  });
+
+  it("keeps the learner diagnostic facets when they pass validation", () => {
+    const payload = buildPostHogPayload({
+      apiKey: "public",
+      installId: "11111111-1111-4111-8111-111111111111",
+      command: "knowledge sync",
+      result: "failure",
+      durationMs: 2,
+      exitCode: 1,
+      facets: {
+        sync_status: "mine-failed",
+        learner_outcome: "gateway_rejected",
+        gateway_reason: "system_role_unsupported",
+        claude_code_source: "system",
+        claude_code_version: "2.1.280",
+        learner_model: "claude-haiku-4-5",
+      },
+      context: SAFE_CONTEXT,
+      runtime: SAFE_RUNTIME,
+    });
+
+    expect(payload.properties).toMatchObject({
+      gateway_reason: "system_role_unsupported",
+      claude_code_source: "system",
+      claude_code_version: "2.1.280",
+      learner_model: "claude-haiku-4-5",
+    });
+  });
+
+  it.each([
+    ["gateway_reason", "LLM gateway rejected the study run: secret prompt text"],
+    ["gateway_reason", "Other"],
+    ["claude_code_source", "/Users/me/.local/bin/claude"],
+    ["claude_code_version", "2.1.280 (Claude Code) /Users/me"],
+    ["claude_code_version", `2.1.${"9".repeat(40)}`],
+    ["learner_model", "gpt-5"],
+    ["learner_model", "claude-haiku-4-5\nx-evil: 1"],
+    ["learner_model", `claude-${"a".repeat(80)}`],
+  ])("drops a malformed %s facet", (field, value) => {
+    const payload = buildPostHogPayload({
+      apiKey: "public",
+      installId: "11111111-1111-4111-8111-111111111111",
+      command: "knowledge sync",
+      result: "failure",
+      durationMs: 2,
+      exitCode: 1,
+      facets: { [field]: value },
+      context: SAFE_CONTEXT,
+      runtime: SAFE_RUNTIME,
+    });
+
+    expect(field in payload.properties).toBe(false);
+    expect(JSON.stringify(payload)).not.toContain(value);
   });
 
   it.each([
@@ -423,6 +493,162 @@ describe("safe payload builders", () => {
     expect(built?.body).not.toContain("raw secret message");
     expect(built?.body).not.toContain("/Users/alice/private");
     expect(built?.body).not.toContain("privateFunction");
+  });
+
+  it("tags, summarizes, and fingerprints a knowledge-sync failure from its facets", () => {
+    const built = buildSentryEnvelope({
+      dsn: "https://public@sentry.example.test/42",
+      command: "knowledge sync",
+      context: SAFE_CONTEXT,
+      runtime: SAFE_RUNTIME,
+      error: { type: "CommandExitError", frames: [], exitCode: 1 },
+      facets: {
+        sync_trigger: "hook",
+        sync_status: "mine-failed",
+        sessions_studied: 4,
+        learner_outcome: "gateway_rejected",
+        gateway_reason: "system_role_unsupported",
+        claude_code_source: "system",
+        claude_code_version: "2.1.280",
+        learner_model: "claude-haiku-4-5",
+      },
+      eventId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      timestampMs: 2_000,
+    });
+
+    const event = JSON.parse(built?.body.split("\n")[2] ?? "{}") as {
+      tags: Record<string, string>;
+      fingerprint: string[];
+      exception: { values: Array<{ type: string; value: string }> };
+    };
+    expect(event.tags).toMatchObject({
+      sync_trigger: "hook",
+      sync_status: "mine-failed",
+      learner_outcome: "gateway_rejected",
+      gateway_reason: "system_role_unsupported",
+      claude_code_source: "system",
+      claude_code_version: "2.1.280",
+      learner_model: "claude-haiku-4-5",
+    });
+    // Counts stay in analytics; they would only fragment tag values.
+    expect(event.tags).not.toHaveProperty("sessions_studied");
+    expect(event.exception.values[0]).toEqual({
+      type: "CommandExitError",
+      value: "knowledge sync: gateway_rejected (system_role_unsupported)",
+    });
+    expect(event.fingerprint).toEqual([
+      "dosu-cli",
+      "knowledge sync",
+      "CommandExitError",
+      "unknown",
+      "unknown",
+      "gateway_rejected",
+      "system_role_unsupported",
+    ]);
+  });
+
+  it("summarizes a learner outcome without a gateway reason, and a bare sync status", () => {
+    const envelope = (facets: Record<string, string>) => {
+      const built = buildSentryEnvelope({
+        dsn: "https://public@sentry.example.test/42",
+        command: "knowledge sync",
+        context: SAFE_CONTEXT,
+        runtime: SAFE_RUNTIME,
+        error: { type: "CommandExitError", frames: [], exitCode: 1 },
+        facets,
+        eventId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        timestampMs: 2_000,
+      });
+      return JSON.parse(built?.body.split("\n")[2] ?? "{}") as {
+        fingerprint: string[];
+        exception: { values: Array<{ value: string }> };
+      };
+    };
+
+    const learnerError = envelope({ sync_status: "mine-failed", learner_outcome: "error" });
+    expect(learnerError.exception.values[0]?.value).toBe("knowledge sync: error");
+    expect(learnerError.fingerprint.slice(-2)).toEqual(["unknown", "error"]);
+
+    const scanError = envelope({ sync_status: "error" });
+    expect(scanError.exception.values[0]?.value).toBe("knowledge sync: error");
+    expect(scanError.fingerprint).toHaveLength(5);
+  });
+
+  it("keeps the plain value and fingerprint when the study itself completed", () => {
+    // e.g. `--report` failing after a successful study: not a learner failure.
+    const built = buildSentryEnvelope({
+      dsn: "https://public@sentry.example.test/42",
+      command: "knowledge sync",
+      context: SAFE_CONTEXT,
+      runtime: SAFE_RUNTIME,
+      error: { type: "CommandExitError", frames: [], exitCode: 1 },
+      facets: { sync_status: "studied", learner_outcome: "completed" },
+      eventId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      timestampMs: 2_000,
+    });
+
+    const event = JSON.parse(built?.body.split("\n")[2] ?? "{}") as {
+      tags: Record<string, string>;
+      fingerprint: string[];
+      exception: { values: Array<{ value: string }> };
+    };
+    expect(event.exception.values[0]?.value).toBe("CommandExitError");
+    expect(event.fingerprint).toEqual([
+      "dosu-cli",
+      "knowledge sync",
+      "CommandExitError",
+      "unknown",
+      "unknown",
+    ]);
+    // The facts are still tagged.
+    expect(event.tags.learner_outcome).toBe("completed");
+  });
+
+  it("never lets raw learner text reach a Sentry event through its facets", () => {
+    const raw = "LLM gateway rejected the study run: my secret prompt /Users/alice/private";
+    const built = buildSentryEnvelope({
+      dsn: "https://public@sentry.example.test/42",
+      command: "knowledge sync",
+      context: SAFE_CONTEXT,
+      runtime: SAFE_RUNTIME,
+      error: { type: "CommandExitError", frames: [], exitCode: 1 },
+      facets: {
+        sync_trigger: raw,
+        sync_status: raw,
+        learner_outcome: raw,
+        gateway_reason: raw,
+        claude_code_source: raw,
+        claude_code_version: raw,
+        learner_model: raw,
+        backfill_offer: raw,
+        ...({ message: raw } as object),
+      },
+      eventId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      timestampMs: 2_000,
+    });
+
+    const event = JSON.parse(built?.body.split("\n")[2] ?? "{}") as {
+      tags: Record<string, string>;
+      fingerprint: string[];
+      exception: { values: Array<{ value: string }> };
+    };
+    expect(built?.body).not.toContain("secret");
+    expect(built?.body).not.toContain("/Users/alice");
+    expect(event.exception.values[0]?.value).toBe("CommandExitError");
+    expect(event.fingerprint).toHaveLength(5);
+    for (const key of [
+      "sync_trigger",
+      "sync_status",
+      "learner_outcome",
+      "gateway_reason",
+      "claude_code_source",
+      "claude_code_version",
+      "learner_model",
+      "backfill_offer",
+      "message",
+    ]) {
+      expect(event.tags).not.toHaveProperty(key);
+    }
   });
 
   it("adds only validated user id and email to authenticated Sentry errors", () => {
@@ -1007,6 +1233,120 @@ describe("CommandTelemetry lifecycle", () => {
     });
     // Consumed on dispatch: nothing leaks into a later telemetry instance.
     expect(consumeCommandFacets()).toBeUndefined();
+  });
+
+  it("sends one command's facets to both PostHog and its Sentry error", async () => {
+    consumeCommandFacets();
+    const deps = testDependencies();
+    const telemetry = createCommandTelemetry(
+      { install_id: "11111111-1111-4111-8111-111111111111" },
+      deps,
+    );
+    telemetry.start("knowledge sync", SAFE_CONTEXT);
+    recordCommandFacets({
+      sync_status: "mine-failed",
+      learner_outcome: "gateway_rejected",
+      gateway_reason: "effort_unsupported",
+    });
+    await telemetry.complete(1);
+
+    expect(deps.fetch).toHaveBeenCalledTimes(2);
+    const bodies = deps.fetch.mock.calls.map(([, init]) => String(init?.body));
+    const posthog = JSON.parse(bodies.find((b) => b.startsWith('{"api_key"')) ?? "{}") as {
+      properties: Record<string, unknown>;
+    };
+    expect(posthog.properties.gateway_reason).toBe("effort_unsupported");
+    const sentry = bodies.find((b) => b.includes('\n{"type":"event"}\n')) ?? "";
+    const event = JSON.parse(sentry.split("\n")[2] ?? "{}") as {
+      tags: Record<string, string>;
+      exception: { values: Array<{ value: string }> };
+    };
+    expect(event.tags.gateway_reason).toBe("effort_unsupported");
+    expect(event.exception.values[0]?.value).toBe(
+      "knowledge sync: gateway_rejected (effort_unsupported)",
+    );
+  });
+
+  describe("background study-run failures", () => {
+    async function completeWith(facets: Record<string, unknown>, exitCode = 0) {
+      consumeCommandFacets();
+      const deps = testDependencies();
+      const telemetry = createCommandTelemetry(
+        { install_id: "11111111-1111-4111-8111-111111111111" },
+        deps,
+      );
+      telemetry.start("knowledge sync", SAFE_CONTEXT);
+      recordCommandFacets(facets);
+      await telemetry.complete(exitCode);
+      const bodies = deps.fetch.mock.calls.map(([, init]) => String(init?.body));
+      const posthog = bodies
+        .filter((b) => b.startsWith('{"api_key"'))
+        .map((b) => JSON.parse(b) as { properties: Record<string, unknown> });
+      const sentry = bodies
+        .filter((b) => b.includes('\n{"type":"event"}\n'))
+        .map(
+          (b) =>
+            JSON.parse(b.split("\n")[2] ?? "{}") as {
+              tags: Record<string, string>;
+              fingerprint: string[];
+              exception: { values: Array<Record<string, unknown>> };
+            },
+        );
+      return { posthog, sentry };
+    }
+
+    it("reports a quiet run's failed study to Sentry while the command stays a success", async () => {
+      const { posthog, sentry } = await completeWith({
+        sync_trigger: "hook",
+        sync_status: "mine-failed",
+        learner_outcome: "gateway_rejected",
+        gateway_reason: "system_role_unsupported",
+      });
+
+      expect(posthog).toHaveLength(1);
+      expect(posthog[0]?.properties).toMatchObject({ result: "success", exit_code: 0 });
+      expect(sentry).toHaveLength(1);
+      expect(sentry[0]?.exception.values).toEqual([
+        {
+          type: "LearnerRunFailed",
+          value: "knowledge sync: gateway_rejected (system_role_unsupported)",
+        },
+      ]);
+      expect(sentry[0]?.tags).toMatchObject({ sync_trigger: "hook", sync_status: "mine-failed" });
+      expect(sentry[0]?.tags).not.toHaveProperty("exit_code");
+      expect(sentry[0]?.fingerprint).toEqual([
+        "dosu-cli",
+        "knowledge sync",
+        "LearnerRunFailed",
+        "unknown",
+        "unknown",
+        "gateway_rejected",
+        "system_role_unsupported",
+      ]);
+    });
+
+    it.each([
+      [{ sync_status: "skipped-gateway", learner_outcome: "credit_limit" }],
+      [{ sync_status: "skipped-gateway", learner_outcome: "claude_code_missing" }],
+      [{ sync_status: "skipped-backoff" }],
+      [{ sync_status: "studied", learner_outcome: "completed" }],
+      [{ sync_status: "mine-failed; injected" }],
+    ])("sends no Sentry event for %j", async (facets) => {
+      const { posthog, sentry } = await completeWith(facets);
+
+      expect(posthog).toHaveLength(1);
+      expect(sentry).toHaveLength(0);
+    });
+
+    it("sends only the exit error when a failed study also fails the command", async () => {
+      const { sentry } = await completeWith(
+        { sync_status: "mine-failed", learner_outcome: "error" },
+        1,
+      );
+
+      expect(sentry).toHaveLength(1);
+      expect(sentry[0]?.exception.values[0]?.type).toBe("CommandExitError");
+    });
   });
 
   it("fails open when the facet resolver throws", async () => {

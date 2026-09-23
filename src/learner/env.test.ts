@@ -8,6 +8,7 @@ const baseOptions = {
   runID: "run-1",
   trigger: "hook" as const,
   cliVersion: "0.0.0-test",
+  model: "claude-haiku-4-5",
 };
 
 describe("buildLearnerEnv", () => {
@@ -28,7 +29,8 @@ describe("buildLearnerEnv", () => {
     expect(env.PATH).toBe("/usr/bin");
     expect(env.HOME).toBe("/Users/me");
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
-    expect(env.ANTHROPIC_MODEL).toBeUndefined();
+    // The user's own model choice never leaks; the served model replaces it.
+    expect(env.ANTHROPIC_MODEL).toBe("claude-haiku-4-5");
     expect(env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
     expect(env.CLAUDECODE).toBeUndefined();
   });
@@ -45,7 +47,16 @@ describe("buildLearnerEnv", () => {
     const env = buildLearnerEnv({ ...baseOptions, baseEnv: {} });
 
     expect(env.ANTHROPIC_CUSTOM_HEADERS).toBe(
-      "x-dosu-run-id: run-1\nx-dosu-trigger: hook\nx-dosu-cli-version: 0.0.0-test",
+      "x-dosu-run-id: run-1\nx-dosu-trigger: hook\nx-dosu-cli-version: 0.0.0-test\nx-dosu-expected-model: claude-haiku-4-5",
+    );
+  });
+
+  it("pins the served model and tells the gateway which model the request was shaped for", () => {
+    const env = buildLearnerEnv({ ...baseOptions, model: "claude-sonnet-5", baseEnv: {} });
+
+    expect(env.ANTHROPIC_MODEL).toBe("claude-sonnet-5");
+    expect(env.ANTHROPIC_CUSTOM_HEADERS?.split("\n")).toContain(
+      "x-dosu-expected-model: claude-sonnet-5",
     );
   });
 

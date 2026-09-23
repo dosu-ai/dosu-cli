@@ -57,12 +57,16 @@ export interface ResolveExecutableOptions {
   sdkBinaryExists?: () => boolean;
 }
 
-/** Path to pass as `pathToClaudeCodeExecutable`, or undefined to let the SDK resolve its own
- * version-matched binary (preferred when available). */
-export function resolveClaudeExecutable(
-  options: ResolveExecutableOptions = {},
-): string | undefined {
+/** Where a study run's Claude Code comes from: the SDK's version-matched binary (preferred), a
+ * system install passed as `pathToClaudeCodeExecutable`, or nowhere. */
+export type ClaudeExecutable =
+  | { kind: "sdk" }
+  | { kind: "system"; path: string }
+  | { kind: "missing" };
+
+export function resolveClaudeExecutable(options: ResolveExecutableOptions = {}): ClaudeExecutable {
   const hasSdkBinary = options.sdkBinaryExists ?? sdkNativeBinaryExists;
-  if (hasSdkBinary()) return undefined;
-  return findSystemClaude(options.env, options.homeDir);
+  if (hasSdkBinary()) return { kind: "sdk" };
+  const path = findSystemClaude(options.env, options.homeDir);
+  return path ? { kind: "system", path } : { kind: "missing" };
 }

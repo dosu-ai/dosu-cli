@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../sessions/scan";
 import { getVersionString } from "../version/version";
 import {
   classifyGatewayError,
   classifyGatewayRejection,
+  classifyRejectionReason,
   runLearner,
   traceAgentMessage,
 } from "./runner";
@@ -66,12 +67,22 @@ function queryReturning(...messages: unknown[]) {
   );
 }
 
+/** The gateway's capabilities endpoint, as the runner's model resolution sees it. */
+const fetchMock = vi.hoisted(() => vi.fn());
+
 beforeEach(() => {
+  fetchMock.mockReset();
+  fetchMock.mockResolvedValue(new Response("not found", { status: 404 }));
+  vi.stubGlobal("fetch", fetchMock);
   queryMock.mockReset();
   conflictsMock.mockReset();
   conflictsMock.mockReturnValue([]);
   resolveExecutableMock.mockReset();
-  resolveExecutableMock.mockReturnValue(undefined);
+  resolveExecutableMock.mockReturnValue({ kind: "sdk" });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe("classifyGatewayError", () => {
@@ -95,6 +106,7 @@ describe("classifyGatewayRejection", () => {
       outcome: "gateway_rejected",
       message:
         "LLM gateway rejected the study run: max_tokens: 128000 > 64000, which is the maximum allowed number of output tokens for claude-haiku-4-5-20251001",
+      reason: "max_tokens",
     });
   });
 
@@ -122,6 +134,38 @@ describe("classifyGatewayRejection", () => {
   });
 });
 
+describe("classifyRejectionReason", () => {
+  it.each([
+    ["dosu_unsupported_request: system-role messages need claude-opus-5-5", "unsupported_request"],
+    ["messages.0.role: Input should be 'user' or 'assistant'", "system_role_unsupported"],
+    [
+      'Unexpected role "system". The Messages API accepts a top-level `system` parameter',
+      "system_role_unsupported",
+    ],
+    [
+      "thinking.type: Input tag 'adaptive' found using 'type' does not match",
+      "adaptive_thinking_unsupported",
+    ],
+    ["adaptive thinking is not supported on this model", "adaptive_thinking_unsupported"],
+    ["output_config.effort: Extra inputs are not permitted", "effort_unsupported"],
+    [
+      "messages.1.output_config: output_config is only permitted on role 'system' messages",
+      "effort_unsupported",
+    ],
+    ["`max_tokens` must be greater than `thinking.budget_tokens`", "max_tokens"],
+    ["thinking.budget_tokens: Input should be greater than or equal to 1024", "other"],
+    ["max_tokens: 128000 > 64000, which is the maximum allowed", "max_tokens"],
+    ["prompt is too long: 250000 tokens > 200000 maximum", "context_length"],
+    [
+      "input length and `max_tokens` exceed context limit: 190000 + 32000 > 200000",
+      "context_length",
+    ],
+    ["something nobody anticipated", "other"],
+  ])("maps %j to %s", (text, reason) => {
+    expect(classifyRejectionReason(text)).toBe(reason);
+  });
+});
+
 describe("runLearner", () => {
   it("fails closed when the gateway URL is not absolute", async () => {
     const result = await runLearner({ ...baseOptions, gatewayURL: "/v1/llm-gateway" });
@@ -129,6 +173,7 @@ describe("runLearner", () => {
     expect(result.outcome).toBe("error");
     expect(result.message).toMatch(/gateway URL/i);
     expect(queryMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("fails closed on settings conflicts without spawning", async () => {
@@ -142,6 +187,89 @@ describe("runLearner", () => {
     expect(result.message).toContain("managed-settings.json");
     expect(result.message).toContain("apiKeyHelper");
     expect(queryMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses cleanly, before spawning anything, when no Claude Code is installed", async () => {
+    resolveExecutableMock.mockReturnValue({ kind: "missing" });
+
+    const result = await runLearner(baseOptions);
+
+    expect(result).toMatchObject({ outcome: "claude_code_missing", notesWritten: 0, turns: 0 });
+    expect(result.message).toMatch(/Claude Code/);
+    expect(result.message).toContain("dosu knowledge sync");
+    expect(result.message).not.toContain("\n");
+    expect(queryMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("pins the model the gateway serves in both the env and the SDK options", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ model: "claude-sonnet-5", max_output_tokens: 64000 }), {
+        status: 200,
+      }),
+    );
+    queryReturning(successResult());
+
+    await runLearner(baseOptions);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:7001/v1/llm-gateway/capabilities",
+      expect.objectContaining({ headers: { Authorization: "Bearer sk_user_test" } }),
+    );
+    const params = queryMock.mock.calls[0][0];
+    expect(params.options.model).toBe("claude-sonnet-5");
+    expect(params.options.env.ANTHROPIC_MODEL).toBe("claude-sonnet-5");
+    expect(params.options.env.ANTHROPIC_CUSTOM_HEADERS).toContain(
+      "x-dosu-expected-model: claude-sonnet-5",
+    );
+    expect(debugMock).toHaveBeenCalledWith("learner", "study run model: claude-sonnet-5");
+  });
+
+  it("reports coarse diagnostics: executable source, init version, and pinned model", async () => {
+    resolveExecutableMock.mockReturnValue({ kind: "system", path: "/home/u/.local/bin/claude" });
+    queryReturning(
+      { type: "system", subtype: "init", claude_code_version: "2.1.280" },
+      successResult(),
+    );
+
+    const result = await runLearner(baseOptions);
+
+    expect(result).toMatchObject({
+      outcome: "completed",
+      claudeCodeSource: "system",
+      claudeCodeVersion: "2.1.280",
+      model: "claude-haiku-4-5",
+    });
+    expect(result.gatewayReason).toBeUndefined();
+  });
+
+  it("reports a missing Claude Code as the executable source", async () => {
+    resolveExecutableMock.mockReturnValue({ kind: "missing" });
+
+    const result = await runLearner(baseOptions);
+
+    expect(result.claudeCodeSource).toBe("missing");
+    expect(result.model).toBeUndefined();
+  });
+
+  it("ignores a non-string Claude Code version on the init message", async () => {
+    queryReturning({ type: "system", subtype: "init", claude_code_version: 7 }, successResult());
+
+    const result = await runLearner(baseOptions);
+
+    expect(result.claudeCodeSource).toBe("sdk");
+    expect(result.claudeCodeVersion).toBeUndefined();
+  });
+
+  it("pins the default model when the gateway can't report one", async () => {
+    queryReturning(successResult());
+
+    await runLearner(baseOptions);
+
+    const params = queryMock.mock.calls[0][0];
+    expect(params.options.model).toBe("claude-haiku-4-5");
+    expect(params.options.env.ANTHROPIC_MODEL).toBe("claude-haiku-4-5");
   });
 
   it("completes on a success result and reports turns", async () => {
@@ -185,7 +313,7 @@ describe("runLearner", () => {
   });
 
   it("passes a fallback Claude executable when the SDK binary is unavailable", async () => {
-    resolveExecutableMock.mockReturnValue("/home/u/.local/bin/claude");
+    resolveExecutableMock.mockReturnValue({ kind: "system", path: "/home/u/.local/bin/claude" });
     queryReturning(successResult());
 
     await runLearner(baseOptions);
@@ -360,6 +488,129 @@ describe("runLearner", () => {
     expect(g[0].updatedInput).toEqual({ title: "no-real-read", content: "c" });
   });
 
+  const threeSessions: AgentSession[] = ["s1", "s2", "s3"].map((id) => ({
+    id,
+    harness: id === "s2" ? "cursor" : "claude",
+    path: `/x/${id}.jsonl`,
+    updated: "2026-08-27T00:00:00.000Z",
+  }));
+
+  /** A write_knowledge call the gate sees under `toolUseID`, as the SDK passes it. */
+  const noteCall = (title: string, toolUseID: string) =>
+    [
+      "mcp__dosu__write_knowledge",
+      { title, content: "c" },
+      { signal: new AbortController().signal, toolUseID },
+    ] as const;
+  /** The tool_result the stream carries back for a call. */
+  const toolResult = (toolUseID: string, isError?: boolean) => ({
+    type: "user",
+    message: {
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: toolUseID,
+          content: isError ? "write failed" : "saved",
+          ...(isError === undefined ? {} : { is_error: isError }),
+        },
+      ],
+    },
+  });
+
+  it("reports which sessions got notes when a later turn fails", async () => {
+    queryMock.mockImplementation((params: GateParams) => {
+      return (async function* () {
+        await params.options.canUseTool(...read("s1"));
+        await params.options.canUseTool(...noteCall("s1-a", "tu-1"));
+        await params.options.canUseTool(...noteCall("s1-b", "tu-2"));
+        yield toolResult("tu-1");
+        yield toolResult("tu-2", false);
+        await params.options.canUseTool(...read("s2"));
+        await params.options.canUseTool(...noteCall("s2-a", "tu-3"));
+        yield toolResult("tu-3");
+        // Read but never noted: not reported, so a retry studies it.
+        await params.options.canUseTool(...read("s3"));
+        yield successResult({ is_error: true, result: "API Error: 400 bad request" });
+      })();
+    });
+
+    const result = await runLearner({ ...baseOptions, sessions: threeSessions });
+
+    expect(result.outcome).toBe("gateway_rejected");
+    expect(result.notesWritten).toBe(3);
+    // Keyed `harness/id`, the shape sync's studied-session history uses.
+    expect(result.notedSessions).toEqual(["claude/s1", "cursor/s2"]);
+  });
+
+  it("counts a session as noted only once its write succeeds", async () => {
+    queryMock.mockImplementation((params: GateParams) => {
+      return (async function* () {
+        await params.options.canUseTool(...read("s1"));
+        await params.options.canUseTool(...noteCall("s1-a", "tu-1"));
+        yield toolResult("tu-1", true);
+        await params.options.canUseTool(...read("s2"));
+        // Allowed, but the run died before the write's result came back.
+        await params.options.canUseTool(...noteCall("s2-a", "tu-2"));
+        await params.options.canUseTool(...read("s3"));
+        await params.options.canUseTool(...noteCall("s3-a", "tu-3"));
+        // A result for some other tool call never counts.
+        yield toolResult("tu-unrelated");
+        yield toolResult("tu-3");
+        yield await Promise.reject(new Error("socket hang up"));
+      })();
+    });
+
+    const result = await runLearner({ ...baseOptions, sessions: threeSessions });
+
+    expect(result.outcome).toBe("error");
+    expect(result.notedSessions).toEqual(["claude/s3"]);
+  });
+
+  it("leaves denied, unattributed, and out-of-scope notes out of the noted sessions", async () => {
+    queryMock.mockImplementation((params: GateParams) => {
+      return (async function* () {
+        // Unattributed: no session read yet.
+        await params.options.canUseTool(...noteCall("orphan", "tu-1"));
+        // Denied: ambiguous after two different reads.
+        await params.options.canUseTool(...read("s1"));
+        await params.options.canUseTool(...read("s2"));
+        await params.options.canUseTool(...noteCall("ambiguous", "tu-2"));
+        // Out of scope: the read_session tool itself rejects unknown ids.
+        await params.options.canUseTool(...read("not-in-run"));
+        await params.options.canUseTool(...noteCall("stray", "tu-3"));
+        yield toolResult("tu-1");
+        yield toolResult("tu-2");
+        yield toolResult("tu-3");
+        yield successResult();
+      })();
+    });
+
+    const result = await runLearner({ ...baseOptions, sessions: threeSessions });
+
+    expect(result.notesWritten).toBe(2);
+    expect(result.notedSessions).toEqual([]);
+  });
+
+  it("reports noted sessions on completed and result-less runs too", async () => {
+    queryMock.mockImplementation((params: GateParams) => {
+      return (async function* () {
+        await params.options.canUseTool(...read("s3"));
+        await params.options.canUseTool(...noteCall("s3-a", "tu-1"));
+        yield toolResult("tu-1");
+        yield { type: "assistant" };
+      })();
+    });
+
+    const endedEarly = await runLearner({ ...baseOptions, sessions: threeSessions });
+    expect(endedEarly.outcome).toBe("error");
+    expect(endedEarly.notedSessions).toEqual(["claude/s3"]);
+
+    queryReturning(successResult());
+    const completed = await runLearner({ ...baseOptions, sessions: threeSessions });
+    expect(completed.outcome).toBe("completed");
+    expect(completed.notedSessions).toEqual([]);
+  });
+
   it("maps a consent-off gateway refusal from the result text", async () => {
     queryReturning(successResult({ is_error: true, result: "API error: dosu_consent_off: nope" }));
 
@@ -385,6 +636,7 @@ describe("runLearner", () => {
     expect(result.message).toBe(
       "LLM gateway rejected the study run: max_tokens: 128000 > 64000, which is the maximum allowed number of output tokens for claude-haiku-4-5-20251001",
     );
+    expect(result.gatewayReason).toBe("max_tokens");
   });
 
   it("lets a dosu_* refusal token win over a 400", async () => {
@@ -418,6 +670,7 @@ describe("runLearner", () => {
 
     expect(result.outcome).toBe("gateway_rejected");
     expect(result.message).toBe("LLM gateway rejected the study run: max_tokens too large");
+    expect(result.gatewayReason).toBe("max_tokens");
   });
 
   it("maps a quota error thrown by the SDK", async () => {

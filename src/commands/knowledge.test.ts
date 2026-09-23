@@ -938,6 +938,43 @@ describe("knowledge sync", () => {
       });
     });
 
+    it("tags a failed study run with the learner's coarse diagnostics, never its message", async () => {
+      mockRunSync.mockResolvedValue({
+        status: "mine-failed",
+        readySessions: 2,
+        inFlightSessions: 0,
+        sessions: [],
+        studiedSessions: 0,
+        learner: {
+          outcome: "gateway_rejected",
+          notesWritten: 0,
+          turns: 1,
+          message: "LLM gateway rejected the study run: secret detail",
+          gatewayReason: "system_role_unsupported",
+          claudeCodeSource: "system",
+          claudeCodeVersion: "2.1.280",
+          model: "claude-haiku-4-5",
+        },
+        error: "LLM gateway rejected the study run: secret detail",
+      });
+
+      await run("sync", "--quiet");
+
+      const facets = consumeCommandFacets();
+      expect(facets).toEqual({
+        sync_trigger: "hook",
+        sync_status: "mine-failed",
+        sessions_studied: 0,
+        notes_written: 0,
+        learner_outcome: "gateway_rejected",
+        gateway_reason: "system_role_unsupported",
+        claude_code_source: "system",
+        claude_code_version: "2.1.280",
+        learner_model: "claude-haiku-4-5",
+      });
+      expect(JSON.stringify(facets)).not.toContain("secret");
+    });
+
     it("tags a manual run that only reported the backlog", async () => {
       mockRunSync.mockResolvedValue({ status: "backlog", readySessions: 3, inFlightSessions: 1 });
 
