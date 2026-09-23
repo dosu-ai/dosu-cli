@@ -186,10 +186,11 @@ a selected organization do not include a group association.
 Current common setup properties are `cli_version`, `install_channel`, `platform`, `arch`, and `mode`.
 Current callers also use only these workflow properties: `onboarding_run_id`,
 `has_deployment_option`, `mode_option`, `flow_kind`, `reason`, `provider_count`, `providers`,
-`completed_mcp`, `completed_skill`, and `completed_agents_md`. The post-install "study past
-sessions" offer is not a setup event; its outcome rides on the `setup` command's
-`cli_command_completed` event as `backfill_offer` (see the command telemetry table above). Setup
-events use stable names in the
+`completed_mcp`, `completed_skill`, `completed_agents_md`, `completed_hooks` (at least one
+session-end knowledge sync hook was enabled in the run), and `hook_count` (integer `0..50`).
+The post-install "study past sessions" offer is not a setup event; its outcome rides on the
+`setup` command's `cli_command_completed` event as `backfill_offer` (see the command telemetry
+table above). Setup events use stable names in the
 `cli_onboarding_*` family. They do not include raw authentication errors. This path uses a dedicated
 no-refresh client, runs without blocking setup, refuses redirects, and aborts its request after
 500ms. The public API input remains a generic property record for generated-client compatibility,
