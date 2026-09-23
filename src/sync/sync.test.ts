@@ -728,6 +728,131 @@ describe("runKnowledgeSync studying", () => {
   });
 });
 
+describe("runKnowledgeSync partial runs", () => {
+  it.each([
+    "gateway_rejected",
+    "error",
+    "credit_limit",
+  ] as const)("%s after notes records the noted sessions without changing its semantics", async (outcome) => {
+    const noted = { ...session(50), project: "dosu-cli" };
+    const { deps, saved } = makeStudyingDeps({
+      listSessions: vi.fn().mockResolvedValue([session(30), session(40), noted]),
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        mined_sessions: [{ at: "2026-08-25T10:00:00.000Z", session: "cursor/earlier" }],
+        total_mined: 5,
+        total_notes: 7,
+        total_learning_tokens: 100,
+      }),
+      mine: vi.fn().mockResolvedValue(
+        learnerResult({
+          outcome,
+          message: "boom",
+          notesWritten: 3,
+          notedSessions: ["claude/s-50", "claude/s-30"],
+        }),
+      ),
+      sessionTokens: () => 1000,
+      lock: openLock(),
+    });
+
+    const result = await runKnowledgeSync({ deps });
+
+    // The notes are already saved: history, counters, and learning tokens take them in…
+    expect(saved[0].mined_sessions).toEqual([
+      { at: "2026-08-25T10:00:00.000Z", session: "cursor/earlier" },
+      { at: NOW.toISOString(), session: "claude/s-50", project: "dosu-cli" },
+      { at: NOW.toISOString(), session: "claude/s-30" },
+    ]);
+    expect(saved[0].total_mined).toBe(7);
+    expect(saved[0].total_notes).toBe(10);
+    expect(saved[0].total_learning_tokens).toBe(2100);
+    // …while the outcome keeps its own semantics: the watermark never moves on a partial run.
+    expect(saved[0].watermark).toBeNull();
+    if (outcome === "credit_limit") {
+      expect(result.status).toBe("skipped-gateway");
+      expect(saved[0].consecutive_failures).toBe(0);
+    } else {
+      expect(result.status).toBe("mine-failed");
+      expect(saved[0].consecutive_failures).toBe(1);
+    }
+  });
+
+  it("leaves history and counters alone when a failed run noted nothing", async () => {
+    const { deps, saved } = makeStudyingDeps({
+      listSessions: vi.fn().mockResolvedValue([session(30)]),
+      mine: vi
+        .fn()
+        .mockResolvedValue(learnerResult({ outcome: "error", notesWritten: 0, notedSessions: [] })),
+      lock: openLock(),
+    });
+
+    await runKnowledgeSync({ deps });
+
+    expect(saved[0].mined_sessions).toBeUndefined();
+    expect(saved[0].total_mined).toBeUndefined();
+    expect(saved[0].total_notes).toBeUndefined();
+  });
+
+  it("skips a session already noted by a failed run, re-studying the rest", async () => {
+    mockLoggerDebug.mockClear();
+    const mine = vi.fn().mockResolvedValue(learnerResult());
+    const { deps, saved } = makeStudyingDeps({
+      listSessions: vi.fn().mockResolvedValue([session(30), session(40), session(50)]),
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 1,
+        // Noted after s-40 went quiet; s-30 was recorded before its latest activity.
+        mined_sessions: [
+          { at: new Date(NOW.getTime() - 20 * 60 * 1000).toISOString(), session: "claude/s-40" },
+          { at: new Date(NOW.getTime() - 35 * 60 * 1000).toISOString(), session: "claude/s-30" },
+          // An older record never shadows a newer one; an unparseable one never counts.
+          { at: new Date(NOW.getTime() - 90 * 60 * 1000).toISOString(), session: "claude/s-40" },
+          { at: "not-a-date", session: "claude/s-50" },
+        ],
+      }),
+      mine,
+      lock: openLock(),
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    const batch = mine.mock.calls[0][0] as AgentSession[];
+    // s-30 was resumed after it was noted, so it is studied again; s-40 is not.
+    expect(batch.map((s) => s.id)).toEqual(["s-50", "s-30"]);
+    expect(outcome.studiedSessions).toBe(2);
+    // The skipped session counts as examined: the watermark passes it.
+    expect(saved[0].watermark).toBe(session(30).updated);
+    const logged = mockLoggerDebug.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(logged).toContain("skipping already-studied session claude/s-40");
+    expect(logged).toContain("(0 trivial, 0 incognito, 1 already studied skipped)");
+  });
+
+  it("advances the watermark without a run when every ready session was already noted", async () => {
+    const mine = vi.fn();
+    const { deps, saved } = makeStudyingDeps({
+      listSessions: vi.fn().mockResolvedValue([session(30)]),
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 1,
+        mined_sessions: [{ at: NOW.toISOString(), session: "claude/s-30" }],
+      }),
+      mine,
+      lock: openLock(),
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.status).toBe("nothing-new");
+    expect(mine).not.toHaveBeenCalled();
+    expect(saved[0].watermark).toBe(session(30).updated);
+  });
+});
+
 describe("runKnowledgeSync pause switch", () => {
   it("quiet runs skip while paused, before any scan", async () => {
     const listSessions = vi.fn().mockResolvedValue([session(60)]);

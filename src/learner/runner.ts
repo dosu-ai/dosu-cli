@@ -31,6 +31,9 @@ export interface LearnerRunResult {
   /** write_knowledge calls that were allowed through the gate. */
   notesWritten: number;
   turns: number;
+  /** `harness/id` of each in-scope session that received at least one allowed note; set once
+   * the run starts. Notes are append-only, so sync records these even when the run fails. */
+  notedSessions?: string[];
   /** One renderable line for error-ish outcomes; never a stack trace. */
   message?: string;
 }
@@ -225,6 +228,9 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
   // session's notes before reading the next). Reset after each write; reading
   // one session and writing many notes is NOT ambiguous. See the deny path.
   const readsSinceWrite = new Set<string>();
+  // Sessions that received a note, keyed the way sync's studied-session history is.
+  const sessionKeys = new Map(options.sessions.map((s) => [s.id, `${s.harness}/${s.id}`]));
+  const notedSessions = new Set<string>();
   let turns = 0;
 
   const env = buildLearnerEnv({
@@ -321,6 +327,8 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
             // unattributed (null) rather than guessed. Reset only the
             // ambiguity set, not the current session.
             readsSinceWrite.clear();
+            const noted = currentSession && sessionKeys.get(currentSession);
+            if (noted) notedSessions.add(noted);
             const { transcript_id: _authoredByModel, ...clean } = input as Record<string, unknown>;
             return {
               behavior: "allow",
@@ -344,6 +352,7 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
           return {
             outcome: gatewayError.outcome,
             notesWritten,
+            notedSessions: [...notedSessions],
             turns,
             message: gatewayError.message,
           };
@@ -353,6 +362,7 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
           return {
             outcome: "error",
             notesWritten,
+            notedSessions: [...notedSessions],
             turns,
             message: "Study run failed; see debug log for details.",
           };
@@ -361,13 +371,20 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
           "learner",
           `run ${runID} completed: ${turns} turns, ${notesWritten} suggested pages`,
         );
-        return { outcome: "completed", notesWritten, turns, message: text };
+        return {
+          outcome: "completed",
+          notesWritten,
+          notedSessions: [...notedSessions],
+          turns,
+          message: text,
+        };
       }
     }
 
     return {
       outcome: "error",
       notesWritten,
+      notedSessions: [...notedSessions],
       turns,
       message: "Study run ended without a result.",
     };
@@ -375,12 +392,19 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
     const text = error instanceof Error ? error.message : String(error);
     const gatewayError = classifyGatewayError(text) ?? classifyGatewayRejection(text);
     if (gatewayError) {
-      return { outcome: gatewayError.outcome, notesWritten, turns, message: gatewayError.message };
+      return {
+        outcome: gatewayError.outcome,
+        notesWritten,
+        notedSessions: [...notedSessions],
+        turns,
+        message: gatewayError.message,
+      };
     }
     logger.debug("learner", `run ${runID} threw: ${text}`);
     return {
       outcome: "error",
       notesWritten,
+      notedSessions: [...notedSessions],
       turns,
       message: abort.signal.aborted
         ? "Study run timed out and was aborted."

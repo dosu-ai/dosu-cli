@@ -14,6 +14,7 @@ import {
   gateSessions,
   loadSyncState,
   STUDIED_HISTORY_LIMIT,
+  type StudiedSessionRecord,
   type SyncState,
   saveSyncState,
 } from "./watermark";
@@ -114,6 +115,33 @@ function batchWatermark(batch: readonly AgentSession[]): string {
     if (Date.parse(s.updated) > Date.parse(newest)) newest = s.updated;
   }
   return newest;
+}
+
+/** The key a session goes by in the studied-session history. */
+function sessionKey(session: AgentSession): string {
+  return `${session.harness}/${session.id}`;
+}
+
+/** One history record per session, stamped with the time the run recorded it. */
+function studiedRecords(sessions: readonly AgentSession[], at: string): StudiedSessionRecord[] {
+  return sessions.map((s) => ({
+    at,
+    session: sessionKey(s),
+    ...(s.project ? { project: s.project } : {}),
+  }));
+}
+
+/** Newest history time per session, so the batch can skip sessions studied since their last
+ * activity (a failed run's noted sessions, which the kept watermark would otherwise revisit). */
+function lastStudiedAt(history: readonly StudiedSessionRecord[] | undefined): Map<string, number> {
+  const latest = new Map<string, number>();
+  for (const record of history ?? []) {
+    const at = Date.parse(record.at);
+    if (!Number.isNaN(at) && at > (latest.get(record.session) ?? Number.NEGATIVE_INFINITY)) {
+      latest.set(record.session, at);
+    }
+  }
+  return latest;
 }
 
 export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncOutcome> {
@@ -221,16 +249,23 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     // Walk ready oldest-first so the watermark can advance without skipping newer sessions;
     // incognito and trivial sessions are filtered locally and never cost a gateway run. Both
     // count as examined so the watermark passes them and they are never re-read.
+    // Sessions a failed run already noted are skipped the same way, unless resumed since.
     const worthStudying = deps.worthStudying ?? isWorthStudying;
     const isIncognito = deps.isIncognito ?? isIncognitoSession;
+    const studiedAt = lastStudiedAt(state.mined_sessions);
     const examined: AgentSession[] = [];
     const batch: AgentSession[] = [];
     let trivial = 0;
     let incognito = 0;
+    let alreadyStudied = 0;
     for (let i = ready.length - 1; i >= 0 && batch.length < MINE_BATCH_LIMIT; i--) {
       const candidate = ready[i];
       examined.push(candidate);
-      if (isIncognito(candidate)) {
+      const key = sessionKey(candidate);
+      if ((studiedAt.get(key) ?? Number.NEGATIVE_INFINITY) >= Date.parse(candidate.updated)) {
+        alreadyStudied += 1;
+        logger.debug("sync", `skipping already-studied session ${key}`);
+      } else if (isIncognito(candidate)) {
         incognito += 1;
         logger.debug("sync", `skipping incognito session ${candidate.harness}/${candidate.id}`);
       } else if (worthStudying(candidate)) {
@@ -239,7 +274,9 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
         trivial += 1;
       }
     }
-    const skippedNote = `${trivial} trivial, ${incognito} incognito skipped`;
+    const skippedNote = `${trivial} trivial, ${incognito} incognito${
+      alreadyStudied > 0 ? `, ${alreadyStudied} already studied` : ""
+    } skipped`;
 
     if (batch.length === 0) {
       // Everything examined was trivial or incognito: commit the watermark past it
@@ -268,6 +305,30 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       `studying ${batch.length} of ${ready.length} ready sessions (${skippedNote})`,
     );
     const learner = await deps.mine(batch);
+    const sessionTokens = deps.sessionTokens ?? estimateSessionTokens;
+
+    // Notes are append-only, so sessions a failed or refused run already noted go into the
+    // history now: the batch loop then skips them on retry instead of noting them twice. The
+    // watermark and backoff still follow the outcome below.
+    const noted = new Set(learner.notedSessions ?? []);
+    const notedBatch = batch.filter((s) => noted.has(sessionKey(s)));
+    const partialProgress = (at: string): Partial<SyncState> => {
+      if (notedBatch.length === 0) return {};
+      let tokens = 0;
+      for (const s of notedBatch) tokens += sessionTokens(s);
+      logger.debug(
+        "sync",
+        `recorded ${notedBatch.length} noted sessions from the ${learner.outcome} run`,
+      );
+      return {
+        mined_sessions: [...(state.mined_sessions ?? []), ...studiedRecords(notedBatch, at)].slice(
+          -STUDIED_HISTORY_LIMIT,
+        ),
+        total_mined: (state.total_mined ?? 0) + notedBatch.length,
+        total_notes: (state.total_notes ?? 0) + learner.notesWritten,
+        total_learning_tokens: (state.total_learning_tokens ?? 0) + tokens,
+      };
+    };
 
     switch (learner.outcome) {
       case "completed": {
@@ -277,27 +338,22 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
         }
         // …and a durable history record per session, so status views can
         // list everything ever studied (capped) with an all-time counter.
-        const studiedAt = now().toISOString();
+        const completedAt = now().toISOString();
         const history = [
           ...(state.mined_sessions ?? []),
-          ...batch.map((s) => ({
-            at: studiedAt,
-            session: `${s.harness}/${s.id}`,
-            ...(s.project ? { project: s.project } : {}),
-          })),
+          ...studiedRecords(batch, completedAt),
         ].slice(-STUDIED_HISTORY_LIMIT);
         // The watermark covers everything examined — studied and trivial
         // alike — so neither is ever revisited.
         const watermark = batchWatermark(examined);
         // Analytics: what this batch cost to learn originally (chars÷4 over
         // the studied conversations) — future note reads reuse that learning.
-        const sessionTokens = deps.sessionTokens ?? estimateSessionTokens;
         let batchTokens = 0;
         for (const s of batch) batchTokens += sessionTokens(s);
         saveState({
           ...state,
           watermark,
-          last_attempt_at: studiedAt,
+          last_attempt_at: completedAt,
           consecutive_failures: 0,
           mined_sessions: history,
           total_mined: (state.total_mined ?? 0) + batch.length,
@@ -329,6 +385,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
         const at = now().toISOString();
         saveState({
           ...state,
+          ...partialProgress(at),
           last_attempt_at: at,
           consecutive_failures: 0,
           last_refusal: {
@@ -347,6 +404,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
         const at = now().toISOString();
         saveState({
           ...state,
+          ...partialProgress(at),
           last_attempt_at: at,
           consecutive_failures: state.consecutive_failures + 1,
           ...(learner.outcome === "gateway_rejected" && learner.message

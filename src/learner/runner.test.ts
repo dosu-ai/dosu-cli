@@ -418,6 +418,91 @@ describe("runLearner", () => {
     expect(g[0].updatedInput).toEqual({ title: "no-real-read", content: "c" });
   });
 
+  const threeSessions: AgentSession[] = ["s1", "s2", "s3"].map((id) => ({
+    id,
+    harness: id === "s2" ? "cursor" : "claude",
+    path: `/x/${id}.jsonl`,
+    updated: "2026-08-27T00:00:00.000Z",
+  }));
+
+  it("reports which sessions got notes when a later turn fails", async () => {
+    queryMock.mockImplementation((params: GateParams) => {
+      return (async function* () {
+        await params.options.canUseTool(...read("s1"));
+        await params.options.canUseTool(...write("s1-a"));
+        await params.options.canUseTool(...write("s1-b"));
+        await params.options.canUseTool(...read("s2"));
+        await params.options.canUseTool(...write("s2-a"));
+        // Read but never noted: not reported, so a retry studies it.
+        await params.options.canUseTool(...read("s3"));
+        yield successResult({ is_error: true, result: "API Error: 400 bad request" });
+      })();
+    });
+
+    const result = await runLearner({ ...baseOptions, sessions: threeSessions });
+
+    expect(result.outcome).toBe("gateway_rejected");
+    expect(result.notesWritten).toBe(3);
+    // Keyed `harness/id`, the shape sync's studied-session history uses.
+    expect(result.notedSessions).toEqual(["claude/s1", "cursor/s2"]);
+  });
+
+  it("reports noted sessions when the SDK throws mid-run", async () => {
+    queryMock.mockImplementation((params: GateParams) => {
+      return (async function* () {
+        await params.options.canUseTool(...read("s1"));
+        await params.options.canUseTool(...write("s1-a"));
+        yield await Promise.reject(new Error("socket hang up"));
+      })();
+    });
+
+    const result = await runLearner({ ...baseOptions, sessions: threeSessions });
+
+    expect(result.outcome).toBe("error");
+    expect(result.notedSessions).toEqual(["claude/s1"]);
+  });
+
+  it("leaves denied, unattributed, and out-of-scope notes out of the noted sessions", async () => {
+    queryMock.mockImplementation((params: GateParams) => {
+      return (async function* () {
+        // Unattributed: no session read yet.
+        await params.options.canUseTool(...write("orphan"));
+        // Denied: ambiguous after two different reads.
+        await params.options.canUseTool(...read("s1"));
+        await params.options.canUseTool(...read("s2"));
+        await params.options.canUseTool(...write("ambiguous"));
+        // Out of scope: the read_session tool itself rejects unknown ids.
+        await params.options.canUseTool(...read("not-in-run"));
+        await params.options.canUseTool(...write("stray"));
+        yield successResult();
+      })();
+    });
+
+    const result = await runLearner({ ...baseOptions, sessions: threeSessions });
+
+    expect(result.notesWritten).toBe(2);
+    expect(result.notedSessions).toEqual([]);
+  });
+
+  it("reports noted sessions on completed and result-less runs too", async () => {
+    queryMock.mockImplementation((params: GateParams) => {
+      return (async function* () {
+        await params.options.canUseTool(...read("s3"));
+        await params.options.canUseTool(...write("s3-a"));
+        yield { type: "assistant" };
+      })();
+    });
+
+    const endedEarly = await runLearner({ ...baseOptions, sessions: threeSessions });
+    expect(endedEarly.outcome).toBe("error");
+    expect(endedEarly.notedSessions).toEqual(["claude/s3"]);
+
+    queryReturning(successResult());
+    const completed = await runLearner({ ...baseOptions, sessions: threeSessions });
+    expect(completed.outcome).toBe("completed");
+    expect(completed.notedSessions).toEqual([]);
+  });
+
   it("maps a consent-off gateway refusal from the result text", async () => {
     queryReturning(successResult({ is_error: true, result: "API error: dosu_consent_off: nope" }));
 
