@@ -44,7 +44,7 @@ export function buildLearnerEnv(options: LearnerEnvOptions): NodeJS.ProcessEnv {
     `x-dosu-run-id: ${options.runID}`,
     `x-dosu-trigger: ${options.trigger}`,
     `x-dosu-cli-version: ${options.cliVersion}`,
-    // Lets the gateway refuse a request shaped for a model other than the one it serves.
+    // Lets the gateway log when its model policy moved after this run discovered the model.
     `x-dosu-expected-model: ${options.model}`,
   ];
   if (options.deploymentID) headers.push(`x-dosu-deployment-id: ${options.deploymentID}`);
