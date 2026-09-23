@@ -86,14 +86,14 @@ describe("findSystemClaude", () => {
 });
 
 describe("resolveClaudeExecutable", () => {
-  it("returns undefined when the SDK has its own binary", () => {
+  it("prefers the SDK's own binary when it has one", () => {
     const result = resolveClaudeExecutable({
       sdkBinaryExists: () => true,
       env: { PATH: tempDir },
       homeDir: tempDir,
     });
 
-    expect(result).toBeUndefined();
+    expect(result).toEqual({ kind: "sdk" });
   });
 
   it("falls back to a system claude when the SDK binary is missing", () => {
@@ -106,16 +106,16 @@ describe("resolveClaudeExecutable", () => {
       homeDir: tempDir,
     });
 
-    expect(result).toBe(expected);
+    expect(result).toEqual({ kind: "system", path: expected });
   });
 
-  it("returns undefined when nothing is available anywhere", () => {
+  it("reports missing when nothing is available anywhere", () => {
     const result = resolveClaudeExecutable({
       sdkBinaryExists: () => false,
       env: { PATH: "" },
       homeDir: tempDir,
     });
 
-    expect(result).toBeUndefined();
+    expect(result).toEqual({ kind: "missing" });
   });
 });

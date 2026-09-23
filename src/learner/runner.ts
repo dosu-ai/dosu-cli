@@ -23,6 +23,7 @@ export type LearnerOutcome =
   | "credit_limit"
   | "quota_exceeded"
   | "gateway_rejected"
+  | "claude_code_missing"
   | "error";
 
 export interface LearnerRunResult {
@@ -176,6 +177,24 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
     };
   }
 
+  // Compiled/bundled installs don't carry the SDK's native binary; fall back
+  // to a system Claude Code so hook-triggered runs work outside a checkout.
+  // With neither, refuse before importing the SDK: it would only fail later
+  // with an opaque spawn error.
+  const claudeExecutable = resolveClaudeExecutable();
+  if (claudeExecutable.kind === "missing") {
+    return {
+      outcome: "claude_code_missing",
+      notesWritten: 0,
+      turns: 0,
+      message:
+        "Studying runs on Claude Code, which isn't installed here. Install Claude Code, then run `dosu knowledge sync`.",
+    };
+  }
+  if (claudeExecutable.kind === "system") {
+    logger.debug("learner", `using system Claude Code executable: ${claudeExecutable.path}`);
+  }
+
   // Pin the model the gateway serves: unpinned, Claude Code shapes requests for its own default
   // model (system-role messages, adaptive thinking), which the served model can reject.
   const model = await resolveServedModel({ gatewayURL, apiKey: options.apiKey });
@@ -183,13 +202,6 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
 
   // The SDK is dynamically imported so no other CLI path pays its cost.
   const { query } = await import("@anthropic-ai/claude-agent-sdk");
-
-  // Compiled/bundled installs don't carry the SDK's native binary; fall back
-  // to a system Claude Code so hook-triggered runs work outside a checkout.
-  const claudeExecutable = resolveClaudeExecutable();
-  if (claudeExecutable) {
-    logger.debug("learner", `using system Claude Code executable: ${claudeExecutable}`);
-  }
 
   const configDir = createRunConfigDir();
   const runID = options.runID ?? crypto.randomUUID();
@@ -239,7 +251,9 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
         // reach the learner (managed policy is handled by the conflict check).
         settingSources: [],
         persistSession: false,
-        ...(claudeExecutable ? { pathToClaudeCodeExecutable: claudeExecutable } : {}),
+        ...(claudeExecutable.kind === "system"
+          ? { pathToClaudeCodeExecutable: claudeExecutable.path }
+          : {}),
         sandbox: { enabled: true, failIfUnavailable: false },
         mcpServers: {
           [SESSIONS_SERVER_NAME]: createSessionToolsServer(options.sessions),

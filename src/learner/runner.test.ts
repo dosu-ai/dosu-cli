@@ -77,7 +77,7 @@ beforeEach(() => {
   conflictsMock.mockReset();
   conflictsMock.mockReturnValue([]);
   resolveExecutableMock.mockReset();
-  resolveExecutableMock.mockReturnValue(undefined);
+  resolveExecutableMock.mockReturnValue({ kind: "sdk" });
 });
 
 afterEach(() => {
@@ -156,6 +156,19 @@ describe("runLearner", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("refuses cleanly, before spawning anything, when no Claude Code is installed", async () => {
+    resolveExecutableMock.mockReturnValue({ kind: "missing" });
+
+    const result = await runLearner(baseOptions);
+
+    expect(result).toMatchObject({ outcome: "claude_code_missing", notesWritten: 0, turns: 0 });
+    expect(result.message).toMatch(/Claude Code/);
+    expect(result.message).toContain("dosu knowledge sync");
+    expect(result.message).not.toContain("\n");
+    expect(queryMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("pins the model the gateway serves in both the env and the SDK options", async () => {
     fetchMock.mockResolvedValue(
       new Response(JSON.stringify({ model: "claude-sonnet-5", max_output_tokens: 64000 }), {
@@ -230,7 +243,7 @@ describe("runLearner", () => {
   });
 
   it("passes a fallback Claude executable when the SDK binary is unavailable", async () => {
-    resolveExecutableMock.mockReturnValue("/home/u/.local/bin/claude");
+    resolveExecutableMock.mockReturnValue({ kind: "system", path: "/home/u/.local/bin/claude" });
     queryReturning(successResult());
 
     await runLearner(baseOptions);

@@ -321,9 +321,11 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       }
       case "consent_off":
       case "credit_limit":
-      case "quota_exceeded": {
+      case "quota_exceeded":
+      case "claude_code_missing": {
         // Clean refusals are not failures: no backoff, watermark stays put. Persist the reason
-        // so the Activity view and --status can explain why studying is paused.
+        // so the Activity view and --status can explain why studying is paused. A missing
+        // Claude Code is the user's to fix, so retrying on a backoff schedule would only nag.
         const at = now().toISOString();
         saveState({
           ...state,
@@ -335,7 +337,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
             message: learner.message ?? "Studying unavailable right now.",
           },
         });
-        logger.debug("sync", `studying skipped by gateway: ${learner.outcome}`);
+        logger.debug("sync", `studying skipped: ${learner.outcome}`);
         return { status: "skipped-gateway", ...base, studiedSessions: 0, learner };
       }
       default: {

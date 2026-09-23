@@ -105,7 +105,7 @@ The `properties` allowlist is:
 | `sync_status` | Optional, `knowledge sync` only: the pipeline status (`backlog`, `nothing-new`, `skipped-backoff`, `skipped-lock`, `skipped-gateway`, `skipped-paused`, `studied`, `mine-failed`, `error`) or a command-level outcome (`detached` for the hook parent that only re-spawns, `detach-failed`, `status-only` for `--status`). |
 | `sessions_studied` | Optional, `knowledge sync` only: sessions handed to the learner this invocation, bucketed to `0`, `1-4`, `5-9`, `10-19`, `20-49`, or `50+`. Summed across bootstrap rounds. |
 | `notes_written` | Optional, `knowledge sync` only: `write_knowledge` calls allowed through this invocation, same buckets. |
-| `learner_outcome` | Optional, `knowledge sync` only: `completed`, `settings_conflict`, `consent_off`, `credit_limit`, `quota_exceeded`, or `error`. |
+| `learner_outcome` | Optional, `knowledge sync` only: `completed`, `settings_conflict`, `consent_off`, `credit_limit`, `quota_exceeded`, `gateway_rejected`, `claude_code_missing`, or `error`. |
 | `backfill_offer` | Optional, `setup`/`tui` only: what happened to the post-install "study past sessions" prompt — `not-offered` (empty backlog), `accepted`, `declined`, `cancelled`, or `spawn-failed`. |
 
 The optional per-command facets are recorded by the running command through

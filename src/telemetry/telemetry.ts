@@ -123,6 +123,7 @@ const LEARNER_OUTCOMES = new Set([
   "credit_limit",
   "quota_exceeded",
   "gateway_rejected",
+  "claude_code_missing",
   "error",
 ]);
 const BACKFILL_OFFERS = new Set([

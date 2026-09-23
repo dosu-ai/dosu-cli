@@ -380,6 +380,7 @@ describe("runKnowledgeSync studying", () => {
     "consent_off",
     "credit_limit",
     "quota_exceeded",
+    "claude_code_missing",
   ] as const)("%s is a clean skip: no watermark advance, no failure count", async (outcome) => {
     const { deps, saved } = makeStudyingDeps({
       listSessions: vi.fn().mockResolvedValue([session(30)]),
