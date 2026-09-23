@@ -132,7 +132,11 @@ until the user rotates it.
 
 An error event is sent only when telemetry is enabled and an instrumented command throws or finishes
 with a non-validation, nonzero exit code. A nonzero completion becomes a message-free
-`CommandExitError`. The CLI builds a Sentry envelope directly; it does not initialize the Sentry SDK
+`CommandExitError`. One more case is reported without changing the command's outcome: a
+`knowledge sync` that exits 0 but recorded `sync_status: mine-failed` (background hook and
+setup-bootstrap runs are quiet and always exit 0) sends a message-free `LearnerRunFailed` event
+with no stack; its PostHog event still reports `result: success`. Clean refusals
+(`skipped-gateway`, including `claude_code_missing`) and backoff skips send nothing. The CLI builds a Sentry envelope directly; it does not initialize the Sentry SDK
 or its automatic integrations.
 
 The envelope header contains exactly `dsn`, `event_id`, and `sent_at`. The item header is exactly

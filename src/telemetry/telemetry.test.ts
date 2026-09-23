@@ -1237,6 +1237,88 @@ describe("CommandTelemetry lifecycle", () => {
     );
   });
 
+  describe("background study-run failures", () => {
+    async function completeWith(facets: Record<string, unknown>, exitCode = 0) {
+      consumeCommandFacets();
+      const deps = testDependencies();
+      const telemetry = createCommandTelemetry(
+        { install_id: "11111111-1111-4111-8111-111111111111" },
+        deps,
+      );
+      telemetry.start("knowledge sync", SAFE_CONTEXT);
+      recordCommandFacets(facets);
+      await telemetry.complete(exitCode);
+      const bodies = deps.fetch.mock.calls.map(([, init]) => String(init?.body));
+      const posthog = bodies
+        .filter((b) => b.startsWith('{"api_key"'))
+        .map((b) => JSON.parse(b) as { properties: Record<string, unknown> });
+      const sentry = bodies
+        .filter((b) => b.includes('\n{"type":"event"}\n'))
+        .map(
+          (b) =>
+            JSON.parse(b.split("\n")[2] ?? "{}") as {
+              tags: Record<string, string>;
+              fingerprint: string[];
+              exception: { values: Array<Record<string, unknown>> };
+            },
+        );
+      return { posthog, sentry };
+    }
+
+    it("reports a quiet run's failed study to Sentry while the command stays a success", async () => {
+      const { posthog, sentry } = await completeWith({
+        sync_trigger: "hook",
+        sync_status: "mine-failed",
+        learner_outcome: "gateway_rejected",
+        gateway_reason: "system_role_unsupported",
+      });
+
+      expect(posthog).toHaveLength(1);
+      expect(posthog[0]?.properties).toMatchObject({ result: "success", exit_code: 0 });
+      expect(sentry).toHaveLength(1);
+      expect(sentry[0]?.exception.values).toEqual([
+        {
+          type: "LearnerRunFailed",
+          value: "knowledge sync: gateway_rejected (system_role_unsupported)",
+        },
+      ]);
+      expect(sentry[0]?.tags).toMatchObject({ sync_trigger: "hook", sync_status: "mine-failed" });
+      expect(sentry[0]?.tags).not.toHaveProperty("exit_code");
+      expect(sentry[0]?.fingerprint).toEqual([
+        "dosu-cli",
+        "knowledge sync",
+        "LearnerRunFailed",
+        "unknown",
+        "unknown",
+        "gateway_rejected",
+        "system_role_unsupported",
+      ]);
+    });
+
+    it.each([
+      [{ sync_status: "skipped-gateway", learner_outcome: "credit_limit" }],
+      [{ sync_status: "skipped-gateway", learner_outcome: "claude_code_missing" }],
+      [{ sync_status: "skipped-backoff" }],
+      [{ sync_status: "studied", learner_outcome: "completed" }],
+      [{ sync_status: "mine-failed; injected" }],
+    ])("sends no Sentry event for %j", async (facets) => {
+      const { posthog, sentry } = await completeWith(facets);
+
+      expect(posthog).toHaveLength(1);
+      expect(sentry).toHaveLength(0);
+    });
+
+    it("sends only the exit error when a failed study also fails the command", async () => {
+      const { sentry } = await completeWith(
+        { sync_status: "mine-failed", learner_outcome: "error" },
+        1,
+      );
+
+      expect(sentry).toHaveLength(1);
+      expect(sentry[0]?.exception.values[0]?.type).toBe("CommandExitError");
+    });
+  });
+
   it("fails open when the facet resolver throws", async () => {
     const deps = testDependencies({
       facets: vi.fn(() => {

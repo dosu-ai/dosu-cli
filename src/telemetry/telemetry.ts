@@ -23,6 +23,7 @@ const SAFE_ERROR_TYPES = new Set([
   "CliUsageError",
   "CommandExitError",
   "Error",
+  "LearnerRunFailed",
   "OAuthCallbackError",
   "RangeError",
   "ReferenceError",
@@ -1219,7 +1220,16 @@ export function createCommandTelemetry(
         }
       }
 
-      if (!disabled && result === "failure" && error && shouldSendToSentry(error) && sentryDsn) {
+      // Background study runs (hook and setup-bootstrap `--quiet` syncs) exit 0 by contract, so a
+      // failed run there is reported as its own message-free event; the command result and exit
+      // code stay untouched. Clean refusals and backoff skips are not failures.
+      const sentryError =
+        result === "failure" && error && shouldSendToSentry(error)
+          ? error
+          : result === "success" && sanitizeFacets(facets).sync_status === "mine-failed"
+            ? ({ type: "LearnerRunFailed", frames: [] } satisfies SafeError)
+            : undefined;
+      if (!disabled && sentryError && sentryDsn) {
         const id = eventId(generateUuid);
         const envelope = id
           ? buildSentryEnvelope({
@@ -1227,7 +1237,7 @@ export function createCommandTelemetry(
               command,
               context,
               runtime,
-              error,
+              error: sentryError,
               ...(facets ? { facets } : {}),
               eventId: id,
               timestampMs: safeNow(now),
