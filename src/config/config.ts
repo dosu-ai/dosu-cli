@@ -1,6 +1,17 @@
 /** Config management: load/save JSON config from the XDG config directory. */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { migrateLegacyConfig } from "./config-v1-migration";
@@ -105,6 +116,36 @@ export function loadConfig(): Config {
     // persisted (for example, on a temporarily read-only filesystem).
   }
   return parsed;
+}
+
+const MAX_BACKGROUND_CONFIG_BYTES = 64 * 1_024;
+
+/** Read the config only when it is a bounded regular file, and never migrate or write it.
+ * For background work (telemetry context, pre-action checks) that must not block a
+ * config-free command on a FIFO or a giant file. Returns `undefined` when unreadable. */
+export function loadConfigNonBlocking(): Config | undefined {
+  let fd: number | undefined;
+  try {
+    const nonblocking = typeof constants.O_NONBLOCK === "number" ? constants.O_NONBLOCK : 0;
+    fd = openSync(getConfigPath(), constants.O_RDONLY | nonblocking);
+    const file = fstatSync(fd);
+    if (!file.isFile() || file.size > MAX_BACKGROUND_CONFIG_BYTES) return undefined;
+
+    const content = Buffer.alloc(MAX_BACKGROUND_CONFIG_BYTES + 1);
+    const bytesRead = readSync(fd, content, 0, content.byteLength, 0);
+    if (bytesRead > MAX_BACKGROUND_CONFIG_BYTES) return undefined;
+    return parseConfig(JSON.parse(content.subarray(0, bytesRead).toString("utf8")) as unknown);
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Background config cleanup must not affect the command.
+      }
+    }
+  }
 }
 
 /** Parse config content without performing filesystem writes. */

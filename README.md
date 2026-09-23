@@ -96,15 +96,16 @@ Or right-click the binary, select "Open", and click "Open" in the dialog.
 | `dosu login` | Authenticate with Dosu via browser OAuth |
 | `dosu logout` | Clear saved credentials |
 | `dosu status [--json]` | Show current authentication and MCP status |
-| `dosu upgrade` | Update Dosu through the package manager that installed it |
+| `dosu upgrade` | Update Dosu through the package manager that installed it, then re-run `dosu setup` on the new version |
 | `dosu mcp list` | List supported AI tools |
 | `dosu mcp add <tool>` | Add the Dosu MCP server to a specific tool |
+| `dosu mcp refresh` | Rewrite the Dosu MCP entry in every already-configured tool from the current setup |
 | `dosu logs` | View or manage debug logs (`--tail`, `--clear`) |
 | `dosu telemetry` | Manage usage analytics and error diagnostics (`status`, `enable`, `disable`, `reset`) |
 
 `dosu mcp add` takes `-g, --global` to install for all projects instead of project-local, and `--show-secret` to print the full manual config.
 
-`dosu upgrade` delegates to npm, pnpm, Yarn Classic, or Homebrew only after confirming which manager owns the current installation. Temporary package-runner invocations stay ephemeral, ambiguous or local installs are left unchanged, and standalone binaries receive the latest safe manual download path.
+`dosu upgrade` delegates to npm, pnpm, Yarn Classic, or Homebrew only after confirming which manager owns the current installation. Temporary package-runner invocations stay ephemeral, ambiguous or local installs are left unchanged, and standalone binaries receive the latest safe manual download path. After a successful update it re-invokes the new version to run `dosu setup`, so every configured tool gets the current MCP entry, hooks, status line, rules, and skill; without a TTY it runs the non-interactive `dosu mcp refresh` instead. Upgrades done outside `dosu upgrade` (npm, brew, `npx @dosu/cli@latest`) get a safety net: when the new version changed the shape of the MCP entry, the first command on it silently rewrites configured tools' MCP entries and prompts you to run `dosu setup` for the rest.
 
 ### Platform commands
 

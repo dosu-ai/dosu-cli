@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../debug/logger", () => ({
@@ -18,10 +19,15 @@ vi.mock("../debug/logger", () => ({
 vi.mock("../version/update-check", () => ({ checkForUpdates: vi.fn() }));
 vi.mock("../version/skill-update-check", () => ({ checkForSkillUpdates: vi.fn() }));
 vi.mock("../version/pending-tasks-check", () => ({ checkForReadyTasks: vi.fn() }));
+vi.mock("../version/mcp-refresh-check", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version/mcp-refresh-check")>()),
+  checkForMcpRefresh: vi.fn(),
+  writeMcpRefreshCache: vi.fn(),
+}));
 
 import { saveConfig } from "../config/config";
 import type { CommandTelemetry } from "../telemetry/telemetry";
-import { createProgram, shouldRunBackgroundChecks } from "./cli";
+import { createProgram, shouldRunBackgroundChecks, shouldRunMcpRefreshCheck } from "./cli";
 
 describe("CLI", () => {
   let originalArgv: string[];
@@ -77,12 +83,27 @@ describe("CLI", () => {
     expect(cmd?.options.find((o) => o.long === "--json")).toBeDefined();
   });
 
-  it("has mcp command with add and list subcommands", () => {
+  it("has mcp command with add, refresh, and list subcommands", () => {
     const program = createProgram();
     const mcpCmd = program.commands.find((c) => c.name() === "mcp");
     expect(mcpCmd).toBeDefined();
     expect(mcpCmd?.commands.find((c) => c.name() === "add")).toBeDefined();
+    expect(mcpCmd?.commands.find((c) => c.name() === "refresh")).toBeDefined();
     expect(mcpCmd?.commands.find((c) => c.name() === "list")).toBeDefined();
+  });
+
+  it("skips the automatic MCP refresh for setup and the explicit mcp refresh command", () => {
+    const program = createProgram();
+    const mcpCmd = program.commands.find((c) => c.name() === "mcp");
+    const refresh = mcpCmd?.commands.find((c) => c.name() === "refresh");
+    const list = mcpCmd?.commands.find((c) => c.name() === "list");
+    const setup = program.commands.find((c) => c.name() === "setup");
+    if (!refresh || !list || !setup) throw new Error("commands missing");
+    expect(shouldRunMcpRefreshCheck(setup)).toBe(false);
+    expect(shouldRunMcpRefreshCheck(refresh)).toBe(false);
+    expect(shouldRunMcpRefreshCheck(list)).toBe(true);
+    // A top-level command that happens to be named "refresh" would still get the check.
+    expect(shouldRunMcpRefreshCheck(new Command("refresh"))).toBe(true);
   });
 
   it("has setup command with --deployment option", () => {

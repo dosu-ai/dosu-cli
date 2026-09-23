@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   action: vi.fn<() => void>(),
+  checkForMcpRefresh: vi.fn<(options?: { notify?: boolean }) => void>(),
   checkForReadyTasks: vi.fn<() => void>(),
   checkForSkillUpdates: vi.fn<() => void>(),
   checkForUpdates: vi.fn<() => Promise<void>>(),
@@ -21,6 +22,11 @@ vi.mock("../version/skill-update-check", async (importOriginal) => ({
 vi.mock("../version/pending-tasks-check", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../version/pending-tasks-check")>()),
   checkForReadyTasks: mocks.checkForReadyTasks,
+}));
+
+vi.mock("../version/mcp-refresh-check", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version/mcp-refresh-check")>()),
+  checkForMcpRefresh: mocks.checkForMcpRefresh,
 }));
 
 vi.mock("../debug/logger", async (importOriginal) => {
@@ -99,6 +105,7 @@ describe("createProgram background checks", () => {
     );
     mocks.checkForSkillUpdates.mockImplementation(() => events.push("skill"));
     mocks.checkForReadyTasks.mockImplementation(() => events.push("task"));
+    mocks.checkForMcpRefresh.mockImplementation(() => events.push("mcp"));
     mocks.action.mockImplementation(() => events.push("action"));
 
     const command = runCommand("logs").then(() => {
@@ -109,6 +116,7 @@ describe("createProgram background checks", () => {
     expect(events).toEqual(["registry:start"]);
     expect(mocks.checkForSkillUpdates).not.toHaveBeenCalled();
     expect(mocks.checkForReadyTasks).not.toHaveBeenCalled();
+    expect(mocks.checkForMcpRefresh).not.toHaveBeenCalled();
     expect(mocks.action).not.toHaveBeenCalled();
     expect(commandFinished).toBe(false);
 
@@ -116,7 +124,9 @@ describe("createProgram background checks", () => {
     finishRegistryCheck();
     await command;
 
-    expect(events).toEqual(["registry:start", "registry:end", "skill", "task", "action"]);
+    expect(events).toEqual(["registry:start", "registry:end", "skill", "task", "mcp", "action"]);
+    // A subcommand prints the refresh notice itself; only the TUI suppresses it.
+    expect(mocks.checkForMcpRefresh).toHaveBeenCalledWith({ notify: true });
   });
 
   it("skips all background checks for upgrade but still runs its action", async () => {
@@ -125,19 +135,21 @@ describe("createProgram background checks", () => {
     expect(mocks.checkForUpdates).not.toHaveBeenCalled();
     expect(mocks.checkForSkillUpdates).not.toHaveBeenCalled();
     expect(mocks.checkForReadyTasks).not.toHaveBeenCalled();
+    expect(mocks.checkForMcpRefresh).not.toHaveBeenCalled();
     expect(mocks.action).toHaveBeenCalledOnce();
   });
 
-  it("skips the registry check in CI but still runs skill, task, and command execution", async () => {
+  it("skips the registry check in CI but still runs skill, task, MCP refresh, and command execution", async () => {
     const events: string[] = [];
     process.env.CI = "true";
     mocks.checkForSkillUpdates.mockImplementation(() => events.push("skill"));
     mocks.checkForReadyTasks.mockImplementation(() => events.push("task"));
+    mocks.checkForMcpRefresh.mockImplementation(() => events.push("mcp"));
     mocks.action.mockImplementation(() => events.push("action"));
 
     await runCommand("logs");
 
     expect(mocks.checkForUpdates).not.toHaveBeenCalled();
-    expect(events).toEqual(["skill", "task", "action"]);
+    expect(events).toEqual(["skill", "task", "mcp", "action"]);
   });
 });
