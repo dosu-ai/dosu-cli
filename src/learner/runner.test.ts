@@ -495,14 +495,39 @@ describe("runLearner", () => {
     updated: "2026-08-27T00:00:00.000Z",
   }));
 
+  /** A write_knowledge call the gate sees under `toolUseID`, as the SDK passes it. */
+  const noteCall = (title: string, toolUseID: string) =>
+    [
+      "mcp__dosu__write_knowledge",
+      { title, content: "c" },
+      { signal: new AbortController().signal, toolUseID },
+    ] as const;
+  /** The tool_result the stream carries back for a call. */
+  const toolResult = (toolUseID: string, isError?: boolean) => ({
+    type: "user",
+    message: {
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: toolUseID,
+          content: isError ? "write failed" : "saved",
+          ...(isError === undefined ? {} : { is_error: isError }),
+        },
+      ],
+    },
+  });
+
   it("reports which sessions got notes when a later turn fails", async () => {
     queryMock.mockImplementation((params: GateParams) => {
       return (async function* () {
         await params.options.canUseTool(...read("s1"));
-        await params.options.canUseTool(...write("s1-a"));
-        await params.options.canUseTool(...write("s1-b"));
+        await params.options.canUseTool(...noteCall("s1-a", "tu-1"));
+        await params.options.canUseTool(...noteCall("s1-b", "tu-2"));
+        yield toolResult("tu-1");
+        yield toolResult("tu-2", false);
         await params.options.canUseTool(...read("s2"));
-        await params.options.canUseTool(...write("s2-a"));
+        await params.options.canUseTool(...noteCall("s2-a", "tu-3"));
+        yield toolResult("tu-3");
         // Read but never noted: not reported, so a retry studies it.
         await params.options.canUseTool(...read("s3"));
         yield successResult({ is_error: true, result: "API Error: 400 bad request" });
@@ -517,11 +542,20 @@ describe("runLearner", () => {
     expect(result.notedSessions).toEqual(["claude/s1", "cursor/s2"]);
   });
 
-  it("reports noted sessions when the SDK throws mid-run", async () => {
+  it("counts a session as noted only once its write succeeds", async () => {
     queryMock.mockImplementation((params: GateParams) => {
       return (async function* () {
         await params.options.canUseTool(...read("s1"));
-        await params.options.canUseTool(...write("s1-a"));
+        await params.options.canUseTool(...noteCall("s1-a", "tu-1"));
+        yield toolResult("tu-1", true);
+        await params.options.canUseTool(...read("s2"));
+        // Allowed, but the run died before the write's result came back.
+        await params.options.canUseTool(...noteCall("s2-a", "tu-2"));
+        await params.options.canUseTool(...read("s3"));
+        await params.options.canUseTool(...noteCall("s3-a", "tu-3"));
+        // A result for some other tool call never counts.
+        yield toolResult("tu-unrelated");
+        yield toolResult("tu-3");
         yield await Promise.reject(new Error("socket hang up"));
       })();
     });
@@ -529,21 +563,24 @@ describe("runLearner", () => {
     const result = await runLearner({ ...baseOptions, sessions: threeSessions });
 
     expect(result.outcome).toBe("error");
-    expect(result.notedSessions).toEqual(["claude/s1"]);
+    expect(result.notedSessions).toEqual(["claude/s3"]);
   });
 
   it("leaves denied, unattributed, and out-of-scope notes out of the noted sessions", async () => {
     queryMock.mockImplementation((params: GateParams) => {
       return (async function* () {
         // Unattributed: no session read yet.
-        await params.options.canUseTool(...write("orphan"));
+        await params.options.canUseTool(...noteCall("orphan", "tu-1"));
         // Denied: ambiguous after two different reads.
         await params.options.canUseTool(...read("s1"));
         await params.options.canUseTool(...read("s2"));
-        await params.options.canUseTool(...write("ambiguous"));
+        await params.options.canUseTool(...noteCall("ambiguous", "tu-2"));
         // Out of scope: the read_session tool itself rejects unknown ids.
         await params.options.canUseTool(...read("not-in-run"));
-        await params.options.canUseTool(...write("stray"));
+        await params.options.canUseTool(...noteCall("stray", "tu-3"));
+        yield toolResult("tu-1");
+        yield toolResult("tu-2");
+        yield toolResult("tu-3");
         yield successResult();
       })();
     });
@@ -558,7 +595,8 @@ describe("runLearner", () => {
     queryMock.mockImplementation((params: GateParams) => {
       return (async function* () {
         await params.options.canUseTool(...read("s3"));
-        await params.options.canUseTool(...write("s3-a"));
+        await params.options.canUseTool(...noteCall("s3-a", "tu-1"));
+        yield toolResult("tu-1");
         yield { type: "assistant" };
       })();
     });

@@ -41,8 +41,9 @@ export interface LearnerRunResult {
   /** write_knowledge calls that were allowed through the gate. */
   notesWritten: number;
   turns: number;
-  /** `harness/id` of each in-scope session that received at least one allowed note; set once
-   * the run starts. Notes are append-only, so sync records these even when the run fails. */
+  /** `harness/id` of each in-scope session with at least one note written (its write_knowledge
+   * call returned without error); set once the run starts. Notes are append-only, so sync records
+   * these even when the run fails. */
   notedSessions?: string[];
   /** One renderable line for error-ish outcomes; never a stack trace. */
   message?: string;
@@ -276,6 +277,9 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
   // Sessions that received a note, keyed the way sync's studied-session history is.
   const sessionKeys = new Map(options.sessions.map((s) => [s.id, `${s.harness}/${s.id}`]));
   const notedSessions = new Set<string>();
+  // Allowed writes awaiting their tool_result, by tool use id: a session counts as noted only
+  // once a write for it actually succeeds.
+  const pendingNotes = new Map<string, string>();
   let turns = 0;
   const finish = (
     outcome: LearnerOutcome,
@@ -337,7 +341,7 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
         // Deliberately NO allowedTools: bare entries auto-approve before canUseTool is
         // consulted, bypassing the note cap. canUseTool is the single hard gate.
         stderr: (data) => logger.debug("learner", `[sdk] ${data}`),
-        canUseTool: async (toolName, input) => {
+        canUseTool: async (toolName, input, { toolUseID }) => {
           if (!allowed.has(toolName)) {
             return {
               behavior: "deny",
@@ -386,7 +390,7 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
             // ambiguity set, not the current session.
             readsSinceWrite.clear();
             const noted = currentSession && sessionKeys.get(currentSession);
-            if (noted) notedSessions.add(noted);
+            if (noted) pendingNotes.set(toolUseID, noted);
             const { transcript_id: _authoredByModel, ...clean } = input as Record<string, unknown>;
             return {
               behavior: "allow",
@@ -400,6 +404,12 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
 
     for await (const message of run) {
       traceAgentMessage(message);
+      if (message.type === "user" && Array.isArray(message.message.content)) {
+        for (const block of message.message.content) {
+          const noted = block.type === "tool_result" && pendingNotes.get(block.tool_use_id);
+          if (noted && block.is_error !== true) notedSessions.add(noted);
+        }
+      }
       if (
         message.type === "system" &&
         message.subtype === "init" &&
