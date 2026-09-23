@@ -1,3 +1,10 @@
+## [0.56.1](https://github.com/dosu-ai/dosu-cli/compare/v0.56.0...v0.56.1) (2026-09-23)
+
+
+### Bug Fixes
+
+* **learner:** pin the gateway's served model and make study-run failures clear and traceable ([#235](https://github.com/dosu-ai/dosu-cli/issues/235)) ([d11802f](https://github.com/dosu-ai/dosu-cli/commit/d11802ff6df46fba7538e97abdb17d2a4d9d7641))
+
 # [0.56.0](https://github.com/dosu-ai/dosu-cli/compare/v0.55.1...v0.56.0) (2026-09-23)
 
 
