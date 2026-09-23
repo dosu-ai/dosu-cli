@@ -1,20 +1,16 @@
 import { readFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { createServer, type Socket } from "node:net";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-
+import type { ErrorReport } from "./sentry";
 import {
   buildPostHogPayload,
-  buildSentryEnvelope,
   consumeCommandFacets,
   countBucket,
   createCommandTelemetry,
   durationBucket,
   fetchWithoutRedirect,
   parsePostHogProjectToken,
-  parseSentryDsn,
   parseTelemetryWebAppURL,
   recordCommandFacets,
   sanitizeError,
@@ -47,8 +43,6 @@ const AUTHENTICATED_CONTEXT = {
   orgId: "33333333-3333-4333-8333-333333333333",
 } as const;
 
-const DOSU_SOURCE_FILE = fileURLToPath(new URL("../commands/ask.ts", import.meta.url));
-
 function response(ok: boolean): Response {
   return { ok } as Response;
 }
@@ -57,7 +51,7 @@ function testDependencies(overrides: Record<string, unknown> = {}) {
   return {
     fetch: vi.fn(async (_input: string, _init: RequestInit) => response(true)),
     now: vi.fn(() => 1_000),
-    randomUUID: vi.fn(() => "11111111-1111-4111-8111-111111111111"),
+    reportError: vi.fn(async (_report: ErrorReport) => {}),
     env: {
       DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE: "phc_public_project_token",
       DOSU_CLI_SENTRY_DSN_OVERRIDE: "https://public@sentry.example.test/42",
@@ -338,181 +332,7 @@ describe("safe payload builders", () => {
     expect(consumeCommandFacets()).toBeUndefined();
   });
 
-  it("constructs a minimal Sentry envelope with normalized Dosu-owned frames", () => {
-    const stack = Array.from(
-      { length: 25 },
-      (_, index) => `    at privateFunction (${DOSU_SOURCE_FILE}:${index + 1}:7)`,
-    ).join("\n");
-    const error = Object.assign(new Error("raw secret message"), {
-      name: "TRPCClientError",
-      code: "BAD_REQUEST",
-      status: 400,
-      data: { path: "knowledge.search" },
-      stack,
-    });
-
-    const built = buildSentryEnvelope({
-      dsn: "https://public@sentry.example.test/base/42",
-      command: "knowledge search",
-      context: SAFE_CONTEXT,
-      runtime: SAFE_RUNTIME,
-      error: sanitizeError(error),
-      eventId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      timestampMs: 2_000,
-    });
-
-    expect(built).not.toBeNull();
-    const lines = built?.body.split("\n") ?? [];
-    expect(lines).toHaveLength(3);
-    const envelopeHeader = JSON.parse(lines[0] ?? "{}") as Record<string, unknown>;
-    const itemHeader = JSON.parse(lines[1] ?? "{}") as Record<string, unknown>;
-    const event = JSON.parse(lines[2] ?? "{}") as Record<string, unknown>;
-    expect(Object.keys(envelopeHeader).sort()).toEqual(["dsn", "event_id", "sent_at"]);
-    expect(itemHeader).toEqual({ type: "event" });
-    expect(Object.keys(event).sort()).toEqual([
-      "event_id",
-      "exception",
-      "fingerprint",
-      "level",
-      "platform",
-      "release",
-      "tags",
-      "timestamp",
-    ]);
-    expect(event).not.toHaveProperty("message");
-    expect(event).not.toHaveProperty("user");
-    expect(event).not.toHaveProperty("request");
-    expect(event).not.toHaveProperty("breadcrumbs");
-    expect(event).not.toHaveProperty("contexts");
-    expect(event).not.toHaveProperty("extra");
-
-    const exception = event.exception as {
-      values: Array<{
-        type: string;
-        value: string;
-        stacktrace: { frames: Array<Record<string, unknown>> };
-      }>;
-    };
-    expect(Object.keys(exception)).toEqual(["values"]);
-    expect(Object.keys(exception.values[0] ?? {}).sort()).toEqual(
-      ["stacktrace", "type", "value"].sort(),
-    );
-    expect(exception.values[0]?.type).toBe("TRPCClientError");
-    expect(exception.values[0]?.value).toBe("BAD_REQUEST");
-    expect(exception.values[0]?.stacktrace.frames).toHaveLength(20);
-    expect(exception.values[0]?.stacktrace.frames[0]).toEqual({
-      filename: "src/commands/ask.ts",
-      lineno: 20,
-      colno: 7,
-      in_app: true,
-    });
-    expect(exception.values[0]?.stacktrace.frames.at(-1)).toEqual({
-      filename: "src/commands/ask.ts",
-      lineno: 1,
-      colno: 7,
-      in_app: true,
-    });
-    expect(event.fingerprint).toEqual([
-      "dosu-cli",
-      "knowledge search",
-      "TRPCClientError",
-      "BAD_REQUEST",
-      "src/commands/ask.ts:1",
-    ]);
-    expect(built?.endpoint).toBe("https://sentry.example.test/base/api/42/envelope/");
-    expect(built?.body).not.toContain("raw secret message");
-    expect(built?.body).not.toContain("/Users/alice/private");
-    expect(built?.body).not.toContain("privateFunction");
-  });
-
-  it("adds only validated user id and email to authenticated Sentry errors", () => {
-    const built = buildSentryEnvelope({
-      dsn: "https://public@sentry.example.test/42",
-      command: "status",
-      context: {
-        ...AUTHENTICATED_CONTEXT,
-        user: {
-          ...AUTHENTICATED_CONTEXT.user,
-          token: "must-not-leak",
-          metadata: { name: "must-not-leak" },
-        },
-      } as typeof AUTHENTICATED_CONTEXT,
-      runtime: SAFE_RUNTIME,
-      error: { type: "Error", frames: [] },
-      eventId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      timestampMs: 2_000,
-    });
-
-    const event = JSON.parse(built?.body.split("\n")[2] ?? "{}") as Record<string, unknown>;
-    expect(event.user).toEqual({
-      id: "22222222-2222-4222-8222-222222222222",
-      email: "user@example.com",
-    });
-    expect(JSON.stringify(event)).not.toContain("must-not-leak");
-  });
-
-  it("links npm bundle frames to the exact uploaded source map debug id", () => {
-    const debugId = "99ff1efe-b52e-6f8f-6475-6e2164756e21";
-    const built = buildSentryEnvelope({
-      dsn: "https://public@sentry.example.test/42",
-      command: "status",
-      context: SAFE_CONTEXT,
-      runtime: SAFE_RUNTIME,
-      error: {
-        type: "Error",
-        frames: [{ filename: "bin/dosu.js", lineno: 120, colno: 9, in_app: true }],
-      },
-      eventId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      timestampMs: 2_000,
-      debugId,
-    });
-
-    const event = JSON.parse(built?.body.split("\n")[2] ?? "{}") as {
-      debug_meta?: { images?: Array<Record<string, unknown>> };
-      exception?: { values?: Array<{ stacktrace?: { frames?: Array<Record<string, unknown>> } }> };
-    };
-    expect(event.debug_meta).toEqual({
-      images: [{ type: "sourcemap", code_file: "app:///bin/dosu.js", debug_id: debugId }],
-    });
-    expect(event.exception?.values?.[0]?.stacktrace?.frames?.[0]).toEqual({
-      filename: "bin/dosu.js",
-      abs_path: "app:///bin/dosu.js",
-      lineno: 120,
-      colno: 9,
-      in_app: true,
-    });
-  });
-
-  it("omits Sentry user data unless authentication and identity are both valid", () => {
-    const contexts = [
-      {
-        mode: "cloud" as const,
-        isAuthenticated: false,
-        user: AUTHENTICATED_CONTEXT.user,
-      },
-      {
-        mode: "cloud" as const,
-        isAuthenticated: true,
-        user: { id: "invalid", email: "user@example.com" },
-      },
-    ];
-
-    for (const context of contexts) {
-      const built = buildSentryEnvelope({
-        dsn: "https://public@sentry.example.test/42",
-        command: "status",
-        context,
-        runtime: SAFE_RUNTIME,
-        error: { type: "Error", frames: [] },
-        eventId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        timestampMs: 2_000,
-      });
-      const event = JSON.parse(built?.body.split("\n")[2] ?? "{}") as Record<string, unknown>;
-      expect(event).not.toHaveProperty("user");
-    }
-  });
-
-  it("never serializes malicious messages, paths, emails, credentials, or raw arguments", () => {
+  it("never puts malicious messages, paths, emails, credentials, or raw arguments in analytics", () => {
     const sentinels = [
       "RAW_TOKEN_XYZ",
       "alice@private.example",
@@ -542,34 +362,30 @@ describe("safe payload builders", () => {
       context: SAFE_CONTEXT,
       runtime: SAFE_RUNTIME,
     });
-    const sentry = buildSentryEnvelope({
-      dsn: "https://public@sentry.example.test/42",
-      command: `ask ${sentinels[3]}`,
-      context: SAFE_CONTEXT,
-      runtime: SAFE_RUNTIME,
-      error: safeError,
-      eventId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      timestampMs: 2_000,
-    });
-    const serialized = `${JSON.stringify(analytics)}\n${sentry?.body ?? ""}`;
+    const serialized = JSON.stringify(analytics);
 
     for (const sentinel of sentinels) expect(serialized).not.toContain(sentinel);
     expect(serialized).not.toContain("node_modules");
     expect(serialized).not.toContain("src/commands/ask.ts");
     expect(analytics.properties.command).toBe("unknown");
-    expect(safeError).toMatchObject({ type: "Error" });
     expect(safeError.code).toBeUndefined();
-    expect(safeError.status).toBeUndefined();
   });
 
-  it("accepts only known error types and codes, not merely safe-looking user strings", () => {
+  it("accepts only known error codes, not merely safe-looking user strings", () => {
     const safeError = sanitizeError({
       name: "PrivateCustomerWorkflowError",
       code: "PRIVATE_INTERNAL_STATE",
-      stack: "PrivateCustomerWorkflowError at /Users/alice/project/index.ts:1:1",
     });
 
-    expect(safeError).toEqual({ type: "Error", frames: [] });
+    expect(safeError).toEqual({});
+  });
+
+  it("flags a CliUsageError as a usage error", () => {
+    expect(sanitizeError({ name: "CliUsageError", exitCode: 1 })).toEqual({
+      exitCode: 1,
+      usageError: true,
+    });
+    expect(sanitizeError({ name: "Error" })).toEqual({});
   });
 
   it.each([
@@ -588,7 +404,7 @@ describe("safe payload builders", () => {
 
     const safeError = sanitizeError(wrapped);
 
-    expect(safeError).toMatchObject({ type: name, code });
+    expect(safeError).toEqual({ code });
     expect(JSON.stringify(safeError)).not.toContain("alice");
     expect(JSON.stringify(safeError)).not.toContain("config.json");
   });
@@ -602,7 +418,7 @@ describe("safe payload builders", () => {
 
     const safeError = sanitizeError(error);
 
-    expect(safeError).toMatchObject({ type: "TRPCClientError", code: "NOT_FOUND" });
+    expect(safeError).toEqual({ code: "NOT_FOUND" });
     expect(JSON.stringify(safeError)).not.toContain("private");
   });
 
@@ -622,7 +438,7 @@ describe("safe payload builders", () => {
       path: "customer-secrets.repo",
     });
 
-    expect(safeError).toEqual({ type: "Error", code, frames: [] });
+    expect(safeError).toEqual({ code });
     expect(JSON.stringify(safeError)).not.toContain("customer");
   });
 
@@ -632,7 +448,7 @@ describe("safe payload builders", () => {
       code: "commander.alicePrivateToken42",
     });
 
-    expect(safeError).toEqual({ type: "CommanderError", frames: [] });
+    expect(safeError).toEqual({});
   });
 
   it("never treats a Node filesystem error path as an RPC identifier", () => {
@@ -645,45 +461,8 @@ describe("safe payload builders", () => {
     }
 
     const safeError = sanitizeError(fsError);
-    expect(safeError).toMatchObject({ type: "Error", code: "ENOENT" });
+    expect(safeError).toEqual({ code: "ENOENT" });
     expect(JSON.stringify(safeError)).not.toContain(privateFilename);
-  });
-
-  it("does not mistake user text or a user-project src path for a Dosu-owned frame", () => {
-    const nonexistentOwnedPath = resolve(dirname(DOSU_SOURCE_FILE), "private-roadmap.ts");
-    const safeError = sanitizeError({
-      name: "Error",
-      stack:
-        "Error: failed near /Users/alice/client-repo/src/customer-plan.ts:77:9\n" +
-        "    at leak (/Users/alice/client-repo/src/private-roadmap.ts:78:10)\n" +
-        `    at forged (${nonexistentOwnedPath}:79:11)`,
-    });
-
-    expect(safeError.frames).toEqual([]);
-  });
-});
-
-describe("Sentry DSN parsing", () => {
-  it("accepts an HTTPS DSN and preserves a path prefix", () => {
-    expect(parseSentryDsn("https://public_key@sentry.example.test/team/42")).toEqual({
-      dsn: "https://public_key@sentry.example.test/team/42",
-      endpoint: "https://sentry.example.test/team/api/42/envelope/",
-      projectId: "42",
-      publicKey: "public_key",
-    });
-  });
-
-  it.each([
-    "http://public@sentry.example.test/42",
-    "https://sentry.example.test/42",
-    "https://public:password@sentry.example.test/42",
-    "https://public@sentry.example.test/",
-    "https://public@sentry.example.test/42?token=secret",
-    "https://sntrys_secret@sentry.example.test/42",
-    "https://sntryu_secret@sentry.example.test/42",
-    "not a dsn",
-  ])("rejects unsafe or malformed DSN %s", (dsn) => {
-    expect(parseSentryDsn(dsn)).toBeNull();
   });
 });
 
@@ -875,7 +654,7 @@ describe("CommandTelemetry lifecycle", () => {
     await telemetry.fail(new Error("private"));
 
     expect(deps.fetch).not.toHaveBeenCalled();
-    expect(deps.randomUUID).not.toHaveBeenCalled();
+    expect(deps.reportError).not.toHaveBeenCalled();
     expect(deps.stderr).not.toHaveBeenCalled();
   });
 
@@ -899,11 +678,11 @@ describe("CommandTelemetry lifecycle", () => {
     disabledTelemetry.start("status", SAFE_CONTEXT);
     await disabledTelemetry.fail(new Error("private"));
 
-    expect(deps.fetch).toHaveBeenCalledTimes(2);
-    expect(deps.randomUUID).toHaveBeenCalledOnce();
+    expect(deps.fetch).toHaveBeenCalledOnce();
+    expect(deps.reportError).toHaveBeenCalledOnce();
     expect(deps.stderr).not.toHaveBeenCalled();
     expect(disabledDeps.fetch).not.toHaveBeenCalled();
-    expect(disabledDeps.randomUUID).not.toHaveBeenCalled();
+    expect(disabledDeps.reportError).not.toHaveBeenCalled();
     expect(disabledDeps.stderr).not.toHaveBeenCalled();
   });
 
@@ -1059,6 +838,7 @@ describe("CommandTelemetry lifecycle", () => {
       }),
     );
 
+    expect(deps.reportError).not.toHaveBeenCalled();
     expect(deps.fetch).toHaveBeenCalledOnce();
     const payload = JSON.parse(String(deps.fetch.mock.calls[0]?.[1]?.body)) as {
       properties: Record<string, unknown>;
@@ -1089,7 +869,7 @@ describe("CommandTelemetry lifecycle", () => {
     await telemetry.fail(error);
 
     expect(deps.fetch).toHaveBeenCalledOnce();
-    expect(deps.randomUUID).not.toHaveBeenCalled();
+    expect(deps.reportError).not.toHaveBeenCalled();
     const [url, init] = deps.fetch.mock.calls[0] ?? [];
     expect(url).toBe("https://dosu.dev/ph-api/i/v0/e/");
     const payload = JSON.parse(String(init?.body)) as {
@@ -1118,31 +898,38 @@ describe("CommandTelemetry lifecycle", () => {
 
     await telemetry.fail(wrapped);
 
-    expect(deps.fetch).toHaveBeenCalledTimes(2);
-    expect(deps.randomUUID).toHaveBeenCalledOnce();
-    const bodies = deps.fetch.mock.calls.map((call) => String(call[1]?.body));
-    const analytics = JSON.parse(bodies.find((body) => body.startsWith("{")) ?? "{}") as {
+    expect(deps.fetch).toHaveBeenCalledOnce();
+    const analytics = JSON.parse(String(deps.fetch.mock.calls[0]?.[1]?.body)) as {
       properties: Record<string, unknown>;
     };
-    const envelope = bodies.find((body) => body.includes("\n")) ?? "";
     expect(analytics.properties.error_code).toBe("SESSION_REFRESH_ERROR");
-    expect(envelope).toContain('"type":"SessionRefreshError"');
-    expect(envelope).toContain('"http_status":"503"');
-    expect(envelope).not.toContain("private upstream");
+    expect(deps.reportError).toHaveBeenCalledExactlyOnceWith({
+      dsn: "https://public@sentry.example.test/42",
+      error: wrapped,
+      release: "dosu-cli@1.2.3",
+      tags: {
+        command: "review list",
+        install_channel: "npm",
+        error_code: "SESSION_REFRESH_ERROR",
+      },
+    });
   });
 
-  it("reports a non-validation nonzero completion as a message-free Sentry error", async () => {
+  it("records a nonzero completion without an exception in analytics only", async () => {
     const deps = testDependencies();
-    const telemetry = createCommandTelemetry({}, deps);
+    const telemetry = createCommandTelemetry(
+      { install_id: "11111111-1111-4111-8111-111111111111" },
+      deps,
+    );
     telemetry.start("login", SAFE_CONTEXT);
 
     await telemetry.complete(1);
 
-    expect(deps.fetch).toHaveBeenCalledOnce();
-    const envelope = String(deps.fetch.mock.calls[0]?.[1]?.body);
-    expect(envelope).toContain('"type":"CommandExitError"');
-    expect(envelope).toContain('"exit_code":"1"');
-    expect(envelope).not.toContain('"message"');
+    const payload = JSON.parse(String(deps.fetch.mock.calls[0]?.[1]?.body)) as {
+      properties: Record<string, unknown>;
+    };
+    expect(payload.properties).toMatchObject({ result: "failure", exit_code: 1 });
+    expect(deps.reportError).not.toHaveBeenCalled();
   });
 
   it("still sends an unrelated tRPC failure to analytics and Sentry exactly once", async () => {
@@ -1158,23 +945,90 @@ describe("CommandTelemetry lifecycle", () => {
       name: "TRPCClientError",
       code: "NOT_FOUND",
       data: { httpStatus: 404, path: "knowledge.search" },
-      stack: `Error: private query and token\n at call (${DOSU_SOURCE_FILE}:2:3)`,
     });
 
     await telemetry.fail(error);
     await telemetry.fail(error);
     await telemetry.complete(1);
 
-    expect(deps.fetch).toHaveBeenCalledTimes(2);
-    const bodies = deps.fetch.mock.calls.map((call) => String(call[1]?.body));
-    const analytics = JSON.parse(bodies.find((body) => body.startsWith("{")) ?? "{}") as {
+    expect(deps.fetch).toHaveBeenCalledOnce();
+    const analytics = JSON.parse(String(deps.fetch.mock.calls[0]?.[1]?.body)) as {
       properties: Record<string, unknown>;
     };
-    const envelope = bodies.find((body) => body.includes("\n")) ?? "";
     expect(analytics.properties).toMatchObject({ result: "failure", error_code: "NOT_FOUND" });
-    expect(envelope).toContain('"filename":"src/commands/ask.ts"');
-    expect(envelope).not.toContain("private query");
-    expect(envelope).not.toContain("/private/");
+    expect(deps.reportError).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        error,
+        tags: { command: "knowledge search", install_channel: "npm", error_code: "NOT_FOUND" },
+      }),
+    );
+  });
+
+  it("reports the raw error to Sentry with the validated account identity", async () => {
+    const deps = testDependencies();
+    const telemetry = createCommandTelemetry({}, deps);
+    telemetry.start("docs list", AUTHENTICATED_CONTEXT);
+    const error = new TypeError("fetch failed");
+
+    await telemetry.fail(error);
+
+    expect(deps.reportError).toHaveBeenCalledExactlyOnceWith({
+      dsn: "https://public@sentry.example.test/42",
+      error,
+      release: "dosu-cli@1.2.3",
+      tags: { command: "docs list", install_channel: "npm" },
+      user: { id: "22222222-2222-4222-8222-222222222222", email: "user@example.com" },
+    });
+  });
+
+  it("omits the Sentry user when the signed-in identity is not a valid account id", async () => {
+    const deps = testDependencies();
+    const telemetry = createCommandTelemetry({}, deps);
+    telemetry.start("docs list", {
+      mode: "cloud",
+      isAuthenticated: true,
+      user: { id: "not-a-uuid", email: "user@example.com" },
+    });
+
+    await telemetry.fail(new Error("boom"));
+
+    expect(deps.reportError).toHaveBeenCalledOnce();
+    expect(deps.reportError.mock.calls[0]?.[0]).not.toHaveProperty("user");
+  });
+
+  it("does not report to Sentry without a DSN", async () => {
+    const deps = testDependencies({
+      env: { DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE: "phc_public_project_token" },
+    });
+    const telemetry = createCommandTelemetry(
+      { install_id: "11111111-1111-4111-8111-111111111111" },
+      deps,
+    );
+    telemetry.start("status", SAFE_CONTEXT);
+
+    await telemetry.fail(new Error("boom"));
+
+    expect(deps.fetch).toHaveBeenCalledOnce();
+    expect(deps.reportError).not.toHaveBeenCalled();
+  });
+
+  it("debug mode hands Sentry a printer instead of sending", async () => {
+    const stderr = vi.fn();
+    const deps = testDependencies({
+      env: {
+        DOSU_TELEMETRY_DEBUG: "1",
+        DOSU_CLI_SENTRY_DSN_OVERRIDE: "https://public@sentry.example.test/42",
+      },
+      stderr,
+    });
+    const telemetry = createCommandTelemetry({}, deps);
+    telemetry.start("status", SAFE_CONTEXT);
+
+    await telemetry.fail(new Error("boom"));
+
+    const report = deps.reportError.mock.calls[0]?.[0];
+    report?.print?.('{"event_id":"x"}');
+    expect(stderr).toHaveBeenCalledExactlyOnceWith('{"event_id":"x"}');
   });
 
   it("debug mode writes the exact safe payload to stderr and never sends", async () => {
@@ -1209,6 +1063,9 @@ describe("CommandTelemetry lifecycle", () => {
       fetch: fetcher,
       webAppURL: vi.fn(() => {
         throw new Error("broken config");
+      }),
+      reportError: vi.fn(async () => {
+        throw new Error("Sentry SDK failed to load");
       }),
     });
     const telemetry = createCommandTelemetry(

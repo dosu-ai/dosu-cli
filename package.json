@@ -14,7 +14,7 @@
     "dosu": "bin/dosu.js"
   },
   "files": [
-    "bin/dosu.js"
+    "bin/*.js"
   ],
   "scripts": {
     "dev": "DOSU_DEV=true bun --env-file=.env.production run src/index.ts",
@@ -22,8 +22,8 @@
     "reset:dev": "bun run scripts/reset-dev.ts",
     "build": "bun --env-file=.env.production run scripts/build-compile.ts",
     "build:dev": "bun --env-file=.env.development run scripts/build-compile.ts",
-    "build:npm": "DOSU_INSTALL_CHANNEL=npm bun --env-file=.env.production run scripts/build-npm.ts",
-    "upload:sourcemaps": "sentry-cli sourcemaps upload --org dosu-ai --project dosu-cli --validate --wait --strict --url-prefix app:///bin bin/dosu.js bin/dosu.js.map",
+    "build:npm": "DOSU_INSTALL_CHANNEL=npm bun --env-file=.env.production run scripts/build-npm.ts && sentry-cli sourcemaps inject bin",
+    "upload:sourcemaps": "sentry-cli sourcemaps upload --org dosu-ai --project dosu-cli bin",
     "build:all": "bun --env-file=.env.production run scripts/build-all.ts",
     "test": "bunx vitest run",
     "test:watch": "bunx vitest",
@@ -45,6 +45,7 @@
     "@semantic-release/exec": "^7.1.0",
     "@semantic-release/git": "^10.0.1",
     "@sentry/cli": "3.6.2",
+    "@sentry/node": "^10.75.0",
     "@trpc/client": "11.18.0",
     "@trpc/server": "11.18.0",
     "@types/bun": "1.4.2",

@@ -47,6 +47,7 @@ import { createLogFollower } from "../debug/follow";
 import { logger } from "../debug/logger";
 import { allProviders, getProvider, type Provider } from "../mcp/providers";
 import { browserFallbackHint } from "../setup/styles";
+import { ERROR_REPORT_TIMEOUT_MS } from "../telemetry/sentry";
 import {
   getOrCreateInstallID,
   isTelemetryEnabled,
@@ -61,6 +62,7 @@ import { checkForReadyTasks } from "../version/pending-tasks-check";
 import { checkForSkillUpdates } from "../version/skill-update-check";
 import { checkForUpdates } from "../version/update-check";
 import { getVersionString } from "../version/version";
+import { printFatalError } from "./fatal-error";
 
 export function shouldRunBackgroundChecks(actionName: string): boolean {
   return actionName !== "upgrade";
@@ -155,13 +157,16 @@ function startTelemetry(
   }
 }
 
-async function finishTelemetry(operation: () => Promise<void>): Promise<void> {
+async function finishTelemetry(
+  operation: () => Promise<void>,
+  timeoutMs = TELEMETRY_FLUSH_TIMEOUT_MS,
+): Promise<void> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([
       Promise.resolve().then(operation),
       new Promise<void>((resolve) => {
-        timeout = setTimeout(resolve, TELEMETRY_FLUSH_TIMEOUT_MS);
+        timeout = setTimeout(resolve, timeoutMs);
       }),
     ]);
   } catch {
@@ -706,8 +711,12 @@ export async function execute(): Promise<void> {
   try {
     await program.parseAsync(process.argv);
   } catch (err: unknown) {
-    if (telemetry) await finishTelemetry(() => telemetry.fail(err));
-    throw err;
+    // Print before reporting: the error report can wait up to ERROR_REPORT_TIMEOUT_MS.
+    printFatalError(err);
+    if (telemetry) {
+      await finishTelemetry(() => telemetry.fail(err), ERROR_REPORT_TIMEOUT_MS);
+    }
+    process.exit(1);
   }
 }
 

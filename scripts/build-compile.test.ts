@@ -7,15 +7,10 @@ describe("build-compile script", () => {
     expect(existsSync(join(__dirname, "build-compile.ts"))).toBe(true);
   });
 
-  it("uses --compile flag for standalone binary", () => {
+  it("compiles through build-all's shared compileBinary", () => {
     const content = readFileSync(join(__dirname, "build-compile.ts"), "utf-8");
-    expect(content).toContain("--compile");
-  });
-
-  it("uses --define via buildDefines from build-all", () => {
-    const content = readFileSync(join(__dirname, "build-compile.ts"), "utf-8");
-    expect(content).toContain('import { buildDefines } from "./build-all"');
-    expect(content).toContain("...defines");
+    expect(content).toContain('import { compileBinary } from "./build-all"');
+    expect(content).toContain("compileBinary(OUTFILE)");
   });
 
   it("does not use redundant --env flags", () => {

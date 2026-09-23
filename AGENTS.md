@@ -13,7 +13,7 @@ bun install                     # Install dependencies
 bun run dev                     # Production endpoints + isolated ~/.config/dosu-cli-dev (DOSU_DEV=true)
 bun run dev:local               # Run CLI from source (local endpoints + DOSU_DEV=true)
 bun run build                   # Compile to single binary via bun build --compile
-bun run build:npm               # Bundle for npm distribution (bin/dosu.js)
+bun run build:npm               # Bundle for npm distribution (bin/*.js)
 bun run build:all               # Cross-platform build matrix
 
 bun run test                    # Run all tests (vitest, forks pool)
@@ -45,7 +45,7 @@ Key modules:
 - **`src/commands/`** — The Dosu platform command layer (the list above). Thin Commander wrappers over `src/client/` calls; `output.ts` standardizes human vs JSON output.
 - **`src/setup/`** — Interactive setup wizard (authenticate → select org → select deployment → mint API key → detect installed tools → configure). Uses `@clack/prompts`.
 - **`src/agent/`** — Non-interactive setup for coding agents (`setup --agent --tool <id>`) and the ticket-based login commands (`login --request`/`--check`). Emits machine-readable JSON via `output.ts` for agent consumption.
-- **`src/telemetry/`** — Default-on analytics and error diagnostics with one persisted global switch, safe payload builders, and fail-open transport. User controls live under `dosu telemetry status|enable|disable|reset`.
+- **`src/telemetry/`** — Default-on analytics and error diagnostics with one persisted global switch, allowlisted analytics payloads, a Sentry SDK reporter loaded only on failure, and fail-open transport. User controls live under `dosu telemetry status|enable|disable|reset`.
 - **`src/tui/`** — Main menu TUI when running `dosu` with no subcommand.
 - **`src/version/`** — Version string from the build-time `DOSU_VERSION` env var, plus background update checks (`update-check.ts`, `skill-update-check.ts`).
 
@@ -60,11 +60,12 @@ use a random installation ID. Signed-in command and setup-funnel events use the 
 when a selected organization UUID is available, analytics events associate it through
 `$groups.organization`. Sentry errors may additionally include that user's email. Never alias prior
 installation history to an account.
-Setup analytics may include only the documented coarse fields. Never collect prompts, raw command
-lines, free-form argument or option values, user source code, file contents, local paths, environment
-variable names or values, credentials, raw error messages, or `debug.log`. Keep payloads allowlisted, transports
-bounded and fail-open, honor `DO_NOT_TRACK` and `DOSU_TELEMETRY_DISABLED`, and keep stdout/JSON
-contracts unchanged. See
+Setup analytics may include only the documented coarse fields. Analytics must never collect prompts,
+raw command lines, free-form argument or option values, user source code, file contents, local paths,
+environment variable names or values, credentials, raw error messages, or `debug.log`; keep analytics
+payloads allowlisted. Error diagnostics use the Sentry SDK's default event, imported only on the
+failure path so successful commands never load it. Keep transports bounded and fail-open, honor
+`DO_NOT_TRACK` and `DOSU_TELEMETRY_DISABLED`, and keep stdout/JSON contracts unchanged. See
 [docs/telemetry.md](docs/telemetry.md) for the field and privacy contract.
 
 ## Testing
@@ -79,7 +80,7 @@ contracts unchanged. See
 
 - **`bun.lock` is committed.** It pins the full transitive tree for reproducible installs across machines and CI. Run `bun update` to bump deps (this is also where the install gate below applies).
 - **`bunfig.toml` sets `minimumReleaseAge = 259200`** (3 days) — `bun install`/`bun update` ignore package versions published in the last 3 days, a supply-chain delay against compromised fresh releases. Add `minimumReleaseAgeExcludes = [...]` if a package ever needs to bypass it.
-- **The published npm package is a self-contained bundle.** `build:npm` runs `bun build --target node`, which inlines every dependency into `bin/dosu.js` (the only code file shipped — see `files` in `package.json`). Because nothing is resolved from `node_modules` at runtime, **all deps live in `devDependencies` and the package declares zero runtime `dependencies`** — so `npm install @dosu/cli` pulls no transitive packages. Keep new runtime deps in `devDependencies`; only add a real `dependencies` entry if something genuinely cannot be bundled (e.g. a native binary), and verify with the isolated-bundle run before doing so.
+- **The published npm package is a self-contained bundle.** `build:npm` runs `bun build --target node --splitting`, which inlines every dependency into `bin/dosu.js` and the chunks it imports (`bin/*.js`, the only code files shipped — see `files` in `package.json`). Splitting keeps dynamically imported modules, such as the Sentry SDK, off the startup path. Because nothing is resolved from `node_modules` at runtime, **all deps live in `devDependencies` and the package declares zero runtime `dependencies`** — so `npm install @dosu/cli` pulls no transitive packages. Keep new runtime deps in `devDependencies`; only add a real `dependencies` entry if something genuinely cannot be bundled (e.g. a native binary), and verify with the isolated-bundle run before doing so.
 
 ## Code Style (Biome)
 

@@ -10,8 +10,9 @@ Dosu sends two kinds of telemetry:
 1. **Usage analytics** measure whether coarse, named CLI workflows succeed. Signed-in commands use
    the same stable Dosu user ID as the web app and, when available, associate the event with the
    selected organization UUID; signed-out commands use a random installation ID.
-2. **Error diagnostics** send a minimal error fingerprint, Dosu-owned stack frames, and, when the
-   local session has a verified identity, only the user's ID and email.
+2. **Error diagnostics** report a thrown command failure with the official Sentry SDK's default
+   event (error message, stack trace, and runtime context) and, when the local session has a
+   verified identity, the user's ID and email.
 
 Telemetry is **on by default** and has one persisted global enable/disable switch. Interactive setup
 and non-interactive paths do not show a telemetry prompt. `DO_NOT_TRACK` and
@@ -55,15 +56,16 @@ disable.
 
 `DOSU_POSTHOG_PROJECT_TOKEN` and `DOSU_CLI_SENTRY_DSN` are build-time defaults injected into release
 artifacts. They and their runtime overrides must contain only public client-side ingestion
-credentials: a PostHog `phc_` project token and a public HTTPS Sentry client DSN. Known management
-credential formats are rejected at runtime, and release builds fail instead of baking invalid
-non-empty values. Never put a PostHog personal API key, Sentry auth token, or other management secret
-in the CLI.
+credentials: a PostHog `phc_` project token and a public `https://<key>@<host>/<project>` Sentry
+client DSN. Release builds fail instead of baking another token format, a DSN with a secret key, or
+an auth token in the DSN's key slot, and the CLI ignores a non-`phc_` token at runtime.
+Never put a PostHog personal API key, Sentry auth token, or other management secret in the CLI.
 
 ## Data sent by command telemetry
 
-The CLI constructs typed payloads from allowlisted values. It never serializes a command object,
-an `Error`, `argv`, configuration, or a log record and then attempts to redact it.
+The CLI constructs typed analytics payloads from allowlisted values. It never serializes a command
+object, an `Error`, `argv`, configuration, or a log record into analytics and then attempts to
+redact it. Error diagnostics are the exception: they send the Sentry SDK's default event.
 
 ### Usage analytics: PostHog
 
@@ -124,47 +126,37 @@ until the user rotates it.
 
 ### Error diagnostics: Sentry
 
-An error event is sent only when telemetry is enabled and an instrumented command throws or finishes
-with a non-validation, nonzero exit code. A nonzero completion becomes a message-free
-`CommandExitError`. The CLI builds a Sentry envelope directly; it does not initialize the Sentry SDK
-or its automatic integrations.
+An error event is sent only when telemetry is enabled, a Sentry DSN is configured, and an
+instrumented command throws a non-validation error. The expected session states `SESSION_EXPIRED`
+and `SESSION_PERSISTENCE_ERROR` are not reported. A command that exits nonzero without throwing is
+recorded in usage analytics only.
 
-The envelope header contains exactly `dsn`, `event_id`, and `sent_at`. The item header is exactly
-`{"type":"event"}`. The event contains exactly:
+The CLI reports through the official `@sentry/node` SDK with its default configuration. The SDK is
+imported on this failure path only, so successful commands never load it. Three default
+integrations are removed because they do not fit a CLI started after a failure: `ProcessSession`
+would record every session as errored at the cost of an extra request, and `ContextLines` and
+`Modules` read source files and `package.json` relative to the working directory, which is the
+user's project. The CLI also pins `environment`, `debug`, and `spotlight` so `SENTRY_*` variables
+set for the user's own project cannot change them. The event therefore contains what the SDK
+collects by default, including the error message and its `cause` chain, the stack trace (with
+local file paths), OS/runtime/device context, and the host name. The CLI adds:
 
 | Field | Value |
 | --- | --- |
-| `event_id` | Random UUID without dashes for this error event. |
-| `timestamp` | Event time. |
-| `platform` | Always `node`. |
-| `level` | Always `error`. |
 | `release` | `dosu-cli@<cli_version>`. |
-| `tags` | The closed tag set below. |
+| `tags.command` | The canonical command name. |
+| `tags.install_channel` | `npm`, `homebrew`, or `binary`. |
+| `tags.error_code` | Optional stable error code from the analytics allowlist. |
 | `user` | Optional validated `{id, email?}` for the current authenticated Dosu user. |
-| `fingerprint` | `dosu-cli`, canonical command, safe error type, stable error code or `unknown`, and newest allowlisted Dosu callsite or `unknown`. |
-| `exception` | One value containing only safe type/code and optional Dosu-owned frames. |
-| `debug_meta` | Optional npm-bundle source-map debug ID; omitted unless the event has a mapped `bin/dosu.js` frame. |
 
-The exact tag allowlist is `schema_version`, `command`, `cli_version`, `install_channel`, `os`,
-`arch`, `runtime`, `runtime_major`, `is_ci`, `is_tty`, `mode`, and `is_authenticated`, plus optional
-`error_code`, `http_status`, and `exit_code`. Values are bounded and validated. `error_code` and
-error types come from closed known-value allowlists, and `http_status` is an integer from 100
-through 599.
+The random PostHog installation ID is not included in Sentry events. Invalid, mismatched, or
+signed-out identity is omitted.
 
-The exception value contains only:
-
-- `type`: a known allowlisted error-class name, otherwise `Error`;
-- `value`: the stable error code, otherwise the safe error type; and
-- optional `stacktrace.frames`: at most 20 frames with only `filename`, `lineno`, `colno`,
-  `in_app: true`, and the fixed `app:///bin/dosu.js` `abs_path` for mapped npm-bundle frames.
-
-Frame filenames must be package-relative Dosu CLI paths under `src/` or `bin/dosu.js`. Absolute
-prefixes, function names, dependency frames, source context, and local variables are discarded.
-Frames are sent oldest-to-newest as required by Sentry. Release builds upload the npm bundle's
-external map with the same debug ID before publishing; the map and CI-only Sentry auth token are not
-included in the npm package. The random PostHog installation ID is not included in Sentry events.
-Authenticated events contain only the validated account ID and optional email; invalid, mismatched,
-or signed-out identity is omitted.
+Stack traces are readable in every distribution. The npm package is bundled with code splitting;
+`sentry-cli sourcemaps inject` adds a debug ID to each chunk and its source map, and the release
+workflow uploads the maps before publishing the exact chunks without them. Standalone (Homebrew
+and binary) builds embed their source map, so their stack traces already point at `src/` files and
+need no upload.
 
 ### Setup/onboarding analytics
 
@@ -202,9 +194,9 @@ therefore include setup RPC input and the normal authenticated server user conte
 accepted residual risk of keeping setup telemetry client-filtered rather than maintaining a
 separate server-side privacy boundary.
 
-## Data excluded from CLI-built telemetry fields
+## Data excluded from CLI-built analytics fields
 
-The payloads constructed by the CLI never include:
+The analytics payloads constructed by the CLI never include:
 
 - prompts, questions, search text, documents, source code, file contents, or model output;
 - raw command lines, free-form arguments or option values, stdin, stdout, or stderr (only the
@@ -222,9 +214,11 @@ The payloads constructed by the CLI never include:
 - raw error messages, raw stack lines, function names, local variables, source context,
   breadcrumbs, attachments, arbitrary `extra` data, or exception causes;
 - person name, username, hostname, MAC address, hardware serial, or a hash derived from any of them;
-  signed-in command analytics uses only the validated user ID, and signed-in error diagnostics use
-  only that ID and optional email; or
+  signed-in command analytics uses only the validated user ID; or
 - the contents of `debug.log` or another local log file.
+
+Error diagnostics are outside this list: they use the Sentry SDK's default event described above,
+which can include error messages, stack traces with local file paths, and the host name.
 
 Authenticated setup still uses a session-token transport header, and the Dosu server enriches
 successful setup analytics with the documented account identity. The exclusions above describe
@@ -266,7 +260,7 @@ keeping roughly the newest 512 KiB. `dosu logs` lets the user locate, inspect, o
 The logger redacts common credential shapes, but local log text can still contain detailed errors,
 URLs, IDs, and paths. Treat it as potentially sensitive. It is never attached to PostHog or Sentry
 and is never uploaded automatically. `--debug` mirrors local log entries to stderr; it is distinct
-from `DOSU_TELEMETRY_DEBUG=1`, which prints safe telemetry payloads and disables sending.
+from `DOSU_TELEMETRY_DEBUG=1`, which prints telemetry payloads and disables sending.
 
 ## Destinations and failure behavior
 
@@ -277,7 +271,7 @@ command analytics
   -> PostHog
 
 error diagnostics
-  -> HTTPS Sentry envelope endpoint derived from the public DSN
+  -> Sentry SDK transport to the configured DSN
   -> Sentry
 
 setup/onboarding analytics
@@ -289,14 +283,15 @@ setup/onboarding analytics
 
 Command telemetry has these delivery guarantees:
 
-- HTTPS destinations only, with redirects refused to prevent protocol downgrade;
-- one attempt per destination, with a hard 500ms deadline;
-- analytics and error requests run in parallel when both apply;
+- analytics goes to HTTPS destinations only, with redirects refused to prevent protocol downgrade;
+- one analytics attempt, with a hard 500ms deadline;
+- a failure's error report is sent by the Sentry SDK in parallel with its analytics event, and the
+  CLI prints the error first and then waits at most 2.5 seconds for both before exiting;
 - no retry, disk queue, background daemon, or replay on the next invocation;
 - missing/invalid destination configuration is a no-op;
 - timeout, offline state, non-2xx response, serialization error, and provider error are swallowed;
 - telemetry writes nothing to stdout; and
-- debug mode writes the exact safe payload to stderr and makes no request.
+- debug mode writes the analytics payload and the Sentry envelope to stderr and makes no request.
 
 The PostHog project token and Sentry DSN are public ingestion credentials, not authorization for
 querying, deleting, or administering data. Management credentials, when operationally required,
@@ -317,20 +312,17 @@ remain in controlled Dosu/vendor infrastructure or CI and are never placed in th
   `preAction` hook. Those parser-level failures are currently not emitted; their raw token is never
   captured as a fallback.
 - Unknown or unsafe command names become `unknown`; they are never preserved as raw input.
-- Compiled binary/homebrew error events can be frame-less because the executable has no verifiable
-  package-relative source files. The npm bundle can include allowlisted `bin/dosu.js` frames. Safe
-  omission is preferred to guessing a path or symbolicating user-owned code.
 - There is no automatic raw-log upload, diagnostic bundle, performance tracing, session replay,
   autocapture, or repository identity. Signed-in commands use the existing web user ID, but the CLI
   deliberately never aliases prior installation history to an account.
 
 ## Maintainer contract
 
-Any new event, tag, property, identifier, stack-frame category, or setup property is a privacy
-schema change. Its review must state the product/support question it answers, cardinality,
-retention, access, and deletion impact. Update this document and the exact-key/forbidden-sentinel
-tests in the same change. Do not add a generic property bag to command telemetry or enable vendor
-SDK defaults as policy.
+Any new event, tag, property, identifier, or setup property is a privacy schema change. Its review
+must state the product/support question it answers, cardinality, retention, access, and deletion
+impact. Update this document and the exact-key/forbidden-sentinel tests in the same change. Do not
+add a generic property bag to command analytics. Error diagnostics deliberately use the Sentry SDK
+defaults; changing that configuration is a schema change too.
 
 ## Production launch checklist
 
@@ -362,11 +354,11 @@ Complete and record each item before enabling release destinations:
   telemetry currently trusts the official CLI allowlist; modified clients or future regressions can
   send additional fields into the server's normal PostHog/Sentry path. Revisit this accepted risk if
   the privacy or compliance requirements change.
-- **Source maps:** the release pipeline builds and uploads a debug-ID-matched external npm source map
-  before publishing, then publishes the exact bundle without the map. Inspect a real processed event
-  before release. Define and test a separate native-symbolication strategy before promising frames
-  for binary/homebrew builds. `sourcesContent` contains this public open-source repository and its
-  bundled dependencies; the CI auth token is never baked into the CLI.
+- **Source maps:** the release pipeline injects debug IDs into the npm chunks and uploads their
+  source maps before publishing, then publishes the exact chunks without the maps. Standalone builds
+  embed their source map instead. Inspect a real processed event from each distribution before
+  release. `sourcesContent` contains this public open-source repository and its bundled
+  dependencies; the CI auth token is never baked into the CLI.
 - **End-to-end evidence:** in isolated vendor projects, inspect real received payloads for enabled,
   disabled, `DO_NOT_TRACK`, debug, timeout, malformed-error, and JSON/NDJSON cases.
   Confirm stdout and exit codes are unchanged and that disabled runs create neither IDs nor network
@@ -379,7 +371,8 @@ Complete and record each item before enabling release destinations:
 - [PostHog: capture API contract](https://posthog.com/docs/api/capture)
 - [PostHog: privacy and data collection](https://posthog.com/docs/privacy/data-collection)
 - [PostHog: data storage, retention, and deletion](https://posthog.com/docs/privacy/data-storage)
-- [Sentry: envelope protocol](https://develop.sentry.dev/sdk/data-model/envelopes/)
+- [Sentry Node: configuration options](https://docs.sentry.io/platforms/javascript/guides/node/configuration/options/)
+- [Sentry: uploading source maps with Sentry CLI](https://docs.sentry.io/platforms/javascript/sourcemaps/uploading/cli/)
 - [Sentry Node: scrubbing sensitive data](https://docs.sentry.io/platforms/javascript/guides/node/data-management/sensitive-data/)
 - [Sentry: hosted data retention periods](https://docs.sentry.io/security-legal-pii/security/data-retention-periods/)
 - [OWASP Logging Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html)
