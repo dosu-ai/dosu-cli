@@ -1,3 +1,10 @@
+# [0.56.0](https://github.com/dosu-ai/dosu-cli/compare/v0.55.1...v0.56.0) (2026-09-23)
+
+
+### Features
+
+* **telemetry:** report hook enablement on cli_onboarding_completed ([#231](https://github.com/dosu-ai/dosu-cli/issues/231)) ([8ee7208](https://github.com/dosu-ai/dosu-cli/commit/8ee72080f234fd0e803df28bd0e4101774fc5286))
+
 ## [0.55.1](https://github.com/dosu-ai/dosu-cli/compare/v0.55.0...v0.55.1) (2026-09-22)
 
 
