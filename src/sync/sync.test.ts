@@ -763,8 +763,13 @@ describe("runKnowledgeSync partial runs", () => {
     // The notes are already saved: history, counters, and learning tokens take them in…
     expect(saved[0].mined_sessions).toEqual([
       { at: "2026-08-25T10:00:00.000Z", session: "cursor/earlier" },
-      { at: NOW.toISOString(), session: "claude/s-50", project: "dosu-cli" },
-      { at: NOW.toISOString(), session: "claude/s-30" },
+      {
+        at: NOW.toISOString(),
+        session: "claude/s-50",
+        updated: session(50).updated,
+        project: "dosu-cli",
+      },
+      { at: NOW.toISOString(), session: "claude/s-30", updated: session(30).updated },
     ]);
     expect(saved[0].total_mined).toBe(7);
     expect(saved[0].total_notes).toBe(10);
@@ -805,13 +810,13 @@ describe("runKnowledgeSync partial runs", () => {
         schema_version: 1,
         watermark: null,
         consecutive_failures: 1,
-        // Noted after s-40 went quiet; s-30 was recorded before its latest activity.
+        // s-40 was noted at its current activity; s-30 has had activity since it was noted.
         mined_sessions: [
-          { at: new Date(NOW.getTime() - 20 * 60 * 1000).toISOString(), session: "claude/s-40" },
-          { at: new Date(NOW.getTime() - 35 * 60 * 1000).toISOString(), session: "claude/s-30" },
-          // An older record never shadows a newer one; an unparseable one never counts.
-          { at: new Date(NOW.getTime() - 90 * 60 * 1000).toISOString(), session: "claude/s-40" },
-          { at: "not-a-date", session: "claude/s-50" },
+          { at: NOW.toISOString(), session: "claude/s-40", updated: session(40).updated },
+          { at: NOW.toISOString(), session: "claude/s-30", updated: session(35).updated },
+          // An older snapshot never shadows a newer one; an unparseable one never counts.
+          { at: NOW.toISOString(), session: "claude/s-40", updated: session(90).updated },
+          { at: NOW.toISOString(), session: "claude/s-50", updated: "not-a-date" },
         ],
       }),
       mine,
@@ -839,7 +844,9 @@ describe("runKnowledgeSync partial runs", () => {
         schema_version: 1,
         watermark: null,
         consecutive_failures: 1,
-        mined_sessions: [{ at: NOW.toISOString(), session: "claude/s-30" }],
+        mined_sessions: [
+          { at: NOW.toISOString(), session: "claude/s-30", updated: session(30).updated },
+        ],
       }),
       mine,
       lock: openLock(),
@@ -850,6 +857,65 @@ describe("runKnowledgeSync partial runs", () => {
     expect(outcome.status).toBe("nothing-new");
     expect(mine).not.toHaveBeenCalled();
     expect(saved[0].watermark).toBe(session(30).updated);
+  });
+});
+
+describe("runKnowledgeSync sessions resumed during a run", () => {
+  /** s-30 as scanned at run start, and again after activity that landed while the run was in
+   * flight (quiet again by the next sync, but older than the run's finish time). */
+  const snapshot = session(30);
+  const resumed = { ...snapshot, updated: session(10).updated };
+
+  it.each([
+    ["completed", learnerResult()],
+    ["partial", learnerResult({ outcome: "error", notedSessions: ["claude/s-30"] })],
+  ] as const)("re-studies a session updated during a %s run", async (_label, firstRun) => {
+    const first = makeStudyingDeps({
+      listSessions: vi.fn().mockResolvedValue([snapshot]),
+      mine: vi.fn().mockResolvedValue(firstRun),
+      lock: openLock(),
+    });
+    await runKnowledgeSync({ deps: first.deps });
+    const recorded = first.saved[0];
+    expect(recorded.mined_sessions?.at(-1)).toMatchObject({
+      at: NOW.toISOString(),
+      session: "claude/s-30",
+      updated: snapshot.updated,
+    });
+
+    const mine = vi.fn().mockResolvedValue(learnerResult());
+    const second = makeStudyingDeps({
+      listSessions: vi.fn().mockResolvedValue([resumed]),
+      loadState: () => recorded,
+      mine,
+      lock: openLock(),
+    });
+    const outcome = await runKnowledgeSync({ deps: second.deps });
+
+    expect(outcome.status).toBe("studied");
+    expect((mine.mock.calls[0][0] as AgentSession[]).map((s) => s.updated)).toEqual([
+      resumed.updated,
+    ]);
+  });
+
+  it("never skips on a record that carries no activity snapshot", async () => {
+    const mine = vi.fn().mockResolvedValue(learnerResult());
+    const { deps } = makeStudyingDeps({
+      listSessions: vi.fn().mockResolvedValue([snapshot]),
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        mined_sessions: [{ at: NOW.toISOString(), session: "claude/s-30" }],
+      }),
+      mine,
+      lock: openLock(),
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.status).toBe("studied");
+    expect(mine).toHaveBeenCalledOnce();
   });
 });
 

@@ -139,6 +139,8 @@ describe("loadSyncState / saveSyncState", () => {
         mined_sessions: [
           { at: "2026-08-25T11:04:00Z", session: "cursor/abc" },
           { at: "2026-08-25T11:05:00Z", session: "cursor/def", project: 42 },
+          { at: "2026-08-25T11:06:00Z", session: "cursor/ghi", updated: "2026-08-25T10:59:00Z" },
+          { at: "2026-08-25T11:07:00Z", session: "cursor/jkl", updated: 7 },
           { at: 42 },
           "nope",
           null,
@@ -147,13 +149,15 @@ describe("loadSyncState / saveSyncState", () => {
       }),
     );
     const state = loadSyncState(configDir);
-    // A non-string project is dropped from the surviving record.
+    // A non-string project or activity snapshot is dropped from the surviving record.
     expect(state.mined_sessions).toEqual([
       { at: "2026-08-25T11:04:00Z", session: "cursor/abc" },
       { at: "2026-08-25T11:05:00Z", session: "cursor/def" },
+      { at: "2026-08-25T11:06:00Z", session: "cursor/ghi", updated: "2026-08-25T10:59:00Z" },
+      { at: "2026-08-25T11:07:00Z", session: "cursor/jkl" },
     ]);
     // A bad counter falls back to what the surviving history proves.
-    expect(state.total_mined).toBe(2);
+    expect(state.total_mined).toBe(4);
   });
 });
 

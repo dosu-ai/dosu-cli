@@ -122,23 +122,31 @@ function sessionKey(session: AgentSession): string {
   return `${session.harness}/${session.id}`;
 }
 
-/** One history record per session, stamped with the time the run recorded it. */
+/** One history record per session, stamped with the time the run recorded it and the activity
+ * snapshot it studied. */
 function studiedRecords(sessions: readonly AgentSession[], at: string): StudiedSessionRecord[] {
   return sessions.map((s) => ({
     at,
     session: sessionKey(s),
+    updated: s.updated,
     ...(s.project ? { project: s.project } : {}),
   }));
 }
 
-/** Newest history time per session, so the batch can skip sessions studied since their last
- * activity (a failed run's noted sessions, which the kept watermark would otherwise revisit). */
-function lastStudiedAt(history: readonly StudiedSessionRecord[] | undefined): Map<string, number> {
+/** Newest studied activity snapshot per session, so the batch can skip sessions with nothing new
+ * since (a failed run's noted sessions, which the kept watermark would otherwise revisit). The
+ * snapshot, not the run's finish time, is compared: activity during a run must be studied again. */
+function lastStudiedSnapshot(
+  history: readonly StudiedSessionRecord[] | undefined,
+): Map<string, number> {
   const latest = new Map<string, number>();
   for (const record of history ?? []) {
-    const at = Date.parse(record.at);
-    if (!Number.isNaN(at) && at > (latest.get(record.session) ?? Number.NEGATIVE_INFINITY)) {
-      latest.set(record.session, at);
+    const updated = record.updated ? Date.parse(record.updated) : Number.NaN;
+    if (
+      !Number.isNaN(updated) &&
+      updated > (latest.get(record.session) ?? Number.NEGATIVE_INFINITY)
+    ) {
+      latest.set(record.session, updated);
     }
   }
   return latest;
@@ -252,7 +260,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     // Sessions a failed run already noted are skipped the same way, unless resumed since.
     const worthStudying = deps.worthStudying ?? isWorthStudying;
     const isIncognito = deps.isIncognito ?? isIncognitoSession;
-    const studiedAt = lastStudiedAt(state.mined_sessions);
+    const studiedSnapshot = lastStudiedSnapshot(state.mined_sessions);
     const examined: AgentSession[] = [];
     const batch: AgentSession[] = [];
     let trivial = 0;
@@ -262,7 +270,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       const candidate = ready[i];
       examined.push(candidate);
       const key = sessionKey(candidate);
-      if ((studiedAt.get(key) ?? Number.NEGATIVE_INFINITY) >= Date.parse(candidate.updated)) {
+      if (Date.parse(candidate.updated) <= (studiedSnapshot.get(key) ?? Number.NEGATIVE_INFINITY)) {
         alreadyStudied += 1;
         logger.debug("sync", `skipping already-studied session ${key}`);
       } else if (isIncognito(candidate)) {
