@@ -802,9 +802,16 @@ function sentryTags(
   };
 }
 
+/** A recorded learner outcome that describes the failure; a completed study never does (the
+ * command failed after it, e.g. writing `--report`). */
+function failedLearnerOutcome(facets: SafeCommandFacets): string | undefined {
+  return facets.learner_outcome === "completed" ? undefined : facets.learner_outcome;
+}
+
 /** The exception value: the failing outcome in allowlisted words when the command recorded one
  * (e.g. `knowledge sync: gateway_rejected (system_role_unsupported)`), else the code or type. */
 function exceptionSummary(command: string, error: SafeError, facets: SafeCommandFacets): string {
+  if (facets.learner_outcome === "completed") return error.code ?? error.type;
   const outcome = facets.learner_outcome ?? facets.sync_status;
   if (!outcome) return error.code ?? error.type;
   return `${command}: ${outcome}${facets.gateway_reason ? ` (${facets.gateway_reason})` : ""}`;
@@ -883,7 +890,7 @@ export function buildSentryEnvelope(input: SentryEnvelopeInput): SentryEnvelope 
       error.type,
       error.code ?? "unknown",
       safeCallsite,
-      ...(facets.learner_outcome ? [facets.learner_outcome] : []),
+      ...(failedLearnerOutcome(facets) ? [facets.learner_outcome] : []),
       ...(facets.gateway_reason ? [facets.gateway_reason] : []),
     ],
     exception: { values: [exceptionValue] },

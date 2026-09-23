@@ -18,8 +18,9 @@ import { delimiter, join } from "node:path";
 import { createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { buildLearnerEnv } from "../src/learner/env";
+import { DEFAULT_LEARNER_MODEL } from "../src/learner/model";
 
-export const PINNED_MODEL = "claude-haiku-4-5";
+export const PINNED_MODEL = DEFAULT_LEARNER_MODEL;
 
 /** Haiku 4.5's output ceiling. */
 const MAX_OUTPUT_TOKENS = 64_000;

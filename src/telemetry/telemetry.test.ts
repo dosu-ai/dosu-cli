@@ -574,6 +574,36 @@ describe("safe payload builders", () => {
     expect(scanError.fingerprint).toHaveLength(5);
   });
 
+  it("keeps the plain value and fingerprint when the study itself completed", () => {
+    // e.g. `--report` failing after a successful study: not a learner failure.
+    const built = buildSentryEnvelope({
+      dsn: "https://public@sentry.example.test/42",
+      command: "knowledge sync",
+      context: SAFE_CONTEXT,
+      runtime: SAFE_RUNTIME,
+      error: { type: "CommandExitError", frames: [], exitCode: 1 },
+      facets: { sync_status: "studied", learner_outcome: "completed" },
+      eventId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      timestampMs: 2_000,
+    });
+
+    const event = JSON.parse(built?.body.split("\n")[2] ?? "{}") as {
+      tags: Record<string, string>;
+      fingerprint: string[];
+      exception: { values: Array<{ value: string }> };
+    };
+    expect(event.exception.values[0]?.value).toBe("CommandExitError");
+    expect(event.fingerprint).toEqual([
+      "dosu-cli",
+      "knowledge sync",
+      "CommandExitError",
+      "unknown",
+      "unknown",
+    ]);
+    // The facts are still tagged.
+    expect(event.tags.learner_outcome).toBe("completed");
+  });
+
   it("never lets raw learner text reach a Sentry event through its facets", () => {
     const raw = "LLM gateway rejected the study run: my secret prompt /Users/alice/private";
     const built = buildSentryEnvelope({

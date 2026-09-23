@@ -371,8 +371,6 @@ export function knowledgeCommand(): Command {
   return cmd;
 }
 
-/** Studying step for authenticated cloud-mode installs; returns undefined (gate-and-report only)
- * when the install can't mine: logged out, OSS mode, or no API key. */
 /** The learner's coarse diagnostics as telemetry facets; telemetry re-validates each one. */
 function learnerFacets(learner: LearnerRunResult): CommandFacets {
   return {
@@ -384,6 +382,8 @@ function learnerFacets(learner: LearnerRunResult): CommandFacets {
   };
 }
 
+/** Studying step for authenticated cloud-mode installs; returns undefined (gate-and-report only)
+ * when the install can't mine: logged out, OSS mode, or no API key. */
 function buildLearner(trigger: "hook" | "manual"): SyncDeps["mine"] {
   const cfg = loadConfig();
   if (cfg.mode === "oss") return undefined;

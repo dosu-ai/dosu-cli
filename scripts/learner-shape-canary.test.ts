@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_LEARNER_MODEL } from "../src/learner/model";
 import { checkLearnerRequest, PINNED_MODEL } from "./learner-shape-canary";
 
 /** A second-turn request in the shape Claude Code sends when pinned to Haiku 4.5. */
@@ -37,7 +36,7 @@ function messagesOf(body: Record<string, unknown>): Record<string, unknown>[] {
 describe("checkLearnerRequest", () => {
   it("encodes the rules of the model the learner defaults to", () => {
     // The checks are Haiku 4.5's acceptance rules; a new default model needs new rules.
-    expect(PINNED_MODEL).toBe(DEFAULT_LEARNER_MODEL);
+    expect(PINNED_MODEL).toBe("claude-haiku-4-5");
   });
 
   it("accepts the Haiku-shaped request", () => {

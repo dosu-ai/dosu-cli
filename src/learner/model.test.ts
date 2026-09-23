@@ -39,6 +39,14 @@ describe("resolveServedModel", () => {
     expect(init?.signal).toBeInstanceOf(AbortSignal);
   });
 
+  it("joins the capabilities path onto a gateway URL with trailing slashes", async () => {
+    const fetchImpl = respond(200, { model: "claude-haiku-4-5" });
+
+    await resolveServedModel({ gatewayURL: `${gatewayURL}//`, apiKey: "sk_user_x", fetchImpl });
+
+    expect(vi.mocked(fetchImpl).mock.calls[0][0]).toBe(`${gatewayURL}/capabilities`);
+  });
+
   it("falls back to the default when the gateway predates the endpoint", async () => {
     const fetchImpl = respond(404, "not found");
 

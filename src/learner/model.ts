@@ -23,7 +23,8 @@ export interface ResolveServedModelOptions {
 export async function resolveServedModel(options: ResolveServedModelOptions): Promise<string> {
   const fetchImpl = options.fetchImpl ?? fetch;
   try {
-    const resp = await fetchImpl(`${options.gatewayURL}/capabilities`, {
+    const base = options.gatewayURL.replace(/\/+$/, "");
+    const resp = await fetchImpl(`${base}/capabilities`, {
       method: "GET",
       headers: { Authorization: `Bearer ${options.apiKey}` },
       signal: AbortSignal.timeout(options.timeoutMs ?? CAPABILITIES_TIMEOUT_MS),
