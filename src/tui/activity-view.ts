@@ -745,7 +745,8 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
   };
   // What the last paint actually showed: the renderer sizes the list to the terminal (and, in
   // full-rows mode, to how far the visible rows wrapped), so the scroll bound reads it back.
-  let listHeight = fullRows ? ACTIVITY_VIEW_FULL_LIST_ROWS : ACTIVITY_VIEW_LIST_LINES;
+  // Starts at the clipped default; the first draw replaces it before any key can scroll.
+  let listHeight = ACTIVITY_VIEW_LIST_LINES;
 
   // Identical frames skip the terminal write entirely (most ticks change nothing).
   let lastFrame: string | null = null;

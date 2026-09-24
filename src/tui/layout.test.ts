@@ -83,6 +83,19 @@ describe("frameMaxLines", () => {
     expect(frameMaxLines(4)).toBe(1);
     expect(frameMaxLines(1)).toBe(1);
   });
+
+  it("reads the terminal height by default, assuming 24 rows off a TTY", () => {
+    const original = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+    try {
+      Object.defineProperty(process.stdout, "rows", { value: 40, configurable: true });
+      expect(frameMaxLines()).toBe(frameMaxLines(40));
+      Object.defineProperty(process.stdout, "rows", { value: undefined, configurable: true });
+      expect(frameMaxLines()).toBe(frameMaxLines(24));
+    } finally {
+      if (original) Object.defineProperty(process.stdout, "rows", original);
+      else delete (process.stdout as { rows?: number }).rows;
+    }
+  });
 });
 
 describe("padLines", () => {
