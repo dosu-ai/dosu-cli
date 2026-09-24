@@ -1,3 +1,10 @@
+## [0.57.2](https://github.com/dosu-ai/dosu-cli/compare/v0.57.1...v0.57.2) (2026-09-24)
+
+
+### Bug Fixes
+
+* **deployments:** resolve truncated ids in switch instead of sending them to the backend ([#241](https://github.com/dosu-ai/dosu-cli/issues/241)) ([daa2f03](https://github.com/dosu-ai/dosu-cli/commit/daa2f0310782a106554c81eb989336ad8473a67a))
+
 ## [0.57.1](https://github.com/dosu-ai/dosu-cli/compare/v0.57.0...v0.57.1) (2026-09-24)
 
 
