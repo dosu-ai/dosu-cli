@@ -324,8 +324,10 @@ describe("deployments info", () => {
 });
 
 describe("deployments switch", () => {
+  const NEW_DEP = "188b701a-3f0e-4c8b-9d2a-5e6f7a8b9c0d";
+  const OTHER_DEP = "188b701a-ffff-4c8b-9d2a-5e6f7a8b9c0d";
   const deployment = {
-    deployment_id: "new-dep",
+    deployment_id: NEW_DEP,
     name: "New Deploy",
     org_id: "org2",
     space_id: "sp2",
@@ -335,45 +337,45 @@ describe("deployments switch", () => {
   it("validates deployment via workspaces.get", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce(deployment);
-    await run("switch", "new-dep");
-    expect(mockQuery).toHaveBeenCalledWith("workspaces.get", "new-dep");
+    await run("switch", NEW_DEP);
+    expect(mockQuery).toHaveBeenCalledWith("workspaces.get", NEW_DEP);
   });
 
   it("saves the deployment fields with a newly scoped API key", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce(deployment);
-    await run("switch", "new-dep");
+    await run("switch", NEW_DEP);
 
     const savedTarget = testTarget(mockSaveConfig.mock.calls[0][0]);
-    expect(savedTarget.deployment_id).toBe("new-dep");
+    expect(savedTarget.deployment_id).toBe(NEW_DEP);
     expect(savedTarget.deployment_name).toBe("New Deploy");
     expect(savedTarget.org_id).toBe("org2");
     expect(savedTarget.space_id).toBe("sp2");
     expect(savedTarget.api_key).toBe("fresh-key");
-    expect(mockCreateAPIKey).toHaveBeenCalledWith("new-dep", "dosu-cli");
+    expect(mockCreateAPIKey).toHaveBeenCalledWith(NEW_DEP, "dosu-cli");
   });
 
   it("outputs JSON with --json", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce(deployment);
-    await run("switch", "--json", "new-dep");
+    await run("switch", "--json", NEW_DEP);
 
     const output = JSON.parse(allOutput());
     expect(output.success).toBe(true);
-    expect(output.deployment_id).toBe("new-dep");
+    expect(output.deployment_id).toBe(NEW_DEP);
   });
 
   it("prints human-readable confirmation", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce(deployment);
-    await run("switch", "new-dep");
+    await run("switch", NEW_DEP);
     expect(allOutput()).toContain("New Deploy");
   });
 
   it("exits when deployment is not found", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce(null);
-    await expect(run("switch", "missing-dep")).rejects.toThrow("exit");
+    await expect(run("switch", OTHER_DEP)).rejects.toThrow("exit");
     expect(mockSaveConfig).not.toHaveBeenCalled();
   });
 
@@ -381,10 +383,107 @@ describe("deployments switch", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce({ ...deployment, provider_slug: "github" });
 
-    await expect(run("switch", "new-dep")).rejects.toThrow("exit");
+    await expect(run("switch", NEW_DEP)).rejects.toThrow("exit");
 
     expect(mockCreateAPIKey).not.toHaveBeenCalled();
     expect(mockSaveConfig).not.toHaveBeenCalled();
+  });
+
+  describe("with a truncated ID (as printed by 'deployments list')", () => {
+    function mockListAndGet(listed: unknown[]) {
+      mockQuery.mockImplementation((path: string, input: unknown) => {
+        if (path === "workspaces.listForOrg") return Promise.resolve(listed);
+        if (path === "workspaces.get") {
+          return Promise.resolve(
+            (listed as Array<{ deployment_id: string }>).find((d) => d.deployment_id === input) ??
+              null,
+          );
+        }
+        throw new Error(`unexpected query: ${path} ${String(input)}`);
+      });
+    }
+
+    it("resolves a unique prefix to the full UUID before calling the backend", async () => {
+      // Fresh config: earlier `switch` runs mutate the shared `validConfig` target in place.
+      mockLoadConfig.mockReturnValue(makeValidConfig());
+      mockListAndGet([
+        deployment,
+        { ...deployment, deployment_id: "0123abcd-0000-4000-8000-000000000000" },
+      ]);
+
+      await run("switch", "188b701a");
+
+      expect(mockQuery).toHaveBeenCalledWith("workspaces.listForOrg", "org1");
+      expect(mockQuery).toHaveBeenCalledWith("workspaces.get", NEW_DEP);
+      expect(mockQuery).not.toHaveBeenCalledWith("workspaces.get", "188b701a");
+      expect(testTarget(mockSaveConfig.mock.calls[0][0]).deployment_id).toBe(NEW_DEP);
+    });
+
+    it("matches prefixes case-insensitively", async () => {
+      mockLoadConfig.mockReturnValue(validConfig);
+      mockListAndGet([deployment]);
+
+      await run("switch", "188B701A");
+
+      expect(mockQuery).toHaveBeenCalledWith("workspaces.get", NEW_DEP);
+    });
+
+    it("only considers MCP deployments when resolving a prefix", async () => {
+      mockLoadConfig.mockReturnValue(validConfig);
+      mockListAndGet([
+        { ...deployment, deployment_id: OTHER_DEP, provider_slug: "github" },
+        deployment,
+      ]);
+
+      await run("switch", "188b701a");
+
+      expect(mockQuery).toHaveBeenCalledWith("workspaces.get", NEW_DEP);
+    });
+
+    it("exits without calling workspaces.get when nothing matches", async () => {
+      mockLoadConfig.mockReturnValue(validConfig);
+      mockListAndGet([deployment]);
+
+      await expect(run("switch", "deadbeef")).rejects.toThrow("exit");
+
+      expect(mockQuery).not.toHaveBeenCalledWith("workspaces.get", expect.anything());
+      expect(mockSaveConfig).not.toHaveBeenCalled();
+      const stderr = errorSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
+      expect(stderr).toContain("Deployment not found: deadbeef");
+      expect(stderr).toContain("dosu deployments list --json");
+    });
+
+    it("exits and lists candidates when the prefix is ambiguous", async () => {
+      mockLoadConfig.mockReturnValue(validConfig);
+      mockListAndGet([deployment, { ...deployment, deployment_id: OTHER_DEP, name: "Other" }]);
+
+      await expect(run("switch", "188b701a")).rejects.toThrow("exit");
+
+      expect(mockQuery).not.toHaveBeenCalledWith("workspaces.get", expect.anything());
+      expect(mockSaveConfig).not.toHaveBeenCalled();
+      const stderr = errorSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
+      expect(stderr).toContain("Ambiguous");
+      expect(stderr).toContain(NEW_DEP);
+      expect(stderr).toContain(OTHER_DEP);
+    });
+
+    it("resolves across every accessible org when no active org is selected", async () => {
+      mockLoadConfig.mockReturnValue(makeValidConfig({ org_id: undefined }));
+      mockQuery.mockImplementation((path: string, input: unknown) => {
+        if (path === "organization.getOrganizations") {
+          return Promise.resolve([{ org_id: "org1" }, { org_id: "org2" }]);
+        }
+        if (path === "workspaces.listForOrg") {
+          return Promise.resolve(input === "org2" ? [deployment] : []);
+        }
+        if (path === "workspaces.get") return Promise.resolve(deployment);
+        throw new Error(`unexpected query: ${path} ${String(input)}`);
+      });
+
+      await run("switch", "188b701a");
+
+      expect(mockQuery).toHaveBeenCalledWith("workspaces.get", NEW_DEP);
+    });
   });
 });
 
