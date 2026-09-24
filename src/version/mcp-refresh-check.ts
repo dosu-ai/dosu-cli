@@ -83,7 +83,7 @@ export function canRefreshMcp(cfg: Config): boolean {
 function displayNotice(names: string[]): void {
   console.error(
     `\n${pc.green(`✓ Dosu ${VERSION}: refreshed MCP config for ${names.join(", ")}`)}\n` +
-      `${pc.dim(`  Run ${pc.cyan('"dosu setup"')} to also update skills, hooks, and rules, then restart your AI agents.`)}\n`,
+      `${pc.dim(`  Run ${pc.cyan('"dosu setup"')} to also update hooks and rules, then restart your AI agents.`)}\n`,
   );
 }
 
