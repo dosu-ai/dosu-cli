@@ -27,7 +27,7 @@ type JsonConfig = Record<string, any>;
 
 /**
  * Which MCP tool surface a caller speaks. `v2` is the memory-era surface installed into coding
- * agents (search_memory, get_memory_evidence, read_knowledge). `v1` still serves write_knowledge,
+ * agents (search_memory, get_memory_evidence). `v1` still serves write_knowledge,
  * which the local learner calls until transcript shipping replaces it -- so the learner asks for
  * `v1` by name rather than inheriting whatever installs get.
  */
