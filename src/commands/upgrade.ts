@@ -312,8 +312,11 @@ function isInteractiveTerminal(): boolean {
   return process.stdin.isTTY === true && process.stdout.isTTY === true;
 }
 
-function setupAgentsWithNewBinary(channel: string, options: UpgradeOptions): void {
-  const interactive = options.interactive ?? isInteractiveTerminal();
+function setupAgentsWithNewBinary(
+  channel: string,
+  interactive: boolean,
+  options: UpgradeOptions,
+): void {
   const invocation = newBinaryInvocation(
     channel,
     postUpgradeArgs(interactive),
@@ -346,18 +349,23 @@ export async function completeUpgrade(
 ): Promise<number> {
   const status = runUpgrade(channel, options);
   if (status !== 0) return status;
-  console.log("Updating Dosu skills...");
-  try {
-    const result = await installSkill();
-    if (result.success) {
-      console.log(pc.green("✓ Skills updated."));
-    } else {
+  const interactive = options.interactive ?? isInteractiveTerminal();
+  // The interactive hand-off runs `setup`, which reinstalls skills itself; only the silent
+  // `mcp refresh` path needs the old process to refresh them.
+  if (!interactive) {
+    console.log("Updating Dosu skills...");
+    try {
+      const result = await installSkill();
+      if (result.success) {
+        console.log(pc.green("✓ Skills updated."));
+      } else {
+        console.error('Skills could not be refreshed. Run "dosu skill update" to retry.');
+      }
+    } catch {
       console.error('Skills could not be refreshed. Run "dosu skill update" to retry.');
     }
-  } catch {
-    console.error('Skills could not be refreshed. Run "dosu skill update" to retry.');
   }
-  setupAgentsWithNewBinary(channel, options);
+  setupAgentsWithNewBinary(channel, interactive, options);
   return 0;
 }
 

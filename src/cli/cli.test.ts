@@ -92,18 +92,22 @@ describe("CLI", () => {
     expect(mcpCmd?.commands.find((c) => c.name() === "list")).toBeDefined();
   });
 
-  it("skips the automatic MCP refresh for setup and the explicit mcp refresh command", () => {
+  it("skips the automatic MCP refresh for setup, mcp refresh, and the hook-driven knowledge sync", () => {
     const program = createProgram();
     const mcpCmd = program.commands.find((c) => c.name() === "mcp");
     const refresh = mcpCmd?.commands.find((c) => c.name() === "refresh");
     const list = mcpCmd?.commands.find((c) => c.name() === "list");
     const setup = program.commands.find((c) => c.name() === "setup");
-    if (!refresh || !list || !setup) throw new Error("commands missing");
+    const knowledgeCmd = program.commands.find((c) => c.name() === "knowledge");
+    const sync = knowledgeCmd?.commands.find((c) => c.name() === "sync");
+    if (!refresh || !list || !setup || !sync) throw new Error("commands missing");
     expect(shouldRunMcpRefreshCheck(setup)).toBe(false);
     expect(shouldRunMcpRefreshCheck(refresh)).toBe(false);
+    expect(shouldRunMcpRefreshCheck(sync)).toBe(false);
     expect(shouldRunMcpRefreshCheck(list)).toBe(true);
-    // A top-level command that happens to be named "refresh" would still get the check.
+    // Top-level commands that happen to share a subcommand's name still get the check.
     expect(shouldRunMcpRefreshCheck(new Command("refresh"))).toBe(true);
+    expect(shouldRunMcpRefreshCheck(new Command("sync"))).toBe(true);
   });
 
   it("has setup command with --deployment option", () => {
