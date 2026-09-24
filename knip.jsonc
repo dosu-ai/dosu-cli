@@ -9,6 +9,7 @@
     "scripts/build-npm.ts!",
     // Dev tools invoked directly (package script / manual regeneration).
     "scripts/reset-dev.ts!",
+    "scripts/embed-skills.ts!",
   ],
   "project": [
     "src/**/*.ts!",

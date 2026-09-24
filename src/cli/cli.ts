@@ -207,7 +207,9 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
         if (process.env.NODE_ENV !== "test" && !process.env.CI) {
           await checkForUpdates({ notify: !launchesTUI });
         }
-        checkForSkillUpdates();
+        // Skills ship inside the binary: after an upgrade, rewrite the ones a previous version
+        // installed so agents never read stale skill content.
+        checkForSkillUpdates({ notify: !launchesTUI });
         checkForReadyTasks();
         // First run on a new version: rewrite configured agents' MCP entries
         // with this version's provider code so format changes land without
