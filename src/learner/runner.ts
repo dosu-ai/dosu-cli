@@ -24,6 +24,11 @@ type LearnerOutcome =
   | "quota_exceeded"
   | "gateway_rejected"
   | "claude_code_missing"
+  | "max_turns"
+  | "run_failed"
+  | "no_result"
+  | "timed_out"
+  | "sdk_error"
   | "error";
 
 /** Coarse category of a gateway 400, for telemetry grouping; the quoted text stays local. */
@@ -428,7 +433,10 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
         }
         if (message.subtype !== "success" || message.is_error) {
           logger.debug("learner", `run ${runID} failed: ${text}`);
-          return finish("error", "Study run failed; see debug log for details.");
+          if (message.subtype === "error_max_turns") {
+            return finish("max_turns", "Study run hit its turn limit before finishing.");
+          }
+          return finish("run_failed", "Study run failed; see debug log for details.");
         }
         logger.debug(
           "learner",
@@ -438,7 +446,7 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
       }
     }
 
-    return finish("error", "Study run ended without a result.");
+    return finish("no_result", "Study run ended without a result.");
   } catch (error) {
     const text = error instanceof Error ? error.message : String(error);
     const gatewayError = classifyGatewayError(text) ?? classifyGatewayRejection(text);
@@ -446,12 +454,9 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
       return finish(gatewayError.outcome, gatewayError.message, gatewayError.reason);
     }
     logger.debug("learner", `run ${runID} threw: ${text}`);
-    return finish(
-      "error",
-      abort.signal.aborted
-        ? "Study run timed out and was aborted."
-        : "Study run failed; see debug log for details.",
-    );
+    return abort.signal.aborted
+      ? finish("timed_out", "Study run timed out and was aborted.")
+      : finish("sdk_error", "Study run failed; see debug log for details.");
   } finally {
     clearTimeout(timer);
     configDir.cleanup();

@@ -125,6 +125,11 @@ const LEARNER_OUTCOMES = new Set([
   "quota_exceeded",
   "gateway_rejected",
   "claude_code_missing",
+  "max_turns",
+  "run_failed",
+  "no_result",
+  "timed_out",
+  "sdk_error",
   "error",
 ]);
 // GatewayRejectionReason from src/learner/runner.ts
