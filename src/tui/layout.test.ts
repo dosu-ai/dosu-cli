@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   breadcrumb,
   contentWidth,
+  frameMaxLines,
   frameTopMargin,
   installCenteredLayout,
   layoutMargin,
@@ -69,6 +70,31 @@ describe("frameTopMargin", () => {
   it("clamps to a floor on tiny terminals and a ceiling on tall ones", () => {
     expect(frameTopMargin(10)).toBe(2);
     expect(frameTopMargin(200)).toBe(6);
+  });
+});
+
+describe("frameMaxLines", () => {
+  it("leaves room for the top margin, its extra blank line, and the trailing newline", () => {
+    expect(frameMaxLines(24)).toBe(24 - 3 - 2);
+    expect(frameMaxLines(16)).toBe(16 - 2 - 2);
+  });
+
+  it("never drops below one line", () => {
+    expect(frameMaxLines(4)).toBe(1);
+    expect(frameMaxLines(1)).toBe(1);
+  });
+
+  it("reads the terminal height by default, assuming 24 rows off a TTY", () => {
+    const original = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+    try {
+      Object.defineProperty(process.stdout, "rows", { value: 40, configurable: true });
+      expect(frameMaxLines()).toBe(frameMaxLines(40));
+      Object.defineProperty(process.stdout, "rows", { value: undefined, configurable: true });
+      expect(frameMaxLines()).toBe(frameMaxLines(24));
+    } finally {
+      if (original) Object.defineProperty(process.stdout, "rows", original);
+      else delete (process.stdout as { rows?: number }).rows;
+    }
   });
 });
 

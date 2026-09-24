@@ -20,6 +20,7 @@ import type { SyncState } from "../sync/watermark";
 import { ALT_SCREEN_ENTER, ALT_SCREEN_EXIT } from "./alt-screen";
 import {
   ANALYTICS_VIEW_LINES,
+  analyticsListHeight,
   analyticsTabRows,
   cycleAnalyticsTab,
   fetchPageStats,
@@ -318,6 +319,26 @@ describe("windowReport", () => {
   });
 });
 
+describe("analyticsListHeight", () => {
+  it("uses the full window on a tall terminal", () => {
+    expect(analyticsListHeight(50)).toBe(ANALYTICS_VIEW_LINES);
+    // 27 rows: margin 3 + chrome 10 leaves exactly the full window.
+    expect(analyticsListHeight(27)).toBe(ANALYTICS_VIEW_LINES);
+  });
+
+  it("shrinks the list, not the header, as the terminal gets shorter", () => {
+    // 24 rows: margin 3 + chrome 10 leaves 11; 20 rows: margin 2 leaves 8.
+    expect(analyticsListHeight(24)).toBe(11);
+    expect(analyticsListHeight(20)).toBe(8);
+    expect(analyticsListHeight(13)).toBe(1);
+  });
+
+  it("never drops below one report line", () => {
+    expect(analyticsListHeight(8)).toBe(1);
+    expect(analyticsListHeight(1)).toBe(1);
+  });
+});
+
 describe("renderAnalyticsFrame", () => {
   it("titles the screen and shows the tab strip with the key legend", () => {
     const frame = stripAnsi(renderAnalyticsFrame(reportState(), "overview", 0));
@@ -570,6 +591,46 @@ describe("runAnalyticsView", () => {
     expect(blankRun).not.toBeNull();
     const blanks = (blankRun?.[1] ?? "").split("\n").length - 1;
     expect(blanks).toBe(frameTopMargin(24) + 1);
+
+    input.emit("data", "q");
+    await view;
+  });
+
+  it("keeps the breadcrumb and tabs on a short terminal by shrinking the list", async () => {
+    const { input, output, written } = fakeIO();
+    const rows = 16; // margin 2 + chrome 10 leaves 4 report lines
+    Object.assign(output, { rows });
+    const state = overflowState();
+    const report = projectRows(state);
+    expect(report.length).toBeGreaterThan(analyticsListHeight(rows));
+
+    const view = runAnalyticsView({
+      input,
+      output,
+      getStatus: () => makeStatus(state),
+      loadPageStats: async () => null,
+      pollMs: 100,
+    });
+    input.emit("data", "\t"); // projects: the longest report
+
+    const frame = stripAnsi(written.at(-1) ?? "");
+    // Every line, including the top margin, fits without the terminal scrolling.
+    expect(frame.split("\n").length - 1).toBeLessThanOrEqual(rows - 1);
+    expect(frame).toContain("home \u203A analytics");
+    expect(frame).toContain("overview");
+    expect(frame).toContain(`\u2193 ${report.length - analyticsListHeight(rows)} more`);
+
+    // Scrolling still walks the shorter window to the end.
+    for (let i = 0; i < report.length; i += 1) input.emit("data", "j");
+    const bottom = stripAnsi(written.at(-1) ?? "");
+    expect(bottom).toContain(`\u2191 ${report.length - analyticsListHeight(rows)} earlier`);
+    expect(bottom).not.toContain("more");
+
+    // Growing the terminal widens the window; the scroll position is clamped back into range.
+    Object.assign(output, { rows: 40 });
+    output.emit("resize");
+    const tall = stripAnsi(written.at(-1) ?? "");
+    expect(tall).toContain(`\u2191 ${report.length - ANALYTICS_VIEW_LINES} earlier`);
 
     input.emit("data", "q");
     await view;

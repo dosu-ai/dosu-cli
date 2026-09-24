@@ -33,6 +33,13 @@ export function frameTopMargin(rows: number = process.stdout.rows ?? 24): number
   return Math.max(2, Math.min(6, Math.floor(rows / 8)));
 }
 
+/** How many frame lines fit under the top margin without the terminal scrolling. Full-screen
+ * views paint `frameTopMargin + 1` blank lines, the frame, and a trailing newline; the cursor
+ * must land on the last row, so the frame gets everything else. Never below 1. */
+export function frameMaxLines(rows: number = process.stdout.rows ?? 24): number {
+  return Math.max(1, rows - frameTopMargin(rows) - 2);
+}
+
 /** Breadcrumb header: dim trail, bold leaf, clipped so a long title can't push the trail off. */
 export function breadcrumb(segments: readonly string[], width: number = contentWidth()): string {
   const head = segments.slice(0, -1);

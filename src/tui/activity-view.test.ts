@@ -9,6 +9,7 @@ import {
   ACTIVITY_VIEW_FULL_LIST_ROWS,
   activityWidth,
   appendSyncActivity,
+  buildActivityFrame,
   confirmBox,
   cycleTab,
   foldRunProgress,
@@ -20,7 +21,6 @@ import {
   progressLine,
   reduceActivityViewKey,
   reduceSyncConfirmKey,
-  renderActivityFrame,
   runActivityView,
   tabBar,
   windowList,
@@ -41,6 +41,10 @@ const CTRL_C = String.fromCharCode(3);
 function stripAnsi(text: string): string {
   return text.replace(new RegExp(`${ESC}\\[[0-9;?]*[A-Za-z]`, "g"), "");
 }
+
+/** The frame as one string; most assertions only care what is on screen, not the list height. */
+const renderActivityFrame = (...args: Parameters<typeof buildActivityFrame>): string =>
+  buildActivityFrame(...args).lines.join("\n");
 
 function makeStatus(overrides: Partial<SyncStatus> = {}): SyncStatus {
   return {
@@ -1066,6 +1070,119 @@ describe("renderActivityFrame", () => {
     expect(frame).not.toContain("[sync] line 24");
     expect(frame).toContain("\u2191 10 earlier \u00B7 \u2193 5 newer");
   });
+
+  describe("sized to the terminal", () => {
+    const activity = Array.from({ length: 25 }, (_, i) => `[sync] line ${i}`);
+    const pane = { tab: "activity" as const, scroll: 0 };
+    // Everything around the list (the scroll counter line included) at the default height.
+    const chrome = () => {
+      const { lines, listHeight } = buildActivityFrame(makeStatus(), activity, 64, null, pane);
+      return lines.length - listHeight;
+    };
+
+    it("keeps the breadcrumb, tabs, and legend and shrinks the list to fit", () => {
+      const frameLines = chrome() + 3;
+      const { lines, listHeight } = buildActivityFrame(
+        makeStatus(),
+        activity,
+        64,
+        null,
+        pane,
+        [],
+        0,
+        [],
+        null,
+        {},
+        {},
+        frameLines,
+      );
+      const frame = stripAnsi(lines.join("\n"));
+      expect(listHeight).toBe(3);
+      expect(lines.length).toBeLessThanOrEqual(frameLines);
+      expect(frame).toContain("home \u203A activity");
+      expect(frame).toContain("activity");
+      expect(frame).toContain("esc back");
+      expect(frame).toContain("[sync] line 24");
+      expect(frame).toContain("\u2191 22 earlier");
+    });
+
+    it("never takes more than the default window on a tall terminal", () => {
+      const { listHeight } = buildActivityFrame(
+        makeStatus(),
+        activity,
+        64,
+        null,
+        pane,
+        [],
+        0,
+        [],
+        null,
+        {},
+        {},
+        200,
+      );
+      expect(listHeight).toBe(10);
+    });
+
+    it("keeps one row when the terminal cannot even fit the chrome", () => {
+      const { listHeight } = buildActivityFrame(
+        makeStatus(),
+        activity,
+        64,
+        null,
+        pane,
+        [],
+        0,
+        [],
+        null,
+        {},
+        {},
+        3,
+      );
+      expect(listHeight).toBe(1);
+    });
+
+    it("drops wrapped full rows until their lines fit the budget", () => {
+      const queued = Array.from({ length: 8 }, (_, i) => queuedSession(`session-${i}`));
+      const fullPane = { tab: "queued" as const, scroll: 0, fullRows: true };
+      // At this width each full row wraps to several lines.
+      const width = 40;
+      const unbounded = buildActivityFrame(makeStatus(), [], width, null, fullPane, queued);
+      const wrappedLines = unbounded.lines.length - chromeAt(width);
+      expect(wrappedLines).toBeGreaterThan(unbounded.listHeight);
+      // Room for the default row count if rows were one line each, but not once they wrap.
+      const frameLines = chromeAt(width) + ACTIVITY_VIEW_FULL_LIST_ROWS;
+      const bounded = buildActivityFrame(
+        makeStatus(),
+        [],
+        width,
+        null,
+        fullPane,
+        queued,
+        0,
+        [],
+        null,
+        {},
+        {},
+        frameLines,
+      );
+      expect(bounded.listHeight).toBeLessThan(ACTIVITY_VIEW_FULL_LIST_ROWS);
+      expect(bounded.listHeight).toBeGreaterThanOrEqual(1);
+      expect(bounded.lines.length).toBeLessThanOrEqual(frameLines);
+      expect(stripAnsi(bounded.lines.join("\n"))).toContain("session-7");
+
+      /** Header + footer + the reserved scroll-counter line at width `w`. */
+      function chromeAt(w: number): number {
+        const { lines } = buildActivityFrame(makeStatus(), [], w, null, {
+          tab: "queued",
+          scroll: 0,
+          fullRows: true,
+        });
+        // An empty list renders one placeholder line and no scroll counter: swap one for the other.
+        return lines.length;
+      }
+    });
+  });
 });
 
 // --- runActivityView: driven through fake streams and timers ---
@@ -1327,6 +1444,43 @@ describe("runActivityView", () => {
     const reclipped = stripAnsi(written.at(-1) ?? "");
     expect(reclipped).not.toContain(longId);
     expect(reclipped).toContain("f full rows");
+
+    input.emit("data", "q");
+    await view;
+  });
+
+  it("keeps the header and legend on a short terminal by shrinking the list", async () => {
+    const { input, output, written } = fakeIO();
+    const rows = 16; // margin 2 → 12 frame lines; 7 header + 2 footer + 1 reserve leave 2
+    Object.assign(output, { rows });
+    const seed = Array.from(
+      { length: 8 },
+      (_, i) => `[2026-09-02T23:01:0${i}.000Z] [INFO] [sync] activity ${i}`,
+    ).join("\n");
+
+    const view = runActivityView({
+      input,
+      output,
+      getStatus: makeStatus,
+      readLog: () => seed,
+      createFollower: () => ({ poll() {} }),
+      pollMs: 100,
+    });
+
+    const frame = stripAnsi(written.at(-1) ?? "");
+    // Every line, including the top margin, fits without the terminal scrolling.
+    expect(frame.split("\n").length - 1).toBeLessThanOrEqual(rows - 1);
+    expect(frame).toContain("home \u203A activity");
+    expect(frame).toContain("esc back");
+    expect(frame).toContain("activity 7");
+    expect(frame).toContain("\u2191 6 earlier");
+
+    // Scrolling walks the shorter window all the way back, then stops at the edge.
+    for (let i = 0; i < 6; i++) input.emit("data", `${ESC}[A`);
+    expect(stripAnsi(written.at(-1) ?? "")).toContain("activity 0");
+    const framesAtTop = written.length;
+    input.emit("data", `${ESC}[A`);
+    expect(written.length).toBe(framesAtTop);
 
     input.emit("data", "q");
     await view;
