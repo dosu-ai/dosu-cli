@@ -7,7 +7,7 @@ import { loadConfig } from "../config/config";
 import { formatTokenCount, getSyncStatus, type SyncStatus } from "../sync/status";
 import type { SyncState } from "../sync/watermark";
 import { enterAltScreen } from "./alt-screen";
-import { breadcrumb, contentWidth, frameTopMargin, tabStrip } from "./layout";
+import { breadcrumb, contentWidth, frameMaxLines, frameTopMargin, tabStrip } from "./layout";
 import { parseKeys } from "./menu";
 
 const ESC = String.fromCharCode(27);
@@ -25,9 +25,20 @@ const CLEAR_EOL = `${ESC}[K`;
 /** Relaxed poll: analytics only move when a study batch completes. */
 const ANALYTICS_VIEW_POLL_MS = 1000;
 
-/** How many report lines fit on screen at once (the scroll window). Sized so the pages tab's
- * two sections (header + 5 rows each, plus the separator) fit without scrolling. */
+/** The most report lines shown at once (the scroll window). Sized so the pages tab's two
+ * sections (header + 5 rows each, plus the separator) fit without scrolling. */
 export const ANALYTICS_VIEW_LINES = 14;
+
+/** Frame lines around the list: breadcrumb, blank, tab strip (2), blank, the scroll indicator
+ * (always reserved so the footer doesn't jump), blank, footer. */
+const ANALYTICS_VIEW_CHROME_LINES = 8;
+
+/** How many report lines fit under the header on a terminal `rows` tall. The breadcrumb and
+ * tabs must always stay on screen, so a short terminal shrinks the list, never the chrome. */
+export function analyticsListHeight(rows: number): number {
+  const room = frameMaxLines(rows) - ANALYTICS_VIEW_CHROME_LINES;
+  return Math.max(1, Math.min(ANALYTICS_VIEW_LINES, room));
+}
 
 export type AnalyticsViewTab = "overview" | "projects" | "pages";
 
@@ -199,9 +210,11 @@ export function renderAnalyticsFrame(
   /** True while the backend page-stats fetch hasn't settled yet. */
   pagesPending = false,
   width: number = contentWidth(),
+  /** Scroll-window height; `analyticsListHeight` derives it from the terminal. */
+  height: number = ANALYTICS_VIEW_LINES,
 ): string {
   const rows = analyticsTabRows(tab, state, pageStats);
-  const { visible, above, below } = windowReport(rows, scroll);
+  const { visible, above, below } = windowReport(rows, scroll, height);
   const empty =
     tab === "overview"
       ? "No analytics yet. They appear after the first study run."
@@ -269,10 +282,23 @@ export function runAnalyticsView(io: AnalyticsViewIO = {}): Promise<void> {
 
   // Same painting discipline as the Activity view; identical frames skip the write.
   let lastFrame: string | null = null;
+  const listHeight = () => analyticsListHeight(output.rows ?? 24);
+  const maxScroll = () =>
+    Math.max(0, analyticsTabRows(tab, status.state, pageStats).length - listHeight());
   const draw = () => {
     status = getStatus();
+    // A shorter terminal shrinks the window; keep the scroll position inside the new range.
+    scroll = Math.min(scroll, maxScroll());
     const width = Math.min(contentWidth(output.columns ?? 80), (output.columns ?? 80) - 1);
-    const frame = renderAnalyticsFrame(status.state, tab, scroll, pageStats, pagesPending, width);
+    const frame = renderAnalyticsFrame(
+      status.state,
+      tab,
+      scroll,
+      pageStats,
+      pagesPending,
+      width,
+      listHeight(),
+    );
     if (frame === lastFrame) return;
     lastFrame = frame;
     // Fixed top margin; +1 matches the home banner's leading blank line.
@@ -338,11 +364,7 @@ export function runAnalyticsView(io: AnalyticsViewIO = {}): Promise<void> {
             draw();
           }
         } else if (action === "down") {
-          const maxScroll = Math.max(
-            0,
-            analyticsTabRows(tab, status.state, pageStats).length - ANALYTICS_VIEW_LINES,
-          );
-          if (scroll < maxScroll) {
+          if (scroll < maxScroll()) {
             scroll += 1;
             draw();
           }

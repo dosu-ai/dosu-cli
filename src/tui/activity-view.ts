@@ -20,6 +20,7 @@ import {
   breadcrumb,
   centerBlock,
   contentWidth,
+  frameMaxLines,
   frameTopMargin,
   layoutMargin,
   tabStrip,
@@ -405,8 +406,10 @@ export function confirmBox(
   ];
 }
 
-/** Render the full sync-status block, centered within `width` columns. */
-export function renderActivityFrame(
+/** Render the full sync-status block, left-anchored within `width` columns. Returns the frame's
+ * lines plus the list height it settled on, so the key handler's scroll bound matches what is
+ * on screen. */
+export function buildActivityFrame(
   status: SyncStatus,
   activity: readonly string[],
   width: number,
@@ -423,7 +426,10 @@ export function renderActivityFrame(
   projectNames: Readonly<Record<string, string>> = {},
   /** Session display names by `harness/id` key; rows fall back to the session id. */
   sessionNames: Readonly<Record<string, string>> = {},
-): string {
+  /** Frame lines the terminal can show (`frameMaxLines`). The header and footer always fit;
+   * the list shrinks to whatever is left. Omitted: the fixed default window heights. */
+  frameLines?: number,
+): { lines: string[]; listHeight: number } {
   const studied = status.state.watermark
     ? `Studied sessions up to ${localTime(status.state.watermark)}`
     : "Nothing studied yet";
@@ -509,17 +515,9 @@ export function renderActivityFrame(
         : pane.tab === "open"
           ? "No open sessions. Live agent sessions sit here until they go quiet."
           : emptyStudied;
-  // Full-rows mode windows fewer rows (each may wrap to several lines) and hard-wraps them.
-  const height = fullRows ? ACTIVITY_VIEW_FULL_LIST_ROWS : ACTIVITY_VIEW_LIST_LINES;
-  const { visible, above, below } = windowList(source, pane.scroll, height);
-  const display = fullRows ? visible.flatMap((row) => wrapRow(row, width)) : visible;
-  const listRows = display.length > 0 ? display.map((row) => pc.dim(row)) : [pc.dim(empty)];
-
-  const scrollParts: string[] = [];
-  if (above > 0) scrollParts.push(`\u2191 ${above} earlier`);
-  if (below > 0) scrollParts.push(`\u2193 ${below} newer`);
-
-  const lines = [
+  // Header and footer are built first: on a short terminal they must always fit, so the list
+  // gets whatever room is left rather than pushing the breadcrumb and tabs off the top.
+  const header = [
     breadcrumb(["home", "activity"], width),
     "",
     statusLine(status),
@@ -531,9 +529,8 @@ export function renderActivityFrame(
     ...refusalLines,
     "",
     ...tabBar(pane.tab, queued.length, open.length, latestPass.size, width),
-    ...listRows,
-    // Clipped, not wrapped: both scroll counters together can outrun a narrow frame.
-    ...(scrollParts.length > 0 ? [pc.dim(clip(scrollParts.join(" \u00B7 "), width))] : []),
+  ];
+  const footer = [
     "",
     // Pressing s swaps the key legend for the centered confirmation dialog.
     ...(pane.confirm
@@ -557,9 +554,39 @@ export function renderActivityFrame(
           ).map((line) => pc.dim(line)),
         ]),
   ];
+
+  // Full-rows mode windows fewer rows (each may wrap to several lines) and hard-wraps them.
+  const defaultHeight = fullRows ? ACTIVITY_VIEW_FULL_LIST_ROWS : ACTIVITY_VIEW_LIST_LINES;
+  // One line stays reserved for the scroll counters so the footer doesn't jump as they appear.
+  const listBudget =
+    frameLines === undefined
+      ? defaultHeight
+      : Math.max(1, Math.min(defaultHeight, frameLines - header.length - footer.length - 1));
+  let height = listBudget;
+  let { visible, above, below } = windowList(source, pane.scroll, height);
+  let display = fullRows ? visible.flatMap((row) => wrapRow(row, width)) : visible;
+  // Wrapped rows can still outrun the budget; drop rows until the lines fit (or one row is left).
+  while (fullRows && frameLines !== undefined && display.length > listBudget && height > 1) {
+    height -= 1;
+    ({ visible, above, below } = windowList(source, pane.scroll, height));
+    display = visible.flatMap((row) => wrapRow(row, width));
+  }
+  const listRows = display.length > 0 ? display.map((row) => pc.dim(row)) : [pc.dim(empty)];
+
+  const scrollParts: string[] = [];
+  if (above > 0) scrollParts.push(`\u2191 ${above} earlier`);
+  if (below > 0) scrollParts.push(`\u2193 ${below} newer`);
+
   // Left-anchored: centering on each frame's longest line would shove the
   // block sideways on every poll.
-  return lines.join("\n");
+  const lines = [
+    ...header,
+    ...listRows,
+    // Clipped, not wrapped: both scroll counters together can outrun a narrow frame.
+    ...(scrollParts.length > 0 ? [pc.dim(clip(scrollParts.join(" \u00B7 "), width))] : []),
+    ...footer,
+  ];
+  return { lines, listHeight: height };
 }
 
 export interface ActivityViewIO {
@@ -716,8 +743,9 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
     if (tab === "open") return sessions.open.length;
     return (status.state.mined_sessions ?? []).length;
   };
-  // Matches the render: full-rows mode windows fewer (taller) rows.
-  const listHeight = () => (fullRows ? ACTIVITY_VIEW_FULL_LIST_ROWS : ACTIVITY_VIEW_LIST_LINES);
+  // What the last paint actually showed: the renderer sizes the list to the terminal (and, in
+  // full-rows mode, to how far the visible rows wrapped), so the scroll bound reads it back.
+  let listHeight = fullRows ? ACTIVITY_VIEW_FULL_LIST_ROWS : ACTIVITY_VIEW_LIST_LINES;
 
   // Identical frames skip the terminal write entirely (most ticks change nothing).
   let lastFrame: string | null = null;
@@ -745,7 +773,9 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
     if (confirmSync === "stop" && !status.running) confirmSync = null;
     const width = activityWidth(output.columns ?? 80);
     const rowNames = rowNamesFor(status, sessions);
-    const frame = renderActivityFrame(
+    // A shorter terminal shrinks the window; keep the scroll position inside the new range.
+    scroll = Math.min(scroll, Math.max(0, activeListLength() - listHeight));
+    const built = buildActivityFrame(
       status,
       activity,
       width,
@@ -757,7 +787,10 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
       runProgress,
       rowNames.projects,
       rowNames.titles,
+      frameMaxLines(output.rows ?? 24),
     );
+    listHeight = built.listHeight;
+    const frame = built.lines.join("\n");
     if (frame === lastFrame) return;
     lastFrame = frame;
     // Fixed top margin, not vertical centering (which jiggles as the frame's
@@ -874,7 +907,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
           scroll = 0;
           draw();
         } else if (action === "up") {
-          const maxScroll = Math.max(0, activeListLength() - listHeight());
+          const maxScroll = Math.max(0, activeListLength() - listHeight);
           if (scroll < maxScroll) {
             scroll += 1;
             draw();

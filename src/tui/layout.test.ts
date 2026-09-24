@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   breadcrumb,
   contentWidth,
+  frameMaxLines,
   frameTopMargin,
   installCenteredLayout,
   layoutMargin,
@@ -69,6 +70,18 @@ describe("frameTopMargin", () => {
   it("clamps to a floor on tiny terminals and a ceiling on tall ones", () => {
     expect(frameTopMargin(10)).toBe(2);
     expect(frameTopMargin(200)).toBe(6);
+  });
+});
+
+describe("frameMaxLines", () => {
+  it("leaves room for the top margin, its extra blank line, and the trailing newline", () => {
+    expect(frameMaxLines(24)).toBe(24 - 3 - 2);
+    expect(frameMaxLines(16)).toBe(16 - 2 - 2);
+  });
+
+  it("never drops below one line", () => {
+    expect(frameMaxLines(4)).toBe(1);
+    expect(frameMaxLines(1)).toBe(1);
   });
 });
 
