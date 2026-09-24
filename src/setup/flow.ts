@@ -493,14 +493,9 @@ export async function runInstallSkill(providers: readonly SetupProvider[]): Prom
   const agentLabel = providers.length === 1 ? "agent" : "agents";
   spinner.start(`Installing skill for ${providers.length} ${agentLabel}`);
   try {
-    // Keep the nested skills installer quiet so its progress screens don't interrupt setup's
-    // summary UI; the standalone `dosu skill install` command remains verbose.
-    const result = await installSkill(
-      providers.map((provider) => provider.id()),
-      { quiet: true },
-    );
+    const result = await installSkill(providers.map((provider) => provider.id()));
     if (result.success) {
-      logger.info("setup", `Skill installed${result.sha ? ` sha=${result.sha}` : ""}`);
+      logger.info("setup", `Skill installed${result.version ? ` v${result.version}` : ""}`);
       const items = providers.flatMap((provider) => {
         const target = skillInstallTargetForProvider(provider.id());
         if (!target) return [];

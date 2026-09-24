@@ -105,7 +105,7 @@ Or right-click the binary, select "Open", and click "Open" in the dialog.
 
 `dosu mcp add` takes `-g, --global` to install for all projects instead of project-local, and `--show-secret` to print the full manual config.
 
-`dosu upgrade` delegates to npm, pnpm, Yarn Classic, or Homebrew only after confirming which manager owns the current installation. Temporary package-runner invocations stay ephemeral, ambiguous or local installs are left unchanged, and standalone binaries receive the latest safe manual download path. After a successful update it re-invokes the new version to run `dosu setup`, so every configured tool gets the current MCP entry, hooks, status line, rules, and skill; without a TTY it runs the non-interactive `dosu mcp refresh` instead. Upgrades done outside `dosu upgrade` (npm, brew, `npx @dosu/cli@latest`) get a safety net: when the new version changed the shape of the MCP entry, the first command on it silently rewrites configured tools' MCP entries and prompts you to run `dosu setup` for the rest.
+`dosu upgrade` delegates to npm, pnpm, Yarn Classic, or Homebrew only after confirming which manager owns the current installation. Temporary package-runner invocations stay ephemeral, ambiguous or local installs are left unchanged, and standalone binaries receive the latest safe manual download path. After a successful update it re-invokes the new version to run `dosu setup`, so every configured tool gets the current MCP entry, hooks, status line, rules, and skill; without a TTY it runs the non-interactive `dosu mcp refresh` instead. Upgrades done outside `dosu upgrade` (npm, brew, `npx @dosu/cli@latest`) get a safety net: when the new version changed the shape of the MCP entry, the first command on it silently rewrites configured tools' MCP entries and prompts you to run `dosu setup` for the rest; the bundled agent skills are always re-applied on the first command after any version change.
 
 ### Platform commands
 
@@ -125,9 +125,15 @@ Once authenticated against a deployment, you can drive the Dosu platform without
 | `dosu org` | Show organization information |
 | `dosu deployments` | List / show / switch Dosu MCP deployments |
 | `dosu analytics` | View usage statistics |
-| `dosu skill` | Install / update / remove the Dosu agent skill |
+| `dosu skill` | Install / update / remove the bundled Dosu agent skills |
 
 Run `dosu <command> --help` for subcommands and flags.
+
+### Agent skills
+
+The `dosu` skill — which teaches coding agents how to operate Dosu through this CLI — lives in [`skills/dosu`](skills/dosu) and is embedded in the CLI at build time, so the copy an agent reads always matches the installed CLI version. `dosu setup` (and `dosu skill install`) writes it to `~/.agents/skills/dosu`, the universal location read by Cursor, Codex, Gemini CLI, Zed, Cline, Copilot, OpenCode, and Antigravity, and symlinks Claude Code's `~/.claude/skills/dosu` and Windsurf's `~/.codeium/windsurf/skills/dosu` at that copy. After a CLI upgrade, the first command re-applies the skill automatically; `dosu skill update` does the same on demand. The former standalone [`dosu-ai/dosu-skill`](https://github.com/dosu-ai/dosu-skill) repository is deprecated in favour of this bundle.
+
+To change a skill, edit `skills/<name>/…` and run `bun run embed:skills` to regenerate `src/generated/skills.ts` (a test fails if the two drift).
 
 ### Supported AI tools
 

@@ -114,10 +114,10 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
     return 1;
   }
 
-  // 6. Install the Dosu skill quietly to preserve the one-JSON-line-per-step stdout contract.
+  // 6. Install the bundled Dosu skills (pure filesystem writes; nothing reaches stdout).
   if (skillAgentIDsForProviders([provider.id()]).length > 0) {
     try {
-      const skill = await installSkill([provider.id()], { quiet: true });
+      const skill = await installSkill([provider.id()]);
       if (!skill.success) {
         throw new Error("the skills installer failed");
       }
@@ -125,7 +125,8 @@ export async function runAgentSetup(opts: AgentSetupOptions): Promise<number> {
         step: "skill_install",
         tool: provider.id(),
         tool_name: provider.name(),
-        source: "dosu-ai/dosu-skill",
+        source: "@dosu/cli",
+        version: skill.version,
       });
     } catch (err: unknown) {
       emitError({

@@ -192,7 +192,7 @@ describe("runAgentSetup", () => {
     mockSkillAgentIDsForProviders.mockImplementation((agents: string[]) =>
       agents.includes("claude") ? ["claude-code"] : [],
     );
-    mockInstallSkill.mockResolvedValue({ success: true, sha: "skill-sha" });
+    mockInstallSkill.mockResolvedValue({ success: true, version: "1.2.3" });
     mockInGitWorkTree.mockReturnValue(false);
     mockUpsertDosuAgentsSection.mockReturnValue({
       action: "created",
@@ -298,7 +298,7 @@ describe("runAgentSetup", () => {
       agent_next_steps: expect.stringMatching(/wasted turns/),
     });
     expect(mockInstallRuleForAgent).toHaveBeenCalledWith("claude", "canonical rule\n");
-    expect(mockInstallSkill).toHaveBeenCalledWith(["claude"], { quiet: true });
+    expect(mockInstallSkill).toHaveBeenCalledWith(["claude"]);
     expect(mockUpsertDosuAgentsSection).toHaveBeenCalledWith(process.cwd(), "canonical rule\n");
   });
 
