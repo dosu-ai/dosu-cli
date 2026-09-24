@@ -1,3 +1,10 @@
+# [0.57.0](https://github.com/dosu-ai/dosu-cli/compare/v0.56.1...v0.57.0) (2026-09-24)
+
+
+### Features
+
+* **upgrade:** re-run setup after upgrade and add mcp refresh safety net ([#236](https://github.com/dosu-ai/dosu-cli/issues/236)) ([c3516a0](https://github.com/dosu-ai/dosu-cli/commit/c3516a063a175046731a03bf167c4719e0653db1))
+
 ## [0.56.1](https://github.com/dosu-ai/dosu-cli/compare/v0.56.0...v0.56.1) (2026-09-23)
 
 

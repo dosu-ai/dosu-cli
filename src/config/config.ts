@@ -1,6 +1,17 @@
 /** Config management: load/save JSON config from the XDG config directory. */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { migrateLegacyConfig } from "./config-v1-migration";
@@ -107,8 +118,40 @@ export function loadConfig(): Config {
   return parsed;
 }
 
+const MAX_BACKGROUND_CONFIG_BYTES = 64 * 1_024;
+
+/** Read the config only when it is a bounded regular file, and never migrate or write it.
+ * For background work (telemetry context, pre-action checks) that must not block a
+ * config-free command on a FIFO or a giant file. Returns `undefined` when unreadable. */
+export function loadConfigNonBlocking(): Config | undefined {
+  let fd: number | undefined;
+  try {
+    // O_NONBLOCK is undefined on Windows (where a pipe path cannot block an open anyway);
+    // `x | undefined` is `x`, so no branch is needed.
+    fd = openSync(getConfigPath(), constants.O_RDONLY | constants.O_NONBLOCK);
+    const file = fstatSync(fd);
+    if (!file.isFile() || file.size > MAX_BACKGROUND_CONFIG_BYTES) return undefined;
+
+    // Read at most the bound: a file that grew past it between fstat and read is truncated and
+    // fails to parse, which lands in the same `undefined` as any other unreadable config.
+    const content = Buffer.alloc(MAX_BACKGROUND_CONFIG_BYTES);
+    const bytesRead = readSync(fd, content, 0, content.byteLength, 0);
+    return parseConfig(JSON.parse(content.subarray(0, bytesRead).toString("utf8")) as unknown);
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Background config cleanup must not affect the command.
+      }
+    }
+  }
+}
+
 /** Parse config content without performing filesystem writes. */
-export function parseConfig(raw: unknown): Config {
+function parseConfig(raw: unknown): Config {
   if (isConfigV2(raw)) return normalizeV2(raw);
   if (isRecord(raw) && "schema_version" in raw) return emptyConfig();
   return migrateLegacyConfig(raw);

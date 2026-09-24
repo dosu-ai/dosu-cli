@@ -1,14 +1,6 @@
 /** CLI command definitions using Commander. */
 
-import {
-  closeSync,
-  constants,
-  fstatSync,
-  openSync,
-  readFileSync,
-  readSync,
-  unlinkSync,
-} from "node:fs";
+import { readFileSync, unlinkSync } from "node:fs";
 import { Command } from "commander";
 import { Client } from "../client/client";
 import { agentsCommand } from "../commands/agents";
@@ -37,8 +29,8 @@ import {
   isAuthenticated,
   isTokenExpired,
   loadConfig,
+  loadConfigNonBlocking,
   MODE_OSS,
-  parseConfig,
   replaceLoginSession,
   saveConfig,
 } from "../config/config";
@@ -46,6 +38,7 @@ import { getAccessTokenEmail, getAccessTokenUserID } from "../config/identity";
 import { createLogFollower } from "../debug/follow";
 import { logger } from "../debug/logger";
 import { allProviders, getProvider, type Provider } from "../mcp/providers";
+import { configuredProviders, refreshConfiguredProviders } from "../mcp/refresh";
 import { browserFallbackHint } from "../setup/styles";
 import {
   getOrCreateInstallID,
@@ -57,17 +50,29 @@ import {
   type CommandTelemetryContext,
   createCommandTelemetry,
 } from "../telemetry/telemetry";
+import {
+  canRefreshMcp,
+  checkForMcpRefresh,
+  writeMcpRefreshCache,
+} from "../version/mcp-refresh-check";
 import { checkForReadyTasks } from "../version/pending-tasks-check";
 import { checkForSkillUpdates } from "../version/skill-update-check";
 import { checkForUpdates } from "../version/update-check";
-import { getVersionString } from "../version/version";
+import { getVersionString, VERSION } from "../version/version";
 
 export function shouldRunBackgroundChecks(actionName: string): boolean {
   return actionName !== "upgrade";
 }
 
+/** `dosu setup` and `dosu mcp refresh` rewrite the agents' MCP entries themselves (and record
+ * the version); running the automatic post-upgrade refresh first would do it twice and print
+ * two reports. */
+export function shouldRunMcpRefreshCheck(actionCommand: Command): boolean {
+  if (actionCommand.name() === "setup") return false;
+  return !(actionCommand.name() === "refresh" && actionCommand.parent?.name() === "mcp");
+}
+
 const TELEMETRY_FLUSH_TIMEOUT_MS = 750;
-const MAX_TELEMETRY_CONFIG_BYTES = 64 * 1_024;
 
 class CliUsageError extends Error {
   readonly exitCode = 1;
@@ -95,7 +100,8 @@ function shouldTrackCommand(command: string): boolean {
 
 function commandTelemetryContext(): CommandTelemetryContext {
   try {
-    const cfg = loadConfigForTelemetry();
+    // Bounded, non-blocking read so telemetry never stalls a config-free command on a FIFO.
+    const cfg = loadConfigNonBlocking();
     if (!cfg) return { mode: "cloud", isAuthenticated: false };
     const authenticated = isAuthenticated(cfg);
     const accessToken = authenticated ? cfg.active_account.session.access_token : "";
@@ -112,32 +118,6 @@ function commandTelemetryContext(): CommandTelemetryContext {
     };
   } catch {
     return { mode: "cloud", isAuthenticated: false };
-  }
-}
-
-/** Read only a bounded regular file so telemetry can never block a config-free command on a FIFO. */
-function loadConfigForTelemetry(): Config | undefined {
-  let fd: number | undefined;
-  try {
-    const nonblocking = typeof constants.O_NONBLOCK === "number" ? constants.O_NONBLOCK : 0;
-    fd = openSync(getConfigPath(), constants.O_RDONLY | nonblocking);
-    const file = fstatSync(fd);
-    if (!file.isFile() || file.size > MAX_TELEMETRY_CONFIG_BYTES) return undefined;
-
-    const content = Buffer.alloc(MAX_TELEMETRY_CONFIG_BYTES + 1);
-    const bytesRead = readSync(fd, content, 0, content.byteLength, 0);
-    if (bytesRead > MAX_TELEMETRY_CONFIG_BYTES) return undefined;
-    return parseConfig(JSON.parse(content.subarray(0, bytesRead).toString("utf8")) as unknown);
-  } catch {
-    return undefined;
-  } finally {
-    if (fd !== undefined) {
-      try {
-        closeSync(fd);
-      } catch {
-        // Telemetry config cleanup must not affect the command.
-      }
-    }
   }
 }
 
@@ -216,14 +196,20 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
       const opts = thisCommand.optsWithGlobals();
       logger.init({ debug: opts.debug });
       if (shouldRunBackgroundChecks(actionCommand.name())) {
+        // Bare `dosu` launches the TUI, whose welcome banner shows the update
+        // itself; the boxed stderr notice would tear across the TUI's redraws.
+        const launchesTUI = actionCommand.parent === null;
         if (process.env.NODE_ENV !== "test" && !process.env.CI) {
-          // Bare `dosu` launches the TUI, whose welcome banner shows the update
-          // itself; the boxed stderr notice would tear across the TUI's redraws.
-          const launchesTUI = actionCommand.parent === null;
           await checkForUpdates({ notify: !launchesTUI });
         }
         checkForSkillUpdates();
         checkForReadyTasks();
+        // First run on a new version: rewrite configured agents' MCP entries
+        // with this version's provider code so format changes land without
+        // a manual `dosu setup`.
+        if (shouldRunMcpRefreshCheck(actionCommand)) {
+          checkForMcpRefresh({ notify: !launchesTUI });
+        }
       }
       const command = commandTelemetryName(actionCommand);
       if (options.telemetry && shouldTrackCommand(command)) {
@@ -524,6 +510,32 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
       } else {
         console.log(`\nStart ${provider.name()} in this project directory to use the Dosu MCP.`);
       }
+    });
+
+  mcp
+    .command("refresh")
+    .description("Rewrite the Dosu MCP entry in every configured AI tool from the current setup")
+    .action(() => {
+      const cfg = loadConfig();
+      if (!canRefreshMcp(cfg)) {
+        throw new CliUsageError("Dosu is not set up yet. Run 'dosu setup' first");
+      }
+      const configured = configuredProviders();
+      if (configured.length === 0) {
+        console.log("No AI tools with Dosu configured. Run 'dosu setup' to add Dosu to a tool.");
+        return;
+      }
+      console.log("Refreshing Dosu MCP config for configured AI tools...\n");
+      const result = refreshConfiguredProviders(cfg);
+      writeMcpRefreshCache({ version: VERSION });
+      for (const provider of result.updated) {
+        console.log(`  ✓ ${provider.name()}`);
+      }
+      for (const { provider, error } of result.failed) {
+        console.log(`  ✗ ${provider.name()}: ${error.message}`);
+      }
+      console.log("\nRestart your AI agents so they pick up the change.");
+      if (result.failed.length > 0) process.exitCode = 1;
     });
 
   mcp
