@@ -33,7 +33,7 @@ bun run check                   # Biome lint + format check (used in CI)
 
 Running `dosu` with no args launches the interactive TUI (`src/tui/tui.ts`). Two broad families of subcommands are registered in `src/cli/cli.ts`:
 
-- **Local / MCP management** — `login`, `logout`, `status`, `setup`, `mcp add|list`, `logs`, `telemetry`.
+- **Local / MCP management** — `login`, `logout`, `status`, `setup`, `mcp add|refresh|list`, `logs`, `telemetry`.
 - **Dosu platform** (require an authenticated deployment) — `ask`, `knowledge`, `docs`, `threads`, `review`, `sources`, `integrations`, `topics`, `members`, `org`, `deployments`, `analytics`, `skill`. Each lives in `src/commands/<name>.ts` and talks to the backend via `src/client/`.
 
 Key modules:
@@ -47,7 +47,7 @@ Key modules:
 - **`src/agent/`** — Non-interactive setup for coding agents (`setup --agent --tool <id>`) and the ticket-based login commands (`login --request`/`--check`). Emits machine-readable JSON via `output.ts` for agent consumption.
 - **`src/telemetry/`** — Default-on analytics and error diagnostics with one persisted global switch, safe payload builders, and fail-open transport. User controls live under `dosu telemetry status|enable|disable|reset`.
 - **`src/tui/`** — Main menu TUI when running `dosu` with no subcommand.
-- **`src/version/`** — Version string from the build-time `DOSU_VERSION` env var, plus background update checks (`update-check.ts`, `skill-update-check.ts`).
+- **`src/version/`** — Version string from the build-time `DOSU_VERSION` env var, plus background update checks (`update-check.ts`, `skill-update-check.ts`). `mcp-refresh-check.ts` is the post-upgrade safety net: on the first command after an upgrade that crossed a release listed in `MCP_FORMAT_CHANGES` (releases that changed the shape of the MCP entry, currently `0.53.0`), it rewrites the Dosu MCP entry in every installed, already-configured tool with the new provider code (via `src/mcp/refresh.ts`), records the version in `mcp-refresh.json`, and nudges the user to run `dosu setup` for hooks/skills/rules. Bumps that did not cross a format change only advance the marker. **Add the new version to `MCP_FORMAT_CHANGES` whenever a provider's `install` output changes shape.** `dosu setup` and `dosu mcp refresh` record the same marker and skip the automatic check. `dosu upgrade` re-invokes the *new* binary (old process cannot write the new format) to run `setup` on a TTY, or `mcp refresh` otherwise.
 
 ## CLI Contract Discipline
 

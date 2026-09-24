@@ -19,6 +19,8 @@ import { installSkill } from "./skill";
 import {
   buildPackageManagerInvocation,
   completeUpgrade,
+  newBinaryInvocation,
+  postUpgradeArgs,
   runUpgrade,
   upgradeCommand,
 } from "./upgrade";
@@ -262,6 +264,38 @@ describe("runUpgrade", () => {
     expect(output()).toContain("yarn global add @dosu/cli@latest");
   });
 
+  it("skips the package install for a source run in dev mode so the hand-off can be tested", async () => {
+    const sourceEntrypoint = join(tempDir, "dosu-cli", "src", "index.ts");
+    mkdirSync(dirname(sourceEntrypoint), { recursive: true });
+    writeFileSync(sourceEntrypoint, "");
+    mockCommands({
+      "npm root -g": { status: 0, stdout: `${join(tempDir, "npm", "node_modules")}\n` },
+      [PNPM_LOCATE_COMMAND]: { status: 0, stdout: "" },
+      "yarn --silent global dir": { status: 1, stdout: "" },
+      [`${process.execPath} ${sourceEntrypoint} setup`]: { status: 0 },
+    });
+
+    const status = await completeUpgrade("npm", {
+      entrypoint: sourceEntrypoint,
+      platform: "darwin",
+      env: { DOSU_DEV: "true" },
+      interactive: true,
+    });
+
+    expect(status).toBe(0);
+    expect(output()).toContain("skipping the package install");
+    expect(mockSpawnSync).not.toHaveBeenCalledWith(
+      "npm",
+      ["install", "-g", "@dosu/cli@latest"],
+      expect.anything(),
+    );
+    expect(mockSpawnSync).toHaveBeenLastCalledWith(
+      process.execPath,
+      [sourceEntrypoint, "setup"],
+      expect.objectContaining({ shell: false, stdio: "inherit" }),
+    );
+  });
+
   it("fails closed when more than one manager claims the same installation", () => {
     const npmRoot = join(tempDir, "shared", "node_modules");
     const packageRoot = npmPackageRoot(npmRoot);
@@ -476,6 +510,134 @@ describe("completeUpgrade", () => {
     expect(status).toBe(0);
     expect(mockInstallSkill).toHaveBeenCalledOnce();
     expect(errors()).toContain("dosu skill update");
+  });
+
+  it("re-runs setup with the upgraded Homebrew binary when a person is at the terminal", async () => {
+    mockCommands({
+      "brew upgrade dosu-ai/dosu/dosu": { status: 0 },
+      "dosu setup": { status: 0 },
+    });
+
+    await completeUpgrade("homebrew", { platform: "darwin", interactive: true });
+
+    expect(mockSpawnSync).toHaveBeenLastCalledWith(
+      "dosu",
+      ["setup"],
+      expect.objectContaining({ shell: false, stdio: "inherit" }),
+    );
+    expect(output()).toContain("Running setup with the new version");
+    expect(errors()).not.toContain("dosu setup");
+  });
+
+  it("falls back to the silent MCP refresh without a TTY", async () => {
+    mockCommands({
+      "brew upgrade dosu-ai/dosu/dosu": { status: 0 },
+      "dosu mcp refresh": { status: 0 },
+    });
+
+    await completeUpgrade("homebrew", { platform: "darwin", interactive: false });
+
+    expect(mockSpawnSync).toHaveBeenLastCalledWith(
+      "dosu",
+      ["mcp", "refresh"],
+      expect.objectContaining({ shell: false, stdio: "inherit" }),
+    );
+    expect(output()).toContain("Refreshing agent MCP configs");
+  });
+
+  it("detects interactivity from stdin/stdout when not told", async () => {
+    const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+    const stdoutTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+    try {
+      mockCommands({
+        "brew upgrade dosu-ai/dosu/dosu": { status: 0 },
+        "dosu setup": { status: 0 },
+      });
+
+      await completeUpgrade("homebrew", { platform: "darwin" });
+
+      expect(mockSpawnSync).toHaveBeenLastCalledWith("dosu", ["setup"], expect.anything());
+    } finally {
+      restoreDescriptor(process.stdin, "isTTY", stdinTTY);
+      restoreDescriptor(process.stdout, "isTTY", stdoutTTY);
+    }
+  });
+
+  it("re-runs the replaced npm entrypoint under the current runtime", async () => {
+    const npmRoot = join(tempDir, "npm", "node_modules");
+    const entrypoint = makeEntrypoint(npmPackageRoot(npmRoot));
+    mockRealpathSync.mockImplementation((path) => String(path));
+    mockCommands({
+      "npm root -g": { status: 0, stdout: `${npmRoot}\n` },
+      [PNPM_LOCATE_COMMAND]: { status: 1, stdout: "" },
+      "yarn --silent global dir": { status: 1, stdout: "" },
+      "npm install -g @dosu/cli@latest": { status: 0 },
+      [`${process.execPath} ${entrypoint} setup`]: { status: 0 },
+    });
+
+    const status = await completeUpgrade("npm", {
+      entrypoint,
+      platform: "darwin",
+      env: {},
+      interactive: true,
+    });
+
+    expect(status).toBe(0);
+    expect(mockSpawnSync).toHaveBeenLastCalledWith(
+      process.execPath,
+      [entrypoint, "setup"],
+      expect.objectContaining({ cwd: homedir(), shell: false, stdio: "inherit" }),
+    );
+  });
+
+  it("still exits 0 but points at dosu setup when the hand-off fails", async () => {
+    mockCommands({
+      "brew upgrade dosu-ai/dosu/dosu": { status: 0 },
+      "dosu setup": { status: 1 },
+    });
+
+    const status = await completeUpgrade("homebrew", { platform: "darwin", interactive: true });
+
+    expect(status).toBe(0);
+    expect(errors()).toContain('Run "dosu setup"');
+  });
+});
+
+function restoreDescriptor(
+  target: object,
+  key: string,
+  descriptor: PropertyDescriptor | undefined,
+): void {
+  if (descriptor) Object.defineProperty(target, key, descriptor);
+  else delete (target as Record<string, unknown>)[key];
+}
+
+describe("postUpgradeArgs", () => {
+  it("runs the full setup interactively and the MCP refresh otherwise", () => {
+    expect(postUpgradeArgs(true)).toEqual(["setup"]);
+    expect(postUpgradeArgs(false)).toEqual(["mcp", "refresh"]);
+  });
+});
+
+describe("newBinaryInvocation", () => {
+  it("re-invokes the entrypoint under the current runtime for npm installs", () => {
+    expect(
+      newBinaryInvocation("npm", ["setup"], "/g/node_modules/@dosu/cli/bin/dosu.js", "/bin/node"),
+    ).toEqual({
+      command: "/bin/node",
+      args: ["/g/node_modules/@dosu/cli/bin/dosu.js", "setup"],
+    });
+  });
+
+  it("uses the PATH binary for Homebrew and nothing for other channels", () => {
+    expect(newBinaryInvocation("homebrew", ["setup"])).toEqual({
+      command: "dosu",
+      args: ["setup"],
+    });
+    expect(newBinaryInvocation("npm", ["setup"], "")).toBeNull();
+    expect(newBinaryInvocation("binary", ["setup"])).toBeNull();
   });
 });
 

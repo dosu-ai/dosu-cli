@@ -205,6 +205,8 @@ interface UpgradeOptions {
   comSpec?: string;
   env?: Readonly<Record<string, string | undefined>>;
   cwd?: string;
+  /** Whether a person can answer prompts; defaults to stdin+stdout being TTYs. */
+  interactive?: boolean;
 }
 
 function printNonGlobalPackageGuidance(): void {
@@ -238,6 +240,14 @@ export function runUpgrade(channel = INSTALL_CHANNEL, options: UpgradeOptions = 
       cwd,
     );
     if (!manager) {
+      if (env.DOSU_DEV === "true") {
+        // `bun run dev upgrade`: nothing to install, but let the post-upgrade hand-off run
+        // against this working copy so the whole flow can be exercised from source.
+        console.log(
+          "DOSU_DEV=true and this copy is not a global package: skipping the package install.",
+        );
+        return 0;
+      }
       printNonGlobalPackageGuidance();
       return 1;
     }
@@ -269,6 +279,67 @@ export function runUpgrade(channel = INSTALL_CHANNEL, options: UpgradeOptions = 
   return 0;
 }
 
+const SETUP_FALLBACK = 'Run "dosu setup" to finish updating your AI agents.';
+
+/** What the upgraded binary should run: the full setup wizard when a person is at the terminal
+ * (it re-applies MCP, hooks, status line, rules, and skill), or the silent MCP refresh when
+ * there is no TTY to drive prompts. */
+export function postUpgradeArgs(interactive: boolean): string[] {
+  return interactive ? ["setup"] : ["mcp", "refresh"];
+}
+
+/** How to re-invoke Dosu after the package manager swapped the files underneath us. Only the
+ * freshly installed version knows the new config shapes, so the rewrite must happen in a new
+ * process, not in this (old) one. */
+export function newBinaryInvocation(
+  channel: string,
+  args: string[],
+  entrypoint: string | undefined = process.argv[1],
+  execPath: string = process.execPath,
+): Invocation | null {
+  if (channel === "npm") {
+    // npm/pnpm/yarn replace the package in place, so the entrypoint path now holds the new code.
+    return entrypoint ? { command: execPath, args: [entrypoint, ...args] } : null;
+  }
+  if (channel === "homebrew") {
+    // The running binary is the old Cellar version; `dosu` on PATH is the upgraded link.
+    return { command: "dosu", args };
+  }
+  return null;
+}
+
+function isInteractiveTerminal(): boolean {
+  return process.stdin.isTTY === true && process.stdout.isTTY === true;
+}
+
+function setupAgentsWithNewBinary(channel: string, options: UpgradeOptions): void {
+  const interactive = options.interactive ?? isInteractiveTerminal();
+  const invocation = newBinaryInvocation(
+    channel,
+    postUpgradeArgs(interactive),
+    options.entrypoint ?? process.argv[1],
+  );
+  /* v8 ignore start -- runUpgrade only succeeds for channels/entrypoints that resolve here */
+  if (!invocation) {
+    console.error(SETUP_FALLBACK);
+    return;
+  }
+  /* v8 ignore stop */
+  console.log(
+    interactive
+      ? "\nRunning setup with the new version to update your AI agents...\n"
+      : "\nRefreshing agent MCP configs with the new version...",
+  );
+  const result = spawnSync(invocation.command, invocation.args, {
+    cwd: options.cwd ?? homedir(),
+    shell: false,
+    stdio: "inherit",
+  });
+  if (result.error || result.status !== 0) {
+    console.error(SETUP_FALLBACK);
+  }
+}
+
 export async function completeUpgrade(
   channel = INSTALL_CHANNEL,
   options: UpgradeOptions = {},
@@ -286,12 +357,13 @@ export async function completeUpgrade(
   } catch {
     console.error('Skills could not be refreshed. Run "dosu skill update" to retry.');
   }
+  setupAgentsWithNewBinary(channel, options);
   return 0;
 }
 
 export function upgradeCommand(): Command {
   return new Command("upgrade")
-    .description("Update Dosu to the latest version and refresh agent skills")
+    .description("Update Dosu to the latest version, then re-run setup to update your AI agents")
     .action(async () => {
       const status = await completeUpgrade();
       if (status !== 0) process.exitCode = status;

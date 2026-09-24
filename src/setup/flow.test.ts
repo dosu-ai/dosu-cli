@@ -228,6 +228,8 @@ import { OpenCodeProvider } from "../mcp/providers/opencode";
 import { consumeCommandFacets } from "../telemetry/telemetry";
 import { runActivityView } from "../tui/activity-view";
 import * as p from "../tui/prompts";
+import { readMcpRefreshCache } from "../version/mcp-refresh-check";
+import { VERSION } from "../version/version";
 import {
   type ConfigResult,
   cliAuthFailureReason,
@@ -2095,6 +2097,16 @@ describe("runSetup integration", () => {
 
     const saved = loadConfig();
     expect(saved.mode).toBe("oss");
+  });
+
+  it("records the CLI version so the post-upgrade MCP refresh does not repeat the work", async () => {
+    saveConfig(makeCfg());
+    setupAuthenticatedClient();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(readMcpRefreshCache()).toEqual({ version: VERSION });
   });
 
   it("removes provider config when user deselects a previously configured tool", async () => {
