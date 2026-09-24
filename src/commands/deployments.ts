@@ -6,6 +6,7 @@ import { Client } from "../client/client";
 import { createTypedClient, type TypedClient } from "../client/trpc";
 import { saveConfig, updateTarget } from "../config/config";
 import type { CliDeployment } from "../generated/dosu-api-types";
+import { isUuid } from "./arguments";
 import { requireLoginConfig } from "./auth";
 import { formatDate, printInfo, printResult, printTable } from "./output";
 
@@ -26,6 +27,51 @@ async function listAccessibleDeployments(
     orgs.map((org) => client.workspaces.listForOrg.query(org.org_id)),
   );
   return deployments.flat();
+}
+
+/**
+ * Resolve the `<id>` argument of `deployments switch` to a full deployment UUID.
+ *
+ * `dosu deployments list` prints IDs truncated to 8 characters, so users (and agents
+ * reading that table) regularly pass the prefix back. `workspaces.get` forwards its
+ * input straight to a `uuid` column, and Postgres rejects anything that is not a full
+ * UUID with a 500 (`22P02 invalid input syntax for type uuid`) — so a truncated ID
+ * must never reach the backend. A unique prefix is resolved against the deployments
+ * the user can already see; anything else is a user error, not a server error.
+ */
+async function resolveDeploymentId(
+  client: TypedClient,
+  activeOrgId: string | undefined,
+  id: string,
+): Promise<string> {
+  const needle = id.trim();
+  if (isUuid(needle)) return needle;
+
+  const prefix = needle.toLowerCase();
+  const matches = (await listAccessibleDeployments(client, activeOrgId)).filter(
+    (d) =>
+      d.provider_slug === MCP_PROVIDER_SLUG &&
+      prefix.length > 0 &&
+      d.deployment_id.toLowerCase().startsWith(prefix),
+  );
+
+  if (matches.length === 1) return matches[0].deployment_id;
+
+  if (matches.length === 0) {
+    console.error(pc.red(`Deployment not found: ${id}`));
+    console.error(
+      pc.dim(
+        "Expected a full deployment ID (UUID). Run 'dosu deployments list --json' to see full IDs.",
+      ),
+    );
+    process.exit(1);
+  }
+
+  console.error(pc.red(`Ambiguous deployment ID prefix: ${id} matches ${matches.length}:`));
+  for (const d of matches) {
+    console.error(pc.dim(`  ${d.deployment_id}  ${d.name}`));
+  }
+  process.exit(1);
 }
 
 export function deploymentsCommand(): Command {
@@ -125,11 +171,13 @@ export function deploymentsCommand(): Command {
   cmd
     .command("switch")
     .description("Switch to a different deployment")
-    .argument("<id>", "Deployment ID")
+    .argument("<id>", "Deployment ID (full UUID, or a unique prefix as shown by 'list')")
     .option("--json", "Output as JSON")
-    .action(async (id: string, opts: { json?: boolean }) => {
+    .action(async (rawId: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
+
+      const id = await resolveDeploymentId(client, cfg.active_account?.target?.org_id, rawId);
 
       // Validate the deployment exists and user has access
       const deployment = await client.workspaces.get.query(id);
