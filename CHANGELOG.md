@@ -1,3 +1,10 @@
+## [0.57.1](https://github.com/dosu-ai/dosu-cli/compare/v0.57.0...v0.57.1) (2026-09-24)
+
+
+### Bug Fixes
+
+* **tui:** size the Activity and Analytics lists to the terminal height ([#237](https://github.com/dosu-ai/dosu-cli/issues/237)) ([dda9cf4](https://github.com/dosu-ai/dosu-cli/commit/dda9cf466ae18cfdfd6a03e9c4ce4d07a56f36e6))
+
 # [0.57.0](https://github.com/dosu-ai/dosu-cli/compare/v0.56.1...v0.57.0) (2026-09-24)
 
 
