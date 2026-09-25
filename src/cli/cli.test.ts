@@ -19,6 +19,7 @@ vi.mock("../debug/logger", () => ({
 vi.mock("../version/update-check", () => ({ checkForUpdates: vi.fn() }));
 vi.mock("../version/skill-update-check", () => ({ checkForSkillUpdates: vi.fn() }));
 vi.mock("../version/pending-tasks-check", () => ({ checkForReadyTasks: vi.fn() }));
+vi.mock("../version/incognito-backfill-check", () => ({ checkForIncognitoBackfill: vi.fn() }));
 vi.mock("../version/mcp-refresh-check", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../version/mcp-refresh-check")>()),
   checkForMcpRefresh: vi.fn(),
