@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -91,7 +99,8 @@ vi.mock("../sessions/scan", () => ({
 
 // Directory resolution reads session files and probes the filesystem; tests
 // map a session's project field straight to a fake absolute path.
-vi.mock("../sessions/project-dir", () => ({
+vi.mock("../sessions/project-dir", async (importOriginal) => ({
+  gitRepoRoot: (await importOriginal<typeof import("../sessions/project-dir")>()).gitRepoRoot,
   createProjectDirResolver: vi.fn(() => ({
     resolve: (s: { project?: string }) => (s.project ? `/repo/${s.project}` : null),
     flush: vi.fn(),
@@ -967,6 +976,68 @@ describe("runTUI", () => {
     const refreshed = mockMenuSelect.mock.calls[2]?.[1] ?? [];
     // The single picked folder is named by its basename, not counted.
     expect(refreshed.find((o) => o.value === "projects")?.hint).toBe("dosu-cli");
+  });
+
+  it("studying projects setting groups folders by git repo and keeps saved entries", async () => {
+    writeRealConfig(
+      makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
+    );
+    // Real paths throughout, as session cwds are. HOME is itself a repo; it must not swallow
+    // the loose folder. TMPDIR points inside it so temp sessions share one row.
+    const root = realpathSync(tempDir);
+    const repo = join(root, "code", "app");
+    const loose = join(root, "scratch");
+    const tmp = join(root, "tmp");
+    for (const dir of [join(repo, "src", "ui"), join(repo, ".git"), loose, join(root, ".git")]) {
+      mkdirSync(dir, { recursive: true });
+    }
+    mkdirSync(join(tmp, "demo-1"), { recursive: true });
+    const origTmp = process.env.TMPDIR;
+    process.env.HOME = root;
+    process.env.TMPDIR = tmp;
+    saveSyncState({
+      schema_version: 1,
+      watermark: null,
+      consecutive_failures: 0,
+      project_filter: [join(repo, "src")],
+    });
+    vi.mocked(createProjectDirResolver).mockImplementation(
+      () =>
+        ({
+          resolve: (s: AgentSession) => (s.project ? join(root, s.project) : null),
+          cached: () => null,
+          flush: vi.fn(),
+        }) as ReturnType<typeof createProjectDirResolver>,
+    );
+    mockIsCancel.mockReturnValue(false);
+    mockScanSessions.mockImplementation(() => [
+      fakeSession("a", "code/app"),
+      fakeSession("b", "code/app/src/ui"),
+      fakeSession("c", "code/app"),
+      fakeSession("d", "tmp/demo-1"),
+      fakeSession("e", "tmp/demo-2"),
+      fakeSession("f", "scratch"),
+    ]);
+    mockMultiselect.mockResolvedValueOnce([repo]);
+    mockMenuSelect
+      .mockResolvedValueOnce("settings")
+      .mockResolvedValueOnce("projects")
+      .mockResolvedValueOnce("back")
+      .mockResolvedValueOnce("exit");
+
+    try {
+      await runTUI();
+    } finally {
+      if (origTmp === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = origTmp;
+    }
+
+    const [args] = mockMultiselect.mock.calls.at(-1) ?? [];
+    const opts = (args as unknown as { options: Array<{ value: string; label: string }> }).options;
+    expect(opts.map((o) => o.value)).toEqual([repo, tmp, loose, join(repo, "src")]);
+    expect(opts[1]?.label).toBe("(temporary folders)");
+    expect((args as { initialValues?: string[] }).initialValues).toEqual([join(repo, "src")]);
+    expect(loadSyncState().project_filter).toEqual([repo]);
   });
 
   it("studying projects setting clears the filter when everything is picked", async () => {

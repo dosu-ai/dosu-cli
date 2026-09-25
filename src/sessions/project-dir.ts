@@ -12,7 +12,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { getConfigDir } from "../config/config";
 import type { AgentSession } from "./scan";
 
@@ -121,6 +121,18 @@ export function unmungeSlug(
   };
 
   return walk("", 0);
+}
+
+/** Nearest directory at or above `dir` holding a `.git` entry (a file in worktrees and
+ * submodules, so each counts as its own repo); null outside any repo. */
+export function gitRepoRoot(
+  dir: string,
+  exists: (path: string) => boolean = existsSync,
+): string | null {
+  for (let current = dir; ; current = dirname(current)) {
+    if (exists(join(current, ".git"))) return current;
+    if (dirname(current) === current) return null;
+  }
 }
 
 /** Injectable boundaries, for tests. */
