@@ -13,6 +13,7 @@ import {
   resetSyncState,
   type SyncState,
   saveSyncState,
+  setAgentsIncognito,
   setSyncPaused,
   syncStatePath,
   UNKNOWN_PROJECT,
@@ -306,6 +307,7 @@ describe("resetSyncState", () => {
         run: { pid: 1, started_at: "2026-09-02T23:00:00.000Z", baseline_mined: 39 },
         project_filter: ["/Users/me/proj"],
         paused: true,
+        incognito_agents: ["cursor"],
       },
       configDir,
     );
@@ -325,6 +327,7 @@ describe("resetSyncState", () => {
     expect(backoffUntil(state)).toBeNull();
     expect(state.project_filter).toEqual(["/Users/me/proj"]);
     expect(state.paused).toBe(true);
+    expect(state.incognito_agents).toEqual(["cursor"]);
   });
 
   it("writes a clean file when nothing was ever studied", () => {
@@ -334,6 +337,41 @@ describe("resetSyncState", () => {
     expect(state.paused).toBeUndefined();
     expect(state.project_filter).toBeUndefined();
     expect(readFileSync(syncStatePath(configDir), "utf-8")).not.toContain("paused");
+  });
+});
+
+describe("setAgentsIncognito", () => {
+  it("adds and removes agents, keeping the list sorted and deduplicated", () => {
+    setAgentsIncognito(["cursor", "claude"], true, configDir);
+    setAgentsIncognito(["cursor"], true, configDir);
+    expect(loadSyncState(configDir).incognito_agents).toEqual(["claude", "cursor"]);
+
+    setAgentsIncognito(["claude"], false, configDir);
+    expect(loadSyncState(configDir).incognito_agents).toEqual(["cursor"]);
+  });
+
+  it("drops the key once no agent is incognito, and keeps the rest of the state", () => {
+    saveSyncState(
+      { schema_version: 1, watermark: "2026-09-02T23:00:00.000Z", consecutive_failures: 0 },
+      configDir,
+    );
+    setAgentsIncognito(["codex"], true, configDir);
+    setAgentsIncognito(["codex"], false, configDir);
+    expect(loadSyncState(configDir).watermark).toBe("2026-09-02T23:00:00.000Z");
+    expect(readFileSync(syncStatePath(configDir), "utf-8")).not.toContain("incognito_agents");
+  });
+
+  it("ignores non-string entries in a hand-edited file", () => {
+    saveSyncState(
+      {
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        incognito_agents: ["cursor", 7 as unknown as string],
+      },
+      configDir,
+    );
+    expect(loadSyncState(configDir).incognito_agents).toEqual(["cursor"]);
   });
 });
 
