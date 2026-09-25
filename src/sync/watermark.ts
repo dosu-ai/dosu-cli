@@ -73,6 +73,10 @@ export interface SyncState {
   /** User pressed stop: quiet (hook-triggered) syncs skip until resumed. Cleared by the
    * Activity screen's resume or any manual `dosu knowledge sync`. */
   paused?: boolean;
+  /** Agent ids (session harnesses) the user put in incognito: none of their sessions are
+   * studied, as if every one had run `/dosu-incognito`. Sessions that finish while an agent is
+   * incognito are passed by the watermark, so turning incognito off does not study them later. */
+  incognito_agents?: string[];
 }
 
 export function syncStatePath(configDir: string = getConfigDir()): string {
@@ -145,6 +149,13 @@ export function loadSyncState(configDir: string = getConfigDir()): SyncState {
       ...(lastRefusal ? { last_refusal: lastRefusal } : {}),
       ...(run ? { run } : {}),
       ...(raw.paused === true ? { paused: true } : {}),
+      ...(Array.isArray(raw.incognito_agents)
+        ? {
+            incognito_agents: (raw.incognito_agents as unknown[]).filter(
+              (id): id is string => typeof id === "string",
+            ),
+          }
+        : {}),
       ...(Array.isArray(raw.project_filter)
         ? {
             project_filter: (raw.project_filter as unknown[]).filter(
@@ -166,9 +177,27 @@ export function setSyncPaused(paused: boolean, configDir: string = getConfigDir(
   saveSyncState(state, configDir);
 }
 
+/** Put agents in or out of incognito; load-modify-save like setSyncPaused. */
+export function setAgentsIncognito(
+  agentIds: readonly string[],
+  incognito: boolean,
+  configDir: string = getConfigDir(),
+): void {
+  const state = loadSyncState(configDir);
+  const current = new Set(state.incognito_agents ?? []);
+  for (const id of agentIds) {
+    if (incognito) current.add(id);
+    else current.delete(id);
+  }
+  if (current.size > 0) state.incognito_agents = [...current].sort();
+  else delete state.incognito_agents;
+  saveSyncState(state, configDir);
+}
+
 /** Forget everything studied so the next run starts from scratch: watermark, history, lifetime
- * counters, failure backoff, and the last refusal. User settings survive — the project filter
- * and the pause switch are choices, not progress. Notes already saved in Dosu are untouched. */
+ * counters, failure backoff, and the last refusal. User settings survive — the project filter,
+ * the pause switch, and incognito agents are choices, not progress. Notes already saved in Dosu
+ * are untouched. */
 export function resetSyncState(configDir: string = getConfigDir()): void {
   const previous = loadSyncState(configDir);
   const fresh: SyncState = {
@@ -177,6 +206,7 @@ export function resetSyncState(configDir: string = getConfigDir()): void {
     consecutive_failures: 0,
     ...(previous.project_filter ? { project_filter: previous.project_filter } : {}),
     ...(previous.paused ? { paused: true } : {}),
+    ...(previous.incognito_agents ? { incognito_agents: previous.incognito_agents } : {}),
   };
   saveSyncState(fresh, configDir);
 }
