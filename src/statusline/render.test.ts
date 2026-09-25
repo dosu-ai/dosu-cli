@@ -17,6 +17,11 @@ vi.mock("../sync/incognito", () => ({
   transcriptHasIncognitoMarker: (...args: unknown[]) => mockTranscriptMarker(...args),
 }));
 
+const mockGetSyncStatus = vi.hoisted(() => vi.fn());
+vi.mock("../sync/status", () => ({
+  getSyncStatus: (...args: unknown[]) => mockGetSyncStatus(...args),
+}));
+
 import {
   parseStatuslinePayload,
   type RenderDeps,
@@ -32,6 +37,7 @@ function deps(overrides: Partial<RenderDeps> = {}): RenderDeps {
     hookEnabled: () => true,
     loadState: () => baseState,
     transcriptIsIncognito: () => false,
+    syncRunning: () => false,
     ...overrides,
   };
 }
@@ -72,6 +78,17 @@ describe("resolveStatuslineState", () => {
     expect(resolveStatuslineState(payload, "claude", d)).toBe("incognito");
   });
 
+  it("is incognito for an agent saved as incognito, without reading the transcript", () => {
+    const transcriptIsIncognito = vi.fn(() => false);
+    const d = deps({
+      transcriptIsIncognito,
+      loadState: () => ({ ...baseState, paused: true, incognito_agents: ["claude"] }),
+    });
+    expect(resolveStatuslineState(payload, "claude", d)).toBe("incognito");
+    expect(resolveStatuslineState(payload, "cursor", d)).toBe("paused");
+    expect(transcriptIsIncognito).toHaveBeenCalledTimes(1);
+  });
+
   it("does not look for the marker without a transcript path", () => {
     const spy = vi.fn(() => true);
     expect(
@@ -108,6 +125,23 @@ describe("resolveStatuslineState", () => {
   it("is on with no filter and nothing else set", () => {
     expect(resolveStatuslineState(payload, "claude", deps())).toBe("on");
   });
+
+  it("is studying only while a sync run is live", () => {
+    expect(resolveStatuslineState(payload, "claude", deps({ syncRunning: () => true }))).toBe(
+      "studying",
+    );
+  });
+
+  it("ranks paused and not-studied ahead of a live run", () => {
+    const running = { syncRunning: () => true };
+    const paused = deps({ ...running, loadState: () => ({ ...baseState, paused: true }) });
+    expect(resolveStatuslineState(payload, "claude", paused)).toBe("paused");
+    const elsewhere = deps({
+      ...running,
+      loadState: () => ({ ...baseState, project_filter: ["/work/other"] }),
+    });
+    expect(resolveStatuslineState(payload, "claude", elsewhere)).toBe("not-studied");
+  });
 });
 
 describe("default dependencies", () => {
@@ -126,6 +160,18 @@ describe("default dependencies", () => {
     mockTranscriptMarker.mockReturnValue(false);
     expect(resolveStatuslineState(payload, "cursor")).toBe("paused");
     expect(mockLoadSyncState).toHaveBeenCalled();
+  });
+
+  it("check the sync lock without reading the debug log", () => {
+    mockGetHookAgent.mockReturnValue({ isEnabled: () => true });
+    mockLoadSyncState.mockReturnValue(baseState);
+    mockTranscriptMarker.mockReturnValue(false);
+    mockGetSyncStatus.mockReturnValue({ running: true });
+    expect(resolveStatuslineState(payload, "claude")).toBe("studying");
+    const [opts] = mockGetSyncStatus.mock.calls[0] as [{ readLog: () => string }];
+    expect(opts.readLog()).toBe("");
+    mockGetSyncStatus.mockReturnValue({ running: false });
+    expect(resolveStatuslineState(payload, "claude")).toBe("on");
   });
 
   it("read an unknown agent or an unparseable hook config as off", () => {
@@ -164,6 +210,7 @@ describe("renderStatusline", () => {
 
   it("gives studying and incognito their own glyphs and the inactive states a shared one", () => {
     const glyph = (state: keyof typeof STATUSLINE_LABELS) => STATUSLINE_LABELS[state].split(" ")[0];
+    expect(glyph("studying")).toBe(glyph("on"));
     expect(glyph("on")).not.toBe(glyph("off"));
     expect(glyph("incognito")).not.toBe(glyph("off"));
     expect(glyph("on")).not.toBe(glyph("incognito"));

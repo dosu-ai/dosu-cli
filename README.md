@@ -176,16 +176,20 @@ session. `dosu setup` installs both alongside the hook; they can also be managed
 
 ```bash
 dosu knowledge statusline enable|disable [claude|cursor]   # status-bar line in Claude Code / Cursor CLI
-dosu knowledge incognito enable|disable [claude|cursor|codex]  # the /dosu-incognito slash command
+dosu knowledge incognito on|off [claude|cursor|codex]      # stop/resume studying an agent's sessions
+dosu knowledge incognito status                            # which agents are incognito
 ```
 
-The status line shows one of `📚 Dosu studying…`, `👻 Dosu incognito`, `⚪ Dosu paused`,
+The status line shows one of `📚 Dosu studying…` (a sync run is live), `📚 Dosu on`,
+`👻 Dosu incognito`, `⚪ Dosu paused`,
 `⚪ Dosu not studying this folder`, or `⚪ Dosu off`. Neither setup nor `enable` replaces a status
 line you already have; they print the one-liner to add to your own script instead.
 
-Running `/dosu-incognito` inside a session marks that session's transcript so studying skips it
-(the whole session, and for the rest of it — start a new session to turn Dosu back on) and tells the
-model not to use Dosu tools. See [docs/studying.md](docs/studying.md).
+`incognito on` is a saved per-agent setting: none of that agent's sessions are studied until you
+turn it off. To keep a single chat out instead, type `/dosu-incognito` in it; setup installs that
+command with the hook. It marks the session's transcript so studying skips it (the whole session,
+and for the rest of it — start a new session to turn Dosu back on) and tells the model not to use
+Dosu tools. See [docs/studying.md](docs/studying.md).
 
 ### Telemetry and privacy
 
