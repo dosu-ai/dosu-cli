@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   action: vi.fn<() => void>(),
+  checkForIncognitoBackfill: vi.fn<(options?: { notify?: boolean }) => void>(),
   checkForMcpRefresh: vi.fn<(options?: { notify?: boolean }) => void>(),
   checkForReadyTasks: vi.fn<() => void>(),
   checkForSkillUpdates: vi.fn<() => void>(),
@@ -27,6 +28,10 @@ vi.mock("../version/pending-tasks-check", async (importOriginal) => ({
 vi.mock("../version/mcp-refresh-check", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../version/mcp-refresh-check")>()),
   checkForMcpRefresh: mocks.checkForMcpRefresh,
+}));
+
+vi.mock("../version/incognito-backfill-check", () => ({
+  checkForIncognitoBackfill: mocks.checkForIncognitoBackfill,
 }));
 
 vi.mock("../debug/logger", async (importOriginal) => {
@@ -106,6 +111,7 @@ describe("createProgram background checks", () => {
     mocks.checkForSkillUpdates.mockImplementation(() => events.push("skill"));
     mocks.checkForReadyTasks.mockImplementation(() => events.push("task"));
     mocks.checkForMcpRefresh.mockImplementation(() => events.push("mcp"));
+    mocks.checkForIncognitoBackfill.mockImplementation(() => events.push("incognito"));
     mocks.action.mockImplementation(() => events.push("action"));
 
     const command = runCommand("logs").then(() => {
@@ -124,9 +130,18 @@ describe("createProgram background checks", () => {
     finishRegistryCheck();
     await command;
 
-    expect(events).toEqual(["registry:start", "registry:end", "skill", "task", "mcp", "action"]);
+    expect(events).toEqual([
+      "registry:start",
+      "registry:end",
+      "skill",
+      "task",
+      "mcp",
+      "incognito",
+      "action",
+    ]);
     // A subcommand prints the refresh notice itself; only the TUI suppresses it.
     expect(mocks.checkForMcpRefresh).toHaveBeenCalledWith({ notify: true });
+    expect(mocks.checkForIncognitoBackfill).toHaveBeenCalledWith({ notify: true });
   });
 
   it("skips all background checks for upgrade but still runs its action", async () => {
@@ -136,6 +151,7 @@ describe("createProgram background checks", () => {
     expect(mocks.checkForSkillUpdates).not.toHaveBeenCalled();
     expect(mocks.checkForReadyTasks).not.toHaveBeenCalled();
     expect(mocks.checkForMcpRefresh).not.toHaveBeenCalled();
+    expect(mocks.checkForIncognitoBackfill).not.toHaveBeenCalled();
     expect(mocks.action).toHaveBeenCalledOnce();
   });
 
@@ -145,11 +161,12 @@ describe("createProgram background checks", () => {
     mocks.checkForSkillUpdates.mockImplementation(() => events.push("skill"));
     mocks.checkForReadyTasks.mockImplementation(() => events.push("task"));
     mocks.checkForMcpRefresh.mockImplementation(() => events.push("mcp"));
+    mocks.checkForIncognitoBackfill.mockImplementation(() => events.push("incognito"));
     mocks.action.mockImplementation(() => events.push("action"));
 
     await runCommand("logs");
 
     expect(mocks.checkForUpdates).not.toHaveBeenCalled();
-    expect(events).toEqual(["skill", "task", "mcp", "action"]);
+    expect(events).toEqual(["skill", "task", "mcp", "incognito", "action"]);
   });
 });
