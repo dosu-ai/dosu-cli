@@ -1410,7 +1410,7 @@ export function stepShowSummary(results: ConfigResult[]): void {
         statuslines.map((item) => ({ label: item.name, path: item.path })),
       )}\n${dim(
         wrapLog(
-          "Shows 📚 Dosu studying…, 👻 Dosu incognito, or ⚪ Dosu off/paused. Remove with 'dosu knowledge statusline disable'.",
+          "Shows 📚 Dosu on/studying…, 👻 Dosu incognito, or ⚪ Dosu off/paused. Remove with 'dosu knowledge statusline disable'.",
         ),
       )}`,
     );
@@ -1433,7 +1433,7 @@ export function stepShowSummary(results: ConfigResult[]): void {
         incognitos.map((item) => ({ label: item.name, path: item.path })),
       )}\n${dim(
         wrapLog(
-          "Run it inside a session to keep that session out of studying. Remove with 'dosu knowledge incognito disable'.",
+          "Type it in a chat to keep that chat out of Dosu. To keep a whole agent out, run 'dosu knowledge incognito on <agent>'.",
         ),
       )}`,
     );
