@@ -50,6 +50,7 @@ import {
   type CommandTelemetryContext,
   createCommandTelemetry,
 } from "../telemetry/telemetry";
+import { checkForIncognitoBackfill } from "../version/incognito-backfill-check";
 import {
   canRefreshMcp,
   checkForMcpRefresh,
@@ -216,6 +217,7 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
         // a manual `dosu setup`.
         if (shouldRunMcpRefreshCheck(actionCommand)) {
           checkForMcpRefresh({ notify: !launchesTUI });
+          checkForIncognitoBackfill({ notify: !launchesTUI });
         }
       }
       const command = commandTelemetryName(actionCommand);
