@@ -2,7 +2,7 @@
  * per-agent hook triggers. */
 
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { Command, Option } from "commander";
@@ -423,10 +423,10 @@ function currentBranch(cwd: string): string | null {
   }
 }
 
-async function readStdin(): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
-  return Buffer.concat(chunks).toString("utf-8");
+/** Read synchronously: under Bun, a file redirected onto stdin and read as a stream after the
+ * CLI's startup awaits comes back empty, while a pipe does not. */
+function readStdin(): string {
+  return readFileSync(0, "utf-8");
 }
 
 /** `dosu knowledge context`: the Claude Code UserPromptSubmit hook. Hidden -- it is invoked by
@@ -442,7 +442,7 @@ function contextCommand(): Command {
       if (cfg.mode === "oss" || !target?.api_key || !target.deployment_id) return;
       if (!isAbsoluteHttpUrl(backendUrl)) return;
       const { contextHookOutput } = await import("../memory/context-hook");
-      const out = await contextHookOutput(await readStdin(), {
+      const out = await contextHookOutput(readStdin(), {
         apiKey: target.api_key,
         deploymentId: target.deployment_id,
         backendUrl,
