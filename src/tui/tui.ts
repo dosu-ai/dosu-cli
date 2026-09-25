@@ -1,6 +1,7 @@
 /** TUI entry point; launches when `dosu` is run without arguments. */
 
-import { homedir } from "node:os";
+import { realpathSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { basename } from "node:path";
 import pc from "picocolors";
 import { Client, SessionExpiredError } from "../client/client";
@@ -17,13 +18,13 @@ import { getWebAppURL } from "../config/constants";
 import { getHookAgent } from "../hooks/agents";
 import { allSetupProviders } from "../mcp/providers";
 import { emitKnowledgeReport } from "../report/generate";
-import { createProjectDirResolver } from "../sessions/project-dir";
+import { createProjectDirResolver, gitRepoRoot } from "../sessions/project-dir";
 import { scanAgentSessions } from "../sessions/scan";
 import { dosuAgentsSectionState, inGitWorkTree } from "../setup/agents-md-step";
 import { runSetup, runSwitchTarget } from "../setup/flow";
 import { brand, browserFallbackHint, dim } from "../setup/styles";
 import { getSyncStatus } from "../sync/status";
-import { loadSyncState, saveSyncState, UNKNOWN_PROJECT } from "../sync/watermark";
+import { isUnderDir, loadSyncState, saveSyncState, UNKNOWN_PROJECT } from "../sync/watermark";
 import { buildUpdateHint, getAvailableUpdate } from "../version/update-check";
 import { getVersionString, INSTALL_CHANNEL, isNpxInvocation } from "../version/version";
 import { runActivityView } from "./activity-view";
@@ -374,13 +375,38 @@ function displayDir(dir: string): string {
   return dir === home ? "~" : dir.startsWith(`${home}/`) ? `~${dir.slice(home.length)}` : dir;
 }
 
-/** Distinct session working directories, most sessions first; unknowns get UNKNOWN_PROJECT. */
-function discoverProjectDirs(): string[] {
+/** The system temp dir as sessions report it (macOS hands out a `/var` symlink; cwds are real
+ * paths); null when it can't be resolved. */
+function systemTempDir(): string | null {
+  try {
+    return realpathSync(tmpdir());
+  } catch {
+    return null;
+  }
+}
+
+/** Distinct session scopes, most sessions first: anything under the system temp dir is one
+ * scope, a directory inside a git repo counts as the repo root, others as themselves; unknowns
+ * get UNKNOWN_PROJECT. A repo at `$HOME` (dotfiles) is ignored, or every loose folder would
+ * collapse into `~`. */
+function discoverProjectDirs(tempDir: string | null): string[] {
   const counts = new Map<string, number>();
+  const scopes = new Map<string, string>();
+  const home = homedir();
+  const scopeOf = (dir: string): string => {
+    let scope = scopes.get(dir);
+    if (scope === undefined) {
+      const root = tempDir && isUnderDir(dir, tempDir) ? tempDir : gitRepoRoot(dir);
+      scope = root && root !== home ? root : dir;
+      scopes.set(dir, scope);
+    }
+    return scope;
+  };
   try {
     const resolver = createProjectDirResolver();
     for (const session of scanAgentSessions({})) {
-      const key = resolver.resolve(session) ?? UNKNOWN_PROJECT;
+      const dir = resolver.resolve(session);
+      const key = dir ? scopeOf(dir) : UNKNOWN_PROJECT;
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
     resolver.flush();
@@ -390,27 +416,36 @@ function discoverProjectDirs(): string[] {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([dir]) => dir);
 }
 
-/** Scope studying to selected folders (subdirectories included); picking everything clears the
- * filter so new folders are studied too. */
+/** Scope studying to selected repos or folders (subdirectories included); picking everything
+ * clears the filter so new ones are studied too. */
 async function runStudyingProjectsSetting(): Promise<void> {
-  const dirs = discoverProjectDirs();
-  if (dirs.length === 0) {
+  const tempDir = systemTempDir();
+  const discovered = discoverProjectDirs(tempDir);
+  if (discovered.length === 0) {
     p.log.info("No local agent sessions found yet; nothing to scope.");
     return;
   }
   const current = loadSyncState().project_filter;
+  // Saved entries the grouping no longer lists (a subfolder picked before repos were grouped, a
+  // folder with no sessions left) stay pickable, so confirming never silently drops them.
+  const dirs = [...discovered, ...(current ?? []).filter((dir) => !discovered.includes(dir))];
   const selected = await p.multiselect({
-    message: "Study sessions from which folders?",
+    message: "Study sessions from which repos?",
     options: dirs.map((dir) => ({
-      label: dir === UNKNOWN_PROJECT ? "(unknown folder)" : displayDir(dir),
+      label:
+        dir === UNKNOWN_PROJECT
+          ? "(unknown folder)"
+          : dir === tempDir
+            ? "(temporary folders)"
+            : displayDir(dir),
       value: dir,
     })),
     initialValues: current?.length ? current : dirs,
     summary: (picked) =>
       picked.length === dirs.length
-        ? "all folders \u00B7 new ones included automatically"
-        : `${picked.length} of ${dirs.length} folders \u00B7 subfolders included`,
-    validate: (picked) => (picked.length === 0 ? "Select at least one folder." : undefined),
+        ? "all \u00B7 new repos and folders included automatically"
+        : `${picked.length} of ${dirs.length} \u00B7 subfolders included`,
+    validate: (picked) => (picked.length === 0 ? "Select at least one." : undefined),
   });
   if (p.isCancel(selected)) return;
 

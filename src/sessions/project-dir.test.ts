@@ -2,7 +2,12 @@ import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createProjectDirResolver, cwdFromJsonlHead, unmungeSlug } from "./project-dir";
+import {
+  createProjectDirResolver,
+  cwdFromJsonlHead,
+  gitRepoRoot,
+  unmungeSlug,
+} from "./project-dir";
 import type { AgentSession } from "./scan";
 
 let tempDir: string;
@@ -74,6 +79,24 @@ describe("unmungeSlug", () => {
   it("returns null when nothing on disk matches", () => {
     expect(unmungeSlug("Users-nobody-gone", exists)).toBeNull();
     expect(unmungeSlug("", exists)).toBeNull();
+  });
+});
+
+describe("gitRepoRoot", () => {
+  const existing =
+    (...paths: string[]) =>
+    (path: string) =>
+      paths.includes(path);
+
+  it("returns the nearest ancestor with a .git entry", () => {
+    const exists = existing("/work/outer/.git", "/work/outer/inner/.git");
+    expect(gitRepoRoot("/work/outer/inner/src/ui", exists)).toBe("/work/outer/inner");
+    expect(gitRepoRoot("/work/outer/docs", exists)).toBe("/work/outer");
+    expect(gitRepoRoot("/work/outer", exists)).toBe("/work/outer");
+  });
+
+  it("returns null outside any repo", () => {
+    expect(gitRepoRoot("/work/loose/dir", existing())).toBeNull();
   });
 });
 
