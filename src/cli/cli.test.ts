@@ -57,6 +57,11 @@ describe("CLI", () => {
     expect(shouldRunBackgroundChecks("status")).toBe(true);
   });
 
+  it("skips background notices for the prompt-submit hook", () => {
+    // Runs on every prompt while the user waits: no update check, no stderr notice.
+    expect(shouldRunBackgroundChecks("knowledge context")).toBe(false);
+  });
+
   it("has login command", () => {
     const program = createProgram();
     const cmd = program.commands.find((c) => c.name() === "login");
