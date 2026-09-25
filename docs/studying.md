@@ -11,6 +11,10 @@ status-bar indicator.
 slash command for every agent it enables the sync hook for, and removes them when an agent is
 unticked. A hook that fails to install skips the bundle.
 
+Users who enabled the hook before the slash command existed get it on upgrade: the first command
+on a newer CLI installs `/dosu-incognito` for every agent whose hook is enabled, once
+(`src/version/incognito-backfill-check.ts`, marker `incognito-backfill.json` in the config dir).
+
 ## Per-agent incognito
 
 ```bash
