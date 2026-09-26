@@ -569,6 +569,12 @@ describe("safe payload builders", () => {
     expect(learnerError.exception.values[0]?.value).toBe("knowledge sync: error");
     expect(learnerError.fingerprint.slice(-2)).toEqual(["unknown", "error"]);
 
+    for (const outcome of ["max_turns", "run_failed", "no_result", "timed_out", "sdk_error"]) {
+      const failure = envelope({ sync_status: "mine-failed", learner_outcome: outcome });
+      expect(failure.exception.values[0]?.value).toBe(`knowledge sync: ${outcome}`);
+      expect(failure.fingerprint.at(-1)).toBe(outcome);
+    }
+
     const scanError = envelope({ sync_status: "error" });
     expect(scanError.exception.values[0]?.value).toBe("knowledge sync: error");
     expect(scanError.fingerprint).toHaveLength(5);

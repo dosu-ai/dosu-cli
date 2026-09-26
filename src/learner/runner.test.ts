@@ -562,7 +562,7 @@ describe("runLearner", () => {
 
     const result = await runLearner({ ...baseOptions, sessions: threeSessions });
 
-    expect(result.outcome).toBe("error");
+    expect(result.outcome).toBe("sdk_error");
     expect(result.notedSessions).toEqual(["claude/s3"]);
   });
 
@@ -602,7 +602,7 @@ describe("runLearner", () => {
     });
 
     const endedEarly = await runLearner({ ...baseOptions, sessions: threeSessions });
-    expect(endedEarly.outcome).toBe("error");
+    expect(endedEarly.outcome).toBe("no_result");
     expect(endedEarly.notedSessions).toEqual(["claude/s3"]);
 
     queryReturning(successResult());
@@ -688,14 +688,25 @@ describe("runLearner", () => {
     expect(result.message).toContain("resume tomorrow");
   });
 
-  it("returns an error outcome for non-success results", async () => {
+  it("reports run_failed for non-success results", async () => {
     queryReturning(
       successResult({ subtype: "error_during_execution", is_error: true, result: undefined }),
     );
 
     const result = await runLearner(baseOptions);
 
-    expect(result.outcome).toBe("error");
+    expect(result.outcome).toBe("run_failed");
+  });
+
+  it("reports max_turns when the run hits its turn limit", async () => {
+    queryReturning(
+      successResult({ subtype: "error_max_turns", is_error: true, result: undefined }),
+    );
+
+    const result = await runLearner(baseOptions);
+
+    expect(result.outcome).toBe("max_turns");
+    expect(result.message).toMatch(/turn limit/);
   });
 
   it("returns an error when the stream ends without a result", async () => {
@@ -703,7 +714,7 @@ describe("runLearner", () => {
 
     const result = await runLearner(baseOptions);
 
-    expect(result.outcome).toBe("error");
+    expect(result.outcome).toBe("no_result");
     expect(result.message).toContain("without a result");
   });
 
@@ -714,7 +725,7 @@ describe("runLearner", () => {
 
     const result = await runLearner(baseOptions);
 
-    expect(result.outcome).toBe("error");
+    expect(result.outcome).toBe("sdk_error");
     expect(result.message).toBe("Study run failed; see debug log for details.");
     expect(debugMock).toHaveBeenCalledWith("learner", expect.stringContaining("spawn ENOENT"));
   });
@@ -726,7 +737,7 @@ describe("runLearner", () => {
 
     const result = await runLearner(baseOptions);
 
-    expect(result.outcome).toBe("error");
+    expect(result.outcome).toBe("sdk_error");
     expect(debugMock).toHaveBeenCalledWith("learner", expect.stringContaining("socket hang up"));
   });
 
@@ -744,7 +755,7 @@ describe("runLearner", () => {
 
     const result = await runLearner(baseOptions);
 
-    expect(result.outcome).toBe("error");
+    expect(result.outcome).toBe("run_failed");
     expect(result.message).toBe("Study run failed; see debug log for details.");
   });
 
@@ -794,7 +805,7 @@ describe("runLearner", () => {
 
     const result = await runLearner({ ...baseOptions, timeoutMs: 5 });
 
-    expect(result.outcome).toBe("error");
+    expect(result.outcome).toBe("timed_out");
     expect(result.message).toBe("Study run timed out and was aborted.");
   });
 });
