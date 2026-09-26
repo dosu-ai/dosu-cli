@@ -27,12 +27,13 @@ export interface IncognitoAgent {
  * status line look for; the rest tells the model to leave Dosu alone for the session. */
 export const INCOGNITO_COMMAND_BODY = `Dosu incognito marker: ${INCOGNITO_MARKER}
 
-Dosu is off for the rest of this session. Do not call any Dosu MCP tools (read_knowledge, write_knowledge, review_knowledge, finalize_session_knowledge), even where project rules ask you to. This session will not be studied for shared knowledge.
+Dosu is off for the rest of this session. Do not call any Dosu MCP tools (read_knowledge, write_knowledge, review_knowledge, finalize_session_knowledge), even where project rules ask you to. This session will not be shipped to Dosu memory.
 
-Acknowledge in one line: "Dosu incognito: this session will not be studied."
+Acknowledge in one line: "Dosu incognito: this session stays off the record."
 `;
 
-const DESCRIPTION = "Turn Dosu off for this session: no knowledge tools, and it is never studied";
+const DESCRIPTION =
+  "Turn Dosu off for this session: no knowledge tools, and it is never shipped to Dosu memory";
 
 /** Claude Code and Codex read a `description` from YAML frontmatter; Cursor takes plain markdown. */
 function withFrontmatter(body: string): string {

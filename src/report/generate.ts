@@ -20,7 +20,7 @@ export interface EmitReportOptions {
   /** Injectable for tests; the default fetches from the backend. */
   notes?: ReportNote[];
   sessions?: AgentSession[];
-  /** Injectable for tests; the default reads the ship watermark state. */
+  /** Injectable for tests; the default reads the sync state's shipped history. */
   shipped?: ShippedSessionRecord[];
   orgName?: string;
   /** Injectable project-name source for a session; the default resolves the
@@ -66,11 +66,6 @@ export async function emitKnowledgeReport(options: EmitReportOptions = {}): Prom
   const sessions = sessionsForNotes(notes, scanned);
   const candidates = attributeRediscovery(notes, sessions);
   const inventory = sessionsToInventory(sessions);
-  const state = loadSyncState();
-  if (inventory.totals && state.total_learning_tokens && !options.sessions) {
-    // All-time distilled baseline, when this machine has studied.
-    inventory.totals.learning_tokens = state.total_learning_tokens;
-  }
   const projectName = options.projectName ?? defaultProjectName();
   const projects = [
     ...new Set(
@@ -87,7 +82,7 @@ export async function emitKnowledgeReport(options: EmitReportOptions = {}): Prom
     truncated: fetched.truncated,
     generatedAt: options.generatedAt,
     digests: digestsForSessions(sessions),
-    shipped: options.shipped ?? state.ship?.shipped_sessions ?? [],
+    shipped: options.shipped ?? loadSyncState().shipped_sessions ?? [],
   });
   return writeAndOpenReport({
     html,

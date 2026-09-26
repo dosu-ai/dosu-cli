@@ -1,10 +1,10 @@
-/** Standalone Analytics screen: all-time studying numbers plus backend page analytics. Pure
+/** Standalone Analytics screen: all-time shipping numbers plus backend page analytics. Pure
  * render/reduce functions wired to injectable IO. */
 
 import pc from "picocolors";
 import { createTypedClient, type TypedClient } from "../client/trpc";
 import { loadConfig } from "../config/config";
-import { formatTokenCount, getSyncStatus, type SyncStatus } from "../sync/status";
+import { getSyncStatus, type SyncStatus } from "../sync/status";
 import type { SyncState } from "../sync/watermark";
 import { enterAltScreen } from "./alt-screen";
 import { breadcrumb, contentWidth, frameTopMargin, tabStrip } from "./layout";
@@ -22,7 +22,7 @@ const CURSOR_HOME = `${ESC}[H`;
 const CLEAR_BELOW = `${ESC}[0J`;
 const CLEAR_EOL = `${ESC}[K`;
 
-/** Relaxed poll: analytics only move when a study batch completes. */
+/** Relaxed poll: analytics only move when a ship batch completes. */
 const ANALYTICS_VIEW_POLL_MS = 1000;
 
 /** How many report lines fit on screen at once (the scroll window). Sized so the pages tab's
@@ -116,27 +116,16 @@ function loadPageStatsFromConfig(): Promise<PageStats | null> {
 
 const label = (text: string) => text.padEnd(26);
 
-/** Overview tab: all-time totals. "Investigation distilled" is what the studied investigations
- * originally cost to learn; future reads reuse that. */
+/** Overview tab: all-time totals. */
 export function overviewRows(state: SyncState): string[] {
-  const studiedTotal = state.total_mined ?? 0;
-  const notes = state.total_notes ?? 0;
-  const tokens = state.total_learning_tokens ?? 0;
-  if (studiedTotal === 0 && notes === 0) return [];
-  const rows = [
-    `${label("Sessions studied")}${studiedTotal}`,
-    `${label("Suggested pages")}${notes}`,
-  ];
-  if (tokens > 0) {
-    rows.push(`${label("Investigation distilled")}${formatTokenCount(tokens)} tokens`);
-  }
-  return rows;
+  const shipped = state.total_shipped ?? 0;
+  return shipped === 0 ? [] : [`${label("Sessions shipped")}${shipped}`];
 }
 
-/** Projects tab: recent studied-session history bucketed by project, under column labels. */
+/** Projects tab: recent shipped-session history bucketed by project, under column labels. */
 export function projectRows(state: SyncState): string[] {
   const byProject = new Map<string, number>();
-  for (const record of state.mined_sessions ?? []) {
+  for (const record of state.shipped_sessions ?? []) {
     const key = record.project ?? "(unknown)";
     byProject.set(key, (byProject.get(key) ?? 0) + 1);
   }
@@ -204,9 +193,9 @@ export function renderAnalyticsFrame(
   const { visible, above, below } = windowReport(rows, scroll);
   const empty =
     tab === "overview"
-      ? "No analytics yet. They appear after the first study run."
+      ? "No analytics yet. They appear after the first sessions ship."
       : tab === "projects"
-        ? "No per-project history yet. It fills in as sessions are studied."
+        ? "No per-project history yet. It fills in as sessions ship."
         : pagesPending
           ? "Loading page analytics..."
           : "No page analytics yet.";

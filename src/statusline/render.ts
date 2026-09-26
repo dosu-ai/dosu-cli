@@ -1,21 +1,27 @@
 /** Status-line rendering: the harness payload (stdin JSON) plus persisted sync state → one line
- * saying whether this session is being studied. Runs on every status refresh, so it reads only
+ * saying whether Dosu memory will learn from this session. Runs on every status refresh, so it reads only
  * two small files plus the transcript, and it never throws: any failure renders as off. */
 
 import { getHookAgent } from "../hooks/agents";
 import { transcriptHasIncognitoMarker } from "../sync/incognito";
-import { isUnderDir, loadSyncState, type SyncState, UNKNOWN_PROJECT } from "../sync/watermark";
+import {
+  isShippingEnabled,
+  isUnderDir,
+  loadSyncState,
+  type SyncState,
+  UNKNOWN_PROJECT,
+} from "../sync/watermark";
 
 /** In priority order: the first matching state wins. */
 export type StatuslineState = "off" | "incognito" | "paused" | "not-studied" | "on";
 
-/** Three glyphs, not five: studying, incognito (the user's own switch for this session), and one
+/** Three glyphs, not five: learning, incognito (the user's own switch for this session), and one
  * shared "inactive" glyph whose text says why. */
 export const STATUSLINE_LABELS: Readonly<Record<StatuslineState, string>> = {
-  on: "📚 Dosu studying…",
+  on: "📚 Dosu learning…",
   incognito: "👻 Dosu incognito",
   paused: "⚪ Dosu paused",
-  "not-studied": "⚪ Dosu not studying this folder",
+  "not-studied": "⚪ Dosu not learning from this folder",
   off: "⚪ Dosu off",
 };
 
@@ -67,7 +73,7 @@ function defaultHookEnabled(agentId: string): boolean {
   }
 }
 
-/** Whether `cwd` falls inside the studied directories; a missing cwd is the unknown bucket. */
+/** Whether `cwd` falls inside the synced directories; a missing cwd is the unknown bucket. */
 function cwdIsStudied(cwd: string | undefined, filter: readonly string[] | undefined): boolean {
   if (!filter || filter.length === 0) return true;
   if (!cwd) return filter.includes(UNKNOWN_PROJECT);
@@ -83,13 +89,14 @@ export function resolveStatuslineState(
 ): StatuslineState {
   const hookEnabled = deps.hookEnabled ?? defaultHookEnabled;
   if (!hookEnabled(agentId)) return "off";
+  const state = (deps.loadState ?? loadSyncState)();
+  if (!isShippingEnabled(state)) return "off";
 
   const transcriptIsIncognito = deps.transcriptIsIncognito ?? transcriptHasIncognitoMarker;
   if (payload.transcript_path && transcriptIsIncognito(payload.transcript_path)) {
     return "incognito";
   }
 
-  const state = (deps.loadState ?? loadSyncState)();
   if (state.paused) return "paused";
   if (!cwdIsStudied(payload.cwd, state.project_filter)) return "not-studied";
   return "on";

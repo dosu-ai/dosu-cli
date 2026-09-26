@@ -249,10 +249,8 @@ describe("safe payload builders", () => {
       exitCode: 0,
       facets: {
         sync_trigger: "hook",
-        sync_status: "studied",
-        sessions_studied: 7,
-        notes_written: 23,
-        learner_outcome: "completed",
+        sync_status: "shipped",
+        sessions_shipped: 7,
       },
       context: SAFE_CONTEXT,
       runtime: SAFE_RUNTIME,
@@ -260,28 +258,10 @@ describe("safe payload builders", () => {
 
     expect(payload.properties).toMatchObject({
       sync_trigger: "hook",
-      sync_status: "studied",
-      sessions_studied: "5-9",
-      notes_written: "20-49",
-      learner_outcome: "completed",
+      sync_status: "shipped",
+      sessions_shipped: "5-9",
     });
     expect(payload.properties.backfill_offer).toBeUndefined();
-  });
-
-  it("keeps the gateway_rejected learner outcome", () => {
-    const payload = buildPostHogPayload({
-      apiKey: "public",
-      installId: "11111111-1111-4111-8111-111111111111",
-      command: "knowledge sync",
-      result: "success",
-      durationMs: 2,
-      exitCode: 0,
-      facets: { sync_status: "skipped-gateway", learner_outcome: "gateway_rejected" },
-      context: SAFE_CONTEXT,
-      runtime: SAFE_RUNTIME,
-    });
-
-    expect(payload.properties.learner_outcome).toBe("gateway_rejected");
   });
 
   it("drops facet values outside the closed vocabularies", () => {
@@ -294,8 +274,7 @@ describe("safe payload builders", () => {
       exitCode: 0,
       facets: {
         sync_trigger: "/Users/me/secret",
-        sync_status: "studied; rm -rf /",
-        learner_outcome: "user@example.com",
+        sync_status: "shipped; rm -rf /",
         backfill_offer: "declined",
         // Unknown keys never survive, even when injected past the type system.
         ...({ raw_prompt: "delete everything" } as object),
@@ -307,9 +286,7 @@ describe("safe payload builders", () => {
     expect(payload.properties.backfill_offer).toBe("declined");
     expect(payload.properties.sync_trigger).toBeUndefined();
     expect(payload.properties.sync_status).toBeUndefined();
-    expect(payload.properties.learner_outcome).toBeUndefined();
-    expect(payload.properties.sessions_studied).toBeUndefined();
-    expect(payload.properties.notes_written).toBeUndefined();
+    expect(payload.properties.sessions_shipped).toBeUndefined();
     expect("raw_prompt" in payload.properties).toBe(false);
     expect(JSON.stringify(payload)).not.toContain("secret");
     expect(JSON.stringify(payload)).not.toContain("rm -rf");

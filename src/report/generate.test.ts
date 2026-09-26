@@ -132,10 +132,9 @@ describe("emitKnowledgeReport", () => {
 
   it("summarizes the run's projects in the header instead of a note anchor", async () => {
     mockLoadSyncState.mockReturnValue({
-      schema_version: 1,
+      schema_version: 2,
       watermark: null,
       consecutive_failures: 0,
-      total_learning_tokens: 50_000,
     });
     mockWrite.mockImplementation(async (opts: { html: string }) => {
       expect(opts.html).toContain("Dosu knowledge report — Acme");
@@ -176,25 +175,20 @@ describe("emitKnowledgeReport", () => {
 });
 
 describe("emitKnowledgeReport shipped sessions", () => {
-  it("surfaces the ship watermark history's session links in the report", async () => {
+  it("surfaces the shipped-session history's links in the report", async () => {
     mockLoadSyncState.mockReturnValue({
-      schema_version: 1,
-      watermark: null,
+      schema_version: 2,
+      watermark: "2026-09-01T00:00:00.000Z",
       consecutive_failures: 0,
-      ship_transcripts: true,
-      ship: {
-        watermark: "2026-09-01T00:00:00.000Z",
-        consecutive_failures: 0,
-        total_shipped: 1,
-        shipped_sessions: [
-          {
-            at: "2026-09-01T00:00:00.000Z",
-            session: "claude/s1",
-            task_id: "task-1",
-            session_url: "https://app/memories/sessions/s1",
-          },
-        ],
-      },
+      total_shipped: 1,
+      shipped_sessions: [
+        {
+          at: "2026-09-01T00:00:00.000Z",
+          session: "claude/s1",
+          task_id: "task-1",
+          session_url: "https://app/memories/sessions/s1",
+        },
+      ],
     });
 
     await emitKnowledgeReport({ notes: [] });

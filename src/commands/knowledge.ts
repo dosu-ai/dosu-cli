@@ -17,9 +17,9 @@ import { emitKnowledgeReport } from "../report/generate";
 import type { AgentSession } from "../sessions/scan";
 import { listSessionBacklog } from "../sync/backlog";
 import { spawnDetachedSelf } from "../sync/detach";
-import { formatTokenCount, getSyncStatus, type SyncStatus } from "../sync/status";
-import { MINE_BATCH_LIMIT, runKnowledgeSync, type SyncDeps, type SyncOutcome } from "../sync/sync";
-import { loadSyncState, setShipTranscripts } from "../sync/watermark";
+import { getSyncStatus, type SyncStatus } from "../sync/status";
+import { runKnowledgeSync, SHIP_BATCH_LIMIT, type SyncDeps, type SyncOutcome } from "../sync/sync";
+import { isShippingEnabled, loadSyncState, setShipTranscripts } from "../sync/watermark";
 import { recordCommandFacets } from "../telemetry/telemetry";
 import { resolveAgents } from "./agent-select";
 import { positiveInteger } from "./arguments";
@@ -132,25 +132,25 @@ export function knowledgeCommand(): Command {
     .description(
       "List local agent sessions with full project and session ids (the untruncated view of the Activity screen's tabs)",
     )
-    .option("--queued", "Only sessions queued for studying")
+    .option("--queued", "Only sessions queued for shipping")
     .option("--open", "Only live sessions still inside the quiet period")
-    .option("--studied", "Only recent studied-session history")
+    .option("--shipped", "Only recent shipped-session history")
     .option("--json", "Output as JSON")
-    .action((opts: { queued?: boolean; open?: boolean; studied?: boolean; json?: boolean }) => {
-      const all = !opts.queued && !opts.open && !opts.studied;
+    .action((opts: { queued?: boolean; open?: boolean; shipped?: boolean; json?: boolean }) => {
+      const all = !opts.queued && !opts.open && !opts.shipped;
       const wantQueued = all || Boolean(opts.queued);
       const wantOpen = all || Boolean(opts.open);
-      const wantStudied = all || Boolean(opts.studied);
+      const wantShipped = all || Boolean(opts.shipped);
 
       const backlog = wantQueued || wantOpen ? listSessionBacklog() : { queued: [], open: [] };
-      const studied = wantStudied ? (loadSyncState().mined_sessions ?? []) : [];
+      const shipped = wantShipped ? (loadSyncState().shipped_sessions ?? []) : [];
 
       if (opts.json) {
         printResult(
           {
             ...(wantQueued ? { queued: backlog.queued } : {}),
             ...(wantOpen ? { open: backlog.open } : {}),
-            ...(wantStudied ? { studied } : {}),
+            ...(wantShipped ? { shipped } : {}),
           },
           opts,
         );
@@ -159,8 +159,8 @@ export function knowledgeCommand(): Command {
 
       const sessionRows = (sessions: AgentSession[]) =>
         sessions.map((s) => [s.harness, s.updated, s.project ?? "-", s.id]);
-      // Studied history stores "harness/id" in one field; split it back into columns.
-      const studiedRows = studied.map((record) => {
+      // Shipped history stores "harness/id" in one field; split it back into columns.
+      const shippedRows = shipped.map((record) => {
         const slash = record.session.indexOf("/");
         const harness = slash > 0 ? record.session.slice(0, slash) : "-";
         const id = slash > 0 ? record.session.slice(slash + 1) : record.session;
@@ -195,19 +195,19 @@ export function knowledgeCommand(): Command {
           "No open sessions. Live agent sessions sit here until they go quiet.",
         );
       }
-      if (wantStudied) {
-        section("Studied", studiedRows, "Studied at", "No studied sessions recorded yet.");
+      if (wantShipped) {
+        section("Shipped", shippedRows, "Shipped at", "No sessions shipped yet.");
       }
     });
 
   cmd
     .command("sync")
-    .description("Scan local agent session history and report the study backlog")
+    .description("Ship finished local agent sessions to Dosu memory")
     .option("--quiet", "Background mode for hooks: honor backoff, exit 0, print nothing")
     .option("--detach", "Re-spawn detached and return immediately (used by agent hooks)")
     .option(
       "--bootstrap",
-      "Backfill mode: study the full local session history regardless of age and drain the backlog (used by setup)",
+      "Backfill mode: ship every finished session from the last 30 days, draining the backlog (used by setup)",
     )
     .option("--status", "Show whether a sync is running now, plus watermark and recent activity")
     .option(
@@ -227,10 +227,10 @@ export function knowledgeCommand(): Command {
         json?: boolean;
       }) => {
         // Analytics facets on this command's completion event: coarse trigger/status only, so
-        // dashboards can tell hook fires, detached parents, and real study runs apart.
+        // dashboards can tell hook fires, detached parents, and real ship runs apart.
         const trigger = opts.bootstrap ? "bootstrap" : opts.quiet ? "hook" : "manual";
 
-        // --status never scans or mines: it reads the lock, the persisted
+        // --status never scans or ships: it reads the lock, the persisted
         // watermark state, and the tail of the debug log.
         if (opts.status) {
           recordCommandFacets({ sync_trigger: trigger, sync_status: "status-only" });
@@ -262,36 +262,36 @@ export function knowledgeCommand(): Command {
           return;
         }
 
-        const deps: SyncDeps = {
-          mine: buildLearner(opts.quiet ? "hook" : "manual"),
-          ship: buildShipper(),
-        };
+        const deps: SyncDeps = { ship: buildShipper() };
         let outcome = await runKnowledgeSync({
           quiet: opts.quiet,
           bootstrap: opts.bootstrap,
           deps,
         });
-        let sessionsStudied = outcome.studiedSessions ?? 0;
-        let notesWritten = outcome.learner?.notesWritten ?? 0;
+        let sessionsShipped = outcome.counts?.shipped ?? 0;
 
-        // Bootstrap drains the whole backlog in this process; any non-studied status ends the
-        // drain; the round cap guards against a learner that never stops reporting progress.
-        if (opts.bootstrap && deps.mine) {
-          const maxRounds = Math.ceil(outcome.readySessions / MINE_BATCH_LIMIT) + 2;
-          for (let round = 1; outcome.status === "studied" && round < maxRounds; round++) {
+        // Bootstrap drains the whole backlog in this process, batch by batch, while each batch
+        // makes progress; the round cap guards against a batch that never settles anything.
+        if (opts.bootstrap && deps.ship) {
+          const maxRounds = Math.ceil(outcome.readySessions / SHIP_BATCH_LIMIT) + 2;
+          for (
+            let round = 1;
+            outcome.status === "shipped" &&
+            (outcome.settledSessions ?? 0) > 0 &&
+            (outcome.settledSessions ?? 0) < outcome.readySessions &&
+            round < maxRounds;
+            round++
+          ) {
             if (!opts.quiet && !opts.json) printSyncOutcome(outcome);
             outcome = await runKnowledgeSync({ quiet: opts.quiet, bootstrap: true, deps });
-            sessionsStudied += outcome.studiedSessions ?? 0;
-            notesWritten += outcome.learner?.notesWritten ?? 0;
+            sessionsShipped += outcome.counts?.shipped ?? 0;
           }
         }
 
         recordCommandFacets({
           sync_trigger: trigger,
           sync_status: outcome.status,
-          sessions_studied: sessionsStudied,
-          notes_written: notesWritten,
-          ...(outcome.learner ? { learner_outcome: outcome.learner.outcome } : {}),
+          sessions_shipped: sessionsShipped,
         });
 
         if (opts.quiet) return; // Invisible by contract; details are in the debug log.
@@ -300,7 +300,7 @@ export function knowledgeCommand(): Command {
           if (outcome.status === "error") process.exitCode = 1;
           if (opts.report) {
             // The sync outcome must reach stdout even when the report fails:
-            // studying already happened and callers parse this JSON.
+            // shipping already happened and callers parse this JSON.
             try {
               const report = await emitKnowledgeReport({ out: opts.out, open: false });
               printResult({ ...outcome, report }, opts);
@@ -345,30 +345,6 @@ export function knowledgeCommand(): Command {
       console.log(`Wrote ${path}`);
     });
 
-  cmd
-    .command("backfill-transcripts")
-    .description(
-      "One-shot: attribute pre-existing notes to the local sessions that produced them, so the report can show their traces",
-    )
-    .option("--json", "Output the result as JSON")
-    .action(async (opts: { json?: boolean }) => {
-      const { runBackfill } = await import("../report/backfill-run");
-      const result = await runBackfill();
-      if (opts.json) {
-        printResult(result, opts);
-        return;
-      }
-      if (result.candidates === 0) {
-        console.log("All your notes already have a transcript — nothing to backfill.");
-        return;
-      }
-      console.log(
-        `Attributed ${result.updated} of ${result.candidates} notes ` +
-          `(${result.ambiguous} ambiguous, ${result.noBatch} without a local study batch). ` +
-          "Run 'dosu knowledge report' to see their traces.",
-      );
-    });
-
   cmd.addCommand(hooksCommand());
   cmd.addCommand(incognitoCommand());
   cmd.addCommand(statuslineCommand());
@@ -378,24 +354,9 @@ export function knowledgeCommand(): Command {
   return cmd;
 }
 
-/** Studying step for authenticated cloud-mode installs; returns undefined (gate-and-report only)
- * when the install can't mine: logged out, OSS mode, or no API key. */
-function buildLearner(trigger: "hook" | "manual"): SyncDeps["mine"] {
-  const cfg = loadConfig();
-  if (cfg.mode === "oss") return undefined;
-  const target = cfg.active_account?.target;
-  if (!target?.api_key || !target.deployment_id) return undefined;
-  const { api_key, deployment_id } = target;
-  return async (sessions: AgentSession[]) => {
-    const { runLearner } = await import("../learner/runner");
-    return runLearner({ sessions, apiKey: api_key, deploymentID: deployment_id, trigger });
-  };
-}
-
 /** Transcript-shipping step for authenticated cloud-mode installs; undefined when the install
- * cannot ship: logged out, OSS mode, no API key/deployment, or no backend URL. The
- * `ship_transcripts` opt-in itself is enforced inside the sync pipeline, against the same state
- * file it already loads. */
+ * cannot ship: logged out, OSS mode, no API key/deployment, or no backend URL. The user's
+ * opt-out is enforced inside the sync pipeline, against the same state file it already loads. */
 function buildShipper(): SyncDeps["ship"] {
   const cfg = loadConfig();
   if (cfg.mode === "oss") return undefined;
@@ -452,12 +413,12 @@ function contextCommand(): Command {
     });
 }
 
-/** `dosu knowledge transcripts`: the opt-in switch for shipping finished session transcripts to
- * Dosu memory. Off by default — you control which transcripts Dosu collects (this switch plus
- * the per-session /dosu-incognito opt-out); secrets are redacted locally before anything ships. */
+/** `dosu knowledge transcripts`: the switch for shipping finished session transcripts to Dosu
+ * memory. On by default; you control what Dosu collects with this switch and the per-session
+ * /dosu-incognito opt-out, and secrets are redacted locally before anything ships. */
 function transcriptsCommand(): Command {
   const cmd = new Command("transcripts").description(
-    "Control shipping finished session transcripts to Dosu memory (default: off)",
+    "Control shipping finished session transcripts to Dosu memory (default: on)",
   );
 
   cmd
@@ -466,14 +427,14 @@ function transcriptsCommand(): Command {
     .option("--json", "Output as JSON")
     .action((opts: { json?: boolean }) => {
       const state = loadSyncState();
-      const enabled = state.ship_transcripts === true;
+      const enabled = isShippingEnabled(state);
       if (opts.json) {
         printResult(
           {
             enabled,
-            total_shipped: state.ship?.total_shipped ?? 0,
-            watermark: state.ship?.watermark ?? null,
-            shipped_sessions: state.ship?.shipped_sessions ?? [],
+            total_shipped: state.total_shipped ?? 0,
+            watermark: state.watermark,
+            shipped_sessions: state.shipped_sessions ?? [],
           },
           opts,
         );
@@ -481,16 +442,15 @@ function transcriptsCommand(): Command {
       }
       console.log(
         enabled
-          ? `${pc.green("●")} Transcript shipping is enabled.`
-          : "○ Transcript shipping is disabled (the default).",
+          ? `${pc.green("●")} Transcript shipping is enabled (the default).`
+          : "○ Transcript shipping is disabled.",
       );
-      const total = state.ship?.total_shipped ?? 0;
+      const total = state.total_shipped ?? 0;
       if (total > 0) {
         console.log(`  Shipped:         ${total} session${total === 1 ? "" : "s"}`);
       }
-      const wm = state.ship?.watermark;
-      if (wm) console.log(`  Shipped through: ${wm}`);
-      const recent = (state.ship?.shipped_sessions ?? []).slice(-5);
+      if (state.watermark) console.log(`  Shipped through: ${state.watermark}`);
+      const recent = (state.shipped_sessions ?? []).slice(-5);
       if (recent.length > 0) {
         console.log("\nRecent shipments:");
         for (const record of recent) {
@@ -503,7 +463,7 @@ function transcriptsCommand(): Command {
 
   cmd
     .command("enable")
-    .description("Ship finished sessions to Dosu memory (redacted locally before upload)")
+    .description("Ship finished sessions to Dosu memory (the default; redacted locally first)")
     .action(() => {
       setShipTranscripts(true);
       console.log("✓ Transcript shipping enabled.");
@@ -527,7 +487,7 @@ function transcriptsCommand(): Command {
 
   cmd
     .command("disable")
-    .description("Stop shipping session transcripts (the default)")
+    .description("Stop shipping session transcripts to Dosu memory")
     .action(() => {
       setShipTranscripts(false);
       console.log("✓ Transcript shipping disabled.");
@@ -566,28 +526,28 @@ function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
     console.log("○ No sync running.");
   }
 
+  if (!isShippingEnabled(status.state)) {
+    console.log(
+      pc.yellow("  Shipping disabled. Turn it on with 'dosu knowledge transcripts enable'."),
+    );
+  }
   if (status.state.paused) {
     console.log(
       pc.yellow(
-        "  Studying paused: stopped by you. Resume from the Activity screen or run 'dosu knowledge sync'.",
+        "  Syncing paused: stopped by you. Resume from the Activity screen or run 'dosu knowledge sync'.",
       ),
     );
   }
   const wm = status.state.watermark;
-  console.log(`  Studied through: ${wm ? `${wm} (${formatAge(wm, now)})` : "nothing studied yet"}`);
+  console.log(`  Shipped through: ${wm ? `${wm} (${formatAge(wm, now)})` : "nothing shipped yet"}`);
+  const total = status.state.total_shipped ?? 0;
+  if (total > 0) console.log(`  Shipped:         ${total} session${total === 1 ? "" : "s"}`);
   if (status.state.project_filter?.length) {
     const home = homedir();
     const scope = status.state.project_filter
       .map((dir) => (dir.startsWith(`${home}/`) ? `~${dir.slice(home.length)}` : dir))
       .join(", ");
-    console.log(`  Study scope:     ${scope}`);
-  }
-  if ((status.state.total_notes ?? 0) > 0) {
-    const tokens = status.state.total_learning_tokens ?? 0;
-    const distilled = tokens > 0 ? `, ${formatTokenCount(tokens)} tokens distilled` : "";
-    console.log(
-      `  Suggested pages: ${status.state.total_notes} (from ${status.state.total_mined ?? 0} sessions${distilled})`,
-    );
+    console.log(`  Scope:           ${scope}`);
   }
   if (status.state.last_attempt_at) {
     console.log(
@@ -602,13 +562,6 @@ function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
       ),
     );
   }
-  if (status.state.last_refusal) {
-    console.log(
-      pc.yellow(
-        `  Studying paused: ${status.state.last_refusal.message} (${formatAge(status.state.last_refusal.at, now)})`,
-      ),
-    );
-  }
 
   if (status.recentActivity.length > 0) {
     console.log("\nRecent activity:");
@@ -620,47 +573,45 @@ function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
 }
 
 function printSyncOutcome(outcome: SyncOutcome): void {
-  if (outcome.ship) {
-    const { shipped, failed } = outcome.ship;
-    if (shipped > 0) {
-      console.log(
-        `✓ Shipped ${shipped} session transcript${shipped === 1 ? "" : "s"} to Dosu memory.`,
-      );
-    }
-    if (failed > 0) {
-      console.log(pc.yellow("Some transcripts failed to ship; they will be retried."));
-    }
-  }
+  const plural = (n: number) => (n === 1 ? "" : "s");
+  const inFlight =
+    outcome.inFlightSessions > 0
+      ? pc.dim(` (${outcome.inFlightSessions} more still in progress)`)
+      : "";
   switch (outcome.status) {
     case "backlog": {
-      const inFlight =
-        outcome.inFlightSessions > 0
-          ? pc.dim(` (${outcome.inFlightSessions} more still in progress)`)
-          : "";
       console.log(
-        `✓ Scanned. ${outcome.readySessions} new session${outcome.readySessions === 1 ? "" : "s"} ready to study${inFlight}.`,
+        `✓ Scanned. ${outcome.readySessions} finished session${plural(outcome.readySessions)} ready to ship${inFlight}.`,
       );
-      console.log(pc.dim("Sign in with 'dosu setup' to enable studying."));
+      console.log(pc.dim("Sign in with 'dosu setup' to ship them to Dosu memory."));
       break;
     }
-    case "studied": {
-      const notes = outcome.learner?.notesWritten ?? 0;
-      const remaining = outcome.readySessions - (outcome.studiedSessions ?? 0);
+    case "shipped":
+    case "ship-failed": {
+      const { shipped = 0, incognito = 0, trivial = 0, skipped = 0 } = outcome.counts ?? {};
+      const passed = incognito + trivial + skipped;
       console.log(
-        `✓ Studied ${outcome.studiedSessions} session${outcome.studiedSessions === 1 ? "" : "s"}, ${notes} suggested page${notes === 1 ? "" : "s"} created.`,
+        `✓ Shipped ${shipped} session${plural(shipped)} to Dosu memory${
+          passed > 0 ? pc.dim(` (${passed} passed over: incognito, too short, or rejected)`) : ""
+        }.`,
       );
+      if (outcome.status === "ship-failed") {
+        console.log(
+          pc.yellow(`Shipping stopped: ${outcome.error ?? "unknown error"}. It will be retried.`),
+        );
+        process.exitCode = 1;
+        break;
+      }
+      const remaining = outcome.readySessions - (outcome.settledSessions ?? 0);
       if (remaining > 0) {
         console.log(pc.dim(`${remaining} more in the backlog; run sync again to continue.`));
       }
       break;
     }
-    case "skipped-gateway": {
-      console.log(pc.yellow(outcome.learner?.message ?? "Studying unavailable right now."));
-      break;
-    }
-    case "mine-failed": {
-      console.error(pc.red(outcome.learner?.message ?? "Study run failed."));
-      process.exitCode = 1;
+    case "disabled": {
+      console.log(
+        pc.dim("Transcript shipping is off. Turn it on with 'dosu knowledge transcripts enable'."),
+      );
       break;
     }
     case "skipped-lock": {
@@ -668,11 +619,11 @@ function printSyncOutcome(outcome: SyncOutcome): void {
       break;
     }
     case "nothing-new": {
-      const inFlight =
+      const open =
         outcome.inFlightSessions > 0
-          ? ` ${outcome.inFlightSessions} session${outcome.inFlightSessions === 1 ? "" : "s"} still in progress.`
+          ? ` ${outcome.inFlightSessions} session${plural(outcome.inFlightSessions)} still in progress.`
           : "";
-      console.log(`✓ Scanned. No new completed sessions since the last run.${inFlight}`);
+      console.log(`✓ Scanned. No new finished sessions since the last run.${open}`);
       break;
     }
     case "error": {
@@ -685,7 +636,7 @@ function printSyncOutcome(outcome: SyncOutcome): void {
       break;
     }
     case "skipped-paused": {
-      console.log(pc.dim("Skipped: studying is paused. Run 'dosu knowledge sync' to resume."));
+      console.log(pc.dim("Skipped: syncing is paused. Run 'dosu knowledge sync' to resume."));
       break;
     }
   }

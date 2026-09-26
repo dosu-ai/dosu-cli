@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { formatTokenCount, getSyncStatus } from "./status";
+import { getSyncStatus } from "./status";
 import { saveSyncState } from "./watermark";
 
 let dir: string;
@@ -16,16 +16,6 @@ afterEach(() => {
 });
 
 const lockFile = () => join(dir, "knowledge-sync.lock");
-
-describe("formatTokenCount", () => {
-  it("prints small counts verbatim and larger ones as ~k / ~M", () => {
-    expect(formatTokenCount(950)).toBe("950");
-    expect(formatTokenCount(12_400)).toBe("~12.4k");
-    expect(formatTokenCount(312_000)).toBe("~312k");
-    expect(formatTokenCount(1_200_000)).toBe("~1.2M");
-    expect(formatTokenCount(3_000_000)).toBe("~3M");
-  });
-});
 
 describe("getSyncStatus", () => {
   it("reports no run when there is no lock file", () => {
@@ -86,7 +76,7 @@ describe("getSyncStatus", () => {
     const lastAttempt = new Date().toISOString();
     saveSyncState(
       {
-        schema_version: 1,
+        schema_version: 2,
         watermark: "2026-09-01T00:00:00Z",
         last_attempt_at: lastAttempt,
         consecutive_failures: 2,
@@ -101,25 +91,23 @@ describe("getSyncStatus", () => {
   });
 
   it("omits backoff when there are no failures", () => {
-    saveSyncState({ schema_version: 1, watermark: null, consecutive_failures: 0 }, dir);
+    saveSyncState({ schema_version: 2, watermark: null, consecutive_failures: 0 }, dir);
     const status = getSyncStatus({ configDir: dir, readLog: () => "" });
     expect(status.backoffUntil).toBeUndefined();
   });
 
-  it("extracts recent sync/learner lines from the debug log, stripping the level", () => {
+  it("extracts recent sync lines from the debug log, stripping the level", () => {
     const log = [
       "[2026-09-02T21:00:00Z] [DEBUG] [cli] starting",
       "[2026-09-02T21:00:01Z] [DEBUG] [sync] gate: 5 ready",
-      "[2026-09-02T21:05:00Z] [INFO] [learner] run completed",
-      "[2026-09-02T21:05:01Z] [DEBUG] [sync] studied 5 sessions",
+      "[2026-09-02T21:05:01Z] [DEBUG] [sync] shipped session claude/abc → task t1",
       "",
     ].join("\n");
 
     const status = getSyncStatus({ configDir: dir, readLog: () => log });
     expect(status.recentActivity).toEqual([
       "[2026-09-02T21:00:01Z] [sync] gate: 5 ready",
-      "[2026-09-02T21:05:00Z] [learner] run completed",
-      "[2026-09-02T21:05:01Z] [sync] studied 5 sessions",
+      "[2026-09-02T21:05:01Z] [sync] shipped session claude/abc → task t1",
     ]);
   });
 

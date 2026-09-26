@@ -104,26 +104,17 @@ const SYNC_STATUSES = new Set([
   // SyncStatus from src/sync/sync.ts
   "backlog",
   "nothing-new",
+  "shipped",
+  "ship-failed",
+  "disabled",
   "skipped-backoff",
   "skipped-lock",
-  "skipped-gateway",
   "skipped-paused",
-  "studied",
-  "mine-failed",
   "error",
   // Command-level outcomes that never reach the pipeline
   "detached",
   "detach-failed",
   "status-only",
-]);
-const LEARNER_OUTCOMES = new Set([
-  "completed",
-  "settings_conflict",
-  "consent_off",
-  "credit_limit",
-  "quota_exceeded",
-  "gateway_rejected",
-  "error",
 ]);
 const BACKFILL_OFFERS = new Set([
   "not-offered",
@@ -140,12 +131,8 @@ export interface CommandFacets {
   sync_trigger?: string;
   /** `knowledge sync`: pipeline status, or a command-level outcome such as `detached`. */
   sync_status?: string;
-  /** `knowledge sync`: sessions handed to the learner (summed across bootstrap rounds). */
-  sessions_studied?: number;
-  /** `knowledge sync`: `write_knowledge` calls allowed through (summed across bootstrap rounds). */
-  notes_written?: number;
-  /** `knowledge sync`: the learner's own outcome when it ran. */
-  learner_outcome?: string;
+  /** `knowledge sync`: sessions shipped to Dosu memory (summed across bootstrap rounds). */
+  sessions_shipped?: number;
   /** `setup`: what happened to the post-install "study past sessions" offer. */
   backfill_offer?: string;
 }
@@ -153,9 +140,7 @@ export interface CommandFacets {
 interface SafeCommandFacets {
   sync_trigger?: string;
   sync_status?: string;
-  sessions_studied?: string;
-  notes_written?: string;
-  learner_outcome?: string;
+  sessions_shipped?: string;
   backfill_offer?: string;
 }
 
@@ -235,9 +220,7 @@ interface PostHogProperties {
   error_code?: string;
   sync_trigger?: string;
   sync_status?: string;
-  sessions_studied?: string;
-  notes_written?: string;
-  learner_outcome?: string;
+  sessions_shipped?: string;
   backfill_offer?: string;
 }
 
@@ -591,18 +574,13 @@ function sanitizeFacets(facets: CommandFacets | undefined): SafeCommandFacets {
   if (!facets || typeof facets !== "object") return {};
   const trigger = allowlisted(facets.sync_trigger, SYNC_TRIGGERS);
   const status = allowlisted(facets.sync_status, SYNC_STATUSES);
-  const learner = allowlisted(facets.learner_outcome, LEARNER_OUTCOMES);
   const backfill = allowlisted(facets.backfill_offer, BACKFILL_OFFERS);
   return {
     ...(trigger ? { sync_trigger: trigger } : {}),
     ...(status ? { sync_status: status } : {}),
-    ...(facets.sessions_studied !== undefined
-      ? { sessions_studied: countBucket(facets.sessions_studied) }
+    ...(facets.sessions_shipped !== undefined
+      ? { sessions_shipped: countBucket(facets.sessions_shipped) }
       : {}),
-    ...(facets.notes_written !== undefined
-      ? { notes_written: countBucket(facets.notes_written) }
-      : {}),
-    ...(learner ? { learner_outcome: learner } : {}),
     ...(backfill ? { backfill_offer: backfill } : {}),
   };
 }
