@@ -161,24 +161,26 @@ dosu setup --agent --tool claude
 
 Combine with `dosu login --request` / `--check <ticket>` for human-in-the-loop authentication, and `--mode oss|cloud` to skip the mode prompt.
 
-### Studying sessions: status line and incognito
+### Syncing sessions to Dosu memory: status line and incognito
 
-With `dosu knowledge hooks enable`, Dosu studies finished coding-agent sessions in the background
-and turns what it learns into shared knowledge. Two switches make that visible and controllable per
-session. `dosu setup` installs both alongside the hook; they can also be managed directly:
+With `dosu knowledge hooks enable`, finished coding-agent sessions ship to Dosu memory in the
+background (secrets redacted locally first), and Dosu learns from them server-side. Shipping is on
+by default; `dosu knowledge transcripts disable` turns it off. Two switches make it visible and
+controllable per session. `dosu setup` installs both alongside the hook; they can also be managed
+directly:
 
 ```bash
 dosu knowledge statusline enable|disable [claude|cursor]   # status-bar line in Claude Code / Cursor CLI
 dosu knowledge incognito enable|disable [claude|cursor|codex]  # the /dosu-incognito slash command
 ```
 
-The status line shows one of `📚 Dosu studying…`, `👻 Dosu incognito`, `⚪ Dosu paused`,
-`⚪ Dosu not studying this folder`, or `⚪ Dosu off`. Neither setup nor `enable` replaces a status
+The status line shows one of `📚 Dosu learning…`, `👻 Dosu incognito`, `⚪ Dosu paused`,
+`⚪ Dosu not learning from this folder`, or `⚪ Dosu off`. Neither setup nor `enable` replaces a status
 line you already have; they print the one-liner to add to your own script instead.
 
-Running `/dosu-incognito` inside a session marks that session's transcript so studying skips it
+Running `/dosu-incognito` inside a session marks that session's transcript so it is never shipped
 (the whole session, and for the rest of it — start a new session to turn Dosu back on) and tells the
-model not to use Dosu tools. See [docs/studying.md](docs/studying.md).
+model not to use Dosu tools. See [docs/syncing.md](docs/syncing.md).
 
 ### Telemetry and privacy
 

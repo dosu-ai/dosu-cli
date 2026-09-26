@@ -26,19 +26,11 @@ const writeFileAtomic = writeFileAtomicRaw as {
 type JsonConfig = Record<string, any>;
 
 /**
- * Which MCP tool surface a caller speaks. `v2` is the memory-era surface installed into coding
- * agents (search_memory, get_memory_evidence). `v1` still serves write_knowledge,
- * which the local learner calls until transcript shipping replaces it -- so the learner asks for
- * `v1` by name rather than inheriting whatever installs get.
+ * Returns the MCP endpoint URL with deployment ID encoded in the path: the v2, memory-era tool
+ * surface (search_memory, get_memory_evidence).
  */
-export type McpSurface = "v1" | "v2";
-export const INSTALLED_MCP_SURFACE: McpSurface = "v2";
-
-/**
- * Returns the MCP endpoint URL with deployment ID encoded in the path.
- */
-export function mcpURL(deploymentID: string, surface: McpSurface = INSTALLED_MCP_SURFACE): string {
-  return `${getBackendURL()}/${surface}/mcp/deployments/${deploymentID}`;
+export function mcpURL(deploymentID: string): string {
+  return `${getBackendURL()}/v2/mcp/deployments/${deploymentID}`;
 }
 
 /**

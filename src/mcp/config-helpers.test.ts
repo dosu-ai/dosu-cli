@@ -36,10 +36,6 @@ describe("mcpURL", () => {
     expect(url).toContain("/v2/mcp/deployments/deploy-abc");
     expect(url).toMatch(/^https?:\/\//);
   });
-
-  it("still reaches v1 when a caller needs write_knowledge", () => {
-    expect(mcpURL("deploy-abc", "v1")).toContain("/v1/mcp/deployments/deploy-abc");
-  });
 });
 
 describe("mcpHeaders", () => {

@@ -1,10 +1,12 @@
-# Studying sessions: the status line and `/dosu-incognito`
+# Syncing sessions to Dosu memory: the status line and `/dosu-incognito`
 
 `dosu knowledge hooks enable` installs a session-end hook (Claude Code, Cursor, Codex) that runs
-`dosu knowledge sync --quiet --detach`. The sync scans finished agent sessions, gates them behind a
-watermark and a quiet period, applies the directory filter and pause switch from
-`~/.config/dosu-cli/knowledge-sync.json`, and studies what is left. This document covers the two
-switches layered on top of that: a per-session opt-out and a status-bar indicator.
+`dosu knowledge sync --quiet --detach`. The sync scans the last 30 days of finished agent sessions,
+gates them behind a watermark and a quiet period, applies the directory filter and pause switch
+from `~/.config/dosu-cli/knowledge-sync.json`, and ships what is left to Dosu memory (secrets
+redacted locally first), which learns from each session server-side. Shipping is on by default;
+`dosu knowledge transcripts disable` turns it off. This document covers the two switches layered
+on top of that: a per-session opt-out and a status-bar indicator.
 
 Both are installed by default: `dosu setup` (and the TUI's configure step) enables the status line
 and the slash command for every agent it enables the sync hook for, and removes them when an agent
@@ -31,17 +33,17 @@ Running `/dosu-incognito` inside a session expands the file into the conversatio
 the marker `dosu:incognito:v1` and instructs the model not to call Dosu MCP tools for the rest of
 the session. Because the harness records the expansion in the transcript, the marker is the switch:
 
-- `dosu knowledge sync` skips any gated session whose transcript contains the marker (or Claude
-  Code's `<command-name>/dosu-incognito</command-name>` record). Skipped sessions count as examined,
-  so the watermark moves past them and they are never re-read. The debug log records
-  `skipping incognito session <harness>/<id>` and the run summary shows `N incognito skipped`.
+- `dosu knowledge sync` never uploads a gated session whose transcript contains the marker (or
+  Claude Code's `<command-name>/dosu-incognito</command-name>` record). Skipped sessions count as
+  examined, so the watermark moves past them and they are never re-read. The debug log records
+  `not shipping incognito session <harness>/<id>` and the run summary counts it as passed over.
 - The Activity screen and `dosu knowledge sessions` set them aside from the queue.
 
 Properties worth knowing:
 
 - It covers the **whole session**, including turns before the command was run, since the transcript
   is skipped as a unit.
-- It is **one-way** for that session. Start a new session to have Dosu study again. Resuming the
+- It is **one-way** for that session. Start a new session to have Dosu learn again. Resuming the
   same session keeps it incognito.
 - The command **instructs** the model to avoid Dosu tools; it does not block them. A `PreToolUse`
   hook that rejects Dosu tool calls when the marker is present is a possible follow-up.
@@ -63,11 +65,11 @@ command to `dosu knowledge statusline render --agent <id>`, which prints one lin
 
 | Line | Meaning |
 |---|---|
-| `📚 Dosu studying…` | The hook is installed and this session will be studied when it ends |
+| `📚 Dosu learning…` | The hook is installed and this session ships to Dosu memory when it ends |
 | `👻 Dosu incognito` | `/dosu-incognito` was run in this session |
-| `⚪ Dosu paused` | Studying is paused (Activity screen stop, or `paused` in the state file) |
-| `⚪ Dosu not studying this folder` | A directory filter is set and `cwd` is outside it |
-| `⚪ Dosu off` | No Dosu hook is installed for this agent |
+| `⚪ Dosu paused` | Syncing is paused (Activity screen stop, or `paused` in the state file) |
+| `⚪ Dosu not learning from this folder` | A directory filter is set and `cwd` is outside it |
+| `⚪ Dosu off` | No Dosu hook is installed for this agent, or shipping is disabled |
 
 States are checked in that order after `off`: incognito outranks paused and not-studied because it
 is the user's own action in this session and the line is how they confirm it took.
@@ -92,7 +94,7 @@ Dev installs (`DOSU_DEV=true`) pin the working copy and prefix with `env` rather
 ```bash
 DOSU_DEV=true bun run dev knowledge statusline enable claude
 DOSU_DEV=true bun run dev knowledge incognito enable claude
-# Open Claude Code in a studied folder → 📚 Dosu studying…
+# Open Claude Code in a synced folder → 📚 Dosu learning…
 # Run /dosu-incognito → 👻 Dosu incognito
-# End the session; `dosu logs --tail` shows "skipping incognito session claude/<id>" on the next sync
+# End the session; `dosu logs --tail` shows "not shipping incognito session claude/<id>" on the next sync
 ```
