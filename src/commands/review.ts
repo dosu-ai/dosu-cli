@@ -2,7 +2,7 @@
 
 import { readFileSync } from "node:fs";
 import { isTRPCClientError } from "@trpc/client";
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import pc from "picocolors";
 import { createTypedClient, type TypedClient } from "../client/trpc";
 import type {
@@ -13,6 +13,7 @@ import type {
 import { requireLoginConfig } from "./auth";
 import { confirmAction } from "./confirmation";
 import { formatDate, printInfo, printResult, printTable, truncate } from "./output";
+import { describeTimeRange, resolveTimeRange, timeBound } from "./time-range";
 
 // Contract-typed since dosu#11679: no local mirror types, so a contract-side shape change
 // fails typecheck here instead of silently breaking at runtime.
@@ -160,8 +161,31 @@ export function reviewCommand(): Command {
   cmd
     .command("list")
     .description("List pending review items (doc changes and draft replies)")
+    .addOption(
+      new Option(
+        "--since <when>",
+        "Only items created at or after <when>: a duration back from now (24h, 7d, 2w), " +
+          "a UTC date (2026-09-01), or an ISO-8601 datetime",
+      ).argParser(timeBound),
+    )
+    .addOption(
+      new Option(
+        "--until <when>",
+        "Only items created before <when> (same forms; a date includes that whole day)",
+      ).argParser(timeBound),
+    )
     .option("--json", "Output as JSON")
-    .action(async (opts: { json?: boolean }) => {
+    .action(async (opts: { json?: boolean; since?: string; until?: string }) => {
+      let range: ReturnType<typeof resolveTimeRange>;
+      try {
+        range = resolveTimeRange(opts.since, opts.until);
+      } catch (err) {
+        console.error(pc.red(`${(err as Error).message}.`));
+        process.exit(1);
+      }
+      const rangeLabel = describeTimeRange(range);
+      const inRange = rangeLabel ? ` ${rangeLabel}` : "";
+
       const cfg = requireConfig();
       if (!cfg.active_account?.target?.space_id) {
         console.error(pc.red("Missing space config. Run 'dosu setup' to reconfigure."));
@@ -175,6 +199,8 @@ export function reviewCommand(): Command {
       const result = await client.review.listPending.query({
         knowledgeStoreId: ksId,
         deploymentId: cfg.active_account?.target?.deployment_id,
+        ...(range.since && { since: range.since.toISOString() }),
+        ...(range.until && { until: range.until.toISOString() }),
       });
       const { items, truncated, total } = result;
 
@@ -184,9 +210,11 @@ export function reviewCommand(): Command {
       }
 
       if (!items || items.length === 0) {
-        console.log(pc.dim("No pending review items."));
+        console.log(pc.dim(`No pending review items${inRange}.`));
         return;
       }
+
+      if (rangeLabel) console.log(pc.dim(`Pending review items created ${rangeLabel}:`));
 
       printTable(
         ["ID", "Kind", "Title", "Source", "Status", "Created"],
@@ -214,7 +242,9 @@ export function reviewCommand(): Command {
       if (truncated) {
         // Mirrors the MCP review tool's truncation footer (ENG-605): the backlog
         // is larger than one page, so tell the user what they're looking at.
-        console.log(pc.dim(`Showing ${items.length} of ${total}+ pending items (list truncated).`));
+        console.log(
+          pc.dim(`Showing ${items.length} of ${total}+ pending items${inRange} (list truncated).`),
+        );
       }
     });
 
