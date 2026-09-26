@@ -200,6 +200,14 @@ export function resetSyncState(configDir: string = getConfigDir()): void {
   );
 }
 
+/** Pass over everything that finished before `now`, so only later sessions ship. Setup calls
+ * this when the user declines the backfill; the watermark never moves backwards. */
+export function skipBacklog(now: Date = new Date(), configDir: string = getConfigDir()): void {
+  const state = loadSyncState(configDir);
+  if (state.watermark && Date.parse(state.watermark) >= now.getTime()) return;
+  saveSyncState({ ...state, watermark: now.toISOString() }, configDir);
+}
+
 /** Persist the shipping switch: load-modify-save so counters are not clobbered. */
 export function setShipTranscripts(enabled: boolean, configDir: string = getConfigDir()): void {
   const state = loadSyncState(configDir);

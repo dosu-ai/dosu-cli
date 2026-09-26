@@ -16,6 +16,7 @@ import {
   saveSyncState,
   setShipTranscripts,
   setSyncPaused,
+  skipBacklog,
   syncStatePath,
   UNKNOWN_PROJECT,
 } from "./watermark";
@@ -349,6 +350,39 @@ describe("resetSyncState", () => {
     expect(loadSyncState(configDir).watermark).toBeNull();
     expect(raw).not.toContain("paused");
     expect(raw).not.toContain("ship_transcripts");
+  });
+});
+
+describe("skipBacklog", () => {
+  it("moves the watermark to now so only later sessions ship, keeping the rest", () => {
+    saveSyncState(
+      {
+        schema_version: 2,
+        watermark: "2026-08-01T00:00:00.000Z",
+        consecutive_failures: 0,
+        total_shipped: 3,
+        project_filter: ["/p"],
+      },
+      configDir,
+    );
+
+    skipBacklog(NOW, configDir);
+
+    const state = loadSyncState(configDir);
+    expect(state.watermark).toBe(NOW.toISOString());
+    expect(state.total_shipped).toBe(3);
+    expect(state.project_filter).toEqual(["/p"]);
+  });
+
+  it("never moves the watermark backwards", () => {
+    saveSyncState(
+      { schema_version: 2, watermark: "2026-09-01T00:00:00.000Z", consecutive_failures: 0 },
+      configDir,
+    );
+
+    skipBacklog(NOW, configDir);
+
+    expect(loadSyncState(configDir).watermark).toBe("2026-09-01T00:00:00.000Z");
   });
 });
 

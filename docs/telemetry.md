@@ -104,7 +104,7 @@ The `properties` allowlist is:
 | `sync_trigger` | Optional, `knowledge sync` only: `hook`, `manual`, or `bootstrap`. |
 | `sync_status` | Optional, `knowledge sync` only: the pipeline status (`backlog`, `nothing-new`, `shipped`, `ship-failed`, `disabled`, `skipped-backoff`, `skipped-lock`, `skipped-paused`, `error`) or a command-level outcome (`detached` for the hook parent that only re-spawns, `detach-failed`, `status-only` for `--status`). |
 | `sessions_shipped` | Optional, `knowledge sync` only: sessions shipped to Dosu memory this invocation, bucketed to `0`, `1-4`, `5-9`, `10-19`, `20-49`, or `50+`. Summed across bootstrap rounds. |
-| `backfill_offer` | Optional, `setup`/`tui` only: what happened to the post-install "study past sessions" prompt — `not-offered` (empty backlog), `accepted`, `declined`, `cancelled`, or `spawn-failed`. |
+| `backfill_offer` | Optional, `setup`/`tui` only: what happened to the post-install "ship the last 30 days" prompt — `not-offered` (empty backlog), `accepted`, `declined`, `cancelled`, or `spawn-failed`. |
 
 The optional per-command facets are recorded by the running command through
 `recordCommandFacets()` and attached to its single completion event. Every value is checked against
@@ -184,8 +184,8 @@ a selected organization do not include a group association.
 Current common setup properties are `cli_version`, `install_channel`, `platform`, `arch`, and `mode`.
 Current callers also use only these workflow properties: `onboarding_run_id`,
 `has_deployment_option`, `mode_option`, `flow_kind`, `reason`, `provider_count`, `providers`,
-`completed_mcp`, `completed_skill`, and `completed_agents_md`. The post-install "study past
-sessions" offer is not a setup event; its outcome rides on the `setup` command's
+`completed_mcp`, `completed_skill`, and `completed_agents_md`. The post-install "ship the last
+30 days" offer is not a setup event; its outcome rides on the `setup` command's
 `cli_command_completed` event as `backfill_offer` (see the command telemetry table above). Setup
 events use stable names in the
 `cli_onboarding_*` family. They do not include raw authentication errors. This path uses a dedicated

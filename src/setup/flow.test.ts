@@ -225,6 +225,7 @@ import { ClaudeDesktopProvider } from "../mcp/providers/claude-desktop";
 import { CodexProvider } from "../mcp/providers/codex";
 import { CursorProvider } from "../mcp/providers/cursor";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
+import { loadSyncState, setShipTranscripts } from "../sync/watermark";
 import { consumeCommandFacets } from "../telemetry/telemetry";
 import { runActivityView } from "../tui/activity-view";
 import * as p from "../tui/prompts";
@@ -726,6 +727,39 @@ describe("stepConfigureTools", () => {
     );
     expect(cliConfig.statusLine).toBeUndefined();
     expect(existsSync(join(tempDir, ".cursor", "commands", "dosu-incognito.md"))).toBe(false);
+  });
+
+  // --- Prompt-time memory rides along with Claude Code's hook ---
+
+  it("installs Claude Code's prompt-time memory hook with the session hook", () => {
+    mkdirSync(join(tempDir, ".claude"), { recursive: true });
+
+    stepConfigureTools(makeCfg(), { toInstall: [ClaudeProvider()], toRemove: [], skipped: [] });
+
+    const settings = readFileSync(join(tempDir, ".claude", "settings.json"), "utf-8");
+    expect(settings).toContain("UserPromptSubmit");
+    expect(settings).toContain("knowledge context");
+  });
+
+  it("leaves the prompt-time memory hook out once the user opted out of shipping", () => {
+    mkdirSync(join(tempDir, ".claude"), { recursive: true });
+    setShipTranscripts(false);
+
+    stepConfigureTools(makeCfg(), { toInstall: [ClaudeProvider()], toRemove: [], skipped: [] });
+
+    const settings = readFileSync(join(tempDir, ".claude", "settings.json"), "utf-8");
+    expect(settings).not.toContain("knowledge context");
+  });
+
+  it("removes the prompt-time memory hook when Claude Code is unticked", () => {
+    mkdirSync(join(tempDir, ".claude"), { recursive: true });
+    const cfg = makeCfg();
+    stepConfigureTools(cfg, { toInstall: [ClaudeProvider()], toRemove: [], skipped: [] });
+
+    stepConfigureTools(cfg, { toInstall: [], toRemove: [ClaudeProvider()], skipped: [] });
+
+    const settings = readFileSync(join(tempDir, ".claude", "settings.json"), "utf-8");
+    expect(settings).not.toContain("knowledge context");
   });
 
   it("leaves a foreign status line alone and prints the one-liner instead", () => {
@@ -3369,7 +3403,31 @@ describe("stepOfferInitialSync", () => {
     expect(vi.mocked(p.confirm)).not.toHaveBeenCalled();
   });
 
-  it("scans with the bootstrap scope (old sessions included)", async () => {
+  it("does nothing once the user opted out of shipping", async () => {
+    setShipTranscripts(false);
+
+    await stepOfferInitialSync(makeCfg());
+
+    expect(mockRunKnowledgeSync).not.toHaveBeenCalled();
+    expect(vi.mocked(p.confirm)).not.toHaveBeenCalled();
+  });
+
+  it("says plainly that sessions are uploaded, and how to keep them out", async () => {
+    mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(3));
+    vi.mocked(p.confirm).mockResolvedValue(false);
+
+    await stepOfferInitialSync(makeCfg());
+
+    // wrapLog breaks lines to the terminal width; compare on flattened whitespace.
+    const said = vi.mocked(p.log.message).mock.calls.join(" ").replace(/\s+/g, " ");
+    expect(said).toContain("uploaded");
+    expect(said).toContain("redacted on this machine");
+    expect(said).toContain("/dosu-incognito");
+    expect(said).toContain("dosu knowledge transcripts disable");
+    expect(said).not.toContain("stay on this machine");
+  });
+
+  it("scans with the bootstrap scope (the whole 30-day window)", async () => {
     mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(3));
     vi.mocked(p.confirm).mockResolvedValue(false);
 
@@ -3405,7 +3463,7 @@ describe("stepOfferInitialSync", () => {
       "--quiet",
       "--bootstrap",
     ]);
-    expect(vi.mocked(p.log.success).mock.calls.join(" ")).toContain("Studying ");
+    expect(vi.mocked(p.log.success).mock.calls.join(" ")).toContain("Shipping 12 sessions");
     // Both prompts answered "yes": the live Activity view opens.
     expect(vi.mocked(runActivityView)).toHaveBeenCalledOnce();
   });
@@ -3428,17 +3486,22 @@ describe("stepOfferInitialSync", () => {
 
     await stepOfferInitialSync(makeCfg());
 
-    expect(vi.mocked(p.log.success).mock.calls.join(" ")).toContain("Studying 1 session in");
+    expect(vi.mocked(p.log.success).mock.calls.join(" ")).toContain("Shipping 1 session in");
   });
 
-  it("skips without spawning when the user declines", async () => {
+  it("declining ships only new sessions: the backlog is passed over, not queued for hooks", async () => {
     mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(2));
     vi.mocked(p.confirm).mockResolvedValue(false);
+    const before = Date.now();
 
     await stepOfferInitialSync(makeCfg());
 
     expect(mockSpawnDetachedSelf).not.toHaveBeenCalled();
-    expect(vi.mocked(p.log.info).mock.calls.join(" ")).toContain("Skipped");
+    // Otherwise the next session-end hook would ship the same 30 days anyway.
+    const watermark = loadSyncState().watermark;
+    expect(watermark).not.toBeNull();
+    expect(Date.parse(watermark as string)).toBeGreaterThanOrEqual(before - 1000);
+    expect(vi.mocked(p.log.info).mock.calls.join(" ")).toContain("Only sessions from now on");
   });
 
   it("treats a cancelled prompt as a decline", async () => {
@@ -3449,6 +3512,7 @@ describe("stepOfferInitialSync", () => {
     await stepOfferInitialSync(makeCfg());
 
     expect(mockSpawnDetachedSelf).not.toHaveBeenCalled();
+    expect(loadSyncState().watermark).not.toBeNull();
   });
 
   it("warns when the detached spawn fails", async () => {

@@ -22,12 +22,14 @@ import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
 import type { CliLibrary } from "../generated/dosu-api-types";
 import { getHookAgent } from "../hooks/agents";
+import { disableClaudeContextHook, enableClaudeContextHook } from "../hooks/context";
 import { getIncognitoAgent } from "../incognito/agents";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { getStatuslineAgent, StatuslineConflictError } from "../statusline/agents";
 import { spawnDetachedSelf } from "../sync/detach";
 import { runKnowledgeSync } from "../sync/sync";
+import { isShippingEnabled, loadSyncState, skipBacklog } from "../sync/watermark";
 import { recordCommandFacets } from "../telemetry/telemetry";
 import { runActivityView } from "../tui/activity-view";
 import { installCenteredLayout } from "../tui/layout";
@@ -336,8 +338,7 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
     );
   }
 
-  // Backfill offer: hooks only fire on future sessions, so offer to mine the existing backlog
-  // now, with consent, never automatically.
+  // Backfill offer: ship the last 30 days now, or pass them over and start from here.
   if (mcpCompleted && cfg.mode !== MODE_OSS) {
     await stepOfferInitialSync(cfg);
   }
@@ -362,49 +363,50 @@ function setupOutroMessage(mcpCompleted: boolean): string {
   return `${brand("\u2714")} You're all set!\n\n${steps.join("\n")}`;
 }
 
-/** Offer to mine the existing session backlog after install. The prompt only appears when there
- * is something to mine; on consent the sync runs fully detached so setup never blocks. */
+/** Offer to ship the last 30 days of sessions after install. Shipping is on by default, so the
+ * choice is between backfilling now and starting from here: declining passes the backlog over,
+ * or the first session-end hook would ship it anyway. On consent the drain runs fully detached
+ * so setup never blocks. */
 export async function stepOfferInitialSync(cfg: Config): Promise<void> {
   const target = cfg.active_account?.target;
-  // Without an API key + deployment the detached run couldn't mine anyway.
+  // Without an API key + deployment the detached run couldn't ship anyway.
   if (!target?.api_key || !target.deployment_id) return;
+  if (!isShippingEnabled(loadSyncState())) return;
 
   logger.info("setup", "Step: offer initial knowledge sync");
   const s = p.spinner();
-  s.start("Checking for recent agent sessions...");
+  s.start("Checking for agent sessions from the last 30 days...");
   const outcome = await runKnowledgeSync({ bootstrap: true });
   if (outcome.status !== "backlog" || outcome.readySessions === 0) {
-    s.stop("No past agent sessions to study. Dosu will learn from new ones as you work.");
+    s.stop("No recent agent sessions. Dosu memory learns from new ones as you work.");
     recordCommandFacets({ backfill_offer: "not-offered" });
     return;
   }
   const n = outcome.readySessions;
   const them = n === 1 ? "it" : "them";
-  s.stop(
-    `Found ${n} past agent session${n === 1 ? "" : "s"} on this machine that Dosu hasn't studied.`,
-  );
-  // What Dosu is about to do, why it's worth it, and what to expect when it's done.
+  s.stop(`Found ${n} agent session${n === 1 ? "" : "s"} from the last 30 days on this machine.`);
+  // What happens to the sessions, why it's worth it, and how to keep something out.
   p.log.message(
     wrapLog(
       [
-        `Dosu can read ${them} and pull out the durable knowledge: decisions, gotchas, and how-things-work that your team and agents would otherwise rediscover.`,
-        "Only distilled notes are saved to Dosu; your session logs stay on this machine.",
-        "It runs in the background a few sessions at a time; notes appear in Dosu as each batch finishes.",
+        "Dosu memory learns from finished agent sessions: where things live, commands that work, approaches that failed, so the next agent starts from what the last one learned.",
+        "Sessions are uploaded to Dosu, with secrets redacted on this machine first. Run /dosu-incognito in a session to keep it out, or dosu knowledge transcripts disable to stop shipping altogether.",
       ].join("\n"),
     ),
   );
 
-  const mineNow = await p.confirm({
-    message: `Study ${them} now?`,
-    active: "Study now \uD83D\uDCDA",
-    inactive: "Skip for now",
+  const shipNow = await p.confirm({
+    message: `Ship ${them} now?`,
+    active: "Ship now \uD83D\uDCDA",
+    inactive: "Only new sessions",
     initialValue: true,
   });
-  if (p.isCancel(mineNow) || !mineNow) {
-    recordCommandFacets({ backfill_offer: p.isCancel(mineNow) ? "cancelled" : "declined" });
+  if (p.isCancel(shipNow) || !shipNow) {
+    recordCommandFacets({ backfill_offer: p.isCancel(shipNow) ? "cancelled" : "declined" });
+    skipBacklog();
     p.log.info(
       wrapLog(
-        `Skipped. Dosu studies new sessions in the background as you work; run ${info("dosu knowledge sync")} anytime to study these too.`,
+        `Only sessions from now on will ship. To send these later, clear the shipping history on the Activity screen and run ${info("dosu knowledge sync --bootstrap")}.`,
       ),
     );
     return;
@@ -414,7 +416,7 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
     recordCommandFacets({ backfill_offer: "accepted" });
     p.log.success(
       wrapLog(
-        `\uD83D\uDCDA Studying ${n} session${n === 1 ? "" : "s"} in the background. Watch progress on the Activity screen; when it finishes, the new notes are in Dosu and agents connected to this MCP can use them.`,
+        `\uD83D\uDCDA Shipping ${n} session${n === 1 ? "" : "s"} in the background. Watch progress on the Activity screen; Dosu memory learns from each session after it arrives, and agents connected to this MCP can use what it learns.`,
       ),
     );
     const watch = await p.confirm({
@@ -1264,7 +1266,7 @@ function syncSessionHook(providerID: string, action: "enable" | "disable"): Hook
 }
 
 /** The status line rides along with the hook: it only has something to say once sessions are
- * being studied. A status line the user already has is left alone, and its one-liner is
+ * being shipped. A status line the user already has is left alone, and its one-liner is
  * returned as a suggestion. Fail-open like the hook. */
 function setupStatusline(
   providerID: string,
@@ -1289,6 +1291,21 @@ function setupStatusline(
     logger.warn("setup", `Status line ${action} failed for ${providerID}: ${msg}`);
     p.log.warn(`Could not ${action} the Dosu status line for ${agent.name()}: ${msg}`);
     return {};
+  }
+}
+
+/** Claude Code's prompt-time memory hook rides along with its session hook: memory built from
+ * shipped sessions comes back as a digest when a prompt warrants it. Not installed after the
+ * user opted out of shipping; removed with the agent. Fail-open like the hook. */
+function setupContextHook(providerID: string, action: "enable" | "disable"): void {
+  if (providerID !== "claude") return;
+  try {
+    if (action === "disable") disableClaudeContextHook();
+    else if (isShippingEnabled(loadSyncState())) enableClaudeContextHook();
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn("setup", `Prompt-time memory hook ${action} failed: ${msg}`);
+    p.log.warn(`Could not ${action} Claude Code's prompt-time memory hook: ${msg}`);
   }
 }
 
@@ -1324,7 +1341,8 @@ export function stepConfigureTools(cfg: Config, selection: ToolSelection): Confi
       provider.install(cfg, true);
       logger.info("setup", `Configured ${provider.name()}`);
       const hook = syncSessionHook(provider.id(), "enable");
-      // Status line and slash command only make sense once the hook is studying sessions.
+      // Status line, slash command and prompt hook only make sense once the hook ships sessions.
+      if (hook) setupContextHook(provider.id(), "enable");
       const bundle = hook
         ? {
             ...setupStatusline(provider.id(), "enable"),
@@ -1352,6 +1370,7 @@ export function stepConfigureTools(cfg: Config, selection: ToolSelection): Confi
       syncSessionHook(provider.id(), "disable");
       setupStatusline(provider.id(), "disable");
       setupIncognito(provider.id(), "disable");
+      setupContextHook(provider.id(), "disable");
     } catch (err: unknown) {
       /* v8 ignore next -- err is always Error in practice */
       const error = err instanceof Error ? err : new Error(String(err));
