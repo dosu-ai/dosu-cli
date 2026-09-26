@@ -241,6 +241,84 @@ describe("review list", () => {
     expect(allOutput()).toContain("No pending review items");
   });
 
+  describe("--since / --until", () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-09-25T12:00:00Z"));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("resolves both bounds to ISO instants (an until date includes the whole day)", async () => {
+      mockLoadConfig.mockReturnValue(validConfig);
+      mockQuery.mockResolvedValueOnce({ id: "ks1" });
+      mockQuery.mockResolvedValueOnce({ items: [pendingItem], truncated: false, total: 1 });
+
+      await run("list", "--since", "7d", "--until", "2026-09-24");
+
+      expect(mockQuery).toHaveBeenNthCalledWith(2, "review.listPending", {
+        knowledgeStoreId: "ks1",
+        deploymentId: "dep1",
+        since: "2026-09-18T12:00:00.000Z",
+        until: "2026-09-25T00:00:00.000Z",
+      });
+      expect(allOutput()).toContain(
+        "Pending review items created since 2026-09-18T12:00Z and before 2026-09-25T00:00Z:",
+      );
+      expect(allOutput()).toContain("API Guide");
+    });
+
+    it("sends only the bound that was given", async () => {
+      mockLoadConfig.mockReturnValue(validConfig);
+      mockQuery.mockResolvedValueOnce({ id: "ks1" });
+      mockQuery.mockResolvedValueOnce({ items: [], truncated: false, total: 0 });
+
+      await run("list", "--until", "2026-09-01T14:00:00+02:00");
+
+      expect(mockQuery).toHaveBeenNthCalledWith(2, "review.listPending", {
+        knowledgeStoreId: "ks1",
+        deploymentId: "dep1",
+        until: "2026-09-01T12:00:00.000Z",
+      });
+      expect(allOutput()).toContain("No pending review items before 2026-09-01T12:00Z.");
+    });
+
+    it("names the range in the truncation footer", async () => {
+      mockLoadConfig.mockReturnValue(validConfig);
+      mockQuery.mockResolvedValueOnce({ id: "ks1" });
+      mockQuery.mockResolvedValueOnce({ items: [pendingItem], truncated: true, total: 50 });
+
+      await run("list", "--since", "24h");
+
+      expect(allOutput()).toContain(
+        "Showing 1 of 50+ pending items since 2026-09-24T12:00Z (list truncated).",
+      );
+    });
+
+    it("exits before any request when --since is not earlier than --until", async () => {
+      mockLoadConfig.mockReturnValue(validConfig);
+
+      await expect(run("list", "--since", "7d", "--until", "7d")).rejects.toThrow("exit");
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("--since must be earlier than --until."),
+      );
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it("rejects a malformed bound at parse time", async () => {
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        await expect(run("list", "--since", "last week")).rejects.toThrow("exit");
+        expect(stderr).toHaveBeenCalledWith(expect.stringContaining("must be a duration"));
+      } finally {
+        stderr.mockRestore();
+      }
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+  });
+
   it("exits when space_id is missing", async () => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ space_id: undefined }));
     await expect(run("list")).rejects.toThrow("exit");
