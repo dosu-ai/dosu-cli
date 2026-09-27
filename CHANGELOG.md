@@ -1,3 +1,10 @@
+# [0.58.0](https://github.com/dosu-ai/dosu-cli/compare/v0.57.2...v0.58.0) (2026-09-27)
+
+
+### Features
+
+* **review:** add --since/--until to review list ([#246](https://github.com/dosu-ai/dosu-cli/issues/246)) ([2641843](https://github.com/dosu-ai/dosu-cli/commit/26418430edae79a0b268e0c5ebcb3fac2e46935b))
+
 ## [0.57.2](https://github.com/dosu-ai/dosu-cli/compare/v0.57.1...v0.57.2) (2026-09-24)
 
 
