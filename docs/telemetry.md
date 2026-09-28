@@ -107,6 +107,7 @@ The `properties` allowlist is:
 | `notes_written` | Optional, `knowledge sync` only: `write_knowledge` calls allowed through this invocation, same buckets. |
 | `learner_outcome` | Optional, `knowledge sync` only: `completed`, `settings_conflict`, `consent_off`, `credit_limit`, `quota_exceeded`, `gateway_rejected`, `claude_code_missing`, or `error`. |
 | `gateway_reason` | Optional, `knowledge sync` only: fixed category of the LLM gateway's 400, derived locally from its text — `system_role_unsupported`, `adaptive_thinking_unsupported`, `effort_unsupported`, `unsupported_request` (the gateway's own `dosu_unsupported_request:` refusal), `max_tokens`, `context_length`, or `other`. The rejection text itself is never sent. |
+| `settings_conflict_keys` | Optional, `knowledge sync` only, with `settings_conflict`: which keys in the organization's managed Claude Code settings blocked the study run, sorted and comma-joined within 200 characters. Each entry is a public Claude Code setting or variable name from the fixed list in `src/telemetry/telemetry.ts` (for example `apiKeyHelper` or `env.ANTHROPIC_BASE_URL`); any other `env.ANTHROPIC_*`, `env.CLAUDE_CODE_*`, or `env.AWS_*` name collapses to `env.ANTHROPIC_other`, `env.CLAUDE_CODE_other`, or `env.AWS_other`, an unparsable file is `unreadable`, and anything else is `other`. Never setting values (such as a URL or key), the file path, or the file's contents. |
 | `claude_code_source` | Optional, `knowledge sync` only: where the studying agent's Claude Code came from — `sdk` (the Agent SDK's bundled binary), `system` (a system install), or `missing`. Never the executable path. |
 | `claude_code_version` | Optional, `knowledge sync` only: the spawned Claude Code's self-reported version, kept only when it is a plain release version (`1.2.3` with an optional short dotted pre-release). |
 | `learner_model` | Optional, `knowledge sync` only: the model the study run pinned, kept only when it is a `claude-` model id of lowercase letters, digits, `.`, and `-` (at most 63 characters). |
@@ -159,8 +160,8 @@ The exact tag allowlist is `schema_version`, `command`, `cli_version`, `install_
 `arch`, `runtime`, `runtime_major`, `is_ci`, `is_tty`, `mode`, and `is_authenticated`, plus optional
 `error_code`, `http_status`, and `exit_code`, plus these command facets when the failing command
 recorded them and they pass the same validation as for PostHog: `sync_trigger`, `sync_status`,
-`learner_outcome`, `gateway_reason`, `claude_code_source`, `claude_code_version`, and
-`learner_model`. Values are bounded and validated. `error_code` and
+`learner_outcome`, `gateway_reason`, `settings_conflict_keys`, `claude_code_source`,
+`claude_code_version`, and `learner_model`. Values are bounded and validated. `error_code` and
 error types come from closed known-value allowlists, and `http_status` is an integer from 100
 through 599.
 
@@ -168,8 +169,10 @@ The exception value contains only:
 
 - `type`: a known allowlisted error-class name, otherwise `Error`;
 - `value`: when the command recorded a validated `learner_outcome` (or, failing that, `sync_status`)
-  facet, `<command>: <outcome>` with ` (<gateway_reason>)` appended when present — for example
-  `knowledge sync: gateway_rejected (system_role_unsupported)`; otherwise the stable error code, or
+  facet, `<command>: <outcome>` with ` (<gateway_reason>)` or, failing that,
+  ` (<settings_conflict_keys>)` appended when present — for example
+  `knowledge sync: gateway_rejected (system_role_unsupported)` or
+  `knowledge sync: settings_conflict (apiKeyHelper)`; otherwise the stable error code, or
   the safe error type; and
 - optional `stacktrace.frames`: at most 20 frames with only `filename`, `lineno`, `colno`,
   `in_app: true`, and the fixed `app:///bin/dosu.js` `abs_path` for mapped npm-bundle frames.
@@ -228,7 +231,8 @@ The payloads constructed by the CLI never include:
 - user or project file names and paths, working directory, home directory, repository name,
   remote, branch, diff, or directory listing;
 - arbitrary environment-variable names or values (the explicitly configured public PostHog token
-  and Sentry DSN are transport metadata, not event properties);
+  and Sentry DSN are transport metadata, not event properties; `settings_conflict_keys` carries only
+  public Claude Code setting names from a fixed list, never their values);
 - configuration contents other than the validated session user ID/email and setup identifiers
   listed above, including the selected organization UUID used for group association, cookies,
   vendor management keys, or command/API request and response bodies.

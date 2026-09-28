@@ -63,7 +63,8 @@ when a selected organization UUID is available, analytics events associate it th
 installation history to an account.
 Setup analytics may include only the documented coarse fields. Never collect prompts, raw command
 lines, free-form argument or option values, user source code, file contents, local paths, environment
-variable names or values, credentials, raw error messages, or `debug.log`. Keep payloads allowlisted, transports
+variable names or values (beyond the fixed Claude Code setting names documented for
+`settings_conflict_keys`), credentials, raw error messages, or `debug.log`. Keep payloads allowlisted, transports
 bounded and fail-open, honor `DO_NOT_TRACK` and `DOSU_TELEMETRY_DISABLED`, and keep stdout/JSON
 contracts unchanged. See
 [docs/telemetry.md](docs/telemetry.md) for the field and privacy contract.

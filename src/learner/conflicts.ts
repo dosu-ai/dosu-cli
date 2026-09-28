@@ -25,6 +25,9 @@ const CONFLICTING_KEYS = [
 
 const CONFLICTING_ENV_PREFIXES = ["ANTHROPIC_", "CLAUDE_CODE_", "AWS_"];
 
+/** Reported in place of keys when a managed file can't be read or parsed. */
+export const UNREADABLE_SETTINGS_KEY = "<unreadable or invalid JSON>";
+
 export interface LearnerConflict {
   file: string;
   /** The offending keys, e.g. `["apiKeyHelper", "env.ANTHROPIC_BASE_URL"]`. */
@@ -57,7 +60,7 @@ export function detectSettingsConflicts(
     try {
       settings = JSON.parse(readFileSync(file, "utf8"));
     } catch {
-      conflicts.push({ file, keys: ["<unreadable or invalid JSON>"] });
+      conflicts.push({ file, keys: [UNREADABLE_SETTINGS_KEY] });
       continue;
     }
     if (typeof settings !== "object" || settings === null) continue;

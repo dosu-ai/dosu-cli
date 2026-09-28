@@ -975,6 +975,33 @@ describe("knowledge sync", () => {
       expect(JSON.stringify(facets)).not.toContain("secret");
     });
 
+    it("tags a settings conflict with the offending keys, never the file path", async () => {
+      mockRunSync.mockResolvedValue({
+        status: "mine-failed",
+        readySessions: 1,
+        inFlightSessions: 0,
+        sessions: [],
+        studiedSessions: 0,
+        learner: {
+          outcome: "settings_conflict",
+          notesWritten: 0,
+          turns: 0,
+          message: "Refusing to run: /Library/Application Support/ClaudeCode/managed-settings.json",
+          conflictKeys: ["apiKeyHelper", "env.ANTHROPIC_BASE_URL"],
+        },
+        error: "Refusing to run: /Library/Application Support/ClaudeCode/managed-settings.json",
+      });
+
+      await run("sync", "--quiet");
+
+      const facets = consumeCommandFacets();
+      expect(facets).toMatchObject({
+        learner_outcome: "settings_conflict",
+        settings_conflict_keys: ["apiKeyHelper", "env.ANTHROPIC_BASE_URL"],
+      });
+      expect(JSON.stringify(facets)).not.toContain("managed-settings.json");
+    });
+
     it("tags a manual run that only reported the backlog", async () => {
       mockRunSync.mockResolvedValue({ status: "backlog", readySessions: 3, inFlightSessions: 1 });
 

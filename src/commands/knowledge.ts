@@ -376,6 +376,7 @@ function learnerFacets(learner: LearnerRunResult): CommandFacets {
   return {
     learner_outcome: learner.outcome,
     ...(learner.gatewayReason ? { gateway_reason: learner.gatewayReason } : {}),
+    ...(learner.conflictKeys ? { settings_conflict_keys: learner.conflictKeys } : {}),
     ...(learner.claudeCodeSource ? { claude_code_source: learner.claudeCodeSource } : {}),
     ...(learner.claudeCodeVersion ? { claude_code_version: learner.claudeCodeVersion } : {}),
     ...(learner.model ? { learner_model: learner.model } : {}),
