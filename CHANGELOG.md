@@ -1,3 +1,10 @@
+# [0.59.0](https://github.com/dosu-ai/dosu-cli/compare/v0.58.1...v0.59.0) (2026-09-28)
+
+
+### Features
+
+* **skill:** bundle the dosu skill inside the CLI ([#239](https://github.com/dosu-ai/dosu-cli/issues/239)) ([3004fa4](https://github.com/dosu-ai/dosu-cli/commit/3004fa446123457f271c29bf01381ac05c7bc7d8))
+
 ## [0.58.1](https://github.com/dosu-ai/dosu-cli/compare/v0.58.0...v0.58.1) (2026-09-28)
 
 
