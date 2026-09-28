@@ -50,6 +50,8 @@ export interface LearnerRunResult {
   /** Set with `gateway_rejected`. The remaining fields are diagnostics for telemetry, each set
    * once known; telemetry re-validates every one against its own allowlist. */
   gatewayReason?: GatewayRejectionReason;
+  /** Set with `settings_conflict`: the offending managed-settings keys, e.g. `env.ANTHROPIC_BASE_URL`. */
+  conflictKeys?: string[];
   claudeCodeSource?: ClaudeExecutable["kind"];
   /** As reported by the spawned Claude Code's init message. */
   claudeCodeVersion?: string;
@@ -207,6 +209,7 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
       notesWritten: 0,
       turns: 0,
       message: `Refusing to run: conflicting Claude Code settings would override the study run's auth (${detail})`,
+      conflictKeys: conflicts.flatMap((c) => c.keys),
     };
   }
 

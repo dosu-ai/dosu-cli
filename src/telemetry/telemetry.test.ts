@@ -359,7 +359,72 @@ describe("safe payload builders", () => {
     });
   });
 
+  it("keeps known settings-conflict keys and collapses unknown names to their family", () => {
+    const payload = buildPostHogPayload({
+      apiKey: "public",
+      installId: "11111111-1111-4111-8111-111111111111",
+      command: "knowledge sync",
+      result: "success",
+      durationMs: 2,
+      exitCode: 0,
+      facets: {
+        learner_outcome: "settings_conflict",
+        settings_conflict_keys: [
+          "env.ANTHROPIC_BASE_URL",
+          "apiKeyHelper",
+          "env.ANTHROPIC_CORP_SECRET_ROUTE",
+          "env.CLAUDE_CODE_INTERNAL_FLAG",
+          "env.AWS_ACME_ACCOUNT",
+          "<unreadable or invalid JSON>",
+          "/Users/alice/private",
+          "apiKeyHelper",
+        ],
+      },
+      context: SAFE_CONTEXT,
+      runtime: SAFE_RUNTIME,
+    });
+
+    expect(payload.properties.settings_conflict_keys).toBe(
+      "apiKeyHelper,env.ANTHROPIC_BASE_URL,env.ANTHROPIC_other,env.AWS_other," +
+        "env.CLAUDE_CODE_other,other,unreadable",
+    );
+    expect(JSON.stringify(payload)).not.toContain("CORP_SECRET");
+    expect(JSON.stringify(payload)).not.toContain("alice");
+  });
+
+  it("keeps the settings-conflict keys within the Sentry tag limit", () => {
+    const payload = buildPostHogPayload({
+      apiKey: "public",
+      installId: "11111111-1111-4111-8111-111111111111",
+      command: "knowledge sync",
+      result: "success",
+      durationMs: 2,
+      exitCode: 0,
+      facets: {
+        settings_conflict_keys: [
+          "env.ANTHROPIC_API_KEY",
+          "env.ANTHROPIC_AUTH_TOKEN",
+          "env.ANTHROPIC_BASE_URL",
+          "env.ANTHROPIC_BEDROCK_BASE_URL",
+          "env.ANTHROPIC_CUSTOM_HEADERS",
+          "env.ANTHROPIC_DEFAULT_HAIKU_MODEL",
+          "env.ANTHROPIC_DEFAULT_OPUS_MODEL",
+          "env.ANTHROPIC_DEFAULT_SONNET_MODEL",
+          "env.ANTHROPIC_FOUNDRY_API_KEY",
+        ],
+      },
+      context: SAFE_CONTEXT,
+      runtime: SAFE_RUNTIME,
+    });
+
+    const value = payload.properties.settings_conflict_keys ?? "";
+    expect(value.length).toBeLessThanOrEqual(200);
+    expect(value.startsWith("env.ANTHROPIC_API_KEY,")).toBe(true);
+    expect(value.endsWith(",")).toBe(false);
+  });
+
   it.each([
+    ["settings_conflict_keys", "apiKeyHelper"],
     ["gateway_reason", "LLM gateway rejected the study run: secret prompt text"],
     ["gateway_reason", "Other"],
     ["claude_code_source", "/Users/me/.local/bin/claude"],
@@ -547,6 +612,34 @@ describe("safe payload builders", () => {
     ]);
   });
 
+  it("tags and summarizes a settings conflict with its keys, keeping one fingerprint", () => {
+    const built = buildSentryEnvelope({
+      dsn: "https://public@sentry.example.test/42",
+      command: "knowledge sync",
+      context: SAFE_CONTEXT,
+      runtime: SAFE_RUNTIME,
+      error: { type: "LearnerRunFailed", frames: [] },
+      facets: {
+        sync_status: "mine-failed",
+        learner_outcome: "settings_conflict",
+        settings_conflict_keys: ["env.ANTHROPIC_BASE_URL", "apiKeyHelper"],
+      },
+      eventId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      timestampMs: 2_000,
+    });
+
+    const event = JSON.parse(built?.body.split("\n")[2] ?? "{}") as {
+      tags: Record<string, string>;
+      fingerprint: string[];
+      exception: { values: Array<{ value: string }> };
+    };
+    expect(event.tags.settings_conflict_keys).toBe("apiKeyHelper,env.ANTHROPIC_BASE_URL");
+    expect(event.exception.values[0]?.value).toBe(
+      "knowledge sync: settings_conflict (apiKeyHelper,env.ANTHROPIC_BASE_URL)",
+    );
+    expect(event.fingerprint.slice(-1)).toEqual(["settings_conflict"]);
+  });
+
   it("summarizes a learner outcome without a gateway reason, and a bare sync status", () => {
     const envelope = (facets: Record<string, string>) => {
       const built = buildSentryEnvelope({
@@ -617,6 +710,7 @@ describe("safe payload builders", () => {
         sync_status: raw,
         learner_outcome: raw,
         gateway_reason: raw,
+        ...({ settings_conflict_keys: raw } as object),
         claude_code_source: raw,
         claude_code_version: raw,
         learner_model: raw,
@@ -641,6 +735,7 @@ describe("safe payload builders", () => {
       "sync_status",
       "learner_outcome",
       "gateway_reason",
+      "settings_conflict_keys",
       "claude_code_source",
       "claude_code_version",
       "learner_model",

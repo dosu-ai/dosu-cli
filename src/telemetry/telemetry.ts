@@ -6,6 +6,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { getWebAppURL } from "../config/constants";
+import { UNREADABLE_SETTINGS_KEY } from "../learner/conflicts";
 import { INSTALL_CHANNEL, VERSION } from "../version/version";
 import { BUNDLE_DEBUG_ID_PLACEHOLDER } from "./debug-id";
 
@@ -138,6 +139,52 @@ const GATEWAY_REASONS = new Set([
   "other",
 ]);
 const CLAUDE_CODE_SOURCES = new Set(["sdk", "system", "missing"]);
+/** Public Claude Code setting and variable names the learner's managed-settings check can report
+ * (src/learner/conflicts.ts). Names only, never values; any other name collapses to its family. */
+const SETTINGS_CONFLICT_KEYS = new Set([
+  "apiKeyHelper",
+  "forceLoginMethod",
+  "awsAuthRefresh",
+  "awsCredentialExport",
+  "env.ANTHROPIC_API_KEY",
+  "env.ANTHROPIC_AUTH_TOKEN",
+  "env.ANTHROPIC_BASE_URL",
+  "env.ANTHROPIC_CUSTOM_HEADERS",
+  "env.ANTHROPIC_MODEL",
+  "env.ANTHROPIC_SMALL_FAST_MODEL",
+  "env.ANTHROPIC_DEFAULT_OPUS_MODEL",
+  "env.ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "env.ANTHROPIC_DEFAULT_HAIKU_MODEL",
+  "env.ANTHROPIC_BEDROCK_BASE_URL",
+  "env.ANTHROPIC_VERTEX_BASE_URL",
+  "env.ANTHROPIC_VERTEX_PROJECT_ID",
+  "env.ANTHROPIC_FOUNDRY_BASE_URL",
+  "env.ANTHROPIC_FOUNDRY_API_KEY",
+  "env.CLAUDE_CODE_USE_BEDROCK",
+  "env.CLAUDE_CODE_USE_VERTEX",
+  "env.CLAUDE_CODE_USE_FOUNDRY",
+  "env.CLAUDE_CODE_OAUTH_TOKEN",
+  "env.CLAUDE_CODE_API_BASE_URL",
+  "env.CLAUDE_CODE_SKIP_BEDROCK_AUTH",
+  "env.CLAUDE_CODE_SKIP_VERTEX_AUTH",
+  "env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS",
+  "env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+  "env.CLAUDE_CODE_ENABLE_TELEMETRY",
+  "env.CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+  "env.AWS_REGION",
+  "env.AWS_PROFILE",
+  "env.AWS_BEARER_TOKEN_BEDROCK",
+  "env.AWS_ACCESS_KEY_ID",
+  "env.AWS_SECRET_ACCESS_KEY",
+  "env.AWS_SESSION_TOKEN",
+]);
+const SETTINGS_CONFLICT_FAMILIES: Array<[prefix: string, family: string]> = [
+  ["env.ANTHROPIC_", "env.ANTHROPIC_other"],
+  ["env.CLAUDE_CODE_", "env.CLAUDE_CODE_other"],
+  ["env.AWS_", "env.AWS_other"],
+];
+/** Sentry caps tag values at 200 characters. */
+const MAX_CONFLICT_KEYS_LENGTH = 200;
 /** Open-ended but shape-checked: a plain release version, and a Claude model id. */
 const CLAUDE_CODE_VERSION_PATTERN =
   /^\d{1,4}\.\d{1,4}\.\d{1,6}(?:-[0-9A-Za-z]{1,16}(?:\.[0-9A-Za-z]{1,16}){0,3})?$/;
@@ -165,6 +212,8 @@ export interface CommandFacets {
   learner_outcome?: string;
   /** `knowledge sync`: fixed category of a gateway 400; never its text. */
   gateway_reason?: string;
+  /** `knowledge sync`: managed-settings keys behind a `settings_conflict`; never their values. */
+  settings_conflict_keys?: string[];
   /** `knowledge sync`: where the learner's Claude Code came from. */
   claude_code_source?: string;
   /** `knowledge sync`: the spawned Claude Code's version. */
@@ -182,6 +231,7 @@ interface SafeCommandFacets {
   notes_written?: string;
   learner_outcome?: string;
   gateway_reason?: string;
+  settings_conflict_keys?: string;
   claude_code_source?: string;
   claude_code_version?: string;
   learner_model?: string;
@@ -194,6 +244,7 @@ const SENTRY_FACET_TAGS = [
   "sync_status",
   "learner_outcome",
   "gateway_reason",
+  "settings_conflict_keys",
   "claude_code_source",
   "claude_code_version",
   "learner_model",
@@ -279,6 +330,7 @@ interface PostHogProperties {
   notes_written?: string;
   learner_outcome?: string;
   gateway_reason?: string;
+  settings_conflict_keys?: string;
   claude_code_source?: string;
   claude_code_version?: string;
   learner_model?: string;
@@ -637,12 +689,33 @@ function matching(value: unknown, pattern: RegExp): string | undefined {
   return typeof value === "string" && pattern.test(value) ? value : undefined;
 }
 
+/** Known conflict keys kept as-is, anything else reduced to its family (or `other`), sorted and
+ * comma-joined within the Sentry tag limit. */
+function conflictKeysFacet(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const keys = new Set<string>();
+  for (const raw of value) {
+    if (typeof raw !== "string") continue;
+    if (SETTINGS_CONFLICT_KEYS.has(raw)) keys.add(raw);
+    else if (raw === UNREADABLE_SETTINGS_KEY) keys.add("unreadable");
+    else keys.add(SETTINGS_CONFLICT_FAMILIES.find(([p]) => raw.startsWith(p))?.[1] ?? "other");
+  }
+  let joined = "";
+  for (const key of [...keys].sort()) {
+    const next = joined ? `${joined},${key}` : key;
+    if (next.length > MAX_CONFLICT_KEYS_LENGTH) break;
+    joined = next;
+  }
+  return joined || undefined;
+}
+
 function sanitizeFacets(facets: CommandFacets | undefined): SafeCommandFacets {
   if (!facets || typeof facets !== "object") return {};
   const trigger = allowlisted(facets.sync_trigger, SYNC_TRIGGERS);
   const status = allowlisted(facets.sync_status, SYNC_STATUSES);
   const learner = allowlisted(facets.learner_outcome, LEARNER_OUTCOMES);
   const gatewayReason = allowlisted(facets.gateway_reason, GATEWAY_REASONS);
+  const conflictKeys = conflictKeysFacet(facets.settings_conflict_keys);
   const claudeSource = allowlisted(facets.claude_code_source, CLAUDE_CODE_SOURCES);
   const claudeVersion = matching(facets.claude_code_version, CLAUDE_CODE_VERSION_PATTERN);
   const model = matching(facets.learner_model, LEARNER_MODEL_PATTERN);
@@ -658,6 +731,7 @@ function sanitizeFacets(facets: CommandFacets | undefined): SafeCommandFacets {
       : {}),
     ...(learner ? { learner_outcome: learner } : {}),
     ...(gatewayReason ? { gateway_reason: gatewayReason } : {}),
+    ...(conflictKeys ? { settings_conflict_keys: conflictKeys } : {}),
     ...(claudeSource ? { claude_code_source: claudeSource } : {}),
     ...(claudeVersion ? { claude_code_version: claudeVersion } : {}),
     ...(model ? { learner_model: model } : {}),
@@ -814,7 +888,8 @@ function exceptionSummary(command: string, error: SafeError, facets: SafeCommand
   if (facets.learner_outcome === "completed") return error.code ?? error.type;
   const outcome = facets.learner_outcome ?? facets.sync_status;
   if (!outcome) return error.code ?? error.type;
-  return `${command}: ${outcome}${facets.gateway_reason ? ` (${facets.gateway_reason})` : ""}`;
+  const detail = facets.gateway_reason ?? facets.settings_conflict_keys;
+  return `${command}: ${outcome}${detail ? ` (${detail})` : ""}`;
 }
 
 export function buildSentryEnvelope(input: SentryEnvelopeInput): SentryEnvelope | null {

@@ -186,6 +186,7 @@ describe("runLearner", () => {
     expect(result.outcome).toBe("settings_conflict");
     expect(result.message).toContain("managed-settings.json");
     expect(result.message).toContain("apiKeyHelper");
+    expect(result.conflictKeys).toEqual(["apiKeyHelper"]);
     expect(queryMock).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
