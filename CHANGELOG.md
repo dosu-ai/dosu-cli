@@ -1,3 +1,10 @@
+# [0.60.0](https://github.com/dosu-ai/dosu-cli/compare/v0.59.0...v0.60.0) (2026-09-28)
+
+
+### Features
+
+* **telemetry:** report which managed Claude Code settings block a study run ([#248](https://github.com/dosu-ai/dosu-cli/issues/248)) ([2eace85](https://github.com/dosu-ai/dosu-cli/commit/2eace8547399485859a52c765b527a2b6dc53cf2))
+
 # [0.59.0](https://github.com/dosu-ai/dosu-cli/compare/v0.58.1...v0.59.0) (2026-09-28)
 
 
