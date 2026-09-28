@@ -66,10 +66,15 @@ export function shouldRunBackgroundChecks(actionName: string): boolean {
 
 /** `dosu setup` and `dosu mcp refresh` rewrite the agents' MCP entries themselves (and record
  * the version); running the automatic post-upgrade refresh first would do it twice and print
- * two reports. */
+ * two reports. `dosu knowledge sync` is the hook command: it runs inside a live agent session,
+ * where rewriting the agent's own config races its writes and the stderr nudge is never seen.
+ * Deferring to the next command a person actually types loses nothing — the hook itself does
+ * not depend on the MCP entry. */
 export function shouldRunMcpRefreshCheck(actionCommand: Command): boolean {
   if (actionCommand.name() === "setup") return false;
-  return !(actionCommand.name() === "refresh" && actionCommand.parent?.name() === "mcp");
+  const parent = actionCommand.parent?.name();
+  if (actionCommand.name() === "refresh" && parent === "mcp") return false;
+  return !(actionCommand.name() === "sync" && parent === "knowledge");
 }
 
 const TELEMETRY_FLUSH_TIMEOUT_MS = 750;

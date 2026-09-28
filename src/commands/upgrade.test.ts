@@ -482,30 +482,49 @@ describe("runUpgrade", () => {
 });
 
 describe("completeUpgrade", () => {
-  it("refreshes skills after a successful Homebrew upgrade", async () => {
-    mockCommands({ "brew upgrade dosu-ai/dosu/dosu": { status: 0 } });
+  it("refreshes skills after a successful non-interactive Homebrew upgrade", async () => {
+    mockCommands({
+      "brew upgrade dosu-ai/dosu/dosu": { status: 0 },
+      "dosu mcp refresh": { status: 0 },
+    });
 
-    const status = await completeUpgrade("homebrew", { platform: "darwin" });
+    const status = await completeUpgrade("homebrew", { platform: "darwin", interactive: false });
 
     expect(status).toBe(0);
     expect(mockInstallSkill).toHaveBeenCalledOnce();
     expect(output()).toContain("Skills updated");
   });
 
+  it("leaves skills to the setup wizard when the hand-off is interactive", async () => {
+    mockCommands({
+      "brew upgrade dosu-ai/dosu/dosu": { status: 0 },
+      "dosu setup": { status: 0 },
+    });
+
+    const status = await completeUpgrade("homebrew", { platform: "darwin", interactive: true });
+
+    expect(status).toBe(0);
+    expect(mockInstallSkill).not.toHaveBeenCalled();
+    expect(output()).not.toContain("Updating Dosu skills");
+  });
+
   it("does not refresh skills after a failed Homebrew upgrade", async () => {
     mockCommands({ "brew upgrade dosu-ai/dosu/dosu": { status: 7 } });
 
-    const status = await completeUpgrade("homebrew", { platform: "darwin" });
+    const status = await completeUpgrade("homebrew", { platform: "darwin", interactive: false });
 
     expect(status).toBe(7);
     expect(mockInstallSkill).not.toHaveBeenCalled();
   });
 
   it("returns 0 and hints at dosu skill update when skill refresh fails", async () => {
-    mockCommands({ "brew upgrade dosu-ai/dosu/dosu": { status: 0 } });
+    mockCommands({
+      "brew upgrade dosu-ai/dosu/dosu": { status: 0 },
+      "dosu mcp refresh": { status: 0 },
+    });
     mockInstallSkill.mockResolvedValue({ success: false });
 
-    const status = await completeUpgrade("homebrew", { platform: "darwin" });
+    const status = await completeUpgrade("homebrew", { platform: "darwin", interactive: false });
 
     expect(status).toBe(0);
     expect(mockInstallSkill).toHaveBeenCalledOnce();
