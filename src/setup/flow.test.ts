@@ -1008,7 +1008,7 @@ describe("runSetup integration", () => {
     installRemoteSetupDefaults();
     vi.mocked(p.isCancel).mockReturnValue(false);
     installMultiselectDefault();
-    mockInstallSkill.mockResolvedValue({ success: true, sha: "test-sha" });
+    mockInstallSkill.mockResolvedValue({ success: true, version: "1.2.3" });
   });
   afterEach(teardownTempEnv);
 
@@ -2170,7 +2170,7 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(mockInstallSkill).toHaveBeenCalledWith(["cursor"], { quiet: true });
+    expect(mockInstallSkill).toHaveBeenCalledWith(["cursor"]);
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill ready for 1 agent"));
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("/skills/cursor/dosu"));
   });
@@ -2201,7 +2201,7 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(mockInstallSkill).toHaveBeenCalledWith(["cursor"], { quiet: true });
+    expect(mockInstallSkill).toHaveBeenCalledWith(["cursor"]);
   });
 
   it("goes directly to agent selection without a component-selection prompt", async () => {
@@ -2369,7 +2369,7 @@ describe("runInstallSkill", () => {
   afterEach(teardownTempEnv);
 
   it("calls installSkill and returns true on success", async () => {
-    mockInstallSkill.mockResolvedValue({ success: true, sha: "abc" });
+    mockInstallSkill.mockResolvedValue({ success: true, version: "1.2.3" });
 
     const result = await runInstallSkill([ClaudeProvider()]);
     const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
@@ -2377,7 +2377,7 @@ describe("runInstallSkill", () => {
     expect(result).toBe(true);
     expect(spinner?.start).toHaveBeenCalledWith("Installing skill for 1 agent");
     expect(spinner?.stop).toHaveBeenCalledWith("Skill installed");
-    expect(mockInstallSkill).toHaveBeenCalledWith(["claude"], { quiet: true });
+    expect(mockInstallSkill).toHaveBeenCalledWith(["claude"]);
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill ready for 1 agent"));
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Claude Code"));
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("/skills/claude/dosu"));
@@ -2432,7 +2432,7 @@ describe("runSetup checkpoint behavior", () => {
     installRemoteSetupDefaults();
     vi.mocked(p.isCancel).mockReturnValue(false);
     installMultiselectDefault();
-    mockInstallSkill.mockResolvedValue({ success: true, sha: "test-sha" });
+    mockInstallSkill.mockResolvedValue({ success: true, version: "1.2.3" });
   });
   afterEach(teardownTempEnv);
 
@@ -2828,7 +2828,7 @@ describe("runSetup additional branches", () => {
     installRemoteSetupDefaults();
     vi.mocked(p.isCancel).mockReturnValue(false);
     installMultiselectDefault();
-    mockInstallSkill.mockResolvedValue({ success: true, sha: "test-sha" });
+    mockInstallSkill.mockResolvedValue({ success: true, version: "1.2.3" });
   });
   afterEach(teardownTempEnv);
 
@@ -3169,7 +3169,7 @@ describe("runSetup single-handshake protocol", () => {
     installRemoteSetupDefaults();
     vi.mocked(p.isCancel).mockReturnValue(false);
     installMultiselectDefault();
-    mockInstallSkill.mockResolvedValue({ success: true, sha: "test-sha" });
+    mockInstallSkill.mockResolvedValue({ success: true, version: "1.2.3" });
   });
   afterEach(() => {
     process.exitCode = undefined;
