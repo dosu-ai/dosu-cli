@@ -392,6 +392,28 @@ describe("safe payload builders", () => {
     expect(JSON.stringify(payload)).not.toContain("alice");
   });
 
+  it("keeps the alternate-provider and workload-identity keys by name", () => {
+    const keys = [
+      "env.ANTHROPIC_AWS_API_KEY",
+      "env.ANTHROPIC_IDENTITY_TOKEN",
+      "env.CLAUDE_CODE_USE_ANTHROPIC_AWS",
+      "env.CLAUDE_CODE_USE_MANTLE",
+    ];
+    const payload = buildPostHogPayload({
+      apiKey: "public",
+      installId: "11111111-1111-4111-8111-111111111111",
+      command: "knowledge sync",
+      result: "success",
+      durationMs: 2,
+      exitCode: 0,
+      facets: { settings_conflict_keys: keys },
+      context: SAFE_CONTEXT,
+      runtime: SAFE_RUNTIME,
+    });
+
+    expect(payload.properties.settings_conflict_keys).toBe(keys.join(","));
+  });
+
   it("drops settings-conflict keys that contain no strings", () => {
     const payload = buildPostHogPayload({
       apiKey: "public",
