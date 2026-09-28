@@ -1,3 +1,10 @@
+## [0.58.1](https://github.com/dosu-ai/dosu-cli/compare/v0.58.0...v0.58.1) (2026-09-28)
+
+
+### Bug Fixes
+
+* **upgrade:** keep the post-upgrade MCP refresh out of hook runs and skip the redundant skill install ([#238](https://github.com/dosu-ai/dosu-cli/issues/238)) ([969af88](https://github.com/dosu-ai/dosu-cli/commit/969af88acf3e4e5f80fca2a3cafba6526d65002e))
+
 # [0.58.0](https://github.com/dosu-ai/dosu-cli/compare/v0.57.2...v0.58.0) (2026-09-27)
 
 
