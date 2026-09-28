@@ -1,3 +1,10 @@
+## [0.60.1](https://github.com/dosu-ai/dosu-cli/compare/v0.60.0...v0.60.1) (2026-09-28)
+
+
+### Bug Fixes
+
+* **learner:** specific error type instead of generic "error" ([#242](https://github.com/dosu-ai/dosu-cli/issues/242)) ([a0bee6d](https://github.com/dosu-ai/dosu-cli/commit/a0bee6d6f4aaecdf45a68e743a686e8d0b8928a5))
+
 # [0.60.0](https://github.com/dosu-ai/dosu-cli/compare/v0.59.0...v0.60.0) (2026-09-28)
 
 
