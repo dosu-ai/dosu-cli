@@ -1,3 +1,10 @@
+## [0.62.1](https://github.com/dosu-ai/dosu-cli/compare/v0.62.0...v0.62.1) (2026-09-29)
+
+
+### Bug Fixes
+
+* **skill:** route review-list requests and clarify MCP deployment terms ([#252](https://github.com/dosu-ai/dosu-cli/issues/252)) ([f0cb59d](https://github.com/dosu-ai/dosu-cli/commit/f0cb59d4bfff6d5f62dda4ccac9b989f023479bf))
+
 # [0.62.0](https://github.com/dosu-ai/dosu-cli/compare/v0.61.0...v0.62.0) (2026-09-29)
 
 
