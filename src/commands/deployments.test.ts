@@ -82,6 +82,18 @@ afterEach(() => {
   exitSpy.mockRestore();
 });
 
+describe("deployments help", () => {
+  it("names MCP deployments (not Agents) in every description", () => {
+    const cmd = deploymentsCommand();
+    expect(cmd.description()).toContain("MCP deployment");
+    expect(cmd.description()).toMatch(/not.*Agent/);
+    for (const name of ["list", "info", "switch"]) {
+      const sub = cmd.commands.find((c) => c.name() === name);
+      expect(sub?.description(), name).toContain("MCP deployment");
+    }
+  });
+});
+
 describe("deployments list", () => {
   it("only returns MCP deployments that the CLI can target", async () => {
     mockLoadConfig.mockReturnValue(validConfig);

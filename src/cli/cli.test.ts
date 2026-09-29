@@ -45,6 +45,15 @@ describe("CLI", () => {
     expect(program.name()).toBe("dosu");
   });
 
+  it("describes platform work as well as MCP setup in the root help", () => {
+    // Agents read `dosu --help` to decide whether this CLI can do platform work
+    // (e.g. list the review queue), so the root description must not read as MCP-only.
+    const description = createProgram().description();
+    expect(description).toContain("MCP");
+    expect(description).toMatch(/Libraries/);
+    expect(description).toMatch(/reviews/);
+  });
+
   it("has version flag", () => {
     const program = createProgram();
     expect(program.version()).toMatch(/^v\d+/);
