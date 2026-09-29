@@ -144,7 +144,7 @@ dosu review reject <id> [--confirm] [--json]
 dosu review revert <id> [--json]
 ```
 
-- `list` reads the selected Library's pending doc changes plus the selected MCP deployment's draft replies. JSON is `{items, truncated, total}`: at most 50 items, newest first; `total` is a lower bound when `truncated` is true. `--since`/`--until` take `24h`/`7d`/`2w`, a UTC date, or an ISO-8601 datetime.
+- `list` reads the selected Library's pending doc changes plus the selected MCP deployment's draft replies. JSON is `{items, truncated, total, scope}`: at most 50 items, newest first; `total` is a lower bound when `truncated` is true; `scope` names the Library and MCP deployment searched (see [review-workflow.md](review-workflow.md)). A missing, deleted, or inaccessible Library or deployment is an error, not an empty list. `--since`/`--until` take `24h`/`7d`/`2w`, a UTC date, or an ISO-8601 datetime.
 - IDs are opaque: pass each `id` from `list` verbatim (draft replies carry a `draft_message:` prefix). `revert` takes a decided doc change's page-version ID and does not apply to drafts.
 - `edit` requires at least one field; drafts accept only `--body`/`--body-file`. `approve` and `reject` do not write without interactive confirmation or `--confirm`.
 
@@ -210,6 +210,7 @@ dosu deployments switch <id> [--json]
 
 dosu mcp list
 dosu mcp add <agent> [--global] [--show-secret]
+dosu mcp refresh
 dosu skill install | remove | update
 dosu telemetry status [--json]
 dosu telemetry enable | disable | reset
@@ -218,7 +219,7 @@ dosu upgrade [--auto on|off]
 dosu logs [--tail [n]] [--clear]
 ```
 
-`deployments` selects the MCP deployment stored in local config; it is distinct from `agents`. `insights` opens an interactive visual report. `logs --clear` deletes the CLI log file. The CLI updates itself in the background by default; a `[dosu:update] Installing ...` notice on stderr needs no action. `upgrade --auto off` turns that off.
+`deployments` selects the MCP deployment stored in local config; it is distinct from `agents`. `deployments switch` does not repoint an AI tool's running MCP connection; `mcp refresh` rewrites the Dosu MCP entry of every configured tool from the current selection, and the tool then needs a restart or reconnect. `insights` opens an interactive visual report. `logs --clear` deletes the CLI log file. The CLI updates itself in the background by default; a `[dosu:update] Installing ...` notice on stderr needs no action. `upgrade --auto off` turns that off.
 
 ## Codebase audit
 
