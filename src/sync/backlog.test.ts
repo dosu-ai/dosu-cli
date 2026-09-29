@@ -77,6 +77,20 @@ describe("listSessionBacklog", () => {
     expect(mockFlush).toHaveBeenCalled();
   });
 
+  it("sets aside every session from an agent saved as incognito", () => {
+    mockLoadSyncState.mockReturnValue({
+      schema_version: 1,
+      watermark: null,
+      consecutive_failures: 0,
+      incognito_agents: ["claude"],
+    });
+    mockScan.mockReturnValue([session({ id: "c1" }), session({ id: "k1", harness: "claude" })]);
+
+    const backlog = listSessionBacklog();
+    expect(backlog.queued.map((s) => s.id)).toEqual(["c1"]);
+    expect(backlog.incognito?.map((s) => s.id)).toEqual(["k1"]);
+  });
+
   it("sets incognito sessions aside from the queue", () => {
     const dir = mkdtempSync(join(tmpdir(), "dosu-backlog-"));
     try {

@@ -259,7 +259,10 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     // count as examined so the watermark passes them and they are never re-read.
     // Sessions a failed run already noted are skipped the same way, unless resumed since.
     const worthStudying = deps.worthStudying ?? isWorthStudying;
-    const isIncognito = deps.isIncognito ?? isIncognitoSession;
+    const isIncognitoChat = deps.isIncognito ?? isIncognitoSession;
+    const incognitoAgents = new Set(state.incognito_agents ?? []);
+    const isIncognito = (session: AgentSession) =>
+      incognitoAgents.has(session.harness) || isIncognitoChat(session);
     const studiedSnapshot = lastStudiedSnapshot(state.mined_sessions);
     const examined: AgentSession[] = [];
     const batch: AgentSession[] = [];

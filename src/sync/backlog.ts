@@ -3,7 +3,7 @@
 
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { type AgentSession, scanAgentSessions } from "../sessions/scan";
-import { partitionIncognitoSessions } from "./incognito";
+import { isIncognitoSession, partitionIncognitoSessions } from "./incognito";
 import { filterSessionsByProject, gateSessions, loadSyncState } from "./watermark";
 
 export interface SessionBacklog {
@@ -11,7 +11,8 @@ export interface SessionBacklog {
   queued: AgentSession[];
   /** Sessions still inside the quiet period — queued once they go silent. */
   open: AgentSession[];
-  /** Gated sessions the user opted out of with `/dosu-incognito`; never studied. Optional so
+  /** Gated sessions the user opted out of, with `/dosu-incognito` or by putting their agent in
+   * incognito; never studied. Optional so
    * callers that only fake `queued`/`open` keep compiling. */
   incognito?: AgentSession[];
 }
@@ -28,7 +29,11 @@ export function listSessionBacklog(): SessionBacklog {
     }
     const gate = gateSessions(sessions, state.watermark);
     // Only the gated backlog is read for the marker: everything behind the watermark is settled.
-    const { kept, skipped } = partitionIncognitoSessions(gate.ready);
+    const incognitoAgents = new Set(state.incognito_agents ?? []);
+    const { kept, skipped } = partitionIncognitoSessions(
+      gate.ready,
+      (session) => incognitoAgents.has(session.harness) || isIncognitoSession(session),
+    );
     return { queued: kept.reverse(), open: gate.open.reverse(), incognito: skipped.reverse() };
   } catch {
     return { queued: [], open: [], incognito: [] };
