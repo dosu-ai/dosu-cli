@@ -1,7 +1,7 @@
 /** First-run-after-upgrade safety net. The version that last rewrote the MCP entries is
  * remembered in the config dir; when the running CLI has crossed a release that changed the
  * shape of the entry (the user upgraded via npm, brew, or a fresh `npx` without going through
- * `dosu upgrade`, which re-runs setup itself), every installed and already-configured AI tool
+ * `dosu upgrade`, which makes the same decision itself), every installed and already-configured AI tool
  * gets its Dosu entry rewritten by the *new* provider code so the format change can never leave
  * an agent broken. Ordinary bumps that did not touch the entry leave the agents alone. This
  * cannot prompt (it runs inside arbitrary commands, including agents' JSON calls), so it nudges
