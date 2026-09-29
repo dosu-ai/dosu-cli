@@ -13,7 +13,10 @@ vi.mock("../mcp/refresh", () => ({
 
 // Pin the running version: the real one comes from package.json, which each release bumps, so a
 // seeded "previous" version would start crossing format changes that ship after it was written.
-vi.mock("./version", () => ({ VERSION: "0.62.1" }));
+vi.mock("./version", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./version")>()),
+  VERSION: "0.62.1",
+}));
 
 import { saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
