@@ -101,7 +101,7 @@ export function deploymentsCommand(): Command {
       }
 
       if (!deployments || deployments.length === 0) {
-        console.log(pc.dim("No deployments found."));
+        console.log(pc.dim("No MCP deployments found."));
         return;
       }
 

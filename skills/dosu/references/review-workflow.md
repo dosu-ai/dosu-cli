@@ -35,9 +35,10 @@ Run this only when the user says the list is for the wrong Library, names a
 different Library, or a command reports missing context:
 
 1. `dosu status --json`: login state and the selected MCP deployment.
-2. `dosu deployments info --json`: the selected MCP deployment; its `space_id`
-   is the Library the list reads (`dosu libraries info <space_id> --json` gives
-   its name).
+2. `dosu deployments info --json`: the selected MCP deployment. The list reads
+   the Library saved in the CLI's config, which `dosu setup` and
+   `dosu deployments switch` set to this deployment's `space_id`
+   (`dosu libraries info <space_id> --json` gives its name).
 3. If that is not the Library the user means, run
    `dosu deployments list --json` and find the MCP deployment whose `space_id`
    matches it (`dosu libraries list --json` maps names to IDs).

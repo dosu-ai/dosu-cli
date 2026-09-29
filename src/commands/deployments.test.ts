@@ -149,7 +149,7 @@ describe("deployments list", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce([]);
     await run("list");
-    expect(allOutput()).toContain("No deployments found");
+    expect(allOutput()).toContain("No MCP deployments found");
   });
 
   it("shows 'active' for enabled=true", async () => {
