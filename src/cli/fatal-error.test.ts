@@ -101,6 +101,22 @@ describe("fatalErrorDiagnostics", () => {
     ).toBe("code=NOT_FOUND status=404");
   });
 
+  it("omits a malformed code, path, or status and keeps the rest", () => {
+    expect(
+      fatalErrorDiagnostics(
+        trpcError({
+          code: "NOT_FOUND\u001b[31m",
+          path: "review.list\nforged: line",
+          httpStatus: "500",
+          requestId: "req-1",
+        }),
+      ),
+    ).toBe("request_id=req-1");
+    expect(
+      fatalErrorDiagnostics(trpcError({ code: "NOT_FOUND", path: "review.list", httpStatus: 1e9 })),
+    ).toBe("code=NOT_FOUND path=review.list");
+  });
+
   it("trims a padded request ID", () => {
     expect(fatalErrorDiagnostics(trpcError({ requestId: "  req-1  " }))).toBe("request_id=req-1");
   });
