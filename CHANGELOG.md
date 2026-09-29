@@ -1,3 +1,10 @@
+# [0.62.0](https://github.com/dosu-ai/dosu-cli/compare/v0.61.0...v0.62.0) (2026-09-29)
+
+
+### Features
+
+* **mcp:** always load Dosu tools in Claude Code ([#255](https://github.com/dosu-ai/dosu-cli/issues/255)) ([7feb411](https://github.com/dosu-ai/dosu-cli/commit/7feb4111c9af39d89ac49f8411dcf6cb2e7f9f19))
+
 # [0.61.0](https://github.com/dosu-ai/dosu-cli/compare/v0.60.2...v0.61.0) (2026-09-29)
 
 
