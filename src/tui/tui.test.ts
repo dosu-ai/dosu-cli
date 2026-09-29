@@ -971,6 +971,16 @@ describe("runTUI", () => {
     const [args] = mockMultiselect.mock.calls.at(-1) ?? [];
     const opts = (args as unknown as { options: Array<{ value: string }> }).options;
     expect(opts.map((o) => o.value)).toEqual(["/repo/dosu-cli", "/repo/other", "(unknown)"]);
+    const { summary, validate } = args as unknown as {
+      summary: (picked: string[]) => string;
+      validate: (picked: string[]) => string | undefined;
+    };
+    expect(summary(opts.map((o) => o.value))).toBe(
+      "all \u00B7 new repos and folders included automatically",
+    );
+    expect(summary(["/repo/dosu-cli"])).toBe("1 of 3 \u00B7 subfolders included");
+    expect(validate([])).toBe("Select at least one.");
+    expect(validate(["/repo/dosu-cli"])).toBeUndefined();
     // The subset is persisted; the reopened settings row hints the new scope.
     expect(loadSyncState().project_filter).toEqual(["/repo/dosu-cli"]);
     const refreshed = mockMenuSelect.mock.calls[2]?.[1] ?? [];
@@ -1068,6 +1078,52 @@ describe("runTUI", () => {
     const [args] = mockMultiselect.mock.calls.at(-1) ?? [];
     expect((args as { initialValues?: string[] }).initialValues).toEqual(["/repo/dosu-cli"]);
     expect(loadSyncState().project_filter).toBeUndefined();
+  });
+
+  it("studying projects setting has nothing to scope without sessions", async () => {
+    writeRealConfig(
+      makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
+    );
+    mockScanSessions.mockImplementation(() => []);
+    mockMenuSelect
+      .mockResolvedValueOnce("settings")
+      .mockResolvedValueOnce("projects")
+      .mockResolvedValueOnce("back")
+      .mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    expect(vi.mocked(p.log.info)).toHaveBeenCalledWith(
+      "No local agent sessions found yet; nothing to scope.",
+    );
+    expect(mockMultiselect).not.toHaveBeenCalled();
+  });
+
+  it("studying projects setting lists folders when the temp dir can't be resolved", async () => {
+    writeRealConfig(
+      makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
+    );
+    const origTmp = process.env.TMPDIR;
+    process.env.TMPDIR = join(tempDir, "missing-tmp");
+    mockIsCancel.mockReturnValue(false);
+    mockScanSessions.mockImplementation(() => [fakeSession("a", "dosu-cli")]);
+    mockMultiselect.mockResolvedValueOnce(["/repo/dosu-cli"]);
+    mockMenuSelect
+      .mockResolvedValueOnce("settings")
+      .mockResolvedValueOnce("projects")
+      .mockResolvedValueOnce("back")
+      .mockResolvedValueOnce("exit");
+
+    try {
+      await runTUI();
+    } finally {
+      if (origTmp === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = origTmp;
+    }
+
+    const [args] = mockMultiselect.mock.calls.at(-1) ?? [];
+    const opts = (args as unknown as { options: Array<{ value: string; label: string }> }).options;
+    expect(opts).toEqual([{ value: "/repo/dosu-cli", label: "/repo/dosu-cli" }]);
   });
 
   it("settings shows 'not configured' before any target exists", async () => {
