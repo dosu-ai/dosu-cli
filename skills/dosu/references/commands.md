@@ -212,11 +212,11 @@ dosu skill install | remove | update
 dosu telemetry status [--json]
 dosu telemetry enable | disable | reset
 dosu insights
-dosu upgrade
+dosu upgrade [--auto on|off]
 dosu logs [--tail [n]] [--clear]
 ```
 
-`deployments` selects the MCP deployment stored in local config; it is distinct from `agents`. `insights` opens an interactive visual report. `logs --clear` deletes the CLI log file.
+`deployments` selects the MCP deployment stored in local config; it is distinct from `agents`. `insights` opens an interactive visual report. `logs --clear` deletes the CLI log file. The CLI updates itself in the background by default; a `[dosu:update] Installing ...` notice on stderr needs no action. `upgrade --auto off` turns that off.
 
 ## Codebase audit
 

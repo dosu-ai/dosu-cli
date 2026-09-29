@@ -15,6 +15,13 @@ vi.mock("node:fs", async (importOriginal) => {
 
 vi.mock("../version/skill-update-check", () => ({ checkForSkillUpdates: vi.fn() }));
 
+vi.mock("../version/auto-update", () => ({
+  AUTO_UPDATE_ENV: "DOSU_DISABLE_AUTOUPDATE",
+  autoUpdateDisabledReason: vi.fn(),
+  runBackgroundUpgrade: vi.fn((upgrade: () => number) => upgrade()),
+  setAutoUpdateEnabled: vi.fn(() => true),
+}));
+
 vi.mock("../version/version", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../version/version")>()),
   VERSION: "0.60.1",
@@ -38,6 +45,11 @@ vi.mock("../setup/flow", () => ({ runSetup: vi.fn(async () => {}) }));
 import { loadConfigNonBlocking } from "../config/config";
 import { refreshConfiguredProviders } from "../mcp/refresh";
 import { runSetup } from "../setup/flow";
+import {
+  autoUpdateDisabledReason,
+  runBackgroundUpgrade,
+  setAutoUpdateEnabled,
+} from "../version/auto-update";
 import { canRefreshMcp, writeMcpRefreshCache } from "../version/mcp-refresh-check";
 import { checkForSkillUpdates } from "../version/skill-update-check";
 import {
@@ -507,6 +519,77 @@ describe("runUpgrade", () => {
     await upgradeCommand().parseAsync([], { from: "user" });
 
     expect(process.exitCode).toBe(expectedExitCode);
+  });
+
+  it("--background installs through runBackgroundUpgrade without the post-upgrade setup", async () => {
+    const npmRoot = join(tempDir, "npm", "node_modules");
+    const entrypoint = makeEntrypoint(npmPackageRoot(npmRoot));
+    process.argv = [process.execPath, entrypoint];
+    mockCommands({
+      "npm root -g": { status: 0, stdout: `${npmRoot}\n` },
+      [PNPM_LOCATE_COMMAND]: { status: 0, stdout: "" },
+      "yarn --silent global dir": { status: 1, stdout: "" },
+      "npm install -g @dosu/cli@latest": { status: 0 },
+    });
+
+    await upgradeCommand().parseAsync(["--background"], { from: "user" });
+
+    expect(vi.mocked(runBackgroundUpgrade)).toHaveBeenCalledOnce();
+    expect(mockSpawnSync).toHaveBeenCalledWith(
+      "npm",
+      ["install", "-g", "@dosu/cli@latest"],
+      expect.anything(),
+    );
+    expect(mockSpawnSync).not.toHaveBeenCalledWith(
+      process.execPath,
+      [entrypoint, ...FINISH_ARGS],
+      expect.anything(),
+    );
+    expect(vi.mocked(checkForSkillUpdates)).not.toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
+  });
+});
+
+describe("upgrade --auto", () => {
+  beforeEach(() => {
+    vi.mocked(setAutoUpdateEnabled).mockReset().mockReturnValue(true);
+    vi.mocked(autoUpdateDisabledReason).mockReset().mockReturnValue(undefined);
+  });
+
+  it.each([
+    ["off", false, "Automatic updates are off"],
+    ["ON", true, "Automatic updates are on."],
+  ])("--auto %s persists the setting without upgrading", async (value, enabled, message) => {
+    await upgradeCommand().parseAsync(["--auto", value], { from: "user" });
+
+    expect(vi.mocked(setAutoUpdateEnabled)).toHaveBeenCalledWith(enabled);
+    expect(logSpy.mock.calls.flat().join("\n")).toContain(message);
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("warns when the environment variable still disables updates", async () => {
+    vi.mocked(autoUpdateDisabledReason).mockReturnValue("env");
+
+    await upgradeCommand().parseAsync(["--auto", "on"], { from: "user" });
+
+    expect(logSpy.mock.calls.flat().join("\n")).toContain("DOSU_DISABLE_AUTOUPDATE");
+  });
+
+  it("rejects an unknown value", async () => {
+    await upgradeCommand().parseAsync(["--auto", "maybe"], { from: "user" });
+
+    expect(vi.mocked(setAutoUpdateEnabled)).not.toHaveBeenCalled();
+    expect(errorSpy.mock.calls.flat().join("\n")).toContain("expected 'on' or 'off'");
+    expect(process.exitCode).toBe(2);
+  });
+
+  it("reports a failed save", async () => {
+    vi.mocked(setAutoUpdateEnabled).mockReturnValue(false);
+
+    await upgradeCommand().parseAsync(["--auto", "off"], { from: "user" });
+
+    expect(process.exitCode).toBe(1);
   });
 });
 

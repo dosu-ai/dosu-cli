@@ -8,7 +8,14 @@ vi.mock("picocolors", async () => {
   return { default: actual.createColors(true) };
 });
 
+const mocks = vi.hoisted(() => ({
+  startAutoUpdate: vi.fn<(version: string) => "started" | "in_progress" | "unavailable">(),
+}));
+
+vi.mock("./auto-update", () => ({ startAutoUpdate: mocks.startAutoUpdate }));
+
 import {
+  buildAutoUpdateNotice,
   buildUpdateHint,
   buildUpdateNotice,
   checkForUpdates,
@@ -97,6 +104,29 @@ describe("buildUpdateNotice", () => {
     expect(notice).toContain('use "npx -y @dosu/cli@latest" for the next Dosu command');
     expect(notice).toContain('verify with "npx -y @dosu/cli@latest --version"');
     expect(notice).not.toContain("npm install -g");
+  });
+});
+
+describe("buildAutoUpdateNotice", () => {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: Strip ANSI colors before measuring the frame.
+  const stripAnsi = (text: string) => text.replaceAll(/\u001B\[[0-9;]*m/g, "");
+
+  it("frames the in-progress update for an interactive user", () => {
+    const stripped = stripAnsi(buildAutoUpdateNotice("0.43.0", "0.44.0", true, 0));
+
+    expect(stripped).toContain("Updating Dosu: 0.43.0 → 0.44.0");
+    expect(stripped).toContain("your next command uses it");
+    expect(stripped).not.toContain("dosu upgrade");
+    expect(stripped.trim().split("\n")[0]).toMatch(/^╭─+╮$/);
+  });
+
+  it("tells an agent no action is needed instead of asking for approval", () => {
+    const notice = buildAutoUpdateNotice("0.43.0", "0.44.0", false);
+
+    expect(notice).toContain("[dosu:update] Installing Dosu 0.44.0 in the background");
+    expect(notice).toContain("no action needed");
+    expect(notice).not.toContain("approve");
+    expect(notice).not.toContain("\u001B");
   });
 });
 
@@ -200,6 +230,8 @@ describe("checkForUpdates", () => {
     origXDG = process.env.XDG_CONFIG_HOME;
     tempDir = mkdtempSync(join(tmpdir(), "dosu-update-test-"));
     process.env.XDG_CONFIG_HOME = tempDir;
+    mocks.startAutoUpdate.mockReset();
+    mocks.startAutoUpdate.mockReturnValue("unavailable");
 
     // Stub fetch to prevent real network calls
     vi.stubGlobal(
@@ -281,6 +313,47 @@ describe("checkForUpdates", () => {
     const output = spy.mock.calls[0][0] as string;
     expect(output).toContain("Update available");
     expect(output).toContain("99.0.0");
+  });
+
+  it.each([
+    "started",
+    "in_progress",
+  ] as const)("shows the background-install notice when auto-update is %s", async (status) => {
+    mocks.startAutoUpdate.mockReturnValue(status);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { mkdirSync } = require("node:fs");
+    mkdirSync(join(tempDir, "dosu-cli"), { recursive: true });
+    writeFileSync(
+      join(tempDir, "dosu-cli", "update-check.json"),
+      JSON.stringify({ lastCheck: Date.now(), latestVersion: "99.0.0" }),
+    );
+
+    await checkForUpdates();
+
+    expect(mocks.startAutoUpdate).toHaveBeenCalledWith("99.0.0");
+    expect(spy).toHaveBeenCalledOnce();
+    expect(spy.mock.calls[0][0]).toContain("Installing Dosu 99.0.0 in the background");
+    expect(spy.mock.calls[0][0]).not.toContain("dosu upgrade");
+  });
+
+  it("starts the background install for a freshly fetched version even with notify: false", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ latest: "99.0.0" }) }),
+    );
+    mocks.startAutoUpdate.mockReturnValue("started");
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await checkForUpdates({ notify: false });
+
+    expect(mocks.startAutoUpdate).toHaveBeenCalledWith("99.0.0");
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("does not start an install when the known version is not newer", async () => {
+    await checkForUpdates();
+
+    expect(mocks.startAutoUpdate).not.toHaveBeenCalled();
   });
 
   it("does not print when cached version is current or older", async () => {
