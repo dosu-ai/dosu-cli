@@ -1,3 +1,10 @@
+## [0.60.2](https://github.com/dosu-ai/dosu-cli/compare/v0.60.1...v0.60.2) (2026-09-29)
+
+
+### Bug Fixes
+
+* **upgrade:** only re-run setup when the upgrade crosses an agent config format change ([#250](https://github.com/dosu-ai/dosu-cli/issues/250)) ([927ff13](https://github.com/dosu-ai/dosu-cli/commit/927ff13a01b49e588eb947fad3f23735927b3085))
+
 ## [0.60.1](https://github.com/dosu-ai/dosu-cli/compare/v0.60.0...v0.60.1) (2026-09-28)
 
 
