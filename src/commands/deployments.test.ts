@@ -126,9 +126,35 @@ describe("deployments list", () => {
 
   it("calls workspaces.listForOrg when org_id exists", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([]);
+    mockQuery.mockResolvedValueOnce([{ deployment_id: "d1", provider_slug: "dosu_mcp" }]);
     await run("list");
     expect(mockQuery).toHaveBeenCalledWith("workspaces.listForOrg", "org1");
+  });
+
+  it("fails instead of listing nothing when the saved organization is not accessible", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockImplementation((path: string) => {
+      if (path === "workspaces.listForOrg") return Promise.resolve([]);
+      if (path === "organization.getOrganizations") {
+        return Promise.resolve([{ org_id: "org2", name: "Two" }]);
+      }
+      throw new Error(`unexpected query: ${path}`);
+    });
+    await expectCommandError(run("list", "--json"), "ORG_UNAVAILABLE");
+    expect(allOutput()).toBe("");
+  });
+
+  it("still reports an empty list when the saved organization is accessible", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockImplementation((path: string) => {
+      if (path === "workspaces.listForOrg") return Promise.resolve([]);
+      if (path === "organization.getOrganizations") {
+        return Promise.resolve([{ org_id: "org1", name: "One" }]);
+      }
+      throw new Error(`unexpected query: ${path}`);
+    });
+    await run("list", "--json");
+    expect(JSON.parse(allOutput())).toEqual([]);
   });
 
   it("lists each accessible org when no active org is selected", async () => {
@@ -162,7 +188,9 @@ describe("deployments list", () => {
 
   it("prints message for empty results", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([]);
+    mockQuery.mockImplementation((path: string) =>
+      Promise.resolve(path === "organization.getOrganizations" ? [{ org_id: "org1" }] : []),
+    );
     await run("list");
     expect(allOutput()).toContain("No MCP deployments found");
   });

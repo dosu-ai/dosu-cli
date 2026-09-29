@@ -21,7 +21,20 @@ async function listAccessibleDeployments(
   client: TypedClient,
   activeOrgId: string | undefined,
 ): Promise<CliDeployment[]> {
-  if (activeOrgId) return client.workspaces.listForOrg.query(activeOrgId);
+  if (activeOrgId) {
+    const deployments = await client.workspaces.listForOrg.query(activeOrgId);
+    if (deployments.length > 0) return deployments;
+    // An org the account cannot access also lists nothing; say so instead of an empty list.
+    const orgs = await client.organization.getOrganizations.query({});
+    if (!orgs.some((org) => org.org_id === activeOrgId)) {
+      throw new CommandError(
+        "ORG_UNAVAILABLE",
+        "The saved organization is not available to this account.",
+        ["Run 'dosu setup' to choose an organization and MCP deployment."],
+      );
+    }
+    return deployments;
+  }
 
   const orgs = await client.organization.getOrganizations.query({});
   const deployments = await Promise.all(

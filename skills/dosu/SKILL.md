@@ -71,7 +71,7 @@ Use [commands.md](references/commands.md) as the sole detailed command and flag 
 ## Handle failures literally
 
 - `Not logged in` or an unrecoverable expired session: run `dosu login` (agent setup may instead return a ticket flow).
-- Missing organization, Library, deployment, or API-key context: run the appropriate `dosu setup` flow.
+- Missing or unavailable organization, Library, deployment, or API-key context: tell the user which `dosu setup` flow fixes it. Plain `dosu setup` is interactive, so don't start it for them unless they ask.
 - Wrong or unexpected Library context: read `dosu status --json` and `dosu deployments info --json` before changing anything. Switch only to an MCP deployment the user named or confirmed; never pick the first one listed, and never switch just because a list came back empty.
 - Skill guidance out of date: `dosu skill update` rewrites the installed skill from the running CLI version. Some agents read skills only when a session starts, so start a new session if the change does not appear. Installed files show the skill is on disk, not that the agent loaded it.
 - `confirmRequired`: no write occurred.

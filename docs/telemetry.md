@@ -141,6 +141,7 @@ Command handlers report expected account, context, and selection failures by thr
 | `NO_API_KEY` | The saved target has no MCP API key. |
 | `NO_LIBRARY_SELECTED` | No Library is saved (`review list`). |
 | `NO_DEPLOYMENT_SELECTED` | No MCP deployment is saved (`deployments info`). |
+| `ORG_UNAVAILABLE` | The saved organization was removed or the account cannot access it (`deployments list`, `deployments switch`). |
 | `LIBRARY_UNAVAILABLE` | The saved Library was deleted or the account cannot access it. |
 | `DEPLOYMENT_UNAVAILABLE` | The saved MCP deployment was deleted or the account cannot access it. |
 | `SCOPE_MISMATCH` | The saved Library is not the saved MCP deployment's Library. |

@@ -14,6 +14,7 @@ export const COMMAND_ERROR_CODES = [
   "NO_LIBRARY_SELECTED",
   "NO_DEPLOYMENT_SELECTED",
   // A saved or requested selection that does not resolve
+  "ORG_UNAVAILABLE",
   "LIBRARY_UNAVAILABLE",
   "DEPLOYMENT_UNAVAILABLE",
   "SCOPE_MISMATCH",
