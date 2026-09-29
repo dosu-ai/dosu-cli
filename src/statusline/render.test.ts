@@ -17,6 +17,11 @@ vi.mock("../sync/incognito", () => ({
   transcriptHasIncognitoMarker: (...args: unknown[]) => mockTranscriptMarker(...args),
 }));
 
+const mockOriginRepoOfDir = vi.hoisted(() => vi.fn());
+vi.mock("../sessions/repo", () => ({
+  originRepoOfDir: (...args: unknown[]) => mockOriginRepoOfDir(...args),
+}));
+
 import {
   parseStatuslinePayload,
   type RenderDeps,
@@ -118,6 +123,13 @@ describe("resolveStatuslineState", () => {
     const d = deps({ loadState: () => ({ ...baseState, project_filter: ["/work/dosu-cli/"] }) });
     expect(resolveStatuslineState({ cwd: "/work/dosu-cli/src" }, "claude", d)).toBe("on");
     expect(resolveStatuslineState({ cwd: "/work/other" }, "claude", d)).toBe("not-studied");
+  });
+
+  it("reads the cwd's repo from its git origin by default", () => {
+    mockOriginRepoOfDir.mockReset().mockReturnValue("github.com/dosu-ai/dosu-cli");
+    const { repoOfDir: _, ...d } = deps();
+    expect(resolveStatuslineState({ cwd: "/anywhere" }, "claude", d)).toBe("on");
+    expect(mockOriginRepoOfDir).toHaveBeenCalledWith("/anywhere");
   });
 
   it("is on with no filter and nothing else set", () => {

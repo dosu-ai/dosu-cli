@@ -1032,6 +1032,76 @@ describe("runTUI", () => {
     expect(loadSyncState().repo_filter).toEqual(["github.com/acme/dosu-cli"]);
   });
 
+  it("study scope setting explains an empty picker when no session ran in a repo", async () => {
+    writeRealConfig(
+      makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
+    );
+    mockScanSessions.mockImplementation(() => [fakeSession("a")]);
+    mockMenuSelect
+      .mockResolvedValueOnce("settings")
+      .mockResolvedValueOnce("projects")
+      .mockResolvedValueOnce("back")
+      .mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    expect(p.log.info).toHaveBeenCalledWith(
+      "No agent sessions inside a git repo found yet; nothing to scope.",
+    );
+    expect(mockMultiselect).not.toHaveBeenCalled();
+  });
+
+  it("study scope picker summarizes and validates the selection", async () => {
+    writeRealConfig(
+      makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
+    );
+    mockIsCancel.mockReturnValue(false);
+    mockScanSessions.mockImplementation(() => [
+      fakeSession("a", "dosu-cli"),
+      fakeSession("b", "other"),
+    ]);
+    mockMultiselect.mockResolvedValueOnce(["github.com/acme/dosu-cli"]);
+    mockMenuSelect
+      .mockResolvedValueOnce("settings")
+      .mockResolvedValueOnce("projects")
+      .mockResolvedValueOnce("back")
+      .mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    const [args] = mockMultiselect.mock.calls.at(-1) ?? [];
+    const { summary, validate } = args as unknown as {
+      summary: (picked: string[]) => string;
+      validate: (picked: string[]) => string | undefined;
+    };
+    expect(summary(["a", "b"])).toBe("all repos \u00B7 new ones included automatically");
+    expect(summary(["a"])).toBe("1 of 2 repos");
+    expect(validate([])).toBe("Select at least one repo.");
+    expect(validate(["a"])).toBeUndefined();
+  });
+
+  it.each([
+    [[], "no repos"],
+    [["github.com/acme/a", "github.com/acme/b", "github.com/acme/c"], "3 repos"],
+  ])("settings hints a %j repo scope as %s", async (repoFilter, hint) => {
+    writeRealConfig(makeCfg({}));
+    saveSyncState({
+      schema_version: 1,
+      watermark: null,
+      consecutive_failures: 0,
+      repo_filter: repoFilter,
+    });
+    mockMenuSelect
+      .mockResolvedValueOnce("settings")
+      .mockResolvedValueOnce("back")
+      .mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    const settingsOptions = mockMenuSelect.mock.calls[1]?.[1] ?? [];
+    expect(settingsOptions.find((o) => o.value === "projects")?.hint).toBe(hint);
+  });
+
   it("settings shows 'not configured' before any target exists", async () => {
     writeRealConfig(makeCfg({}));
     mockMenuSelect

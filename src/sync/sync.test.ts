@@ -15,6 +15,11 @@ vi.mock("../sessions/scan", () => ({
   scanAgentSessions: (...args: unknown[]) => mockScanSessions(...args),
 }));
 
+const mockCreateResolver = vi.hoisted(() => vi.fn());
+vi.mock("../sessions/project-dir", () => ({
+  createProjectDirResolver: (...args: unknown[]) => mockCreateResolver(...args),
+}));
+
 const NOW = new Date("2026-08-25T12:00:00Z");
 
 function session(updatedOffsetMinutes: number): AgentSession {
@@ -157,6 +162,21 @@ describe("runKnowledgeSync", () => {
 
     expect(outcome.status).toBe("nothing-new");
     expect(saved[0].repo_filter).toEqual([]);
+  });
+
+  it("resolves repos with the on-disk resolver by default and flushes its cache", async () => {
+    const flush = vi.fn();
+    mockCreateResolver.mockReset().mockReturnValue({ ...projectLocator, flush });
+    const inRepo = { ...session(60), project: "dosu-cli" };
+    const { deps } = makeDeps({
+      listSessions: vi.fn().mockResolvedValue([inRepo, session(40)]),
+      locator: undefined,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.sessions.map((s) => s.id)).toEqual([inRepo.id]);
+    expect(flush).toHaveBeenCalledOnce();
   });
 
   it("reports nothing-new when the gate is empty", async () => {
