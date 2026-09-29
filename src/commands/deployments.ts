@@ -2,6 +2,7 @@
 
 import { Command } from "commander";
 import pc from "picocolors";
+import { CommandError } from "../cli/command-error";
 import { Client } from "../client/client";
 import { createTypedClient, type TypedClient } from "../client/trpc";
 import { saveConfig, updateTarget } from "../config/config";
@@ -58,20 +59,16 @@ async function resolveDeploymentId(
   if (matches.length === 1) return matches[0].deployment_id;
 
   if (matches.length === 0) {
-    console.error(pc.red(`Deployment not found: ${id}`));
-    console.error(
-      pc.dim(
-        "Expected a full deployment ID (UUID). Run 'dosu deployments list --json' to see full IDs.",
-      ),
-    );
-    process.exit(1);
+    throw new CommandError("DEPLOYMENT_NOT_FOUND", `Deployment not found: ${id}`, [
+      "Expected a full deployment ID (UUID). Run 'dosu deployments list --json' to see full IDs.",
+    ]);
   }
 
-  console.error(pc.red(`Ambiguous deployment ID prefix: ${id} matches ${matches.length}:`));
-  for (const d of matches) {
-    console.error(pc.dim(`  ${d.deployment_id}  ${d.name}`));
-  }
-  process.exit(1);
+  throw new CommandError(
+    "DEPLOYMENT_AMBIGUOUS",
+    `Ambiguous deployment ID prefix: ${id} matches ${matches.length}:`,
+    matches.map((d) => `  ${d.deployment_id}  ${d.name}`),
+  );
 }
 
 export function deploymentsCommand(): Command {
@@ -133,10 +130,10 @@ export function deploymentsCommand(): Command {
       const cfg = requireConfig();
 
       if (!cfg.active_account?.target?.deployment_id) {
-        console.error(
-          pc.red("No deployment selected. Run 'dosu setup' or 'dosu deployments switch'."),
+        throw new CommandError(
+          "NO_DEPLOYMENT_SELECTED",
+          "No deployment selected. Run 'dosu setup' or 'dosu deployments switch'.",
         );
-        process.exit(1);
       }
 
       const client = createTypedClient(cfg);
@@ -145,8 +142,10 @@ export function deploymentsCommand(): Command {
       );
 
       if (!deployment) {
-        console.error(pc.red(`Deployment not found: ${cfg.active_account?.target?.deployment_id}`));
-        process.exit(1);
+        throw new CommandError(
+          "DEPLOYMENT_UNAVAILABLE",
+          `Deployment not found: ${cfg.active_account?.target?.deployment_id}`,
+        );
       }
 
       if (opts.json) {
@@ -185,12 +184,10 @@ export function deploymentsCommand(): Command {
       const deployment = await client.workspaces.get.query(id);
 
       if (!deployment) {
-        console.error(pc.red(`Deployment not found: ${id}`));
-        process.exit(1);
+        throw new CommandError("DEPLOYMENT_NOT_FOUND", `Deployment not found: ${id}`);
       }
       if (deployment.provider_slug !== MCP_PROVIDER_SLUG) {
-        console.error(pc.red(`Not a Dosu MCP deployment: ${id}`));
-        process.exit(1);
+        throw new CommandError("NOT_MCP_DEPLOYMENT", `Not a Dosu MCP deployment: ${id}`);
       }
 
       const apiKey = await new Client(cfg).createAPIKey(deployment.deployment_id, "dosu-cli");

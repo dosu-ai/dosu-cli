@@ -1,4 +1,6 @@
+import pc from "picocolors";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CommandError } from "./command-error";
 import { fatalErrorDiagnostics, printFatalError } from "./fatal-error";
 
 afterEach(() => {
@@ -52,6 +54,20 @@ describe("printFatalError", () => {
         "code=INTERNAL_SERVER_ERROR path=review.listPending status=500 " +
           "request_id=sfo1::iad1::abcde-1695000000000-0123456789ab",
       ],
+    ]);
+  });
+
+  it("prints a CommandError as its colored message and dim detail lines", () => {
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    printFatalError(
+      new CommandError("DEPLOYMENT_AMBIGUOUS", "Ambiguous prefix", ["  one", "  two"]),
+    );
+
+    expect(stderr.mock.calls).toEqual([
+      [pc.red("Ambiguous prefix")],
+      [pc.dim("  one")],
+      [pc.dim("  two")],
     ]);
   });
 });

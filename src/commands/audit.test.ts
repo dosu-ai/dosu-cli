@@ -203,9 +203,9 @@ describe("config guard", () => {
     await expect(run()).rejects.toThrow("exit");
   });
 
-  it("exits when not logged in", async () => {
+  it("fails with NOT_LOGGED_IN when access_token is missing", async () => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ access_token: "" }));
-    await expect(run()).rejects.toThrow("exit");
+    await expect(run()).rejects.toMatchObject({ code: "NOT_LOGGED_IN" });
   });
 });
 

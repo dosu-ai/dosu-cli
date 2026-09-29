@@ -316,10 +316,10 @@ describe("knowledge list", () => {
 });
 
 describe("requireConfig", () => {
-  it("exits when access_token is missing", async () => {
+  it("fails with NOT_LOGGED_IN when access_token is missing", async () => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ access_token: "" }));
-    await expect(run("search", "q")).rejects.toThrow("exit");
-    expect(exitSpy).toHaveBeenCalledWith(1);
+    await expect(run("search", "q")).rejects.toMatchObject({ code: "NOT_LOGGED_IN" });
+    expect(exitSpy).not.toHaveBeenCalled();
   });
 
   it("exits when org_id is missing", async () => {

@@ -5,6 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
+import { COMMAND_ERROR_CODES, CommandError } from "../cli/command-error";
 import {
   buildPostHogPayload,
   buildSentryEnvelope,
@@ -1576,6 +1577,52 @@ describe("CommandTelemetry lifecycle", () => {
     };
     expect(payload.properties).toMatchObject({ result: "failure", error_code: code });
     expect(JSON.stringify(payload)).not.toContain("private");
+  });
+
+  it.each(
+    COMMAND_ERROR_CODES.filter((code) => code !== "INVALID_ARGUMENT"),
+  )("reports the %s command state to analytics as a failure but not to Sentry", async (code) => {
+    const deps = testDependencies();
+    const telemetry = createCommandTelemetry(
+      { install_id: "11111111-1111-4111-8111-111111111111" },
+      deps,
+    );
+    telemetry.start("review list", SAFE_CONTEXT);
+
+    await telemetry.fail(new CommandError(code, "private message naming a private-id"));
+
+    expect(deps.fetch).toHaveBeenCalledOnce();
+    expect(deps.randomUUID).not.toHaveBeenCalled();
+    const [url, init] = deps.fetch.mock.calls[0] ?? [];
+    expect(url).toBe("https://dosu.dev/ph-api/i/v0/e/");
+    const payload = JSON.parse(String(init?.body)) as { properties: Record<string, unknown> };
+    expect(payload.properties).toMatchObject({
+      command: "review list",
+      result: "failure",
+      exit_code: 1,
+      error_code: code,
+    });
+    expect(JSON.stringify(payload)).not.toContain("private");
+  });
+
+  it("reports an INVALID_ARGUMENT command error as a validation error", async () => {
+    const deps = testDependencies();
+    const telemetry = createCommandTelemetry(
+      { install_id: "11111111-1111-4111-8111-111111111111" },
+      deps,
+    );
+    telemetry.start("review edit", SAFE_CONTEXT);
+
+    await telemetry.fail(new CommandError("INVALID_ARGUMENT", "private flag value"));
+
+    expect(deps.fetch).toHaveBeenCalledOnce();
+    const payload = JSON.parse(String(deps.fetch.mock.calls[0]?.[1]?.body)) as {
+      properties: Record<string, unknown>;
+    };
+    expect(payload.properties).toMatchObject({
+      result: "validation_error",
+      error_code: "INVALID_ARGUMENT",
+    });
   });
 
   it("continues sending an unexpected wrapped session refresh failure to Sentry", async () => {

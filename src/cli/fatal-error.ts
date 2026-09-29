@@ -1,3 +1,6 @@
+import pc from "picocolors";
+import { isCommandError } from "./command-error";
+
 /** Vercel request IDs look like `sfo1::iad1::abcde-1695000000000-0123456789ab`. Anything else
  * (non-strings, spaces, control characters, overlong values) is dropped rather than echoed to a
  * terminal. */
@@ -41,8 +44,14 @@ export function fatalErrorDiagnostics(err: unknown): string | undefined {
 }
 
 /** Print an error that ends the process. The tRPC code/path/status/request ID is printed when
- * present so masked server messages (e.g. "[object Object]") stay diagnosable. */
+ * present so masked server messages (e.g. "[object Object]") stay diagnosable. A CommandError
+ * prints as the handler used to print it before exiting: a red message and dim detail lines. */
 export function printFatalError(err: unknown): void {
+  if (isCommandError(err)) {
+    console.error(pc.red(err.message));
+    for (const line of err.details) console.error(pc.dim(line));
+    return;
+  }
   console.error(read(err, "message") ?? err);
   const diagnostics = fatalErrorDiagnostics(err);
   if (diagnostics) console.error(diagnostics);

@@ -32,6 +32,8 @@ vi.mock("../config/config", async (importOriginal) => ({
   saveConfig: (...args: unknown[]) => mockSaveConfig(...args),
 }));
 
+import { CommandError } from "../cli/command-error";
+import { printFatalError } from "../cli/fatal-error";
 import { type FlatTestConfig, makeTestConfig, testTarget } from "../config/config.test-utils";
 import { deploymentsCommand } from "./deployments";
 
@@ -55,6 +57,19 @@ const validConfig = makeValidConfig();
 
 function allOutput(): string {
   return logSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
+}
+
+/** A handled failure as execute() reports it: the handler throws a CommandError (it never calls
+ * process.exit, so nothing after the failure runs), and the real printer writes it to stderr. */
+async function expectCommandError(pending: Promise<unknown>, code: string): Promise<void> {
+  const error = await pending.then(
+    () => undefined,
+    (err: unknown) => err,
+  );
+  expect(error).toBeInstanceOf(CommandError);
+  expect(error).toMatchObject({ code });
+  expect(exitSpy).not.toHaveBeenCalled();
+  printFatalError(error);
 }
 
 async function run(...args: string[]) {
@@ -258,15 +273,15 @@ describe("deployments info", () => {
     expect(mockQuery).toHaveBeenCalledWith("workspaces.get", "dep1");
   });
 
-  it("exits when no deployment_id in config", async () => {
+  it("fails with NO_DEPLOYMENT_SELECTED when no deployment_id in config", async () => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: undefined }));
-    await expect(run("info")).rejects.toThrow("exit");
+    await expectCommandError(run("info"), "NO_DEPLOYMENT_SELECTED");
   });
 
-  it("exits when deployment is not found", async () => {
+  it("fails when deployment is not found", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce(null);
-    await expect(run("info")).rejects.toThrow("exit");
+    await expectCommandError(run("info"), "DEPLOYMENT_UNAVAILABLE");
   });
 
   it("outputs valid JSON with --json", async () => {
@@ -407,10 +422,10 @@ describe("deployments switch", () => {
     });
   });
 
-  it("exits when deployment is not found", async () => {
+  it("fails when deployment is not found", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce(null);
-    await expect(run("switch", OTHER_DEP)).rejects.toThrow("exit");
+    await expectCommandError(run("switch", OTHER_DEP), "DEPLOYMENT_NOT_FOUND");
     expect(mockSaveConfig).not.toHaveBeenCalled();
   });
 
@@ -418,7 +433,7 @@ describe("deployments switch", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce({ ...deployment, provider_slug: "github" });
 
-    await expect(run("switch", NEW_DEP)).rejects.toThrow("exit");
+    await expectCommandError(run("switch", NEW_DEP), "NOT_MCP_DEPLOYMENT");
 
     expect(mockCreateAPIKey).not.toHaveBeenCalled();
     expect(mockSaveConfig).not.toHaveBeenCalled();
@@ -475,11 +490,11 @@ describe("deployments switch", () => {
       expect(mockQuery).toHaveBeenCalledWith("workspaces.get", NEW_DEP);
     });
 
-    it("exits without calling workspaces.get when nothing matches", async () => {
+    it("fails without calling workspaces.get when nothing matches", async () => {
       mockLoadConfig.mockReturnValue(validConfig);
       mockListAndGet([deployment]);
 
-      await expect(run("switch", "deadbeef")).rejects.toThrow("exit");
+      await expectCommandError(run("switch", "deadbeef"), "DEPLOYMENT_NOT_FOUND");
 
       expect(mockQuery).not.toHaveBeenCalledWith("workspaces.get", expect.anything());
       expect(mockSaveConfig).not.toHaveBeenCalled();
@@ -488,11 +503,11 @@ describe("deployments switch", () => {
       expect(stderr).toContain("dosu deployments list --json");
     });
 
-    it("exits and lists candidates when the prefix is ambiguous", async () => {
+    it("fails and lists candidates when the prefix is ambiguous", async () => {
       mockLoadConfig.mockReturnValue(validConfig);
       mockListAndGet([deployment, { ...deployment, deployment_id: OTHER_DEP, name: "Other" }]);
 
-      await expect(run("switch", "188b701a")).rejects.toThrow("exit");
+      await expectCommandError(run("switch", "188b701a"), "DEPLOYMENT_AMBIGUOUS");
 
       expect(mockQuery).not.toHaveBeenCalledWith("workspaces.get", expect.anything());
       expect(mockSaveConfig).not.toHaveBeenCalled();
@@ -523,8 +538,8 @@ describe("deployments switch", () => {
 });
 
 describe("requireConfig", () => {
-  it("exits when access_token is missing", async () => {
+  it("fails with NOT_LOGGED_IN when access_token is missing", async () => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ access_token: "" }));
-    await expect(run("list")).rejects.toThrow("exit");
+    await expect(run("list")).rejects.toMatchObject({ code: "NOT_LOGGED_IN" });
   });
 });

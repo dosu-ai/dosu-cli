@@ -1367,9 +1367,9 @@ describe("backendPost", () => {
 });
 
 describe("requireConfig", () => {
-  it("exits when access_token is missing", async () => {
+  it("fails with NOT_LOGGED_IN when access_token is missing", async () => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ access_token: "" }));
-    await expect(run("list")).rejects.toThrow("exit");
+    await expect(run("list")).rejects.toMatchObject({ code: "NOT_LOGGED_IN" });
   });
 
   it("exits when space_id is missing", async () => {
