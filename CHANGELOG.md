@@ -1,3 +1,10 @@
+# [0.61.0](https://github.com/dosu-ai/dosu-cli/compare/v0.60.2...v0.61.0) (2026-09-29)
+
+
+### Features
+
+* **upgrade:** update Dosu automatically in the background ([#249](https://github.com/dosu-ai/dosu-cli/issues/249)) ([1b50555](https://github.com/dosu-ai/dosu-cli/commit/1b505557dedd534bf6cad7d98c0452741c3c8f8e))
+
 ## [0.60.2](https://github.com/dosu-ai/dosu-cli/compare/v0.60.1...v0.60.2) (2026-09-29)
 
 
