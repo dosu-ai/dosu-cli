@@ -8,6 +8,12 @@ import { Command, Option } from "commander";
 import pc from "picocolors";
 import { loadConfigNonBlocking } from "../config/config";
 import { refreshConfiguredProviders } from "../mcp/refresh";
+import {
+  AUTO_UPDATE_ENV,
+  autoUpdateDisabledReason,
+  runBackgroundUpgrade,
+  setAutoUpdateEnabled,
+} from "../version/auto-update";
 import { canRefreshMcp, needsMcpRefresh, writeMcpRefreshCache } from "../version/mcp-refresh-check";
 import { checkForSkillUpdates } from "../version/skill-update-check";
 import { INSTALL_CHANNEL, isNpxInvocation, VERSION } from "../version/version";
@@ -384,15 +390,48 @@ export async function finishUpgrade(
   return 0;
 }
 
+/** `dosu upgrade --auto on|off`: persist the auto-update opt-out and report the effective state. */
+function setAutoUpdate(value: string): number {
+  const normalized = value.trim().toLowerCase();
+  if (normalized !== "on" && normalized !== "off") {
+    console.error(`Invalid --auto value '${value}' (expected 'on' or 'off').`);
+    return 2;
+  }
+  if (!setAutoUpdateEnabled(normalized === "on")) {
+    console.error("Could not save the auto-update setting.");
+    return 1;
+  }
+  if (normalized === "off") {
+    console.log('Automatic updates are off. Run "dosu upgrade" to update by hand.');
+  } else if (autoUpdateDisabledReason() === "env") {
+    console.log(`Automatic updates are on, but ${AUTO_UPDATE_ENV} still disables them here.`);
+  } else {
+    console.log("Automatic updates are on.");
+  }
+  return 0;
+}
+
 export function upgradeCommand(): Command {
   return new Command("upgrade")
     .description(
       "Update Dosu to the latest version, re-running setup when the update changes agent config",
     )
+    .option("--auto <on|off>", "Turn automatic background updates on or off")
+    .addOption(new Option("--background").hideHelp())
     .addOption(new Option("--finish <from>").hideHelp())
-    .action(async (opts: { finish?: string }) => {
-      const status =
-        opts.finish !== undefined ? await finishUpgrade(opts.finish) : await completeUpgrade();
+    .action(async (opts: { auto?: string; background?: boolean; finish?: string }) => {
+      let status: number;
+      if (opts.auto !== undefined) {
+        status = setAutoUpdate(opts.auto);
+      } else if (opts.background) {
+        // Detached child of the update check: install only. The next command runs the new
+        // version, whose first-run checks refresh skills and MCP entries.
+        status = runBackgroundUpgrade(() => runUpgrade());
+      } else if (opts.finish !== undefined) {
+        status = await finishUpgrade(opts.finish);
+      } else {
+        status = await completeUpgrade();
+      }
       if (status !== 0) process.exitCode = status;
     });
 }
