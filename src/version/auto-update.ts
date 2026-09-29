@@ -158,8 +158,7 @@ function lockIsFresh(now: number): boolean {
 /** Atomically claim the install so concurrent commands never run two package managers. */
 function claimLock(version: string, now: number): "claimed" | "held" | "failed" {
   try {
-    const dir = getConfigDir();
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    mkdirSync(getConfigDir(), { recursive: true, mode: 0o700 });
     if (!lockIsFresh(now)) rmSync(lockPath(), { force: true });
     const fd = openSync(lockPath(), "wx", 0o600);
     try {

@@ -1,10 +1,24 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, openSync: vi.fn(actual.openSync) };
+});
 
 import {
   autoUpdateDisabledReason,
@@ -155,6 +169,37 @@ describe("startAutoUpdate", () => {
     expect(mockSpawn).not.toHaveBeenCalled();
   });
 
+  it("has nothing to start when there is no entrypoint to re-run", () => {
+    expect(startAutoUpdate("1.2.3", { ...NPM, entrypoint: "" })).toBe("unavailable");
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("defaults to this process's channel and environment", () => {
+    // Vitest sets NODE_ENV=test, which always opts out.
+    expect(startAutoUpdate("1.2.3")).toBe("unavailable");
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("joins the process that won a race for the lock", () => {
+    const race = Object.assign(new Error("EEXIST"), { code: "EEXIST" });
+    vi.mocked(openSync).mockImplementationOnce(() => {
+      throw race;
+    });
+
+    expect(startAutoUpdate("1.2.3", NPM)).toBe("in_progress");
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("gives up when the lock cannot be created", () => {
+    // A stale directory where the lock file belongs cannot be removed with rmSync(force).
+    mkdirSync(configPath("auto-update.lock"), { recursive: true });
+    const stale = new Date(Date.now() - 60 * 60 * 1000);
+    utimesSync(configPath("auto-update.lock"), stale, stale);
+
+    expect(startAutoUpdate("1.2.3", NPM)).toBe("unavailable");
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
   it("honors the persisted opt-out", () => {
     setAutoUpdateEnabled(false);
 
@@ -185,6 +230,14 @@ describe("auto-update settings", () => {
 
     writeConfig("auto-update.json", "[]");
     expect(autoUpdateDisabledReason(ENV)).toBeUndefined();
+  });
+
+  it("reports a setting that cannot be saved", () => {
+    // A file where the config directory belongs makes every write fail.
+    writeFileSync(join(tempDir, "blocked"), "");
+    process.env.XDG_CONFIG_HOME = join(tempDir, "blocked");
+
+    expect(setAutoUpdateEnabled(false)).toBe(false);
   });
 
   it("keeps the last attempt when toggling", () => {
@@ -234,6 +287,15 @@ describe("runBackgroundUpgrade", () => {
       throw new Error("boom");
     });
     expect(status).toBe(1);
+    expect(existsSync(configPath("auto-update.lock"))).toBe(false);
+  });
+
+  it("does not record a lock whose contents are not a version", () => {
+    writeConfig("auto-update.lock", "not a version\n");
+
+    expect(runBackgroundUpgrade(() => 0)).toBe(0);
+
+    expect(existsSync(configPath("auto-update.json"))).toBe(false);
     expect(existsSync(configPath("auto-update.lock"))).toBe(false);
   });
 
