@@ -1,6 +1,6 @@
 ---
 name: dosu
-description: 'Use the Dosu CLI to authenticate and configure coding agents; manage Libraries, Agents, sources, Monitor, documents, reviews, threads, topics, members, integrations, and deployments; query knowledge; or audit a repository for Dosu-generated docs. Use for Dosu platform work that should be done from a terminal instead of the web app.'
+description: 'Use the Dosu CLI to show the Dosu review list or review queue (items pending approval: pending doc changes and draft replies) and to review, approve, or reject one item; authenticate and configure coding agents; manage Libraries, Agents, sources, Monitor, documents, threads, topics, members, integrations, and MCP deployments; query knowledge; or audit a repository for Dosu-generated docs. Use for Dosu platform work that should be done from a terminal instead of the web app.'
 ---
 
 # Use the Dosu CLI
@@ -28,7 +28,8 @@ Operate Dosu through `dosu`. Prefer structured output and let the CLI and App va
 - **Data source** is an organization-level connection such as a repository, Slack channel, or Notion workspace. A Library can use already-connected sources.
 - **Agent** is a configurable GitHub, GitLab, Slack, or Teams deployment serving exactly one Library.
 - **Monitor** is per Library and source. It supports GitHub, GitLab, and Azure DevOps sources.
-- `dosu deployments` manages selectable **MCP deployments**. Do not use it as an Agent CRUD command.
+- **MCP deployment** is the local selection made by `dosu setup` or `dosu deployments switch`. It sets the Library that Library-scoped commands such as `dosu review list` read, plus the API key `dosu ask` uses. `dosu deployments` lists and switches MCP deployments; it is not an Agent command.
+- The **review queue** (`dosu review list`) holds pending doc changes in the selected Library plus draft replies from the selected MCP deployment. The App's **Review** page is a list of conversation threads, so its entries and counts can differ. When the user explicitly means that page, explain the difference and offer `dosu threads list` or `dosu review context <thread-id>`; do not substitute an Agent list.
 
 ## Route by intent
 
@@ -41,7 +42,8 @@ Operate Dosu through `dosu`. Prefer structured output and let the CLI and App va
 | Ask for a synthesized answer | `dosu ask` |
 | Find source documents | `dosu knowledge search`, then `dosu docs get` |
 | Create, import, or publish docs | `dosu docs ...` |
-| Review a pending doc change or draft reply | Read [review-workflow.md](references/review-workflow.md) first |
+| Show the review list, review queue, or what needs approval | `dosu review list --json`; if the scope looks wrong, follow the context check in [review-workflow.md](references/review-workflow.md) |
+| Inspect, edit, approve, or reject one review item | Read [review-workflow.md](references/review-workflow.md) first |
 | Inspect conversations | `dosu threads ...` |
 | Browse managed topics | `dosu topics ...` |
 | Audit agent docs, README, architecture, or dependencies | Read [audit.md](references/audit.md) first |
@@ -70,6 +72,8 @@ Use [commands.md](references/commands.md) as the sole detailed command and flag 
 
 - `Not logged in` or an unrecoverable expired session: run `dosu login` (agent setup may instead return a ticket flow).
 - Missing organization, Library, deployment, or API-key context: run the appropriate `dosu setup` flow.
+- Wrong or unexpected Library context: read `dosu status --json` and `dosu deployments info --json` before changing anything. Switch only to an MCP deployment the user named or confirmed; never pick the first one listed, and never switch just because a list came back empty.
+- Skill guidance out of date: `dosu skill update` rewrites the installed skill from the running CLI version. Some agents read skills only when a session starts, so start a new session if the change does not appear. Installed files show the skill is on disk, not that the agent loaded it.
 - `confirmRequired`: no write occurred.
 - `CONFLICT` on config: reread before retrying.
 - A tRPC or backend error is a failed operation. Surface the code/path/status and do not imply the requested state exists.

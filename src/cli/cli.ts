@@ -193,7 +193,9 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
 
   program
     .name("dosu")
-    .description("Dosu CLI - Manage MCP servers for AI tools")
+    .description(
+      "Dosu CLI - Set up Dosu MCP for AI tools and work with Dosu Libraries, docs, reviews, and more",
+    )
     .version(getVersionString(), "-v, --version")
     .helpCommand("help [command]", "Show help for a command")
     .option("--debug", "Enable debug logging to stderr", false)
