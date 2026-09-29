@@ -146,13 +146,98 @@ function printDraftPreview(draft: DraftMessageRow): void {
   console.log(draft.body ?? "");
 }
 
-async function getKnowledgeStoreId(client: TypedClient, spaceId: string): Promise<string> {
-  const store = await client.knowledgeStore.getBySpaceId.query({ space_id: spaceId });
-  if (!store) {
-    console.error(pc.red("No knowledge store found for this deployment."));
-    process.exit(1);
+// Recovery shared by every "wrong or missing scope" error: the exact existing selection commands.
+const SELECT_LIBRARY_HINT =
+  "Run 'dosu deployments list' to see the MCP deployments you can select, then " +
+  "'dosu deployments switch <deployment-id>' for the Library to review, or run 'dosu setup' " +
+  "to choose the organization and Library again.";
+
+function failScope(message: string, hint: string = SELECT_LIBRARY_HINT): never {
+  console.error(pc.red(message));
+  console.error(pc.dim(hint));
+  process.exit(1);
+}
+
+/** What `review list` searched: doc changes come from the Library's knowledge store, draft
+ * replies from the MCP deployment's threads. Names are read from the server for this account,
+ * never from cached config, and stay null when a lookup cannot provide them. */
+interface ReviewScope {
+  knowledgeStoreId: string;
+  library: { id: string; name: string | null };
+  deployment: { id: string; name: string | null } | null;
+}
+
+// libraries.info is authoritative for "deleted or not visible" (NOT_FOUND); any other failure
+// only costs the display name, so it must not turn a readable queue into an error.
+async function lookupLibrary(
+  client: TypedClient,
+  spaceId: string,
+): Promise<{ found: false } | { found: true; name: string | null }> {
+  try {
+    const library = await client.libraries.info.query(spaceId);
+    return { found: true, name: library.name || null };
+  } catch (err) {
+    if (isNotFound(err)) return { found: false };
+    return { found: true, name: null };
   }
-  return store.id;
+}
+
+/** Validate the saved Library / MCP deployment before listing, so a stale or unauthorized
+ * target is an error rather than an empty queue. Read-only: never changes the selection. */
+async function resolveReviewScope(
+  client: TypedClient,
+  spaceId: string,
+  deploymentId: string | undefined,
+): Promise<ReviewScope> {
+  const [store, library, deployment] = await Promise.all([
+    client.knowledgeStore.getBySpaceId.query({ space_id: spaceId }),
+    lookupLibrary(client, spaceId),
+    deploymentId ? client.workspaces.get.query(deploymentId) : Promise.resolve(undefined),
+  ]);
+
+  if (deploymentId && !deployment) {
+    failScope(
+      `The selected MCP deployment (${deploymentId}) is unavailable: it was deleted, or the ` +
+        "signed-in account cannot access it.",
+    );
+  }
+  if (deployment && deployment.space_id !== spaceId) {
+    failScope(
+      `The saved Library (${spaceId}) does not match the Library of the selected MCP ` +
+        `deployment (${deployment.space_id}).`,
+      `Run 'dosu deployments switch ${deployment.deployment_id}' to save that deployment's ` +
+        "Library again, or choose another MCP deployment with 'dosu deployments list'.",
+    );
+  }
+  if (!library.found || !store) {
+    failScope(
+      `The selected Library (${spaceId}) is unavailable: it was deleted, or the signed-in ` +
+        "account cannot access it.",
+    );
+  }
+
+  return {
+    knowledgeStoreId: store.id,
+    library: { id: spaceId, name: library.name },
+    deployment: deployment ? { id: deployment.deployment_id, name: deployment.name || null } : null,
+  };
+}
+
+function describeScopeEntry(entry: { id: string; name: string | null }): string {
+  return entry.name ? `${entry.name} (${entry.id})` : entry.id;
+}
+
+function printScope(scope: ReviewScope): void {
+  printInfo([
+    ["Library", describeScopeEntry(scope.library)],
+    [
+      "MCP deployment",
+      scope.deployment
+        ? describeScopeEntry(scope.deployment)
+        : "none selected (draft replies not listed)",
+    ],
+  ]);
+  console.log();
 }
 
 export function reviewCommand(): Command {
@@ -160,7 +245,9 @@ export function reviewCommand(): Command {
 
   cmd
     .command("list")
-    .description("List pending review items (doc changes and draft replies)")
+    .description(
+      "List pending review items in the selected Library (doc changes and draft replies)",
+    )
     .addOption(
       new Option(
         "--since <when>",
@@ -187,30 +274,54 @@ export function reviewCommand(): Command {
       const inRange = rangeLabel ? ` ${rangeLabel}` : "";
 
       const cfg = requireConfig();
-      if (!cfg.active_account?.target?.space_id) {
-        console.error(pc.red("Missing space config. Run 'dosu setup' to reconfigure."));
-        process.exit(1);
+      const target = cfg.active_account?.target;
+      if (!target?.space_id) {
+        failScope(
+          "No Library selected. The review list reads the Library of the selected MCP deployment.",
+        );
       }
       const client = createTypedClient(cfg);
-      const ksId = await getKnowledgeStoreId(client, cfg.active_account?.target?.space_id);
+      const scope = await resolveReviewScope(client, target.space_id, target.deployment_id);
 
       // Docs are knowledge-store-scoped, drafts are deployment-scoped; passing deploymentId
       // merges draft replies into the list, omitting it returns doc changes only.
       const result = await client.review.listPending.query({
-        knowledgeStoreId: ksId,
-        deploymentId: cfg.active_account?.target?.deployment_id,
+        knowledgeStoreId: scope.knowledgeStoreId,
+        ...(scope.deployment && { deploymentId: scope.deployment.id }),
         ...(range.since && { since: range.since.toISOString() }),
         ...(range.until && { until: range.until.toISOString() }),
       });
       const { items, truncated, total } = result;
 
       if (opts.json) {
-        printResult(result, opts);
+        // `scope` is additive: `items`, `truncated`, and `total` keep their shape and meaning.
+        printResult(
+          {
+            ...result,
+            scope: {
+              library: scope.library,
+              deployment: scope.deployment,
+              kinds: scope.deployment ? ["doc_change", "draft_message"] : ["doc_change"],
+              since: range.since?.toISOString() ?? null,
+              until: range.until?.toISOString() ?? null,
+            },
+          },
+          opts,
+        );
         return;
       }
 
+      printScope(scope);
+
       if (!items || items.length === 0) {
-        console.log(pc.dim(`No pending review items${inRange}.`));
+        console.log(pc.dim(`No pending review items in this scope${inRange}.`));
+        console.log(
+          pc.dim(
+            "Only the selected Library is listed. To review another Library, find its MCP " +
+              "deployment with 'dosu deployments list' and select it with " +
+              "'dosu deployments switch <deployment-id>'.",
+          ),
+        );
         return;
       }
 

@@ -109,81 +109,6 @@ describe("review list", () => {
     createdAt: "2026-06-24T19:18:50.002Z",
   };
 
-  it("resolves space→KS then calls review.listPending", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({ id: "ks1" }); // knowledgeStore.getBySpaceId
-    mockQuery.mockResolvedValueOnce({ items: [pendingItem], truncated: false, total: 0 });
-
-    await run("list");
-
-    expect(mockQuery).toHaveBeenNthCalledWith(1, "knowledgeStore.getBySpaceId", {
-      space_id: "sp1",
-    });
-    expect(mockQuery).toHaveBeenNthCalledWith(2, "review.listPending", {
-      knowledgeStoreId: "ks1",
-      deploymentId: "dep1",
-    });
-    // full id must print — verbs (diff/approve/reject/edit) need the whole id (#102)
-    expect(allOutput()).toContain("pv-abcdef12");
-    expect(allOutput()).toContain("doc_change");
-    expect(allOutput()).toContain("API Guide");
-    // origin enum is humanized to match the MCP tool / dashboard
-    expect(allOutput()).toContain("Synced from source");
-    expect(allOutput()).not.toContain("sync_upstream");
-  });
-
-  it("outputs valid JSON with --json", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({ id: "ks1" });
-    mockQuery.mockResolvedValueOnce({ items: [pendingItem], truncated: false, total: 0 });
-
-    await run("list", "--json");
-
-    // --json emits the full ENG-605 envelope ({ items, truncated, total }) so
-    // machine consumers see truncation, not just the visible slice.
-    const output = JSON.parse(allOutput());
-    expect(output.items).toHaveLength(1);
-    expect(output.truncated).toBe(false);
-    expect(output.items[0].id).toBe("pv-abcdef12");
-    expect(output.items[0].kind).toBe("doc_change");
-    // --json is the machine surface — raw enum, not humanized
-    expect(output.items[0].origin).toBe("sync_upstream");
-  });
-
-  it.each([
-    ["manual_update", 1, "User created"],
-    ["manual_update", 2, "User updated"],
-    ["llm_generated", 1, "AI generated"],
-    ["api_update", 1, "Created via API"],
-    ["future_origin", 1, "future_origin"], // unknown enum falls through to raw value
-  ])("humanizes source %s (v%i) as %s", async (origin, version, expected) => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({ id: "ks1" });
-    mockQuery.mockResolvedValueOnce({
-      items: [{ ...pendingItem, origin, version }],
-      truncated: false,
-      total: 0,
-    });
-
-    await run("list");
-
-    expect(allOutput()).toContain(expected);
-  });
-
-  it("falls back to (untitled) when title is missing", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({ id: "ks1" });
-    mockQuery.mockResolvedValueOnce({
-      items: [{ ...pendingItem, title: null }],
-      truncated: false,
-      total: 0,
-    });
-
-    await run("list");
-
-    expect(allOutput()).toContain("(untitled)");
-  });
-
   const draftItem = {
     // listPending prefixes draft ids (ENG-547) — the CLI prints them verbatim so
     // they're copyable straight into the verbs, which strip the prefix.
@@ -195,13 +120,154 @@ describe("review list", () => {
     createdAt: "2026-06-25T10:00:00.000Z",
   };
 
+  const library = { id: "sp1", name: "Docs Library", org_id: "org1", deleted_at: null };
+  const deployment = {
+    deployment_id: "dep1",
+    name: "Docs MCP Server",
+    space_id: "sp1",
+    org_id: "org1",
+    provider_slug: "dosu_mcp",
+  };
+
+  type Routes = Record<string, unknown>;
+
+  /** Route queries by procedure path so the scope lookups can run in any order. A route value
+   * that is an Error rejects; `listPending` defaults to an empty page. */
+  function serve(overrides: Routes = {}) {
+    const routes: Routes = {
+      "knowledgeStore.getBySpaceId": { id: "ks1" },
+      "libraries.info": library,
+      "workspaces.get": deployment,
+      "review.listPending": { items: [], truncated: false, total: 0 },
+      ...overrides,
+    };
+    mockQuery.mockImplementation(async (path: string) => {
+      if (!(path in routes)) throw new Error(`unexpected query ${path}`);
+      const value = routes[path];
+      if (value instanceof Error) throw value;
+      return value;
+    });
+  }
+
+  function queried(path: string): unknown[] {
+    return mockQuery.mock.calls.filter((c: unknown[]) => c[0] === path).map((c: unknown[]) => c[1]);
+  }
+
+  function errorOutput(): string {
+    return errorSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
+  }
+
+  function internalError() {
+    return new TRPCClientError("boom", {
+      result: {
+        error: { code: -32603, message: "boom", data: { code: "INTERNAL_SERVER_ERROR" } },
+      },
+    });
+  }
+
+  afterEach(() => {
+    // Listing is read-only: no list scenario may issue a mutation.
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
+
+  it("resolves the selected scope, then calls review.listPending for it", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    serve({ "review.listPending": { items: [pendingItem], truncated: false, total: 1 } });
+
+    await run("list");
+
+    expect(queried("knowledgeStore.getBySpaceId")).toEqual([{ space_id: "sp1" }]);
+    expect(queried("libraries.info")).toEqual(["sp1"]);
+    expect(queried("workspaces.get")).toEqual(["dep1"]);
+    expect(queried("review.listPending")).toEqual([
+      { knowledgeStoreId: "ks1", deploymentId: "dep1" },
+    ]);
+    // full id must print — verbs (diff/approve/reject/edit) need the whole id (#102)
+    expect(allOutput()).toContain("pv-abcdef12");
+    expect(allOutput()).toContain("doc_change");
+    expect(allOutput()).toContain("API Guide");
+    // origin enum is humanized to match the MCP tool / dashboard
+    expect(allOutput()).toContain("Synced from source");
+    expect(allOutput()).not.toContain("sync_upstream");
+  });
+
+  it("shows the Library and MCP deployment it searched above the table", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    serve({ "review.listPending": { items: [pendingItem], truncated: false, total: 1 } });
+
+    await run("list");
+
+    const out = allOutput();
+    expect(out).toMatch(/Library\s+Docs Library \(sp1\)/);
+    expect(out).toMatch(/MCP deployment\s+Docs MCP Server \(dep1\)/);
+    expect(out.indexOf("Docs Library")).toBeLessThan(out.indexOf("API Guide"));
+  });
+
+  it("keeps items/truncated/total in --json and adds the scope object", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    serve({ "review.listPending": { items: [pendingItem], truncated: false, total: 1 } });
+
+    await run("list", "--json");
+
+    // --json emits the full ENG-605 envelope ({ items, truncated, total }) so
+    // machine consumers see truncation, not just the visible slice.
+    const output = JSON.parse(allOutput());
+    expect(output.items).toHaveLength(1);
+    expect(output.truncated).toBe(false);
+    expect(output.total).toBe(1);
+    expect(output.items[0].id).toBe("pv-abcdef12");
+    expect(output.items[0].kind).toBe("doc_change");
+    // --json is the machine surface — raw enum, not humanized
+    expect(output.items[0].origin).toBe("sync_upstream");
+    expect(output.scope).toEqual({
+      library: { id: "sp1", name: "Docs Library" },
+      deployment: { id: "dep1", name: "Docs MCP Server" },
+      kinds: ["doc_change", "draft_message"],
+      since: null,
+      until: null,
+    });
+  });
+
+  it.each([
+    ["manual_update", 1, "User created"],
+    ["manual_update", 2, "User updated"],
+    ["llm_generated", 1, "AI generated"],
+    ["api_update", 1, "Created via API"],
+    ["future_origin", 1, "future_origin"], // unknown enum falls through to raw value
+  ])("humanizes source %s (v%i) as %s", async (origin, version, expected) => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    serve({
+      "review.listPending": {
+        items: [{ ...pendingItem, origin, version }],
+        truncated: false,
+        total: 1,
+      },
+    });
+
+    await run("list");
+
+    expect(allOutput()).toContain(expected);
+  });
+
+  it("falls back to (untitled) when title is missing", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    serve({
+      "review.listPending": {
+        items: [{ ...pendingItem, title: null }],
+        truncated: false,
+        total: 1,
+      },
+    });
+
+    await run("list");
+
+    expect(allOutput()).toContain("(untitled)");
+  });
+
   it("renders draft_message items alongside doc changes", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({ id: "ks1" });
-    mockQuery.mockResolvedValueOnce({
-      items: [pendingItem, draftItem],
-      truncated: false,
-      total: 0,
+    serve({
+      "review.listPending": { items: [pendingItem, draftItem], truncated: false, total: 2 },
     });
 
     await run("list");
@@ -219,11 +285,8 @@ describe("review list", () => {
 
   it("falls back to (untitled) for a draft with an empty title", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({ id: "ks1" });
-    mockQuery.mockResolvedValueOnce({
-      items: [{ ...draftItem, title: "" }],
-      truncated: false,
-      total: 0,
+    serve({
+      "review.listPending": { items: [{ ...draftItem, title: "" }], truncated: false, total: 1 },
     });
 
     await run("list");
@@ -231,14 +294,71 @@ describe("review list", () => {
     expect(allOutput()).toContain("(untitled)");
   });
 
-  it("prints message for empty queue", async () => {
+  it("names the scope when the queue is empty", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({ id: "ks1" });
-    mockQuery.mockResolvedValueOnce({ items: [], truncated: false, total: 0 });
+    serve();
 
     await run("list");
 
-    expect(allOutput()).toContain("No pending review items");
+    const out = allOutput();
+    expect(out).toMatch(/Library\s+Docs Library \(sp1\)/);
+    expect(out).toMatch(/MCP deployment\s+Docs MCP Server \(dep1\)/);
+    expect(out).toContain("No pending review items in this scope.");
+    expect(out).toContain("dosu deployments switch");
+  });
+
+  it("prints IDs alone when optional names are unavailable, never a placeholder name", async () => {
+    mockLoadConfig.mockReturnValue(
+      makeValidConfig({ library_name: "Stale Cached Name", deployment_name: "Stale Dep" }),
+    );
+    serve({
+      // A lookup failure other than NOT_FOUND leaves the name unknown; it is not a scope error.
+      "libraries.info": internalError(),
+      "workspaces.get": { ...deployment, name: "" },
+      "review.listPending": { items: [pendingItem], truncated: false, total: 1 },
+    });
+
+    await run("list", "--json");
+
+    const output = JSON.parse(allOutput());
+    expect(output.scope.library).toEqual({ id: "sp1", name: null });
+    expect(output.scope.deployment).toEqual({ id: "dep1", name: null });
+    expect(JSON.stringify(output)).not.toContain("Stale");
+  });
+
+  it("renders a scope without names in human output", async () => {
+    mockLoadConfig.mockReturnValue(makeValidConfig({ library_name: "Stale Cached Name" }));
+    serve({ "libraries.info": internalError(), "workspaces.get": { ...deployment, name: "" } });
+
+    await run("list");
+
+    const out = allOutput();
+    expect(out).toMatch(/Library\s+sp1\n/);
+    expect(out).toMatch(/MCP deployment\s+dep1\n/);
+    expect(out).not.toContain("Stale");
+    expect(out).not.toMatch(/null|undefined/);
+  });
+
+  it("lists doc changes only, and says so, when no MCP deployment is saved", async () => {
+    mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: undefined }));
+    serve({ "review.listPending": { items: [pendingItem], truncated: false, total: 1 } });
+
+    await run("list", "--json");
+
+    expect(queried("workspaces.get")).toEqual([]);
+    expect(queried("review.listPending")).toEqual([{ knowledgeStoreId: "ks1" }]);
+    const output = JSON.parse(allOutput());
+    expect(output.scope.deployment).toBeNull();
+    expect(output.scope.kinds).toEqual(["doc_change"]);
+  });
+
+  it("explains missing draft replies in human output when no MCP deployment is saved", async () => {
+    mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: undefined }));
+    serve();
+
+    await run("list");
+
+    expect(allOutput()).toMatch(/MCP deployment\s+none selected \(draft replies not listed\)/);
   });
 
   describe("--since / --until", () => {
@@ -252,42 +372,52 @@ describe("review list", () => {
 
     it("resolves both bounds to ISO instants (an until date includes the whole day)", async () => {
       mockLoadConfig.mockReturnValue(validConfig);
-      mockQuery.mockResolvedValueOnce({ id: "ks1" });
-      mockQuery.mockResolvedValueOnce({ items: [pendingItem], truncated: false, total: 1 });
+      serve({ "review.listPending": { items: [pendingItem], truncated: false, total: 1 } });
 
       await run("list", "--since", "7d", "--until", "2026-09-24");
 
-      expect(mockQuery).toHaveBeenNthCalledWith(2, "review.listPending", {
-        knowledgeStoreId: "ks1",
-        deploymentId: "dep1",
-        since: "2026-09-18T12:00:00.000Z",
-        until: "2026-09-25T00:00:00.000Z",
-      });
+      expect(queried("review.listPending")).toEqual([
+        {
+          knowledgeStoreId: "ks1",
+          deploymentId: "dep1",
+          since: "2026-09-18T12:00:00.000Z",
+          until: "2026-09-25T00:00:00.000Z",
+        },
+      ]);
       expect(allOutput()).toContain(
         "Pending review items created since 2026-09-18T12:00Z and before 2026-09-25T00:00Z:",
       );
       expect(allOutput()).toContain("API Guide");
     });
 
+    it("records the window in the JSON scope", async () => {
+      mockLoadConfig.mockReturnValue(validConfig);
+      serve();
+
+      await run("list", "--since", "24h", "--json");
+
+      const output = JSON.parse(allOutput());
+      expect(output.scope.since).toBe("2026-09-24T12:00:00.000Z");
+      expect(output.scope.until).toBeNull();
+    });
+
     it("sends only the bound that was given", async () => {
       mockLoadConfig.mockReturnValue(validConfig);
-      mockQuery.mockResolvedValueOnce({ id: "ks1" });
-      mockQuery.mockResolvedValueOnce({ items: [], truncated: false, total: 0 });
+      serve();
 
       await run("list", "--until", "2026-09-01T14:00:00+02:00");
 
-      expect(mockQuery).toHaveBeenNthCalledWith(2, "review.listPending", {
-        knowledgeStoreId: "ks1",
-        deploymentId: "dep1",
-        until: "2026-09-01T12:00:00.000Z",
-      });
-      expect(allOutput()).toContain("No pending review items before 2026-09-01T12:00Z.");
+      expect(queried("review.listPending")).toEqual([
+        { knowledgeStoreId: "ks1", deploymentId: "dep1", until: "2026-09-01T12:00:00.000Z" },
+      ]);
+      expect(allOutput()).toContain(
+        "No pending review items in this scope before 2026-09-01T12:00Z.",
+      );
     });
 
     it("names the range in the truncation footer", async () => {
       mockLoadConfig.mockReturnValue(validConfig);
-      mockQuery.mockResolvedValueOnce({ id: "ks1" });
-      mockQuery.mockResolvedValueOnce({ items: [pendingItem], truncated: true, total: 50 });
+      serve({ "review.listPending": { items: [pendingItem], truncated: true, total: 50 } });
 
       await run("list", "--since", "24h");
 
@@ -319,15 +449,98 @@ describe("review list", () => {
     });
   });
 
-  it("exits when space_id is missing", async () => {
-    mockLoadConfig.mockReturnValue(makeValidConfig({ space_id: undefined }));
-    await expect(run("list")).rejects.toThrow("exit");
+  it("keeps truncated/total in --json for a capped page", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    serve({ "review.listPending": { items: [pendingItem], truncated: true, total: 73 } });
+
+    await run("list", "--json");
+
+    const output = JSON.parse(allOutput());
+    expect(output.truncated).toBe(true);
+    expect(output.total).toBe(73);
+    expect(output.scope.library.id).toBe("sp1");
   });
 
-  it("exits when no knowledge store is found", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce(null); // knowledgeStore.getBySpaceId
-    await expect(run("list")).rejects.toThrow("exit");
+  describe("context errors", () => {
+    it("stops before any request when not logged in", async () => {
+      mockLoadConfig.mockReturnValue({ schema_version: 2 });
+
+      await expect(run("list")).rejects.toThrow("exit");
+
+      expect(errorOutput()).toContain("Not logged in. Run 'dosu login' first.");
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it("names the missing Library and the selection commands", async () => {
+      mockLoadConfig.mockReturnValue(makeValidConfig({ space_id: undefined }));
+
+      await expect(run("list", "--json")).rejects.toThrow("exit");
+
+      const err = errorOutput();
+      expect(err).toContain("No Library selected.");
+      expect(err).toContain("dosu deployments list");
+      expect(err).toContain("dosu deployments switch <deployment-id>");
+      expect(err).toContain("dosu setup");
+      expect(err).not.toMatch(/space/i);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(allOutput()).toBe("");
+    });
+
+    it("treats a deleted or inaccessible MCP deployment as an error, not an empty queue", async () => {
+      mockLoadConfig.mockReturnValue(validConfig);
+      serve({ "workspaces.get": null });
+
+      await expect(run("list", "--json")).rejects.toThrow("exit");
+
+      const err = errorOutput();
+      expect(err).toContain("The selected MCP deployment (dep1) is unavailable");
+      expect(err).toContain("dosu deployments list");
+      expect(queried("review.listPending")).toEqual([]);
+      expect(allOutput()).toBe("");
+    });
+
+    it("treats a deleted or inaccessible Library as an error", async () => {
+      mockLoadConfig.mockReturnValue(validConfig);
+      serve({ "libraries.info": notFound() });
+
+      await expect(run("list")).rejects.toThrow("exit");
+
+      expect(errorOutput()).toContain("The selected Library (sp1) is unavailable");
+      expect(queried("review.listPending")).toEqual([]);
+    });
+
+    it("treats a Library without a readable knowledge store as unavailable", async () => {
+      mockLoadConfig.mockReturnValue(validConfig);
+      serve({ "knowledgeStore.getBySpaceId": null });
+
+      await expect(run("list")).rejects.toThrow("exit");
+
+      const err = errorOutput();
+      expect(err).toContain("The selected Library (sp1) is unavailable");
+      expect(err).not.toContain("knowledge store");
+      expect(queried("review.listPending")).toEqual([]);
+    });
+
+    it("refuses a saved Library that is not the MCP deployment's Library", async () => {
+      mockLoadConfig.mockReturnValue(validConfig);
+      serve({ "workspaces.get": { ...deployment, space_id: "sp-other" } });
+
+      await expect(run("list")).rejects.toThrow("exit");
+
+      const err = errorOutput();
+      expect(err).toContain("does not match");
+      expect(err).toContain("dosu deployments switch dep1");
+      expect(queried("review.listPending")).toEqual([]);
+    });
+
+    it("propagates an unexpected lookup failure instead of reporting an empty queue", async () => {
+      mockLoadConfig.mockReturnValue(validConfig);
+      serve({ "workspaces.get": internalError() });
+
+      await expect(run("list")).rejects.toThrow("boom");
+
+      expect(queried("review.listPending")).toEqual([]);
+    });
   });
 });
 
