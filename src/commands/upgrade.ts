@@ -4,8 +4,14 @@ import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { posix, win32 } from "node:path";
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import pc from "picocolors";
+import {
+  AUTO_UPDATE_ENV,
+  autoUpdateDisabledReason,
+  runBackgroundUpgrade,
+  setAutoUpdateEnabled,
+} from "../version/auto-update";
 import { INSTALL_CHANNEL, isNpxInvocation } from "../version/version";
 import { installSkill } from "./skill";
 
@@ -369,11 +375,43 @@ export async function completeUpgrade(
   return 0;
 }
 
+/** `dosu upgrade --auto on|off`: persist the auto-update opt-out and report the effective state. */
+export function setAutoUpdate(value: string): number {
+  const normalized = value.trim().toLowerCase();
+  if (normalized !== "on" && normalized !== "off") {
+    console.error(`Invalid --auto value '${value}' (expected 'on' or 'off').`);
+    return 2;
+  }
+  if (!setAutoUpdateEnabled(normalized === "on")) {
+    console.error("Could not save the auto-update setting.");
+    return 1;
+  }
+  if (normalized === "off") {
+    console.log('Automatic updates are off. Run "dosu upgrade" to update by hand.');
+  } else if (autoUpdateDisabledReason() === "env") {
+    console.log(`Automatic updates are on, but ${AUTO_UPDATE_ENV} still disables them here.`);
+  } else {
+    console.log("Automatic updates are on.");
+  }
+  return 0;
+}
+
 export function upgradeCommand(): Command {
   return new Command("upgrade")
     .description("Update Dosu to the latest version, then re-run setup to update your AI agents")
-    .action(async () => {
-      const status = await completeUpgrade();
+    .option("--auto <on|off>", "Turn automatic background updates on or off")
+    .addOption(new Option("--background").hideHelp())
+    .action(async (opts: { auto?: string; background?: boolean }) => {
+      let status: number;
+      if (opts.auto !== undefined) {
+        status = setAutoUpdate(opts.auto);
+      } else if (opts.background) {
+        // Detached child of the update check: install only. The next command runs the new
+        // version, whose first-run checks refresh skills and MCP entries.
+        status = runBackgroundUpgrade(() => runUpgrade());
+      } else {
+        status = await completeUpgrade();
+      }
       if (status !== 0) process.exitCode = status;
     });
 }
