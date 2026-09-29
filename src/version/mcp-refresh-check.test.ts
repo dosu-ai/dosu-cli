@@ -128,8 +128,33 @@ describe("canRefreshMcp", () => {
 });
 
 describe("needsMcpRefresh", () => {
-  it("lists 0.53.0 as the release that changed the MCP entry", () => {
+  it("lists the releases that changed the MCP entry", () => {
     expect(MCP_FORMAT_CHANGES).toContain("0.53.0");
+    // Claude Code entries gained alwaysLoad: true. Provisional: must equal the version this
+    // change actually ships in (re-check at merge/release time).
+    expect(MCP_FORMAT_CHANGES).toContain("0.62.0");
+  });
+
+  it("refreshes every pre-alwaysLoad install when it upgrades onto the Claude Code change", () => {
+    for (const previous of [
+      "0.58.0",
+      "0.58.3",
+      "0.59.0",
+      "0.59.2",
+      "0.60.1",
+      "0.60.2",
+      "0.61.0",
+      "0.61.3",
+      null,
+    ]) {
+      expect(needsMcpRefresh(previous, "0.62.0")).toBe(true);
+      expect(needsMcpRefresh(previous, "0.62.4")).toBe(true);
+    }
+  });
+
+  it("does not refresh again once an install already wrote the alwaysLoad entry", () => {
+    expect(needsMcpRefresh("0.62.0", "0.62.1")).toBe(false);
+    expect(needsMcpRefresh("0.62.0-alpha.3", "0.62.0")).toBe(false);
   });
 
   it("refreshes when the install predates the marker", () => {
