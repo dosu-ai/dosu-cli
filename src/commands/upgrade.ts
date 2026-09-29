@@ -391,7 +391,7 @@ export async function finishUpgrade(
 }
 
 /** `dosu upgrade --auto on|off`: persist the auto-update opt-out and report the effective state. */
-export function setAutoUpdate(value: string): number {
+function setAutoUpdate(value: string): number {
   const normalized = value.trim().toLowerCase();
   if (normalized !== "on" && normalized !== "off") {
     console.error(`Invalid --auto value '${value}' (expected 'on' or 'off').`);
