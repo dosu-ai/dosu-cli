@@ -135,7 +135,7 @@ dosu docs sync-back <id> [--json]
 Read [review-workflow.md](review-workflow.md) before mutating a review item.
 
 ```text
-dosu review list [--json]
+dosu review list [--since <when>] [--until <when>] [--json]
 dosu review diff <id> [--json]
 dosu review edit <id> [--title <title>] [--body <markdown> | --body-file <path>] [--json]
 dosu review context <thread-id> [--json]
@@ -144,7 +144,9 @@ dosu review reject <id> [--confirm] [--json]
 dosu review revert <id> [--json]
 ```
 
-`edit` requires at least one field. `approve` and `reject` do not write without interactive confirmation or `--confirm`.
+- `list` reads the selected Library's pending doc changes plus the selected MCP deployment's draft replies. JSON is `{items, truncated, total}`: at most 50 items, newest first; `total` is a lower bound when `truncated` is true. `--since`/`--until` take `24h`/`7d`/`2w`, a UTC date, or an ISO-8601 datetime.
+- IDs are opaque: pass each `id` from `list` verbatim (draft replies carry a `draft_message:` prefix). `revert` takes a decided doc change's page-version ID and does not apply to drafts.
+- `edit` requires at least one field; drafts accept only `--body`/`--body-file`. `approve` and `reject` do not write without interactive confirmation or `--confirm`.
 
 ## Sources, integrations, members, and organization
 
