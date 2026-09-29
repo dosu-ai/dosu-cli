@@ -17,7 +17,7 @@ vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
-  return { ...actual, openSync: vi.fn(actual.openSync) };
+  return { ...actual, mkdirSync: vi.fn(actual.mkdirSync), openSync: vi.fn(actual.openSync) };
 });
 
 import {
@@ -187,6 +187,19 @@ describe("startAutoUpdate", () => {
     });
 
     expect(startAutoUpdate("1.2.3", NPM)).toBe("in_progress");
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("keeps a fresh lock another process took after the first check", () => {
+    const actual = vi.mocked(mkdirSync).getMockImplementation();
+    vi.mocked(mkdirSync).mockImplementationOnce((path, options) => {
+      const result = actual?.(path, options);
+      writeFileSync(configPath("auto-update.lock"), "1.2.2");
+      return result;
+    });
+
+    expect(startAutoUpdate("1.2.3", NPM)).toBe("in_progress");
+    expect(readFileSync(configPath("auto-update.lock"), "utf-8")).toBe("1.2.2");
     expect(mockSpawn).not.toHaveBeenCalled();
   });
 

@@ -6,14 +6,17 @@ import { homedir } from "node:os";
 import { posix, win32 } from "node:path";
 import { Command, Option } from "commander";
 import pc from "picocolors";
+import { loadConfigNonBlocking } from "../config/config";
+import { refreshConfiguredProviders } from "../mcp/refresh";
 import {
   AUTO_UPDATE_ENV,
   autoUpdateDisabledReason,
   runBackgroundUpgrade,
   setAutoUpdateEnabled,
 } from "../version/auto-update";
-import { INSTALL_CHANNEL, isNpxInvocation } from "../version/version";
-import { installSkill } from "./skill";
+import { canRefreshMcp, needsMcpRefresh, writeMcpRefreshCache } from "../version/mcp-refresh-check";
+import { checkForSkillUpdates } from "../version/skill-update-check";
+import { INSTALL_CHANNEL, isNpxInvocation, VERSION } from "../version/version";
 
 const PACKAGE_NAME = "@dosu/cli";
 const LATEST_PACKAGE = `${PACKAGE_NAME}@latest`;
@@ -211,8 +214,6 @@ interface UpgradeOptions {
   comSpec?: string;
   env?: Readonly<Record<string, string | undefined>>;
   cwd?: string;
-  /** Whether a person can answer prompts; defaults to stdin+stdout being TTYs. */
-  interactive?: boolean;
 }
 
 function printNonGlobalPackageGuidance(): void {
@@ -286,12 +287,12 @@ export function runUpgrade(channel = INSTALL_CHANNEL, options: UpgradeOptions = 
 }
 
 const SETUP_FALLBACK = 'Run "dosu setup" to finish updating your AI agents.';
+const SEMVER = /^\d+\.\d+\.\d+/;
 
-/** What the upgraded binary should run: the full setup wizard when a person is at the terminal
- * (it re-applies MCP, hooks, status line, rules, and skill), or the silent MCP refresh when
- * there is no TTY to drive prompts. */
-export function postUpgradeArgs(interactive: boolean): string[] {
-  return interactive ? ["setup"] : ["mcp", "refresh"];
+/** What the upgraded binary should run. It, not this old process, decides whether the agents
+ * need touching: only the new code knows which releases changed the agent config format. */
+export function postUpgradeArgs(fromVersion: string = VERSION): string[] {
+  return ["upgrade", "--finish", fromVersion];
 }
 
 /** How to re-invoke Dosu after the package manager swapped the files underneath us. Only the
@@ -318,14 +319,10 @@ function isInteractiveTerminal(): boolean {
   return process.stdin.isTTY === true && process.stdout.isTTY === true;
 }
 
-function setupAgentsWithNewBinary(
-  channel: string,
-  interactive: boolean,
-  options: UpgradeOptions,
-): void {
+function finishWithNewBinary(channel: string, options: UpgradeOptions): void {
   const invocation = newBinaryInvocation(
     channel,
-    postUpgradeArgs(interactive),
+    postUpgradeArgs(),
     options.entrypoint ?? process.argv[1],
   );
   /* v8 ignore start -- runUpgrade only succeeds for channels/entrypoints that resolve here */
@@ -334,11 +331,6 @@ function setupAgentsWithNewBinary(
     return;
   }
   /* v8 ignore stop */
-  console.log(
-    interactive
-      ? "\nRunning setup with the new version to update your AI agents...\n"
-      : "\nRefreshing agent MCP configs with the new version...",
-  );
   const result = spawnSync(invocation.command, invocation.args, {
     cwd: options.cwd ?? homedir(),
     shell: false,
@@ -355,23 +347,46 @@ export async function completeUpgrade(
 ): Promise<number> {
   const status = runUpgrade(channel, options);
   if (status !== 0) return status;
-  const interactive = options.interactive ?? isInteractiveTerminal();
-  // The interactive hand-off runs `setup`, which reinstalls skills itself; only the silent
-  // `mcp refresh` path needs the old process to refresh them.
-  if (!interactive) {
-    console.log("Updating Dosu skills...");
-    try {
-      const result = await installSkill();
-      if (result.success) {
-        console.log(pc.green("✓ Skills updated."));
-      } else {
-        console.error('Skills could not be refreshed. Run "dosu skill update" to retry.');
-      }
-    } catch {
-      console.error('Skills could not be refreshed. Run "dosu skill update" to retry.');
-    }
+  finishWithNewBinary(channel, options);
+  return 0;
+}
+
+/** `dosu upgrade --finish <from>`, run by the freshly installed binary. Re-runs setup (or, with
+ * no TTY, the MCP refresh) only when the jump from `from` crossed a release that changed the
+ * agent config format; otherwise it just re-applies the bundled skills. */
+export async function finishUpgrade(
+  from: string,
+  options: { interactive?: boolean } = {},
+): Promise<number> {
+  const previous = SEMVER.test(from) ? from : null;
+  if (!needsMcpRefresh(previous, VERSION)) {
+    checkForSkillUpdates();
+    writeMcpRefreshCache({ version: VERSION });
+    console.log(pc.green(`✓ Dosu ${VERSION} is ready. Your AI agents need no changes.`));
+    return 0;
   }
-  setupAgentsWithNewBinary(channel, interactive, options);
+
+  if (options.interactive ?? isInteractiveTerminal()) {
+    console.log("\nThis update changes how agents connect to Dosu. Running setup...\n");
+    const { runSetup } = await import("../setup/flow");
+    await runSetup();
+    return 0;
+  }
+
+  checkForSkillUpdates();
+  const cfg = loadConfigNonBlocking();
+  if (!cfg || !canRefreshMcp(cfg)) {
+    console.error(SETUP_FALLBACK);
+    return 0;
+  }
+  console.log("\nRefreshing agent MCP configs with the new version...");
+  const result = refreshConfiguredProviders(cfg);
+  writeMcpRefreshCache({ version: VERSION });
+  for (const provider of result.updated) console.log(`  ✓ ${provider.name()}`);
+  for (const { provider, error } of result.failed) {
+    console.log(`  ✗ ${provider.name()}: ${error.message}`);
+  }
+  if (result.failed.length > 0) console.error(SETUP_FALLBACK);
   return 0;
 }
 
@@ -398,10 +413,13 @@ export function setAutoUpdate(value: string): number {
 
 export function upgradeCommand(): Command {
   return new Command("upgrade")
-    .description("Update Dosu to the latest version, then re-run setup to update your AI agents")
+    .description(
+      "Update Dosu to the latest version, re-running setup when the update changes agent config",
+    )
     .option("--auto <on|off>", "Turn automatic background updates on or off")
     .addOption(new Option("--background").hideHelp())
-    .action(async (opts: { auto?: string; background?: boolean }) => {
+    .addOption(new Option("--finish <from>").hideHelp())
+    .action(async (opts: { auto?: string; background?: boolean; finish?: string }) => {
       let status: number;
       if (opts.auto !== undefined) {
         status = setAutoUpdate(opts.auto);
@@ -409,6 +427,8 @@ export function upgradeCommand(): Command {
         // Detached child of the update check: install only. The next command runs the new
         // version, whose first-run checks refresh skills and MCP entries.
         status = runBackgroundUpgrade(() => runUpgrade());
+      } else if (opts.finish !== undefined) {
+        status = await finishUpgrade(opts.finish);
       } else {
         status = await completeUpgrade();
       }
