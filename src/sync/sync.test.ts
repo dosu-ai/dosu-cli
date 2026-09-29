@@ -35,11 +35,21 @@ function makeDeps(overrides: Partial<SyncDeps> = {}): {
     listSessions: vi.fn().mockResolvedValue([]),
     loadState: () => ({ schema_version: 1, watermark: null, consecutive_failures: 0 }),
     saveState: (state) => saved.push(state),
+    locator: { resolve: () => "/repo/dosu-cli", resolveRepo: () => DOSU_CLI },
     now: () => NOW,
     ...overrides,
   };
   return { deps, saved };
 }
+
+const DOSU_CLI = "github.com/dosu-ai/dosu-cli";
+
+/** Sessions sit in `/repo/<project>`; project "dosu-cli" is DOSU_CLI, no project is no repo. */
+const projectLocator = {
+  resolve: (s: AgentSession) => (s.project ? `/repo/${s.project}` : null),
+  resolveRepo: (s: AgentSession) =>
+    s.project ? (s.project === "dosu-cli" ? DOSU_CLI : `github.com/x/${s.project}`) : null,
+};
 
 describe("runKnowledgeSync", () => {
   it("reports a backlog of completed sessions past the gate", async () => {
@@ -69,25 +79,84 @@ describe("runKnowledgeSync", () => {
     expect(logged).toContain("(+2 more)");
   });
 
-  it("gates out sessions outside the project filter", async () => {
+  it("gates out sessions outside the repo filter", async () => {
     const inScope = { ...session(60), project: "dosu-cli" };
     const outScope = { ...session(30), project: "other" };
-    const unknown = session(40); // directory unresolvable → "(unknown)"
     const { deps } = makeDeps({
       loadState: () => ({
         schema_version: 1,
         watermark: null,
         consecutive_failures: 0,
-        project_filter: ["/repo/dosu-cli"],
+        repo_filter: [DOSU_CLI],
       }),
-      listSessions: vi.fn().mockResolvedValue([inScope, outScope, unknown]),
-      resolveProjectDir: (s) => (s.project ? `/repo/${s.project}` : null),
+      listSessions: vi.fn().mockResolvedValue([inScope, outScope]),
+      locator: projectLocator,
     });
 
     const outcome = await runKnowledgeSync({ deps });
 
     expect(outcome.status).toBe("backlog");
     expect(outcome.sessions.map((s) => s.id)).toEqual([inScope.id]);
+  });
+
+  it("never studies sessions outside a git repo, even with no filter", async () => {
+    const inRepo = { ...session(60), project: "other" };
+    const noRepo = session(40);
+    const { deps } = makeDeps({
+      listSessions: vi.fn().mockResolvedValue([inRepo, noRepo]),
+      locator: projectLocator,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.sessions.map((s) => s.id)).toEqual([inRepo.id]);
+  });
+
+  it("converts a legacy folder scope to the repos its sessions ran in and persists it", async () => {
+    mockScanSessions
+      .mockReset()
+      .mockReturnValue([
+        { ...session(90), project: "dosu-cli" },
+        { ...session(95), project: "other" },
+        session(99),
+      ]);
+    const inScope = { ...session(60), project: "dosu-cli" };
+    const outScope = { ...session(30), project: "other" };
+    const { deps, saved } = makeDeps({
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        project_filter: ["/repo/dosu-cli", "(unknown)"],
+      }),
+      listSessions: vi.fn().mockResolvedValue([inScope, outScope]),
+      locator: projectLocator,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.sessions.map((s) => s.id)).toEqual([inScope.id]);
+    expect(saved[0].repo_filter).toEqual([DOSU_CLI]);
+    expect(saved[0].project_filter).toBeUndefined();
+  });
+
+  it("a legacy folder scope with no repos in it studies nothing", async () => {
+    mockScanSessions.mockReset().mockReturnValue([session(99)]);
+    const { deps, saved } = makeDeps({
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        project_filter: ["(unknown)"],
+      }),
+      listSessions: vi.fn().mockResolvedValue([{ ...session(60), project: "dosu-cli" }]),
+      locator: projectLocator,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.status).toBe("nothing-new");
+    expect(saved[0].repo_filter).toEqual([]);
   });
 
   it("reports nothing-new when the gate is empty", async () => {

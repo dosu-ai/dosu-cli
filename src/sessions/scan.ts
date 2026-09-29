@@ -18,6 +18,8 @@ export interface AgentSession {
   project?: string;
   /** ISO timestamp of the session's last activity. */
   updated: string;
+  /** Normalized origin repo (`host/owner/repo`), attached once the study scope resolves it. */
+  repo?: string;
 }
 
 export interface ScanSessionsOptions {

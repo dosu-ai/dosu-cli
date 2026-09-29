@@ -296,7 +296,7 @@ describe("runLearner", () => {
     expect(Object.keys(params.options.mcpServers)).toEqual(["sessions", "dosu"]);
     expect(params.options.mcpServers.dosu.type).toBe("http");
     // Session-context headers ride on every knowledge MCP request; no repo/branch/commit
-    // headers because a run spans many repos.
+    // headers because a run spans many repos (the gate sets repo per note).
     expect(params.options.mcpServers.dosu.headers).toMatchObject({
       "X-Dosu-API-Key": "sk_user_test",
       "X-Dosu-Session-Id": "run-123",
@@ -450,6 +450,69 @@ describe("runLearner", () => {
     expect(g[1].updatedInput).toEqual({ title: "resolved", content: "c", transcript_id: "s2" });
     // The denied write is not counted; only the resolved one is.
     expect(result.notesWritten).toBe(1);
+  });
+
+  it("stamps each note with its own session's repo and never forwards a branch", async () => {
+    const g: GateResult[] = [];
+    queryMock.mockImplementation((params: GateParams) => {
+      return (async function* () {
+        await params.options.canUseTool(...read("s1"));
+        g.push(
+          await params.options.canUseTool(
+            "mcp__dosu__write_knowledge",
+            { title: "a", content: "c", repo: "github.com/model/guess", branch: "main" },
+            {},
+          ),
+        );
+        await params.options.canUseTool(...read("s2"));
+        g.push(await params.options.canUseTool(...write("b")));
+        await params.options.canUseTool(...read("s3"));
+        g.push(
+          await params.options.canUseTool(
+            "mcp__dosu__write_knowledge",
+            { title: "c", content: "c", repo: "github.com/model/guess" },
+            {},
+          ),
+        );
+        yield successResult();
+      })();
+    });
+
+    await runLearner({
+      ...baseOptions,
+      sessions: [
+        {
+          id: "s1",
+          harness: "claude",
+          path: "/x/1.jsonl",
+          updated: "2026-08-27T00:00:00.000Z",
+          repo: "github.com/dosu-ai/dosu-cli",
+        },
+        {
+          id: "s2",
+          harness: "cursor",
+          path: "/x/2.jsonl",
+          updated: "2026-08-27T00:00:00.000Z",
+          repo: "github.com/dosu-ai/dosu",
+        },
+        { id: "s3", harness: "codex", path: "/x/3.jsonl", updated: "2026-08-27T00:00:00.000Z" },
+      ],
+    });
+
+    expect(g[0].updatedInput).toEqual({
+      title: "a",
+      content: "c",
+      transcript_id: "s1",
+      repo: "github.com/dosu-ai/dosu-cli",
+    });
+    expect(g[1].updatedInput).toEqual({
+      title: "b",
+      content: "c",
+      transcript_id: "s2",
+      repo: "github.com/dosu-ai/dosu",
+    });
+    // A session with no resolved repo gets none; the model's guess is dropped either way.
+    expect(g[2].updatedInput).toEqual({ title: "c", content: "c", transcript_id: "s3" });
   });
 
   it("leaves a note unattributed when no session was read before it", async () => {
