@@ -13,7 +13,7 @@ vi.mock("../debug/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), init: vi.fn() },
 }));
 
-import { saveConfig } from "../config/config";
+import { getConfigDir, saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
 import { checkForMcpRefresh, readMcpRefreshCache } from "./mcp-refresh-check";
 
@@ -35,6 +35,11 @@ function claudeJson() {
   return JSON.parse(readFileSync(join(home, ".claude.json"), "utf-8"));
 }
 
+function writeMarker(contents: string): void {
+  mkdirSync(getConfigDir(), { recursive: true });
+  writeFileSync(join(getConfigDir(), "mcp-refresh.json"), contents);
+}
+
 function seed(previous: string | null): void {
   mkdirSync(join(home, ".claude"), { recursive: true });
   writeFileSync(
@@ -45,13 +50,7 @@ function seed(previous: string | null): void {
       mcpServers: { dosu: PRE_ALWAYS_LOAD_ENTRY, ...UNRELATED },
     }),
   );
-  if (previous !== null) {
-    mkdirSync(join(home, ".config", "dosu-cli"), { recursive: true });
-    writeFileSync(
-      join(home, ".config", "dosu-cli", "mcp-refresh.json"),
-      JSON.stringify({ version: previous }),
-    );
-  }
+  if (previous !== null) writeMarker(JSON.stringify({ version: previous }));
   saveConfig(
     makeTestConfig({
       access_token: "tok",
@@ -105,6 +104,19 @@ describe("post-upgrade refresh onto the Claude Code alwaysLoad entry", () => {
     expect(cfg.mcpServers.local).toEqual(UNRELATED.local);
     expect(cfg.numStartups).toBe(3);
     expect(cfg.projects).toEqual({ "/repo": { allowedTools: [] } });
+    expect(readMcpRefreshCache()).toEqual({ version: "0.62.0" });
+  });
+
+  it.each([
+    ["unreadable JSON", "{not json"],
+    ["a non-string version", JSON.stringify({ version: 61 })],
+  ])("treats a marker with %s as unknown and rewrites the entry", (_label, contents) => {
+    seed(null);
+    writeMarker(contents);
+
+    checkForMcpRefresh();
+
+    expect(claudeJson().mcpServers.dosu).toMatchObject({ alwaysLoad: true });
     expect(readMcpRefreshCache()).toEqual({ version: "0.62.0" });
   });
 
