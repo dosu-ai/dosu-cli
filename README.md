@@ -125,7 +125,7 @@ Once authenticated against a deployment, you can drive the Dosu platform without
 | `dosu topics` | List knowledge base topics and their pages |
 | `dosu members` | Invite organization members |
 | `dosu org` | Show organization information |
-| `dosu deployments` | List / show / switch Dosu MCP deployments. `switch` changes the CLI's saved selection; `dosu mcp refresh` repoints already-configured AI tools, which then need a restart or reconnect |
+| `dosu deployments` | List / show / switch Dosu MCP deployments. `switch` changes the CLI's saved selection; `dosu mcp refresh` repoints already-configured AI tools' global entries, which then need a restart or reconnect |
 | `dosu analytics` | View usage statistics |
 | `dosu skill` | Install / update / remove the bundled Dosu agent skills |
 

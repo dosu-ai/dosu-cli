@@ -219,7 +219,7 @@ dosu upgrade [--auto on|off]
 dosu logs [--tail [n]] [--clear]
 ```
 
-`deployments` selects the MCP deployment stored in local config; it is distinct from `agents`. `deployments switch` does not repoint an AI tool's running MCP connection; `mcp refresh` rewrites the Dosu MCP entry of every configured tool from the current selection, and the tool then needs a restart or reconnect. `insights` opens an interactive visual report. `logs --clear` deletes the CLI log file. The CLI updates itself in the background by default; a `[dosu:update] Installing ...` notice on stderr needs no action. `upgrade --auto off` turns that off.
+`deployments` selects the MCP deployment stored in local config; it is distinct from `agents`. `deployments switch` does not repoint an AI tool's running MCP connection; `mcp refresh` rewrites the global Dosu MCP entry of each configured tool from the current selection (project-level entries change on the next `dosu setup` or `dosu mcp add`), and the tool then needs a restart or reconnect. `insights` opens an interactive visual report. `logs --clear` deletes the CLI log file. The CLI updates itself in the background by default; a `[dosu:update] Installing ...` notice on stderr needs no action. `upgrade --auto off` turns that off.
 
 ## Codebase audit
 
