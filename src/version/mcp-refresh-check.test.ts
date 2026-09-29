@@ -11,6 +11,10 @@ vi.mock("../mcp/refresh", () => ({
   refreshConfiguredProviders: mocks.refreshConfiguredProviders,
 }));
 
+// Pin the running version: the real one comes from package.json, which each release bumps, so a
+// seeded "previous" version would start crossing format changes that ship after it was written.
+vi.mock("./version", () => ({ VERSION: "0.62.1" }));
+
 import { saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
 import type { SetupProvider } from "../mcp/providers";
@@ -183,7 +187,7 @@ describe("needsMcpRefresh", () => {
 describe("checkForMcpRefresh", () => {
   it("only moves the marker along for a bump that did not change the entry", () => {
     saveConfig(signedInCfg);
-    seedCache("0.53.1");
+    seedCache("0.62.0");
 
     checkForMcpRefresh();
 
