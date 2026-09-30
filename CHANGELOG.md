@@ -1,3 +1,10 @@
+## [0.64.1](https://github.com/dosu-ai/dosu-cli/compare/v0.64.0...v0.64.1) (2026-09-30)
+
+
+### Bug Fixes
+
+* **docs:** report unreadable --body-file as a usage error ([#261](https://github.com/dosu-ai/dosu-cli/issues/261)) ([76e99e0](https://github.com/dosu-ai/dosu-cli/commit/76e99e02f31a800f4a8f40008998383d81b55156))
+
 # [0.64.0](https://github.com/dosu-ai/dosu-cli/compare/v0.63.0...v0.64.0) (2026-09-30)
 
 
