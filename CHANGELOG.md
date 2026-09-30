@@ -1,3 +1,10 @@
+# [0.64.0](https://github.com/dosu-ai/dosu-cli/compare/v0.63.0...v0.64.0) (2026-09-30)
+
+
+### Features
+
+* **knowledge:** anchor mined notes to their session's git branch ([#260](https://github.com/dosu-ai/dosu-cli/issues/260)) ([2d3d58a](https://github.com/dosu-ai/dosu-cli/commit/2d3d58a5779f728e458c34d30fefe443409e217e))
+
 # [0.63.0](https://github.com/dosu-ai/dosu-cli/compare/v0.62.1...v0.63.0) (2026-09-30)
 
 
