@@ -164,6 +164,26 @@ describe("runKnowledgeSync", () => {
     expect(saved[0].repo_filter).toEqual([]);
   });
 
+  it("drops an empty legacy folder scope and studies every repo", async () => {
+    const inRepo = { ...session(60), project: "dosu-cli" };
+    const { deps, saved } = makeDeps({
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        project_filter: [],
+      }),
+      listSessions: vi.fn().mockResolvedValue([inRepo]),
+      locator: projectLocator,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.sessions.map((s) => s.id)).toEqual([inRepo.id]);
+    expect(saved[0].repo_filter).toBeUndefined();
+    expect(saved[0].project_filter).toBeUndefined();
+  });
+
   it("resolves repos with the on-disk resolver by default and flushes its cache", async () => {
     const flush = vi.fn();
     mockCreateResolver.mockReset().mockReturnValue({ ...projectLocator, flush });
