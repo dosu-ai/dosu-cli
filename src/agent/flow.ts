@@ -16,6 +16,7 @@ import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders } from "../mcp/providers";
 import { fetchDosuRule, installRuleForAgent, isRuleAgent } from "../rules/installer";
 import { inGitWorkTree, upsertDosuAgentsSection } from "../setup/agents-md-step";
+import { releaseTag } from "../version/version";
 import { emitError, emitNeedUserAction, emitStep } from "./output";
 
 export interface AgentSetupOptions {
@@ -24,7 +25,8 @@ export interface AgentSetupOptions {
   deploymentID?: string;
 }
 
-const NPX_INVOCATION = "npx @dosu/cli@latest";
+/** Resumes setup on the same channel (e.g. `@beta`) the agent started it with. */
+const NPX_INVOCATION = `npx @dosu/cli@${releaseTag()}`;
 
 /** Run agent-mediated setup end-to-end. Exit code contract: 0 means success or
  * need_user_action/pending, 1 means recoverable error, 2 means CLI usage error. */
