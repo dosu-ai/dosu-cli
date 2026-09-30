@@ -69,7 +69,7 @@ export interface HookSpec {
 }
 
 /** The session-end sync hook -- the default, and the only one that existed before memory. */
-export const SYNC_HOOK: HookSpec = { command: hookCommand, isOurs: isDosuHookCommand };
+const SYNC_HOOK: HookSpec = { command: hookCommand, isOurs: isDosuHookCommand };
 
 export class HookConfigError extends Error {
   constructor(message: string) {

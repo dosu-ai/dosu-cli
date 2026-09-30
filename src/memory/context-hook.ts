@@ -15,7 +15,7 @@ import { textHasIncognitoMarker, transcriptHasIncognitoMarker } from "../sync/in
 
 /** Retrieval is ~0.6s warm and ~2.5s cold, plus ~0.15s for the classifier. Past this the user
  * is waiting on us, and a late digest is not worth a stalled prompt. */
-export const CONTEXT_TIMEOUT_MS = 4_000;
+const CONTEXT_TIMEOUT_MS = 4_000;
 
 /** The trajectory source the session's transcript will later ingest under, so a pushed memory
  * ranks by the same scope its evidence will get. */

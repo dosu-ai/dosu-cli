@@ -21,19 +21,19 @@ import {
  * task exists, which is exactly what the old AGENTS.md digest had to fake. */
 export const CONTEXT_EVENT = "UserPromptSubmit";
 
-export const CONTEXT_HOOK_COMMAND = "dosu knowledge context";
+const CONTEXT_HOOK_COMMAND = "dosu knowledge context";
 
 /** Dev installs pin the working copy with env inline, as the sync hook's do. */
-export function contextHookCommand(): string {
+function contextHookCommand(): string {
   if (process.env.DOSU_DEV !== "true") return CONTEXT_HOOK_COMMAND;
   return `${devEnvAssignments().join(" ")} ${devSelfCommand()} knowledge context`;
 }
 
-export function isDosuContextHookCommand(command: unknown): boolean {
+function isDosuContextHookCommand(command: unknown): boolean {
   return typeof command === "string" && command.includes("knowledge context");
 }
 
-export const CONTEXT_HOOK: HookSpec = {
+const CONTEXT_HOOK: HookSpec = {
   command: contextHookCommand,
   isOurs: isDosuContextHookCommand,
 };
