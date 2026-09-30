@@ -190,7 +190,7 @@ describe("study scope", () => {
     expect(loadSyncState(configDir).project_filter).toEqual(["dosu"]);
   });
 
-  it("filterSessionsByRepo keeps only in-repo sessions, limited to the filter when set", () => {
+  it("filterSessionsByRepo keeps every session without a filter and only picked repos with one", () => {
     const cli = session({ id: "cli", project: "github.com/dosu-ai/dosu-cli" });
     const app = session({ id: "app", project: "github.com/dosu-ai/dosu" });
     const loose = session({ id: "loose" });
@@ -199,6 +199,7 @@ describe("study scope", () => {
     expect(filterSessionsByRepo([cli, app, loose], null, repoOf)).toEqual([
       { ...cli, repo: "github.com/dosu-ai/dosu-cli" },
       { ...app, repo: "github.com/dosu-ai/dosu" },
+      loose,
     ]);
     expect(filterSessionsByRepo([cli, app, loose], ["github.com/dosu-ai/dosu"], repoOf)).toEqual([
       { ...app, repo: "github.com/dosu-ai/dosu" },

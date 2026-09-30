@@ -72,6 +72,8 @@ export interface SyncDeps {
   isIncognito?: (session: AgentSession) => boolean;
   /** Session → working directory and repo, for the study scope; defaults to the cached resolver. */
   locator?: SessionLocator;
+  /** Session → the git branch it ran on; defaults to the cached resolver's. */
+  resolveBranch?: (session: AgentSession) => string | null;
   /** Per-session learning-token estimate; defaults to estimateSessionTokens. */
   sessionTokens?: (session: AgentSession) => number;
   lock?: SyncLock;
@@ -181,6 +183,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
 
   let ready: AgentSession[];
   let open: AgentSession[];
+  let branchOf: (session: AgentSession) => string | null;
   try {
     const listSessions =
       deps.listSessions ??
@@ -194,11 +197,14 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     const scanned = await listSessions();
     let flush: (() => void) | undefined;
     let locator = deps.locator;
-    if (!locator) {
+    let resolveBranch = deps.resolveBranch;
+    if (!locator || !resolveBranch) {
       const resolver = createProjectDirResolver();
-      locator = resolver;
+      locator ??= resolver;
+      resolveBranch ??= resolver.resolveBranch;
       flush = resolver.flush;
     }
+    branchOf = resolveBranch;
     const repoFilter = studyRepoFilter(state, () => scanAgentSessions({}), locator);
     if (state.project_filter) {
       // One-time upgrade of a folder scope; every later state save persists it.
@@ -287,10 +293,13 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       } else if (isIncognito(candidate)) {
         incognito += 1;
         logger.debug("sync", `skipping incognito session ${candidate.harness}/${candidate.id}`);
-      } else if (worthStudying(candidate)) {
-        batch.push(candidate);
-      } else {
+      } else if (!worthStudying(candidate)) {
         trivial += 1;
+      } else {
+        // A branch only anchors a note alongside its repo. Without either, the session is still
+        // studied and its notes are written unanchored, reaching topics at once.
+        const branch = candidate.repo ? branchOf(candidate) : null;
+        batch.push(branch ? { ...candidate, branch } : candidate);
       }
     }
     const skippedNote = `${trivial} trivial, ${incognito} incognito${
@@ -298,7 +307,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     } skipped`;
 
     if (batch.length === 0) {
-      // Everything examined was trivial or incognito: commit the watermark past it
+      // Everything examined was skipped locally: commit the watermark past it
       // without spending a single gateway token.
       saveState({
         ...state,

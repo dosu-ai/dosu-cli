@@ -213,6 +213,7 @@ beforeEach(() => {
       ({
         resolve: (s: AgentSession) => (s.project ? `/repo/${s.project}` : null),
         resolveRepo: (s: AgentSession) => (s.project ? `github.com/acme/${s.project}` : null),
+        resolveBranch: () => "main",
         cached: () => null,
         flush: vi.fn(),
       }) as ReturnType<typeof createProjectDirResolver>,

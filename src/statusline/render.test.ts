@@ -114,20 +114,31 @@ describe("resolveStatuslineState", () => {
     expect(resolveStatuslineState({ cwd: "/work/dosu-cli/src" }, "claude", d)).toBe("on");
   });
 
-  it("is not-studied outside a git repo or without a cwd, filter or not", () => {
-    expect(resolveStatuslineState({ cwd: "/tmp/scratch" }, "claude", deps())).toBe("not-studied");
-    expect(resolveStatuslineState({}, "claude", deps())).toBe("not-studied");
+  it("is on outside a git repo or without a cwd when no scope is set", () => {
+    expect(resolveStatuslineState({ cwd: "/tmp/scratch" }, "claude", deps())).toBe("on");
+    expect(resolveStatuslineState({}, "claude", deps())).toBe("on");
   });
 
-  it("honors an unconverted legacy folder scope inside repos", () => {
+  it("is not-studied outside a git repo or without a cwd under a repo filter", () => {
+    const d = deps({
+      loadState: () => ({ ...baseState, repo_filter: ["github.com/dosu-ai/dosu-cli"] }),
+    });
+    expect(resolveStatuslineState({ cwd: "/tmp/scratch" }, "claude", d)).toBe("not-studied");
+    expect(resolveStatuslineState({}, "claude", d)).toBe("not-studied");
+  });
+
+  it("honors an unconverted legacy folder scope", () => {
     const d = deps({ loadState: () => ({ ...baseState, project_filter: ["/work/dosu-cli/"] }) });
     expect(resolveStatuslineState({ cwd: "/work/dosu-cli/src" }, "claude", d)).toBe("on");
     expect(resolveStatuslineState({ cwd: "/work/other" }, "claude", d)).toBe("not-studied");
+    expect(resolveStatuslineState({}, "claude", d)).toBe("not-studied");
   });
 
-  it("reads the cwd's repo from its git origin by default", () => {
+  it("reads the cwd's repo from its git origin by default under a repo filter", () => {
     mockOriginRepoOfDir.mockReset().mockReturnValue("github.com/dosu-ai/dosu-cli");
-    const { repoOfDir: _, ...d } = deps();
+    const { repoOfDir: _, ...d } = deps({
+      loadState: () => ({ ...baseState, repo_filter: ["github.com/dosu-ai/dosu-cli"] }),
+    });
     expect(resolveStatuslineState({ cwd: "/anywhere" }, "claude", d)).toBe("on");
     expect(mockOriginRepoOfDir).toHaveBeenCalledWith("/anywhere");
   });

@@ -41,6 +41,7 @@ function makeDeps(overrides: Partial<SyncDeps> = {}): {
     loadState: () => ({ schema_version: 1, watermark: null, consecutive_failures: 0 }),
     saveState: (state) => saved.push(state),
     locator: { resolve: () => "/repo/dosu-cli", resolveRepo: () => DOSU_CLI },
+    resolveBranch: () => "main",
     now: () => NOW,
     ...overrides,
   };
@@ -104,11 +105,32 @@ describe("runKnowledgeSync", () => {
     expect(outcome.sessions.map((s) => s.id)).toEqual([inScope.id]);
   });
 
-  it("never studies sessions outside a git repo, even with no filter", async () => {
+  it("studies sessions outside a git repo when no repo filter is set", async () => {
     const inRepo = { ...session(60), project: "other" };
     const noRepo = session(40);
     const { deps } = makeDeps({
       listSessions: vi.fn().mockResolvedValue([inRepo, noRepo]),
+      locator: projectLocator,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.sessions.map((s) => [s.id, s.repo])).toEqual([
+      [inRepo.id, "github.com/x/other"],
+      [noRepo.id, undefined],
+    ]);
+  });
+
+  it("leaves sessions outside a git repo out of a repo filter", async () => {
+    const inRepo = { ...session(60), project: "dosu-cli" };
+    const { deps } = makeDeps({
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        repo_filter: [DOSU_CLI],
+      }),
+      listSessions: vi.fn().mockResolvedValue([inRepo, session(40)]),
       locator: projectLocator,
     });
 
@@ -195,7 +217,7 @@ describe("runKnowledgeSync", () => {
 
     const outcome = await runKnowledgeSync({ deps });
 
-    expect(outcome.sessions.map((s) => s.id)).toEqual([inRepo.id]);
+    expect(outcome.sessions.map((s) => s.repo)).toEqual([DOSU_CLI, undefined]);
     expect(flush).toHaveBeenCalledOnce();
   });
 
@@ -690,6 +712,40 @@ describe("runKnowledgeSync studying", () => {
     const logged = mockLoggerDebug.mock.calls.map((c) => c.join(" ")).join("\n");
     expect(logged).toContain("skipping incognito session claude/s-30");
     expect(logged).toContain("(0 trivial, 1 incognito skipped)");
+  });
+
+  it("studies sessions with or without a known branch, tagging the branch only in a repo", async () => {
+    const mine = vi.fn().mockResolvedValue(learnerResult());
+    // Newest-first: s-30 (repo, no branch), s-40 (repo, feat/b), s-45 (no repo), s-50 (trivial).
+    const sessions = [
+      { ...session(30), project: "dosu-cli" },
+      { ...session(40), project: "dosu-cli" },
+      session(45),
+      { ...session(50), project: "dosu-cli" },
+    ];
+    const resolveBranch = vi.fn((s: AgentSession) => (s.id === "s-40" ? "feat/b" : null));
+    const { deps, saved } = makeDeps({
+      listSessions: vi.fn().mockResolvedValue(sessions),
+      locator: projectLocator,
+      worthStudying: (s) => s.id !== "s-50",
+      resolveBranch,
+      mine,
+      lock: openLock(),
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.status).toBe("studied");
+    expect(outcome.trivialSessions).toBe(1);
+    const batch = mine.mock.calls[0][0] as AgentSession[];
+    expect(batch.map((s) => [s.id, s.repo, s.branch])).toEqual([
+      ["s-45", undefined, undefined],
+      ["s-40", DOSU_CLI, "feat/b"],
+      ["s-30", DOSU_CLI, undefined],
+    ]);
+    expect(resolveBranch).not.toHaveBeenCalledWith(expect.objectContaining({ id: "s-45" }));
+    expect(resolveBranch).not.toHaveBeenCalledWith(expect.objectContaining({ id: "s-50" }));
+    expect(saved.at(-1)?.watermark).toBe(session(30).updated);
   });
 
   it("advances the watermark without a run when everything ready is incognito", async () => {

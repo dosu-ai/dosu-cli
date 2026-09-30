@@ -11,6 +11,7 @@ import { allHookAgents, getHookAgent, type HookAgent } from "../hooks/agents";
 import { HookConfigError, hookCommand } from "../hooks/formats";
 import type { LearnerRunResult } from "../learner/runner";
 import { emitKnowledgeReport } from "../report/generate";
+import { captureHookSession } from "../sessions/capture";
 import { displayRepo } from "../sessions/repo";
 import type { AgentSession } from "../sessions/scan";
 import { listSessionBacklog } from "../sync/backlog";
@@ -243,7 +244,9 @@ export function knowledgeCommand(): Command {
 
         if (opts.detach) {
           // Hooks call `sync --quiet --detach`; the re-spawned child runs the
-          // actual pipeline so the hooking agent gets its exit immediately.
+          // actual pipeline so the hooking agent gets its exit immediately. The hook payload
+          // is only readable here: the child's stdin is ignored.
+          await captureHookSession();
           const spawned = spawnDetachedSelf([
             "knowledge",
             "sync",

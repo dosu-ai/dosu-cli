@@ -69,19 +69,19 @@ function defaultHookEnabled(agentId: string): boolean {
   }
 }
 
-/** Whether `cwd` is inside a studied repo. A legacy folder scope, not yet converted by a sync,
- * additionally requires the cwd to sit under one of its folders. */
+/** Whether sessions in `cwd` get studied: everywhere without a scope, only inside a picked repo
+ * with one. A legacy folder scope, not yet converted by a sync, requires a cwd under its folders. */
 function cwdIsStudied(
   cwd: string | undefined,
   state: SyncState,
   repoOfDir: (dir: string) => string | null,
 ): boolean {
-  if (!cwd) return false;
-  const repo = repoOfDir(cwd);
-  if (!repo) return false;
-  if (state.repo_filter) return state.repo_filter.includes(repo);
+  if (state.repo_filter) {
+    const repo = cwd ? repoOfDir(cwd) : null;
+    return repo !== null && state.repo_filter.includes(repo);
+  }
   if (state.project_filter?.length) {
-    return state.project_filter.some((base) => isUnderDir(cwd, base));
+    return cwd !== undefined && state.project_filter.some((base) => isUnderDir(cwd, base));
   }
   return true;
 }

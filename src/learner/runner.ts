@@ -285,6 +285,7 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
   // Sessions that received a note, keyed the way sync's studied-session history is.
   const sessionKeys = new Map(options.sessions.map((s) => [s.id, `${s.harness}/${s.id}`]));
   const sessionRepos = new Map(options.sessions.map((s) => [s.id, s.repo]));
+  const sessionBranches = new Map(options.sessions.map((s) => [s.id, s.branch]));
   const notedSessions = new Set<string>();
   // Allowed writes awaiting their tool_result, by tool use id: a session counts as noted only
   // once a write for it actually succeeds.
@@ -339,7 +340,7 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
             url: mcpURL(options.deploymentID),
             // Session-context headers the backend stores on each note; repo/branch/commit
             // headers are omitted because one run mines many repos — the tool gate supplies
-            // each note's repo from its own session instead.
+            // each note's repo and branch from its own session instead.
             headers: {
               ...mcpHeaders(options.apiKey),
               "X-Dosu-Session-Id": runID,
@@ -389,35 +390,46 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
                   "Re-read only the session this note is about, then write it.",
               };
             }
+            // A note with no session behind it could not be attributed, and would drop the repo
+            // and branch that session would anchor it with. Deny, so the model re-reads first.
+            const noted = currentSession && sessionKeys.get(currentSession);
+            if (!currentSession || !noted) {
+              return {
+                behavior: "deny",
+                message:
+                  "Read the session this note is about with read_session first, then write it.",
+              };
+            }
             notesWritten += 1;
             // Attribute to the current session — the one being studied — which
             // persists across the several notes a session usually yields. The
             // model never authors this field, so strip any transcript_id it
             // supplied FIRST: the backend trusts the argument from this attested
-            // client, so a stray model value would otherwise be stored. With no
-            // session read yet (a stray early write) the note is left genuinely
-            // unattributed (null) rather than guessed. Reset only the
-            // ambiguity set, not the current session.
+            // client, so a stray model value would otherwise be stored. Reset
+            // only the ambiguity set, not the current session.
             readsSinceWrite.clear();
-            const noted = currentSession && sessionKeys.get(currentSession);
-            if (noted) pendingNotes.set(toolUseID, noted);
-            // repo comes from the session's resolved origin, never the model. branch is never
-            // sent: with a repo it anchors a Branch Note that waits for a PR merge, which
-            // already-merged or default-branch sessions never get, so the repo alone rides as
-            // observed context on an unanchored note.
+            pendingNotes.set(toolUseID, noted);
+            // repo and branch come from the session, never the model. Together they anchor a
+            // Branch Note, which reaches topics when that branch's PR merges into the default
+            // branch, or at once when it already has (the backend promotes default-branch and
+            // already-merged branches on write). A branch without a repo anchors nothing, so it
+            // rides only with one; a session missing either writes an unanchored note, which
+            // reaches topics at once.
             const {
               transcript_id: _transcriptByModel,
               repo: _repoByModel,
               branch: _branchByModel,
               ...clean
             } = input as Record<string, unknown>;
-            const repo = currentSession && sessionRepos.get(currentSession);
+            const repo = sessionRepos.get(currentSession);
+            const branch = repo && sessionBranches.get(currentSession);
             return {
               behavior: "allow",
               updatedInput: {
                 ...clean,
-                ...(currentSession ? { transcript_id: currentSession } : {}),
+                transcript_id: currentSession,
                 ...(repo ? { repo } : {}),
+                ...(branch ? { branch } : {}),
               },
             };
           }
