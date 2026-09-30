@@ -284,6 +284,7 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
   const readsSinceWrite = new Set<string>();
   // Sessions that received a note, keyed the way sync's studied-session history is.
   const sessionKeys = new Map(options.sessions.map((s) => [s.id, `${s.harness}/${s.id}`]));
+  const sessionRepos = new Map(options.sessions.map((s) => [s.id, s.repo]));
   const notedSessions = new Set<string>();
   // Allowed writes awaiting their tool_result, by tool use id: a session counts as noted only
   // once a write for it actually succeeds.
@@ -337,7 +338,8 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
             type: "http",
             url: mcpURL(options.deploymentID),
             // Session-context headers the backend stores on each note; repo/branch/commit
-            // headers are omitted because one run mines many repos, and absent beats wrong.
+            // headers are omitted because one run mines many repos — the tool gate supplies
+            // each note's repo from its own session instead.
             headers: {
               ...mcpHeaders(options.apiKey),
               "X-Dosu-Session-Id": runID,
@@ -399,10 +401,24 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
             readsSinceWrite.clear();
             const noted = currentSession && sessionKeys.get(currentSession);
             if (noted) pendingNotes.set(toolUseID, noted);
-            const { transcript_id: _authoredByModel, ...clean } = input as Record<string, unknown>;
+            // repo comes from the session's resolved origin, never the model. branch is never
+            // sent: with a repo it anchors a Branch Note that waits for a PR merge, which
+            // already-merged or default-branch sessions never get, so the repo alone rides as
+            // observed context on an unanchored note.
+            const {
+              transcript_id: _transcriptByModel,
+              repo: _repoByModel,
+              branch: _branchByModel,
+              ...clean
+            } = input as Record<string, unknown>;
+            const repo = currentSession && sessionRepos.get(currentSession);
             return {
               behavior: "allow",
-              updatedInput: currentSession ? { ...clean, transcript_id: currentSession } : clean,
+              updatedInput: {
+                ...clean,
+                ...(currentSession ? { transcript_id: currentSession } : {}),
+                ...(repo ? { repo } : {}),
+              },
             };
           }
           return { behavior: "allow", updatedInput: input };

@@ -2,9 +2,31 @@
 
 `dosu knowledge hooks enable` installs a session-end hook (Claude Code, Cursor, Codex) that runs
 `dosu knowledge sync --quiet --detach`. The sync scans finished agent sessions, gates them behind a
-watermark and a quiet period, applies the directory filter and pause switch from
-`~/.config/dosu-cli/knowledge-sync.json`, and studies what is left. This document covers the two
-switches layered on top of that: a per-session opt-out and a status-bar indicator.
+watermark and a quiet period, applies the repo scope and pause switch from
+`~/.config/dosu-cli/knowledge-sync.json`, and studies what is left. This document covers the study
+scope and the two switches layered on top of it: a per-session opt-out and a status-bar indicator.
+
+## Study scope
+
+Only sessions that ran inside a git repository are studied. A session's repo is the `origin`
+remote of its working directory, normalized to the same `host/owner/repo` key Dosu anchors notes
+to (`git@github.com:dosu-ai/dosu-cli.git` → `github.com/dosu-ai/dosu-cli`). Sessions outside a
+repo, or in a repo without an `origin`, are skipped. The lookup is cached per session in
+`project-dirs.json`, so a checkout deleted later still resolves.
+
+Each note the learner writes carries its session's repo: the tool gate sets `repo` on
+`write_knowledge` (dropping anything the model supplied) and never sends `branch`. Repo alone keeps
+the note unanchored, so it is promoted immediately as before, with the repo stored as observed
+context. Sending a branch would anchor a Branch Note that waits for a PR merge, which a session on
+the default branch or an already-merged branch never gets.
+
+`dosu` → settings → study scope picks which repos to study (`repo_filter` in the state file).
+Picking every repo clears the filter so new repos are studied automatically. Clones and worktrees of
+the same repo share one entry.
+
+Before repo scoping, the scope was a list of folders (`project_filter`). The next sync converts it
+to the repos its folders' sessions ran in, so upgrading never widens the scope. A folder scope with
+no repos in it becomes an empty repo scope, which studies nothing until you pick repos again.
 
 Both are installed by default: `dosu setup` (and the TUI's configure step) enables the status line
 and the slash command for every agent it enables the sync hook for, and removes them when an agent
@@ -66,7 +88,7 @@ command to `dosu knowledge statusline render --agent <id>`, which prints one lin
 | `📚 Dosu studying…` | The hook is installed and this session will be studied when it ends |
 | `👻 Dosu incognito` | `/dosu-incognito` was run in this session |
 | `⚪ Dosu paused` | Studying is paused (Activity screen stop, or `paused` in the state file) |
-| `⚪ Dosu not studying this folder` | A directory filter is set and `cwd` is outside it |
+| `⚪ Dosu not studying this repo` | `cwd` is outside a git repo, or its repo is outside the study scope |
 | `⚪ Dosu off` | No Dosu hook is installed for this agent |
 
 States are checked in that order after `off`: incognito outranks paused and not-studied because it
@@ -81,7 +103,8 @@ printf '%s' "$input" | dosu knowledge statusline render --agent claude
 
 Rendering is on the hot path (harnesses re-run the command at most every 300 ms, Cursor kills it
 after 2 s), so `src/index.ts` dispatches `knowledge statusline render` before loading the rest of
-the CLI, and the renderer reads only the hook config, the sync state file, and the transcript. It
+the CLI, and the renderer reads only the hook config, the sync state file, and the transcript, plus
+one `git remote get-url origin` in `cwd` (1 s timeout) once the earlier states have not matched. It
 never throws; anything unreadable renders as `⚪ Dosu off`.
 
 Dev installs (`DOSU_DEV=true`) pin the working copy and prefix with `env` rather than bare
@@ -92,7 +115,7 @@ Dev installs (`DOSU_DEV=true`) pin the working copy and prefix with `env` rather
 ```bash
 DOSU_DEV=true bun run dev knowledge statusline enable claude
 DOSU_DEV=true bun run dev knowledge incognito enable claude
-# Open Claude Code in a studied folder → 📚 Dosu studying…
+# Open Claude Code in a studied repo → 📚 Dosu studying…
 # Run /dosu-incognito → 👻 Dosu incognito
 # End the session; `dosu logs --tail` shows "skipping incognito session claude/<id>" on the next sync
 ```

@@ -17,6 +17,11 @@ vi.mock("../sync/incognito", () => ({
   transcriptHasIncognitoMarker: (...args: unknown[]) => mockTranscriptMarker(...args),
 }));
 
+const mockOriginRepoOfDir = vi.hoisted(() => vi.fn());
+vi.mock("../sessions/repo", () => ({
+  originRepoOfDir: (...args: unknown[]) => mockOriginRepoOfDir(...args),
+}));
+
 import {
   parseStatuslinePayload,
   type RenderDeps,
@@ -32,6 +37,12 @@ function deps(overrides: Partial<RenderDeps> = {}): RenderDeps {
     hookEnabled: () => true,
     loadState: () => baseState,
     transcriptIsIncognito: () => false,
+    repoOfDir: (dir) =>
+      dir.startsWith("/work/dosu-cli")
+        ? "github.com/dosu-ai/dosu-cli"
+        : dir.startsWith("/work/")
+          ? "github.com/dosu-ai/other"
+          : null,
     ...overrides,
   };
 }
@@ -75,7 +86,11 @@ describe("resolveStatuslineState", () => {
   it("does not look for the marker without a transcript path", () => {
     const spy = vi.fn(() => true);
     expect(
-      resolveStatuslineState({ cwd: "/w" }, "claude", deps({ transcriptIsIncognito: spy })),
+      resolveStatuslineState(
+        { cwd: "/work/dosu-cli" },
+        "claude",
+        deps({ transcriptIsIncognito: spy }),
+      ),
     ).toBe("on");
     expect(spy).not.toHaveBeenCalled();
   });
@@ -85,24 +100,36 @@ describe("resolveStatuslineState", () => {
     expect(resolveStatuslineState(payload, "claude", d)).toBe("paused");
   });
 
-  it("is not-studied when cwd is outside the project filter", () => {
-    const d = deps({ loadState: () => ({ ...baseState, project_filter: ["/work/other"] }) });
+  it("is not-studied when the cwd's repo is outside the repo filter", () => {
+    const d = deps({
+      loadState: () => ({ ...baseState, repo_filter: ["github.com/dosu-ai/other"] }),
+    });
     expect(resolveStatuslineState(payload, "claude", d)).toBe("not-studied");
   });
 
-  it("is on when cwd is at or under a studied directory", () => {
-    const d = deps({ loadState: () => ({ ...baseState, project_filter: ["/work/dosu-cli/"] }) });
-    expect(resolveStatuslineState(payload, "claude", d)).toBe("on");
+  it("is on when the cwd's repo is in the repo filter", () => {
+    const d = deps({
+      loadState: () => ({ ...baseState, repo_filter: ["github.com/dosu-ai/dosu-cli"] }),
+    });
     expect(resolveStatuslineState({ cwd: "/work/dosu-cli/src" }, "claude", d)).toBe("on");
   });
 
-  it("treats a missing cwd as the unknown bucket", () => {
-    const filtered = deps({ loadState: () => ({ ...baseState, project_filter: ["/work"] }) });
-    expect(resolveStatuslineState({}, "claude", filtered)).toBe("not-studied");
-    const withUnknown = deps({
-      loadState: () => ({ ...baseState, project_filter: ["/work", "(unknown)"] }),
-    });
-    expect(resolveStatuslineState({}, "claude", withUnknown)).toBe("on");
+  it("is not-studied outside a git repo or without a cwd, filter or not", () => {
+    expect(resolveStatuslineState({ cwd: "/tmp/scratch" }, "claude", deps())).toBe("not-studied");
+    expect(resolveStatuslineState({}, "claude", deps())).toBe("not-studied");
+  });
+
+  it("honors an unconverted legacy folder scope inside repos", () => {
+    const d = deps({ loadState: () => ({ ...baseState, project_filter: ["/work/dosu-cli/"] }) });
+    expect(resolveStatuslineState({ cwd: "/work/dosu-cli/src" }, "claude", d)).toBe("on");
+    expect(resolveStatuslineState({ cwd: "/work/other" }, "claude", d)).toBe("not-studied");
+  });
+
+  it("reads the cwd's repo from its git origin by default", () => {
+    mockOriginRepoOfDir.mockReset().mockReturnValue("github.com/dosu-ai/dosu-cli");
+    const { repoOfDir: _, ...d } = deps();
+    expect(resolveStatuslineState({ cwd: "/anywhere" }, "claude", d)).toBe("on");
+    expect(mockOriginRepoOfDir).toHaveBeenCalledWith("/anywhere");
   });
 
   it("is on with no filter and nothing else set", () => {

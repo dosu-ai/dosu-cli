@@ -77,6 +77,47 @@ describe("unmungeSlug", () => {
   });
 });
 
+describe("resolveRepo", () => {
+  it("looks up each directory once and persists the repo per session", () => {
+    const repoOfDir = vi.fn(() => "github.com/dosu-ai/dosu-cli");
+    const resolver = createProjectDirResolver(tempDir, { repoOfDir });
+    const a = session({ harness: "opencode", project: "/work/dosu-cli", id: "a" });
+    const b = session({ harness: "opencode", project: "/work/dosu-cli", id: "b" });
+    expect(resolver.resolveRepo(a)).toBe("github.com/dosu-ai/dosu-cli");
+    expect(resolver.resolveRepo(b)).toBe("github.com/dosu-ai/dosu-cli");
+    expect(resolver.resolveRepo(a)).toBe("github.com/dosu-ai/dosu-cli");
+    expect(repoOfDir).toHaveBeenCalledTimes(1);
+    resolver.flush();
+
+    // The checkout may be gone by now; the cached repo still answers.
+    const gone = vi.fn(() => null);
+    const second = createProjectDirResolver(tempDir, { repoOfDir: gone });
+    expect(second.resolveRepo(a)).toBe("github.com/dosu-ai/dosu-cli");
+    expect(gone).not.toHaveBeenCalled();
+  });
+
+  it("is null without a directory, and retries a non-repo once the session file changes", () => {
+    const repoOfDir = vi.fn<(dir: string) => string | null>(() => null);
+    let mtime = "t1";
+    const resolver = createProjectDirResolver(tempDir, { repoOfDir, mtime: () => mtime });
+    expect(resolver.resolveRepo(session({ harness: "opencode" }))).toBeNull();
+    expect(repoOfDir).not.toHaveBeenCalled();
+
+    const s = session({ harness: "opencode", project: "/work/scratch", id: "s" });
+    expect(resolver.resolveRepo(s)).toBeNull();
+    resolver.flush();
+
+    const later = createProjectDirResolver(tempDir, { repoOfDir, mtime: () => mtime });
+    expect(later.resolveRepo(s)).toBeNull();
+    expect(repoOfDir).toHaveBeenCalledTimes(1);
+
+    mtime = "t2";
+    repoOfDir.mockReturnValue("github.com/acme/scratch");
+    const changed = createProjectDirResolver(tempDir, { repoOfDir, mtime: () => mtime });
+    expect(changed.resolveRepo(s)).toBe("github.com/acme/scratch");
+  });
+});
+
 describe("createProjectDirResolver", () => {
   it("passes opencode directories through without any I/O", () => {
     const readHead = vi.fn();
