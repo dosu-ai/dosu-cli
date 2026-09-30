@@ -561,7 +561,7 @@ export type CliSlackChannelRow = {
 	topic?: string | null
 }
 
-export declare const CLI_CONTRACT_HASH: 'd7c6f0f0e8d0'
+export declare const CLI_CONTRACT_HASH: 'a6e002dff58e'
 
 export type AgentsAddAdminsInput = {
 	deployment_id: string
@@ -1617,6 +1617,8 @@ export type ReviewGetThreadContextOutput =
 export type ReviewListPendingInput = {
 	deploymentId?: string
 	knowledgeStoreId: string
+	since?: string
+	until?: string
 }
 
 export type ReviewListPendingOutput = {
@@ -1742,8 +1744,10 @@ export type ThreadListInput = {
 	read?: boolean | null
 	resolved?: boolean | null
 	search?: string | null
+	since?: string | null
 	sort?: 'created_at_asc' | 'created_at_desc'
 	space_id: string | null
+	until?: string | null
 	workspaces?: Array<string> | null
 }
 

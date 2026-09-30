@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../debug/logger", () => ({
@@ -20,10 +21,15 @@ vi.mock("../debug/logger", () => ({
 vi.mock("../version/update-check", () => ({ checkForUpdates: vi.fn() }));
 vi.mock("../version/skill-update-check", () => ({ checkForSkillUpdates: vi.fn() }));
 vi.mock("../version/pending-tasks-check", () => ({ checkForReadyTasks: vi.fn() }));
+vi.mock("../version/mcp-refresh-check", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version/mcp-refresh-check")>()),
+  checkForMcpRefresh: vi.fn(),
+  writeMcpRefreshCache: vi.fn(),
+}));
 
 import { saveConfig } from "../config/config";
 import type { CommandTelemetry } from "../telemetry/telemetry";
-import { createProgram, shouldRunBackgroundChecks } from "./cli";
+import { createProgram, shouldRunBackgroundChecks, shouldRunMcpRefreshCheck } from "./cli";
 
 describe("CLI", () => {
   let originalArgv: string[];
@@ -39,6 +45,15 @@ describe("CLI", () => {
   it("creates a program with correct name", () => {
     const program = createProgram();
     expect(program.name()).toBe("dosu");
+  });
+
+  it("describes platform work as well as MCP setup in the root help", () => {
+    // Agents read `dosu --help` to decide whether this CLI can do platform work
+    // (e.g. list the review queue), so the root description must not read as MCP-only.
+    const description = createProgram().description();
+    expect(description).toContain("MCP");
+    expect(description).toMatch(/Libraries/);
+    expect(description).toMatch(/reviews/);
   });
 
   it("has version flag", () => {
@@ -84,12 +99,31 @@ describe("CLI", () => {
     expect(cmd?.options.find((o) => o.long === "--json")).toBeDefined();
   });
 
-  it("has mcp command with add and list subcommands", () => {
+  it("has mcp command with add, refresh, and list subcommands", () => {
     const program = createProgram();
     const mcpCmd = program.commands.find((c) => c.name() === "mcp");
     expect(mcpCmd).toBeDefined();
     expect(mcpCmd?.commands.find((c) => c.name() === "add")).toBeDefined();
+    expect(mcpCmd?.commands.find((c) => c.name() === "refresh")).toBeDefined();
     expect(mcpCmd?.commands.find((c) => c.name() === "list")).toBeDefined();
+  });
+
+  it("skips the automatic MCP refresh for setup, mcp refresh, and the hook-driven knowledge sync", () => {
+    const program = createProgram();
+    const mcpCmd = program.commands.find((c) => c.name() === "mcp");
+    const refresh = mcpCmd?.commands.find((c) => c.name() === "refresh");
+    const list = mcpCmd?.commands.find((c) => c.name() === "list");
+    const setup = program.commands.find((c) => c.name() === "setup");
+    const knowledgeCmd = program.commands.find((c) => c.name() === "knowledge");
+    const sync = knowledgeCmd?.commands.find((c) => c.name() === "sync");
+    if (!refresh || !list || !setup || !sync) throw new Error("commands missing");
+    expect(shouldRunMcpRefreshCheck(setup)).toBe(false);
+    expect(shouldRunMcpRefreshCheck(refresh)).toBe(false);
+    expect(shouldRunMcpRefreshCheck(sync)).toBe(false);
+    expect(shouldRunMcpRefreshCheck(list)).toBe(true);
+    // Top-level commands that happen to share a subcommand's name still get the check.
+    expect(shouldRunMcpRefreshCheck(new Command("refresh"))).toBe(true);
+    expect(shouldRunMcpRefreshCheck(new Command("sync"))).toBe(true);
   });
 
   it("has setup command with --deployment option", () => {

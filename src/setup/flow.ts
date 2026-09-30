@@ -26,6 +26,7 @@ import { disableClaudeContextHook, enableClaudeContextHook } from "../hooks/cont
 import { getIncognitoAgent } from "../incognito/agents";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
+import { refreshConfiguredProviders } from "../mcp/refresh";
 import { getStatuslineAgent, StatuslineConflictError } from "../statusline/agents";
 import { spawnDetachedSelf } from "../sync/detach";
 import { runKnowledgeSync } from "../sync/sync";
@@ -34,6 +35,8 @@ import { recordCommandFacets } from "../telemetry/telemetry";
 import { runActivityView } from "../tui/activity-view";
 import { installCenteredLayout } from "../tui/layout";
 import * as p from "../tui/prompts";
+import { writeMcpRefreshCache } from "../version/mcp-refresh-check";
+import { VERSION } from "../version/version";
 import { inGitWorkTree, stepUpdateAgentsMd } from "./agents-md-step";
 import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
 import { stepConnectGitHubRepo } from "./github-step";
@@ -293,6 +296,10 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
     return;
   }
 
+  // Setup is the full form of the post-upgrade refresh: record this version so the automatic
+  // MCP-only refresh does not repeat the work on the next command.
+  writeMcpRefreshCache({ version: VERSION });
+
   const configuredProviders = configured.filter(
     (result) => (result.action === "install" || result.action === "skip") && !result.error,
   );
@@ -329,11 +336,16 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
   }
 
   if (mcpCompleted || skillCompleted || agentsMdCompleted) {
+    // Hooks are what make the new CLI learn continuously, so activation needs to know whether
+    // any were enabled alongside the MCP installs — not just that MCP was configured.
+    const hookCount = configuredProviders.filter((result) => result.hook).length;
     trackInBackground(
       trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_completed", {
         completed_mcp: mcpCompleted,
         completed_skill: skillCompleted,
         completed_agents_md: agentsMdCompleted,
+        completed_hooks: hookCount > 0,
+        hook_count: hookCount,
       }),
     );
   }
@@ -483,14 +495,9 @@ export async function runInstallSkill(providers: readonly SetupProvider[]): Prom
   const agentLabel = providers.length === 1 ? "agent" : "agents";
   spinner.start(`Installing skill for ${providers.length} ${agentLabel}`);
   try {
-    // Keep the nested skills installer quiet so its progress screens don't interrupt setup's
-    // summary UI; the standalone `dosu skill install` command remains verbose.
-    const result = await installSkill(
-      providers.map((provider) => provider.id()),
-      { quiet: true },
-    );
+    const result = await installSkill(providers.map((provider) => provider.id()));
     if (result.success) {
-      logger.info("setup", `Skill installed${result.sha ? ` sha=${result.sha}` : ""}`);
+      logger.info("setup", `Skill installed${result.version ? ` v${result.version}` : ""}`);
       const items = providers.flatMap((provider) => {
         const target = skillInstallTargetForProvider(provider.id());
         if (!target) return [];
@@ -882,26 +889,14 @@ export async function runSwitchTarget(scope: SwitchScope = "org"): Promise<void>
   updateTarget(cfg, { api_key: apiKey });
   saveConfig(cfg);
 
-  const configured = allSetupProviders().filter((provider) => {
-    try {
-      return provider.isInstalled() && provider.isConfigured();
-    } catch {
-      return false;
-    }
-  });
-  for (const provider of configured) {
-    try {
-      provider.install(cfg, true);
-      logger.info("setup", `Switch: updated ${provider.name()}`);
-      p.log.success(`${provider.name()} ${dim("\u00B7 updated")}`);
-    } catch (err: unknown) {
-      /* v8 ignore next -- err is always Error in practice */
-      const error = err instanceof Error ? err : new Error(String(err));
-      logger.error("setup", `Switch: update failed for ${provider.name()}: ${error.message}`);
-      p.log.error(`Failed to update ${provider.name()}: ${error.message}`);
-    }
+  const refreshed = refreshConfiguredProviders(cfg);
+  for (const provider of refreshed.updated) {
+    p.log.success(`${provider.name()} ${dim("\u00B7 updated")}`);
   }
-  if (configured.length > 0) {
+  for (const { provider, error } of refreshed.failed) {
+    p.log.error(`Failed to update ${provider.name()}: ${error.message}`);
+  }
+  if (refreshed.updated.length + refreshed.failed.length > 0) {
     p.log.info("Restart your AI agents so they pick up the new MCP target.");
   }
 }

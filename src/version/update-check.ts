@@ -1,5 +1,6 @@
-/** Cached version update checker: reads a cached latest version on startup, prints a stderr
- * notice when newer, and refreshes a stale (>6 h) cache with a bounded one-second wait. */
+/** Cached version update checker: reads a cached latest version on startup, starts a background
+ * install and prints a stderr notice when newer, and refreshes a stale (>6 h) cache with a
+ * bounded one-second wait. */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -8,6 +9,7 @@ import { getConfigDir } from "../config/config";
 import { logger } from "../debug/logger";
 import { brand } from "../setup/styles";
 import { centerBlock, visibleWidth } from "../tui/layout";
+import { startAutoUpdate } from "./auto-update";
 import { INSTALL_CHANNEL, isNpxInvocation, VERSION } from "./version";
 
 const CACHE_FILENAME = "update-check.json";
@@ -112,6 +114,53 @@ function styleHint(hint: string): string {
     .join("");
 }
 
+function framedNotice(content: string[], width: number): string {
+  const innerWidth = Math.max(...content.map(visibleWidth)) + BOX_PADDING * 2;
+
+  // Center each line inside the frame, then the frame in the terminal, so
+  // the notice lines up with the centered TUI welcome screen beneath it.
+  const framed = (line: string): string => {
+    const pad = innerWidth - visibleWidth(line);
+    const left = Math.floor(pad / 2);
+    return `${pc.yellow("│")}${" ".repeat(left)}${line}${" ".repeat(pad - left)}${pc.yellow("│")}`;
+  };
+  const box = [
+    pc.yellow(`╭${"─".repeat(innerWidth)}╮`),
+    framed(""),
+    ...content.map(framed),
+    framed(""),
+    pc.yellow(`╰${"─".repeat(innerWidth)}╯`),
+  ];
+  return `\n${centerBlock(box, width).join("\n")}\n`;
+}
+
+function versionArrow(current: string, latest: string): string {
+  return `${pc.dim(current)} ${pc.dim("→")} ${pc.bold(brand(latest))}`;
+}
+
+/** Shown while a background install is running: nobody needs to act, so an agent is told not
+ * to interrupt the user about it. */
+export function buildAutoUpdateNotice(
+  current: string,
+  latest: string,
+  interactive: boolean,
+  width: number = process.stderr.columns ?? 80,
+): string {
+  if (interactive) {
+    return framedNotice(
+      [
+        `Updating Dosu: ${versionArrow(current, latest)}`,
+        pc.dim("Installing in the background; your next command uses it"),
+      ],
+      width,
+    );
+  }
+  return (
+    `\n[dosu:update] Installing Dosu ${latest} in the background (running ${current}). ` +
+    "The next Dosu command uses it; no action needed.\n"
+  );
+}
+
 export function buildUpdateNotice(
   current: string,
   latest: string,
@@ -122,27 +171,10 @@ export function buildUpdateNotice(
 ): string {
   const hint = buildUpdateHint(channel, npx);
   if (interactive) {
-    const content = [
-      `Update available: ${pc.dim(current)} ${pc.dim("→")} ${pc.bold(brand(latest))}`,
-      styleHint(hint),
-    ];
-    const innerWidth = Math.max(...content.map(visibleWidth)) + BOX_PADDING * 2;
-
-    // Center each line inside the frame, then the frame in the terminal, so
-    // the notice lines up with the centered TUI welcome screen beneath it.
-    const framed = (line: string): string => {
-      const pad = innerWidth - visibleWidth(line);
-      const left = Math.floor(pad / 2);
-      return `${pc.yellow("│")}${" ".repeat(left)}${line}${" ".repeat(pad - left)}${pc.yellow("│")}`;
-    };
-    const box = [
-      pc.yellow(`╭${"─".repeat(innerWidth)}╮`),
-      framed(""),
-      ...content.map(framed),
-      framed(""),
-      pc.yellow(`╰${"─".repeat(innerWidth)}╯`),
-    ];
-    return `\n${centerBlock(box, width).join("\n")}\n`;
+    return framedNotice(
+      [`Update available: ${versionArrow(current, latest)}`, styleHint(hint)],
+      width,
+    );
   }
 
   const agentAction = hint[0].toLowerCase() + hint.slice(1);
@@ -161,28 +193,29 @@ export function getAvailableUpdate(): string | null {
   return cache && isNewerVersion(cache.latestVersion, VERSION) ? cache.latestVersion : null;
 }
 
-function displayNotice(current: string, latest: string): void {
+/** Start (or join) a background install of `latest`, then tell the person what is happening:
+ * that it is installing, or, when this copy cannot update itself, how to do it by hand. */
+function handleNewerVersion(latest: string, notify: boolean): void {
+  const autoUpdate = startAutoUpdate(latest);
+  if (!notify) return;
+  const interactive = process.stderr.isTTY === true;
   console.error(
-    buildUpdateNotice(
-      current,
-      latest,
-      INSTALL_CHANNEL,
-      process.stderr.isTTY === true,
-      isNpxInvocation(),
-    ),
+    autoUpdate === "unavailable"
+      ? buildUpdateNotice(VERSION, latest, INSTALL_CHANNEL, interactive, isNpxInvocation())
+      : buildAutoUpdateNotice(VERSION, latest, interactive),
   );
 }
 
-/** Check for updates, awaited from the preAction hook. With `notify: false` the check still
- * refreshes the cache but prints nothing; the TUI welcome banner shows the update itself. */
+/** Check for updates, awaited from the preAction hook. A newer version starts a background
+ * install. With `notify: false` nothing is printed; the TUI welcome banner shows the update. */
 export async function checkForUpdates(options: { notify?: boolean } = {}): Promise<void> {
   const notify = options.notify ?? true;
   try {
     const cache = readCache();
     const isStale = !cache || Date.now() - cache.lastCheck > CHECK_INTERVAL_MS;
     if (!isStale) {
-      if (notify && isNewerVersion(cache.latestVersion, VERSION)) {
-        displayNotice(VERSION, cache.latestVersion);
+      if (isNewerVersion(cache.latestVersion, VERSION)) {
+        handleNewerVersion(cache.latestVersion, notify);
       }
       return;
     }
@@ -198,8 +231,8 @@ export async function checkForUpdates(options: { notify?: boolean } = {}): Promi
     if (latest) {
       logger.debug("update-check", `Cached latest version: ${latest}`);
     }
-    if (notify && isNewerVersion(latestKnownVersion, VERSION)) {
-      displayNotice(VERSION, latestKnownVersion);
+    if (isNewerVersion(latestKnownVersion, VERSION)) {
+      handleNewerVersion(latestKnownVersion, notify);
     }
   } catch (err) {
     logger.error("update-check", `Update check failed: ${err}`);

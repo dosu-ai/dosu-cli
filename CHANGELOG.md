@@ -1,3 +1,101 @@
+## [0.62.1](https://github.com/dosu-ai/dosu-cli/compare/v0.62.0...v0.62.1) (2026-09-29)
+
+
+### Bug Fixes
+
+* **skill:** route review-list requests and clarify MCP deployment terms ([#252](https://github.com/dosu-ai/dosu-cli/issues/252)) ([f0cb59d](https://github.com/dosu-ai/dosu-cli/commit/f0cb59d4bfff6d5f62dda4ccac9b989f023479bf))
+
+# [0.62.0](https://github.com/dosu-ai/dosu-cli/compare/v0.61.0...v0.62.0) (2026-09-29)
+
+
+### Features
+
+* **mcp:** always load Dosu tools in Claude Code ([#255](https://github.com/dosu-ai/dosu-cli/issues/255)) ([7feb411](https://github.com/dosu-ai/dosu-cli/commit/7feb4111c9af39d89ac49f8411dcf6cb2e7f9f19))
+
+# [0.61.0](https://github.com/dosu-ai/dosu-cli/compare/v0.60.2...v0.61.0) (2026-09-29)
+
+
+### Features
+
+* **upgrade:** update Dosu automatically in the background ([#249](https://github.com/dosu-ai/dosu-cli/issues/249)) ([1b50555](https://github.com/dosu-ai/dosu-cli/commit/1b505557dedd534bf6cad7d98c0452741c3c8f8e))
+
+## [0.60.2](https://github.com/dosu-ai/dosu-cli/compare/v0.60.1...v0.60.2) (2026-09-29)
+
+
+### Bug Fixes
+
+* **upgrade:** only re-run setup when the upgrade crosses an agent config format change ([#250](https://github.com/dosu-ai/dosu-cli/issues/250)) ([927ff13](https://github.com/dosu-ai/dosu-cli/commit/927ff13a01b49e588eb947fad3f23735927b3085))
+
+## [0.60.1](https://github.com/dosu-ai/dosu-cli/compare/v0.60.0...v0.60.1) (2026-09-28)
+
+
+### Bug Fixes
+
+* **learner:** specific error type instead of generic "error" ([#242](https://github.com/dosu-ai/dosu-cli/issues/242)) ([a0bee6d](https://github.com/dosu-ai/dosu-cli/commit/a0bee6d6f4aaecdf45a68e743a686e8d0b8928a5))
+
+# [0.60.0](https://github.com/dosu-ai/dosu-cli/compare/v0.59.0...v0.60.0) (2026-09-28)
+
+
+### Features
+
+* **telemetry:** report which managed Claude Code settings block a study run ([#248](https://github.com/dosu-ai/dosu-cli/issues/248)) ([2eace85](https://github.com/dosu-ai/dosu-cli/commit/2eace8547399485859a52c765b527a2b6dc53cf2))
+
+# [0.59.0](https://github.com/dosu-ai/dosu-cli/compare/v0.58.1...v0.59.0) (2026-09-28)
+
+
+### Features
+
+* **skill:** bundle the dosu skill inside the CLI ([#239](https://github.com/dosu-ai/dosu-cli/issues/239)) ([3004fa4](https://github.com/dosu-ai/dosu-cli/commit/3004fa446123457f271c29bf01381ac05c7bc7d8))
+
+## [0.58.1](https://github.com/dosu-ai/dosu-cli/compare/v0.58.0...v0.58.1) (2026-09-28)
+
+
+### Bug Fixes
+
+* **upgrade:** keep the post-upgrade MCP refresh out of hook runs and skip the redundant skill install ([#238](https://github.com/dosu-ai/dosu-cli/issues/238)) ([969af88](https://github.com/dosu-ai/dosu-cli/commit/969af88acf3e4e5f80fca2a3cafba6526d65002e))
+
+# [0.58.0](https://github.com/dosu-ai/dosu-cli/compare/v0.57.2...v0.58.0) (2026-09-27)
+
+
+### Features
+
+* **review:** add --since/--until to review list ([#246](https://github.com/dosu-ai/dosu-cli/issues/246)) ([2641843](https://github.com/dosu-ai/dosu-cli/commit/26418430edae79a0b268e0c5ebcb3fac2e46935b))
+
+## [0.57.2](https://github.com/dosu-ai/dosu-cli/compare/v0.57.1...v0.57.2) (2026-09-24)
+
+
+### Bug Fixes
+
+* **deployments:** resolve truncated ids in switch instead of sending them to the backend ([#241](https://github.com/dosu-ai/dosu-cli/issues/241)) ([daa2f03](https://github.com/dosu-ai/dosu-cli/commit/daa2f0310782a106554c81eb989336ad8473a67a))
+
+## [0.57.1](https://github.com/dosu-ai/dosu-cli/compare/v0.57.0...v0.57.1) (2026-09-24)
+
+
+### Bug Fixes
+
+* **tui:** size the Activity and Analytics lists to the terminal height ([#237](https://github.com/dosu-ai/dosu-cli/issues/237)) ([dda9cf4](https://github.com/dosu-ai/dosu-cli/commit/dda9cf466ae18cfdfd6a03e9c4ce4d07a56f36e6))
+
+# [0.57.0](https://github.com/dosu-ai/dosu-cli/compare/v0.56.1...v0.57.0) (2026-09-24)
+
+
+### Features
+
+* **upgrade:** re-run setup after upgrade and add mcp refresh safety net ([#236](https://github.com/dosu-ai/dosu-cli/issues/236)) ([c3516a0](https://github.com/dosu-ai/dosu-cli/commit/c3516a063a175046731a03bf167c4719e0653db1))
+
+## [0.56.1](https://github.com/dosu-ai/dosu-cli/compare/v0.56.0...v0.56.1) (2026-09-23)
+
+
+### Bug Fixes
+
+* **learner:** pin the gateway's served model and make study-run failures clear and traceable ([#235](https://github.com/dosu-ai/dosu-cli/issues/235)) ([d11802f](https://github.com/dosu-ai/dosu-cli/commit/d11802ff6df46fba7538e97abdb17d2a4d9d7641))
+
+# [0.56.0](https://github.com/dosu-ai/dosu-cli/compare/v0.55.1...v0.56.0) (2026-09-23)
+
+
+### Features
+
+* **telemetry:** report hook enablement on cli_onboarding_completed ([#231](https://github.com/dosu-ai/dosu-cli/issues/231)) ([8ee7208](https://github.com/dosu-ai/dosu-cli/commit/8ee72080f234fd0e803df28bd0e4101774fc5286))
+
 ## [0.55.1](https://github.com/dosu-ai/dosu-cli/compare/v0.55.0...v0.55.1) (2026-09-22)
 
 

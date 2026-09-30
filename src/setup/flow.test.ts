@@ -229,6 +229,8 @@ import { loadSyncState, setShipTranscripts } from "../sync/watermark";
 import { consumeCommandFacets } from "../telemetry/telemetry";
 import { runActivityView } from "../tui/activity-view";
 import * as p from "../tui/prompts";
+import { readMcpRefreshCache } from "../version/mcp-refresh-check";
+import { VERSION } from "../version/version";
 import {
   type ConfigResult,
   cliAuthFailureReason,
@@ -1040,7 +1042,7 @@ describe("runSetup integration", () => {
     installRemoteSetupDefaults();
     vi.mocked(p.isCancel).mockReturnValue(false);
     installMultiselectDefault();
-    mockInstallSkill.mockResolvedValue({ success: true, sha: "test-sha" });
+    mockInstallSkill.mockResolvedValue({ success: true, version: "1.2.3" });
   });
   afterEach(teardownTempEnv);
 
@@ -2131,6 +2133,16 @@ describe("runSetup integration", () => {
     expect(saved.mode).toBe("oss");
   });
 
+  it("records the CLI version so the post-upgrade MCP refresh does not repeat the work", async () => {
+    saveConfig(makeCfg());
+    setupAuthenticatedClient();
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
+
+    await runSetup();
+
+    expect(readMcpRefreshCache()).toEqual({ version: VERSION });
+  });
+
   it("removes provider config when user deselects a previously configured tool", async () => {
     const cfg = makeCfg();
     saveConfig(cfg);
@@ -2192,7 +2204,7 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(mockInstallSkill).toHaveBeenCalledWith(["cursor"], { quiet: true });
+    expect(mockInstallSkill).toHaveBeenCalledWith(["cursor"]);
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill ready for 1 agent"));
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("/skills/cursor/dosu"));
   });
@@ -2223,7 +2235,7 @@ describe("runSetup integration", () => {
 
     await runSetup();
 
-    expect(mockInstallSkill).toHaveBeenCalledWith(["cursor"], { quiet: true });
+    expect(mockInstallSkill).toHaveBeenCalledWith(["cursor"]);
   });
 
   it("goes directly to agent selection without a component-selection prompt", async () => {
@@ -2320,6 +2332,31 @@ describe("runSetup integration", () => {
       (e) => e.event === "cli_onboarding_completed",
     );
     expect(completed?.properties.completed_agents_md).toBe(true);
+    // Cursor's knowledge sync hook rode along with the MCP install.
+    expect(completed?.properties).toMatchObject({ completed_hooks: true, hook_count: 1 });
+  });
+
+  it("reports completed_hooks=false when the hook could not be enabled", async () => {
+    const cfg = makeCfg();
+    saveConfig(cfg);
+
+    setupAuthenticatedClient();
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    // An unparseable hooks file makes the hook step fail open while MCP still installs.
+    writeFileSync(join(tempDir, ".cursor", "hooks.json"), "not json {");
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    mockToolSelection(["cursor"]);
+
+    await runSetup();
+
+    const completed = trackedCliOnboardingEvents().find(
+      (e) => e.event === "cli_onboarding_completed",
+    );
+    expect(completed?.properties).toMatchObject({
+      completed_mcp: true,
+      completed_hooks: false,
+      hook_count: 0,
+    });
   });
 
   it("does not update AGENTS.md when no agent was configured", async () => {
@@ -2366,7 +2403,7 @@ describe("runInstallSkill", () => {
   afterEach(teardownTempEnv);
 
   it("calls installSkill and returns true on success", async () => {
-    mockInstallSkill.mockResolvedValue({ success: true, sha: "abc" });
+    mockInstallSkill.mockResolvedValue({ success: true, version: "1.2.3" });
 
     const result = await runInstallSkill([ClaudeProvider()]);
     const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
@@ -2374,7 +2411,7 @@ describe("runInstallSkill", () => {
     expect(result).toBe(true);
     expect(spinner?.start).toHaveBeenCalledWith("Installing skill for 1 agent");
     expect(spinner?.stop).toHaveBeenCalledWith("Skill installed");
-    expect(mockInstallSkill).toHaveBeenCalledWith(["claude"], { quiet: true });
+    expect(mockInstallSkill).toHaveBeenCalledWith(["claude"]);
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill ready for 1 agent"));
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Claude Code"));
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("/skills/claude/dosu"));
@@ -2429,7 +2466,7 @@ describe("runSetup checkpoint behavior", () => {
     installRemoteSetupDefaults();
     vi.mocked(p.isCancel).mockReturnValue(false);
     installMultiselectDefault();
-    mockInstallSkill.mockResolvedValue({ success: true, sha: "test-sha" });
+    mockInstallSkill.mockResolvedValue({ success: true, version: "1.2.3" });
   });
   afterEach(teardownTempEnv);
 
@@ -2825,7 +2862,7 @@ describe("runSetup additional branches", () => {
     installRemoteSetupDefaults();
     vi.mocked(p.isCancel).mockReturnValue(false);
     installMultiselectDefault();
-    mockInstallSkill.mockResolvedValue({ success: true, sha: "test-sha" });
+    mockInstallSkill.mockResolvedValue({ success: true, version: "1.2.3" });
   });
   afterEach(teardownTempEnv);
 
@@ -3166,7 +3203,7 @@ describe("runSetup single-handshake protocol", () => {
     installRemoteSetupDefaults();
     vi.mocked(p.isCancel).mockReturnValue(false);
     installMultiselectDefault();
-    mockInstallSkill.mockResolvedValue({ success: true, sha: "test-sha" });
+    mockInstallSkill.mockResolvedValue({ success: true, version: "1.2.3" });
   });
   afterEach(() => {
     process.exitCode = undefined;

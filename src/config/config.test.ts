@@ -10,6 +10,7 @@ import {
   isAuthenticated,
   isTokenExpired,
   loadConfig,
+  loadConfigNonBlocking,
   replaceLoginSession,
   type SessionCredentials,
   saveConfig,
@@ -105,6 +106,47 @@ describe("config", () => {
   it("loadConfig returns empty config when file does not exist", () => {
     const cfg = loadConfig();
     expect(cfg).toEqual({ schema_version: CONFIG_SCHEMA_VERSION });
+  });
+
+  describe("loadConfigNonBlocking", () => {
+    it("returns undefined when the file does not exist", () => {
+      expect(loadConfigNonBlocking()).toBeUndefined();
+    });
+
+    it("parses a regular config file without touching it", () => {
+      const cfg = makeTestConfig({ access_token: "tok", refresh_token: "ref", expires_at: 1 });
+      saveConfig(cfg);
+      const before = readFileSync(getConfigPath(), "utf-8");
+
+      expect(loadConfigNonBlocking()?.active_account?.session.access_token).toBe("tok");
+      expect(readFileSync(getConfigPath(), "utf-8")).toBe(before);
+    });
+
+    it("does not migrate a legacy config on disk", () => {
+      writeFileSync(
+        getConfigPath(),
+        JSON.stringify({ access_token: "legacy", refresh_token: "r", expires_at: 1 }),
+      );
+      const before = readFileSync(getConfigPath(), "utf-8");
+
+      expect(loadConfigNonBlocking()?.schema_version).toBe(CONFIG_SCHEMA_VERSION);
+      expect(readFileSync(getConfigPath(), "utf-8")).toBe(before);
+    });
+
+    it("returns undefined when config.json is not a regular file", () => {
+      mkdirSync(getConfigPath(), { recursive: true });
+      expect(loadConfigNonBlocking()).toBeUndefined();
+    });
+
+    it("returns undefined for an oversized file", () => {
+      writeFileSync(getConfigPath(), `{"pad":"${"x".repeat(64 * 1_024)}"}`);
+      expect(loadConfigNonBlocking()).toBeUndefined();
+    });
+
+    it("returns undefined for corrupt JSON", () => {
+      writeFileSync(getConfigPath(), "{not json");
+      expect(loadConfigNonBlocking()).toBeUndefined();
+    });
   });
 
   it("saveConfig and loadConfig round-trip", () => {

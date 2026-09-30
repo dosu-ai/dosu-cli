@@ -33,7 +33,7 @@ bun run check                   # Biome lint + format check (used in CI)
 
 Running `dosu` with no args launches the interactive TUI (`src/tui/tui.ts`). Two broad families of subcommands are registered in `src/cli/cli.ts`:
 
-- **Local / MCP management** — `login`, `logout`, `status`, `setup`, `mcp add|list`, `logs`, `telemetry`.
+- **Local / MCP management** — `login`, `logout`, `status`, `setup`, `mcp add|refresh|list`, `logs`, `telemetry`.
 - **Dosu platform** (require an authenticated deployment) — `ask`, `knowledge`, `docs`, `threads`, `review`, `sources`, `integrations`, `topics`, `members`, `org`, `deployments`, `analytics`, `skill`. Each lives in `src/commands/<name>.ts` and talks to the backend via `src/client/`.
 
 Key modules:
@@ -48,7 +48,8 @@ Key modules:
 - **`src/sync/`** + **`src/shipper/`** — How the CLI learns from sessions: `knowledge sync` (session-end hooks, the Activity screen, setup's backfill) scans the last 30 days of finished sessions and ships them to the Dosu memory ingest API (`POST /v1/memory/ingest/async`), which learns from them server-side. Incognito (`/dosu-incognito`) and trivial sessions are settled locally and never uploaded; the shipper normalizes raw logs to Letta trajectory-v1 via `@letta-ai/trajectory` and redacts every outgoing string with `redactSecrets`. Progress (watermark, backoff, shipped history) lives in `~/.config/dosu-cli/knowledge-sync.json`, schema 2 (schema 1 was the retired local learner; its files migrate on load). Shipping is on by default; only the opt-out is stored (`ship_transcripts: false`, `dosu knowledge transcripts disable`). There is no local learner: nothing in the CLI calls an LLM or `write_knowledge`.
 - **`src/telemetry/`** — Default-on analytics and error diagnostics with one persisted global switch, safe payload builders, and fail-open transport. User controls live under `dosu telemetry status|enable|disable|reset`.
 - **`src/tui/`** — Main menu TUI when running `dosu` with no subcommand.
-- **`src/version/`** — Version string from the build-time `DOSU_VERSION` env var, plus background update checks (`update-check.ts`, `skill-update-check.ts`).
+- **`skills/`** — The `dosu` agent skill (formerly the separate `dosu-ai/dosu-skill` repo), which teaches coding agents to configure and operate Dosu through this CLI. Only skills a customer needs to use the CLI belong here; internal analysis skills stay out of the bundle. `scripts/embed-skills.ts` generates `src/generated/skills.ts` from it so the single-file bundle carries the content; `src/commands/skill.ts` writes it to `~/.agents/skills/<name>` and symlinks Claude Code / Windsurf directories at it. **Run `bun run embed:skills` after editing anything under `skills/`** — `scripts/embed-skills.test.ts` fails when the generated file drifts.
+- **`src/version/`** — Version string from the build-time `DOSU_VERSION` env var, plus the background update check (`update-check.ts`). When that check sees a newer release, `auto-update.ts` (default on) spawns a detached `dosu upgrade --background`, which runs only the package-manager install. The install is guarded by `auto-update.lock` and recorded in `auto-update.json`, and the next command's first-run checks below handle the rest; the child runs with telemetry disabled so it never counts as an `upgrade` command. `skill-update-check.ts` re-applies the bundled agent skills on the first command after any version change (for the agents a previous version installed them for). `mcp-refresh-check.ts` is the post-upgrade safety net: on the first command after an upgrade that crossed a release listed in `MCP_FORMAT_CHANGES` (releases that changed the shape of the MCP entry, currently `0.53.0` and `0.62.0`, when Claude Code entries gained `alwaysLoad: true`), it rewrites the Dosu MCP entry in every installed, already-configured tool with the new provider code (via `src/mcp/refresh.ts`), records the version in `mcp-refresh.json`, and nudges the user to run `dosu setup` for hooks/rules. Bumps that did not cross a format change only advance the marker. **Add the new version to `MCP_FORMAT_CHANGES` whenever a provider's `install` output changes shape.** `dosu setup` and `dosu mcp refresh` record the same marker and skip the automatic check. `dosu upgrade` re-invokes the *new* binary as `dosu upgrade --finish <old version>` (only the new code knows its `MCP_FORMAT_CHANGES`); that runs `setup` on a TTY, or `mcp refresh` otherwise, only when the jump crossed a format change, and otherwise just re-applies skills.
 
 ## CLI Contract Discipline
 
@@ -63,7 +64,8 @@ when a selected organization UUID is available, analytics events associate it th
 installation history to an account.
 Setup analytics may include only the documented coarse fields. Never collect prompts, raw command
 lines, free-form argument or option values, user source code, file contents, local paths, environment
-variable names or values, credentials, raw error messages, or `debug.log`. Keep payloads allowlisted, transports
+variable names or values (beyond the fixed Claude Code setting names documented for
+`settings_conflict_keys`), credentials, raw error messages, or `debug.log`. Keep payloads allowlisted, transports
 bounded and fail-open, honor `DO_NOT_TRACK` and `DOSU_TELEMETRY_DISABLED`, and keep stdout/JSON
 contracts unchanged. See
 [docs/telemetry.md](docs/telemetry.md) for the field and privacy contract.
@@ -179,6 +181,7 @@ npx @dosu/cli@alpha setup
 - `DOSU_DEV=true` — isolates the CLI's config dir to `~/.config/dosu-cli-dev/` so dev runs don't clobber prod credentials. Does **not** switch URLs (URLs are build-time-baked; use `*_OVERRIDE` for that).
 - `DO_NOT_TRACK=1` or `DOSU_TELEMETRY_DISABLED=1` — master disable for all telemetry.
 - `DOSU_TELEMETRY_DEBUG=1` — print the exact safe payload to stderr and send nothing.
+- `DOSU_DISABLE_AUTOUPDATE=1` — turn off background self-updates for this environment (the persisted switch is `dosu upgrade --auto off`).
 
 <!-- dosu:mcp:start v2 -->
 The team you are assisting maintains shared knowledge in Dosu: consult it to build on prior work, and contribute durable knowledge so future teammates and agents do not have to rediscover it. Always use only tools currently listed by the server.

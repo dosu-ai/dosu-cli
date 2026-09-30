@@ -1,4 +1,4 @@
-/** `dosu deployments`: list, inspect, and switch deployments. */
+/** `dosu deployments`: list, inspect, and switch the selected MCP deployment. */
 
 import { Command } from "commander";
 import pc from "picocolors";
@@ -6,6 +6,7 @@ import { Client } from "../client/client";
 import { createTypedClient, type TypedClient } from "../client/trpc";
 import { saveConfig, updateTarget } from "../config/config";
 import type { CliDeployment } from "../generated/dosu-api-types";
+import { isUuid } from "./arguments";
 import { requireLoginConfig } from "./auth";
 import { formatDate, printInfo, printResult, printTable } from "./output";
 
@@ -28,12 +29,59 @@ async function listAccessibleDeployments(
   return deployments.flat();
 }
 
+/**
+ * Resolve the `<id>` argument of `deployments switch` to a full deployment UUID.
+ *
+ * `dosu deployments list` prints IDs truncated to 8 characters, so users (and agents
+ * reading that table) regularly pass the prefix back. `workspaces.get` forwards its
+ * input straight to a `uuid` column, and Postgres rejects anything that is not a full
+ * UUID with a 500 (`22P02 invalid input syntax for type uuid`) — so a truncated ID
+ * must never reach the backend. A unique prefix is resolved against the deployments
+ * the user can already see; anything else is a user error, not a server error.
+ */
+async function resolveDeploymentId(
+  client: TypedClient,
+  activeOrgId: string | undefined,
+  id: string,
+): Promise<string> {
+  const needle = id.trim();
+  if (isUuid(needle)) return needle;
+
+  const prefix = needle.toLowerCase();
+  const matches = (await listAccessibleDeployments(client, activeOrgId)).filter(
+    (d) =>
+      d.provider_slug === MCP_PROVIDER_SLUG &&
+      prefix.length > 0 &&
+      d.deployment_id.toLowerCase().startsWith(prefix),
+  );
+
+  if (matches.length === 1) return matches[0].deployment_id;
+
+  if (matches.length === 0) {
+    console.error(pc.red(`Deployment not found: ${id}`));
+    console.error(
+      pc.dim(
+        "Expected a full deployment ID (UUID). Run 'dosu deployments list --json' to see full IDs.",
+      ),
+    );
+    process.exit(1);
+  }
+
+  console.error(pc.red(`Ambiguous deployment ID prefix: ${id} matches ${matches.length}:`));
+  for (const d of matches) {
+    console.error(pc.dim(`  ${d.deployment_id}  ${d.name}`));
+  }
+  process.exit(1);
+}
+
 export function deploymentsCommand(): Command {
-  const cmd = new Command("deployments").description("Manage deployments");
+  const cmd = new Command("deployments").description(
+    "Select the MCP deployment (and its Library) this CLI uses; not for Agents",
+  );
 
   cmd
     .command("list")
-    .description("List all deployments")
+    .description("List MCP deployments you can select")
     .option("--json", "Output as JSON")
     .action(async (opts: { json?: boolean }) => {
       const cfg = requireConfig();
@@ -53,7 +101,7 @@ export function deploymentsCommand(): Command {
       }
 
       if (!deployments || deployments.length === 0) {
-        console.log(pc.dim("No deployments found."));
+        console.log(pc.dim("No MCP deployments found."));
         return;
       }
 
@@ -79,7 +127,7 @@ export function deploymentsCommand(): Command {
 
   cmd
     .command("info")
-    .description("Show current deployment details")
+    .description("Show the selected MCP deployment")
     .option("--json", "Output as JSON")
     .action(async (opts: { json?: boolean }) => {
       const cfg = requireConfig();
@@ -124,12 +172,14 @@ export function deploymentsCommand(): Command {
 
   cmd
     .command("switch")
-    .description("Switch to a different deployment")
-    .argument("<id>", "Deployment ID")
+    .description("Select a different MCP deployment (mints a new API key for it)")
+    .argument("<id>", "MCP deployment ID (full UUID, or a unique prefix as shown by 'list')")
     .option("--json", "Output as JSON")
-    .action(async (id: string, opts: { json?: boolean }) => {
+    .action(async (rawId: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
+
+      const id = await resolveDeploymentId(client, cfg.active_account?.target?.org_id, rawId);
 
       // Validate the deployment exists and user has access
       const deployment = await client.workspaces.get.query(id);

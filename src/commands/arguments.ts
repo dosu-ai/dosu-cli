@@ -27,8 +27,15 @@ export function messageLimit(value: string): number {
   return parsed;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** True when `value` is a full RFC 4122 UUID (any version). */
+export function isUuid(value: string): boolean {
+  return UUID_RE.test(value);
+}
+
 export function uuid(value: string): string {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
+  if (!isUuid(value)) {
     throw new InvalidArgumentError("must be a UUID");
   }
   return value;

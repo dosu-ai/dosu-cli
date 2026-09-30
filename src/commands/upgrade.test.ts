@@ -13,17 +13,56 @@ vi.mock("node:fs", async (importOriginal) => {
   return { ...actual, realpathSync: vi.fn(actual.realpathSync) };
 });
 
-vi.mock("./skill", () => ({ installSkill: vi.fn(async () => ({ success: true })) }));
+vi.mock("../version/skill-update-check", () => ({ checkForSkillUpdates: vi.fn() }));
 
-import { installSkill } from "./skill";
+vi.mock("../version/auto-update", () => ({
+  AUTO_UPDATE_ENV: "DOSU_DISABLE_AUTOUPDATE",
+  autoUpdateDisabledReason: vi.fn(),
+  runBackgroundUpgrade: vi.fn((upgrade: () => number) => upgrade()),
+  setAutoUpdateEnabled: vi.fn(() => true),
+}));
+
+vi.mock("../version/version", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version/version")>()),
+  VERSION: "0.60.1",
+}));
+
+vi.mock("../version/mcp-refresh-check", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version/mcp-refresh-check")>()),
+  canRefreshMcp: vi.fn(() => true),
+  writeMcpRefreshCache: vi.fn(),
+}));
+
+vi.mock("../config/config", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config")>()),
+  loadConfigNonBlocking: vi.fn(() => ({})),
+}));
+
+vi.mock("../mcp/refresh", () => ({ refreshConfiguredProviders: vi.fn() }));
+
+vi.mock("../setup/flow", () => ({ runSetup: vi.fn(async () => {}) }));
+
+import { loadConfigNonBlocking } from "../config/config";
+import { refreshConfiguredProviders } from "../mcp/refresh";
+import { runSetup } from "../setup/flow";
+import {
+  autoUpdateDisabledReason,
+  runBackgroundUpgrade,
+  setAutoUpdateEnabled,
+} from "../version/auto-update";
+import { canRefreshMcp, writeMcpRefreshCache } from "../version/mcp-refresh-check";
+import { checkForSkillUpdates } from "../version/skill-update-check";
 import {
   buildPackageManagerInvocation,
   completeUpgrade,
+  finishUpgrade,
+  newBinaryInvocation,
+  postUpgradeArgs,
   runUpgrade,
   upgradeCommand,
 } from "./upgrade";
 
-const mockInstallSkill = vi.mocked(installSkill);
+const FINISH_ARGS = ["upgrade", "--finish", "0.60.1"];
 
 const mockSpawnSync = vi.mocked(spawnSync);
 const mockRealpathSync = vi.mocked(realpathSync);
@@ -89,8 +128,13 @@ function errors(): string {
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), "dosu-upgrade-test-"));
   mockSpawnSync.mockReset();
-  mockInstallSkill.mockReset();
-  mockInstallSkill.mockResolvedValue({ success: true });
+  vi.mocked(checkForSkillUpdates).mockClear();
+  vi.mocked(runSetup).mockClear();
+  vi.mocked(refreshConfiguredProviders).mockReset();
+  vi.mocked(refreshConfiguredProviders).mockReturnValue({ updated: [], failed: [] });
+  vi.mocked(writeMcpRefreshCache).mockClear();
+  vi.mocked(canRefreshMcp).mockClear();
+  vi.mocked(loadConfigNonBlocking).mockClear();
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   originalArgv = process.argv;
@@ -260,6 +304,37 @@ describe("runUpgrade", () => {
     expect(output()).toContain("not a uniquely identified global package installation");
     expect(output()).toContain("pnpm add -g @dosu/cli@latest");
     expect(output()).toContain("yarn global add @dosu/cli@latest");
+  });
+
+  it("skips the package install for a source run in dev mode so the hand-off can be tested", async () => {
+    const sourceEntrypoint = join(tempDir, "dosu-cli", "src", "index.ts");
+    mkdirSync(dirname(sourceEntrypoint), { recursive: true });
+    writeFileSync(sourceEntrypoint, "");
+    mockCommands({
+      "npm root -g": { status: 0, stdout: `${join(tempDir, "npm", "node_modules")}\n` },
+      [PNPM_LOCATE_COMMAND]: { status: 0, stdout: "" },
+      "yarn --silent global dir": { status: 1, stdout: "" },
+      [`${process.execPath} ${sourceEntrypoint} ${FINISH_ARGS.join(" ")}`]: { status: 0 },
+    });
+
+    const status = await completeUpgrade("npm", {
+      entrypoint: sourceEntrypoint,
+      platform: "darwin",
+      env: { DOSU_DEV: "true" },
+    });
+
+    expect(status).toBe(0);
+    expect(output()).toContain("skipping the package install");
+    expect(mockSpawnSync).not.toHaveBeenCalledWith(
+      "npm",
+      ["install", "-g", "@dosu/cli@latest"],
+      expect.anything(),
+    );
+    expect(mockSpawnSync).toHaveBeenLastCalledWith(
+      process.execPath,
+      [sourceEntrypoint, ...FINISH_ARGS],
+      expect.objectContaining({ shell: false, stdio: "inherit" }),
+    );
   });
 
   it("fails closed when more than one manager claims the same installation", () => {
@@ -445,37 +520,249 @@ describe("runUpgrade", () => {
 
     expect(process.exitCode).toBe(expectedExitCode);
   });
+
+  it("--background installs through runBackgroundUpgrade without the post-upgrade setup", async () => {
+    const npmRoot = join(tempDir, "npm", "node_modules");
+    const entrypoint = makeEntrypoint(npmPackageRoot(npmRoot));
+    process.argv = [process.execPath, entrypoint];
+    mockCommands({
+      "npm root -g": { status: 0, stdout: `${npmRoot}\n` },
+      [PNPM_LOCATE_COMMAND]: { status: 0, stdout: "" },
+      "yarn --silent global dir": { status: 1, stdout: "" },
+      "npm install -g @dosu/cli@latest": { status: 0 },
+    });
+
+    await upgradeCommand().parseAsync(["--background"], { from: "user" });
+
+    expect(vi.mocked(runBackgroundUpgrade)).toHaveBeenCalledOnce();
+    expect(mockSpawnSync).toHaveBeenCalledWith(
+      "npm",
+      ["install", "-g", "@dosu/cli@latest"],
+      expect.anything(),
+    );
+    expect(mockSpawnSync).not.toHaveBeenCalledWith(
+      process.execPath,
+      [entrypoint, ...FINISH_ARGS],
+      expect.anything(),
+    );
+    expect(vi.mocked(checkForSkillUpdates)).not.toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
+  });
+});
+
+describe("upgrade --auto", () => {
+  beforeEach(() => {
+    vi.mocked(setAutoUpdateEnabled).mockReset().mockReturnValue(true);
+    vi.mocked(autoUpdateDisabledReason).mockReset().mockReturnValue(undefined);
+  });
+
+  it.each([
+    ["off", false, "Automatic updates are off"],
+    ["ON", true, "Automatic updates are on."],
+  ])("--auto %s persists the setting without upgrading", async (value, enabled, message) => {
+    await upgradeCommand().parseAsync(["--auto", value], { from: "user" });
+
+    expect(vi.mocked(setAutoUpdateEnabled)).toHaveBeenCalledWith(enabled);
+    expect(logSpy.mock.calls.flat().join("\n")).toContain(message);
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("warns when the environment variable still disables updates", async () => {
+    vi.mocked(autoUpdateDisabledReason).mockReturnValue("env");
+
+    await upgradeCommand().parseAsync(["--auto", "on"], { from: "user" });
+
+    expect(logSpy.mock.calls.flat().join("\n")).toContain("DOSU_DISABLE_AUTOUPDATE");
+  });
+
+  it("rejects an unknown value", async () => {
+    await upgradeCommand().parseAsync(["--auto", "maybe"], { from: "user" });
+
+    expect(vi.mocked(setAutoUpdateEnabled)).not.toHaveBeenCalled();
+    expect(errorSpy.mock.calls.flat().join("\n")).toContain("expected 'on' or 'off'");
+    expect(process.exitCode).toBe(2);
+  });
+
+  it("reports a failed save", async () => {
+    vi.mocked(setAutoUpdateEnabled).mockReturnValue(false);
+
+    await upgradeCommand().parseAsync(["--auto", "off"], { from: "user" });
+
+    expect(process.exitCode).toBe(1);
+  });
 });
 
 describe("completeUpgrade", () => {
-  it("refreshes skills after a successful Homebrew upgrade", async () => {
-    mockCommands({ "brew upgrade dosu-ai/dosu/dosu": { status: 0 } });
+  it("hands off to the upgraded Homebrew binary with the version it came from", async () => {
+    mockCommands({
+      "brew upgrade dosu-ai/dosu/dosu": { status: 0 },
+      [`dosu ${FINISH_ARGS.join(" ")}`]: { status: 0 },
+    });
 
     const status = await completeUpgrade("homebrew", { platform: "darwin" });
 
     expect(status).toBe(0);
-    expect(mockInstallSkill).toHaveBeenCalledOnce();
-    expect(output()).toContain("Skills updated");
+    expect(mockSpawnSync).toHaveBeenLastCalledWith(
+      "dosu",
+      FINISH_ARGS,
+      expect.objectContaining({ shell: false, stdio: "inherit" }),
+    );
+    expect(mockSpawnSync).not.toHaveBeenCalledWith("dosu", ["setup"], expect.anything());
   });
 
-  it("does not refresh skills after a failed Homebrew upgrade", async () => {
+  it("does not hand off after a failed Homebrew upgrade", async () => {
     mockCommands({ "brew upgrade dosu-ai/dosu/dosu": { status: 7 } });
 
     const status = await completeUpgrade("homebrew", { platform: "darwin" });
 
     expect(status).toBe(7);
-    expect(mockInstallSkill).not.toHaveBeenCalled();
+    expect(mockSpawnSync).toHaveBeenCalledTimes(1);
   });
 
-  it("returns 0 and hints at dosu skill update when skill refresh fails", async () => {
-    mockCommands({ "brew upgrade dosu-ai/dosu/dosu": { status: 0 } });
-    mockInstallSkill.mockResolvedValue({ success: false });
+  it("re-runs the replaced npm entrypoint under the current runtime", async () => {
+    const npmRoot = join(tempDir, "npm", "node_modules");
+    const entrypoint = makeEntrypoint(npmPackageRoot(npmRoot));
+    mockRealpathSync.mockImplementation((path) => String(path));
+    mockCommands({
+      "npm root -g": { status: 0, stdout: `${npmRoot}\n` },
+      [PNPM_LOCATE_COMMAND]: { status: 1, stdout: "" },
+      "yarn --silent global dir": { status: 1, stdout: "" },
+      "npm install -g @dosu/cli@latest": { status: 0 },
+      [`${process.execPath} ${entrypoint} ${FINISH_ARGS.join(" ")}`]: { status: 0 },
+    });
+
+    const status = await completeUpgrade("npm", { entrypoint, platform: "darwin", env: {} });
+
+    expect(status).toBe(0);
+    expect(mockSpawnSync).toHaveBeenLastCalledWith(
+      process.execPath,
+      [entrypoint, ...FINISH_ARGS],
+      expect.objectContaining({ cwd: homedir(), shell: false, stdio: "inherit" }),
+    );
+  });
+
+  it("still exits 0 but points at dosu setup when the hand-off fails", async () => {
+    mockCommands({
+      "brew upgrade dosu-ai/dosu/dosu": { status: 0 },
+      [`dosu ${FINISH_ARGS.join(" ")}`]: { status: 1 },
+    });
 
     const status = await completeUpgrade("homebrew", { platform: "darwin" });
 
     expect(status).toBe(0);
-    expect(mockInstallSkill).toHaveBeenCalledOnce();
-    expect(errors()).toContain("dosu skill update");
+    expect(errors()).toContain('Run "dosu setup"');
+  });
+});
+
+describe("finishUpgrade", () => {
+  it("only re-applies skills when no agent config format changed since the old version", async () => {
+    const status = await finishUpgrade("0.57.2", { interactive: true });
+
+    expect(status).toBe(0);
+    expect(runSetup).not.toHaveBeenCalled();
+    expect(refreshConfiguredProviders).not.toHaveBeenCalled();
+    expect(checkForSkillUpdates).toHaveBeenCalledOnce();
+    expect(writeMcpRefreshCache).toHaveBeenCalledWith({ version: "0.60.1" });
+    expect(output()).toContain("need no changes");
+  });
+
+  it("runs setup when a person is at the terminal and a format change was crossed", async () => {
+    const status = await finishUpgrade("0.52.0", { interactive: true });
+
+    expect(status).toBe(0);
+    expect(runSetup).toHaveBeenCalledOnce();
+    expect(checkForSkillUpdates).not.toHaveBeenCalled();
+  });
+
+  it("treats an unrecognised old version as needing setup", async () => {
+    await finishUpgrade("dev", { interactive: true });
+
+    expect(runSetup).toHaveBeenCalledOnce();
+  });
+
+  it("refreshes MCP entries silently without a TTY when a format change was crossed", async () => {
+    vi.mocked(refreshConfiguredProviders).mockReturnValue({
+      updated: [{ name: () => "Cursor" }],
+      failed: [{ provider: { name: () => "Zed" }, error: new Error("read-only") }],
+    } as unknown as ReturnType<typeof refreshConfiguredProviders>);
+
+    const status = await finishUpgrade("0.52.0", { interactive: false });
+
+    expect(status).toBe(0);
+    expect(runSetup).not.toHaveBeenCalled();
+    expect(checkForSkillUpdates).toHaveBeenCalledOnce();
+    expect(writeMcpRefreshCache).toHaveBeenCalledWith({ version: "0.60.1" });
+    expect(output()).toContain("✓ Cursor");
+    expect(output()).toContain("✗ Zed: read-only");
+    expect(errors()).toContain('Run "dosu setup"');
+  });
+
+  it("points at dosu setup when there is nothing to refresh with", async () => {
+    vi.mocked(canRefreshMcp).mockReturnValueOnce(false);
+
+    await finishUpgrade("0.52.0", { interactive: false });
+
+    expect(refreshConfiguredProviders).not.toHaveBeenCalled();
+    expect(writeMcpRefreshCache).not.toHaveBeenCalled();
+    expect(errors()).toContain('Run "dosu setup"');
+  });
+
+  it("detects interactivity from stdin/stdout when not told", async () => {
+    const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+    const stdoutTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+    try {
+      await finishUpgrade("0.52.0");
+      expect(runSetup).toHaveBeenCalledOnce();
+    } finally {
+      restoreDescriptor(process.stdin, "isTTY", stdinTTY);
+      restoreDescriptor(process.stdout, "isTTY", stdoutTTY);
+    }
+  });
+
+  it("is reachable through the hidden --finish option", async () => {
+    await upgradeCommand().parseAsync(["--finish", "0.57.2"], { from: "user" });
+
+    expect(checkForSkillUpdates).toHaveBeenCalledOnce();
+    expect(process.exitCode).toBeUndefined();
+  });
+});
+
+function restoreDescriptor(
+  target: object,
+  key: string,
+  descriptor: PropertyDescriptor | undefined,
+): void {
+  if (descriptor) Object.defineProperty(target, key, descriptor);
+  else delete (target as Record<string, unknown>)[key];
+}
+
+describe("postUpgradeArgs", () => {
+  it("asks the new binary to finish from the old version", () => {
+    expect(postUpgradeArgs()).toEqual(FINISH_ARGS);
+    expect(postUpgradeArgs("0.57.2")).toEqual(["upgrade", "--finish", "0.57.2"]);
+  });
+});
+
+describe("newBinaryInvocation", () => {
+  it("re-invokes the entrypoint under the current runtime for npm installs", () => {
+    expect(
+      newBinaryInvocation("npm", ["setup"], "/g/node_modules/@dosu/cli/bin/dosu.js", "/bin/node"),
+    ).toEqual({
+      command: "/bin/node",
+      args: ["/g/node_modules/@dosu/cli/bin/dosu.js", "setup"],
+    });
+  });
+
+  it("uses the PATH binary for Homebrew and nothing for other channels", () => {
+    expect(newBinaryInvocation("homebrew", ["setup"])).toEqual({
+      command: "dosu",
+      args: ["setup"],
+    });
+    expect(newBinaryInvocation("npm", ["setup"], "")).toBeNull();
+    expect(newBinaryInvocation("binary", ["setup"])).toBeNull();
   });
 });
 

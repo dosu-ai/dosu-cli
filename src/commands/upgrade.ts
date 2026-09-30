@@ -4,10 +4,19 @@ import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { posix, win32 } from "node:path";
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import pc from "picocolors";
-import { INSTALL_CHANNEL, isNpxInvocation } from "../version/version";
-import { installSkill } from "./skill";
+import { loadConfigNonBlocking } from "../config/config";
+import { refreshConfiguredProviders } from "../mcp/refresh";
+import {
+  AUTO_UPDATE_ENV,
+  autoUpdateDisabledReason,
+  runBackgroundUpgrade,
+  setAutoUpdateEnabled,
+} from "../version/auto-update";
+import { canRefreshMcp, needsMcpRefresh, writeMcpRefreshCache } from "../version/mcp-refresh-check";
+import { checkForSkillUpdates } from "../version/skill-update-check";
+import { INSTALL_CHANNEL, isNpxInvocation, VERSION } from "../version/version";
 
 const PACKAGE_NAME = "@dosu/cli";
 const LATEST_PACKAGE = `${PACKAGE_NAME}@latest`;
@@ -238,6 +247,14 @@ export function runUpgrade(channel = INSTALL_CHANNEL, options: UpgradeOptions = 
       cwd,
     );
     if (!manager) {
+      if (env.DOSU_DEV === "true") {
+        // `bun run dev upgrade`: nothing to install, but let the post-upgrade hand-off run
+        // against this working copy so the whole flow can be exercised from source.
+        console.log(
+          "DOSU_DEV=true and this copy is not a global package: skipping the package install.",
+        );
+        return 0;
+      }
       printNonGlobalPackageGuidance();
       return 1;
     }
@@ -269,31 +286,152 @@ export function runUpgrade(channel = INSTALL_CHANNEL, options: UpgradeOptions = 
   return 0;
 }
 
+const SETUP_FALLBACK = 'Run "dosu setup" to finish updating your AI agents.';
+const SEMVER = /^\d+\.\d+\.\d+/;
+
+/** What the upgraded binary should run. It, not this old process, decides whether the agents
+ * need touching: only the new code knows which releases changed the agent config format. */
+export function postUpgradeArgs(fromVersion: string = VERSION): string[] {
+  return ["upgrade", "--finish", fromVersion];
+}
+
+/** How to re-invoke Dosu after the package manager swapped the files underneath us. Only the
+ * freshly installed version knows the new config shapes, so the rewrite must happen in a new
+ * process, not in this (old) one. */
+export function newBinaryInvocation(
+  channel: string,
+  args: string[],
+  entrypoint: string | undefined = process.argv[1],
+  execPath: string = process.execPath,
+): Invocation | null {
+  if (channel === "npm") {
+    // npm/pnpm/yarn replace the package in place, so the entrypoint path now holds the new code.
+    return entrypoint ? { command: execPath, args: [entrypoint, ...args] } : null;
+  }
+  if (channel === "homebrew") {
+    // The running binary is the old Cellar version; `dosu` on PATH is the upgraded link.
+    return { command: "dosu", args };
+  }
+  return null;
+}
+
+function isInteractiveTerminal(): boolean {
+  return process.stdin.isTTY === true && process.stdout.isTTY === true;
+}
+
+function finishWithNewBinary(channel: string, options: UpgradeOptions): void {
+  const invocation = newBinaryInvocation(
+    channel,
+    postUpgradeArgs(),
+    options.entrypoint ?? process.argv[1],
+  );
+  /* v8 ignore start -- runUpgrade only succeeds for channels/entrypoints that resolve here */
+  if (!invocation) {
+    console.error(SETUP_FALLBACK);
+    return;
+  }
+  /* v8 ignore stop */
+  const result = spawnSync(invocation.command, invocation.args, {
+    cwd: options.cwd ?? homedir(),
+    shell: false,
+    stdio: "inherit",
+  });
+  if (result.error || result.status !== 0) {
+    console.error(SETUP_FALLBACK);
+  }
+}
+
 export async function completeUpgrade(
   channel = INSTALL_CHANNEL,
   options: UpgradeOptions = {},
 ): Promise<number> {
   const status = runUpgrade(channel, options);
   if (status !== 0) return status;
-  console.log("Updating Dosu skills...");
-  try {
-    const result = await installSkill();
-    if (result.success) {
-      console.log(pc.green("✓ Skills updated."));
-    } else {
-      console.error('Skills could not be refreshed. Run "dosu skill update" to retry.');
-    }
-  } catch {
-    console.error('Skills could not be refreshed. Run "dosu skill update" to retry.');
+  finishWithNewBinary(channel, options);
+  return 0;
+}
+
+/** `dosu upgrade --finish <from>`, run by the freshly installed binary. Re-runs setup (or, with
+ * no TTY, the MCP refresh) only when the jump from `from` crossed a release that changed the
+ * agent config format; otherwise it just re-applies the bundled skills. */
+export async function finishUpgrade(
+  from: string,
+  options: { interactive?: boolean } = {},
+): Promise<number> {
+  const previous = SEMVER.test(from) ? from : null;
+  if (!needsMcpRefresh(previous, VERSION)) {
+    checkForSkillUpdates();
+    writeMcpRefreshCache({ version: VERSION });
+    console.log(pc.green(`✓ Dosu ${VERSION} is ready. Your AI agents need no changes.`));
+    return 0;
+  }
+
+  if (options.interactive ?? isInteractiveTerminal()) {
+    console.log("\nThis update changes how agents connect to Dosu. Running setup...\n");
+    const { runSetup } = await import("../setup/flow");
+    await runSetup();
+    return 0;
+  }
+
+  checkForSkillUpdates();
+  const cfg = loadConfigNonBlocking();
+  if (!cfg || !canRefreshMcp(cfg)) {
+    console.error(SETUP_FALLBACK);
+    return 0;
+  }
+  console.log("\nRefreshing agent MCP configs with the new version...");
+  const result = refreshConfiguredProviders(cfg);
+  writeMcpRefreshCache({ version: VERSION });
+  for (const provider of result.updated) console.log(`  ✓ ${provider.name()}`);
+  for (const { provider, error } of result.failed) {
+    console.log(`  ✗ ${provider.name()}: ${error.message}`);
+  }
+  if (result.failed.length > 0) console.error(SETUP_FALLBACK);
+  return 0;
+}
+
+/** `dosu upgrade --auto on|off`: persist the auto-update opt-out and report the effective state. */
+function setAutoUpdate(value: string): number {
+  const normalized = value.trim().toLowerCase();
+  if (normalized !== "on" && normalized !== "off") {
+    console.error(`Invalid --auto value '${value}' (expected 'on' or 'off').`);
+    return 2;
+  }
+  if (!setAutoUpdateEnabled(normalized === "on")) {
+    console.error("Could not save the auto-update setting.");
+    return 1;
+  }
+  if (normalized === "off") {
+    console.log('Automatic updates are off. Run "dosu upgrade" to update by hand.');
+  } else if (autoUpdateDisabledReason() === "env") {
+    console.log(`Automatic updates are on, but ${AUTO_UPDATE_ENV} still disables them here.`);
+  } else {
+    console.log("Automatic updates are on.");
   }
   return 0;
 }
 
 export function upgradeCommand(): Command {
   return new Command("upgrade")
-    .description("Update Dosu to the latest version and refresh agent skills")
-    .action(async () => {
-      const status = await completeUpgrade();
+    .description(
+      "Update Dosu to the latest version, re-running setup when the update changes agent config",
+    )
+    .option("--auto <on|off>", "Turn automatic background updates on or off")
+    .addOption(new Option("--background").hideHelp())
+    .addOption(new Option("--finish <from>").hideHelp())
+    .action(async (opts: { auto?: string; background?: boolean; finish?: string }) => {
+      let status: number;
+      if (opts.auto !== undefined) {
+        status = setAutoUpdate(opts.auto);
+      } else if (opts.background) {
+        // Detached child of the update check: install only. The next command runs the new
+        // version, whose first-run checks refresh skills and MCP entries.
+        status = runBackgroundUpgrade(() => runUpgrade());
+      } else if (opts.finish !== undefined) {
+        status = await finishUpgrade(opts.finish);
+      } else {
+        status = await completeUpgrade();
+      }
       if (status !== 0) process.exitCode = status;
     });
 }
