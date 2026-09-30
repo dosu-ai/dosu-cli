@@ -27,6 +27,10 @@ export const MCP_FORMAT_CHANGES: readonly string[] = [
   // Claude Code entries gained `alwaysLoad: true`. This must be the first release that ships
   // it: a lower number skips upgrades from the releases in between, a higher one delays them.
   "0.62.0",
+  // Cloud entries moved from /v1/mcp to the v2 memory surface (/v2/mcp). Ships first on the
+  // beta channel as 0.63.0-beta.N, which compares as 0.63.0 here. If main cuts a stable
+  // 0.63.0 before this graduates, raise it to the first stable release that includes it.
+  "0.63.0",
 ];
 
 /** Whether moving from `previous` (the version that last wrote the entries; `null` when
