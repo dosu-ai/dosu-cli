@@ -118,6 +118,101 @@ describe("resolveRepo", () => {
   });
 });
 
+describe("resolveBranch", () => {
+  const noGit = {
+    reflogOfDir: vi.fn(() => null),
+    currentBranch: vi.fn(() => null),
+    captured: vi.fn(() => null),
+  };
+
+  it("reads Claude and Codex branches from their transcripts before anything else", () => {
+    const captured = vi.fn(() => ({ branch: "hook", at: "" }));
+    const resolver = createProjectDirResolver(tempDir, {
+      ...noGit,
+      captured,
+      readTranscript: (path) =>
+        path === "/c.jsonl"
+          ? JSON.stringify({ gitBranch: "feat/claude" })
+          : JSON.stringify({ type: "session_meta", payload: { git: { branch: "feat/codex" } } }),
+    });
+    expect(resolver.resolveBranch(session({ harness: "claude", path: "/c.jsonl" }))).toBe(
+      "feat/claude",
+    );
+    expect(resolver.resolveBranch(session({ harness: "codex", path: "/x.jsonl" }))).toBe(
+      "feat/codex",
+    );
+    expect(captured).not.toHaveBeenCalled();
+  });
+
+  it("uses a hook-captured branch and directory for Cursor", () => {
+    const captured = vi.fn((key: string) =>
+      key === "cursor/c1" ? { dir: "/work/app", branch: "feat/cursor", at: "" } : null,
+    );
+    const resolver = createProjectDirResolver(tempDir, { ...noGit, captured });
+    const s = session({ harness: "cursor", id: "c1", project: "gone-slug" });
+    expect(resolver.resolve(s)).toBe("/work/app");
+    expect(resolver.resolveBranch(s)).toBe("feat/cursor");
+  });
+
+  it("falls back to the reflog at the session's end, reading each directory's reflog once", () => {
+    const end = Date.parse("2026-08-25T11:00:00Z") / 1000;
+    const reflogOfDir = vi.fn(() =>
+      [
+        `HEAD@{${end + 60}}\tcheckout: moving from feat/r to main`,
+        `HEAD@{${end - 60}}\tcheckout: moving from main to feat/r`,
+      ].join("\n"),
+    );
+    const resolver = createProjectDirResolver(tempDir, {
+      ...noGit,
+      reflogOfDir,
+      readTranscript: () => JSON.stringify({ gitBranch: "HEAD" }),
+    });
+    const a = session({ harness: "opencode", project: "/work/r" });
+    const b = session({ harness: "claude", project: "-work-r", path: "/nope" });
+    expect(resolver.resolveBranch(a)).toBe("feat/r");
+    expect(resolver.resolveBranch({ ...a, id: "a2" })).toBe("feat/r");
+    expect(reflogOfDir).toHaveBeenCalledTimes(1);
+    // No cwd for b, so no reflog to consult.
+    expect(resolver.resolveBranch(b)).toBeNull();
+  });
+
+  it("asks for the current branch once per directory when the reflog has no checkout", () => {
+    const currentBranch = vi.fn(() => "trunk");
+    const resolver = createProjectDirResolver(tempDir, {
+      ...noGit,
+      currentBranch,
+      reflogOfDir: () => "HEAD@{1}\tcommit (initial): x",
+    });
+    const s = session({ harness: "opencode", project: "/work/t" });
+    expect(resolver.resolveBranch(s)).toBe("trunk");
+    expect(resolver.resolveBranch({ ...s, id: "t2" })).toBe("trunk");
+    expect(currentBranch).toHaveBeenCalledTimes(1);
+  });
+
+  it("is null without a transcript, capture, directory, or parseable end time", () => {
+    const resolver = createProjectDirResolver(tempDir, { ...noGit, readTranscript: () => null });
+    expect(resolver.resolveBranch(session({ harness: "claude" }))).toBeNull();
+    expect(
+      resolver.resolveBranch(session({ harness: "opencode", project: "/w", updated: "bogus" })),
+    ).toBeNull();
+    expect(resolver.resolveBranch(session({ harness: "opencode", project: "/w" }))).toBeNull();
+  });
+
+  it("reads real transcripts and capture files by default", () => {
+    const log = join(tempDir, "real.jsonl");
+    writeFileSync(log, `${JSON.stringify({ gitBranch: "feat/real" })}\n`);
+    const resolver = createProjectDirResolver(tempDir, { reflogOfDir: () => null });
+    expect(resolver.resolveBranch(session({ harness: "claude", path: log }))).toBe("feat/real");
+
+    mkdirSync(join(tempDir, "session-captures", "cursor"), { recursive: true });
+    writeFileSync(
+      join(tempDir, "session-captures", "cursor", "cur.json"),
+      JSON.stringify({ branch: "feat/hooked", at: "" }),
+    );
+    expect(resolver.resolveBranch(session({ harness: "cursor", id: "cur" }))).toBe("feat/hooked");
+  });
+});
+
 describe("createProjectDirResolver", () => {
   it("passes opencode directories through without any I/O", () => {
     const readHead = vi.fn();

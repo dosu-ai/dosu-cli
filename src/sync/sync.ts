@@ -56,6 +56,8 @@ export interface SyncOutcome {
   trivialSessions?: number;
   /** Sessions skipped because the user ran `/dosu-incognito` in them. */
   incognitoSessions?: number;
+  /** Sessions skipped because the branch they ran on could not be determined. */
+  unbranchedSessions?: number;
   learner?: LearnerRunResult;
   error?: string;
 }
@@ -72,6 +74,8 @@ export interface SyncDeps {
   isIncognito?: (session: AgentSession) => boolean;
   /** Session → working directory and repo, for the study scope; defaults to the cached resolver. */
   locator?: SessionLocator;
+  /** Session → the git branch it ran on; defaults to the cached resolver's. */
+  resolveBranch?: (session: AgentSession) => string | null;
   /** Per-session learning-token estimate; defaults to estimateSessionTokens. */
   sessionTokens?: (session: AgentSession) => number;
   lock?: SyncLock;
@@ -181,6 +185,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
 
   let ready: AgentSession[];
   let open: AgentSession[];
+  let resolveBranch = deps.resolveBranch;
   try {
     const listSessions =
       deps.listSessions ??
@@ -194,9 +199,10 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     const scanned = await listSessions();
     let flush: (() => void) | undefined;
     let locator = deps.locator;
-    if (!locator) {
+    if (!locator || !resolveBranch) {
       const resolver = createProjectDirResolver();
-      locator = resolver;
+      locator ??= resolver;
+      resolveBranch ??= resolver.resolveBranch;
       flush = resolver.flush;
     }
     const repoFilter = studyRepoFilter(state, () => scanAgentSessions({}), locator);
@@ -266,16 +272,19 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     }
 
     // Walk ready oldest-first so the watermark can advance without skipping newer sessions;
-    // incognito and trivial sessions are filtered locally and never cost a gateway run. Both
-    // count as examined so the watermark passes them and they are never re-read.
+    // incognito, trivial, and unbranched sessions are filtered locally and never cost a gateway
+    // run. All count as examined so the watermark passes them and they are never re-read: an
+    // unbranched session's notes could never be anchored to work that landed.
     // Sessions a failed run already noted are skipped the same way, unless resumed since.
     const worthStudying = deps.worthStudying ?? isWorthStudying;
     const isIncognito = deps.isIncognito ?? isIncognitoSession;
+    const branchOf = resolveBranch ?? (() => null);
     const studiedSnapshot = lastStudiedSnapshot(state.mined_sessions);
     const examined: AgentSession[] = [];
     const batch: AgentSession[] = [];
     let trivial = 0;
     let incognito = 0;
+    let unbranched = 0;
     let alreadyStudied = 0;
     for (let i = ready.length - 1; i >= 0 && batch.length < MINE_BATCH_LIMIT; i--) {
       const candidate = ready[i];
@@ -287,18 +296,24 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       } else if (isIncognito(candidate)) {
         incognito += 1;
         logger.debug("sync", `skipping incognito session ${candidate.harness}/${candidate.id}`);
-      } else if (worthStudying(candidate)) {
-        batch.push(candidate);
-      } else {
+      } else if (!worthStudying(candidate)) {
         trivial += 1;
+      } else {
+        const branch = branchOf(candidate);
+        if (branch) {
+          batch.push({ ...candidate, branch });
+        } else {
+          unbranched += 1;
+          logger.debug("sync", `skipping session ${key}: its git branch is unknown`);
+        }
       }
     }
     const skippedNote = `${trivial} trivial, ${incognito} incognito${
-      alreadyStudied > 0 ? `, ${alreadyStudied} already studied` : ""
-    } skipped`;
+      unbranched > 0 ? `, ${unbranched} without a branch` : ""
+    }${alreadyStudied > 0 ? `, ${alreadyStudied} already studied` : ""} skipped`;
 
     if (batch.length === 0) {
-      // Everything examined was trivial or incognito: commit the watermark past it
+      // Everything examined was skipped locally: commit the watermark past it
       // without spending a single gateway token.
       saveState({
         ...state,
@@ -316,6 +331,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
         studiedSessions: 0,
         trivialSessions: trivial,
         incognitoSessions: incognito,
+        unbranchedSessions: unbranched,
       };
     }
 
@@ -391,6 +407,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
           studiedSessions: batch.length,
           trivialSessions: trivial,
           incognitoSessions: incognito,
+          unbranchedSessions: unbranched,
           learner,
         };
       }

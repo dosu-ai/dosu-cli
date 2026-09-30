@@ -37,6 +37,11 @@ vi.mock("../sync/detach", async (importOriginal) => ({
   spawnDetachedSelf: (...args: unknown[]) => mockSpawnDetached(...args),
 }));
 
+const mockCaptureHookSession = vi.fn();
+vi.mock("../sessions/capture", () => ({
+  captureHookSession: (...args: unknown[]) => mockCaptureHookSession(...args),
+}));
+
 const mockGetSyncStatus = vi.fn();
 vi.mock("../sync/status", async (importOriginal) => ({
   // Keep the real formatTokenCount: only the status source is faked.
@@ -877,6 +882,28 @@ describe("knowledge sync", () => {
 
     expect(mockSpawnDetached).toHaveBeenCalledWith(["knowledge", "sync", "--quiet"]);
     expect(mockRunSync).not.toHaveBeenCalled();
+  });
+
+  it("--detach captures the hook payload before re-spawning", async () => {
+    const order: string[] = [];
+    mockCaptureHookSession.mockImplementationOnce(async () => order.push("capture"));
+    mockSpawnDetached.mockImplementationOnce(() => order.push("spawn"));
+    await run("sync", "--quiet", "--detach");
+
+    expect(order).toEqual(["capture", "spawn"]);
+  });
+
+  it("reports sessions skipped for an unknown branch", async () => {
+    mockRunSync.mockResolvedValue({
+      status: "nothing-new",
+      readySessions: 2,
+      inFlightSessions: 0,
+      sessions: [],
+      unbranchedSessions: 2,
+    });
+    await run("sync");
+
+    expect(allOutput()).toContain("Skipped 2 sessions whose git branch could not be determined.");
   });
 
   it("--detach forwards --bootstrap to the re-spawned run", async () => {

@@ -3,7 +3,13 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { displayRepo, normalizeRepoRemote, originRepoOfDir } from "./repo";
+import {
+  currentBranchOfDir,
+  displayRepo,
+  headReflogOfDir,
+  normalizeRepoRemote,
+  originRepoOfDir,
+} from "./repo";
 
 describe("normalizeRepoRemote", () => {
   it.each([
@@ -73,5 +79,19 @@ describe("originRepoOfDir", () => {
     expect(originRepoOfDir(join(dir, "missing"))).toBeNull();
     git("init", "-q");
     expect(originRepoOfDir(dir)).toBeNull();
+  });
+
+  it("reads the current branch and the HEAD reflog; a detached HEAD has no branch", () => {
+    expect(currentBranchOfDir(dir)).toBeNull();
+    expect(headReflogOfDir(dir)).toBeNull();
+    git("init", "-q", "-b", "main");
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "a");
+    git("checkout", "-q", "-b", "feat/x");
+    expect(currentBranchOfDir(dir)).toBe("feat/x");
+    expect(headReflogOfDir(dir)).toMatch(
+      /^HEAD@\{\d+\}\tcheckout: moving from main to feat\/x\nHEAD@\{\d+\}\tcommit \(initial\): a\n/,
+    );
+    git("checkout", "-q", "--detach");
+    expect(currentBranchOfDir(dir)).toBeNull();
   });
 });

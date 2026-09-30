@@ -14,7 +14,14 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config/config";
-import { originRepoOfDir } from "./repo";
+import {
+  branchFromClaudeTranscript,
+  branchFromCodexTranscript,
+  branchFromReflog,
+  parseReflog,
+} from "./branch";
+import { type CapturedSession, readCapturedSession } from "./capture";
+import { currentBranchOfDir, headReflogOfDir, originRepoOfDir } from "./repo";
 import type { AgentSession } from "./scan";
 
 const CACHE_FILENAME = "project-dirs.json";
@@ -133,6 +140,18 @@ export interface ProjectDirDeps {
   readHead?: (path: string) => string | null;
   mtime?: (path: string) => string;
   repoOfDir?: (dir: string) => string | null;
+  readTranscript?: (path: string) => string | null;
+  captured?: (key: string) => CapturedSession | null;
+  reflogOfDir?: (dir: string) => string | null;
+  currentBranch?: (dir: string) => string | null;
+}
+
+function readWholeFile(path: string): string | null {
+  try {
+    return readFileSync(path, "utf-8");
+  } catch {
+    return null;
+  }
 }
 
 function fileMtime(path: string): string {
@@ -148,6 +167,9 @@ export interface ProjectDirResolver {
   resolve(session: AgentSession): string | null;
   /** The normalized origin repo of the session's working directory, or null outside a repo. */
   resolveRepo(session: AgentSession): string | null;
+  /** The branch the session ran on, or null when nothing recorded it. Not cached: a session's
+   * branch can move until it ends, and each session is resolved about once. */
+  resolveBranch(session: AgentSession): string | null;
   /** Cache-only lookup by `harness/id` key — for history rows with no session file at hand. */
   cached(key: string): string | null;
   /** Persist any newly resolved entries; call once after a batch. */
@@ -163,6 +185,7 @@ export function createProjectDirResolver(
   const exists = deps.exists ?? existsSync;
   const head = deps.readHead ?? readHead;
   const mtime = deps.mtime ?? fileMtime;
+  const captured = deps.captured ?? ((key: string) => readCapturedSession(key, configDir));
   const entries = loadCacheFile(configDir);
   let dirty = false;
 
@@ -182,8 +205,12 @@ export function createProjectDirResolver(
         const text = head(session.path);
         return text ? cwdFromJsonlHead(text) : null;
       }
-      case "cursor":
+      case "cursor": {
+        // The stop hook records the real workspace root; the slug is only a guess at it.
+        const hookDir = captured(`cursor/${session.id}`)?.dir;
+        if (hookDir) return hookDir;
         return session.project ? unmungeSlug(session.project, exists) : null;
+      }
       default:
         return null;
     }
@@ -192,6 +219,35 @@ export function createProjectDirResolver(
   const repoOfDir = deps.repoOfDir ?? originRepoOfDir;
   // Many sessions share a directory; one git call per directory per resolver.
   const repoByDir = new Map<string, string | null>();
+  const readTranscript = deps.readTranscript ?? readWholeFile;
+  const reflogOfDir = deps.reflogOfDir ?? headReflogOfDir;
+  const currentBranch = deps.currentBranch ?? currentBranchOfDir;
+  const reflogByDir = new Map<string, ReturnType<typeof parseReflog>>();
+  const currentByDir = new Map<string, string | null>();
+
+  const transcriptBranch = (session: AgentSession): string | null => {
+    if (session.harness !== "claude" && session.harness !== "codex") return null;
+    const text = readTranscript(session.path);
+    if (text === null) return null;
+    return session.harness === "claude"
+      ? branchFromClaudeTranscript(text)
+      : branchFromCodexTranscript(text);
+  };
+
+  const reflogBranch = (session: AgentSession): string | null => {
+    const dir = resolve(session);
+    const end = Date.parse(session.updated);
+    if (dir === null || Number.isNaN(end)) return null;
+    let entries = reflogByDir.get(dir);
+    if (!entries) {
+      entries = parseReflog(reflogOfDir(dir) ?? "");
+      reflogByDir.set(dir, entries);
+    }
+    return branchFromReflog(entries, Math.floor(end / 1000), () => {
+      if (!currentByDir.has(dir)) currentByDir.set(dir, currentBranch(dir));
+      return currentByDir.get(dir) ?? null;
+    });
+  };
 
   const resolve = (session: AgentSession): string | null => {
     const key = `${session.harness}/${session.id}`;
@@ -229,6 +285,13 @@ export function createProjectDirResolver(
       entry.mtime = mtime(session.path);
       dirty = true;
       return repo;
+    },
+    resolveBranch(session) {
+      return (
+        transcriptBranch(session) ??
+        captured(`${session.harness}/${session.id}`)?.branch ??
+        reflogBranch(session)
+      );
     },
     flush() {
       if (!dirty) return;

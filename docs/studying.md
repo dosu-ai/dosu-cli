@@ -14,11 +14,24 @@ to (`git@github.com:dosu-ai/dosu-cli.git` → `github.com/dosu-ai/dosu-cli`). Se
 repo, or in a repo without an `origin`, are skipped. The lookup is cached per session in
 `project-dirs.json`, so a checkout deleted later still resolves.
 
-Each note the learner writes carries its session's repo: the tool gate sets `repo` on
-`write_knowledge` (dropping anything the model supplied) and never sends `branch`. Repo alone keeps
-the note unanchored, so it is promoted immediately as before, with the repo stored as observed
-context. Sending a branch would anchor a Branch Note that waits for a PR merge, which a session on
-the default branch or an already-merged branch never gets.
+Each note the learner writes carries its session's repo and branch: the tool gate sets `repo` and
+`branch` on `write_knowledge` (dropping anything the model supplied). Together they anchor a Branch
+Note, which reaches topics only once the branch lands on the default branch. The backend promotes
+it on write when the branch already has (it is the default branch, or its PR already merged), and
+otherwise when the PR merges. A note in a repo not connected to the Library stays unanchored and is
+promoted immediately, with the repo and branch stored as observed context.
+
+Only sessions whose branch is known are studied. The branch comes from the first source that has
+one:
+
+1. The transcript: Claude Code stamps `gitBranch` on every line (the last one wins), and Codex
+   records it in `session_meta` when the session starts.
+2. The hook capture: Cursor's transcripts record neither branch nor working directory, so the
+   `stop` hook records both to `session-captures/cursor/<id>.json` before the detached sync starts.
+3. The HEAD reflog of the session's working directory, read at the session's last update.
+
+A session with no branch from any source is skipped and counted as examined, so the watermark moves
+past it and it is never re-read. The sync summary reports how many were skipped.
 
 `dosu` → settings → study scope picks which repos to study (`repo_filter` in the state file).
 Picking every repo clears the filter so new repos are studied automatically. Clones and worktrees of
