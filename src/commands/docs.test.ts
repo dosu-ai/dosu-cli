@@ -289,6 +289,48 @@ describe("docs create", () => {
     }
   });
 
+  it("reports a missing --body-file as a usage error before calling tRPC", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    const missing = join(tmpdir(), "dosu-docs-test-missing", "body.md");
+    await expect(run("update", "p1", "--body-file", missing)).rejects.toMatchObject({
+      name: "CliUsageError",
+      message: expect.stringContaining(`--body-file not found: ${missing}`),
+    });
+    expect(mockQuery).not.toHaveBeenCalled();
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
+
+  it("reports a directory --body-file as a usage error", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    const dir = mkdtempSync(join(tmpdir(), "dosu-docs-test-"));
+    try {
+      await expect(run("create", "--title", "T", "--body-file", dir)).rejects.toMatchObject({
+        name: "CliUsageError",
+        message: `--body-file is a directory, not a file: ${dir}`,
+      });
+      expect(mockMutate).not.toHaveBeenCalled();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports other --body-file read failures as a usage error", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    const dir = mkdtempSync(join(tmpdir(), "dosu-docs-test-"));
+    const blocker = join(dir, "not-a-dir");
+    try {
+      writeFileSync(blocker, "", "utf-8");
+      await expect(
+        run("update", "p1", "--body-file", join(blocker, "body.md")),
+      ).rejects.toMatchObject({
+        name: "CliUsageError",
+        message: expect.stringContaining("Could not read --body-file"),
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects --body with --body-file before calling tRPC", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     await expect(
