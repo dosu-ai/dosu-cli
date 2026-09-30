@@ -543,7 +543,39 @@ export type CliReviewDocument = {
 	syncPrUrl: string | null
 }
 
+export type CliReviewNotification = {
+	channel: CliSlackChannel | null
+	created_at: string
+	created_by: string | null
+	deployment_id: string | null
+	disabled_reason: string | null
+	id: string
+	notify_doc_reviews: boolean
+	notify_message_reviews: boolean
+	org_id: string
+	scope: 'org' | 'space' | 'deployment'
+	slack_channel_id: string
+	space_id: string | null
+	updated_at: string
+}
+
 export type CliReviewPage = unknown
+
+export type CliSlackChannel = {
+	archived: boolean
+	channel_id: string
+	channel_type: 'im' | 'mpim' | 'group' | 'channel'
+	description: string | null
+	enterprise_id: string | null
+	id: string
+	installation_id: string
+	is_private: boolean | null
+	name: string | null
+	org_id: string
+	team_id: string
+	team_name: string | null
+	topic: string | null
+}
 
 export type CliSlackChannelRow = {
 	archived?: boolean | null
@@ -561,7 +593,7 @@ export type CliSlackChannelRow = {
 	topic?: string | null
 }
 
-export declare const CLI_CONTRACT_HASH: 'a6e002dff58e'
+export declare const CLI_CONTRACT_HASH: 'dd33222d64a5'
 
 export type AgentsAddAdminsInput = {
 	deployment_id: string
@@ -1627,6 +1659,34 @@ export type ReviewListPendingOutput = {
 	truncated: boolean
 }
 
+export type ReviewNotificationGetInput = {
+	scope: 'space' | 'deployment'
+	targetId: string
+}
+
+export type ReviewNotificationGetOutput = {
+	canEdit: boolean
+	notification: CliReviewNotification | null
+	notificationsEnabled: boolean
+	orgId: string
+	slackInstalled: boolean
+}
+
+export type ReviewNotificationRemoveInput = {
+	scope: 'space' | 'deployment'
+	targetId: string
+}
+
+export type ReviewNotificationRemoveOutput = true
+
+export type ReviewNotificationUpsertInput = {
+	scope: 'space' | 'deployment'
+	slackChannelId: string
+	targetId: string
+}
+
+export type ReviewNotificationUpsertOutput = true
+
 export type SearchGetMentionsInput = {
 	dataSourceIds: Array<string>
 	entityTypes: Array<
@@ -1655,6 +1715,18 @@ export type SlackChannelGetAllOutput = any
 export type SlackChannelJoinInput = string
 
 export type SlackChannelJoinOutput = any
+
+export type SlackChannelListPagedInput = {
+	cursor?: string | null
+	limit?: number
+	orgId: string
+	search?: string
+}
+
+export type SlackChannelListPagedOutput = {
+	items: Array<CliSlackChannel>
+	nextCursor: string | null
+}
 
 export type ThreadArchiveInput = {
 	archived: boolean
@@ -2127,12 +2199,18 @@ export interface CliApiClient {
 		getThreadContext: QueryProcedure<ReviewGetThreadContextInput, ReviewGetThreadContextOutput>
 		listPending: QueryProcedure<ReviewListPendingInput, ReviewListPendingOutput>
 	}
+	reviewNotification: {
+		get: QueryProcedure<ReviewNotificationGetInput, ReviewNotificationGetOutput>
+		remove: MutationProcedure<ReviewNotificationRemoveInput, ReviewNotificationRemoveOutput>
+		upsert: MutationProcedure<ReviewNotificationUpsertInput, ReviewNotificationUpsertOutput>
+	}
 	search: {
 		getMentions: QueryProcedure<SearchGetMentionsInput, SearchGetMentionsOutput>
 	}
 	slackChannel: {
 		getAll: QueryProcedure<SlackChannelGetAllInput, SlackChannelGetAllOutput>
 		join: MutationProcedure<SlackChannelJoinInput, SlackChannelJoinOutput>
+		listPaged: QueryProcedure<SlackChannelListPagedInput, SlackChannelListPagedOutput>
 	}
 	thread: {
 		archive: MutationProcedure<ThreadArchiveInput, ThreadArchiveOutput>
