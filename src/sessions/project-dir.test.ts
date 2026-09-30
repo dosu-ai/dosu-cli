@@ -189,6 +189,14 @@ describe("resolveBranch", () => {
     expect(currentBranch).toHaveBeenCalledTimes(1);
   });
 
+  it("is null when the reflog has no checkout and HEAD is detached", () => {
+    const resolver = createProjectDirResolver(tempDir, {
+      ...noGit,
+      reflogOfDir: () => "HEAD@{1}\tcommit (initial): x",
+    });
+    expect(resolver.resolveBranch(session({ harness: "opencode", project: "/work/d" }))).toBeNull();
+  });
+
   it("is null without a transcript, capture, directory, or parseable end time", () => {
     const resolver = createProjectDirResolver(tempDir, { ...noGit, readTranscript: () => null });
     expect(resolver.resolveBranch(session({ harness: "claude" }))).toBeNull();
@@ -203,6 +211,9 @@ describe("resolveBranch", () => {
     writeFileSync(log, `${JSON.stringify({ gitBranch: "feat/real" })}\n`);
     const resolver = createProjectDirResolver(tempDir, { reflogOfDir: () => null });
     expect(resolver.resolveBranch(session({ harness: "claude", path: log }))).toBe("feat/real");
+    expect(
+      resolver.resolveBranch(session({ harness: "claude", path: join(tempDir, "gone.jsonl") })),
+    ).toBeNull();
 
     mkdirSync(join(tempDir, "session-captures", "cursor"), { recursive: true });
     writeFileSync(

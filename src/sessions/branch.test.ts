@@ -118,4 +118,15 @@ describe("branchFromReflog", () => {
     expect(branchFromReflog(sameSecond, 300, current)).toBe("c");
     expect(branchFromReflog(sameSecond, 200, current)).toBe("a");
   });
+
+  it("takes the earliest later checkout even when the reflog is out of time order", () => {
+    const skewed = parseReflog(
+      [
+        "HEAD@{250}\tcheckout: moving from feat/a to b",
+        "HEAD@{300}\tcheckout: moving from c to d",
+        "HEAD@{100}\tcommit: x",
+      ].join("\n"),
+    );
+    expect(branchFromReflog(skewed, 150, current)).toBe("feat/a");
+  });
 });

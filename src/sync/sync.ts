@@ -185,7 +185,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
 
   let ready: AgentSession[];
   let open: AgentSession[];
-  let resolveBranch = deps.resolveBranch;
+  let branchOf: (session: AgentSession) => string | null;
   try {
     const listSessions =
       deps.listSessions ??
@@ -199,12 +199,14 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     const scanned = await listSessions();
     let flush: (() => void) | undefined;
     let locator = deps.locator;
+    let resolveBranch = deps.resolveBranch;
     if (!locator || !resolveBranch) {
       const resolver = createProjectDirResolver();
       locator ??= resolver;
       resolveBranch ??= resolver.resolveBranch;
       flush = resolver.flush;
     }
+    branchOf = resolveBranch;
     const repoFilter = studyRepoFilter(state, () => scanAgentSessions({}), locator);
     if (state.project_filter) {
       // One-time upgrade of a folder scope; every later state save persists it.
@@ -278,7 +280,6 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     // Sessions a failed run already noted are skipped the same way, unless resumed since.
     const worthStudying = deps.worthStudying ?? isWorthStudying;
     const isIncognito = deps.isIncognito ?? isIncognitoSession;
-    const branchOf = resolveBranch ?? (() => null);
     const studiedSnapshot = lastStudiedSnapshot(state.mined_sessions);
     const examined: AgentSession[] = [];
     const batch: AgentSession[] = [];

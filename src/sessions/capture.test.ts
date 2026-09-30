@@ -109,6 +109,20 @@ describe("captureCursorStop", () => {
     expect(captureCursorStop({ ...payload, workspace_roots: [] }, deps)).toBe(false);
     expect(captureCursorStop({ ...payload, workspace_roots: ["relative"] }, deps)).toBe(false);
   });
+
+  it("asks real git by default and records only the directory outside a repo", () => {
+    const outsideRepo = mkdtempSync(join(tmpdir(), "dosu-capture-norepo-"));
+    try {
+      const stop = { ...payload, workspace_roots: [outsideRepo] };
+      expect(captureCursorStop(stop, { configDir, now: NOW })).toBe(true);
+      expect(readCapturedSession("cursor/uuid-1", configDir)).toEqual({
+        dir: outsideRepo,
+        at: NOW.toISOString(),
+      });
+    } finally {
+      rmSync(outsideRepo, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("readHookStdin", () => {
@@ -143,6 +157,15 @@ describe("readHookStdin", () => {
     await expect(readHookStdin(new PassThrough(), 10)).resolves.toBeNull();
   });
 
+  it("keeps the first result when the stream errors after ending", async () => {
+    const stream = new PassThrough();
+    const read = readHookStdin(stream, 1_000);
+    stream.emit("data", Buffer.from("[1]"));
+    stream.emit("end");
+    stream.emit("error", new Error("late"));
+    await expect(read).resolves.toEqual([1]);
+  });
+
   it("accepts string chunks", async () => {
     const stream = new PassThrough({ encoding: "utf-8" });
     const read = readHookStdin(stream, 1_000);
@@ -159,6 +182,19 @@ describe("captureHookSession", () => {
       },
     } as unknown as NodeJS.ReadableStream;
     await expect(captureHookSession(broken)).resolves.toBeUndefined();
+    const throwsString = {
+      on: () => {
+        throw "boom";
+      },
+    } as unknown as NodeJS.ReadableStream;
+    await expect(captureHookSession(throwsString)).resolves.toBeUndefined();
+  });
+
+  it("ignores an unreadable payload", async () => {
+    const stream = new PassThrough();
+    const done = captureHookSession(stream);
+    stream.end("not json");
+    await expect(done).resolves.toBeUndefined();
   });
 
   it("reads and ignores a non-Cursor payload", async () => {

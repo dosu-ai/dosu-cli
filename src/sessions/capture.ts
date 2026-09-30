@@ -79,7 +79,7 @@ export function recordCapturedSession(
     renameSync(tmp, path);
     return true;
   } catch (err) {
-    logger.debug("sync", `could not record ${key}: ${err instanceof Error ? err.message : err}`);
+    logger.debug("sync", `could not record ${key}: ${(err as Error).message}`);
     return false;
   }
 }
