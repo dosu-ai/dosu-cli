@@ -1,3 +1,10 @@
+# [0.63.0](https://github.com/dosu-ai/dosu-cli/compare/v0.62.1...v0.63.0) (2026-09-30)
+
+
+### Features
+
+* **knowledge:** scope studying by git repo and tag learned notes with their repo ([#251](https://github.com/dosu-ai/dosu-cli/issues/251)) ([7fa7c20](https://github.com/dosu-ai/dosu-cli/commit/7fa7c20f3685906ffa8196bcfcd2503e4d2d129c))
+
 ## [0.62.1](https://github.com/dosu-ai/dosu-cli/compare/v0.62.0...v0.62.1) (2026-09-29)
 
 
