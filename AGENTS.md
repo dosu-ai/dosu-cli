@@ -121,12 +121,15 @@ Scopes are optional: `fix(config): handle empty file without crash`
 
 ## Release Channels
 
-semantic-release publishes on every push to a release branch. Two channels are configured (`release.config.js`):
+semantic-release publishes on every push to a release branch. Three channels are configured (`release.config.js`):
 
 | Branch | npm dist-tag | Version shape | Install with |
 |---|---|---|---|
 | `main` | `latest` | `0.11.0` | `npx @dosu/cli setup` |
+| `beta` | `beta` | `0.11.0-beta.1` | `npx @dosu/cli@beta setup` |
 | `alpha` | `alpha` | `0.11.0-alpha.1` | `npx @dosu/cli@alpha setup` |
+
+An install stays on the channel it came from: update checks, auto-update and `dosu upgrade` read and install the running version's own dist-tag (`releaseTag()` in `src/version/version.ts`), so a beta install moves to the next beta rather than to `latest`. Leaving a prerelease channel means reinstalling from `latest`.
 
 The `alpha` channel is for **internal pre-release / dogfooding**. Workflow:
 
