@@ -233,7 +233,7 @@ async function runMainMenu(): Promise<void> {
     const studying = isStudying();
     return [
       {
-        label: studying ? `activity \uD83D\uDCDA ${brand("studying sessions...")}` : "activity",
+        label: studying ? `activity \uD83D\uDCDA ${brand("shipping sessions...")}` : "activity",
         value: "sync",
       },
       { label: "knowledge report", hint: "(opens in browser)", value: "report" },
@@ -336,7 +336,7 @@ async function runSettings(cfg: Config): Promise<void> {
     const action = await menuSelect("settings", [
       { label: "switch organization", hint: target?.org_name, value: "switch-org" },
       { label: "switch library", hint: library, value: "switch-library" },
-      { label: "study scope", hint: scope, value: "projects" },
+      { label: "sync scope", hint: scope, value: "projects" },
       { label: "run setup", hint: "rerun the setup wizard", value: "setup" },
       { label: "log out", hint: "clear stored credentials", value: "logout" },
       { label: "back", value: "back" },
@@ -390,8 +390,8 @@ function discoverProjectDirs(): string[] {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([dir]) => dir);
 }
 
-/** Scope studying to selected folders (subdirectories included); picking everything clears the
- * filter so new folders are studied too. */
+/** Scope shipping to selected folders (subdirectories included); picking everything clears the
+ * filter so new folders are shipped too. */
 async function runStudyingProjectsSetting(): Promise<void> {
   const dirs = discoverProjectDirs();
   if (dirs.length === 0) {
@@ -400,7 +400,7 @@ async function runStudyingProjectsSetting(): Promise<void> {
   }
   const current = loadSyncState().project_filter;
   const selected = await p.multiselect({
-    message: "Study sessions from which folders?",
+    message: "Ship sessions to Dosu memory from which folders?",
     options: dirs.map((dir) => ({
       label: dir === UNKNOWN_PROJECT ? "(unknown folder)" : displayDir(dir),
       value: dir,
@@ -419,7 +419,7 @@ async function runStudyingProjectsSetting(): Promise<void> {
   const all = selected.length === dirs.length;
   saveSyncState(all ? state : { ...state, project_filter: [...selected] });
   const scope = all ? "all folders" : (selected as string[]).map(displayDir).join(", ");
-  p.log.success(`Study scope ${dim(`\u00B7 ${scope}`)}`);
+  p.log.success(`Sync scope ${dim(`\u00B7 ${scope}`)}`);
 }
 
 async function handleAuthenticate(cfg: ReturnType<typeof loadConfig>): Promise<void> {

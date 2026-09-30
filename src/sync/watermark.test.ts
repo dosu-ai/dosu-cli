@@ -8,12 +8,15 @@ import {
   DEFAULT_QUIET_PERIOD_MS,
   filterSessionsByProject,
   gateSessions,
+  isShippingEnabled,
   isUnderDir,
   loadSyncState,
   resetSyncState,
   type SyncState,
   saveSyncState,
+  setShipTranscripts,
   setSyncPaused,
+  skipBacklog,
   syncStatePath,
   UNKNOWN_PROJECT,
 } from "./watermark";
@@ -41,64 +44,57 @@ function session(overrides: Partial<AgentSession> = {}): AgentSession {
   };
 }
 
+function writeRaw(raw: unknown): void {
+  writeFileSync(syncStatePath(configDir), JSON.stringify(raw));
+}
+
 describe("loadSyncState / saveSyncState", () => {
   it("returns an empty state when no file exists", () => {
     const state = loadSyncState(configDir);
+    expect(state.schema_version).toBe(2);
     expect(state.watermark).toBeNull();
     expect(state.consecutive_failures).toBe(0);
   });
 
   it("round-trips state through disk", () => {
     const state: SyncState = {
-      schema_version: 1,
+      schema_version: 2,
       watermark: "2026-08-25T11:00:00Z",
       last_attempt_at: "2026-08-25T11:05:00Z",
       consecutive_failures: 2,
-      mined_sessions: [{ at: "2026-08-25T11:04:00Z", session: "cursor/abc", project: "dosu" }],
-      total_mined: 12,
-      total_notes: 5,
-      total_learning_tokens: 42_000,
-      last_refusal: {
-        at: "2026-08-25T11:05:00Z",
-        outcome: "credit_limit",
-        message: "Your org has used its Dosu credits for this billing period.",
-      },
-      run: { pid: 4321, started_at: "2026-08-25T11:03:00Z", baseline_mined: 7 },
+      shipped_sessions: [
+        {
+          at: "2026-08-25T11:04:00Z",
+          session: "claude/abc",
+          task_id: "task-1",
+          session_url: "https://app/memories/sessions/abc",
+          project: "dosu",
+        },
+      ],
+      total_shipped: 12,
+      run: { pid: 4321, started_at: "2026-08-25T11:03:00Z", baseline_shipped: 7 },
+      project_filter: ["/Users/me/proj"],
+      paused: true,
+      ship_transcripts: false,
     };
     saveSyncState(state, configDir);
     expect(loadSyncState(configDir)).toEqual(state);
   });
 
-  it("drops a malformed last_refusal", () => {
-    writeFileSync(
-      syncStatePath(configDir),
-      JSON.stringify({
-        schema_version: 1,
-        watermark: null,
-        consecutive_failures: 0,
-        last_refusal: { outcome: "credit_limit" },
-      }),
-    );
-    expect(loadSyncState(configDir).last_refusal).toBeUndefined();
-  });
-
   it("drops a malformed run record", () => {
-    writeFileSync(
-      syncStatePath(configDir),
-      JSON.stringify({
-        schema_version: 1,
-        watermark: null,
-        consecutive_failures: 0,
-        run: { pid: "not-a-pid", started_at: "2026-08-25T11:03:00Z", baseline_mined: -1 },
-      }),
-    );
+    writeRaw({
+      schema_version: 2,
+      watermark: null,
+      consecutive_failures: 0,
+      run: { pid: "not-a-pid", started_at: "2026-08-25T11:03:00Z", baseline_shipped: -1 },
+    });
     expect(loadSyncState(configDir).run).toBeUndefined();
   });
 
   it("writes owner-only files with no temp residue", () => {
-    saveSyncState({ schema_version: 1, watermark: null, consecutive_failures: 0 }, configDir);
+    saveSyncState({ schema_version: 2, watermark: null, consecutive_failures: 0 }, configDir);
     const content = readFileSync(syncStatePath(configDir), "utf-8");
-    expect(JSON.parse(content).schema_version).toBe(1);
+    expect(JSON.parse(content).schema_version).toBe(2);
   });
 
   it("treats a corrupt file as empty state", () => {
@@ -107,57 +103,82 @@ describe("loadSyncState / saveSyncState", () => {
   });
 
   it("treats an unknown schema_version as empty state", () => {
-    writeFileSync(
-      syncStatePath(configDir),
-      JSON.stringify({ schema_version: 99, watermark: "2026-01-01T00:00:00Z" }),
-    );
+    writeRaw({ schema_version: 99, watermark: "2026-01-01T00:00:00Z" });
     expect(loadSyncState(configDir).watermark).toBeNull();
   });
 
-  it("normalizes malformed fields", () => {
-    writeFileSync(
-      syncStatePath(configDir),
-      JSON.stringify({ schema_version: 1, watermark: 42, consecutive_failures: -3 }),
-    );
+  it("normalizes malformed fields and drops malformed shipped-session records", () => {
+    writeRaw({
+      schema_version: 2,
+      watermark: 42,
+      consecutive_failures: -3,
+      shipped_sessions: [
+        { at: "2026-08-25T11:04:00Z", session: "claude/abc", task_id: "task-1", project: 42 },
+        { at: "2026-08-25T11:04:00Z", session: "claude/no-task" },
+        "junk",
+        null,
+      ],
+      total_shipped: "many",
+    });
     const state = loadSyncState(configDir);
     expect(state.watermark).toBeNull();
     expect(state.consecutive_failures).toBe(0);
-    expect(state.mined_sessions).toEqual([]);
-    expect(state.total_mined).toBe(0);
-    // Analytics counters predating this schema addition default to zero.
-    expect(state.total_notes).toBe(0);
-    expect(state.total_learning_tokens).toBe(0);
-  });
-
-  it("drops malformed studied-session records and backfills the count", () => {
-    writeFileSync(
-      syncStatePath(configDir),
-      JSON.stringify({
-        schema_version: 1,
-        watermark: null,
-        consecutive_failures: 0,
-        mined_sessions: [
-          { at: "2026-08-25T11:04:00Z", session: "cursor/abc" },
-          { at: "2026-08-25T11:05:00Z", session: "cursor/def", project: 42 },
-          { at: "2026-08-25T11:06:00Z", session: "cursor/ghi", updated: "2026-08-25T10:59:00Z" },
-          { at: "2026-08-25T11:07:00Z", session: "cursor/jkl", updated: 7 },
-          { at: 42 },
-          "nope",
-          null,
-        ],
-        total_mined: "many",
-      }),
-    );
-    const state = loadSyncState(configDir);
-    // A non-string project or activity snapshot is dropped from the surviving record.
-    expect(state.mined_sessions).toEqual([
-      { at: "2026-08-25T11:04:00Z", session: "cursor/abc" },
-      { at: "2026-08-25T11:05:00Z", session: "cursor/def" },
-      { at: "2026-08-25T11:06:00Z", session: "cursor/ghi", updated: "2026-08-25T10:59:00Z" },
-      { at: "2026-08-25T11:07:00Z", session: "cursor/jkl" },
+    expect(state.shipped_sessions).toEqual([
+      { at: "2026-08-25T11:04:00Z", session: "claude/abc", task_id: "task-1" },
     ]);
     // A bad counter falls back to what the surviving history proves.
-    expect(state.total_mined).toBe(4);
+    expect(state.total_shipped).toBe(1);
+  });
+});
+
+describe("migration from the studying-era state (schema 1)", () => {
+  const v1 = {
+    schema_version: 1,
+    // The learner's progress: memory has never seen these sessions, so it must not carry over.
+    watermark: "2026-09-01T00:00:00Z",
+    consecutive_failures: 4,
+    last_attempt_at: "2026-09-01T00:05:00Z",
+    mined_sessions: [{ at: "2026-09-01T00:00:00Z", session: "cursor/abc" }],
+    total_mined: 40,
+    total_notes: 12,
+    last_refusal: { at: "2026-09-01T00:05:00Z", outcome: "credit_limit", message: "out" },
+    project_filter: ["/Users/me/proj"],
+    paused: true,
+  };
+
+  it("keeps shipping progress and user settings, dropping the learner's", () => {
+    writeRaw({
+      ...v1,
+      ship_transcripts: true,
+      ship: {
+        watermark: "2026-08-20T00:00:00Z",
+        last_attempt_at: "2026-08-20T00:01:00Z",
+        consecutive_failures: 1,
+        shipped_sessions: [{ at: "2026-08-20T00:00:00Z", session: "claude/x", task_id: "t" }],
+        total_shipped: 9,
+      },
+    });
+    expect(loadSyncState(configDir)).toEqual({
+      schema_version: 2,
+      watermark: "2026-08-20T00:00:00Z",
+      last_attempt_at: "2026-08-20T00:01:00Z",
+      consecutive_failures: 1,
+      shipped_sessions: [{ at: "2026-08-20T00:00:00Z", session: "claude/x", task_id: "t" }],
+      total_shipped: 9,
+      project_filter: ["/Users/me/proj"],
+      paused: true,
+    });
+  });
+
+  it("starts shipping from scratch when the install never shipped", () => {
+    writeRaw(v1);
+    const state = loadSyncState(configDir);
+    expect(state.watermark).toBeNull();
+    expect(state.consecutive_failures).toBe(0);
+    expect(state.total_shipped).toBe(0);
+    // Shipping was opt-in under schema 1; absent now means on.
+    expect(isShippingEnabled(state)).toBe(true);
+    expect(state.project_filter).toEqual(["/Users/me/proj"]);
   });
 });
 
@@ -165,7 +186,7 @@ describe("project filter", () => {
   it("round-trips through disk and drops non-string entries", () => {
     saveSyncState(
       {
-        schema_version: 1,
+        schema_version: 2,
         watermark: null,
         consecutive_failures: 0,
         project_filter: ["dosu-cli", UNKNOWN_PROJECT],
@@ -177,7 +198,7 @@ describe("project filter", () => {
     writeFileSync(
       syncStatePath(configDir),
       JSON.stringify({
-        schema_version: 1,
+        schema_version: 2,
         watermark: null,
         consecutive_failures: 0,
         project_filter: ["dosu", 42, null],
@@ -222,20 +243,20 @@ describe("project filter", () => {
 describe("backoffUntil", () => {
   it("returns null with no failures", () => {
     expect(
-      backoffUntil({ schema_version: 1, watermark: null, consecutive_failures: 0 }),
+      backoffUntil({ schema_version: 2, watermark: null, consecutive_failures: 0 }),
     ).toBeNull();
   });
 
   it("returns null when there is no attempt timestamp", () => {
     expect(
-      backoffUntil({ schema_version: 1, watermark: null, consecutive_failures: 3 }),
+      backoffUntil({ schema_version: 2, watermark: null, consecutive_failures: 3 }),
     ).toBeNull();
   });
 
   it("doubles the delay per failure starting at 15 minutes", () => {
     const base = Date.parse("2026-08-25T12:00:00Z");
     const state = (failures: number): SyncState => ({
-      schema_version: 1,
+      schema_version: 2,
       watermark: null,
       last_attempt_at: "2026-08-25T12:00:00Z",
       consecutive_failures: failures,
@@ -248,7 +269,7 @@ describe("backoffUntil", () => {
   it("caps the delay at 24 hours", () => {
     const base = Date.parse("2026-08-25T12:00:00Z");
     const until = backoffUntil({
-      schema_version: 1,
+      schema_version: 2,
       watermark: null,
       last_attempt_at: "2026-08-25T12:00:00Z",
       consecutive_failures: 20,
@@ -291,21 +312,19 @@ describe("gateSessions", () => {
 });
 
 describe("resetSyncState", () => {
-  it("forgets study progress but keeps the project filter and pause switch", () => {
+  it("forgets shipping progress but keeps the filter, pause switch and opt-out", () => {
     saveSyncState(
       {
-        schema_version: 1,
+        schema_version: 2,
         watermark: "2026-09-02T23:00:00.000Z",
         last_attempt_at: "2026-09-02T23:05:00.000Z",
         consecutive_failures: 3,
-        mined_sessions: [{ at: "2026-09-02T23:00:00.000Z", session: "cursor/abc" }],
-        total_mined: 40,
-        total_notes: 12,
-        total_learning_tokens: 9000,
-        last_refusal: { at: "2026-09-02T23:05:00.000Z", outcome: "quota", message: "over" },
-        run: { pid: 1, started_at: "2026-09-02T23:00:00.000Z", baseline_mined: 39 },
+        shipped_sessions: [{ at: "2026-09-02T23:00:00.000Z", session: "claude/abc", task_id: "t" }],
+        total_shipped: 40,
+        run: { pid: 1, started_at: "2026-09-02T23:00:00.000Z", baseline_shipped: 39 },
         project_filter: ["/Users/me/proj"],
         paused: true,
+        ship_transcripts: false,
       },
       configDir,
     );
@@ -316,24 +335,54 @@ describe("resetSyncState", () => {
     expect(state.watermark).toBeNull();
     expect(state.last_attempt_at).toBeUndefined();
     expect(state.consecutive_failures).toBe(0);
-    expect(state.mined_sessions).toEqual([]);
-    expect(state.total_mined).toBe(0);
-    expect(state.total_notes).toBe(0);
-    expect(state.total_learning_tokens).toBe(0);
-    expect(state.last_refusal).toBeUndefined();
+    expect(state.shipped_sessions).toEqual([]);
+    expect(state.total_shipped).toBe(0);
     expect(state.run).toBeUndefined();
     expect(backoffUntil(state)).toBeNull();
     expect(state.project_filter).toEqual(["/Users/me/proj"]);
     expect(state.paused).toBe(true);
+    expect(state.ship_transcripts).toBe(false);
   });
 
-  it("writes a clean file when nothing was ever studied", () => {
+  it("writes a clean file when nothing was ever shipped", () => {
     resetSyncState(configDir);
+    const raw = readFileSync(syncStatePath(configDir), "utf-8");
+    expect(loadSyncState(configDir).watermark).toBeNull();
+    expect(raw).not.toContain("paused");
+    expect(raw).not.toContain("ship_transcripts");
+  });
+});
+
+describe("skipBacklog", () => {
+  it("moves the watermark to now so only later sessions ship, keeping the rest", () => {
+    saveSyncState(
+      {
+        schema_version: 2,
+        watermark: "2026-08-01T00:00:00.000Z",
+        consecutive_failures: 0,
+        total_shipped: 3,
+        project_filter: ["/p"],
+      },
+      configDir,
+    );
+
+    skipBacklog(NOW, configDir);
+
     const state = loadSyncState(configDir);
-    expect(state.watermark).toBeNull();
-    expect(state.paused).toBeUndefined();
-    expect(state.project_filter).toBeUndefined();
-    expect(readFileSync(syncStatePath(configDir), "utf-8")).not.toContain("paused");
+    expect(state.watermark).toBe(NOW.toISOString());
+    expect(state.total_shipped).toBe(3);
+    expect(state.project_filter).toEqual(["/p"]);
+  });
+
+  it("never moves the watermark backwards", () => {
+    saveSyncState(
+      { schema_version: 2, watermark: "2026-09-01T00:00:00.000Z", consecutive_failures: 0 },
+      configDir,
+    );
+
+    skipBacklog(NOW, configDir);
+
+    expect(loadSyncState(configDir).watermark).toBe("2026-09-01T00:00:00.000Z");
   });
 });
 
@@ -351,26 +400,65 @@ describe("setSyncPaused", () => {
   });
 
   it("pausing preserves the rest of the state", () => {
-    const state: SyncState = {
-      schema_version: 1,
-      watermark: "2026-09-02T23:00:00.000Z",
-      consecutive_failures: 2,
-      total_mined: 7,
-    };
-    saveSyncState(state, configDir);
+    saveSyncState(
+      {
+        schema_version: 2,
+        watermark: "2026-09-02T23:00:00.000Z",
+        consecutive_failures: 2,
+        total_shipped: 7,
+      },
+      configDir,
+    );
     setSyncPaused(true, configDir);
     const loaded = loadSyncState(configDir);
-    expect(loaded.watermark).toBe(state.watermark);
+    expect(loaded.watermark).toBe("2026-09-02T23:00:00.000Z");
     expect(loaded.consecutive_failures).toBe(2);
-    expect(loaded.total_mined).toBe(7);
+    expect(loaded.total_shipped).toBe(7);
     expect(loaded.paused).toBe(true);
   });
 
   it("loadSyncState ignores non-boolean paused values", () => {
-    saveSyncState({ schema_version: 1, watermark: null, consecutive_failures: 0 }, configDir);
-    const raw = JSON.parse(readFileSync(syncStatePath(configDir), "utf-8"));
-    raw.paused = "yes";
-    writeFileSync(syncStatePath(configDir), JSON.stringify(raw));
+    writeRaw({ schema_version: 2, watermark: null, consecutive_failures: 0, paused: "yes" });
     expect(loadSyncState(configDir).paused).toBeUndefined();
+  });
+});
+
+describe("transcript shipping switch", () => {
+  it("is on by default", () => {
+    expect(isShippingEnabled(loadSyncState(configDir))).toBe(true);
+  });
+
+  it("disable persists an explicit opt-out", () => {
+    setShipTranscripts(false, configDir);
+    expect(loadSyncState(configDir).ship_transcripts).toBe(false);
+    expect(isShippingEnabled(loadSyncState(configDir))).toBe(false);
+  });
+
+  it("enable removes the key instead of storing true", () => {
+    setShipTranscripts(false, configDir);
+    setShipTranscripts(true, configDir);
+    expect(isShippingEnabled(loadSyncState(configDir))).toBe(true);
+    expect(readFileSync(syncStatePath(configDir), "utf-8")).not.toContain("ship_transcripts");
+  });
+
+  it("only a literal false opts out", () => {
+    writeRaw({
+      schema_version: 2,
+      watermark: null,
+      consecutive_failures: 0,
+      ship_transcripts: "no",
+    });
+    expect(isShippingEnabled(loadSyncState(configDir))).toBe(true);
+  });
+
+  it("toggling preserves the rest of the state", () => {
+    saveSyncState(
+      { schema_version: 2, watermark: "2026-09-02T23:00:00.000Z", consecutive_failures: 2 },
+      configDir,
+    );
+    setShipTranscripts(false, configDir);
+    const loaded = loadSyncState(configDir);
+    expect(loaded.watermark).toBe("2026-09-02T23:00:00.000Z");
+    expect(loaded.consecutive_failures).toBe(2);
   });
 });

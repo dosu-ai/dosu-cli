@@ -102,24 +102,15 @@ The `properties` allowlist is:
 | `exit_code` | Integer clamped to `0..255`. |
 | `error_code` | Optional validated, stable, low-cardinality code; never a message. |
 | `sync_trigger` | Optional, `knowledge sync` only: `hook`, `manual`, or `bootstrap`. |
-| `sync_status` | Optional, `knowledge sync` only: the pipeline status (`backlog`, `nothing-new`, `skipped-backoff`, `skipped-lock`, `skipped-gateway`, `skipped-paused`, `studied`, `mine-failed`, `error`) or a command-level outcome (`detached` for the hook parent that only re-spawns, `detach-failed`, `status-only` for `--status`). |
-| `sessions_studied` | Optional, `knowledge sync` only: sessions handed to the learner this invocation, bucketed to `0`, `1-4`, `5-9`, `10-19`, `20-49`, or `50+`. Summed across bootstrap rounds. |
-| `notes_written` | Optional, `knowledge sync` only: `write_knowledge` calls allowed through this invocation, same buckets. |
-| `learner_outcome` | Optional, `knowledge sync` only: `completed`, `settings_conflict`, `consent_off`, `credit_limit`, `quota_exceeded`, `gateway_rejected`, `claude_code_missing`, `max_turns`, `run_failed`, `no_result`, `timed_out`, `sdk_error`, or `error`. |
-| `gateway_reason` | Optional, `knowledge sync` only: fixed category of the LLM gateway's 400, derived locally from its text — `system_role_unsupported`, `adaptive_thinking_unsupported`, `effort_unsupported`, `unsupported_request` (the gateway's own `dosu_unsupported_request:` refusal), `max_tokens`, `context_length`, or `other`. The rejection text itself is never sent. |
-| `settings_conflict_keys` | Optional, `knowledge sync` only, with `settings_conflict`: which keys in the organization's managed Claude Code settings blocked the study run, sorted and comma-joined within 200 characters. Each entry is a public Claude Code setting or variable name from the fixed list in `src/telemetry/telemetry.ts` (for example `apiKeyHelper` or `env.ANTHROPIC_BASE_URL`); any other `env.ANTHROPIC_*`, `env.CLAUDE_CODE_*`, or `env.AWS_*` name collapses to `env.ANTHROPIC_other`, `env.CLAUDE_CODE_other`, or `env.AWS_other`, an unparsable file is `unreadable`, and anything else is `other`. Never setting values (such as a URL or key), the file path, or the file's contents. |
-| `claude_code_source` | Optional, `knowledge sync` only: where the studying agent's Claude Code came from — `sdk` (the Agent SDK's bundled binary), `system` (a system install), or `missing`. Never the executable path. |
-| `claude_code_version` | Optional, `knowledge sync` only: the spawned Claude Code's self-reported version, kept only when it is a plain release version (`1.2.3` with an optional short dotted pre-release). |
-| `learner_model` | Optional, `knowledge sync` only: the model the study run pinned, kept only when it is a `claude-` model id of lowercase letters, digits, `.`, and `-` (at most 63 characters). |
-| `backfill_offer` | Optional, `setup`/`tui` only: what happened to the post-install "study past sessions" prompt — `not-offered` (empty backlog), `accepted`, `declined`, `cancelled`, or `spawn-failed`. |
+| `sync_status` | Optional, `knowledge sync` only: the pipeline status (`backlog`, `nothing-new`, `shipped`, `ship-failed`, `disabled`, `skipped-backoff`, `skipped-lock`, `skipped-paused`, `error`) or a command-level outcome (`detached` for the hook parent that only re-spawns, `detach-failed`, `status-only` for `--status`). |
+| `sessions_shipped` | Optional, `knowledge sync` only: sessions shipped to Dosu memory this invocation, bucketed to `0`, `1-4`, `5-9`, `10-19`, `20-49`, or `50+`. Summed across bootstrap rounds. |
+| `backfill_offer` | Optional, `setup`/`tui` only: what happened to the post-install "ship the last 30 days" prompt — `not-offered` (empty backlog), `accepted`, `declined`, `cancelled`, or `spawn-failed`. |
 
 The optional per-command facets are recorded by the running command through
 `recordCommandFacets()` and attached to its single completion event. Every value is checked against
 a closed vocabulary in `src/telemetry/telemetry.ts` and counts are bucketed before transport, so a
-new status string cannot reach PostHog until it is added to the allowlist; the two open-ended facets
-(`claude_code_version`, `learner_model`) must match a strict shape instead. Facets never include
-session identifiers, project names, note titles, note content, executable paths, or learner or
-gateway message text.
+new status string cannot reach PostHog until it is added to the allowlist. Facets never include
+session identifiers, project names, note titles, or note content.
 
 Signed-in command events join the existing PostHog person identified by the web app with the same
 Dosu user UUID. When the current authenticated config has a selected organization UUID, the event
@@ -133,11 +124,7 @@ until the user rotates it.
 
 An error event is sent only when telemetry is enabled and an instrumented command throws or finishes
 with a non-validation, nonzero exit code. A nonzero completion becomes a message-free
-`CommandExitError`. One more case is reported without changing the command's outcome: a
-`knowledge sync` that exits 0 but recorded `sync_status: mine-failed` (background hook and
-setup-bootstrap runs are quiet and always exit 0) sends a message-free `LearnerRunFailed` event
-with no stack; its PostHog event still reports `result: success`. Clean refusals
-(`skipped-gateway`, including `claude_code_missing`) and backoff skips send nothing. The CLI builds a Sentry envelope directly; it does not initialize the Sentry SDK
+`CommandExitError`. The CLI builds a Sentry envelope directly; it does not initialize the Sentry SDK
 or its automatic integrations.
 
 The envelope header contains exactly `dsn`, `event_id`, and `sent_at`. The item header is exactly
@@ -152,28 +139,20 @@ The envelope header contains exactly `dsn`, `event_id`, and `sent_at`. The item 
 | `release` | `dosu-cli@<cli_version>`. |
 | `tags` | The closed tag set below. |
 | `user` | Optional validated `{id, email?}` for the current authenticated Dosu user. |
-| `fingerprint` | `dosu-cli`, canonical command, safe error type, stable error code or `unknown`, and newest allowlisted Dosu callsite or `unknown`, then the validated `learner_outcome` and `gateway_reason` facets when present, so distinct study-run failure modes group separately. |
-| `exception` | One value containing only safe type, a summary built from allowlisted values, and optional Dosu-owned frames. |
+| `fingerprint` | `dosu-cli`, canonical command, safe error type, stable error code or `unknown`, and newest allowlisted Dosu callsite or `unknown`. |
+| `exception` | One value containing only safe type/code and optional Dosu-owned frames. |
 | `debug_meta` | Optional npm-bundle source-map debug ID; omitted unless the event has a mapped `bin/dosu.js` frame. |
 
 The exact tag allowlist is `schema_version`, `command`, `cli_version`, `install_channel`, `os`,
 `arch`, `runtime`, `runtime_major`, `is_ci`, `is_tty`, `mode`, and `is_authenticated`, plus optional
-`error_code`, `http_status`, and `exit_code`, plus these command facets when the failing command
-recorded them and they pass the same validation as for PostHog: `sync_trigger`, `sync_status`,
-`learner_outcome`, `gateway_reason`, `settings_conflict_keys`, `claude_code_source`,
-`claude_code_version`, and `learner_model`. Values are bounded and validated. `error_code` and
+`error_code`, `http_status`, and `exit_code`. Values are bounded and validated. `error_code` and
 error types come from closed known-value allowlists, and `http_status` is an integer from 100
 through 599.
 
 The exception value contains only:
 
 - `type`: a known allowlisted error-class name, otherwise `Error`;
-- `value`: when the command recorded a validated `learner_outcome` (or, failing that, `sync_status`)
-  facet, `<command>: <outcome>` with ` (<gateway_reason>)` or, failing that,
-  ` (<settings_conflict_keys>)` appended when present — for example
-  `knowledge sync: gateway_rejected (system_role_unsupported)` or
-  `knowledge sync: settings_conflict (apiKeyHelper)`; otherwise the stable error code, or
-  the safe error type; and
+- `value`: the stable error code, otherwise the safe error type; and
 - optional `stacktrace.frames`: at most 20 frames with only `filename`, `lineno`, `colno`,
   `in_app: true`, and the fixed `app:///bin/dosu.js` `abs_path` for mapped npm-bundle frames.
 
@@ -207,7 +186,7 @@ Current callers also use only these workflow properties: `onboarding_run_id`,
 `has_deployment_option`, `mode_option`, `flow_kind`, `reason`, `provider_count`, `providers`,
 `completed_mcp`, `completed_skill`, `completed_agents_md`, `completed_hooks` (at least one
 session-end knowledge sync hook was enabled in the run), and `hook_count` (integer `0..50`).
-The post-install "study past sessions" offer is not a setup event; its outcome rides on the
+The post-install "ship the last 30 days" offer is not a setup event; its outcome rides on the
 `setup` command's `cli_command_completed` event as `backfill_offer` (see the command telemetry
 table above). Setup events use stable names in the
 `cli_onboarding_*` family. They do not include raw authentication errors. This path uses a dedicated
@@ -231,8 +210,7 @@ The payloads constructed by the CLI never include:
 - user or project file names and paths, working directory, home directory, repository name,
   remote, branch, diff, or directory listing;
 - arbitrary environment-variable names or values (the explicitly configured public PostHog token
-  and Sentry DSN are transport metadata, not event properties; `settings_conflict_keys` carries only
-  public Claude Code setting names from a fixed list, never their values);
+  and Sentry DSN are transport metadata, not event properties);
 - configuration contents other than the validated session user ID/email and setup identifiers
   listed above, including the selected organization UUID used for group association, cookies,
   vendor management keys, or command/API request and response bodies.

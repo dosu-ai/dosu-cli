@@ -3,6 +3,7 @@
  * log-to-dosu-knowledge/scripts/generate_report.py.
  */
 
+import type { ShippedSessionRecord } from "../sync/watermark";
 import { REPORT_CSS } from "./css";
 import type {
   DigestTool,
@@ -33,6 +34,8 @@ export interface BuildReportOptions {
   dryRun?: boolean;
   generatedAt?: Date;
   digests?: Record<string, ReportDigest>;
+  /** Sessions shipped to Dosu memory, oldest first (the ship watermark's history). */
+  shipped?: ShippedSessionRecord[];
 }
 
 function esc(value: unknown): string {
@@ -519,6 +522,41 @@ export function buildReportHtml(options: BuildReportOptions): string {
     '<p class="muted">No write_knowledge payloads yet. Run knowledge sync so Dosu studies your sessions and extracts learnings.</p>';
   const lede = notesLede ? `<p class="lede">${esc(notesLede)}</p>` : "";
 
+  // Newest first, so the freshest memory-session links sit on top.
+  const shipped = [...(options.shipped ?? [])].reverse();
+  const shippedRows = shipped
+    .map((record) => {
+      const link = record.session_url
+        ? `<a href="${esc(record.session_url)}">${esc(record.session_url)}</a>`
+        : '<span class="muted">processing</span>';
+      return `<tr>
+      <td>${esc(record.session)}</td>
+      <td>${esc(record.project ?? "—")}</td>
+      <td>${esc(record.at)}</td>
+      <td>${link}</td>
+    </tr>`;
+    })
+    .join("");
+  const shippedSection =
+    shipped.length === 0
+      ? ""
+      : `
+    <section>
+      <h2>Shipped to Dosu memory <span class="muted">(${shipped.length})</span></h2>
+      <p class="lede">Transcripts you opted in to ship ('dosu knowledge transcripts enable'), redacted locally before upload. Each link opens the session's memory page.</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Session</th><th>Project</th><th>Shipped</th><th>Memories</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${shippedRows}
+        </tbody>
+      </table>
+    </section>
+`;
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -552,6 +590,7 @@ ${REPORT_CSS}
       ${notesBody}
     </section>
 
+    ${shippedSection}
     <section>
       <h2>Heaviest sessions</h2>
       <p class="lede">Where learning cost was highest — prime targets for Dosu cache hits.</p>
@@ -572,7 +611,11 @@ ${REPORT_CSS}
       <p>${esc(footerBody)}</p>
       <p class="meta">
         Print tip: use <strong>Print / Save as PDF</strong> above (or ⌘P / Ctrl+P).
-        Session logs stay between you and your agent — only note text is written to Dosu.
+        ${
+          shipped.length > 0
+            ? "Shipped transcripts are redacted locally before upload; everything else stays between you and your agent."
+            : "Session logs stay between you and your agent — only note text is written to Dosu."
+        }
       </p>
       <div class="toolbar no-print">
         <button type="button" onclick="window.print()">Print / Save as PDF</button>

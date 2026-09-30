@@ -16,12 +16,19 @@ import {
 } from "../version/auto-update";
 import { canRefreshMcp, needsMcpRefresh, writeMcpRefreshCache } from "../version/mcp-refresh-check";
 import { checkForSkillUpdates } from "../version/skill-update-check";
-import { INSTALL_CHANNEL, isNpxInvocation, VERSION } from "../version/version";
+import { INSTALL_CHANNEL, isNpxInvocation, releaseTag, VERSION } from "../version/version";
 
 const PACKAGE_NAME = "@dosu/cli";
-const LATEST_PACKAGE = `${PACKAGE_NAME}@latest`;
+
+/** What to install: the running version's own channel, so a beta install upgrades along
+ * `beta` instead of dropping back to `latest`. */
+export function installSpec(version: string = VERSION): string {
+  return `${PACKAGE_NAME}@${releaseTag(version)}`;
+}
+
+const INSTALL_PACKAGE = installSpec();
 const BREW_MANUAL_COMMAND = "brew upgrade dosu-ai/dosu/dosu";
-const NPX_COMMAND = "npx -y @dosu/cli@latest";
+const NPX_COMMAND = `npx -y ${INSTALL_PACKAGE}`;
 const PROBE_TIMEOUT_MS = 5_000;
 const RELEASES_URL = "https://github.com/dosu-ai/dosu-cli/releases/latest";
 
@@ -35,17 +42,17 @@ const PACKAGE_MANAGERS: Record<
   npm: {
     label: "npm",
     locateArgs: ["root", "-g"],
-    installArgs: ["install", "-g", LATEST_PACKAGE],
+    installArgs: ["install", "-g", INSTALL_PACKAGE],
   },
   pnpm: {
     label: "pnpm",
     locateArgs: ["list", "-g", "--depth=0", "--parseable", PACKAGE_NAME],
-    installArgs: ["add", "-g", LATEST_PACKAGE],
+    installArgs: ["add", "-g", INSTALL_PACKAGE],
   },
   yarn: {
     label: "Yarn Classic",
     locateArgs: ["--silent", "global", "dir"],
-    installArgs: ["global", "add", LATEST_PACKAGE],
+    installArgs: ["global", "add", INSTALL_PACKAGE],
   },
 };
 

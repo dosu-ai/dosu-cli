@@ -706,3 +706,41 @@ describe("trace edge shapes", () => {
     expect(html).not.toContain("nested/");
   });
 });
+
+describe("buildReportHtml shipped sessions", () => {
+  const shipped = [
+    {
+      at: "2026-09-01T00:00:00.000Z",
+      session: "claude/abc",
+      task_id: "task-1",
+      session_url: "https://app/memories/sessions/abc?x=1&y=2",
+      project: "dosu-cli",
+    },
+    { at: "2026-09-02T00:00:00.000Z", session: "codex/def", task_id: "task-2" },
+  ];
+
+  it("renders shipped rows newest first with escaped memory links", () => {
+    const html = buildReportHtml({ inventory, shipped });
+
+    expect(html).toContain("Shipped to Dosu memory");
+    expect(html).toContain("claude/abc");
+    expect(html).toContain("dosu-cli");
+    // The URL is escaped into the anchor.
+    expect(html).toContain('href="https://app/memories/sessions/abc?x=1&amp;y=2"');
+    // A record the backend has not linked yet still shows, marked as processing.
+    expect(html).toContain("codex/def");
+    expect(html).toContain("processing");
+    // Newest first: codex/def (Sep 2) renders before claude/abc (Sep 1).
+    expect(html.indexOf("codex/def")).toBeLessThan(html.indexOf("claude/abc"));
+    // The privacy footer reflects that transcripts were shipped, by choice.
+    expect(html).toContain("Shipped transcripts are redacted locally before upload");
+    expect(html).not.toContain("Session logs stay between you and your agent");
+  });
+
+  it("omits the section — and keeps the local-only privacy copy — when nothing shipped", () => {
+    const html = buildReportHtml({ inventory });
+
+    expect(html).not.toContain("Shipped to Dosu memory");
+    expect(html).toContain("Session logs stay between you and your agent");
+  });
+});

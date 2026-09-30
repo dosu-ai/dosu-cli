@@ -23,17 +23,6 @@ export interface SyncStatus {
   recentActivity: string[];
 }
 
-/** "950" / "~12k" / "~1.2M" — compact token counts for analytics lines. */
-export function formatTokenCount(tokens: number): string {
-  if (tokens < 1_000) return String(tokens);
-  if (tokens < 1_000_000) {
-    const k = tokens / 1_000;
-    return `~${k >= 100 ? Math.round(k) : k.toFixed(1).replace(/\.0$/, "")}k`;
-  }
-  const m = tokens / 1_000_000;
-  return `~${m >= 100 ? Math.round(m) : m.toFixed(1).replace(/\.0$/, "")}M`;
-}
-
 export interface SyncStatusDeps {
   configDir?: string;
   isProcessAlive?: (pid: number) => boolean;
@@ -76,7 +65,7 @@ const ACTIVITY_LINES = 10;
 function recentSyncActivity(log: string): string[] {
   return log
     .split("\n")
-    .filter((line) => line.includes("[sync]") || line.includes("[learner]"))
+    .filter((line) => line.includes("[sync]"))
     .slice(-ACTIVITY_LINES)
     .map((line) => line.replace(/ \[(DEBUG|INFO|WARN|ERROR)\]/, ""));
 }

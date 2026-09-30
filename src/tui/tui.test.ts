@@ -793,9 +793,9 @@ describe("runTUI", () => {
     await runTUI();
 
     const opts = mockMenuSelect.mock.calls[0]?.[1] ?? [];
-    expect(opts.find((o) => o.value === "sync")?.label).toContain("\uD83D\uDCDA studying sessions");
+    expect(opts.find((o) => o.value === "sync")?.label).toContain("\uD83D\uDCDA shipping sessions");
     // The welcome banner shows the sync row too.
-    expect(stdoutWrites.join("")).toContain("studying sessions...");
+    expect(stdoutWrites.join("")).toContain("shipping sessions...");
   });
 
   it("runs in the alternate screen on a TTY and restores the shell on exit", async () => {

@@ -1,5 +1,7 @@
-import { spawnSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { appendFileSync, mkdirSync, mkdtempSync, openSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
@@ -68,6 +70,11 @@ describe("CLI", () => {
   it("skips background notices for upgrade", () => {
     expect(shouldRunBackgroundChecks("upgrade")).toBe(false);
     expect(shouldRunBackgroundChecks("status")).toBe(true);
+  });
+
+  it("skips background notices for the prompt-submit hook", () => {
+    // Runs on every prompt while the user waits: no update check, no stderr notice.
+    expect(shouldRunBackgroundChecks("knowledge context")).toBe(false);
   });
 
   it("has login command", () => {
@@ -330,6 +337,73 @@ describe("CLI", () => {
         rmSync(configRoot, { recursive: true, force: true });
       }
     },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "reads the prompt-submit hook payload from a redirected file",
+    async () => {
+      // `dosu knowledge context < payload.json` is how the hook is tested by hand. Under Bun a
+      // file on stdin read as a stream after the CLI's startup awaits comes back empty, and
+      // the hook then silently injects nothing.
+      const root = mkdtempSync(join(tmpdir(), "dosu-cli-context-hook-"));
+      mkdirSync(join(root, "dosu-cli"), { recursive: true });
+      writeFileSync(
+        join(root, "dosu-cli", "config.json"),
+        JSON.stringify({
+          schema_version: 2,
+          active_account: {
+            user_id: "u",
+            session: { access_token: "t", refresh_token: "r", expires_at: 4102444800 },
+            target: { api_key: "sk_user_test", deployment_id: "d" },
+          },
+        }),
+      );
+      const payload = join(root, "payload.json");
+      writeFileSync(
+        payload,
+        JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          session_id: "s",
+          prompt: "reduce the cost of the staleness agent",
+          cwd: root,
+        }),
+      );
+      const server = createServer((_req, res) => {
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ digest: "## Task Memory (Dosu)" }));
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const { port } = server.address() as AddressInfo;
+      try {
+        const child = spawn("bun", ["run", "src/index.ts", "knowledge", "context"], {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            CI: "1",
+            DOSU_DEV: "false",
+            DOSU_BACKEND_URL_OVERRIDE: `http://127.0.0.1:${port}`,
+            NODE_ENV: "test",
+            XDG_CONFIG_HOME: root,
+          },
+          stdio: [openSync(payload, "r"), "pipe", "pipe"],
+        });
+        let stdout = "";
+        child.stdout?.on("data", (chunk) => {
+          stdout += chunk;
+        });
+        await new Promise((resolve) => child.on("close", resolve));
+        expect(JSON.parse(stdout)).toEqual({
+          hookSpecificOutput: {
+            hookEventName: "UserPromptSubmit",
+            additionalContext: "## Task Memory (Dosu)",
+          },
+        });
+      } finally {
+        server.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    15_000,
   );
 
   it("preserves command output when telemetry start throws", async () => {

@@ -25,7 +25,7 @@ import {
   STATUSLINE_LABELS,
 } from "./render";
 
-const baseState: SyncState = { schema_version: 1, watermark: null, consecutive_failures: 0 };
+const baseState: SyncState = { schema_version: 2, watermark: null, consecutive_failures: 0 };
 
 function deps(overrides: Partial<RenderDeps> = {}): RenderDeps {
   return {
@@ -80,7 +80,15 @@ describe("resolveStatuslineState", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it("is paused when studying is paused", () => {
+  it("is off once the user has switched shipping off, ahead of incognito", () => {
+    const d = deps({
+      loadState: () => ({ ...baseState, ship_transcripts: false }),
+      transcriptIsIncognito: () => true,
+    });
+    expect(resolveStatuslineState(payload, "claude", d)).toBe("off");
+  });
+
+  it("is paused when syncing is paused", () => {
     const d = deps({ loadState: () => ({ ...baseState, paused: true }) });
     expect(resolveStatuslineState(payload, "claude", d)).toBe("paused");
   });

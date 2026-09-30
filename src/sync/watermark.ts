@@ -1,5 +1,6 @@
-/** Knowledge-sync watermark: the studying commit point, advancing only after a successful run.
- * Kept out of config.json, which is credential-bearing and rewritten by auth flows. */
+/** Knowledge-sync state: the shipping watermark, which advances only past sessions the ship
+ * phase settled (shipped, or deliberately passed over). Kept out of config.json, which is
+ * credential-bearing and rewritten by auth flows. */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -7,7 +8,8 @@ import { getConfigDir } from "../config/config";
 import type { AgentSession } from "../sessions/scan";
 
 const STATE_FILENAME = "knowledge-sync.json";
-const STATE_SCHEMA_VERSION = 1;
+/** 2: sessions go to the Dosu memory pipeline; 1 was the local learner era (see migrateV1). */
+const STATE_SCHEMA_VERSION = 2;
 
 /** Sessions whose `updated` is newer than this are treated as still running. */
 export const DEFAULT_QUIET_PERIOD_MS = 5 * 60 * 1000;
@@ -15,146 +17,161 @@ export const DEFAULT_QUIET_PERIOD_MS = 5 * 60 * 1000;
 const BACKOFF_BASE_MS = 15 * 60 * 1000;
 const BACKOFF_MAX_MS = 24 * 60 * 60 * 1000;
 
-/** One studied session, as recorded by a completed study run. */
-export interface StudiedSessionRecord {
-  /** When the run recorded this session (ISO). */
+/** One shipped session, as recorded by a completed ship phase. */
+export interface ShippedSessionRecord {
+  /** When the phase shipped this session (ISO). */
   at: string;
   /** The session's `harness/id`. */
   session: string;
-  /** The session's `updated` as studied; later activity means it is due again. Absent on
-   * records written before this was stored. */
-  updated?: string;
+  /** The ingest task the backend accepted (202) for this session. */
+  task_id: string;
+  /** Shareable memory-session page, when the backend returned one. */
+  session_url?: string;
   /** The session's project (workspace basename), when the scanner knew it. */
   project?: string;
 }
 
-/** How many studied-session history records the state file keeps. */
-export const STUDIED_HISTORY_LIMIT = 500;
+/** How many shipped-session history records the state file keeps. */
+export const SHIPPED_HISTORY_LIMIT = 500;
 
-/** A clean gateway refusal from the last studying attempt, persisted so status surfaces can say
- * why studying is paused; never triggers backoff and is cleared by the next successful run. */
-interface SyncRefusal {
-  at: string;
-  outcome: string;
-  message: string;
-}
-
-/** The active run's baseline; status viewers subtract baseline_mined from total_mined for a
+/** The active run's baseline; status viewers subtract baseline_shipped from total_shipped for a
  * run-scoped progress bar. Only meaningful while the recorded pid holds the sync lock. */
 interface SyncRun {
   pid: number;
   started_at: string;
-  /** total_mined when this run started. */
-  baseline_mined: number;
+  /** total_shipped when this run started. */
+  baseline_shipped: number;
 }
 
 export interface SyncState {
   schema_version: number;
-  /** ISO timestamp of the newest session already studied; null = never studied. */
+  /** ISO timestamp of the newest session already shipped past; null = nothing yet. */
   watermark: string | null;
   last_attempt_at?: string;
   consecutive_failures: number;
-  /** Rolling studied-session history, oldest first, capped at STUDIED_HISTORY_LIMIT. */
-  mined_sessions?: StudiedSessionRecord[];
-  /** All-time studied-session count — survives the history cap above. */
-  total_mined?: number;
-  /** All-time knowledge notes written by completed study runs. */
-  total_notes?: number;
-  /** All-time tokens of investigation distilled (chars/4 estimate of every studied conversation);
-   * future reads of the notes reuse this instead of re-learning it. */
-  total_learning_tokens?: number;
-  /** Why the last studying attempt was refused by the gateway, if it was. */
-  last_refusal?: SyncRefusal;
+  /** Rolling shipped-session history, oldest first, capped at SHIPPED_HISTORY_LIMIT. */
+  shipped_sessions?: ShippedSessionRecord[];
+  /** All-time shipped-session count — survives the history cap above. */
+  total_shipped?: number;
   /** The active run's progress baseline; see SyncRun. */
   run?: SyncRun;
-  /** Absolute directories whose sessions get studied (subdirectories included); absent means
+  /** Absolute directories whose sessions get shipped (subdirectories included); absent means
    * everywhere. Undeterminable directories match UNKNOWN_PROJECT. */
   project_filter?: string[];
   /** User pressed stop: quiet (hook-triggered) syncs skip until resumed. Cleared by the
    * Activity screen's resume or any manual `dosu knowledge sync`. */
   paused?: boolean;
+  /** `false` = the user opted out of shipping transcripts (`dosu knowledge transcripts
+   * disable`). Shipping is on by default, so only the opt-out is ever stored. */
+  ship_transcripts?: false;
+}
+
+/** Whether finished sessions are shipped to Dosu memory: on unless the user opted out. */
+export function isShippingEnabled(state: SyncState): boolean {
+  return state.ship_transcripts !== false;
 }
 
 export function syncStatePath(configDir: string = getConfigDir()): string {
   return join(configDir, STATE_FILENAME);
 }
 
-export function loadSyncState(configDir: string = getConfigDir()): SyncState {
-  const empty: SyncState = {
-    schema_version: STATE_SCHEMA_VERSION,
-    watermark: null,
-    consecutive_failures: 0,
+function emptyState(): SyncState {
+  return { schema_version: STATE_SCHEMA_VERSION, watermark: null, consecutive_failures: 0 };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function nonNegative(value: unknown): number | undefined {
+  return typeof value === "number" && value >= 0 ? value : undefined;
+}
+
+function parseShipped(value: unknown): ShippedSessionRecord[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(
+      (record): record is ShippedSessionRecord =>
+        isRecord(record) &&
+        typeof record.at === "string" &&
+        typeof record.session === "string" &&
+        typeof record.task_id === "string",
+    )
+    .map((record) => ({
+      at: record.at,
+      session: record.session,
+      task_id: record.task_id,
+      ...(typeof record.session_url === "string" ? { session_url: record.session_url } : {}),
+      ...(typeof record.project === "string" ? { project: record.project } : {}),
+    }));
+}
+
+/** The shipping-progress fields, from wherever a schema keeps them. */
+function parseProgress(raw: Record<string, unknown>): Omit<SyncState, "schema_version"> {
+  const shipped = parseShipped(raw.shipped_sessions);
+  return {
+    watermark: typeof raw.watermark === "string" ? raw.watermark : null,
+    ...(typeof raw.last_attempt_at === "string" ? { last_attempt_at: raw.last_attempt_at } : {}),
+    consecutive_failures: nonNegative(raw.consecutive_failures) ?? 0,
+    shipped_sessions: shipped,
+    total_shipped: nonNegative(raw.total_shipped) ?? shipped.length,
   };
+}
+
+/** User choices shared by both schemas. */
+function parseSettings(raw: Record<string, unknown>): Partial<SyncState> {
+  return {
+    ...(Array.isArray(raw.project_filter)
+      ? {
+          project_filter: (raw.project_filter as unknown[]).filter(
+            (p): p is string => typeof p === "string",
+          ),
+        }
+      : {}),
+    ...(raw.paused === true ? { paused: true } : {}),
+  };
+}
+
+/** Schema 1 kept the local learner's progress at the top level and shipping (then opt-in) under
+ * `ship`. Only shipping progress carries over: memory has never seen what the learner studied,
+ * so starting from the learner's watermark would skip those sessions forever. */
+function migrateV1(raw: Record<string, unknown>): SyncState {
+  return {
+    schema_version: STATE_SCHEMA_VERSION,
+    ...parseProgress(isRecord(raw.ship) ? raw.ship : {}),
+    ...parseSettings(raw),
+  };
+}
+
+export function loadSyncState(configDir: string = getConfigDir()): SyncState {
   const path = syncStatePath(configDir);
-  if (!existsSync(path)) return empty;
+  if (!existsSync(path)) return emptyState();
   try {
-    const raw = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
-    if (raw.schema_version !== STATE_SCHEMA_VERSION) return empty;
-    const studiedSessions = Array.isArray(raw.mined_sessions)
-      ? (raw.mined_sessions as unknown[])
-          .filter(
-            (record): record is StudiedSessionRecord =>
-              typeof record === "object" &&
-              record !== null &&
-              typeof (record as StudiedSessionRecord).at === "string" &&
-              typeof (record as StudiedSessionRecord).session === "string",
-          )
-          .map((record) => ({
-            at: record.at,
-            session: record.session,
-            ...(typeof record.updated === "string" ? { updated: record.updated } : {}),
-            ...(typeof record.project === "string" ? { project: record.project } : {}),
-          }))
-      : [];
-    const rawRefusal = raw.last_refusal as Partial<SyncRefusal> | undefined;
-    const lastRefusal =
-      rawRefusal &&
-      typeof rawRefusal.at === "string" &&
-      typeof rawRefusal.outcome === "string" &&
-      typeof rawRefusal.message === "string"
-        ? { at: rawRefusal.at, outcome: rawRefusal.outcome, message: rawRefusal.message }
-        : undefined;
-    const rawRun = raw.run as Partial<SyncRun> | undefined;
+    const raw = JSON.parse(readFileSync(path, "utf-8")) as unknown;
+    if (!isRecord(raw)) return emptyState();
+    if (raw.schema_version === 1) return migrateV1(raw);
+    if (raw.schema_version !== STATE_SCHEMA_VERSION) return emptyState();
+    const rawRun = raw.run;
     const run =
-      rawRun &&
+      isRecord(rawRun) &&
       typeof rawRun.pid === "number" &&
       typeof rawRun.started_at === "string" &&
-      typeof rawRun.baseline_mined === "number" &&
-      rawRun.baseline_mined >= 0
-        ? { pid: rawRun.pid, started_at: rawRun.started_at, baseline_mined: rawRun.baseline_mined }
+      nonNegative(rawRun.baseline_shipped) !== undefined
+        ? {
+            pid: rawRun.pid,
+            started_at: rawRun.started_at,
+            baseline_shipped: rawRun.baseline_shipped as number,
+          }
         : undefined;
     return {
       schema_version: STATE_SCHEMA_VERSION,
-      watermark: typeof raw.watermark === "string" ? raw.watermark : null,
-      last_attempt_at: typeof raw.last_attempt_at === "string" ? raw.last_attempt_at : undefined,
-      consecutive_failures:
-        typeof raw.consecutive_failures === "number" && raw.consecutive_failures >= 0
-          ? raw.consecutive_failures
-          : 0,
-      mined_sessions: studiedSessions,
-      total_mined:
-        typeof raw.total_mined === "number" && raw.total_mined >= 0
-          ? raw.total_mined
-          : studiedSessions.length,
-      total_notes:
-        typeof raw.total_notes === "number" && raw.total_notes >= 0 ? raw.total_notes : 0,
-      total_learning_tokens:
-        typeof raw.total_learning_tokens === "number" && raw.total_learning_tokens >= 0
-          ? raw.total_learning_tokens
-          : 0,
-      ...(lastRefusal ? { last_refusal: lastRefusal } : {}),
+      ...parseProgress(raw),
       ...(run ? { run } : {}),
-      ...(raw.paused === true ? { paused: true } : {}),
-      ...(Array.isArray(raw.project_filter)
-        ? {
-            project_filter: (raw.project_filter as unknown[]).filter(
-              (p): p is string => typeof p === "string",
-            ),
-          }
-        : {}),
+      ...parseSettings(raw),
+      ...(raw.ship_transcripts === false ? { ship_transcripts: false as const } : {}),
     };
   } catch {
-    return empty;
+    return emptyState();
   }
 }
 
@@ -166,19 +183,37 @@ export function setSyncPaused(paused: boolean, configDir: string = getConfigDir(
   saveSyncState(state, configDir);
 }
 
-/** Forget everything studied so the next run starts from scratch: watermark, history, lifetime
- * counters, failure backoff, and the last refusal. User settings survive — the project filter
- * and the pause switch are choices, not progress. Notes already saved in Dosu are untouched. */
+/** Forget everything shipped so the next run starts from scratch: watermark, history, lifetime
+ * counter, and failure backoff (the backend dedupes re-shipped traces on content hash). User
+ * settings survive — the project filter, the pause switch, and the shipping opt-out are
+ * choices, not progress. Memory already built in Dosu is untouched. */
 export function resetSyncState(configDir: string = getConfigDir()): void {
   const previous = loadSyncState(configDir);
-  const fresh: SyncState = {
-    schema_version: STATE_SCHEMA_VERSION,
-    watermark: null,
-    consecutive_failures: 0,
-    ...(previous.project_filter ? { project_filter: previous.project_filter } : {}),
-    ...(previous.paused ? { paused: true } : {}),
-  };
-  saveSyncState(fresh, configDir);
+  saveSyncState(
+    {
+      ...emptyState(),
+      ...(previous.project_filter ? { project_filter: previous.project_filter } : {}),
+      ...(previous.paused ? { paused: true } : {}),
+      ...(previous.ship_transcripts === false ? { ship_transcripts: false as const } : {}),
+    },
+    configDir,
+  );
+}
+
+/** Pass over everything that finished before `now`, so only later sessions ship. Setup calls
+ * this when the user declines the backfill; the watermark never moves backwards. */
+export function skipBacklog(now: Date = new Date(), configDir: string = getConfigDir()): void {
+  const state = loadSyncState(configDir);
+  if (state.watermark && Date.parse(state.watermark) >= now.getTime()) return;
+  saveSyncState({ ...state, watermark: now.toISOString() }, configDir);
+}
+
+/** Persist the shipping switch: load-modify-save so counters are not clobbered. */
+export function setShipTranscripts(enabled: boolean, configDir: string = getConfigDir()): void {
+  const state = loadSyncState(configDir);
+  if (enabled) delete state.ship_transcripts;
+  else state.ship_transcripts = false;
+  saveSyncState(state, configDir);
 }
 
 export function saveSyncState(state: SyncState, configDir: string = getConfigDir()): void {
@@ -210,7 +245,7 @@ export function isUnderDir(dir: string, base: string): boolean {
   return dir === root || dir.startsWith(`${root}/`);
 }
 
-/** Apply the studying directory filter (empty passes everything): a session matches at or under
+/** Apply the shipping directory filter (empty passes everything): a session matches at or under
  * any picked directory; unresolvable sessions match only UNKNOWN_PROJECT. */
 export function filterSessionsByProject(
   sessions: readonly AgentSession[],
@@ -228,7 +263,7 @@ export function filterSessionsByProject(
 }
 
 export interface GateResult {
-  /** Completed sessions newer than the watermark — the study backlog. */
+  /** Completed sessions newer than the watermark — the ship backlog. */
   ready: AgentSession[];
   /** Sessions newer than the watermark but still inside the quiet period; queued once quiet. */
   open: AgentSession[];

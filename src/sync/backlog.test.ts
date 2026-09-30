@@ -41,13 +41,22 @@ beforeEach(() => {
   mockFlush.mockReset();
   mockLoadSyncState.mockReset();
   mockLoadSyncState.mockReturnValue({
-    schema_version: 1,
+    schema_version: 2,
     watermark: null,
     consecutive_failures: 0,
   });
 });
 
 describe("listSessionBacklog", () => {
+  it("scans only the sync's 30-day window, so the queue never lists what will not ship", () => {
+    mockScan.mockReturnValue([]);
+    const now = new Date("2026-09-25T12:00:00.000Z");
+
+    listSessionBacklog(now);
+
+    expect(mockScan).toHaveBeenCalledWith({ since: new Date("2026-08-26T12:00:00.000Z") });
+  });
+
   it("buckets quiet sessions as queued and fresh ones as open", () => {
     const quiet = session({ id: "quiet-1" });
     const fresh = session({ id: "fresh-1", updated: new Date().toISOString() });
@@ -60,7 +69,7 @@ describe("listSessionBacklog", () => {
 
   it("applies the persisted project filter through the dir resolver", () => {
     mockLoadSyncState.mockReturnValue({
-      schema_version: 1,
+      schema_version: 2,
       watermark: null,
       consecutive_failures: 0,
       project_filter: ["/work/dosu-cli"],

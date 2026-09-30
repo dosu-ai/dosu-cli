@@ -142,6 +142,17 @@ describe("needsMcpRefresh", () => {
     expect(MCP_FORMAT_CHANGES).toContain("0.62.0");
   });
 
+  it("moves installs onto the v2 memory MCP entry and back across 0.63.0", () => {
+    expect(MCP_FORMAT_CHANGES).toContain("0.63.0");
+    // Onto the beta that first writes /v2/mcp, and from any later beta.
+    expect(needsMcpRefresh("0.62.1", "0.63.0-beta.1")).toBe(true);
+    expect(needsMcpRefresh(null, "0.63.0-beta.1")).toBe(true);
+    // Leaving the beta for an older stable release rewrites the entry back to /v1/mcp.
+    expect(needsMcpRefresh("0.63.0-beta.2", "0.62.1")).toBe(true);
+    // Beta to beta: the entry already has the v2 shape.
+    expect(needsMcpRefresh("0.63.0-beta.1", "0.63.0-beta.2")).toBe(false);
+  });
+
   it("refreshes every pre-alwaysLoad install when it upgrades onto the Claude Code change", () => {
     for (const previous of [
       "0.58.0",

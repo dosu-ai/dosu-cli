@@ -132,10 +132,9 @@ describe("emitKnowledgeReport", () => {
 
   it("summarizes the run's projects in the header instead of a note anchor", async () => {
     mockLoadSyncState.mockReturnValue({
-      schema_version: 1,
+      schema_version: 2,
       watermark: null,
       consecutive_failures: 0,
-      total_learning_tokens: 50_000,
     });
     mockWrite.mockImplementation(async (opts: { html: string }) => {
       expect(opts.html).toContain("Dosu knowledge report — Acme");
@@ -172,5 +171,53 @@ describe("emitKnowledgeReport", () => {
     await emitKnowledgeReport({ notes: [{ title: "A", content: "B" }], fetchNotes, open: false });
     expect(fetchNotes).not.toHaveBeenCalled();
     expect(mockWrite).toHaveBeenCalled();
+  });
+});
+
+describe("emitKnowledgeReport shipped sessions", () => {
+  it("surfaces the shipped-session history's links in the report", async () => {
+    mockLoadSyncState.mockReturnValue({
+      schema_version: 2,
+      watermark: "2026-09-01T00:00:00.000Z",
+      consecutive_failures: 0,
+      total_shipped: 1,
+      shipped_sessions: [
+        {
+          at: "2026-09-01T00:00:00.000Z",
+          session: "claude/s1",
+          task_id: "task-1",
+          session_url: "https://app/memories/sessions/s1",
+        },
+      ],
+    });
+
+    await emitKnowledgeReport({ notes: [] });
+
+    const html = mockWrite.mock.calls[0][0].html as string;
+    expect(html).toContain("Shipped to Dosu memory");
+    expect(html).toContain("https://app/memories/sessions/s1");
+  });
+
+  it("an injected shipped list overrides the state file", async () => {
+    await emitKnowledgeReport({
+      notes: [],
+      shipped: [
+        {
+          at: "2026-09-01T00:00:00.000Z",
+          session: "cursor/injected",
+          task_id: "task-9",
+        },
+      ],
+    });
+
+    const html = mockWrite.mock.calls[0][0].html as string;
+    expect(html).toContain("cursor/injected");
+  });
+
+  it("renders no shipped section when nothing was ever shipped", async () => {
+    await emitKnowledgeReport({ notes: [] });
+
+    const html = mockWrite.mock.calls[0][0].html as string;
+    expect(html).not.toContain("Shipped to Dosu memory");
   });
 });

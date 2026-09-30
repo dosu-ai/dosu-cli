@@ -46,12 +46,12 @@ describe("runStatuslineRender", () => {
   });
 
   it("defaults to the real renderer and stdout", async () => {
-    mockRender.mockReturnValue("📚 Dosu studying");
+    mockRender.mockReturnValue("📚 Dosu learning");
     const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     try {
       await runStatuslineRender("cursor", { readStdin: async () => "{}" });
       expect(mockRender).toHaveBeenCalledWith("{}", "cursor");
-      expect(write).toHaveBeenCalledWith("📚 Dosu studying\n");
+      expect(write).toHaveBeenCalledWith("📚 Dosu learning\n");
     } finally {
       write.mockRestore();
     }

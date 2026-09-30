@@ -60,8 +60,13 @@ import { checkForSkillUpdates } from "../version/skill-update-check";
 import { checkForUpdates } from "../version/update-check";
 import { getVersionString, VERSION } from "../version/version";
 
-export function shouldRunBackgroundChecks(actionName: string): boolean {
-  return actionName !== "upgrade";
+/** Commands that skip the update / skill / ready-task checks: `upgrade` does its own, and the
+ * prompt-submit hook runs on every prompt while the user waits. */
+const NO_BACKGROUND_CHECKS = new Set(["upgrade", "knowledge context"]);
+
+/** `command` is the full subcommand path, e.g. `knowledge context`. */
+export function shouldRunBackgroundChecks(command: string): boolean {
+  return !NO_BACKGROUND_CHECKS.has(command);
 }
 
 /** `dosu setup` and `dosu mcp refresh` rewrite the agents' MCP entries themselves (and record
@@ -202,7 +207,7 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
     .hook("preAction", async (thisCommand, actionCommand) => {
       const opts = thisCommand.optsWithGlobals();
       logger.init({ debug: opts.debug });
-      if (shouldRunBackgroundChecks(actionCommand.name())) {
+      if (shouldRunBackgroundChecks(commandTelemetryName(actionCommand))) {
         // Bare `dosu` launches the TUI, whose welcome banner shows the update
         // itself; the boxed stderr notice would tear across the TUI's redraws.
         const launchesTUI = actionCommand.parent === null;

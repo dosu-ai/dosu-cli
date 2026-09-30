@@ -45,6 +45,7 @@ Key modules:
 - **`src/commands/`** — The Dosu platform command layer (the list above). Thin Commander wrappers over `src/client/` calls; `output.ts` standardizes human vs JSON output.
 - **`src/setup/`** — Interactive setup wizard (authenticate → select org → select deployment → mint API key → detect installed tools → configure). Uses `@clack/prompts`.
 - **`src/agent/`** — Non-interactive setup for coding agents (`setup --agent --tool <id>`) and the ticket-based login commands (`login --request`/`--check`). Emits machine-readable JSON via `output.ts` for agent consumption.
+- **`src/sync/`** + **`src/shipper/`** — How the CLI learns from sessions: `knowledge sync` (session-end hooks, the Activity screen, setup's backfill) scans the last 30 days of finished sessions and ships them to the Dosu memory ingest API (`POST /v1/memory/ingest/async`), which learns from them server-side. Incognito (`/dosu-incognito`) and trivial sessions are settled locally and never uploaded; the shipper normalizes raw logs to Letta trajectory-v1 via `@letta-ai/trajectory` and redacts every outgoing string with `redactSecrets`. Progress (watermark, backoff, shipped history) lives in `~/.config/dosu-cli/knowledge-sync.json`, schema 2 (schema 1 was the retired local learner; its files migrate on load). Shipping is on by default; only the opt-out is stored (`ship_transcripts: false`, `dosu knowledge transcripts disable`). There is no local learner: nothing in the CLI calls an LLM or `write_knowledge`.
 - **`src/telemetry/`** — Default-on analytics and error diagnostics with one persisted global switch, safe payload builders, and fail-open transport. User controls live under `dosu telemetry status|enable|disable|reset`.
 - **`src/tui/`** — Main menu TUI when running `dosu` with no subcommand.
 - **`skills/`** — The `dosu` agent skill (formerly the separate `dosu-ai/dosu-skill` repo), which teaches coding agents to configure and operate Dosu through this CLI. Only skills a customer needs to use the CLI belong here; internal analysis skills stay out of the bundle. `scripts/embed-skills.ts` generates `src/generated/skills.ts` from it so the single-file bundle carries the content; `src/commands/skill.ts` writes it to `~/.agents/skills/<name>` and symlinks Claude Code / Windsurf directories at it. **Run `bun run embed:skills` after editing anything under `skills/`** — `scripts/embed-skills.test.ts` fails when the generated file drifts.
@@ -120,12 +121,15 @@ Scopes are optional: `fix(config): handle empty file without crash`
 
 ## Release Channels
 
-semantic-release publishes on every push to a release branch. Two channels are configured (`release.config.js`):
+semantic-release publishes on every push to a release branch. Three channels are configured (`release.config.js`):
 
 | Branch | npm dist-tag | Version shape | Install with |
 |---|---|---|---|
 | `main` | `latest` | `0.11.0` | `npx @dosu/cli setup` |
+| `beta` | `beta` | `0.11.0-beta.1` | `npx @dosu/cli@beta setup` |
 | `alpha` | `alpha` | `0.11.0-alpha.1` | `npx @dosu/cli@alpha setup` |
+
+An install stays on the channel it came from: update checks, auto-update and `dosu upgrade` read and install the running version's own dist-tag (`releaseTag()` in `src/version/version.ts`), so a beta install moves to the next beta rather than to `latest`. Leaving a prerelease channel means reinstalling from `latest`.
 
 The `alpha` channel is for **internal pre-release / dogfooding**. Workflow:
 
