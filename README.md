@@ -182,9 +182,11 @@ dosu knowledge incognito enable|disable [claude|cursor|codex]  # the /dosu-incog
 ```
 
 The status line shows one of `📚 Dosu studying…`, `👻 Dosu incognito`, `⚪ Dosu paused`,
-`⚪ Dosu not studying this repo`, or `⚪ Dosu off`. Only sessions inside a git repo are studied;
-pick which repos under `dosu` → settings → study scope. Neither setup nor `enable` replaces a status
-line you already have; they print the one-liner to add to your own script instead.
+`⚪ Dosu not studying this repo`, or `⚪ Dosu off`. Only sessions inside a git repo with a
+determinable branch are studied; pick which repos under `dosu` → settings → study scope. Sessions
+without an identifiable git branch (from transcripts, hook captures, or reflog) are skipped.
+Neither setup nor `enable` replaces a status line you already have; they print the one-liner to add
+to your own script instead.
 
 Running `/dosu-incognito` inside a session marks that session's transcript so studying skips it
 (the whole session, and for the rest of it — start a new session to turn Dosu back on) and tells the
