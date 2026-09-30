@@ -105,11 +105,32 @@ describe("runKnowledgeSync", () => {
     expect(outcome.sessions.map((s) => s.id)).toEqual([inScope.id]);
   });
 
-  it("never studies sessions outside a git repo, even with no filter", async () => {
+  it("studies sessions outside a git repo when no repo filter is set", async () => {
     const inRepo = { ...session(60), project: "other" };
     const noRepo = session(40);
     const { deps } = makeDeps({
       listSessions: vi.fn().mockResolvedValue([inRepo, noRepo]),
+      locator: projectLocator,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.sessions.map((s) => [s.id, s.repo])).toEqual([
+      [inRepo.id, "github.com/x/other"],
+      [noRepo.id, undefined],
+    ]);
+  });
+
+  it("leaves sessions outside a git repo out of a repo filter", async () => {
+    const inRepo = { ...session(60), project: "dosu-cli" };
+    const { deps } = makeDeps({
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        repo_filter: [DOSU_CLI],
+      }),
+      listSessions: vi.fn().mockResolvedValue([inRepo, session(40)]),
       locator: projectLocator,
     });
 
@@ -196,7 +217,7 @@ describe("runKnowledgeSync", () => {
 
     const outcome = await runKnowledgeSync({ deps });
 
-    expect(outcome.sessions.map((s) => s.id)).toEqual([inRepo.id]);
+    expect(outcome.sessions.map((s) => s.repo)).toEqual([DOSU_CLI, undefined]);
     expect(flush).toHaveBeenCalledOnce();
   });
 
@@ -693,14 +714,19 @@ describe("runKnowledgeSync studying", () => {
     expect(logged).toContain("(0 trivial, 1 incognito skipped)");
   });
 
-  it("skips sessions with no known branch, rolls the watermark over them, and tags the rest", async () => {
-    mockLoggerDebug.mockClear();
+  it("studies sessions with or without a known branch, tagging the branch only in a repo", async () => {
     const mine = vi.fn().mockResolvedValue(learnerResult());
-    // Newest-first: s-30 (no branch), s-40 (feat/b), s-50 (trivial, never asked).
-    const sessions = [session(30), session(40), session(50)];
+    // Newest-first: s-30 (repo, no branch), s-40 (repo, feat/b), s-45 (no repo), s-50 (trivial).
+    const sessions = [
+      { ...session(30), project: "dosu-cli" },
+      { ...session(40), project: "dosu-cli" },
+      session(45),
+      { ...session(50), project: "dosu-cli" },
+    ];
     const resolveBranch = vi.fn((s: AgentSession) => (s.id === "s-40" ? "feat/b" : null));
     const { deps, saved } = makeDeps({
       listSessions: vi.fn().mockResolvedValue(sessions),
+      locator: projectLocator,
       worthStudying: (s) => s.id !== "s-50",
       resolveBranch,
       mine,
@@ -710,33 +736,16 @@ describe("runKnowledgeSync studying", () => {
     const outcome = await runKnowledgeSync({ deps });
 
     expect(outcome.status).toBe("studied");
-    expect(outcome.unbranchedSessions).toBe(1);
     expect(outcome.trivialSessions).toBe(1);
     const batch = mine.mock.calls[0][0] as AgentSession[];
-    expect(batch.map((s) => [s.id, s.branch])).toEqual([["s-40", "feat/b"]]);
+    expect(batch.map((s) => [s.id, s.repo, s.branch])).toEqual([
+      ["s-45", undefined, undefined],
+      ["s-40", DOSU_CLI, "feat/b"],
+      ["s-30", DOSU_CLI, undefined],
+    ]);
+    expect(resolveBranch).not.toHaveBeenCalledWith(expect.objectContaining({ id: "s-45" }));
     expect(resolveBranch).not.toHaveBeenCalledWith(expect.objectContaining({ id: "s-50" }));
-    expect(saved[0].watermark).toBe(session(30).updated);
-    const logged = mockLoggerDebug.mock.calls.map((c) => c.join(" ")).join("\n");
-    expect(logged).toContain("skipping session claude/s-30: its git branch is unknown");
-    expect(logged).toContain("(1 trivial, 0 incognito, 1 without a branch skipped)");
-  });
-
-  it("advances the watermark without a run when no ready session has a branch", async () => {
-    const mine = vi.fn();
-    const { deps, saved } = makeDeps({
-      listSessions: vi.fn().mockResolvedValue([session(30), session(50)]),
-      worthStudying: () => true,
-      resolveBranch: () => null,
-      mine,
-      lock: openLock(),
-    });
-
-    const outcome = await runKnowledgeSync({ deps });
-
-    expect(outcome.status).toBe("nothing-new");
-    expect(outcome.unbranchedSessions).toBe(2);
-    expect(mine).not.toHaveBeenCalled();
-    expect(saved[0].watermark).toBe(session(30).updated);
+    expect(saved.at(-1)?.watermark).toBe(session(30).updated);
   });
 
   it("advances the watermark without a run when everything ready is incognito", async () => {

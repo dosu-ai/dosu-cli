@@ -374,7 +374,7 @@ async function runSettings(cfg: Config): Promise<void> {
 }
 
 /** Repos the local sessions ran in plus the current scope, most sessions first; sessions
- * outside a git repo are left out, since they are never studied. */
+ * outside a git repo have no repo to pick, and are studied only when every repo is. */
 function discoverSessionRepos(current: readonly string[] | null): string[] {
   const counts = new Map<string, number>();
   try {

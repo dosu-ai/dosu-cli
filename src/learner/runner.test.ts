@@ -540,7 +540,7 @@ describe("runLearner", () => {
 
     const result = await runLearner(baseOptions);
 
-    // Unattributed, it would be unanchored and skip the merge gate its branch is held to.
+    // Unattributed, it would lose its session and the repo and branch that anchor it.
     expect(g[0].behavior).toBe("deny");
     expect(g[0].message).toContain("read_session first");
     expect(g[1].updatedInput).toEqual({ title: "orphan", content: "c", transcript_id: "s1" });

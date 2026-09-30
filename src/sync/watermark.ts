@@ -67,8 +67,8 @@ export interface SyncState {
   last_refusal?: SyncRefusal;
   /** The active run's progress baseline; see SyncRun. */
   run?: SyncRun;
-  /** Repo keys (`host/owner/repo`) whose sessions get studied; absent means every repo. Sessions
-   * outside a git repo are never studied. */
+  /** Repo keys (`host/owner/repo`) whose sessions get studied; absent means every session,
+   * including those outside a git repo. */
   repo_filter?: string[];
   /** Legacy folder scope from before repo scoping; the next sync converts it to repo_filter. */
   project_filter?: string[];
@@ -237,8 +237,8 @@ export function studyRepoFilter(
   return [...repos].sort();
 }
 
-/** Keep sessions that ran inside a git repo, limited to `filter` when one is set, each tagged
- * with its repo. */
+/** Keep the sessions in scope, each tagged with its repo when it ran in one: with a `filter`,
+ * only sessions in a picked repo; without one, every session, in a repo or not. */
 export function filterSessionsByRepo(
   sessions: readonly AgentSession[],
   filter: readonly string[] | null,
@@ -247,8 +247,11 @@ export function filterSessionsByRepo(
   const kept: AgentSession[] = [];
   for (const session of sessions) {
     const repo = resolveRepo(session);
-    if (repo !== null && (filter === null || filter.includes(repo)))
+    if (repo !== null && (filter === null || filter.includes(repo))) {
       kept.push({ ...session, repo });
+    } else if (filter === null) {
+      kept.push(session);
+    }
   }
   return kept;
 }

@@ -56,8 +56,6 @@ export interface SyncOutcome {
   trivialSessions?: number;
   /** Sessions skipped because the user ran `/dosu-incognito` in them. */
   incognitoSessions?: number;
-  /** Sessions skipped because the branch they ran on could not be determined. */
-  unbranchedSessions?: number;
   learner?: LearnerRunResult;
   error?: string;
 }
@@ -274,9 +272,8 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     }
 
     // Walk ready oldest-first so the watermark can advance without skipping newer sessions;
-    // incognito, trivial, and unbranched sessions are filtered locally and never cost a gateway
-    // run. All count as examined so the watermark passes them and they are never re-read: an
-    // unbranched session's notes could never be anchored to work that landed.
+    // incognito and trivial sessions are filtered locally and never cost a gateway run. Both
+    // count as examined so the watermark passes them and they are never re-read.
     // Sessions a failed run already noted are skipped the same way, unless resumed since.
     const worthStudying = deps.worthStudying ?? isWorthStudying;
     const isIncognito = deps.isIncognito ?? isIncognitoSession;
@@ -285,7 +282,6 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     const batch: AgentSession[] = [];
     let trivial = 0;
     let incognito = 0;
-    let unbranched = 0;
     let alreadyStudied = 0;
     for (let i = ready.length - 1; i >= 0 && batch.length < MINE_BATCH_LIMIT; i--) {
       const candidate = ready[i];
@@ -300,18 +296,15 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       } else if (!worthStudying(candidate)) {
         trivial += 1;
       } else {
-        const branch = branchOf(candidate);
-        if (branch) {
-          batch.push({ ...candidate, branch });
-        } else {
-          unbranched += 1;
-          logger.debug("sync", `skipping session ${key}: its git branch is unknown`);
-        }
+        // A branch only anchors a note alongside its repo. Without either, the session is still
+        // studied and its notes are written unanchored, reaching topics at once.
+        const branch = candidate.repo ? branchOf(candidate) : null;
+        batch.push(branch ? { ...candidate, branch } : candidate);
       }
     }
     const skippedNote = `${trivial} trivial, ${incognito} incognito${
-      unbranched > 0 ? `, ${unbranched} without a branch` : ""
-    }${alreadyStudied > 0 ? `, ${alreadyStudied} already studied` : ""} skipped`;
+      alreadyStudied > 0 ? `, ${alreadyStudied} already studied` : ""
+    } skipped`;
 
     if (batch.length === 0) {
       // Everything examined was skipped locally: commit the watermark past it
@@ -332,7 +325,6 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
         studiedSessions: 0,
         trivialSessions: trivial,
         incognitoSessions: incognito,
-        unbranchedSessions: unbranched,
       };
     }
 
@@ -408,7 +400,6 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
           studiedSessions: batch.length,
           trivialSessions: trivial,
           incognitoSessions: incognito,
-          unbranchedSessions: unbranched,
           learner,
         };
       }

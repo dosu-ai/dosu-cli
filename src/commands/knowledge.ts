@@ -540,14 +540,6 @@ function printSyncOutcome(outcome: SyncOutcome): void {
       break;
     }
   }
-  const unbranched = outcome.unbranchedSessions ?? 0;
-  if (unbranched > 0) {
-    console.log(
-      pc.dim(
-        `Skipped ${unbranched} session${unbranched === 1 ? "" : "s"} whose git branch could not be determined.`,
-      ),
-    );
-  }
 }
 
 function resolveHookAgents(ids: string[]): HookAgent[] {

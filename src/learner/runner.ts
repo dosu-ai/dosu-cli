@@ -390,9 +390,8 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
                   "Re-read only the session this note is about, then write it.",
               };
             }
-            // A note with no session behind it would carry no repo or branch, and an unanchored
-            // note reaches topics at once: it would bypass the merge gate its session's branch
-            // is held to. Deny, so the model re-reads the session first.
+            // A note with no session behind it could not be attributed, and would drop the repo
+            // and branch that session would anchor it with. Deny, so the model re-reads first.
             const noted = currentSession && sessionKeys.get(currentSession);
             if (!currentSession || !noted) {
               return {
@@ -413,8 +412,9 @@ export async function runLearner(options: RunLearnerOptions): Promise<LearnerRun
             // repo and branch come from the session, never the model. Together they anchor a
             // Branch Note, which reaches topics when that branch's PR merges into the default
             // branch, or at once when it already has (the backend promotes default-branch and
-            // already-merged branches on write).
-            // A branch without a repo anchors nothing, so it rides only with one.
+            // already-merged branches on write). A branch without a repo anchors nothing, so it
+            // rides only with one; a session missing either writes an unanchored note, which
+            // reaches topics at once.
             const {
               transcript_id: _transcriptByModel,
               repo: _repoByModel,

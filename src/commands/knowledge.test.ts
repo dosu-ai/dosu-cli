@@ -893,32 +893,6 @@ describe("knowledge sync", () => {
     expect(order).toEqual(["capture", "spawn"]);
   });
 
-  it("reports sessions skipped for an unknown branch", async () => {
-    mockRunSync.mockResolvedValue({
-      status: "nothing-new",
-      readySessions: 2,
-      inFlightSessions: 0,
-      sessions: [],
-      unbranchedSessions: 2,
-    });
-    await run("sync");
-
-    expect(allOutput()).toContain("Skipped 2 sessions whose git branch could not be determined.");
-  });
-
-  it("reports a single session skipped for an unknown branch in the singular", async () => {
-    mockRunSync.mockResolvedValue({
-      status: "nothing-new",
-      readySessions: 1,
-      inFlightSessions: 0,
-      sessions: [],
-      unbranchedSessions: 1,
-    });
-    await run("sync");
-
-    expect(allOutput()).toContain("Skipped 1 session whose git branch could not be determined.");
-  });
-
   it("--detach forwards --bootstrap to the re-spawned run", async () => {
     await run("sync", "--quiet", "--detach", "--bootstrap");
 

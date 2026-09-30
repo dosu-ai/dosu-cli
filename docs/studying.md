@@ -8,11 +8,11 @@ scope and the two switches layered on top of it: a per-session opt-out and a sta
 
 ## Study scope
 
-Only sessions that ran inside a git repository are studied. A session's repo is the `origin`
-remote of its working directory, normalized to the same `host/owner/repo` key Dosu anchors notes
-to (`git@github.com:dosu-ai/dosu-cli.git` → `github.com/dosu-ai/dosu-cli`). Sessions outside a
-repo, or in a repo without an `origin`, are skipped. The lookup is cached per session in
-`project-dirs.json`, so a checkout deleted later still resolves.
+A session's repo is the `origin` remote of its working directory, normalized to the same
+`host/owner/repo` key Dosu anchors notes to (`git@github.com:dosu-ai/dosu-cli.git` →
+`github.com/dosu-ai/dosu-cli`). A session outside a repo, or in a repo without an `origin`, has no
+repo. The lookup is cached per session in `project-dirs.json`, so a checkout deleted later still
+resolves.
 
 Each note the learner writes carries its session's repo and branch: the tool gate sets `repo` and
 `branch` on `write_knowledge` (dropping anything the model supplied). Together they anchor a Branch
@@ -21,8 +21,7 @@ it on write when the branch already has (it is the default branch, or its PR alr
 otherwise when the PR merges. A note in a repo not connected to the Library stays unanchored and is
 promoted immediately, with the repo and branch stored as observed context.
 
-Only sessions whose branch is known are studied. The branch comes from the first source that has
-one:
+The branch comes from the first source that has one:
 
 1. The transcript: Claude Code stamps `gitBranch` on every line (the last one wins), and Codex
    records it in `session_meta` when the session starts.
@@ -30,12 +29,13 @@ one:
    `stop` hook records both to `session-captures/cursor/<id>.json` before the detached sync starts.
 3. The HEAD reflog of the session's working directory, read at the session's last update.
 
-A session with no branch from any source is skipped and counted as examined, so the watermark moves
-past it and it is never re-read. The sync summary reports how many were skipped.
+A session with no repo or no branch is still studied. Its notes carry whatever it has (a branch
+rides only with a repo), so they are unanchored and reach topics immediately.
 
 `dosu` → settings → study scope picks which repos to study (`repo_filter` in the state file).
-Picking every repo clears the filter so new repos are studied automatically. Clones and worktrees of
-the same repo share one entry.
+With a repo scope, only sessions in the picked repos are studied. Picking every repo clears the
+filter, so new repos and sessions outside any repo are studied too. Clones and worktrees of the
+same repo share one entry.
 
 Before repo scoping, the scope was a list of folders (`project_filter`). The next sync converts it
 to the repos its folders' sessions ran in, so upgrading never widens the scope. A folder scope with
@@ -101,7 +101,7 @@ command to `dosu knowledge statusline render --agent <id>`, which prints one lin
 | `📚 Dosu studying…` | The hook is installed and this session will be studied when it ends |
 | `👻 Dosu incognito` | `/dosu-incognito` was run in this session |
 | `⚪ Dosu paused` | Studying is paused (Activity screen stop, or `paused` in the state file) |
-| `⚪ Dosu not studying this repo` | `cwd` is outside a git repo, or its repo is outside the study scope |
+| `⚪ Dosu not studying this repo` | A repo scope is set and `cwd` is not in one of its repos |
 | `⚪ Dosu off` | No Dosu hook is installed for this agent |
 
 States are checked in that order after `off`: incognito outranks paused and not-studied because it
