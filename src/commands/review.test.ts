@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { TRPCClientError } from "@trpc/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -71,7 +72,7 @@ function unprocessable() {
 }
 
 function allOutput(): string {
-  return logSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
+  return stripVTControlCharacters(logSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n"));
 }
 
 /** A handled failure as execute() reports it: the handler throws a CommandError (it never calls
