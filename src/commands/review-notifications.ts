@@ -6,14 +6,14 @@ import pc from "picocolors";
 import { createTypedClient, type TypedClient } from "../client/trpc";
 import { getWebAppURL } from "../config/constants";
 import type {
-  CliSlackChannel,
   ReviewNotificationGetInput,
   ReviewNotificationGetOutput,
 } from "../generated/dosu-api-types";
-import { isUuid, uuidV4 } from "./arguments";
+import { uuidV4 } from "./arguments";
 import { requireLoginConfig } from "./auth";
 import { confirmAction } from "./confirmation";
 import { printInfo, printResult } from "./output";
+import { channelLabel, resolveChannel } from "./slack-channel-resolve";
 
 type Scope = ReviewNotificationGetInput["scope"];
 
@@ -27,13 +27,6 @@ type Target = {
   /** The flag pair that re-selects this target in hints (`--library <id>`). */
   flag: string;
 };
-
-// Slack's own channel IDs: C… for public channels, G… for older private ones.
-const SLACK_CHANNEL_ID_RE = /^[CG][A-Z0-9]{8,}$/;
-const PAGE_SIZE = 100;
-// Report scan progress every this many pages when walking every channel in an org.
-const PROGRESS_EVERY_PAGES = 10;
-const MAX_CANDIDATES = 10;
 
 const RECONNECT_HELP = `
 A channel that stopped receiving notifications (archived, Dosu removed, access lost) shows its
@@ -81,11 +74,6 @@ function installUrl(): string {
   return `${getWebAppURL()}/slack`;
 }
 
-function channelLabel(channel: CliSlackChannel): string {
-  const name = channel.name ? `#${channel.name}` : channel.channel_id;
-  return channel.team_name ? `${name} (${channel.team_name})` : name;
-}
-
 // Mirrors disabledReasonKey in dosu's ReviewNotificationsSection.tsx so the CLI and the App
 // explain a delivery failure the same way.
 function describeDisabledReason(reason: string): string {
@@ -125,99 +113,6 @@ function assertWritable(state: ReviewNotificationGetOutput): void {
     console.error(pc.red("Slack Notifications are not enabled for this organization."));
     process.exit(1);
   }
-}
-
-/** Every channel that `listPaged` returns for `search`, walking all pages. */
-async function listAllChannels(
-  client: TypedClient,
-  orgId: string,
-  search: string | undefined,
-  json: boolean | undefined,
-): Promise<CliSlackChannel[]> {
-  const channels: CliSlackChannel[] = [];
-  let cursor: string | null = null;
-  let pages = 0;
-  do {
-    const page = await client.slackChannel.listPaged.query({
-      orgId,
-      limit: PAGE_SIZE,
-      ...(search !== undefined && { search }),
-      ...(cursor && { cursor }),
-    });
-    channels.push(...page.items);
-    cursor = page.nextCursor;
-    pages += 1;
-    if (cursor && !json && pages % PROGRESS_EVERY_PAGES === 0) {
-      console.error(pc.dim(`Scanned ${channels.length} Slack channels…`));
-    }
-  } while (cursor);
-  return channels;
-}
-
-// Candidates go to stderr with the error so a `--json` caller's stdout stays empty.
-function printCandidates(candidates: CliSlackChannel[]): void {
-  const shown = candidates.slice(0, MAX_CANDIDATES);
-  for (const c of shown) {
-    const name = c.name ? `#${c.name}` : "-";
-    console.error(`  ${c.id}  ${c.channel_id}  ${name}  ${c.team_name ?? "-"}`);
-  }
-  if (candidates.length > shown.length) {
-    console.error(pc.dim(`  …and ${candidates.length - shown.length} more.`));
-  }
-}
-
-/**
- * Resolve `--channel` to the Dosu channel UUID the router takes. A UUID passes through
- * unchecked (`upsert` 404s on an unknown one); a Slack ID or name is looked up in the
- * target's org (`orgId` from `get`, which can differ from the org selected locally).
- */
-async function resolveChannel(
-  client: TypedClient,
-  orgId: string,
-  input: string,
-  json: boolean | undefined,
-): Promise<{ id: string; channel: CliSlackChannel | null }> {
-  const value = input.trim();
-  if (isUuid(value)) return { id: value, channel: null };
-
-  if (SLACK_CHANNEL_ID_RE.test(value)) {
-    // `search` filters names only, so a Slack ID means walking every channel in the org.
-    const match = (await listAllChannels(client, orgId, undefined, json)).find(
-      (c) => c.channel_id === value,
-    );
-    if (!match) {
-      console.error(pc.red(`No Slack channel with ID ${value} in this organization.`));
-      console.error("Run `dosu integrations slack-channels` to list channels, or pass a name.");
-      process.exit(1);
-    }
-    return { id: match.id, channel: match };
-  }
-
-  const name = value.replace(/^#/, "");
-  if (!name) {
-    console.error(pc.red("--channel must not be empty."));
-    process.exit(1);
-  }
-  // The search is an unescaped substring match ordered by id, so the exact name can sit on any
-  // page; collect them all and match locally.
-  const candidates = await listAllChannels(client, orgId, name, json);
-  const exact = candidates.filter((c) => c.name?.toLowerCase() === name.toLowerCase());
-  if (exact.length === 1) return { id: exact[0].id, channel: exact[0] };
-
-  if (exact.length === 0) {
-    console.error(pc.red(`No Slack channel named #${name} in this organization.`));
-  } else {
-    console.error(
-      pc.red(`${exact.length} Slack channels are named #${name} (in different workspaces).`),
-    );
-  }
-  const shown = exact.length > 0 ? exact : candidates;
-  if (shown.length > 0) {
-    console.error(exact.length > 0 ? "Matches:" : "Similar channels:");
-    printCandidates(shown);
-  }
-  console.error("Pass the channel's UUID with --channel <uuid>.");
-  process.exit(1);
 }
 
 function printNotification(target: Target, state: ReviewNotificationGetOutput): void {
@@ -310,10 +205,13 @@ export function reviewNotificationsCommand(): Command {
       const state = await getNotification(client, target);
       assertWritable(state);
 
+      // Look the channel up in the target's org (from `get`), which can differ from the org
+      // selected locally.
       const { id: slackChannelId, channel } = await resolveChannel(
         client,
         state.orgId,
         opts.channel,
+        { name: "--channel", uuidUsage: "--channel <uuid>" },
         opts.json,
       );
       const label = channel ? channelLabel(channel) : slackChannelId;

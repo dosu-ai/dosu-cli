@@ -169,7 +169,7 @@ dosu sources create github --repo <owner/name> [--library <id>] [--confirm] [--j
 dosu integrations list [--json]
 dosu integrations status <platform> [--json]
 dosu integrations slack-channels [--json]
-dosu integrations slack-join <channel-id> [--json]
+dosu integrations slack-join <uuid | slack-id | #name> [--json]
 dosu integrations github-collaborators <positive-repository-id> [--json]
 
 dosu members invite <email> [--role admin|member] [--json]       # default member
@@ -186,6 +186,13 @@ dosu org info [--json]
   to the active Library. A repo not listed means the GitHub App lacks access — run
   `sources connect github` first. Forks can't be connected.
 - Integration status choices: `github`, `gitlab`, `azure_devops`, `slack`, `confluence`, `notion`, `coda`, `teams`. GitHub, Slack, and Teams currently return `connected: null` because CLI status probing is unavailable for them.
+- `slack-channels` lists each channel's Dosu UUID and Slack ID (`C…`/`G…`); `slack-join` and
+  `review notifications set --channel` accept either, or the channel name (quote `'#name'` in
+  shells that treat `#` as a comment). A name shared across Slack workspaces or not found exits 1
+  with candidate UUIDs on stderr. `slack-join --json` returns `{success, channelId, id, channel}`:
+  `channelId` is the input, `id` the resolved UUID, and `channel` the matched row (`null` when a
+  UUID was passed). `slack-channels --json` prints the raw rows, which carry both `id` and
+  `channel_id`.
 - The CLI has no member list/remove/request commands; `members invite` is its only member operation.
 
 ## Threads, Topics, suggestions, and analytics
