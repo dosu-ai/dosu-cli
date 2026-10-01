@@ -192,7 +192,7 @@ dosu org info [--json]
   with candidate UUIDs on stderr. `slack-join --json` returns `{success, channelId, id, channel}`:
   `channelId` is the input, `id` the resolved UUID, and `channel` the matched row (`null` when a
   UUID was passed).
-- `slack-channels` lists 50 non-DM channels per page (`--limit` up to 100); `--search` is a
+- `slack-channels` lists 50 available channels per page (`--limit` up to 100); `--search` is a
   server-side substring match on the name. `--json` always returns `{items, nextCursor}`, where
   each item carries both `id` and `channel_id`; pass a non-null `nextCursor` as `--cursor` for the
   next page. `--all` reads every page (`nextCursor: null`) and cannot be combined with `--limit` or
