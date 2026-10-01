@@ -117,8 +117,6 @@ dosu docs unarchive <id> [--json]
 dosu docs delete <id> [--json]
 dosu docs versions <id> [--json]
 dosu docs restore <id> --revision <positive-int> [--json]
-dosu docs generate --title <title> [--instructions <text>] [--json]
-dosu docs auto-tag <id> [--json]
 dosu docs import <platform> --files <comma-separated-ids> [--json]
 dosu docs import-status <task-id> [--json]
 dosu docs publish <id> --to <platform> [target flags] [--json]
@@ -128,7 +126,7 @@ dosu docs sync-back <id> [--json]
 - Document list defaults to 20. `create` and `update` reject combining `--body` with `--body-file`; `update` requires at least one field.
 - Import platforms: `github`, `gitlab`, `azure_devops`, `confluence`, `notion`, `coda`.
 - Publish platforms: the same six. Target flags are `--repo-id`, `--project-id`, `--parent-page-id`, `--doc-id`, `--directory`, and `--data-source-id`; Azure DevOps requires `--data-source-id`. Other target validation may occur in the backend.
-- `generate`, `auto-tag`, import, publish, and sync operations may be asynchronous. Use the returned task/status identifiers rather than assuming completion.
+- Import, publish, and sync operations may be asynchronous. Use the returned task/status identifiers rather than assuming completion.
 
 ## Review
 
