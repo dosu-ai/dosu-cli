@@ -6,7 +6,7 @@ import type { CliSlackChannel } from "../generated/dosu-api-types";
 import { isUuid } from "./arguments";
 
 // Slack's own channel IDs: C… for public channels, G… for older private ones.
-export const SLACK_CHANNEL_ID_RE = /^[CG][A-Z0-9]{8,}$/;
+const SLACK_CHANNEL_ID_RE = /^[CG][A-Z0-9]{8,}$/;
 const PAGE_SIZE = 100;
 // Report scan progress every this many pages when walking every channel in an org.
 const PROGRESS_EVERY_PAGES = 10;
@@ -26,7 +26,7 @@ export function channelLabel(channel: CliSlackChannel): string {
 }
 
 /** Every channel that `listPaged` returns for `search`, walking all pages. */
-export async function listAllChannels(
+async function listAllChannels(
   client: TypedClient,
   orgId: string,
   search: string | undefined,
@@ -53,7 +53,7 @@ export async function listAllChannels(
 }
 
 // Candidates go to stderr with the error so a `--json` caller's stdout stays empty.
-export function printCandidates(candidates: CliSlackChannel[]): void {
+function printCandidates(candidates: CliSlackChannel[]): void {
   const shown = candidates.slice(0, MAX_CANDIDATES);
   for (const c of shown) {
     const name = c.name ? `#${c.name}` : "-";
