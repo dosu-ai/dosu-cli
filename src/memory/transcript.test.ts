@@ -3,11 +3,16 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { convertTranscriptLines } from "./transcript";
 
-/** A real Claude Code 2.1 session (headless, haiku) in a toy repo; paths rewritten to /work, only
- * user/assistant lines and the memory hook's attachment kept. */
-const SESSION = readFileSync(join(__dirname, "testdata", "claude-code-session.jsonl"), "utf-8")
-  .split("\n")
-  .filter((line) => line !== "");
+/** Real Claude Code 2.1 sessions (headless, haiku) in a toy repo with the memory hooks on;
+ * paths rewritten to /work, only user/assistant/system lines and the hooks' attachments kept. */
+const fixture = (name: string) =>
+  readFileSync(join(__dirname, "testdata", name), "utf-8")
+    .split("\n")
+    .filter((line) => line !== "");
+const SESSION = fixture("claude-code-session.jsonl");
+/** Note injected on the first prompt, `/compact`, the note re-injected by SessionStart, then a
+ * second prompt. The injected note carries the marker MEMO-MARKER-7731. */
+const COMPACTED = fixture("claude-code-compacted-session.jsonl");
 
 const TS = "2026-10-01T10:00:00.000Z";
 const user = (content: unknown, extra: Record<string, unknown> = {}) =>
@@ -46,6 +51,20 @@ describe("convertTranscriptLines", () => {
     ]);
     expect(events[0].ts).toBe("2026-10-01T19:34:45.974Z");
     expect(events[2].ts).toBe("2026-10-01T19:34:49.312Z");
+  });
+
+  it("never feeds an injected note back into the record", () => {
+    expect(COMPACTED.filter((line) => line.includes("<prior_task_memory>"))).toHaveLength(2);
+    const { events } = convertTranscriptLines(COMPACTED, {}, "/work/demo-widgets");
+
+    expect(events.filter((e) => e.type === "user_prompt").map((e) => e.text)).toEqual([
+      "Use the Bash tool to run: python3 widgets.py ; then reply in one short sentence.",
+      expect.stringMatching(/^Now use the Edit tool to change "A tiny widget counter\."/),
+    ]);
+    const uploaded = JSON.stringify(events);
+    expect(uploaded).not.toContain("prior_task_memory");
+    expect(uploaded).not.toContain("MEMO-MARKER");
+    expect(uploaded).not.toContain("being continued from a previous conversation");
   });
 
   it("keeps only what a person typed as user_prompt", () => {
