@@ -147,12 +147,16 @@ let errorSpy: ReturnType<typeof vi.spyOn>;
 // biome-ignore lint/suspicious/noExplicitAny: process.exit mock type mismatch
 let exitSpy: any;
 
+// CI forces color on, so picocolors wraps labels in ANSI codes; assert on the plain text.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching ANSI escapes needs ESC.
+const stripAnsi = (text: string) => text.replaceAll(/\u001B\[[0-9;]*m/g, "");
+
 function stdout(): string {
-  return logSpy.mock.calls.map((call: unknown[]) => call.join(" ")).join("\n");
+  return stripAnsi(logSpy.mock.calls.map((call: unknown[]) => call.join(" ")).join("\n"));
 }
 
 function stderr(): string {
-  return errorSpy.mock.calls.map((call: unknown[]) => call.join(" ")).join("\n");
+  return stripAnsi(errorSpy.mock.calls.map((call: unknown[]) => call.join(" ")).join("\n"));
 }
 
 async function run(...args: string[]) {
