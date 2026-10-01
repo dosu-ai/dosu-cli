@@ -119,6 +119,16 @@ describe("CLI", () => {
     expect(shouldRunMcpRefreshCheck(new Command("sync"))).toBe(true);
   });
 
+  it("skips the automatic MCP refresh for the agent-memory hook and its sync", () => {
+    const memoryCmd = createProgram().commands.find((c) => c.name() === "memory");
+    const names = (memoryCmd?.commands ?? []).map((c) => [c.name(), shouldRunMcpRefreshCheck(c)]);
+    expect(names).toEqual([
+      ["hook", false],
+      ["sync", false],
+      ["hooks", true],
+    ]);
+  });
+
   it("has setup command with --deployment option", () => {
     const program = createProgram();
     const cmd = program.commands.find((c) => c.name() === "setup");
