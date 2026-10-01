@@ -66,7 +66,11 @@ export function fileLock(
   configDir: string = getConfigDir(),
   now: () => Date = () => new Date(),
 ): SyncLock {
-  const path = lockPath(configDir);
+  return lockAt(lockPath(configDir), now);
+}
+
+/** The same single-flight lock on any lock-file path. */
+export function lockAt(path: string, now: () => Date = () => new Date()): SyncLock {
   let held = false;
 
   const tryCreate = (): boolean => {
