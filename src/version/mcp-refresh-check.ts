@@ -22,7 +22,12 @@ const CACHE_FILENAME = "mcp-refresh.json";
 /** Releases whose provider code changed what the Dosu MCP entry looks like. Add a version here
  * whenever a provider's `install` output changes shape; an upgrade or downgrade that crosses
  * one of these rewrites configured agents on the first run, nothing else does. */
-export const MCP_FORMAT_CHANGES: readonly string[] = ["0.53.0"];
+export const MCP_FORMAT_CHANGES: readonly string[] = [
+  "0.53.0",
+  // Claude Code entries gained `alwaysLoad: true`. This must be the first release that ships
+  // it: a lower number skips upgrades from the releases in between, a higher one delays them.
+  "0.62.0",
+];
 
 /** Whether moving from `previous` (the version that last wrote the entries; `null` when
  * unknown, i.e. the install predates this marker) to `current` crosses a format change. */

@@ -11,6 +11,13 @@ vi.mock("../mcp/refresh", () => ({
   refreshConfiguredProviders: mocks.refreshConfiguredProviders,
 }));
 
+// Pin the running version: the real one comes from package.json, which each release bumps, so a
+// seeded "previous" version would start crossing format changes that ship after it was written.
+vi.mock("./version", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./version")>()),
+  VERSION: "0.62.1",
+}));
+
 import { saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
 import type { SetupProvider } from "../mcp/providers";
@@ -128,8 +135,33 @@ describe("canRefreshMcp", () => {
 });
 
 describe("needsMcpRefresh", () => {
-  it("lists 0.53.0 as the release that changed the MCP entry", () => {
+  it("lists the releases that changed the MCP entry", () => {
     expect(MCP_FORMAT_CHANGES).toContain("0.53.0");
+    // Claude Code entries gained alwaysLoad: true. Provisional: must equal the version this
+    // change actually ships in (re-check at merge/release time).
+    expect(MCP_FORMAT_CHANGES).toContain("0.62.0");
+  });
+
+  it("refreshes every pre-alwaysLoad install when it upgrades onto the Claude Code change", () => {
+    for (const previous of [
+      "0.58.0",
+      "0.58.3",
+      "0.59.0",
+      "0.59.2",
+      "0.60.1",
+      "0.60.2",
+      "0.61.0",
+      "0.61.3",
+      null,
+    ]) {
+      expect(needsMcpRefresh(previous, "0.62.0")).toBe(true);
+      expect(needsMcpRefresh(previous, "0.62.4")).toBe(true);
+    }
+  });
+
+  it("does not refresh again once an install already wrote the alwaysLoad entry", () => {
+    expect(needsMcpRefresh("0.62.0", "0.62.1")).toBe(false);
+    expect(needsMcpRefresh("0.62.0-alpha.3", "0.62.0")).toBe(false);
   });
 
   it("refreshes when the install predates the marker", () => {
@@ -158,7 +190,7 @@ describe("needsMcpRefresh", () => {
 describe("checkForMcpRefresh", () => {
   it("only moves the marker along for a bump that did not change the entry", () => {
     saveConfig(signedInCfg);
-    seedCache("0.53.1");
+    seedCache("0.62.0");
 
     checkForMcpRefresh();
 

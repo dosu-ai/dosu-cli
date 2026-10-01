@@ -15,6 +15,11 @@ vi.mock("../sessions/scan", () => ({
   scanAgentSessions: (...args: unknown[]) => mockScanSessions(...args),
 }));
 
+const mockCreateResolver = vi.hoisted(() => vi.fn());
+vi.mock("../sessions/project-dir", () => ({
+  createProjectDirResolver: (...args: unknown[]) => mockCreateResolver(...args),
+}));
+
 const NOW = new Date("2026-08-25T12:00:00Z");
 
 function session(updatedOffsetMinutes: number): AgentSession {
@@ -35,11 +40,22 @@ function makeDeps(overrides: Partial<SyncDeps> = {}): {
     listSessions: vi.fn().mockResolvedValue([]),
     loadState: () => ({ schema_version: 1, watermark: null, consecutive_failures: 0 }),
     saveState: (state) => saved.push(state),
+    locator: { resolve: () => "/repo/dosu-cli", resolveRepo: () => DOSU_CLI },
+    resolveBranch: () => "main",
     now: () => NOW,
     ...overrides,
   };
   return { deps, saved };
 }
+
+const DOSU_CLI = "github.com/dosu-ai/dosu-cli";
+
+/** Sessions sit in `/repo/<project>`; project "dosu-cli" is DOSU_CLI, no project is no repo. */
+const projectLocator = {
+  resolve: (s: AgentSession) => (s.project ? `/repo/${s.project}` : null),
+  resolveRepo: (s: AgentSession) =>
+    s.project ? (s.project === "dosu-cli" ? DOSU_CLI : `github.com/x/${s.project}`) : null,
+};
 
 describe("runKnowledgeSync", () => {
   it("reports a backlog of completed sessions past the gate", async () => {
@@ -69,25 +85,140 @@ describe("runKnowledgeSync", () => {
     expect(logged).toContain("(+2 more)");
   });
 
-  it("gates out sessions outside the project filter", async () => {
+  it("gates out sessions outside the repo filter", async () => {
     const inScope = { ...session(60), project: "dosu-cli" };
     const outScope = { ...session(30), project: "other" };
-    const unknown = session(40); // directory unresolvable → "(unknown)"
     const { deps } = makeDeps({
       loadState: () => ({
         schema_version: 1,
         watermark: null,
         consecutive_failures: 0,
-        project_filter: ["/repo/dosu-cli"],
+        repo_filter: [DOSU_CLI],
       }),
-      listSessions: vi.fn().mockResolvedValue([inScope, outScope, unknown]),
-      resolveProjectDir: (s) => (s.project ? `/repo/${s.project}` : null),
+      listSessions: vi.fn().mockResolvedValue([inScope, outScope]),
+      locator: projectLocator,
     });
 
     const outcome = await runKnowledgeSync({ deps });
 
     expect(outcome.status).toBe("backlog");
     expect(outcome.sessions.map((s) => s.id)).toEqual([inScope.id]);
+  });
+
+  it("studies sessions outside a git repo when no repo filter is set", async () => {
+    const inRepo = { ...session(60), project: "other" };
+    const noRepo = session(40);
+    const { deps } = makeDeps({
+      listSessions: vi.fn().mockResolvedValue([inRepo, noRepo]),
+      locator: projectLocator,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.sessions.map((s) => [s.id, s.repo])).toEqual([
+      [inRepo.id, "github.com/x/other"],
+      [noRepo.id, undefined],
+    ]);
+  });
+
+  it("leaves sessions outside a git repo out of a repo filter", async () => {
+    const inRepo = { ...session(60), project: "dosu-cli" };
+    const { deps } = makeDeps({
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        repo_filter: [DOSU_CLI],
+      }),
+      listSessions: vi.fn().mockResolvedValue([inRepo, session(40)]),
+      locator: projectLocator,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.sessions.map((s) => s.id)).toEqual([inRepo.id]);
+  });
+
+  it("converts a legacy folder scope to the repos its sessions ran in and persists it", async () => {
+    mockScanSessions
+      .mockReset()
+      .mockReturnValue([
+        { ...session(90), project: "dosu-cli" },
+        { ...session(95), project: "other" },
+        session(99),
+      ]);
+    const inScope = { ...session(60), project: "dosu-cli" };
+    const outScope = { ...session(30), project: "other" };
+    const { deps, saved } = makeDeps({
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        project_filter: ["/repo/dosu-cli", "(unknown)"],
+      }),
+      listSessions: vi.fn().mockResolvedValue([inScope, outScope]),
+      locator: projectLocator,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.sessions.map((s) => s.id)).toEqual([inScope.id]);
+    expect(saved[0].repo_filter).toEqual([DOSU_CLI]);
+    expect(saved[0].project_filter).toBeUndefined();
+  });
+
+  it("a legacy folder scope with no repos in it studies nothing", async () => {
+    mockScanSessions.mockReset().mockReturnValue([session(99)]);
+    const { deps, saved } = makeDeps({
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        project_filter: ["(unknown)"],
+      }),
+      listSessions: vi.fn().mockResolvedValue([{ ...session(60), project: "dosu-cli" }]),
+      locator: projectLocator,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.status).toBe("nothing-new");
+    expect(saved[0].repo_filter).toEqual([]);
+  });
+
+  it("drops an empty legacy folder scope and studies every repo", async () => {
+    const inRepo = { ...session(60), project: "dosu-cli" };
+    const { deps, saved } = makeDeps({
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        project_filter: [],
+      }),
+      listSessions: vi.fn().mockResolvedValue([inRepo]),
+      locator: projectLocator,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.sessions.map((s) => s.id)).toEqual([inRepo.id]);
+    expect(saved[0].repo_filter).toBeUndefined();
+    expect(saved[0].project_filter).toBeUndefined();
+  });
+
+  it("resolves repos with the on-disk resolver by default and flushes its cache", async () => {
+    const flush = vi.fn();
+    mockCreateResolver.mockReset().mockReturnValue({ ...projectLocator, flush });
+    const inRepo = { ...session(60), project: "dosu-cli" };
+    const { deps } = makeDeps({
+      listSessions: vi.fn().mockResolvedValue([inRepo, session(40)]),
+      locator: undefined,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.sessions.map((s) => s.repo)).toEqual([DOSU_CLI, undefined]);
+    expect(flush).toHaveBeenCalledOnce();
   });
 
   it("reports nothing-new when the gate is empty", async () => {
@@ -581,6 +712,40 @@ describe("runKnowledgeSync studying", () => {
     const logged = mockLoggerDebug.mock.calls.map((c) => c.join(" ")).join("\n");
     expect(logged).toContain("skipping incognito session claude/s-30");
     expect(logged).toContain("(0 trivial, 1 incognito skipped)");
+  });
+
+  it("studies sessions with or without a known branch, tagging the branch only in a repo", async () => {
+    const mine = vi.fn().mockResolvedValue(learnerResult());
+    // Newest-first: s-30 (repo, no branch), s-40 (repo, feat/b), s-45 (no repo), s-50 (trivial).
+    const sessions = [
+      { ...session(30), project: "dosu-cli" },
+      { ...session(40), project: "dosu-cli" },
+      session(45),
+      { ...session(50), project: "dosu-cli" },
+    ];
+    const resolveBranch = vi.fn((s: AgentSession) => (s.id === "s-40" ? "feat/b" : null));
+    const { deps, saved } = makeDeps({
+      listSessions: vi.fn().mockResolvedValue(sessions),
+      locator: projectLocator,
+      worthStudying: (s) => s.id !== "s-50",
+      resolveBranch,
+      mine,
+      lock: openLock(),
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.status).toBe("studied");
+    expect(outcome.trivialSessions).toBe(1);
+    const batch = mine.mock.calls[0][0] as AgentSession[];
+    expect(batch.map((s) => [s.id, s.repo, s.branch])).toEqual([
+      ["s-45", undefined, undefined],
+      ["s-40", DOSU_CLI, "feat/b"],
+      ["s-30", DOSU_CLI, undefined],
+    ]);
+    expect(resolveBranch).not.toHaveBeenCalledWith(expect.objectContaining({ id: "s-45" }));
+    expect(resolveBranch).not.toHaveBeenCalledWith(expect.objectContaining({ id: "s-50" }));
+    expect(saved.at(-1)?.watermark).toBe(session(30).updated);
   });
 
   it("advances the watermark without a run when everything ready is incognito", async () => {
