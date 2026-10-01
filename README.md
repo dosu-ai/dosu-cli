@@ -119,13 +119,13 @@ Once authenticated against a deployment, you can drive the Dosu platform without
 | `dosu knowledge` | Search and browse your knowledge base |
 | `dosu docs` | Manage documents (list, create, update, import, publish) |
 | `dosu threads` | List and manage conversation threads |
-| `dosu review` | Document review workflow, plus `review notifications` to route a Library's or Agent's reviews to a Slack channel |
+| `dosu review` | Review workflow for the selected Library: list pending doc changes and draft replies, diff, edit, approve, reject. `review list --json` returns `{items, truncated, total, scope}`, where `scope` names the Library and MCP deployment searched. `review notifications` routes a Library's or Agent's reviews to a Slack channel |
 | `dosu sources` | Manage connected data sources (list, connect, create, sync, update) |
 | `dosu integrations` | List and inspect platform integrations (Slack, GitHub, …) |
 | `dosu topics` | List knowledge base topics and their pages |
 | `dosu members` | Invite organization members |
 | `dosu org` | Show organization information |
-| `dosu deployments` | List / show / switch Dosu MCP deployments |
+| `dosu deployments` | List / show / switch Dosu MCP deployments. `switch` changes the CLI's saved selection; `dosu mcp refresh` repoints already-configured AI tools' global entries, which then need a restart or reconnect |
 | `dosu analytics` | View usage statistics |
 | `dosu skill` | Install / update / remove the bundled Dosu agent skills |
 
