@@ -21,7 +21,11 @@ function frontmatterDescription(skillMd: string): string {
   return match[1];
 }
 
-/** `dosu review <sub> ...` lines in the Review section's code block, continuations joined. */
+/**
+ * `dosu review <sub> ...` lines in the Review section's code block, continuations joined. A
+ * nested group keys on both words (`notifications get`): a bare lowercase word after the
+ * subcommand is a leaf name, while `<id>` and `[--flag]` are arguments.
+ */
 function documentedReviewSyntax(commandsMd: string): Map<string, string> {
   const section = commandsMd.split(/^## /m).find((s) => s.startsWith("Review\n"));
   const block = section ? /```text\n([\s\S]*?)```/.exec(section)?.[1] : undefined;
@@ -29,7 +33,7 @@ function documentedReviewSyntax(commandsMd: string): Map<string, string> {
   const syntax = new Map<string, string>();
   let current: string | undefined;
   for (const line of block.split("\n")) {
-    const head = /^dosu review (\S+)/.exec(line);
+    const head = /^dosu review (\S+(?: [a-z][a-z-]*(?= |$))?)/.exec(line);
     if (head) {
       current = head[1];
       syntax.set(current, line);
@@ -58,14 +62,17 @@ describe("bundled dosu skill: review routing", () => {
 
   it("documents exactly the flags each `dosu review` subcommand accepts", () => {
     const documented = documentedReviewSyntax(skillFile("references/commands.md"));
-    const cmd = reviewCommand();
-    expect([...documented.keys()].sort()).toEqual(cmd.commands.map((c) => c.name()).sort());
-    for (const sub of cmd.commands) {
-      const flags = [...(documented.get(sub.name())?.matchAll(/--[a-z][a-z-]*/g) ?? [])].map(
-        (m) => m[0],
-      );
-      const accepted = sub.options.map((o) => o.long);
-      expect(new Set(flags), sub.name()).toEqual(new Set(accepted));
+    // Leaf commands keyed like the doc: a group's leaves as `group leaf`, others by name.
+    const leaves = reviewCommand().commands.flatMap((sub) =>
+      sub.commands.length > 0
+        ? sub.commands.map((leaf) => ({ key: `${sub.name()} ${leaf.name()}`, cmd: leaf }))
+        : [{ key: sub.name(), cmd: sub }],
+    );
+    expect([...documented.keys()].sort()).toEqual(leaves.map((l) => l.key).sort());
+    for (const { key, cmd } of leaves) {
+      const flags = [...(documented.get(key)?.matchAll(/--[a-z][a-z-]*/g) ?? [])].map((m) => m[0]);
+      const accepted = cmd.options.map((o) => o.long);
+      expect(new Set(flags), key).toEqual(new Set(accepted));
     }
   });
 
