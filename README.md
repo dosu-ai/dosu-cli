@@ -119,7 +119,7 @@ Once authenticated against a deployment, you can drive the Dosu platform without
 | `dosu knowledge` | Search and browse your knowledge base |
 | `dosu docs` | Manage documents (list, create, update, import, publish) |
 | `dosu threads` | List and manage conversation threads |
-| `dosu review` | Document review workflow |
+| `dosu review` | Document review workflow, plus `review notifications` to route a Library's or Agent's reviews to a Slack channel |
 | `dosu sources` | Manage connected data sources (list, connect, create, sync, update) |
 | `dosu integrations` | List and inspect platform integrations (Slack, GitHub, …) |
 | `dosu topics` | List knowledge base topics and their pages |

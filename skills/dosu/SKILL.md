@@ -44,6 +44,7 @@ Operate Dosu through `dosu`. Prefer structured output and let the CLI and App va
 | Create, import, or publish docs | `dosu docs ...` |
 | Show the review list, review queue, or what needs approval | `dosu review list --json`; if the scope looks wrong, follow the context check in [review-workflow.md](references/review-workflow.md) |
 | Inspect, edit, approve, or reject one review item | Read [review-workflow.md](references/review-workflow.md) first |
+| Send a Library's or Agent's review notifications to a Slack channel | `dosu review notifications get --json`, then `set`/`clear` |
 | Inspect conversations | `dosu threads ...` |
 | Browse managed topics | `dosu topics ...` |
 | Audit agent docs, README, architecture, or dependencies | Read [audit.md](references/audit.md) first |

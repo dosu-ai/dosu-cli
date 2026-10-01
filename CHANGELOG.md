@@ -1,3 +1,16 @@
+# [0.65.0](https://github.com/dosu-ai/dosu-cli/compare/v0.64.2...v0.65.0) (2026-10-01)
+
+
+### Bug Fixes
+
+* **integrations:** let slack-join take the UUID, Slack ID, or name ([#264](https://github.com/dosu-ai/dosu-cli/issues/264)) ([b151f79](https://github.com/dosu-ai/dosu-cli/commit/b151f795860418cde4d8fb9f6fa4126b856cd719))
+
+
+### Features
+
+* **integrations:** paginate and search `dosu integrations slack-channels` ([#267](https://github.com/dosu-ai/dosu-cli/issues/267)) ([4890655](https://github.com/dosu-ai/dosu-cli/commit/48906556472eb4d441e113b43b1b1a1284dd2e3b))
+* **review:** manage Slack review-notification channels ([#263](https://github.com/dosu-ai/dosu-cli/issues/263)) ([ca9b8e0](https://github.com/dosu-ai/dosu-cli/commit/ca9b8e0bb748fd02b1a206612e35ce1dbaa59d89)), closes [#262](https://github.com/dosu-ai/dosu-cli/issues/262)
+
 ## [0.64.2](https://github.com/dosu-ai/dosu-cli/compare/v0.64.1...v0.64.2) (2026-10-01)
 
 
