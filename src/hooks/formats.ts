@@ -96,6 +96,20 @@ export function writeHookConfig(path: string, config: JsonConfig): void {
 interface GroupedHookEntry {
   type?: unknown;
   command?: unknown;
+  timeout?: unknown;
+}
+
+/** What a grouped-hook edit writes and which existing entries it owns. Defaults to the
+ * knowledge-sync hook; agent memory passes its own so the two never touch each other's entries. */
+export interface GroupedHookSpec {
+  command: string;
+  owns: (command: unknown) => boolean;
+  /** Claude Code's per-hook `timeout`, in seconds. */
+  timeout?: number;
+}
+
+function knowledgeHookSpec(): GroupedHookSpec {
+  return { command: hookCommand(), owns: isDosuHookCommand };
 }
 
 interface GroupedHookGroup {
@@ -110,39 +124,51 @@ function groupedEventArray(config: JsonConfig, event: string): GroupedHookGroup[
   return Array.isArray(groups) ? groups : [];
 }
 
-export function hasGroupedHook(config: JsonConfig, event: string): boolean {
+export function hasGroupedHook(
+  config: JsonConfig,
+  event: string,
+  owns: GroupedHookSpec["owns"] = isDosuHookCommand,
+): boolean {
   return groupedEventArray(config, event).some(
-    (group) =>
-      Array.isArray(group?.hooks) && group.hooks.some((h) => isDosuHookCommand(h?.command)),
+    (group) => Array.isArray(group?.hooks) && group.hooks.some((h) => owns(h?.command)),
   );
 }
 
-export function addGroupedHook(config: JsonConfig, event: string): JsonConfig {
-  const desired = hookCommand();
+export function addGroupedHook(
+  config: JsonConfig,
+  event: string,
+  spec: GroupedHookSpec = knowledgeHookSpec(),
+): JsonConfig {
+  const timeout = spec.timeout === undefined ? {} : { timeout: spec.timeout };
 
   let present = false;
   for (const group of groupedEventArray(config, event)) {
     if (!Array.isArray(group?.hooks)) continue;
     for (const hook of group.hooks) {
-      if (!isDosuHookCommand(hook?.command)) continue;
+      if (!spec.owns(hook?.command)) continue;
       present = true;
-      hook.command = desired;
+      hook.command = spec.command;
+      Object.assign(hook, timeout);
     }
   }
   if (present) return config;
   if (typeof config.hooks !== "object" || config.hooks === null) config.hooks = {};
   if (!Array.isArray(config.hooks[event])) config.hooks[event] = [];
-  config.hooks[event].push({ hooks: [{ type: "command", command: desired }] });
+  config.hooks[event].push({ hooks: [{ type: "command", command: spec.command, ...timeout }] });
   return config;
 }
 
-export function removeGroupedHook(config: JsonConfig, event: string): JsonConfig {
+export function removeGroupedHook(
+  config: JsonConfig,
+  event: string,
+  owns: GroupedHookSpec["owns"] = isDosuHookCommand,
+): JsonConfig {
   const groups = groupedEventArray(config, event);
   if (groups.length === 0) return config;
   const kept = groups
     .map((group) => {
       if (!Array.isArray(group?.hooks)) return group;
-      const hooks = group.hooks.filter((h) => !isDosuHookCommand(h?.command));
+      const hooks = group.hooks.filter((h) => !owns(h?.command));
       return { ...group, hooks };
     })
     .filter((group) => !Array.isArray(group?.hooks) || group.hooks.length > 0);
