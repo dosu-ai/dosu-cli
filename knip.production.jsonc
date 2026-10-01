@@ -10,6 +10,7 @@
     // Dev tools invoked directly (package script / manual regeneration).
     "scripts/reset-dev.ts!",
     "scripts/embed-skills.ts!",
+    "scripts/memory-rules-diff.ts!",
   ],
   "project": [
     "src/**/*.ts!",
