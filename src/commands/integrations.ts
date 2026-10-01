@@ -3,10 +3,11 @@
 import { Argument, Command } from "commander";
 import pc from "picocolors";
 import { createTypedClient, type TypedClient } from "../client/trpc";
-import type { NangoGetConnectionInput } from "../generated/dosu-api-types";
+import type { CliSlackChannelRow, NangoGetConnectionInput } from "../generated/dosu-api-types";
 import { positiveInteger } from "./arguments";
 import { requireLoginConfig } from "./auth";
 import { printResult, printTable } from "./output";
+import { channelLabel, resolveChannel } from "./slack-channel-resolve";
 
 function requireConfig() {
   const cfg = requireLoginConfig();
@@ -179,11 +180,14 @@ export function integrationsCommand(): Command {
         return;
       }
 
+      // Both IDs, so either can be copied into `slack-join` or `review notifications set`.
       printTable(
-        ["ID", "Name"],
-        channels.map((c: { channel_id: string; name?: string | null }) => [
-          c.channel_id,
+        ["UUID", "Slack ID", "Name", "Workspace"],
+        channels.map((c: CliSlackChannelRow) => [
+          c.id ?? "-",
+          c.channel_id ?? "-",
           c.name ?? "(unnamed)",
+          c.team_name ?? "-",
         ]),
         { rawData: channels },
       );
@@ -192,19 +196,28 @@ export function integrationsCommand(): Command {
   cmd
     .command("slack-join")
     .description("Join a Slack channel")
-    .argument("<channel-id>", "Slack channel ID")
+    .argument("<channel>", "Channel UUID, Slack channel ID (C… / G…), or #name")
     .option("--json", "Output as JSON")
     .action(async (channelId: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
 
-      await client.slackChannel.join.mutate(channelId);
+      // `join` takes the Dosu channel UUID, not Slack's channel ID.
+      const { id, channel } = await resolveChannel(
+        client,
+        // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
+        cfg.active_account!.target!.org_id!,
+        channelId,
+        { name: "<channel>", uuidUsage: "`dosu integrations slack-join <uuid>`" },
+        opts.json,
+      );
+      await client.slackChannel.join.mutate(id);
 
       if (opts.json) {
-        printResult({ success: true, channelId }, opts);
+        printResult({ success: true, channelId, id, channel }, opts);
         return;
       }
-      console.log(pc.green(`Joined Slack channel ${channelId}.`));
+      console.log(pc.green(`Joined ${channel ? channelLabel(channel) : `Slack channel ${id}`}.`));
     });
 
   cmd
