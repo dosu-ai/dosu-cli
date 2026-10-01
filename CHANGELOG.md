@@ -1,3 +1,38 @@
+## [0.64.1](https://github.com/dosu-ai/dosu-cli/compare/v0.64.0...v0.64.1) (2026-09-30)
+
+
+### Bug Fixes
+
+* **docs:** report unreadable --body-file as a usage error ([#261](https://github.com/dosu-ai/dosu-cli/issues/261)) ([76e99e0](https://github.com/dosu-ai/dosu-cli/commit/76e99e02f31a800f4a8f40008998383d81b55156))
+
+# [0.64.0](https://github.com/dosu-ai/dosu-cli/compare/v0.63.0...v0.64.0) (2026-09-30)
+
+
+### Features
+
+* **knowledge:** anchor mined notes to their session's git branch ([#260](https://github.com/dosu-ai/dosu-cli/issues/260)) ([2d3d58a](https://github.com/dosu-ai/dosu-cli/commit/2d3d58a5779f728e458c34d30fefe443409e217e))
+
+# [0.63.0](https://github.com/dosu-ai/dosu-cli/compare/v0.62.1...v0.63.0) (2026-09-30)
+
+
+### Features
+
+* **knowledge:** scope studying by git repo and tag learned notes with their repo ([#251](https://github.com/dosu-ai/dosu-cli/issues/251)) ([7fa7c20](https://github.com/dosu-ai/dosu-cli/commit/7fa7c20f3685906ffa8196bcfcd2503e4d2d129c))
+
+## [0.62.1](https://github.com/dosu-ai/dosu-cli/compare/v0.62.0...v0.62.1) (2026-09-29)
+
+
+### Bug Fixes
+
+* **skill:** route review-list requests and clarify MCP deployment terms ([#252](https://github.com/dosu-ai/dosu-cli/issues/252)) ([f0cb59d](https://github.com/dosu-ai/dosu-cli/commit/f0cb59d4bfff6d5f62dda4ccac9b989f023479bf))
+
+# [0.62.0](https://github.com/dosu-ai/dosu-cli/compare/v0.61.0...v0.62.0) (2026-09-29)
+
+
+### Features
+
+* **mcp:** always load Dosu tools in Claude Code ([#255](https://github.com/dosu-ai/dosu-cli/issues/255)) ([7feb411](https://github.com/dosu-ai/dosu-cli/commit/7feb4111c9af39d89ac49f8411dcf6cb2e7f9f19))
+
 # [0.61.0](https://github.com/dosu-ai/dosu-cli/compare/v0.60.2...v0.61.0) (2026-09-29)
 
 

@@ -1,4 +1,4 @@
-/** `dosu deployments`: list, inspect, and switch deployments. */
+/** `dosu deployments`: list, inspect, and switch the selected MCP deployment. */
 
 import { Command } from "commander";
 import pc from "picocolors";
@@ -75,11 +75,13 @@ async function resolveDeploymentId(
 }
 
 export function deploymentsCommand(): Command {
-  const cmd = new Command("deployments").description("Manage deployments");
+  const cmd = new Command("deployments").description(
+    "Select the MCP deployment (and its Library) this CLI uses; not for Agents",
+  );
 
   cmd
     .command("list")
-    .description("List all deployments")
+    .description("List MCP deployments you can select")
     .option("--json", "Output as JSON")
     .action(async (opts: { json?: boolean }) => {
       const cfg = requireConfig();
@@ -99,7 +101,7 @@ export function deploymentsCommand(): Command {
       }
 
       if (!deployments || deployments.length === 0) {
-        console.log(pc.dim("No deployments found."));
+        console.log(pc.dim("No MCP deployments found."));
         return;
       }
 
@@ -125,7 +127,7 @@ export function deploymentsCommand(): Command {
 
   cmd
     .command("info")
-    .description("Show current deployment details")
+    .description("Show the selected MCP deployment")
     .option("--json", "Output as JSON")
     .action(async (opts: { json?: boolean }) => {
       const cfg = requireConfig();
@@ -170,8 +172,8 @@ export function deploymentsCommand(): Command {
 
   cmd
     .command("switch")
-    .description("Switch to a different deployment")
-    .argument("<id>", "Deployment ID (full UUID, or a unique prefix as shown by 'list')")
+    .description("Select a different MCP deployment (mints a new API key for it)")
+    .argument("<id>", "MCP deployment ID (full UUID, or a unique prefix as shown by 'list')")
     .option("--json", "Output as JSON")
     .action(async (rawId: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();

@@ -6,7 +6,7 @@ import type { AgentSession } from "../sessions/scan";
 import {
   backoffUntil,
   DEFAULT_QUIET_PERIOD_MS,
-  filterSessionsByProject,
+  filterSessionsByRepo,
   gateSessions,
   isUnderDir,
   loadSyncState,
@@ -14,8 +14,8 @@ import {
   type SyncState,
   saveSyncState,
   setSyncPaused,
+  studyRepoFilter,
   syncStatePath,
-  UNKNOWN_PROJECT,
 } from "./watermark";
 
 let configDir: string;
@@ -161,18 +161,20 @@ describe("loadSyncState / saveSyncState", () => {
   });
 });
 
-describe("project filter", () => {
-  it("round-trips through disk and drops non-string entries", () => {
+describe("study scope", () => {
+  it("round-trips both filters through disk and drops non-string entries", () => {
     saveSyncState(
       {
         schema_version: 1,
         watermark: null,
         consecutive_failures: 0,
-        project_filter: ["dosu-cli", UNKNOWN_PROJECT],
+        repo_filter: ["github.com/dosu-ai/dosu-cli"],
+        project_filter: ["/repo/dosu-cli"],
       },
       configDir,
     );
-    expect(loadSyncState(configDir).project_filter).toEqual(["dosu-cli", UNKNOWN_PROJECT]);
+    expect(loadSyncState(configDir).repo_filter).toEqual(["github.com/dosu-ai/dosu-cli"]);
+    expect(loadSyncState(configDir).project_filter).toEqual(["/repo/dosu-cli"]);
 
     writeFileSync(
       syncStatePath(configDir),
@@ -180,36 +182,67 @@ describe("project filter", () => {
         schema_version: 1,
         watermark: null,
         consecutive_failures: 0,
+        repo_filter: ["github.com/a/b", 42, null],
         project_filter: ["dosu", 42, null],
       }),
     );
+    expect(loadSyncState(configDir).repo_filter).toEqual(["github.com/a/b"]);
     expect(loadSyncState(configDir).project_filter).toEqual(["dosu"]);
   });
 
-  it("filterSessionsByProject passes everything without a filter", () => {
-    const sessions = [session({ project: "a" }), session()];
-    const resolve = () => "/anywhere";
-    expect(filterSessionsByProject(sessions, undefined, resolve)).toEqual(sessions);
-    expect(filterSessionsByProject(sessions, [], resolve)).toEqual(sessions);
+  it("filterSessionsByRepo keeps every session without a filter and only picked repos with one", () => {
+    const cli = session({ id: "cli", project: "github.com/dosu-ai/dosu-cli" });
+    const app = session({ id: "app", project: "github.com/dosu-ai/dosu" });
+    const loose = session({ id: "loose" });
+    const repoOf = (s: AgentSession) => s.project ?? null;
+
+    expect(filterSessionsByRepo([cli, app, loose], null, repoOf)).toEqual([
+      { ...cli, repo: "github.com/dosu-ai/dosu-cli" },
+      { ...app, repo: "github.com/dosu-ai/dosu" },
+      loose,
+    ]);
+    expect(filterSessionsByRepo([cli, app, loose], ["github.com/dosu-ai/dosu"], repoOf)).toEqual([
+      { ...app, repo: "github.com/dosu-ai/dosu" },
+    ]);
+    expect(filterSessionsByRepo([cli, app, loose], [], repoOf)).toEqual([]);
   });
 
-  it("filterSessionsByProject matches by directory, subfolders included", () => {
-    const inScope = session({ project: "/repo/dosu-cli" });
-    const worktree = session({ project: "/repo/dosu-cli/worktrees/fix" });
-    const sibling = session({ project: "/repo/dosu-cli-docs" });
-    const unknown = session();
-    const resolve = (s: AgentSession) => s.project ?? null;
+  it("studyRepoFilter prefers the repo filter and is null with no scope", () => {
+    const locator = { resolve: () => "/x", resolveRepo: () => "github.com/a/b" };
+    const list = () => [session()];
+    expect(studyRepoFilter({ repo_filter: ["github.com/c/d"] }, list, locator)).toEqual([
+      "github.com/c/d",
+    ]);
+    expect(studyRepoFilter({}, list, locator)).toBeNull();
+    expect(studyRepoFilter({ project_filter: [] }, list, locator)).toBeNull();
+  });
 
-    const picked = filterSessionsByProject(
-      [inScope, worktree, sibling, unknown],
-      ["/repo/dosu-cli"],
-      resolve,
-    );
-    // The sibling shares the string prefix but not the path boundary.
-    expect(picked).toEqual([inScope, worktree]);
+  it("studyRepoFilter maps a legacy folder scope to the sorted repos of its sessions", () => {
+    const sessions = [
+      session({ id: "a", project: "/work/dosu-cli/src" }),
+      session({ id: "b", project: "/work/dosu" }),
+      session({ id: "c", project: "/work/dosu-cli-docs" }),
+      session({ id: "d", project: "/work/scratch" }),
+      session({ id: "e" }),
+    ];
+    const repos: Record<string, string | null> = {
+      a: "github.com/dosu-ai/dosu-cli",
+      b: "github.com/dosu-ai/dosu",
+      c: "github.com/dosu-ai/docs",
+      d: null,
+    };
+    const locator = {
+      resolve: (s: AgentSession) => s.project ?? null,
+      resolveRepo: (s: AgentSession) => repos[s.id] ?? null,
+    };
+
     expect(
-      filterSessionsByProject([inScope, unknown], ["/repo/dosu-cli", UNKNOWN_PROJECT], resolve),
-    ).toEqual([inScope, unknown]);
+      studyRepoFilter(
+        { project_filter: ["/work/dosu-cli", "/work/dosu", "/work/scratch", "(unknown)"] },
+        () => sessions,
+        locator,
+      ),
+    ).toEqual(["github.com/dosu-ai/dosu", "github.com/dosu-ai/dosu-cli"]);
   });
 
   it("isUnderDir respects path boundaries and trailing slashes", () => {
@@ -304,6 +337,7 @@ describe("resetSyncState", () => {
         total_learning_tokens: 9000,
         last_refusal: { at: "2026-09-02T23:05:00.000Z", outcome: "quota", message: "over" },
         run: { pid: 1, started_at: "2026-09-02T23:00:00.000Z", baseline_mined: 39 },
+        repo_filter: ["github.com/me/proj"],
         project_filter: ["/Users/me/proj"],
         paused: true,
       },
@@ -323,6 +357,7 @@ describe("resetSyncState", () => {
     expect(state.last_refusal).toBeUndefined();
     expect(state.run).toBeUndefined();
     expect(backoffUntil(state)).toBeNull();
+    expect(state.repo_filter).toEqual(["github.com/me/proj"]);
     expect(state.project_filter).toEqual(["/Users/me/proj"]);
     expect(state.paused).toBe(true);
   });

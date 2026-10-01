@@ -26,9 +26,8 @@ note cap are the volume guards.
 5. Title is a noun-phrase topic (like "page_version UniqueViolation race"), not a sentence.
 Content is a self-contained observation in plain language; include file/path pointers when
 useful.
-6. Only pass repo/branch to write_knowledge when the session itself verifies them (an explicit
-cwd, git remote, or branch mentioned in the transcript). Never infer or guess a repo. When not
-verified, omit both.
+6. Never pass repo or branch to write_knowledge; the client attaches each note's repo from the
+session it came from.
 7. Never quote credentials, tokens, or secrets — even redacted placeholders — and never include
 long verbatim transcript spans. Summarize in your own words.
 8. A trivial session with no real user query is normal: skip it silently.`;
