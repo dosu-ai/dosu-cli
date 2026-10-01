@@ -117,8 +117,6 @@ dosu docs unarchive <id> [--json]
 dosu docs delete <id> [--json]
 dosu docs versions <id> [--json]
 dosu docs restore <id> --revision <positive-int> [--json]
-dosu docs generate --title <title> [--instructions <text>] [--json]
-dosu docs auto-tag <id> [--json]
 dosu docs import <platform> --files <comma-separated-ids> [--json]
 dosu docs import-status <task-id> [--json]
 dosu docs publish <id> --to <platform> [target flags] [--json]
@@ -128,7 +126,7 @@ dosu docs sync-back <id> [--json]
 - Document list defaults to 20. `create` and `update` reject combining `--body` with `--body-file`; `update` requires at least one field.
 - Import platforms: `github`, `gitlab`, `azure_devops`, `confluence`, `notion`, `coda`.
 - Publish platforms: the same six. Target flags are `--repo-id`, `--project-id`, `--parent-page-id`, `--doc-id`, `--directory`, and `--data-source-id`; Azure DevOps requires `--data-source-id`. Other target validation may occur in the backend.
-- `generate`, `auto-tag`, import, publish, and sync operations may be asynchronous. Use the returned task/status identifiers rather than assuming completion.
+- Import, publish, and sync operations may be asynchronous. Use the returned task/status identifiers rather than assuming completion.
 
 ## Review
 
@@ -142,11 +140,18 @@ dosu review context <thread-id> [--json]
 dosu review approve <id> [--confirm] [--json]
 dosu review reject <id> [--confirm] [--json]
 dosu review revert <id> [--json]
+dosu review notifications get (--library <library-id> | --agent <agent-id>) [--json]
+dosu review notifications set (--library <library-id> | --agent <agent-id>)
+    --channel <uuid | slack-id | #name> [--confirm] [--json]
+dosu review notifications clear (--library <library-id> | --agent <agent-id>) [--confirm] [--json]
 ```
 
 - `list` reads the selected Library's pending doc changes plus the selected MCP deployment's draft replies. JSON is `{items, truncated, total, scope}`: at most 50 items, newest first; `total` is a lower bound when `truncated` is true; `scope` names the Library and MCP deployment searched (see [review-workflow.md](review-workflow.md)). A missing, deleted, or inaccessible Library or deployment is an error, not an empty list. `--since`/`--until` take `24h`/`7d`/`2w`, a UTC date, or an ISO-8601 datetime.
 - IDs are opaque: pass each `id` from `list` verbatim (draft replies carry a `draft_message:` prefix). `revert` takes a decided doc change's page-version ID and does not apply to drafts.
 - `edit` requires at least one field; drafts accept only `--body`/`--body-file`. `approve` and `reject` do not write without interactive confirmation or `--confirm`.
+- `notifications` manages the Slack channel that receives review notifications for one Library (doc reviews) or one Agent (its draft replies). Unlike the queue commands it takes an explicit target, not the selected MCP deployment. Pass exactly one of `--library`/`--agent` (UUID v4; Agent IDs come from `dosu agents list`).
+- `notifications get --json` returns `{orgId, canEdit, slackInstalled, notificationsEnabled, notification}`; `notification` is `null` when no channel is set. A non-null `notification.disabled_reason` means delivery stopped: `not_in_channel` needs `/invite @Dosu` in the channel; `is_archived`/`channel_not_found`/`channel_missing` need another channel; re-running `set` with the same channel reconnects it.
+- `set`/`clear` need an organization admin, and `set` needs the Slack app installed and Slack Notifications enabled for the organization; the CLI checks all three before prompting. `--channel` takes the channel's Dosu UUID, a Slack ID (`C…`/`G…`), or a name; a name shared across Slack workspaces or not found exits 1 with candidate UUIDs. A private channel Dosu cannot join exits 1 asking for `/invite @Dosu`. `set --json` returns `{success, notification}`; `clear --json` returns `{success, removed}`, and `removed: false` (nothing was set) is still a success.
 
 ## Sources, integrations, members, and organization
 
@@ -161,8 +166,8 @@ dosu sources create github --repo <owner/name> [--library <id>] [--confirm] [--j
 
 dosu integrations list [--json]
 dosu integrations status <platform> [--json]
-dosu integrations slack-channels [--json]
-dosu integrations slack-join <channel-id> [--json]
+dosu integrations slack-channels [--search <term>] [--limit <1-100>] [--cursor <uuid>] [--all] [--json]
+dosu integrations slack-join <uuid | slack-id | #name> [--json]
 dosu integrations github-collaborators <positive-repository-id> [--json]
 
 dosu members invite <email> [--role admin|member] [--json]       # default member
@@ -179,6 +184,17 @@ dosu org info [--json]
   to the active Library. A repo not listed means the GitHub App lacks access — run
   `sources connect github` first. Forks can't be connected.
 - Integration status choices: `github`, `gitlab`, `azure_devops`, `slack`, `confluence`, `notion`, `coda`, `teams`. GitHub, Slack, and Teams currently return `connected: null` because CLI status probing is unavailable for them.
+- `slack-channels` lists each channel's Dosu UUID and Slack ID (`C…`/`G…`); `slack-join` and
+  `review notifications set --channel` accept either, or the channel name (quote `'#name'` in
+  shells that treat `#` as a comment). A name shared across Slack workspaces or not found exits 1
+  with candidate UUIDs on stderr. `slack-join --json` returns `{success, channelId, id, channel}`:
+  `channelId` is the input, `id` the resolved UUID, and `channel` the matched row (`null` when a
+  UUID was passed).
+- `slack-channels` lists 50 available channels per page (`--limit` up to 100); `--search` is a
+  server-side substring match on the name. `--json` always returns `{items, nextCursor}`, where
+  each item carries both `id` and `channel_id`; pass a non-null `nextCursor` as `--cursor` for the
+  next page. `--all` reads every page (`nextCursor: null`) and cannot be combined with `--limit` or
+  `--cursor`; prefer `--search` in large organizations.
 - The CLI has no member list/remove/request commands; `members invite` is its only member operation.
 
 ## Threads, Topics, suggestions, and analytics

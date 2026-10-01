@@ -2,7 +2,6 @@
  * per-agent hook triggers. */
 
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { Command, Option } from "commander";
 import pc from "picocolors";
@@ -12,6 +11,8 @@ import { allHookAgents, getHookAgent, type HookAgent } from "../hooks/agents";
 import { HookConfigError, hookCommand } from "../hooks/formats";
 import type { LearnerRunResult } from "../learner/runner";
 import { emitKnowledgeReport } from "../report/generate";
+import { captureHookSession } from "../sessions/capture";
+import { displayRepo } from "../sessions/repo";
 import type { AgentSession } from "../sessions/scan";
 import { listSessionBacklog } from "../sync/backlog";
 import { spawnDetachedSelf } from "../sync/detach";
@@ -243,7 +244,9 @@ export function knowledgeCommand(): Command {
 
         if (opts.detach) {
           // Hooks call `sync --quiet --detach`; the re-spawned child runs the
-          // actual pipeline so the hooking agent gets its exit immediately.
+          // actual pipeline so the hooking agent gets its exit immediately. The hook payload
+          // is only readable here: the child's stdin is ignored.
+          await captureHookSession();
           const spawned = spawnDetachedSelf([
             "knowledge",
             "sync",
@@ -431,12 +434,15 @@ function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
   }
   const wm = status.state.watermark;
   console.log(`  Studied through: ${wm ? `${wm} (${formatAge(wm, now)})` : "nothing studied yet"}`);
-  if (status.state.project_filter?.length) {
-    const home = homedir();
-    const scope = status.state.project_filter
-      .map((dir) => (dir.startsWith(`${home}/`) ? `~${dir.slice(home.length)}` : dir))
-      .join(", ");
-    console.log(`  Study scope:     ${scope}`);
+  const repoFilter = status.state.repo_filter;
+  if (repoFilter) {
+    console.log(
+      `  Study scope:     ${repoFilter.length ? repoFilter.map(displayRepo).join(", ") : "no repos"}`,
+    );
+  } else if (status.state.project_filter?.length) {
+    console.log(
+      `  Study scope:     ${status.state.project_filter.length} folders (converted to repos on the next sync)`,
+    );
   }
   if ((status.state.total_notes ?? 0) > 0) {
     const tokens = status.state.total_learning_tokens ?? 0;

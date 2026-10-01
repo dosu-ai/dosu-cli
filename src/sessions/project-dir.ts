@@ -1,4 +1,4 @@
-/** Session working-directory resolution for the studying project filter; each harness leaks the
+/** Session working-directory and repo resolution for the study scope; each harness leaks the
  * cwd differently. Results are cached per session (a session's cwd never changes). */
 
 import {
@@ -14,6 +14,14 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config/config";
+import {
+  branchFromClaudeTranscript,
+  branchFromCodexTranscript,
+  branchFromReflog,
+  parseReflog,
+} from "./branch";
+import { type CapturedSession, readCapturedSession } from "./capture";
+import { currentBranchOfDir, headReflogOfDir, originRepoOfDir } from "./repo";
 import type { AgentSession } from "./scan";
 
 const CACHE_FILENAME = "project-dirs.json";
@@ -28,6 +36,9 @@ interface CacheEntry {
   dir: string | null;
   /** Session file mtime at resolution time, for retrying failures. */
   mtime: string;
+  /** Normalized origin repo of `dir`; null = not a repo (retried when mtime moves); absent =
+   * never looked up. */
+  repo?: string | null;
 }
 
 interface CacheFile {
@@ -128,6 +139,19 @@ export interface ProjectDirDeps {
   exists?: (path: string) => boolean;
   readHead?: (path: string) => string | null;
   mtime?: (path: string) => string;
+  repoOfDir?: (dir: string) => string | null;
+  readTranscript?: (path: string) => string | null;
+  captured?: (key: string) => CapturedSession | null;
+  reflogOfDir?: (dir: string) => string | null;
+  currentBranch?: (dir: string) => string | null;
+}
+
+function readWholeFile(path: string): string | null {
+  try {
+    return readFileSync(path, "utf-8");
+  } catch {
+    return null;
+  }
 }
 
 function fileMtime(path: string): string {
@@ -141,6 +165,11 @@ function fileMtime(path: string): string {
 export interface ProjectDirResolver {
   /** The session's working directory, or null when it can't be determined. */
   resolve(session: AgentSession): string | null;
+  /** The normalized origin repo of the session's working directory, or null outside a repo. */
+  resolveRepo(session: AgentSession): string | null;
+  /** The branch the session ran on, or null when nothing recorded it. Not cached: a session's
+   * branch can move until it ends, and each session is resolved about once. */
+  resolveBranch(session: AgentSession): string | null;
   /** Cache-only lookup by `harness/id` key — for history rows with no session file at hand. */
   cached(key: string): string | null;
   /** Persist any newly resolved entries; call once after a batch. */
@@ -156,6 +185,7 @@ export function createProjectDirResolver(
   const exists = deps.exists ?? existsSync;
   const head = deps.readHead ?? readHead;
   const mtime = deps.mtime ?? fileMtime;
+  const captured = deps.captured ?? ((key: string) => readCapturedSession(key, configDir));
   const entries = loadCacheFile(configDir);
   let dirty = false;
 
@@ -175,29 +205,93 @@ export function createProjectDirResolver(
         const text = head(session.path);
         return text ? cwdFromJsonlHead(text) : null;
       }
-      case "cursor":
+      case "cursor": {
+        // The stop hook records the real workspace root; the slug is only a guess at it.
+        const hookDir = captured(`cursor/${session.id}`)?.dir;
+        if (hookDir) return hookDir;
         return session.project ? unmungeSlug(session.project, exists) : null;
+      }
       default:
         return null;
     }
+  };
+
+  const repoOfDir = deps.repoOfDir ?? originRepoOfDir;
+  // Many sessions share a directory; one git call per directory per resolver.
+  const repoByDir = new Map<string, string | null>();
+  const readTranscript = deps.readTranscript ?? readWholeFile;
+  const reflogOfDir = deps.reflogOfDir ?? headReflogOfDir;
+  const currentBranch = deps.currentBranch ?? currentBranchOfDir;
+  const reflogByDir = new Map<string, ReturnType<typeof parseReflog>>();
+  const currentByDir = new Map<string, string | null>();
+
+  const transcriptBranch = (session: AgentSession): string | null => {
+    if (session.harness !== "claude" && session.harness !== "codex") return null;
+    const text = readTranscript(session.path);
+    if (text === null) return null;
+    return session.harness === "claude"
+      ? branchFromClaudeTranscript(text)
+      : branchFromCodexTranscript(text);
+  };
+
+  const reflogBranch = (session: AgentSession): string | null => {
+    const dir = resolve(session);
+    const end = Date.parse(session.updated);
+    if (dir === null || Number.isNaN(end)) return null;
+    let entries = reflogByDir.get(dir);
+    if (!entries) {
+      entries = parseReflog(reflogOfDir(dir) ?? "");
+      reflogByDir.set(dir, entries);
+    }
+    return branchFromReflog(entries, Math.floor(end / 1000), () => {
+      if (!currentByDir.has(dir)) currentByDir.set(dir, currentBranch(dir));
+      return currentByDir.get(dir) ?? null;
+    });
+  };
+
+  const resolve = (session: AgentSession): string | null => {
+    const key = `${session.harness}/${session.id}`;
+    const cached = entries[key];
+    // Hits are final; failures are retried once the session file changes
+    // (a young log may simply not have written its cwd line yet).
+    if (cached && (cached.dir !== null || cached.mtime === mtime(session.path))) {
+      return cached.dir;
+    }
+    const dir = compute(session);
+    entries[key] = { dir, mtime: mtime(session.path) };
+    dirty = true;
+    return dir;
   };
 
   return {
     cached(key) {
       return entries[key]?.dir ?? null;
     },
-    resolve(session) {
-      const key = `${session.harness}/${session.id}`;
-      const cached = entries[key];
-      // Hits are final; failures are retried once the session file changes
-      // (a young log may simply not have written its cwd line yet).
-      if (cached && (cached.dir !== null || cached.mtime === mtime(session.path))) {
-        return cached.dir;
+    resolve,
+    resolveRepo(session) {
+      const dir = resolve(session);
+      if (dir === null) return null;
+      const entry = entries[`${session.harness}/${session.id}`];
+      // Cached per session, so a checkout deleted since still resolves to its repo.
+      if (
+        entry.repo !== undefined &&
+        (entry.repo !== null || entry.mtime === mtime(session.path))
+      ) {
+        return entry.repo;
       }
-      const dir = compute(session);
-      entries[key] = { dir, mtime: mtime(session.path) };
+      if (!repoByDir.has(dir)) repoByDir.set(dir, repoOfDir(dir));
+      const repo = repoByDir.get(dir) ?? null;
+      entry.repo = repo;
+      entry.mtime = mtime(session.path);
       dirty = true;
-      return dir;
+      return repo;
+    },
+    resolveBranch(session) {
+      return (
+        transcriptBranch(session) ??
+        captured(`${session.harness}/${session.id}`)?.branch ??
+        reflogBranch(session)
+      );
     },
     flush() {
       if (!dirty) return;
