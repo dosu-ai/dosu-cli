@@ -153,6 +153,7 @@ These are read by `scripts/build-all.ts:buildDefines()` and inlined as string li
 - `DOSU_WEB_APP_URL`, `DOSU_BACKEND_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY` — sourced from `.env.production` for prod builds, `.env.development` for `bun run dev:local`
 - `DOSU_POSTHOG_PROJECT_TOKEN`, `DOSU_CLI_SENTRY_DSN` — telemetry ingestion destinations. These must be public client-side project credentials, never PostHog personal API keys, Sentry auth tokens, or admin/management secrets.
 - `DOSU_VERSION` — injected at build time for version info
+- `DOSU_INSTALL_CHANNEL` — `npm` (default), `binary`, `homebrew`, or `selfhost`. A `selfhost` build is made for a self-hosted Dosu backend (set `DOSU_BACKEND_URL` and `DOSU_WEB_APP_URL` to it) and ships with that deployment, so it never checks for, offers, or installs public releases, which point at Dosu Cloud.
 
 ### Runtime overrides
 

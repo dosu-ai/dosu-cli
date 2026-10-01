@@ -405,6 +405,23 @@ describe("checkForUpdates", () => {
     expect(getAvailableUpdate()).toBe("99.0.0");
   });
 
+  it("never checks for or offers public releases in a self-hosted build", async () => {
+    const { mkdirSync } = require("node:fs");
+    mkdirSync(join(tempDir, "dosu-cli"), { recursive: true });
+    writeFileSync(
+      join(tempDir, "dosu-cli", "update-check.json"),
+      JSON.stringify({ lastCheck: 0, latestVersion: "99.0.0" }),
+    );
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await checkForUpdates({ channel: "selfhost" });
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(spy).not.toHaveBeenCalled();
+    expect(mocks.startAutoUpdate).not.toHaveBeenCalled();
+    expect(getAvailableUpdate("selfhost")).toBeNull();
+  });
+
   it("getAvailableUpdate is null with no cache or no newer version", () => {
     expect(getAvailableUpdate()).toBeNull();
 

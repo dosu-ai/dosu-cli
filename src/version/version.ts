@@ -11,8 +11,14 @@ function readPackageVersion(): string {
 
 export const VERSION = process.env.DOSU_VERSION ?? readPackageVersion();
 
-/** Distribution channel baked in at build time. One of: "npm", "binary", "homebrew". */
+/** Distribution channel baked in at build time. One of: "npm", "binary", "homebrew", "selfhost". */
 export const INSTALL_CHANNEL = process.env.DOSU_INSTALL_CHANNEL ?? "npm";
+
+/** A build for a self-hosted Dosu backend, which ships its own CLI. Public releases point at Dosu
+ * Cloud, so these builds never look for, offer, or install them. */
+export function isSelfHostedBuild(channel: string = INSTALL_CHANNEL): boolean {
+  return channel === "selfhost";
+}
 
 /** npm exec/npx runs are ephemeral and must never be converted into global installs. */
 export function isNpxInvocation(

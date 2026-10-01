@@ -454,6 +454,14 @@ describe("runUpgrade", () => {
     expect(errors()).toContain("brew upgrade dosu-ai/dosu/dosu");
   });
 
+  it("refuses to replace a self-hosted build with a public release", () => {
+    expect(runUpgrade("selfhost")).toBe(1);
+
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+    expect(output()).toContain("self-hosted Dosu");
+    expect(output()).not.toContain("github.com/dosu-ai/dosu-cli/releases");
+  });
+
   it("fails closed for standalone and unknown channels", () => {
     expect(runUpgrade("binary")).toBe(1);
     expect(runUpgrade("unexpected")).toBe(1);
