@@ -17,11 +17,7 @@ vi.mock("../debug/logger", () => ({
 }));
 
 const SESSION = "5f0c2a1e-7b3d-4c8e-9a61-2d4f8b0e1c37";
-const API: MemoryApi = {
-  backendURL: "http://memory.test",
-  apiKey: "test-key",
-  deploymentID: "d-1",
-};
+const API: MemoryApi = { backendURL: "http://memory.test", apiKey: "test-key" };
 const TS = "2026-10-01T10:00:00.000Z";
 
 let dir: string;
@@ -54,7 +50,7 @@ function deps(extra: Partial<SyncDeps> = {}): SyncDeps {
 }
 
 const chunks = () =>
-  requests.filter((r) => r.url.endsWith("/chunks")).map((r) => r.body as ChunkRequest);
+  requests.filter((r) => r.url.endsWith("/events")).map((r) => r.body as ChunkRequest);
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "dosu-memory-sync-"));
@@ -106,9 +102,9 @@ describe("syncSession", () => {
       [1, 4, 5, 1],
       [2, 6, 6, 1],
     ]);
+    expect(requests[0].url).toBe(`http://memory.test/v1/agent-memory/sessions/${SESSION}/events`);
     expect(chunks()[0]).toMatchObject({
       repo: "acme/widgets",
-      session_id: SESSION,
       source: "claude_code",
       diff: "diff --git a/x b/x",
       events: [
@@ -207,11 +203,16 @@ describe("syncSession", () => {
     expect(chunks()[0].diff).toBe('+DB_PASSWORD = "[redacted:credential]"');
   });
 
-  it("flushes after the last chunk lands, and not while one is still pending", async () => {
+  it("flushes after the last chunk lands, not while one is pending or before any landed", async () => {
+    expect(await syncSession(SESSION, { flush: true }, deps())).toMatchObject({ flushed: false });
+    expect(requests).toEqual([]);
+
     appendFileSync(transcript, prompt("First"));
     statuses = [500];
     expect(await syncSession(SESSION, { flush: true }, deps())).toMatchObject({ flushed: false });
-    expect(requests.map((r) => r.url)).toEqual(["http://memory.test/v1/agent-memory/chunks"]);
+    expect(requests.map((r) => r.url)).toEqual([
+      `http://memory.test/v1/agent-memory/sessions/${SESSION}/events`,
+    ]);
 
     expect(await syncSession(SESSION, { flush: true }, deps())).toEqual({
       status: "uploaded",

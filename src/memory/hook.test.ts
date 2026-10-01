@@ -28,7 +28,7 @@ const payload = (event: string, extra: Record<string, unknown> = {}) => ({
 function deps(extra: Partial<HookDeps> = {}): HookDeps {
   return {
     configDir: dir,
-    api: { backendURL: "http://memory.test", apiKey: "test-key", deploymentID: "d-1" },
+    api: { backendURL: "http://memory.test", apiKey: "test-key" },
     fetchImpl: (async (_url: unknown, init?: RequestInit) => {
       recallBodies.push(JSON.parse(String(init?.body)));
       return respond();

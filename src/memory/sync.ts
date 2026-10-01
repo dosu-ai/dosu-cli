@@ -124,7 +124,6 @@ function buildChunk(
   const diff = snapshot(state.cwd, state.start_head);
   const chunk: ChunkRequest = {
     repo,
-    session_id: state.session_id,
     source: "claude_code",
     seq: state.next_seq,
     first_line: state.line_offset + 1,
@@ -140,16 +139,17 @@ function buildChunk(
 
 async function sendWithRetry(
   api: MemoryApi,
+  sessionId: string,
   chunk: ChunkRequest,
   deps: SyncDeps,
 ): Promise<ApiOutcome> {
   const delays = deps.retryDelaysMs ?? RETRY_DELAYS_MS;
   const sleep = deps.sleep ?? defaultSleep;
-  let outcome = await postChunk(api, chunk, deps.fetchImpl);
+  let outcome = await postChunk(api, sessionId, chunk, deps.fetchImpl);
   for (const delay of delays) {
     if (outcome.ok || (outcome.status !== null && PERMANENT_REJECTIONS.has(outcome.status))) break;
     await sleep(delay);
-    outcome = await postChunk(api, chunk, deps.fetchImpl);
+    outcome = await postChunk(api, sessionId, chunk, deps.fetchImpl);
   }
   return outcome;
 }
@@ -161,7 +161,7 @@ async function deliverOutbox(
   deps: SyncDeps,
 ): Promise<{ delivered: boolean; error?: string }> {
   const outbox = state.outbox as Outbox;
-  const outcome = await sendWithRetry(api, outbox.chunk, deps);
+  const outcome = await sendWithRetry(api, state.session_id, outbox.chunk, deps);
   if (!outcome.ok) {
     const permanent = outcome.status !== null && PERMANENT_REJECTIONS.has(outcome.status);
     if (!permanent) return { delivered: false, error: outcome.error };
@@ -224,7 +224,8 @@ export async function syncSession(
     }
     if (result.chunks > 0) result.status = "uploaded";
 
-    if (options.flush) {
+    // A session the backend never got a batch of has no episode to flush (it would answer 404).
+    if (options.flush && state.next_seq > 0) {
       const flushed = await flushSession(api, sessionId, deps.fetchImpl);
       result.flushed = flushed.ok;
       if (!flushed.ok) return { ...result, status: "failed", error: `flush: ${flushed.error}` };

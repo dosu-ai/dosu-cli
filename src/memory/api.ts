@@ -1,7 +1,6 @@
-/** Client for the agent-memory backend (`/v1/agent-memory/*`). Every request and response shape
- * the CLI relies on lives in this file, so aligning with the backend is a one-file change. Auth
- * matches the MCP server: the deployment's `X-Dosu-API-Key` plus its deployment id, from which the
- * backend resolves the org. */
+/** Client for the agent-memory backend (`/v1/agent-memory/*`, dosu backend
+ * `public_api/agent_memory/router.py`). Every request and response shape the CLI relies on lives
+ * in this file. Auth is the MCP entry's `X-Dosu-API-Key`; the backend resolves the org from it. */
 
 import { loadConfig } from "../config/config";
 import { getBackendURL } from "../config/constants";
@@ -15,13 +14,12 @@ export type MemoryEvent =
   | { type: "command"; ts: string; command: string; rc: number; error_line: string | null }
   | { type: "file_edit"; ts: string; tool: string; path: string };
 
-/** `POST /v1/agent-memory/chunks`. `(org, session_id, seq)` is unique server-side; a resent
- * chunk carries the same seq and content. Lines are 1-based and inclusive. `diff` is the latest
- * snapshot against the session's starting commit: `""` means no changes, `null` means git could
- * not produce one (keep the previous snapshot). */
+/** `POST /v1/agent-memory/sessions/{session_id}/events` (backend `SessionBatch`).
+ * `(org, session_id, seq)` is unique server-side; a resent chunk carries the same seq and content.
+ * Lines are 1-based and inclusive. `diff` is the latest snapshot against the session's starting
+ * commit: `""` means no changes, `null` means git could not produce one (keep the previous). */
 export interface ChunkRequest {
   repo: string;
-  session_id: string;
   source: "claude_code";
   seq: number;
   first_line: number;
@@ -37,25 +35,25 @@ export interface RecallRequest {
   prompt: string;
 }
 
-/** An empty `note` means nothing to inject. */
+/** An empty `note` means nothing to inject. `episode_ids` were read in full;
+ * `available_episode_ids` are all earlier done episodes the writer saw. */
 export interface RecallResponse {
   note: string;
   episode_ids: string[];
+  available_episode_ids: string[];
   latency_ms: number;
-  cost_usd?: number;
+  cost_usd: number | null;
 }
 
-const CHUNKS_PATH = "/v1/agent-memory/chunks";
 const RECALL_PATH = "/v1/agent-memory/recall";
 
-function flushPath(sessionId: string): string {
-  return `/v1/agent-memory/sessions/${encodeURIComponent(sessionId)}/flush`;
+function sessionPath(sessionId: string, action: "events" | "flush"): string {
+  return `/v1/agent-memory/sessions/${encodeURIComponent(sessionId)}/${action}`;
 }
 
 export interface MemoryApi {
   backendURL: string;
   apiKey: string;
-  deploymentID: string;
 }
 
 /** Credentials from the CLI config; null when logged out, in OSS mode, or without an API key. */
@@ -63,10 +61,10 @@ export function memoryApiFromConfig(): MemoryApi | null {
   try {
     const cfg = loadConfig();
     if (cfg.mode === "oss") return null;
-    const target = cfg.active_account?.target;
+    const apiKey = cfg.active_account?.target?.api_key;
     const backendURL = getBackendURL().replace(/\/$/, "");
-    if (!target?.api_key || !target.deployment_id || !backendURL) return null;
-    return { backendURL, apiKey: target.api_key, deploymentID: target.deployment_id };
+    if (!apiKey || !backendURL) return null;
+    return { backendURL, apiKey };
   } catch {
     return null;
   }
@@ -94,7 +92,6 @@ async function postJSON(
       headers: {
         "Content-Type": "application/json",
         "X-Dosu-API-Key": api.apiKey,
-        "X-Deployment-ID": api.deploymentID,
       },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutMs),
@@ -109,19 +106,21 @@ async function postJSON(
 
 export function postChunk(
   api: MemoryApi,
+  sessionId: string,
   chunk: ChunkRequest,
   fetchImpl: typeof fetch = fetch,
 ): Promise<ApiOutcome> {
-  return postJSON(api, CHUNKS_PATH, chunk, CHUNK_TIMEOUT_MS, fetchImpl);
+  return postJSON(api, sessionPath(sessionId, "events"), chunk, CHUNK_TIMEOUT_MS, fetchImpl);
 }
 
-/** Mark the session's episode ready for processing now instead of after the quiet period. */
+/** Process the session's episode now instead of after the quiet period. The backend answers 404
+ * for a session it has no batch of. */
 export function flushSession(
   api: MemoryApi,
   sessionId: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<ApiOutcome> {
-  return postJSON(api, flushPath(sessionId), {}, FLUSH_TIMEOUT_MS, fetchImpl);
+  return postJSON(api, sessionPath(sessionId, "flush"), {}, FLUSH_TIMEOUT_MS, fetchImpl);
 }
 
 export async function recall(
@@ -136,7 +135,10 @@ export async function recall(
   return {
     note: body.note,
     episode_ids: Array.isArray(body.episode_ids) ? body.episode_ids : [],
+    available_episode_ids: Array.isArray(body.available_episode_ids)
+      ? body.available_episode_ids
+      : [],
     latency_ms: typeof body.latency_ms === "number" ? body.latency_ms : 0,
-    ...(typeof body.cost_usd === "number" ? { cost_usd: body.cost_usd } : {}),
+    cost_usd: typeof body.cost_usd === "number" ? body.cost_usd : null,
   };
 }

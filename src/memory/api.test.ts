@@ -12,13 +12,12 @@ afterEach(() => {
 });
 
 describe("memoryApiFromConfig", () => {
-  it("uses the CLI's backend URL and the deployment's API key, like the MCP entry", () => {
+  it("uses the CLI's backend URL and the API key of the MCP entry", () => {
     process.env.DOSU_BACKEND_URL_OVERRIDE = "https://api.example.test/";
     saveConfig(makeTestConfig({ ...session, deployment_id: "d-1", api_key: "test-key" }));
     expect(memoryApiFromConfig()).toEqual({
       backendURL: "https://api.example.test",
       apiKey: "test-key",
-      deploymentID: "d-1",
     });
   });
 

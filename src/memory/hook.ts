@@ -129,7 +129,8 @@ async function onFirstPrompt(
   logger.info(
     "memory",
     `recall for ${state.session_id}: ${note ? `${note.length} chars` : "no note"} from ` +
-      `${response.episode_ids.length} episodes in ${response.latency_ms} ms`,
+      `${response.available_episode_ids.length} episodes (${response.episode_ids.length} in ` +
+      `full) in ${response.latency_ms} ms`,
   );
   if (!note || note === NO_NOTE) return null;
   state.note = note;
