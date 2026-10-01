@@ -18,7 +18,7 @@ Operate Dosu through `dosu`. Prefer structured output and let the CLI and App va
 
 - `dosu login` supplies the JWT used by tRPC-backed commands.
 - `dosu setup` selects an organization, Library context, and MCP deployment, creates an API key, and can configure an agent tool.
-- `dosu ask` needs an API key. `docs generate`, `docs auto-tag`, and `docs publish` need both JWT login and the API key. Other platform commands generally need JWT login; commands scoped to an organization or current Library also need the corresponding setup selection.
+- `dosu ask` needs an API key. `docs publish` needs both JWT login and the API key. Other platform commands generally need JWT login; commands scoped to an organization or current Library also need the corresponding setup selection.
 - For coding-agent setup, follow the nonblocking `dosu setup --agent --tool <id>` workflow in [workflows.md](references/workflows.md). Relay its URL and execute its returned `resume_command`; never invent ticket commands.
 
 ## Use current product terms

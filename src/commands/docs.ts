@@ -401,49 +401,6 @@ export function docsCommand(): Command {
       console.log(pc.green(`Document restored to version ${opts.revision}.`));
     });
 
-  // ── generate ──
-  cmd
-    .command("generate")
-    .description("Generate a document using AI")
-    .requiredOption("--title <title>", "Document title")
-    .option("--instructions <text>", "Custom generation instructions")
-    .option("--json", "Output as JSON")
-    .action(async (opts: { title: string; instructions?: string; json?: boolean }) => {
-      const cfg = requireConfig();
-      const client = createTypedClient(cfg);
-      // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const ksId = await getKnowledgeStoreId(client, cfg.active_account!.target!.space_id!);
-
-      const result = await backendPost("/doc/generate", requireAPIKey(cfg), {
-        knowledge_store_id: ksId,
-        title: opts.title,
-        instructions: opts.instructions,
-      });
-
-      if (opts.json) {
-        printResult(result, opts);
-        return;
-      }
-      console.log(pc.green("Document generation started."));
-    });
-
-  // ── auto-tag ──
-  cmd
-    .command("auto-tag")
-    .description("Auto-tag a document using AI")
-    .argument("<id>", "Page ID")
-    .option("--json", "Output as JSON")
-    .action(async (id: string, opts: { json?: boolean }) => {
-      const cfg = requireConfig();
-      const result = await backendPost("/doc/auto-tag", requireAPIKey(cfg), { page_id: id });
-
-      if (opts.json) {
-        printResult(result, opts);
-        return;
-      }
-      console.log(pc.green("Auto-tagging started."));
-    });
-
   // ── import ──
   cmd
     .command("import")

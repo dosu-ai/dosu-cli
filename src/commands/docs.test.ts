@@ -551,97 +551,6 @@ describe("docs restore", () => {
   });
 });
 
-describe("docs generate", () => {
-  it("POSTs to Python backend /doc/generate", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockFetch.mockResolvedValueOnce(jsonResponse({ status: "started" }));
-
-    await run("generate", "--title", "API Guide", "--instructions", "Focus on REST");
-
-    const [url, opts] = mockFetch.mock.calls[0];
-    expect(url).toBe("https://api.test.dev/doc/generate");
-    expect(opts.headers["X-Dosu-API-Key"]).toBe("sk_user_test");
-    const body = JSON.parse(opts.body);
-    expect(body.knowledge_store_id).toBe("ks1");
-    expect(body.title).toBe("API Guide");
-    expect(body.instructions).toBe("Focus on REST");
-  });
-
-  it("outputs JSON with --json", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockFetch.mockResolvedValueOnce(jsonResponse({ status: "started" }));
-    await run("generate", "--json", "--title", "API Guide");
-    const output = JSON.parse(allOutput());
-    expect(output).toMatchObject({ status: "started" });
-  });
-
-  it("prints human-readable confirmation", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockFetch.mockResolvedValueOnce(jsonResponse({ status: "started" }));
-    await run("generate", "--title", "API Guide");
-    expect(allOutput()).toContain("Document generation started");
-  });
-
-  it("exits when backend URL is not configured", async () => {
-    const saved = {
-      url: process.env.DOSU_BACKEND_URL,
-      override: process.env.DOSU_BACKEND_URL_OVERRIDE,
-    };
-    delete process.env.DOSU_BACKEND_URL;
-    delete process.env.DOSU_BACKEND_URL_OVERRIDE;
-    mockLoadConfig.mockReturnValue(validConfig);
-    try {
-      await expect(run("generate", "--title", "API Guide", "--instructions", "x")).rejects.toThrow(
-        "exit",
-      );
-      expect(errorSpy.mock.calls.flat().join(" ")).toContain("Backend URL not configured");
-    } finally {
-      if (saved.url !== undefined) {
-        process.env.DOSU_BACKEND_URL = saved.url;
-      } else {
-        delete process.env.DOSU_BACKEND_URL;
-      }
-      if (saved.override !== undefined) {
-        process.env.DOSU_BACKEND_URL_OVERRIDE = saved.override;
-      } else {
-        delete process.env.DOSU_BACKEND_URL_OVERRIDE;
-      }
-    }
-  });
-});
-
-describe("docs auto-tag", () => {
-  it("POSTs to Python backend /doc/auto-tag", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockFetch.mockResolvedValueOnce(jsonResponse({ status: "ok" }));
-
-    mockQuery.mockReset();
-    await run("auto-tag", "p1");
-
-    const [url, opts] = mockFetch.mock.calls[0];
-    expect(url).toBe("https://api.test.dev/doc/auto-tag");
-    expect(opts.headers["X-Dosu-API-Key"]).toBe("sk_user_test");
-    expect(JSON.parse(opts.body)).toEqual({ page_id: "p1" });
-  });
-
-  it("outputs JSON with --json", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockFetch.mockResolvedValueOnce(jsonResponse({ status: "ok" }));
-    mockQuery.mockReset();
-    await run("auto-tag", "--json", "p1");
-    const output = JSON.parse(allOutput());
-    expect(output).toMatchObject({ status: "ok" });
-  });
-
-  it("prints human-readable confirmation", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockFetch.mockResolvedValueOnce(jsonResponse({ status: "ok" }));
-    mockQuery.mockReset();
-    await run("auto-tag", "p1");
-    expect(allOutput()).toContain("Auto-tagging started");
-  });
-});
-
 describe("docs import", () => {
   it("rejects an empty --files list before calling tRPC", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
@@ -1378,7 +1287,9 @@ describe("backendPost", () => {
     try {
       mockLoadConfig.mockReturnValue(validConfig);
       mockQuery.mockReset();
-      await expect(run("generate", "--title", "T")).rejects.toThrow("exit");
+      await expect(run("publish", "p1", "--to", "gitlab", "--project-id", "42")).rejects.toThrow(
+        "exit",
+      );
     } finally {
       process.env.DOSU_BACKEND_URL = origUrl;
     }
@@ -1387,13 +1298,17 @@ describe("backendPost", () => {
   it("throws error with detail from failed backend response", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockFetch.mockResolvedValueOnce(jsonResponse({ detail: "Rate limited" }, 429));
-    await expect(run("generate", "--title", "T")).rejects.toThrow("Rate limited");
+    await expect(run("publish", "p1", "--to", "gitlab", "--project-id", "42")).rejects.toThrow(
+      "Rate limited",
+    );
   });
 
   it("throws error with status when detail is missing from failed response", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockFetch.mockResolvedValueOnce(jsonResponse({}, 500));
-    await expect(run("generate", "--title", "T")).rejects.toThrow("Request failed with status 500");
+    await expect(run("publish", "p1", "--to", "gitlab", "--project-id", "42")).rejects.toThrow(
+      "Request failed with status 500",
+    );
   });
 
   it("throws status message when failed response body is not JSON", async () => {
@@ -1404,7 +1319,9 @@ describe("backendPost", () => {
         headers: { "Content-Type": "text/plain" },
       }),
     );
-    await expect(run("generate", "--title", "T")).rejects.toThrow("Request failed with status 502");
+    await expect(run("publish", "p1", "--to", "gitlab", "--project-id", "42")).rejects.toThrow(
+      "Request failed with status 502",
+    );
   });
 });
 
