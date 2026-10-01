@@ -1115,8 +1115,120 @@ describe("ClaudeDesktopProvider", () => {
   });
 });
 
-// --- 7. createJSONProvider-based providers: Cursor, OpenCode, ClineCli, Antigravity, Zed ---
+// --- 7. createJSONProvider-based providers: Claude, Cursor, OpenCode, ClineCli, Antigravity, Zed ---
 // (Cline excluded: it depends on platform-specific appSupportDir, hard to override via env)
+
+describe("ClaudeProvider", () => {
+  let tempDir: string;
+  let origHome: string | undefined;
+  let origCwd: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "dosu-claude-test-"));
+    origHome = process.env.HOME;
+    process.env.HOME = tempDir;
+    origCwd = process.cwd();
+    process.chdir(tempDir);
+  });
+
+  afterEach(() => {
+    process.chdir(origCwd);
+    process.env.HOME = origHome;
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("global install writes an always-loaded http entry to ~/.claude.json", async () => {
+    const { ClaudeProvider } = await import("./claude");
+
+    ClaudeProvider().install(makeCfg(), true);
+
+    const cfg = loadJSONConfig(join(tempDir, ".claude.json"));
+    expect(cfg.mcpServers.dosu).toEqual({
+      type: "http",
+      url: expect.stringContaining("dep-123"),
+      headers: { "X-Dosu-API-Key": "key-abc" },
+      alwaysLoad: true,
+    });
+  });
+
+  it("local install writes the same entry to cwd/.mcp.json", async () => {
+    const { ClaudeProvider } = await import("./claude");
+
+    ClaudeProvider().install(makeCfg(), false);
+
+    const cfg = loadJSONConfig(join(tempDir, ".mcp.json"));
+    expect(cfg.mcpServers.dosu).toEqual({
+      type: "http",
+      url: expect.stringContaining("dep-123"),
+      headers: { "X-Dosu-API-Key": "key-abc" },
+      alwaysLoad: true,
+    });
+    expect(existsSync(join(tempDir, ".claude.json"))).toBe(false);
+  });
+
+  it("OSS mode writes the same shape against the base MCP URL", async () => {
+    const { ClaudeProvider } = await import("./claude");
+
+    ClaudeProvider().install(makeCfg({ mode: "oss", deployment_id: undefined }), true);
+
+    const cfg = loadJSONConfig(join(tempDir, ".claude.json"));
+    expect(Object.keys(cfg.mcpServers.dosu).sort()).toEqual([
+      "alwaysLoad",
+      "headers",
+      "type",
+      "url",
+    ]);
+    expect(cfg.mcpServers.dosu.url).toMatch(/\/v1\/mcp$/);
+    expect(cfg.mcpServers.dosu.alwaysLoad).toBe(true);
+  });
+
+  it("rewrites a pre-alwaysLoad dosu entry and keeps other servers and settings", async () => {
+    const { ClaudeProvider } = await import("./claude");
+    const configPath = join(tempDir, ".claude.json");
+    const other = { type: "http", url: "https://example.com/mcp", alwaysLoad: false };
+    const stdio = { command: "node", args: ["server.js"] };
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        numStartups: 7,
+        mcpServers: {
+          dosu: {
+            type: "http",
+            url: "https://old.example/mcp",
+            headers: { "X-Dosu-API-Key": "old" },
+          },
+          other,
+          stdio,
+        },
+      }),
+    );
+
+    ClaudeProvider().install(makeCfg(), true);
+
+    const cfg = loadJSONConfig(configPath);
+    expect(cfg.numStartups).toBe(7);
+    expect(cfg.mcpServers.other).toEqual(other);
+    expect(cfg.mcpServers.stdio).toEqual(stdio);
+    expect(cfg.mcpServers.dosu).toEqual({
+      type: "http",
+      url: expect.stringContaining("dep-123"),
+      headers: { "X-Dosu-API-Key": "key-abc" },
+      alwaysLoad: true,
+    });
+  });
+
+  it("remove deletes only the dosu entry", async () => {
+    const { ClaudeProvider } = await import("./claude");
+    const configPath = join(tempDir, ".claude.json");
+    writeFileSync(configPath, JSON.stringify({ mcpServers: { other: { command: "x" } } }));
+
+    ClaudeProvider().install(makeCfg(), true);
+    ClaudeProvider().remove(true);
+
+    const cfg = loadJSONConfig(configPath);
+    expect(cfg.mcpServers).toEqual({ other: { command: "x" } });
+  });
+});
 
 describe("CursorProvider", () => {
   let tempDir: string;

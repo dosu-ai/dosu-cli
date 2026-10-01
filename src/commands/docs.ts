@@ -1,10 +1,12 @@
 /** `dosu docs`: document/page management. */
 
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import * as p from "@clack/prompts";
 import { isTRPCClientError } from "@trpc/client";
 import { Argument, Command, Option } from "commander";
 import pc from "picocolors";
+import { CliUsageError } from "../cli/errors";
 import { Client } from "../client/client";
 import { createTypedClient, type TypedClient } from "../client/trpc";
 import { getBackendURL } from "../config/constants";
@@ -35,8 +37,23 @@ async function getKnowledgeStoreId(client: TypedClient, spaceId: string): Promis
 }
 
 function readBody(opts: { body?: string; bodyFile?: string }): string | undefined {
-  if (opts.bodyFile) return readFileSync(opts.bodyFile, "utf-8");
-  return opts.body;
+  if (!opts.bodyFile) return opts.body;
+  const path = opts.bodyFile;
+  try {
+    return readFileSync(path, "utf-8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      throw new CliUsageError(
+        `--body-file not found: ${path} (looked in ${resolve(path)}). ` +
+          "Check the path, or pass the content with --body.",
+      );
+    }
+    if (code === "EISDIR") {
+      throw new CliUsageError(`--body-file is a directory, not a file: ${path}`);
+    }
+    throw new CliUsageError(`Could not read --body-file ${path}: ${(err as Error).message}`);
+  }
 }
 
 /** Discriminator in tRPC `error.data`, flat JSON body, or nested FastAPI `detail` object. */
@@ -232,12 +249,12 @@ export function docsCommand(): Command {
     .addOption(new Option("--body-file <path>", "Read body from file").conflicts("body"))
     .option("--json", "Output as JSON")
     .action(async (opts: { title: string; body?: string; bodyFile?: string; json?: boolean }) => {
+      const body = readBody(opts);
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
       // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
       const ksId = await getKnowledgeStoreId(client, cfg.active_account!.target!.space_id!);
 
-      const body = readBody(opts);
       const result = await client.page.create.mutate({
         knowledge_store_id: ksId,
         title: opts.title,
@@ -266,14 +283,14 @@ export function docsCommand(): Command {
         opts: { title?: string; body?: string; bodyFile?: string; json?: boolean },
       ) => {
         if (opts.title === undefined && opts.body === undefined && opts.bodyFile === undefined) {
-          throw new Error("Specify at least one of --title, --body, or --body-file.");
+          throw new CliUsageError("Specify at least one of --title, --body, or --body-file.");
         }
+        const body = readBody(opts);
         const cfg = requireConfig();
         const client = createTypedClient(cfg);
         // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
         const ksId = await getKnowledgeStoreId(client, cfg.active_account!.target!.space_id!);
 
-        const body = readBody(opts);
         await client.page.update.mutate({
           id,
           knowledge_store_id: ksId,
@@ -382,49 +399,6 @@ export function docsCommand(): Command {
         return;
       }
       console.log(pc.green(`Document restored to version ${opts.revision}.`));
-    });
-
-  // ── generate ──
-  cmd
-    .command("generate")
-    .description("Generate a document using AI")
-    .requiredOption("--title <title>", "Document title")
-    .option("--instructions <text>", "Custom generation instructions")
-    .option("--json", "Output as JSON")
-    .action(async (opts: { title: string; instructions?: string; json?: boolean }) => {
-      const cfg = requireConfig();
-      const client = createTypedClient(cfg);
-      // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const ksId = await getKnowledgeStoreId(client, cfg.active_account!.target!.space_id!);
-
-      const result = await backendPost("/doc/generate", requireAPIKey(cfg), {
-        knowledge_store_id: ksId,
-        title: opts.title,
-        instructions: opts.instructions,
-      });
-
-      if (opts.json) {
-        printResult(result, opts);
-        return;
-      }
-      console.log(pc.green("Document generation started."));
-    });
-
-  // ── auto-tag ──
-  cmd
-    .command("auto-tag")
-    .description("Auto-tag a document using AI")
-    .argument("<id>", "Page ID")
-    .option("--json", "Output as JSON")
-    .action(async (id: string, opts: { json?: boolean }) => {
-      const cfg = requireConfig();
-      const result = await backendPost("/doc/auto-tag", requireAPIKey(cfg), { page_id: id });
-
-      if (opts.json) {
-        printResult(result, opts);
-        return;
-      }
-      console.log(pc.green("Auto-tagging started."));
     });
 
   // ── import ──

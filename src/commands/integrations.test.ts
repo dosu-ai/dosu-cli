@@ -23,6 +23,7 @@ vi.mock("../config/config", () => ({
 }));
 
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
+import type { CliSlackChannel, SlackChannelListPagedOutput } from "../generated/dosu-api-types";
 import { integrationsCommand } from "./integrations";
 
 let logSpy: ReturnType<typeof vi.spyOn>;
@@ -43,6 +44,18 @@ const validConfig = makeValidConfig();
 
 function allOutput(): string {
   return logSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
+}
+
+// CI forces color on, so picocolors wraps labels in ANSI codes; assert on the plain text.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching ANSI escapes needs ESC.
+const stripAnsi = (text: string) => text.replaceAll(/\u001B\[[0-9;]*m/g, "");
+
+function stdout(): string {
+  return stripAnsi(allOutput());
+}
+
+function stderr(): string {
+  return stripAnsi(errorSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n"));
 }
 
 async function run(...args: string[]) {
@@ -280,33 +293,279 @@ describe("integrations status (not queryable via nango)", () => {
   });
 });
 
+const CHANNEL_A = "00000000-0000-4000-8000-00000000000a";
+const CHANNEL_B = "00000000-0000-4000-8000-00000000000b";
+
+function channel(overrides: Partial<CliSlackChannel> = {}): CliSlackChannel {
+  return {
+    archived: false,
+    channel_id: "C0000000A",
+    channel_type: "channel",
+    description: null,
+    enterprise_id: null,
+    id: CHANNEL_A,
+    installation_id: "00000000-0000-4000-8000-0000000000f1",
+    is_private: false,
+    name: "eng",
+    org_id: "org1",
+    team_id: "T1",
+    team_name: "Acme",
+    topic: null,
+    ...overrides,
+  };
+}
+
+/** Answer `slackChannel.listPaged` from a queue of pages. */
+function servePages(...pages: SlackChannelListPagedOutput[]) {
+  const queue = [...pages];
+  mockQuery.mockImplementation(async (path: string) => {
+    if (path !== "slackChannel.listPaged") throw new Error(`unexpected query ${path}`);
+    const page = queue.shift();
+    if (!page) throw new Error("unexpected listPaged call");
+    return page;
+  });
+}
+
+function listPagedCalls(): unknown[] {
+  return mockQuery.mock.calls
+    .filter(([path]) => path === "slackChannel.listPaged")
+    .map((c) => c[1]);
+}
+
 describe("integrations slack-channels", () => {
-  it("calls slackChannel.getAll", async () => {
+  it("lists the first 50 channels through listPaged with both IDs", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "C123", name: "general" }]);
+    servePages({ items: [channel()], nextCursor: null });
 
     await run("slack-channels");
 
-    expect(mockQuery).toHaveBeenCalledWith("slackChannel.getAll", "org1");
-    expect(allOutput()).toContain("general");
+    expect(listPagedCalls()).toEqual([{ orgId: "org1", limit: 50 }]);
+    expect(mockQuery).not.toHaveBeenCalledWith("slackChannel.getAll", expect.anything());
+    const out = stdout();
+    expect(out).toMatch(/UUID\s+Slack ID\s+Name\s+Workspace/);
+    expect(out).toMatch(new RegExp(`${CHANNEL_A}\\s+C0000000A\\s+eng\\s+Acme`));
+    expect(out).not.toContain("More channels");
   });
 
-  it("prints message for empty channels", async () => {
+  it("prints the command for the next page", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([]);
+    servePages({ items: [channel()], nextCursor: CHANNEL_A });
+
     await run("slack-channels");
-    expect(allOutput()).toContain("No Slack channels found");
+
+    expect(stdout()).toContain(
+      `More channels: dosu integrations slack-channels --cursor ${CHANNEL_A} (or --all)`,
+    );
+  });
+
+  it("narrows server-side with --search and keeps it in the next-page hint", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    servePages({ items: [channel()], nextCursor: CHANNEL_A });
+
+    await run("slack-channels", "--search", "eng team", "--limit", "10");
+
+    expect(listPagedCalls()).toEqual([{ orgId: "org1", limit: 10, search: "eng team" }]);
+    expect(stdout()).toContain(
+      `slack-channels --search 'eng team' --limit 10 --cursor ${CHANNEL_A}`,
+    );
+  });
+
+  it("continues from --cursor", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    servePages({ items: [channel({ id: CHANNEL_B })], nextCursor: null });
+
+    await run("slack-channels", "--cursor", CHANNEL_A);
+
+    expect(listPagedCalls()).toEqual([{ orgId: "org1", limit: 50, cursor: CHANNEL_A }]);
+    expect(stdout()).toContain(CHANNEL_B);
+  });
+
+  it.each([
+    ["--limit", "0"],
+    ["--limit", "101"],
+    ["--cursor", "C0000000A"],
+  ])("rejects %s %s before any request", async (flag, value) => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    await expect(run("slack-channels", flag, value)).rejects.toThrow();
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it.each(["--cursor", "--limit"])("rejects --all with %s", async (flag) => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    await expect(
+      run("slack-channels", "--all", flag, flag === "--limit" ? "10" : CHANNEL_A),
+    ).rejects.toThrow();
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it("walks every page with --all and returns a null nextCursor", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    const second = channel({ id: CHANNEL_B, channel_id: "C0000000B" });
+    servePages(
+      { items: [channel()], nextCursor: CHANNEL_A },
+      { items: [second], nextCursor: null },
+    );
+
+    await run("slack-channels", "--all", "--search", "eng", "--json");
+
+    expect(listPagedCalls()).toEqual([
+      { orgId: "org1", limit: 100, search: "eng" },
+      { orgId: "org1", limit: 100, search: "eng", cursor: CHANNEL_A },
+    ]);
+    expect(JSON.parse(stdout())).toEqual({ items: [channel(), second], nextCursor: null });
+    expect(stderr()).toBe("");
+  });
+
+  it("warns on stderr when --all lists more than 500 channels", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    const full = { items: Array.from({ length: 100 }, () => channel()), nextCursor: CHANNEL_A };
+    servePages(...Array.from({ length: 5 }, () => full), {
+      items: [channel()],
+      nextCursor: null,
+    });
+
+    await run("slack-channels", "--all");
+
+    expect(listPagedCalls()).toHaveLength(6);
+    expect(stderr()).toContain("Listed 501 channels. Use --search <term> to narrow the list.");
+  });
+
+  it("prints one page as {items, nextCursor} with --json", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    const page = { items: [channel()], nextCursor: CHANNEL_A };
+    servePages(page);
+
+    await run("slack-channels", "--json");
+
+    expect(JSON.parse(stdout())).toEqual(page);
+  });
+
+  it("says when nothing matches", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    servePages({ items: [], nextCursor: null }, { items: [], nextCursor: null });
+
+    await run("slack-channels");
+    expect(stdout()).toContain("No Slack channels found.");
+
+    await run("slack-channels", "--search", "zzz");
+    expect(stdout()).toContain('No Slack channels match "zzz".');
   });
 });
 
 describe("integrations slack-join", () => {
-  it("calls slackChannel.join mutation", async () => {
+  it("passes a UUID straight to slackChannel.join", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
+    mockMutate.mockResolvedValueOnce(true);
 
-    await run("slack-join", "C123");
+    await run("slack-join", CHANNEL_B);
 
-    expect(mockMutate).toHaveBeenCalledWith("slackChannel.join", "C123");
+    expect(listPagedCalls()).toHaveLength(0);
+    expect(mockMutate).toHaveBeenCalledWith("slackChannel.join", CHANNEL_B);
+    expect(stdout()).toContain(`Joined Slack channel ${CHANNEL_B}.`);
+  });
+
+  it("resolves a Slack ID to the row UUID, matching on a later page", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    const match = channel({ id: CHANNEL_B, channel_id: "C0000000B", name: "docs" });
+    servePages({ items: [channel()], nextCursor: CHANNEL_A }, { items: [match], nextCursor: null });
+    mockMutate.mockResolvedValueOnce(true);
+
+    await run("slack-join", "C0000000B");
+
+    expect(listPagedCalls()).toEqual([
+      { orgId: "org1", limit: 100 },
+      { orgId: "org1", limit: 100, cursor: CHANNEL_A },
+    ]);
+    expect(mockMutate).toHaveBeenCalledWith("slackChannel.join", CHANNEL_B);
+    expect(stdout()).toContain("Joined #docs (Acme).");
+  });
+
+  it("resolves #name to an exact match on a later page", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    const exact = channel({ id: CHANNEL_B, channel_id: "C0000000B", name: "Docs" });
+    servePages(
+      { items: [channel({ name: "docs-archive" })], nextCursor: CHANNEL_A },
+      { items: [exact], nextCursor: null },
+    );
+    mockMutate.mockResolvedValueOnce(true);
+
+    await run("slack-join", "#docs");
+
+    expect(listPagedCalls()).toEqual([
+      { orgId: "org1", limit: 100, search: "docs" },
+      { orgId: "org1", limit: 100, search: "docs", cursor: CHANNEL_A },
+    ]);
+    expect(mockMutate).toHaveBeenCalledWith("slackChannel.join", CHANNEL_B);
+  });
+
+  it("refuses a name shared across workspaces and lists the matches on stderr", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    servePages({
+      items: [
+        channel({ id: CHANNEL_A, name: "docs", team_name: "Acme" }),
+        channel({ id: CHANNEL_B, name: "docs", team_name: "Acme EU" }),
+      ],
+      nextCursor: null,
+    });
+
+    await expect(run("slack-join", "docs", "--json")).rejects.toThrow("exit");
+
+    const err = stderr();
+    expect(err).toContain("2 Slack channels are named #docs");
+    expect(err).toContain(CHANNEL_B);
+    expect(err).toContain("Acme EU");
+    expect(err).toContain("`dosu integrations slack-join <uuid>`");
+    expect(stdout()).toBe("");
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
+
+  it("fails when nothing matches", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    servePages({ items: [channel()], nextCursor: null });
+
+    await expect(run("slack-join", "C9999999Z")).rejects.toThrow("exit");
+
+    expect(stderr()).toContain("No Slack channel with ID C9999999Z");
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
+
+  it("rejects an empty #name before any lookup", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+
+    await expect(run("slack-join", "#")).rejects.toThrow("exit");
+
+    expect(stderr()).toContain("<channel> must not be empty.");
+    expect(listPagedCalls()).toHaveLength(0);
+  });
+
+  it("returns the input, the resolved UUID, and the channel with --json", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    const match = channel({ id: CHANNEL_B, channel_id: "C0000000B" });
+    servePages({ items: [match], nextCursor: null });
+    mockMutate.mockResolvedValueOnce(true);
+
+    await run("slack-join", "C0000000B", "--json");
+
+    expect(JSON.parse(stdout())).toEqual({
+      success: true,
+      channelId: "C0000000B",
+      id: CHANNEL_B,
+      channel: match,
+    });
+  });
+
+  it("reports a null channel when a UUID was passed with --json", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockMutate.mockResolvedValueOnce(true);
+
+    await run("slack-join", CHANNEL_B, "--json");
+
+    expect(JSON.parse(stdout())).toEqual({
+      success: true,
+      channelId: CHANNEL_B,
+      id: CHANNEL_B,
+      channel: null,
+    });
   });
 });
 
@@ -361,41 +620,6 @@ describe("integrations status (JSON branches)", () => {
     mockQuery.mockRejectedValueOnce(new Error("fail"));
 
     await expect(run("status", "--json", "gitlab")).rejects.toThrow("fail");
-  });
-});
-
-describe("integrations slack-channels (JSON branch)", () => {
-  it("outputs valid JSON with --json", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "C123", name: "general" }]);
-
-    await run("slack-channels", "--json");
-
-    const output = JSON.parse(allOutput());
-    expect(Array.isArray(output)).toBe(true);
-    expect(output[0].name).toBe("general");
-  });
-});
-
-describe("integrations slack-join (JSON and human branches)", () => {
-  it("outputs JSON with --json", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-
-    await run("slack-join", "--json", "C123");
-
-    const output = JSON.parse(allOutput());
-    expect(output.success).toBe(true);
-    expect(output.channelId).toBe("C123");
-  });
-
-  it("prints human-readable confirmation", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-
-    await run("slack-join", "C123");
-
-    expect(allOutput()).toContain("Joined Slack channel");
   });
 });
 
