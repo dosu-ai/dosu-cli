@@ -142,11 +142,18 @@ dosu review context <thread-id> [--json]
 dosu review approve <id> [--confirm] [--json]
 dosu review reject <id> [--confirm] [--json]
 dosu review revert <id> [--json]
+dosu review notifications get (--library <library-id> | --agent <agent-id>) [--json]
+dosu review notifications set (--library <library-id> | --agent <agent-id>)
+    --channel <uuid | slack-id | #name> [--confirm] [--json]
+dosu review notifications clear (--library <library-id> | --agent <agent-id>) [--confirm] [--json]
 ```
 
 - `list` reads the selected Library's pending doc changes plus the selected MCP deployment's draft replies. JSON is `{items, truncated, total}`: at most 50 items, newest first; `total` is a lower bound when `truncated` is true. `--since`/`--until` take `24h`/`7d`/`2w`, a UTC date, or an ISO-8601 datetime.
 - IDs are opaque: pass each `id` from `list` verbatim (draft replies carry a `draft_message:` prefix). `revert` takes a decided doc change's page-version ID and does not apply to drafts.
 - `edit` requires at least one field; drafts accept only `--body`/`--body-file`. `approve` and `reject` do not write without interactive confirmation or `--confirm`.
+- `notifications` manages the Slack channel that receives review notifications for one Library (doc reviews) or one Agent (its draft replies). Unlike the queue commands it takes an explicit target, not the selected MCP deployment. Pass exactly one of `--library`/`--agent` (UUID v4; Agent IDs come from `dosu agents list`).
+- `notifications get --json` returns `{orgId, canEdit, slackInstalled, notificationsEnabled, notification}`; `notification` is `null` when no channel is set. A non-null `notification.disabled_reason` means delivery stopped: `not_in_channel` needs `/invite @Dosu` in the channel; `is_archived`/`channel_not_found`/`channel_missing` need another channel; re-running `set` with the same channel reconnects it.
+- `set`/`clear` need an organization admin, and `set` needs the Slack app installed and Slack Notifications enabled for the organization; the CLI checks all three before prompting. `--channel` takes the channel's Dosu UUID, a Slack ID (`C…`/`G…`), or a name; a name shared across Slack workspaces or not found exits 1 with candidate UUIDs. A private channel Dosu cannot join exits 1 asking for `/invite @Dosu`. `set --json` returns `{success, notification}`; `clear --json` returns `{success, removed}`, and `removed: false` (nothing was set) is still a success.
 
 ## Sources, integrations, members, and organization
 

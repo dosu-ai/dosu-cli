@@ -13,6 +13,7 @@ import type {
 import { requireLoginConfig } from "./auth";
 import { confirmAction } from "./confirmation";
 import { formatDate, printInfo, printResult, printTable, truncate } from "./output";
+import { reviewNotificationsCommand } from "./review-notifications";
 import { describeTimeRange, resolveTimeRange, timeBound } from "./time-range";
 
 // Contract-typed since dosu#11679: no local mirror types, so a contract-side shape change
@@ -504,6 +505,8 @@ export function reviewCommand(): Command {
       }
       console.log(pc.green(`Review revert: ${truncateId(id)}`));
     });
+
+  cmd.addCommand(reviewNotificationsCommand());
 
   return cmd;
 }
