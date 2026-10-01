@@ -60,6 +60,7 @@ import { checkForSkillUpdates } from "../version/skill-update-check";
 import { checkForUpdates } from "../version/update-check";
 import { getVersionString, VERSION } from "../version/version";
 import { CliUsageError } from "./errors";
+import { fatalErrorDiagnostics, printFatalError } from "./fatal-error";
 
 export function shouldRunBackgroundChecks(actionName: string): boolean {
   return actionName !== "upgrade";
@@ -713,14 +714,31 @@ async function ensureFreshSession(cfg: Config): Promise<boolean> {
   }
 }
 
+/** Run the CLI. A command that fails throws (a CommandError for handled states, anything else
+ * for crashes); the error unwinds to here, which is the one place that prints it, records the
+ * command's single telemetry failure event, and exits 1. */
 export async function execute(): Promise<void> {
   const telemetry = processCommandTelemetry();
   const program = createProgram({ telemetry });
   try {
     await program.parseAsync(process.argv);
   } catch (err: unknown) {
+    // Print before reporting: the telemetry flush can wait up to TELEMETRY_FLUSH_TIMEOUT_MS.
+    printFatalError(err);
+    logFatalError(err);
     if (telemetry) await finishTelemetry(() => telemetry.fail(err));
-    throw err;
+    process.exit(1);
+  }
+}
+
+/** Keep the failure, including any server request ID, in the local debug log. */
+function logFatalError(err: unknown): void {
+  try {
+    const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    const diagnostics = fatalErrorDiagnostics(err);
+    logger.error("cli", diagnostics ? `${message} (${diagnostics})` : message);
+  } catch {
+    // Logging must never change how the command fails.
   }
 }
 

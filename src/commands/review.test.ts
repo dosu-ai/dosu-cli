@@ -33,6 +33,8 @@ vi.mock("../config/config", () => ({
   loadConfig: (...args: unknown[]) => mockLoadConfig(...args),
 }));
 
+import { CommandError } from "../cli/command-error";
+import { printFatalError } from "../cli/fatal-error";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { reviewCommand } from "./review";
 
@@ -71,6 +73,19 @@ function unprocessable() {
 
 function allOutput(): string {
   return stripVTControlCharacters(logSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n"));
+}
+
+/** A handled failure as execute() reports it: the handler throws a CommandError (it never calls
+ * process.exit, so nothing after the failure runs), and the real printer writes it to stderr. */
+async function expectCommandError(pending: Promise<unknown>, code: string): Promise<void> {
+  const error = await pending.then(
+    () => undefined,
+    (err: unknown) => err,
+  );
+  expect(error).toBeInstanceOf(CommandError);
+  expect(error).toMatchObject({ code });
+  expect(exitSpy).not.toHaveBeenCalled();
+  printFatalError(error);
 }
 
 async function run(...args: string[]) {
@@ -427,10 +442,10 @@ describe("review list", () => {
       );
     });
 
-    it("exits before any request when --since is not earlier than --until", async () => {
+    it("fails before any request when --since is not earlier than --until", async () => {
       mockLoadConfig.mockReturnValue(validConfig);
 
-      await expect(run("list", "--since", "7d", "--until", "7d")).rejects.toThrow("exit");
+      await expectCommandError(run("list", "--since", "7d", "--until", "7d"), "INVALID_ARGUMENT");
 
       expect(errorSpy).toHaveBeenCalledWith(
         expect.stringContaining("--since must be earlier than --until."),
@@ -466,7 +481,7 @@ describe("review list", () => {
     it("stops before any request when not logged in", async () => {
       mockLoadConfig.mockReturnValue({ schema_version: 2 });
 
-      await expect(run("list")).rejects.toThrow("exit");
+      await expectCommandError(run("list"), "NOT_LOGGED_IN");
 
       expect(errorOutput()).toContain("Not logged in. Run 'dosu login' first.");
       expect(mockQuery).not.toHaveBeenCalled();
@@ -475,7 +490,7 @@ describe("review list", () => {
     it("names the missing Library and the selection commands", async () => {
       mockLoadConfig.mockReturnValue(makeValidConfig({ space_id: undefined }));
 
-      await expect(run("list", "--json")).rejects.toThrow("exit");
+      await expectCommandError(run("list", "--json"), "NO_LIBRARY_SELECTED");
 
       const err = errorOutput();
       expect(err).toContain("No Library selected.");
@@ -491,7 +506,7 @@ describe("review list", () => {
       mockLoadConfig.mockReturnValue(validConfig);
       serve({ "workspaces.get": null });
 
-      await expect(run("list", "--json")).rejects.toThrow("exit");
+      await expectCommandError(run("list", "--json"), "DEPLOYMENT_UNAVAILABLE");
 
       const err = errorOutput();
       expect(err).toContain("The selected MCP deployment (dep1) is unavailable");
@@ -504,7 +519,7 @@ describe("review list", () => {
       mockLoadConfig.mockReturnValue(validConfig);
       serve({ "libraries.info": notFound() });
 
-      await expect(run("list")).rejects.toThrow("exit");
+      await expectCommandError(run("list"), "LIBRARY_UNAVAILABLE");
 
       expect(errorOutput()).toContain("The selected Library (sp1) is unavailable");
       expect(queried("review.listPending")).toEqual([]);
@@ -514,7 +529,7 @@ describe("review list", () => {
       mockLoadConfig.mockReturnValue(validConfig);
       serve({ "knowledgeStore.getBySpaceId": null });
 
-      await expect(run("list")).rejects.toThrow("exit");
+      await expectCommandError(run("list"), "LIBRARY_UNAVAILABLE");
 
       const err = errorOutput();
       expect(err).toContain("The selected Library (sp1) is unavailable");
@@ -526,7 +541,7 @@ describe("review list", () => {
       mockLoadConfig.mockReturnValue(validConfig);
       serve({ "workspaces.get": { ...deployment, space_id: "sp-other" } });
 
-      await expect(run("list")).rejects.toThrow("exit");
+      await expectCommandError(run("list"), "SCOPE_MISMATCH");
 
       const err = errorOutput();
       expect(err).toContain("does not match");
@@ -603,7 +618,7 @@ describe("review diff", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockRejectedValueOnce(notFound()); // review.getChange → unknown doc
 
-    await expect(run("diff", "missing")).rejects.toThrow("exit");
+    await expectCommandError(run("diff", "missing"), "REVIEW_ITEM_NOT_FOUND");
     expect(errorSpy.mock.calls.flat().join(" ")).toContain("No review item found");
   });
 
@@ -611,7 +626,7 @@ describe("review diff", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockRejectedValueOnce(unprocessable()); // review.getChange → 422, not 404
 
-    await expect(run("diff", "not-a-uuid")).rejects.toThrow("exit");
+    await expectCommandError(run("diff", "not-a-uuid"), "REVIEW_ITEM_NOT_FOUND");
     expect(errorSpy.mock.calls.flat().join(" ")).toContain("No review item found");
   });
 
@@ -698,8 +713,9 @@ describe("review edit", () => {
   it("rejects --title for a draft id (saveDraft is body-only)", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
 
-    await expect(run("edit", "draft_message:msg-1", "--title", "T", "--body", "b")).rejects.toThrow(
-      "exit",
+    await expectCommandError(
+      run("edit", "draft_message:msg-1", "--title", "T", "--body", "b"),
+      "INVALID_ARGUMENT",
     );
     expect(errorSpy.mock.calls.flat().join(" ")).toContain("--body only");
     expect(mockMutate).not.toHaveBeenCalled();
@@ -709,7 +725,10 @@ describe("review edit", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce(null); // getMessage → not a draft
 
-    await expect(run("edit", "draft_message:missing", "--body", "b")).rejects.toThrow("exit");
+    await expectCommandError(
+      run("edit", "draft_message:missing", "--body", "b"),
+      "REVIEW_ITEM_NOT_FOUND",
+    );
     expect(errorSpy.mock.calls.flat().join(" ")).toContain("No review item found");
     expect(mockMutate).not.toHaveBeenCalled();
   });
@@ -717,7 +736,7 @@ describe("review edit", () => {
   it("errors when neither title nor body is given", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
 
-    await expect(run("edit", "pv-abcdef12")).rejects.toThrow("exit");
+    await expectCommandError(run("edit", "pv-abcdef12"), "INVALID_ARGUMENT");
     expect(errorSpy.mock.calls.flat().join(" ")).toContain("Nothing to edit");
     expect(mockMutate).not.toHaveBeenCalled();
   });
@@ -725,8 +744,9 @@ describe("review edit", () => {
   it("errors when both --body and --body-file are given", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
 
-    await expect(run("edit", "pv-abcdef12", "--body", "x", "--body-file", "f.md")).rejects.toThrow(
-      "exit",
+    await expectCommandError(
+      run("edit", "pv-abcdef12", "--body", "x", "--body-file", "f.md"),
+      "INVALID_ARGUMENT",
     );
     expect(errorSpy.mock.calls.flat().join(" ")).toContain("only one of --body or --body-file");
     expect(mockMutate).not.toHaveBeenCalled();
@@ -735,8 +755,9 @@ describe("review edit", () => {
   it("errors gracefully when --body-file cannot be read", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
 
-    await expect(run("edit", "pv-abcdef12", "--body-file", "/no/such/file.md")).rejects.toThrow(
-      "exit",
+    await expectCommandError(
+      run("edit", "pv-abcdef12", "--body-file", "/no/such/file.md"),
+      "INVALID_ARGUMENT",
     );
     expect(errorSpy.mock.calls.flat().join(" ")).toContain("Failed to read --body-file");
     expect(mockMutate).not.toHaveBeenCalled();
@@ -746,7 +767,7 @@ describe("review edit", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockMutate.mockRejectedValueOnce(notFound()); // page.updateReview → no longer pending
 
-    await expect(run("edit", "pv-missing", "--title", "T")).rejects.toThrow("exit");
+    await expectCommandError(run("edit", "pv-missing", "--title", "T"), "REVIEW_ITEM_NOT_FOUND");
     expect(errorSpy.mock.calls.flat().join(" ")).toContain("No pending review item found");
   });
 
@@ -978,11 +999,14 @@ describe("review approve/reject (draft messages)", () => {
     expect(mockMutate).not.toHaveBeenCalled();
   });
 
-  it("exits with a clear message when the draft id resolves to nothing", async () => {
+  it("fails with a clear message when the draft id resolves to nothing", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce(null); // messages.getMessage → missing
 
-    await expect(run("approve", "--confirm", "draft_message:missing")).rejects.toThrow("exit");
+    await expectCommandError(
+      run("approve", "--confirm", "draft_message:missing"),
+      "REVIEW_ITEM_NOT_FOUND",
+    );
     expect(errorSpy.mock.calls.flat().join(" ")).toContain("No review item found");
     expect(mockMutate).not.toHaveBeenCalled();
   });
@@ -1094,16 +1118,16 @@ describe("review revert", () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce({ id: "msg-1" }); // messages.getMessage exists
 
-    await expect(run("revert", "draft_message:msg-1")).rejects.toThrow("exit");
+    await expectCommandError(run("revert", "draft_message:msg-1"), "INVALID_ARGUMENT");
     expect(errorSpy.mock.calls.flat().join(" ")).toContain("not supported for draft replies");
     expect(mockMutate).not.toHaveBeenCalled();
   });
 
-  it("exits with a clear message for an unknown bare (doc) id", async () => {
+  it("fails with a clear message for an unknown bare (doc) id", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockRejectedValueOnce(notFound()); // review.getChange → unknown doc
 
-    await expect(run("revert", "missing")).rejects.toThrow("exit");
+    await expectCommandError(run("revert", "missing"), "REVIEW_ITEM_NOT_FOUND");
     expect(errorSpy.mock.calls.flat().join(" ")).toContain("No review item found");
     expect(mockMutate).not.toHaveBeenCalled();
   });
@@ -1136,8 +1160,8 @@ describe("review error propagation", () => {
 });
 
 describe("requireConfig", () => {
-  it("exits when access_token is missing", async () => {
+  it("fails with NOT_LOGGED_IN when access_token is missing", async () => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ access_token: "" }));
-    await expect(run("context", "t1")).rejects.toThrow("exit");
+    await expect(run("context", "t1")).rejects.toMatchObject({ code: "NOT_LOGGED_IN" });
   });
 });
