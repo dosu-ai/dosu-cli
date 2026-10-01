@@ -1,3 +1,10 @@
+## [0.65.1](https://github.com/dosu-ai/dosu-cli/compare/v0.65.0...v0.65.1) (2026-10-01)
+
+
+### Bug Fixes
+
+* **docs:** remove generate and auto-tag commands the backend no longer serves ([#266](https://github.com/dosu-ai/dosu-cli/issues/266)) ([f623780](https://github.com/dosu-ai/dosu-cli/commit/f623780700c1dd51bc067d5812e8a38cceb3df79)), closes [#12255](https://github.com/dosu-ai/dosu-cli/issues/12255)
+
 # [0.65.0](https://github.com/dosu-ai/dosu-cli/compare/v0.64.2...v0.65.0) (2026-10-01)
 
 
