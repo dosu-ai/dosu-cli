@@ -26,7 +26,7 @@ export function channelLabel(channel: CliSlackChannel): string {
 }
 
 /** Every channel that `listPaged` returns for `search`, walking all pages. */
-async function listAllChannels(
+export async function listAllChannels(
   client: TypedClient,
   orgId: string,
   search: string | undefined,

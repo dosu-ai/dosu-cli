@@ -168,7 +168,7 @@ dosu sources create github --repo <owner/name> [--library <id>] [--confirm] [--j
 
 dosu integrations list [--json]
 dosu integrations status <platform> [--json]
-dosu integrations slack-channels [--json]
+dosu integrations slack-channels [--search <term>] [--limit <1-100>] [--cursor <uuid>] [--all] [--json]
 dosu integrations slack-join <uuid | slack-id | #name> [--json]
 dosu integrations github-collaborators <positive-repository-id> [--json]
 
@@ -191,8 +191,12 @@ dosu org info [--json]
   shells that treat `#` as a comment). A name shared across Slack workspaces or not found exits 1
   with candidate UUIDs on stderr. `slack-join --json` returns `{success, channelId, id, channel}`:
   `channelId` is the input, `id` the resolved UUID, and `channel` the matched row (`null` when a
-  UUID was passed). `slack-channels --json` prints the raw rows, which carry both `id` and
-  `channel_id`.
+  UUID was passed).
+- `slack-channels` lists 50 available channels per page (`--limit` up to 100); `--search` is a
+  server-side substring match on the name. `--json` always returns `{items, nextCursor}`, where
+  each item carries both `id` and `channel_id`; pass a non-null `nextCursor` as `--cursor` for the
+  next page. `--all` reads every page (`nextCursor: null`) and cannot be combined with `--limit` or
+  `--cursor`; prefer `--search` in large organizations.
 - The CLI has no member list/remove/request commands; `members invite` is its only member operation.
 
 ## Threads, Topics, suggestions, and analytics

@@ -333,33 +333,122 @@ function listPagedCalls(): unknown[] {
 }
 
 describe("integrations slack-channels", () => {
-  it("shows both the UUID and the Slack ID", async () => {
+  it("lists the first 50 channels through listPaged with both IDs", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([channel()]);
+    servePages({ items: [channel()], nextCursor: null });
 
     await run("slack-channels");
 
-    expect(mockQuery).toHaveBeenCalledWith("slackChannel.getAll", "org1");
+    expect(listPagedCalls()).toEqual([{ orgId: "org1", limit: 50 }]);
+    expect(mockQuery).not.toHaveBeenCalledWith("slackChannel.getAll", expect.anything());
     const out = stdout();
     expect(out).toMatch(/UUID\s+Slack ID\s+Name\s+Workspace/);
     expect(out).toMatch(new RegExp(`${CHANNEL_A}\\s+C0000000A\\s+eng\\s+Acme`));
+    expect(out).not.toContain("More channels");
   });
 
-  it("prints message for empty channels", async () => {
+  it("prints the command for the next page", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([]);
+    servePages({ items: [channel()], nextCursor: CHANNEL_A });
+
     await run("slack-channels");
-    expect(allOutput()).toContain("No Slack channels found");
+
+    expect(stdout()).toContain(
+      `More channels: dosu integrations slack-channels --cursor ${CHANNEL_A} (or --all)`,
+    );
   });
 
-  it("prints the raw rows unchanged with --json", async () => {
+  it("narrows server-side with --search and keeps it in the next-page hint", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
-    const rows = [channel(), { id: CHANNEL_B, channel_id: "D0000000B", name: null }];
-    mockQuery.mockResolvedValueOnce(rows);
+    servePages({ items: [channel()], nextCursor: CHANNEL_A });
+
+    await run("slack-channels", "--search", "eng team", "--limit", "10");
+
+    expect(listPagedCalls()).toEqual([{ orgId: "org1", limit: 10, search: "eng team" }]);
+    expect(stdout()).toContain(
+      `slack-channels --search 'eng team' --limit 10 --cursor ${CHANNEL_A}`,
+    );
+  });
+
+  it("continues from --cursor", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    servePages({ items: [channel({ id: CHANNEL_B })], nextCursor: null });
+
+    await run("slack-channels", "--cursor", CHANNEL_A);
+
+    expect(listPagedCalls()).toEqual([{ orgId: "org1", limit: 50, cursor: CHANNEL_A }]);
+    expect(stdout()).toContain(CHANNEL_B);
+  });
+
+  it.each([
+    ["--limit", "0"],
+    ["--limit", "101"],
+    ["--cursor", "C0000000A"],
+  ])("rejects %s %s before any request", async (flag, value) => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    await expect(run("slack-channels", flag, value)).rejects.toThrow();
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it.each(["--cursor", "--limit"])("rejects --all with %s", async (flag) => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    await expect(
+      run("slack-channels", "--all", flag, flag === "--limit" ? "10" : CHANNEL_A),
+    ).rejects.toThrow();
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it("walks every page with --all and returns a null nextCursor", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    const second = channel({ id: CHANNEL_B, channel_id: "C0000000B" });
+    servePages(
+      { items: [channel()], nextCursor: CHANNEL_A },
+      { items: [second], nextCursor: null },
+    );
+
+    await run("slack-channels", "--all", "--search", "eng", "--json");
+
+    expect(listPagedCalls()).toEqual([
+      { orgId: "org1", limit: 100, search: "eng" },
+      { orgId: "org1", limit: 100, search: "eng", cursor: CHANNEL_A },
+    ]);
+    expect(JSON.parse(stdout())).toEqual({ items: [channel(), second], nextCursor: null });
+    expect(stderr()).toBe("");
+  });
+
+  it("warns on stderr when --all lists more than 500 channels", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    const full = { items: Array.from({ length: 100 }, () => channel()), nextCursor: CHANNEL_A };
+    servePages(...Array.from({ length: 5 }, () => full), {
+      items: [channel()],
+      nextCursor: null,
+    });
+
+    await run("slack-channels", "--all");
+
+    expect(listPagedCalls()).toHaveLength(6);
+    expect(stderr()).toContain("Listed 501 channels. Use --search <term> to narrow the list.");
+  });
+
+  it("prints one page as {items, nextCursor} with --json", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    const page = { items: [channel()], nextCursor: CHANNEL_A };
+    servePages(page);
 
     await run("slack-channels", "--json");
 
-    expect(JSON.parse(stdout())).toEqual(rows);
+    expect(JSON.parse(stdout())).toEqual(page);
+  });
+
+  it("says when nothing matches", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    servePages({ items: [], nextCursor: null }, { items: [], nextCursor: null });
+
+    await run("slack-channels");
+    expect(stdout()).toContain("No Slack channels found.");
+
+    await run("slack-channels", "--search", "zzz");
+    expect(stdout()).toContain('No Slack channels match "zzz".');
   });
 });
 
