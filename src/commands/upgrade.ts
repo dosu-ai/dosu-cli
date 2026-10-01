@@ -16,7 +16,13 @@ import {
 } from "../version/auto-update";
 import { canRefreshMcp, needsMcpRefresh, writeMcpRefreshCache } from "../version/mcp-refresh-check";
 import { checkForSkillUpdates } from "../version/skill-update-check";
-import { INSTALL_CHANNEL, isNpxInvocation, releaseTag, VERSION } from "../version/version";
+import {
+  INSTALL_CHANNEL,
+  isNpxInvocation,
+  isSelfHostedBuild,
+  releaseTag,
+  VERSION,
+} from "../version/version";
 
 const PACKAGE_NAME = "@dosu/cli";
 
@@ -235,6 +241,11 @@ function printNonGlobalPackageGuidance(): void {
 }
 
 export function runUpgrade(channel = INSTALL_CHANNEL, options: UpgradeOptions = {}): number {
+  if (isSelfHostedBuild(channel)) {
+    console.log("This Dosu CLI was built for a self-hosted Dosu and updates with it.");
+    console.log("Ask whoever runs your Dosu deployment for a newer build.");
+    return 1;
+  }
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
   // Global operations do not need the caller's project, whose config may execute arbitrary code.

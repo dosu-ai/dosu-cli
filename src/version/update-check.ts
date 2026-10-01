@@ -10,7 +10,14 @@ import { logger } from "../debug/logger";
 import { brand } from "../setup/styles";
 import { centerBlock, visibleWidth } from "../tui/layout";
 import { startAutoUpdate } from "./auto-update";
-import { INSTALL_CHANNEL, isNpxInvocation, type ReleaseTag, releaseTag, VERSION } from "./version";
+import {
+  INSTALL_CHANNEL,
+  isNpxInvocation,
+  isSelfHostedBuild,
+  type ReleaseTag,
+  releaseTag,
+  VERSION,
+} from "./version";
 
 const CACHE_FILENAME = "update-check.json";
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -214,7 +221,8 @@ export function buildUpdateNotice(
 
 /** The update the cache already knows about, if any, for surfaces (the TUI welcome banner)
  * that render the notice themselves instead of printing the boxed stderr notice. */
-export function getAvailableUpdate(): string | null {
+export function getAvailableUpdate(channel: string = INSTALL_CHANNEL): string | null {
+  if (isSelfHostedBuild(channel)) return null;
   const cache = readCache();
   return cache && isNewerRelease(cache.latestVersion, VERSION) ? cache.latestVersion : null;
 }
@@ -234,7 +242,10 @@ function handleNewerVersion(latest: string, notify: boolean): void {
 
 /** Check for updates, awaited from the preAction hook. A newer version starts a background
  * install. With `notify: false` nothing is printed; the TUI welcome banner shows the update. */
-export async function checkForUpdates(options: { notify?: boolean } = {}): Promise<void> {
+export async function checkForUpdates(
+  options: { notify?: boolean; channel?: string } = {},
+): Promise<void> {
+  if (isSelfHostedBuild(options.channel)) return;
   const notify = options.notify ?? true;
   try {
     const cache = readCache();
