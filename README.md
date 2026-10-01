@@ -117,9 +117,9 @@ Once authenticated against a deployment, you can drive the Dosu platform without
 |---|---|
 | `dosu ask` | Ask a question and get an AI-generated answer |
 | `dosu knowledge` | Search and browse your knowledge base |
-| `dosu docs` | Manage documents (list, create, update, import, publish, AI-generate) |
+| `dosu docs` | Manage documents (list, create, update, import, publish) |
 | `dosu threads` | List and manage conversation threads |
-| `dosu review` | Review workflow for the selected Library: list pending doc changes and draft replies, diff, edit, approve, reject. `review list --json` returns `{items, truncated, total, scope}`, where `scope` names the Library and MCP deployment searched |
+| `dosu review` | Review workflow for the selected Library: list pending doc changes and draft replies, diff, edit, approve, reject. `review list --json` returns `{items, truncated, total, scope}`, where `scope` names the Library and MCP deployment searched. `review notifications` routes a Library's or Agent's reviews to a Slack channel |
 | `dosu sources` | Manage connected data sources (list, connect, create, sync, update) |
 | `dosu integrations` | List and inspect platform integrations (Slack, GitHub, …) |
 | `dosu topics` | List knowledge base topics and their pages |
@@ -182,8 +182,11 @@ dosu knowledge incognito enable|disable [claude|cursor|codex]  # the /dosu-incog
 ```
 
 The status line shows one of `📚 Dosu studying…`, `👻 Dosu incognito`, `⚪ Dosu paused`,
-`⚪ Dosu not studying this folder`, or `⚪ Dosu off`. Neither setup nor `enable` replaces a status
-line you already have; they print the one-liner to add to your own script instead.
+`⚪ Dosu not studying this repo`, or `⚪ Dosu off`. Every session is studied unless you limit
+studying to picked repos under `dosu` → settings → study scope. Notes from a session with a known
+repo and branch are anchored to that branch; the rest are unanchored and reach topics immediately.
+Neither setup nor `enable` replaces a status line you already have; they print the one-liner to add
+to your own script instead.
 
 Running `/dosu-incognito` inside a session marks that session's transcript so studying skips it
 (the whole session, and for the rest of it — start a new session to turn Dosu back on) and tells the
