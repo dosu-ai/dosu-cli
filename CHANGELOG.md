@@ -1,3 +1,10 @@
+## [0.64.2](https://github.com/dosu-ai/dosu-cli/compare/v0.64.1...v0.64.2) (2026-10-01)
+
+
+### Bug Fixes
+
+* **rules:** match the Dosu MCP server's review and finalize instructions ([#256](https://github.com/dosu-ai/dosu-cli/issues/256)) ([889387c](https://github.com/dosu-ai/dosu-cli/commit/889387c31b0637db938482500c4a3dc03c4f00a5))
+
 ## [0.64.1](https://github.com/dosu-ai/dosu-cli/compare/v0.64.0...v0.64.1) (2026-09-30)
 
 
