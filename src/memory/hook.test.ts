@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type HookDeps, runMemoryHook } from "./hook";
+import { type HookDeps, repoOfDir, runMemoryHook } from "./hook";
 import { readSessionState } from "./state";
 
 vi.mock("../debug/logger", () => ({
@@ -154,5 +154,27 @@ describe("runMemoryHook", () => {
     expect(await runMemoryHook(null, deps())).toBeNull();
     expect(await runMemoryHook(payload("Stop", { session_id: "../escape" }), deps())).toBeNull();
     expect(spawned).toEqual([]);
+  });
+});
+
+describe("repoOfDir", () => {
+  const saved = process.env.DOSU_MEMORY_REPO;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.DOSU_MEMORY_REPO;
+    else process.env.DOSU_MEMORY_REPO = saved;
+  });
+
+  it("takes DOSU_MEMORY_REPO over the origin remote, and only in owner/name form", () => {
+    const noRemote = mkdtempSync(join(tmpdir(), "dosu-memory-norepo-"));
+    try {
+      delete process.env.DOSU_MEMORY_REPO;
+      expect(repoOfDir(noRemote)).toBeNull();
+      process.env.DOSU_MEMORY_REPO = " Acme/Widgets ";
+      expect(repoOfDir(noRemote)).toBe("Acme/Widgets");
+      process.env.DOSU_MEMORY_REPO = "github.com/acme/widgets";
+      expect(repoOfDir(noRemote)).toBeNull();
+    } finally {
+      rmSync(noRemote, { recursive: true, force: true });
+    }
   });
 });

@@ -74,7 +74,19 @@ export interface HookDeps {
   now?: Date;
 }
 
-function repoOfDir(dir: string): string | null {
+/** The backend's `owner/name` shape. */
+const REPO_NAME = /^[^/\s]+\/[^/\s]+$/;
+
+/** `owner/name` for the session: `DOSU_MEMORY_REPO` when set (for checkouts without an origin,
+ * such as evaluation containers), else the origin remote. A malformed override disables memory
+ * for the session rather than silently falling back to another name. */
+export function repoOfDir(dir: string): string | null {
+  const override = process.env.DOSU_MEMORY_REPO?.trim();
+  if (override) {
+    if (REPO_NAME.test(override)) return override;
+    logger.warn("memory", "DOSU_MEMORY_REPO is not owner/name; memory is off for this session");
+    return null;
+  }
   const repo = originRepoOfDir(dir);
   return repo ? displayRepo(repo) : null;
 }
