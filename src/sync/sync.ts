@@ -198,11 +198,11 @@ function ledgerEntry(
   cliVersion: string,
 ): LedgerEntry | null {
   if (result.outcome === "failed") return null;
-  const before = shippedPrefix(previous);
-  // A shipped session whose new tail is too small to learn from stays shipped, as of now.
-  if (result.outcome === "trivial" && previous?.outcome === "shipped" && before) {
+  // A shipped session whose new content is too small to learn from stays shipped, as of now.
+  if (result.outcome === "trivial" && previous?.outcome === "shipped") {
     return { ...previous, updated: result.session.updated };
   }
+  const before = shippedPrefix(previous);
   const entry: LedgerEntry = {
     updated: result.session.updated,
     outcome: result.outcome,
@@ -343,8 +343,9 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     // A run that held the lock while this one scanned may have settled some of the backlog.
     const locked = loadState();
     const todo = ready.filter((s) => isPending(s, locked.sessions[sessionKey(s)], pending));
-    if (todo.length === 0)
+    if (todo.length === 0) {
       return { status: "nothing-new", ...base, readySessions: 0, sessions: [] };
+    }
 
     // Stamp this run's progress baseline into every state save so status viewers can compute
     // run-scoped progress; same-pid batches (a bootstrap drain) keep the first batch's baseline.

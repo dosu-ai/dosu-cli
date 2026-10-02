@@ -562,6 +562,25 @@ describe("runKnowledgeSync shipping", () => {
     });
   });
 
+  it("a migrated shipped session that grew by too little stays shipped", async () => {
+    const grown = session(60);
+    const seeded = settled(grown, { updated: session(120).updated, task_id: "t0", seeded: true });
+    const { deps, saved } = makeDeps({
+      loadState: () => state({ sessions: seeded }),
+      listSessions: vi.fn().mockResolvedValue([grown]),
+      ship: vi.fn(
+        async (): Promise<ShipSessionResult[]> => [{ session: grown, outcome: "trivial" }],
+      ),
+    });
+
+    await runKnowledgeSync({ deps });
+
+    expect(saved.at(-1)?.sessions["claude/s-60"]).toEqual({
+      ...seeded["claude/s-60"],
+      updated: grown.updated,
+    });
+  });
+
   it("a refused tail keeps what already shipped, so a retry can send just the tail", async () => {
     const grown = session(60);
     const { deps, saved } = makeDeps({
