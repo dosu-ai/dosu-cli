@@ -1,12 +1,86 @@
-# Syncing sessions to Dosu memory: the status line and `/dosu-incognito`
+# Syncing sessions to Dosu memory
 
 `dosu knowledge hooks enable` installs a session-end hook (Claude Code, Cursor, Codex) that runs
-`dosu knowledge sync --quiet --detach`. The sync scans the last 30 days of finished agent sessions,
-gates them behind a watermark and a quiet period, applies the repo scope and pause switch from
-`~/.config/dosu-cli/knowledge-sync.json`, and ships what is left to Dosu memory (secrets redacted
-locally first), which learns from each session server-side. Shipping is on by default;
-`dosu knowledge transcripts disable` turns it off. This document covers the repo scope and the two
-switches layered on top of it: a per-session opt-out and a status-bar indicator.
+`dosu knowledge sync --quiet --detach`. The sync scans the last 30 days of agent sessions, keeps the
+ones its ledger has no answer for, applies the repo scope and pause switch from
+`~/.config/dosu-cli/knowledge-sync.json`, and ships them to Dosu memory (secrets redacted locally
+first), which learns from each session server-side. Shipping is on by default;
+`dosu knowledge transcripts disable` turns it off. This document covers how a sync decides what to
+ship, the project key sessions are scoped by, the repo scope, and the two switches layered on top:
+a per-session opt-out and a status-bar indicator.
+
+## What a sync ships
+
+The state file keeps a ledger (`sessions`, schema 3) with one entry per session, keyed
+`<harness>/<session id>`, recording how it was settled and the session's mtime at the time. A
+scanned session is **pending** when it has no entry, when its mtime differs from the entry's (it was
+resumed or kept writing), or when it was passed over by a different CLI version (so newer harness
+support or rules get a second look). `--retry-rejected` makes sessions the backend refused pending
+for that run. Nothing is skipped for good by being older than something else, and there is no count
+cap on the scan: listing is metadata only. Each run settles at most 20 sessions, oldest first;
+`--bootstrap` keeps going until the backlog is drained. Entries are pruned a week after their session
+leaves the 30-day window.
+
+| Outcome | Meaning |
+|---|---|
+| `shipped` | Accepted by the ingest API (202) |
+| `trivial` | No user record, nothing answering it, or under 2,000 characters of content |
+| `incognito` | `/dosu-incognito` was run in the session |
+| `rejected` | The backend refused the payload (HTTP 400, 413, or 422) |
+| `unsupported` | No normalizer for the harness, or the transcript could not be normalized |
+| `skipped_by_user` | You declined setup's offer to ship the last 30 days |
+
+Only transport errors, auth failures, and 5xx responses are failures: they stop the run, leave the
+session pending, and make hook runs back off. `rejected` and `unsupported` are answers, so one
+unreadable session never stalls the rest. `dosu knowledge sync --status` and
+`dosu knowledge sessions` show counts per outcome and list the rejected and unsupported sessions
+with the reason.
+
+**Worthiness** is judged on what would ship: the normalized, redacted trajectory. Text, tool
+arguments, and tool results all count toward the 2,000 characters, so a terse run that did its work
+through tools ships; the meta record does not count.
+
+**Quiet period.** A session updated in the last five minutes may still be running, so it waits for a
+later run. The exception is a session the hook says just ended: the `--detach` parent reads the hook
+payload and passes the session to the detached run as `--ended <harness>:<id>` and
+`--ended-path <transcript>`. That session ships in the same run, past the quiet period and ahead of
+the backlog, even if its transcript lives outside the directories the scan walks. If another run
+holds the sync lock, the run waits for it (up to ten minutes) instead of leaving the session for a
+later trigger. Only definitive end events count: Claude Code's `SessionEnd` today. Per-turn events
+(Cursor's `stop`, Codex's `Stop`) never pass `--ended`. Each agent's end event is one reader in
+`END_EVENT_READERS` (`src/sessions/capture.ts`).
+
+**Resumed sessions.** For a shipped session the ledger also keeps how many normalized records went
+and a sha256 of them. When the session grows and its records still start with exactly that prefix,
+only the meta record and the new tail ship, with `metadata.continuation =
+{"from_record": n, "prefix_sha256": "..."}`. A new tail too small to learn from is not uploaded and
+the session stays shipped. If the prefix no longer matches, the whole session ships again and the
+server dedupes identical content. A child session's upload carries `parent_session_id`.
+
+Upgrading from the watermark state (schema 2, or the learner-era schema 1) seeds the ledger with the
+sessions it shipped. Everything else in the window becomes pending again, including sessions the
+watermark passed over without shipping; the server dedupes anything it already has. Clearing the
+history on the Activity screen empties the ledger the same way.
+
+## Project key
+
+Every upload, and every prompt-time memory request, carries a `project` key naming the codebase the
+session worked in (`repo` repeats it for servers that predate `project`). Memory is scoped by it
+when the deployment has no linked repository. For a working directory, the first rule that applies
+wins:
+
+1. A directory linked in `~/.config/dosu-cli/projects.json`
+   (`{"links": [{"dir": "/abs/path", "project": "<key>"}]}`), longest match.
+2. The `DOSU_PROJECT` environment variable.
+3. The `origin` remote, normalized (`github.com/acme/widget`).
+4. `git:<sha>` of the repository's root commit, for clones without an `origin`. Skipped in a shallow
+   clone, whose oldest commit is only where the clone was cut.
+5. `path:<git top level, or the directory itself>`.
+
+The git answer is cached per session in `project-dirs.json`, so a checkout deleted later still
+resolves to the same key; links and `DOSU_PROJECT` are applied fresh every time. The prompt hook
+caches its answer under the session's key, so the transcript ships under the same project it was
+served memory for.
 
 ## Repo scope
 
@@ -51,9 +125,9 @@ Running `/dosu-incognito` inside a session expands the file into the conversatio
 the marker `dosu:incognito:v1` and instructs the model not to call Dosu MCP tools for the rest of
 the session. Because the harness records the expansion in the transcript, the marker is the switch:
 
-- `dosu knowledge sync` never uploads a gated session whose transcript contains the marker (or
-  Claude Code's `<command-name>/dosu-incognito</command-name>` record). Skipped sessions count as
-  examined, so the watermark moves past them and they are never re-read. The debug log records
+- `dosu knowledge sync` never uploads a session whose transcript contains the marker (or Claude
+  Code's `<command-name>/dosu-incognito</command-name>` record). It is settled in the ledger as
+  `incognito`, so it is not re-read until it changes. The debug log records
   `not shipping incognito session <harness>/<id>` and the run summary counts it as passed over.
 - The Activity screen and `dosu knowledge sessions` set them aside from the queue.
 
@@ -115,5 +189,5 @@ DOSU_DEV=true bun run dev knowledge statusline enable claude
 DOSU_DEV=true bun run dev knowledge incognito enable claude
 # Open Claude Code in a synced repo → 📚 Dosu learning…
 # Run /dosu-incognito → 👻 Dosu incognito
-# End the session; `dosu logs --tail` shows "not shipping incognito session claude/<id>" on the next sync
+# End the session; `dosu logs --tail` shows "not shipping incognito session claude/<id>" right away
 ```

@@ -173,10 +173,19 @@ Combine with `dosu login --request` / `--check <ticket>` for human-in-the-loop a
 ### Syncing sessions to Dosu memory: status line and incognito
 
 With `dosu knowledge hooks enable`, finished coding-agent sessions ship to Dosu memory in the
-background (secrets redacted locally first), and Dosu learns from them server-side. Shipping is on
-by default; `dosu knowledge transcripts disable` turns it off. Two switches make it visible and
-controllable per session. `dosu setup` installs both alongside the hook; they can also be managed
-directly:
+background (secrets redacted locally first), and Dosu learns from them server-side. A session ships
+as soon as its session-end hook fires; a resumed session later ships only what is new. Shipping is
+on by default; `dosu knowledge transcripts disable` turns it off. `dosu knowledge sync --status` and
+`dosu knowledge sessions` show what shipped and why anything did not (too short, rejected by the
+server, or from an agent not supported yet); `dosu knowledge sync --retry-rejected` tries refused
+sessions again.
+
+When the deployment has no linked repository, memory is scoped by the codebase a session worked in:
+its `origin` remote, else the repository's root commit, else its path. Set `DOSU_PROJECT` to name it
+yourself. See [docs/syncing.md](docs/syncing.md#project-key).
+
+Two switches make shipping visible and controllable per session. `dosu setup` installs both
+alongside the hook; they can also be managed directly:
 
 ```bash
 dosu knowledge statusline enable|disable [claude|cursor]   # status-bar line in Claude Code / Cursor CLI
