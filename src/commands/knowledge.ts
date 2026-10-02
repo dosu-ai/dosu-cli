@@ -14,6 +14,7 @@ import { disableClaudeContextHook, enableClaudeContextHook } from "../hooks/cont
 import { HookConfigError, hookCommand } from "../hooks/formats";
 import { emitKnowledgeReport } from "../report/generate";
 import { captureHookSession, endedSessionArgs, parseEndedSessionArgs } from "../sessions/capture";
+import { pinEndedSessionProjects } from "../sessions/project-dir";
 import { displayRepo } from "../sessions/repo";
 import type { AgentSession } from "../sessions/scan";
 import { listSessionBacklog } from "../sync/backlog";
@@ -352,6 +353,10 @@ export function knowledgeCommand(): Command {
           return;
         }
 
+        // The hook that named these sessions runs in their agent's environment, so its
+        // DOSU_PROJECT is theirs (and only theirs); pin it now, before a pause, backoff, or failed
+        // upload can leave the session to a later run from some other environment.
+        if (ended.length > 0) pinEndedSessionProjects(ended);
         const deps: SyncDeps = { ship: buildShipper() };
         const syncOptions = {
           quiet: opts.quiet,

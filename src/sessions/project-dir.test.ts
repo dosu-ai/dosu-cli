@@ -155,33 +155,58 @@ describe("resolveProject", () => {
     expect(createProjectDirResolver(tempDir, deps).resolveProject(s)).toEqual(ORIGIN);
   });
 
-  it("applies links and DOSU_PROJECT fresh on every call, ahead of the cached git answer", () => {
-    const s = session({ harness: "opencode", project: "/work/widget", id: "w" });
+  it("a link made before a session is first resolved applies; one made after does not move it", () => {
+    const linkWork = () =>
+      writeFileSync(
+        join(tempDir, "projects.json"),
+        JSON.stringify({ links: [{ dir: "/work", project: "linked" }] }),
+      );
+    const shippedBefore = session({ harness: "opencode", project: "/work/widget", id: "before" });
     const resolver = createProjectDirResolver(tempDir, { gitProjectOfDir: () => ORIGIN, env: {} });
-    expect(resolver.resolveProject(s)).toEqual(ORIGIN);
+    expect(resolver.resolveProject(shippedBefore)).toEqual(ORIGIN);
     resolver.flush();
-    writeFileSync(
-      join(tempDir, "projects.json"),
-      JSON.stringify({ links: [{ dir: "/work", project: "linked" }] }),
-    );
+    linkWork();
 
     const later = createProjectDirResolver(tempDir, { gitProjectOfDir: () => ORIGIN, env: {} });
-    expect(later.resolveProject(s)).toEqual({ project: "linked", rule: "link" });
+    // Same session, same key: memory scoped by it stays together.
+    expect(later.resolveProject(shippedBefore)).toEqual(ORIGIN);
+    // A backlog session nobody resolved yet takes the link.
+    const backlog = session({ harness: "opencode", project: "/work/widget", id: "backlog" });
+    expect(later.resolveProject(backlog)).toEqual({ project: "linked", rule: "link" });
   });
 
-  it("without a working directory only DOSU_PROJECT can answer", () => {
+  it("DOSU_PROJECT counts only from the session's own agent's environment, then sticks", () => {
+    const s = session({ harness: "opencode", project: "/work/widget", id: "w" });
+    // A sync shipping many sessions runs in some other session's environment: never theirs.
+    const sync = createProjectDirResolver(tempDir, {
+      gitProjectOfDir: () => ORIGIN,
+      env: { DOSU_PROJECT: "someone-else" },
+    });
+    const other = session({ harness: "opencode", project: "/work/widget", id: "other" });
+    expect(sync.resolveProject(other)).toEqual(ORIGIN);
+
+    expect(sync.resolveProject(s, { DOSU_PROJECT: "poc" })).toEqual({
+      project: "poc",
+      rule: "env",
+    });
+    sync.flush();
+    const later = createProjectDirResolver(tempDir, { gitProjectOfDir: () => ORIGIN, env: {} });
+    expect(later.resolveProject(s)).toEqual({ project: "poc", rule: "env" });
+  });
+
+  it("without a working directory only the agent's DOSU_PROJECT can answer", () => {
     const s = session({ harness: "opencode", id: "nowhere" });
     const gitProjectOfDir = vi.fn(() => ORIGIN);
+    const resolver = createProjectDirResolver(tempDir, {
+      gitProjectOfDir,
+      env: { DOSU_PROJECT: "not-this-one" },
+    });
 
-    expect(
-      createProjectDirResolver(tempDir, { gitProjectOfDir, env: {} }).resolveProject(s),
-    ).toBeNull();
-    expect(
-      createProjectDirResolver(tempDir, {
-        gitProjectOfDir,
-        env: { DOSU_PROJECT: "poc" },
-      }).resolveProject(s),
-    ).toEqual({ project: "poc", rule: "env" });
+    expect(resolver.resolveProject(s)).toBeNull();
+    expect(resolver.resolveProject(s, { DOSU_PROJECT: "poc" })).toEqual({
+      project: "poc",
+      rule: "env",
+    });
     expect(gitProjectOfDir).not.toHaveBeenCalled();
   });
 
@@ -202,17 +227,53 @@ describe("resolveProject", () => {
     expect(ship.resolveProject(s)).toEqual(ORIGIN);
   });
 
-  it("resolveProjectAt does not cache a directory that disagrees with the session's", () => {
+  it("the prompt hook's DOSU_PROJECT and links are the session's, and its shipment agrees", () => {
+    const prompt = createProjectDirResolver(tempDir, {
+      gitProjectOfDir: () => ORIGIN,
+      env: { DOSU_PROJECT: "poc-gamma" },
+    });
+    expect(prompt.resolveProjectAt("claude/abc", "/work/widget")).toEqual({
+      project: "poc-gamma",
+      rule: "env",
+    });
+    prompt.flush();
+
+    // The sync that ships it runs without the variable (another agent's hook, a manual run).
+    const ship = createProjectDirResolver(tempDir, { gitProjectOfDir: () => ORIGIN, env: {} });
+    const s = session({ harness: "claude", id: "abc" });
+    expect(ship.resolveProject(s)).toEqual({ project: "poc-gamma", rule: "env" });
+  });
+
+  it("a flush keeps what another process cached since this resolver loaded", () => {
+    const ORIGIN_B = { project: "github.com/acme/other", rule: "origin" } as const;
+    const a = session({ harness: "opencode", project: "/work/widget", id: "a" });
+    const b = session({ harness: "opencode", project: "/work/other", id: "b" });
+    // A sync and a prompt hook load the cache at the same time, then each caches one session.
+    const sync = createProjectDirResolver(tempDir, { gitProjectOfDir: () => ORIGIN, env: {} });
+    const prompt = createProjectDirResolver(tempDir, { gitProjectOfDir: () => ORIGIN_B, env: {} });
+    sync.resolveProject(a);
+    prompt.resolveProject(b);
+    prompt.flush();
+    sync.flush();
+
+    const gitProjectOfDir = vi.fn(() => ({ project: "path:/x", rule: "path" as const }));
+    const later = createProjectDirResolver(tempDir, { gitProjectOfDir, env: {} });
+    expect(later.resolveProject(a)).toEqual(ORIGIN);
+    expect(later.resolveProject(b)).toEqual(ORIGIN_B);
+    expect(gitProjectOfDir).not.toHaveBeenCalled();
+  });
+
+  it("the first answer for a session is its answer, whichever caller gave it", () => {
     const gitProjectOfDir = vi.fn((dir: string) => ({
-      project: `path:${dir}`,
-      rule: "path" as const,
+      project: `git:${dir}`,
+      rule: "root-commit" as const,
     }));
     const s = session({ harness: "opencode", project: "/work/widget", id: "w" });
     const resolver = createProjectDirResolver(tempDir, { gitProjectOfDir, env: {} });
-    resolver.resolve(s);
+    expect(resolver.resolveProject(s)?.project).toBe("git:/work/widget");
 
-    expect(resolver.resolveProjectAt("opencode/w", "/elsewhere").project).toBe("path:/elsewhere");
-    expect(resolver.resolveProject(s)?.project).toBe("path:/work/widget");
+    // A later prompt from another directory (the agent cd'd) still gets the session's key.
+    expect(resolver.resolveProjectAt("opencode/w", "/elsewhere").project).toBe("git:/work/widget");
   });
 });
 

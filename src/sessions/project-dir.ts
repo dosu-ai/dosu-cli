@@ -20,10 +20,10 @@ import {
   branchFromReflog,
   parseReflog,
 } from "./branch";
-import { type CapturedSession, readCapturedSession } from "./capture";
+import { type CapturedSession, type EndedSession, readCapturedSession } from "./capture";
 import { gitProjectOfDir, type ProjectKey, projectOverride } from "./project";
 import { currentBranchOfDir, headReflogOfDir, originRepoOfDir } from "./repo";
-import type { AgentSession } from "./scan";
+import { type AgentSession, sessionAtPath } from "./scan";
 
 const CACHE_FILENAME = "project-dirs.json";
 const CACHE_SCHEMA_VERSION = 1;
@@ -40,8 +40,8 @@ interface CacheEntry {
   /** Normalized origin repo of `dir`; null = not a repo (retried when mtime moves); absent =
    * never looked up. */
   repo?: string | null;
-  /** What git says the project of `dir` is (project.ts rules 3-5); a `path` fallback is retried
-   * when mtime moves, like a null repo. Links and DOSU_PROJECT are never cached. */
+  /** The session's project key (project.ts), as first resolved for it, by whichever rule; a
+   * `path` fallback is retried when mtime moves, like a null repo. */
   project?: ProjectKey;
 }
 
@@ -149,7 +149,7 @@ export interface ProjectDirDeps {
   reflogOfDir?: (dir: string) => string | null;
   currentBranch?: (dir: string) => string | null;
   gitProjectOfDir?: (dir: string) => ProjectKey;
-  /** Source of DOSU_PROJECT; defaults to process.env. */
+  /** The hook's environment, for resolveProjectAt's DOSU_PROJECT; defaults to process.env. */
   env?: NodeJS.ProcessEnv;
 }
 
@@ -174,18 +174,24 @@ export interface ProjectDirResolver {
   resolve(session: AgentSession): string | null;
   /** The normalized origin repo of the session's working directory, or null outside a repo. */
   resolveRepo(session: AgentSession): string | null;
-  /** The session's project key; null only when neither its working directory nor DOSU_PROJECT
-   * is known. */
-  resolveProject(session: AgentSession): ProjectKey | null;
+  /** The session's project key, as first resolved for it and cached from then on, so prompt-time
+   * memory and the shipped session agree and a deleted checkout still resolves. `agentEnv` is the
+   * environment the session's own agent ran in, when the caller runs inside it (a hook for this
+   * very session): only then does DOSU_PROJECT apply, since a sync shipping many sessions runs in
+   * whichever agent's environment triggered it. Null only when neither the working directory nor
+   * that DOSU_PROJECT is known. */
+  resolveProject(session: AgentSession, agentEnv?: NodeJS.ProcessEnv): ProjectKey | null;
   /** The project key for a session whose working directory the caller already knows (a hook
-   * payload's cwd), cached under the same `harness/id` key so the shipped session agrees. */
+   * payload's cwd), resolved in the hook's environment (`deps.env`) and cached under the same
+   * `harness/id` key so the shipped session agrees. */
   resolveProjectAt(key: string, dir: string): ProjectKey;
   /** The branch the session ran on, or null when nothing recorded it. Not cached: a session's
    * branch can move until it ends, and each session is resolved about once. */
   resolveBranch(session: AgentSession): string | null;
   /** Cache-only lookup by `harness/id` key — for history rows with no session file at hand. */
   cached(key: string): string | null;
-  /** Persist any newly resolved entries; call once after a batch. */
+  /** Persist any newly resolved entries, merged into the file as it is now; call once after a
+   * batch. */
   flush(): void;
 }
 
@@ -200,7 +206,9 @@ export function createProjectDirResolver(
   const mtime = deps.mtime ?? fileMtime;
   const captured = deps.captured ?? ((key: string) => readCapturedSession(key, configDir));
   const entries = loadCacheFile(configDir);
-  let dirty = false;
+  // Keys this resolver changed: a flush writes only these over the file as it is then, so it
+  // never drops what a concurrent hook or sync cached since this one loaded.
+  const touched = new Set<string>();
 
   const compute = (session: AgentSession): string | null => {
     switch (session.harness) {
@@ -271,30 +279,45 @@ export function createProjectDirResolver(
       return cached.dir;
     }
     const dir = compute(session);
-    entries[key] = { dir, mtime: mtime(session.path) };
-    dirty = true;
+    // A key pinned while the directory was unknown (DOSU_PROJECT) stays the session's.
+    const project = cached?.project;
+    entries[key] = { dir, mtime: mtime(session.path), ...(project ? { project } : {}) };
+    touched.add(key);
     return dir;
   };
 
   const gitProject = deps.gitProjectOfDir ?? gitProjectOfDir;
   const projectByDir = new Map<string, ProjectKey>();
-  const overrideFor = (dir: string | null) => projectOverride(dir, { configDir, env: deps.env });
 
-  /** Rules 3-5 for `dir`, through the session's cache entry when it is about the same dir. */
-  const cachedGitProject = (key: string, dir: string, currentMtime: string): ProjectKey => {
-    const entry = entries[key];
-    const cacheable = entry !== undefined && entry.dir === dir;
-    const hit = cacheable ? entry.project : undefined;
-    if (hit && (hit.rule !== "path" || entry.mtime === currentMtime)) return hit;
+  /** All five rules for `dir` (only DOSU_PROJECT without one); git asked once per directory. */
+  const freshProject = (dir: string | null, env: NodeJS.ProcessEnv): ProjectKey | null => {
+    const override = projectOverride(dir, { configDir, env });
+    if (override || dir === null) return override;
     let project = projectByDir.get(dir);
     if (!project) {
       project = gitProject(dir);
       projectByDir.set(dir, project);
     }
-    if (cacheable) {
+    return project;
+  };
+
+  /** The session's cached key, or a fresh one cached on its entry. Every rule is cached: the
+   * session keeps the key it was first served or shipped under. A `path` answer, the last
+   * resort, is retried once the session file changes (a repo may have its first commit now). */
+  const sessionProject = (
+    key: string,
+    dir: string | null,
+    currentMtime: string,
+    env: NodeJS.ProcessEnv,
+  ): ProjectKey | null => {
+    const entry = entries[key];
+    const hit = entry?.project;
+    if (hit && (hit.rule !== "path" || entry.mtime === currentMtime)) return hit;
+    const project = freshProject(dir, env);
+    if (entry && project) {
       entry.project = project;
       entry.mtime = currentMtime;
-      dirty = true;
+      touched.add(key);
     }
     return project;
   };
@@ -307,7 +330,8 @@ export function createProjectDirResolver(
     resolveRepo(session) {
       const dir = resolve(session);
       if (dir === null) return null;
-      const entry = entries[`${session.harness}/${session.id}`];
+      const key = `${session.harness}/${session.id}`;
+      const entry = entries[key];
       // Cached per session, so a checkout deleted since still resolves to its repo.
       if (
         entry.repo !== undefined &&
@@ -319,26 +343,23 @@ export function createProjectDirResolver(
       const repo = repoByDir.get(dir) ?? null;
       entry.repo = repo;
       entry.mtime = mtime(session.path);
-      dirty = true;
+      touched.add(key);
       return repo;
     },
-    resolveProject(session) {
+    resolveProject(session, agentEnv = {}) {
       const dir = resolve(session);
-      const override = overrideFor(dir);
-      if (override) return override;
-      if (dir === null) return null;
-      return cachedGitProject(`${session.harness}/${session.id}`, dir, mtime(session.path));
+      return sessionProject(`${session.harness}/${session.id}`, dir, mtime(session.path), agentEnv);
     },
     resolveProjectAt(key, dir) {
-      const override = overrideFor(dir);
-      if (override) return override;
       if (!entries[key]) {
         // No session file to stamp yet: a `path` fallback answers the session's later prompts,
         // and is retried once the sync stamps the real file's mtime.
         entries[key] = { dir, mtime: "" };
-        dirty = true;
+        touched.add(key);
       }
-      return cachedGitProject(key, dir, entries[key].mtime);
+      const env = deps.env ?? process.env;
+      // Never null: the directory is known.
+      return sessionProject(key, dir, entries[key].mtime, env) as ProjectKey;
     },
     resolveBranch(session) {
       return (
@@ -348,9 +369,30 @@ export function createProjectDirResolver(
       );
     },
     flush() {
-      if (!dirty) return;
-      saveCacheFile(configDir, entries);
-      dirty = false;
+      if (touched.size === 0) return;
+      const latest = loadCacheFile(configDir);
+      for (const key of touched) latest[key] = entries[key];
+      saveCacheFile(configDir, latest);
+      touched.clear();
     },
   };
+}
+
+/** Resolve, in this process's environment, the projects of sessions a hook running in their own
+ * agent's environment just reported as ended (`knowledge sync --ended`): besides the prompt hook,
+ * the one place DOSU_PROJECT applies to a session. Cached like any answer, so the session ships
+ * under that key whichever later run ships it; every other session in the run's batch is resolved
+ * without this environment. */
+export function pinEndedSessionProjects(
+  ended: readonly EndedSession[],
+  configDir: string = getConfigDir(),
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  const resolver = createProjectDirResolver(configDir, { env });
+  for (const { harness, id, path } of ended) {
+    if (!harness || !id || !path) continue;
+    const session = sessionAtPath(harness, id, path);
+    if (session) resolver.resolveProject(session, env);
+  }
+  resolver.flush();
 }

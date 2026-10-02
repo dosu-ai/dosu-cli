@@ -77,10 +77,18 @@ wins:
    clone, whose oldest commit is only where the clone was cut.
 5. `path:<git top level, or the directory itself>`.
 
-The git answer is cached per session in `project-dirs.json`, so a checkout deleted later still
-resolves to the same key; links and `DOSU_PROJECT` are applied fresh every time. The prompt hook
-caches its answer under the session's key, so the transcript ships under the same project it was
-served memory for.
+A session's key is cached in `project-dirs.json` the first time it is resolved, whichever rule
+produced it, so a checkout deleted later still resolves and a session never changes projects
+midway. The prompt hook resolves it first for Claude Code sessions, so the transcript ships under
+the same project it was served memory for. A link added later applies to sessions not yet
+resolved (the unshipped backlog), not to ones already served or shipped. Only a `path:` answer is
+looked up again once the session file changes, since the directory may have become a repository.
+
+`DOSU_PROJECT` counts only in the session's own agent's environment: the prompt hook, and the
+session-end hook for the session that just ended (`--ended`). A sync shipping a batch runs in
+whichever agent's environment triggered it, so it never applies its own `DOSU_PROJECT` to the rest
+of the batch. To key a backlog of sessions that ran without the variable, link their directory
+instead.
 
 ## Repo scope
 

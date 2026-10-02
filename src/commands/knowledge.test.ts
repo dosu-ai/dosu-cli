@@ -18,7 +18,8 @@ vi.mock("../client/trpc", () => ({
 }));
 
 const mockLoadConfig = vi.fn();
-vi.mock("../config/config", () => ({
+vi.mock("../config/config", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config")>()),
   loadConfig: (...args: unknown[]) => mockLoadConfig(...args),
 }));
 

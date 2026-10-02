@@ -181,8 +181,9 @@ server, or from an agent not supported yet); `dosu knowledge sync --retry-reject
 sessions again.
 
 When the deployment has no linked repository, memory is scoped by the codebase a session worked in:
-its `origin` remote, else the repository's root commit, else its path. Set `DOSU_PROJECT` to name it
-yourself. See [docs/syncing.md](docs/syncing.md#project-key).
+its `origin` remote, else the repository's root commit, else its path. Set `DOSU_PROJECT` in the
+agent's environment to name it yourself. A session keeps the key it was first resolved under. See
+[docs/syncing.md](docs/syncing.md#project-key).
 
 Two switches make shipping visible and controllable per session. `dosu setup` installs both
 alongside the hook; they can also be managed directly:

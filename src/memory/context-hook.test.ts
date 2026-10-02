@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProjectDirResolver } from "../sessions/project-dir";
+import { createShipStep } from "../shipper/runner";
 import { INCOGNITO_MARKER } from "../sync/incognito";
 import { contextHookOutput } from "./context-hook";
 
@@ -106,6 +107,67 @@ describe("contextHookOutput", () => {
         updated: "2026-10-02T00:00:00.000Z",
       });
       expect(shipped?.project).toBe("github.com/acme/widget");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("the session ships under the DOSU_PROJECT its prompts were served by", async () => {
+    // A clone without an origin, where git alone would say git:<root commit>.
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), "dosu-context-repo-")));
+    try {
+      execFileSync("git", ["-C", repo, "init", "-q"]);
+      execFileSync("git", [
+        "-C",
+        repo,
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "init",
+      ]);
+      process.env.DOSU_PROJECT = "poc-gamma";
+      const context = respond(200, { digest: null });
+      await contextHookOutput(payload({ cwd: repo, session_id: "sess-77" }), {
+        ...base,
+        fetchImpl: context,
+      });
+      expect(sentBody(context)).toMatchObject({ project: "poc-gamma" });
+
+      // The transcript ships from a sync run whose environment lacks the variable.
+      delete process.env.DOSU_PROJECT;
+      const transcript = join(repo, "sess-77.jsonl");
+      writeFileSync(
+        transcript,
+        [
+          { type: "user", uuid: "u", cwd: repo, message: { role: "user", content: "fix it" } },
+          {
+            type: "assistant",
+            uuid: "a",
+            message: { role: "assistant", content: [{ type: "text", text: "x".repeat(2500) }] },
+          },
+        ]
+          .map((r) =>
+            JSON.stringify({ ...r, sessionId: "sess-77", timestamp: "2026-10-02T00:00:00Z" }),
+          )
+          .join("\n"),
+      );
+      const ingest = respond(202, { task_id: "t" });
+      const ship = createShipStep({
+        apiKey: "k",
+        deploymentId: "dep-1",
+        backendUrl: "https://api.test",
+        fetchImpl: ingest,
+      });
+      await ship([
+        { id: "sess-77", harness: "claude", path: transcript, updated: "2026-10-02T00:00:00Z" },
+      ]);
+
+      expect(sentBody(ingest).metadata).toMatchObject({ project: "poc-gamma", repo: "poc-gamma" });
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }

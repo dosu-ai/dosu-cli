@@ -8,7 +8,8 @@
  *   5. path         `path:<git toplevel, or the directory itself>`
  *
  * Keys are opaque strings to the server; ingest, prompt-time push, and MCP must all send the
- * same one for the same checkout, so every caller resolves through here. */
+ * same one for the same checkout, so every caller resolves through here, and a session's key is
+ * cached for it the first time it is resolved (sessions/project-dir.ts). */
 
 import { createHash } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
@@ -99,8 +100,9 @@ function linkedProject(dir: string, links: readonly ProjectLink[]): string | nul
   return best?.project ?? null;
 }
 
-/** Rules 1 and 2, the user's explicit choices. Cheap, so callers never cache them: a link made
- * after a session ran still applies when it ships. `dir` may be null (only env can apply). */
+/** Rules 1 and 2, the user's explicit choices. `dir` may be null (only env can apply). `env`
+ * must be the environment the session's agent ran in: DOSU_PROJECT means nothing for a session
+ * some other process happens to be handling. */
 export function projectOverride(
   dir: string | null,
   options: ProjectOptions = {},
@@ -113,8 +115,7 @@ export function projectOverride(
   return env === null ? null : { project: env, rule: "env" };
 }
 
-/** Rules 3 to 5, what git says about `dir`. Callers cache this per session, so a checkout
- * deleted since still resolves to what it was. */
+/** Rules 3 to 5, what git says about `dir`. */
 export function gitProjectOfDir(dir: string): ProjectKey {
   const origin = validKey(originRepoOfDir(dir));
   if (origin !== null) return { project: origin, rule: "origin" };

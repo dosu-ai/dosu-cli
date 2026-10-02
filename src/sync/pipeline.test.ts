@@ -1,7 +1,16 @@
 /** The sync pipeline end to end: real session files under a temporary home, the real scanner,
  * ledger, and ship step, with only HTTP faked. */
 
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  appendFileSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,9 +30,12 @@ type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 let fetchImpl: ReturnType<typeof vi.fn<Fetch>>;
 
 beforeEach(() => {
-  home = mkdtempSync(join(tmpdir(), "dosu-pipeline-"));
+  home = realpathSync(mkdtempSync(join(tmpdir(), "dosu-pipeline-")));
   configDir = join(home, ".config", "dosu-cli");
   mkdirSync(configDir, { recursive: true });
+  // The ship step's own project cache lives in the CLI's config dir.
+  vi.stubEnv("XDG_CONFIG_HOME", join(home, ".config"));
+  vi.stubEnv("DOSU_PROJECT", undefined);
   fetchImpl = vi.fn<Fetch>(
     async () =>
       new Response(JSON.stringify({ task_id: "task", session_url: null }), { status: 202 }),
@@ -31,10 +43,12 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   rmSync(home, { recursive: true, force: true });
 });
 
-function deps(): SyncDeps {
+/** The pipeline's deps; `projects: "git"` resolves real project keys instead of a fixed one. */
+function deps(projects: "fixed" | "git" = "fixed"): SyncDeps {
   return {
     listSessions: () =>
       scanAgentSessions({ homeDir: home, env: {}, since: minutesAgo(60 * 24 * 30) }),
@@ -47,7 +61,9 @@ function deps(): SyncDeps {
       deploymentId: "dep1",
       backendUrl: "https://api.dosu.test",
       fetchImpl,
-      resolveProject: () => ({ project: "github.com/acme/app", rule: "origin" }),
+      ...(projects === "fixed"
+        ? { resolveProject: () => ({ project: "github.com/acme/app", rule: "origin" as const }) }
+        : {}),
     }),
     now: () => NOW,
     cliVersion: "1.0.0",
@@ -55,14 +71,14 @@ function deps(): SyncDeps {
 }
 
 /** One user/assistant exchange as Claude Code logs it, big enough to be worth shipping. */
-function exchange(n: number): string {
+function exchange(n: number, cwd: string = home): string {
   const at = (s: number) => `2026-10-02T10:0${n}:${String(s).padStart(2, "0")}.000Z`;
   return `${[
     JSON.stringify({
       type: "user",
       uuid: `u${n}`,
       timestamp: at(0),
-      cwd: home,
+      cwd,
       sessionId: "sess",
       message: { role: "user", content: `question ${n}` },
     }),
@@ -87,6 +103,20 @@ function claudeSession(id: string, body: string, touched: Date): string {
   writeFileSync(path, body);
   utimesSync(path, touched, touched);
   return path;
+}
+
+/** A git checkout under the temporary home, with one commit and the given origin. */
+function gitRepo(name: string, origin: string): string {
+  const dir = join(home, "work", name);
+  mkdirSync(dir, { recursive: true });
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", ...args], {
+      stdio: "ignore",
+    });
+  git("init", "-q");
+  git("remote", "add", "origin", origin);
+  git("commit", "-q", "--allow-empty", "-m", "init");
+  return dir;
 }
 
 function posted(call: number): { records: { role: string }[]; metadata: Record<string, unknown> } {
@@ -155,5 +185,34 @@ describe("knowledge sync, end to end", () => {
     expect(outcome).toMatchObject({ status: "shipped", inFlightSessions: 1 });
     expect(fetchImpl).toHaveBeenCalledOnce();
     expect(posted(0).metadata.session_id).toBe("ended");
+  });
+
+  it("a sync carrying DOSU_PROJECT ships every other session under its own project", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    const beta = gitRepo("beta", "git@github.com:acme/beta.git");
+    const endedPath = claudeSession("aaaa", exchange(1, alpha), minutesAgo(0));
+    claudeSession("bbbb", exchange(2, beta), minutesAgo(60));
+    // Alpha's agent ran with DOSU_PROJECT, and its prompt hook resolved the session in it.
+    const promptHook = createProjectDirResolver(configDir, {
+      env: { DOSU_PROJECT: "poc-alpha" },
+    });
+    promptHook.resolveProjectAt("claude/aaaa", alpha);
+    promptHook.flush();
+
+    // Alpha's session-end hook triggers the sync, which inherits alpha's environment.
+    vi.stubEnv("DOSU_PROJECT", "poc-alpha");
+    await runKnowledgeSync({
+      quiet: true,
+      ended: [{ harness: "claude", id: "aaaa", path: endedPath }],
+      deps: deps("git"),
+    });
+
+    const projects = Object.fromEntries(
+      fetchImpl.mock.calls.map((_, i) => [
+        posted(i).metadata.session_id,
+        posted(i).metadata.project,
+      ]),
+    );
+    expect(projects).toEqual({ aaaa: "poc-alpha", bbbb: "github.com/acme/beta" });
   });
 });
