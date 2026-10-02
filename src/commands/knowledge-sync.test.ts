@@ -139,7 +139,7 @@ describe("knowledge sync from a session-end hook", () => {
 
     // The hook, and so this sync, runs in the environment of the agent that just ended.
     vi.stubEnv("DOSU_PROJECT", "poc-alpha");
-    await dosu("sync", "--quiet", "--ended", "claude:aaaa", "--ended-path", ended);
+    await dosu("sync", "--quiet", "--ended", `claude:aaaa=${ended}`);
 
     const projects = Object.fromEntries(
       posted().map((p) => [p.metadata.session_id, p.metadata.project]),
@@ -153,7 +153,7 @@ describe("knowledge sync from a session-end hook", () => {
     fetchImpl.mockResolvedValueOnce(new Response("unavailable", { status: 503 }));
 
     vi.stubEnv("DOSU_PROJECT", "poc-alpha");
-    await dosu("sync", "--quiet", "--ended", "claude:aaaa", "--ended-path", ended);
+    await dosu("sync", "--quiet", "--ended", `claude:aaaa=${ended}`);
     // Later, past the quiet period, a manual run from a shell without the variable.
     const later = new Date(Date.now() - 10 * 60_000);
     utimesSync(ended, later, later);
@@ -178,11 +178,32 @@ describe("knowledge sync from a session-end hook", () => {
     await dosu("sync", "--quiet", "--detach");
     expect(fetchImpl).not.toHaveBeenCalled();
     const child = respawnedArgs();
-    expect(child).toEqual(["sync", "--quiet", "--ended", "claude:aaaa", "--ended-path", ended]);
+    expect(child).toEqual(["sync", "--quiet", "--ended", `claude:aaaa=${ended}`]);
 
     // The spawned run ships the session that ended; the live one waits out the quiet period.
     await dosu(...child);
     expect(posted().map((p) => p.metadata.session_id)).toEqual(["aaaa"]);
+  });
+
+  it("a hook's session and an explicit --ended-path stay two sessions, each with its transcript", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    // Outside the scanned roots, so only the paths say where each session lives.
+    const relocated = join(home, "altcfg", "projects", "-work");
+    mkdirSync(relocated, { recursive: true });
+    const ended = join(relocated, "aaaa.jsonl");
+    writeFileSync(ended, exchange(1, alpha));
+    const other = join(home, "elsewhere", "other.jsonl");
+    mkdirSync(join(home, "elsewhere"));
+    writeFileSync(other, exchange(2, alpha));
+    hookStdin({ hook_event_name: "SessionEnd", session_id: "aaaa", transcript_path: ended });
+
+    await dosu("sync", "--quiet", "--detach", "--ended-path", other);
+    await dosu(...respawnedArgs());
+
+    const [shipped] = posted();
+    expect(shipped.metadata.session_id).toBe("aaaa");
+    expect(JSON.stringify(shipped.records)).toContain("question 1");
+    expect(JSON.stringify(shipped.records)).not.toContain("question 2");
   });
 
   it("a per-turn hook payload names no session, so nothing skips the quiet period", async () => {

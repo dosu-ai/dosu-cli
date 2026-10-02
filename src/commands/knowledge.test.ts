@@ -871,9 +871,11 @@ describe("knowledge sync", () => {
       "sync",
       "--quiet",
       "--ended",
-      "claude:abc-123",
+      "claude:abc-123=/home/u/.claude/projects/-work-app/abc-123.jsonl",
+      "--ended",
+      "codex:no-path",
       "--ended-path",
-      "/home/u/.claude/projects/-work-app/abc-123.jsonl",
+      "/x/known-by-path.jsonl",
     );
 
     expect(mockRunSync.mock.calls[0][0].ended).toEqual([
@@ -882,6 +884,8 @@ describe("knowledge sync", () => {
         id: "abc-123",
         path: "/home/u/.claude/projects/-work-app/abc-123.jsonl",
       },
+      { harness: "codex", id: "no-path" },
+      { path: "/x/known-by-path.jsonl" },
     ]);
   });
 
@@ -897,30 +901,33 @@ describe("knowledge sync", () => {
       "vim:x",
       "--ended",
       "claude:../x",
+      "--ended",
+      "claude:x=relative.jsonl",
+      "--ended-path",
+      "relative.jsonl",
     );
 
     expect(mockRunSync.mock.calls[0][0].ended).toEqual([]);
     expect(process.exitCode).toBeUndefined();
   });
 
-  it("an --ended-path alone still names the session by its transcript", async () => {
-    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
-
-    await run("sync", "--ended-path", "/x/s.jsonl", "--ended-path", "relative.jsonl");
-
-    expect(mockRunSync.mock.calls[0][0].ended).toEqual([{ path: "/x/s.jsonl" }]);
-  });
-
-  it("--detach forwards explicit --ended flags too", async () => {
-    await run("sync", "--detach", "--ended", "claude:abc", "--ended-path", "/x/abc.jsonl");
+  it("--detach forwards explicit --ended flags too, one value per session", async () => {
+    await run(
+      "sync",
+      "--detach",
+      "--ended",
+      "claude:abc=/x/abc.jsonl",
+      "--ended-path",
+      "/x/b.jsonl",
+    );
 
     expect(mockSpawnDetached).toHaveBeenCalledWith([
       "knowledge",
       "sync",
       "--ended",
-      "claude:abc",
+      "claude:abc=/x/abc.jsonl",
       "--ended-path",
-      "/x/abc.jsonl",
+      "/x/b.jsonl",
     ]);
   });
 

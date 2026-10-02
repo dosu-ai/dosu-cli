@@ -278,13 +278,13 @@ export function knowledgeCommand(): Command {
     )
     .option("--retry-rejected", "Ship sessions the backend refused before, once more")
     .option(
-      "--ended <harness:id>",
-      "A session that just ended: ship it now, past the quiet period (session-end hooks set this)",
+      "--ended <harness:id[=transcript]>",
+      "A session that just ended, with its transcript when known: ship it now, past the quiet period (session-end hooks set this)",
       collectValues,
     )
     .option(
       "--ended-path <path>",
-      "Transcript of a session that just ended, paired with --ended (session-end hooks set this)",
+      "A session that just ended, known only by its transcript (session-end hooks set this)",
       collectValues,
     )
     .option(

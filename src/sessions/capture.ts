@@ -194,30 +194,32 @@ export function endedSessionOf(payload: unknown): EndedSession | null {
   return null;
 }
 
-/** The `knowledge sync` flags that hand an ended session to the detached run. */
+/** The `knowledge sync` flags that hand an ended session to the detached run: one value per
+ * session, `--ended <harness>:<id>[=<transcript>]`, so a session's transcript can never be
+ * paired with another's; a session known only by its transcript is `--ended-path <transcript>`. */
 export function endedSessionArgs(ended: EndedSession): string[] {
-  return [
-    ...(ended.harness && ended.id ? ["--ended", `${ended.harness}:${ended.id}`] : []),
-    ...(ended.path ? ["--ended-path", ended.path] : []),
-  ];
+  if (ended.harness && ended.id) {
+    return ["--ended", `${ended.harness}:${ended.id}${ended.path ? `=${ended.path}` : ""}`];
+  }
+  return ended.path ? ["--ended-path", ended.path] : [];
 }
 
-/** `--ended <harness>:<id>` and `--ended-path <path>` values back into sessions, the i-th path
- * with the i-th id. Malformed values are dropped: a hook-triggered run never fails loudly. */
+/** `--ended <harness>:<id>[=<transcript>]`: ids are SAFE_SEGMENT, so the first `=` ends one. */
+const ENDED_VALUE = /^([a-z]+):([A-Za-z0-9_-]+)(?:=(\/.*))?$/s;
+
+/** `--ended` and `--ended-path` values back into sessions, each value its own session. Malformed
+ * values are dropped: a hook-triggered run never fails loudly. */
 export function parseEndedSessionArgs(
   ids: readonly string[],
   paths: readonly string[],
 ): EndedSession[] {
   const ended: EndedSession[] = [];
-  for (let i = 0; i < Math.max(ids.length, paths.length); i++) {
-    const [harness, id] = ids[i]?.split(/:(.*)/s) ?? [];
-    const named =
-      SESSION_HARNESSES.includes(harness as SessionHarness) && SAFE_SEGMENT.test(id ?? "")
-        ? { harness: harness as SessionHarness, id }
-        : {};
-    const path = paths[i]?.startsWith("/") ? { path: paths[i] } : {};
-    if ("id" in named || "path" in path) ended.push({ ...named, ...path });
+  for (const value of ids) {
+    const [, harness, id, path] = ENDED_VALUE.exec(value) ?? [];
+    if (!SESSION_HARNESSES.includes(harness as SessionHarness)) continue;
+    ended.push({ harness: harness as SessionHarness, id, ...(path ? { path } : {}) });
   }
+  for (const path of paths) if (path.startsWith("/")) ended.push({ path });
   return ended;
 }
 
