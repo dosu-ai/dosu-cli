@@ -339,7 +339,9 @@ export function resetSyncState(configDir: string = getConfigDir()): void {
 
 /** Settle the backlog the user declined at setup's backfill offer as `skipped_by_user`, so only
  * sessions that finish (or change) from here on ship. Explicit per session, and never
- * re-evaluated by a newer CLI: it was the user's call, not a rule's. */
+ * re-evaluated by a newer CLI: it was the user's call, not a rule's. Only sessions the ledger
+ * has never settled count as backlog; any other entry is kept, so a shipped session that grew
+ * since still ships just its tail. */
 export function skipBacklog(
   sessions: readonly AgentSession[],
   cliVersion: string,
@@ -348,7 +350,7 @@ export function skipBacklog(
 ): void {
   const state = loadSyncState(configDir);
   const at = now.toISOString();
-  for (const session of sessions) {
+  for (const session of unsettledSessions(sessions, state)) {
     state.sessions[sessionKey(session)] = {
       updated: session.updated,
       outcome: "skipped_by_user",
@@ -357,6 +359,15 @@ export function skipBacklog(
     };
   }
   saveSyncState(state, configDir);
+}
+
+/** The sessions the ledger has no answer for at all: a first-time backlog, as opposed to sessions
+ * pending again because they changed or a newer CLI reconsiders them. */
+export function unsettledSessions(
+  sessions: readonly AgentSession[],
+  state: Pick<SyncState, "sessions">,
+): AgentSession[] {
+  return sessions.filter((session) => state.sessions[sessionKey(session)] === undefined);
 }
 
 /** Earliest time a background run should retry after failure: 15min * 2^(failures-1), capped

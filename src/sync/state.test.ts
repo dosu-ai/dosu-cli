@@ -626,6 +626,20 @@ describe("skipBacklog", () => {
     expect(state.project_filter).toEqual(["/p"]);
   });
 
+  it("never overwrites a session the ledger already settled: a shipped one keeps its prefix", () => {
+    const shipped = entry({ task_id: "t", records: 12, prefix_sha256: "abc" });
+    saveSyncState({ ...emptySyncState(), sessions: { "claude/grown": shipped } }, configDir);
+
+    skipBacklog(
+      [session({ id: "grown", updated: "2026-08-26T00:00:00.000Z" })],
+      VERSION,
+      NOW,
+      configDir,
+    );
+
+    expect(loadSyncState(configDir).sessions).toEqual({ "claude/grown": shipped });
+  });
+
   it("a declined session ships once it changes, and never on a CLI upgrade alone", () => {
     const declined = session({ id: "declined", updated: "2026-08-24T00:00:00.000Z" });
     skipBacklog([declined], VERSION, NOW, configDir);

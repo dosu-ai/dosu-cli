@@ -26,7 +26,7 @@ import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { refreshConfiguredProviders } from "../mcp/refresh";
 import { getStatuslineAgent, StatuslineConflictError } from "../statusline/agents";
 import { spawnDetachedSelf } from "../sync/detach";
-import { isShippingEnabled, loadSyncState, skipBacklog } from "../sync/state";
+import { isShippingEnabled, loadSyncState, skipBacklog, unsettledSessions } from "../sync/state";
 import { runKnowledgeSync } from "../sync/sync";
 import { recordCommandFacets } from "../telemetry/telemetry";
 import { runActivityView } from "../tui/activity-view";
@@ -367,24 +367,28 @@ function setupOutroMessage(mcpCompleted: boolean): string {
 
 /** Offer to ship the last 30 days of sessions after install. Shipping is on by default, so the
  * choice is between backfilling now and starting from here: declining settles the backlog as
- * skipped by the user, or the first session-end hook would ship it anyway. On consent the drain
- * runs fully detached so setup never blocks. */
+ * skipped by the user, or the first session-end hook would ship it anyway. The backlog is only
+ * what the ledger has never settled, so running setup again never re-offers (or, declined,
+ * forgets) a session that shipped and has grown since. On consent the drain runs fully detached
+ * so setup never blocks. */
 export async function stepOfferInitialSync(cfg: Config): Promise<void> {
   const target = cfg.active_account?.target;
   // Without an API key + deployment the detached run couldn't ship anyway.
   if (!target?.api_key || !target.deployment_id) return;
-  if (!isShippingEnabled(loadSyncState())) return;
+  const state = loadSyncState();
+  if (!isShippingEnabled(state)) return;
 
   logger.info("setup", "Step: offer initial knowledge sync");
   const s = p.spinner();
   s.start("Checking for agent sessions from the last 30 days...");
   const outcome = await runKnowledgeSync();
-  if (outcome.status !== "backlog" || outcome.readySessions === 0) {
+  const backlog = outcome.status === "backlog" ? unsettledSessions(outcome.sessions, state) : [];
+  if (backlog.length === 0) {
     s.stop("No recent agent sessions. Dosu memory learns from new ones as you work.");
     recordCommandFacets({ backfill_offer: "not-offered" });
     return;
   }
-  const n = outcome.readySessions;
+  const n = backlog.length;
   const them = n === 1 ? "it" : "them";
   s.stop(`Found ${n} agent session${n === 1 ? "" : "s"} from the last 30 days on this machine.`);
   // What happens to the sessions, why it's worth it, and how to keep something out.
@@ -407,7 +411,7 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
     recordCommandFacets({ backfill_offer: p.isCancel(shipNow) ? "cancelled" : "declined" });
     // Exactly the sessions offered, each settled as the user's call; anything that finishes or
     // changes from here on still ships.
-    skipBacklog(outcome.sessions, VERSION);
+    skipBacklog(backlog, VERSION);
     p.log.info(
       wrapLog(
         `Only sessions from now on will ship. To send these later, clear the shipping history on the Activity screen and run ${info("dosu knowledge sync --bootstrap")}.`,

@@ -28,7 +28,7 @@ leaves the 30-day window.
 | `incognito` | `/dosu-incognito` was run in the session |
 | `rejected` | The backend refused the payload (HTTP 400, 413, or 422) |
 | `unsupported` | No normalizer for the harness, or the transcript could not be normalized |
-| `skipped_by_user` | You declined setup's offer to ship the last 30 days |
+| `skipped_by_user` | You declined setup's offer to ship the last 30 days (it offers only sessions the ledger has never settled) |
 
 Only transport errors, auth failures, and 5xx responses are failures: they stop the run, leave the
 session pending, and make hook runs back off. `rejected` and `unsupported` are answers, so one

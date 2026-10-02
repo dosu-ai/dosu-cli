@@ -225,7 +225,7 @@ import { ClaudeDesktopProvider } from "../mcp/providers/claude-desktop";
 import { CodexProvider } from "../mcp/providers/codex";
 import { CursorProvider } from "../mcp/providers/cursor";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
-import { loadSyncState, setShipTranscripts } from "../sync/state";
+import { loadSyncState, saveSyncState, setShipTranscripts } from "../sync/state";
 import { consumeCommandFacets } from "../telemetry/telemetry";
 import { runActivityView } from "../tui/activity-view";
 import * as p from "../tui/prompts";
@@ -3392,6 +3392,49 @@ describe("stepOfferInitialSync", () => {
     expect(vi.mocked(p.log.info).mock.calls.join(" ")).toContain("Only sessions from now on");
   });
 
+  it("a re-run offers only sessions never settled; a shipped one that grew keeps its entry", async () => {
+    // Shipped before, then resumed: the next hook ships just its tail, so it is no backlog.
+    const shipped = {
+      updated: "2026-08-01T00:00:00.000Z",
+      outcome: "shipped" as const,
+      at: "2026-08-01T00:05:00.000Z",
+      cli_version: "0.1.0",
+      task_id: "t",
+      records: 12,
+      prefix_sha256: "abc",
+    };
+    saveSyncState({ ...loadSyncState(), sessions: { "claude/offered-0": shipped } });
+    mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(3));
+    vi.mocked(p.confirm).mockResolvedValue(false);
+
+    await stepOfferInitialSync(makeCfg());
+
+    const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
+    expect(spinner?.stop).toHaveBeenCalledWith(expect.stringContaining("Found 2 agent sessions"));
+    const ledger = loadSyncState().sessions;
+    expect(ledger["claude/offered-0"]).toEqual(shipped);
+    expect(ledger["claude/offered-1"]?.outcome).toBe("skipped_by_user");
+    expect(ledger["claude/offered-2"]?.outcome).toBe("skipped_by_user");
+  });
+
+  it("offers nothing when every pending session was settled before", async () => {
+    const trivial = {
+      updated: "2026-08-01T00:00:00.000Z",
+      outcome: "trivial" as const,
+      at: "2026-08-01T00:05:00.000Z",
+      cli_version: "0.1.0",
+    };
+    saveSyncState({ ...loadSyncState(), sessions: { "claude/offered-0": trivial } });
+    mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(1));
+    consumeCommandFacets();
+
+    await stepOfferInitialSync(makeCfg());
+
+    expect(vi.mocked(p.confirm)).not.toHaveBeenCalled();
+    expect(loadSyncState().sessions).toEqual({ "claude/offered-0": trivial });
+    expect(consumeCommandFacets()).toEqual({ backfill_offer: "not-offered" });
+  });
+
   it("treats a cancelled prompt as a decline", async () => {
     mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(2));
     vi.mocked(p.confirm).mockResolvedValue(Symbol("cancel"));
@@ -3456,6 +3499,8 @@ describe("stepOfferInitialSync", () => {
       await stepOfferInitialSync(makeCfg());
       expect(consumeCommandFacets()).toEqual({ backfill_offer: "declined" });
 
+      // A fresh machine: the decline above settled the first backlog, which is never re-offered.
+      saveSyncState({ ...loadSyncState(), sessions: {} });
       vi.mocked(p.confirm).mockResolvedValue(Symbol("cancel"));
       vi.mocked(p.isCancel).mockReturnValue(true);
       await stepOfferInitialSync(makeCfg());
