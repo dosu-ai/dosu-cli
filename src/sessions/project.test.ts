@@ -233,6 +233,21 @@ describe("readProjectLinks", () => {
     expect(readProjectLinks(configDir)).toEqual([]);
   });
 
+  it("reads a file whose links are not a list as no links", () => {
+    writeFileSync(projectLinksPath(configDir), JSON.stringify({ links: { dir: "/a" } }));
+    expect(readProjectLinks(configDir)).toEqual([]);
+    writeFileSync(projectLinksPath(configDir), "null");
+    expect(readProjectLinks(configDir)).toEqual([]);
+  });
+
+  it("a link for the root directory covers everything, below any closer link", () => {
+    writeLinks([{ dir: "//", project: "everything" }, { dir: "/work/app", project: "app" }, null]);
+
+    expect(readProjectLinks(configDir)[0]).toEqual({ dir: "/", project: "everything" });
+    expect(projectOverride("/elsewhere", { configDir, env: noEnv })?.project).toBe("everything");
+    expect(projectOverride("/work/app/src", { configDir, env: noEnv })?.project).toBe("app");
+  });
+
   it("drops malformed entries, relative dirs, and blank or oversized projects", () => {
     writeLinks([
       { dir: "/work/app/", project: " app " },

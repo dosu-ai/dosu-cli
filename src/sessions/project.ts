@@ -68,7 +68,7 @@ export function readProjectLinks(configDir: string = getConfigDir()): ProjectLin
     const { dir, project } = (link ?? {}) as { dir?: unknown; project?: unknown };
     const key = validKey(project);
     if (typeof dir !== "string" || !dir.startsWith("/") || key === null) continue;
-    valid.push({ dir: dir.length > 1 ? dir.replace(/\/+$/, "") : dir, project: key });
+    valid.push({ dir: dir.replace(/\/+$/, "") || "/", project: key });
   }
   return valid;
 }
