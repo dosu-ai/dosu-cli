@@ -1,7 +1,7 @@
 /** Transcript shipper — the sync pipeline's `ship` step. Per session: honor the incognito
  * opt-out, normalize the raw log to redacted trajectory-v1 records, and POST them to the Dosu
  * memory ingest API. Fire-and-forget: the accepted task is never polled; the task id and the
- * shareable session_url are returned for the ship watermark state and the report to surface. */
+ * shareable session_url are returned for the sync ledger and the report to surface. */
 
 import type { NormalizedRecord } from "@letta-ai/trajectory";
 import { getBackendURL } from "../config/constants";
@@ -13,10 +13,10 @@ import type { ShipSessionResult } from "../sync/sync";
 import { normalizeSessionRecords, trajectorySourceOf } from "./normalize";
 
 /** Statuses where re-sending identical records cannot succeed (bad/oversized/unparseable
- * payload): skip past the session instead of wedging the watermark behind a poison pill.
- * Everything else non-202 — auth, rate limit, 5xx, a not-yet-deployed endpoint — is a failure
- * that backs off and retries. */
-const SKIP_STATUSES = new Set([400, 413, 422]);
+ * payload): the session is settled as rejected instead of failing every run behind a poison
+ * pill. Everything else non-202 — auth, rate limit, 5xx, a not-yet-deployed endpoint — is a
+ * failure that backs off and retries. */
+const REJECTED_STATUSES = new Set([400, 413, 422]);
 
 /** Per-request cap; ship runs are already detached from the hook, so patience is cheap. */
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -40,7 +40,7 @@ export interface ShipStepOptions {
 }
 
 /** Build the sync pipeline's ship step. Processes oldest-first and stops after the first
- * failure, per the SyncDeps contract; the pipeline owns all watermark bookkeeping. */
+ * failure, per the SyncDeps contract; the pipeline owns all ledger bookkeeping. */
 export function createShipStep(
   options: ShipStepOptions,
 ): (sessions: AgentSession[]) => Promise<ShipSessionResult[]> {
@@ -54,8 +54,18 @@ export function createShipStep(
     resolveProject: (session: AgentSession) => ProjectKey | null,
   ): Promise<ShipSessionResult> {
     if (isIncognito(session)) return { session, outcome: "incognito" };
+    if (!trajectorySourceOf(session.harness)) {
+      return {
+        session,
+        outcome: "unsupported",
+        message: `no normalizer for ${session.harness} sessions yet`,
+      };
+    }
     const records = await normalize(session);
-    if (!records) return { session, outcome: "skipped", message: "no shippable transcript" };
+    if (!records) {
+      return { session, outcome: "unsupported", message: "transcript could not be normalized" };
+    }
+    if (records.length === 0) return { session, outcome: "trivial" };
     // The project key of the session's working directory (sessions/project.ts), the same one
     // prompt-time memory sends. Branch is omitted: the trajectory meta record carries
     // git_branch when the harness logged one.
@@ -91,8 +101,13 @@ export function createShipStep(
           project,
         };
       }
-      if (SKIP_STATUSES.has(response.status)) {
-        return { session, outcome: "skipped", message: `ingest rejected: HTTP ${response.status}` };
+      if (REJECTED_STATUSES.has(response.status)) {
+        return {
+          session,
+          outcome: "rejected",
+          httpStatus: response.status,
+          message: `ingest rejected: HTTP ${response.status}`,
+        };
       }
       return { session, outcome: "failed", message: `ingest failed: HTTP ${response.status}` };
     } catch (err) {

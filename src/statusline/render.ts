@@ -5,7 +5,7 @@
 import { getHookAgent } from "../hooks/agents";
 import { originRepoOfDir } from "../sessions/repo";
 import { transcriptHasIncognitoMarker } from "../sync/incognito";
-import { isShippingEnabled, isUnderDir, loadSyncState, type SyncState } from "../sync/watermark";
+import { isShippingEnabled, isUnderDir, loadSyncState, type SyncState } from "../sync/state";
 
 /** In priority order: the first matching state wins. */
 export type StatuslineState = "off" | "incognito" | "paused" | "not-studied" | "on";

@@ -4,8 +4,8 @@
 import pc from "picocolors";
 import { createTypedClient, type TypedClient } from "../client/trpc";
 import { loadConfig } from "../config/config";
+import { type SyncState, shippedSessions } from "../sync/state";
 import { getSyncStatus, type SyncStatus } from "../sync/status";
-import type { SyncState } from "../sync/watermark";
 import { enterAltScreen } from "./alt-screen";
 import { breadcrumb, contentWidth, frameMaxLines, frameTopMargin, tabStrip } from "./layout";
 import { parseKeys } from "./menu";
@@ -133,10 +133,10 @@ export function overviewRows(state: SyncState): string[] {
   return shipped === 0 ? [] : [`${label("Sessions shipped")}${shipped}`];
 }
 
-/** Projects tab: recent shipped-session history bucketed by project, under column labels. */
+/** Projects tab: recent shipped sessions bucketed by project key, under column labels. */
 export function projectRows(state: SyncState): string[] {
   const byProject = new Map<string, number>();
-  for (const record of state.shipped_sessions ?? []) {
+  for (const record of shippedSessions(state)) {
     const key = record.project ?? "(unknown)";
     byProject.set(key, (byProject.get(key) ?? 0) + 1);
   }
@@ -245,7 +245,7 @@ export function renderAnalyticsFrame(
 export interface AnalyticsViewIO {
   input?: NodeJS.ReadStream;
   output?: NodeJS.WriteStream;
-  /** Lock/watermark state without the log read; called every poll. */
+  /** Lock and ledger state without the log read; called every poll. */
   getStatus?: () => SyncStatus;
   /** Injectable page analytics fetch for tests; defaults to the backend. */
   loadPageStats?: () => Promise<PageStats | null>;

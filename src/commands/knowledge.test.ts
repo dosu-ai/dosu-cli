@@ -54,8 +54,8 @@ vi.mock("../sync/backlog", () => ({
 
 const mockLoadSyncState = vi.fn();
 const mockSetShipTranscripts = vi.fn();
-vi.mock("../sync/watermark", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../sync/watermark")>()),
+vi.mock("../sync/state", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sync/state")>()),
   loadSyncState: (...args: unknown[]) => mockLoadSyncState(...args),
   setShipTranscripts: (...args: unknown[]) => mockSetShipTranscripts(...args),
 }));
@@ -347,18 +347,40 @@ describe("knowledge sessions", () => {
     path: "/tmp/b.jsonl",
     updated: "2026-09-04T19:59:00.000Z",
   };
+  const shippedEntry = {
+    updated: "2026-09-02T22:00:00.000Z",
+    outcome: "shipped",
+    at: "2026-09-02T23:00:00.000Z",
+    cli_version: "1.0.0",
+    task_id: "task-1",
+    project: "github.com/dosu-ai/dosu-cli",
+  };
   const syncState = {
-    schema_version: 2,
-    watermark: "2026-09-02T23:00:00.000Z",
+    schema_version: 3,
     consecutive_failures: 0,
-    shipped_sessions: [
-      {
-        at: "2026-09-02T23:00:00.000Z",
-        session: "cursor/1d4b4ea0-e555-4444-8888-abcdefabcdef",
-        task_id: "task-1",
-        project: "dosu-cli",
+    sessions: {
+      "cursor/1d4b4ea0-e555-4444-8888-abcdefabcdef": shippedEntry,
+      "codex/rej-1": {
+        updated: "2026-09-02T22:00:00.000Z",
+        outcome: "rejected",
+        at: "2026-09-02T23:01:00.000Z",
+        cli_version: "1.0.0",
+        http_status: 413,
       },
-    ],
+      "opencode/uns-1": {
+        updated: "2026-09-02T22:00:00.000Z",
+        outcome: "unsupported",
+        at: "2026-09-02T23:02:00.000Z",
+        cli_version: "1.0.0",
+        message: "no normalizer for opencode sessions yet",
+      },
+      "claude/triv-1": {
+        updated: "2026-09-02T22:00:00.000Z",
+        outcome: "trivial",
+        at: "2026-09-02T23:03:00.000Z",
+        cli_version: "1.0.0",
+      },
+    },
   };
 
   it("prints every section with full, untruncated projects and ids", async () => {
@@ -371,19 +393,28 @@ describe("knowledge sessions", () => {
     expect(out).toContain("Queued (1)");
     expect(out).toContain("Open (1)");
     expect(out).toContain("Shipped (1)");
+    expect(out).toContain("Rejected (1)");
+    expect(out).toContain("Unsupported (1)");
     // The whole point of the command: nothing is clipped.
     expect(out).toContain(queuedSession.id);
     expect(out).toContain(queuedSession.project);
     expect(out).toContain(openSession.id);
     expect(out).toContain("1d4b4ea0-e555-4444-8888-abcdefabcdef");
+    expect(out).toContain("github.com/dosu-ai/dosu-cli");
     expect(out).not.toContain("\u2026");
-    // Shipped history's "harness/id" splits back into columns.
+    // The ledger's "harness/id" key splits back into columns.
     expect(out).not.toContain("cursor/1d4b4ea0");
+    // Why each one did not ship, and the counts per outcome.
+    expect(out).toContain("HTTP 413");
+    expect(out).toContain("no normalizer for opencode sessions yet");
+    expect(out).toContain(
+      "Settled sessions: 1 shipped \u00B7 1 trivial \u00B7 1 rejected \u00B7 1 unsupported",
+    );
   });
 
   it("shows per-section empty messages", async () => {
     mockListBacklog.mockReturnValue({ queued: [], open: [] });
-    mockLoadSyncState.mockReturnValue({ ...syncState, shipped_sessions: [] });
+    mockLoadSyncState.mockReturnValue({ ...syncState, sessions: {} });
 
     await run("sessions");
 
@@ -391,6 +422,9 @@ describe("knowledge sessions", () => {
     expect(out).toContain("Queue empty.");
     expect(out).toContain("No open sessions.");
     expect(out).toContain("No sessions shipped yet.");
+    expect(out).toContain("Rejected (0)");
+    expect(out).toContain("Unsupported (0)");
+    expect(out).toContain("Settled sessions: nothing settled");
   });
 
   it("--queued lists only the queue and never reads the sync state", async () => {
@@ -412,6 +446,7 @@ describe("knowledge sessions", () => {
 
     expect(mockListBacklog).not.toHaveBeenCalled();
     expect(allOutput()).toContain("Shipped (1)");
+    expect(allOutput()).not.toContain("Rejected (");
   });
 
   it("--json emits only the requested sections", async () => {
@@ -429,25 +464,49 @@ describe("knowledge sessions", () => {
 
     await run("sessions", "--shipped", "--json");
 
-    expect(JSON.parse(allOutput())).toEqual({ shipped: syncState.shipped_sessions });
+    expect(JSON.parse(allOutput())).toEqual({
+      shipped: [
+        {
+          at: "2026-09-02T23:00:00.000Z",
+          session: "cursor/1d4b4ea0-e555-4444-8888-abcdefabcdef",
+          task_id: "task-1",
+          project: "github.com/dosu-ai/dosu-cli",
+        },
+      ],
+    });
     expect(mockListBacklog).not.toHaveBeenCalled();
   });
 
-  it("treats a sync state without shipped_sessions as empty history", async () => {
-    mockListBacklog.mockReturnValue({ queued: [], open: [] });
-    mockLoadSyncState.mockReturnValue({ schema_version: 2, watermark: null });
+  it("--rejected --unsupported --json emits those entries with their reasons", async () => {
+    mockLoadSyncState.mockReturnValue(syncState);
 
-    await run("sessions");
+    await run("sessions", "--rejected", "--unsupported", "--json");
 
-    expect(allOutput()).toContain("Shipped (0)");
+    const parsed = JSON.parse(allOutput());
+    expect(parsed.rejected).toEqual([
+      { session: "codex/rej-1", ...syncState.sessions["codex/rej-1"] },
+    ]);
+    expect(parsed.unsupported.map((e: { session: string }) => e.session)).toEqual([
+      "opencode/uns-1",
+    ]);
+    expect(parsed.counts).toBeUndefined();
   });
 
-  it("keeps shipped records that lack a harness prefix or project", async () => {
+  it("--json with no filter adds the counts per outcome", async () => {
+    mockListBacklog.mockReturnValue({ queued: [], open: [] });
+    mockLoadSyncState.mockReturnValue(syncState);
+
+    await run("sessions", "--json");
+
+    expect(JSON.parse(allOutput()).counts).toMatchObject({ shipped: 1, rejected: 1, trivial: 1 });
+  });
+
+  it("keeps ledger entries whose key lacks a harness prefix or project", async () => {
     mockLoadSyncState.mockReturnValue({
       ...syncState,
-      shipped_sessions: [
-        { at: "2026-09-01T00:00:00.000Z", session: "bare-session-id", task_id: "t" },
-      ],
+      sessions: {
+        "bare-session-id": { ...shippedEntry, at: "2026-09-01T00:00:00.000Z", project: undefined },
+      },
     });
 
     await run("sessions", "--shipped");
@@ -460,6 +519,22 @@ describe("knowledge sessions", () => {
       .map((c: unknown[]) => c.join(" "))
       .find((line: string) => line.includes("bare-session-id"));
     expect(row).toMatch(/^-\s+2026-09-01T00:00:00\.000Z\s+-\s+bare-session-id/);
+  });
+
+  it("names a rejection by its status when the backend gave no message", async () => {
+    mockLoadSyncState.mockReturnValue({
+      ...syncState,
+      sessions: {
+        "codex/r": { ...syncState.sessions["codex/rej-1"], http_status: undefined },
+      },
+    });
+
+    await run("sessions", "--rejected");
+
+    const row = logSpy.mock.calls
+      .map((c: unknown[]) => c.join(" "))
+      .find((line: string) => line.includes("2026-09-02T23:01"));
+    expect(row).toMatch(/^codex\s+2026-09-02T23:01:00\.000Z\s+-\s+r/);
   });
 });
 
@@ -492,7 +567,7 @@ describe("knowledge sync", () => {
       inFlightSessions: 0,
       sessions: [],
       settledSessions: 5,
-      counts: { shipped: 3, incognito: 1, trivial: 1, skipped: 0, failed: 0 },
+      counts: { shipped: 3, incognito: 1, trivial: 1, unsupported: 0, rejected: 0, failed: 0 },
     });
 
     await run("sync");
@@ -511,7 +586,7 @@ describe("knowledge sync", () => {
       inFlightSessions: 0,
       sessions: [],
       settledSessions: 1,
-      counts: { shipped: 1, incognito: 0, trivial: 0, skipped: 0, failed: 0 },
+      counts: { shipped: 1, incognito: 0, trivial: 0, unsupported: 0, rejected: 0, failed: 0 },
     });
 
     await run("sync");
@@ -529,7 +604,7 @@ describe("knowledge sync", () => {
       inFlightSessions: 0,
       sessions: [],
       settledSessions: 1,
-      counts: { shipped: 1, incognito: 0, trivial: 0, skipped: 0, failed: 1 },
+      counts: { shipped: 1, incognito: 0, trivial: 0, unsupported: 0, rejected: 0, failed: 1 },
       error: "502 Bad Gateway",
     });
 
@@ -742,7 +817,7 @@ describe("knowledge sync", () => {
       inFlightSessions: 0,
       sessions: [],
       settledSessions: 2,
-      counts: { shipped: 2, incognito: 0, trivial: 0, skipped: 0, failed: 0 },
+      counts: { shipped: 2, incognito: 0, trivial: 0, unsupported: 0, rejected: 0, failed: 0 },
     });
 
     await run("sync", "--report", "--out", "/tmp/custom-report.html");
@@ -835,7 +910,14 @@ describe("knowledge sync", () => {
       inFlightSessions: 0,
       sessions: [],
       settledSessions: settled,
-      counts: { shipped: settled, incognito: 0, trivial: 0, skipped: 0, failed: 0 },
+      counts: {
+        shipped: settled,
+        incognito: 0,
+        trivial: 0,
+        unsupported: 0,
+        rejected: 0,
+        failed: 0,
+      },
     };
   }
 
@@ -901,7 +983,9 @@ describe("knowledge sync", () => {
     it("tags --status as a read-only invocation", async () => {
       mockGetSyncStatus.mockReturnValue({
         running: false,
-        state: { schema_version: 2, watermark: null, consecutive_failures: 0 },
+        state: { schema_version: 3, sessions: {}, consecutive_failures: 0 },
+        outcomes: {},
+        attention: [],
         recentActivity: [],
       });
 
@@ -914,15 +998,25 @@ describe("knowledge sync", () => {
     });
   });
 
-  it("--bootstrap passes the bootstrap scope on every round", async () => {
+  it("--retry-rejected retries only what was refused before the command started", async () => {
     mockRunSync.mockResolvedValueOnce(shippedOutcome(8)).mockResolvedValue(shippedOutcome(3));
+    const before = Date.now();
 
-    await run("sync", "--bootstrap");
+    await run("sync", "--bootstrap", "--retry-rejected");
 
     expect(mockRunSync).toHaveBeenCalledTimes(2);
-    for (const call of mockRunSync.mock.calls) {
-      expect(call[0].bootstrap).toBe(true);
-    }
+    const bounds = mockRunSync.mock.calls.map((call) => call[0].retryRejectedBefore as Date);
+    // One bound for the whole drain, so a round never retries a refusal from an earlier one.
+    expect(bounds[0].getTime()).toBeGreaterThanOrEqual(before);
+    expect(bounds[1]).toBe(bounds[0]);
+  });
+
+  it("without --retry-rejected, refused sessions stay settled", async () => {
+    mockRunSync.mockResolvedValue(shippedOutcome(1));
+
+    await run("sync");
+
+    expect(mockRunSync.mock.calls[0][0].retryRejectedBefore).toBeUndefined();
   });
 
   it("--bootstrap drains the backlog round by round and reports each round", async () => {
@@ -1001,18 +1095,34 @@ describe("knowledge sync", () => {
 });
 
 describe("knowledge sync --status", () => {
-  const baseState = { schema_version: 2, watermark: null, consecutive_failures: 0 };
+  const baseState = { schema_version: 3, sessions: {}, consecutive_failures: 0 };
+  const noOutcomes = {
+    shipped: 0,
+    trivial: 0,
+    incognito: 0,
+    rejected: 0,
+    unsupported: 0,
+    skipped_by_user: 0,
+  };
+  /** A full status object: nothing settled unless the test says so. */
+  const statusOf = (status: Record<string, unknown>) => ({
+    outcomes: noOutcomes,
+    attention: [],
+    ...status,
+  });
 
   beforeEach(() => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: "dep1" }));
   });
 
   it("surfaces a user-paused pipeline with the resume paths", async () => {
-    mockGetSyncStatus.mockReturnValue({
-      running: false,
-      state: { ...baseState, paused: true },
-      recentActivity: [],
-    });
+    mockGetSyncStatus.mockReturnValue(
+      statusOf({
+        running: false,
+        state: { ...baseState, paused: true },
+        recentActivity: [],
+      }),
+    );
 
     await run("sync", "--status");
 
@@ -1022,11 +1132,13 @@ describe("knowledge sync --status", () => {
   });
 
   it("points a disabled install at the switch", async () => {
-    mockGetSyncStatus.mockReturnValue({
-      running: false,
-      state: { ...baseState, ship_transcripts: false },
-      recentActivity: [],
-    });
+    mockGetSyncStatus.mockReturnValue(
+      statusOf({
+        running: false,
+        state: { ...baseState, ship_transcripts: false },
+        recentActivity: [],
+      }),
+    );
 
     await run("sync", "--status");
 
@@ -1034,53 +1146,108 @@ describe("knowledge sync --status", () => {
   });
 
   it("reports a running sync without scanning or shipping", async () => {
-    mockGetSyncStatus.mockReturnValue({
-      running: true,
-      pid: 4242,
-      startedAt: new Date(Date.now() - 3 * 60_000).toISOString(),
-      state: {
-        ...baseState,
-        watermark: new Date(Date.now() - 2 * 86_400_000).toISOString(),
-        total_shipped: 12,
-      },
-      recentActivity: ["[t] [sync] shipped session claude/abc → task t1"],
-    });
+    mockGetSyncStatus.mockReturnValue(
+      statusOf({
+        running: true,
+        pid: 4242,
+        startedAt: new Date(Date.now() - 3 * 60_000).toISOString(),
+        state: { ...baseState, total_shipped: 12 },
+        recentActivity: ["[t] [sync] shipped session claude/abc → task t1"],
+      }),
+    );
 
     await run("sync", "--status");
 
     const output = allOutput();
     expect(output).toContain("Sync running \u00B7 pid 4242");
     expect(output).toContain("3m ago");
-    expect(output).toContain("Shipped through:");
-    expect(output).toContain("2d ago");
     expect(output).toContain("Shipped:         12 sessions");
     expect(output).toContain("shipped session claude/abc");
     expect(output).toContain("logs --follow");
     expect(mockRunSync).not.toHaveBeenCalled();
   });
 
+  it("counts the ledger per outcome and says why sessions did not ship", async () => {
+    const entry = (outcome: string, extra = {}) => ({
+      updated: "2026-09-01T00:00:00.000Z",
+      outcome,
+      at: "2026-09-01T00:05:00.000Z",
+      cli_version: "1.0.0",
+      ...extra,
+    });
+    mockGetSyncStatus.mockReturnValue(
+      statusOf({
+        running: false,
+        state: {
+          ...baseState,
+          total_shipped: 3,
+          sessions: {
+            "claude/a": entry("shipped"),
+            "claude/b": entry("trivial"),
+            "codex/c": entry("rejected", { http_status: 413 }),
+            "opencode/d": entry("unsupported", {
+              message: "no normalizer for opencode sessions yet",
+            }),
+            "claude/e": entry("skipped_by_user"),
+          },
+        },
+        outcomes: {
+          ...noOutcomes,
+          shipped: 1,
+          trivial: 1,
+          rejected: 1,
+          unsupported: 1,
+          skipped_by_user: 1,
+        },
+        attention: [
+          { session: "codex/c", ...entry("rejected", { http_status: 413 }) },
+          {
+            session: "opencode/d",
+            ...entry("unsupported", { message: "no normalizer for opencode sessions yet" }),
+          },
+        ],
+        recentActivity: [],
+      }),
+    );
+
+    await run("sync", "--status");
+
+    const out = allOutput();
+    expect(out).toContain(
+      "Settled:         1 shipped \u00B7 1 trivial \u00B7 1 rejected \u00B7 1 unsupported \u00B7 1 skipped by user",
+    );
+    expect(out).toContain("rejected    codex/c \u00B7 HTTP 413");
+    expect(out).toContain("unsupported opencode/d \u00B7 no normalizer for opencode sessions yet");
+    expect(out).toContain("--retry-rejected");
+  });
+
   it("reports idle with nothing shipped yet", async () => {
-    mockGetSyncStatus.mockReturnValue({ running: false, state: baseState, recentActivity: [] });
+    mockGetSyncStatus.mockReturnValue(
+      statusOf({ running: false, state: baseState, recentActivity: [] }),
+    );
 
     await run("sync", "--status");
 
     const output = allOutput();
     expect(output).toContain("No sync running");
-    expect(output).toContain("nothing shipped yet");
-    expect(output).not.toContain("Shipped:");
+    expect(output).toContain("Shipped:         nothing shipped yet");
+    expect(output).not.toContain("Last 30 days:");
+    expect(output).not.toContain("Not shipped, and why");
     expect(output).not.toContain("Shipping disabled");
     expect(output).not.toContain("Recent activity");
   });
 
   it("flags a stale lock left by a dead run", async () => {
-    mockGetSyncStatus.mockReturnValue({
-      running: false,
-      staleLock: true,
-      pid: 99,
-      startedAt: new Date().toISOString(),
-      state: baseState,
-      recentActivity: [],
-    });
+    mockGetSyncStatus.mockReturnValue(
+      statusOf({
+        running: false,
+        staleLock: true,
+        pid: 99,
+        startedAt: new Date().toISOString(),
+        state: baseState,
+        recentActivity: [],
+      }),
+    );
 
     await run("sync", "--status");
 
@@ -1089,12 +1256,14 @@ describe("knowledge sync --status", () => {
 
   it("shows the last attempt and the backoff window", async () => {
     const lastAttempt = new Date(Date.now() - 90 * 60_000).toISOString();
-    mockGetSyncStatus.mockReturnValue({
-      running: false,
-      state: { ...baseState, last_attempt_at: lastAttempt, consecutive_failures: 2 },
-      backoffUntil: "2026-09-02T23:00:00.000Z",
-      recentActivity: [],
-    });
+    mockGetSyncStatus.mockReturnValue(
+      statusOf({
+        running: false,
+        state: { ...baseState, last_attempt_at: lastAttempt, consecutive_failures: 2 },
+        backoffUntil: "2026-09-02T23:00:00.000Z",
+        recentActivity: [],
+      }),
+    );
 
     await run("sync", "--status");
 
@@ -1106,13 +1275,15 @@ describe("knowledge sync --status", () => {
   });
 
   it("renders very recent timestamps as 'just now'", async () => {
-    mockGetSyncStatus.mockReturnValue({
-      running: true,
-      pid: 7,
-      startedAt: new Date().toISOString(),
-      state: baseState,
-      recentActivity: [],
-    });
+    mockGetSyncStatus.mockReturnValue(
+      statusOf({
+        running: true,
+        pid: 7,
+        startedAt: new Date().toISOString(),
+        state: baseState,
+        recentActivity: [],
+      }),
+    );
 
     await run("sync", "--status");
 
@@ -1120,23 +1291,28 @@ describe("knowledge sync --status", () => {
   });
 
   it("--json emits the raw status object", async () => {
-    mockGetSyncStatus.mockReturnValue({ running: false, state: baseState, recentActivity: [] });
+    mockGetSyncStatus.mockReturnValue(
+      statusOf({ running: false, state: baseState, recentActivity: [] }),
+    );
 
     await run("sync", "--status", "--json");
 
     const parsed = JSON.parse(allOutput());
     expect(parsed.running).toBe(false);
-    expect(parsed.state.watermark).toBeNull();
+    expect(parsed.state.sessions).toEqual({});
+    expect(parsed.outcomes.shipped).toBe(0);
     expect(mockRunSync).not.toHaveBeenCalled();
   });
 
   it("tolerates a running lock without a start time", async () => {
-    mockGetSyncStatus.mockReturnValue({
-      running: true,
-      pid: 11,
-      state: baseState,
-      recentActivity: [],
-    });
+    mockGetSyncStatus.mockReturnValue(
+      statusOf({
+        running: true,
+        pid: 11,
+        state: baseState,
+        recentActivity: [],
+      }),
+    );
 
     await run("sync", "--status");
 
@@ -1146,23 +1322,27 @@ describe("knowledge sync --status", () => {
 
   it("echoes a future timestamp instead of a negative age", async () => {
     const future = new Date(Date.now() + 60 * 60_000).toISOString();
-    mockGetSyncStatus.mockReturnValue({
-      running: false,
-      state: { ...baseState, watermark: future },
-      recentActivity: [],
-    });
+    mockGetSyncStatus.mockReturnValue(
+      statusOf({
+        running: false,
+        state: { ...baseState, last_attempt_at: future },
+        recentActivity: [],
+      }),
+    );
 
     await run("sync", "--status");
 
-    expect(allOutput()).toContain(`Shipped through: ${future} (${future})`);
+    expect(allOutput()).toContain(`Last attempt:    ${future} (${future})`);
   });
 
   it("renders an hours-old timestamp with the minute remainder", async () => {
-    mockGetSyncStatus.mockReturnValue({
-      running: false,
-      state: { ...baseState, watermark: new Date(Date.now() - 125 * 60_000).toISOString() },
-      recentActivity: [],
-    });
+    mockGetSyncStatus.mockReturnValue(
+      statusOf({
+        running: false,
+        state: { ...baseState, last_attempt_at: new Date(Date.now() - 125 * 60_000).toISOString() },
+        recentActivity: [],
+      }),
+    );
 
     await run("sync", "--status");
 
@@ -1170,14 +1350,16 @@ describe("knowledge sync --status", () => {
   });
 
   it("shows the scope as owner/repo names", async () => {
-    mockGetSyncStatus.mockReturnValue({
-      running: false,
-      state: {
-        ...baseState,
-        repo_filter: ["github.com/dosu-ai/dosu-cli", "gitlab.com/acme/api"],
-      },
-      recentActivity: [],
-    });
+    mockGetSyncStatus.mockReturnValue(
+      statusOf({
+        running: false,
+        state: {
+          ...baseState,
+          repo_filter: ["github.com/dosu-ai/dosu-cli", "gitlab.com/acme/api"],
+        },
+        recentActivity: [],
+      }),
+    );
 
     await run("sync", "--status");
 
@@ -1185,11 +1367,13 @@ describe("knowledge sync --status", () => {
   });
 
   it("says when the scope matches no repos", async () => {
-    mockGetSyncStatus.mockReturnValue({
-      running: false,
-      state: { ...baseState, repo_filter: [] },
-      recentActivity: [],
-    });
+    mockGetSyncStatus.mockReturnValue(
+      statusOf({
+        running: false,
+        state: { ...baseState, repo_filter: [] },
+        recentActivity: [],
+      }),
+    );
 
     await run("sync", "--status");
 
@@ -1197,11 +1381,13 @@ describe("knowledge sync --status", () => {
   });
 
   it("flags a legacy folder scope as pending conversion", async () => {
-    mockGetSyncStatus.mockReturnValue({
-      running: false,
-      state: { ...baseState, project_filter: ["/work/dosu-cli"] },
-      recentActivity: [],
-    });
+    mockGetSyncStatus.mockReturnValue(
+      statusOf({
+        running: false,
+        state: { ...baseState, project_filter: ["/work/dosu-cli"] },
+        recentActivity: [],
+      }),
+    );
 
     await run("sync", "--status");
 
@@ -1209,11 +1395,13 @@ describe("knowledge sync --status", () => {
   });
 
   it("omits the scope when the project filter is empty", async () => {
-    mockGetSyncStatus.mockReturnValue({
-      running: false,
-      state: { ...baseState, project_filter: [] },
-      recentActivity: [],
-    });
+    mockGetSyncStatus.mockReturnValue(
+      statusOf({
+        running: false,
+        state: { ...baseState, project_filter: [] },
+        recentActivity: [],
+      }),
+    );
 
     await run("sync", "--status");
 
@@ -1221,12 +1409,14 @@ describe("knowledge sync --status", () => {
   });
 
   it("uses the singular for a single failure in the backoff notice", async () => {
-    mockGetSyncStatus.mockReturnValue({
-      running: false,
-      state: { ...baseState, consecutive_failures: 1 },
-      backoffUntil: "2026-09-02T23:00:00.000Z",
-      recentActivity: [],
-    });
+    mockGetSyncStatus.mockReturnValue(
+      statusOf({
+        running: false,
+        state: { ...baseState, consecutive_failures: 1 },
+        backoffUntil: "2026-09-02T23:00:00.000Z",
+        recentActivity: [],
+      }),
+    );
 
     await run("sync", "--status");
 
@@ -1561,8 +1751,8 @@ describe("knowledge transcripts", () => {
 
   it("status shows the opt-out", async () => {
     mockLoadSyncState.mockReturnValue({
-      schema_version: 2,
-      watermark: null,
+      schema_version: 3,
+      sessions: {},
       consecutive_failures: 0,
       ship_transcripts: false,
     });
@@ -1574,18 +1764,19 @@ describe("knowledge transcripts", () => {
 
   it("status shows the default and recent session links", async () => {
     mockLoadSyncState.mockReturnValue({
-      schema_version: 2,
-      watermark: "2026-09-01T00:00:00.000Z",
+      schema_version: 3,
       consecutive_failures: 0,
       total_shipped: 3,
-      shipped_sessions: [
-        {
+      sessions: {
+        "claude/abc": {
+          updated: "2026-08-31T23:00:00.000Z",
+          outcome: "shipped",
           at: "2026-09-01T00:00:00.000Z",
-          session: "claude/abc",
+          cli_version: "1.0.0",
           task_id: "task-1",
           session_url: "https://app/memories/sessions/abc",
         },
-      ],
+      },
     });
 
     await run("transcripts", "status");
@@ -1593,19 +1784,23 @@ describe("knowledge transcripts", () => {
     const output = allOutput();
     expect(output).toContain("Transcript shipping is enabled (the default).");
     expect(output).toContain("Shipped:         3 sessions");
-    expect(output).toContain("Shipped through: 2026-09-01T00:00:00.000Z");
     expect(output).toContain("claude/abc · https://app/memories/sessions/abc");
   });
 
   it("status --json emits the machine-readable state", async () => {
     mockLoadSyncState.mockReturnValue({
-      schema_version: 2,
-      watermark: "2026-09-01T00:00:00.000Z",
+      schema_version: 3,
       consecutive_failures: 0,
       total_shipped: 1,
-      shipped_sessions: [
-        { at: "2026-09-01T00:00:00.000Z", session: "claude/abc", task_id: "task-1" },
-      ],
+      sessions: {
+        "claude/abc": {
+          updated: "2026-08-31T23:00:00.000Z",
+          outcome: "shipped",
+          at: "2026-09-01T00:00:00.000Z",
+          cli_version: "1.0.0",
+          task_id: "task-1",
+        },
+      },
     });
 
     await run("transcripts", "status", "--json");
@@ -1613,7 +1808,14 @@ describe("knowledge transcripts", () => {
     expect(JSON.parse(allOutput())).toEqual({
       enabled: true,
       total_shipped: 1,
-      watermark: "2026-09-01T00:00:00.000Z",
+      counts: {
+        shipped: 1,
+        trivial: 0,
+        incognito: 0,
+        rejected: 0,
+        unsupported: 0,
+        skipped_by_user: 0,
+      },
       shipped_sessions: [
         { at: "2026-09-01T00:00:00.000Z", session: "claude/abc", task_id: "task-1" },
       ],

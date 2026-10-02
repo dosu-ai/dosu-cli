@@ -13,8 +13,14 @@ import { brand } from "../setup/styles";
 import { listSessionBacklog, type SessionBacklog } from "../sync/backlog";
 import { spawnDetachedSelf } from "../sync/detach";
 import { stopSyncRun } from "../sync/lock";
+import {
+  ledgerStamp,
+  resetSyncState,
+  type ShippedSessionRecord,
+  setSyncPaused,
+  shippedSessions,
+} from "../sync/state";
 import { getSyncStatus, type SyncStatus } from "../sync/status";
-import { resetSyncState, type ShippedSessionRecord, setSyncPaused } from "../sync/watermark";
 import { enterAltScreen } from "./alt-screen";
 import {
   breadcrumb,
@@ -361,6 +367,11 @@ export function confirmBox(
   ];
 }
 
+/** Whether the ledger holds anything for `c` to clear. */
+function hasSettled(status: SyncStatus): boolean {
+  return Object.keys(status.state.sessions).length > 0;
+}
+
 /** Render the full sync-status block, left-anchored within `width` columns. Returns the frame's
  * lines plus the list height it settled on, so the key handler's scroll bound matches what is
  * on screen. */
@@ -383,8 +394,11 @@ export function buildActivityFrame(
    * the list shrinks to whatever is left. Omitted: the fixed default window heights. */
   frameLines?: number,
 ): { lines: string[]; listHeight: number } {
-  const shippedThrough = status.state.watermark
-    ? `Shipped sessions up to ${localTime(status.state.watermark)}`
+  // Shipped history is the ledger's, one row per session (its latest pass).
+  const shipped = shippedSessions(status.state);
+  const lastShipped = shipped.at(-1);
+  const shippedSummary = lastShipped
+    ? `Last shipped a session at ${localTime(lastShipped.at)}`
     : "Nothing shipped yet";
   // Queue and open-session counts live in the tab bar, not a header line.
   const queueDetail: string[] = [];
@@ -409,11 +423,7 @@ export function buildActivityFrame(
   const fullRows = Boolean(pane.fullRows);
   const withName = <T extends { project?: string }>(item: T, key: string): T =>
     projectNames[key] ? { ...item, project: projectNames[key] } : item;
-  // A session shipped again after new activity appends another history record;
-  // the list shows only its latest pass.
-  const latestPass = new Map<string, ShippedSessionRecord>();
-  for (const r of status.state.shipped_sessions ?? []) latestPass.set(r.session, r);
-  const shippedRows = [...latestPass.values()].map((r) => {
+  const shippedRows = shipped.map((r) => {
     const record = withName(r, r.session);
     const name = sessionNames[r.session];
     return fullRows
@@ -452,13 +462,13 @@ export function buildActivityFrame(
     breadcrumb(["home", "activity"], width),
     "",
     statusLine(status),
-    pc.dim(shippedThrough),
+    pc.dim(shippedSummary),
     ...(queueDetail.length > 0
       ? wrapLine(queueDetail.join(" \u00B7 "), width).map((line) => pc.dim(line))
       : []),
     ...(progress ? [progress] : []),
     "",
-    ...tabBar(pane.tab, queued.length, open.length, latestPass.size, width),
+    ...tabBar(pane.tab, queued.length, open.length, shipped.length, width),
   ];
   const footer = [
     "",
@@ -476,7 +486,7 @@ export function buildActivityFrame(
               "\u2191\u2193 scroll",
               fullRows ? "f clip" : "f full rows",
               status.running ? "s stop" : status.state.paused ? "s resume" : "s sync now",
-              ...(!status.running && status.state.watermark ? ["c clear"] : []),
+              ...(!status.running && hasSettled(status) ? ["c clear"] : []),
               "esc back",
             ].join(" \u00B7 "),
             width,
@@ -522,7 +532,7 @@ export function buildActivityFrame(
 export interface ActivityViewIO {
   input?: NodeJS.ReadStream;
   output?: NodeJS.WriteStream;
-  /** Lock/watermark state without the log read; called every poll. */
+  /** Lock and ledger state without the log read; called every poll. */
   getStatus?: () => SyncStatus;
   /** Full debug-log contents; read once to seed activity and backlog. */
   readLog?: () => string;
@@ -534,9 +544,9 @@ export interface ActivityViewIO {
   stopSync?: (pid: number) => boolean;
   /** Persists the pause switch hooks honor; stop sets it, resume clears it. */
   setPaused?: (paused: boolean) => void;
-  /** Forgets the watermark and shipping history; pressing `c` while idle calls this. */
+  /** Forgets the ledger (shipping history included); pressing `c` while idle calls this. */
   clearHistory?: () => void;
-  /** The scanned backlog for the Queued and Open tabs; re-run when the watermark moves. */
+  /** The scanned backlog for the Queued and Open tabs; re-run when the ledger changes. */
   listBacklog?: () => SessionBacklog;
   /** Friendly project and session names by `harness/id` key for the session rows. */
   rowNames?: (status: SyncStatus, backlog: SessionBacklog) => RowNames;
@@ -588,10 +598,10 @@ function createRowNamer(): (status: SyncStatus, backlog: SessionBacklog) => RowN
     }
     // Newest first: the view shows the end of the history, so the visible
     // rows must win the per-draw budget over the offscreen backlog.
-    for (const r of [...(status.state.shipped_sessions ?? [])].reverse()) {
+    for (const r of shippedSessions(status.state).reverse()) {
       const key = r.session;
       if (!names.projects[key]) {
-        const dir = dirs.cached(key) ?? (r.project ? fromSlug(r.project) : null);
+        const dir = dirs.cached(key) ?? (r.workspace ? fromSlug(r.workspace) : null);
         if (dir) names.projects[key] = basename(dir);
       }
       if (!names.titles[key]) {
@@ -603,7 +613,7 @@ function createRowNamer(): (status: SyncStatus, backlog: SessionBacklog) => RowN
           const session = reconstructSession(
             key.slice(0, slash) as AgentSession["harness"],
             key.slice(slash + 1),
-            r.project,
+            r.workspace,
           );
           if (session) title(key, session);
         }
@@ -654,10 +664,10 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
   let fullRows = false;
   let confirmSync: SyncConfirmMode | null = null;
   let status = getStatus();
-  // Rescan on watermark moves and tab switches, not every poll (a scan
+  // Rescan when a run settles something and on tab switches, not every poll (a scan
   // stats every local session file).
   let sessions = listBacklog();
-  let queuedWatermark = status.state.watermark;
+  let queuedStamp = ledgerStamp(status.state);
 
   const follower = createFollower((chunk) => {
     activity = appendSyncActivity(activity, chunk);
@@ -668,7 +678,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
     if (tab === "activity") return activity.length;
     if (tab === "queued") return sessions.queued.length;
     if (tab === "open") return sessions.open.length;
-    return (status.state.shipped_sessions ?? []).length;
+    return shippedSessions(status.state).length;
   };
   // What the last paint actually showed: the renderer sizes the list to the terminal (and, in
   // full-rows mode, to how far the visible rows wrapped), so the scroll bound reads it back.
@@ -692,8 +702,8 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
     } else {
       shippedBeforeRun = null;
     }
-    if (status.state.watermark !== queuedWatermark) {
-      queuedWatermark = status.state.watermark;
+    if (ledgerStamp(status.state) !== queuedStamp) {
+      queuedStamp = ledgerStamp(status.state);
       sessions = listBacklog();
     }
     // A run starting or ending elsewhere makes the pending confirmation moot.
@@ -773,7 +783,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
             confirmSync = null;
             let note: string;
             if (mode === "clear") {
-              // The watermark going null re-gates every local session; draw() rescans on the
+              // An empty ledger makes every local session pending; draw() rescans on the
               // change so the Queued tab fills immediately.
               clearHistory();
               shippedBeforeRun = null;
@@ -817,7 +827,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
         } else if (action === "clear") {
           // Only offered when idle with something shipped; otherwise the key is inert, matching
           // the legend.
-          if (!status.running && status.state.watermark) {
+          if (!status.running && hasSettled(status)) {
             confirmSync = "clear";
             draw();
           }
@@ -825,7 +835,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
           tab = cycleTab(tab, action === "tab" ? 1 : -1);
           scroll = 0;
           // Rescan on entry: open sessions drain into the queue without the
-          // watermark ever moving.
+          // ledger ever changing.
           if (tab === "queued" || tab === "open") sessions = listBacklog();
           draw();
         } else if (action === "full") {

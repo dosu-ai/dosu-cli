@@ -137,7 +137,7 @@ import { scanAgentSessions } from "../sessions/scan";
 import { dosuAgentsSectionState, inGitWorkTree } from "../setup/agents-md-step";
 import { runSetup, runSwitchTarget } from "../setup/flow";
 import { lockPath } from "../sync/lock";
-import { loadSyncState, saveSyncState } from "../sync/watermark";
+import { emptySyncState, loadSyncState, saveSyncState } from "../sync/state";
 import { runActivityView } from "./activity-view";
 import { runAnalyticsView } from "./analytics-view";
 import { frameTopMargin } from "./layout";
@@ -977,8 +977,7 @@ describe("runTUI", () => {
       makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
     );
     saveSyncState({
-      schema_version: 1,
-      watermark: null,
+      ...emptySyncState(),
       consecutive_failures: 0,
       project_filter: ["/repo/dosu-cli"],
     });
@@ -1013,8 +1012,7 @@ describe("runTUI", () => {
       makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
     );
     saveSyncState({
-      schema_version: 1,
-      watermark: null,
+      ...emptySyncState(),
       consecutive_failures: 0,
       repo_filter: ["github.com/acme/gone"],
     });
@@ -1089,8 +1087,7 @@ describe("runTUI", () => {
   ])("settings hints a %j repo scope as %s", async (repoFilter, hint) => {
     writeRealConfig(makeCfg({}));
     saveSyncState({
-      schema_version: 1,
-      watermark: null,
+      ...emptySyncState(),
       consecutive_failures: 0,
       repo_filter: repoFilter,
     });

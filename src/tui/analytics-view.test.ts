@@ -15,8 +15,8 @@ vi.mock("../client/trpc", async (importOriginal) => ({
 }));
 
 import { makeTestConfig } from "../config/config.test-utils";
+import { emptySyncState, outcomeCounts, type SyncState } from "../sync/state";
 import type { SyncStatus } from "../sync/status";
-import type { SyncState } from "../sync/watermark";
 import { ALT_SCREEN_ENTER, ALT_SCREEN_EXIT } from "./alt-screen";
 import {
   ANALYTICS_VIEW_LINES,
@@ -43,20 +43,31 @@ function stripAnsi(text: string): string {
 }
 
 function emptyState(): SyncState {
-  return { schema_version: 2, watermark: null, consecutive_failures: 0 };
+  return emptySyncState();
+}
+
+/** A ledger holding these sessions as shipped. */
+function ledger(
+  records: Array<{ at: string; session: string; task_id: string; project?: string }>,
+): SyncState["sessions"] {
+  return Object.fromEntries(
+    records.map(({ session, ...record }) => [
+      session,
+      { updated: record.at, outcome: "shipped" as const, cli_version: "1.0.0", ...record },
+    ]),
+  );
 }
 
 /** A state carrying the all-time total plus per-project history. */
 function reportState(): SyncState {
   return {
-    schema_version: 2,
-    watermark: "2026-09-02T23:00:00.000Z",
+    ...emptySyncState(),
     consecutive_failures: 0,
-    shipped_sessions: [
+    sessions: ledger([
       { at: "2026-09-02T23:00:00.000Z", session: "cursor/abc", task_id: "t1", project: "dosu-cli" },
       { at: "2026-09-02T23:10:00.000Z", session: "cursor/def", task_id: "t2", project: "dosu-cli" },
       { at: "2026-09-02T23:20:00.000Z", session: "claude/ghi", task_id: "t3" },
-    ],
+    ]),
     total_shipped: 558,
   };
 }
@@ -65,17 +76,25 @@ function reportState(): SyncState {
 function overflowState(): SyncState {
   return {
     ...reportState(),
-    shipped_sessions: Array.from({ length: ANALYTICS_VIEW_LINES + 3 }, (_, i) => ({
-      at: "2026-09-02T23:00:00.000Z",
-      session: `cursor/s${i}`,
-      task_id: `t${i}`,
-      project: `project-${i}`,
-    })),
+    sessions: ledger(
+      Array.from({ length: ANALYTICS_VIEW_LINES + 3 }, (_, i) => ({
+        at: "2026-09-02T23:00:00.000Z",
+        session: `cursor/s${i}`,
+        task_id: `t${i}`,
+        project: `project-${i}`,
+      })),
+    ),
   };
 }
 
 function makeStatus(state: SyncState = emptyState()): SyncStatus {
-  return { running: false, state, recentActivity: [] };
+  return {
+    running: false,
+    state,
+    outcomes: outcomeCounts(state),
+    attention: [],
+    recentActivity: [],
+  };
 }
 
 /** Page analytics as the backend loader returns them. */

@@ -22,7 +22,8 @@ function wrapNotes<T>(notes: T[]) {
 }
 
 const mockLoadSyncState = vi.fn();
-vi.mock("../sync/watermark", () => ({
+vi.mock("../sync/state", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sync/state")>()),
   loadSyncState: (...args: unknown[]) => mockLoadSyncState(...args),
 }));
 
@@ -49,11 +50,7 @@ beforeEach(() => {
     schema_version: 2,
     active_account: { target: { org_name: "Acme" } },
   });
-  mockLoadSyncState.mockReturnValue({
-    schema_version: 1,
-    watermark: null,
-    consecutive_failures: 0,
-  });
+  mockLoadSyncState.mockReturnValue({ schema_version: 3, sessions: {}, consecutive_failures: 0 });
   mockScan.mockReturnValue([]);
   mockWrite.mockResolvedValue("/tmp/dosu-knowledge-report.html");
 });
@@ -131,11 +128,7 @@ describe("emitKnowledgeReport", () => {
   });
 
   it("summarizes the run's projects in the header instead of a note anchor", async () => {
-    mockLoadSyncState.mockReturnValue({
-      schema_version: 2,
-      watermark: null,
-      consecutive_failures: 0,
-    });
+    mockLoadSyncState.mockReturnValue({ schema_version: 3, sessions: {}, consecutive_failures: 0 });
     mockWrite.mockImplementation(async (opts: { html: string }) => {
       expect(opts.html).toContain("Dosu knowledge report — Acme");
       expect(opts.html).not.toContain("feat/report");
@@ -177,18 +170,25 @@ describe("emitKnowledgeReport", () => {
 describe("emitKnowledgeReport shipped sessions", () => {
   it("surfaces the shipped-session history's links in the report", async () => {
     mockLoadSyncState.mockReturnValue({
-      schema_version: 2,
-      watermark: "2026-09-01T00:00:00.000Z",
-      consecutive_failures: 0,
-      total_shipped: 1,
-      shipped_sessions: [
-        {
+      schema_version: 3,
+      sessions: {
+        "claude/s1": {
+          updated: "2026-08-31T23:00:00.000Z",
+          outcome: "shipped",
           at: "2026-09-01T00:00:00.000Z",
-          session: "claude/s1",
+          cli_version: "1.0.0",
           task_id: "task-1",
           session_url: "https://app/memories/sessions/s1",
         },
-      ],
+        "claude/s2": {
+          updated: "2026-08-31T23:00:00.000Z",
+          outcome: "trivial",
+          at: "2026-09-01T00:00:00.000Z",
+          cli_version: "1.0.0",
+        },
+      },
+      consecutive_failures: 0,
+      total_shipped: 1,
     });
 
     await emitKnowledgeReport({ notes: [] });
@@ -196,6 +196,8 @@ describe("emitKnowledgeReport shipped sessions", () => {
     const html = mockWrite.mock.calls[0][0].html as string;
     expect(html).toContain("Shipped to Dosu memory");
     expect(html).toContain("https://app/memories/sessions/s1");
+    // Only what shipped: sessions passed over are not history.
+    expect(html).not.toContain("claude/s2");
   });
 
   it("an injected shipped list overrides the state file", async () => {

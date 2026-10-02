@@ -51,8 +51,13 @@ export function redactRecords(records: readonly NormalizedRecord[]): NormalizedR
   return records.map((record) => redactValue(record) as NormalizedRecord);
 }
 
-/** Normalize one session to redacted trajectory-v1 records; null when the session cannot ship
- * (unsupported harness, unreadable or empty log, or a transcript the adapter rejects). */
+/** The adapter's refusals that only mean "no conversation here": the session is trivial, not
+ * unsupported. */
+const EMPTY_CONVERSATION_CODES = new Set(["missing_user_records", "missing_assistant_records"]);
+
+/** Normalize one session to redacted trajectory-v1 records: none for a log with no
+ * conversation in it, null when the session cannot be normalized (unsupported harness,
+ * unreadable log, or a transcript the adapter cannot parse). */
 export async function normalizeSessionRecords(
   session: AgentSession,
 ): Promise<NormalizedRecord[] | null> {
@@ -64,13 +69,15 @@ export async function normalizeSessionRecords(
   } catch {
     return null;
   }
-  if (transcript.trim() === "") return null;
+  if (transcript.trim() === "") return [];
   try {
     // Dynamic so ship-free CLI paths never pay for the normalizer.
     const { normalizeTranscript } = await import("@letta-ai/trajectory");
     const { records } = normalizeTranscript({ source, transcript });
     return redactRecords(records);
   } catch (err) {
+    const code = (err as { code?: unknown } | null)?.code;
+    if (typeof code === "string" && EMPTY_CONVERSATION_CODES.has(code)) return [];
     const message = err instanceof Error ? err.message : String(err);
     logger.debug("sync", `normalization failed for ${session.harness}/${session.id}: ${message}`);
     return null;

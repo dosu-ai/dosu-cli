@@ -1,11 +1,19 @@
-/** Point-in-time pipeline status for `dosu knowledge sync --status`: lock holder liveness,
- * watermark/backoff state, and the latest sync activity from the debug log. */
+/** Point-in-time pipeline status for `dosu knowledge sync --status`: lock holder liveness, the
+ * ledger's counts per outcome, backoff state, and the latest sync activity from the debug log. */
 
 import { readFileSync, statSync } from "node:fs";
 import { getConfigDir } from "../config/config";
 import { logger } from "../debug/logger";
 import { lockPath } from "./lock";
-import { backoffUntil, loadSyncState, type SyncState } from "./watermark";
+import {
+  backoffUntil,
+  type LedgerEntry,
+  loadSyncState,
+  outcomeCounts,
+  type SessionOutcome,
+  type SyncState,
+  settledSessions,
+} from "./state";
 
 export interface SyncStatus {
   /** True when a live process holds the sync lock. */
@@ -17,6 +25,11 @@ export interface SyncStatus {
   /** Lock file exists but its process is gone — a crashed run. */
   staleLock?: boolean;
   state: SyncState;
+  /** Ledger entries per outcome. */
+  outcomes: Record<SessionOutcome, number>;
+  /** Sessions settled without shipping for a reason worth a look (rejected, then unsupported),
+   * oldest first. */
+  attention: Array<LedgerEntry & { session: string }>;
   /** Set when failed runs have quiet syncs waiting out a backoff. */
   backoffUntil?: string;
   /** Latest `[sync]` lines from the debug log, oldest first. */
@@ -86,6 +99,8 @@ export function getSyncStatus(deps: SyncStatusDeps = {}): SyncStatus {
     ...(lock ? { pid: lock.pid, startedAt: lock.mtime.toISOString() } : {}),
     ...(lock && !running ? { staleLock: true } : {}),
     state,
+    outcomes: outcomeCounts(state),
+    attention: [...settledSessions(state, "rejected"), ...settledSessions(state, "unsupported")],
     ...(retryAt ? { backoffUntil: retryAt.toISOString() } : {}),
     recentActivity: recentSyncActivity(readLog()),
   };

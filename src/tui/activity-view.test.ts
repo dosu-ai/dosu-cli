@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { emptySyncState, type SyncState } from "../sync/state";
 import type { SyncStatus } from "../sync/status";
 import {
   ACTIVITY_VIEW_BUFFER_LINES,
@@ -45,10 +46,40 @@ function stripAnsi(text: string): string {
 const renderActivityFrame = (...args: Parameters<typeof buildActivityFrame>): string =>
   buildActivityFrame(...args).lines.join("\n");
 
+/** A ledger holding these sessions as shipped. */
+function ledger(
+  records: Array<{
+    at: string;
+    session: string;
+    task_id: string;
+    project?: string;
+    workspace?: string;
+  }>,
+): SyncState["sessions"] {
+  return Object.fromEntries(
+    records.map(({ session, ...record }) => [
+      session,
+      { updated: record.at, outcome: "shipped" as const, cli_version: "1.0.0", ...record },
+    ]),
+  );
+}
+
+/** Something settled, so the ledger has a history to clear. */
+const SETTLED = ledger([{ at: "2026-09-02T21:00:00.000Z", session: "claude/done", task_id: "t" }]);
+
 function makeStatus(overrides: Partial<SyncStatus> = {}): SyncStatus {
   return {
     running: false,
-    state: { schema_version: 2, watermark: null, consecutive_failures: 0 },
+    state: emptySyncState(),
+    outcomes: {
+      shipped: 0,
+      trivial: 0,
+      incognito: 0,
+      rejected: 0,
+      unsupported: 0,
+      skipped_by_user: 0,
+    },
+    attention: [],
     recentActivity: [],
     ...overrides,
   };
@@ -69,10 +100,9 @@ function queuedSession(id = "848b3896-fb07") {
 function studiedStatus(): SyncStatus {
   return makeStatus({
     state: {
-      schema_version: 2,
-      watermark: null,
+      ...emptySyncState(),
       consecutive_failures: 0,
-      shipped_sessions: [{ at: "2026-09-02T23:00:00.000Z", session: "cursor/abc", task_id: "t" }],
+      sessions: ledger([{ at: "2026-09-02T23:00:00.000Z", session: "cursor/abc", task_id: "t" }]),
       total_shipped: 7,
     },
   });
@@ -307,9 +337,9 @@ describe("parseGateLine", () => {
 describe("latestBacklog", () => {
   it("returns the counts from the newest gate line", () => {
     const log = [
-      "[sync] gate: 49 ready, 0 in flight (watermark none)",
+      "[sync] gate: 49 ready, 0 in flight (0 already settled)",
       "[learner] wrote note",
-      "[sync] gate: 44 ready, 1 in flight (watermark 2026-09-01)",
+      "[sync] gate: 44 ready, 1 in flight (0 already settled)",
     ].join("\n");
     expect(latestBacklog(log)).toEqual({ ready: 44, inFlight: 1 });
   });
@@ -358,7 +388,7 @@ describe("renderActivityFrame", () => {
     expect(frame).toContain("pid 4242");
   });
 
-  it("shows idle state and the never-studied watermark", () => {
+  it("shows idle state and that nothing shipped yet", () => {
     const frame = stripAnsi(renderActivityFrame(makeStatus(), [], 64));
     expect(frame).toContain("Idle");
     expect(frame).toContain("Nothing shipped yet");
@@ -388,8 +418,7 @@ describe("renderActivityFrame", () => {
     // 568 sessions studied all-time, a hook just queued 1: the bar must read
     // 0/1 (this run hasn't studied anything yet), not 568/569 ≈ 99%.
     const state = {
-      schema_version: 2,
-      watermark: null,
+      ...emptySyncState(),
       consecutive_failures: 0,
       total_shipped: 568,
     };
@@ -410,8 +439,7 @@ describe("renderActivityFrame", () => {
 
   it("shows the progress bar only while a run is live", () => {
     const state = {
-      schema_version: 2,
-      watermark: null,
+      ...emptySyncState(),
       consecutive_failures: 0,
       total_shipped: 20,
     };
@@ -470,13 +498,15 @@ describe("renderActivityFrame", () => {
     expect(empty).toContain("No open sessions");
   });
 
-  it("shows the watermark, backoff, and activity lines", () => {
+  it("shows the last shipment, backoff, and activity lines", () => {
     const frame = stripAnsi(
       renderActivityFrame(
         makeStatus({
           state: {
-            schema_version: 2,
-            watermark: "2026-09-02T20:00:00.000Z",
+            ...emptySyncState(),
+            sessions: ledger([
+              { at: "2026-09-02T20:00:00.000Z", session: "claude/a", task_id: "t" },
+            ]),
             consecutive_failures: 2,
           },
           backoffUntil: "2026-09-02T22:00:00.000Z",
@@ -485,7 +515,7 @@ describe("renderActivityFrame", () => {
         64,
       ),
     );
-    expect(frame).toContain("Shipped sessions up to");
+    expect(frame).toContain("Last shipped a session at");
     // The backoff line must advertise the manual escape hatch: s ignores the backoff.
     expect(frame).toContain("retrying after");
     expect(frame).toContain("s syncs now");
@@ -531,16 +561,16 @@ describe("renderActivityFrame", () => {
     expect(frame).toContain("activity");
     expect(frame).toContain("queued (1)");
     expect(frame).toContain("shipped (1)"); // unique sessions in history, not lifetime passes
-    expect(frame).toContain(
-      "tab switch \u00B7 \u2191\u2193 scroll \u00B7 f full rows \u00B7 s sync now \u00B7 esc back",
+    // The legend wraps at this width; compare it flattened.
+    expect(frame.replace(/\n/g, " ").replace(/\s+/g, " ")).toContain(
+      "tab switch \u00B7 \u2191\u2193 scroll \u00B7 f full rows \u00B7 s sync now \u00B7 c clear \u00B7 esc back",
     );
   });
 
   it("keeps analytics content out of the sync frame — it has its own screen", () => {
     const withAnalytics = makeStatus({
       state: {
-        schema_version: 2,
-        watermark: null,
+        ...emptySyncState(),
         consecutive_failures: 0,
         total_shipped: 47,
       },
@@ -570,12 +600,12 @@ describe("renderActivityFrame", () => {
     expect(nothingMined).not.toContain("c clear");
 
     const studied = makeStatus();
-    studied.state.watermark = "2026-09-02T21:00:00.000Z";
+    studied.state.sessions = SETTLED;
     const idle = stripAnsi(renderActivityFrame(studied, [], 80));
     expect(idle).toContain("s sync now \u00B7 c clear \u00B7 esc back");
 
     const running = makeStatus({ running: true, pid: 1 });
-    running.state.watermark = "2026-09-02T21:00:00.000Z";
+    running.state.sessions = SETTLED;
     expect(stripAnsi(renderActivityFrame(running, [], 64))).not.toContain("c clear");
   });
 
@@ -593,7 +623,7 @@ describe("renderActivityFrame", () => {
 
   it("wraps the key legend instead of outrunning a narrow frame", () => {
     const studied = makeStatus();
-    studied.state.watermark = "2026-09-02T21:00:00.000Z";
+    studied.state.sessions = SETTLED;
     const width = 50;
     const frame = stripAnsi(renderActivityFrame(studied, [], width));
     for (const line of frame.split("\n")) expect(line.length).toBeLessThanOrEqual(width);
@@ -654,17 +684,16 @@ describe("renderActivityFrame", () => {
   it("clips studied rows to the frame width so they never outrun the tab rule", () => {
     const status = makeStatus({
       state: {
-        schema_version: 2,
-        watermark: "x",
+        ...emptySyncState(),
         consecutive_failures: 0,
-        shipped_sessions: [
+        sessions: ledger([
           {
             at: "2026-09-02T23:00:00.000Z",
             session: "cursor/a60cacd1-2d66-455d-b220-0123456789ab",
             task_id: "t",
             project: "Users-james-Documents-dosu-global-dosu-cli",
           },
-        ],
+        ]),
       },
     });
     const width = 63;
@@ -752,17 +781,16 @@ describe("renderActivityFrame", () => {
   it("shows full rows wrapped to the width in full mode", () => {
     const status = makeStatus({
       state: {
-        schema_version: 2,
-        watermark: "x",
+        ...emptySyncState(),
         consecutive_failures: 0,
-        shipped_sessions: [
+        sessions: ledger([
           {
             at: "2026-09-02T23:00:00.000Z",
             session: "cursor/a60cacd1-2d66-455d-b220-0123456789ab",
             task_id: "t",
             project: "Users-james-Documents-dosu-global-dosu-cli",
           },
-        ],
+        ]),
       },
     });
     const width = 63;
@@ -827,14 +855,13 @@ describe("renderActivityFrame", () => {
   it("collapses repeat study passes to the session's latest row and counts unique sessions", () => {
     const status = makeStatus({
       state: {
-        schema_version: 2,
-        watermark: "2026-05-12T19:00:00.000Z",
+        ...emptySyncState(),
         consecutive_failures: 0,
-        shipped_sessions: [
+        sessions: ledger([
           { at: "2026-05-12T17:00:00.000Z", session: "cursor/dup-1", task_id: "t", project: "p" },
           { at: "2026-05-12T18:00:00.000Z", session: "claude/solo-1", task_id: "t", project: "p" },
           { at: "2026-05-12T19:00:00.000Z", session: "cursor/dup-1", task_id: "t", project: "p" },
-        ],
+        ]),
       },
     });
     const frame = stripAnsi(
@@ -849,17 +876,16 @@ describe("renderActivityFrame", () => {
   it("shows the resolved project name instead of the stored slug when provided", () => {
     const status = makeStatus({
       state: {
-        schema_version: 2,
-        watermark: "2026-05-12T17:16:26.769Z",
+        ...emptySyncState(),
         consecutive_failures: 0,
-        shipped_sessions: [
+        sessions: ledger([
           {
             at: "2026-05-12T17:16:26.769Z",
             session: "claude/abc123",
             task_id: "t",
             project: "Users-spencer-Documents-GitHub-dosu",
           },
-        ],
+        ]),
       },
     });
     const frame = stripAnsi(
@@ -1093,12 +1119,16 @@ describe("runActivityView", () => {
 
       const status = makeStatus({
         state: {
-          schema_version: 2,
-          watermark: "2026-09-02T21:00:00.000Z",
+          ...emptySyncState(),
           consecutive_failures: 0,
-          shipped_sessions: [
-            { at: "2026-09-02T21:00:00.000Z", session: "claude/abc", task_id: "t", project: slug },
-          ],
+          sessions: ledger([
+            {
+              at: "2026-09-02T21:00:00.000Z",
+              session: "claude/abc",
+              task_id: "t",
+              workspace: slug,
+            },
+          ]),
         },
       });
       const queued = {
@@ -1144,7 +1174,7 @@ describe("runActivityView", () => {
     const { input, output, written } = fakeIO();
     const chunks: string[] = [
       "[2026-09-02T21:00:05.000Z] [INFO] [sync] shipped session claude/abc → task t1\n" +
-        "[2026-09-02T21:00:06.000Z] [DEBUG] [sync] gate: 44 ready, 0 in flight (watermark x)\n",
+        "[2026-09-02T21:00:06.000Z] [DEBUG] [sync] gate: 44 ready, 0 in flight (0 already settled)\n",
     ];
     let emit: (chunk: string) => void = () => {};
 
@@ -1153,7 +1183,7 @@ describe("runActivityView", () => {
       output,
       getStatus: () => makeStatus({ running: true, pid: 99 }),
       readLog: () =>
-        "[2026-09-02T21:00:00.000Z] [DEBUG] [sync] gate: 49 ready, 0 in flight (watermark none)\n",
+        "[2026-09-02T21:00:00.000Z] [DEBUG] [sync] gate: 49 ready, 0 in flight (0 already settled)\n",
       createFollower: (handler) => {
         emit = handler;
         return {
@@ -1373,14 +1403,13 @@ describe("runActivityView", () => {
           running: true,
           pid: 9,
           state: {
-            schema_version: 2,
-            watermark: null,
+            ...emptySyncState(),
             consecutive_failures: 0,
             total_shipped: totalStudied,
           },
         }),
       readLog: () =>
-        "[2026-09-03T16:00:00.000Z] [INFO] [sync] gate: 1 ready, 0 in flight (watermark x)\n",
+        "[2026-09-03T16:00:00.000Z] [INFO] [sync] gate: 1 ready, 0 in flight (0 already settled)\n",
       createFollower: (handler) => {
         emitChunk = handler;
         return { poll() {} };
@@ -1395,7 +1424,7 @@ describe("runActivityView", () => {
     // The run mines the session: lifetime counter bumps, gate drains.
     totalStudied = 569;
     emitChunk(
-      "[2026-09-03T16:00:20.000Z] [INFO] [sync] gate: 0 ready, 0 in flight (watermark y)\n",
+      "[2026-09-03T16:00:20.000Z] [INFO] [sync] gate: 0 ready, 0 in flight (0 already settled)\n",
     );
     vi.advanceTimersByTime(100);
     expect(stripAnsi(written.join(""))).toContain("1/1 shipped \u00B7 100%");
@@ -1417,15 +1446,14 @@ describe("runActivityView", () => {
           running: true,
           pid: 9,
           state: {
-            schema_version: 2,
-            watermark: null,
+            ...emptySyncState(),
             consecutive_failures: 0,
             total_shipped: 568,
             run: { pid: 9, started_at: "2026-09-03T16:00:00Z", baseline_shipped: 560 },
           },
         }),
       readLog: () =>
-        "[2026-09-03T16:05:00.000Z] [INFO] [sync] gate: 2 ready, 0 in flight (watermark x)\n",
+        "[2026-09-03T16:05:00.000Z] [INFO] [sync] gate: 2 ready, 0 in flight (0 already settled)\n",
       createFollower: () => ({ poll() {} }),
       pollMs: 100,
     });
@@ -1447,8 +1475,7 @@ describe("runActivityView", () => {
           running: true,
           pid: 9,
           state: {
-            schema_version: 2,
-            watermark: null,
+            ...emptySyncState(),
             consecutive_failures: 0,
             total_shipped: 568,
             // A crashed earlier run's record; this run hasn't written its own yet.
@@ -1456,7 +1483,7 @@ describe("runActivityView", () => {
           },
         }),
       readLog: () =>
-        "[2026-09-03T16:05:00.000Z] [INFO] [sync] gate: 2 ready, 0 in flight (watermark x)\n",
+        "[2026-09-03T16:05:00.000Z] [INFO] [sync] gate: 2 ready, 0 in flight (0 already settled)\n",
       createFollower: () => ({ poll() {} }),
       pollMs: 100,
     });
@@ -1467,9 +1494,9 @@ describe("runActivityView", () => {
     await view;
   });
 
-  it("rescans the backlog when the watermark moves or a backlog tab is entered", async () => {
+  it("rescans the backlog when a run settles something or a backlog tab is entered", async () => {
     const { input, output } = fakeIO();
-    let watermark: string | null = null;
+    let sessions: SyncState["sessions"] = {};
     const listBacklog = vi.fn(() => ({ queued: [queuedSession()], open: [] }));
 
     const view = runActivityView({
@@ -1477,7 +1504,7 @@ describe("runActivityView", () => {
       output,
       getStatus: () =>
         makeStatus({
-          state: { schema_version: 2, watermark, consecutive_failures: 0 },
+          state: { ...emptySyncState(), sessions },
         }),
       readLog: () => "",
       createFollower: () => ({ poll() {} }),
@@ -1486,17 +1513,17 @@ describe("runActivityView", () => {
     });
 
     expect(listBacklog).toHaveBeenCalledTimes(1);
-    // Polls without a watermark change reuse the cached backlog.
+    // Polls without a ledger change reuse the cached backlog.
     vi.advanceTimersByTime(300);
     expect(listBacklog).toHaveBeenCalledTimes(1);
 
-    // A studied batch moves the watermark: the next poll rescans.
-    watermark = "2026-09-02T23:59:00.000Z";
+    // A run settles a session: the next poll rescans.
+    sessions = SETTLED;
     vi.advanceTimersByTime(100);
     expect(listBacklog).toHaveBeenCalledTimes(2);
 
     // Entering Studied reads persisted history without rescanning, but Queued rescans: open
-    // sessions drain into the queue without the watermark ever moving.
+    // sessions drain into the queue without the ledger ever changing.
     input.emit("data", "\t");
     expect(listBacklog).toHaveBeenCalledTimes(2);
     input.emit("data", "\t");
@@ -1515,7 +1542,7 @@ describe("runActivityView", () => {
       output,
       getStatus: () => makeStatus(),
       readLog: () =>
-        "[2026-09-03T16:00:00.000Z] [INFO] [sync] gate: 2 ready, 1 in flight (watermark none)\n",
+        "[2026-09-03T16:00:00.000Z] [INFO] [sync] gate: 2 ready, 1 in flight (0 already settled)\n",
       createFollower: () => ({ poll() {} }),
       startSync,
       listBacklog: () => ({ queued: [queuedSession(), queuedSession("b2")], open: [] }),
@@ -1710,7 +1737,7 @@ describe("runActivityView", () => {
     // The status reflects the reset once clearHistory has run, as the real state file would.
     const getStatus = () => {
       const status = makeStatus();
-      status.state.watermark = clearHistory.mock.calls.length > 0 ? null : "2026-09-02T21:00:00Z";
+      status.state.sessions = clearHistory.mock.calls.length > 0 ? {} : SETTLED;
       return status;
     };
 
@@ -1736,7 +1763,7 @@ describe("runActivityView", () => {
     input.emit("data", "\r");
     expect(clearHistory).toHaveBeenCalledTimes(1);
     expect(startSync).not.toHaveBeenCalled();
-    // The watermark moved (to null), so the queue was rescanned on the redraw.
+    // The ledger emptied, so the queue was rescanned on the redraw.
     expect(listBacklog.mock.calls.length).toBeGreaterThan(scansBefore);
     const after = stripAnsi(written.join(""));
     expect(after).toContain("[sync] shipping history cleared");
@@ -1750,7 +1777,7 @@ describe("runActivityView", () => {
     const { input, output, written } = fakeIO();
     const clearHistory = vi.fn();
     const status = makeStatus();
-    status.state.watermark = "2026-09-02T21:00:00Z";
+    status.state.sessions = SETTLED;
 
     const view = runActivityView({
       input,
@@ -1776,7 +1803,7 @@ describe("runActivityView", () => {
     const { input, output, written } = fakeIO();
     const clearHistory = vi.fn();
     let status = makeStatus({ running: true, pid: 7 });
-    status.state.watermark = "2026-09-02T21:00:00Z";
+    status.state.sessions = SETTLED;
 
     const view = runActivityView({
       input,
@@ -1808,7 +1835,7 @@ describe("runActivityView", () => {
     const { input, output, written } = fakeIO();
     const clearHistory = vi.fn();
     let status = makeStatus();
-    status.state.watermark = "2026-09-02T21:00:00Z";
+    status.state.sessions = SETTLED;
 
     const view = runActivityView({
       input,
@@ -1824,7 +1851,7 @@ describe("runActivityView", () => {
     expect(stripAnsi(written.join(""))).toContain("Clear shipping history?");
 
     status = makeStatus({ running: true, pid: 9 });
-    status.state.watermark = "2026-09-02T21:00:00Z";
+    status.state.sessions = SETTLED;
     vi.advanceTimersByTime(100);
     expect(stripAnsi(written.at(-1) ?? "")).not.toContain("Clear shipping history?");
     // Enter now has nothing to confirm.

@@ -192,18 +192,40 @@ describe("createShipStep", () => {
     expect(JSON.parse(fetchImpl.mock.calls[0][1].body).metadata.session_id).toBe("s2");
   });
 
-  it("skips sessions that have no shippable transcript", async () => {
+  it("a transcript the normalizer cannot read is unsupported, not a failure", async () => {
     const { step, fetchImpl } = makeStep({ normalize: async () => null });
 
-    const results = await step([session("s1")]);
+    const results = await step([session("s1"), session("s2")]);
 
-    expect(results).toEqual([
-      { session: session("s1"), outcome: "skipped", message: "no shippable transcript" },
-    ]);
+    expect(results.map((r) => r.outcome)).toEqual(["unsupported", "unsupported"]);
+    expect(results[0].message).toBe("transcript could not be normalized");
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("skips past a rejected payload (422) instead of wedging the batch", async () => {
+  it("a transcript with no conversation in it is trivial and never uploaded", async () => {
+    const { step, fetchImpl } = makeStep({ normalize: async () => [] });
+
+    const [result] = await step([session("s1")]);
+
+    expect(result.outcome).toBe("trivial");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("a harness with no normalizer is unsupported and never reads its transcript", async () => {
+    const normalize = vi.fn(async () => RECORDS);
+    const { step, fetchImpl } = makeStep({ normalize });
+
+    const [result] = await step([session("s1", { harness: "opencode" })]);
+
+    expect(result).toMatchObject({
+      outcome: "unsupported",
+      message: "no normalizer for opencode sessions yet",
+    });
+    expect(normalize).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("settles a refused payload (422) as rejected and carries on with the batch", async () => {
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(new Response("bad", { status: 422 }))
@@ -212,8 +234,8 @@ describe("createShipStep", () => {
 
     const results = await step([session("s1"), session("s2")]);
 
-    expect(results.map((r) => r.outcome)).toEqual(["skipped", "shipped"]);
-    expect(results[0].message).toContain("HTTP 422");
+    expect(results.map((r) => r.outcome)).toEqual(["rejected", "shipped"]);
+    expect(results[0]).toMatchObject({ httpStatus: 422, message: "ingest rejected: HTTP 422" });
   });
 
   it("a server failure stops the batch so unprocessed sessions retry after backoff", async () => {

@@ -1,0 +1,525 @@
+/** Knowledge-sync state: a ledger of how each session was settled (shipped, or deliberately passed
+ * over), keyed by `harness/id`, plus failure backoff and the user's switches. A session is
+ * pending until the ledger holds an answer for its current contents, so nothing a run skips is
+ * ever lost behind a high-water mark. Kept out of config.json, which is credential-bearing and
+ * rewritten by auth flows. */
+
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { getConfigDir } from "../config/config";
+import type { AgentSession } from "../sessions/scan";
+
+const STATE_FILENAME = "knowledge-sync.json";
+/** 3: a per-session ledger; 2 kept one shipping watermark; 1 was the local learner era. Both
+ * migrate on load (see migrate). */
+const STATE_SCHEMA_VERSION = 3;
+
+/** Sessions whose `updated` is newer than this are treated as still running. */
+export const DEFAULT_QUIET_PERIOD_MS = 5 * 60 * 1000;
+
+const BACKOFF_BASE_MS = 15 * 60 * 1000;
+const BACKOFF_MAX_MS = 24 * 60 * 60 * 1000;
+
+/** How a session was settled. Only `shipped` uploaded anything. */
+export type SessionOutcome =
+  | "shipped"
+  /** Too small to hold anything worth learning. */
+  | "trivial"
+  /** The user took it off the record with /dosu-incognito. */
+  | "incognito"
+  /** The backend refused the payload (400/413/422); retried by --retry-rejected. */
+  | "rejected"
+  /** No normalizer for this harness or transcript. Never a failure: that would back off and
+   * stall every other harness. */
+  | "unsupported"
+  /** Passed over when the user declined setup's backfill offer. */
+  | "skipped_by_user";
+
+export const SESSION_OUTCOMES: readonly SessionOutcome[] = [
+  "shipped",
+  "trivial",
+  "incognito",
+  "rejected",
+  "unsupported",
+  "skipped_by_user",
+];
+
+/** The ledger's answer for one session. */
+export interface LedgerEntry {
+  /** The session's `updated` when it was settled; any other value makes it pending again. */
+  updated: string;
+  outcome: SessionOutcome;
+  /** When it was settled (ISO). */
+  at: string;
+  /** The CLI version that settled it. Passed-over sessions are re-evaluated by a newer CLI,
+   * which may support the harness, judge triviality differently, or fix what was rejected. */
+  cli_version: string;
+  /** shipped: the ingest task the backend accepted (202). */
+  task_id?: string;
+  /** shipped: the shareable memory-session page, when the backend returned one. */
+  session_url?: string;
+  /** shipped: the project key the session shipped under (sessions/project.ts). */
+  project?: string;
+  /** shipped: the scanner's workspace for the session (a harness project slug or directory),
+   * which history views need to find the transcript again for its title. */
+  workspace?: string;
+  /** rejected: the HTTP status the backend answered with. */
+  http_status?: number;
+  /** rejected/unsupported: one renderable line saying why. */
+  message?: string;
+  /** Carried over from the schema-2 shipped history, which never recorded the session's own
+   * mtime: `updated` holds the ship time instead, and the session is pending only once it
+   * changes after that. */
+  seeded?: true;
+}
+
+/** One shipped session, for history views; derived from the ledger. */
+export interface ShippedSessionRecord {
+  /** When the session was shipped (ISO). */
+  at: string;
+  /** The session's `harness/id`. */
+  session: string;
+  /** The ingest task the backend accepted (202) for this session. */
+  task_id: string;
+  /** Shareable memory-session page, when the backend returned one. */
+  session_url?: string;
+  /** The project key the session shipped under (sessions/project.ts). */
+  project?: string;
+  /** The scanner's workspace slug or directory for the session, when it had one. */
+  workspace?: string;
+}
+
+/** The active run's baseline; status viewers subtract baseline_shipped from total_shipped for a
+ * run-scoped progress bar. Only meaningful while the recorded pid holds the sync lock. */
+interface SyncRun {
+  pid: number;
+  started_at: string;
+  /** total_shipped when this run started. */
+  baseline_shipped: number;
+}
+
+export interface SyncState {
+  schema_version: number;
+  /** The ledger, by `harness/id`. Entries age out once their session leaves the scan window. */
+  sessions: Record<string, LedgerEntry>;
+  last_attempt_at?: string;
+  consecutive_failures: number;
+  /** All-time shipped-session count — survives ledger pruning. */
+  total_shipped?: number;
+  /** The active run's progress baseline; see SyncRun. */
+  run?: SyncRun;
+  /** Repo keys (`host/owner/repo`) whose sessions get shipped; absent means every session,
+   * including those outside a git repo. */
+  repo_filter?: string[];
+  /** Legacy folder scope from before repo scoping; the next sync converts it to repo_filter. */
+  project_filter?: string[];
+  /** User pressed stop: quiet (hook-triggered) syncs skip until resumed. Cleared by the
+   * Activity screen's resume or any manual `dosu knowledge sync`. */
+  paused?: boolean;
+  /** `false` = the user opted out of shipping transcripts (`dosu knowledge transcripts
+   * disable`). Shipping is on by default, so only the opt-out is ever stored. */
+  ship_transcripts?: false;
+}
+
+/** Whether finished sessions are shipped to Dosu memory: on unless the user opted out. */
+export function isShippingEnabled(state: SyncState): boolean {
+  return state.ship_transcripts !== false;
+}
+
+export function syncStatePath(configDir: string = getConfigDir()): string {
+  return join(configDir, STATE_FILENAME);
+}
+
+export function emptySyncState(): SyncState {
+  return { schema_version: STATE_SCHEMA_VERSION, sessions: {}, consecutive_failures: 0 };
+}
+
+/** The ledger key of a session. */
+export function sessionKey(session: Pick<AgentSession, "harness" | "id">): string {
+  return `${session.harness}/${session.id}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function stringsOf(values: unknown[]): string[] {
+  return values.filter((v): v is string => typeof v === "string");
+}
+
+function nonNegative(value: unknown): number | undefined {
+  return typeof value === "number" && value >= 0 ? value : undefined;
+}
+
+function optionalString<K extends string>(key: K, value: unknown): Partial<Record<K, string>> {
+  return typeof value === "string" ? ({ [key]: value } as Record<K, string>) : {};
+}
+
+function parseEntry(value: unknown): LedgerEntry | null {
+  if (!isRecord(value)) return null;
+  const { updated, outcome, at, cli_version } = value;
+  if (
+    typeof updated !== "string" ||
+    typeof at !== "string" ||
+    typeof cli_version !== "string" ||
+    !SESSION_OUTCOMES.includes(outcome as SessionOutcome)
+  ) {
+    return null;
+  }
+  return {
+    updated,
+    outcome: outcome as SessionOutcome,
+    at,
+    cli_version,
+    ...optionalString("task_id", value.task_id),
+    ...optionalString("session_url", value.session_url),
+    ...optionalString("project", value.project),
+    ...optionalString("workspace", value.workspace),
+    ...(typeof value.http_status === "number" ? { http_status: value.http_status } : {}),
+    ...optionalString("message", value.message),
+    ...(value.seeded === true ? { seeded: true as const } : {}),
+  };
+}
+
+function parseLedger(value: unknown): Record<string, LedgerEntry> {
+  const ledger: Record<string, LedgerEntry> = {};
+  if (!isRecord(value)) return ledger;
+  for (const [key, raw] of Object.entries(value)) {
+    const entry = parseEntry(raw);
+    if (entry) ledger[key] = entry;
+  }
+  return ledger;
+}
+
+/** The fields every schema keeps the same way. */
+function parseCommon(raw: Record<string, unknown>): Omit<SyncState, "schema_version" | "sessions"> {
+  return {
+    ...optionalString("last_attempt_at", raw.last_attempt_at),
+    consecutive_failures: nonNegative(raw.consecutive_failures) ?? 0,
+    ...(Array.isArray(raw.repo_filter) ? { repo_filter: stringsOf(raw.repo_filter) } : {}),
+    ...(Array.isArray(raw.project_filter) ? { project_filter: stringsOf(raw.project_filter) } : {}),
+    ...(raw.paused === true ? { paused: true } : {}),
+    ...(raw.ship_transcripts === false ? { ship_transcripts: false as const } : {}),
+  };
+}
+
+/** Schema 1 kept the local learner's progress at the top level and shipping under `ship`;
+ * schema 2 kept shipping progress at the top level behind one watermark. What carries over is
+ * which sessions shipped, so they are not uploaded again unchanged. The watermark is dropped:
+ * everything it passed over without shipping (trivial, rejected, unsupported, past the old
+ * 200-session cap) becomes pending again, and the server dedupes anything it already has. */
+function migrate(raw: Record<string, unknown>, progress: Record<string, unknown>): SyncState {
+  const sessions: Record<string, LedgerEntry> = {};
+  let shipped = 0;
+  for (const record of Array.isArray(progress.shipped_sessions) ? progress.shipped_sessions : []) {
+    if (!isRecord(record)) continue;
+    const { at, session, task_id } = record;
+    if (typeof at !== "string" || typeof session !== "string" || typeof task_id !== "string") {
+      continue;
+    }
+    shipped += 1;
+    // Oldest first, so a session shipped twice keeps its latest pass.
+    sessions[session] = {
+      updated: at,
+      outcome: "shipped",
+      at,
+      cli_version: "migrated",
+      task_id,
+      ...optionalString("session_url", record.session_url),
+      // Schema 2 recorded the scanner's workspace slug under `project`.
+      ...optionalString("workspace", record.project),
+      seeded: true,
+    };
+  }
+  // Schema 1's top-level counters were the learner's, so the backoff comes from `progress`.
+  const {
+    last_attempt_at: _attempt,
+    consecutive_failures: _failures,
+    ...settings
+  } = parseCommon(raw);
+  return {
+    schema_version: STATE_SCHEMA_VERSION,
+    sessions,
+    ...settings,
+    ...optionalString("last_attempt_at", progress.last_attempt_at),
+    consecutive_failures: nonNegative(progress.consecutive_failures) ?? 0,
+    total_shipped: nonNegative(progress.total_shipped) ?? shipped,
+  };
+}
+
+function parseRun(value: unknown): SyncRun | undefined {
+  if (
+    isRecord(value) &&
+    typeof value.pid === "number" &&
+    typeof value.started_at === "string" &&
+    nonNegative(value.baseline_shipped) !== undefined
+  ) {
+    return {
+      pid: value.pid,
+      started_at: value.started_at,
+      baseline_shipped: value.baseline_shipped as number,
+    };
+  }
+  return undefined;
+}
+
+export function loadSyncState(configDir: string = getConfigDir()): SyncState {
+  const path = syncStatePath(configDir);
+  if (!existsSync(path)) return emptySyncState();
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf-8")) as unknown;
+    if (!isRecord(raw)) return emptySyncState();
+    if (raw.schema_version === 1) return migrate(raw, isRecord(raw.ship) ? raw.ship : {});
+    if (raw.schema_version === 2) return migrate(raw, raw);
+    if (raw.schema_version !== STATE_SCHEMA_VERSION) return emptySyncState();
+    const run = parseRun(raw.run);
+    const totalShipped = nonNegative(raw.total_shipped);
+    return {
+      schema_version: STATE_SCHEMA_VERSION,
+      sessions: parseLedger(raw.sessions),
+      ...parseCommon(raw),
+      ...(totalShipped !== undefined ? { total_shipped: totalShipped } : {}),
+      ...(run ? { run } : {}),
+    };
+  } catch {
+    return emptySyncState();
+  }
+}
+
+export function saveSyncState(state: SyncState, configDir: string = getConfigDir()): void {
+  if (!existsSync(configDir)) mkdirSync(configDir, { recursive: true, mode: 0o700 });
+  const path = syncStatePath(configDir);
+  // Write-then-rename, same discipline as config.json: hook-triggered syncs
+  // can run concurrently and must never observe a torn state file.
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(state, null, 2), { mode: 0o600 });
+  renameSync(tmp, path);
+}
+
+/** Persist the pause switch: load-modify-save so concurrent counters are not clobbered. */
+export function setSyncPaused(paused: boolean, configDir: string = getConfigDir()): void {
+  const state = loadSyncState(configDir);
+  if (paused) state.paused = true;
+  else delete state.paused;
+  saveSyncState(state, configDir);
+}
+
+/** Persist the shipping switch: load-modify-save so counters are not clobbered. */
+export function setShipTranscripts(enabled: boolean, configDir: string = getConfigDir()): void {
+  const state = loadSyncState(configDir);
+  if (enabled) delete state.ship_transcripts;
+  else state.ship_transcripts = false;
+  saveSyncState(state, configDir);
+}
+
+/** Forget everything settled so the next run starts from scratch: the ledger, the lifetime
+ * counter, and failure backoff (the backend dedupes re-shipped traces on content hash). User
+ * settings survive — the study scope, the pause switch, and the shipping opt-out are
+ * choices, not progress. Memory already built in Dosu is untouched. */
+export function resetSyncState(configDir: string = getConfigDir()): void {
+  const previous = loadSyncState(configDir);
+  saveSyncState(
+    {
+      ...emptySyncState(),
+      ...(previous.repo_filter ? { repo_filter: previous.repo_filter } : {}),
+      ...(previous.project_filter ? { project_filter: previous.project_filter } : {}),
+      ...(previous.paused ? { paused: true } : {}),
+      ...(previous.ship_transcripts === false ? { ship_transcripts: false as const } : {}),
+    },
+    configDir,
+  );
+}
+
+/** Settle the backlog the user declined at setup's backfill offer as `skipped_by_user`, so only
+ * sessions that finish (or change) from here on ship. Explicit per session, and never
+ * re-evaluated by a newer CLI: it was the user's call, not a rule's. */
+export function skipBacklog(
+  sessions: readonly AgentSession[],
+  cliVersion: string,
+  now: Date = new Date(),
+  configDir: string = getConfigDir(),
+): void {
+  const state = loadSyncState(configDir);
+  const at = now.toISOString();
+  for (const session of sessions) {
+    state.sessions[sessionKey(session)] = {
+      updated: session.updated,
+      outcome: "skipped_by_user",
+      at,
+      cli_version: cliVersion,
+    };
+  }
+  saveSyncState(state, configDir);
+}
+
+/** Earliest time a background run should retry after failure: 15min * 2^(failures-1), capped
+ * at 24h; null when no backoff is in force. Manual runs ignore this. */
+export function backoffUntil(state: SyncState): Date | null {
+  if (state.consecutive_failures === 0 || !state.last_attempt_at) return null;
+  const last = Date.parse(state.last_attempt_at);
+  if (Number.isNaN(last)) return null;
+  const delay = Math.min(BACKOFF_BASE_MS * 2 ** (state.consecutive_failures - 1), BACKOFF_MAX_MS);
+  return new Date(last + delay);
+}
+
+export interface PendingOptions {
+  /** The running CLI's version: passed-over sessions settled by another version are pending. */
+  cliVersion: string;
+  /** `--retry-rejected`: sessions the backend refused before this time are pending again. A
+   * bound rather than a flag, so a drain never retries what it was just refused. */
+  retryRejectedBefore?: Date;
+}
+
+/** Whether a session still needs the ship step: no ledger answer yet, an answer for different
+ * contents, or a passed-over answer this CLI should reconsider. */
+export function isPending(
+  session: AgentSession,
+  entry: LedgerEntry | undefined,
+  options: PendingOptions,
+): boolean {
+  if (!entry) return true;
+  if (entry.seeded) return Date.parse(session.updated) > Date.parse(entry.updated);
+  if (Date.parse(session.updated) !== Date.parse(entry.updated)) return true;
+  if (entry.outcome === "shipped" || entry.outcome === "skipped_by_user") return false;
+  if (
+    entry.outcome === "rejected" &&
+    options.retryRejectedBefore &&
+    Date.parse(entry.at) < options.retryRejectedBefore.getTime()
+  ) {
+    return true;
+  }
+  return entry.cli_version !== options.cliVersion;
+}
+
+/** Drop ledger entries for sessions last updated before `cutoff` (past the scan window, so no
+ * run would look at them again). */
+export function pruneLedger(state: SyncState, cutoff: Date): void {
+  const limit = cutoff.getTime();
+  for (const [key, entry] of Object.entries(state.sessions)) {
+    if (Date.parse(entry.updated) < limit) delete state.sessions[key];
+  }
+}
+
+/** How many ledger entries settled each way. */
+export function outcomeCounts(state: SyncState): Record<SessionOutcome, number> {
+  const counts = Object.fromEntries(SESSION_OUTCOMES.map((o) => [o, 0])) as Record<
+    SessionOutcome,
+    number
+  >;
+  for (const entry of Object.values(state.sessions)) counts[entry.outcome] += 1;
+  return counts;
+}
+
+/** Ledger entries with the given outcome, oldest settled first, keyed by `harness/id`. */
+export function settledSessions(
+  state: SyncState,
+  outcome: SessionOutcome,
+): Array<LedgerEntry & { session: string }> {
+  return Object.entries(state.sessions)
+    .filter(([, entry]) => entry.outcome === outcome)
+    .map(([session, entry]) => ({ session, ...entry }))
+    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+}
+
+/** Shipped sessions still in the ledger, oldest shipped first. */
+export function shippedSessions(state: SyncState): ShippedSessionRecord[] {
+  return settledSessions(state, "shipped").map((entry) => ({
+    at: entry.at,
+    session: entry.session,
+    task_id: entry.task_id ?? "unknown",
+    ...(entry.session_url ? { session_url: entry.session_url } : {}),
+    ...(entry.project ? { project: entry.project } : {}),
+    ...(entry.workspace ? { workspace: entry.workspace } : {}),
+  }));
+}
+
+/** Changes whenever a run settles something or the ledger is cleared; views rescan on it. */
+export function ledgerStamp(state: SyncState): string {
+  let latest = "";
+  for (const entry of Object.values(state.sessions)) if (entry.at > latest) latest = entry.at;
+  return `${Object.keys(state.sessions).length}@${latest}`;
+}
+
+/** Whether dir is at or under base (path-boundary-aware prefix match). */
+export function isUnderDir(dir: string, base: string): boolean {
+  const root = base.endsWith("/") ? base.slice(0, -1) : base;
+  return dir === root || dir.startsWith(`${root}/`);
+}
+
+/** Session → working directory and repo, as the cached project-dir resolver provides. */
+export interface SessionLocator {
+  resolve(session: AgentSession): string | null;
+  resolveRepo(session: AgentSession): string | null;
+}
+
+/** The repos shipping is limited to, or null for every repo. A legacy folder scope becomes the
+ * repos its folders' sessions ran in, so upgrading never widens what the user picked. */
+export function studyRepoFilter(
+  state: Pick<SyncState, "repo_filter" | "project_filter">,
+  listSessions: () => readonly AgentSession[],
+  locator: SessionLocator,
+): string[] | null {
+  if (state.repo_filter) return state.repo_filter;
+  const folders = state.project_filter;
+  if (!folders?.length) return null;
+  const repos = new Set<string>();
+  for (const session of listSessions()) {
+    const dir = locator.resolve(session);
+    if (!dir || !folders.some((base) => isUnderDir(dir, base))) continue;
+    const repo = locator.resolveRepo(session);
+    if (repo) repos.add(repo);
+  }
+  return [...repos].sort();
+}
+
+/** Keep the sessions in scope, each tagged with its repo when it ran in one: with a `filter`,
+ * only sessions in a picked repo; without one, every session, in a repo or not. */
+export function filterSessionsByRepo(
+  sessions: readonly AgentSession[],
+  filter: readonly string[] | null,
+  resolveRepo: (session: AgentSession) => string | null,
+): AgentSession[] {
+  const kept: AgentSession[] = [];
+  for (const session of sessions) {
+    const repo = resolveRepo(session);
+    if (repo !== null && (filter === null || filter.includes(repo))) {
+      kept.push({ ...session, repo });
+    } else if (filter === null) {
+      kept.push(session);
+    }
+  }
+  return kept;
+}
+
+export interface GateOptions extends PendingOptions {
+  now?: Date;
+  quietPeriodMs?: number;
+}
+
+export interface GateResult {
+  /** Pending sessions quiet long enough to be complete — the ship backlog. */
+  ready: AgentSession[];
+  /** Pending sessions still inside the quiet period; queued once quiet. */
+  open: AgentSession[];
+}
+
+/** Pending sessions, split on the quiet period: fresher ones may still be running and wait for
+ * a later trigger. Keeps the input order. */
+export function gateSessions(
+  sessions: readonly AgentSession[],
+  ledger: Readonly<Record<string, LedgerEntry>>,
+  options: GateOptions,
+): GateResult {
+  const now = options.now ?? new Date();
+  const completedBefore = now.getTime() - (options.quietPeriodMs ?? DEFAULT_QUIET_PERIOD_MS);
+  const ready: AgentSession[] = [];
+  const open: AgentSession[] = [];
+  for (const session of sessions) {
+    const updated = Date.parse(session.updated);
+    if (Number.isNaN(updated)) continue;
+    if (!isPending(session, ledger[sessionKey(session)], options)) continue;
+    if (updated > completedBefore) open.push(session);
+    else ready.push(session);
+  }
+  return { ready, open };
+}

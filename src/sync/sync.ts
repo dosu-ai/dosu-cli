@@ -1,36 +1,44 @@
 /** The knowledge-sync pipeline (scan, gate, ship): finished agent sessions go to the Dosu memory
- * ingest API. The watermark advances only past sessions the run settled, and quiet
- * hook-triggered runs never throw or write to stdout/stderr. */
+ * ingest API. Each session the ship step settles gets a ledger entry, so it is not shipped
+ * again until it changes, and quiet hook-triggered runs never throw or write to stdout/stderr. */
 
 import { logger } from "../debug/logger";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { isWorthStudying } from "../sessions/read";
 import { type AgentSession, scanAgentSessions } from "../sessions/scan";
+import { VERSION } from "../version/version";
 import { isIncognitoSession } from "./incognito";
 import { fileLock, type SyncLock } from "./lock";
 import {
   backoffUntil,
   filterSessionsByRepo,
   gateSessions,
+  isPending,
   isShippingEnabled,
+  type LedgerEntry,
   loadSyncState,
+  type PendingOptions,
+  pruneLedger,
   type SessionLocator,
-  SHIPPED_HISTORY_LIMIT,
-  type ShippedSessionRecord,
+  type SessionOutcome,
   type SyncState,
   saveSyncState,
+  sessionKey,
   studyRepoFilter,
-} from "./watermark";
+} from "./state";
 
 /** Every run, the first-time backfill included, looks back this far and no further: memory
  * is most useful about recent work, and each shipped session costs a server-side ingest. */
 export const SCAN_WINDOW_DAYS = 30;
 
-/** Safety cap per hook-triggered run, so a hyperactive machine can't unbound a quiet sync. */
-const SCAN_LIMIT = 200;
+/** Ledger entries outlive the scan window by this much before they are pruned. */
+const LEDGER_GRACE_DAYS = 7;
 
-/** Sessions shipped per run, oldest first; a bootstrap drains the backlog run after run. */
+/** Sessions settled per run, oldest first; a bootstrap drains the backlog run after run, and a
+ * hook run leaves the rest for the next trigger. */
 export const SHIP_BATCH_LIMIT = 20;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 type SyncStatus =
   | "backlog"
@@ -45,16 +53,19 @@ type SyncStatus =
 
 export interface ShipSessionResult {
   session: AgentSession;
-  /** How the ship step disposed of this session. `incognito` and `skipped` still advance the
-   * watermark; `failed` stops the batch and leaves the watermark for a retry. */
-  outcome: "shipped" | "incognito" | "skipped" | "failed";
+  /** How the ship step disposed of this session. Everything but `failed` is settled in the
+   * ledger; `failed` (transport, auth, 5xx) stops the batch and backs off, and the session stays
+   * pending for the retry. */
+  outcome: Exclude<SessionOutcome, "skipped_by_user"> | "failed";
   /** The accepted ingest task id, on `shipped`. */
   taskId?: string;
   /** Shareable memory-session page, when the backend returned one. */
   sessionUrl?: string;
   /** The project key the session shipped under, on `shipped`. */
   project?: string;
-  /** One renderable line for skipped/failed results. */
+  /** The backend's answer, on `rejected`. */
+  httpStatus?: number;
+  /** One renderable line for results that did not ship. */
   message?: string;
 }
 
@@ -65,20 +76,22 @@ interface ShipCounts {
   incognito: number;
   /** Too small to plausibly hold anything worth learning; never uploaded. */
   trivial: number;
-  /** Rejected by the backend or unreadable locally; not retried. */
-  skipped: number;
+  /** No normalizer for the harness or transcript; re-evaluated by a newer CLI. */
+  unsupported: number;
+  /** Refused by the backend (400/413/422); retried by `--retry-rejected`. */
+  rejected: number;
   failed: number;
 }
 
 export interface SyncOutcome {
   status: SyncStatus;
-  /** Completed sessions newer than the watermark. */
+  /** Pending sessions quiet long enough to ship. */
   readySessions: number;
-  /** Sessions still inside the quiet period. */
+  /** Pending sessions still inside the quiet period. */
   inFlightSessions: number;
   /** The gated backlog itself, newest first. */
   sessions: AgentSession[];
-  /** Sessions the watermark moved past this run. */
+  /** Sessions this run settled in the ledger. */
   settledSessions?: number;
   counts?: ShipCounts;
   error?: string;
@@ -100,54 +113,61 @@ export interface SyncDeps {
   locator?: SessionLocator;
   lock?: SyncLock;
   now?: () => Date;
+  /** The version stamped on ledger entries; defaults to this build's. */
+  cliVersion?: string;
 }
 
 export interface SyncOptions {
   /** Background (hook-triggered) run: honor backoff, never fail loudly. */
   quiet?: boolean;
-  /** First-time backfill: the whole scan window with no count cap, drained batch by batch. */
-  bootstrap?: boolean;
+  /** Sessions the backend refused before this time are pending again (`--retry-rejected`). */
+  retryRejectedBefore?: Date;
   deps?: SyncDeps;
 }
 
 /** How many selected sessions a gate log line names before summarizing. */
 const LOG_PREVIEW_LIMIT = 10;
 
-/** One debug-log line naming what the gate selected: the only visibility a quiet run has. */
-function logGateResult(
-  ready: readonly AgentSession[],
-  inFlight: number,
-  watermark: string | null,
-): void {
-  const preview = ready
-    .slice(0, LOG_PREVIEW_LIMIT)
-    .map((s) => `${s.harness}/${s.id}`)
-    .join(", ");
+/** One debug-log line naming what the gate selected: the only visibility a quiet run has. The
+ * Activity screen parses its "N ready, M in flight" prefix. */
+function logGateResult(ready: readonly AgentSession[], inFlight: number, settled: number): void {
+  const preview = ready.slice(0, LOG_PREVIEW_LIMIT).map(sessionKey).join(", ");
   const more =
     ready.length > LOG_PREVIEW_LIMIT ? ` (+${ready.length - LOG_PREVIEW_LIMIT} more)` : "";
   logger.debug(
     "sync",
-    `gate: ${ready.length} ready, ${inFlight} in flight (watermark ${watermark ?? "none"})${
+    `gate: ${ready.length} ready, ${inFlight} in flight (${settled} already settled)${
       preview ? ` · ${preview}${more}` : ""
     }`,
   );
 }
 
-/** Newest `updated` timestamp among the sessions — the new watermark. */
-function newestUpdated(sessions: readonly AgentSession[]): string {
-  let newest = sessions[0].updated;
-  for (const s of sessions) {
-    if (Date.parse(s.updated) > Date.parse(newest)) newest = s.updated;
-  }
-  return newest;
-}
-
-function key(session: AgentSession): string {
-  return `${session.harness}/${session.id}`;
-}
-
 function empty(status: SyncStatus): SyncOutcome {
   return { status, readySessions: 0, inFlightSessions: 0, sessions: [] };
+}
+
+/** The ledger entry a ship result settles, or null for a failure (still pending). */
+function ledgerEntry(
+  result: ShipSessionResult,
+  at: string,
+  cliVersion: string,
+): LedgerEntry | null {
+  if (result.outcome === "failed") return null;
+  const entry: LedgerEntry = {
+    updated: result.session.updated,
+    outcome: result.outcome,
+    at,
+    cli_version: cliVersion,
+  };
+  if (result.outcome === "shipped") {
+    entry.task_id = result.taskId ?? "unknown";
+    if (result.sessionUrl) entry.session_url = result.sessionUrl;
+    if (result.project) entry.project = result.project;
+    if (result.session.project) entry.workspace = result.session.project;
+  }
+  if (result.httpStatus !== undefined) entry.http_status = result.httpStatus;
+  if (result.outcome !== "shipped" && result.message) entry.message = result.message;
+  return entry;
 }
 
 export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncOutcome> {
@@ -155,6 +175,8 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
   const loadState = deps.loadState ?? loadSyncState;
   const saveState = deps.saveState ?? saveSyncState;
   const now = deps.now ?? (() => new Date());
+  const cliVersion = deps.cliVersion ?? VERSION;
+  const pending: PendingOptions = { cliVersion, retryRejectedBefore: options.retryRejectedBefore };
 
   const state = loadState();
 
@@ -162,6 +184,8 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     logger.debug("sync", "skipping: transcript shipping is disabled");
     return empty("disabled");
   }
+  // An explicit run is an explicit resume; this run's state saves persist the clear.
+  const resumes = !options.quiet && state.paused === true;
   if (options.quiet) {
     // The user's stop switch: hook-triggered runs stay off until resumed.
     if (state.paused) {
@@ -173,8 +197,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       logger.debug("sync", `skipping quiet sync: backoff until ${retryAt.toISOString()}`);
       return empty("skipped-backoff");
     }
-  } else if (state.paused) {
-    // An explicit run is an explicit resume; every later state save persists the clear.
+  } else if (resumes) {
     delete state.paused;
     logger.debug("sync", "manual sync resumes paused syncing");
   }
@@ -182,10 +205,10 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
   let ready: AgentSession[];
   let open: AgentSession[];
   try {
-    const since = new Date(now().getTime() - SCAN_WINDOW_DAYS * 24 * 60 * 60 * 1000);
-    const listSessions =
-      deps.listSessions ??
-      (() => scanAgentSessions(options.bootstrap ? { since } : { since, limit: SCAN_LIMIT }));
+    // The whole window every time: listing is metadata only, and the ledger, not a count cap,
+    // decides what is left to do.
+    const since = new Date(now().getTime() - SCAN_WINDOW_DAYS * DAY_MS);
+    const listSessions = deps.listSessions ?? (() => scanAgentSessions({ since }));
     const scanned = await listSessions();
     let flush: (() => void) | undefined;
     let locator = deps.locator;
@@ -202,16 +225,20 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       saveState(state);
       logger.debug("sync", `folder scope converted to repos: ${repoFilter?.join(", ") || "none"}`);
     }
-    const sessions = filterSessionsByRepo(scanned, repoFilter, (s) => locator.resolveRepo(s));
+    // The ledger first, so settled sessions never cost a repo lookup.
+    const gate = gateSessions(scanned, state.sessions, { ...pending, now: now() });
+    const inScope = (sessions: AgentSession[]) =>
+      filterSessionsByRepo(sessions, repoFilter, (s) => locator.resolveRepo(s));
+    ready = inScope(gate.ready);
+    open = inScope(gate.open);
     flush?.();
     logger.debug(
       "sync",
       `shipping scope ${repoFilter ? repoFilter.join(", ") || "none" : "all repos"}: ${
-        sessions.length
-      } of ${scanned.length} sessions in scope`,
+        ready.length + open.length
+      } of ${gate.ready.length + gate.open.length} pending sessions in scope`,
     );
-    ({ ready, open } = gateSessions(sessions, state.watermark, now()));
-    logGateResult(ready, open.length, state.watermark);
+    logGateResult(ready, open.length, Object.keys(state.sessions).length);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.debug("sync", `sync failed: ${message}`);
@@ -239,37 +266,45 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
   }
 
   try {
+    // A run that held the lock while this one scanned may have settled some of the backlog.
+    const locked = loadState();
+    const todo = ready.filter((s) => isPending(s, locked.sessions[sessionKey(s)], pending));
+    if (todo.length === 0)
+      return { status: "nothing-new", ...base, readySessions: 0, sessions: [] };
+
     // Stamp this run's progress baseline into every state save so status viewers can compute
     // run-scoped progress; same-pid batches (a bootstrap drain) keep the first batch's baseline.
-    if (state.run?.pid !== process.pid) {
-      state.run = {
-        pid: process.pid,
-        started_at: now().toISOString(),
-        baseline_shipped: state.total_shipped ?? 0,
-      };
-    }
+    const run =
+      locked.run?.pid === process.pid
+        ? locked.run
+        : {
+            pid: process.pid,
+            started_at: now().toISOString(),
+            baseline_shipped: locked.total_shipped ?? 0,
+          };
 
-    // Oldest first, so the watermark only ever advances. Incognito and trivial sessions are
-    // settled locally — never uploaded — and count as examined so the watermark passes them.
+    // Incognito and trivial sessions are settled locally — never uploaded.
     const worthShipping = deps.worthShipping ?? isWorthStudying;
     const isIncognito = deps.isIncognito ?? isIncognitoSession;
-    const counts: ShipCounts = { shipped: 0, incognito: 0, trivial: 0, skipped: 0, failed: 0 };
-    const examined: AgentSession[] = [];
-    const localOutcome = new Map<AgentSession, "incognito" | "trivial">();
+    const counts: ShipCounts = {
+      shipped: 0,
+      incognito: 0,
+      trivial: 0,
+      unsupported: 0,
+      rejected: 0,
+      failed: 0,
+    };
+    const examined = [...todo]
+      .sort((a, b) => Date.parse(a.updated) - Date.parse(b.updated))
+      .slice(0, SHIP_BATCH_LIMIT);
+    const localOutcome = new Map<string, "incognito" | "trivial">();
     const batch: AgentSession[] = [];
-    // Sorted here rather than trusting the lister's order: the watermark depends on it.
-    const oldestFirst = [...ready].sort((a, b) => Date.parse(a.updated) - Date.parse(b.updated));
-    for (const candidate of oldestFirst) {
-      if (batch.length >= SHIP_BATCH_LIMIT) break;
-      examined.push(candidate);
-      if (isIncognito(candidate)) localOutcome.set(candidate, "incognito");
-      else if (!worthShipping(candidate)) localOutcome.set(candidate, "trivial");
+    for (const candidate of examined) {
+      if (isIncognito(candidate)) localOutcome.set(sessionKey(candidate), "incognito");
+      else if (!worthShipping(candidate)) localOutcome.set(sessionKey(candidate), "trivial");
       else batch.push(candidate);
     }
-    logger.debug(
-      "sync",
-      `shipping ${batch.length} of ${ready.length} ready sessions (watermark ${state.watermark ?? "none"})`,
-    );
+    logger.debug("sync", `shipping ${batch.length} of ${todo.length} ready sessions`);
 
     let results: ShipSessionResult[] = [];
     if (batch.length > 0) {
@@ -283,79 +318,62 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       }
     }
     // By key, not identity: scoping hands the batch out as repo-tagged copies.
-    const resultOf = new Map(results.map((r) => [key(r.session), r]));
+    const resultOf = new Map(results.map((r) => [sessionKey(r.session), r]));
 
-    // Settle in order and stop at the first session the ship step did not finish: the
-    // watermark must never jump past a session that still has to be retried.
     const at = now().toISOString();
-    const settled: AgentSession[] = [];
-    const records: ShippedSessionRecord[] = [];
+    const settled = new Map<string, LedgerEntry>();
     let error: string | undefined;
     for (const session of examined) {
-      const local = localOutcome.get(session);
-      if (local) {
-        counts[local] += 1;
-        logger.debug("sync", `not shipping ${local} session ${key(session)}`);
-        settled.push(session);
+      const key = sessionKey(session);
+      const local = localOutcome.get(key);
+      const result: ShipSessionResult | undefined = local
+        ? { session, outcome: local }
+        : resultOf.get(key);
+      // No result: the batch stopped at an earlier failure; still pending.
+      if (!result) continue;
+      counts[result.outcome] += 1;
+      const entry = ledgerEntry(result, at, cliVersion);
+      if (!entry) {
+        error = result.message ?? "unknown error";
+        logger.debug("sync", `shipping failed at ${key}: ${error}`);
         continue;
       }
-      const result = resultOf.get(key(session));
-      if (!result || result.outcome === "failed") {
-        if (result) {
-          counts.failed += 1;
-          error = result.message ?? "unknown error";
-          logger.debug("sync", `shipping failed at ${key(session)}: ${error}`);
-        }
-        break;
-      }
-      settled.push(session);
-      if (result.outcome === "shipped") {
-        counts.shipped += 1;
-        records.push({
-          at,
-          session: key(session),
-          task_id: result.taskId ?? "unknown",
-          ...(result.sessionUrl ? { session_url: result.sessionUrl } : {}),
-          ...(result.project ? { project: result.project } : {}),
-        });
-        logger.debug(
-          "sync",
-          `shipped session ${key(session)} → task ${result.taskId ?? "unknown"}${
-            result.sessionUrl ? ` · ${result.sessionUrl}` : ""
-          }`,
-        );
-      } else {
-        counts[result.outcome] += 1;
-        logger.debug(
-          "sync",
-          `not shipping session ${key(session)}: ${result.message ?? result.outcome}`,
-        );
-      }
+      settled.set(key, entry);
+      logger.debug(
+        "sync",
+        entry.outcome === "shipped"
+          ? `shipped session ${key} → task ${entry.task_id}${
+              entry.session_url ? ` · ${entry.session_url}` : ""
+            }`
+          : `not shipping ${entry.outcome} session ${key}${entry.message ? `: ${entry.message}` : ""}`,
+      );
     }
 
-    const next: SyncState = {
-      ...state,
-      watermark: settled.length > 0 ? newestUpdated(settled) : state.watermark,
-      last_attempt_at: at,
-      consecutive_failures: counts.failed > 0 ? state.consecutive_failures + 1 : 0,
-      shipped_sessions: [...(state.shipped_sessions ?? []), ...records].slice(
-        -SHIPPED_HISTORY_LIMIT,
-      ),
-      total_shipped: (state.total_shipped ?? 0) + counts.shipped,
-    };
+    // Applied to a fresh read, so a pause or opt-out flipped mid-run survives this save.
     try {
+      const next = loadState();
+      for (const [key, entry] of settled) next.sessions[key] = entry;
+      pruneLedger(
+        next,
+        new Date(now().getTime() - (SCAN_WINDOW_DAYS + LEDGER_GRACE_DAYS) * DAY_MS),
+      );
+      next.last_attempt_at = at;
+      next.consecutive_failures = counts.failed > 0 ? next.consecutive_failures + 1 : 0;
+      next.total_shipped = (next.total_shipped ?? 0) + counts.shipped;
+      next.run = run;
+      if (resumes) delete next.paused;
       saveState(next);
     } catch {
       // Persisting progress is best-effort; the accepted tasks are already server-side.
     }
     logger.debug(
       "sync",
-      `ship phase: ${counts.shipped} shipped, ${counts.incognito} incognito, ${counts.trivial} trivial, ${counts.skipped} skipped, ${counts.failed} failed; watermark → ${next.watermark ?? "none"}`,
+      `ship phase: ${counts.shipped} shipped, ${counts.incognito} incognito, ${counts.trivial} trivial, ${counts.unsupported} unsupported, ${counts.rejected} rejected, ${counts.failed} failed`,
     );
     return {
       status: counts.failed > 0 ? "ship-failed" : "shipped",
       ...base,
-      settledSessions: settled.length,
+      settledSessions: settled.size,
       counts,
       ...(error ? { error } : {}),
     };

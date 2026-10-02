@@ -225,7 +225,7 @@ import { ClaudeDesktopProvider } from "../mcp/providers/claude-desktop";
 import { CodexProvider } from "../mcp/providers/codex";
 import { CursorProvider } from "../mcp/providers/cursor";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
-import { loadSyncState, setShipTranscripts } from "../sync/watermark";
+import { loadSyncState, setShipTranscripts } from "../sync/state";
 import { consumeCommandFacets } from "../telemetry/telemetry";
 import { runActivityView } from "../tui/activity-view";
 import * as p from "../tui/prompts";
@@ -3272,7 +3272,13 @@ describe("stepOfferInitialSync", () => {
   afterEach(teardownTempEnv);
 
   function backlogOutcome(readySessions: number) {
-    return { status: "backlog", readySessions, inFlightSessions: 0, sessions: [] };
+    const sessions = Array.from({ length: readySessions }, (_, i) => ({
+      id: `offered-${i}`,
+      harness: "claude",
+      path: `/tmp/offered-${i}.jsonl`,
+      updated: `2026-09-0${i + 1}T00:00:00.000Z`,
+    }));
+    return { status: "backlog", readySessions, inFlightSessions: 0, sessions };
   }
 
   it("does nothing without an API key or deployment", async () => {
@@ -3307,13 +3313,13 @@ describe("stepOfferInitialSync", () => {
     expect(said).not.toContain("stay on this machine");
   });
 
-  it("scans with the bootstrap scope (the whole 30-day window)", async () => {
+  it("only counts the backlog: the offer itself never ships anything", async () => {
     mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(3));
     vi.mocked(p.confirm).mockResolvedValue(false);
 
     await stepOfferInitialSync(makeCfg());
 
-    expect(mockRunKnowledgeSync).toHaveBeenCalledWith({ bootstrap: true });
+    expect(mockRunKnowledgeSync.mock.calls[0][0]?.deps?.ship).toBeUndefined();
   });
 
   it("stays quiet when there is nothing to mine", async () => {
@@ -3369,18 +3375,20 @@ describe("stepOfferInitialSync", () => {
     expect(vi.mocked(p.log.success).mock.calls.join(" ")).toContain("Shipping 1 session in");
   });
 
-  it("declining ships only new sessions: the backlog is passed over, not queued for hooks", async () => {
+  it("declining ships only new sessions: the offered backlog is settled as the user's call", async () => {
     mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(2));
     vi.mocked(p.confirm).mockResolvedValue(false);
-    const before = Date.now();
 
     await stepOfferInitialSync(makeCfg());
 
     expect(mockSpawnDetachedSelf).not.toHaveBeenCalled();
     // Otherwise the next session-end hook would ship the same 30 days anyway.
-    const watermark = loadSyncState().watermark;
-    expect(watermark).not.toBeNull();
-    expect(Date.parse(watermark as string)).toBeGreaterThanOrEqual(before - 1000);
+    const ledger = loadSyncState().sessions;
+    expect(Object.keys(ledger).sort()).toEqual(["claude/offered-0", "claude/offered-1"]);
+    expect(ledger["claude/offered-1"]).toMatchObject({
+      outcome: "skipped_by_user",
+      updated: "2026-09-02T00:00:00.000Z",
+    });
     expect(vi.mocked(p.log.info).mock.calls.join(" ")).toContain("Only sessions from now on");
   });
 
@@ -3392,7 +3400,10 @@ describe("stepOfferInitialSync", () => {
     await stepOfferInitialSync(makeCfg());
 
     expect(mockSpawnDetachedSelf).not.toHaveBeenCalled();
-    expect(loadSyncState().watermark).not.toBeNull();
+    expect(Object.values(loadSyncState().sessions).map((e) => e.outcome)).toEqual([
+      "skipped_by_user",
+      "skipped_by_user",
+    ]);
   });
 
   it("warns when the detached spawn fails", async () => {

@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../sessions/scan";
 import type { SyncLock } from "./lock";
+import { backoffUntil, emptySyncState, type LedgerEntry, type SyncState } from "./state";
 import { runKnowledgeSync, SHIP_BATCH_LIMIT, type ShipSessionResult, type SyncDeps } from "./sync";
-import { backoffUntil, type SyncState } from "./watermark";
 
 const mockLoggerDebug = vi.hoisted(() => vi.fn());
 vi.mock("../debug/logger", () => ({
@@ -30,8 +30,26 @@ function session(updatedOffsetMinutes: number): AgentSession {
   };
 }
 
+const CLI = "1.2.3";
+
 function state(overrides: Partial<SyncState> = {}): SyncState {
-  return { schema_version: 2, watermark: null, consecutive_failures: 0, ...overrides };
+  return { ...emptySyncState(), ...overrides };
+}
+
+/** A ledger answer for `s` as it is now. */
+function settled(
+  s: AgentSession,
+  overrides: Partial<LedgerEntry> = {},
+): Record<string, LedgerEntry> {
+  return {
+    [`${s.harness}/${s.id}`]: {
+      updated: s.updated,
+      outcome: "shipped",
+      at: NOW.toISOString(),
+      cli_version: CLI,
+      ...overrides,
+    },
+  };
 }
 
 function openLock(): SyncLock {
@@ -62,6 +80,7 @@ function makeDeps(overrides: Partial<SyncDeps> = {}): { deps: SyncDeps; saved: S
     lock: openLock(),
     locator: { resolve: () => "/repo/dosu-cli", resolveRepo: () => DOSU_CLI },
     now: () => NOW,
+    cliVersion: CLI,
     ...overrides,
   };
   return { deps, saved };
@@ -100,7 +119,7 @@ describe("runKnowledgeSync gate", () => {
     await runKnowledgeSync({ deps });
 
     const logged = mockLoggerDebug.mock.calls.map((c) => c.join(" ")).join("\n");
-    expect(logged).toContain("gate: 12 ready, 0 in flight (watermark none)");
+    expect(logged).toContain("gate: 12 ready, 0 in flight (0 already settled)");
     expect(logged).toContain("claude/s-30");
     expect(logged).toContain("(+2 more)");
   });
@@ -138,12 +157,7 @@ describe("runKnowledgeSync gate", () => {
   it("leaves sessions outside a git repo out of a repo filter", async () => {
     const inRepo = { ...session(60), project: "dosu-cli" };
     const { deps } = makeDeps({
-      loadState: () => ({
-        schema_version: 1,
-        watermark: null,
-        consecutive_failures: 0,
-        repo_filter: [DOSU_CLI],
-      }),
+      loadState: () => state({ repo_filter: [DOSU_CLI] }),
       listSessions: vi.fn().mockResolvedValue([inRepo, session(40)]),
       locator: projectLocator,
     });
@@ -164,12 +178,7 @@ describe("runKnowledgeSync gate", () => {
     const inScope = { ...session(60), project: "dosu-cli" };
     const outScope = { ...session(30), project: "other" };
     const { deps, saved } = makeDeps({
-      loadState: () => ({
-        schema_version: 1,
-        watermark: null,
-        consecutive_failures: 0,
-        project_filter: ["/repo/dosu-cli", "(unknown)"],
-      }),
+      loadState: () => state({ project_filter: ["/repo/dosu-cli", "(unknown)"] }),
       listSessions: vi.fn().mockResolvedValue([inScope, outScope]),
       locator: projectLocator,
     });
@@ -184,12 +193,7 @@ describe("runKnowledgeSync gate", () => {
   it("a legacy folder scope with no repos in it studies nothing", async () => {
     mockScanSessions.mockReset().mockReturnValue([session(99)]);
     const { deps, saved } = makeDeps({
-      loadState: () => ({
-        schema_version: 1,
-        watermark: null,
-        consecutive_failures: 0,
-        project_filter: ["(unknown)"],
-      }),
+      loadState: () => state({ project_filter: ["(unknown)"] }),
       listSessions: vi.fn().mockResolvedValue([{ ...session(60), project: "dosu-cli" }]),
       locator: projectLocator,
     });
@@ -203,12 +207,7 @@ describe("runKnowledgeSync gate", () => {
   it("drops an empty legacy folder scope and studies every repo", async () => {
     const inRepo = { ...session(60), project: "dosu-cli" };
     const { deps, saved } = makeDeps({
-      loadState: () => ({
-        schema_version: 1,
-        watermark: null,
-        consecutive_failures: 0,
-        project_filter: [],
-      }),
+      loadState: () => state({ project_filter: [] }),
       listSessions: vi.fn().mockResolvedValue([inRepo]),
       locator: projectLocator,
     });
@@ -357,22 +356,11 @@ describe("runKnowledgeSync switches", () => {
 describe("runKnowledgeSync scan scope", () => {
   const window = new Date(NOW.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-  it("hook runs scan the last 30 days, capped at 200 sessions", async () => {
+  it("hook runs scan the whole last 30 days with no count cap", async () => {
     mockScanSessions.mockReset().mockReturnValue([]);
     const { deps } = makeDeps({ listSessions: undefined });
 
-    await runKnowledgeSync({ deps });
-
-    const arg = mockScanSessions.mock.calls[0][0] as { since: Date; limit?: number };
-    expect(arg.limit).toBe(200);
-    expect(arg.since.toISOString()).toBe(window);
-  });
-
-  it("the first-time backfill covers the same 30 days with no count cap", async () => {
-    mockScanSessions.mockReset().mockReturnValue([]);
-    const { deps } = makeDeps({ listSessions: undefined });
-
-    await runKnowledgeSync({ bootstrap: true, deps });
+    await runKnowledgeSync({ quiet: true, deps });
 
     const arg = mockScanSessions.mock.calls[0][0] as { since: Date; limit?: number };
     expect(arg.limit).toBeUndefined();
@@ -381,7 +369,7 @@ describe("runKnowledgeSync scan scope", () => {
 });
 
 describe("runKnowledgeSync shipping", () => {
-  it("ships the backlog oldest-first and records each accepted task", async () => {
+  it("ships the backlog oldest-first and settles each accepted task in the ledger", async () => {
     const ship = shipAll();
     const { deps, saved } = makeDeps({
       listSessions: vi.fn().mockResolvedValue([session(30), session(90), session(60)]),
@@ -392,20 +380,30 @@ describe("runKnowledgeSync shipping", () => {
 
     expect(vi.mocked(ship).mock.calls[0][0].map((s) => s.id)).toEqual(["s-90", "s-60", "s-30"]);
     expect(outcome.status).toBe("shipped");
-    expect(outcome.counts).toEqual({ shipped: 3, incognito: 0, trivial: 0, skipped: 0, failed: 0 });
-    const last = saved.at(-1);
-    expect(last?.watermark).toBe(session(30).updated);
-    expect(last?.total_shipped).toBe(3);
-    expect(last?.shipped_sessions?.map((r) => r.session)).toEqual([
-      "claude/s-90",
-      "claude/s-60",
-      "claude/s-30",
-    ]);
-    expect(last?.shipped_sessions?.[0]).toMatchObject({
+    expect(outcome.counts).toEqual({
+      shipped: 3,
+      incognito: 0,
+      trivial: 0,
+      unsupported: 0,
+      rejected: 0,
+      failed: 0,
+    });
+    const last = saved.at(-1) as SyncState;
+    expect(last.total_shipped).toBe(3);
+    expect(last.sessions["claude/s-90"]).toEqual({
+      updated: session(90).updated,
+      outcome: "shipped",
+      at: NOW.toISOString(),
+      cli_version: CLI,
       task_id: "task-s-90",
       session_url: "https://app/memories/sessions/s-90",
     });
-    expect(last?.consecutive_failures).toBe(0);
+    expect(Object.keys(last.sessions).sort()).toEqual([
+      "claude/s-30",
+      "claude/s-60",
+      "claude/s-90",
+    ]);
+    expect(last.consecutive_failures).toBe(0);
   });
 
   it("records the project key each session shipped under", async () => {
@@ -423,7 +421,48 @@ describe("runKnowledgeSync shipping", () => {
 
     await runKnowledgeSync({ deps });
 
-    expect(saved.at(-1)?.shipped_sessions?.[0].project).toBe("github.com/acme/widget");
+    expect(saved.at(-1)?.sessions["claude/s-60"]).toMatchObject({
+      project: "github.com/acme/widget",
+      // The scanner's slug, so history views can find the transcript again for its title.
+      workspace: "-Users-me-widget",
+    });
+  });
+
+  it("never ships a settled session again until it changes", async () => {
+    const done = session(90);
+    const grown = session(60);
+    const ship = shipAll();
+    const { deps } = makeDeps({
+      loadState: () =>
+        state({
+          sessions: {
+            ...settled(done),
+            ...settled(grown, { updated: session(120).updated }),
+          },
+        }),
+      listSessions: vi.fn().mockResolvedValue([done, grown]),
+      ship,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.readySessions).toBe(1);
+    expect(vi.mocked(ship).mock.calls[0][0].map((s) => s.id)).toEqual([grown.id]);
+  });
+
+  it("an older session passed over never hides behind newer settled ones", async () => {
+    // The watermark bug: a session older than everything shipped was gone for good.
+    const straggler = session(600);
+    const ship = shipAll();
+    const { deps } = makeDeps({
+      loadState: () => state({ sessions: { ...settled(session(30)), ...settled(session(60)) } }),
+      listSessions: vi.fn().mockResolvedValue([session(30), session(60), straggler]),
+      ship,
+    });
+
+    await runKnowledgeSync({ deps });
+
+    expect(vi.mocked(ship).mock.calls[0][0].map((s) => s.id)).toEqual([straggler.id]);
   });
 
   it("settles incognito and trivial sessions locally without uploading them", async () => {
@@ -441,10 +480,12 @@ describe("runKnowledgeSync shipping", () => {
 
     expect(vi.mocked(ship).mock.calls[0][0]).toEqual([{ ...session(30), repo: DOSU_CLI }]);
     expect(outcome.counts).toMatchObject({ shipped: 1, incognito: 1, trivial: 1 });
-    expect(saved.at(-1)?.watermark).toBe(session(30).updated);
+    const ledger = (saved.at(-1) as SyncState).sessions;
+    expect(ledger["claude/s-90"]).toMatchObject({ outcome: "incognito", cli_version: CLI });
+    expect(ledger["claude/s-60"]).toMatchObject({ outcome: "trivial", cli_version: CLI });
   });
 
-  it("moves the watermark past a batch of only local skips without calling the ship step", async () => {
+  it("settles a batch of only local skips without calling the ship step", async () => {
     const ship = shipAll();
     const { deps, saved } = makeDeps({
       listSessions: vi.fn().mockResolvedValue([session(30), session(60)]),
@@ -457,10 +498,25 @@ describe("runKnowledgeSync shipping", () => {
     expect(ship).not.toHaveBeenCalled();
     expect(outcome.status).toBe("shipped");
     expect(outcome.settledSessions).toBe(2);
-    expect(saved.at(-1)?.watermark).toBe(session(30).updated);
+    expect(Object.keys((saved.at(-1) as SyncState).sessions)).toHaveLength(2);
   });
 
-  it("stops at a failure: backs off and never moves past the session to retry", async () => {
+  it("a newer CLI reconsiders what an older one passed over", async () => {
+    const tiny = session(60);
+    const ship = shipAll();
+    const { deps } = makeDeps({
+      loadState: () =>
+        state({ sessions: settled(tiny, { outcome: "trivial", cli_version: "0.0.1" }) }),
+      listSessions: vi.fn().mockResolvedValue([tiny]),
+      ship,
+    });
+
+    await runKnowledgeSync({ deps });
+
+    expect(ship).toHaveBeenCalledOnce();
+  });
+
+  it("stops at a failure: backs off, and the failed session stays pending", async () => {
     const older = session(90);
     const failing = session(60);
     const { deps, saved } = makeDeps({
@@ -479,48 +535,65 @@ describe("runKnowledgeSync shipping", () => {
     expect(outcome.error).toBe("502 Bad Gateway");
     expect(outcome.counts).toMatchObject({ shipped: 1, failed: 1 });
     const last = saved.at(-1) as SyncState;
-    expect(last.watermark).toBe(older.updated);
+    expect(Object.keys(last.sessions)).toEqual(["claude/s-90"]);
     expect(last.consecutive_failures).toBe(1);
     expect(backoffUntil(last)?.toISOString()).toBe(
       new Date(NOW.getTime() + 15 * 60 * 1000).toISOString(),
     );
   });
 
-  it("a trivial session after a failure is not settled past it", async () => {
-    const failing = session(90);
-    const tiny = session(60);
+  it("rejected and unsupported sessions are settled and visible, never failures", async () => {
+    const rejected = session(90);
+    const unsupported = session(60);
     const { deps, saved } = makeDeps({
-      loadState: () => state({ watermark: "2026-08-01T00:00:00.000Z" }),
-      listSessions: vi.fn().mockResolvedValue([tiny, failing]),
-      worthShipping: (s) => s !== tiny,
+      loadState: () => state({ consecutive_failures: 2 }),
+      listSessions: vi.fn().mockResolvedValue([rejected, unsupported]),
       ship: vi.fn(
         async (): Promise<ShipSessionResult[]> => [
-          { session: failing, outcome: "failed", message: "down" },
-        ],
-      ),
-    });
-
-    await runKnowledgeSync({ deps });
-
-    expect(saved.at(-1)?.watermark).toBe("2026-08-01T00:00:00.000Z");
-  });
-
-  it("backend-rejected sessions advance the watermark without a recorded task", async () => {
-    const rejected = session(60);
-    const { deps, saved } = makeDeps({
-      listSessions: vi.fn().mockResolvedValue([rejected]),
-      ship: vi.fn(
-        async (): Promise<ShipSessionResult[]> => [
-          { session: rejected, outcome: "skipped", message: "413" },
+          { session: rejected, outcome: "rejected", httpStatus: 413, message: "too big" },
+          { session: unsupported, outcome: "unsupported", message: "no normalizer" },
         ],
       ),
     });
 
     const outcome = await runKnowledgeSync({ deps });
 
-    expect(outcome.counts).toMatchObject({ skipped: 1 });
-    expect(saved.at(-1)?.watermark).toBe(rejected.updated);
-    expect(saved.at(-1)?.shipped_sessions).toEqual([]);
+    expect(outcome.status).toBe("shipped");
+    expect(outcome.counts).toMatchObject({ rejected: 1, unsupported: 1, failed: 0 });
+    const last = saved.at(-1) as SyncState;
+    // A rejection is not a failure: backoff clears instead of stalling every other harness.
+    expect(last.consecutive_failures).toBe(0);
+    expect(last.sessions["claude/s-90"]).toMatchObject({
+      outcome: "rejected",
+      http_status: 413,
+      message: "too big",
+    });
+    expect(last.sessions["claude/s-60"]).toMatchObject({
+      outcome: "unsupported",
+      message: "no normalizer",
+    });
+    expect(last.sessions["claude/s-90"].task_id).toBeUndefined();
+  });
+
+  it("--retry-rejected ships what the backend refused before", async () => {
+    const refused = session(60);
+    const ship = shipAll();
+    const ledger = settled(refused, {
+      outcome: "rejected",
+      http_status: 422,
+      at: "2026-08-24T00:00:00.000Z",
+    });
+    const { deps } = makeDeps({
+      loadState: () => state({ sessions: ledger }),
+      listSessions: vi.fn().mockResolvedValue([refused]),
+      ship,
+    });
+
+    expect((await runKnowledgeSync({ deps })).status).toBe("nothing-new");
+    expect(ship).not.toHaveBeenCalled();
+
+    await runKnowledgeSync({ deps, retryRejectedBefore: NOW });
+    expect(ship).toHaveBeenCalledOnce();
   });
 
   it("a throwing ship step counts as one failed attempt instead of crashing the sync", async () => {
@@ -533,7 +606,78 @@ describe("runKnowledgeSync shipping", () => {
 
     expect(outcome.status).toBe("ship-failed");
     expect(saved.at(-1)?.consecutive_failures).toBe(1);
-    expect(saved.at(-1)?.watermark).toBeNull();
+    expect(saved.at(-1)?.sessions).toEqual({});
+  });
+
+  it("re-reads the ledger under the lock: what another run just settled is not shipped twice", async () => {
+    const a = session(90);
+    const b = session(60);
+    const ship = shipAll();
+    let reads = 0;
+    const { deps } = makeDeps({
+      // The first read (before the lock) predates the other run's save; later reads see it.
+      loadState: () => (reads++ === 0 ? state() : state({ sessions: settled(a) })),
+      listSessions: vi.fn().mockResolvedValue([a, b]),
+      ship,
+    });
+
+    await runKnowledgeSync({ deps });
+
+    expect(vi.mocked(ship).mock.calls[0][0].map((s) => s.id)).toEqual([b.id]);
+  });
+
+  it("reports nothing new when another run settled the whole backlog meanwhile", async () => {
+    const a = session(90);
+    let reads = 0;
+    const { deps, saved } = makeDeps({
+      loadState: () => (reads++ === 0 ? state() : state({ sessions: settled(a) })),
+      listSessions: vi.fn().mockResolvedValue([a]),
+      ship: shipAll(),
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.status).toBe("nothing-new");
+    expect(deps.ship).not.toHaveBeenCalled();
+    expect(saved).toEqual([]);
+  });
+
+  it("saves onto a fresh read, so a switch flipped mid-run survives", async () => {
+    let reads = 0;
+    const { deps, saved } = makeDeps({
+      loadState: () => (reads++ < 2 ? state() : state({ ship_transcripts: false })),
+      listSessions: vi.fn().mockResolvedValue([session(60)]),
+      ship: shipAll(),
+    });
+
+    await runKnowledgeSync({ deps });
+
+    expect(saved.at(-1)?.ship_transcripts).toBe(false);
+    expect(saved.at(-1)?.sessions["claude/s-60"]).toBeDefined();
+  });
+
+  it("prunes entries for sessions a week past the scan window", async () => {
+    const old = new Date(NOW.getTime() - 38 * 24 * 60 * 60 * 1000).toISOString();
+    const recent = new Date(NOW.getTime() - 36 * 24 * 60 * 60 * 1000).toISOString();
+    const entry = (updated: string): LedgerEntry => ({
+      updated,
+      outcome: "trivial",
+      at: updated,
+      cli_version: CLI,
+    });
+    const { deps, saved } = makeDeps({
+      loadState: () =>
+        state({ sessions: { "claude/old": entry(old), "claude/recent": entry(recent) } }),
+      listSessions: vi.fn().mockResolvedValue([session(60)]),
+      ship: shipAll(),
+    });
+
+    await runKnowledgeSync({ deps });
+
+    expect(Object.keys(saved.at(-1)?.sessions ?? {}).sort()).toEqual([
+      "claude/recent",
+      "claude/s-60",
+    ]);
   });
 
   it("ships at most SHIP_BATCH_LIMIT sessions per run, oldest first", async () => {

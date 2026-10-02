@@ -18,8 +18,8 @@ vi.mock("../sessions/project-dir", () => ({
 
 // Keep the real gate and filter logic; only the persisted state read is faked.
 const mockLoadSyncState = vi.fn();
-vi.mock("./watermark", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./watermark")>()),
+vi.mock("./state", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./state")>()),
   loadSyncState: (...args: unknown[]) => mockLoadSyncState(...args),
 }));
 
@@ -27,8 +27,10 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentSession } from "../sessions/scan";
+import { VERSION } from "../version/version";
 import { listSessionBacklog } from "./backlog";
 import { INCOGNITO_MARKER } from "./incognito";
+import { emptySyncState } from "./state";
 
 function session(overrides: Partial<AgentSession>): AgentSession {
   return {
@@ -46,11 +48,7 @@ beforeEach(() => {
   mockResolveRepo.mockReset().mockReturnValue("github.com/dosu-ai/dosu-cli");
   mockFlush.mockReset();
   mockLoadSyncState.mockReset();
-  mockLoadSyncState.mockReturnValue({
-    schema_version: 2,
-    watermark: null,
-    consecutive_failures: 0,
-  });
+  mockLoadSyncState.mockReturnValue(emptySyncState());
 });
 
 describe("listSessionBacklog", () => {
@@ -75,9 +73,7 @@ describe("listSessionBacklog", () => {
 
   it("applies the persisted repo filter and drops sessions outside any repo", () => {
     mockLoadSyncState.mockReturnValue({
-      schema_version: 1,
-      watermark: null,
-      consecutive_failures: 0,
+      ...emptySyncState(),
       repo_filter: ["github.com/dosu-ai/dosu-cli"],
     });
     mockScan.mockReturnValue([
@@ -99,12 +95,7 @@ describe("listSessionBacklog", () => {
   });
 
   it("reads a legacy folder scope as the repos of its sessions", () => {
-    mockLoadSyncState.mockReturnValue({
-      schema_version: 2,
-      watermark: null,
-      consecutive_failures: 0,
-      project_filter: ["/work/dosu-cli"],
-    });
+    mockLoadSyncState.mockReturnValue({ ...emptySyncState(), project_filter: ["/work/dosu-cli"] });
     mockScan.mockReturnValue([session({ id: "in-folder" }), session({ id: "elsewhere" })]);
     mockResolve.mockImplementation((s: AgentSession) =>
       s.id === "in-folder" ? "/work/dosu-cli/src" : "/elsewhere",
@@ -114,6 +105,38 @@ describe("listSessionBacklog", () => {
     );
 
     expect(listSessionBacklog().queued.map((s) => s.id)).toEqual(["in-folder"]);
+  });
+
+  it("lists only sessions the ledger has no answer for, by the same rules the sync uses", () => {
+    const shipped = session({ id: "shipped" });
+    const grown = session({ id: "grown" });
+    const trivialOld = session({ id: "trivial-by-an-older-cli" });
+    const trivialNow = session({ id: "trivial-by-this-cli" });
+    const fresh = session({ id: "never-seen" });
+    const entry = (s: AgentSession, outcome: "shipped" | "trivial", cli_version = VERSION) => ({
+      updated: s.updated,
+      outcome,
+      at: s.updated,
+      cli_version,
+    });
+    mockLoadSyncState.mockReturnValue({
+      ...emptySyncState(),
+      sessions: {
+        "cursor/shipped": entry(shipped, "shipped"),
+        "cursor/grown": { ...entry(grown, "shipped"), updated: "2026-01-01T00:00:00.000Z" },
+        "cursor/trivial-by-an-older-cli": entry(trivialOld, "trivial", "0.0.1"),
+        "cursor/trivial-by-this-cli": entry(trivialNow, "trivial"),
+      },
+    });
+    mockScan.mockReturnValue([shipped, grown, trivialOld, trivialNow, fresh]);
+
+    expect(
+      listSessionBacklog()
+        .queued.map((s) => s.id)
+        .sort(),
+    ).toEqual(["grown", "never-seen", "trivial-by-an-older-cli"]);
+    // Settled sessions never cost a repo lookup.
+    expect(mockResolveRepo).toHaveBeenCalledTimes(3);
   });
 
   it("sets incognito sessions aside from the queue", () => {

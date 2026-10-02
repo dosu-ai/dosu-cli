@@ -3,7 +3,7 @@
  * log-to-dosu-knowledge/scripts/generate_report.py.
  */
 
-import type { ShippedSessionRecord } from "../sync/watermark";
+import type { ShippedSessionRecord } from "../sync/state";
 import { REPORT_CSS } from "./css";
 import type {
   DigestTool,
@@ -34,7 +34,7 @@ export interface BuildReportOptions {
   dryRun?: boolean;
   generatedAt?: Date;
   digests?: Record<string, ReportDigest>;
-  /** Sessions shipped to Dosu memory, oldest first (the ship watermark's history). */
+  /** Sessions shipped to Dosu memory, oldest first (from the sync ledger). */
   shipped?: ShippedSessionRecord[];
 }
 

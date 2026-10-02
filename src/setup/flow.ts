@@ -26,8 +26,8 @@ import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { refreshConfiguredProviders } from "../mcp/refresh";
 import { getStatuslineAgent, StatuslineConflictError } from "../statusline/agents";
 import { spawnDetachedSelf } from "../sync/detach";
+import { isShippingEnabled, loadSyncState, skipBacklog } from "../sync/state";
 import { runKnowledgeSync } from "../sync/sync";
-import { isShippingEnabled, loadSyncState, skipBacklog } from "../sync/watermark";
 import { recordCommandFacets } from "../telemetry/telemetry";
 import { runActivityView } from "../tui/activity-view";
 import { installCenteredLayout } from "../tui/layout";
@@ -366,9 +366,9 @@ function setupOutroMessage(mcpCompleted: boolean): string {
 }
 
 /** Offer to ship the last 30 days of sessions after install. Shipping is on by default, so the
- * choice is between backfilling now and starting from here: declining passes the backlog over,
- * or the first session-end hook would ship it anyway. On consent the drain runs fully detached
- * so setup never blocks. */
+ * choice is between backfilling now and starting from here: declining settles the backlog as
+ * skipped by the user, or the first session-end hook would ship it anyway. On consent the drain
+ * runs fully detached so setup never blocks. */
 export async function stepOfferInitialSync(cfg: Config): Promise<void> {
   const target = cfg.active_account?.target;
   // Without an API key + deployment the detached run couldn't ship anyway.
@@ -378,7 +378,7 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
   logger.info("setup", "Step: offer initial knowledge sync");
   const s = p.spinner();
   s.start("Checking for agent sessions from the last 30 days...");
-  const outcome = await runKnowledgeSync({ bootstrap: true });
+  const outcome = await runKnowledgeSync();
   if (outcome.status !== "backlog" || outcome.readySessions === 0) {
     s.stop("No recent agent sessions. Dosu memory learns from new ones as you work.");
     recordCommandFacets({ backfill_offer: "not-offered" });
@@ -405,7 +405,9 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
   });
   if (p.isCancel(shipNow) || !shipNow) {
     recordCommandFacets({ backfill_offer: p.isCancel(shipNow) ? "cancelled" : "declined" });
-    skipBacklog();
+    // Exactly the sessions offered, each settled as the user's call; anything that finishes or
+    // changes from here on still ships.
+    skipBacklog(outcome.sessions, VERSION);
     p.log.info(
       wrapLog(
         `Only sessions from now on will ship. To send these later, clear the shipping history on the Activity screen and run ${info("dosu knowledge sync --bootstrap")}.`,

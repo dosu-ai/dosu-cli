@@ -9,7 +9,7 @@ import { type Config, loadConfig } from "../config/config";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import type { AgentSession } from "../sessions/scan";
 import { scanAgentSessions } from "../sessions/scan";
-import { loadSyncState, type ShippedSessionRecord } from "../sync/watermark";
+import { loadSyncState, type ShippedSessionRecord, shippedSessions } from "../sync/state";
 import { type FetchedReportNotes, fetchReportNotes } from "./fetch";
 import { buildReportHtml } from "./html";
 import { attributeRediscovery, digestsForSessions, sessionsToInventory } from "./notes";
@@ -82,7 +82,7 @@ export async function emitKnowledgeReport(options: EmitReportOptions = {}): Prom
     truncated: fetched.truncated,
     generatedAt: options.generatedAt,
     digests: digestsForSessions(sessions),
-    shipped: options.shipped ?? loadSyncState().shipped_sessions ?? [],
+    shipped: options.shipped ?? shippedSessions(loadSyncState()),
   });
   return writeAndOpenReport({
     html,

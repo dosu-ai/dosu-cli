@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { SyncState } from "../sync/watermark";
+import { emptySyncState, type SyncState } from "../sync/state";
 
 const mockGetHookAgent = vi.hoisted(() => vi.fn());
 vi.mock("../hooks/agents", () => ({
@@ -7,8 +7,8 @@ vi.mock("../hooks/agents", () => ({
 }));
 
 const mockLoadSyncState = vi.hoisted(() => vi.fn());
-vi.mock("../sync/watermark", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../sync/watermark")>()),
+vi.mock("../sync/state", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sync/state")>()),
   loadSyncState: (...args: unknown[]) => mockLoadSyncState(...args),
 }));
 
@@ -30,7 +30,7 @@ import {
   STATUSLINE_LABELS,
 } from "./render";
 
-const baseState: SyncState = { schema_version: 2, watermark: null, consecutive_failures: 0 };
+const baseState: SyncState = emptySyncState();
 
 function deps(overrides: Partial<RenderDeps> = {}): RenderDeps {
   return {

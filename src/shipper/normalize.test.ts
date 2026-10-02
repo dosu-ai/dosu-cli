@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NormalizedRecord } from "@letta-ai/trajectory";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../sessions/scan";
 import { normalizeSessionRecords, redactRecords } from "./normalize";
 
@@ -131,17 +131,35 @@ describe("normalizeSessionRecords", () => {
     expect(await normalizeSessionRecords(session({ path: join(dir, "missing.jsonl") }))).toBeNull();
   });
 
-  it("returns null for an empty transcript", async () => {
+  it("returns no records for an empty transcript", async () => {
     const path = join(dir, "empty.jsonl");
     writeFileSync(path, "\n\n");
-    expect(await normalizeSessionRecords(session({ path }))).toBeNull();
+    expect(await normalizeSessionRecords(session({ path }))).toEqual([]);
   });
 
-  it("returns null when the adapter rejects the transcript instead of throwing", async () => {
+  it("returns no records for a transcript with no conversation in it", async () => {
     const path = join(dir, "junk.jsonl");
-    // Parseable JSONL that yields no usable records — the adapter refuses it.
+    // Parseable JSONL with no user turn: the adapter refuses it, which only means "nothing here".
     writeFileSync(path, `${JSON.stringify({ type: "summary", summary: "nothing" })}\n`);
-    expect(await normalizeSessionRecords(session({ path }))).toBeNull();
+    expect(await normalizeSessionRecords(session({ path }))).toEqual([]);
+  });
+
+  it("returns null when the adapter fails for any other reason, instead of throwing", async () => {
+    const path = join(dir, "ok.jsonl");
+    writeFileSync(path, "{}\n");
+    vi.resetModules();
+    vi.doMock("@letta-ai/trajectory", () => ({
+      normalizeTranscript: () => {
+        throw new Error("parser bug");
+      },
+    }));
+    try {
+      const fresh = await import("./normalize");
+      expect(await fresh.normalizeSessionRecords(session({ path }))).toBeNull();
+    } finally {
+      vi.doUnmock("@letta-ai/trajectory");
+      vi.resetModules();
+    }
   });
 });
 

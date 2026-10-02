@@ -18,9 +18,18 @@ import { displayRepo } from "../sessions/repo";
 import type { AgentSession } from "../sessions/scan";
 import { listSessionBacklog } from "../sync/backlog";
 import { spawnDetachedSelf } from "../sync/detach";
+import {
+  isShippingEnabled,
+  loadSyncState,
+  outcomeCounts,
+  SESSION_OUTCOMES,
+  type SyncState,
+  setShipTranscripts,
+  settledSessions,
+  shippedSessions,
+} from "../sync/state";
 import { getSyncStatus, type SyncStatus } from "../sync/status";
 import { runKnowledgeSync, SHIP_BATCH_LIMIT, type SyncDeps, type SyncOutcome } from "../sync/sync";
-import { isShippingEnabled, loadSyncState, setShipTranscripts } from "../sync/watermark";
 import { recordCommandFacets } from "../telemetry/telemetry";
 import { resolveAgents } from "./agent-select";
 import { positiveInteger } from "./arguments";
@@ -135,71 +144,122 @@ export function knowledgeCommand(): Command {
     )
     .option("--queued", "Only sessions queued for shipping")
     .option("--open", "Only live sessions still inside the quiet period")
-    .option("--shipped", "Only recent shipped-session history")
+    .option("--shipped", "Only recently shipped sessions")
+    .option("--rejected", "Only sessions the backend refused (retry with sync --retry-rejected)")
+    .option("--unsupported", "Only sessions no normalizer could read yet")
     .option("--json", "Output as JSON")
-    .action((opts: { queued?: boolean; open?: boolean; shipped?: boolean; json?: boolean }) => {
-      const all = !opts.queued && !opts.open && !opts.shipped;
-      const wantQueued = all || Boolean(opts.queued);
-      const wantOpen = all || Boolean(opts.open);
-      const wantShipped = all || Boolean(opts.shipped);
+    .action(
+      (opts: {
+        queued?: boolean;
+        open?: boolean;
+        shipped?: boolean;
+        rejected?: boolean;
+        unsupported?: boolean;
+        json?: boolean;
+      }) => {
+        const all =
+          !opts.queued && !opts.open && !opts.shipped && !opts.rejected && !opts.unsupported;
+        const want = (flag: boolean | undefined) => all || Boolean(flag);
+        const wantQueued = want(opts.queued);
+        const wantOpen = want(opts.open);
 
-      const backlog = wantQueued || wantOpen ? listSessionBacklog() : { queued: [], open: [] };
-      const shipped = wantShipped ? (loadSyncState().shipped_sessions ?? []) : [];
+        const backlog = wantQueued || wantOpen ? listSessionBacklog() : { queued: [], open: [] };
+        const state =
+          want(opts.shipped) || want(opts.rejected) || want(opts.unsupported)
+            ? loadSyncState()
+            : null;
+        const shipped = state && want(opts.shipped) ? shippedSessions(state) : [];
+        const rejected = state && want(opts.rejected) ? settledSessions(state, "rejected") : [];
+        const unsupported =
+          state && want(opts.unsupported) ? settledSessions(state, "unsupported") : [];
 
-      if (opts.json) {
-        printResult(
-          {
-            ...(wantQueued ? { queued: backlog.queued } : {}),
-            ...(wantOpen ? { open: backlog.open } : {}),
-            ...(wantShipped ? { shipped } : {}),
-          },
-          opts,
-        );
-        return;
-      }
-
-      const sessionRows = (sessions: AgentSession[]) =>
-        sessions.map((s) => [s.harness, s.updated, s.project ?? "-", s.id]);
-      // Shipped history stores "harness/id" in one field; split it back into columns.
-      const shippedRows = shipped.map((record) => {
-        const slash = record.session.indexOf("/");
-        const harness = slash > 0 ? record.session.slice(0, slash) : "-";
-        const id = slash > 0 ? record.session.slice(slash + 1) : record.session;
-        return [harness, record.at, record.project ?? "-", id];
-      });
-
-      let first = true;
-      const section = (title: string, rows: string[][], stamp: string, emptyMsg: string) => {
-        if (!first) console.log();
-        first = false;
-        console.log(pc.bold(`${title} (${rows.length})`));
-        if (rows.length === 0) {
-          console.log(pc.dim(`  ${emptyMsg}`));
+        if (opts.json) {
+          printResult(
+            {
+              ...(wantQueued ? { queued: backlog.queued } : {}),
+              ...(wantOpen ? { open: backlog.open } : {}),
+              ...(want(opts.shipped) ? { shipped } : {}),
+              ...(want(opts.rejected) ? { rejected } : {}),
+              ...(want(opts.unsupported) ? { unsupported } : {}),
+              ...(all && state ? { counts: outcomeCounts(state) } : {}),
+            },
+            opts,
+          );
           return;
         }
-        printTable(["Agent", stamp, "Project", "Session"], rows);
-      };
 
-      if (wantQueued) {
-        section(
-          "Queued",
-          sessionRows(backlog.queued),
-          "Updated",
-          "Queue empty. Finished agent sessions appear here.",
-        );
-      }
-      if (wantOpen) {
-        section(
-          "Open",
-          sessionRows(backlog.open),
-          "Updated",
-          "No open sessions. Live agent sessions sit here until they go quiet.",
-        );
-      }
-      if (wantShipped) {
-        section("Shipped", shippedRows, "Shipped at", "No sessions shipped yet.");
-      }
-    });
+        const sessionRows = (sessions: AgentSession[]) =>
+          sessions.map((s) => [s.harness, s.updated, s.project ?? "-", s.id]);
+        // The ledger keys sessions as "harness/id" in one field; split it back into columns.
+        const keyColumns = (key: string): [string, string] => {
+          const slash = key.indexOf("/");
+          return slash > 0 ? [key.slice(0, slash), key.slice(slash + 1)] : ["-", key];
+        };
+        const shippedRows = shipped.map((record) => {
+          const [harness, id] = keyColumns(record.session);
+          return [harness, record.at, record.project ?? "-", id];
+        });
+        const reasonRows = (entries: typeof rejected) =>
+          entries.map((entry) => {
+            const [harness, id] = keyColumns(entry.session);
+            const reason = entry.message ?? (entry.http_status ? `HTTP ${entry.http_status}` : "-");
+            return [harness, entry.at, reason, id];
+          });
+
+        let first = true;
+        const section = (title: string, rows: string[][], headers: string[], emptyMsg: string) => {
+          if (!first) console.log();
+          first = false;
+          console.log(pc.bold(`${title} (${rows.length})`));
+          if (rows.length === 0) {
+            console.log(pc.dim(`  ${emptyMsg}`));
+            return;
+          }
+          printTable(headers, rows);
+        };
+        const sessionHeaders = (stamp: string) => ["Agent", stamp, "Project", "Session"];
+
+        if (wantQueued) {
+          section(
+            "Queued",
+            sessionRows(backlog.queued),
+            sessionHeaders("Updated"),
+            "Queue empty. Finished agent sessions appear here.",
+          );
+        }
+        if (wantOpen) {
+          section(
+            "Open",
+            sessionRows(backlog.open),
+            sessionHeaders("Updated"),
+            "No open sessions. Live agent sessions sit here until they go quiet.",
+          );
+        }
+        if (want(opts.shipped)) {
+          section("Shipped", shippedRows, sessionHeaders("Shipped at"), "No sessions shipped yet.");
+        }
+        if (want(opts.rejected)) {
+          section(
+            "Rejected",
+            reasonRows(rejected),
+            ["Agent", "Settled at", "Reason", "Session"],
+            "None. Sessions the backend refuses are listed here.",
+          );
+        }
+        if (want(opts.unsupported)) {
+          section(
+            "Unsupported",
+            reasonRows(unsupported),
+            ["Agent", "Settled at", "Reason", "Session"],
+            "None. Sessions no normalizer can read yet are listed here.",
+          );
+        }
+        if (all && state) {
+          console.log();
+          console.log(pc.dim(`Settled sessions: ${formatOutcomeCounts(state)}`));
+        }
+      },
+    );
 
   cmd
     .command("sync")
@@ -210,7 +270,11 @@ export function knowledgeCommand(): Command {
       "--bootstrap",
       "Backfill mode: ship every finished session from the last 30 days, draining the backlog (used by setup)",
     )
-    .option("--status", "Show whether a sync is running now, plus watermark and recent activity")
+    .option("--retry-rejected", "Ship sessions the backend refused before, once more")
+    .option(
+      "--status",
+      "Show whether a sync is running now, plus what was settled how and recent activity",
+    )
     .option(
       "--report",
       "Write the same HTML harvest report as the log-to-dosu-knowledge skill and open it",
@@ -222,6 +286,7 @@ export function knowledgeCommand(): Command {
         quiet?: boolean;
         detach?: boolean;
         bootstrap?: boolean;
+        retryRejected?: boolean;
         status?: boolean;
         report?: boolean;
         out?: string;
@@ -232,7 +297,7 @@ export function knowledgeCommand(): Command {
         const trigger = opts.bootstrap ? "bootstrap" : opts.quiet ? "hook" : "manual";
 
         // --status never scans or ships: it reads the lock, the persisted
-        // watermark state, and the tail of the debug log.
+        // ledger, and the tail of the debug log.
         if (opts.status) {
           recordCommandFacets({ sync_trigger: trigger, sync_status: "status-only" });
           const status = getSyncStatus();
@@ -254,6 +319,7 @@ export function knowledgeCommand(): Command {
             "sync",
             ...(opts.quiet ? ["--quiet"] : []),
             ...(opts.bootstrap ? ["--bootstrap"] : []),
+            ...(opts.retryRejected ? ["--retry-rejected"] : []),
             ...(opts.report ? ["--report"] : []),
             ...(opts.out ? ["--out", opts.out] : []),
           ]);
@@ -266,11 +332,13 @@ export function knowledgeCommand(): Command {
         }
 
         const deps: SyncDeps = { ship: buildShipper() };
-        let outcome = await runKnowledgeSync({
+        const syncOptions = {
           quiet: opts.quiet,
-          bootstrap: opts.bootstrap,
+          // Bounded by when this command started, so a drain never retries a fresh refusal.
+          ...(opts.retryRejected ? { retryRejectedBefore: new Date() } : {}),
           deps,
-        });
+        };
+        let outcome = await runKnowledgeSync(syncOptions);
         let sessionsShipped = outcome.counts?.shipped ?? 0;
 
         // Bootstrap drains the whole backlog in this process, batch by batch, while each batch
@@ -286,7 +354,7 @@ export function knowledgeCommand(): Command {
             round++
           ) {
             if (!opts.quiet && !opts.json) printSyncOutcome(outcome);
-            outcome = await runKnowledgeSync({ quiet: opts.quiet, bootstrap: true, deps });
+            outcome = await runKnowledgeSync(syncOptions);
             sessionsShipped += outcome.counts?.shipped ?? 0;
           }
         }
@@ -431,13 +499,14 @@ function transcriptsCommand(): Command {
     .action((opts: { json?: boolean }) => {
       const state = loadSyncState();
       const enabled = isShippingEnabled(state);
+      const shipped = shippedSessions(state);
       if (opts.json) {
         printResult(
           {
             enabled,
             total_shipped: state.total_shipped ?? 0,
-            watermark: state.watermark,
-            shipped_sessions: state.shipped_sessions ?? [],
+            counts: outcomeCounts(state),
+            shipped_sessions: shipped,
           },
           opts,
         );
@@ -452,8 +521,7 @@ function transcriptsCommand(): Command {
       if (total > 0) {
         console.log(`  Shipped:         ${total} session${total === 1 ? "" : "s"}`);
       }
-      if (state.watermark) console.log(`  Shipped through: ${state.watermark}`);
-      const recent = (state.shipped_sessions ?? []).slice(-5);
+      const recent = shipped.slice(-5);
       if (recent.length > 0) {
         console.log("\nRecent shipments:");
         for (const record of recent) {
@@ -516,6 +584,15 @@ function formatAge(iso: string, now: Date): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+/** "3 shipped · 1 trivial · 2 rejected": the non-zero ledger counts, in outcome order. */
+function formatOutcomeCounts(state: SyncState): string {
+  const counts = outcomeCounts(state);
+  const parts = SESSION_OUTCOMES.filter((o) => counts[o] > 0).map(
+    (o) => `${counts[o]} ${o.replaceAll("_", " ")}`,
+  );
+  return parts.length > 0 ? parts.join(" \u00B7 ") : "nothing settled";
+}
+
 function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
   if (status.running) {
     console.log(
@@ -541,10 +618,13 @@ function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
       ),
     );
   }
-  const wm = status.state.watermark;
-  console.log(`  Shipped through: ${wm ? `${wm} (${formatAge(wm, now)})` : "nothing shipped yet"}`);
   const total = status.state.total_shipped ?? 0;
-  if (total > 0) console.log(`  Shipped:         ${total} session${total === 1 ? "" : "s"}`);
+  console.log(
+    `  Shipped:         ${total > 0 ? `${total} session${total === 1 ? "" : "s"}` : "nothing shipped yet"}`,
+  );
+  if (Object.keys(status.state.sessions).length > 0) {
+    console.log(`  Settled:         ${formatOutcomeCounts(status.state)}`);
+  }
   const repoFilter = status.state.repo_filter;
   if (repoFilter) {
     console.log(
@@ -567,6 +647,19 @@ function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
         `  Backing off after ${n} failure${n === 1 ? "" : "s"}; background syncs retry after ${status.backoffUntil}.`,
       ),
     );
+  }
+
+  if (status.attention.length > 0) {
+    console.log("\nNot shipped, and why:");
+    for (const entry of status.attention) {
+      const reason = entry.message ?? (entry.http_status ? `HTTP ${entry.http_status}` : "");
+      console.log(
+        `  ${entry.outcome.padEnd(11)} ${entry.session}${reason ? ` \u00B7 ${reason}` : ""}`,
+      );
+    }
+    if (status.outcomes.rejected > 0) {
+      console.log(pc.dim("  Retry refused sessions with 'dosu knowledge sync --retry-rejected'."));
+    }
   }
 
   if (status.recentActivity.length > 0) {
@@ -594,11 +687,19 @@ function printSyncOutcome(outcome: SyncOutcome): void {
     }
     case "shipped":
     case "ship-failed": {
-      const { shipped = 0, incognito = 0, trivial = 0, skipped = 0 } = outcome.counts ?? {};
-      const passed = incognito + trivial + skipped;
+      const {
+        shipped = 0,
+        incognito = 0,
+        trivial = 0,
+        unsupported = 0,
+        rejected = 0,
+      } = outcome.counts ?? {};
+      const passed = incognito + trivial + unsupported + rejected;
       console.log(
         `✓ Shipped ${shipped} session${plural(shipped)} to Dosu memory${
-          passed > 0 ? pc.dim(` (${passed} passed over: incognito, too short, or rejected)`) : ""
+          passed > 0
+            ? pc.dim(` (${passed} passed over: incognito, too short, unsupported, or rejected)`)
+            : ""
         }.`,
       );
       if (outcome.status === "ship-failed") {

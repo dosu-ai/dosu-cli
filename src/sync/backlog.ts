@@ -1,14 +1,15 @@
-/** Shared scan of the gated local-session backlog: what's queued to ship and what's still
+/** Shared scan of the pending local-session backlog: what's queued to ship and what's still
  * open (inside the quiet period). Used by the Activity TUI and `dosu knowledge sessions`. */
 
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { type AgentSession, scanAgentSessions } from "../sessions/scan";
+import { VERSION } from "../version/version";
 import { partitionIncognitoSessions } from "./incognito";
+import { filterSessionsByRepo, gateSessions, loadSyncState, studyRepoFilter } from "./state";
 import { SCAN_WINDOW_DAYS } from "./sync";
-import { filterSessionsByRepo, gateSessions, loadSyncState, studyRepoFilter } from "./watermark";
 
 export interface SessionBacklog {
-  /** Gated (quiet, not yet shipped) sessions, oldest first. */
+  /** Pending sessions past the quiet period, oldest first. */
   queued: AgentSession[];
   /** Sessions still inside the quiet period — queued once they go silent. */
   open: AgentSession[];
@@ -17,7 +18,7 @@ export interface SessionBacklog {
   incognito?: AgentSession[];
 }
 
-/** The gated backlog within the sync's own scan window, oldest first; a failed scan reads as
+/** The pending backlog within the sync's own scan window, oldest first; a failed scan reads as
  * empty. */
 export function listSessionBacklog(now: Date = new Date()): SessionBacklog {
   try {
@@ -26,12 +27,14 @@ export function listSessionBacklog(now: Date = new Date()): SessionBacklog {
     const scanned = scanAgentSessions({ since });
     const resolver = createProjectDirResolver();
     const filter = studyRepoFilter(state, () => scanned, resolver);
-    const sessions = filterSessionsByRepo(scanned, filter, resolver.resolveRepo);
+    // The same ledger rules the sync applies, so the queue lists exactly what it would ship.
+    const gate = gateSessions(scanned, state.sessions, { cliVersion: VERSION, now });
+    const ready = filterSessionsByRepo(gate.ready, filter, resolver.resolveRepo);
+    const open = filterSessionsByRepo(gate.open, filter, resolver.resolveRepo);
     resolver.flush();
-    const gate = gateSessions(sessions, state.watermark);
-    // Only the gated backlog is read for the marker: everything behind the watermark is settled.
-    const { kept, skipped } = partitionIncognitoSessions(gate.ready);
-    return { queued: kept.reverse(), open: gate.open.reverse(), incognito: skipped.reverse() };
+    // Only pending sessions are read for the marker: settled ones already have their answer.
+    const { kept, skipped } = partitionIncognitoSessions(ready);
+    return { queued: kept.reverse(), open: open.reverse(), incognito: skipped.reverse() };
   } catch {
     return { queued: [], open: [], incognito: [] };
   }
