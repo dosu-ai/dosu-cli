@@ -2,11 +2,29 @@
 
 `dosu knowledge hooks enable` installs a session-end hook (Claude Code, Cursor, Codex) that runs
 `dosu knowledge sync --quiet --detach`. The sync scans the last 30 days of finished agent sessions,
-gates them behind a watermark and a quiet period, applies the directory filter and pause switch
-from `~/.config/dosu-cli/knowledge-sync.json`, and ships what is left to Dosu memory (secrets
-redacted locally first), which learns from each session server-side. Shipping is on by default;
-`dosu knowledge transcripts disable` turns it off. This document covers the two switches layered
-on top of that: a per-session opt-out and a status-bar indicator.
+gates them behind a watermark and a quiet period, applies the repo scope and pause switch from
+`~/.config/dosu-cli/knowledge-sync.json`, and ships what is left to Dosu memory (secrets redacted
+locally first), which learns from each session server-side. Shipping is on by default;
+`dosu knowledge transcripts disable` turns it off. This document covers the repo scope and the two
+switches layered on top of it: a per-session opt-out and a status-bar indicator.
+
+## Repo scope
+
+A session's repo is the `origin` remote of its working directory, normalized to a `host/owner/repo`
+key (`git@github.com:dosu-ai/dosu-cli.git` → `github.com/dosu-ai/dosu-cli`). A session outside a
+repo, or in a repo without an `origin`, has no repo. The lookup is cached per session in
+`project-dirs.json`, so a checkout deleted later still resolves. Cursor's transcripts record no
+working directory, so its `stop` hook records it to `session-captures/cursor/<id>.json` before the
+detached sync starts.
+
+`dosu` → settings → study scope picks which repos to ship (`repo_filter` in the state file). With a
+repo scope, only sessions in the picked repos are shipped. Picking every repo clears the filter, so
+new repos and sessions outside any repo are shipped too. Clones and worktrees of the same repo share
+one entry.
+
+Before repo scoping, the scope was a list of folders (`project_filter`). The next sync converts it
+to the repos its folders' sessions ran in, so upgrading never widens the scope. A folder scope with
+no repos in it becomes an empty repo scope, which ships nothing until you pick repos again.
 
 Both are installed by default: `dosu setup` (and the TUI's configure step) enables the status line
 and the slash command for every agent it enables the sync hook for, and removes them when an agent
@@ -68,7 +86,7 @@ command to `dosu knowledge statusline render --agent <id>`, which prints one lin
 | `📚 Dosu learning…` | The hook is installed and this session ships to Dosu memory when it ends |
 | `👻 Dosu incognito` | `/dosu-incognito` was run in this session |
 | `⚪ Dosu paused` | Syncing is paused (Activity screen stop, or `paused` in the state file) |
-| `⚪ Dosu not learning from this folder` | A directory filter is set and `cwd` is outside it |
+| `⚪ Dosu not learning from this repo` | A repo scope is set and `cwd` is not in one of its repos |
 | `⚪ Dosu off` | No Dosu hook is installed for this agent, or shipping is disabled |
 
 States are checked in that order after `off`: incognito outranks paused and not-studied because it
@@ -83,7 +101,8 @@ printf '%s' "$input" | dosu knowledge statusline render --agent claude
 
 Rendering is on the hot path (harnesses re-run the command at most every 300 ms, Cursor kills it
 after 2 s), so `src/index.ts` dispatches `knowledge statusline render` before loading the rest of
-the CLI, and the renderer reads only the hook config, the sync state file, and the transcript. It
+the CLI, and the renderer reads only the hook config, the sync state file, and the transcript, plus
+one `git remote get-url origin` in `cwd` (1 s timeout) once the earlier states have not matched. It
 never throws; anything unreadable renders as `⚪ Dosu off`.
 
 Dev installs (`DOSU_DEV=true`) pin the working copy and prefix with `env` rather than bare
@@ -94,7 +113,7 @@ Dev installs (`DOSU_DEV=true`) pin the working copy and prefix with `env` rather
 ```bash
 DOSU_DEV=true bun run dev knowledge statusline enable claude
 DOSU_DEV=true bun run dev knowledge incognito enable claude
-# Open Claude Code in a synced folder → 📚 Dosu learning…
+# Open Claude Code in a synced repo → 📚 Dosu learning…
 # Run /dosu-incognito → 👻 Dosu incognito
 # End the session; `dosu logs --tail` shows "not shipping incognito session claude/<id>" on the next sync
 ```

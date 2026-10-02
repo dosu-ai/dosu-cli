@@ -1,12 +1,27 @@
 /** `dosu integrations`: integration status and management. */
 
-import { Argument, Command } from "commander";
+import { Argument, Command, Option } from "commander";
 import pc from "picocolors";
 import { createTypedClient, type TypedClient } from "../client/trpc";
-import type { NangoGetConnectionInput } from "../generated/dosu-api-types";
-import { positiveInteger } from "./arguments";
+import type {
+  NangoGetConnectionInput,
+  SlackChannelListPagedOutput,
+} from "../generated/dosu-api-types";
+import { boundedText, positiveInteger, positiveIntegerAtMost, uuid } from "./arguments";
 import { requireLoginConfig } from "./auth";
 import { printResult, printTable } from "./output";
+import { channelLabel, listAllChannels, resolveChannel } from "./slack-channel-resolve";
+
+const DEFAULT_CHANNEL_PAGE = 50;
+// `listPaged` rejects a larger limit.
+const MAX_CHANNEL_PAGE = 100;
+// Past this many rows, `--all` suggests `--search` instead.
+const ALL_CHANNELS_WARN_AT = 500;
+
+/** Quote a value for the copy-paste hint when it isn't a plain word. */
+function shellQuote(value: string): string {
+  return /^[\w.-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
+}
 
 function requireConfig() {
   const cfg = requireLoginConfig();
@@ -160,51 +175,106 @@ export function integrationsCommand(): Command {
 
   cmd
     .command("slack-channels")
-    .description("List Slack channels")
-    .option("--json", "Output as JSON")
-    .action(async (opts: { json?: boolean }) => {
-      const cfg = requireConfig();
-      const client = createTypedClient(cfg);
+    .description("List Slack channels (DMs excluded), 50 per page by default")
+    .option("--search <term>", "Only channels whose name contains <term>", boundedText(200))
+    .addOption(
+      new Option("--limit <n>", `Channels per page (1-${MAX_CHANNEL_PAGE})`)
+        .argParser(positiveIntegerAtMost(MAX_CHANNEL_PAGE))
+        .conflicts("all"),
+    )
+    .addOption(
+      new Option("--cursor <uuid>", "Continue after this channel (the nextCursor of a page)")
+        .argParser(uuid)
+        .conflicts("all"),
+    )
+    .option("--all", "List every channel instead of one page")
+    .option("--json", "Output as JSON: {items, nextCursor} (nextCursor is null with --all)")
+    .action(
+      async (opts: {
+        search?: string;
+        limit?: number;
+        cursor?: string;
+        all?: boolean;
+        json?: boolean;
+      }) => {
+        const cfg = requireConfig();
+        const client = createTypedClient(cfg);
+        // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
+        const orgId = cfg.active_account!.target!.org_id!;
+        const search = opts.search?.trim() || undefined;
 
-      // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
-      const channels = await client.slackChannel.getAll.query(cfg.active_account!.target!.org_id!);
+        let page: SlackChannelListPagedOutput;
+        if (opts.all) {
+          const items = await listAllChannels(client, orgId, search, opts.json);
+          page = { items, nextCursor: null };
+          if (items.length > ALL_CHANNELS_WARN_AT) {
+            console.error(
+              pc.yellow(`Listed ${items.length} channels. Use --search <term> to narrow the list.`),
+            );
+          }
+        } else {
+          page = await client.slackChannel.listPaged.query({
+            orgId,
+            limit: opts.limit ?? DEFAULT_CHANNEL_PAGE,
+            ...(search && { search }),
+            ...(opts.cursor && { cursor: opts.cursor }),
+          });
+        }
 
-      if (opts.json) {
-        printResult(channels, opts);
-        return;
-      }
+        if (opts.json) {
+          printResult(page, opts);
+          return;
+        }
 
-      if (!channels || channels.length === 0) {
-        console.log(pc.dim("No Slack channels found."));
-        return;
-      }
+        if (page.items.length === 0) {
+          console.log(
+            pc.dim(search ? `No Slack channels match "${search}".` : "No Slack channels found."),
+          );
+          return;
+        }
 
-      printTable(
-        ["ID", "Name"],
-        channels.map((c: { channel_id: string; name?: string | null }) => [
-          c.channel_id,
-          c.name ?? "(unnamed)",
-        ]),
-        { rawData: channels },
-      );
-    });
+        // Both IDs, so either can be copied into `slack-join` or `review notifications set`.
+        printTable(
+          ["UUID", "Slack ID", "Name", "Workspace"],
+          page.items.map((c) => [c.id, c.channel_id, c.name ?? "(unnamed)", c.team_name ?? "-"]),
+        );
+        if (page.nextCursor) {
+          const next = [
+            "dosu integrations slack-channels",
+            search && `--search ${shellQuote(search)}`,
+            opts.limit && `--limit ${opts.limit}`,
+            `--cursor ${page.nextCursor}`,
+          ].filter(Boolean);
+          console.log(pc.dim(`More channels: ${next.join(" ")} (or --all)`));
+        }
+      },
+    );
 
   cmd
     .command("slack-join")
     .description("Join a Slack channel")
-    .argument("<channel-id>", "Slack channel ID")
+    .argument("<channel>", "Channel UUID, Slack channel ID (C… / G…), or #name")
     .option("--json", "Output as JSON")
     .action(async (channelId: string, opts: { json?: boolean }) => {
       const cfg = requireConfig();
       const client = createTypedClient(cfg);
 
-      await client.slackChannel.join.mutate(channelId);
+      // `join` takes the Dosu channel UUID, not Slack's channel ID.
+      const { id, channel } = await resolveChannel(
+        client,
+        // biome-ignore lint/style/noNonNullAssertion: checked in requireConfig
+        cfg.active_account!.target!.org_id!,
+        channelId,
+        { name: "<channel>", uuidUsage: "`dosu integrations slack-join <uuid>`" },
+        opts.json,
+      );
+      await client.slackChannel.join.mutate(id);
 
       if (opts.json) {
-        printResult({ success: true, channelId }, opts);
+        printResult({ success: true, channelId, id, channel }, opts);
         return;
       }
-      console.log(pc.green(`Joined Slack channel ${channelId}.`));
+      console.log(pc.green(`Joined ${channel ? channelLabel(channel) : `Slack channel ${id}`}.`));
     });
 
   cmd

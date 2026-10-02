@@ -94,6 +94,7 @@ vi.mock("../sessions/scan", () => ({
 vi.mock("../sessions/project-dir", () => ({
   createProjectDirResolver: vi.fn(() => ({
     resolve: (s: { project?: string }) => (s.project ? `/repo/${s.project}` : null),
+    resolveRepo: (s: { project?: string }) => (s.project ? `github.com/acme/${s.project}` : null),
     flush: vi.fn(),
   })),
 }));
@@ -211,6 +212,8 @@ beforeEach(() => {
     () =>
       ({
         resolve: (s: AgentSession) => (s.project ? `/repo/${s.project}` : null),
+        resolveRepo: (s: AgentSession) => (s.project ? `github.com/acme/${s.project}` : null),
+        resolveBranch: () => "main",
         cached: () => null,
         flush: vi.fn(),
       }) as ReturnType<typeof createProjectDirResolver>,
@@ -932,23 +935,23 @@ describe("runTUI", () => {
     // Library name on the Library row, studying scope on the projects row.
     expect(settingsOptions[0]?.hint).toBe("Acme");
     expect(settingsOptions[1]?.hint).toBe("Docs Library");
-    expect(settingsOptions[2]?.hint).toBe("all projects");
+    expect(settingsOptions[2]?.hint).toBe("all repos");
     expect(mockRunSwitchTarget).not.toHaveBeenCalled();
   });
 
-  it("studying projects setting saves a subset of folders", async () => {
+  it("study scope setting saves a subset of repos", async () => {
     writeRealConfig(
       makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
     );
     mockIsCancel.mockReturnValue(false);
-    // Two dosu-cli sessions, one other, one whose directory can't be resolved.
+    // Two dosu-cli sessions, one other, one outside any repo.
     mockScanSessions.mockImplementation(() => [
       fakeSession("a", "dosu-cli"),
       fakeSession("b", "dosu-cli"),
       fakeSession("c", "other"),
       fakeSession("d"),
     ]);
-    mockMultiselect.mockResolvedValueOnce(["/repo/dosu-cli"]);
+    mockMultiselect.mockResolvedValueOnce(["github.com/acme/dosu-cli"]);
     mockMenuSelect
       .mockResolvedValueOnce("settings")
       .mockResolvedValueOnce("projects")
@@ -957,19 +960,17 @@ describe("runTUI", () => {
 
     await runTUI();
 
-    // Options are directories ordered by session count; unresolvable sessions
-    // get their own bucket.
+    // Options are repos ordered by session count; non-repo sessions are never offered.
     const [args] = mockMultiselect.mock.calls.at(-1) ?? [];
     const opts = (args as unknown as { options: Array<{ value: string }> }).options;
-    expect(opts.map((o) => o.value)).toEqual(["/repo/dosu-cli", "/repo/other", "(unknown)"]);
+    expect(opts.map((o) => o.value)).toEqual(["github.com/acme/dosu-cli", "github.com/acme/other"]);
     // The subset is persisted; the reopened settings row hints the new scope.
-    expect(loadSyncState().project_filter).toEqual(["/repo/dosu-cli"]);
+    expect(loadSyncState().repo_filter).toEqual(["github.com/acme/dosu-cli"]);
     const refreshed = mockMenuSelect.mock.calls[2]?.[1] ?? [];
-    // The single picked folder is named by its basename, not counted.
-    expect(refreshed.find((o) => o.value === "projects")?.hint).toBe("dosu-cli");
+    expect(refreshed.find((o) => o.value === "projects")?.hint).toBe("acme/dosu-cli");
   });
 
-  it("studying projects setting clears the filter when everything is picked", async () => {
+  it("study scope setting preselects a legacy folder scope's repos and clears it on save", async () => {
     writeRealConfig(
       makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
     );
@@ -984,7 +985,7 @@ describe("runTUI", () => {
       fakeSession("a", "dosu-cli"),
       fakeSession("b", "other"),
     ]);
-    mockMultiselect.mockResolvedValueOnce(["/repo/dosu-cli", "/repo/other"]);
+    mockMultiselect.mockResolvedValueOnce(["github.com/acme/dosu-cli", "github.com/acme/other"]);
     mockMenuSelect
       .mockResolvedValueOnce("settings")
       .mockResolvedValueOnce("projects")
@@ -993,10 +994,113 @@ describe("runTUI", () => {
 
     await runTUI();
 
-    // The saved filter preselects the picker; picking all clears it.
+    const hint = mockMenuSelect.mock.calls[1]?.[1]?.find((o) => o.value === "projects")?.hint;
+    expect(hint).toBe("1 folders (legacy)");
+    // The legacy scope's repos preselect the picker; picking all clears both filters.
     const [args] = mockMultiselect.mock.calls.at(-1) ?? [];
-    expect((args as { initialValues?: string[] }).initialValues).toEqual(["/repo/dosu-cli"]);
-    expect(loadSyncState().project_filter).toBeUndefined();
+    expect((args as { initialValues?: string[] }).initialValues).toEqual([
+      "github.com/acme/dosu-cli",
+    ]);
+    const state = loadSyncState();
+    expect(state.project_filter).toBeUndefined();
+    expect(state.repo_filter).toBeUndefined();
+  });
+
+  it("study scope setting keeps a picked repo with no remaining sessions removable", async () => {
+    writeRealConfig(
+      makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
+    );
+    saveSyncState({
+      schema_version: 1,
+      watermark: null,
+      consecutive_failures: 0,
+      repo_filter: ["github.com/acme/gone"],
+    });
+    mockIsCancel.mockReturnValue(false);
+    mockScanSessions.mockImplementation(() => [fakeSession("a", "dosu-cli")]);
+    mockMultiselect.mockResolvedValueOnce(["github.com/acme/dosu-cli"]);
+    mockMenuSelect
+      .mockResolvedValueOnce("settings")
+      .mockResolvedValueOnce("projects")
+      .mockResolvedValueOnce("back")
+      .mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    const [args] = mockMultiselect.mock.calls.at(-1) ?? [];
+    const opts = (args as unknown as { options: Array<{ value: string }> }).options;
+    expect(opts.map((o) => o.value)).toEqual(["github.com/acme/dosu-cli", "github.com/acme/gone"]);
+    expect(loadSyncState().repo_filter).toEqual(["github.com/acme/dosu-cli"]);
+  });
+
+  it("study scope setting explains an empty picker when no session ran in a repo", async () => {
+    writeRealConfig(
+      makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
+    );
+    mockScanSessions.mockImplementation(() => [fakeSession("a")]);
+    mockMenuSelect
+      .mockResolvedValueOnce("settings")
+      .mockResolvedValueOnce("projects")
+      .mockResolvedValueOnce("back")
+      .mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    expect(p.log.info).toHaveBeenCalledWith(
+      "No agent sessions inside a git repo found yet; nothing to scope.",
+    );
+    expect(mockMultiselect).not.toHaveBeenCalled();
+  });
+
+  it("study scope picker summarizes and validates the selection", async () => {
+    writeRealConfig(
+      makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
+    );
+    mockIsCancel.mockReturnValue(false);
+    mockScanSessions.mockImplementation(() => [
+      fakeSession("a", "dosu-cli"),
+      fakeSession("b", "other"),
+    ]);
+    mockMultiselect.mockResolvedValueOnce(["github.com/acme/dosu-cli"]);
+    mockMenuSelect
+      .mockResolvedValueOnce("settings")
+      .mockResolvedValueOnce("projects")
+      .mockResolvedValueOnce("back")
+      .mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    const [args] = mockMultiselect.mock.calls.at(-1) ?? [];
+    const { summary, validate } = args as unknown as {
+      summary: (picked: string[]) => string;
+      validate: (picked: string[]) => string | undefined;
+    };
+    expect(summary(["a", "b"])).toBe("all repos \u00B7 new ones included automatically");
+    expect(summary(["a"])).toBe("1 of 2 repos");
+    expect(validate([])).toBe("Select at least one repo.");
+    expect(validate(["a"])).toBeUndefined();
+  });
+
+  it.each([
+    [[], "no repos"],
+    [["github.com/acme/a", "github.com/acme/b", "github.com/acme/c"], "3 repos"],
+  ])("settings hints a %j repo scope as %s", async (repoFilter, hint) => {
+    writeRealConfig(makeCfg({}));
+    saveSyncState({
+      schema_version: 1,
+      watermark: null,
+      consecutive_failures: 0,
+      repo_filter: repoFilter,
+    });
+    mockMenuSelect
+      .mockResolvedValueOnce("settings")
+      .mockResolvedValueOnce("back")
+      .mockResolvedValueOnce("exit");
+
+    await runTUI();
+
+    const settingsOptions = mockMenuSelect.mock.calls[1]?.[1] ?? [];
+    expect(settingsOptions.find((o) => o.value === "projects")?.hint).toBe(hint);
   });
 
   it("settings shows 'not configured' before any target exists", async () => {

@@ -14,6 +14,11 @@ vi.mock("../sessions/scan", () => ({
   scanAgentSessions: (...args: unknown[]) => mockScanSessions(...args),
 }));
 
+const mockCreateResolver = vi.hoisted(() => vi.fn());
+vi.mock("../sessions/project-dir", () => ({
+  createProjectDirResolver: (...args: unknown[]) => mockCreateResolver(...args),
+}));
+
 const NOW = new Date("2026-08-25T12:00:00Z");
 
 function session(updatedOffsetMinutes: number): AgentSession {
@@ -55,11 +60,21 @@ function makeDeps(overrides: Partial<SyncDeps> = {}): { deps: SyncDeps; saved: S
     worthShipping: () => true,
     isIncognito: () => false,
     lock: openLock(),
+    locator: { resolve: () => "/repo/dosu-cli", resolveRepo: () => DOSU_CLI },
     now: () => NOW,
     ...overrides,
   };
   return { deps, saved };
 }
+
+const DOSU_CLI = "github.com/dosu-ai/dosu-cli";
+
+/** Sessions sit in `/repo/<project>`; project "dosu-cli" is DOSU_CLI, no project is no repo. */
+const projectLocator = {
+  resolve: (s: AgentSession) => (s.project ? `/repo/${s.project}` : null),
+  resolveRepo: (s: AgentSession) =>
+    s.project ? (s.project === "dosu-cli" ? DOSU_CLI : `github.com/x/${s.project}`) : null,
+};
 
 describe("runKnowledgeSync gate", () => {
   it("reports a backlog of completed sessions when there is no ship step", async () => {
@@ -90,19 +105,134 @@ describe("runKnowledgeSync gate", () => {
     expect(logged).toContain("(+2 more)");
   });
 
-  it("gates out sessions outside the project filter", async () => {
+  it("gates out sessions outside the repo filter", async () => {
     const inScope = { ...session(60), project: "dosu-cli" };
     const outScope = { ...session(30), project: "other" };
-    const unknown = session(40); // directory unresolvable → "(unknown)"
     const { deps } = makeDeps({
-      loadState: () => state({ project_filter: ["/repo/dosu-cli"] }),
-      listSessions: vi.fn().mockResolvedValue([inScope, outScope, unknown]),
-      resolveProjectDir: (s) => (s.project ? `/repo/${s.project}` : null),
+      loadState: () => state({ repo_filter: [DOSU_CLI] }),
+      listSessions: vi.fn().mockResolvedValue([inScope, outScope]),
+      locator: projectLocator,
     });
 
     const outcome = await runKnowledgeSync({ deps });
 
     expect(outcome.sessions.map((s) => s.id)).toEqual([inScope.id]);
+  });
+
+  it("studies sessions outside a git repo when no repo filter is set", async () => {
+    const inRepo = { ...session(60), project: "other" };
+    const noRepo = session(40);
+    const { deps } = makeDeps({
+      listSessions: vi.fn().mockResolvedValue([inRepo, noRepo]),
+      locator: projectLocator,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.sessions.map((s) => [s.id, s.repo])).toEqual([
+      [inRepo.id, "github.com/x/other"],
+      [noRepo.id, undefined],
+    ]);
+  });
+
+  it("leaves sessions outside a git repo out of a repo filter", async () => {
+    const inRepo = { ...session(60), project: "dosu-cli" };
+    const { deps } = makeDeps({
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        repo_filter: [DOSU_CLI],
+      }),
+      listSessions: vi.fn().mockResolvedValue([inRepo, session(40)]),
+      locator: projectLocator,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.sessions.map((s) => s.id)).toEqual([inRepo.id]);
+  });
+
+  it("converts a legacy folder scope to the repos its sessions ran in and persists it", async () => {
+    mockScanSessions
+      .mockReset()
+      .mockReturnValue([
+        { ...session(90), project: "dosu-cli" },
+        { ...session(95), project: "other" },
+        session(99),
+      ]);
+    const inScope = { ...session(60), project: "dosu-cli" };
+    const outScope = { ...session(30), project: "other" };
+    const { deps, saved } = makeDeps({
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        project_filter: ["/repo/dosu-cli", "(unknown)"],
+      }),
+      listSessions: vi.fn().mockResolvedValue([inScope, outScope]),
+      locator: projectLocator,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.sessions.map((s) => s.id)).toEqual([inScope.id]);
+    expect(saved[0].repo_filter).toEqual([DOSU_CLI]);
+    expect(saved[0].project_filter).toBeUndefined();
+  });
+
+  it("a legacy folder scope with no repos in it studies nothing", async () => {
+    mockScanSessions.mockReset().mockReturnValue([session(99)]);
+    const { deps, saved } = makeDeps({
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        project_filter: ["(unknown)"],
+      }),
+      listSessions: vi.fn().mockResolvedValue([{ ...session(60), project: "dosu-cli" }]),
+      locator: projectLocator,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.status).toBe("nothing-new");
+    expect(saved[0].repo_filter).toEqual([]);
+  });
+
+  it("drops an empty legacy folder scope and studies every repo", async () => {
+    const inRepo = { ...session(60), project: "dosu-cli" };
+    const { deps, saved } = makeDeps({
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        project_filter: [],
+      }),
+      listSessions: vi.fn().mockResolvedValue([inRepo]),
+      locator: projectLocator,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.sessions.map((s) => s.id)).toEqual([inRepo.id]);
+    expect(saved[0].repo_filter).toBeUndefined();
+    expect(saved[0].project_filter).toBeUndefined();
+  });
+
+  it("resolves repos with the on-disk resolver by default and flushes its cache", async () => {
+    const flush = vi.fn();
+    mockCreateResolver.mockReset().mockReturnValue({ ...projectLocator, flush });
+    const inRepo = { ...session(60), project: "dosu-cli" };
+    const { deps } = makeDeps({
+      listSessions: vi.fn().mockResolvedValue([inRepo, session(40)]),
+      locator: undefined,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.sessions.map((s) => s.repo)).toEqual([DOSU_CLI, undefined]);
+    expect(flush).toHaveBeenCalledOnce();
   });
 
   it("reports nothing-new when the gate is empty", async () => {
@@ -284,14 +414,14 @@ describe("runKnowledgeSync shipping", () => {
     const tiny = session(60);
     const { deps, saved } = makeDeps({
       listSessions: vi.fn().mockResolvedValue([session(30), tiny, secret]),
-      isIncognito: (s) => s === secret,
-      worthShipping: (s) => s !== tiny,
+      isIncognito: (s) => s.id === secret.id,
+      worthShipping: (s) => s.id !== tiny.id,
       ship,
     });
 
     const outcome = await runKnowledgeSync({ deps });
 
-    expect(vi.mocked(ship).mock.calls[0][0]).toEqual([session(30)]);
+    expect(vi.mocked(ship).mock.calls[0][0]).toEqual([{ ...session(30), repo: DOSU_CLI }]);
     expect(outcome.counts).toMatchObject({ shipped: 1, incognito: 1, trivial: 1 });
     expect(saved.at(-1)?.watermark).toBe(session(30).updated);
   });

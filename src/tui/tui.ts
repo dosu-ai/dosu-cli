@@ -1,6 +1,5 @@
 /** TUI entry point; launches when `dosu` is run without arguments. */
 
-import { homedir } from "node:os";
 import { basename } from "node:path";
 import pc from "picocolors";
 import { Client, SessionExpiredError } from "../client/client";
@@ -18,12 +17,13 @@ import { getHookAgent } from "../hooks/agents";
 import { allSetupProviders } from "../mcp/providers";
 import { emitKnowledgeReport } from "../report/generate";
 import { createProjectDirResolver } from "../sessions/project-dir";
+import { displayRepo } from "../sessions/repo";
 import { scanAgentSessions } from "../sessions/scan";
 import { dosuAgentsSectionState, inGitWorkTree } from "../setup/agents-md-step";
 import { runSetup, runSwitchTarget } from "../setup/flow";
 import { brand, browserFallbackHint, dim } from "../setup/styles";
 import { getSyncStatus } from "../sync/status";
-import { loadSyncState, saveSyncState, UNKNOWN_PROJECT } from "../sync/watermark";
+import { loadSyncState, saveSyncState, studyRepoFilter } from "../sync/watermark";
 import { buildUpdateHint, getAvailableUpdate } from "../version/update-check";
 import { getVersionString, INSTALL_CHANNEL, isNpxInvocation } from "../version/version";
 import { runActivityView } from "./activity-view";
@@ -326,13 +326,18 @@ async function runSettings(cfg: Config): Promise<void> {
     const target = cfg.active_account?.target;
     // Older configs predate org_name/library_name; fall back rather than show nothing.
     const library = target?.library_name ?? target?.deployment_name ?? "not configured";
-    const filter = loadSyncState().project_filter;
-    // Name the picked projects while they fit; count only when they don't.
-    const scope = !filter?.length
-      ? "all projects"
-      : filter.length <= 2
-        ? filter.map((dir) => (dir === UNKNOWN_PROJECT ? "unknown" : basename(dir))).join(", ")
-        : `${filter.length} projects`;
+    const sync = loadSyncState();
+    const filter = sync.repo_filter;
+    // Name the picked repos while they fit; count only when they don't.
+    const scope = !filter
+      ? sync.project_filter?.length
+        ? `${sync.project_filter.length} folders (legacy)`
+        : "all repos"
+      : filter.length === 0
+        ? "no repos"
+        : filter.length <= 2
+          ? filter.map(displayRepo).join(", ")
+          : `${filter.length} repos`;
     const action = await menuSelect("settings", [
       { label: "switch organization", hint: target?.org_name, value: "switch-org" },
       { label: "switch library", hint: library, value: "switch-library" },
@@ -368,57 +373,52 @@ async function runSettings(cfg: Config): Promise<void> {
   }
 }
 
-/** Home-relative display form of an absolute directory. */
-function displayDir(dir: string): string {
-  const home = homedir();
-  return dir === home ? "~" : dir.startsWith(`${home}/`) ? `~${dir.slice(home.length)}` : dir;
-}
-
-/** Distinct session working directories, most sessions first; unknowns get UNKNOWN_PROJECT. */
-function discoverProjectDirs(): string[] {
+/** Repos the local sessions ran in plus the current scope, most sessions first; sessions
+ * outside a git repo have no repo to pick, and are studied only when every repo is. */
+function discoverSessionRepos(current: readonly string[] | null): string[] {
   const counts = new Map<string, number>();
   try {
     const resolver = createProjectDirResolver();
     for (const session of scanAgentSessions({})) {
-      const key = resolver.resolve(session) ?? UNKNOWN_PROJECT;
-      counts.set(key, (counts.get(key) ?? 0) + 1);
+      const repo = resolver.resolveRepo(session);
+      if (repo) counts.set(repo, (counts.get(repo) ?? 0) + 1);
     }
     resolver.flush();
   } catch {
     // An unreadable session store just yields an empty picker.
   }
-  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([dir]) => dir);
+  // A picked repo whose sessions have all aged out must stay removable.
+  for (const repo of current ?? []) if (!counts.has(repo)) counts.set(repo, 0);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([repo]) => repo);
 }
 
-/** Scope shipping to selected folders (subdirectories included); picking everything clears the
- * filter so new folders are shipped too. */
+/** Scope shipping to selected repos; picking everything clears the filter so new repos are
+ * shipped too. */
 async function runStudyingProjectsSetting(): Promise<void> {
-  const dirs = discoverProjectDirs();
-  if (dirs.length === 0) {
-    p.log.info("No local agent sessions found yet; nothing to scope.");
+  const state = loadSyncState();
+  const current = studyRepoFilter(state, () => scanAgentSessions({}), createProjectDirResolver());
+  const repos = discoverSessionRepos(current);
+  if (repos.length === 0) {
+    p.log.info("No agent sessions inside a git repo found yet; nothing to scope.");
     return;
   }
-  const current = loadSyncState().project_filter;
   const selected = await p.multiselect({
-    message: "Ship sessions to Dosu memory from which folders?",
-    options: dirs.map((dir) => ({
-      label: dir === UNKNOWN_PROJECT ? "(unknown folder)" : displayDir(dir),
-      value: dir,
-    })),
-    initialValues: current?.length ? current : dirs,
+    message: "Ship sessions to Dosu memory from which repos?",
+    options: repos.map((repo) => ({ label: displayRepo(repo), hint: repo, value: repo })),
+    initialValues: current ?? repos,
     summary: (picked) =>
-      picked.length === dirs.length
-        ? "all folders \u00B7 new ones included automatically"
-        : `${picked.length} of ${dirs.length} folders \u00B7 subfolders included`,
-    validate: (picked) => (picked.length === 0 ? "Select at least one folder." : undefined),
+      picked.length === repos.length
+        ? "all repos \u00B7 new ones included automatically"
+        : `${picked.length} of ${repos.length} repos`,
+    validate: (picked) => (picked.length === 0 ? "Select at least one repo." : undefined),
   });
   if (p.isCancel(selected)) return;
 
   // Reload right before writing: a background sync may have advanced the state.
-  const { project_filter: _previous, ...state } = loadSyncState();
-  const all = selected.length === dirs.length;
-  saveSyncState(all ? state : { ...state, project_filter: [...selected] });
-  const scope = all ? "all folders" : (selected as string[]).map(displayDir).join(", ");
+  const { repo_filter: _repos, project_filter: _folders, ...fresh } = loadSyncState();
+  const all = selected.length === repos.length;
+  saveSyncState(all ? fresh : { ...fresh, repo_filter: [...selected] });
+  const scope = all ? "all repos" : (selected as string[]).map(displayRepo).join(", ");
   p.log.success(`Sync scope ${dim(`\u00B7 ${scope}`)}`);
 }
 

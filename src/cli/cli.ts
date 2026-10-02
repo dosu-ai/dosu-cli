@@ -59,6 +59,7 @@ import { checkForReadyTasks } from "../version/pending-tasks-check";
 import { checkForSkillUpdates } from "../version/skill-update-check";
 import { checkForUpdates } from "../version/update-check";
 import { getVersionString, VERSION } from "../version/version";
+import { CliUsageError } from "./errors";
 
 /** Commands that skip the update / skill / ready-task checks: `upgrade` does its own, and the
  * prompt-submit hook runs on every prompt while the user waits. */
@@ -83,15 +84,6 @@ export function shouldRunMcpRefreshCheck(actionCommand: Command): boolean {
 }
 
 const TELEMETRY_FLUSH_TIMEOUT_MS = 750;
-
-class CliUsageError extends Error {
-  readonly exitCode = 1;
-
-  constructor(message: string) {
-    super(message);
-    this.name = "CliUsageError";
-  }
-}
 
 function commandTelemetryName(actionCommand: Command): string {
   const segments: string[] = [];

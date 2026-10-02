@@ -1,11 +1,9 @@
 /** Setup flow: interactive wizard. */
 
 import { randomUUID } from "node:crypto";
-import { isTRPCClientError } from "@trpc/client";
 import pc from "picocolors";
 import { OAuthCallbackError } from "../auth/errors";
 import { Client, type Deployment, type Org, SessionExpiredError } from "../client/client";
-import type { TypedClient } from "../client/trpc";
 import { installSkill, skillInstallTargetForProvider } from "../commands/skill";
 import {
   bindAccountIdentity,
@@ -18,7 +16,6 @@ import {
   saveConfig,
   updateTarget,
 } from "../config/config";
-import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
 import type { CliLibrary } from "../generated/dosu-api-types";
 import { getHookAgent } from "../hooks/agents";
@@ -39,7 +36,6 @@ import { writeMcpRefreshCache } from "../version/mcp-refresh-check";
 import { VERSION } from "../version/version";
 import { inGitWorkTree, stepUpdateAgentsMd } from "./agents-md-step";
 import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
-import { stepConnectGitHubRepo } from "./github-step";
 import { stepConfigureAgentRules } from "./rules-step";
 import {
   brand,
@@ -262,12 +258,6 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
   // a missing name never blocks setup.
   if (cfg.mode !== MODE_OSS) {
     await stepShowLibrary(cfg);
-  }
-
-  // GitHub guard (cloud only): an MCP with no connected repo answers from nothing. The offer is
-  // fail-open, so setup never blocks on this step.
-  if (cfg.mode !== MODE_OSS) {
-    await stepOfferGithubConnect(cfg);
   }
 
   // API key: `stepMintAPIKey` is idempotent — it validates an existing key
@@ -717,57 +707,6 @@ async function stepSetupHandshake(cfg: Config, onboardingRunID: string): Promise
         "`dosu logout`, then retry. Otherwise finish in the browser and re-run `dosu setup`.",
     );
     return false;
-  }
-}
-
-/** Offer the interactive GitHub connect step when the MCP's space has no GitHub source yet.
- * Fail-open by design: this step is a nudge, never a gate, so setup always proceeds. */
-async function stepOfferGithubConnect(cfg: Config): Promise<void> {
-  const target = cfg.active_account?.target;
-  // stepConnectGitHubRepo needs org+space context to connect anything, so
-  // without it the offer could only dead-end.
-  if (!target?.org_id || !target?.space_id) return;
-
-  try {
-    const { createTypedClient } = await import("../client/trpc");
-    const trpc = createTypedClient(cfg);
-    if (await spaceHasGithubSource(trpc, target.space_id)) return;
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.warn("setup", `GitHub source check failed, skipping offer: ${msg}`);
-    return;
-  }
-
-  logger.info("setup", "Step: offer GitHub connect (no GitHub source in the MCP's Library)");
-  p.log.warn("No GitHub repos are connected to this MCP yet, so it can't answer from your code.");
-  const connectNow = await p.confirm({
-    message: "Connect a GitHub repo now?",
-    active: "Connect now",
-    inactive: "Skip for now",
-    initialValue: true,
-  });
-  if (p.isCancel(connectNow) || !connectNow) {
-    p.log.info(
-      `Skipped. Connect later at ${info(`${getWebAppURL()}/libraries`)} or re-run ${info("dosu setup")}.`,
-    );
-    return;
-  }
-  await stepConnectGitHubRepo(cfg);
-}
-
-/** Library sources are the truth for "answers from code"; deployment rows can be orphans that
- * would suppress the offer forever. Old backends fall back to the deployment heuristic. */
-async function spaceHasGithubSource(trpc: TypedClient, spaceID: string): Promise<boolean> {
-  try {
-    const sources = await trpc.libraries.sourcesList.query(spaceID);
-    return (sources ?? []).some((source) => source.provider_slug === "github");
-  } catch (err: unknown) {
-    const missingProcedure =
-      isTRPCClientError(err) && (err.data as { code?: string } | null)?.code === "NOT_FOUND";
-    if (!missingProcedure) throw err;
-    const spaceDeployments: { provider_slug?: string | null }[] | null =
-      await trpc.workspaces.listForSpace.query(spaceID);
-    return (spaceDeployments ?? []).some((d) => d.provider_slug === "github");
   }
 }
 

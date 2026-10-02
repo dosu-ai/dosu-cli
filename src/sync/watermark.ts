@@ -55,8 +55,10 @@ export interface SyncState {
   total_shipped?: number;
   /** The active run's progress baseline; see SyncRun. */
   run?: SyncRun;
-  /** Absolute directories whose sessions get shipped (subdirectories included); absent means
-   * everywhere. Undeterminable directories match UNKNOWN_PROJECT. */
+  /** Repo keys (`host/owner/repo`) whose sessions get shipped; absent means every session,
+   * including those outside a git repo. */
+  repo_filter?: string[];
+  /** Legacy folder scope from before repo scoping; the next sync converts it to repo_filter. */
   project_filter?: string[];
   /** User pressed stop: quiet (hook-triggered) syncs skip until resumed. Cleared by the
    * Activity screen's resume or any manual `dosu knowledge sync`. */
@@ -81,6 +83,10 @@ function emptyState(): SyncState {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function stringsOf(values: unknown[]): string[] {
+  return values.filter((v): v is string => typeof v === "string");
 }
 
 function nonNegative(value: unknown): number | undefined {
@@ -121,13 +127,8 @@ function parseProgress(raw: Record<string, unknown>): Omit<SyncState, "schema_ve
 /** User choices shared by both schemas. */
 function parseSettings(raw: Record<string, unknown>): Partial<SyncState> {
   return {
-    ...(Array.isArray(raw.project_filter)
-      ? {
-          project_filter: (raw.project_filter as unknown[]).filter(
-            (p): p is string => typeof p === "string",
-          ),
-        }
-      : {}),
+    ...(Array.isArray(raw.repo_filter) ? { repo_filter: stringsOf(raw.repo_filter) } : {}),
+    ...(Array.isArray(raw.project_filter) ? { project_filter: stringsOf(raw.project_filter) } : {}),
     ...(raw.paused === true ? { paused: true } : {}),
   };
 }
@@ -185,13 +186,14 @@ export function setSyncPaused(paused: boolean, configDir: string = getConfigDir(
 
 /** Forget everything shipped so the next run starts from scratch: watermark, history, lifetime
  * counter, and failure backoff (the backend dedupes re-shipped traces on content hash). User
- * settings survive — the project filter, the pause switch, and the shipping opt-out are
+ * settings survive — the study scope, the pause switch, and the shipping opt-out are
  * choices, not progress. Memory already built in Dosu is untouched. */
 export function resetSyncState(configDir: string = getConfigDir()): void {
   const previous = loadSyncState(configDir);
   saveSyncState(
     {
       ...emptyState(),
+      ...(previous.repo_filter ? { repo_filter: previous.repo_filter } : {}),
       ...(previous.project_filter ? { project_filter: previous.project_filter } : {}),
       ...(previous.paused ? { paused: true } : {}),
       ...(previous.ship_transcripts === false ? { ship_transcripts: false as const } : {}),
@@ -236,30 +238,55 @@ export function backoffUntil(state: SyncState): Date | null {
   return new Date(last + delay);
 }
 
-/** Bucket for sessions whose working directory can't be determined. */
-export const UNKNOWN_PROJECT = "(unknown)";
-
 /** Whether dir is at or under base (path-boundary-aware prefix match). */
 export function isUnderDir(dir: string, base: string): boolean {
   const root = base.endsWith("/") ? base.slice(0, -1) : base;
   return dir === root || dir.startsWith(`${root}/`);
 }
 
-/** Apply the shipping directory filter (empty passes everything): a session matches at or under
- * any picked directory; unresolvable sessions match only UNKNOWN_PROJECT. */
-export function filterSessionsByProject(
+/** Session → working directory and repo, as the cached project-dir resolver provides. */
+export interface SessionLocator {
+  resolve(session: AgentSession): string | null;
+  resolveRepo(session: AgentSession): string | null;
+}
+
+/** The repos shipping is limited to, or null for every repo. A legacy folder scope becomes the
+ * repos its folders' sessions ran in, so upgrading never widens what the user picked. */
+export function studyRepoFilter(
+  state: Pick<SyncState, "repo_filter" | "project_filter">,
+  listSessions: () => readonly AgentSession[],
+  locator: SessionLocator,
+): string[] | null {
+  if (state.repo_filter) return state.repo_filter;
+  const folders = state.project_filter;
+  if (!folders?.length) return null;
+  const repos = new Set<string>();
+  for (const session of listSessions()) {
+    const dir = locator.resolve(session);
+    if (!dir || !folders.some((base) => isUnderDir(dir, base))) continue;
+    const repo = locator.resolveRepo(session);
+    if (repo) repos.add(repo);
+  }
+  return [...repos].sort();
+}
+
+/** Keep the sessions in scope, each tagged with its repo when it ran in one: with a `filter`,
+ * only sessions in a picked repo; without one, every session, in a repo or not. */
+export function filterSessionsByRepo(
   sessions: readonly AgentSession[],
-  filter: readonly string[] | undefined,
-  resolveDir: (session: AgentSession) => string | null,
+  filter: readonly string[] | null,
+  resolveRepo: (session: AgentSession) => string | null,
 ): AgentSession[] {
-  if (!filter || filter.length === 0) return [...sessions];
-  const includeUnknown = filter.includes(UNKNOWN_PROJECT);
-  const dirs = filter.filter((entry) => entry !== UNKNOWN_PROJECT);
-  return sessions.filter((session) => {
-    const dir = resolveDir(session);
-    if (!dir) return includeUnknown;
-    return dirs.some((base) => isUnderDir(dir, base));
-  });
+  const kept: AgentSession[] = [];
+  for (const session of sessions) {
+    const repo = resolveRepo(session);
+    if (repo !== null && (filter === null || filter.includes(repo))) {
+      kept.push({ ...session, repo });
+    } else if (filter === null) {
+      kept.push(session);
+    }
+  }
+  return kept;
 }
 
 export interface GateResult {

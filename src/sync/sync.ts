@@ -10,14 +10,16 @@ import { isIncognitoSession } from "./incognito";
 import { fileLock, type SyncLock } from "./lock";
 import {
   backoffUntil,
-  filterSessionsByProject,
+  filterSessionsByRepo,
   gateSessions,
   isShippingEnabled,
   loadSyncState,
+  type SessionLocator,
   SHIPPED_HISTORY_LIMIT,
   type ShippedSessionRecord,
   type SyncState,
   saveSyncState,
+  studyRepoFilter,
 } from "./watermark";
 
 /** Every run, the first-time backfill included, looks back this far and no further: memory
@@ -91,8 +93,9 @@ export interface SyncDeps {
   worthShipping?: (session: AgentSession) => boolean;
   /** Per-session opt-out check; defaults to isIncognitoSession (transcript marker). */
   isIncognito?: (session: AgentSession) => boolean;
-  /** Session → working directory, for the project filter; defaults to the cached resolver. */
-  resolveProjectDir?: (session: AgentSession) => string | null;
+  /** Session → working directory and repo, for the shipping scope; defaults to the cached
+   * resolver. */
+  locator?: SessionLocator;
   lock?: SyncLock;
   now?: () => Date;
 }
@@ -181,20 +184,30 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     const listSessions =
       deps.listSessions ??
       (() => scanAgentSessions(options.bootstrap ? { since } : { since, limit: SCAN_LIMIT }));
-    let sessions = await listSessions();
-    if (state.project_filter?.length) {
-      // Resolver only when filtering: it reads session heads on cache misses.
-      let resolve = deps.resolveProjectDir;
-      let flush: (() => void) | undefined;
-      if (!resolve) {
-        const resolver = createProjectDirResolver();
-        resolve = resolver.resolve;
-        flush = resolver.flush;
-      }
-      sessions = filterSessionsByProject(sessions, state.project_filter, resolve);
-      flush?.();
-      logger.debug("sync", `project filter active: ${state.project_filter.join(", ")}`);
+    const scanned = await listSessions();
+    let flush: (() => void) | undefined;
+    let locator = deps.locator;
+    if (!locator) {
+      const resolver = createProjectDirResolver();
+      locator = resolver;
+      flush = resolver.flush;
     }
+    const repoFilter = studyRepoFilter(state, () => scanAgentSessions({}), locator);
+    if (state.project_filter) {
+      // One-time upgrade of a folder scope, saved now: a run that ships nothing saves no state.
+      delete state.project_filter;
+      if (repoFilter) state.repo_filter = repoFilter;
+      saveState(state);
+      logger.debug("sync", `folder scope converted to repos: ${repoFilter?.join(", ") || "none"}`);
+    }
+    const sessions = filterSessionsByRepo(scanned, repoFilter, (s) => locator.resolveRepo(s));
+    flush?.();
+    logger.debug(
+      "sync",
+      `shipping scope ${repoFilter ? repoFilter.join(", ") || "none" : "all repos"}: ${
+        sessions.length
+      } of ${scanned.length} sessions in scope`,
+    );
     ({ ready, open } = gateSessions(sessions, state.watermark, now()));
     logGateResult(ready, open.length, state.watermark);
   } catch (err) {
@@ -267,7 +280,8 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
         results = [{ session: batch[0], outcome: "failed", message }];
       }
     }
-    const resultOf = new Map(results.map((r) => [r.session, r]));
+    // By key, not identity: scoping hands the batch out as repo-tagged copies.
+    const resultOf = new Map(results.map((r) => [key(r.session), r]));
 
     // Settle in order and stop at the first session the ship step did not finish: the
     // watermark must never jump past a session that still has to be retried.
@@ -283,7 +297,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
         settled.push(session);
         continue;
       }
-      const result = resultOf.get(session);
+      const result = resultOf.get(key(session));
       if (!result || result.outcome === "failed") {
         if (result) {
           counts.failed += 1;

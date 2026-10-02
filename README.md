@@ -117,9 +117,9 @@ Once authenticated against a deployment, you can drive the Dosu platform without
 |---|---|
 | `dosu ask` | Ask a question and get an AI-generated answer |
 | `dosu knowledge` | Search and browse your knowledge base |
-| `dosu docs` | Manage documents (list, create, update, import, publish, AI-generate) |
+| `dosu docs` | Manage documents (list, create, update, import, publish) |
 | `dosu threads` | List and manage conversation threads |
-| `dosu review` | Document review workflow |
+| `dosu review` | Document review workflow, plus `review notifications` to route a Library's or Agent's reviews to a Slack channel |
 | `dosu sources` | Manage connected data sources (list, connect, create, sync, update) |
 | `dosu integrations` | List and inspect platform integrations (Slack, GitHub, …) |
 | `dosu topics` | List knowledge base topics and their pages |
@@ -184,8 +184,9 @@ dosu knowledge incognito enable|disable [claude|cursor|codex]  # the /dosu-incog
 ```
 
 The status line shows one of `📚 Dosu learning…`, `👻 Dosu incognito`, `⚪ Dosu paused`,
-`⚪ Dosu not learning from this folder`, or `⚪ Dosu off`. Neither setup nor `enable` replaces a status
-line you already have; they print the one-liner to add to your own script instead.
+`⚪ Dosu not learning from this repo`, or `⚪ Dosu off`. Every session is shipped unless you limit
+syncing to picked repos under `dosu` → settings → study scope. Neither setup nor `enable` replaces a
+status line you already have; they print the one-liner to add to your own script instead.
 
 Running `/dosu-incognito` inside a session marks that session's transcript so it is never shipped
 (the whole session, and for the rest of it — start a new session to turn Dosu back on) and tells the

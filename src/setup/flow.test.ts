@@ -1228,174 +1228,17 @@ describe("runSetup integration", () => {
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Main Library"));
   });
 
-  it("offers and runs the GitHub connect step when the MCP's Library has no GitHub source", async () => {
-    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
-    setupAuthenticatedClient();
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockTrpc.libraries.sourcesList.query.mockResolvedValue([]);
-    vi.mocked(p.confirm).mockResolvedValue(true as never);
-
-    await runSetup();
-
-    // Scoped to the selected MCP's space — not an org-wide source check.
-    expect(mockTrpc.libraries.sourcesList.query).toHaveBeenCalledWith("s1");
-    expect(p.log.warn).toHaveBeenCalledWith(
-      expect.stringContaining("No GitHub repos are connected"),
-    );
-    expect(mockStepConnectGitHubRepo).toHaveBeenCalledTimes(1);
-  });
-
-  it("still offers the connect step when only an orphaned github deployment remains", async () => {
-    // Removing a source in the web UI leaves its Monitor (`github` deployment)
-    // behind. That orphan must not suppress the offer — sources are the truth.
-    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
-    setupAuthenticatedClient();
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockTrpc.libraries.sourcesList.query.mockResolvedValue([]);
-    mockTrpc.workspaces.listForSpace.query.mockResolvedValue([
-      { deployment_id: "d-gh", provider_slug: "github", name: "acme/repo" },
-    ]);
-    vi.mocked(p.confirm).mockResolvedValue(true as never);
-
-    await runSetup();
-
-    expect(mockStepConnectGitHubRepo).toHaveBeenCalledTimes(1);
-    // Deployments are only consulted on the old-backend fallback path.
-    expect(mockTrpc.workspaces.listForSpace.query).not.toHaveBeenCalled();
-  });
-
-  it("points at the web app and continues setup when the user continues without GitHub", async () => {
+  it("never prompts to connect GitHub, even when the MCP's Library has no GitHub source", async () => {
     saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
     const clientMethods = setupAuthenticatedClient();
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
     mockTrpc.libraries.sourcesList.query.mockResolvedValue([]);
-    vi.mocked(p.confirm).mockResolvedValue(false as never);
-
-    await runSetup();
-
-    expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
-    expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("Connect later at"));
-    // Continuing without GitHub is not a failure — setup proceeds to the API key step.
-    expect(clientMethods.validateAPIKey).toHaveBeenCalled();
-  });
-
-  it("treats a cancelled GitHub confirm as a decline and continues setup", async () => {
-    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
-    const clientMethods = setupAuthenticatedClient();
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    // `null` list exercises the `?? []` fallback alongside the cancel path.
-    mockTrpc.libraries.sourcesList.query.mockResolvedValue(null);
-    const cancelSentinel = Symbol("clack:cancel");
-    vi.mocked(p.confirm).mockResolvedValue(cancelSentinel as never);
-    vi.mocked(p.isCancel).mockImplementation((value: unknown) => value === cancelSentinel);
-
-    await runSetup();
-
-    expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
-    expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("Connect later at"));
-    expect(clientMethods.validateAPIKey).toHaveBeenCalled();
-  });
-
-  it("stays quiet when the MCP's Library already has a GitHub source", async () => {
-    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
-    setupAuthenticatedClient();
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    // installRemoteSetupDefaults() already attaches a github source to the Library.
-
-    await runSetup();
-
-    expect(p.confirm).not.toHaveBeenCalled();
-    expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
-  });
-
-  it("falls back to the deployment check on backends without the libraries router", async () => {
-    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
-    setupAuthenticatedClient();
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockTrpc.libraries.sourcesList.query.mockRejectedValue(
-      trpcNotFoundError("libraries.sourcesList"),
-    );
-    mockTrpc.workspaces.listForSpace.query.mockResolvedValue([
-      { deployment_id: "d-gh", provider_slug: "github", name: "acme/repo" },
-    ]);
-
-    await runSetup();
-
-    // Old heuristic: a `github` deployment in the space keeps the offer quiet.
-    expect(mockTrpc.workspaces.listForSpace.query).toHaveBeenCalledWith("s1");
-    expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
-  });
-
-  it("offers the connect step via the fallback when the old backend has no github deployment", async () => {
-    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
-    setupAuthenticatedClient();
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockTrpc.libraries.sourcesList.query.mockRejectedValue(
-      trpcNotFoundError("libraries.sourcesList"),
-    );
-    mockTrpc.workspaces.listForSpace.query.mockResolvedValue([]);
-    vi.mocked(p.confirm).mockResolvedValue(true as never);
-
-    await runSetup();
-
-    expect(mockStepConnectGitHubRepo).toHaveBeenCalledTimes(1);
-  });
-
-  it("skips the GitHub offer silently when the source lookup fails", async () => {
-    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
-    const clientMethods = setupAuthenticatedClient();
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockTrpc.libraries.sourcesList.query.mockRejectedValue(new Error("backend down"));
-
-    await runSetup();
-
-    expect(p.confirm).not.toHaveBeenCalled();
-    expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
-    // Fail-open: setup still proceeds.
-    expect(clientMethods.validateAPIKey).toHaveBeenCalled();
-  });
-
-  it("skips the GitHub offer when the source lookup rejects with a non-Error", async () => {
-    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined }));
-    const clientMethods = setupAuthenticatedClient();
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    // tRPC boundaries can reject with plain values; the step must stringify
-    // them for the debug log without blowing up.
-    mockTrpc.libraries.sourcesList.query.mockRejectedValue("backend down");
 
     await runSetup();
 
     expect(p.confirm).not.toHaveBeenCalled();
     expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
     expect(clientMethods.validateAPIKey).toHaveBeenCalled();
-  });
-
-  it("skips the GitHub offer when the target has an org but no space", async () => {
-    // Legacy/partial targets can carry org_id without space_id; the connect
-    // step couldn't run there, so the offer must not fire either.
-    saveConfig(makeCfg({ org_id: "o1", space_id: undefined }));
-    setupAuthenticatedClient();
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-
-    await runSetup();
-
-    expect(mockTrpc.libraries.sourcesList.query).not.toHaveBeenCalled();
-    expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
-  });
-
-  it("never offers the GitHub connect step in OSS mode", async () => {
-    saveConfig(makeCfg({ deployment_id: undefined, deployment_name: undefined, mode: "oss" }));
-    setupAuthenticatedClient();
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-    mockStartOAuthFlow.mockResolvedValue({
-      browserOpened: true,
-      token: { access_token: "tok", refresh_token: "ref", expires_in: 3600 },
-    });
-
-    await runSetup();
-
-    expect(mockTrpc.libraries.sourcesList.query).not.toHaveBeenCalled();
-    expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
   });
 
   it("completes full flow with tool install via real filesystem", async () => {

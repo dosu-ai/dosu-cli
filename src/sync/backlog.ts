@@ -5,7 +5,7 @@ import { createProjectDirResolver } from "../sessions/project-dir";
 import { type AgentSession, scanAgentSessions } from "../sessions/scan";
 import { partitionIncognitoSessions } from "./incognito";
 import { SCAN_WINDOW_DAYS } from "./sync";
-import { filterSessionsByProject, gateSessions, loadSyncState } from "./watermark";
+import { filterSessionsByRepo, gateSessions, loadSyncState, studyRepoFilter } from "./watermark";
 
 export interface SessionBacklog {
   /** Gated (quiet, not yet shipped) sessions, oldest first. */
@@ -23,12 +23,11 @@ export function listSessionBacklog(now: Date = new Date()): SessionBacklog {
   try {
     const state = loadSyncState();
     const since = new Date(now.getTime() - SCAN_WINDOW_DAYS * 24 * 60 * 60 * 1000);
-    let sessions = scanAgentSessions({ since });
-    if (state.project_filter?.length) {
-      const resolver = createProjectDirResolver();
-      sessions = filterSessionsByProject(sessions, state.project_filter, resolver.resolve);
-      resolver.flush();
-    }
+    const scanned = scanAgentSessions({ since });
+    const resolver = createProjectDirResolver();
+    const filter = studyRepoFilter(state, () => scanned, resolver);
+    const sessions = filterSessionsByRepo(scanned, filter, resolver.resolveRepo);
+    resolver.flush();
     const gate = gateSessions(sessions, state.watermark);
     // Only the gated backlog is read for the marker: everything behind the watermark is settled.
     const { kept, skipped } = partitionIncognitoSessions(gate.ready);

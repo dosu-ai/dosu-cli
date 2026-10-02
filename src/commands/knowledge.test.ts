@@ -37,6 +37,11 @@ vi.mock("../sync/detach", async (importOriginal) => ({
   spawnDetachedSelf: (...args: unknown[]) => mockSpawnDetached(...args),
 }));
 
+const mockCaptureHookSession = vi.fn();
+vi.mock("../sessions/capture", () => ({
+  captureHookSession: (...args: unknown[]) => mockCaptureHookSession(...args),
+}));
+
 const mockGetSyncStatus = vi.fn();
 vi.mock("../sync/status", () => ({
   getSyncStatus: (...args: unknown[]) => mockGetSyncStatus(...args),
@@ -113,7 +118,7 @@ vi.mock("../hooks/agents", () => ({
 }));
 
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { HookConfigError } from "../hooks/formats";
@@ -787,6 +792,15 @@ describe("knowledge sync", () => {
     expect(mockRunSync).not.toHaveBeenCalled();
   });
 
+  it("--detach captures the hook payload before re-spawning", async () => {
+    const order: string[] = [];
+    mockCaptureHookSession.mockImplementationOnce(async () => order.push("capture"));
+    mockSpawnDetached.mockImplementationOnce(() => order.push("spawn"));
+    await run("sync", "--quiet", "--detach");
+
+    expect(order).toEqual(["capture", "spawn"]);
+  });
+
   it("--detach forwards --bootstrap to the re-spawned run", async () => {
     await run("sync", "--quiet", "--detach", "--bootstrap");
 
@@ -1155,17 +1169,43 @@ describe("knowledge sync --status", () => {
     expect(allOutput()).toContain("2h 5m ago");
   });
 
-  it("shows the scope with the home directory abbreviated", async () => {
-    const home = homedir();
+  it("shows the scope as owner/repo names", async () => {
     mockGetSyncStatus.mockReturnValue({
       running: false,
-      state: { ...baseState, project_filter: [`${home}/work/dosu-cli`, "/srv/other"] },
+      state: {
+        ...baseState,
+        repo_filter: ["github.com/dosu-ai/dosu-cli", "gitlab.com/acme/api"],
+      },
       recentActivity: [],
     });
 
     await run("sync", "--status");
 
-    expect(allOutput()).toContain("Scope:           ~/work/dosu-cli, /srv/other");
+    expect(allOutput()).toContain("Scope:           dosu-ai/dosu-cli, acme/api");
+  });
+
+  it("says when the scope matches no repos", async () => {
+    mockGetSyncStatus.mockReturnValue({
+      running: false,
+      state: { ...baseState, repo_filter: [] },
+      recentActivity: [],
+    });
+
+    await run("sync", "--status");
+
+    expect(allOutput()).toContain("Scope:           no repos");
+  });
+
+  it("flags a legacy folder scope as pending conversion", async () => {
+    mockGetSyncStatus.mockReturnValue({
+      running: false,
+      state: { ...baseState, project_filter: ["/work/dosu-cli"] },
+      recentActivity: [],
+    });
+
+    await run("sync", "--status");
+
+    expect(allOutput()).toContain("1 folders (converted to repos on the next sync)");
   });
 
   it("omits the scope when the project filter is empty", async () => {

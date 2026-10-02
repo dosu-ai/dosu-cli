@@ -1,3 +1,51 @@
+## [0.65.1](https://github.com/dosu-ai/dosu-cli/compare/v0.65.0...v0.65.1) (2026-10-01)
+
+
+### Bug Fixes
+
+* **docs:** remove generate and auto-tag commands the backend no longer serves ([#266](https://github.com/dosu-ai/dosu-cli/issues/266)) ([f623780](https://github.com/dosu-ai/dosu-cli/commit/f623780700c1dd51bc067d5812e8a38cceb3df79)), closes [#12255](https://github.com/dosu-ai/dosu-cli/issues/12255)
+
+# [0.65.0](https://github.com/dosu-ai/dosu-cli/compare/v0.64.2...v0.65.0) (2026-10-01)
+
+
+### Bug Fixes
+
+* **integrations:** let slack-join take the UUID, Slack ID, or name ([#264](https://github.com/dosu-ai/dosu-cli/issues/264)) ([b151f79](https://github.com/dosu-ai/dosu-cli/commit/b151f795860418cde4d8fb9f6fa4126b856cd719))
+
+
+### Features
+
+* **integrations:** paginate and search `dosu integrations slack-channels` ([#267](https://github.com/dosu-ai/dosu-cli/issues/267)) ([4890655](https://github.com/dosu-ai/dosu-cli/commit/48906556472eb4d441e113b43b1b1a1284dd2e3b))
+* **review:** manage Slack review-notification channels ([#263](https://github.com/dosu-ai/dosu-cli/issues/263)) ([ca9b8e0](https://github.com/dosu-ai/dosu-cli/commit/ca9b8e0bb748fd02b1a206612e35ce1dbaa59d89)), closes [#262](https://github.com/dosu-ai/dosu-cli/issues/262)
+
+## [0.64.2](https://github.com/dosu-ai/dosu-cli/compare/v0.64.1...v0.64.2) (2026-10-01)
+
+
+### Bug Fixes
+
+* **rules:** match the Dosu MCP server's review and finalize instructions ([#256](https://github.com/dosu-ai/dosu-cli/issues/256)) ([889387c](https://github.com/dosu-ai/dosu-cli/commit/889387c31b0637db938482500c4a3dc03c4f00a5))
+
+## [0.64.1](https://github.com/dosu-ai/dosu-cli/compare/v0.64.0...v0.64.1) (2026-09-30)
+
+
+### Bug Fixes
+
+* **docs:** report unreadable --body-file as a usage error ([#261](https://github.com/dosu-ai/dosu-cli/issues/261)) ([76e99e0](https://github.com/dosu-ai/dosu-cli/commit/76e99e02f31a800f4a8f40008998383d81b55156))
+
+# [0.64.0](https://github.com/dosu-ai/dosu-cli/compare/v0.63.0...v0.64.0) (2026-09-30)
+
+
+### Features
+
+* **knowledge:** anchor mined notes to their session's git branch ([#260](https://github.com/dosu-ai/dosu-cli/issues/260)) ([2d3d58a](https://github.com/dosu-ai/dosu-cli/commit/2d3d58a5779f728e458c34d30fefe443409e217e))
+
+# [0.63.0](https://github.com/dosu-ai/dosu-cli/compare/v0.62.1...v0.63.0) (2026-09-30)
+
+
+### Features
+
+* **knowledge:** scope studying by git repo and tag learned notes with their repo ([#251](https://github.com/dosu-ai/dosu-cli/issues/251)) ([7fa7c20](https://github.com/dosu-ai/dosu-cli/commit/7fa7c20f3685906ffa8196bcfcd2503e4d2d129c))
+
 ## [0.62.1](https://github.com/dosu-ai/dosu-cli/compare/v0.62.0...v0.62.1) (2026-09-29)
 
 
