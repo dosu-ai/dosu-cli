@@ -141,4 +141,19 @@ describe("knowledge sync, end to end", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(posted(1).metadata.session_id).toBe("late");
   });
+
+  it("ships the session a SessionEnd hook just named, while a live one waits until quiet", async () => {
+    const endedPath = claudeSession("ended", exchange(1), minutesAgo(0));
+    claudeSession("live", exchange(2), minutesAgo(1));
+
+    const outcome = await runKnowledgeSync({
+      quiet: true,
+      ended: [{ harness: "claude", id: "ended", path: endedPath }],
+      deps: deps(),
+    });
+
+    expect(outcome).toMatchObject({ status: "shipped", inFlightSessions: 1 });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(posted(0).metadata.session_id).toBe("ended");
+  });
 });

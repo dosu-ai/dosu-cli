@@ -501,6 +501,8 @@ export function filterSessionsByRepo(
 export interface GateOptions extends PendingOptions {
   now?: Date;
   quietPeriodMs?: number;
+  /** Sessions known to be over (a session-end hook said so) skip the quiet period. */
+  isEnded?: (session: AgentSession) => boolean;
 }
 
 export interface GateResult {
@@ -511,7 +513,7 @@ export interface GateResult {
 }
 
 /** Pending sessions, split on the quiet period: fresher ones may still be running and wait for
- * a later trigger. Keeps the input order. */
+ * a later trigger, unless they are known to have ended. Keeps the input order. */
 export function gateSessions(
   sessions: readonly AgentSession[],
   ledger: Readonly<Record<string, LedgerEntry>>,
@@ -525,7 +527,7 @@ export function gateSessions(
     const updated = Date.parse(session.updated);
     if (Number.isNaN(updated)) continue;
     if (!isPending(session, ledger[sessionKey(session)], options)) continue;
-    if (updated > completedBefore) open.push(session);
+    if (updated > completedBefore && !options.isEnded?.(session)) open.push(session);
     else ready.push(session);
   }
   return { ready, open };

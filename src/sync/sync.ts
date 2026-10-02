@@ -3,8 +3,9 @@
  * again until it changes, and quiet hook-triggered runs never throw or write to stdout/stderr. */
 
 import { logger } from "../debug/logger";
+import type { EndedSession } from "../sessions/capture";
 import { createProjectDirResolver } from "../sessions/project-dir";
-import { type AgentSession, scanAgentSessions } from "../sessions/scan";
+import { type AgentSession, scanAgentSessions, sessionAtPath } from "../sessions/scan";
 import type { ShippedPrefix } from "../shipper/continuation";
 import { VERSION } from "../version/version";
 import { fileLock, type SyncLock } from "./lock";
@@ -38,6 +39,11 @@ const LEDGER_GRACE_DAYS = 7;
 export const SHIP_BATCH_LIMIT = 20;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** How long a run carrying a just-ended session waits for another run to release the lock,
+ * rather than leaving the session until some later trigger. */
+export const ENDED_LOCK_WAIT_MS = 10 * 60 * 1000;
+const LOCK_POLL_MS = 2_000;
 
 type SyncStatus =
   | "backlog"
@@ -118,6 +124,8 @@ export interface SyncDeps {
   now?: () => Date;
   /** The version stamped on ledger entries; defaults to this build's. */
   cliVersion?: string;
+  /** Waits between lock attempts; defaults to a timer. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export interface SyncOptions {
@@ -125,6 +133,9 @@ export interface SyncOptions {
   quiet?: boolean;
   /** Sessions the backend refused before this time are pending again (`--retry-rejected`). */
   retryRejectedBefore?: Date;
+  /** Sessions a session-end hook just reported (`--ended`/`--ended-path`): shipped this run, past
+   * the quiet period and ahead of the backlog. Everything else still waits until quiet. */
+  ended?: readonly EndedSession[];
   deps?: SyncDeps;
 }
 
@@ -143,6 +154,28 @@ function logGateResult(ready: readonly AgentSession[], inFlight: number, settled
       preview ? ` · ${preview}${more}` : ""
     }`,
   );
+}
+
+function isEndedSession(ended: EndedSession, session: AgentSession): boolean {
+  return (
+    (ended.harness === session.harness && ended.id === session.id) ||
+    (ended.path !== undefined && ended.path === session.path)
+  );
+}
+
+/** The scan plus any ended session it missed because its transcript lives outside the roots the
+ * scan walks: the hook named the file, so read it from there. */
+function withEndedSessions(
+  scanned: readonly AgentSession[],
+  ended: readonly EndedSession[],
+): AgentSession[] {
+  const sessions = [...scanned];
+  for (const e of ended) {
+    if (!e.harness || !e.id || !e.path || sessions.some((s) => isEndedSession(e, s))) continue;
+    const found = sessionAtPath(e.harness, e.id, e.path);
+    if (found) sessions.push(found);
+  }
+  return sessions;
 }
 
 function empty(status: SyncStatus): SyncOutcome {
@@ -202,6 +235,8 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
   const now = deps.now ?? (() => new Date());
   const cliVersion = deps.cliVersion ?? VERSION;
   const pending: PendingOptions = { cliVersion, retryRejectedBefore: options.retryRejectedBefore };
+  const ended = options.ended ?? [];
+  const isEnded = (session: AgentSession) => ended.some((e) => isEndedSession(e, session));
 
   const state = loadState();
 
@@ -234,7 +269,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     // decides what is left to do.
     const since = new Date(now().getTime() - SCAN_WINDOW_DAYS * DAY_MS);
     const listSessions = deps.listSessions ?? (() => scanAgentSessions({ since }));
-    const scanned = await listSessions();
+    const scanned = withEndedSessions(await listSessions(), ended);
     let flush: (() => void) | undefined;
     let locator = deps.locator;
     if (!locator) {
@@ -251,7 +286,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       logger.debug("sync", `folder scope converted to repos: ${repoFilter?.join(", ") || "none"}`);
     }
     // The ledger first, so settled sessions never cost a repo lookup.
-    const gate = gateSessions(scanned, state.sessions, { ...pending, now: now() });
+    const gate = gateSessions(scanned, state.sessions, { ...pending, now: now(), isEnded });
     const inScope = (sessions: AgentSession[]) =>
       filterSessionsByRepo(sessions, repoFilter, (s) => locator.resolveRepo(s));
     ready = inScope(gate.ready);
@@ -264,6 +299,10 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       } of ${gate.ready.length + gate.open.length} pending sessions in scope`,
     );
     logGateResult(ready, open.length, Object.keys(state.sessions).length);
+    const endedReady = ready.filter(isEnded).map(sessionKey);
+    if (ended.length > 0) {
+      logger.debug("sync", `ended by hook: ${endedReady.join(", ") || "nothing pending"}`);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.debug("sync", `sync failed: ${message}`);
@@ -283,9 +322,19 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
   if (ready.length === 0) return { status: "nothing-new", ...base };
   if (!deps.ship) return { status: "backlog", ...base };
 
-  // Single-flight. The lock loser leaves state untouched — the winner owns this run.
+  // Single-flight. The lock loser leaves state untouched — the winner owns this run. A run
+  // carrying a just-ended session waits its turn instead: the session is why it exists.
   const lock = deps.lock ?? fileLock();
-  if (!lock.acquire()) {
+  let held = lock.acquire();
+  if (!held && ready.some(isEnded)) {
+    const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    logger.debug("sync", "waiting for the run that holds the lock");
+    for (let waited = 0; !held && waited < ENDED_LOCK_WAIT_MS; waited += LOCK_POLL_MS) {
+      await sleep(LOCK_POLL_MS);
+      held = lock.acquire();
+    }
+  }
+  if (!held) {
     logger.debug("sync", "skipping: another sync run holds the lock");
     return { status: "skipped-lock", ...base };
   }
@@ -318,8 +367,12 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     };
     // The ship step decides each session's fate (incognito, unsupported, trivial, rejected, or
     // shipped); this side only picks the batch and records the answers.
+    // Ended sessions lead, so the batch limit never pushes one to a later run.
     const batch = [...todo]
-      .sort((a, b) => Date.parse(a.updated) - Date.parse(b.updated))
+      .sort(
+        (a, b) =>
+          Number(isEnded(b)) - Number(isEnded(a)) || Date.parse(a.updated) - Date.parse(b.updated),
+      )
       .slice(0, SHIP_BATCH_LIMIT);
     logger.debug("sync", `shipping ${batch.length} of ${todo.length} ready sessions`);
 

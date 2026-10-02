@@ -1,8 +1,17 @@
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../sessions/scan";
 import type { SyncLock } from "./lock";
 import { backoffUntil, emptySyncState, type LedgerEntry, type SyncState } from "./state";
-import { runKnowledgeSync, SHIP_BATCH_LIMIT, type ShipSessionResult, type SyncDeps } from "./sync";
+import {
+  ENDED_LOCK_WAIT_MS,
+  runKnowledgeSync,
+  SHIP_BATCH_LIMIT,
+  type ShipSessionResult,
+  type SyncDeps,
+} from "./sync";
 
 const mockLoggerDebug = vi.hoisted(() => vi.fn());
 vi.mock("../debug/logger", () => ({
@@ -10,7 +19,8 @@ vi.mock("../debug/logger", () => ({
 }));
 
 const mockScanSessions = vi.hoisted(() => vi.fn());
-vi.mock("../sessions/scan", () => ({
+vi.mock("../sessions/scan", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sessions/scan")>()),
   scanAgentSessions: (...args: unknown[]) => mockScanSessions(...args),
 }));
 
@@ -815,5 +825,125 @@ describe("runKnowledgeSync shipping", () => {
     await runKnowledgeSync({ deps: again.deps });
     expect(again.saved.at(-1)?.run?.baseline_shipped).toBe(5);
     expect(again.saved.at(-1)?.total_shipped).toBe(7);
+  });
+});
+
+describe("runKnowledgeSync with a session a hook says just ended", () => {
+  const justEnded = session(1);
+  const stillOpen = { ...session(2), id: "other-live" };
+  const backlog = session(60);
+
+  it("ships it now, ahead of the backlog, while other fresh sessions wait out the quiet period", async () => {
+    const ship = shipAll();
+    const { deps } = makeDeps({
+      listSessions: vi.fn().mockResolvedValue([justEnded, stillOpen, backlog]),
+      ship,
+    });
+
+    const outcome = await runKnowledgeSync({
+      quiet: true,
+      ended: [{ harness: "claude", id: justEnded.id }],
+      deps,
+    });
+
+    expect(vi.mocked(ship).mock.calls[0][0].map((s) => s.id)).toEqual([justEnded.id, backlog.id]);
+    expect(outcome).toMatchObject({ readySessions: 2, inFlightSessions: 1 });
+  });
+
+  it("recognizes it by its transcript path alone", async () => {
+    const ship = shipAll();
+    const { deps } = makeDeps({ listSessions: vi.fn().mockResolvedValue([justEnded]), ship });
+
+    await runKnowledgeSync({ ended: [{ path: justEnded.path }], deps });
+
+    expect(ship).toHaveBeenCalledOnce();
+  });
+
+  it("finds it by its transcript when it lives outside the scanned roots", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dosu-ended-"));
+    try {
+      const project = join(dir, "relocated-config", "projects", "-work-app");
+      mkdirSync(project, { recursive: true });
+      const path = join(project, "far-away.jsonl");
+      writeFileSync(path, "{}\n");
+      utimesSync(path, NOW, NOW);
+      const ship = shipAll();
+      const { deps } = makeDeps({ listSessions: vi.fn().mockResolvedValue([]), ship });
+
+      await runKnowledgeSync({ ended: [{ harness: "claude", id: "far-away", path }], deps });
+
+      expect(vi.mocked(ship).mock.calls[0][0]).toEqual([
+        {
+          id: "far-away",
+          harness: "claude",
+          path,
+          project: "-work-app",
+          updated: NOW.toISOString(),
+          repo: DOSU_CLI,
+        },
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not ship it again when the ledger already answers for it", async () => {
+    const ship = shipAll();
+    const { deps } = makeDeps({
+      loadState: () => state({ sessions: settled(justEnded) }),
+      listSessions: vi.fn().mockResolvedValue([justEnded]),
+      ship,
+    });
+
+    const outcome = await runKnowledgeSync({
+      ended: [{ harness: "claude", id: justEnded.id }],
+      deps,
+    });
+
+    expect(outcome.status).toBe("nothing-new");
+    expect(ship).not.toHaveBeenCalled();
+  });
+
+  it("waits for a run holding the lock instead of dropping the session", async () => {
+    let attempts = 0;
+    const sleep = vi.fn(async () => {});
+    const ship = shipAll();
+    const { deps } = makeDeps({
+      listSessions: vi.fn().mockResolvedValue([justEnded]),
+      lock: { acquire: () => ++attempts > 3, release: vi.fn() },
+      sleep,
+      ship,
+    });
+
+    const outcome = await runKnowledgeSync({
+      quiet: true,
+      ended: [{ harness: "claude", id: justEnded.id }],
+      deps,
+    });
+
+    expect(outcome.status).toBe("shipped");
+    expect(sleep).toHaveBeenCalledTimes(3);
+  });
+
+  it("gives up waiting after a bound, leaving the session for the next run", async () => {
+    const sleep = vi.fn(async (_ms: number) => {});
+    const ship = shipAll();
+    const { deps } = makeDeps({
+      listSessions: vi.fn().mockResolvedValue([justEnded]),
+      lock: { acquire: () => false, release: vi.fn() },
+      sleep,
+      ship,
+    });
+
+    const outcome = await runKnowledgeSync({
+      quiet: true,
+      ended: [{ harness: "claude", id: justEnded.id }],
+      deps,
+    });
+
+    expect(outcome.status).toBe("skipped-lock");
+    expect(ship).not.toHaveBeenCalled();
+    const waited = sleep.mock.calls.reduce((total, [ms]) => total + ms, 0);
+    expect(waited).toBeGreaterThanOrEqual(ENDED_LOCK_WAIT_MS);
   });
 });

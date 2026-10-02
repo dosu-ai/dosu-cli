@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   captureCursorStop,
   captureHookSession,
+  endedSessionOf,
   readCapturedSession,
   readHookStdin,
   recordCapturedSession,
@@ -181,26 +182,84 @@ describe("captureHookSession", () => {
         throw new Error("boom");
       },
     } as unknown as NodeJS.ReadableStream;
-    await expect(captureHookSession(broken)).resolves.toBeUndefined();
+    await expect(captureHookSession(broken)).resolves.toBeNull();
     const throwsString = {
       on: () => {
         throw "boom";
       },
     } as unknown as NodeJS.ReadableStream;
-    await expect(captureHookSession(throwsString)).resolves.toBeUndefined();
+    await expect(captureHookSession(throwsString)).resolves.toBeNull();
   });
 
   it("ignores an unreadable payload", async () => {
     const stream = new PassThrough();
     const done = captureHookSession(stream);
     stream.end("not json");
-    await expect(done).resolves.toBeUndefined();
+    await expect(done).resolves.toBeNull();
   });
 
-  it("reads and ignores a non-Cursor payload", async () => {
+  it("reads and ignores a payload that is not an end event", async () => {
     const stream = new PassThrough();
     const done = captureHookSession(stream);
     stream.end('{"session_id":"claude"}');
-    await expect(done).resolves.toBeUndefined();
+    await expect(done).resolves.toBeNull();
+  });
+
+  it("names the session a Claude Code SessionEnd hook reports", async () => {
+    const stream = new PassThrough();
+    const done = captureHookSession(stream);
+    stream.end(
+      JSON.stringify({
+        session_id: "0a1b2c3d-4e5f-6789-abcd-ef0123456789",
+        transcript_path:
+          "/home/u/.claude/projects/-work-app/0a1b2c3d-4e5f-6789-abcd-ef0123456789.jsonl",
+        cwd: "/work/app",
+        hook_event_name: "SessionEnd",
+        reason: "exit",
+      }),
+    );
+    await expect(done).resolves.toEqual({
+      harness: "claude",
+      id: "0a1b2c3d-4e5f-6789-abcd-ef0123456789",
+      path: "/home/u/.claude/projects/-work-app/0a1b2c3d-4e5f-6789-abcd-ef0123456789.jsonl",
+    });
+  });
+});
+
+describe("endedSessionOf", () => {
+  const claudeEnd = {
+    session_id: "abc-123",
+    transcript_path: "/home/u/.claude/projects/-work-app/abc-123.jsonl",
+    hook_event_name: "SessionEnd",
+  };
+
+  it("reads a Claude Code SessionEnd", () => {
+    expect(endedSessionOf(claudeEnd)).toEqual({
+      harness: "claude",
+      id: "abc-123",
+      path: claudeEnd.transcript_path,
+    });
+  });
+
+  it.each([
+    ["a per-turn Stop event", { ...claudeEnd, hook_event_name: "Stop" }],
+    [
+      "Cursor's per-turn stop",
+      { conversation_id: "c1", cursor_version: "1.2", status: "completed" },
+    ],
+    // Codex's own end event names a rollout file, not the session id: its reader is separate.
+    [
+      "a SessionEnd whose transcript is not named for the session",
+      { ...claudeEnd, transcript_path: "/home/u/.codex/sessions/2026/10/02/rollout-x.jsonl" },
+    ],
+    [
+      "an unsafe session id",
+      { ...claudeEnd, session_id: "../../etc", transcript_path: "/x/../../etc.jsonl" },
+    ],
+    ["no transcript path", { ...claudeEnd, transcript_path: undefined }],
+    ["not an object", "SessionEnd"],
+    ["null", null],
+  ])("ignores %s", (_label, payload) => {
+    expect(endedSessionOf(payload)).toBeNull();
   });
 });

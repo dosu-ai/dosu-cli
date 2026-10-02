@@ -38,7 +38,8 @@ vi.mock("../sync/detach", async (importOriginal) => ({
 }));
 
 const mockCaptureHookSession = vi.fn();
-vi.mock("../sessions/capture", () => ({
+vi.mock("../sessions/capture", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sessions/capture")>()),
   captureHookSession: (...args: unknown[]) => mockCaptureHookSession(...args),
 }));
 
@@ -874,6 +875,83 @@ describe("knowledge sync", () => {
     await run("sync", "--quiet", "--detach");
 
     expect(order).toEqual(["capture", "spawn"]);
+  });
+
+  it("--detach hands the session a SessionEnd hook named to the re-spawned run", async () => {
+    const path = "/home/u/.claude/projects/-work-app/abc-123.jsonl";
+    mockCaptureHookSession.mockResolvedValueOnce({ harness: "claude", id: "abc-123", path });
+
+    await run("sync", "--quiet", "--detach");
+
+    expect(mockSpawnDetached).toHaveBeenCalledWith([
+      "knowledge",
+      "sync",
+      "--quiet",
+      "--ended",
+      "claude:abc-123",
+      "--ended-path",
+      path,
+    ]);
+  });
+
+  it("ships the sessions named by --ended and --ended-path past the quiet period", async () => {
+    mockRunSync.mockResolvedValue({ status: "shipped", readySessions: 1, inFlightSessions: 0 });
+
+    await run(
+      "sync",
+      "--quiet",
+      "--ended",
+      "claude:abc-123",
+      "--ended-path",
+      "/home/u/.claude/projects/-work-app/abc-123.jsonl",
+    );
+
+    expect(mockRunSync.mock.calls[0][0].ended).toEqual([
+      {
+        harness: "claude",
+        id: "abc-123",
+        path: "/home/u/.claude/projects/-work-app/abc-123.jsonl",
+      },
+    ]);
+  });
+
+  it("drops malformed --ended values instead of failing a hook run", async () => {
+    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
+
+    await run(
+      "sync",
+      "--quiet",
+      "--ended",
+      "nonsense",
+      "--ended",
+      "vim:x",
+      "--ended",
+      "claude:../x",
+    );
+
+    expect(mockRunSync.mock.calls[0][0].ended).toEqual([]);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("an --ended-path alone still names the session by its transcript", async () => {
+    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
+
+    await run("sync", "--ended-path", "/x/s.jsonl", "--ended-path", "relative.jsonl");
+
+    expect(mockRunSync.mock.calls[0][0].ended).toEqual([{ path: "/x/s.jsonl" }]);
+  });
+
+  it("--detach forwards explicit --ended flags too", async () => {
+    await run("sync", "--detach", "--ended", "claude:abc", "--ended-path", "/x/abc.jsonl");
+
+    expect(mockSpawnDetached).toHaveBeenCalledWith([
+      "knowledge",
+      "sync",
+      "--ended",
+      "claude:abc",
+      "--ended-path",
+      "/x/abc.jsonl",
+    ]);
   });
 
   it("--detach forwards --bootstrap to the re-spawned run", async () => {

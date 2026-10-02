@@ -13,7 +13,7 @@ import { allHookAgents, getHookAgent, type HookAgent } from "../hooks/agents";
 import { disableClaudeContextHook, enableClaudeContextHook } from "../hooks/context";
 import { HookConfigError, hookCommand } from "../hooks/formats";
 import { emitKnowledgeReport } from "../report/generate";
-import { captureHookSession } from "../sessions/capture";
+import { captureHookSession, endedSessionArgs, parseEndedSessionArgs } from "../sessions/capture";
 import { displayRepo } from "../sessions/repo";
 import type { AgentSession } from "../sessions/scan";
 import { listSessionBacklog } from "../sync/backlog";
@@ -37,6 +37,11 @@ import { requireLoginConfig } from "./auth";
 import { incognitoCommand } from "./knowledge-incognito";
 import { statuslineCommand } from "./knowledge-statusline";
 import { printResult, printTable, truncate } from "./output";
+
+/** Commander collector for a repeatable option (no default, so help shows none). */
+function collectValues(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
+}
 
 function requireConfig() {
   const cfg = requireLoginConfig();
@@ -272,6 +277,16 @@ export function knowledgeCommand(): Command {
     )
     .option("--retry-rejected", "Ship sessions the backend refused before, once more")
     .option(
+      "--ended <harness:id>",
+      "A session that just ended: ship it now, past the quiet period (session-end hooks set this)",
+      collectValues,
+    )
+    .option(
+      "--ended-path <path>",
+      "Transcript of a session that just ended, paired with --ended (session-end hooks set this)",
+      collectValues,
+    )
+    .option(
       "--status",
       "Show whether a sync is running now, plus what was settled how and recent activity",
     )
@@ -287,11 +302,14 @@ export function knowledgeCommand(): Command {
         detach?: boolean;
         bootstrap?: boolean;
         retryRejected?: boolean;
+        ended?: string[];
+        endedPath?: string[];
         status?: boolean;
         report?: boolean;
         out?: string;
         json?: boolean;
       }) => {
+        const ended = parseEndedSessionArgs(opts.ended ?? [], opts.endedPath ?? []);
         // Analytics facets on this command's completion event: coarse trigger/status only, so
         // dashboards can tell hook fires, detached parents, and real ship runs apart.
         const trigger = opts.bootstrap ? "bootstrap" : opts.quiet ? "hook" : "manual";
@@ -313,13 +331,16 @@ export function knowledgeCommand(): Command {
           // Hooks call `sync --quiet --detach`; the re-spawned child runs the
           // actual pipeline so the hooking agent gets its exit immediately. The hook payload
           // is only readable here: the child's stdin is ignored.
-          await captureHookSession();
+          // A definitive end event names its session: the child ships it right away instead of
+          // waiting out the quiet period like every other session.
+          const hookEnded = await captureHookSession();
           const spawned = spawnDetachedSelf([
             "knowledge",
             "sync",
             ...(opts.quiet ? ["--quiet"] : []),
             ...(opts.bootstrap ? ["--bootstrap"] : []),
             ...(opts.retryRejected ? ["--retry-rejected"] : []),
+            ...[...ended, ...(hookEnded ? [hookEnded] : [])].flatMap(endedSessionArgs),
             ...(opts.report ? ["--report"] : []),
             ...(opts.out ? ["--out", opts.out] : []),
           ]);
@@ -334,6 +355,7 @@ export function knowledgeCommand(): Command {
         const deps: SyncDeps = { ship: buildShipper() };
         const syncOptions = {
           quiet: opts.quiet,
+          ended,
           // Bounded by when this command started, so a drain never retries a fresh refusal.
           ...(opts.retryRejected ? { retryRejectedBefore: new Date() } : {}),
           deps,

@@ -4,9 +4,11 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
-type SessionHarness = "claude" | "cursor" | "codex" | "opencode";
+/** The agents whose sessions the scanner finds, by the id the ledger keys them with. */
+export const SESSION_HARNESSES = ["claude", "cursor", "codex", "opencode"] as const;
+export type SessionHarness = (typeof SESSION_HARNESSES)[number];
 
 export interface AgentSession {
   /** Session id: the log filename stem, or the DB row id for opencode. */
@@ -209,6 +211,25 @@ function scanOpencode(home: string, env: NodeJS.ProcessEnv): AgentSession[] {
     });
   }
   return sessions;
+}
+
+/** One session whose transcript the caller already knows (a session-end hook named it), as the
+ * scan would report it; it may live outside the roots the scan walks (e.g. a relocated Claude
+ * config dir). Null when the file is gone. */
+export function sessionAtPath(
+  harness: SessionHarness,
+  id: string,
+  path: string,
+): AgentSession | null {
+  let mtime: Date;
+  try {
+    mtime = statSync(path).mtime;
+  } catch {
+    return null;
+  }
+  // Claude Code keeps transcripts directly in their project dir, like scanClaude reads them.
+  const project = harness === "claude" ? basename(dirname(path)) : undefined;
+  return { id, harness, path, ...(project ? { project } : {}), updated: mtime.toISOString() };
 }
 
 /** All local agent sessions across supported harnesses, newest first; missing harnesses

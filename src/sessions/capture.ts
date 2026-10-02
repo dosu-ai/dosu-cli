@@ -1,13 +1,15 @@
-/** Session facts an agent hook captured while the session ran, for agents whose transcripts do not
- * record them (Cursor records neither its branch nor its working directory). One small file per
- * session, never dropped like the project-dir cache: a lost branch means the session is never
- * studied. */
+/** What an agent hook's payload tells the sync. Session facts captured while the session ran, for
+ * agents whose transcripts do not record them (Cursor records neither its branch nor its working
+ * directory): one small file per session, never dropped like the project-dir cache, since a lost
+ * branch means the session is never studied. And which session just ended, when the hook is a
+ * definitive end event, so the sync ships it now instead of waiting out the quiet period. */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { getConfigDir } from "../config/config";
 import { logger } from "../debug/logger";
 import { currentBranchOfDir } from "./repo";
+import { SESSION_HARNESSES, type SessionHarness } from "./scan";
 
 const CAPTURE_DIRNAME = "session-captures";
 
@@ -152,13 +154,84 @@ export function readHookStdin(
   });
 }
 
-/** Hook-side capture before a detached sync: reads the hook payload and records what it can.
- * Never throws; a failed capture only means the reflog has to answer later. */
-export async function captureHookSession(stream?: HookStdin): Promise<void> {
+/** A session a hook reported as ended, for `knowledge sync --ended`/`--ended-path`. */
+export interface EndedSession {
+  /** With `id`, the scanner's key for the session. */
+  harness?: SessionHarness;
+  id?: string;
+  /** Its transcript: matches the scanned session at that path, and finds one outside the
+   * scanned roots when harness and id are known too. */
+  path?: string;
+}
+
+type HookPayload = Record<string, unknown>;
+
+/** Claude Code `SessionEnd`: `{session_id, transcript_path, hook_event_name, reason, cwd}`. */
+function claudeSessionEnd(hook: HookPayload): EndedSession | null {
+  if (hook.hook_event_name !== "SessionEnd") return null;
+  const id = hook.session_id;
+  const path = hook.transcript_path;
+  if (typeof id !== "string" || !SAFE_SEGMENT.test(id) || typeof path !== "string") return null;
+  // Claude Code names the transcript after the session; another agent's SessionEnd (Codex names
+  // a rollout file) is not this one.
+  if (basename(path) !== `${id}.jsonl`) return null;
+  return { harness: "claude", id, path };
+}
+
+/** One reader per agent for its definitive end-of-session event. Per-turn events (Cursor
+ * `stop`, Codex `Stop` before 0.160) never count: they fire while the session goes on. */
+const END_EVENT_READERS: ReadonlyArray<(hook: HookPayload) => EndedSession | null> = [
+  claudeSessionEnd,
+];
+
+/** The session a hook payload says just ended; null when the payload is not an end event. */
+export function endedSessionOf(payload: unknown): EndedSession | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  for (const read of END_EVENT_READERS) {
+    const ended = read(payload as HookPayload);
+    if (ended) return ended;
+  }
+  return null;
+}
+
+/** The `knowledge sync` flags that hand an ended session to the detached run. */
+export function endedSessionArgs(ended: EndedSession): string[] {
+  return [
+    ...(ended.harness && ended.id ? ["--ended", `${ended.harness}:${ended.id}`] : []),
+    ...(ended.path ? ["--ended-path", ended.path] : []),
+  ];
+}
+
+/** `--ended <harness>:<id>` and `--ended-path <path>` values back into sessions, the i-th path
+ * with the i-th id. Malformed values are dropped: a hook-triggered run never fails loudly. */
+export function parseEndedSessionArgs(
+  ids: readonly string[],
+  paths: readonly string[],
+): EndedSession[] {
+  const ended: EndedSession[] = [];
+  for (let i = 0; i < Math.max(ids.length, paths.length); i++) {
+    const [harness, id] = ids[i]?.split(/:(.*)/s) ?? [];
+    const named =
+      SESSION_HARNESSES.includes(harness as SessionHarness) && SAFE_SEGMENT.test(id ?? "")
+        ? { harness: harness as SessionHarness, id }
+        : {};
+    const path = paths[i]?.startsWith("/") ? { path: paths[i] } : {};
+    if ("id" in named || "path" in path) ended.push({ ...named, ...path });
+  }
+  return ended;
+}
+
+/** Hook-side capture before a detached sync: reads the hook payload, records what it can, and
+ * returns the session that just ended, if the hook says one did. Never throws; a failed capture
+ * only means the reflog has to answer later and the session waits out the quiet period. */
+export async function captureHookSession(stream?: HookStdin): Promise<EndedSession | null> {
   try {
     const payload = await readHookStdin(stream);
-    if (payload !== null) captureCursorStop(payload);
+    if (payload === null) return null;
+    captureCursorStop(payload);
+    return endedSessionOf(payload);
   } catch (err) {
     logger.debug("sync", `hook capture failed: ${err instanceof Error ? err.message : err}`);
+    return null;
   }
 }
