@@ -4,7 +4,7 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 /** The agents whose sessions the scanner finds, by the id the ledger keys them with. */
 export const SESSION_HARNESSES = ["claude", "cursor", "codex", "opencode"] as const;
@@ -74,15 +74,21 @@ function sessionFromFile(
   };
 }
 
-/** Claude Code: one level of project dirs, session logs directly inside. */
-function scanClaude(home: string): AgentSession[] {
+/** Claude Code: one level of project dirs, session logs directly inside, under `~/.claude` and
+ * under CLAUDE_CONFIG_DIR when the agent was relocated there (the hooks install there too). Both,
+ * because a sync triggered by another agent's hook does not have the variable. */
+function scanClaude(home: string, env: NodeJS.ProcessEnv): AgentSession[] {
+  const relocated = env.CLAUDE_CONFIG_DIR ? resolve(env.CLAUDE_CONFIG_DIR) : null;
+  const roots = new Set([join(home, ".claude"), relocated ?? join(home, ".claude")]);
   const sessions: AgentSession[] = [];
-  for (const project of listDir(join(home, ".claude", "projects"))) {
-    if (!project.isDir) continue;
-    for (const entry of listDir(project.path)) {
-      if (entry.isDir) continue;
-      const session = sessionFromFile(entry.path, "claude", project.name);
-      if (session) sessions.push(session);
+  for (const root of roots) {
+    for (const project of listDir(join(root, "projects"))) {
+      if (!project.isDir) continue;
+      for (const entry of listDir(project.path)) {
+        if (entry.isDir) continue;
+        const session = sessionFromFile(entry.path, "claude", project.name);
+        if (session) sessions.push(session);
+      }
     }
   }
   return sessions;
@@ -239,7 +245,7 @@ export function scanAgentSessions(options: ScanSessionsOptions = {}): AgentSessi
   const env = options.env ?? process.env;
 
   let sessions = [
-    ...scanClaude(home),
+    ...scanClaude(home, env),
     ...scanCursor(home),
     ...scanCodex(home, env),
     ...scanOpencode(home, env),

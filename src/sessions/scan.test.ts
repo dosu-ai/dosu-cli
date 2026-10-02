@@ -235,6 +235,21 @@ describe("scanAgentSessions", () => {
     expect(sessions.map((s) => s.id)).toEqual(["rollout-x"]);
   });
 
+  it("honors CLAUDE_CONFIG_DIR, alongside the default directory", () => {
+    const claudeHome = join(home, "relocated-claude");
+    makeLog(join(claudeHome, "projects", "-p", "relocated.jsonl"), T1);
+    claudeLog("-p", "default", T2);
+
+    const sessions = scan({ env: { CLAUDE_CONFIG_DIR: claudeHome } });
+
+    expect(sessions.map((s) => [s.id, s.project])).toEqual([
+      ["default", "-p"],
+      ["relocated", "-p"],
+    ]);
+    // Set to the default directory itself, nothing is listed twice.
+    expect(scan({ env: { CLAUDE_CONFIG_DIR: `${join(home, ".claude")}/` } })).toHaveLength(1);
+  });
+
   it("applies the limit after sorting", () => {
     claudeLog("-p", "old", T1);
     claudeLog("-p", "mid", T2);

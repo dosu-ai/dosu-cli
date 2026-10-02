@@ -17,7 +17,8 @@ scanned session is **pending** when it has no entry, when its mtime differs from
 resumed or kept writing), or when it was passed over by a different CLI version (so newer harness
 support or rules get a second look). `--retry-rejected` makes sessions the backend refused pending
 for that run. Nothing is skipped for good by being older than something else, and there is no count
-cap on the scan: listing is metadata only. Each run settles at most 20 sessions, oldest first;
+cap on the scan: listing is metadata only. Claude Code sessions are listed from `~/.claude` and,
+when the variable is set, `CLAUDE_CONFIG_DIR`. Each run settles at most 20 sessions, oldest first;
 `--bootstrap` keeps going until the backlog is drained. Entries are pruned a week after their session
 leaves the 30-day window.
 
