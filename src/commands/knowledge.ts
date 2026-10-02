@@ -620,6 +620,38 @@ function formatOutcomeCounts(state: SyncState): string {
   return parts.length > 0 ? parts.join(" \u00B7 ") : "nothing settled";
 }
 
+/** How many sessions `--status` names for one reason before pointing at the full list. */
+const ATTENTION_PREVIEW = 3;
+
+/** Sessions settled without shipping, one group per outcome and reason: a machine full of one
+ * agent with no normalizer yet would otherwise print a line per session. */
+function printAttention(attention: SyncStatus["attention"]): void {
+  const groups = new Map<string, { outcome: string; reason: string; sessions: string[] }>();
+  for (const entry of attention) {
+    const reason = entry.message ?? (entry.http_status ? `HTTP ${entry.http_status}` : "");
+    const key = `${entry.outcome}\u0000${reason}`;
+    const group = groups.get(key) ?? { outcome: entry.outcome, reason, sessions: [] };
+    group.sessions.push(entry.session);
+    groups.set(key, group);
+  }
+  for (const { outcome, reason, sessions } of groups.values()) {
+    const why = reason ? ` \u00B7 ${reason}` : "";
+    if (sessions.length === 1) {
+      console.log(`  ${outcome.padEnd(11)} ${sessions[0]}${why}`);
+      continue;
+    }
+    console.log(`  ${outcome.padEnd(11)} ${sessions.length} sessions${why}`);
+    const more = sessions.length - ATTENTION_PREVIEW;
+    console.log(
+      pc.dim(
+        `  ${"".padEnd(11)} ${sessions.slice(0, ATTENTION_PREVIEW).join(", ")}${
+          more > 0 ? `, +${more} more ('dosu knowledge sessions --${outcome}')` : ""
+        }`,
+      ),
+    );
+  }
+}
+
 function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
   if (status.running) {
     console.log(
@@ -678,12 +710,7 @@ function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
 
   if (status.attention.length > 0) {
     console.log("\nNot shipped, and why:");
-    for (const entry of status.attention) {
-      const reason = entry.message ?? (entry.http_status ? `HTTP ${entry.http_status}` : "");
-      console.log(
-        `  ${entry.outcome.padEnd(11)} ${entry.session}${reason ? ` \u00B7 ${reason}` : ""}`,
-      );
-    }
+    printAttention(status.attention);
     if (status.outcomes.rejected > 0) {
       console.log(pc.dim("  Retry refused sessions with 'dosu knowledge sync --retry-rejected'."));
     }

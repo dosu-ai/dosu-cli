@@ -17,6 +17,7 @@ import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
+import { emptySyncState, saveSyncState } from "../sync/state";
 import { knowledgeCommand } from "./knowledge";
 
 /** The detached re-spawn is a process boundary: record its argv instead of starting a process. */
@@ -233,5 +234,35 @@ describe("knowledge sync of a resumed session", () => {
       prefix_sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
     expect(second.records.map((r) => r.role)).toEqual(["meta", "user", "assistant"]);
+  });
+});
+
+describe("knowledge sync --status", () => {
+  it("summarizes many sessions passed over for one reason instead of listing each", async () => {
+    const entry = (outcome: "unsupported" | "rejected", message: string) => ({
+      updated: "2026-10-01T00:00:00.000Z",
+      outcome,
+      at: "2026-10-01T00:05:00.000Z",
+      cli_version: "1.0.0",
+      message,
+    });
+    const sessions = Object.fromEntries(
+      Array.from({ length: 12 }, (_, i) => [
+        `opencode/ses_${i}`,
+        entry("unsupported", "no normalizer for opencode sessions yet"),
+      ]),
+    );
+    sessions["claude/refused"] = entry("rejected", "ingest rejected: HTTP 422");
+    saveSyncState({ ...emptySyncState(), sessions });
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await dosu("sync", "--status");
+
+    const out = log.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(out).toContain("rejected    claude/refused \u00B7 ingest rejected: HTTP 422");
+    expect(out).toContain("unsupported 12 sessions \u00B7 no normalizer for opencode sessions yet");
+    expect(out).toContain("+9 more");
+    expect(out).toContain("dosu knowledge sessions --unsupported");
+    expect(out.split("\n").filter((line) => line.includes("opencode/ses_"))).toHaveLength(1);
   });
 });

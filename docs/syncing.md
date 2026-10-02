@@ -34,8 +34,8 @@ leaves the 30-day window.
 Only transport errors, auth failures, and 5xx responses are failures: they stop the run, leave the
 session pending, and make hook runs back off (except for a just-ended session, below). `rejected`
 and `unsupported` are answers, so one unreadable session never stalls the rest.
-`dosu knowledge sync --status` and `dosu knowledge sessions` show counts per outcome and list the
-rejected and unsupported sessions with the reason.
+`dosu knowledge sync --status` shows counts per outcome and the rejected and unsupported sessions
+grouped by reason; `dosu knowledge sessions --rejected` (or `--unsupported`) lists every one.
 
 **Worthiness** is judged on what would ship: the normalized, redacted trajectory. Text, tool
 arguments, and tool results all count toward the 2,000 characters, so a terse run that did its work
