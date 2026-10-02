@@ -1,6 +1,6 @@
 /** Transcript shipper — the sync pipeline's `ship` step. Per session: honor the incognito
- * opt-out, normalize the raw log to redacted trajectory-v1 records, and POST them to the Dosu
- * memory ingest API. Fire-and-forget: the accepted task is never polled; the task id and the
+ * opt-out, normalize the raw log to redacted trajectory-v1 records, judge whether they are worth
+ * learning from, and POST them to the Dosu memory ingest API. Fire-and-forget: the accepted task is never polled; the task id and the
  * shareable session_url are returned for the sync ledger and the report to surface. */
 
 import type { NormalizedRecord } from "@letta-ai/trajectory";
@@ -11,6 +11,7 @@ import type { AgentSession } from "../sessions/scan";
 import { isIncognitoSession } from "../sync/incognito";
 import type { ShipSessionResult } from "../sync/sync";
 import { normalizeSessionRecords, trajectorySourceOf } from "./normalize";
+import { isTrivialTrajectory } from "./worthiness";
 
 /** Statuses where re-sending identical records cannot succeed (bad/oversized/unparseable
  * payload): the session is settled as rejected instead of failing every run behind a poison
@@ -65,7 +66,7 @@ export function createShipStep(
     if (!records) {
       return { session, outcome: "unsupported", message: "transcript could not be normalized" };
     }
-    if (records.length === 0) return { session, outcome: "trivial" };
+    if (isTrivialTrajectory(records)) return { session, outcome: "trivial" };
     // The project key of the session's working directory (sessions/project.ts), the same one
     // prompt-time memory sends. Branch is omitted: the trajectory meta record carries
     // git_branch when the harness logged one.

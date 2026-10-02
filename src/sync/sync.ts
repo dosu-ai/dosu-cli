@@ -4,10 +4,8 @@
 
 import { logger } from "../debug/logger";
 import { createProjectDirResolver } from "../sessions/project-dir";
-import { isWorthStudying } from "../sessions/read";
 import { type AgentSession, scanAgentSessions } from "../sessions/scan";
 import { VERSION } from "../version/version";
-import { isIncognitoSession } from "./incognito";
 import { fileLock, type SyncLock } from "./lock";
 import {
   backoffUntil,
@@ -104,10 +102,6 @@ export interface SyncDeps {
   /** When present, gated sessions are shipped; absent = gate-and-report only. Must process
    * oldest-first and stop after the first failed result. */
   ship?: (sessions: AgentSession[]) => Promise<ShipSessionResult[]>;
-  /** Local worthiness pre-filter; defaults to isWorthStudying. */
-  worthShipping?: (session: AgentSession) => boolean;
-  /** Per-session opt-out check; defaults to isIncognitoSession (transcript marker). */
-  isIncognito?: (session: AgentSession) => boolean;
   /** Session → working directory and repo, for the shipping scope; defaults to the cached
    * resolver. */
   locator?: SessionLocator;
@@ -283,9 +277,6 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
             baseline_shipped: locked.total_shipped ?? 0,
           };
 
-    // Incognito and trivial sessions are settled locally — never uploaded.
-    const worthShipping = deps.worthShipping ?? isWorthStudying;
-    const isIncognito = deps.isIncognito ?? isIncognitoSession;
     const counts: ShipCounts = {
       shipped: 0,
       incognito: 0,
@@ -294,28 +285,21 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       rejected: 0,
       failed: 0,
     };
-    const examined = [...todo]
+    // The ship step decides each session's fate (incognito, unsupported, trivial, rejected, or
+    // shipped); this side only picks the batch and records the answers.
+    const batch = [...todo]
       .sort((a, b) => Date.parse(a.updated) - Date.parse(b.updated))
       .slice(0, SHIP_BATCH_LIMIT);
-    const localOutcome = new Map<string, "incognito" | "trivial">();
-    const batch: AgentSession[] = [];
-    for (const candidate of examined) {
-      if (isIncognito(candidate)) localOutcome.set(sessionKey(candidate), "incognito");
-      else if (!worthShipping(candidate)) localOutcome.set(sessionKey(candidate), "trivial");
-      else batch.push(candidate);
-    }
     logger.debug("sync", `shipping ${batch.length} of ${todo.length} ready sessions`);
 
-    let results: ShipSessionResult[] = [];
-    if (batch.length > 0) {
-      try {
-        results = await deps.ship(batch);
-      } catch (err) {
-        // The ship step reports failures per session; a throw is a step bug — treat it as one
-        // failed attempt so backoff still engages instead of crashing the sync run.
-        const message = err instanceof Error ? err.message : String(err);
-        results = [{ session: batch[0], outcome: "failed", message }];
-      }
+    let results: ShipSessionResult[];
+    try {
+      results = await deps.ship(batch);
+    } catch (err) {
+      // The ship step reports failures per session; a throw is a step bug — treat it as one
+      // failed attempt so backoff still engages instead of crashing the sync run.
+      const message = err instanceof Error ? err.message : String(err);
+      results = [{ session: batch[0], outcome: "failed", message }];
     }
     // By key, not identity: scoping hands the batch out as repo-tagged copies.
     const resultOf = new Map(results.map((r) => [sessionKey(r.session), r]));
@@ -323,12 +307,9 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     const at = now().toISOString();
     const settled = new Map<string, LedgerEntry>();
     let error: string | undefined;
-    for (const session of examined) {
+    for (const session of batch) {
       const key = sessionKey(session);
-      const local = localOutcome.get(key);
-      const result: ShipSessionResult | undefined = local
-        ? { session, outcome: local }
-        : resultOf.get(key);
+      const result = resultOf.get(key);
       // No result: the batch stopped at an earlier failure; still pending.
       if (!result) continue;
       counts[result.outcome] += 1;

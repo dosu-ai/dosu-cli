@@ -74,9 +74,6 @@ function makeDeps(overrides: Partial<SyncDeps> = {}): { deps: SyncDeps; saved: S
     listSessions: vi.fn().mockResolvedValue([]),
     loadState: () => state(),
     saveState: (s) => saved.push(s),
-    // Tests use fake paths: neither local filter can read them.
-    worthShipping: () => true,
-    isIncognito: () => false,
     lock: openLock(),
     locator: { resolve: () => "/repo/dosu-cli", resolveRepo: () => DOSU_CLI },
     now: () => NOW,
@@ -465,40 +462,29 @@ describe("runKnowledgeSync shipping", () => {
     expect(vi.mocked(ship).mock.calls[0][0].map((s) => s.id)).toEqual([straggler.id]);
   });
 
-  it("settles incognito and trivial sessions locally without uploading them", async () => {
-    const ship = shipAll();
+  it("settles what the ship step passed over: incognito and trivial are answers, not failures", async () => {
     const secret = session(90);
     const tiny = session(60);
     const { deps, saved } = makeDeps({
       listSessions: vi.fn().mockResolvedValue([session(30), tiny, secret]),
-      isIncognito: (s) => s.id === secret.id,
-      worthShipping: (s) => s.id !== tiny.id,
-      ship,
+      ship: vi.fn(
+        async (): Promise<ShipSessionResult[]> => [
+          { session: secret, outcome: "incognito" },
+          { session: tiny, outcome: "trivial" },
+          { session: session(30), outcome: "shipped", taskId: "t" },
+        ],
+      ),
     });
 
     const outcome = await runKnowledgeSync({ deps });
 
-    expect(vi.mocked(ship).mock.calls[0][0]).toEqual([{ ...session(30), repo: DOSU_CLI }]);
-    expect(outcome.counts).toMatchObject({ shipped: 1, incognito: 1, trivial: 1 });
+    expect(outcome.status).toBe("shipped");
+    expect(outcome.settledSessions).toBe(3);
+    expect(outcome.counts).toMatchObject({ shipped: 1, incognito: 1, trivial: 1, failed: 0 });
     const ledger = (saved.at(-1) as SyncState).sessions;
     expect(ledger["claude/s-90"]).toMatchObject({ outcome: "incognito", cli_version: CLI });
     expect(ledger["claude/s-60"]).toMatchObject({ outcome: "trivial", cli_version: CLI });
-  });
-
-  it("settles a batch of only local skips without calling the ship step", async () => {
-    const ship = shipAll();
-    const { deps, saved } = makeDeps({
-      listSessions: vi.fn().mockResolvedValue([session(30), session(60)]),
-      worthShipping: () => false,
-      ship,
-    });
-
-    const outcome = await runKnowledgeSync({ deps });
-
-    expect(ship).not.toHaveBeenCalled();
-    expect(outcome.status).toBe("shipped");
-    expect(outcome.settledSessions).toBe(2);
-    expect(Object.keys((saved.at(-1) as SyncState).sessions)).toHaveLength(2);
+    expect(ledger["claude/s-60"].task_id).toBeUndefined();
   });
 
   it("a newer CLI reconsiders what an older one passed over", async () => {

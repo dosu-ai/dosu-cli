@@ -1,10 +1,11 @@
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectKey } from "../sessions/project";
 import type { AgentSession } from "../sessions/scan";
 import { createShipStep } from "./runner";
+import { MIN_SESSION_CHARS } from "./worthiness";
 
 const mockLoggerDebug = vi.hoisted(() => vi.fn());
 vi.mock("../debug/logger", () => ({
@@ -21,9 +22,11 @@ function session(id: string, overrides: Partial<AgentSession> = {}): AgentSessio
   };
 }
 
+/** A conversation big enough to be worth learning from. */
 const RECORDS = [
   { role: "meta", source: "claude-code" },
-  { role: "user", content: "hi", timestamp: "2026-09-01T00:00:00.000Z" },
+  { role: "user", content: "why does the sync lock leak?", timestamp: "2026-09-01T00:00:00.000Z" },
+  { role: "assistant", content: "x".repeat(2000), timestamp: "2026-09-01T00:00:05.000Z" },
 ];
 
 function accepted(body: unknown = { task_id: "task-1", session_url: "https://app/m/s1" }) {
@@ -33,7 +36,7 @@ function accepted(body: unknown = { task_id: "task-1", session_url: "https://app
 interface StepOverrides {
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
   isIncognito?: (s: AgentSession) => boolean;
-  normalize?: (s: AgentSession) => Promise<typeof RECORDS | null>;
+  normalize?: (s: AgentSession) => Promise<Record<string, unknown>[] | null>;
   resolveProject?: (s: AgentSession) => ProjectKey | null;
 }
 
@@ -83,7 +86,12 @@ describe("createShipStep", () => {
           message: {
             role: "assistant",
             model: "claude-x",
-            content: [{ type: "text", text: "single-flight via a pid lock file" }],
+            content: [
+              {
+                type: "text",
+                text: `single-flight via a pid lock file. ${"Details. ".repeat(250)}`,
+              },
+            ],
           },
         }),
       ].join("\n"),
@@ -259,5 +267,146 @@ describe("createShipStep", () => {
     expect(results).toEqual([
       { session: session("s1"), outcome: "failed", message: "socket hang up" },
     ]);
+  });
+});
+
+/** One Claude Code transcript line. */
+function line(type: string, uuid: string, second: number, content: unknown): string {
+  return JSON.stringify({
+    type,
+    uuid,
+    timestamp: `2026-09-01T00:00:${String(second).padStart(2, "0")}.000Z`,
+    sessionId: "s",
+    message: { role: type, model: "claude-x", content },
+  });
+}
+
+describe("createShipStep worthiness, judged on the normalized and redacted records", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "dosu-ship-worth-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** Ships one real transcript through the default normalizer. */
+  async function shipTranscript(lines: string[]) {
+    const path = join(dir, "s.jsonl");
+    writeFileSync(path, lines.join("\n"));
+    const fetchImpl = vi.fn().mockResolvedValue(accepted());
+    const step = createShipStep({
+      apiKey: "k",
+      deploymentId: "dep1",
+      backendUrl: "https://api.dosu.test",
+      fetchImpl,
+      isIncognito: () => false,
+      resolveProject: () => ({ project: "github.com/acme/app", rule: "origin" }),
+    });
+    const [result] = await step([session("s", { path })]);
+    return { result, fetchImpl };
+  }
+
+  it("ships a terse, tool-heavy run: tool arguments and results count, not just prose", async () => {
+    // Two words of prose each way; the substance is in the tool traffic. A text-only turn
+    // count called this trivial.
+    const { result, fetchImpl } = await shipTranscript([
+      line("user", "u1", 0, "fix it"),
+      line("assistant", "a1", 1, [
+        { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "npm test 2>&1" } },
+      ]),
+      line("user", "u2", 2, [
+        {
+          type: "tool_result",
+          tool_use_id: "toolu_1",
+          content: `FAIL auth.test.ts\n${"at x\n".repeat(500)}`,
+        },
+      ]),
+      line("assistant", "a2", 3, [{ type: "text", text: "Fixed." }]),
+    ]);
+
+    expect(result.outcome).toBe("shipped");
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("a short exchange is trivial and never uploaded", async () => {
+    const { result, fetchImpl } = await shipTranscript([
+      line("user", "u1", 0, "hello"),
+      line("assistant", "a1", 1, [{ type: "text", text: "Hi! How can I help?" }]),
+    ]);
+
+    expect(result.outcome).toBe("trivial");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("a long prompt nobody answered is trivial", async () => {
+    const { result } = await shipTranscript([line("user", "u1", 0, "y".repeat(5000))]);
+
+    expect(result.outcome).toBe("trivial");
+  });
+
+  it("the threshold is on the records as shipped, after redaction", async () => {
+    // 2,100 characters of which most is one secret: redacted, it falls under the bar.
+    const secret = `ghp_${"a".repeat(36)}`;
+    const { result } = await shipTranscript([
+      line("user", "u1", 0, `use ${secret} ${"z".repeat(10)}`),
+      line("assistant", "a1", 1, [{ type: "text", text: `${secret.repeat(50)} ok` }]),
+    ]);
+
+    expect(result.outcome).toBe("trivial");
+  });
+});
+
+describe("createShipStep worthiness thresholds", () => {
+  const user = { role: "user", content: "u", timestamp: "2026-09-01T00:00:00.000Z" };
+  const assistant = (content: string) => ({
+    role: "assistant",
+    content,
+    timestamp: "2026-09-01T00:00:01.000Z",
+  });
+
+  it.each([
+    // The user record holds one character.
+    ["exactly the minimum", [user, assistant("a".repeat(MIN_SESSION_CHARS - 1))], "shipped"],
+    ["one character short", [user, assistant("a".repeat(MIN_SESSION_CHARS - 2))], "trivial"],
+    [
+      "no user record",
+      [
+        assistant("a".repeat(3000)),
+        { role: "tool", tool_call_id: "t", content: "r", timestamp: "x" },
+      ],
+      "trivial",
+    ],
+    [
+      "only a tool result answering the user",
+      [
+        user,
+        { role: "tool", tool_call_id: "t", content: "r".repeat(MIN_SESSION_CHARS), timestamp: "x" },
+      ],
+      "shipped",
+    ],
+    [
+      "tool arguments count",
+      [
+        user,
+        {
+          role: "assistant",
+          content: null,
+          tool_calls: [{ id: "t", name: "Edit", args: "a".repeat(MIN_SESSION_CHARS - 1) }],
+          timestamp: "x",
+        },
+      ],
+      "shipped",
+    ],
+  ])("%s", async (_label, body, outcome) => {
+    const meta = { role: "meta", source: "claude-code", cwd: "/m".repeat(5000) };
+    const { step } = makeStep({ normalize: async () => [meta, ...body] });
+
+    const [result] = await step([session("s1")]);
+
+    // The meta record never counts, however long its strings.
+    expect(result.outcome).toBe(outcome);
   });
 });

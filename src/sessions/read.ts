@@ -239,21 +239,3 @@ export function estimateSessionTokens(session: AgentSession): number {
   for (const turn of readSessionTurns(session)) chars += turn.text.length;
   return Math.round(chars / CHARS_PER_TOKEN);
 }
-
-/** Fewer conversational turns than this and a session can't hold a real finding. */
-const MIN_WORTH_TURNS = 4;
-/** Total conversation text below this is a greeting, not an investigation. */
-const MIN_WORTH_CHARS = 2000;
-
-/** Cheap pre-filter that keeps trivial sessions from costing a gateway run; deliberately
- * permissive, rejecting only sessions that are structurally too small, never judging content. */
-export function isWorthStudying(session: AgentSession): boolean {
-  const turns = readSessionTurns(session);
-  if (turns.length < MIN_WORTH_TURNS) return false;
-  let chars = 0;
-  for (const turn of turns) {
-    chars += turn.text.length;
-    if (chars >= MIN_WORTH_CHARS) return true;
-  }
-  return false;
-}

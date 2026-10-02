@@ -3,12 +3,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  countRediscoveryToolCalls,
-  estimateSessionTokens,
-  isWorthStudying,
-  readSessionTurns,
-} from "./read";
+import { countRediscoveryToolCalls, estimateSessionTokens, readSessionTurns } from "./read";
 import type { AgentSession } from "./scan";
 
 let dir: string;
@@ -387,48 +382,6 @@ describe("readSessionTurns", () => {
 
       expect(readSessionTurns(session("opencode", dbPath, "ses_a"))).toEqual([]);
     });
-  });
-});
-
-describe("isWorthStudying", () => {
-  function claudeTurn(role: "user" | "assistant", text: string) {
-    return { type: role, message: { role, content: text } };
-  }
-
-  it("accepts a session with enough turns and enough text", () => {
-    const text = "a substantial paragraph of investigation detail ".repeat(20); // ~960 chars
-    const path = writeLog("worthy.jsonl", [
-      claudeTurn("user", text),
-      claudeTurn("assistant", text),
-      claudeTurn("user", text),
-      claudeTurn("assistant", text),
-    ]);
-
-    expect(isWorthStudying(session("claude", path))).toBe(true);
-  });
-
-  it("rejects a session with too few turns, however long", () => {
-    const path = writeLog("short.jsonl", [
-      claudeTurn("user", "x".repeat(5000)),
-      claudeTurn("assistant", "y".repeat(5000)),
-    ]);
-
-    expect(isWorthStudying(session("claude", path))).toBe(false);
-  });
-
-  it("rejects a chatty but tiny session", () => {
-    const path = writeLog("tiny.jsonl", [
-      claudeTurn("user", "hi"),
-      claudeTurn("assistant", "hello!"),
-      claudeTurn("user", "thanks"),
-      claudeTurn("assistant", "any time"),
-    ]);
-
-    expect(isWorthStudying(session("claude", path))).toBe(false);
-  });
-
-  it("rejects an unreadable session", () => {
-    expect(isWorthStudying(session("claude", join(dir, "missing.jsonl")))).toBe(false);
   });
 });
 
