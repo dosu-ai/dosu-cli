@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  displayProjectKey,
   gitProjectOfDir,
   MAX_PROJECT_KEY_LENGTH,
   projectLinksPath,
@@ -259,5 +260,20 @@ describe("readProjectLinks", () => {
     ]);
 
     expect(readProjectLinks(configDir)).toEqual([{ dir: "/work/app", project: "app" }]);
+  });
+});
+
+describe("displayProjectKey", () => {
+  it.each([
+    ["github.com/acme/widget", "acme/widget"],
+    ["gitlab.example.com/group/sub/repo", "group/sub/repo"],
+    [`git:${"ab".repeat(20)}`, "git:abababababab"],
+    ["path:/work/scratch", "scratch"],
+    [`path:sha256:${"f".repeat(64)}`, "path:sha256:ffffffffffff"],
+    ["path:/", "path:/"],
+    ["poc-alpha", "poc-alpha"],
+    ["team/thing", "team/thing"],
+  ])("%s reads as %s", (key, shown) => {
+    expect(displayProjectKey(key)).toBe(shown);
   });
 });

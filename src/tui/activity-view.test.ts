@@ -222,6 +222,21 @@ describe("formatShippedRow", () => {
     ).toBe("cursor    09-02 23:00  dosu-cli  abc-123");
   });
 
+  it("shows the project key readably, and the workspace for history from before keys", () => {
+    const at = "2026-09-02T23:00:00.000Z";
+    expect(
+      formatShippedRow({
+        at,
+        session: "claude/a",
+        task_id: "t",
+        project: "github.com/acme/widget",
+      }),
+    ).toBe("claude    09-02 23:00  acme/widget  a");
+    expect(
+      formatShippedRow({ at, session: "claude/a", task_id: "t", workspace: "-work-app" }),
+    ).toBe("claude    09-02 23:00  -work-app  a");
+  });
+
   it("shows '-' for records written before the project field existed", () => {
     expect(
       formatShippedRow({ at: "2026-09-02T23:00:00.000Z", session: "cursor/abc", task_id: "t" }),

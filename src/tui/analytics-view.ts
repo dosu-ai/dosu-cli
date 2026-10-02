@@ -4,6 +4,7 @@
 import pc from "picocolors";
 import { createTypedClient, type TypedClient } from "../client/trpc";
 import { loadConfig } from "../config/config";
+import { displayProjectKey } from "../sessions/project";
 import { type SyncState, shippedSessions } from "../sync/state";
 import { getSyncStatus, type SyncStatus } from "../sync/status";
 import { enterAltScreen } from "./alt-screen";
@@ -133,16 +134,20 @@ export function overviewRows(state: SyncState): string[] {
   return shipped === 0 ? [] : [`${label("Sessions shipped")}${shipped}`];
 }
 
-/** Projects tab: recent shipped sessions bucketed by project key, under column labels. */
+/** Projects tab: recent shipped sessions bucketed by project key, under column labels. History
+ * carried over from the watermark state has no key, only the scanner's workspace. */
 export function projectRows(state: SyncState): string[] {
-  const byProject = new Map<string, number>();
+  const byProject = new Map<string, { name: string; count: number }>();
   for (const record of shippedSessions(state)) {
-    const key = record.project ?? "(unknown)";
-    byProject.set(key, (byProject.get(key) ?? 0) + 1);
+    const key = record.project ?? record.workspace ?? "";
+    const name = record.project ? displayProjectKey(record.project) : record.workspace;
+    const bucket = byProject.get(key) ?? { name: name ?? "(unknown)", count: 0 };
+    bucket.count += 1;
+    byProject.set(key, bucket);
   }
-  const data = [...byProject.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([project, count]) => `${label(clip(project, 24))}${count}`);
+  const data = [...byProject.values()]
+    .sort((a, b) => b.count - a.count)
+    .map(({ name, count }) => `${label(clip(name, 24))}${count}`);
   return data.length > 0 ? [`${label("Project")}Sessions`, ...data] : [];
 }
 

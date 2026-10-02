@@ -531,7 +531,7 @@ export function buildReportHtml(options: BuildReportOptions): string {
         : '<span class="muted">processing</span>';
       return `<tr>
       <td>${esc(record.session)}</td>
-      <td>${esc(record.project ?? "—")}</td>
+      <td>${esc(record.project ?? record.workspace ?? "—")}</td>
       <td>${esc(record.at)}</td>
       <td>${link}</td>
     </tr>`;

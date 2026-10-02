@@ -6,6 +6,7 @@ import { basename } from "node:path";
 import pc from "picocolors";
 import { createLogFollower } from "../debug/follow";
 import { logger, stripAnsiCodes } from "../debug/logger";
+import { displayProjectKey } from "../sessions/project";
 import { createProjectDirResolver, unmungeSlug } from "../sessions/project-dir";
 import type { AgentSession } from "../sessions/scan";
 import { createSessionTitleResolver, reconstructSession } from "../sessions/session-title";
@@ -155,8 +156,11 @@ export function formatShippedRow(
   const slash = record.session.indexOf("/");
   const harness = slash > 0 ? record.session.slice(0, slash) : "-";
   const id = slash > 0 ? record.session.slice(slash + 1) : record.session;
-  const rawProject = record.project ?? "-";
-  const project = full ? rawProject : clip(rawProject, 28);
+  // History carried over from the watermark state has only the scanner's workspace.
+  const rawProject = record.project ?? record.workspace ?? "-";
+  const project = full
+    ? rawProject
+    : clip(record.project ? displayProjectKey(record.project) : rawProject, 28);
   const label = full ? (name ? `${name} \u00B7 ${id}` : id) : clip(name ?? id, 44);
   return `${harness.padEnd(8)}  ${stamp}  ${project}  ${label}`;
 }

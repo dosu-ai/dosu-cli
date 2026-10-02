@@ -203,7 +203,7 @@ export function knowledgeCommand(): Command {
         };
         const shippedRows = shipped.map((record) => {
           const [harness, id] = keyColumns(record.session);
-          return [harness, record.at, record.project ?? "-", id];
+          return [harness, record.at, record.project ?? record.workspace ?? "-", id];
         });
         const reasonRows = (entries: typeof rejected) =>
           entries.map((entry) => {

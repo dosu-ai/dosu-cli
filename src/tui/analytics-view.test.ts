@@ -48,7 +48,13 @@ function emptyState(): SyncState {
 
 /** A ledger holding these sessions as shipped. */
 function ledger(
-  records: Array<{ at: string; session: string; task_id: string; project?: string }>,
+  records: Array<{
+    at: string;
+    session: string;
+    task_id: string;
+    project?: string;
+    workspace?: string;
+  }>,
 ): SyncState["sessions"] {
   return Object.fromEntries(
     records.map(({ session, ...record }) => [
@@ -170,6 +176,31 @@ describe("projectRows", () => {
 
   it("is empty without shipped-session history", () => {
     expect(projectRows(emptyState())).toEqual([]);
+  });
+
+  it("shows project keys readably, and history migrated from the watermark by workspace", () => {
+    const at = "2026-09-02T23:00:00.000Z";
+    const rows = projectRows({
+      ...emptySyncState(),
+      sessions: ledger([
+        { at, session: "claude/a", task_id: "t", project: "github.com/acme/widget" },
+        { at, session: "claude/b", task_id: "t", project: `git:${"c0ac08c7".repeat(5)}` },
+        { at, session: "claude/c", task_id: "t", project: "path:/work/scratch" },
+        { at, session: "claude/d", task_id: "t", project: "poc-alpha" },
+        // Schema 2 recorded only the scanner's workspace.
+        { at, session: "claude/e", task_id: "t", workspace: "-work-app" },
+        { at, session: "claude/f", task_id: "t", workspace: "-work-app" },
+      ]),
+    });
+
+    expect(rows.slice(1).map((row) => row.replace(/\s+\d+$/, ""))).toEqual([
+      "-work-app",
+      "acme/widget",
+      "git:c0ac08c7c0ac",
+      "scratch",
+      "poc-alpha",
+    ]);
+    expect(rows.join("\n")).not.toContain("(unknown)");
   });
 });
 

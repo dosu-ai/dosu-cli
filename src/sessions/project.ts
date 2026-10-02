@@ -13,9 +13,9 @@
 
 import { createHash } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { getConfigDir } from "../config/config";
-import { originRepoOfDir, rootCommitOfDir, toplevelOfDir } from "./repo";
+import { displayRepo, originRepoOfDir, rootCommitOfDir, toplevelOfDir } from "./repo";
 
 const LINKS_FILENAME = "projects.json";
 
@@ -131,4 +131,15 @@ export function gitProjectOfDir(dir: string): ProjectKey {
 /** All five rules, uncached. */
 export function resolveProjectOfDir(dir: string, options: ProjectOptions = {}): ProjectKey {
   return projectOverride(dir, options) ?? gitProjectOfDir(dir);
+}
+
+/** A project key short enough for a narrow column: `acme/widget` for an origin, `git:` and the
+ * first 12 hex of a root commit, a path's last directory; a link or DOSU_PROJECT name as is. */
+export function displayProjectKey(key: string): string {
+  if (key.startsWith("git:")) return key.slice(0, "git:".length + 12);
+  if (key.startsWith("path:sha256:")) return key.slice(0, "path:sha256:".length + 12);
+  if (key.startsWith("path:")) return basename(key.slice("path:".length)) || key;
+  // An origin: host (with a dot), owner, repo.
+  if (/^[^/\s]+\.[^/\s]+\/[^/]+\/./.test(key)) return displayRepo(key);
+  return key;
 }
