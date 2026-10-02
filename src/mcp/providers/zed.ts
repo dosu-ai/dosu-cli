@@ -1,7 +1,7 @@
 import { rmSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
-import { readJSONConfig, saveJSONConfig } from "../config-helpers";
+import { readJSONConfig, readJSONServer, saveJSONConfig } from "../config-helpers";
 import { appSupportDir } from "../detect";
 import type { SetupProvider } from "../providers";
 import { createJSONProvider } from "./base";
@@ -73,6 +73,8 @@ export const ZedProvider = (legacyPath = legacyDarwinSettingsPath()): SetupProvi
   if (!legacyPath) return provider;
   return {
     ...provider,
+    isCurrent: (cfg) =>
+      provider.isCurrent(cfg) && readJSONServer(legacyPath, "context_servers") === undefined,
     install(cfg, global) {
       provider.install(cfg, global);
       if (global) removeLegacyDosuEntry(legacyPath);

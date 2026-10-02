@@ -206,8 +206,8 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
         checkForSkillUpdates({ notify: !launchesTUI });
         checkForReadyTasks();
         // First run on a new version: rewrite configured agents' MCP entries
-        // with this version's provider code so format changes land without
-        // a manual `dosu setup`.
+        // that are not the shape this version writes, so format changes land
+        // without a manual `dosu setup`.
         if (shouldRunMcpRefreshCheck(actionCommand)) {
           checkForMcpRefresh({ notify: !launchesTUI });
         }

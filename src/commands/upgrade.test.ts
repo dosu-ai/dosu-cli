@@ -38,12 +38,12 @@ vi.mock("../config/config", async (importOriginal) => ({
   loadConfigNonBlocking: vi.fn(() => ({})),
 }));
 
-vi.mock("../mcp/refresh", () => ({ refreshConfiguredProviders: vi.fn() }));
+vi.mock("../mcp/refresh", () => ({ refreshProviders: vi.fn(), staleProviders: vi.fn() }));
 
 vi.mock("../setup/flow", () => ({ runSetup: vi.fn(async () => {}) }));
 
 import { loadConfigNonBlocking } from "../config/config";
-import { refreshConfiguredProviders } from "../mcp/refresh";
+import { refreshProviders, staleProviders } from "../mcp/refresh";
 import { runSetup } from "../setup/flow";
 import {
   autoUpdateDisabledReason,
@@ -130,8 +130,10 @@ beforeEach(() => {
   mockSpawnSync.mockReset();
   vi.mocked(checkForSkillUpdates).mockClear();
   vi.mocked(runSetup).mockClear();
-  vi.mocked(refreshConfiguredProviders).mockReset();
-  vi.mocked(refreshConfiguredProviders).mockReturnValue({ updated: [], failed: [] });
+  vi.mocked(refreshProviders).mockReset();
+  vi.mocked(refreshProviders).mockReturnValue({ updated: [], failed: [] });
+  vi.mocked(staleProviders).mockReset();
+  vi.mocked(staleProviders).mockReturnValue([]);
   vi.mocked(writeMcpRefreshCache).mockClear();
   vi.mocked(canRefreshMcp).mockClear();
   vi.mocked(loadConfigNonBlocking).mockClear();
@@ -656,41 +658,43 @@ describe("completeUpgrade", () => {
 });
 
 describe("finishUpgrade", () => {
-  it("only re-applies skills when no agent config format changed since the old version", async () => {
+  const cursor = { name: () => "Cursor" } as ReturnType<typeof staleProviders>[number];
+
+  it("only re-applies skills when every configured entry is already current", async () => {
     const status = await finishUpgrade("0.57.2", { interactive: true });
 
     expect(status).toBe(0);
+    expect(staleProviders).toHaveBeenCalledWith({});
     expect(runSetup).not.toHaveBeenCalled();
-    expect(refreshConfiguredProviders).not.toHaveBeenCalled();
+    expect(refreshProviders).not.toHaveBeenCalled();
     expect(checkForSkillUpdates).toHaveBeenCalledOnce();
     expect(writeMcpRefreshCache).toHaveBeenCalledWith({ version: "0.60.1" });
     expect(output()).toContain("need no changes");
   });
 
-  it("runs setup when a person is at the terminal and a format change was crossed", async () => {
-    const status = await finishUpgrade("0.52.0", { interactive: true });
+  it("runs setup when a person is at the terminal and an entry is out of date", async () => {
+    vi.mocked(staleProviders).mockReturnValue([cursor]);
+
+    const status = await finishUpgrade("0.60.0", { interactive: true });
 
     expect(status).toBe(0);
     expect(runSetup).toHaveBeenCalledOnce();
     expect(checkForSkillUpdates).not.toHaveBeenCalled();
   });
 
-  it("treats an unrecognised old version as needing setup", async () => {
-    await finishUpgrade("dev", { interactive: true });
+  it("refreshes only the out-of-date entries without a TTY", async () => {
+    const zed = { name: () => "Zed" } as typeof cursor;
+    vi.mocked(staleProviders).mockReturnValue([cursor, zed]);
+    vi.mocked(refreshProviders).mockReturnValue({
+      updated: [cursor],
+      failed: [{ provider: zed, error: new Error("read-only") }],
+    });
 
-    expect(runSetup).toHaveBeenCalledOnce();
-  });
-
-  it("refreshes MCP entries silently without a TTY when a format change was crossed", async () => {
-    vi.mocked(refreshConfiguredProviders).mockReturnValue({
-      updated: [{ name: () => "Cursor" }],
-      failed: [{ provider: { name: () => "Zed" }, error: new Error("read-only") }],
-    } as unknown as ReturnType<typeof refreshConfiguredProviders>);
-
-    const status = await finishUpgrade("0.52.0", { interactive: false });
+    const status = await finishUpgrade("0.60.0", { interactive: false });
 
     expect(status).toBe(0);
     expect(runSetup).not.toHaveBeenCalled();
+    expect(refreshProviders).toHaveBeenCalledWith({}, [cursor, zed]);
     expect(checkForSkillUpdates).toHaveBeenCalledOnce();
     expect(writeMcpRefreshCache).toHaveBeenCalledWith({ version: "0.60.1" });
     expect(output()).toContain("✓ Cursor");
@@ -698,12 +702,13 @@ describe("finishUpgrade", () => {
     expect(errors()).toContain('Run "dosu setup"');
   });
 
-  it("points at dosu setup when there is nothing to refresh with", async () => {
+  it("points at dosu setup when an entry is out of date but there is nothing to refresh with", async () => {
+    vi.mocked(staleProviders).mockReturnValue([cursor]);
     vi.mocked(canRefreshMcp).mockReturnValueOnce(false);
 
-    await finishUpgrade("0.52.0", { interactive: false });
+    await finishUpgrade("0.60.0", { interactive: false });
 
-    expect(refreshConfiguredProviders).not.toHaveBeenCalled();
+    expect(refreshProviders).not.toHaveBeenCalled();
     expect(writeMcpRefreshCache).not.toHaveBeenCalled();
     expect(errors()).toContain('Run "dosu setup"');
   });
@@ -714,7 +719,10 @@ describe("finishUpgrade", () => {
     Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
     Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
     try {
-      await finishUpgrade("0.52.0");
+      vi.mocked(staleProviders).mockReturnValue([{ name: () => "Cursor" }] as ReturnType<
+        typeof staleProviders
+      >);
+      await finishUpgrade("0.60.0");
       expect(runSetup).toHaveBeenCalledOnce();
     } finally {
       restoreDescriptor(process.stdin, "isTTY", stdinTTY);

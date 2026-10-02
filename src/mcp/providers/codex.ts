@@ -6,9 +6,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { type Config, MODE_OSS } from "../../config/config";
-import { mcpEndpoint, mcpRemoteServer, writeSecureFile } from "../config-helpers";
+import { mcpEndpoint, npxRemoteEntry, writeSecureFile } from "../config-helpers";
 import { expandHome, findNpx, isInstalled, npxPathEnv } from "../detect";
 import type { SetupProvider } from "../providers";
+import { ANY, hasShape, shapeEndpoint } from "../shape";
 
 function codexHome(): string {
   return process.env.CODEX_HOME ?? expandHome("~/.codex");
@@ -33,25 +34,80 @@ function tomlString(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
+type TOMLValue = string | string[];
+/** The Dosu entry as data: root-table keys, plus one record per subtable (`env`). */
+type DosuEntry = Record<string, TOMLValue | Record<string, TOMLValue>>;
+
+function tomlValue(value: TOMLValue): string {
+  return Array.isArray(value) ? `[${value.map(tomlString).join(", ")}]` : tomlString(value);
+}
+
+/** Codex desktop only renders MCP Apps for stdio servers, so the entry proxies through
+ * `npx mcp-remote`. */
+function dosuEntry(url: string, apiKey: string | undefined, npx: string, path: string): DosuEntry {
+  return npxRemoteEntry(url, apiKey, npx, path);
+}
+
+function renderDosuEntry(entry: DosuEntry): string {
+  const tables: Array<[string, Record<string, TOMLValue>]> = [["mcp_servers.dosu", {}]];
+  for (const [key, value] of Object.entries(entry)) {
+    if (typeof value === "string" || Array.isArray(value)) tables[0][1][key] = value;
+    else tables.push([`mcp_servers.dosu.${key}`, value]);
+  }
+  return tables
+    .map(([name, keys]) => {
+      const lines = Object.entries(keys).map(([key, value]) => `${key} = ${tomlValue(value)}`);
+      return `\n[${name}]\n${lines.join("\n")}\n`;
+    })
+    .join("");
+}
+
+/** The Dosu entry in `content` in `DosuEntry` form, or undefined when there is none. Values are
+ * read as JSON, which covers the strings and string arrays this provider writes; anything else
+ * (a hand-written literal string, a trailing comment) stays raw text and compares as different. */
+function readDosuEntry(content: string): Record<string, unknown> | undefined {
+  let entry: Record<string, unknown> | undefined;
+  let table: Record<string, unknown> | undefined;
+  for (const line of content.split("\n")) {
+    const name = sectionName(line);
+    if (name !== null) {
+      table = undefined;
+      if (!isDosuSection(name)) continue;
+      entry ??= {};
+      if (name === "mcp_servers.dosu") {
+        table = entry;
+      } else {
+        table = {};
+        entry[name.slice("mcp_servers.dosu.".length)] = table;
+      }
+      continue;
+    }
+    const text = line.trim();
+    if (!table || !text || text.startsWith("#")) continue;
+    const eq = text.indexOf("=");
+    const key = eq === -1 ? text : text.slice(0, eq).trim();
+    const raw = eq === -1 ? "" : text.slice(eq + 1).trim();
+    try {
+      table[key] = JSON.parse(raw);
+    } catch {
+      table[key] = raw;
+    }
+  }
+  return entry;
+}
+
 function installDosuToTOML(path: string, cfg: Config): void {
-  let content = readTOML(path);
   // Remove existing [mcp_servers.dosu] section if present (including the
   // legacy [mcp_servers.dosu.http_headers] subtable from the remote-HTTP form)
-  content = removeDosuFromTOML(content);
-  // Codex desktop only renders MCP Apps for stdio servers, so proxy through `npx mcp-remote`;
-  // npx is absolute with explicit PATH because desktop launches with the minimal launchd PATH.
+  const content = removeDosuFromTOML(readTOML(path));
   const npx = findNpx();
-  const remote = mcpRemoteServer(mcpEndpoint(cfg), cfg.active_account?.target?.api_key);
-  const env: Record<string, string> = { PATH: npxPathEnv(npx), ...remote.env };
-  const envEntries = Object.entries(env)
-    .map(([key, value]) => `${key} = ${tomlString(value)}`)
-    .join("\n");
-  const args = remote.args.map(tomlString).join(", ");
-  const section =
-    `\n[mcp_servers.dosu]\ncommand = ${tomlString(npx)}\nargs = [${args}]\n` +
-    `\n[mcp_servers.dosu.env]\n${envEntries}\n`;
-  content += section;
-  writeTOML(path, content);
+  const entry = dosuEntry(
+    mcpEndpoint(cfg),
+    cfg.active_account?.target?.api_key,
+    npx,
+    npxPathEnv(npx),
+  );
+  writeTOML(path, content + renderDosuEntry(entry));
 }
 
 /** The table name from a TOML table or array-of-tables header, tolerating a trailing comment and
@@ -146,6 +202,11 @@ export const CodexProvider = (): SetupProvider => ({
     const content = readTOML(join(codexHome(), "config.toml"));
     return content.includes("[mcp_servers.dosu]");
   },
+  isCurrent: (cfg) =>
+    hasShape(
+      dosuEntry(shapeEndpoint(cfg), ANY, ANY, npxPathEnv(join(ANY, "npx"))),
+      readDosuEntry(readTOML(join(codexHome(), "config.toml"))),
+    ),
   install(cfg: Config, global: boolean): void {
     if (cfg.mode !== MODE_OSS && !cfg.active_account?.target?.deployment_id)
       throw new Error("deployment ID is required");
