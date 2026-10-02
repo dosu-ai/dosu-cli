@@ -597,6 +597,21 @@ describe("resetSyncState", () => {
   });
 });
 
+describe("outside_sessions", () => {
+  it("survives a load and a reset, dropping malformed values", () => {
+    writeRaw({
+      schema_version: 3,
+      sessions: {},
+      consecutive_failures: 0,
+      outside_sessions: { "claude/a": "/x/a.jsonl", "claude/b": 7 },
+    });
+    expect(loadSyncState(configDir).outside_sessions).toEqual({ "claude/a": "/x/a.jsonl" });
+
+    resetSyncState(configDir);
+    expect(loadSyncState(configDir).outside_sessions).toEqual({ "claude/a": "/x/a.jsonl" });
+  });
+});
+
 describe("skipBacklog", () => {
   it("settles exactly the declined sessions as skipped by the user, keeping the rest", () => {
     saveSyncState(

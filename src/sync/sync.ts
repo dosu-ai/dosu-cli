@@ -5,7 +5,13 @@
 import { logger } from "../debug/logger";
 import type { EndedSession } from "../sessions/capture";
 import { createProjectDirResolver } from "../sessions/project-dir";
-import { type AgentSession, scanAgentSessions, sessionAtPath } from "../sessions/scan";
+import {
+  type AgentSession,
+  SESSION_HARNESSES,
+  type SessionHarness,
+  scanAgentSessions,
+  sessionAtPath,
+} from "../sessions/scan";
 import type { ShippedPrefix } from "../shipper/continuation";
 import { VERSION } from "../version/version";
 import { fileLock, type SyncLock } from "./lock";
@@ -163,19 +169,42 @@ function isEndedSession(ended: EndedSession, session: AgentSession): boolean {
   );
 }
 
-/** The scan plus any ended session it missed because its transcript lives outside the roots the
- * scan walks: the hook named the file, so read it from there. */
-function withEndedSessions(
+/** The scan plus the sessions it cannot list: the ones a hook just named as ended and the ones
+ * earlier hooks named (`remembered`), whose transcripts live outside the roots the scan walks.
+ * Returns them with the outside transcripts worth remembering from now on: any still on disk,
+ * inside the scan window, and still missed by the scan. */
+export function withOutsideSessions(
   scanned: readonly AgentSession[],
   ended: readonly EndedSession[],
-): AgentSession[] {
+  remembered: Readonly<Record<string, string>>,
+  since: Date,
+): { sessions: AgentSession[]; outside: Record<string, string> } {
   const sessions = [...scanned];
-  for (const e of ended) {
-    if (!e.harness || !e.id || !e.path || sessions.some((s) => isEndedSession(e, s))) continue;
-    const found = sessionAtPath(e.harness, e.id, e.path);
-    if (found) sessions.push(found);
+  const listed = new Set(scanned.map(sessionKey));
+  const outside: Record<string, string> = {};
+  const candidates = [
+    ...ended,
+    ...Object.entries(remembered).map(([key, path]) => {
+      const [harness, id] = key.split(/\/(.*)/s);
+      return { harness: harness as SessionHarness, id, path };
+    }),
+  ];
+  for (const { harness, id, path } of candidates) {
+    if (!harness || !SESSION_HARNESSES.includes(harness) || !id || !path) continue;
+    const key = sessionKey({ harness, id });
+    if (listed.has(key)) continue;
+    const found = sessionAtPath(harness, id, path);
+    if (!found || Date.parse(found.updated) < since.getTime()) continue;
+    listed.add(key);
+    sessions.push(found);
+    outside[key] = path;
   }
-  return sessions;
+  return { sessions, outside };
+}
+
+function sameRecord(a: Readonly<Record<string, string>>, b: Readonly<Record<string, string>>) {
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((k) => a[k] === b[k]);
 }
 
 function empty(status: SyncStatus): SyncOutcome {
@@ -246,14 +275,17 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
   }
   // An explicit run is an explicit resume; this run's state saves persist the clear.
   const resumes = !options.quiet && state.paused === true;
+  // The user's stop switch: hook-triggered runs stay off until resumed. One whose hook just ended
+  // a session still remembers where that session lives before it stops.
+  let holdBack: "paused" | null = null;
   if (options.quiet) {
-    // The user's stop switch: hook-triggered runs stay off until resumed.
-    if (state.paused) {
+    const retryAt = backoffUntil(state);
+    if (state.paused) holdBack = "paused";
+    if (holdBack && ended.length === 0) {
       logger.debug("sync", "skipping quiet sync: syncing is paused");
       return empty("skipped-paused");
     }
-    const retryAt = backoffUntil(state);
-    if (retryAt && now() < retryAt) {
+    if (!holdBack && retryAt && now() < retryAt) {
       logger.debug("sync", `skipping quiet sync: backoff until ${retryAt.toISOString()}`);
       return empty("skipped-backoff");
     }
@@ -269,7 +301,25 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     // decides what is left to do.
     const since = new Date(now().getTime() - SCAN_WINDOW_DAYS * DAY_MS);
     const listSessions = deps.listSessions ?? (() => scanAgentSessions({ since }));
-    const scanned = withEndedSessions(await listSessions(), ended);
+    const remembered = state.outside_sessions ?? {};
+    const { sessions: scanned, outside } = withOutsideSessions(
+      await listSessions(),
+      ended,
+      remembered,
+      since,
+    );
+    if (!sameRecord(outside, remembered)) {
+      // Saved now, whatever this run goes on to do (the next run must find these), onto a fresh
+      // read so nothing a concurrent run settled meanwhile is lost.
+      const fresh = loadState();
+      if (Object.keys(outside).length > 0) fresh.outside_sessions = outside;
+      else delete fresh.outside_sessions;
+      saveState(fresh);
+    }
+    if (holdBack === "paused") {
+      logger.debug("sync", "skipping quiet sync: syncing is paused");
+      return empty("skipped-paused");
+    }
     let flush: (() => void) | undefined;
     let locator = deps.locator;
     if (!locator) {

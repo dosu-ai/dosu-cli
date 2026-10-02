@@ -124,6 +124,11 @@ export interface SyncState {
   /** `false` = the user opted out of shipping transcripts (`dosu knowledge transcripts
    * disable`). Shipping is on by default, so only the opt-out is ever stored. */
   ship_transcripts?: false;
+  /** Transcripts a session-end hook named that the scan does not list (an agent relocated by an
+   * environment variable only its own processes see), by `harness/id`. Every run reads them too,
+   * so a failed or skipped upload is retried and a resumed session ships its tail; each is
+   * forgotten once its file is gone, leaves the scan window, or the scan lists it itself. */
+  outside_sessions?: Record<string, string>;
 }
 
 /** Whether finished sessions are shipped to Dosu memory: on unless the user opted out. */
@@ -150,6 +155,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stringsOf(values: unknown[]): string[] {
   return values.filter((v): v is string => typeof v === "string");
+}
+
+function stringRecord(value: unknown): Record<string, string> | undefined {
+  if (!isRecord(value)) return undefined;
+  const entries = Object.entries(value).filter(
+    (e): e is [string, string] => typeof e[1] === "string",
+  );
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
 function nonNegative(value: unknown): number | undefined {
@@ -200,6 +213,7 @@ function parseLedger(value: unknown): Record<string, LedgerEntry> {
 
 /** The fields every schema keeps the same way. */
 function parseCommon(raw: Record<string, unknown>): Omit<SyncState, "schema_version" | "sessions"> {
+  const outside = stringRecord(raw.outside_sessions);
   return {
     ...optionalString("last_attempt_at", raw.last_attempt_at),
     consecutive_failures: nonNegative(raw.consecutive_failures) ?? 0,
@@ -207,6 +221,7 @@ function parseCommon(raw: Record<string, unknown>): Omit<SyncState, "schema_vers
     ...(Array.isArray(raw.project_filter) ? { project_filter: stringsOf(raw.project_filter) } : {}),
     ...(raw.paused === true ? { paused: true } : {}),
     ...(raw.ship_transcripts === false ? { ship_transcripts: false as const } : {}),
+    ...(outside ? { outside_sessions: outside } : {}),
   };
 }
 
@@ -322,7 +337,8 @@ export function setShipTranscripts(enabled: boolean, configDir: string = getConf
 /** Forget everything settled so the next run starts from scratch: the ledger, the lifetime
  * counter, and failure backoff (the backend dedupes re-shipped traces on content hash). User
  * settings survive — the study scope, the pause switch, and the shipping opt-out are
- * choices, not progress. Memory already built in Dosu is untouched. */
+ * choices, not progress — and so do the transcripts outside the scan. Memory already built in
+ * Dosu is untouched. */
 export function resetSyncState(configDir: string = getConfigDir()): void {
   const previous = loadSyncState(configDir);
   saveSyncState(
@@ -332,6 +348,8 @@ export function resetSyncState(configDir: string = getConfigDir()): void {
       ...(previous.project_filter ? { project_filter: previous.project_filter } : {}),
       ...(previous.paused ? { paused: true } : {}),
       ...(previous.ship_transcripts === false ? { ship_transcripts: false as const } : {}),
+      // Where those sessions live, so a fresh drain can still find them.
+      ...(previous.outside_sessions ? { outside_sessions: previous.outside_sessions } : {}),
     },
     configDir,
   );

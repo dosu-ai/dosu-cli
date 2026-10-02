@@ -6,7 +6,7 @@ import { type AgentSession, scanAgentSessions } from "../sessions/scan";
 import { VERSION } from "../version/version";
 import { partitionIncognitoSessions } from "./incognito";
 import { filterSessionsByRepo, gateSessions, loadSyncState, studyRepoFilter } from "./state";
-import { SCAN_WINDOW_DAYS } from "./sync";
+import { SCAN_WINDOW_DAYS, withOutsideSessions } from "./sync";
 
 export interface SessionBacklog {
   /** Pending sessions past the quiet period, oldest first. */
@@ -24,7 +24,13 @@ export function listSessionBacklog(now: Date = new Date()): SessionBacklog {
   try {
     const state = loadSyncState();
     const since = new Date(now.getTime() - SCAN_WINDOW_DAYS * 24 * 60 * 60 * 1000);
-    const scanned = scanAgentSessions({ since });
+    // Plus the transcripts outside the scanned roots that the sync remembers and would ship too.
+    const { sessions: scanned } = withOutsideSessions(
+      scanAgentSessions({ since }),
+      [],
+      state.outside_sessions ?? {},
+      since,
+    );
     const resolver = createProjectDirResolver();
     const filter = studyRepoFilter(state, () => scanned, resolver);
     // The same ledger rules the sync applies, so the queue lists exactly what it would ship.

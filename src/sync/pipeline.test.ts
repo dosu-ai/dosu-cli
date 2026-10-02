@@ -215,4 +215,33 @@ describe("knowledge sync, end to end", () => {
     );
     expect(projects).toEqual({ aaaa: "poc-alpha", bbbb: "github.com/acme/beta" });
   });
+
+  it("an ended session outside the scanned roots ships after a failed try, then its tail", async () => {
+    // A Claude Code relocated with CLAUDE_CONFIG_DIR in only its own environment.
+    const dir = join(home, "altcfg", "projects", "-work-app");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, "far.jsonl");
+    writeFileSync(path, exchange(1));
+    utimesSync(path, minutesAgo(0), minutesAgo(0));
+    fetchImpl.mockResolvedValueOnce(new Response("unavailable", { status: 503 }));
+
+    const hook = await runKnowledgeSync({
+      quiet: true,
+      ended: [{ harness: "claude", id: "far", path }],
+      deps: deps(),
+    });
+    expect(hook.status).toBe("ship-failed");
+
+    // Later, from a shell without the variable: the run still knows where the session lives.
+    utimesSync(path, minutesAgo(10), minutesAgo(10));
+    expect((await runKnowledgeSync({ deps: deps() })).counts?.shipped).toBe(1);
+    expect(posted(1).metadata.session_id).toBe("far");
+
+    appendFileSync(path, exchange(2));
+    utimesSync(path, minutesAgo(8), minutesAgo(8));
+    expect((await runKnowledgeSync({ deps: deps() })).counts?.shipped).toBe(1);
+    expect(posted(2).metadata.continuation).toMatchObject({
+      from_record: posted(1).records.length,
+    });
+  });
 });

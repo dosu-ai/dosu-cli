@@ -102,6 +102,28 @@ const projectLocator = {
     s.project ? (s.project === "dosu-cli" ? DOSU_CLI : `github.com/x/${s.project}`) : null,
 };
 
+/** A Claude Code transcript under `dir`, outside anything the (faked) scan lists. */
+function outsideTranscript(dir: string, id: string, mtime: Date = NOW): string {
+  const project = join(dir, "relocated-config", "projects", "-work-app");
+  mkdirSync(project, { recursive: true });
+  const path = join(project, `${id}.jsonl`);
+  writeFileSync(path, "{}\n");
+  utimesSync(path, mtime, mtime);
+  return path;
+}
+
+/** A state file in memory: what each run saves, the next run loads. */
+function stateStore(initial: SyncState = state()) {
+  let current = structuredClone(initial);
+  return {
+    loadState: () => structuredClone(current),
+    saveState: (next: SyncState) => {
+      current = structuredClone(next);
+    },
+    get: () => current,
+  };
+}
+
 describe("runKnowledgeSync gate", () => {
   it("reports a backlog of completed sessions when there is no ship step", async () => {
     const { deps, saved } = makeDeps({
@@ -345,6 +367,27 @@ describe("runKnowledgeSync switches", () => {
 
     expect(outcome.status).toBe("skipped-paused");
     expect(deps.listSessions).not.toHaveBeenCalled();
+  });
+
+  it("a paused hook run ships nothing, but remembers an ended session the scan cannot see", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dosu-ended-"));
+    try {
+      const path = outsideTranscript(dir, "far-away");
+      const ship = shipAll();
+      const { deps, saved } = makeDeps({ loadState: () => state({ paused: true }), ship });
+
+      const outcome = await runKnowledgeSync({
+        quiet: true,
+        ended: [{ harness: "claude", id: "far-away", path }],
+        deps,
+      });
+
+      expect(outcome.status).toBe("skipped-paused");
+      expect(ship).not.toHaveBeenCalled();
+      expect(saved.at(-1)?.outside_sessions).toEqual({ "claude/far-away": path });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("a manual run acts as resume: the next state save drops the flag", async () => {
@@ -901,6 +944,88 @@ describe("runKnowledgeSync with a session a hook says just ended", () => {
           repo: DOSU_CLI,
         },
       ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps retrying one outside the scanned roots until it ships, and after", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dosu-ended-"));
+    try {
+      // Ended ten minutes ago, so a later run's quiet period no longer holds it.
+      const path = outsideTranscript(dir, "far-away", new Date(NOW.getTime() - 10 * 60_000));
+      const store = stateStore();
+      const failing = vi.fn(async (sessions: AgentSession[]) => [
+        { session: sessions[0], outcome: "failed" as const, message: "HTTP 503" },
+      ]);
+      const ended = [{ harness: "claude" as const, id: "far-away", path }];
+      await runKnowledgeSync({ ended, deps: makeDeps({ ...store, ship: failing }).deps });
+
+      // A later run that no hook told about it still finds it.
+      const ship = shipAll();
+      const later = await runKnowledgeSync({ deps: makeDeps({ ...store, ship }).deps });
+
+      expect(later.status).toBe("shipped");
+      expect(vi.mocked(ship).mock.calls[0][0].map((s) => s.id)).toEqual(["far-away"]);
+      // Still remembered once shipped: a resumed session ships its tail from there.
+      expect(store.get().outside_sessions).toEqual({ "claude/far-away": path });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("forgets a remembered transcript once it is gone, past the window, or scanned", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dosu-ended-"));
+    try {
+      const gone = join(dir, "gone.jsonl");
+      const old = outsideTranscript(dir, "old", new Date(NOW.getTime() - 31 * 24 * 60 * 60_000));
+      const scanned = outsideTranscript(dir, "scanned");
+      const kept = outsideTranscript(dir, "kept");
+      const store = stateStore(
+        state({
+          outside_sessions: {
+            "claude/gone": gone,
+            "claude/old": old,
+            "claude/scanned": scanned,
+            "claude/kept": kept,
+            "bogus/x": kept,
+          },
+        }),
+      );
+      const listed = {
+        id: "scanned",
+        harness: "claude" as const,
+        path: scanned,
+        updated: NOW.toISOString(),
+      };
+
+      await runKnowledgeSync({
+        deps: makeDeps({ ...store, listSessions: vi.fn().mockResolvedValue([listed]) }).deps,
+      });
+
+      expect(store.get().outside_sessions).toEqual({ "claude/kept": kept });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("records where it lives onto a fresh read, keeping what a concurrent run settled", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dosu-ended-"));
+    try {
+      const path = outsideTranscript(dir, "far-away");
+      const concurrent = settled(session(90));
+      let reads = 0;
+      const { deps, saved } = makeDeps({
+        // Another run settles a session while this one scans.
+        loadState: () => (++reads === 1 ? state() : state({ sessions: concurrent })),
+      });
+
+      await runKnowledgeSync({ ended: [{ harness: "claude", id: "far-away", path }], deps });
+
+      expect(saved[0]).toMatchObject({
+        sessions: concurrent,
+        outside_sessions: { "claude/far-away": path },
+      });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

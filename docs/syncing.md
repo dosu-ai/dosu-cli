@@ -45,9 +45,11 @@ through tools ships; the meta record does not count.
 later run. The exception is a session the hook says just ended: the `--detach` parent reads the hook
 payload and passes the session to the detached run as `--ended <harness>:<id>` and
 `--ended-path <transcript>`. That session ships in the same run, past the quiet period and ahead of
-the backlog, even if its transcript lives outside the directories the scan walks. If another run
-holds the sync lock, the run waits for it (up to ten minutes) instead of leaving the session for a
-later trigger. Only definitive end events count: Claude Code's `SessionEnd` today. Per-turn events
+the backlog, even if its transcript lives outside the directories the scan walks; such a transcript
+is remembered in the state file (`outside_sessions`) until it is gone or leaves the window, so later
+runs retry it after a failure and ship its tail when it is resumed. If another run holds the sync
+lock, the run waits for it (up to ten minutes) instead of leaving the session for a later trigger.
+A paused hook run ships nothing, but still remembers where an ended session lives. Only definitive end events count: Claude Code's `SessionEnd` today. Per-turn events
 (Cursor's `stop`, Codex's `Stop`) never pass `--ended`. Each agent's end event is one reader in
 `END_EVENT_READERS` (`src/sessions/capture.ts`).
 
