@@ -46,15 +46,17 @@ later run. The exception is a session the hook says just ended: the `--detach` p
 payload and passes the session to the detached run as `--ended <harness>:<id>=<transcript>` (one
 value per session, so two sessions' transcripts never get swapped; `--ended-path <transcript>` names
 a session known only by its transcript). That session ships in the same run, past the quiet period
-and ahead of the backlog, even if its transcript lives outside the directories the scan walks; such
-a transcript is remembered in the state file (`outside_sessions`) until it is gone or leaves the
-window, so later runs retry it after a failure and ship its tail when it is resumed. If another run
-holds the sync lock, the run waits for it (up to ten minutes) instead of leaving the session for a
-later trigger. A paused hook run ships nothing, but still remembers where an ended session lives.
-While hook runs back off after a failure, a run carrying an ended session still tries that session,
-and only that one; if it gets through, the backoff ends. Only definitive end events count: Claude
-Code's `SessionEnd` today. Per-turn events (Cursor's `stop`, Codex's `Stop`) never pass `--ended`.
-Each agent's end event is one reader in `END_EVENT_READERS` (`src/sessions/capture.ts`).
+and ahead of the backlog, even if its transcript lives outside the directories the scan walks. A
+transcript outside the default directories (including one this run lists only because the agent
+exported `CLAUDE_CONFIG_DIR` or `CODEX_HOME`, which a sync started elsewhere lacks) is remembered in
+the state file (`outside_sessions`) until it is gone or leaves the window, so later runs retry it
+after a failure and ship its tail when it is resumed. If another run holds the sync lock, the run
+waits for it (up to ten minutes) instead of leaving the session for a later trigger. A paused hook
+run ships nothing, but still remembers where an ended session lives. While hook runs back off after
+a failure, a run carrying an ended session still tries that session, and only that one; if it gets
+through, the backoff ends. Only definitive end events count: Claude Code's `SessionEnd` today.
+Per-turn events (Cursor's `stop`, Codex's `Stop`) never pass `--ended`. Each agent's end event is
+one reader in `END_EVENT_READERS` (`src/sessions/capture.ts`).
 
 **Resumed sessions.** For a shipped session the ledger also keeps how many normalized records went
 and a sha256 of them. When the session grows and its records still start with exactly that prefix,

@@ -217,6 +217,26 @@ describe("knowledge sync from a session-end hook", () => {
 });
 
 describe("knowledge sync of a resumed session", () => {
+  it("ships the tail of one under a relocated Claude config from a shell without the variable", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    const relocated = join(home, "altclaude");
+    mkdirSync(join(relocated, "projects", "-work"), { recursive: true });
+    const path = join(relocated, "projects", "-work", "aaaa.jsonl");
+    writeFileSync(path, exchange(1, alpha));
+    // The session-end hook runs in the agent's environment, which has the variable.
+    vi.stubEnv("CLAUDE_CONFIG_DIR", relocated);
+    await dosu("sync", "--quiet", "--ended", `claude:aaaa=${path}`);
+
+    appendFileSync(path, exchange(2, alpha));
+    const later = new Date(Date.now() - 10 * 60_000);
+    utimesSync(path, later, later);
+    vi.stubEnv("CLAUDE_CONFIG_DIR", undefined);
+    await dosu("sync");
+
+    const [, second] = posted();
+    expect(second?.metadata).toMatchObject({ session_id: "aaaa", continuation: expect.anything() });
+  });
+
   it("ships only the new tail the second time", async () => {
     const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
     const path = claudeSession("aaaa", exchange(1, alpha), 30);

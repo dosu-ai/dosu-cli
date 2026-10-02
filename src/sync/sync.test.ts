@@ -999,37 +999,59 @@ describe("runKnowledgeSync with a session a hook says just ended", () => {
     }
   });
 
-  it("forgets a remembered transcript once it is gone, past the window, or scanned", async () => {
+  it("remembers one this run's scan found only through a variable later runs may lack", async () => {
     const dir = mkdtempSync(join(tmpdir(), "dosu-ended-"));
+    try {
+      // Listed because this hook's agent exported CLAUDE_CONFIG_DIR; a shell's sync would not.
+      const path = outsideTranscript(dir, "relocated");
+      const listed = {
+        id: "relocated",
+        harness: "claude" as const,
+        path,
+        updated: NOW.toISOString(),
+      };
+      const store = stateStore();
+
+      await runKnowledgeSync({
+        ended: [{ harness: "claude", id: "relocated", path }],
+        deps: makeDeps({ ...store, listSessions: vi.fn().mockResolvedValue([listed]) }).deps,
+      });
+
+      expect(store.get().outside_sessions).toEqual({ "claude/relocated": path });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("forgets a remembered transcript once it is gone, past the window, or where every scan looks", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dosu-ended-"));
+    vi.stubEnv("HOME", dir);
     try {
       const gone = join(dir, "gone.jsonl");
       const old = outsideTranscript(dir, "old", new Date(NOW.getTime() - 31 * 24 * 60 * 60_000));
-      const scanned = outsideTranscript(dir, "scanned");
       const kept = outsideTranscript(dir, "kept");
+      // Under ~/.claude/projects, which every scan lists, whatever its environment.
+      const home = join(dir, ".claude", "projects", "-work-app");
+      mkdirSync(home, { recursive: true });
+      const atHome = join(home, "at-home.jsonl");
+      writeFileSync(atHome, "{}\n");
       const store = stateStore(
         state({
           outside_sessions: {
             "claude/gone": gone,
             "claude/old": old,
-            "claude/scanned": scanned,
+            "claude/at-home": atHome,
             "claude/kept": kept,
             "bogus/x": kept,
           },
         }),
       );
-      const listed = {
-        id: "scanned",
-        harness: "claude" as const,
-        path: scanned,
-        updated: NOW.toISOString(),
-      };
 
-      await runKnowledgeSync({
-        deps: makeDeps({ ...store, listSessions: vi.fn().mockResolvedValue([listed]) }).deps,
-      });
+      await runKnowledgeSync({ deps: makeDeps(store).deps });
 
       expect(store.get().outside_sessions).toEqual({ "claude/kept": kept });
     } finally {
+      vi.unstubAllEnvs();
       rmSync(dir, { recursive: true, force: true });
     }
   });

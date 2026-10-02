@@ -10,6 +10,7 @@ import {
   SESSION_HARNESSES,
   type SessionHarness,
   scanAgentSessions,
+  scannedEverywhere,
   sessionAtPath,
 } from "../sessions/scan";
 import type { ShippedPrefix } from "../shipper/continuation";
@@ -171,8 +172,9 @@ function isEndedSession(ended: EndedSession, session: AgentSession): boolean {
 
 /** The scan plus the sessions it cannot list: the ones a hook just named as ended and the ones
  * earlier hooks named (`remembered`), whose transcripts live outside the roots the scan walks.
- * Returns them with the outside transcripts worth remembering from now on: any still on disk,
- * inside the scan window, and still missed by the scan. */
+ * Returns them with the transcripts worth remembering from now on: any still on disk, inside the
+ * scan window, and outside the roots every scan walks (this run may list one only because its
+ * hook's agent exported CLAUDE_CONFIG_DIR or CODEX_HOME, which a later run may lack). */
 export function withOutsideSessions(
   scanned: readonly AgentSession[],
   ended: readonly EndedSession[],
@@ -191,12 +193,14 @@ export function withOutsideSessions(
   ];
   for (const { harness, id, path } of candidates) {
     if (!harness || !SESSION_HARNESSES.includes(harness) || !id || !path) continue;
+    if (scannedEverywhere(harness, path)) continue;
     const key = sessionKey({ harness, id });
-    if (listed.has(key)) continue;
-    const found = sessionAtPath(harness, id, path);
-    if (!found || Date.parse(found.updated) < since.getTime()) continue;
-    listed.add(key);
-    sessions.push(found);
+    if (!listed.has(key)) {
+      const found = sessionAtPath(harness, id, path);
+      if (!found || Date.parse(found.updated) < since.getTime()) continue;
+      listed.add(key);
+      sessions.push(found);
+    }
     outside[key] = path;
   }
   return { sessions, outside };

@@ -238,6 +238,31 @@ export function sessionAtPath(
   return { id, harness, path, ...(project ? { project } : {}), updated: mtime.toISOString() };
 }
 
+/** Where each harness keeps its sessions when no variable relocates it (CLAUDE_CONFIG_DIR,
+ * CODEX_HOME, XDG_DATA_HOME). */
+function defaultRoot(harness: SessionHarness, home: string): string {
+  switch (harness) {
+    case "claude":
+      return join(home, ".claude", "projects");
+    case "cursor":
+      return join(home, ".cursor", "projects");
+    case "codex":
+      return join(home, ".codex", "sessions");
+    case "opencode":
+      return join(home, ".local", "share", "opencode");
+  }
+}
+
+/** Whether every scan lists the transcript at `path`, whatever its environment: one found only
+ * under a relocated root is missed by a sync started from another agent's hook or a shell. */
+export function scannedEverywhere(
+  harness: SessionHarness,
+  path: string,
+  home: string = homedir(),
+): boolean {
+  return path.startsWith(`${defaultRoot(harness, home)}/`);
+}
+
 /** All local agent sessions across supported harnesses, newest first; missing harnesses
  * simply contribute nothing. */
 export function scanAgentSessions(options: ScanSessionsOptions = {}): AgentSession[] {
