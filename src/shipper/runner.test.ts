@@ -1,7 +1,8 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ProjectKey } from "../sessions/project";
 import type { AgentSession } from "../sessions/scan";
 import { createShipStep } from "./runner";
 
@@ -33,7 +34,7 @@ interface StepOverrides {
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
   isIncognito?: (s: AgentSession) => boolean;
   normalize?: (s: AgentSession) => Promise<typeof RECORDS | null>;
-  resolveProjectDir?: (s: AgentSession) => string | null;
+  resolveProject?: (s: AgentSession) => ProjectKey | null;
 }
 
 function makeStep(overrides: StepOverrides = {}) {
@@ -46,7 +47,8 @@ function makeStep(overrides: StepOverrides = {}) {
     isIncognito: overrides.isIncognito ?? (() => false),
     // biome-ignore lint/suspicious/noExplicitAny: test records stand in for the package's type
     normalize: (overrides.normalize ?? (async () => RECORDS)) as any,
-    resolveProjectDir: overrides.resolveProjectDir ?? (() => "/repo/app"),
+    resolveProject:
+      overrides.resolveProject ?? (() => ({ project: "github.com/acme/app", rule: "origin" })),
   });
   return { step, fetchImpl: fetchImpl as ReturnType<typeof vi.fn> };
 }
@@ -101,8 +103,9 @@ describe("createShipStep", () => {
       expect(url).toBe("https://api.dosu.test/v1/memory/ingest/async");
       const body = JSON.parse(init.body);
       expect(body.records[0]).toMatchObject({ role: "meta", source: "claude-code" });
-      // repo resolved from the transcript's own cwd by the default resolver.
-      expect(body.metadata.repo).toBe(dir);
+      // The project comes from the transcript's own cwd: not a checkout, so its path.
+      expect(body.metadata.project).toBe(`path:${realpathSync(dir)}`);
+      expect(body.metadata.repo).toBe(body.metadata.project);
     } finally {
       delete process.env.DOSU_BACKEND_URL_OVERRIDE;
       rmSync(dir, { recursive: true, force: true });
@@ -120,6 +123,7 @@ describe("createShipStep", () => {
         outcome: "shipped",
         taskId: "task-1",
         sessionUrl: "https://app/m/s1",
+        project: "github.com/acme/app",
       },
     ]);
     const [url, init] = fetchImpl.mock.calls[0];
@@ -133,8 +137,11 @@ describe("createShipStep", () => {
       records: RECORDS,
       metadata: {
         deployment_id: "dep1",
-        repo: "/repo/app",
-        agent: "claude",
+        project: "github.com/acme/app",
+        // Older servers require `repo`; it carries the same key.
+        repo: "github.com/acme/app",
+        // The trajectory source, not the CLI's harness id.
+        agent: "claude-code",
         session_id: "s1",
       },
     });
@@ -147,7 +154,12 @@ describe("createShipStep", () => {
 
     const [result] = await step([session("s1")]);
 
-    expect(result).toEqual({ session: session("s1"), outcome: "shipped", taskId: "task-2" });
+    expect(result).toEqual({
+      session: session("s1"),
+      outcome: "shipped",
+      taskId: "task-2",
+      project: "github.com/acme/app",
+    });
   });
 
   it("tolerates a 202 with an unparseable body", async () => {
@@ -161,13 +173,13 @@ describe("createShipStep", () => {
     expect(result.taskId).toBe("unknown");
   });
 
-  it("falls back to the scanner's project mapping, then 'unknown', for repo", async () => {
-    const { step, fetchImpl } = makeStep({ resolveProjectDir: () => null });
+  it("sends 'unknown' when neither the working directory nor DOSU_PROJECT is known", async () => {
+    const { step, fetchImpl } = makeStep({ resolveProject: () => null });
 
-    await step([session("s1", { project: "-repo-app" }), session("s2")]);
+    await step([session("s1")]);
 
-    expect(JSON.parse(fetchImpl.mock.calls[0][1].body).metadata.repo).toBe("-repo-app");
-    expect(JSON.parse(fetchImpl.mock.calls[1][1].body).metadata.repo).toBe("unknown");
+    const { metadata } = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(metadata).toMatchObject({ project: "unknown", repo: "unknown" });
   });
 
   it("never ships an incognito session", async () => {

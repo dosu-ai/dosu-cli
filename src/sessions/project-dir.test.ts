@@ -118,6 +118,104 @@ describe("resolveRepo", () => {
   });
 });
 
+describe("resolveProject", () => {
+  const ORIGIN = { project: "github.com/acme/widget", rule: "origin" } as const;
+
+  it("asks git once per session and keeps the answer after the checkout is gone", () => {
+    const gitProjectOfDir = vi.fn(() => ORIGIN);
+    const s = session({ harness: "opencode", project: "/work/widget", id: "w" });
+    const resolver = createProjectDirResolver(tempDir, { gitProjectOfDir, env: {} });
+
+    expect(resolver.resolveProject(s)).toEqual(ORIGIN);
+    expect(resolver.resolveProject(s)).toEqual(ORIGIN);
+    resolver.flush();
+    const later = createProjectDirResolver(tempDir, {
+      gitProjectOfDir: () => ({ project: "path:/work/widget", rule: "path" }),
+      env: {},
+    });
+
+    expect(later.resolveProject(s)).toEqual(ORIGIN);
+    expect(gitProjectOfDir).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a path fallback once the session file changes", () => {
+    let mtime = "t1";
+    const gitProjectOfDir = vi.fn(() => ({ project: "path:/work/widget", rule: "path" as const }));
+    const s = session({ harness: "opencode", project: "/work/widget", id: "w" });
+    const deps = { gitProjectOfDir, env: {}, mtime: () => mtime };
+    const first = createProjectDirResolver(tempDir, deps);
+    first.resolveProject(s);
+    first.flush();
+
+    expect(createProjectDirResolver(tempDir, deps).resolveProject(s)?.rule).toBe("path");
+    expect(gitProjectOfDir).toHaveBeenCalledTimes(1);
+
+    mtime = "t2";
+    gitProjectOfDir.mockReturnValue(ORIGIN as never);
+    expect(createProjectDirResolver(tempDir, deps).resolveProject(s)).toEqual(ORIGIN);
+  });
+
+  it("applies links and DOSU_PROJECT fresh on every call, ahead of the cached git answer", () => {
+    const s = session({ harness: "opencode", project: "/work/widget", id: "w" });
+    const resolver = createProjectDirResolver(tempDir, { gitProjectOfDir: () => ORIGIN, env: {} });
+    expect(resolver.resolveProject(s)).toEqual(ORIGIN);
+    resolver.flush();
+    writeFileSync(
+      join(tempDir, "projects.json"),
+      JSON.stringify({ links: [{ dir: "/work", project: "linked" }] }),
+    );
+
+    const later = createProjectDirResolver(tempDir, { gitProjectOfDir: () => ORIGIN, env: {} });
+    expect(later.resolveProject(s)).toEqual({ project: "linked", rule: "link" });
+  });
+
+  it("without a working directory only DOSU_PROJECT can answer", () => {
+    const s = session({ harness: "opencode", id: "nowhere" });
+    const gitProjectOfDir = vi.fn(() => ORIGIN);
+
+    expect(
+      createProjectDirResolver(tempDir, { gitProjectOfDir, env: {} }).resolveProject(s),
+    ).toBeNull();
+    expect(
+      createProjectDirResolver(tempDir, {
+        gitProjectOfDir,
+        env: { DOSU_PROJECT: "poc" },
+      }).resolveProject(s),
+    ).toEqual({ project: "poc", rule: "env" });
+    expect(gitProjectOfDir).not.toHaveBeenCalled();
+  });
+
+  it("resolveProjectAt caches under the session key, so the shipped session agrees", () => {
+    const gitProjectOfDir = vi.fn(() => ORIGIN);
+    const prompt = createProjectDirResolver(tempDir, { gitProjectOfDir, env: {} });
+    expect(prompt.resolveProjectAt("claude/abc", "/work/widget")).toEqual(ORIGIN);
+    prompt.flush();
+
+    // Later the transcript is gone and git would say something else: the cache still answers.
+    const ship = createProjectDirResolver(tempDir, {
+      gitProjectOfDir: () => ({ project: "path:/work/widget", rule: "path" }),
+      readHead: () => null,
+      env: {},
+    });
+    const s = session({ harness: "claude", id: "abc" });
+    expect(ship.resolve(s)).toBe("/work/widget");
+    expect(ship.resolveProject(s)).toEqual(ORIGIN);
+  });
+
+  it("resolveProjectAt does not cache a directory that disagrees with the session's", () => {
+    const gitProjectOfDir = vi.fn((dir: string) => ({
+      project: `path:${dir}`,
+      rule: "path" as const,
+    }));
+    const s = session({ harness: "opencode", project: "/work/widget", id: "w" });
+    const resolver = createProjectDirResolver(tempDir, { gitProjectOfDir, env: {} });
+    resolver.resolve(s);
+
+    expect(resolver.resolveProjectAt("opencode/w", "/elsewhere").project).toBe("path:/elsewhere");
+    expect(resolver.resolveProject(s)?.project).toBe("path:/work/widget");
+  });
+});
+
 describe("resolveBranch", () => {
   const noGit = {
     reflogOfDir: vi.fn(() => null),

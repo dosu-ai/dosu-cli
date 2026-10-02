@@ -52,6 +52,8 @@ export interface ShipSessionResult {
   taskId?: string;
   /** Shareable memory-session page, when the backend returned one. */
   sessionUrl?: string;
+  /** The project key the session shipped under, on `shipped`. */
+  project?: string;
   /** One renderable line for skipped/failed results. */
   message?: string;
 }
@@ -314,7 +316,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
           session: key(session),
           task_id: result.taskId ?? "unknown",
           ...(result.sessionUrl ? { session_url: result.sessionUrl } : {}),
-          ...(session.project ? { project: session.project } : {}),
+          ...(result.project ? { project: result.project } : {}),
         });
         logger.debug(
           "sync",

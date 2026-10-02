@@ -5,11 +5,12 @@
 
 import type { NormalizedRecord } from "@letta-ai/trajectory";
 import { getBackendURL } from "../config/constants";
+import type { ProjectKey } from "../sessions/project";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import type { AgentSession } from "../sessions/scan";
 import { isIncognitoSession } from "../sync/incognito";
 import type { ShipSessionResult } from "../sync/sync";
-import { normalizeSessionRecords } from "./normalize";
+import { normalizeSessionRecords, trajectorySourceOf } from "./normalize";
 
 /** Statuses where re-sending identical records cannot succeed (bad/oversized/unparseable
  * payload): skip past the session instead of wedging the watermark behind a poison pill.
@@ -35,7 +36,7 @@ export interface ShipStepOptions {
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
   isIncognito?: (session: AgentSession) => boolean;
   normalize?: (session: AgentSession) => Promise<NormalizedRecord[] | null>;
-  resolveProjectDir?: (session: AgentSession) => string | null;
+  resolveProject?: (session: AgentSession) => ProjectKey | null;
 }
 
 /** Build the sync pipeline's ship step. Processes oldest-first and stops after the first
@@ -50,21 +51,23 @@ export function createShipStep(
 
   async function shipOne(
     session: AgentSession,
-    resolveDir: (session: AgentSession) => string | null,
+    resolveProject: (session: AgentSession) => ProjectKey | null,
   ): Promise<ShipSessionResult> {
     if (isIncognito(session)) return { session, outcome: "incognito" };
     const records = await normalize(session);
     if (!records) return { session, outcome: "skipped", message: "no shippable transcript" };
-    // The CLI derives no git context of its own; repo is the session's working directory (the
-    // scanner's project mapping) and branch is omitted — the trajectory meta record still
-    // carries git_branch server-side when the harness logged one.
-    const repo = resolveDir(session) ?? session.project ?? "unknown";
+    // The project key of the session's working directory (sessions/project.ts), the same one
+    // prompt-time memory sends. Branch is omitted: the trajectory meta record carries
+    // git_branch when the harness logged one.
+    const project = resolveProject(session)?.project ?? "unknown";
     const body = JSON.stringify({
       records,
       metadata: {
         deployment_id: options.deploymentId,
-        repo,
-        agent: session.harness,
+        project,
+        // Servers that predate `project` require `repo`; same key.
+        repo: project,
+        agent: trajectorySourceOf(session.harness) ?? session.harness,
         session_id: session.id,
       },
     });
@@ -85,6 +88,7 @@ export function createShipStep(
           outcome: "shipped",
           taskId: accepted.task_id ?? "unknown",
           ...(typeof accepted.session_url === "string" ? { sessionUrl: accepted.session_url } : {}),
+          project,
         };
       }
       if (SKIP_STATUSES.has(response.status)) {
@@ -98,12 +102,12 @@ export function createShipStep(
   }
 
   return async (sessions) => {
-    const resolver = options.resolveProjectDir ? undefined : createProjectDirResolver();
-    const resolveDir =
-      options.resolveProjectDir ?? ((session) => resolver?.resolve(session) ?? null);
+    const resolver = options.resolveProject ? undefined : createProjectDirResolver();
+    const resolveProject =
+      options.resolveProject ?? ((session) => resolver?.resolveProject(session) ?? null);
     const results: ShipSessionResult[] = [];
     for (const session of sessions) {
-      const result = await shipOne(session, resolveDir);
+      const result = await shipOne(session, resolveProject);
       results.push(result);
       if (result.outcome === "failed") break;
     }

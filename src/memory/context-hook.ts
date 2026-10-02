@@ -11,6 +11,8 @@
  * or down server, a malformed payload -- produces no output and a clean exit, and the prompt
  * goes through exactly as if Dosu were not installed. */
 
+import { projectOverride, resolveProjectOfDir } from "../sessions/project";
+import { createProjectDirResolver } from "../sessions/project-dir";
 import { textHasIncognitoMarker, transcriptHasIncognitoMarker } from "../sync/incognito";
 
 /** Retrieval is ~0.6s warm and ~2.5s cold, plus ~0.15s for the classifier. Past this the user
@@ -48,6 +50,18 @@ function str(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+/** The project key for the prompt's cwd, cached under the session's key so the transcript
+ * ships under the same one later; DOSU_PROJECT alone when the payload has no cwd. */
+function projectOf(cwd: string | null, sessionId: string | null): string | null {
+  if (cwd === null) return projectOverride(null)?.project ?? null;
+  if (sessionId === null) return resolveProjectOfDir(cwd).project;
+  const resolver = createProjectDirResolver();
+  // Claude Code names the transcript by session id, which makes this the scanner's key too.
+  const resolved = resolver.resolveProjectAt(`claude/${sessionId}`, cwd);
+  resolver.flush();
+  return resolved.project;
+}
+
 /** The hook's stdout for one payload: the additionalContext JSON, or "" to add nothing. */
 export async function contextHookOutput(
   stdin: string,
@@ -74,16 +88,20 @@ export async function contextHookOutput(
   const branch = cwd ? (options.branchOf?.(cwd) ?? null) : null;
   const fetchImpl = options.fetchImpl ?? fetch;
   try {
+    const sessionId = str(payload.session_id);
+    const project = projectOf(cwd, sessionId);
     const response = await fetchImpl(`${options.backendUrl.replace(/\/$/, "")}/v1/memory/context`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Dosu-API-Key": options.apiKey },
       body: JSON.stringify({
         deployment_id: options.deploymentId,
         prompt,
-        session_id: str(payload.session_id),
+        session_id: sessionId,
         branch,
         agent: CLAUDE_CODE_AGENT,
-        repo: cwd,
+        // `repo` repeats the key for servers that predate `project`.
+        project,
+        repo: project,
       }),
       signal: AbortSignal.timeout(options.timeoutMs ?? CONTEXT_TIMEOUT_MS),
     });

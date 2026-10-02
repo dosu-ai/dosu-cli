@@ -408,6 +408,24 @@ describe("runKnowledgeSync shipping", () => {
     expect(last?.consecutive_failures).toBe(0);
   });
 
+  it("records the project key each session shipped under", async () => {
+    const { deps, saved } = makeDeps({
+      listSessions: vi.fn().mockResolvedValue([{ ...session(60), project: "-Users-me-widget" }]),
+      ship: vi.fn(async (sessions: AgentSession[]) =>
+        sessions.map<ShipSessionResult>((s) => ({
+          session: s,
+          outcome: "shipped",
+          taskId: "t1",
+          project: "github.com/acme/widget",
+        })),
+      ),
+    });
+
+    await runKnowledgeSync({ deps });
+
+    expect(saved.at(-1)?.shipped_sessions?.[0].project).toBe("github.com/acme/widget");
+  });
+
   it("settles incognito and trivial sessions locally without uploading them", async () => {
     const ship = shipAll();
     const secret = session(90);

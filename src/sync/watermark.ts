@@ -27,7 +27,8 @@ export interface ShippedSessionRecord {
   task_id: string;
   /** Shareable memory-session page, when the backend returned one. */
   session_url?: string;
-  /** The session's project (workspace basename), when the scanner knew it. */
+  /** The project key the session shipped under (sessions/project.ts); older records hold the
+   * scanner's workspace slug instead. */
   project?: string;
 }
 

@@ -18,6 +18,13 @@ const TRAJECTORY_SOURCES: Partial<Record<AgentSession["harness"], TranscriptTraj
   codex: "codex",
 };
 
+/** The trajectory source a harness's transcripts normalize as; undefined when unsupported. */
+export function trajectorySourceOf(
+  harness: AgentSession["harness"],
+): TranscriptTrajectorySource | undefined {
+  return TRAJECTORY_SOURCES[harness];
+}
+
 /** Keys whose string values are structural identity, not text: redacting them would break the
  * tool_call ↔ tool_result linkage or the record framing itself. Everything else is redacted. */
 const STRUCTURAL_KEYS = new Set(["id", "tool_call_id", "role", "timestamp", "source", "name"]);
@@ -49,7 +56,7 @@ export function redactRecords(records: readonly NormalizedRecord[]): NormalizedR
 export async function normalizeSessionRecords(
   session: AgentSession,
 ): Promise<NormalizedRecord[] | null> {
-  const source = TRAJECTORY_SOURCES[session.harness];
+  const source = trajectorySourceOf(session.harness);
   if (!source) return null;
   let transcript: string;
   try {

@@ -1,4 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createProjectDirResolver } from "../sessions/project-dir";
 import { INCOGNITO_MARKER } from "../sync/incognito";
 import { contextHookOutput } from "./context-hook";
 
@@ -26,6 +31,23 @@ const base = {
   isIncognito: () => false,
 };
 
+let savedProject: string | undefined;
+
+beforeEach(() => {
+  savedProject = process.env.DOSU_PROJECT;
+  delete process.env.DOSU_PROJECT;
+});
+
+afterEach(() => {
+  if (savedProject === undefined) delete process.env.DOSU_PROJECT;
+  else process.env.DOSU_PROJECT = savedProject;
+});
+
+function sentBody(fetchImpl: ReturnType<typeof respond>): Record<string, unknown> {
+  const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+  return JSON.parse(init.body as string);
+}
+
 describe("contextHookOutput", () => {
   it("turns a digest into Claude Code's additionalContext", async () => {
     const fetchImpl = respond(200, { digest: DIGEST, reason: "injected", memory_ids: ["m1"] });
@@ -46,8 +68,64 @@ describe("contextHookOutput", () => {
       session_id: "sess-1",
       branch: "feat/x",
       agent: "claude-code",
-      repo: "/Users/me/dosu",
+      // Not a checkout on this machine: the path rule, sent as both fields for older servers.
+      project: "path:/Users/me/dosu",
+      repo: "path:/Users/me/dosu",
     });
+  });
+
+  it("sends the cwd's project key, which the shipped session later carries too", async () => {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), "dosu-context-repo-")));
+    try {
+      execFileSync("git", ["-C", repo, "init", "-q"]);
+      execFileSync("git", [
+        "-C",
+        repo,
+        "remote",
+        "add",
+        "origin",
+        "git@github.com:Acme/Widget.git",
+      ]);
+      const fetchImpl = respond(200, { digest: null });
+
+      await contextHookOutput(payload({ cwd: repo, session_id: "sess-42" }), {
+        ...base,
+        fetchImpl,
+      });
+
+      expect(sentBody(fetchImpl)).toMatchObject({
+        project: "github.com/acme/widget",
+        repo: "github.com/acme/widget",
+      });
+      // The checkout is gone by the time the session ships; its key is not.
+      rmSync(repo, { recursive: true, force: true });
+      const shipped = createProjectDirResolver().resolveProject({
+        id: "sess-42",
+        harness: "claude",
+        path: join(repo, "missing.jsonl"),
+        updated: "2026-10-02T00:00:00.000Z",
+      });
+      expect(shipped?.project).toBe("github.com/acme/widget");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves the cwd directly when the payload names no session", async () => {
+    const fetchImpl = respond(200, { digest: null });
+
+    await contextHookOutput(payload({ session_id: undefined }), { ...base, fetchImpl });
+
+    expect(sentBody(fetchImpl)).toMatchObject({ session_id: null, project: "path:/Users/me/dosu" });
+  });
+
+  it("honors DOSU_PROJECT, even without a cwd", async () => {
+    process.env.DOSU_PROJECT = "poc-widget";
+    const fetchImpl = respond(200, { digest: null });
+
+    await contextHookOutput(payload({ cwd: undefined }), { ...base, fetchImpl });
+
+    expect(sentBody(fetchImpl)).toMatchObject({ project: "poc-widget", repo: "poc-widget" });
   });
 
   it("adds nothing when the server declines", async () => {

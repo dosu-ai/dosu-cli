@@ -1,5 +1,5 @@
-/** Session working-directory and repo resolution for the study scope; each harness leaks the
- * cwd differently. Results are cached per session (a session's cwd never changes). */
+/** Session working-directory, repo, and project resolution; each harness leaks the cwd
+ * differently. Results are cached per session (a session's cwd never changes). */
 
 import {
   closeSync,
@@ -21,6 +21,7 @@ import {
   parseReflog,
 } from "./branch";
 import { type CapturedSession, readCapturedSession } from "./capture";
+import { gitProjectOfDir, type ProjectKey, projectOverride } from "./project";
 import { currentBranchOfDir, headReflogOfDir, originRepoOfDir } from "./repo";
 import type { AgentSession } from "./scan";
 
@@ -39,6 +40,9 @@ interface CacheEntry {
   /** Normalized origin repo of `dir`; null = not a repo (retried when mtime moves); absent =
    * never looked up. */
   repo?: string | null;
+  /** What git says the project of `dir` is (project.ts rules 3-5); a `path` fallback is retried
+   * when mtime moves, like a null repo. Links and DOSU_PROJECT are never cached. */
+  project?: ProjectKey;
 }
 
 interface CacheFile {
@@ -144,6 +148,9 @@ export interface ProjectDirDeps {
   captured?: (key: string) => CapturedSession | null;
   reflogOfDir?: (dir: string) => string | null;
   currentBranch?: (dir: string) => string | null;
+  gitProjectOfDir?: (dir: string) => ProjectKey;
+  /** Source of DOSU_PROJECT; defaults to process.env. */
+  env?: NodeJS.ProcessEnv;
 }
 
 function readWholeFile(path: string): string | null {
@@ -167,6 +174,12 @@ export interface ProjectDirResolver {
   resolve(session: AgentSession): string | null;
   /** The normalized origin repo of the session's working directory, or null outside a repo. */
   resolveRepo(session: AgentSession): string | null;
+  /** The session's project key; null only when neither its working directory nor DOSU_PROJECT
+   * is known. */
+  resolveProject(session: AgentSession): ProjectKey | null;
+  /** The project key for a session whose working directory the caller already knows (a hook
+   * payload's cwd), cached under the same `harness/id` key so the shipped session agrees. */
+  resolveProjectAt(key: string, dir: string): ProjectKey;
   /** The branch the session ran on, or null when nothing recorded it. Not cached: a session's
    * branch can move until it ends, and each session is resolved about once. */
   resolveBranch(session: AgentSession): string | null;
@@ -263,6 +276,29 @@ export function createProjectDirResolver(
     return dir;
   };
 
+  const gitProject = deps.gitProjectOfDir ?? gitProjectOfDir;
+  const projectByDir = new Map<string, ProjectKey>();
+  const overrideFor = (dir: string | null) => projectOverride(dir, { configDir, env: deps.env });
+
+  /** Rules 3-5 for `dir`, through the session's cache entry when it is about the same dir. */
+  const cachedGitProject = (key: string, dir: string, currentMtime: string): ProjectKey => {
+    const entry = entries[key];
+    const cacheable = entry !== undefined && entry.dir === dir;
+    const hit = cacheable ? entry.project : undefined;
+    if (hit && (hit.rule !== "path" || entry.mtime === currentMtime)) return hit;
+    let project = projectByDir.get(dir);
+    if (!project) {
+      project = gitProject(dir);
+      projectByDir.set(dir, project);
+    }
+    if (cacheable) {
+      entry.project = project;
+      entry.mtime = currentMtime;
+      dirty = true;
+    }
+    return project;
+  };
+
   return {
     cached(key) {
       return entries[key]?.dir ?? null;
@@ -285,6 +321,24 @@ export function createProjectDirResolver(
       entry.mtime = mtime(session.path);
       dirty = true;
       return repo;
+    },
+    resolveProject(session) {
+      const dir = resolve(session);
+      const override = overrideFor(dir);
+      if (override) return override;
+      if (dir === null) return null;
+      return cachedGitProject(`${session.harness}/${session.id}`, dir, mtime(session.path));
+    },
+    resolveProjectAt(key, dir) {
+      const override = overrideFor(dir);
+      if (override) return override;
+      if (!entries[key]) {
+        // No session file to stamp yet: a `path` fallback answers the session's later prompts,
+        // and is retried once the sync stamps the real file's mtime.
+        entries[key] = { dir, mtime: "" };
+        dirty = true;
+      }
+      return cachedGitProject(key, dir, entries[key].mtime);
     },
     resolveBranch(session) {
       return (

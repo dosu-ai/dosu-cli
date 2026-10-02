@@ -65,6 +65,28 @@ export function currentBranchOfDir(dir: string): string | null {
   return out ? out : null;
 }
 
+/** The root commit of the history checked out in `dir`: the lexicographically first parentless
+ * commit reachable from HEAD. Null outside a repo, before the first commit, and in a shallow
+ * clone, whose parentless commit is only where the clone was cut. */
+export function rootCommitOfDir(dir: string): string | null {
+  const shallow = gitOutput(dir, ["rev-parse", "--is-shallow-repository"], 1_000)?.trim();
+  if (shallow !== "false") return null;
+  // Walks the whole history, so it gets more room than the single-ref lookups.
+  const out = gitOutput(dir, ["rev-list", "--max-parents=0", "HEAD"], 5_000);
+  const roots = (out ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^[0-9a-f]{40,64}$/.test(line))
+    .sort();
+  return roots[0] ?? null;
+}
+
+/** The top directory of the work tree containing `dir`; null outside a repo. */
+export function toplevelOfDir(dir: string): string | null {
+  const out = gitOutput(dir, ["rev-parse", "--show-toplevel"], 1_000)?.trim();
+  return out ? out : null;
+}
+
 /** `dir`'s HEAD reflog, newest first, one `HEAD@{<unix seconds>}\t<subject>` line per entry;
  * null outside a repo. */
 export function headReflogOfDir(dir: string): string | null {
