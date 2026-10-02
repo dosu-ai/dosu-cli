@@ -128,6 +128,13 @@ describe("out-of-date entries", () => {
       expect(provider("codex").isCurrent(makeCfg())).toBe(true);
     });
 
+    it("is not current for an entry written before omit_tools_from", () => {
+      provider("codex").install(makeCfg(), true);
+      writeFileSync(path(), readFileSync(path(), "utf-8").replace(/^omit_tools_from = .*\n/m, ""));
+
+      expect(provider("codex").isCurrent(makeCfg())).toBe(false);
+    });
+
     it("is not current for the legacy remote-HTTP entry", () => {
       writeFileSync(
         path(),
