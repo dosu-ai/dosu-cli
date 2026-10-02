@@ -43,9 +43,11 @@ function tomlValue(value: TOMLValue): string {
 }
 
 /** Codex desktop only renders MCP Apps for stdio servers, so the entry proxies through
- * `npx mcp-remote`. */
+ * `npx mcp-remote`. Codex defers MCP tools behind tool_search and ignores the server's alwaysLoad
+ * hint; omit_tools_from = ["deferred"] (Codex 0.147.0+) lists them up front. Older releases ignore
+ * the key unless run with --strict-config. */
 function dosuEntry(url: string, apiKey: string | undefined, npx: string, path: string): DosuEntry {
-  return npxRemoteEntry(url, apiKey, npx, path);
+  return { ...npxRemoteEntry(url, apiKey, npx, path), omit_tools_from: ["deferred"] };
 }
 
 function renderDosuEntry(entry: DosuEntry): string {
