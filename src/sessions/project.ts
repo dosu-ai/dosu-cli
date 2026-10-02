@@ -15,7 +15,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
 import { basename, join } from "node:path";
 import { getConfigDir } from "../config/config";
-import { displayRepo, originRepoOfDir, rootCommitOfDir, toplevelOfDir } from "./repo";
+import { displayRepo, GIT_TIMED_OUT, gitAnswer, normalizeRepoRemote } from "./repo";
 
 const LINKS_FILENAME = "projects.json";
 
@@ -115,22 +115,77 @@ export function projectOverride(
   return env === null ? null : { project: env, rule: "env" };
 }
 
-/** Rules 3 to 5, what git says about `dir`. */
-export function gitProjectOfDir(dir: string): ProjectKey {
-  const origin = validKey(originRepoOfDir(dir));
+/** How long the git lookups behind rules 3 to 5 may take, in ms: `lookup` for each single-ref
+ * question, `history` for the walk to the root commit. */
+export interface GitBudget {
+  lookup: number;
+  history: number;
+}
+
+/** A prompt hook keeps the user's prompt waiting; a sync runs in the background and can wait out
+ * a long history. */
+export const GIT_BUDGETS = {
+  prompt: { lookup: 1_000, history: 3_000 },
+  background: { lookup: 10_000, history: 120_000 },
+} satisfies Record<string, GitBudget>;
+
+/** Rule 4's root commit: the lexicographically first parentless commit reachable from HEAD; null
+ * before the first commit and in a shallow clone, whose parentless commit is only where the clone
+ * was cut. `knownRoot`, a root found for this directory before, is taken while this repository
+ * still has that commit, sparing the walk. */
+function rootCommitOf(
+  dir: string,
+  budget: GitBudget,
+  knownRoot: string | undefined,
+): string | null | typeof GIT_TIMED_OUT {
+  const shallow = gitAnswer(dir, ["rev-parse", "--is-shallow-repository"], budget.lookup);
+  if (shallow === GIT_TIMED_OUT) return shallow;
+  if (shallow?.trim() !== "false") return null;
+  if (knownRoot) {
+    const has = gitAnswer(dir, ["cat-file", "-e", `${knownRoot}^{commit}`], budget.lookup);
+    if (has === GIT_TIMED_OUT) return has;
+    if (has !== null) return knownRoot;
+  }
+  const out = gitAnswer(dir, ["rev-list", "--max-parents=0", "HEAD"], budget.history);
+  if (out === GIT_TIMED_OUT) return out;
+  const roots = (out ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^[0-9a-f]{40,64}$/.test(line))
+    .sort();
+  return roots[0] ?? null;
+}
+
+/** Rules 3 to 5, what git says about `dir`. Null when git ran out of `budget`, which says nothing
+ * about the directory: callers retry later rather than settle for the `path:` fallback, which a
+ * patient lookup elsewhere would contradict. */
+export function gitProjectOfDir(
+  dir: string,
+  budget: GitBudget = GIT_BUDGETS.background,
+  knownRoot?: string,
+): ProjectKey | null {
+  const remote = gitAnswer(dir, ["remote", "get-url", "origin"], budget.lookup);
+  if (remote === GIT_TIMED_OUT) return null;
+  const origin = remote === null ? null : validKey(normalizeRepoRemote(remote));
   if (origin !== null) return { project: origin, rule: "origin" };
-  const root = rootCommitOfDir(dir);
+  const root = rootCommitOf(dir, budget, knownRoot);
+  if (root === GIT_TIMED_OUT) return null;
   if (root !== null) return { project: `git:${root}`, rule: "root-commit" };
-  const path = `path:${realpathOr(toplevelOfDir(dir) ?? dir)}`;
+  const toplevel = gitAnswer(dir, ["rev-parse", "--show-toplevel"], budget.lookup);
+  if (toplevel === GIT_TIMED_OUT) return null;
+  const path = `path:${realpathOr(toplevel?.trim() || dir)}`;
   if (path.length <= MAX_PROJECT_KEY_LENGTH) return { project: path, rule: "path" };
   // Hashed rather than truncated, so two long paths never share a key.
   const digest = createHash("sha256").update(path.slice("path:".length)).digest("hex");
   return { project: `path:sha256:${digest}`, rule: "path" };
 }
 
-/** All five rules, uncached. */
-export function resolveProjectOfDir(dir: string, options: ProjectOptions = {}): ProjectKey {
-  return projectOverride(dir, options) ?? gitProjectOfDir(dir);
+/** All five rules, uncached; null only when git ran out of `budget`. */
+export function resolveProjectOfDir(
+  dir: string,
+  options: ProjectOptions & { budget?: GitBudget } = {},
+): ProjectKey | null {
+  return projectOverride(dir, options) ?? gitProjectOfDir(dir, options.budget);
 }
 
 /** A project key short enough for a narrow column: `acme/widget` for an origin, `git:` and the

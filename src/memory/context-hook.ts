@@ -11,7 +11,7 @@
  * or down server, a malformed payload -- produces no output and a clean exit, and the prompt
  * goes through exactly as if Dosu were not installed. */
 
-import { projectOverride, resolveProjectOfDir } from "../sessions/project";
+import { GIT_BUDGETS, projectOverride, resolveProjectOfDir } from "../sessions/project";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { textHasIncognitoMarker, transcriptHasIncognitoMarker } from "../sync/incognito";
 
@@ -51,15 +51,19 @@ function str(value: unknown): string | null {
 }
 
 /** The project key for the prompt's cwd, cached under the session's key so the transcript
- * ships under the same one later; DOSU_PROJECT alone when the payload has no cwd. */
+ * ships under the same one later; DOSU_PROJECT alone when the payload has no cwd. Null when git
+ * could not answer within the prompt's budget: better no key than one the session will not ship
+ * under. */
 function projectOf(cwd: string | null, sessionId: string | null): string | null {
   if (cwd === null) return projectOverride(null)?.project ?? null;
-  if (sessionId === null) return resolveProjectOfDir(cwd).project;
+  if (sessionId === null) {
+    return resolveProjectOfDir(cwd, { budget: GIT_BUDGETS.prompt })?.project ?? null;
+  }
   const resolver = createProjectDirResolver();
   // Claude Code names the transcript by session id, which makes this the scanner's key too.
   const resolved = resolver.resolveProjectAt(`claude/${sessionId}`, cwd);
   resolver.flush();
-  return resolved.project;
+  return resolved?.project ?? null;
 }
 
 /** The hook's stdout for one payload: the additionalContext JSON, or "" to add nothing. */

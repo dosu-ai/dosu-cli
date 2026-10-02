@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   displayProjectKey,
   gitProjectOfDir,
@@ -80,7 +80,7 @@ describe("resolveProjectOfDir", () => {
     const app2 = repo("app2");
     writeLinks([{ dir: join(root, "app"), project: "app" }]);
 
-    expect(resolveProjectOfDir(app2, { configDir, env: noEnv }).rule).not.toBe("link");
+    expect(resolveProjectOfDir(app2, { configDir, env: noEnv })?.rule).not.toBe("link");
   });
 
   it("rule 1 matches a link written through a symlinked path", () => {
@@ -102,7 +102,7 @@ describe("resolveProjectOfDir", () => {
     expect(
       resolveProjectOfDir(dir, { configDir, env: { DOSU_PROJECT: "  poc-widget \n" } }),
     ).toEqual({ project: "poc-widget", rule: "env" });
-    expect(resolveProjectOfDir(dir, { configDir, env: { DOSU_PROJECT: "   " } }).rule).toBe(
+    expect(resolveProjectOfDir(dir, { configDir, env: { DOSU_PROJECT: "   " } })?.rule).toBe(
       "origin",
     );
   });
@@ -137,7 +137,7 @@ describe("resolveProjectOfDir", () => {
     const roots = git(dir, "rev-list", "--max-parents=0", "HEAD").split("\n").sort();
 
     expect(roots).toHaveLength(2);
-    expect(resolveProjectOfDir(dir, { configDir, env: noEnv }).project).toBe(`git:${roots[0]}`);
+    expect(resolveProjectOfDir(dir, { configDir, env: noEnv })?.project).toBe(`git:${roots[0]}`);
   });
 
   it("rule 4 is skipped in a shallow clone: its parentless commit is the cut, not the root", () => {
@@ -177,10 +177,10 @@ describe("resolveProjectOfDir", () => {
     mkdirSync(real);
     symlinkSync(real, join(root, "alias"));
 
-    expect(resolveProjectOfDir(join(root, "alias"), { configDir, env: noEnv }).project).toBe(
+    expect(resolveProjectOfDir(join(root, "alias"), { configDir, env: noEnv })?.project).toBe(
       `path:${real}`,
     );
-    expect(resolveProjectOfDir(join(root, "gone"), { configDir, env: noEnv }).project).toBe(
+    expect(resolveProjectOfDir(join(root, "gone"), { configDir, env: noEnv })?.project).toBe(
       `path:${join(root, "gone")}`,
     );
   });
@@ -196,8 +196,8 @@ describe("resolveProjectOfDir", () => {
     });
 
     // Oversized link and env values are ignored; an oversized path is hashed, never truncated.
-    expect(resolved.rule).toBe("path");
-    expect(resolved.project).toMatch(/^path:sha256:[0-9a-f]{64}$/);
+    expect(resolved?.rule).toBe("path");
+    expect(resolved?.project).toMatch(/^path:sha256:[0-9a-f]{64}$/);
   });
 });
 
@@ -224,6 +224,70 @@ describe("gitProjectOfDir", () => {
     writeLinks([{ dir, project: "linked" }]);
 
     expect(gitProjectOfDir(dir)).toEqual({ project: "github.com/acme/widget", rule: "origin" });
+  });
+
+  describe("when git runs out of time", () => {
+    /** A history walk that cannot finish; single lookups get ample room, so only the walk can
+     * run out even on a loaded machine. */
+    const budget = { lookup: 10_000, history: 300 };
+
+    beforeEach(() => {
+      // A git that stalls on the subcommand named in SLOW_GIT, as a huge history or a hung
+      // network filesystem would.
+      const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf-8" }).trim();
+      const bin = join(root, "bin");
+      mkdirSync(bin);
+      writeFileSync(
+        join(bin, "git"),
+        `#!/bin/sh\nfor a in "$@"; do [ "$a" = "$SLOW_GIT" ] && sleep 3; done\nexec "${realGit}" "$@"\n`,
+        { mode: 0o755 },
+      );
+      vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("a history walk past the budget is no answer, rather than the path fallback", () => {
+      const dir = repo("huge", 2);
+      vi.stubEnv("SLOW_GIT", "rev-list");
+
+      expect(gitProjectOfDir(dir, budget)).toBeNull();
+    });
+
+    it("so is an origin lookup past the budget", () => {
+      const dir = repo("hung");
+      vi.stubEnv("SLOW_GIT", "remote");
+
+      expect(gitProjectOfDir(dir, { lookup: 300, history: 300 })).toBeNull();
+    });
+
+    it.each([
+      ["the shallow check", "--is-shallow-repository", true],
+      ["the check of a root found before", "cat-file", true],
+      ["the top-level lookup outside a repo", "--show-toplevel", false],
+    ])("so is %s", (_, slow, inRepo) => {
+      const dir = inRepo ? repo("slow", 2) : join(root, "plain");
+      if (!inRepo) mkdirSync(dir);
+      const knownRoot = inRepo ? git(dir, "rev-list", "--max-parents=0", "HEAD") : undefined;
+      vi.stubEnv("SLOW_GIT", slow);
+
+      expect(gitProjectOfDir(dir, { lookup: 300, history: 300 }, knownRoot)).toBeNull();
+    });
+
+    it("a root commit found before spares the walk while this repository still has it", () => {
+      const dir = repo("huge", 2);
+      const rootCommit = git(dir, "rev-list", "--max-parents=0", "HEAD");
+      vi.stubEnv("SLOW_GIT", "rev-list");
+
+      expect(gitProjectOfDir(dir, budget, rootCommit)).toEqual({
+        project: `git:${rootCommit}`,
+        rule: "root-commit",
+      });
+      // Not this repository's: the walk runs, and runs out of time.
+      expect(gitProjectOfDir(dir, budget, "f".repeat(40))).toBeNull();
+    });
   });
 });
 

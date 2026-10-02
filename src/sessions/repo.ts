@@ -34,8 +34,16 @@ export function normalizeRepoRemote(remote: string): string | null {
   return `${lowerHost}/${lowerHost === "github.com" ? path.toLowerCase() : path}`;
 }
 
-/** Stdout of `git -C dir <args>`; null on a non-zero exit, a timeout, or no git. */
-function gitOutput(dir: string, args: string[], timeout: number): string | null {
+/** A git call that ran out of time: no answer either way, unlike a non-zero exit. */
+export const GIT_TIMED_OUT = Symbol("git timed out");
+
+/** Stdout of `git -C dir <args>`; null on a non-zero exit or no git, GIT_TIMED_OUT when it ran
+ * past `timeout`. */
+export function gitAnswer(
+  dir: string,
+  args: string[],
+  timeout: number,
+): string | null | typeof GIT_TIMED_OUT {
   const env = { ...process.env };
   for (const name of GIT_LOCATION_ENV) delete env[name];
   try {
@@ -46,9 +54,15 @@ function gitOutput(dir: string, args: string[], timeout: number): string | null 
       timeout,
       maxBuffer: 16 * 1024 * 1024,
     });
-  } catch {
-    return null;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ETIMEDOUT" ? GIT_TIMED_OUT : null;
   }
+}
+
+/** Stdout of `git -C dir <args>`; null on a non-zero exit, a timeout, or no git. */
+function gitOutput(dir: string, args: string[], timeout: number): string | null {
+  const out = gitAnswer(dir, args, timeout);
+  return out === GIT_TIMED_OUT ? null : out;
 }
 
 /** The normalized `origin` of the repository containing `dir`; null outside a git repo, without
@@ -62,28 +76,6 @@ export function originRepoOfDir(dir: string): string | null {
 /** The branch checked out in `dir` right now; null on a detached HEAD or outside a repo. */
 export function currentBranchOfDir(dir: string): string | null {
   const out = gitOutput(dir, ["symbolic-ref", "--short", "-q", "HEAD"], 1_000)?.trim();
-  return out ? out : null;
-}
-
-/** The root commit of the history checked out in `dir`: the lexicographically first parentless
- * commit reachable from HEAD. Null outside a repo, before the first commit, and in a shallow
- * clone, whose parentless commit is only where the clone was cut. */
-export function rootCommitOfDir(dir: string): string | null {
-  const shallow = gitOutput(dir, ["rev-parse", "--is-shallow-repository"], 1_000)?.trim();
-  if (shallow !== "false") return null;
-  // Walks the whole history, so it gets more room than the single-ref lookups.
-  const out = gitOutput(dir, ["rev-list", "--max-parents=0", "HEAD"], 5_000);
-  const roots = (out ?? "")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => /^[0-9a-f]{40,64}$/.test(line))
-    .sort();
-  return roots[0] ?? null;
-}
-
-/** The top directory of the work tree containing `dir`; null outside a repo. */
-export function toplevelOfDir(dir: string): string | null {
-  const out = gitOutput(dir, ["rev-parse", "--show-toplevel"], 1_000)?.trim();
   return out ? out : null;
 }
 

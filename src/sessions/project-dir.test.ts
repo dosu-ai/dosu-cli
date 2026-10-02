@@ -273,7 +273,47 @@ describe("resolveProject", () => {
     expect(resolver.resolveProject(s)?.project).toBe("git:/work/widget");
 
     // A later prompt from another directory (the agent cd'd) still gets the session's key.
-    expect(resolver.resolveProjectAt("opencode/w", "/elsewhere").project).toBe("git:/work/widget");
+    expect(resolver.resolveProjectAt("opencode/w", "/elsewhere")?.project).toBe("git:/work/widget");
+  });
+
+  it("git out of a prompt's time sends no key, waits no more that session, and caches nothing", () => {
+    const ROOT = { project: `git:${"a".repeat(40)}`, rule: "root-commit" } as const;
+    const gitProjectOfDir = vi.fn((_dir: string, budget: { history: number }) =>
+      // A history walk that only fits the background budget.
+      budget.history > 60_000 ? ROOT : null,
+    );
+    const prompt = createProjectDirResolver(tempDir, { gitProjectOfDir, env: {} });
+    expect(prompt.resolveProjectAt("claude/abc", "/work/huge")).toBeNull();
+    expect(prompt.resolveProjectAt("claude/abc", "/work/huge")).toBeNull();
+    prompt.flush();
+    const nextPrompt = createProjectDirResolver(tempDir, { gitProjectOfDir, env: {} });
+    expect(nextPrompt.resolveProjectAt("claude/abc", "/work/huge")).toBeNull();
+    expect(gitProjectOfDir).toHaveBeenCalledTimes(1);
+
+    // The sync has time: the session ships under the real key, not a `path:` stand-in.
+    const sync = createProjectDirResolver(tempDir, { gitProjectOfDir, env: {} });
+    const s = session({ harness: "claude", id: "abc" });
+    expect(sync.resolveProject(s)).toEqual(ROOT);
+  });
+
+  it("a root commit found for one session spares the next one in that directory the walk", () => {
+    const ROOT = { project: `git:${"b".repeat(40)}`, rule: "root-commit" } as const;
+    const gitProjectOfDir = vi.fn(
+      (_dir: string, _budget: unknown, knownRoot?: string): typeof ROOT | null =>
+        knownRoot ? { project: `git:${knownRoot}`, rule: "root-commit" } : ROOT,
+    );
+    const first = session({ harness: "opencode", project: "/work/huge", id: "first" });
+    const sync = createProjectDirResolver(tempDir, { gitProjectOfDir, env: {} });
+    sync.resolveProject(first);
+    sync.flush();
+
+    const prompt = createProjectDirResolver(tempDir, { gitProjectOfDir, env: {} });
+    expect(prompt.resolveProjectAt("claude/next", "/work/huge")).toEqual(ROOT);
+    expect(gitProjectOfDir).toHaveBeenLastCalledWith(
+      "/work/huge",
+      expect.anything(),
+      "b".repeat(40),
+    );
   });
 });
 

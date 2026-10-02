@@ -21,7 +21,13 @@ import {
   parseReflog,
 } from "./branch";
 import { type CapturedSession, type EndedSession, readCapturedSession } from "./capture";
-import { gitProjectOfDir, type ProjectKey, projectOverride } from "./project";
+import {
+  GIT_BUDGETS,
+  type GitBudget,
+  gitProjectOfDir,
+  type ProjectKey,
+  projectOverride,
+} from "./project";
 import { currentBranchOfDir, headReflogOfDir, originRepoOfDir } from "./repo";
 import { type AgentSession, sessionAtPath } from "./scan";
 
@@ -43,6 +49,9 @@ interface CacheEntry {
   /** The session's project key (project.ts), as first resolved for it, by whichever rule; a
    * `path` fallback is retried when mtime moves, like a null repo. */
   project?: ProjectKey;
+  /** A prompt hook's git lookup ran out of time: the session's later prompts skip git (and send
+   * no key) rather than keep the user waiting again, and the sync resolves it patiently. */
+  git_timed_out?: true;
 }
 
 interface CacheFile {
@@ -148,7 +157,7 @@ export interface ProjectDirDeps {
   captured?: (key: string) => CapturedSession | null;
   reflogOfDir?: (dir: string) => string | null;
   currentBranch?: (dir: string) => string | null;
-  gitProjectOfDir?: (dir: string) => ProjectKey;
+  gitProjectOfDir?: (dir: string, budget: GitBudget, knownRoot?: string) => ProjectKey | null;
   /** The hook's environment, for resolveProjectAt's DOSU_PROJECT; defaults to process.env. */
   env?: NodeJS.ProcessEnv;
 }
@@ -178,13 +187,14 @@ export interface ProjectDirResolver {
    * memory and the shipped session agree and a deleted checkout still resolves. `agentEnv` is the
    * environment the session's own agent ran in, when the caller runs inside it (a hook for this
    * very session): only then does DOSU_PROJECT apply, since a sync shipping many sessions runs in
-   * whichever agent's environment triggered it. Null only when neither the working directory nor
-   * that DOSU_PROJECT is known. */
+   * whichever agent's environment triggered it. Git gets the background budget. Null when
+   * neither the working directory nor that DOSU_PROJECT is known, or git ran out of time. */
   resolveProject(session: AgentSession, agentEnv?: NodeJS.ProcessEnv): ProjectKey | null;
   /** The project key for a session whose working directory the caller already knows (a hook
    * payload's cwd), resolved in the hook's environment (`deps.env`) and cached under the same
-   * `harness/id` key so the shipped session agrees. */
-  resolveProjectAt(key: string, dir: string): ProjectKey;
+   * `harness/id` key so the shipped session agrees. Git gets the prompt budget; null when it ran
+   * out, then and on the session's later prompts. */
+  resolveProjectAt(key: string, dir: string): ProjectKey | null;
   /** The branch the session ran on, or null when nothing recorded it. Not cached: a session's
    * branch can move until it ends, and each session is resolved about once. */
   resolveBranch(session: AgentSession): string | null;
@@ -289,14 +299,30 @@ export function createProjectDirResolver(
   const gitProject = deps.gitProjectOfDir ?? gitProjectOfDir;
   const projectByDir = new Map<string, ProjectKey>();
 
-  /** All five rules for `dir` (only DOSU_PROJECT without one); git asked once per directory. */
-  const freshProject = (dir: string | null, env: NodeJS.ProcessEnv): ProjectKey | null => {
+  /** A root commit some session in `dir` was keyed by: the history walk is done once per
+   * directory, not once per session (a long one may only fit a background budget). */
+  const knownRootOf = (dir: string): string | undefined => {
+    for (const entry of Object.values(entries)) {
+      if (entry.dir === dir && entry.project?.rule === "root-commit") {
+        return entry.project.project.slice("git:".length);
+      }
+    }
+    return undefined;
+  };
+
+  /** All five rules for `dir` (only DOSU_PROJECT without one), git asked once per directory;
+   * `budget` null skips git. Null when git ran out of time. */
+  const freshProject = (
+    dir: string | null,
+    env: NodeJS.ProcessEnv,
+    budget: GitBudget | null,
+  ): ProjectKey | null => {
     const override = projectOverride(dir, { configDir, env });
-    if (override || dir === null) return override;
-    let project = projectByDir.get(dir);
+    if (override || dir === null || budget === null) return override;
+    let project = projectByDir.get(dir) ?? null;
     if (!project) {
-      project = gitProject(dir);
-      projectByDir.set(dir, project);
+      project = gitProject(dir, budget, knownRootOf(dir));
+      if (project) projectByDir.set(dir, project);
     }
     return project;
   };
@@ -309,14 +335,21 @@ export function createProjectDirResolver(
     dir: string | null,
     currentMtime: string,
     env: NodeJS.ProcessEnv,
+    patience: keyof typeof GIT_BUDGETS,
   ): ProjectKey | null => {
     const entry = entries[key];
     const hit = entry?.project;
     if (hit && (hit.rule !== "path" || entry.mtime === currentMtime)) return hit;
-    const project = freshProject(dir, env);
+    const waitedBefore = patience === "prompt" && entry?.git_timed_out === true;
+    const project = freshProject(dir, env, waitedBefore ? null : GIT_BUDGETS[patience]);
     if (entry && project) {
       entry.project = project;
       entry.mtime = currentMtime;
+      delete entry.git_timed_out;
+      touched.add(key);
+    } else if (entry && dir !== null && patience === "prompt" && !waitedBefore) {
+      // Git ran out of the prompt's budget.
+      entry.git_timed_out = true;
       touched.add(key);
     }
     return project;
@@ -348,7 +381,8 @@ export function createProjectDirResolver(
     },
     resolveProject(session, agentEnv = {}) {
       const dir = resolve(session);
-      return sessionProject(`${session.harness}/${session.id}`, dir, mtime(session.path), agentEnv);
+      const key = `${session.harness}/${session.id}`;
+      return sessionProject(key, dir, mtime(session.path), agentEnv, "background");
     },
     resolveProjectAt(key, dir) {
       if (!entries[key]) {
@@ -357,9 +391,7 @@ export function createProjectDirResolver(
         entries[key] = { dir, mtime: "" };
         touched.add(key);
       }
-      const env = deps.env ?? process.env;
-      // Never null: the directory is known.
-      return sessionProject(key, dir, entries[key].mtime, env) as ProjectKey;
+      return sessionProject(key, dir, entries[key].mtime, deps.env ?? process.env, "prompt");
     },
     resolveBranch(session) {
       return (
