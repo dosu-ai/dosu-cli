@@ -1,9 +1,11 @@
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { NormalizedRecord } from "@letta-ai/trajectory";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectKey } from "../sessions/project";
 import type { AgentSession } from "../sessions/scan";
+import { prefixSha256 } from "./continuation";
 import { createShipStep } from "./runner";
 import { MIN_SESSION_CHARS } from "./worthiness";
 
@@ -36,7 +38,7 @@ function accepted(body: unknown = { task_id: "task-1", session_url: "https://app
 interface StepOverrides {
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
   isIncognito?: (s: AgentSession) => boolean;
-  normalize?: (s: AgentSession) => Promise<Record<string, unknown>[] | null>;
+  normalize?: (s: AgentSession) => Promise<unknown[] | null>;
   resolveProject?: (s: AgentSession) => ProjectKey | null;
 }
 
@@ -132,6 +134,8 @@ describe("createShipStep", () => {
         taskId: "task-1",
         sessionUrl: "https://app/m/s1",
         project: "github.com/acme/app",
+        records: 3,
+        prefixSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
       },
     ]);
     const [url, init] = fetchImpl.mock.calls[0];
@@ -167,6 +171,8 @@ describe("createShipStep", () => {
       outcome: "shipped",
       taskId: "task-2",
       project: "github.com/acme/app",
+      records: 3,
+      prefixSha256: expect.any(String),
     });
   });
 
@@ -408,5 +414,88 @@ describe("createShipStep worthiness thresholds", () => {
 
     // The meta record never counts, however long its strings.
     expect(result.outcome).toBe(outcome);
+  });
+});
+
+describe("createShipStep continuation", () => {
+  const turn = (i: number) => [
+    { role: "user", content: `question ${i}`, timestamp: `2026-09-01T00:0${i}:00.000Z` },
+    { role: "assistant", content: "a".repeat(2000), timestamp: `2026-09-01T00:0${i}:30.000Z` },
+  ];
+  const meta = { role: "meta", source: "claude-code", cwd: "/repo/app" };
+  const first = [meta, ...turn(1)];
+  const grown = [...first, ...turn(2)];
+  const hash = (records: unknown[], count: number) =>
+    prefixSha256(records as NormalizedRecord[], count);
+  const shippedFirst = { records: 3, prefix_sha256: hash(first, 3) };
+
+  function body(fetchImpl: ReturnType<typeof vi.fn>, call = 0) {
+    return JSON.parse(fetchImpl.mock.calls[call][1].body);
+  }
+
+  it("a first ship reports how many records went and their hash", async () => {
+    const { step, fetchImpl } = makeStep({ normalize: async () => first });
+
+    const [result] = await step([session("s1")]);
+
+    expect(result).toMatchObject({ records: 3, prefixSha256: hash(first, 3) });
+    expect(body(fetchImpl).metadata.continuation).toBeUndefined();
+  });
+
+  it("a session that grew after shipping sends the meta record and only the new tail", async () => {
+    const { step, fetchImpl } = makeStep({ normalize: async () => grown });
+
+    const [result] = await step([session("s1")], () => shippedFirst);
+
+    const sent = body(fetchImpl);
+    expect(sent.records).toEqual([meta, ...turn(2)]);
+    expect(sent.metadata.continuation).toEqual({
+      from_record: 3,
+      prefix_sha256: shippedFirst.prefix_sha256,
+    });
+    // What has shipped now covers the whole session.
+    expect(result).toMatchObject({ outcome: "shipped", records: 5, prefixSha256: hash(grown, 5) });
+  });
+
+  it("ships the whole session again when the shipped prefix no longer matches", async () => {
+    const rewritten = [meta, { ...turn(1)[0], content: "edited" }, turn(1)[1], ...turn(2)];
+    const { step, fetchImpl } = makeStep({ normalize: async () => rewritten });
+
+    await step([session("s1")], () => shippedFirst);
+
+    expect(body(fetchImpl).records).toEqual(rewritten);
+    expect(body(fetchImpl).metadata.continuation).toBeUndefined();
+  });
+
+  it("a new tail too small to learn from is trivial and never uploaded", async () => {
+    const pleasantries = [
+      ...first,
+      { role: "user", content: "thanks!", timestamp: "2026-09-01T00:09:00.000Z" },
+      { role: "assistant", content: "Anytime.", timestamp: "2026-09-01T00:09:01.000Z" },
+    ];
+    const { step, fetchImpl } = makeStep({ normalize: async () => pleasantries });
+
+    const [result] = await step([session("s1")], () => shippedFirst);
+
+    expect(result.outcome).toBe("trivial");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("a session touched without new records is trivial", async () => {
+    const { step, fetchImpl } = makeStep({ normalize: async () => first });
+
+    const [result] = await step([session("s1")], () => shippedFirst);
+
+    expect(result.outcome).toBe("trivial");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("names the parent of a child session, and only then", async () => {
+    const { step, fetchImpl } = makeStep();
+
+    await step([session("child", { parentId: "parent-1" }), session("top")]);
+
+    expect(body(fetchImpl, 0).metadata.parent_session_id).toBe("parent-1");
+    expect("parent_session_id" in body(fetchImpl, 1).metadata).toBe(false);
   });
 });

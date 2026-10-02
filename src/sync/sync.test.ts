@@ -487,6 +487,98 @@ describe("runKnowledgeSync shipping", () => {
     expect(ledger["claude/s-60"].task_id).toBeUndefined();
   });
 
+  it("remembers how much of each session shipped, and hands it to the ship step next time", async () => {
+    const grown = session(60);
+    const ship = vi.fn(async (sessions: AgentSession[], _shipped?: (s: AgentSession) => unknown) =>
+      sessions.map<ShipSessionResult>((s) => ({
+        session: s,
+        outcome: "shipped",
+        taskId: "t2",
+        records: 9,
+        prefixSha256: "hash-9",
+      })),
+    );
+    const { deps, saved } = makeDeps({
+      loadState: () =>
+        state({
+          sessions: settled(grown, {
+            updated: session(120).updated,
+            records: 4,
+            prefix_sha256: "hash-4",
+          }),
+        }),
+      listSessions: vi.fn().mockResolvedValue([grown]),
+      ship,
+    });
+
+    await runKnowledgeSync({ deps });
+
+    const shippedOf = ship.mock.calls[0][1] ?? (() => "not passed");
+    expect(shippedOf(grown)).toEqual({ records: 4, prefix_sha256: "hash-4" });
+    expect(shippedOf(session(1))).toBeUndefined();
+    expect(saved.at(-1)?.sessions["claude/s-60"]).toMatchObject({
+      outcome: "shipped",
+      updated: grown.updated,
+      records: 9,
+      prefix_sha256: "hash-9",
+      task_id: "t2",
+    });
+  });
+
+  it("a shipped session whose new tail is trivial stays shipped, and settled", async () => {
+    const grown = session(60);
+    const before = settled(grown, {
+      updated: session(120).updated,
+      at: "2026-08-25T09:00:00.000Z",
+      task_id: "t1",
+      records: 4,
+      prefix_sha256: "hash-4",
+    });
+    const { deps, saved } = makeDeps({
+      loadState: () => state({ sessions: before }),
+      listSessions: vi.fn().mockResolvedValue([grown]),
+      ship: vi.fn(
+        async (): Promise<ShipSessionResult[]> => [{ session: grown, outcome: "trivial" }],
+      ),
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.counts).toMatchObject({ trivial: 1 });
+    // Still the first shipment's record, now answering for the current contents.
+    expect(saved.at(-1)?.sessions["claude/s-60"]).toEqual({
+      ...before["claude/s-60"],
+      updated: grown.updated,
+    });
+  });
+
+  it("a refused tail keeps what already shipped, so a retry can send just the tail", async () => {
+    const grown = session(60);
+    const { deps, saved } = makeDeps({
+      loadState: () =>
+        state({
+          sessions: settled(grown, {
+            updated: session(120).updated,
+            task_id: "t1",
+            records: 4,
+            prefix_sha256: "hash-4",
+          }),
+        }),
+      listSessions: vi.fn().mockResolvedValue([grown]),
+      ship: vi.fn(
+        async (): Promise<ShipSessionResult[]> => [
+          { session: grown, outcome: "rejected", httpStatus: 413, message: "too big" },
+        ],
+      ),
+    });
+
+    await runKnowledgeSync({ deps });
+
+    const entry = saved.at(-1)?.sessions["claude/s-60"];
+    expect(entry).toMatchObject({ outcome: "rejected", records: 4, prefix_sha256: "hash-4" });
+    expect(entry?.task_id).toBeUndefined();
+  });
+
   it("a newer CLI reconsiders what an older one passed over", async () => {
     const tiny = session(60);
     const ship = shipAll();

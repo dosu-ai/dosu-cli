@@ -9,7 +9,8 @@ import type { ProjectKey } from "../sessions/project";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import type { AgentSession } from "../sessions/scan";
 import { isIncognitoSession } from "../sync/incognito";
-import type { ShipSessionResult } from "../sync/sync";
+import type { ShipSessionResult, SyncDeps } from "../sync/sync";
+import { planShipment, prefixSha256, type ShippedPrefix } from "./continuation";
 import { normalizeSessionRecords, trajectorySourceOf } from "./normalize";
 import { isTrivialTrajectory } from "./worthiness";
 
@@ -41,10 +42,9 @@ export interface ShipStepOptions {
 }
 
 /** Build the sync pipeline's ship step. Processes oldest-first and stops after the first
- * failure, per the SyncDeps contract; the pipeline owns all ledger bookkeeping. */
-export function createShipStep(
-  options: ShipStepOptions,
-): (sessions: AgentSession[]) => Promise<ShipSessionResult[]> {
+ * failure, per the SyncDeps contract; the pipeline owns all ledger bookkeeping and says, per
+ * session, what earlier runs already shipped of it. */
+export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["ship"]> {
   const backendUrl = (options.backendUrl ?? getBackendURL()).replace(/\/$/, "");
   const fetchImpl = options.fetchImpl ?? fetch;
   const isIncognito = options.isIncognito ?? isIncognitoSession;
@@ -52,6 +52,7 @@ export function createShipStep(
 
   async function shipOne(
     session: AgentSession,
+    shipped: ShippedPrefix | undefined,
     resolveProject: (session: AgentSession) => ProjectKey | null,
   ): Promise<ShipSessionResult> {
     if (isIncognito(session)) return { session, outcome: "incognito" };
@@ -66,13 +67,15 @@ export function createShipStep(
     if (!records) {
       return { session, outcome: "unsupported", message: "transcript could not be normalized" };
     }
-    if (isTrivialTrajectory(records)) return { session, outcome: "trivial" };
+    // A resumed session sends only its new tail, and only when that tail is worth learning from.
+    const plan = planShipment(records, shipped);
+    if (isTrivialTrajectory(plan.fresh)) return { session, outcome: "trivial" };
     // The project key of the session's working directory (sessions/project.ts), the same one
     // prompt-time memory sends. Branch is omitted: the trajectory meta record carries
     // git_branch when the harness logged one.
     const project = resolveProject(session)?.project ?? "unknown";
     const body = JSON.stringify({
-      records,
+      records: plan.records,
       metadata: {
         deployment_id: options.deploymentId,
         project,
@@ -80,6 +83,8 @@ export function createShipStep(
         repo: project,
         agent: trajectorySourceOf(session.harness) ?? session.harness,
         session_id: session.id,
+        ...(session.parentId ? { parent_session_id: session.parentId } : {}),
+        ...(plan.continuation ? { continuation: plan.continuation } : {}),
       },
     });
     try {
@@ -100,6 +105,9 @@ export function createShipStep(
           taskId: accepted.task_id ?? "unknown",
           ...(typeof accepted.session_url === "string" ? { sessionUrl: accepted.session_url } : {}),
           project,
+          // Everything up to here has now shipped, whether this upload was all of it or a tail.
+          records: records.length,
+          prefixSha256: prefixSha256(records, records.length),
         };
       }
       if (REJECTED_STATUSES.has(response.status)) {
@@ -117,13 +125,13 @@ export function createShipStep(
     }
   }
 
-  return async (sessions) => {
+  return async (sessions, shippedOf = () => undefined) => {
     const resolver = options.resolveProject ? undefined : createProjectDirResolver();
     const resolveProject =
       options.resolveProject ?? ((session) => resolver?.resolveProject(session) ?? null);
     const results: ShipSessionResult[] = [];
     for (const session of sessions) {
-      const result = await shipOne(session, resolveProject);
+      const result = await shipOne(session, shippedOf(session), resolveProject);
       results.push(result);
       if (result.outcome === "failed") break;
     }

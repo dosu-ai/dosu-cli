@@ -5,6 +5,7 @@
 import { logger } from "../debug/logger";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { type AgentSession, scanAgentSessions } from "../sessions/scan";
+import type { ShippedPrefix } from "../shipper/continuation";
 import { VERSION } from "../version/version";
 import { fileLock, type SyncLock } from "./lock";
 import {
@@ -61,6 +62,10 @@ export interface ShipSessionResult {
   sessionUrl?: string;
   /** The project key the session shipped under, on `shipped`. */
   project?: string;
+  /** On `shipped`: how many normalized records of the session have now shipped in total (a
+   * tail-only upload covers the earlier ones too), and their prefixSha256. */
+  records?: number;
+  prefixSha256?: string;
   /** The backend's answer, on `rejected`. */
   httpStatus?: number;
   /** One renderable line for results that did not ship. */
@@ -100,8 +105,12 @@ export interface SyncDeps {
   loadState?: () => SyncState;
   saveState?: (state: SyncState) => void;
   /** When present, gated sessions are shipped; absent = gate-and-report only. Must process
-   * oldest-first and stop after the first failed result. */
-  ship?: (sessions: AgentSession[]) => Promise<ShipSessionResult[]>;
+   * oldest-first and stop after the first failed result. `shipped` says what earlier runs
+   * already shipped of a session, so a resumed one can send only its new tail. */
+  ship?: (
+    sessions: AgentSession[],
+    shipped?: (session: AgentSession) => ShippedPrefix | undefined,
+  ) => Promise<ShipSessionResult[]>;
   /** Session → working directory and repo, for the shipping scope; defaults to the cached
    * resolver. */
   locator?: SessionLocator;
@@ -140,13 +149,27 @@ function empty(status: SyncStatus): SyncOutcome {
   return { status, readySessions: 0, inFlightSessions: 0, sessions: [] };
 }
 
-/** The ledger entry a ship result settles, or null for a failure (still pending). */
+/** What earlier runs shipped of a session, per its ledger entry. */
+function shippedPrefix(entry: LedgerEntry | undefined): ShippedPrefix | undefined {
+  return entry?.records !== undefined && entry.prefix_sha256 !== undefined
+    ? { records: entry.records, prefix_sha256: entry.prefix_sha256 }
+    : undefined;
+}
+
+/** The ledger entry a ship result settles, or null for a failure (still pending). `previous` is
+ * the session's entry before this run: what already shipped of it is never forgotten. */
 function ledgerEntry(
   result: ShipSessionResult,
+  previous: LedgerEntry | undefined,
   at: string,
   cliVersion: string,
 ): LedgerEntry | null {
   if (result.outcome === "failed") return null;
+  const before = shippedPrefix(previous);
+  // A shipped session whose new tail is too small to learn from stays shipped, as of now.
+  if (result.outcome === "trivial" && previous?.outcome === "shipped" && before) {
+    return { ...previous, updated: result.session.updated };
+  }
   const entry: LedgerEntry = {
     updated: result.session.updated,
     outcome: result.outcome,
@@ -158,6 +181,14 @@ function ledgerEntry(
     if (result.sessionUrl) entry.session_url = result.sessionUrl;
     if (result.project) entry.project = result.project;
     if (result.session.project) entry.workspace = result.session.project;
+    if (result.records !== undefined && result.prefixSha256 !== undefined) {
+      entry.records = result.records;
+      entry.prefix_sha256 = result.prefixSha256;
+    }
+  } else if (before) {
+    // Refused or passed over now, but its start still shipped: a retry can send just the tail.
+    entry.records = before.records;
+    entry.prefix_sha256 = before.prefix_sha256;
   }
   if (result.httpStatus !== undefined) entry.http_status = result.httpStatus;
   if (result.outcome !== "shipped" && result.message) entry.message = result.message;
@@ -294,7 +325,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
 
     let results: ShipSessionResult[];
     try {
-      results = await deps.ship(batch);
+      results = await deps.ship(batch, (s) => shippedPrefix(locked.sessions[sessionKey(s)]));
     } catch (err) {
       // The ship step reports failures per session; a throw is a step bug — treat it as one
       // failed attempt so backoff still engages instead of crashing the sync run.
@@ -313,7 +344,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       // No result: the batch stopped at an earlier failure; still pending.
       if (!result) continue;
       counts[result.outcome] += 1;
-      const entry = ledgerEntry(result, at, cliVersion);
+      const entry = ledgerEntry(result, locked.sessions[key], at, cliVersion);
       if (!entry) {
         error = result.message ?? "unknown error";
         logger.debug("sync", `shipping failed at ${key}: ${error}`);

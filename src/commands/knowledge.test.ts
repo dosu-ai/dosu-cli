@@ -1720,14 +1720,16 @@ describe("knowledge sync shipping wiring", () => {
 
     await run("sync");
 
-    const ship = syncDeps().ship as (sessions: unknown[]) => Promise<unknown>;
+    const ship = syncDeps().ship as (sessions: unknown[], shipped: unknown) => Promise<unknown>;
     const sessions = [{ id: "s1", harness: "claude", path: "/tmp/s1.jsonl", updated: "now" }];
-    await expect(ship(sessions)).resolves.toEqual([]);
+    // What already shipped of each session must reach the shipper, or resumed sessions ship whole.
+    const shipped = () => ({ records: 4, prefix_sha256: "abc" });
+    await expect(ship(sessions, shipped)).resolves.toEqual([]);
     expect(mockCreateShipStep).toHaveBeenCalledWith({
       apiKey: "sk_user_test",
       deploymentId: "dep1",
     });
-    expect(inner).toHaveBeenCalledWith(sessions);
+    expect(inner).toHaveBeenCalledWith(sessions, shipped);
   });
 });
 

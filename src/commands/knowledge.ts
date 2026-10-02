@@ -435,9 +435,9 @@ function buildShipper(): SyncDeps["ship"] {
   if (!target?.api_key || !target.deployment_id) return undefined;
   if (!isAbsoluteHttpUrl(getBackendURL())) return undefined;
   const { api_key, deployment_id } = target;
-  return async (sessions: AgentSession[]) => {
+  return async (sessions, shipped) => {
     const { createShipStep } = await import("../shipper/runner");
-    return createShipStep({ apiKey: api_key, deploymentId: deployment_id })(sessions);
+    return createShipStep({ apiKey: api_key, deploymentId: deployment_id })(sessions, shipped);
   };
 }
 

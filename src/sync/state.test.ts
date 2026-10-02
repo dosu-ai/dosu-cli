@@ -85,6 +85,8 @@ describe("loadSyncState / saveSyncState", () => {
           session_url: "https://app/memories/sessions/abc",
           project: "github.com/acme/widget",
           workspace: "-Users-me-widget",
+          records: 42,
+          prefix_sha256: "ab12",
         }),
         "codex/def": entry({
           outcome: "rejected",

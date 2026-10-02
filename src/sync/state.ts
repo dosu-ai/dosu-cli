@@ -54,6 +54,11 @@ export interface LedgerEntry {
   /** The CLI version that settled it. Passed-over sessions are re-evaluated by a newer CLI,
    * which may support the harness, judge triviality differently, or fix what was rejected. */
   cli_version: string;
+  /** How many normalized records of the session have shipped so far, from the start, and the
+   * sha256 of their canonical JSON (shipper/continuation.ts): a session that grows ships only
+   * its tail. Kept when a later attempt is refused or passed over. */
+  records?: number;
+  prefix_sha256?: string;
   /** shipped: the ingest task the backend accepted (202). */
   task_id?: string;
   /** shipped: the shareable memory-session page, when the backend returned one. */
@@ -171,6 +176,8 @@ function parseEntry(value: unknown): LedgerEntry | null {
     outcome: outcome as SessionOutcome,
     at,
     cli_version,
+    ...(nonNegative(value.records) !== undefined ? { records: value.records as number } : {}),
+    ...optionalString("prefix_sha256", value.prefix_sha256),
     ...optionalString("task_id", value.task_id),
     ...optionalString("session_url", value.session_url),
     ...optionalString("project", value.project),
