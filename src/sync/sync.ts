@@ -275,19 +275,23 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
   }
   // An explicit run is an explicit resume; this run's state saves persist the clear.
   const resumes = !options.quiet && state.paused === true;
-  // The user's stop switch: hook-triggered runs stay off until resumed. One whose hook just ended
-  // a session still remembers where that session lives before it stops.
-  let holdBack: "paused" | null = null;
+  // A hook-triggered run held back by the user's stop switch or by failure backoff does nothing,
+  // unless its hook just ended a session: a paused run still remembers where that session lives,
+  // and a backed-off one tries that session alone, so the last sessions before a throwaway
+  // machine goes away are not left waiting out a backoff.
+  let holdBack: "paused" | "backoff" | null = null;
   if (options.quiet) {
     const retryAt = backoffUntil(state);
     if (state.paused) holdBack = "paused";
+    else if (retryAt && now() < retryAt) holdBack = "backoff";
     if (holdBack && ended.length === 0) {
-      logger.debug("sync", "skipping quiet sync: syncing is paused");
-      return empty("skipped-paused");
-    }
-    if (!holdBack && retryAt && now() < retryAt) {
-      logger.debug("sync", `skipping quiet sync: backoff until ${retryAt.toISOString()}`);
-      return empty("skipped-backoff");
+      logger.debug(
+        "sync",
+        holdBack === "paused"
+          ? "skipping quiet sync: syncing is paused"
+          : `skipping quiet sync: backoff until ${retryAt?.toISOString()}`,
+      );
+      return empty(holdBack === "paused" ? "skipped-paused" : "skipped-backoff");
     }
   } else if (resumes) {
     delete state.paused;
@@ -339,8 +343,9 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     const gate = gateSessions(scanned, state.sessions, { ...pending, now: now(), isEnded });
     const inScope = (sessions: AgentSession[]) =>
       filterSessionsByRepo(sessions, repoFilter, (s) => locator.resolveRepo(s));
-    ready = inScope(gate.ready);
+    ready = inScope(holdBack === "backoff" ? gate.ready.filter(isEnded) : gate.ready);
     open = inScope(gate.open);
+    if (holdBack === "backoff") logger.debug("sync", "backing off: trying only the ended session");
     flush?.();
     logger.debug(
       "sync",

@@ -32,7 +32,7 @@ leaves the 30-day window.
 | `skipped_by_user` | You declined setup's offer to ship the last 30 days (it offers only sessions the ledger has never settled) |
 
 Only transport errors, auth failures, and 5xx responses are failures: they stop the run, leave the
-session pending, and make hook runs back off. `rejected` and `unsupported` are answers, so one
+session pending, and make hook runs back off (except for a just-ended session, below). `rejected` and `unsupported` are answers, so one
 unreadable session never stalls the rest. `dosu knowledge sync --status` and
 `dosu knowledge sessions` show counts per outcome and list the rejected and unsupported sessions
 with the reason.
@@ -49,7 +49,9 @@ the backlog, even if its transcript lives outside the directories the scan walks
 is remembered in the state file (`outside_sessions`) until it is gone or leaves the window, so later
 runs retry it after a failure and ship its tail when it is resumed. If another run holds the sync
 lock, the run waits for it (up to ten minutes) instead of leaving the session for a later trigger.
-A paused hook run ships nothing, but still remembers where an ended session lives. Only definitive end events count: Claude Code's `SessionEnd` today. Per-turn events
+A paused hook run ships nothing, but still remembers where an ended session lives. While hook runs
+back off after a failure, a run carrying an ended session still tries that session, and only that
+one; if it gets through, the backoff ends. Only definitive end events count: Claude Code's `SessionEnd` today. Per-turn events
 (Cursor's `stop`, Codex's `Stop`) never pass `--ended`. Each agent's end event is one reader in
 `END_EVENT_READERS` (`src/sessions/capture.ts`).
 

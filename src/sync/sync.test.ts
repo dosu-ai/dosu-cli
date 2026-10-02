@@ -338,6 +338,31 @@ describe("runKnowledgeSync switches", () => {
     expect(deps.listSessions).not.toHaveBeenCalled();
   });
 
+  it("under backoff, a quiet run still tries the session a hook just ended, and only that", async () => {
+    const justEnded = session(0);
+    const ship = shipAll();
+    const { deps, saved } = makeDeps({
+      loadState: () =>
+        state({
+          last_attempt_at: new Date(NOW.getTime() - 60 * 1000).toISOString(),
+          consecutive_failures: 1,
+        }),
+      listSessions: vi.fn().mockResolvedValue([justEnded, session(60)]),
+      ship,
+    });
+
+    const outcome = await runKnowledgeSync({
+      quiet: true,
+      ended: [{ harness: "claude", id: justEnded.id }],
+      deps,
+    });
+
+    expect(outcome.status).toBe("shipped");
+    expect(vi.mocked(ship).mock.calls[0][0].map((s) => s.id)).toEqual([justEnded.id]);
+    // It got through, so the backend is back: the backlog resumes with the next hook.
+    expect(saved.at(-1)?.consecutive_failures).toBe(0);
+  });
+
   it("quiet runs proceed once backoff has expired", async () => {
     const { deps } = makeDeps({
       loadState: () =>
