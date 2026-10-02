@@ -2,13 +2,29 @@
  * config, ledger, and project cache, and only the ingest API faked. */
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
 import { knowledgeCommand } from "./knowledge";
+
+/** The detached re-spawn is a process boundary: record its argv instead of starting a process. */
+const mockSpawn = vi.hoisted(() => vi.fn(() => ({ unref: () => {} })));
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawn: mockSpawn,
+}));
 
 let home: string;
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -40,6 +56,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  mockSpawn.mockClear();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   rmSync(home, { recursive: true, force: true });
@@ -53,6 +71,19 @@ async function dosu(...args: string[]): Promise<void> {
 
 function posted(): Array<{ records: { role: string }[]; metadata: Record<string, unknown> }> {
   return fetchImpl.mock.calls.map(([, init]) => JSON.parse(init?.body as string));
+}
+
+/** Feed `payload` to this process's stdin, as an agent hands a hook its JSON. */
+function hookStdin(payload: unknown): void {
+  vi.spyOn(process, "stdin", "get").mockReturnValue(
+    Readable.from([JSON.stringify(payload)]) as unknown as typeof process.stdin,
+  );
+}
+
+/** The `knowledge` arguments the last detached re-spawn was given. */
+function respawnedArgs(): string[] {
+  const args = (mockSpawn.mock.calls.at(-1) as unknown as [string, string[]])[1];
+  return args.slice(args.indexOf("knowledge") + 1);
 }
 
 /** A git checkout under the temporary home, with one commit and the given origin. */
@@ -130,5 +161,56 @@ describe("knowledge sync from a session-end hook", () => {
     await dosu("sync");
 
     expect(posted().map((p) => p.metadata.project)).toEqual(["poc-alpha", "poc-alpha"]);
+  });
+
+  it("the --detach parent hands the SessionEnd payload's session to the run it spawns", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    const ended = claudeSession("aaaa", exchange(1, alpha), 0);
+    claudeSession("live", exchange(2, alpha), 1);
+    hookStdin({
+      hook_event_name: "SessionEnd",
+      session_id: "aaaa",
+      transcript_path: ended,
+      cwd: alpha,
+      reason: "exit",
+    });
+
+    await dosu("sync", "--quiet", "--detach");
+    expect(fetchImpl).not.toHaveBeenCalled();
+    const child = respawnedArgs();
+    expect(child).toEqual(["sync", "--quiet", "--ended", "claude:aaaa", "--ended-path", ended]);
+
+    // The spawned run ships the session that ended; the live one waits out the quiet period.
+    await dosu(...child);
+    expect(posted().map((p) => p.metadata.session_id)).toEqual(["aaaa"]);
+  });
+
+  it("a per-turn hook payload names no session, so nothing skips the quiet period", async () => {
+    hookStdin({ hook_event_name: "Stop", session_id: "aaaa", transcript_path: "/x/aaaa.jsonl" });
+
+    await dosu("sync", "--quiet", "--detach");
+
+    expect(respawnedArgs()).toEqual(["sync", "--quiet"]);
+  });
+});
+
+describe("knowledge sync of a resumed session", () => {
+  it("ships only the new tail the second time", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    const path = claudeSession("aaaa", exchange(1, alpha), 30);
+    await dosu("sync");
+
+    appendFileSync(path, exchange(2, alpha));
+    const later = new Date(Date.now() - 10 * 60_000);
+    utimesSync(path, later, later);
+    await dosu("sync");
+
+    const [first, second] = posted();
+    expect(first.metadata.continuation).toBeUndefined();
+    expect(second.metadata.continuation).toEqual({
+      from_record: first.records.length,
+      prefix_sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
+    expect(second.records.map((r) => r.role)).toEqual(["meta", "user", "assistant"]);
   });
 });

@@ -38,12 +38,6 @@ vi.mock("../sync/detach", async (importOriginal) => ({
   spawnDetachedSelf: (...args: unknown[]) => mockSpawnDetached(...args),
 }));
 
-const mockCaptureHookSession = vi.fn();
-vi.mock("../sessions/capture", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../sessions/capture")>()),
-  captureHookSession: (...args: unknown[]) => mockCaptureHookSession(...args),
-}));
-
 const mockGetSyncStatus = vi.fn();
 vi.mock("../sync/status", () => ({
   getSyncStatus: (...args: unknown[]) => mockGetSyncStatus(...args),
@@ -65,11 +59,6 @@ vi.mock("../sync/state", async (importOriginal) => ({
 const mockEmitReport = vi.fn();
 vi.mock("../report/generate", () => ({
   emitKnowledgeReport: (...args: unknown[]) => mockEmitReport(...args),
-}));
-
-const mockCreateShipStep = vi.fn();
-vi.mock("../shipper/runner", () => ({
-  createShipStep: (...args: unknown[]) => mockCreateShipStep(...args),
 }));
 
 interface FakeAgent {
@@ -132,6 +121,7 @@ let logSpy: ReturnType<typeof vi.spyOn>;
 let errorSpy: ReturnType<typeof vi.spyOn>;
 // biome-ignore lint/suspicious/noExplicitAny: process.exit mock type mismatch
 let exitSpy: any;
+let stdinSpy: ReturnType<typeof vi.spyOn>;
 
 const validFlatConfig: FlatTestConfig = {
   access_token: "t",
@@ -166,7 +156,6 @@ beforeEach(() => {
   mockEmitReport.mockReset();
   mockEmitReport.mockResolvedValue("/tmp/dosu-knowledge-report.html");
   mockSetShipTranscripts.mockReset();
-  mockCreateShipStep.mockReset();
   fakeAgents = [];
   enableCalls.length = 0;
   disableCalls.length = 0;
@@ -175,6 +164,11 @@ beforeEach(() => {
   exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
     throw new Error("exit");
   }) as never);
+  // A terminal on stdin: no hook payload for the --detach parent to read (knowledge-sync.test.ts
+  // feeds real ones).
+  stdinSpy = vi
+    .spyOn(process, "stdin", "get")
+    .mockReturnValue({ isTTY: true } as unknown as typeof process.stdin);
   consumeCommandFacets(); // start each test with an empty analytics facet store
 });
 
@@ -182,6 +176,7 @@ afterEach(() => {
   logSpy.mockRestore();
   errorSpy.mockRestore();
   exitSpy.mockRestore();
+  stdinSpy.mockRestore();
   process.exitCode = undefined;
 });
 
@@ -867,32 +862,6 @@ describe("knowledge sync", () => {
 
     expect(mockSpawnDetached).toHaveBeenCalledWith(["knowledge", "sync", "--quiet"]);
     expect(mockRunSync).not.toHaveBeenCalled();
-  });
-
-  it("--detach captures the hook payload before re-spawning", async () => {
-    const order: string[] = [];
-    mockCaptureHookSession.mockImplementationOnce(async () => order.push("capture"));
-    mockSpawnDetached.mockImplementationOnce(() => order.push("spawn"));
-    await run("sync", "--quiet", "--detach");
-
-    expect(order).toEqual(["capture", "spawn"]);
-  });
-
-  it("--detach hands the session a SessionEnd hook named to the re-spawned run", async () => {
-    const path = "/home/u/.claude/projects/-work-app/abc-123.jsonl";
-    mockCaptureHookSession.mockResolvedValueOnce({ harness: "claude", id: "abc-123", path });
-
-    await run("sync", "--quiet", "--detach");
-
-    expect(mockSpawnDetached).toHaveBeenCalledWith([
-      "knowledge",
-      "sync",
-      "--quiet",
-      "--ended",
-      "claude:abc-123",
-      "--ended-path",
-      path,
-    ]);
   });
 
   it("ships the sessions named by --ended and --ended-path past the quiet period", async () => {
@@ -1791,24 +1760,6 @@ describe("knowledge sync shipping wiring", () => {
     delete process.env.DOSU_BACKEND_URL_OVERRIDE;
     await run("sync");
     expect(syncDeps().ship).toBeUndefined();
-  });
-
-  it("the ship step forwards the install's credentials to the shipper", async () => {
-    const inner = vi.fn().mockResolvedValue([]);
-    mockCreateShipStep.mockReturnValue(inner);
-
-    await run("sync");
-
-    const ship = syncDeps().ship as (sessions: unknown[], shipped: unknown) => Promise<unknown>;
-    const sessions = [{ id: "s1", harness: "claude", path: "/tmp/s1.jsonl", updated: "now" }];
-    // What already shipped of each session must reach the shipper, or resumed sessions ship whole.
-    const shipped = () => ({ records: 4, prefix_sha256: "abc" });
-    await expect(ship(sessions, shipped)).resolves.toEqual([]);
-    expect(mockCreateShipStep).toHaveBeenCalledWith({
-      apiKey: "sk_user_test",
-      deploymentId: "dep1",
-    });
-    expect(inner).toHaveBeenCalledWith(sessions, shipped);
   });
 });
 
