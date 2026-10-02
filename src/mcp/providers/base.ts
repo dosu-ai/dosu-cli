@@ -7,10 +7,12 @@ import {
   isJSONKeyConfigured,
   mcpEndpoint,
   mcpHeaders,
+  readJSONServer,
   removeJSONServer,
 } from "../config-helpers";
 import { expandHome, isInstalled } from "../detect";
 import type { SetupProvider } from "../providers";
+import { ANY, hasShape, shapeEndpoint } from "../shape";
 
 /** The resolved Dosu MCP endpoint a provider writes into its config file. */
 interface McpEndpoint {
@@ -32,7 +34,7 @@ export interface BaseProviderConfig {
    * need to know which mode they are in. Defaults to `{ type: "http", url, headers }`.
    */
   // biome-ignore lint/suspicious/noExplicitAny: server entries are arbitrary JSON
-  buildServer?: (endpoint: McpEndpoint, cfg: Config) => Record<string, any>;
+  buildServer?: (endpoint: McpEndpoint) => Record<string, any>;
   /** For providers that use a different local config path pattern */
   localConfigPath?: (cwd: string) => string;
 }
@@ -56,6 +58,11 @@ export function createJSONProvider(opts: BaseProviderConfig): SetupProvider {
     isInstalled: () => isInstalled(opts.paths),
     globalConfigPath: () => expandHome(opts.globalPath),
     isConfigured: () => isJSONKeyConfigured(expandHome(opts.globalPath), opts.topKey),
+    isCurrent: (cfg) =>
+      hasShape(
+        buildServer({ url: shapeEndpoint(cfg), headers: mcpHeaders(ANY) }),
+        readJSONServer(expandHome(opts.globalPath), opts.topKey),
+      ),
 
     install(cfg: Config, global: boolean): void {
       const endpoint: McpEndpoint = {
@@ -70,7 +77,7 @@ export function createJSONProvider(opts: BaseProviderConfig): SetupProvider {
       } else {
         throw new Error(`${opts.providerName} does not support local installation`);
       }
-      installJSONServer(configPath, opts.topKey, buildServer(endpoint, cfg));
+      installJSONServer(configPath, opts.topKey, buildServer(endpoint));
     },
 
     remove(global: boolean): void {

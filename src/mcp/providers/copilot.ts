@@ -5,10 +5,16 @@ import {
   isJSONKeyConfigured,
   mcpEndpoint,
   mcpHeaders,
+  readJSONServer,
   removeJSONServer,
 } from "../config-helpers";
 import { expandHome, isInstalled } from "../detect";
 import type { SetupProvider } from "../providers";
+import { ANY, hasShape, shapeEndpoint } from "../shape";
+
+function globalServer(url: string, apiKey: string | undefined) {
+  return { type: "http", url, tools: ["*"], headers: mcpHeaders(apiKey) };
+}
 
 function globalPath(): string {
   if (process.env.XDG_CONFIG_HOME) {
@@ -26,19 +32,18 @@ export const CopilotProvider = (): SetupProvider => ({
   isInstalled: () => isInstalled([expandHome("~/.copilot")]),
   globalConfigPath: () => globalPath(),
   isConfigured: () => isJSONKeyConfigured(globalPath(), "mcpServers"),
+  isCurrent: (cfg) =>
+    hasShape(globalServer(shapeEndpoint(cfg), ANY), readJSONServer(globalPath(), "mcpServers")),
 
   install(cfg: Config, global: boolean): void {
     const url = mcpEndpoint(cfg);
 
     if (global) {
-      const server = {
-        type: "http",
-        url,
-        tools: ["*"],
-        // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
-        headers: mcpHeaders(cfg.active_account!.target!.api_key!),
-      };
-      installJSONServer(globalPath(), "mcpServers", server);
+      installJSONServer(
+        globalPath(),
+        "mcpServers",
+        globalServer(url, cfg.active_account?.target?.api_key),
+      );
     } else {
       const configPath = join(process.cwd(), ".vscode", "mcp.json");
       const server = {

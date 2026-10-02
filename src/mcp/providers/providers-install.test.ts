@@ -246,9 +246,7 @@ describe("createJSONProvider (base)", () => {
       paths: [],
       globalPath,
       topKey: "servers",
-      buildServer: (_endpoint, cfg) => ({
-        myUrl: `custom-${cfg.active_account?.target?.deployment_id}`,
-      }),
+      buildServer: ({ url }) => ({ myUrl: `custom-${url.split("/").pop()}` }),
     });
 
     provider.install(makeCfg(), true);

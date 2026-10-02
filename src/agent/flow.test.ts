@@ -110,6 +110,7 @@ function makeProvider(id: string, opts: Partial<SetupProvider> = {}): SetupProvi
     detectPaths: () => [],
     isInstalled: () => true,
     isConfigured: () => false,
+    isCurrent: () => false,
     globalConfigPath: () => `/tmp/${id}/mcp.json`,
     priority: () => 0,
     ...opts,
