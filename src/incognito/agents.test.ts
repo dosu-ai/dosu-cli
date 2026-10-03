@@ -93,6 +93,20 @@ describe("claude agent", () => {
     expect(agent.isEnabled()).toBe(true);
   });
 
+  it("keeps the command out of the model's own choosing: only the user runs it", () => {
+    getIncognitoAgent("claude")?.enable();
+    // Claude Code offers every other command to the model through its Skill tool, and a session
+    // whose model ran this one would carry the marker the user never set.
+    const content = readFileSync(
+      join(fakeHome, ".claude", "commands", "dosu-incognito.md"),
+      "utf-8",
+    );
+    const frontmatter = content.split("\n---\n")[0];
+    expect(frontmatter).toContain("\ndisable-model-invocation: true");
+    // The user still sees what it does in the / menu.
+    expect(frontmatter).toContain("\ndescription: Turn Dosu off for this session");
+  });
+
   it("is idempotent and refreshes a stale file", () => {
     const agent = getIncognitoAgent("claude");
     if (!agent) throw new Error("missing agent");

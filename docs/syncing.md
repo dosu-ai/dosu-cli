@@ -388,6 +388,12 @@ dosu knowledge incognito disable [agents...]
 | Codex | `$dosu-incognito` | `~/.codex/skills/dosu-incognito/SKILL.md` (honors `CODEX_HOME`) |
 | OpenCode | `/dosu-incognito` | `~/.config/opencode/command/dosu-incognito.md` (honors `XDG_CONFIG_HOME`) |
 
+Only the user runs it: the Claude Code command sets `disable-model-invocation: true` and the
+Codex skill `allow_implicit_invocation: false` (in `agents/openai.yaml`), since both agents
+otherwise offer their commands or skills to the model, which may run one on its own when a prompt
+or project rule seems to ask for Dosu to be off. OpenCode offers custom commands to the user
+only.
+
 Running the command inside a session expands the file into the conversation. Its body carries
 the marker `dosu:incognito:v1` and instructs the model not to call Dosu MCP tools for the rest of
 the session. Because the harness records the expansion in the transcript, the marker is the switch:

@@ -43,9 +43,15 @@ const DESCRIPTION =
 
 /** Claude Code and OpenCode read a `description` from YAML frontmatter; Cursor takes plain
  * markdown. */
-function withFrontmatter(body: string): string {
-  return `---\ndescription: ${DESCRIPTION}\n---\n\n${body}`;
+function withFrontmatter(body: string, extra = ""): string {
+  return `---\ndescription: ${DESCRIPTION}\n${extra}---\n\n${body}`;
 }
+
+/** User invocation only. Claude Code offers its commands to the model through the Skill tool,
+ * and the model runs one on its own when a prompt or project rule seems to ask for it ("Dosu must
+ * be off here"): a session whose model ran this one would carry the marker the user never set.
+ * OpenCode shows commands to the user alone, so its file needs no such line. */
+const CLAUDE_COMMAND_POLICY = "disable-model-invocation: true\n";
 
 function claudeConfigDir(): string {
   return process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
@@ -178,7 +184,7 @@ export function allIncognitoAgents(): IncognitoAgent[] {
         name: "Claude Code",
         detectPath: claudeConfigDir,
         commandPath: () => join(claudeConfigDir(), "commands", FILE_NAME),
-        content: withFrontmatter(INCOGNITO_COMMAND_BODY),
+        content: withFrontmatter(INCOGNITO_COMMAND_BODY, CLAUDE_COMMAND_POLICY),
       }),
       // `claude` on PATH counts too: a fresh machine sets Dosu up before Claude Code's first run.
       isInstalled: claudeCodeInstalled,
