@@ -129,3 +129,30 @@ export function opencodeTranscript(session: AgentSession): string | null {
     })),
   });
 }
+
+/** How far up a subagent's chain of parent sessions to look; deeper nesting is not something
+ * opencode's task tool produces in practice. */
+const MAX_LINEAGE = 8;
+
+/** The session and the sessions it was spawned from, nearest first: a subagent's child session
+ * holds work done for its parent's conversation. Stops at a parent the DB no longer has, and
+ * never visits a session twice. */
+export function opencodeLineage(session: AgentSession): AgentSession[] {
+  const lineage = [session];
+  const seen = new Set([session.id]);
+  let parent = session.parentId;
+  while (parent && SAFE_ID.test(parent) && !seen.has(parent) && lineage.length <= MAX_LINEAGE) {
+    const [row] =
+      querySqlite(session.path, `SELECT parent_id FROM session WHERE id = '${parent}'`) ?? [];
+    if (!row) break;
+    seen.add(parent);
+    lineage.push({
+      id: parent,
+      harness: session.harness,
+      path: session.path,
+      updated: session.updated,
+    });
+    parent = typeof row.parent_id === "string" ? row.parent_id : undefined;
+  }
+  return lineage;
+}

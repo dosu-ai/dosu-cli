@@ -4,6 +4,7 @@
  * reading the transcript. No session-id mapping, no extra state: the transcript is the switch. */
 
 import { closeSync, fstatSync, openSync, readSync } from "node:fs";
+import { opencodeLineage } from "../sessions/opencode";
 import { readSessionTurns } from "../sessions/read";
 import type { AgentSession } from "../sessions/scan";
 
@@ -58,10 +59,14 @@ export function transcriptHasIncognitoMarker(
 }
 
 /** Whether a scanned session opted out. File-backed harnesses scan the raw transcript; opencode
- * (SQLite) falls back to the parsed turns. Never throws. */
+ * (SQLite) falls back to the parsed turns, of the session and of every session it was spawned
+ * from, since a subagent's child session is part of the conversation that went incognito. Never
+ * throws. */
 export function isIncognitoSession(session: AgentSession): boolean {
   if (session.harness === "opencode") {
-    return readSessionTurns(session).some((turn) => textHasIncognitoMarker(turn.text));
+    return opencodeLineage(session).some((s) =>
+      readSessionTurns(s).some((turn) => textHasIncognitoMarker(turn.text)),
+    );
   }
   return transcriptHasIncognitoMarker(session.path);
 }
