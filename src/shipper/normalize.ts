@@ -9,6 +9,7 @@ import type { NormalizedRecord, TranscriptTrajectorySource } from "@letta-ai/tra
 import { logger } from "../debug/logger";
 import { redactSecrets } from "../sessions/redact";
 import type { AgentSession } from "../sessions/scan";
+import { subagentReportsAsObservations } from "./codex-rollout";
 
 /** Harness → trajectory source. opencode is absent: its adapter wants the exported
  * `{ info, messages }` session JSON, which the scanner's sqlite rows do not provide yet. */
@@ -74,7 +75,8 @@ export async function normalizeSessionRecords(
     // Dynamic so ship-free CLI paths never pay for the normalizer.
     const { normalizeTranscript } = await import("@letta-ai/trajectory");
     const { records } = normalizeTranscript({ source, transcript });
-    return redactRecords(records);
+    // Codex hands a parent its subagents' reports as user messages; nobody typed them.
+    return redactRecords(source === "codex" ? subagentReportsAsObservations(records) : records);
   } catch (err) {
     const code = (err as { code?: unknown } | null)?.code;
     if (typeof code === "string" && EMPTY_CONVERSATION_CODES.has(code)) return [];

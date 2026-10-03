@@ -103,7 +103,9 @@ only the meta record and the new tail ship, with `metadata.continuation =
 the session stays shipped. If the prefix no longer matches, the whole session ships again and the
 server dedupes identical content. A child session's upload carries `parent_session_id`: for a
 Codex subagent (`thread_source: "subagent"` in its rollout's `session_meta`), the parent's rollout
-name, which is the parent's own `session_id`.
+name, which is the parent's own `session_id`. The report a finished Codex subagent hands its parent,
+a `<subagent_notification>` injected as a user message, ships in the parent's trace in place as an
+`observation` record: what the parent acted on next, not something the user said.
 
 Upgrading from the watermark state (schema 2, or the learner-era schema 1) seeds the ledger with the
 sessions it shipped. Everything else in the window becomes pending again, including sessions the
