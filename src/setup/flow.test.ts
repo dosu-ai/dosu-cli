@@ -190,11 +190,10 @@ vi.mock("../tui/activity-view", () => ({
   runActivityView: vi.fn(),
 }));
 
-// Status line and slash command installers run for real against the temp home; these overrides
-// stay inert (undefined → real registry) unless a test needs an installer that misbehaves.
-const { mockGetStatuslineAgent, mockGetIncognitoAgent } = vi.hoisted(() => ({
+// The status line installer runs for real against the temp home; this override stays inert
+// (undefined → real registry) unless a test needs an installer that misbehaves.
+const { mockGetStatuslineAgent } = vi.hoisted(() => ({
   mockGetStatuslineAgent: vi.fn(),
-  mockGetIncognitoAgent: vi.fn(),
 }));
 vi.mock("../statusline/agents", async (importOriginal) => {
   const original = await importOriginal<typeof import("../statusline/agents")>();
@@ -202,13 +201,6 @@ vi.mock("../statusline/agents", async (importOriginal) => {
     ...original,
     getStatuslineAgent: (id: string) =>
       mockGetStatuslineAgent(id) ?? original.getStatuslineAgent(id),
-  };
-});
-vi.mock("../incognito/agents", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../incognito/agents")>();
-  return {
-    ...original,
-    getIncognitoAgent: (id: string) => mockGetIncognitoAgent(id) ?? original.getIncognitoAgent(id),
   };
 });
 
@@ -772,20 +764,42 @@ describe("stepConfigureTools", () => {
       expect.stringContaining("Status line enabled for 1 agent(s):"),
     );
     expect(p.log.success).toHaveBeenCalledWith(
-      expect.stringContaining("/dosu-incognito installed for 1 agent(s):"),
+      expect.stringContaining("Incognito command installed for 1 agent(s):"),
     );
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Cursor (/dosu-incognito)"));
   });
 
-  it("removes the status line and slash command when the agent is unticked", () => {
+  it("removes the status line when the agent is unticked, and keeps /dosu-incognito while transcripts ship", () => {
     const cfg = makeCfg();
     stepConfigureTools(cfg, { toInstall: [CursorProvider()], toRemove: [], skipped: [] });
 
-    stepConfigureTools(cfg, { toInstall: [], toRemove: [CursorProvider()], skipped: [] });
+    const results = stepConfigureTools(cfg, {
+      toInstall: [],
+      toRemove: [CursorProvider()],
+      skipped: [],
+    });
 
     const cliConfig = JSON.parse(
       readFileSync(join(tempDir, ".cursor", "cli-config.json"), "utf-8"),
     );
     expect(cliConfig.statusLine).toBeUndefined();
+    // Any sync still ships Cursor's sessions, and the summary says why the command stayed.
+    expect(existsSync(join(tempDir, ".cursor", "commands", "dosu-incognito.md"))).toBe(true);
+    stepShowSummary(results);
+    expect(p.log.info).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Kept /dosu-incognito: Cursor sessions still ship with any 'dosu knowledge sync'",
+      ),
+    );
+  });
+
+  it("removes /dosu-incognito too when the agent is unticked once transcript shipping is off", () => {
+    const cfg = makeCfg();
+    stepConfigureTools(cfg, { toInstall: [CursorProvider()], toRemove: [], skipped: [] });
+    setShipTranscripts(false);
+
+    stepConfigureTools(cfg, { toInstall: [], toRemove: [CursorProvider()], skipped: [] });
+
     expect(existsSync(join(tempDir, ".cursor", "commands", "dosu-incognito.md"))).toBe(false);
   });
 
@@ -847,7 +861,7 @@ describe("stepConfigureTools", () => {
     expect(p.log.success).not.toHaveBeenCalledWith(expect.stringContaining("Status line enabled"));
   });
 
-  it("skips the status line for agents without one but still installs the slash command", () => {
+  it("skips the status line for agents without one but still installs the incognito command", () => {
     const cfg = makeCfg();
 
     const results = stepConfigureTools(cfg, {
@@ -859,7 +873,7 @@ describe("stepConfigureTools", () => {
     expect(results[0].hook).toBeDefined();
     expect(results[0].statusline).toBeUndefined();
     expect(results[0].incognito).toMatchObject({
-      path: join(tempDir, ".codex", "prompts", "dosu-incognito.md"),
+      path: join(tempDir, ".codex", "skills", "dosu-incognito", "SKILL.md"),
     });
   });
 
@@ -879,6 +893,8 @@ describe("stepConfigureTools", () => {
     expect(results[0].hook).toMatchObject({ name: "OpenCode", path: pluginPath });
     expect(results[0].incognito).toMatchObject({ path: commandPath });
 
+    // The command stays while transcripts ship (src/hooks/opencode.test.ts).
+    setShipTranscripts(false);
     stepConfigureTools(cfg, { toInstall: [], toRemove: [OpenCodeProvider()], skipped: [] });
 
     expect(existsSync(pluginPath)).toBe(false);
@@ -921,7 +937,7 @@ describe("stepConfigureTools", () => {
     );
   });
 
-  it("keeps the install successful when the slash command cannot be written", () => {
+  it("keeps the MCP install when the incognito command cannot be written, and says why", () => {
     const cfg = makeCfg();
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
     // A file where the commands directory should be: mkdir fails, the command cannot be written.
@@ -934,22 +950,21 @@ describe("stepConfigureTools", () => {
     });
 
     expect(results[0].error).toBeUndefined();
-    expect(results[0].hook).toBeDefined();
-    expect(results[0].statusline).toBeDefined();
+    // The command is part of what the hook installs: the hook did not finish.
+    expect(results[0].hook).toBeUndefined();
     expect(results[0].incognito).toBeUndefined();
     expect(p.log.warn).toHaveBeenCalledWith(
-      expect.stringContaining("Could not enable the /dosu-incognito command for Cursor"),
+      expect.stringMatching(/Could not enable the knowledge sync hook for Cursor: .*commands/),
     );
   });
 
-  it("reports a non-Error thrown by either bundle installer without failing the install", () => {
+  it("reports a non-Error thrown by the status line installer without failing the install", () => {
     const cfg = makeCfg();
     const throwing = {
       id: () => "cursor",
       name: () => "Cursor",
       isInstalled: () => true,
       configPath: () => "/dev/null",
-      commandPath: () => "/dev/null",
       isEnabled: () => false,
       enable: () => {
         throw "disk full";
@@ -957,7 +972,6 @@ describe("stepConfigureTools", () => {
       disable: () => false,
     };
     mockGetStatuslineAgent.mockReturnValue(throwing);
-    mockGetIncognitoAgent.mockReturnValue(throwing);
 
     const results = stepConfigureTools(cfg, {
       toInstall: [CursorProvider()],
@@ -968,12 +982,9 @@ describe("stepConfigureTools", () => {
     expect(results[0].error).toBeUndefined();
     expect(results[0].hook).toBeDefined();
     expect(results[0].statusline).toBeUndefined();
-    expect(results[0].incognito).toBeUndefined();
+    expect(results[0].incognito).toBeDefined();
     expect(p.log.warn).toHaveBeenCalledWith(
       "Could not enable the Dosu status line for Cursor: disk full",
-    );
-    expect(p.log.warn).toHaveBeenCalledWith(
-      "Could not enable the /dosu-incognito command for Cursor: disk full",
     );
   });
 
@@ -3391,6 +3402,8 @@ describe("stepOfferInitialSync", () => {
   it("says plainly that sessions are uploaded, and how to keep them out", async () => {
     mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(3));
     vi.mocked(p.confirm).mockResolvedValue(false);
+    // What the tools step left: Cursor's hooks, its incognito command with them.
+    stepConfigureTools(makeCfg(), { toInstall: [CursorProvider()], toRemove: [], skipped: [] });
 
     await stepOfferInitialSync(makeCfg());
 
@@ -3398,9 +3411,20 @@ describe("stepOfferInitialSync", () => {
     const said = vi.mocked(p.log.message).mock.calls.join(" ").replace(/\s+/g, " ");
     expect(said).toContain("uploaded");
     expect(said).toContain("redacted on this machine");
-    expect(said).toContain("/dosu-incognito");
+    expect(said).toContain("Run /dosu-incognito (Cursor) in a session to keep it out");
     expect(said).toContain("dosu knowledge transcripts disable");
     expect(said).not.toContain("stay on this machine");
+  });
+
+  it("offers no incognito command that is not installed", async () => {
+    mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(3));
+    vi.mocked(p.confirm).mockResolvedValue(false);
+
+    await stepOfferInitialSync(makeCfg());
+
+    const said = vi.mocked(p.log.message).mock.calls.join(" ").replace(/\s+/g, " ");
+    expect(said).not.toContain("incognito");
+    expect(said).toContain("Run dosu knowledge transcripts disable to stop shipping altogether.");
   });
 
   it("only counts the backlog: the offer itself never ships anything", async () => {

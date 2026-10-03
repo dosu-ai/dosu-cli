@@ -3,9 +3,16 @@
 `dosu knowledge hooks enable` installs a session-end hook (Claude Code, Cursor, Codex), for
 OpenCode a plugin (see [OpenCode](#opencode)) and for pi the Dosu pi extension (see [Pi](#pi)),
 each running `dosu knowledge sync --quiet --detach`; for Claude Code it also installs the prompt-time memory hook
-(`UserPromptSubmit` → `dosu knowledge context`) unless transcript shipping is off, and `disable`
-removes both. With no agent named it installs for every agent it detects and names the ones it
-skipped. Claude Code counts as detected when `~/.claude` (or `CLAUDE_CONFIG_DIR`) exists or
+(`UserPromptSubmit` → `dosu knowledge context`) unless transcript shipping is off. Every agent's
+`enable` also installs its incognito command (`/dosu-incognito`, `$dosu-incognito` in Codex; see
+[Per-session incognito](#per-session-incognito)), so the way to keep a session out is there before
+the first session ships, and `disable` removes everything `enable` installed, except that the
+incognito command stays while transcript shipping is on: any sync (another agent's hook, a
+`--flush`) still ships every agent's sessions, hooks or not, so `disable` says it kept the command
+and `dosu knowledge incognito disable <agent>` removes it. Pi's command is part of its extension
+and goes with it; `hooks disable pi` says that pi's sessions still ship. `hooks status` says
+when the command is missing (as an older CLI left it). With no agent named it installs for every
+agent it detects and names the ones it skipped. Claude Code counts as detected when `~/.claude` (or `CLAUDE_CONFIG_DIR`) exists or
 `claude` is on PATH, so a freshly provisioned machine can set Dosu up before Claude Code's first
 run (which is what creates `~/.claude`); `dosu knowledge transcripts enable` and `dosu setup` detect
 it the same way, and say so when they skip it. The sync scans the last 30 days of agent sessions, keeps the
@@ -82,7 +89,7 @@ leaves the 30-day window.
 |---|---|
 | `shipped` | Accepted by the ingest API (202) |
 | `trivial` | No user record, nothing answering it, or under 2,000 characters of content |
-| `incognito` | `/dosu-incognito` was run in the session |
+| `incognito` | `/dosu-incognito` (`$dosu-incognito` in Codex) was run in the session |
 | `rejected` | The backend refused the payload (HTTP 400, 413, or 422) |
 | `unsupported` | No normalizer for the harness, or the transcript could not be normalized |
 | `skipped_by_user` | You declined setup's offer to ship the last 30 days (it offers only sessions the ledger has never settled), or ran `dosu knowledge skip-backlog` |
@@ -332,7 +339,8 @@ records. A child session is incognito when the session that spawned it is.
 
 **The plugin.** `dosu knowledge hooks enable opencode` (and `dosu setup`) writes
 `$XDG_CONFIG_HOME/opencode/plugin/dosu.js` and the `/dosu-incognito` command; `disable` removes
-both, and the directories it made for them if they are left empty. A `plugin/dosu.js` that is not
+the plugin, the command once transcript shipping is off (see above), and the directories it made
+for them if they are left empty. A `plugin/dosu.js` that is not
 Dosu's is never replaced: enable stops with an error instead. OpenCode counts as installed when its
 config or data dir exists, or, on a machine where it has never run, when `opencode` is on PATH.
 The plugin is plain JavaScript importing only node builtins, and does three things:
@@ -366,6 +374,9 @@ plugin anyway.
 
 ## Per-session incognito
 
+`dosu knowledge hooks enable` and `dosu setup` install each agent's command with its hooks. The
+command can also be managed on its own:
+
 ```bash
 dosu knowledge incognito enable            # all detected agents
 dosu knowledge incognito enable claude     # or one of: claude, cursor, codex, opencode
@@ -373,16 +384,22 @@ dosu knowledge incognito status [--json]
 dosu knowledge incognito disable [agents...]
 ```
 
-`enable` writes a slash-command file per agent:
+`enable` writes a command file per agent:
 
-| Agent | File |
-|---|---|
-| Claude Code | `~/.claude/commands/dosu-incognito.md` (honors `CLAUDE_CONFIG_DIR`) |
-| Cursor | `~/.cursor/commands/dosu-incognito.md` |
-| Codex | `~/.codex/prompts/dosu-incognito.md` (honors `CODEX_HOME`) |
-| OpenCode | `~/.config/opencode/command/dosu-incognito.md` (honors `XDG_CONFIG_HOME`) |
+| Agent | Run it as | File |
+|---|---|---|
+| Claude Code | `/dosu-incognito` | `~/.claude/commands/dosu-incognito.md` (honors `CLAUDE_CONFIG_DIR`) |
+| Cursor | `/dosu-incognito` | `~/.cursor/commands/dosu-incognito.md` |
+| Codex | `$dosu-incognito` | `~/.codex/skills/dosu-incognito/SKILL.md` (honors `CODEX_HOME`) |
+| OpenCode | `/dosu-incognito` | `~/.config/opencode/command/dosu-incognito.md` (honors `XDG_CONFIG_HOME`) |
 
-Running `/dosu-incognito` inside a session expands the file into the conversation. Its body carries
+Only the user runs it: the Claude Code command sets `disable-model-invocation: true` and the
+Codex skill `allow_implicit_invocation: false` (in `agents/openai.yaml`), since both agents
+otherwise offer their commands or skills to the model, which may run one on its own when a prompt
+or project rule seems to ask for Dosu to be off. OpenCode offers custom commands to the user
+only.
+
+Running the command inside a session expands the file into the conversation. Its body carries
 the marker `dosu:incognito:v1` and instructs the model not to call Dosu MCP tools for the rest of
 the session. Because the harness records the expansion in the transcript, the marker is the switch:
 
@@ -407,6 +424,26 @@ Properties worth knowing:
   hook that rejects Dosu tool calls when the marker is present is a possible follow-up.
 - An OpenCode subagent's session is incognito when the session that spawned it is.
 - Pi's `/dosu-incognito` comes with the Dosu pi extension rather than this command (see [Pi](#pi)).
+- The marker itself works anywhere: a prompt containing `dosu:incognito:v1` takes its session off
+  the record in any agent, with or without the command installed.
+
+### Codex: `$dosu-incognito`
+
+Codex has no user slash commands: 0.140 and 0.160 run only their built-in `/` commands and no longer
+load custom prompts (`~/.codex/prompts`, where CLIs before this one installed the command; `enable`
+removes that file). What a user can invoke is a skill, so the command is the skill
+`$CODEX_HOME/skills/dosu-incognito`, run by mentioning it: type `$dosu-incognito` in the TUI (the
+`$` menu lists it) or anywhere in a `codex exec` prompt. Codex adds the skill's text to the
+conversation as a user turn, so the rollout carries the marker. The skill sets
+`allow_implicit_invocation: false` in `agents/openai.yaml`: Codex leaves it out of the skills it
+lists to the model, which therefore never opens it on its own and carries the marker into a session
+the user did not take off the record. It lives under `$CODEX_HOME/skills` rather than
+`~/.agents/skills`, which other agents read too. `/dosu-incognito` typed into Codex is an
+unrecognized command.
+
+The prompt that runs the command (Claude Code hands its prompt hook `/dosu-incognito` as typed;
+Codex expands `$dosu-incognito` anywhere in a prompt) is never sent to the prompt-time memory hook
+either, even though the transcript shows the marker only after it.
 
 ## Status line
 
@@ -499,7 +536,7 @@ ends and is remembered for later syncs. The header's `cwd` gives the project key
 
 ```bash
 DOSU_DEV=true bun run dev knowledge statusline enable claude
-DOSU_DEV=true bun run dev knowledge incognito enable claude
+DOSU_DEV=true bun run dev knowledge hooks enable claude   # installs /dosu-incognito too
 # Open Claude Code in a synced repo → 📚 Dosu learning…
 # Run /dosu-incognito → 👻 Dosu incognito
 # End the session; `dosu logs --tail` shows "not shipping incognito session claude/<id>" right away

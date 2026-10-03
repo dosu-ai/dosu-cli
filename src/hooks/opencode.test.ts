@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { INCOGNITO_COMMAND_BODY } from "../incognito/agents";
+import { setShipTranscripts } from "../sync/state";
 import { allHookAgents, getHookAgent } from "./agents";
 
 let home: string;
@@ -90,6 +91,7 @@ describe("the opencode hook agent", () => {
     expect(readFileSync(commandPath(), "utf8")).toContain("dosu:incognito:v1");
 
     opencode().enable(); // idempotent
+    setShipTranscripts(false);
     opencode().disable();
 
     expect(existsSync(pluginPath())).toBe(false);
@@ -102,6 +104,7 @@ describe("the opencode hook agent", () => {
   it("leaves no trace on a machine without OpenCode once disabled again", () => {
     opencode().enable();
     expect(opencode().isInstalled()).toBe(true);
+    setShipTranscripts(false);
 
     opencode().disable();
 
@@ -109,9 +112,23 @@ describe("the opencode hook agent", () => {
     expect(opencode().isInstalled()).toBe(false);
   });
 
+  it("keeps /dosu-incognito when the plugin goes while transcript shipping is on", () => {
+    opencode().enable();
+
+    opencode().disable();
+
+    // Any sync still ships OpenCode's sessions: another agent's hook, or a --flush.
+    expect(existsSync(pluginPath())).toBe(false);
+    expect(readFileSync(commandPath(), "utf8")).toContain("dosu:incognito:v1");
+    expect(opencode().disableNote?.()).toBe(
+      "Kept /dosu-incognito: OpenCode sessions still ship with any 'dosu knowledge sync' while transcript shipping is on. 'dosu knowledge incognito disable opencode' removes it.",
+    );
+  });
+
   it("keeps OpenCode's own config dir, whatever else it holds", () => {
     mkdirSync(configDir(), { recursive: true });
     writeFileSync(join(configDir(), "opencode.json"), "{}\n");
+    setShipTranscripts(false);
 
     opencode().enable();
     opencode().disable();

@@ -20,6 +20,7 @@ import { SESSION_HARNESSES } from "../sessions/scan";
 import { trajectorySourceOf } from "../shipper/normalize";
 import {
   codexRolloutIncognito,
+  promptRunsIncognito,
   textHasIncognitoMarker,
   transcriptHasIncognitoMarker,
 } from "../sync/incognito";
@@ -118,7 +119,7 @@ export async function contextHookOutput(
 
   // The prompt is sent to Dosu and logged as the retrieval query, so a session the user took
   // off the record must not be queried either -- same opt-out transcript shipping honors.
-  if (textHasIncognitoMarker(prompt)) return "";
+  if (textHasIncognitoMarker(prompt) || promptRunsIncognito(prompt)) return "";
   const agent = options.agent ?? CLAUDE_CODE_AGENT;
   const transcript = str(payload.transcript_path);
   const isIncognito =

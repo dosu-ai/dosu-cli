@@ -48,6 +48,8 @@ function installBinary(name: string): void {
   chmodSync(path, 0o755);
 }
 
+const incognitoCommand = () => join(home, ".claude", "commands", "dosu-incognito.md");
+
 async function dosu(...args: string[]): Promise<string> {
   out.mockClear();
   const cmd = knowledgeCommand();
@@ -77,14 +79,17 @@ describe("Claude Code installed but never run (no ~/.claude)", () => {
     installBinary("dosu");
   });
 
-  it("hooks enable installs the session-end and prompt-time hooks", async () => {
+  it("hooks enable installs the session-end and prompt-time hooks, and /dosu-incognito", async () => {
     const said = await dosu("hooks", "enable");
 
     expect(claudeHooks()).toEqual({
       SessionEnd: ["dosu knowledge sync --quiet --detach"],
       UserPromptSubmit: ["dosu knowledge context"],
     });
+    // The user's one opt-out, there before the first session needs it.
+    expect(readFileSync(incognitoCommand(), "utf-8")).toContain("dosu:incognito:v1");
     expect(said).toContain("Claude Code · hook enabled");
+    expect(said).toContain("Run /dosu-incognito in a session to keep it out of Dosu memory.");
     // Every agent not found is named, never passed over in silence.
     expect(said).toMatch(/Skipped Cursor, Codex(, [^:]+)?: not detected on this machine/);
   });
@@ -94,6 +99,18 @@ describe("Claude Code installed but never run (no ~/.claude)", () => {
 
     expect(claudeHooks()).toEqual({ UserPromptSubmit: ["dosu knowledge context"] });
     expect(said).toContain("Claude Code will receive task memory");
+  });
+
+  it("transcripts enable names /dosu-incognito only once it is installed", async () => {
+    // Before the hooks: no command exists yet, so none is offered, only where it comes from.
+    const before = await dosu("transcripts", "enable");
+    expect(before).not.toContain("/dosu-incognito");
+    expect(before).toContain("dosu knowledge hooks enable");
+
+    // The PoC recipe: hooks, then transcripts.
+    await dosu("hooks", "enable", "claude");
+    const after = await dosu("transcripts", "enable");
+    expect(after).toContain("Use /dosu-incognito (Claude Code) in a session to keep it out.");
   });
 
   it("works in either order, and hooks status shows Claude Code installed", async () => {
@@ -119,8 +136,7 @@ describe("Claude Code installed but never run (no ~/.claude)", () => {
     await dosu("incognito", "enable");
     await dosu("statusline", "enable");
 
-    // The user's one opt-out, there before the first session needs it.
-    expect(existsSync(join(home, ".claude", "commands", "dosu-incognito.md"))).toBe(true);
+    expect(existsSync(incognitoCommand())).toBe(true);
     const settings = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf-8"));
     expect(settings.statusLine.command).toBe("dosu knowledge statusline render --agent claude");
   });
@@ -153,6 +169,24 @@ describe("Claude Code installed but never run (no ~/.claude)", () => {
     expect(await claudeRow()).not.toHaveProperty("note");
   });
 
+  it("hooks status says when /dosu-incognito is missing, until hooks enable adds it", async () => {
+    // As an older CLI left it: both hooks, but no command.
+    await dosu("hooks", "enable", "claude");
+    rmSync(incognitoCommand());
+    const claudeRow = async () =>
+      (JSON.parse(await dosu("hooks", "status", "--json")) as { agent: string }[]).find(
+        (row) => row.agent === "claude",
+      );
+
+    expect(await claudeRow()).toMatchObject({
+      enabled: true,
+      note: "/dosu-incognito is missing; 'dosu knowledge hooks enable claude' adds it.",
+    });
+
+    await dosu("hooks", "enable", "claude");
+    expect(await claudeRow()).not.toHaveProperty("note");
+  });
+
   it("hooks disable removes both hooks and nothing else of the user's", async () => {
     mkdirSync(join(home, ".claude"));
     writeFileSync(
@@ -166,6 +200,29 @@ describe("Claude Code installed but never run (no ~/.claude)", () => {
     await dosu("hooks", "disable", "claude");
 
     expect(claudeHooks()).toEqual({ UserPromptSubmit: ["my-linter"] });
+  });
+
+  it("hooks disable keeps /dosu-incognito while transcript shipping is on, and says why", async () => {
+    // Any sync still ships Claude Code's sessions: another agent's hook, or a --flush.
+    await dosu("hooks", "enable", "claude", "codex");
+
+    const said = await dosu("hooks", "disable", "claude");
+
+    expect(claudeHooks()).toEqual({});
+    expect(readFileSync(incognitoCommand(), "utf-8")).toContain("dosu:incognito:v1");
+    expect(said).toContain(
+      "Kept /dosu-incognito: Claude Code sessions still ship with any 'dosu knowledge sync' while transcript shipping is on. 'dosu knowledge incognito disable claude' removes it.",
+    );
+  });
+
+  it("hooks disable removes /dosu-incognito with the hooks once transcript shipping is off", async () => {
+    await dosu("hooks", "enable", "claude");
+    await dosu("transcripts", "disable");
+
+    const said = await dosu("hooks", "disable", "claude");
+
+    expect(existsSync(incognitoCommand())).toBe(false);
+    expect(said).not.toContain("Kept");
   });
 
   it("hooks enable says so when shipping is off and leaves prompt-time memory out", async () => {

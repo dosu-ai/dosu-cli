@@ -28,7 +28,11 @@
 import { existsSync, readFileSync, rmdirSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { getIncognitoAgent } from "../incognito/agents";
+import {
+  disableIncognitoWithHooks,
+  getIncognitoAgent,
+  keptIncognitoNote,
+} from "../incognito/agents";
 import { writeSecureFile } from "../mcp/config-helpers";
 import { isInstalled, isOnPath } from "../mcp/detect";
 import { INCOGNITO_MARKER } from "../sync/incognito";
@@ -289,7 +293,7 @@ export function opencodeHookAgent(): HookAgent {
     disable: () => {
       const path = pluginPath();
       if (isOurs(path)) unlinkSync(path);
-      getIncognitoAgent("opencode")?.disable();
+      disableIncognitoWithHooks("opencode");
       // enable() may have made these on a machine where opencode never ran, and left there empty
       // they would make it look installed. Anything in one, opencode's own files included, keeps it.
       for (const dir of [join(configDir(), "plugin"), join(configDir(), "command"), configDir()]) {
@@ -302,5 +306,6 @@ export function opencodeHookAgent(): HookAgent {
     },
     enableNote: () =>
       "Restart running OpenCode sessions to load the plugin. Before loading any plugin, OpenCode installs @opencode-ai/plugin from npm into its config dir once (Dosu's plugin does not use it).",
+    disableNote: () => keptIncognitoNote("opencode"),
   };
 }

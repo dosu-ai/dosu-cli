@@ -6,6 +6,7 @@ import {
   appendFileSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -316,6 +317,25 @@ describe("knowledge sync of Codex subagents", () => {
       [parent]: undefined,
       "rollout-2026-10-02T17-33-26-01a0ff2e-1861-7b61-a549-34bdff8539e0": parent,
     });
+  });
+});
+
+describe("knowledge sync of a Codex session that ran $dosu-incognito", () => {
+  it("settles it as incognito: Codex hands the model the installed skill, marker and all", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    await dosu("incognito", "enable", "codex");
+    const skill = join(home, ".codex", "skills", "dosu-incognito", "SKILL.md");
+    // The user turn Codex 0.140 and 0.160 record when the user mentions the skill.
+    const injected = `<skill>\n<name>dosu-incognito</name>\n<path>${skill}</path>\n${readFileSync(skill, "utf-8")}\n</skill>`;
+    const off = "rollout-2026-10-02T21-39-11-01a1000f-16ad-74a1-89da-48c26a9f5e74";
+    codexRollout(off, alpha, 30, {}, injected);
+    const on = "rollout-2026-10-02T21-39-30-01a1000f-6111-7ca2-a4ff-a4662c9f0a1c";
+    codexRollout(on, alpha, 30);
+
+    await dosu("sync");
+
+    expect(posted().map((p) => p.metadata.session_id)).toEqual([on]);
+    expect(loadSyncState().sessions[`codex/${off}`]?.outcome).toBe("incognito");
   });
 });
 

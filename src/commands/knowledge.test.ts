@@ -1805,7 +1805,8 @@ describe("knowledge transcripts", () => {
     const output = allOutput();
     expect(output).toContain("Transcript shipping enabled.");
     expect(output).toContain("redacted locally");
-    expect(output).toContain("/dosu-incognito");
+    // How to keep a session out; which command, if any, is installed is knowledge-hooks-*'s.
+    expect(output).toMatch(/keep .*session out/);
   });
 
   it("disable records the opt-out", async () => {

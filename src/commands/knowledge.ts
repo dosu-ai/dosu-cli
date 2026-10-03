@@ -11,6 +11,7 @@ import { getBackendURL, isAbsoluteHttpUrl } from "../config/constants";
 import { allHookAgents, getHookAgent, type HookAgent } from "../hooks/agents";
 import { disableClaudeContextHook, enableClaudeContextHook } from "../hooks/context";
 import { HookConfigError, hookCommand } from "../hooks/formats";
+import { getIncognitoAgent, installedIncognitoCommands } from "../incognito/agents";
 import { isOnPath } from "../mcp/detect";
 import { emitKnowledgeReport } from "../report/generate";
 import { captureHookSession, endedSessionArgs, parseEndedSessionArgs } from "../sessions/capture";
@@ -631,10 +632,13 @@ function transcriptsCommand(): Command {
           `! Prompt-time memory not installed: ${err instanceof Error ? err.message : err}`,
         );
       }
+      const incognito = installedIncognitoCommands();
       console.log(
         pc.dim(
           "Finished agent sessions are redacted locally, then shipped to Dosu memory on the next sync. " +
-            "Use /dosu-incognito in a session to keep that session out.",
+            (incognito
+              ? `Use ${incognito} in a session to keep it out.`
+              : "To keep a single session out, install the agent's incognito command with 'dosu knowledge hooks enable <agent>'."),
         ),
       );
     });
@@ -964,6 +968,12 @@ function hooksCommand(): Command {
           console.log(`✓ ${agent.name()} \u00B7 hook enabled (${agent.configPath()})`);
           const note = agent.enableNote?.();
           if (note) console.log(pc.dim(`  ${note}`));
+          const incognito = getIncognitoAgent(agent.id());
+          if (incognito?.isEnabled()) {
+            console.log(
+              pc.dim(`  Run ${incognito.invocation()} in a session to keep it out of Dosu memory.`),
+            );
+          }
         } catch (err) {
           reportHookFailure(agent, err);
         }
@@ -978,6 +988,8 @@ function hooksCommand(): Command {
         try {
           agent.disable();
           console.log(`✓ ${agent.name()} \u00B7 hook disabled`);
+          const note = agent.disableNote?.();
+          if (note) console.log(pc.dim(`  ${note}`));
         } catch (err) {
           reportHookFailure(agent, err);
         }
