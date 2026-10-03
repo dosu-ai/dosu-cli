@@ -43,6 +43,16 @@ while Dosu's hooks are in hooks.json with their current hashes trusted. `disable
 the hooks and tables `enable` added (with the newline each table was appended behind), and deletes
 a hooks.json or config.toml it leaves empty; both files keep their mode.
 
+When `SessionEnd` fires is up to Codex. `codex exec` fires it as the run ends, on SIGINT too, but
+not when killed with SIGTERM (what a task runner's timeout sends). The 0.160 TUI, in its default
+mode, talks to a shared background server: `/quit` only disconnects, and `SessionEnd` fires when the
+server unloads the thread, `thread_unload_delay_secs` later (config.toml, default 60). That hook runs
+in the background server's environment (its PATH and `DOSU_PROJECT`, from the TUI that started it),
+not the quitting TUI's. A session that misses its `SessionEnd` ships with a later run once it has
+been quiet for five minutes, so a throwaway machine should end with `dosu knowledge sync
+--bootstrap` run at least five minutes after its last session (and over a minute after the last TUI
+quit).
+
 The prompt hook runs `dosu knowledge context --agent codex --format codex`, which answers with the
 same `additionalContext` JSON as Claude Code's. It names the session by its rollout file, as the
 scan does: Codex's `session_id` is the root session's even inside a subagent.
