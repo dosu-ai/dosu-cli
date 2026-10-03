@@ -25,7 +25,7 @@
  * until that has a node_modules (one registry fetch; with no registry reachable, every start waits
  * for the install to fail), but this plugin never imports it. */
 
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, rmdirSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { getIncognitoAgent } from "../incognito/agents";
@@ -290,6 +290,15 @@ export function opencodeHookAgent(): HookAgent {
       const path = pluginPath();
       if (isOurs(path)) unlinkSync(path);
       getIncognitoAgent("opencode")?.disable();
+      // enable() may have made these on a machine where opencode never ran, and left there empty
+      // they would make it look installed. Anything in one, opencode's own files included, keeps it.
+      for (const dir of [join(configDir(), "plugin"), join(configDir(), "command"), configDir()]) {
+        try {
+          rmdirSync(dir);
+        } catch {
+          // Not empty, or not there.
+        }
+      }
     },
     enableNote: () =>
       "Restart running OpenCode sessions to load the plugin. Before loading any plugin, OpenCode installs @opencode-ai/plugin from npm into its config dir once (Dosu's plugin does not use it).",

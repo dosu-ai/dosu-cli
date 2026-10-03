@@ -9,6 +9,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -91,6 +92,26 @@ describe("the opencode hook agent", () => {
     expect(opencode().isEnabled()).toBe(false);
     expect(existsSync(join(configDir(), "plugin", "mine.js"))).toBe(true);
     expect(existsSync(join(configDir(), "command", "review.md"))).toBe(true);
+  });
+
+  it("leaves no trace on a machine without OpenCode once disabled again", () => {
+    opencode().enable();
+    expect(opencode().isInstalled()).toBe(true);
+
+    opencode().disable();
+
+    expect(existsSync(configDir())).toBe(false);
+    expect(opencode().isInstalled()).toBe(false);
+  });
+
+  it("keeps OpenCode's own config dir, whatever else it holds", () => {
+    mkdirSync(configDir(), { recursive: true });
+    writeFileSync(join(configDir(), "opencode.json"), "{}\n");
+
+    opencode().enable();
+    opencode().disable();
+
+    expect(readdirSync(configDir())).toEqual(["opencode.json"]);
   });
 
   it("never replaces or removes a plugin file of the same name that is not Dosu's", () => {
