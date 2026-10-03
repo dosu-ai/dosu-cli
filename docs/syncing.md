@@ -471,10 +471,16 @@ extension shells out to `dosu` on PATH for everything, so it carries no credenti
   normalizer does not ship back.
 - `search_memory` and `get_memory_evidence` are pi tools that run
   `dosu memory search|evidence --client pi -- <arg>` in the session's directory.
-- `/dosu-incognito` sends the incognito marker as the user's own message (which is what keeps the
-  session from shipping), removes the two memory tools from the model's tool set, and stops digests;
-  a resumed incognito session stays off. For pi only the user's turns are searched for the marker,
-  so a session whose model read a file quoting it still ships. A fork or clone of an incognito
+- `/dosu-incognito` records the opt-out as an extension entry
+  (`{type: "custom", customType: "dosu-incognito", data: {marker}}`, which is what keeps the session
+  from shipping), adds a note telling the model Dosu is off (shown in the TUI), removes the two
+  memory tools from the model's tool set, and stops digests. It starts no turn of its own, so it
+  works the same in the TUI, mid-run, and in print mode: `pi -p "/dosu-incognito" "<task>"` runs
+  the task off the record. Pi saves a session only once it has a message, so a print run with
+  nothing after the command saves none, and says so on stderr: a later run with the same
+  `--session-id` would be a new session. A resumed incognito session stays off. Only that entry,
+  or a user turn carrying the marker (what the extension sent before it kept a record), counts, so
+  a session whose model read a file quoting the marker still ships. A fork or clone of an incognito
   session (or of a fork of one, at any depth) stays off too, in the extension and in the sync, even
   when it was forked from a message before the marker: it holds what the session did off the
   record and carries on from there.

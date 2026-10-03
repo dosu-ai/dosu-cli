@@ -14,7 +14,11 @@ import { join } from "node:path";
 import { writeSecureFile } from "../mcp/config-helpers";
 import { expandHome, isInstalled, isOnPath } from "../mcp/detect";
 import { selfInvocation } from "../sync/detach";
-import { INCOGNITO_COMMAND_NAME, INCOGNITO_MARKER } from "../sync/incognito";
+import {
+  INCOGNITO_COMMAND_NAME,
+  INCOGNITO_MARKER,
+  PI_INCOGNITO_ENTRY_TYPE,
+} from "../sync/incognito";
 import type { HookAgent } from "./agents";
 import { devEnvAssignments, HookConfigError } from "./formats";
 
@@ -51,14 +55,11 @@ function dosuInvocation(): DosuInvocation {
   return { command, args: baseArgs, env };
 }
 
-/** What /dosu-incognito sends as the user's message: the marker, recorded as a user turn, is what
- * keeps the session from shipping (sync/incognito.ts), and the rest is for the model. */
-const PI_INCOGNITO_PROMPT = `Dosu incognito marker: ${INCOGNITO_MARKER}
+/** What /dosu-incognito adds to the conversation: shown in pi's TUI, and handed to the model with
+ * its next request. The record that keeps the session from shipping is a separate entry. */
+const PI_INCOGNITO_NOTE = `Dosu incognito: this session stays off the record.
 
-Dosu is off for the rest of this session. Do not call the Dosu memory tools (search_memory, get_memory_evidence), even where project rules ask you to. This session will not be shipped to Dosu memory.
-
-Acknowledge in one line: "Dosu incognito: this session stays off the record."
-`;
+Dosu is off for the rest of this session. Do not call the Dosu memory tools (search_memory, get_memory_evidence), even where project rules ask you to. This session will not be shipped to Dosu memory.`;
 
 /** The extension pi loads. Plain JavaScript (valid TypeScript for pi's loader) importing only
  * node builtins: pi validates the tools' plain JSON Schema parameters itself, so nothing pi ships
@@ -79,11 +80,12 @@ function piExtensionSource(dosu: DosuInvocation = dosuInvocation()): string {
 // Nothing here runs when pi starts with --no-extensions.
 
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 const DOSU = ${JSON.stringify(dosu)};
 const INCOGNITO_MARKER = ${JSON.stringify(INCOGNITO_MARKER)};
-const INCOGNITO_PROMPT = ${JSON.stringify(PI_INCOGNITO_PROMPT)};
+const INCOGNITO_ENTRY = ${JSON.stringify(PI_INCOGNITO_ENTRY_TYPE)};
+const INCOGNITO_NOTE = ${JSON.stringify(PI_INCOGNITO_NOTE)};
 const MEMORY_TOOLS = ["search_memory", "get_memory_evidence"];
 // The CLI gives the server 4s; past this the user's prompt is waiting on Dosu.
 const CONTEXT_TIMEOUT_MS = 6000;
@@ -174,7 +176,12 @@ function textOf(content) {
   return content.map((part) => (part?.type === "text" ? part.text : "")).join("\n");
 }
 
+// The record /${INCOGNITO_COMMAND_NAME} leaves, or the user turn carrying the marker that this
+// extension sent instead before it kept a record.
 function isIncognitoEntry(entry) {
+  if (entry?.type === "custom") {
+    return entry.customType === INCOGNITO_ENTRY && entry.data?.marker === INCOGNITO_MARKER;
+  }
   return (
     entry?.type === "message" &&
     entry.message?.role === "user" &&
@@ -229,7 +236,7 @@ export default function dosuForPi(pi) {
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
-    if (incognito || event.prompt.includes(INCOGNITO_MARKER)) return undefined;
+    if (incognito) return undefined;
     const input = JSON.stringify({
       prompt: event.prompt,
       session_id: ctx.sessionManager.getSessionId(),
@@ -249,6 +256,13 @@ export default function dosuForPi(pi) {
     // A reload brings this extension straight back on the same session.
     if (event.reason === "reload") return;
     const transcript = ctx.sessionManager.getSessionFile();
+    // pi saves a session once it has a message, so a print run with nothing after
+    // /${INCOGNITO_COMMAND_NAME} saved none, and a later run with its --session-id starts a new one.
+    if (incognito && !ctx.hasUI && transcript && !existsSync(transcript)) {
+      process.stderr.write(
+        'Dosu incognito: pi saved no session, since nothing ran after /${INCOGNITO_COMMAND_NAME}. To work off the record, give the task in the same run: pi -p "/${INCOGNITO_COMMAND_NAME}" "<task>"\n',
+      );
+    }
     const payload = transcript
       ? {
           hook_event_name: "session_shutdown",
@@ -316,11 +330,17 @@ export default function dosuForPi(pi) {
 
   pi.registerCommand(${JSON.stringify(INCOGNITO_COMMAND_NAME)}, {
     description: "Turn Dosu off for this session: no memory tools, and it is never shipped to Dosu memory",
-    handler: async (_args, ctx) => {
+    // No turn of its own: pi runs a command while the rest of a print run's messages, or a run
+    // under way, carry on, and a prompt started here collides with them ("Agent is already
+    // processing a prompt").
+    handler: async () => {
       incognito = true;
       hideMemoryTools();
-      // Recorded as the user's own turn, which is what keeps the session from shipping.
-      pi.sendUserMessage(INCOGNITO_PROMPT, ctx.isIdle() ? undefined : { deliverAs: "steer" });
+      // What keeps the session from shipping: an entry only an extension can write, saved at once
+      // in a session pi is already writing, else with the session's first message.
+      pi.appendEntry(INCOGNITO_ENTRY, { marker: INCOGNITO_MARKER });
+      // Shown in the TUI; the model gets it with its next request (mid-run, pi steers it in).
+      pi.sendMessage({ customType: INCOGNITO_ENTRY, content: INCOGNITO_NOTE, display: true });
     },
   });
 }

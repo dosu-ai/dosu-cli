@@ -1,9 +1,10 @@
 /** Per-session incognito: a session opts out of studying by carrying a marker in its transcript.
  * The `/dosu-incognito` slash command expands to text containing INCOGNITO_MARKER, which the
- * harness records as a user turn, so both the sync pipeline and the status line detect it by
- * reading the transcript. No session-id mapping, no extra state: the transcript is the switch. */
+ * harness records as a user turn (pi: an entry the Dosu pi extension writes), so both the sync
+ * pipeline and the status line detect it by reading the transcript. No session-id mapping, no
+ * extra state: the transcript is the switch. */
 
-import { closeSync, fstatSync, openSync, readSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readFileSync, readSync } from "node:fs";
 import { codexAncestorRollouts } from "../sessions/codex-lineage";
 import { opencodeLineage } from "../sessions/opencode";
 import { readPiHeader } from "../sessions/pi";
@@ -63,10 +64,40 @@ export function transcriptHasIncognitoMarker(
 /** How far up a chain of forks of forks the pi check looks. */
 const MAX_FORK_DEPTH = 32;
 
-/** pi's /dosu-incognito (the Dosu pi extension) sends the marker as a user message, so only the
- * user's turns count: a session whose model merely read a file quoting the marker still ships.
- * The transcript a fork or clone was copied from counts too, at any depth: a fork made before
- * the marker holds what the session did off the record and carries on from there. */
+/** pi's /dosu-incognito (the Dosu pi extension) records the opt-out as an extension entry of this
+ * custom type, `{type: "custom", customType, data: {marker: INCOGNITO_MARKER}}`, without starting
+ * a turn of its own. */
+export const PI_INCOGNITO_ENTRY_TYPE = "dosu-incognito";
+
+/** Whether a pi transcript holds the Dosu pi extension's incognito record. */
+function piTranscriptHasIncognitoRecord(path: string): boolean {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return false;
+  }
+  return text.split("\n").some((line) => {
+    if (!line.includes(INCOGNITO_MARKER)) return false;
+    try {
+      const entry = JSON.parse(line) as Record<string, unknown> | null;
+      const data = entry?.data as Record<string, unknown> | undefined;
+      return (
+        entry?.type === "custom" &&
+        entry.customType === PI_INCOGNITO_ENTRY_TYPE &&
+        data?.marker === INCOGNITO_MARKER
+      );
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** pi sessions opt out by the extension's record, an entry only an extension can write, or by a
+ * user turn carrying the marker (what the extension sent before it kept a record). Nothing else
+ * counts: a session whose model merely read a file quoting the marker still ships. The transcript
+ * a fork or clone was copied from counts too, at any depth: a fork made before the marker holds
+ * what the session did off the record and carries on from there. */
 function piSessionIsIncognito(session: AgentSession): boolean {
   const seen = new Set<string>();
   let path: string | undefined = session.path;
@@ -75,9 +106,10 @@ function piSessionIsIncognito(session: AgentSession): boolean {
     const transcript = { ...session, path };
     if (
       transcriptHasIncognitoMarker(path) &&
-      readSessionTurns(transcript).some(
-        (turn) => turn.role === "user" && textHasIncognitoMarker(turn.text),
-      )
+      (piTranscriptHasIncognitoRecord(path) ||
+        readSessionTurns(transcript).some(
+          (turn) => turn.role === "user" && textHasIncognitoMarker(turn.text),
+        ))
     ) {
       return true;
     }
