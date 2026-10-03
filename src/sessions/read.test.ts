@@ -385,6 +385,67 @@ describe("readSessionTurns", () => {
   });
 });
 
+describe("readSessionTurns for pi", () => {
+  /** pi's transcript: a session header, then entries whose `message` is the conversation. */
+  const piLog = (entries: unknown[]) =>
+    writeLog("2026-08-25T10-00-00-000Z_p1.jsonl", [
+      { type: "session", version: 3, id: "p1", cwd: "/w" },
+      ...entries,
+    ]);
+
+  it("extracts user and assistant text, skipping prompts, tools, thinking, and extension entries", () => {
+    const path = piLog([
+      { type: "model_change", provider: "anthropic", modelId: "m" },
+      { type: "message", message: { role: "system", content: "", sections: { preamble: "p" } } },
+      { type: "message", message: { role: "user", content: [{ type: "text", text: "fix it" }] } },
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "hmm" },
+            { type: "text", text: "On it." },
+            { type: "toolCall", id: "c1", name: "read", arguments: { path: "a.py" } },
+          ],
+        },
+      },
+      {
+        type: "message",
+        message: { role: "toolResult", toolCallId: "c1", content: [{ type: "text", text: "x" }] },
+      },
+      { type: "custom_message", customType: "dosu-memory", content: "digest", display: false },
+      { type: "message", message: { role: "user", content: "and test it" } },
+      "{truncated",
+    ]);
+
+    expect(readSessionTurns(session("pi", path))).toEqual([
+      { role: "user", text: "fix it" },
+      { role: "assistant", text: "On it." },
+      { role: "user", text: "and test it" },
+    ]);
+  });
+
+  it("counts pi's built-in investigation tools", () => {
+    const path = piLog([
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "toolCall", name: "read" },
+            { type: "toolCall", name: "bash" },
+            { type: "toolCall", name: "search_memory" },
+            { type: "text", text: "done" },
+          ],
+        },
+      },
+      { type: "message", message: { role: "assistant", content: "plain" } },
+    ]);
+
+    expect(countRediscoveryToolCalls(session("pi", path))).toBe(2);
+  });
+});
+
 describe("countRediscoveryToolCalls", () => {
   it("counts Cursor/Claude tool_use names in REDISCOVERY_TOOLS", () => {
     const path = writeLog("tools.jsonl", [

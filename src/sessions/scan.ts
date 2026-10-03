@@ -1,17 +1,26 @@
 /** Native agent-session scanner replacing the pinned deja-vu binary: enumerates each harness's
  * session logs directly and uses file mtime as `updated`. No index, no download, no subprocess. */
 
-import { existsSync, readdirSync, statSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  statSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 /** The agents whose sessions the scanner finds, by the id the ledger keys them with. */
-export const SESSION_HARNESSES = ["claude", "cursor", "codex", "opencode"] as const;
+export const SESSION_HARNESSES = ["claude", "cursor", "codex", "opencode", "pi"] as const;
 export type SessionHarness = (typeof SESSION_HARNESSES)[number];
 
 export interface AgentSession {
-  /** Session id: the log filename stem, or the DB row id for opencode. */
+  /** Session id: the log filename stem, the DB row id for opencode, or for pi the session id its
+   * `<timestamp>_<id>` file name ends with. */
   id: string;
   harness: SessionHarness;
   /** Where the session content lives: the .jsonl log, or the sqlite DB for opencode. */
@@ -219,6 +228,110 @@ function scanOpencode(home: string, env: NodeJS.ProcessEnv): AgentSession[] {
   return sessions;
 }
 
+/** pi names a transcript `<timestamp>_<session id>.jsonl`; the timestamp has no underscore. */
+function piSessionId(stem: string): string {
+  const cut = stem.indexOf("_");
+  return cut === -1 ? stem : stem.slice(cut + 1);
+}
+
+/** How much of a pi transcript holds its header line. */
+const PI_HEADER_BYTES = 16 * 1024;
+
+/** The `type: "session"` header pi writes as a transcript's first line; null when unreadable. */
+function piHeader(path: string): Record<string, unknown> | null {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, "r");
+    const buf = Buffer.alloc(PI_HEADER_BYTES);
+    const text = buf.subarray(0, readSync(fd, buf, 0, PI_HEADER_BYTES, 0)).toString("utf-8");
+    const header = JSON.parse(text.split("\n", 1)[0] ?? "") as Record<string, unknown>;
+    return header?.type === "session" ? header : null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+/** A pi session; a fork or clone (`/fork`, `/clone`, `--fork`) names its parent's transcript in
+ * the header, and is shipped as that session's child. */
+function piSession(path: string, id: string, project?: string): AgentSession | null {
+  let mtime: Date;
+  try {
+    mtime = statSync(path).mtime;
+  } catch {
+    return null;
+  }
+  const parent = piHeader(path)?.parentSession;
+  const parentId =
+    typeof parent === "string" && parent.endsWith(".jsonl")
+      ? piSessionId(basename(parent, ".jsonl"))
+      : undefined;
+  return {
+    id,
+    harness: "pi",
+    path,
+    ...(project ? { project } : {}),
+    updated: mtime.toISOString(),
+    ...(parentId ? { parentId } : {}),
+  };
+}
+
+/** `~` and `~/x` as pi expands them; null for a relative path, which pi resolves against a
+ * working directory the scan does not have. */
+function piPath(value: unknown, home: string): string | null {
+  if (typeof value !== "string" || value.trim() === "") return null;
+  const path = value === "~" ? home : value.startsWith("~/") ? join(home, value.slice(2)) : value;
+  return isAbsolute(path) ? resolve(path) : null;
+}
+
+/** The `sessionDir` setting of a pi agent directory's settings.json, when it names a place. */
+function piSessionDirSetting(agentDir: string, home: string): string | null {
+  try {
+    const settings = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+    return piPath(settings?.sessionDir, home);
+  } catch {
+    return null;
+  }
+}
+
+/** pi: `<agent dir>/sessions/--<cwd>--/<timestamp>_<id>.jsonl`, under `~/.pi/agent` and under
+ * PI_CODING_AGENT_DIR (both, as for Claude Code: a sync another agent's hook started does not
+ * have the variable), plus the flat folder a session-dir override writes straight into:
+ * PI_CODING_AGENT_SESSION_DIR, or the `sessionDir` setting. */
+function scanPi(home: string, env: NodeJS.ProcessEnv): AgentSession[] {
+  const agentDirs = new Set([join(home, ".pi", "agent")]);
+  const relocated = piPath(env.PI_CODING_AGENT_DIR, home);
+  if (relocated) agentDirs.add(relocated);
+  const flatDirs = new Set<string>();
+  const envSessionDir = piPath(env.PI_CODING_AGENT_SESSION_DIR, home);
+  if (envSessionDir) flatDirs.add(envSessionDir);
+  for (const agentDir of agentDirs) {
+    const setting = piSessionDirSetting(agentDir, home);
+    if (setting) flatDirs.add(setting);
+  }
+
+  // By path: an override may point into a folder the default layout lists too.
+  const sessions = new Map<string, AgentSession>();
+  const add = (path: string, name: string, project?: string) => {
+    if (!name.endsWith(".jsonl") || sessions.has(path)) return;
+    const session = piSession(path, piSessionId(name.slice(0, -".jsonl".length)), project);
+    if (session) sessions.set(path, session);
+  };
+  for (const agentDir of agentDirs) {
+    for (const project of listDir(join(agentDir, "sessions"))) {
+      if (!project.isDir) continue;
+      for (const entry of listDir(project.path)) {
+        if (!entry.isDir) add(entry.path, entry.name, project.name);
+      }
+    }
+  }
+  for (const dir of flatDirs) {
+    for (const entry of listDir(dir)) if (!entry.isDir) add(entry.path, entry.name);
+  }
+  return [...sessions.values()];
+}
+
 /** One session whose transcript the caller already knows (a session-end hook named it), as the
  * scan would report it; it may live outside the roots the scan walks (e.g. a relocated Claude
  * config dir). Null when the file is gone. */
@@ -235,11 +348,16 @@ export function sessionAtPath(
   }
   // Claude Code keeps transcripts directly in their project dir, like scanClaude reads them.
   const project = harness === "claude" ? basename(dirname(path)) : undefined;
+  if (harness === "pi") {
+    // pi's per-directory folder, as scanPi reports it; a flat override folder is no project.
+    const folder = basename(dirname(path));
+    return piSession(path, id, /^--.*--$/.test(folder) ? folder : undefined);
+  }
   return { id, harness, path, ...(project ? { project } : {}), updated: mtime.toISOString() };
 }
 
 /** Where each harness keeps its sessions when no variable relocates it (CLAUDE_CONFIG_DIR,
- * CODEX_HOME, XDG_DATA_HOME). */
+ * CODEX_HOME, XDG_DATA_HOME, PI_CODING_AGENT_DIR). */
 function defaultRoot(harness: SessionHarness, home: string): string {
   switch (harness) {
     case "claude":
@@ -250,6 +368,8 @@ function defaultRoot(harness: SessionHarness, home: string): string {
       return join(home, ".codex", "sessions");
     case "opencode":
       return join(home, ".local", "share", "opencode");
+    case "pi":
+      return join(home, ".pi", "agent", "sessions");
   }
 }
 
@@ -274,6 +394,7 @@ export function scanAgentSessions(options: ScanSessionsOptions = {}): AgentSessi
     ...scanCursor(home),
     ...scanCodex(home, env),
     ...scanOpencode(home, env),
+    ...scanPi(home, env),
   ];
   if (options.since !== undefined) {
     // ISO-8601 strings with identical precision compare correctly as strings.

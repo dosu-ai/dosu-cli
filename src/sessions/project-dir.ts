@@ -232,7 +232,9 @@ export function createProjectDirResolver(
         // Old or truncated logs: fall back to un-munging the project dir.
         return session.project ? unmungeSlug(session.project, exists) : null;
       }
-      case "codex": {
+      case "codex":
+      case "pi": {
+        // Codex's session_meta and pi's session header both open the log with the cwd.
         const text = head(session.path);
         return text ? cwdFromJsonlHead(text) : null;
       }

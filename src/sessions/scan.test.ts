@@ -108,6 +108,21 @@ function opencodeDbPath(base: string = join(home, ".local", "share")): string {
   return join(base, "opencode", "opencode.db");
 }
 
+/** A pi transcript: `<dir>/<timestamp>_<id>.jsonl`, opening with the session header pi writes. */
+function piLog(dir: string, id: string, mtime: Date, header: Record<string, unknown> = {}): string {
+  const path = join(dir, `2026-08-25T10-00-00-000Z_${id}.jsonl`);
+  mkdirSync(dir, { recursive: true });
+  const first = { type: "session", version: 3, id, timestamp: "2026-08-25T10:00:00.000Z" };
+  writeFileSync(path, `${JSON.stringify({ ...first, cwd: "/Users/me/proj", ...header })}\n`);
+  utimesSync(path, mtime, mtime);
+  return path;
+}
+
+/** pi's default per-directory session folder under an agent directory. */
+function piProjectDir(agentDir: string = join(home, ".pi", "agent")): string {
+  return join(agentDir, "sessions", "--Users-me-proj--");
+}
+
 describe("scanAgentSessions", () => {
   it("returns an empty list when no harness dirs exist", () => {
     expect(scan()).toEqual([]);
@@ -323,6 +338,77 @@ describe("scanAgentSessions", () => {
       mkdirSync(join(home, ".local", "share", "opencode"), { recursive: true });
       writeFileSync(opencodeDbPath(), "this is not a sqlite database");
 
+      expect(scan()).toEqual([]);
+    });
+  });
+
+  describe("pi", () => {
+    it("lists sessions by the id in their file name, with pi's per-directory folder", () => {
+      const path = piLog(piProjectDir(), "01a0fdc5-a112-704c", T2);
+      piLog(piProjectDir(), "01a0fdc6-3a60-72c3", T1);
+      writeFileSync(join(piProjectDir(), "notes.txt"), "x");
+
+      const sessions = scan();
+
+      expect(sessions.map((s) => [s.harness, s.id])).toEqual([
+        ["pi", "01a0fdc5-a112-704c"],
+        ["pi", "01a0fdc6-3a60-72c3"],
+      ]);
+      expect(sessions[0]).toMatchObject({
+        path,
+        project: "--Users-me-proj--",
+        updated: T2.toISOString(),
+      });
+      expect(sessions[0].parentId).toBeUndefined();
+    });
+
+    it("names a forked or cloned session's parent from its header", () => {
+      const parent = piLog(piProjectDir(), "parent-1", T1);
+      piLog(piProjectDir(), "child-2", T2, { parentSession: parent });
+
+      const child = scan().find((s) => s.id === "child-2");
+
+      expect(child?.parentId).toBe("parent-1");
+    });
+
+    it("honors PI_CODING_AGENT_DIR, alongside the default directory", () => {
+      const agentDir = join(home, "relocated-pi");
+      piLog(piProjectDir(agentDir), "relocated", T1);
+      piLog(piProjectDir(), "default", T2);
+
+      const sessions = scan({ env: { PI_CODING_AGENT_DIR: agentDir } });
+
+      expect(sessions.map((s) => s.id)).toEqual(["default", "relocated"]);
+      // Set to the default directory itself, nothing is listed twice.
+      expect(scan({ env: { PI_CODING_AGENT_DIR: "~/.pi/agent" } })).toHaveLength(1);
+    });
+
+    it("reads the flat folders a session-dir override writes into", () => {
+      piLog(join(home, "env-sessions"), "from-env", T1);
+      piLog(join(home, "setting-sessions"), "from-setting", T2);
+      piLog(join(home, "relative-sessions"), "from-relative", T3);
+      mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+      writeFileSync(
+        join(home, ".pi", "agent", "settings.json"),
+        JSON.stringify({ sessionDir: "~/setting-sessions" }),
+      );
+
+      const sessions = scan({ env: { PI_CODING_AGENT_SESSION_DIR: join(home, "env-sessions") } });
+
+      expect(sessions.map((s) => [s.id, s.project])).toEqual([
+        ["from-setting", undefined],
+        ["from-env", undefined],
+      ]);
+    });
+
+    it("ignores a sessionDir setting it cannot resolve without pi's working directory", () => {
+      piLog(join(home, "relative-sessions"), "relative", T1);
+      mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+      const settings = join(home, ".pi", "agent", "settings.json");
+      writeFileSync(settings, JSON.stringify({ sessionDir: "relative-sessions" }));
+      expect(scan()).toEqual([]);
+
+      writeFileSync(settings, "{not json");
       expect(scan()).toEqual([]);
     });
   });

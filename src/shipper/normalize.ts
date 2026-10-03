@@ -16,6 +16,7 @@ const TRAJECTORY_SOURCES: Partial<Record<AgentSession["harness"], TranscriptTraj
   claude: "claude-code",
   cursor: "cursor",
   codex: "codex",
+  pi: "pi",
 };
 
 /** The trajectory source a harness's transcripts normalize as; undefined when unsupported. */

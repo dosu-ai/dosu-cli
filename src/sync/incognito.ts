@@ -58,10 +58,17 @@ export function transcriptHasIncognitoMarker(
 }
 
 /** Whether a scanned session opted out. File-backed harnesses scan the raw transcript; opencode
- * (SQLite) falls back to the parsed turns. Never throws. */
+ * (SQLite) falls back to the parsed turns. pi's /dosu-incognito (the Dosu pi extension) sends the
+ * marker as a user message, so only the user's turns count there: a session whose model merely
+ * read a file quoting the marker still ships. Never throws. */
 export function isIncognitoSession(session: AgentSession): boolean {
   if (session.harness === "opencode") {
     return readSessionTurns(session).some((turn) => textHasIncognitoMarker(turn.text));
+  }
+  if (session.harness === "pi") {
+    return readSessionTurns(session).some(
+      (turn) => turn.role === "user" && textHasIncognitoMarker(turn.text),
+    );
   }
   return transcriptHasIncognitoMarker(session.path);
 }
