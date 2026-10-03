@@ -20,7 +20,9 @@ import { saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
 import { makeOpencodeDb, opencodeDocument } from "../sessions/opencode.test-utils";
 import { INCOGNITO_MARKER } from "../sync/incognito";
-import { emptySyncState, saveSyncState } from "../sync/state";
+import { lockPath } from "../sync/lock";
+import { emptySyncState, loadSyncState, saveSyncState } from "../sync/state";
+import { SHIP_BATCH_LIMIT } from "../sync/sync";
 import { knowledgeCommand } from "./knowledge";
 
 /** The detached re-spawn is a process boundary: record its argv instead of starting a process. */
@@ -486,6 +488,109 @@ describe("knowledge sync of a resumed session", () => {
       prefix_sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
     expect(second.records.map((r) => r.role)).toEqual(["meta", "user", "assistant"]);
+  });
+});
+
+describe("knowledge sync --flush (the last step before a machine is torn down)", () => {
+  const shippedIds = () => posted().map((p) => p.metadata.session_id);
+
+  it("ships every pending session now, the ones still inside the quiet period included", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    claudeSession("older", exchange(1, alpha), 60);
+    // Written a moment ago, and no end event will ever name it: its agent was killed.
+    claudeSession("killed", exchange(2, alpha), 0);
+
+    await dosu("sync", "--flush");
+
+    expect(shippedIds()).toEqual(["older", "killed"]);
+  });
+
+  it("drains the whole backlog, past the per-run batch limit", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    const total = SHIP_BATCH_LIMIT + 3;
+    for (let i = 0; i < total; i++) claudeSession(`s${i}`, exchange(1, alpha), i % 2 ? 0 : 30);
+
+    await dosu("sync", "--flush");
+
+    expect(new Set(shippedIds()).size).toBe(total);
+  });
+
+  it("still keeps incognito, trivial, and out-of-scope sessions out", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    const beta = gitRepo("beta", "git@github.com:acme/beta.git");
+    saveSyncState({ ...emptySyncState(), repo_filter: ["github.com/acme/alpha"] });
+    claudeSession("kept", exchange(1, alpha), 0);
+    claudeSession(
+      "incognito",
+      exchange(2, alpha).replace("question 2", `${INCOGNITO_MARKER} question 2`),
+      0,
+    );
+    claudeSession(
+      "trivial",
+      `${JSON.stringify({ type: "user", uuid: "u", cwd: alpha, message: { role: "user", content: "hi" } })}\n`,
+      0,
+    );
+    claudeSession("elsewhere", exchange(3, beta), 0);
+
+    await dosu("sync", "--flush");
+
+    expect(shippedIds()).toEqual(["kept"]);
+  });
+
+  it("is an explicit command: it resumes paused syncing, even with --quiet", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    claudeSession("aaaa", exchange(1, alpha), 0);
+    saveSyncState({ ...emptySyncState(), paused: true });
+
+    await dosu("sync", "--flush", "--quiet");
+
+    expect(shippedIds()).toEqual(["aaaa"]);
+    expect(loadSyncState().paused).toBeUndefined();
+  });
+
+  it("does not wait out a failure backoff, even with --quiet", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    claudeSession("aaaa", exchange(1, alpha), 30);
+    claudeSession("bbbb", exchange(2, alpha), 0);
+    saveSyncState({
+      ...emptySyncState(),
+      consecutive_failures: 3,
+      last_attempt_at: new Date().toISOString(),
+    });
+
+    await dosu("sync", "--flush", "--quiet");
+
+    expect(shippedIds()).toEqual(["aaaa", "bbbb"]);
+  });
+
+  it("waits for a run holding the sync lock instead of skipping, as an ended session's run does", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    claudeSession("aaaa", exchange(1, alpha), 0);
+    // Another run (this live process stands in for it) holds the lock, and finishes shortly.
+    const lock = lockPath();
+    writeFileSync(lock, String(process.pid));
+    const otherRun = setTimeout(() => rmSync(lock, { force: true }), 200);
+
+    try {
+      await dosu("sync", "--flush");
+    } finally {
+      clearTimeout(otherRun);
+    }
+
+    expect(shippedIds()).toEqual(["aaaa"]);
+  });
+
+  it("refuses --detach: a flush must be done before the machine goes away", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    vi.spyOn(process, "exit").mockImplementation((code) => {
+      throw new Error(`exit ${code}`);
+    });
+
+    await expect(dosu("sync", "--flush", "--detach")).rejects.toThrow("exit 1");
+
+    expect(stderr.mock.calls.join("")).toMatch(/'--flush' cannot be used with option '--detach'/);
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
 

@@ -295,6 +295,12 @@ export function knowledgeCommand(): Command {
       "--bootstrap",
       "Backfill mode: ship every finished session from the last 30 days, draining the backlog (used by setup)",
     )
+    .addOption(
+      new Option(
+        "--flush",
+        "Ship every pending session now, past the quiet period, draining the backlog and resuming a paused sync (run it last on a machine about to be torn down)",
+      ).conflicts("detach"),
+    )
     .option("--retry-rejected", "Ship sessions the backend refused before, once more")
     .option(
       "--ended <harness:id[=transcript]>",
@@ -321,6 +327,7 @@ export function knowledgeCommand(): Command {
         quiet?: boolean;
         detach?: boolean;
         bootstrap?: boolean;
+        flush?: boolean;
         retryRejected?: boolean;
         ended?: string[];
         endedPath?: string[];
@@ -380,6 +387,7 @@ export function knowledgeCommand(): Command {
         const syncOptions = {
           quiet: opts.quiet,
           ended,
+          flush: opts.flush,
           // Bounded by when this command started, so a drain never retries a fresh refusal.
           ...(opts.retryRejected ? { retryRejectedBefore: new Date() } : {}),
           deps,
@@ -387,9 +395,9 @@ export function knowledgeCommand(): Command {
         let outcome = await runKnowledgeSync(syncOptions);
         let sessionsShipped = outcome.counts?.shipped ?? 0;
 
-        // Bootstrap drains the whole backlog in this process, batch by batch, while each batch
-        // makes progress; the round cap guards against a batch that never settles anything.
-        if (opts.bootstrap && deps.ship) {
+        // Bootstrap and flush drain the whole backlog in this process, batch by batch, while each
+        // batch makes progress; the round cap guards against a batch that never settles anything.
+        if ((opts.bootstrap || opts.flush) && deps.ship) {
           const maxRounds = Math.ceil(outcome.readySessions / SHIP_BATCH_LIMIT) + 2;
           for (
             let round = 1;

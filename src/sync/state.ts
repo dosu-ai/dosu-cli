@@ -123,7 +123,7 @@ export interface SyncState {
   /** Legacy folder scope from before repo scoping; the next sync converts it to repo_filter. */
   project_filter?: string[];
   /** User pressed stop: quiet (hook-triggered) syncs skip until resumed. Cleared by the
-   * Activity screen's resume or any manual `dosu knowledge sync`. */
+   * Activity screen's resume, any manual `dosu knowledge sync`, or a `--flush`. */
   paused?: boolean;
   /** `false` = the user opted out of shipping transcripts (`dosu knowledge transcripts
    * disable`). Shipping is on by default, so only the opt-out is ever stored. */

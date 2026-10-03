@@ -152,6 +152,10 @@ export interface SyncOptions {
   /** Sessions a session-end hook just reported (`--ended`/`--ended-path`): shipped this run, past
    * the quiet period and ahead of the backlog. Everything else still waits until quiet. */
   ended?: readonly EndedSession[];
+  /** `--flush`, the last step before a machine is torn down: every pending session ships now, as
+   * if a hook had named it ended, and the run waits for the lock as an ended session's run does.
+   * Always an explicit command, even with `quiet`: it resumes paused syncing and ignores backoff. */
+  flush?: boolean;
   deps?: SyncDeps;
 }
 
@@ -330,14 +334,15 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     logger.debug("sync", "skipping: transcript shipping is disabled");
     return empty("disabled");
   }
+  const explicit = !options.quiet || options.flush === true;
   // An explicit run is an explicit resume; this run's state saves persist the clear.
-  const resumes = !options.quiet && state.paused === true;
+  const resumes = explicit && state.paused === true;
   // A hook-triggered run held back by the user's stop switch or by failure backoff does nothing,
   // unless its hook just ended a session: a paused run still remembers where that session lives,
   // and a backed-off one tries that session alone, so the last sessions before a throwaway
   // machine goes away are not left waiting out a backoff.
   let holdBack: "paused" | "backoff" | null = null;
-  if (options.quiet) {
+  if (!explicit) {
     const retryAt = backoffUntil(state);
     if (state.paused) holdBack = "paused";
     else if (retryAt && now() < retryAt) holdBack = "backoff";
@@ -397,7 +402,12 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       logger.debug("sync", `folder scope converted to repos: ${repoFilter?.join(", ") || "none"}`);
     }
     // The ledger first, so settled sessions never cost a repo lookup.
-    const gate = gateSessions(scanned, state.sessions, { ...pending, now: now(), isEnded });
+    // A flush treats every session as over: nothing will run after it to ship them later.
+    const gate = gateSessions(scanned, state.sessions, {
+      ...pending,
+      now: now(),
+      isEnded: options.flush ? () => true : isEnded,
+    });
     const inScope = (sessions: AgentSession[]) =>
       filterSessionsByRepo(sessions, repoFilter, (s) => locator.resolveRepo(s));
     ready = inScope(holdBack === "backoff" ? gate.ready.filter(isEnded) : gate.ready);
@@ -439,10 +449,11 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
   if (!deps.ship) return { status: "backlog", ...base };
 
   // Single-flight. The lock loser leaves state untouched — the winner owns this run. A run
-  // carrying a just-ended session waits its turn instead: the session is why it exists.
+  // carrying a just-ended session waits its turn instead: the session is why it exists. So does
+  // a flush, for all of them.
   const lock = deps.lock ?? fileLock();
   let held = lock.acquire();
-  if (!held && ready.some(isEnded)) {
+  if (!held && (options.flush || ready.some(isEnded))) {
     const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
     logger.debug("sync", "waiting for the run that holds the lock");
     for (let waited = 0; !held && waited < ENDED_LOCK_WAIT_MS; waited += LOCK_POLL_MS) {
