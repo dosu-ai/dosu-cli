@@ -186,9 +186,10 @@ export interface ProjectDirResolver {
   resolveProjectAt(key: string, dir: string): ProjectKey | null;
   /** The branch a session whose transcript recorded none ran on, as first resolved for it and
    * cached from then on, like its project key: the one its prompts were served under, else what
-   * Cursor's hook captured, else the reflog's answer for the session's end (the checkout's
-   * current branch only when no checkout happened since). Null when none of them knows. */
-  resolveBranch(session: AgentSession): string | null;
+   * Cursor's hook captured, else the reflog's answer for `at` (ISO; when the session began, its
+   * first prompt, which is when a prompt hook pins it; default its last activity), with the
+   * checkout's current branch only when no checkout happened since. Null when none knows. */
+  resolveBranch(session: AgentSession, at?: string): string | null;
   /** The branch for a session whose working directory the caller already knows (a prompt hook's
    * cwd): the one cached under its `harness/id` key, else the one checked out there now, which is
    * cached so the session's later prompts and its shipped transcript carry it too. */
@@ -252,16 +253,16 @@ export function createProjectDirResolver(
   const reflogByDir = new Map<string, ReturnType<typeof parseReflog>>();
   const currentByDir = new Map<string, string | null>();
 
-  const reflogBranch = (session: AgentSession): string | null => {
+  const reflogBranch = (session: AgentSession, at: string): string | null => {
     const dir = resolve(session);
-    const end = Date.parse(session.updated);
-    if (dir === null || Number.isNaN(end)) return null;
+    const when = Date.parse(at);
+    if (dir === null || Number.isNaN(when)) return null;
     let entries = reflogByDir.get(dir);
     if (!entries) {
       entries = parseReflog(reflogOfDir(dir) ?? "");
       reflogByDir.set(dir, entries);
     }
-    return branchFromReflog(entries, Math.floor(end / 1000), () => {
+    return branchFromReflog(entries, Math.floor(when / 1000), () => {
       if (!currentByDir.has(dir)) currentByDir.set(dir, currentBranch(dir));
       return currentByDir.get(dir) ?? null;
     });
@@ -396,11 +397,11 @@ export function createProjectDirResolver(
       }
       return sessionProject(key, dir, entries[key].mtime, deps.env ?? process.env, "prompt");
     },
-    resolveBranch(session) {
+    resolveBranch(session, at = session.updated) {
       const key = `${session.harness}/${session.id}`;
       const pinned = entries[key]?.branch;
       if (pinned) return pinned;
-      const branch = captured(key)?.branch ?? reflogBranch(session);
+      const branch = captured(key)?.branch ?? reflogBranch(session, at);
       if (branch) {
         resolve(session); // the session's entry, to pin the branch on
         entries[key].branch = branch;

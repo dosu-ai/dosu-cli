@@ -285,9 +285,11 @@ project. An upload sends the branch its transcript recorded, when it recorded on
 `gitBranch` and Codex's `session_meta`, as the trajectory's `git_branch` (the value the server
 read before the CLI sent one). OpenCode, pi and Cursor record none, so their sessions ship with
 the branch their prompts were served under, else (Cursor) the one its `stop` hook captured, else
-the one the session's directory had checked out at the session's last activity, read from the
-reflog; the branch checked out now counts only when the reflog shows no checkout since. A
-detached HEAD is no branch, and the upload then sends none.
+the one the session's directory had checked out at its first prompt, read from the reflog, so a
+session that starts a branch for its change ships with the branch it started from, as Claude Code
+and Codex sessions do (a fork's first prompt is its own, not the one it copied). The branch
+checked out now counts only when the reflog shows no checkout since. A detached HEAD is no
+branch, and the upload then sends none.
 
 Like the project key, a session's branch is cached in `project-dirs.json` the first time it is
 resolved: the first prompt pins the branch checked out then, the session's later prompts send

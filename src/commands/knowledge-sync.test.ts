@@ -450,33 +450,38 @@ describe("knowledge sync from opencode's Dosu plugin", () => {
   });
 });
 
-/** `git` in `dir` as though run `minutesAgo` minutes ago: the reflog records each checkout then. */
-function gitThen(dir: string, minutesAgo: number, ...args: string[]): void {
-  const at = `@${Math.floor((Date.now() - minutesAgo * 60_000) / 1000)} +0000`;
+/** Unix seconds `n` minutes ago. */
+const minutesAgo = (n: number) => Math.floor((Date.now() - n * 60_000) / 1000);
+
+/** `git` in `dir` as though run at unix second `at`: the reflog records each checkout then. */
+function gitAt(dir: string, at: number, ...args: string[]): void {
+  const date = `@${at} +0000`;
   execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", ...args], {
-    env: { ...process.env, GIT_COMMITTER_DATE: at, GIT_AUTHOR_DATE: at },
+    env: { ...process.env, GIT_COMMITTER_DATE: date, GIT_AUTHOR_DATE: date },
     stdio: "ignore",
   });
 }
 
-/** A checkout made two hours ago, that moved to `branch` 90 minutes ago. */
-function checkoutOn(name: string, branch: string): string {
+/** A checkout made an hour before `since`, that moved to `branch` at `since`. */
+function checkoutOn(name: string, branch: string, since: number): string {
   const dir = join(home, "work", name);
   mkdirSync(dir, { recursive: true });
-  gitThen(dir, 120, "init", "-q");
-  gitThen(dir, 120, "remote", "add", "origin", `git@github.com:acme/${name}.git`);
-  gitThen(dir, 120, "commit", "-q", "--allow-empty", "-m", "init");
-  gitThen(dir, 90, "checkout", "-q", "-b", branch);
+  gitAt(dir, since - 3600, "init", "-q");
+  gitAt(dir, since - 3600, "remote", "add", "origin", `git@github.com:acme/${name}.git`);
+  gitAt(dir, since - 3600, "commit", "-q", "--allow-empty", "-m", "init");
+  gitAt(dir, since, "checkout", "-q", "-b", branch);
   return dir;
 }
 
 describe("knowledge sync of a session's branch", () => {
-  it("ships an opencode session with the branch its checkout was on then, not the one it is on now", async () => {
+  it("ships an opencode session with the branch it began on, not one it or the checkout moved to later", async () => {
     const bin = join(home, "bin");
     mkdirSync(bin);
     writeFileSync(join(bin, "opencode"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
     vi.stubEnv("PATH", `${bin}${delimiter}${process.env.PATH ?? ""}`);
-    const alpha = checkoutOn("alpha", "feat/layout");
+    // The fixture's prompt is at this second.
+    const prompted = Math.floor(opencodeDocument().messages[0].info.time.created / 1000);
+    const alpha = checkoutOn("alpha", "feat/layout", prompted - 600);
     mkdirSync(join(home, ".local", "share", "opencode"), { recursive: true });
     const made = makeOpencodeDb(join(home, ".local", "share", "opencode", "opencode.db"), [
       opencodeDocument({
@@ -487,8 +492,9 @@ describe("knowledge sync of a session's branch", () => {
       }),
     ]);
     if (!made) return; // no sqlite builtin
-    // After the session, the checkout moves on.
-    gitThen(alpha, 10, "checkout", "-q", "-b", "feat/next");
+    // Mid-session, the agent starts a branch for its change; after the session, the user moves on.
+    gitAt(alpha, prompted + 3, "checkout", "-q", "-b", "feat/mid");
+    gitAt(alpha, minutesAgo(10), "checkout", "-q", "-b", "feat/next");
 
     await dosu("sync");
 
@@ -502,7 +508,7 @@ describe("knowledge sync of a session's branch", () => {
   });
 
   it("ships a Claude Code session with the branch its transcript recorded, as before", async () => {
-    const alpha = checkoutOn("alpha", "feat/now");
+    const alpha = checkoutOn("alpha", "feat/now", minutesAgo(90));
     const recorded = exchange(1, alpha)
       .trimEnd()
       .split("\n")
@@ -518,7 +524,7 @@ describe("knowledge sync of a session's branch", () => {
   });
 
   it("ships a Codex session with the branch its session_meta recorded, as before", async () => {
-    const alpha = checkoutOn("alpha", "feat/now");
+    const alpha = checkoutOn("alpha", "feat/now", minutesAgo(90));
     codexRollout("rollout-2026-10-02T10-00-00-01a0ff2b-0000-7000-8000-000000000001", alpha, 30, {
       git: { branch: "feat/codex", commit_hash: "abc" },
     });

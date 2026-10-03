@@ -40,7 +40,7 @@ interface StepOverrides {
   isIncognito?: (s: AgentSession) => boolean;
   normalize?: (s: AgentSession) => Promise<unknown[] | null>;
   resolveProject?: (s: AgentSession) => ProjectKey | null;
-  resolveBranch?: (s: AgentSession) => string | null;
+  resolveBranch?: (s: AgentSession, at?: string) => string | null;
 }
 
 function makeStep(overrides: StepOverrides = {}) {
@@ -537,6 +537,32 @@ describe("createShipStep branch", () => {
     await step([session("s1")]);
 
     expect(metadata(fetchImpl).branch).toBe("feat/resolved");
+  });
+
+  it("asks for the branch the session was on when its own records began", async () => {
+    const forked = [
+      { role: "meta", source: "pi" },
+      ...RECORDS.slice(1),
+      { role: "user", content: "and now?", timestamp: "2026-09-02T08:00:00.000Z" },
+      { role: "assistant", content: "y".repeat(2000), timestamp: "2026-09-02T08:00:09.000Z" },
+    ];
+    const byTime: Record<string, string> = {
+      "2026-09-01T00:00:00.000Z": "feat/parent-start",
+      "2026-09-02T08:00:00.000Z": "feat/fork-start",
+    };
+    const { step, fetchImpl } = makeStep({
+      normalize: async (s) => (s.id === "parent" ? RECORDS : s.id === "fork" ? forked : RECORDS),
+      resolveBranch: (_s, at) => (at ? (byTime[at] ?? null) : null),
+    });
+
+    await step([
+      session("s1"),
+      // A fork's copy of its parent's history began before the fork did.
+      session("fork", { forkOf: { id: "parent", path: "/tmp/parent.jsonl" } }),
+    ]);
+
+    const branches = fetchImpl.mock.calls.map(([, init]) => JSON.parse(init.body).metadata.branch);
+    expect(branches).toEqual(["feat/parent-start", "feat/fork-start"]);
   });
 
   it("leaves the branch out when nothing knows it", async () => {

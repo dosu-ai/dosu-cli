@@ -40,7 +40,8 @@ export interface ShipStepOptions {
   isIncognito?: (session: AgentSession) => boolean;
   normalize?: (session: AgentSession) => Promise<NormalizedRecord[] | null>;
   resolveProject?: (session: AgentSession) => ProjectKey | null;
-  resolveBranch?: (session: AgentSession) => string | null;
+  /** `at`: when the session's own records began (ISO), the time to ask the reflog about. */
+  resolveBranch?: (session: AgentSession, at?: string) => string | null;
 }
 
 /** Build the sync pipeline's ship step. Processes oldest-first and stops after the first
@@ -83,11 +84,12 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
     const project = resolve.resolveProject(session)?.project ?? "unknown";
     // The branch the transcript recorded (Claude Code, Codex), which the server would read off
     // the meta record anyway; else the one the session's prompts were served under or its
-    // checkout was on then (OpenCode, pi, Cursor).
+    // checkout was on at its first prompt (OpenCode, pi, Cursor). A fork's first is its own.
     const meta = records[0];
+    const prompted = plan.fresh.find((record) => record.role === "user")?.timestamp;
     const branch =
       (meta?.role === "meta" ? recordedBranch(meta.git_branch) : null) ??
-      resolve.resolveBranch(session);
+      resolve.resolveBranch(session, prompted);
     const parentSessionId = session.parentId ?? session.forkOf?.id;
     const body = JSON.stringify({
       records: plan.records,
@@ -148,7 +150,7 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
       resolveProject:
         options.resolveProject ?? ((session) => resolver?.resolveProject(session) ?? null),
       resolveBranch:
-        options.resolveBranch ?? ((session) => resolver?.resolveBranch(session) ?? null),
+        options.resolveBranch ?? ((session, at) => resolver?.resolveBranch(session, at) ?? null),
     };
     const results: ShipSessionResult[] = [];
     for (const session of sessions) {

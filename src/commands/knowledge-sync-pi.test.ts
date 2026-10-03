@@ -320,10 +320,16 @@ describe("knowledge sync of a pi session's branch", () => {
     return dir;
   }
 
-  it("ships a session with the branch its checkout was on then, not the one it is on now", async () => {
+  it("ships a session with the branch it began on, not one it or the checkout moved to later", async () => {
     const widget = checkoutOn("feat/calc");
-    piSession("01a0fdc5-b001", widget, exchange(1), { minutesAgo: 30 });
-    // After the session, the checkout moves on.
+    const at = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000).toISOString();
+    const entries = exchange(1).map((entry, i) => ({
+      ...(entry as object),
+      timestamp: at(40 - i),
+    }));
+    // Mid-session, the agent starts a branch for its change; after the session, the user moves on.
+    gitThen(widget, 35, "checkout", "-q", "-b", "feat/mul");
+    piSession("01a0fdc5-b001", widget, entries, { minutesAgo: 30 });
     gitThen(widget, 10, "checkout", "-q", "-b", "feat/next");
 
     await dosu("sync");

@@ -352,6 +352,19 @@ describe("resolveBranch", () => {
     expect(resolver.resolveBranch(b)).toBeNull();
   });
 
+  it("consults the reflog at the time it is given: when the session began", () => {
+    const end = Date.parse("2026-08-25T11:00:00Z") / 1000;
+    const reflogOfDir = () =>
+      [
+        `HEAD@{${end - 60}}\tcheckout: moving from feat/start to feat/mid`,
+        `HEAD@{${end - 300}}\tcheckout: moving from main to feat/start`,
+      ].join("\n");
+    const resolver = createProjectDirResolver(tempDir, { ...noGit, reflogOfDir });
+    const s = session({ harness: "opencode", project: "/work/s" });
+    expect(resolver.resolveBranch(s, "2026-08-25T10:58:00Z")).toBe("feat/start");
+    expect(resolver.resolveBranch({ ...s, id: "ended" })).toBe("feat/mid");
+  });
+
   it("asks for the current branch once per directory when the reflog has no checkout", () => {
     const currentBranch = vi.fn(() => "trunk");
     const resolver = createProjectDirResolver(tempDir, {
