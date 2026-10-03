@@ -14,12 +14,16 @@ import { getBackendURL, isAbsoluteHttpUrl } from "../config/constants";
 import { logger } from "../debug/logger";
 import { type GitBudget, resolveProjectOfDir } from "../sessions/project";
 import { currentBranchOfDir } from "../sessions/repo";
+import { VERSION } from "../version/version";
 import { mcpEndpoint } from "./config-helpers";
 import { createMcpRelay, type McpRelay } from "./relay";
 
 /** The agent waits for the server to start (Codex gives up after 10s by default), so the project
  * lookup gets less time than a background sync; a repository too slow for it sends no project. */
 const STARTUP_GIT_BUDGET: GitBudget = { lookup: 1_000, history: 5_000 };
+
+/** What `dosu memory` asks for; the server answers with the version it speaks. */
+const CLIENT_PROTOCOL_VERSION = "2025-06-18";
 
 const PARSE_ERROR = { jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } };
 
@@ -41,7 +45,7 @@ export interface ProxyOptions {
 
 /** A relay to the configured Dosu MCP endpoint, scoped to `cwd`. Throws McpSetupError when
  * there is no API key or deployment to reach it with. */
-function proxyRelay(options: ProxyOptions = {}): McpRelay {
+export function proxyRelay(options: ProxyOptions = {}): McpRelay {
   const cfg = loadConfig();
   const apiKey = cfg.active_account?.target?.api_key;
   if (!apiKey) throw new McpSetupError("Dosu is not set up: run 'dosu setup' first.");
@@ -140,4 +144,56 @@ export async function runMcpServe(options: ProxyOptions): Promise<number> {
   } finally {
     Object.assign(console, { log, info, debug });
   }
+}
+
+export interface ToolResult {
+  content?: Array<{ type?: string; text?: string }>;
+  isError?: boolean;
+  [key: string]: unknown;
+}
+
+/** One request over the relay; its result, or the JSON-RPC error as an Error. */
+async function request(
+  relay: McpRelay,
+  id: number,
+  method: string,
+  params: Record<string, unknown>,
+): Promise<unknown> {
+  let reply: { error?: { message?: unknown }; result?: unknown } | undefined;
+  await relay.send({ jsonrpc: "2.0", id, method, params }, (message) => {
+    if ((message as { id?: unknown } | null)?.id === id) reply = message as typeof reply;
+  });
+  if (reply?.error) {
+    const text = reply.error.message;
+    throw new Error(typeof text === "string" ? text : "Dosu MCP request failed.");
+  }
+  return reply?.result;
+}
+
+/** Calls one tool as an MCP client would: initialize, initialized, tools/call. */
+export async function callMcpTool(
+  relay: McpRelay,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<ToolResult> {
+  try {
+    await request(relay, 1, "initialize", {
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: { name: "dosu-cli", version: VERSION },
+    });
+    await relay.send({ jsonrpc: "2.0", method: "notifications/initialized" }, () => {});
+    const result = await request(relay, 2, "tools/call", { name, arguments: args });
+    return (result ?? {}) as ToolResult;
+  } finally {
+    await relay.close();
+  }
+}
+
+/** The text a tool result carries, its text blocks joined. */
+export function toolText(result: ToolResult): string {
+  return (result.content ?? [])
+    .filter((block) => block.type === "text" && typeof block.text === "string")
+    .map((block) => block.text)
+    .join("\n");
 }
