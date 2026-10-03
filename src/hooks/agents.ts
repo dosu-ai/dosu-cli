@@ -13,6 +13,7 @@ import {
   removeGroupedHook,
   writeHookConfig,
 } from "./formats";
+import { opencodeHookAgent } from "./opencode";
 
 export interface HookAgent {
   id(): string;
@@ -99,6 +100,7 @@ export function allHookAgents(): HookAgent[] {
       event: "Stop",
       enableNote: "Codex asks you to trust new hooks; approve the Dosu hook when prompted.",
     }),
+    opencodeHookAgent(),
   ];
 }
 

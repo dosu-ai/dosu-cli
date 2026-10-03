@@ -655,7 +655,7 @@ describe("stepConfigureTools", () => {
     const cfg = makeCfg();
 
     const results = stepConfigureTools(cfg, {
-      toInstall: [OpenCodeProvider()],
+      toInstall: [ClaudeDesktopProvider()],
       toRemove: [],
       skipped: [],
     });
@@ -803,6 +803,28 @@ describe("stepConfigureTools", () => {
     expect(results[0].incognito).toMatchObject({
       path: join(tempDir, ".codex", "prompts", "dosu-incognito.md"),
     });
+  });
+
+  it("installs OpenCode's Dosu plugin and /dosu-incognito with its MCP entry, and removes both", () => {
+    const cfg = makeCfg();
+
+    const results = stepConfigureTools(cfg, {
+      toInstall: [OpenCodeProvider()],
+      toRemove: [],
+      skipped: [],
+    });
+
+    // opencode's config dir follows XDG_CONFIG_HOME, which this suite points at the temp dir.
+    const pluginPath = join(tempDir, "opencode", "plugin", "dosu.js");
+    const commandPath = join(tempDir, "opencode", "command", "dosu-incognito.md");
+    expect(readFileSync(pluginPath, "utf-8")).toContain("dosu knowledge sync --quiet --detach");
+    expect(results[0].hook).toMatchObject({ name: "OpenCode", path: pluginPath });
+    expect(results[0].incognito).toMatchObject({ path: commandPath });
+
+    stepConfigureTools(cfg, { toInstall: [], toRemove: [OpenCodeProvider()], skipped: [] });
+
+    expect(existsSync(pluginPath)).toBe(false);
+    expect(existsSync(commandPath)).toBe(false);
   });
 
   it("skips the whole bundle when the hook could not be enabled", () => {

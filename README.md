@@ -174,8 +174,10 @@ Combine with `dosu login --request` / `--check <ticket>` for human-in-the-loop a
 
 With `dosu knowledge hooks enable`, finished coding-agent sessions ship to Dosu memory in the
 background (secrets redacted locally first), and Dosu learns from them server-side. A Claude Code
-session ships as soon as it ends; other agents' sessions ship with a later sync once they have been
-quiet for five minutes (their end events are not wired up yet). A resumed session later ships only
+session ships as soon as it ends, and an OpenCode session as soon as the opencode process that ran
+it exits (OpenCode gets a plugin rather than a hook, which also adds task memory to its prompts);
+other agents' sessions ship with a later sync once they have been quiet for five minutes (their end
+events are not wired up yet). A resumed session later ships only
 what is new. Shipping is on by default; `dosu knowledge transcripts disable` turns it off.
 `dosu knowledge sync --status` and `dosu knowledge sessions` show what shipped and why anything did
 not (too short, rejected by the server, or from an agent not supported yet);
@@ -191,7 +193,7 @@ alongside the hook; they can also be managed directly:
 
 ```bash
 dosu knowledge statusline enable|disable [claude|cursor]   # status-bar line in Claude Code / Cursor CLI
-dosu knowledge incognito enable|disable [claude|cursor|codex]  # the /dosu-incognito slash command
+dosu knowledge incognito enable|disable [claude|cursor|codex|opencode]  # the /dosu-incognito command
 ```
 
 The status line shows one of `📚 Dosu learning…`, `👻 Dosu incognito`, `⚪ Dosu paused`,
