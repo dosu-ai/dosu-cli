@@ -373,16 +373,16 @@ dosu knowledge incognito status [--json]
 dosu knowledge incognito disable [agents...]
 ```
 
-`enable` writes a slash-command file per agent:
+`enable` writes a command file per agent:
 
-| Agent | File |
-|---|---|
-| Claude Code | `~/.claude/commands/dosu-incognito.md` (honors `CLAUDE_CONFIG_DIR`) |
-| Cursor | `~/.cursor/commands/dosu-incognito.md` |
-| Codex | `~/.codex/prompts/dosu-incognito.md` (honors `CODEX_HOME`) |
-| OpenCode | `~/.config/opencode/command/dosu-incognito.md` (honors `XDG_CONFIG_HOME`) |
+| Agent | Run it as | File |
+|---|---|---|
+| Claude Code | `/dosu-incognito` | `~/.claude/commands/dosu-incognito.md` (honors `CLAUDE_CONFIG_DIR`) |
+| Cursor | `/dosu-incognito` | `~/.cursor/commands/dosu-incognito.md` |
+| Codex | `$dosu-incognito` | `~/.codex/skills/dosu-incognito/SKILL.md` (honors `CODEX_HOME`) |
+| OpenCode | `/dosu-incognito` | `~/.config/opencode/command/dosu-incognito.md` (honors `XDG_CONFIG_HOME`) |
 
-Running `/dosu-incognito` inside a session expands the file into the conversation. Its body carries
+Running the command inside a session expands the file into the conversation. Its body carries
 the marker `dosu:incognito:v1` and instructs the model not to call Dosu MCP tools for the rest of
 the session. Because the harness records the expansion in the transcript, the marker is the switch:
 
@@ -407,6 +407,22 @@ Properties worth knowing:
   hook that rejects Dosu tool calls when the marker is present is a possible follow-up.
 - An OpenCode subagent's session is incognito when the session that spawned it is.
 - Pi's `/dosu-incognito` comes with the Dosu pi extension rather than this command (see [Pi](#pi)).
+- The marker itself works anywhere: a prompt containing `dosu:incognito:v1` takes its session off
+  the record in any agent, with or without the command installed.
+
+### Codex: `$dosu-incognito`
+
+Codex has no user slash commands: 0.140 and 0.160 run only their built-in `/` commands and no longer
+load custom prompts (`~/.codex/prompts`, where CLIs before this one installed the command; `enable`
+removes that file). What a user can invoke is a skill, so the command is the skill
+`$CODEX_HOME/skills/dosu-incognito`, run by mentioning it: type `$dosu-incognito` in the TUI (the
+`$` menu lists it) or anywhere in a `codex exec` prompt. Codex adds the skill's text to the
+conversation as a user turn, so the rollout carries the marker. The skill sets
+`allow_implicit_invocation: false` in `agents/openai.yaml`: Codex leaves it out of the skills it
+lists to the model, which therefore never opens it on its own and carries the marker into a session
+the user did not take off the record. It lives under `$CODEX_HOME/skills` rather than
+`~/.agents/skills`, which other agents read too. `/dosu-incognito` typed into Codex is an
+unrecognized command.
 
 ## Status line
 

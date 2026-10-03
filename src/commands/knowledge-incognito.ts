@@ -1,5 +1,6 @@
-/** `dosu knowledge incognito`: install the `/dosu-incognito` slash command per agent. Running it
- * inside a session marks that session's transcript so studying skips it. */
+/** `dosu knowledge incognito`: install the `/dosu-incognito` command per agent (`$dosu-incognito`,
+ * a skill, in Codex). Running it inside a session marks that session's transcript so it is never
+ * shipped. */
 
 import { Command } from "commander";
 import pc from "picocolors";
@@ -10,12 +11,12 @@ import { printResult } from "./output";
 
 export function incognitoCommand(): Command {
   const cmd = new Command("incognito").description(
-    `Manage the /${INCOGNITO_COMMAND_NAME} slash command that turns Dosu off for one session`,
+    `Manage the /${INCOGNITO_COMMAND_NAME} command (Codex: $${INCOGNITO_COMMAND_NAME}) that turns Dosu off for one session`,
   );
 
   cmd
     .command("status")
-    .description("Show whether the slash command is installed for each supported agent")
+    .description("Show whether the command is installed for each supported agent")
     .option("--json", "Output as JSON")
     .action((opts: { json?: boolean }) => {
       const rows = allIncognitoAgents().map((agent) => ({
@@ -23,6 +24,7 @@ export function incognitoCommand(): Command {
         name: agent.name(),
         installed: agent.isInstalled(),
         enabled: agent.isEnabled(),
+        invocation: agent.invocation(),
         command_path: agent.commandPath(),
       }));
 
@@ -42,21 +44,21 @@ export function incognitoCommand(): Command {
       console.log(
         pc.dim(
           `\nUse 'dosu knowledge incognito enable|disable [agent...]' to change these.\n` +
-            `Inside a session, run /${INCOGNITO_COMMAND_NAME} to keep that session out of studying.`,
+            `Inside a session, run /${INCOGNITO_COMMAND_NAME} ($${INCOGNITO_COMMAND_NAME} in Codex) to keep that session out of Dosu memory.`,
         ),
       );
     });
 
   cmd
     .command("enable [agents...]")
-    .description("Install the slash command for agents (default: all detected)")
+    .description("Install the command for agents (default: all detected)")
     .action((ids: string[]) => {
       for (const agent of resolveAgents(ids, allIncognitoAgents, getIncognitoAgent)) {
         try {
           const action = agent.enable();
           const verb = action === "unchanged" ? "already installed" : "installed";
           console.log(
-            `✓ ${agent.name()} \u00B7 /${INCOGNITO_COMMAND_NAME} ${verb} (${agent.commandPath()})`,
+            `✓ ${agent.name()} \u00B7 ${agent.invocation()} ${verb} (${agent.commandPath()})`,
           );
         } catch (err) {
           reportFailure(agent.name(), err);
@@ -66,13 +68,13 @@ export function incognitoCommand(): Command {
 
   cmd
     .command("disable [agents...]")
-    .description("Remove the slash command from agents (default: all detected)")
+    .description("Remove the command from agents (default: all detected)")
     .action((ids: string[]) => {
       for (const agent of resolveAgents(ids, allIncognitoAgents, getIncognitoAgent)) {
         try {
           const action = agent.disable();
           const verb = action === "removed" ? "removed" : "was not installed";
-          console.log(`✓ ${agent.name()} \u00B7 /${INCOGNITO_COMMAND_NAME} ${verb}`);
+          console.log(`✓ ${agent.name()} \u00B7 ${agent.invocation()} ${verb}`);
         } catch (err) {
           reportFailure(agent.name(), err);
         }

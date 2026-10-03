@@ -1,81 +1,34 @@
+/** `dosu knowledge incognito` on a temporary home and PATH: the agents' real command files are
+ * written and removed; nothing else is faked. */
+
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { IncognitoAction, IncognitoAgent } from "../incognito/agents";
-
-interface FakeAgent {
-  id: string;
-  name: string;
-  installed: boolean;
-  enabled: boolean;
-  enableResult?: IncognitoAction;
-  disableResult?: IncognitoAction;
-  enableError?: unknown;
-  disableError?: unknown;
-}
-
-let fakeAgents: FakeAgent[] = [];
-const enableCalls: string[] = [];
-const disableCalls: string[] = [];
-
-function toAgent(agent: FakeAgent): IncognitoAgent {
-  return {
-    id: () => agent.id,
-    name: () => agent.name,
-    isInstalled: () => agent.installed,
-    commandPath: () => `/home/u/.${agent.id}/commands/dosu-incognito.md`,
-    isEnabled: () => agent.enabled,
-    enable: () => {
-      if (agent.enableError) throw agent.enableError;
-      enableCalls.push(agent.id);
-      return agent.enableResult ?? "created";
-    },
-    disable: () => {
-      if (agent.disableError) throw agent.disableError;
-      disableCalls.push(agent.id);
-      return agent.disableResult ?? "removed";
-    },
-  };
-}
-
-vi.mock("../incognito/agents", () => ({
-  allIncognitoAgents: () => fakeAgents.map(toAgent),
-  getIncognitoAgent: (id: string) => {
-    const found = fakeAgents.find((a) => a.id === id);
-    return found ? toAgent(found) : undefined;
-  },
-}));
-
 import { incognitoCommand } from "./knowledge-incognito";
 
+let home: string;
+let bin: string;
 let logSpy: ReturnType<typeof vi.spyOn>;
 let errorSpy: ReturnType<typeof vi.spyOn>;
 
-function allOutput(): string {
-  return logSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
-}
-
-async function run(...args: string[]) {
-  const cmd = incognitoCommand();
-  cmd.exitOverride();
-  await cmd.parseAsync(["node", "test", ...args]);
-}
-
-const claude = (): FakeAgent => ({
-  id: "claude",
-  name: "Claude Code",
-  installed: true,
-  enabled: false,
-});
-const cursor = (): FakeAgent => ({
-  id: "cursor",
-  name: "Cursor",
-  installed: false,
-  enabled: false,
-});
-
 beforeEach(() => {
-  fakeAgents = [];
-  enableCalls.length = 0;
-  disableCalls.length = 0;
+  home = realpathSync(mkdtempSync(join(tmpdir(), "dosu-knowledge-incognito-")));
+  bin = join(home, "bin");
+  mkdirSync(bin);
+  vi.stubEnv("HOME", home);
+  vi.stubEnv("XDG_CONFIG_HOME", join(home, ".config"));
+  vi.stubEnv("CODEX_HOME", undefined);
+  vi.stubEnv("CLAUDE_CONFIG_DIR", undefined);
+  vi.stubEnv("PATH", bin);
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -83,106 +36,131 @@ beforeEach(() => {
 afterEach(() => {
   logSpy.mockRestore();
   errorSpy.mockRestore();
+  vi.unstubAllEnvs();
   process.exitCode = undefined;
+  rmSync(home, { recursive: true, force: true });
 });
 
+/** An executable on the temporary PATH, as a package install leaves it. */
+function installBinary(name: string): void {
+  writeFileSync(join(bin, name), "#!/bin/sh\n");
+  chmodSync(join(bin, name), 0o755);
+}
+
+async function run(...args: string[]): Promise<string> {
+  logSpy.mockClear();
+  const cmd = incognitoCommand();
+  cmd.exitOverride();
+  await cmd.parseAsync(["node", "test", ...args]);
+  return logSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
+}
+
+const errors = () => errorSpy.mock.calls.join(" ");
+const claudeCommand = () => join(home, ".claude", "commands", "dosu-incognito.md");
+const codexSkill = () => join(home, ".codex", "skills", "dosu-incognito", "SKILL.md");
+
 describe("knowledge incognito status", () => {
-  it("lists every agent with its state and the slash command hint", async () => {
-    fakeAgents = [{ ...claude(), enabled: true }, cursor()];
-    await run("status");
-    const output = allOutput();
-    expect(output).toContain("claude");
-    expect(output).toContain("enabled");
-    expect(output).toContain("not installed");
-    expect(output).toContain("/dosu-incognito");
+  it("lists every agent with its state, and how each runs the command", async () => {
+    installBinary("claude");
+    installBinary("codex");
+    await run("enable", "claude");
+
+    const said = await run("status");
+
+    expect(said).toMatch(/claude\s+Claude Code\s+enabled/);
+    expect(said).toMatch(/codex\s+Codex\s+disabled/);
+    expect(said).toMatch(/cursor\s+Cursor\s+not installed/);
+    expect(said).toContain("/dosu-incognito");
+    expect(said).toContain("$dosu-incognito in Codex");
   });
 
-  it("shows an installed agent without the command as disabled", async () => {
-    fakeAgents = [claude()];
-    await run("status");
-    expect(allOutput()).toMatch(/claude\s+Claude Code\s+disabled/);
-  });
+  it("--json emits rows with the command path and its invocation", async () => {
+    installBinary("codex");
+    await run("enable", "codex");
 
-  it("--json emits rows", async () => {
-    fakeAgents = [claude()];
-    await run("status", "--json");
-    expect(JSON.parse(allOutput())).toEqual([
-      expect.objectContaining({
-        agent: "claude",
-        installed: true,
-        enabled: false,
-        command_path: "/home/u/.claude/commands/dosu-incognito.md",
-      }),
-    ]);
+    const rows = JSON.parse(await run("status", "--json")) as Record<string, unknown>[];
+
+    expect(rows.find((row) => row.agent === "codex")).toEqual({
+      agent: "codex",
+      name: "Codex",
+      installed: true,
+      enabled: true,
+      invocation: "$dosu-incognito",
+      command_path: codexSkill(),
+    });
   });
 });
 
 describe("knowledge incognito enable", () => {
-  it("installs for named agents", async () => {
-    fakeAgents = [claude(), cursor()];
-    await run("enable", "claude");
-    expect(enableCalls).toEqual(["claude"]);
-    expect(allOutput()).toContain("/dosu-incognito installed");
+  it("installs for named agents, saying how each runs it", async () => {
+    const said = await run("enable", "claude", "codex");
+
+    expect(existsSync(claudeCommand())).toBe(true);
+    expect(existsSync(codexSkill())).toBe(true);
+    expect(said).toContain(`✓ Claude Code · /dosu-incognito installed (${claudeCommand()})`);
+    expect(said).toContain(`✓ Codex · $dosu-incognito installed (${codexSkill()})`);
   });
 
   it("defaults to detected agents and reports already-installed ones", async () => {
-    fakeAgents = [{ ...claude(), enableResult: "unchanged" }, cursor()];
+    installBinary("claude");
     await run("enable");
-    expect(enableCalls).toEqual(["claude"]);
-    expect(allOutput()).toContain("already installed");
+
+    const said = await run("enable");
+
+    expect(said).toContain("Claude Code · /dosu-incognito already installed");
+    expect(existsSync(join(home, ".cursor"))).toBe(false);
   });
 
   it("rejects unknown agents", async () => {
-    fakeAgents = [claude()];
     await run("enable", "zed");
-    expect(errorSpy.mock.calls.join(" ")).toContain("unknown agent 'zed'");
-    expect(process.exitCode).toBe(1);
-    expect(enableCalls).toEqual([]);
-  });
-
-  it("reports write failures without aborting", async () => {
-    fakeAgents = [{ ...claude(), enableError: new Error("EACCES") }];
-    await run("enable", "claude");
-    expect(errorSpy.mock.calls.join(" ")).toContain("EACCES");
+    expect(errors()).toContain("unknown agent 'zed'");
     expect(process.exitCode).toBe(1);
   });
 
-  it("stringifies non-Error failures", async () => {
-    fakeAgents = [{ ...claude(), enableError: "disk full" }];
-    await run("enable", "claude");
-    expect(errorSpy.mock.calls.join(" ")).toContain("disk full");
+  it("reports a write failure and goes on to the next agent", async () => {
+    // A file where the commands directory should be: the command cannot be written.
+    mkdirSync(join(home, ".claude"));
+    writeFileSync(join(home, ".claude", "commands"), "not a directory");
+
+    await run("enable", "claude", "codex");
+
+    expect(errors()).toContain("✗ Claude Code:");
     expect(process.exitCode).toBe(1);
+    expect(existsSync(codexSkill())).toBe(true);
   });
 });
 
 describe("knowledge incognito disable", () => {
   it("removes for named agents", async () => {
-    fakeAgents = [claude(), cursor()];
-    await run("disable", "claude");
-    expect(disableCalls).toEqual(["claude"]);
-    expect(allOutput()).toContain("/dosu-incognito removed");
+    await run("enable", "claude", "codex");
+
+    const said = await run("disable", "claude", "codex");
+
+    expect(existsSync(claudeCommand())).toBe(false);
+    expect(existsSync(codexSkill())).toBe(false);
+    expect(said).toContain("Claude Code · /dosu-incognito removed");
+    expect(said).toContain("Codex · $dosu-incognito removed");
   });
 
   it("says so when nothing was installed", async () => {
-    fakeAgents = [{ ...claude(), disableResult: "not_found" }];
-    await run("disable");
-    expect(allOutput()).toContain("was not installed");
+    installBinary("claude");
+    expect(await run("disable")).toContain("/dosu-incognito was not installed");
   });
 
   it("prints a hint when nothing is detected", async () => {
-    fakeAgents = [cursor()];
-    await run("disable");
-    expect(allOutput()).toContain("No supported agents detected");
+    expect(await run("disable")).toContain("No supported agents detected");
   });
 
-  it("reports removal failures without aborting", async () => {
-    fakeAgents = [
-      { ...claude(), disableError: new Error("EPERM") },
-      { ...cursor(), installed: true },
-    ];
-    await run("disable");
-    expect(errorSpy.mock.calls.join(" ")).toContain("EPERM");
+  it("reports a removal failure and goes on to the next agent", async () => {
+    await run("enable", "claude", "codex");
+    // A directory where the command file should be: it cannot be unlinked.
+    rmSync(claudeCommand());
+    mkdirSync(join(claudeCommand(), "x"), { recursive: true });
+
+    await run("disable", "claude", "codex");
+
+    expect(errors()).toContain("✗ Claude Code:");
     expect(process.exitCode).toBe(1);
-    expect(disableCalls).toEqual(["cursor"]);
+    expect(existsSync(codexSkill())).toBe(false);
   });
 });

@@ -847,7 +847,7 @@ describe("stepConfigureTools", () => {
     expect(p.log.success).not.toHaveBeenCalledWith(expect.stringContaining("Status line enabled"));
   });
 
-  it("skips the status line for agents without one but still installs the slash command", () => {
+  it("skips the status line for agents without one but still installs the incognito command", () => {
     const cfg = makeCfg();
 
     const results = stepConfigureTools(cfg, {
@@ -859,7 +859,7 @@ describe("stepConfigureTools", () => {
     expect(results[0].hook).toBeDefined();
     expect(results[0].statusline).toBeUndefined();
     expect(results[0].incognito).toMatchObject({
-      path: join(tempDir, ".codex", "prompts", "dosu-incognito.md"),
+      path: join(tempDir, ".codex", "skills", "dosu-incognito", "SKILL.md"),
     });
   });
 

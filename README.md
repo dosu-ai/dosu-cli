@@ -207,7 +207,7 @@ alongside the hook; they can also be managed directly:
 
 ```bash
 dosu knowledge statusline enable|disable [claude|cursor]   # status-bar line in Claude Code / Cursor CLI
-dosu knowledge incognito enable|disable [claude|cursor|codex|opencode]  # the /dosu-incognito command
+dosu knowledge incognito enable|disable [claude|cursor|codex|opencode]  # /dosu-incognito ($dosu-incognito in Codex)
 ```
 
 The status line shows one of `📚 Dosu learning…`, `👻 Dosu incognito`, `⚪ Dosu paused`,
@@ -217,9 +217,10 @@ syncing to picked repos under `dosu` → settings → study scope (or `dosu know
 [docs/syncing.md](docs/syncing.md#repo-scope)). Neither setup nor `enable` replaces a
 status line you already have; they print the one-liner to add to your own script instead.
 
-Running `/dosu-incognito` inside a session marks that session's transcript so it is never shipped
-(the whole session, and for the rest of it — start a new session to turn Dosu back on) and tells the
-model not to use Dosu tools. See [docs/syncing.md](docs/syncing.md).
+Running `/dosu-incognito` inside a session (in Codex, which has no user slash commands, mention the
+skill `$dosu-incognito`) marks that session's transcript so it is never shipped (the whole session,
+and for the rest of it — start a new session to turn Dosu back on) and tells the model not to use
+Dosu tools. See [docs/syncing.md](docs/syncing.md#per-session-incognito).
 
 ### Telemetry and privacy
 
