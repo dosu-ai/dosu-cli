@@ -1,5 +1,5 @@
 /** `dosu memory hook`: the one entry point for Claude Code's SessionStart, UserPromptSubmit,
- * PostToolUse, Stop, and SessionEnd hooks. It must never block or break the session: every
+ * PostToolUse, PostToolUseFailure, Stop, and SessionEnd hooks. It must never block or break the session: every
  * failure is logged locally and the hook exits 0 with no output. Only an injected note is
  * printed. */
 
@@ -70,10 +70,9 @@ function fullNoteBlock(note: string): string {
   return `${FULL_NOTE_PREFACE}\n${memoryBlock(note)}`;
 }
 
-function contextOutput(
-  event: "SessionStart" | "UserPromptSubmit" | "PostToolUse",
-  context: string,
-): string {
+type ContextEvent = "SessionStart" | "UserPromptSubmit" | "PostToolUse" | "PostToolUseFailure";
+
+function contextOutput(event: ContextEvent, context: string): string {
   return JSON.stringify({
     hookSpecificOutput: { hookEventName: event, additionalContext: context },
   });
@@ -211,12 +210,13 @@ export async function runMemoryHook(raw: unknown, deps: HookDeps = {}): Promise<
       logger.warn("memory", "hook payload missing or malformed; ignored");
       return null;
     }
-    if (payload.hook_event_name === "PostToolUse") {
-      // Every tool call lands here: local files only, and not even the session state. A
-      // subagent's tool call would hand stage two to the subagent instead of the main agent.
+    const event = payload.hook_event_name;
+    if (event === "PostToolUse" || event === "PostToolUseFailure") {
+      // Every tool call lands here, failed or not: local files only, and not even the session
+      // state. A subagent's tool call would hand stage two to the subagent, not the main agent.
       if (payload.agent_id) return null;
       const full = claimFullNote(payload.session_id, deps.configDir);
-      return full ? contextOutput("PostToolUse", fullNoteBlock(full)) : null;
+      return full ? contextOutput(event, fullNoteBlock(full)) : null;
     }
     const state = ensureState(payload, deps);
     const spawn = deps.spawn ?? spawnDetachedSelf;

@@ -1,8 +1,9 @@
 /** Two-stage recall. The first prompt waits only for stage one (the quick note, at most 5 s) and
  * starts stage two, the note written for this task, in the background; a detached
  * `dosu memory recall-poll` waits for it and saves it locally. Hooks after the first prompt read
- * local files only: stage two goes to the agent on the first PostToolUse after it is ready, or on
- * the next prompt if no tool ran in between, once per session. */
+ * local files only: stage two goes to the agent with the first tool result after it is ready
+ * (PostToolUse, or PostToolUseFailure for a failed call), or with the next prompt if no tool ran
+ * in between, once per session. */
 
 import { logger } from "../debug/logger";
 import { spawnDetachedSelf } from "../sync/detach";

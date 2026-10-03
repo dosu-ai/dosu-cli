@@ -87,6 +87,12 @@ const toolCall = (session = SESSION) =>
     { tool_name: "Bash", tool_input: { command: "ls" }, tool_response: { stdout: "a\n" } },
     session,
   );
+const failedCall = (session = SESSION) =>
+  hook(
+    "PostToolUseFailure",
+    { tool_name: "Bash", tool_input: { command: "make test" }, error: "Exit code 2\nFAILED" },
+    session,
+  );
 const compact = () => hook("SessionStart", { source: "compact" });
 const poll = (extra: Partial<PollDeps> = {}) => pollFullRecall(SESSION, pollDeps(extra));
 const statusPolls = () => calls.filter((c) => c.key === STATUS_PATH).length;
@@ -212,17 +218,32 @@ describe("two-stage recall", () => {
     expect(await compact()).toBe(output("SessionStart", fullBlock));
   });
 
+  it("hands stage two over with a failed tool call too (PostToolUseFailure), once", async () => {
+    await firstPrompt();
+    expect(await failedCall()).toBeNull();
+    await poll();
+
+    expect(await failedCall()).toBe(output("PostToolUseFailure", fullBlock));
+    expect(await failedCall()).toBeNull();
+    expect(await toolCall()).toBeNull();
+    expect(await laterPrompt()).toBeNull();
+    expect(await compact()).toBe(output("SessionStart", `${block(QUICK)}\n\n${fullBlock}`));
+  });
+
   it("leaves stage two to the main agent when a subagent's tool call fires first", async () => {
     await firstPrompt();
     await poll();
     expect(await hook("PostToolUse", { tool_name: "Bash", agent_id: "a1" })).toBeNull();
+    expect(await hook("PostToolUseFailure", { tool_name: "Bash", agent_id: "a1" })).toBeNull();
     expect(await toolCall()).toBe(output("PostToolUse", fullBlock));
   });
 
-  it("hands stage two to exactly one of many concurrent tool calls", async () => {
+  it("hands stage two to exactly one of many concurrent tool calls, failed or not", async () => {
     await firstPrompt();
     await poll();
-    const results = await Promise.all(Array.from({ length: 20 }, () => toolCall()));
+    const results = await Promise.all(
+      Array.from({ length: 20 }, (_, i) => (i % 2 ? failedCall() : toolCall())),
+    );
     expect(results.filter((r) => r !== null)).toEqual([output("PostToolUse", fullBlock)]);
     expect(await laterPrompt()).toBeNull();
   });
@@ -241,12 +262,12 @@ describe("two-stage recall", () => {
     expect(await toolCall()).toBeNull();
   });
 
-  it("answers PostToolUse in milliseconds from local files, without the network", async () => {
-    const timed = async (session = SESSION) => {
+  it("answers PostToolUse and PostToolUseFailure in milliseconds, without the network", async () => {
+    const timed = async (call: (session?: string) => Promise<unknown>, session = SESSION) => {
       const times: number[] = [];
       for (let i = 0; i < 200; i++) {
         const start = performance.now();
-        await toolCall(session);
+        await call(session);
         times.push(performance.now() - start);
       }
       times.sort((a, b) => a - b);
@@ -255,16 +276,18 @@ describe("two-stage recall", () => {
     await firstPrompt();
     const requests = calls.length;
 
-    const noRecall = await timed("0a1b2c3d-no-recall-session");
-    const pending = await timed();
+    const noRecall = await timed(toolCall, "0a1b2c3d-no-recall-session");
+    const pending = await timed(toolCall);
+    const pendingFailed = await timed(failedCall);
     await poll();
     const pollRequests = calls.length;
     expect(await toolCall()).toBe(output("PostToolUse", fullBlock));
-    const injected = await timed();
+    const injected = await timed(toolCall);
+    const injectedFailed = await timed(failedCall);
 
     expect(calls).toHaveLength(pollRequests);
     expect(pollRequests).toBe(requests + 1);
-    for (const { median, p99 } of [noRecall, pending, injected]) {
+    for (const { median, p99 } of [noRecall, pending, pendingFailed, injected, injectedFailed]) {
       expect(median).toBeLessThan(2);
       expect(p99).toBeLessThan(20);
     }
