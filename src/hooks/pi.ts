@@ -23,7 +23,7 @@ import { devEnvAssignments, HookConfigError } from "./formats";
 const EXTENSION_MARKER = "dosu:pi-extension";
 
 /** The agent directory pi reads extensions from: PI_CODING_AGENT_DIR, else ~/.pi/agent. */
-function piAgentDir(): string {
+export function piAgentDir(): string {
   const override = process.env.PI_CODING_AGENT_DIR?.trim();
   return override ? expandHome(override) : expandHome("~/.pi/agent");
 }
