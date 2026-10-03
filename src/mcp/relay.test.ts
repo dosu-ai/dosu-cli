@@ -39,6 +39,13 @@ function relayTo(srv: FakeMcpServer, options: Partial<McpRelayOptions> = {}) {
   });
 }
 
+/** What the server does with a scope header: a value that starts with the RFC 8187 charset
+ * marker is percent-encoded UTF-8; anything else is the value itself. */
+function decodeScope(value: unknown): string {
+  const text = String(value);
+  return text.startsWith("UTF-8''") ? decodeURIComponent(text.slice(7)) : text;
+}
+
 async function exchange(relay: ReturnType<typeof createMcpRelay>, message: unknown) {
   const out: unknown[] = [];
   await relay.send(message, (m) => out.push(m));
@@ -103,6 +110,34 @@ describe("createMcpRelay", () => {
     expect(headers["x-dosu-branch"]).toBeUndefined();
     expect(headers["x-dosu-client"]).toBeUndefined();
     expect(headers["x-dosu-api-key"]).toBe("sk_test");
+  });
+
+  it("sends a project or branch outside ASCII as an RFC 8187 UTF-8 value", async () => {
+    server = await startFakeMcpServer();
+    const out = await exchange(
+      relayTo(server, { project: "团队/widget", branch: () => "rv/日本-café" }),
+      SEARCH,
+    );
+
+    expect(out).toEqual([expect.objectContaining({ id: 2, result: expect.anything() })]);
+    const headers = server.requests[0].headers;
+    expect(headers["x-dosu-project"]).toMatch(/^UTF-8''[A-Za-z0-9!#$&+\-.^_`|~%]+$/);
+    expect(decodeScope(headers["x-dosu-project"])).toBe("团队/widget");
+    expect(decodeScope(headers["x-dosu-repo"])).toBe("团队/widget");
+    expect(decodeScope(headers["x-dosu-branch"])).toBe("rv/日本-café");
+  });
+
+  it("sends ASCII scope values as they are, unless they could be read as encoded", async () => {
+    server = await startFakeMcpServer();
+    await exchange(
+      relayTo(server, { project: "path:/w/a b%20c", branch: () => "UTF-8''x" }),
+      SEARCH,
+    );
+
+    const headers = server.requests[0].headers;
+    expect(headers["x-dosu-project"]).toBe("path:/w/a b%20c");
+    expect(headers["x-dosu-branch"]).not.toBe("UTF-8''x");
+    expect(decodeScope(headers["x-dosu-branch"])).toBe("UTF-8''x");
   });
 
   it("relays a plain JSON reply", async () => {

@@ -158,6 +158,21 @@ async function readEventStream(
   dispatch();
 }
 
+/** RFC 8187's charset marker: what follows is percent-encoded UTF-8. */
+const UTF8_MARKER = "UTF-8''";
+
+/** A scope value as a header can carry it. Header values are bytes, and fetch refuses (or
+ * mangles) anything past ASCII, which a linked project key, a checkout path, or a branch name
+ * may hold; those go as an RFC 8187 ext-value the server decodes. Plain ASCII goes as is. */
+function scopeHeader(value: string): string {
+  if (/^[\x20-\x7e]*$/.test(value) && !value.startsWith(UTF8_MARKER)) return value;
+  const encoded = encodeURIComponent(value).replace(
+    /['()*]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `${UTF8_MARKER}${encoded}`;
+}
+
 function describeFetchError(err: unknown, endpoint: string, timeoutMs: number): string {
   const name = (err as { name?: string } | null)?.name;
   if (name === "TimeoutError" || name === "AbortError") {
@@ -179,12 +194,12 @@ export function createMcpRelay(options: McpRelayOptions): McpRelay {
       "X-Dosu-API-Key": options.apiKey,
     };
     if (options.project) {
-      out["x-dosu-project"] = options.project;
-      out["x-dosu-repo"] = options.project;
+      out["x-dosu-project"] = scopeHeader(options.project);
+      out["x-dosu-repo"] = out["x-dosu-project"];
     }
     const branch = options.branch();
-    if (branch) out["x-dosu-branch"] = branch;
-    if (options.client) out["x-dosu-client"] = options.client;
+    if (branch) out["x-dosu-branch"] = scopeHeader(branch);
+    if (options.client) out["x-dosu-client"] = scopeHeader(options.client);
     if (sessionId) out["Mcp-Session-Id"] = sessionId;
     if (protocolVersion) out["MCP-Protocol-Version"] = protocolVersion;
     return out;

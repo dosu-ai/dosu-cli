@@ -109,7 +109,9 @@ proxy, `dosu mcp serve --client <agent>`, which resolves the key once for the di
 started it in and sends it as `x-dosu-project` (and `x-dosu-repo`, for older servers) with every
 request, along with the branch checked out at that moment (`x-dosu-branch`) and the agent
 (`x-dosu-client`). `dosu memory search` and `dosu memory evidence` send the same headers from the
-current directory.
+current directory. A value with characters outside ASCII (a linked key, a checkout path, a branch
+name) goes as an RFC 8187 value, `UTF-8''` followed by its percent-encoded UTF-8, which the server
+decodes; any other value goes as it is.
 
 ## Repo scope
 
