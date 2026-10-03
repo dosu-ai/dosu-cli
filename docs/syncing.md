@@ -12,7 +12,10 @@ a per-session opt-out and a status-bar indicator.
 ## Codex hooks
 
 `dosu knowledge hooks enable codex` writes `$CODEX_HOME/hooks.json` (default `~/.codex`) for the
-`codex` on PATH, so re-running it after a Codex upgrade converges on the right set:
+`codex` on PATH, so re-running it after a Codex upgrade converges on the right set. Codex counts as
+installed (for `hooks enable` with no agent named, and for `dosu setup`) when its home exists or
+`codex` is on PATH: Codex creates its home on its first run, which on a fresh machine comes after
+Dosu's setup.
 
 | Codex | Sync triggers | Prompt-time memory |
 |---|---|---|

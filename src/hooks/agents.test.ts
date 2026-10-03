@@ -171,6 +171,14 @@ describe("codex agent", () => {
   const key = (event: string, group = 0, handler = 0) =>
     `${join(fakeHome, ".codex", "hooks.json")}:${event}:${group}:${handler}`;
 
+  it("counts as installed with only `codex` on PATH: Dosu is set up before Codex's first run", () => {
+    const codex = getHookAgent("codex");
+    expect(codex?.isInstalled()).toBe(false);
+    installCodex("0.160.0");
+    expect(existsSync(join(fakeHome, ".codex"))).toBe(false);
+    expect(codex?.isInstalled()).toBe(true);
+  });
+
   it("on Codex before 0.160 installs a per-turn Stop trigger and the prompt hook, trusted", () => {
     installCodex("0.140.0");
     const codex = getHookAgent("codex");

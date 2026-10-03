@@ -15,7 +15,7 @@
 
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, readFileSync, rmSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { writeSecureFile } from "../mcp/config-helpers";
 import { expandHome, isInstalled } from "../mcp/detect";
@@ -65,6 +65,15 @@ function isOurs(command: unknown): boolean {
 /** CODEX_HOME when set and non-empty, as Codex reads it. */
 function codexHome(): string {
   return process.env.CODEX_HOME || expandHome("~/.codex");
+}
+
+/** Codex is installed when its home exists or `codex` is on PATH. Codex creates its home on its
+ * first run, and a freshly provisioned machine (a throwaway VM) sets up Dosu before that run: the
+ * hooks and the MCP entry must already be there when it happens. */
+export function codexInstalled(): boolean {
+  if (isInstalled([codexHome()])) return true;
+  const path = process.env.PATH ?? "";
+  return path.split(delimiter).some((dir) => dir !== "" && existsSync(join(dir, "codex")));
 }
 
 /** The `codex` on PATH's version, from `codex --version` ("codex-cli 0.160.0"); null when there
@@ -177,7 +186,7 @@ export function codexHookAgent(): HookAgent {
   return {
     id: () => "codex",
     name: () => "Codex",
-    isInstalled: () => isInstalled([codexHome()]),
+    isInstalled: codexInstalled,
     configPath: hooksPath,
     // Installed and trusted: `codex exec` skips a hook whose trust is not recorded.
     isEnabled: () => {

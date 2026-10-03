@@ -427,6 +427,26 @@ describe("stepDetectTools", () => {
     expect(detected.map((p2) => p2.id())).toEqual(["claude-desktop"]);
   });
 
+  it("includes Codex before its first run: the codex binary on PATH, or a relocated CODEX_HOME", () => {
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CodexProvider()]);
+    const bin = join(tempDir, "bin");
+    mkdirSync(bin);
+    vi.stubEnv("PATH", bin);
+    try {
+      expect(stepDetectTools()).toEqual([]);
+
+      writeFileSync(join(bin, "codex"), '#!/bin/sh\necho "codex-cli 0.160.0"\n', { mode: 0o755 });
+      expect(stepDetectTools().map((p2) => p2.id())).toEqual(["codex"]);
+
+      rmSync(join(bin, "codex"));
+      mkdirSync(join(tempDir, "codex-home"));
+      vi.stubEnv("CODEX_HOME", join(tempDir, "codex-home"));
+      expect(stepDetectTools().map((p2) => p2.id())).toEqual(["codex"]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("returns empty array when no providers are installed", () => {
     // Don't create any detect paths
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => {
