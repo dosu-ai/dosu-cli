@@ -14,6 +14,8 @@ export interface OpencodeFixture {
   answer?: string;
   /** A memory digest Dosu's plugin pushed into the user message, flagged as such. */
   memory?: string;
+  /** The session's last activity (epoch ms). */
+  updated?: number;
 }
 
 /** One session as `opencode export` prints it, `{ info, messages: [{ info, parts }] }`: a user
@@ -55,7 +57,7 @@ export function opencodeDocument(fixture: OpencodeFixture = {}) {
       title: "Auth walkthrough",
       version: "1.18.34",
       ...(fixture.parentID ? { parentID: fixture.parentID } : {}),
-      time: { created: 1790963932400, updated: 1790963941200 },
+      time: { created: 1790963932400, updated: fixture.updated ?? 1790963941200 },
     },
     messages: [
       {

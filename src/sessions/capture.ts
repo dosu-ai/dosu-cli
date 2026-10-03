@@ -178,10 +178,22 @@ function claudeSessionEnd(hook: HookPayload): EndedSession | null {
   return { harness: "claude", id, path };
 }
 
+/** OpenCode, from Dosu's plugin (src/hooks/opencode.ts): `{agent: "opencode", hook_event_name:
+ * "opencode.session.end", session_id}`, sent for each session that ran in an opencode process as
+ * the process shuts down. Its sessions live in a shared DB, so there is no transcript path. */
+function opencodeSessionEnd(hook: HookPayload): EndedSession | null {
+  if (hook.agent !== "opencode" || hook.hook_event_name !== "opencode.session.end") return null;
+  const id = hook.session_id;
+  if (typeof id !== "string" || !SAFE_SEGMENT.test(id)) return null;
+  return { harness: "opencode", id };
+}
+
 /** One reader per agent for its definitive end-of-session event. Per-turn events (Cursor
- * `stop`, Codex `Stop` before 0.160) never count: they fire while the session goes on. */
+ * `stop`, Codex `Stop` before 0.160, OpenCode's `session.idle`) never count: they fire while the
+ * session goes on. */
 const END_EVENT_READERS: ReadonlyArray<(hook: HookPayload) => EndedSession | null> = [
   claudeSessionEnd,
+  opencodeSessionEnd,
 ];
 
 /** The session a hook payload says just ended; null when the payload is not an end event. */

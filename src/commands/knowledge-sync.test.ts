@@ -17,6 +17,7 @@ import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
+import { makeOpencodeDb, opencodeDocument } from "../sessions/opencode.test-utils";
 import { emptySyncState, saveSyncState } from "../sync/state";
 import { knowledgeCommand } from "./knowledge";
 
@@ -209,6 +210,61 @@ describe("knowledge sync from a session-end hook", () => {
 
   it("a per-turn hook payload names no session, so nothing skips the quiet period", async () => {
     hookStdin({ hook_event_name: "Stop", session_id: "aaaa", transcript_path: "/x/aaaa.jsonl" });
+
+    await dosu("sync", "--quiet", "--detach");
+
+    expect(respawnedArgs()).toEqual(["sync", "--quiet"]);
+  });
+});
+
+describe("knowledge sync from opencode's Dosu plugin", () => {
+  /** opencode sessions in its DB under the temporary home, all still inside the quiet period. */
+  function opencodeSessions(dir: string): boolean {
+    mkdirSync(join(home, ".local", "share", "opencode"), { recursive: true });
+    const answer = `answer: ${"detail ".repeat(400)}`;
+    const updated = Date.now();
+    return makeOpencodeDb(join(home, ".local", "share", "opencode", "opencode.db"), [
+      opencodeDocument({ id: "ses_root", directory: dir, answer, updated }),
+      opencodeDocument({ id: "ses_child", parentID: "ses_root", directory: dir, answer, updated }),
+      opencodeDocument({ id: "ses_live", directory: dir, answer, updated }),
+    ]);
+  }
+
+  it("ships each session the plugin reports ended when opencode shuts down, a subagent's naming its parent", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    if (!opencodeSessions(alpha)) return; // no sqlite builtin
+
+    for (const id of ["ses_root", "ses_child"]) {
+      hookStdin({
+        agent: "opencode",
+        hook_event_name: "opencode.session.end",
+        session_id: id,
+        cwd: alpha,
+      });
+      await dosu("sync", "--quiet", "--detach");
+      const child = respawnedArgs();
+      expect(child).toEqual(["sync", "--quiet", "--ended", `opencode:${id}`]);
+      await dosu(...child);
+    }
+
+    // The session still running elsewhere waits out the quiet period.
+    expect(posted().map((p) => p.metadata)).toEqual([
+      expect.objectContaining({
+        agent: "opencode",
+        session_id: "ses_root",
+        project: "github.com/acme/alpha",
+      }),
+      expect.objectContaining({
+        agent: "opencode",
+        session_id: "ses_child",
+        parent_session_id: "ses_root",
+      }),
+    ]);
+    expect(posted()[0].records[0]).toMatchObject({ role: "meta", source: "opencode", cwd: alpha });
+  });
+
+  it("a session going idle after a turn ends nothing, so nothing skips the quiet period", async () => {
+    hookStdin({ agent: "opencode", hook_event_name: "opencode.session.idle", session_id: "ses_a" });
 
     await dosu("sync", "--quiet", "--detach");
 
