@@ -78,7 +78,9 @@ when the deployment has no linked repository. For a working directory, the first
 wins:
 
 1. A directory linked in `~/.config/dosu-cli/projects.json`
-   (`{"links": [{"dir": "/abs/path", "project": "<key>"}]}`), longest match.
+   (`{"links": [{"dir": "/abs/path", "project": "<key>"}]}`), longest match. Manage links with
+   `dosu project link [dir] <key>` and `dosu project unlink [dir]`; `dosu project show [dir]` prints a
+   directory's key and the rule that produced it.
 2. The `DOSU_PROJECT` environment variable.
 3. The `origin` remote, normalized (`github.com/acme/widget`).
 4. `git:<sha>` of the repository's root commit, for clones without an `origin`. Skipped in a shallow
@@ -101,6 +103,13 @@ session-end hook for the session that just ended (`--ended`). A sync shipping a 
 whichever agent's environment triggered it, so it never applies its own `DOSU_PROJECT` to the rest
 of the batch. To key a backlog of sessions that ran without the variable, link their directory
 instead.
+
+Memory pulled over MCP is scoped by the same key. Every agent's Dosu MCP entry runs the local
+proxy, `dosu mcp serve --client <agent>`, which resolves the key once for the directory the agent
+started it in and sends it as `x-dosu-project` (and `x-dosu-repo`, for older servers) with every
+request, along with the branch checked out at that moment (`x-dosu-branch`) and the agent
+(`x-dosu-client`). `dosu memory search` and `dosu memory evidence` send the same headers from the
+current directory.
 
 ## Repo scope
 

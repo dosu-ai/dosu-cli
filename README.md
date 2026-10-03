@@ -100,10 +100,13 @@ Or right-click the binary, select "Open", and click "Open" in the dialog.
 | `dosu mcp list` | List supported AI tools |
 | `dosu mcp add <tool>` | Add the Dosu MCP server to a specific tool |
 | `dosu mcp refresh` | Rewrite the Dosu MCP entry in every already-configured tool from the current setup |
+| `dosu mcp serve --client <agent>` | The local (stdio) Dosu MCP server that tools' MCP entries run; not run by hand |
+| `dosu project show\|link\|unlink [dir]` | Show the project key Dosu memory scopes a directory by, or link a directory to a key |
+| `dosu memory search <query>` / `dosu memory evidence <id>` | Search Dosu memory, or read the evidence behind one memory, as an agent's MCP tools do |
 | `dosu logs` | View or manage debug logs (`--tail`, `--clear`) |
 | `dosu telemetry` | Manage usage analytics and error diagnostics (`status`, `enable`, `disable`, `reset`) |
 
-`dosu mcp add` takes `-g, --global` to install for all projects instead of project-local, and `--show-secret` to print the full manual config.
+`dosu mcp add` takes `-g, --global` to install for all projects instead of project-local, and `--show-secret` to print the full manual config. The entry it writes runs `dosu mcp serve`, a local proxy to Dosu's MCP endpoint that adds the API key from the CLI config and the project, branch, and agent of the session, so memory lookups are scoped to the codebase you are in. Without a `dosu` on PATH (a one-off `npx @dosu/cli setup`) tools get a remote entry instead.
 
 `dosu upgrade` delegates to npm, pnpm, Yarn Classic, or Homebrew only after confirming which manager owns the current installation. Temporary package-runner invocations stay ephemeral, ambiguous or local installs are left unchanged, and standalone binaries receive the latest safe manual download path. After a successful update it hands off to the new version, which re-applies the bundled skills and, only if the update crossed a release that changed the agent config format, runs `dosu setup` (or the non-interactive `dosu mcp refresh` without a TTY). Upgrades done outside `dosu upgrade` (npm, brew, `npx @dosu/cli@latest`) get a safety net: when the new version changed the shape of the MCP entry, the first command on it silently rewrites configured tools' MCP entries and prompts you to run `dosu setup` for the rest; the bundled agent skills are always re-applied on the first command after any version change.
 
@@ -183,7 +186,8 @@ not (too short, rejected by the server, or from an agent not supported yet);
 
 When the deployment has no linked repository, memory is scoped by the codebase a session worked in:
 its `origin` remote, else the repository's root commit, else its path. Set `DOSU_PROJECT` in the
-agent's environment to name it yourself. A session keeps the key it was first resolved under. See
+agent's environment, or run `dosu project link [dir] <key>`, to name it yourself
+(`dosu project show` prints the key in use). A session keeps the key it was first resolved under. See
 [docs/syncing.md](docs/syncing.md#project-key).
 
 Two switches make shipping visible and controllable per session. `dosu setup` installs both
