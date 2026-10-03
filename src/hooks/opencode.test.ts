@@ -289,10 +289,13 @@ function opencodeProcess(
 /** Detached commands record themselves a moment after they start. */
 const settle = (check: () => void) => vi.waitFor(check, { timeout: 5000, interval: 50 });
 
+/** The process the test ran reported its sessions ended; nothing it started writes any more. */
+const endReported = () => settle(() => expect(syncs()).toHaveLength(1));
+
 const QUIET_SYNC_MS = 330_000;
 
 describe("the opencode plugin", () => {
-  it("adds the memory digest to a prompt, flagged, after what the user typed", () => {
+  it("adds the memory digest to a prompt, flagged, after what the user typed", async () => {
     fakeDosu("Dosu memory: the deploy codeword is PELICAN-7\n");
 
     const [parts] = opencodeProcess([
@@ -300,6 +303,7 @@ describe("the opencode plugin", () => {
       ["created", "ses_a"],
       ["chat", "ses_a", "how does deploy work?"],
     ]);
+    await endReported();
 
     expect(dosuCalls().filter((c) => c.args.startsWith("knowledge context"))).toEqual([
       {
@@ -322,9 +326,10 @@ describe("the opencode plugin", () => {
     expect(String(memory.id) > String(typed.id)).toBe(true);
   });
 
-  it("adds nothing when Dosu has nothing to say", () => {
+  it("adds nothing when Dosu has nothing to say", async () => {
     fakeDosu("");
     const [parts] = opencodeProcess([["start"], ["chat", "ses_a", "hello"]]);
+    await endReported();
     expect(parts).toHaveLength(1);
   });
 
@@ -333,7 +338,7 @@ describe("the opencode plugin", () => {
     expect(parts).toHaveLength(1);
   });
 
-  it("asks nothing for an incognito session, a resumed one that went incognito, or a subagent's", () => {
+  it("asks nothing for an incognito session, a resumed one that went incognito, or a subagent's", async () => {
     fakeDosu("Dosu memory: something");
 
     const [marked] = opencodeProcess(
@@ -349,6 +354,7 @@ describe("the opencode plugin", () => {
       ],
       { ses_old: ["earlier", INCOGNITO_COMMAND_BODY] },
     );
+    await endReported();
 
     expect(dosuCalls().filter((c) => c.args.startsWith("knowledge context"))).toEqual([]);
     expect(marked).toHaveLength(1);
