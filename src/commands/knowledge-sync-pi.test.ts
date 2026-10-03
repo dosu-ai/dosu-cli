@@ -189,25 +189,21 @@ function shutdownPayload(id: string, transcript: string, cwd: string, reason = "
 }
 
 describe("knowledge sync of pi sessions", () => {
-  it("ships each finished pi session under its header's id, project and parent", async () => {
+  it("ships each finished pi session under its header's id and project", async () => {
     const widget = gitRepo("widget", "git@github.com:acme/widget.git");
-    const parent = piSession("01a0fdc5-a112", widget, exchange(1), { minutesAgo: 60 });
-    piSession("01a0fdc7-6bbf", widget, [...exchange(1), ...exchange(2)], {
-      parentSession: parent,
-    });
+    piSession("01a0fdc5-a112", widget, exchange(1));
 
     await dosu("sync");
 
-    const shipped = Object.fromEntries(posted().map((p) => [String(p.metadata.session_id), p]));
-    expect(Object.keys(shipped).sort()).toEqual(["01a0fdc5-a112", "01a0fdc7-6bbf"]);
-    expect(shipped["01a0fdc5-a112"].metadata).toMatchObject({
+    const [shipped] = posted();
+    expect(shipped.metadata).toMatchObject({
       agent: "pi",
+      session_id: "01a0fdc5-a112",
       project: "github.com/acme/widget",
       repo: "github.com/acme/widget",
     });
-    expect(shipped["01a0fdc5-a112"].metadata.parent_session_id).toBeUndefined();
-    expect(shipped["01a0fdc7-6bbf"].metadata.parent_session_id).toBe("01a0fdc5-a112");
-    expect(shipped["01a0fdc5-a112"].records.map((r) => r.role)).toEqual([
+    expect(shipped.metadata.parent_session_id).toBeUndefined();
+    expect(shipped.records.map((r) => r.role)).toEqual([
       "meta",
       "user",
       "assistant",
@@ -216,6 +212,39 @@ describe("knowledge sync of pi sessions", () => {
       "assistant",
     ]);
     expect(loadSyncState().sessions["pi/01a0fdc5-a112"]?.outcome).toBe("shipped");
+  });
+
+  it("ships a fork or clone without the history it copied, as its parent's child", async () => {
+    const widget = gitRepo("widget", "git@github.com:acme/widget.git");
+    // pi's /fork, /clone and --fork copy the parent's entries verbatim, ids and all.
+    const parent = piSession("01a0fdc5-a112", widget, [...exchange(1), ...exchange(3)], {
+      minutesAgo: 60,
+    });
+    piSession("01a0fdc7-6bbf", widget, [...exchange(1), ...exchange(2)], {
+      parentSession: parent,
+    });
+
+    await dosu("sync");
+
+    const shipped = Object.fromEntries(posted().map((p) => [String(p.metadata.session_id), p]));
+    expect(Object.keys(shipped).sort()).toEqual(["01a0fdc5-a112", "01a0fdc7-6bbf"]);
+    expect(shipped["01a0fdc5-a112"].records).toHaveLength(11);
+    const fork = shipped["01a0fdc7-6bbf"];
+    expect(fork.metadata.parent_session_id).toBe("01a0fdc5-a112");
+    expect(fork.metadata.continuation).toMatchObject({ from_record: 6 });
+    // The meta record, then the fork's own exchange only.
+    expect(fork.records.map((r) => r.content ?? r.role)).toEqual([
+      "meta",
+      "question 2",
+      "Reading calc.py for 2.",
+      expect.any(String),
+      "def add(a, b):\n    return a + b\n",
+      expect.stringMatching(/^answer 2: /),
+    ]);
+    expect(loadSyncState().sessions["pi/01a0fdc7-6bbf"]).toMatchObject({
+      outcome: "shipped",
+      records: 11,
+    });
   });
 
   it("keys a clone with no origin by its root commit", async () => {
@@ -301,6 +330,34 @@ describe("knowledge sync from the Dosu pi extension's session_shutdown", () => {
       ["01a0ff60-263a", "github.com/acme/widget"],
     ]);
     expect(posted()[1].metadata.continuation).toMatchObject({ from_record: 6 });
+  });
+
+  it("/fork ends the old session alone; the fork ships its own work when it ends", async () => {
+    const widget = gitRepo("widget", "git@github.com:acme/widget.git");
+    const parent = piSession("01a0fdc5-a112", widget, exchange(1), { minutesAgo: 0 });
+    const forkEntries = (entries: unknown[]) =>
+      piSession("01a0fdc7-6bbf", widget, entries, { minutesAgo: 0, parentSession: parent });
+    const fork = forkEntries(exchange(1));
+
+    // pi shuts the old session down as /fork switches to the new one, which is live.
+    hookStdin(shutdownPayload("01a0fdc5-a112", parent, widget, "fork"));
+    await dosu("sync", "--quiet", "--detach");
+    await dosu(...respawnedArgs());
+    expect(posted().map((p) => p.metadata.session_id)).toEqual(["01a0fdc5-a112"]);
+
+    forkEntries([...exchange(1), ...exchange(2)]);
+    hookStdin(shutdownPayload("01a0fdc7-6bbf", fork, widget));
+    await dosu("sync", "--quiet", "--detach");
+    await dosu(...respawnedArgs());
+
+    const [, forked] = posted();
+    expect(forked.metadata).toMatchObject({
+      session_id: "01a0fdc7-6bbf",
+      parent_session_id: "01a0fdc5-a112",
+    });
+    expect(forked.records.filter((r) => r.role === "user").map((r) => r.content)).toEqual([
+      "question 2",
+    ]);
   });
 
   it("a reload names no session: the extension comes back on the same one", async () => {

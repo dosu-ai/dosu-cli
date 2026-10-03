@@ -25,6 +25,10 @@ export interface AgentSession {
   /** The parent session's id, for a subagent or other child session (shipped as
    * parent_session_id). */
   parentId?: string;
+  /** The session this one was forked or cloned from (pi's /fork, /clone, --fork): its transcript
+   * opens with a copy of that one's history. Not a subagent: it lives on after that session ends.
+   * Shipped as its child, without the copied history. */
+  forkOf?: { id: string; path: string };
   /** Normalized origin repo (`host/owner/repo`), attached once the study scope resolves it. */
   repo?: string;
   /** Git branch the session ran on, attached once sync resolves it for a study batch. */
@@ -230,8 +234,7 @@ function piSessionIdOfName(path: string): string {
 }
 
 /** A pi session, keyed by its header's id; a fork or clone (`/fork`, `/clone`, `--fork`) names
- * its parent's transcript in the header, and is shipped as that session's child. `id` is what a
- * hook already called it, when one did. */
+ * the transcript it copied in the header. `id` is what a hook already called it, when one did. */
 function piSession(path: string, project?: string, id?: string): AgentSession | null {
   let mtime: Date;
   try {
@@ -241,14 +244,15 @@ function piSession(path: string, project?: string, id?: string): AgentSession | 
   }
   const header = readPiHeader(path);
   const parent = header?.parentSession;
-  const parentId = parent ? (readPiHeader(parent)?.id ?? piSessionIdOfName(parent)) : undefined;
   return {
     id: id ?? header?.id ?? piSessionIdOfName(path),
     harness: "pi",
     path,
     ...(project ? { project } : {}),
     updated: mtime.toISOString(),
-    ...(parentId ? { parentId } : {}),
+    ...(parent
+      ? { forkOf: { id: readPiHeader(parent)?.id ?? piSessionIdOfName(parent), path: parent } }
+      : {}),
   };
 }
 

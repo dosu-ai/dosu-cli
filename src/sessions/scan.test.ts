@@ -370,16 +370,17 @@ describe("scanAgentSessions", () => {
         project: "--Users-me-proj--",
         updated: T2.toISOString(),
       });
-      expect(sessions[0].parentId).toBeUndefined();
+      expect(sessions[0].forkOf).toBeUndefined();
     });
 
-    it("names a forked or cloned session's parent from its header", () => {
+    it("names the session a fork or clone copied, from its header; a fork is no subagent", () => {
       const parent = piLog(piProjectDir(), "parent-1", T1);
       piLog(piProjectDir(), "child-2", T2, { parentSession: parent });
 
       const child = scan().find((s) => s.id === "child-2");
 
-      expect(child?.parentId).toBe("parent-1");
+      expect(child?.forkOf).toEqual({ id: "parent-1", path: parent });
+      expect(child?.parentId).toBeUndefined();
     });
 
     it("honors PI_CODING_AGENT_DIR, alongside the default directory", () => {
@@ -418,7 +419,7 @@ describe("scanAgentSessions", () => {
       utimesSync(path, T1, T1);
       symlinkSync(join(home, "nowhere.jsonl"), join(piProjectDir(), "2026_gone.jsonl"));
 
-      expect(scan().map((s) => [s.id, s.parentId])).toEqual([["no-header", undefined]]);
+      expect(scan().map((s) => [s.id, s.forkOf])).toEqual([["no-header", undefined]]);
     });
 
     it("ignores a sessionDir setting it cannot resolve without pi's working directory", () => {

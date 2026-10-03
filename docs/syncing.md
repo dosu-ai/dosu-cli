@@ -66,6 +66,14 @@ only the meta record and the new tail ship, with `metadata.continuation =
 the session stays shipped. If the prefix no longer matches, the whole session ships again and the
 server dedupes identical content. A child session's upload carries `parent_session_id`.
 
+**Forks.** A session forked or cloned from another (`AgentSession.forkOf`; pi's `/fork`, `/clone`,
+`--fork`) opens with a verbatim copy of that session's history, which is the parent's to ship.
+Its upload carries `parent_session_id` and only what the fork added: the meta record and the
+records past the leading ones the parent's normalized records hold too, marked with
+`continuation` as a tail is (`from_record` is where the fork's own records start). A fork with
+nothing of its own yet is too small to learn from, and ships once it has more. A fork is not a
+subagent: it outlives the session it came from, so that session's end neither ships nor holds it.
+
 Upgrading from the watermark state (schema 2, or the learner-era schema 1) seeds the ledger with the
 sessions it shipped. Everything else in the window becomes pending again, including sessions the
 watermark passed over without shipping; the server dedupes anything it already has. Clearing the
@@ -243,7 +251,8 @@ with the id from the transcript's header (the one `PI_SESSION_ID` carries), what
 called. Ids pi accepts with dots (`pi --session-id rv.task.2`) end their session like any other, and
 a transcript at an explicit `pi --session <path>` outside those folders ships when its session
 ends and is remembered for later syncs. The header's `cwd` gives the project key, and a
-`/fork` or `/clone` names its parent's transcript there, so it ships with `parent_session_id`.
+`/fork`, `/clone` or `--fork` names the transcript it copied there, so it ships as a fork (see
+[Forks](#what-a-sync-ships)): with `parent_session_id`, without the copied history.
 
 ## Manual check
 

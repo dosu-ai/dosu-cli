@@ -10,7 +10,7 @@ import { createProjectDirResolver } from "../sessions/project-dir";
 import type { AgentSession } from "../sessions/scan";
 import { isIncognitoSession } from "../sync/incognito";
 import type { ShipSessionResult, SyncDeps } from "../sync/sync";
-import { planShipment, prefixSha256, type ShippedPrefix } from "./continuation";
+import { copiedPrefix, planShipment, prefixSha256, type ShippedPrefix } from "./continuation";
 import { normalizeSessionRecords, trajectorySourceOf } from "./normalize";
 import { isTrivialTrajectory } from "./worthiness";
 
@@ -68,12 +68,19 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
       return { session, outcome: "unsupported", message: "transcript could not be normalized" };
     }
     // A resumed session sends only its new tail, and only when that tail is worth learning from.
-    const plan = planShipment(records, shipped);
+    let plan = planShipment(records, shipped);
+    if (!plan.continuation && session.forkOf) {
+      // A fork's copy of its parent's history is the parent's to ship: send what it added.
+      const { id, path } = session.forkOf;
+      const parentRecords = await normalize({ harness: session.harness, id, path, updated: "" });
+      plan = planShipment(records, copiedPrefix(records, parentRecords));
+    }
     if (isTrivialTrajectory(plan.fresh)) return { session, outcome: "trivial" };
     // The project key of the session's working directory (sessions/project.ts), the same one
     // prompt-time memory sends. Branch is omitted: the trajectory meta record carries
     // git_branch when the harness logged one.
     const project = resolveProject(session)?.project ?? "unknown";
+    const parentSessionId = session.parentId ?? session.forkOf?.id;
     const body = JSON.stringify({
       records: plan.records,
       metadata: {
@@ -83,7 +90,7 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
         repo: project,
         agent: trajectorySourceOf(session.harness) ?? session.harness,
         session_id: session.id,
-        ...(session.parentId ? { parent_session_id: session.parentId } : {}),
+        ...(parentSessionId ? { parent_session_id: parentSessionId } : {}),
         ...(plan.continuation ? { continuation: plan.continuation } : {}),
       },
     });
