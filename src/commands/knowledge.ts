@@ -2,14 +2,14 @@
  * per-agent hook triggers. */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { readFileSync } from "node:fs";
 import { Command, Option } from "commander";
 import pc from "picocolors";
 import { createTypedClient } from "../client/trpc";
 import { loadConfig } from "../config/config";
 import { getBackendURL, isAbsoluteHttpUrl } from "../config/constants";
 import { allHookAgents, getHookAgent, type HookAgent } from "../hooks/agents";
+import { isOnPath } from "../hooks/claude-code";
 import { disableClaudeContextHook, enableClaudeContextHook } from "../hooks/context";
 import { HookConfigError, hookCommand } from "../hooks/formats";
 import { emitKnowledgeReport } from "../report/generate";
@@ -588,6 +588,12 @@ function transcriptsCommand(): Command {
       try {
         if (enableClaudeContextHook()) {
           console.log("✓ Claude Code will receive task memory when a prompt warrants it.");
+        } else {
+          console.log(
+            pc.yellow(
+              "! Prompt-time memory not installed: Claude Code was not found (no ~/.claude, and no 'claude' on PATH). Once it is installed, run 'dosu knowledge hooks enable claude'.",
+            ),
+          );
         }
       } catch (err) {
         // Shipping is on either way; only the prompt hook could not be written.
@@ -886,6 +892,17 @@ function hooksCommand(): Command {
     .description("Install the sync hook for agents (default: all detected)")
     .action((ids: string[]) => {
       const agents = resolveHookAgents(ids);
+      if (ids.length === 0) {
+        // No agent named: only detected ones get hooks; never pass over the rest in silence.
+        const skipped = allHookAgents().filter((agent) => !agent.isInstalled());
+        if (skipped.length > 0) {
+          console.log(
+            pc.yellow(
+              `! Skipped ${skipped.map((agent) => agent.name()).join(", ")}: not detected on this machine. Name an agent to install its hook anyway: dosu knowledge hooks enable <agent>`,
+            ),
+          );
+        }
+      }
       const devMode = process.env.DOSU_DEV === "true";
       // Dev hooks pin this working copy by absolute path, so PATH is moot.
       if (agents.length > 0 && !devMode && !dosuOnPath()) {
@@ -936,8 +953,5 @@ function reportHookFailure(agent: HookAgent, err: unknown): void {
 
 /** Hooks invoke plain `dosu`; warn at enable time when that will not resolve. */
 function dosuOnPath(): boolean {
-  const bin = process.platform === "win32" ? "dosu.cmd" : "dosu";
-  return (process.env.PATH ?? "")
-    .split(delimiter)
-    .some((dir) => dir !== "" && existsSync(join(dir, bin)));
+  return isOnPath(process.platform === "win32" ? "dosu.cmd" : "dosu");
 }

@@ -1228,6 +1228,19 @@ describe("ClaudeProvider", () => {
     const cfg = loadJSONConfig(configPath);
     expect(cfg.mcpServers).toEqual({ other: { command: "x" } });
   });
+
+  it("is detected on a fresh machine from `claude` on PATH, before ~/.claude exists", async () => {
+    const { ClaudeProvider } = await import("./claude");
+    mkdirSync(join(tempDir, "bin"));
+    vi.stubEnv("PATH", join(tempDir, "bin"));
+    try {
+      expect(ClaudeProvider().isInstalled()).toBe(false);
+      writeFileSync(join(tempDir, "bin", "claude"), "#!/bin/sh\n");
+      expect(ClaudeProvider().isInstalled()).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });
 
 describe("CursorProvider", () => {

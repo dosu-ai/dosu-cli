@@ -19,7 +19,6 @@ import {
 import { logger } from "../debug/logger";
 import type { CliLibrary } from "../generated/dosu-api-types";
 import { getHookAgent } from "../hooks/agents";
-import { disableClaudeContextHook, enableClaudeContextHook } from "../hooks/context";
 import { getIncognitoAgent } from "../incognito/agents";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
@@ -1241,21 +1240,6 @@ function setupStatusline(
   }
 }
 
-/** Claude Code's prompt-time memory hook rides along with its session hook: memory built from
- * shipped sessions comes back as a digest when a prompt warrants it. Not installed after the
- * user opted out of shipping; removed with the agent. Fail-open like the hook. */
-function setupContextHook(providerID: string, action: "enable" | "disable"): void {
-  if (providerID !== "claude") return;
-  try {
-    if (action === "disable") disableClaudeContextHook();
-    else if (isShippingEnabled(loadSyncState())) enableClaudeContextHook();
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.warn("setup", `Prompt-time memory hook ${action} failed: ${msg}`);
-    p.log.warn(`Could not ${action} Claude Code's prompt-time memory hook: ${msg}`);
-  }
-}
-
 /** The `/dosu-incognito` slash command rides along too: without it the status line has an
  * incognito state nobody can reach. Fail-open like the hook. */
 function setupIncognito(
@@ -1287,9 +1271,9 @@ export function stepConfigureTools(cfg: Config, selection: ToolSelection): Confi
     try {
       provider.install(cfg, true);
       logger.info("setup", `Configured ${provider.name()}`);
+      // The agent's hooks: the session-end trigger, plus prompt-time memory where it has one.
       const hook = syncSessionHook(provider.id(), "enable");
-      // Status line, slash command and prompt hook only make sense once the hook ships sessions.
-      if (hook) setupContextHook(provider.id(), "enable");
+      // Status line and slash command only make sense once the hook ships sessions.
       const bundle = hook
         ? {
             ...setupStatusline(provider.id(), "enable"),
@@ -1317,7 +1301,6 @@ export function stepConfigureTools(cfg: Config, selection: ToolSelection): Confi
       syncSessionHook(provider.id(), "disable");
       setupStatusline(provider.id(), "disable");
       setupIncognito(provider.id(), "disable");
-      setupContextHook(provider.id(), "disable");
     } catch (err: unknown) {
       /* v8 ignore next -- err is always Error in practice */
       const error = err instanceof Error ? err : new Error(String(err));

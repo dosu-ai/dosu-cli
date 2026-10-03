@@ -18,12 +18,16 @@ import { HOOK_COMMAND, HookConfigError } from "./formats";
 
 beforeEach(() => {
   fakeHome = mkdtempSync(join(tmpdir(), "dosu-agents-test-"));
+  // A PATH with nothing on it: whether an agent is installed is up to each test.
+  mkdirSync(join(fakeHome, "bin"));
+  vi.stubEnv("PATH", join(fakeHome, "bin"));
 });
 
 afterEach(() => {
   rmSync(fakeHome, { recursive: true, force: true });
   delete process.env.CODEX_HOME;
   delete process.env.CLAUDE_CONFIG_DIR;
+  vi.unstubAllEnvs();
 });
 
 function readJSON(path: string): Record<string, unknown> {
@@ -43,6 +47,11 @@ describe("registry", () => {
   it("reports installation from detect paths", () => {
     expect(getHookAgent("claude")?.isInstalled()).toBe(false);
     mkdirSync(join(fakeHome, ".claude"));
+    expect(getHookAgent("claude")?.isInstalled()).toBe(true);
+  });
+
+  it("counts Claude Code installed once `claude` is on PATH, before it ever ran", () => {
+    writeFileSync(join(fakeHome, "bin", "claude"), "#!/bin/sh\n");
     expect(getHookAgent("claude")?.isInstalled()).toBe(true);
   });
 });

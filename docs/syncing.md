@@ -1,7 +1,13 @@
 # Syncing sessions to Dosu memory
 
 `dosu knowledge hooks enable` installs a session-end hook (Claude Code, Cursor, Codex) that runs
-`dosu knowledge sync --quiet --detach`. The sync scans the last 30 days of agent sessions, keeps the
+`dosu knowledge sync --quiet --detach`; for Claude Code it also installs the prompt-time memory hook
+(`UserPromptSubmit` → `dosu knowledge context`) unless transcript shipping is off, and `disable`
+removes both. With no agent named it installs for every agent it detects and names the ones it
+skipped. Claude Code counts as detected when `~/.claude` (or `CLAUDE_CONFIG_DIR`) exists or
+`claude` is on PATH, so a freshly provisioned machine can set Dosu up before Claude Code's first
+run (which is what creates `~/.claude`); `dosu knowledge transcripts enable` and `dosu setup` detect
+it the same way, and say so when they skip it. The sync scans the last 30 days of agent sessions, keeps the
 ones its ledger has no answer for, applies the repo scope and pause switch from
 `~/.config/dosu-cli/knowledge-sync.json`, and ships them to Dosu memory (secrets redacted locally
 first), which learns from each session server-side. Shipping is on by default;

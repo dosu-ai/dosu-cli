@@ -1,8 +1,9 @@
 import { join } from "node:path";
+import { claudeCodeInstalled } from "../../hooks/claude-code";
 import { createJSONProvider } from "./base";
 
-export const ClaudeProvider = () =>
-  createJSONProvider({
+export const ClaudeProvider = () => ({
+  ...createJSONProvider({
     providerName: "Claude Code",
     providerID: "claude",
     local: true,
@@ -15,4 +16,7 @@ export const ClaudeProvider = () =>
     // removing the key, needs a new MCP_FORMAT_CHANGES entry to rewrite existing installs.
     buildServer: ({ url, headers }) => ({ type: "http", url, headers, alwaysLoad: true }),
     localConfigPath: (cwd) => join(cwd, ".mcp.json"),
-  });
+  }),
+  // `claude` on PATH counts too: a fresh machine sets Dosu up before Claude Code's first run.
+  isInstalled: claudeCodeInstalled,
+});
