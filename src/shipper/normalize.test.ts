@@ -209,6 +209,31 @@ describe("normalizeSessionRecords for Codex", () => {
     ]);
     expect(records?.[3]).toMatchObject({ role: "observation", content: report });
   });
+
+  it("ships a forked subagent without the parent history its rollout copies", async () => {
+    const parent = "01a0ff74-a68d-7ad0-83ee-80cf02c29b14";
+    const records = await normalizeSessionRecords(
+      codexSession([
+        codexMeta("01a0ff74-c903-73c2-b6b1-7546b84710ff", {
+          forked_from_id: parent,
+          parent_thread_id: parent,
+          thread_source: "subagent",
+          subagent_history_start_ordinal: 4,
+        }),
+        // Ordinals 1-3: the parent's history, copied in when the subagent was spawned.
+        codexMeta(parent, { thread_source: "user" }),
+        codexMessage("user", "Spawn a subagent to write the tests"),
+        codexMessage("assistant", "Spawning one."),
+        codexMessage("user", "Write test_calc.py for calc.py"),
+        codexMessage("assistant", "Wrote test_calc.py."),
+      ]),
+    );
+
+    expect(records?.filter((r) => r.role !== "meta").map((r) => r.content)).toEqual([
+      "Write test_calc.py for calc.py",
+      "Wrote test_calc.py.",
+    ]);
+  });
 });
 
 describe("redactRecords", () => {
