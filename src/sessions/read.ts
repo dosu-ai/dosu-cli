@@ -110,6 +110,20 @@ function readCodex(raw: string): SessionTurn[] {
   return turns;
 }
 
+/** pi: `type: "message"` entries carry the conversation; the system prompt, tool results, and
+ * extension entries (an injected memory digest among them) are not turns. */
+function readPi(raw: string): SessionTurn[] {
+  const turns: SessionTurn[] = [];
+  for (const record of jsonlRecords(raw)) {
+    if (record.type !== "message") continue;
+    const message = asRecord(record.message);
+    const role = message?.role;
+    if (role !== "user" && role !== "assistant") continue;
+    pushTurn(turns, role, textFromContent(message?.content, PLAIN_TEXT));
+  }
+  return turns;
+}
+
 function readOpencode(dbPath: string, sessionId: string): SessionTurn[] {
   // The id is interpolated into SQL; scanner-produced ids are opaque tokens,
   // so anything outside this charset is unexpected input, not a session.
@@ -151,13 +165,15 @@ export function readSessionTurns(session: AgentSession): SessionTurn[] {
         return readCodex(readFileSync(session.path, "utf8"));
       case "opencode":
         return readOpencode(session.path, session.id);
+      case "pi":
+        return readPi(readFileSync(session.path, "utf8"));
     }
   } catch {
     return [];
   }
 }
 
-/** Cursor + Claude Code + Codex names the skill report counts as rediscovery. */
+/** Cursor + Claude Code + Codex + pi names the skill report counts as rediscovery. */
 const REDISCOVERY_TOOLS = new Set([
   "Read",
   "Grep",
@@ -182,6 +198,14 @@ const REDISCOVERY_TOOLS = new Set([
   "list_dir",
   "grep_files",
   "read_file",
+  // pi's built-ins.
+  "read",
+  "bash",
+  "edit",
+  "write",
+  "grep",
+  "find",
+  "ls",
 ]);
 
 function isRediscoveryTool(name: string): boolean {
@@ -219,6 +243,19 @@ export function countRediscoveryToolCalls(session: AgentSession): number {
           const payload = asRecord(record.payload);
           if (payload?.type === "function_call" && typeof payload.name === "string") {
             if (isRediscoveryTool(payload.name)) n += 1;
+          }
+        }
+        return n;
+      }
+      case "pi": {
+        let n = 0;
+        for (const record of jsonlRecords(readFileSync(session.path, "utf8"))) {
+          const content = asRecord(record.message)?.content;
+          for (const item of Array.isArray(content) ? content : []) {
+            const call = asRecord(item);
+            if (call?.type === "toolCall" && typeof call.name === "string") {
+              if (isRediscoveryTool(call.name)) n += 1;
+            }
           }
         }
         return n;

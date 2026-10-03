@@ -334,6 +334,18 @@ describe("sessionToDigest", () => {
     ]);
   });
 
+  it("maps pi transcripts through their turns like opencode", () => {
+    const pi = session("p1", "pi", [
+      { type: "session", id: "p1", cwd: "/w" },
+      { type: "message", message: { role: "user", content: "ask pi" } },
+      { type: "message", message: { role: "assistant", content: [{ type: "text", text: "ok" }] } },
+    ]);
+    expect(sessionToDigest(pi).turns).toEqual([
+      { role: "user", line: 1, est_tokens: 2, text: ["ask pi"], tools: [] },
+      { role: "assistant", line: 2, est_tokens: 1, text: ["ok"], tools: [] },
+    ]);
+  });
+
   it("digestsForSessions keys one digest per session id", () => {
     const readable = claudeSession("d1", [{ type: "user", message: { content: "hello" } }]);
     const missing: AgentSession = {

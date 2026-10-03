@@ -20,6 +20,7 @@ const TRAJECTORY_SOURCES: Partial<Record<AgentSession["harness"], TranscriptTraj
   codex: "codex",
   // Not a file: its sessions are read out of opencode's DB as the export document.
   opencode: "opencode",
+  pi: "pi",
 };
 
 /** The raw transcript the adapter reads; null when unreadable. */

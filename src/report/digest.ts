@@ -255,7 +255,8 @@ export function sessionToDigest(session: AgentSession): ReportDigest {
         return { turns: digestCursor(readFileSync(session.path, "utf8")) };
       case "codex":
         return { turns: digestCodex(readFileSync(session.path, "utf8")) };
-      case "opencode": {
+      case "opencode":
+      case "pi": {
         const turns = readSessionTurns(session).map((turn, index) => ({
           role: turn.role,
           line: index + 1,

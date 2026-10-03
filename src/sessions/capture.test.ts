@@ -299,3 +299,43 @@ describe("endedSessionOf", () => {
     expect(endedSessionOf(payload)).toBeNull();
   });
 });
+
+describe("endedSessionOf for the Dosu pi extension", () => {
+  const piEnd = {
+    hook_event_name: "session_shutdown",
+    agent: "pi",
+    reason: "quit",
+    session_id: "01a0fdc5-a112",
+    transcript_path:
+      "/home/u/.pi/agent/sessions/--work--/2026-10-02T17-59-42-611Z_01a0fdc5-a112.jsonl",
+    cwd: "/work",
+  };
+
+  it.each(["quit", "new", "resume", "fork"])("reads a session_shutdown for %s", (reason) => {
+    expect(endedSessionOf({ ...piEnd, reason })).toEqual({
+      harness: "pi",
+      id: "01a0fdc5-a112",
+      path: piEnd.transcript_path,
+    });
+  });
+
+  it("reads any id pi accepts, and a transcript under any name (`pi --session <path>`)", () => {
+    const payload = { ...piEnd, session_id: "rv.task.2", transcript_path: "/runs/task-9.jsonl" };
+    expect(endedSessionOf(payload)).toEqual({
+      harness: "pi",
+      id: "rv.task.2",
+      path: "/runs/task-9.jsonl",
+    });
+  });
+
+  it.each([
+    // A reload tears the extension down and brings it back on the same session.
+    ["a reload", { ...piEnd, reason: "reload" }],
+    ["another agent's event of the same name", { ...piEnd, agent: "opencode" }],
+    ["an id pi would refuse", { ...piEnd, session_id: "../x" }],
+    ["a relative transcript path", { ...piEnd, transcript_path: "x_01a0fdc5-a112.jsonl" }],
+    ["no transcript (an ephemeral --no-session run)", { ...piEnd, transcript_path: undefined }],
+  ])("ignores %s", (_label, payload) => {
+    expect(endedSessionOf(payload)).toBeNull();
+  });
+});

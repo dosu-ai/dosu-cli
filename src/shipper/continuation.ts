@@ -51,6 +51,30 @@ export interface ShipPlan {
   fresh: NormalizedRecord[];
 }
 
+/** The prefix a fork or clone copied from the session it was made from: its meta record and the
+ * leading records the parent's normalized records hold too (past the parent's own meta record).
+ * That history is the parent's to ship; undefined when nothing is shared or the parent could not
+ * be read. */
+export function copiedPrefix(
+  records: readonly NormalizedRecord[],
+  parentRecords: readonly NormalizedRecord[] | null,
+): ShippedPrefix | undefined {
+  if (!parentRecords) return undefined;
+  const skipMeta = (list: readonly NormalizedRecord[]) => (list[0]?.role === "meta" ? 1 : 0);
+  const start = skipMeta(records);
+  const parentStart = skipMeta(parentRecords);
+  let shared = 0;
+  while (
+    start + shared < records.length &&
+    parentStart + shared < parentRecords.length &&
+    canonicalJson(records[start + shared]) === canonicalJson(parentRecords[parentStart + shared])
+  ) {
+    shared += 1;
+  }
+  if (shared === 0) return undefined;
+  return { records: start + shared, prefix_sha256: prefixSha256(records, start + shared) };
+}
+
 /** Ship the tail when the session still starts with what shipped before; otherwise all of it. */
 export function planShipment(
   records: NormalizedRecord[],

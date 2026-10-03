@@ -22,6 +22,7 @@ import {
   writeHookConfig,
 } from "./formats";
 import { opencodeHookAgent } from "./opencode";
+import { piHookAgent } from "./pi";
 
 export interface HookAgent {
   id(): string;
@@ -117,7 +118,7 @@ function claudeAgent(): HookAgent {
 }
 
 export function allHookAgents(): HookAgent[] {
-  return [claudeAgent(), cursorAgent(), codexHookAgent(), opencodeHookAgent()];
+  return [claudeAgent(), cursorAgent(), codexHookAgent(), opencodeHookAgent(), piHookAgent()];
 }
 
 export function getHookAgent(id: string): HookAgent | undefined {

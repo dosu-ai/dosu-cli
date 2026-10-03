@@ -155,6 +155,7 @@ To change a skill, edit `skills/<name>/…` and run `bun run embed:skills` to re
 | `cline-cli` | Cline CLI |
 | `copilot` | GitHub Copilot CLI |
 | `opencode` | OpenCode |
+| `pi` | Pi (installs the Dosu pi extension; global only) |
 | `antigravity` | Antigravity |
 | `mcporter` | MCPorter |
 | `factory` | Factory |
@@ -174,11 +175,14 @@ Combine with `dosu login --request` / `--check <ticket>` for human-in-the-loop a
 
 With `dosu knowledge hooks enable`, finished coding-agent sessions ship to Dosu memory in the
 background (secrets redacted locally first), and Dosu learns from them server-side. A Claude Code
-or Codex (0.160+) session ships as soon as it ends, and an OpenCode session as soon as the opencode
-process that ran it exits, however it exits (OpenCode gets a plugin rather than a hook, which also
-adds task memory to its prompts); other agents' sessions ship with a later sync once they have been
-quiet for five minutes (their end events are not wired up yet). A resumed session later ships only
-what is new. Shipping is on by default; `dosu knowledge transcripts disable` turns it off.
+or Codex (0.160+) session ships as soon as it ends, an OpenCode session as soon as the opencode
+process that ran it exits, however it exits, and a pi session as soon as pi shuts it down. OpenCode
+gets a plugin and pi an extension rather than a hook; both also add memory digests to prompts, and
+pi's adds `search_memory`/`get_memory_evidence` tools and `/dosu-incognito` (pi run with
+`--no-extensions` skips it, see [docs/syncing.md](docs/syncing.md#pi)). Cursor sessions ship with a
+later sync once they have been quiet for five minutes (its end event fires every turn). A resumed
+session later ships only what is new. Shipping is on by default; `dosu knowledge transcripts
+disable` turns it off.
 `dosu knowledge sync --status` and `dosu knowledge sessions` show what shipped and why anything did
 not (too short, rejected by the server, or from an agent not supported yet);
 `dosu knowledge sync --retry-rejected` tries refused sessions again. Running `claude -p` from an eval

@@ -1,6 +1,6 @@
 import type { NormalizedRecord } from "@letta-ai/trajectory";
 import { describe, expect, it } from "vitest";
-import { planShipment, prefixSha256 } from "./continuation";
+import { copiedPrefix, planShipment, prefixSha256 } from "./continuation";
 
 const meta = { role: "meta", source: "claude-code" } as NormalizedRecord;
 const user = (content: string) => ({ role: "user", content, timestamp: "t" }) as NormalizedRecord;
@@ -36,5 +36,26 @@ describe("planShipment", () => {
 
     expect(plan.records).toEqual([user("b")]);
     expect(plan.continuation?.from_record).toBe(1);
+  });
+});
+
+describe("copiedPrefix", () => {
+  const parentMeta = { role: "meta", source: "pi", cwd: "/elsewhere" } as NormalizedRecord;
+
+  it("covers the meta record and the leading records the parent has too", () => {
+    const records = [meta, user("a"), user("b"), user("mine")];
+
+    expect(copiedPrefix(records, [parentMeta, user("a"), user("b"), user("theirs")])).toEqual({
+      records: 3,
+      prefix_sha256: prefixSha256(records, 3),
+    });
+    expect(copiedPrefix(records, [user("a")])?.records).toBe(2);
+    expect(copiedPrefix([user("a"), user("b")], [user("a")])?.records).toBe(1);
+  });
+
+  it("is nothing when the parent shares no record, or there is no parent to read", () => {
+    expect(copiedPrefix([meta, user("a")], [parentMeta, user("b")])).toBeUndefined();
+    expect(copiedPrefix([meta, user("a")], [])).toBeUndefined();
+    expect(copiedPrefix([meta, user("a")], null)).toBeUndefined();
   });
 });
