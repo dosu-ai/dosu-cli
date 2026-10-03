@@ -352,7 +352,7 @@ export function applyHookTrust(text: string, plan: TrustPlan, path: string): str
   }
   if (!parsed || !isDeepStrictEqual(pruned(parsed), pruned(expectedState(original, plan)))) {
     throw new HookConfigError(
-      `${path} keeps Codex's hook state in a form Dosu cannot edit safely; left unchanged`,
+      `${path} keeps Codex's hook state in a form Dosu cannot edit safely (inline tables or dotted keys)`,
     );
   }
   return result;
