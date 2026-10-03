@@ -1,13 +1,13 @@
 # Syncing sessions to Dosu memory
 
-`dosu knowledge hooks enable` installs a session-end hook (Claude Code, Cursor, Codex) that runs
-`dosu knowledge sync --quiet --detach`. The sync scans the last 30 days of agent sessions, keeps the
-ones its ledger has no answer for, applies the repo scope and pause switch from
-`~/.config/dosu-cli/knowledge-sync.json`, and ships them to Dosu memory (secrets redacted locally
-first), which learns from each session server-side. Shipping is on by default;
-`dosu knowledge transcripts disable` turns it off. This document covers how a sync decides what to
-ship, the project key sessions are scoped by, the repo scope, and the two switches layered on top:
-a per-session opt-out and a status-bar indicator.
+`dosu knowledge hooks enable` installs a session-end hook (Claude Code, Cursor, Codex, and for pi
+the Dosu pi extension, see [Pi](#pi)) that runs `dosu knowledge sync --quiet --detach`. The sync
+scans the last 30 days of agent sessions, keeps the ones its ledger has no answer for, applies the
+repo scope and pause switch from `~/.config/dosu-cli/knowledge-sync.json`, and ships them to Dosu
+memory (secrets redacted locally first), which learns from each session server-side. Shipping is
+on by default; `dosu knowledge transcripts disable` turns it off. This document covers how a sync
+decides what to ship, the project key sessions are scoped by, the repo scope, and the two switches
+layered on top: a per-session opt-out and a status-bar indicator.
 
 ## What a sync ships
 
@@ -54,9 +54,10 @@ after a failure and ship its tail when it is resumed. If another run holds the s
 waits for it (up to ten minutes) instead of leaving the session for a later trigger. A paused hook
 run ships nothing, but still remembers where an ended session lives. While hook runs back off after
 a failure, a run carrying an ended session still tries that session, and only that one; if it gets
-through, the backoff ends. Only definitive end events count: Claude Code's `SessionEnd` today.
-Per-turn events (Cursor's `stop`, Codex's `Stop`) never pass `--ended`. Each agent's end event is
-one reader in `END_EVENT_READERS` (`src/sessions/capture.ts`).
+through, the backoff ends. Only definitive end events count: Claude Code's `SessionEnd`, and pi's
+`session_shutdown` as the Dosu pi extension reports it. Per-turn events (Cursor's `stop`, Codex's
+`Stop`) never pass `--ended`. Each agent's end event is one reader in `END_EVENT_READERS`
+(`src/sessions/capture.ts`).
 
 **Resumed sessions.** For a shipped session the ledger also keeps how many normalized records went
 and a sha256 of them. When the session grows and its records still start with exactly that prefix,
@@ -160,6 +161,7 @@ Properties worth knowing:
 - The command **instructs** the model to avoid Dosu tools; it does not block them. A `PreToolUse`
   hook that rejects Dosu tool calls when the marker is present is a possible follow-up.
 - OpenCode has no slash-command install here, but its sessions are checked for the marker too.
+- Pi's `/dosu-incognito` comes with the Dosu pi extension rather than this command (see [Pi](#pi)).
 
 ## Status line
 
@@ -201,6 +203,42 @@ never throws; anything unreadable renders as `⚪ Dosu off`.
 
 Dev installs (`DOSU_DEV=true`) pin the working copy and prefix with `env` rather than bare
 `NAME=value` assignments, because Cursor spawns the command without a shell.
+
+## Pi
+
+Pi has no hook config, so `dosu knowledge hooks enable pi` (and `dosu setup`, which lists pi as an
+agent; `dosu mcp add pi` does the same) writes one extension, `<agent dir>/extensions/dosu.ts`
+(`~/.pi/agent`, or `PI_CODING_AGENT_DIR`), which pi discovers on its next start or `/reload`. It is
+a single file rather than a pi package: `pi install` needs pi on PATH, network or a second
+directory, and an edit to pi's `settings.json` to undo; the extensions folder works offline in a
+throwaway VM.
+`hooks disable pi` deletes it, and neither command touches a `dosu.ts` that is not Dosu's. The
+extension shells out to `dosu` on PATH for everything, so it carries no credentials:
+
+- `session_shutdown` (quit, `/new`, `/resume`, `/fork`; not `/reload`, which keeps the session)
+  pipes `{hook_event_name: "session_shutdown", agent: "pi", session_id, transcript_path, cwd}` to
+  `dosu knowledge sync --quiet --detach`, so the session ships right away. Pi waits at most 3 s for
+  that process to take the payload, never for the upload.
+- `before_agent_start` asks `dosu knowledge context --agent pi --format plain` for a digest and adds
+  it to the run as a hidden custom message (`customType: "dosu-memory"`), which the trajectory
+  normalizer does not ship back.
+- `search_memory` and `get_memory_evidence` are pi tools that run
+  `dosu memory search|evidence --client pi -- <arg>` in the session's directory.
+- `/dosu-incognito` sends the incognito marker as the user's own message (which is what keeps the
+  session from shipping), removes the two memory tools from the model's tool set, and stops digests;
+  a resumed incognito session stays off. For pi only the user's turns are searched for the marker,
+  so a session whose model read a file quoting it still ships.
+
+Pi started with `--no-extensions` (`-ne`) loads none of this: no digest, no tools, and its sessions
+ship only on a later sync once they have been quiet for five minutes (an explicit
+`-e ~/.pi/agent/extensions/dosu.ts` still loads it). Every failure, a missing `dosu` included,
+leaves pi running as if Dosu were not installed.
+
+Pi keeps sessions at `<agent dir>/sessions/--<cwd>--/<timestamp>_<session id>.jsonl`; the scan lists
+them under `~/.pi/agent` and `PI_CODING_AGENT_DIR`, plus the flat folder a
+`PI_CODING_AGENT_SESSION_DIR` or absolute `sessionDir` setting points at, keyed `pi/<session id>`
+(the id `PI_SESSION_ID` and the header carry). The header's `cwd` gives the project key, and a
+`/fork` or `/clone` names its parent's transcript there, so it ships with `parent_session_id`.
 
 ## Manual check
 

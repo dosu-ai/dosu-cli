@@ -155,6 +155,7 @@ To change a skill, edit `skills/<name>/…` and run `bun run embed:skills` to re
 | `cline-cli` | Cline CLI |
 | `copilot` | GitHub Copilot CLI |
 | `opencode` | OpenCode |
+| `pi` | Pi (installs the Dosu pi extension; global only) |
 | `antigravity` | Antigravity |
 | `mcporter` | MCPorter |
 | `factory` | Factory |
@@ -174,9 +175,12 @@ Combine with `dosu login --request` / `--check <ticket>` for human-in-the-loop a
 
 With `dosu knowledge hooks enable`, finished coding-agent sessions ship to Dosu memory in the
 background (secrets redacted locally first), and Dosu learns from them server-side. A Claude Code
-session ships as soon as it ends; other agents' sessions ship with a later sync once they have been
-quiet for five minutes (their end events are not wired up yet). A resumed session later ships only
-what is new. Shipping is on by default; `dosu knowledge transcripts disable` turns it off.
+or pi session ships as soon as it ends; other agents' sessions ship with a later sync once they have
+been quiet for five minutes (their end events are not wired up yet). For pi the hook is an extension
+that also adds memory digests, `search_memory`/`get_memory_evidence` tools and `/dosu-incognito`;
+pi run with `--no-extensions` skips it ([docs/syncing.md](docs/syncing.md#pi)).
+A resumed session later ships only what is new. Shipping is on by default;
+`dosu knowledge transcripts disable` turns it off.
 `dosu knowledge sync --status` and `dosu knowledge sessions` show what shipped and why anything did
 not (too short, rejected by the server, or from an agent not supported yet);
 `dosu knowledge sync --retry-rejected` tries refused sessions again.
