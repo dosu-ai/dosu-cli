@@ -258,7 +258,30 @@ describe("knowledge sync of pi sessions", () => {
 
   it("keeps out a session where the user ran /dosu-incognito, and only such a session", async () => {
     const widget = gitRepo("widget", "git@github.com:acme/widget.git");
+    // What the Dosu pi extension's /dosu-incognito records, as pi writes an extension's entry.
     piSession("incognito", widget, [
+      ...exchange(1),
+      {
+        type: "custom",
+        customType: "dosu-incognito",
+        data: { marker: "dosu:incognito:v1" },
+        id: "c1",
+        parentId: "f1",
+        timestamp: "2026-10-02T18:00:00.000Z",
+      },
+      {
+        type: "custom_message",
+        customType: "dosu-incognito",
+        content: "Dosu incognito: this session stays off the record.",
+        display: true,
+        id: "c2",
+        parentId: "c1",
+        timestamp: "2026-10-02T18:00:00.000Z",
+      },
+      ...exchange(2),
+    ]);
+    // Extensions before it sent the marker as the user's own message.
+    piSession("legacy", widget, [
       ...exchange(1),
       ...exchange(2, "Dosu incognito marker: dosu:incognito:v1\n\nDosu is off for this session."),
     ]);
@@ -271,7 +294,11 @@ describe("knowledge sync of pi sessions", () => {
     await dosu("sync");
 
     expect(posted().map((p) => p.metadata.session_id)).toEqual(["quoting"]);
-    expect(loadSyncState().sessions["pi/incognito"]?.outcome).toBe("incognito");
+    const ledger = loadSyncState().sessions;
+    expect([ledger["pi/incognito"]?.outcome, ledger["pi/legacy"]?.outcome]).toEqual([
+      "incognito",
+      "incognito",
+    ]);
   });
 
   it("keeps a fork or clone of an incognito session off the record, even one made before the marker", async () => {

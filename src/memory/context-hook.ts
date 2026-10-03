@@ -14,6 +14,7 @@
  * goes through exactly as if Dosu were not installed. */
 
 import { basename } from "node:path";
+import { logger } from "../debug/logger";
 import { GIT_BUDGETS, projectOverride, resolveProjectOfDir } from "../sessions/project";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { SESSION_HARNESSES } from "../sessions/scan";
@@ -52,6 +53,8 @@ interface PromptHookPayload {
 
 interface ContextResponse {
   digest?: unknown;
+  reason?: unknown;
+  memory_ids?: unknown;
 }
 
 export interface ContextHookOptions {
@@ -130,10 +133,21 @@ export async function contextHookOutput(
   const cwd = str(payload.cwd);
   const branch = cwd ? (options.branchOf?.(cwd) ?? null) : null;
   const fetchImpl = options.fetchImpl ?? fetch;
+  const sessionId = sessionIdOf(payload, format);
+  const budgetMs = options.timeoutMs ?? CONTEXT_TIMEOUT_MS;
+  const startedAt = Date.now();
+  // Every outcome looks the same to the user -- no digest, prompt unchanged -- so the debug log
+  // is where this says which it was (never the prompt or the digest).
+  const note = (outcome: string) =>
+    logger.debug(
+      "context",
+      `${agent} ${sessionId ?? "-"}: ${outcome} in ${Date.now() - startedAt}ms`,
+    );
+  let signal: AbortSignal | undefined;
   try {
-    const sessionId = sessionIdOf(payload, format);
     const harness = harnessOf(agent);
     const project = projectOf(cwd, harness && sessionId ? `${harness}/${sessionId}` : null);
+    signal = AbortSignal.timeout(budgetMs);
     const response = await fetchImpl(`${options.backendUrl.replace(/\/$/, "")}/v1/memory/context`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Dosu-API-Key": options.apiKey },
@@ -147,18 +161,31 @@ export async function contextHookOutput(
         project,
         repo: project,
       }),
-      signal: AbortSignal.timeout(options.timeoutMs ?? CONTEXT_TIMEOUT_MS),
+      signal,
     });
-    if (response.status !== 200) return "";
+    if (response.status !== 200) {
+      note(`no digest, HTTP ${response.status}`);
+      return "";
+    }
     const body = (await response.json()) as ContextResponse;
     const digest = str(body.digest);
-    if (!digest) return "";
+    if (!digest) {
+      note(`no digest, ${str(body.reason) ?? "none"}`);
+      return "";
+    }
+    const count = Array.isArray(body.memory_ids) ? body.memory_ids.length : 0;
+    note(`injected ${count} ${count === 1 ? "memory" : "memories"}`);
     if (format === "plain") return digest;
     // Codex reads Claude Code's hook output shape.
     return JSON.stringify({
       hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: digest },
     });
-  } catch {
+  } catch (err) {
+    note(
+      signal?.aborted
+        ? `no digest, no answer within the ${budgetMs}ms budget`
+        : `no digest, ${err instanceof Error ? err.message : String(err)}`,
+    );
     return "";
   }
 }

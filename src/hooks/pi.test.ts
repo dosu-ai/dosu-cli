@@ -17,7 +17,8 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { endedSessionOf } from "../sessions/capture";
-import { textHasIncognitoMarker } from "../sync/incognito";
+import type { AgentSession } from "../sessions/scan";
+import { isIncognitoSession, textHasIncognitoMarker } from "../sync/incognito";
 import { setShipTranscripts } from "../sync/state";
 
 let fakeHome: string;
@@ -31,7 +32,8 @@ import { knowledgeCommand } from "../commands/knowledge";
 import { getHookAgent } from "./agents";
 import { HookConfigError } from "./formats";
 
-/** A `dosu` that logs argv, cwd and stdin, and answers per `<command> <subcommand>`. */
+/** A `dosu` that logs argv, cwd and stdin, and answers per `<command> <subcommand>`; a reply
+ * with `waitFor` answers only once that file exists, standing in for a slow start or server. */
 const FAKE_DOSU = `#!/usr/bin/env node
 const fs = require("node:fs");
 let input = "";
@@ -40,9 +42,13 @@ process.stdin.on("end", () => {
   const argv = process.argv.slice(2);
   fs.appendFileSync(process.env.FAKE_DOSU_LOG, JSON.stringify({ argv, cwd: process.cwd(), input }) + "\\n");
   const reply = JSON.parse(process.env.FAKE_DOSU_REPLIES || "{}")[argv.slice(0, 2).join(" ")] || {};
-  if (reply.stdout) process.stdout.write(reply.stdout);
-  if (reply.stderr) process.stderr.write(reply.stderr);
-  process.exit(reply.code || 0);
+  const answer = () => {
+    if (reply.waitFor && !fs.existsSync(reply.waitFor)) return setTimeout(answer, 10);
+    if (reply.stdout) process.stdout.write(reply.stdout);
+    if (reply.stderr) process.stderr.write(reply.stderr);
+    process.exit(reply.code || 0);
+  };
+  answer();
 });
 `;
 
@@ -72,7 +78,9 @@ afterEach(() => {
   rmSync(fakeHome, { recursive: true, force: true });
 });
 
-function replies(map: Record<string, { stdout?: string; stderr?: string; code?: number }>): void {
+function replies(
+  map: Record<string, { stdout?: string; stderr?: string; code?: number; waitFor?: string }>,
+): void {
   vi.stubEnv("FAKE_DOSU_REPLIES", JSON.stringify(map));
 }
 
@@ -93,13 +101,80 @@ function calls(): DosuCall[] {
 // biome-ignore lint/suspicious/noExplicitAny: pi's extension API, faked loosely
 type Any = any;
 
-/** A stand-in for the slice of pi's ExtensionAPI the extension uses. */
-function fakePi() {
+const userTurn = (text: string) => ({
+  type: "message",
+  message: { role: "user", content: [{ type: "text", text }] },
+});
+
+/** What the model reads of a session entry: user turns, and extension messages (pi hands those to
+ * the model as user-role context). */
+function modelText(entry: Any): string[] {
+  if (entry.type === "custom_message") return [entry.content];
+  if (entry.type === "message" && entry.message.role === "user") {
+    return [entry.message.content[0].text];
+  }
+  return [];
+}
+
+/** A stand-in for pi: the slice of its ExtensionAPI the extension uses, plus the behavior of pi's
+ * own that the extension depends on. One agent run at a time, and a prompt that finds another run
+ * starting or under way fails; `/name` runs an extension command instead; `sendUserMessage`
+ * starts a prompt without waiting for it; `appendEntry` and `sendMessage` add session entries
+ * (while a run is under way, a message is steered into it); with a UI, `ctx.ui` shows notices
+ * and fills the editor. `print` drives it the way `pi -p <message>...` does: each message in
+ * turn, failing on the first error. */
+function fakePi(options: { hasUI?: boolean } = {}) {
   const handlers = new Map<string, (event: Any, ctx: Any) => Any>();
   const tools = new Map<string, Any>();
   const commands = new Map<string, Any>();
-  const sent: { content: string; options: unknown }[] = [];
+  const entries: Any[] = [];
+  const steered: Any[] = [];
+  const failures: string[] = [];
+  const modelReads: string[][] = [];
+  const notices: { message: string; type?: string }[] = [];
   let active: string[] = ["read", "bash"];
+  let running = false;
+  let editorText = "";
+  const ui = {
+    notify: (message: string, type?: string) => notices.push({ message, type }),
+    setEditorText: (text: string) => {
+      editorText = text;
+    },
+  };
+  const ctx = (transcript?: string) => ({
+    ...piContext(entries, transcript),
+    isIdle: () => !running,
+    hasUI: !!options.hasUI,
+    ui,
+  });
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  async function prompt(text: string): Promise<void> {
+    const command = /^\/(\S+)\s*([\s\S]*)$/.exec(text);
+    if (command && commands.has(command[1])) {
+      await commands.get(command[1]).handler(command[2], ctx());
+      return;
+    }
+    // Input handlers and the auth check run before the agent run starts.
+    await tick();
+    if (running) {
+      throw new Error(
+        "Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.",
+      );
+    }
+    running = true;
+    try {
+      const result = await handlers.get("before_agent_start")?.({ prompt: text }, ctx());
+      entries.push(userTurn(text));
+      if (result?.message) entries.push({ type: "custom_message", ...result.message });
+      modelReads.push(entries.flatMap(modelText));
+      await tick();
+      entries.push({ type: "message", message: { role: "assistant", content: [] } });
+    } finally {
+      running = false;
+    }
+  }
+
   const api = {
     on: (event: string, handler: (event: Any, ctx: Any) => Any) => {
       handlers.set(event, handler);
@@ -114,9 +189,38 @@ function fakePi() {
     setActiveTools: (names: string[]) => {
       active = names;
     },
-    sendUserMessage: (content: string, options?: unknown) => sent.push({ content, options }),
+    sendUserMessage: (content: string) => {
+      prompt(content).catch((err: Error) => failures.push(err.message));
+    },
+    sendMessage: (message: Any) => {
+      if (running) steered.push(message);
+      else entries.push({ type: "custom_message", ...message });
+    },
+    appendEntry: (customType: string, data?: unknown) => {
+      entries.push({ type: "custom", customType, data });
+    },
   };
-  return { api, handlers, tools, commands, sent, active: () => active };
+  return {
+    api,
+    handlers,
+    tools,
+    commands,
+    entries,
+    steered,
+    failures,
+    modelReads,
+    notices,
+    editorText: () => editorText,
+    active: () => active,
+    print: async (...messages: string[]) => {
+      for (const message of messages) await prompt(message);
+    },
+    /** A run under way, for commands typed mid-run. */
+    startRun: () => {
+      running = true;
+    },
+    context: ctx,
+  };
 }
 
 const TRANSCRIPT_NAME = "2026-10-02T17-59-42-611Z_01a0fdc5-a112.jsonl";
@@ -140,14 +244,27 @@ function piContext(
 }
 
 /** Enable pi the way `dosu knowledge hooks enable pi` does, then load the file pi would load. */
-async function loadExtension() {
+async function loadExtension(options: { hasUI?: boolean } = {}) {
   const agent = getHookAgent("pi");
   agent?.enable();
   const path = agent?.configPath() as string;
   const { default: extension } = await import(`${pathToFileURL(path).href}?t=${Date.now()}`);
-  const pi = fakePi();
+  const pi = fakePi(options);
   extension(pi.api);
   return pi;
+}
+
+/** The transcript pi saves for `entries`, as the sync later reads it: pi writes a session's file
+ * once it has a user or assistant message, and none before. */
+function savedSession(entries: unknown[], name = "01a0fdc5-a112"): AgentSession | null {
+  const conversation = entries.some(
+    (e) => (e as Any).type === "message" && ["user", "assistant"].includes((e as Any).message.role),
+  );
+  if (!conversation) return null;
+  const path = join(fakeHome, `${name}.jsonl`);
+  const header = { type: "session", version: 3, id: name, cwd };
+  writeFileSync(path, `${[header, ...entries].map((e) => JSON.stringify(e)).join("\n")}\n`);
+  return { id: name, harness: "pi", path, updated: new Date().toISOString() };
 }
 
 describe("pi hook agent", () => {
@@ -295,6 +412,32 @@ describe("the Dosu pi extension", () => {
     expect(await beforeStart?.({ prompt: "and then?" }, piContext())).toBeUndefined();
   });
 
+  it("leaves the CLI its own server budget, even when it starts slowly, and stops one that hangs", async () => {
+    // The CLI gives the server 4s and gives up on its own, saying why in its debug log. Before
+    // that it may spend over a second starting (a freshly installed binary's first run) and on
+    // git for the project key; the extension only stops a CLI that never answers.
+    const answerNow = join(fakeHome, "answer-now");
+    replies({ "knowledge context": { stdout: "Dosu memory: PELICAN\n", waitFor: answerNow } });
+    const pi = await loadExtension();
+    const beforeStart = pi.handlers.get("before_agent_start");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const slow = beforeStart?.({ prompt: "how do I deploy?" }, piContext());
+      vi.advanceTimersByTime(7_000);
+      writeFileSync(answerNow, "");
+      expect(await slow).toEqual({
+        message: { customType: "dosu-memory", content: "Dosu memory: PELICAN", display: false },
+      });
+
+      rmSync(answerNow);
+      const hung = beforeStart?.({ prompt: "and then?" }, piContext());
+      vi.advanceTimersByTime(10_000);
+      expect(await hung).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("answers search_memory and get_memory_evidence through `dosu memory`", async () => {
     const pi = await loadExtension();
     replies({
@@ -327,62 +470,124 @@ describe("the Dosu pi extension", () => {
     ).rejects.toThrow("Not signed in. Run dosu setup.");
   });
 
-  it("/dosu-incognito records the marker as the user's turn and turns Dosu off", async () => {
+  it('`pi -p "/dosu-incognito" "<task>"` runs the task with Dosu off, and never ships it', async () => {
     const pi = await loadExtension();
+    replies({ "knowledge context": { stdout: "Dosu memory: the deploy codeword is PELICAN\n" } });
 
-    await pi.commands.get("dosu-incognito").handler("", piContext());
+    await pi.print("/dosu-incognito", "fix the failing tests");
 
-    const [message] = pi.sent;
-    expect(textHasIncognitoMarker(message.content)).toBe(true);
-    expect(message.options).toBeUndefined();
+    // The task is the run's only turn, and the model reads it after being told Dosu is off.
+    expect(pi.failures).toEqual([]);
+    expect(pi.modelReads).toHaveLength(1);
+    const read = pi.modelReads[0];
+    expect(read.at(-1)).toBe("fix the failing tests");
+    expect(read.slice(0, -1).join("\n")).toMatch(/do not call the Dosu memory tools/i);
+    // No digest was asked for, and the memory tools are gone.
+    expect(calls()).toEqual([]);
     expect(pi.active()).toEqual(["read", "bash"]);
-    expect(
-      await pi.handlers.get("before_agent_start")?.({ prompt: message.content }, piContext()),
-    ).toBeUndefined();
-    expect(
-      await pi.handlers.get("before_agent_start")?.({ prompt: "next" }, piContext()),
-    ).toBeUndefined();
     await expect(
       pi.tools.get("search_memory").execute("c", { query: "x" }, undefined, undefined, piContext()),
     ).rejects.toThrow(/off for this session/);
-    expect(calls()).toEqual([]);
+    // The transcript pi saves is one the sync keeps off the record.
+    const saved = savedSession(pi.entries);
+    expect(saved && isIncognitoSession(saved)).toBe(true);
   });
 
-  it("steers the marker in when the agent is mid-run", async () => {
+  it("mid-run, /dosu-incognito records the opt-out at once and steers the note into the run", async () => {
+    const pi = await loadExtension({ hasUI: true });
+    pi.entries.push(userTurn("refactor the parser"));
+    pi.startRun();
+
+    await pi.print("/dosu-incognito");
+
+    // Already in the transcript pi is writing: quitting before the run ends still keeps it off.
+    const saved = savedSession(pi.entries);
+    expect(saved && isIncognitoSession(saved)).toBe(true);
+    expect(pi.steered.map((m) => m.content).join("\n")).toMatch(
+      /do not call the Dosu memory tools/i,
+    );
+    expect(pi.active()).toEqual(["read", "bash"]);
+  });
+
+  it("says so when a print run ends on /dosu-incognito with nothing for pi to save", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const unsaved = join(fakeHome, "never-written.jsonl");
+
     const pi = await loadExtension();
+    await pi.print("/dosu-incognito");
+    await pi.handlers.get("session_shutdown")?.({ reason: "quit" }, pi.context(unsaved));
+    expect(stderr.mock.calls.join("")).toContain('pi -p "/dosu-incognito" "<task>"');
 
-    await pi.commands.get("dosu-incognito").handler("", { ...piContext(), isIdle: () => false });
+    // Pi's TUI showed the note already; and a session that ran is saved and off the record.
+    stderr.mockClear();
+    for (const [options, messages] of [
+      [{ hasUI: true }, ["/dosu-incognito"]],
+      [{}, ["/dosu-incognito", "fix it"]],
+    ] as const) {
+      const other = await loadExtension(options);
+      await other.print(...messages);
+      const saved = savedSession(other.entries)?.path;
+      await other.handlers.get("session_shutdown")?.(
+        { reason: "quit" },
+        other.context(saved ?? unsaved),
+      );
+    }
+    expect(stderr.mock.calls.join("")).not.toContain("/dosu-incognito");
+  });
 
-    expect(pi.sent[0].options).toEqual({ deliverAs: "steer" });
+  it("/dosu-incognito runs no task given after it, and says so rather than lose it", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const unsaved = join(fakeHome, "never-written.jsonl");
+
+    // `pi -p "/dosu-incognito <task>"`: Dosu goes off, and stderr says the task did not run and
+    // how to give it.
+    const pi = await loadExtension();
+    await pi.print("/dosu-incognito fix the failing tests");
+    await pi.handlers.get("session_shutdown")?.({ reason: "quit" }, pi.context(unsaved));
+    expect(pi.failures).toEqual([]);
+    expect(pi.modelReads).toEqual([]);
+    expect(pi.active()).toEqual(["read", "bash"]);
+    const said = stderr.mock.calls.join("");
+    expect(said).toContain("/dosu-incognito takes no task");
+    expect(said).toContain('pi -p "/dosu-incognito" "<task>"');
+    expect(said).not.toContain("nothing ran");
+
+    // In the TUI the task goes back in the editor, an Enter away from running with Dosu off.
+    stderr.mockClear();
+    const tui = await loadExtension({ hasUI: true });
+    await tui.print("/dosu-incognito  fix the failing tests ");
+    expect(tui.modelReads).toEqual([]);
+    expect(tui.editorText()).toBe("fix the failing tests");
+    expect(tui.notices).toEqual([
+      { message: expect.stringContaining("/dosu-incognito takes no task"), type: "warning" },
+    ]);
+    expect(stderr).not.toHaveBeenCalled();
+    await tui.print(tui.editorText());
+    expect(tui.modelReads.at(-1)?.at(-1)).toBe("fix the failing tests");
+    expect(calls().filter((call) => call.argv[1] === "context")).toEqual([]);
+    const saved = savedSession(tui.entries);
+    expect(saved && isIncognitoSession(saved)).toBe(true);
   });
 
   it("a resumed session that went incognito stays off", async () => {
-    const pi = await loadExtension();
-    const entries = [
-      { type: "message", message: { role: "user", content: [{ type: "text", text: "hi" }] } },
-      {
-        type: "message",
-        message: {
-          role: "user",
-          content: [{ type: "text", text: "Dosu incognito marker: dosu:incognito:v1" }],
-        },
-      },
+    // The record /dosu-incognito leaves, and the user turn extensions before it sent instead.
+    const records = [
+      { type: "custom", customType: "dosu-incognito", data: { marker: "dosu:incognito:v1" } },
+      userTurn("Dosu incognito marker: dosu:incognito:v1"),
     ];
+    for (const record of records) {
+      const pi = await loadExtension();
+      pi.handlers.get("session_start")?.({ reason: "resume" }, piContext([userTurn("hi"), record]));
 
-    pi.handlers.get("session_start")?.({ reason: "resume" }, piContext(entries));
-
-    expect(pi.active()).toEqual(["read", "bash"]);
-    expect(await pi.handlers.get("before_agent_start")?.({ prompt: "q" }, piContext())).toBe(
-      undefined,
-    );
+      expect(pi.active()).toEqual(["read", "bash"]);
+      expect(await pi.handlers.get("before_agent_start")?.({ prompt: "q" }, piContext())).toBe(
+        undefined,
+      );
+    }
     expect(calls()).toEqual([]);
   });
 
   it("a fork or clone of an incognito session stays off, at any depth", async () => {
-    const userTurn = (text: string) => ({
-      type: "message",
-      message: { role: "user", content: [{ type: "text", text }] },
-    });
     const transcript = (name: string, entries: unknown[], parentSession?: string) => {
       const path = join(fakeHome, `${name}.jsonl`);
       const header = { type: "session", id: name, cwd, parentSession };
@@ -391,13 +596,17 @@ describe("the Dosu pi extension", () => {
     };
     const incognito = transcript("incognito", [
       userTurn("hi"),
+      { type: "custom", customType: "dosu-incognito", data: { marker: "dosu:incognito:v1" } },
+    ]);
+    const legacy = transcript("legacy", [
+      userTurn("hi"),
       userTurn("Dosu incognito marker: dosu:incognito:v1"),
     ]);
     // Forked before the marker: the copy has the work, not the marker.
     const fork = transcript("fork", [userTurn("hi")], incognito);
     const plain = transcript("plain", [userTurn("hi")]);
 
-    for (const parent of [incognito, fork]) {
+    for (const parent of [incognito, legacy, fork]) {
       const pi = await loadExtension();
       pi.handlers.get("session_start")?.(
         { reason: "fork" },

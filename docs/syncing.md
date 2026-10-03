@@ -505,13 +505,26 @@ extension shells out to `dosu` on PATH for everything, so it carries no credenti
   that process to take the payload, never for the upload.
 - `before_agent_start` asks `dosu knowledge context --agent pi --format plain` for a digest and adds
   it to the run as a hidden custom message (`customType: "dosu-memory"`), which the trajectory
-  normalizer does not ship back.
+  normalizer does not ship back. The CLI gives the server 4 s and then gives up on its own; for
+  every agent it records the outcome of each lookup in `debug.log` as a `[context]` line (memories
+  injected, the server's reason for none, an HTTP status, or the budget running out), never the
+  prompt or the digest. The extension stops only a CLI that has not answered in 10 s, which leaves
+  room for a slow first start.
 - `search_memory` and `get_memory_evidence` are pi tools that run
   `dosu memory search|evidence --client pi -- <arg>` in the session's directory.
-- `/dosu-incognito` sends the incognito marker as the user's own message (which is what keeps the
-  session from shipping), removes the two memory tools from the model's tool set, and stops digests;
-  a resumed incognito session stays off. For pi only the user's turns are searched for the marker,
-  so a session whose model read a file quoting it still ships. A fork or clone of an incognito
+- `/dosu-incognito` records the opt-out as an extension entry
+  (`{type: "custom", customType: "dosu-incognito", data: {marker}}`, which is what keeps the session
+  from shipping), adds a note telling the model Dosu is off (shown in the TUI), removes the two
+  memory tools from the model's tool set, and stops digests. It starts no turn of its own, so it
+  works the same in the TUI, mid-run, and in print mode: `pi -p "/dosu-incognito" "<task>"` runs
+  the task off the record. For the same reason it does not run a task typed after it on the same
+  line (`/dosu-incognito fix the tests`, unlike Claude Code's command): Dosu still goes off, and
+  the extension says the task did not run, on stderr in print mode, while the TUI puts the task
+  back in the editor to send with Enter. Pi saves a session only once it has a message, so a print
+  run with nothing after the command saves none, and says so on stderr: a later run with the same
+  `--session-id` would be a new session. A resumed incognito session stays off. Only that entry,
+  or a user turn carrying the marker (what the extension sent before it kept a record), counts, so
+  a session whose model read a file quoting the marker still ships. A fork or clone of an incognito
   session (or of a fork of one, at any depth) stays off too, in the extension and in the sync, even
   when it was forked from a message before the marker: it holds what the session did off the
   record and carries on from there.
