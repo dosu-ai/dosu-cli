@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -422,5 +422,77 @@ describe("contextHookOutput for other agents", () => {
     const fetchImpl = respond(200, { digest: DIGEST });
     expect(await contextHookOutput(stdin, { ...options, fetchImpl })).toBe("");
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe("contextHookOutput when git hangs", () => {
+  let bin: string;
+  let calls: string;
+
+  beforeEach(() => {
+    // A git that never answers in time, as a hung network filesystem would; it logs each call.
+    bin = mkdtempSync(join(tmpdir(), "dosu-context-git-"));
+    calls = join(bin, "calls.log");
+    writeFileSync(calls, "");
+    writeFileSync(join(bin, "git"), `#!/bin/sh\necho "$*" >> "${calls}"\nsleep 3\n`, {
+      mode: 0o755,
+    });
+    vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(bin, { recursive: true, force: true });
+  });
+
+  /** The git subcommands run since the last look. */
+  const gitRan = (() => {
+    let seen = 0;
+    return () => {
+      const lines = readFileSync(calls, "utf-8").split("\n").filter(Boolean);
+      const fresh = lines.slice(seen).map((line) => line.split(" ")[2]);
+      seen = lines.length;
+      return fresh;
+    };
+  })();
+
+  async function ask(stdin: string): Promise<Record<string, unknown>> {
+    const fetchImpl = respond(200, { digest: null });
+    await contextHookOutput(stdin, { ...base, fetchImpl });
+    return sentBody(fetchImpl);
+  }
+
+  it("waits on git once per session, for the project and the branch alike", async () => {
+    gitRan();
+    expect(await ask(payload({ session_id: "slow-1" }))).toMatchObject({
+      project: null,
+      branch: null,
+    });
+    // The project lookup ran out of time: the branch is not asked for on top of it.
+    expect(gitRan()).toEqual(["remote"]);
+    expect(await ask(payload({ session_id: "slow-1" }))).toMatchObject({ branch: null });
+    expect(gitRan()).toEqual([]);
+  });
+
+  it("a branch lookup that runs out of time is not retried on the session's later prompts", async () => {
+    // The project needs no git; the branch does.
+    process.env.DOSU_PROJECT = "poc-slow";
+    gitRan();
+    expect(await ask(payload({ session_id: "slow-2" }))).toMatchObject({
+      project: "poc-slow",
+      branch: null,
+    });
+    expect(gitRan()).toEqual(["symbolic-ref"]);
+    expect(await ask(payload({ session_id: "slow-2" }))).toMatchObject({ branch: null });
+    expect(gitRan()).toEqual([]);
+  });
+
+  it("without a session to remember it for, skips the branch once the project ran out", async () => {
+    gitRan();
+    expect(await ask(payload({ session_id: undefined }))).toMatchObject({
+      project: null,
+      branch: null,
+    });
+    expect(gitRan()).toEqual(["remote"]);
   });
 });

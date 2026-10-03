@@ -73,10 +73,19 @@ export function originRepoOfDir(dir: string): string | null {
   return out === null ? null : normalizeRepoRemote(out);
 }
 
-/** The branch checked out in `dir` right now; null on a detached HEAD or outside a repo. */
+/** The branch checked out in `dir` right now; null on a detached HEAD or outside a repo,
+ * GIT_TIMED_OUT when git took over a second. */
+export function currentBranchAnswer(dir: string): string | null | typeof GIT_TIMED_OUT {
+  const out = gitAnswer(dir, ["symbolic-ref", "--short", "-q", "HEAD"], 1_000);
+  if (out === GIT_TIMED_OUT) return out;
+  return out?.trim() || null;
+}
+
+/** The branch checked out in `dir` right now; null on a detached HEAD, outside a repo, or when
+ * git took over a second. */
 export function currentBranchOfDir(dir: string): string | null {
-  const out = gitOutput(dir, ["symbolic-ref", "--short", "-q", "HEAD"], 1_000)?.trim();
-  return out ? out : null;
+  const branch = currentBranchAnswer(dir);
+  return branch === GIT_TIMED_OUT ? null : branch;
 }
 
 /** `dir`'s HEAD reflog, newest first, one `HEAD@{<unix seconds>}\t<subject>` line per entry;

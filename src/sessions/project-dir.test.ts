@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProjectDirResolver, cwdFromJsonlHead, unmungeSlug } from "./project-dir";
+import { GIT_TIMED_OUT } from "./repo";
 import type { AgentSession } from "./scan";
 
 let tempDir: string;
@@ -376,6 +377,15 @@ describe("resolveBranch", () => {
     expect(resolver.resolveBranch(s)).toBe("trunk");
     expect(resolver.resolveBranch({ ...s, id: "t2" })).toBe("trunk");
     expect(currentBranch).toHaveBeenCalledTimes(1);
+  });
+
+  it("is null when the reflog has no checkout and git runs out of time for the current branch", () => {
+    const resolver = createProjectDirResolver(tempDir, {
+      ...noGit,
+      currentBranch: () => GIT_TIMED_OUT,
+      reflogOfDir: () => "HEAD@{1}\tcommit (initial): x",
+    });
+    expect(resolver.resolveBranch(session({ harness: "opencode", project: "/work/d" }))).toBeNull();
   });
 
   it("is null when the reflog has no checkout and HEAD is detached", () => {

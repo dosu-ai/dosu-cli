@@ -23,7 +23,7 @@ import {
   type ProjectKey,
   projectOverride,
 } from "./project";
-import { currentBranchOfDir, headReflogOfDir, originRepoOfDir } from "./repo";
+import { currentBranchAnswer, GIT_TIMED_OUT, headReflogOfDir, originRepoOfDir } from "./repo";
 import { type AgentSession, parentSessionOf, scanAgentSessions, sessionAtPath } from "./scan";
 
 const CACHE_FILENAME = "project-dirs.json";
@@ -48,7 +48,8 @@ interface CacheEntry {
    * shipped it), so its prompts and its transcript carry the same one; absent until known. */
   branch?: string;
   /** A prompt hook's git lookup ran out of time: the session's later prompts skip git (and send
-   * no key) rather than keep the user waiting again, and the sync resolves it patiently. */
+   * no key or branch) rather than keep the user waiting again, and the sync resolves it
+   * patiently. */
   git_timed_out?: true;
 }
 
@@ -153,7 +154,7 @@ export interface ProjectDirDeps {
   repoOfDir?: (dir: string) => string | null;
   captured?: (key: string) => CapturedSession | null;
   reflogOfDir?: (dir: string) => string | null;
-  currentBranch?: (dir: string) => string | null;
+  currentBranch?: (dir: string) => string | null | typeof GIT_TIMED_OUT;
   gitProjectOfDir?: (dir: string, budget: GitBudget, knownRoot?: string) => ProjectKey | null;
   /** The hook's environment, for resolveProjectAt's DOSU_PROJECT; defaults to process.env. */
   env?: NodeJS.ProcessEnv;
@@ -192,7 +193,8 @@ export interface ProjectDirResolver {
   resolveBranch(session: AgentSession, at?: string): string | null;
   /** The branch for a session whose working directory the caller already knows (a prompt hook's
    * cwd): the one cached under its `harness/id` key, else the one checked out there now, which is
-   * cached so the session's later prompts and its shipped transcript carry it too. */
+   * cached so the session's later prompts and its shipped transcript carry it too. Null, and no
+   * git asked, once git ran out of a prompt's time for the session. */
   resolveBranchAt(key: string, dir: string): string | null;
   /** Cache-only lookup by `harness/id` key — for history rows with no session file at hand. */
   cached(key: string): string | null;
@@ -249,7 +251,7 @@ export function createProjectDirResolver(
   // Many sessions share a directory; one git call per directory per resolver.
   const repoByDir = new Map<string, string | null>();
   const reflogOfDir = deps.reflogOfDir ?? headReflogOfDir;
-  const currentBranch = deps.currentBranch ?? currentBranchOfDir;
+  const currentBranch = deps.currentBranch ?? currentBranchAnswer;
   const reflogByDir = new Map<string, ReturnType<typeof parseReflog>>();
   const currentByDir = new Map<string, string | null>();
 
@@ -263,7 +265,10 @@ export function createProjectDirResolver(
       reflogByDir.set(dir, entries);
     }
     return branchFromReflog(entries, Math.floor(when / 1000), () => {
-      if (!currentByDir.has(dir)) currentByDir.set(dir, currentBranch(dir));
+      if (!currentByDir.has(dir)) {
+        const branch = currentBranch(dir);
+        currentByDir.set(dir, branch === GIT_TIMED_OUT ? null : branch);
+      }
       return currentByDir.get(dir) ?? null;
     });
   };
@@ -410,15 +415,16 @@ export function createProjectDirResolver(
       return branch;
     },
     resolveBranchAt(key, dir) {
-      const pinned = entries[key]?.branch;
-      if (pinned) return pinned;
+      const entry = entries[key];
+      if (entry?.branch) return entry.branch;
+      if (entry?.git_timed_out) return null;
       const branch = currentBranch(dir);
-      if (branch) {
-        entries[key] ??= { dir, mtime: "" };
-        entries[key].branch = branch;
-        touched.add(key);
-      }
-      return branch;
+      if (branch === null) return null;
+      entries[key] ??= { dir, mtime: "" };
+      if (branch === GIT_TIMED_OUT) entries[key].git_timed_out = true;
+      else entries[key].branch = branch;
+      touched.add(key);
+      return branch === GIT_TIMED_OUT ? null : branch;
     },
     flush() {
       if (touched.size === 0) return;

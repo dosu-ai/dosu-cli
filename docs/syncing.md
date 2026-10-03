@@ -255,8 +255,8 @@ ships under the same project it was served memory for. A link added later applie
 resolved (the unshipped backlog), not to ones already served or shipped. Only a `path:` answer is
 looked up again once the session file changes, since the directory may have become a repository.
 A git lookup that runs out of time is no answer, never a reason to fall back to `path:`: the prompt
-hook, which keeps the prompt waiting, then sends no key for the rest of that session, and the sync,
-which can wait minutes, resolves it. A root commit found once is reused for later sessions in the
+hook, which keeps the prompt waiting, then sends no key (and no branch, nor asks git for one) for
+the rest of that session, and the sync, which can wait minutes, resolves it. A root commit found once is reused for later sessions in the
 same directory while the repository still has it, so the long walk happens once.
 
 `DOSU_PROJECT` counts only in the session's own agent's environment: the prompt hook, and the

@@ -16,7 +16,7 @@
 import { basename } from "node:path";
 import { GIT_BUDGETS, projectOverride, resolveProjectOfDir } from "../sessions/project";
 import { createProjectDirResolver } from "../sessions/project-dir";
-import { currentBranchOfDir } from "../sessions/repo";
+import { currentBranchAnswer, GIT_TIMED_OUT } from "../sessions/repo";
 import { SESSION_HARNESSES } from "../sessions/scan";
 import { trajectorySourceOf } from "../shipper/normalize";
 import {
@@ -65,7 +65,7 @@ export interface ContextHookOptions {
   /** Injectable boundaries, for tests. */
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
   /** The branch checked out in a directory now; defaults to asking git. */
-  branchOf?: (cwd: string) => string | null;
+  branchOf?: (cwd: string) => string | null | typeof GIT_TIMED_OUT;
   isIncognito?: (transcriptPath: string) => boolean;
 }
 
@@ -81,17 +81,20 @@ function harnessOf(agent: string): string | null {
 
 /** The project key and branch for the prompt's cwd, cached under the session's scanner key so
  * the transcript ships under the same ones later, and the session's later prompts keep its first
- * branch; DOSU_PROJECT alone when the payload has no cwd. The key is null when git could not
- * answer within the prompt's budget: better no key than one the session will not ship under. */
+ * branch; DOSU_PROJECT alone when the payload has no cwd. Both are null when git could not
+ * answer within the prompt's budget, and git is not asked again: better no key than one the
+ * session will not ship under, and no branch than a prompt kept waiting. */
 function scopeOf(
   cwd: string | null,
   sessionKey: string | null,
-  branchOf: (cwd: string) => string | null,
+  branchOf: NonNullable<ContextHookOptions["branchOf"]>,
 ): { project: string | null; branch: string | null } {
   if (cwd === null) return { project: projectOverride(null)?.project ?? null, branch: null };
   if (sessionKey === null) {
+    // Null only when git ran out of time.
     const project = resolveProjectOfDir(cwd, { budget: GIT_BUDGETS.prompt })?.project ?? null;
-    return { project, branch: branchOf(cwd) };
+    const branch = project === null ? null : branchOf(cwd);
+    return { project, branch: branch === GIT_TIMED_OUT ? null : branch };
   }
   const resolver = createProjectDirResolver(undefined, { currentBranch: branchOf });
   const project = resolver.resolveProjectAt(sessionKey, cwd)?.project ?? null;
@@ -142,7 +145,7 @@ export async function contextHookOutput(
     const { project, branch } = scopeOf(
       cwd,
       harness && sessionId ? `${harness}/${sessionId}` : null,
-      options.branchOf ?? currentBranchOfDir,
+      options.branchOf ?? currentBranchAnswer,
     );
     const response = await fetchImpl(`${options.backendUrl.replace(/\/$/, "")}/v1/memory/context`, {
       method: "POST",
