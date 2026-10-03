@@ -9,7 +9,10 @@ import {
   filterSessionsByRepo,
   gateSessions,
   loadSyncState,
+  sessionKey,
+  skipBacklog,
   studyRepoFilter,
+  unsettledSessions,
   withoutSubagents,
 } from "./state";
 import { SCAN_WINDOW_DAYS, withOutsideSessions } from "./sync";
@@ -27,12 +30,14 @@ export interface SessionBacklog {
   subagents?: number;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 /** The pending backlog within the sync's own scan window, oldest first; a failed scan reads as
  * empty. */
 export function listSessionBacklog(now: Date = new Date()): SessionBacklog {
   try {
     const state = loadSyncState();
-    const since = new Date(now.getTime() - SCAN_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+    const since = new Date(now.getTime() - SCAN_WINDOW_DAYS * DAY_MS);
     // Plus the transcripts outside the scanned roots that the sync remembers and would ship too.
     const { sessions: scanned } = withOutsideSessions(
       scanAgentSessions({ since }),
@@ -58,4 +63,46 @@ export function listSessionBacklog(now: Date = new Date()): SessionBacklog {
   } catch {
     return { queued: [], open: [], incognito: [] };
   }
+}
+
+/** What `skipSessionBacklog` passed over: sessions, and the subagents' transcripts with them. */
+export interface SkippedBacklog {
+  sessions: number;
+  subagents: number;
+}
+
+/** Settle as skipped by the user every session in the scan window and the repo scope that the
+ * ledger has never settled and that was last active before `before`, as declining setup's
+ * backfill offer does: none of them ships, while anything that finishes or changes from here on
+ * still does. A subagent counts as active when its session was, so the two are decided together.
+ * Ships nothing, and works with shipping switched off, so a provisioning script can set the
+ * starting point before turning shipping on. Sessions outside the scope are left unsettled, for
+ * a later, wider scope to decide. */
+export function skipSessionBacklog(before: Date, now: Date = new Date()): SkippedBacklog {
+  const state = loadSyncState();
+  const since = new Date(now.getTime() - SCAN_WINDOW_DAYS * DAY_MS);
+  const { sessions: scanned } = withOutsideSessions(
+    scanAgentSessions({ since }),
+    [],
+    state.outside_sessions ?? {},
+    since,
+  );
+  const resolver = createProjectDirResolver();
+  const filter = studyRepoFilter(state, () => scanned, resolver);
+  const unsettled = filterSessionsByRepo(
+    unsettledSessions(scanned, state),
+    filter,
+    resolver.resolveRepo,
+  );
+  resolver.flush();
+  const updatedOf = new Map(scanned.map((s) => [sessionKey(s), Date.parse(s.updated)]));
+  const skipped = unsettled.filter((session) => {
+    const updated = Date.parse(session.updated);
+    const parent = session.parentId && updatedOf.get(`${session.harness}/${session.parentId}`);
+    const active = parent && parent > updated ? parent : updated;
+    return active < before.getTime();
+  });
+  skipBacklog(skipped, VERSION, now);
+  const subagents = skipped.filter((s) => s.parentId).length;
+  return { sessions: skipped.length - subagents, subagents };
 }

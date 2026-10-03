@@ -36,6 +36,7 @@ import { resolveAgents } from "./agent-select";
 import { positiveInteger } from "./arguments";
 import { requireLoginConfig } from "./auth";
 import { incognitoCommand } from "./knowledge-incognito";
+import { scopeCommand, skipBacklogCommand } from "./knowledge-scope";
 import { statuslineCommand } from "./knowledge-statusline";
 import { printResult, printTable, truncate } from "./output";
 
@@ -478,6 +479,8 @@ export function knowledgeCommand(): Command {
 
   cmd.addCommand(hooksCommand());
   cmd.addCommand(incognitoCommand());
+  cmd.addCommand(scopeCommand());
+  cmd.addCommand(skipBacklogCommand());
   cmd.addCommand(statuslineCommand());
   cmd.addCommand(transcriptsCommand());
   cmd.addCommand(contextCommand(), { hidden: true });

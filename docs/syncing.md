@@ -85,7 +85,7 @@ leaves the 30-day window.
 | `incognito` | `/dosu-incognito` was run in the session |
 | `rejected` | The backend refused the payload (HTTP 400, 413, or 422) |
 | `unsupported` | No normalizer for the harness, or the transcript could not be normalized |
-| `skipped_by_user` | You declined setup's offer to ship the last 30 days (it offers only sessions the ledger has never settled) |
+| `skipped_by_user` | You declined setup's offer to ship the last 30 days (it offers only sessions the ledger has never settled), or ran `dosu knowledge skip-backlog` |
 
 Only transport errors, auth failures, and 5xx responses are failures: they stop the run, leave the
 session pending, and make hook runs back off (except for a just-ended session, below). `rejected`
@@ -289,7 +289,26 @@ detached sync starts.
 `dosu` → settings → study scope picks which repos to ship (`repo_filter` in the state file). With a
 repo scope, only sessions in the picked repos are shipped. Picking every repo clears the filter, so
 new repos and sessions outside any repo are shipped too. Clones and worktrees of the same repo share
-one entry.
+one entry. A script sets the same scope from checkouts on disk:
+
+```bash
+dosu knowledge scope set <checkout>...   # ship only these checkouts' repos (by origin remote)
+dosu knowledge scope clear               # ship every repo, and sessions outside any repo
+dosu knowledge scope show [--json]
+```
+
+`set` replaces the scope and refuses a directory without an `origin`, since a repo scope can only
+name repositories by their origin; a session in a clone without one is never in a repo scope,
+whatever its project key.
+
+`dosu knowledge skip-backlog [--before <date>]` makes setup's other choice, declining the 30-day
+backfill, from a script: every session waiting to ship now (or, with `--before`, last active before
+that date) is settled as `skipped_by_user`, and only sessions that finish or change from then on
+ship. It ships nothing, works while shipping is switched off (so a script can set the starting
+point before turning shipping on), and leaves sessions outside the repo scope unsettled, for a later
+scope that includes them to decide. A skipped session stays skipped until it changes; to ship it
+after all, clear the shipping history on the Activity screen and run
+`dosu knowledge sync --bootstrap`.
 
 Before repo scoping, the scope was a list of folders (`project_filter`). The next sync converts it
 to the repos its folders' sessions ran in, so upgrading never widens the scope. A folder scope with

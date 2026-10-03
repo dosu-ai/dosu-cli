@@ -212,7 +212,9 @@ dosu knowledge incognito enable|disable [claude|cursor|codex|opencode]  # the /d
 
 The status line shows one of `📚 Dosu learning…`, `👻 Dosu incognito`, `⚪ Dosu paused`,
 `⚪ Dosu not learning from this repo`, or `⚪ Dosu off`. Every session is shipped unless you limit
-syncing to picked repos under `dosu` → settings → study scope. Neither setup nor `enable` replaces a
+syncing to picked repos under `dosu` → settings → study scope (or `dosu knowledge scope set
+<checkout>...`; `dosu knowledge skip-backlog` passes over the sessions waiting to ship, see
+[docs/syncing.md](docs/syncing.md#repo-scope)). Neither setup nor `enable` replaces a
 status line you already have; they print the one-liner to add to your own script instead.
 
 Running `/dosu-incognito` inside a session marks that session's transcript so it is never shipped
