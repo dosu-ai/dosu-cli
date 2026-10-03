@@ -18,6 +18,7 @@ import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
+import { contextHookOutput } from "../memory/context-hook";
 import { makeOpencodeDb, opencodeDocument } from "../sessions/opencode.test-utils";
 import { INCOGNITO_MARKER } from "../sync/incognito";
 import { lockPath } from "../sync/lock";
@@ -534,6 +535,51 @@ describe("knowledge sync of a session's branch", () => {
     const [shipped] = posted();
     expect(shipped.records[0]).toMatchObject({ role: "meta", git_branch: "feat/codex" });
     expect(shipped.metadata.branch).toBe("feat/codex");
+  });
+
+  it("ships a recorded branch verbatim, the one the session's prompts asked memory with", async () => {
+    // A Jira-style name reads as high-entropy text to the redactor; a branch is not text.
+    const branch = "feature/PROJ-4821-AddRetryLogicForPayments";
+    const alpha = checkoutOn("alpha", branch, minutesAgo(90));
+    const recorded = exchange(1, alpha)
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.stringify({ ...JSON.parse(line), gitBranch: branch }))
+      .join("\n");
+    const claude = claudeSession("aaaa", `${recorded}\n`, 30);
+    const name = "rollout-2026-10-02T10-00-00-01a0ff2b-0000-7000-8000-000000000001";
+    const codex = codexRollout(name, alpha, 30, { git: { branch, commit_hash: "abc" } });
+    const context = vi.fn<Fetch>(async () => new Response(JSON.stringify({ digest: null })));
+    const ask = (agent: string, format: "claude" | "codex", transcript: string) =>
+      contextHookOutput(
+        JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          session_id: basename(transcript, ".jsonl"),
+          transcript_path: transcript,
+          cwd: alpha,
+          prompt: "and the retries?",
+        }),
+        {
+          apiKey: "sk_test",
+          deploymentId: "dep1",
+          backendUrl: "x",
+          agent,
+          format,
+          fetchImpl: context,
+        },
+      );
+    await ask("claude-code", "claude", claude);
+    await ask("codex", "codex", codex);
+
+    await dosu("sync");
+
+    const asked = context.mock.calls.map(([, init]) => JSON.parse(init?.body as string).branch);
+    expect(asked).toEqual([branch, branch]);
+    const shipped = posted();
+    expect(shipped.map((p) => p.metadata.branch)).toEqual([branch, branch]);
+    for (const { records } of shipped) {
+      expect(records[0]).toMatchObject({ role: "meta", git_branch: branch });
+    }
   });
 });
 

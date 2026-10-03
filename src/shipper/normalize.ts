@@ -41,8 +41,18 @@ export function trajectorySourceOf(
 }
 
 /** Keys whose string values are structural identity, not text: redacting them would break the
- * tool_call ↔ tool_result linkage or the record framing itself. Everything else is redacted. */
-const STRUCTURAL_KEYS = new Set(["id", "tool_call_id", "role", "timestamp", "source", "name"]);
+ * tool_call ↔ tool_result linkage or the record framing itself, or (the meta record's
+ * `git_branch`, which a Jira-style name trips the entropy pass on) scope the session by a
+ * placeholder its prompts never asked with. Everything else is redacted. */
+const STRUCTURAL_KEYS = new Set([
+  "id",
+  "tool_call_id",
+  "role",
+  "timestamp",
+  "source",
+  "name",
+  "git_branch",
+]);
 
 function redactValue(value: unknown, key?: string): unknown {
   if (typeof value === "string") {

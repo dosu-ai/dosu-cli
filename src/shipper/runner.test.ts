@@ -525,6 +525,53 @@ describe("createShipStep branch", () => {
     expect(metadata(fetchImpl).branch).toBe("feat/recorded");
   });
 
+  it("sends a recorded branch verbatim, though redaction would take its name for a secret", async () => {
+    // A Jira-style name reads as high-entropy text; a branch is identity, not text.
+    const branch = "feature/PROJ-4821-AddRetryLogicForPayments";
+    const dir = mkdtempSync(join(tmpdir(), "dosu-ship-branch-"));
+    const at = "2026-10-02T10:00:00.000Z";
+    const rollout = join(dir, "rollout-2026-10-02T10-00-00-01a0ff2b.jsonl");
+    const lines = [
+      {
+        type: "session_meta",
+        payload: { id: "01a0ff2b", timestamp: at, cwd: dir, git: { branch, commit_hash: "abc" } },
+      },
+      {
+        type: "response_item",
+        payload: { type: "message", role: "user", content: [{ type: "input_text", text: "q" }] },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: `answer: ${"detail ".repeat(400)}` }],
+        },
+      },
+    ];
+    writeFileSync(rollout, lines.map((r) => JSON.stringify({ timestamp: at, ...r })).join("\n"));
+    const fetchImpl = vi.fn().mockResolvedValue(accepted());
+    const step = createShipStep({
+      apiKey: "sk_user_test",
+      deploymentId: "dep1",
+      backendUrl: "https://api.dosu.test",
+      fetchImpl,
+      isIncognito: () => false,
+      resolveProject: () => ({ project: "github.com/acme/app", rule: "origin" }),
+      resolveBranch: () => "feat/elsewhere",
+    });
+    try {
+      await step([session("01a0ff2b", { harness: "codex", path: rollout, updated: at })]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+
+    const sent = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(sent.metadata.branch).toBe(branch);
+    // The meta record, which servers that predate metadata.branch read, says the same.
+    expect(sent.records[0]).toMatchObject({ role: "meta", git_branch: branch });
+  });
+
   it.each([
     ["recorded none", RECORDS],
     ["recorded a detached HEAD", withBranch("HEAD")],

@@ -283,8 +283,10 @@ Every upload, and every prompt-time memory request, also carries the branch the 
 (`metadata.branch`, and `branch` on the prompt request), which memory is scoped by beside the
 project. An upload sends the branch its transcript recorded, when it recorded one: Claude Code's
 `gitBranch` and Codex's `session_meta`, as the trajectory's `git_branch` (the value the server
-read before the CLI sent one). OpenCode, pi and Cursor record none, so their sessions ship with
-the branch their prompts were served under, else (Cursor) the one its `stop` hook captured, else
+read before the CLI sent one), verbatim: redaction leaves the branch alone, as it does ids, since
+its entropy pass takes a Jira-style name like `feature/PROJ-4821-AddRetryLogicForPayments` for a
+secret, and a placeholder would scope every such session together. OpenCode, pi and Cursor record
+none, so their sessions ship with the branch their prompts were served under, else (Cursor) the one its `stop` hook captured, else
 the one the session's directory had checked out at its first prompt, read from the reflog, so a
 session that starts a branch for its change ships with the branch it started from, as Claude Code
 and Codex sessions do (a fork's first prompt is its own, not the one it copied). The branch
