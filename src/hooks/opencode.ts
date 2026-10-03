@@ -17,10 +17,10 @@
  * - Incognito. `/dosu-incognito` is an opencode custom command (src/incognito/agents.ts); its
  *   expansion carries the marker, which the plugin and the sync both read.
  *
- * The plugin is plain JavaScript importing only node builtins. opencode 1.18 still installs
- * `@opencode-ai/plugin` into its config dir before it loads any local plugin (one npm fetch, once;
- * offline it retries on every start and stalls it by about a minute), but this plugin never
- * imports it. */
+ * The plugin is plain JavaScript importing only node builtins. opencode 1.18 still waits, before it
+ * loads any local plugin, for the npm install of `@opencode-ai/plugin` it starts in its config dir
+ * until that has a node_modules (one registry fetch; with no registry reachable, every start waits
+ * for the install to fail), but this plugin never imports it. */
 
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
@@ -253,6 +253,6 @@ export function opencodeHookAgent(): HookAgent {
       getIncognitoAgent("opencode")?.disable();
     },
     enableNote: () =>
-      "Restart running OpenCode sessions to load the plugin. OpenCode fetches @opencode-ai/plugin from npm into its config dir on its next start (Dosu's plugin does not use it).",
+      "Restart running OpenCode sessions to load the plugin. Before loading any plugin, OpenCode installs @opencode-ai/plugin from npm into its config dir once (Dosu's plugin does not use it).",
   };
 }

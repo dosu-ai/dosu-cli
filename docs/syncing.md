@@ -158,9 +158,12 @@ both. The plugin is plain JavaScript importing only node builtins, and does thre
   are not asked about.
 - `/dosu-incognito` is an opencode custom command whose prompt carries the marker.
 
-OpenCode 1.18 installs `@opencode-ai/plugin` from npm into its config dir before it loads any local
-plugin, whether or not the plugin imports it (Dosu's does not). That needs registry access once;
-offline, each start waits about a minute for the install to fail, then loads the plugin anyway.
+OpenCode 1.18 starts an npm install of `@opencode-ai/plugin` into its config dir on every start until
+that dir has a `node_modules`, plugin or not; with any local plugin it waits for the install before
+loading plugins, whether or not they import the package (Dosu's does not). That needs registry
+access once (it honors `npm_config_registry`, so a mirror works). With no registry reachable, every
+start waits for the install to fail (about 70 seconds against a refused connection), then loads the
+plugin anyway.
 
 ## Per-session incognito
 
