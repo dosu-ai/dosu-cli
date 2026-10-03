@@ -130,6 +130,43 @@ function claudeSession(id: string, body: string, minutesAgo: number): string {
   return path;
 }
 
+/** A Codex rollout under the temporary CODEX_HOME, last written `minutesAgo` minutes ago. */
+function codexRollout(name: string, cwd: string, minutesAgo: number): string {
+  const dir = join(home, ".codex", "sessions", "2026", "10", "02");
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, `${name}.jsonl`);
+  const at = "2026-10-02T10:00:00.000Z";
+  const records = [
+    {
+      type: "session_meta",
+      payload: { id: name.slice(-36), timestamp: at, cwd, cli_version: "0.160.0" },
+    },
+    {
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "question" }],
+      },
+    },
+    {
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: `answer: ${"detail ".repeat(400)}` }],
+      },
+    },
+  ];
+  writeFileSync(
+    path,
+    `${records.map((r) => JSON.stringify({ timestamp: at, ...r })).join("\n")}\n`,
+  );
+  const touched = new Date(Date.now() - minutesAgo * 60_000);
+  utimesSync(path, touched, touched);
+  return path;
+}
+
 describe("knowledge sync from a session-end hook", () => {
   it("applies the hook's DOSU_PROJECT to the session that ended, and to no other", async () => {
     const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
@@ -205,6 +242,38 @@ describe("knowledge sync from a session-end hook", () => {
     expect(shipped.metadata.session_id).toBe("aaaa");
     expect(JSON.stringify(shipped.records)).toContain("question 1");
     expect(JSON.stringify(shipped.records)).not.toContain("question 2");
+  });
+
+  it("ships the session a Codex SessionEnd names at once, under its rollout's name", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    const uuid = "01a0ff29-62b1-7310-94a2-45a5c2140458";
+    const ended = codexRollout(`rollout-2026-10-02T17-28-17-${uuid}`, alpha, 0);
+    codexRollout("rollout-2026-10-02T17-29-00-01a0ff2a-0000-7000-8000-000000000000", alpha, 1);
+    hookStdin({
+      session_id: uuid,
+      transcript_path: ended,
+      cwd: alpha,
+      hook_event_name: "SessionEnd",
+      reason: "other",
+    });
+
+    await dosu("sync", "--quiet", "--detach");
+    const child = respawnedArgs();
+    expect(child).toEqual([
+      "sync",
+      "--quiet",
+      "--ended",
+      `codex:rollout-2026-10-02T17-28-17-${uuid}=${ended}`,
+    ]);
+    await dosu(...child);
+
+    expect(posted().map((p) => p.metadata)).toEqual([
+      expect.objectContaining({
+        agent: "codex",
+        session_id: `rollout-2026-10-02T17-28-17-${uuid}`,
+        project: "github.com/acme/alpha",
+      }),
+    ]);
   });
 
   it("a per-turn hook payload names no session, so nothing skips the quiet period", async () => {

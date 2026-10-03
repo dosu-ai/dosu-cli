@@ -54,7 +54,8 @@ after a failure and ship its tail when it is resumed. If another run holds the s
 waits for it (up to ten minutes) instead of leaving the session for a later trigger. A paused hook
 run ships nothing, but still remembers where an ended session lives. While hook runs back off after
 a failure, a run carrying an ended session still tries that session, and only that one; if it gets
-through, the backoff ends. Only definitive end events count: Claude Code's `SessionEnd` today.
+through, the backoff ends. Only definitive end events count: Claude Code's `SessionEnd`, and
+Codex's `SessionEnd` (0.160+), whose session is named by its rollout file as the scan names it.
 Per-turn events (Cursor's `stop`, Codex's `Stop`) never pass `--ended`. Each agent's end event is
 one reader in `END_EVENT_READERS` (`src/sessions/capture.ts`).
 
