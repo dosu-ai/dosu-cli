@@ -8,6 +8,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { claudeCodeInstalled } from "../hooks/claude-code";
 import { codexInstalled } from "../hooks/codex";
+import { piHookAgent } from "../hooks/pi";
 import { isInstalled } from "../mcp/detect";
 import { INCOGNITO_COMMAND_NAME, INCOGNITO_MARKER } from "../sync/incognito";
 
@@ -203,4 +204,21 @@ export function allIncognitoAgents(): IncognitoAgent[] {
 
 export function getIncognitoAgent(id: string): IncognitoAgent | undefined {
   return allIncognitoAgents().find((agent) => agent.id() === id);
+}
+
+/** The incognito commands installed on this machine, for the messages that tell the user how to
+ * keep a session out: "/dosu-incognito (Claude Code, Pi) or $dosu-incognito (Codex)". Pi's comes
+ * with its Dosu extension. Null when no agent has one. */
+export function installedIncognitoCommands(): string | null {
+  const agents = new Map<string, string[]>();
+  const add = (invocation: string, name: string) =>
+    agents.set(invocation, [...(agents.get(invocation) ?? []), name]);
+  for (const agent of allIncognitoAgents()) {
+    if (agent.isEnabled()) add(agent.invocation(), agent.name());
+  }
+  if (piHookAgent().isEnabled()) add(SLASH_COMMAND, "Pi");
+  if (agents.size === 0) return null;
+  return [...agents]
+    .map(([invocation, names]) => `${invocation} (${names.join(", ")})`)
+    .join(" or ");
 }

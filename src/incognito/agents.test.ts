@@ -13,8 +13,14 @@ vi.mock("node:os", async (importOriginal) => {
   };
 });
 
+import { piHookAgent } from "../hooks/pi";
 import { INCOGNITO_MARKER, textHasIncognitoMarker } from "../sync/incognito";
-import { allIncognitoAgents, getIncognitoAgent, INCOGNITO_COMMAND_BODY } from "./agents";
+import {
+  allIncognitoAgents,
+  getIncognitoAgent,
+  INCOGNITO_COMMAND_BODY,
+  installedIncognitoCommands,
+} from "./agents";
 
 beforeEach(() => {
   fakeHome = mkdtempSync(join(tmpdir(), "dosu-incognito-agents-"));
@@ -252,6 +258,22 @@ describe("opencode agent", () => {
     process.env.XDG_CONFIG_HOME = join(fakeHome, "xdg");
     expect(getIncognitoAgent("opencode")?.commandPath()).toBe(
       join(fakeHome, "xdg", "opencode", "command", "dosu-incognito.md"),
+    );
+  });
+});
+
+describe("installedIncognitoCommands", () => {
+  it("names only the agents that have the command, by how each runs it", () => {
+    expect(installedIncognitoCommands()).toBeNull();
+
+    getIncognitoAgent("codex")?.enable();
+    expect(installedIncognitoCommands()).toBe("$dosu-incognito (Codex)");
+
+    getIncognitoAgent("claude")?.enable();
+    // Pi's comes with the Dosu pi extension.
+    piHookAgent().enable();
+    expect(installedIncognitoCommands()).toBe(
+      "/dosu-incognito (Claude Code, Pi) or $dosu-incognito (Codex)",
     );
   });
 });

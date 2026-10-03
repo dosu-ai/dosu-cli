@@ -203,7 +203,8 @@ agent's environment, or run `dosu project link [dir] <key>`, to name it yourself
 [docs/syncing.md](docs/syncing.md#project-key).
 
 Two switches make shipping visible and controllable per session. `dosu setup` installs both
-alongside the hook; they can also be managed directly:
+alongside the hook (`dosu knowledge hooks enable` installs the incognito command with each agent's
+hooks); they can also be managed directly:
 
 ```bash
 dosu knowledge statusline enable|disable [claude|cursor]   # status-bar line in Claude Code / Cursor CLI

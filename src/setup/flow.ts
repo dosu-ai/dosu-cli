@@ -19,7 +19,7 @@ import {
 import { logger } from "../debug/logger";
 import type { CliLibrary } from "../generated/dosu-api-types";
 import { getHookAgent } from "../hooks/agents";
-import { getIncognitoAgent } from "../incognito/agents";
+import { getIncognitoAgent, installedIncognitoCommands } from "../incognito/agents";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { refreshConfiguredProviders } from "../mcp/refresh";
@@ -83,8 +83,8 @@ export interface ConfigResult {
   statusline?: BundleItem;
   /** Set when the agent already had a status line: the one-liner to add to their script. */
   statuslineSuggestion?: string;
-  /** Set when the `/dosu-incognito` slash command was installed alongside the hook. */
-  incognito?: BundleItem;
+  /** Set when the agent's incognito command came with its hook, and how the user runs it. */
+  incognito?: BundleItem & { invocation: string };
 }
 
 export interface ToolSelection {
@@ -398,11 +398,14 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
   const them = n === 1 ? "it" : "them";
   s.stop(`Found ${n} agent session${n === 1 ? "" : "s"} from the last 30 days on this machine.`);
   // What happens to the sessions, why it's worth it, and how to keep something out.
+  const incognito = installedIncognitoCommands();
   p.log.message(
     wrapLog(
       [
         "Dosu memory learns from finished agent sessions: where things live, commands that work, approaches that failed, so the next agent starts from what the last one learned.",
-        "Sessions are uploaded to Dosu, with secrets redacted on this machine first. Run /dosu-incognito in a session to keep it out, or dosu knowledge transcripts disable to stop shipping altogether.",
+        `Sessions are uploaded to Dosu, with secrets redacted on this machine first. ${
+          incognito ? `Run ${incognito} in a session to keep it out, or run` : "Run"
+        } dosu knowledge transcripts disable to stop shipping altogether.`,
       ].join("\n"),
     ),
   );
@@ -1240,28 +1243,14 @@ function setupStatusline(
   }
 }
 
-/** The `/dosu-incognito` slash command rides along too: without it the status line has an
- * incognito state nobody can reach. Fail-open like the hook. */
-function setupIncognito(
-  providerID: string,
-  action: "enable" | "disable",
-): Pick<ConfigResult, "incognito"> {
+/** The incognito command the agent's hook installed with it (hooks/agents.ts), for the summary:
+ * without it the status line has an incognito state nobody can reach. */
+function installedIncognito(providerID: string): Pick<ConfigResult, "incognito"> {
   const agent = getIncognitoAgent(providerID);
-  if (!agent) return {};
-  try {
-    if (action === "disable") {
-      agent.disable();
-      return {};
-    }
-    agent.enable();
-    logger.info("setup", `/dosu-incognito installed for ${providerID}`);
-    return { incognito: { name: agent.name(), path: agent.commandPath() } };
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.warn("setup", `/dosu-incognito ${action} failed for ${providerID}: ${msg}`);
-    p.log.warn(`Could not ${action} the /dosu-incognito command for ${agent.name()}: ${msg}`);
-    return {};
-  }
+  if (!agent?.isEnabled()) return {};
+  return {
+    incognito: { name: agent.name(), path: agent.commandPath(), invocation: agent.invocation() },
+  };
 }
 
 export function stepConfigureTools(cfg: Config, selection: ToolSelection): ConfigResult[] {
@@ -1271,14 +1260,12 @@ export function stepConfigureTools(cfg: Config, selection: ToolSelection): Confi
     try {
       provider.install(cfg, true);
       logger.info("setup", `Configured ${provider.name()}`);
-      // The agent's hooks: the session-end trigger, plus prompt-time memory where it has one.
+      // The agent's hooks: the session-end trigger, prompt-time memory where it has one, and the
+      // incognito command.
       const hook = syncSessionHook(provider.id(), "enable");
-      // Status line and slash command only make sense once the hook ships sessions.
+      // The status line only makes sense once the hook ships sessions.
       const bundle = hook
-        ? {
-            ...setupStatusline(provider.id(), "enable"),
-            ...setupIncognito(provider.id(), "enable"),
-          }
+        ? { ...setupStatusline(provider.id(), "enable"), ...installedIncognito(provider.id()) }
         : {};
       results.push({ provider, action: "install", ...(hook ? { hook } : {}), ...bundle });
     } catch (err: unknown) {
@@ -1300,7 +1287,6 @@ export function stepConfigureTools(cfg: Config, selection: ToolSelection): Confi
       results.push({ provider, action: "remove" });
       syncSessionHook(provider.id(), "disable");
       setupStatusline(provider.id(), "disable");
-      setupIncognito(provider.id(), "disable");
     } catch (err: unknown) {
       /* v8 ignore next -- err is always Error in practice */
       const error = err instanceof Error ? err : new Error(String(err));
@@ -1383,11 +1369,11 @@ export function stepShowSummary(results: ConfigResult[]): void {
   if (incognitos.length > 0) {
     p.log.success(
       `${formatSetupSummary(
-        `/dosu-incognito installed for ${incognitos.length} agent(s):`,
-        incognitos.map((item) => ({ label: item.name, path: item.path })),
+        `Incognito command installed for ${incognitos.length} agent(s):`,
+        incognitos.map((item) => ({ label: `${item.name} (${item.invocation})`, path: item.path })),
       )}\n${dim(
         wrapLog(
-          "Run it inside a session to keep that session out of studying. Remove with 'dosu knowledge incognito disable'.",
+          "Run it inside a session to keep that session out of Dosu memory. Remove with 'dosu knowledge incognito disable'.",
         ),
       )}`,
     );

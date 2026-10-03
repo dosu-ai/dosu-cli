@@ -3,9 +3,12 @@
 `dosu knowledge hooks enable` installs a session-end hook (Claude Code, Cursor, Codex), for
 OpenCode a plugin (see [OpenCode](#opencode)) and for pi the Dosu pi extension (see [Pi](#pi)),
 each running `dosu knowledge sync --quiet --detach`; for Claude Code it also installs the prompt-time memory hook
-(`UserPromptSubmit` → `dosu knowledge context`) unless transcript shipping is off, and `disable`
-removes both. With no agent named it installs for every agent it detects and names the ones it
-skipped. Claude Code counts as detected when `~/.claude` (or `CLAUDE_CONFIG_DIR`) exists or
+(`UserPromptSubmit` → `dosu knowledge context`) unless transcript shipping is off. Every agent's
+`enable` also installs its incognito command (`/dosu-incognito`, `$dosu-incognito` in Codex; see
+[Per-session incognito](#per-session-incognito)), so the way to keep a session out is there before
+the first session ships, and `disable` removes everything `enable` installed; `hooks status` says
+when the command is missing (as an older CLI left it). With no agent named it installs for every
+agent it detects and names the ones it skipped. Claude Code counts as detected when `~/.claude` (or `CLAUDE_CONFIG_DIR`) exists or
 `claude` is on PATH, so a freshly provisioned machine can set Dosu up before Claude Code's first
 run (which is what creates `~/.claude`); `dosu knowledge transcripts enable` and `dosu setup` detect
 it the same way, and say so when they skip it. The sync scans the last 30 days of agent sessions, keeps the
@@ -82,7 +85,7 @@ leaves the 30-day window.
 |---|---|
 | `shipped` | Accepted by the ingest API (202) |
 | `trivial` | No user record, nothing answering it, or under 2,000 characters of content |
-| `incognito` | `/dosu-incognito` was run in the session |
+| `incognito` | `/dosu-incognito` (`$dosu-incognito` in Codex) was run in the session |
 | `rejected` | The backend refused the payload (HTTP 400, 413, or 422) |
 | `unsupported` | No normalizer for the harness, or the transcript could not be normalized |
 | `skipped_by_user` | You declined setup's offer to ship the last 30 days (it offers only sessions the ledger has never settled), or ran `dosu knowledge skip-backlog` |
@@ -366,6 +369,9 @@ plugin anyway.
 
 ## Per-session incognito
 
+`dosu knowledge hooks enable` and `dosu setup` install each agent's command with its hooks. The
+command can also be managed on its own:
+
 ```bash
 dosu knowledge incognito enable            # all detected agents
 dosu knowledge incognito enable claude     # or one of: claude, cursor, codex, opencode
@@ -519,7 +525,7 @@ ends and is remembered for later syncs. The header's `cwd` gives the project key
 
 ```bash
 DOSU_DEV=true bun run dev knowledge statusline enable claude
-DOSU_DEV=true bun run dev knowledge incognito enable claude
+DOSU_DEV=true bun run dev knowledge hooks enable claude   # installs /dosu-incognito too
 # Open Claude Code in a synced repo → 📚 Dosu learning…
 # Run /dosu-incognito → 👻 Dosu incognito
 # End the session; `dosu logs --tail` shows "not shipping incognito session claude/<id>" right away

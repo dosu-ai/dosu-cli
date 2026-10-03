@@ -148,6 +148,17 @@ describe("cursor agent", () => {
     cursor?.disable();
     expect(cursor?.isEnabled()).toBe(false);
   });
+
+  it("installs /dosu-incognito with the hook and removes it with the hook", () => {
+    const cursor = getHookAgent("cursor");
+    const command = join(fakeHome, ".cursor", "commands", "dosu-incognito.md");
+
+    cursor?.enable();
+    expect(readFileSync(command, "utf-8")).toContain("dosu:incognito:v1");
+
+    cursor?.disable();
+    expect(existsSync(command)).toBe(false);
+  });
 });
 
 /** Hashes `codex app-server` hooks/list reported for these exact entries (0.140 and 0.160 agree). */
