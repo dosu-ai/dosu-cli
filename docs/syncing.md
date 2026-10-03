@@ -128,7 +128,7 @@ is unticked. A hook that fails to install skips the bundle. The commands below m
 
 ```bash
 dosu knowledge incognito enable            # all detected agents
-dosu knowledge incognito enable claude     # or one of: claude, cursor, codex
+dosu knowledge incognito enable claude     # or one of: claude, cursor, codex, opencode
 dosu knowledge incognito status [--json]
 dosu knowledge incognito disable [agents...]
 ```
@@ -140,6 +140,7 @@ dosu knowledge incognito disable [agents...]
 | Claude Code | `~/.claude/commands/dosu-incognito.md` (honors `CLAUDE_CONFIG_DIR`) |
 | Cursor | `~/.cursor/commands/dosu-incognito.md` |
 | Codex | `~/.codex/prompts/dosu-incognito.md` (honors `CODEX_HOME`) |
+| OpenCode | `~/.config/opencode/command/dosu-incognito.md` (honors `XDG_CONFIG_HOME`) |
 
 Running `/dosu-incognito` inside a session expands the file into the conversation. Its body carries
 the marker `dosu:incognito:v1` and instructs the model not to call Dosu MCP tools for the rest of
@@ -159,7 +160,7 @@ Properties worth knowing:
   same session keeps it incognito.
 - The command **instructs** the model to avoid Dosu tools; it does not block them. A `PreToolUse`
   hook that rejects Dosu tool calls when the marker is present is a possible follow-up.
-- OpenCode has no slash-command install here, but its sessions are checked for the marker too.
+- An OpenCode subagent's session is incognito when the session that spawned it is.
 
 ## Status line
 

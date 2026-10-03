@@ -24,11 +24,17 @@ afterEach(() => {
   rmSync(fakeHome, { recursive: true, force: true });
   delete process.env.CODEX_HOME;
   delete process.env.CLAUDE_CONFIG_DIR;
+  delete process.env.XDG_CONFIG_HOME;
 });
 
 describe("registry", () => {
-  it("exposes claude, cursor, and codex", () => {
-    expect(allIncognitoAgents().map((a) => a.id())).toEqual(["claude", "cursor", "codex"]);
+  it("exposes claude, cursor, codex, and opencode", () => {
+    expect(allIncognitoAgents().map((a) => a.id())).toEqual([
+      "claude",
+      "cursor",
+      "codex",
+      "opencode",
+    ]);
     expect(getIncognitoAgent("cursor")?.name()).toBe("Cursor");
     expect(getIncognitoAgent("zed")).toBeUndefined();
   });
@@ -132,6 +138,33 @@ describe("codex agent", () => {
   it("defaults to ~/.codex", () => {
     expect(getIncognitoAgent("codex")?.commandPath()).toBe(
       join(fakeHome, ".codex", "prompts", "dosu-incognito.md"),
+    );
+  });
+});
+
+describe("opencode agent", () => {
+  it("writes a custom command under opencode's config dir and detects OpenCode from it", () => {
+    const agent = getIncognitoAgent("opencode");
+    if (!agent) throw new Error("missing agent");
+    expect(agent.isInstalled()).toBe(false);
+    mkdirSync(join(fakeHome, ".config", "opencode"), { recursive: true });
+    expect(agent.isInstalled()).toBe(true);
+
+    expect(agent.enable()).toBe("created");
+
+    const path = join(fakeHome, ".config", "opencode", "command", "dosu-incognito.md");
+    expect(agent.commandPath()).toBe(path);
+    const content = readFileSync(path, "utf-8");
+    // opencode reads a command's description from frontmatter and sends the rest as the prompt.
+    expect(content.startsWith("---\ndescription: ")).toBe(true);
+    expect(textHasIncognitoMarker(content)).toBe(true);
+    expect(agent.isEnabled()).toBe(true);
+  });
+
+  it("follows XDG_CONFIG_HOME, as opencode does", () => {
+    process.env.XDG_CONFIG_HOME = join(fakeHome, "xdg");
+    expect(getIncognitoAgent("opencode")?.commandPath()).toBe(
+      join(fakeHome, "xdg", "opencode", "command", "dosu-incognito.md"),
     );
   });
 });
