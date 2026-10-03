@@ -5,14 +5,14 @@
 
 import type { NormalizedRecord } from "@letta-ai/trajectory";
 import { getBackendURL } from "../config/constants";
-import { recordedBranch } from "../sessions/branch";
 import type { ProjectKey } from "../sessions/project";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import type { AgentSession } from "../sessions/scan";
 import { isIncognitoSession } from "../sync/incognito";
 import type { ShipSessionResult, SyncDeps } from "../sync/sync";
-import { copiedPrefix, planShipment, prefixSha256, type ShippedPrefix } from "./continuation";
+import { planShipment, prefixSha256, type ShippedPrefix } from "./continuation";
 import { normalizeSessionRecords, trajectorySourceOf } from "./normalize";
+import { forkCopy, sessionStartOf } from "./session-start";
 import { isTrivialTrajectory } from "./worthiness";
 
 /** Statuses where re-sending identical records cannot succeed (bad/oversized/unparseable
@@ -72,24 +72,19 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
     }
     // A resumed session sends only its new tail, and only when that tail is worth learning from.
     let plan = planShipment(records, shipped);
-    if (!plan.continuation && session.forkOf) {
-      // A fork's copy of its parent's history is the parent's to ship: send what it added.
-      const { id, path } = session.forkOf;
-      const parentRecords = await normalize({ harness: session.harness, id, path, updated: "" });
-      plan = planShipment(records, copiedPrefix(records, parentRecords));
-    }
+    // A fork's copy of its parent's history is the parent's to ship: send what it added.
+    const copied = await forkCopy(session, records, normalize);
+    if (!plan.continuation && session.forkOf) plan = planShipment(records, copied);
     if (isTrivialTrajectory(plan.fresh)) return { session, outcome: "trivial" };
     // The project key of the session's working directory (sessions/project.ts), the same one
     // prompt-time memory sends.
     const project = resolve.resolveProject(session)?.project ?? "unknown";
     // The branch the transcript recorded (Claude Code, Codex), which the server would read off
     // the meta record anyway; else the one the session's prompts were served under or its
-    // checkout was on at its first prompt (OpenCode, pi, Cursor). A fork's first is its own.
-    const meta = records[0];
-    const prompted = plan.fresh.find((record) => record.role === "user")?.timestamp;
-    const branch =
-      (meta?.role === "meta" ? recordedBranch(meta.git_branch) : null) ??
-      resolve.resolveBranch(session, prompted);
+    // checkout was on at its first prompt (OpenCode, pi, Cursor), the tail of a resumed session
+    // included. A fork's first prompt is its own.
+    const start = sessionStartOf(records, copied);
+    const branch = start.recorded ?? resolve.resolveBranch(session, start.firstPromptAt);
     const parentSessionId = session.parentId ?? session.forkOf?.id;
     const body = JSON.stringify({
       records: plan.records,

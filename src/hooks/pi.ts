@@ -230,10 +230,13 @@ export default function dosuForPi(pi) {
 
   pi.on("before_agent_start", async (event, ctx) => {
     if (incognito || event.prompt.includes(INCOGNITO_MARKER)) return undefined;
+    // The transcript, once pi has one, tells the CLI whether the session began before this
+    // prompt (and on which branch).
     const input = JSON.stringify({
       prompt: event.prompt,
       session_id: ctx.sessionManager.getSessionId(),
       cwd: ctx.cwd,
+      transcript_path: ctx.sessionManager.getSessionFile(),
     });
     const result = await dosu(["knowledge", "context", "--agent", "pi", "--format", "plain"], {
       cwd: ctx.cwd,

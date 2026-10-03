@@ -89,9 +89,12 @@ export function currentBranchOfDir(dir: string): string | null {
 }
 
 /** `dir`'s HEAD reflog, newest first, one `HEAD@{<unix seconds>}\t<subject>` line per entry;
- * null outside a repo. */
-export function headReflogOfDir(dir: string): string | null {
-  return gitOutput(dir, ["reflog", "show", "--date=unix", "--format=%gd%x09%gs", "HEAD"], 5_000);
+ * null outside a repo, GIT_TIMED_OUT past `timeout`. */
+export function headReflogOfDir(
+  dir: string,
+  timeout: number = 5_000,
+): string | null | typeof GIT_TIMED_OUT {
+  return gitAnswer(dir, ["reflog", "show", "--date=unix", "--format=%gd%x09%gs", "HEAD"], timeout);
 }
 
 /** Short display form of a repo key: `owner/repo`. */

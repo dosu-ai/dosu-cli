@@ -17,10 +17,18 @@ import { basename } from "node:path";
 import { GIT_BUDGETS, projectOverride, resolveProjectOfDir } from "../sessions/project";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { currentBranchAnswer, GIT_TIMED_OUT } from "../sessions/repo";
-import { SESSION_HARNESSES } from "../sessions/scan";
+import {
+  type AgentSession,
+  opencodeSessionById,
+  SESSION_HARNESSES,
+  type SessionHarness,
+  sessionAtPath,
+} from "../sessions/scan";
 import { trajectorySourceOf } from "../shipper/normalize";
+import { readSessionStart } from "../shipper/session-start";
 import {
   codexRolloutIncognito,
+  isIncognitoSession,
   textHasIncognitoMarker,
   transcriptHasIncognitoMarker,
 } from "../sync/incognito";
@@ -75,32 +83,62 @@ function str(value: unknown): string | null {
 
 /** The scanner's harness id for a trajectory source (`claude-code` -> `claude`); null for an
  * agent the scanner does not list. */
-function harnessOf(agent: string): string | null {
+function harnessOf(agent: string): SessionHarness | null {
   return SESSION_HARNESSES.find((h) => trajectorySourceOf(h) === agent || h === agent) ?? null;
 }
 
+/** The session a prompt belongs to, as its payload names it. */
+interface PromptSession {
+  harness: SessionHarness;
+  id: string;
+  transcript: string | null;
+}
+
+/** Where the prompt's agent keeps that session: the transcript the payload names (Claude Code,
+ * Codex, pi), else opencode's DB; null when there is none yet. */
+function storedSession({ harness, id, transcript }: PromptSession): AgentSession | null {
+  if (transcript) return sessionAtPath(harness, id, transcript);
+  return harness === "opencode" ? opencodeSessionById(id) : null;
+}
+
 /** The project key and branch for the prompt's cwd, cached under the session's scanner key so
- * the transcript ships under the same ones later, and the session's later prompts keep its first
- * branch; DOSU_PROJECT alone when the payload has no cwd. Both are null when git could not
- * answer within the prompt's budget, and git is not asked again: better no key than one the
- * session will not ship under, and no branch than a prompt kept waiting. */
-function scopeOf(
+ * the transcript ships under the same ones later, and the session's later prompts keep the
+ * branch it began on (a session the hook first serves partway through included: its transcript
+ * says when it began); DOSU_PROJECT alone when the payload has no cwd. Both are null when git
+ * could not answer within the prompt's budget, and git is not asked again: better no key than
+ * one the session will not ship under, and no branch than a prompt kept waiting. */
+async function scopeOf(
   cwd: string | null,
-  sessionKey: string | null,
+  session: PromptSession | null,
   branchOf: NonNullable<ContextHookOptions["branchOf"]>,
-): { project: string | null; branch: string | null } {
+): Promise<{ project: string | null; branch: string | null }> {
   if (cwd === null) return { project: projectOverride(null)?.project ?? null, branch: null };
-  if (sessionKey === null) {
+  if (session === null) {
     // Null only when git ran out of time.
     const project = resolveProjectOfDir(cwd, { budget: GIT_BUDGETS.prompt })?.project ?? null;
     const branch = project === null ? null : branchOf(cwd);
     return { project, branch: branch === GIT_TIMED_OUT ? null : branch };
   }
+  const key = `${session.harness}/${session.id}`;
   const resolver = createProjectDirResolver(undefined, { currentBranch: branchOf });
-  const project = resolver.resolveProjectAt(sessionKey, cwd)?.project ?? null;
-  const branch = resolver.resolveBranchAt(sessionKey, cwd);
+  const project = resolver.resolveProjectAt(key, cwd)?.project ?? null;
+  const branch = await resolver.resolveBranchAt(key, cwd, async () => {
+    const stored = storedSession(session);
+    return stored ? readSessionStart(stored) : null;
+  });
   resolver.flush();
   return { project, branch };
+}
+
+/** Whether the transcript a payload names is off the record, judged as its upload will be. */
+function incognitoCheckOf(agent: string): (transcriptPath: string) => boolean {
+  if (agent === "codex") return codexRolloutIncognito;
+  // pi's user turns, and those of the sessions a fork came from: a file the agent read that
+  // mentions the marker takes nothing off the record.
+  if (agent === "pi") {
+    return (path) => isIncognitoSession({ harness: "pi", id: "", path, updated: "" });
+  }
+  return transcriptHasIncognitoMarker;
 }
 
 /** The session id the scanner and the shipped session use. Codex's is its rollout's filename
@@ -132,9 +170,7 @@ export async function contextHookOutput(
   if (textHasIncognitoMarker(prompt)) return "";
   const agent = options.agent ?? CLAUDE_CODE_AGENT;
   const transcript = str(payload.transcript_path);
-  const isIncognito =
-    options.isIncognito ??
-    (agent === "codex" ? codexRolloutIncognito : transcriptHasIncognitoMarker);
+  const isIncognito = options.isIncognito ?? incognitoCheckOf(agent);
   if (transcript && isIncognito(transcript)) return "";
 
   const cwd = str(payload.cwd);
@@ -142,9 +178,9 @@ export async function contextHookOutput(
   try {
     const sessionId = sessionIdOf(payload, format);
     const harness = harnessOf(agent);
-    const { project, branch } = scopeOf(
+    const { project, branch } = await scopeOf(
       cwd,
-      harness && sessionId ? `${harness}/${sessionId}` : null,
+      harness && sessionId ? { harness, id: sessionId, transcript } : null,
       options.branchOf ?? currentBranchAnswer,
     );
     const response = await fetchImpl(`${options.backendUrl.replace(/\/$/, "")}/v1/memory/context`, {

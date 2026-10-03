@@ -194,6 +194,42 @@ describe("contextHookOutput", () => {
     expect(shipped).toBe("feat/first");
   });
 
+  it("a session first served partway through asks with the branch its transcript recorded", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "dosu-context-resumed-")));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    // The session began before the hook was installed, on a branch since left.
+    const transcript = join(dir, "sess-resumed.jsonl");
+    writeFileSync(
+      transcript,
+      [
+        { type: "user", uuid: "u", cwd: dir, message: { role: "user", content: "fix it" } },
+        {
+          type: "assistant",
+          uuid: "a",
+          message: { role: "assistant", content: [{ type: "text", text: "x".repeat(2500) }] },
+        },
+      ]
+        .map((r) =>
+          JSON.stringify({
+            ...r,
+            sessionId: "sess-resumed",
+            gitBranch: "feat/began",
+            timestamp: "2026-10-02T00:00:00Z",
+          }),
+        )
+        .join("\n"),
+    );
+    const asked = async (checkedOut: string) => {
+      const fetchImpl = respond(200, { digest: null });
+      const stdin = payload({ session_id: "sess-resumed", transcript_path: transcript, cwd: dir });
+      await contextHookOutput(stdin, { ...base, fetchImpl, branchOf: () => checkedOut });
+      return sentBody(fetchImpl).branch;
+    };
+
+    expect(await asked("feat/now")).toBe("feat/began");
+    expect(await asked("feat/later")).toBe("feat/began");
+  });
+
   it("resolves the cwd directly when the payload names no session", async () => {
     const fetchImpl = respond(200, { digest: null });
 
@@ -395,6 +431,40 @@ describe("contextHookOutput for other agents", () => {
       prompt: "why is the build slow",
       project: "path:/w",
     });
+  });
+
+  it("judges a pi transcript off the record as its upload is judged: by what the user typed", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dosu-context-pi-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    const transcript = (name: string, role: "user" | "toolResult") => {
+      const path = join(dir, name);
+      const entries = [
+        { type: "session", version: 3, id: name, timestamp: "2026-10-02T00:00:00Z", cwd: dir },
+        {
+          type: "message",
+          id: "m1",
+          message: { role, content: [{ type: "text", text: `see ${INCOGNITO_MARKER}` }] },
+        },
+      ];
+      writeFileSync(path, entries.map((e) => JSON.stringify(e)).join("\n"));
+      return path;
+    };
+    const asks = async (path: string) => {
+      const fetchImpl = respond(200, { digest: null });
+      const stdin = JSON.stringify({
+        prompt: "go on",
+        session_id: "p",
+        cwd: dir,
+        transcript_path: path,
+      });
+      const { isIncognito: _, ...options } = base;
+      await contextHookOutput(stdin, { ...options, agent: "pi", format: "plain", fetchImpl });
+      return fetchImpl.mock.calls.length > 0;
+    };
+
+    // A file the agent read that mentions the marker takes nothing off the record.
+    expect(await asks(transcript("read.jsonl", "toolResult"))).toBe(true);
+    expect(await asks(transcript("typed.jsonl", "user"))).toBe(false);
   });
 
   it("prints nothing in plain format when there is no digest", async () => {

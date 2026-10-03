@@ -296,7 +296,11 @@ branch, and the upload then sends none.
 Like the project key, a session's branch is cached in `project-dirs.json` the first time it is
 resolved: the first prompt pins the branch checked out then, the session's later prompts send
 that one even after a checkout, and its transcript ships with it, the tail of a resumed session
-included.
+included. A session the prompt hook first serves partway through (the hook went in, or Dosu was
+set up, after it began, and it was resumed on another branch) is read the way its upload will
+be: the transcript the payload names (Claude Code, Codex, pi) or opencode's DB (read directly,
+without starting opencode) gives the branch it recorded, else when its first prompt was, and the
+reflog answers for then; only a session's first prompt takes the branch checked out now.
 
 ## Repo scope
 
@@ -487,9 +491,10 @@ extension shells out to `dosu` on PATH for everything, so it carries no credenti
   pipes `{hook_event_name: "session_shutdown", agent: "pi", session_id, transcript_path, cwd}` to
   `dosu knowledge sync --quiet --detach`, so the session ships right away. Pi waits at most 3 s for
   that process to take the payload, never for the upload.
-- `before_agent_start` asks `dosu knowledge context --agent pi --format plain` for a digest and adds
-  it to the run as a hidden custom message (`customType: "dosu-memory"`), which the trajectory
-  normalizer does not ship back.
+- `before_agent_start` asks `dosu knowledge context --agent pi --format plain` for a digest (with
+  `transcript_path` beside `prompt`, `session_id` and `cwd` once pi has a transcript, so the CLI
+  can tell whether the session began before this prompt) and adds it to the run as a hidden custom
+  message (`customType: "dosu-memory"`), which the trajectory normalizer does not ship back.
 - `search_memory` and `get_memory_evidence` are pi tools that run
   `dosu memory search|evidence --client pi -- <arg>` in the session's directory.
 - `/dosu-incognito` sends the incognito marker as the user's own message (which is what keeps the

@@ -432,30 +432,57 @@ describe("resolveBranch", () => {
     expect(later.resolveBranch({ ...s, updated: "2026-08-26T09:00:00Z" })).toBe("feat/p");
   });
 
-  it("a prompt's branch is its session's: pinned at the first prompt, then shipped with", () => {
+  it("a prompt's branch is its session's: pinned at the first prompt, then shipped with", async () => {
     const prompt = createProjectDirResolver(tempDir, {
       ...noGit,
       currentBranch: () => "feat/live",
     });
-    expect(prompt.resolveBranchAt("opencode/o1", "/work/o")).toBe("feat/live");
+    expect(await prompt.resolveBranchAt("opencode/o1", "/work/o")).toBe("feat/live");
     prompt.flush();
 
     // The user checks out another branch before the next prompt, and before the session ships.
     const moved = { ...noGit, currentBranch: () => "other", reflogOfDir: () => "HEAD@{1}\tx" };
     const next = createProjectDirResolver(tempDir, moved);
-    expect(next.resolveBranchAt("opencode/o1", "/work/o")).toBe("feat/live");
+    expect(await next.resolveBranchAt("opencode/o1", "/work/o")).toBe("feat/live");
     next.flush();
     const sync = createProjectDirResolver(tempDir, moved);
     const s = session({ harness: "opencode", id: "o1", project: "/work/o" });
     expect(sync.resolveBranch(s)).toBe("feat/live");
   });
 
-  it("pins nothing when a prompt finds no branch, so the next prompt asks again", () => {
+  it("pins nothing when a prompt finds no branch, so the next prompt asks again", async () => {
     const currentBranch = vi.fn<(dir: string) => string | null>(() => null);
     const resolver = createProjectDirResolver(tempDir, { ...noGit, currentBranch });
-    expect(resolver.resolveBranchAt("pi/p2", "/work/q")).toBeNull();
+    expect(await resolver.resolveBranchAt("pi/p2", "/work/q")).toBeNull();
     currentBranch.mockReturnValue("main");
-    expect(resolver.resolveBranchAt("pi/p2", "/work/q")).toBe("main");
+    expect(await resolver.resolveBranchAt("pi/p2", "/work/q")).toBe("main");
+  });
+
+  it("a prompt partway through a session asks the reflog about its first, within the prompt's budget", async () => {
+    const start = Date.parse("2026-08-25T10:00:00Z") / 1000;
+    const reflogOfDir = vi.fn((_dir: string, _timeout?: number) =>
+      [
+        `HEAD@{${start + 600}}\tcheckout: moving from feat/began to feat/later`,
+        `HEAD@{${start - 60}}\tcheckout: moving from main to feat/began`,
+      ].join("\n"),
+    );
+    const resolver = createProjectDirResolver(tempDir, {
+      ...noGit,
+      reflogOfDir,
+      currentBranch: () => "feat/later",
+    });
+    const startOf = async () => ({ recorded: null, firstPromptAt: "2026-08-25T10:00:00Z" });
+    expect(await resolver.resolveBranchAt("pi/p3", "/work/r", startOf)).toBe("feat/began");
+    expect(reflogOfDir).toHaveBeenCalledWith("/work/r", 1_000);
+  });
+
+  it("a prompt whose reflog lookup runs out of time pins nothing and asks git no more", async () => {
+    const reflogOfDir = vi.fn((): typeof GIT_TIMED_OUT => GIT_TIMED_OUT);
+    const resolver = createProjectDirResolver(tempDir, { ...noGit, reflogOfDir });
+    const startOf = async () => ({ recorded: null, firstPromptAt: "2026-08-25T10:00:00Z" });
+    expect(await resolver.resolveBranchAt("pi/p4", "/work/s", startOf)).toBeNull();
+    expect(await resolver.resolveBranchAt("pi/p4", "/work/s", startOf)).toBeNull();
+    expect(reflogOfDir).toHaveBeenCalledTimes(1);
   });
 });
 

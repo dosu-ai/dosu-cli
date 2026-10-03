@@ -612,6 +612,31 @@ describe("createShipStep branch", () => {
     expect(branches).toEqual(["feat/parent-start", "feat/fork-start"]);
   });
 
+  it("asks about a resumed session's first prompt, not its tail's", async () => {
+    const grown = [
+      ...RECORDS,
+      { role: "user", content: "and now?", timestamp: "2026-09-03T00:00:00.000Z" },
+      { role: "assistant", content: "z".repeat(2000), timestamp: "2026-09-03T00:00:09.000Z" },
+    ];
+    const byTime: Record<string, string> = {
+      "2026-09-01T00:00:00.000Z": "feat/start",
+      "2026-09-03T00:00:00.000Z": "feat/resumed-on",
+    };
+    const { step, fetchImpl } = makeStep({
+      normalize: async () => grown,
+      resolveBranch: (_s, at) => (at ? (byTime[at] ?? null) : null),
+    });
+
+    await step([session("s1")], () => ({
+      records: RECORDS.length,
+      prefix_sha256: prefixSha256(RECORDS as unknown as NormalizedRecord[], RECORDS.length),
+    }));
+
+    const sent = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(sent.metadata.continuation).toBeDefined();
+    expect(sent.metadata.branch).toBe("feat/start");
+  });
+
   it("leaves the branch out when nothing knows it", async () => {
     const { step, fetchImpl } = makeStep();
 

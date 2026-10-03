@@ -23,9 +23,17 @@ const TRAJECTORY_SOURCES: Partial<Record<AgentSession["harness"], TranscriptTraj
   pi: "pi",
 };
 
+export interface NormalizeOptions {
+  /** Whether opencode's binary is asked for the session's export (default) before its DB rows
+   * are read: a process start a waiting prompt can do without. */
+  opencodeBinary?: boolean;
+}
+
 /** The raw transcript the adapter reads; null when unreadable. */
-function readTranscript(session: AgentSession): string | null {
-  if (session.harness === "opencode") return opencodeTranscript(session);
+function readTranscript(session: AgentSession, options: NormalizeOptions): string | null {
+  if (session.harness === "opencode") {
+    return opencodeTranscript(session, { binary: options.opencodeBinary });
+  }
   try {
     return readFileSync(session.path, "utf8");
   } catch {
@@ -85,10 +93,11 @@ const EMPTY_CONVERSATION_CODES = new Set(["missing_user_records", "missing_assis
  * unreadable log, or a transcript the adapter cannot parse). */
 export async function normalizeSessionRecords(
   session: AgentSession,
+  options: NormalizeOptions = {},
 ): Promise<NormalizedRecord[] | null> {
   const source = trajectorySourceOf(session.harness);
   if (!source) return null;
-  const transcript = readTranscript(session);
+  const transcript = readTranscript(session, options);
   if (transcript === null) return null;
   if (transcript.trim() === "") return [];
   try {

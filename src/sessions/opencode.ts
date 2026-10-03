@@ -112,10 +112,14 @@ function isDosuMemory(part: unknown): boolean {
 }
 
 /** The session's export document as JSON, without the memory Dosu pushed into it; null when
- * neither the binary nor the DB has the session. */
-export function opencodeTranscript(session: AgentSession): string | null {
+ * neither the binary nor the DB has the session. `binary: false` reads the DB alone, sparing a
+ * prompt that waits the binary's start. */
+export function opencodeTranscript(
+  session: AgentSession,
+  { binary = true }: { binary?: boolean } = {},
+): string | null {
   if (!SAFE_ID.test(session.id)) return null;
-  let doc = exportWithBinary(session.id);
+  let doc = binary ? exportWithBinary(session.id) : null;
   if (!doc) {
     logger.debug("sync", `opencode export unavailable for ${session.id}; reading the DB`);
     doc = documentFromDb(session.path, session.id);

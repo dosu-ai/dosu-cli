@@ -305,13 +305,18 @@ export function querySqlite(dbPath: string, sql: string): SqliteRows | null {
 }
 
 /** opencode: sqlite rows. A subagent's work is a child session (parent_id set), listed as its own
- * session that names its parent, like Claude Code's subagent transcripts. */
-function scanOpencode(home: string, env: NodeJS.ProcessEnv): AgentSession[] {
+ * session that names its parent, like Claude Code's subagent transcripts. `id` reads that one
+ * session's row alone. */
+function scanOpencode(home: string, env: NodeJS.ProcessEnv, id?: string): AgentSession[] {
   const dataDir = env.XDG_DATA_HOME ?? join(home, ".local", "share");
   const dbPath = join(dataDir, "opencode", "opencode.db");
   if (!existsSync(dbPath)) return [];
 
-  const rows = querySqlite(dbPath, "SELECT id, parent_id, directory, time_updated FROM session");
+  const where = id === undefined ? "" : ` WHERE id = '${id}'`;
+  const rows = querySqlite(
+    dbPath,
+    `SELECT id, parent_id, directory, time_updated FROM session${where}`,
+  );
   if (!rows) return [];
 
   const sessions: AgentSession[] = [];
@@ -417,6 +422,17 @@ function scanPi(home: string, env: NodeJS.ProcessEnv): AgentSession[] {
     for (const entry of listDir(dir)) if (!entry.isDir) add(entry.path, entry.name);
   }
   return [...sessions.values()];
+}
+
+/** One opencode session, as the scan would report it, read by its id (which opencode's plugin
+ * names): null when the DB has no such session. */
+export function opencodeSessionById(
+  id: string,
+  options: Pick<ScanSessionsOptions, "homeDir" | "env"> = {},
+): AgentSession | null {
+  if (!/^[A-Za-z0-9_-]+$/.test(id)) return null;
+  const [session] = scanOpencode(options.homeDir ?? homedir(), options.env ?? process.env, id);
+  return session ?? null;
 }
 
 /** One session whose transcript the caller already knows (a session-end hook named it), as the

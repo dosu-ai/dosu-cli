@@ -364,6 +364,42 @@ describe("knowledge sync of a pi session's branch", () => {
     expect(served).toEqual(["feat/calc", "feat/calc"]);
     expect(posted().map((p) => p.metadata.branch)).toEqual(["feat/calc"]);
   });
+
+  it("a session the prompt hook first serves partway through keeps the branch it began on", async () => {
+    const widget = checkoutOn("feat/res");
+    const at = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000).toISOString();
+    // The session ran before the Dosu extension was installed, so none of its prompts was served.
+    const entries = exchange(1).map((entry, i) => ({
+      ...(entry as object),
+      timestamp: at(40 - i),
+    }));
+    const transcript = piSession("01a0fdc5-b003", widget, entries, { minutesAgo: 30 });
+    gitThen(widget, 20, "checkout", "-q", "-b", "feat/res-later");
+    const context = vi.fn<Fetch>(async () => new Response(JSON.stringify({ digest: null })));
+    // Resumed once the extension is in.
+    await contextHookOutput(
+      JSON.stringify({
+        prompt: "and the tests?",
+        session_id: "01a0fdc5-b003",
+        cwd: widget,
+        transcript_path: transcript,
+      }),
+      {
+        apiKey: "sk_test",
+        deploymentId: "dep1",
+        backendUrl: "https://api.dosu.test",
+        agent: "pi",
+        format: "plain",
+        fetchImpl: context,
+      },
+    );
+
+    await dosu("sync", "--quiet", "--ended", `pi:01a0fdc5-b003=${transcript}`);
+
+    const [[, init]] = context.mock.calls;
+    expect(JSON.parse(init?.body as string).branch).toBe("feat/res");
+    expect(posted().map((p) => p.metadata.branch)).toEqual(["feat/res"]);
+  });
 });
 
 describe("knowledge sync from the Dosu pi extension's session_shutdown", () => {

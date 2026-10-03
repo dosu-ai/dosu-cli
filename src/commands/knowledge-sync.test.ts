@@ -6,6 +6,7 @@ import {
   appendFileSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -506,6 +507,51 @@ describe("knowledge sync of a session's branch", () => {
         branch: "feat/layout",
       }),
     ]);
+  });
+
+  it("an opencode session the prompt hook first serves partway through keeps the branch it began on", async () => {
+    // The sync may ask opencode for its export; the prompt, which waits, must not.
+    const bin = join(home, "bin");
+    mkdirSync(bin);
+    const exports = join(home, "opencode-calls.log");
+    writeFileSync(exports, "");
+    writeFileSync(join(bin, "opencode"), `#!/bin/sh\necho "$*" >> "${exports}"\nexit 1\n`, {
+      mode: 0o755,
+    });
+    vi.stubEnv("PATH", `${bin}${delimiter}${process.env.PATH ?? ""}`);
+    const prompted = Math.floor(opencodeDocument().messages[0].info.time.created / 1000);
+    const alpha = checkoutOn("alpha", "feat/layout", prompted - 600);
+    mkdirSync(join(home, ".local", "share", "opencode"), { recursive: true });
+    const made = makeOpencodeDb(join(home, ".local", "share", "opencode", "opencode.db"), [
+      opencodeDocument({
+        id: "ses_resumed",
+        directory: alpha,
+        answer: `answer: ${"detail ".repeat(400)}`,
+        updated: Date.now() - 30 * 60_000,
+      }),
+    ]);
+    if (!made) return; // no sqlite builtin
+    gitAt(alpha, minutesAgo(10), "checkout", "-q", "-b", "feat/next");
+    const context = vi.fn<Fetch>(async () => new Response(JSON.stringify({ digest: null })));
+    // The plugin went in after the session's first prompts; this one resumes it.
+    await contextHookOutput(
+      JSON.stringify({ prompt: "and the footer?", session_id: "ses_resumed", cwd: alpha }),
+      {
+        apiKey: "sk_test",
+        deploymentId: "dep1",
+        backendUrl: "https://api.dosu.test",
+        agent: "opencode",
+        format: "plain",
+        fetchImpl: context,
+      },
+    );
+    expect(readFileSync(exports, "utf-8")).toBe("");
+
+    await dosu("sync");
+
+    const [[, init]] = context.mock.calls;
+    expect(JSON.parse(init?.body as string).branch).toBe("feat/layout");
+    expect(posted().map((p) => p.metadata.branch)).toEqual(["feat/layout"]);
   });
 
   it("ships a Claude Code session with the branch its transcript recorded, as before", async () => {
