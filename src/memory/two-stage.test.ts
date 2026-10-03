@@ -1,0 +1,292 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { FULL_NOTE_PREFACE, type HookDeps, runMemoryHook } from "./hook";
+import { readFullRecallState, readSessionState } from "./state";
+import { type PollDeps, pollFullRecall } from "./two-stage";
+
+vi.mock("../debug/logger", () => ({
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
+const SESSION = "5f0c2a1e-7b3d-4c8e-9a61-2d4f8b0e1c37";
+const QUICK = "Playbook: run `make test` before committing; fixtures live in tests/data.";
+const FULL = "For this task: the counter is in widgets.py and `python3 widgets.py` checks it.";
+const QUICK_PATH = "POST /v1/agent-memory/recall/quick";
+const FULL_PATH = "POST /v1/agent-memory/recall/full";
+const STATUS_PATH = "GET /v1/agent-memory/recall/full/job-1";
+const api = { backendURL: "http://memory.test", apiKey: "test-key" };
+
+const block = (note: string) => `<prior_task_memory>\n${note}\n</prior_task_memory>`;
+const fullBlock = `${FULL_NOTE_PREFACE}\n${block(FULL)}`;
+const output = (event: string, context: string) =>
+  JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } });
+
+type Route = () => Promise<Response>;
+const json =
+  (body: unknown, status = 200): Route =>
+  async () =>
+    new Response(JSON.stringify(body), { status });
+/** Answers in turn; the last one repeats. */
+const sequence = (...routes: Route[]): Route => {
+  let i = 0;
+  return () => routes[Math.min(i++, routes.length - 1)]();
+};
+
+let dir: string;
+let routes: Record<string, Route>;
+let calls: { key: string; body: unknown }[];
+let spawned: string[][];
+const savedMode = process.env.DOSU_MEMORY_RECALL_MODE;
+
+const fetchImpl = (async (url: unknown, init?: RequestInit) => {
+  const key = `${init?.method ?? "GET"} ${new URL(String(url)).pathname}`;
+  calls.push({ key, body: init?.body ? JSON.parse(String(init.body)) : null });
+  const route = routes[key];
+  if (!route) throw new Error(`unexpected request ${key}`);
+  return route();
+}) as typeof fetch;
+
+const deps = (): HookDeps => ({
+  configDir: dir,
+  api,
+  fetchImpl,
+  repoOf: () => "acme/widgets",
+  headOf: () => "abc123",
+  spawn: (args) => {
+    spawned.push(args);
+    return true;
+  },
+});
+
+const pollDeps = (extra: Partial<PollDeps> = {}): PollDeps => ({
+  configDir: dir,
+  api,
+  fetchImpl,
+  sleep: async () => {},
+  ...extra,
+});
+
+const hook = (event: string, extra: Record<string, unknown> = {}, session = SESSION) =>
+  runMemoryHook(
+    {
+      hook_event_name: event,
+      session_id: session,
+      transcript_path: "/home/dev/.claude/projects/w/session.jsonl",
+      cwd: "/work/widgets",
+      ...extra,
+    },
+    deps(),
+  );
+const firstPrompt = () => hook("UserPromptSubmit", { prompt: "Fix the counter" });
+const laterPrompt = () => hook("UserPromptSubmit", { prompt: "Now update the docs" });
+const toolCall = (session = SESSION) =>
+  hook(
+    "PostToolUse",
+    { tool_name: "Bash", tool_input: { command: "ls" }, tool_response: { stdout: "a\n" } },
+    session,
+  );
+const compact = () => hook("SessionStart", { source: "compact" });
+const poll = (extra: Partial<PollDeps> = {}) => pollFullRecall(SESSION, pollDeps(extra));
+const statusPolls = () => calls.filter((c) => c.key === STATUS_PATH).length;
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "dosu-memory-two-stage-"));
+  calls = [];
+  spawned = [];
+  routes = {
+    [QUICK_PATH]: json({ note: `  ${QUICK}\n`, latency_ms: 900 }),
+    [FULL_PATH]: json({ job_id: "job-1" }),
+    [STATUS_PATH]: json({ status: "done", note: FULL, latency_ms: 9_500 }),
+  };
+  delete process.env.DOSU_MEMORY_RECALL_MODE;
+});
+
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true });
+  vi.restoreAllMocks();
+  if (savedMode === undefined) delete process.env.DOSU_MEMORY_RECALL_MODE;
+  else process.env.DOSU_MEMORY_RECALL_MODE = savedMode;
+});
+
+describe("two-stage recall", () => {
+  it("injects stage one on the first prompt and leaves stage two to a detached poller", async () => {
+    const timeouts = vi.spyOn(AbortSignal, "timeout");
+
+    expect(await firstPrompt()).toBe(output("UserPromptSubmit", block(QUICK)));
+
+    const request = { repo: "acme/widgets", session_id: SESSION, prompt: "Fix the counter" };
+    expect(calls).toEqual([
+      { key: QUICK_PATH, body: request },
+      { key: FULL_PATH, body: request },
+    ]);
+    expect(timeouts.mock.calls).toEqual([[5_000], [5_000]]);
+    expect(spawned).toEqual([["memory", "recall-poll", "--session", SESSION]]);
+    expect(readFullRecallState(SESSION, dir)).toMatchObject({
+      job_id: "job-1",
+      status: "pending",
+      note: null,
+    });
+    expect(readSessionState(SESSION, dir)).toMatchObject({ recall_mode: "two_stage", note: QUICK });
+  });
+
+  it("stage two ready before the first tool call: that call injects it, and only it", async () => {
+    await firstPrompt();
+    expect(await poll()).toMatchObject({ status: "done", note: FULL });
+
+    expect(await toolCall()).toBe(output("PostToolUse", fullBlock));
+    expect(await toolCall()).toBeNull();
+    expect(await laterPrompt()).toBeNull();
+  });
+
+  it("stage two ready after some tool calls: the first call after it injects it", async () => {
+    routes[STATUS_PATH] = sequence(
+      json({ status: "pending" }),
+      json({ status: "running" }),
+      json({ status: "done", note: FULL }),
+    );
+    await firstPrompt();
+    expect(await toolCall()).toBeNull();
+    expect(await toolCall()).toBeNull();
+
+    expect(await poll()).toMatchObject({ status: "done", note: FULL });
+    expect(statusPolls()).toBe(3);
+    expect(await toolCall()).toBe(output("PostToolUse", fullBlock));
+    expect(await toolCall()).toBeNull();
+  });
+
+  it("stage two ready after the last tool call of the turn: the next prompt injects it", async () => {
+    await firstPrompt();
+    expect(await toolCall()).toBeNull();
+    await poll();
+    const before = calls.length;
+
+    expect(await laterPrompt()).toBe(output("UserPromptSubmit", fullBlock));
+    expect(calls).toHaveLength(before);
+    expect(await toolCall()).toBeNull();
+    expect(await laterPrompt()).toBeNull();
+  });
+
+  it.each<[string, Route, Partial<PollDeps>, string | null]>([
+    ["the job fails", json({ status: "failed", error: "writer error" }), {}, "writer error"],
+    ["the job is unknown", json({ detail: "no such job" }, 404), {}, "HTTP 404"],
+    ["the job outlives the deadline", json({ status: "pending" }), { deadlineMs: 0 }, "timed out"],
+    ["the writer had nothing to say", json({ status: "done", note: "NONE" }), {}, null],
+  ])("injects no stage two when %s", async (_label, route, options, error) => {
+    routes[STATUS_PATH] = route;
+    await firstPrompt();
+    const finished = await poll(options);
+
+    expect(finished).toMatchObject({ note: null, error });
+    expect(await toolCall()).toBeNull();
+    expect(await laterPrompt()).toBeNull();
+    expect(await compact()).toBe(output("SessionStart", block(QUICK)));
+  });
+
+  it("keeps polling through network errors and 5xx until the job is done", async () => {
+    routes[STATUS_PATH] = sequence(
+      async () => Promise.reject(new Error("ECONNRESET")),
+      json({ detail: "busy" }, 503),
+      json({ status: "done", note: FULL }),
+    );
+    await firstPrompt();
+    expect(await poll()).toMatchObject({ status: "done", note: FULL });
+    expect(statusPolls()).toBe(3);
+  });
+
+  it("still injects stage one when stage two cannot start, and spawns no poller", async () => {
+    routes[FULL_PATH] = json({ detail: "boom" }, 500);
+    expect(await firstPrompt()).toBe(output("UserPromptSubmit", block(QUICK)));
+    expect(spawned).toEqual([]);
+    expect(readFullRecallState(SESSION, dir)).toBeNull();
+    expect(await poll()).toBeNull();
+    expect(await toolCall()).toBeNull();
+  });
+
+  it("still delivers stage two when stage one fails", async () => {
+    routes[QUICK_PATH] = async () => Promise.reject(new Error("timeout"));
+    expect(await firstPrompt()).toBeNull();
+    await poll();
+    expect(await toolCall()).toBe(output("PostToolUse", fullBlock));
+    expect(await compact()).toBe(output("SessionStart", fullBlock));
+  });
+
+  it("leaves stage two to the main agent when a subagent's tool call fires first", async () => {
+    await firstPrompt();
+    await poll();
+    expect(await hook("PostToolUse", { tool_name: "Bash", agent_id: "a1" })).toBeNull();
+    expect(await toolCall()).toBe(output("PostToolUse", fullBlock));
+  });
+
+  it("hands stage two to exactly one of many concurrent tool calls", async () => {
+    await firstPrompt();
+    await poll();
+    const results = await Promise.all(Array.from({ length: 20 }, () => toolCall()));
+    expect(results.filter((r) => r !== null)).toEqual([output("PostToolUse", fullBlock)]);
+    expect(await laterPrompt()).toBeNull();
+  });
+
+  it("puts back what was injected after compaction: stage one, then stage two once given", async () => {
+    await firstPrompt();
+    expect(await compact()).toBe(output("SessionStart", block(QUICK)));
+    await poll();
+    // Ready but not yet handed over: compaction leaves it for the next tool call.
+    expect(await compact()).toBe(output("SessionStart", block(QUICK)));
+    expect(await toolCall()).toBe(output("PostToolUse", fullBlock));
+
+    const both = output("SessionStart", `${block(QUICK)}\n\n${fullBlock}`);
+    expect(await compact()).toBe(both);
+    expect(await compact()).toBe(both);
+    expect(await toolCall()).toBeNull();
+  });
+
+  it("answers PostToolUse in milliseconds from local files, without the network", async () => {
+    const timed = async (session = SESSION) => {
+      const times: number[] = [];
+      for (let i = 0; i < 200; i++) {
+        const start = performance.now();
+        await toolCall(session);
+        times.push(performance.now() - start);
+      }
+      times.sort((a, b) => a - b);
+      return { median: times[100], p99: times[197] };
+    };
+    await firstPrompt();
+    const requests = calls.length;
+
+    const noRecall = await timed("0a1b2c3d-no-recall-session");
+    const pending = await timed();
+    await poll();
+    const pollRequests = calls.length;
+    expect(await toolCall()).toBe(output("PostToolUse", fullBlock));
+    const injected = await timed();
+
+    expect(calls).toHaveLength(pollRequests);
+    expect(pollRequests).toBe(requests + 1);
+    for (const { median, p99 } of [noRecall, pending, injected]) {
+      expect(median).toBeLessThan(2);
+      expect(p99).toBeLessThan(20);
+    }
+  });
+
+  it("fixes the mode when the session's state is created; single uses phase 1's recall", async () => {
+    process.env.DOSU_MEMORY_RECALL_MODE = "single";
+    routes["POST /v1/agent-memory/recall"] = json({ note: QUICK, episode_ids: [] });
+    await hook("SessionStart", { source: "startup" });
+    delete process.env.DOSU_MEMORY_RECALL_MODE;
+
+    expect(await firstPrompt()).toBe(output("UserPromptSubmit", block(QUICK)));
+    expect(calls.map((c) => c.key)).toEqual(["POST /v1/agent-memory/recall"]);
+    expect(spawned).toEqual([]);
+
+    process.env.DOSU_MEMORY_RECALL_MODE = "three_stage";
+    await hook("SessionStart", { source: "startup", session_id: "other-session" });
+    expect(readSessionState("other-session", dir)?.recall_mode).toBe("two_stage");
+  });
+
+  it("fails the wait without credentials", async () => {
+    await firstPrompt();
+    expect(await poll({ api: null })).toMatchObject({ status: "failed", error: "not signed in" });
+  });
+});

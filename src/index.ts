@@ -15,6 +15,13 @@ async function main(): Promise<void> {
     await runStatuslineRenderFromArgv();
     return;
   }
+  // The agent-memory hook runs on every tool call (PostToolUse) and must not wait on the update
+  // check or send telemetry; it skips Commander for the same reason.
+  if (process.argv[2] === "memory" && process.argv[3] === "hook") {
+    const { runMemoryHookCommand } = await import("./memory/hook");
+    await runMemoryHookCommand();
+    return;
+  }
   const { execute } = await import("./cli/cli");
   await execute();
 }

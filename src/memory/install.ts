@@ -1,5 +1,5 @@
 /** Agent-memory hooks in Claude Code's settings.json (under `CLAUDE_CONFIG_DIR` when set). One
- * command, `dosu memory hook`, serves all four events and dispatches on the payload's
+ * command, `dosu memory hook`, serves every event and dispatches on the payload's
  * `hook_event_name`. Separate from the knowledge-sync hook: neither install touches the other. */
 
 import { join } from "node:path";
@@ -16,11 +16,14 @@ import {
 
 const HOOK_COMMAND = "dosu memory hook";
 
-/** UserPromptSubmit waits for the recall (the note is written on the spot); 120 s keeps a slow
- * write from being cut off by Claude Code's 30 s default. The others return immediately. */
+/** UserPromptSubmit waits for the recall (in single mode the note is written on the spot); 120 s
+ * keeps a slow write from being cut off by Claude Code's 30 s default, which would block the
+ * prompt. PostToolUse runs on every tool call and only reads local files; 5 s bounds a stall
+ * (Claude Code then keeps the tool result and moves on). The others return immediately. */
 const MEMORY_HOOK_EVENTS: ReadonlyArray<{ event: string; timeout?: number }> = [
   { event: "SessionStart" },
   { event: "UserPromptSubmit", timeout: 120 },
+  { event: "PostToolUse", timeout: 5 },
   { event: "Stop" },
   { event: "SessionEnd" },
 ];
@@ -40,7 +43,7 @@ export function claudeSettingsPath(): string {
   return join(claudeConfigDir(), "settings.json");
 }
 
-/** Which of the four events currently have the memory hook. */
+/** Which of the events currently have the memory hook. */
 export function memoryHookStatus(): Record<string, boolean> {
   const config = readHookConfig(claudeSettingsPath());
   return Object.fromEntries(

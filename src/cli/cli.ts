@@ -71,12 +71,15 @@ export function shouldRunBackgroundChecks(actionName: string): boolean {
  * two reports. `dosu knowledge sync` is the hook command: it runs inside a live agent session,
  * where rewriting the agent's own config races its writes and the stderr nudge is never seen.
  * Deferring to the next command a person actually types loses nothing — the hook itself does
- * not depend on the MCP entry. The agent-memory hook and its sync run inside sessions the same way. */
+ * not depend on the MCP entry. The agent-memory hook, its sync, and its recall poller run inside
+ * sessions the same way. */
 export function shouldRunMcpRefreshCheck(actionCommand: Command): boolean {
   if (actionCommand.name() === "setup") return false;
   const parent = actionCommand.parent?.name();
   if (actionCommand.name() === "refresh" && parent === "mcp") return false;
-  if (parent === "memory" && ["hook", "sync"].includes(actionCommand.name())) return false;
+  if (parent === "memory" && ["hook", "sync", "recall-poll"].includes(actionCommand.name())) {
+    return false;
+  }
   return !(actionCommand.name() === "sync" && parent === "knowledge");
 }
 

@@ -14,6 +14,7 @@ const NOTE = "Earlier sessions ran `make test` before committing; fixtures live 
 
 let dir: string;
 let recallBodies: unknown[];
+let recallUrls: string[];
 let respond: () => Promise<Response>;
 let spawned: string[][];
 
@@ -29,7 +30,8 @@ function deps(extra: Partial<HookDeps> = {}): HookDeps {
   return {
     configDir: dir,
     api: { backendURL: "http://memory.test", apiKey: "test-key" },
-    fetchImpl: (async (_url: unknown, init?: RequestInit) => {
+    fetchImpl: (async (url: unknown, init?: RequestInit) => {
+      recallUrls.push(String(url));
       recallBodies.push(JSON.parse(String(init?.body)));
       return respond();
     }) as typeof fetch,
@@ -48,18 +50,25 @@ const json =
   async () =>
     new Response(JSON.stringify(body), { status });
 
+const savedMode = process.env.DOSU_MEMORY_RECALL_MODE;
+
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "dosu-memory-hook-"));
   recallBodies = [];
+  recallUrls = [];
   spawned = [];
   respond = json({ note: `  ${NOTE}\n`, episode_ids: ["e1"], latency_ms: 12 });
+  // Phase 1's single recall; two-stage recall is covered in two-stage.test.ts.
+  process.env.DOSU_MEMORY_RECALL_MODE = "single";
 });
 
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
+  if (savedMode === undefined) delete process.env.DOSU_MEMORY_RECALL_MODE;
+  else process.env.DOSU_MEMORY_RECALL_MODE = savedMode;
 });
 
-describe("runMemoryHook", () => {
+describe("runMemoryHook with DOSU_MEMORY_RECALL_MODE=single", () => {
   it("injects the note as additionalContext on the first prompt only", async () => {
     const first = await runMemoryHook(
       payload("UserPromptSubmit", { prompt: "Fix the counter" }),
@@ -77,10 +86,14 @@ describe("runMemoryHook", () => {
     expect(recallBodies).toEqual([
       { repo: "acme/widgets", session_id: SESSION, prompt: "Fix the counter" },
     ]);
+    expect(recallUrls).toEqual(["http://memory.test/v1/agent-memory/recall"]);
+    expect(readSessionState(SESSION, dir)?.recall_mode).toBe("single");
+    expect(await runMemoryHook(payload("PostToolUse", { tool_name: "Bash" }), deps())).toBeNull();
     expect(
       await runMemoryHook(payload("UserPromptSubmit", { prompt: "And docs" }), deps()),
     ).toBeNull();
     expect(recallBodies).toHaveLength(1);
+    expect(spawned).toEqual([]);
   });
 
   it.each([

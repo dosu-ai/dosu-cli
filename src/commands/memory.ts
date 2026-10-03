@@ -5,7 +5,7 @@
 import { Command } from "commander";
 import pc from "picocolors";
 import { HookConfigError } from "../hooks/formats";
-import { runMemoryHook } from "../memory/hook";
+import { runMemoryHookCommand } from "../memory/hook";
 import {
   claudeSettingsPath,
   disableMemoryHooks,
@@ -13,7 +13,7 @@ import {
   memoryHookStatus,
 } from "../memory/install";
 import { syncSession } from "../memory/sync";
-import { readHookStdin } from "../sessions/capture";
+import { pollFullRecall } from "../memory/two-stage";
 import { printResult } from "./output";
 
 function hooksCommand(): Command {
@@ -37,7 +37,9 @@ function hooksCommand(): Command {
 
   cmd
     .command("enable")
-    .description("Install the memory hooks (SessionStart, UserPromptSubmit, Stop, SessionEnd)")
+    .description(
+      "Install the memory hooks (SessionStart, UserPromptSubmit, PostToolUse, Stop, SessionEnd)",
+    )
     .action(() => {
       changeHooks(enableMemoryHooks, "enabled");
     });
@@ -72,9 +74,14 @@ export function memoryCommand(): Command {
   cmd
     .command("hook", { hidden: true })
     .description("Claude Code hook entry point; reads the hook payload on stdin")
-    .action(async () => {
-      const output = await runMemoryHook(await readHookStdin());
-      if (output) process.stdout.write(`${output}\n`);
+    .action(runMemoryHookCommand);
+
+  cmd
+    .command("recall-poll", { hidden: true })
+    .description("Wait for a session's task-specific note and save it for the hooks to inject")
+    .requiredOption("--session <id>", "Claude Code session id")
+    .action(async (opts: { session: string }) => {
+      await pollFullRecall(opts.session);
     });
 
   cmd

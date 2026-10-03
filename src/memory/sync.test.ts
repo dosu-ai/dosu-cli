@@ -65,6 +65,7 @@ beforeEach(() => {
       cwd: "/w",
       repo: "acme/widgets",
       start_head: "abc123",
+      recall_mode: "two_stage",
     }),
     dir,
   );

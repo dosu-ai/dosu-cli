@@ -28,7 +28,8 @@ export interface ChunkRequest {
   diff: string | null;
 }
 
-/** `POST /v1/agent-memory/recall`, called on a session's first prompt. */
+/** The body of every recall call on a session's first prompt: `POST /v1/agent-memory/recall`
+ * (single-stage) and both halves of a two-stage recall, `/recall/quick` and `/recall/full`. */
 export interface RecallRequest {
   repo: string;
   session_id: string;
@@ -45,7 +46,40 @@ export interface RecallResponse {
   cost_usd: number | null;
 }
 
+/** `POST /v1/agent-memory/recall/quick`: stage one of a two-stage recall, answered from material
+ * the backend computed ahead of time (the repository playbook), without a model call. */
+export interface QuickRecallResponse {
+  note: string;
+  latency_ms: number;
+}
+
+/** `POST /v1/agent-memory/recall/full`: stage two, the note written for this task, started in the
+ * background. */
+export interface FullRecallJob {
+  job_id: string;
+}
+
+/** `GET /v1/agent-memory/recall/full/{job_id}`. The backend's `done` and `failed` are final; any
+ * other status reads as `pending`. `note` is only meaningful once `done`. */
+export interface FullRecallStatus {
+  status: "pending" | "done" | "failed";
+  note: string;
+  error: string | null;
+  latency_ms: number | null;
+}
+
+/** The writer's "no note" answer; never injected. */
+const NO_NOTE = "NONE";
+
+/** The note to inject, or null when the backend had nothing to say. */
+export function usableNote(note: string): string | null {
+  const trimmed = note.trim();
+  return trimmed && trimmed !== NO_NOTE ? trimmed : null;
+}
+
 const RECALL_PATH = "/v1/agent-memory/recall";
+const QUICK_RECALL_PATH = "/v1/agent-memory/recall/quick";
+const FULL_RECALL_PATH = "/v1/agent-memory/recall/full";
 
 function sessionPath(sessionId: string, action: "events" | "flush"): string {
   return `/v1/agent-memory/sessions/${encodeURIComponent(sessionId)}/${action}`;
@@ -74,12 +108,21 @@ export type ApiOutcome =
   | { ok: true; body: unknown }
   | { ok: false; status: number | null; error: string };
 
+/** A failed call; `permanent` when asking again cannot help (a 4xx answer). */
+export interface ApiError {
+  error: string;
+  permanent: boolean;
+}
+
 const CHUNK_TIMEOUT_MS = 30_000;
 const FLUSH_TIMEOUT_MS = 30_000;
 /** Below the UserPromptSubmit hook's 120 s timeout so a slow recall still exits cleanly. */
 const RECALL_TIMEOUT_MS = 110_000;
+/** The first prompt waits at most this long for stage one, and for stage two's job id alongside. */
+const QUICK_RECALL_TIMEOUT_MS = 5_000;
+const FULL_RECALL_STATUS_TIMEOUT_MS = 10_000;
 
-async function postJSON(
+async function requestJSON(
   api: MemoryApi,
   path: string,
   body: unknown,
@@ -88,12 +131,12 @@ async function postJSON(
 ): Promise<ApiOutcome> {
   try {
     const resp = await fetchImpl(`${api.backendURL}${path}`, {
-      method: "POST",
+      method: body === undefined ? "GET" : "POST",
       headers: {
-        "Content-Type": "application/json",
+        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
         "X-Dosu-API-Key": api.apiKey,
       },
-      body: JSON.stringify(body),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (!resp.ok) return { ok: false, status: resp.status, error: `HTTP ${resp.status}` };
@@ -110,7 +153,7 @@ export function postChunk(
   chunk: ChunkRequest,
   fetchImpl: typeof fetch = fetch,
 ): Promise<ApiOutcome> {
-  return postJSON(api, sessionPath(sessionId, "events"), chunk, CHUNK_TIMEOUT_MS, fetchImpl);
+  return requestJSON(api, sessionPath(sessionId, "events"), chunk, CHUNK_TIMEOUT_MS, fetchImpl);
 }
 
 /** Process the session's episode now instead of after the quiet period. The backend answers 404
@@ -120,7 +163,7 @@ export function flushSession(
   sessionId: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<ApiOutcome> {
-  return postJSON(api, sessionPath(sessionId, "flush"), {}, FLUSH_TIMEOUT_MS, fetchImpl);
+  return requestJSON(api, sessionPath(sessionId, "flush"), {}, FLUSH_TIMEOUT_MS, fetchImpl);
 }
 
 export async function recall(
@@ -128,7 +171,7 @@ export async function recall(
   request: RecallRequest,
   fetchImpl: typeof fetch = fetch,
 ): Promise<RecallResponse | { error: string }> {
-  const outcome = await postJSON(api, RECALL_PATH, request, RECALL_TIMEOUT_MS, fetchImpl);
+  const outcome = await requestJSON(api, RECALL_PATH, request, RECALL_TIMEOUT_MS, fetchImpl);
   if (!outcome.ok) return { error: outcome.error };
   const body = outcome.body as Partial<RecallResponse> | null;
   if (typeof body?.note !== "string") return { error: "recall response has no note" };
@@ -140,5 +183,71 @@ export async function recall(
       : [],
     latency_ms: typeof body.latency_ms === "number" ? body.latency_ms : 0,
     cost_usd: typeof body.cost_usd === "number" ? body.cost_usd : null,
+  };
+}
+
+function apiError(outcome: Extract<ApiOutcome, { ok: false }>): ApiError {
+  const permanent = outcome.status !== null && outcome.status >= 400 && outcome.status < 500;
+  return { error: outcome.error, permanent };
+}
+
+export async function recallQuick(
+  api: MemoryApi,
+  request: RecallRequest,
+  fetchImpl: typeof fetch = fetch,
+): Promise<QuickRecallResponse | ApiError> {
+  const outcome = await requestJSON(
+    api,
+    QUICK_RECALL_PATH,
+    request,
+    QUICK_RECALL_TIMEOUT_MS,
+    fetchImpl,
+  );
+  if (!outcome.ok) return apiError(outcome);
+  const body = outcome.body as Partial<QuickRecallResponse> | null;
+  if (typeof body?.note !== "string") {
+    return { error: "quick recall response has no note", permanent: true };
+  }
+  return { note: body.note, latency_ms: typeof body.latency_ms === "number" ? body.latency_ms : 0 };
+}
+
+export async function startFullRecall(
+  api: MemoryApi,
+  request: RecallRequest,
+  fetchImpl: typeof fetch = fetch,
+): Promise<FullRecallJob | ApiError> {
+  const outcome = await requestJSON(
+    api,
+    FULL_RECALL_PATH,
+    request,
+    QUICK_RECALL_TIMEOUT_MS,
+    fetchImpl,
+  );
+  if (!outcome.ok) return apiError(outcome);
+  const body = outcome.body as Partial<FullRecallJob> | null;
+  if (typeof body?.job_id !== "string" || body.job_id === "") {
+    return { error: "full recall response has no job_id", permanent: true };
+  }
+  return { job_id: body.job_id };
+}
+
+export async function fullRecallStatus(
+  api: MemoryApi,
+  jobId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<FullRecallStatus | ApiError> {
+  const path = `${FULL_RECALL_PATH}/${encodeURIComponent(jobId)}`;
+  const outcome = await requestJSON(api, path, undefined, FULL_RECALL_STATUS_TIMEOUT_MS, fetchImpl);
+  if (!outcome.ok) return apiError(outcome);
+  const body = outcome.body as Record<string, unknown> | null;
+  const status = body?.status === "done" || body?.status === "failed" ? body.status : "pending";
+  if (status === "done" && typeof body?.note !== "string") {
+    return { error: "finished full recall has no note", permanent: true };
+  }
+  return {
+    status,
+    note: typeof body?.note === "string" ? body.note : "",
+    error: typeof body?.error === "string" ? body.error : null,
+    latency_ms: typeof body?.latency_ms === "number" ? body.latency_ms : null,
   };
 }
