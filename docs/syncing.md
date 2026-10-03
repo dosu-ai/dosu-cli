@@ -95,6 +95,39 @@ sessions it shipped. Everything else in the window becomes pending again, includ
 watermark passed over without shipping; the server dedupes anything it already has. Clearing the
 history on the Activity screen empties the ledger the same way.
 
+## Claude Code in an eval harness
+
+On a throwaway machine, set Dosu up before Claude Code's first run (`dosu knowledge hooks enable`
+detects it from `claude` on PATH), then run sessions as usual. Dosu learns from a `claude -p`
+session through two user-level hooks in `~/.claude/settings.json` (`UserPromptSubmit` for
+prompt-time memory, `SessionEnd` to ship the session the moment it ends) and the transcript Claude
+Code writes under `~/.claude/projects`. Some flags switch those off. Checked with Claude Code
+2.1.286 in `-p` mode:
+
+| Passed to `claude` | Prompt-time memory | Ships when it ends | Transcript written |
+|---|---|---|---|
+| none of the below | yes | yes | yes |
+| `--bare` (also `CLAUDE_CODE_SIMPLE=1`) | no | no | yes |
+| `--safe-mode` (also `CLAUDE_CODE_SAFE_MODE=1`) | no | no | yes |
+| `--restricted` | no | no | yes |
+| `--setting-sources` without `user` | no | no | yes |
+| `--settings '{"disableAllHooks": true}'` (or that key in any settings file) | no | no | yes |
+| `--no-session-persistence` | yes | the hook runs, but there is nothing to ship | no |
+
+So an eval harness must not pass `--no-session-persistence` at all, and should not pass the others:
+they skip user hooks, so the session gets no memory at prompt time and does not ship when it ends.
+(`--strict-mcp-config` without Dosu in its `--mcp-config` also drops the Dosu MCP tools.) A session
+that wrote a transcript still ships with a later sync once it has been quiet for five minutes, which
+a machine torn down right after the run never reaches. If a harness cannot drop those flags, it can
+ship each session itself as soon as `claude` returns, using the `session_id` from
+`--output-format json`:
+
+```bash
+dosu knowledge sync --ended claude:<session_id>
+```
+
+That ships the session and its subagents at once, past the quiet period.
+
 ## Project key
 
 Every upload, and every prompt-time memory request, carries a `project` key naming the codebase the

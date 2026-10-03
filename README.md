@@ -179,7 +179,9 @@ quiet for five minutes (their end events are not wired up yet). A resumed sessio
 what is new. Shipping is on by default; `dosu knowledge transcripts disable` turns it off.
 `dosu knowledge sync --status` and `dosu knowledge sessions` show what shipped and why anything did
 not (too short, rejected by the server, or from an agent not supported yet);
-`dosu knowledge sync --retry-rejected` tries refused sessions again.
+`dosu knowledge sync --retry-rejected` tries refused sessions again. Running `claude -p` from an eval
+harness? Some flags (`--bare`, `--safe-mode`, `--no-session-persistence`, ...) keep sessions from
+reaching Dosu; see [docs/syncing.md](docs/syncing.md#claude-code-in-an-eval-harness).
 
 When the deployment has no linked repository, memory is scoped by the codebase a session worked in:
 its `origin` remote, else the repository's root commit, else its path. Set `DOSU_PROJECT` in the
