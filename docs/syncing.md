@@ -14,11 +14,18 @@ a per-session opt-out and a status-bar indicator.
 `dosu knowledge hooks enable codex` writes `$CODEX_HOME/hooks.json` (default `~/.codex`) for the
 `codex` on PATH, so re-running it after a Codex upgrade converges on the right set:
 
-| Codex | Sync trigger | Prompt-time memory |
+| Codex | Sync triggers | Prompt-time memory |
 |---|---|---|
-| 0.160+ | `SessionEnd` (the ended session ships at once; 3s timeout, Codex's cap) | `UserPromptSubmit` |
+| 0.160+ | `SessionEnd` (the ended session ships at once; 3s timeout, Codex's cap), and `Stop` | `UserPromptSubmit` |
 | 0.116 to 0.159, or no `codex` on PATH | `Stop`, after every turn (sessions ship once quiet) | `UserPromptSubmit` |
 | older | `Stop` | none |
+
+`Stop` stays alongside `SessionEnd` because every Codex that shares the home reads the same
+hooks.json (another install, the IDE extension, the desktop app), and one without `SessionEnd`
+skips that event silently: `Stop` keeps its sessions shipping. It is also the backstop for a session
+that never fires `SessionEnd` (`codex exec` killed with SIGTERM fires none; SIGINT does): a later
+turn's run ships it once it has been quiet for five minutes. A `Stop` run never names a session as
+ended, so it ships nothing early; on 0.160 its run is usually an empty one.
 
 Codex runs a hook only once its `config.toml` records the hook's hash as trusted (0.129+), and
 `codex exec` never asks, so `enable` records that trust itself: a

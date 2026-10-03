@@ -192,15 +192,18 @@ describe("codex agent", () => {
     expect(codex?.enableNote?.()).toMatch(/trust/i);
   });
 
-  it("on Codex 0.160 installs SessionEnd instead of Stop", () => {
+  it("on Codex 0.160 adds SessionEnd and keeps Stop for older Codex builds sharing the home", () => {
     installCodex("0.160.0");
     getHookAgent("codex")?.enable();
 
     expect(hooksJson().hooks.SessionEnd).toEqual([
       { hooks: [{ type: "command", command: HOOK_COMMAND, timeout: 3 }] },
     ]);
-    expect(hooksJson().hooks.Stop).toBeUndefined();
+    expect(hooksJson().hooks.Stop).toEqual([
+      { hooks: [{ type: "command", command: HOOK_COMMAND }] },
+    ]);
     expect(trusted()).toEqual({
+      [key("stop")]: { trusted_hash: STOP_SYNC_HASH },
       [key("session_end")]: { trusted_hash: SESSION_END_SYNC_HASH },
       [key("user_prompt_submit")]: { trusted_hash: PROMPT_HASH },
     });
@@ -228,29 +231,40 @@ describe("codex agent", () => {
     );
   });
 
-  it("converges after a Codex upgrade, carrying the user's own hook trust along", () => {
-    installCodex("0.140.0");
+  it("converges when the installed Codex changes, carrying the user's own hook trust along", () => {
+    installCodex("0.160.0");
     const codex = getHookAgent("codex");
     codex?.enable();
-    // The user's own Stop hook, after Dosu's, which they trusted in Codex.
+    // The user's own SessionEnd hook, after Dosu's, which they trusted in Codex.
     const config = hooksJson();
-    config.hooks.Stop.push({ hooks: [{ type: "command", command: "my-notifier" }] });
+    config.hooks.SessionEnd.push({ hooks: [{ type: "command", command: "my-notifier" }] });
     writeFileSync(join(fakeHome, ".codex", "hooks.json"), JSON.stringify(config));
     const tomlPath = join(fakeHome, ".codex", "config.toml");
     writeFileSync(
       tomlPath,
-      `${readFileSync(tomlPath, "utf-8")}\n[hooks.state.${JSON.stringify(key("stop", 1))}]\ntrusted_hash = "sha256:mine"\n`,
+      `${readFileSync(tomlPath, "utf-8")}\n[hooks.state.${JSON.stringify(key("session_end", 1))}]\ntrusted_hash = "sha256:mine"\n`,
     );
+
+    // Back to a Codex without SessionEnd: Dosu's goes, and the user's moves up with its trust.
+    installCodex("0.140.0");
+    codex?.enable();
+
+    expect(hooksJson().hooks.SessionEnd).toEqual([
+      { hooks: [{ type: "command", command: "my-notifier" }] },
+    ]);
+    expect(trusted()).toEqual({
+      [key("stop")]: { trusted_hash: STOP_SYNC_HASH },
+      [key("session_end")]: { trusted_hash: "sha256:mine" },
+      [key("user_prompt_submit")]: { trusted_hash: PROMPT_HASH },
+    });
 
     installCodex("0.160.0");
     codex?.enable();
 
-    expect(hooksJson().hooks.Stop).toEqual([
-      { hooks: [{ type: "command", command: "my-notifier" }] },
-    ]);
     expect(trusted()).toEqual({
-      [key("stop")]: { trusted_hash: "sha256:mine" },
-      [key("session_end")]: { trusted_hash: SESSION_END_SYNC_HASH },
+      [key("stop")]: { trusted_hash: STOP_SYNC_HASH },
+      [key("session_end")]: { trusted_hash: "sha256:mine" },
+      [key("session_end", 1)]: { trusted_hash: SESSION_END_SYNC_HASH },
       [key("user_prompt_submit")]: { trusted_hash: PROMPT_HASH },
     });
   });

@@ -1,14 +1,15 @@
-/** Codex's Dosu hooks, all in `$CODEX_HOME/hooks.json`: the sync trigger and the prompt-time
+/** Codex's Dosu hooks, all in `$CODEX_HOME/hooks.json`: the sync triggers and the prompt-time
  * memory hook, each recorded as trusted in config.toml so `codex exec` runs them (codex-trust.ts).
- * Which trigger depends on the installed Codex, so re-running `hooks enable codex` after an
- * upgrade converges on the right set:
+ * Which hooks depends on the installed Codex, so re-running `hooks enable codex` after an upgrade
+ * converges on the right set:
  *
- * - 0.160+: SessionEnd, which names the session that ended; that session ships at once. Verified
- *   to fire in `codex exec`. No per-turn Stop as well: it would ship nothing SessionEnd's own run
- *   does not (the live session is inside its quiet period at every Stop), and a session killed
- *   before SessionEnd is caught by the next session's run either way.
- * - older, or no `codex` on PATH: Stop, which fires after every turn; it starts a plain sync that
- *   ships sessions once they have been quiet for five minutes.
+ * - always: Stop, which fires after every turn and starts a plain sync that ships sessions once
+ *   they have been quiet for five minutes. hooks.json is read by every Codex that shares the home
+ *   (the CLI on PATH, another install, the IDE extension, the desktop app), and one without
+ *   SessionEnd skips that event silently, so Stop is what keeps its sessions shipping. It is also
+ *   the backstop for a session that never fires SessionEnd (`codex exec` killed with SIGTERM).
+ * - 0.160+: SessionEnd as well, which names the session that ended; that session ships at once.
+ *   Verified to fire in `codex exec`.
  * - 0.116+ (or unknown): UserPromptSubmit, `dosu knowledge context --agent codex --format codex`,
  *   whose additionalContext Codex hands the model. Older versions ignore the unknown event. */
 
@@ -94,7 +95,8 @@ function plannedHooks(version: Version | null): Partial<Record<CodexHookEvent, H
   const sessionEnd = version !== null && atLeast(version, SESSION_END_SINCE);
   const prompt = version === null || atLeast(version, PROMPT_HOOK_SINCE);
   return {
-    ...(sessionEnd ? { SessionEnd: [SESSION_END_SYNC] } : { Stop: [SYNC_HOOK] }),
+    Stop: [SYNC_HOOK],
+    ...(sessionEnd ? { SessionEnd: [SESSION_END_SYNC] } : {}),
     ...(prompt ? { UserPromptSubmit: [CONTEXT] } : {}),
   };
 }
