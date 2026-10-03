@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveConfig } from "../config/config";
@@ -218,6 +218,15 @@ describe("knowledge sync from a session-end hook", () => {
 });
 
 describe("knowledge sync from opencode's Dosu plugin", () => {
+  // Whatever opencode this machine has never answers: every document comes from the DB rows under
+  // the temporary home, and no real opencode boots against them.
+  beforeEach(() => {
+    const bin = join(home, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "opencode"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    vi.stubEnv("PATH", `${bin}${delimiter}${process.env.PATH ?? ""}`);
+  });
+
   /** opencode sessions in its DB under the temporary home, all still inside the quiet period. */
   function opencodeSessions(dir: string): boolean {
     mkdirSync(join(home, ".local", "share", "opencode"), { recursive: true });
