@@ -61,9 +61,17 @@ import { checkForUpdates } from "../version/update-check";
 import { getVersionString, VERSION } from "../version/version";
 import { CliUsageError } from "./errors";
 
-/** Commands that skip the update / skill / ready-task checks: `upgrade` does its own, and the
- * prompt-submit hook runs on every prompt while the user waits. */
-const NO_BACKGROUND_CHECKS = new Set(["upgrade", "knowledge context"]);
+/** Commands that skip the update / skill / ready-task / MCP-refresh checks: `upgrade` does its
+ * own, and the prompt-submit hook runs on every prompt while the user waits. */
+const NO_BACKGROUND_CHECKS = new Set([
+  "upgrade",
+  "knowledge context",
+  // Started by agents: the MCP server owns stdout for the protocol, and the memory commands are
+  // the Pi extension's tools, run while the agent waits.
+  "mcp serve",
+  "memory search",
+  "memory evidence",
+]);
 
 /** `command` is the full subcommand path, e.g. `knowledge context`. */
 export function shouldRunBackgroundChecks(command: string): boolean {
@@ -542,6 +550,15 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
       }
       console.log("\nRestart your AI agents so they pick up the change.");
       if (result.failed.length > 0) process.exitCode = 1;
+    });
+
+  mcp
+    .command("serve")
+    .description("Run the local Dosu MCP server (stdio) that AI tools start from their MCP config")
+    .option("--client <id>", "The AI tool this server runs for (claude-code, codex, opencode, ...)")
+    .action(async (opts: { client?: string }) => {
+      const { runMcpServe } = await import("../mcp/proxy");
+      process.exitCode = await runMcpServe({ client: opts.client });
     });
 
   mcp
