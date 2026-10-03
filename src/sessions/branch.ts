@@ -1,9 +1,10 @@
 /** The git branch a session ran on, read from what was recorded at the time: sync can run days
  * after a session, so the checkout's current branch is only trusted when the reflog shows no
- * checkout since. */
+ * checkout since. What a transcript recorded itself (Claude Code's `gitBranch`, Codex's
+ * `session_meta`) reaches the shipper as its trajectory's `git_branch`. */
 
 /** A recorded branch name, or null for the detached (`HEAD`) and empty values agents record. */
-function recordedBranch(value: unknown): string | null {
+export function recordedBranch(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const branch = value.trim();
   return branch && branch !== "HEAD" ? branch : null;

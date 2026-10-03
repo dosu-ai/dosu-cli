@@ -450,6 +450,87 @@ describe("knowledge sync from opencode's Dosu plugin", () => {
   });
 });
 
+/** `git` in `dir` as though run `minutesAgo` minutes ago: the reflog records each checkout then. */
+function gitThen(dir: string, minutesAgo: number, ...args: string[]): void {
+  const at = `@${Math.floor((Date.now() - minutesAgo * 60_000) / 1000)} +0000`;
+  execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", ...args], {
+    env: { ...process.env, GIT_COMMITTER_DATE: at, GIT_AUTHOR_DATE: at },
+    stdio: "ignore",
+  });
+}
+
+/** A checkout made two hours ago, that moved to `branch` 90 minutes ago. */
+function checkoutOn(name: string, branch: string): string {
+  const dir = join(home, "work", name);
+  mkdirSync(dir, { recursive: true });
+  gitThen(dir, 120, "init", "-q");
+  gitThen(dir, 120, "remote", "add", "origin", `git@github.com:acme/${name}.git`);
+  gitThen(dir, 120, "commit", "-q", "--allow-empty", "-m", "init");
+  gitThen(dir, 90, "checkout", "-q", "-b", branch);
+  return dir;
+}
+
+describe("knowledge sync of a session's branch", () => {
+  it("ships an opencode session with the branch its checkout was on then, not the one it is on now", async () => {
+    const bin = join(home, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "opencode"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    vi.stubEnv("PATH", `${bin}${delimiter}${process.env.PATH ?? ""}`);
+    const alpha = checkoutOn("alpha", "feat/layout");
+    mkdirSync(join(home, ".local", "share", "opencode"), { recursive: true });
+    const made = makeOpencodeDb(join(home, ".local", "share", "opencode", "opencode.db"), [
+      opencodeDocument({
+        id: "ses_branch",
+        directory: alpha,
+        answer: `answer: ${"detail ".repeat(400)}`,
+        updated: Date.now() - 30 * 60_000,
+      }),
+    ]);
+    if (!made) return; // no sqlite builtin
+    // After the session, the checkout moves on.
+    gitThen(alpha, 10, "checkout", "-q", "-b", "feat/next");
+
+    await dosu("sync");
+
+    expect(posted().map((p) => p.metadata)).toEqual([
+      expect.objectContaining({
+        agent: "opencode",
+        session_id: "ses_branch",
+        branch: "feat/layout",
+      }),
+    ]);
+  });
+
+  it("ships a Claude Code session with the branch its transcript recorded, as before", async () => {
+    const alpha = checkoutOn("alpha", "feat/now");
+    const recorded = exchange(1, alpha)
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.stringify({ ...JSON.parse(line), gitBranch: "feat/claude" }))
+      .join("\n");
+    claudeSession("aaaa", `${recorded}\n`, 30);
+
+    await dosu("sync");
+
+    const [shipped] = posted();
+    expect(shipped.records[0]).toMatchObject({ role: "meta", git_branch: "feat/claude" });
+    expect(shipped.metadata.branch).toBe("feat/claude");
+  });
+
+  it("ships a Codex session with the branch its session_meta recorded, as before", async () => {
+    const alpha = checkoutOn("alpha", "feat/now");
+    codexRollout("rollout-2026-10-02T10-00-00-01a0ff2b-0000-7000-8000-000000000001", alpha, 30, {
+      git: { branch: "feat/codex", commit_hash: "abc" },
+    });
+
+    await dosu("sync");
+
+    const [shipped] = posted();
+    expect(shipped.records[0]).toMatchObject({ role: "meta", git_branch: "feat/codex" });
+    expect(shipped.metadata.branch).toBe("feat/codex");
+  });
+});
+
 describe("knowledge sync of a resumed session", () => {
   it("ships the tail of one under a relocated Claude config from a shell without the variable", async () => {
     const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");

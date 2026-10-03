@@ -10,6 +10,7 @@ import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
+import { contextHookOutput } from "../memory/context-hook";
 import { loadSyncState } from "../sync/state";
 import { knowledgeCommand } from "./knowledge";
 
@@ -297,6 +298,65 @@ describe("knowledge sync of pi sessions", () => {
       "incognito",
       "incognito",
     ]);
+  });
+});
+
+describe("knowledge sync of a pi session's branch", () => {
+  /** `git` in `dir` as though run `minutesAgo` minutes ago: the reflog records each checkout then. */
+  function gitThen(dir: string, minutesAgo: number, ...args: string[]): void {
+    const at = `@${Math.floor((Date.now() - minutesAgo * 60_000) / 1000)} +0000`;
+    execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", ...args], {
+      env: { ...process.env, GIT_COMMITTER_DATE: at, GIT_AUTHOR_DATE: at },
+      stdio: "ignore",
+    });
+  }
+
+  function checkoutOn(branch: string): string {
+    const dir = join(home, "work", "widget");
+    mkdirSync(dir, { recursive: true });
+    gitThen(dir, 120, "init", "-q");
+    gitThen(dir, 120, "commit", "-q", "--allow-empty", "-m", "init");
+    gitThen(dir, 90, "checkout", "-q", "-b", branch);
+    return dir;
+  }
+
+  it("ships a session with the branch its checkout was on then, not the one it is on now", async () => {
+    const widget = checkoutOn("feat/calc");
+    piSession("01a0fdc5-b001", widget, exchange(1), { minutesAgo: 30 });
+    // After the session, the checkout moves on.
+    gitThen(widget, 10, "checkout", "-q", "-b", "feat/next");
+
+    await dosu("sync");
+
+    expect(posted().map((p) => p.metadata)).toEqual([
+      expect.objectContaining({ agent: "pi", session_id: "01a0fdc5-b001", branch: "feat/calc" }),
+    ]);
+  });
+
+  it("ships a session with the branch its prompts were served under", async () => {
+    const widget = checkoutOn("feat/calc");
+    const prompt = (text: string) =>
+      JSON.stringify({ prompt: text, session_id: "01a0fdc5-b002", cwd: widget });
+    const context = vi.fn<Fetch>(async () => new Response(JSON.stringify({ digest: null })));
+    const options = {
+      apiKey: "sk_test",
+      deploymentId: "dep1",
+      backendUrl: "https://api.dosu.test",
+      agent: "pi",
+      format: "plain" as const,
+      fetchImpl: context,
+    };
+    await contextHookOutput(prompt("add a mul function"), options);
+    // Partway through, the session moves to another branch; its prompts keep the first one.
+    gitThen(widget, 0, "checkout", "-q", "-b", "feat/mul");
+    await contextHookOutput(prompt("now the tests"), options);
+    const ended = piSession("01a0fdc5-b002", widget, exchange(1), { minutesAgo: 0 });
+
+    await dosu("sync", "--quiet", "--ended", `pi:01a0fdc5-b002=${ended}`);
+
+    const served = context.mock.calls.map(([, init]) => JSON.parse(init?.body as string).branch);
+    expect(served).toEqual(["feat/calc", "feat/calc"]);
+    expect(posted().map((p) => p.metadata.branch)).toEqual(["feat/calc"]);
   });
 });
 

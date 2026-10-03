@@ -40,6 +40,7 @@ interface StepOverrides {
   isIncognito?: (s: AgentSession) => boolean;
   normalize?: (s: AgentSession) => Promise<unknown[] | null>;
   resolveProject?: (s: AgentSession) => ProjectKey | null;
+  resolveBranch?: (s: AgentSession) => string | null;
 }
 
 function makeStep(overrides: StepOverrides = {}) {
@@ -54,6 +55,7 @@ function makeStep(overrides: StepOverrides = {}) {
     normalize: (overrides.normalize ?? (async () => RECORDS)) as any,
     resolveProject:
       overrides.resolveProject ?? (() => ({ project: "github.com/acme/app", rule: "origin" })),
+    resolveBranch: overrides.resolveBranch ?? (() => null),
   });
   return { step, fetchImpl: fetchImpl as ReturnType<typeof vi.fn> };
 }
@@ -499,5 +501,49 @@ describe("createShipStep continuation", () => {
 
     expect(body(fetchImpl, 0).metadata.parent_session_id).toBe("parent-1");
     expect("parent_session_id" in body(fetchImpl, 1).metadata).toBe(false);
+  });
+});
+
+describe("createShipStep branch", () => {
+  const withBranch = (gitBranch: string) => [
+    { ...RECORDS[0], git_branch: gitBranch },
+    ...RECORDS.slice(1),
+  ];
+
+  function metadata(fetchImpl: ReturnType<typeof vi.fn>) {
+    return JSON.parse(fetchImpl.mock.calls[0][1].body).metadata;
+  }
+
+  it("sends the branch the transcript recorded, the one the server read before", async () => {
+    const { step, fetchImpl } = makeStep({
+      normalize: async () => withBranch("feat/recorded"),
+      resolveBranch: () => "feat/elsewhere",
+    });
+
+    await step([session("s1")]);
+
+    expect(metadata(fetchImpl).branch).toBe("feat/recorded");
+  });
+
+  it.each([
+    ["recorded none", RECORDS],
+    ["recorded a detached HEAD", withBranch("HEAD")],
+  ])("a transcript that %s ships the branch resolved for its session", async (_label, records) => {
+    const { step, fetchImpl } = makeStep({
+      normalize: async () => records,
+      resolveBranch: (s) => (s.id === "s1" ? "feat/resolved" : null),
+    });
+
+    await step([session("s1")]);
+
+    expect(metadata(fetchImpl).branch).toBe("feat/resolved");
+  });
+
+  it("leaves the branch out when nothing knows it", async () => {
+    const { step, fetchImpl } = makeStep();
+
+    await step([session("s1")]);
+
+    expect("branch" in metadata(fetchImpl)).toBe(false);
   });
 });

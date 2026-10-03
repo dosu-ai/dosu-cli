@@ -1,5 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { branchFromReflog, parseReflog } from "./branch";
+import { branchFromReflog, parseReflog, recordedBranch } from "./branch";
+
+describe("recordedBranch", () => {
+  it("takes a recorded name, not a detached HEAD, an empty value, or a non-string", () => {
+    expect(recordedBranch(" feat/x ")).toBe("feat/x");
+    expect(recordedBranch("HEAD")).toBeNull();
+    expect(recordedBranch("")).toBeNull();
+    expect(recordedBranch(undefined)).toBeNull();
+  });
+});
 
 describe("parseReflog", () => {
   it("parses unix-dated entries and skips anything else", () => {
