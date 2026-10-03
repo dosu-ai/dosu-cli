@@ -188,7 +188,11 @@ session later ships only what is new. Shipping is on by default; `dosu knowledge
 disable` turns it off.
 `dosu knowledge sync --status` and `dosu knowledge sessions` show what shipped and why anything did
 not (too short, rejected by the server, or from an agent not supported yet);
-`dosu knowledge sync --retry-rejected` tries refused sessions again. Running `claude -p` from an eval
+`dosu knowledge sync --retry-rejected` tries refused sessions again. On a throwaway machine (a VM
+destroyed after its last task), run `dosu knowledge sync --flush` as the last step before teardown:
+it ships every session not shipped yet right away, including the ones no end event named (Cursor's,
+a Codex session killed with SIGTERM, pi run with `--no-extensions`); see
+[docs/syncing.md](docs/syncing.md#throwaway-machines). Running `claude -p` from an eval
 harness? Some flags (`--bare`, `--safe-mode`, `--no-session-persistence`, ...) keep sessions from
 reaching Dosu; see [docs/syncing.md](docs/syncing.md#claude-code-in-an-eval-harness).
 

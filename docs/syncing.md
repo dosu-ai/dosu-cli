@@ -14,7 +14,8 @@ ones its ledger has no answer for, applies the repo scope and pause switch from
 first), which learns from each session server-side. Shipping is on by default;
 `dosu knowledge transcripts disable` turns it off. This document covers how a sync decides what to
 ship, the project key sessions are scoped by, the repo scope, and the two switches layered on top:
-a per-session opt-out and a status-bar indicator.
+a per-session opt-out and a status-bar indicator. On a machine torn down after its last task, run
+`dosu knowledge sync --flush` as the last step (see [Throwaway machines](#throwaway-machines)).
 
 ## Codex hooks
 
@@ -56,9 +57,8 @@ mode, talks to a shared background server: `/quit` only disconnects, and `Sessio
 server unloads the thread, `thread_unload_delay_secs` later (config.toml, default 60). That hook runs
 in the background server's environment (its PATH and `DOSU_PROJECT`, from the TUI that started it),
 not the quitting TUI's. A session that misses its `SessionEnd` ships with a later run once it has
-been quiet for five minutes, so a throwaway machine should end with `dosu knowledge sync
---bootstrap` run at least five minutes after its last session (and over a minute after the last TUI
-quit).
+been quiet for five minutes, which a throwaway machine never reaches: end it with
+`dosu knowledge sync --flush` (see [Throwaway machines](#throwaway-machines)).
 
 The prompt hook runs `dosu knowledge context --agent codex --format codex`, which answers with the
 same `additionalContext` JSON as Claude Code's. It names the session by its rollout file, as the
@@ -75,7 +75,7 @@ for that run. Nothing is skipped for good by being older than something else, an
 cap on the scan: listing is metadata only. Claude Code sessions are listed from `~/.claude` and,
 when the variable is set, `CLAUDE_CONFIG_DIR`. Codex sessions are listed from `sessions/` and
 `archived_sessions/` under `CODEX_HOME` (default `~/.codex`). Each run settles at most 20 sessions, oldest first;
-`--bootstrap` keeps going until the backlog is drained. Entries are pruned a week after their session
+`--bootstrap` and `--flush` keep going until the backlog is drained. Entries are pruned a week after their session
 leaves the 30-day window.
 
 | Outcome | Meaning |
@@ -143,7 +143,8 @@ through, the backoff ends. Only definitive end events count: Claude Code's `Sess
 the opencode process that ran an OpenCode session, and pi's `session_shutdown` as the Dosu pi
 extension reports it. Per-turn events (Cursor's `stop`, Codex's `Stop`, OpenCode's `session.idle`)
 never pass `--ended`. Each agent's end event is one reader in `END_EVENT_READERS`
-(`src/sessions/capture.ts`), except OpenCode's: its plugin passes `--ended` itself.
+(`src/sessions/capture.ts`), except OpenCode's: its plugin passes `--ended` itself. `--flush` lifts
+the quiet period for every session (see [Throwaway machines](#throwaway-machines)).
 
 **Resumed sessions.** For a shipped session the ledger also keeps how many normalized records went
 and a sha256 of them. When the session grows and its records still start with exactly that prefix,
@@ -204,7 +205,31 @@ ship each session itself as soon as `claude` returns, using the `session_id` fro
 dosu knowledge sync --ended claude:<session_id>
 ```
 
-That ships the session and its subagents at once, past the quiet period.
+That ships the session and its subagents at once, past the quiet period. Or ship everything at the
+end with `dosu knowledge sync --flush` (see [Throwaway machines](#throwaway-machines)).
+
+## Throwaway machines
+
+A VM or container destroyed after its last task gets no later sync, so make this its last step,
+after the last agent has exited:
+
+```bash
+dosu knowledge sync --flush
+```
+
+End events ship most sessions at once, but not all: Codex killed with SIGTERM fires no `SessionEnd`,
+Codex before 0.160 and Cursor have only per-turn events, pi run with `--no-extensions` loads no
+extension to report its end, and the sync a hook starts runs detached, where a teardown can cut it
+short. A flush ships every pending session now, with its subagents, past the five-minute quiet
+period. It drains the backlog batch by batch in the foreground (`--detach` is refused), and when
+another sync holds the lock, such as one a session-end hook just started, it waits for it (up to ten
+minutes) instead of skipping. It is an explicit command even with `--quiet`, which then only
+silences it: it resumes a paused sync and does not wait out a failure backoff. It still leaves out
+incognito sessions, sessions too small to learn from, and repos outside the repo scope, and ships
+nothing while `dosu knowledge transcripts disable` is in effect. If an upload fails, it stops with
+the rest still pending and, without `--quiet` or `--json`, exits 1. A session still running when the
+flush starts ships what it has so far; were the machine to live on, the rest would ship later as a
+tail.
 
 ## Project key
 
@@ -436,7 +461,8 @@ extension shells out to `dosu` on PATH for everything, so it carries no credenti
   record and carries on from there.
 
 Pi started with `--no-extensions` (`-ne`) loads none of this: no digest, no tools, and its sessions
-ship only on a later sync once they have been quiet for five minutes (an explicit
+ship only on a later sync once they have been quiet for five minutes, or with
+`dosu knowledge sync --flush` (an explicit
 `-e ~/.pi/agent/extensions/dosu.ts` still loads it). Every failure, a missing `dosu` included,
 leaves pi running as if Dosu were not installed.
 

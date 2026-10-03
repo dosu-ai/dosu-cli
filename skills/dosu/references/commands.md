@@ -107,6 +107,8 @@ dosu agents config set <agent-id> <existing.leaf.path>
 dosu ask <question> [--session <id>] [--timeout <seconds>] [--json]
 dosu knowledge search <query> [--limit <positive-int>] [--json]   # default 10
 dosu knowledge list [--json]
+dosu knowledge sync [--flush] [--json]
+dosu knowledge sync --status [--json]
 
 dosu docs list [--search <query>] [--topic <id>] [--limit <positive-int>] [--json]
 dosu docs get <id> [--revision <positive-int>] [--json]
@@ -123,6 +125,7 @@ dosu docs publish <id> --to <platform> [target flags] [--json]
 dosu docs sync-back <id> [--json]
 ```
 
+- `knowledge sync` ships finished local agent sessions to Dosu memory; session-end hooks run it, so it rarely needs running by hand. `--flush` ships every pending session now instead of waiting for it to be quiet for five minutes: on a throwaway machine, run it as the last step before teardown. `--status` shows what shipped and why anything did not.
 - Document list defaults to 20. `create` and `update` reject combining `--body` with `--body-file`; `update` requires at least one field.
 - Import platforms: `github`, `gitlab`, `azure_devops`, `confluence`, `notion`, `coda`.
 - Publish platforms: the same six. Target flags are `--repo-id`, `--project-id`, `--parent-page-id`, `--doc-id`, `--directory`, and `--data-source-id`; Azure DevOps requires `--data-source-id`. Other target validation may occur in the backend.
