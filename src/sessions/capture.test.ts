@@ -263,3 +263,37 @@ describe("endedSessionOf", () => {
     expect(endedSessionOf(payload)).toBeNull();
   });
 });
+
+describe("endedSessionOf for the Dosu pi extension", () => {
+  const piEnd = {
+    hook_event_name: "session_shutdown",
+    agent: "pi",
+    reason: "quit",
+    session_id: "01a0fdc5-a112",
+    transcript_path:
+      "/home/u/.pi/agent/sessions/--work--/2026-10-02T17-59-42-611Z_01a0fdc5-a112.jsonl",
+    cwd: "/work",
+  };
+
+  it.each(["quit", "new", "resume", "fork"])("reads a session_shutdown for %s", (reason) => {
+    expect(endedSessionOf({ ...piEnd, reason })).toEqual({
+      harness: "pi",
+      id: "01a0fdc5-a112",
+      path: piEnd.transcript_path,
+    });
+  });
+
+  it.each([
+    // A reload tears the extension down and brings it back on the same session.
+    ["a reload", { ...piEnd, reason: "reload" }],
+    ["another agent's event of the same name", { ...piEnd, agent: "opencode" }],
+    [
+      "a transcript not named for the session",
+      { ...piEnd, transcript_path: "/home/u/.pi/agent/sessions/--work--/other.jsonl" },
+    ],
+    ["an unsafe session id", { ...piEnd, session_id: "../x", transcript_path: "/x_../x.jsonl" }],
+    ["no transcript (an ephemeral --no-session run)", { ...piEnd, transcript_path: undefined }],
+  ])("ignores %s", (_label, payload) => {
+    expect(endedSessionOf(payload)).toBeNull();
+  });
+});

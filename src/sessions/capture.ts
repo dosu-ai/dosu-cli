@@ -178,10 +178,26 @@ function claudeSessionEnd(hook: HookPayload): EndedSession | null {
   return { harness: "claude", id, path };
 }
 
+/** pi `session_shutdown`, as the Dosu pi extension hands it over: `{hook_event_name, agent: "pi",
+ * reason, session_id, transcript_path, cwd}`. A reload tears the extension down and brings it
+ * straight back on the same session, so it ends nothing; quit, /new, /resume and /fork leave the
+ * session behind. */
+function piSessionShutdown(hook: HookPayload): EndedSession | null {
+  if (hook.hook_event_name !== "session_shutdown" || hook.agent !== "pi") return null;
+  if (hook.reason === "reload") return null;
+  const id = hook.session_id;
+  const path = hook.transcript_path;
+  if (typeof id !== "string" || !SAFE_SEGMENT.test(id) || typeof path !== "string") return null;
+  // pi names the transcript `<timestamp>_<session id>.jsonl`.
+  if (!basename(path).endsWith(`_${id}.jsonl`)) return null;
+  return { harness: "pi", id, path };
+}
+
 /** One reader per agent for its definitive end-of-session event. Per-turn events (Cursor
  * `stop`, Codex `Stop` before 0.160) never count: they fire while the session goes on. */
 const END_EVENT_READERS: ReadonlyArray<(hook: HookPayload) => EndedSession | null> = [
   claudeSessionEnd,
+  piSessionShutdown,
 ];
 
 /** The session a hook payload says just ended; null when the payload is not an end event. */

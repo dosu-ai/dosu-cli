@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
@@ -162,6 +163,31 @@ function piSession(
   return path;
 }
 
+/** Feed `payload` to this process's stdin, as the Dosu pi extension hands the hook its JSON. */
+function hookStdin(payload: unknown): void {
+  vi.spyOn(process, "stdin", "get").mockReturnValue(
+    Readable.from([JSON.stringify(payload)]) as unknown as typeof process.stdin,
+  );
+}
+
+/** The `knowledge` arguments the last detached re-spawn was given. */
+function respawnedArgs(): string[] {
+  const args = (mockSpawn.mock.calls.at(-1) as unknown as [string, string[]])[1];
+  return args.slice(args.indexOf("knowledge") + 1);
+}
+
+/** What the Dosu pi extension sends on `session_shutdown`. */
+function shutdownPayload(id: string, transcript: string, cwd: string, reason = "quit") {
+  return {
+    hook_event_name: "session_shutdown",
+    agent: "pi",
+    reason,
+    session_id: id,
+    transcript_path: transcript,
+    cwd,
+  };
+}
+
 describe("knowledge sync of pi sessions", () => {
   it("ships each finished pi session under its header's id, project and parent", async () => {
     const widget = gitRepo("widget", "git@github.com:acme/widget.git");
@@ -217,5 +243,55 @@ describe("knowledge sync of pi sessions", () => {
 
     expect(posted().map((p) => p.metadata.session_id)).toEqual(["quoting"]);
     expect(loadSyncState().sessions["pi/incognito"]?.outcome).toBe("incognito");
+  });
+});
+
+describe("knowledge sync from the Dosu pi extension's session_shutdown", () => {
+  it("ships the session that just ended, while another live one waits out the quiet period", async () => {
+    const widget = gitRepo("widget", "git@github.com:acme/widget.git");
+    const ended = piSession("01a0fdc5-a112", widget, exchange(1), { minutesAgo: 0 });
+    piSession("live", widget, exchange(2), { minutesAgo: 1 });
+    hookStdin(shutdownPayload("01a0fdc5-a112", ended, widget));
+
+    await dosu("sync", "--quiet", "--detach");
+    expect(fetchImpl).not.toHaveBeenCalled();
+    const child = respawnedArgs();
+    expect(child).toEqual(["sync", "--quiet", "--ended", `pi:01a0fdc5-a112=${ended}`]);
+
+    await dosu(...child);
+    expect(posted().map((p) => p.metadata.session_id)).toEqual(["01a0fdc5-a112"]);
+  });
+
+  it("a reload names no session: the extension comes back on the same one", async () => {
+    const widget = gitRepo("widget", "git@github.com:acme/widget.git");
+    const live = piSession("01a0fdc5-a112", widget, exchange(1), { minutesAgo: 0 });
+    hookStdin(shutdownPayload("01a0fdc5-a112", live, widget, "reload"));
+
+    await dosu("sync", "--quiet", "--detach");
+
+    expect(respawnedArgs()).toEqual(["sync", "--quiet"]);
+  });
+
+  it("finds a session pi kept under PI_CODING_AGENT_DIR, now and on later runs without it", async () => {
+    const widget = gitRepo("widget", "git@github.com:acme/widget.git");
+    const agentDir = join(home, "relocated-pi");
+    const ended = piSession("01a0fdc5-a112", widget, exchange(1), { minutesAgo: 0, agentDir });
+    // The extension's hook runs in pi's environment, so this run has the variable.
+    vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+    fetchImpl.mockResolvedValueOnce(new Response("unavailable", { status: 503 }));
+    await dosu("sync", "--quiet", "--ended", `pi:01a0fdc5-a112=${ended}`);
+
+    // A later manual run, past the quiet period, from a shell without the variable still knows
+    // where it lives.
+    const later = new Date(Date.now() - 10 * 60_000);
+    utimesSync(ended, later, later);
+    vi.stubEnv("PI_CODING_AGENT_DIR", undefined);
+    await dosu("sync");
+
+    expect(posted().map((p) => [p.metadata.session_id, p.metadata.project])).toEqual([
+      ["01a0fdc5-a112", "github.com/acme/widget"],
+      ["01a0fdc5-a112", "github.com/acme/widget"],
+    ]);
+    expect(loadSyncState().sessions["pi/01a0fdc5-a112"]?.outcome).toBe("shipped");
   });
 });
