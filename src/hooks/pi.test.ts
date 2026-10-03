@@ -26,6 +26,7 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...original, homedir: () => fakeHome };
 });
 
+import { knowledgeCommand } from "../commands/knowledge";
 import { getHookAgent } from "./agents";
 import { HookConfigError } from "./formats";
 
@@ -65,6 +66,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   rmSync(fakeHome, { recursive: true, force: true });
 });
@@ -144,6 +146,7 @@ async function loadExtension() {
 
 describe("pi hook agent", () => {
   it("installs the extension in pi's extensions folder, and removes it", () => {
+    vi.stubEnv("PATH", bin);
     const pi = getHookAgent("pi");
     expect(pi?.name()).toBe("Pi");
     expect(pi?.isInstalled()).toBe(false);
@@ -162,6 +165,24 @@ describe("pi hook agent", () => {
     expect(pi?.isEnabled()).toBe(false);
     expect(existsSync(pi?.configPath() as string)).toBe(false);
     pi?.disable();
+  });
+
+  it("counts pi as installed before its first run, when pi is on PATH", async () => {
+    // pi creates ~/.pi/agent on its first run; a fresh VM sets Dosu up before that run.
+    vi.stubEnv("PATH", bin);
+    const pi = getHookAgent("pi");
+    expect(pi?.isInstalled()).toBe(false);
+    writeFileSync(join(bin, "pi"), "#!/bin/sh\n");
+    chmodSync(join(bin, "pi"), 0o755);
+    expect(pi?.isInstalled()).toBe(true);
+    expect(existsSync(join(fakeHome, ".pi"))).toBe(false);
+
+    // `hooks enable` with no agent named installs it for every detected agent, pi included.
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const cmd = knowledgeCommand();
+    cmd.exitOverride();
+    await cmd.parseAsync(["node", "dosu", "hooks", "enable"]);
+    expect(pi?.isEnabled()).toBe(true);
   });
 
   it("honors PI_CODING_AGENT_DIR", () => {

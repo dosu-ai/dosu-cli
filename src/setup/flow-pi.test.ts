@@ -1,7 +1,15 @@
 /** `dosu setup` on a machine with pi: pi has no MCP config, so the agent setup offers is the Dosu
  * pi extension itself (memory tools, session-end trigger, prompt-time memory, /dosu-incognito). */
 
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,7 +40,21 @@ const cfg = makeTestConfig({
 
 describe("dosu setup with pi", () => {
   it("is not offered where pi is absent", () => {
+    vi.stubEnv("PATH", join(home, "bin"));
     expect(stepDetectTools().map((p) => p.id())).not.toContain("pi");
+  });
+
+  it("is offered before pi's first run, when pi is on PATH", () => {
+    const bin = join(home, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "pi"), "#!/bin/sh\n");
+    chmodSync(join(bin, "pi"), 0o755);
+    vi.stubEnv("PATH", bin);
+
+    const pi = stepDetectTools().find((p) => p.id() === "pi");
+
+    expect(pi?.isConfigured()).toBe(false);
+    expect(existsSync(join(home, ".pi"))).toBe(false);
   });
 
   it("offers pi once it is installed, installs the extension, and removes it again", () => {

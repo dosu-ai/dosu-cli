@@ -208,8 +208,10 @@ Dev installs (`DOSU_DEV=true`) pin the working copy and prefix with `env` rather
 
 Pi has no hook config, so `dosu knowledge hooks enable pi` (and `dosu setup`, which lists pi as an
 agent; `dosu mcp add pi` does the same) writes one extension, `<agent dir>/extensions/dosu.ts`
-(`~/.pi/agent`, or `PI_CODING_AGENT_DIR`), which pi discovers on its next start or `/reload`. It is
-a single file rather than a pi package: `pi install` needs pi on PATH, network or a second
+(`~/.pi/agent`, or `PI_CODING_AGENT_DIR`), which pi discovers on its next start or `/reload`. Pi
+counts as installed when that directory exists or `pi` is on PATH, so a machine provisioned before
+pi's first run (which creates the directory) gets the extension too. It is a single file rather
+than a pi package: `pi install` needs pi on PATH, network or a second
 directory, and an edit to pi's `settings.json` to undo; the extensions folder works offline in a
 throwaway VM.
 `hooks disable pi` deletes it, and neither command touches a `dosu.ts` that is not Dosu's. The

@@ -9,6 +9,12 @@ export function isInstalled(paths: string[]): boolean {
   return paths.some((p) => existsSync(expandHome(p)));
 }
 
+/** Whether an executable named `bin` is in a PATH directory: an agent installed on a machine
+ * where it has never run has no config dir yet. */
+export function isOnPath(bin: string, path: string = process.env.PATH ?? ""): boolean {
+  return path.split(delimiter).some((dir) => dir !== "" && existsSync(join(dir, bin)));
+}
+
 /** Expands ~ to the user's home directory. */
 export function expandHome(path: string): string {
   if (!path.startsWith("~")) return path;

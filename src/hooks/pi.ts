@@ -12,7 +12,7 @@
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { writeSecureFile } from "../mcp/config-helpers";
-import { expandHome, isInstalled } from "../mcp/detect";
+import { expandHome, isInstalled, isOnPath } from "../mcp/detect";
 import { selfInvocation } from "../sync/detach";
 import { INCOGNITO_COMMAND_NAME, INCOGNITO_MARKER } from "../sync/incognito";
 import type { HookAgent } from "./agents";
@@ -298,13 +298,19 @@ function isOurs(path: string): boolean {
   }
 }
 
+/** Pi is installed when its agent directory exists or `pi` is on PATH: pi creates the directory
+ * on its first run, and a freshly provisioned machine sets Dosu up before that run. */
+function piInstalled(): boolean {
+  return isInstalled([piAgentDir()]) || isOnPath("pi");
+}
+
 /** Pi's HookAgent: the session-end trigger, prompt-time memory, the memory tools and
  * /dosu-incognito, installed and removed together as the one extension file. */
 export function piHookAgent(): HookAgent {
   return {
     id: () => "pi",
     name: () => "Pi",
-    isInstalled: () => isInstalled([piAgentDir()]),
+    isInstalled: piInstalled,
     configPath: extensionPath,
     isEnabled: () => isOurs(extensionPath()),
     enable: () => {
