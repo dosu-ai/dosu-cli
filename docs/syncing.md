@@ -277,6 +277,23 @@ send the same headers from the current directory. A value with characters outsid
 name) goes as an RFC 8187 value, `UTF-8''` followed by its percent-encoded UTF-8, which the server
 decodes; any other value goes as it is.
 
+## Branch
+
+Every upload, and every prompt-time memory request, also carries the branch the session ran on
+(`metadata.branch`, and `branch` on the prompt request), which memory is scoped by beside the
+project. An upload sends the branch its transcript recorded, when it recorded one: Claude Code's
+`gitBranch` and Codex's `session_meta`, as the trajectory's `git_branch` (the value the server
+read before the CLI sent one). OpenCode, pi and Cursor record none, so their sessions ship with
+the branch their prompts were served under, else (Cursor) the one its `stop` hook captured, else
+the one the session's directory had checked out at the session's last activity, read from the
+reflog; the branch checked out now counts only when the reflog shows no checkout since. A
+detached HEAD is no branch, and the upload then sends none.
+
+Like the project key, a session's branch is cached in `project-dirs.json` the first time it is
+resolved: the first prompt pins the branch checked out then, the session's later prompts send
+that one even after a checkout, and its transcript ships with it, the tail of a resumed session
+included.
+
 ## Repo scope
 
 A session's repo is the `origin` remote of its working directory, normalized to a `host/owner/repo`
