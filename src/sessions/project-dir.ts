@@ -29,7 +29,7 @@ import {
   projectOverride,
 } from "./project";
 import { currentBranchOfDir, headReflogOfDir, originRepoOfDir } from "./repo";
-import { type AgentSession, sessionAtPath } from "./scan";
+import { type AgentSession, scanAgentSessions, sessionAtPath } from "./scan";
 
 const CACHE_FILENAME = "project-dirs.json";
 const CACHE_SCHEMA_VERSION = 1;
@@ -421,9 +421,16 @@ export function pinEndedSessionProjects(
   env: NodeJS.ProcessEnv = process.env,
 ): void {
   const resolver = createProjectDirResolver(configDir, { env });
+  // opencode's sessions share one DB, so its end event names no transcript: the scan finds them.
+  let opencode: AgentSession[] | undefined;
   for (const { harness, id, path } of ended) {
-    if (!harness || !id || !path) continue;
-    const session = sessionAtPath(harness, id, path);
+    if (!harness || !id) continue;
+    let session: AgentSession | null | undefined = null;
+    if (path) session = sessionAtPath(harness, id, path);
+    else if (harness === "opencode") {
+      opencode ??= scanAgentSessions({ env }).filter((s) => s.harness === "opencode");
+      session = opencode.find((s) => s.id === id);
+    }
     if (session) resolver.resolveProject(session, env);
   }
   resolver.flush();

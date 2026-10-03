@@ -263,6 +263,30 @@ describe("knowledge sync from opencode's Dosu plugin", () => {
     expect(posted()[0].records[0]).toMatchObject({ role: "meta", source: "opencode", cwd: alpha });
   });
 
+  it("applies opencode's DOSU_PROJECT to the sessions that ended there, a subagent's included", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    if (!opencodeSessions(alpha)) return;
+
+    // The plugin's syncs run in the opencode process's environment.
+    vi.stubEnv("DOSU_PROJECT", "poc-alpha");
+    await dosu("sync", "--quiet", "--ended", "opencode:ses_root", "--ended", "opencode:ses_child");
+    // Later, past the quiet period, a run from a shell without the variable ships the rest.
+    vi.stubEnv("DOSU_PROJECT", undefined);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    await dosu("sync");
+    vi.useRealTimers();
+
+    const projects = Object.fromEntries(
+      posted().map((p) => [p.metadata.session_id, p.metadata.project]),
+    );
+    expect(projects).toEqual({
+      ses_root: "poc-alpha",
+      ses_child: "poc-alpha",
+      ses_live: "github.com/acme/alpha",
+    });
+  });
+
   it("a session going idle after a turn ends nothing, so nothing skips the quiet period", async () => {
     hookStdin({ agent: "opencode", hook_event_name: "opencode.session.idle", session_id: "ses_a" });
 
