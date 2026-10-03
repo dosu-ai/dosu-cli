@@ -401,6 +401,15 @@ describe("scanAgentSessions", () => {
       ]);
     });
 
+    it("lists a transcript whose header is unreadable, and drops one whose stat fails", () => {
+      const path = piLog(piProjectDir(), "no-header", T1);
+      writeFileSync(path, "{truncated\n");
+      utimesSync(path, T1, T1);
+      symlinkSync(join(home, "nowhere.jsonl"), join(piProjectDir(), "2026_gone.jsonl"));
+
+      expect(scan().map((s) => [s.id, s.parentId])).toEqual([["no-header", undefined]]);
+    });
+
     it("ignores a sessionDir setting it cannot resolve without pi's working directory", () => {
       piLog(join(home, "relative-sessions"), "relative", T1);
       mkdirSync(join(home, ".pi", "agent"), { recursive: true });
