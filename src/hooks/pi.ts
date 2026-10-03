@@ -224,6 +224,8 @@ function forkedFromIncognito(path) {
 
 export default function dosuForPi(pi) {
   let incognito = false;
+  // Set when /${INCOGNITO_COMMAND_NAME} was given a task it did not run, and said so.
+  let droppedTask = false;
 
   const hideMemoryTools = () => {
     pi.setActiveTools(pi.getActiveTools().filter((name) => !MEMORY_TOOLS.includes(name)));
@@ -260,7 +262,7 @@ export default function dosuForPi(pi) {
     const transcript = ctx.sessionManager.getSessionFile();
     // pi saves a session once it has a message, so a print run with nothing after
     // /${INCOGNITO_COMMAND_NAME} saved none, and a later run with its --session-id starts a new one.
-    if (incognito && !ctx.hasUI && transcript && !existsSync(transcript)) {
+    if (incognito && !droppedTask && !ctx.hasUI && transcript && !existsSync(transcript)) {
       process.stderr.write(
         'Dosu incognito: pi saved no session, since nothing ran after /${INCOGNITO_COMMAND_NAME}. To work off the record, give the task in the same run: pi -p "/${INCOGNITO_COMMAND_NAME}" "<task>"\n',
       );
@@ -334,8 +336,8 @@ export default function dosuForPi(pi) {
     description: "Turn Dosu off for this session: no memory tools, and it is never shipped to Dosu memory",
     // No turn of its own: pi runs a command while the rest of a print run's messages, or a run
     // under way, carry on, and a prompt started here collides with them ("Agent is already
-    // processing a prompt").
-    handler: async () => {
+    // processing a prompt"). So a task typed after the command does not run; it is handed back.
+    handler: async (args, ctx) => {
       incognito = true;
       hideMemoryTools();
       // What keeps the session from shipping: an entry only an extension can write, saved at once
@@ -343,6 +345,20 @@ export default function dosuForPi(pi) {
       pi.appendEntry(INCOGNITO_ENTRY, { marker: INCOGNITO_MARKER });
       // Shown in the TUI; the model gets it with its next request (mid-run, pi steers it in).
       pi.sendMessage({ customType: INCOGNITO_ENTRY, content: INCOGNITO_NOTE, display: true });
+      const task = args.trim();
+      if (!task) return;
+      droppedTask = true;
+      if (ctx.hasUI) {
+        ctx.ui.setEditorText(task);
+        ctx.ui.notify(
+          "/${INCOGNITO_COMMAND_NAME} takes no task, so it did not send the text after it. It is back in the editor: press Enter to send it with Dosu off.",
+          "warning",
+        );
+      } else {
+        process.stderr.write(
+          'Dosu incognito: /${INCOGNITO_COMMAND_NAME} takes no task, so pi did not run the text after it. Give the task as its own argument: pi -p "/${INCOGNITO_COMMAND_NAME}" "<task>"\n',
+        );
+      }
     },
   });
 }

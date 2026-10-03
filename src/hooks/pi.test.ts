@@ -119,8 +119,9 @@ function modelText(entry: Any): string[] {
  * own that the extension depends on. One agent run at a time, and a prompt that finds another run
  * starting or under way fails; `/name` runs an extension command instead; `sendUserMessage`
  * starts a prompt without waiting for it; `appendEntry` and `sendMessage` add session entries
- * (while a run is under way, a message is steered into it). `print` drives it the way
- * `pi -p <message>...` does: each message in turn, failing on the first error. */
+ * (while a run is under way, a message is steered into it); with a UI, `ctx.ui` shows notices
+ * and fills the editor. `print` drives it the way `pi -p <message>...` does: each message in
+ * turn, failing on the first error. */
 function fakePi(options: { hasUI?: boolean } = {}) {
   const handlers = new Map<string, (event: Any, ctx: Any) => Any>();
   const tools = new Map<string, Any>();
@@ -129,12 +130,21 @@ function fakePi(options: { hasUI?: boolean } = {}) {
   const steered: Any[] = [];
   const failures: string[] = [];
   const modelReads: string[][] = [];
+  const notices: { message: string; type?: string }[] = [];
   let active: string[] = ["read", "bash"];
   let running = false;
+  let editorText = "";
+  const ui = {
+    notify: (message: string, type?: string) => notices.push({ message, type }),
+    setEditorText: (text: string) => {
+      editorText = text;
+    },
+  };
   const ctx = (transcript?: string) => ({
     ...piContext(entries, transcript),
     isIdle: () => !running,
     hasUI: !!options.hasUI,
+    ui,
   });
   const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -198,6 +208,8 @@ function fakePi(options: { hasUI?: boolean } = {}) {
     steered,
     failures,
     modelReads,
+    notices,
+    editorText: () => editorText,
     active: () => active,
     print: async (...messages: string[]) => {
       for (const message of messages) await prompt(message);
@@ -506,6 +518,40 @@ describe("the Dosu pi extension", () => {
       );
     }
     expect(stderr.mock.calls.join("")).not.toContain("/dosu-incognito");
+  });
+
+  it("/dosu-incognito runs no task given after it, and says so rather than lose it", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const unsaved = join(fakeHome, "never-written.jsonl");
+
+    // `pi -p "/dosu-incognito <task>"`: Dosu goes off, and stderr says the task did not run and
+    // how to give it.
+    const pi = await loadExtension();
+    await pi.print("/dosu-incognito fix the failing tests");
+    await pi.handlers.get("session_shutdown")?.({ reason: "quit" }, pi.context(unsaved));
+    expect(pi.failures).toEqual([]);
+    expect(pi.modelReads).toEqual([]);
+    expect(pi.active()).toEqual(["read", "bash"]);
+    const said = stderr.mock.calls.join("");
+    expect(said).toContain("/dosu-incognito takes no task");
+    expect(said).toContain('pi -p "/dosu-incognito" "<task>"');
+    expect(said).not.toContain("nothing ran");
+
+    // In the TUI the task goes back in the editor, an Enter away from running with Dosu off.
+    stderr.mockClear();
+    const tui = await loadExtension({ hasUI: true });
+    await tui.print("/dosu-incognito  fix the failing tests ");
+    expect(tui.modelReads).toEqual([]);
+    expect(tui.editorText()).toBe("fix the failing tests");
+    expect(tui.notices).toEqual([
+      { message: expect.stringContaining("/dosu-incognito takes no task"), type: "warning" },
+    ]);
+    expect(stderr).not.toHaveBeenCalled();
+    await tui.print(tui.editorText());
+    expect(tui.modelReads.at(-1)?.at(-1)).toBe("fix the failing tests");
+    expect(calls().filter((call) => call.argv[1] === "context")).toEqual([]);
+    const saved = savedSession(tui.entries);
+    expect(saved && isIncognitoSession(saved)).toBe(true);
   });
 
   it("a resumed session that went incognito stays off", async () => {

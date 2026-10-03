@@ -480,8 +480,11 @@ extension shells out to `dosu` on PATH for everything, so it carries no credenti
   from shipping), adds a note telling the model Dosu is off (shown in the TUI), removes the two
   memory tools from the model's tool set, and stops digests. It starts no turn of its own, so it
   works the same in the TUI, mid-run, and in print mode: `pi -p "/dosu-incognito" "<task>"` runs
-  the task off the record. Pi saves a session only once it has a message, so a print run with
-  nothing after the command saves none, and says so on stderr: a later run with the same
+  the task off the record. For the same reason it does not run a task typed after it on the same
+  line (`/dosu-incognito fix the tests`, unlike Claude Code's command): Dosu still goes off, and
+  the extension says the task did not run, on stderr in print mode, while the TUI puts the task
+  back in the editor to send with Enter. Pi saves a session only once it has a message, so a print
+  run with nothing after the command saves none, and says so on stderr: a later run with the same
   `--session-id` would be a new session. A resumed incognito session stays off. Only that entry,
   or a user turn carrying the marker (what the extension sent before it kept a record), counts, so
   a session whose model read a file quoting the marker still ships. A fork or clone of an incognito
