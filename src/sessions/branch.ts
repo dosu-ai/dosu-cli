@@ -2,45 +2,11 @@
  * after a session, so the checkout's current branch is only trusted when the reflog shows no
  * checkout since. */
 
-/** Lines of a Codex log searched for its `session_meta` record. */
-const CODEX_META_LINES = 50;
-
 /** A recorded branch name, or null for the detached (`HEAD`) and empty values agents record. */
 function recordedBranch(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const branch = value.trim();
   return branch && branch !== "HEAD" ? branch : null;
-}
-
-/** Claude Code stamps `gitBranch` on every line; the last real one wins, since a session that
- * creates its feature branch partway through commits there. */
-export function branchFromClaudeTranscript(text: string): string | null {
-  let last: string | null = null;
-  for (const match of text.matchAll(/"gitBranch":\s*("(?:[^"\\]|\\.)*")/g)) {
-    try {
-      last = recordedBranch(JSON.parse(match[1])) ?? last;
-    } catch {
-      // Malformed escape; keep the previous value.
-    }
-  }
-  return last;
-}
-
-/** Codex records the branch once, in `session_meta.payload.git`, when the session starts. */
-export function branchFromCodexTranscript(text: string): string | null {
-  for (const line of text.split("\n", CODEX_META_LINES)) {
-    if (!line.includes('"session_meta"')) continue;
-    try {
-      const record = JSON.parse(line) as {
-        type?: unknown;
-        payload?: { git?: { branch?: unknown } | null };
-      };
-      if (record.type === "session_meta") return recordedBranch(record.payload?.git?.branch);
-    } catch {
-      // Truncated line; keep looking.
-    }
-  }
-  return null;
 }
 
 interface ReflogEntry {

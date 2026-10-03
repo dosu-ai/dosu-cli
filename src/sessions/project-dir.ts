@@ -14,12 +14,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config/config";
-import {
-  branchFromClaudeTranscript,
-  branchFromCodexTranscript,
-  branchFromReflog,
-  parseReflog,
-} from "./branch";
+import { branchFromReflog, parseReflog } from "./branch";
 import { type CapturedSession, type EndedSession, readCapturedSession } from "./capture";
 import {
   GIT_BUDGETS,
@@ -49,6 +44,9 @@ interface CacheEntry {
   /** The session's project key (project.ts), as first resolved for it, by whichever rule; a
    * `path` fallback is retried when mtime moves, like a null repo. */
   project?: ProjectKey;
+  /** The branch the session ran on, as first resolved for it (its first prompt, or the sync that
+   * shipped it), so its prompts and its transcript carry the same one; absent until known. */
+  branch?: string;
   /** A prompt hook's git lookup ran out of time: the session's later prompts skip git (and send
    * no key) rather than keep the user waiting again, and the sync resolves it patiently. */
   git_timed_out?: true;
@@ -153,21 +151,12 @@ export interface ProjectDirDeps {
   readHead?: (path: string) => string | null;
   mtime?: (path: string) => string;
   repoOfDir?: (dir: string) => string | null;
-  readTranscript?: (path: string) => string | null;
   captured?: (key: string) => CapturedSession | null;
   reflogOfDir?: (dir: string) => string | null;
   currentBranch?: (dir: string) => string | null;
   gitProjectOfDir?: (dir: string, budget: GitBudget, knownRoot?: string) => ProjectKey | null;
   /** The hook's environment, for resolveProjectAt's DOSU_PROJECT; defaults to process.env. */
   env?: NodeJS.ProcessEnv;
-}
-
-function readWholeFile(path: string): string | null {
-  try {
-    return readFileSync(path, "utf-8");
-  } catch {
-    return null;
-  }
 }
 
 function fileMtime(path: string): string {
@@ -195,9 +184,15 @@ export interface ProjectDirResolver {
    * `harness/id` key so the shipped session agrees. Git gets the prompt budget; null when it ran
    * out, then and on the session's later prompts. */
   resolveProjectAt(key: string, dir: string): ProjectKey | null;
-  /** The branch the session ran on, or null when nothing recorded it. Not cached: a session's
-   * branch can move until it ends, and each session is resolved about once. */
+  /** The branch a session whose transcript recorded none ran on, as first resolved for it and
+   * cached from then on, like its project key: the one its prompts were served under, else what
+   * Cursor's hook captured, else the reflog's answer for the session's end (the checkout's
+   * current branch only when no checkout happened since). Null when none of them knows. */
   resolveBranch(session: AgentSession): string | null;
+  /** The branch for a session whose working directory the caller already knows (a prompt hook's
+   * cwd): the one cached under its `harness/id` key, else the one checked out there now, which is
+   * cached so the session's later prompts and its shipped transcript carry it too. */
+  resolveBranchAt(key: string, dir: string): string | null;
   /** Cache-only lookup by `harness/id` key — for history rows with no session file at hand. */
   cached(key: string): string | null;
   /** Persist any newly resolved entries, merged into the file as it is now; call once after a
@@ -252,20 +247,10 @@ export function createProjectDirResolver(
   const repoOfDir = deps.repoOfDir ?? originRepoOfDir;
   // Many sessions share a directory; one git call per directory per resolver.
   const repoByDir = new Map<string, string | null>();
-  const readTranscript = deps.readTranscript ?? readWholeFile;
   const reflogOfDir = deps.reflogOfDir ?? headReflogOfDir;
   const currentBranch = deps.currentBranch ?? currentBranchOfDir;
   const reflogByDir = new Map<string, ReturnType<typeof parseReflog>>();
   const currentByDir = new Map<string, string | null>();
-
-  const transcriptBranch = (session: AgentSession): string | null => {
-    if (session.harness !== "claude" && session.harness !== "codex") return null;
-    const text = readTranscript(session.path);
-    if (text === null) return null;
-    return session.harness === "claude"
-      ? branchFromClaudeTranscript(text)
-      : branchFromCodexTranscript(text);
-  };
 
   const reflogBranch = (session: AgentSession): string | null => {
     const dir = resolve(session);
@@ -291,9 +276,16 @@ export function createProjectDirResolver(
       return cached.dir;
     }
     const dir = compute(session);
-    // A key pinned while the directory was unknown (DOSU_PROJECT) stays the session's.
+    // A key or branch pinned while the directory was unknown (DOSU_PROJECT, a prompt) stays the
+    // session's.
     const project = cached?.project;
-    entries[key] = { dir, mtime: mtime(session.path), ...(project ? { project } : {}) };
+    const branch = cached?.branch;
+    entries[key] = {
+      dir,
+      mtime: mtime(session.path),
+      ...(project ? { project } : {}),
+      ...(branch ? { branch } : {}),
+    };
     touched.add(key);
     return dir;
   };
@@ -405,11 +397,27 @@ export function createProjectDirResolver(
       return sessionProject(key, dir, entries[key].mtime, deps.env ?? process.env, "prompt");
     },
     resolveBranch(session) {
-      return (
-        transcriptBranch(session) ??
-        captured(`${session.harness}/${session.id}`)?.branch ??
-        reflogBranch(session)
-      );
+      const key = `${session.harness}/${session.id}`;
+      const pinned = entries[key]?.branch;
+      if (pinned) return pinned;
+      const branch = captured(key)?.branch ?? reflogBranch(session);
+      if (branch) {
+        resolve(session); // the session's entry, to pin the branch on
+        entries[key].branch = branch;
+        touched.add(key);
+      }
+      return branch;
+    },
+    resolveBranchAt(key, dir) {
+      const pinned = entries[key]?.branch;
+      if (pinned) return pinned;
+      const branch = currentBranch(dir);
+      if (branch) {
+        entries[key] ??= { dir, mtime: "" };
+        entries[key].branch = branch;
+        touched.add(key);
+      }
+      return branch;
     },
     flush() {
       if (touched.size === 0) return;

@@ -16,6 +16,7 @@
 import { basename } from "node:path";
 import { GIT_BUDGETS, projectOverride, resolveProjectOfDir } from "../sessions/project";
 import { createProjectDirResolver } from "../sessions/project-dir";
+import { currentBranchOfDir } from "../sessions/repo";
 import { SESSION_HARNESSES } from "../sessions/scan";
 import { trajectorySourceOf } from "../shipper/normalize";
 import {
@@ -63,6 +64,7 @@ export interface ContextHookOptions {
   timeoutMs?: number;
   /** Injectable boundaries, for tests. */
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
+  /** The branch checked out in a directory now; defaults to asking git. */
   branchOf?: (cwd: string) => string | null;
   isIncognito?: (transcriptPath: string) => boolean;
 }
@@ -77,19 +79,25 @@ function harnessOf(agent: string): string | null {
   return SESSION_HARNESSES.find((h) => trajectorySourceOf(h) === agent || h === agent) ?? null;
 }
 
-/** The project key for the prompt's cwd, cached under the session's scanner key so the
- * transcript ships under the same one later; DOSU_PROJECT alone when the payload has no cwd.
- * Null when git could not answer within the prompt's budget: better no key than one the session
- * will not ship under. */
-function projectOf(cwd: string | null, sessionKey: string | null): string | null {
-  if (cwd === null) return projectOverride(null)?.project ?? null;
+/** The project key and branch for the prompt's cwd, cached under the session's scanner key so
+ * the transcript ships under the same ones later, and the session's later prompts keep its first
+ * branch; DOSU_PROJECT alone when the payload has no cwd. The key is null when git could not
+ * answer within the prompt's budget: better no key than one the session will not ship under. */
+function scopeOf(
+  cwd: string | null,
+  sessionKey: string | null,
+  branchOf: (cwd: string) => string | null,
+): { project: string | null; branch: string | null } {
+  if (cwd === null) return { project: projectOverride(null)?.project ?? null, branch: null };
   if (sessionKey === null) {
-    return resolveProjectOfDir(cwd, { budget: GIT_BUDGETS.prompt })?.project ?? null;
+    const project = resolveProjectOfDir(cwd, { budget: GIT_BUDGETS.prompt })?.project ?? null;
+    return { project, branch: branchOf(cwd) };
   }
-  const resolver = createProjectDirResolver();
-  const resolved = resolver.resolveProjectAt(sessionKey, cwd);
+  const resolver = createProjectDirResolver(undefined, { currentBranch: branchOf });
+  const project = resolver.resolveProjectAt(sessionKey, cwd)?.project ?? null;
+  const branch = resolver.resolveBranchAt(sessionKey, cwd);
   resolver.flush();
-  return resolved?.project ?? null;
+  return { project, branch };
 }
 
 /** The session id the scanner and the shipped session use. Codex's is its rollout's filename
@@ -127,12 +135,15 @@ export async function contextHookOutput(
   if (transcript && isIncognito(transcript)) return "";
 
   const cwd = str(payload.cwd);
-  const branch = cwd ? (options.branchOf?.(cwd) ?? null) : null;
   const fetchImpl = options.fetchImpl ?? fetch;
   try {
     const sessionId = sessionIdOf(payload, format);
     const harness = harnessOf(agent);
-    const project = projectOf(cwd, harness && sessionId ? `${harness}/${sessionId}` : null);
+    const { project, branch } = scopeOf(
+      cwd,
+      harness && sessionId ? `${harness}/${sessionId}` : null,
+      options.branchOf ?? currentBranchOfDir,
+    );
     const response = await fetchImpl(`${options.backendUrl.replace(/\/$/, "")}/v1/memory/context`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Dosu-API-Key": options.apiKey },

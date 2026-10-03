@@ -1,7 +1,6 @@
 /** `dosu knowledge`: knowledge base search/listing, plus the local sync pipeline and its
  * per-agent hook triggers. */
 
-import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { Command, Option } from "commander";
 import pc from "picocolors";
@@ -504,20 +503,6 @@ function buildShipper(): SyncDeps["ship"] {
   };
 }
 
-/** The git branch checked out in `cwd`, or null. Bounded, because the user's prompt waits. */
-function currentBranch(cwd: string): string | null {
-  try {
-    const out = execFileSync("git", ["-C", cwd, "branch", "--show-current"], {
-      encoding: "utf-8",
-      timeout: 500,
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    return out || null;
-  } catch {
-    return null;
-  }
-}
-
 /** Read synchronously: under Bun, a file redirected onto stdin and read as a stream after the
  * CLI's startup awaits comes back empty, while a pipe does not. */
 function readStdin(): string {
@@ -554,7 +539,6 @@ function contextCommand(): Command {
         backendUrl,
         agent: opts.agent,
         format,
-        branchOf: currentBranch,
       });
       if (out) process.stdout.write(out);
     });

@@ -173,6 +173,27 @@ describe("contextHookOutput", () => {
     }
   });
 
+  it("keeps a session's first branch for its later prompts, and its transcript", async () => {
+    const asked = (branch: string) => async (stdin: string) => {
+      const fetchImpl = respond(200, { digest: null });
+      await contextHookOutput(stdin, { ...base, fetchImpl, branchOf: () => branch });
+      return sentBody(fetchImpl).branch;
+    };
+    const session = payload({ session_id: "sess-branch" });
+
+    expect(await asked("feat/first")(session)).toBe("feat/first");
+    // The user checked out another branch mid-session.
+    expect(await asked("feat/second")(session)).toBe("feat/first");
+    expect(await asked("feat/second")(payload({ session_id: "sess-other" }))).toBe("feat/second");
+    const shipped = createProjectDirResolver().resolveBranch({
+      id: "sess-branch",
+      harness: "claude",
+      path: "/gone/sess-branch.jsonl",
+      updated: "2026-10-02T00:00:00.000Z",
+    });
+    expect(shipped).toBe("feat/first");
+  });
+
   it("resolves the cwd directly when the payload names no session", async () => {
     const fetchImpl = respond(200, { digest: null });
 
