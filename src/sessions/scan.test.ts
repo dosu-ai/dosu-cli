@@ -343,6 +343,17 @@ describe("scanAgentSessions", () => {
   });
 
   describe("pi", () => {
+    it("keys a session by its header's id, whatever its file is called", () => {
+      const path = join(piProjectDir(), "task-9.jsonl");
+      piLog(piProjectDir(), "01a0ff60-263a", T1);
+      writeFileSync(path, `${JSON.stringify({ type: "session", id: "rv.task.9", cwd: "/w" })}\n`);
+
+      expect(scan().map((s) => [s.id, s.path.endsWith("task-9.jsonl")])).toEqual([
+        ["rv.task.9", true],
+        ["01a0ff60-263a", false],
+      ]);
+    });
+
     it("lists sessions by the id in their file name, with pi's per-directory folder", () => {
       const path = piLog(piProjectDir(), "01a0fdc5-a112-704c", T2);
       piLog(piProjectDir(), "01a0fdc6-3a60-72c3", T1);

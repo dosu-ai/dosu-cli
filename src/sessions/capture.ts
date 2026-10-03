@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { basename, join } from "node:path";
 import { getConfigDir } from "../config/config";
 import { logger } from "../debug/logger";
+import { PI_SESSION_ID_PATTERN } from "./pi";
 import { currentBranchOfDir } from "./repo";
 import { SESSION_HARNESSES, type SessionHarness } from "./scan";
 
@@ -179,17 +180,17 @@ function claudeSessionEnd(hook: HookPayload): EndedSession | null {
 }
 
 /** pi `session_shutdown`, as the Dosu pi extension hands it over: `{hook_event_name, agent: "pi",
- * reason, session_id, transcript_path, cwd}`. A reload tears the extension down and brings it
- * straight back on the same session, so it ends nothing; quit, /new, /resume and /fork leave the
- * session behind. */
+ * reason, session_id, transcript_path, cwd}`, the id being the one in the transcript's header. A
+ * reload tears the extension down and brings it straight back on the same session, so it ends
+ * nothing; quit, /new, /resume and /fork leave the session behind. Any transcript name counts:
+ * `pi --session <path>` keeps the caller's. */
 function piSessionShutdown(hook: HookPayload): EndedSession | null {
   if (hook.hook_event_name !== "session_shutdown" || hook.agent !== "pi") return null;
   if (hook.reason === "reload") return null;
   const id = hook.session_id;
   const path = hook.transcript_path;
-  if (typeof id !== "string" || !SAFE_SEGMENT.test(id) || typeof path !== "string") return null;
-  // pi names the transcript `<timestamp>_<session id>.jsonl`.
-  if (!basename(path).endsWith(`_${id}.jsonl`)) return null;
+  if (typeof id !== "string" || !PI_SESSION_ID_PATTERN.test(id)) return null;
+  if (typeof path !== "string" || !path.startsWith("/")) return null;
   return { harness: "pi", id, path };
 }
 
@@ -220,8 +221,9 @@ export function endedSessionArgs(ended: EndedSession): string[] {
   return ended.path ? ["--ended-path", ended.path] : [];
 }
 
-/** `--ended <harness>:<id>[=<transcript>]`: ids are SAFE_SEGMENT, so the first `=` ends one. */
-const ENDED_VALUE = /^([a-z]+):([A-Za-z0-9_-]+)(?:=(\/.*))?$/s;
+/** `--ended <harness>:<id>[=<transcript>]`: ids are SAFE_SEGMENT, or pi's, which allow dots too;
+ * neither has `=`, so the first one ends the id. */
+const ENDED_VALUE = /^([a-z]+):([A-Za-z0-9._-]+)(?:=(\/.*))?$/s;
 
 /** `--ended` and `--ended-path` values back into sessions, each value its own session. Malformed
  * values are dropped: a hook-triggered run never fails loudly. */

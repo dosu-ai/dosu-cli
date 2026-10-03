@@ -1,26 +1,19 @@
 /** Native agent-session scanner replacing the pinned deja-vu binary: enumerates each harness's
  * session logs directly and uses file mtime as `updated`. No index, no download, no subprocess. */
 
-import {
-  closeSync,
-  existsSync,
-  openSync,
-  readdirSync,
-  readFileSync,
-  readSync,
-  statSync,
-} from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { readPiHeader } from "./pi";
 
 /** The agents whose sessions the scanner finds, by the id the ledger keys them with. */
 export const SESSION_HARNESSES = ["claude", "cursor", "codex", "opencode", "pi"] as const;
 export type SessionHarness = (typeof SESSION_HARNESSES)[number];
 
 export interface AgentSession {
-  /** Session id: the log filename stem, the DB row id for opencode, or for pi the session id its
-   * `<timestamp>_<id>` file name ends with. */
+  /** Session id: the log filename stem, the DB row id for opencode, or for pi the id in the
+   * transcript's header. */
   id: string;
   harness: SessionHarness;
   /** Where the session content lives: the .jsonl log, or the sqlite DB for opencode. */
@@ -228,47 +221,29 @@ function scanOpencode(home: string, env: NodeJS.ProcessEnv): AgentSession[] {
   return sessions;
 }
 
-/** pi names a transcript `<timestamp>_<session id>.jsonl`; the timestamp has no underscore. */
-function piSessionId(stem: string): string {
+/** pi names a transcript `<timestamp>_<session id>.jsonl` (the timestamp has no underscore): the
+ * id of a transcript whose header cannot say. */
+function piSessionIdOfName(path: string): string {
+  const stem = basename(path, ".jsonl");
   const cut = stem.indexOf("_");
   return cut === -1 ? stem : stem.slice(cut + 1);
 }
 
-/** How much of a pi transcript holds its header line. */
-const PI_HEADER_BYTES = 16 * 1024;
-
-/** The `type: "session"` header pi writes as a transcript's first line; null when unreadable. */
-function piHeader(path: string): Record<string, unknown> | null {
-  let fd: number | undefined;
-  try {
-    fd = openSync(path, "r");
-    const buf = Buffer.alloc(PI_HEADER_BYTES);
-    const text = buf.subarray(0, readSync(fd, buf, 0, PI_HEADER_BYTES, 0)).toString("utf-8");
-    const header = JSON.parse(text.split("\n", 1)[0] ?? "") as Record<string, unknown>;
-    return header?.type === "session" ? header : null;
-  } catch {
-    return null;
-  } finally {
-    if (fd !== undefined) closeSync(fd);
-  }
-}
-
-/** A pi session; a fork or clone (`/fork`, `/clone`, `--fork`) names its parent's transcript in
- * the header, and is shipped as that session's child. */
-function piSession(path: string, id: string, project?: string): AgentSession | null {
+/** A pi session, keyed by its header's id; a fork or clone (`/fork`, `/clone`, `--fork`) names
+ * its parent's transcript in the header, and is shipped as that session's child. `id` is what a
+ * hook already called it, when one did. */
+function piSession(path: string, project?: string, id?: string): AgentSession | null {
   let mtime: Date;
   try {
     mtime = statSync(path).mtime;
   } catch {
     return null;
   }
-  const parent = piHeader(path)?.parentSession;
-  const parentId =
-    typeof parent === "string" && parent.endsWith(".jsonl")
-      ? piSessionId(basename(parent, ".jsonl"))
-      : undefined;
+  const header = readPiHeader(path);
+  const parent = header?.parentSession;
+  const parentId = parent ? (readPiHeader(parent)?.id ?? piSessionIdOfName(parent)) : undefined;
   return {
-    id,
+    id: id ?? header?.id ?? piSessionIdOfName(path),
     harness: "pi",
     path,
     ...(project ? { project } : {}),
@@ -315,7 +290,7 @@ function scanPi(home: string, env: NodeJS.ProcessEnv): AgentSession[] {
   const sessions = new Map<string, AgentSession>();
   const add = (path: string, name: string, project?: string) => {
     if (!name.endsWith(".jsonl") || sessions.has(path)) return;
-    const session = piSession(path, piSessionId(name.slice(0, -".jsonl".length)), project);
+    const session = piSession(path, project);
     if (session) sessions.set(path, session);
   };
   for (const agentDir of agentDirs) {
@@ -351,7 +326,7 @@ export function sessionAtPath(
   if (harness === "pi") {
     // pi's per-directory folder, as scanPi reports it; a flat override folder is no project.
     const folder = basename(dirname(path));
-    return piSession(path, id, /^--.*--$/.test(folder) ? folder : undefined);
+    return piSession(path, /^--.*--$/.test(folder) ? folder : undefined, id);
   }
   return { id, harness, path, ...(project ? { project } : {}), updated: mtime.toISOString() };
 }

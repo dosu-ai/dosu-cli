@@ -262,6 +262,47 @@ describe("knowledge sync from the Dosu pi extension's session_shutdown", () => {
     expect(posted().map((p) => p.metadata.session_id)).toEqual(["01a0fdc5-a112"]);
   });
 
+  it("ships at once a session run under a --session-id pi accepts, dots included", async () => {
+    const widget = gitRepo("widget", "git@github.com:acme/widget.git");
+    const ended = piSession("rv.task.2", widget, exchange(1), { minutesAgo: 0 });
+    hookStdin(shutdownPayload("rv.task.2", ended, widget));
+
+    await dosu("sync", "--quiet", "--detach");
+    const child = respawnedArgs();
+    expect(child).toEqual(["sync", "--quiet", "--ended", `pi:rv.task.2=${ended}`]);
+
+    await dosu(...child);
+    expect(posted().map((p) => p.metadata.session_id)).toEqual(["rv.task.2"]);
+  });
+
+  it("ships at once, and keeps finding, a session at an explicit `pi --session <path>`", async () => {
+    const widget = gitRepo("widget", "git@github.com:acme/widget.git");
+    // Outside every folder the scan walks, under a name of the caller's choosing.
+    const dir = join(home, "runs");
+    mkdirSync(dir);
+    const ended = join(dir, "task-9.jsonl");
+    const header = { type: "session", version: 3, id: "01a0ff60-263a", cwd: widget };
+    const write = (entries: unknown[]) =>
+      writeFileSync(ended, `${[header, ...entries].map((e) => JSON.stringify(e)).join("\n")}\n`);
+    write(exchange(1));
+    hookStdin(shutdownPayload("01a0ff60-263a", ended, widget));
+
+    await dosu("sync", "--quiet", "--detach");
+    await dosu(...respawnedArgs());
+
+    // Resumed later and left to go quiet: a manual sync still knows where it lives.
+    write([...exchange(1), ...exchange(2)]);
+    const later = new Date(Date.now() - 10 * 60_000);
+    utimesSync(ended, later, later);
+    await dosu("sync");
+
+    expect(posted().map((p) => [p.metadata.session_id, p.metadata.project])).toEqual([
+      ["01a0ff60-263a", "github.com/acme/widget"],
+      ["01a0ff60-263a", "github.com/acme/widget"],
+    ]);
+    expect(posted()[1].metadata.continuation).toMatchObject({ from_record: 6 });
+  });
+
   it("a reload names no session: the extension comes back on the same one", async () => {
     const widget = gitRepo("widget", "git@github.com:acme/widget.git");
     const live = piSession("01a0fdc5-a112", widget, exchange(1), { minutesAgo: 0 });

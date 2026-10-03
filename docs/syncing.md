@@ -239,7 +239,10 @@ leaves pi running as if Dosu were not installed.
 Pi keeps sessions at `<agent dir>/sessions/--<cwd>--/<timestamp>_<session id>.jsonl`; the scan lists
 them under `~/.pi/agent` and `PI_CODING_AGENT_DIR`, plus the flat folder a
 `PI_CODING_AGENT_SESSION_DIR` or absolute `sessionDir` setting points at, keyed `pi/<session id>`
-(the id `PI_SESSION_ID` and the header carry). The header's `cwd` gives the project key, and a
+with the id from the transcript's header (the one `PI_SESSION_ID` carries), whatever the file is
+called. Ids pi accepts with dots (`pi --session-id rv.task.2`) end their session like any other, and
+a transcript at an explicit `pi --session <path>` outside those folders ships when its session
+ends and is remembered for later syncs. The header's `cwd` gives the project key, and a
 `/fork` or `/clone` names its parent's transcript there, so it ships with `parent_session_id`.
 
 ## Manual check
