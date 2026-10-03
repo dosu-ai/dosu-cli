@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parentSessionOf, scanAgentSessions, sessionAtPath } from "./scan";
+import { childSessionsOf, parentSessionOf, scanAgentSessions, sessionAtPath } from "./scan";
 
 /** `homedir()` target for the default-home test; every other test passes `homeDir` explicitly. */
 const mockedOs = vi.hoisted(() => ({ home: "" }));
@@ -178,6 +178,20 @@ describe("scanAgentSessions", () => {
     // A parent transcript that is gone leaves the child an orphan.
     rmSync(parent.path);
     expect(parentSessionOf(child)).toBeNull();
+  });
+
+  it("finds a session's subagents beside its transcript, wherever it lives", () => {
+    const parentPath = join(home, "cfg", "projects", "-p", "parent.jsonl");
+    makeLog(parentPath, T2);
+    makeLog(join(home, "cfg", "projects", "-p", "parent", "subagents", "agent-a1.jsonl"), T1);
+    const parent = sessionAtPath("claude", "parent", parentPath);
+    if (!parent) throw new Error("no parent");
+
+    const [child] = childSessionsOf(parent);
+    expect(child).toMatchObject({ id: "agent-a1", parentId: "parent", project: "-p" });
+    // A subagent has none of its own here, and other agents keep theirs elsewhere.
+    expect(childSessionsOf(child)).toEqual([]);
+    expect(childSessionsOf({ ...parent, harness: "codex" })).toEqual([]);
   });
 
   it("reads a subagent transcript named by path as the child it is", () => {

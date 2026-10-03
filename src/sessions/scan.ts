@@ -280,11 +280,8 @@ export function childSessionsOf(session: AgentSession): AgentSession[] {
   if (session.harness !== "claude" || session.parentId || !session.path.endsWith(".jsonl")) {
     return [];
   }
-  return claudeSubagents(
-    session.path.slice(0, -".jsonl".length),
-    session.id,
-    session.project ?? basename(dirname(session.path)),
-  );
+  const stem = session.path.slice(0, -".jsonl".length);
+  return claudeSubagents(stem, session.id, basename(dirname(session.path)));
 }
 
 /** The session a child session (a subagent's transcript) belongs to, as the scan would report
