@@ -229,11 +229,13 @@ describe("createShipStep", () => {
     const normalize = vi.fn(async () => RECORDS);
     const { step, fetchImpl } = makeStep({ normalize });
 
-    const [result] = await step([session("s1", { harness: "opencode" })]);
+    // A harness a newer scanner lists but this build cannot normalize.
+    const harness = "aider" as AgentSession["harness"];
+    const [result] = await step([session("s1", { harness })]);
 
     expect(result).toMatchObject({
       outcome: "unsupported",
-      message: "no normalizer for opencode sessions yet",
+      message: "no normalizer for aider sessions yet",
     });
     expect(normalize).not.toHaveBeenCalled();
     expect(fetchImpl).not.toHaveBeenCalled();

@@ -1,12 +1,15 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NormalizedRecord } from "@letta-ai/trajectory";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeOpencodeDb, opencodeDocument } from "../sessions/opencode.test-utils";
 import type { AgentSession } from "../sessions/scan";
 import { normalizeSessionRecords, redactRecords } from "./normalize";
 
 let dir: string;
+
+const GITHUB_TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz012345";
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "dosu-ship-normalize-"));
@@ -15,8 +18,6 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
-
-const GITHUB_TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz012345";
 
 /** A minimal real Claude Code transcript: prose, a tool call, and its result. */
 function claudeTranscript(): string {
@@ -121,12 +122,6 @@ describe("normalizeSessionRecords", () => {
     expect(result.tool_call_id).toBe("toolu_01AbCdEfGhJkLmNpQr");
   });
 
-  it("returns null for opencode sessions (sqlite rows are not the adapter's export shape)", async () => {
-    expect(
-      await normalizeSessionRecords(session({ harness: "opencode", path: join(dir, "db") })),
-    ).toBeNull();
-  });
-
   it("returns null for an unreadable transcript", async () => {
     expect(await normalizeSessionRecords(session({ path: join(dir, "missing.jsonl") }))).toBeNull();
   });
@@ -160,6 +155,136 @@ describe("normalizeSessionRecords", () => {
       vi.doUnmock("@letta-ai/trajectory");
       vi.resetModules();
     }
+  });
+});
+
+const OPENCODE_ID = "ses_0ff3fixture00001";
+
+/** A session whose prompt carries a password, whose answer carries a token, and whose user message
+ * Dosu's plugin added a memory digest to. */
+function doc() {
+  return opencodeDocument({
+    id: OPENCODE_ID,
+    user: 'How does auth work? password: "hunter2secretvalue42"',
+    answer: `Auth reads KEY; the token is ${GITHUB_TOKEN} here.`,
+    memory: "Dosu memory: the deploy codeword is PELICAN-0",
+  });
+}
+
+describe("normalizeSessionRecords for opencode", () => {
+  let bin: string;
+  let dbPath: string;
+  let opencode: AgentSession;
+
+  beforeEach(() => {
+    bin = join(dir, "bin");
+    mkdirSync(bin);
+    dbPath = join(dir, "opencode.db");
+    opencode = {
+      id: OPENCODE_ID,
+      harness: "opencode",
+      path: dbPath,
+      project: "/repo/app",
+      updated: "2026-09-01T00:00:00.000Z",
+    };
+    vi.stubEnv("PATH", bin);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  /** An `opencode` on PATH that records its arguments, prints `stdout`, and exits `code`. */
+  function fakeOpencode(stdout: string, code = 0): string {
+    const out = join(dir, "export.json");
+    const argsFile = join(dir, "args.txt");
+    writeFileSync(out, stdout);
+    const script = join(bin, "opencode");
+    writeFileSync(
+      script,
+      `#!/bin/sh\necho "$@" > '${argsFile}'\n/bin/cat '${out}'\necho "Exporting session: $3" >&2\nexit ${code}\n`,
+    );
+    chmodSync(script, 0o755);
+    return argsFile;
+  }
+
+  it("normalizes `opencode export`, leaving out the memory Dosu pushed into the prompt", async () => {
+    const args = fakeOpencode(JSON.stringify(doc(), null, 2));
+
+    const records = await normalizeSessionRecords(opencode);
+
+    expect(readFileSync(args, "utf8").trim()).toBe(`export --pure ${OPENCODE_ID}`);
+    expect(records?.[0]).toMatchObject({ role: "meta", source: "opencode", cwd: "/repo/app" });
+    expect(records?.map((r) => r.role)).toEqual([
+      "meta",
+      "user",
+      "assistant",
+      "assistant",
+      "tool",
+      "assistant",
+    ]);
+    const shipped = JSON.stringify(records);
+    expect(shipped).not.toContain("PELICAN");
+    expect(shipped).not.toContain("hunter2secretvalue42");
+    expect(shipped).not.toContain(GITHUB_TOKEN);
+    expect(shipped).toContain("toolu_0156L5aHDegRahdNMdG7zTv9");
+  });
+
+  it("rebuilds the same records from the sqlite DB when no opencode binary is on PATH", async () => {
+    if (!makeOpencodeDb(dbPath, doc())) return; // no sqlite builtin
+    fakeOpencode(JSON.stringify(doc()));
+    const exported = await normalizeSessionRecords(opencode);
+    rmSync(join(bin, "opencode"));
+
+    const rebuilt = await normalizeSessionRecords(opencode);
+
+    expect(rebuilt).not.toBeNull();
+    expect(rebuilt).toEqual(exported);
+  });
+
+  it("falls back to the DB when the export fails or answers for another session", async () => {
+    if (!makeOpencodeDb(dbPath, doc())) return;
+    rmSync(join(bin), { recursive: true });
+    mkdirSync(bin);
+    const fromDb = await normalizeSessionRecords(opencode);
+
+    fakeOpencode("Error: Session not found", 1);
+    expect(await normalizeSessionRecords(opencode)).toEqual(fromDb);
+
+    const other = opencodeDocument({ id: "ses_someoneelse", user: "a different conversation" });
+    fakeOpencode(JSON.stringify(other));
+    expect(await normalizeSessionRecords(opencode)).toEqual(fromDb);
+
+    fakeOpencode("not json");
+    expect(await normalizeSessionRecords(opencode)).toEqual(fromDb);
+  });
+
+  it("rebuilds around DB rows it cannot parse", async () => {
+    const t = 1790963950000;
+    const created = makeOpencodeDb(dbPath, doc(), [
+      `INSERT INTO message VALUES ('msg_${OPENCODE_ID}_9', '${OPENCODE_ID}', ${t}, ${t}, 'not json')`,
+      `INSERT INTO part VALUES ('prt_${OPENCODE_ID}_9', 'msg_${OPENCODE_ID}_3', '${OPENCODE_ID}', ${t}, ${t}, '[1]')`,
+    ]);
+    if (!created) return;
+
+    const records = await normalizeSessionRecords(opencode);
+
+    expect(records?.map((r) => r.role)).toEqual([
+      "meta",
+      "user",
+      "assistant",
+      "assistant",
+      "tool",
+      "assistant",
+    ]);
+  });
+
+  it("returns null for a session neither the export nor the DB has", async () => {
+    if (!makeOpencodeDb(dbPath, doc())) return;
+
+    expect(await normalizeSessionRecords({ ...opencode, id: "ses_missing" })).toBeNull();
+    expect(await normalizeSessionRecords({ ...opencode, id: "ses_x' OR '1'='1" })).toBeNull();
+    expect(await normalizeSessionRecords({ ...opencode, path: join(dir, "nope.db") })).toBeNull();
   });
 });
 
