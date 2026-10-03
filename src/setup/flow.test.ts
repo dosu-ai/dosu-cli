@@ -395,8 +395,14 @@ describe("stepDetectTools", () => {
     setupTempEnv();
     vi.resetAllMocks();
     installSetupStepDefaults();
+    // Agents found by their binary see only what a test puts here, not this machine's installs.
+    mkdirSync(join(tempDir, "bin"));
+    vi.stubEnv("PATH", join(tempDir, "bin"));
   });
-  afterEach(teardownTempEnv);
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    teardownTempEnv();
+  });
 
   it("returns providers whose detect paths exist", () => {
     // Create Cursor detect path so it's "installed"; Claude Desktop's app
@@ -430,7 +436,7 @@ describe("stepDetectTools", () => {
   it("includes Codex before its first run: the codex binary on PATH, or a relocated CODEX_HOME", () => {
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CodexProvider()]);
     const bin = join(tempDir, "bin");
-    mkdirSync(bin);
+    mkdirSync(bin, { recursive: true });
     vi.stubEnv("PATH", bin);
     try {
       expect(stepDetectTools()).toEqual([]);
@@ -445,6 +451,15 @@ describe("stepDetectTools", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it("includes OpenCode installed but never run, from its binary on PATH", () => {
+    writeFileSync(join(tempDir, "bin", "opencode"), "#!/bin/sh\n", { mode: 0o755 });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => {
+      return [CursorProvider(), OpenCodeProvider()];
+    });
+
+    expect(stepDetectTools().map((p2) => p2.id())).toEqual(["opencode"]);
   });
 
   it("returns empty array when no providers are installed", () => {
@@ -675,7 +690,7 @@ describe("stepConfigureTools", () => {
     const cfg = makeCfg();
 
     const results = stepConfigureTools(cfg, {
-      toInstall: [OpenCodeProvider()],
+      toInstall: [ClaudeDesktopProvider()],
       toRemove: [],
       skipped: [],
     });
@@ -823,6 +838,28 @@ describe("stepConfigureTools", () => {
     expect(results[0].incognito).toMatchObject({
       path: join(tempDir, ".codex", "prompts", "dosu-incognito.md"),
     });
+  });
+
+  it("installs OpenCode's Dosu plugin and /dosu-incognito with its MCP entry, and removes both", () => {
+    const cfg = makeCfg();
+
+    const results = stepConfigureTools(cfg, {
+      toInstall: [OpenCodeProvider()],
+      toRemove: [],
+      skipped: [],
+    });
+
+    // opencode's config dir follows XDG_CONFIG_HOME, which this suite points at the temp dir.
+    const pluginPath = join(tempDir, "opencode", "plugin", "dosu.js");
+    const commandPath = join(tempDir, "opencode", "command", "dosu-incognito.md");
+    expect(readFileSync(pluginPath, "utf-8")).toContain("dosu knowledge sync --quiet --detach");
+    expect(results[0].hook).toMatchObject({ name: "OpenCode", path: pluginPath });
+    expect(results[0].incognito).toMatchObject({ path: commandPath });
+
+    stepConfigureTools(cfg, { toInstall: [], toRemove: [OpenCodeProvider()], skipped: [] });
+
+    expect(existsSync(pluginPath)).toBe(false);
+    expect(existsSync(commandPath)).toBe(false);
   });
 
   it("skips the whole bundle when the hook could not be enabled", () => {

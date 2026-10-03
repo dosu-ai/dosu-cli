@@ -36,7 +36,8 @@ Acknowledge in one line: "Dosu incognito: this session stays off the record."
 const DESCRIPTION =
   "Turn Dosu off for this session: no knowledge tools, and it is never shipped to Dosu memory";
 
-/** Claude Code and Codex read a `description` from YAML frontmatter; Cursor takes plain markdown. */
+/** Claude Code, Codex, and OpenCode read a `description` from YAML frontmatter; Cursor takes plain
+ * markdown. */
 function withFrontmatter(body: string): string {
   return `---\ndescription: ${DESCRIPTION}\n---\n\n${body}`;
 }
@@ -47,6 +48,11 @@ function claudeConfigDir(): string {
 
 function codexHome(): string {
   return process.env.CODEX_HOME || join(homedir(), ".codex");
+}
+
+/** opencode's global config dir, which it finds through XDG_CONFIG_HOME on every platform. */
+function opencodeConfigDir(): string {
+  return join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "opencode");
 }
 
 const FILE_NAME = `${INCOGNITO_COMMAND_NAME}.md`;
@@ -118,6 +124,14 @@ export function allIncognitoAgents(): IncognitoAgent[] {
       name: "Codex",
       detectPath: codexHome,
       commandPath: () => join(codexHome(), "prompts", FILE_NAME),
+      content: withFrontmatter(INCOGNITO_COMMAND_BODY),
+    }),
+    // A custom command: opencode sends the body as the session's next prompt.
+    fileAgent({
+      id: "opencode",
+      name: "OpenCode",
+      detectPath: opencodeConfigDir,
+      commandPath: () => join(opencodeConfigDir(), "command", FILE_NAME),
       content: withFrontmatter(INCOGNITO_COMMAND_BODY),
     }),
   ];

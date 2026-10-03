@@ -13,11 +13,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, delimiter, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
+import { makeOpencodeDb, opencodeDocument } from "../sessions/opencode.test-utils";
 import { INCOGNITO_MARKER } from "../sync/incognito";
 import { emptySyncState, saveSyncState } from "../sync/state";
 import { knowledgeCommand } from "./knowledge";
@@ -367,6 +368,83 @@ describe("knowledge sync of Codex subagents, ended", () => {
       `rollout-2026-10-02T18-14-03-${uuid}`,
       "rollout-2026-10-02T18-14-12-01a0ff53-6b7f-7932-813b-526f14d8b881",
     ]);
+  });
+});
+
+describe("knowledge sync from opencode's Dosu plugin", () => {
+  // Whatever opencode this machine has never answers: every document comes from the DB rows under
+  // the temporary home, and no real opencode boots against them.
+  beforeEach(() => {
+    const bin = join(home, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "opencode"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    vi.stubEnv("PATH", `${bin}${delimiter}${process.env.PATH ?? ""}`);
+  });
+
+  /** opencode sessions in its DB under the temporary home, all still inside the quiet period. */
+  function opencodeSessions(dir: string): boolean {
+    mkdirSync(join(home, ".local", "share", "opencode"), { recursive: true });
+    const answer = `answer: ${"detail ".repeat(400)}`;
+    const updated = Date.now();
+    return makeOpencodeDb(join(home, ".local", "share", "opencode", "opencode.db"), [
+      opencodeDocument({ id: "ses_root", directory: dir, answer, updated }),
+      opencodeDocument({ id: "ses_child", parentID: "ses_root", directory: dir, answer, updated }),
+      opencodeDocument({ id: "ses_live", directory: dir, answer, updated }),
+    ]);
+  }
+
+  it("ships the sessions the plugin reports ended when opencode exits, a subagent's naming its parent", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    if (!opencodeSessions(alpha)) return; // no sqlite builtin
+
+    // The plugin's watcher names every session that ran in the process, with nothing on stdin.
+    vi.spyOn(process, "stdin", "get").mockReturnValue(
+      Readable.from([]) as unknown as typeof process.stdin,
+    );
+    const ended = ["--ended", "opencode:ses_root", "--ended", "opencode:ses_child"];
+    await dosu("sync", "--quiet", "--detach", ...ended);
+    const child = respawnedArgs();
+    expect(child).toEqual(["sync", "--quiet", ...ended]);
+    await dosu(...child);
+
+    // The session still running elsewhere waits out the quiet period.
+    expect(posted().map((p) => p.metadata)).toEqual([
+      expect.objectContaining({
+        agent: "opencode",
+        session_id: "ses_root",
+        project: "github.com/acme/alpha",
+      }),
+      expect.objectContaining({
+        agent: "opencode",
+        session_id: "ses_child",
+        parent_session_id: "ses_root",
+      }),
+    ]);
+    expect(posted()[0].records[0]).toMatchObject({ role: "meta", source: "opencode", cwd: alpha });
+  });
+
+  it("applies opencode's DOSU_PROJECT to the sessions that ended there, a subagent's included", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    if (!opencodeSessions(alpha)) return;
+
+    // The plugin's syncs run in the opencode process's environment.
+    vi.stubEnv("DOSU_PROJECT", "poc-alpha");
+    await dosu("sync", "--quiet", "--ended", "opencode:ses_root", "--ended", "opencode:ses_child");
+    // Later, past the quiet period, a run from a shell without the variable ships the rest.
+    vi.stubEnv("DOSU_PROJECT", undefined);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    await dosu("sync");
+    vi.useRealTimers();
+
+    const projects = Object.fromEntries(
+      posted().map((p) => [p.metadata.session_id, p.metadata.project]),
+    );
+    expect(projects).toEqual({
+      ses_root: "poc-alpha",
+      ses_child: "poc-alpha",
+      ses_live: "github.com/acme/alpha",
+    });
   });
 });
 

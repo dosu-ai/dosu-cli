@@ -1,7 +1,8 @@
 import { join } from "node:path";
+import { isOnPath } from "../detect";
 import { createJSONProvider } from "./base";
 
-export const OpenCodeProvider = () =>
+const jsonProvider = () =>
   createJSONProvider({
     providerName: "OpenCode",
     providerID: "opencode",
@@ -18,3 +19,9 @@ export const OpenCodeProvider = () =>
     }),
     localConfigPath: (cwd) => join(cwd, "opencode.json"),
   });
+
+export const OpenCodeProvider = () => {
+  const provider = jsonProvider();
+  // Installed on a machine where it has never run, OpenCode has no config dir yet.
+  return { ...provider, isInstalled: () => provider.isInstalled() || isOnPath("opencode") };
+};

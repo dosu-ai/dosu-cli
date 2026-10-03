@@ -472,25 +472,33 @@ describe("scanAgentSessions", () => {
   });
 
   describe("opencode", () => {
-    it("reads top-level sessions from the sqlite DB", () => {
+    it("reads sessions from the sqlite DB, subagent children as their own with their parent", () => {
       mkdirSync(join(home, ".local", "share", "opencode"), { recursive: true });
       const created = makeOpencodeDb(opencodeDbPath(), [
         { id: "ses_top", directory: "/Users/me/proj", time_updated: T2.getTime() },
-        { id: "ses_child", parent_id: "ses_top", time_updated: T3.getTime() },
+        {
+          id: "ses_child",
+          parent_id: "ses_top",
+          directory: "/Users/me/proj",
+          time_updated: T3.getTime(),
+        },
         { id: "ses_no_dir", time_updated: T1.getTime() },
       ]);
       if (!created) return; // runtime has no sqlite builtin — scanner skips too
 
       const sessions = scan();
 
-      expect(sessions.map((s) => [s.harness, s.id])).toEqual([
-        ["opencode", "ses_top"],
-        ["opencode", "ses_no_dir"],
+      expect(sessions.map((s) => [s.harness, s.id, s.parentId])).toEqual([
+        ["opencode", "ses_child", "ses_top"],
+        ["opencode", "ses_top", undefined],
+        ["opencode", "ses_no_dir", undefined],
       ]);
-      expect(sessions[0].updated).toBe(T2.toISOString());
-      expect(sessions[0].path).toBe(opencodeDbPath());
+      expect(sessions[1].updated).toBe(T2.toISOString());
+      expect(sessions[1].path).toBe(opencodeDbPath());
+      expect(sessions[1].project).toBe("/Users/me/proj");
       expect(sessions[0].project).toBe("/Users/me/proj");
-      expect(sessions[1].project).toBeUndefined();
+      expect(sessions[2].project).toBeUndefined();
+      expect("parentId" in sessions[1]).toBe(false);
     });
 
     it("honors XDG_DATA_HOME", () => {

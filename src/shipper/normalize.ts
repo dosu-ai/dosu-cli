@@ -7,18 +7,30 @@
 import { readFileSync } from "node:fs";
 import type { NormalizedRecord, TranscriptTrajectorySource } from "@letta-ai/trajectory";
 import { logger } from "../debug/logger";
+import { opencodeTranscript } from "../sessions/opencode";
 import { redactSecrets } from "../sessions/redact";
 import type { AgentSession } from "../sessions/scan";
 import { markClaudeInputs, markedAsObservations } from "./claude-inputs";
 import { subagentReportsAsObservations, withoutInheritedHistory } from "./codex-rollout";
 
-/** Harness → trajectory source. opencode is absent: its adapter wants the exported
- * `{ info, messages }` session JSON, which the scanner's sqlite rows do not provide yet. */
+/** Harness → trajectory source. */
 const TRAJECTORY_SOURCES: Partial<Record<AgentSession["harness"], TranscriptTrajectorySource>> = {
   claude: "claude-code",
   cursor: "cursor",
   codex: "codex",
+  // Not a file: its sessions are read out of opencode's DB as the export document.
+  opencode: "opencode",
 };
+
+/** The raw transcript the adapter reads; null when unreadable. */
+function readTranscript(session: AgentSession): string | null {
+  if (session.harness === "opencode") return opencodeTranscript(session);
+  try {
+    return readFileSync(session.path, "utf8");
+  } catch {
+    return null;
+  }
+}
 
 /** The trajectory source a harness's transcripts normalize as; undefined when unsupported. */
 export function trajectorySourceOf(
@@ -65,12 +77,8 @@ export async function normalizeSessionRecords(
 ): Promise<NormalizedRecord[] | null> {
   const source = trajectorySourceOf(session.harness);
   if (!source) return null;
-  let transcript: string;
-  try {
-    transcript = readFileSync(session.path, "utf8");
-  } catch {
-    return null;
-  }
+  const transcript = readTranscript(session);
+  if (transcript === null) return null;
   if (transcript.trim() === "") return [];
   try {
     // Dynamic so ship-free CLI paths never pay for the normalizer.

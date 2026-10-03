@@ -48,7 +48,7 @@ function readJSON(path: string): Record<string, unknown> {
 
 describe("registry", () => {
   it("exposes the v1 agents", () => {
-    expect(allHookAgents().map((a) => a.id())).toEqual(["claude", "cursor", "codex"]);
+    expect(allHookAgents().map((a) => a.id())).toEqual(["claude", "cursor", "codex", "opencode"]);
   });
 
   it("looks up agents by id", () => {

@@ -1,7 +1,7 @@
 # Syncing sessions to Dosu memory
 
-`dosu knowledge hooks enable` installs a session-end hook (Claude Code, Cursor, Codex) that runs
-`dosu knowledge sync --quiet --detach`; for Claude Code it also installs the prompt-time memory hook
+`dosu knowledge hooks enable` installs a session-end hook (Claude Code, Cursor, Codex) or, for
+OpenCode, a plugin (see [OpenCode](#opencode)) that runs `dosu knowledge sync --quiet --detach`; for Claude Code it also installs the prompt-time memory hook
 (`UserPromptSubmit` → `dosu knowledge context`) unless transcript shipping is off, and `disable`
 removes both. With no agent named it installs for every agent it detects and names the ones it
 skipped. Claude Code counts as detected when `~/.claude` (or `CLAUDE_CONFIG_DIR`) exists or
@@ -137,10 +137,12 @@ after a failure and ship its tail when it is resumed. If another run holds the s
 waits for it (up to ten minutes) instead of leaving the session for a later trigger. A paused hook
 run ships nothing, but still remembers where an ended session lives. While hook runs back off after
 a failure, a run carrying an ended session still tries that session, and only that one; if it gets
-through, the backoff ends. Only definitive end events count: Claude Code's `SessionEnd`, and
-Codex's `SessionEnd` (0.160+), whose session is named by its rollout file as the scan names it.
-Per-turn events (Cursor's `stop`, Codex's `Stop`) never pass `--ended`. Each agent's end event is
-one reader in `END_EVENT_READERS` (`src/sessions/capture.ts`).
+through, the backoff ends. Only definitive end events count: Claude Code's `SessionEnd`, Codex's
+`SessionEnd` (0.160+), whose session is named by its rollout file as the scan names it, and the exit
+of the opencode process that ran an OpenCode session. Per-turn events (Cursor's `stop`, Codex's
+`Stop`, OpenCode's `session.idle`) never pass `--ended`. Each agent's end event is one reader in
+`END_EVENT_READERS` (`src/sessions/capture.ts`), except OpenCode's: its plugin passes `--ended`
+itself.
 
 **Resumed sessions.** For a shipped session the ledger also keeps how many normalized records went
 and a sha256 of them. When the session grows and its records still start with exactly that prefix,
@@ -249,11 +251,57 @@ Both are installed by default: `dosu setup` (and the TUI's configure step) enabl
 and the slash command for every agent it enables the sync hook for, and removes them when an agent
 is unticked. A hook that fails to install skips the bundle. The commands below manage them directly.
 
+## OpenCode
+
+OpenCode keeps its sessions in a sqlite DB (`$XDG_DATA_HOME/opencode/opencode.db`) and has no
+command hooks, so it gets its own reader and a plugin.
+
+**Reading sessions.** Every session row is listed, a subagent's child session (`parent_id` set) as
+its own session that ships with `parent_session_id`. The trajectory adapter reads the whole-session
+document `opencode export <id>` prints, so the shipper asks the opencode binary on PATH for it
+(`opencode export --pure`, which skips plugins, Dosu's included); without one, or when it fails, the
+same document is rebuilt from the `session`, `message`, and `part` rows. Both normalize to the same
+records. A child session is incognito when the session that spawned it is.
+
+**The plugin.** `dosu knowledge hooks enable opencode` (and `dosu setup`) writes
+`$XDG_CONFIG_HOME/opencode/plugin/dosu.js` and the `/dosu-incognito` command; `disable` removes
+both, and the directories it made for them if they are left empty. A `plugin/dosu.js` that is not
+Dosu's is never replaced: enable stops with an error instead. OpenCode counts as installed when its
+config or data dir exists, or, on a machine where it has never run, when `opencode` is on PATH.
+The plugin is plain JavaScript importing only node builtins, and does three things:
+
+- When the opencode process exits, however it exits (`opencode run` finishing or interrupted; the
+  TUI quitting; `opencode serve`, and the SDK, web UI, and `run --attach` built on it, stopped by
+  any signal, SIGKILL included), one `dosu knowledge sync --quiet --detach` runs with
+  `--ended opencode:<id>` for every session that ran a turn in it, so each ships right away. The
+  first turn starts a detached watcher that reads session ids from a pipe only the opencode process
+  writes to; the kernel closes the pipe when that process exits, which ends the watcher's input and
+  starts the sync. opencode's own `dispose` hook is not used: a server killed by a signal never
+  runs it, and a live process runs it whenever it reloads an instance (`/connect`, a config
+  change), which ends nothing. Nor is `session.idle` an end: the TUI fires it after every turn,
+  and a subagent's session fires it when its task returns. A session left idle in a long-lived TUI
+  or server ships with a plain sync (no session named) that the plugin runs 5.5 minutes after the
+  last turn went idle, once that session is past the quiet period.
+- Before a prompt is saved or sent (`chat.message`), it runs
+  `dosu knowledge context --agent opencode --format plain` with `{"prompt", "session_id", "cwd"}` on
+  stdin and appends the digest, if any, to the user message as a synthetic text part flagged
+  `metadata.dosu_memory`. The shipper drops that part, so memory never ships back as something the
+  user said. Incognito sessions (including one resumed in a later process) and subagents' sessions
+  are not asked about.
+- `/dosu-incognito` is an opencode custom command whose prompt carries the marker.
+
+OpenCode 1.18 starts an npm install of `@opencode-ai/plugin` into its config dir on every start until
+that dir has a `node_modules`, plugin or not; with any local plugin it waits for the install before
+loading plugins, whether or not they import the package (Dosu's does not). That needs registry
+access once (it honors `npm_config_registry`, so a mirror works). With no registry reachable, every
+start waits for the install to fail (about 70 seconds against a refused connection), then loads the
+plugin anyway.
+
 ## Per-session incognito
 
 ```bash
 dosu knowledge incognito enable            # all detected agents
-dosu knowledge incognito enable claude     # or one of: claude, cursor, codex
+dosu knowledge incognito enable claude     # or one of: claude, cursor, codex, opencode
 dosu knowledge incognito status [--json]
 dosu knowledge incognito disable [agents...]
 ```
@@ -265,6 +313,7 @@ dosu knowledge incognito disable [agents...]
 | Claude Code | `~/.claude/commands/dosu-incognito.md` (honors `CLAUDE_CONFIG_DIR`) |
 | Cursor | `~/.cursor/commands/dosu-incognito.md` |
 | Codex | `~/.codex/prompts/dosu-incognito.md` (honors `CODEX_HOME`) |
+| OpenCode | `~/.config/opencode/command/dosu-incognito.md` (honors `XDG_CONFIG_HOME`) |
 
 Running `/dosu-incognito` inside a session expands the file into the conversation. Its body carries
 the marker `dosu:incognito:v1` and instructs the model not to call Dosu MCP tools for the rest of
@@ -289,7 +338,7 @@ Properties worth knowing:
   the marker, for shipping and for the prompt-time memory hook alike.
 - The command **instructs** the model to avoid Dosu tools; it does not block them. A `PreToolUse`
   hook that rejects Dosu tool calls when the marker is present is a possible follow-up.
-- OpenCode has no slash-command install here, but its sessions are checked for the marker too.
+- An OpenCode subagent's session is incognito when the session that spawned it is.
 
 ## Status line
 

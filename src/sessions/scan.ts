@@ -290,17 +290,14 @@ export function querySqlite(dbPath: string, sql: string): SqliteRows | null {
   }
 }
 
-/** opencode: sqlite rows, top-level sessions only (parent_id rows are subagent children that
- * would inflate the backlog). */
+/** opencode: sqlite rows. A subagent's work is a child session (parent_id set), listed as its own
+ * session that names its parent, like Claude Code's subagent transcripts. */
 function scanOpencode(home: string, env: NodeJS.ProcessEnv): AgentSession[] {
   const dataDir = env.XDG_DATA_HOME ?? join(home, ".local", "share");
   const dbPath = join(dataDir, "opencode", "opencode.db");
   if (!existsSync(dbPath)) return [];
 
-  const rows = querySqlite(
-    dbPath,
-    "SELECT id, directory, time_updated FROM session WHERE parent_id IS NULL",
-  );
+  const rows = querySqlite(dbPath, "SELECT id, parent_id, directory, time_updated FROM session");
   if (!rows) return [];
 
   const sessions: AgentSession[] = [];
@@ -314,6 +311,9 @@ function scanOpencode(home: string, env: NodeJS.ProcessEnv): AgentSession[] {
         ? { project: row.directory }
         : {}),
       updated: new Date(row.time_updated).toISOString(),
+      ...(typeof row.parent_id === "string" && row.parent_id !== ""
+        ? { parentId: row.parent_id }
+        : {}),
     });
   }
   return sessions;

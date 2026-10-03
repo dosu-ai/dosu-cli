@@ -21,6 +21,7 @@ import {
   removeGroupedHook,
   writeHookConfig,
 } from "./formats";
+import { opencodeHookAgent } from "./opencode";
 
 export interface HookAgent {
   id(): string;
@@ -116,7 +117,7 @@ function claudeAgent(): HookAgent {
 }
 
 export function allHookAgents(): HookAgent[] {
-  return [claudeAgent(), cursorAgent(), codexHookAgent()];
+  return [claudeAgent(), cursorAgent(), codexHookAgent(), opencodeHookAgent()];
 }
 
 export function getHookAgent(id: string): HookAgent | undefined {

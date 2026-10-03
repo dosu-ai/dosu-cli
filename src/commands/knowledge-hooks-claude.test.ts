@@ -86,7 +86,7 @@ describe("Claude Code installed but never run (no ~/.claude)", () => {
     });
     expect(said).toContain("Claude Code · hook enabled");
     // Every agent not found is named, never passed over in silence.
-    expect(said).toMatch(/Skipped Cursor, Codex: not detected on this machine/);
+    expect(said).toMatch(/Skipped Cursor, Codex(, [^:]+)?: not detected on this machine/);
   });
 
   it("transcripts enable installs the prompt-time hook", async () => {
@@ -183,7 +183,9 @@ describe("Claude Code not on this machine at all", () => {
     const said = await dosu("hooks", "enable");
 
     expect(existsSync(join(home, ".claude"))).toBe(false);
-    expect(said).toMatch(/Skipped Claude Code, Cursor, Codex: not detected on this machine/);
+    expect(said).toMatch(
+      /Skipped Claude Code, Cursor, Codex(, [^:]+)?: not detected on this machine/,
+    );
     expect(said).toContain("dosu knowledge hooks enable <agent>");
   });
 
