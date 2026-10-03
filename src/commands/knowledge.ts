@@ -339,7 +339,13 @@ export function knowledgeCommand(): Command {
         const ended = parseEndedSessionArgs(opts.ended ?? [], opts.endedPath ?? []);
         // Analytics facets on this command's completion event: coarse trigger/status only, so
         // dashboards can tell hook fires, detached parents, and real ship runs apart.
-        const trigger = opts.bootstrap ? "bootstrap" : opts.quiet ? "hook" : "manual";
+        const trigger = opts.flush
+          ? "flush"
+          : opts.bootstrap
+            ? "bootstrap"
+            : opts.quiet
+              ? "hook"
+              : "manual";
 
         // --status never scans or ships: it reads the lock, the persisted
         // ledger, and the tail of the debug log.

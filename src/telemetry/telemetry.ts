@@ -99,7 +99,7 @@ type CommandResult = "success" | "validation_error" | "failure";
 
 /** Closed vocabularies for the optional per-command facets below. Anything outside these sets is
  * dropped at payload construction, so a new status string can never leak until it is listed here. */
-const SYNC_TRIGGERS = new Set(["hook", "manual", "bootstrap"]);
+const SYNC_TRIGGERS = new Set(["hook", "manual", "bootstrap", "flush"]);
 const SYNC_STATUSES = new Set([
   // SyncStatus from src/sync/sync.ts
   "backlog",

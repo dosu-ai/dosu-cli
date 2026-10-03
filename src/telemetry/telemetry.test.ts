@@ -264,6 +264,22 @@ describe("safe payload builders", () => {
     expect(payload.properties.backfill_offer).toBeUndefined();
   });
 
+  it.each(["hook", "manual", "bootstrap", "flush"])("keeps the %s sync trigger", (trigger) => {
+    const payload = buildPostHogPayload({
+      apiKey: "public",
+      installId: "11111111-1111-4111-8111-111111111111",
+      command: "knowledge sync",
+      result: "success",
+      durationMs: 2,
+      exitCode: 0,
+      facets: { sync_trigger: trigger },
+      context: SAFE_CONTEXT,
+      runtime: SAFE_RUNTIME,
+    });
+
+    expect(payload.properties.sync_trigger).toBe(trigger);
+  });
+
   it("drops facet values outside the closed vocabularies", () => {
     const payload = buildPostHogPayload({
       apiKey: "public",

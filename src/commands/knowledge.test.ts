@@ -1031,6 +1031,18 @@ describe("knowledge sync", () => {
       });
     });
 
+    it("tags a flush as its own trigger, even when run with --quiet", async () => {
+      mockRunSync.mockResolvedValueOnce(shippedOutcome(8)).mockResolvedValue(shippedOutcome(3));
+
+      await run("sync", "--flush", "--quiet");
+
+      expect(consumeCommandFacets()).toEqual({
+        sync_trigger: "flush",
+        sync_status: "shipped",
+        sessions_shipped: 8,
+      });
+    });
+
     it("tags the --detach parent so it is never counted as a pipeline run", async () => {
       mockSpawnDetached.mockReturnValue(true);
 

@@ -101,9 +101,9 @@ The `properties` allowlist is:
 | `is_authenticated` | Boolean only; it does not duplicate the top-level identity. |
 | `exit_code` | Integer clamped to `0..255`. |
 | `error_code` | Optional validated, stable, low-cardinality code; never a message. |
-| `sync_trigger` | Optional, `knowledge sync` only: `hook`, `manual`, or `bootstrap`. |
+| `sync_trigger` | Optional, `knowledge sync` only: `hook`, `manual`, `bootstrap`, or `flush`. |
 | `sync_status` | Optional, `knowledge sync` only: the pipeline status (`backlog`, `nothing-new`, `shipped`, `ship-failed`, `disabled`, `skipped-backoff`, `skipped-lock`, `skipped-paused`, `error`) or a command-level outcome (`detached` for the hook parent that only re-spawns, `detach-failed`, `status-only` for `--status`). |
-| `sessions_shipped` | Optional, `knowledge sync` only: sessions shipped to Dosu memory this invocation, bucketed to `0`, `1-4`, `5-9`, `10-19`, `20-49`, or `50+`. Summed across bootstrap rounds. |
+| `sessions_shipped` | Optional, `knowledge sync` only: sessions shipped to Dosu memory this invocation, bucketed to `0`, `1-4`, `5-9`, `10-19`, `20-49`, or `50+`. Summed across bootstrap and flush rounds. |
 | `backfill_offer` | Optional, `setup`/`tui` only: what happened to the post-install "ship the last 30 days" prompt — `not-offered` (empty backlog), `accepted`, `declined`, `cancelled`, or `spawn-failed`. |
 
 The optional per-command facets are recorded by the running command through
