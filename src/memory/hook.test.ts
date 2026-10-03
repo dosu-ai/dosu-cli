@@ -88,7 +88,7 @@ describe("runMemoryHook with DOSU_MEMORY_RECALL_MODE=single", () => {
     ]);
     expect(recallUrls).toEqual(["http://memory.test/v1/agent-memory/recall"]);
     expect(readSessionState(SESSION, dir)?.recall_mode).toBe("single");
-    expect(await runMemoryHook(payload("PostToolUse", { tool_name: "Bash" }), deps())).toBeNull();
+    expect(await runMemoryHook(payload("PostToolBatch", { tool_calls: [] }), deps())).toBeNull();
     expect(
       await runMemoryHook(payload("UserPromptSubmit", { prompt: "And docs" }), deps()),
     ).toBeNull();

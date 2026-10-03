@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 describe("memory hooks in Claude Code settings", () => {
-  it("installs the six events under CLAUDE_CONFIG_DIR, with timeouts on the prompt and tool hooks", () => {
+  it("installs the five events under CLAUDE_CONFIG_DIR, with timeouts on the prompt and tool hooks", () => {
     expect(claudeSettingsPath()).toBe(join(configDir, "settings.json"));
     enableMemoryHooks();
     enableMemoryHooks();
@@ -41,8 +41,7 @@ describe("memory hooks in Claude Code settings", () => {
       hooks: {
         SessionStart: [{ hooks: [hook] }],
         UserPromptSubmit: [{ hooks: [{ ...hook, timeout: 120 }] }],
-        PostToolUse: [{ hooks: [{ ...hook, timeout: 5 }] }],
-        PostToolUseFailure: [{ hooks: [{ ...hook, timeout: 5 }] }],
+        PostToolBatch: [{ hooks: [{ ...hook, timeout: 5 }] }],
         Stop: [{ hooks: [hook] }],
         SessionEnd: [{ hooks: [hook] }],
       },
@@ -50,8 +49,7 @@ describe("memory hooks in Claude Code settings", () => {
     expect(memoryHookStatus()).toEqual({
       SessionStart: true,
       UserPromptSubmit: true,
-      PostToolUse: true,
-      PostToolUseFailure: true,
+      PostToolBatch: true,
       Stop: true,
       SessionEnd: true,
     });
@@ -79,7 +77,7 @@ describe("memory hooks in Claude Code settings", () => {
       model: "opus",
       hooks: { SessionEnd: [{ hooks: [knowledge] }], Stop: [own] },
     });
-    expect(Object.values(memoryHookStatus())).toEqual([false, false, false, false, false, false]);
+    expect(Object.values(memoryHookStatus())).toEqual([false, false, false, false, false]);
   });
 
   it("recognizes its own command in production and dev form only", () => {

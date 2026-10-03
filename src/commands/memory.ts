@@ -38,8 +38,7 @@ function hooksCommand(): Command {
   cmd
     .command("enable")
     .description(
-      "Install the memory hooks (SessionStart, UserPromptSubmit, PostToolUse, " +
-        "PostToolUseFailure, Stop, SessionEnd)",
+      "Install the memory hooks (SessionStart, UserPromptSubmit, PostToolBatch, Stop, SessionEnd)",
     )
     .action(() => {
       changeHooks(enableMemoryHooks, "enabled");

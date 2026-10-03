@@ -18,14 +18,13 @@ const HOOK_COMMAND = "dosu memory hook";
 
 /** UserPromptSubmit waits for the recall (in single mode the note is written on the spot); 120 s
  * keeps a slow write from being cut off by Claude Code's 30 s default, which would block the
- * prompt. PostToolUse and PostToolUseFailure (a failed call fires only the latter) run on every
- * tool call and only read local files; 5 s bounds a stall (Claude Code then keeps the tool result
- * and moves on). The others return immediately. */
+ * prompt. PostToolBatch runs once per batch of tool calls, failed ones included, right before the
+ * next model request, and only reads local files; 5 s bounds a stall. The others return
+ * immediately. */
 const MEMORY_HOOK_EVENTS: ReadonlyArray<{ event: string; timeout?: number }> = [
   { event: "SessionStart" },
   { event: "UserPromptSubmit", timeout: 120 },
-  { event: "PostToolUse", timeout: 5 },
-  { event: "PostToolUseFailure", timeout: 5 },
+  { event: "PostToolBatch", timeout: 5 },
   { event: "Stop" },
   { event: "SessionEnd" },
 ];

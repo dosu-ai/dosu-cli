@@ -1,9 +1,8 @@
 /** Two-stage recall. The first prompt waits only for stage one (the quick note, at most 5 s) and
  * starts stage two, the note written for this task, in the background; a detached
  * `dosu memory recall-poll` waits for it and saves it locally. Hooks after the first prompt read
- * local files only: stage two goes to the agent with the first tool result after it is ready
- * (PostToolUse, or PostToolUseFailure for a failed call), or with the next prompt if no tool ran
- * in between, once per session. */
+ * local files only: stage two goes to the agent with the first batch of tool results after it is
+ * ready (PostToolBatch), or with the next prompt if no tool ran in between, once per session. */
 
 import { logger } from "../debug/logger";
 import { spawnDetachedSelf } from "../sync/detach";
@@ -79,7 +78,7 @@ export async function startTwoStageRecall(
 }
 
 /** Stage two's note if it is ready and this caller won the session's one injection; else null.
- * Local files only, no network: this runs on every tool call. */
+ * Local files only, no network: this runs after every batch of tool calls. */
 export function claimFullNote(sessionId: string, configDir?: string): string | null {
   if (fullRecallInjected(sessionId, configDir)) return null;
   const full = readFullRecallState(sessionId, configDir);

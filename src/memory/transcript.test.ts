@@ -15,13 +15,12 @@ const SESSION = fixture("claude-code-session.jsonl");
 const COMPACTED = fixture("claude-code-compacted-session.jsonl");
 /** Two-stage recall against a fake backend. Stage one carries STAGE1-MARKER-4410; stage two
  * carries STAGE2-MARKER-8823 plus an `ERROR:` line and an `Exit code 9` line, bait for the
- * command parser had it landed inside a tool result. TOOL: a failing Bash (no PostToolUse fires),
- * stage two on the next Bash's PostToolUse, `/compact` puts both back, a second prompt edits
- * README.md. PROMPT: no tool call in the first turn, so stage two comes with the second prompt.
- * FAILURE: the only tool call fails, so stage two comes through PostToolUseFailure. */
+ * command parser had it landed inside a tool result. TOOL: two parallel Bash calls, one failing,
+ * then stage two on that batch's PostToolBatch, `/compact` puts both stages back, a second prompt
+ * edits README.md. PROMPT: no tool call in the first turn, so stage two comes with the second
+ * prompt. */
 const TWO_STAGE_TOOL = fixture("claude-code-two-stage-tool-session.jsonl");
 const TWO_STAGE_PROMPT = fixture("claude-code-two-stage-prompt-session.jsonl");
-const TWO_STAGE_FAILURE = fixture("claude-code-two-stage-failure-session.jsonl");
 
 const TS = "2026-10-01T10:00:00.000Z";
 const user = (content: unknown, extra: Record<string, unknown> = {}) =>
@@ -81,20 +80,26 @@ describe("convertTranscriptLines", () => {
       lines
         .filter((line) => line.includes("MARKER-"))
         .map((line) => JSON.parse(line).attachment?.hookEvent ?? "not a hook attachment");
-    expect(injectedBy(TWO_STAGE_TOOL)).toEqual(["UserPromptSubmit", "PostToolUse", "SessionStart"]);
+    expect(injectedBy(TWO_STAGE_TOOL)).toEqual([
+      "UserPromptSubmit",
+      "PostToolBatch",
+      "SessionStart",
+    ]);
     expect(injectedBy(TWO_STAGE_PROMPT)).toEqual(["UserPromptSubmit", "UserPromptSubmit"]);
-    expect(injectedBy(TWO_STAGE_FAILURE)).toEqual(["UserPromptSubmit", "PostToolUseFailure"]);
 
     const tool = convertTranscriptLines(TWO_STAGE_TOOL, {}, "/work/demo-widgets").events;
     expect(tool.map(({ ts: _ts, ...rest }) => rest)).toEqual([
-      { type: "user_prompt", text: expect.stringMatching(/^Use the Bash tool to run: sleep 3;/) },
+      {
+        type: "user_prompt",
+        text: expect.stringMatching(/^In ONE assistant message, call the Bash/),
+      },
       {
         type: "command",
         command: "sleep 3; python3 widgets.py --strict",
         rc: 3,
         error_line: "ERROR: widget count mismatch (expected 3, got 2)",
       },
-      { type: "command", command: "python3 widgets.py", rc: 0, error_line: null },
+      { type: "command", command: "sleep 3; python3 widgets.py", rc: 0, error_line: null },
       { type: "assistant_text", text: expect.any(String) },
       { type: "user_prompt", text: expect.stringMatching(/^Now use the Edit tool to change/) },
       { type: "file_edit", tool: "Edit", path: "README.md" },
@@ -105,18 +110,7 @@ describe("convertTranscriptLines", () => {
       "Reply with one short sentence saying hello. Do not use any tools.",
       "Use the Bash tool to run: python3 widgets.py ; then reply in one short sentence.",
     ]);
-    const failure = convertTranscriptLines(TWO_STAGE_FAILURE, {}, "/work/demo-widgets").events;
-    expect(failure.map(({ ts: _ts, ...rest }) => rest)).toEqual([
-      { type: "user_prompt", text: expect.stringMatching(/^Use the Bash tool to run: sleep 3;/) },
-      {
-        type: "command",
-        command: "sleep 3; python3 widgets.py --strict",
-        rc: 3,
-        error_line: "ERROR: widget count mismatch (expected 3, got 2)",
-      },
-      { type: "assistant_text", text: expect.any(String) },
-    ]);
-    for (const events of [tool, prompt, failure]) {
+    for (const events of [tool, prompt]) {
       expect(JSON.stringify(events)).not.toMatch(/MARKER|prior_task_memory|Addendum/);
     }
   });
