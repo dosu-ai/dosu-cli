@@ -46,27 +46,36 @@ export interface RecallResponse {
   cost_usd: number | null;
 }
 
-/** `POST /v1/agent-memory/recall/quick`: stage one of a two-stage recall, answered from material
- * the backend computed ahead of time (the repository playbook), without a model call. */
+/** `POST /v1/agent-memory/recall/quick` (backend `QuickRecallResponse`): stage one of a two-stage
+ * recall, the playbook note, without a model call. `recall_id` is the backend's recall_log row,
+ * kept for the local log. The backend also sends `RecallResponse`'s episode lists and cost. */
 export interface QuickRecallResponse {
   note: string;
   latency_ms: number;
+  recall_id: string | null;
 }
 
-/** `POST /v1/agent-memory/recall/full`: stage two, the note written for this task, started in the
- * background. */
+/** `POST /v1/agent-memory/recall/full` answers 202 with a pending job (backend `FullRecallJob`):
+ * stage two, the note written for this task, by a background worker. The request may also carry
+ * `quick_recall_id` to link the two recall_log rows; the CLI sends both stages at once and has no
+ * id yet, so the rows pair by session instead. */
 export interface FullRecallJob {
   job_id: string;
 }
 
-/** `GET /v1/agent-memory/recall/full/{job_id}`. The backend's `done` and `failed` are final; any
- * other status reads as `pending`. `note` is only meaningful once `done`. */
+/** `GET /v1/agent-memory/recall/full/{job_id}` (backend `FullRecallJob`). `done` and `failed` are
+ * final; `note` is null on the wire until `done` (read here as ""), and "" when done means
+ * nothing to say. `latency_ms` runs from the start request to the job's end. A job unfinished at
+ * the backend's deadline (120 s after the request) fails, and one whose worker died is failed 30 s
+ * after that. Other org's or unknown jobs are 404. */
 export interface FullRecallStatus {
   status: "pending" | "done" | "failed";
   note: string;
   error: string | null;
   latency_ms: number | null;
 }
+
+const FULL_RECALL_STATUSES = new Set(["pending", "done", "failed"]);
 
 /** The writer's "no note" answer; never injected. */
 const NO_NOTE = "NONE";
@@ -208,7 +217,11 @@ export async function recallQuick(
   if (typeof body?.note !== "string") {
     return { error: "quick recall response has no note", permanent: true };
   }
-  return { note: body.note, latency_ms: typeof body.latency_ms === "number" ? body.latency_ms : 0 };
+  return {
+    note: body.note,
+    latency_ms: typeof body.latency_ms === "number" ? body.latency_ms : 0,
+    recall_id: typeof body.recall_id === "string" ? body.recall_id : null,
+  };
 }
 
 export async function startFullRecall(
@@ -240,12 +253,15 @@ export async function fullRecallStatus(
   const outcome = await requestJSON(api, path, undefined, FULL_RECALL_STATUS_TIMEOUT_MS, fetchImpl);
   if (!outcome.ok) return apiError(outcome);
   const body = outcome.body as Record<string, unknown> | null;
-  const status = body?.status === "done" || body?.status === "failed" ? body.status : "pending";
+  const status = body?.status;
+  if (typeof status !== "string" || !FULL_RECALL_STATUSES.has(status)) {
+    return { error: `full recall job has an unknown status: ${String(status)}`, permanent: true };
+  }
   if (status === "done" && typeof body?.note !== "string") {
     return { error: "finished full recall has no note", permanent: true };
   }
   return {
-    status,
+    status: status as FullRecallStatus["status"],
     note: typeof body?.note === "string" ? body.note : "",
     error: typeof body?.error === "string" ? body.error : null,
     latency_ms: typeof body?.latency_ms === "number" ? body.latency_ms : null,

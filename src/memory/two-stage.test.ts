@@ -23,6 +23,31 @@ const fullBlock = `${FULL_NOTE_PREFACE}\n${block(FULL)}`;
 const output = (event: string, context: string) =>
   JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } });
 
+/** Answers in the backend's shapes (phase2-impl.md 12.2). */
+const QUICK_ANSWER = {
+  note: QUICK,
+  episode_ids: [],
+  available_episode_ids: [],
+  latency_ms: 900,
+  cost_usd: null,
+  recall_id: "0b9c8d7e-6f5a-4b3c-9d2e-1f0a9b8c7d6e",
+};
+const job = (extra: Record<string, unknown> = {}) => ({
+  job_id: "job-1",
+  status: "pending",
+  mode: "retrieval",
+  quick_recall_id: null,
+  note: null,
+  episode_ids: null,
+  available_episode_ids: null,
+  latency_ms: null,
+  recall_latency_ms: null,
+  cost_usd: null,
+  error: null,
+  recall_id: null,
+  ...extra,
+});
+
 type Route = () => Promise<Response>;
 const json =
   (body: unknown, status = 200): Route =>
@@ -102,9 +127,9 @@ beforeEach(() => {
   calls = [];
   spawned = [];
   routes = {
-    [QUICK_PATH]: json({ note: `  ${QUICK}\n`, latency_ms: 900 }),
-    [FULL_PATH]: json({ job_id: "job-1" }),
-    [STATUS_PATH]: json({ status: "done", note: FULL, latency_ms: 9_500 }),
+    [QUICK_PATH]: json({ ...QUICK_ANSWER, note: `  ${QUICK}\n` }),
+    [FULL_PATH]: json(job(), 202),
+    [STATUS_PATH]: json(job({ status: "done", note: FULL, latency_ms: 9_500 })),
   };
   delete process.env.DOSU_MEMORY_RECALL_MODE;
 });
@@ -148,9 +173,9 @@ describe("two-stage recall", () => {
 
   it("stage two ready after some tool batches: the first batch after it injects it", async () => {
     routes[STATUS_PATH] = sequence(
-      json({ status: "pending" }),
-      json({ status: "running" }),
-      json({ status: "done", note: FULL }),
+      json(job()),
+      json(job()),
+      json(job({ status: "done", note: FULL })),
     );
     await firstPrompt();
     expect(await toolBatch()).toBeNull();
@@ -175,10 +200,10 @@ describe("two-stage recall", () => {
   });
 
   it.each<[string, Route, Partial<PollDeps>, string | null]>([
-    ["the job fails", json({ status: "failed", error: "writer error" }), {}, "writer error"],
-    ["the job is unknown", json({ detail: "no such job" }, 404), {}, "HTTP 404"],
-    ["the job outlives the deadline", json({ status: "pending" }), { deadlineMs: 0 }, "timed out"],
-    ["the writer had nothing to say", json({ status: "done", note: "NONE" }), {}, null],
+    ["the job fails", json(job({ status: "failed", error: "writer error" })), {}, "writer error"],
+    ["the job is unknown", json({ detail: "Job not found" }, 404), {}, "HTTP 404"],
+    ["the job outlives the deadline", json(job()), { deadlineMs: 0 }, "timed out"],
+    ["the writer had nothing to say", json(job({ status: "done", note: "" })), {}, null],
   ])("injects no stage two when %s", async (_label, route, options, error) => {
     routes[STATUS_PATH] = route;
     await firstPrompt();
@@ -194,7 +219,7 @@ describe("two-stage recall", () => {
     routes[STATUS_PATH] = sequence(
       async () => Promise.reject(new Error("ECONNRESET")),
       json({ detail: "busy" }, 503),
-      json({ status: "done", note: FULL }),
+      json(job({ status: "done", note: FULL })),
     );
     await firstPrompt();
     expect(await poll()).toMatchObject({ status: "done", note: FULL });

@@ -71,8 +71,8 @@ export async function startTwoStageRecall(
   const note = usableNote(quick.note);
   logger.info(
     "memory",
-    `quick recall for ${sessionId}: ${note ? `${note.length} chars` : "no note"} in ` +
-      `${quick.latency_ms} ms`,
+    `quick recall ${quick.recall_id ?? "(no id)"} for ${sessionId}: ` +
+      `${note ? `${note.length} chars` : "no note"} in ${quick.latency_ms} ms`,
   );
   return note;
 }
@@ -105,8 +105,10 @@ export interface PollDeps {
 }
 
 const POLL_INTERVAL_MS = 1_000;
-/** A note later than this is not worth handing over; the job counts as failed. */
-const POLL_DEADLINE_MS = 120_000;
+/** The backend gives a job 120 s from the start request; a few seconds more so a note finished
+ * right at its deadline is still read. A job whose worker died only reads as failed 30 s after the
+ * deadline; the poller has stopped by then and records it as timed out. */
+const POLL_DEADLINE_MS = 125_000;
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
