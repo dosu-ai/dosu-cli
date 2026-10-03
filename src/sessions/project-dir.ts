@@ -14,12 +14,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config/config";
-import {
-  branchFromClaudeTranscript,
-  branchFromCodexTranscript,
-  branchFromReflog,
-  parseReflog,
-} from "./branch";
+import { branchFromReflog, parseReflog } from "./branch";
 import { type CapturedSession, type EndedSession, readCapturedSession } from "./capture";
 import {
   GIT_BUDGETS,
@@ -28,7 +23,7 @@ import {
   type ProjectKey,
   projectOverride,
 } from "./project";
-import { currentBranchOfDir, headReflogOfDir, originRepoOfDir } from "./repo";
+import { currentBranchAnswer, GIT_TIMED_OUT, headReflogOfDir, originRepoOfDir } from "./repo";
 import { type AgentSession, parentSessionOf, scanAgentSessions, sessionAtPath } from "./scan";
 
 const CACHE_FILENAME = "project-dirs.json";
@@ -49,8 +44,12 @@ interface CacheEntry {
   /** The session's project key (project.ts), as first resolved for it, by whichever rule; a
    * `path` fallback is retried when mtime moves, like a null repo. */
   project?: ProjectKey;
+  /** The branch the session ran on, as first resolved for it (its first prompt, or the sync that
+   * shipped it), so its prompts and its transcript carry the same one; absent until known. */
+  branch?: string;
   /** A prompt hook's git lookup ran out of time: the session's later prompts skip git (and send
-   * no key) rather than keep the user waiting again, and the sync resolves it patiently. */
+   * no key or branch) rather than keep the user waiting again, and the sync resolves it
+   * patiently. */
   git_timed_out?: true;
 }
 
@@ -153,21 +152,12 @@ export interface ProjectDirDeps {
   readHead?: (path: string) => string | null;
   mtime?: (path: string) => string;
   repoOfDir?: (dir: string) => string | null;
-  readTranscript?: (path: string) => string | null;
   captured?: (key: string) => CapturedSession | null;
-  reflogOfDir?: (dir: string) => string | null;
-  currentBranch?: (dir: string) => string | null;
+  reflogOfDir?: (dir: string, timeout?: number) => string | null | typeof GIT_TIMED_OUT;
+  currentBranch?: (dir: string) => string | null | typeof GIT_TIMED_OUT;
   gitProjectOfDir?: (dir: string, budget: GitBudget, knownRoot?: string) => ProjectKey | null;
   /** The hook's environment, for resolveProjectAt's DOSU_PROJECT; defaults to process.env. */
   env?: NodeJS.ProcessEnv;
-}
-
-function readWholeFile(path: string): string | null {
-  try {
-    return readFileSync(path, "utf-8");
-  } catch {
-    return null;
-  }
 }
 
 function fileMtime(path: string): string {
@@ -176,6 +166,13 @@ function fileMtime(path: string): string {
   } catch {
     return "";
   }
+}
+
+/** What a session's transcript says about the branch it began on (shipper/session-start.ts):
+ * the branch it recorded then (Claude Code, Codex), and when its own first prompt was. */
+export interface SessionStart {
+  recorded: string | null;
+  firstPromptAt?: string;
 }
 
 export interface ProjectDirResolver {
@@ -195,9 +192,25 @@ export interface ProjectDirResolver {
    * `harness/id` key so the shipped session agrees. Git gets the prompt budget; null when it ran
    * out, then and on the session's later prompts. */
   resolveProjectAt(key: string, dir: string): ProjectKey | null;
-  /** The branch the session ran on, or null when nothing recorded it. Not cached: a session's
-   * branch can move until it ends, and each session is resolved about once. */
-  resolveBranch(session: AgentSession): string | null;
+  /** The branch a session whose transcript recorded none ran on, as first resolved for it and
+   * cached from then on, like its project key: the one its prompts were served under, else the
+   * reflog's answer for `at` (ISO; when the session began, its first prompt, which is when a
+   * prompt hook pins it; for Cursor, whose transcripts carry no times, its first captured turn;
+   * else its last activity), with the checkout's current branch only when no checkout happened
+   * since, else the branch Cursor's hook captured at its first turn. Null when none knows. */
+  resolveBranch(session: AgentSession, at?: string): string | null;
+  /** The branch for a session whose working directory the caller already knows (a prompt hook's
+   * cwd), cached under its `harness/id` key so the session's later prompts and its shipped
+   * transcript carry it too. Unless one is cached, `startOf` reads the session's transcript: the
+   * branch it recorded as it began, else, when it had prompts before this one (the hook went in,
+   * or Dosu was set up, partway through), the reflog's answer for the first; only for a session's
+   * first prompt is it the one checked out now. Git gets the prompt's budget: null, and no git
+   * asked, once git ran out of a prompt's time for the session. */
+  resolveBranchAt(
+    key: string,
+    dir: string,
+    startOf?: () => Promise<SessionStart | null>,
+  ): Promise<string | null>;
   /** Cache-only lookup by `harness/id` key — for history rows with no session file at hand. */
   cached(key: string): string | null;
   /** Persist any newly resolved entries, merged into the file as it is now; call once after a
@@ -252,34 +265,46 @@ export function createProjectDirResolver(
   const repoOfDir = deps.repoOfDir ?? originRepoOfDir;
   // Many sessions share a directory; one git call per directory per resolver.
   const repoByDir = new Map<string, string | null>();
-  const readTranscript = deps.readTranscript ?? readWholeFile;
   const reflogOfDir = deps.reflogOfDir ?? headReflogOfDir;
-  const currentBranch = deps.currentBranch ?? currentBranchOfDir;
+  const currentBranch = deps.currentBranch ?? currentBranchAnswer;
   const reflogByDir = new Map<string, ReturnType<typeof parseReflog>>();
-  const currentByDir = new Map<string, string | null>();
+  const currentByDir = new Map<string, string | null | typeof GIT_TIMED_OUT>();
 
-  const transcriptBranch = (session: AgentSession): string | null => {
-    if (session.harness !== "claude" && session.harness !== "codex") return null;
-    const text = readTranscript(session.path);
-    if (text === null) return null;
-    return session.harness === "claude"
-      ? branchFromClaudeTranscript(text)
-      : branchFromCodexTranscript(text);
+  const currentOf = (dir: string): string | null | typeof GIT_TIMED_OUT => {
+    if (!currentByDir.has(dir)) currentByDir.set(dir, currentBranch(dir));
+    return currentByDir.get(dir) ?? null;
   };
 
-  const reflogBranch = (session: AgentSession): string | null => {
-    const dir = resolve(session);
-    const end = Date.parse(session.updated);
-    if (dir === null || Number.isNaN(end)) return null;
-    let entries = reflogByDir.get(dir);
-    if (!entries) {
-      entries = parseReflog(reflogOfDir(dir) ?? "");
-      reflogByDir.set(dir, entries);
+  /** The branch `dir` had checked out at `at` (ISO), from its reflog: the checkout's current branch
+   * only when the reflog shows no checkout at all. GIT_TIMED_OUT when git ran out of `timeout`
+   * (default: the reflog lookup's own). */
+  const branchAt = (
+    dir: string,
+    at: string,
+    timeout?: number,
+  ): string | null | typeof GIT_TIMED_OUT => {
+    const when = Date.parse(at);
+    if (Number.isNaN(when)) return null;
+    let reflog = reflogByDir.get(dir);
+    if (!reflog) {
+      const out = reflogOfDir(dir, timeout);
+      if (out === GIT_TIMED_OUT) return out;
+      reflog = parseReflog(out ?? "");
+      reflogByDir.set(dir, reflog);
     }
-    return branchFromReflog(entries, Math.floor(end / 1000), () => {
-      if (!currentByDir.has(dir)) currentByDir.set(dir, currentBranch(dir));
-      return currentByDir.get(dir) ?? null;
+    let timedOut = false;
+    const branch = branchFromReflog(reflog, Math.floor(when / 1000), () => {
+      const current = currentOf(dir);
+      timedOut = current === GIT_TIMED_OUT;
+      return current === GIT_TIMED_OUT ? null : current;
     });
+    return timedOut ? GIT_TIMED_OUT : branch;
+  };
+
+  const reflogBranch = (session: AgentSession, at: string): string | null => {
+    const dir = resolve(session);
+    const branch = dir === null ? null : branchAt(dir, at);
+    return branch === GIT_TIMED_OUT ? null : branch;
   };
 
   const resolve = (session: AgentSession): string | null => {
@@ -291,9 +316,16 @@ export function createProjectDirResolver(
       return cached.dir;
     }
     const dir = compute(session);
-    // A key pinned while the directory was unknown (DOSU_PROJECT) stays the session's.
+    // A key or branch pinned while the directory was unknown (DOSU_PROJECT, a prompt) stays the
+    // session's.
     const project = cached?.project;
-    entries[key] = { dir, mtime: mtime(session.path), ...(project ? { project } : {}) };
+    const branch = cached?.branch;
+    entries[key] = {
+      dir,
+      mtime: mtime(session.path),
+      ...(project ? { project } : {}),
+      ...(branch ? { branch } : {}),
+    };
     touched.add(key);
     return dir;
   };
@@ -404,12 +436,36 @@ export function createProjectDirResolver(
       }
       return sessionProject(key, dir, entries[key].mtime, deps.env ?? process.env, "prompt");
     },
-    resolveBranch(session) {
-      return (
-        transcriptBranch(session) ??
-        captured(`${session.harness}/${session.id}`)?.branch ??
-        reflogBranch(session)
-      );
+    resolveBranch(session, at) {
+      const key = `${session.harness}/${session.id}`;
+      const pinned = entries[key]?.branch;
+      if (pinned) return pinned;
+      const capture = captured(key);
+      const when = at ?? capture?.since ?? session.updated;
+      const branch = reflogBranch(session, when) ?? capture?.branch ?? null;
+      if (branch) {
+        resolve(session); // the session's entry, to pin the branch on
+        entries[key].branch = branch;
+        touched.add(key);
+      }
+      return branch;
+    },
+    async resolveBranchAt(key, dir, startOf) {
+      const entry = entries[key];
+      if (entry?.branch) return entry.branch;
+      if (entry?.git_timed_out) return null;
+      const start = await startOf?.();
+      const branch =
+        start?.recorded ??
+        (start?.firstPromptAt
+          ? branchAt(dir, start.firstPromptAt, GIT_BUDGETS.prompt.lookup)
+          : currentBranch(dir));
+      if (branch === null) return null;
+      entries[key] ??= { dir, mtime: "" };
+      if (branch === GIT_TIMED_OUT) entries[key].git_timed_out = true;
+      else entries[key].branch = branch;
+      touched.add(key);
+      return branch === GIT_TIMED_OUT ? null : branch;
     },
     flush() {
       if (touched.size === 0) return;

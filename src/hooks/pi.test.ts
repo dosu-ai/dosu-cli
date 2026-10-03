@@ -406,6 +406,17 @@ describe("the Dosu pi extension", () => {
       cwd,
     });
 
+    // Once pi has a transcript for the session, the CLI is told where, so it can tell whether
+    // the session began before this prompt.
+    const transcript = join(cwd, TRANSCRIPT_NAME);
+    await beforeStart?.({ prompt: "and then?" }, piContext([], transcript));
+    expect(JSON.parse(calls()[1].input)).toEqual({
+      prompt: "and then?",
+      session_id: "01a0fdc5-a112",
+      cwd,
+      transcript_path: transcript,
+    });
+
     replies({});
     expect(await beforeStart?.({ prompt: "and then?" }, piContext())).toBeUndefined();
     replies({ "knowledge context": { stdout: "partial", code: 1 } });

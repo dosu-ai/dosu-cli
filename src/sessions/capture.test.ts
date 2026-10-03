@@ -29,29 +29,35 @@ afterEach(() => {
 const NOW = new Date("2026-09-29T12:00:00.000Z");
 
 describe("recordCapturedSession", () => {
-  it("persists per session and keeps an earlier branch through a detached turn", () => {
+  it("persists per session the branch and time of its first turn, through later turns", () => {
+    const LATER = new Date("2026-09-29T12:30:00.000Z");
     expect(readCapturedSession("cursor/abc", configDir)).toBeNull();
     expect(
       recordCapturedSession("cursor/abc", { dir: "/w", branch: "feat/x" }, configDir, NOW),
     ).toBe(true);
-    recordCapturedSession("cursor/abc", { dir: "/w", branch: null }, configDir, NOW);
+    recordCapturedSession("cursor/abc", { dir: "/w", branch: null }, configDir, LATER);
     expect(readCapturedSession("cursor/abc", configDir)).toEqual({
       dir: "/w",
       branch: "feat/x",
-      at: NOW.toISOString(),
+      since: NOW.toISOString(),
+      at: LATER.toISOString(),
     });
 
-    recordCapturedSession("cursor/abc", { branch: "main" }, configDir, NOW);
-    expect(readCapturedSession("cursor/abc", configDir)?.branch).toBe("main");
+    // A later turn on another branch: the session began on the first one.
+    recordCapturedSession("cursor/abc", { branch: "main" }, configDir, LATER);
+    expect(readCapturedSession("cursor/abc", configDir)?.branch).toBe("feat/x");
     expect(readCapturedSession("cursor/other", configDir)).toBeNull();
   });
 
-  it("records a detached first turn with its directory only", () => {
+  it("records a detached first turn with its directory only, and a later turn's branch", () => {
     recordCapturedSession("cursor/d", { dir: "/w", branch: null }, configDir, NOW);
     expect(readCapturedSession("cursor/d", configDir)).toEqual({
       dir: "/w",
+      since: NOW.toISOString(),
       at: NOW.toISOString(),
     });
+    recordCapturedSession("cursor/d", { branch: "main" }, configDir, NOW);
+    expect(readCapturedSession("cursor/d", configDir)?.branch).toBe("main");
   });
 
   it("rejects keys that could escape the capture directory", () => {
@@ -90,6 +96,7 @@ describe("captureCursorStop", () => {
     expect(readCapturedSession("cursor/uuid-1", configDir)).toEqual({
       dir: "/work/app",
       branch: "feat/cursor",
+      since: NOW.toISOString(),
       at: NOW.toISOString(),
     });
   });
@@ -118,6 +125,7 @@ describe("captureCursorStop", () => {
       expect(captureCursorStop(stop, { configDir, now: NOW })).toBe(true);
       expect(readCapturedSession("cursor/uuid-1", configDir)).toEqual({
         dir: outsideRepo,
+        since: NOW.toISOString(),
         at: NOW.toISOString(),
       });
     } finally {

@@ -19,6 +19,7 @@ import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
+import { contextHookOutput } from "../memory/context-hook";
 import { makeOpencodeDb, opencodeDocument } from "../sessions/opencode.test-utils";
 import { INCOGNITO_MARKER } from "../sync/incognito";
 import { lockPath } from "../sync/lock";
@@ -467,6 +468,222 @@ describe("knowledge sync from opencode's Dosu plugin", () => {
       ses_child: "poc-alpha",
       ses_live: "github.com/acme/alpha",
     });
+  });
+});
+
+/** Unix seconds `n` minutes ago. */
+const minutesAgo = (n: number) => Math.floor((Date.now() - n * 60_000) / 1000);
+
+/** `git` in `dir` as though run at unix second `at`: the reflog records each checkout then. */
+function gitAt(dir: string, at: number, ...args: string[]): void {
+  const date = `@${at} +0000`;
+  execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", ...args], {
+    env: { ...process.env, GIT_COMMITTER_DATE: date, GIT_AUTHOR_DATE: date },
+    stdio: "ignore",
+  });
+}
+
+/** A checkout made an hour before `since`, that moved to `branch` at `since`. */
+function checkoutOn(name: string, branch: string, since: number): string {
+  const dir = join(home, "work", name);
+  mkdirSync(dir, { recursive: true });
+  gitAt(dir, since - 3600, "init", "-q");
+  gitAt(dir, since - 3600, "remote", "add", "origin", `git@github.com:acme/${name}.git`);
+  gitAt(dir, since - 3600, "commit", "-q", "--allow-empty", "-m", "init");
+  gitAt(dir, since, "checkout", "-q", "-b", branch);
+  return dir;
+}
+
+describe("knowledge sync of a session's branch", () => {
+  it("ships an opencode session with the branch it began on, not one it or the checkout moved to later", async () => {
+    const bin = join(home, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "opencode"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    vi.stubEnv("PATH", `${bin}${delimiter}${process.env.PATH ?? ""}`);
+    // The fixture's prompt is at this second.
+    const prompted = Math.floor(opencodeDocument().messages[0].info.time.created / 1000);
+    const alpha = checkoutOn("alpha", "feat/layout", prompted - 600);
+    mkdirSync(join(home, ".local", "share", "opencode"), { recursive: true });
+    const made = makeOpencodeDb(join(home, ".local", "share", "opencode", "opencode.db"), [
+      opencodeDocument({
+        id: "ses_branch",
+        directory: alpha,
+        answer: `answer: ${"detail ".repeat(400)}`,
+        updated: Date.now() - 30 * 60_000,
+      }),
+    ]);
+    if (!made) return; // no sqlite builtin
+    // Mid-session, the agent starts a branch for its change; after the session, the user moves on.
+    gitAt(alpha, prompted + 3, "checkout", "-q", "-b", "feat/mid");
+    gitAt(alpha, minutesAgo(10), "checkout", "-q", "-b", "feat/next");
+
+    await dosu("sync");
+
+    expect(posted().map((p) => p.metadata)).toEqual([
+      expect.objectContaining({
+        agent: "opencode",
+        session_id: "ses_branch",
+        branch: "feat/layout",
+      }),
+    ]);
+  });
+
+  it("an opencode session the prompt hook first serves partway through keeps the branch it began on", async () => {
+    // The sync may ask opencode for its export; the prompt, which waits, must not.
+    const bin = join(home, "bin");
+    mkdirSync(bin);
+    const exports = join(home, "opencode-calls.log");
+    writeFileSync(exports, "");
+    writeFileSync(join(bin, "opencode"), `#!/bin/sh\necho "$*" >> "${exports}"\nexit 1\n`, {
+      mode: 0o755,
+    });
+    vi.stubEnv("PATH", `${bin}${delimiter}${process.env.PATH ?? ""}`);
+    const prompted = Math.floor(opencodeDocument().messages[0].info.time.created / 1000);
+    const alpha = checkoutOn("alpha", "feat/layout", prompted - 600);
+    mkdirSync(join(home, ".local", "share", "opencode"), { recursive: true });
+    const made = makeOpencodeDb(join(home, ".local", "share", "opencode", "opencode.db"), [
+      opencodeDocument({
+        id: "ses_resumed",
+        directory: alpha,
+        answer: `answer: ${"detail ".repeat(400)}`,
+        updated: Date.now() - 30 * 60_000,
+      }),
+    ]);
+    if (!made) return; // no sqlite builtin
+    gitAt(alpha, minutesAgo(10), "checkout", "-q", "-b", "feat/next");
+    const context = vi.fn<Fetch>(async () => new Response(JSON.stringify({ digest: null })));
+    // The plugin went in after the session's first prompts; this one resumes it.
+    await contextHookOutput(
+      JSON.stringify({ prompt: "and the footer?", session_id: "ses_resumed", cwd: alpha }),
+      {
+        apiKey: "sk_test",
+        deploymentId: "dep1",
+        backendUrl: "https://api.dosu.test",
+        agent: "opencode",
+        format: "plain",
+        fetchImpl: context,
+      },
+    );
+    expect(readFileSync(exports, "utf-8")).toBe("");
+
+    await dosu("sync");
+
+    const [[, init]] = context.mock.calls;
+    expect(JSON.parse(init?.body as string).branch).toBe("feat/layout");
+    expect(posted().map((p) => p.metadata.branch)).toEqual(["feat/layout"]);
+  });
+
+  it("ships a Cursor session with the branch its first turn was on, not one a later turn moved to", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const alpha = checkoutOn("alpha", "feat/start", now - 3600);
+    const dir = join(home, ".cursor", "projects", "work-alpha", "agent-transcripts", "c1");
+    mkdirSync(dir, { recursive: true });
+    const transcript = join(dir, "c1.jsonl");
+    const rows = [
+      { role: "user", message: { content: [{ type: "text", text: "lay out the footer" }] } },
+      {
+        role: "assistant",
+        message: { content: [{ type: "text", text: `done: ${"detail ".repeat(400)}` }] },
+      },
+    ];
+    writeFileSync(transcript, `${rows.map((r) => JSON.stringify(r)).join("\n")}\n`);
+    // Cursor's `stop` hook, after each turn.
+    const stop = async () => {
+      hookStdin({
+        hook_event_name: "stop",
+        cursor_version: "2.0.0",
+        conversation_id: "c1",
+        transcript_path: transcript,
+        workspace_roots: [alpha],
+      });
+      await dosu("sync", "--quiet", "--detach");
+    };
+    await stop();
+    // The second turn starts a branch for its change; the session's last activity is after it.
+    gitAt(alpha, now + 2, "checkout", "-q", "-b", "feat/mid");
+    await stop();
+    const last = new Date((now + 3) * 1000);
+    utimesSync(transcript, last, last);
+
+    await dosu("sync", "--flush");
+
+    expect(posted().map((p) => [p.metadata.agent, p.metadata.branch])).toEqual([
+      ["cursor", "feat/start"],
+    ]);
+  });
+
+  it("ships a Claude Code session with the branch its transcript recorded, as before", async () => {
+    const alpha = checkoutOn("alpha", "feat/now", minutesAgo(90));
+    const recorded = exchange(1, alpha)
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.stringify({ ...JSON.parse(line), gitBranch: "feat/claude" }))
+      .join("\n");
+    claudeSession("aaaa", `${recorded}\n`, 30);
+
+    await dosu("sync");
+
+    const [shipped] = posted();
+    expect(shipped.records[0]).toMatchObject({ role: "meta", git_branch: "feat/claude" });
+    expect(shipped.metadata.branch).toBe("feat/claude");
+  });
+
+  it("ships a Codex session with the branch its session_meta recorded, as before", async () => {
+    const alpha = checkoutOn("alpha", "feat/now", minutesAgo(90));
+    codexRollout("rollout-2026-10-02T10-00-00-01a0ff2b-0000-7000-8000-000000000001", alpha, 30, {
+      git: { branch: "feat/codex", commit_hash: "abc" },
+    });
+
+    await dosu("sync");
+
+    const [shipped] = posted();
+    expect(shipped.records[0]).toMatchObject({ role: "meta", git_branch: "feat/codex" });
+    expect(shipped.metadata.branch).toBe("feat/codex");
+  });
+
+  it("ships a recorded branch verbatim, the one the session's prompts asked memory with", async () => {
+    // A Jira-style name reads as high-entropy text to the redactor; a branch is not text.
+    const branch = "feature/PROJ-4821-AddRetryLogicForPayments";
+    const alpha = checkoutOn("alpha", branch, minutesAgo(90));
+    const recorded = exchange(1, alpha)
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.stringify({ ...JSON.parse(line), gitBranch: branch }))
+      .join("\n");
+    const claude = claudeSession("aaaa", `${recorded}\n`, 30);
+    const name = "rollout-2026-10-02T10-00-00-01a0ff2b-0000-7000-8000-000000000001";
+    const codex = codexRollout(name, alpha, 30, { git: { branch, commit_hash: "abc" } });
+    const context = vi.fn<Fetch>(async () => new Response(JSON.stringify({ digest: null })));
+    const ask = (agent: string, format: "claude" | "codex", transcript: string) =>
+      contextHookOutput(
+        JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          session_id: basename(transcript, ".jsonl"),
+          transcript_path: transcript,
+          cwd: alpha,
+          prompt: "and the retries?",
+        }),
+        {
+          apiKey: "sk_test",
+          deploymentId: "dep1",
+          backendUrl: "x",
+          agent,
+          format,
+          fetchImpl: context,
+        },
+      );
+    await ask("claude-code", "claude", claude);
+    await ask("codex", "codex", codex);
+
+    await dosu("sync");
+
+    const asked = context.mock.calls.map(([, init]) => JSON.parse(init?.body as string).branch);
+    expect(asked).toEqual([branch, branch]);
+    const shipped = posted();
+    expect(shipped.map((p) => p.metadata.branch)).toEqual([branch, branch]);
+    for (const { records } of shipped) {
+      expect(records[0]).toMatchObject({ role: "meta", git_branch: branch });
+    }
   });
 });
 

@@ -10,8 +10,9 @@ import { createProjectDirResolver } from "../sessions/project-dir";
 import type { AgentSession } from "../sessions/scan";
 import { isIncognitoSession } from "../sync/incognito";
 import type { ShipSessionResult, SyncDeps } from "../sync/sync";
-import { copiedPrefix, planShipment, prefixSha256, type ShippedPrefix } from "./continuation";
+import { planShipment, prefixSha256, type ShippedPrefix } from "./continuation";
 import { normalizeSessionRecords, trajectorySourceOf } from "./normalize";
+import { forkCopy, sessionStartOf } from "./session-start";
 import { isTrivialTrajectory } from "./worthiness";
 
 /** Statuses where re-sending identical records cannot succeed (bad/oversized/unparseable
@@ -39,6 +40,8 @@ export interface ShipStepOptions {
   isIncognito?: (session: AgentSession) => boolean;
   normalize?: (session: AgentSession) => Promise<NormalizedRecord[] | null>;
   resolveProject?: (session: AgentSession) => ProjectKey | null;
+  /** `at`: when the session's own records began (ISO), the time to ask the reflog about. */
+  resolveBranch?: (session: AgentSession, at?: string) => string | null;
 }
 
 /** Build the sync pipeline's ship step. Processes oldest-first and stops after the first
@@ -53,7 +56,7 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
   async function shipOne(
     session: AgentSession,
     shipped: ShippedPrefix | undefined,
-    resolveProject: (session: AgentSession) => ProjectKey | null,
+    resolve: Required<Pick<ShipStepOptions, "resolveProject" | "resolveBranch">>,
   ): Promise<ShipSessionResult> {
     if (isIncognito(session)) return { session, outcome: "incognito" };
     if (!trajectorySourceOf(session.harness)) {
@@ -69,17 +72,19 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
     }
     // A resumed session sends only its new tail, and only when that tail is worth learning from.
     let plan = planShipment(records, shipped);
-    if (!plan.continuation && session.forkOf) {
-      // A fork's copy of its parent's history is the parent's to ship: send what it added.
-      const { id, path } = session.forkOf;
-      const parentRecords = await normalize({ harness: session.harness, id, path, updated: "" });
-      plan = planShipment(records, copiedPrefix(records, parentRecords));
-    }
+    // A fork's copy of its parent's history is the parent's to ship: send what it added.
+    const copied = await forkCopy(session, records, normalize);
+    if (!plan.continuation && session.forkOf) plan = planShipment(records, copied);
     if (isTrivialTrajectory(plan.fresh)) return { session, outcome: "trivial" };
     // The project key of the session's working directory (sessions/project.ts), the same one
-    // prompt-time memory sends. Branch is omitted: the trajectory meta record carries
-    // git_branch when the harness logged one.
-    const project = resolveProject(session)?.project ?? "unknown";
+    // prompt-time memory sends.
+    const project = resolve.resolveProject(session)?.project ?? "unknown";
+    // The branch the transcript recorded (Claude Code, Codex), which the server would read off
+    // the meta record anyway; else the one the session's prompts were served under or its
+    // checkout was on at its first prompt (OpenCode, pi, Cursor), the tail of a resumed session
+    // included. A fork's first prompt is its own.
+    const start = sessionStartOf(records, copied);
+    const branch = start.recorded ?? resolve.resolveBranch(session, start.firstPromptAt);
     const parentSessionId = session.parentId ?? session.forkOf?.id;
     const body = JSON.stringify({
       records: plan.records,
@@ -90,6 +95,7 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
         repo: project,
         agent: trajectorySourceOf(session.harness) ?? session.harness,
         session_id: session.id,
+        ...(branch ? { branch } : {}),
         ...(parentSessionId ? { parent_session_id: parentSessionId } : {}),
         ...(plan.continuation ? { continuation: plan.continuation } : {}),
       },
@@ -133,12 +139,17 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
   }
 
   return async (sessions, shippedOf = () => undefined) => {
-    const resolver = options.resolveProject ? undefined : createProjectDirResolver();
-    const resolveProject =
-      options.resolveProject ?? ((session) => resolver?.resolveProject(session) ?? null);
+    const resolver =
+      options.resolveProject && options.resolveBranch ? undefined : createProjectDirResolver();
+    const resolve = {
+      resolveProject:
+        options.resolveProject ?? ((session) => resolver?.resolveProject(session) ?? null),
+      resolveBranch:
+        options.resolveBranch ?? ((session, at) => resolver?.resolveBranch(session, at) ?? null),
+    };
     const results: ShipSessionResult[] = [];
     for (const session of sessions) {
-      const result = await shipOne(session, shippedOf(session), resolveProject);
+      const result = await shipOne(session, shippedOf(session), resolve);
       results.push(result);
       if (result.outcome === "failed") break;
     }

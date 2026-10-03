@@ -40,6 +40,7 @@ interface StepOverrides {
   isIncognito?: (s: AgentSession) => boolean;
   normalize?: (s: AgentSession) => Promise<unknown[] | null>;
   resolveProject?: (s: AgentSession) => ProjectKey | null;
+  resolveBranch?: (s: AgentSession, at?: string) => string | null;
 }
 
 function makeStep(overrides: StepOverrides = {}) {
@@ -54,6 +55,7 @@ function makeStep(overrides: StepOverrides = {}) {
     normalize: (overrides.normalize ?? (async () => RECORDS)) as any,
     resolveProject:
       overrides.resolveProject ?? (() => ({ project: "github.com/acme/app", rule: "origin" })),
+    resolveBranch: overrides.resolveBranch ?? (() => null),
   });
   return { step, fetchImpl: fetchImpl as ReturnType<typeof vi.fn> };
 }
@@ -499,5 +501,147 @@ describe("createShipStep continuation", () => {
 
     expect(body(fetchImpl, 0).metadata.parent_session_id).toBe("parent-1");
     expect("parent_session_id" in body(fetchImpl, 1).metadata).toBe(false);
+  });
+});
+
+describe("createShipStep branch", () => {
+  const withBranch = (gitBranch: string) => [
+    { ...RECORDS[0], git_branch: gitBranch },
+    ...RECORDS.slice(1),
+  ];
+
+  function metadata(fetchImpl: ReturnType<typeof vi.fn>) {
+    return JSON.parse(fetchImpl.mock.calls[0][1].body).metadata;
+  }
+
+  it("sends the branch the transcript recorded, the one the server read before", async () => {
+    const { step, fetchImpl } = makeStep({
+      normalize: async () => withBranch("feat/recorded"),
+      resolveBranch: () => "feat/elsewhere",
+    });
+
+    await step([session("s1")]);
+
+    expect(metadata(fetchImpl).branch).toBe("feat/recorded");
+  });
+
+  it("sends a recorded branch verbatim, though redaction would take its name for a secret", async () => {
+    // A Jira-style name reads as high-entropy text; a branch is identity, not text.
+    const branch = "feature/PROJ-4821-AddRetryLogicForPayments";
+    const dir = mkdtempSync(join(tmpdir(), "dosu-ship-branch-"));
+    const at = "2026-10-02T10:00:00.000Z";
+    const rollout = join(dir, "rollout-2026-10-02T10-00-00-01a0ff2b.jsonl");
+    const lines = [
+      {
+        type: "session_meta",
+        payload: { id: "01a0ff2b", timestamp: at, cwd: dir, git: { branch, commit_hash: "abc" } },
+      },
+      {
+        type: "response_item",
+        payload: { type: "message", role: "user", content: [{ type: "input_text", text: "q" }] },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: `answer: ${"detail ".repeat(400)}` }],
+        },
+      },
+    ];
+    writeFileSync(rollout, lines.map((r) => JSON.stringify({ timestamp: at, ...r })).join("\n"));
+    const fetchImpl = vi.fn().mockResolvedValue(accepted());
+    const step = createShipStep({
+      apiKey: "sk_user_test",
+      deploymentId: "dep1",
+      backendUrl: "https://api.dosu.test",
+      fetchImpl,
+      isIncognito: () => false,
+      resolveProject: () => ({ project: "github.com/acme/app", rule: "origin" }),
+      resolveBranch: () => "feat/elsewhere",
+    });
+    try {
+      await step([session("01a0ff2b", { harness: "codex", path: rollout, updated: at })]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+
+    const sent = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(sent.metadata.branch).toBe(branch);
+    // The meta record, which servers that predate metadata.branch read, says the same.
+    expect(sent.records[0]).toMatchObject({ role: "meta", git_branch: branch });
+  });
+
+  it.each([
+    ["recorded none", RECORDS],
+    ["recorded a detached HEAD", withBranch("HEAD")],
+  ])("a transcript that %s ships the branch resolved for its session", async (_label, records) => {
+    const { step, fetchImpl } = makeStep({
+      normalize: async () => records,
+      resolveBranch: (s) => (s.id === "s1" ? "feat/resolved" : null),
+    });
+
+    await step([session("s1")]);
+
+    expect(metadata(fetchImpl).branch).toBe("feat/resolved");
+  });
+
+  it("asks for the branch the session was on when its own records began", async () => {
+    const forked = [
+      { role: "meta", source: "pi" },
+      ...RECORDS.slice(1),
+      { role: "user", content: "and now?", timestamp: "2026-09-02T08:00:00.000Z" },
+      { role: "assistant", content: "y".repeat(2000), timestamp: "2026-09-02T08:00:09.000Z" },
+    ];
+    const byTime: Record<string, string> = {
+      "2026-09-01T00:00:00.000Z": "feat/parent-start",
+      "2026-09-02T08:00:00.000Z": "feat/fork-start",
+    };
+    const { step, fetchImpl } = makeStep({
+      normalize: async (s) => (s.id === "parent" ? RECORDS : s.id === "fork" ? forked : RECORDS),
+      resolveBranch: (_s, at) => (at ? (byTime[at] ?? null) : null),
+    });
+
+    await step([
+      session("s1"),
+      // A fork's copy of its parent's history began before the fork did.
+      session("fork", { forkOf: { id: "parent", path: "/tmp/parent.jsonl" } }),
+    ]);
+
+    const branches = fetchImpl.mock.calls.map(([, init]) => JSON.parse(init.body).metadata.branch);
+    expect(branches).toEqual(["feat/parent-start", "feat/fork-start"]);
+  });
+
+  it("asks about a resumed session's first prompt, not its tail's", async () => {
+    const grown = [
+      ...RECORDS,
+      { role: "user", content: "and now?", timestamp: "2026-09-03T00:00:00.000Z" },
+      { role: "assistant", content: "z".repeat(2000), timestamp: "2026-09-03T00:00:09.000Z" },
+    ];
+    const byTime: Record<string, string> = {
+      "2026-09-01T00:00:00.000Z": "feat/start",
+      "2026-09-03T00:00:00.000Z": "feat/resumed-on",
+    };
+    const { step, fetchImpl } = makeStep({
+      normalize: async () => grown,
+      resolveBranch: (_s, at) => (at ? (byTime[at] ?? null) : null),
+    });
+
+    await step([session("s1")], () => ({
+      records: RECORDS.length,
+      prefix_sha256: prefixSha256(RECORDS as unknown as NormalizedRecord[], RECORDS.length),
+    }));
+
+    const sent = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(sent.metadata.continuation).toBeDefined();
+    expect(sent.metadata.branch).toBe("feat/start");
+  });
+
+  it("leaves the branch out when nothing knows it", async () => {
+    const { step, fetchImpl } = makeStep();
+
+    await step([session("s1")]);
+
+    expect("branch" in metadata(fetchImpl)).toBe(false);
   });
 });

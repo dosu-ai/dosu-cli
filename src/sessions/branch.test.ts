@@ -1,58 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  branchFromClaudeTranscript,
-  branchFromCodexTranscript,
-  branchFromReflog,
-  parseReflog,
-} from "./branch";
+import { branchFromReflog, parseReflog, recordedBranch } from "./branch";
 
-const lines = (...records: unknown[]) => records.map((r) => JSON.stringify(r)).join("\n");
-
-describe("branchFromClaudeTranscript", () => {
-  it("takes the last recorded branch, skipping detached HEAD and empty values", () => {
-    const text = lines(
-      { type: "user", gitBranch: "main" },
-      { type: "assistant", gitBranch: "feat/new" },
-      { type: "user", gitBranch: "HEAD" },
-      { type: "user", gitBranch: "" },
-    );
-    expect(branchFromClaudeTranscript(text)).toBe("feat/new");
-  });
-
-  it("unescapes branch names and ignores malformed escapes", () => {
-    expect(branchFromClaudeTranscript(lines({ gitBranch: 'we"ird' }))).toBe('we"ird');
-    expect(branchFromClaudeTranscript('{"gitBranch":"main"}\n{"gitBranch":"bad\\q"}')).toBe("main");
-  });
-
-  it("is null when no line names a real branch", () => {
-    expect(
-      branchFromClaudeTranscript(lines({ gitBranch: "HEAD" }, { type: "summary" })),
-    ).toBeNull();
-    expect(branchFromClaudeTranscript("")).toBeNull();
-  });
-});
-
-describe("branchFromCodexTranscript", () => {
-  it("reads session_meta.payload.git.branch", () => {
-    const text = lines(
-      { type: "session_meta", payload: { cwd: "/r", git: { branch: "feat/x", commit_hash: "a" } } },
-      { type: "response_item", payload: { git: { branch: "not-this" } } },
-    );
-    expect(branchFromCodexTranscript(text)).toBe("feat/x");
-  });
-
-  it("is null outside a repo, on a detached HEAD, or without a meta line", () => {
-    expect(branchFromCodexTranscript(lines({ type: "session_meta", payload: { git: null } }))).toBe(
-      null,
-    );
-    expect(
-      branchFromCodexTranscript(
-        lines({ type: "session_meta", payload: { git: { branch: "HEAD" } } }),
-      ),
-    ).toBeNull();
-    expect(branchFromCodexTranscript(lines({ type: "response_item" }))).toBeNull();
-    expect(branchFromCodexTranscript('{"type":"session_meta", "payload": {')).toBeNull();
-    expect(branchFromCodexTranscript(lines({ note: "session_meta" }))).toBeNull();
+describe("recordedBranch", () => {
+  it("takes a recorded name, not a detached HEAD, an empty value, or a non-string", () => {
+    expect(recordedBranch(" feat/x ")).toBe("feat/x");
+    expect(recordedBranch("HEAD")).toBeNull();
+    expect(recordedBranch("")).toBeNull();
+    expect(recordedBranch(undefined)).toBeNull();
   });
 });
 

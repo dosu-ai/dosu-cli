@@ -17,10 +17,19 @@ import { basename } from "node:path";
 import { logger } from "../debug/logger";
 import { GIT_BUDGETS, projectOverride, resolveProjectOfDir } from "../sessions/project";
 import { createProjectDirResolver } from "../sessions/project-dir";
-import { SESSION_HARNESSES } from "../sessions/scan";
+import { currentBranchAnswer, GIT_TIMED_OUT } from "../sessions/repo";
+import {
+  type AgentSession,
+  opencodeSessionById,
+  SESSION_HARNESSES,
+  type SessionHarness,
+  sessionAtPath,
+} from "../sessions/scan";
 import { trajectorySourceOf } from "../shipper/normalize";
+import { readSessionStart } from "../shipper/session-start";
 import {
   codexRolloutIncognito,
+  isIncognitoSession,
   promptRunsIncognito,
   textHasIncognitoMarker,
   transcriptHasIncognitoMarker,
@@ -67,7 +76,8 @@ export interface ContextHookOptions {
   timeoutMs?: number;
   /** Injectable boundaries, for tests. */
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
-  branchOf?: (cwd: string) => string | null;
+  /** The branch checked out in a directory now; defaults to asking git. */
+  branchOf?: (cwd: string) => string | null | typeof GIT_TIMED_OUT;
   isIncognito?: (transcriptPath: string) => boolean;
 }
 
@@ -77,23 +87,62 @@ function str(value: unknown): string | null {
 
 /** The scanner's harness id for a trajectory source (`claude-code` -> `claude`); null for an
  * agent the scanner does not list. */
-function harnessOf(agent: string): string | null {
+function harnessOf(agent: string): SessionHarness | null {
   return SESSION_HARNESSES.find((h) => trajectorySourceOf(h) === agent || h === agent) ?? null;
 }
 
-/** The project key for the prompt's cwd, cached under the session's scanner key so the
- * transcript ships under the same one later; DOSU_PROJECT alone when the payload has no cwd.
- * Null when git could not answer within the prompt's budget: better no key than one the session
- * will not ship under. */
-function projectOf(cwd: string | null, sessionKey: string | null): string | null {
-  if (cwd === null) return projectOverride(null)?.project ?? null;
-  if (sessionKey === null) {
-    return resolveProjectOfDir(cwd, { budget: GIT_BUDGETS.prompt })?.project ?? null;
+/** The session a prompt belongs to, as its payload names it. */
+interface PromptSession {
+  harness: SessionHarness;
+  id: string;
+  transcript: string | null;
+}
+
+/** Where the prompt's agent keeps that session: the transcript the payload names (Claude Code,
+ * Codex, pi), else opencode's DB; null when there is none yet. */
+function storedSession({ harness, id, transcript }: PromptSession): AgentSession | null {
+  if (transcript) return sessionAtPath(harness, id, transcript);
+  return harness === "opencode" ? opencodeSessionById(id) : null;
+}
+
+/** The project key and branch for the prompt's cwd, cached under the session's scanner key so
+ * the transcript ships under the same ones later, and the session's later prompts keep the
+ * branch it began on (a session the hook first serves partway through included: its transcript
+ * says when it began); DOSU_PROJECT alone when the payload has no cwd. Both are null when git
+ * could not answer within the prompt's budget, and git is not asked again: better no key than
+ * one the session will not ship under, and no branch than a prompt kept waiting. */
+async function scopeOf(
+  cwd: string | null,
+  session: PromptSession | null,
+  branchOf: NonNullable<ContextHookOptions["branchOf"]>,
+): Promise<{ project: string | null; branch: string | null }> {
+  if (cwd === null) return { project: projectOverride(null)?.project ?? null, branch: null };
+  if (session === null) {
+    // Null only when git ran out of time.
+    const project = resolveProjectOfDir(cwd, { budget: GIT_BUDGETS.prompt })?.project ?? null;
+    const branch = project === null ? null : branchOf(cwd);
+    return { project, branch: branch === GIT_TIMED_OUT ? null : branch };
   }
-  const resolver = createProjectDirResolver();
-  const resolved = resolver.resolveProjectAt(sessionKey, cwd);
+  const key = `${session.harness}/${session.id}`;
+  const resolver = createProjectDirResolver(undefined, { currentBranch: branchOf });
+  const project = resolver.resolveProjectAt(key, cwd)?.project ?? null;
+  const branch = await resolver.resolveBranchAt(key, cwd, async () => {
+    const stored = storedSession(session);
+    return stored ? readSessionStart(stored) : null;
+  });
   resolver.flush();
-  return resolved?.project ?? null;
+  return { project, branch };
+}
+
+/** Whether the transcript a payload names is off the record, judged as its upload will be. */
+function incognitoCheckOf(agent: string): (transcriptPath: string) => boolean {
+  if (agent === "codex") return codexRolloutIncognito;
+  // pi's user turns, and those of the sessions a fork came from: a file the agent read that
+  // mentions the marker takes nothing off the record.
+  if (agent === "pi") {
+    return (path) => isIncognitoSession({ harness: "pi", id: "", path, updated: "" });
+  }
+  return transcriptHasIncognitoMarker;
 }
 
 /** The session id the scanner and the shipped session use. Codex's is its rollout's filename
@@ -125,13 +174,10 @@ export async function contextHookOutput(
   if (textHasIncognitoMarker(prompt) || promptRunsIncognito(prompt)) return "";
   const agent = options.agent ?? CLAUDE_CODE_AGENT;
   const transcript = str(payload.transcript_path);
-  const isIncognito =
-    options.isIncognito ??
-    (agent === "codex" ? codexRolloutIncognito : transcriptHasIncognitoMarker);
+  const isIncognito = options.isIncognito ?? incognitoCheckOf(agent);
   if (transcript && isIncognito(transcript)) return "";
 
   const cwd = str(payload.cwd);
-  const branch = cwd ? (options.branchOf?.(cwd) ?? null) : null;
   const fetchImpl = options.fetchImpl ?? fetch;
   const sessionId = sessionIdOf(payload, format);
   const budgetMs = options.timeoutMs ?? CONTEXT_TIMEOUT_MS;
@@ -146,7 +192,11 @@ export async function contextHookOutput(
   let signal: AbortSignal | undefined;
   try {
     const harness = harnessOf(agent);
-    const project = projectOf(cwd, harness && sessionId ? `${harness}/${sessionId}` : null);
+    const { project, branch } = await scopeOf(
+      cwd,
+      harness && sessionId ? { harness, id: sessionId, transcript } : null,
+      options.branchOf ?? currentBranchAnswer,
+    );
     signal = AbortSignal.timeout(budgetMs);
     const response = await fetchImpl(`${options.backendUrl.replace(/\/$/, "")}/v1/memory/context`, {
       method: "POST",

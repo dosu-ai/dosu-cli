@@ -174,6 +174,63 @@ describe("contextHookOutput", () => {
     }
   });
 
+  it("keeps a session's first branch for its later prompts, and its transcript", async () => {
+    const asked = (branch: string) => async (stdin: string) => {
+      const fetchImpl = respond(200, { digest: null });
+      await contextHookOutput(stdin, { ...base, fetchImpl, branchOf: () => branch });
+      return sentBody(fetchImpl).branch;
+    };
+    const session = payload({ session_id: "sess-branch" });
+
+    expect(await asked("feat/first")(session)).toBe("feat/first");
+    // The user checked out another branch mid-session.
+    expect(await asked("feat/second")(session)).toBe("feat/first");
+    expect(await asked("feat/second")(payload({ session_id: "sess-other" }))).toBe("feat/second");
+    const shipped = createProjectDirResolver().resolveBranch({
+      id: "sess-branch",
+      harness: "claude",
+      path: "/gone/sess-branch.jsonl",
+      updated: "2026-10-02T00:00:00.000Z",
+    });
+    expect(shipped).toBe("feat/first");
+  });
+
+  it("a session first served partway through asks with the branch its transcript recorded", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "dosu-context-resumed-")));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    // The session began before the hook was installed, on a branch since left.
+    const transcript = join(dir, "sess-resumed.jsonl");
+    writeFileSync(
+      transcript,
+      [
+        { type: "user", uuid: "u", cwd: dir, message: { role: "user", content: "fix it" } },
+        {
+          type: "assistant",
+          uuid: "a",
+          message: { role: "assistant", content: [{ type: "text", text: "x".repeat(2500) }] },
+        },
+      ]
+        .map((r) =>
+          JSON.stringify({
+            ...r,
+            sessionId: "sess-resumed",
+            gitBranch: "feat/began",
+            timestamp: "2026-10-02T00:00:00Z",
+          }),
+        )
+        .join("\n"),
+    );
+    const asked = async (checkedOut: string) => {
+      const fetchImpl = respond(200, { digest: null });
+      const stdin = payload({ session_id: "sess-resumed", transcript_path: transcript, cwd: dir });
+      await contextHookOutput(stdin, { ...base, fetchImpl, branchOf: () => checkedOut });
+      return sentBody(fetchImpl).branch;
+    };
+
+    expect(await asked("feat/now")).toBe("feat/began");
+    expect(await asked("feat/later")).toBe("feat/began");
+  });
+
   it("resolves the cwd directly when the payload names no session", async () => {
     const fetchImpl = respond(200, { digest: null });
 
@@ -412,6 +469,40 @@ describe("contextHookOutput for other agents", () => {
     });
   });
 
+  it("judges a pi transcript off the record as its upload is judged: by what the user typed", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dosu-context-pi-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    const transcript = (name: string, role: "user" | "toolResult") => {
+      const path = join(dir, name);
+      const entries = [
+        { type: "session", version: 3, id: name, timestamp: "2026-10-02T00:00:00Z", cwd: dir },
+        {
+          type: "message",
+          id: "m1",
+          message: { role, content: [{ type: "text", text: `see ${INCOGNITO_MARKER}` }] },
+        },
+      ];
+      writeFileSync(path, entries.map((e) => JSON.stringify(e)).join("\n"));
+      return path;
+    };
+    const asks = async (path: string) => {
+      const fetchImpl = respond(200, { digest: null });
+      const stdin = JSON.stringify({
+        prompt: "go on",
+        session_id: "p",
+        cwd: dir,
+        transcript_path: path,
+      });
+      const { isIncognito: _, ...options } = base;
+      await contextHookOutput(stdin, { ...options, agent: "pi", format: "plain", fetchImpl });
+      return fetchImpl.mock.calls.length > 0;
+    };
+
+    // A file the agent read that mentions the marker takes nothing off the record.
+    expect(await asks(transcript("read.jsonl", "toolResult"))).toBe(true);
+    expect(await asks(transcript("typed.jsonl", "user"))).toBe(false);
+  });
+
   it("prints nothing in plain format when there is no digest", async () => {
     const stdin = JSON.stringify({ prompt: "hi", session_id: "ses_1", cwd: "/w" });
     const out = await contextHookOutput(stdin, {
@@ -487,5 +578,77 @@ describe("contextHookOutput's debug log", () => {
     expect(log).toMatch(/\[context\] claude-code sess-1: no digest, fetch failed in \d+ms/);
     expect(log).not.toContain("reset the local database");
     expect(log).not.toContain("Task Memory");
+  });
+});
+
+describe("contextHookOutput when git hangs", () => {
+  let bin: string;
+  let calls: string;
+
+  beforeEach(() => {
+    // A git that never answers in time, as a hung network filesystem would; it logs each call.
+    bin = mkdtempSync(join(tmpdir(), "dosu-context-git-"));
+    calls = join(bin, "calls.log");
+    writeFileSync(calls, "");
+    writeFileSync(join(bin, "git"), `#!/bin/sh\necho "$*" >> "${calls}"\nsleep 3\n`, {
+      mode: 0o755,
+    });
+    vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(bin, { recursive: true, force: true });
+  });
+
+  /** The git subcommands run since the last look. */
+  const gitRan = (() => {
+    let seen = 0;
+    return () => {
+      const lines = readFileSync(calls, "utf-8").split("\n").filter(Boolean);
+      const fresh = lines.slice(seen).map((line) => line.split(" ")[2]);
+      seen = lines.length;
+      return fresh;
+    };
+  })();
+
+  async function ask(stdin: string): Promise<Record<string, unknown>> {
+    const fetchImpl = respond(200, { digest: null });
+    await contextHookOutput(stdin, { ...base, fetchImpl });
+    return sentBody(fetchImpl);
+  }
+
+  it("waits on git once per session, for the project and the branch alike", async () => {
+    gitRan();
+    expect(await ask(payload({ session_id: "slow-1" }))).toMatchObject({
+      project: null,
+      branch: null,
+    });
+    // The project lookup ran out of time: the branch is not asked for on top of it.
+    expect(gitRan()).not.toContain("symbolic-ref");
+    expect(await ask(payload({ session_id: "slow-1" }))).toMatchObject({ branch: null });
+    expect(gitRan()).toEqual([]);
+  });
+
+  it("a branch lookup that runs out of time is not retried on the session's later prompts", async () => {
+    // The project needs no git; the branch does.
+    process.env.DOSU_PROJECT = "poc-slow";
+    gitRan();
+    expect(await ask(payload({ session_id: "slow-2" }))).toMatchObject({
+      project: "poc-slow",
+      branch: null,
+    });
+    gitRan();
+    expect(await ask(payload({ session_id: "slow-2" }))).toMatchObject({ branch: null });
+    expect(gitRan()).toEqual([]);
+  });
+
+  it("without a session to remember it for, skips the branch once the project ran out", async () => {
+    gitRan();
+    expect(await ask(payload({ session_id: undefined }))).toMatchObject({
+      project: null,
+      branch: null,
+    });
+    expect(gitRan()).not.toContain("symbolic-ref");
   });
 });

@@ -262,8 +262,8 @@ ships under the same project it was served memory for. A link added later applie
 resolved (the unshipped backlog), not to ones already served or shipped. Only a `path:` answer is
 looked up again once the session file changes, since the directory may have become a repository.
 A git lookup that runs out of time is no answer, never a reason to fall back to `path:`: the prompt
-hook, which keeps the prompt waiting, then sends no key for the rest of that session, and the sync,
-which can wait minutes, resolves it. A root commit found once is reused for later sessions in the
+hook, which keeps the prompt waiting, then sends no key (and no branch, nor asks git for one) for
+the rest of that session, and the sync, which can wait minutes, resolves it. A root commit found once is reused for later sessions in the
 same directory while the repository still has it, so the long walk happens once.
 
 `DOSU_PROJECT` counts only in the session's own agent's environment: the prompt hook, and the
@@ -284,6 +284,33 @@ send the same headers from the current directory. A value with characters outsid
 name) goes as an RFC 8187 value, `UTF-8''` followed by its percent-encoded UTF-8, which the server
 decodes; any other value goes as it is.
 
+## Branch
+
+Every upload, and every prompt-time memory request, also carries the branch the session ran on
+(`metadata.branch`, and `branch` on the prompt request), which memory is scoped by beside the
+project. An upload sends the branch its transcript recorded, when it recorded one: Claude Code's
+`gitBranch` and Codex's `session_meta`, as the trajectory's `git_branch` (the value the server
+read before the CLI sent one), verbatim: redaction leaves the branch alone, as it does ids, since
+its entropy pass takes a Jira-style name like `feature/PROJ-4821-AddRetryLogicForPayments` for a
+secret, and a placeholder would scope every such session together. OpenCode, pi and Cursor record
+none, so their sessions ship with the branch their prompts were served under, else the one the
+session's directory had checked out at its first prompt, read from the reflog, so a session that
+starts a branch for its change ships with the branch it started from, as Claude Code and Codex
+sessions do (a fork's first prompt is its own, not the one it copied). Cursor's transcripts carry
+no times, so the reflog is asked about its first turn, when its `stop` hook first captured the
+session, and the branch that capture recorded serves when the reflog cannot answer; later turns
+change neither. The branch checked out now counts only when the reflog shows no checkout since.
+A detached HEAD is no branch, and the upload then sends none.
+
+Like the project key, a session's branch is cached in `project-dirs.json` the first time it is
+resolved: the first prompt pins the branch checked out then, the session's later prompts send
+that one even after a checkout, and its transcript ships with it, the tail of a resumed session
+included. A session the prompt hook first serves partway through (the hook went in, or Dosu was
+set up, after it began, and it was resumed on another branch) is read the way its upload will
+be: the transcript the payload names (Claude Code, Codex, pi) or opencode's DB (read directly,
+without starting opencode) gives the branch it recorded, else when its first prompt was, and the
+reflog answers for then; only a session's first prompt takes the branch checked out now.
+
 ## Repo scope
 
 A session's repo is the `origin` remote of its working directory, normalized to a `host/owner/repo`
@@ -291,7 +318,7 @@ key (`git@github.com:dosu-ai/dosu-cli.git` → `github.com/dosu-ai/dosu-cli`). A
 repo, or in a repo without an `origin`, has no repo. The lookup is cached per session in
 `project-dirs.json`, so a checkout deleted later still resolves. Cursor's transcripts record no
 working directory, so its `stop` hook records it to `session-captures/cursor/<id>.json` before the
-detached sync starts.
+detached sync starts, with the time and branch of the session's first turn.
 
 `dosu` → settings → study scope picks which repos to ship (`repo_filter` in the state file). With a
 repo scope, only sessions in the picked repos are shipped. Picking every repo clears the filter, so
@@ -503,9 +530,11 @@ extension shells out to `dosu` on PATH for everything, so it carries no credenti
   pipes `{hook_event_name: "session_shutdown", agent: "pi", session_id, transcript_path, cwd}` to
   `dosu knowledge sync --quiet --detach`, so the session ships right away. Pi waits at most 3 s for
   that process to take the payload, never for the upload.
-- `before_agent_start` asks `dosu knowledge context --agent pi --format plain` for a digest and adds
-  it to the run as a hidden custom message (`customType: "dosu-memory"`), which the trajectory
-  normalizer does not ship back. The CLI gives the server 4 s and then gives up on its own; for
+- `before_agent_start` asks `dosu knowledge context --agent pi --format plain` for a digest (with
+  `transcript_path` beside `prompt`, `session_id` and `cwd` once pi has a transcript, so the CLI
+  can tell whether the session began before this prompt) and adds it to the run as a hidden custom
+  message (`customType: "dosu-memory"`), which the trajectory normalizer does not ship back.
+  The CLI gives the server 4 s and then gives up on its own; for
   every agent it records the outcome of each lookup in `debug.log` as a `[context]` line (memories
   injected, the server's reason for none, an HTTP status, or the budget running out), never the
   prompt or the digest. The extension stops only a CLI that has not answered in 10 s, which leaves
