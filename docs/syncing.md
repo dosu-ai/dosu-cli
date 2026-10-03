@@ -49,11 +49,12 @@ its own (`claude/agent-<agent id>`), normalizes it on its own, and ships it with
 `metadata.parent_session_id` set to the session it worked for (the top-level session, for a nested
 subagent too). It is settled in the ledger on its own, so it can be trivial while its session ships,
 but it inherits what its session decided: a session-end hook for the session ships its subagents in
-the same run, `/dosu-incognito` in the session keeps them out, and they ship under the session's
-project key. Views count sessions, not transcripts: `--status`, `transcripts status`,
-`knowledge sessions`, the Activity screen, and setup's backfill offer count a session's subagents
-with it and report them apart ("Subagents: 2 shipped", `subagent_counts` in JSON), and
-`total_shipped` counts sessions only.
+the same run, right after the session and however many there are (the per-run batch limit of 20
+applies only to the rest of the backlog), `/dosu-incognito` in the session keeps them out, and they
+ship under the session's project key. Views count sessions, not transcripts: `--status`,
+`transcripts status`, `knowledge sessions`, the Activity screen, and setup's backfill offer count a
+session's subagents with it and report them apart ("Subagents: 2 shipped", `subagent_counts` in
+JSON), and `total_shipped` counts sessions only.
 
 A background subagent (or background shell command) reports back by injecting a
 `<task-notification>` message, carrying its result, into the session. The trajectory normalizer

@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
+import { SHIP_BATCH_LIMIT } from "../sync/sync";
 import { knowledgeCommand } from "./knowledge";
 
 /** The detached re-spawn is a process boundary: record its argv instead of starting a process. */
@@ -176,6 +177,44 @@ describe("knowledge sync of a session with subagents", () => {
     await dosu("sync", "--quiet", "--ended", `claude:parent=${ended}`);
 
     expect(Object.keys(postedBySession()).sort()).toEqual(["agent-a1", "parent"]);
+  });
+
+  it("ships a session that just ended with all its subagents, however many, before the backlog", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    // An older backlog session, and more subagents than one run's batch, all finished before
+    // the session that just ended wrote its last line.
+    claudeSession("older", exchange(1, alpha, { sessionId: "older" }), 60);
+    const ended = claudeSession("parent", exchange(2, alpha, { sessionId: "parent" }), 0);
+    const agents = Array.from({ length: SHIP_BATCH_LIMIT + 2 }, (_, i) => `a${i}`);
+    for (const agent of agents) subagent("parent", agent, 3, alpha, 2);
+
+    await dosu("sync", "--quiet", "--ended", `claude:parent=${ended}`);
+
+    const order = posted().map((p) => p.metadata.session_id);
+    // Nothing runs after a throwaway machine's last session ends: this run is its only chance.
+    expect(order[0]).toBe("parent");
+    expect(order.slice(1).sort()).toEqual(agents.map((a) => `agent-${a}`).sort());
+  });
+
+  it("tries a session that just ended before its subagents while hook runs back off", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    const ended = claudeSession("parent", exchange(1, alpha, { sessionId: "parent" }), 0);
+    subagent("parent", "a1", 2, alpha, 2);
+    // An earlier hook run failed, so this one is inside the backoff and tries only ended work.
+    fetchImpl.mockResolvedValue(new Response("unavailable", { status: 503 }));
+    claudeSession("before", exchange(3, alpha, { sessionId: "before" }), 30);
+    await dosu("sync", "--quiet");
+    fetchImpl.mockClear();
+    // The backend takes the session but not the subagent's transcript.
+    fetchImpl.mockImplementation(async (_url, init) =>
+      JSON.parse(init?.body as string).metadata.session_id === "parent"
+        ? new Response(JSON.stringify({ task_id: "task" }), { status: 202 })
+        : new Response("unavailable", { status: 503 }),
+    );
+
+    await dosu("sync", "--quiet", "--ended", `claude:parent=${ended}`);
+
+    expect(posted()[0].metadata.session_id).toBe("parent");
   });
 
   it("ships a session's subagents under the project the session ended with", async () => {

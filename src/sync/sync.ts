@@ -45,7 +45,8 @@ export const SCAN_WINDOW_DAYS = 30;
 const LEDGER_GRACE_DAYS = 7;
 
 /** Sessions settled per run, oldest first; a bootstrap drains the backlog run after run, and a
- * hook run leaves the rest for the next trigger. */
+ * hook run leaves the rest for the next trigger. Sessions a hook named as ended, and their
+ * subagents, all ship in its run even past the limit. */
 export const SHIP_BATCH_LIMIT = 20;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -470,13 +471,15 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     };
     // The ship step decides each session's fate (incognito, unsupported, trivial, rejected, or
     // shipped); this side only picks the batch and records the answers.
-    // Ended sessions lead, so the batch limit never pushes one to a later run.
-    const batch = [...todo]
-      .sort(
-        (a, b) =>
-          Number(isEnded(b)) - Number(isEnded(a)) || Date.parse(a.updated) - Date.parse(b.updated),
-      )
-      .slice(0, SHIP_BATCH_LIMIT);
+    // The sessions a hook named lead, so a failure further on never keeps one from being tried;
+    // then their subagents, then the backlog oldest first. The batch limit never cuts the ended
+    // work: on a throwaway machine, nothing may run after this.
+    const rank = (s: AgentSession) =>
+      ended.some((e) => isEndedSession(e, s)) ? 0 : isEnded(s) ? 1 : 2;
+    const ordered = [...todo].sort(
+      (a, b) => rank(a) - rank(b) || Date.parse(a.updated) - Date.parse(b.updated),
+    );
+    const batch = ordered.slice(0, Math.max(SHIP_BATCH_LIMIT, ordered.filter(isEnded).length));
     logger.debug("sync", `shipping ${batch.length} of ${todo.length} ready sessions`);
 
     let results: ShipSessionResult[];
