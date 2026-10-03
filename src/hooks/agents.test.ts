@@ -1,10 +1,12 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -289,8 +291,37 @@ describe("codex agent", () => {
     codex?.disable();
 
     expect(readFileSync(tomlPath, "utf-8")).toBe(original);
-    expect(hooksJson().hooks).toEqual({});
+    expect(existsSync(join(fakeHome, ".codex", "hooks.json"))).toBe(false);
     expect(codex?.isEnabled()).toBe(false);
+  });
+
+  it("disable after enable on a home without Codex files leaves none behind", () => {
+    installCodex("0.160.0");
+    mkdirSync(join(fakeHome, ".codex"));
+    const codex = getHookAgent("codex");
+    codex?.enable();
+    codex?.disable();
+
+    expect(existsSync(join(fakeHome, ".codex", "config.toml"))).toBe(false);
+    expect(existsSync(join(fakeHome, ".codex", "hooks.json"))).toBe(false);
+    // The home is Codex's: it stays.
+    expect(existsSync(join(fakeHome, ".codex"))).toBe(true);
+  });
+
+  it("enable and disable keep config.toml's mode and its missing final newline", () => {
+    installCodex("0.160.0");
+    mkdirSync(join(fakeHome, ".codex"));
+    const tomlPath = join(fakeHome, ".codex", "config.toml");
+    writeFileSync(tomlPath, 'model = "gpt-5"', { mode: 0o644 });
+    chmodSync(tomlPath, 0o644);
+
+    const codex = getHookAgent("codex");
+    codex?.enable();
+    expect(statSync(tomlPath).mode & 0o777).toBe(0o644);
+    codex?.disable();
+
+    expect(readFileSync(tomlPath, "utf-8")).toBe('model = "gpt-5"');
+    expect(statSync(tomlPath).mode & 0o777).toBe(0o644);
   });
 
   it("re-enabling keeps a Dosu hook the user switched off in Codex switched off", () => {

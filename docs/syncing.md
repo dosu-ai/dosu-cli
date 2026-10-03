@@ -37,7 +37,8 @@ tables change; the rest of `config.toml`, comments included, is left as it was, 
 parsing shows would change anything else is refused with an error, leaving both files as they
 were: hooks Codex would not run are never installed. `hooks status` reports Codex enabled only
 while Dosu's hooks are in hooks.json with their current hashes trusted. `disable` removes exactly
-the hooks and tables `enable` added.
+the hooks and tables `enable` added (with the newline each table was appended behind), and deletes
+a hooks.json or config.toml it leaves empty; both files keep their mode.
 
 The prompt hook runs `dosu knowledge context --agent codex --format codex`, which answers with the
 same `additionalContext` JSON as Claude Code's. It names the session by its rollout file, as the

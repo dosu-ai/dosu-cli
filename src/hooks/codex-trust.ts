@@ -334,10 +334,12 @@ export function applyHookTrust(text: string, plan: TrustPlan, path: string): str
   }
   closeSection();
 
+  // A new table goes at the end behind one newline of its own: a blank line after a final
+  // newline, the line break a file without one lacks. Dropping the table later takes exactly that
+  // newline with it, so `disable` gives back the file `enable` found.
   let result = out.join("\n");
   for (const [key, hash] of plan.trust) {
     if (written.has(key)) continue;
-    if (result !== "" && !result.endsWith("\n")) result += "\n";
     if (result !== "") result += "\n";
     result += `${stateHeader(key)}\n${trustedHashLine(hash)}\n`;
   }

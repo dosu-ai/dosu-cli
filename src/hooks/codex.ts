@@ -14,7 +14,7 @@
  *   whose additionalContext Codex hands the model. Older versions ignore the unknown event. */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { writeSecureFile } from "../mcp/config-helpers";
@@ -39,7 +39,6 @@ import {
   readHookConfig,
   removeGroupedHook,
   SYNC_HOOK,
-  writeHookConfig,
 } from "./formats";
 
 type Version = readonly [number, number, number];
@@ -145,8 +144,33 @@ function converge(planned: Partial<Record<CodexHookEvent, HookSpec[]>>): void {
       );
     }
   }
-  if (!isDeepStrictEqual(before, after)) writeHookConfig(path, after);
-  if (next !== text) writeSecureFile(configPath(), next);
+  if (!isDeepStrictEqual(before, after)) {
+    if (isEmptyHookConfig(after)) rmSync(path, { force: true });
+    else writeKeepingMode(path, `${JSON.stringify(after, null, 2)}\n`);
+  }
+  if (next !== text) {
+    if (next === "") rmSync(configPath(), { force: true });
+    else writeKeepingMode(configPath(), next);
+  }
+}
+
+/** A hooks.json with no hooks left in it, which `disable` deletes rather than leave behind. */
+function isEmptyHookConfig(config: Record<string, unknown>): boolean {
+  const keys = Object.keys(config);
+  if (keys.some((key) => key !== "hooks")) return false;
+  const hooks = config.hooks;
+  return hooks === undefined || (isPlainObject(hooks) && Object.keys(hooks).length === 0);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Codex's files are the user's: an existing one keeps its mode; a new one is owner-only. */
+function writeKeepingMode(path: string, content: string): void {
+  const mode = existsSync(path) ? statSync(path).mode & 0o7777 : undefined;
+  writeSecureFile(path, content);
+  if (mode !== undefined) chmodSync(path, mode);
 }
 
 export function codexHookAgent(): HookAgent {
