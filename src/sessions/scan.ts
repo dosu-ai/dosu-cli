@@ -1,7 +1,7 @@
 /** Native agent-session scanner replacing the pinned deja-vu binary: enumerates each harness's
  * session logs directly and uses file mtime as `updated`. No index, no download, no subprocess. */
 
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -112,8 +112,39 @@ function scanCursor(home: string): AgentSession[] {
   return sessions;
 }
 
-/** Codex: `sessions/<yyyy>/<mm>/<dd>/rollout-*.jsonl`, three fixed levels. */
-function scanCodex(home: string, env: NodeJS.ProcessEnv): AgentSession[] {
+/** How much of a rollout to read for its lineage: the `session_meta` fields naming a parent come
+ * before the instructions Codex inlines into that first, long line. */
+const CODEX_META_PREFIX_BYTES = 16 * 1024;
+
+/** A rollout's name ends in its thread id: `rollout-<time>-<uuid>`. */
+const ROLLOUT_THREAD_ID = /-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
+/** The thread that spawned a Codex subagent rollout (`thread_source: "subagent"`, with
+ * `parent_thread_id` in its `session_meta`); null for any other rollout, forks included. */
+function codexParentThread(path: string): string | null {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, "r");
+    const buffer = Buffer.alloc(CODEX_META_PREFIX_BYTES);
+    const read = readSync(fd, buffer, 0, buffer.length, 0);
+    const head = buffer.toString("utf8", 0, read).split("\n", 1)[0];
+    if (!head.includes('"type":"session_meta"')) return null;
+    if (!head.includes('"thread_source":"subagent"') && !head.includes('"source":{"subagent"')) {
+      return null;
+    }
+    return /"parent_thread_id":"([^"]+)"/.exec(head)?.[1] ?? null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+/** Codex: `sessions/<yyyy>/<mm>/<dd>/rollout-*.jsonl`, three fixed levels, plus the rollouts it
+ * archived, flat in `archived_sessions/`. A subagent's rollout names its parent's rollout, the
+ * scanner's id for that session, or the bare thread id when that rollout is gone. Only sessions
+ * at or after `since` are opened for that. */
+function scanCodex(home: string, env: NodeJS.ProcessEnv, since?: Date): AgentSession[] {
   const codexHome = env.CODEX_HOME ?? join(home, ".codex");
   const sessions: AgentSession[] = [];
   for (const year of listDir(join(codexHome, "sessions"))) {
@@ -129,6 +160,23 @@ function scanCodex(home: string, env: NodeJS.ProcessEnv): AgentSession[] {
         }
       }
     }
+  }
+  for (const entry of listDir(join(codexHome, "archived_sessions"))) {
+    if (entry.isDir) continue;
+    const session = sessionFromFile(entry.path, "codex");
+    if (session) sessions.push(session);
+  }
+
+  const rolloutOfThread = new Map<string, string>();
+  for (const session of sessions) {
+    const thread = ROLLOUT_THREAD_ID.exec(session.id)?.[1];
+    if (thread) rolloutOfThread.set(thread.toLowerCase(), session.id);
+  }
+  const cutoff = since?.toISOString();
+  for (const session of sessions) {
+    if (cutoff !== undefined && session.updated < cutoff) continue;
+    const parent = codexParentThread(session.path);
+    if (parent) session.parentId = rolloutOfThread.get(parent.toLowerCase()) ?? parent;
   }
   return sessions;
 }
@@ -260,7 +308,9 @@ export function scannedEverywhere(
   path: string,
   home: string = homedir(),
 ): boolean {
-  return path.startsWith(`${defaultRoot(harness, home)}/`);
+  const roots = [defaultRoot(harness, home)];
+  if (harness === "codex") roots.push(join(home, ".codex", "archived_sessions"));
+  return roots.some((root) => path.startsWith(`${root}/`));
 }
 
 /** All local agent sessions across supported harnesses, newest first; missing harnesses
@@ -272,7 +322,7 @@ export function scanAgentSessions(options: ScanSessionsOptions = {}): AgentSessi
   let sessions = [
     ...scanClaude(home, env),
     ...scanCursor(home),
-    ...scanCodex(home, env),
+    ...scanCodex(home, env, options.since),
     ...scanOpencode(home, env),
   ];
   if (options.since !== undefined) {

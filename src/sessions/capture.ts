@@ -178,10 +178,23 @@ function claudeSessionEnd(hook: HookPayload): EndedSession | null {
   return { harness: "claude", id, path };
 }
 
+/** Codex `SessionEnd` (0.160+): `{session_id, transcript_path, cwd, hook_event_name, reason}`.
+ * The scanner names a Codex session by its rollout file, `rollout-<time>-<session id>.jsonl`. */
+function codexSessionEnd(hook: HookPayload): EndedSession | null {
+  if (hook.hook_event_name !== "SessionEnd") return null;
+  const uuid = hook.session_id;
+  const path = hook.transcript_path;
+  if (typeof uuid !== "string" || !SAFE_SEGMENT.test(uuid) || typeof path !== "string") return null;
+  const id = basename(path, ".jsonl");
+  if (!id.startsWith("rollout-") || !id.endsWith(`-${uuid}`) || !SAFE_SEGMENT.test(id)) return null;
+  return { harness: "codex", id, path };
+}
+
 /** One reader per agent for its definitive end-of-session event. Per-turn events (Cursor
- * `stop`, Codex `Stop` before 0.160) never count: they fire while the session goes on. */
+ * `stop`, Codex `Stop`) never count: they fire while the session goes on. */
 const END_EVENT_READERS: ReadonlyArray<(hook: HookPayload) => EndedSession | null> = [
   claudeSessionEnd,
+  codexSessionEnd,
 ];
 
 /** The session a hook payload says just ended; null when the payload is not an end event. */

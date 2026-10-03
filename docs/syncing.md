@@ -9,6 +9,54 @@ first), which learns from each session server-side. Shipping is on by default;
 ship, the project key sessions are scoped by, the repo scope, and the two switches layered on top:
 a per-session opt-out and a status-bar indicator.
 
+## Codex hooks
+
+`dosu knowledge hooks enable codex` writes `$CODEX_HOME/hooks.json` (default `~/.codex`) for the
+`codex` on PATH, so re-running it after a Codex upgrade converges on the right set. Codex counts as
+installed (for `hooks enable` with no agent named, and for `dosu setup`) when its home exists or
+`codex` is on PATH: Codex creates its home on its first run, which on a fresh machine comes after
+Dosu's setup.
+
+| Codex | Sync triggers | Prompt-time memory |
+|---|---|---|
+| 0.160+ | `SessionEnd` (the ended session ships at once; 3s timeout, Codex's cap), and `Stop` | `UserPromptSubmit` |
+| 0.116 to 0.159, or no `codex` on PATH | `Stop`, after every turn (sessions ship once quiet) | `UserPromptSubmit` |
+| older | `Stop` | none |
+
+`Stop` stays alongside `SessionEnd` because every Codex that shares the home reads the same
+hooks.json (another install, the IDE extension, the desktop app), and one without `SessionEnd`
+skips that event silently: `Stop` keeps its sessions shipping. It is also the backstop for a session
+that never fires `SessionEnd` (`codex exec` killed with SIGTERM fires none; SIGINT does): a later
+turn's run ships it once it has been quiet for five minutes. A `Stop` run never names a session as
+ended, so it ships nothing early; on 0.160 its run is usually an empty one.
+
+Codex runs a hook only once its `config.toml` records the hook's hash as trusted (0.129+), and
+`codex exec` never asks, so `enable` records that trust itself: a
+`[hooks.state."<hooks.json path>:<event>:<group>:<handler>"]` table with `trusted_hash`, the same
+hash Codex's own `/hooks` review stores (sha256 over the normalized hook; the path is `CODEX_HOME`
+with symlinks resolved). The keys are positions, so when Dosu's hook leaves an event (an upgrade,
+or `disable`) the user's own hooks behind it shift, and their tables move with them. Only those
+tables change; the rest of `config.toml`, comments included, is left as it was, and an edit that
+parsing shows would change anything else is refused with an error, leaving both files as they
+were: hooks Codex would not run are never installed. `hooks status` reports Codex enabled only
+while Dosu's hooks are in hooks.json with their current hashes trusted. `disable` removes exactly
+the hooks and tables `enable` added (with the newline each table was appended behind), and deletes
+a hooks.json or config.toml it leaves empty; both files keep their mode.
+
+When `SessionEnd` fires is up to Codex. `codex exec` fires it as the run ends, on SIGINT too, but
+not when killed with SIGTERM (what a task runner's timeout sends). The 0.160 TUI, in its default
+mode, talks to a shared background server: `/quit` only disconnects, and `SessionEnd` fires when the
+server unloads the thread, `thread_unload_delay_secs` later (config.toml, default 60). That hook runs
+in the background server's environment (its PATH and `DOSU_PROJECT`, from the TUI that started it),
+not the quitting TUI's. A session that misses its `SessionEnd` ships with a later run once it has
+been quiet for five minutes, so a throwaway machine should end with `dosu knowledge sync
+--bootstrap` run at least five minutes after its last session (and over a minute after the last TUI
+quit).
+
+The prompt hook runs `dosu knowledge context --agent codex --format codex`, which answers with the
+same `additionalContext` JSON as Claude Code's. It names the session by its rollout file, as the
+scan does: Codex's `session_id` is the root session's even inside a subagent.
+
 ## What a sync ships
 
 The state file keeps a ledger (`sessions`, schema 3) with one entry per session, keyed
@@ -18,7 +66,8 @@ resumed or kept writing), or when it was passed over by a different CLI version 
 support or rules get a second look). `--retry-rejected` makes sessions the backend refused pending
 for that run. Nothing is skipped for good by being older than something else, and there is no count
 cap on the scan: listing is metadata only. Claude Code sessions are listed from `~/.claude` and,
-when the variable is set, `CLAUDE_CONFIG_DIR`. Each run settles at most 20 sessions, oldest first;
+when the variable is set, `CLAUDE_CONFIG_DIR`. Codex sessions are listed from `sessions/` and
+`archived_sessions/` under `CODEX_HOME` (default `~/.codex`). Each run settles at most 20 sessions, oldest first;
 `--bootstrap` keeps going until the backlog is drained. Entries are pruned a week after their session
 leaves the 30-day window.
 
@@ -46,7 +95,8 @@ later run. The exception is a session the hook says just ended: the `--detach` p
 payload and passes the session to the detached run as `--ended <harness>:<id>=<transcript>` (one
 value per session, so two sessions' transcripts never get swapped; `--ended-path <transcript>` names
 a session known only by its transcript). That session ships in the same run, past the quiet period
-and ahead of the backlog, even if its transcript lives outside the directories the scan walks. A
+and ahead of the backlog, together with the subagent sessions it spawned, which ended with it (Codex
+fires `SessionEnd` for the root session only), even if its transcript lives outside the directories the scan walks. A
 transcript outside the default directories (including one this run lists only because the agent
 exported `CLAUDE_CONFIG_DIR` or `CODEX_HOME`, which a sync started elsewhere lacks) is remembered in
 the state file (`outside_sessions`) until it is gone or leaves the window, so later runs retry it
@@ -54,7 +104,8 @@ after a failure and ship its tail when it is resumed. If another run holds the s
 waits for it (up to ten minutes) instead of leaving the session for a later trigger. A paused hook
 run ships nothing, but still remembers where an ended session lives. While hook runs back off after
 a failure, a run carrying an ended session still tries that session, and only that one; if it gets
-through, the backoff ends. Only definitive end events count: Claude Code's `SessionEnd` today.
+through, the backoff ends. Only definitive end events count: Claude Code's `SessionEnd`, and
+Codex's `SessionEnd` (0.160+), whose session is named by its rollout file as the scan names it.
 Per-turn events (Cursor's `stop`, Codex's `Stop`) never pass `--ended`. Each agent's end event is
 one reader in `END_EVENT_READERS` (`src/sessions/capture.ts`).
 
@@ -63,7 +114,15 @@ and a sha256 of them. When the session grows and its records still start with ex
 only the meta record and the new tail ship, with `metadata.continuation =
 {"from_record": n, "prefix_sha256": "..."}`. A new tail too small to learn from is not uploaded and
 the session stays shipped. If the prefix no longer matches, the whole session ships again and the
-server dedupes identical content. A child session's upload carries `parent_session_id`.
+server dedupes identical content. A child session's upload carries `parent_session_id`: for a
+Codex subagent (`thread_source: "subagent"` in its rollout's `session_meta`), the parent's rollout
+name, which is the parent's own `session_id`. The report a finished Codex subagent hands its parent,
+a `<subagent_notification>` injected as a user message, ships in the parent's trace in place as an
+`observation` record: what the parent acted on next, not something the user said. A subagent spawned
+with its parent's context starts its rollout with a copy of the parent's history; on 0.160 (whose
+rollouts mark where the subagent's own records begin, `subagent_history_start_ordinal`) only the
+subagent's own records ship, since the parent's trace carries the rest. Older rollouts have no such
+mark and ship whole.
 
 Upgrading from the watermark state (schema 2, or the learner-era schema 1) seeds the ledger with the
 sessions it shipped. Everything else in the window becomes pending again, including sessions the
@@ -87,8 +146,8 @@ wins:
 
 A session's key is cached in `project-dirs.json` the first time it is resolved, whichever rule
 produced it, so a checkout deleted later still resolves and a session never changes projects
-midway. The prompt hook resolves it first for Claude Code sessions, so the transcript ships under
-the same project it was served memory for. A link added later applies to sessions not yet
+midway. The prompt hook resolves it first for Claude Code and Codex sessions, so the transcript
+ships under the same project it was served memory for. A link added later applies to sessions not yet
 resolved (the unshipped backlog), not to ones already served or shipped. Only a `path:` answer is
 looked up again once the session file changes, since the directory may have become a repository.
 A git lookup that runs out of time is no answer, never a reason to fall back to `path:`: the prompt
@@ -157,6 +216,11 @@ Properties worth knowing:
   is skipped as a unit.
 - It is **one-way** for that session. Start a new session to have Dosu learn again. Resuming the
   same session keeps it incognito.
+- It carries over to a Codex session's **subagents and forks**, whose rollouts hold no marker of
+  their own (a subagent's starts with the parent's history only when spawned with it; a fork's on
+  0.160 references its source instead of copying it): a rollout whose `session_meta` names a
+  `parent_thread_id` or `forked_from_id` is off the record when any rollout up that chain carries
+  the marker, for shipping and for the prompt-time memory hook alike.
 - The command **instructs** the model to avoid Dosu tools; it does not block them. A `PreToolUse`
   hook that rejects Dosu tool calls when the marker is present is a possible follow-up.
 - OpenCode has no slash-command install here, but its sessions are checked for the marker too.

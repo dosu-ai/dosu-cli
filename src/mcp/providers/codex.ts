@@ -6,8 +6,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { type Config, MODE_OSS } from "../../config/config";
+import { codexInstalled } from "../../hooks/codex";
 import { mcpEndpoint, mcpRemoteServer, writeSecureFile } from "../config-helpers";
-import { expandHome, findNpx, isInstalled, npxPathEnv } from "../detect";
+import { expandHome, findNpx, npxPathEnv } from "../detect";
 import type { SetupProvider } from "../providers";
 
 function codexHome(): string {
@@ -140,7 +141,8 @@ export const CodexProvider = (): SetupProvider => ({
   supportsLocal: () => true,
   priority: () => 8,
   detectPaths: () => ["~/.codex"],
-  isInstalled: () => isInstalled(["~/.codex"]),
+  // CODEX_HOME, or `codex` on PATH: a fresh machine sets Dosu up before Codex's first run.
+  isInstalled: codexInstalled,
   globalConfigPath: () => join(codexHome(), "config.toml"),
   isConfigured: () => {
     const content = readTOML(join(codexHome(), "config.toml"));

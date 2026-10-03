@@ -219,6 +219,23 @@ describe("readSessionTurns", () => {
       ]);
     });
 
+    it("does not count a subagent's report, which Codex injects as a user turn, as a prompt", () => {
+      const message = (role: string, text: string) => ({
+        type: "response_item",
+        payload: { type: "message", role, content: [{ type: "input_text", text }] },
+      });
+      const path = writeLog("c.jsonl", [
+        message("user", "delegate the listing to a subagent"),
+        message("user", '<subagent_notification>\n{"agent_path":"a1","status":{}}'),
+        message("assistant", "The subagent reported two files."),
+      ]);
+
+      expect(readSessionTurns(session("codex", path)).map((t) => t.text)).toEqual([
+        "delegate the listing to a subagent",
+        "The subagent reported two files.",
+      ]);
+    });
+
     it("skips response_items with a missing or non-object payload", () => {
       const path = writeLog("c.jsonl", [
         { type: "response_item" },

@@ -241,8 +241,32 @@ describe("endedSessionOf", () => {
     });
   });
 
+  // Codex 0.160+: the payload names the session by uuid, the transcript is a rollout file.
+  const rollout = "rollout-2026-10-02T17-28-17-01a0ff29-62b1-7310-94a2-45a5c2140458";
+  const codexEnd = {
+    session_id: "01a0ff29-62b1-7310-94a2-45a5c2140458",
+    transcript_path: `/home/u/.codex/sessions/2026/10/02/${rollout}.jsonl`,
+    cwd: "/work/app",
+    hook_event_name: "SessionEnd",
+    reason: "other",
+  };
+
+  it("reads a Codex SessionEnd, naming the session by its rollout as the scanner does", () => {
+    expect(endedSessionOf(codexEnd)).toEqual({
+      harness: "codex",
+      id: rollout,
+      path: codexEnd.transcript_path,
+    });
+  });
+
   it.each([
     ["a per-turn Stop event", { ...claudeEnd, hook_event_name: "Stop" }],
+    ["Codex's per-turn Stop", { ...codexEnd, hook_event_name: "Stop", turn_id: "t1" }],
+    [
+      "a Codex SessionEnd whose rollout belongs to another session",
+      { ...codexEnd, session_id: "01a0ff29-0000-7000-8000-000000000000" },
+    ],
+    ["a Codex SessionEnd with no transcript", { ...codexEnd, transcript_path: null }],
     [
       "Cursor's per-turn stop",
       { conversation_id: "c1", cursor_version: "1.2", status: "completed" },

@@ -23,18 +23,20 @@ export const CONTEXT_EVENT = "UserPromptSubmit";
 
 const CONTEXT_HOOK_COMMAND = "dosu knowledge context";
 
-/** Dev installs pin the working copy with env inline, as the sync hook's do. */
-function contextHookCommand(): string {
-  if (process.env.DOSU_DEV !== "true") return CONTEXT_HOOK_COMMAND;
-  return `${devEnvAssignments().join(" ")} ${devSelfCommand()} knowledge context`;
+/** `dosu knowledge context` plus `args` (another agent's --agent/--format). Dev installs pin the
+ * working copy with env inline, as the sync hook's do. */
+export function contextHookCommand(args: readonly string[] = []): string {
+  const suffix = args.length > 0 ? ` ${args.join(" ")}` : "";
+  if (process.env.DOSU_DEV !== "true") return `${CONTEXT_HOOK_COMMAND}${suffix}`;
+  return `${devEnvAssignments().join(" ")} ${devSelfCommand()} knowledge context${suffix}`;
 }
 
-function isDosuContextHookCommand(command: unknown): boolean {
+export function isDosuContextHookCommand(command: unknown): boolean {
   return typeof command === "string" && command.includes("knowledge context");
 }
 
 const CONTEXT_HOOK: HookSpec = {
-  command: contextHookCommand,
+  command: () => contextHookCommand(),
   isOurs: isDosuContextHookCommand,
 };
 
@@ -42,9 +44,8 @@ function settingsPath(): string {
   return join(claudeConfigDir(), "settings.json");
 }
 
-/** Install the hook if Claude Code is present. Returns whether it is installed afterwards. Other
- * agents are not wired: Cursor's prompt hook cannot add context, and Codex's has not been
- * verified to. */
+/** Install the hook if Claude Code is present. Returns whether it is installed afterwards. Codex's
+ * prompt hook is installed with its other hooks (hooks/codex.ts); Cursor's cannot add context. */
 export function enableClaudeContextHook(): boolean {
   if (!isInstalled([claudeConfigDir()])) return false;
   const path = settingsPath();

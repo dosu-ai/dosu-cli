@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { createShipStep } from "../shipper/runner";
 import { INCOGNITO_MARKER } from "../sync/incognito";
@@ -243,6 +243,163 @@ describe("contextHookOutput", () => {
     });
     expect(marked).toBe("");
     expect(typed).toBe("");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe("contextHookOutput for other agents", () => {
+  const ROLLOUT = "rollout-2026-10-02T17-33-20-01a0ff2e-029b-7153-9702-1dbfdee28612";
+
+  /** Codex 0.160's UserPromptSubmit payload: `session_id` is the root session, also in a subagent. */
+  function codexPayload(over: Record<string, unknown> = {}): string {
+    return JSON.stringify({
+      session_id: "01a0ff2e-029b-7153-9702-1dbfdee28612",
+      turn_id: "01a0ff2e-6306-73d1-aa1b-4a24313481f9",
+      transcript_path: `/home/u/.codex/sessions/2026/10/02/${ROLLOUT}.jsonl`,
+      cwd: "/work/widget",
+      hook_event_name: "UserPromptSubmit",
+      model: "gpt-5.6-luna",
+      permission_mode: "bypassPermissions",
+      prompt: "add a cache to the layout pass",
+      ...over,
+    });
+  }
+
+  const codex = { ...base, agent: "codex", format: "codex" as const };
+
+  it("answers Codex's prompt hook in Codex's hook JSON, as the codex agent", async () => {
+    const fetchImpl = respond(200, { digest: DIGEST });
+
+    const out = await contextHookOutput(codexPayload(), { ...codex, fetchImpl });
+
+    expect(JSON.parse(out)).toEqual({
+      hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: DIGEST },
+    });
+    // The rollout names the session, as the scanner and the shipped session name it.
+    expect(sentBody(fetchImpl)).toMatchObject({
+      agent: "codex",
+      session_id: ROLLOUT,
+      project: "path:/work/widget",
+    });
+  });
+
+  it("asks nothing for a Codex subagent or fork of a session taken off the record", async () => {
+    const codexHome = mkdtempSync(join(tmpdir(), "dosu-codex-home-"));
+    onTestFinished(() => rmSync(codexHome, { recursive: true, force: true }));
+    const sessions = join(codexHome, "sessions", "2026", "10", "02");
+    mkdirSync(sessions, { recursive: true });
+    const rollout = (name: string, meta: Record<string, unknown>, text: string) => {
+      const path = join(sessions, `${name}.jsonl`);
+      const items = [
+        { type: "session_meta", payload: { id: name.slice(-36), cwd: "/work/widget", ...meta } },
+        {
+          type: "response_item",
+          payload: { type: "message", role: "user", content: [{ type: "input_text", text }] },
+        },
+      ];
+      writeFileSync(path, `${items.map((item) => JSON.stringify(item)).join("\n")}\n`);
+      return path;
+    };
+    const parent = "01a0ff74-a68d-7ad0-83ee-80cf02c29b14";
+    rollout(`rollout-2026-10-02T18-50-30-${parent}`, {}, `${INCOGNITO_MARKER} keep it out`);
+    const subagent = rollout(
+      "rollout-2026-10-02T18-50-38-01a0ff74-c903-73c2-b6b1-7546b84710ff",
+      { parent_thread_id: parent, thread_source: "subagent" },
+      "write the tests",
+    );
+    const fork = rollout(
+      "rollout-2026-10-02T18-56-30-01a0ff7a-277c-74f1-b64b-59ffa01a7d14",
+      { forked_from_id: parent },
+      "go on",
+    );
+    const unrelated = rollout(
+      "rollout-2026-10-02T19-10-00-01a0ff86-0000-7000-8000-000000000002",
+      { parent_thread_id: "01a0ff86-0000-7000-8000-00000000ffff", thread_source: "subagent" },
+      "write the docs",
+    );
+    const { isIncognito: _, ...defaults } = codex;
+    const fetchImpl = respond(200, { digest: DIGEST });
+
+    for (const transcript_path of [subagent, fork]) {
+      expect(
+        await contextHookOutput(codexPayload({ transcript_path }), { ...defaults, fetchImpl }),
+      ).toBe("");
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+    // A subagent whose parent's rollout is gone, or on the record, is asked about as usual.
+    await contextHookOutput(codexPayload({ transcript_path: unrelated }), {
+      ...defaults,
+      fetchImpl,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("a Codex session ships under the DOSU_PROJECT its prompts were served by", async () => {
+    const rollout = "rollout-2026-10-02T18-00-00-01a0ff40-0000-7000-8000-000000000001";
+    process.env.DOSU_PROJECT = "poc-codex";
+    await contextHookOutput(
+      codexPayload({ transcript_path: `/home/u/.codex/sessions/2026/10/02/${rollout}.jsonl` }),
+      { ...codex, fetchImpl: respond(200, {}) },
+    );
+    delete process.env.DOSU_PROJECT;
+
+    const shipped = createProjectDirResolver().resolveProject({
+      id: rollout,
+      harness: "codex",
+      path: "/gone/rollout.jsonl",
+      updated: "2026-10-02T00:00:00.000Z",
+    });
+    expect(shipped?.project).toBe("poc-codex");
+  });
+
+  it("takes a harness-neutral payload and prints the digest alone in plain format", async () => {
+    const fetchImpl = respond(200, { digest: DIGEST });
+    const stdin = JSON.stringify({
+      prompt: "why is the build slow",
+      session_id: "ses_1",
+      cwd: "/w",
+    });
+
+    const out = await contextHookOutput(stdin, {
+      ...base,
+      agent: "opencode",
+      format: "plain",
+      fetchImpl,
+    });
+
+    expect(out).toBe(DIGEST);
+    expect(sentBody(fetchImpl)).toMatchObject({
+      agent: "opencode",
+      session_id: "ses_1",
+      prompt: "why is the build slow",
+      project: "path:/w",
+    });
+  });
+
+  it("prints nothing in plain format when there is no digest", async () => {
+    const stdin = JSON.stringify({ prompt: "hi", session_id: "ses_1", cwd: "/w" });
+    const out = await contextHookOutput(stdin, {
+      ...base,
+      format: "plain",
+      fetchImpl: respond(200, { digest: null }),
+    });
+    expect(out).toBe("");
+  });
+
+  it.each([
+    [
+      "Claude Code's task notification",
+      payload({ prompt: "<task-notification>\n<task-id>a1</task-id>" }),
+      base,
+    ],
+    [
+      "Codex's subagent notification",
+      codexPayload({ prompt: '<subagent_notification>\n{"agent_path":"x"}' }),
+      codex,
+    ],
+  ])("never asks about %s, which no one typed", async (_label, stdin, options) => {
+    const fetchImpl = respond(200, { digest: DIGEST });
+    expect(await contextHookOutput(stdin, { ...options, fetchImpl })).toBe("");
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

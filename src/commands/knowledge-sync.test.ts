@@ -7,16 +7,18 @@ import {
   mkdirSync,
   mkdtempSync,
   realpathSync,
+  renameSync,
   rmSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
+import { INCOGNITO_MARKER } from "../sync/incognito";
 import { emptySyncState, saveSyncState } from "../sync/state";
 import { knowledgeCommand } from "./knowledge";
 
@@ -130,6 +132,49 @@ function claudeSession(id: string, body: string, minutesAgo: number): string {
   return path;
 }
 
+/** A Codex rollout under the temporary CODEX_HOME, last written `minutesAgo` minutes ago. */
+function codexRollout(
+  name: string,
+  cwd: string,
+  minutesAgo: number,
+  meta: Record<string, unknown> = {},
+  prompt = "question",
+): string {
+  const dir = join(home, ".codex", "sessions", "2026", "10", "02");
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, `${name}.jsonl`);
+  const at = "2026-10-02T10:00:00.000Z";
+  const records = [
+    {
+      type: "session_meta",
+      payload: { id: name.slice(-36), timestamp: at, cwd, cli_version: "0.160.0", ...meta },
+    },
+    {
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: prompt }],
+      },
+    },
+    {
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: `answer: ${"detail ".repeat(400)}` }],
+      },
+    },
+  ];
+  writeFileSync(
+    path,
+    `${records.map((r) => JSON.stringify({ timestamp: at, ...r })).join("\n")}\n`,
+  );
+  const touched = new Date(Date.now() - minutesAgo * 60_000);
+  utimesSync(path, touched, touched);
+  return path;
+}
+
 describe("knowledge sync from a session-end hook", () => {
   it("applies the hook's DOSU_PROJECT to the session that ended, and to no other", async () => {
     const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
@@ -207,12 +252,121 @@ describe("knowledge sync from a session-end hook", () => {
     expect(JSON.stringify(shipped.records)).not.toContain("question 2");
   });
 
+  it("ships the session a Codex SessionEnd names at once, under its rollout's name", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    const uuid = "01a0ff29-62b1-7310-94a2-45a5c2140458";
+    const ended = codexRollout(`rollout-2026-10-02T17-28-17-${uuid}`, alpha, 0);
+    codexRollout("rollout-2026-10-02T17-29-00-01a0ff2a-0000-7000-8000-000000000000", alpha, 1);
+    hookStdin({
+      session_id: uuid,
+      transcript_path: ended,
+      cwd: alpha,
+      hook_event_name: "SessionEnd",
+      reason: "other",
+    });
+
+    await dosu("sync", "--quiet", "--detach");
+    const child = respawnedArgs();
+    expect(child).toEqual([
+      "sync",
+      "--quiet",
+      "--ended",
+      `codex:rollout-2026-10-02T17-28-17-${uuid}=${ended}`,
+    ]);
+    await dosu(...child);
+
+    expect(posted().map((p) => p.metadata)).toEqual([
+      expect.objectContaining({
+        agent: "codex",
+        session_id: `rollout-2026-10-02T17-28-17-${uuid}`,
+        project: "github.com/acme/alpha",
+      }),
+    ]);
+  });
+
   it("a per-turn hook payload names no session, so nothing skips the quiet period", async () => {
     hookStdin({ hook_event_name: "Stop", session_id: "aaaa", transcript_path: "/x/aaaa.jsonl" });
 
     await dosu("sync", "--quiet", "--detach");
 
     expect(respawnedArgs()).toEqual(["sync", "--quiet"]);
+  });
+});
+
+describe("knowledge sync of Codex subagents", () => {
+  it("ships a subagent's session with its parent's rollout as parent_session_id", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    const parent = "rollout-2026-10-02T17-33-20-01a0ff2e-029b-7153-9702-1dbfdee28612";
+    codexRollout(parent, alpha, 30);
+    codexRollout("rollout-2026-10-02T17-33-26-01a0ff2e-1861-7b61-a549-34bdff8539e0", alpha, 30, {
+      parent_thread_id: "01a0ff2e-029b-7153-9702-1dbfdee28612",
+      thread_source: "subagent",
+    });
+
+    await dosu("sync");
+
+    expect(
+      Object.fromEntries(
+        posted().map((p) => [p.metadata.session_id, p.metadata.parent_session_id]),
+      ),
+    ).toEqual({
+      [parent]: undefined,
+      "rollout-2026-10-02T17-33-26-01a0ff2e-1861-7b61-a549-34bdff8539e0": parent,
+    });
+  });
+});
+
+describe("knowledge sync of an incognito Codex session's descendants", () => {
+  it("keeps its subagents and its forks off the record, which carry no marker of their own", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    const parentId = "01a0ff74-a68d-7ad0-83ee-80cf02c29b14";
+    const parent = codexRollout(
+      `rollout-2026-10-02T18-50-30-${parentId}`,
+      alpha,
+      30,
+      {},
+      `${INCOGNITO_MARKER} keep this one out`,
+    );
+    // Archived since: found there all the same.
+    mkdirSync(join(home, ".codex", "archived_sessions"));
+    renameSync(parent, join(home, ".codex", "archived_sessions", basename(parent)));
+    const subagent = "rollout-2026-10-02T18-50-38-01a0ff74-c903-73c2-b6b1-7546b84710ff";
+    codexRollout(subagent, alpha, 30, { parent_thread_id: parentId, thread_source: "subagent" });
+    const fork = "rollout-2026-10-02T18-56-30-01a0ff7a-277c-74f1-b64b-59ffa01a7d14";
+    codexRollout(fork, alpha, 30, { forked_from_id: parentId, thread_source: "user" });
+    // A fork of the subagent: off the record two links up.
+    codexRollout("rollout-2026-10-02T19-00-00-01a0ff7d-0000-7000-8000-000000000001", alpha, 30, {
+      forked_from_id: "01a0ff74-c903-73c2-b6b1-7546b84710ff",
+    });
+    const other = "rollout-2026-10-02T19-10-00-01a0ff86-0000-7000-8000-000000000002";
+    codexRollout(other, alpha, 30);
+
+    await dosu("sync");
+
+    expect(posted().map((p) => p.metadata.session_id)).toEqual([other]);
+  });
+});
+
+describe("knowledge sync of Codex subagents, ended", () => {
+  it("ships a session's subagents with it: Codex ends them with the session it names", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    const uuid = "01a0ff53-4a89-7920-bc32-11dac880a6e6";
+    const parent = codexRollout(`rollout-2026-10-02T18-14-03-${uuid}`, alpha, 0);
+    codexRollout("rollout-2026-10-02T18-14-12-01a0ff53-6b7f-7932-813b-526f14d8b881", alpha, 0, {
+      parent_thread_id: uuid,
+      thread_source: "subagent",
+    });
+
+    await dosu("sync", "--quiet", "--ended", `codex:rollout-2026-10-02T18-14-03-${uuid}=${parent}`);
+
+    expect(
+      posted()
+        .map((p) => p.metadata.session_id)
+        .sort(),
+    ).toEqual([
+      `rollout-2026-10-02T18-14-03-${uuid}`,
+      "rollout-2026-10-02T18-14-12-01a0ff53-6b7f-7932-813b-526f14d8b881",
+    ]);
   });
 });
 

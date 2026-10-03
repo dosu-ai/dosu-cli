@@ -83,13 +83,15 @@ function readCursor(raw: string): SessionTurn[] {
   return turns;
 }
 
-/** Injected scaffolding Codex records as user text but nobody typed. */
+/** Injected scaffolding Codex records as user text but nobody typed, including the report a
+ * finished subagent hands its parent. */
 function isCodexInjectedBlock(text: string): boolean {
   const head = text.trimStart().toLowerCase();
   return (
     head.startsWith("<user_instructions>") ||
     head.startsWith("<environment_context>") ||
-    head.startsWith("<recommended_plugins>")
+    head.startsWith("<recommended_plugins>") ||
+    head.startsWith("<subagent_notification>")
   );
 }
 

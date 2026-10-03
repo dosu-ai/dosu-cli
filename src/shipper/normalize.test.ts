@@ -163,6 +163,79 @@ describe("normalizeSessionRecords", () => {
   });
 });
 
+/** A Codex rollout as 0.160 writes it: one JSON line per item, each with its `ordinal`. */
+function codexSession(items: Record<string, unknown>[]): AgentSession {
+  const path = join(dir, "rollout-2026-10-02T18-50-38-01a0ff74-c903-73c2-b6b1-7546b84710ff.jsonl");
+  const at = "2026-10-02T10:00:00.000Z";
+  writeFileSync(
+    path,
+    `${items.map((item, ordinal) => JSON.stringify({ timestamp: at, ordinal, ...item })).join("\n")}\n`,
+  );
+  return { id: "rollout-x", harness: "codex", path, updated: at };
+}
+
+function codexMeta(id: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    type: "session_meta",
+    payload: { id, timestamp: "2026-10-02T10:00:00.000Z", cwd: "/repo/app", ...extra },
+  };
+}
+
+function codexMessage(role: string, text: string): Record<string, unknown> {
+  const type = role === "assistant" ? "output_text" : "input_text";
+  return { type: "response_item", payload: { type: "message", role, content: [{ type, text }] } };
+}
+
+describe("normalizeSessionRecords for Codex", () => {
+  it("keeps a subagent's report to its parent as an observation, not as something the user said", async () => {
+    const report =
+      '<subagent_notification>\n{"agent_path":"01a0ff74-c903","status":{"completed":"Wrote test_calc.py"}}';
+    const records = await normalizeSessionRecords(
+      codexSession([
+        codexMeta("01a0ff74-a68d-7ad0-83ee-80cf02c29b14"),
+        codexMessage("user", "Spawn a subagent to write the tests"),
+        codexMessage("assistant", "Spawned one."),
+        codexMessage("user", report),
+        codexMessage("assistant", "The subagent wrote the tests."),
+      ]),
+    );
+
+    expect(records?.map((r) => r.role)).toEqual([
+      "meta",
+      "user",
+      "assistant",
+      "observation",
+      "assistant",
+    ]);
+    expect(records?.[3]).toMatchObject({ role: "observation", content: report });
+  });
+
+  it("ships a forked subagent without the parent history its rollout copies", async () => {
+    const parent = "01a0ff74-a68d-7ad0-83ee-80cf02c29b14";
+    const records = await normalizeSessionRecords(
+      codexSession([
+        codexMeta("01a0ff74-c903-73c2-b6b1-7546b84710ff", {
+          forked_from_id: parent,
+          parent_thread_id: parent,
+          thread_source: "subagent",
+          subagent_history_start_ordinal: 4,
+        }),
+        // Ordinals 1-3: the parent's history, copied in when the subagent was spawned.
+        codexMeta(parent, { thread_source: "user" }),
+        codexMessage("user", "Spawn a subagent to write the tests"),
+        codexMessage("assistant", "Spawning one."),
+        codexMessage("user", "Write test_calc.py for calc.py"),
+        codexMessage("assistant", "Wrote test_calc.py."),
+      ]),
+    );
+
+    expect(records?.filter((r) => r.role !== "meta").map((r) => r.content)).toEqual([
+      "Write test_calc.py for calc.py",
+      "Wrote test_calc.py.",
+    ]);
+  });
+});
+
 describe("redactRecords", () => {
   it("redacts tool args and content but never structural keys", () => {
     const records = [

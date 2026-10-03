@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // CRITICAL: mock `open` so tests never pop a real browser tab; mock git so detectGitRepo()
@@ -425,6 +425,26 @@ describe("stepDetectTools", () => {
 
     const detected = stepDetectTools();
     expect(detected.map((p2) => p2.id())).toEqual(["claude-desktop"]);
+  });
+
+  it("includes Codex before its first run: the codex binary on PATH, or a relocated CODEX_HOME", () => {
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CodexProvider()]);
+    const bin = join(tempDir, "bin");
+    mkdirSync(bin);
+    vi.stubEnv("PATH", bin);
+    try {
+      expect(stepDetectTools()).toEqual([]);
+
+      writeFileSync(join(bin, "codex"), '#!/bin/sh\necho "codex-cli 0.160.0"\n', { mode: 0o755 });
+      expect(stepDetectTools().map((p2) => p2.id())).toEqual(["codex"]);
+
+      rmSync(join(bin, "codex"));
+      mkdirSync(join(tempDir, "codex-home"));
+      vi.stubEnv("CODEX_HOME", join(tempDir, "codex-home"));
+      expect(stepDetectTools().map((p2) => p2.id())).toEqual(["codex"]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("returns empty array when no providers are installed", () => {
@@ -897,21 +917,31 @@ describe("stepConfigureTools", () => {
     );
   });
 
-  it("prints the Codex trust note after enabling its hook", () => {
+  it("tells the user Codex's hooks are trusted after enabling them", () => {
     const cfg = makeCfg();
+    // A Codex from before SessionEnd, ahead of anything else on PATH: the per-turn Stop trigger.
+    const bin = join(tempDir, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "codex"), '#!/bin/sh\necho "codex-cli 0.140.0"\n', { mode: 0o755 });
+    vi.stubEnv("PATH", `${bin}${delimiter}${process.env.PATH ?? ""}`);
 
-    const results = stepConfigureTools(cfg, {
-      toInstall: [CodexProvider()],
-      toRemove: [],
-      skipped: [],
-    });
+    try {
+      const results = stepConfigureTools(cfg, {
+        toInstall: [CodexProvider()],
+        toRemove: [],
+        skipped: [],
+      });
 
-    const hooks = JSON.parse(readFileSync(join(tempDir, ".codex", "hooks.json"), "utf-8"));
-    expect(hooks.hooks.Stop).toBeDefined();
-    stepShowSummary(results);
-    expect(p.log.info).toHaveBeenCalledWith(
-      expect.stringContaining("approve the Dosu hook when prompted"),
-    );
+      const hooks = JSON.parse(readFileSync(join(tempDir, ".codex", "hooks.json"), "utf-8"));
+      expect(hooks.hooks.Stop).toBeDefined();
+      expect(readFileSync(join(tempDir, ".codex", "config.toml"), "utf-8")).toContain(
+        "trusted_hash",
+      );
+      stepShowSummary(results);
+      expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("marked trusted"));
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 
