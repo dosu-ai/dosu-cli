@@ -13,6 +13,13 @@ const SESSION = fixture("claude-code-session.jsonl");
 /** Note injected on the first prompt, `/compact`, the note re-injected by SessionStart, then a
  * second prompt. The injected note carries the marker MEMO-MARKER-7731. */
 const COMPACTED = fixture("claude-code-compacted-session.jsonl");
+/** Two-stage recall against a fake backend. Stage one carries STAGE1-MARKER-4410; stage two
+ * carries STAGE2-MARKER-8823 plus an `ERROR:` line and an `Exit code 9` line, bait for the
+ * command parser had it landed inside a tool result. TOOL: a failing Bash (no PostToolUse fires),
+ * stage two on the next Bash's PostToolUse, `/compact` puts both back, a second prompt edits
+ * README.md. PROMPT: no tool call in the first turn, so stage two comes with the second prompt. */
+const TWO_STAGE_TOOL = fixture("claude-code-two-stage-tool-session.jsonl");
+const TWO_STAGE_PROMPT = fixture("claude-code-two-stage-prompt-session.jsonl");
 
 const TS = "2026-10-01T10:00:00.000Z";
 const user = (content: unknown, extra: Record<string, unknown> = {}) =>
@@ -65,6 +72,39 @@ describe("convertTranscriptLines", () => {
     expect(uploaded).not.toContain("prior_task_memory");
     expect(uploaded).not.toContain("MEMO-MARKER");
     expect(uploaded).not.toContain("being continued from a previous conversation");
+  });
+
+  it("never feeds either stage of a two-stage recall back into the record", () => {
+    const injectedBy = (lines: string[]) =>
+      lines
+        .filter((line) => line.includes("MARKER-"))
+        .map((line) => JSON.parse(line).attachment?.hookEvent ?? "not a hook attachment");
+    expect(injectedBy(TWO_STAGE_TOOL)).toEqual(["UserPromptSubmit", "PostToolUse", "SessionStart"]);
+    expect(injectedBy(TWO_STAGE_PROMPT)).toEqual(["UserPromptSubmit", "UserPromptSubmit"]);
+
+    const tool = convertTranscriptLines(TWO_STAGE_TOOL, {}, "/work/demo-widgets").events;
+    expect(tool.map(({ ts: _ts, ...rest }) => rest)).toEqual([
+      { type: "user_prompt", text: expect.stringMatching(/^Use the Bash tool to run: sleep 3;/) },
+      {
+        type: "command",
+        command: "sleep 3; python3 widgets.py --strict",
+        rc: 3,
+        error_line: "ERROR: widget count mismatch (expected 3, got 2)",
+      },
+      { type: "command", command: "python3 widgets.py", rc: 0, error_line: null },
+      { type: "assistant_text", text: expect.any(String) },
+      { type: "user_prompt", text: expect.stringMatching(/^Now use the Edit tool to change/) },
+      { type: "file_edit", tool: "Edit", path: "README.md" },
+      { type: "assistant_text", text: expect.any(String) },
+    ]);
+    const prompt = convertTranscriptLines(TWO_STAGE_PROMPT, {}, "/work/demo-widgets").events;
+    expect(prompt.filter((e) => e.type === "user_prompt").map((e) => e.text)).toEqual([
+      "Reply with one short sentence saying hello. Do not use any tools.",
+      "Use the Bash tool to run: python3 widgets.py ; then reply in one short sentence.",
+    ]);
+    for (const events of [tool, prompt]) {
+      expect(JSON.stringify(events)).not.toMatch(/MARKER|prior_task_memory|Addendum/);
+    }
   });
 
   it("keeps only what a person typed as user_prompt", () => {
