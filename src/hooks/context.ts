@@ -56,6 +56,11 @@ export function enableClaudeContextHook(): boolean {
   return true;
 }
 
+/** Whether Claude Code's settings carry the hook. */
+export function hasClaudeContextHook(): boolean {
+  return hasGroupedHook(readHookConfig(settingsPath()), CONTEXT_EVENT, CONTEXT_HOOK);
+}
+
 export function disableClaudeContextHook(): void {
   const path = settingsPath();
   const config = readHookConfig(path);

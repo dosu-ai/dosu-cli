@@ -5,7 +5,11 @@ import { join } from "node:path";
 import { expandHome, isInstalled } from "../mcp/detect";
 import { isShippingEnabled, loadSyncState } from "../sync/state";
 import { claudeCodeInstalled, claudeConfigDir } from "./claude-code";
-import { disableClaudeContextHook, installClaudeContextHook } from "./context";
+import {
+  disableClaudeContextHook,
+  hasClaudeContextHook,
+  installClaudeContextHook,
+} from "./context";
 import {
   addCursorHook,
   addGroupedHook,
@@ -28,6 +32,8 @@ export interface HookAgent {
   disable(): void;
   /** Extra guidance shown after enabling, when the agent needs it. */
   enableNote?(): string;
+  /** Shown by `hooks status` while enabled, when part of what enable() installs is missing. */
+  statusNote?(): string;
 }
 
 function groupedAgent(options: {
@@ -105,6 +111,10 @@ function claudeAgent(): HookAgent {
       shipping()
         ? ""
         : "Prompt-time memory stays off while transcript shipping is disabled; 'dosu knowledge transcripts enable' turns it on.",
+    statusNote: () =>
+      shipping() && !hasClaudeContextHook()
+        ? "Prompt-time memory hook (UserPromptSubmit) is missing; 'dosu knowledge hooks enable claude' adds it."
+        : "",
   };
 }
 

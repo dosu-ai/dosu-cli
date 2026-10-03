@@ -125,6 +125,34 @@ describe("Claude Code installed but never run (no ~/.claude)", () => {
     expect(settings.statusLine.command).toBe("dosu knowledge statusline render --agent claude");
   });
 
+  it("hooks status says when the prompt-time hook is missing, until hooks enable adds it", async () => {
+    // As an older CLI left it: the session-end hook only.
+    mkdirSync(join(home, ".claude"));
+    writeFileSync(
+      join(home, ".claude", "settings.json"),
+      JSON.stringify({
+        hooks: {
+          SessionEnd: [
+            { hooks: [{ type: "command", command: "dosu knowledge sync --quiet --detach" }] },
+          ],
+        },
+      }),
+    );
+    const claudeRow = async () =>
+      (JSON.parse(await dosu("hooks", "status", "--json")) as { agent: string }[]).find(
+        (row) => row.agent === "claude",
+      );
+
+    expect(await claudeRow()).toMatchObject({
+      enabled: true,
+      note: expect.stringContaining("Prompt-time memory hook (UserPromptSubmit) is missing"),
+    });
+    expect(await dosu("hooks", "status")).toContain("dosu knowledge hooks enable claude");
+
+    await dosu("hooks", "enable", "claude");
+    expect(await claudeRow()).not.toHaveProperty("note");
+  });
+
   it("hooks disable removes both hooks and nothing else of the user's", async () => {
     mkdirSync(join(home, ".claude"));
     writeFileSync(

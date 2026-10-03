@@ -867,6 +867,7 @@ function hooksCommand(): Command {
         let note: string | undefined;
         try {
           enabled = agent.isEnabled();
+          if (enabled) note = agent.statusNote?.() || undefined;
         } catch (err) {
           note = err instanceof Error ? err.message : String(err);
         }
