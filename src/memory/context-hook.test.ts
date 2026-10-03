@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { logger } from "../debug/logger";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { createShipStep } from "../shipper/runner";
 import { INCOGNITO_MARKER } from "../sync/incognito";
@@ -401,5 +402,55 @@ describe("contextHookOutput for other agents", () => {
     const fetchImpl = respond(200, { digest: DIGEST });
     expect(await contextHookOutput(stdin, { ...options, fetchImpl })).toBe("");
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+// A prompt that gets no digest looks the same to the user whatever the reason; the debug log is
+// where `dosu` says which it was, without the prompt or the digest.
+describe("contextHookOutput's debug log", () => {
+  const logged = () => readFileSync(logger.getLogPath(), "utf-8");
+
+  it("says when the server missed the budget", async () => {
+    // A server that never answers: only the hook's own budget ends the wait.
+    const fetchImpl = vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+        }),
+    );
+    const stdin = JSON.stringify({ prompt: "fix the flaky test", session_id: "ses_9", cwd: "/w" });
+
+    const out = await contextHookOutput(stdin, {
+      ...base,
+      agent: "pi",
+      format: "plain",
+      fetchImpl,
+      timeoutMs: 30,
+    });
+
+    expect(out).toBe("");
+    expect(logged()).toMatch(/\[context\] pi ses_9: no digest, no answer within the 30ms budget/);
+  });
+
+  it("records the server's answer and how long it took", async () => {
+    const answers = [
+      respond(200, { digest: DIGEST, reason: "injected", memory_ids: ["m1", "m2"] }),
+      respond(200, { digest: null, reason: "nothing_new", memory_ids: [] }),
+      respond(503, { detail: "busy" }),
+      vi.fn(async () => {
+        throw new TypeError("fetch failed");
+      }),
+    ];
+    for (const fetchImpl of answers) {
+      await contextHookOutput(payload(), { ...base, fetchImpl });
+    }
+
+    const log = logged();
+    expect(log).toMatch(/\[context\] claude-code sess-1: injected 2 memories in \d+ms/);
+    expect(log).toMatch(/\[context\] claude-code sess-1: no digest, nothing_new in \d+ms/);
+    expect(log).toMatch(/\[context\] claude-code sess-1: no digest, HTTP 503 in \d+ms/);
+    expect(log).toMatch(/\[context\] claude-code sess-1: no digest, fetch failed in \d+ms/);
+    expect(log).not.toContain("reset the local database");
+    expect(log).not.toContain("Task Memory");
   });
 });
