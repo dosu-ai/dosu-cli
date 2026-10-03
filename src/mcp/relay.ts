@@ -27,8 +27,10 @@ export interface McpRelayOptions {
   apiKey: string;
   /** x-dosu-client: the agent the proxy serves (`claude-code`, `codex`, ...). */
   client?: string;
-  /** x-dosu-project (and x-dosu-repo, the same value for older servers); null sends neither. */
-  project: string | null;
+  /** x-dosu-project (and x-dosu-repo, the same value for older servers), read for every
+   * request: the proxy may learn the session's workspace only after it starts. Null sends
+   * neither. */
+  project: () => string | null;
   /** x-dosu-branch, re-read for every request: the agent may switch branches mid-session. */
   branch: () => string | null;
   timeoutMs?: number;
@@ -193,8 +195,9 @@ export function createMcpRelay(options: McpRelayOptions): McpRelay {
       Accept: "application/json, text/event-stream",
       "X-Dosu-API-Key": options.apiKey,
     };
-    if (options.project) {
-      out["x-dosu-project"] = scopeHeader(options.project);
+    const project = options.project();
+    if (project) {
+      out["x-dosu-project"] = scopeHeader(project);
       out["x-dosu-repo"] = out["x-dosu-project"];
     }
     const branch = options.branch();

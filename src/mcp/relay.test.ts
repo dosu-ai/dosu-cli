@@ -33,7 +33,7 @@ function relayTo(srv: FakeMcpServer, options: Partial<McpRelayOptions> = {}) {
     endpoint: `${srv.baseUrl}/v2/mcp/deployments/dep1`,
     apiKey: "sk_test",
     client: "claude-code",
-    project: "git:abc",
+    project: () => "git:abc",
     branch: () => "main",
     ...options,
   });
@@ -100,7 +100,7 @@ describe("createMcpRelay", () => {
   it("sends no project, branch, or client header it has no value for", async () => {
     server = await startFakeMcpServer();
     await exchange(
-      relayTo(server, { project: null, branch: () => null, client: undefined }),
+      relayTo(server, { project: () => null, branch: () => null, client: undefined }),
       SEARCH,
     );
 
@@ -115,7 +115,7 @@ describe("createMcpRelay", () => {
   it("sends a project or branch outside ASCII as an RFC 8187 UTF-8 value", async () => {
     server = await startFakeMcpServer();
     const out = await exchange(
-      relayTo(server, { project: "团队/widget", branch: () => "rv/日本-café" }),
+      relayTo(server, { project: () => "团队/widget", branch: () => "rv/日本-café" }),
       SEARCH,
     );
 
@@ -130,7 +130,7 @@ describe("createMcpRelay", () => {
   it("sends ASCII scope values as they are, unless they could be read as encoded", async () => {
     server = await startFakeMcpServer();
     await exchange(
-      relayTo(server, { project: "path:/w/a b%20c", branch: () => "UTF-8''x" }),
+      relayTo(server, { project: () => "path:/w/a b%20c", branch: () => "UTF-8''x" }),
       SEARCH,
     );
 
@@ -358,7 +358,7 @@ describe("createMcpRelay", () => {
     const relay = createMcpRelay({
       endpoint: `http://127.0.0.1:${port}/v2/mcp`,
       apiKey: "k",
-      project: null,
+      project: () => null,
       branch: () => null,
     });
     const [reply] = (await exchange(relay, SEARCH)) as Array<{ error: { message: string } }>;

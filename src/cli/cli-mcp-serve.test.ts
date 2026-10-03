@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
@@ -232,5 +233,103 @@ describe("dosu mcp serve", () => {
 
     expect(process.exitCode).toBe(1);
     expect(stderr.join("")).toContain("backend URL");
+  });
+});
+
+describe("an agent that starts the proxy outside its workspace", () => {
+  // GUI hosts (Cursor, Claude Desktop, VS Code) may start a global server in / or the home
+  // directory; MCP roots are how such an agent names the workspace it has open.
+  const SEARCH = {
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/call",
+    params: { name: "search_memory", arguments: { query: "q" } },
+  };
+
+  // biome-ignore lint/suspicious/noExplicitAny: JSON-RPC lines are arbitrary JSON
+  function lines(): any[] {
+    return stdout
+      .join("")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  }
+
+  /** A session for an agent that declares the roots capability. When the proxy asks for roots,
+   * `answer` gives the agent's reply to that request id; undefined leaves it unanswered. */
+  async function session(answer?: (id: unknown) => unknown): Promise<string> {
+    const input = new Readable({ read() {} });
+    vi.spyOn(process, "stdin", "get").mockReturnValue(input as unknown as typeof process.stdin);
+    const program = createProgram();
+    program.exitOverride();
+    const running = program.parseAsync(["node", "dosu", "mcp", "serve", "--client", "cursor"]);
+    const send = (message: unknown) => input.push(`${JSON.stringify(message)}\n`);
+    const [initialize, initialized] = HANDSHAKE as [{ params: object }, unknown];
+    send({ ...initialize, params: { ...initialize.params, capabilities: { roots: {} } } });
+    await vi.waitFor(() => expect(lines().map((m) => m.id)).toContain(1));
+    send(initialized);
+    if (answer) {
+      await vi.waitFor(() => expect(lines().map((m) => m.method)).toContain("roots/list"));
+      send(answer(lines().find((m) => m.method === "roots/list").id));
+    }
+    send(SEARCH);
+    await vi.waitFor(() => expect(lines().map((m) => m.id)).toContain(2), { timeout: 5_000 });
+    input.push(null);
+    await running;
+    return lines().find((m) => m.id === 2).result.content[0].text;
+  }
+
+  it("scopes the session by the workspace root the agent names", async () => {
+    setUp();
+    const { dir, root } = noOriginClone("main");
+    process.chdir(home);
+
+    const text = await session((id) => ({
+      jsonrpc: "2.0",
+      id,
+      result: { roots: [{ uri: pathToFileURL(dir).href, name: "widget" }] },
+    }));
+
+    expect(text).toContain(`project=git:${root} repo=git:${root} branch=main client=cursor`);
+    // The agent's answer is the proxy's own business, not the server's.
+    expect(server.requests.map((r) => r.body.method)).toEqual([
+      "initialize",
+      "notifications/initialized",
+      "tools/call",
+    ]);
+  });
+
+  it("asks nothing when the directory it started in has a project of its own", async () => {
+    setUp();
+    const { dir, root } = noOriginClone("main");
+    process.chdir(dir);
+
+    const text = await session();
+
+    expect(text).toContain(`project=git:${root}`);
+    expect(lines().map((m) => m.method)).not.toContain("roots/list");
+  });
+
+  it("keeps the directory it started in when the agent has no roots to give", async () => {
+    setUp();
+    process.chdir(home);
+
+    const text = await session((id) => ({
+      jsonrpc: "2.0",
+      id,
+      error: { code: -32601, message: "Method not found" },
+    }));
+
+    expect(text).toContain(`project=path:${home} `);
+  });
+
+  it("goes on without the roots of an agent that never answers", async () => {
+    setUp();
+    process.chdir(home);
+
+    const text = await session();
+
+    expect(lines().map((m) => m.method)).toContain("roots/list");
+    expect(text).toContain(`project=path:${home} `);
   });
 });

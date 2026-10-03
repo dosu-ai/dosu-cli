@@ -108,8 +108,11 @@ Memory pulled over MCP is scoped by the same key. Every agent's Dosu MCP entry r
 proxy, `dosu mcp serve --client <agent>`, which resolves the key once for the directory the agent
 started it in and sends it as `x-dosu-project` (and `x-dosu-repo`, for older servers) with every
 request, along with the branch checked out at that moment (`x-dosu-branch`) and the agent
-(`x-dosu-client`). `dosu memory search` and `dosu memory evidence` send the same headers from the
-current directory. A value with characters outside ASCII (a linked key, a checkout path, a branch
+(`x-dosu-client`). When that directory has no key of its own (no link, no `DOSU_PROJECT`, not in
+a checkout), as when a GUI host such as Cursor or Claude Desktop starts a global server in `/` or
+the home directory, the proxy asks an agent that supports MCP roots for its workspace roots and
+scopes the session by the first local one instead. `dosu memory search` and `dosu memory evidence`
+send the same headers from the current directory. A value with characters outside ASCII (a linked key, a checkout path, a branch
 name) goes as an RFC 8187 value, `UTF-8''` followed by its percent-encoded UTF-8, which the server
 decodes; any other value goes as it is.
 
