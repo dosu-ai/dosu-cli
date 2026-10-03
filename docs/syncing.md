@@ -60,7 +60,11 @@ A background subagent (or background shell command) reports back by injecting a
 drops those as harness noise, but they are what the model acted on next, the way a foreground
 subagent's result is its tool result. So the CLI keeps each one in place as an `observation`
 record (input the agent received that nobody typed): the session's trace stays readable on its own,
-and the subagent's full work ships separately, linked by `parent_session_id`.
+and the subagent's full work ships separately, linked by `parent_session_id`. When the session is
+busy as the notification arrives (the usual case interactively), Claude Code queues it and logs it
+as an `attachment` row (`queued_command`), which the normalizer skips entirely; the CLI turns those
+back into the input they stand for. The same goes for a message the user typed mid-turn, which
+ships as a user record, and one from another agent session, which ships as an observation.
 
 **Worthiness** is judged on what would ship: the normalized, redacted trajectory. Text, tool
 arguments, and tool results all count toward the 2,000 characters, so a terse run that did its work

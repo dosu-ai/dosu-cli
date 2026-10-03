@@ -274,6 +274,45 @@ describe("knowledge sync of a session with a background agent", () => {
     ]);
     expect(shipped["agent-a1"].metadata.parent_session_id).toBe("parent");
   });
+
+  it("keeps a result Claude Code queued while the session was busy", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    const rows = exchange(1, alpha, { sessionId: "parent" });
+    rows.push(
+      // The usual delivery in an interactive session: the agent finished mid-turn, so the
+      // notification waited in the queue and was logged as an attachment, not a user message.
+      {
+        type: "attachment",
+        uuid: "q1",
+        sessionId: "parent",
+        isSidechain: false,
+        timestamp: "2026-10-02T10:05:00.000Z",
+        attachment: {
+          type: "queued_command",
+          commandMode: "task-notification",
+          prompt:
+            "<task-notification>\n<task-id>a1</task-id>\n<status>completed</status>\n" +
+            "<result>The flaky test is test_retry: it sleeps on wall-clock time.</result>\n" +
+            "</task-notification>",
+        },
+      },
+      ...exchange(6, alpha, { sessionId: "parent" }).slice(1),
+    );
+    claudeSession("parent", rows, 30);
+    subagent("parent", "a1", 2, alpha, 31);
+
+    await dosu("sync");
+
+    const { parent } = postedBySession();
+    expect(parent.records.map((r) => r.role)).toEqual([
+      "meta",
+      "user",
+      "assistant",
+      "observation",
+      "assistant",
+    ]);
+    expect(parent.records[3].content).toContain("The flaky test is test_retry");
+  });
 });
 
 describe("status views", () => {

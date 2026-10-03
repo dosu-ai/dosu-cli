@@ -9,7 +9,7 @@ import type { NormalizedRecord, TranscriptTrajectorySource } from "@letta-ai/tra
 import { logger } from "../debug/logger";
 import { redactSecrets } from "../sessions/redact";
 import type { AgentSession } from "../sessions/scan";
-import { markTaskNotifications, notificationsAsObservations } from "./task-notifications";
+import { markClaudeInputs, markedAsObservations } from "./claude-inputs";
 
 /** Harness → trajectory source. opencode is absent: its adapter wants the exported
  * `{ info, messages }` session JSON, which the scanner's sqlite rows do not provide yet. */
@@ -74,13 +74,13 @@ export async function normalizeSessionRecords(
   try {
     // Dynamic so ship-free CLI paths never pay for the normalizer.
     const { normalizeTranscript } = await import("@letta-ai/trajectory");
-    // Claude Code's background-task results would be dropped as noise; keep them as observations.
+    // Claude Code's background-task results and queued input would be dropped; keep them.
     const claude = source === "claude-code";
     const { records } = normalizeTranscript({
       source,
-      transcript: claude ? markTaskNotifications(transcript) : transcript,
+      transcript: claude ? markClaudeInputs(transcript) : transcript,
     });
-    return redactRecords(claude ? notificationsAsObservations(records) : records);
+    return redactRecords(claude ? markedAsObservations(records) : records);
   } catch (err) {
     const code = (err as { code?: unknown } | null)?.code;
     if (typeof code === "string" && EMPTY_CONVERSATION_CODES.has(code)) return [];
