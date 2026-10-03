@@ -206,6 +206,11 @@ Properties worth knowing:
   is skipped as a unit.
 - It is **one-way** for that session. Start a new session to have Dosu learn again. Resuming the
   same session keeps it incognito.
+- It carries over to a Codex session's **subagents and forks**, whose rollouts hold no marker of
+  their own (a subagent's starts with the parent's history only when spawned with it; a fork's on
+  0.160 references its source instead of copying it): a rollout whose `session_meta` names a
+  `parent_thread_id` or `forked_from_id` is off the record when any rollout up that chain carries
+  the marker, for shipping and for the prompt-time memory hook alike.
 - The command **instructs** the model to avoid Dosu tools; it does not block them. A `PreToolUse`
   hook that rejects Dosu tool calls when the marker is present is a possible follow-up.
 - OpenCode has no slash-command install here, but its sessions are checked for the marker too.

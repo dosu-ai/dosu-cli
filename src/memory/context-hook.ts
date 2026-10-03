@@ -18,7 +18,11 @@ import { GIT_BUDGETS, projectOverride, resolveProjectOfDir } from "../sessions/p
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { SESSION_HARNESSES } from "../sessions/scan";
 import { trajectorySourceOf } from "../shipper/normalize";
-import { textHasIncognitoMarker, transcriptHasIncognitoMarker } from "../sync/incognito";
+import {
+  codexRolloutIncognito,
+  textHasIncognitoMarker,
+  transcriptHasIncognitoMarker,
+} from "../sync/incognito";
 
 /** Retrieval is ~0.6s warm and ~2.5s cold, plus ~0.15s for the classifier. Past this the user
  * is waiting on us, and a late digest is not worth a stalled prompt. */
@@ -115,14 +119,16 @@ export async function contextHookOutput(
   // The prompt is sent to Dosu and logged as the retrieval query, so a session the user took
   // off the record must not be queried either -- same opt-out transcript shipping honors.
   if (textHasIncognitoMarker(prompt)) return "";
+  const agent = options.agent ?? CLAUDE_CODE_AGENT;
   const transcript = str(payload.transcript_path);
-  const isIncognito = options.isIncognito ?? transcriptHasIncognitoMarker;
+  const isIncognito =
+    options.isIncognito ??
+    (agent === "codex" ? codexRolloutIncognito : transcriptHasIncognitoMarker);
   if (transcript && isIncognito(transcript)) return "";
 
   const cwd = str(payload.cwd);
   const branch = cwd ? (options.branchOf?.(cwd) ?? null) : null;
   const fetchImpl = options.fetchImpl ?? fetch;
-  const agent = options.agent ?? CLAUDE_CODE_AGENT;
   try {
     const sessionId = sessionIdOf(payload, format);
     const harness = harnessOf(agent);

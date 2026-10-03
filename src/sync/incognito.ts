@@ -4,6 +4,7 @@
  * reading the transcript. No session-id mapping, no extra state: the transcript is the switch. */
 
 import { closeSync, fstatSync, openSync, readSync } from "node:fs";
+import { codexAncestorRollouts } from "../sessions/codex-lineage";
 import { readSessionTurns } from "../sessions/read";
 import type { AgentSession } from "../sessions/scan";
 
@@ -63,7 +64,19 @@ export function isIncognitoSession(session: AgentSession): boolean {
   if (session.harness === "opencode") {
     return readSessionTurns(session).some((turn) => textHasIncognitoMarker(turn.text));
   }
+  if (session.harness === "codex") return codexRolloutIncognito(session.path);
   return transcriptHasIncognitoMarker(session.path);
+}
+
+/** A Codex rollout is off the record when it, or a rollout it descends from, carries the marker:
+ * a subagent's rollout (unless spawned with its parent's history) and a fork's (0.160 references
+ * its source instead of copying it) hold none of the session they came from. */
+export function codexRolloutIncognito(path: string): boolean {
+  if (transcriptHasIncognitoMarker(path)) return true;
+  for (const ancestor of codexAncestorRollouts(path)) {
+    if (transcriptHasIncognitoMarker(ancestor)) return true;
+  }
+  return false;
 }
 
 export interface IncognitoPartition {

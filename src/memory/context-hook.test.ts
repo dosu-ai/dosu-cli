@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { createShipStep } from "../shipper/runner";
 import { INCOGNITO_MARKER } from "../sync/incognito";
@@ -281,6 +281,57 @@ describe("contextHookOutput for other agents", () => {
       session_id: ROLLOUT,
       project: "path:/work/widget",
     });
+  });
+
+  it("asks nothing for a Codex subagent or fork of a session taken off the record", async () => {
+    const codexHome = mkdtempSync(join(tmpdir(), "dosu-codex-home-"));
+    onTestFinished(() => rmSync(codexHome, { recursive: true, force: true }));
+    const sessions = join(codexHome, "sessions", "2026", "10", "02");
+    mkdirSync(sessions, { recursive: true });
+    const rollout = (name: string, meta: Record<string, unknown>, text: string) => {
+      const path = join(sessions, `${name}.jsonl`);
+      const items = [
+        { type: "session_meta", payload: { id: name.slice(-36), cwd: "/work/widget", ...meta } },
+        {
+          type: "response_item",
+          payload: { type: "message", role: "user", content: [{ type: "input_text", text }] },
+        },
+      ];
+      writeFileSync(path, `${items.map((item) => JSON.stringify(item)).join("\n")}\n`);
+      return path;
+    };
+    const parent = "01a0ff74-a68d-7ad0-83ee-80cf02c29b14";
+    rollout(`rollout-2026-10-02T18-50-30-${parent}`, {}, `${INCOGNITO_MARKER} keep it out`);
+    const subagent = rollout(
+      "rollout-2026-10-02T18-50-38-01a0ff74-c903-73c2-b6b1-7546b84710ff",
+      { parent_thread_id: parent, thread_source: "subagent" },
+      "write the tests",
+    );
+    const fork = rollout(
+      "rollout-2026-10-02T18-56-30-01a0ff7a-277c-74f1-b64b-59ffa01a7d14",
+      { forked_from_id: parent },
+      "go on",
+    );
+    const unrelated = rollout(
+      "rollout-2026-10-02T19-10-00-01a0ff86-0000-7000-8000-000000000002",
+      { parent_thread_id: "01a0ff86-0000-7000-8000-00000000ffff", thread_source: "subagent" },
+      "write the docs",
+    );
+    const { isIncognito: _, ...defaults } = codex;
+    const fetchImpl = respond(200, { digest: DIGEST });
+
+    for (const transcript_path of [subagent, fork]) {
+      expect(
+        await contextHookOutput(codexPayload({ transcript_path }), { ...defaults, fetchImpl }),
+      ).toBe("");
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+    // A subagent whose parent's rollout is gone, or on the record, is asked about as usual.
+    await contextHookOutput(codexPayload({ transcript_path: unrelated }), {
+      ...defaults,
+      fetchImpl,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("a Codex session ships under the DOSU_PROJECT its prompts were served by", async () => {

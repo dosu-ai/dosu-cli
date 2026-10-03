@@ -7,16 +7,18 @@ import {
   mkdirSync,
   mkdtempSync,
   realpathSync,
+  renameSync,
   rmSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
+import { INCOGNITO_MARKER } from "../sync/incognito";
 import { emptySyncState, saveSyncState } from "../sync/state";
 import { knowledgeCommand } from "./knowledge";
 
@@ -136,6 +138,7 @@ function codexRollout(
   cwd: string,
   minutesAgo: number,
   meta: Record<string, unknown> = {},
+  prompt = "question",
 ): string {
   const dir = join(home, ".codex", "sessions", "2026", "10", "02");
   mkdirSync(dir, { recursive: true });
@@ -151,7 +154,7 @@ function codexRollout(
       payload: {
         type: "message",
         role: "user",
-        content: [{ type: "input_text", text: "question" }],
+        content: [{ type: "input_text", text: prompt }],
       },
     },
     {
@@ -310,6 +313,37 @@ describe("knowledge sync of Codex subagents", () => {
       [parent]: undefined,
       "rollout-2026-10-02T17-33-26-01a0ff2e-1861-7b61-a549-34bdff8539e0": parent,
     });
+  });
+});
+
+describe("knowledge sync of an incognito Codex session's descendants", () => {
+  it("keeps its subagents and its forks off the record, which carry no marker of their own", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    const parentId = "01a0ff74-a68d-7ad0-83ee-80cf02c29b14";
+    const parent = codexRollout(
+      `rollout-2026-10-02T18-50-30-${parentId}`,
+      alpha,
+      30,
+      {},
+      `${INCOGNITO_MARKER} keep this one out`,
+    );
+    // Archived since: found there all the same.
+    mkdirSync(join(home, ".codex", "archived_sessions"));
+    renameSync(parent, join(home, ".codex", "archived_sessions", basename(parent)));
+    const subagent = "rollout-2026-10-02T18-50-38-01a0ff74-c903-73c2-b6b1-7546b84710ff";
+    codexRollout(subagent, alpha, 30, { parent_thread_id: parentId, thread_source: "subagent" });
+    const fork = "rollout-2026-10-02T18-56-30-01a0ff7a-277c-74f1-b64b-59ffa01a7d14";
+    codexRollout(fork, alpha, 30, { forked_from_id: parentId, thread_source: "user" });
+    // A fork of the subagent: off the record two links up.
+    codexRollout("rollout-2026-10-02T19-00-00-01a0ff7d-0000-7000-8000-000000000001", alpha, 30, {
+      forked_from_id: "01a0ff74-c903-73c2-b6b1-7546b84710ff",
+    });
+    const other = "rollout-2026-10-02T19-10-00-01a0ff86-0000-7000-8000-000000000002";
+    codexRollout(other, alpha, 30);
+
+    await dosu("sync");
+
+    expect(posted().map((p) => p.metadata.session_id)).toEqual([other]);
   });
 });
 
