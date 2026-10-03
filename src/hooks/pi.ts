@@ -74,10 +74,12 @@ function piExtensionSource(dosu: DosuInvocation = dosuInvocation()): string {
 // - before each agent run, the CLI may answer the prompt with a memory digest, added to the
 //   conversation as a hidden message;
 // - search_memory and get_memory_evidence pull memory on demand;
-// - /${INCOGNITO_COMMAND_NAME} takes the session off the record: no digest, no memory tools, never shipped.
+// - /${INCOGNITO_COMMAND_NAME} takes the session off the record: no digest, no memory tools, never shipped;
+//   a fork or clone of such a session stays off too.
 // Nothing here runs when pi starts with --no-extensions.
 
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 const DOSU = ${JSON.stringify(dosu)};
 const INCOGNITO_MARKER = ${JSON.stringify(INCOGNITO_MARKER)};
@@ -88,6 +90,8 @@ const CONTEXT_TIMEOUT_MS = 6000;
 const TOOL_TIMEOUT_MS = 60000;
 // How long quitting pi waits for the sync to take the ended session.
 const HANDOFF_TIMEOUT_MS = 3000;
+// How far up a chain of forks of forks session_start looks for the incognito marker.
+const MAX_FORK_DEPTH = 32;
 
 function launch(args, options) {
   return spawn(DOSU.command, [...DOSU.args, ...args], {
@@ -178,6 +182,37 @@ function isIncognitoEntry(entry) {
   );
 }
 
+function parseLine(line) {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return null;
+  }
+}
+
+// Whether the transcript a fork or clone was copied from, or one that was copied from in turn,
+// has the user's incognito turn: a fork made before the marker holds what the session did off
+// the record, and carries on from there.
+function forkedFromIncognito(path) {
+  const seen = new Set();
+  while (typeof path === "string" && !seen.has(path) && seen.size < MAX_FORK_DEPTH) {
+    seen.add(path);
+    let text;
+    try {
+      text = readFileSync(path, "utf-8");
+    } catch {
+      return false;
+    }
+    const lines = text.split("\n");
+    if (text.includes(INCOGNITO_MARKER) && lines.some((line) => isIncognitoEntry(parseLine(line)))) {
+      return true;
+    }
+    const header = parseLine(lines[0]);
+    path = header?.type === "session" ? header.parentSession : undefined;
+  }
+  return false;
+}
+
 export default function dosuForPi(pi) {
   let incognito = false;
 
@@ -186,8 +221,10 @@ export default function dosuForPi(pi) {
   };
 
   pi.on("session_start", (_event, ctx) => {
-    // A resumed session that went incognito stays incognito.
-    incognito = ctx.sessionManager.getEntries().some(isIncognitoEntry);
+    // A resumed session that went incognito stays incognito, and so does a fork or clone of one.
+    incognito =
+      ctx.sessionManager.getEntries().some(isIncognitoEntry) ||
+      forkedFromIncognito(ctx.sessionManager.getHeader?.()?.parentSession);
     if (incognito) hideMemoryTools();
   });
 

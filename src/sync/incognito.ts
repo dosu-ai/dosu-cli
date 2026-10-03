@@ -4,6 +4,7 @@
  * reading the transcript. No session-id mapping, no extra state: the transcript is the switch. */
 
 import { closeSync, fstatSync, openSync, readSync } from "node:fs";
+import { readPiHeader } from "../sessions/pi";
 import { readSessionTurns } from "../sessions/read";
 import type { AgentSession } from "../sessions/scan";
 
@@ -57,19 +58,40 @@ export function transcriptHasIncognitoMarker(
   }
 }
 
+/** How far up a chain of forks of forks the pi check looks. */
+const MAX_FORK_DEPTH = 32;
+
+/** pi's /dosu-incognito (the Dosu pi extension) sends the marker as a user message, so only the
+ * user's turns count: a session whose model merely read a file quoting the marker still ships.
+ * The transcript a fork or clone was copied from counts too, at any depth: a fork made before
+ * the marker holds what the session did off the record and carries on from there. */
+function piSessionIsIncognito(session: AgentSession): boolean {
+  const seen = new Set<string>();
+  let path: string | undefined = session.path;
+  while (path && !seen.has(path) && seen.size < MAX_FORK_DEPTH) {
+    seen.add(path);
+    const transcript = { ...session, path };
+    if (
+      transcriptHasIncognitoMarker(path) &&
+      readSessionTurns(transcript).some(
+        (turn) => turn.role === "user" && textHasIncognitoMarker(turn.text),
+      )
+    ) {
+      return true;
+    }
+    path = readPiHeader(path)?.parentSession;
+  }
+  return false;
+}
+
 /** Whether a scanned session opted out. File-backed harnesses scan the raw transcript; opencode
- * (SQLite) falls back to the parsed turns. pi's /dosu-incognito (the Dosu pi extension) sends the
- * marker as a user message, so only the user's turns count there: a session whose model merely
- * read a file quoting the marker still ships. Never throws. */
+ * (SQLite) falls back to the parsed turns; pi reads its user turns, and those of the sessions it
+ * was forked from. Never throws. */
 export function isIncognitoSession(session: AgentSession): boolean {
   if (session.harness === "opencode") {
     return readSessionTurns(session).some((turn) => textHasIncognitoMarker(turn.text));
   }
-  if (session.harness === "pi") {
-    return readSessionTurns(session).some(
-      (turn) => turn.role === "user" && textHasIncognitoMarker(turn.text),
-    );
-  }
+  if (session.harness === "pi") return piSessionIsIncognito(session);
   return transcriptHasIncognitoMarker(session.path);
 }
 

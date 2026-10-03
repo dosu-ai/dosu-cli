@@ -120,8 +120,12 @@ function fakePi() {
 
 const TRANSCRIPT_NAME = "2026-10-02T17-59-42-611Z_01a0fdc5-a112.jsonl";
 
-/** pi's context for a session in `cwd`. */
-function piContext(entries: unknown[] = [], transcript: string | undefined = undefined) {
+/** pi's context for a session in `cwd`; `parentSession` is the transcript a fork copied. */
+function piContext(
+  entries: unknown[] = [],
+  transcript: string | undefined = undefined,
+  parentSession: string | undefined = undefined,
+) {
   return {
     cwd,
     isIdle: () => true,
@@ -129,6 +133,7 @@ function piContext(entries: unknown[] = [], transcript: string | undefined = und
       getSessionId: () => "01a0fdc5-a112",
       getSessionFile: () => transcript,
       getEntries: () => entries,
+      getHeader: () => ({ type: "session", id: "01a0fdc5-a112", cwd, parentSession }),
     },
   };
 }
@@ -356,6 +361,47 @@ describe("the Dosu pi extension", () => {
       undefined,
     );
     expect(calls()).toEqual([]);
+  });
+
+  it("a fork or clone of an incognito session stays off, at any depth", async () => {
+    const userTurn = (text: string) => ({
+      type: "message",
+      message: { role: "user", content: [{ type: "text", text }] },
+    });
+    const transcript = (name: string, entries: unknown[], parentSession?: string) => {
+      const path = join(fakeHome, `${name}.jsonl`);
+      const header = { type: "session", id: name, cwd, parentSession };
+      writeFileSync(path, `${[header, ...entries].map((e) => JSON.stringify(e)).join("\n")}\n`);
+      return path;
+    };
+    const incognito = transcript("incognito", [
+      userTurn("hi"),
+      userTurn("Dosu incognito marker: dosu:incognito:v1"),
+    ]);
+    // Forked before the marker: the copy has the work, not the marker.
+    const fork = transcript("fork", [userTurn("hi")], incognito);
+    const plain = transcript("plain", [userTurn("hi")]);
+
+    for (const parent of [incognito, fork]) {
+      const pi = await loadExtension();
+      pi.handlers.get("session_start")?.(
+        { reason: "fork" },
+        piContext([userTurn("hi")], undefined, parent),
+      );
+      expect(pi.active()).toEqual(["read", "bash"]);
+      expect(await pi.handlers.get("before_agent_start")?.({ prompt: "q" }, piContext())).toBe(
+        undefined,
+      );
+    }
+    expect(calls()).toEqual([]);
+
+    // A fork of a session that never went incognito keeps Dosu on.
+    const pi = await loadExtension();
+    pi.handlers.get("session_start")?.(
+      { reason: "fork" },
+      piContext([userTurn("hi")], undefined, plain),
+    );
+    expect(pi.active()).toContain("search_memory");
   });
 
   it("never breaks pi when the CLI is missing", async () => {

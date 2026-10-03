@@ -273,6 +273,31 @@ describe("knowledge sync of pi sessions", () => {
     expect(posted().map((p) => p.metadata.session_id)).toEqual(["quoting"]);
     expect(loadSyncState().sessions["pi/incognito"]?.outcome).toBe("incognito");
   });
+
+  it("keeps a fork or clone of an incognito session off the record, even one made before the marker", async () => {
+    const widget = gitRepo("widget", "git@github.com:acme/widget.git");
+    const incognito = piSession("incognito", widget, [
+      ...exchange(1),
+      ...exchange(2, "Dosu incognito marker: dosu:incognito:v1\n\nDosu is off for this session."),
+    ]);
+    // /fork onto the message before the marker: the copy holds the work, not the marker.
+    const fork = piSession("fork", widget, [...exchange(1), ...exchange(3)], {
+      parentSession: incognito,
+    });
+    piSession("fork-of-fork", widget, [...exchange(1), ...exchange(3), ...exchange(4)], {
+      parentSession: fork,
+    });
+
+    await dosu("sync");
+
+    expect(posted()).toEqual([]);
+    const ledger = loadSyncState().sessions;
+    expect(["pi/incognito", "pi/fork", "pi/fork-of-fork"].map((k) => ledger[k]?.outcome)).toEqual([
+      "incognito",
+      "incognito",
+      "incognito",
+    ]);
+  });
 });
 
 describe("knowledge sync from the Dosu pi extension's session_shutdown", () => {

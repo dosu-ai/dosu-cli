@@ -237,7 +237,10 @@ extension shells out to `dosu` on PATH for everything, so it carries no credenti
 - `/dosu-incognito` sends the incognito marker as the user's own message (which is what keeps the
   session from shipping), removes the two memory tools from the model's tool set, and stops digests;
   a resumed incognito session stays off. For pi only the user's turns are searched for the marker,
-  so a session whose model read a file quoting it still ships.
+  so a session whose model read a file quoting it still ships. A fork or clone of an incognito
+  session (or of a fork of one, at any depth) stays off too, in the extension and in the sync, even
+  when it was forked from a message before the marker: it holds what the session did off the
+  record and carries on from there.
 
 Pi started with `--no-extensions` (`-ne`) loads none of this: no digest, no tools, and its sessions
 ship only on a later sync once they have been quiet for five minutes (an explicit
