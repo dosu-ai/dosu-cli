@@ -448,6 +448,31 @@ describe("status views", () => {
     ]);
   });
 
+  it("say what became of every subagent transcript a run settled, not only the shipped ones", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    claudeSession("parent", exchange(1, alpha, { sessionId: "parent" }), 30);
+    subagent("parent", "a1", 2, alpha, 31);
+    subagent("parent", "a2", 3, alpha, 32);
+    // Too small to learn from.
+    const short = exchange(4, alpha, { isSidechain: true, agentId: "a3", sessionId: "parent" });
+    short[1] = { ...short[1], message: { role: "assistant", content: "ok" } };
+    write(join(PROJECTS(), "parent", "subagents", "agent-a3.jsonl"), short, 33);
+    // The backend refuses one transcript.
+    fetchImpl.mockImplementation(async (_url, init) =>
+      JSON.parse(init?.body as string).metadata.session_id === "agent-a2"
+        ? new Response("bad payload", { status: 422 })
+        : new Response(JSON.stringify({ task_id: "task" }), { status: 202 }),
+    );
+
+    const said = await output("sync");
+
+    expect(said).toContain("Shipped 1 session to Dosu memory (+1 subagent transcript)");
+    expect(said).toContain("Subagent transcripts passed over: 1 trivial · 1 rejected");
+    expect(await output("sync", "--status")).toMatch(
+      /Subagents: +1 shipped · 1 trivial · 1 rejected\n/,
+    );
+  });
+
   it("list a session's pending subagents with it, not as sessions of their own", async () => {
     const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
     claudeSession("parent", exchange(1, alpha, { sessionId: "parent" }), 30);

@@ -89,12 +89,14 @@ export interface ShipSessionResult {
   message?: string;
 }
 
+/** How a run settled the subagents' transcripts it examined, apart from the sessions. */
+type SubagentCounts = Record<Exclude<ShipSessionResult["outcome"], "failed">, number>;
+
 /** How a run disposed of the sessions it examined. A subagent's transcript is part of its
- * session: it counts only in `subagents` when it ships, and in `failed` when it fails. */
+ * session: it counts only in `subagents` when it settles, and in `failed` when it fails. */
 interface ShipCounts {
   shipped: number;
-  /** Subagents' transcripts shipped, apart from the sessions they worked for. */
-  subagents: number;
+  subagents: SubagentCounts;
   /** Opted out with `/dosu-incognito`; never uploaded. */
   incognito: number;
   /** Too small to plausibly hold anything worth learning; never uploaded. */
@@ -462,7 +464,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
 
     const counts: ShipCounts = {
       shipped: 0,
-      subagents: 0,
+      subagents: { shipped: 0, trivial: 0, incognito: 0, rejected: 0, unsupported: 0 },
       incognito: 0,
       trivial: 0,
       unsupported: 0,
@@ -503,7 +505,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       // No result: the batch stopped at an earlier failure; still pending.
       if (!result) continue;
       if (!session.parentId || result.outcome === "failed") counts[result.outcome] += 1;
-      else if (result.outcome === "shipped") counts.subagents += 1;
+      else counts.subagents[result.outcome] += 1;
       const entry = ledgerEntry(result, locked.sessions[key], at, cliVersion);
       if (!entry) {
         error = result.message ?? "unknown error";
@@ -538,9 +540,14 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     } catch {
       // Persisting progress is best-effort; the accepted tasks are already server-side.
     }
+    const subagents = Object.entries(counts.subagents)
+      .filter(([, n]) => n > 0)
+      .map(([outcome, n]) => `${n} ${outcome}`);
     logger.debug(
       "sync",
-      `ship phase: ${counts.shipped} shipped (+${counts.subagents} subagent transcripts), ${counts.incognito} incognito, ${counts.trivial} trivial, ${counts.unsupported} unsupported, ${counts.rejected} rejected, ${counts.failed} failed`,
+      `ship phase: ${counts.shipped} shipped, ${counts.incognito} incognito, ${counts.trivial} trivial, ${counts.unsupported} unsupported, ${counts.rejected} rejected, ${counts.failed} failed${
+        subagents.length > 0 ? `; subagent transcripts: ${subagents.join(", ")}` : ""
+      }`,
     );
     return {
       status: counts.failed > 0 ? "ship-failed" : "shipped",

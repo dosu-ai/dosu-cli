@@ -773,22 +773,34 @@ function printSyncOutcome(outcome: SyncOutcome): void {
     case "ship-failed": {
       const {
         shipped = 0,
-        subagents = 0,
+        subagents,
         incognito = 0,
         trivial = 0,
         unsupported = 0,
         rejected = 0,
       } = outcome.counts ?? {};
       const passed = incognito + trivial + unsupported + rejected;
+      const subagentsShipped = subagents?.shipped ?? 0;
       console.log(
         `✓ Shipped ${shipped} session${plural(shipped)} to Dosu memory${
-          subagents > 0 ? ` (+${subagents} subagent transcript${plural(subagents)})` : ""
+          subagentsShipped > 0
+            ? ` (+${subagentsShipped} subagent transcript${plural(subagentsShipped)})`
+            : ""
         }${
           passed > 0
             ? pc.dim(` (${passed} passed over: incognito, too short, unsupported, or rejected)`)
             : ""
         }.`,
       );
+      // Subagents' transcripts settle on their own; say which ones did not ship, and why.
+      const subagentsPassed = Object.entries(subagents ?? {})
+        .filter(([o, n]) => o !== "shipped" && n > 0)
+        .map(([o, n]) => `${n} ${o}`);
+      if (subagentsPassed.length > 0) {
+        console.log(
+          pc.dim(`Subagent transcripts passed over: ${subagentsPassed.join(" \u00B7 ")}.`),
+        );
+      }
       if (outcome.status === "ship-failed") {
         console.log(
           pc.yellow(`Shipping stopped: ${outcome.error ?? "unknown error"}. It will be retried.`),
