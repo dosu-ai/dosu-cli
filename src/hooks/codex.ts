@@ -15,10 +15,10 @@
 
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, readFileSync, rmSync, statSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { writeSecureFile } from "../mcp/config-helpers";
-import { expandHome, isInstalled } from "../mcp/detect";
+import { expandHome, isInstalled, isOnPath } from "../mcp/detect";
 import type { HookAgent } from "./agents";
 import {
   applyHookTrust,
@@ -71,9 +71,7 @@ function codexHome(): string {
  * first run, and a freshly provisioned machine (a throwaway VM) sets up Dosu before that run: the
  * hooks and the MCP entry must already be there when it happens. */
 export function codexInstalled(): boolean {
-  if (isInstalled([codexHome()])) return true;
-  const path = process.env.PATH ?? "";
-  return path.split(delimiter).some((dir) => dir !== "" && existsSync(join(dir, "codex")));
+  return isInstalled([codexHome()]) || isOnPath("codex");
 }
 
 /** The `codex` on PATH's version, from `codex --version` ("codex-cli 0.160.0"); null when there
