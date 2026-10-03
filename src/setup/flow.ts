@@ -77,7 +77,8 @@ export interface ConfigResult {
   provider: SetupProvider;
   action: ConfigAction;
   error?: Error;
-  /** Set when a knowledge sync hook was enabled alongside this agent's MCP install. */
+  /** Set when a knowledge sync hook was enabled alongside this agent's MCP install, or when its
+   * removal left a note. */
   hook?: HookResult;
   /** Set when the Dosu status line was installed alongside the hook. */
   statusline?: BundleItem;
@@ -1204,7 +1205,7 @@ function syncSessionHook(providerID: string, action: "enable" | "disable"): Hook
     if (action === "enable") agent.enable();
     else agent.disable();
     logger.info("setup", `Knowledge sync hook ${action}d for ${providerID}`);
-    const note = agent.enableNote?.();
+    const note = action === "enable" ? agent.enableNote?.() : agent.disableNote?.();
     return { name: agent.name(), path: agent.configPath(), ...(note ? { note } : {}) };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -1284,8 +1285,9 @@ export function stepConfigureTools(cfg: Config, selection: ToolSelection): Confi
     try {
       provider.remove(true);
       logger.info("setup", `Removed ${provider.name()}`);
-      results.push({ provider, action: "remove" });
-      syncSessionHook(provider.id(), "disable");
+      // What the hook left behind, and why: the incognito command, while transcripts ship.
+      const hook = syncSessionHook(provider.id(), "disable");
+      results.push({ provider, action: "remove", ...(hook?.note ? { hook } : {}) });
       setupStatusline(provider.id(), "disable");
     } catch (err: unknown) {
       /* v8 ignore next -- err is always Error in practice */
@@ -1390,6 +1392,7 @@ export function stepShowSummary(results: ConfigResult[]): void {
         IconRemove,
       ),
     );
+    for (const { hook } of removed) if (hook?.note) p.log.info(dim(hook.note));
   }
 
   if (installed.length === 0 && removed.length === 0 && skipped.length > 0) {

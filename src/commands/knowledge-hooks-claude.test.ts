@@ -200,7 +200,29 @@ describe("Claude Code installed but never run (no ~/.claude)", () => {
     await dosu("hooks", "disable", "claude");
 
     expect(claudeHooks()).toEqual({ UserPromptSubmit: ["my-linter"] });
+  });
+
+  it("hooks disable keeps /dosu-incognito while transcript shipping is on, and says why", async () => {
+    // Any sync still ships Claude Code's sessions: another agent's hook, or a --flush.
+    await dosu("hooks", "enable", "claude", "codex");
+
+    const said = await dosu("hooks", "disable", "claude");
+
+    expect(claudeHooks()).toEqual({});
+    expect(readFileSync(incognitoCommand(), "utf-8")).toContain("dosu:incognito:v1");
+    expect(said).toContain(
+      "Kept /dosu-incognito: Claude Code sessions still ship with any 'dosu knowledge sync' while transcript shipping is on. 'dosu knowledge incognito disable claude' removes it.",
+    );
+  });
+
+  it("hooks disable removes /dosu-incognito with the hooks once transcript shipping is off", async () => {
+    await dosu("hooks", "enable", "claude");
+    await dosu("transcripts", "disable");
+
+    const said = await dosu("hooks", "disable", "claude");
+
     expect(existsSync(incognitoCommand())).toBe(false);
+    expect(said).not.toContain("Kept");
   });
 
   it("hooks enable says so when shipping is off and leaves prompt-time memory out", async () => {

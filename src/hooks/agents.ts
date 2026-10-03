@@ -2,7 +2,11 @@
  * `src/mcp/providers`, not an extension: hook-capable agents and their operations differ. */
 
 import { join } from "node:path";
-import { getIncognitoAgent } from "../incognito/agents";
+import {
+  disableIncognitoWithHooks,
+  getIncognitoAgent,
+  keptIncognitoNote,
+} from "../incognito/agents";
 import { expandHome, isInstalled } from "../mcp/detect";
 import { isShippingEnabled, loadSyncState } from "../sync/state";
 import { claudeCodeInstalled, claudeConfigDir } from "./claude-code";
@@ -36,6 +40,8 @@ export interface HookAgent {
   disable(): void;
   /** Extra guidance shown after enabling, when the agent needs it. */
   enableNote?(): string;
+  /** Shown after disabling, when something stays behind or the agent's sessions still ship. */
+  disableNote?(): string;
   /** Shown by `hooks status` while enabled, when part of what enable() installs is missing. */
   statusNote?(): string;
 }
@@ -120,8 +126,9 @@ function claudeAgent(): HookAgent {
 
 /** The agent's incognito command (src/incognito/agents.ts) rides along with its hooks: once they
  * ship sessions, the user's one way to keep a session out is there before the first one needs it.
- * Written after the hooks, so a hook config Dosu cannot edit leaves no command behind either.
- * OpenCode's plugin and pi's extension install theirs themselves. */
+ * Written after the hooks, so a hook config Dosu cannot edit leaves no command behind either, and
+ * removed with them only once transcript shipping is off (disableIncognitoWithHooks). OpenCode's
+ * plugin and pi's extension install theirs themselves. */
 function withIncognitoCommand(agent: HookAgent): HookAgent {
   const command = () => getIncognitoAgent(agent.id());
   return {
@@ -132,8 +139,9 @@ function withIncognitoCommand(agent: HookAgent): HookAgent {
     },
     disable: () => {
       agent.disable();
-      command()?.disable();
+      disableIncognitoWithHooks(agent.id());
     },
+    disableNote: () => keptIncognitoNote(agent.id()),
     statusNote: () => {
       const missing = command();
       return [

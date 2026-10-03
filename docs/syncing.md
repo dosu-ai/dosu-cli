@@ -6,7 +6,11 @@ each running `dosu knowledge sync --quiet --detach`; for Claude Code it also ins
 (`UserPromptSubmit` → `dosu knowledge context`) unless transcript shipping is off. Every agent's
 `enable` also installs its incognito command (`/dosu-incognito`, `$dosu-incognito` in Codex; see
 [Per-session incognito](#per-session-incognito)), so the way to keep a session out is there before
-the first session ships, and `disable` removes everything `enable` installed; `hooks status` says
+the first session ships, and `disable` removes everything `enable` installed, except that the
+incognito command stays while transcript shipping is on: any sync (another agent's hook, a
+`--flush`) still ships every agent's sessions, hooks or not, so `disable` says it kept the command
+and `dosu knowledge incognito disable <agent>` removes it. Pi's command is part of its extension
+and goes with it; `hooks disable pi` says that pi's sessions still ship. `hooks status` says
 when the command is missing (as an older CLI left it). With no agent named it installs for every
 agent it detects and names the ones it skipped. Claude Code counts as detected when `~/.claude` (or `CLAUDE_CONFIG_DIR`) exists or
 `claude` is on PATH, so a freshly provisioned machine can set Dosu up before Claude Code's first
@@ -335,7 +339,8 @@ records. A child session is incognito when the session that spawned it is.
 
 **The plugin.** `dosu knowledge hooks enable opencode` (and `dosu setup`) writes
 `$XDG_CONFIG_HOME/opencode/plugin/dosu.js` and the `/dosu-incognito` command; `disable` removes
-both, and the directories it made for them if they are left empty. A `plugin/dosu.js` that is not
+the plugin, the command once transcript shipping is off (see above), and the directories it made
+for them if they are left empty. A `plugin/dosu.js` that is not
 Dosu's is never replaced: enable stops with an error instead. OpenCode counts as installed when its
 config or data dir exists, or, on a machine where it has never run, when `opencode` is on PATH.
 The plugin is plain JavaScript importing only node builtins, and does three things:

@@ -15,6 +15,7 @@ import { writeSecureFile } from "../mcp/config-helpers";
 import { expandHome, isInstalled, isOnPath } from "../mcp/detect";
 import { selfInvocation } from "../sync/detach";
 import { INCOGNITO_COMMAND_NAME, INCOGNITO_MARKER } from "../sync/incognito";
+import { isShippingEnabled, loadSyncState } from "../sync/state";
 import type { HookAgent } from "./agents";
 import { devEnvAssignments, HookConfigError } from "./formats";
 
@@ -363,5 +364,11 @@ export function piHookAgent(): HookAgent {
     },
     enableNote: () =>
       "Pi loads it from its next start (or /reload). Sessions run with `pi --no-extensions` skip it and ship only on a later sync.",
+    // Unlike the other agents' commands, /dosu-incognito is part of the extension: nothing of it
+    // can stay behind for the sessions any sync still ships.
+    disableNote: () =>
+      isShippingEnabled(loadSyncState())
+        ? "Pi sessions still ship with any 'dosu knowledge sync' while transcript shipping is on, and /dosu-incognito went with the extension. 'dosu knowledge transcripts disable' stops shipping."
+        : "",
   };
 }

@@ -25,6 +25,7 @@ vi.mock("node:os", async (importOriginal) => {
   };
 });
 
+import { setShipTranscripts } from "../sync/state";
 import { allHookAgents, getHookAgent } from "./agents";
 import { HOOK_COMMAND, HookConfigError } from "./formats";
 
@@ -149,15 +150,24 @@ describe("cursor agent", () => {
     expect(cursor?.isEnabled()).toBe(false);
   });
 
-  it("installs /dosu-incognito with the hook and removes it with the hook", () => {
+  it("installs /dosu-incognito with the hook, and removes it with the hook once nothing ships", () => {
+    vi.stubEnv("XDG_CONFIG_HOME", join(fakeHome, ".config"));
     const cursor = getHookAgent("cursor");
     const command = join(fakeHome, ".cursor", "commands", "dosu-incognito.md");
 
     cursor?.enable();
     expect(readFileSync(command, "utf-8")).toContain("dosu:incognito:v1");
 
+    // While transcripts ship, any sync ships Cursor's sessions, hook or not.
+    cursor?.disable();
+    expect(existsSync(command)).toBe(true);
+    expect(cursor?.disableNote?.()).toContain("Kept /dosu-incognito");
+
+    cursor?.enable();
+    setShipTranscripts(false);
     cursor?.disable();
     expect(existsSync(command)).toBe(false);
+    expect(cursor?.disableNote?.()).toBe("");
   });
 });
 

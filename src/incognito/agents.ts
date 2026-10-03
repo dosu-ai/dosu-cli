@@ -11,6 +11,7 @@ import { codexInstalled } from "../hooks/codex";
 import { piHookAgent } from "../hooks/pi";
 import { isInstalled } from "../mcp/detect";
 import { INCOGNITO_COMMAND_NAME, INCOGNITO_MARKER } from "../sync/incognito";
+import { isShippingEnabled, loadSyncState } from "../sync/state";
 
 type IncognitoAction = "created" | "updated" | "unchanged" | "removed" | "not_found";
 
@@ -210,6 +211,22 @@ export function allIncognitoAgents(): IncognitoAgent[] {
 
 export function getIncognitoAgent(id: string): IncognitoAgent | undefined {
   return allIncognitoAgents().find((agent) => agent.id() === id);
+}
+
+/** `dosu knowledge hooks disable <agent>`'s part for the agent's command. While transcript
+ * shipping is on, any `dosu knowledge sync` (another agent's hook, a `--flush`) ships every
+ * agent's sessions, its own hooks or not, so the command, the user's one way to keep a session
+ * out, stays; once nothing ships, it goes with the hooks. `incognito disable` removes it either
+ * way. */
+export function disableIncognitoWithHooks(id: string): void {
+  if (!isShippingEnabled(loadSyncState())) getIncognitoAgent(id)?.disable();
+}
+
+/** What `hooks disable` says when it left the agent's command in place; empty otherwise. */
+export function keptIncognitoNote(id: string): string {
+  const command = getIncognitoAgent(id);
+  if (!command?.isEnabled() || !isShippingEnabled(loadSyncState())) return "";
+  return `Kept ${command.invocation()}: ${command.name()} sessions still ship with any 'dosu knowledge sync' while transcript shipping is on. 'dosu knowledge incognito disable ${id}' removes it.`;
 }
 
 /** The incognito commands installed on this machine, for the messages that tell the user how to

@@ -87,8 +87,21 @@ describe("Codex installed but never run (no ~/.codex)", () => {
     expect(await codexRow()).not.toHaveProperty("note");
   });
 
-  it("hooks disable removes the hooks and the skill, and nothing of Codex's own", async () => {
+  it("hooks disable keeps $dosu-incognito while transcript shipping is on, and says why", async () => {
     await dosu("hooks", "enable", "codex");
+
+    const said = await dosu("hooks", "disable", "codex");
+
+    expect(existsSync(join(home, ".codex", "hooks.json"))).toBe(false);
+    expect(readFileSync(skill(), "utf-8")).toContain("dosu:incognito:v1");
+    expect(said).toContain(
+      "Kept $dosu-incognito: Codex sessions still ship with any 'dosu knowledge sync' while transcript shipping is on. 'dosu knowledge incognito disable codex' removes it.",
+    );
+  });
+
+  it("hooks disable, once transcript shipping is off, removes the hooks and the skill, and nothing of Codex's own", async () => {
+    await dosu("hooks", "enable", "codex");
+    await dosu("transcripts", "disable");
     // What Codex's first run adds: its bundled skills.
     mkdirSync(join(home, ".codex", "skills", ".system"), { recursive: true });
 

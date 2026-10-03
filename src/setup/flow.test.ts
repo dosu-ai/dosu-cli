@@ -769,16 +769,37 @@ describe("stepConfigureTools", () => {
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Cursor (/dosu-incognito)"));
   });
 
-  it("removes the status line and slash command when the agent is unticked", () => {
+  it("removes the status line when the agent is unticked, and keeps /dosu-incognito while transcripts ship", () => {
     const cfg = makeCfg();
     stepConfigureTools(cfg, { toInstall: [CursorProvider()], toRemove: [], skipped: [] });
 
-    stepConfigureTools(cfg, { toInstall: [], toRemove: [CursorProvider()], skipped: [] });
+    const results = stepConfigureTools(cfg, {
+      toInstall: [],
+      toRemove: [CursorProvider()],
+      skipped: [],
+    });
 
     const cliConfig = JSON.parse(
       readFileSync(join(tempDir, ".cursor", "cli-config.json"), "utf-8"),
     );
     expect(cliConfig.statusLine).toBeUndefined();
+    // Any sync still ships Cursor's sessions, and the summary says why the command stayed.
+    expect(existsSync(join(tempDir, ".cursor", "commands", "dosu-incognito.md"))).toBe(true);
+    stepShowSummary(results);
+    expect(p.log.info).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Kept /dosu-incognito: Cursor sessions still ship with any 'dosu knowledge sync'",
+      ),
+    );
+  });
+
+  it("removes /dosu-incognito too when the agent is unticked once transcript shipping is off", () => {
+    const cfg = makeCfg();
+    stepConfigureTools(cfg, { toInstall: [CursorProvider()], toRemove: [], skipped: [] });
+    setShipTranscripts(false);
+
+    stepConfigureTools(cfg, { toInstall: [], toRemove: [CursorProvider()], skipped: [] });
+
     expect(existsSync(join(tempDir, ".cursor", "commands", "dosu-incognito.md"))).toBe(false);
   });
 
@@ -872,6 +893,8 @@ describe("stepConfigureTools", () => {
     expect(results[0].hook).toMatchObject({ name: "OpenCode", path: pluginPath });
     expect(results[0].incognito).toMatchObject({ path: commandPath });
 
+    // The command stays while transcripts ship (src/hooks/opencode.test.ts).
+    setShipTranscripts(false);
     stepConfigureTools(cfg, { toInstall: [], toRemove: [OpenCodeProvider()], skipped: [] });
 
     expect(existsSync(pluginPath)).toBe(false);

@@ -988,6 +988,8 @@ function hooksCommand(): Command {
         try {
           agent.disable();
           console.log(`✓ ${agent.name()} \u00B7 hook disabled`);
+          const note = agent.disableNote?.();
+          if (note) console.log(pc.dim(`  ${note}`));
         } catch (err) {
           reportHookFailure(agent, err);
         }

@@ -18,6 +18,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { endedSessionOf } from "../sessions/capture";
 import { textHasIncognitoMarker } from "../sync/incognito";
+import { setShipTranscripts } from "../sync/state";
 
 let fakeHome: string;
 
@@ -170,6 +171,20 @@ describe("pi hook agent", () => {
     expect(pi?.isEnabled()).toBe(false);
     expect(existsSync(pi?.configPath() as string)).toBe(false);
     pi?.disable();
+  });
+
+  it("says, once disabled, that pi's sessions still ship and /dosu-incognito went with it", () => {
+    vi.stubEnv("XDG_CONFIG_HOME", join(fakeHome, ".config"));
+    const pi = getHookAgent("pi");
+    pi?.enable();
+    pi?.disable();
+    // The command is the extension's own: there is no file of it to keep.
+    expect(pi?.disableNote?.()).toBe(
+      "Pi sessions still ship with any 'dosu knowledge sync' while transcript shipping is on, and /dosu-incognito went with the extension. 'dosu knowledge transcripts disable' stops shipping.",
+    );
+
+    setShipTranscripts(false);
+    expect(pi?.disableNote?.()).toBe("");
   });
 
   it("counts pi as installed before its first run, when pi is on PATH", async () => {
