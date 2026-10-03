@@ -167,6 +167,20 @@ describe("knowledge sync of a session with subagents", () => {
     expect(posted()).toHaveLength(2);
   });
 
+  it("ships a workflow's agents as subagents of the session that ran it", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    const ended = claudeSession("parent", exchange(1, alpha, { sessionId: "parent" }), 0);
+    const rows = exchange(2, alpha, { isSidechain: true, agentId: "w1", sessionId: "parent" });
+    write(join(PROJECTS(), "parent", "subagents", "workflows", "wf_1", "agent-w1.jsonl"), rows, 0);
+
+    await dosu("sync", "--quiet", "--ended", `claude:parent=${ended}`);
+
+    const shipped = postedBySession();
+    expect(Object.keys(shipped).sort()).toEqual(["agent-w1", "parent"]);
+    expect(shipped["agent-w1"].metadata.parent_session_id).toBe("parent");
+    expect(JSON.stringify(shipped["agent-w1"].records)).toContain("question 2");
+  });
+
   it("ships the subagents of a session that just ended in the same run, past the quiet period", async () => {
     const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
     const ended = claudeSession("parent", exchange(1, alpha, { sessionId: "parent" }), 0);

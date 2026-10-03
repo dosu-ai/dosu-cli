@@ -44,8 +44,8 @@ and `unsupported` are answers, so one unreadable session never stalls the rest.
 grouped by reason; `dosu knowledge sessions --rejected` (or `--unsupported`) lists every one.
 
 **Subagents.** Claude Code writes each subagent's conversation to its own transcript,
-`<project>/<session id>/subagents/agent-<agent id>.jsonl`. The sync lists every one as a session of
-its own (`claude/agent-<agent id>`), normalizes it on its own, and ships it with
+`<project>/<session id>/subagents/agent-<agent id>.jsonl` (a workflow's agents one level down, in
+`subagents/workflows/<workflow id>/`). The sync lists every one as a session of its own (`claude/agent-<agent id>`), normalizes it on its own, and ships it with
 `metadata.parent_session_id` set to the session it worked for (the top-level session, for a nested
 subagent too). It is settled in the ledger on its own, so it can be trivial while its session ships,
 but it inherits what its session decided: a session-end hook for the session ships its subagents in

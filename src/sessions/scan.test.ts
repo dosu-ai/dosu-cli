@@ -168,6 +168,26 @@ describe("scanAgentSessions", () => {
     expect(sessions[1].updated).toBe(T1.toISOString());
   });
 
+  it("lists a workflow's agents as subagents of the session that ran the workflow", () => {
+    claudeLog("-p", "parent", T3);
+    const workflow = join(home, ".claude", "projects", "-p", "parent", "subagents", "workflows");
+    makeLog(join(workflow, "wf_abc", "agent-w1.jsonl"), T2);
+    // The workflow's own journal and the agent's sidecar are not transcripts.
+    makeLog(join(workflow, "wf_abc", "journal.jsonl"), T1);
+    writeFileSync(join(workflow, "wf_abc", "agent-w1.meta.json"), "{}");
+
+    const [parent, child] = scan();
+
+    expect(scan().map((s) => [s.id, s.parentId, s.project])).toEqual([
+      ["parent", undefined, "-p"],
+      ["agent-w1", "parent", "-p"],
+    ]);
+    expect(child.path).toBe(join(workflow, "wf_abc", "agent-w1.jsonl"));
+    expect(parentSessionOf(child)).toEqual(parent);
+    expect(childSessionsOf(parent)).toEqual([child]);
+    expect(sessionAtPath("claude", "agent-w1", child.path)).toEqual(child);
+  });
+
   it("finds a subagent's parent session, and none for a top-level one", () => {
     claudeLog("-p", "parent", T2);
     makeLog(join(home, ".claude", "projects", "-p", "parent", "subagents", "agent-a1.jsonl"), T1);
