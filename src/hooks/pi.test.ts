@@ -31,7 +31,8 @@ import { knowledgeCommand } from "../commands/knowledge";
 import { getHookAgent } from "./agents";
 import { HookConfigError } from "./formats";
 
-/** A `dosu` that logs argv, cwd and stdin, and answers per `<command> <subcommand>`. */
+/** A `dosu` that logs argv, cwd and stdin, and answers per `<command> <subcommand>`; a reply
+ * with `waitFor` answers only once that file exists, standing in for a slow start or server. */
 const FAKE_DOSU = `#!/usr/bin/env node
 const fs = require("node:fs");
 let input = "";
@@ -40,9 +41,13 @@ process.stdin.on("end", () => {
   const argv = process.argv.slice(2);
   fs.appendFileSync(process.env.FAKE_DOSU_LOG, JSON.stringify({ argv, cwd: process.cwd(), input }) + "\\n");
   const reply = JSON.parse(process.env.FAKE_DOSU_REPLIES || "{}")[argv.slice(0, 2).join(" ")] || {};
-  if (reply.stdout) process.stdout.write(reply.stdout);
-  if (reply.stderr) process.stderr.write(reply.stderr);
-  process.exit(reply.code || 0);
+  const answer = () => {
+    if (reply.waitFor && !fs.existsSync(reply.waitFor)) return setTimeout(answer, 10);
+    if (reply.stdout) process.stdout.write(reply.stdout);
+    if (reply.stderr) process.stderr.write(reply.stderr);
+    process.exit(reply.code || 0);
+  };
+  answer();
 });
 `;
 
@@ -72,7 +77,9 @@ afterEach(() => {
   rmSync(fakeHome, { recursive: true, force: true });
 });
 
-function replies(map: Record<string, { stdout?: string; stderr?: string; code?: number }>): void {
+function replies(
+  map: Record<string, { stdout?: string; stderr?: string; code?: number; waitFor?: string }>,
+): void {
   vi.stubEnv("FAKE_DOSU_REPLIES", JSON.stringify(map));
 }
 
@@ -376,6 +383,32 @@ describe("the Dosu pi extension", () => {
     expect(await beforeStart?.({ prompt: "and then?" }, piContext())).toBeUndefined();
     replies({ "knowledge context": { stdout: "partial", code: 1 } });
     expect(await beforeStart?.({ prompt: "and then?" }, piContext())).toBeUndefined();
+  });
+
+  it("leaves the CLI its own server budget, even when it starts slowly, and stops one that hangs", async () => {
+    // The CLI gives the server 4s and gives up on its own, saying why in its debug log. Before
+    // that it may spend over a second starting (a freshly installed binary's first run) and on
+    // git for the project key; the extension only stops a CLI that never answers.
+    const answerNow = join(fakeHome, "answer-now");
+    replies({ "knowledge context": { stdout: "Dosu memory: PELICAN\n", waitFor: answerNow } });
+    const pi = await loadExtension();
+    const beforeStart = pi.handlers.get("before_agent_start");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const slow = beforeStart?.({ prompt: "how do I deploy?" }, piContext());
+      vi.advanceTimersByTime(7_000);
+      writeFileSync(answerNow, "");
+      expect(await slow).toEqual({
+        message: { customType: "dosu-memory", content: "Dosu memory: PELICAN", display: false },
+      });
+
+      rmSync(answerNow);
+      const hung = beforeStart?.({ prompt: "and then?" }, piContext());
+      vi.advanceTimersByTime(10_000);
+      expect(await hung).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("answers search_memory and get_memory_evidence through `dosu memory`", async () => {

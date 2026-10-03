@@ -468,7 +468,11 @@ extension shells out to `dosu` on PATH for everything, so it carries no credenti
   that process to take the payload, never for the upload.
 - `before_agent_start` asks `dosu knowledge context --agent pi --format plain` for a digest and adds
   it to the run as a hidden custom message (`customType: "dosu-memory"`), which the trajectory
-  normalizer does not ship back.
+  normalizer does not ship back. The CLI gives the server 4 s and then gives up on its own; for
+  every agent it records the outcome of each lookup in `debug.log` as a `[context]` line (memories
+  injected, the server's reason for none, an HTTP status, or the budget running out), never the
+  prompt or the digest. The extension stops only a CLI that has not answered in 10 s, which leaves
+  room for a slow first start.
 - `search_memory` and `get_memory_evidence` are pi tools that run
   `dosu memory search|evidence --client pi -- <arg>` in the session's directory.
 - `/dosu-incognito` records the opt-out as an extension entry

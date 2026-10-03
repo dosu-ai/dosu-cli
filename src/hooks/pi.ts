@@ -87,8 +87,10 @@ const INCOGNITO_MARKER = ${JSON.stringify(INCOGNITO_MARKER)};
 const INCOGNITO_ENTRY = ${JSON.stringify(PI_INCOGNITO_ENTRY_TYPE)};
 const INCOGNITO_NOTE = ${JSON.stringify(PI_INCOGNITO_NOTE)};
 const MEMORY_TOOLS = ["search_memory", "get_memory_evidence"];
-// The CLI gives the server 4s; past this the user's prompt is waiting on Dosu.
-const CONTEXT_TIMEOUT_MS = 6000;
+// The CLI gives the server 4s and then gives up on its own (its debug log says why); this only
+// stops a CLI that never answers. It leaves room for a slow start -- a freshly installed
+// binary's first run, git lookups for the project key -- and matches the OpenCode plugin.
+const CONTEXT_TIMEOUT_MS = 10000;
 const TOOL_TIMEOUT_MS = 60000;
 // How long quitting pi waits for the sync to take the ended session.
 const HANDOFF_TIMEOUT_MS = 3000;
