@@ -5,6 +5,7 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { claudeCodeInstalled } from "../hooks/claude-code";
 import { isInstalled } from "../mcp/detect";
 import { INCOGNITO_COMMAND_NAME, INCOGNITO_MARKER } from "../sync/incognito";
 
@@ -94,13 +95,17 @@ function fileAgent(options: {
 
 export function allIncognitoAgents(): IncognitoAgent[] {
   return [
-    fileAgent({
-      id: "claude",
-      name: "Claude Code",
-      detectPath: claudeConfigDir,
-      commandPath: () => join(claudeConfigDir(), "commands", FILE_NAME),
-      content: withFrontmatter(INCOGNITO_COMMAND_BODY),
-    }),
+    {
+      ...fileAgent({
+        id: "claude",
+        name: "Claude Code",
+        detectPath: claudeConfigDir,
+        commandPath: () => join(claudeConfigDir(), "commands", FILE_NAME),
+        content: withFrontmatter(INCOGNITO_COMMAND_BODY),
+      }),
+      // `claude` on PATH counts too: a fresh machine sets Dosu up before Claude Code's first run.
+      isInstalled: claudeCodeInstalled,
+    },
     fileAgent({
       id: "cursor",
       name: "Cursor",

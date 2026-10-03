@@ -115,6 +115,16 @@ describe("Claude Code installed but never run (no ~/.claude)", () => {
     });
   });
 
+  it("incognito enable and statusline enable set Claude Code up too", async () => {
+    await dosu("incognito", "enable");
+    await dosu("statusline", "enable");
+
+    // The user's one opt-out, there before the first session needs it.
+    expect(existsSync(join(home, ".claude", "commands", "dosu-incognito.md"))).toBe(true);
+    const settings = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf-8"));
+    expect(settings.statusLine.command).toBe("dosu knowledge statusline render --agent claude");
+  });
+
   it("hooks disable removes both hooks and nothing else of the user's", async () => {
     mkdirSync(join(home, ".claude"));
     writeFileSync(
