@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { scanAgentSessions } from "./scan";
+import { scanAgentSessions, scannedEverywhere } from "./scan";
 
 /** `homedir()` target for the default-home test; every other test passes `homeDir` explicitly. */
 const mockedOs = vi.hoisted(() => ({ home: "" }));
@@ -224,6 +224,123 @@ describe("scanAgentSessions", () => {
       ["codex", "rollout-env"],
       ["claude", "from-home"],
     ]);
+  });
+
+  it("lists the sessions Codex archived, flat under archived_sessions", () => {
+    codexLog("rollout-live", T1);
+    makeLog(join(home, ".codex", "archived_sessions", "rollout-archived.jsonl"), T2);
+
+    expect(scan().map((s) => [s.harness, s.id, s.path])).toEqual([
+      [
+        "codex",
+        "rollout-archived",
+        join(home, ".codex", "archived_sessions", "rollout-archived.jsonl"),
+      ],
+      [
+        "codex",
+        "rollout-live",
+        join(home, ".codex", "sessions", "2026", "08", "25", "rollout-live.jsonl"),
+      ],
+    ]);
+    expect(
+      scannedEverywhere(
+        "codex",
+        join(home, ".codex", "archived_sessions", "rollout-a.jsonl"),
+        home,
+      ),
+    ).toBe(true);
+  });
+
+  describe("Codex subagents", () => {
+    const PARENT = "01a0ff2e-029b-7153-9702-1dbfdee28612";
+    const CHILD = "01a0ff2e-1861-7b61-a549-34bdff8539e0";
+
+    /** A rollout whose first record is `session_meta` with `payload`, as Codex writes it (the
+     * instructions it inlines make that line long). */
+    function rollout(dir: string, name: string, payload: Record<string, unknown>): void {
+      const path = join(dir, `${name}.jsonl`);
+      mkdirSync(dir, { recursive: true });
+      const meta = {
+        timestamp: "2026-10-03T00:33:26.300Z",
+        type: "session_meta",
+        payload: { ...payload, base_instructions: { text: "You are Codex. ".repeat(2000) } },
+      };
+      writeFileSync(path, `${JSON.stringify(meta)}\n`);
+      utimesSync(path, T1, T1);
+    }
+    const day = () => join(home, ".codex", "sessions", "2026", "10", "02");
+
+    it.each([
+      [
+        "0.160",
+        {
+          session_id: PARENT,
+          id: CHILD,
+          parent_thread_id: PARENT,
+          source: { subagent: { thread_spawn: { parent_thread_id: PARENT, depth: 1 } } },
+          thread_source: "subagent",
+        },
+      ],
+      [
+        "0.140",
+        {
+          id: CHILD,
+          parent_thread_id: PARENT,
+          source: { subagent: { thread_spawn: { parent_thread_id: PARENT, depth: 1 } } },
+          thread_source: "subagent",
+        },
+      ],
+    ])("names the parent's rollout for a %s subagent", (_version, payload) => {
+      rollout(day(), `rollout-2026-10-02T17-33-20-${PARENT}`, {
+        id: PARENT,
+        thread_source: "user",
+      });
+      rollout(day(), `rollout-2026-10-02T17-33-26-${CHILD}`, payload);
+
+      const byId = Object.fromEntries(scan().map((s) => [s.id, s.parentId]));
+
+      expect(byId).toEqual({
+        [`rollout-2026-10-02T17-33-20-${PARENT}`]: undefined,
+        [`rollout-2026-10-02T17-33-26-${CHILD}`]: `rollout-2026-10-02T17-33-20-${PARENT}`,
+      });
+    });
+
+    it("finds a parent that was archived, and falls back to its thread id when it is gone", () => {
+      rollout(join(home, ".codex", "archived_sessions"), `rollout-2026-10-02T17-33-20-${PARENT}`, {
+        id: PARENT,
+      });
+      rollout(day(), `rollout-2026-10-02T17-33-26-${CHILD}`, {
+        id: CHILD,
+        parent_thread_id: PARENT,
+        thread_source: "subagent",
+      });
+      const orphan = "01a0ff2e-9999-7000-8000-000000000000";
+      rollout(day(), `rollout-2026-10-02T17-40-00-${orphan}`, {
+        id: orphan,
+        parent_thread_id: "01a0ff2e-0000-7000-8000-00000000dead",
+        thread_source: "subagent",
+      });
+
+      const byId = Object.fromEntries(scan().map((s) => [s.id, s.parentId]));
+
+      expect(byId[`rollout-2026-10-02T17-33-26-${CHILD}`]).toBe(
+        `rollout-2026-10-02T17-33-20-${PARENT}`,
+      );
+      expect(byId[`rollout-2026-10-02T17-40-00-${orphan}`]).toBe(
+        "01a0ff2e-0000-7000-8000-00000000dead",
+      );
+    });
+
+    it("gives a forked or resumed thread no parent: only subagents are children", () => {
+      rollout(day(), `rollout-2026-10-02T17-33-20-${PARENT}`, { id: PARENT });
+      rollout(day(), `rollout-2026-10-02T17-33-26-${CHILD}`, {
+        id: CHILD,
+        parent_thread_id: PARENT,
+        thread_source: "fork",
+      });
+
+      expect(scan().every((s) => s.parentId === undefined)).toBe(true);
+    });
   });
 
   it("honors CODEX_HOME", () => {

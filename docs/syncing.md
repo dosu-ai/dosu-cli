@@ -43,7 +43,8 @@ resumed or kept writing), or when it was passed over by a different CLI version 
 support or rules get a second look). `--retry-rejected` makes sessions the backend refused pending
 for that run. Nothing is skipped for good by being older than something else, and there is no count
 cap on the scan: listing is metadata only. Claude Code sessions are listed from `~/.claude` and,
-when the variable is set, `CLAUDE_CONFIG_DIR`. Each run settles at most 20 sessions, oldest first;
+when the variable is set, `CLAUDE_CONFIG_DIR`. Codex sessions are listed from `sessions/` and
+`archived_sessions/` under `CODEX_HOME` (default `~/.codex`). Each run settles at most 20 sessions, oldest first;
 `--bootstrap` keeps going until the backlog is drained. Entries are pruned a week after their session
 leaves the 30-day window.
 
@@ -89,7 +90,9 @@ and a sha256 of them. When the session grows and its records still start with ex
 only the meta record and the new tail ship, with `metadata.continuation =
 {"from_record": n, "prefix_sha256": "..."}`. A new tail too small to learn from is not uploaded and
 the session stays shipped. If the prefix no longer matches, the whole session ships again and the
-server dedupes identical content. A child session's upload carries `parent_session_id`.
+server dedupes identical content. A child session's upload carries `parent_session_id`: for a
+Codex subagent (`thread_source: "subagent"` in its rollout's `session_meta`), the parent's rollout
+name, which is the parent's own `session_id`.
 
 Upgrading from the watermark state (schema 2, or the learner-era schema 1) seeds the ledger with the
 sessions it shipped. Everything else in the window becomes pending again, including sessions the
