@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // CRITICAL: mock `open` so tests never pop a real browser tab; mock git so detectGitRepo()
 // doesn't hit the real filesystem.
@@ -243,6 +243,25 @@ import {
   stepShowSummary,
   type ToolSelection,
 } from "./flow";
+
+// `npx` but no `dosu` on PATH: the real-filesystem installs below write the remote (or Codex's
+// mcp-remote) entry, which carries the deployment and API key these tests follow through setup.
+// The local-proxy entry reads both from the CLI config instead; providers-stdio.test.ts covers it.
+const npxOnlyBin = mkdtempSync(join(tmpdir(), "dosu-flow-npx-only-"));
+writeFileSync(join(npxOnlyBin, "npx"), "#!/bin/sh\n", { mode: 0o755 });
+
+beforeEach(() => {
+  vi.stubEnv("PATH", npxOnlyBin);
+  vi.stubEnv("DOSU_DEV", undefined);
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
+afterAll(() => {
+  rmSync(npxOnlyBin, { recursive: true, force: true });
+});
 
 /** Default p.multiselect behaviour: accept the agent selection's initial values. */
 function installMultiselectDefault() {

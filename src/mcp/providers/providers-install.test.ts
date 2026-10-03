@@ -14,6 +14,18 @@ import type { Config } from "../../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../../config/config.test-utils";
 import { loadJSONConfig, MCP_REMOTE_VERSION } from "../config-helpers";
 
+// No `dosu` on PATH (and no dev mode) unless a test puts one there: these tests pin the remote
+// and mcp-remote forms written when there is no `dosu` to run the local proxy with.
+// providers-stdio.test.ts covers the proxy entries written when there is.
+beforeEach(() => {
+  vi.stubEnv("PATH", join(tmpdir(), "dosu-test-no-bin"));
+  vi.stubEnv("DOSU_DEV", undefined);
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 // --- Helpers ---
 
 function makeCfg(overrides: Partial<FlatTestConfig> = {}): Config {
@@ -903,6 +915,18 @@ describe("ManualProvider", () => {
     expect(allOutput).toContain("Secret hidden");
     expect(allOutput).toContain("X-Dosu-API-Key");
 
+    logSpy.mockRestore();
+  });
+
+  it("install offers the local proxy command before the HTTP details", async () => {
+    const { ManualProvider } = await import("./manual");
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    ManualProvider().install(makeCfg(), false);
+
+    const allOutput = logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(allOutput).toContain("dosu mcp serve --client <agent>");
+    expect(allOutput.indexOf("dosu mcp serve")).toBeLessThan(allOutput.indexOf("Endpoint:"));
     logSpy.mockRestore();
   });
 

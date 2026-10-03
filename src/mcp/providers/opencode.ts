@@ -10,6 +10,12 @@ export const OpenCodeProvider = () =>
     paths: ["~/.config/opencode"],
     globalPath: "~/.config/opencode/opencode.json",
     topKey: "mcp",
+    buildStdioServer: ({ command, args, env }) => ({
+      type: "local",
+      command: [command, ...args],
+      environment: env,
+      enabled: true,
+    }),
     buildServer: ({ url, headers }) => ({
       type: "remote",
       url,

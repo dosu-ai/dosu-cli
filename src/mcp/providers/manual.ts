@@ -19,6 +19,10 @@ export const ManualProvider = (): Provider => ({
     const headerValue = opts.showSecret ? apiKey : maskSecret(apiKey);
     console.log("Use these details to configure the Dosu MCP server in your client:");
     console.log();
+    console.log("  Local (stdio) server, which adds your project and branch to memory lookups:");
+    console.log("  Command:        dosu mcp serve --client <agent>");
+    console.log();
+    console.log("  Or connect over HTTP:");
     console.log(`  Transport:      HTTP`);
     console.log(`  Endpoint:       ${url}`);
     console.log(`  Header:         X-Dosu-API-Key: ${headerValue}`);

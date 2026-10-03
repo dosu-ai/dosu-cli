@@ -68,6 +68,9 @@ beforeEach(() => {
   origXDG = process.env.XDG_CONFIG_HOME;
   process.env.HOME = home;
   process.env.XDG_CONFIG_HOME = join(home, ".config");
+  // No `dosu` on PATH: this pins the remote entry 0.62.0 wrote, not the later stdio proxy.
+  vi.stubEnv("PATH", join(home, "no-bin"));
+  vi.stubEnv("DOSU_DEV", undefined);
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -77,6 +80,7 @@ afterEach(() => {
   else process.env.XDG_CONFIG_HOME = origXDG;
   rmSync(home, { recursive: true, force: true });
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe("post-upgrade refresh onto the Claude Code alwaysLoad entry", () => {

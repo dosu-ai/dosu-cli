@@ -695,24 +695,51 @@ describe("CLI actions", () => {
   // ── mcp add ─────────────────────────────────────────────────────────────
 
   describe("mcp add", () => {
-    it("creates real cursor config file with --global", async () => {
-      const cfg = authenticatedConfig();
-      saveConfig(cfg);
+    /** Puts a `dosu` on PATH for the entry to run, or with `present` false, none at all. */
+    function dosuOnPath(present: boolean): string {
+      const bin = join(tempDir, "bin");
+      mkdirSync(bin, { recursive: true });
+      const dosu = join(bin, "dosu");
+      if (present) writeFileSync(dosu, "#!/bin/sh\n", { mode: 0o755 });
+      vi.stubEnv("PATH", bin);
+      vi.stubEnv("DOSU_DEV", undefined);
+      vi.stubEnv("DOSU_BACKEND_URL_OVERRIDE", undefined);
+      return dosu;
+    }
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("creates real cursor config file with --global that runs the local proxy", async () => {
+      const dosu = dosuOnPath(true);
+      saveConfig(authenticatedConfig());
 
       await run("mcp", "add", "cursor", "--global");
 
       // Verify real file was created on disk
       const cursorConfigPath = join(tempDir, ".cursor", "mcp.json");
       const cursorConfig = JSON.parse(readFileSync(cursorConfigPath, "utf-8"));
-      expect(cursorConfig.mcpServers).toBeDefined();
-      expect(cursorConfig.mcpServers.dosu).toBeDefined();
-      expect(cursorConfig.mcpServers.dosu.url).toContain("dep_123");
-      expect(cursorConfig.mcpServers.dosu.headers).toBeDefined();
-      expect(cursorConfig.mcpServers.dosu.headers["X-Dosu-API-Key"]).toBe("key_abc");
+      expect(cursorConfig.mcpServers.dosu).toEqual({
+        command: dosu,
+        args: ["mcp", "serve", "--client", "cursor"],
+        env: { PATH: `${join(tempDir, "bin")}:/usr/bin:/bin` },
+      });
 
       expect(logSpy).toHaveBeenCalledWith(
         expect.stringContaining("Successfully added Dosu MCP to Cursor"),
       );
+    });
+
+    it("writes the remote entry when there is no dosu on PATH to run", async () => {
+      dosuOnPath(false);
+      saveConfig(authenticatedConfig());
+
+      await run("mcp", "add", "cursor", "--global");
+
+      const cursorConfig = JSON.parse(readFileSync(join(tempDir, ".cursor", "mcp.json"), "utf-8"));
+      expect(cursorConfig.mcpServers.dosu.url).toContain("dep_123");
+      expect(cursorConfig.mcpServers.dosu.headers["X-Dosu-API-Key"]).toBe("key_abc");
     });
 
     it("throws error for unknown tool", async () => {
@@ -772,6 +799,7 @@ describe("CLI actions", () => {
       testTarget(cfg).deployment_name = undefined;
       saveConfig(cfg);
 
+      dosuOnPath(false);
       await run("mcp", "add", "cursor", "--global");
 
       const cursorConfigPath = join(tempDir, ".cursor", "mcp.json");

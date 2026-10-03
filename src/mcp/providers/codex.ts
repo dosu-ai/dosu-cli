@@ -6,9 +6,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { type Config, MODE_OSS } from "../../config/config";
-import { mcpEndpoint, mcpRemoteServer, writeSecureFile } from "../config-helpers";
-import { expandHome, findNpx, isInstalled, npxPathEnv } from "../detect";
+import { mcpEndpoint, mcpHeaders, mcpRemoteServer, writeSecureFile } from "../config-helpers";
+import { expandHome, findNpx, isInstalled, launcherPathEnv } from "../detect";
 import type { SetupProvider } from "../providers";
+import { proxyCommand } from "../proxy-entry";
 
 function codexHome(): string {
   return process.env.CODEX_HOME ?? expandHome("~/.codex");
@@ -33,22 +34,50 @@ function tomlString(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
+/** Variables Codex forwards from its own environment to the proxy. Codex starts stdio servers
+ * with a short allowlist (HOME, PATH, ...); these decide which Dosu config the proxy reads and
+ * the project a session's DOSU_PROJECT names. */
+const FORWARDED_ENV = ["DOSU_PROJECT", "XDG_CONFIG_HOME"];
+
+/** The stdio server Codex runs: Dosu's proxy, or without a `dosu` on PATH, `npx mcp-remote`.
+ * Codex desktop only renders MCP Apps for stdio servers, and launches them with the minimal
+ * launchd PATH, so the command is absolute with an explicit PATH either way. */
+function codexServer(cfg: Config): {
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  envVars: string[];
+} {
+  const url = mcpEndpoint(cfg);
+  const proxy = proxyCommand("codex");
+  if (proxy) {
+    mcpHeaders(cfg.active_account?.target?.api_key);
+    return { ...proxy, envVars: FORWARDED_ENV };
+  }
+  const npx = findNpx();
+  const remote = mcpRemoteServer(url, cfg.active_account?.target?.api_key);
+  return {
+    command: npx,
+    args: remote.args,
+    env: { PATH: launcherPathEnv(npx), ...remote.env },
+    envVars: [],
+  };
+}
+
 function installDosuToTOML(path: string, cfg: Config): void {
   let content = readTOML(path);
   // Remove existing [mcp_servers.dosu] section if present (including the
   // legacy [mcp_servers.dosu.http_headers] subtable from the remote-HTTP form)
   content = removeDosuFromTOML(content);
-  // Codex desktop only renders MCP Apps for stdio servers, so proxy through `npx mcp-remote`;
-  // npx is absolute with explicit PATH because desktop launches with the minimal launchd PATH.
-  const npx = findNpx();
-  const remote = mcpRemoteServer(mcpEndpoint(cfg), cfg.active_account?.target?.api_key);
-  const env: Record<string, string> = { PATH: npxPathEnv(npx), ...remote.env };
-  const envEntries = Object.entries(env)
+  const server = codexServer(cfg);
+  const envEntries = Object.entries(server.env)
     .map(([key, value]) => `${key} = ${tomlString(value)}`)
     .join("\n");
-  const args = remote.args.map(tomlString).join(", ");
+  const args = server.args.map(tomlString).join(", ");
+  const envVars =
+    server.envVars.length > 0 ? `env_vars = [${server.envVars.map(tomlString).join(", ")}]\n` : "";
   const section =
-    `\n[mcp_servers.dosu]\ncommand = ${tomlString(npx)}\nargs = [${args}]\n` +
+    `\n[mcp_servers.dosu]\ncommand = ${tomlString(server.command)}\nargs = [${args}]\n${envVars}` +
     `\n[mcp_servers.dosu.env]\n${envEntries}\n`;
   content += section;
   writeTOML(path, content);

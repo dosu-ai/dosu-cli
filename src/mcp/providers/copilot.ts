@@ -9,6 +9,7 @@ import {
 } from "../config-helpers";
 import { expandHome, isInstalled } from "../detect";
 import type { SetupProvider } from "../providers";
+import { proxyCommand, stdioServer } from "../proxy-entry";
 
 function globalPath(): string {
   if (process.env.XDG_CONFIG_HOME) {
@@ -29,24 +30,21 @@ export const CopilotProvider = (): SetupProvider => ({
 
   install(cfg: Config, global: boolean): void {
     const url = mcpEndpoint(cfg);
+    // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
+    const headers = mcpHeaders(cfg.active_account!.target!.api_key!);
+    const proxy = proxyCommand("copilot");
 
     if (global) {
-      const server = {
-        type: "http",
-        url,
-        tools: ["*"],
-        // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
-        headers: mcpHeaders(cfg.active_account!.target!.api_key!),
-      };
+      // The CLI's own config calls a stdio server "local".
+      const server = proxy
+        ? { type: "local", ...stdioServer(proxy), tools: ["*"] }
+        : { type: "http", url, tools: ["*"], headers };
       installJSONServer(globalPath(), "mcpServers", server);
     } else {
       const configPath = join(process.cwd(), ".vscode", "mcp.json");
-      const server = {
-        type: "http",
-        url,
-        // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
-        headers: mcpHeaders(cfg.active_account!.target!.api_key!),
-      };
+      const server = proxy
+        ? { type: "stdio", ...stdioServer(proxy) }
+        : { type: "http", url, headers };
       installJSONServer(configPath, "servers", server);
     }
   },

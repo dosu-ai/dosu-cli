@@ -36,22 +36,29 @@ export function appSupportDir(): string {
 }
 /* v8 ignore stop */
 
+/** The absolute path of `name` on the shell PATH, or null. */
+export function findOnPath(name: string): string | null {
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (!dir) continue;
+    const candidate = join(dir, name);
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
 /** Locates `npx` by absolute path on the shell PATH. GUI hosts spawn stdio servers with the
  * minimal launchd PATH (no Homebrew/nvm), so config entries must reference npx absolutely. */
 export function findNpx(): string {
   /* v8 ignore next -- platform dispatch, win32 arm not exercised on POSIX CI */
-  const bin = platform() === "win32" ? "npx.cmd" : "npx";
-  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
-    if (!dir) continue;
-    const candidate = join(dir, bin);
-    if (existsSync(candidate)) return candidate;
-  }
+  const npx = findOnPath(platform() === "win32" ? "npx.cmd" : "npx");
+  if (npx) return npx;
   throw new Error(
     "npx not found on PATH. Node.js is required (the MCP entry runs `npx mcp-remote`).",
   );
 }
 
-/** PATH for a spawned stdio entry: npx's own dir first (node lives beside npx) plus system dirs. */
-export function npxPathEnv(npx: string): string {
-  return [dirname(npx), "/usr/bin", "/bin"].join(delimiter);
+/** PATH for a spawned stdio entry: the launcher's own dir first (a Node launcher's `node` lives
+ * beside it) plus the system dirs, where `git` is. */
+export function launcherPathEnv(launcher: string): string {
+  return [dirname(launcher), "/usr/bin", "/bin"].join(delimiter);
 }
