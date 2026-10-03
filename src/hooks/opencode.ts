@@ -34,7 +34,7 @@ import { isInstalled } from "../mcp/detect";
 import { INCOGNITO_MARKER } from "../sync/incognito";
 import { DEFAULT_QUIET_PERIOD_MS } from "../sync/state";
 import type { HookAgent } from "./agents";
-import { devEnvAssignments, devSelfCommand, hookCommand } from "./formats";
+import { devEnvAssignments, devSelfCommand, HookConfigError, hookCommand } from "./formats";
 
 /** Marks the plugin file as Dosu's; a user's own `dosu.js` is never rewritten or removed. */
 const PLUGIN_MARKER = "dosu-opencode-plugin";
@@ -278,6 +278,9 @@ export function opencodeHookAgent(): HookAgent {
     enable: () => {
       const path = pluginPath();
       const source = opencodePluginSource();
+      if (existsSync(path) && !isOurs(path)) {
+        throw new HookConfigError(`${path} is not Dosu's plugin; rename or remove it, then retry`);
+      }
       if (!existsSync(path) || readFileSync(path, "utf-8") !== source) {
         writeSecureFile(path, source);
       }

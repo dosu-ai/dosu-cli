@@ -93,14 +93,17 @@ describe("the opencode hook agent", () => {
     expect(existsSync(join(configDir(), "command", "review.md"))).toBe(true);
   });
 
-  it("leaves a plugin file of the same name that is not Dosu's", () => {
+  it("never replaces or removes a plugin file of the same name that is not Dosu's", () => {
     mkdirSync(join(configDir(), "plugin"), { recursive: true });
-    writeFileSync(pluginPath(), "export const Other = async () => ({});\n");
+    const theirs = "// my own plugin\nexport const Other = async () => ({});\n";
+    writeFileSync(pluginPath(), theirs);
 
     expect(opencode().isEnabled()).toBe(false);
+    expect(() => opencode().enable()).toThrow(`${pluginPath()} is not Dosu's plugin`);
     opencode().disable();
 
-    expect(readFileSync(pluginPath(), "utf8")).toContain("Other");
+    expect(readFileSync(pluginPath(), "utf8")).toBe(theirs);
+    expect(existsSync(commandPath())).toBe(false);
   });
 
   it("pins this working copy in dev mode, as the other agents' hooks do", () => {
