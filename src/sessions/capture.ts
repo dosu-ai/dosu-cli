@@ -23,8 +23,11 @@ const SAFE_SEGMENT = /^[A-Za-z0-9_-]+$/;
 export interface CapturedSession {
   /** Working directory the hook reported. */
   dir?: string;
-  /** Branch checked out in `dir` at the latest captured turn. */
+  /** Branch checked out in `dir` at the first captured turn that had one: the nearest the hook
+   * comes to the branch the session began on. */
   branch?: string;
+  /** When the first turn was captured; absent from captures older CLIs wrote. */
+  since?: string;
   /** When the capture was last updated. */
   at: string;
 }
@@ -49,6 +52,7 @@ export function readCapturedSession(
     return {
       ...(typeof raw.dir === "string" ? { dir: raw.dir } : {}),
       ...(typeof raw.branch === "string" ? { branch: raw.branch } : {}),
+      ...(typeof raw.since === "string" ? { since: raw.since } : {}),
       at: typeof raw.at === "string" ? raw.at : "",
     };
   } catch {
@@ -56,8 +60,8 @@ export function readCapturedSession(
   }
 }
 
-/** Merge a turn's capture into the session's record. A turn on a detached HEAD (mid-rebase)
- * keeps the branch an earlier turn captured. */
+/** Merge a turn's capture into the session's record. The first turn's branch stays, as does a
+ * branch an earlier turn captured through a turn on a detached HEAD (mid-rebase). */
 export function recordCapturedSession(
   key: string,
   update: { dir?: string; branch?: string | null },
@@ -68,10 +72,13 @@ export function recordCapturedSession(
   if (!path) return false;
   const previous = readCapturedSession(key, configDir);
   const dir = update.dir ?? previous?.dir;
-  const branch = update.branch ?? previous?.branch;
+  const branch = previous?.branch ?? update.branch;
+  // A capture an older CLI started has no first turn on record: better none than a later one.
+  const since = previous ? previous.since : now.toISOString();
   const record: CapturedSession = {
     ...(dir ? { dir } : {}),
     ...(branch ? { branch } : {}),
+    ...(since ? { since } : {}),
     at: now.toISOString(),
   };
   try {
@@ -94,7 +101,7 @@ export interface CaptureDeps {
 }
 
 /** Record the branch from a Cursor `stop` hook payload; other agents' payloads are ignored.
- * `stop` fires every turn, so the latest turn's branch wins. */
+ * `stop` fires every turn, and the first turn's branch is the one kept. */
 export function captureCursorStop(payload: unknown, deps: CaptureDeps = {}): boolean {
   if (typeof payload !== "object" || payload === null) return false;
   const hook = payload as Record<string, unknown>;

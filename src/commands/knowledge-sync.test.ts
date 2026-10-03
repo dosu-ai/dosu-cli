@@ -554,6 +554,45 @@ describe("knowledge sync of a session's branch", () => {
     expect(posted().map((p) => p.metadata.branch)).toEqual(["feat/layout"]);
   });
 
+  it("ships a Cursor session with the branch its first turn was on, not one a later turn moved to", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const alpha = checkoutOn("alpha", "feat/start", now - 3600);
+    const dir = join(home, ".cursor", "projects", "work-alpha", "agent-transcripts", "c1");
+    mkdirSync(dir, { recursive: true });
+    const transcript = join(dir, "c1.jsonl");
+    const rows = [
+      { role: "user", message: { content: [{ type: "text", text: "lay out the footer" }] } },
+      {
+        role: "assistant",
+        message: { content: [{ type: "text", text: `done: ${"detail ".repeat(400)}` }] },
+      },
+    ];
+    writeFileSync(transcript, `${rows.map((r) => JSON.stringify(r)).join("\n")}\n`);
+    // Cursor's `stop` hook, after each turn.
+    const stop = async () => {
+      hookStdin({
+        hook_event_name: "stop",
+        cursor_version: "2.0.0",
+        conversation_id: "c1",
+        transcript_path: transcript,
+        workspace_roots: [alpha],
+      });
+      await dosu("sync", "--quiet", "--detach");
+    };
+    await stop();
+    // The second turn starts a branch for its change; the session's last activity is after it.
+    gitAt(alpha, now + 2, "checkout", "-q", "-b", "feat/mid");
+    await stop();
+    const last = new Date((now + 3) * 1000);
+    utimesSync(transcript, last, last);
+
+    await dosu("sync", "--flush");
+
+    expect(posted().map((p) => [p.metadata.agent, p.metadata.branch])).toEqual([
+      ["cursor", "feat/start"],
+    ]);
+  });
+
   it("ships a Claude Code session with the branch its transcript recorded, as before", async () => {
     const alpha = checkoutOn("alpha", "feat/now", minutesAgo(90));
     const recorded = exchange(1, alpha)

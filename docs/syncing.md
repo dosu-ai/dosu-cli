@@ -286,12 +286,14 @@ project. An upload sends the branch its transcript recorded, when it recorded on
 read before the CLI sent one), verbatim: redaction leaves the branch alone, as it does ids, since
 its entropy pass takes a Jira-style name like `feature/PROJ-4821-AddRetryLogicForPayments` for a
 secret, and a placeholder would scope every such session together. OpenCode, pi and Cursor record
-none, so their sessions ship with the branch their prompts were served under, else (Cursor) the one its `stop` hook captured, else
-the one the session's directory had checked out at its first prompt, read from the reflog, so a
-session that starts a branch for its change ships with the branch it started from, as Claude Code
-and Codex sessions do (a fork's first prompt is its own, not the one it copied). The branch
-checked out now counts only when the reflog shows no checkout since. A detached HEAD is no
-branch, and the upload then sends none.
+none, so their sessions ship with the branch their prompts were served under, else the one the
+session's directory had checked out at its first prompt, read from the reflog, so a session that
+starts a branch for its change ships with the branch it started from, as Claude Code and Codex
+sessions do (a fork's first prompt is its own, not the one it copied). Cursor's transcripts carry
+no times, so the reflog is asked about its first turn, when its `stop` hook first captured the
+session, and the branch that capture recorded serves when the reflog cannot answer; later turns
+change neither. The branch checked out now counts only when the reflog shows no checkout since.
+A detached HEAD is no branch, and the upload then sends none.
 
 Like the project key, a session's branch is cached in `project-dirs.json` the first time it is
 resolved: the first prompt pins the branch checked out then, the session's later prompts send
@@ -309,7 +311,7 @@ key (`git@github.com:dosu-ai/dosu-cli.git` → `github.com/dosu-ai/dosu-cli`). A
 repo, or in a repo without an `origin`, has no repo. The lookup is cached per session in
 `project-dirs.json`, so a checkout deleted later still resolves. Cursor's transcripts record no
 working directory, so its `stop` hook records it to `session-captures/cursor/<id>.json` before the
-detached sync starts.
+detached sync starts, with the time and branch of the session's first turn.
 
 `dosu` → settings → study scope picks which repos to ship (`repo_filter` in the state file). With a
 repo scope, only sessions in the picked repos are shipped. Picking every repo clears the filter, so

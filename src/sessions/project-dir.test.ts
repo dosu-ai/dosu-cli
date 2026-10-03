@@ -335,6 +335,27 @@ describe("resolveBranch", () => {
     expect(resolver.resolveBranch(s)).toBe("feat/cursor");
   });
 
+  it("asks Cursor's reflog first, about the session's first prompt, else its first captured turn", () => {
+    const at = (iso: string) => Date.parse(iso) / 1000;
+    const reflogOfDir = () =>
+      [
+        `HEAD@{${at("2026-08-25T10:40:00Z")}}\tcheckout: moving from feat/start to feat/mid`,
+        `HEAD@{${at("2026-08-25T09:00:00Z")}}\tcheckout: moving from main to feat/start`,
+      ].join("\n");
+    // The latest turn ran on feat/mid; an older CLI's capture holds that one.
+    const capture = { dir: "/work/app", branch: "feat/mid", at: "2026-08-25T11:00:00Z" };
+    const resolver = createProjectDirResolver(tempDir, {
+      ...noGit,
+      reflogOfDir,
+      captured: (key) =>
+        key === "cursor/c2" ? { ...capture, since: "2026-08-25T10:10:00Z" } : capture,
+    });
+    const s = session({ harness: "cursor", id: "c1", updated: "2026-08-25T11:00:00Z" });
+    expect(resolver.resolveBranch(s, "2026-08-25T10:00:00Z")).toBe("feat/start");
+    // Cursor's transcripts carry no times: its first captured turn is the nearest to its start.
+    expect(resolver.resolveBranch({ ...s, id: "c2" })).toBe("feat/start");
+  });
+
   it("falls back to the reflog at the session's end, reading each directory's reflog once", () => {
     const end = Date.parse("2026-08-25T11:00:00Z") / 1000;
     const reflogOfDir = vi.fn(() =>

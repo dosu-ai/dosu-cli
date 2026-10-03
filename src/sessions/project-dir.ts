@@ -193,10 +193,11 @@ export interface ProjectDirResolver {
    * out, then and on the session's later prompts. */
   resolveProjectAt(key: string, dir: string): ProjectKey | null;
   /** The branch a session whose transcript recorded none ran on, as first resolved for it and
-   * cached from then on, like its project key: the one its prompts were served under, else what
-   * Cursor's hook captured, else the reflog's answer for `at` (ISO; when the session began, its
-   * first prompt, which is when a prompt hook pins it; default its last activity), with the
-   * checkout's current branch only when no checkout happened since. Null when none knows. */
+   * cached from then on, like its project key: the one its prompts were served under, else the
+   * reflog's answer for `at` (ISO; when the session began, its first prompt, which is when a
+   * prompt hook pins it; for Cursor, whose transcripts carry no times, its first captured turn;
+   * else its last activity), with the checkout's current branch only when no checkout happened
+   * since, else the branch Cursor's hook captured at its first turn. Null when none knows. */
   resolveBranch(session: AgentSession, at?: string): string | null;
   /** The branch for a session whose working directory the caller already knows (a prompt hook's
    * cwd), cached under its `harness/id` key so the session's later prompts and its shipped
@@ -435,11 +436,13 @@ export function createProjectDirResolver(
       }
       return sessionProject(key, dir, entries[key].mtime, deps.env ?? process.env, "prompt");
     },
-    resolveBranch(session, at = session.updated) {
+    resolveBranch(session, at) {
       const key = `${session.harness}/${session.id}`;
       const pinned = entries[key]?.branch;
       if (pinned) return pinned;
-      const branch = captured(key)?.branch ?? reflogBranch(session, at);
+      const capture = captured(key);
+      const when = at ?? capture?.since ?? session.updated;
+      const branch = reflogBranch(session, when) ?? capture?.branch ?? null;
       if (branch) {
         resolve(session); // the session's entry, to pin the branch on
         entries[key].branch = branch;
