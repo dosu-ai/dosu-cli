@@ -121,6 +121,51 @@ describe("normalizeSessionRecords", () => {
     expect(result.tool_call_id).toBe("toolu_01AbCdEfGhJkLmNpQr");
   });
 
+  it("keeps a Claude Code task notification, in place, as what the agent observed", async () => {
+    const path = join(dir, "bg.jsonl");
+    const row = (uuid: string, type: string, content: unknown, extra = {}) =>
+      JSON.stringify({
+        type,
+        uuid,
+        timestamp: `2026-09-01T00:00:0${uuid.slice(-1)}.000Z`,
+        sessionId: "bg",
+        message: { role: type, content },
+        ...extra,
+      });
+    const notification =
+      "<task-notification>\n<task-id>a1</task-id>\n<status>completed</status>\n" +
+      "<result>README.md has 4 lines.</result>\n</task-notification>";
+    writeFileSync(
+      path,
+      [
+        row("u1", "user", "Launch a background agent to count README lines."),
+        row("a2", "assistant", [{ type: "tool_use", id: "toolu_1", name: "Agent", input: {} }]),
+        row("u3", "user", [{ type: "tool_result", tool_use_id: "toolu_1", content: "launched" }]),
+        row("u4", "user", notification, { origin: { kind: "task-notification" } }),
+        // The same notification as content blocks, as a queued prompt can record it.
+        row("u5", "user", [{ type: "text", text: notification }]),
+        row("a6", "assistant", [{ type: "text", text: "The agent counted 4 lines." }]),
+      ].join("\n"),
+    );
+
+    const records = await normalizeSessionRecords(session({ path }));
+
+    expect(records?.map((r) => r.role)).toEqual([
+      "meta",
+      "user",
+      "assistant",
+      "tool",
+      "observation",
+      "observation",
+      "assistant",
+    ]);
+    expect(records?.[4]).toEqual({
+      role: "observation",
+      content: notification,
+      timestamp: "2026-09-01T00:00:04.000Z",
+    });
+  });
+
   it("returns null for opencode sessions (sqlite rows are not the adapter's export shape)", async () => {
     expect(
       await normalizeSessionRecords(session({ harness: "opencode", path: join(dir, "db") })),

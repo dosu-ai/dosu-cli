@@ -234,6 +234,48 @@ describe("knowledge sync of a session with subagents", () => {
   });
 });
 
+describe("knowledge sync of a session with a background agent", () => {
+  it("keeps the agent's reported result in the session, and ships the agent's own work linked to it", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    const rows = exchange(1, alpha, { sessionId: "parent" });
+    rows.push(
+      {
+        type: "user",
+        uuid: "n1",
+        sessionId: "parent",
+        timestamp: "2026-10-02T10:05:00.000Z",
+        origin: { kind: "task-notification" },
+        message: {
+          role: "user",
+          content:
+            "<task-notification>\n<task-id>a1</task-id>\n<status>completed</status>\n" +
+            "<result>The flaky test is test_retry: it sleeps on wall-clock time.</result>\n" +
+            "</task-notification>",
+        },
+      },
+      ...exchange(6, alpha, { sessionId: "parent" }).slice(1),
+    );
+    claudeSession("parent", rows, 30);
+    subagent("parent", "a1", 2, alpha, 31);
+
+    await dosu("sync");
+
+    const shipped = postedBySession();
+    const observed = shipped.parent.records.filter((r) => r.role === "observation");
+    expect(observed.map((r) => r.content)).toEqual([
+      expect.stringContaining("The flaky test is test_retry"),
+    ]);
+    expect(shipped.parent.records.map((r) => r.role)).toEqual([
+      "meta",
+      "user",
+      "assistant",
+      "observation",
+      "assistant",
+    ]);
+    expect(shipped["agent-a1"].metadata.parent_session_id).toBe("parent");
+  });
+});
+
 describe("status views", () => {
   /** Everything printed to stdout by `dosu <args>`, as one string. */
   async function output(...args: string[]): Promise<string> {
