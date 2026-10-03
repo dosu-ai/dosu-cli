@@ -301,6 +301,31 @@ describe("codex agent", () => {
     });
   });
 
+  it("trusts a Dosu hook installed before trust was recorded, keeping the user's switch", () => {
+    installCodex("0.160.0");
+    mkdirSync(join(fakeHome, ".codex"));
+    // An older install: the hook is in hooks.json, and the user switched it off in Codex.
+    writeFileSync(
+      join(fakeHome, ".codex", "hooks.json"),
+      JSON.stringify({
+        hooks: {
+          SessionEnd: [{ hooks: [{ type: "command", command: HOOK_COMMAND, timeout: 3 }] }],
+        },
+      }),
+    );
+    writeFileSync(
+      join(fakeHome, ".codex", "config.toml"),
+      `[hooks.state.${JSON.stringify(key("session_end"))}] # set in /hooks\nenabled = false\n`,
+    );
+
+    getHookAgent("codex")?.enable();
+
+    expect(trusted()[key("session_end")]).toEqual({
+      enabled: false,
+      trusted_hash: SESSION_END_SYNC_HASH,
+    });
+  });
+
   it("an unparseable config.toml is left alone, and the error says the hooks need trusting", () => {
     installCodex("0.160.0");
     mkdirSync(join(fakeHome, ".codex"));
