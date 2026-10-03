@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
+import { loadSyncState } from "../sync/state";
 import { SHIP_BATCH_LIMIT } from "../sync/sync";
 import { knowledgeCommand } from "./knowledge";
 
@@ -242,6 +243,47 @@ describe("knowledge sync of a session with subagents", () => {
     await dosu("sync");
 
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("holds a subagent's transcript while its session is live, so the session can still opt out", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    const rows = exchange(1, alpha, { sessionId: "parent" });
+    const live = claudeSession("parent", rows, 0);
+    // The subagent finished long ago; the session it worked for is still going.
+    subagent("parent", "a1", 2, alpha, 10);
+
+    // Any hook run (another session ending, another agent's per-turn hook) leaves it alone.
+    await dosu("sync", "--quiet");
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    // Then the user turns Dosu off for the session, and the session ends.
+    rows.push({
+      type: "user",
+      uuid: "inc",
+      message: { role: "user", content: "<command-name>/dosu-incognito</command-name>" },
+    });
+    claudeSession("parent", rows, 0);
+    await dosu("sync", "--quiet", "--ended", `claude:parent=${live}`);
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    const { sessions } = loadSyncState();
+    expect(sessions["claude/parent"].outcome).toBe("incognito");
+    expect(sessions["claude/agent-a1"].outcome).toBe("incognito");
+  });
+
+  it("ships a subagent's transcript once its session has gone quiet, without an end hook", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    claudeSession("parent", exchange(1, alpha, { sessionId: "parent" }), 0);
+    subagent("parent", "a1", 2, alpha, 10);
+    await dosu("sync", "--quiet");
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    // Quiet for the full period (as after `claude -p --bare`, which runs no hooks).
+    const quiet = new Date(Date.now() - 6 * 60_000);
+    utimesSync(join(PROJECTS(), "parent.jsonl"), quiet, quiet);
+    await dosu("sync", "--quiet");
+
+    expect(Object.keys(postedBySession()).sort()).toEqual(["agent-a1", "parent"]);
   });
 
   it("ships the subagents of a session under a relocated config from a shell without it", async () => {

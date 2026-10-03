@@ -565,7 +565,10 @@ export interface GateResult {
 }
 
 /** Pending sessions, split on the quiet period: fresher ones may still be running and wait for
- * a later trigger, unless they are known to have ended. Keeps the input order. */
+ * a later trigger, unless they are known to have ended. A subagent's transcript waits while the
+ * session it worked for (when listed) does, so it ships with or after that session and whatever
+ * the session decides later (its end, an incognito opt-out) still applies to it. Keeps the input
+ * order. */
 export function gateSessions(
   sessions: readonly AgentSession[],
   ledger: Readonly<Record<string, LedgerEntry>>,
@@ -573,13 +576,16 @@ export function gateSessions(
 ): GateResult {
   const now = options.now ?? new Date();
   const completedBefore = now.getTime() - (options.quietPeriodMs ?? DEFAULT_QUIET_PERIOD_MS);
+  const updatedOf = new Map(sessions.map((s) => [sessionKey(s), Date.parse(s.updated)]));
   const ready: AgentSession[] = [];
   const open: AgentSession[] = [];
   for (const session of sessions) {
     const updated = Date.parse(session.updated);
     if (Number.isNaN(updated)) continue;
     if (!isPending(session, ledger[sessionKey(session)], options)) continue;
-    if (updated > completedBefore && !options.isEnded?.(session)) open.push(session);
+    const parent = session.parentId && updatedOf.get(`${session.harness}/${session.parentId}`);
+    const active = parent && parent > updated ? parent : updated;
+    if (active > completedBefore && !options.isEnded?.(session)) open.push(session);
     else ready.push(session);
   }
   return { ready, open };
