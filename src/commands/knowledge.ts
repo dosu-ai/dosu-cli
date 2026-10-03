@@ -488,23 +488,36 @@ function readStdin(): string {
   return readFileSync(0, "utf-8");
 }
 
-/** `dosu knowledge context`: the Claude Code UserPromptSubmit hook. Hidden -- it is invoked by
- * the agent, not by people. Prints nothing and exits 0 unless there is a digest to add, so a
- * logged-out install, OSS mode or a down server all look like Dosu not being there. */
+/** `dosu knowledge context`: the prompt-submit hook (Claude Code by default; Codex with `--agent
+ * codex --format codex`), and the lookup OpenCode and Pi plugins call with `--format plain`.
+ * Hidden -- it is invoked by agents, not by people. Prints nothing and exits 0 unless there is a
+ * digest to add, so a logged-out install, OSS mode, shipping switched off or a down server all
+ * look like Dosu not being there. */
 function contextCommand(): Command {
   return new Command("context")
     .description("Prompt-submit hook: add task memory to the agent's context")
-    .action(async () => {
+    .option("--agent <source>", "Trajectory source the session ships as", "claude-code")
+    .option(
+      "--format <format>",
+      "Output: claude or codex hook JSON, or plain digest text",
+      "claude",
+    )
+    .action(async (opts: { agent: string; format: string }) => {
       const cfg = loadConfig();
       const target = cfg.active_account?.target;
       const backendUrl = getBackendURL();
       if (cfg.mode === "oss" || !target?.api_key || !target.deployment_id) return;
       if (!isAbsoluteHttpUrl(backendUrl)) return;
-      const { contextHookOutput } = await import("../memory/context-hook");
+      if (!isShippingEnabled(loadSyncState())) return;
+      const { CONTEXT_FORMATS, contextHookOutput } = await import("../memory/context-hook");
+      const format = CONTEXT_FORMATS.find((f) => f === opts.format);
+      if (!format) return;
       const out = await contextHookOutput(readStdin(), {
         apiKey: target.api_key,
         deploymentId: target.deployment_id,
         backendUrl,
+        agent: opts.agent,
+        format,
         branchOf: currentBranch,
       });
       if (out) process.stdout.write(out);

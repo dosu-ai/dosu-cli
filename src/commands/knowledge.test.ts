@@ -1880,4 +1880,21 @@ describe("knowledge context (prompt-submit hook)", () => {
     write.mockRestore();
     fetchSpy.mockRestore();
   });
+
+  // Codex keeps its prompt hook when shipping is switched off, so the switch is honored here too:
+  // the prompt would otherwise still reach Dosu as a retrieval query.
+  it("is silent once transcript shipping is turned off", async () => {
+    mockLoadConfig.mockReturnValue({
+      mode: "cloud",
+      active_account: { target: { api_key: "k", deployment_id: "d" } },
+    });
+    mockLoadSyncState.mockReturnValue({ schema_version: 3, sessions: {}, ship_transcripts: false });
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    await run("context", "--agent", "codex", "--format", "codex");
+    expect(write).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    write.mockRestore();
+    fetchSpy.mockRestore();
+  });
 });
