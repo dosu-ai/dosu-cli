@@ -457,6 +457,7 @@ describe("runKnowledgeSync shipping", () => {
     expect(outcome.status).toBe("shipped");
     expect(outcome.counts).toEqual({
       shipped: 3,
+      subagents: 0,
       incognito: 0,
       trivial: 0,
       unsupported: 0,

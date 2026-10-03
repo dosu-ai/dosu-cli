@@ -72,6 +72,9 @@ export interface LedgerEntry {
   http_status?: number;
   /** rejected/unsupported: one renderable line saying why. */
   message?: string;
+  /** A subagent's transcript (a child session): the id of the session it worked for. Settled on
+   * its own, but counted with that session in every view, never as a session of its own. */
+  parent?: string;
   /** Carried over from the schema-2 shipped history, which never recorded the session's own
    * mtime: `updated` holds the ship time instead, and the session is pending only once it
    * changes after that. */
@@ -109,7 +112,8 @@ export interface SyncState {
   sessions: Record<string, LedgerEntry>;
   last_attempt_at?: string;
   consecutive_failures: number;
-  /** All-time shipped-session count — survives ledger pruning. */
+  /** All-time shipped-session count — survives ledger pruning. Subagents' transcripts ship with
+   * their session and do not count. */
   total_shipped?: number;
   /** The active run's progress baseline; see SyncRun. */
   run?: SyncRun;
@@ -197,6 +201,7 @@ function parseEntry(value: unknown): LedgerEntry | null {
     ...optionalString("workspace", value.workspace),
     ...(typeof value.http_status === "number" ? { http_status: value.http_status } : {}),
     ...optionalString("message", value.message),
+    ...optionalString("parent", value.parent),
     ...(value.seeded === true ? { seeded: true as const } : {}),
   };
 }
@@ -374,6 +379,7 @@ export function skipBacklog(
       outcome: "skipped_by_user",
       at,
       cli_version: cliVersion,
+      ...(session.parentId ? { parent: session.parentId } : {}),
     };
   }
   saveSyncState(state, configDir);
@@ -436,13 +442,27 @@ export function pruneLedger(state: SyncState, cutoff: Date): void {
   }
 }
 
-/** How many ledger entries settled each way. */
-export function outcomeCounts(state: SyncState): Record<SessionOutcome, number> {
+/** The sessions themselves, without the subagents' transcripts that ship with them: what every
+ * view counts and lists as sessions. */
+export function withoutSubagents<T extends Pick<AgentSession, "parentId">>(
+  sessions: readonly T[],
+): T[] {
+  return sessions.filter((session) => !session.parentId);
+}
+
+/** How many ledger entries settled each way: sessions, or (`of: "subagents"`) the subagents'
+ * transcripts, which views count apart so a session is never counted once per subagent. */
+export function outcomeCounts(
+  state: SyncState,
+  of: "sessions" | "subagents" = "sessions",
+): Record<SessionOutcome, number> {
   const counts = Object.fromEntries(SESSION_OUTCOMES.map((o) => [o, 0])) as Record<
     SessionOutcome,
     number
   >;
-  for (const entry of Object.values(state.sessions)) counts[entry.outcome] += 1;
+  for (const entry of Object.values(state.sessions)) {
+    if ((entry.parent !== undefined) === (of === "subagents")) counts[entry.outcome] += 1;
+  }
   return counts;
 }
 
@@ -457,16 +477,19 @@ export function settledSessions(
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
 }
 
-/** Shipped sessions still in the ledger, oldest shipped first. */
+/** Shipped sessions still in the ledger, oldest shipped first; the subagents' transcripts that
+ * shipped with them are not sessions of their own. */
 export function shippedSessions(state: SyncState): ShippedSessionRecord[] {
-  return settledSessions(state, "shipped").map((entry) => ({
-    at: entry.at,
-    session: entry.session,
-    task_id: entry.task_id ?? "unknown",
-    ...(entry.session_url ? { session_url: entry.session_url } : {}),
-    ...(entry.project ? { project: entry.project } : {}),
-    ...(entry.workspace ? { workspace: entry.workspace } : {}),
-  }));
+  return settledSessions(state, "shipped")
+    .filter((entry) => entry.parent === undefined)
+    .map((entry) => ({
+      at: entry.at,
+      session: entry.session,
+      task_id: entry.task_id ?? "unknown",
+      ...(entry.session_url ? { session_url: entry.session_url } : {}),
+      ...(entry.project ? { project: entry.project } : {}),
+      ...(entry.workspace ? { workspace: entry.workspace } : {}),
+    }));
 }
 
 /** Changes whenever a run settles something or the ledger is cleared; views rescan on it. */

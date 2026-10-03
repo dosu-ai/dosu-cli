@@ -37,6 +37,18 @@ and `unsupported` are answers, so one unreadable session never stalls the rest.
 `dosu knowledge sync --status` shows counts per outcome and the rejected and unsupported sessions
 grouped by reason; `dosu knowledge sessions --rejected` (or `--unsupported`) lists every one.
 
+**Subagents.** Claude Code writes each subagent's conversation to its own transcript,
+`<project>/<session id>/subagents/agent-<agent id>.jsonl`. The sync lists every one as a session of
+its own (`claude/agent-<agent id>`), normalizes it on its own, and ships it with
+`metadata.parent_session_id` set to the session it worked for (the top-level session, for a nested
+subagent too). It is settled in the ledger on its own, so it can be trivial while its session ships,
+but it inherits what its session decided: a session-end hook for the session ships its subagents in
+the same run, `/dosu-incognito` in the session keeps them out, and they ship under the session's
+project key. Views count sessions, not transcripts: `--status`, `transcripts status`,
+`knowledge sessions`, the Activity screen, and setup's backfill offer count a session's subagents
+with it and report them apart ("Subagents: 2 shipped", `subagent_counts` in JSON), and
+`total_shipped` counts sessions only.
+
 **Worthiness** is judged on what would ship: the normalized, redacted trajectory. Text, tool
 arguments, and tool results all count toward the 2,000 characters, so a terse run that did its work
 through tools ships; the meta record does not count.
@@ -63,7 +75,7 @@ and a sha256 of them. When the session grows and its records still start with ex
 only the meta record and the new tail ship, with `metadata.continuation =
 {"from_record": n, "prefix_sha256": "..."}`. A new tail too small to learn from is not uploaded and
 the session stays shipped. If the prefix no longer matches, the whole session ships again and the
-server dedupes identical content. A child session's upload carries `parent_session_id`.
+server dedupes identical content.
 
 Upgrading from the watermark state (schema 2, or the learner-era schema 1) seeds the ledger with the
 sessions it shipped. Everything else in the window becomes pending again, including sessions the

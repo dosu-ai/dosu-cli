@@ -5,7 +5,13 @@ import { createProjectDirResolver } from "../sessions/project-dir";
 import { type AgentSession, scanAgentSessions } from "../sessions/scan";
 import { VERSION } from "../version/version";
 import { partitionIncognitoSessions } from "./incognito";
-import { filterSessionsByRepo, gateSessions, loadSyncState, studyRepoFilter } from "./state";
+import {
+  filterSessionsByRepo,
+  gateSessions,
+  loadSyncState,
+  studyRepoFilter,
+  withoutSubagents,
+} from "./state";
 import { SCAN_WINDOW_DAYS, withOutsideSessions } from "./sync";
 
 export interface SessionBacklog {
@@ -16,6 +22,9 @@ export interface SessionBacklog {
   /** Gated sessions the user opted out of with `/dosu-incognito`; never shipped. Optional so
    * callers that only fake `queued`/`open` keep compiling. */
   incognito?: AgentSession[];
+  /** Pending subagents' transcripts. Each ships with the session it worked for, so the lists
+   * above name only sessions. */
+  subagents?: number;
 }
 
 /** The pending backlog within the sync's own scan window, oldest first; a failed scan reads as
@@ -39,8 +48,13 @@ export function listSessionBacklog(now: Date = new Date()): SessionBacklog {
     const open = filterSessionsByRepo(gate.open, filter, resolver.resolveRepo);
     resolver.flush();
     // Only pending sessions are read for the marker: settled ones already have their answer.
-    const { kept, skipped } = partitionIncognitoSessions(ready);
-    return { queued: kept.reverse(), open: open.reverse(), incognito: skipped.reverse() };
+    const { kept, skipped } = partitionIncognitoSessions(withoutSubagents(ready));
+    return {
+      queued: kept.reverse(),
+      open: withoutSubagents(open).reverse(),
+      incognito: skipped.reverse(),
+      subagents: [...ready, ...open].filter((s) => s.parentId).length,
+    };
   } catch {
     return { queued: [], open: [], incognito: [] };
   }

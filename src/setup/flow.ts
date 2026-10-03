@@ -26,7 +26,13 @@ import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { refreshConfiguredProviders } from "../mcp/refresh";
 import { getStatuslineAgent, StatuslineConflictError } from "../statusline/agents";
 import { spawnDetachedSelf } from "../sync/detach";
-import { isShippingEnabled, loadSyncState, skipBacklog, unsettledSessions } from "../sync/state";
+import {
+  isShippingEnabled,
+  loadSyncState,
+  skipBacklog,
+  unsettledSessions,
+  withoutSubagents,
+} from "../sync/state";
 import { runKnowledgeSync } from "../sync/sync";
 import { recordCommandFacets } from "../telemetry/telemetry";
 import { runActivityView } from "../tui/activity-view";
@@ -383,12 +389,13 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
   s.start("Checking for agent sessions from the last 30 days...");
   const outcome = await runKnowledgeSync();
   const backlog = outcome.status === "backlog" ? unsettledSessions(outcome.sessions, state) : [];
-  if (backlog.length === 0) {
+  // Subagents' transcripts go (or are skipped) with their sessions; the offer counts sessions.
+  const n = withoutSubagents(backlog).length;
+  if (n === 0) {
     s.stop("No recent agent sessions. Dosu memory learns from new ones as you work.");
     recordCommandFacets({ backfill_offer: "not-offered" });
     return;
   }
-  const n = backlog.length;
   const them = n === 1 ? "it" : "them";
   s.stop(`Found ${n} agent session${n === 1 ? "" : "s"} from the last 30 days on this machine.`);
   // What happens to the sessions, why it's worth it, and how to keep something out.

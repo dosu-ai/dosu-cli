@@ -169,7 +169,8 @@ export function knowledgeCommand(): Command {
         const wantQueued = want(opts.queued);
         const wantOpen = want(opts.open);
 
-        const backlog = wantQueued || wantOpen ? listSessionBacklog() : { queued: [], open: [] };
+        const backlog =
+          wantQueued || wantOpen ? listSessionBacklog() : { queued: [], open: [], subagents: 0 };
         const state =
           want(opts.shipped) || want(opts.rejected) || want(opts.unsupported)
             ? loadSyncState()
@@ -184,10 +185,18 @@ export function knowledgeCommand(): Command {
             {
               ...(wantQueued ? { queued: backlog.queued } : {}),
               ...(wantOpen ? { open: backlog.open } : {}),
+              ...((wantQueued || wantOpen) && backlog.subagents
+                ? { pending_subagent_transcripts: backlog.subagents }
+                : {}),
               ...(want(opts.shipped) ? { shipped } : {}),
               ...(want(opts.rejected) ? { rejected } : {}),
               ...(want(opts.unsupported) ? { unsupported } : {}),
-              ...(all && state ? { counts: outcomeCounts(state) } : {}),
+              ...(all && state
+                ? {
+                    counts: outcomeCounts(state),
+                    subagent_counts: outcomeCounts(state, "subagents"),
+                  }
+                : {}),
             },
             opts,
           );
@@ -241,6 +250,14 @@ export function knowledgeCommand(): Command {
             "No open sessions. Live agent sessions sit here until they go quiet.",
           );
         }
+        const pendingSubagents = backlog.subagents ?? 0;
+        if ((wantQueued || wantOpen) && pendingSubagents > 0) {
+          console.log(
+            pc.dim(
+              `${pendingSubagents} subagent transcript${pendingSubagents === 1 ? "" : "s"} ships with these sessions.`,
+            ),
+          );
+        }
         if (want(opts.shipped)) {
           section("Shipped", shippedRows, sessionHeaders("Shipped at"), "No sessions shipped yet.");
         }
@@ -263,6 +280,8 @@ export function knowledgeCommand(): Command {
         if (all && state) {
           console.log();
           console.log(pc.dim(`Settled sessions: ${formatOutcomeCounts(state)}`));
+          const subagents = formatOutcomeCounts(state, "subagents");
+          if (subagents) console.log(pc.dim(`Subagent transcripts: ${subagents}`));
         }
       },
     );
@@ -533,6 +552,7 @@ function transcriptsCommand(): Command {
             enabled,
             total_shipped: state.total_shipped ?? 0,
             counts: outcomeCounts(state),
+            subagent_counts: outcomeCounts(state, "subagents"),
             shipped_sessions: shipped,
           },
           opts,
@@ -611,13 +631,15 @@ function formatAge(iso: string, now: Date): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-/** "3 shipped · 1 trivial · 2 rejected": the non-zero ledger counts, in outcome order. */
-function formatOutcomeCounts(state: SyncState): string {
-  const counts = outcomeCounts(state);
+/** "3 shipped · 1 trivial · 2 rejected": the non-zero ledger counts, in outcome order. Sessions
+ * say "nothing settled" when empty; subagents' transcripts say nothing (""). */
+function formatOutcomeCounts(state: SyncState, of: "sessions" | "subagents" = "sessions"): string {
+  const counts = outcomeCounts(state, of);
   const parts = SESSION_OUTCOMES.filter((o) => counts[o] > 0).map(
     (o) => `${counts[o]} ${o.replaceAll("_", " ")}`,
   );
-  return parts.length > 0 ? parts.join(" \u00B7 ") : "nothing settled";
+  if (parts.length > 0) return parts.join(" \u00B7 ");
+  return of === "sessions" ? "nothing settled" : "";
 }
 
 /** How many sessions `--status` names for one reason before pointing at the full list. */
@@ -683,6 +705,8 @@ function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
   );
   if (Object.keys(status.state.sessions).length > 0) {
     console.log(`  Settled:         ${formatOutcomeCounts(status.state)}`);
+    const subagents = formatOutcomeCounts(status.state, "subagents");
+    if (subagents) console.log(`  Subagents:       ${subagents}`);
   }
   const repoFilter = status.state.repo_filter;
   if (repoFilter) {
@@ -733,9 +757,9 @@ function printSyncOutcome(outcome: SyncOutcome): void {
       : "";
   switch (outcome.status) {
     case "backlog": {
-      console.log(
-        `✓ Scanned. ${outcome.readySessions} finished session${plural(outcome.readySessions)} ready to ship${inFlight}.`,
-      );
+      // Subagents' transcripts ship with their sessions; only sessions are counted here.
+      const ready = outcome.readySessions - outcome.sessions.filter((s) => s.parentId).length;
+      console.log(`✓ Scanned. ${ready} finished session${plural(ready)} ready to ship${inFlight}.`);
       console.log(pc.dim("Sign in with 'dosu setup' to ship them to Dosu memory."));
       break;
     }
@@ -743,6 +767,7 @@ function printSyncOutcome(outcome: SyncOutcome): void {
     case "ship-failed": {
       const {
         shipped = 0,
+        subagents = 0,
         incognito = 0,
         trivial = 0,
         unsupported = 0,
@@ -751,6 +776,8 @@ function printSyncOutcome(outcome: SyncOutcome): void {
       const passed = incognito + trivial + unsupported + rejected;
       console.log(
         `✓ Shipped ${shipped} session${plural(shipped)} to Dosu memory${
+          subagents > 0 ? ` (+${subagents} subagent transcript${plural(subagents)})` : ""
+        }${
           passed > 0
             ? pc.dim(` (${passed} passed over: incognito, too short, unsupported, or rejected)`)
             : ""
