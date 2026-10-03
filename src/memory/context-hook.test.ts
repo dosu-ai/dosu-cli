@@ -236,7 +236,7 @@ describe("contextHookOutput", () => {
       fetchImpl,
       isIncognito: () => true,
     });
-    // `/dosu-incognito` expands to a body carrying this token, which is what the hook sees.
+    // The marker typed into a prompt works in any agent.
     const typed = await contextHookOutput(payload({ prompt: `${INCOGNITO_MARKER} then fix it` }), {
       ...base,
       fetchImpl,
@@ -244,6 +244,22 @@ describe("contextHookOutput", () => {
     expect(marked).toBe("");
     expect(typed).toBe("");
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("never sends the prompt that runs /dosu-incognito, which the transcript does not yet show", async () => {
+    // Claude Code hands its prompt hook the command as typed, before the expansion is recorded.
+    const fetchImpl = respond(200, { digest: DIGEST });
+    for (const prompt of ["/dosu-incognito", "  /dosu-incognito then fix the login bug"]) {
+      expect(await contextHookOutput(payload({ prompt }), { ...base, fetchImpl })).toBe("");
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    // Only a command at the start runs; a prompt that merely names it is asked about as usual.
+    await contextHookOutput(payload({ prompt: "what does /dosu-incognito do?" }), {
+      ...base,
+      fetchImpl,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -281,6 +297,25 @@ describe("contextHookOutput for other agents", () => {
       session_id: ROLLOUT,
       project: "path:/work/widget",
     });
+  });
+
+  it("never sends a Codex prompt that mentions $dosu-incognito, which runs the skill", async () => {
+    const fetchImpl = respond(200, { digest: DIGEST });
+    for (const prompt of [
+      "$dosu-incognito",
+      "fix the login bug $dosu-incognito",
+      "[$dosu-incognito](/home/u/.codex/skills/dosu-incognito/SKILL.md) fix it",
+    ]) {
+      expect(await contextHookOutput(codexPayload({ prompt }), { ...codex, fetchImpl })).toBe("");
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    // Another skill whose name starts the same is not this one.
+    await contextHookOutput(codexPayload({ prompt: "$dosu-incognito-notes summarize" }), {
+      ...codex,
+      fetchImpl,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("asks nothing for a Codex subagent or fork of a session taken off the record", async () => {

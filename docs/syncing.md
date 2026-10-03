@@ -424,6 +424,10 @@ the user did not take off the record. It lives under `$CODEX_HOME/skills` rather
 `~/.agents/skills`, which other agents read too. `/dosu-incognito` typed into Codex is an
 unrecognized command.
 
+The prompt that runs the command (Claude Code hands its prompt hook `/dosu-incognito` as typed;
+Codex expands `$dosu-incognito` anywhere in a prompt) is never sent to the prompt-time memory hook
+either, even though the transcript shows the marker only after it.
+
 ## Status line
 
 ```bash

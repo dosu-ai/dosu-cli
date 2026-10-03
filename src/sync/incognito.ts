@@ -28,6 +28,17 @@ export function textHasIncognitoMarker(text: string): boolean {
   return text.includes(INCOGNITO_MARKER) || text.includes(COMMAND_NAME_MARKER);
 }
 
+/** A prompt that runs the incognito command: `/dosu-incognito` at its start (Claude Code hands a
+ * prompt hook the command as typed), or a `$dosu-incognito` skill mention anywhere in it (Codex
+ * runs every mentioned skill). The transcript shows the marker only after such a prompt. */
+const RUNS_INCOGNITO = new RegExp(
+  `^\\s*/${INCOGNITO_COMMAND_NAME}(?:\\s|$)|(?:^|\\W)\\$${INCOGNITO_COMMAND_NAME}(?![\\w:-])`,
+);
+
+export function promptRunsIncognito(prompt: string): boolean {
+  return RUNS_INCOGNITO.test(prompt);
+}
+
 /** Whether a JSONL transcript file carries the incognito marker. Raw substring search on the
  * file, bounded by MAX_SCAN_BYTES; a missing or unreadable file reads as not incognito. */
 export function transcriptHasIncognitoMarker(
