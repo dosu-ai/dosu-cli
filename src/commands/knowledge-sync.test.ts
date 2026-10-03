@@ -239,22 +239,19 @@ describe("knowledge sync from opencode's Dosu plugin", () => {
     ]);
   }
 
-  it("ships each session the plugin reports ended when opencode shuts down, a subagent's naming its parent", async () => {
+  it("ships the sessions the plugin reports ended when opencode exits, a subagent's naming its parent", async () => {
     const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
     if (!opencodeSessions(alpha)) return; // no sqlite builtin
 
-    for (const id of ["ses_root", "ses_child"]) {
-      hookStdin({
-        agent: "opencode",
-        hook_event_name: "opencode.session.end",
-        session_id: id,
-        cwd: alpha,
-      });
-      await dosu("sync", "--quiet", "--detach");
-      const child = respawnedArgs();
-      expect(child).toEqual(["sync", "--quiet", "--ended", `opencode:${id}`]);
-      await dosu(...child);
-    }
+    // The plugin's watcher names every session that ran in the process, with nothing on stdin.
+    vi.spyOn(process, "stdin", "get").mockReturnValue(
+      Readable.from([]) as unknown as typeof process.stdin,
+    );
+    const ended = ["--ended", "opencode:ses_root", "--ended", "opencode:ses_child"];
+    await dosu("sync", "--quiet", "--detach", ...ended);
+    const child = respawnedArgs();
+    expect(child).toEqual(["sync", "--quiet", ...ended]);
+    await dosu(...child);
 
     // The session still running elsewhere waits out the quiet period.
     expect(posted().map((p) => p.metadata)).toEqual([
@@ -294,14 +291,6 @@ describe("knowledge sync from opencode's Dosu plugin", () => {
       ses_child: "poc-alpha",
       ses_live: "github.com/acme/alpha",
     });
-  });
-
-  it("a session going idle after a turn ends nothing, so nothing skips the quiet period", async () => {
-    hookStdin({ agent: "opencode", hook_event_name: "opencode.session.idle", session_id: "ses_a" });
-
-    await dosu("sync", "--quiet", "--detach");
-
-    expect(respawnedArgs()).toEqual(["sync", "--quiet"]);
   });
 });
 

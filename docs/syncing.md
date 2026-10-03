@@ -55,9 +55,10 @@ waits for it (up to ten minutes) instead of leaving the session for a later trig
 run ships nothing, but still remembers where an ended session lives. While hook runs back off after
 a failure, a run carrying an ended session still tries that session, and only that one; if it gets
 through, the backoff ends. Only definitive end events count: Claude Code's `SessionEnd`, and the
-shutdown of the opencode process that ran an OpenCode session. Per-turn events (Cursor's `stop`,
+exit of the opencode process that ran an OpenCode session. Per-turn events (Cursor's `stop`,
 Codex's `Stop`, OpenCode's `session.idle`) never pass `--ended`. Each agent's end event is
-one reader in `END_EVENT_READERS` (`src/sessions/capture.ts`).
+one reader in `END_EVENT_READERS` (`src/sessions/capture.ts`), except OpenCode's: its plugin
+passes `--ended` itself.
 
 **Resumed sessions.** For a shipped session the ledger also keeps how many normalized records went
 and a sha256 of them. When the session grows and its records still start with exactly that prefix,
@@ -141,15 +142,18 @@ records. A child session is incognito when the session that spawned it is.
 `$XDG_CONFIG_HOME/opencode/plugin/dosu.js` and the `/dosu-incognito` command; `disable` removes
 both. The plugin is plain JavaScript importing only node builtins, and does three things:
 
-- When the opencode process shuts down (`opencode run` finishing; the TUI quitting on Ctrl+C,
-  SIGTERM, or SIGHUP; a server stopping), its `dispose` hook, which opencode awaits, runs
-  `dosu knowledge sync --quiet --detach` once for each session that ran a turn in the process, with
-  `{"agent": "opencode", "hook_event_name": "opencode.session.end", "session_id": ...}` on stdin, so
-  each ships right away as `--ended opencode:<id>`. `session.idle` is not an end: the TUI fires it
-  after every turn, and a subagent's session fires it when its task returns. A turn going idle runs a
-  plain sync (no session named) at most every five minutes, so sessions left idle in a long-lived TUI
-  ship without waiting for it to exit. A process killed outright (SIGKILL) reports nothing; its
-  sessions ship with the next sync once quiet.
+- When the opencode process exits, however it exits (`opencode run` finishing or interrupted; the
+  TUI quitting; `opencode serve`, and the SDK, web UI, and `run --attach` built on it, stopped by
+  any signal, SIGKILL included), one `dosu knowledge sync --quiet --detach` runs with
+  `--ended opencode:<id>` for every session that ran a turn in it, so each ships right away. The
+  first turn starts a detached watcher that reads session ids from a pipe only the opencode process
+  writes to; the kernel closes the pipe when that process exits, which ends the watcher's input and
+  starts the sync. opencode's own `dispose` hook is not used: a server killed by a signal never
+  runs it, and a live process runs it whenever it reloads an instance (`/connect`, a config
+  change), which ends nothing. Nor is `session.idle` an end: the TUI fires it after every turn,
+  and a subagent's session fires it when its task returns. A session left idle in a long-lived TUI
+  or server ships with a plain sync (no session named) that the plugin runs 5.5 minutes after the
+  last turn went idle, once that session is past the quiet period.
 - Before a prompt is saved or sent (`chat.message`), it runs
   `dosu knowledge context --agent opencode --format plain` with `{"prompt", "session_id", "cwd"}` on
   stdin and appends the digest, if any, to the user message as a synthetic text part flagged

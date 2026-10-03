@@ -1,7 +1,9 @@
 /** OpenCode's Dosu plugin: what `hooks enable opencode` installs, and the installed plugin itself,
- * loaded the way opencode loads it and driven through its hooks. Only the `dosu` binary it runs
- * (a script recording what it was given) and opencode's own client are faked. */
+ * loaded the way opencode loads it, in a process of its own, driven through its hooks, then left
+ * to exit. Only the `dosu` binary it runs (a script recording what it was given), opencode's own
+ * client, and its clock are faked. */
 
+import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -13,10 +15,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { INCOGNITO_COMMAND_BODY } from "../incognito/agents";
-import { endedSessionOf } from "../sessions/capture";
 import { allHookAgents, getHookAgent } from "./agents";
 
 let home: string;
@@ -118,7 +118,9 @@ describe("the opencode hook agent", () => {
 
 interface Call {
   args: string;
-  stdin: Record<string, unknown>;
+  stdin: Record<string, unknown> | null;
+  /** How far opencode's clock had moved when the plugin started this command (ms). */
+  clock: number;
 }
 
 /** A `dosu` on PATH that records each call and prints `digest` for `knowledge context`. */
@@ -131,7 +133,7 @@ function fakeDosu(digest = ""): void {
     [
       "#!/bin/sh",
       'input=$(cat | tr -d "\\n")',
-      `printf '{"args":"%s","stdin":%s}\\n' "$*" "$input" >> '${calls}'`,
+      `printf '{"args":"%s","stdin":%s,"clock":%s}\\n' "$*" "\${input:-null}" "\${DOSU_TEST_CLOCK:-null}" >> '${calls}'`,
       `case "$*" in "knowledge context"*) cat '${out}';; esac`,
     ].join("\n"),
   );
@@ -146,82 +148,138 @@ function dosuCalls(): Call[] {
     .map((line) => JSON.parse(line) as Call);
 }
 
-type Hooks = {
-  event: (input: { event: { type: string; properties: Record<string, unknown> } }) => Promise<void>;
-  "chat.message": (
-    input: { sessionID: string },
-    output: { message: { id: string }; parts: Record<string, unknown>[] },
-  ) => Promise<void>;
-  dispose: () => Promise<void>;
+const syncs = () => dosuCalls().filter((c) => c.args.startsWith("knowledge sync"));
+
+/** Runs the plugin as opencode does: imports the module once and calls its one export per
+ * instance (`start`, again after a reload), with a client whose sessions hold `history`. Steps
+ * drive its hooks and opencode's clock; then the process exits, unless a step kills it. Prints the
+ * parts each prompt carries after the plugin saw it, one JSON line per prompt. */
+const DRIVER = `
+import { pathToFileURL } from "node:url";
+const [pluginPath, stepsJson, historyJson] = process.argv.slice(2);
+const history = JSON.parse(historyJson);
+
+const start = Date.now();
+let now = start;
+const timers = [];
+Date.now = () => now;
+globalThis.setTimeout = (fn, ms) => {
+  const timer = { at: now + ms, fn, unref: () => timer };
+  timers.push(timer);
+  return timer;
 };
-
-/** The installed plugin, imported fresh (module state included) and started as opencode starts
- * it, with a client whose sessions hold `history`. */
-async function startPlugin(history: Record<string, string[]> = {}): Promise<Hooks> {
-  opencode().enable();
-  const fresh = join(home, `dosu-${Math.random().toString(36).slice(2)}.js`);
-  writeFileSync(fresh, readFileSync(pluginPath(), "utf8"));
-  const mod = (await import(pathToFileURL(fresh).href)) as Record<
-    string,
-    (input: unknown) => Promise<Hooks>
-  >;
-  const plugins = Object.values(mod);
-  expect(plugins).toHaveLength(1); // opencode calls every export as a plugin
-  const client = {
-    session: {
-      messages: async ({ path }: { path: { id: string } }) => ({
-        data: (history[path.id] ?? []).map((text) => ({
-          info: { role: "user" },
-          parts: [{ type: "text", text }],
-        })),
-      }),
-    },
-  };
-  return plugins[0]({ directory: "/repo/app", worktree: "/repo/app", client });
+globalThis.clearTimeout = (timer) => {
+  if (timers.includes(timer)) timers.splice(timers.indexOf(timer), 1);
+};
+const tick = () => { process.env.DOSU_TEST_CLOCK = String(now - start); };
+tick();
+function advance(ms) {
+  const until = now + ms;
+  for (;;) {
+    timers.sort((a, b) => a.at - b.at);
+    if (!timers[0] || timers[0].at > until) break;
+    const timer = timers.shift();
+    now = timer.at;
+    tick();
+    timer.fn();
+  }
+  now = until;
+  tick();
 }
 
-/** opencode's part ids: `prt_`, 12 hex digits of time, 14 random characters. */
-function partId(ms: number): string {
-  return `prt_${(BigInt(ms) * 4096n + 1n).toString(16).slice(-12)}AAAAAAAAAAAAAA`;
-}
-
-function userMessage(sessionID: string, text: string) {
-  const messageID = `msg_${sessionID}`;
-  return {
-    message: { id: messageID, sessionID, role: "user" },
-    parts: [{ id: partId(Date.now() - 1000), sessionID, messageID, type: "text", text }] as Record<
-      string,
-      unknown
-    >[],
-  };
-}
-
-const created = (id: string, parentID?: string) => ({
-  event: {
-    type: "session.created",
-    properties: { info: { id, ...(parentID ? { parentID } : {}) } },
+const plugins = Object.values(await import(pathToFileURL(pluginPath).href));
+if (plugins.length !== 1) throw new Error("opencode calls every export as a plugin");
+const client = {
+  session: {
+    messages: async ({ path }) => ({
+      data: (history[path.id] ?? []).map((text) => ({ info: { role: "user" }, parts: [{ type: "text", text }] })),
+    }),
   },
-});
-const idle = (sessionID: string) => ({
-  event: { type: "session.idle", properties: { sessionID } },
-});
+};
+// opencode's part ids: prt_, 12 hex digits of time, 14 random characters.
+const typedPartId = "prt_" + (BigInt(start - 1000) * 4096n + 1n).toString(16).slice(-12) + "AAAAAAAAAAAAAA";
+let hooks;
+for (const [step, ...args] of JSON.parse(stepsJson)) {
+  if (step === "start") {
+    hooks = await plugins[0]({ directory: "/repo/app", worktree: "/repo/app", client });
+  } else if (step === "created") {
+    const info = { id: args[0], ...(args[1] ? { parentID: args[1] } : {}) };
+    await hooks.event({ event: { type: "session.created", properties: { info } } });
+  } else if (step === "chat") {
+    const [sessionID, text] = args;
+    const messageID = "msg_" + sessionID;
+    const output = {
+      message: { id: messageID, sessionID, role: "user" },
+      parts: [{ id: typedPartId, sessionID, messageID, type: "text", text }],
+    };
+    await hooks["chat.message"]({ sessionID }, output);
+    console.log(JSON.stringify(output.parts));
+  } else if (step === "idle") {
+    await hooks.event({ event: { type: "session.idle", properties: { sessionID: args[0] } } });
+  } else if (step === "dispose") {
+    await hooks.dispose?.();
+  } else if (step === "advance") {
+    advance(args[0]);
+  } else if (step === "kill") {
+    process.kill(process.pid, "SIGKILL");
+  }
+}
+process.exit(0);
+`;
+
+type Step =
+  | ["start"]
+  | ["created", string, string?]
+  | ["chat", string, string]
+  | ["idle", string]
+  | ["dispose"]
+  | ["advance", number]
+  | ["kill"];
+
+/** The installed plugin in an opencode process of its own: the parts of each prompt it ran. */
+function opencodeProcess(
+  steps: Step[],
+  history: Record<string, string[]> = {},
+): Record<string, unknown>[][] {
+  opencode().enable();
+  const driver = join(home, "driver.mjs");
+  writeFileSync(driver, DRIVER);
+  const result = spawnSync(
+    process.execPath,
+    [driver, pluginPath(), JSON.stringify(steps), JSON.stringify(history)],
+    { encoding: "utf8" },
+  );
+  if (!steps.some(([step]) => step === "kill")) expect(result.status, result.stderr).toBe(0);
+  return result.stdout
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
+/** Detached commands record themselves a moment after they start. */
+const settle = (check: () => void) => vi.waitFor(check, { timeout: 5000, interval: 50 });
+
+const QUIET_SYNC_MS = 330_000;
 
 describe("the opencode plugin", () => {
-  it("adds the memory digest to a prompt, flagged, after what the user typed", async () => {
+  it("adds the memory digest to a prompt, flagged, after what the user typed", () => {
     fakeDosu("Dosu memory: the deploy codeword is PELICAN-7\n");
-    const hooks = await startPlugin();
-    await hooks.event(created("ses_a"));
-    const output = userMessage("ses_a", "how does deploy work?");
 
-    await hooks["chat.message"]({ sessionID: "ses_a" }, output);
+    const [parts] = opencodeProcess([
+      ["start"],
+      ["created", "ses_a"],
+      ["chat", "ses_a", "how does deploy work?"],
+    ]);
 
-    expect(dosuCalls()).toEqual([
+    expect(dosuCalls().filter((c) => c.args.startsWith("knowledge context"))).toEqual([
       {
         args: "knowledge context --agent opencode --format plain",
         stdin: { prompt: "how does deploy work?", session_id: "ses_a", cwd: "/repo/app" },
+        clock: 0,
       },
     ]);
-    const [typed, memory] = output.parts;
+    const [typed, memory] = parts;
     expect(memory).toMatchObject({
       type: "text",
       text: "Dosu memory: the deploy codeword is PELICAN-7",
@@ -235,86 +293,116 @@ describe("the opencode plugin", () => {
     expect(String(memory.id) > String(typed.id)).toBe(true);
   });
 
-  it("adds nothing when Dosu has nothing to say or cannot be run", async () => {
+  it("adds nothing when Dosu has nothing to say", () => {
     fakeDosu("");
-    const hooks = await startPlugin();
-    const output = userMessage("ses_a", "hello");
-    await hooks["chat.message"]({ sessionID: "ses_a" }, output);
-    expect(output.parts).toHaveLength(1);
-
-    rmSync(join(bin, "dosu"));
-    await hooks["chat.message"]({ sessionID: "ses_a" }, output);
-    expect(output.parts).toHaveLength(1);
+    const [parts] = opencodeProcess([["start"], ["chat", "ses_a", "hello"]]);
+    expect(parts).toHaveLength(1);
   });
 
-  it("asks nothing for an incognito session, a resumed one that went incognito, or a subagent's", async () => {
+  it("adds nothing when Dosu cannot be run", () => {
+    const [parts] = opencodeProcess([["start"], ["chat", "ses_a", "hello"]]);
+    expect(parts).toHaveLength(1);
+  });
+
+  it("asks nothing for an incognito session, a resumed one that went incognito, or a subagent's", () => {
     fakeDosu("Dosu memory: something");
-    const hooks = await startPlugin({ ses_old: ["earlier", INCOGNITO_COMMAND_BODY] });
-    await hooks.event(created("ses_a"));
-    await hooks.event(created("ses_child", "ses_b"));
 
-    const marked = userMessage("ses_a", INCOGNITO_COMMAND_BODY);
-    await hooks["chat.message"]({ sessionID: "ses_a" }, marked);
-    await hooks["chat.message"]({ sessionID: "ses_a" }, userMessage("ses_a", "now deploy"));
-    // Resumed in this process: its history says it went incognito.
-    await hooks["chat.message"]({ sessionID: "ses_old" }, userMessage("ses_old", "continue"));
-    await hooks["chat.message"]({ sessionID: "ses_child" }, userMessage("ses_child", "read it"));
+    const [marked] = opencodeProcess(
+      [
+        ["start"],
+        ["created", "ses_a"],
+        ["created", "ses_child", "ses_b"],
+        ["chat", "ses_a", INCOGNITO_COMMAND_BODY],
+        ["chat", "ses_a", "now deploy"],
+        // Resumed in this process: its history says it went incognito.
+        ["chat", "ses_old", "continue"],
+        ["chat", "ses_child", "read it"],
+      ],
+      { ses_old: ["earlier", INCOGNITO_COMMAND_BODY] },
+    );
 
-    expect(dosuCalls()).toEqual([]);
-    expect(marked.parts).toHaveLength(1);
+    expect(dosuCalls().filter((c) => c.args.startsWith("knowledge context"))).toEqual([]);
+    expect(marked).toHaveLength(1);
   });
 
-  it("reports every session that ran here as ended when opencode shuts it down", async () => {
+  it("reports every session that ran a turn as ended, in one sync, once opencode exits", async () => {
     fakeDosu();
-    const hooks = await startPlugin();
-    await hooks.event(created("ses_a"));
-    await hooks.event(created("ses_child", "ses_a"));
-    await hooks.event(created("ses_untouched"));
-    await hooks["chat.message"]({ sessionID: "ses_child" }, userMessage("ses_child", "read it"));
-    await hooks.event(idle("ses_child"));
-    await hooks.event(idle("ses_a"));
 
-    await hooks.dispose();
-
-    const syncs = dosuCalls().filter((c) => c.args.startsWith("knowledge sync"));
-    expect(syncs.map((c) => c.args)).toEqual([
-      "knowledge sync --quiet --detach",
-      "knowledge sync --quiet --detach",
-    ]);
-    // Each payload is an end event `knowledge sync --detach` turns into --ended.
-    expect(syncs.map((c) => endedSessionOf(c.stdin))).toEqual([
-      { harness: "opencode", id: "ses_child" },
-      { harness: "opencode", id: "ses_a" },
+    opencodeProcess([
+      ["start"],
+      ["created", "ses_a"],
+      ["created", "ses_child", "ses_a"],
+      ["created", "ses_untouched"],
+      ["chat", "ses_a", "spawn a reader"],
+      ["chat", "ses_child", "read it"],
+      ["idle", "ses_child"],
+      ["idle", "ses_a"],
     ]);
 
-    await hooks.dispose(); // a second shutdown of the same instance reports nothing new
-    expect(dosuCalls().filter((c) => c.args.startsWith("knowledge sync"))).toHaveLength(2);
+    await settle(() => expect(syncs()).toHaveLength(1));
+    expect(syncs()[0].args).toBe(
+      "knowledge sync --quiet --detach --ended opencode:ses_a --ended opencode:ses_child",
+    );
   });
 
-  it("runs a plain sync after a turn at most every five minutes, ending nothing", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-10-02T10:00:00Z"));
+  it("reports them when opencode is killed outright, too", async () => {
     fakeDosu();
-    const hooks = await startPlugin();
 
-    await hooks.event(idle("ses_a"));
-    vi.setSystemTime(new Date("2026-10-02T10:06:00Z"));
-    await hooks.event(idle("ses_a"));
-    await hooks.event(idle("ses_b"));
+    opencodeProcess([["start"], ["chat", "ses_a", "deploy it"], ["kill"]]);
 
-    // The idle sync is not awaited; give the spawned script a moment to record itself.
-    await vi.waitFor(() => expect(dosuCalls()).toHaveLength(1), { timeout: 5000 });
-    const [sync] = dosuCalls();
-    expect(sync.args).toBe("knowledge sync --quiet --detach");
-    expect(endedSessionOf(sync.stdin)).toBeNull();
+    await settle(() => expect(syncs()).toHaveLength(1));
+    expect(syncs()[0].args).toBe("knowledge sync --quiet --detach --ended opencode:ses_a");
   });
 
-  it("does nothing at shutdown in a process that ran no session, like `opencode export`", async () => {
+  it("ends nothing when opencode reloads an instance, only when the process exits", async () => {
     fakeDosu();
-    const hooks = await startPlugin();
 
-    await hooks.dispose();
+    opencodeProcess([
+      ["start"],
+      ["chat", "ses_a", "first"],
+      ["idle", "ses_a"],
+      // `/connect`, a config change: the instance is disposed and started again, mid-session.
+      ["dispose"],
+      ["start"],
+      ["chat", "ses_a", "second"],
+      ["idle", "ses_a"],
+    ]);
 
+    await settle(() => expect(syncs()).toHaveLength(1));
+    expect(syncs()[0].args).toBe("knowledge sync --quiet --detach --ended opencode:ses_a");
+  });
+
+  it("runs a plain sync once the last turn to go idle is past the quiet period", async () => {
+    fakeDosu();
+
+    opencodeProcess([
+      ["start"],
+      ["chat", "ses_a", "first"],
+      ["idle", "ses_a"],
+      ["advance", 60_000],
+      ["chat", "ses_a", "second"],
+      ["idle", "ses_a"],
+      // The first idle's sync comes due with the second turn still quiet for less than the
+      // period, so one more follows for it; then nothing, however long the TUI stays open.
+      ["advance", 3_600_000],
+    ]);
+
+    await settle(() => expect(syncs()).toHaveLength(3));
+    const plain = syncs()
+      .filter((c) => !c.args.includes("--ended"))
+      .sort((a, b) => a.clock - b.clock);
+    expect(plain.map((c) => [c.args, c.clock])).toEqual([
+      ["knowledge sync --quiet --detach", QUIET_SYNC_MS],
+      ["knowledge sync --quiet --detach", 60_000 + QUIET_SYNC_MS],
+    ]);
+  });
+
+  it("does nothing in a process that ran no session, like `opencode export`", async () => {
+    fakeDosu();
+
+    opencodeProcess([["start"], ["dispose"]]);
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
     expect(dosuCalls()).toEqual([]);
   });
 });

@@ -2,14 +2,17 @@
  * whose hooks run inside the opencode process. Dosu's plugin is generated here and does three
  * things, each through the same `dosu` commands the other agents' hooks run:
  *
- * - Session end. A session's definitive end is the shutdown of the opencode process that ran it:
- *   the plugin's `dispose` hook, which opencode awaits on exit (`opencode run` finishing, the TUI
- *   quitting on Ctrl+C, SIGTERM, or SIGHUP, a server stopping). `session.idle` is not an end: it
- *   fires after every turn in the TUI, and after every subagent's turn too. So at dispose the
- *   plugin runs `dosu knowledge sync --quiet --detach` once per session that ran a turn in this
- *   process, with an `opencode.session.end` payload the sync turns into `--ended`. A turn going
- *   idle runs a plain sync (no session named) at most every five minutes, so sessions left idle in
- *   a long-lived TUI or server ship without waiting for it to exit.
+ * - Session end. A session's definitive end is the exit of the opencode process that ran it,
+ *   however it exits: `opencode run` finishing or interrupted, the TUI quitting, or a server
+ *   (`opencode serve`, and the SDK, web UI, and `run --attach` built on it) stopped by any signal,
+ *   SIGKILL included. opencode's `dispose` hook marks none of that reliably: a server killed by a
+ *   signal never runs it, and a live process runs it whenever it reloads an instance (`/connect`,
+ *   a config change), which ends nothing. Nor does `session.idle`, which fires after every turn.
+ *   So the first session to run a turn here starts a detached watcher that reads session ids from
+ *   a pipe only this process writes to. When the process exits, the kernel closes the pipe, and
+ *   the watcher runs `dosu knowledge sync --quiet --detach` once with `--ended opencode:<id>` for
+ *   every session that ran here. A session left idle in a long-lived TUI or server ships with a
+ *   plain sync the plugin runs once that session is past the sync's quiet period.
  * - Prompt-time memory. `chat.message` runs before a prompt is saved or sent; the plugin asks
  *   `dosu knowledge context --agent opencode --format plain` and appends the digest to the user
  *   message as a synthetic text part flagged `dosu_memory`, which the shipper leaves out of the
@@ -29,6 +32,7 @@ import { getIncognitoAgent } from "../incognito/agents";
 import { writeSecureFile } from "../mcp/config-helpers";
 import { isInstalled } from "../mcp/detect";
 import { INCOGNITO_MARKER } from "../sync/incognito";
+import { DEFAULT_QUIET_PERIOD_MS } from "../sync/state";
 import type { HookAgent } from "./agents";
 import { devEnvAssignments, devSelfCommand, hookCommand } from "./formats";
 
@@ -57,27 +61,85 @@ function contextCommand(): string {
   return `${devEnvAssignments().join(" ")} ${devSelfCommand()} ${CONTEXT_ARGS}`;
 }
 
+/** The watcher's script: one session id per line until the plugin's process exits, then one sync
+ * naming each as ended. The plugin writes only ids that are safe on a command line. */
+function endWatcherScript(): string {
+  return [
+    'ended=""',
+    'while IFS= read -r id; do ended="$ended --ended opencode:$id"; done',
+    `[ -z "$ended" ] || ${hookCommand()} $ended </dev/null`,
+  ].join("\n");
+}
+
 /** The plugin module. Commands run through /bin/sh, like every other agent's hook commands. */
 function opencodePluginSource(): string {
   return `// Dosu for OpenCode (${PLUGIN_MARKER} v1). Written by \`dosu knowledge hooks enable opencode\`,
 // removed by \`dosu knowledge hooks disable opencode\`; edits are overwritten on the next enable.
-// Ships each session that ran in this opencode process to Dosu memory when the process shuts
-// down, and adds task memory to prompts that warrant it. Imports only node builtins.
+// Ships each session that ran in this opencode process to Dosu memory once the process exits,
+// and adds task memory to prompts that warrant it. Imports only node builtins.
 import { spawn } from "node:child_process";
 
 const SYNC_COMMAND = ${JSON.stringify(hookCommand())};
 const CONTEXT_COMMAND = ${JSON.stringify(contextCommand())};
 const INCOGNITO_MARKER = ${JSON.stringify(INCOGNITO_MARKER)};
-// A turn going idle runs a plain sync at most this often: the sync's own quiet period.
-const IDLE_SYNC_INTERVAL_MS = 5 * 60 * 1000;
+// Reads one session id per line until this process exits, then reports each one ended.
+const END_WATCHER = ${JSON.stringify(endWatcherScript())};
+// The sync holds a session back until it has been quiet this long; the margin covers opencode's
+// last writes to a session after its turn goes idle.
+const QUIET_SYNC_MS = ${DEFAULT_QUIET_PERIOD_MS + 30_000};
 // Past this the prompt is waiting on Dosu, and a late digest is not worth a stalled prompt.
 const CONTEXT_TIMEOUT_MS = 10000;
-// The sync's --detach parent reads its stdin and hands off to a detached run within a second.
-const SYNC_TIMEOUT_MS = 5000;
+const SESSION_ID = /^[A-Za-z0-9_-]+$/;
 
-let lastIdleSync = Date.now();
+// Per process, not per plugin instance: opencode imports this module once and starts the plugin
+// from it for each project instance, and again whenever it reloads one.
+const ran = new Set();
+const created = new Set();
+const subagents = new Set();
+const incognito = new Set();
+let watcher;
+let lastIdle = 0;
+let quietSync;
 let partCounter = 0;
 let partMs = 0;
+
+/** Start a shell command in its own session, so it outlives this process and its terminal. */
+function detached(command, stdin) {
+  try {
+    const child = spawn("/bin/sh", ["-c", command], {
+      detached: true,
+      stdio: [stdin, "ignore", "ignore"],
+    });
+    child.on("error", () => {});
+    child.stdin?.on("error", () => {});
+    child.unref();
+    return child;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A session ran a turn here. The watcher holds the read end of a pipe whose write end only this
+ * process has, so however the process exits, a kill included, the watcher's input ends then and
+ * not before: an instance reload is not an exit. */
+function ranHere(sessionID) {
+  if (!SESSION_ID.test(sessionID) || ran.has(sessionID)) return;
+  ran.add(sessionID);
+  watcher ??= detached(END_WATCHER, "pipe");
+  watcher?.stdin?.write(sessionID + "\\n");
+}
+
+/** A plain sync once the latest session to go idle is past the quiet period, again later if
+ * another turn went idle meanwhile. Never holds the process open. */
+function syncWhenQuiet(delay) {
+  quietSync = setTimeout(() => {
+    quietSync = undefined;
+    detached(SYNC_COMMAND, "ignore");
+    const wait = lastIdle + QUIET_SYNC_MS - Date.now();
+    if (wait > 0) syncWhenQuiet(wait);
+  }, delay);
+  quietSync.unref?.();
+}
 
 /** Run a shell command with JSON on stdin; resolves to its stdout, "" on any failure. */
 function run(command, input, timeoutMs) {
@@ -133,11 +195,6 @@ function hasMarker(parts) {
 }
 
 export const DosuMemory = async ({ client, directory }) => {
-  const ran = new Set();
-  const created = new Set();
-  const subagents = new Set();
-  const incognito = new Set();
-
   /** A session resumed in this process may have gone incognito before it. */
   async function wentIncognitoBefore(sessionID) {
     try {
@@ -159,22 +216,15 @@ export const DosuMemory = async ({ client, directory }) => {
         return;
       }
       if (event?.type !== "session.idle" || typeof props.sessionID !== "string") return;
-      ran.add(props.sessionID);
-      if (Date.now() - lastIdleSync < IDLE_SYNC_INTERVAL_MS) return;
-      lastIdleSync = Date.now();
-      const payload = {
-        agent: "opencode",
-        hook_event_name: "opencode.session.idle",
-        session_id: props.sessionID,
-        cwd: directory,
-      };
-      void run(SYNC_COMMAND, payload, SYNC_TIMEOUT_MS);
+      ranHere(props.sessionID);
+      lastIdle = Date.now();
+      if (!quietSync) syncWhenQuiet(QUIET_SYNC_MS);
     },
 
     "chat.message": async (input, output) => {
       const sessionID = input?.sessionID;
       if (typeof sessionID !== "string") return;
-      ran.add(sessionID);
+      ranHere(sessionID);
       const parts = Array.isArray(output?.parts) ? output.parts : [];
       if (hasMarker(parts)) incognito.add(sessionID);
       if (incognito.has(sessionID) || subagents.has(sessionID)) return;
@@ -204,20 +254,6 @@ export const DosuMemory = async ({ client, directory }) => {
         synthetic: true,
         metadata: { dosu_memory: true },
       });
-    },
-
-    dispose: async () => {
-      const ended = [...ran];
-      ran.clear();
-      for (const sessionID of ended) {
-        const payload = {
-          agent: "opencode",
-          hook_event_name: "opencode.session.end",
-          session_id: sessionID,
-          cwd: directory,
-        };
-        await run(SYNC_COMMAND, payload, SYNC_TIMEOUT_MS);
-      }
     },
   };
 };

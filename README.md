@@ -175,7 +175,8 @@ Combine with `dosu login --request` / `--check <ticket>` for human-in-the-loop a
 With `dosu knowledge hooks enable`, finished coding-agent sessions ship to Dosu memory in the
 background (secrets redacted locally first), and Dosu learns from them server-side. A Claude Code
 session ships as soon as it ends, and an OpenCode session as soon as the opencode process that ran
-it exits (OpenCode gets a plugin rather than a hook, which also adds task memory to its prompts);
+it exits, however it exits (OpenCode gets a plugin rather than a hook, which also adds task memory
+to its prompts);
 other agents' sessions ship with a later sync once they have been quiet for five minutes (their end
 events are not wired up yet). A resumed session later ships only
 what is new. Shipping is on by default; `dosu knowledge transcripts disable` turns it off.
