@@ -31,6 +31,10 @@ export const MCP_FORMAT_CHANGES: readonly string[] = [
   // beta channel as 0.63.0-beta.N, which compares as 0.63.0 here. If main cuts a stable
   // 0.63.0 before this graduates, raise it to the first stable release that includes it.
   "0.63.0",
+  // Every provider's entry became a stdio command running the local proxy, `dosu mcp serve`, in
+  // place of a remote-HTTP or `npx mcp-remote` entry. The first stable release after 0.65.1 that
+  // includes it; raise it if a release ships before this does.
+  "0.66.0",
 ];
 
 /** Whether moving from `previous` (the version that last wrote the entries; `null` when

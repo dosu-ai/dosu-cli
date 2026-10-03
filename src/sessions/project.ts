@@ -48,7 +48,7 @@ export function projectLinksPath(configDir: string = getConfigDir()): string {
 }
 
 /** A usable key: trimmed, non-empty, and within the server's limit; null otherwise. */
-function validKey(value: unknown): string | null {
+export function validKey(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const key = value.trim();
   return key !== "" && key.length <= MAX_PROJECT_KEY_LENGTH ? key : null;
@@ -74,7 +74,7 @@ export function readProjectLinks(configDir: string = getConfigDir()): ProjectLin
   return valid;
 }
 
-function realpathOr(path: string): string {
+export function realpathOr(path: string): string {
   try {
     return realpathSync(path);
   } catch {
@@ -89,7 +89,7 @@ function isAtOrUnder(dir: string, base: string): boolean {
 
 /** Rule 1: the link with the longest directory containing `dir`. Both sides are compared as
  * given and with symlinks resolved, so a link made through an alias still matches. */
-function linkedProject(dir: string, links: readonly ProjectLink[]): string | null {
+export function matchingLink(dir: string, links: readonly ProjectLink[]): ProjectLink | null {
   const dirs = [...new Set([dir, realpathOr(dir)])];
   let best: ProjectLink | null = null;
   for (const link of links) {
@@ -97,7 +97,7 @@ function linkedProject(dir: string, links: readonly ProjectLink[]): string | nul
     const contains = bases.some((base) => dirs.some((d) => isAtOrUnder(d, base)));
     if (contains && (best === null || link.dir.length > best.dir.length)) best = link;
   }
-  return best?.project ?? null;
+  return best;
 }
 
 /** Rules 1 and 2, the user's explicit choices. `dir` may be null (only env can apply). `env`
@@ -108,8 +108,8 @@ export function projectOverride(
   options: ProjectOptions = {},
 ): ProjectKey | null {
   if (dir !== null) {
-    const linked = linkedProject(dir, readProjectLinks(options.configDir));
-    if (linked !== null) return { project: linked, rule: "link" };
+    const linked = matchingLink(dir, readProjectLinks(options.configDir));
+    if (linked !== null) return { project: linked.project, rule: "link" };
   }
   const env = validKey((options.env ?? process.env).DOSU_PROJECT);
   return env === null ? null : { project: env, rule: "env" };

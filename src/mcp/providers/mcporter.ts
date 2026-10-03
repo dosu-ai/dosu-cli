@@ -10,6 +10,7 @@ import {
 } from "../config-helpers";
 import { expandHome, isInstalled } from "../detect";
 import type { SetupProvider } from "../providers";
+import { proxyCommand, stdioServer } from "../proxy-entry";
 
 function resolveGlobalConfigPath(): string {
   const jsonPath = expandHome("~/.mcporter/mcporter.json");
@@ -33,12 +34,11 @@ export const MCPorterProvider = (): SetupProvider => ({
     const configPath = global
       ? resolveGlobalConfigPath()
       : join(process.cwd(), "config", "mcporter.json");
-    const server = {
-      type: "http",
-      url: mcpEndpoint(cfg),
-      // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
-      headers: mcpHeaders(cfg.active_account!.target!.api_key!),
-    };
+    const url = mcpEndpoint(cfg);
+    // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
+    const headers = mcpHeaders(cfg.active_account!.target!.api_key!);
+    const proxy = proxyCommand("mcporter");
+    const server = proxy ? stdioServer(proxy) : { type: "http", url, headers };
     installJSONServer(configPath, "mcpServers", server);
   },
 

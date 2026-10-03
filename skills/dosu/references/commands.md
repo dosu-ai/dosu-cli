@@ -226,6 +226,12 @@ dosu deployments switch <id> [--json]
 
 dosu mcp list
 dosu mcp add <agent> [--global] [--show-secret]
+dosu mcp refresh
+dosu project show [dir] [--json]
+dosu project link [dir] <key>
+dosu project unlink [dir]
+dosu memory search <query> [--json] [--client <agent>]
+dosu memory evidence <memory-id> [--json] [--client <agent>]
 dosu skill install | remove | update
 dosu telemetry status [--json]
 dosu telemetry enable | disable | reset
@@ -234,7 +240,7 @@ dosu upgrade [--auto on|off]
 dosu logs [--tail [n]] [--clear]
 ```
 
-`deployments` selects the MCP deployment stored in local config; it is distinct from `agents`. `insights` opens an interactive visual report. `logs --clear` deletes the CLI log file. The CLI updates itself in the background by default; a `[dosu:update] Installing ...` notice on stderr needs no action. `upgrade --auto off` turns that off.
+`deployments` selects the MCP deployment stored in local config; it is distinct from `agents`. The MCP entry `mcp add` writes runs `dosu mcp serve --client <agent>` (a local proxy; never run it by hand). `project show` prints the project key Dosu memory scopes the directory by and which rule produced it; `project link` overrides it for a directory and everything under it. `memory search` and `memory evidence` call the same memory tools as the MCP server, scoped to the current directory. `insights` opens an interactive visual report. `logs --clear` deletes the CLI log file. The CLI updates itself in the background by default; a `[dosu:update] Installing ...` notice on stderr needs no action. `upgrade --auto off` turns that off.
 
 ## Codebase audit
 

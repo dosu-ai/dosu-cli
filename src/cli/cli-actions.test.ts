@@ -7,6 +7,11 @@ import type { Config } from "../config/config";
 import { loadConfig, saveConfig } from "../config/config";
 import { makeTestConfig, testSession, testTarget } from "../config/config.test-utils";
 import { allProviders } from "../mcp/providers";
+import {
+  restoreRunningInstall,
+  stubRunningFromNpx,
+  stubRunningInstall,
+} from "../mcp/running-install.test-utils";
 import { createProgram } from "./cli";
 
 // ── Mocks (true external boundaries only) ───────────────────────────────────
@@ -695,24 +700,55 @@ describe("CLI actions", () => {
   // ── mcp add ─────────────────────────────────────────────────────────────
 
   describe("mcp add", () => {
-    it("creates real cursor config file with --global", async () => {
-      const cfg = authenticatedConfig();
-      saveConfig(cfg);
+    /** Makes this process a compiled `dosu` in a bin dir on PATH, or with `throwaway`, npx's
+     * one-off copy of the npm package; returns the binary. */
+    function runningDosu({ throwaway = false } = {}): string {
+      const bin = join(tempDir, "bin");
+      mkdirSync(bin, { recursive: true });
+      const dosu = join(bin, "dosu");
+      writeFileSync(dosu, "#!/bin/sh\n", { mode: 0o755 });
+      vi.stubEnv("PATH", bin);
+      vi.stubEnv("DOSU_DEV", undefined);
+      vi.stubEnv("DOSU_BACKEND_URL_OVERRIDE", undefined);
+      if (throwaway) stubRunningFromNpx(tempDir);
+      else stubRunningInstall({ execPath: dosu });
+      return dosu;
+    }
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      restoreRunningInstall();
+    });
+
+    it("creates real cursor config file with --global that runs the local proxy", async () => {
+      const dosu = runningDosu();
+      saveConfig(authenticatedConfig());
 
       await run("mcp", "add", "cursor", "--global");
 
       // Verify real file was created on disk
       const cursorConfigPath = join(tempDir, ".cursor", "mcp.json");
       const cursorConfig = JSON.parse(readFileSync(cursorConfigPath, "utf-8"));
-      expect(cursorConfig.mcpServers).toBeDefined();
-      expect(cursorConfig.mcpServers.dosu).toBeDefined();
-      expect(cursorConfig.mcpServers.dosu.url).toContain("dep_123");
-      expect(cursorConfig.mcpServers.dosu.headers).toBeDefined();
-      expect(cursorConfig.mcpServers.dosu.headers["X-Dosu-API-Key"]).toBe("key_abc");
+      expect(cursorConfig.mcpServers.dosu).toEqual({
+        command: dosu,
+        args: ["mcp", "serve", "--client", "cursor"],
+        env: { PATH: `${join(tempDir, "bin")}:/usr/bin:/bin` },
+      });
 
       expect(logSpy).toHaveBeenCalledWith(
         expect.stringContaining("Successfully added Dosu MCP to Cursor"),
       );
+    });
+
+    it("writes the remote entry when a one-off npx copy is doing the writing", async () => {
+      runningDosu({ throwaway: true });
+      saveConfig(authenticatedConfig());
+
+      await run("mcp", "add", "cursor", "--global");
+
+      const cursorConfig = JSON.parse(readFileSync(join(tempDir, ".cursor", "mcp.json"), "utf-8"));
+      expect(cursorConfig.mcpServers.dosu.url).toContain("dep_123");
+      expect(cursorConfig.mcpServers.dosu.headers["X-Dosu-API-Key"]).toBe("key_abc");
     });
 
     it("throws error for unknown tool", async () => {
@@ -772,6 +808,7 @@ describe("CLI actions", () => {
       testTarget(cfg).deployment_name = undefined;
       saveConfig(cfg);
 
+      runningDosu({ throwaway: true });
       await run("mcp", "add", "cursor", "--global");
 
       const cursorConfigPath = join(tempDir, ".cursor", "mcp.json");
