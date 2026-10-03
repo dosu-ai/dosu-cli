@@ -547,7 +547,12 @@ describe("knowledge sync", () => {
   });
 
   it("prints the backlog when there is nothing to ship with", async () => {
-    mockRunSync.mockResolvedValue({ status: "backlog", readySessions: 3, inFlightSessions: 1 });
+    mockRunSync.mockResolvedValue({
+      status: "backlog",
+      readySessions: 3,
+      inFlightSessions: 1,
+      sessions: [],
+    });
 
     await run("sync");
 
@@ -660,7 +665,12 @@ describe("knowledge sync", () => {
   });
 
   it("backlog uses the singular for one ready session and omits the in-flight note", async () => {
-    mockRunSync.mockResolvedValue({ status: "backlog", readySessions: 1, inFlightSessions: 0 });
+    mockRunSync.mockResolvedValue({
+      status: "backlog",
+      readySessions: 1,
+      inFlightSessions: 0,
+      sessions: [],
+    });
 
     await run("sync");
 
@@ -990,7 +1000,12 @@ describe("knowledge sync", () => {
     });
 
     it("tags a manual run that only reported the backlog", async () => {
-      mockRunSync.mockResolvedValue({ status: "backlog", readySessions: 3, inFlightSessions: 1 });
+      mockRunSync.mockResolvedValue({
+        status: "backlog",
+        readySessions: 3,
+        inFlightSessions: 1,
+        sessions: [],
+      });
 
       await run("sync");
 
@@ -1849,6 +1864,14 @@ describe("knowledge transcripts", () => {
       total_shipped: 1,
       counts: {
         shipped: 1,
+        trivial: 0,
+        incognito: 0,
+        rejected: 0,
+        unsupported: 0,
+        skipped_by_user: 0,
+      },
+      subagent_counts: {
+        shipped: 0,
         trivial: 0,
         incognito: 0,
         rejected: 0,

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { emptySyncState, type SyncState } from "../sync/state";
+import { emptySyncState, outcomeCounts, type SyncState } from "../sync/state";
 import type { SyncStatus } from "../sync/status";
 import {
   ACTIVITY_VIEW_BUFFER_LINES,
@@ -79,6 +79,7 @@ function makeStatus(overrides: Partial<SyncStatus> = {}): SyncStatus {
       unsupported: 0,
       skipped_by_user: 0,
     },
+    subagentOutcomes: outcomeCounts(emptySyncState(), "subagents"),
     attention: [],
     recentActivity: [],
     ...overrides,

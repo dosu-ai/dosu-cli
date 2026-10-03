@@ -9,6 +9,7 @@ import type { NormalizedRecord, TranscriptTrajectorySource } from "@letta-ai/tra
 import { logger } from "../debug/logger";
 import { redactSecrets } from "../sessions/redact";
 import type { AgentSession } from "../sessions/scan";
+import { markClaudeInputs, markedAsObservations } from "./claude-inputs";
 import { subagentReportsAsObservations, withoutInheritedHistory } from "./codex-rollout";
 
 /** Harness → trajectory source. opencode is absent: its adapter wants the exported
@@ -75,12 +76,19 @@ export async function normalizeSessionRecords(
     // Dynamic so ship-free CLI paths never pay for the normalizer.
     const { normalizeTranscript } = await import("@letta-ai/trajectory");
     const codex = source === "codex";
+    // Claude Code's background-task results and queued input would be dropped; keep them.
+    const claude = source === "claude-code";
     const { records } = normalizeTranscript({
       source,
-      transcript: codex ? withoutInheritedHistory(transcript) : transcript,
+      transcript: codex
+        ? withoutInheritedHistory(transcript)
+        : claude
+          ? markClaudeInputs(transcript)
+          : transcript,
     });
     // Codex hands a parent its subagents' reports as user messages; nobody typed them.
-    return redactRecords(codex ? subagentReportsAsObservations(records) : records);
+    if (codex) return redactRecords(subagentReportsAsObservations(records));
+    return redactRecords(claude ? markedAsObservations(records) : records);
   } catch (err) {
     const code = (err as { code?: unknown } | null)?.code;
     if (typeof code === "string" && EMPTY_CONVERSATION_CODES.has(code)) return [];

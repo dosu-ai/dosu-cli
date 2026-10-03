@@ -21,6 +21,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   rmSync(fakeHome, { recursive: true, force: true });
   delete process.env.CODEX_HOME;
   delete process.env.CLAUDE_CONFIG_DIR;
@@ -34,9 +35,19 @@ describe("registry", () => {
   });
 
   it("reports installation from the agent's home dir", () => {
+    vi.stubEnv("PATH", "");
     expect(getIncognitoAgent("claude")?.isInstalled()).toBe(false);
     mkdirSync(join(fakeHome, ".claude"));
     expect(getIncognitoAgent("claude")?.isInstalled()).toBe(true);
+  });
+
+  it("reports Claude Code installed from `claude` on PATH before its first run", () => {
+    const bin = join(fakeHome, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "claude"), "#!/bin/sh\n", { mode: 0o755 });
+    vi.stubEnv("PATH", bin);
+    expect(getIncognitoAgent("claude")?.isInstalled()).toBe(true);
+    expect(getIncognitoAgent("cursor")?.isInstalled()).toBe(false);
   });
 
   it("the command body carries the marker the sync filter looks for", () => {

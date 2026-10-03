@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CONTEXT_EVENT, disableClaudeContextHook, enableClaudeContextHook } from "./context";
 import { addGroupedHook, HOOK_COMMAND } from "./formats";
 
@@ -58,6 +58,11 @@ describe("the Claude Code context hook", () => {
 
   it("does nothing when Claude Code is not installed", () => {
     process.env.CLAUDE_CONFIG_DIR = join(dir, "nope");
-    expect(enableClaudeContextHook()).toBe(false);
+    vi.stubEnv("PATH", join(dir, "empty-bin"));
+    try {
+      expect(enableClaudeContextHook()).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

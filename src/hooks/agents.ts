@@ -3,7 +3,14 @@
 
 import { join } from "node:path";
 import { expandHome, isInstalled } from "../mcp/detect";
+import { isShippingEnabled, loadSyncState } from "../sync/state";
+import { claudeCodeInstalled, claudeConfigDir } from "./claude-code";
 import { codexHookAgent } from "./codex";
+import {
+  disableClaudeContextHook,
+  hasClaudeContextHook,
+  installClaudeContextHook,
+} from "./context";
 import {
   addCursorHook,
   addGroupedHook,
@@ -26,6 +33,8 @@ export interface HookAgent {
   disable(): void;
   /** Extra guidance shown after enabling, when the agent needs it. */
   enableNote?(): string;
+  /** Shown by `hooks status` while enabled, when part of what enable() installs is missing. */
+  statusNote?(): string;
 }
 
 function groupedAgent(options: {
@@ -54,11 +63,6 @@ function groupedAgent(options: {
   };
 }
 
-/** Same override the rules and slash-command installers honor. */
-export function claudeConfigDir(): string {
-  return process.env.CLAUDE_CONFIG_DIR || expandHome("~/.claude");
-}
-
 const CURSOR_EVENT = "stop";
 
 function cursorAgent(): HookAgent {
@@ -78,18 +82,41 @@ function cursorAgent(): HookAgent {
   };
 }
 
+/** Claude Code: the SessionEnd trigger plus the prompt-time memory hook, one switch for both.
+ * The prompt hook follows transcript shipping: left out while the user has opted out of it. */
+function claudeAgent(): HookAgent {
+  const sessionEnd = groupedAgent({
+    id: "claude",
+    name: "Claude Code",
+    detectPath: claudeConfigDir,
+    configPath: () => join(claudeConfigDir(), "settings.json"),
+    event: "SessionEnd",
+  });
+  const shipping = () => isShippingEnabled(loadSyncState());
+  return {
+    ...sessionEnd,
+    isInstalled: claudeCodeInstalled,
+    enable: () => {
+      sessionEnd.enable();
+      if (shipping()) installClaudeContextHook();
+    },
+    disable: () => {
+      sessionEnd.disable();
+      disableClaudeContextHook();
+    },
+    enableNote: () =>
+      shipping()
+        ? ""
+        : "Prompt-time memory stays off while transcript shipping is disabled; 'dosu knowledge transcripts enable' turns it on.",
+    statusNote: () =>
+      shipping() && !hasClaudeContextHook()
+        ? "Prompt-time memory hook (UserPromptSubmit) is missing; 'dosu knowledge hooks enable claude' adds it."
+        : "",
+  };
+}
+
 export function allHookAgents(): HookAgent[] {
-  return [
-    groupedAgent({
-      id: "claude",
-      name: "Claude Code",
-      detectPath: claudeConfigDir,
-      configPath: () => join(claudeConfigDir(), "settings.json"),
-      event: "SessionEnd",
-    }),
-    cursorAgent(),
-    codexHookAgent(),
-  ];
+  return [claudeAgent(), cursorAgent(), codexHookAgent()];
 }
 
 export function getHookAgent(id: string): HookAgent | undefined {

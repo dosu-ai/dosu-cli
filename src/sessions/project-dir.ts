@@ -29,7 +29,7 @@ import {
   projectOverride,
 } from "./project";
 import { currentBranchOfDir, headReflogOfDir, originRepoOfDir } from "./repo";
-import { type AgentSession, sessionAtPath } from "./scan";
+import { type AgentSession, parentSessionOf, sessionAtPath } from "./scan";
 
 const CACHE_FILENAME = "project-dirs.json";
 const CACHE_SCHEMA_VERSION = 1;
@@ -355,6 +355,19 @@ export function createProjectDirResolver(
     return project;
   };
 
+  const resolveProject = (
+    session: AgentSession,
+    agentEnv: NodeJS.ProcessEnv = {},
+  ): ProjectKey | null => {
+    // A subagent works for its session, so it ships under the session's key (which may have
+    // come from DOSU_PROJECT in the agent's environment), not one of its own.
+    const parent = parentSessionOf(session);
+    if (parent) return resolveProject(parent, agentEnv);
+    const dir = resolve(session);
+    const key = `${session.harness}/${session.id}`;
+    return sessionProject(key, dir, mtime(session.path), agentEnv, "background");
+  };
+
   return {
     cached(key) {
       return entries[key]?.dir ?? null;
@@ -379,11 +392,7 @@ export function createProjectDirResolver(
       touched.add(key);
       return repo;
     },
-    resolveProject(session, agentEnv = {}) {
-      const dir = resolve(session);
-      const key = `${session.harness}/${session.id}`;
-      return sessionProject(key, dir, mtime(session.path), agentEnv, "background");
-    },
+    resolveProject,
     resolveProjectAt(key, dir) {
       if (!entries[key]) {
         // No session file to stamp yet: a `path` fallback answers the session's later prompts,

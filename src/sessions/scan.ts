@@ -74,6 +74,45 @@ function sessionFromFile(
   };
 }
 
+/** Claude Code keeps each subagent's transcript in a directory named for its session:
+ * `<project>/<session id>/subagents/agent-<agent id>.jsonl`, and a workflow's agents one level
+ * down, in `subagents/workflows/<workflow id>/`. Every one is a session of its own, shipped with
+ * its parent's id (a nested subagent's parent is the top-level session too). */
+const CLAUDE_SUBAGENTS_DIR = "subagents";
+const CLAUDE_WORKFLOWS_DIR = "workflows";
+
+function claudeSubagents(sessionDir: string, parentId: string, project: string): AgentSession[] {
+  const subagentsDir = join(sessionDir, CLAUDE_SUBAGENTS_DIR);
+  const dirs = [
+    subagentsDir,
+    ...listDir(join(subagentsDir, CLAUDE_WORKFLOWS_DIR))
+      .filter((workflow) => workflow.isDir)
+      .map((workflow) => workflow.path),
+  ];
+  const sessions: AgentSession[] = [];
+  for (const entry of dirs.flatMap(listDir)) {
+    if (entry.isDir || !entry.name.startsWith("agent-")) continue;
+    const session = sessionFromFile(entry.path, "claude", project);
+    if (session) sessions.push({ ...session, parentId });
+  }
+  return sessions;
+}
+
+/** The directory of the session a subagent's transcript belongs to, or null for a top-level
+ * transcript. */
+function claudeSessionDirOf(path: string): string | null {
+  const dir = dirname(path);
+  if (basename(dir) === CLAUDE_SUBAGENTS_DIR) return dirname(dir);
+  const workflows = dirname(dir);
+  if (
+    basename(workflows) === CLAUDE_WORKFLOWS_DIR &&
+    basename(dirname(workflows)) === CLAUDE_SUBAGENTS_DIR
+  ) {
+    return dirname(dirname(workflows));
+  }
+  return null;
+}
+
 /** Claude Code: one level of project dirs, session logs directly inside, under `~/.claude` and
  * under CLAUDE_CONFIG_DIR when the agent was relocated there (the hooks install there too). Both,
  * because a sync triggered by another agent's hook does not have the variable. */
@@ -85,13 +124,26 @@ function scanClaude(home: string, env: NodeJS.ProcessEnv): AgentSession[] {
     for (const project of listDir(join(root, "projects"))) {
       if (!project.isDir) continue;
       for (const entry of listDir(project.path)) {
-        if (entry.isDir) continue;
+        if (entry.isDir) {
+          sessions.push(...claudeSubagents(entry.path, entry.name, project.name));
+          continue;
+        }
         const session = sessionFromFile(entry.path, "claude", project.name);
         if (session) sessions.push(session);
       }
     }
   }
   return sessions;
+}
+
+/** The Claude Code session a transcript path belongs to, read off the layout: the project slug,
+ * and for a subagent's transcript the parent session's id. */
+function claudeLayoutOf(path: string): Pick<AgentSession, "project" | "parentId"> {
+  const sessionDir = claudeSessionDirOf(path);
+  if (sessionDir) {
+    return { project: basename(dirname(sessionDir)), parentId: basename(sessionDir) };
+  }
+  return { project: basename(dirname(path)) };
 }
 
 /** Cursor: per-project `agent-transcripts/<uuid>/<uuid>.jsonl`. */
@@ -281,9 +333,37 @@ export function sessionAtPath(
   } catch {
     return null;
   }
-  // Claude Code keeps transcripts directly in their project dir, like scanClaude reads them.
-  const project = harness === "claude" ? basename(dirname(path)) : undefined;
-  return { id, harness, path, ...(project ? { project } : {}), updated: mtime.toISOString() };
+  // Claude Code keeps transcripts in their project dir, like scanClaude reads them.
+  const layout = harness === "claude" ? claudeLayoutOf(path) : {};
+  return {
+    id,
+    harness,
+    path,
+    ...(layout.project ? { project: layout.project } : {}),
+    ...(layout.parentId ? { parentId: layout.parentId } : {}),
+    updated: mtime.toISOString(),
+  };
+}
+
+/** The child sessions (subagents' transcripts) of a session the scan may not list, read beside
+ * its transcript; none for a harness without them. */
+export function childSessionsOf(session: AgentSession): AgentSession[] {
+  if (session.harness !== "claude" || session.parentId || !session.path.endsWith(".jsonl")) {
+    return [];
+  }
+  const stem = session.path.slice(0, -".jsonl".length);
+  return claudeSubagents(stem, session.id, basename(dirname(session.path)));
+}
+
+/** The session a child session (a subagent's transcript) belongs to, as the scan would report
+ * it; null for a top-level session, or when the parent's transcript is gone. Children inherit
+ * what their parent decided: whether it ended, its incognito opt-out, and its project key. */
+export function parentSessionOf(session: AgentSession): AgentSession | null {
+  if (!session.parentId || session.harness !== "claude") return null;
+  // <project>/<parent id>/subagents/[workflows/<wf>/]agent-<id>.jsonl → <project>/<parent id>.jsonl
+  const sessionDir = claudeSessionDirOf(session.path);
+  if (!sessionDir) return null;
+  return sessionAtPath("claude", session.parentId, `${sessionDir}.jsonl`);
 }
 
 /** Where each harness keeps its sessions when no variable relocates it (CLAUDE_CONFIG_DIR,

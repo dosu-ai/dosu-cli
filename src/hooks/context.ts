@@ -3,8 +3,7 @@
  * Installed and removed together with transcript shipping -- one switch for the memory system. */
 
 import { join } from "node:path";
-import { isInstalled } from "../mcp/detect";
-import { claudeConfigDir } from "./agents";
+import { claudeCodeInstalled, claudeConfigDir } from "./claude-code";
 import {
   addGroupedHook,
   devEnvAssignments,
@@ -44,13 +43,23 @@ function settingsPath(): string {
   return join(claudeConfigDir(), "settings.json");
 }
 
+/** Install the hook, whether or not Claude Code has run here yet. */
+export function installClaudeContextHook(): void {
+  const path = settingsPath();
+  writeHookConfig(path, addGroupedHook(readHookConfig(path), CONTEXT_EVENT, CONTEXT_HOOK));
+}
+
 /** Install the hook if Claude Code is present. Returns whether it is installed afterwards. Codex's
  * prompt hook is installed with its other hooks (hooks/codex.ts); Cursor's cannot add context. */
 export function enableClaudeContextHook(): boolean {
-  if (!isInstalled([claudeConfigDir()])) return false;
-  const path = settingsPath();
-  writeHookConfig(path, addGroupedHook(readHookConfig(path), CONTEXT_EVENT, CONTEXT_HOOK));
+  if (!claudeCodeInstalled()) return false;
+  installClaudeContextHook();
   return true;
+}
+
+/** Whether Claude Code's settings carry the hook. */
+export function hasClaudeContextHook(): boolean {
+  return hasGroupedHook(readHookConfig(settingsPath()), CONTEXT_EVENT, CONTEXT_HOOK);
 }
 
 export function disableClaudeContextHook(): void {

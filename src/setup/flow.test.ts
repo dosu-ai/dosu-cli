@@ -3447,6 +3447,27 @@ describe("stepOfferInitialSync", () => {
     expect(ledger["claude/offered-2"]?.outcome).toBe("skipped_by_user");
   });
 
+  it("counts a session's subagents with it, and declining settles them with it", async () => {
+    const outcome = backlogOutcome(1);
+    const child = { ...outcome.sessions[0], id: "agent-a1", parentId: "offered-0" };
+    mockRunKnowledgeSync.mockResolvedValue({
+      ...outcome,
+      readySessions: 2,
+      sessions: [...outcome.sessions, child],
+    });
+    vi.mocked(p.confirm).mockResolvedValue(false);
+
+    await stepOfferInitialSync(makeCfg());
+
+    const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
+    expect(spinner?.stop).toHaveBeenCalledWith(expect.stringContaining("Found 1 agent session "));
+    const ledger = loadSyncState().sessions;
+    expect(ledger["claude/agent-a1"]).toMatchObject({
+      outcome: "skipped_by_user",
+      parent: "offered-0",
+    });
+  });
+
   it("offers nothing when every pending session was settled before", async () => {
     const trivial = {
       updated: "2026-08-01T00:00:00.000Z",

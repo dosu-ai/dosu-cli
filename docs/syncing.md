@@ -1,7 +1,13 @@
 # Syncing sessions to Dosu memory
 
 `dosu knowledge hooks enable` installs a session-end hook (Claude Code, Cursor, Codex) that runs
-`dosu knowledge sync --quiet --detach`. The sync scans the last 30 days of agent sessions, keeps the
+`dosu knowledge sync --quiet --detach`; for Claude Code it also installs the prompt-time memory hook
+(`UserPromptSubmit` → `dosu knowledge context`) unless transcript shipping is off, and `disable`
+removes both. With no agent named it installs for every agent it detects and names the ones it
+skipped. Claude Code counts as detected when `~/.claude` (or `CLAUDE_CONFIG_DIR`) exists or
+`claude` is on PATH, so a freshly provisioned machine can set Dosu up before Claude Code's first
+run (which is what creates `~/.claude`); `dosu knowledge transcripts enable` and `dosu setup` detect
+it the same way, and say so when they skip it. The sync scans the last 30 days of agent sessions, keeps the
 ones its ledger has no answer for, applies the repo scope and pause switch from
 `~/.config/dosu-cli/knowledge-sync.json`, and ships them to Dosu memory (secrets redacted locally
 first), which learns from each session server-side. Shipping is on by default;
@@ -86,6 +92,33 @@ and `unsupported` are answers, so one unreadable session never stalls the rest.
 `dosu knowledge sync --status` shows counts per outcome and the rejected and unsupported sessions
 grouped by reason; `dosu knowledge sessions --rejected` (or `--unsupported`) lists every one.
 
+**Subagents.** Claude Code writes each subagent's conversation to its own transcript,
+`<project>/<session id>/subagents/agent-<agent id>.jsonl` (a workflow's agents one level down, in
+`subagents/workflows/<workflow id>/`). The sync lists every one as a session of its own
+(`claude/agent-<agent id>`), normalizes it on its own, and ships it with
+`metadata.parent_session_id` set to the session it worked for (the top-level session, for a nested
+subagent too). It is settled in the ledger on its own, so it can be trivial while its session ships,
+but it inherits what its session decided: a session-end hook for the session ships its subagents in
+the same run, right after the session and however many there are (the per-run batch limit of 20
+applies only to the rest of the backlog), `/dosu-incognito` in the session keeps them out, and they
+ship under the session's project key. A subagent's transcript waits as long as its session does
+(until the session ends or has been quiet for five minutes), however long ago the subagent itself
+finished, so it never ships ahead of the session or before an opt-out later in it. Views count
+sessions, not transcripts: `--status`, `transcripts status`, `knowledge sessions`, the Activity
+screen, and setup's backfill offer count a session's subagents with it and report them apart
+("Subagents: 2 shipped", `subagent_counts` in JSON), and `total_shipped` counts sessions only.
+
+A background subagent (or background shell command) reports back by injecting a
+`<task-notification>` message, carrying its result, into the session. The trajectory normalizer
+drops those as harness noise, but they are what the model acted on next, the way a foreground
+subagent's result is its tool result. So the CLI keeps each one in place as an `observation`
+record (input the agent received that nobody typed): the session's trace stays readable on its own,
+and the subagent's full work ships separately, linked by `parent_session_id`. When the session is
+busy as the notification arrives (the usual case interactively), Claude Code queues it and logs it
+as an `attachment` row (`queued_command`), which the normalizer skips entirely; the CLI turns those
+back into the input they stand for. The same goes for a message the user typed mid-turn, which
+ships as a user record, and one from another agent session, which ships as an observation.
+
 **Worthiness** is judged on what would ship: the normalized, redacted trajectory. Text, tool
 arguments, and tool results all count toward the 2,000 characters, so a terse run that did its work
 through tools ships; the meta record does not count.
@@ -128,6 +161,39 @@ Upgrading from the watermark state (schema 2, or the learner-era schema 1) seeds
 sessions it shipped. Everything else in the window becomes pending again, including sessions the
 watermark passed over without shipping; the server dedupes anything it already has. Clearing the
 history on the Activity screen empties the ledger the same way.
+
+## Claude Code in an eval harness
+
+On a throwaway machine, set Dosu up before Claude Code's first run (`dosu knowledge hooks enable`
+detects it from `claude` on PATH), then run sessions as usual. Dosu learns from a `claude -p`
+session through two user-level hooks in `~/.claude/settings.json` (`UserPromptSubmit` for
+prompt-time memory, `SessionEnd` to ship the session the moment it ends) and the transcript Claude
+Code writes under `~/.claude/projects`. Some flags switch those off. Checked with Claude Code
+2.1.286 in `-p` mode:
+
+| Passed to `claude` | Prompt-time memory | Ships when it ends | Transcript written |
+|---|---|---|---|
+| none of the below | yes | yes | yes |
+| `--bare` (also `CLAUDE_CODE_SIMPLE=1`) | no | no | yes |
+| `--safe-mode` (also `CLAUDE_CODE_SAFE_MODE=1`) | no | no | yes |
+| `--restricted` | no | no | yes |
+| `--setting-sources` without `user` | no | no | yes |
+| `--settings '{"disableAllHooks": true}'` (or that key in any settings file) | no | no | yes |
+| `--no-session-persistence` | yes | the hook runs, but there is nothing to ship | no |
+
+So an eval harness must not pass `--no-session-persistence` at all, and should not pass the others:
+they skip user hooks, so the session gets no memory at prompt time and does not ship when it ends.
+(`--strict-mcp-config` without Dosu in its `--mcp-config` also drops the Dosu MCP tools.) A session
+that wrote a transcript still ships with a later sync once it has been quiet for five minutes, which
+a machine torn down right after the run never reaches. If a harness cannot drop those flags, it can
+ship each session itself as soon as `claude` returns, using the `session_id` from
+`--output-format json`:
+
+```bash
+dosu knowledge sync --ended claude:<session_id>
+```
+
+That ships the session and its subagents at once, past the quiet period.
 
 ## Project key
 

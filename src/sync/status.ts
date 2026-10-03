@@ -25,8 +25,9 @@ export interface SyncStatus {
   /** Lock file exists but its process is gone — a crashed run. */
   staleLock?: boolean;
   state: SyncState;
-  /** Ledger entries per outcome. */
+  /** Ledger entries per outcome: sessions, and apart from them the subagents' transcripts. */
   outcomes: Record<SessionOutcome, number>;
+  subagentOutcomes: Record<SessionOutcome, number>;
   /** Sessions settled without shipping for a reason worth a look (rejected, then unsupported),
    * oldest first. */
   attention: Array<LedgerEntry & { session: string }>;
@@ -100,6 +101,7 @@ export function getSyncStatus(deps: SyncStatusDeps = {}): SyncStatus {
     ...(lock && !running ? { staleLock: true } : {}),
     state,
     outcomes: outcomeCounts(state),
+    subagentOutcomes: outcomeCounts(state, "subagents"),
     attention: [...settledSessions(state, "rejected"), ...settledSessions(state, "unsupported")],
     ...(retryAt ? { backoffUntil: retryAt.toISOString() } : {}),
     recentActivity: recentSyncActivity(readLog()),

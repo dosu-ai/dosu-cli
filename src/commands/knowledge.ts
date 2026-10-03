@@ -2,14 +2,14 @@
  * per-agent hook triggers. */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { readFileSync } from "node:fs";
 import { Command, Option } from "commander";
 import pc from "picocolors";
 import { createTypedClient } from "../client/trpc";
 import { loadConfig } from "../config/config";
 import { getBackendURL, isAbsoluteHttpUrl } from "../config/constants";
 import { allHookAgents, getHookAgent, type HookAgent } from "../hooks/agents";
+import { isOnPath } from "../hooks/claude-code";
 import { disableClaudeContextHook, enableClaudeContextHook } from "../hooks/context";
 import { HookConfigError, hookCommand } from "../hooks/formats";
 import { emitKnowledgeReport } from "../report/generate";
@@ -169,7 +169,8 @@ export function knowledgeCommand(): Command {
         const wantQueued = want(opts.queued);
         const wantOpen = want(opts.open);
 
-        const backlog = wantQueued || wantOpen ? listSessionBacklog() : { queued: [], open: [] };
+        const backlog =
+          wantQueued || wantOpen ? listSessionBacklog() : { queued: [], open: [], subagents: 0 };
         const state =
           want(opts.shipped) || want(opts.rejected) || want(opts.unsupported)
             ? loadSyncState()
@@ -184,10 +185,18 @@ export function knowledgeCommand(): Command {
             {
               ...(wantQueued ? { queued: backlog.queued } : {}),
               ...(wantOpen ? { open: backlog.open } : {}),
+              ...((wantQueued || wantOpen) && backlog.subagents
+                ? { pending_subagent_transcripts: backlog.subagents }
+                : {}),
               ...(want(opts.shipped) ? { shipped } : {}),
               ...(want(opts.rejected) ? { rejected } : {}),
               ...(want(opts.unsupported) ? { unsupported } : {}),
-              ...(all && state ? { counts: outcomeCounts(state) } : {}),
+              ...(all && state
+                ? {
+                    counts: outcomeCounts(state),
+                    subagent_counts: outcomeCounts(state, "subagents"),
+                  }
+                : {}),
             },
             opts,
           );
@@ -241,6 +250,14 @@ export function knowledgeCommand(): Command {
             "No open sessions. Live agent sessions sit here until they go quiet.",
           );
         }
+        const pendingSubagents = backlog.subagents ?? 0;
+        if ((wantQueued || wantOpen) && pendingSubagents > 0) {
+          console.log(
+            pc.dim(
+              `${pendingSubagents} subagent transcript${pendingSubagents === 1 ? "" : "s"} ships with these sessions.`,
+            ),
+          );
+        }
         if (want(opts.shipped)) {
           section("Shipped", shippedRows, sessionHeaders("Shipped at"), "No sessions shipped yet.");
         }
@@ -263,6 +280,8 @@ export function knowledgeCommand(): Command {
         if (all && state) {
           console.log();
           console.log(pc.dim(`Settled sessions: ${formatOutcomeCounts(state)}`));
+          const subagents = formatOutcomeCounts(state, "subagents");
+          if (subagents) console.log(pc.dim(`Subagent transcripts: ${subagents}`));
         }
       },
     );
@@ -546,6 +565,7 @@ function transcriptsCommand(): Command {
             enabled,
             total_shipped: state.total_shipped ?? 0,
             counts: outcomeCounts(state),
+            subagent_counts: outcomeCounts(state, "subagents"),
             shipped_sessions: shipped,
           },
           opts,
@@ -581,6 +601,12 @@ function transcriptsCommand(): Command {
       try {
         if (enableClaudeContextHook()) {
           console.log("✓ Claude Code will receive task memory when a prompt warrants it.");
+        } else {
+          console.log(
+            pc.yellow(
+              "! Prompt-time memory not installed: Claude Code was not found (no ~/.claude, and no 'claude' on PATH). Once it is installed, run 'dosu knowledge hooks enable claude'.",
+            ),
+          );
         }
       } catch (err) {
         // Shipping is on either way; only the prompt hook could not be written.
@@ -624,13 +650,15 @@ function formatAge(iso: string, now: Date): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-/** "3 shipped · 1 trivial · 2 rejected": the non-zero ledger counts, in outcome order. */
-function formatOutcomeCounts(state: SyncState): string {
-  const counts = outcomeCounts(state);
+/** "3 shipped · 1 trivial · 2 rejected": the non-zero ledger counts, in outcome order. Sessions
+ * say "nothing settled" when empty; subagents' transcripts say nothing (""). */
+function formatOutcomeCounts(state: SyncState, of: "sessions" | "subagents" = "sessions"): string {
+  const counts = outcomeCounts(state, of);
   const parts = SESSION_OUTCOMES.filter((o) => counts[o] > 0).map(
     (o) => `${counts[o]} ${o.replaceAll("_", " ")}`,
   );
-  return parts.length > 0 ? parts.join(" \u00B7 ") : "nothing settled";
+  if (parts.length > 0) return parts.join(" \u00B7 ");
+  return of === "sessions" ? "nothing settled" : "";
 }
 
 /** How many sessions `--status` names for one reason before pointing at the full list. */
@@ -696,6 +724,8 @@ function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
   );
   if (Object.keys(status.state.sessions).length > 0) {
     console.log(`  Settled:         ${formatOutcomeCounts(status.state)}`);
+    const subagents = formatOutcomeCounts(status.state, "subagents");
+    if (subagents) console.log(`  Subagents:       ${subagents}`);
   }
   const repoFilter = status.state.repo_filter;
   if (repoFilter) {
@@ -746,9 +776,9 @@ function printSyncOutcome(outcome: SyncOutcome): void {
       : "";
   switch (outcome.status) {
     case "backlog": {
-      console.log(
-        `✓ Scanned. ${outcome.readySessions} finished session${plural(outcome.readySessions)} ready to ship${inFlight}.`,
-      );
+      // Subagents' transcripts ship with their sessions; only sessions are counted here.
+      const ready = outcome.readySessions - outcome.sessions.filter((s) => s.parentId).length;
+      console.log(`✓ Scanned. ${ready} finished session${plural(ready)} ready to ship${inFlight}.`);
       console.log(pc.dim("Sign in with 'dosu setup' to ship them to Dosu memory."));
       break;
     }
@@ -756,19 +786,34 @@ function printSyncOutcome(outcome: SyncOutcome): void {
     case "ship-failed": {
       const {
         shipped = 0,
+        subagents,
         incognito = 0,
         trivial = 0,
         unsupported = 0,
         rejected = 0,
       } = outcome.counts ?? {};
       const passed = incognito + trivial + unsupported + rejected;
+      const subagentsShipped = subagents?.shipped ?? 0;
       console.log(
         `✓ Shipped ${shipped} session${plural(shipped)} to Dosu memory${
+          subagentsShipped > 0
+            ? ` (+${subagentsShipped} subagent transcript${plural(subagentsShipped)})`
+            : ""
+        }${
           passed > 0
             ? pc.dim(` (${passed} passed over: incognito, too short, unsupported, or rejected)`)
             : ""
         }.`,
       );
+      // Subagents' transcripts settle on their own; say which ones did not ship, and why.
+      const subagentsPassed = Object.entries(subagents ?? {})
+        .filter(([o, n]) => o !== "shipped" && n > 0)
+        .map(([o, n]) => `${n} ${o}`);
+      if (subagentsPassed.length > 0) {
+        console.log(
+          pc.dim(`Subagent transcripts passed over: ${subagentsPassed.join(" \u00B7 ")}.`),
+        );
+      }
       if (outcome.status === "ship-failed") {
         console.log(
           pc.yellow(`Shipping stopped: ${outcome.error ?? "unknown error"}. It will be retried.`),
@@ -835,6 +880,7 @@ function hooksCommand(): Command {
         let note: string | undefined;
         try {
           enabled = agent.isEnabled();
+          if (enabled) note = agent.statusNote?.() || undefined;
         } catch (err) {
           note = err instanceof Error ? err.message : String(err);
         }
@@ -872,6 +918,17 @@ function hooksCommand(): Command {
     .description("Install the sync hook for agents (default: all detected)")
     .action((ids: string[]) => {
       const agents = resolveHookAgents(ids);
+      if (ids.length === 0) {
+        // No agent named: only detected ones get hooks; never pass over the rest in silence.
+        const skipped = allHookAgents().filter((agent) => !agent.isInstalled());
+        if (skipped.length > 0) {
+          console.log(
+            pc.yellow(
+              `! Skipped ${skipped.map((agent) => agent.name()).join(", ")}: not detected on this machine. Name an agent to install its hook anyway: dosu knowledge hooks enable <agent>`,
+            ),
+          );
+        }
+      }
       const devMode = process.env.DOSU_DEV === "true";
       // Dev hooks pin this working copy by absolute path, so PATH is moot.
       if (agents.length > 0 && !devMode && !dosuOnPath()) {
@@ -922,8 +979,5 @@ function reportHookFailure(agent: HookAgent, err: unknown): void {
 
 /** Hooks invoke plain `dosu`; warn at enable time when that will not resolve. */
 function dosuOnPath(): boolean {
-  const bin = process.platform === "win32" ? "dosu.cmd" : "dosu";
-  return (process.env.PATH ?? "")
-    .split(delimiter)
-    .some((dir) => dir !== "" && existsSync(join(dir, bin)));
+  return isOnPath(process.platform === "win32" ? "dosu.cmd" : "dosu");
 }

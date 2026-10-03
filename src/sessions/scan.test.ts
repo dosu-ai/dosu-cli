@@ -3,7 +3,13 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { scanAgentSessions, scannedEverywhere } from "./scan";
+import {
+  childSessionsOf,
+  parentSessionOf,
+  scanAgentSessions,
+  scannedEverywhere,
+  sessionAtPath,
+} from "./scan";
 
 /** `homedir()` target for the default-home test; every other test passes `homeDir` explicitly. */
 const mockedOs = vi.hoisted(() => ({ home: "" }));
@@ -148,6 +154,84 @@ describe("scanAgentSessions", () => {
     const sessions = scan();
 
     expect(sessions.map((s) => s.id)).toEqual(["aaa"]);
+  });
+
+  it("lists each Claude Code subagent transcript as a session of its own, under its parent", () => {
+    claudeLog("-Users-me-proj", "parent", T2);
+    const sessionDir = join(home, ".claude", "projects", "-Users-me-proj", "parent");
+    makeLog(join(sessionDir, "subagents", "agent-a1.jsonl"), T1);
+    // Beside the transcripts: the agent's sidecar metadata and other per-session state.
+    writeFileSync(join(sessionDir, "subagents", "agent-a1.meta.json"), "{}");
+    makeLog(join(sessionDir, "tool-results", "big.jsonl"), T3);
+
+    const sessions = scan();
+
+    expect(sessions.map((s) => [s.id, s.parentId, s.project])).toEqual([
+      ["parent", undefined, "-Users-me-proj"],
+      ["agent-a1", "parent", "-Users-me-proj"],
+    ]);
+    expect(sessions[1].path).toBe(join(sessionDir, "subagents", "agent-a1.jsonl"));
+    expect(sessions[1].updated).toBe(T1.toISOString());
+  });
+
+  it("lists a workflow's agents as subagents of the session that ran the workflow", () => {
+    claudeLog("-p", "parent", T3);
+    const workflow = join(home, ".claude", "projects", "-p", "parent", "subagents", "workflows");
+    makeLog(join(workflow, "wf_abc", "agent-w1.jsonl"), T2);
+    // The workflow's own journal and the agent's sidecar are not transcripts.
+    makeLog(join(workflow, "wf_abc", "journal.jsonl"), T1);
+    writeFileSync(join(workflow, "wf_abc", "agent-w1.meta.json"), "{}");
+
+    const [parent, child] = scan();
+
+    expect(scan().map((s) => [s.id, s.parentId, s.project])).toEqual([
+      ["parent", undefined, "-p"],
+      ["agent-w1", "parent", "-p"],
+    ]);
+    expect(child.path).toBe(join(workflow, "wf_abc", "agent-w1.jsonl"));
+    expect(parentSessionOf(child)).toEqual(parent);
+    expect(childSessionsOf(parent)).toEqual([child]);
+    expect(sessionAtPath("claude", "agent-w1", child.path)).toEqual(child);
+  });
+
+  it("finds a subagent's parent session, and none for a top-level one", () => {
+    claudeLog("-p", "parent", T2);
+    makeLog(join(home, ".claude", "projects", "-p", "parent", "subagents", "agent-a1.jsonl"), T1);
+    const [parent, child] = scan();
+
+    expect(parentSessionOf(child)).toEqual(parent);
+    expect(parentSessionOf(parent)).toBeNull();
+    // A parent transcript that is gone leaves the child an orphan.
+    rmSync(parent.path);
+    expect(parentSessionOf(child)).toBeNull();
+  });
+
+  it("finds a session's subagents beside its transcript, wherever it lives", () => {
+    const parentPath = join(home, "cfg", "projects", "-p", "parent.jsonl");
+    makeLog(parentPath, T2);
+    makeLog(join(home, "cfg", "projects", "-p", "parent", "subagents", "agent-a1.jsonl"), T1);
+    const parent = sessionAtPath("claude", "parent", parentPath);
+    if (!parent) throw new Error("no parent");
+
+    const [child] = childSessionsOf(parent);
+    expect(child).toMatchObject({ id: "agent-a1", parentId: "parent", project: "-p" });
+    // A subagent has none of its own here, and other agents keep theirs elsewhere.
+    expect(childSessionsOf(child)).toEqual([]);
+    expect(childSessionsOf({ ...parent, harness: "codex" })).toEqual([]);
+  });
+
+  it("reads a subagent transcript named by path as the child it is", () => {
+    const path = join(home, "cfg", "projects", "-p", "parent", "subagents", "agent-a1.jsonl");
+    makeLog(path, T1);
+
+    expect(sessionAtPath("claude", "agent-a1", path)).toEqual({
+      id: "agent-a1",
+      harness: "claude",
+      path,
+      project: "-p",
+      parentId: "parent",
+      updated: T1.toISOString(),
+    });
   });
 
   it("tolerates a flattened Cursor transcript layout", () => {

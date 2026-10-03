@@ -7,6 +7,8 @@ import type { EndedSession } from "../sessions/capture";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import {
   type AgentSession,
+  childSessionsOf,
+  parentSessionOf,
   SESSION_HARNESSES,
   type SessionHarness,
   scanAgentSessions,
@@ -32,6 +34,7 @@ import {
   saveSyncState,
   sessionKey,
   studyRepoFilter,
+  withoutSubagents,
 } from "./state";
 
 /** Every run, the first-time backfill included, looks back this far and no further: memory
@@ -42,7 +45,8 @@ export const SCAN_WINDOW_DAYS = 30;
 const LEDGER_GRACE_DAYS = 7;
 
 /** Sessions settled per run, oldest first; a bootstrap drains the backlog run after run, and a
- * hook run leaves the rest for the next trigger. */
+ * hook run leaves the rest for the next trigger. Sessions a hook named as ended, and their
+ * subagents, all ship in its run even past the limit. */
 export const SHIP_BATCH_LIMIT = 20;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -85,9 +89,14 @@ export interface ShipSessionResult {
   message?: string;
 }
 
-/** How a run disposed of the sessions it examined. */
+/** How a run settled the subagents' transcripts it examined, apart from the sessions. */
+type SubagentCounts = Record<Exclude<ShipSessionResult["outcome"], "failed">, number>;
+
+/** How a run disposed of the sessions it examined. A subagent's transcript is part of its
+ * session: it counts only in `subagents` when it settles, and in `failed` when it fails. */
 interface ShipCounts {
   shipped: number;
+  subagents: SubagentCounts;
   /** Opted out with `/dosu-incognito`; never uploaded. */
   incognito: number;
   /** Too small to plausibly hold anything worth learning; never uploaded. */
@@ -103,7 +112,7 @@ export interface SyncOutcome {
   status: SyncStatus;
   /** Pending sessions quiet long enough to ship. */
   readySessions: number;
-  /** Pending sessions still inside the quiet period. */
+  /** Pending sessions still inside the quiet period, not counting subagents' transcripts. */
   inFlightSessions: number;
   /** The gated backlog itself, newest first. */
   sessions: AgentSession[];
@@ -150,29 +159,52 @@ export interface SyncOptions {
 const LOG_PREVIEW_LIMIT = 10;
 
 /** One debug-log line naming what the gate selected: the only visibility a quiet run has. The
- * Activity screen parses its "N ready, M in flight" prefix. */
-function logGateResult(ready: readonly AgentSession[], inFlight: number, settled: number): void {
+ * Activity screen parses its "N ready, M in flight" prefix, which counts sessions (its progress
+ * bar sets them against total_shipped); subagents' transcripts are counted after it. */
+function logGateResult(
+  ready: readonly AgentSession[],
+  open: readonly AgentSession[],
+  settled: number,
+): void {
   const preview = ready.slice(0, LOG_PREVIEW_LIMIT).map(sessionKey).join(", ");
   const more =
     ready.length > LOG_PREVIEW_LIMIT ? ` (+${ready.length - LOG_PREVIEW_LIMIT} more)` : "";
+  const sessions = withoutSubagents(ready).length;
+  const subagents = ready.length - sessions;
   logger.debug(
     "sync",
-    `gate: ${ready.length} ready, ${inFlight} in flight (${settled} already settled)${
-      preview ? ` · ${preview}${more}` : ""
-    }`,
+    `gate: ${sessions} ready, ${withoutSubagents(open).length} in flight${
+      subagents > 0 ? ` (+${subagents} subagent transcripts ready)` : ""
+    } (${settled} already settled)${preview ? ` · ${preview}${more}` : ""}`,
+  );
+}
+
+/** Whether `ended` names this very session, by id or transcript path. */
+function namesSession(ended: EndedSession, session: AgentSession): boolean {
+  return (
+    (ended.harness === session.harness && ended.id === session.id) ||
+    (ended.path !== undefined && ended.path === session.path)
   );
 }
 
 /** Whether `ended` names this session, or the session it is a subagent of: subagents end with
  * their session (Codex fires SessionEnd for the root session only). */
 function isEndedSession(ended: EndedSession, session: AgentSession): boolean {
-  const names = (id: string | undefined) =>
-    id !== undefined && ended.harness === session.harness && ended.id === id;
   return (
-    names(session.id) ||
-    names(session.parentId) ||
-    (ended.path !== undefined && ended.path === session.path)
+    namesSession(ended, session) ||
+    (session.parentId !== undefined &&
+      ended.harness === session.harness &&
+      ended.id === session.parentId)
   );
+}
+
+/** Whether a hook named this session, or the session it is a subagent of, as ended: a session's
+ * subagents are over when it is, and ship with it rather than after the quiet period. */
+function endedByHook(ended: EndedSession, session: AgentSession): boolean {
+  if (isEndedSession(ended, session)) return true;
+  if (!session.parentId) return false;
+  const parent = parentSessionOf(session);
+  return parent !== null && isEndedSession(ended, parent);
 }
 
 /** The scan plus the sessions it cannot list: the ones a hook just named as ended and the ones
@@ -196,17 +228,21 @@ export function withOutsideSessions(
       return { harness: harness as SessionHarness, id, path };
     }),
   ];
+  const add = (session: AgentSession) => {
+    const key = sessionKey(session);
+    if (listed.has(key) || Date.parse(session.updated) < since.getTime()) return;
+    listed.add(key);
+    sessions.push(session);
+  };
   for (const { harness, id, path } of candidates) {
     if (!harness || !SESSION_HARNESSES.includes(harness) || !id || !path) continue;
     if (scannedEverywhere(harness, path)) continue;
-    const key = sessionKey({ harness, id });
-    if (!listed.has(key)) {
-      const found = sessionAtPath(harness, id, path);
-      if (!found || Date.parse(found.updated) < since.getTime()) continue;
-      listed.add(key);
-      sessions.push(found);
-    }
-    outside[key] = path;
+    const found = sessionAtPath(harness, id, path);
+    if (!found || Date.parse(found.updated) < since.getTime()) continue;
+    add(found);
+    // Its subagents live beside it, outside the scan too; they are found again from it each run.
+    for (const child of childSessionsOf(found)) add(child);
+    outside[sessionKey(found)] = path;
   }
   return { sessions, outside };
 }
@@ -246,6 +282,7 @@ function ledgerEntry(
     outcome: result.outcome,
     at,
     cli_version: cliVersion,
+    ...(result.session.parentId ? { parent: result.session.parentId } : {}),
   };
   if (result.outcome === "shipped") {
     entry.task_id = result.taskId ?? "unknown";
@@ -274,7 +311,18 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
   const cliVersion = deps.cliVersion ?? VERSION;
   const pending: PendingOptions = { cliVersion, retryRejectedBefore: options.retryRejectedBefore };
   const ended = options.ended ?? [];
-  const isEnded = (session: AgentSession) => ended.some((e) => isEndedSession(e, session));
+  // Memoized: the batch sort asks repeatedly, and a subagent's answer costs a stat of its parent.
+  const endedKeys = new Map<string, boolean>();
+  const isEnded = (session: AgentSession) => {
+    if (ended.length === 0) return false;
+    const key = sessionKey(session);
+    let answer = endedKeys.get(key);
+    if (answer === undefined) {
+      answer = ended.some((e) => endedByHook(e, session));
+      endedKeys.set(key, answer);
+    }
+    return answer;
+  };
 
   const state = loadState();
 
@@ -362,7 +410,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
         ready.length + open.length
       } of ${gate.ready.length + gate.open.length} pending sessions in scope`,
     );
-    logGateResult(ready, open.length, Object.keys(state.sessions).length);
+    logGateResult(ready, open, Object.keys(state.sessions).length);
     const endedReady = ready.filter(isEnded).map(sessionKey);
     if (ended.length > 0) {
       logger.debug("sync", `ended by hook: ${endedReady.join(", ") || "nothing pending"}`);
@@ -382,7 +430,11 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     return { ...empty("error"), error: message };
   }
 
-  const base = { readySessions: ready.length, inFlightSessions: open.length, sessions: ready };
+  const base = {
+    readySessions: ready.length,
+    inFlightSessions: withoutSubagents(open).length,
+    sessions: ready,
+  };
   if (ready.length === 0) return { status: "nothing-new", ...base };
   if (!deps.ship) return { status: "backlog", ...base };
 
@@ -424,6 +476,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
 
     const counts: ShipCounts = {
       shipped: 0,
+      subagents: { shipped: 0, trivial: 0, incognito: 0, rejected: 0, unsupported: 0 },
       incognito: 0,
       trivial: 0,
       unsupported: 0,
@@ -432,13 +485,15 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     };
     // The ship step decides each session's fate (incognito, unsupported, trivial, rejected, or
     // shipped); this side only picks the batch and records the answers.
-    // Ended sessions lead, so the batch limit never pushes one to a later run.
-    const batch = [...todo]
-      .sort(
-        (a, b) =>
-          Number(isEnded(b)) - Number(isEnded(a)) || Date.parse(a.updated) - Date.parse(b.updated),
-      )
-      .slice(0, SHIP_BATCH_LIMIT);
+    // The sessions a hook named lead, so a failure further on never keeps one from being tried;
+    // then their subagents, then the backlog oldest first. The batch limit never cuts the ended
+    // work: on a throwaway machine, nothing may run after this.
+    const rank = (s: AgentSession) =>
+      ended.some((e) => namesSession(e, s)) ? 0 : isEnded(s) ? 1 : 2;
+    const ordered = [...todo].sort(
+      (a, b) => rank(a) - rank(b) || Date.parse(a.updated) - Date.parse(b.updated),
+    );
+    const batch = ordered.slice(0, Math.max(SHIP_BATCH_LIMIT, ordered.filter(isEnded).length));
     logger.debug("sync", `shipping ${batch.length} of ${todo.length} ready sessions`);
 
     let results: ShipSessionResult[];
@@ -461,7 +516,8 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       const result = resultOf.get(key);
       // No result: the batch stopped at an earlier failure; still pending.
       if (!result) continue;
-      counts[result.outcome] += 1;
+      if (!session.parentId || result.outcome === "failed") counts[result.outcome] += 1;
+      else counts.subagents[result.outcome] += 1;
       const entry = ledgerEntry(result, locked.sessions[key], at, cliVersion);
       if (!entry) {
         error = result.message ?? "unknown error";
@@ -496,9 +552,14 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     } catch {
       // Persisting progress is best-effort; the accepted tasks are already server-side.
     }
+    const subagents = Object.entries(counts.subagents)
+      .filter(([, n]) => n > 0)
+      .map(([outcome, n]) => `${n} ${outcome}`);
     logger.debug(
       "sync",
-      `ship phase: ${counts.shipped} shipped, ${counts.incognito} incognito, ${counts.trivial} trivial, ${counts.unsupported} unsupported, ${counts.rejected} rejected, ${counts.failed} failed`,
+      `ship phase: ${counts.shipped} shipped, ${counts.incognito} incognito, ${counts.trivial} trivial, ${counts.unsupported} unsupported, ${counts.rejected} rejected, ${counts.failed} failed${
+        subagents.length > 0 ? `; subagent transcripts: ${subagents.join(", ")}` : ""
+      }`,
     );
     return {
       status: counts.failed > 0 ? "ship-failed" : "shipped",

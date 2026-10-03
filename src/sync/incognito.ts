@@ -6,7 +6,7 @@
 import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 import { codexAncestorRollouts } from "../sessions/codex-lineage";
 import { readSessionTurns } from "../sessions/read";
-import type { AgentSession } from "../sessions/scan";
+import { type AgentSession, parentSessionOf } from "../sessions/scan";
 
 /** The token the slash command body carries; versioned so the shape can evolve. */
 export const INCOGNITO_MARKER = "dosu:incognito:v1";
@@ -59,13 +59,16 @@ export function transcriptHasIncognitoMarker(
 }
 
 /** Whether a scanned session opted out. File-backed harnesses scan the raw transcript; opencode
- * (SQLite) falls back to the parsed turns. Never throws. */
+ * (SQLite) falls back to the parsed turns. A subagent's transcript never carries the marker, so
+ * it opts out with the session it worked for. Never throws. */
 export function isIncognitoSession(session: AgentSession): boolean {
   if (session.harness === "opencode") {
     return readSessionTurns(session).some((turn) => textHasIncognitoMarker(turn.text));
   }
   if (session.harness === "codex") return codexRolloutIncognito(session.path);
-  return transcriptHasIncognitoMarker(session.path);
+  if (transcriptHasIncognitoMarker(session.path)) return true;
+  const parent = parentSessionOf(session);
+  return parent !== null && isIncognitoSession(parent);
 }
 
 /** A Codex rollout is off the record when it, or a rollout it descends from, carries the marker:

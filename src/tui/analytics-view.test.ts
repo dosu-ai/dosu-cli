@@ -98,6 +98,7 @@ function makeStatus(state: SyncState = emptyState()): SyncStatus {
     running: false,
     state,
     outcomes: outcomeCounts(state),
+    subagentOutcomes: outcomeCounts(state, "subagents"),
     attention: [],
     recentActivity: [],
   };

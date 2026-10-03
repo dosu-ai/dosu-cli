@@ -121,6 +121,136 @@ describe("normalizeSessionRecords", () => {
     expect(result.tool_call_id).toBe("toolu_01AbCdEfGhJkLmNpQr");
   });
 
+  it("keeps a Claude Code task notification, in place, as what the agent observed", async () => {
+    const path = join(dir, "bg.jsonl");
+    const row = (uuid: string, type: string, content: unknown, extra = {}) =>
+      JSON.stringify({
+        type,
+        uuid,
+        timestamp: `2026-09-01T00:00:0${uuid.slice(-1)}.000Z`,
+        sessionId: "bg",
+        message: { role: type, content },
+        ...extra,
+      });
+    const notification =
+      "<task-notification>\n<task-id>a1</task-id>\n<status>completed</status>\n" +
+      "<result>README.md has 4 lines.</result>\n</task-notification>";
+    writeFileSync(
+      path,
+      [
+        row("u1", "user", "Launch a background agent to count README lines."),
+        row("a2", "assistant", [{ type: "tool_use", id: "toolu_1", name: "Agent", input: {} }]),
+        row("u3", "user", [{ type: "tool_result", tool_use_id: "toolu_1", content: "launched" }]),
+        row("u4", "user", notification, { origin: { kind: "task-notification" } }),
+        // The same notification as content blocks, as a queued prompt can record it.
+        row("u5", "user", [{ type: "text", text: notification }]),
+        row("a6", "assistant", [{ type: "text", text: "The agent counted 4 lines." }]),
+      ].join("\n"),
+    );
+
+    const records = await normalizeSessionRecords(session({ path }));
+
+    expect(records?.map((r) => r.role)).toEqual([
+      "meta",
+      "user",
+      "assistant",
+      "tool",
+      "observation",
+      "observation",
+      "assistant",
+    ]);
+    expect(records?.[4]).toEqual({
+      role: "observation",
+      content: notification,
+      timestamp: "2026-09-01T00:00:04.000Z",
+    });
+  });
+
+  it("keeps input queued while the agent was busy: what nobody typed as observations, the user's as user records", async () => {
+    const path = join(dir, "busy.jsonl");
+    const row = (uuid: string, type: string, content: unknown) =>
+      JSON.stringify({
+        type,
+        uuid,
+        timestamp: `2026-09-01T00:00:${uuid.slice(1)}.000Z`,
+        sessionId: "busy",
+        message: { role: type, content },
+      });
+    /** Claude Code's record of input that arrived mid-turn: an attachment the adapter skips. */
+    const queued = (uuid: string, attachment: Record<string, unknown>, timestamp: string) =>
+      JSON.stringify({
+        type: "attachment",
+        uuid,
+        timestamp,
+        sessionId: "busy",
+        isSidechain: false,
+        attachment: { type: "queued_command", ...attachment },
+      });
+    const notification =
+      "<task-notification>\n<task-id>a1</task-id>\n<status>completed</status>\n" +
+      "<result>LINES=18 MARKER=OSPREY-5521</result>\n</task-notification>";
+    const peer = '<agent-message from="planner">The schema change is merged.</agent-message>';
+    writeFileSync(
+      path,
+      [
+        row("u10", "user", "Count the lines in a background agent, then sleep 60."),
+        row("a11", "assistant", [{ type: "tool_use", id: "toolu_1", name: "Agent", input: {} }]),
+        row("u12", "user", [{ type: "tool_result", tool_use_id: "toolu_1", content: "launched" }]),
+        row("a13", "assistant", [{ type: "tool_use", id: "toolu_2", name: "Bash", input: {} }]),
+        row("u14", "user", [{ type: "tool_result", tool_use_id: "toolu_2", content: "slept" }]),
+        // Logged after the sleep it waited out, stamped when the agent finished during it.
+        queued(
+          "q15",
+          {
+            prompt: notification,
+            commandMode: "task-notification",
+            origin: { kind: "task-notification" },
+          },
+          "2026-09-01T00:00:13.500Z",
+        ),
+        queued(
+          "q16",
+          { prompt: "Also check the CHANGELOG.", commandMode: "prompt", origin: { kind: "human" } },
+          "2026-09-01T00:00:16.000Z",
+        ),
+        queued(
+          "q17",
+          { prompt: peer, isMeta: true, origin: { kind: "peer" } },
+          "2026-09-01T00:00:17.000Z",
+        ),
+        // Any other attachment is still transport.
+        JSON.stringify({
+          type: "attachment",
+          uuid: "x18",
+          timestamp: "2026-09-01T00:00:18.000Z",
+          attachment: { type: "hook_additional_context", content: ["Dosu memory: PELICAN"] },
+        }),
+        row("a19", "assistant", [{ type: "text", text: "LINES=18; the CHANGELOG is current." }]),
+      ].join("\n"),
+    );
+
+    const records = await normalizeSessionRecords(session({ path }));
+
+    expect(records?.map((r) => r.role)).toEqual([
+      "meta",
+      "user",
+      "assistant",
+      "tool",
+      "assistant",
+      "tool",
+      "observation",
+      "user",
+      "observation",
+      "assistant",
+    ]);
+    expect(records?.slice(6, 9)).toEqual([
+      { role: "observation", content: notification, timestamp: "2026-09-01T00:00:13.500Z" },
+      { role: "user", content: "Also check the CHANGELOG.", timestamp: "2026-09-01T00:00:16.000Z" },
+      { role: "observation", content: peer, timestamp: "2026-09-01T00:00:17.000Z" },
+    ]);
+    expect(JSON.stringify(records)).not.toContain("PELICAN");
+  });
+
   it("returns null for opencode sessions (sqlite rows are not the adapter's export shape)", async () => {
     expect(
       await normalizeSessionRecords(session({ harness: "opencode", path: join(dir, "db") })),
