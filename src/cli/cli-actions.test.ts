@@ -7,6 +7,11 @@ import type { Config } from "../config/config";
 import { loadConfig, saveConfig } from "../config/config";
 import { makeTestConfig, testSession, testTarget } from "../config/config.test-utils";
 import { allProviders } from "../mcp/providers";
+import {
+  restoreRunningInstall,
+  stubRunningFromNpx,
+  stubRunningInstall,
+} from "../mcp/running-install.test-utils";
 import { createProgram } from "./cli";
 
 // ── Mocks (true external boundaries only) ───────────────────────────────────
@@ -695,24 +700,28 @@ describe("CLI actions", () => {
   // ── mcp add ─────────────────────────────────────────────────────────────
 
   describe("mcp add", () => {
-    /** Puts a `dosu` on PATH for the entry to run, or with `present` false, none at all. */
-    function dosuOnPath(present: boolean): string {
+    /** Makes this process a compiled `dosu` in a bin dir on PATH, or with `throwaway`, npx's
+     * one-off copy of the npm package; returns the binary. */
+    function runningDosu({ throwaway = false } = {}): string {
       const bin = join(tempDir, "bin");
       mkdirSync(bin, { recursive: true });
       const dosu = join(bin, "dosu");
-      if (present) writeFileSync(dosu, "#!/bin/sh\n", { mode: 0o755 });
+      writeFileSync(dosu, "#!/bin/sh\n", { mode: 0o755 });
       vi.stubEnv("PATH", bin);
       vi.stubEnv("DOSU_DEV", undefined);
       vi.stubEnv("DOSU_BACKEND_URL_OVERRIDE", undefined);
+      if (throwaway) stubRunningFromNpx(tempDir);
+      else stubRunningInstall({ execPath: dosu });
       return dosu;
     }
 
     afterEach(() => {
       vi.unstubAllEnvs();
+      restoreRunningInstall();
     });
 
     it("creates real cursor config file with --global that runs the local proxy", async () => {
-      const dosu = dosuOnPath(true);
+      const dosu = runningDosu();
       saveConfig(authenticatedConfig());
 
       await run("mcp", "add", "cursor", "--global");
@@ -731,8 +740,8 @@ describe("CLI actions", () => {
       );
     });
 
-    it("writes the remote entry when there is no dosu on PATH to run", async () => {
-      dosuOnPath(false);
+    it("writes the remote entry when a one-off npx copy is doing the writing", async () => {
+      runningDosu({ throwaway: true });
       saveConfig(authenticatedConfig());
 
       await run("mcp", "add", "cursor", "--global");
@@ -799,7 +808,7 @@ describe("CLI actions", () => {
       testTarget(cfg).deployment_name = undefined;
       saveConfig(cfg);
 
-      dosuOnPath(false);
+      runningDosu({ throwaway: true });
       await run("mcp", "add", "cursor", "--global");
 
       const cursorConfigPath = join(tempDir, ".cursor", "mcp.json");

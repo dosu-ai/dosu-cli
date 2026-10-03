@@ -13,17 +13,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../../config/config.test-utils";
 import { loadJSONConfig, MCP_REMOTE_VERSION } from "../config-helpers";
+import { restoreRunningInstall, stubRunningFromNpx } from "../running-install.test-utils";
 
-// No `dosu` on PATH (and no dev mode) unless a test puts one there: these tests pin the remote
-// and mcp-remote forms written when there is no `dosu` to run the local proxy with.
+// A one-off `npx @dosu/cli` doing the writing (and no dev mode): these tests pin the remote and
+// mcp-remote forms written when there is no lasting Dosu install to run the local proxy with.
 // providers-stdio.test.ts covers the proxy entries written when there is.
 beforeEach(() => {
   vi.stubEnv("PATH", join(tmpdir(), "dosu-test-no-bin"));
   vi.stubEnv("DOSU_DEV", undefined);
+  stubRunningFromNpx(tmpdir());
 });
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  restoreRunningInstall();
 });
 
 // --- Helpers ---

@@ -36,14 +36,18 @@ export function appSupportDir(): string {
 }
 /* v8 ignore stop */
 
+/** Every absolute path `name` has on the shell PATH, in PATH order. */
+export function allOnPath(name: string): string[] {
+  return (process.env.PATH ?? "")
+    .split(delimiter)
+    .filter(Boolean)
+    .map((dir) => join(dir, name))
+    .filter((candidate) => existsSync(candidate));
+}
+
 /** The absolute path of `name` on the shell PATH, or null. */
 export function findOnPath(name: string): string | null {
-  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
-    if (!dir) continue;
-    const candidate = join(dir, name);
-    if (existsSync(candidate)) return candidate;
-  }
-  return null;
+  return allOnPath(name)[0] ?? null;
 }
 
 /** Locates `npx` by absolute path on the shell PATH. GUI hosts spawn stdio servers with the
@@ -58,7 +62,9 @@ export function findNpx(): string {
 }
 
 /** PATH for a spawned stdio entry: the launcher's own dir first (a Node launcher's `node` lives
- * beside it) plus the system dirs, where `git` is. */
-export function launcherPathEnv(launcher: string): string {
-  return [dirname(launcher), "/usr/bin", "/bin"].join(delimiter);
+ * beside it), the dir of a program it runs when given (`git`, wherever the installing shell found
+ * it), plus the system dirs. */
+export function launcherPathEnv(launcher: string, program?: string | null): string {
+  const dirs = [dirname(launcher), ...(program ? [dirname(program)] : []), "/usr/bin", "/bin"];
+  return [...new Set(dirs)].join(delimiter);
 }

@@ -225,6 +225,7 @@ import { ClaudeDesktopProvider } from "../mcp/providers/claude-desktop";
 import { CodexProvider } from "../mcp/providers/codex";
 import { CursorProvider } from "../mcp/providers/cursor";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
+import { restoreRunningInstall, stubRunningFromNpx } from "../mcp/running-install.test-utils";
 import { loadSyncState, saveSyncState, setShipTranscripts } from "../sync/state";
 import { consumeCommandFacets } from "../telemetry/telemetry";
 import { runActivityView } from "../tui/activity-view";
@@ -244,19 +245,22 @@ import {
   type ToolSelection,
 } from "./flow";
 
-// `npx` but no `dosu` on PATH: the real-filesystem installs below write the remote (or Codex's
-// mcp-remote) entry, which carries the deployment and API key these tests follow through setup.
-// The local-proxy entry reads both from the CLI config instead; providers-stdio.test.ts covers it.
+// A one-off `npx @dosu/cli setup` (npx on PATH, the CLI running from npx's cache): the
+// real-filesystem installs below write the remote (or Codex's mcp-remote) entry, which carries the
+// deployment and API key these tests follow through setup. An installed CLI writes the
+// local-proxy entry, which reads both from the CLI config instead; providers-stdio.test.ts covers it.
 const npxOnlyBin = mkdtempSync(join(tmpdir(), "dosu-flow-npx-only-"));
 writeFileSync(join(npxOnlyBin, "npx"), "#!/bin/sh\n", { mode: 0o755 });
 
 beforeEach(() => {
   vi.stubEnv("PATH", npxOnlyBin);
   vi.stubEnv("DOSU_DEV", undefined);
+  stubRunningFromNpx(npxOnlyBin);
 });
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  restoreRunningInstall();
 });
 
 afterAll(() => {

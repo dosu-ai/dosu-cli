@@ -15,6 +15,7 @@ vi.mock("../debug/logger", () => ({
 
 import { getConfigDir, saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
+import { restoreRunningInstall, stubRunningFromNpx } from "../mcp/running-install.test-utils";
 import { checkForMcpRefresh, readMcpRefreshCache } from "./mcp-refresh-check";
 
 const PRE_ALWAYS_LOAD_ENTRY = {
@@ -68,8 +69,10 @@ beforeEach(() => {
   origXDG = process.env.XDG_CONFIG_HOME;
   process.env.HOME = home;
   process.env.XDG_CONFIG_HOME = join(home, ".config");
-  // No `dosu` on PATH: this pins the remote entry 0.62.0 wrote, not the later stdio proxy.
+  // A one-off npx copy doing the writing: this pins the remote entry 0.62.0 wrote, not the later
+  // stdio proxy.
   vi.stubEnv("PATH", join(home, "no-bin"));
+  stubRunningFromNpx(home);
   vi.stubEnv("DOSU_DEV", undefined);
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -81,6 +84,7 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+  restoreRunningInstall();
 });
 
 describe("post-upgrade refresh onto the Claude Code alwaysLoad entry", () => {

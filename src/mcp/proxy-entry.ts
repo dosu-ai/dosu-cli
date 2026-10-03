@@ -2,10 +2,12 @@
  * (proxy.ts). Every provider writes this instead of a remote-HTTP entry when it can: only a
  * local process knows the project, branch, and agent a request comes from. */
 
+import { realpathSync } from "node:fs";
 import { platform } from "node:os";
+import { basename } from "node:path";
 import { getBackendURL } from "../config/constants";
-import { selfInvocation } from "../sync/detach";
-import { findOnPath, launcherPathEnv } from "./detect";
+import { type SelfInvocation, selfInvocation } from "../sync/detach";
+import { allOnPath, findOnPath, launcherPathEnv } from "./detect";
 
 export interface ProxyCommand {
   command: string;
@@ -29,12 +31,46 @@ function pinnedBackend(): Record<string, string> {
   return url ? { DOSU_BACKEND_URL_OVERRIDE: url } : {};
 }
 
-/** How `providerId`'s agent starts the proxy; null when there is no stable `dosu` to run (none on
- * PATH, as after a one-off `npx @dosu/cli setup`), and the provider writes its remote entry.
+/** A package runner's throwaway copy of the CLI: npx's cache, a bunx temp install, pnpm or Yarn
+ * dlx. The runner may delete it any time, so no entry should run it. */
+const THROWAWAY_COPY = /[\\/](?:_npx|bunx-[^\\/]*|dlx-[^\\/]*|pnpm[\\/]dlx)[\\/]/;
+
+function realPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+/** `program` by the PATH entry that reaches it, when one does: a package manager's link (say
+ * Homebrew's bin/dosu or bin/node) outlives the versioned file it points at, which is what the
+ * runtime reports and what the next upgrade deletes. */
+function stablePath(program: string): string {
+  const real = realPath(program);
+  return allOnPath(basename(program)).find((candidate) => realPath(candidate) === real) ?? program;
+}
+
+/** How to run the Dosu install doing the writing -- not whichever `dosu` is first on PATH, which
+ * may be an older one without `mcp serve`. A compiled binary runs itself; the npm package runs
+ * its script with the node running it now, by absolute path, so the entry never depends on a
+ * `#!/usr/bin/env node` finding node on the PATH the agent gives it. Null for a throwaway copy. */
+function runningInstall(): SelfInvocation | null {
+  const { command, baseArgs } = selfInvocation();
+  const program = baseArgs[0] ?? command;
+  if (THROWAWAY_COPY.test(program) || THROWAWAY_COPY.test(realPath(program))) return null;
+  return { command: stablePath(command), baseArgs };
+}
+
+/** How `providerId`'s agent starts the proxy; null when the CLI doing the writing is a package
+ * runner's throwaway copy (a one-off `npx @dosu/cli setup`), and the provider writes its remote
+ * entry.
  *
  * The command is absolute and the entry carries its own PATH because GUI hosts (Cursor, Claude
- * Desktop, Codex desktop) spawn servers with the minimal launchd PATH. Dev installs run this
- * working copy, with the endpoints it was set up against, as dev hooks do. */
+ * Desktop, Codex desktop) spawn servers with the minimal launchd PATH, and agents apply an entry's
+ * PATH over their own. That PATH keeps the git the installing shell resolves, which reads the
+ * project key. Dev installs run this working copy, with the endpoints it was set up against, as
+ * dev hooks do. */
 export function proxyCommand(providerId: string): ProxyCommand | null {
   const args = ["mcp", "serve", "--client", clientId(providerId)];
   if (process.env.DOSU_DEV === "true") {
@@ -45,10 +81,15 @@ export function proxyCommand(providerId: string): ProxyCommand | null {
       env: { DOSU_DEV: "true", DOSU_BACKEND_URL_OVERRIDE: getBackendURL() },
     };
   }
+  const install = runningInstall();
+  if (!install) return null;
   /* v8 ignore next -- platform dispatch, win32 arm not exercised on POSIX CI */
-  const dosu = findOnPath(platform() === "win32" ? "dosu.cmd" : "dosu");
-  if (!dosu) return null;
-  return { command: dosu, args, env: { PATH: launcherPathEnv(dosu), ...pinnedBackend() } };
+  const git = findOnPath(platform() === "win32" ? "git.exe" : "git");
+  return {
+    command: install.command,
+    args: [...install.baseArgs, ...args],
+    env: { PATH: launcherPathEnv(install.command, git), ...pinnedBackend() },
+  };
 }
 
 /** The usual JSON form of a stdio server: `{ command, args, env }`. */

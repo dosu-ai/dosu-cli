@@ -1,15 +1,31 @@
-/** Every provider's Dosu entry runs the local proxy, `dosu mcp serve --client <agent>`, when a
- * `dosu` command is on PATH; providers-install.test.ts covers the forms written without one. */
+/** Every provider's Dosu entry runs the local proxy, `dosu mcp serve --client <agent>`, with the
+ * Dosu install doing the writing; providers-install.test.ts covers the forms written when that is
+ * a package runner's throwaway copy. */
 
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../../config/config";
 import { makeTestConfig } from "../../config/config.test-utils";
 import { loadJSONConfig } from "../config-helpers";
 import { allSetupProviders, getProvider, type SetupProvider } from "../providers";
 import { refreshConfiguredProviders } from "../refresh";
+import {
+  restoreRunningInstall,
+  stubRunningFromNpx,
+  stubRunningInstall,
+  testRuntime,
+} from "../running-install.test-utils";
 
 let home: string;
 let dosu: string;
@@ -32,6 +48,7 @@ beforeEach(() => {
   mkdirSync(bin);
   dosu = join(bin, "dosu");
   writeFileSync(dosu, "#!/bin/sh\n", { mode: 0o755 });
+  stubRunningInstall({ execPath: dosu });
   pathEnv = `${bin}:/usr/bin:/bin`;
   vi.stubEnv("HOME", home);
   vi.stubEnv("PATH", bin);
@@ -44,6 +61,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  restoreRunningInstall();
   rmSync(home, { recursive: true, force: true });
 });
 
@@ -169,13 +187,20 @@ describe("stdio proxy entries", () => {
   });
 
   it("runs this working copy in dev mode, with the endpoints it was set up against", () => {
+    stubRunningInstall({ execPath: "/opt/bun/bin/bun", script: "/src/dosu-cli/src/index.ts" });
     vi.stubEnv("DOSU_DEV", "true");
     vi.stubEnv("DOSU_BACKEND_URL_OVERRIDE", "http://localhost:7001");
     getProvider("cursor").install(makeCfg(), true);
 
     const entry = loadJSONConfig(join(home, ".cursor", "mcp.json")).mcpServers.dosu;
-    expect(entry.command).toBe(process.execPath);
-    expect(entry.args).toEqual([process.argv[1], "mcp", "serve", "--client", "cursor"]);
+    expect(entry.command).toBe("/opt/bun/bin/bun");
+    expect(entry.args).toEqual([
+      "/src/dosu-cli/src/index.ts",
+      "mcp",
+      "serve",
+      "--client",
+      "cursor",
+    ]);
     expect(entry.env).toEqual({
       DOSU_DEV: "true",
       DOSU_BACKEND_URL_OVERRIDE: "http://localhost:7001",
@@ -243,5 +268,115 @@ describe("stdio proxy entries", () => {
     expect(toml).toContain(`command = "${dosu}"`);
     expect(toml).not.toContain("mcp-remote");
     expect(toml).not.toContain("X_DOSU_API_KEY");
+  });
+});
+
+describe("the Dosu an entry runs", () => {
+  /** An executable `name` in a new directory under the test home; returns its path. */
+  function program(dir: string, name: string, body: string): string {
+    mkdirSync(join(home, dir), { recursive: true });
+    const path = join(home, dir, name);
+    writeFileSync(path, body, { mode: 0o755 });
+    return path;
+  }
+
+  function link(target: string, dir: string, name: string): string {
+    mkdirSync(join(home, dir), { recursive: true });
+    const path = join(home, dir, name);
+    symlinkSync(target, path);
+    return path;
+  }
+
+  function cursorEntry() {
+    getProvider("cursor").install(makeCfg(), true);
+    return loadJSONConfig(join(home, ".cursor", "mcp.json")).mcpServers.dosu;
+  }
+
+  it("runs a compiled install through the PATH link that reaches it, not its versioned file", () => {
+    // Homebrew: `dosu` on PATH links to the Cellar binary, the path Bun reports as execPath,
+    // which the next `brew upgrade` deletes.
+    const cellar = program("Cellar/dosu/1.0.0/bin", "dosu", "#!/bin/sh\n");
+    const brewBin = dirname(link(cellar, "brew/bin", "dosu"));
+    const git = program("git/bin", "git", "#!/bin/sh\n");
+    vi.stubEnv("PATH", `${brewBin}:${dirname(git)}`);
+    stubRunningInstall({ execPath: cellar });
+
+    expect(cursorEntry()).toEqual({
+      command: join(brewBin, "dosu"),
+      args: ["mcp", "serve", "--client", "cursor"],
+      env: { PATH: `${brewBin}:${dirname(git)}:/usr/bin:/bin` },
+    });
+  });
+
+  it("runs the install doing the writing, not an older dosu earlier on PATH", () => {
+    const old = program("old/bin", "dosu", "#!/bin/sh\necho \"error: unknown command 'serve'\"\n");
+    const current = program("new/bin", "dosu", "#!/bin/sh\n");
+    stubRunningInstall({ execPath: current });
+
+    vi.stubEnv("PATH", `${dirname(old)}:${dirname(current)}`);
+    expect(cursorEntry().command).toBe(current);
+
+    vi.stubEnv("PATH", dirname(old));
+    expect(cursorEntry().command).toBe(current);
+  });
+
+  it("starts the npm package with node by absolute path, with the git the installing shell had", () => {
+    // A global install whose bin dir has no node beside it (Yarn, pnpm, a custom npm prefix):
+    // the script's `#!/usr/bin/env node` finds nothing on a PATH of that dir plus the system dirs.
+    const script = program(
+      "lib/node_modules/@dosu/cli/bin",
+      "dosu.js",
+      "#!/usr/bin/env node\n" +
+        'const { spawnSync } = require("node:child_process");\n' +
+        'const git = spawnSync("git", ["--version"], { encoding: "utf-8" });\n' +
+        "console.log(JSON.stringify({ args: process.argv.slice(2), git: git.stdout?.trim() }));\n",
+    );
+    const bin = link(script, "yarn/bin", "dosu");
+    const node = link(testRuntime, "node/bin", "node");
+    const git = program("git/bin", "git", "#!/bin/sh\necho fake-git 9.9\n");
+    vi.stubEnv("PATH", [dirname(bin), dirname(node), dirname(git)].join(":"));
+    // Node reports its own file, resolved: Homebrew's Cellar copy rather than bin/node.
+    stubRunningInstall({ execPath: realpathSync(testRuntime), script: bin });
+
+    getProvider("claude").install(makeCfg(), true);
+    const entry = loadJSONConfig(join(home, ".claude.json")).mcpServers.dosu;
+
+    expect(entry.command).toBe(node);
+    expect(entry.args).toEqual([bin, "mcp", "serve", "--client", "claude-code"]);
+    // What the agent does with the entry: run it with the entry's own environment.
+    const run = spawnSync(entry.command, entry.args, {
+      env: { HOME: home, ...entry.env },
+      encoding: "utf-8",
+      timeout: 20_000,
+    });
+    expect(run.stderr).toBe("");
+    expect(JSON.parse(run.stdout)).toEqual({
+      args: ["mcp", "serve", "--client", "claude-code"],
+      git: "fake-git 9.9",
+    });
+  });
+
+  it.each([
+    ["npx", ".npm/_npx/0123abcd/node_modules/.bin"],
+    ["bunx", "tmp/bunx-501-@dosu/cli@latest/node_modules/.bin"],
+    ["pnpm dlx", ".cache/pnpm/dlx/0123abcd/node_modules/.bin"],
+    ["yarn dlx", "tmp/xfs-0123abcd/dlx-4242/node_modules/.bin"],
+  ])("writes the remote entry when %s runs a throwaway copy", (_runner, dir) => {
+    // The runner puts its copy's bin dir first on PATH while it runs.
+    const script = program(dir, "dosu", "#!/usr/bin/env node\n");
+    vi.stubEnv("PATH", `${dirname(script)}:${dirname(dosu)}`);
+    stubRunningInstall({ execPath: process.execPath, script });
+
+    expect(cursorEntry()).toEqual(
+      expect.objectContaining({
+        url: expect.stringContaining("dep-123"),
+        headers: expect.any(Object),
+      }),
+    );
+  });
+
+  it("writes the remote entry from the shared npx helper's install, as other tests rely on", () => {
+    stubRunningFromNpx(home);
+    expect(cursorEntry().command).toBeUndefined();
   });
 });

@@ -39,7 +39,7 @@ function tomlString(value: string): string {
  * the project a session's DOSU_PROJECT names. */
 const FORWARDED_ENV = ["DOSU_PROJECT", "XDG_CONFIG_HOME"];
 
-/** The stdio server Codex runs: Dosu's proxy, or without a `dosu` on PATH, `npx mcp-remote`.
+/** The stdio server Codex runs: Dosu's proxy, or from a one-off npx copy, `npx mcp-remote`.
  * Codex desktop only renders MCP Apps for stdio servers, and launches them with the minimal
  * launchd PATH, so the command is absolute with an explicit PATH either way. */
 function codexServer(cfg: Config): {

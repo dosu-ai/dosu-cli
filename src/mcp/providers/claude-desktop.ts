@@ -32,7 +32,7 @@ export const ClaudeDesktopProvider = (): SetupProvider => ({
     // Claude Desktop's chat surface launches only stdio servers from this
     // config file (and only renders MCP Apps from them); remote HTTP goes
     // through the Connectors UI, which cannot be automated. Run Dosu's own
-    // proxy, or without a `dosu` on PATH proxy the remote endpoint through
+    // proxy, or from a one-off npx copy proxy the remote endpoint through
     // `npx mcp-remote`, with an absolute npx path and an explicit PATH
     // because Claude Desktop spawns servers with the minimal launchd PATH.
     const proxy = proxyCommand("claude-desktop");
