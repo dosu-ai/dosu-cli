@@ -140,7 +140,10 @@ records. A child session is incognito when the session that spawned it is.
 
 **The plugin.** `dosu knowledge hooks enable opencode` (and `dosu setup`) writes
 `$XDG_CONFIG_HOME/opencode/plugin/dosu.js` and the `/dosu-incognito` command; `disable` removes
-both. The plugin is plain JavaScript importing only node builtins, and does three things:
+both, and the directories it made for them if they are left empty. A `plugin/dosu.js` that is not
+Dosu's is never replaced: enable stops with an error instead. OpenCode counts as installed when its
+config or data dir exists, or, on a machine where it has never run, when `opencode` is on PATH.
+The plugin is plain JavaScript importing only node builtins, and does three things:
 
 - When the opencode process exits, however it exits (`opencode run` finishing or interrupted; the
   TUI quitting; `opencode serve`, and the SDK, web UI, and `run --attach` built on it, stopped by

@@ -61,6 +61,11 @@ describe("the opencode hook agent", () => {
     expect(opencode().isInstalled()).toBe(true);
   });
 
+  it("detects OpenCode installed but never run, from its binary on PATH", () => {
+    writeFileSync(join(bin, "opencode"), "#!/bin/sh\n", { mode: 0o755 });
+    expect(opencode().isInstalled()).toBe(true);
+  });
+
   it("installs the plugin and /dosu-incognito, and removes exactly those", () => {
     mkdirSync(join(configDir(), "plugin"), { recursive: true });
     mkdirSync(join(configDir(), "command"), { recursive: true });

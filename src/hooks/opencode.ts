@@ -30,7 +30,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { getIncognitoAgent } from "../incognito/agents";
 import { writeSecureFile } from "../mcp/config-helpers";
-import { isInstalled } from "../mcp/detect";
+import { isInstalled, isOnPath } from "../mcp/detect";
 import { INCOGNITO_MARKER } from "../sync/incognito";
 import { DEFAULT_QUIET_PERIOD_MS } from "../sync/state";
 import type { HookAgent } from "./agents";
@@ -272,7 +272,7 @@ export function opencodeHookAgent(): HookAgent {
   return {
     id: () => "opencode",
     name: () => "OpenCode",
-    isInstalled: () => isInstalled([configDir(), dataDir()]),
+    isInstalled: () => isInstalled([configDir(), dataDir()]) || isOnPath("opencode"),
     configPath: pluginPath,
     isEnabled: () => isOurs(pluginPath()),
     enable: () => {

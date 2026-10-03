@@ -395,8 +395,14 @@ describe("stepDetectTools", () => {
     setupTempEnv();
     vi.resetAllMocks();
     installSetupStepDefaults();
+    // Agents found by their binary see only what a test puts here, not this machine's installs.
+    mkdirSync(join(tempDir, "bin"));
+    vi.stubEnv("PATH", join(tempDir, "bin"));
   });
-  afterEach(teardownTempEnv);
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    teardownTempEnv();
+  });
 
   it("returns providers whose detect paths exist", () => {
     // Create Cursor detect path so it's "installed"; Claude Desktop's app
@@ -425,6 +431,15 @@ describe("stepDetectTools", () => {
 
     const detected = stepDetectTools();
     expect(detected.map((p2) => p2.id())).toEqual(["claude-desktop"]);
+  });
+
+  it("includes OpenCode installed but never run, from its binary on PATH", () => {
+    writeFileSync(join(tempDir, "bin", "opencode"), "#!/bin/sh\n", { mode: 0o755 });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => {
+      return [CursorProvider(), OpenCodeProvider()];
+    });
+
+    expect(stepDetectTools().map((p2) => p2.id())).toEqual(["opencode"]);
   });
 
   it("returns empty array when no providers are installed", () => {
