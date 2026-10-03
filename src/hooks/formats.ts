@@ -66,10 +66,12 @@ export function isDosuHookCommand(command: unknown): boolean {
 export interface HookSpec {
   command: () => string;
   isOurs: (command: unknown) => boolean;
+  /** Seconds, written as the entry's `timeout` when the agent's default does not suit. */
+  timeout?: number;
 }
 
 /** The session-end sync hook -- the default, and the only one that existed before memory. */
-const SYNC_HOOK: HookSpec = { command: hookCommand, isOurs: isDosuHookCommand };
+export const SYNC_HOOK: HookSpec = { command: hookCommand, isOurs: isDosuHookCommand };
 
 export class HookConfigError extends Error {
   constructor(message: string) {
@@ -106,6 +108,7 @@ export function writeHookConfig(path: string, config: JsonConfig): void {
 interface GroupedHookEntry {
   type?: unknown;
   command?: unknown;
+  timeout?: unknown;
 }
 
 interface GroupedHookGroup {
@@ -144,12 +147,14 @@ export function addGroupedHook(
       if (!spec.isOurs(hook?.command)) continue;
       present = true;
       hook.command = desired;
+      if (spec.timeout !== undefined) hook.timeout = spec.timeout;
     }
   }
   if (present) return config;
   if (typeof config.hooks !== "object" || config.hooks === null) config.hooks = {};
   if (!Array.isArray(config.hooks[event])) config.hooks[event] = [];
-  config.hooks[event].push({ hooks: [{ type: "command", command: desired }] });
+  const timeout = spec.timeout !== undefined ? { timeout: spec.timeout } : {};
+  config.hooks[event].push({ hooks: [{ type: "command", command: desired, ...timeout }] });
   return config;
 }
 

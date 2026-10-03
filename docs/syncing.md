@@ -9,6 +9,31 @@ first), which learns from each session server-side. Shipping is on by default;
 ship, the project key sessions are scoped by, the repo scope, and the two switches layered on top:
 a per-session opt-out and a status-bar indicator.
 
+## Codex hooks
+
+`dosu knowledge hooks enable codex` writes `$CODEX_HOME/hooks.json` (default `~/.codex`) for the
+`codex` on PATH, so re-running it after a Codex upgrade converges on the right set:
+
+| Codex | Sync trigger | Prompt-time memory |
+|---|---|---|
+| 0.160+ | `SessionEnd` (the ended session ships at once; 3s timeout, Codex's cap) | `UserPromptSubmit` |
+| 0.116 to 0.159, or no `codex` on PATH | `Stop`, after every turn (sessions ship once quiet) | `UserPromptSubmit` |
+| older | `Stop` | none |
+
+Codex runs a hook only once its `config.toml` records the hook's hash as trusted (0.129+), and
+`codex exec` never asks, so `enable` records that trust itself: a
+`[hooks.state."<hooks.json path>:<event>:<group>:<handler>"]` table with `trusted_hash`, the same
+hash Codex's own `/hooks` review stores (sha256 over the normalized hook; the path is `CODEX_HOME`
+with symlinks resolved). The keys are positions, so when Dosu's hook leaves an event (an upgrade,
+or `disable`) the user's own hooks behind it shift, and their tables move with them. Only those
+tables change; the rest of `config.toml`, comments included, is left as it was, and an edit that
+parsing shows would change anything else is refused with an error (the hooks are then installed but
+untrusted). `disable` removes exactly the hooks and tables `enable` added.
+
+The prompt hook runs `dosu knowledge context --agent codex --format codex`, which answers with the
+same `additionalContext` JSON as Claude Code's. It names the session by its rollout file, as the
+scan does: Codex's `session_id` is the root session's even inside a subagent.
+
 ## What a sync ships
 
 The state file keeps a ledger (`sessions`, schema 3) with one entry per session, keyed
@@ -88,8 +113,8 @@ wins:
 
 A session's key is cached in `project-dirs.json` the first time it is resolved, whichever rule
 produced it, so a checkout deleted later still resolves and a session never changes projects
-midway. The prompt hook resolves it first for Claude Code sessions, so the transcript ships under
-the same project it was served memory for. A link added later applies to sessions not yet
+midway. The prompt hook resolves it first for Claude Code and Codex sessions, so the transcript
+ships under the same project it was served memory for. A link added later applies to sessions not yet
 resolved (the unshipped backlog), not to ones already served or shipped. Only a `path:` answer is
 looked up again once the session file changes, since the directory may have become a repository.
 A git lookup that runs out of time is no answer, never a reason to fall back to `path:`: the prompt

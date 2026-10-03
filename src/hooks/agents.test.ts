@@ -1,6 +1,16 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parse as parseToml } from "smol-toml";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 let fakeHome: string;
@@ -123,25 +133,193 @@ describe("cursor agent", () => {
   });
 });
 
+/** Hashes `codex app-server` hooks/list reported for these exact entries (0.140 and 0.160 agree). */
+const STOP_SYNC_HASH = "sha256:9af26319d88670f7b9a7975077980ca88ce25d1763e0ac3a92510b982f5d78a0";
+const SESSION_END_SYNC_HASH =
+  "sha256:3573ceb3bf9bc6f8a2924a03a6027d8fa36a8df2b072d1429f219ce26f86a4f4";
+const PROMPT_HASH = "sha256:95aa250e19c568a288e6718b4e4034c4bc480f93e53d1bc14f325793af8be070";
+
 describe("codex agent", () => {
-  it("enables a Stop hook in hooks.json and surfaces the trust note", () => {
+  let bin: string;
+
+  beforeEach(() => {
+    // `codex --version` is the boundary: a script on an otherwise empty PATH answers for it.
+    bin = join(fakeHome, "bin");
+    mkdirSync(bin);
+    vi.stubEnv("PATH", bin);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  function installCodex(version: string): void {
+    writeFileSync(join(bin, "codex"), `#!/bin/sh\necho "codex-cli ${version}"\n`, { mode: 0o755 });
+  }
+
+  function hooksJson(): { hooks: Record<string, { hooks: Record<string, unknown>[] }[]> } {
+    return readJSON(join(fakeHome, ".codex", "hooks.json")) as never;
+  }
+
+  function trusted(): Record<string, Record<string, unknown>> {
+    const config = parseToml(readFileSync(join(fakeHome, ".codex", "config.toml"), "utf-8"));
+    return ((config.hooks as Record<string, unknown>)?.state ?? {}) as never;
+  }
+
+  const key = (event: string, group = 0, handler = 0) =>
+    `${join(fakeHome, ".codex", "hooks.json")}:${event}:${group}:${handler}`;
+
+  it("on Codex before 0.160 installs a per-turn Stop trigger and the prompt hook, trusted", () => {
+    installCodex("0.140.0");
     const codex = getHookAgent("codex");
     codex?.enable();
 
-    const config = readJSON(join(fakeHome, ".codex", "hooks.json")) as {
-      hooks: { Stop: unknown[] };
-    };
-    expect(config.hooks.Stop).toEqual([{ hooks: [{ type: "command", command: HOOK_COMMAND }] }]);
+    expect(hooksJson().hooks).toEqual({
+      Stop: [{ hooks: [{ type: "command", command: HOOK_COMMAND }] }],
+      UserPromptSubmit: [
+        {
+          hooks: [
+            { type: "command", command: "dosu knowledge context --agent codex --format codex" },
+          ],
+        },
+      ],
+    });
+    expect(trusted()).toEqual({
+      [key("stop")]: { trusted_hash: STOP_SYNC_HASH },
+      [key("user_prompt_submit")]: { trusted_hash: PROMPT_HASH },
+    });
+    expect(codex?.isEnabled()).toBe(true);
     expect(codex?.enableNote?.()).toMatch(/trust/i);
   });
 
-  it("honors CODEX_HOME", () => {
-    const altHome = join(fakeHome, "alt-codex");
-    process.env.CODEX_HOME = altHome;
+  it("on Codex 0.160 installs SessionEnd instead of Stop", () => {
+    installCodex("0.160.0");
+    getHookAgent("codex")?.enable();
+
+    expect(hooksJson().hooks.SessionEnd).toEqual([
+      { hooks: [{ type: "command", command: HOOK_COMMAND, timeout: 3 }] },
+    ]);
+    expect(hooksJson().hooks.Stop).toBeUndefined();
+    expect(trusted()).toEqual({
+      [key("session_end")]: { trusted_hash: SESSION_END_SYNC_HASH },
+      [key("user_prompt_submit")]: { trusted_hash: PROMPT_HASH },
+    });
+  });
+
+  it("without a codex on PATH falls back to the Stop trigger", () => {
+    getHookAgent("codex")?.enable();
+    expect(Object.keys(hooksJson().hooks).sort()).toEqual(["Stop", "UserPromptSubmit"]);
+  });
+
+  it("keys trust by CODEX_HOME's real path, as Codex resolves it", () => {
+    installCodex("0.160.0");
+    const real = join(fakeHome, "real-codex");
+    mkdirSync(real);
+    symlinkSync(real, join(fakeHome, "codex-link"));
+    vi.stubEnv("CODEX_HOME", join(fakeHome, "codex-link"));
 
     const codex = getHookAgent("codex");
-    expect(codex?.configPath()).toBe(join(altHome, "hooks.json"));
+    expect(codex?.configPath()).toBe(join(fakeHome, "codex-link", "hooks.json"));
     codex?.enable();
-    expect(existsSync(join(altHome, "hooks.json"))).toBe(true);
+
+    const config = parseToml(readFileSync(join(real, "config.toml"), "utf-8"));
+    expect(Object.keys((config.hooks as { state: object }).state)).toContain(
+      `${realpathSync(real)}/hooks.json:session_end:0:0`,
+    );
+  });
+
+  it("converges after a Codex upgrade, carrying the user's own hook trust along", () => {
+    installCodex("0.140.0");
+    const codex = getHookAgent("codex");
+    codex?.enable();
+    // The user's own Stop hook, after Dosu's, which they trusted in Codex.
+    const config = hooksJson();
+    config.hooks.Stop.push({ hooks: [{ type: "command", command: "my-notifier" }] });
+    writeFileSync(join(fakeHome, ".codex", "hooks.json"), JSON.stringify(config));
+    const tomlPath = join(fakeHome, ".codex", "config.toml");
+    writeFileSync(
+      tomlPath,
+      `${readFileSync(tomlPath, "utf-8")}\n[hooks.state.${JSON.stringify(key("stop", 1))}]\ntrusted_hash = "sha256:mine"\n`,
+    );
+
+    installCodex("0.160.0");
+    codex?.enable();
+
+    expect(hooksJson().hooks.Stop).toEqual([
+      { hooks: [{ type: "command", command: "my-notifier" }] },
+    ]);
+    expect(trusted()).toEqual({
+      [key("stop")]: { trusted_hash: "sha256:mine" },
+      [key("session_end")]: { trusted_hash: SESSION_END_SYNC_HASH },
+      [key("user_prompt_submit")]: { trusted_hash: PROMPT_HASH },
+    });
+  });
+
+  it("disable removes exactly what enable added, leaving the rest of config.toml as it was", () => {
+    installCodex("0.160.0");
+    mkdirSync(join(fakeHome, ".codex"));
+    const tomlPath = join(fakeHome, ".codex", "config.toml");
+    const original = [
+      "# my settings",
+      'model = "gpt-5"',
+      "",
+      '[projects."/work/app"]',
+      'trust_level = "trusted" # reviewed',
+      "",
+    ].join("\n");
+    writeFileSync(tomlPath, original);
+
+    const codex = getHookAgent("codex");
+    codex?.enable();
+    expect(readFileSync(tomlPath, "utf-8")).toContain('trust_level = "trusted" # reviewed');
+    codex?.disable();
+
+    expect(readFileSync(tomlPath, "utf-8")).toBe(original);
+    expect(hooksJson().hooks).toEqual({});
+    expect(codex?.isEnabled()).toBe(false);
+  });
+
+  it("re-enabling keeps a Dosu hook the user switched off in Codex switched off", () => {
+    installCodex("0.160.0");
+    const codex = getHookAgent("codex");
+    codex?.enable();
+    const tomlPath = join(fakeHome, ".codex", "config.toml");
+    const promptKey = JSON.stringify(key("user_prompt_submit"));
+    writeFileSync(
+      tomlPath,
+      readFileSync(tomlPath, "utf-8").replace(
+        `[hooks.state.${promptKey}]\n`,
+        `[hooks.state.${promptKey}]\nenabled = false\n`,
+      ),
+    );
+
+    codex?.enable();
+
+    expect(trusted()[key("user_prompt_submit")]).toEqual({
+      enabled: false,
+      trusted_hash: PROMPT_HASH,
+    });
+  });
+
+  it("an unparseable config.toml is left alone, and the error says the hooks need trusting", () => {
+    installCodex("0.160.0");
+    mkdirSync(join(fakeHome, ".codex"));
+    const tomlPath = join(fakeHome, ".codex", "config.toml");
+    writeFileSync(tomlPath, "model = [unclosed");
+
+    expect(() => getHookAgent("codex")?.enable()).toThrow(/trust/);
+    expect(readFileSync(tomlPath, "utf-8")).toBe("model = [unclosed");
+    expect(hooksJson().hooks.SessionEnd).toHaveLength(1);
+  });
+
+  it("refuses hook state kept as an inline table instead of rewriting it", () => {
+    installCodex("0.160.0");
+    mkdirSync(join(fakeHome, ".codex"));
+    const tomlPath = join(fakeHome, ".codex", "config.toml");
+    const inline = `[hooks.state]\n${JSON.stringify(key("session_end"))} = { enabled = true }\n`;
+    writeFileSync(tomlPath, inline);
+
+    expect(() => getHookAgent("codex")?.enable()).toThrow(HookConfigError);
+    expect(readFileSync(tomlPath, "utf-8")).toBe(inline);
   });
 });

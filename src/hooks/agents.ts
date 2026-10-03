@@ -3,6 +3,7 @@
 
 import { join } from "node:path";
 import { expandHome, isInstalled } from "../mcp/detect";
+import { codexHookAgent } from "./codex";
 import {
   addCursorHook,
   addGroupedHook,
@@ -53,10 +54,6 @@ function groupedAgent(options: {
   };
 }
 
-function codexHome(): string {
-  return process.env.CODEX_HOME ?? expandHome("~/.codex");
-}
-
 /** Same override the rules and slash-command installers honor. */
 export function claudeConfigDir(): string {
   return process.env.CLAUDE_CONFIG_DIR || expandHome("~/.claude");
@@ -91,14 +88,7 @@ export function allHookAgents(): HookAgent[] {
       event: "SessionEnd",
     }),
     cursorAgent(),
-    groupedAgent({
-      id: "codex",
-      name: "Codex",
-      detectPath: codexHome,
-      configPath: () => join(codexHome(), "hooks.json"),
-      event: "Stop",
-      enableNote: "Codex asks you to trust new hooks; approve the Dosu hook when prompted.",
-    }),
+    codexHookAgent(),
   ];
 }
 
