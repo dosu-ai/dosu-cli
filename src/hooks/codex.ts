@@ -25,6 +25,7 @@ import {
   CODEX_EVENTS,
   type CodexHookEvent,
   codexHooksKeySource,
+  dosuHooksTrusted,
   isEmptyPlan,
   planHookTrust,
 } from "./codex-trust";
@@ -101,10 +102,25 @@ function plannedHooks(version: Version | null): Partial<Record<CodexHookEvent, H
   };
 }
 
-/** Rewrite hooks.json to hold exactly `planned` of Dosu's hooks, then record their trust (and
- * move the user's own hooks' trust along with any positions that shifted). */
+function hooksPath(): string {
+  return join(codexHome(), "hooks.json");
+}
+
+function configPath(): string {
+  return join(codexHome(), "config.toml");
+}
+
+function readConfigText(): string {
+  const path = configPath();
+  return existsSync(path) ? readFileSync(path, "utf-8") : "";
+}
+
+/** Rewrite hooks.json to hold exactly `planned` of Dosu's hooks and record their trust (moving
+ * the user's own hooks' trust along with any positions that shifted). Both edits are worked out
+ * before either file is written, so a config.toml Dosu cannot edit leaves hooks.json alone too:
+ * hooks Codex would not run are never installed. */
 function converge(planned: Partial<Record<CodexHookEvent, HookSpec[]>>): void {
-  const path = join(codexHome(), "hooks.json");
+  const path = hooksPath();
   const before = readHookConfig(path);
   const after = structuredClone(before);
   for (const event of CODEX_EVENTS) {
@@ -115,34 +131,35 @@ function converge(planned: Partial<Record<CodexHookEvent, HookSpec[]>>): void {
       else removeGroupedHook(after, event, spec);
     }
   }
-  if (!isDeepStrictEqual(before, after)) writeHookConfig(path, after);
 
   const plan = planHookTrust(before, after, codexHooksKeySource(), isOurs);
-  if (isEmptyPlan(plan)) return;
-  const configPath = join(codexHome(), "config.toml");
-  const text = existsSync(configPath) ? readFileSync(configPath, "utf-8") : "";
-  let next: string;
-  try {
-    next = applyHookTrust(text, plan, configPath);
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
-    throw new HookConfigError(
-      `${reason}. The hooks are in ${path}, but Codex will not run them until you trust them (/hooks)`,
-    );
+  const text = readConfigText();
+  let next = text;
+  if (!isEmptyPlan(plan)) {
+    try {
+      next = applyHookTrust(text, plan, configPath());
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new HookConfigError(
+        `${reason}. Nothing was changed: Codex runs Dosu's hooks only once their trust is recorded there`,
+      );
+    }
   }
-  if (next !== text) writeSecureFile(configPath, next);
+  if (!isDeepStrictEqual(before, after)) writeHookConfig(path, after);
+  if (next !== text) writeSecureFile(configPath(), next);
 }
 
 export function codexHookAgent(): HookAgent {
-  const configPath = () => join(codexHome(), "hooks.json");
   return {
     id: () => "codex",
     name: () => "Codex",
     isInstalled: () => isInstalled([codexHome()]),
-    configPath,
+    configPath: hooksPath,
+    // Installed and trusted: `codex exec` skips a hook whose trust is not recorded.
     isEnabled: () => {
-      const config = readHookConfig(configPath());
-      return hasGroupedHook(config, "SessionEnd") || hasGroupedHook(config, "Stop");
+      const config = readHookConfig(hooksPath());
+      if (!hasGroupedHook(config, "Stop") && !hasGroupedHook(config, "SessionEnd")) return false;
+      return dosuHooksTrusted(config, readConfigText(), codexHooksKeySource(), isOurs);
     },
     enable: () => converge(plannedHooks(codexVersion())),
     disable: () => converge({}),

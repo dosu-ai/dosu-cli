@@ -206,6 +206,32 @@ function stateTableKey(line: string): string | null {
   return path.length === 3 && path[0] === "hooks" && path[1] === "state" ? path[2] : null;
 }
 
+/** Whether Codex would run every Dosu handler in a hooks.json: each one's state table in
+ * config.toml records the hash the handler has now. A config.toml that does not parse trusts
+ * nothing (Codex will not start on it either). */
+export function dosuHooksTrusted(
+  config: JsonConfig,
+  configText: string,
+  keySource: string,
+  isOurs: (command: unknown) => boolean,
+): boolean {
+  let state: TomlTable;
+  try {
+    const hooks = parse(configText).hooks;
+    state = isTable(hooks) && isTable(hooks.state) ? hooks.state : {};
+  } catch {
+    return false;
+  }
+  return CODEX_EVENTS.every((event) =>
+    placedHooks(config, event, keySource, isOurs)
+      .filter((hook) => hook.ours)
+      .every((hook) => {
+        const entry = state[hook.key];
+        return isTable(entry) && entry.trusted_hash === hook.hash;
+      }),
+  );
+}
+
 /** Whether a line opens any table, so a section ends there. */
 function opensTable(line: string): boolean {
   const text = line.trim();

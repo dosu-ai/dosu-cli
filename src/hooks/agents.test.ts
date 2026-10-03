@@ -340,15 +340,18 @@ describe("codex agent", () => {
     });
   });
 
-  it("an unparseable config.toml is left alone, and the error says the hooks need trusting", () => {
+  it("an unparseable config.toml leaves both files alone, and the error says why", () => {
     installCodex("0.160.0");
     mkdirSync(join(fakeHome, ".codex"));
     const tomlPath = join(fakeHome, ".codex", "config.toml");
     writeFileSync(tomlPath, "model = [unclosed");
 
-    expect(() => getHookAgent("codex")?.enable()).toThrow(/trust/);
+    const codex = getHookAgent("codex");
+    expect(() => codex?.enable()).toThrow(/trust/);
     expect(readFileSync(tomlPath, "utf-8")).toBe("model = [unclosed");
-    expect(hooksJson().hooks.SessionEnd).toHaveLength(1);
+    // Hooks Codex would not run are not installed: hooks.json is untouched too.
+    expect(existsSync(join(fakeHome, ".codex", "hooks.json"))).toBe(false);
+    expect(codex?.isEnabled()).toBe(false);
   });
 
   it("refuses hook state kept as an inline table instead of rewriting it", () => {
@@ -360,5 +363,28 @@ describe("codex agent", () => {
 
     expect(() => getHookAgent("codex")?.enable()).toThrow(HookConfigError);
     expect(readFileSync(tomlPath, "utf-8")).toBe(inline);
+    expect(existsSync(join(fakeHome, ".codex", "hooks.json"))).toBe(false);
+  });
+
+  it("is not enabled while Dosu's hook sits in hooks.json untrusted, until enable trusts it", () => {
+    installCodex("0.140.0");
+    mkdirSync(join(fakeHome, ".codex"));
+    // What an older CLI left: the Stop hook, with no trust recorded, so `codex exec` skips it.
+    writeFileSync(
+      join(fakeHome, ".codex", "hooks.json"),
+      JSON.stringify({
+        hooks: { Stop: [{ hooks: [{ type: "command", command: HOOK_COMMAND }] }] },
+      }),
+    );
+    const codex = getHookAgent("codex");
+    expect(codex?.isEnabled()).toBe(false);
+
+    codex?.enable();
+    expect(codex?.isEnabled()).toBe(true);
+
+    // A hash that no longer matches the hook (edited by hand) is not trust either.
+    const tomlPath = join(fakeHome, ".codex", "config.toml");
+    writeFileSync(tomlPath, readFileSync(tomlPath, "utf-8").replace(STOP_SYNC_HASH, "sha256:old"));
+    expect(codex?.isEnabled()).toBe(false);
   });
 });

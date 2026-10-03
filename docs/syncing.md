@@ -34,8 +34,10 @@ hash Codex's own `/hooks` review stores (sha256 over the normalized hook; the pa
 with symlinks resolved). The keys are positions, so when Dosu's hook leaves an event (an upgrade,
 or `disable`) the user's own hooks behind it shift, and their tables move with them. Only those
 tables change; the rest of `config.toml`, comments included, is left as it was, and an edit that
-parsing shows would change anything else is refused with an error (the hooks are then installed but
-untrusted). `disable` removes exactly the hooks and tables `enable` added.
+parsing shows would change anything else is refused with an error, leaving both files as they
+were: hooks Codex would not run are never installed. `hooks status` reports Codex enabled only
+while Dosu's hooks are in hooks.json with their current hashes trusted. `disable` removes exactly
+the hooks and tables `enable` added.
 
 The prompt hook runs `dosu knowledge context --agent codex --format codex`, which answers with the
 same `additionalContext` JSON as Claude Code's. It names the session by its rollout file, as the
