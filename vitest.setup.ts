@@ -9,3 +9,10 @@ import { join } from "node:path";
 // own empty config home; tests that need specific config contents (e.g.
 // config.test.ts) still override this per-test.
 process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "dosu-vitest-"));
+
+// Likewise the agents' own config: a test that reaches a hook or command installer without
+// faking the home must write into a scratch ~/.claude (or ~/.codex, ~/.cursor), never the
+// developer's. Tests that need a particular home still set their own.
+process.env.HOME = mkdtempSync(join(tmpdir(), "dosu-vitest-home-"));
+delete process.env.CLAUDE_CONFIG_DIR;
+delete process.env.CODEX_HOME;
