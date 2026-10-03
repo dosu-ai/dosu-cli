@@ -72,7 +72,8 @@ later run. The exception is a session the hook says just ended: the `--detach` p
 payload and passes the session to the detached run as `--ended <harness>:<id>=<transcript>` (one
 value per session, so two sessions' transcripts never get swapped; `--ended-path <transcript>` names
 a session known only by its transcript). That session ships in the same run, past the quiet period
-and ahead of the backlog, even if its transcript lives outside the directories the scan walks. A
+and ahead of the backlog, together with the subagent sessions it spawned, which ended with it (Codex
+fires `SessionEnd` for the root session only), even if its transcript lives outside the directories the scan walks. A
 transcript outside the default directories (including one this run lists only because the agent
 exported `CLAUDE_CONFIG_DIR` or `CODEX_HOME`, which a sync started elsewhere lacks) is remembered in
 the state file (`outside_sessions`) until it is gone or leaves the window, so later runs retry it

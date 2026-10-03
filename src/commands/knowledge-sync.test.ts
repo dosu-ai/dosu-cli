@@ -313,6 +313,29 @@ describe("knowledge sync of Codex subagents", () => {
   });
 });
 
+describe("knowledge sync of Codex subagents, ended", () => {
+  it("ships a session's subagents with it: Codex ends them with the session it names", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    const uuid = "01a0ff53-4a89-7920-bc32-11dac880a6e6";
+    const parent = codexRollout(`rollout-2026-10-02T18-14-03-${uuid}`, alpha, 0);
+    codexRollout("rollout-2026-10-02T18-14-12-01a0ff53-6b7f-7932-813b-526f14d8b881", alpha, 0, {
+      parent_thread_id: uuid,
+      thread_source: "subagent",
+    });
+
+    await dosu("sync", "--quiet", "--ended", `codex:rollout-2026-10-02T18-14-03-${uuid}=${parent}`);
+
+    expect(
+      posted()
+        .map((p) => p.metadata.session_id)
+        .sort(),
+    ).toEqual([
+      `rollout-2026-10-02T18-14-03-${uuid}`,
+      "rollout-2026-10-02T18-14-12-01a0ff53-6b7f-7932-813b-526f14d8b881",
+    ]);
+  });
+});
+
 describe("knowledge sync of a resumed session", () => {
   it("ships the tail of one under a relocated Claude config from a shell without the variable", async () => {
     const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");

@@ -163,9 +163,14 @@ function logGateResult(ready: readonly AgentSession[], inFlight: number, settled
   );
 }
 
+/** Whether `ended` names this session, or the session it is a subagent of: subagents end with
+ * their session (Codex fires SessionEnd for the root session only). */
 function isEndedSession(ended: EndedSession, session: AgentSession): boolean {
+  const names = (id: string | undefined) =>
+    id !== undefined && ended.harness === session.harness && ended.id === id;
   return (
-    (ended.harness === session.harness && ended.id === session.id) ||
+    names(session.id) ||
+    names(session.parentId) ||
     (ended.path !== undefined && ended.path === session.path)
   );
 }
