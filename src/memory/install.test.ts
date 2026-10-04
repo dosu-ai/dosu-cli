@@ -229,6 +229,9 @@ describe("memory hooks in Cursor's hooks.json", () => {
     process.env.DOSU_DEV = "true";
     process.env.XDG_CONFIG_HOME = configDir;
     process.env.DOSU_BACKEND_URL_OVERRIDE = "https://api.example.test";
+    // A shim an earlier install left readable by others is narrowed before it is rewritten.
+    mkdirSync(join(configDir, "dosu-cli-dev"));
+    writeFileSync(join(configDir, "dosu-cli-dev", "cursor-dev-dosu"), "old", { mode: 0o644 });
     enableMemoryHooks("cursor");
 
     const text = readFileSync(join(configDir, ".cursor", "hooks.json"), "utf-8");

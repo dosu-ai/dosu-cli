@@ -4,7 +4,7 @@
  * dispatches on the payload's `hook_event_name`. Separate from the knowledge-sync hook in the same
  * files: neither install touches the other. */
 
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getConfigDir } from "../config/config";
 import { claudeConfigDir, codexHome, cursorHooksPath } from "../hooks/agents";
@@ -125,15 +125,18 @@ function cursorDevShimPath(): string {
   return join(getConfigDir(), "cursor-dev-dosu");
 }
 
+/** Owner-only from the start: a new file is created 0700, an old one narrowed before it is
+ * rewritten. */
 function writeCursorDevShim(): void {
   const path = cursorDevShimPath();
   mkdirSync(dirname(path), { recursive: true });
+  if (existsSync(path)) chmodSync(path, 0o700);
   const script = `${devEnvAssignments().join(" ")} ${devSelfCommand()}`;
   writeFileSync(
     path,
     `#!/bin/sh\n# \`dosu memory hooks enable --agent cursor\` in dev mode: this working copy and its endpoints.\nexec env ${script} "$@"\n`,
+    { mode: 0o700 },
   );
-  chmodSync(path, 0o700);
 }
 
 /** Dev installs pin this working copy with its endpoints inline, as the knowledge hook does; on
