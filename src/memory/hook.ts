@@ -388,10 +388,10 @@ async function runCursorHook(raw: unknown, deps: HookDeps, event?: string): Prom
 }
 
 /** Cursor also runs the hooks in Claude Code's settings (its third-party hooks setting, on by
- * default), with its own payload and environment. */
+ * default), with its own payload. Only the payload tells: Claude Code started from Cursor's
+ * terminal may inherit Cursor's environment, and exiting there would lose its memory. */
 function fromCursor(raw: unknown): boolean {
-  const cursorPayload = typeof raw === "object" && raw !== null && "cursor_version" in raw;
-  return cursorPayload || process.env.CURSOR_VERSION !== undefined;
+  return typeof raw === "object" && raw !== null && "cursor_version" in raw;
 }
 
 /** Handle one hook payload; returns what to print on stdout, or null for nothing. */

@@ -343,13 +343,23 @@ describe("runMemoryHook for Claude Code, run by Cursor", () => {
     else process.env.CURSOR_VERSION = savedVersion;
   });
 
-  it("leaves the session to the Cursor entry", async () => {
-    const prompt = payload("UserPromptSubmit", { prompt: "Fix it" });
-    expect(await runMemoryHook({ ...prompt, cursor_version: "3.22.12" }, deps())).toBeNull();
-    process.env.CURSOR_VERSION = "3.22.12";
+  it("leaves a Cursor payload to the Cursor entry", async () => {
+    const prompt = payload("UserPromptSubmit", { prompt: "Fix it", cursor_version: "3.22.12" });
     expect(await runMemoryHook(prompt, deps())).toBeNull();
     expect(recallBodies).toEqual([]);
     expect(readSessionState(SESSION, dir)).toBeNull();
+  });
+
+  it("still serves Claude Code started from Cursor's terminal", async () => {
+    process.env.CURSOR_VERSION = "3.22.12";
+    expect(await runMemoryHook(payload("UserPromptSubmit", { prompt: "Fix it" }), deps())).toBe(
+      JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "UserPromptSubmit",
+          additionalContext: `<prior_task_memory>\n${NOTE}\n</prior_task_memory>`,
+        },
+      }),
+    );
   });
 });
 
