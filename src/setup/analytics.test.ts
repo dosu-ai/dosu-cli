@@ -284,23 +284,29 @@ describe("setup analytics", () => {
     await trackCliOnboardingEvent(makeConfig(), RUN_ID, "cli_onboarding_completed", {
       completed_hooks: true,
       hook_count: 2,
+      memory_hook_count: 3,
     });
     expect(mutate.mock.calls[0]?.[0].properties).toMatchObject({
       completed_hooks: true,
       hook_count: 2,
+      memory_hook_count: 3,
     });
 
     await trackCliOnboardingEvent(makeConfig(), RUN_ID, "cli_onboarding_completed", {
       completed_hooks: "yes",
       hook_count: 1.5,
+      memory_hook_count: "3",
     } as never);
     expect(mutate.mock.calls[1]?.[0].properties).not.toHaveProperty("completed_hooks");
     expect(mutate.mock.calls[1]?.[0].properties).not.toHaveProperty("hook_count");
+    expect(mutate.mock.calls[1]?.[0].properties).not.toHaveProperty("memory_hook_count");
 
     await trackCliOnboardingEvent(makeConfig(), RUN_ID, "cli_onboarding_completed", {
       hook_count: 51,
+      memory_hook_count: -1,
     });
     expect(mutate.mock.calls[2]?.[0].properties).not.toHaveProperty("hook_count");
+    expect(mutate.mock.calls[2]?.[0].properties).not.toHaveProperty("memory_hook_count");
   });
 
   it("logs and swallows pre-auth client setup failures", async () => {

@@ -111,7 +111,7 @@ The `properties` allowlist is:
 | `claude_code_source` | Optional, `knowledge sync` only: where the studying agent's Claude Code came from — `sdk` (the Agent SDK's bundled binary), `system` (a system install), or `missing`. Never the executable path. |
 | `claude_code_version` | Optional, `knowledge sync` only: the spawned Claude Code's self-reported version, kept only when it is a plain release version (`1.2.3` with an optional short dotted pre-release). |
 | `learner_model` | Optional, `knowledge sync` only: the model the study run pinned, kept only when it is a `claude-` model id of lowercase letters, digits, `.`, and `-` (at most 63 characters). |
-| `backfill_offer` | Optional, `setup`/`tui` only: what happened to the post-install "study past sessions" prompt — `not-offered` (empty backlog), `accepted`, `declined`, `cancelled`, or `spawn-failed`. |
+| `backfill_offer` | Optional, `setup`/`tui` only: what happened to the post-install "study past sessions" prompt — `not-offered` (empty backlog), `accepted`, `declined`, `cancelled`, or `spawn-failed`. Absent when setup made no offer: it offers only when a configured agent already has the knowledge sync hook. |
 
 The optional per-command facets are recorded by the running command through
 `recordCommandFacets()` and attached to its single completion event. Every value is checked against
@@ -206,7 +206,9 @@ Current common setup properties are `cli_version`, `install_channel`, `platform`
 Current callers also use only these workflow properties: `onboarding_run_id`,
 `has_deployment_option`, `mode_option`, `flow_kind`, `reason`, `provider_count`, `providers`,
 `completed_mcp`, `completed_skill`, `completed_agents_md`, `completed_hooks` (at least one
-session-end knowledge sync hook was enabled in the run), and `hook_count` (integer `0..50`).
+configured agent has the session-end knowledge sync hook; setup no longer installs it, so a new
+install reports `false`), `hook_count` (integer `0..50`, those agents), and `memory_hook_count`
+(integer `0..50`, the agents whose agent-memory hooks were enabled in the run).
 The post-install "study past sessions" offer is not a setup event; its outcome rides on the
 `setup` command's `cli_command_completed` event as `backfill_offer` (see the command telemetry
 table above). Setup events use stable names in the

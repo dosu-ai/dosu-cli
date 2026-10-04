@@ -160,6 +160,10 @@ To change a skill, edit `skills/<name>/…` and run `bun run embed:skills` to re
 | `factory` | Factory |
 | `manual` | Manual Configuration (prints config to paste yourself) |
 
+For Claude Code, Cursor, and Codex, the setup wizard also installs the agent-memory hooks
+(`dosu memory hooks enable --agent claude-code|cursor|codex`), which record each session and hand
+the agent notes from earlier sessions in the same repository. Unticking the agent removes them.
+
 ### Non-interactive / agent setup
 
 For coding agents and CI, `setup` has a non-interactive mode:
@@ -174,7 +178,7 @@ Combine with `dosu login --request` / `--check <ticket>` for human-in-the-loop a
 
 With `dosu knowledge hooks enable`, Dosu studies finished coding-agent sessions in the background
 and turns what it learns into shared knowledge. Two switches make that visible and controllable per
-session. `dosu setup` installs both alongside the hook; they can also be managed directly:
+session. `dosu setup` no longer installs the hook or either switch; manage them directly:
 
 ```bash
 dosu knowledge statusline enable|disable [claude|cursor]   # status-bar line in Claude Code / Cursor CLI

@@ -1,14 +1,12 @@
 /** `dosu knowledge`: knowledge base search/listing, plus the local sync pipeline and its
  * per-agent hook triggers. */
 
-import { existsSync } from "node:fs";
-import { delimiter, join } from "node:path";
 import { Command, Option } from "commander";
 import pc from "picocolors";
 import { createTypedClient } from "../client/trpc";
 import { loadConfig } from "../config/config";
 import { allHookAgents, getHookAgent, type HookAgent } from "../hooks/agents";
-import { HookConfigError, hookCommand } from "../hooks/formats";
+import { dosuOnPath, HookConfigError, hookCommand } from "../hooks/formats";
 import type { LearnerRunResult } from "../learner/runner";
 import { emitKnowledgeReport } from "../report/generate";
 import { captureHookSession } from "../sessions/capture";
@@ -644,12 +642,4 @@ function reportHookFailure(agent: HookAgent, err: unknown): void {
     err instanceof HookConfigError ? err.message : err instanceof Error ? err.message : String(err);
   console.error(pc.red(`✗ ${agent.name()}: ${message}`));
   process.exitCode = 1;
-}
-
-/** Hooks invoke plain `dosu`; warn at enable time when that will not resolve. */
-function dosuOnPath(): boolean {
-  const bin = process.platform === "win32" ? "dosu.cmd" : "dosu";
-  return (process.env.PATH ?? "")
-    .split(delimiter)
-    .some((dir) => dir !== "" && existsSync(join(dir, bin)));
 }

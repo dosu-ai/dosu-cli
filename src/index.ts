@@ -15,6 +15,29 @@ async function main(): Promise<void> {
     await runStatuslineRenderFromArgv();
     return;
   }
+  // The agent-memory hook runs on every tool call (PostToolUse) and must not wait on the update
+  // check or send telemetry; it skips Commander for the same reason. Flags it does not know go
+  // to Commander, which reports them.
+  if (process.argv[2] === "memory" && process.argv[3] === "hook") {
+    const { parseHookArgs, runMemoryHookCommand } = await import("./memory/hook");
+    const entry = parseHookArgs(process.argv.slice(4));
+    if (entry) {
+      await runMemoryHookCommand(entry);
+      return;
+    }
+  }
+  // So does stage two's poller, which the first prompt's hook spawns: the session waits for the
+  // note of the job it starts, and the update check would hold up that start.
+  if (
+    process.argv[2] === "memory" &&
+    process.argv[3] === "recall-poll" &&
+    process.argv[4] === "--session" &&
+    process.argv.length === 6
+  ) {
+    const { pollFullRecall } = await import("./memory/two-stage");
+    await pollFullRecall(process.argv[5]);
+    return;
+  }
   const { execute } = await import("./cli/cli");
   await execute();
 }
