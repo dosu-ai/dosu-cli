@@ -17,13 +17,12 @@ export type MemoryEvent =
 
 /** `POST /v1/agent-memory/sessions/{session_id}/events` (backend `SessionBatch`).
  * `(org, session_id, seq)` is unique server-side; a resent chunk carries the same seq and content.
- * Codex sessions go up as `claude_code` too: the backend knows no other source yet and rejects an
- * unknown one (422), which would drop the chunk.
+ * `source` is the agent (backend `AgentMemorySessionSource`).
  * Lines are 1-based and inclusive. `diff` is the latest snapshot against the session's starting
  * commit: `""` means no changes, `null` means git could not produce one (keep the previous). */
 export interface ChunkRequest {
   repo: string;
-  source: "claude_code";
+  source: "claude_code" | "codex";
   seq: number;
   first_line: number;
   last_line: number;

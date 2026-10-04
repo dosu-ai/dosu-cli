@@ -132,7 +132,7 @@ function buildChunk(
   const diff = snapshot(state.cwd, state.start_head);
   const chunk: ChunkRequest = {
     repo,
-    source: "claude_code",
+    source: state.agent === "codex" ? "codex" : "claude_code",
     seq: state.next_seq,
     first_line: state.line_offset + 1,
     last_line: next.line_offset,

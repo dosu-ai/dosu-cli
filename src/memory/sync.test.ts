@@ -259,7 +259,7 @@ describe("syncSession for Codex", () => {
       flushed: true,
     });
     expect(chunks()[0]).toMatchObject({
-      source: "claude_code",
+      source: "codex",
       seq: 0,
       first_line: 1,
       last_line: 35,
