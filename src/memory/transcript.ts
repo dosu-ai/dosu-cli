@@ -218,9 +218,12 @@ export function convertCodexTranscriptLines(lines: string[], cwd: string): Memor
           : { type: "assistant_text", ts, text: clip(text, ASSISTANT_TEXT_CHARS) },
       );
     } else if (item?.type === "CommandExecution") {
-      // A declined or killed command has no exit code: it did not complete.
+      // Only a command that ran counts, as on Claude Code. Codex writes exit code -1 with status
+      // `declined` for a command the user rejected, and with status `failed` for one that did not
+      // start or ended without a code; one that ran has its own code and status `completed` (0)
+      // or `failed`.
       const command = codexCommandText(item.command);
-      if (command === null || typeof item.exit_code !== "number") continue;
+      if (command === null || typeof item.exit_code !== "number" || item.exit_code < 0) continue;
       const output = typeof item.aggregated_output === "string" ? item.aggregated_output : "";
       events.push(commandEvent(ts, prepareRecordedCommand(command), item.exit_code, output));
     } else if (item?.type === "FileChange" && item.status === "completed") {

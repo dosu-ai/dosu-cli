@@ -256,6 +256,38 @@ describe("convertCodexTranscriptLines", () => {
     expect(events[0].ts).toBe("2026-10-04T18:52:26.901Z");
   });
 
+  it("keeps only commands that ran: not a declined one or one that never started", () => {
+    // Shaped like Codex 0.160's items (core/src/tools/events.rs): -1 when nothing ran.
+    const command = (cmd: string, status: string, exitCode: number, output: string) =>
+      JSON.stringify({
+        timestamp: TS,
+        type: "event_msg",
+        payload: {
+          type: "item_completed",
+          item: {
+            type: "CommandExecution",
+            id: `exec-${cmd}`,
+            command: ["/bin/zsh", "-lc", cmd],
+            source: "unified_exec_startup",
+            status,
+            aggregated_output: output,
+            exit_code: exitCode,
+          },
+        },
+      });
+    const events = convertCodexTranscriptLines(
+      [
+        command("rm -rf build", "declined", -1, "exec command rejected by user"),
+        command("make lint", "failed", -1, "sandbox error: failed to spawn"),
+        command("make test", "failed", 2, "ERROR: 3 tests failed\n"),
+      ],
+      "/work",
+    );
+    expect(events).toEqual([
+      { type: "command", ts: TS, command: "make test", rc: 2, error_line: "ERROR: 3 tests failed" },
+    ]);
+  });
+
   it("reads the same items from a 0.160 session, whose commands run in code mode", () => {
     const events = convertCodexTranscriptLines(CODEX_160, "/work/widgets");
     expect(events.map((event) => event.type)).toEqual([
