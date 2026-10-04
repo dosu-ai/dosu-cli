@@ -104,8 +104,10 @@ interface GroupedHookEntry {
 export interface GroupedHookSpec {
   command: string;
   owns: (command: unknown) => boolean;
-  /** Claude Code's per-hook `timeout`, in seconds. */
+  /** Per-hook `timeout`, in seconds. */
   timeout?: number;
+  /** Codex's per-hook `async`: run in the background. */
+  async?: boolean;
 }
 
 function knowledgeHookSpec(): GroupedHookSpec {
@@ -139,7 +141,10 @@ export function addGroupedHook(
   event: string,
   spec: GroupedHookSpec = knowledgeHookSpec(),
 ): JsonConfig {
-  const timeout = spec.timeout === undefined ? {} : { timeout: spec.timeout };
+  const options = {
+    ...(spec.timeout === undefined ? {} : { timeout: spec.timeout }),
+    ...(spec.async ? { async: true } : {}),
+  };
 
   let present = false;
   for (const group of groupedEventArray(config, event)) {
@@ -148,13 +153,13 @@ export function addGroupedHook(
       if (!spec.owns(hook?.command)) continue;
       present = true;
       hook.command = spec.command;
-      Object.assign(hook, timeout);
+      Object.assign(hook, options);
     }
   }
   if (present) return config;
   if (typeof config.hooks !== "object" || config.hooks === null) config.hooks = {};
   if (!Array.isArray(config.hooks[event])) config.hooks[event] = [];
-  config.hooks[event].push({ hooks: [{ type: "command", command: spec.command, ...timeout }] });
+  config.hooks[event].push({ hooks: [{ type: "command", command: spec.command, ...options }] });
   return config;
 }
 

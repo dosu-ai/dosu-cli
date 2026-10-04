@@ -1,5 +1,5 @@
-/** `dosu memory sync --session <id>`: upload what a Claude Code session added to its transcript
- * since the last run. One chunk per run: new lines → events, a diff snapshot, secrets redacted,
+/** `dosu memory sync --session <id>`: upload what an agent session added to its transcript since
+ * the last run. One chunk per run: new lines → events, a diff snapshot, secrets redacted,
  * then POST. The chunk is saved before it is sent and the cursor only moves once the backend has
  * it, so a failed or killed run resends the identical chunk next time. */
 
@@ -24,7 +24,7 @@ import {
   sessionLockPath,
   writeSessionState,
 } from "./state";
-import { convertTranscriptLines } from "./transcript";
+import { type Conversion, convertCodexTranscriptLines, convertTranscriptLines } from "./transcript";
 
 type SyncStatus =
   | "uploaded"
@@ -103,6 +103,13 @@ function redactEvent(event: MemoryEvent, counter: { n: number }): MemoryEvent {
   }
 }
 
+function convertLines(state: SessionState, lines: string[]): Conversion {
+  if (state.agent === "codex") {
+    return { events: convertCodexTranscriptLines(lines, state.cwd), pending: state.pending_tools };
+  }
+  return convertTranscriptLines(lines, state.pending_tools, state.cwd);
+}
+
 /** The next chunk from new transcript lines, and the cursor after them; null without new lines.
  * Lines that yield no events only advance the cursor (`chunk` is null). */
 function buildChunk(
@@ -110,9 +117,10 @@ function buildChunk(
   repo: string,
   snapshot: (dir: string, base: string | null) => string | null,
 ): { chunk: ChunkRequest | null; next: Outbox["next"] } | null {
+  if (state.transcript_path === null) return null;
   const { lines, bytes } = readNewLines(state.transcript_path, state.byte_offset);
   if (lines.length === 0) return null;
-  const { events, pending } = convertTranscriptLines(lines, state.pending_tools, state.cwd);
+  const { events, pending } = convertLines(state, lines);
   const next = {
     byte_offset: state.byte_offset + bytes,
     line_offset: state.line_offset + lines.length,

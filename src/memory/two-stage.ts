@@ -3,7 +3,8 @@
  * prompt itself waits only for stage one (the quick note, at most 2.5 s by default). Hooks after
  * the first prompt read local files only: stage two goes to the agent with the first batch of tool
  * results after it is ready (PostToolBatch), or with the next prompt if no tool ran in between,
- * once per session. */
+ * once per session. Codex has no PostToolBatch but runs hooks in the background: there a
+ * background prompt hook takes the poller's place and hands the note over itself. */
 
 import { logger } from "../debug/logger";
 import { spawnDetachedSelf } from "../sync/detach";
@@ -47,7 +48,16 @@ export async function startTwoStageRecall(
     logger.warn("memory", `full recall poller for ${sessionId} did not start`);
     takeFullRecallRequest(sessionId, deps.configDir);
   }
+  return quickRecall(api, request, deps);
+}
 
+/** Stage one's note, or null for none. */
+export async function quickRecall(
+  api: MemoryApi,
+  request: RecallRequest,
+  deps: TwoStageDeps,
+): Promise<string | null> {
+  const sessionId = request.session_id;
   const quick = await recallQuick(api, request, deps.fetchImpl);
   if ("error" in quick) {
     logger.warn("memory", `quick recall failed for ${sessionId}: ${quick.error}`);
@@ -98,11 +108,8 @@ const POLL_DEADLINE_MS = 125_000;
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-/** `dosu memory recall-poll --session <id>`: start stage two with the request the first prompt
- * left, poll it until it is done, fails, or runs past the deadline, then save the outcome. The
- * start is retried until the deadline only while the request cannot leave (see
- * `startFullRecall`). Polls retry network errors and 5xx until the deadline; a 4xx (unknown job)
- * ends the wait. Returns the saved state, or null when no job started. */
+/** `dosu memory recall-poll --session <id>`: run stage two with the request the first prompt
+ * left. Returns the saved state, or null when no job started. */
 export async function pollFullRecall(
   sessionId: string,
   deps: PollDeps = {},
@@ -114,6 +121,19 @@ export async function pollFullRecall(
     logger.warn("memory", `full recall not started for ${sessionId}: not signed in`);
     return null;
   }
+  return runFullRecall(api, request, deps);
+}
+
+/** Start stage two, poll it until it is done, fails, or runs past the deadline, then save the
+ * outcome. The start is retried until the deadline only while the request cannot leave (see
+ * `startFullRecall`). Polls retry network errors and 5xx until the deadline; a 4xx (unknown job)
+ * ends the wait. Returns the saved state, or null when no job started. */
+export async function runFullRecall(
+  api: MemoryApi,
+  request: RecallRequest,
+  deps: Omit<PollDeps, "api"> = {},
+): Promise<FullRecallState | null> {
+  const sessionId = request.session_id;
   const now = deps.now ?? (() => new Date());
   const sleep = deps.sleep ?? defaultSleep;
   const intervalMs = deps.intervalMs ?? POLL_INTERVAL_MS;

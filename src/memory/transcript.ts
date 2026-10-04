@@ -1,7 +1,8 @@
-/** Claude Code transcript lines → compact memory events. Tool calls are matched to their
+/** Agent transcript lines → compact memory events. Claude Code: tool calls are matched to their
  * results the way the frozen memwriter's `claude_code.py` does it (coding-memory-bench 0951e6a);
- * calls whose result lands in a later chunk wait in `pending`. Full tool output never leaves
- * this module: a command keeps only its return code and error line. */
+ * calls whose result lands in a later chunk wait in `pending`. Codex: see
+ * `convertCodexTranscriptLines`. Full tool output never leaves this module: a command keeps only
+ * its return code and error line. */
 
 import type { MemoryEvent } from "./api";
 import { clip, parseCommandObservation, prepareRecordedCommand } from "./record-rules";
@@ -68,6 +69,13 @@ function humanPromptText(record: JsonRecord, content: unknown): string | null {
 function relativePath(path: string, cwd: string): string {
   const prefix = `${cwd.replace(/\/+$/, "")}/`;
   return path.startsWith(prefix) ? path.slice(prefix.length) : path;
+}
+
+function commandEvent(ts: string, command: string, rc: number, output: string): MemoryEvent {
+  const parsed = parseCommandObservation(
+    `<returncode>${rc}</returncode>\n<output>\n${output}\n</output>`,
+  );
+  return { type: "command", ts, command, rc, error_line: parsed?.[1] ?? null };
 }
 
 export interface Conversion {
@@ -145,16 +153,7 @@ export function convertTranscriptLines(
           returncode = Number.parseInt(match[1], 10);
           output = text.slice(match[0].length);
         }
-        const parsed = parseCommandObservation(
-          `<returncode>${returncode}</returncode>\n<output>\n${output}\n</output>`,
-        );
-        events.push({
-          type: "command",
-          ts,
-          command: tool.command ?? "",
-          rc: returncode,
-          error_line: parsed?.[1] ?? null,
-        });
+        events.push(commandEvent(ts, tool.command ?? "", returncode, output));
       } else if (block.is_error !== true) {
         events.push({
           type: "file_edit",
@@ -166,4 +165,69 @@ export function convertTranscriptLines(
     }
   }
   return { events, pending: open };
+}
+
+/** The text of every content block that has one: Codex's `{type: "text"}` and `{type: "Text"}`. */
+function contentText(content: unknown): string {
+  if (!Array.isArray(content)) return "";
+  return content
+    .map(asRecord)
+    .filter((block) => typeof block?.text === "string")
+    .map((block) => (block as JsonRecord).text as string)
+    .join("\n");
+}
+
+/** The script of Codex's `[shell, "-lc", script]`; any other argv joined by spaces. */
+function codexCommandText(command: unknown): string | null {
+  if (typeof command === "string") return command;
+  if (!Array.isArray(command) || !command.every((part) => typeof part === "string")) return null;
+  const [, flag, script] = command as string[];
+  return command.length === 3 && (flag === "-lc" || flag === "-c") ? script : command.join(" ");
+}
+
+/** Codex rollout lines → the same events. Codex calls its transcript format unstable, but its hooks
+ * report no exit code (a shell command's `tool_response` is its output alone), and a failed
+ * command's error line is what memory learns most from. So the rollout is read, and only its
+ * completed thread items: `event_msg` records of type `item_completed` for a user message, an agent
+ * message, a finished shell command, or an applied patch, written alike by Codex 0.153 and 0.160.
+ * Its model-facing `response_item` records are not: in code mode a shell command is a line of
+ * JavaScript there. Anything else yields nothing. */
+export function convertCodexTranscriptLines(lines: string[], cwd: string): MemoryEvent[] {
+  const events: MemoryEvent[] = [];
+  let lastTs = "";
+
+  for (const line of lines) {
+    let record: JsonRecord | null;
+    try {
+      record = asRecord(JSON.parse(line));
+    } catch {
+      continue;
+    }
+    if (typeof record?.timestamp === "string") lastTs = record.timestamp;
+    const payload = asRecord(record?.payload);
+    if (record?.type !== "event_msg" || payload?.type !== "item_completed") continue;
+    const item = asRecord(payload.item);
+    const ts = lastTs || new Date().toISOString();
+
+    if (item?.type === "UserMessage" || item?.type === "AgentMessage") {
+      const text = contentText(item.content).trim();
+      if (!text) continue;
+      events.push(
+        item.type === "UserMessage"
+          ? { type: "user_prompt", ts, text: clip(text, USER_PROMPT_CHARS) }
+          : { type: "assistant_text", ts, text: clip(text, ASSISTANT_TEXT_CHARS) },
+      );
+    } else if (item?.type === "CommandExecution") {
+      // A declined or killed command has no exit code: it did not complete.
+      const command = codexCommandText(item.command);
+      if (command === null || typeof item.exit_code !== "number") continue;
+      const output = typeof item.aggregated_output === "string" ? item.aggregated_output : "";
+      events.push(commandEvent(ts, prepareRecordedCommand(command), item.exit_code, output));
+    } else if (item?.type === "FileChange" && item.status === "completed") {
+      for (const path of Object.keys(asRecord(item.changes) ?? {})) {
+        events.push({ type: "file_edit", ts, tool: "apply_patch", path: relativePath(path, cwd) });
+      }
+    }
+  }
+  return events;
 }

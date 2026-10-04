@@ -1,6 +1,6 @@
 /** Per-session local state for agent memory: what SessionStart learned, how far the transcript
- * has been uploaded, and the note injected on the first prompt. One JSON file per Claude Code
- * session under the CLI config dir (so `DOSU_DEV` installs stay isolated). Stage two of a
+ * has been uploaded, and the note injected on the first prompt. One JSON file per agent session
+ * under the CLI config dir (so `DOSU_DEV` installs stay isolated). Stage two of a
  * two-stage recall has files of its own: the detached poller writes it while syncs rewrite the
  * session state, and neither may overwrite the other. The first prompt hands the poller its
  * request in one more file, which the poller deletes on reading. */
@@ -18,6 +18,10 @@ import {
 import { join } from "node:path";
 import { getConfigDir } from "../config/config";
 import type { ChunkRequest, RecallRequest } from "./api";
+
+/** The coding agents whose hooks feed agent memory. */
+export const MEMORY_AGENTS = ["claude-code", "codex"] as const;
+export type MemoryAgent = (typeof MEMORY_AGENTS)[number];
 
 const SAFE_SESSION_ID = /^[A-Za-z0-9_-]+$/;
 const FULL_RECALL_REQUEST_SUFFIX = ".full-recall.request.json";
@@ -54,7 +58,10 @@ export type RecallMode = "single" | "two_stage";
 
 export interface SessionState extends TranscriptCursor {
   session_id: string;
-  transcript_path: string;
+  /** Which converter reads the transcript. */
+  agent: MemoryAgent;
+  /** Null when the agent keeps none (an ephemeral Codex session): nothing to upload. */
+  transcript_path: string | null;
   cwd: string;
   /** `owner/name` from the origin remote; null disables memory for the session. */
   repo: string | null;
@@ -106,6 +113,10 @@ function fullRecallRequestPath(sessionId: string, configDir?: string): string {
 
 function fullRecallInjectedPath(sessionId: string, configDir?: string): string {
   return join(memoryDir(configDir), `${sessionId}.full-recall.injected`);
+}
+
+function fullRecallStartedPath(sessionId: string, configDir?: string): string {
+  return join(memoryDir(configDir), `${sessionId}.full-recall.started`);
 }
 
 export function sessionLockPath(sessionId: string, configDir?: string): string {
@@ -189,21 +200,36 @@ export function fullRecallInjected(sessionId: string, configDir?: string): boole
   return isSafeSessionId(sessionId) && existsSync(fullRecallInjectedPath(sessionId, configDir));
 }
 
-/** Take the session's single stage-two injection: an exclusive create of a marker file, so of
- * several hooks racing (parallel tool calls fire PostToolUse concurrently) exactly one wins. */
-export function claimFullRecallInjection(sessionId: string, configDir?: string): boolean {
+/** An exclusive create of a marker file: of several hooks racing, exactly one wins. */
+function claimMarker(path: string, sessionId: string, configDir?: string): boolean {
   if (!isSafeSessionId(sessionId)) return false;
+  const dir = memoryDir(configDir);
   try {
-    writeFileSync(fullRecallInjectedPath(sessionId, configDir), "", { flag: "wx", mode: 0o600 });
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(path, "", { flag: "wx", mode: 0o600 });
     return true;
   } catch {
     return false;
   }
 }
 
+/** Take the session's single stage-two injection (parallel tool calls fire their hooks
+ * concurrently). */
+export function claimFullRecallInjection(sessionId: string, configDir?: string): boolean {
+  return claimMarker(fullRecallInjectedPath(sessionId, configDir), sessionId, configDir);
+}
+
+/** Take the session's single start of stage two, for Codex's background prompt hook, which runs on
+ * every prompt and alongside the prompt hook that would otherwise tell it which prompt came
+ * first. */
+export function claimFullRecallStart(sessionId: string, configDir?: string): boolean {
+  return claimMarker(fullRecallStartedPath(sessionId, configDir), sessionId, configDir);
+}
+
 export function newSessionState(fields: {
   session_id: string;
-  transcript_path: string;
+  agent: MemoryAgent;
+  transcript_path: string | null;
   cwd: string;
   repo: string | null;
   start_head: string | null;

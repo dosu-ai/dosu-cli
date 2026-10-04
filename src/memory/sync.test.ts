@@ -1,4 +1,4 @@
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +7,7 @@ import {
   memoryDir,
   newSessionState,
   readSessionState,
+  type SessionState,
   sessionLockPath,
   writeSessionState,
 } from "./state";
@@ -61,6 +62,7 @@ beforeEach(() => {
   writeSessionState(
     newSessionState({
       session_id: SESSION,
+      agent: "claude-code",
       transcript_path: transcript,
       cwd: "/w",
       repo: "acme/widgets",
@@ -241,5 +243,33 @@ describe("syncSession", () => {
     writeSessionState({ ...(state as NonNullable<typeof state>), repo: null }, dir);
     expect(await syncSession(SESSION, {}, deps())).toMatchObject({ status: "no-repo" });
     expect(memoryDir(dir)).toBe(join(dir, "agent-memory"));
+  });
+});
+
+describe("syncSession for Codex", () => {
+  it("uploads what the rollout's completed items say, and nothing without a rollout", async () => {
+    const rollout = join(dir, "rollout.jsonl");
+    writeFileSync(rollout, readFileSync(join(__dirname, "testdata", "codex-0.153-session.jsonl")));
+    const state = readSessionState(SESSION, dir) as SessionState;
+    writeSessionState({ ...state, agent: "codex", transcript_path: rollout }, dir);
+
+    expect(await syncSession(SESSION, { flush: true }, deps())).toEqual({
+      status: "uploaded",
+      chunks: 1,
+      flushed: true,
+    });
+    expect(chunks()[0]).toMatchObject({
+      source: "claude_code",
+      seq: 0,
+      first_line: 1,
+      last_line: 35,
+    });
+    expect(chunks()[0].events.filter((event) => event.type === "command")).toHaveLength(6);
+
+    writeSessionState(
+      { ...(readSessionState(SESSION, dir) as SessionState), transcript_path: null },
+      dir,
+    );
+    expect((await syncSession(SESSION, {}, deps())).status).toBe("nothing-new");
   });
 });

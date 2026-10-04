@@ -53,7 +53,7 @@ function groupedAgent(options: {
   };
 }
 
-function codexHome(): string {
+export function codexHome(): string {
   return process.env.CODEX_HOME ?? expandHome("~/.codex");
 }
 

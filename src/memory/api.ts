@@ -6,7 +6,7 @@ import { loadConfig } from "../config/config";
 import { getBackendURL } from "../config/constants";
 import { logger } from "../debug/logger";
 
-/** One compact event rebuilt from a Claude Code transcript line. `ts` is that line's client
+/** One compact event rebuilt from an agent's transcript line. `ts` is that line's client
  * timestamp. `file_edit` is context only: the backend must not append it to the episode's steps,
  * which hold shell commands alone (as in the frozen memwriter). */
 export type MemoryEvent =
@@ -17,6 +17,8 @@ export type MemoryEvent =
 
 /** `POST /v1/agent-memory/sessions/{session_id}/events` (backend `SessionBatch`).
  * `(org, session_id, seq)` is unique server-side; a resent chunk carries the same seq and content.
+ * Codex sessions go up as `claude_code` too: the backend knows no other source yet and rejects an
+ * unknown one (422), which would drop the chunk.
  * Lines are 1-based and inclusive. `diff` is the latest snapshot against the session's starting
  * commit: `""` means no changes, `null` means git could not produce one (keep the previous). */
 export interface ChunkRequest {

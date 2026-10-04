@@ -1,7 +1,8 @@
 /** `dosu memory hook`: the one entry point for Claude Code's SessionStart, UserPromptSubmit,
- * PostToolBatch, Stop, and SessionEnd hooks. It must never block or break the session: every
- * failure is logged locally and the hook exits 0 with no output. Only an injected note is
- * printed. */
+ * PostToolBatch, Stop, and SessionEnd hooks, and, with `--agent codex`, for Codex's SessionStart,
+ * UserPromptSubmit, Stop, and SessionEnd hooks. Both agents send the same payload fields and take
+ * the same output. It must never block or break the session: every failure is logged locally and
+ * the hook exits 0 with no output. Only an injected note is printed. */
 
 import { logger } from "../debug/logger";
 import { readHookStdin } from "../sessions/capture";
@@ -12,7 +13,10 @@ import { type MemoryApi, memoryApiFromConfig, type RecallRequest, recall, usable
 import { headCommit } from "./git";
 import { clip } from "./record-rules";
 import {
+  claimFullRecallStart,
   isSafeSessionId,
+  MEMORY_AGENTS,
+  type MemoryAgent,
   newSessionState,
   type RecallMode,
   readSessionState,
@@ -20,7 +24,13 @@ import {
   type SessionState,
   writeSessionState,
 } from "./state";
-import { claimFullNote, injectedFullNote, startTwoStageRecall } from "./two-stage";
+import {
+  claimFullNote,
+  injectedFullNote,
+  quickRecall,
+  runFullRecall,
+  startTwoStageRecall,
+} from "./two-stage";
 
 /** Same cap as the `user_prompt` event, so recall sees the text the episode will hold. */
 const RECALL_PROMPT_CHARS = 32_000;
@@ -30,7 +40,8 @@ export const FULL_NOTE_PREFACE = "Addendum: detailed notes for this task.";
 interface HookPayload {
   hook_event_name: string;
   session_id: string;
-  transcript_path: string;
+  /** Codex sends null for a session it keeps no transcript of. */
+  transcript_path: string | null;
   cwd: string;
   prompt?: string;
   source?: string;
@@ -45,7 +56,7 @@ function parsePayload(raw: unknown): HookPayload | null {
     typeof p.hook_event_name !== "string" ||
     typeof p.session_id !== "string" ||
     !isSafeSessionId(p.session_id) ||
-    typeof p.transcript_path !== "string" ||
+    (typeof p.transcript_path !== "string" && p.transcript_path !== null) ||
     typeof p.cwd !== "string"
   ) {
     return null;
@@ -77,6 +88,13 @@ function contextOutput(event: ContextEvent, context: string): string {
   return JSON.stringify({
     hookSpecificOutput: { hookEventName: event, additionalContext: context },
   });
+}
+
+/** Which installed hook ran: the agent, and whether it is Codex's background prompt hook, which
+ * runs stage two. */
+export interface HookEntry {
+  agent: MemoryAgent;
+  stageTwo?: boolean;
 }
 
 export interface HookDeps {
@@ -122,11 +140,12 @@ export function repoOfDir(dir: string): string | null {
 /** The session's state, created on first sight. SessionStart normally creates it; any later
  * event creates it too, so hooks enabled mid-session still work. An existing state is kept as
  * is: a resumed session continues the same transcript from the same cursor and start commit. */
-function ensureState(payload: HookPayload, deps: HookDeps): SessionState {
+function ensureState(payload: HookPayload, agent: MemoryAgent, deps: HookDeps): SessionState {
   const existing = readSessionState(payload.session_id, deps.configDir);
   if (existing) return existing;
   const state = newSessionState({
     session_id: payload.session_id,
+    agent,
     transcript_path: payload.transcript_path,
     cwd: payload.cwd,
     repo: (deps.repoOf ?? repoOfDir)(payload.cwd),
@@ -159,6 +178,11 @@ async function singleRecall(
   return note;
 }
 
+function recallRequest(repo: string, payload: HookPayload): RecallRequest {
+  const prompt = clip(redactSecrets(payload.prompt ?? "").text, RECALL_PROMPT_CHARS);
+  return { repo, session_id: payload.session_id, prompt };
+}
+
 /** First prompt: recall and remember the note for compaction. Later prompts in two-stage mode:
  * hand over stage two if it became ready after the last tool call. */
 async function onPrompt(
@@ -181,16 +205,37 @@ async function onPrompt(
     logger.info("memory", "recall skipped: not signed in to a Dosu deployment");
     return null;
   }
-  const prompt = clip(redactSecrets(payload.prompt ?? "").text, RECALL_PROMPT_CHARS);
-  const request = { repo: state.repo, session_id: state.session_id, prompt };
-  const note =
-    state.recall_mode === "single"
-      ? await singleRecall(api, request, deps)
-      : await startTwoStageRecall(api, request, deps);
+  const request = recallRequest(state.repo, payload);
+  let note: string | null;
+  if (state.recall_mode === "single") {
+    note = await singleRecall(api, request, deps);
+  } else if (state.agent === "codex") {
+    // Codex's background prompt hook runs stage two.
+    note = await quickRecall(api, request, deps);
+  } else {
+    note = await startTwoStageRecall(api, request, deps);
+  }
   if (!note) return null;
   state.note = note;
   writeSessionState(state, deps.configDir);
   return contextOutput("UserPromptSubmit", memoryBlock(note));
+}
+
+/** Codex's background prompt hook: stage two for the session's first prompt, started and waited
+ * for here; Codex hands what it prints to the next model request of the turn, or of the next turn
+ * once this one has ended. It runs alongside the prompt hook, which may not have written the
+ * session state yet, so it reads that state at most and never writes it. */
+async function stageTwo(payload: HookPayload, deps: HookDeps): Promise<string | null> {
+  const sessionId = payload.session_id;
+  const mode = readSessionState(sessionId, deps.configDir)?.recall_mode ?? recallModeFromEnv();
+  if (mode !== "two_stage" || !claimFullRecallStart(sessionId, deps.configDir)) return null;
+  const repo = (deps.repoOf ?? repoOfDir)(payload.cwd);
+  const api = deps.api === undefined ? memoryApiFromConfig() : deps.api;
+  if (!repo || !api) return null;
+  const request = recallRequest(repo, payload);
+  await runFullRecall(api, request, { configDir: deps.configDir, fetchImpl: deps.fetchImpl });
+  const full = claimFullNote(sessionId, deps.configDir);
+  return full ? contextOutput("UserPromptSubmit", fullNoteBlock(full)) : null;
 }
 
 /** After compaction: everything injected so far, stage one then stage two. */
@@ -204,21 +249,30 @@ function afterCompaction(state: SessionState, deps: HookDeps): string | null {
 }
 
 /** Handle one hook payload; returns what to print on stdout, or null for nothing. */
-export async function runMemoryHook(raw: unknown, deps: HookDeps = {}): Promise<string | null> {
+export async function runMemoryHook(
+  raw: unknown,
+  deps: HookDeps = {},
+  entry: HookEntry = { agent: "claude-code" },
+): Promise<string | null> {
   try {
     const payload = parsePayload(raw);
     if (!payload) {
       logger.warn("memory", "hook payload missing or malformed; ignored");
       return null;
     }
+    // A subagent's hooks carry its parent's session id: a note handed over there would reach the
+    // subagent, and its prompt would count as the session's first.
+    if (payload.agent_id) return null;
     if (payload.hook_event_name === "PostToolBatch") {
       // Every batch of tool calls lands here, failed calls included: local files only, and not
-      // even the session state. A subagent's batch would hand stage two to the subagent.
-      if (payload.agent_id) return null;
+      // even the session state.
       const full = claimFullNote(payload.session_id, deps.configDir);
       return full ? contextOutput("PostToolBatch", fullNoteBlock(full)) : null;
     }
-    const state = ensureState(payload, deps);
+    if (entry.stageTwo) {
+      return payload.hook_event_name === "UserPromptSubmit" ? await stageTwo(payload, deps) : null;
+    }
+    const state = ensureState(payload, entry.agent, deps);
     const spawn = deps.spawn ?? spawnDetachedSelf;
     switch (payload.hook_event_name) {
       case "SessionStart":
@@ -245,8 +299,25 @@ export async function runMemoryHook(raw: unknown, deps: HookDeps = {}): Promise<
   }
 }
 
+/** `[--agent claude-code|codex] [--stage-two]`, parsed without Commander for the fast path in
+ * index.ts; null for anything else. */
+export function parseHookArgs(args: readonly string[]): HookEntry | null {
+  const entry: HookEntry = { agent: "claude-code" };
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] === "--stage-two") {
+      entry.stageTwo = true;
+    } else if (args[i] === "--agent" && MEMORY_AGENTS.some((agent) => agent === args[i + 1])) {
+      entry.agent = args[i + 1] as MemoryAgent;
+      i += 1;
+    } else {
+      return null;
+    }
+  }
+  return entry;
+}
+
 /** `dosu memory hook`: payload on stdin, injected context (if any) on stdout. */
-export async function runMemoryHookCommand(): Promise<void> {
-  const output = await runMemoryHook(await readHookStdin());
+export async function runMemoryHookCommand(entry: HookEntry): Promise<void> {
+  const output = await runMemoryHook(await readHookStdin(), {}, entry);
   if (output) process.stdout.write(`${output}\n`);
 }

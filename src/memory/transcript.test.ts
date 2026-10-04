@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { convertTranscriptLines } from "./transcript";
+import { convertCodexTranscriptLines, convertTranscriptLines } from "./transcript";
 
 /** Real Claude Code 2.1 sessions (headless, haiku) in a toy repo with the memory hooks on;
  * paths rewritten to /work, only user/assistant/system lines and the hooks' attachments kept. */
@@ -21,6 +21,13 @@ const COMPACTED = fixture("claude-code-compacted-session.jsonl");
  * prompt. */
 const TWO_STAGE_TOOL = fixture("claude-code-two-stage-tool-session.jsonl");
 const TWO_STAGE_PROMPT = fixture("claude-code-two-stage-prompt-session.jsonl");
+/** Real `codex exec` sessions (gpt-6-sol) in a toy repo with the memory hooks on and a fake
+ * backend; paths rewritten to /work/widgets, reasoning, token counts and the built-in context
+ * dropped. Three commands (the second fails), then a fix through apply_patch. 0.153 calls tools
+ * directly; 0.160 calls them from JavaScript in code mode. Both carry the hooks' two notes as
+ * developer messages. */
+const CODEX_153 = fixture("codex-0.153-session.jsonl");
+const CODEX_160 = fixture("codex-0.160-session.jsonl");
 
 const TS = "2026-10-01T10:00:00.000Z";
 const user = (content: unknown, extra: Record<string, unknown> = {}) =>
@@ -206,5 +213,64 @@ describe("convertTranscriptLines", () => {
     const { events, pending } = convertTranscriptLines(lines, {}, "/w");
     expect(events).toEqual([{ type: "assistant_text", ts: TS, text: "No response requested." }]);
     expect(pending).toEqual({});
+  });
+});
+
+describe("convertCodexTranscriptLines", () => {
+  it("turns a real Codex 0.153 session into prompt, replies, commands, and edits", () => {
+    const events = convertCodexTranscriptLines(CODEX_153, "/work/widgets");
+    expect(events.map(({ ts: _ts, ...rest }) => rest)).toEqual([
+      { type: "user_prompt", text: expect.stringMatching(/^Run these shell commands one at a/) },
+      { type: "assistant_text", text: expect.stringMatching(/^I’ll run the three commands/) },
+      { type: "command", command: "sleep 4 && echo one", rc: 0, error_line: null },
+      {
+        type: "command",
+        command: 'python3 -c "raise SystemExit(\\"ERROR: widget count mismatch\\")"',
+        rc: 1,
+        error_line: "ERROR: widget count mismatch",
+      },
+      { type: "command", command: "sleep 4 && echo three", rc: 0, error_line: null },
+      { type: "assistant_text", text: expect.stringMatching(/^The commands finished/) },
+      {
+        type: "command",
+        command: expect.stringMatching(/^pwd; rg --files/),
+        rc: 1,
+        error_line: null,
+      },
+      {
+        type: "command",
+        command: "cat calc.py; ls -la; git status --short",
+        rc: 0,
+        error_line: null,
+      },
+      { type: "assistant_text", text: expect.stringMatching(/^`add` subtracts/) },
+      { type: "file_edit", tool: "apply_patch", path: "calc.py" },
+      {
+        type: "command",
+        command: expect.stringMatching(/^python3 -c 'import calc;/),
+        rc: 0,
+        error_line: null,
+      },
+      { type: "assistant_text", text: expect.stringMatching(/^Fixed `calc.add`/) },
+    ]);
+    expect(events[0].ts).toBe("2026-10-04T18:52:26.901Z");
+  });
+
+  it("reads the same items from a 0.160 session, whose commands run in code mode", () => {
+    const events = convertCodexTranscriptLines(CODEX_160, "/work/widgets");
+    expect(events.map((event) => event.type)).toEqual([
+      "user_prompt",
+      "assistant_text",
+      "command",
+      "command",
+      "command",
+      "assistant_text",
+      "command",
+      "command",
+      "file_edit",
+      "command",
+      "assistant_text",
+    ]);
+    expect(events[3]).toMatchObject({ command: "ls /nonexistent-dir", rc: 1 });
   });
 });

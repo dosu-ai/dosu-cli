@@ -1,93 +1,109 @@
-/** `dosu memory`: agent memory for Claude Code. Hooks record each session incrementally and inject
- * a note from earlier sessions in the same repository on a session's first prompt. Independent of
- * `dosu knowledge` and its hooks. */
+/** `dosu memory`: agent memory for Claude Code and Codex. Hooks record each session incrementally
+ * and inject a note from earlier sessions in the same repository on a session's first prompt.
+ * Independent of `dosu knowledge` and its hooks. */
 
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import pc from "picocolors";
 import { HookConfigError } from "../hooks/formats";
 import { runMemoryHookCommand } from "../memory/hook";
 import {
-  claudeSettingsPath,
   disableMemoryHooks,
   enableMemoryHooks,
   memoryHookStatus,
+  memoryHooksTarget,
 } from "../memory/install";
+import { MEMORY_AGENTS, type MemoryAgent } from "../memory/state";
 import { syncSession } from "../memory/sync";
 import { pollFullRecall } from "../memory/two-stage";
 import { printResult } from "./output";
 
+const agentOption = () =>
+  new Option("--agent <agent>", "Coding agent").choices(MEMORY_AGENTS).default("claude-code");
+
 function hooksCommand(): Command {
-  const cmd = new Command("hooks").description("Manage the agent-memory hooks in Claude Code");
+  const cmd = new Command("hooks").description(
+    "Manage the agent-memory hooks in Claude Code or Codex",
+  );
 
   cmd
     .command("status")
-    .description("Show which Claude Code events have the memory hook")
+    .description("Show which of the agent's events have the memory hook")
+    .addOption(agentOption())
     .option("--json", "Output as JSON")
-    .action((opts: { json?: boolean }) => {
-      const status = { settings: claudeSettingsPath(), events: memoryHookStatus() };
+    .action((opts: { agent: MemoryAgent; json?: boolean }) => {
+      const status = {
+        settings: memoryHooksTarget(opts.agent).configPath,
+        events: memoryHookStatus(opts.agent),
+      };
       if (opts.json) {
         printResult(status, opts);
         return;
       }
       for (const [event, enabled] of Object.entries(status.events)) {
-        console.log(`  ${event.padEnd(17)} ${enabled ? pc.green("enabled") : "disabled"}`);
+        console.log(`  ${event.padEnd(28)} ${enabled ? pc.green("enabled") : "disabled"}`);
       }
       console.log(pc.dim(`\n${status.settings}`));
     });
 
   cmd
     .command("enable")
-    .description(
-      "Install the memory hooks (SessionStart, UserPromptSubmit, PostToolBatch, Stop, SessionEnd)",
-    )
-    .action(() => {
-      changeHooks(enableMemoryHooks, "enabled");
+    .description("Install the memory hooks (`status` lists them)")
+    .addOption(agentOption())
+    .action((opts: { agent: MemoryAgent }) => {
+      changeHooks(opts.agent, enableMemoryHooks, "enabled");
     });
 
   cmd
     .command("disable")
     .description("Remove the memory hooks")
-    .action(() => {
-      changeHooks(disableMemoryHooks, "disabled");
+    .addOption(agentOption())
+    .action((opts: { agent: MemoryAgent }) => {
+      changeHooks(opts.agent, disableMemoryHooks, "disabled");
     });
 
   return cmd;
 }
 
-function changeHooks(change: () => void, verb: string): void {
+function changeHooks(agent: MemoryAgent, change: (agent: MemoryAgent) => void, verb: string): void {
+  const { name, configPath, enableNote } = memoryHooksTarget(agent);
   try {
-    change();
-    console.log(`✓ Claude Code · memory hooks ${verb} (${claudeSettingsPath()})`);
+    change(agent);
+    console.log(`✓ ${name} · memory hooks ${verb} (${configPath})`);
+    if (verb === "enabled" && enableNote) console.log(pc.dim(`  ${enableNote}`));
   } catch (err) {
     const message =
       err instanceof HookConfigError || err instanceof Error ? err.message : String(err);
-    console.error(pc.red(`✗ Claude Code: ${message}`));
+    console.error(pc.red(`✗ ${name}: ${message}`));
     process.exitCode = 1;
   }
 }
 
 export function memoryCommand(): Command {
   const cmd = new Command("memory").description(
-    "Agent memory for Claude Code: record sessions, recall notes from earlier ones",
+    "Agent memory for Claude Code and Codex: record sessions, recall notes from earlier ones",
   );
 
   cmd
     .command("hook", { hidden: true })
-    .description("Claude Code hook entry point; reads the hook payload on stdin")
-    .action(runMemoryHookCommand);
+    .description("Agent hook entry point; reads the hook payload on stdin")
+    .addOption(agentOption())
+    .option("--stage-two", "Codex's background prompt hook: wait for stage two and print it")
+    .action((opts: { agent: MemoryAgent; stageTwo?: boolean }) =>
+      runMemoryHookCommand({ agent: opts.agent, stageTwo: opts.stageTwo }),
+    );
 
   cmd
     .command("recall-poll", { hidden: true })
     .description("Start a session's task-specific note, wait for it, and save it for the hooks")
-    .requiredOption("--session <id>", "Claude Code session id")
+    .requiredOption("--session <id>", "Agent session id")
     .action(async (opts: { session: string }) => {
       await pollFullRecall(opts.session);
     });
 
   cmd
     .command("sync")
-    .description("Upload what a Claude Code session added since the last sync")
-    .requiredOption("--session <id>", "Claude Code session id")
+    .description("Upload what an agent session added since the last sync")
+    .requiredOption("--session <id>", "Agent session id")
     .option("--flush", "Then mark the session's episode ready for processing")
     .option("--json", "Output as JSON")
     .action(async (opts: { session: string; flush?: boolean; json?: boolean }) => {

@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FULL_NOTE_PREFACE, type HookDeps, runMemoryHook } from "./hook";
+import { FULL_NOTE_PREFACE, type HookDeps, type HookEntry, runMemoryHook } from "./hook";
 import { memoryDir, readFullRecallState, readSessionState } from "./state";
 import { type PollDeps, pollFullRecall } from "./two-stage";
 
@@ -405,5 +405,52 @@ describe("two-stage recall", () => {
     await firstPrompt();
     expect(await poll({ api: null })).toBeNull();
     expect(calls.map((c) => c.key)).toEqual([QUICK_PATH]);
+  });
+});
+
+describe("two-stage recall on Codex", () => {
+  const request = { repo: "acme/widgets", session_id: SESSION, prompt: "Fix the counter" };
+  /** A Codex payload: it adds turn_id and model, and may have no transcript. */
+  const codex = (prompt: string, entry: HookEntry) =>
+    runMemoryHook(
+      {
+        hook_event_name: "UserPromptSubmit",
+        session_id: SESSION,
+        turn_id: "019a7c1e-turn",
+        transcript_path: null,
+        cwd: "/work/widgets",
+        model: "gpt-6-sol",
+        prompt,
+      },
+      deps(),
+      entry,
+    );
+  const promptHook = (prompt: string) => codex(prompt, { agent: "codex" });
+  const backgroundHook = (prompt: string) => codex(prompt, { agent: "codex", stageTwo: true });
+
+  it("the prompt hook injects stage one; the background hook beside it prints stage two, once", async () => {
+    const [first, second] = await Promise.all([
+      promptHook("Fix the counter"),
+      backgroundHook("Fix the counter"),
+    ]);
+
+    expect(first).toBe(output("UserPromptSubmit", block(QUICK)));
+    expect(second).toBe(output("UserPromptSubmit", fullBlock));
+    expect(spawned).toEqual([]);
+    expect(calls.map((c) => c.key).sort()).toEqual([STATUS_PATH, FULL_PATH, QUICK_PATH]);
+    expect(calls.filter((c) => c.key !== STATUS_PATH).map((c) => c.body)).toEqual([
+      request,
+      request,
+    ]);
+    expect(readSessionState(SESSION, dir)).toMatchObject({
+      agent: "codex",
+      transcript_path: null,
+      note: QUICK,
+    });
+
+    expect(await promptHook("Now update the docs")).toBeNull();
+    expect(await backgroundHook("Now update the docs")).toBeNull();
+    expect(calls).toHaveLength(3);
+    expect(await compact()).toBe(output("SessionStart", `${block(QUICK)}\n\n${fullBlock}`));
   });
 });

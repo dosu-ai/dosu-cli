@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type HookDeps, repoOfDir, runMemoryHook } from "./hook";
+import { type HookDeps, parseHookArgs, repoOfDir, runMemoryHook } from "./hook";
 import { readSessionState } from "./state";
 
 vi.mock("../debug/logger", () => ({
@@ -189,5 +189,19 @@ describe("repoOfDir", () => {
     } finally {
       rmSync(noRemote, { recursive: true, force: true });
     }
+  });
+});
+
+describe("parseHookArgs", () => {
+  it("takes the flags `hooks enable` writes and nothing else", () => {
+    expect(parseHookArgs([])).toEqual({ agent: "claude-code" });
+    expect(parseHookArgs(["--agent", "codex"])).toEqual({ agent: "codex" });
+    expect(parseHookArgs(["--agent", "codex", "--stage-two"])).toEqual({
+      agent: "codex",
+      stageTwo: true,
+    });
+    expect(parseHookArgs(["--agent", "cursor"])).toBeNull();
+    expect(parseHookArgs(["--agent"])).toBeNull();
+    expect(parseHookArgs(["--verbose"])).toBeNull();
   });
 });
