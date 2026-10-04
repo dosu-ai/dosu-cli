@@ -163,6 +163,33 @@ describe("runMemoryHook with DOSU_MEMORY_RECALL_MODE=single", () => {
     ]);
   });
 
+  it("on Codex, waits for the one note at the prompt and leaves the background hook idle", async () => {
+    const codex = (stageTwo: boolean) =>
+      runMemoryHook(
+        payload("UserPromptSubmit", {
+          prompt: "Fix the counter",
+          turn_id: "t1",
+          transcript_path: null,
+        }),
+        deps(),
+        { agent: "codex", stageTwo },
+      );
+    const [prompt, background] = await Promise.all([codex(false), codex(true)]);
+
+    expect(prompt).toBe(
+      JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "UserPromptSubmit",
+          additionalContext: `<prior_task_memory>\n${NOTE}\n</prior_task_memory>`,
+        },
+      }),
+    );
+    expect(background).toBeNull();
+    expect(recallUrls).toEqual(["http://memory.test/v1/agent-memory/recall"]);
+    expect(spawned).toEqual([]);
+    expect(readSessionState(SESSION, dir)).toMatchObject({ agent: "codex", recall_mode: "single" });
+  });
+
   it("ignores a missing or malformed payload", async () => {
     expect(await runMemoryHook(null, deps())).toBeNull();
     expect(await runMemoryHook(payload("Stop", { session_id: "../escape" }), deps())).toBeNull();
