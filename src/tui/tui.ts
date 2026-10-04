@@ -13,8 +13,8 @@ import {
   saveConfig,
 } from "../config/config";
 import { getWebAppURL } from "../config/constants";
-import { getHookAgent } from "../hooks/agents";
 import { allSetupProviders } from "../mcp/providers";
+import { memoryAgentForProvider, memoryHookStatus } from "../memory/install";
 import { emitKnowledgeReport } from "../report/generate";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { displayRepo } from "../sessions/repo";
@@ -131,13 +131,13 @@ function agentSetupIncomplete(): boolean {
   });
 }
 
-/** A configured, hook-capable agent whose session-end hook is missing. */
+/** A configured agent that agent memory supports, with some of its memory hooks missing. */
 function hooksIncomplete(): boolean {
   return allSetupProviders().some((provider) => {
     try {
       if (!provider.isInstalled() || !provider.isConfigured()) return false;
-      const hook = getHookAgent(provider.id());
-      return hook ? !hook.isEnabled() : false;
+      const agent = memoryAgentForProvider(provider.id());
+      return agent ? !Object.values(memoryHookStatus(agent)).every(Boolean) : false;
     } catch {
       return false;
     }

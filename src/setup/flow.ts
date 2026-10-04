@@ -19,11 +19,18 @@ import {
 import { logger } from "../debug/logger";
 import type { CliLibrary } from "../generated/dosu-api-types";
 import { getHookAgent } from "../hooks/agents";
+import { dosuOnPath } from "../hooks/formats";
 import { getIncognitoAgent } from "../incognito/agents";
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { refreshConfiguredProviders } from "../mcp/refresh";
-import { getStatuslineAgent, StatuslineConflictError } from "../statusline/agents";
+import {
+  disableMemoryHooks,
+  enableMemoryHooks,
+  memoryAgentForProvider,
+  memoryHooksTarget,
+} from "../memory/install";
+import { getStatuslineAgent } from "../statusline/agents";
 import { spawnDetachedSelf } from "../sync/detach";
 import { runKnowledgeSync } from "../sync/sync";
 import { recordCommandFacets } from "../telemetry/telemetry";
@@ -60,24 +67,12 @@ interface HookResult {
   note?: string;
 }
 
-/** One file written as part of the studying bundle (status line, slash command). */
-interface BundleItem {
-  name: string;
-  path: string;
-}
-
 export interface ConfigResult {
   provider: SetupProvider;
   action: ConfigAction;
   error?: Error;
-  /** Set when a knowledge sync hook was enabled alongside this agent's MCP install. */
-  hook?: HookResult;
-  /** Set when the Dosu status line was installed alongside the hook. */
-  statusline?: BundleItem;
-  /** Set when the agent already had a status line: the one-liner to add to their script. */
-  statuslineSuggestion?: string;
-  /** Set when the `/dosu-incognito` slash command was installed alongside the hook. */
-  incognito?: BundleItem;
+  /** Set when the agent-memory hooks were enabled alongside this agent's MCP install. */
+  memoryHooks?: HookResult;
 }
 
 export interface ToolSelection {
@@ -323,24 +318,26 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
     agentsMdCompleted = await stepUpdateAgentsMd();
   }
 
+  // Hooks are what make the CLI learn continuously, so activation needs to know whether any are
+  // in place alongside the MCP installs — not just that MCP was configured.
+  const knowledgeHookCount = configuredProviders.filter(hasKnowledgeHook).length;
   if (mcpCompleted || skillCompleted || agentsMdCompleted) {
-    // Hooks are what make the new CLI learn continuously, so activation needs to know whether
-    // any were enabled alongside the MCP installs — not just that MCP was configured.
-    const hookCount = configuredProviders.filter((result) => result.hook).length;
     trackInBackground(
       trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_completed", {
         completed_mcp: mcpCompleted,
         completed_skill: skillCompleted,
         completed_agents_md: agentsMdCompleted,
-        completed_hooks: hookCount > 0,
-        hook_count: hookCount,
+        completed_hooks: knowledgeHookCount > 0,
+        hook_count: knowledgeHookCount,
+        memory_hook_count: configuredProviders.filter((result) => result.memoryHooks).length,
       }),
     );
   }
 
-  // Backfill offer: hooks only fire on future sessions, so offer to mine the existing backlog
-  // now, with consent, never automatically.
-  if (mcpCompleted && cfg.mode !== MODE_OSS) {
+  // Backfill offer, for users of the knowledge sync hook only: it studies future sessions, so offer
+  // to mine the existing backlog now, with consent, never automatically. New installs get the
+  // memory hooks instead, and no offer.
+  if (mcpCompleted && cfg.mode !== MODE_OSS && knowledgeHookCount > 0) {
     await stepOfferInitialSync(cfg);
   }
 
@@ -1178,75 +1175,52 @@ async function stepSelectTools(detected: SetupProvider[]): Promise<ToolSelection
   return result;
 }
 
-/** Session-end knowledge sync hooks ride along with the MCP bundle. Fail-open: a hook config
- * problem is reported but never fails the agent's MCP setup. */
-function syncSessionHook(providerID: string, action: "enable" | "disable"): HookResult | null {
-  const agent = getHookAgent(providerID);
-  if (!agent) return null;
+/** Whether the agent has the knowledge sync hook, from a setup before the memory hooks. */
+function hasKnowledgeHook(result: ConfigResult): boolean {
   try {
-    if (action === "enable") agent.enable();
-    else agent.disable();
-    logger.info("setup", `Knowledge sync hook ${action}d for ${providerID}`);
-    const note = agent.enableNote?.();
-    return { name: agent.name(), path: agent.configPath(), ...(note ? { note } : {}) };
+    return getHookAgent(result.provider.id())?.isEnabled() ?? false;
+  } catch {
+    return false;
+  }
+}
+
+/** The agent-memory hooks ride along with the MCP bundle for Claude Code, Codex, and Cursor.
+ * Fail-open: a hook config problem is reported but never fails the agent's MCP setup. */
+function setupMemoryHooks(providerID: string, action: "enable" | "disable"): HookResult | null {
+  const agent = memoryAgentForProvider(providerID);
+  if (!agent) return null;
+  const { name, configPath, enableNote } = memoryHooksTarget(agent);
+  try {
+    if (action === "enable") enableMemoryHooks(agent);
+    else disableMemoryHooks(agent);
+    logger.info("setup", `Memory hooks ${action}d for ${providerID}`);
+    return { name, path: configPath, ...(enableNote ? { note: enableNote } : {}) };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    logger.warn("setup", `Knowledge sync hook ${action} failed for ${providerID}: ${msg}`);
-    p.log.warn(`Could not ${action} the knowledge sync hook for ${agent.name()}: ${msg}`);
+    logger.warn("setup", `Memory hooks ${action} failed for ${providerID}: ${msg}`);
+    p.log.warn(`Could not ${action} the memory hooks for ${name}: ${msg}`);
     return null;
   }
 }
 
-/** The status line rides along with the hook: it only has something to say once sessions are
- * being studied. A status line the user already has is left alone, and its one-liner is
- * returned as a suggestion. Fail-open like the hook. */
-function setupStatusline(
-  providerID: string,
-  action: "enable" | "disable",
-): Pick<ConfigResult, "statusline" | "statuslineSuggestion"> {
-  const agent = getStatuslineAgent(providerID);
-  if (!agent) return {};
-  try {
-    if (action === "disable") {
+/** Setup no longer installs the knowledge sync hook, the status line, or `/dosu-incognito`, and
+ * leaves them as they are while the agent stays configured. An agent removed from Dosu loses them,
+ * as before. Fail-open, each on its own. */
+function removeKnowledgeBundle(providerID: string): void {
+  const parts = [
+    { what: "knowledge sync hook", agent: getHookAgent(providerID) },
+    { what: "Dosu status line", agent: getStatuslineAgent(providerID) },
+    { what: "/dosu-incognito command", agent: getIncognitoAgent(providerID) },
+  ];
+  for (const { what, agent } of parts) {
+    if (!agent) continue;
+    try {
       agent.disable();
-      return {};
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn("setup", `${what} disable failed for ${providerID}: ${msg}`);
+      p.log.warn(`Could not disable the ${what} for ${agent.name()}: ${msg}`);
     }
-    agent.enable();
-    logger.info("setup", `Status line enabled for ${providerID}`);
-    return { statusline: { name: agent.name(), path: agent.configPath() } };
-  } catch (err: unknown) {
-    if (err instanceof StatuslineConflictError) {
-      logger.info("setup", `Status line left alone for ${providerID}: ${err.existingCommand}`);
-      return { statuslineSuggestion: err.suggestion };
-    }
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.warn("setup", `Status line ${action} failed for ${providerID}: ${msg}`);
-    p.log.warn(`Could not ${action} the Dosu status line for ${agent.name()}: ${msg}`);
-    return {};
-  }
-}
-
-/** The `/dosu-incognito` slash command rides along too: without it the status line has an
- * incognito state nobody can reach. Fail-open like the hook. */
-function setupIncognito(
-  providerID: string,
-  action: "enable" | "disable",
-): Pick<ConfigResult, "incognito"> {
-  const agent = getIncognitoAgent(providerID);
-  if (!agent) return {};
-  try {
-    if (action === "disable") {
-      agent.disable();
-      return {};
-    }
-    agent.enable();
-    logger.info("setup", `/dosu-incognito installed for ${providerID}`);
-    return { incognito: { name: agent.name(), path: agent.commandPath() } };
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.warn("setup", `/dosu-incognito ${action} failed for ${providerID}: ${msg}`);
-    p.log.warn(`Could not ${action} the /dosu-incognito command for ${agent.name()}: ${msg}`);
-    return {};
   }
 }
 
@@ -1257,15 +1231,8 @@ export function stepConfigureTools(cfg: Config, selection: ToolSelection): Confi
     try {
       provider.install(cfg, true);
       logger.info("setup", `Configured ${provider.name()}`);
-      const hook = syncSessionHook(provider.id(), "enable");
-      // Status line and slash command only make sense once the hook is studying sessions.
-      const bundle = hook
-        ? {
-            ...setupStatusline(provider.id(), "enable"),
-            ...setupIncognito(provider.id(), "enable"),
-          }
-        : {};
-      results.push({ provider, action: "install", ...(hook ? { hook } : {}), ...bundle });
+      const memoryHooks = setupMemoryHooks(provider.id(), "enable");
+      results.push({ provider, action: "install", ...(memoryHooks ? { memoryHooks } : {}) });
     } catch (err: unknown) {
       /* v8 ignore next -- err is always Error in practice */
       const error = err instanceof Error ? err : new Error(String(err));
@@ -1283,9 +1250,8 @@ export function stepConfigureTools(cfg: Config, selection: ToolSelection): Confi
       provider.remove(true);
       logger.info("setup", `Removed ${provider.name()}`);
       results.push({ provider, action: "remove" });
-      syncSessionHook(provider.id(), "disable");
-      setupStatusline(provider.id(), "disable");
-      setupIncognito(provider.id(), "disable");
+      setupMemoryHooks(provider.id(), "disable");
+      removeKnowledgeBundle(provider.id());
     } catch (err: unknown) {
       /* v8 ignore next -- err is always Error in practice */
       const error = err instanceof Error ? err : new Error(String(err));
@@ -1322,60 +1288,31 @@ export function stepShowSummary(results: ConfigResult[]): void {
     );
   }
 
-  // Knowledge sync hooks ride along with the MCP install; show them as their
-  // own bundle item so users see exactly what was written where.
-  const hooked = installed.flatMap((result) => (result.hook ? [result.hook] : []));
+  // Memory hooks ride along with the MCP install; show them as their own bundle item so users
+  // see exactly what was written where.
+  const hooked = installed.flatMap((result) => (result.memoryHooks ? [result.memoryHooks] : []));
   if (hooked.length > 0) {
     p.log.success(
       `${formatSetupSummary(
-        `Knowledge sync hooks enabled for ${hooked.length} agent(s):`,
+        `Memory hooks enabled for ${hooked.length} agent(s):`,
         hooked.map((hook) => ({ label: hook.name, path: hook.path })),
       )}\n${dim(
         wrapLog(
-          "Dosu scans finished agent sessions in the background. Disable anytime with 'dosu knowledge hooks disable'.",
+          "Dosu records each session and hands your agents notes from earlier sessions in the same repository. Disable anytime with 'dosu memory hooks disable --agent <agent>'.",
         ),
       )}`,
     );
     for (const hook of hooked) {
       if (hook.note) p.log.info(dim(hook.note));
     }
-  }
-
-  const statuslines = installed.flatMap((r) => (r.statusline ? [r.statusline] : []));
-  if (statuslines.length > 0) {
-    p.log.success(
-      `${formatSetupSummary(
-        `Status line enabled for ${statuslines.length} agent(s):`,
-        statuslines.map((item) => ({ label: item.name, path: item.path })),
-      )}\n${dim(
+    // Dev hooks pin this working copy by absolute path, so PATH is moot.
+    if (process.env.DOSU_DEV !== "true" && !dosuOnPath()) {
+      p.log.warn(
         wrapLog(
-          "Shows 📚 Dosu studying…, 👻 Dosu incognito, or ⚪ Dosu off/paused. Remove with 'dosu knowledge statusline disable'.",
+          `'dosu' is not on PATH; the memory hooks run 'dosu memory hook' and will fail until it is. Install the CLI globally, for example ${info("npm install -g @dosu/cli")}.`,
         ),
-      )}`,
-    );
-  }
-  for (const result of installed) {
-    if (result.statuslineSuggestion) {
-      p.log.info(
-        `${wrapLog(
-          `${result.provider.name()} already has a status line; left as is. To show Dosu alongside it, add to your script:`,
-        )}\n  ${dim(result.statuslineSuggestion)}`,
       );
     }
-  }
-
-  const incognitos = installed.flatMap((r) => (r.incognito ? [r.incognito] : []));
-  if (incognitos.length > 0) {
-    p.log.success(
-      `${formatSetupSummary(
-        `/dosu-incognito installed for ${incognitos.length} agent(s):`,
-        incognitos.map((item) => ({ label: item.name, path: item.path })),
-      )}\n${dim(
-        wrapLog(
-          "Run it inside a session to keep that session out of studying. Remove with 'dosu knowledge incognito disable'.",
-        ),
-      )}`,
-    );
   }
 
   if (removed.length > 0) {

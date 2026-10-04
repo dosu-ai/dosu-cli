@@ -38,10 +38,12 @@ interface CliOnboardingProperties {
   completed_mcp?: boolean;
   completed_skill?: boolean;
   completed_agents_md?: boolean;
-  /** At least one session-end knowledge sync hook was enabled in this run. */
+  /** At least one configured agent has the session-end knowledge sync hook. */
   completed_hooks?: boolean;
-  /** Agents whose knowledge sync hook was enabled in this run. */
+  /** Configured agents that have the knowledge sync hook. */
   hook_count?: number;
+  /** Agents whose agent-memory hooks were enabled in this run. */
+  memory_hook_count?: number;
 }
 
 interface OrganizationGroups {
@@ -219,13 +221,11 @@ function allowlistedWorkflowProperties(properties: CliOnboardingProperties): Saf
   ] as const) {
     if (typeof input[key] === "boolean") safe[key] = input[key];
   }
-  if (
-    typeof input.hook_count === "number" &&
-    Number.isInteger(input.hook_count) &&
-    input.hook_count >= 0 &&
-    input.hook_count <= 50
-  ) {
-    safe.hook_count = input.hook_count;
+  for (const key of ["hook_count", "memory_hook_count"] as const) {
+    const count = input[key];
+    if (typeof count === "number" && Number.isInteger(count) && count >= 0 && count <= 50) {
+      safe[key] = count;
+    }
   }
   return safe;
 }

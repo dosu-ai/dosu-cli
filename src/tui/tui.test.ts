@@ -100,8 +100,9 @@ vi.mock("../sessions/project-dir", () => ({
 }));
 
 // Hook detection reads the real agents' hook config files.
-vi.mock("../hooks/agents", () => ({
-  getHookAgent: vi.fn(),
+vi.mock("../memory/install", () => ({
+  memoryAgentForProvider: vi.fn(),
+  memoryHookStatus: vi.fn(),
 }));
 
 // The launch-time session probe would otherwise call Supabase to refresh an expired token.
@@ -126,10 +127,9 @@ import { Client } from "../client/client";
 import type { Config } from "../config/config";
 import { emptyConfig, getConfigDir, loadConfig, saveConfig, updateTarget } from "../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
-import type { HookAgent } from "../hooks/agents";
-import { getHookAgent } from "../hooks/agents";
 import type { SetupProvider } from "../mcp/providers";
 import { allSetupProviders } from "../mcp/providers";
+import { memoryAgentForProvider, memoryHookStatus } from "../memory/install";
 import { emitKnowledgeReport } from "../report/generate";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import type { AgentSession } from "../sessions/scan";
@@ -161,11 +161,14 @@ const mockEmitReport = vi.mocked(emitKnowledgeReport);
 const mockAllSetupProviders = vi.mocked(allSetupProviders);
 const mockScanSessions = vi.mocked(scanAgentSessions);
 const mockMultiselect = vi.mocked(p.multiselect);
-const mockGetHookAgent = vi.mocked(getHookAgent);
+const mockMemoryAgentForProvider = vi.mocked(memoryAgentForProvider);
+const mockMemoryHookStatus = vi.mocked(memoryHookStatus);
 
 /** Hook agent stub: only the detection surface the TUI reads. */
-function fakeHookAgent(enabled: boolean): HookAgent {
-  return { isEnabled: () => enabled } as HookAgent;
+/** Every configured agent is one agent memory supports, with its hooks in the given state. */
+function memoryHooksInstalled(installed: boolean) {
+  mockMemoryAgentForProvider.mockReturnValue("cursor");
+  mockMemoryHookStatus.mockReturnValue({ preToolUse: true, stop: installed });
 }
 
 function fakeSession(id: string, project?: string): AgentSession {
@@ -206,7 +209,7 @@ beforeEach(() => {
   // Default machine state: one agent installed with Dosu already configured,
   // so "target complete" configs count as fully set up.
   mockAllSetupProviders.mockImplementation(() => [fakeProvider(true, true)]);
-  mockGetHookAgent.mockImplementation(() => fakeHookAgent(true));
+  memoryHooksInstalled(true);
   mockScanSessions.mockImplementation(() => []);
   vi.mocked(createProjectDirResolver).mockImplementation(
     () =>
@@ -669,13 +672,13 @@ describe("runTUI", () => {
     expect(stdoutWrites.join("")).toContain("not configured");
   });
 
-  it("stays in setup mode when a configured agent's hook is missing", async () => {
-    // Target complete and the MCP entry installed, but the session-end hook
-    // is gone (write failed or was removed by hand).
+  it("stays in setup mode when a configured agent's memory hooks are incomplete", async () => {
+    // Target complete and the MCP entry installed, but one of the memory hooks
+    // is gone (write failed, removed by hand, or an install from before them).
     writeRealConfig(
       makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
     );
-    mockGetHookAgent.mockImplementation(() => fakeHookAgent(false));
+    memoryHooksInstalled(false);
     mockMenuSelect.mockResolvedValueOnce("exit");
 
     await runTUI();
@@ -687,12 +690,12 @@ describe("runTUI", () => {
     expect(stdoutWrites.join("")).toContain("hooks");
   });
 
-  it("ignores hooks for agents that are not hook-capable", async () => {
+  it("ignores hooks for agents agent memory does not support", async () => {
     writeRealConfig(
       makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
     );
-    // e.g. Zed: has an MCP entry but no hook support at all.
-    mockGetHookAgent.mockImplementation(() => undefined);
+    // e.g. Zed: has an MCP entry but no memory hooks.
+    mockMemoryAgentForProvider.mockReturnValue(null);
     mockMenuSelect.mockResolvedValueOnce("exit");
 
     await runTUI();

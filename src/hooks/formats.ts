@@ -2,6 +2,7 @@
  * helpers, an existing file that does not parse ABORTS: rewriting would destroy user settings. */
 
 import { existsSync, readFileSync } from "node:fs";
+import { delimiter, join } from "node:path";
 import {
   getBackendURL,
   getSupabaseAnonKey,
@@ -14,6 +15,14 @@ import { selfInvocation } from "../sync/detach";
 /** Plain PATH-resolved `dosu` rather than an absolute path: the command text must stay stable
  * because Codex pins a trust hash on it. `hooks enable` warns when `dosu` is not on PATH. */
 export const HOOK_COMMAND = "dosu knowledge sync --quiet --detach";
+
+/** Hooks invoke plain `dosu`; warn at enable time when that will not resolve. */
+export function dosuOnPath(): boolean {
+  const bin = process.platform === "win32" ? "dosu.cmd" : "dosu";
+  return (process.env.PATH ?? "")
+    .split(delimiter)
+    .some((dir) => dir !== "" && existsSync(join(dir, bin)));
+}
 
 /** `*_OVERRIDE` vars baked into dev hook commands. Hooks fire from cwds where this repo's
  * `.env.development` is not loaded, so each URL is resolved now and inlined or runs fail. */

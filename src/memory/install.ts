@@ -146,6 +146,18 @@ function hookLabel(hook: MemoryHook): string {
   return hook.stageTwo ? `${hook.event} (stage two)` : hook.event;
 }
 
+/** Setup provider ids (`src/mcp/providers`) of the agents agent memory supports. */
+const AGENT_BY_PROVIDER = new Map<string, MemoryAgent>([
+  ["claude", "claude-code"],
+  ["codex", "codex"],
+  ["cursor", "cursor"],
+]);
+
+/** The memory agent behind a setup provider, or null when agent memory does not support it. */
+export function memoryAgentForProvider(providerID: string): MemoryAgent | null {
+  return AGENT_BY_PROVIDER.get(providerID) ?? null;
+}
+
 /** The agent's display name, its hooks file, and what to tell the user after enabling. */
 export function memoryHooksTarget(agent: MemoryAgent): {
   name: string;

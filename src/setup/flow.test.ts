@@ -218,6 +218,8 @@ import { Client } from "../client/client";
 import type { Config } from "../config/config";
 import { loadConfig, saveConfig } from "../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
+import { getHookAgent } from "../hooks/agents";
+import { getIncognitoAgent } from "../incognito/agents";
 import { loadJSONConfig, saveJSONConfig } from "../mcp/config-helpers";
 import * as providersModule from "../mcp/providers";
 import { ClaudeProvider } from "../mcp/providers/claude";
@@ -225,6 +227,8 @@ import { ClaudeDesktopProvider } from "../mcp/providers/claude-desktop";
 import { CodexProvider } from "../mcp/providers/codex";
 import { CursorProvider } from "../mcp/providers/cursor";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
+import { memoryHookStatus } from "../memory/install";
+import { getStatuslineAgent } from "../statusline/agents";
 import { consumeCommandFacets } from "../telemetry/telemetry";
 import { runActivityView } from "../tui/activity-view";
 import * as p from "../tui/prompts";
@@ -616,9 +620,9 @@ describe("stepConfigureTools", () => {
     expect(opencodeConfig.mcp.dosu).toBeUndefined();
   });
 
-  // --- Knowledge sync hooks ride along with the MCP bundle ---
+  // --- Memory hooks ride along with the MCP bundle ---
 
-  it("enables the knowledge sync hook alongside the MCP install", () => {
+  it("installs the memory hooks alongside the MCP install, without the knowledge bundle", () => {
     const cfg = makeCfg();
     const selection: ToolSelection = { toInstall: [CursorProvider()], toRemove: [], skipped: [] };
 
@@ -626,31 +630,91 @@ describe("stepConfigureTools", () => {
 
     expect(results[0].error).toBeUndefined();
     const hooksPath = join(tempDir, ".cursor", "hooks.json");
-    expect(existsSync(hooksPath)).toBe(true);
     const hooks = JSON.parse(readFileSync(hooksPath, "utf-8"));
-    expect(hooks.hooks.stop[0].command).toContain("knowledge sync");
-    expect(results[0].hook).toMatchObject({ name: "Cursor", path: hooksPath });
+    expect(hooks.hooks.preToolUse[0].command).toContain("memory hook --agent cursor");
+    expect(hooks.hooks.stop).toHaveLength(1);
+    expect(hooks.hooks.stop[0].command).not.toContain("knowledge sync");
+    expect(results[0].memoryHooks).toMatchObject({ name: "Cursor", path: hooksPath });
+    expect(existsSync(join(tempDir, ".cursor", "cli-config.json"))).toBe(false);
+    expect(existsSync(join(tempDir, ".cursor", "commands", "dosu-incognito.md"))).toBe(false);
 
     stepShowSummary(results);
     expect(p.log.success).toHaveBeenCalledWith(
-      expect.stringContaining("Knowledge sync hooks enabled for 1 agent(s):"),
+      expect.stringContaining("Memory hooks enabled for 1 agent(s):"),
     );
     expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining(hooksPath));
   });
 
-  it("removes the knowledge sync hook when the agent is unticked", () => {
+  it("warns when 'dosu' is not on PATH, which the memory hooks run", () => {
+    const savedPath = process.env.PATH;
+    const bin = join(tempDir, "bin");
+    mkdirSync(bin);
+    try {
+      process.env.PATH = bin;
+      const results = stepConfigureTools(makeCfg(), {
+        toInstall: [CursorProvider()],
+        toRemove: [],
+        skipped: [],
+      });
+      stepShowSummary(results);
+      expect(p.log.warn).toHaveBeenCalledWith(expect.stringContaining("'dosu' is not on PATH"));
+
+      vi.mocked(p.log.warn).mockClear();
+      writeFileSync(join(bin, "dosu"), "");
+      stepShowSummary(results);
+      expect(p.log.warn).not.toHaveBeenCalled();
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  });
+
+  it("installs the memory hooks for Claude Code and Codex, with Codex's trust note", () => {
+    const cfg = makeCfg();
+
+    const results = stepConfigureTools(cfg, {
+      toInstall: [ClaudeProvider(), CodexProvider()],
+      toRemove: [],
+      skipped: [],
+    });
+
+    const settings = JSON.parse(readFileSync(join(tempDir, ".claude", "settings.json"), "utf-8"));
+    expect(settings.hooks.UserPromptSubmit[0].hooks[0].command).toMatch(/memory hook$/);
+    const codexHooks = JSON.parse(readFileSync(join(tempDir, ".codex", "hooks.json"), "utf-8"));
+    expect(codexHooks.hooks.Stop[0].hooks[0].command).toContain("memory hook --agent codex");
+    expect(results.map((r) => r.memoryHooks?.name)).toEqual(["Claude Code", "Codex"]);
+    stepShowSummary(results);
+    expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("open /hooks in Codex"));
+  });
+
+  it("leaves a knowledge bundle from an earlier setup alone while the agent stays", () => {
+    const cfg = makeCfg();
+    getHookAgent("cursor")?.enable();
+    getStatuslineAgent("cursor")?.enable();
+    getIncognitoAgent("cursor")?.enable();
+
+    stepConfigureTools(cfg, { toInstall: [CursorProvider()], toRemove: [], skipped: [] });
+
+    expect(getHookAgent("cursor")?.isEnabled()).toBe(true);
+    expect(getStatuslineAgent("cursor")?.isEnabled()).toBe(true);
+    expect(getIncognitoAgent("cursor")?.isEnabled()).toBe(true);
+  });
+
+  it("removes the memory hooks and any knowledge bundle when the agent is unticked", () => {
     const cfg = makeCfg();
     stepConfigureTools(cfg, { toInstall: [CursorProvider()], toRemove: [], skipped: [] });
-    const hooksPath = join(tempDir, ".cursor", "hooks.json");
-    expect(JSON.parse(readFileSync(hooksPath, "utf-8")).hooks.stop).toBeDefined();
+    getHookAgent("cursor")?.enable();
+    getStatuslineAgent("cursor")?.enable();
+    getIncognitoAgent("cursor")?.enable();
 
     stepConfigureTools(cfg, { toInstall: [], toRemove: [CursorProvider()], skipped: [] });
 
-    const hooks = JSON.parse(readFileSync(hooksPath, "utf-8"));
-    expect(hooks.hooks.stop).toBeUndefined();
+    expect(memoryHookStatus("cursor").preToolUse).toBe(false);
+    expect(getHookAgent("cursor")?.isEnabled()).toBe(false);
+    expect(getStatuslineAgent("cursor")?.isEnabled()).toBe(false);
+    expect(getIncognitoAgent("cursor")?.isEnabled()).toBe(false);
   });
 
-  it("does not touch hooks for agents without hook support", () => {
+  it("does not touch hooks for agents agent memory does not support", () => {
     const cfg = makeCfg();
 
     const results = stepConfigureTools(cfg, {
@@ -659,11 +723,9 @@ describe("stepConfigureTools", () => {
       skipped: [],
     });
 
-    expect(results[0].hook).toBeUndefined();
+    expect(results[0].memoryHooks).toBeUndefined();
     stepShowSummary(results);
-    expect(p.log.success).not.toHaveBeenCalledWith(
-      expect.stringContaining("Knowledge sync hooks enabled"),
-    );
+    expect(p.log.success).not.toHaveBeenCalledWith(expect.stringContaining("Memory hooks enabled"));
   });
 
   it("keeps the MCP install successful when the hook config is broken", () => {
@@ -678,205 +740,38 @@ describe("stepConfigureTools", () => {
     });
 
     expect(results[0].error).toBeUndefined();
-    expect(results[0].hook).toBeUndefined();
+    expect(results[0].memoryHooks).toBeUndefined();
     expect(p.log.warn).toHaveBeenCalledWith(
-      expect.stringContaining("Could not enable the knowledge sync hook for Cursor"),
+      expect.stringContaining("Could not enable the memory hooks for Cursor"),
     );
     stepShowSummary(results);
-    expect(p.log.success).not.toHaveBeenCalledWith(
-      expect.stringContaining("Knowledge sync hooks enabled"),
-    );
+    expect(p.log.success).not.toHaveBeenCalledWith(expect.stringContaining("Memory hooks enabled"));
   });
 
-  // --- Status line and /dosu-incognito ride along with the hook ---
-
-  it("enables the status line and the slash command alongside the hook", () => {
-    const cfg = makeCfg();
-
-    const results = stepConfigureTools(cfg, {
-      toInstall: [CursorProvider()],
-      toRemove: [],
-      skipped: [],
-    });
-
-    const cliConfigPath = join(tempDir, ".cursor", "cli-config.json");
-    const cliConfig = JSON.parse(readFileSync(cliConfigPath, "utf-8"));
-    expect(cliConfig.statusLine.command).toContain("knowledge statusline render --agent cursor");
-    expect(results[0].statusline).toMatchObject({ name: "Cursor CLI", path: cliConfigPath });
-
-    const commandPath = join(tempDir, ".cursor", "commands", "dosu-incognito.md");
-    expect(readFileSync(commandPath, "utf-8")).toContain("dosu:incognito:v1");
-    expect(results[0].incognito).toMatchObject({ name: "Cursor", path: commandPath });
-
-    stepShowSummary(results);
-    expect(p.log.success).toHaveBeenCalledWith(
-      expect.stringContaining("Status line enabled for 1 agent(s):"),
-    );
-    expect(p.log.success).toHaveBeenCalledWith(
-      expect.stringContaining("/dosu-incognito installed for 1 agent(s):"),
-    );
-  });
-
-  it("removes the status line and slash command when the agent is unticked", () => {
-    const cfg = makeCfg();
-    stepConfigureTools(cfg, { toInstall: [CursorProvider()], toRemove: [], skipped: [] });
-
-    stepConfigureTools(cfg, { toInstall: [], toRemove: [CursorProvider()], skipped: [] });
-
-    const cliConfig = JSON.parse(
-      readFileSync(join(tempDir, ".cursor", "cli-config.json"), "utf-8"),
-    );
-    expect(cliConfig.statusLine).toBeUndefined();
-    expect(existsSync(join(tempDir, ".cursor", "commands", "dosu-incognito.md"))).toBe(false);
-  });
-
-  it("leaves a foreign status line alone and prints the one-liner instead", () => {
-    const cfg = makeCfg();
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    const cliConfigPath = join(tempDir, ".cursor", "cli-config.json");
-    const before = JSON.stringify({ statusLine: { type: "command", command: "~/mine.sh" } });
-    writeFileSync(cliConfigPath, before);
-
-    const results = stepConfigureTools(cfg, {
-      toInstall: [CursorProvider()],
-      toRemove: [],
-      skipped: [],
-    });
-
-    expect(readFileSync(cliConfigPath, "utf-8")).toBe(before);
-    expect(results[0].statusline).toBeUndefined();
-    expect(results[0].statuslineSuggestion).toContain(
-      "dosu knowledge statusline render --agent cursor",
-    );
-    stepShowSummary(results);
-    expect(p.log.info).toHaveBeenCalledWith(
-      expect.stringContaining("already has a status line; left as is"),
-    );
-    expect(p.log.success).not.toHaveBeenCalledWith(expect.stringContaining("Status line enabled"));
-  });
-
-  it("skips the status line for agents without one but still installs the slash command", () => {
-    const cfg = makeCfg();
-
-    const results = stepConfigureTools(cfg, {
-      toInstall: [CodexProvider()],
-      toRemove: [],
-      skipped: [],
-    });
-
-    expect(results[0].hook).toBeDefined();
-    expect(results[0].statusline).toBeUndefined();
-    expect(results[0].incognito).toMatchObject({
-      path: join(tempDir, ".codex", "prompts", "dosu-incognito.md"),
-    });
-  });
-
-  it("skips the whole bundle when the hook could not be enabled", () => {
-    const cfg = makeCfg();
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    writeFileSync(join(tempDir, ".cursor", "hooks.json"), "not json {");
-
-    const results = stepConfigureTools(cfg, {
-      toInstall: [CursorProvider()],
-      toRemove: [],
-      skipped: [],
-    });
-
-    expect(results[0].statusline).toBeUndefined();
-    expect(results[0].incognito).toBeUndefined();
-    expect(existsSync(join(tempDir, ".cursor", "cli-config.json"))).toBe(false);
-  });
-
-  it("keeps the install successful when the status line config is broken", () => {
-    const cfg = makeCfg();
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    writeFileSync(join(tempDir, ".cursor", "cli-config.json"), "not json {");
-
-    const results = stepConfigureTools(cfg, {
-      toInstall: [CursorProvider()],
-      toRemove: [],
-      skipped: [],
-    });
-
-    expect(results[0].error).toBeUndefined();
-    expect(results[0].hook).toBeDefined();
-    expect(results[0].statusline).toBeUndefined();
-    expect(results[0].incognito).toBeDefined();
-    expect(p.log.warn).toHaveBeenCalledWith(
-      expect.stringContaining("Could not enable the Dosu status line for Cursor CLI"),
-    );
-  });
-
-  it("keeps the install successful when the slash command cannot be written", () => {
-    const cfg = makeCfg();
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    // A file where the commands directory should be: mkdir fails, the command cannot be written.
-    writeFileSync(join(tempDir, ".cursor", "commands"), "not a directory");
-
-    const results = stepConfigureTools(cfg, {
-      toInstall: [CursorProvider()],
-      toRemove: [],
-      skipped: [],
-    });
-
-    expect(results[0].error).toBeUndefined();
-    expect(results[0].hook).toBeDefined();
-    expect(results[0].statusline).toBeDefined();
-    expect(results[0].incognito).toBeUndefined();
-    expect(p.log.warn).toHaveBeenCalledWith(
-      expect.stringContaining("Could not enable the /dosu-incognito command for Cursor"),
-    );
-  });
-
-  it("reports a non-Error thrown by either bundle installer without failing the install", () => {
+  it("still removes the agent when part of the knowledge bundle cannot be removed", () => {
     const cfg = makeCfg();
     const throwing = {
-      id: () => "cursor",
       name: () => "Cursor",
-      isInstalled: () => true,
-      configPath: () => "/dev/null",
-      commandPath: () => "/dev/null",
-      isEnabled: () => false,
-      enable: () => {
+      disable: () => {
         throw "disk full";
       },
-      disable: () => false,
     };
     mockGetStatuslineAgent.mockReturnValue(throwing);
     mockGetIncognitoAgent.mockReturnValue(throwing);
 
     const results = stepConfigureTools(cfg, {
-      toInstall: [CursorProvider()],
-      toRemove: [],
+      toInstall: [],
+      toRemove: [CursorProvider()],
       skipped: [],
     });
 
+    expect(results[0]).toMatchObject({ action: "remove" });
     expect(results[0].error).toBeUndefined();
-    expect(results[0].hook).toBeDefined();
-    expect(results[0].statusline).toBeUndefined();
-    expect(results[0].incognito).toBeUndefined();
     expect(p.log.warn).toHaveBeenCalledWith(
-      "Could not enable the Dosu status line for Cursor: disk full",
+      "Could not disable the Dosu status line for Cursor: disk full",
     );
     expect(p.log.warn).toHaveBeenCalledWith(
-      "Could not enable the /dosu-incognito command for Cursor: disk full",
-    );
-  });
-
-  it("prints the Codex trust note after enabling its hook", () => {
-    const cfg = makeCfg();
-
-    const results = stepConfigureTools(cfg, {
-      toInstall: [CodexProvider()],
-      toRemove: [],
-      skipped: [],
-    });
-
-    const hooks = JSON.parse(readFileSync(join(tempDir, ".codex", "hooks.json"), "utf-8"));
-    expect(hooks.hooks.Stop).toBeDefined();
-    stepShowSummary(results);
-    expect(p.log.info).toHaveBeenCalledWith(
-      expect.stringContaining("approve the Dosu hook when prompted"),
+      "Could not disable the /dosu-incognito command for Cursor: disk full",
     );
   });
 });
@@ -2141,11 +2036,35 @@ describe("runSetup integration", () => {
       (e) => e.event === "cli_onboarding_completed",
     );
     expect(completed?.properties.completed_agents_md).toBe(true);
-    // Cursor's knowledge sync hook rode along with the MCP install.
-    expect(completed?.properties).toMatchObject({ completed_hooks: true, hook_count: 1 });
+    // Cursor's memory hooks rode along with the MCP install; no knowledge sync hook did.
+    expect(completed?.properties).toMatchObject({
+      completed_hooks: false,
+      hook_count: 0,
+      memory_hook_count: 1,
+    });
   });
 
-  it("reports completed_hooks=false when the hook could not be enabled", async () => {
+  it("still counts the knowledge sync hook an earlier setup installed", async () => {
+    saveConfig(makeCfg());
+    setupAuthenticatedClient();
+    getHookAgent("cursor")?.enable();
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    mockToolSelection(["cursor"]);
+
+    await runSetup();
+
+    const completed = trackedCliOnboardingEvents().find(
+      (e) => e.event === "cli_onboarding_completed",
+    );
+    expect(completed?.properties).toMatchObject({
+      completed_hooks: true,
+      hook_count: 1,
+      memory_hook_count: 1,
+    });
+    expect(getHookAgent("cursor")?.isEnabled()).toBe(true);
+  });
+
+  it("reports memory_hook_count=0 when the memory hooks could not be enabled", async () => {
     const cfg = makeCfg();
     saveConfig(cfg);
 
@@ -2165,7 +2084,34 @@ describe("runSetup integration", () => {
       completed_mcp: true,
       completed_hooks: false,
       hook_count: 0,
+      memory_hook_count: 0,
     });
+  });
+
+  it("does not offer a new install to study past agent sessions", async () => {
+    saveConfig(makeCfg());
+    setupAuthenticatedClient();
+    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    mockToolSelection(["cursor"]);
+
+    await runSetup();
+
+    expect(mockRunKnowledgeSync).not.toHaveBeenCalled();
+    expect(mockSpawnDetachedSelf).not.toHaveBeenCalled();
+    expect(memoryHookStatus("cursor").preToolUse).toBe(true);
+  });
+
+  it("offers a user of the knowledge sync hook to study past agent sessions", async () => {
+    saveConfig(makeCfg());
+    setupAuthenticatedClient();
+    getHookAgent("cursor")?.enable();
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
+    mockToolSelection(["cursor"]);
+
+    await runSetup();
+
+    expect(mockRunKnowledgeSync).toHaveBeenCalledWith({ bootstrap: true });
   });
 
   it("does not update AGENTS.md when no agent was configured", async () => {

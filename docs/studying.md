@@ -41,9 +41,9 @@ Before repo scoping, the scope was a list of folders (`project_filter`). The nex
 to the repos its folders' sessions ran in, so upgrading never widens the scope. A folder scope with
 no repos in it becomes an empty repo scope, which studies nothing until you pick repos again.
 
-Both are installed by default: `dosu setup` (and the TUI's configure step) enables the status line
-and the slash command for every agent it enables the sync hook for, and removes them when an agent
-is unticked. A hook that fails to install skips the bundle. The commands below manage them directly.
+`dosu setup` (and the TUI's configure step) no longer installs the sync hook, the status line, or
+the slash command, and leaves existing ones as they are; it still removes them when an agent is
+unticked. The commands below manage them directly.
 
 ## Per-session incognito
 
