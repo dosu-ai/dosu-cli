@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,7 +18,7 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...original, homedir: () => configDir };
 });
 
-import { HOOK_COMMAND } from "../hooks/formats";
+import { HOOK_COMMAND, HookConfigError } from "../hooks/formats";
 import {
   disableMemoryHooks,
   enableMemoryHooks,
@@ -23,6 +31,8 @@ const saved = {
   CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
   CODEX_HOME: process.env.CODEX_HOME,
   DOSU_DEV: process.env.DOSU_DEV,
+  XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+  DOSU_BACKEND_URL_OVERRIDE: process.env.DOSU_BACKEND_URL_OVERRIDE,
 };
 
 const settings = () => JSON.parse(readFileSync(join(configDir, "settings.json"), "utf-8"));
@@ -213,5 +223,36 @@ describe("memory hooks in Cursor's hooks.json", () => {
       hooks: { stop: [knowledge] },
     });
     expect(Object.values(memoryHookStatus("cursor")).some(Boolean)).toBe(false);
+  });
+
+  it("in dev mode, keeps endpoint URLs out of hooks.json: Cursor would read their // as comments", () => {
+    process.env.DOSU_DEV = "true";
+    process.env.XDG_CONFIG_HOME = configDir;
+    process.env.DOSU_BACKEND_URL_OVERRIDE = "https://api.example.test";
+    enableMemoryHooks("cursor");
+
+    const text = readFileSync(join(configDir, ".cursor", "hooks.json"), "utf-8");
+    expect(text).not.toMatch(/\/\/|\/\*/);
+    const shim = join(configDir, "dosu-cli-dev", "cursor-dev-dosu");
+    expect(JSON.parse(text).hooks.preToolUse[0].command).toBe(
+      `'${shim}' memory hook --agent cursor --event preToolUse`,
+    );
+    expect(readFileSync(shim, "utf-8")).toContain(
+      "exec env DOSU_DEV=true DOSU_BACKEND_URL_OVERRIDE='https://api.example.test'",
+    );
+    expect(statSync(shim).mode & 0o777).toBe(0o700);
+    expect(Object.values(memoryHookStatus("cursor")).every(Boolean)).toBe(true);
+  });
+
+  it("refuses to write a command holding // or /*, leaving the file as it was", () => {
+    const cursorHooks = join(configDir, ".cursor", "hooks.json");
+    mkdirSync(join(configDir, ".cursor"));
+    writeFileSync(cursorHooks, '{"version":1,"hooks":{}}');
+    process.env.DOSU_DEV = "true";
+    process.env.XDG_CONFIG_HOME = join(configDir, "odd/*dir");
+
+    expect(() => enableMemoryHooks("cursor")).toThrow(HookConfigError);
+    expect(readFileSync(cursorHooks, "utf-8")).toBe('{"version":1,"hooks":{}}');
+    expect(existsSync(join(configDir, "odd"))).toBe(false);
   });
 });

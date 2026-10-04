@@ -4,13 +4,16 @@
  * dispatches on the payload's `hook_event_name`. Separate from the knowledge-sync hook in the same
  * files: neither install touches the other. */
 
-import { join } from "node:path";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { getConfigDir } from "../config/config";
 import { claudeConfigDir, codexHome, cursorHooksPath } from "../hooks/agents";
 import {
   addCursorHook,
   addGroupedHook,
   devEnvAssignments,
   devSelfCommand,
+  HookConfigError,
   hasCursorHook,
   hasGroupedHook,
   readHookConfig,
@@ -111,12 +114,38 @@ const AGENT_HOOKS: Record<MemoryAgent, AgentHooks> = {
   },
 };
 
-/** Dev installs pin this working copy with its endpoints inline, as the knowledge hook does. */
+/** Cursor reads hooks.json as JSONC and strips `//` and `/*` comments even inside strings (CLI
+ * 2026.09.28), so a single command holding either breaks the whole file and every hook in it. */
+const CURSOR_COMMENT = /\/\/|\/\*/;
+
+/** A dev install's stand-in for `dosu` on Cursor. Dev commands inline their endpoints, URLs
+ * included, which Cursor would read as comments; its commands call this script instead, which
+ * holds them. */
+function cursorDevShimPath(): string {
+  return join(getConfigDir(), "cursor-dev-dosu");
+}
+
+function writeCursorDevShim(): void {
+  const path = cursorDevShimPath();
+  mkdirSync(dirname(path), { recursive: true });
+  const script = `${devEnvAssignments().join(" ")} ${devSelfCommand()}`;
+  writeFileSync(
+    path,
+    `#!/bin/sh\n# \`dosu memory hooks enable --agent cursor\` in dev mode: this working copy and its endpoints.\nexec env ${script} "$@"\n`,
+  );
+  chmodSync(path, 0o700);
+}
+
+/** Dev installs pin this working copy with its endpoints inline, as the knowledge hook does; on
+ * Cursor, through `cursorDevShimPath`. */
 function memoryHookCommand(agent: MemoryAgent, hook: MemoryHook): string {
-  const base =
-    process.env.DOSU_DEV === "true"
-      ? `${devEnvAssignments().join(" ")} ${devSelfCommand()} memory hook`
-      : HOOK_COMMAND;
+  let base = HOOK_COMMAND;
+  if (process.env.DOSU_DEV === "true") {
+    base =
+      agent === "cursor"
+        ? `'${cursorDevShimPath()}' memory hook`
+        : `${devEnvAssignments().join(" ")} ${devSelfCommand()} memory hook`;
+  }
   return [
     base,
     ...(agent === "claude-code" ? [] : [`--agent ${agent}`]),
@@ -184,6 +213,18 @@ export function enableMemoryHooks(agent: MemoryAgent): void {
   const { configPath, format, hooks } = AGENT_HOOKS[agent];
   const path = configPath();
   let config = readHookConfig(path);
+  if (format === "cursor") {
+    const unsafe = hooks
+      .map((hook) => memoryHookCommand(agent, hook))
+      .find((command) => CURSOR_COMMENT.test(command));
+    if (unsafe) {
+      throw new HookConfigError(
+        `refusing to write ${path}: Cursor reads // and /* as comments even inside a command, ` +
+          `which would break every hook in the file: ${unsafe}`,
+      );
+    }
+    if (process.env.DOSU_DEV === "true") writeCursorDevShim();
+  }
   for (const hook of hooks) {
     const spec = {
       command: memoryHookCommand(agent, hook),
