@@ -256,9 +256,15 @@ describe("convertCodexTranscriptLines", () => {
     expect(events[0].ts).toBe("2026-10-04T18:52:26.901Z");
   });
 
-  it("keeps only commands that ran: not a declined one or one that never started", () => {
-    // Shaped like Codex 0.160's items (core/src/tools/events.rs): -1 when nothing ran.
-    const command = (cmd: string, status: string, exitCode: number, output: string) =>
+  it("keeps only the agent's commands that ran: not declined, never started, or the user's", () => {
+    // Shaped like Codex 0.160's items (core/src/tools/events.rs, tasks/user_shell.rs).
+    const command = (
+      cmd: string,
+      status: string,
+      exitCode: number,
+      output: string,
+      source = "unified_exec_startup",
+    ) =>
       JSON.stringify({
         timestamp: TS,
         type: "event_msg",
@@ -268,7 +274,7 @@ describe("convertCodexTranscriptLines", () => {
             type: "CommandExecution",
             id: `exec-${cmd}`,
             command: ["/bin/zsh", "-lc", cmd],
-            source: "unified_exec_startup",
+            source,
             status,
             aggregated_output: output,
             exit_code: exitCode,
@@ -280,6 +286,7 @@ describe("convertCodexTranscriptLines", () => {
         command("rm -rf build", "declined", -1, "exec command rejected by user"),
         command("make lint", "failed", -1, "sandbox error: failed to spawn"),
         command("make test", "failed", 2, "ERROR: 3 tests failed\n"),
+        command("git log -1", "completed", 0, "abc123 fix\n", "user_shell"),
       ],
       "/work",
     );
