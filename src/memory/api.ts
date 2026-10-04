@@ -8,11 +8,12 @@ import { logger } from "../debug/logger";
 
 /** One compact event rebuilt from an agent's transcript line (or, for Cursor, a hook payload).
  * `ts` is that line's client timestamp. `file_edit` is context only: the backend must not append
- * it to the episode's steps, which hold shell commands alone (as in the frozen memwriter). */
+ * it to the episode's steps, which hold shell commands alone (as in the frozen memwriter). A
+ * command's `rc` is null when the agent reported a failure without an exit code (Cursor). */
 export type MemoryEvent =
   | { type: "user_prompt"; ts: string; text: string }
   | { type: "assistant_text"; ts: string; text: string }
-  | { type: "command"; ts: string; command: string; rc: number; error_line: string | null }
+  | { type: "command"; ts: string; command: string; rc: number | null; error_line: string | null }
   | { type: "file_edit"; ts: string; tool: string; path: string };
 
 /** `POST /v1/agent-memory/sessions/{session_id}/events` (backend `SessionBatch`).

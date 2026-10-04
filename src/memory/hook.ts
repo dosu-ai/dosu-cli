@@ -343,7 +343,14 @@ async function cursorEvent(
   }
   // A subagent's context is not the main agent's, nor are its commands the session's.
   if (payload.agent_id) return null;
-  const state = ensureState(payload, "cursor", deps);
+  // Only a session's start or prompt creates its state. Cursor (local runtime 2026.10.01) runs a
+  // subagent under a conversation id of its own and marks none of its hooks, but sends it neither
+  // event, so its tool calls find no state and leave none behind.
+  const opens = ["sessionStart", "beforeSubmitPrompt"].includes(payload.hook_event_name);
+  const state = opens
+    ? ensureState(payload, "cursor", deps)
+    : readSessionState(payload.session_id, deps.configDir);
+  if (!state) return null;
   const event = cursorHookEvent(record, state.cwd, (deps.now ?? new Date()).toISOString());
   if (event) appendSessionEvent(state.session_id, event, deps.configDir);
   const spawn = deps.spawn ?? spawnDetachedSelf;

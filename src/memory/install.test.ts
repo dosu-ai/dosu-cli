@@ -197,6 +197,7 @@ describe("memory hooks in Cursor's hooks.json", () => {
         beforeSubmitPrompt: [{ ...hook("beforeSubmitPrompt"), timeout: 120 }],
         preToolUse: [{ ...hook("preToolUse"), timeout: 5 }],
         postToolUse: [{ ...hook("postToolUse"), matcher: "Shell", timeout: 5 }],
+        postToolUseFailure: [{ ...hook("postToolUseFailure"), matcher: "Shell", timeout: 5 }],
         afterFileEdit: [{ ...hook("afterFileEdit"), timeout: 5 }],
         afterAgentResponse: [{ ...hook("afterAgentResponse"), timeout: 5 }],
         preCompact: [hook("preCompact")],

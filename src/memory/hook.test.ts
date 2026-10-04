@@ -223,12 +223,6 @@ describe("runMemoryHook on Cursor", () => {
     );
   const toolCall = (extra: Record<string, unknown> = {}) =>
     cursor("preToolUse", { tool_name: "Read", tool_input: { path: "a.py" }, ...extra });
-  const loggedEvents = () =>
-    readFileSync(eventLogPath(SESSION, dir), "utf-8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
-
   it("always prints an explicit allow before a tool call, whatever goes wrong", async () => {
     const allow = { permission: "allow" };
     expect(await toolCall()).toEqual(allow);
@@ -289,39 +283,50 @@ describe("runMemoryHook on Cursor", () => {
     expect(await toolCall()).toEqual({ permission: "allow" });
   });
 
-  it("logs prompts, replies, completed shell commands and edits, but not a subagent's", async () => {
-    const shell = (command: string, toolOutput: string, extra: Record<string, unknown> = {}) =>
-      cursor("postToolUse", {
-        tool_name: "Shell",
-        tool_input: { command, working_directory: "/work/widgets" },
-        tool_output: toolOutput,
-        ...extra,
-      });
-    await cursor("beforeSubmitPrompt", { prompt: "  Fix the counter\n" });
-    await shell(
-      "make test",
-      JSON.stringify({ exitCode: 2, stdout: "", stderr: "E   AssertionError: 3 != 4\n" }),
-    );
-    await shell("ls", JSON.stringify({ exitCode: 0, stdout: "a.py\n" }), {
-      parent_tool_call_id: "tool-7",
-    });
-    await shell("sleep 99", "not json");
-    await cursor("postToolUse", { tool_name: "Read", tool_input: { command: "x" } });
-    await cursor("afterFileEdit", { file_path: "/work/widgets/src/counter.py", edits: [] });
-    await cursor("afterAgentResponse", { text: "Fixed the off-by-one." });
+  it("replays a real session: records it, and hands the note to the main agent only", async () => {
+    // Hook payloads Cursor's local runtime 2026.10.01 sent in one interactive session: a read, a
+    // command that exits 0, one that exits 1, a write, a subagent's read. Paths shortened.
+    const payloads = readFileSync(
+      join(__dirname, "testdata", "cursor-local-2026.10.01-session.jsonl"),
+      "utf-8",
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const toolCalls: Array<{ conversation: string; output: Record<string, unknown> }> = [];
+    for (const payload of payloads) {
+      const event = payload.hook_event_name;
+      const out = await runMemoryHook(payload, { ...deps(), now: NOW }, { agent: "cursor", event });
+      if (event === "preToolUse") {
+        toolCalls.push({ conversation: payload.conversation_id, output: JSON.parse(out ?? "") });
+      }
+    }
 
+    const main = "78ea4db5-9c55-4792-ac7d-9afd2ce92ae5";
     const ts = NOW.toISOString();
-    expect(loggedEvents()).toEqual([
-      { type: "user_prompt", ts, text: "Fix the counter" },
+    const logged = readFileSync(eventLogPath(main, dir), "utf-8").trim().split("\n");
+    expect(logged.map((line) => JSON.parse(line))).toEqual([
+      { type: "user_prompt", ts, text: "Fix the off-by-one in the widget counter." },
+      { type: "command", ts, command: "echo ok-from-shell", rc: 0, error_line: null },
       {
         type: "command",
         ts,
-        command: "make test",
-        rc: 2,
-        error_line: "E AssertionError: 3 != 4",
+        command: "ls /definitely-missing-dir-xyz",
+        rc: null,
+        error_line: "ls: /definitely-missing-dir-xyz: No such file or directory",
       },
-      { type: "file_edit", ts, tool: "Write", path: "src/counter.py" },
-      { type: "assistant_text", ts, text: "Fixed the off-by-one." },
+      { type: "file_edit", ts, tool: "Write", path: "notes.txt" },
+      { type: "assistant_text", ts, text: "Done." },
+    ]);
+    expect(toolCalls.every(({ output }) => output.permission === "allow")).toBe(true);
+    expect(toolCalls[0].output.additional_context).toBe(BLOCK);
+    // The subagent's read: a conversation of its own that never started, so no note and no state.
+    const sub = toolCalls.filter(({ conversation }) => conversation !== main);
+    expect(sub.map(({ output }) => output)).toEqual([{ permission: "allow" }]);
+    expect(readSessionState(sub[0].conversation, dir)).toBeNull();
+    expect(spawned).toEqual([
+      ["memory", "sync", "--session", main],
+      ["memory", "sync", "--session", main, "--flush"],
     ]);
   });
 

@@ -60,13 +60,15 @@ const CODEX_HOOKS: readonly MemoryHook[] = [
 
 /** Cursor's events. beforeSubmitPrompt waits for the recall, as UserPromptSubmit does on Claude
  * Code. preToolUse hands notes over and the recording hooks append one line; they read and write
- * local files only, and 5 s bounds a stall. postToolUse records shell commands alone. The others
- * return immediately. */
+ * local files only, and 5 s bounds a stall. postToolUse and postToolUseFailure record shell
+ * commands alone: Cursor sends a command that exits non-zero to the latter. The others return
+ * immediately. */
 const CURSOR_HOOKS: readonly MemoryHook[] = [
   { event: "sessionStart" },
   { event: "beforeSubmitPrompt", timeout: 120 },
   { event: "preToolUse", timeout: 5 },
   { event: "postToolUse", matcher: "Shell", timeout: 5 },
+  { event: "postToolUseFailure", matcher: "Shell", timeout: 5 },
   { event: "afterFileEdit", timeout: 5 },
   { event: "afterAgentResponse", timeout: 5 },
   { event: "preCompact" },

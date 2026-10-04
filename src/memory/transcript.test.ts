@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { convertCodexTranscriptLines, convertTranscriptLines } from "./transcript";
+import { convertCodexTranscriptLines, convertTranscriptLines, cursorHookEvent } from "./transcript";
 
 /** Real Claude Code 2.1 sessions (headless, haiku) in a toy repo with the memory hooks on;
  * paths rewritten to /work, only user/assistant/system lines and the hooks' attachments kept. */
@@ -311,5 +311,45 @@ describe("convertCodexTranscriptLines", () => {
       "assistant_text",
     ]);
     expect(events[3]).toMatchObject({ command: "ls /nonexistent-dir", rc: 1 });
+  });
+});
+
+describe("cursorHookEvent for a failed command", () => {
+  const TS = "2026-10-04T22:39:08.900Z";
+  const failure = (extra: Record<string, unknown>) =>
+    cursorHookEvent(
+      {
+        hook_event_name: "postToolUseFailure",
+        tool_name: "Shell",
+        tool_input: { command: "make test" },
+        failure_type: "error",
+        is_interrupt: false,
+        ...extra,
+      },
+      "/work/widgets",
+      TS,
+    );
+  const failed = (errorLine: string) => ({
+    type: "command",
+    ts: TS,
+    command: "make test",
+    rc: null,
+    error_line: errorLine,
+  });
+
+  it("takes the record rules' error line, else the last line, else the failure type", () => {
+    expect(failure({ error_message: "collected 3 items\nFAILED tests/test_counter.py\n" })).toEqual(
+      failed("FAILED tests/test_counter.py"),
+    );
+    expect(failure({ error_message: "make: *** [test] Error 2\nNo rule to run\n" })).toEqual(
+      failed("make: *** [test] Error 2"),
+    );
+    expect(failure({ error_message: "   \n", failure_type: "timeout" })).toEqual(failed("timeout"));
+  });
+
+  it("records nothing for a declined, interrupted, or non-shell call", () => {
+    expect(failure({ failure_type: "permission_denied", error_message: "denied" })).toBeNull();
+    expect(failure({ is_interrupt: true, error_message: "interrupted" })).toBeNull();
+    expect(failure({ tool_name: "Read", error_message: "File not found: notes.txt" })).toBeNull();
   });
 });

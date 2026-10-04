@@ -236,16 +236,47 @@ export function convertCodexTranscriptLines(lines: string[], cwd: string): Memor
   return events;
 }
 
+/** Error lines are cut to this, as the record rules cut theirs. */
+const FAILURE_LINE_CHARS = 160;
+
+/** The error line of a Cursor command that failed without an exit code: the record rules' line if
+ * one looks like an error, else the message's last line, else the failure type. The line is never
+ * empty, since with `rc` null it is all that shows the command failed. */
+function cursorFailureLine(message: string, failureType: unknown): string {
+  const ruled = parseCommandObservation(
+    `<returncode>1</returncode>\n<output>\n${message}\n</output>`,
+  );
+  if (ruled?.[1]) return ruled[1];
+  const last = message
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .pop();
+  if (!last) return typeof failureType === "string" ? failureType : "failed";
+  const points = Array.from(last);
+  return points.length > FAILURE_LINE_CHARS
+    ? `${points.slice(0, FAILURE_LINE_CHARS - 3).join("")}...`
+    : last;
+}
+
 /** The event a Cursor hook payload records, or null. Cursor's transcript has neither tool results
  * nor timestamps, so its hooks record as things happen: the prompt (beforeSubmitPrompt), the
- * agent's reply (afterAgentResponse), a shell command with the exit code in its JSON output
- * (postToolUse on Shell), and an edited file (afterFileEdit). A command without an exit code did
- * not complete and records nothing. */
+ * agent's reply (afterAgentResponse), an edited file (afterFileEdit), and a shell command. Cursor
+ * (local runtime 2026.10.01) hands a command that exits 0 to postToolUse, with
+ * `{"output", "exitCode"}` as its output, and one that exits non-zero to postToolUseFailure, with
+ * the error text but no exit code: that one is recorded with `rc` null (the backend takes it) and
+ * the error line as the mark of failure. A command the user or a policy declined, or one the user
+ * interrupted, did not complete and records nothing. */
 export function cursorHookEvent(
   payload: Record<string, unknown>,
   cwd: string,
   ts: string,
 ): MemoryEvent | null {
+  const input = asRecord(payload.tool_input)?.command;
+  const command =
+    payload.tool_name === "Shell" && typeof input === "string"
+      ? prepareRecordedCommand(input)
+      : null;
   switch (payload.hook_event_name) {
     case "beforeSubmitPrompt": {
       const text = typeof payload.prompt === "string" ? payload.prompt.trim() : "";
@@ -256,8 +287,7 @@ export function cursorHookEvent(
       return text ? { type: "assistant_text", ts, text: clip(text, ASSISTANT_TEXT_CHARS) } : null;
     }
     case "postToolUse": {
-      const command = asRecord(payload.tool_input)?.command;
-      if (payload.tool_name !== "Shell" || typeof command !== "string") return null;
+      if (command === null) return null;
       let result: JsonRecord | null;
       try {
         result = asRecord(JSON.parse(String(payload.tool_output)));
@@ -266,8 +296,23 @@ export function cursorHookEvent(
       }
       const exitCode = result?.exitCode;
       if (typeof exitCode !== "number") return null;
-      const output = [result?.stdout, result?.stderr].filter((part) => typeof part === "string");
-      return commandEvent(ts, prepareRecordedCommand(command), exitCode, output.join("\n"));
+      const output = typeof result?.output === "string" ? result.output : "";
+      return commandEvent(ts, command, exitCode, output);
+    }
+    case "postToolUseFailure": {
+      const declined =
+        payload.failure_type === "permission_denied" || payload.is_interrupt === true;
+      if (command === null || declined) {
+        return null;
+      }
+      const message = typeof payload.error_message === "string" ? payload.error_message : "";
+      return {
+        type: "command",
+        ts,
+        command,
+        rc: null,
+        error_line: cursorFailureLine(message, payload.failure_type),
+      };
     }
     case "afterFileEdit":
       return typeof payload.file_path === "string"
