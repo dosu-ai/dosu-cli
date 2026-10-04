@@ -22,6 +22,18 @@ async function main(): Promise<void> {
     await runMemoryHookCommand();
     return;
   }
+  // So does stage two's poller, which the first prompt's hook spawns: the session waits for the
+  // note of the job it starts, and the update check would hold up that start.
+  if (
+    process.argv[2] === "memory" &&
+    process.argv[3] === "recall-poll" &&
+    process.argv[4] === "--session" &&
+    process.argv.length === 6
+  ) {
+    const { pollFullRecall } = await import("./memory/two-stage");
+    await pollFullRecall(process.argv[5]);
+    return;
+  }
   const { execute } = await import("./cli/cli");
   await execute();
 }

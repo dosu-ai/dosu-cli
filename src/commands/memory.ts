@@ -78,7 +78,7 @@ export function memoryCommand(): Command {
 
   cmd
     .command("recall-poll", { hidden: true })
-    .description("Wait for a session's task-specific note and save it for the hooks to inject")
+    .description("Start a session's task-specific note, wait for it, and save it for the hooks")
     .requiredOption("--session <id>", "Claude Code session id")
     .action(async (opts: { session: string }) => {
       await pollFullRecall(opts.session);

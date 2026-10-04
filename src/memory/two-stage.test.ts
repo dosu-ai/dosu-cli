@@ -64,6 +64,7 @@ let routes: Record<string, Route>;
 let calls: { key: string; body: unknown }[];
 let spawned: string[][];
 const savedMode = process.env.DOSU_MEMORY_RECALL_MODE;
+const savedQuickTimeout = process.env.DOSU_MEMORY_QUICK_TIMEOUT_MS;
 
 const fetchImpl = (async (url: unknown, init?: RequestInit) => {
   const key = `${init?.method ?? "GET"} ${new URL(String(url)).pathname}`;
@@ -132,6 +133,7 @@ beforeEach(() => {
     [STATUS_PATH]: json(job({ status: "done", note: FULL, latency_ms: 9_500 })),
   };
   delete process.env.DOSU_MEMORY_RECALL_MODE;
+  delete process.env.DOSU_MEMORY_QUICK_TIMEOUT_MS;
 });
 
 afterEach(() => {
@@ -139,27 +141,61 @@ afterEach(() => {
   vi.restoreAllMocks();
   if (savedMode === undefined) delete process.env.DOSU_MEMORY_RECALL_MODE;
   else process.env.DOSU_MEMORY_RECALL_MODE = savedMode;
+  if (savedQuickTimeout === undefined) delete process.env.DOSU_MEMORY_QUICK_TIMEOUT_MS;
+  else process.env.DOSU_MEMORY_QUICK_TIMEOUT_MS = savedQuickTimeout;
 });
 
 describe("two-stage recall", () => {
+  const request = { repo: "acme/widgets", session_id: SESSION, prompt: "Fix the counter" };
+
   it("injects stage one on the first prompt and leaves stage two to a detached poller", async () => {
+    // Stage two's start never answers: the first prompt does not wait for it.
+    routes[FULL_PATH] = () => new Promise<Response>(() => {});
     const timeouts = vi.spyOn(AbortSignal, "timeout");
 
     expect(await firstPrompt()).toBe(output("UserPromptSubmit", block(QUICK)));
 
-    const request = { repo: "acme/widgets", session_id: SESSION, prompt: "Fix the counter" };
-    expect(calls).toEqual([
-      { key: QUICK_PATH, body: request },
-      { key: FULL_PATH, body: request },
-    ]);
-    expect(timeouts.mock.calls).toEqual([[5_000], [5_000]]);
+    expect(calls).toEqual([{ key: QUICK_PATH, body: request }]);
+    expect(timeouts.mock.calls).toEqual([[2_500]]);
     expect(spawned).toEqual([["memory", "recall-poll", "--session", SESSION]]);
-    expect(readFullRecallState(SESSION, dir)).toMatchObject({
-      job_id: "job-1",
-      status: "pending",
-      note: null,
-    });
+    expect(readFullRecallState(SESSION, dir)).toBeNull();
     expect(readSessionState(SESSION, dir)).toMatchObject({ recall_mode: "two_stage", note: QUICK });
+  });
+
+  it("waits DOSU_MEMORY_QUICK_TIMEOUT_MS for stage one when it is a whole number", async () => {
+    const timeouts = vi.spyOn(AbortSignal, "timeout");
+    process.env.DOSU_MEMORY_QUICK_TIMEOUT_MS = "800";
+    await firstPrompt();
+    process.env.DOSU_MEMORY_QUICK_TIMEOUT_MS = "soon";
+    await hook("UserPromptSubmit", { prompt: "Fix the counter" }, "other-session");
+
+    expect(timeouts.mock.calls).toEqual([[800], [2_500]]);
+  });
+
+  it("the poller starts stage two with the first prompt's request, then polls it", async () => {
+    await firstPrompt();
+    const timeouts = vi.spyOn(AbortSignal, "timeout");
+
+    expect(await poll()).toMatchObject({ job_id: "job-1", status: "done", note: FULL });
+    expect(calls.slice(1)).toEqual([
+      { key: FULL_PATH, body: request },
+      { key: STATUS_PATH, body: null },
+    ]);
+    expect(timeouts.mock.calls).toEqual([[10_000], [10_000]]);
+    // The request, prompt included, was deleted on reading: a second run has nothing to start.
+    expect(await poll()).toBeNull();
+    expect(calls).toHaveLength(3);
+  });
+
+  it("the poller retries stage two's start through network errors and 5xx", async () => {
+    routes[FULL_PATH] = sequence(
+      async () => Promise.reject(new Error("The operation timed out.")),
+      json({ detail: "busy" }, 503),
+      json(job(), 202),
+    );
+    await firstPrompt();
+    expect(await poll()).toMatchObject({ job_id: "job-1", status: "done", note: FULL });
+    expect(calls.filter((c) => c.key === FULL_PATH)).toHaveLength(3);
   });
 
   it("stage two ready before the first tool batch: that batch injects it, and only it", async () => {
@@ -226,13 +262,16 @@ describe("two-stage recall", () => {
     expect(statusPolls()).toBe(3);
   });
 
-  it("still injects stage one when stage two cannot start, and spawns no poller", async () => {
-    routes[FULL_PATH] = json({ detail: "boom" }, 500);
+  it.each<[string, Route, Partial<PollDeps>]>([
+    ["is rejected", json({ detail: "boom" }, 422), {}],
+    ["keeps failing past the deadline", json({ detail: "boom" }, 500), { deadlineMs: 0 }],
+  ])("still injects stage one when stage two's start %s", async (_label, route, options) => {
+    routes[FULL_PATH] = route;
     expect(await firstPrompt()).toBe(output("UserPromptSubmit", block(QUICK)));
-    expect(spawned).toEqual([]);
+    expect(await poll(options)).toBeNull();
     expect(readFullRecallState(SESSION, dir)).toBeNull();
-    expect(await poll()).toBeNull();
     expect(await toolBatch()).toBeNull();
+    expect(await laterPrompt()).toBeNull();
   });
 
   it("still delivers stage two when stage one fails", async () => {
@@ -294,7 +333,7 @@ describe("two-stage recall", () => {
     const injected = await timed();
 
     expect(calls).toHaveLength(pollRequests);
-    expect(pollRequests).toBe(requests + 1);
+    expect(pollRequests).toBe(requests + 2);
     for (const { median, p99 } of [noRecall, pending, injected]) {
       expect(median).toBeLessThan(2);
       expect(p99).toBeLessThan(20);
@@ -316,8 +355,9 @@ describe("two-stage recall", () => {
     expect(readSessionState("other-session", dir)?.recall_mode).toBe("two_stage");
   });
 
-  it("fails the wait without credentials", async () => {
+  it("starts no stage two without credentials", async () => {
     await firstPrompt();
-    expect(await poll({ api: null })).toMatchObject({ status: "failed", error: "not signed in" });
+    expect(await poll({ api: null })).toBeNull();
+    expect(calls.map((c) => c.key)).toEqual([QUICK_PATH]);
   });
 });

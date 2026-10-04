@@ -4,6 +4,7 @@
 
 import { loadConfig } from "../config/config";
 import { getBackendURL } from "../config/constants";
+import { logger } from "../debug/logger";
 
 /** One compact event rebuilt from a Claude Code transcript line. `ts` is that line's client
  * timestamp. `file_edit` is context only: the backend must not append it to the episode's steps,
@@ -57,7 +58,7 @@ export interface QuickRecallResponse {
 
 /** `POST /v1/agent-memory/recall/full` answers 202 with a pending job (backend `FullRecallJob`):
  * stage two, the note written for this task, by a background worker. The request may also carry
- * `quick_recall_id` to link the two recall_log rows; the CLI sends both stages at once and has no
+ * `quick_recall_id` to link the two recall_log rows; the CLI starts both stages at once and has no
  * id yet, so the rows pair by session instead. */
 export interface FullRecallJob {
   job_id: string;
@@ -127,9 +128,23 @@ const CHUNK_TIMEOUT_MS = 30_000;
 const FLUSH_TIMEOUT_MS = 30_000;
 /** Below the UserPromptSubmit hook's 120 s timeout so a slow recall still exits cleanly. */
 const RECALL_TIMEOUT_MS = 110_000;
-/** The first prompt waits at most this long for stage one, and for stage two's job id alongside. */
-const QUICK_RECALL_TIMEOUT_MS = 5_000;
-const FULL_RECALL_STATUS_TIMEOUT_MS = 10_000;
+/** The first prompt waits at most this long for stage one; `DOSU_MEMORY_QUICK_TIMEOUT_MS`
+ * overrides it. */
+const QUICK_RECALL_TIMEOUT_MS = 2_500;
+/** Each call of the detached poller: stage two's start request and every status poll. */
+const FULL_RECALL_TIMEOUT_MS = 10_000;
+
+function quickRecallTimeoutMs(): number {
+  const value = process.env.DOSU_MEMORY_QUICK_TIMEOUT_MS?.trim();
+  if (!value) return QUICK_RECALL_TIMEOUT_MS;
+  const ms = Number(value);
+  if (Number.isInteger(ms) && ms > 0) return ms;
+  logger.warn(
+    "memory",
+    `DOSU_MEMORY_QUICK_TIMEOUT_MS is not a positive whole number; using ${QUICK_RECALL_TIMEOUT_MS}`,
+  );
+  return QUICK_RECALL_TIMEOUT_MS;
+}
 
 async function requestJSON(
   api: MemoryApi,
@@ -209,7 +224,7 @@ export async function recallQuick(
     api,
     QUICK_RECALL_PATH,
     request,
-    QUICK_RECALL_TIMEOUT_MS,
+    quickRecallTimeoutMs(),
     fetchImpl,
   );
   if (!outcome.ok) return apiError(outcome);
@@ -233,7 +248,7 @@ export async function startFullRecall(
     api,
     FULL_RECALL_PATH,
     request,
-    QUICK_RECALL_TIMEOUT_MS,
+    FULL_RECALL_TIMEOUT_MS,
     fetchImpl,
   );
   if (!outcome.ok) return apiError(outcome);
@@ -250,7 +265,7 @@ export async function fullRecallStatus(
   fetchImpl: typeof fetch = fetch,
 ): Promise<FullRecallStatus | ApiError> {
   const path = `${FULL_RECALL_PATH}/${encodeURIComponent(jobId)}`;
-  const outcome = await requestJSON(api, path, undefined, FULL_RECALL_STATUS_TIMEOUT_MS, fetchImpl);
+  const outcome = await requestJSON(api, path, undefined, FULL_RECALL_TIMEOUT_MS, fetchImpl);
   if (!outcome.ok) return apiError(outcome);
   const body = outcome.body as Record<string, unknown> | null;
   const status = body?.status;

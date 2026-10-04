@@ -2,12 +2,13 @@
  * has been uploaded, and the note injected on the first prompt. One JSON file per Claude Code
  * session under the CLI config dir (so `DOSU_DEV` installs stay isolated). Stage two of a
  * two-stage recall has files of its own: the detached poller writes it while syncs rewrite the
- * session state, and neither may overwrite the other. */
+ * session state, and neither may overwrite the other. The first prompt hands the poller its
+ * request in one more file, which the poller deletes on reading. */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config/config";
-import type { ChunkRequest } from "./api";
+import type { ChunkRequest, RecallRequest } from "./api";
 
 const SAFE_SESSION_ID = /^[A-Za-z0-9_-]+$/;
 
@@ -57,8 +58,8 @@ export interface SessionState extends TranscriptCursor {
   note: string | null;
 }
 
-/** Stage two of a two-stage recall. Written by the first prompt as `pending`, then once more by
- * the poller with the outcome. */
+/** Stage two of a two-stage recall. Written by the poller as `pending` once the job has started,
+ * then once more with the outcome. */
 export interface FullRecallState {
   session_id: string;
   job_id: string;
@@ -84,6 +85,10 @@ function statePath(sessionId: string, configDir?: string): string {
 
 function fullRecallPath(sessionId: string, configDir?: string): string {
   return join(memoryDir(configDir), `${sessionId}.full-recall.json`);
+}
+
+function fullRecallRequestPath(sessionId: string, configDir?: string): string {
+  return join(memoryDir(configDir), `${sessionId}.full-recall.request.json`);
 }
 
 function fullRecallInjectedPath(sessionId: string, configDir?: string): string {
@@ -129,6 +134,21 @@ export function readFullRecallState(sessionId: string, configDir?: string): Full
 
 export function writeFullRecallState(state: FullRecallState, configDir?: string): void {
   writeJSON(state.session_id, fullRecallPath(state.session_id, configDir), state, configDir);
+}
+
+/** The first prompt's recall request, for the poller to start stage two with. */
+export function writeFullRecallRequest(request: RecallRequest, configDir?: string): void {
+  const sessionId = request.session_id;
+  writeJSON(sessionId, fullRecallRequestPath(sessionId, configDir), request, configDir);
+}
+
+/** Read and delete the request, so the prompt stays on disk only until the poller has it. */
+export function takeFullRecallRequest(sessionId: string, configDir?: string): RecallRequest | null {
+  if (!isSafeSessionId(sessionId)) return null;
+  const path = fullRecallRequestPath(sessionId, configDir);
+  const request = readJSON<RecallRequest>(path, sessionId);
+  rmSync(path, { force: true });
+  return request;
 }
 
 /** Whether stage two has been handed to the agent. */
