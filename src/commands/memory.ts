@@ -4,7 +4,7 @@
 
 import { Command, Option } from "commander";
 import pc from "picocolors";
-import { HookConfigError } from "../hooks/formats";
+import { dosuOnPath, HookConfigError } from "../hooks/formats";
 import { runMemoryHookCommand } from "../memory/hook";
 import {
   disableMemoryHooks,
@@ -50,6 +50,14 @@ function hooksCommand(): Command {
     .description("Install the memory hooks (`status` lists them)")
     .addOption(agentOption())
     .action((opts: { agent: MemoryAgent }) => {
+      // Dev hooks pin this working copy by absolute path, so PATH is moot.
+      if (process.env.DOSU_DEV !== "true" && !dosuOnPath()) {
+        console.log(
+          pc.yellow(
+            "Warning: 'dosu' is not on PATH; hooks run 'dosu memory hook' and will fail until it is.",
+          ),
+        );
+      }
       changeHooks(opts.agent, enableMemoryHooks, "enabled");
     });
 
