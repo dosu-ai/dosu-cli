@@ -114,9 +114,10 @@ export function memoryApiFromConfig(): MemoryApi | null {
   }
 }
 
+/** `sent` is false only when the connection failed, so the backend never saw the request. */
 export type ApiOutcome =
   | { ok: true; body: unknown }
-  | { ok: false; status: number | null; error: string };
+  | { ok: false; status: number | null; error: string; sent: boolean };
 
 /** A failed call; `permanent` when asking again cannot help (a 4xx answer). */
 export interface ApiError {
@@ -146,6 +147,28 @@ function quickRecallTimeoutMs(): number {
   return QUICK_RECALL_TIMEOUT_MS;
 }
 
+/** Error codes for a connection that never opened (refused, or the host name did not resolve):
+ * Bun sets them on the error, Node on its `cause`. Everything else may come after the request
+ * went out: a timeout cannot tell connecting from waiting for the answer, and a reset can follow
+ * the request. */
+const CONNECT_FAILURES = new Set([
+  "ConnectionRefused",
+  "FailedToOpenSocket",
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+]);
+
+function errorCode(err: unknown): string | undefined {
+  if (typeof err !== "object" || err === null || !("code" in err)) return undefined;
+  return String(err.code);
+}
+
+function neverSent(err: unknown): boolean {
+  const cause = err instanceof Error ? err.cause : undefined;
+  return [errorCode(err), errorCode(cause)].some((code) => code && CONNECT_FAILURES.has(code));
+}
+
 async function requestJSON(
   api: MemoryApi,
   path: string,
@@ -163,11 +186,14 @@ async function requestJSON(
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!resp.ok) return { ok: false, status: resp.status, error: `HTTP ${resp.status}` };
+    if (!resp.ok) {
+      return { ok: false, status: resp.status, error: `HTTP ${resp.status}`, sent: true };
+    }
     const text = await resp.text();
     return { ok: true, body: text ? JSON.parse(text) : null };
   } catch (err) {
-    return { ok: false, status: null, error: err instanceof Error ? err.message : String(err) };
+    const error = err instanceof Error ? err.message : String(err);
+    return { ok: false, status: null, error, sent: !neverSent(err) };
   }
 }
 
@@ -239,6 +265,9 @@ export async function recallQuick(
   };
 }
 
+/** Only a request that never went out is worth sending again: the backend starts a new job for
+ * every one it receives, so an error is permanent once the request may have arrived (a timeout, a
+ * dropped connection, any HTTP status). */
 export async function startFullRecall(
   api: MemoryApi,
   request: RecallRequest,
@@ -251,7 +280,7 @@ export async function startFullRecall(
     FULL_RECALL_TIMEOUT_MS,
     fetchImpl,
   );
-  if (!outcome.ok) return apiError(outcome);
+  if (!outcome.ok) return { error: outcome.error, permanent: outcome.sent };
   const body = outcome.body as Partial<FullRecallJob> | null;
   if (typeof body?.job_id !== "string" || body.job_id === "") {
     return { error: "full recall response has no job_id", permanent: true };

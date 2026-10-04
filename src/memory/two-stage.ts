@@ -99,10 +99,10 @@ const POLL_DEADLINE_MS = 125_000;
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /** `dosu memory recall-poll --session <id>`: start stage two with the request the first prompt
- * left, poll it until it is done, fails, or runs past the deadline, then save the outcome. Network
- * errors and 5xx are retried until the deadline, for the start as for the polls; a 4xx (a
- * rejected request, an unknown job) ends the wait. Returns the saved state, or null when no job
- * started. */
+ * left, poll it until it is done, fails, or runs past the deadline, then save the outcome. The
+ * start is retried until the deadline only while the request cannot leave (see
+ * `startFullRecall`). Polls retry network errors and 5xx until the deadline; a 4xx (unknown job)
+ * ends the wait. Returns the saved state, or null when no job started. */
 export async function pollFullRecall(
   sessionId: string,
   deps: PollDeps = {},

@@ -16,6 +16,7 @@ import {
   newSessionState,
   type RecallMode,
   readSessionState,
+  removeStaleFullRecallRequests,
   type SessionState,
   writeSessionState,
 } from "./state";
@@ -221,6 +222,9 @@ export async function runMemoryHook(raw: unknown, deps: HookDeps = {}): Promise<
     const spawn = deps.spawn ?? spawnDetachedSelf;
     switch (payload.hook_event_name) {
       case "SessionStart":
+        // Requests a dead poller left behind. Swept here and on SessionEnd, not on the prompt and
+        // tool-batch hooks, which the agent waits for.
+        removeStaleFullRecallRequests(deps.configDir, deps.now);
         // Compaction can drop what was injected; put the same notes back.
         return payload.source === "compact" ? afterCompaction(state, deps) : null;
       case "UserPromptSubmit":
@@ -229,6 +233,7 @@ export async function runMemoryHook(raw: unknown, deps: HookDeps = {}): Promise<
         spawn(["memory", "sync", "--session", payload.session_id]);
         return null;
       case "SessionEnd":
+        removeStaleFullRecallRequests(deps.configDir, deps.now);
         spawn(["memory", "sync", "--session", payload.session_id, "--flush"]);
         return null;
       default:

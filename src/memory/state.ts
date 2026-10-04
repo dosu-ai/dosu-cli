@@ -5,12 +5,25 @@
  * session state, and neither may overwrite the other. The first prompt hands the poller its
  * request in one more file, which the poller deletes on reading. */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config/config";
 import type { ChunkRequest, RecallRequest } from "./api";
 
 const SAFE_SESSION_ID = /^[A-Za-z0-9_-]+$/;
+const FULL_RECALL_REQUEST_SUFFIX = ".full-recall.request.json";
+/** A poller reads its request within a second of starting; one still there after this is from a
+ * poller that died first. */
+const STALE_REQUEST_MS = 5 * 60_000;
 
 /** A tool call seen in the transcript whose result has not been read yet. */
 export interface PendingTool {
@@ -88,7 +101,7 @@ function fullRecallPath(sessionId: string, configDir?: string): string {
 }
 
 function fullRecallRequestPath(sessionId: string, configDir?: string): string {
-  return join(memoryDir(configDir), `${sessionId}.full-recall.request.json`);
+  return join(memoryDir(configDir), `${sessionId}${FULL_RECALL_REQUEST_SUFFIX}`);
 }
 
 function fullRecallInjectedPath(sessionId: string, configDir?: string): string {
@@ -149,6 +162,26 @@ export function takeFullRecallRequest(sessionId: string, configDir?: string): Re
   const request = readJSON<RecallRequest>(path, sessionId);
   rmSync(path, { force: true });
   return request;
+}
+
+/** Delete every session's request that no poller read in time, so no prompt stays on disk. */
+export function removeStaleFullRecallRequests(configDir?: string, now: Date = new Date()): void {
+  const dir = memoryDir(configDir);
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!name.endsWith(FULL_RECALL_REQUEST_SUFFIX)) continue;
+    const path = join(dir, name);
+    try {
+      if (now.getTime() - statSync(path).mtimeMs > STALE_REQUEST_MS) rmSync(path, { force: true });
+    } catch {
+      // Taken by its poller in the meantime.
+    }
+  }
 }
 
 /** Whether stage two has been handed to the agent. */

@@ -1,9 +1,9 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FULL_NOTE_PREFACE, type HookDeps, runMemoryHook } from "./hook";
-import { readFullRecallState, readSessionState } from "./state";
+import { memoryDir, readFullRecallState, readSessionState } from "./state";
 import { type PollDeps, pollFullRecall } from "./two-stage";
 
 vi.mock("../debug/logger", () => ({
@@ -58,6 +58,24 @@ const sequence = (...routes: Route[]): Route => {
   let i = 0;
   return () => routes[Math.min(i++, routes.length - 1)]();
 };
+const failing =
+  (error: () => unknown): Route =>
+  async () =>
+    Promise.reject(error());
+/** fetch's failures as Bun (the code on the error) and Node (on its cause) raise them. */
+const refused = () =>
+  Object.assign(new Error("Unable to connect. Is the computer able to access the url?"), {
+    code: "ConnectionRefused",
+  });
+const unresolved = () =>
+  new TypeError("fetch failed", {
+    cause: Object.assign(new Error("getaddrinfo ENOTFOUND api.dosu.dev"), { code: "ENOTFOUND" }),
+  });
+const timedOut = () => new DOMException("The operation timed out.", "TimeoutError");
+const reset = () =>
+  Object.assign(new Error("The socket connection was closed unexpectedly."), {
+    code: "ECONNRESET",
+  });
 
 let dir: string;
 let routes: Record<string, Route>;
@@ -121,6 +139,16 @@ const toolBatch = (session = SESSION) =>
   );
 const compact = () => hook("SessionStart", { source: "compact" });
 const poll = (extra: Partial<PollDeps> = {}) => pollFullRecall(SESSION, pollDeps(extra));
+/** A clock that moves only while the poller sleeps, so a retry loop ends at its deadline. */
+const sleepingClock = (): Partial<PollDeps> => {
+  let ms = Date.parse("2026-10-04T12:00:00Z");
+  return {
+    now: () => new Date(ms),
+    sleep: async (interval) => {
+      ms += interval;
+    },
+  };
+};
 const statusPolls = () => calls.filter((c) => c.key === STATUS_PATH).length;
 
 beforeEach(() => {
@@ -187,12 +215,8 @@ describe("two-stage recall", () => {
     expect(calls).toHaveLength(3);
   });
 
-  it("the poller retries stage two's start through network errors and 5xx", async () => {
-    routes[FULL_PATH] = sequence(
-      async () => Promise.reject(new Error("The operation timed out.")),
-      json({ detail: "busy" }, 503),
-      json(job(), 202),
-    );
+  it("the poller retries stage two's start while the request cannot leave", async () => {
+    routes[FULL_PATH] = sequence(failing(refused), failing(unresolved), json(job(), 202));
     await firstPrompt();
     expect(await poll()).toMatchObject({ job_id: "job-1", status: "done", note: FULL });
     expect(calls.filter((c) => c.key === FULL_PATH)).toHaveLength(3);
@@ -262,13 +286,18 @@ describe("two-stage recall", () => {
     expect(statusPolls()).toBe(3);
   });
 
+  // Once the request may have arrived, sending it again could start a second job.
   it.each<[string, Route, Partial<PollDeps>]>([
     ["is rejected", json({ detail: "boom" }, 422), {}],
-    ["keeps failing past the deadline", json({ detail: "boom" }, 500), { deadlineMs: 0 }],
+    ["answers 5xx", json({ detail: "boom" }, 503), {}],
+    ["times out", failing(timedOut), {}],
+    ["loses the connection", failing(reset), {}],
+    ["cannot connect by the deadline", failing(refused), { deadlineMs: 0 }],
   ])("still injects stage one when stage two's start %s", async (_label, route, options) => {
     routes[FULL_PATH] = route;
     expect(await firstPrompt()).toBe(output("UserPromptSubmit", block(QUICK)));
-    expect(await poll(options)).toBeNull();
+    expect(await poll({ ...sleepingClock(), ...options })).toBeNull();
+    expect(calls.filter((c) => c.key === FULL_PATH)).toHaveLength(1);
     expect(readFullRecallState(SESSION, dir)).toBeNull();
     expect(await toolBatch()).toBeNull();
     expect(await laterPrompt()).toBeNull();
@@ -353,6 +382,23 @@ describe("two-stage recall", () => {
     process.env.DOSU_MEMORY_RECALL_MODE = "three_stage";
     await hook("SessionStart", { source: "startup", session_id: "other-session" });
     expect(readSessionState("other-session", dir)?.recall_mode).toBe("two_stage");
+  });
+
+  it.each([
+    "SessionStart",
+    "SessionEnd",
+  ])("%s deletes requests no poller read within 5 minutes", async (event) => {
+    const request = (session: string) =>
+      join(memoryDir(dir), `${session}.full-recall.request.json`);
+    await firstPrompt();
+    await hook("UserPromptSubmit", { prompt: "Fix the counter" }, "fresh-session");
+    const sixMinutesAgo = new Date(Date.now() - 6 * 60_000);
+    utimesSync(request(SESSION), sixMinutesAgo, sixMinutesAgo);
+
+    await hook(event, { source: "startup" }, "another-session");
+
+    expect(existsSync(request(SESSION))).toBe(false);
+    expect(existsSync(request("fresh-session"))).toBe(true);
   });
 
   it("starts no stage two without credentials", async () => {
