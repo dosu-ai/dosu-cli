@@ -100,12 +100,11 @@ function contextOutput(event: ContextEvent, context: string): string {
   });
 }
 
-/** Which installed hook ran: the agent, whether it is Codex's background prompt hook, which runs
- * stage two, and, on Cursor, the event it is installed for. */
+/** Which installed hook ran: the agent, and whether it is Codex's background prompt hook, which
+ * runs stage two. */
 export interface HookEntry {
   agent: MemoryAgent;
   stageTwo?: boolean;
-  event?: string;
 }
 
 export interface HookDeps {
@@ -298,33 +297,22 @@ function parseCursorPayload(p: Record<string, unknown>): HookPayload | null {
   };
 }
 
-/** `DOSU_MEMORY_CURSOR_PROMPT_CONTEXT=1` hands notes to Cursor with the prompt, as on Claude Code.
- * Cursor documents no context on beforeSubmitPrompt, though its CLI reads one; until that is
- * confirmed, stage one waits for the first tool call. */
-function cursorPromptContext(): boolean {
-  return process.env.DOSU_MEMORY_CURSOR_PROMPT_CONTEXT === "1";
-}
-
-/** The first prompt recalls; with prompt context on, it hands stage one over, and later prompts
- * stage two once ready. */
+/** The first prompt recalls and hands stage one over, as on Claude Code; a later prompt hands over
+ * the next note due. Cursor documents no context on beforeSubmitPrompt, but its IDE has been seen
+ * to deliver one. Its `-p` mode sends no prompt event, so such a session recalls nothing. */
 async function cursorPrompt(
   payload: HookPayload,
   state: SessionState,
   deps: HookDeps,
 ): Promise<string | null> {
-  if (state.recall_attempted) {
-    const full = cursorPromptContext() ? claimFullNote(state.session_id, deps.configDir) : null;
-    return full ? fullNoteBlock(full) : null;
-  }
+  if (state.recall_attempted) return nextCursorNote(state, deps);
   const note = await firstRecall(payload, state, deps);
-  const handOver =
-    note !== null && cursorPromptContext() && claimNoteInjection(state.session_id, deps.configDir);
-  return handOver ? memoryBlock(note) : null;
+  return note && claimNoteInjection(state.session_id, deps.configDir) ? memoryBlock(note) : null;
 }
 
-/** Before a tool call, one note at a time: stage one unless already handed over, else stage two
- * once ready. A compaction makes both due again (see `forgetHandOvers`). */
-function cursorToolContext(state: SessionState, deps: HookDeps): string | null {
+/** With a later prompt or after a tool call, one note at a time: stage one unless already handed
+ * over, else stage two once ready. A compaction makes both due again (see `forgetHandOvers`). */
+function nextCursorNote(state: SessionState, deps: HookDeps): string | null {
   const sessionId = state.session_id;
   if (state.note && claimNoteInjection(sessionId, deps.configDir)) return memoryBlock(state.note);
   const full = claimFullNote(sessionId, deps.configDir);
@@ -360,8 +348,9 @@ async function cursorEvent(
       return null;
     case "beforeSubmitPrompt":
       return await cursorPrompt(payload, state, deps);
-    case "preToolUse":
-      return cursorToolContext(state, deps);
+    case "postToolUse":
+    case "postToolUseFailure":
+      return nextCursorNote(state, deps);
     case "preCompact":
       forgetHandOvers(state.session_id, deps.configDir);
       return null;
@@ -377,14 +366,11 @@ async function cursorEvent(
   }
 }
 
-/** Cursor's hooks print one JSON object each time, with the note, if any, as `additional_context`.
- * preToolUse is a permission check, and Cursor blocks the tool call when its output does not
- * parse, so that event always prints an explicit allow, failures included. The installed command
- * names its event, so even a payload too large or too slow to read gets the allow. */
-async function runCursorHook(raw: unknown, deps: HookDeps, event?: string): Promise<string> {
+/** Cursor's hooks print one JSON object each time, with the note, if any, as
+ * `additional_context`. */
+async function runCursorHook(raw: unknown, deps: HookDeps): Promise<string> {
   const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
-  const output: Record<string, unknown> =
-    (event ?? record.hook_event_name) === "preToolUse" ? { permission: "allow" } : {};
+  const output: Record<string, unknown> = {};
   try {
     const context = await cursorEvent(record, deps);
     if (context) output.additional_context = clip(context, CURSOR_CONTEXT_CHARS);
@@ -407,7 +393,7 @@ export async function runMemoryHook(
   deps: HookDeps = {},
   entry: HookEntry = { agent: "claude-code" },
 ): Promise<string | null> {
-  if (entry.agent === "cursor") return runCursorHook(raw, deps, entry.event);
+  if (entry.agent === "cursor") return runCursorHook(raw, deps);
   try {
     // There the `--agent cursor` entry handles the session.
     if (entry.agent === "claude-code" && fromCursor(raw)) return null;
@@ -455,16 +441,13 @@ export async function runMemoryHook(
   }
 }
 
-/** `[--agent claude-code|codex|cursor] [--event <name>] [--stage-two]`, parsed without Commander
- * for the fast path in index.ts; null for anything else. */
+/** `[--agent claude-code|codex|cursor] [--stage-two]`, parsed without Commander for the fast
+ * path in index.ts; null for anything else. */
 export function parseHookArgs(args: readonly string[]): HookEntry | null {
   const entry: HookEntry = { agent: "claude-code" };
   for (let i = 0; i < args.length; i += 1) {
     if (args[i] === "--stage-two") {
       entry.stageTwo = true;
-    } else if (args[i] === "--event" && /^[A-Za-z]+$/.test(args[i + 1] ?? "")) {
-      entry.event = args[i + 1];
-      i += 1;
     } else if (args[i] === "--agent" && MEMORY_AGENTS.some((agent) => agent === args[i + 1])) {
       entry.agent = args[i + 1] as MemoryAgent;
       i += 1;

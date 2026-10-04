@@ -32,8 +32,6 @@ interface MemoryHook {
   async?: boolean;
   /** Codex's background prompt hook, which runs stage two (`--stage-two`). */
   stageTwo?: boolean;
-  /** Cursor's per-hook filter, such as the tool name. */
-  matcher?: string;
 }
 
 /** UserPromptSubmit waits for the recall (in single mode the note is written on the spot); 120 s
@@ -61,17 +59,16 @@ const CODEX_HOOKS: readonly MemoryHook[] = [
   { event: "SessionEnd", timeout: 3 },
 ];
 
-/** Cursor's events. beforeSubmitPrompt waits for the recall, as UserPromptSubmit does on Claude
- * Code. preToolUse hands notes over and the recording hooks append one line; they read and write
- * local files only, and 5 s bounds a stall. postToolUse and postToolUseFailure record shell
- * commands alone: Cursor sends a command that exits non-zero to the latter. The others return
- * immediately. */
+/** Cursor's events. beforeSubmitPrompt waits for the recall and hands stage one over, as
+ * UserPromptSubmit does on Claude Code. postToolUse and postToolUseFailure run after every tool
+ * call, failed ones included: they hand stage two over and record shell commands (Cursor sends a
+ * command that exits non-zero to the latter). They and the other recording hooks read and write
+ * local files only, and 5 s bounds a stall. The others return immediately. */
 const CURSOR_HOOKS: readonly MemoryHook[] = [
   { event: "sessionStart" },
   { event: "beforeSubmitPrompt", timeout: 120 },
-  { event: "preToolUse", timeout: 5 },
-  { event: "postToolUse", matcher: "Shell", timeout: 5 },
-  { event: "postToolUseFailure", matcher: "Shell", timeout: 5 },
+  { event: "postToolUse", timeout: 5 },
+  { event: "postToolUseFailure", timeout: 5 },
   { event: "afterFileEdit", timeout: 5 },
   { event: "afterAgentResponse", timeout: 5 },
   { event: "preCompact" },
@@ -152,8 +149,6 @@ function memoryHookCommand(agent: MemoryAgent, hook: MemoryHook): string {
   return [
     base,
     ...(agent === "claude-code" ? [] : [`--agent ${agent}`]),
-    // So the hook knows its event without its payload: see `runCursorHook`.
-    ...(agent === "cursor" ? [`--event ${hook.event}`] : []),
     ...(hook.stageTwo ? ["--stage-two"] : []),
   ].join(" ");
 }
@@ -163,7 +158,7 @@ function memoryHookCommand(agent: MemoryAgent, hook: MemoryHook): string {
 export function isMemoryHookCommand(command: unknown): boolean {
   return (
     typeof command === "string" &&
-    /(?:\bdosu|')\s+memory hook(?:\s+--agent (?:codex|cursor))?(?:\s+--event [A-Za-z]+)?(?:\s+--stage-two)?\s*$/.test(
+    /(?:\bdosu|')\s+memory hook(?:\s+--agent (?:codex|cursor))?(?:\s+--stage-two)?\s*$/.test(
       command,
     )
   );
@@ -236,7 +231,7 @@ export function enableMemoryHooks(agent: MemoryAgent): void {
     };
     config =
       format === "cursor"
-        ? addCursorHook(config, hook.event, { ...spec, matcher: hook.matcher })
+        ? addCursorHook(config, hook.event, spec)
         : addGroupedHook(config, hook.event, { ...spec, async: hook.async });
   }
   writeHookConfig(path, config);

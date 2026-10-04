@@ -468,29 +468,40 @@ describe("two-stage recall on Cursor", () => {
       deps(),
       { agent: "cursor" },
     );
-  const toolCall = () => cursor("preToolUse", { tool_name: "Grep", tool_input: { pattern: "x" } });
-  const allowWith = (context: string) =>
-    JSON.stringify({ permission: "allow", additional_context: context });
+  const toolCall = () =>
+    cursor("postToolUse", { tool_name: "Grep", tool_input: { pattern: "x" }, tool_output: "a.py" });
+  const failedToolCall = () =>
+    cursor("postToolUseFailure", {
+      tool_name: "Read",
+      tool_input: { file_path: "notes.txt" },
+      error_message: "File not found: /work/widgets/notes.txt",
+      failure_type: "error",
+      is_interrupt: false,
+    });
+  const withContext = (context: string) => JSON.stringify({ additional_context: context });
 
-  it("hands over stage one before the first tool call and stage two before a later one", async () => {
-    expect(await cursor("beforeSubmitPrompt", { prompt: "Fix the counter" })).toBe("{}");
+  it("hands over stage one with the prompt and stage two after a later tool call", async () => {
+    expect(await cursor("beforeSubmitPrompt", { prompt: "Fix the counter" })).toBe(
+      withContext(block(QUICK)),
+    );
     expect(spawned).toEqual([["memory", "recall-poll", "--session", SESSION]]);
+    expect(await toolCall()).toBe("{}");
     await poll();
 
-    expect(await toolCall()).toBe(allowWith(block(QUICK)));
-    expect(await toolCall()).toBe(allowWith(fullBlock));
-    expect(await toolCall()).toBe(JSON.stringify({ permission: "allow" }));
+    expect(await failedToolCall()).toBe(withContext(fullBlock));
+    expect(await toolCall()).toBe("{}");
   });
 
-  it("after a compaction, hands both notes over again, one per tool call", async () => {
+  it("after a compaction, hands both notes over again, one per prompt or tool call", async () => {
     await cursor("beforeSubmitPrompt", { prompt: "Fix the counter" });
     await poll();
     await toolCall();
-    await toolCall();
 
     expect(await cursor("preCompact", { trigger: "auto" })).toBe("{}");
-    expect(await toolCall()).toBe(allowWith(block(QUICK)));
-    expect(await toolCall()).toBe(allowWith(fullBlock));
-    expect(await toolCall()).toBe(JSON.stringify({ permission: "allow" }));
+    expect(await toolCall()).toBe(withContext(block(QUICK)));
+    expect(await cursor("beforeSubmitPrompt", { prompt: "Now update the docs" })).toBe(
+      withContext(fullBlock),
+    );
+    expect(await toolCall()).toBe("{}");
   });
 });

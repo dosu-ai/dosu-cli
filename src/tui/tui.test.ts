@@ -168,7 +168,7 @@ const mockMemoryHookStatus = vi.mocked(memoryHookStatus);
 /** Every configured agent is one agent memory supports, with its hooks in the given state. */
 function memoryHooksInstalled(installed: boolean) {
   mockMemoryAgentForProvider.mockReturnValue("cursor");
-  mockMemoryHookStatus.mockReturnValue({ preToolUse: true, stop: installed });
+  mockMemoryHookStatus.mockReturnValue({ postToolUse: true, stop: installed });
 }
 
 function fakeSession(id: string, project?: string): AgentSession {

@@ -631,7 +631,7 @@ describe("stepConfigureTools", () => {
     expect(results[0].error).toBeUndefined();
     const hooksPath = join(tempDir, ".cursor", "hooks.json");
     const hooks = JSON.parse(readFileSync(hooksPath, "utf-8"));
-    expect(hooks.hooks.preToolUse[0].command).toContain("memory hook --agent cursor");
+    expect(hooks.hooks.postToolUse[0].command).toContain("memory hook --agent cursor");
     expect(hooks.hooks.stop).toHaveLength(1);
     expect(hooks.hooks.stop[0].command).not.toContain("knowledge sync");
     expect(results[0].memoryHooks).toMatchObject({ name: "Cursor", path: hooksPath });
@@ -708,7 +708,7 @@ describe("stepConfigureTools", () => {
 
     stepConfigureTools(cfg, { toInstall: [], toRemove: [CursorProvider()], skipped: [] });
 
-    expect(memoryHookStatus("cursor").preToolUse).toBe(false);
+    expect(memoryHookStatus("cursor").postToolUse).toBe(false);
     expect(getHookAgent("cursor")?.isEnabled()).toBe(false);
     expect(getStatuslineAgent("cursor")?.isEnabled()).toBe(false);
     expect(getIncognitoAgent("cursor")?.isEnabled()).toBe(false);
@@ -2099,7 +2099,7 @@ describe("runSetup integration", () => {
 
     expect(mockRunKnowledgeSync).not.toHaveBeenCalled();
     expect(mockSpawnDetachedSelf).not.toHaveBeenCalled();
-    expect(memoryHookStatus("cursor").preToolUse).toBe(true);
+    expect(memoryHookStatus("cursor").postToolUse).toBe(true);
   });
 
   it("offers a user of the knowledge sync hook to study past agent sessions", async () => {

@@ -114,7 +114,6 @@ describe("memory hooks in Claude Code settings", () => {
     expect(isMemoryHookCommand("dosu memory hook --agent codex --stage-two")).toBe(true);
     expect(isMemoryHookCommand("DOSU_DEV=true '/bin/bun' '/src/index.ts' memory hook")).toBe(true);
     expect(isMemoryHookCommand("dosu memory hook --agent cursor")).toBe(true);
-    expect(isMemoryHookCommand("dosu memory hook --agent cursor --event preToolUse")).toBe(true);
     expect(isMemoryHookCommand("dosu memory hook --agent windsurf")).toBe(false);
     expect(isMemoryHookCommand(HOOK_COMMAND)).toBe(false);
     expect(isMemoryHookCommand("./my-memory hook.sh")).toBe(false);
@@ -197,22 +196,19 @@ describe("memory hooks in Cursor's hooks.json", () => {
     enableMemoryHooks("cursor");
     enableMemoryHooks("cursor");
 
-    const hook = (event: string) => ({
-      command: `dosu memory hook --agent cursor --event ${event}`,
-    });
+    const hook = { command: "dosu memory hook --agent cursor" };
     expect(JSON.parse(readFileSync(cursorHooks, "utf-8"))).toEqual({
       version: 1,
       hooks: {
-        sessionStart: [hook("sessionStart")],
-        beforeSubmitPrompt: [{ ...hook("beforeSubmitPrompt"), timeout: 120 }],
-        preToolUse: [{ ...hook("preToolUse"), timeout: 5 }],
-        postToolUse: [{ ...hook("postToolUse"), matcher: "Shell", timeout: 5 }],
-        postToolUseFailure: [{ ...hook("postToolUseFailure"), matcher: "Shell", timeout: 5 }],
-        afterFileEdit: [{ ...hook("afterFileEdit"), timeout: 5 }],
-        afterAgentResponse: [{ ...hook("afterAgentResponse"), timeout: 5 }],
-        preCompact: [hook("preCompact")],
-        stop: [knowledge, hook("stop")],
-        sessionEnd: [hook("sessionEnd")],
+        sessionStart: [hook],
+        beforeSubmitPrompt: [{ ...hook, timeout: 120 }],
+        postToolUse: [{ ...hook, timeout: 5 }],
+        postToolUseFailure: [{ ...hook, timeout: 5 }],
+        afterFileEdit: [{ ...hook, timeout: 5 }],
+        afterAgentResponse: [{ ...hook, timeout: 5 }],
+        preCompact: [hook],
+        stop: [knowledge, hook],
+        sessionEnd: [hook],
       },
     });
     expect(Object.values(memoryHookStatus("cursor")).every(Boolean)).toBe(true);
@@ -237,8 +233,8 @@ describe("memory hooks in Cursor's hooks.json", () => {
     const text = readFileSync(join(configDir, ".cursor", "hooks.json"), "utf-8");
     expect(text).not.toMatch(/\/\/|\/\*/);
     const shim = join(configDir, "dosu-cli-dev", "cursor-dev-dosu");
-    expect(JSON.parse(text).hooks.preToolUse[0].command).toBe(
-      `'${shim}' memory hook --agent cursor --event preToolUse`,
+    expect(JSON.parse(text).hooks.postToolUse[0].command).toBe(
+      `'${shim}' memory hook --agent cursor`,
     );
     expect(readFileSync(shim, "utf-8")).toContain(
       "exec env DOSU_DEV=true DOSU_BACKEND_URL_OVERRIDE='https://api.example.test'",

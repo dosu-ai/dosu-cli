@@ -232,14 +232,12 @@ interface CursorHookEntry {
   command?: unknown;
 }
 
-/** As `GroupedHookSpec`, for Cursor's flat entries, which also take a `matcher`. */
+/** As `GroupedHookSpec`, for Cursor's flat entries. */
 export interface CursorHookSpec {
   command: string;
   owns: (command: unknown) => boolean;
   /** Per-hook `timeout`, in seconds. */
   timeout?: number;
-  /** Regex on what the event matches, such as the tool name. */
-  matcher?: string;
 }
 
 function knowledgeCursorSpec(): CursorHookSpec {
@@ -266,10 +264,7 @@ export function addCursorHook(
   event: string,
   spec: CursorHookSpec = knowledgeCursorSpec(),
 ): JsonConfig {
-  const options = {
-    ...(spec.matcher === undefined ? {} : { matcher: spec.matcher }),
-    ...(spec.timeout === undefined ? {} : { timeout: spec.timeout }),
-  };
+  const options = spec.timeout === undefined ? {} : { timeout: spec.timeout };
   // Same stale-command refresh as addGroupedHook.
   let present = false;
   for (const entry of cursorEventArray(config, event)) {

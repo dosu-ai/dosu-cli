@@ -109,9 +109,8 @@ export function memoryCommand(): Command {
     .description("Agent hook entry point; reads the hook payload on stdin")
     .addOption(agentOption())
     .option("--stage-two", "Codex's background prompt hook: wait for stage two and print it")
-    .option("--event <name>", "Cursor: the event the hook is installed for")
-    .action((opts: { agent: MemoryAgent; stageTwo?: boolean; event?: string }) =>
-      runMemoryHookCommand({ agent: opts.agent, stageTwo: opts.stageTwo, event: opts.event }),
+    .action((opts: { agent: MemoryAgent; stageTwo?: boolean }) =>
+      runMemoryHookCommand({ agent: opts.agent, stageTwo: opts.stageTwo }),
     );
 
   cmd

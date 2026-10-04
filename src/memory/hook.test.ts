@@ -200,11 +200,6 @@ describe("runMemoryHook with DOSU_MEMORY_RECALL_MODE=single", () => {
 describe("runMemoryHook on Cursor", () => {
   const BLOCK = `<prior_task_memory>\n${NOTE}\n</prior_task_memory>`;
   const NOW = new Date("2026-10-04T12:00:00.000Z");
-  const savedPromptContext = process.env.DOSU_MEMORY_CURSOR_PROMPT_CONTEXT;
-  afterEach(() => {
-    if (savedPromptContext === undefined) delete process.env.DOSU_MEMORY_CURSOR_PROMPT_CONTEXT;
-    else process.env.DOSU_MEMORY_CURSOR_PROMPT_CONTEXT = savedPromptContext;
-  });
 
   /** Cursor's common fields; its transcript is not read. */
   const cursorPayload = (event: string, extra: Record<string, unknown> = {}) => ({
@@ -221,36 +216,33 @@ describe("runMemoryHook on Cursor", () => {
       (await runMemoryHook(cursorPayload(event, extra), { ...d, now: NOW }, { agent: "cursor" })) ??
         "null",
     );
-  const toolCall = (extra: Record<string, unknown> = {}) =>
-    cursor("preToolUse", { tool_name: "Read", tool_input: { path: "a.py" }, ...extra });
-  it("always prints an explicit allow before a tool call, whatever goes wrong", async () => {
-    const allow = { permission: "allow" };
-    expect(await toolCall()).toEqual(allow);
-    expect(await toolCall({ conversation_id: "../escape" })).toEqual(allow);
-    expect(await toolCall({ parent_tool_call_id: "tool-7" })).toEqual(allow);
+  const toolCall = () =>
+    cursor("postToolUse", {
+      tool_name: "Read",
+      tool_input: { file_path: "a.py" },
+      tool_output: '{"file_path":"a.py","content_length":8}',
+    });
+  const prompt = (text = "Fix the counter") => cursor("beforeSubmitPrompt", { prompt: text });
+
+  it("prints one JSON object, whatever goes wrong", async () => {
+    expect(await cursor("postToolUse", { conversation_id: "../escape" })).toEqual({});
     const broken = deps({
       repoOf: () => {
         throw new Error("git crashed");
       },
     });
-    expect(await cursor("preToolUse", { conversation_id: "other-session" }, broken)).toEqual(allow);
-    // A payload over the size limit or too slow to read: the installed command names the event.
-    const unread = (event: string) => runMemoryHook(null, deps(), { agent: "cursor", event });
-    expect(JSON.parse((await unread("preToolUse")) ?? "")).toEqual(allow);
-    expect(await unread("stop")).toBe("{}");
-    expect(await cursor("stop")).toEqual({});
+    expect(await cursor("beforeSubmitPrompt", { prompt: "Fix it" }, broken)).toEqual({});
+    expect(await runMemoryHook(null, deps(), { agent: "cursor" })).toBe("{}");
   });
 
-  it("recalls on the first prompt and hands the note over before the first tool call", async () => {
-    expect(await cursor("beforeSubmitPrompt", { prompt: "Fix the counter" })).toEqual({});
+  it("recalls on the first prompt and hands the note over with it", async () => {
+    expect(await prompt()).toEqual({ additional_context: BLOCK });
     expect(recallBodies).toEqual([
       { repo: "acme/widgets", session_id: SESSION, prompt: "Fix the counter" },
     ]);
 
-    expect(await toolCall({ parent_tool_call_id: "tool-7" })).toEqual({ permission: "allow" });
-    expect(await toolCall()).toEqual({ permission: "allow", additional_context: BLOCK });
-    expect(await toolCall()).toEqual({ permission: "allow" });
-    expect(await cursor("beforeSubmitPrompt", { prompt: "And docs" })).toEqual({});
+    expect(await toolCall()).toEqual({});
+    expect(await prompt("And docs")).toEqual({});
     expect(recallBodies).toHaveLength(1);
     expect(readSessionState(SESSION, dir)).toMatchObject({
       agent: "cursor",
@@ -259,33 +251,24 @@ describe("runMemoryHook on Cursor", () => {
     });
   });
 
-  it("hands the note over with the prompt when DOSU_MEMORY_CURSOR_PROMPT_CONTEXT=1", async () => {
-    process.env.DOSU_MEMORY_CURSOR_PROMPT_CONTEXT = "1";
-    expect(await cursor("beforeSubmitPrompt", { prompt: "Fix the counter" })).toEqual({
-      additional_context: BLOCK,
-    });
-    expect(await toolCall()).toEqual({ permission: "allow" });
-  });
-
   it("keeps a note under Cursor's context limit", async () => {
     respond = json({ note: "x".repeat(20_000), episode_ids: ["e1"], latency_ms: 12 });
-    await cursor("beforeSubmitPrompt", { prompt: "Fix the counter" });
-    const { additional_context: context } = await toolCall();
+    const { additional_context: context } = await prompt();
     expect(context.length).toBeLessThan(10_000);
     expect(context).toContain("characters cut");
   });
 
-  it("puts the note back on the first tool call after a compaction", async () => {
-    await cursor("beforeSubmitPrompt", { prompt: "Fix the counter" });
-    await toolCall();
+  it("puts the note back after the first tool call that follows a compaction", async () => {
+    await prompt();
     expect(await cursor("preCompact", { trigger: "auto" })).toEqual({});
-    expect(await toolCall()).toEqual({ permission: "allow", additional_context: BLOCK });
-    expect(await toolCall()).toEqual({ permission: "allow" });
+    expect(await toolCall()).toEqual({ additional_context: BLOCK });
+    expect(await toolCall()).toEqual({});
   });
 
   it("replays a real session: records it, and hands the note to the main agent only", async () => {
-    // Hook payloads Cursor's local runtime 2026.10.01 sent in one interactive session: a read, a
-    // command that exits 0, one that exits 1, a write, a subagent's read. Paths shortened.
+    // Hook payloads Cursor's local runtime 2026.10.01 sent in one interactive session to the
+    // events `hooks enable` installs: a read, a command that exits 0, one that exits 1, a read
+    // that fails, a write, a subagent's read. Paths shortened.
     const payloads = readFileSync(
       join(__dirname, "testdata", "cursor-local-2026.10.01-session.jsonl"),
       "utf-8",
@@ -293,12 +276,15 @@ describe("runMemoryHook on Cursor", () => {
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
-    const toolCalls: Array<{ conversation: string; output: Record<string, unknown> }> = [];
+    const handedOver: Array<{ event: string; conversation: string; output: string | null }> = [];
     for (const payload of payloads) {
-      const event = payload.hook_event_name;
-      const out = await runMemoryHook(payload, { ...deps(), now: NOW }, { agent: "cursor", event });
-      if (event === "preToolUse") {
-        toolCalls.push({ conversation: payload.conversation_id, output: JSON.parse(out ?? "") });
+      const output = await runMemoryHook(payload, { ...deps(), now: NOW }, { agent: "cursor" });
+      if (output !== "{}") {
+        handedOver.push({
+          event: payload.hook_event_name,
+          conversation: payload.conversation_id,
+          output,
+        });
       }
     }
 
@@ -318,12 +304,17 @@ describe("runMemoryHook on Cursor", () => {
       { type: "file_edit", ts, tool: "Write", path: "notes.txt" },
       { type: "assistant_text", ts, text: "Done." },
     ]);
-    expect(toolCalls.every(({ output }) => output.permission === "allow")).toBe(true);
-    expect(toolCalls[0].output.additional_context).toBe(BLOCK);
-    // The subagent's read: a conversation of its own that never started, so no note and no state.
-    const sub = toolCalls.filter(({ conversation }) => conversation !== main);
-    expect(sub.map(({ output }) => output)).toEqual([{ permission: "allow" }]);
-    expect(readSessionState(sub[0].conversation, dir)).toBeNull();
+    expect(handedOver).toEqual([
+      {
+        event: "beforeSubmitPrompt",
+        conversation: main,
+        output: JSON.stringify({ additional_context: BLOCK }),
+      },
+    ]);
+    // The subagent's read: a conversation of its own that never started, so no state.
+    const sub = payloads.find(({ conversation_id }) => conversation_id !== main);
+    expect(sub.hook_event_name).toBe("postToolUse");
+    expect(readSessionState(sub.conversation_id, dir)).toBeNull();
     expect(spawned).toEqual([
       ["memory", "sync", "--session", main],
       ["memory", "sync", "--session", main, "--flush"],
@@ -399,11 +390,6 @@ describe("parseHookArgs", () => {
       stageTwo: true,
     });
     expect(parseHookArgs(["--agent", "cursor"])).toEqual({ agent: "cursor" });
-    expect(parseHookArgs(["--agent", "cursor", "--event", "preToolUse"])).toEqual({
-      agent: "cursor",
-      event: "preToolUse",
-    });
-    expect(parseHookArgs(["--agent", "cursor", "--event"])).toBeNull();
     expect(parseHookArgs(["--agent", "windsurf"])).toBeNull();
     expect(parseHookArgs(["--agent"])).toBeNull();
     expect(parseHookArgs(["--verbose"])).toBeNull();
