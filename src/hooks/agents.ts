@@ -62,10 +62,14 @@ export function claudeConfigDir(): string {
   return process.env.CLAUDE_CONFIG_DIR || expandHome("~/.claude");
 }
 
+export function cursorHooksPath(): string {
+  return expandHome("~/.cursor/hooks.json");
+}
+
 const CURSOR_EVENT = "stop";
 
 function cursorAgent(): HookAgent {
-  const configPath = () => expandHome("~/.cursor/hooks.json");
+  const configPath = cursorHooksPath;
   return {
     id: () => "cursor",
     name: () => "Cursor",

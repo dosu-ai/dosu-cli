@@ -1,6 +1,6 @@
-/** `dosu memory`: agent memory for Claude Code and Codex. Hooks record each session incrementally
- * and inject a note from earlier sessions in the same repository on a session's first prompt.
- * Independent of `dosu knowledge` and its hooks. */
+/** `dosu memory`: agent memory for Claude Code, Codex, and Cursor. Hooks record each session
+ * incrementally and inject a note from earlier sessions in the same repository on a session's first
+ * prompt (on Cursor, before its first tool call). Independent of `dosu knowledge` and its hooks. */
 
 import { Command, Option } from "commander";
 import pc from "picocolors";
@@ -22,7 +22,7 @@ const agentOption = () =>
 
 function hooksCommand(): Command {
   const cmd = new Command("hooks").description(
-    "Manage the agent-memory hooks in Claude Code or Codex",
+    "Manage the agent-memory hooks in Claude Code, Codex, or Cursor",
   );
 
   cmd
@@ -93,7 +93,7 @@ function changeHooks<T>(
 
 export function memoryCommand(): Command {
   const cmd = new Command("memory").description(
-    "Agent memory for Claude Code and Codex: record sessions, recall notes from earlier ones",
+    "Agent memory for Claude Code, Codex, and Cursor: record sessions, recall notes from earlier ones",
   );
 
   cmd
@@ -101,8 +101,9 @@ export function memoryCommand(): Command {
     .description("Agent hook entry point; reads the hook payload on stdin")
     .addOption(agentOption())
     .option("--stage-two", "Codex's background prompt hook: wait for stage two and print it")
-    .action((opts: { agent: MemoryAgent; stageTwo?: boolean }) =>
-      runMemoryHookCommand({ agent: opts.agent, stageTwo: opts.stageTwo }),
+    .option("--event <name>", "Cursor: the event the hook is installed for")
+    .action((opts: { agent: MemoryAgent; stageTwo?: boolean; event?: string }) =>
+      runMemoryHookCommand({ agent: opts.agent, stageTwo: opts.stageTwo, event: opts.event }),
     );
 
   cmd

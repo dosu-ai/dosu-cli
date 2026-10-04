@@ -6,9 +6,9 @@ import { loadConfig } from "../config/config";
 import { getBackendURL } from "../config/constants";
 import { logger } from "../debug/logger";
 
-/** One compact event rebuilt from an agent's transcript line. `ts` is that line's client
- * timestamp. `file_edit` is context only: the backend must not append it to the episode's steps,
- * which hold shell commands alone (as in the frozen memwriter). */
+/** One compact event rebuilt from an agent's transcript line (or, for Cursor, a hook payload).
+ * `ts` is that line's client timestamp. `file_edit` is context only: the backend must not append
+ * it to the episode's steps, which hold shell commands alone (as in the frozen memwriter). */
 export type MemoryEvent =
   | { type: "user_prompt"; ts: string; text: string }
   | { type: "assistant_text"; ts: string; text: string }
@@ -22,7 +22,7 @@ export type MemoryEvent =
  * commit: `""` means no changes, `null` means git could not produce one (keep the previous). */
 export interface ChunkRequest {
   repo: string;
-  source: "claude_code" | "codex";
+  source: "claude_code" | "codex" | "cursor";
   seq: number;
   first_line: number;
   last_line: number;

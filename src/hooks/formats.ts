@@ -223,6 +223,20 @@ interface CursorHookEntry {
   command?: unknown;
 }
 
+/** As `GroupedHookSpec`, for Cursor's flat entries, which also take a `matcher`. */
+export interface CursorHookSpec {
+  command: string;
+  owns: (command: unknown) => boolean;
+  /** Per-hook `timeout`, in seconds. */
+  timeout?: number;
+  /** Regex on what the event matches, such as the tool name. */
+  matcher?: string;
+}
+
+function knowledgeCursorSpec(): CursorHookSpec {
+  return { command: hookCommand(), owns: isDosuHookCommand };
+}
+
 function cursorEventArray(config: JsonConfig, event: string): CursorHookEntry[] {
   const hooks = config.hooks;
   if (typeof hooks !== "object" || hooks === null) return [];
@@ -230,31 +244,47 @@ function cursorEventArray(config: JsonConfig, event: string): CursorHookEntry[] 
   return Array.isArray(entries) ? entries : [];
 }
 
-export function hasCursorHook(config: JsonConfig, event: string): boolean {
-  return cursorEventArray(config, event).some((entry) => isDosuHookCommand(entry?.command));
+export function hasCursorHook(
+  config: JsonConfig,
+  event: string,
+  owns: CursorHookSpec["owns"] = isDosuHookCommand,
+): boolean {
+  return cursorEventArray(config, event).some((entry) => owns(entry?.command));
 }
 
-export function addCursorHook(config: JsonConfig, event: string): JsonConfig {
-  const desired = hookCommand();
+export function addCursorHook(
+  config: JsonConfig,
+  event: string,
+  spec: CursorHookSpec = knowledgeCursorSpec(),
+): JsonConfig {
+  const options = {
+    ...(spec.matcher === undefined ? {} : { matcher: spec.matcher }),
+    ...(spec.timeout === undefined ? {} : { timeout: spec.timeout }),
+  };
   // Same stale-command refresh as addGroupedHook.
   let present = false;
   for (const entry of cursorEventArray(config, event)) {
-    if (!isDosuHookCommand(entry?.command)) continue;
+    if (!spec.owns(entry?.command)) continue;
     present = true;
-    entry.command = desired;
+    entry.command = spec.command;
+    Object.assign(entry, options);
   }
   if (present) return config;
   if (config.version === undefined) config.version = 1;
   if (typeof config.hooks !== "object" || config.hooks === null) config.hooks = {};
   if (!Array.isArray(config.hooks[event])) config.hooks[event] = [];
-  config.hooks[event].push({ command: desired });
+  config.hooks[event].push({ command: spec.command, ...options });
   return config;
 }
 
-export function removeCursorHook(config: JsonConfig, event: string): JsonConfig {
+export function removeCursorHook(
+  config: JsonConfig,
+  event: string,
+  owns: CursorHookSpec["owns"] = isDosuHookCommand,
+): JsonConfig {
   const entries = cursorEventArray(config, event);
   if (entries.length === 0) return config;
-  const kept = entries.filter((entry) => !isDosuHookCommand(entry?.command));
+  const kept = entries.filter((entry) => !owns(entry?.command));
   if (kept.length > 0) {
     config.hooks[event] = kept;
   } else {

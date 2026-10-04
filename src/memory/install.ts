@@ -1,17 +1,20 @@
-/** Agent-memory hooks in Claude Code's settings.json (under `CLAUDE_CONFIG_DIR` when set) and in
- * Codex's hooks.json (under `CODEX_HOME` when set). One command, `dosu memory hook` (with
- * `--agent codex` for Codex), serves every event and dispatches on the payload's
- * `hook_event_name`. Separate from the knowledge-sync hook in the same files: neither install
- * touches the other. */
+/** Agent-memory hooks in Claude Code's settings.json (under `CLAUDE_CONFIG_DIR` when set), in
+ * Codex's hooks.json (under `CODEX_HOME` when set), and in Cursor's ~/.cursor/hooks.json. One
+ * command, `dosu memory hook` (with `--agent codex` or `--agent cursor`), serves every event and
+ * dispatches on the payload's `hook_event_name`. Separate from the knowledge-sync hook in the same
+ * files: neither install touches the other. */
 
 import { join } from "node:path";
-import { claudeConfigDir, codexHome } from "../hooks/agents";
+import { claudeConfigDir, codexHome, cursorHooksPath } from "../hooks/agents";
 import {
+  addCursorHook,
   addGroupedHook,
   devEnvAssignments,
   devSelfCommand,
+  hasCursorHook,
   hasGroupedHook,
   readHookConfig,
+  removeCursorHook,
   removeGroupedHook,
   removeGroupedHookInPlace,
   writeHookConfig,
@@ -26,6 +29,8 @@ interface MemoryHook {
   async?: boolean;
   /** Codex's background prompt hook, which runs stage two (`--stage-two`). */
   stageTwo?: boolean;
+  /** Cursor's per-hook filter, such as the tool name. */
+  matcher?: string;
 }
 
 /** UserPromptSubmit waits for the recall (in single mode the note is written on the spot); 120 s
@@ -53,9 +58,27 @@ const CODEX_HOOKS: readonly MemoryHook[] = [
   { event: "SessionEnd", timeout: 3 },
 ];
 
+/** Cursor's events. beforeSubmitPrompt waits for the recall, as UserPromptSubmit does on Claude
+ * Code. preToolUse hands notes over and the recording hooks append one line; they read and write
+ * local files only, and 5 s bounds a stall. postToolUse records shell commands alone. The others
+ * return immediately. */
+const CURSOR_HOOKS: readonly MemoryHook[] = [
+  { event: "sessionStart" },
+  { event: "beforeSubmitPrompt", timeout: 120 },
+  { event: "preToolUse", timeout: 5 },
+  { event: "postToolUse", matcher: "Shell", timeout: 5 },
+  { event: "afterFileEdit", timeout: 5 },
+  { event: "afterAgentResponse", timeout: 5 },
+  { event: "preCompact" },
+  { event: "stop" },
+  { event: "sessionEnd" },
+];
+
 interface AgentHooks {
   name: string;
   configPath: () => string;
+  /** Claude Code and Codex group entries under a matcher; Cursor lists them flat. */
+  format: "grouped" | "cursor";
   hooks: readonly MemoryHook[];
   /** Shown after enabling. */
   enableNote?: string;
@@ -67,14 +90,22 @@ const AGENT_HOOKS: Record<MemoryAgent, AgentHooks> = {
   "claude-code": {
     name: "Claude Code",
     configPath: () => join(claudeConfigDir(), "settings.json"),
+    format: "grouped",
     hooks: CLAUDE_CODE_HOOKS,
   },
   codex: {
     name: "Codex",
     configPath: () => join(codexHome(), "hooks.json"),
+    format: "grouped",
     hooks: CODEX_HOOKS,
     enableNote: "Codex skips new hooks until you trust them: open /hooks in Codex and trust them.",
     trustsByPosition: true,
+  },
+  cursor: {
+    name: "Cursor",
+    configPath: cursorHooksPath,
+    format: "cursor",
+    hooks: CURSOR_HOOKS,
   },
 };
 
@@ -86,7 +117,9 @@ function memoryHookCommand(agent: MemoryAgent, hook: MemoryHook): string {
       : HOOK_COMMAND;
   return [
     base,
-    ...(agent === "codex" ? ["--agent codex"] : []),
+    ...(agent === "claude-code" ? [] : [`--agent ${agent}`]),
+    // So the hook knows its event without its payload: see `runCursorHook`.
+    ...(agent === "cursor" ? [`--event ${hook.event}`] : []),
     ...(hook.stageTwo ? ["--stage-two"] : []),
   ].join(" ");
 }
@@ -96,7 +129,9 @@ function memoryHookCommand(agent: MemoryAgent, hook: MemoryHook): string {
 export function isMemoryHookCommand(command: unknown): boolean {
   return (
     typeof command === "string" &&
-    /(?:\bdosu|')\s+memory hook(?:\s+--agent codex)?(?:\s+--stage-two)?\s*$/.test(command)
+    /(?:\bdosu|')\s+memory hook(?:\s+--agent (?:codex|cursor))?(?:\s+--event [A-Za-z]+)?(?:\s+--stage-two)?\s*$/.test(
+      command,
+    )
   );
 }
 
@@ -123,24 +158,28 @@ export function memoryHooksTarget(agent: MemoryAgent): {
 
 /** Which of the agent's hooks are installed. */
 export function memoryHookStatus(agent: MemoryAgent): Record<string, boolean> {
-  const { configPath, hooks } = AGENT_HOOKS[agent];
+  const { configPath, format, hooks } = AGENT_HOOKS[agent];
   const config = readHookConfig(configPath());
+  const has = format === "cursor" ? hasCursorHook : hasGroupedHook;
   return Object.fromEntries(
-    hooks.map((hook) => [hookLabel(hook), hasGroupedHook(config, hook.event, ownedBy(hook))]),
+    hooks.map((hook) => [hookLabel(hook), has(config, hook.event, ownedBy(hook))]),
   );
 }
 
 export function enableMemoryHooks(agent: MemoryAgent): void {
-  const { configPath, hooks } = AGENT_HOOKS[agent];
+  const { configPath, format, hooks } = AGENT_HOOKS[agent];
   const path = configPath();
   let config = readHookConfig(path);
   for (const hook of hooks) {
-    config = addGroupedHook(config, hook.event, {
+    const spec = {
       command: memoryHookCommand(agent, hook),
       owns: ownedBy(hook),
       timeout: hook.timeout,
-      async: hook.async,
-    });
+    };
+    config =
+      format === "cursor"
+        ? addCursorHook(config, hook.event, { ...spec, matcher: hook.matcher })
+        : addGroupedHook(config, hook.event, { ...spec, async: hook.async });
   }
   writeHookConfig(path, config);
 }
@@ -148,12 +187,14 @@ export function enableMemoryHooks(agent: MemoryAgent): void {
 /** Returns how many of the agent's other hooks moved and so need trusting again (Codex only, and
  * only where one of ours shares a group with them). */
 export function disableMemoryHooks(agent: MemoryAgent): number {
-  const { configPath, hooks, trustsByPosition } = AGENT_HOOKS[agent];
+  const { configPath, format, hooks, trustsByPosition } = AGENT_HOOKS[agent];
   const path = configPath();
   let config = readHookConfig(path);
   let moved = 0;
   for (const hook of hooks) {
-    if (trustsByPosition) {
+    if (format === "cursor") {
+      config = removeCursorHook(config, hook.event, ownedBy(hook));
+    } else if (trustsByPosition) {
       const removed = removeGroupedHookInPlace(config, hook.event, ownedBy(hook));
       config = removed.config;
       moved += removed.moved;

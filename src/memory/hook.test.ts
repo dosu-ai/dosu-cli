@@ -1,9 +1,9 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type HookDeps, parseHookArgs, repoOfDir, runMemoryHook } from "./hook";
-import { readSessionState } from "./state";
+import { eventLogPath, readSessionState } from "./state";
 
 vi.mock("../debug/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -197,6 +197,162 @@ describe("runMemoryHook with DOSU_MEMORY_RECALL_MODE=single", () => {
   });
 });
 
+describe("runMemoryHook on Cursor", () => {
+  const BLOCK = `<prior_task_memory>\n${NOTE}\n</prior_task_memory>`;
+  const NOW = new Date("2026-10-04T12:00:00.000Z");
+  const savedPromptContext = process.env.DOSU_MEMORY_CURSOR_PROMPT_CONTEXT;
+  afterEach(() => {
+    if (savedPromptContext === undefined) delete process.env.DOSU_MEMORY_CURSOR_PROMPT_CONTEXT;
+    else process.env.DOSU_MEMORY_CURSOR_PROMPT_CONTEXT = savedPromptContext;
+  });
+
+  /** Cursor's common fields; its transcript is not read. */
+  const cursorPayload = (event: string, extra: Record<string, unknown> = {}) => ({
+    hook_event_name: event,
+    conversation_id: SESSION,
+    generation_id: "gen-1",
+    cursor_version: "3.22.12",
+    workspace_roots: ["/work/widgets"],
+    transcript_path: "/home/dev/.cursor/projects/w/agent-transcripts/t.jsonl",
+    ...extra,
+  });
+  const cursor = async (event: string, extra: Record<string, unknown> = {}, d = deps()) =>
+    JSON.parse(
+      (await runMemoryHook(cursorPayload(event, extra), { ...d, now: NOW }, { agent: "cursor" })) ??
+        "null",
+    );
+  const toolCall = (extra: Record<string, unknown> = {}) =>
+    cursor("preToolUse", { tool_name: "Read", tool_input: { path: "a.py" }, ...extra });
+  const loggedEvents = () =>
+    readFileSync(eventLogPath(SESSION, dir), "utf-8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+
+  it("always prints an explicit allow before a tool call, whatever goes wrong", async () => {
+    const allow = { permission: "allow" };
+    expect(await toolCall()).toEqual(allow);
+    expect(await toolCall({ conversation_id: "../escape" })).toEqual(allow);
+    expect(await toolCall({ parent_tool_call_id: "tool-7" })).toEqual(allow);
+    const broken = deps({
+      repoOf: () => {
+        throw new Error("git crashed");
+      },
+    });
+    expect(await cursor("preToolUse", { conversation_id: "other-session" }, broken)).toEqual(allow);
+    // A payload over the size limit or too slow to read: the installed command names the event.
+    const unread = (event: string) => runMemoryHook(null, deps(), { agent: "cursor", event });
+    expect(JSON.parse((await unread("preToolUse")) ?? "")).toEqual(allow);
+    expect(await unread("stop")).toBe("{}");
+    expect(await cursor("stop")).toEqual({});
+  });
+
+  it("recalls on the first prompt and hands the note over before the first tool call", async () => {
+    expect(await cursor("beforeSubmitPrompt", { prompt: "Fix the counter" })).toEqual({});
+    expect(recallBodies).toEqual([
+      { repo: "acme/widgets", session_id: SESSION, prompt: "Fix the counter" },
+    ]);
+
+    expect(await toolCall({ parent_tool_call_id: "tool-7" })).toEqual({ permission: "allow" });
+    expect(await toolCall()).toEqual({ permission: "allow", additional_context: BLOCK });
+    expect(await toolCall()).toEqual({ permission: "allow" });
+    expect(await cursor("beforeSubmitPrompt", { prompt: "And docs" })).toEqual({});
+    expect(recallBodies).toHaveLength(1);
+    expect(readSessionState(SESSION, dir)).toMatchObject({
+      agent: "cursor",
+      cwd: "/work/widgets",
+      transcript_path: eventLogPath(SESSION, dir),
+    });
+  });
+
+  it("hands the note over with the prompt when DOSU_MEMORY_CURSOR_PROMPT_CONTEXT=1", async () => {
+    process.env.DOSU_MEMORY_CURSOR_PROMPT_CONTEXT = "1";
+    expect(await cursor("beforeSubmitPrompt", { prompt: "Fix the counter" })).toEqual({
+      additional_context: BLOCK,
+    });
+    expect(await toolCall()).toEqual({ permission: "allow" });
+  });
+
+  it("keeps a note under Cursor's context limit", async () => {
+    respond = json({ note: "x".repeat(20_000), episode_ids: ["e1"], latency_ms: 12 });
+    await cursor("beforeSubmitPrompt", { prompt: "Fix the counter" });
+    const { additional_context: context } = await toolCall();
+    expect(context.length).toBeLessThan(10_000);
+    expect(context).toContain("characters cut");
+  });
+
+  it("puts the note back on the first tool call after a compaction", async () => {
+    await cursor("beforeSubmitPrompt", { prompt: "Fix the counter" });
+    await toolCall();
+    expect(await cursor("preCompact", { trigger: "auto" })).toEqual({});
+    expect(await toolCall()).toEqual({ permission: "allow", additional_context: BLOCK });
+    expect(await toolCall()).toEqual({ permission: "allow" });
+  });
+
+  it("logs prompts, replies, completed shell commands and edits, but not a subagent's", async () => {
+    const shell = (command: string, toolOutput: string, extra: Record<string, unknown> = {}) =>
+      cursor("postToolUse", {
+        tool_name: "Shell",
+        tool_input: { command, working_directory: "/work/widgets" },
+        tool_output: toolOutput,
+        ...extra,
+      });
+    await cursor("beforeSubmitPrompt", { prompt: "  Fix the counter\n" });
+    await shell(
+      "make test",
+      JSON.stringify({ exitCode: 2, stdout: "", stderr: "E   AssertionError: 3 != 4\n" }),
+    );
+    await shell("ls", JSON.stringify({ exitCode: 0, stdout: "a.py\n" }), {
+      parent_tool_call_id: "tool-7",
+    });
+    await shell("sleep 99", "not json");
+    await cursor("postToolUse", { tool_name: "Read", tool_input: { command: "x" } });
+    await cursor("afterFileEdit", { file_path: "/work/widgets/src/counter.py", edits: [] });
+    await cursor("afterAgentResponse", { text: "Fixed the off-by-one." });
+
+    const ts = NOW.toISOString();
+    expect(loggedEvents()).toEqual([
+      { type: "user_prompt", ts, text: "Fix the counter" },
+      {
+        type: "command",
+        ts,
+        command: "make test",
+        rc: 2,
+        error_line: "E AssertionError: 3 != 4",
+      },
+      { type: "file_edit", ts, tool: "Write", path: "src/counter.py" },
+      { type: "assistant_text", ts, text: "Fixed the off-by-one." },
+    ]);
+  });
+
+  it("hands stop and sessionEnd to a detached sync", async () => {
+    await cursor("sessionStart", { session_id: SESSION, composer_mode: "agent" });
+    await cursor("stop", { status: "completed", loop_count: 0 });
+    await cursor("sessionEnd", { session_id: SESSION, reason: "completed" });
+    expect(spawned).toEqual([
+      ["memory", "sync", "--session", SESSION],
+      ["memory", "sync", "--session", SESSION, "--flush"],
+    ]);
+  });
+});
+
+describe("runMemoryHook for Claude Code, run by Cursor", () => {
+  const savedVersion = process.env.CURSOR_VERSION;
+  afterEach(() => {
+    if (savedVersion === undefined) delete process.env.CURSOR_VERSION;
+    else process.env.CURSOR_VERSION = savedVersion;
+  });
+
+  it("leaves the session to the Cursor entry", async () => {
+    const prompt = payload("UserPromptSubmit", { prompt: "Fix it" });
+    expect(await runMemoryHook({ ...prompt, cursor_version: "3.22.12" }, deps())).toBeNull();
+    process.env.CURSOR_VERSION = "3.22.12";
+    expect(await runMemoryHook(prompt, deps())).toBeNull();
+    expect(recallBodies).toEqual([]);
+    expect(readSessionState(SESSION, dir)).toBeNull();
+  });
+});
+
 describe("repoOfDir", () => {
   const saved = process.env.DOSU_MEMORY_REPO;
   afterEach(() => {
@@ -227,7 +383,13 @@ describe("parseHookArgs", () => {
       agent: "codex",
       stageTwo: true,
     });
-    expect(parseHookArgs(["--agent", "cursor"])).toBeNull();
+    expect(parseHookArgs(["--agent", "cursor"])).toEqual({ agent: "cursor" });
+    expect(parseHookArgs(["--agent", "cursor", "--event", "preToolUse"])).toEqual({
+      agent: "cursor",
+      event: "preToolUse",
+    });
+    expect(parseHookArgs(["--agent", "cursor", "--event"])).toBeNull();
+    expect(parseHookArgs(["--agent", "windsurf"])).toBeNull();
     expect(parseHookArgs(["--agent"])).toBeNull();
     expect(parseHookArgs(["--verbose"])).toBeNull();
   });

@@ -273,3 +273,24 @@ describe("syncSession for Codex", () => {
     expect((await syncSession(SESSION, {}, deps())).status).toBe("nothing-new");
   });
 });
+
+describe("syncSession for Cursor", () => {
+  it("uploads the event log its hooks wrote, as source cursor, skipping a torn line", async () => {
+    const log = join(dir, "events.jsonl");
+    const command = { type: "command", ts: TS, command: "make test", rc: 2, error_line: "E x" };
+    writeFileSync(
+      log,
+      `${JSON.stringify({ type: "user_prompt", ts: TS, text: "Fix it" })}\n{"type":"comm\n${JSON.stringify(command)}\n`,
+    );
+    const state = readSessionState(SESSION, dir) as SessionState;
+    writeSessionState({ ...state, agent: "cursor", transcript_path: log }, dir);
+
+    expect((await syncSession(SESSION, {}, deps())).status).toBe("uploaded");
+    expect(chunks()[0]).toMatchObject({
+      source: "cursor",
+      first_line: 1,
+      last_line: 3,
+      events: [{ type: "user_prompt", ts: TS, text: "Fix it" }, command],
+    });
+  });
+});

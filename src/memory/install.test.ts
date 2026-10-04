@@ -1,7 +1,15 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+let configDir: string;
+
+vi.mock("node:os", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:os")>();
+  return { ...original, homedir: () => configDir };
+});
+
 import { HOOK_COMMAND } from "../hooks/formats";
 import {
   disableMemoryHooks,
@@ -11,7 +19,6 @@ import {
   memoryHooksTarget,
 } from "./install";
 
-let configDir: string;
 const saved = {
   CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
   CODEX_HOME: process.env.CODEX_HOME,
@@ -96,7 +103,9 @@ describe("memory hooks in Claude Code settings", () => {
     expect(isMemoryHookCommand("dosu memory hook")).toBe(true);
     expect(isMemoryHookCommand("dosu memory hook --agent codex --stage-two")).toBe(true);
     expect(isMemoryHookCommand("DOSU_DEV=true '/bin/bun' '/src/index.ts' memory hook")).toBe(true);
-    expect(isMemoryHookCommand("dosu memory hook --agent cursor")).toBe(false);
+    expect(isMemoryHookCommand("dosu memory hook --agent cursor")).toBe(true);
+    expect(isMemoryHookCommand("dosu memory hook --agent cursor --event preToolUse")).toBe(true);
+    expect(isMemoryHookCommand("dosu memory hook --agent windsurf")).toBe(false);
     expect(isMemoryHookCommand(HOOK_COMMAND)).toBe(false);
     expect(isMemoryHookCommand("./my-memory hook.sh")).toBe(false);
     expect(isMemoryHookCommand(undefined)).toBe(false);
@@ -165,5 +174,43 @@ describe("memory hooks in Codex's hooks.json", () => {
         SessionEnd: [{ hooks: [own] }],
       },
     });
+  });
+});
+
+describe("memory hooks in Cursor's hooks.json", () => {
+  it("lists every event flat beside the knowledge hook, and removes only its own", () => {
+    const cursorHooks = join(configDir, ".cursor", "hooks.json");
+    const knowledge = { command: HOOK_COMMAND };
+    mkdirSync(join(configDir, ".cursor"));
+    writeFileSync(cursorHooks, JSON.stringify({ version: 1, hooks: { stop: [knowledge] } }));
+    expect(memoryHooksTarget("cursor").configPath).toBe(cursorHooks);
+    enableMemoryHooks("cursor");
+    enableMemoryHooks("cursor");
+
+    const hook = (event: string) => ({
+      command: `dosu memory hook --agent cursor --event ${event}`,
+    });
+    expect(JSON.parse(readFileSync(cursorHooks, "utf-8"))).toEqual({
+      version: 1,
+      hooks: {
+        sessionStart: [hook("sessionStart")],
+        beforeSubmitPrompt: [{ ...hook("beforeSubmitPrompt"), timeout: 120 }],
+        preToolUse: [{ ...hook("preToolUse"), timeout: 5 }],
+        postToolUse: [{ ...hook("postToolUse"), matcher: "Shell", timeout: 5 }],
+        afterFileEdit: [{ ...hook("afterFileEdit"), timeout: 5 }],
+        afterAgentResponse: [{ ...hook("afterAgentResponse"), timeout: 5 }],
+        preCompact: [hook("preCompact")],
+        stop: [knowledge, hook("stop")],
+        sessionEnd: [hook("sessionEnd")],
+      },
+    });
+    expect(Object.values(memoryHookStatus("cursor")).every(Boolean)).toBe(true);
+
+    disableMemoryHooks("cursor");
+    expect(JSON.parse(readFileSync(cursorHooks, "utf-8"))).toEqual({
+      version: 1,
+      hooks: { stop: [knowledge] },
+    });
+    expect(Object.values(memoryHookStatus("cursor")).some(Boolean)).toBe(false);
   });
 });

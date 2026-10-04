@@ -1,8 +1,10 @@
 /** `dosu memory hook`: the one entry point for Claude Code's SessionStart, UserPromptSubmit,
  * PostToolBatch, Stop, and SessionEnd hooks, and, with `--agent codex`, for Codex's SessionStart,
  * UserPromptSubmit, Stop, and SessionEnd hooks. Both agents send the same payload fields and take
- * the same output. It must never block or break the session: every failure is logged locally and
- * the hook exits 0 with no output. Only an injected note is printed. */
+ * the same output. With `--agent cursor` it serves Cursor's hooks, whose payloads and output
+ * differ (see `runCursorHook`). It must never block or break the session: every failure is logged
+ * locally and the hook exits 0 with no output. Only an injected note is printed, and on Cursor
+ * one JSON object every time. */
 
 import { logger } from "../debug/logger";
 import { readHookStdin } from "../sessions/capture";
@@ -13,7 +15,11 @@ import { type MemoryApi, memoryApiFromConfig, type RecallRequest, recall, usable
 import { headCommit } from "./git";
 import { clip } from "./record-rules";
 import {
+  appendSessionEvent,
   claimFullRecallStart,
+  claimNoteInjection,
+  eventLogPath,
+  forgetHandOvers,
   isSafeSessionId,
   MEMORY_AGENTS,
   type MemoryAgent,
@@ -24,6 +30,7 @@ import {
   type SessionState,
   writeSessionState,
 } from "./state";
+import { cursorHookEvent } from "./transcript";
 import {
   claimFullNote,
   injectedFullNote,
@@ -36,6 +43,9 @@ import {
 const RECALL_PROMPT_CHARS = 32_000;
 /** One line ahead of stage two's block, which arrives mid-task after stage one. */
 export const FULL_NOTE_PREFACE = "Addendum: detailed notes for this task.";
+/** Cursor drops an `additional_context` over 10,000 characters whole. The margin covers `clip`'s
+ * marker and characters outside the BMP, which Cursor counts twice. */
+const CURSOR_CONTEXT_CHARS = 9_000;
 
 interface HookPayload {
   hook_event_name: string;
@@ -90,11 +100,12 @@ function contextOutput(event: ContextEvent, context: string): string {
   });
 }
 
-/** Which installed hook ran: the agent, and whether it is Codex's background prompt hook, which
- * runs stage two. */
+/** Which installed hook ran: the agent, whether it is Codex's background prompt hook, which runs
+ * stage two, and, on Cursor, the event it is installed for. */
 export interface HookEntry {
   agent: MemoryAgent;
   stageTwo?: boolean;
+  event?: string;
 }
 
 export interface HookDeps {
@@ -146,7 +157,10 @@ function ensureState(payload: HookPayload, agent: MemoryAgent, deps: HookDeps): 
   const state = newSessionState({
     session_id: payload.session_id,
     agent,
-    transcript_path: payload.transcript_path,
+    transcript_path:
+      agent === "cursor"
+        ? eventLogPath(payload.session_id, deps.configDir)
+        : payload.transcript_path,
     cwd: payload.cwd,
     repo: (deps.repoOf ?? repoOfDir)(payload.cwd),
     start_head: (deps.headOf ?? headCommit)(payload.cwd),
@@ -194,6 +208,17 @@ async function onPrompt(
     const full = claimFullNote(state.session_id, deps.configDir);
     return full ? contextOutput("UserPromptSubmit", fullNoteBlock(full)) : null;
   }
+  const note = await firstRecall(payload, state, deps);
+  return note ? contextOutput("UserPromptSubmit", memoryBlock(note)) : null;
+}
+
+/** The session's one recall, on its first prompt: the note to hand over (stage one in two-stage
+ * mode), saved in the session state for compaction, or null. */
+async function firstRecall(
+  payload: HookPayload,
+  state: SessionState,
+  deps: HookDeps,
+): Promise<string | null> {
   state.recall_attempted = true;
   writeSessionState(state, deps.configDir);
   if (!state.repo) {
@@ -218,7 +243,7 @@ async function onPrompt(
   if (!note) return null;
   state.note = note;
   writeSessionState(state, deps.configDir);
-  return contextOutput("UserPromptSubmit", memoryBlock(note));
+  return note;
 }
 
 /** Codex's background prompt hook: stage two for the session's first prompt, started and waited
@@ -248,13 +273,137 @@ function afterCompaction(state: SessionState, deps: HookDeps): string | null {
   return blocks.length > 0 ? contextOutput("SessionStart", blocks.join("\n\n")) : null;
 }
 
+/** Cursor's payload in the shared shape: the conversation id is the session id (sessionStart sends
+ * it as `session_id` too), the first workspace root is the directory, and `parent_tool_call_id`,
+ * set on a subagent's tool calls, marks a subagent. */
+function parseCursorPayload(p: Record<string, unknown>): HookPayload | null {
+  const sessionId = p.conversation_id ?? p.session_id;
+  const roots = p.workspace_roots;
+  const cwd = Array.isArray(roots) && typeof roots[0] === "string" ? roots[0] : p.cwd;
+  if (
+    typeof p.hook_event_name !== "string" ||
+    typeof sessionId !== "string" ||
+    !isSafeSessionId(sessionId) ||
+    typeof cwd !== "string"
+  ) {
+    return null;
+  }
+  return {
+    hook_event_name: p.hook_event_name,
+    session_id: sessionId,
+    transcript_path: null,
+    cwd,
+    ...(typeof p.prompt === "string" ? { prompt: p.prompt } : {}),
+    ...(typeof p.parent_tool_call_id === "string" ? { agent_id: p.parent_tool_call_id } : {}),
+  };
+}
+
+/** `DOSU_MEMORY_CURSOR_PROMPT_CONTEXT=1` hands notes to Cursor with the prompt, as on Claude Code.
+ * Cursor documents no context on beforeSubmitPrompt, though its CLI reads one; until that is
+ * confirmed, stage one waits for the first tool call. */
+function cursorPromptContext(): boolean {
+  return process.env.DOSU_MEMORY_CURSOR_PROMPT_CONTEXT === "1";
+}
+
+/** The first prompt recalls; with prompt context on, it hands stage one over, and later prompts
+ * stage two once ready. */
+async function cursorPrompt(
+  payload: HookPayload,
+  state: SessionState,
+  deps: HookDeps,
+): Promise<string | null> {
+  if (state.recall_attempted) {
+    const full = cursorPromptContext() ? claimFullNote(state.session_id, deps.configDir) : null;
+    return full ? fullNoteBlock(full) : null;
+  }
+  const note = await firstRecall(payload, state, deps);
+  const handOver =
+    note !== null && cursorPromptContext() && claimNoteInjection(state.session_id, deps.configDir);
+  return handOver ? memoryBlock(note) : null;
+}
+
+/** Before a tool call, one note at a time: stage one unless already handed over, else stage two
+ * once ready. A compaction makes both due again (see `forgetHandOvers`). */
+function cursorToolContext(state: SessionState, deps: HookDeps): string | null {
+  const sessionId = state.session_id;
+  if (state.note && claimNoteInjection(sessionId, deps.configDir)) return memoryBlock(state.note);
+  const full = claimFullNote(sessionId, deps.configDir);
+  return full ? fullNoteBlock(full) : null;
+}
+
+/** One Cursor event: record what it says, then act on it. Returns the context to hand over. */
+async function cursorEvent(
+  record: Record<string, unknown>,
+  deps: HookDeps,
+): Promise<string | null> {
+  const payload = parseCursorPayload(record);
+  if (!payload) {
+    logger.warn("memory", "hook payload missing or malformed; ignored");
+    return null;
+  }
+  // A subagent's context is not the main agent's, nor are its commands the session's.
+  if (payload.agent_id) return null;
+  const state = ensureState(payload, "cursor", deps);
+  const event = cursorHookEvent(record, state.cwd, (deps.now ?? new Date()).toISOString());
+  if (event) appendSessionEvent(state.session_id, event, deps.configDir);
+  const spawn = deps.spawn ?? spawnDetachedSelf;
+  switch (payload.hook_event_name) {
+    case "sessionStart":
+      removeStaleFullRecallRequests(deps.configDir, deps.now);
+      return null;
+    case "beforeSubmitPrompt":
+      return await cursorPrompt(payload, state, deps);
+    case "preToolUse":
+      return cursorToolContext(state, deps);
+    case "preCompact":
+      forgetHandOvers(state.session_id, deps.configDir);
+      return null;
+    case "stop":
+      spawn(["memory", "sync", "--session", state.session_id]);
+      return null;
+    case "sessionEnd":
+      removeStaleFullRecallRequests(deps.configDir, deps.now);
+      spawn(["memory", "sync", "--session", state.session_id, "--flush"]);
+      return null;
+    default:
+      return null;
+  }
+}
+
+/** Cursor's hooks print one JSON object each time, with the note, if any, as `additional_context`.
+ * preToolUse is a permission check, and Cursor blocks the tool call when its output does not
+ * parse, so that event always prints an explicit allow, failures included. The installed command
+ * names its event, so even a payload too large or too slow to read gets the allow. */
+async function runCursorHook(raw: unknown, deps: HookDeps, event?: string): Promise<string> {
+  const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+  const output: Record<string, unknown> =
+    (event ?? record.hook_event_name) === "preToolUse" ? { permission: "allow" } : {};
+  try {
+    const context = await cursorEvent(record, deps);
+    if (context) output.additional_context = clip(context, CURSOR_CONTEXT_CHARS);
+  } catch (err) {
+    logger.warn("memory", `hook failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return JSON.stringify(output);
+}
+
+/** Cursor also runs the hooks in Claude Code's settings (its third-party hooks setting, on by
+ * default), with its own payload and environment. */
+function fromCursor(raw: unknown): boolean {
+  const cursorPayload = typeof raw === "object" && raw !== null && "cursor_version" in raw;
+  return cursorPayload || process.env.CURSOR_VERSION !== undefined;
+}
+
 /** Handle one hook payload; returns what to print on stdout, or null for nothing. */
 export async function runMemoryHook(
   raw: unknown,
   deps: HookDeps = {},
   entry: HookEntry = { agent: "claude-code" },
 ): Promise<string | null> {
+  if (entry.agent === "cursor") return runCursorHook(raw, deps, entry.event);
   try {
+    // There the `--agent cursor` entry handles the session.
+    if (entry.agent === "claude-code" && fromCursor(raw)) return null;
     const payload = parsePayload(raw);
     if (!payload) {
       logger.warn("memory", "hook payload missing or malformed; ignored");
@@ -299,13 +448,16 @@ export async function runMemoryHook(
   }
 }
 
-/** `[--agent claude-code|codex] [--stage-two]`, parsed without Commander for the fast path in
- * index.ts; null for anything else. */
+/** `[--agent claude-code|codex|cursor] [--event <name>] [--stage-two]`, parsed without Commander
+ * for the fast path in index.ts; null for anything else. */
 export function parseHookArgs(args: readonly string[]): HookEntry | null {
   const entry: HookEntry = { agent: "claude-code" };
   for (let i = 0; i < args.length; i += 1) {
     if (args[i] === "--stage-two") {
       entry.stageTwo = true;
+    } else if (args[i] === "--event" && /^[A-Za-z]+$/.test(args[i + 1] ?? "")) {
+      entry.event = args[i + 1];
+      i += 1;
     } else if (args[i] === "--agent" && MEMORY_AGENTS.some((agent) => agent === args[i + 1])) {
       entry.agent = args[i + 1] as MemoryAgent;
       i += 1;

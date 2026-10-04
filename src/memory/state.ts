@@ -3,9 +3,11 @@
  * under the CLI config dir (so `DOSU_DEV` installs stay isolated). Stage two of a
  * two-stage recall has files of its own: the detached poller writes it while syncs rewrite the
  * session state, and neither may overwrite the other. The first prompt hands the poller its
- * request in one more file, which the poller deletes on reading. */
+ * request in one more file, which the poller deletes on reading. Cursor sessions also keep an
+ * event log, which their hooks append to and syncs read in place of a transcript. */
 
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -17,10 +19,10 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config/config";
-import type { ChunkRequest, RecallRequest } from "./api";
+import type { ChunkRequest, MemoryEvent, RecallRequest } from "./api";
 
 /** The coding agents whose hooks feed agent memory. */
-export const MEMORY_AGENTS = ["claude-code", "codex"] as const;
+export const MEMORY_AGENTS = ["claude-code", "codex", "cursor"] as const;
 export type MemoryAgent = (typeof MEMORY_AGENTS)[number];
 
 const SAFE_SESSION_ID = /^[A-Za-z0-9_-]+$/;
@@ -60,7 +62,8 @@ export interface SessionState extends TranscriptCursor {
   session_id: string;
   /** Which converter reads the transcript. */
   agent: MemoryAgent;
-  /** Null when the agent keeps none (an ephemeral Codex session): nothing to upload. */
+  /** Null when the agent keeps none (an ephemeral Codex session): nothing to upload. A Cursor
+   * session's event log. */
   transcript_path: string | null;
   cwd: string;
   /** `owner/name` from the origin remote; null disables memory for the session. */
@@ -119,6 +122,14 @@ function fullRecallStartedPath(sessionId: string, configDir?: string): string {
   return join(memoryDir(configDir), `${sessionId}.full-recall.started`);
 }
 
+function noteInjectedPath(sessionId: string, configDir?: string): string {
+  return join(memoryDir(configDir), `${sessionId}.note.injected`);
+}
+
+export function eventLogPath(sessionId: string, configDir?: string): string {
+  return join(memoryDir(configDir), `${sessionId}.events.jsonl`);
+}
+
 export function sessionLockPath(sessionId: string, configDir?: string): string {
   return join(memoryDir(configDir), `${sessionId}.lock`);
 }
@@ -132,11 +143,15 @@ function readJSON<T extends { session_id: string }>(path: string, sessionId: str
   }
 }
 
+function ensureMemoryDir(configDir?: string): void {
+  const dir = memoryDir(configDir);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+}
+
 /** Atomic replace (temp file + rename), owner-only permissions. */
 function writeJSON(sessionId: string, path: string, value: unknown, configDir?: string): void {
   if (!isSafeSessionId(sessionId)) throw new Error("unsafe session id");
-  const dir = memoryDir(configDir);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  ensureMemoryDir(configDir);
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(value), { mode: 0o600 });
   renameSync(tmp, path);
@@ -200,12 +215,22 @@ export function fullRecallInjected(sessionId: string, configDir?: string): boole
   return isSafeSessionId(sessionId) && existsSync(fullRecallInjectedPath(sessionId, configDir));
 }
 
+/** One line per event, appended as it happens; a sync uploads the lines added since the last. */
+export function appendSessionEvent(
+  sessionId: string,
+  event: MemoryEvent,
+  configDir?: string,
+): void {
+  if (!isSafeSessionId(sessionId)) throw new Error("unsafe session id");
+  ensureMemoryDir(configDir);
+  appendFileSync(eventLogPath(sessionId, configDir), `${JSON.stringify(event)}\n`, { mode: 0o600 });
+}
+
 /** An exclusive create of a marker file: of several hooks racing, exactly one wins. */
 function claimMarker(path: string, sessionId: string, configDir?: string): boolean {
   if (!isSafeSessionId(sessionId)) return false;
-  const dir = memoryDir(configDir);
   try {
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    ensureMemoryDir(configDir);
     writeFileSync(path, "", { flag: "wx", mode: 0o600 });
     return true;
   } catch {
@@ -224,6 +249,20 @@ export function claimFullRecallInjection(sessionId: string, configDir?: string):
  * first. */
 export function claimFullRecallStart(sessionId: string, configDir?: string): boolean {
   return claimMarker(fullRecallStartedPath(sessionId, configDir), sessionId, configDir);
+}
+
+/** Take the session's single hand-over of stage one, for Cursor, which hands it over before a
+ * tool call when its prompt hook does not. */
+export function claimNoteInjection(sessionId: string, configDir?: string): boolean {
+  return claimMarker(noteInjectedPath(sessionId, configDir), sessionId, configDir);
+}
+
+/** Cursor's preCompact: what was handed over may be gone after the compaction, so both notes
+ * count as not handed over again, and the tool calls that follow hand them over as before. */
+export function forgetHandOvers(sessionId: string, configDir?: string): void {
+  if (!isSafeSessionId(sessionId)) return;
+  rmSync(noteInjectedPath(sessionId, configDir), { force: true });
+  rmSync(fullRecallInjectedPath(sessionId, configDir), { force: true });
 }
 
 export function newSessionState(fields: {

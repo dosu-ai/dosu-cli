@@ -18,13 +18,19 @@ import {
 } from "./api";
 import { diffSnapshot } from "./git";
 import {
+  type MemoryAgent,
   type Outbox,
   readSessionState,
   type SessionState,
   sessionLockPath,
   writeSessionState,
 } from "./state";
-import { type Conversion, convertCodexTranscriptLines, convertTranscriptLines } from "./transcript";
+import {
+  type Conversion,
+  convertCodexTranscriptLines,
+  convertCursorEventLines,
+  convertTranscriptLines,
+} from "./transcript";
 
 type SyncStatus =
   | "uploaded"
@@ -54,6 +60,12 @@ export interface SyncDeps {
   retryDelaysMs?: number[];
   sleep?: (ms: number) => Promise<void>;
 }
+
+const SOURCE_BY_AGENT: Record<MemoryAgent, ChunkRequest["source"]> = {
+  "claude-code": "claude_code",
+  codex: "codex",
+  cursor: "cursor",
+};
 
 const LOCK_WAIT_MS = 90_000;
 const LOCK_POLL_MS = 250;
@@ -107,6 +119,9 @@ function convertLines(state: SessionState, lines: string[]): Conversion {
   if (state.agent === "codex") {
     return { events: convertCodexTranscriptLines(lines, state.cwd), pending: state.pending_tools };
   }
+  if (state.agent === "cursor") {
+    return { events: convertCursorEventLines(lines), pending: state.pending_tools };
+  }
   return convertTranscriptLines(lines, state.pending_tools, state.cwd);
 }
 
@@ -132,7 +147,7 @@ function buildChunk(
   const diff = snapshot(state.cwd, state.start_head);
   const chunk: ChunkRequest = {
     repo,
-    source: state.agent === "codex" ? "codex" : "claude_code",
+    source: SOURCE_BY_AGENT[state.agent],
     seq: state.next_seq,
     first_line: state.line_offset + 1,
     last_line: next.line_offset,

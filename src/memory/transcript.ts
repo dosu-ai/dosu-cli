@@ -1,8 +1,8 @@
 /** Agent transcript lines → compact memory events. Claude Code: tool calls are matched to their
  * results the way the frozen memwriter's `claude_code.py` does it (coding-memory-bench 0951e6a);
  * calls whose result lands in a later chunk wait in `pending`. Codex: see
- * `convertCodexTranscriptLines`. Full tool output never leaves this module: a command keeps only
- * its return code and error line. */
+ * `convertCodexTranscriptLines`. Cursor: see `cursorHookEvent`. Full tool output never leaves this
+ * module: a command keeps only its return code and error line. */
 
 import type { MemoryEvent } from "./api";
 import { clip, parseCommandObservation, prepareRecordedCommand } from "./record-rules";
@@ -231,6 +231,65 @@ export function convertCodexTranscriptLines(lines: string[], cwd: string): Memor
       for (const path of Object.keys(asRecord(item.changes) ?? {})) {
         events.push({ type: "file_edit", ts, tool: "apply_patch", path: relativePath(path, cwd) });
       }
+    }
+  }
+  return events;
+}
+
+/** The event a Cursor hook payload records, or null. Cursor's transcript has neither tool results
+ * nor timestamps, so its hooks record as things happen: the prompt (beforeSubmitPrompt), the
+ * agent's reply (afterAgentResponse), a shell command with the exit code in its JSON output
+ * (postToolUse on Shell), and an edited file (afterFileEdit). A command without an exit code did
+ * not complete and records nothing. */
+export function cursorHookEvent(
+  payload: Record<string, unknown>,
+  cwd: string,
+  ts: string,
+): MemoryEvent | null {
+  switch (payload.hook_event_name) {
+    case "beforeSubmitPrompt": {
+      const text = typeof payload.prompt === "string" ? payload.prompt.trim() : "";
+      return text ? { type: "user_prompt", ts, text: clip(text, USER_PROMPT_CHARS) } : null;
+    }
+    case "afterAgentResponse": {
+      const text = typeof payload.text === "string" ? payload.text.trim() : "";
+      return text ? { type: "assistant_text", ts, text: clip(text, ASSISTANT_TEXT_CHARS) } : null;
+    }
+    case "postToolUse": {
+      const command = asRecord(payload.tool_input)?.command;
+      if (payload.tool_name !== "Shell" || typeof command !== "string") return null;
+      let result: JsonRecord | null;
+      try {
+        result = asRecord(JSON.parse(String(payload.tool_output)));
+      } catch {
+        return null;
+      }
+      const exitCode = result?.exitCode;
+      if (typeof exitCode !== "number") return null;
+      const output = [result?.stdout, result?.stderr].filter((part) => typeof part === "string");
+      return commandEvent(ts, prepareRecordedCommand(command), exitCode, output.join("\n"));
+    }
+    case "afterFileEdit":
+      return typeof payload.file_path === "string"
+        ? { type: "file_edit", ts, tool: "Write", path: relativePath(payload.file_path, cwd) }
+        : null;
+    default:
+      return null;
+  }
+}
+
+const EVENT_TYPES = new Set(["user_prompt", "assistant_text", "command", "file_edit"]);
+
+/** A Cursor session's event log, which its hooks wrote one event per line; malformed lines are
+ * skipped. */
+export function convertCursorEventLines(lines: string[]): MemoryEvent[] {
+  const events: MemoryEvent[] = [];
+  for (const line of lines) {
+    try {
+      const event = asRecord(JSON.parse(line));
+      if (event && EVENT_TYPES.has(String(event.type))) events.push(event as MemoryEvent);
+    } catch {
+      // A line cut short by a crash.
     }
   }
   return events;

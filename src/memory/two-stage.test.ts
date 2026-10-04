@@ -454,3 +454,43 @@ describe("two-stage recall on Codex", () => {
     expect(await compact()).toBe(output("SessionStart", `${block(QUICK)}\n\n${fullBlock}`));
   });
 });
+
+describe("two-stage recall on Cursor", () => {
+  const cursor = (event: string, extra: Record<string, unknown> = {}) =>
+    runMemoryHook(
+      {
+        hook_event_name: event,
+        conversation_id: SESSION,
+        cursor_version: "3.22.12",
+        workspace_roots: ["/work/widgets"],
+        ...extra,
+      },
+      deps(),
+      { agent: "cursor" },
+    );
+  const toolCall = () => cursor("preToolUse", { tool_name: "Grep", tool_input: { pattern: "x" } });
+  const allowWith = (context: string) =>
+    JSON.stringify({ permission: "allow", additional_context: context });
+
+  it("hands over stage one before the first tool call and stage two before a later one", async () => {
+    expect(await cursor("beforeSubmitPrompt", { prompt: "Fix the counter" })).toBe("{}");
+    expect(spawned).toEqual([["memory", "recall-poll", "--session", SESSION]]);
+    await poll();
+
+    expect(await toolCall()).toBe(allowWith(block(QUICK)));
+    expect(await toolCall()).toBe(allowWith(fullBlock));
+    expect(await toolCall()).toBe(JSON.stringify({ permission: "allow" }));
+  });
+
+  it("after a compaction, hands both notes over again, one per tool call", async () => {
+    await cursor("beforeSubmitPrompt", { prompt: "Fix the counter" });
+    await poll();
+    await toolCall();
+    await toolCall();
+
+    expect(await cursor("preCompact", { trigger: "auto" })).toBe("{}");
+    expect(await toolCall()).toBe(allowWith(block(QUICK)));
+    expect(await toolCall()).toBe(allowWith(fullBlock));
+    expect(await toolCall()).toBe(JSON.stringify({ permission: "allow" }));
+  });
+});
