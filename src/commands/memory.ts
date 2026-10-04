@@ -58,18 +58,31 @@ function hooksCommand(): Command {
     .description("Remove the memory hooks")
     .addOption(agentOption())
     .action((opts: { agent: MemoryAgent }) => {
-      changeHooks(opts.agent, disableMemoryHooks, "disabled");
+      const moved = changeHooks(opts.agent, disableMemoryHooks, "disabled");
+      if (moved) {
+        console.log(
+          pc.yellow(
+            `  ${moved} other hook${moved === 1 ? "" : "s"} moved within their group; ` +
+              "Codex skips them until you trust them again in /hooks.",
+          ),
+        );
+      }
     });
 
   return cmd;
 }
 
-function changeHooks(agent: MemoryAgent, change: (agent: MemoryAgent) => void, verb: string): void {
+function changeHooks<T>(
+  agent: MemoryAgent,
+  change: (agent: MemoryAgent) => T,
+  verb: string,
+): T | undefined {
   const { name, configPath, enableNote } = memoryHooksTarget(agent);
   try {
-    change(agent);
+    const result = change(agent);
     console.log(`✓ ${name} · memory hooks ${verb} (${configPath})`);
     if (verb === "enabled" && enableNote) console.log(pc.dim(`  ${enableNote}`));
+    return result;
   } catch (err) {
     const message =
       err instanceof HookConfigError || err instanceof Error ? err.message : String(err);

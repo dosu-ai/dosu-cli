@@ -143,7 +143,27 @@ describe("memory hooks in Codex's hooks.json", () => {
     });
     expect(memoryHookStatus("claude-code").SessionStart).toBe(false);
 
-    disableMemoryHooks("codex");
+    expect(disableMemoryHooks("codex")).toBe(0);
     expect(codexHooks()).toEqual({ hooks: { Stop: [{ hooks: [knowledge] }] } });
+  });
+
+  it("disables without moving the hooks after ours, since Codex trusts hooks by position", () => {
+    enableMemoryHooks("codex");
+    const own = { type: "command", command: "./audit.sh" };
+    const config = codexHooks();
+    config.hooks.UserPromptSubmit.push({ hooks: [own] });
+    config.hooks.Stop.push({ hooks: [{ type: "command", command: HOOK_COMMAND }] });
+    // One of ours moved by hand into a group ahead of a user's hook.
+    config.hooks.SessionEnd = [{ hooks: [...config.hooks.SessionEnd[0].hooks, own] }];
+    writeFileSync(join(configDir, "hooks.json"), JSON.stringify(config));
+
+    expect(disableMemoryHooks("codex")).toBe(1);
+    expect(codexHooks()).toEqual({
+      hooks: {
+        UserPromptSubmit: [{ hooks: [] }, { hooks: [] }, { hooks: [own] }],
+        Stop: [{ hooks: [] }, { hooks: [{ type: "command", command: HOOK_COMMAND }] }],
+        SessionEnd: [{ hooks: [own] }],
+      },
+    });
   });
 });

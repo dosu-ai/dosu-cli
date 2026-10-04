@@ -185,6 +185,38 @@ export function removeGroupedHook(
   return config;
 }
 
+const isEmptyGroup = (group: GroupedHookGroup) =>
+  Array.isArray(group?.hooks) && group.hooks.length === 0;
+
+/** Remove our entries without moving anyone else's. Codex keys a hook's trust to its file, event,
+ * group index and handler index (`hook_key` in codex-rs/hooks, 0.153 and 0.160), so a group left
+ * empty stays as `{"hooks": []}` while a later group follows it; empty groups at the end go.
+ * Returns how many other handlers still moved, which happens only where one of ours shared their
+ * group: Codex skips those until they are trusted again. */
+export function removeGroupedHookInPlace(
+  config: JsonConfig,
+  event: string,
+  owns: GroupedHookSpec["owns"],
+): { config: JsonConfig; moved: number } {
+  const groups = groupedEventArray(config, event);
+  if (groups.length === 0) return { config, moved: 0 };
+  let moved = 0;
+  const kept = groups.map((group) => {
+    if (!Array.isArray(group?.hooks)) return group;
+    const first = group.hooks.findIndex((h) => owns(h?.command));
+    if (first < 0) return group;
+    moved += group.hooks.slice(first).filter((h) => !owns(h?.command)).length;
+    return { ...group, hooks: group.hooks.filter((h) => !owns(h?.command)) };
+  });
+  while (kept.length > 0 && isEmptyGroup(kept[kept.length - 1])) kept.pop();
+  if (kept.length > 0) {
+    config.hooks[event] = kept;
+  } else {
+    delete config.hooks[event];
+  }
+  return { config, moved };
+}
+
 // --- Cursor format ---
 
 interface CursorHookEntry {

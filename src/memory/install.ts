@@ -13,6 +13,7 @@ import {
   hasGroupedHook,
   readHookConfig,
   removeGroupedHook,
+  removeGroupedHookInPlace,
   writeHookConfig,
 } from "../hooks/formats";
 import type { MemoryAgent } from "./state";
@@ -58,6 +59,8 @@ interface AgentHooks {
   hooks: readonly MemoryHook[];
   /** Shown after enabling. */
   enableNote?: string;
+  /** Codex trusts each hook by its position in the file: removing ours must not move others. */
+  trustsByPosition?: boolean;
 }
 
 const AGENT_HOOKS: Record<MemoryAgent, AgentHooks> = {
@@ -71,6 +74,7 @@ const AGENT_HOOKS: Record<MemoryAgent, AgentHooks> = {
     configPath: () => join(codexHome(), "hooks.json"),
     hooks: CODEX_HOOKS,
     enableNote: "Codex skips new hooks until you trust them: open /hooks in Codex and trust them.",
+    trustsByPosition: true,
   },
 };
 
@@ -141,12 +145,22 @@ export function enableMemoryHooks(agent: MemoryAgent): void {
   writeHookConfig(path, config);
 }
 
-export function disableMemoryHooks(agent: MemoryAgent): void {
-  const { configPath, hooks } = AGENT_HOOKS[agent];
+/** Returns how many of the agent's other hooks moved and so need trusting again (Codex only, and
+ * only where one of ours shares a group with them). */
+export function disableMemoryHooks(agent: MemoryAgent): number {
+  const { configPath, hooks, trustsByPosition } = AGENT_HOOKS[agent];
   const path = configPath();
   let config = readHookConfig(path);
+  let moved = 0;
   for (const hook of hooks) {
-    config = removeGroupedHook(config, hook.event, ownedBy(hook));
+    if (trustsByPosition) {
+      const removed = removeGroupedHookInPlace(config, hook.event, ownedBy(hook));
+      config = removed.config;
+      moved += removed.moved;
+    } else {
+      config = removeGroupedHook(config, hook.event, ownedBy(hook));
+    }
   }
   writeHookConfig(path, config);
+  return moved;
 }
