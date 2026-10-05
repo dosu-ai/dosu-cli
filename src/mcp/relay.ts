@@ -38,8 +38,9 @@ export interface McpRelayOptions {
 
 export interface McpRelay {
   /** POST one JSON-RPC message (or batch) and pass every message the server sends back to
-   * `emit`, ending with exactly one answer per request it carried. Never throws. */
-  send(message: unknown, emit: (message: unknown) => void): Promise<void>;
+   * `emit`, ending with exactly one answer per request it carried. `session` (x-dosu-session)
+   * names the agent session the message belongs to, when known. Never throws. */
+  send(message: unknown, emit: (message: unknown) => void, session?: string | null): Promise<void>;
   /** Ends the server-side session, when the server opened one. Never throws. */
   close(): Promise<void>;
 }
@@ -189,7 +190,7 @@ export function createMcpRelay(options: McpRelayOptions): McpRelay {
   let sessionId: string | null = null;
   let protocolVersion: string | null = null;
 
-  function headers(): Record<string, string> {
+  function headers(agentSession: string | null = null): Record<string, string> {
     const out: Record<string, string> = {
       "Content-Type": "application/json",
       Accept: "application/json, text/event-stream",
@@ -203,6 +204,7 @@ export function createMcpRelay(options: McpRelayOptions): McpRelay {
     const branch = options.branch();
     if (branch) out["x-dosu-branch"] = scopeHeader(branch);
     if (options.client) out["x-dosu-client"] = scopeHeader(options.client);
+    if (agentSession) out["x-dosu-session"] = scopeHeader(agentSession);
     if (sessionId) out["Mcp-Session-Id"] = sessionId;
     if (protocolVersion) out["MCP-Protocol-Version"] = protocolVersion;
     return out;
@@ -219,7 +221,11 @@ export function createMcpRelay(options: McpRelayOptions): McpRelay {
     }
   }
 
-  async function send(message: unknown, emit: (message: unknown) => void): Promise<void> {
+  async function send(
+    message: unknown,
+    emit: (message: unknown) => void,
+    agentSession: string | null = null,
+  ): Promise<void> {
     const pending = new Set(requestIds(message));
     const deliver = (reply: unknown) => {
       for (const id of responseIds(reply)) pending.delete(id);
@@ -236,7 +242,7 @@ export function createMcpRelay(options: McpRelayOptions): McpRelay {
     try {
       response = await fetch(options.endpoint, {
         method: "POST",
-        headers: headers(),
+        headers: headers(agentSession),
         body: JSON.stringify(message),
         signal: AbortSignal.timeout(timeoutMs),
       });

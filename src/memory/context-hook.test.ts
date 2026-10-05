@@ -652,3 +652,52 @@ describe("contextHookOutput when git hangs", () => {
     expect(gitRan()).not.toContain("symbolic-ref");
   });
 });
+
+describe("Claude Code's PreToolUse hook on Dosu's memory tools", () => {
+  function toolPayload(over: Record<string, unknown> = {}): string {
+    return payload({
+      hook_event_name: "PreToolUse",
+      prompt: undefined,
+      tool_name: "mcp__dosu__search_memory",
+      tool_input: { query: "q" },
+      tool_use_id: "toolu_1",
+      ...over,
+    });
+  }
+
+  it("denies a memory tool in a session the user took off the record, asking nothing", async () => {
+    const fetchImpl = respond(200, {});
+    for (const tool of ["mcp__dosu__search_memory", "mcp__dosu-dev__get_memory_evidence"]) {
+      const out = await contextHookOutput(toolPayload({ tool_name: tool }), {
+        ...base,
+        isIncognito: () => true,
+        fetchImpl,
+      });
+      expect(JSON.parse(out).hookSpecificOutput).toMatchObject({
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+      });
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("leaves the decision to Claude Code otherwise, and other tools alone", async () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "dosu-pretool-")));
+    vi.stubEnv("XDG_CONFIG_HOME", home);
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+      rmSync(home, { recursive: true, force: true });
+    });
+    const fetchImpl = respond(200, {});
+    expect(await contextHookOutput(toolPayload(), { ...base, fetchImpl })).toBe("");
+    const offTheRecord = { ...base, isIncognito: () => true, fetchImpl };
+    expect(await contextHookOutput(toolPayload({ tool_name: "Bash" }), offTheRecord)).toBe("");
+    expect(
+      await contextHookOutput(
+        toolPayload({ tool_name: "mcp__dosu__read_knowledge" }),
+        offTheRecord,
+      ),
+    ).toBe("");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});

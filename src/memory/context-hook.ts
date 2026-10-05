@@ -1,6 +1,8 @@
 /** Prompt-time memory: the `UserPromptSubmit` hook behind `dosu knowledge context` (Claude Code,
  * Codex), and the same lookup for agents whose plugins ask from code (OpenCode, Pi: `--format
- * plain`).
+ * plain`). The same command is Claude Code's `PreToolUse` hook on Dosu's memory tools, which
+ * stops them in a session the user took off the record and otherwise tells the MCP proxy which
+ * session the call belongs to (memoryToolHookOutput).
  *
  * Reads the hook payload from stdin, asks the server whether this prompt warrants a memory
  * digest (POST /v1/memory/context), and prints the hook's JSON when it does. The server makes
@@ -15,6 +17,7 @@
 
 import { basename } from "node:path";
 import { logger } from "../debug/logger";
+import { CLAUDE_MEMORY_TOOL_PATTERN, recordClaudeToolCall } from "../mcp/call-session";
 import { GIT_BUDGETS, projectOverride, resolveProjectOfDir } from "../sessions/project";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { currentBranchAnswer, GIT_TIMED_OUT } from "../sessions/repo";
@@ -58,7 +61,15 @@ interface PromptHookPayload {
   prompt?: unknown;
   cwd?: unknown;
   transcript_path?: unknown;
+  tool_name?: unknown;
+  tool_use_id?: unknown;
 }
+
+const MEMORY_TOOL = new RegExp(`^${CLAUDE_MEMORY_TOOL_PATTERN}$`);
+
+/** Why Claude Code's hook stopped a memory tool, shown to the model. */
+const INCOGNITO_DENIAL =
+  "Dosu is off for this session (/dosu-incognito): Dosu's memory tools are not available.";
 
 interface ContextResponse {
   digest?: unknown;
@@ -153,7 +164,33 @@ function sessionIdOf(payload: PromptHookPayload, format: ContextFormat): string 
   return str(payload.session_id);
 }
 
-/** The hook's stdout for one payload: the additionalContext JSON, or "" to add nothing. */
+/** Claude Code's PreToolUse hook on a Dosu memory tool: denies the call in a session that is off
+ * the record (the query would be logged with the retrieval), and otherwise records the call's
+ * session under its tool-use id for the MCP proxy, which a server started before a /clear or an
+ * in-app resume could not know. */
+function memoryToolHookOutput(
+  payload: PromptHookPayload,
+  isIncognito: (transcriptPath: string) => boolean,
+): string {
+  if (typeof payload.tool_name !== "string" || !MEMORY_TOOL.test(payload.tool_name)) return "";
+  const transcript = str(payload.transcript_path);
+  if (transcript && isIncognito(transcript)) {
+    return JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: INCOGNITO_DENIAL,
+      },
+    });
+  }
+  const toolUseId = str(payload.tool_use_id);
+  const id = str(payload.session_id);
+  if (toolUseId && id) recordClaudeToolCall(toolUseId, { id, transcript });
+  return "";
+}
+
+/** The hook's stdout for one payload: the additionalContext JSON, the PreToolUse decision, or ""
+ * to add nothing. */
 export async function contextHookOutput(
   stdin: string,
   options: ContextHookOptions,
@@ -165,6 +202,10 @@ export async function contextHookOutput(
     return "";
   }
   const format = options.format ?? "claude";
+  if (format === "claude" && payload.hook_event_name === "PreToolUse") {
+    const agent = options.agent ?? CLAUDE_CODE_AGENT;
+    return memoryToolHookOutput(payload, options.isIncognito ?? incognitoCheckOf(agent));
+  }
   if (format !== "plain" && payload.hook_event_name !== "UserPromptSubmit") return "";
   const prompt = str(payload.prompt);
   if (!prompt || NOTIFICATION_PROMPT.test(prompt)) return "";

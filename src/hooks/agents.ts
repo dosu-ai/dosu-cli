@@ -119,7 +119,7 @@ function claudeAgent(): HookAgent {
         : "Prompt-time memory stays off while transcript shipping is disabled; 'dosu knowledge transcripts enable' turns it on.",
     statusNote: () =>
       shipping() && !hasClaudeContextHook()
-        ? "Prompt-time memory hook (UserPromptSubmit) is missing; 'dosu knowledge hooks enable claude' adds it."
+        ? "Memory hooks (UserPromptSubmit, PreToolUse) are missing; 'dosu knowledge hooks enable claude' adds them."
         : "",
   };
 }

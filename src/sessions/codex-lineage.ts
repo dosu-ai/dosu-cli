@@ -57,23 +57,34 @@ function codexHomeOf(path: string): string | null {
   return null;
 }
 
+function isRolloutOf(thread: string, name: string): boolean {
+  return name.startsWith("rollout-") && name.toLowerCase().endsWith(`-${thread}.jsonl`);
+}
+
 /** The rollout of `thread`: beside `near` first (a subagent and its parent usually share a day),
  * then anywhere under the same Codex home. */
 function rolloutOfThread(thread: string, near: string): string | null {
-  const isIt = (name: string) =>
-    name.startsWith("rollout-") && name.toLowerCase().endsWith(`-${thread}.jsonl`);
-  const besides = listDir(dirname(near)).find((entry) => !entry.isDir && isIt(entry.name));
+  const besides = listDir(dirname(near)).find(
+    (entry) => !entry.isDir && isRolloutOf(thread, entry.name),
+  );
   if (besides) return besides.path;
   const home = codexHomeOf(near);
-  if (home === null) return null;
-  const dirs = [join(home, "archived_sessions")];
+  return home === null ? null : codexRolloutOfThread(thread, home);
+}
+
+/** The rollout of `thread` (a Codex thread id) anywhere under the Codex home `home`, newest day
+ * first; null when there is none. */
+export function codexRolloutOfThread(thread: string, home: string): string | null {
+  const id = thread.toLowerCase();
+  const dirs: string[] = [];
   for (const year of listDir(join(home, "sessions"))) {
     for (const month of listDir(year.path)) {
       for (const day of listDir(month.path)) dirs.push(day.path);
     }
   }
+  dirs.reverse().push(join(home, "archived_sessions"));
   for (const dir of dirs) {
-    const found = listDir(dir).find((entry) => !entry.isDir && isIt(entry.name));
+    const found = listDir(dir).find((entry) => !entry.isDir && isRolloutOf(id, entry.name));
     if (found) return found.path;
   }
   return null;
