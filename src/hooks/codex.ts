@@ -194,6 +194,10 @@ export function codexHookAgent(): HookAgent {
     },
     enable: () => converge(plannedHooks(codexVersion())),
     disable: () => converge({}),
+    // Left out for a Codex too old for UserPromptSubmit.
+    promptMemory: () =>
+      hasGroupedHook(readHookConfig(hooksPath()), "UserPromptSubmit", CONTEXT) &&
+      codexHookAgent().isEnabled(),
     enableNote: () =>
       "Codex runs the Dosu hooks without asking: they are marked trusted in its config.toml.",
   };

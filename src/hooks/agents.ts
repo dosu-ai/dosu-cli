@@ -44,6 +44,9 @@ export interface HookAgent {
   disableNote?(): string;
   /** Shown by `hooks status` while enabled, when part of what enable() installs is missing. */
   statusNote?(): string;
+  /** Whether Dosu's config for the agent, as it is now, adds memory to its prompts. Absent for
+   * agents that cannot take prompt-time memory (Cursor). */
+  promptMemory?(): boolean;
 }
 
 function groupedAgent(options: {
@@ -117,6 +120,7 @@ function claudeAgent(): HookAgent {
       shipping()
         ? ""
         : "Prompt-time memory stays off while transcript shipping is disabled; 'dosu knowledge transcripts enable' turns it on.",
+    promptMemory: hasClaudeContextHook,
     statusNote: () =>
       shipping() && !hasClaudeContextHook()
         ? "Prompt-time memory hook (UserPromptSubmit) is missing; 'dosu knowledge hooks enable claude' adds it."

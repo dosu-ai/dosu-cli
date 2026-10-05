@@ -392,6 +392,8 @@ export function piHookAgent(): HookAgent {
     isInstalled: piInstalled,
     configPath: extensionPath,
     isEnabled: () => isOurs(extensionPath()),
+    // The extension asks for a digest before every agent run.
+    promptMemory: () => isOurs(extensionPath()),
     enable: () => {
       const path = extensionPath();
       if (existsSync(path) && !isOurs(path)) {
