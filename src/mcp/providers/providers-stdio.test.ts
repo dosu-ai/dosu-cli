@@ -145,7 +145,7 @@ describe("stdio proxy entries", () => {
     const toml = readFileSync(join(home, ".codex", "config.toml"), "utf-8");
     expect(toml).toContain(`[mcp_servers.dosu]\ncommand = "${dosu}"\n`);
     expect(toml).toContain('args = ["mcp", "serve", "--client", "codex"]\n');
-    expect(toml).toContain('env_vars = ["DOSU_PROJECT", "XDG_CONFIG_HOME"]\n');
+    expect(toml).toContain('env_vars = ["DOSU_PROJECT", "XDG_CONFIG_HOME", "CODEX_HOME"]\n');
     expect(toml).toContain(`[mcp_servers.dosu.env]\nPATH = "${pathEnv}"\n`);
     expect(toml).not.toContain("mcp-remote");
     expect(toml).not.toContain("key-abc");
