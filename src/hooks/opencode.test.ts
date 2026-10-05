@@ -202,8 +202,9 @@ const syncs = () => dosuCalls().filter((c) => c.args.startsWith("knowledge sync"
  * parts each prompt carries after the plugin saw it, one JSON line per prompt. */
 const DRIVER = `
 import { pathToFileURL } from "node:url";
-const [pluginPath, stepsJson, historyJson] = process.argv.slice(2);
+const [pluginPath, stepsJson, historyJson, configJson] = process.argv.slice(2);
 const history = JSON.parse(historyJson);
+const config = JSON.parse(configJson);
 
 const start = Date.now();
 let now = start;
@@ -236,6 +237,7 @@ function advance(ms) {
 const plugins = Object.values(await import(pathToFileURL(pluginPath).href));
 if (plugins.length !== 1) throw new Error("opencode calls every export as a plugin");
 const client = {
+  config: { get: async () => ({ data: config }) },
   session: {
     messages: async ({ path }) => ({
       data: (history[path.id] ?? []).map((text) => ({ info: { role: "user" }, parts: [{ type: "text", text }] })),
@@ -260,6 +262,15 @@ for (const [step, ...args] of JSON.parse(stepsJson)) {
     };
     await hooks["chat.message"]({ sessionID }, output);
     console.log(JSON.stringify(output.parts));
+  } else if (step === "tool") {
+    const [sessionID, tool, toolArgs] = args;
+    const output = { args: { ...toolArgs } };
+    try {
+      await hooks["tool.execute.before"]({ tool, sessionID, callID: "call_1" }, output);
+      console.log(JSON.stringify({ tool, args: output.args }));
+    } catch (err) {
+      console.log(JSON.stringify({ tool, error: String(err?.message ?? err) }));
+    }
   } else if (step === "idle") {
     await hooks.event({ event: { type: "session.idle", properties: { sessionID: args[0] } } });
   } else if (step === "dispose") {
@@ -277,22 +288,31 @@ type Step =
   | ["start"]
   | ["created", string, string?]
   | ["chat", string, string]
+  | ["tool", string, string, Record<string, unknown>]
   | ["idle", string]
   | ["dispose"]
   | ["advance", number]
   | ["kill"];
 
-/** The installed plugin in an opencode process of its own: the parts of each prompt it ran. */
+/** opencode's config with Dosu's MCP entry as `dosu mcp add` writes it: the local proxy. */
+const PROXY_CONFIG = {
+  mcp: { dosu: { type: "local", command: ["/bin/dosu", "mcp", "serve", "--client", "opencode"] } },
+};
+
+/** The installed plugin in an opencode process of its own: the parts of each prompt it ran, and
+ * what each tool call looked like after it (or the error it stopped the call with). */
 function opencodeProcess(
   steps: Step[],
   history: Record<string, string[]> = {},
-): Record<string, unknown>[][] {
+  config: Record<string, unknown> = PROXY_CONFIG,
+  // biome-ignore lint/suspicious/noExplicitAny: lines are either a prompt's parts or a tool call
+): any[] {
   opencode().enable();
   const driver = join(home, "driver.mjs");
   writeFileSync(driver, DRIVER);
   const result = spawnSync(
     process.execPath,
-    [driver, pluginPath(), JSON.stringify(steps), JSON.stringify(history)],
+    [driver, pluginPath(), JSON.stringify(steps), JSON.stringify(history), JSON.stringify(config)],
     { encoding: "utf8" },
   );
   if (!steps.some(([step]) => step === "kill")) expect(result.status, result.stderr).toBe(0);
@@ -375,6 +395,64 @@ describe("the opencode plugin", () => {
 
     expect(dosuCalls().filter((c) => c.args.startsWith("knowledge context"))).toEqual([]);
     expect(marked).toHaveLength(1);
+  });
+
+  it("names the session in each call to Dosu's memory tools, for the proxy", async () => {
+    fakeDosu("");
+    const calls = opencodeProcess([
+      ["start"],
+      ["created", "ses_a"],
+      ["chat", "ses_a", "deploy it"],
+      ["tool", "ses_a", "dosu_search_memory", { query: "deploy" }],
+      ["tool", "ses_a", "dosu_get_memory_evidence", { memory_id: "m1" }],
+      ["tool", "ses_a", "bash", { command: "ls" }],
+    ]).filter((line) => line.tool);
+    await endReported();
+
+    expect(calls).toEqual([
+      { tool: "dosu_search_memory", args: { query: "deploy", _dosu_session: "ses_a" } },
+      { tool: "dosu_get_memory_evidence", args: { memory_id: "m1", _dosu_session: "ses_a" } },
+      { tool: "bash", args: { command: "ls" } },
+    ]);
+  });
+
+  it("adds nothing to the arguments of a server that is not Dosu's proxy", async () => {
+    fakeDosu("");
+    const remote = { mcp: { dosu: { type: "remote", url: "https://api.dosu.dev/v2/mcp" } } };
+    const calls = opencodeProcess(
+      [["start"], ["tool", "ses_a", "dosu_search_memory", { query: "deploy" }]],
+      {},
+      remote,
+    ).filter((line) => line.tool);
+
+    expect(calls).toEqual([{ tool: "dosu_search_memory", args: { query: "deploy" } }]);
+  });
+
+  it("stops the memory tools in an incognito session and its subagents' sessions", async () => {
+    fakeDosu("");
+    const calls = opencodeProcess(
+      [
+        ["start"],
+        ["created", "ses_a"],
+        ["chat", "ses_a", INCOGNITO_COMMAND_BODY],
+        ["created", "ses_child", "ses_a"],
+        ["tool", "ses_a", "dosu_search_memory", { query: "deploy" }],
+        ["tool", "ses_child", "dosu_get_memory_evidence", { memory_id: "m1" }],
+        ["chat", "ses_old", "continue"],
+        ["tool", "ses_old", "dosu_search_memory", { query: "deploy" }],
+        ["tool", "ses_a", "bash", { command: "ls" }],
+      ],
+      { ses_old: ["earlier", INCOGNITO_COMMAND_BODY] },
+    ).filter((line) => line.tool);
+    await endReported();
+
+    expect(calls.map((c) => [c.tool, c.error ? "stopped" : "ran"])).toEqual([
+      ["dosu_search_memory", "stopped"],
+      ["dosu_get_memory_evidence", "stopped"],
+      ["dosu_search_memory", "stopped"],
+      ["bash", "ran"],
+    ]);
+    expect(calls[0].error).toContain("Dosu is off for this session");
   });
 
   it("reports every session that ran a turn as ended, in one sync, once opencode exits", async () => {

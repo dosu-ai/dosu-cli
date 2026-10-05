@@ -35,7 +35,7 @@ import { isIncognitoSession } from "../sync/incognito";
 export const CLAUDE_MEMORY_TOOL_PATTERN = "mcp__.+__(search_memory|get_memory_evidence)";
 
 /** The argument OpenCode's Dosu plugin names the session with. */
-const SESSION_ARGUMENT = "_dosu_session";
+export const SESSION_ARGUMENT = "_dosu_session";
 
 /** What the proxy answers, instead of relaying, for a call from a session off the record. */
 export const OFF_THE_RECORD_MESSAGE =
