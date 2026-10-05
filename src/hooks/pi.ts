@@ -1,8 +1,13 @@
 /** Dosu for pi: pi has no hook config, so everything Dosu needs from a pi session lives in one
- * extension file, `<agent dir>/extensions/dosu.ts`, which pi loads on start. A single file rather
- * than a pi package: `pi install` would need pi on PATH, network for an npm source or a second
- * directory for a local one, and an edit to pi's settings.json to undo; a file in the extensions
- * folder is discovered as is, works offline in a throwaway VM, and disabling it is deleting it.
+ * extension file, `<agent dir>/extensions/dosu.ts`, which pi loads on start. That includes Dosu's
+ * MCP server: the extension registers the local proxy every agent runs (`dosu mcp serve`) with
+ * pi's built-in MCP, which an incognito session never starts, and names the session in each
+ * memory tool call for the proxy, as OpenCode's plugin does.
+ *
+ * A single file rather than a pi package: `pi install` would need pi on PATH, network for an npm
+ * source or a second directory for a local one, and an edit to pi's settings.json to undo; a file
+ * in the extensions folder is discovered as is, works offline in a throwaway VM, and disabling it
+ * is deleting it.
  *
  * The extension shells out to the `dosu` CLI for everything, so it carries no credentials and
  * stays correct across CLI upgrades: the CLI resolves the account, project and branch itself.
@@ -13,6 +18,7 @@ import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { writeSecureFile } from "../mcp/config-helpers";
 import { expandHome, isInstalled, isOnPath } from "../mcp/detect";
+import { type ProxyCommand, proxyCommand } from "../mcp/proxy-entry";
 import { selfInvocation } from "../sync/detach";
 import {
   INCOGNITO_COMMAND_NAME,
@@ -56,18 +62,29 @@ function dosuInvocation(): DosuInvocation {
   return { command, args: baseArgs, env };
 }
 
+/** How pi starts Dosu's MCP server: the entry `dosu mcp add` writes for every agent, or, when a
+ * package runner's throwaway copy is doing the writing, the `dosu` the extension runs otherwise. */
+function memoryServer(dosu: DosuInvocation): ProxyCommand {
+  const args = ["mcp", "serve", "--client", "pi"];
+  return (
+    proxyCommand("pi") ?? { command: dosu.command, args: [...dosu.args, ...args], env: dosu.env }
+  );
+}
+
 /** What /dosu-incognito adds to the conversation: shown in pi's TUI, and handed to the model with
  * its next request. The record that keeps the session from shipping is a separate entry. */
 const PI_INCOGNITO_NOTE = `Dosu incognito: this session stays off the record.
 
-Dosu is off for the rest of this session. Do not call the Dosu memory tools (search_memory, get_memory_evidence), even where project rules ask you to. This session will not be shipped to Dosu memory.`;
+Dosu is off for the rest of this session. Do not call the Dosu memory tools (search_memory, get_memory_evidence), even where project rules ask you to; pi blocks them. This session will not be shipped to Dosu memory.`;
 
 /** The extension pi loads. Plain JavaScript (valid TypeScript for pi's loader) importing only
- * node builtins: pi validates the tools' plain JSON Schema parameters itself, so nothing pi ships
- * needs resolving from here. */
-function piExtensionSource(dosu: DosuInvocation = dosuInvocation()): string {
+ * node builtins, so nothing pi ships needs resolving from here. */
+function piExtensionSource(
+  dosu: DosuInvocation = dosuInvocation(),
+  server: ProxyCommand = memoryServer(dosu),
+): string {
   // Raw, so the extension's own escapes ("\n") reach the file as written.
-  return String.raw`// ${EXTENSION_MARKER} v1 -- written by "dosu knowledge hooks enable pi"; every enable
+  return String.raw`// ${EXTENSION_MARKER} v2 -- written by "dosu knowledge hooks enable pi"; every enable
 // rewrites it and "dosu knowledge hooks disable pi" removes it, so edits do not last.
 //
 // Dosu memory for pi:
@@ -75,9 +92,11 @@ function piExtensionSource(dosu: DosuInvocation = dosuInvocation()): string {
 //   right away;
 // - before each agent run, the CLI may answer the prompt with a memory digest, added to the
 //   conversation as a hidden message;
-// - search_memory and get_memory_evidence pull memory on demand;
-// - /${INCOGNITO_COMMAND_NAME} takes the session off the record: no digest, no memory tools, never shipped;
-//   a fork or clone of such a session stays off too.
+// - each session gets Dosu's MCP server (search_memory, get_memory_evidence) from pi's built-in
+//   MCP: the local proxy, told which session it serves;
+// - /${INCOGNITO_COMMAND_NAME} takes the session off the record: no digest, the memory tools hidden
+//   and blocked, never shipped; a fork or clone of such a session stays off too, and does not
+//   start the MCP server.
 // Nothing here runs when pi starts with --no-extensions.
 
 import { spawn } from "node:child_process";
@@ -87,12 +106,17 @@ const DOSU = ${JSON.stringify(dosu)};
 const INCOGNITO_MARKER = ${JSON.stringify(INCOGNITO_MARKER)};
 const INCOGNITO_ENTRY = ${JSON.stringify(PI_INCOGNITO_ENTRY_TYPE)};
 const INCOGNITO_NOTE = ${JSON.stringify(PI_INCOGNITO_NOTE)};
-const MEMORY_TOOLS = ["search_memory", "get_memory_evidence"];
+const MCP_SERVER_NAME = "dosu";
+const MCP_SERVER = ${JSON.stringify(server)};
+// The argument that names the session to the proxy, which takes it out before relaying the call.
+const SESSION_ARGUMENT = "_dosu_session";
+// Dosu memory's tools under any server name (pi names them mcp__<server>__<tool>), so a Dosu
+// entry of the user's own in mcp.json, which pi prefers to this one, is blocked too.
+const MEMORY_TOOL = /^(?:mcp__\w+__)?(?:search_memory|get_memory_evidence)$/;
 // The CLI gives the server 4s and then gives up on its own (its debug log says why); this only
 // stops a CLI that never answers. It leaves room for a slow start -- a freshly installed
 // binary's first run, git lookups for the project key -- and matches the OpenCode plugin.
 const CONTEXT_TIMEOUT_MS = 10000;
-const TOOL_TIMEOUT_MS = 60000;
 // How long quitting pi waits for the sync to take the ended session.
 const HANDOFF_TIMEOUT_MS = 3000;
 // How far up a chain of forks of forks session_start looks for the incognito marker.
@@ -116,7 +140,6 @@ function dosu(args, options) {
     let child;
     const finish = (code) => {
       clearTimeout(timer);
-      options.signal?.removeEventListener("abort", stop);
       resolve({ code, stdout, stderr });
     };
     const stop = () => {
@@ -131,7 +154,6 @@ function dosu(args, options) {
       return;
     }
     timer = setTimeout(stop, options.timeoutMs);
-    options.signal?.addEventListener("abort", stop, { once: true });
     child.stdout.on("data", (chunk) => {
       stdout += chunk;
     });
@@ -228,8 +250,25 @@ export default function dosuForPi(pi) {
   // Set when /${INCOGNITO_COMMAND_NAME} was given a task it did not run, and said so.
   let droppedTask = false;
 
+  // pi before 1.0 has no built-in MCP, and pi refuses a name another extension took: either way
+  // pi runs on, without Dosu's tools.
+  const connectMemory = (ctx) => {
+    try {
+      pi.registerMcpServer?.(MCP_SERVER_NAME, {
+        command: MCP_SERVER.command,
+        args: MCP_SERVER.args,
+        env: MCP_SERVER.env,
+        cwd: ctx.cwd,
+        exposure: "direct",
+        description: "Dosu memory: what earlier agent sessions learned about this codebase",
+      });
+    } catch {}
+  };
+
+  // Not unregistered: a print run that unregisters a server never exits (pi 1.0.0). A server
+  // already running stays connected, unused, its tools hidden here and blocked in tool_call.
   const hideMemoryTools = () => {
-    pi.setActiveTools(pi.getActiveTools().filter((name) => !MEMORY_TOOLS.includes(name)));
+    pi.setActiveTools(pi.getActiveTools().filter((name) => !MEMORY_TOOL.test(name)));
   };
 
   pi.on("session_start", (_event, ctx) => {
@@ -237,7 +276,26 @@ export default function dosuForPi(pi) {
     incognito =
       ctx.sessionManager.getEntries().some(isIncognitoEntry) ||
       forkedFromIncognito(ctx.sessionManager.getHeader?.()?.parentSession);
+    // A registration lasts only as long as this load of the extension: register for every
+    // session, replacing any earlier registration, which also brings back hidden tools.
     if (incognito) hideMemoryTools();
+    else connectMemory(ctx);
+  });
+
+  // Every tool call passes through here, after pi validated its arguments, MCP tools and
+  // codemode scripts' nested calls included. One pi serves many sessions (/new, /resume) through
+  // one proxy, and pi tells an MCP server nothing about the session, so a call to this extension's
+  // server names it in the arguments.
+  pi.on("tool_call", (event, ctx) => {
+    if (!MEMORY_TOOL.test(event.toolName)) return undefined;
+    if (incognito) {
+      return { block: true, reason: "Dosu is off for this session (/${INCOGNITO_COMMAND_NAME})." };
+    }
+    const session = ctx.sessionManager.getSessionId();
+    if (event.toolName.startsWith("mcp__" + MCP_SERVER_NAME + "__") && typeof session === "string") {
+      event.input[SESSION_ARGUMENT] = session;
+    }
+    return undefined;
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
@@ -282,58 +340,6 @@ export default function dosuForPi(pi) {
         }
       : null;
     await handOff(payload, ctx.cwd);
-  });
-
-  const memoryTool = async (args, signal, ctx) => {
-    if (incognito) throw new Error("Dosu is off for this session (/${INCOGNITO_COMMAND_NAME}).");
-    const result = await dosu(args, { cwd: ctx.cwd, signal, timeoutMs: TOOL_TIMEOUT_MS });
-    if (result.code !== 0) {
-      throw new Error(result.stderr.trim() || "the Dosu CLI could not reach Dosu memory");
-    }
-    return { content: [{ type: "text", text: result.stdout.trim() }], details: undefined };
-  };
-
-  pi.registerTool({
-    name: "search_memory",
-    label: "Dosu memory",
-    description:
-      "Search long-term memory built from previous agent work in this organization. Returns lessons learned (semantic memories) and step-by-step runbooks (procedural memories) relevant to the query. Use it BEFORE exploring the codebase for a task: what took a previous agent many steps to learn -- where things live, environment quirks, commands that work, approaches that failed -- may already be recorded here. Query with a short description of what you are trying to do or learn.",
-    promptSnippet: "Search what earlier agent sessions learned about this codebase (Dosu memory)",
-    promptGuidelines: [
-      "Use search_memory before exploring the codebase for a non-trivial task, and whenever you are about to work something out that a previous session plausibly already did; name the files, symbols, or tools involved. A Dosu memory digest may already be in context: act on its facts directly.",
-    ],
-    parameters: {
-      type: "object",
-      properties: {
-        query: { type: "string", description: "What you are trying to do or learn." },
-      },
-      required: ["query"],
-    },
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      return memoryTool(["memory", "search", "--client", "pi", "--", params.query], signal, ctx);
-    },
-  });
-
-  pi.registerTool({
-    name: "get_memory_evidence",
-    label: "Dosu memory evidence",
-    description:
-      "Show the primary evidence behind one memory returned by search_memory or listed in a Dosu memory digest: the verbatim transcript excerpts (oldest first) that created, updated, or confirmed it, each with when it happened and why it mattered. Use it when a summary is ambiguous or you need the exact command, path, error text, or wording it was distilled from.",
-    promptSnippet: "Show the transcript evidence behind one Dosu memory",
-    parameters: {
-      type: "object",
-      properties: {
-        memory_id: { type: "string", description: "The memory's id." },
-      },
-      required: ["memory_id"],
-    },
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      return memoryTool(
-        ["memory", "evidence", "--client", "pi", "--", params.memory_id],
-        signal,
-        ctx,
-      );
-    },
   });
 
   pi.registerCommand(${JSON.stringify(INCOGNITO_COMMAND_NAME)}, {
@@ -383,7 +389,7 @@ function piInstalled(): boolean {
   return isInstalled([piAgentDir()]) || isOnPath("pi");
 }
 
-/** Pi's HookAgent: the session-end trigger, prompt-time memory, the memory tools and
+/** Pi's HookAgent: the session-end trigger, prompt-time memory, Dosu's MCP server and
  * /dosu-incognito, installed and removed together as the one extension file. */
 export function piHookAgent(): HookAgent {
   return {

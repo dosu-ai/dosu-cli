@@ -1,5 +1,6 @@
-/** `dosu setup` on a machine with pi: pi has no MCP config, so the agent setup offers is the Dosu
- * pi extension itself (memory tools, session-end trigger, prompt-time memory, /dosu-incognito). */
+/** `dosu setup` on a machine with pi: the agent setup offers is the Dosu pi extension, which
+ * registers Dosu's MCP server with pi per session and carries the session-end trigger, prompt-time
+ * memory and /dosu-incognito. */
 
 import {
   chmodSync,

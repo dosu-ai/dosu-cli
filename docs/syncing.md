@@ -524,7 +524,7 @@ than a pi package: `pi install` needs pi on PATH, network or a second
 directory, and an edit to pi's `settings.json` to undo; the extensions folder works offline in a
 throwaway VM.
 `hooks disable pi` deletes it, and neither command touches a `dosu.ts` that is not Dosu's. The
-extension shells out to `dosu` on PATH for everything, so it carries no credentials:
+extension runs `dosu` for everything, so it carries no credentials:
 
 - `session_shutdown` (quit, `/new`, `/resume`, `/fork`; not `/reload`, which keeps the session)
   pipes `{hook_event_name: "session_shutdown", agent: "pi", session_id, transcript_path, cwd}` to
@@ -539,26 +539,44 @@ extension shells out to `dosu` on PATH for everything, so it carries no credenti
   injected, the server's reason for none, an HTTP status, or the budget running out), never the
   prompt or the digest. The extension stops only a CLI that has not answered in 10 s, which leaves
   room for a slow first start.
-- `search_memory` and `get_memory_evidence` are pi tools that run
-  `dosu memory search|evidence --client pi -- <arg>` in the session's directory.
+- `session_start` registers Dosu's MCP server with pi's built-in MCP (pi 1.0+;
+  `pi.registerMcpServer`): the same `dosu mcp serve --client pi` proxy entry `dosu mcp add` writes
+  for every other agent, run in the session's directory with `exposure: "direct"`, so
+  `search_memory` and `get_memory_evidence` reach the model as `mcp__dosu__search_memory` and
+  `mcp__dosu__get_memory_evidence`. It registers again for every session pi starts (`/new`,
+  `/resume`, `/fork`, `/reload`), since a registration lasts only as long as that load of the
+  extension; an incognito session (resumed, forked or cloned) does not start it. Pi tells an MCP server nothing about the session,
+  and one pi serves its sessions through one proxy, so a `tool_call` handler adds
+  `_dosu_session: <session id>` to the arguments of each call to those two tools, after pi has
+  validated them; the proxy takes it out and sends it as `x-dosu-session`, as for OpenCode's plugin.
+  The extension registers the server rather than writing it to pi's `mcp.json`, so installing,
+  refreshing and removing Dosu for pi stays one file; a `dosu` entry of the user's own in
+  `mcp.json` takes precedence (and gets the argument too, which only the proxy accepts).
+  `dosu mcp refresh` rewrites the extension, which moves an install from the extension's own
+  memory tools (before pi had built-in MCP) to the proxy. A pi without built-in MCP, or one that
+  refuses the server, runs on without the tools.
 - `/dosu-incognito` records the opt-out as an extension entry
   (`{type: "custom", customType: "dosu-incognito", data: {marker}}`, which is what keeps the session
-  from shipping), adds a note telling the model Dosu is off (shown in the TUI), removes the two
-  memory tools from the model's tool set, and stops digests. It starts no turn of its own, so it
+  from shipping), adds a note telling the model Dosu is off (shown in the TUI), stops digests, hides
+  the memory tools from the model, and blocks `search_memory` and `get_memory_evidence` in a `tool_call`
+  handler, from any MCP server name (`mcp__<server>__<tool>`, so a user's own `mcp.json` entry for
+  Dosu too) and from codemode scripts, so none of the session's queries reach Dosu. A proxy already
+  running stays connected, unused: a `pi -p` run that unregisters an MCP server never exits
+  (pi 1.0.0). It starts no turn of its own, so it
   works the same in the TUI, mid-run, and in print mode: `pi -p "/dosu-incognito" "<task>"` runs
   the task off the record. For the same reason it does not run a task typed after it on the same
   line (`/dosu-incognito fix the tests`, unlike Claude Code's command): Dosu still goes off, and
   the extension says the task did not run, on stderr in print mode, while the TUI puts the task
   back in the editor to send with Enter. Pi saves a session only once it has a message, so a print
   run with nothing after the command saves none, and says so on stderr: a later run with the same
-  `--session-id` would be a new session. A resumed incognito session stays off. Only that entry,
+  `--session-id` would be a new session. A resumed incognito session stays off: no MCP server, the tools blocked. Only that entry,
   or a user turn carrying the marker (what the extension sent before it kept a record), counts, so
   a session whose model read a file quoting the marker still ships. A fork or clone of an incognito
   session (or of a fork of one, at any depth) stays off too, in the extension and in the sync, even
   when it was forked from a message before the marker: it holds what the session did off the
   record and carries on from there.
 
-Pi started with `--no-extensions` (`-ne`) loads none of this: no digest, no tools, and its sessions
+Pi started with `--no-extensions` (`-ne`) loads none of this: no digest, no MCP server, and its sessions
 ship only on a later sync once they have been quiet for five minutes, or with
 `dosu knowledge sync --flush` (an explicit
 `-e ~/.pi/agent/extensions/dosu.ts` still loads it). Every failure, a missing `dosu` included,

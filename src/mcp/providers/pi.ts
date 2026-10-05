@@ -5,9 +5,10 @@ function globalOnly(): never {
   throw new Error("Pi's Dosu extension installs only globally");
 }
 
-/** Pi in `dosu setup` and `dosu mcp`: its Dosu "MCP" is the Dosu pi extension, which registers
- * search_memory and get_memory_evidence and also carries the session-end trigger, prompt-time
- * memory and /dosu-incognito, so installing it here and enabling pi's hook are the same act. */
+/** Pi in `dosu setup` and `dosu mcp`: Dosu's MCP server reaches pi through the Dosu pi extension,
+ * which registers the `dosu mcp serve` proxy with pi's built-in MCP for each session (so the proxy
+ * knows the session it serves) and also carries the session-end trigger, prompt-time memory and
+ * /dosu-incognito, so installing it here and enabling pi's hook are the same act. */
 export const PiProvider = (): SetupProvider => {
   const extension = piHookAgent();
   return {

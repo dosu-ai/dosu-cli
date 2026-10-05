@@ -1,7 +1,7 @@
-/** `dosu memory search|evidence`: Dosu memory's two MCP tools from a terminal, for people and for
- * agents without MCP (the Pi extension's tools shell out to these). They go through the same
- * relay as `dosu mcp serve`, so the request carries the same project (from the cwd), branch, and
- * client headers an MCP session in this directory would, and prints what the agent would read. */
+/** `dosu memory search|evidence`: Dosu memory's two MCP tools from a terminal, for people,
+ * scripts, and agents without MCP. They go through the same relay as `dosu mcp serve`, so the
+ * request carries the same project (from the cwd), branch, and client headers an MCP session in
+ * this directory would, and prints what the agent would read. */
 
 import { Command, Option } from "commander";
 import pc from "picocolors";
