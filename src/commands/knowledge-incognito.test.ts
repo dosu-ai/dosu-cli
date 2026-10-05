@@ -55,8 +55,10 @@ import { incognitoCommand } from "./knowledge-incognito";
 let logSpy: ReturnType<typeof vi.spyOn>;
 let errorSpy: ReturnType<typeof vi.spyOn>;
 
+const stripAnsi = (text: string) => text.replaceAll(/\u001B\[[0-9;]*m/g, "");
+
 function allOutput(): string {
-  return logSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
+  return stripAnsi(logSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n"));
 }
 
 function allErrors(): string {
