@@ -10,7 +10,7 @@ interface FakeAgent {
 }
 
 const state = vi.hoisted(() => ({
-  incognitoAgents: [] as string[],
+  incognitoAgents: [] as string[] | undefined,
   saveError: undefined as unknown,
   setCalls: [] as Array<{ ids: string[]; incognito: boolean }>,
 }));
@@ -55,6 +55,7 @@ import { incognitoCommand } from "./knowledge-incognito";
 let logSpy: ReturnType<typeof vi.spyOn>;
 let errorSpy: ReturnType<typeof vi.spyOn>;
 
+// biome-ignore lint/suspicious/noControlCharactersInRegex: Strip ANSI colors before matching output.
 const stripAnsi = (text: string) => text.replaceAll(/\u001B\[[0-9;]*m/g, "");
 
 function allOutput(): string {
@@ -114,6 +115,13 @@ describe("knowledge incognito status", () => {
     expect(output).toMatch(/codex\s+Cursor\s+agent not found/);
     expect(output).toContain("incognito on|off");
     expect(output).toContain("type /dosu-incognito in it");
+  });
+
+  it("treats a sync state with no saved switches as all studied", async () => {
+    fakeAgents = [claude()];
+    state.incognitoAgents = undefined;
+    await run("status");
+    expect(allOutput()).toMatch(/claude\s+Claude Code\s+📚 studied/);
   });
 
   it("--json emits rows", async () => {
