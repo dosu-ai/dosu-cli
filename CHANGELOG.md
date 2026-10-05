@@ -1,3 +1,10 @@
+# [0.66.0](https://github.com/dosu-ai/dosu-cli/compare/v0.65.1...v0.66.0) (2026-10-05)
+
+
+### Features
+
+* **incognito:** add a saved per-agent incognito switch ([#243](https://github.com/dosu-ai/dosu-cli/issues/243)) ([082d8ae](https://github.com/dosu-ai/dosu-cli/commit/082d8ae35f94a7a331da25f54f4d128543de93cc))
+
 ## [0.65.1](https://github.com/dosu-ai/dosu-cli/compare/v0.65.0...v0.65.1) (2026-10-01)
 
 
