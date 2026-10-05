@@ -6,9 +6,14 @@ vi.mock("../sessions/scan", () => ({
 }));
 
 const mockResolve = vi.fn();
+const mockResolveRepo = vi.fn();
 const mockFlush = vi.fn();
 vi.mock("../sessions/project-dir", () => ({
-  createProjectDirResolver: () => ({ resolve: mockResolve, flush: mockFlush }),
+  createProjectDirResolver: () => ({
+    resolve: mockResolve,
+    resolveRepo: mockResolveRepo,
+    flush: mockFlush,
+  }),
 }));
 
 // Keep the real gate and filter logic; only the persisted state read is faked.
@@ -38,6 +43,7 @@ function session(overrides: Partial<AgentSession>): AgentSession {
 beforeEach(() => {
   mockScan.mockReset();
   mockResolve.mockReset();
+  mockResolveRepo.mockReset().mockReturnValue("github.com/dosu-ai/dosu-cli");
   mockFlush.mockReset();
   mockLoadSyncState.mockReset();
   mockLoadSyncState.mockReturnValue({
@@ -58,23 +64,47 @@ describe("listSessionBacklog", () => {
     expect(backlog.open.map((s) => s.id)).toEqual(["fresh-1"]);
   });
 
-  it("applies the persisted project filter through the dir resolver", () => {
+  it("applies the persisted repo filter and drops sessions outside any repo", () => {
+    mockLoadSyncState.mockReturnValue({
+      schema_version: 1,
+      watermark: null,
+      consecutive_failures: 0,
+      repo_filter: ["github.com/dosu-ai/dosu-cli"],
+    });
+    mockScan.mockReturnValue([
+      session({ id: "in-scope" }),
+      session({ id: "other-repo" }),
+      session({ id: "no-repo" }),
+    ]);
+    mockResolveRepo.mockImplementation((s: AgentSession) =>
+      s.id === "in-scope"
+        ? "github.com/dosu-ai/dosu-cli"
+        : s.id === "other-repo"
+          ? "github.com/dosu-ai/dosu"
+          : null,
+    );
+
+    const backlog = listSessionBacklog();
+    expect(backlog.queued.map((s) => s.id)).toEqual(["in-scope"]);
+    expect(mockFlush).toHaveBeenCalled();
+  });
+
+  it("reads a legacy folder scope as the repos of its sessions", () => {
     mockLoadSyncState.mockReturnValue({
       schema_version: 1,
       watermark: null,
       consecutive_failures: 0,
       project_filter: ["/work/dosu-cli"],
     });
-    const inScope = session({ id: "in-scope" });
-    const outOfScope = session({ id: "out-of-scope" });
-    mockScan.mockReturnValue([inScope, outOfScope]);
+    mockScan.mockReturnValue([session({ id: "in-folder" }), session({ id: "elsewhere" })]);
     mockResolve.mockImplementation((s: AgentSession) =>
-      s.id === "in-scope" ? "/work/dosu-cli" : "/elsewhere",
+      s.id === "in-folder" ? "/work/dosu-cli/src" : "/elsewhere",
+    );
+    mockResolveRepo.mockImplementation((s: AgentSession) =>
+      s.id === "in-folder" ? "github.com/dosu-ai/dosu-cli" : "github.com/dosu-ai/dosu",
     );
 
-    const backlog = listSessionBacklog();
-    expect(backlog.queued.map((s) => s.id)).toEqual(["in-scope"]);
-    expect(mockFlush).toHaveBeenCalled();
+    expect(listSessionBacklog().queued.map((s) => s.id)).toEqual(["in-folder"]);
   });
 
   it("sets aside every session from an agent saved as incognito", () => {

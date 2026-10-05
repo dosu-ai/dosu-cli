@@ -117,9 +117,9 @@ Once authenticated against a deployment, you can drive the Dosu platform without
 |---|---|
 | `dosu ask` | Ask a question and get an AI-generated answer |
 | `dosu knowledge` | Search and browse your knowledge base |
-| `dosu docs` | Manage documents (list, create, update, import, publish, AI-generate) |
+| `dosu docs` | Manage documents (list, create, update, import, publish) |
 | `dosu threads` | List and manage conversation threads |
-| `dosu review` | Document review workflow |
+| `dosu review` | Document review workflow, plus `review notifications` to route a Library's or Agent's reviews to a Slack channel |
 | `dosu sources` | Manage connected data sources (list, connect, create, sync, update) |
 | `dosu integrations` | List and inspect platform integrations (Slack, GitHub, …) |
 | `dosu topics` | List knowledge base topics and their pages |
@@ -183,9 +183,11 @@ dosu knowledge incognito status                            # which agents are in
 ```
 
 The status line shows one of `📚 Dosu studying…` (a sync run is live), `📚 Dosu on`,
-`👻 Dosu incognito`, `⚪ Dosu paused`,
-`⚪ Dosu not studying this folder`, or `⚪ Dosu off`. Neither setup nor `enable` replaces a status
-line you already have; they print the one-liner to add to your own script instead.
+`👻 Dosu incognito`, `⚪ Dosu paused`, `⚪ Dosu not studying this repo`, or `⚪ Dosu off`. Every
+session is studied unless you limit studying to picked repos under `dosu` → settings → study
+scope. Notes from a session with a known repo and branch are anchored to that branch; the rest are
+unanchored and reach topics immediately. Neither setup nor `enable` replaces a status line you
+already have; they print the one-liner to add to your own script instead.
 
 `incognito on` is a saved per-agent setting: none of that agent's sessions are studied until you
 turn it off. To keep a single chat out instead, type `/dosu-incognito` in it; setup installs that

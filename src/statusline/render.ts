@@ -3,9 +3,10 @@
  * a few small files plus the transcript, and it never throws: any failure renders as off. */
 
 import { getHookAgent } from "../hooks/agents";
+import { originRepoOfDir } from "../sessions/repo";
 import { transcriptHasIncognitoMarker } from "../sync/incognito";
 import { getSyncStatus } from "../sync/status";
-import { isUnderDir, loadSyncState, type SyncState, UNKNOWN_PROJECT } from "../sync/watermark";
+import { isUnderDir, loadSyncState, type SyncState } from "../sync/watermark";
 
 /** In priority order: the first matching state wins. */
 export type StatuslineState = "off" | "incognito" | "paused" | "not-studied" | "studying" | "on";
@@ -18,7 +19,7 @@ export const STATUSLINE_LABELS: Readonly<Record<StatuslineState, string>> = {
   on: "📚 Dosu on",
   incognito: "👻 Dosu incognito",
   paused: "⚪ Dosu paused",
-  "not-studied": "⚪ Dosu not studying this folder",
+  "not-studied": "⚪ Dosu not studying this repo",
   off: "⚪ Dosu off",
 };
 
@@ -35,6 +36,7 @@ export interface RenderDeps {
   transcriptIsIncognito?: (path: string) => boolean;
   /** Whether a knowledge-sync run is alive right now; defaults to the sync lock file. */
   syncRunning?: () => boolean;
+  repoOfDir?: (dir: string) => string | null;
 }
 
 function asString(value: unknown): string | undefined {
@@ -76,11 +78,21 @@ function defaultSyncRunning(): boolean {
   return getSyncStatus({ readLog: () => "" }).running;
 }
 
-/** Whether `cwd` falls inside the studied directories; a missing cwd is the unknown bucket. */
-function cwdIsStudied(cwd: string | undefined, filter: readonly string[] | undefined): boolean {
-  if (!filter || filter.length === 0) return true;
-  if (!cwd) return filter.includes(UNKNOWN_PROJECT);
-  return filter.some((base) => base !== UNKNOWN_PROJECT && isUnderDir(cwd, base));
+/** Whether sessions in `cwd` get studied: everywhere without a scope, only inside a picked repo
+ * with one. A legacy folder scope, not yet converted by a sync, requires a cwd under its folders. */
+function cwdIsStudied(
+  cwd: string | undefined,
+  state: SyncState,
+  repoOfDir: (dir: string) => string | null,
+): boolean {
+  if (state.repo_filter) {
+    const repo = cwd ? repoOfDir(cwd) : null;
+    return repo !== null && state.repo_filter.includes(repo);
+  }
+  if (state.project_filter?.length) {
+    return cwd !== undefined && state.project_filter.some((base) => isUnderDir(cwd, base));
+  }
+  return true;
 }
 
 /** Incognito (the agent's saved switch, or `/dosu-incognito` in this session) outranks paused
@@ -102,7 +114,7 @@ export function resolveStatuslineState(
   }
 
   if (state.paused) return "paused";
-  if (!cwdIsStudied(payload.cwd, state.project_filter)) return "not-studied";
+  if (!cwdIsStudied(payload.cwd, state, deps.repoOfDir ?? originRepoOfDir)) return "not-studied";
   return (deps.syncRunning ?? defaultSyncRunning)() ? "studying" : "on";
 }
 

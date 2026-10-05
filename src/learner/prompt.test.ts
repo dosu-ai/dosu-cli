@@ -15,7 +15,7 @@ describe("buildLearnerSystemPrompt", () => {
     expect(prompt).toContain("read_knowledge");
     expect(prompt).toContain("durable");
     expect(prompt).toContain("EXCLUDE in-flight state");
-    expect(prompt).toContain("Never infer or guess a repo");
+    expect(prompt).toContain("Never pass repo or branch to write_knowledge");
     expect(prompt).not.toContain("metadata");
     expect(prompt).toContain("Never quote credentials");
   });

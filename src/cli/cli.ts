@@ -60,6 +60,7 @@ import { checkForReadyTasks } from "../version/pending-tasks-check";
 import { checkForSkillUpdates } from "../version/skill-update-check";
 import { checkForUpdates } from "../version/update-check";
 import { getVersionString, VERSION } from "../version/version";
+import { CliUsageError } from "./errors";
 
 export function shouldRunBackgroundChecks(actionName: string): boolean {
   return actionName !== "upgrade";
@@ -79,15 +80,6 @@ export function shouldRunMcpRefreshCheck(actionCommand: Command): boolean {
 }
 
 const TELEMETRY_FLUSH_TIMEOUT_MS = 750;
-
-class CliUsageError extends Error {
-  readonly exitCode = 1;
-
-  constructor(message: string) {
-    super(message);
-    this.name = "CliUsageError";
-  }
-}
 
 function commandTelemetryName(actionCommand: Command): string {
   const segments: string[] = [];
@@ -194,7 +186,9 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
 
   program
     .name("dosu")
-    .description("Dosu CLI - Manage MCP servers for AI tools")
+    .description(
+      "Dosu CLI - Set up Dosu MCP for AI tools and work with Dosu Libraries, docs, reviews, and more",
+    )
     .version(getVersionString(), "-v, --version")
     .helpCommand("help [command]", "Show help for a command")
     .option("--debug", "Enable debug logging to stderr", false)

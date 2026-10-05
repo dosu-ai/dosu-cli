@@ -36,9 +36,12 @@ vi.mock("./executable", () => ({
   resolveClaudeExecutable: () => resolveExecutableMock(),
 }));
 
-const sessions: AgentSession[] = [
-  { id: "s1", harness: "claude", path: "/x/a.jsonl", updated: "2026-08-27T00:00:00.000Z" },
-];
+const sessions: AgentSession[] = ["s1", "s2", "s3"].map((id) => ({
+  id,
+  harness: "claude",
+  path: `/x/${id}.jsonl`,
+  updated: "2026-08-27T00:00:00.000Z",
+}));
 
 const baseOptions = {
   sessions,
@@ -296,7 +299,7 @@ describe("runLearner", () => {
     expect(Object.keys(params.options.mcpServers)).toEqual(["sessions", "dosu"]);
     expect(params.options.mcpServers.dosu.type).toBe("http");
     // Session-context headers ride on every knowledge MCP request; no repo/branch/commit
-    // headers because a run spans many repos.
+    // headers because a run spans many repos (the gate sets repo per note).
     expect(params.options.mcpServers.dosu.headers).toMatchObject({
       "X-Dosu-API-Key": "sk_user_test",
       "X-Dosu-Session-Id": "run-123",
@@ -361,6 +364,7 @@ describe("runLearner", () => {
     };
     queryMock.mockImplementation((params: GateParams) => {
       return (async function* () {
+        await params.options.canUseTool("mcp__sessions__read_session", { id: "s1" }, {});
         await params.options.canUseTool("mcp__dosu__write_knowledge", {}, {});
         await params.options.canUseTool("mcp__dosu__write_knowledge", {}, {});
         yield successResult();
@@ -452,10 +456,83 @@ describe("runLearner", () => {
     expect(result.notesWritten).toBe(1);
   });
 
-  it("leaves a note unattributed when no session was read before it", async () => {
+  it("stamps each note with its own session's repo and branch, never the model's", async () => {
     const g: GateResult[] = [];
     queryMock.mockImplementation((params: GateParams) => {
       return (async function* () {
+        await params.options.canUseTool(...read("s1"));
+        g.push(
+          await params.options.canUseTool(
+            "mcp__dosu__write_knowledge",
+            { title: "a", content: "c", repo: "github.com/model/guess", branch: "main" },
+            {},
+          ),
+        );
+        await params.options.canUseTool(...read("s2"));
+        g.push(await params.options.canUseTool(...write("b")));
+        await params.options.canUseTool(...read("s3"));
+        g.push(
+          await params.options.canUseTool(
+            "mcp__dosu__write_knowledge",
+            { title: "c", content: "c", repo: "github.com/model/guess" },
+            {},
+          ),
+        );
+        yield successResult();
+      })();
+    });
+
+    await runLearner({
+      ...baseOptions,
+      sessions: [
+        {
+          id: "s1",
+          harness: "claude",
+          path: "/x/1.jsonl",
+          updated: "2026-08-27T00:00:00.000Z",
+          repo: "github.com/dosu-ai/dosu-cli",
+          branch: "feat/anchor",
+        },
+        {
+          id: "s2",
+          harness: "cursor",
+          path: "/x/2.jsonl",
+          updated: "2026-08-27T00:00:00.000Z",
+          repo: "github.com/dosu-ai/dosu",
+        },
+        {
+          id: "s3",
+          harness: "codex",
+          path: "/x/3.jsonl",
+          updated: "2026-08-27T00:00:00.000Z",
+          branch: "main",
+        },
+      ],
+    });
+
+    expect(g[0].updatedInput).toEqual({
+      title: "a",
+      content: "c",
+      transcript_id: "s1",
+      repo: "github.com/dosu-ai/dosu-cli",
+      branch: "feat/anchor",
+    });
+    expect(g[1].updatedInput).toEqual({
+      title: "b",
+      content: "c",
+      transcript_id: "s2",
+      repo: "github.com/dosu-ai/dosu",
+    });
+    // No repo means no anchor, so no branch either; the model's guesses are dropped regardless.
+    expect(g[2].updatedInput).toEqual({ title: "c", content: "c", transcript_id: "s3" });
+  });
+
+  it("denies a note when no session was read before it, then attributes it after a read", async () => {
+    const g: GateResult[] = [];
+    queryMock.mockImplementation((params: GateParams) => {
+      return (async function* () {
+        g.push(await params.options.canUseTool(...write("orphan")));
+        await params.options.canUseTool(...read("s1"));
         g.push(await params.options.canUseTool(...write("orphan")));
         yield successResult();
       })();
@@ -463,11 +540,30 @@ describe("runLearner", () => {
 
     const result = await runLearner(baseOptions);
 
+    // Unattributed, it would lose its session and the repo and branch that anchor it.
+    expect(g[0].behavior).toBe("deny");
+    expect(g[0].message).toContain("read_session first");
+    expect(g[1].updatedInput).toEqual({ title: "orphan", content: "c", transcript_id: "s1" });
     expect(result.notesWritten).toBe(1);
-    // No session to attribute → genuinely unattributed. Any transcript_id the
-    // model supplied is stripped so the attested backend stores null.
-    expect(g[0].updatedInput).toEqual({ title: "orphan", content: "c" });
-    expect(g[0].updatedInput).not.toHaveProperty("transcript_id");
+  });
+
+  it("denies a re-issued write after an ambiguity denial until the session is re-read", async () => {
+    const g: GateResult[] = [];
+    queryMock.mockImplementation((params: GateParams) => {
+      return (async function* () {
+        await params.options.canUseTool(...read("s1"));
+        await params.options.canUseTool(...read("s2"));
+        g.push(await params.options.canUseTool(...write("n")));
+        g.push(await params.options.canUseTool(...write("n")));
+        yield successResult();
+      })();
+    });
+
+    const result = await runLearner(baseOptions);
+
+    expect(g.map((r) => r.behavior)).toEqual(["deny", "deny"]);
+    expect(g[1].message).toContain("read_session first");
+    expect(result.notesWritten).toBe(0);
   });
 
   it("ignores an id-less read (a paging call) so it doesn't count as a session", async () => {
@@ -484,9 +580,8 @@ describe("runLearner", () => {
 
     const result = await runLearner(baseOptions);
 
-    expect(result.notesWritten).toBe(1);
-    // Stripped: an id-less read is no session, so the model's value must not survive.
-    expect(g[0].updatedInput).toEqual({ title: "no-real-read", content: "c" });
+    expect(result.notesWritten).toBe(0);
+    expect(g[0].behavior).toBe("deny");
   });
 
   const threeSessions: AgentSession[] = ["s1", "s2", "s3"].map((id) => ({
@@ -567,7 +662,7 @@ describe("runLearner", () => {
     expect(result.notedSessions).toEqual(["claude/s3"]);
   });
 
-  it("leaves denied, unattributed, and out-of-scope notes out of the noted sessions", async () => {
+  it("denies unattributed, ambiguous, and out-of-scope notes and never counts them", async () => {
     queryMock.mockImplementation((params: GateParams) => {
       return (async function* () {
         // Unattributed: no session read yet.
@@ -588,7 +683,7 @@ describe("runLearner", () => {
 
     const result = await runLearner({ ...baseOptions, sessions: threeSessions });
 
-    expect(result.notesWritten).toBe(2);
+    expect(result.notesWritten).toBe(0);
     expect(result.notedSessions).toEqual([]);
   });
 
