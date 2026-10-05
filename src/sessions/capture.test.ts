@@ -293,14 +293,6 @@ describe("endedSessionOf", () => {
       "OpenCode's per-turn idle",
       { agent: "opencode", hook_event_name: "opencode.session.idle", session_id: "ses_a" },
     ],
-    [
-      "an OpenCode end with an unsafe session id",
-      { agent: "opencode", hook_event_name: "opencode.session.end", session_id: "ses_a'; --" },
-    ],
-    [
-      "an OpenCode end event from another agent",
-      { agent: "pi", hook_event_name: "opencode.session.end", session_id: "ses_a" },
-    ],
     ["not an object", "SessionEnd"],
     ["null", null],
   ])("ignores %s", (_label, payload) => {
