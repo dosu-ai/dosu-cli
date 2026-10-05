@@ -2,13 +2,14 @@
  * MCP endpoint: the same relay and headers as `dosu mcp serve`, from a real git checkout. */
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveConfig } from "../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { type FakeMcpServer, startFakeMcpServer } from "../mcp/mcp-server.test-utils";
+import { INCOGNITO_MARKER, PI_INCOGNITO_ENTRY_TYPE } from "../sync/incognito";
 import { memoryCommand } from "./memory";
 
 let home: string;
@@ -180,5 +181,45 @@ describe("dosu memory evidence", () => {
 
     expect(process.exitCode).toBe(1);
     expect(JSON.parse(out.join("\n"))).toMatchObject({ isError: true });
+  });
+});
+
+describe("the session a dosu memory call belongs to", () => {
+  /** A pi session file, with the extension's incognito record when `incognito`. */
+  function piTranscript(incognito: boolean): string {
+    const path = join(home, ".pi", "agent", "sessions", "--w--", "2026-10-05_pi-s1.jsonl");
+    mkdirSync(dirname(path), { recursive: true });
+    const lines = [{ type: "session", id: "pi-s1", cwd: "/w", timestamp: "2026-10-05T00:00:00Z" }];
+    if (incognito) {
+      lines.push({
+        type: "custom",
+        customType: PI_INCOGNITO_ENTRY_TYPE,
+        data: { marker: INCOGNITO_MARKER },
+      } as never);
+    }
+    writeFileSync(path, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+    return path;
+  }
+
+  it("names the session the caller passes", async () => {
+    inNoOriginClone("main");
+    const transcript = piTranscript(false);
+
+    await dosu("search", "q", "--client", "pi", "--session", "pi-s1", "--transcript", transcript);
+    await dosu("evidence", "m1", "--client", "pi", "--session", "pi-s1");
+
+    const calls = server.requests.filter((r) => r.body?.method === "tools/call");
+    expect(calls.map((r) => r.headers["x-dosu-session"])).toEqual(["pi-s1", "pi-s1"]);
+  });
+
+  it("sends nothing for a session the user took off the record", async () => {
+    inNoOriginClone("main");
+    const transcript = piTranscript(true);
+
+    await dosu("search", "q", "--client", "pi", "--session", "pi-s1", "--transcript", transcript);
+
+    expect(server.requests).toEqual([]);
+    expect(err.join("\n")).toContain("Dosu is off for this session");
+    expect(process.exitCode).toBe(1);
   });
 });

@@ -64,7 +64,7 @@ function str(value: unknown): string | null {
 }
 
 /** The scanner's harness for an agent id (`claude-code` -> `claude`). */
-function harnessOfClient(client: string | undefined): SessionHarness | null {
+export function harnessOfClient(client: string | undefined): SessionHarness | null {
   if (!client) return null;
   return SESSION_HARNESSES.find((h) => trajectorySourceOf(h) === client || h === client) ?? null;
 }
