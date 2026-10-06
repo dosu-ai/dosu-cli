@@ -580,6 +580,18 @@ describe("the Dosu pi extension", () => {
     for (const tool of ["bash", "mcp__github__search_code", "codemode"]) {
       expect(await pi.callTool(tool)).toEqual({ ran: tool, args: {} });
     }
+    // Nor does the Dosu CLI run from bash, which a session pi does not save (--no-session) leaves
+    // the CLI no transcript to check.
+    for (const command of [
+      "dosu memory search 'deploy'",
+      "cd /w && /usr/local/bin/dosu memory evidence m1 --json",
+      "npx -y @dosu/cli memory search q",
+    ]) {
+      expect(await pi.callTool("bash", { command })).toEqual({
+        blocked: expect.stringContaining("/dosu-incognito"),
+      });
+    }
+    expect(await pi.callTool("bash", { command: "dosu status" })).toMatchObject({ ran: "bash" });
   });
 
   it("leaves a pi without built-in MCP, or one that refuses the server, running", async () => {

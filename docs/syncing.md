@@ -564,8 +564,9 @@ extension runs `dosu` for everything, so it carries no credentials:
   the memory tools from the model, and blocks `search_memory` and `get_memory_evidence` in a `tool_call`
   handler, from any MCP server name (`mcp__<server>__<tool>`, so a user's own `mcp.json` entry for
   Dosu too) and from codemode scripts. `dosu memory search|evidence` run from the session's bash
-  refuse as well, since pi names the session to the commands it runs. So none of the session's
-  queries reach Dosu. A proxy already
+  refuse as well, since pi names the session to the commands it runs, and the extension blocks
+  such a bash command itself (pi with `--no-session` leaves the CLI no transcript to check). So none
+  of the session's queries reach Dosu. A proxy already
   running stays connected, unused: a `pi -p` run that unregisters an MCP server never exits
   (pi 1.0.0). It starts no turn of its own, so it
   works the same in the TUI, mid-run, and in print mode: `pi -p "/dosu-incognito" "<task>"` runs

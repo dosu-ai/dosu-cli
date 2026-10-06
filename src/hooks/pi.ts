@@ -84,7 +84,7 @@ function piExtensionSource(
   server: ProxyCommand = memoryServer(dosu),
 ): string {
   // Raw, so the extension's own escapes ("\n") reach the file as written.
-  return String.raw`// ${EXTENSION_MARKER} v2 -- written by "dosu knowledge hooks enable pi"; every enable
+  return String.raw`// ${EXTENSION_MARKER} v3 -- written by "dosu knowledge hooks enable pi"; every enable
 // rewrites it and "dosu knowledge hooks disable pi" removes it, so edits do not last.
 //
 // Dosu memory for pi:
@@ -95,7 +95,7 @@ function piExtensionSource(
 // - each session gets Dosu's MCP server (search_memory, get_memory_evidence) from pi's built-in
 //   MCP: the local proxy, told which session it serves;
 // - /${INCOGNITO_COMMAND_NAME} takes the session off the record: no digest, the memory tools hidden
-//   and blocked, never shipped; a fork or clone of such a session stays off too, and does not
+//   and blocked (and "dosu memory" from bash), never shipped; a fork or clone of such a session stays off too, and does not
 //   start the MCP server.
 // Nothing here runs when pi starts with --no-extensions.
 
@@ -113,6 +113,8 @@ const SESSION_ARGUMENT = "_dosu_session";
 // Dosu memory's tools under any server name (pi names them mcp__<server>__<tool>), so a Dosu
 // entry of the user's own in mcp.json, which pi prefers to this one, is blocked too.
 const MEMORY_TOOL = /^(?:mcp__\w+__)?(?:search_memory|get_memory_evidence)$/;
+// The same tools from bash, through the Dosu CLI however it is run (dosu, a path to it, npx).
+const MEMORY_COMMAND = /\bdosu\b[\s\S]*\bmemory\s+(?:search|evidence)\b/;
 // The CLI gives the server 4s and then gives up on its own (its debug log says why); this only
 // stops a CLI that never answers. It leaves room for a slow start -- a freshly installed
 // binary's first run, git lookups for the project key -- and matches the OpenCode plugin.
@@ -287,6 +289,11 @@ export default function dosuForPi(pi) {
   // one proxy, and pi tells an MCP server nothing about the session, so a call to this extension's
   // server names it in the arguments.
   pi.on("tool_call", (event, ctx) => {
+    // The CLI refuses an incognito session's call itself, but only one it can read off the record:
+    // not one pi does not save (--no-session).
+    if (incognito && event.toolName === "bash" && MEMORY_COMMAND.test(String(event.input?.command))) {
+      return { block: true, reason: "Dosu is off for this session (/${INCOGNITO_COMMAND_NAME})." };
+    }
     if (!MEMORY_TOOL.test(event.toolName)) return undefined;
     if (incognito) {
       return { block: true, reason: "Dosu is off for this session (/${INCOGNITO_COMMAND_NAME})." };
