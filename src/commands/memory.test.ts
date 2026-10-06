@@ -212,6 +212,75 @@ describe("the session a dosu memory call belongs to", () => {
     expect(calls.map((r) => r.headers["x-dosu-session"])).toEqual(["pi-s1", "pi-s1"]);
   });
 
+  it("names the agent session it runs in from its shell's environment", async () => {
+    inNoOriginClone("main");
+    const transcript = piTranscript(false);
+    // What pi sets for every command its bash tool runs.
+    vi.stubEnv("PI_CODING_AGENT", "true");
+    vi.stubEnv("AI_AGENT", "pi");
+    vi.stubEnv("PI_SESSION_ID", "pi-s1");
+    vi.stubEnv("PI_SESSION_FILE", transcript);
+    // Inherited from the Claude Code shell pi was started from.
+    vi.stubEnv("CLAUDECODE", "1");
+    vi.stubEnv("CLAUDE_CODE_SESSION_ID", "claude-outer");
+
+    await dosu("search", "q");
+
+    const [call] = server.requests.filter((r) => r.body?.method === "tools/call");
+    expect(call.headers["x-dosu-session"]).toBe("pi-s1");
+    expect(call.headers["x-dosu-client"]).toBe("pi");
+  });
+
+  it("sends nothing when the agent session it runs in is off the record", async () => {
+    inNoOriginClone("main");
+    vi.stubEnv("PI_CODING_AGENT", "true");
+    vi.stubEnv("AI_AGENT", "pi");
+    vi.stubEnv("PI_SESSION_ID", "pi-s1");
+    vi.stubEnv("PI_SESSION_FILE", piTranscript(true));
+
+    await dosu("search", "q");
+    await dosu("evidence", "m1", "--json");
+
+    expect(server.requests).toEqual([]);
+    expect(err.join("\n")).toContain("Dosu is off for this session");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("sends nothing from a Claude Code or Codex session that is off the record", async () => {
+    inNoOriginClone("main");
+    const marker = `{"type":"user","message":{"content":"<command-name>/dosu-incognito</command-name>"}}\n`;
+    const claude = join(home, ".claude", "projects", "-w", "c-off.jsonl");
+    mkdirSync(dirname(claude), { recursive: true });
+    writeFileSync(claude, marker);
+    vi.stubEnv("CLAUDE_CONFIG_DIR", undefined);
+    vi.stubEnv("CLAUDECODE", "1");
+    vi.stubEnv("CLAUDE_CODE_SESSION_ID", "c-off");
+    await dosu("search", "q");
+
+    vi.stubEnv("CLAUDECODE", undefined);
+    vi.stubEnv("CLAUDE_CODE_SESSION_ID", undefined);
+    const thread = "01a10e94-7647-7512-abec-a5b6e626da5f";
+    const rollout = join(
+      home,
+      ".codex",
+      "sessions",
+      "2026",
+      "10",
+      "05",
+      `rollout-x-${thread}.jsonl`,
+    );
+    mkdirSync(dirname(rollout), { recursive: true });
+    writeFileSync(
+      rollout,
+      `{"type":"session_meta"}\n{"text":"Dosu incognito marker: ${INCOGNITO_MARKER}"}\n`,
+    );
+    vi.stubEnv("CODEX_HOME", undefined);
+    vi.stubEnv("CODEX_THREAD_ID", thread);
+    await dosu("search", "q");
+
+    expect(server.requests).toEqual([]);
+  });
+
   it("sends nothing for a session the user took off the record", async () => {
     inNoOriginClone("main");
     const transcript = piTranscript(true);

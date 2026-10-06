@@ -16,3 +16,17 @@ process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "dosu-vitest-"));
 process.env.HOME = mkdtempSync(join(tmpdir(), "dosu-vitest-home-"));
 delete process.env.CLAUDE_CONFIG_DIR;
 delete process.env.CODEX_HOME;
+
+// Tests run the same from an agent's shell as from CI: the session an agent names in the
+// environment of the commands it runs (mcp/call-session.ts shellSessions) is the test's to set.
+for (const name of [
+  "AI_AGENT",
+  "CLAUDECODE",
+  "CLAUDE_CODE_SESSION_ID",
+  "CODEX_THREAD_ID",
+  "PI_CODING_AGENT",
+  "PI_SESSION_ID",
+  "PI_SESSION_FILE",
+]) {
+  delete process.env[name];
+}

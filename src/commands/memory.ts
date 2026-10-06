@@ -2,19 +2,23 @@
  * scripts, and agents without MCP. They go through the same relay as `dosu mcp serve`, so the
  * request carries the same project (from the cwd), branch, and client headers an MCP session in
  * this directory would, and prints what the agent would read.
- * An agent passes the session it calls from (`--session`, and `--transcript` where the CLI cannot
- * find it by id), which the call is logged under -- and which, when the user took it off the
- * record, stops the call before it leaves the machine, as the proxy does. */
+ * The call is logged under the agent session it is made from -- the one passed (`--session`, and
+ * `--transcript` where the CLI cannot find it by id), else the one the agent's shell names
+ * (shellSessions) -- and a session the user took off the record stops it before it leaves the
+ * machine, as the proxy does. */
 
 import { Command, Option } from "commander";
 import pc from "picocolors";
 import { loadConfig, MODE_OSS } from "../config/config";
 import {
+  type CallSession,
   callSessionIsIncognito,
   harnessOfClient,
   OFF_THE_RECORD_MESSAGE,
+  shellSessions,
 } from "../mcp/call-session";
 import { callMcpTool, proxyRelay, type ToolResult, toolText } from "../mcp/proxy";
+import { trajectorySourceOf } from "../shipper/normalize";
 import { printResult } from "./output";
 
 interface MemoryOptions {
@@ -37,11 +41,18 @@ function sessionOptions(command: Command): Command {
     .option("--transcript <path>", "That session's transcript, where it cannot be found by id");
 }
 
-/** Whether the session the caller named is off the record; the client says whose it is. */
-function offTheRecord(opts: MemoryOptions): boolean {
+/** The sessions the call is made from: the one the caller named (the client says whose it is),
+ * else those of the agent shell it runs in, the innermost (or the client's) first. */
+function callerSessions(opts: MemoryOptions): CallSession[] {
   const harness = harnessOfClient(opts.client);
-  if (!opts.session || !harness) return false;
-  return callSessionIsIncognito({ harness, id: opts.session, transcript: opts.transcript ?? null });
+  if (opts.session) {
+    return harness ? [{ harness, id: opts.session, transcript: opts.transcript ?? null }] : [];
+  }
+  const sessions = shellSessions();
+  return [
+    ...sessions.filter((s) => s.harness === harness),
+    ...sessions.filter((s) => s.harness !== harness),
+  ];
 }
 
 function fail(message: string): void {
@@ -55,10 +66,15 @@ async function runTool(tool: string, args: Record<string, unknown>, opts: Memory
   if (loadConfig().mode === MODE_OSS) {
     return fail("Dosu memory needs a Dosu Cloud deployment; OSS mode serves public libraries.");
   }
-  if (offTheRecord(opts)) return fail(OFF_THE_RECORD_MESSAGE);
+  // Any of them off the record keeps the call here: an agent run from an incognito session's
+  // shell is part of it.
+  const sessions = callerSessions(opts);
+  if (sessions.some(callSessionIsIncognito)) return fail(OFF_THE_RECORD_MESSAGE);
+  const [session] = sessions;
+  const client = opts.client ?? (session ? trajectorySourceOf(session.harness) : undefined);
   let result: ToolResult;
   try {
-    result = await callMcpTool(proxyRelay({ client: opts.client }), tool, args, opts.session);
+    result = await callMcpTool(proxyRelay({ client }), tool, args, opts.session ?? session?.id);
   } catch (err) {
     // Not set up, or the request failed: the message says which, and what to do.
     return fail(err instanceof Error ? err.message : String(err));

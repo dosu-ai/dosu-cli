@@ -280,7 +280,10 @@ request, along with the branch checked out at that moment (`x-dosu-branch`) and 
 a checkout), as when a GUI host such as Cursor or Claude Desktop starts a global server in `/` or
 the home directory, the proxy asks an agent that supports MCP roots for its workspace roots and
 scopes the session by the first local one instead. `dosu memory search` and `dosu memory evidence`
-send the same headers from the current directory. A value with characters outside ASCII (a linked key, a checkout path, a branch
+send the same headers from the current directory. Run from an agent's shell, they name the agent
+session the call comes from by what the agent sets for the commands it runs (pi `PI_SESSION_ID`
+and `PI_SESSION_FILE`, Codex `CODEX_THREAD_ID`, Claude Code `CLAUDE_CODE_SESSION_ID`; `--session`
+overrides), and send nothing when that session, or one it was started from, is off the record. A value with characters outside ASCII (a linked key, a checkout path, a branch
 name) goes as an RFC 8187 value, `UTF-8''` followed by its percent-encoded UTF-8, which the server
 decodes; any other value goes as it is.
 
@@ -560,7 +563,9 @@ extension runs `dosu` for everything, so it carries no credentials:
   from shipping), adds a note telling the model Dosu is off (shown in the TUI), stops digests, hides
   the memory tools from the model, and blocks `search_memory` and `get_memory_evidence` in a `tool_call`
   handler, from any MCP server name (`mcp__<server>__<tool>`, so a user's own `mcp.json` entry for
-  Dosu too) and from codemode scripts, so none of the session's queries reach Dosu. A proxy already
+  Dosu too) and from codemode scripts. `dosu memory search|evidence` run from the session's bash
+  refuse as well, since pi names the session to the commands it runs. So none of the session's
+  queries reach Dosu. A proxy already
   running stays connected, unused: a `pi -p` run that unregisters an MCP server never exits
   (pi 1.0.0). It starts no turn of its own, so it
   works the same in the TUI, mid-run, and in print mode: `pi -p "/dosu-incognito" "<task>"` runs

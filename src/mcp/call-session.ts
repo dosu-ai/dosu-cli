@@ -155,6 +155,32 @@ export function takeCallSession(
   return null;
 }
 
+/** The agent sessions a command run from an agent's shell belongs to, innermost first, as the
+ * agents name them in the environment of the commands they run: pi PI_SESSION_ID and
+ * PI_SESSION_FILE (set per command, to the session running it), Codex CODEX_THREAD_ID, Claude
+ * Code CLAUDE_CODE_SESSION_ID. An agent started from another's shell inherits the outer one's
+ * too; AI_AGENT, which pi and Claude Code each set to themselves, puts the inner one first. */
+export function shellSessions(env: NodeJS.ProcessEnv = process.env): CallSession[] {
+  const sessions: CallSession[] = [];
+  const pi = str(env.PI_SESSION_ID);
+  if (env.PI_CODING_AGENT === "true" && pi && SAFE_ID.test(pi)) {
+    sessions.push({ harness: "pi", id: pi, transcript: str(env.PI_SESSION_FILE) });
+  }
+  const thread = str(env.CODEX_THREAD_ID);
+  const codex = thread ? codexSession(thread) : null;
+  if (codex) sessions.push(codex);
+  const claude = str(env.CLAUDE_CODE_SESSION_ID);
+  if (env.CLAUDECODE === "1" && claude && SAFE_ID.test(claude)) {
+    sessions.push({ harness: "claude", id: claude, transcript: null });
+  }
+  const agent = str(env.AI_AGENT);
+  const inner = agent?.startsWith("claude-code") ? "claude" : agent === "pi" ? "pi" : null;
+  return [
+    ...sessions.filter((s) => s.harness === inner),
+    ...sessions.filter((s) => s.harness !== inner),
+  ];
+}
+
 /** A Claude Code session's transcript, in whichever project folder holds it. */
 function claudeTranscript(id: string): string | null {
   const projects = join(claudeConfigDir(), "projects");
