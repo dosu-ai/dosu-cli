@@ -479,4 +479,39 @@ describe("the session a tool call belongs to", () => {
 
     expect(relayedCalls().map((r) => r.headers["x-dosu-session"])).toEqual([undefined]);
   });
+
+  it("takes no Claude Code session from the environment for another agent's server", async () => {
+    // Every shell Claude Code runs carries its session, so an agent started from one passes it on
+    // to its own server -- here an incognito session that is not the agent's.
+    writeFile(
+      join(home, ".claude", "projects", "-w", "s-off.jsonl"),
+      `{"type":"user","message":{"content":"<command-name>/dosu-incognito</command-name>"}}\n`,
+    );
+    vi.stubEnv("CLAUDE_CODE_SESSION_ID", "s-off");
+
+    await serve([...HANDSHAKE, search()], "--client", "opencode");
+    await serve([...HANDSHAKE, search({}, 3)], "--client", "cursor");
+
+    expect(relayedCalls().map((r) => r.headers["x-dosu-session"])).toEqual([undefined, undefined]);
+  });
+
+  it("takes the session argument from OpenCode's server only, and drops it from any", async () => {
+    codexRollout(
+      `{"type":"session_meta"}\n{"text":"Dosu incognito marker: ${INCOGNITO_MARKER}"}\n`,
+    );
+    const named = { query: "q", _dosu_session: "x" };
+
+    await serve(
+      [...HANDSHAKE, search({ ...codexMeta(codexThread), arguments: named })],
+      "--client",
+      "codex",
+    );
+    await serve([...HANDSHAKE, search({ arguments: named }, 3)], "--client", "cursor");
+
+    // Codex's thread still decides, and it is off the record.
+    expect(replies().find((r) => r.id === 2)?.result.isError).toBe(true);
+    const [call] = relayedCalls();
+    expect(call?.headers["x-dosu-session"]).toBeUndefined();
+    expect(call?.body.params.arguments).toEqual({ query: "q" });
+  });
 });

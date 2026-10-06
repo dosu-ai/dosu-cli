@@ -9,10 +9,14 @@
  * - Codex: the thread in every call's `_meta` (0.140 and 0.160), which names its rollout.
  * - Claude Code: the call's tool-use id in `_meta`, under which Dosu's PreToolUse hook recorded
  *   the session just before the call (recordClaudeToolCall); else the session Claude Code started
- *   this server in (CLAUDE_CODE_SESSION_ID).
- * - OpenCode: SESSION_ARGUMENT, which Dosu's plugin adds to the memory tools' arguments; it is
- *   removed before the call is relayed, since the server's tool schemas are strict.
- * - Pi, which has no MCP: `dosu memory --session --transcript` (commands/memory.ts). */
+ *   this server in (CLAUDE_CODE_SESSION_ID). Only Claude Code's server reads that variable: every
+ *   shell Claude Code runs carries it, so another agent started from one passes it on.
+ * - OpenCode: SESSION_ARGUMENT, which Dosu's plugin adds to the memory tools' arguments. Only
+ *   OpenCode's server takes it, and every server removes it before relaying, since the server's
+ *   tool schemas are strict.
+ * - Pi, which has no MCP: `dosu memory --session --transcript` (commands/memory.ts).
+ * - Cursor names no session in its calls and runs no Dosu hook that could, so its /dosu-incognito
+ *   keeps the memory tools off by instruction only. */
 
 import { mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -124,19 +128,20 @@ function codexSession(thread: string): CallSession | null {
   return { harness: "codex", id: basename(rollout, ".jsonl"), transcript: rollout };
 }
 
-/** The session a `tools/call` request's params name, read as described above; null when the
- * call carries none and the agent started this server in none. Removes SESSION_ARGUMENT from the
- * arguments. */
+/** The session a `tools/call` request's params name, read as described above for the agent
+ * `client`; null when the call carries none and the agent started this server in none. Removes
+ * SESSION_ARGUMENT from the arguments. */
 export function takeCallSession(
   params: Record<string, unknown>,
   client: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): CallSession | null {
+  const harness = harnessOfClient(client);
   const args = isObject(params.arguments) ? params.arguments : null;
   const named = args ? str(args[SESSION_ARGUMENT]) : null;
   if (args && SESSION_ARGUMENT in args) delete args[SESSION_ARGUMENT];
-  if (named && SAFE_ID.test(named)) {
-    return { harness: harnessOfClient(client) ?? "opencode", id: named, transcript: null };
+  if (harness === "opencode" && named && SAFE_ID.test(named)) {
+    return { harness, id: named, transcript: null };
   }
 
   const meta = isObject(params._meta) ? params._meta : {};
@@ -147,7 +152,7 @@ export function takeCallSession(
   const toolUseId = str(meta["claudecode/toolUseId"]);
   const recorded = toolUseId ? takeClaudeToolCall(toolUseId) : null;
   if (recorded) return recorded;
-  const started = str(env.CLAUDE_CODE_SESSION_ID);
+  const started = harness === "claude" ? str(env.CLAUDE_CODE_SESSION_ID) : null;
   if (started && SAFE_ID.test(started)) return { harness: "claude", id: started, transcript: null };
   return null;
 }
