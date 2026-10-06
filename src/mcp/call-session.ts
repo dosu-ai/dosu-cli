@@ -9,10 +9,11 @@
  * - Codex: the thread in every call's `_meta` (0.140 and 0.160), which names its rollout.
  * - Claude Code: the call's tool-use id in `_meta`, under which Dosu's PreToolUse hook recorded
  *   the session just before the call (recordClaudeToolCall); else the session Claude Code started
- *   this server in (CLAUDE_CODE_SESSION_ID).
- * - OpenCode: SESSION_ARGUMENT, which Dosu's plugin adds to the memory tools' arguments; it is
- *   removed before the call is relayed, since the server's tool schemas are strict.
- * - Pi, which has no MCP: `dosu memory --session --transcript` (commands/memory.ts). */
+ *   this server in (CLAUDE_CODE_SESSION_ID). Only for a server Claude Code started: any agent run
+ *   from a Claude Code shell inherits that variable.
+ * - OpenCode and pi: SESSION_ARGUMENT, which Dosu's plugin (OpenCode) or extension (pi) adds to
+ *   the memory tools' arguments; it is removed before the call is relayed, since the server's tool
+ *   schemas are strict. */
 
 import { mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -148,7 +149,9 @@ export function takeCallSession(
   const recorded = toolUseId ? takeClaudeToolCall(toolUseId) : null;
   if (recorded) return recorded;
   const started = str(env.CLAUDE_CODE_SESSION_ID);
-  if (started && SAFE_ID.test(started)) return { harness: "claude", id: started, transcript: null };
+  if (harnessOfClient(client) === "claude" && started && SAFE_ID.test(started)) {
+    return { harness: "claude", id: started, transcript: null };
+  }
   return null;
 }
 
