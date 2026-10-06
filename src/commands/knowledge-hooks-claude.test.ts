@@ -85,6 +85,7 @@ describe("Claude Code installed but never run (no ~/.claude)", () => {
     expect(claudeHooks()).toEqual({
       SessionEnd: ["dosu knowledge sync --quiet --detach"],
       UserPromptSubmit: ["dosu knowledge context"],
+      PreToolUse: ["dosu knowledge context"],
     });
     // The user's one opt-out, there before the first session needs it.
     expect(readFileSync(incognitoCommand(), "utf-8")).toContain("dosu:incognito:v1");
@@ -97,7 +98,10 @@ describe("Claude Code installed but never run (no ~/.claude)", () => {
   it("transcripts enable installs the prompt-time hook", async () => {
     const said = await dosu("transcripts", "enable");
 
-    expect(claudeHooks()).toEqual({ UserPromptSubmit: ["dosu knowledge context"] });
+    expect(claudeHooks()).toEqual({
+      UserPromptSubmit: ["dosu knowledge context"],
+      PreToolUse: ["dosu knowledge context"],
+    });
     expect(said).toContain("Claude Code will receive task memory");
   });
 
@@ -120,6 +124,7 @@ describe("Claude Code installed but never run (no ~/.claude)", () => {
     expect(claudeHooks()).toEqual({
       SessionEnd: ["dosu knowledge sync --quiet --detach"],
       UserPromptSubmit: ["dosu knowledge context"],
+      PreToolUse: ["dosu knowledge context"],
     });
     const status = JSON.parse(await dosu("hooks", "status", "--json")) as {
       agent: string;
@@ -161,7 +166,7 @@ describe("Claude Code installed but never run (no ~/.claude)", () => {
 
     expect(await claudeRow()).toMatchObject({
       enabled: true,
-      note: expect.stringContaining("Prompt-time memory hook (UserPromptSubmit) is missing"),
+      note: expect.stringContaining("Memory hooks (UserPromptSubmit, PreToolUse) are missing"),
     });
     expect(await dosu("hooks", "status")).toContain("dosu knowledge hooks enable claude");
 

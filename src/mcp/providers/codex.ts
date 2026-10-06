@@ -36,9 +36,10 @@ function tomlString(value: string): string {
 }
 
 /** Variables Codex forwards from its own environment to the proxy. Codex starts stdio servers
- * with a short allowlist (HOME, PATH, ...); these decide which Dosu config the proxy reads and
- * the project a session's DOSU_PROJECT names. */
-const FORWARDED_ENV = ["DOSU_PROJECT", "XDG_CONFIG_HOME"];
+ * with a short allowlist (HOME, PATH, ...); these decide which Dosu config the proxy reads, the
+ * project a session's DOSU_PROJECT names, and where the proxy finds the rollout of the thread a
+ * call names (its session; mcp/call-session.ts). */
+const FORWARDED_ENV = ["DOSU_PROJECT", "XDG_CONFIG_HOME", "CODEX_HOME"];
 
 /** The stdio server Codex runs: Dosu's proxy, or from a one-off npx copy, `npx mcp-remote`.
  * Codex desktop only renders MCP Apps for stdio servers, and launches them with the minimal

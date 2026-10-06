@@ -2,7 +2,12 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CONTEXT_EVENT, disableClaudeContextHook, enableClaudeContextHook } from "./context";
+import {
+  CONTEXT_EVENT,
+  disableClaudeContextHook,
+  enableClaudeContextHook,
+  hasClaudeContextHook,
+} from "./context";
 import { addGroupedHook, HOOK_COMMAND } from "./formats";
 
 let dir: string;
@@ -27,6 +32,29 @@ describe("the Claude Code context hook", () => {
     expect(settings().hooks[CONTEXT_EVENT]).toEqual([
       { hooks: [{ type: "command", command: "dosu knowledge context" }] },
     ]);
+  });
+
+  it("guards Dosu's memory tools on PreToolUse with the same command, and removes both", () => {
+    enableClaudeContextHook();
+    enableClaudeContextHook(); // idempotent
+    expect(settings().hooks.PreToolUse).toEqual([
+      {
+        matcher: "mcp__.+__(search_memory|get_memory_evidence)",
+        hooks: [{ type: "command", command: "dosu knowledge context" }],
+      },
+    ]);
+    expect(hasClaudeContextHook()).toBe(true);
+
+    disableClaudeContextHook();
+    expect(settings().hooks).toEqual({});
+  });
+
+  it("reports the hook missing when either half is gone", () => {
+    enableClaudeContextHook();
+    const config = settings();
+    delete config.hooks.PreToolUse;
+    writeFileSync(join(dir, "settings.json"), JSON.stringify(config));
+    expect(hasClaudeContextHook()).toBe(false);
   });
 
   it("lives beside the sync hook without touching it", () => {

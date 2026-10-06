@@ -123,7 +123,7 @@ function claudeAgent(): HookAgent {
     promptMemory: hasClaudeContextHook,
     statusNote: () =>
       shipping() && !hasClaudeContextHook()
-        ? "Prompt-time memory hook (UserPromptSubmit) is missing; 'dosu knowledge hooks enable claude' adds it."
+        ? "Memory hooks (UserPromptSubmit, PreToolUse) are missing; 'dosu knowledge hooks enable claude' adds them."
         : "",
   };
 }

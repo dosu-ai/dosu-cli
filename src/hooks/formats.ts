@@ -68,6 +68,8 @@ export interface HookSpec {
   isOurs: (command: unknown) => boolean;
   /** Seconds, written as the entry's `timeout` when the agent's default does not suit. */
   timeout?: number;
+  /** The group's matcher, for an event that filters by one (Claude Code's PreToolUse). */
+  matcher?: string;
 }
 
 /** The session-end sync hook -- the default, and the only one that existed before memory. */
@@ -148,13 +150,18 @@ export function addGroupedHook(
       present = true;
       hook.command = desired;
       if (spec.timeout !== undefined) hook.timeout = spec.timeout;
+      if (spec.matcher !== undefined) group.matcher = spec.matcher;
     }
   }
   if (present) return config;
   if (typeof config.hooks !== "object" || config.hooks === null) config.hooks = {};
   if (!Array.isArray(config.hooks[event])) config.hooks[event] = [];
   const timeout = spec.timeout !== undefined ? { timeout: spec.timeout } : {};
-  config.hooks[event].push({ hooks: [{ type: "command", command: desired, ...timeout }] });
+  const matcher = spec.matcher !== undefined ? { matcher: spec.matcher } : {};
+  config.hooks[event].push({
+    ...matcher,
+    hooks: [{ type: "command", command: desired, ...timeout }],
+  });
   return config;
 }
 
