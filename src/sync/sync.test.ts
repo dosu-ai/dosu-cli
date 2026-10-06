@@ -54,6 +54,7 @@ function makeDeps(overrides: Partial<SyncDeps> = {}): { deps: SyncDeps; saved: S
     // Tests use fake paths: neither local filter can read them.
     worthShipping: () => true,
     isIncognito: () => false,
+    isScratch: () => false,
     lock: openLock(),
     now: () => NOW,
     ...overrides,
@@ -262,7 +263,14 @@ describe("runKnowledgeSync shipping", () => {
 
     expect(vi.mocked(ship).mock.calls[0][0].map((s) => s.id)).toEqual(["s-90", "s-60", "s-30"]);
     expect(outcome.status).toBe("shipped");
-    expect(outcome.counts).toEqual({ shipped: 3, incognito: 0, trivial: 0, skipped: 0, failed: 0 });
+    expect(outcome.counts).toEqual({
+      shipped: 3,
+      incognito: 0,
+      trivial: 0,
+      scratch: 0,
+      skipped: 0,
+      failed: 0,
+    });
     const last = saved.at(-1);
     expect(last?.watermark).toBe(session(30).updated);
     expect(last?.total_shipped).toBe(3);
@@ -293,6 +301,22 @@ describe("runKnowledgeSync shipping", () => {
 
     expect(vi.mocked(ship).mock.calls[0][0]).toEqual([session(30)]);
     expect(outcome.counts).toMatchObject({ shipped: 1, incognito: 1, trivial: 1 });
+    expect(saved.at(-1)?.watermark).toBe(session(30).updated);
+  });
+
+  it("never uploads sessions run in a temp dir (eval replays, scratch repros)", async () => {
+    const ship = shipAll();
+    const replay = session(60);
+    const { deps, saved } = makeDeps({
+      listSessions: vi.fn().mockResolvedValue([session(30), replay]),
+      isScratch: (s) => s === replay,
+      ship,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(vi.mocked(ship).mock.calls[0][0]).toEqual([session(30)]);
+    expect(outcome.counts).toMatchObject({ shipped: 1, scratch: 1 });
     expect(saved.at(-1)?.watermark).toBe(session(30).updated);
   });
 

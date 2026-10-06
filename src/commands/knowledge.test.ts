@@ -491,7 +491,7 @@ describe("knowledge sync", () => {
       inFlightSessions: 0,
       sessions: [],
       settledSessions: 5,
-      counts: { shipped: 3, incognito: 1, trivial: 1, skipped: 0, failed: 0 },
+      counts: { shipped: 3, incognito: 1, trivial: 1, scratch: 0, skipped: 0, failed: 0 },
     });
 
     await run("sync");
@@ -510,7 +510,7 @@ describe("knowledge sync", () => {
       inFlightSessions: 0,
       sessions: [],
       settledSessions: 1,
-      counts: { shipped: 1, incognito: 0, trivial: 0, skipped: 0, failed: 0 },
+      counts: { shipped: 1, incognito: 0, trivial: 0, scratch: 0, skipped: 0, failed: 0 },
     });
 
     await run("sync");
@@ -528,7 +528,7 @@ describe("knowledge sync", () => {
       inFlightSessions: 0,
       sessions: [],
       settledSessions: 1,
-      counts: { shipped: 1, incognito: 0, trivial: 0, skipped: 0, failed: 1 },
+      counts: { shipped: 1, incognito: 0, trivial: 0, scratch: 0, skipped: 0, failed: 1 },
       error: "502 Bad Gateway",
     });
 
@@ -755,7 +755,7 @@ describe("knowledge sync", () => {
       inFlightSessions: 0,
       sessions: [],
       settledSessions: 2,
-      counts: { shipped: 2, incognito: 0, trivial: 0, skipped: 0, failed: 0 },
+      counts: { shipped: 2, incognito: 0, trivial: 0, scratch: 0, skipped: 0, failed: 0 },
     });
 
     await run("sync", "--report", "--out", "/tmp/custom-report.html");
@@ -840,7 +840,7 @@ describe("knowledge sync", () => {
       inFlightSessions: 0,
       sessions: [],
       settledSessions: settled,
-      counts: { shipped: settled, incognito: 0, trivial: 0, skipped: 0, failed: 0 },
+      counts: { shipped: settled, incognito: 0, trivial: 0, scratch: 0, skipped: 0, failed: 0 },
     };
   }
 

@@ -597,11 +597,19 @@ function printSyncOutcome(outcome: SyncOutcome): void {
     }
     case "shipped":
     case "ship-failed": {
-      const { shipped = 0, incognito = 0, trivial = 0, skipped = 0 } = outcome.counts ?? {};
-      const passed = incognito + trivial + skipped;
+      const {
+        shipped = 0,
+        incognito = 0,
+        trivial = 0,
+        scratch = 0,
+        skipped = 0,
+      } = outcome.counts ?? {};
+      const passed = incognito + trivial + scratch + skipped;
       console.log(
         `✓ Shipped ${shipped} session${plural(shipped)} to Dosu memory${
-          passed > 0 ? pc.dim(` (${passed} passed over: incognito, too short, or rejected)`) : ""
+          passed > 0
+            ? pc.dim(` (${passed} passed over: incognito, temp dir, too short, or rejected)`)
+            : ""
         }.`,
       );
       if (outcome.status === "ship-failed") {

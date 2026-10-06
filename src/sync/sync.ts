@@ -8,6 +8,7 @@ import { isWorthStudying } from "../sessions/read";
 import { type AgentSession, scanAgentSessions } from "../sessions/scan";
 import { isIncognitoSession } from "./incognito";
 import { fileLock, type SyncLock } from "./lock";
+import { isScratchDir } from "./scratch";
 import {
   backoffUntil,
   filterSessionsByProject,
@@ -61,6 +62,8 @@ interface ShipCounts {
   incognito: number;
   /** Too small to plausibly hold anything worth learning; never uploaded. */
   trivial: number;
+  /** Run in a temp dir (eval replays, scratch repros); never uploaded. */
+  scratch: number;
   /** Rejected by the backend or unreadable locally; not retried. */
   skipped: number;
   failed: number;
@@ -91,6 +94,8 @@ export interface SyncDeps {
   worthShipping?: (session: AgentSession) => boolean;
   /** Per-session opt-out check; defaults to isIncognitoSession (transcript marker). */
   isIncognito?: (session: AgentSession) => boolean;
+  /** Whether the session ran in a temp dir; defaults to the resolved working directory. */
+  isScratch?: (session: AgentSession) => boolean;
   /** Session → working directory, for the project filter; defaults to the cached resolver. */
   resolveProjectDir?: (session: AgentSession) => string | null;
   lock?: SyncLock;
@@ -234,13 +239,30 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       };
     }
 
-    // Oldest first, so the watermark only ever advances. Incognito and trivial sessions are
-    // settled locally — never uploaded — and count as examined so the watermark passes them.
+    // Oldest first, so the watermark only ever advances. Incognito, scratch and trivial sessions
+    // are settled locally — never uploaded — and count as examined so the watermark passes them.
     const worthShipping = deps.worthShipping ?? isWorthStudying;
     const isIncognito = deps.isIncognito ?? isIncognitoSession;
-    const counts: ShipCounts = { shipped: 0, incognito: 0, trivial: 0, skipped: 0, failed: 0 };
+    let flushDirs: (() => void) | undefined;
+    let isScratch = deps.isScratch;
+    if (!isScratch) {
+      const resolver = createProjectDirResolver();
+      flushDirs = resolver.flush;
+      isScratch = (session) => {
+        const dir = resolver.resolve(session);
+        return dir !== null && isScratchDir(dir);
+      };
+    }
+    const counts: ShipCounts = {
+      shipped: 0,
+      incognito: 0,
+      trivial: 0,
+      scratch: 0,
+      skipped: 0,
+      failed: 0,
+    };
     const examined: AgentSession[] = [];
-    const localOutcome = new Map<AgentSession, "incognito" | "trivial">();
+    const localOutcome = new Map<AgentSession, "incognito" | "trivial" | "scratch">();
     const batch: AgentSession[] = [];
     // Sorted here rather than trusting the lister's order: the watermark depends on it.
     const oldestFirst = [...ready].sort((a, b) => Date.parse(a.updated) - Date.parse(b.updated));
@@ -248,9 +270,11 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       if (batch.length >= SHIP_BATCH_LIMIT) break;
       examined.push(candidate);
       if (isIncognito(candidate)) localOutcome.set(candidate, "incognito");
+      else if (isScratch(candidate)) localOutcome.set(candidate, "scratch");
       else if (!worthShipping(candidate)) localOutcome.set(candidate, "trivial");
       else batch.push(candidate);
     }
+    flushDirs?.();
     logger.debug(
       "sync",
       `shipping ${batch.length} of ${ready.length} ready sessions (watermark ${state.watermark ?? "none"})`,
@@ -334,7 +358,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     }
     logger.debug(
       "sync",
-      `ship phase: ${counts.shipped} shipped, ${counts.incognito} incognito, ${counts.trivial} trivial, ${counts.skipped} skipped, ${counts.failed} failed; watermark → ${next.watermark ?? "none"}`,
+      `ship phase: ${counts.shipped} shipped, ${counts.incognito} incognito, ${counts.scratch} scratch, ${counts.trivial} trivial, ${counts.skipped} skipped, ${counts.failed} failed; watermark → ${next.watermark ?? "none"}`,
     );
     return {
       status: counts.failed > 0 ? "ship-failed" : "shipped",
