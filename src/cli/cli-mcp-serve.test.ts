@@ -2,15 +2,18 @@
  * config and git checkout, and a local streamable-HTTP server standing in for Dosu. */
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
 import { type FakeMcpServer, startFakeMcpServer } from "../mcp/mcp-server.test-utils";
+import { contextHookOutput } from "../memory/context-hook";
+import { makeOpencodeDb, opencodeDocument } from "../sessions/opencode.test-utils";
+import { INCOGNITO_MARKER } from "../sync/incognito";
 import { createProgram } from "./cli";
 
 let home: string;
@@ -331,5 +334,226 @@ describe("an agent that starts the proxy outside its workspace", () => {
 
     expect(lines().map((m) => m.method)).toContain("roots/list");
     expect(text).toContain(`project=path:${home} `);
+  });
+});
+
+describe("the session a tool call belongs to", () => {
+  const search = (params: Record<string, unknown> = {}, id = 2) => ({
+    jsonrpc: "2.0",
+    id,
+    method: "tools/call",
+    params: { name: "search_memory", arguments: { query: "q" }, ...params },
+  });
+
+  // biome-ignore lint/suspicious/noExplicitAny: JSON-RPC replies
+  function replies(): Array<Record<string, any>> {
+    return stdout
+      .join("")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  }
+
+  /** The tools/call requests that reached Dosu. */
+  function relayedCalls() {
+    return server.requests.filter((r) => r.body?.method === "tools/call");
+  }
+
+  function writeFile(path: string, text: string): string {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, text);
+    return path;
+  }
+
+  const codexThread = "01a10e60-e400-7590-875d-37ca506279ac";
+  const rolloutStem = `rollout-2026-10-05T16-23-13-${codexThread}`;
+  const codexMeta = (thread: string) => ({
+    _meta: { "x-codex-turn-metadata": { session_id: thread, thread_id: thread }, threadId: thread },
+  });
+
+  function codexRollout(text: string): void {
+    writeFile(join(home, ".codex", "sessions", "2026", "10", "05", `${rolloutStem}.jsonl`), text);
+  }
+
+  beforeEach(() => {
+    vi.stubEnv("CLAUDE_CODE_SESSION_ID", undefined);
+    vi.stubEnv("CODEX_HOME", undefined);
+    setUp();
+    process.chdir(noOriginClone("main").dir);
+  });
+
+  it("names a Codex call's session by its thread's rollout", async () => {
+    codexRollout('{"type":"session_meta"}\n');
+
+    await serve([...HANDSHAKE, search(codexMeta(codexThread))], "--client", "codex");
+
+    expect(relayedCalls().map((r) => r.headers["x-dosu-session"])).toEqual([rolloutStem]);
+    expect(replies().find((r) => r.id === 2)?.result.isError).toBeFalsy();
+  });
+
+  it("sends nothing for a Codex session the user took off the record", async () => {
+    codexRollout(
+      `{"type":"session_meta"}\n{"text":"Dosu incognito marker: ${INCOGNITO_MARKER}"}\n`,
+    );
+
+    await serve([...HANDSHAKE, search(codexMeta(codexThread))], "--client", "codex");
+
+    expect(relayedCalls()).toEqual([]);
+    const reply = replies().find((r) => r.id === 2);
+    expect(reply?.result.isError).toBe(true);
+    expect(reply?.result.content[0].text).toContain("Dosu is off for this session");
+  });
+
+  it("names a Claude Code call's session as its PreToolUse hook recorded it", async () => {
+    const transcript = writeFile(join(home, ".claude", "projects", "-w", "s-live.jsonl"), "{}\n");
+    vi.stubEnv("CLAUDE_CODE_SESSION_ID", "s-started");
+    await contextHookOutput(
+      JSON.stringify({
+        hook_event_name: "PreToolUse",
+        session_id: "s-live",
+        transcript_path: transcript,
+        tool_name: "mcp__dosu__search_memory",
+        tool_input: { query: "q" },
+        tool_use_id: "toolu_1",
+      }),
+      { apiKey: "k", deploymentId: "d", backendUrl: server.baseUrl },
+    );
+
+    await serve(
+      [
+        ...HANDSHAKE,
+        search({ _meta: { "claudecode/toolUseId": "toolu_1" } }, 2),
+        search({ _meta: { "claudecode/toolUseId": "toolu_2" } }, 3),
+      ],
+      "--client",
+      "claude-code",
+    );
+
+    // The second call has no record: the session Claude Code started the server in.
+    expect(relayedCalls().map((r) => r.headers["x-dosu-session"])).toEqual(["s-live", "s-started"]);
+  });
+
+  it("names a Claude Code subagent's call by the subagent's own session", async () => {
+    // A subagent's transcript ships as a session of its own beside its parent's; the hook payload
+    // names the parent and the agent.
+    const parent = writeFile(join(home, ".claude", "projects", "-w", "s-parent.jsonl"), "{}\n");
+    writeFile(
+      join(home, ".claude", "projects", "-w", "s-parent", "subagents", "agent-a1.jsonl"),
+      "{}\n",
+    );
+    const hook = (agent: Record<string, string>, toolUseId: string) =>
+      contextHookOutput(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          session_id: "s-parent",
+          transcript_path: parent,
+          tool_name: "mcp__dosu__search_memory",
+          tool_input: { query: "q" },
+          tool_use_id: toolUseId,
+          ...agent,
+        }),
+        { apiKey: "k", deploymentId: "d", backendUrl: server.baseUrl },
+      );
+    await hook({ agent_id: "a1", agent_type: "general-purpose" }, "toolu_a1");
+    await hook({ agent_id: "a2", agent_type: "general-purpose" }, "toolu_a2");
+
+    await serve(
+      [
+        ...HANDSHAKE,
+        search({ _meta: { "claudecode/toolUseId": "toolu_a1" } }, 2),
+        search({ _meta: { "claudecode/toolUseId": "toolu_a2" } }, 3),
+      ],
+      "--client",
+      "claude-code",
+    );
+
+    // a2's transcript is not written yet: its id is still the one it will ship under.
+    expect(
+      relayedCalls()
+        .map((r) => r.headers["x-dosu-session"])
+        .sort(),
+    ).toEqual(["agent-a1", "agent-a2"]);
+  });
+
+  it("sends nothing for a Claude Code session the user took off the record", async () => {
+    writeFile(
+      join(home, ".claude", "projects", "-w", "s-off.jsonl"),
+      `{"type":"user","message":{"content":"<command-name>/dosu-incognito</command-name>"}}\n`,
+    );
+    vi.stubEnv("CLAUDE_CODE_SESSION_ID", "s-off");
+
+    await serve([...HANDSHAKE, search()], "--client", "claude-code");
+
+    expect(relayedCalls()).toEqual([]);
+    expect(replies().find((r) => r.id === 2)?.result.isError).toBe(true);
+  });
+
+  it("takes an OpenCode call's session from the argument Dosu's plugin adds, and drops it", async () => {
+    await serve(
+      [...HANDSHAKE, search({ arguments: { query: "q", _dosu_session: "ses_live" } })],
+      "--client",
+      "opencode",
+    );
+
+    const [call] = relayedCalls();
+    expect(call?.headers["x-dosu-session"]).toBe("ses_live");
+    expect(call?.body.params.arguments).toEqual({ query: "q" });
+  });
+
+  it("sends nothing for an OpenCode session the user took off the record", async () => {
+    const dbPath = join(home, ".local", "share", "opencode", "opencode.db");
+    mkdirSync(dirname(dbPath), { recursive: true });
+    const doc = opencodeDocument({ id: "ses_off", user: `/dosu-incognito ${INCOGNITO_MARKER}` });
+    if (!makeOpencodeDb(dbPath, doc)) return; // no sqlite builtin
+
+    await serve(
+      [...HANDSHAKE, search({ arguments: { query: "q", _dosu_session: "ses_off" } })],
+      "--client",
+      "opencode",
+    );
+
+    expect(relayedCalls()).toEqual([]);
+    expect(replies().find((r) => r.id === 2)?.result.isError).toBe(true);
+  });
+
+  it("names no session for a call that carries none", async () => {
+    await serve([...HANDSHAKE, search()], "--client", "cursor");
+
+    expect(relayedCalls().map((r) => r.headers["x-dosu-session"])).toEqual([undefined]);
+  });
+
+  it("takes no Claude Code session from the environment for another agent's server", async () => {
+    // Every shell Claude Code runs carries its session, so an agent started from one passes it on
+    // to its own server -- here an incognito session that is not the agent's.
+    writeFile(
+      join(home, ".claude", "projects", "-w", "s-off.jsonl"),
+      `{"type":"user","message":{"content":"<command-name>/dosu-incognito</command-name>"}}\n`,
+    );
+    vi.stubEnv("CLAUDE_CODE_SESSION_ID", "s-off");
+
+    await serve([...HANDSHAKE, search()], "--client", "opencode");
+    await serve([...HANDSHAKE, search({}, 3)], "--client", "cursor");
+
+    expect(relayedCalls().map((r) => r.headers["x-dosu-session"])).toEqual([undefined, undefined]);
+  });
+
+  it("takes the session argument from OpenCode's server only, and drops it from any", async () => {
+    codexRollout(
+      `{"type":"session_meta"}\n{"text":"Dosu incognito marker: ${INCOGNITO_MARKER}"}\n`,
+    );
+    const named = { query: "q", _dosu_session: "x" };
+
+    await serve(
+      [...HANDSHAKE, search({ ...codexMeta(codexThread), arguments: named })],
+      "--client",
+      "codex",
+    );
+    await serve([...HANDSHAKE, search({ arguments: named }, 3)], "--client", "cursor");
+
+    // Codex's thread still decides, and it is off the record.
+    expect(replies().find((r) => r.id === 2)?.result.isError).toBe(true);
+    const [call] = relayedCalls();
+    expect(call?.headers["x-dosu-session"]).toBeUndefined();
+    expect(call?.body.params.arguments).toEqual({ query: "q" });
   });
 });

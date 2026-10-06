@@ -17,6 +17,7 @@ import { logger } from "../debug/logger";
 import { type GitBudget, resolveProjectOfDir } from "../sessions/project";
 import { currentBranchOfDir } from "../sessions/repo";
 import { VERSION } from "../version/version";
+import { callSessionIsIncognito, OFF_THE_RECORD_MESSAGE, takeCallSession } from "./call-session";
 import { mcpEndpoint } from "./config-helpers";
 import { createMcpRelay, type McpRelay } from "./relay";
 
@@ -55,6 +56,8 @@ export interface ProxyOptions {
 /** A relay with the session scope it sends. */
 interface ProxySession {
   relay: McpRelay;
+  /** x-dosu-client: the agent being served. */
+  client?: string;
   /** The directory it started in has no project of its own (no link, DOSU_PROJECT, or
    * checkout), as when a GUI host starts a global server in / or the home directory. */
   unscoped: boolean;
@@ -92,6 +95,7 @@ function openSession(options: ProxyOptions): ProxySession {
   });
   return {
     relay,
+    client: options.client,
     unscoped: started?.rule === "path",
     rescope(root: string) {
       const named = resolveProjectOfDir(root, { budget: STARTUP_GIT_BUDGET });
@@ -181,8 +185,26 @@ async function serveStdio(
       const params = isObject(message.params) ? message.params : {};
       agentOffersRoots = isObject(params.capabilities) && isObject(params.capabilities.roots);
     }
+    // A tool call names the agent session it belongs to; one from a session the user took off
+    // the record is answered here and never reaches Dosu, so not even its query is logged.
+    const callSession =
+      method === "tools/call" && isObject(message) && isObject(message.params)
+        ? takeCallSession(message.params, session.client)
+        : null;
+    if (callSession && callSessionIsIncognito(callSession) && isObject(message)) {
+      logger.info(
+        "mcp-proxy",
+        `${callSession.harness}/${callSession.id} is incognito: call not sent`,
+      );
+      emit({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: { content: [{ type: "text", text: OFF_THE_RECORD_MESSAGE }], isError: true },
+      });
+      return;
+    }
     const exchange: Promise<void> = scoped
-      .then(() => relay.send(message, emit))
+      .then(() => relay.send(message, emit, callSession?.id))
       .finally(() => {
         inflight.delete(exchange);
       });
@@ -253,11 +275,17 @@ async function request(
   id: number,
   method: string,
   params: Record<string, unknown>,
+  session: string | null = null,
 ): Promise<unknown> {
   let reply: { error?: { message?: unknown }; result?: unknown } | undefined;
-  await relay.send({ jsonrpc: "2.0", id, method, params }, (message) => {
-    if ((message as { id?: unknown } | null)?.id === id) reply = message as typeof reply;
-  });
+  const message = { jsonrpc: "2.0", id, method, params };
+  await relay.send(
+    message,
+    (answer) => {
+      if ((answer as { id?: unknown } | null)?.id === id) reply = answer as typeof reply;
+    },
+    session,
+  );
   if (reply?.error) {
     const text = reply.error.message;
     throw new Error(typeof text === "string" ? text : "Dosu MCP request failed.");
@@ -265,11 +293,13 @@ async function request(
   return reply?.result;
 }
 
-/** Calls one tool as an MCP client would: initialize, initialized, tools/call. */
+/** Calls one tool as an MCP client would: initialize, initialized, tools/call, the call under
+ * the agent session `session` when given. */
 export async function callMcpTool(
   relay: McpRelay,
   name: string,
   args: Record<string, unknown>,
+  session: string | null = null,
 ): Promise<ToolResult> {
   try {
     await request(relay, 1, "initialize", {
@@ -278,7 +308,7 @@ export async function callMcpTool(
       clientInfo: { name: "dosu-cli", version: VERSION },
     });
     await relay.send({ jsonrpc: "2.0", method: "notifications/initialized" }, () => {});
-    const result = await request(relay, 2, "tools/call", { name, arguments: args });
+    const result = await request(relay, 2, "tools/call", { name, arguments: args }, session);
     return (result ?? {}) as ToolResult;
   } finally {
     await relay.close();

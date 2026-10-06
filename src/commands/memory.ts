@@ -1,17 +1,31 @@
 /** `dosu memory search|evidence`: Dosu memory's two MCP tools from a terminal, for people and for
  * agents without MCP (the Pi extension's tools shell out to these). They go through the same
  * relay as `dosu mcp serve`, so the request carries the same project (from the cwd), branch, and
- * client headers an MCP session in this directory would, and prints what the agent would read. */
+ * client headers an MCP session in this directory would, and prints what the agent would read.
+ * The call is logged under the agent session it is made from -- which, when the user took it off
+ * the record, stops the call before it leaves the machine, as the proxy does. An extension names
+ * that session (`--session`, and `--transcript` where the CLI cannot find it by id); a model that
+ * runs the command from its shell is in the session its agent's environment names. */
 
 import { Command, Option } from "commander";
 import pc from "picocolors";
 import { loadConfig, MODE_OSS } from "../config/config";
+import {
+  type CallSession,
+  callSessionIsIncognito,
+  harnessOfClient,
+  OFF_THE_RECORD_MESSAGE,
+  shellSessions,
+} from "../mcp/call-session";
 import { callMcpTool, proxyRelay, type ToolResult, toolText } from "../mcp/proxy";
+import { trajectorySourceOf } from "../shipper/normalize";
 import { printResult } from "./output";
 
 interface MemoryOptions {
   json?: boolean;
   client?: string;
+  session?: string;
+  transcript?: string;
 }
 
 function clientOption(): Option {
@@ -19,6 +33,20 @@ function clientOption(): Option {
     "--client <id>",
     "Agent to report as the caller (claude-code, codex, opencode, pi, ...)",
   );
+}
+
+function sessionOptions(command: Command): Command {
+  return command
+    .option("--session <id>", "The agent session the call is made from, as its transcript ships")
+    .option("--transcript <path>", "That session's transcript, where it cannot be found by id");
+}
+
+/** The sessions the call is made from: the one the caller names (the client says whose), else
+ * the ones the shell's environment names (shellSessions). */
+function callSessions(opts: MemoryOptions): CallSession[] {
+  if (!opts.session) return shellSessions(opts.client);
+  const harness = harnessOfClient(opts.client);
+  return harness ? [{ harness, id: opts.session, transcript: opts.transcript ?? null }] : [];
 }
 
 function fail(message: string): void {
@@ -32,9 +60,15 @@ async function runTool(tool: string, args: Record<string, unknown>, opts: Memory
   if (loadConfig().mode === MODE_OSS) {
     return fail("Dosu memory needs a Dosu Cloud deployment; OSS mode serves public libraries.");
   }
+  // An agent started from another's shell is in both sessions, and held to both.
+  const sessions = callSessions(opts);
+  if (sessions.some(callSessionIsIncognito)) return fail(OFF_THE_RECORD_MESSAGE);
+  // Logged under the shell's session, and as its agent, only when that is unambiguous.
+  const shell = !opts.session && sessions.length === 1 ? sessions[0] : null;
+  const client = opts.client ?? (shell ? trajectorySourceOf(shell.harness) : undefined);
   let result: ToolResult;
   try {
-    result = await callMcpTool(proxyRelay({ client: opts.client }), tool, args);
+    result = await callMcpTool(proxyRelay({ client }), tool, args, opts.session ?? shell?.id);
   } catch (err) {
     // Not set up, or the request failed: the message says which, and what to do.
     return fail(err instanceof Error ? err.message : String(err));
@@ -53,16 +87,14 @@ export function memoryCommand(): Command {
     "Search Dosu memory, learned from earlier agent sessions, as an agent's MCP tools do",
   );
 
-  cmd
-    .command("search")
+  sessionOptions(cmd.command("search"))
     .description("Search memory for lessons and runbooks relevant to a task (search_memory)")
     .argument("<query>", "What you are trying to do or learn")
     .option("--json", "Output the tool result as JSON")
     .addOption(clientOption())
     .action((query: string, opts: MemoryOptions) => runTool("search_memory", { query }, opts));
 
-  cmd
-    .command("evidence")
+  sessionOptions(cmd.command("evidence"))
     .description("Show the transcript excerpts behind one memory (get_memory_evidence)")
     .argument("<memory-id>", "A memory id from search results or a Task Memory digest")
     .option("--json", "Output the tool result as JSON")

@@ -19,6 +19,11 @@
  *   transcript. Incognito sessions and subagents' sessions are not asked about.
  * - Incognito. `/dosu-incognito` is an opencode custom command (src/incognito/agents.ts); its
  *   expansion carries the marker, which the plugin and the sync both read.
+ * - Memory tool calls. One opencode process runs many sessions through one Dosu MCP proxy, which
+ *   cannot tell them apart, so `tool.execute.before` names the session in the arguments of each
+ *   call to Dosu's memory tools when the server is the proxy (which takes it out again; see
+ *   src/mcp/call-session.ts), and stops the call in an incognito session or a subagent's of one.
+ *   `shell.env` names it to the session's shell commands too, for `dosu memory` run from one.
  *
  * The plugin is plain JavaScript importing only node builtins. opencode 1.18 still waits, before it
  * loads any local plugin, for the npm install of `@opencode-ai/plugin` it starts in its config dir
@@ -33,6 +38,11 @@ import {
   getIncognitoAgent,
   keptIncognitoNote,
 } from "../incognito/agents";
+import {
+  OFF_THE_RECORD_MESSAGE,
+  OPENCODE_SESSION_VARIABLE,
+  SESSION_ARGUMENT,
+} from "../mcp/call-session";
 import { writeSecureFile } from "../mcp/config-helpers";
 import { isInstalled, isOnPath } from "../mcp/detect";
 import { INCOGNITO_MARKER } from "../sync/incognito";
@@ -94,13 +104,21 @@ const QUIET_SYNC_MS = ${DEFAULT_QUIET_PERIOD_MS + 30_000};
 // Past this the prompt is waiting on Dosu, and a late digest is not worth a stalled prompt.
 const CONTEXT_TIMEOUT_MS = 10000;
 const SESSION_ID = /^[A-Za-z0-9_-]+$/;
+// Dosu's memory tools as opencode names an MCP server's tools, <server>_<tool>, on the \`dosu\`
+// entry \`dosu mcp add\` writes: other servers may have tools of the same names.
+const MEMORY_TOOL = /^(dosu)_(search_memory|get_memory_evidence)$/;
+const SESSION_ARGUMENT = ${JSON.stringify(SESSION_ARGUMENT)};
+const SESSION_VARIABLE = ${JSON.stringify(OPENCODE_SESSION_VARIABLE)};
+const OFF_THE_RECORD = ${JSON.stringify(OFF_THE_RECORD_MESSAGE)};
 
 // Per process, not per plugin instance: opencode imports this module once and starts the plugin
 // from it for each project instance, and again whenever it reloads one.
 const ran = new Set();
 const created = new Set();
 const subagents = new Set();
+const parents = new Map();
 const incognito = new Set();
+let proxyServers;
 let watcher;
 let lastIdle = 0;
 let quietSync;
@@ -194,6 +212,33 @@ function partId() {
   return "prt_" + time.slice(-12) + random;
 }
 
+/** A session is off the record when it, or a session it was spawned from, went incognito. */
+function offTheRecord(sessionID) {
+  for (let id = sessionID, depth = 0; id && depth < 32; id = parents.get(id), depth++) {
+    if (incognito.has(id)) return true;
+  }
+  return false;
+}
+
+/** The MCP servers (by opencode's tool prefix) that run Dosu's local proxy, which takes the
+ * session argument out before relaying; any other server would reject it. */
+function proxiedServers(client) {
+  proxyServers ??= Promise.resolve()
+    .then(() => client.config.get())
+    .then((res) => {
+      const servers = new Set();
+      for (const [name, entry] of Object.entries(res?.data?.mcp ?? {})) {
+        const command = Array.isArray(entry?.command) ? entry.command.join(" ") : "";
+        if (entry?.type === "local" && command.includes("mcp serve")) {
+          servers.add(name.replace(/[^a-zA-Z0-9_-]/g, "_"));
+        }
+      }
+      return servers;
+    })
+    .catch(() => new Set());
+  return proxyServers;
+}
+
 function hasMarker(parts) {
   return (parts ?? []).some((p) => typeof p?.text === "string" && p.text.includes(INCOGNITO_MARKER));
 }
@@ -216,13 +261,34 @@ export const DosuMemory = async ({ client, directory }) => {
         const info = props.info ?? {};
         if (typeof info.id !== "string") return;
         created.add(info.id);
-        if (info.parentID) subagents.add(info.id);
+        if (info.parentID) {
+          subagents.add(info.id);
+          parents.set(info.id, info.parentID);
+        }
         return;
       }
       if (event?.type !== "session.idle" || typeof props.sessionID !== "string") return;
       ranHere(props.sessionID);
       lastIdle = Date.now();
       if (!quietSync) syncWhenQuiet(QUIET_SYNC_MS);
+    },
+
+    "tool.execute.before": async (input, output) => {
+      const tool = MEMORY_TOOL.exec(input?.tool ?? "");
+      const sessionID = input?.sessionID;
+      if (!tool || typeof sessionID !== "string") return;
+      if (offTheRecord(sessionID)) throw new Error(OFF_THE_RECORD);
+      const args = output?.args;
+      if (!args || typeof args !== "object") return;
+      if ((await proxiedServers(client)).has(tool[1])) args[SESSION_ARGUMENT] = sessionID;
+    },
+
+    // The session's shell commands carry it too, so \`dosu memory\` run from one keeps to it.
+    "shell.env": async (input, output) => {
+      const sessionID = input?.sessionID;
+      if (typeof sessionID === "string" && SESSION_ID.test(sessionID) && output?.env) {
+        output.env[SESSION_VARIABLE] = sessionID;
+      }
     },
 
     "chat.message": async (input, output) => {

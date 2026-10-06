@@ -1,8 +1,11 @@
 /** The prompt-time memory hook: Claude Code runs `dosu knowledge context` on every prompt it is
  * about to submit, and the digest it prints (if any) lands in the model's context for that turn.
- * Installed and removed together with transcript shipping -- one switch for the memory system. */
+ * The same command guards Dosu's memory tools on PreToolUse: it stops them in a session the user
+ * took off the record and tells the MCP proxy which session each call belongs to. Installed and
+ * removed together with transcript shipping -- one switch for the memory system. */
 
 import { join } from "node:path";
+import { CLAUDE_MEMORY_TOOL_PATTERN } from "../mcp/call-session";
 import { claudeCodeInstalled, claudeConfigDir } from "./claude-code";
 import {
   addGroupedHook,
@@ -39,6 +42,10 @@ const CONTEXT_HOOK: HookSpec = {
   isOurs: isDosuContextHookCommand,
 };
 
+const MEMORY_TOOL_EVENT = "PreToolUse";
+
+const MEMORY_TOOL_HOOK: HookSpec = { ...CONTEXT_HOOK, matcher: CLAUDE_MEMORY_TOOL_PATTERN };
+
 function settingsPath(): string {
   return join(claudeConfigDir(), "settings.json");
 }
@@ -46,7 +53,8 @@ function settingsPath(): string {
 /** Install the hook, whether or not Claude Code has run here yet. */
 export function installClaudeContextHook(): void {
   const path = settingsPath();
-  writeHookConfig(path, addGroupedHook(readHookConfig(path), CONTEXT_EVENT, CONTEXT_HOOK));
+  const config = addGroupedHook(readHookConfig(path), CONTEXT_EVENT, CONTEXT_HOOK);
+  writeHookConfig(path, addGroupedHook(config, MEMORY_TOOL_EVENT, MEMORY_TOOL_HOOK));
 }
 
 /** Install the hook if Claude Code is present. Returns whether it is installed afterwards. Codex's
@@ -57,14 +65,22 @@ export function enableClaudeContextHook(): boolean {
   return true;
 }
 
-/** Whether Claude Code's settings carry the hook. */
+/** Whether Claude Code's settings carry the hook, on both of its events. */
 export function hasClaudeContextHook(): boolean {
-  return hasGroupedHook(readHookConfig(settingsPath()), CONTEXT_EVENT, CONTEXT_HOOK);
+  const config = readHookConfig(settingsPath());
+  return (
+    hasGroupedHook(config, CONTEXT_EVENT, CONTEXT_HOOK) &&
+    hasGroupedHook(config, MEMORY_TOOL_EVENT, MEMORY_TOOL_HOOK)
+  );
 }
 
 export function disableClaudeContextHook(): void {
   const path = settingsPath();
   const config = readHookConfig(path);
-  if (!hasGroupedHook(config, CONTEXT_EVENT, CONTEXT_HOOK)) return;
-  writeHookConfig(path, removeGroupedHook(config, CONTEXT_EVENT, CONTEXT_HOOK));
+  const events = [CONTEXT_EVENT, MEMORY_TOOL_EVENT].filter((event) =>
+    hasGroupedHook(config, event, CONTEXT_HOOK),
+  );
+  if (events.length === 0) return;
+  for (const event of events) removeGroupedHook(config, event, CONTEXT_HOOK);
+  writeHookConfig(path, config);
 }

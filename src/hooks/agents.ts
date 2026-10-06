@@ -2,6 +2,7 @@
  * `src/mcp/providers`, not an extension: hook-capable agents and their operations differ. */
 
 import { join } from "node:path";
+import { logger } from "../debug/logger";
 import {
   disableIncognitoWithHooks,
   getIncognitoAgent,
@@ -119,7 +120,7 @@ function claudeAgent(): HookAgent {
         : "Prompt-time memory stays off while transcript shipping is disabled; 'dosu knowledge transcripts enable' turns it on.",
     statusNote: () =>
       shipping() && !hasClaudeContextHook()
-        ? "Prompt-time memory hook (UserPromptSubmit) is missing; 'dosu knowledge hooks enable claude' adds it."
+        ? "Memory hooks (UserPromptSubmit, PreToolUse) are missing; 'dosu knowledge hooks enable claude' adds them."
         : "",
   };
 }
@@ -168,4 +169,22 @@ export function allHookAgents(): HookAgent[] {
 
 export function getHookAgent(id: string): HookAgent | undefined {
   return allHookAgents().find((agent) => agent.id() === id);
+}
+
+/** Re-apply, from this version's code, everything each agent with its hooks on has installed, so
+ * what a release adds to them (another hook event, a new OpenCode plugin) reaches existing
+ * installs without `hooks enable`. Agents whose hooks are off stay off. Returns the agents
+ * refreshed; one that fails is logged and skipped. */
+export function refreshEnabledHooks(): HookAgent[] {
+  const refreshed: HookAgent[] = [];
+  for (const agent of allHookAgents()) {
+    try {
+      if (!agent.isEnabled()) continue;
+      agent.enable();
+      refreshed.push(agent);
+    } catch (err) {
+      logger.error("hooks", `Refreshing ${agent.name()} hooks failed: ${err}`);
+    }
+  }
+  return refreshed;
 }

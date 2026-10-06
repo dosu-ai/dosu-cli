@@ -16,3 +16,9 @@ process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "dosu-vitest-"));
 process.env.HOME = mkdtempSync(join(tmpdir(), "dosu-vitest-home-"));
 delete process.env.CLAUDE_CONFIG_DIR;
 delete process.env.CODEX_HOME;
+
+// And from the agent running the tests: its shell names its own session, which `dosu memory` and
+// the MCP proxy would otherwise read as the session of the code under test.
+delete process.env.CLAUDE_CODE_SESSION_ID;
+delete process.env.CODEX_THREAD_ID;
+delete process.env.DOSU_OPENCODE_SESSION;
