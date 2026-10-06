@@ -7,6 +7,7 @@ import { posix, win32 } from "node:path";
 import { Command, Option } from "commander";
 import pc from "picocolors";
 import { loadConfigNonBlocking } from "../config/config";
+import { refreshEnabledHooks } from "../hooks/agents";
 import { refreshConfiguredProviders } from "../mcp/refresh";
 import {
   AUTO_UPDATE_ENV,
@@ -370,8 +371,8 @@ export async function completeUpgrade(
 }
 
 /** `dosu upgrade --finish <from>`, run by the freshly installed binary. Re-runs setup (or, with
- * no TTY, the MCP refresh) only when the jump from `from` crossed a release that changed the
- * agent config format; otherwise it just re-applies the bundled skills. */
+ * no TTY, the MCP and enabled-hooks refresh) only when the jump from `from` crossed a release that
+ * changed the agent config format; otherwise it just re-applies the bundled skills. */
 export async function finishUpgrade(
   from: string,
   options: { interactive?: boolean } = {},
@@ -399,6 +400,7 @@ export async function finishUpgrade(
   }
   console.log("\nRefreshing agent MCP configs with the new version...");
   const result = refreshConfiguredProviders(cfg);
+  refreshEnabledHooks();
   writeMcpRefreshCache({ version: VERSION });
   for (const provider of result.updated) console.log(`  ✓ ${provider.name()}`);
   for (const { provider, error } of result.failed) {

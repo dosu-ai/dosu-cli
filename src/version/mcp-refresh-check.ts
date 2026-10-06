@@ -13,15 +13,18 @@ import { join } from "node:path";
 import pc from "picocolors";
 import { type Config, getConfigDir, loadConfigNonBlocking, MODE_OSS } from "../config/config";
 import { logger } from "../debug/logger";
+import { refreshEnabledHooks } from "../hooks/agents";
 import { refreshConfiguredProviders } from "../mcp/refresh";
 import { isNewerVersion } from "./update-check";
 import { VERSION } from "./version";
 
 const CACHE_FILENAME = "mcp-refresh.json";
 
-/** Releases whose provider code changed what the Dosu MCP entry looks like. Add a version here
- * whenever a provider's `install` output changes shape; an upgrade or downgrade that crosses
- * one of these rewrites configured agents on the first run, nothing else does. */
+/** Releases whose provider code changed what the Dosu MCP entry looks like, or what an agent's
+ * hooks install. Add a version here whenever a provider's `install` output changes shape, or a
+ * hook agent's `enable` installs something new; an upgrade or downgrade that crosses one of
+ * these rewrites configured agents (and re-applies enabled hooks) on the first run, nothing else
+ * does. */
 export const MCP_FORMAT_CHANGES: readonly string[] = [
   "0.53.0",
   // Claude Code entries gained `alwaysLoad: true`. This must be the first release that ships
@@ -32,8 +35,9 @@ export const MCP_FORMAT_CHANGES: readonly string[] = [
   // 0.63.0 before this graduates, raise it to the first stable release that includes it.
   "0.63.0",
   // Every provider's entry became a stdio command running the local proxy, `dosu mcp serve`, in
-  // place of a remote-HTTP or `npx mcp-remote` entry. The first stable release after 0.65.1 that
-  // includes it; raise it if a release ships before this does.
+  // place of a remote-HTTP or `npx mcp-remote` entry, and the hooks began naming each memory
+  // call's session to it (Claude Code's PreToolUse guard, the OpenCode plugin). The first stable
+  // release after 0.65.1 that includes it; raise it if a release ships before this does.
   "0.66.0",
 ];
 
@@ -124,10 +128,11 @@ export function checkForMcpRefresh(options: { notify?: boolean } = {}): void {
     }
 
     const result = refreshConfiguredProviders(cfg);
+    const hooks = refreshEnabledHooks();
     writeMcpRefreshCache({ version: VERSION });
     logger.info(
       "mcp-refresh",
-      `Version ${VERSION}: refreshed ${result.updated.length}, failed ${result.failed.length}`,
+      `Version ${VERSION}: refreshed ${result.updated.length}, failed ${result.failed.length}; hooks of ${hooks.length}`,
     );
     if (notify && result.updated.length > 0) {
       displayNotice(result.updated.map((provider) => provider.name()));
