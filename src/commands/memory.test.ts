@@ -223,3 +223,98 @@ describe("the session a dosu memory call belongs to", () => {
     expect(process.exitCode).toBe(1);
   });
 });
+
+describe("dosu memory run from an agent's shell", () => {
+  // An agent's model can run `dosu memory` itself, passing nothing: the session is the one the
+  // agent's shell environment names.
+  const INCOGNITO_TURN = `{"type":"user","message":{"content":"<command-name>/dosu-incognito</command-name>"}}\n`;
+  const thread = "01a10e60-e400-7590-875d-37ca506279ac";
+  const stem = `rollout-2026-10-05T16-23-13-${thread}`;
+
+  function write(path: string, text: string): void {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, text);
+  }
+
+  function claudeSession(id: string, incognito: boolean): void {
+    write(
+      join(home, ".claude", "projects", "-w", `${id}.jsonl`),
+      incognito ? INCOGNITO_TURN : "{}\n",
+    );
+  }
+
+  function codexRollout(incognito: boolean): void {
+    const marker = incognito ? `{"text":"Dosu incognito marker: ${INCOGNITO_MARKER}"}\n` : "";
+    write(
+      join(home, ".codex", "sessions", "2026", "10", "05", `${stem}.jsonl`),
+      `{"type":"session_meta"}\n${marker}`,
+    );
+  }
+
+  const calls = () => server.requests.filter((r) => r.body?.method === "tools/call");
+
+  beforeEach(() => inNoOriginClone("main"));
+
+  it("names a Claude Code shell's session, and the agent", async () => {
+    claudeSession("s-live", false);
+    vi.stubEnv("CLAUDE_CODE_SESSION_ID", "s-live");
+
+    await dosu("search", "q");
+
+    expect(calls().map((r) => [r.headers["x-dosu-session"], r.headers["x-dosu-client"]])).toEqual([
+      ["s-live", "claude-code"],
+    ]);
+  });
+
+  it("names a Codex shell's session by its thread's rollout", async () => {
+    codexRollout(false);
+    vi.stubEnv("CODEX_THREAD_ID", thread);
+
+    await dosu("evidence", "m1");
+
+    expect(calls().map((r) => [r.headers["x-dosu-session"], r.headers["x-dosu-client"]])).toEqual([
+      [stem, "codex"],
+    ]);
+  });
+
+  it("sends nothing from the shell of a session the user took off the record", async () => {
+    claudeSession("s-off", true);
+    codexRollout(true);
+
+    vi.stubEnv("CLAUDE_CODE_SESSION_ID", "s-off");
+    await dosu("search", "q");
+    vi.stubEnv("CLAUDE_CODE_SESSION_ID", undefined);
+    vi.stubEnv("CODEX_THREAD_ID", thread);
+    await dosu("evidence", "m1");
+
+    expect(server.requests).toEqual([]);
+    expect(err.join("\n")).toContain("Dosu is off for this session");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("holds an agent run from another's shell to both sessions, and names neither", async () => {
+    claudeSession("s-off", true);
+    codexRollout(false);
+    vi.stubEnv("CLAUDE_CODE_SESSION_ID", "s-off");
+    vi.stubEnv("CODEX_THREAD_ID", thread);
+
+    await dosu("search", "q");
+    expect(server.requests).toEqual([]);
+
+    claudeSession("s-live", false);
+    vi.stubEnv("CLAUDE_CODE_SESSION_ID", "s-live");
+    await dosu("search", "q");
+    expect(calls().map((r) => r.headers["x-dosu-session"])).toEqual([undefined]);
+  });
+
+  it("with --client, looks only at that agent's session", async () => {
+    claudeSession("s-off", true);
+    codexRollout(false);
+    vi.stubEnv("CLAUDE_CODE_SESSION_ID", "s-off");
+    vi.stubEnv("CODEX_THREAD_ID", thread);
+
+    await dosu("search", "q", "--client", "codex");
+
+    expect(calls().map((r) => r.headers["x-dosu-session"])).toEqual([stem]);
+  });
+});

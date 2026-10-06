@@ -128,6 +128,31 @@ function codexSession(thread: string): CallSession | null {
   return { harness: "codex", id: basename(rollout, ".jsonl"), transcript: rollout };
 }
 
+/** The variable each agent puts its session in for the shell commands it runs: Claude Code its
+ * live session (also after /clear), Codex the thread the command runs for. */
+const SHELL_SESSION_VARIABLES: ReadonlyArray<readonly [SessionHarness, string]> = [
+  ["claude", "CLAUDE_CODE_SESSION_ID"],
+  ["codex", "CODEX_THREAD_ID"],
+];
+
+/** The agent sessions a shell command runs in, as its environment names them (`dosu memory` run
+ * by an agent's model): usually one, more when an agent was started from another's shell and
+ * inherited its variable. With `client`, that agent's session only. */
+export function shellSessions(
+  client: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): CallSession[] {
+  const only = harnessOfClient(client);
+  const sessions: CallSession[] = [];
+  for (const [harness, variable] of SHELL_SESSION_VARIABLES) {
+    const id = str(env[variable]);
+    if (!id || (only && only !== harness)) continue;
+    const session = harness === "codex" ? codexSession(id) : { harness, id, transcript: null };
+    if (session && SAFE_ID.test(session.id)) sessions.push(session);
+  }
+  return sessions;
+}
+
 /** The session a `tools/call` request's params name, read as described above for the agent
  * `client`; null when the call carries none and the agent started this server in none. Removes
  * SESSION_ARGUMENT from the arguments. */
