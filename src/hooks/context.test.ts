@@ -39,7 +39,7 @@ describe("the Claude Code context hook", () => {
     enableClaudeContextHook(); // idempotent
     expect(settings().hooks.PreToolUse).toEqual([
       {
-        matcher: "mcp__.+__(search_memory|get_memory_evidence)",
+        matcher: "mcp__dosu__(search_memory|get_memory_evidence)",
         hooks: [{ type: "command", command: "dosu knowledge context" }],
       },
     ]);

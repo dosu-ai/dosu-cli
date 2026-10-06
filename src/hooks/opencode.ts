@@ -104,8 +104,9 @@ const QUIET_SYNC_MS = ${DEFAULT_QUIET_PERIOD_MS + 30_000};
 // Past this the prompt is waiting on Dosu, and a late digest is not worth a stalled prompt.
 const CONTEXT_TIMEOUT_MS = 10000;
 const SESSION_ID = /^[A-Za-z0-9_-]+$/;
-// Dosu's memory tools as opencode names an MCP server's tools: <server>_<tool>.
-const MEMORY_TOOL = /^(.+)_(search_memory|get_memory_evidence)$/;
+// Dosu's memory tools as opencode names an MCP server's tools, <server>_<tool>, on the \`dosu\`
+// entry \`dosu mcp add\` writes: other servers may have tools of the same names.
+const MEMORY_TOOL = /^(dosu)_(search_memory|get_memory_evidence)$/;
 const SESSION_ARGUMENT = ${JSON.stringify(SESSION_ARGUMENT)};
 const SESSION_VARIABLE = ${JSON.stringify(OPENCODE_SESSION_VARIABLE)};
 const OFF_THE_RECORD = ${JSON.stringify(OFF_THE_RECORD_MESSAGE)};

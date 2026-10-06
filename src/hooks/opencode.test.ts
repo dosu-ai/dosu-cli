@@ -463,6 +463,8 @@ describe("the opencode plugin", () => {
         ["chat", "ses_old", "continue"],
         ["tool", "ses_old", "dosu_search_memory", { query: "deploy" }],
         ["tool", "ses_a", "bash", { command: "ls" }],
+        // Another server's tool of the same name is not Dosu's to stop.
+        ["tool", "ses_a", "mem0_search_memory", { query: "deploy" }],
       ],
       { ses_old: ["earlier", INCOGNITO_COMMAND_BODY] },
     ).filter((line) => line.tool);
@@ -473,6 +475,7 @@ describe("the opencode plugin", () => {
       ["dosu_get_memory_evidence", "stopped"],
       ["dosu_search_memory", "stopped"],
       ["bash", "ran"],
+      ["mem0_search_memory", "ran"],
     ]);
     expect(calls[0].error).toContain("Dosu is off for this session");
   });

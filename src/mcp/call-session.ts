@@ -34,9 +34,10 @@ import {
 import { trajectorySourceOf } from "../shipper/normalize";
 import { isIncognitoSession } from "../sync/incognito";
 
-/** Dosu's memory tools as Claude Code names them, on whatever server name the entry has: the
- * matcher of the PreToolUse hook that records each call's session (hooks/context.ts). */
-export const CLAUDE_MEMORY_TOOL_PATTERN = "mcp__.+__(search_memory|get_memory_evidence)";
+/** Dosu's memory tools as Claude Code names them on the `dosu` entry `dosu mcp add` writes (other
+ * servers may have tools of the same names): the matcher of the PreToolUse hook that records
+ * each call's session (hooks/context.ts). */
+export const CLAUDE_MEMORY_TOOL_PATTERN = "mcp__dosu__(search_memory|get_memory_evidence)";
 
 /** The argument OpenCode's Dosu plugin names the session with. */
 export const SESSION_ARGUMENT = "_dosu_session";

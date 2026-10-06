@@ -1,8 +1,17 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { getConfigDir } from "../config/config";
 import { logger } from "../debug/logger";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { createShipStep } from "../shipper/runner";
@@ -667,7 +676,7 @@ describe("Claude Code's PreToolUse hook on Dosu's memory tools", () => {
 
   it("denies a memory tool in a session the user took off the record, asking nothing", async () => {
     const fetchImpl = respond(200, {});
-    for (const tool of ["mcp__dosu__search_memory", "mcp__dosu-dev__get_memory_evidence"]) {
+    for (const tool of ["mcp__dosu__search_memory", "mcp__dosu__get_memory_evidence"]) {
       const out = await contextHookOutput(toolPayload({ tool_name: tool }), {
         ...base,
         isIncognito: () => true,
@@ -698,6 +707,14 @@ describe("Claude Code's PreToolUse hook on Dosu's memory tools", () => {
         offTheRecord,
       ),
     ).toBe("");
+    // Another server's tools of the same names are not Dosu's to stop, or to record for its proxy.
+    const elsewhere = toolPayload({
+      tool_name: "mcp__mem0__search_memory",
+      tool_use_id: "toolu_m",
+    });
+    expect(await contextHookOutput(elsewhere, offTheRecord)).toBe("");
+    expect(await contextHookOutput(elsewhere, { ...base, fetchImpl })).toBe("");
+    expect(existsSync(join(getConfigDir(), "mcp-calls", "toolu_m.json"))).toBe(false);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
