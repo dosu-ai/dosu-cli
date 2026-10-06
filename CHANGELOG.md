@@ -1,3 +1,10 @@
+## [0.66.1](https://github.com/dosu-ai/dosu-cli/compare/v0.66.0...v0.66.1) (2026-10-06)
+
+
+### Bug Fixes
+
+* **tui:** wrap long banner rows inside the centered layout ([#271](https://github.com/dosu-ai/dosu-cli/issues/271)) ([d7648a5](https://github.com/dosu-ai/dosu-cli/commit/d7648a503e378bb5b0abfa267611470385286ce6))
+
 # [0.66.0](https://github.com/dosu-ai/dosu-cli/compare/v0.65.1...v0.66.0) (2026-10-05)
 
 
