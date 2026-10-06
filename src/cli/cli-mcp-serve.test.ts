@@ -433,6 +433,48 @@ describe("the session a tool call belongs to", () => {
     expect(relayedCalls().map((r) => r.headers["x-dosu-session"])).toEqual(["s-live", "s-started"]);
   });
 
+  it("names a Claude Code subagent's call by the subagent's own session", async () => {
+    // A subagent's transcript ships as a session of its own beside its parent's; the hook payload
+    // names the parent and the agent.
+    const parent = writeFile(join(home, ".claude", "projects", "-w", "s-parent.jsonl"), "{}\n");
+    writeFile(
+      join(home, ".claude", "projects", "-w", "s-parent", "subagents", "agent-a1.jsonl"),
+      "{}\n",
+    );
+    const hook = (agent: Record<string, string>, toolUseId: string) =>
+      contextHookOutput(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          session_id: "s-parent",
+          transcript_path: parent,
+          tool_name: "mcp__dosu__search_memory",
+          tool_input: { query: "q" },
+          tool_use_id: toolUseId,
+          ...agent,
+        }),
+        { apiKey: "k", deploymentId: "d", backendUrl: server.baseUrl },
+      );
+    await hook({ agent_id: "a1", agent_type: "general-purpose" }, "toolu_a1");
+    await hook({ agent_id: "a2", agent_type: "general-purpose" }, "toolu_a2");
+
+    await serve(
+      [
+        ...HANDSHAKE,
+        search({ _meta: { "claudecode/toolUseId": "toolu_a1" } }, 2),
+        search({ _meta: { "claudecode/toolUseId": "toolu_a2" } }, 3),
+      ],
+      "--client",
+      "claude-code",
+    );
+
+    // a2's transcript is not written yet: its id is still the one it will ship under.
+    expect(
+      relayedCalls()
+        .map((r) => r.headers["x-dosu-session"])
+        .sort(),
+    ).toEqual(["agent-a1", "agent-a2"]);
+  });
+
   it("sends nothing for a Claude Code session the user took off the record", async () => {
     writeFile(
       join(home, ".claude", "projects", "-w", "s-off.jsonl"),

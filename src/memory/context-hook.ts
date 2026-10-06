@@ -23,6 +23,7 @@ import { createProjectDirResolver } from "../sessions/project-dir";
 import { currentBranchAnswer, GIT_TIMED_OUT } from "../sessions/repo";
 import {
   type AgentSession,
+  childSessionsOf,
   opencodeSessionById,
   SESSION_HARNESSES,
   type SessionHarness,
@@ -63,6 +64,8 @@ interface PromptHookPayload {
   transcript_path?: unknown;
   tool_name?: unknown;
   tool_use_id?: unknown;
+  /** Set when a subagent makes the call; session_id and transcript_path are still its parent's. */
+  agent_id?: unknown;
 }
 
 const MEMORY_TOOL = new RegExp(`^${CLAUDE_MEMORY_TOOL_PATTERN}$`);
@@ -164,10 +167,25 @@ function sessionIdOf(payload: PromptHookPayload, format: ContextFormat): string 
   return str(payload.session_id);
 }
 
+/** The Claude Code session a tool call is made in: a subagent's own, which ships as a session of
+ * its own (`agent-<agent id>`, its transcript beside the parent's), else the payload's. */
+function claudeCaller(
+  id: string,
+  transcript: string | null,
+  agentId: string | null,
+): { id: string; transcript: string | null } {
+  if (!agentId) return { id, transcript };
+  const child = `agent-${agentId}`;
+  const parent = transcript ? sessionAtPath("claude", id, transcript) : null;
+  const found = parent ? childSessionsOf(parent).find((session) => session.id === child) : null;
+  return { id: child, transcript: found?.path ?? null };
+}
+
 /** Claude Code's PreToolUse hook on a Dosu memory tool: denies the call in a session that is off
- * the record (the query would be logged with the retrieval), and otherwise records the call's
- * session under its tool-use id for the MCP proxy, which a server started before a /clear or an
- * in-app resume could not know. */
+ * the record (the query would be logged with the retrieval; a subagent's call is judged by its
+ * parent's transcript, which the payload names), and otherwise records the call's session under
+ * its tool-use id for the MCP proxy, which a server started before a /clear or an in-app resume
+ * could not know. */
 function memoryToolHookOutput(
   payload: PromptHookPayload,
   isIncognito: (transcriptPath: string) => boolean,
@@ -185,7 +203,9 @@ function memoryToolHookOutput(
   }
   const toolUseId = str(payload.tool_use_id);
   const id = str(payload.session_id);
-  if (toolUseId && id) recordClaudeToolCall(toolUseId, { id, transcript });
+  if (toolUseId && id) {
+    recordClaudeToolCall(toolUseId, claudeCaller(id, transcript, str(payload.agent_id)));
+  }
   return "";
 }
 
