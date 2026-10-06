@@ -1,8 +1,10 @@
 /** Assemble the memory report: the sessions this install shipped in the period, looked up in
  * Dosu memory, aggregated, and written as one HTML page. */
 
+import { basename } from "node:path";
 import { type Config, loadConfig } from "../config/config";
 import { getBackendURL, getWebAppURL, isAbsoluteHttpUrl } from "../config/constants";
+import { unmungeSlug } from "../sessions/project-dir";
 import { loadSyncState, type ShippedSessionRecord, type SyncState } from "../sync/watermark";
 import { type FetchReportSessionsOptions, fetchReportSessions } from "./fetch";
 import { buildReportHtml } from "./html";
@@ -24,6 +26,15 @@ export interface ReportOptions {
     records: ShippedSessionRecord[],
     options: FetchReportSessionsOptions,
   ) => Promise<ReportSession[]>;
+  /** Shipped project label → display name; defaults to the folder name behind a path slug. */
+  projectName?: (project: string) => string;
+}
+
+/** Claude Code records a session's project as its path with slashes turned into hyphens
+ * (`-Users-me-dosu-backend`); show the folder name when the path still exists. */
+function defaultProjectName(project: string): string {
+  const dir = project.startsWith("-") ? unmungeSlug(project) : null;
+  return dir ? basename(dir) : project;
 }
 
 export async function buildKnowledgeReport(options: ReportOptions = {}): Promise<Report> {
@@ -52,12 +63,13 @@ export async function buildKnowledgeReport(options: ReportOptions = {}): Promise
           orgId: target.org_id,
           backendUrl,
         });
+  const projectName = options.projectName ?? defaultProjectName;
   return buildReport({
     generatedAt: now.toISOString(),
     days,
     orgName: target.org_name ?? "Your team",
     appUrl: (options.appUrl ?? getWebAppURL()).replace(/\/$/, ""),
-    sessions,
+    sessions: sessions.map((s) => (s.project ? { ...s, project: projectName(s.project) } : s)),
   });
 }
 

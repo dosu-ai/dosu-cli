@@ -3,6 +3,7 @@
  * and links into them, so a session here reads like its session page, many sessions at once. */
 
 import { REPORT_CSS } from "./css";
+import { sessionTime } from "./model";
 import type {
   EpisodeKind,
   MemoryKind,
@@ -231,7 +232,7 @@ function sessionBlock(appUrl: string, session: ReportSession): string {
   ${session.project ? `<span class="strong">${esc(session.project)}</span>` : ""}
   <span class="mono xs faint" title="${esc(session.sessionId)}">${esc(session.sessionId.slice(0, 12))}</span>
   ${counts}
-  <span class="push xs faint">${esc(formatDate(session.shippedAt))}</span>
+  <span class="push xs faint">${esc(formatDate(sessionTime(session)))}</span>
   <a class="link" href="${esc(href)}">Open in Dosu</a></summary>
 <div class="session-body">${sessionBody(appUrl, session)}</div>
 </details>`;

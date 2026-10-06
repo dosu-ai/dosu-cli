@@ -114,12 +114,38 @@ describe("buildReport", () => {
     });
   });
 
-  it("orders sessions newest first by when they were shipped", () => {
+  it("orders sessions by when they ended, not when they were shipped", () => {
+    // A backfill ships a month of sessions in one minute.
+    const ended = (at: string) => trace("x", [], { header: { ended_at: at } });
     const report = buildReport({
       ...base,
       sessions: [
-        session("older", { shippedAt: "2026-10-01T00:00:00Z" }),
-        session("newer", { shippedAt: "2026-10-04T00:00:00Z" }),
+        session("older", {
+          shippedAt: "2026-10-06T00:00:00Z",
+          trace: ended("2026-09-10T00:00:00Z"),
+        }),
+        session("newer", {
+          shippedAt: "2026-10-06T00:00:00Z",
+          trace: ended("2026-09-20T00:00:00Z"),
+        }),
+        session("unread", {
+          shippedAt: "2026-10-06T00:00:00Z",
+          state: "waiting",
+          trace: undefined,
+        }),
+      ],
+    });
+
+    // Without a trace, the shipment is the best clock there is.
+    expect(report.sessions.map((s) => s.sessionId)).toEqual(["unread", "newer", "older"]);
+  });
+
+  it("orders sessions newest first by when they were shipped when nothing else is known", () => {
+    const report = buildReport({
+      ...base,
+      sessions: [
+        session("older", { shippedAt: "2026-10-01T00:00:00Z", state: "waiting", trace: undefined }),
+        session("newer", { shippedAt: "2026-10-04T00:00:00Z", state: "waiting", trace: undefined }),
       ],
     });
 

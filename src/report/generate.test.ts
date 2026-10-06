@@ -35,6 +35,7 @@ function deps(overrides: Record<string, unknown> = {}) {
     records.map<ReportSession>((r) => ({
       sessionId: r.session.split("/")[1],
       harness: r.session.split("/")[0],
+      ...(r.project ? { project: r.project } : {}),
       shippedAt: r.at,
       state: "complete",
       trace: trace(r.session.split("/")[1]),
@@ -64,6 +65,18 @@ describe("buildKnowledgeReport", () => {
     });
     expect(report).toMatchObject({ days: 30, orgName: "Acme", appUrl: "https://app.test" });
     expect(report.sessions.map((s) => s.sessionId)).toEqual(["recent"]);
+  });
+
+  it("names each session's project by its folder, not the agent's path slug", async () => {
+    const d = deps({
+      loadState: () =>
+        state([{ ...shipped("claude/recent", 2), project: "-Users-me-dosu-backend" }]),
+      projectName: (slug: string) => (slug === "-Users-me-dosu-backend" ? "backend" : slug),
+    });
+
+    const report = await buildKnowledgeReport({ days: 30, ...d });
+
+    expect(report.sessions[0].project).toBe("backend");
   });
 
   it("widens with --days", async () => {

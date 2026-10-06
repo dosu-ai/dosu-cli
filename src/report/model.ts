@@ -14,8 +14,15 @@ export interface BuildReportInput {
 /** Effects that changed what the org knows, as opposed to confirming it. */
 const CHANGES: ReadonlySet<SourceEffect> = new Set(["created", "updated", "contradicted"]);
 
-function byShippedDesc(a: ReportSession, b: ReportSession): number {
-  return Date.parse(b.shippedAt) - Date.parse(a.shippedAt);
+/** When the session itself happened: a backfill ships a month of sessions in one minute, so
+ * the shipment only stands in when the trace is not readable yet. */
+export function sessionTime(session: ReportSession): string {
+  const trace = session.trace?.trace;
+  return trace?.ended_at ?? trace?.started_at ?? session.shippedAt;
+}
+
+function newestFirst(a: ReportSession, b: ReportSession): number {
+  return Date.parse(sessionTime(b)) - Date.parse(sessionTime(a));
 }
 
 function rank(memory: ReportMemory): [number, number, number] {
@@ -36,7 +43,7 @@ function compareMemories(a: ReportMemory, b: ReportMemory): number {
 }
 
 export function buildReport(input: BuildReportInput): Report {
-  const sessions = [...input.sessions].sort(byShippedDesc);
+  const sessions = [...input.sessions].sort(newestFirst);
 
   // Oldest first, so a memory's effects and sessions read in the order things happened.
   const byId = new Map<string, ReportMemory>();
