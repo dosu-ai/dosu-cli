@@ -113,6 +113,22 @@ describe("buildKnowledgeReport", () => {
 });
 
 describe("emitKnowledgeReport", () => {
+  it("sends a single session to its own page in Dosu instead of the cross-session report", async () => {
+    const write = vi.fn();
+    const openUrl = vi.fn(async () => undefined);
+
+    const result = await emitKnowledgeReport({
+      days: 30,
+      write,
+      openUrl,
+      ...deps(),
+    });
+
+    expect(result).toEqual({ kind: "session", url: "https://app.test/memories/sessions/recent" });
+    expect(openUrl).toHaveBeenCalledWith("https://app.test/memories/sessions/recent");
+    expect(write).not.toHaveBeenCalled();
+  });
+
   it("writes the HTML and returns its path without opening it when asked not to", async () => {
     const write = vi.fn(async (opts: { html: string; out?: string; open?: boolean }) => {
       expect(opts.html).toContain("What your agent sessions taught Dosu");
@@ -120,14 +136,14 @@ describe("emitKnowledgeReport", () => {
       return opts.out ?? "/tmp/x.html";
     });
 
-    const path = await emitKnowledgeReport({
-      days: 30,
+    const result = await emitKnowledgeReport({
+      days: 60,
       out: "/tmp/r.html",
       open: false,
       write,
       ...deps(),
     });
 
-    expect(path).toBe("/tmp/r.html");
+    expect(result).toEqual({ kind: "report", path: "/tmp/r.html", sessions: 2 });
   });
 });

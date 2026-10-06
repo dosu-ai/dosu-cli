@@ -77,13 +77,32 @@ export interface EmitReportOptions extends ReportOptions {
   out?: string;
   open?: boolean;
   write?: (options: WriteReportOptions) => Promise<string>;
+  openUrl?: (url: string) => Promise<unknown>;
 }
 
-export async function emitKnowledgeReport(options: EmitReportOptions = {}): Promise<string> {
+/** The cross-session report, or — for a single session, where there is nothing to compare —
+ * that session's own page in Dosu. */
+export type EmitReportResult =
+  | { kind: "report"; path: string; sessions: number }
+  | { kind: "session"; url: string };
+
+export async function emitKnowledgeReport(
+  options: EmitReportOptions = {},
+): Promise<EmitReportResult> {
   const report = await buildKnowledgeReport(options);
-  return (options.write ?? writeAndOpenReport)({
+  if (report.sessions.length === 1) {
+    const url = `${report.appUrl}/memories/sessions/${encodeURIComponent(report.sessions[0].sessionId)}`;
+    if (options.open !== false) {
+      await (options.openUrl ?? (async (target: string) => (await import("open")).default(target)))(
+        url,
+      );
+    }
+    return { kind: "session", url };
+  }
+  const path = await (options.write ?? writeAndOpenReport)({
     html: buildReportHtml(report),
     out: options.out ?? defaultReportPath(),
     open: options.open,
   });
+  return { kind: "report", path, sessions: report.sessions.length };
 }

@@ -882,7 +882,11 @@ describe("runTUI", () => {
 
   it("report action writes and opens the harvest HTML", async () => {
     writeRealConfig(makeCfg({}));
-    mockEmitReport.mockResolvedValue("/tmp/dosu-knowledge-report.html");
+    mockEmitReport.mockResolvedValue({
+      kind: "report",
+      path: "/tmp/dosu-memory-report.html",
+      sessions: 2,
+    });
     mockMenuSelect.mockResolvedValueOnce("report").mockResolvedValueOnce("exit");
 
     await runTUI();

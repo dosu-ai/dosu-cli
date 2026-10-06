@@ -243,10 +243,16 @@ function stat(key: string, label: string, value: number, detail: string): string
   <span class="value">${value.toLocaleString("en-US")}</span><span class="xs faint">${esc(detail)}</span></div>`;
 }
 
+/** Memories two or more sessions touched: the ones Dosu could plausibly have recalled had it been
+ * on. A memory one session touched once is that session's detail, shown on its own page. */
+function recurring(memories: readonly ReportMemory[]): ReportMemory[] {
+  return memories.filter((m) => m.sessionIds.length > 1);
+}
+
 function crossSessionMemories(appUrl: string, memories: readonly ReportMemory[]): string {
   if (memories.length === 0) return "";
-  return `<section id="memories"><h2>Memories touched</h2>
-<p class="xs faint" style="margin-bottom:12px">What these sessions taught Dosu memory, most widely touched first.</p>
+  return `<section id="memories"><h2>Memories more than one session touched</h2>
+<p class="xs faint" style="margin-bottom:12px">Knowledge that came up again: what Dosu could have handed the later sessions, most widely touched first.</p>
 <div class="grid">${memories
     .map((m) => memoryCard(appUrl, m.item, m.effects, m.sessionIds.length))
     .join("")}</div></section>`;
@@ -254,10 +260,7 @@ function crossSessionMemories(appUrl: string, memories: readonly ReportMemory[])
 
 export function buildReportHtml(report: Report): string {
   const { totals } = report;
-  const changes = (["created", "updated", "confirmed", "contradicted"] as const)
-    .filter((effect) => totals[effect] > 0)
-    .map((effect) => `${totals[effect]} ${effect}`)
-    .join(" · ");
+  const shared = recurring(report.memories);
   const body =
     report.sessions.length === 0
       ? `<div class="card stack"><p class="strong">No sessions shipped to Dosu memory in the last ${report.days} days.</p>
@@ -266,9 +269,9 @@ export function buildReportHtml(report: Report): string {
   ${stat("sessions", "Sessions", totals.sessions, `${totals.processed} processed`)}
   ${stat("tasks", "Tasks", totals.tasks, "segmented from the transcripts")}
   ${stat("episodes", "Episodes captured", totals.episodes, "excerpts worth keeping")}
-  ${stat("memories", "Memories touched", totals.memories, changes || "none yet")}
+  ${stat("memories", "Touched by 2+ sessions", shared.length, `of ${totals.memories} touched`)}
 </section>
-${crossSessionMemories(report.appUrl, report.memories)}
+${crossSessionMemories(report.appUrl, shared)}
 <section id="sessions"><h2>Sessions</h2>
 ${report.sessions.map((session) => sessionBlock(report.appUrl, session)).join("\n")}
 </section>`;

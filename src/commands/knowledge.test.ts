@@ -161,7 +161,11 @@ beforeEach(() => {
   mockLoadSyncState.mockReset();
   mockEmitReport.mockReset();
   mockBuildReport.mockReset();
-  mockEmitReport.mockResolvedValue("/tmp/dosu-memory-report.html");
+  mockEmitReport.mockResolvedValue({
+    kind: "report",
+    path: "/tmp/dosu-memory-report.html",
+    sessions: 2,
+  });
   mockSetShipTranscripts.mockReset();
   mockCreateShipStep.mockReset();
   fakeAgents = [];
@@ -765,6 +769,16 @@ describe("knowledge sync", () => {
       open: true,
     });
     expect(allOutput()).toContain("Wrote /tmp/dosu-memory-report.html");
+  });
+
+  it("knowledge report points a single session at its own page", async () => {
+    mockEmitReport.mockResolvedValue({ kind: "session", url: "https://app/memories/sessions/s1" });
+
+    await run("report");
+
+    const output = allOutput();
+    expect(output).toContain("Only one session to report on");
+    expect(output).toContain("https://app/memories/sessions/s1");
   });
 
   it("knowledge report writes the HTML without running sync", async () => {

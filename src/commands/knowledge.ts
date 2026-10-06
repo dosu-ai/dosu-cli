@@ -13,7 +13,12 @@ import { getBackendURL, isAbsoluteHttpUrl } from "../config/constants";
 import { allHookAgents, getHookAgent, type HookAgent } from "../hooks/agents";
 import { disableClaudeContextHook, enableClaudeContextHook } from "../hooks/context";
 import { HookConfigError, hookCommand } from "../hooks/formats";
-import { buildKnowledgeReport, DEFAULT_REPORT_DAYS, emitKnowledgeReport } from "../report/generate";
+import {
+  buildKnowledgeReport,
+  DEFAULT_REPORT_DAYS,
+  type EmitReportResult,
+  emitKnowledgeReport,
+} from "../report/generate";
 import type { AgentSession } from "../sessions/scan";
 import { listSessionBacklog } from "../sync/backlog";
 import { spawnDetachedSelf } from "../sync/detach";
@@ -302,7 +307,8 @@ export function knowledgeCommand(): Command {
             // The sync outcome must reach stdout even when the report fails:
             // shipping already happened and callers parse this JSON.
             try {
-              const report = await emitKnowledgeReport({ out: opts.out, open: false });
+              const result = await emitKnowledgeReport({ out: opts.out, open: false });
+              const report = result.kind === "report" ? result.path : result.url;
               printResult({ ...outcome, report }, opts);
             } catch (err) {
               const report_error = err instanceof Error ? err.message : String(err);
@@ -317,8 +323,7 @@ export function knowledgeCommand(): Command {
         printSyncOutcome(outcome);
         if (opts.report) {
           try {
-            const report = await emitKnowledgeReport({ out: opts.out, open: true });
-            console.log(`Wrote ${report}`);
+            console.log(describeReport(await emitKnowledgeReport({ out: opts.out, open: true })));
           } catch (err) {
             console.error(err instanceof Error ? err.message : String(err));
             process.exitCode = 1;
@@ -346,8 +351,11 @@ export function knowledgeCommand(): Command {
           printResult(await buildKnowledgeReport({ days: opts.days }), opts);
           return;
         }
-        const path = await emitKnowledgeReport({ days: opts.days, out: opts.out, open: opts.open });
-        console.log(`Wrote ${path}`);
+        console.log(
+          describeReport(
+            await emitKnowledgeReport({ days: opts.days, out: opts.out, open: opts.open }),
+          ),
+        );
       } catch (err) {
         console.error(pc.red(err instanceof Error ? err.message : String(err)));
         process.exitCode = 1;
@@ -520,6 +528,14 @@ function formatAge(iso: string, now: Date): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h ${minutes % 60}m ago`;
   return `${Math.floor(hours / 24)}d ago`;
+}
+
+/** One line for what `emitKnowledgeReport` produced; a single session has nothing to compare
+ * across, so it goes to that session's page instead of the cross-session report. */
+function describeReport(result: EmitReportResult): string {
+  return result.kind === "session"
+    ? `Only one session to report on, so there is nothing to compare across sessions. Its page in Dosu: ${result.url}`
+    : `Wrote ${result.path}`;
 }
 
 function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {

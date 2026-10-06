@@ -52,7 +52,7 @@ describe("buildReportHtml", () => {
     expect(visible).toContain("last 30 days");
     expect(html).toMatch(/data-stat="sessions"[^>]*>[\s\S]*?>2</);
     expect(visible).toContain("1 processed");
-    expect(visible).toContain("1 created");
+    expect(visible).toContain("of 1 touched");
   });
 
   it("lists each memory once across sessions, linking to it in Dosu with every effect", () => {
@@ -74,6 +74,27 @@ describe("buildReportHtml", () => {
     expect(text(section)).toContain("Created");
     expect(text(section)).toContain("Confirmed");
     expect(text(section)).toContain("2 sessions");
+  });
+
+  it("lists only memories two or more sessions touched, the ones Dosu could plausibly have recalled", () => {
+    const shared = memory("m-shared", { title: "Shared lesson" });
+    const html = render([
+      session("s1", {
+        trace: trace("s1", [
+          [shared, ["created"]],
+          [memory("m-once", { title: "One-off detail" }), ["created"]],
+        ]),
+      }),
+      session("s2", { trace: trace("s2", [[shared, ["confirmed"]]]) }),
+    ]);
+
+    const section = text(html.split('id="memories"')[1].split("</section>")[0]);
+    expect(section).toContain("Shared lesson");
+    expect(section).not.toContain("One-off detail");
+    expect(html).toMatch(/data-stat="memories"[^>]*>[\s\S]*?>1</);
+    expect(text(html)).toContain("of 2 touched");
+    // Each session's own page still shows everything it touched.
+    expect(text(html.split('data-session="s1"')[1])).toContain("One-off detail");
   });
 
   it("renders each session like the session page: tasks, episodes captured, memories touched", () => {

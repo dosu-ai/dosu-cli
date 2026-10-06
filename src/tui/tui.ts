@@ -311,7 +311,8 @@ async function runKnowledgeReport(): Promise<void> {
   const s = p.spinner();
   s.start("Looking up your recent sessions in Dosu memory...");
   try {
-    const path = await emitKnowledgeReport({ open: true });
+    const result = await emitKnowledgeReport({ open: true });
+    const path = result.kind === "report" ? result.path : result.url;
     s.stop(`Opened ${path}`);
   } catch (err) {
     s.stop("Could not write the report");
