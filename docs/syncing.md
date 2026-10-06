@@ -561,7 +561,9 @@ extension runs `dosu` for everything, so it carries no credentials:
 - `/dosu-incognito` records the opt-out as an extension entry
   (`{type: "custom", customType: "dosu-incognito", data: {marker}}`, which is what keeps the session
   from shipping), adds a note telling the model Dosu is off (shown in the TUI), stops digests, hides
-  the memory tools from the model, and blocks `search_memory` and `get_memory_evidence` in a `tool_call`
+  the memory tools from the model (pi connects MCP servers in the background, so the first run of a
+  session that went incognito before it waits, as pi's own MCP does, for the proxy to declare its
+  tools and hides them before that run's first request), and blocks `search_memory` and `get_memory_evidence` in a `tool_call`
   handler, from any MCP server name (`mcp__<server>__<tool>`, so a user's own `mcp.json` entry for
   Dosu too) and from codemode scripts. `dosu memory search|evidence` run from the session's bash
   refuse as well, since pi names the session to the commands it runs, and the extension blocks

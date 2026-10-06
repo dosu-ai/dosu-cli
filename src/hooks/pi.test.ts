@@ -139,6 +139,11 @@ function fakePi(options: { hasUI?: boolean; mcp?: boolean } = {}) {
   const steered: Any[] = [];
   const failures: string[] = [];
   const modelReads: string[][] = [];
+  // The tools declared to the model in each run's request.
+  const toolReads: string[][] = [];
+  // Registered servers still connecting: pi connects them in the background.
+  const connecting = new Map<string, Any>();
+  const registeredMcpTools: string[] = [];
   const notices: { message: string; type?: string }[] = [];
   let active: string[] = ["read", "bash"];
   let running = false;
@@ -173,14 +178,28 @@ function fakePi(options: { hasUI?: boolean; mcp?: boolean } = {}) {
     running = true;
     try {
       const result = await handlers.get("before_agent_start")?.({ prompt: text }, ctx());
+      // pi's built-in MCP, whose handler runs after other extensions', holds the first run until
+      // servers with direct tools connect; the request lists the tools declared then.
+      connect();
       entries.push(userTurn(text));
       if (result?.message) entries.push({ type: "custom_message", ...result.message });
       modelReads.push(entries.flatMap(modelText));
+      toolReads.push([...active]);
       await tick();
       entries.push({ type: "message", message: { role: "assistant", content: [] } });
     } finally {
       running = false;
     }
+  }
+
+  function connect(): void {
+    for (const [name, config] of connecting) {
+      const names = DOSU_MCP_TOOLS.map((tool) => `mcp__${name}__${tool}`);
+      registeredMcpTools.push(...names);
+      if (config.exposure === "direct")
+        active = [...active.filter((n) => !names.includes(n)), ...names];
+    }
+    connecting.clear();
   }
 
   const api = {
@@ -194,12 +213,12 @@ function fakePi(options: { hasUI?: boolean; mcp?: boolean } = {}) {
     },
     registerCommand: (name: string, options: Any) => commands.set(name, options),
     // pi's built-in MCP: a server registered again replaces the earlier registration; its direct
-    // tools, named mcp__<server>__<tool>, are declared once it connects (here, at once).
+    // tools, named mcp__<server>__<tool>, are declared once it connects, in the background (here,
+    // shortly after, or at the next run, or on connect()).
     registerMcpServer: (name: string, config: Any) => {
       mcpServers.set(name, config);
-      const names = DOSU_MCP_TOOLS.map((tool) => `mcp__${name}__${tool}`);
-      if (config.exposure === "direct")
-        active = [...active.filter((n) => !names.includes(n)), ...names];
+      connecting.set(name, config);
+      setTimeout(connect, 20);
     },
     // Seen with pi 1.0.0: a print run that unregistered a server never exits.
     unregisterMcpServer: (name: string) => {
@@ -208,6 +227,7 @@ function fakePi(options: { hasUI?: boolean; mcp?: boolean } = {}) {
       failures.push(`pi hangs at exit: MCP server ${name} was unregistered`);
     },
     getActiveTools: () => [...active],
+    getAllTools: () => [...new Set([...active, ...registeredMcpTools])].map((name) => ({ name })),
     setActiveTools: (names: string[]) => {
       active = names;
     },
@@ -248,7 +268,10 @@ function fakePi(options: { hasUI?: boolean; mcp?: boolean } = {}) {
     steered,
     failures,
     modelReads,
+    toolReads,
     notices,
+    /** The servers still connecting finish connecting. */
+    connect,
     editorText: () => editorText,
     active: () => active,
     print: async (...messages: string[]) => {
@@ -514,6 +537,7 @@ describe("the Dosu pi extension", () => {
     expect(pi.mcpServers.size).toBe(0);
 
     pi.handlers.get("session_start")?.({ reason: "startup" }, piContext());
+    pi.connect();
 
     const server = pi.mcpServers.get("dosu");
     // Declared to the model like a built-in tool, not left for codemode or tool_search to find.
@@ -542,6 +566,7 @@ describe("the Dosu pi extension", () => {
     // /new or /resume in the same pi, through the same proxy: the session running now.
     const next = withSessionId(piContext(), "02b1e6d7");
     pi.handlers.get("session_start")?.({ reason: "new" }, next);
+    pi.connect();
     expect(await pi.callTool("mcp__dosu__get_memory_evidence", { memory_id: "m" }, next)).toEqual({
       ran: "mcp__dosu__get_memory_evidence",
       args: { memory_id: "m", _dosu_session: "02b1e6d7" },
@@ -627,8 +652,10 @@ describe("the Dosu pi extension", () => {
     expect(note).toMatch(/do not call the Dosu memory tools/i);
     expect(note).toContain("search_memory");
     expect(note).toContain("get_memory_evidence");
-    // No digest was asked for, and the memory tools are hidden and blocked.
+    // No digest was asked for, and the memory tools are hidden -- from the run's request too,
+    // although the server connected only after /dosu-incognito -- and blocked.
     expect(calls()).toEqual([]);
+    expect(pi.toolReads).toEqual([["read", "bash"]]);
     expect(pi.active()).toEqual(["read", "bash"]);
     expect(await pi.callTool("mcp__dosu__search_memory", { query: "x" })).toEqual({
       blocked: expect.stringContaining("/dosu-incognito"),
@@ -776,6 +803,7 @@ describe("the Dosu pi extension", () => {
       { reason: "fork" },
       piContext([userTurn("hi")], undefined, plain),
     );
+    pi.connect();
     expect(pi.mcpServers.has("dosu")).toBe(true);
     expect(pi.active()).toEqual(["read", "bash", ...DOSU_MCP_NAMES]);
   });

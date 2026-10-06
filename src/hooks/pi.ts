@@ -95,8 +95,8 @@ function piExtensionSource(
 // - each session gets Dosu's MCP server (search_memory, get_memory_evidence) from pi's built-in
 //   MCP: the local proxy, told which session it serves;
 // - /${INCOGNITO_COMMAND_NAME} takes the session off the record: no digest, the memory tools hidden
-//   and blocked (and "dosu memory" from bash), never shipped; a fork or clone of such a session stays off too, and does not
-//   start the MCP server.
+//   and blocked (and "dosu memory" from bash), never shipped; a fork or clone of such a session
+//   stays off too, and does not start the MCP server.
 // Nothing here runs when pi starts with --no-extensions.
 
 import { spawn } from "node:child_process";
@@ -121,6 +121,9 @@ const MEMORY_COMMAND = /\bdosu\b[\s\S]*\bmemory\s+(?:search|evidence)\b/;
 const CONTEXT_TIMEOUT_MS = 10000;
 // How long quitting pi waits for the sync to take the ended session.
 const HANDOFF_TIMEOUT_MS = 3000;
+// How long the first run of a session that went incognito before it waits for Dosu's server to
+// declare its tools, to hide them from that run: pi's own MCP holds a first run as long.
+const STARTUP_WAIT_MS = 10000;
 // How far up a chain of forks of forks session_start looks for the incognito marker.
 const MAX_FORK_DEPTH = 32;
 
@@ -251,6 +254,8 @@ export default function dosuForPi(pi) {
   let incognito = false;
   // Set when /${INCOGNITO_COMMAND_NAME} was given a task it did not run, and said so.
   let droppedTask = false;
+  // Whether this session registered Dosu's MCP server.
+  let registered = false;
 
   // pi before 1.0 has no built-in MCP, and pi refuses a name another extension took: either way
   // pi runs on, without Dosu's tools.
@@ -280,9 +285,21 @@ export default function dosuForPi(pi) {
       forkedFromIncognito(ctx.sessionManager.getHeader?.()?.parentSession);
     // A registration lasts only as long as this load of the extension: register for every
     // session, replacing any earlier registration, which also brings back hidden tools.
+    registered = !incognito;
     if (incognito) hideMemoryTools();
     else connectMemory(ctx);
   });
+
+  // pi connects servers in the background: one registered before /${INCOGNITO_COMMAND_NAME} may
+  // declare its tools after the command hid them, and pi lists the tools of a run's first request
+  // once its own MCP is done waiting for them, after this extension's before_agent_start. So wait
+  // for them here, to hide them first.
+  const memoryToolsDeclared = async () => {
+    const declared = () => pi.getAllTools().some((tool) => tool.name.startsWith("mcp__" + MCP_SERVER_NAME + "__"));
+    for (let waited = 0; registered && !declared() && waited < STARTUP_WAIT_MS; waited += 50) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
 
   // Every tool call passes through here, after pi validated its arguments, MCP tools and
   // codemode scripts' nested calls included. One pi serves many sessions (/new, /resume) through
@@ -306,7 +323,12 @@ export default function dosuForPi(pi) {
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
-    if (incognito || event.prompt.includes(INCOGNITO_MARKER)) return undefined;
+    if (incognito) {
+      await memoryToolsDeclared();
+      hideMemoryTools();
+      return undefined;
+    }
+    if (event.prompt.includes(INCOGNITO_MARKER)) return undefined;
     // The transcript, once pi has one, tells the CLI whether the session began before this
     // prompt (and on which branch).
     const input = JSON.stringify({
