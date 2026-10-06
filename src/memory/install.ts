@@ -38,13 +38,15 @@ interface MemoryHook {
  * keeps a slow write from being cut off by Claude Code's 30 s default, which would block the
  * prompt. PostToolBatch runs once per batch of tool calls, failed ones included, right before the
  * next model request, and only reads local files; 5 s bounds a stall. The others return
- * immediately. */
+ * immediately. SessionEnd gets 5 s instead of Claude Code's 1.5 s default for it: on a busy
+ * machine the CLI took up to 2.6 s to start, and Claude Code cancelled the hook before it spawned
+ * the flush, leaving the episode to the backend's quiet period. */
 const CLAUDE_CODE_HOOKS: readonly MemoryHook[] = [
   { event: "SessionStart" },
   { event: "UserPromptSubmit", timeout: 120 },
   { event: "PostToolBatch", timeout: 5 },
   { event: "Stop" },
-  { event: "SessionEnd" },
+  { event: "SessionEnd", timeout: 5 },
 ];
 
 /** Codex has no PostToolBatch, but it runs `async` hooks in the background and hands their output

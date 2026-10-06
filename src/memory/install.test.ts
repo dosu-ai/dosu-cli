@@ -54,7 +54,7 @@ afterEach(() => {
 });
 
 describe("memory hooks in Claude Code settings", () => {
-  it("installs the five events under CLAUDE_CONFIG_DIR, with timeouts on the prompt and tool hooks", () => {
+  it("installs the five events under CLAUDE_CONFIG_DIR, with timeouts on the prompt, tool and end hooks", () => {
     expect(memoryHooksTarget("claude-code").configPath).toBe(join(configDir, "settings.json"));
     enableMemoryHooks("claude-code");
     enableMemoryHooks("claude-code");
@@ -66,7 +66,7 @@ describe("memory hooks in Claude Code settings", () => {
         UserPromptSubmit: [{ hooks: [{ ...hook, timeout: 120 }] }],
         PostToolBatch: [{ hooks: [{ ...hook, timeout: 5 }] }],
         Stop: [{ hooks: [hook] }],
-        SessionEnd: [{ hooks: [hook] }],
+        SessionEnd: [{ hooks: [{ ...hook, timeout: 5 }] }],
       },
     });
     expect(memoryHookStatus("claude-code")).toEqual({
@@ -92,7 +92,7 @@ describe("memory hooks in Claude Code settings", () => {
     enableMemoryHooks("claude-code");
     expect(settings().hooks.SessionEnd).toEqual([
       { hooks: [knowledge] },
-      { hooks: [{ type: "command", command: "dosu memory hook" }] },
+      { hooks: [{ type: "command", command: "dosu memory hook", timeout: 5 }] },
     ]);
 
     disableMemoryHooks("claude-code");
