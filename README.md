@@ -211,10 +211,7 @@ and may include documented coarse setup choices. `DO_NOT_TRACK=1` and
 `DOSU_TELEMETRY_DISABLED=1` disable all telemetry for the process. Dosu never collects
 prompts, raw command lines, free-form argument or option values, user source code, file contents,
 local paths, credentials, raw error messages, or `debug.log`. Environment-variable names and values
-are not collected, with one exception: when a managed Claude Code settings conflict prevents a
-study run, Dosu reports the allowlisted public Claude Code setting/variable names that caused the
-conflict (never their values) to help diagnose why knowledge sync fails due to settings conflicts.
-See [Telemetry and privacy](docs/telemetry.md) for the exact event fields, destinations, retention,
+are not collected. See [Telemetry and privacy](docs/telemetry.md) for the exact event fields, destinations, retention,
 and controls.
 
 ## Configuration
