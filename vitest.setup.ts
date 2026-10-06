@@ -21,3 +21,4 @@ delete process.env.CODEX_HOME;
 // the MCP proxy would otherwise read as the session of the code under test.
 delete process.env.CLAUDE_CODE_SESSION_ID;
 delete process.env.CODEX_THREAD_ID;
+delete process.env.DOSU_OPENCODE_SESSION;

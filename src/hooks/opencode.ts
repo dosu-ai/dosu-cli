@@ -23,6 +23,7 @@
  *   cannot tell them apart, so `tool.execute.before` names the session in the arguments of each
  *   call to Dosu's memory tools when the server is the proxy (which takes it out again; see
  *   src/mcp/call-session.ts), and stops the call in an incognito session or a subagent's of one.
+ *   `shell.env` names it to the session's shell commands too, for `dosu memory` run from one.
  *
  * The plugin is plain JavaScript importing only node builtins. opencode 1.18 still waits, before it
  * loads any local plugin, for the npm install of `@opencode-ai/plugin` it starts in its config dir
@@ -37,7 +38,11 @@ import {
   getIncognitoAgent,
   keptIncognitoNote,
 } from "../incognito/agents";
-import { OFF_THE_RECORD_MESSAGE, SESSION_ARGUMENT } from "../mcp/call-session";
+import {
+  OFF_THE_RECORD_MESSAGE,
+  OPENCODE_SESSION_VARIABLE,
+  SESSION_ARGUMENT,
+} from "../mcp/call-session";
 import { writeSecureFile } from "../mcp/config-helpers";
 import { isInstalled, isOnPath } from "../mcp/detect";
 import { INCOGNITO_MARKER } from "../sync/incognito";
@@ -102,6 +107,7 @@ const SESSION_ID = /^[A-Za-z0-9_-]+$/;
 // Dosu's memory tools as opencode names an MCP server's tools: <server>_<tool>.
 const MEMORY_TOOL = /^(.+)_(search_memory|get_memory_evidence)$/;
 const SESSION_ARGUMENT = ${JSON.stringify(SESSION_ARGUMENT)};
+const SESSION_VARIABLE = ${JSON.stringify(OPENCODE_SESSION_VARIABLE)};
 const OFF_THE_RECORD = ${JSON.stringify(OFF_THE_RECORD_MESSAGE)};
 
 // Per process, not per plugin instance: opencode imports this module once and starts the plugin
@@ -274,6 +280,14 @@ export const DosuMemory = async ({ client, directory }) => {
       const args = output?.args;
       if (!args || typeof args !== "object") return;
       if ((await proxiedServers(client)).has(tool[1])) args[SESSION_ARGUMENT] = sessionID;
+    },
+
+    // The session's shell commands carry it too, so \`dosu memory\` run from one keeps to it.
+    "shell.env": async (input, output) => {
+      const sessionID = input?.sessionID;
+      if (typeof sessionID === "string" && SESSION_ID.test(sessionID) && output?.env) {
+        output.env[SESSION_VARIABLE] = sessionID;
+      }
     },
 
     "chat.message": async (input, output) => {

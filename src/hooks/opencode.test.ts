@@ -271,6 +271,11 @@ for (const [step, ...args] of JSON.parse(stepsJson)) {
     } catch (err) {
       console.log(JSON.stringify({ tool, error: String(err?.message ?? err) }));
     }
+  } else if (step === "shell") {
+    const [sessionID] = args;
+    const output = { env: {} };
+    await hooks["shell.env"]({ cwd: "/w", ...(sessionID ? { sessionID, callID: "call_1" } : {}) }, output);
+    console.log(JSON.stringify({ shell: sessionID ?? null, env: output.env }));
   } else if (step === "idle") {
     await hooks.event({ event: { type: "session.idle", properties: { sessionID: args[0] } } });
   } else if (step === "dispose") {
@@ -289,6 +294,7 @@ type Step =
   | ["created", string, string?]
   | ["chat", string, string]
   | ["tool", string, string, Record<string, unknown>]
+  | ["shell", string?]
   | ["idle", string]
   | ["dispose"]
   | ["advance", number]
@@ -426,6 +432,22 @@ describe("the opencode plugin", () => {
     ).filter((line) => line.tool);
 
     expect(calls).toEqual([{ tool: "dosu_search_memory", args: { query: "deploy" } }]);
+  });
+
+  it("names the session to the shell commands it runs, for `dosu memory` run from them", async () => {
+    fakeDosu("");
+    const shells = opencodeProcess([
+      ["start"],
+      ["created", "ses_a"],
+      ["shell", "ses_a"],
+      // A terminal the user opens belongs to no session.
+      ["shell"],
+    ]).filter((line) => "shell" in line);
+
+    expect(shells).toEqual([
+      { shell: "ses_a", env: { DOSU_OPENCODE_SESSION: "ses_a" } },
+      { shell: null, env: {} },
+    ]);
   });
 
   it("stops the memory tools in an incognito session and its subagents' sessions", async () => {

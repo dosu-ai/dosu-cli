@@ -128,11 +128,17 @@ function codexSession(thread: string): CallSession | null {
   return { harness: "codex", id: basename(rollout, ".jsonl"), transcript: rollout };
 }
 
+/** The variable Dosu's OpenCode plugin names the session in for the shell commands it runs
+ * (opencode's `shell.env` hook); opencode sets none of its own. */
+export const OPENCODE_SESSION_VARIABLE = "DOSU_OPENCODE_SESSION";
+
 /** The variable each agent puts its session in for the shell commands it runs: Claude Code its
- * live session (also after /clear), Codex the thread the command runs for. */
+ * live session (also after /clear), Codex the thread the command runs for, OpenCode (through
+ * Dosu's plugin) the session whose tool runs it. */
 const SHELL_SESSION_VARIABLES: ReadonlyArray<readonly [SessionHarness, string]> = [
   ["claude", "CLAUDE_CODE_SESSION_ID"],
   ["codex", "CODEX_THREAD_ID"],
+  ["opencode", OPENCODE_SESSION_VARIABLE],
 ];
 
 /** The agent sessions a shell command runs in, as its environment names them (`dosu memory` run

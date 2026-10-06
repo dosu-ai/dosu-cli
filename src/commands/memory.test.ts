@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveConfig } from "../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { type FakeMcpServer, startFakeMcpServer } from "../mcp/mcp-server.test-utils";
+import { makeOpencodeDb, opencodeDocument } from "../sessions/opencode.test-utils";
 import { INCOGNITO_MARKER, PI_INCOGNITO_ENTRY_TYPE } from "../sync/incognito";
 import { memoryCommand } from "./memory";
 
@@ -275,6 +276,24 @@ describe("dosu memory run from an agent's shell", () => {
     expect(calls().map((r) => [r.headers["x-dosu-session"], r.headers["x-dosu-client"]])).toEqual([
       [stem, "codex"],
     ]);
+  });
+
+  it("names an OpenCode shell's session, as Dosu's plugin gives it, and keeps off the record", async () => {
+    vi.stubEnv("XDG_DATA_HOME", join(home, ".local", "share"));
+    const db = join(home, ".local", "share", "opencode", "opencode.db");
+    mkdirSync(dirname(db), { recursive: true });
+    const off = opencodeDocument({ id: "ses_off", user: `/dosu-incognito ${INCOGNITO_MARKER}` });
+    if (!makeOpencodeDb(db, [opencodeDocument({ id: "ses_live" }), off])) return; // no sqlite
+
+    vi.stubEnv("DOSU_OPENCODE_SESSION", "ses_live");
+    await dosu("search", "q");
+    vi.stubEnv("DOSU_OPENCODE_SESSION", "ses_off");
+    await dosu("search", "q");
+
+    expect(calls().map((r) => [r.headers["x-dosu-session"], r.headers["x-dosu-client"]])).toEqual([
+      ["ses_live", "opencode"],
+    ]);
+    expect(err.join("\n")).toContain("Dosu is off for this session");
   });
 
   it("sends nothing from the shell of a session the user took off the record", async () => {
