@@ -255,6 +255,6 @@ describe("Claude Code not on this machine at all", () => {
     const said = await dosu("transcripts", "enable");
 
     expect(existsSync(join(home, ".claude"))).toBe(false);
-    expect(said).toContain("Prompt-time memory not installed: Claude Code was not found");
+    expect(said).toContain("Prompt-time memory not installed: no agent that supports it was found");
   });
 });

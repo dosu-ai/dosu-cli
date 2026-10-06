@@ -537,7 +537,7 @@ describe("the session a tool call belongs to", () => {
     expect(relayedCalls().map((r) => r.headers["x-dosu-session"])).toEqual([undefined, undefined]);
   });
 
-  it("takes the session argument from OpenCode's server only, and drops it from any", async () => {
+  it("takes the session argument from OpenCode's and pi's servers only, and drops it from any", async () => {
     codexRollout(
       `{"type":"session_meta"}\n{"text":"Dosu incognito marker: ${INCOGNITO_MARKER}"}\n`,
     );
@@ -555,5 +555,33 @@ describe("the session a tool call belongs to", () => {
     const [call] = relayedCalls();
     expect(call?.headers["x-dosu-session"]).toBeUndefined();
     expect(call?.body.params.arguments).toEqual({ query: "q" });
+  });
+
+  it("takes a pi call's session from the argument Dosu's extension adds", async () => {
+    vi.stubEnv("CLAUDE_CODE_SESSION_ID", "s-outer");
+
+    await serve(
+      [...HANDSHAKE, search({ arguments: { query: "q", _dosu_session: "01a10e7d-b836" } })],
+      "--client",
+      "pi",
+    );
+
+    const [call] = relayedCalls();
+    expect(call?.headers["x-dosu-session"]).toBe("01a10e7d-b836");
+    expect(call?.body.params.arguments).toEqual({ query: "q" });
+  });
+
+  it("never names the Claude Code session another agent was started from", async () => {
+    // pi (or any agent) run from a Claude Code shell inherits CLAUDE_CODE_SESSION_ID; a call from
+    // an entry of its own that names no session is not that Claude Code session's.
+    vi.stubEnv("CLAUDE_CODE_SESSION_ID", "s-outer");
+    writeFile(
+      join(home, ".claude", "projects", "-w", "s-outer.jsonl"),
+      `{"type":"user","message":{"content":"<command-name>/dosu-incognito</command-name>"}}\n`,
+    );
+
+    await serve([...HANDSHAKE, search()], "--client", "pi");
+
+    expect(relayedCalls().map((r) => r.headers["x-dosu-session"])).toEqual([undefined]);
   });
 });

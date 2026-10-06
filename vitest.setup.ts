@@ -19,6 +19,12 @@ delete process.env.CODEX_HOME;
 
 // And from the agent running the tests: its shell names its own session, which `dosu memory` and
 // the MCP proxy would otherwise read as the session of the code under test.
-delete process.env.CLAUDE_CODE_SESSION_ID;
-delete process.env.CODEX_THREAD_ID;
-delete process.env.DOSU_OPENCODE_SESSION;
+for (const name of [
+  "CLAUDE_CODE_SESSION_ID",
+  "CODEX_THREAD_ID",
+  "DOSU_OPENCODE_SESSION",
+  "PI_SESSION_ID",
+  "PI_SESSION_FILE",
+]) {
+  delete process.env[name];
+}

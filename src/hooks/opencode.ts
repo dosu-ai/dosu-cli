@@ -345,6 +345,8 @@ export function opencodeHookAgent(): HookAgent {
     isInstalled: () => isInstalled([configDir(), dataDir()]) || isOnPath("opencode"),
     configPath: pluginPath,
     isEnabled: () => isOurs(pluginPath()),
+    // The plugin asks for a digest on every prompt.
+    promptMemory: () => isOurs(pluginPath()),
     enable: () => {
       const path = pluginPath();
       const source = opencodePluginSource();

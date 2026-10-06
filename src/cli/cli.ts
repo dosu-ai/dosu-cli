@@ -68,8 +68,8 @@ import { CliUsageError } from "./errors";
 const NO_BACKGROUND_CHECKS = new Set([
   "upgrade",
   "knowledge context",
-  // Started by agents: the MCP server owns stdout for the protocol, and the memory commands are
-  // the Pi extension's tools, run while the agent waits.
+  // Started by agents: the MCP server owns stdout for the protocol, and agents run the memory
+  // commands from their shell while they wait.
   "mcp serve",
   "memory search",
   "memory evidence",

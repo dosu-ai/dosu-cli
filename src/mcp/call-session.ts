@@ -11,10 +11,9 @@
  *   the session just before the call (recordClaudeToolCall); else the session Claude Code started
  *   this server in (CLAUDE_CODE_SESSION_ID). Only Claude Code's server reads that variable: every
  *   shell Claude Code runs carries it, so another agent started from one passes it on.
- * - OpenCode: SESSION_ARGUMENT, which Dosu's plugin adds to the memory tools' arguments. Only
- *   OpenCode's server takes it, and every server removes it before relaying, since the server's
- *   tool schemas are strict.
- * - Pi, which has no MCP: `dosu memory --session --transcript` (commands/memory.ts).
+ * - OpenCode and pi: SESSION_ARGUMENT, which Dosu's plugin (OpenCode) or extension (pi) adds to
+ *   the memory tools' arguments. Only those two agents' servers take it, and every server removes
+ *   it before relaying, since the server's tool schemas are strict.
  * - Cursor names no session in its calls and runs no Dosu hook that could, so its /dosu-incognito
  *   keeps the memory tools off by instruction only. */
 
@@ -39,7 +38,7 @@ import { isIncognitoSession } from "../sync/incognito";
  * each call's session (hooks/context.ts). */
 export const CLAUDE_MEMORY_TOOL_PATTERN = "mcp__dosu__(search_memory|get_memory_evidence)";
 
-/** The argument OpenCode's Dosu plugin names the session with. */
+/** The argument Dosu's OpenCode plugin and pi extension name the session with. */
 export const SESSION_ARGUMENT = "_dosu_session";
 
 /** What the proxy answers, instead of relaying, for a call from a session off the record. */
@@ -135,11 +134,13 @@ export const OPENCODE_SESSION_VARIABLE = "DOSU_OPENCODE_SESSION";
 
 /** The variable each agent puts its session in for the shell commands it runs: Claude Code its
  * live session (also after /clear), Codex the thread the command runs for, OpenCode (through
- * Dosu's plugin) the session whose tool runs it. */
+ * Dosu's plugin) the session whose tool runs it, pi the session running the command (with its
+ * transcript in PI_SESSION_FILE). */
 const SHELL_SESSION_VARIABLES: ReadonlyArray<readonly [SessionHarness, string]> = [
   ["claude", "CLAUDE_CODE_SESSION_ID"],
   ["codex", "CODEX_THREAD_ID"],
   ["opencode", OPENCODE_SESSION_VARIABLE],
+  ["pi", "PI_SESSION_ID"],
 ];
 
 /** The agent sessions a shell command runs in, as its environment names them (`dosu memory` run
@@ -154,7 +155,8 @@ export function shellSessions(
   for (const [harness, variable] of SHELL_SESSION_VARIABLES) {
     const id = str(env[variable]);
     if (!id || (only && only !== harness)) continue;
-    const session = harness === "codex" ? codexSession(id) : { harness, id, transcript: null };
+    const transcript = harness === "pi" ? str(env.PI_SESSION_FILE) : null;
+    const session = harness === "codex" ? codexSession(id) : { harness, id, transcript };
     if (session && SAFE_ID.test(session.id)) sessions.push(session);
   }
   return sessions;
@@ -172,7 +174,7 @@ export function takeCallSession(
   const args = isObject(params.arguments) ? params.arguments : null;
   const named = args ? str(args[SESSION_ARGUMENT]) : null;
   if (args && SESSION_ARGUMENT in args) delete args[SESSION_ARGUMENT];
-  if (harness === "opencode" && named && SAFE_ID.test(named)) {
+  if ((harness === "opencode" || harness === "pi") && named && SAFE_ID.test(named)) {
     return { harness, id: named, transcript: null };
   }
 

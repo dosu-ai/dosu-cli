@@ -181,8 +181,9 @@ background (secrets redacted locally first), and Dosu learns from them server-si
 or Codex (0.160+) session ships as soon as it ends, an OpenCode session as soon as the opencode
 process that ran it exits, however it exits, and a pi session as soon as pi shuts it down. OpenCode
 gets a plugin and pi an extension rather than a hook; both also add memory digests to prompts, and
-pi's adds `search_memory`/`get_memory_evidence` tools and `/dosu-incognito` (pi run with
-`--no-extensions` skips it, see [docs/syncing.md](docs/syncing.md#pi)). Cursor sessions ship with a
+pi's registers Dosu's MCP server (the `dosu mcp serve` proxy) with pi's built-in MCP and adds
+`/dosu-incognito` (pi run with `--no-extensions` skips it, see
+[docs/syncing.md](docs/syncing.md#pi)). Cursor sessions ship with a
 later sync once they have been quiet for five minutes (its end event fires every turn). A resumed
 session later ships only what is new. Shipping is on by default; `dosu knowledge transcripts
 disable` turns it off.

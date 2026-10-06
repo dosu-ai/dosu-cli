@@ -545,6 +545,63 @@ function contextCommand(): Command {
     });
 }
 
+/** Whether an agent counts as on this machine; detection reads other tools' files, so one that
+ * throws is treated as absent. */
+function agentInstalled(agent: HookAgent): boolean {
+  try {
+    return agent.isInstalled();
+  } catch {
+    return false;
+  }
+}
+
+/** Prompt-time memory once shipping is on, per agent on the machine that can take it: Claude
+ * Code's hook follows the shipping switch, so it is installed here; Codex's comes with its hooks,
+ * and OpenCode's plugin and pi's extension carry their own. */
+function reportPromptMemory(): void {
+  let claudeFailure: string | null = null;
+  try {
+    enableClaudeContextHook();
+  } catch (err) {
+    // Shipping is on either way; only the prompt hook could not be written.
+    claudeFailure = err instanceof Error ? err.message : String(err);
+  }
+  const agents = allHookAgents().filter((agent) => agent.promptMemory && agentInstalled(agent));
+  if (agents.length === 0) {
+    const names = allHookAgents()
+      .filter((agent) => agent.promptMemory)
+      .map((agent) => agent.name())
+      .join(", ");
+    console.log(
+      pc.yellow(
+        `! Prompt-time memory not installed: no agent that supports it was found (${names}). Once one is installed, run 'dosu knowledge hooks enable <agent>'.`,
+      ),
+    );
+    return;
+  }
+  for (const agent of agents) {
+    if (agent.id() === "claude" && claudeFailure) {
+      console.log(`! Prompt-time memory not installed for ${agent.name()}: ${claudeFailure}`);
+      continue;
+    }
+    try {
+      if (agent.promptMemory?.()) {
+        console.log(`✓ ${agent.name()} will receive task memory when a prompt warrants it.`);
+        continue;
+      }
+      const remedy =
+        agent.promptMemoryRemedy?.() ?? `'dosu knowledge hooks enable ${agent.id()}' adds it.`;
+      console.log(pc.yellow(`! Prompt-time memory not installed for ${agent.name()}: ${remedy}`));
+    } catch (err) {
+      // The agent's own config could not be read; shipping is on either way.
+      const reason = err instanceof Error ? err.message : String(err);
+      console.log(
+        pc.yellow(`! Prompt-time memory for ${agent.name()} could not be checked: ${reason}`),
+      );
+    }
+  }
+}
+
 /** `dosu knowledge transcripts`: the switch for shipping finished session transcripts to Dosu
  * memory. On by default; you control what Dosu collects with this switch and the per-session
  * /dosu-incognito opt-out, and secrets are redacted locally before anything ships. */
@@ -600,22 +657,7 @@ function transcriptsCommand(): Command {
     .action(() => {
       setShipTranscripts(true);
       console.log("✓ Transcript shipping enabled.");
-      try {
-        if (enableClaudeContextHook()) {
-          console.log("✓ Claude Code will receive task memory when a prompt warrants it.");
-        } else {
-          console.log(
-            pc.yellow(
-              "! Prompt-time memory not installed: Claude Code was not found (no ~/.claude, and no 'claude' on PATH). Once it is installed, run 'dosu knowledge hooks enable claude'.",
-            ),
-          );
-        }
-      } catch (err) {
-        // Shipping is on either way; only the prompt hook could not be written.
-        console.log(
-          `! Prompt-time memory not installed: ${err instanceof Error ? err.message : err}`,
-        );
-      }
+      reportPromptMemory();
       const incognito = installedIncognitoCommands();
       console.log(
         pc.dim(

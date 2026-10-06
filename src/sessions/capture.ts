@@ -198,16 +198,6 @@ function codexSessionEnd(hook: HookPayload): EndedSession | null {
   return { harness: "codex", id, path };
 }
 
-/** OpenCode, from Dosu's plugin (src/hooks/opencode.ts): `{agent: "opencode", hook_event_name:
- * "opencode.session.end", session_id}`, sent for each session that ran in an opencode process as
- * the process shuts down. Its sessions live in a shared DB, so there is no transcript path. */
-function opencodeSessionEnd(hook: HookPayload): EndedSession | null {
-  if (hook.agent !== "opencode" || hook.hook_event_name !== "opencode.session.end") return null;
-  const id = hook.session_id;
-  if (typeof id !== "string" || !SAFE_SEGMENT.test(id)) return null;
-  return { harness: "opencode", id };
-}
-
 /** pi `session_shutdown`, as the Dosu pi extension hands it over: `{hook_event_name, agent: "pi",
  * reason, session_id, transcript_path, cwd}`, the id being the one in the transcript's header. A
  * reload tears the extension down and brings it straight back on the same session, so it ends
@@ -223,13 +213,12 @@ function piSessionShutdown(hook: HookPayload): EndedSession | null {
   return { harness: "pi", id, path };
 }
 
-/** One reader per agent for its definitive end-of-session event. Per-turn events (Cursor
- * `stop`, Codex `Stop` before 0.160, OpenCode's `session.idle`) never count: they fire while the
- * session goes on. */
+/** One reader per agent for its definitive end-of-session event; OpenCode has none, since its
+ * plugin passes `--ended` itself. Per-turn events (Cursor `stop`, Codex `Stop` before 0.160,
+ * OpenCode's `session.idle`) never count: they fire while the session goes on. */
 const END_EVENT_READERS: ReadonlyArray<(hook: HookPayload) => EndedSession | null> = [
   claudeSessionEnd,
   codexSessionEnd,
-  opencodeSessionEnd,
   piSessionShutdown,
 ];
 

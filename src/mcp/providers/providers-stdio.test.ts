@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../../config/config";
 import { makeTestConfig } from "../../config/config.test-utils";
@@ -55,6 +56,7 @@ beforeEach(() => {
   vi.stubEnv("XDG_CONFIG_HOME", undefined);
   vi.stubEnv("CODEX_HOME", undefined);
   vi.stubEnv("CLINE_DIR", undefined);
+  vi.stubEnv("PI_CODING_AGENT_DIR", undefined);
   vi.stubEnv("DOSU_DEV", undefined);
   vi.stubEnv("DOSU_BACKEND_URL_OVERRIDE", undefined);
 });
@@ -119,6 +121,29 @@ function setupProvider(id: string): SetupProvider {
   return getProvider(id) as SetupProvider;
 }
 
+/** What pi's built-in MCP is asked to run once a session starts in `cwd`: pi has no MCP entry of
+ * Dosu's in a config file; the Dosu pi extension the provider installs registers it. */
+async function piRegistration(cwd: string): Promise<unknown> {
+  const extension = setupProvider("pi").globalConfigPath();
+  const { default: load } = await import(`${pathToFileURL(extension).href}?t=${Date.now()}`);
+  const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+  const servers = new Map<string, unknown>();
+  load({
+    on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) => {
+      handlers.set(event, handler);
+    },
+    registerCommand: () => {},
+    registerMcpServer: (name: string, config: unknown) => servers.set(name, config),
+    getActiveTools: () => [],
+    setActiveTools: () => {},
+  });
+  handlers.get("session_start")?.(
+    { reason: "startup" },
+    { cwd, sessionManager: { getSessionId: () => "s-1", getEntries: () => [] } },
+  );
+  return servers.get("dosu");
+}
+
 describe("stdio proxy entries", () => {
   it.each(JSON_PROVIDERS)("$id runs `dosu mcp serve` for itself", ({ id, key, entry }) => {
     const provider = setupProvider(id);
@@ -128,8 +153,19 @@ describe("stdio proxy entries", () => {
     expect(written).toEqual(entry(clientOf(id)));
   });
 
+  it("Pi runs the same proxy, registered with pi's built-in MCP for each session", async () => {
+    mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+    setupProvider("pi").install(makeCfg(), true);
+
+    expect(await piRegistration(home)).toEqual({
+      ...proxy("pi"),
+      cwd: home,
+      exposure: "direct",
+      description: expect.any(String),
+    });
+  });
+
   it("covers every provider that writes a config file", () => {
-    // Pi writes no MCP entry: its Dosu extension's tools call `dosu memory`, the proxy's code path.
     const covered = new Set([...JSON_PROVIDERS.map((p) => p.id), "codex", "pi"]);
     expect(
       allSetupProviders()
@@ -269,6 +305,23 @@ describe("stdio proxy entries", () => {
     expect(toml).toContain(`command = "${dosu}"`);
     expect(toml).not.toContain("mcp-remote");
     expect(toml).not.toContain("X_DOSU_API_KEY");
+  });
+
+  it("refresh moves pi from the extension's own memory tools to the proxy", async () => {
+    // The extension before pi had built-in MCP: tools that shelled out to `dosu memory`.
+    const extension = join(home, ".pi", "agent", "extensions", "dosu.ts");
+    mkdirSync(dirname(extension), { recursive: true });
+    writeFileSync(
+      extension,
+      "// dosu:pi-extension v1\nexport default function (pi) {\n" +
+        '  pi.registerTool({ name: "search_memory" });\n}\n',
+    );
+
+    const result = refreshConfiguredProviders(makeCfg());
+
+    expect(result.updated.map((p) => p.id())).toEqual(["pi"]);
+    expect(readFileSync(extension, "utf-8")).not.toContain("registerTool");
+    expect(await piRegistration(home)).toMatchObject(proxy("pi"));
   });
 });
 
