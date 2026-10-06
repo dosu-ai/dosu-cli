@@ -584,13 +584,21 @@ function reportPromptMemory(): void {
       console.log(`! Prompt-time memory not installed for ${agent.name()}: ${claudeFailure}`);
       continue;
     }
-    if (agent.promptMemory?.()) {
-      console.log(`✓ ${agent.name()} will receive task memory when a prompt warrants it.`);
-      continue;
+    try {
+      if (agent.promptMemory?.()) {
+        console.log(`✓ ${agent.name()} will receive task memory when a prompt warrants it.`);
+        continue;
+      }
+      const remedy =
+        agent.promptMemoryRemedy?.() ?? `'dosu knowledge hooks enable ${agent.id()}' adds it.`;
+      console.log(pc.yellow(`! Prompt-time memory not installed for ${agent.name()}: ${remedy}`));
+    } catch (err) {
+      // The agent's own config could not be read; shipping is on either way.
+      const reason = err instanceof Error ? err.message : String(err);
+      console.log(
+        pc.yellow(`! Prompt-time memory for ${agent.name()} could not be checked: ${reason}`),
+      );
     }
-    const remedy =
-      agent.promptMemoryRemedy?.() ?? `'dosu knowledge hooks enable ${agent.id()}' adds it.`;
-    console.log(pc.yellow(`! Prompt-time memory not installed for ${agent.name()}: ${remedy}`));
   }
 }
 

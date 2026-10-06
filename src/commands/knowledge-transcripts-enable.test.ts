@@ -97,6 +97,20 @@ describe("only Codex on the machine", () => {
     );
     expect(said).not.toContain("hooks enable codex");
   });
+
+  it("still finishes, and says what it could not check, when Codex's hooks.json is not JSON", async () => {
+    mkdirSync(join(home, ".codex"));
+    writeFileSync(join(home, ".codex", "hooks.json"), '{ "hooks": { oops');
+
+    const said = await dosu("transcripts", "enable");
+
+    expect(process.exitCode ?? 0).toBe(0);
+    expect(said).toContain("✓ Transcript shipping enabled.");
+    expect(said).toMatch(
+      /! Prompt-time memory for Codex could not be checked: .*hooks\.json exists but is not valid JSON/,
+    );
+    expect(said).toContain("shipped to Dosu memory on the next sync");
+  });
 });
 
 describe("Claude Code and pi on the machine", () => {
