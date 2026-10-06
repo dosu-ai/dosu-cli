@@ -1,223 +1,120 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { Config } from "../config/config";
+import type { ShippedSessionRecord, SyncState } from "../sync/watermark";
+import { trace } from "./fixtures.test-utils";
+import { buildKnowledgeReport, emitKnowledgeReport } from "./generate";
+import type { ReportSession } from "./types";
 
-const mockLoadConfig = vi.fn();
-vi.mock("../config/config", () => ({
-  loadConfig: (...args: unknown[]) => mockLoadConfig(...args),
-  getConfigDir: () => "/tmp/dosu-report-test-config",
-}));
+const NOW = new Date("2026-10-06T12:00:00Z");
 
-vi.mock("../sessions/project-dir", () => ({
-  createProjectDirResolver: () => ({
-    resolve: (s: { project?: string }) => (s.project ? `/repos/${s.project}` : null),
-    cached: () => null,
-    flush: () => {},
-  }),
-}));
-
-function wrapNotes<T>(notes: T[]) {
-  return { notes, truncated: false };
-}
-
-const mockLoadSyncState = vi.fn();
-vi.mock("../sync/watermark", () => ({
-  loadSyncState: (...args: unknown[]) => mockLoadSyncState(...args),
-}));
-
-const mockScan = vi.fn();
-vi.mock("../sessions/scan", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../sessions/scan")>()),
-  scanAgentSessions: (...args: unknown[]) => mockScan(...args),
-}));
-
-const mockWrite = vi.fn();
-vi.mock("./write", () => ({
-  defaultReportPath: () => "/tmp/dosu-knowledge-report.html",
-  writeAndOpenReport: (...args: unknown[]) => mockWrite(...args),
-}));
-
-import { emitKnowledgeReport } from "./generate";
-
-let dir: string;
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  dir = mkdtempSync(join(tmpdir(), "dosu-report-gen-"));
-  mockLoadConfig.mockReturnValue({
+function config(target: Record<string, string | undefined> = {}): Config {
+  return {
     schema_version: 2,
-    active_account: { target: { org_name: "Acme" } },
-  });
-  mockLoadSyncState.mockReturnValue({
-    schema_version: 1,
-    watermark: null,
-    consecutive_failures: 0,
-  });
-  mockScan.mockReturnValue([]);
-  mockWrite.mockResolvedValue("/tmp/dosu-knowledge-report.html");
-});
-
-afterEach(() => {
-  rmSync(dir, { recursive: true, force: true });
-});
-
-function claudeSession(id: string, lines: unknown[]) {
-  const path = join(dir, `${id}.jsonl`);
-  writeFileSync(path, lines.map((l) => JSON.stringify(l)).join("\n"));
-  return { id, harness: "claude" as const, path, updated: "2026-09-09T00:00:00.000Z" };
+    active_account: {
+      user_id: "u",
+      session: { access_token: "t", refresh_token: "r", expires_at: 0 },
+      target: { api_key: "sk_user_x", org_id: "org-1", org_name: "Acme", ...target },
+    },
+  } as Config;
 }
+
+function state(shipped: ShippedSessionRecord[]): SyncState {
+  return { schema_version: 2, watermark: null, consecutive_failures: 0, shipped_sessions: shipped };
+}
+
+function shipped(session: string, daysAgo: number): ShippedSessionRecord {
+  return {
+    at: new Date(NOW.getTime() - daysAgo * 86_400_000).toISOString(),
+    session,
+    task_id: "t",
+  };
+}
+
+function deps(overrides: Record<string, unknown> = {}) {
+  const fetchSessions = vi.fn(async (records: ShippedSessionRecord[]) =>
+    records.map<ReportSession>((r) => ({
+      sessionId: r.session.split("/")[1],
+      harness: r.session.split("/")[0],
+      shippedAt: r.at,
+      state: "complete",
+      trace: trace(r.session.split("/")[1]),
+    })),
+  );
+  return {
+    loadConfig: () => config(),
+    loadState: () => state([shipped("claude/recent", 2), shipped("codex/old", 45)]),
+    backendUrl: "https://api.test",
+    appUrl: "https://app.test",
+    now: () => NOW,
+    fetchSessions,
+    ...overrides,
+  };
+}
+
+describe("buildKnowledgeReport", () => {
+  it("looks up only the sessions shipped within the period, with the install's credentials", async () => {
+    const d = deps();
+
+    const report = await buildKnowledgeReport({ days: 30, ...d });
+
+    expect(d.fetchSessions).toHaveBeenCalledWith([shipped("claude/recent", 2)], {
+      apiKey: "sk_user_x",
+      orgId: "org-1",
+      backendUrl: "https://api.test",
+    });
+    expect(report).toMatchObject({ days: 30, orgName: "Acme", appUrl: "https://app.test" });
+    expect(report.sessions.map((s) => s.sessionId)).toEqual(["recent"]);
+  });
+
+  it("widens with --days", async () => {
+    const d = deps();
+
+    const report = await buildKnowledgeReport({ days: 60, ...d });
+
+    expect(report.sessions.map((s) => s.sessionId)).toEqual(["recent", "old"]);
+  });
+
+  it("does not call the API when nothing was shipped in the period", async () => {
+    const d = deps({ loadState: () => state([shipped("codex/old", 45)]) });
+
+    const report = await buildKnowledgeReport({ days: 30, ...d });
+
+    expect(d.fetchSessions).not.toHaveBeenCalled();
+    expect(report.sessions).toEqual([]);
+  });
+
+  it.each([
+    ["no API key", { api_key: undefined }],
+    ["no organization", { org_id: undefined }],
+  ])("asks the user to run setup with %s", async (_label, target) => {
+    const d = deps({ loadConfig: () => config(target) });
+
+    await expect(buildKnowledgeReport({ days: 30, ...d })).rejects.toThrow(/dosu setup/);
+  });
+
+  it("refuses OSS mode, which has no Dosu memory", async () => {
+    const d = deps({ loadConfig: () => ({ ...config(), mode: "oss" }) });
+
+    await expect(buildKnowledgeReport({ days: 30, ...d })).rejects.toThrow(/memory/);
+  });
+});
 
 describe("emitKnowledgeReport", () => {
-  it("renders fetched notes with traces from their referenced sessions only", async () => {
-    const source = claudeSession("s1", [
-      { type: "user", message: { content: "why does auth retry?" } },
-      { type: "assistant", message: { content: [{ type: "text", text: "because 401" }] } },
-    ]);
-    const unrelated = claudeSession("noise", [
-      { type: "user", message: { content: "completely different topic" } },
-    ]);
-    mockScan.mockReturnValue([source, unrelated]);
-    mockWrite.mockImplementation(async (opts: { html: string; out?: string }) => {
-      expect(opts.html).toContain("OAuth retry");
-      expect(opts.html).toContain("Work to learn this");
-      // Unreferenced local history must not leak into the report.
-      expect(opts.html).not.toContain("completely different topic");
+  it("writes the HTML and returns its path without opening it when asked not to", async () => {
+    const write = vi.fn(async (opts: { html: string; out?: string; open?: boolean }) => {
+      expect(opts.html).toContain("What your agent sessions taught Dosu");
+      expect(opts.open).toBe(false);
       return opts.out ?? "/tmp/x.html";
     });
 
-    const out = await emitKnowledgeReport({
-      fetchNotes: async () =>
-        wrapNotes([
-          {
-            title: "OAuth retry",
-            content: "Retry after 401.",
-            transcript_id: "s1",
-            at: "2026-09-09T10:00:00Z",
-          },
-        ]),
-      out: join(dir, "report.html"),
+    const path = await emitKnowledgeReport({
+      days: 30,
+      out: "/tmp/r.html",
       open: false,
-    });
-    expect(out).toBe(join(dir, "report.html"));
-  });
-
-  it("orders notes chronologically regardless of fetch order", async () => {
-    mockWrite.mockImplementation(async (opts: { html: string }) => {
-      expect(opts.html.indexOf("Older note")).toBeLessThan(opts.html.indexOf("Newer note"));
-      return "/tmp/x.html";
-    });
-    await emitKnowledgeReport({
-      fetchNotes: async () =>
-        wrapNotes([
-          { title: "Newer note", content: "b", at: "2026-09-02T00:00:00Z" },
-          { title: "Older note", content: "a", at: "2026-09-01T00:00:00Z" },
-        ]),
-      open: false,
-    });
-    expect(mockWrite).toHaveBeenCalled();
-  });
-
-  it("propagates fetch failures instead of rendering an empty page", async () => {
-    await expect(
-      emitKnowledgeReport({
-        fetchNotes: async () => {
-          throw new Error("Not signed in. Run `dosu setup` to connect an account first.");
-        },
-        open: false,
-      }),
-    ).rejects.toThrow(/Not signed in/);
-    expect(mockWrite).not.toHaveBeenCalled();
-  });
-
-  it("summarizes the run's projects in the header instead of a note anchor", async () => {
-    mockLoadSyncState.mockReturnValue({
-      schema_version: 2,
-      watermark: null,
-      consecutive_failures: 0,
-    });
-    mockWrite.mockImplementation(async (opts: { html: string }) => {
-      expect(opts.html).toContain("Dosu knowledge report — Acme");
-      expect(opts.html).not.toContain("feat/report");
-      expect(opts.html).toContain("0 sessions");
-      return "/tmp/x.html";
-    });
-    await emitKnowledgeReport({
-      fetchNotes: async () =>
-        wrapNotes([
-          { title: "Anchored", content: "Body.", repo: "git@x/y", branch: "feat/report" },
-        ]),
-      open: false,
-    });
-    expect(mockWrite).toHaveBeenCalled();
-  });
-
-  it("renders notes without transcripts as bare cards", async () => {
-    mockWrite.mockImplementation(async (opts: { html: string }) => {
-      expect(opts.html).toContain("Unattributed");
-      expect(opts.html).not.toContain("Work to learn this");
-      return "/tmp/x.html";
-    });
-    await emitKnowledgeReport({
-      fetchNotes: async () =>
-        wrapNotes([{ title: "Unattributed", content: "No transcript.", at: "garbage-date" }]),
-      open: false,
-    });
-    expect(mockWrite).toHaveBeenCalled();
-  });
-
-  it("accepts injected notes without fetching", async () => {
-    const fetchNotes = vi.fn();
-    await emitKnowledgeReport({ notes: [{ title: "A", content: "B" }], fetchNotes, open: false });
-    expect(fetchNotes).not.toHaveBeenCalled();
-    expect(mockWrite).toHaveBeenCalled();
-  });
-});
-
-describe("emitKnowledgeReport shipped sessions", () => {
-  it("surfaces the shipped-session history's links in the report", async () => {
-    mockLoadSyncState.mockReturnValue({
-      schema_version: 2,
-      watermark: "2026-09-01T00:00:00.000Z",
-      consecutive_failures: 0,
-      total_shipped: 1,
-      shipped_sessions: [
-        {
-          at: "2026-09-01T00:00:00.000Z",
-          session: "claude/s1",
-          task_id: "task-1",
-          session_url: "https://app/memories/sessions/s1",
-        },
-      ],
+      write,
+      ...deps(),
     });
 
-    await emitKnowledgeReport({ notes: [] });
-
-    const html = mockWrite.mock.calls[0][0].html as string;
-    expect(html).toContain("Shipped to Dosu memory");
-    expect(html).toContain("https://app/memories/sessions/s1");
-  });
-
-  it("an injected shipped list overrides the state file", async () => {
-    await emitKnowledgeReport({
-      notes: [],
-      shipped: [
-        {
-          at: "2026-09-01T00:00:00.000Z",
-          session: "cursor/injected",
-          task_id: "task-9",
-        },
-      ],
-    });
-
-    const html = mockWrite.mock.calls[0][0].html as string;
-    expect(html).toContain("cursor/injected");
-  });
-
-  it("renders no shipped section when nothing was ever shipped", async () => {
-    await emitKnowledgeReport({ notes: [] });
-
-    const html = mockWrite.mock.calls[0][0].html as string;
-    expect(html).not.toContain("Shipped to Dosu memory");
+    expect(path).toBe("/tmp/r.html");
   });
 });

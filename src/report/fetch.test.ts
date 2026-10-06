@@ -1,137 +1,144 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Config } from "../config/config";
+import { describe, expect, it, vi } from "vitest";
+import type { ShippedSessionRecord } from "../sync/watermark";
+import { fetchReportSessions } from "./fetch";
+import { trace } from "./fixtures.test-utils";
+import type { SessionDetail } from "./types";
 
-const mockQuery = vi.fn();
-const mockCreateTypedClient = vi.fn(() => ({ notes: { listMine: { query: mockQuery } } }));
-vi.mock("../client/trpc", () => ({
-  createTypedClient: () => mockCreateTypedClient(),
-}));
-
-import { fetchReportNotes, REPORT_NOTES_LIMIT } from "./fetch";
-
-function authedConfig(): Config {
-  return {
-    schema_version: 2,
-    active_account: {
-      user_id: "u1",
-      session: { access_token: "tok", refresh_token: "r", expires_at: 0 },
-      target: { org_id: "11111111-1111-4111-8111-111111111111" },
-    },
-  } as unknown as Config;
+function record(
+  session: string,
+  overrides: Partial<ShippedSessionRecord> = {},
+): ShippedSessionRecord {
+  return { at: "2026-10-01T10:00:00Z", session, task_id: "t", ...overrides };
 }
 
-beforeEach(() => {
-  mockQuery.mockReset();
-  mockCreateTypedClient.mockClear();
-});
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
 
-describe("fetchReportNotes", () => {
-  it("maps backend notes, keeping optional fields only when present", async () => {
-    mockQuery.mockResolvedValue({
-      notes: [
-        {
-          id: "n1",
-          title: "OAuth refresh",
-          body: "Retry after 401.",
-          repo: "git@x/y",
-          branch: "main",
-          transcript_id: "conv-1",
-          created_at: "2026-09-01T00:00:00+00:00",
-        },
-        {
-          id: "n2",
-          title: "Bare",
-          body: "No provenance.",
-          repo: null,
-          branch: null,
-          transcript_id: null,
-          created_at: "2026-09-02T00:00:00+00:00",
-        },
-      ],
+function detail(sessionId: string, overrides: Partial<SessionDetail> = {}): SessionDetail {
+  return { session_id: sessionId, traces: [trace(sessionId)], private_traces: 0, ...overrides };
+}
+
+const options = { apiKey: "sk_user_x", orgId: "org-1", backendUrl: "https://api.test/" };
+
+describe("fetchReportSessions", () => {
+  it("asks the session endpoint with the API key, the org, and the bare session id", async () => {
+    const fetchImpl = vi.fn(async () => json(detail("abc/def")));
+
+    await fetchReportSessions([record("claude/abc/def", { project: "dosu" })], {
+      ...options,
+      fetchImpl,
     });
 
-    const { notes, truncated } = await fetchReportNotes(authedConfig());
-    expect(mockQuery).toHaveBeenCalledWith({
-      org_id: "11111111-1111-4111-8111-111111111111",
-      limit: REPORT_NOTES_LIMIT,
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    // The local record keys by harness/id; the backend knows only the id.
+    expect(url).toBe("https://api.test/v1/memory/browse/sessions/abc%2Fdef?org=org-1");
+    expect(init.headers).toMatchObject({ "X-Dosu-API-Key": "sk_user_x" });
+  });
+
+  it("reads a processed session's newest ingest", async () => {
+    const newest = trace("s1", [], { header: { id: "newest" } });
+    const fetchImpl = vi.fn(async () =>
+      json(detail("s1", { traces: [newest, trace("s1", [], { header: { id: "older" } })] })),
+    );
+
+    const [session] = await fetchReportSessions([record("codex/s1", { project: "dosu" })], {
+      ...options,
+      fetchImpl,
     });
-    expect(truncated).toBe(false);
-    expect(notes).toEqual([
-      {
-        title: "OAuth refresh",
-        content: "Retry after 401.",
-        at: "2026-09-01T00:00:00+00:00",
-        transcript_id: "conv-1",
-        repo: "git@x/y",
-        branch: "main",
-      },
-      { title: "Bare", content: "No provenance.", at: "2026-09-02T00:00:00+00:00" },
+
+    expect(session).toMatchObject({
+      sessionId: "s1",
+      harness: "codex",
+      project: "dosu",
+      shippedAt: "2026-10-01T10:00:00Z",
+      state: "complete",
+    });
+    expect(session.trace?.trace.id).toBe("newest");
+  });
+
+  it("tells processing, not-yet-ingested and someone-else's sessions apart", async () => {
+    const replies: Record<string, Response> = {
+      busy: json(detail("busy", { traces: [trace("busy", [], { status: "processing" })] })),
+      waiting: json(detail("waiting", { traces: [] })),
+      theirs: json(detail("theirs", { traces: [], private_traces: 1 })),
+    };
+    const fetchImpl = vi.fn(async (url: string) => {
+      const id = decodeURIComponent(url.split("/sessions/")[1].split("?")[0]);
+      return replies[id];
+    });
+
+    const sessions = await fetchReportSessions(
+      [record("claude/busy"), record("claude/waiting"), record("claude/theirs")],
+      { ...options, fetchImpl },
+    );
+
+    expect(sessions.map((s) => [s.sessionId, s.state, Boolean(s.trace)])).toEqual([
+      ["busy", "processing", true],
+      ["waiting", "waiting", false],
+      ["theirs", "private", false],
     ]);
   });
 
-  it("follows next_cursor until the last page and concatenates in order", async () => {
-    const cursorFor = (n: number) => ({
-      created_at: `2026-09-0${n}T00:00:00+00:00`,
-      id: `n${n}`,
-    });
-    const page = (n: number, next?: { created_at: string; id: string }) => ({
-      notes: [
-        {
-          id: `n${n}`,
-          title: `Note ${n}`,
-          body: "b",
-          repo: null,
-          branch: null,
-          transcript_id: null,
-          created_at: `2026-09-0${n}T00:00:00+00:00`,
-        },
-      ],
-      ...(next ? { next_cursor: next } : {}),
-    });
-    mockQuery
-      .mockResolvedValueOnce(page(3, cursorFor(3)))
-      .mockResolvedValueOnce(page(2, cursorFor(2)))
-      .mockResolvedValueOnce(page(1));
-
-    const { notes, truncated } = await fetchReportNotes(authedConfig());
-    expect(notes.map((n) => n.title)).toEqual(["Note 3", "Note 2", "Note 1"]);
-    expect(truncated).toBe(false);
-    expect(mockQuery).toHaveBeenNthCalledWith(2, expect.objectContaining({ cursor: cursorFor(3) }));
-    expect(mockQuery).toHaveBeenNthCalledWith(3, expect.objectContaining({ cursor: cursorFor(2) }));
-  });
-
-  it("flags truncation when a pre-pagination server returns a full page with no cursor", async () => {
-    mockQuery.mockResolvedValue({
-      notes: Array.from({ length: REPORT_NOTES_LIMIT }, (_, i) => ({
-        id: `n${i}`,
-        title: `Note ${i}`,
-        body: "b",
-        repo: null,
-        branch: null,
-        transcript_id: null,
-        created_at: "2026-09-01T00:00:00+00:00",
-      })),
-    });
-
-    const { notes, truncated } = await fetchReportNotes(authedConfig());
-    expect(notes).toHaveLength(REPORT_NOTES_LIMIT);
-    expect(truncated).toBe(true);
-    expect(mockQuery).toHaveBeenCalledTimes(1);
-  });
-
-  it("rejects with an actionable message when signed out or missing an org", async () => {
-    await expect(fetchReportNotes({ schema_version: 2 } as Config)).rejects.toThrow(
-      /Not signed in/,
+  it("keeps a failed lookup in the report as an error instead of dropping it", async () => {
+    const fetchImpl = vi.fn(async (url: string) =>
+      url.includes("/ok?") ? json(detail("ok")) : json({ detail: "nope" }, 403),
     );
-    const noToken = authedConfig();
-    // biome-ignore lint/style/noNonNullAssertion: shaped above
-    noToken.active_account!.session.access_token = "";
-    await expect(fetchReportNotes(noToken)).rejects.toThrow(/Not signed in/);
-    expect(mockCreateTypedClient).not.toHaveBeenCalled();
+
+    const sessions = await fetchReportSessions([record("claude/ok"), record("claude/denied")], {
+      ...options,
+      fetchImpl,
+    });
+
+    expect(sessions.map((s) => s.state)).toEqual(["complete", "error"]);
+    expect(sessions[1].error).toBe("HTTP 403");
   });
 
-  it("propagates backend failures unchanged (online-only by design)", async () => {
-    mockQuery.mockRejectedValue(new Error("404 NOT_FOUND"));
-    await expect(fetchReportNotes(authedConfig())).rejects.toThrow("404 NOT_FOUND");
+  it("reports a network failure as an error for that session", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("connect ECONNREFUSED");
+    });
+
+    const [session] = await fetchReportSessions([record("claude/s1")], { ...options, fetchImpl });
+
+    expect(session).toMatchObject({ state: "error", error: "connect ECONNREFUSED" });
+  });
+
+  it("looks each session up once, using its latest shipment", async () => {
+    const fetchImpl = vi.fn(async () => json(detail("s1")));
+
+    const sessions = await fetchReportSessions(
+      [
+        record("claude/s1", { at: "2026-10-01T00:00:00Z" }),
+        record("claude/s1", { at: "2026-10-03T00:00:00Z" }),
+      ],
+      { ...options, fetchImpl },
+    );
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].shippedAt).toBe("2026-10-03T00:00:00Z");
+  });
+
+  it("never has more than the concurrency limit in flight", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const fetchImpl = vi.fn(async (url: string) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight -= 1;
+      const id = decodeURIComponent(url.split("/sessions/")[1].split("?")[0]);
+      return json(detail(id));
+    });
+    const records = Array.from({ length: 10 }, (_, i) => record(`claude/s${i}`));
+
+    const sessions = await fetchReportSessions(records, { ...options, fetchImpl, concurrency: 3 });
+
+    expect(peak).toBe(3);
+    expect(sessions.map((s) => s.sessionId)).toEqual(records.map((_, i) => `s${i}`));
   });
 });

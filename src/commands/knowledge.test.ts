@@ -56,8 +56,11 @@ vi.mock("../sync/watermark", async (importOriginal) => ({
 }));
 
 const mockEmitReport = vi.fn();
+const mockBuildReport = vi.fn();
 vi.mock("../report/generate", () => ({
+  DEFAULT_REPORT_DAYS: 30,
   emitKnowledgeReport: (...args: unknown[]) => mockEmitReport(...args),
+  buildKnowledgeReport: (...args: unknown[]) => mockBuildReport(...args),
 }));
 
 const mockCreateShipStep = vi.fn();
@@ -157,7 +160,8 @@ beforeEach(() => {
   mockListBacklog.mockReset();
   mockLoadSyncState.mockReset();
   mockEmitReport.mockReset();
-  mockEmitReport.mockResolvedValue("/tmp/dosu-knowledge-report.html");
+  mockBuildReport.mockReset();
+  mockEmitReport.mockResolvedValue("/tmp/dosu-memory-report.html");
   mockSetShipTranscripts.mockReset();
   mockCreateShipStep.mockReset();
   fakeAgents = [];
@@ -716,17 +720,31 @@ describe("knowledge sync", () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it("knowledge report --json prints the path and never opens a browser", async () => {
-    await run("report", "--json", "--out", "/tmp/custom-report.html");
+  it("knowledge report --json prints the report data and writes no HTML", async () => {
+    mockBuildReport.mockResolvedValue({ days: 7, sessions: [], memories: [] });
 
-    expect(mockEmitReport).toHaveBeenCalledWith({ out: "/tmp/custom-report.html", open: false });
-    expect(JSON.parse(allOutput())).toEqual({ report: "/tmp/dosu-knowledge-report.html" });
+    await run("report", "--json", "--days", "7");
+
+    expect(mockBuildReport).toHaveBeenCalledWith({ days: 7 });
+    expect(mockEmitReport).not.toHaveBeenCalled();
+    expect(JSON.parse(allOutput())).toEqual({ days: 7, sessions: [], memories: [] });
   });
 
-  it("knowledge report opens the browser by default", async () => {
+  it("knowledge report opens the last 30 days in the browser by default", async () => {
     await run("report");
 
-    expect(mockEmitReport).toHaveBeenCalledWith({ out: undefined, open: true });
+    expect(mockEmitReport).toHaveBeenCalledWith({ days: 30, out: undefined, open: true });
+  });
+
+  it("knowledge report explains what it needs instead of a stack trace", async () => {
+    mockEmitReport.mockRejectedValue(
+      new Error("Not connected to a Dosu organization. Run `dosu setup` first."),
+    );
+
+    await run("report");
+
+    expect(errorSpy.mock.calls.join(" ")).toContain("Run `dosu setup` first.");
+    expect(process.exitCode).toBe(1);
   });
 
   it("--report writes and opens the harvest HTML after a foreground sync", async () => {
@@ -746,7 +764,7 @@ describe("knowledge sync", () => {
       out: "/tmp/custom-report.html",
       open: true,
     });
-    expect(allOutput()).toContain("Wrote /tmp/dosu-knowledge-report.html");
+    expect(allOutput()).toContain("Wrote /tmp/dosu-memory-report.html");
   });
 
   it("knowledge report writes the HTML without running sync", async () => {
@@ -754,10 +772,11 @@ describe("knowledge sync", () => {
     await run("report", "--no-open");
     expect(mockRunSync).not.toHaveBeenCalled();
     expect(mockEmitReport).toHaveBeenCalledWith({
+      days: 30,
       out: undefined,
       open: false,
     });
-    expect(allOutput()).toContain("Wrote /tmp/dosu-knowledge-report.html");
+    expect(allOutput()).toContain("Wrote /tmp/dosu-memory-report.html");
   });
 
   it("--quiet --report stays silent and does not write HTML", async () => {
@@ -776,7 +795,7 @@ describe("knowledge sync", () => {
     });
     expect(JSON.parse(allOutput())).toMatchObject({
       status: "nothing-new",
-      report: "/tmp/dosu-knowledge-report.html",
+      report: "/tmp/dosu-memory-report.html",
     });
   });
 

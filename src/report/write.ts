@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 export function defaultReportPath(): string {
-  return join(tmpdir(), "dosu-knowledge-report.html");
+  return join(tmpdir(), "dosu-memory-report.html");
 }
 
 export interface WriteReportOptions {

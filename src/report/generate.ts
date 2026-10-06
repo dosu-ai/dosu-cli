@@ -1,93 +1,77 @@
-/**
- * Assemble the knowledge report: fetch the caller's notes from the backend
- * (the single source of truth), attribute each note's investigation stretch
- * against the local session logs, and emit the HTML.
- */
+/** Assemble the memory report: the sessions this install shipped in the period, looked up in
+ * Dosu memory, aggregated, and written as one HTML page. */
 
-import { basename } from "node:path";
 import { type Config, loadConfig } from "../config/config";
-import { createProjectDirResolver } from "../sessions/project-dir";
-import type { AgentSession } from "../sessions/scan";
-import { scanAgentSessions } from "../sessions/scan";
-import { loadSyncState, type ShippedSessionRecord } from "../sync/watermark";
-import { type FetchedReportNotes, fetchReportNotes } from "./fetch";
+import { getBackendURL, getWebAppURL, isAbsoluteHttpUrl } from "../config/constants";
+import { loadSyncState, type ShippedSessionRecord, type SyncState } from "../sync/watermark";
+import { type FetchReportSessionsOptions, fetchReportSessions } from "./fetch";
 import { buildReportHtml } from "./html";
-import { attributeRediscovery, digestsForSessions, sessionsToInventory } from "./notes";
-import type { ReportNote } from "./types";
-import { defaultReportPath, writeAndOpenReport } from "./write";
+import { buildReport } from "./model";
+import type { Report, ReportSession } from "./types";
+import { defaultReportPath, type WriteReportOptions, writeAndOpenReport } from "./write";
 
-export interface EmitReportOptions {
-  /** Injectable for tests; the default fetches from the backend. */
-  notes?: ReportNote[];
-  sessions?: AgentSession[];
-  /** Injectable for tests; the default reads the sync state's shipped history. */
-  shipped?: ShippedSessionRecord[];
-  orgName?: string;
-  /** Injectable project-name source for a session; the default resolves the
-   * session's real working directory and uses its basename. */
-  projectName?: (session: AgentSession) => string | null;
+export const DEFAULT_REPORT_DAYS = 30;
+
+export interface ReportOptions {
+  days?: number;
+  /** Injectable boundaries, for tests. */
+  loadConfig?: () => Config;
+  loadState?: () => SyncState;
+  backendUrl?: string;
+  appUrl?: string;
+  now?: () => Date;
+  fetchSessions?: (
+    records: ShippedSessionRecord[],
+    options: FetchReportSessionsOptions,
+  ) => Promise<ReportSession[]>;
+}
+
+export async function buildKnowledgeReport(options: ReportOptions = {}): Promise<Report> {
+  const cfg = (options.loadConfig ?? loadConfig)();
+  if (cfg.mode === "oss") {
+    throw new Error("The memory report needs Dosu cloud: OSS mode has no Dosu memory.");
+  }
+  const target = cfg.active_account?.target;
+  if (!target?.api_key || !target.org_id) {
+    throw new Error("Not connected to a Dosu organization. Run `dosu setup` first.");
+  }
+  const backendUrl = options.backendUrl ?? getBackendURL();
+  if (!isAbsoluteHttpUrl(backendUrl)) throw new Error("No Dosu backend URL is configured.");
+
+  const days = options.days ?? DEFAULT_REPORT_DAYS;
+  const now = (options.now ?? (() => new Date()))();
+  const since = now.getTime() - days * 24 * 60 * 60 * 1000;
+  const records = ((options.loadState ?? loadSyncState)().shipped_sessions ?? []).filter(
+    (record) => Date.parse(record.at) >= since,
+  );
+  const sessions =
+    records.length === 0
+      ? []
+      : await (options.fetchSessions ?? fetchReportSessions)(records, {
+          apiKey: target.api_key,
+          orgId: target.org_id,
+          backendUrl,
+        });
+  return buildReport({
+    generatedAt: now.toISOString(),
+    days,
+    orgName: target.org_name ?? "Your team",
+    appUrl: (options.appUrl ?? getWebAppURL()).replace(/\/$/, ""),
+    sessions,
+  });
+}
+
+export interface EmitReportOptions extends ReportOptions {
   out?: string;
   open?: boolean;
-  openUrl?: (url: string) => Promise<unknown>;
-  generatedAt?: Date;
-  fetchNotes?: (cfg: Config) => Promise<FetchedReportNotes>;
-}
-
-/** Only the sessions the notes actually reference: traces and inventory must
- * never widen to unrelated local history when attribution is missing. */
-function sessionsForNotes(
-  notes: readonly ReportNote[],
-  sessions: readonly AgentSession[],
-): AgentSession[] {
-  const ids = new Set(notes.map((n) => n.transcript_id).filter((id): id is string => Boolean(id)));
-  return sessions.filter((s) => ids.has(s.id));
-}
-
-function defaultProjectName(): (session: AgentSession) => string | null {
-  const resolver = createProjectDirResolver();
-  return (session) => {
-    const dir = resolver.resolve(session);
-    return dir ? basename(dir) : null;
-  };
-}
-
-function noteTime(note: ReportNote): number {
-  const parsed = Date.parse(note.at ?? "");
-  return Number.isNaN(parsed) ? 0 : parsed;
+  write?: (options: WriteReportOptions) => Promise<string>;
 }
 
 export async function emitKnowledgeReport(options: EmitReportOptions = {}): Promise<string> {
-  const cfg = loadConfig();
-  const fetched = options.notes
-    ? { notes: options.notes, truncated: false }
-    : await (options.fetchNotes ?? fetchReportNotes)(cfg);
-  const notes = [...fetched.notes].sort((a, b) => noteTime(a) - noteTime(b));
-  const scanned = options.sessions ?? scanAgentSessions();
-  const sessions = sessionsForNotes(notes, scanned);
-  const candidates = attributeRediscovery(notes, sessions);
-  const inventory = sessionsToInventory(sessions);
-  const projectName = options.projectName ?? defaultProjectName();
-  const projects = [
-    ...new Set(
-      sessions
-        .map((s) => projectName(s) ?? s.project)
-        .filter((name): name is string => Boolean(name)),
-    ),
-  ];
-  const html = buildReportHtml({
-    inventory,
-    candidates,
-    orgName: options.orgName ?? cfg.active_account?.target?.org_name ?? "Your team",
-    projects,
-    truncated: fetched.truncated,
-    generatedAt: options.generatedAt,
-    digests: digestsForSessions(sessions),
-    shipped: options.shipped ?? loadSyncState().shipped_sessions ?? [],
-  });
-  return writeAndOpenReport({
-    html,
+  const report = await buildKnowledgeReport(options);
+  return (options.write ?? writeAndOpenReport)({
+    html: buildReportHtml(report),
     out: options.out ?? defaultReportPath(),
     open: options.open,
-    openUrl: options.openUrl,
   });
 }

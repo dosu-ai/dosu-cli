@@ -236,7 +236,7 @@ async function runMainMenu(): Promise<void> {
         label: studying ? `activity \uD83D\uDCDA ${brand("shipping sessions...")}` : "activity",
         value: "sync",
       },
-      { label: "knowledge report", hint: "(opens in browser)", value: "report" },
+      { label: "memory report", hint: "(opens in browser)", value: "report" },
       { label: "analytics", value: "analytics" },
       { label: "pages", value: "pages" },
       { label: "settings", value: "settings" },
@@ -306,10 +306,10 @@ async function runMainMenu(): Promise<void> {
   }
 }
 
-/** Write the harvest HTML from persisted notes and open it, same as `dosu knowledge report`. */
+/** Write the memory report for the last 30 days and open it, same as `dosu knowledge report`. */
 async function runKnowledgeReport(): Promise<void> {
   const s = p.spinner();
-  s.start("Writing knowledge report...");
+  s.start("Looking up your recent sessions in Dosu memory...");
   try {
     const path = await emitKnowledgeReport({ open: true });
     s.stop(`Opened ${path}`);

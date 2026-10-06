@@ -13,7 +13,7 @@ import { getBackendURL, isAbsoluteHttpUrl } from "../config/constants";
 import { allHookAgents, getHookAgent, type HookAgent } from "../hooks/agents";
 import { disableClaudeContextHook, enableClaudeContextHook } from "../hooks/context";
 import { HookConfigError, hookCommand } from "../hooks/formats";
-import { emitKnowledgeReport } from "../report/generate";
+import { buildKnowledgeReport, DEFAULT_REPORT_DAYS, emitKnowledgeReport } from "../report/generate";
 import type { AgentSession } from "../sessions/scan";
 import { listSessionBacklog } from "../sync/backlog";
 import { spawnDetachedSelf } from "../sync/detach";
@@ -212,9 +212,9 @@ export function knowledgeCommand(): Command {
     .option("--status", "Show whether a sync is running now, plus watermark and recent activity")
     .option(
       "--report",
-      "Write the same HTML harvest report as the log-to-dosu-knowledge skill and open it",
+      "Afterwards, write the memory report (as `dosu knowledge report`) and open it",
     )
-    .option("--out <path>", "HTML report path (default: tmp/dosu-knowledge-report.html)")
+    .option("--out <path>", "HTML report path (default: tmp/dosu-memory-report.html)")
     .option("--json", "Output as JSON")
     .action(
       async (opts: {
@@ -329,20 +329,29 @@ export function knowledgeCommand(): Command {
 
   cmd
     .command("report")
-    .description("Render the knowledge report from your Dosu notes and the local session logs")
-    .option("--out <path>", "HTML report path (default: tmp/dosu-knowledge-report.html)")
-    .option("--json", "Output the report path as JSON")
+    .description(
+      "Show what your recent agent sessions taught Dosu memory, as an HTML page linking into Dosu",
+    )
+    .addOption(
+      new Option("--days <n>", "How far back to look")
+        .argParser(positiveInteger)
+        .default(DEFAULT_REPORT_DAYS),
+    )
+    .option("--out <path>", "HTML report path (default: tmp/dosu-memory-report.html)")
+    .option("--json", "Print the report data as JSON instead of writing HTML")
     .option("--no-open", "Write the file without opening a browser")
-    .action(async (opts: { out?: string; json?: boolean; open?: boolean }) => {
-      const path = await emitKnowledgeReport({
-        out: opts.out,
-        open: opts.json ? false : opts.open,
-      });
-      if (opts.json) {
-        printResult({ report: path }, opts);
-        return;
+    .action(async (opts: { days: number; out?: string; json?: boolean; open?: boolean }) => {
+      try {
+        if (opts.json) {
+          printResult(await buildKnowledgeReport({ days: opts.days }), opts);
+          return;
+        }
+        const path = await emitKnowledgeReport({ days: opts.days, out: opts.out, open: opts.open });
+        console.log(`Wrote ${path}`);
+      } catch (err) {
+        console.error(pc.red(err instanceof Error ? err.message : String(err)));
+        process.exitCode = 1;
       }
-      console.log(`Wrote ${path}`);
     });
 
   cmd.addCommand(hooksCommand());

@@ -43,7 +43,7 @@ describe("writeAndOpenReport", () => {
   });
 
   it("uses the default tmp path and the open package when no injector is given", async () => {
-    expect(defaultReportPath()).toContain("dosu-knowledge-report.html");
+    expect(defaultReportPath()).toContain("dosu-memory-report.html");
     const out = join(dir, "opened.html");
     await writeAndOpenReport({ html: "<html>open</html>", out });
     expect(mockOpen).toHaveBeenCalledWith(expect.stringMatching(/^file:\/\//));
