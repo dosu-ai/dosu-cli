@@ -34,7 +34,7 @@ export interface IncognitoAgent {
  * status line look for; the rest tells the model to leave Dosu alone for the session. */
 export const INCOGNITO_COMMAND_BODY = `Dosu incognito marker: ${INCOGNITO_MARKER}
 
-Dosu is off for the rest of this session. Do not call any Dosu MCP tools (search_memory, get_memory_evidence, read_knowledge, write_knowledge, review_knowledge, finalize_session_knowledge), even where project rules ask you to. This session will not be shipped to Dosu memory.
+Dosu is off for the rest of this session. Do not call any Dosu MCP tools (search_memory, get_memory_evidence, read_knowledge, write_knowledge, review_knowledge, finalize_session_knowledge) or run \`dosu memory search\` or \`dosu memory evidence\`, even where project rules ask you to. This session will not be shipped to Dosu memory.
 
 Acknowledge in one line: "Dosu incognito: this session stays off the record."
 `;

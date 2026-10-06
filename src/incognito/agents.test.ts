@@ -76,8 +76,8 @@ describe("registry", () => {
   });
 
   it("the command body tells the model to leave Dosu's memory tools alone too", () => {
-    // Their queries are logged with the retrievals; the proxy refuses them anyway.
-    for (const tool of ["search_memory", "get_memory_evidence"]) {
+    // Their queries are logged with the retrievals; the proxy and `dosu memory` refuse them anyway.
+    for (const tool of ["search_memory", "get_memory_evidence", "dosu memory"]) {
       expect(INCOGNITO_COMMAND_BODY).toContain(tool);
     }
   });
