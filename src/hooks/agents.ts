@@ -47,6 +47,9 @@ export interface HookAgent {
   /** Whether Dosu's config for the agent, as it is now, adds memory to its prompts. Absent for
    * agents that cannot take prompt-time memory (Cursor). */
   promptMemory?(): boolean;
+  /** What adds prompt-time memory while promptMemory() is false, when enabling the agent's hooks
+   * would not. */
+  promptMemoryRemedy?(): string;
 }
 
 function groupedAgent(options: {

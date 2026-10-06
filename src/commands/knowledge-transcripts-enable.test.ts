@@ -86,13 +86,16 @@ describe("only Codex on the machine", () => {
     expect(said).not.toContain("Claude Code");
   });
 
-  it("does not claim memory for a Codex too old for the prompt hook", async () => {
+  it("does not claim memory for a Codex too old for the prompt hook, nor offer a fix that does nothing", async () => {
     installBinary("codex", '#!/bin/sh\necho "codex-cli 0.100.0"\n');
     await dosu("hooks", "enable", "codex");
 
     const said = await dosu("transcripts", "enable");
 
-    expect(said).toContain("! Prompt-time memory not installed for Codex");
+    expect(said).toContain(
+      "! Prompt-time memory not installed for Codex: it needs Codex 0.116.0 or later (this is 0.100.0).",
+    );
+    expect(said).not.toContain("hooks enable codex");
   });
 });
 
