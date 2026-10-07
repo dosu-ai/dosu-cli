@@ -73,10 +73,13 @@ dosu libraries sources config update <library-id> <source-id>
 dosu libraries monitors list <library-id> [--json]
 dosu libraries monitors update <library-id> <source-id>
     [--enabled on|off] [--paths <json-string-array>]
-    [--up-to-date-behavior emoji|comment|silent] [--confirm] [--json]
+    [--up-to-date-behavior emoji|comment|silent]
+    [--review-trigger opened_and_merged|merged|every_push] [--confirm] [--json]
 ```
 
-`update` requires at least one option. Monitor supports GitHub, GitLab, and Azure DevOps. It performs first-time setup for an attached supported source, reusing existing deployment infrastructure when available. When no Monitor row exists, omitted `--enabled`, paths, and behavior default to `true`, `[]`, and `emoji`.
+`update` requires at least one option. Monitor supports GitHub, GitLab, and Azure DevOps. It performs first-time setup for an attached supported source, reusing existing deployment infrastructure when available. When no Monitor row exists, omitted `--enabled`, paths, behavior, and review trigger default to `true`, `[]`, `emoji`, and `opened_and_merged`.
+
+`--review-trigger` chooses which pull/merge request events Monitor reviews: `opened_and_merged` (when one opens and when it merges), `merged` (only on merge), or `every_push` (also on each push). `every_push` is refused unless push reviews are enabled for the organization; a source already on `every_push` keeps it.
 
 ## Agents
 

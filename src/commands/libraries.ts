@@ -5,6 +5,7 @@ import pc from "picocolors";
 import { createTypedClient } from "../client/trpc";
 import type {
   CliJson,
+  CliLibrarySourceMonitor,
   LibrariesConfigSetInput,
   LibrariesSourceConfigUpdateInput,
 } from "../generated/dosu-api-types";
@@ -21,6 +22,13 @@ const CONFIG_SETTINGS: Record<ConfigSetting, true> = {
   review_timeout_days: true,
 };
 const CONFIG_SETTING_NAMES = Object.keys(CONFIG_SETTINGS) as ConfigSetting[];
+type ReviewTrigger = CliLibrarySourceMonitor["review_trigger"];
+const REVIEW_TRIGGER_LABELS: Record<ReviewTrigger, string> = {
+  opened_and_merged: "open + merge",
+  merged: "merge only",
+  every_push: "every push",
+};
+const REVIEW_TRIGGERS = Object.keys(REVIEW_TRIGGER_LABELS) as ReviewTrigger[];
 
 function validatedDocumentationValue(
   setting: LibrariesConfigSetInput["setting"],
@@ -412,12 +420,13 @@ export function librariesCommand(): Command {
       const rows = await createTypedClient(cfg).libraries.monitorsList.query(libraryId);
       if (opts.json) return printResult(rows, opts);
       printTable(
-        ["Source ID", "Name", "Provider", "Monitor", "Setup"],
+        ["Source ID", "Name", "Provider", "Monitor", "Reviews", "Setup"],
         rows.map((row) => [
           row.data_source_id.slice(0, 8),
           row.source_name,
           row.provider_slug,
           row.enabled ? "on" : "off",
+          REVIEW_TRIGGER_LABELS[row.review_trigger],
           row.setup_required ? "web required" : "ready",
         ]),
         { rawData: rows },
@@ -438,6 +447,11 @@ export function librariesCommand(): Command {
         "silent",
       ]),
     )
+    .addOption(
+      new Option("--review-trigger <trigger>", "Pull/merge request events to review").choices(
+        REVIEW_TRIGGERS,
+      ),
+    )
     .option("--confirm", "Apply without the interactive prompt")
     .option("--json", "Output as JSON")
     .action(
@@ -448,6 +462,7 @@ export function librariesCommand(): Command {
           enabled?: boolean;
           paths?: string[];
           upToDateBehavior?: "emoji" | "comment" | "silent";
+          reviewTrigger?: ReviewTrigger;
           confirm?: boolean;
           json?: boolean;
         },
@@ -455,7 +470,8 @@ export function librariesCommand(): Command {
         if (
           opts.enabled === undefined &&
           opts.paths === undefined &&
-          opts.upToDateBehavior === undefined
+          opts.upToDateBehavior === undefined &&
+          opts.reviewTrigger === undefined
         ) {
           throw new InvalidArgumentError("specify at least one Monitor setting");
         }
@@ -474,6 +490,7 @@ export function librariesCommand(): Command {
           enabled: opts.enabled,
           monitored_paths: opts.paths,
           no_update_behavior: opts.upToDateBehavior,
+          review_trigger: opts.reviewTrigger,
           space_id: libraryId,
         });
         if (opts.json) return printResult(result, opts);
