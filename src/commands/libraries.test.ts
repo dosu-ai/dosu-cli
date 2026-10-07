@@ -249,6 +249,26 @@ describe("libraries monitors", () => {
     expect(mockQuery).toHaveBeenCalledWith("libraries.monitorsList", LIBRARY);
   });
 
+  it("shows which pull/merge request events each source reviews", async () => {
+    mockQuery.mockResolvedValueOnce([
+      {
+        configured: true,
+        data_source_id: SOURCE,
+        deployment_id: null,
+        enabled: true,
+        monitored_paths: [],
+        no_update_behavior: "emoji",
+        provider_slug: "github",
+        review_trigger: "merged",
+        setup_required: false,
+        source_name: "acme/docs",
+      },
+    ]);
+    await run("monitors", "list", LIBRARY);
+    expect(output()).toContain("Reviews");
+    expect(output()).toContain("merge only");
+  });
+
   it("updates Monitor settings by source", async () => {
     mockMutate.mockResolvedValueOnce({ data_source_id: SOURCE, enabled: true });
     await run(
@@ -262,6 +282,8 @@ describe("libraries monitors", () => {
       '["docs/**"]',
       "--up-to-date-behavior",
       "comment",
+      "--review-trigger",
+      "merged",
       "--confirm",
       "--json",
     );
@@ -271,7 +293,24 @@ describe("libraries monitors", () => {
       enabled: true,
       monitored_paths: ["docs/**"],
       no_update_behavior: "comment",
+      review_trigger: "merged",
     });
+  });
+
+  it("updates only the review trigger", async () => {
+    mockMutate.mockResolvedValueOnce({ data_source_id: SOURCE, review_trigger: "every_push" });
+    await run("monitors", "update", LIBRARY, SOURCE, "--review-trigger", "every_push", "--confirm");
+    expect(mockMutate).toHaveBeenCalledWith(
+      "libraries.monitorsUpdate",
+      expect.objectContaining({ review_trigger: "every_push" }),
+    );
+  });
+
+  it("rejects an unknown review trigger before any request", async () => {
+    await expect(
+      run("monitors", "update", LIBRARY, SOURCE, "--review-trigger", "every_commit", "--confirm"),
+    ).rejects.toThrow();
+    expect(mockMutate).not.toHaveBeenCalled();
   });
 
   it("rejects a Monitor update with no fields before any request", async () => {
