@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,7 +12,7 @@ import {
   sessionLockPath,
   writeSessionState,
 } from "./state";
-import { type SyncDeps, syncSession } from "./sync";
+import { flushAfterExit, type SyncDeps, syncSession } from "./sync";
 
 vi.mock("../debug/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -243,6 +244,39 @@ describe("syncSession", () => {
     writeSessionState({ ...(state as NonNullable<typeof state>), repo: null }, dir);
     expect(await syncSession(SESSION, {}, deps())).toMatchObject({ status: "no-repo" });
     expect(memoryDir(dir)).toBe(join(dir, "agent-memory"));
+  });
+});
+
+describe("flushAfterExit", () => {
+  const flushes = () => requests.filter((r) => r.url.endsWith("/flush")).length;
+
+  it("waits for the agent's process to exit, then uploads what is left and flushes", async () => {
+    appendFileSync(transcript, prompt("First"));
+    const checks = [true, true, false];
+    const slept: number[] = [];
+    const result = await flushAfterExit(
+      SESSION,
+      4242,
+      deps({ alive: () => checks.shift() ?? false, sleep: async (ms) => void slept.push(ms) }),
+    );
+
+    expect(slept).toEqual([1_000, 1_000]);
+    expect(result).toEqual({ status: "uploaded", chunks: 1, flushed: true });
+    expect(requests.map((r) => r.url.split("/").at(-1))).toEqual(["events", "flush"]);
+  });
+
+  it("does not flush again what SessionEnd's sync flushed, only batches sent after it", async () => {
+    const exited = spawnSync("true").pid;
+    appendFileSync(transcript, prompt("First"));
+    await syncSession(SESSION, { flush: true }, deps());
+    expect(readSessionState(SESSION, dir)).toMatchObject({ next_seq: 1, flushed_seq: 1 });
+
+    expect(await flushAfterExit(SESSION, exited, deps())).toMatchObject({ flushed: false });
+    expect(flushes()).toBe(1);
+
+    appendFileSync(transcript, reply("Done"));
+    expect(await flushAfterExit(SESSION, exited, deps())).toMatchObject({ flushed: true });
+    expect(flushes()).toBe(2);
   });
 });
 

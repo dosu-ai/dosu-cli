@@ -16,6 +16,7 @@ import { headCommit } from "./git";
 import { clip } from "./record-rules";
 import {
   appendSessionEvent,
+  claimExitWatch,
   claimFullRecallStart,
   claimNoteInjection,
   eventLogPath,
@@ -57,6 +58,8 @@ interface HookPayload {
   source?: string;
   /** Set when the hook fires inside a subagent, whose context is not the main agent's. */
   agent_id?: string;
+  /** Claude Code's Stop: background tasks still running. */
+  background_tasks?: unknown[];
 }
 
 function parsePayload(raw: unknown): HookPayload | null {
@@ -79,6 +82,7 @@ function parsePayload(raw: unknown): HookPayload | null {
     ...(typeof p.prompt === "string" ? { prompt: p.prompt } : {}),
     ...(typeof p.source === "string" ? { source: p.source } : {}),
     ...(typeof p.agent_id === "string" ? { agent_id: p.agent_id } : {}),
+    ...(Array.isArray(p.background_tasks) ? { background_tasks: p.background_tasks } : {}),
   };
 }
 
@@ -272,6 +276,17 @@ function afterCompaction(state: SessionState, deps: HookDeps): string | null {
   return blocks.length > 0 ? contextOutput("SessionStart", blocks.join("\n\n")) : null;
 }
 
+/** With a background task still running at Stop, Claude Code `-p` may exit without SessionEnd
+ * (see `flushAfterExit`): leave one watcher per Claude Code process to flush after it exits. Hooks
+ * run under `/bin/sh -c`, so the hook's parent is not Claude Code; Claude Code sets `CLAUDE_PID`
+ * for its hooks. */
+function watchExit(sessionId: string, deps: HookDeps, spawn: (args: string[]) => boolean): void {
+  const pid = Number(process.env.CLAUDE_PID);
+  if (!Number.isInteger(pid) || pid <= 0) return;
+  if (!claimExitWatch(sessionId, pid, deps.configDir)) return;
+  spawn(["memory", "flush-on-exit", "--session", sessionId, "--pid", String(pid)]);
+}
+
 /** Cursor's payload in the shared shape: the conversation id is the session id (sessionStart sends
  * it as `session_id` too), the first workspace root is the directory, and `parent_tool_call_id`,
  * set on a subagent's tool calls, marks a subagent. */
@@ -427,6 +442,7 @@ export async function runMemoryHook(
         return await onPrompt(payload, state, deps);
       case "Stop":
         spawn(["memory", "sync", "--session", payload.session_id]);
+        if (payload.background_tasks?.length) watchExit(payload.session_id, deps, spawn);
         return null;
       case "SessionEnd":
         removeStaleFullRecallRequests(deps.configDir, deps.now);

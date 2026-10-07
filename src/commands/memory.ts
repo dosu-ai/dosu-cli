@@ -13,7 +13,7 @@ import {
   memoryHooksTarget,
 } from "../memory/install";
 import { MEMORY_AGENTS, type MemoryAgent } from "../memory/state";
-import { syncSession } from "../memory/sync";
+import { flushAfterExit, syncSession } from "../memory/sync";
 import { pollFullRecall } from "../memory/two-stage";
 import { printResult } from "./output";
 
@@ -119,6 +119,16 @@ export function memoryCommand(): Command {
     .requiredOption("--session <id>", "Agent session id")
     .action(async (opts: { session: string }) => {
       await pollFullRecall(opts.session);
+    });
+
+  cmd
+    .command("flush-on-exit", { hidden: true })
+    .description("Wait for the agent's process to exit, then sync and flush unless already flushed")
+    .requiredOption("--session <id>", "Agent session id")
+    .requiredOption("--pid <pid>", "Agent process id", (value) => Number.parseInt(value, 10))
+    .action(async (opts: { session: string; pid: number }) => {
+      const result = await flushAfterExit(opts.session, opts.pid);
+      if (result.status === "failed") process.exitCode = 1;
     });
 
   cmd

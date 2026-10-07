@@ -72,6 +72,9 @@ export interface SessionState extends TranscriptCursor {
   start_head: string | null;
   started_at: string;
   next_seq: number;
+  /** `next_seq` when the backend last accepted a flush: the batches below it are in a flushed
+   * episode. */
+  flushed_seq: number | null;
   outbox: Outbox | null;
   /** Fixed when the state is created, so a resumed session keeps its mode. */
   recall_mode: RecallMode;
@@ -124,6 +127,10 @@ function fullRecallStartedPath(sessionId: string, configDir?: string): string {
 
 function noteInjectedPath(sessionId: string, configDir?: string): string {
   return join(memoryDir(configDir), `${sessionId}.note.injected`);
+}
+
+function exitWatchPath(sessionId: string, pid: number, configDir?: string): string {
+  return join(memoryDir(configDir), `${sessionId}.exit-watch.${pid}`);
 }
 
 export function eventLogPath(sessionId: string, configDir?: string): string {
@@ -257,6 +264,12 @@ export function claimNoteInjection(sessionId: string, configDir?: string): boole
   return claimMarker(noteInjectedPath(sessionId, configDir), sessionId, configDir);
 }
 
+/** Take the session's single exit watcher for one Claude Code process, whose Stop hook fires after
+ * every turn. A resumed session runs in a new process and gets a watcher of its own. */
+export function claimExitWatch(sessionId: string, pid: number, configDir?: string): boolean {
+  return claimMarker(exitWatchPath(sessionId, pid, configDir), sessionId, configDir);
+}
+
 /** Cursor's preCompact: what was handed over may be gone after the compaction, so both notes
  * count as not handed over again, and the tool calls that follow hand them over as before. */
 export function forgetHandOvers(sessionId: string, configDir?: string): void {
@@ -283,6 +296,7 @@ export function newSessionState(fields: {
     line_offset: 0,
     pending_tools: {},
     next_seq: 0,
+    flushed_seq: null,
     outbox: null,
     recall_attempted: false,
     note: null,

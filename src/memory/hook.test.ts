@@ -163,6 +163,29 @@ describe("runMemoryHook with DOSU_MEMORY_RECALL_MODE=single", () => {
     ]);
   });
 
+  it("leaves one exit watcher per Claude Code process while a background task runs at Stop", async () => {
+    const running = { background_tasks: [{ id: "b1", type: "shell", status: "running" }] };
+    const stop = async (claudePid: string | undefined, extra: Record<string, unknown>) => {
+      vi.stubEnv("CLAUDE_PID", claudePid);
+      await runMemoryHook(payload("Stop", extra), deps());
+    };
+    try {
+      await stop("4242", running);
+      await stop("4242", running);
+      await stop("4242", { background_tasks: [] });
+      await stop("4343", running);
+      await stop(undefined, running);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    expect(spawned.filter((args) => args[1] === "flush-on-exit")).toEqual([
+      ["memory", "flush-on-exit", "--session", SESSION, "--pid", "4242"],
+      ["memory", "flush-on-exit", "--session", SESSION, "--pid", "4343"],
+    ]);
+    expect(spawned.filter((args) => args[1] === "sync")).toHaveLength(5);
+  });
+
   it("on Codex, waits for the one note at the prompt and leaves the background hook idle", async () => {
     const codex = (stageTwo: boolean) =>
       runMemoryHook(

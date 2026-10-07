@@ -119,12 +119,13 @@ describe("CLI", () => {
     expect(shouldRunMcpRefreshCheck(new Command("sync"))).toBe(true);
   });
 
-  it("skips the automatic MCP refresh for the agent-memory hook, its sync, and its poller", () => {
+  it("skips the automatic MCP refresh for the agent-memory hook, its sync, poller, and watcher", () => {
     const memoryCmd = createProgram().commands.find((c) => c.name() === "memory");
     const names = (memoryCmd?.commands ?? []).map((c) => [c.name(), shouldRunMcpRefreshCheck(c)]);
     expect(names).toEqual([
       ["hook", false],
       ["recall-poll", false],
+      ["flush-on-exit", false],
       ["sync", false],
       ["hooks", true],
     ]);

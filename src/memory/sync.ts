@@ -59,6 +59,8 @@ export interface SyncDeps {
   /** Delays between POST attempts. */
   retryDelaysMs?: number[];
   sleep?: (ms: number) => Promise<void>;
+  /** Whether the agent's process is still running, for `flushAfterExit`. */
+  alive?: (pid: number) => boolean;
 }
 
 const SOURCE_BY_AGENT: Record<MemoryAgent, ChunkRequest["source"]> = {
@@ -209,9 +211,15 @@ async function acquire(path: string, deps: SyncDeps): Promise<ReturnType<typeof 
   }
 }
 
+export interface SyncOptions {
+  flush?: boolean;
+  /** Skip the flush when every batch the backend has is in a flushed episode already. */
+  unlessFlushed?: boolean;
+}
+
 export async function syncSession(
   sessionId: string,
-  options: { flush?: boolean } = {},
+  options: SyncOptions = {},
   deps: SyncDeps = {},
 ): Promise<SyncResult> {
   const result: SyncResult = { status: "nothing-new", chunks: 0, flushed: false };
@@ -248,10 +256,13 @@ export async function syncSession(
     if (result.chunks > 0) result.status = "uploaded";
 
     // A session the backend never got a batch of has no episode to flush (it would answer 404).
-    if (options.flush && state.next_seq > 0) {
+    const covered = options.unlessFlushed && state.flushed_seq === state.next_seq;
+    if (options.flush && state.next_seq > 0 && !covered) {
       const flushed = await flushSession(api, sessionId, deps.fetchImpl);
       result.flushed = flushed.ok;
       if (!flushed.ok) return { ...result, status: "failed", error: `flush: ${flushed.error}` };
+      state.flushed_seq = state.next_seq;
+      writeSessionState(state, deps.configDir);
     }
     return result;
   } catch (err) {
@@ -259,4 +270,32 @@ export async function syncSession(
   } finally {
     lock.release();
   }
+}
+
+const EXIT_POLL_MS = 1_000;
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // Alive, but another user's.
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/** `dosu memory flush-on-exit --session <id> --pid <pid>`: Claude Code (2.1.288) in `-p` mode
+ * kills a background task still running when the session ends and exits without SessionEnd, so
+ * nothing flushes the episode. The Stop hook leaves this watcher behind while such a task runs:
+ * once the Claude Code process has exited, it syncs and flushes, unless SessionEnd's sync already
+ * flushed everything the backend has. */
+export async function flushAfterExit(
+  sessionId: string,
+  pid: number,
+  deps: SyncDeps = {},
+): Promise<SyncResult> {
+  const alive = deps.alive ?? processAlive;
+  const sleep = deps.sleep ?? defaultSleep;
+  while (alive(pid)) await sleep(EXIT_POLL_MS);
+  return syncSession(sessionId, { flush: true, unlessFlushed: true }, deps);
 }
