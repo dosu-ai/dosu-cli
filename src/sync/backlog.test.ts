@@ -193,6 +193,32 @@ describe("listSessionBacklog", () => {
     expect(backlog.subagents).toBe(0);
   });
 
+  it("sets aside the subagents and forks of a session the switch settled, once it is off", () => {
+    const fresh = new Date(Date.now() - 60 * 1000).toISOString(); // inside the quiet period
+    const settled = {
+      updated: "2026-01-01T00:00:00.000Z",
+      outcome: "incognito" as const,
+      at: "2026-01-01T00:00:00.000Z",
+      cli_version: "0.0.1",
+      by_agent: true as const,
+    };
+    mockLoadSyncState.mockReturnValue({ ...emptySyncState(), sessions: { "cursor/c0": settled } });
+    mockScan.mockReturnValue([
+      session({ id: "c0" }),
+      session({ id: "c0-sub", parentId: "c0" }),
+      session({ id: "c0-sub-sub", parentId: "c0-sub", updated: fresh }),
+      session({ id: "c0-fork", forkOf: { id: "c0", path: "/tmp/c0.jsonl" } }),
+      session({ id: "c1" }),
+    ]);
+
+    const backlog = listSessionBacklog();
+
+    expect(backlog.queued.map((s) => s.id)).toEqual(["c1"]);
+    expect(backlog.incognito?.map((s) => s.id)).toEqual(["c0-fork"]);
+    expect(backlog.open).toEqual([]);
+    expect(backlog.subagents).toBe(0);
+  });
+
   it("sets incognito sessions aside from the queue", () => {
     const dir = mkdtempSync(join(tmpdir(), "dosu-backlog-"));
     try {

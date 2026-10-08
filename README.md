@@ -208,9 +208,9 @@ agent's incognito command alongside the hook (`dosu knowledge hooks enable` inst
 command with each agent's hooks); they can also be managed directly:
 
 ```bash
-dosu knowledge statusline enable|disable [claude|cursor]   # status-bar line in Claude Code / Cursor CLI
-dosu knowledge incognito on|off [claude|cursor|codex|opencode]  # stop/resume shipping an agent's sessions
-dosu knowledge incognito status                                  # which agents are incognito
+dosu knowledge statusline enable|disable [claude|cursor]          # status-bar line in Claude Code / Cursor CLI
+dosu knowledge incognito on|off [claude|cursor|codex|opencode|pi]  # stop/resume shipping an agent's sessions
+dosu knowledge incognito status                                     # which agents are incognito
 ```
 
 The status line shows one of `📚 Dosu shipping…` (a sync run is live), `📚 Dosu on`,
@@ -222,7 +222,8 @@ sessions waiting to ship, see [docs/syncing.md](docs/syncing.md#repo-scope)). Ne
 script instead.
 
 `incognito on` is a saved per-agent setting: none of that agent's sessions ship, and turning it off
-later does not ship the ones it kept out (see
+later does not ship the ones that ran while it was on, even if you resume them, nor their subagents
+or forks (`off` seals any no sync has settled yet; see
 [docs/syncing.md](docs/syncing.md#per-agent-incognito)). To keep a single session out instead, run
 `/dosu-incognito` in it (in Codex, which has no user slash commands, mention the skill
 `$dosu-incognito`); setup installs it with the hook. It marks that session's transcript so it is

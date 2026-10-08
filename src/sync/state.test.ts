@@ -15,7 +15,9 @@ import {
   isShippingEnabled,
   isUnderDir,
   type LedgerEntry,
+  leaveIncognito,
   ledgerStamp,
+  lineageIn,
   loadSyncState,
   outcomeCounts,
   pruneLedger,
@@ -131,6 +133,23 @@ describe("loadSyncState / saveSyncState", () => {
     expect(loadSyncState(configDir)).toEqual(emptySyncState());
     writeRaw({ schema_version: 99, sessions: { "claude/x": entry() } });
     expect(loadSyncState(configDir)).toEqual(emptySyncState());
+  });
+
+  it("never widens what ships when it cannot read the schema: the opt-out and incognito stay", () => {
+    writeRaw({
+      schema_version: 99,
+      sessions: { "claude/x": entry() },
+      paused: true,
+      ship_transcripts: false,
+      incognito_agents: ["cursor", "claude", 7],
+    });
+    expect(loadSyncState(configDir)).toEqual({
+      ...emptySyncState(),
+      ship_transcripts: false,
+      incognito_agents: ["claude", "cursor"],
+    });
+    writeRaw({ incognito_agents: ["codex"] });
+    expect(loadSyncState(configDir)).toEqual({ ...emptySyncState(), incognito_agents: ["codex"] });
   });
 
   it("normalizes malformed fields and drops malformed ledger entries", () => {
@@ -374,6 +393,18 @@ describe("pruneLedger", () => {
     };
     pruneLedger(state, new Date("2026-08-01T00:00:00.000Z"));
     expect(Object.keys(state.sessions)).toEqual(["claude/new"]);
+  });
+
+  it("keeps an old entry whose session the scan still lists", () => {
+    const state: SyncState = {
+      ...emptySyncState(),
+      sessions: {
+        "claude/old": entry({ updated: "2026-07-01T00:00:00.000Z" }),
+        "claude/resumed": entry({ updated: "2026-07-01T00:00:00.000Z" }),
+      },
+    };
+    pruneLedger(state, new Date("2026-08-01T00:00:00.000Z"), new Set(["claude/resumed"]));
+    expect(Object.keys(state.sessions)).toEqual(["claude/resumed"]);
   });
 });
 
@@ -728,6 +759,18 @@ describe("skipBacklog", () => {
     });
   });
 
+  it("settles a declined subagent of a session the switch settled the same way, once it is off", () => {
+    const off = agentIncognitoEntry(session(), NOW.toISOString(), VERSION);
+    saveSyncState({ ...emptySyncState(), sessions: { "cursor/c1": off } }, configDir);
+    const subagent = session({ harness: "cursor", id: "c1-sub", parentId: "c1" });
+
+    skipBacklog([subagent], VERSION, NOW, configDir);
+
+    expect(loadSyncState(configDir).sessions["cursor/c1-sub"]).toEqual(
+      agentIncognitoEntry(subagent, NOW.toISOString(), VERSION),
+    );
+  });
+
   it("a declined session ships once it changes, and never on a CLI upgrade alone", () => {
     const declined = session({ id: "declined", updated: "2026-08-24T00:00:00.000Z" });
     skipBacklog([declined], VERSION, NOW, configDir);
@@ -787,6 +830,120 @@ describe("isAgentIncognito", () => {
     expect(
       isAgentIncognito({ sessions: { "cursor/c1": entry({ outcome: "incognito" }) } }, s),
     ).toBe(false);
+  });
+
+  describe("for the subagents and forks of a session the switch settled", () => {
+    const off = { "cursor/root": entry({ outcome: "incognito", by_agent: true }) };
+    const root = session({ harness: "cursor", id: "root" });
+    const child = session({ harness: "cursor", id: "child", parentId: "root" });
+    const grandchild = session({ harness: "cursor", id: "grandchild", parentId: "child" });
+    const fork = session({ harness: "cursor", id: "fork", forkOf: { id: "root", path: "/r" } });
+
+    it("holds for its own subagents and forks", () => {
+      expect(isAgentIncognito({ sessions: off }, child)).toBe(true);
+      expect(isAgentIncognito({ sessions: off }, fork)).toBe(true);
+      // Another agent's session of the same id is someone else's.
+      expect(isAgentIncognito({ sessions: off }, { ...child, harness: "claude" })).toBe(false);
+    });
+
+    it("holds further down, through the scan or the ledger", () => {
+      expect(isAgentIncognito({ sessions: off }, grandchild)).toBe(false);
+      expect(
+        isAgentIncognito({ sessions: off }, grandchild, lineageIn([root, child, grandchild])),
+      ).toBe(true);
+      const recorded = {
+        ...off,
+        "cursor/child": entry({ outcome: "shipped", parent: "root" }),
+      };
+      expect(isAgentIncognito({ sessions: recorded }, grandchild)).toBe(true);
+    });
+
+    it("does not hold through a /dosu-incognito session, and ends on a cycle", () => {
+      const marked = { "cursor/root": entry({ outcome: "incognito" }) };
+      expect(isAgentIncognito({ sessions: marked }, child, lineageIn([root, child]))).toBe(false);
+      const loop = session({ harness: "cursor", id: "a", parentId: "b" });
+      const back = session({ harness: "cursor", id: "b", parentId: "a" });
+      expect(isAgentIncognito({ sessions: {} }, loop, lineageIn([loop, back]))).toBe(false);
+    });
+  });
+});
+
+describe("leaveIncognito", () => {
+  const cursor = (id: string, overrides: Partial<AgentSession> = {}) =>
+    session({ harness: "cursor", id, updated: "2026-08-25T11:00:00.000Z", ...overrides });
+
+  it("seals what the agent ran while incognito that no sync settled, then takes it out", () => {
+    const shipped = cursor("shipped");
+    const grown = cursor("grown", { updated: "2026-08-25T11:30:00.000Z" });
+    const unsettled = cursor("unsettled");
+    const subagent = cursor("sub", { parentId: "unsettled" });
+    const other = session({ id: "claude-1" });
+    saveSyncState(
+      {
+        ...emptySyncState(),
+        incognito_agents: ["claude", "cursor"],
+        sessions: {
+          "cursor/shipped": entry({ task_id: "t1" }),
+          "cursor/grown": entry({ task_id: "t2", records: 3, prefix_sha256: "h" }),
+        },
+      },
+      configDir,
+    );
+
+    leaveIncognito(
+      ["cursor"],
+      () => [shipped, grown, unsettled, subagent, other],
+      VERSION,
+      NOW,
+      configDir,
+    );
+
+    const state = loadSyncState(configDir);
+    expect(state.incognito_agents).toEqual(["claude"]);
+    const at = NOW.toISOString();
+    expect(state.sessions).toEqual({
+      // Settled for what it holds now: it shipped before the switch went on.
+      "cursor/shipped": entry({ task_id: "t1" }),
+      // Its tail ran while incognito: none of it ships.
+      "cursor/grown": agentIncognitoEntry(grown, at, VERSION),
+      "cursor/unsettled": agentIncognitoEntry(unsettled, at, VERSION),
+      "cursor/sub": agentIncognitoEntry(subagent, at, VERSION),
+    });
+  });
+
+  it("seals nothing of an agent that was not incognito", () => {
+    saveSyncState({ ...emptySyncState(), incognito_agents: ["claude"] }, configDir);
+    const listSessions = () => [cursor("c1")];
+
+    leaveIncognito(["cursor"], listSessions, VERSION, NOW, configDir);
+
+    const state = loadSyncState(configDir);
+    expect(state.sessions).toEqual({});
+    expect(state.incognito_agents).toEqual(["claude"]);
+  });
+
+  it("leaves the agent incognito when its sessions cannot be listed", () => {
+    saveSyncState({ ...emptySyncState(), incognito_agents: ["cursor"] }, configDir);
+
+    expect(() =>
+      leaveIncognito(
+        ["cursor"],
+        () => {
+          throw new Error("EACCES");
+        },
+        VERSION,
+        NOW,
+        configDir,
+      ),
+    ).toThrow("EACCES");
+
+    expect(loadSyncState(configDir).incognito_agents).toEqual(["cursor"]);
+  });
+
+  it("drops the key once no agent is incognito", () => {
+    saveSyncState({ ...emptySyncState(), incognito_agents: ["cursor"] }, configDir);
+    leaveIncognito(["cursor"], () => [], VERSION, NOW, configDir);
+    expect(readFileSync(syncStatePath(configDir), "utf-8")).not.toContain("incognito_agents");
   });
 });
 

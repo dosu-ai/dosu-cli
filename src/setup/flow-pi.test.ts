@@ -69,6 +69,12 @@ describe("dosu setup with pi", () => {
 
     const [installed] = stepConfigureTools(cfg, { toInstall: [pi], toRemove: [], skipped: [] });
     expect(installed).toMatchObject({ action: "install", hook: { name: "Pi", path: extension } });
+    // Its /dosu-incognito came with the extension, and is listed once.
+    expect(installed.incognito).toEqual({
+      name: "Pi",
+      path: extension,
+      invocation: "/dosu-incognito",
+    });
     expect(installed.error).toBeUndefined();
     expect(pi.isConfigured()).toBe(true);
     expect(pi.globalConfigPath()).toBe(extension);

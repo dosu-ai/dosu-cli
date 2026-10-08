@@ -378,7 +378,7 @@ describe("pi hook agent", () => {
     pi?.disable();
     // The command is the extension's own: there is no file of it to keep.
     expect(pi?.disableNote?.()).toBe(
-      "Pi sessions still ship with any 'dosu knowledge sync' while transcript shipping is on, and /dosu-incognito went with the extension. 'dosu knowledge transcripts disable' stops shipping.",
+      "Pi sessions still ship with any 'dosu knowledge sync' while transcript shipping is on, and /dosu-incognito went with the extension. 'dosu knowledge incognito on pi' keeps them all out.",
     );
 
     setShipTranscripts(false);

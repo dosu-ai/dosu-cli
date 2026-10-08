@@ -446,7 +446,7 @@ export function piHookAgent(): HookAgent {
     // can stay behind for the sessions any sync still ships.
     disableNote: () =>
       isShippingEnabled(loadSyncState())
-        ? "Pi sessions still ship with any 'dosu knowledge sync' while transcript shipping is on, and /dosu-incognito went with the extension. 'dosu knowledge transcripts disable' stops shipping."
+        ? "Pi sessions still ship with any 'dosu knowledge sync' while transcript shipping is on, and /dosu-incognito went with the extension. 'dosu knowledge incognito on pi' keeps them all out."
         : "",
   };
 }

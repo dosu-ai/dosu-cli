@@ -1,14 +1,17 @@
 /** `dosu knowledge incognito on|off [agents...]`: a saved per-agent switch. An agent in
- * incognito has none of its sessions shipped to Dosu memory, with no command needed. Its
- * incognito command (`/dosu-incognito`; `$dosu-incognito`, a skill, in Codex) stays available in
- * every agent for keeping a single session out while the agent ships; `on` and `off` reinstall it
- * when it is missing. */
+ * incognito has none of its sessions shipped to Dosu memory, with no command needed, and `off`
+ * first seals the ones that ran while it was in, so they stay out too. Its incognito command
+ * (`/dosu-incognito`; `$dosu-incognito`, a skill, in Codex) stays available in every agent for
+ * keeping a single session out while the agent ships; `on` and `off` reinstall it when it is
+ * missing (pi's comes with its extension, which they never install). */
 
 import { Command } from "commander";
 import pc from "picocolors";
 import { allIncognitoAgents, getIncognitoAgent, type IncognitoAgent } from "../incognito/agents";
+import { scanWindowSessions } from "../sync/backlog";
 import { INCOGNITO_COMMAND_NAME } from "../sync/incognito";
-import { loadSyncState, setAgentsIncognito } from "../sync/state";
+import { leaveIncognito, loadSyncState, setAgentsIncognito } from "../sync/state";
+import { VERSION } from "../version/version";
 import { resolveAgents } from "./agent-select";
 import { printResult } from "./output";
 
@@ -25,13 +28,23 @@ function switchAction(incognito: boolean) {
   return (ids: string[]): void => {
     const agents = resolveAgents(ids, allIncognitoAgents, getIncognitoAgent);
     if (agents.length === 0) return;
+    const agentIds = agents.map((agent) => agent.id());
     try {
-      setAgentsIncognito(
-        agents.map((agent) => agent.id()),
-        incognito,
-      );
+      if (incognito) setAgentsIncognito(agentIds, true);
+      // Sealing reads the sessions on disk; when that fails nothing is saved (fail closed).
+      else leaveIncognito(agentIds, (state) => scanWindowSessions(state), VERSION);
     } catch (err) {
-      reportFailure("Dosu", err, "could not save the setting");
+      // Nothing was saved: say which agents that leaves in incognito.
+      const listed = new Set(loadSyncState().incognito_agents ?? []);
+      const kept = incognito ? [] : agents.filter((agent) => listed.has(agent.id()));
+      const names = kept.map((agent) => agent.name()).join(", ");
+      reportFailure(
+        "Dosu",
+        err,
+        kept.length > 0
+          ? `could not save the setting; ${names} ${kept.length === 1 ? "stays" : "stay"} incognito`
+          : "could not save the setting",
+      );
       return;
     }
     for (const agent of agents) {
@@ -59,7 +72,8 @@ export function incognitoCommand(): Command {
     .option("--json", "Output as JSON")
     .action((opts: { json?: boolean }) => {
       const incognitoAgents = new Set(loadSyncState().incognito_agents ?? []);
-      const rows = allIncognitoAgents().map((agent) => ({
+      const agents = allIncognitoAgents();
+      const rows = agents.map((agent) => ({
         agent: agent.id(),
         name: agent.name(),
         installed: agent.isInstalled(),
@@ -74,14 +88,17 @@ export function incognitoCommand(): Command {
         return;
       }
 
-      for (const row of rows) {
+      for (const [i, row] of rows.entries()) {
         const state = !row.installed
           ? pc.dim("agent not found")
           : row.incognito
             ? "👻 incognito (not shipped)"
             : pc.green("📚 shipped");
+        const hint = agents[i].missingHint?.();
         const missing =
-          row.installed && !row.command_installed ? pc.dim(`  (${row.invocation} missing)`) : "";
+          row.installed && !row.command_installed
+            ? pc.dim(`  (${row.invocation} missing${hint ? `; ${hint}` : ""})`)
+            : "";
         console.log(`  ${row.agent.padEnd(8)} ${row.name.padEnd(14)} ${state}${missing}`);
       }
       console.log(

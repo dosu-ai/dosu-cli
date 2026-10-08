@@ -27,6 +27,7 @@ import {
   isPending,
   isShippingEnabled,
   type LedgerEntry,
+  lineageIn,
   loadSyncState,
   type PendingOptions,
   pruneLedger,
@@ -367,6 +368,10 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
   let open: AgentSession[];
   /** Ready sessions of an agent the user put in incognito, whatever the scope. */
   let offRecord: AgentSession[];
+  /** Every session the scan listed, by key: what the ledger must keep, and how a session's
+   * subagents and forks find it. */
+  let listed: ReadonlySet<string>;
+  let lineage: (key: string) => AgentSession | undefined;
   try {
     // The whole window every time: listing is metadata only, and the ledger, not a count cap,
     // decides what is left to do.
@@ -379,13 +384,34 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       remembered,
       since,
     );
-    if (!sameRecord(outside, remembered)) {
-      // Saved now, whatever this run goes on to do (the next run must find these), onto a fresh
-      // read so nothing a concurrent run settled meanwhile is lost.
+    listed = new Set(scanned.map(sessionKey));
+    lineage = lineageIn(scanned);
+    // A session its agent's incognito switch settled is never pending again, but its entry follows
+    // the session's activity, so the ledger keeps it as long after its last use as any other.
+    const restamped = scanned.filter((s) => {
+      const entry = state.sessions[sessionKey(s)];
+      return entry?.by_agent === true && Date.parse(entry.updated) !== Date.parse(s.updated);
+    });
+    const outsideChanged = !sameRecord(outside, remembered);
+    if (outsideChanged || restamped.length > 0) {
+      // Saved now, whatever this run goes on to do (the next run must find these transcripts),
+      // onto a fresh read so nothing a concurrent run settled meanwhile is lost.
       const fresh = loadState();
-      if (Object.keys(outside).length > 0) fresh.outside_sessions = outside;
-      else delete fresh.outside_sessions;
+      if (outsideChanged) {
+        if (Object.keys(outside).length > 0) fresh.outside_sessions = outside;
+        else delete fresh.outside_sessions;
+      }
+      for (const session of restamped) {
+        const entry = fresh.sessions[sessionKey(session)];
+        if (entry?.by_agent) entry.updated = session.updated;
+      }
       saveState(fresh);
+      if (restamped.length > 0) {
+        logger.debug(
+          "sync",
+          `incognito agents: ${restamped.length} sessions they settled changed; still not shipped`,
+        );
+      }
     }
     if (holdBack === "paused") {
       logger.debug("sync", "skipping quiet sync: syncing is paused");
@@ -416,7 +442,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     // An agent the user put in incognito (`dosu knowledge incognito on`) has its sessions, and
     // their subagents, set aside before the scope, the gate line and the batch: the ready ones
     // settle off the record below without reaching the ship step, and none counts as backlog.
-    const agentOff = (s: AgentSession) => isAgentIncognito(state, s);
+    const agentOff = (s: AgentSession) => isAgentIncognito(state, s, lineage);
     offRecord = gate.ready.filter(agentOff);
     const gatedReady = gate.ready.filter((s) => !agentOff(s));
     const gatedOpen = gate.open.filter((s) => !agentOff(s));
@@ -490,9 +516,9 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     const pendingNow = (s: AgentSession) => isPending(s, locked.sessions[sessionKey(s)], pending);
     // The switch as of now, too: an agent put in incognito since the scan keeps its sessions out.
     const offTheRecord = [...offRecord, ...ready].filter(
-      (s) => pendingNow(s) && isAgentIncognito(locked, s),
+      (s) => pendingNow(s) && isAgentIncognito(locked, s, lineage),
     );
-    const todo = ready.filter((s) => pendingNow(s) && !isAgentIncognito(locked, s));
+    const todo = ready.filter((s) => pendingNow(s) && !isAgentIncognito(locked, s, lineage));
     if (todo.length === 0 && offTheRecord.length === 0) {
       return { status: "nothing-new", ...base, readySessions: 0, sessions: [] };
     }
@@ -587,6 +613,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       pruneLedger(
         next,
         new Date(now().getTime() - (SCAN_WINDOW_DAYS + LEDGER_GRACE_DAYS) * DAY_MS),
+        listed,
       );
       // Settling an incognito agent's sessions alone is no attempt to ship: backoff stands.
       if (batch.length > 0) {

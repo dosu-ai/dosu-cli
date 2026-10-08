@@ -9,7 +9,9 @@ import {
   filterSessionsByRepo,
   gateSessions,
   isAgentIncognito,
+  lineageIn,
   loadSyncState,
+  type SyncState,
   sessionKey,
   skipBacklog,
   studyRepoFilter,
@@ -33,26 +35,31 @@ export interface SessionBacklog {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** Every session in the sync's own scan window, plus the transcripts outside the scanned roots
+ * that the sync remembers and would ship too. */
+export function scanWindowSessions(
+  state: Pick<SyncState, "outside_sessions">,
+  now: Date = new Date(),
+): AgentSession[] {
+  const since = new Date(now.getTime() - SCAN_WINDOW_DAYS * DAY_MS);
+  return withOutsideSessions(scanAgentSessions({ since }), [], state.outside_sessions ?? {}, since)
+    .sessions;
+}
+
 /** The pending backlog within the sync's own scan window, oldest first; a failed scan reads as
  * empty. */
 export function listSessionBacklog(now: Date = new Date()): SessionBacklog {
   try {
     const state = loadSyncState();
-    const since = new Date(now.getTime() - SCAN_WINDOW_DAYS * DAY_MS);
-    // Plus the transcripts outside the scanned roots that the sync remembers and would ship too.
-    const { sessions: scanned } = withOutsideSessions(
-      scanAgentSessions({ since }),
-      [],
-      state.outside_sessions ?? {},
-      since,
-    );
+    const scanned = scanWindowSessions(state, now);
     const resolver = createProjectDirResolver();
     const filter = studyRepoFilter(state, () => scanned, resolver);
     // The same ledger rules the sync applies, so the queue lists exactly what it would ship.
     const gate = gateSessions(scanned, state.sessions, { cliVersion: VERSION, now });
     // An incognito agent's sessions, and their subagents, are set aside as the sync sets them
     // aside: never queued, never waited for, never counted.
-    const agentOff = (session: AgentSession) => isAgentIncognito(state, session);
+    const lineage = lineageIn(scanned);
+    const agentOff = (session: AgentSession) => isAgentIncognito(state, session, lineage);
     const ready = filterSessionsByRepo(gate.ready, filter, resolver.resolveRepo);
     const open = filterSessionsByRepo(
       gate.open.filter((session) => !agentOff(session)),
@@ -91,13 +98,7 @@ export interface SkippedBacklog {
  * a later, wider scope to decide. */
 export function skipSessionBacklog(before: Date, now: Date = new Date()): SkippedBacklog {
   const state = loadSyncState();
-  const since = new Date(now.getTime() - SCAN_WINDOW_DAYS * DAY_MS);
-  const { sessions: scanned } = withOutsideSessions(
-    scanAgentSessions({ since }),
-    [],
-    state.outside_sessions ?? {},
-    since,
-  );
+  const scanned = scanWindowSessions(state, now);
   const resolver = createProjectDirResolver();
   const filter = studyRepoFilter(state, () => scanned, resolver);
   const unsettled = filterSessionsByRepo(

@@ -6,13 +6,30 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+/** Set to make the sessions on disk unreadable, as a failing scan would. */
+const scan = vi.hoisted(() => ({ fails: false }));
+vi.mock("../sync/backlog", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../sync/backlog")>();
+  return {
+    ...original,
+    scanWindowSessions: (...args: Parameters<typeof original.scanWindowSessions>) => {
+      if (scan.fails) throw new Error("EACCES: permission denied");
+      return original.scanWindowSessions(...args);
+    },
+  };
+});
+
+import { piHookAgent } from "../hooks/pi";
 import { loadSyncState } from "../sync/state";
 import { incognitoCommand } from "./knowledge-incognito";
 
@@ -36,6 +53,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  scan.fails = false;
   logSpy.mockRestore();
   errorSpy.mockRestore();
   vi.unstubAllEnvs();
@@ -161,6 +179,17 @@ describe("knowledge incognito on", () => {
   });
 });
 
+/** A Claude Code transcript on the temporary home, last written `minutesAgo`. */
+function claudeSession(id: string, minutesAgo = 1): string {
+  const project = join(home, ".claude", "projects", "-work-app");
+  mkdirSync(project, { recursive: true });
+  const path = join(project, `${id}.jsonl`);
+  writeFileSync(path, `${JSON.stringify({ type: "user", message: { content: "hi" } })}\n`);
+  const at = new Date(Date.now() - minutesAgo * 60 * 1000);
+  utimesSync(path, at, at);
+  return path;
+}
+
 describe("knowledge incognito off", () => {
   it("ships named agents again, keeps their command, and says past sessions stay out", async () => {
     await run("on", "claude", "codex");
@@ -172,5 +201,138 @@ describe("knowledge incognito off", () => {
     expect(existsSync(claudeCommand())).toBe(true);
     expect(said).toContain("Claude Code sessions ship to Dosu memory again");
     expect(said).toContain("stay off the record");
+  });
+
+  it("seals the sessions that ran while incognito, even ones no sync has settled", async () => {
+    await run("on", "claude");
+    // Still inside the quiet period, so no sync would have settled it yet.
+    claudeSession("open-one");
+    claudeSession("quiet-one", 60);
+
+    await run("off", "claude");
+
+    expect(saved()).toBeUndefined();
+    const ledger = loadSyncState().sessions;
+    expect(ledger["claude/open-one"]).toMatchObject({ outcome: "incognito", by_agent: true });
+    expect(ledger["claude/quiet-one"]).toMatchObject({ outcome: "incognito", by_agent: true });
+  });
+
+  it("seals nothing when the agent was not incognito", async () => {
+    claudeSession("on-the-record", 60);
+
+    await run("off", "claude");
+
+    expect(loadSyncState().sessions).toEqual({});
+  });
+
+  it("keeps the agent incognito when its sessions cannot be read, and says so", async () => {
+    await run("on", "claude", "codex");
+    scan.fails = true;
+
+    const said = await run("off", "claude", "codex");
+
+    expect(saved()).toEqual(["claude", "codex"]);
+    expect(errors()).toContain("could not save the setting; Claude Code, Codex stay incognito");
+    expect(errors()).toContain("EACCES");
+    expect(said).not.toContain("ship to Dosu memory again");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("names only the agents a failure leaves incognito", async () => {
+    await run("on", "codex");
+    scan.fails = true;
+
+    await run("off", "codex", "claude");
+
+    expect(errors()).toContain("could not save the setting; Codex stays incognito");
+    expect(saved()).toEqual(["codex"]);
+  });
+
+  it("needs no scan for agents that were not incognito", async () => {
+    scan.fails = true;
+
+    expect(await run("off", "claude")).toContain("Claude Code sessions ship to Dosu memory again");
+    expect(errors()).toBe("");
+  });
+});
+
+describe("knowledge incognito for pi", () => {
+  const extension = () => join(home, ".pi", "agent", "extensions", "dosu.ts");
+
+  beforeEach(() => {
+    mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+  });
+
+  it("switches pi without installing its extension", async () => {
+    const said = await run("on", "pi");
+
+    expect(saved()).toEqual(["pi"]);
+    expect(said).toContain("Pi is incognito");
+    expect(existsSync(extension())).toBe(false);
+    expect(errors()).toBe("");
+
+    await run("off", "pi");
+    expect(saved()).toBeUndefined();
+    expect(existsSync(extension())).toBe(false);
+  });
+
+  it("counts as detected, so the default list switches it too", async () => {
+    await run("on");
+    expect(saved()).toEqual(["pi"]);
+  });
+
+  it("brings the Dosu extension up to date, and never touches a user's own dosu.ts", async () => {
+    piHookAgent().enable();
+    const current = readFileSync(extension(), "utf-8");
+    writeFileSync(extension(), `${current}// stale\n`);
+
+    await run("on", "pi");
+    expect(readFileSync(extension(), "utf-8")).toBe(current);
+
+    writeFileSync(extension(), "export default function mine() {}\n");
+    await run("off", "pi");
+    expect(readFileSync(extension(), "utf-8")).toBe("export default function mine() {}\n");
+    expect(errors()).toBe("");
+  });
+
+  it("reports its command with the extension, and how to get it", async () => {
+    await run("on", "pi");
+
+    let said = await run("status");
+    expect(said).toMatch(/pi\s+Pi\s+👻 incognito \(not shipped\)/);
+    expect(said).toContain("(/dosu-incognito missing; 'dosu knowledge hooks enable pi' adds it)");
+
+    piHookAgent().enable();
+    said = await run("status");
+    expect(said).not.toContain("missing");
+    const rows = JSON.parse(await run("status", "--json")) as Record<string, unknown>[];
+    expect(rows.filter((row) => row.agent === "pi")).toEqual([
+      {
+        agent: "pi",
+        name: "Pi",
+        installed: true,
+        incognito: true,
+        command_installed: true,
+        invocation: "/dosu-incognito",
+        command_path: extension(),
+      },
+    ]);
+  });
+});
+
+describe("knowledge incognito with a state file it cannot read", () => {
+  it("keeps the agents a newer schema had incognito", async () => {
+    installBinary("claude");
+    const dir = join(home, ".config", "dosu-cli");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "knowledge-sync.json"),
+      JSON.stringify({ schema_version: 99, incognito_agents: ["claude"] }),
+    );
+
+    expect(await run("status")).toMatch(/claude\s+Claude Code\s+👻 incognito/);
+    await run("on", "codex");
+
+    expect(saved()).toEqual(["claude", "codex"]);
   });
 });

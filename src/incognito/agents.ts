@@ -1,7 +1,8 @@
 /** `/dosu-incognito` command installation per agent. The command file is the whole feature on
  * the agent side: invoking it records INCOGNITO_MARKER in the session transcript, which `dosu
  * knowledge sync` and the status line read. Codex has no user commands, so its command is a skill
- * the user mentions as `$dosu-incognito`. Targets mirror `src/rules/installer.ts`. */
+ * the user mentions as `$dosu-incognito`; pi's is part of the Dosu pi extension. Targets mirror
+ * `src/rules/installer.ts`. */
 
 import { existsSync, mkdirSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -28,6 +29,8 @@ export interface IncognitoAgent {
   isEnabled(): boolean;
   enable(): IncognitoAction;
   disable(): IncognitoAction;
+  /** How to get the command back when it is missing, where `enable` cannot (pi's). */
+  missingHint?(): string;
 }
 
 /** The prompt the slash command expands to. The marker line is what the sync filter and the
@@ -177,6 +180,31 @@ function codexAgent(): IncognitoAgent {
   };
 }
 
+/** Pi: `/dosu-incognito` is part of the Dosu pi extension (hooks/pi.ts), which comes and goes with
+ * pi's hooks. That extension also hands each ended session to a sync, adds memory to prompts and
+ * starts Dosu's MCP server, so nothing here installs or removes it: `enable` (which `dosu
+ * knowledge incognito on|off` run) only brings an extension Dosu already wrote up to date, never
+ * touching a user's own `dosu.ts`, and `disable` leaves it to `hooks disable pi`. */
+function piAgent(): IncognitoAgent {
+  const extension = piHookAgent();
+  return {
+    id: () => "pi",
+    name: () => "Pi",
+    isInstalled: extension.isInstalled,
+    invocation: () => SLASH_COMMAND,
+    commandPath: extension.configPath,
+    isEnabled: extension.isEnabled,
+    enable: () => {
+      if (!extension.isEnabled()) return "not_found";
+      const before = readFileSync(extension.configPath(), "utf-8");
+      extension.enable();
+      return readFileSync(extension.configPath(), "utf-8") === before ? "unchanged" : "updated";
+    },
+    disable: () => "unchanged",
+    missingHint: () => "'dosu knowledge hooks enable pi' adds it",
+  };
+}
+
 export function allIncognitoAgents(): IncognitoAgent[] {
   return [
     {
@@ -206,6 +234,7 @@ export function allIncognitoAgents(): IncognitoAgent[] {
       commandPath: () => join(opencodeConfigDir(), "command", FILE_NAME),
       content: withFrontmatter(INCOGNITO_COMMAND_BODY),
     }),
+    piAgent(),
   ];
 }
 
@@ -229,16 +258,14 @@ export function keptIncognitoNote(id: string): string {
 }
 
 /** The incognito commands installed on this machine, for the messages that tell the user how to
- * keep a session out: "/dosu-incognito (Claude Code, Pi) or $dosu-incognito (Codex)". Pi's comes
- * with its Dosu extension. Null when no agent has one. */
+ * keep a session out: "/dosu-incognito (Claude Code, Pi) or $dosu-incognito (Codex)". Null when no
+ * agent has one. */
 export function installedIncognitoCommands(): string | null {
   const agents = new Map<string, string[]>();
-  const add = (invocation: string, name: string) =>
-    agents.set(invocation, [...(agents.get(invocation) ?? []), name]);
   for (const agent of allIncognitoAgents()) {
-    if (agent.isEnabled()) add(agent.invocation(), agent.name());
+    if (!agent.isEnabled()) continue;
+    agents.set(agent.invocation(), [...(agents.get(agent.invocation()) ?? []), agent.name()]);
   }
-  if (piHookAgent().isEnabled()) add(SLASH_COMMAND, "Pi");
   if (agents.size === 0) return null;
   return [...agents]
     .map(([invocation, names]) => `${invocation} (${names.join(", ")})`)

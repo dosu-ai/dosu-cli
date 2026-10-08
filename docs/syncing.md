@@ -11,7 +11,8 @@ incognito command stays while transcript shipping is on: any sync (another agent
 `--flush`) still ships every agent's sessions, hooks or not, so `disable` says it kept the command
 and that `dosu knowledge incognito on <agent>` keeps all of that agent's sessions out (see
 [Per-agent incognito](#per-agent-incognito)). Pi's command is part of its extension and goes with
-it; `hooks disable pi` says that pi's sessions still ship. `hooks status` says
+it; `hooks disable pi` says that pi's sessions still ship and that `dosu knowledge incognito on pi`
+keeps them out. `hooks status` says
 when the command is missing (as an older CLI left it). With no agent named it installs for every
 agent it detects and names the ones it skipped. Claude Code counts as detected when `~/.claude` (or `CLAUDE_CONFIG_DIR`) exists or
 `claude` is on PATH, so a freshly provisioned machine can set Dosu up before Claude Code's first
@@ -411,7 +412,7 @@ plugin anyway.
 
 ```bash
 dosu knowledge incognito on                 # all detected agents
-dosu knowledge incognito on cursor          # or any of: claude, cursor, codex, opencode
+dosu knowledge incognito on cursor          # or any of: claude, cursor, codex, opencode, pi
 dosu knowledge incognito off [agents...]
 dosu knowledge incognito status [--json]
 ```
@@ -433,6 +434,23 @@ records the switch, so a `by_agent` entry is never pending again: not once the s
 session is resumed, another CLI version runs, or `--retry-rejected` is passed. It keeps no shipped
 prefix (`records`, `prefix_sha256`), since nothing more of the session is ever sent.
 
+- **Lineage.** A session whose parent (`parentId`: a Claude Code or Codex subagent, an OpenCode
+  child session) or fork origin (`forkOf`: pi's `/fork`, `/clone`) has a `by_agent` entry is
+  agent-incognito too, at any depth: a subagent or fork started after the switch is off still
+  carries on from what its session did while it was on. The links come from the scan, and from the
+  ledger's `parent` for a session the scan no longer lists. It settles as `by_agent` in turn.
+- **Resumed sessions.** When a `by_agent` session's transcript changes, the sync re-stamps the
+  entry's `updated` to the new mtime and ships nothing (`incognito agents: N sessions they settled
+  changed; still not shipped` in the debug log), so the entry ages out on the session's last use.
+  Pruning (entries a week past the 30-day window) also keeps every entry whose session the scan
+  still lists.
+- **`off` seals first.** In the same load-modify-save that takes the agents out of the list, `off`
+  settles every session of theirs in the 30-day window that the ledger has no answer for its
+  current contents (no entry, or a pending one) as `incognito` with `by_agent`: those still inside
+  the quiet period, outside the repo scope, past a batch, or never synced (paused, backing off,
+  shipping off, signed out). A shipped session that grew while the agent was listed is sealed too,
+  so its incognito tail never ships. Only agents that were listed are sealed. If the scan fails,
+  nothing is saved: the agents stay incognito and `off` reports the error and exits 1.
 - The Activity screen and `dosu knowledge sessions` set a listed agent's sessions aside as
   incognito: out of the queue, the still-open list and the subagent count.
 - Setup's backfill offer does not count a listed agent's sessions (the sync sets them aside before
@@ -446,10 +464,14 @@ prefix (`records`, `prefix_sha256`), since nothing more of the session is ever s
   `off` reinstall the agent's incognito command when it is missing; a failure there leaves the
   switch as set.
 - The list carries over from a 0.66 state file (schema 1, which kept `incognito_agents` at the top
-  level) and from schema 2.
-- Pi has no entry: its `/dosu-incognito` comes with its extension.
-- Sessions that ran while the agent was listed but that no sync settled before `off` (still in the
-  quiet period, or never synced) are pending like any other once the agent is off.
+  level) and from schema 2. A state file with a schema this CLI does not know (a newer one, after a
+  downgrade) starts the ledger over but keeps `incognito_agents` and `ship_transcripts: false`, so
+  it never widens what ships.
+- Pi switches like the others, but its `/dosu-incognito` is part of the Dosu pi extension, which
+  only `hooks enable pi` (or setup) installs: `on` and `off` never install it (it would also turn on
+  pi's session-end trigger, prompt-time memory and MCP server), only rewrite an extension Dosu
+  already wrote, never a user's own `dosu.ts`. `status` reports pi's `command_installed` as the
+  extension being installed, and says `'dosu knowledge hooks enable pi' adds it` when it is not.
 
 The setting only keeps sessions from shipping. Prompt-time memory and Dosu MCP tools still work in
 that agent's sessions; only the per-session command turns those off.
@@ -663,4 +685,6 @@ DOSU_DEV=true bun run dev knowledge hooks enable claude   # installs /dosu-incog
 # Run /dosu-incognito, or `dosu knowledge incognito on claude` → 👻 Dosu incognito
 # (with the switch, the log line ends "its agent is incognito")
 # End the session; `dosu logs --tail` shows "not shipping incognito session claude/<id>" right away
+# `dosu knowledge incognito off claude`, then resume that session: its entry in
+# knowledge-sync.json keeps `by_agent: true`, and it never ships
 ```

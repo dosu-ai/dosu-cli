@@ -112,8 +112,21 @@ describe("checkForIncognitoBackfill", () => {
   });
 
   it("skips hook agents that have no incognito command of their own", () => {
-    // Pi's /dosu-incognito comes with its extension.
-    state.hookOnlyIds = ["pi"];
+    state.hookOnlyIds = ["future-agent"];
+
+    checkForIncognitoBackfill();
+
+    expect(state.enableCalls).toEqual([]);
+    expect(existsSync(marker())).toBe(true);
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it("never installs pi's: its /dosu-incognito is the extension its hook already is", () => {
+    // Pi's command reads as installed exactly when its hook does.
+    state.agents = [
+      { id: "pi", hookEnabled: true, commandInstalled: true },
+      { id: "cursor", hookEnabled: false, commandInstalled: false },
+    ];
 
     checkForIncognitoBackfill();
 

@@ -698,12 +698,120 @@ describe("runKnowledgeSync shipping", () => {
         listSessions: vi.fn().mockResolvedValue([resumed]),
         ship,
       });
+      mockLoggerDebug.mockClear();
 
       const outcome = await runKnowledgeSync({ deps, retryRejectedBefore: NOW });
 
       expect(ship).not.toHaveBeenCalled();
       expect(outcome.status).toBe("nothing-new");
+      // Only the entry follows the session, so the ledger keeps it while the session is in use.
+      expect(saved).toHaveLength(1);
+      expect(saved[0].sessions["cursor/c-40"]).toEqual({
+        ...before["cursor/c-40"],
+        updated: resumed.updated,
+      });
+      const logged = mockLoggerDebug.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(logged).toContain("1 sessions they settled changed; still not shipped");
+    });
+
+    it("re-stamps nothing that is unchanged, or that it did not settle", async () => {
+      const quiet = cursor(40);
+      const marked = cursor(50);
+      const { deps, saved } = makeDeps({
+        loadState: () =>
+          state({
+            sessions: {
+              ...settled(quiet, { outcome: "incognito", by_agent: true }),
+              // A /dosu-incognito session that changed is the ship step's to decide again.
+              ...settled(marked, { outcome: "incognito", updated: session(400).updated }),
+            },
+          }),
+        listSessions: vi.fn().mockResolvedValue([quiet, marked]),
+      });
+
+      const outcome = await runKnowledgeSync({ deps });
+
+      expect(outcome).toMatchObject({ status: "backlog", readySessions: 1 });
+      expect(outcome.sessions.map((s) => s.id)).toEqual(["c-50"]);
       expect(saved).toEqual([]);
+    });
+
+    describe("once the switch is off", () => {
+      // Settled while Cursor was incognito; the switch is off now.
+      const root = cursor(400);
+      const offRecord = () =>
+        state({ sessions: settled(root, { outcome: "incognito", by_agent: true }) });
+
+      it("keeps a subagent it starts later out, at any depth", async () => {
+        const child = cursor(40, root.id);
+        const grandchild = cursor(30, child.id);
+        const other = cursor(20);
+        const ship = shipAll();
+        const { deps, saved } = makeDeps({
+          loadState: offRecord,
+          listSessions: vi.fn().mockResolvedValue([root, child, grandchild, other]),
+          ship,
+        });
+
+        const outcome = await runKnowledgeSync({ deps });
+
+        expect(vi.mocked(ship).mock.calls[0][0].map((s) => s.id)).toEqual(["c-20"]);
+        expect(outcome.counts?.subagents.incognito).toBe(2);
+        const ledger = (saved.at(-1) as SyncState).sessions;
+        expect(ledger["cursor/c-40"]).toMatchObject({ by_agent: true, parent: root.id });
+        expect(ledger["cursor/c-30"]).toMatchObject({ by_agent: true, parent: child.id });
+        expect(ledger["cursor/c-20"].outcome).toBe("shipped");
+      });
+
+      it("keeps a fork of it out, and a fork of that fork", async () => {
+        const pi = (minutes: number, forkOf?: AgentSession): AgentSession => ({
+          ...session(minutes),
+          id: `p-${minutes}`,
+          harness: "pi",
+          ...(forkOf ? { forkOf: { id: forkOf.id, path: forkOf.path } } : {}),
+        });
+        const origin = pi(400);
+        const fork = pi(40, origin);
+        const forkOfFork = pi(30, fork);
+        const ship = shipAll();
+        const { deps, saved } = makeDeps({
+          loadState: () =>
+            state({ sessions: settled(origin, { outcome: "incognito", by_agent: true }) }),
+          listSessions: vi.fn().mockResolvedValue([origin, fork, forkOfFork]),
+          ship,
+        });
+
+        const outcome = await runKnowledgeSync({ deps });
+
+        expect(ship).not.toHaveBeenCalled();
+        expect(outcome.counts?.incognito).toBe(2);
+        const ledger = (saved.at(-1) as SyncState).sessions;
+        expect(ledger["pi/p-40"]).toMatchObject({ outcome: "incognito", by_agent: true });
+        expect(ledger["pi/p-30"]).toMatchObject({ outcome: "incognito", by_agent: true });
+      });
+
+      it("follows a subagent's link the ledger recorded when its session left the scan", async () => {
+        const child = cursor(40, root.id);
+        const grandchild = cursor(30, child.id);
+        const ship = shipAll();
+        const { deps } = makeDeps({
+          loadState: () =>
+            state({
+              sessions: {
+                ...settled(root, { outcome: "incognito", by_agent: true }),
+                ...settled(child, { outcome: "incognito", by_agent: true, parent: root.id }),
+              },
+            }),
+          // Neither the session nor its first subagent is listed any more.
+          listSessions: vi.fn().mockResolvedValue([grandchild]),
+          ship,
+        });
+
+        const outcome = await runKnowledgeSync({ deps });
+
+        expect(ship).not.toHaveBeenCalled();
+        expect(outcome.counts?.subagents.incognito).toBe(1);
+      });
     });
   });
 
@@ -995,6 +1103,34 @@ describe("runKnowledgeSync shipping", () => {
       "claude/recent",
       "claude/s-60",
     ]);
+  });
+
+  it("keeps an old entry while the scan still lists its session", async () => {
+    const old = new Date(NOW.getTime() - 38 * 24 * 60 * 60 * 1000).toISOString();
+    // Shipped long ago, and resumed since: it keeps what already shipped of it.
+    const resumed = session(90);
+    const { deps, saved } = makeDeps({
+      loadState: () =>
+        state({
+          sessions: settled(resumed, {
+            updated: old,
+            at: old,
+            records: 4,
+            prefix_sha256: "hash-4",
+          }),
+        }),
+      listSessions: vi.fn().mockResolvedValue([resumed, session(60)]),
+      ship: vi.fn(async (sessions: AgentSession[]) =>
+        sessions
+          .filter((s) => s.id === "s-60")
+          .map<ShipSessionResult>((s) => ({ session: s, outcome: "shipped", taskId: "t" })),
+      ),
+    });
+
+    await runKnowledgeSync({ deps });
+
+    // The batch stopped short of the resumed session (no result): still pending, still known.
+    expect(saved.at(-1)?.sessions["claude/s-90"]).toMatchObject({ records: 4, updated: old });
   });
 
   it("ships at most SHIP_BATCH_LIMIT sessions per run, oldest first", async () => {

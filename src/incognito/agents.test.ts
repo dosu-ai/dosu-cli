@@ -35,12 +35,13 @@ afterEach(() => {
 });
 
 describe("registry", () => {
-  it("exposes claude, cursor, codex, and opencode", () => {
+  it("exposes claude, cursor, codex, opencode, and pi", () => {
     expect(allIncognitoAgents().map((a) => a.id())).toEqual([
       "claude",
       "cursor",
       "codex",
       "opencode",
+      "pi",
     ]);
     expect(getIncognitoAgent("cursor")?.name()).toBe("Cursor");
     expect(getIncognitoAgent("zed")).toBeUndefined();
@@ -68,6 +69,7 @@ describe("registry", () => {
       cursor: "/dosu-incognito",
       codex: "$dosu-incognito",
       opencode: "/dosu-incognito",
+      pi: "/dosu-incognito",
     });
   });
 
@@ -283,6 +285,48 @@ describe("opencode agent", () => {
   });
 });
 
+describe("pi agent", () => {
+  const extension = () => join(fakeHome, ".pi", "agent", "extensions", "dosu.ts");
+  const pi = () => getIncognitoAgent("pi");
+
+  it("has its command in the Dosu pi extension, which only pi's hooks install", () => {
+    vi.stubEnv("PATH", "");
+    expect(pi()?.isInstalled()).toBe(false);
+    mkdirSync(join(fakeHome, ".pi", "agent"), { recursive: true });
+    expect(pi()?.isInstalled()).toBe(true);
+    expect(pi()?.commandPath()).toBe(extension());
+    expect(pi()?.isEnabled()).toBe(false);
+
+    // What `dosu knowledge incognito on|off pi` run: no extension appears, so no hook, prompt
+    // memory or MCP server either.
+    expect(pi()?.enable()).toBe("not_found");
+    expect(existsSync(extension())).toBe(false);
+    expect(pi()?.missingHint?.()).toContain("dosu knowledge hooks enable pi");
+
+    piHookAgent().enable();
+    expect(pi()?.isEnabled()).toBe(true);
+    expect(pi()?.enable()).toBe("unchanged");
+  });
+
+  it("brings an extension Dosu wrote up to date, and leaves a user's own dosu.ts alone", () => {
+    piHookAgent().enable();
+    const current = readFileSync(extension(), "utf-8");
+    writeFileSync(extension(), `${current}\n// stale\n`);
+    expect(pi()?.enable()).toBe("updated");
+    expect(readFileSync(extension(), "utf-8")).toBe(current);
+
+    writeFileSync(extension(), "export default function mine() {}\n");
+    expect(pi()?.enable()).toBe("not_found");
+    expect(readFileSync(extension(), "utf-8")).toBe("export default function mine() {}\n");
+  });
+
+  it("never removes the extension: it goes with `hooks disable pi`", () => {
+    piHookAgent().enable();
+    expect(pi()?.disable()).toBe("unchanged");
+    expect(existsSync(extension())).toBe(true);
+  });
+});
+
 describe("installedIncognitoCommands", () => {
   it("names only the agents that have the command, by how each runs it", () => {
     expect(installedIncognitoCommands()).toBeNull();
@@ -291,7 +335,7 @@ describe("installedIncognitoCommands", () => {
     expect(installedIncognitoCommands()).toBe("$dosu-incognito (Codex)");
 
     getIncognitoAgent("claude")?.enable();
-    // Pi's comes with the Dosu pi extension.
+    // Pi's comes with the Dosu pi extension, and is named once.
     piHookAgent().enable();
     expect(installedIncognitoCommands()).toBe(
       "/dosu-incognito (Claude Code, Pi) or $dosu-incognito (Codex)",
