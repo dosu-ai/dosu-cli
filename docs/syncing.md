@@ -435,10 +435,14 @@ session is resumed, another CLI version runs, or `--retry-rejected` is passed. I
 prefix (`records`, `prefix_sha256`), since nothing more of the session is ever sent.
 
 - **Lineage.** A session whose parent (`parentId`: a Claude Code or Codex subagent, an OpenCode
-  child session) or fork origin (`forkOf`: pi's `/fork`, `/clone`) has a `by_agent` entry is
-  agent-incognito too, at any depth: a subagent or fork started after the switch is off still
-  carries on from what its session did while it was on. The links come from the scan, and from the
-  ledger's `parent` for a session the scan no longer lists. It settles as `by_agent` in turn.
+  child session) or fork origin (`forkOf`: pi's `/fork`, `/clone`; a Codex fork, whose
+  `session_meta` names `forked_from_id`; a Claude Code `/branch` or `--fork-session`, whose copied
+  records each carry `forkedFrom`) has a `by_agent` entry is agent-incognito too, at any depth: a
+  subagent or fork started after the switch is off still carries on from what its session did while
+  it was on, and a branch holds a copy of it. The scan lists subagents and pi's forks; the Codex and
+  Claude Code fork links are read off the transcript's head when it matters (only once the switch
+  has settled some session of that agent's), and the ledger's `parent` stands in for a session no
+  transcript leads to. It settles as `by_agent` in turn.
 - **Resumed sessions.** When a `by_agent` session's transcript changes, the sync re-stamps the
   entry's `updated` to the new mtime and ships nothing (`incognito agents: N sessions they settled
   changed; still not shipped` in the debug log), so the entry ages out on the session's last use.
@@ -458,7 +462,8 @@ prefix (`records`, `prefix_sha256`), since nothing more of the session is ever s
   rather than `skipped_by_user`.
 - The Activity screen's clear (`resetSyncState`) keeps the list and the `by_agent` entries, trimmed
   to `updated`, `outcome`, `at`, `cli_version`, `by_agent` and `parent`.
-- The status line shows `👻 Dosu incognito` in a listed agent (see [Status line](#status-line)).
+- The status line shows `👻 Dosu incognito` in a listed agent, and in a session the switch settled
+  once it is off (see [Status line](#status-line)).
 - `status` shows each agent's switch and whether its command is installed (`--json` rows: `agent`,
   `name`, `installed`, `incognito`, `command_installed`, `invocation`, `command_path`). `on` and
   `off` reinstall the agent's incognito command when it is missing; a failure there leaves the
@@ -494,11 +499,13 @@ no restart.
 - **`dosu memory search|evidence`** refuse, with the same message, when `--client` names a listed
   agent or a session they run in (from `--session` or the shell's environment) is one of its.
 - **Sessions that ran while it was listed** stay out of all of these once it is off: a session
-  whose ledger entry has `by_agent`, or one up the `parent` links the ledger records (for a Claude
-  Code subagent's tool call, the session the hook payload names), gets no prompt-time request, and
-  its tool calls are refused with "ran while its agent was incognito". These checks run without a
-  scan, so a subagent or fork the ledger holds nothing for yet is linked only once a sync settles
-  it (as `by_agent`); until then only its shipping is held back.
+  whose ledger entry has `by_agent`, or one that descends from or was branched from such a session
+  (for a Claude Code subagent's tool call, the session the hook payload names), gets no prompt-time
+  request, and its tool calls are refused with "ran while its agent was incognito". These checks
+  have no scan: they read the lineage off the session's own transcript (the rollout a Codex thread
+  names, the transcript a hook payload or `PI_SESSION_FILE` names, a pi session found by the id in
+  its file name, an OpenCode row), so a fork or subagent made after `off` is refused before any sync
+  has settled it.
 - `dosu knowledge sync --status` prints `Incognito: <agents> (not shipped)` while the list is not
   empty.
 
@@ -600,13 +607,14 @@ command to `dosu knowledge statusline render --agent <id>`, which prints one lin
 |---|---|
 | `📚 Dosu shipping…` | As `on`, and a knowledge-sync run is live right now (the lock check behind the TUI's "shipping sessions...") |
 | `📚 Dosu on` | The hook is installed and this session ships to Dosu memory when it ends |
-| `👻 Dosu incognito` | The agent is incognito (`dosu knowledge incognito on`), or `/dosu-incognito` was run in this session |
+| `👻 Dosu incognito` | The agent is incognito (`dosu knowledge incognito on`), this session ran while it was (or descends from or was branched from one that did), or `/dosu-incognito` was run in this session |
 | `⚪ Dosu paused` | Syncing is paused (Activity screen stop, or `paused` in the state file) |
 | `⚪ Dosu not learning from this repo` | A repo scope is set and `cwd` is not in one of its repos |
 | `⚪ Dosu off` | No Dosu hook is installed for this agent, or shipping is disabled |
 
 States are checked from the bottom of the table up: `off` (no hook, or shipping disabled), then
-incognito (the agent's switch, then the transcript's marker), paused, and the repo scope; a line
+incognito (the agent's switch, including a session it settled, then the transcript's marker),
+paused, and the repo scope; a line
 that passes them all is `on`, or `shipping…` while a sync holds the lock. Incognito outranks paused
 and not-studied because it is the user's own action and the line is how they confirm it took.
 

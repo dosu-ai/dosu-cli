@@ -577,6 +577,68 @@ describe("contextHookOutput for other agents", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("asks nothing for a fork or subagent of a session that ran while its agent was incognito", async () => {
+    // Made once the switch is off: no sync has settled them yet, and no marker says so.
+    const dir = mkdtempSync(join(tmpdir(), "dosu-context-lineage-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    const sessions = join(dir, ".codex", "sessions", "2026", "10", "02");
+    mkdirSync(sessions, { recursive: true });
+    const rollout = (name: string, meta: Record<string, unknown>) => {
+      const path = join(sessions, `${name}.jsonl`);
+      const item = { type: "session_meta", payload: { id: name.slice(-36), ...meta } };
+      writeFileSync(path, `${JSON.stringify(item)}\n`);
+      return path;
+    };
+    const parent = "01a0ff74-a68d-7ad0-83ee-80cf02c29b14";
+    const sealed = `rollout-2026-10-02T18-50-30-${parent}`;
+    rollout(sealed, {});
+    const fork = rollout("rollout-2026-10-02T18-56-30-01a0ff7a-277c-74f1-b64b-59ffa01a7d14", {
+      forked_from_id: parent,
+    });
+    const subagent = rollout("rollout-2026-10-02T18-50-38-01a0ff74-c903-73c2-b6b1-7546b84710ff", {
+      parent_thread_id: parent,
+      thread_source: "subagent",
+    });
+    const piSource = join(dir, "2026-10-02T10-00-00_src.jsonl");
+    writeFileSync(piSource, `${JSON.stringify({ type: "session", id: "src" })}\n`);
+    const piFork = join(dir, "2026-10-02T11-00-00_fork.jsonl");
+    writeFileSync(
+      piFork,
+      `${JSON.stringify({ type: "session", id: "fork", parentSession: piSource })}\n`,
+    );
+    const incognito = {
+      sessions: { ...settledByAgent(`codex/${sealed}`), ...settledByAgent("pi/src") },
+    };
+    const { isIncognito: _, ...defaults } = codex;
+    const fetchImpl = respond(200, { digest: DIGEST });
+
+    for (const transcript_path of [fork, subagent]) {
+      expect(
+        await contextHookOutput(codexPayload({ transcript_path }), {
+          ...defaults,
+          fetchImpl,
+          incognito,
+        }),
+      ).toBe("");
+    }
+    const piPrompt = JSON.stringify({
+      prompt: "go on",
+      session_id: "fork",
+      transcript_path: piFork,
+    });
+    const { isIncognito: __, ...plain } = base;
+    expect(
+      await contextHookOutput(piPrompt, {
+        ...plain,
+        agent: "pi",
+        format: "plain",
+        fetchImpl,
+        incognito,
+      }),
+    ).toBe("");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("prints nothing in plain format when there is no digest", async () => {
     const stdin = JSON.stringify({ prompt: "hi", session_id: "ses_1", cwd: "/w" });
     const out = await contextHookOutput(stdin, {

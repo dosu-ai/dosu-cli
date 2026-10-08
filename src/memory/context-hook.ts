@@ -219,7 +219,11 @@ function memoryToolHookOutput(
   if (typeof payload.tool_name !== "string" || !MEMORY_TOOL.test(payload.tool_name)) return "";
   const transcript = str(payload.transcript_path);
   const id = str(payload.session_id);
-  const how = incognito ? agentSwitchOf(incognito, { harness: "claude", id }) : null;
+  const how = incognito
+    ? agentSwitchOf(incognito, { harness: "claude", id }, () =>
+        id && transcript ? sessionAtPath("claude", id, transcript) : null,
+      )
+    : null;
   if (how) return denial(agentSwitchMessage(how, "claude", TOOLS_UNAVAILABLE));
   if (transcript && isIncognito(transcript)) return denial(INCOGNITO_DENIAL);
   const toolUseId = str(payload.tool_use_id);
@@ -260,13 +264,16 @@ export async function contextHookOutput(
   const agent = options.agent ?? CLAUDE_CODE_AGENT;
   const harness = harnessOf(agent);
   const sessionId = sessionIdOf(payload, format);
-  // So does every prompt of an agent in incognito, and of a session that ran while it was.
+  const transcript = str(payload.transcript_path);
+  // So does every prompt of an agent in incognito, and of a session that ran while it was (or
+  // descends from or was branched from one that did).
   const switchedOff =
     harness && options.incognito
-      ? agentSwitchOf(options.incognito, { harness, id: sessionId })
+      ? agentSwitchOf(options.incognito, { harness, id: sessionId }, () =>
+          sessionId ? storedSession({ harness, id: sessionId, transcript }) : null,
+        )
       : null;
   if (switchedOff) return "";
-  const transcript = str(payload.transcript_path);
   const isIncognito = options.isIncognito ?? incognitoCheckOf(agent);
   if (transcript && isIncognito(transcript)) return "";
 

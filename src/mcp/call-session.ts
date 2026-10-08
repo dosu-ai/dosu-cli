@@ -29,13 +29,14 @@ import { codexRolloutOfThread } from "../sessions/codex-lineage";
 import {
   type AgentSession,
   opencodeSessionById,
+  piSessionById,
   SESSION_HARNESSES,
   type SessionHarness,
   sessionAtPath,
 } from "../sessions/scan";
 import { trajectorySourceOf } from "../shipper/normalize";
 import { isIncognitoSession } from "../sync/incognito";
-import { isAgentIncognito, loadSyncState, type SyncState } from "../sync/state";
+import { isSessionAgentIncognito, loadSyncState, type SyncState } from "../sync/state";
 
 /** Dosu's memory tools as Claude Code names them on the `dosu` entry `dosu mcp add` writes (other
  * servers may have tools of the same names): the matcher of the PreToolUse hook that records
@@ -224,6 +225,7 @@ function storedSession(session: CallSession): AgentSession | null {
   if (!SAFE_ID.test(id)) return null;
   if (session.transcript) return sessionAtPath(harness, id, session.transcript);
   if (harness === "opencode") return opencodeSessionById(id);
+  if (harness === "pi") return piSessionById(id);
   if (harness === "claude") {
     const transcript = claudeTranscript(id);
     return transcript ? sessionAtPath(harness, id, transcript) : null;
@@ -237,15 +239,17 @@ export type IncognitoSwitch = Pick<SyncState, "incognito_agents" | "sessions">;
 
 /** How the agents' incognito switch (`dosu knowledge incognito on`) keeps a session off the
  * record: its agent is in the list now (`agent`), or the session ran while it was, or one it
- * descends from by the `parent` links the ledger records did (`sealed`: settled `by_agent`); null
- * when the switch does not. With no session id, only the list can answer. */
+ * descends from or was branched from did (`sealed`: settled `by_agent`); null when the switch does
+ * not. Its links are read off the transcript `stored` finds, when the ledger holds any such
+ * session at all. With no session id, only the list can answer. */
 export function agentSwitchOf(
   state: IncognitoSwitch,
   session: { harness: SessionHarness; id: string | null },
+  stored: () => AgentSession | null = () => null,
 ): "agent" | "sealed" | null {
   const { harness, id } = session;
   if (state.incognito_agents?.includes(harness)) return "agent";
-  return id !== null && isAgentIncognito(state, { harness, id }) ? "sealed" : null;
+  return id !== null && isSessionAgentIncognito(state, { harness, id }, stored) ? "sealed" : null;
 }
 
 /** Why the agents' switch keeps a call on the machine (`effect`: what did not happen), for the
@@ -262,16 +266,25 @@ export function agentSwitchMessage(
     : `Dosu is off for this session, which ran while its agent was incognito: ${effect}.`;
 }
 
-/** Whether the session is off the record: the agents' switch keeps it so (agentSwitchOf), or the
- * user ran /dosu-incognito in it, judged as its transcript's upload would be (a session whose
- * transcript cannot be found has only the switch to go by). Never throws. */
-function callSessionIsIncognito(session: CallSession, state: IncognitoSwitch): boolean {
+/** What keeps the session off the record: the agents' switch (agentSwitchOf), or the user's
+ * /dosu-incognito in it (`marker`), judged as its transcript's upload would be (a session whose
+ * transcript cannot be found has only the switch to go by); null when nothing does. Never throws. */
+function callSessionOffRecord(
+  session: CallSession,
+  state: IncognitoSwitch,
+): "agent" | "sealed" | "marker" | null {
   try {
-    if (agentSwitchOf(state, session) !== null) return true;
-    const stored = storedSession(session);
-    return stored !== null && isIncognitoSession(stored);
+    let stored: AgentSession | null | undefined;
+    const find = () => {
+      if (stored === undefined) stored = storedSession(session);
+      return stored;
+    };
+    const how = agentSwitchOf(state, session, find);
+    if (how) return how;
+    const found = find();
+    return found !== null && isIncognitoSession(found) ? "marker" : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -287,8 +300,10 @@ export function callRefusal(
   const state = loadSyncState();
   const agent = harnessOfClient(client);
   if (agent && state.incognito_agents?.includes(agent)) return agentSwitchMessage("agent", agent);
-  const off = sessions.find((session) => callSessionIsIncognito(session, state));
-  if (!off) return null;
-  const how = agentSwitchOf(state, off);
-  return how ? agentSwitchMessage(how, off.harness) : OFF_THE_RECORD_MESSAGE;
+  for (const session of sessions) {
+    const how = callSessionOffRecord(session, state);
+    if (how === "marker") return OFF_THE_RECORD_MESSAGE;
+    if (how) return agentSwitchMessage(how, session.harness);
+  }
+  return null;
 }

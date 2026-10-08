@@ -4,6 +4,7 @@
 
 import { logger } from "../debug/logger";
 import type { EndedSession } from "../sessions/capture";
+import { type SessionLinks, sessionLineage } from "../sessions/lineage";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import {
   type AgentSession,
@@ -27,7 +28,6 @@ import {
   isPending,
   isShippingEnabled,
   type LedgerEntry,
-  lineageIn,
   loadSyncState,
   type PendingOptions,
   pruneLedger,
@@ -371,7 +371,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
   /** Every session the scan listed, by key: what the ledger must keep, and how a session's
    * subagents and forks find it. */
   let listed: ReadonlySet<string>;
-  let lineage: (key: string) => AgentSession | undefined;
+  let lineage: (key: string) => SessionLinks | undefined;
   try {
     // The whole window every time: listing is metadata only, and the ledger, not a count cap,
     // decides what is left to do.
@@ -385,7 +385,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       since,
     );
     listed = new Set(scanned.map(sessionKey));
-    lineage = lineageIn(scanned);
+    lineage = sessionLineage(scanned);
     // A session its agent's incognito switch settled is never pending again, but its entry follows
     // the session's activity, so the ledger keeps it as long after its last use as any other.
     const restamped = scanned.filter((s) => {

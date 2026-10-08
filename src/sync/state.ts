@@ -7,6 +7,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config/config";
+import { sessionLineage } from "../sessions/lineage";
 import type { AgentSession } from "../sessions/scan";
 
 const STATE_FILENAME = "knowledge-sync.json";
@@ -428,22 +429,25 @@ export function leaveIncognito(
 const MAX_LINEAGE_DEPTH = 32;
 
 /** A session's links up its lineage: the session it is a subagent of, and the one it was forked
- * from. */
+ * or branched from. */
 type Lineage = Pick<AgentSession, "parentId" | "forkOf">;
 
 /** Whether the agent's saved incognito switch keeps a session off the record: its agent is in
  * `incognito_agents` now, or the switch settled it, the session it is a subagent of, or the one it
- * was forked from, at any depth (see LedgerEntry.by_agent). A subagent or fork started once the
- * switch is off still carries on from what its session did while it was on. Subagents' transcripts
- * share their session's harness, so the list covers them too. `lineageOf` looks up the links of a
- * session by key (the scan's), for the ones whose ledger entry does not record them (a fork's, or
- * a session not settled yet). */
+ * was forked or branched from, at any depth (see LedgerEntry.by_agent). A subagent or fork started
+ * once the switch is off still carries on from what its session did while it was on, and a branch
+ * holds a copy of it. Subagents' transcripts share their session's harness, so the list covers them
+ * too. `lineageOf` looks up a session's links by key (sessions/lineage.ts reads them off the
+ * transcripts), and the ledger's `parent` stands in for a session it cannot find; with no answer
+ * from either, the session's own links are all there is. Looks nothing up while the switch has
+ * settled no session of the agent's. */
 export function isAgentIncognito(
   state: Pick<SyncState, "incognito_agents" | "sessions">,
   session: Pick<AgentSession, "harness" | "id"> & Lineage,
   lineageOf: (key: string) => Lineage | undefined = () => undefined,
 ): boolean {
   if (state.incognito_agents?.includes(session.harness)) return true;
+  if (!switchSettledAny(state, session.harness)) return false;
   const seen = new Set<string>();
   const queue = [session.id];
   while (queue.length > 0 && seen.size < MAX_LINEAGE_DEPTH) {
@@ -453,7 +457,7 @@ export function isAgentIncognito(
     seen.add(key);
     const entry = state.sessions[key];
     if (entry?.by_agent) return true;
-    const links = id === session.id ? session : lineageOf(key);
+    const links = lineageOf(key) ?? (id === session.id ? session : undefined);
     for (const next of [links?.parentId, links?.forkOf?.id, entry?.parent]) {
       if (next) queue.push(next);
     }
@@ -461,12 +465,30 @@ export function isAgentIncognito(
   return false;
 }
 
-/** isAgentIncognito's `lineageOf` over a list of sessions (a scan). */
-export function lineageIn(
-  sessions: readonly AgentSession[],
-): (key: string) => AgentSession | undefined {
-  const byKey = new Map(sessions.map((s) => [sessionKey(s), s]));
-  return (key) => byKey.get(key);
+/** Whether the switch has settled any session of the agent's: until it has, no lineage leads to
+ * one, and nothing need be looked up. */
+function switchSettledAny(state: Pick<SyncState, "sessions">, harness: string): boolean {
+  const prefix = `${harness}/`;
+  return Object.entries(state.sessions).some(
+    ([key, entry]) => entry.by_agent === true && key.startsWith(prefix),
+  );
+}
+
+/** isAgentIncognito for the one session a prompt hook, a tool call or the status line names, which
+ * have no scan: its links are read off its transcript, from the session `stored` finds (the scan's
+ * view of it, or null when its transcript cannot be found), which is looked up only once the switch
+ * has settled some session of the agent's. */
+export function isSessionAgentIncognito(
+  state: Pick<SyncState, "incognito_agents" | "sessions">,
+  session: Pick<AgentSession, "harness" | "id">,
+  stored: () => AgentSession | null = () => null,
+): boolean {
+  if (state.incognito_agents?.includes(session.harness)) return true;
+  if (!switchSettledAny(state, session.harness)) return false;
+  const found = stored();
+  return found
+    ? isAgentIncognito(state, { ...found, id: session.id }, sessionLineage([found]))
+    : isAgentIncognito(state, session);
 }
 
 /** The ledger entry for a session its agent's incognito switch keeps off the record: final, and
@@ -537,7 +559,7 @@ export function skipBacklog(
 ): void {
   const state = loadSyncState(configDir);
   const at = now.toISOString();
-  const lineage = lineageIn(sessions);
+  const lineage = sessionLineage(sessions);
   for (const session of unsettledSessions(sessions, state)) {
     state.sessions[sessionKey(session)] = isAgentIncognito(state, session, lineage)
       ? agentIncognitoEntry(session, at, cliVersion)

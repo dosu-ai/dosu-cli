@@ -3,10 +3,18 @@
  * reads only a few small files plus the transcript, and it never throws: any failure renders as
  * off. */
 
+import { basename } from "node:path";
 import { getHookAgent } from "../hooks/agents";
 import { originRepoOfDir } from "../sessions/repo";
+import { SESSION_HARNESSES, sessionAtPath } from "../sessions/scan";
 import { transcriptHasIncognitoMarker } from "../sync/incognito";
-import { isShippingEnabled, isUnderDir, loadSyncState, type SyncState } from "../sync/state";
+import {
+  isSessionAgentIncognito,
+  isShippingEnabled,
+  isUnderDir,
+  loadSyncState,
+  type SyncState,
+} from "../sync/state";
 import { getSyncStatus } from "../sync/status";
 
 /** In priority order: the first matching state wins. */
@@ -96,6 +104,19 @@ function cwdIsStudied(
   return true;
 }
 
+/** Whether the agent's saved switch keeps the payload's session off the record: the agent is in
+ * incognito, or the session ran while it was (or descends from or was branched from one that did),
+ * which stays so once the switch is off. The session is named by its transcript, as the scan names
+ * it. */
+function switchKeepsOff(payload: StatuslinePayload, agentId: string, state: SyncState): boolean {
+  if (state.incognito_agents?.includes(agentId)) return true;
+  const harness = SESSION_HARNESSES.find((h) => h === agentId);
+  const path = payload.transcript_path;
+  if (!harness || !path?.endsWith(".jsonl")) return false;
+  const id = basename(path, ".jsonl");
+  return isSessionAgentIncognito(state, { harness, id }, () => sessionAtPath(harness, id, path));
+}
+
 /** Incognito (the agent's saved switch, or `/dosu-incognito` in this session) outranks paused
  * and not-studied: it is the user's own action, and the line is how they confirm it took. */
 export function resolveStatuslineState(
@@ -107,7 +128,7 @@ export function resolveStatuslineState(
   if (!hookEnabled(agentId)) return "off";
   const state = (deps.loadState ?? loadSyncState)();
   if (!isShippingEnabled(state)) return "off";
-  if (state.incognito_agents?.includes(agentId)) return "incognito";
+  if (switchKeepsOff(payload, agentId, state)) return "incognito";
 
   const transcriptIsIncognito = deps.transcriptIsIncognito ?? transcriptHasIncognitoMarker;
   if (payload.transcript_path && transcriptIsIncognito(payload.transcript_path)) {

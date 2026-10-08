@@ -1,6 +1,7 @@
 /** Shared scan of the pending local-session backlog: what's queued to ship and what's still
  * open (inside the quiet period). Used by the Activity TUI and `dosu knowledge sessions`. */
 
+import { sessionLineage } from "../sessions/lineage";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { type AgentSession, scanAgentSessions } from "../sessions/scan";
 import { VERSION } from "../version/version";
@@ -9,7 +10,6 @@ import {
   filterSessionsByRepo,
   gateSessions,
   isAgentIncognito,
-  lineageIn,
   loadSyncState,
   type SyncState,
   sessionKey,
@@ -58,7 +58,7 @@ export function listSessionBacklog(now: Date = new Date()): SessionBacklog {
     const gate = gateSessions(scanned, state.sessions, { cliVersion: VERSION, now });
     // An incognito agent's sessions, and their subagents, are set aside as the sync sets them
     // aside: never queued, never waited for, never counted.
-    const lineage = lineageIn(scanned);
+    const lineage = sessionLineage(scanned);
     const agentOff = (session: AgentSession) => isAgentIncognito(state, session, lineage);
     const ready = filterSessionsByRepo(gate.ready, filter, resolver.resolveRepo);
     const open = filterSessionsByRepo(

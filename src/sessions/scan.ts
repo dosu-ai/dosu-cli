@@ -13,6 +13,7 @@ import {
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { codexOrigin } from "./codex-lineage";
 import { readPiHeader } from "./pi";
 
 /** The agents whose sessions the scanner finds, by the id the ledger keys them with. */
@@ -88,6 +89,20 @@ function sessionFromFile(
   };
 }
 
+/** The first `bytes` of a file as text; "" when it cannot be read. */
+function readHead(path: string, bytes: number): string {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, "r");
+    const buffer = Buffer.alloc(bytes);
+    return buffer.toString("utf8", 0, readSync(fd, buffer, 0, bytes, 0));
+  } catch {
+    return "";
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
 /** Claude Code keeps each subagent's transcript in a directory named for its session:
  * `<project>/<session id>/subagents/agent-<agent id>.jsonl`, and a workflow's agents one level
  * down, in `subagents/workflows/<workflow id>/`. Every one is a session of its own, shipped with
@@ -160,6 +175,22 @@ function claudeLayoutOf(path: string): Pick<AgentSession, "project" | "parentId"
   return { project: basename(dirname(path)) };
 }
 
+/** How much of a Claude Code transcript is read for the session it was branched from. */
+const CLAUDE_FORK_PREFIX_BYTES = 64 * 1024;
+
+/** Claude Code tags every record it copies into a branch (`/branch`, `--resume <id>
+ * --fork-session`) with the session it was copied from; the copies open the new transcript. */
+const CLAUDE_FORKED_FROM = /"forkedFrom":\{"sessionId":"([A-Za-z0-9._-]{1,200})"/;
+
+/** The session a top-level Claude Code transcript was branched from, whose transcript is its
+ * sibling: the branch opens with a copy of that one's history under its own id. Undefined for any
+ * other transcript. Read on demand (sessions/lineage.ts), not by the scan. */
+export function claudeForkOf(path: string): AgentSession["forkOf"] {
+  const source = CLAUDE_FORKED_FROM.exec(readHead(path, CLAUDE_FORK_PREFIX_BYTES))?.[1];
+  if (!source || source === basename(path, ".jsonl")) return undefined;
+  return { id: source, path: join(dirname(path), `${source}.jsonl`) };
+}
+
 /** Cursor: per-project `agent-transcripts/<uuid>/<uuid>.jsonl`. */
 function scanCursor(home: string): AgentSession[] {
   const sessions: AgentSession[] = [];
@@ -178,33 +209,8 @@ function scanCursor(home: string): AgentSession[] {
   return sessions;
 }
 
-/** How much of a rollout to read for its lineage: the `session_meta` fields naming a parent come
- * before the instructions Codex inlines into that first, long line. */
-const CODEX_META_PREFIX_BYTES = 16 * 1024;
-
 /** A rollout's name ends in its thread id: `rollout-<time>-<uuid>`. */
 const ROLLOUT_THREAD_ID = /-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
-
-/** The thread that spawned a Codex subagent rollout (`thread_source: "subagent"`, with
- * `parent_thread_id` in its `session_meta`); null for any other rollout, forks included. */
-function codexParentThread(path: string): string | null {
-  let fd: number | undefined;
-  try {
-    fd = openSync(path, "r");
-    const buffer = Buffer.alloc(CODEX_META_PREFIX_BYTES);
-    const read = readSync(fd, buffer, 0, buffer.length, 0);
-    const head = buffer.toString("utf8", 0, read).split("\n", 1)[0];
-    if (!head.includes('"type":"session_meta"')) return null;
-    if (!head.includes('"thread_source":"subagent"') && !head.includes('"source":{"subagent"')) {
-      return null;
-    }
-    return /"parent_thread_id":"([^"]+)"/.exec(head)?.[1] ?? null;
-  } catch {
-    return null;
-  } finally {
-    if (fd !== undefined) closeSync(fd);
-  }
-}
 
 /** Codex: `sessions/<yyyy>/<mm>/<dd>/rollout-*.jsonl`, three fixed levels, plus the rollouts it
  * archived, flat in `archived_sessions/`. A subagent's rollout names its parent's rollout, the
@@ -241,8 +247,10 @@ function scanCodex(home: string, env: NodeJS.ProcessEnv, since?: Date): AgentSes
   const cutoff = since?.toISOString();
   for (const session of sessions) {
     if (cutoff !== undefined && session.updated < cutoff) continue;
-    const parent = codexParentThread(session.path);
-    if (parent) session.parentId = rolloutOfThread.get(parent.toLowerCase()) ?? parent;
+    // Forks are not children: they live on after the session they came from (sessions/lineage.ts
+    // follows them where it matters).
+    const origin = codexOrigin(session.path);
+    if (origin?.subagent) session.parentId = rolloutOfThread.get(origin.thread) ?? origin.thread;
   }
   return sessions;
 }
@@ -390,8 +398,9 @@ function piSessionDirSetting(agentDir: string, home: string): string | null {
 /** pi: `<agent dir>/sessions/--<cwd>--/<timestamp>_<id>.jsonl`, under `~/.pi/agent` and under
  * PI_CODING_AGENT_DIR (both, as for Claude Code: a sync another agent's hook started does not
  * have the variable), plus the flat folder a session-dir override writes straight into:
- * PI_CODING_AGENT_SESSION_DIR, or the `sessionDir` setting. */
-function scanPi(home: string, env: NodeJS.ProcessEnv): AgentSession[] {
+ * PI_CODING_AGENT_SESSION_DIR, or the `sessionDir` setting. Each transcript once, by path: an
+ * override may point into a folder the default layout lists too. */
+function piTranscripts(home: string, env: NodeJS.ProcessEnv): Map<string, string | undefined> {
   const agentDirs = new Set([join(home, ".pi", "agent")]);
   const relocated = piPath(env.PI_CODING_AGENT_DIR, home);
   if (relocated) agentDirs.add(relocated);
@@ -403,12 +412,10 @@ function scanPi(home: string, env: NodeJS.ProcessEnv): AgentSession[] {
     if (setting) flatDirs.add(setting);
   }
 
-  // By path: an override may point into a folder the default layout lists too.
-  const sessions = new Map<string, AgentSession>();
+  /** Transcript path -> its per-directory folder (the project), when it has one. */
+  const transcripts = new Map<string, string | undefined>();
   const add = (path: string, name: string, project?: string) => {
-    if (!name.endsWith(".jsonl") || sessions.has(path)) return;
-    const session = piSession(path, project);
-    if (session) sessions.set(path, session);
+    if (name.endsWith(".jsonl") && !transcripts.has(path)) transcripts.set(path, project);
   };
   for (const agentDir of agentDirs) {
     for (const project of listDir(join(agentDir, "sessions"))) {
@@ -421,7 +428,31 @@ function scanPi(home: string, env: NodeJS.ProcessEnv): AgentSession[] {
   for (const dir of flatDirs) {
     for (const entry of listDir(dir)) if (!entry.isDir) add(entry.path, entry.name);
   }
-  return [...sessions.values()];
+  return transcripts;
+}
+
+function scanPi(home: string, env: NodeJS.ProcessEnv): AgentSession[] {
+  const sessions: AgentSession[] = [];
+  for (const [path, project] of piTranscripts(home, env)) {
+    const session = piSession(path, project);
+    if (session) sessions.push(session);
+  }
+  return sessions;
+}
+
+/** One pi session, as the scan would report it, found by its id (which pi's extension names) in
+ * its transcript's file name: null when no transcript there is named for it. */
+export function piSessionById(
+  id: string,
+  options: Pick<ScanSessionsOptions, "homeDir" | "env"> = {},
+): AgentSession | null {
+  for (const [path, project] of piTranscripts(
+    options.homeDir ?? homedir(),
+    options.env ?? process.env,
+  )) {
+    if (piSessionIdOfName(path) === id) return piSession(path, project, id);
+  }
+  return null;
 }
 
 /** One opencode session, as the scan would report it, read by its id (which opencode's plugin

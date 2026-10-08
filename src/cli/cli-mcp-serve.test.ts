@@ -649,6 +649,52 @@ describe("the session a tool call belongs to", () => {
     expect(text).toContain("ran while its agent was incognito");
   });
 
+  it("answers calls from a fork, branch or subagent of such a session, which no sync has settled", async () => {
+    const day = join(home, ".codex", "sessions", "2026", "10", "05");
+    codexRollout('{"type":"session_meta"}\n');
+    const forkThread = "01a10e60-f000-7590-875d-37ca506279ac";
+    writeFile(
+      join(day, `rollout-2026-10-05T17-00-00-${forkThread}.jsonl`),
+      `${JSON.stringify({ type: "session_meta", payload: { id: forkThread, forked_from_id: codexThread } })}\n`,
+    );
+    const childThread = "01a10e60-f111-7590-875d-37ca506279ac";
+    writeFile(
+      join(day, `rollout-2026-10-05T17-10-00-${childThread}.jsonl`),
+      `${JSON.stringify({ type: "session_meta", payload: { id: childThread, parent_thread_id: codexThread, thread_source: "subagent" } })}\n`,
+    );
+    writeFile(join(home, ".claude", "projects", "-w", "s-orig.jsonl"), "{}\n");
+    writeFile(
+      join(home, ".claude", "projects", "-w", "s-branch.jsonl"),
+      `${JSON.stringify({ type: "user", sessionId: "s-branch", forkedFrom: { sessionId: "s-orig" } })}\n`,
+    );
+    const sealed = {
+      updated: "2026-10-05T16:30:00.000Z",
+      outcome: "incognito" as const,
+      at: "2026-10-05T16:40:00.000Z",
+      cli_version: "0.67.0",
+      by_agent: true as const,
+    };
+    saveSyncState({
+      ...emptySyncState(),
+      sessions: { [`codex/${rolloutStem}`]: sealed, "claude/s-orig": sealed },
+    });
+
+    await serve(
+      [...HANDSHAKE, search(codexMeta(forkThread), 2), search(codexMeta(childThread), 3)],
+      "--client",
+      "codex",
+    );
+    vi.stubEnv("CLAUDE_CODE_SESSION_ID", "s-branch");
+    await serve([...HANDSHAKE, search({}, 4)], "--client", "claude-code");
+
+    expect(relayedCalls()).toEqual([]);
+    for (const id of [2, 3, 4]) {
+      expect(replies().find((r) => r.id === id)?.result.content[0].text).toContain(
+        "ran while its agent was incognito",
+      );
+    }
+  });
+
   it("never names the Claude Code session another agent was started from", async () => {
     // pi (or any agent) run from a Claude Code shell inherits CLAUDE_CODE_SESSION_ID; a call from
     // an entry of its own that names no session is not that Claude Code session's.

@@ -17,9 +17,16 @@ const THREAD_ID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 const PARENT_THREAD = new RegExp(`"parent_thread_id":"(${THREAD_ID})"`, "i");
 const FORKED_FROM = new RegExp(`"forked_from_id":"(${THREAD_ID})"`, "i");
 
+/** Where a rollout comes from: the thread it descends from, and whether it is that thread's
+ * subagent (`thread_source: "subagent"`) rather than a fork or other continuation of it. */
+export interface CodexOrigin {
+  thread: string;
+  subagent: boolean;
+}
+
 /** The thread a rollout descends from: a subagent's parent, else a fork's source; null for a
  * session of its own or a file this cannot read. */
-function originThread(path: string): string | null {
+export function codexOrigin(path: string): CodexOrigin | null {
   let fd: number | undefined;
   try {
     fd = openSync(path, "r");
@@ -28,7 +35,10 @@ function originThread(path: string): string | null {
     const head = buffer.toString("utf8", 0, read).split("\n", 1)[0];
     if (!head.includes('"type":"session_meta"')) return null;
     const thread = PARENT_THREAD.exec(head)?.[1] ?? FORKED_FROM.exec(head)?.[1];
-    return thread ? thread.toLowerCase() : null;
+    if (!thread) return null;
+    const subagent =
+      head.includes('"thread_source":"subagent"') || head.includes('"source":{"subagent"');
+    return { thread: thread.toLowerCase(), subagent };
   } catch {
     return null;
   } finally {
@@ -63,7 +73,7 @@ function isRolloutOf(thread: string, name: string): boolean {
 
 /** The rollout of `thread`: beside `near` first (a subagent and its parent usually share a day),
  * then anywhere under the same Codex home. */
-function rolloutOfThread(thread: string, near: string): string | null {
+export function codexRolloutNear(thread: string, near: string): string | null {
   const besides = listDir(dirname(near)).find(
     (entry) => !entry.isDir && isRolloutOf(thread, entry.name),
   );
@@ -96,9 +106,9 @@ export function* codexAncestorRollouts(path: string): Generator<string> {
   const seen = new Set([path]);
   let current = path;
   for (let depth = 0; depth < MAX_DEPTH; depth++) {
-    const thread = originThread(current);
-    if (thread === null) return;
-    const origin = rolloutOfThread(thread, current);
+    const thread = codexOrigin(current)?.thread;
+    if (thread === undefined) return;
+    const origin = codexRolloutNear(thread, current);
     if (origin === null || seen.has(origin)) return;
     seen.add(origin);
     yield origin;

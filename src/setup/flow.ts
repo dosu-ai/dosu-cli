@@ -23,12 +23,12 @@ import { getIncognitoAgent, installedIncognitoCommands } from "../incognito/agen
 import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { refreshConfiguredProviders } from "../mcp/refresh";
+import { sessionLineage } from "../sessions/lineage";
 import { getStatuslineAgent, StatuslineConflictError } from "../statusline/agents";
 import { spawnDetachedSelf } from "../sync/detach";
 import {
   isAgentIncognito,
   isShippingEnabled,
-  lineageIn,
   loadSyncState,
   skipBacklog,
   unsettledSessions,
@@ -394,7 +394,7 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
   // Subagents' transcripts go (or are skipped) with their sessions; the offer counts sessions,
   // and none of an agent in incognito, which never ship (declining settles them as its switch
   // would, too).
-  const lineage = lineageIn(outcome.sessions);
+  const lineage = sessionLineage(outcome.sessions);
   const n = withoutSubagents(backlog).filter(
     (session) => !isAgentIncognito(state, session, lineage),
   ).length;

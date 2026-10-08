@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { sessionLineage } from "../sessions/lineage";
 import type { AgentSession } from "../sessions/scan";
 import {
   agentIncognitoEntry,
@@ -17,7 +18,6 @@ import {
   type LedgerEntry,
   leaveIncognito,
   ledgerStamp,
-  lineageIn,
   loadSyncState,
   outcomeCounts,
   pruneLedger,
@@ -849,7 +849,7 @@ describe("isAgentIncognito", () => {
     it("holds further down, through the scan or the ledger", () => {
       expect(isAgentIncognito({ sessions: off }, grandchild)).toBe(false);
       expect(
-        isAgentIncognito({ sessions: off }, grandchild, lineageIn([root, child, grandchild])),
+        isAgentIncognito({ sessions: off }, grandchild, sessionLineage([root, child, grandchild])),
       ).toBe(true);
       const recorded = {
         ...off,
@@ -860,10 +860,12 @@ describe("isAgentIncognito", () => {
 
     it("does not hold through a /dosu-incognito session, and ends on a cycle", () => {
       const marked = { "cursor/root": entry({ outcome: "incognito" }) };
-      expect(isAgentIncognito({ sessions: marked }, child, lineageIn([root, child]))).toBe(false);
+      expect(isAgentIncognito({ sessions: marked }, child, sessionLineage([root, child]))).toBe(
+        false,
+      );
       const loop = session({ harness: "cursor", id: "a", parentId: "b" });
       const back = session({ harness: "cursor", id: "b", parentId: "a" });
-      expect(isAgentIncognito({ sessions: {} }, loop, lineageIn([loop, back]))).toBe(false);
+      expect(isAgentIncognito({ sessions: {} }, loop, sessionLineage([loop, back]))).toBe(false);
     });
   });
 });

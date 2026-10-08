@@ -372,6 +372,68 @@ describe("knowledge sync of an incognito Codex session's descendants", () => {
   });
 });
 
+describe("knowledge sync of what descends from a session its agent's switch settled", () => {
+  it("keeps a Codex fork or subagent made once the switch is off out, though no marker says so", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    const sourceId = "01a0ff74-a68d-7ad0-83ee-80cf02c29b14";
+    const source = `rollout-2026-10-02T18-50-30-${sourceId}`;
+    codexRollout(source, alpha, 30, {}, "SECRET incognito work");
+    await dosu("incognito", "on", "codex");
+    await dosu("sync");
+    await dosu("incognito", "off", "codex");
+    expect(loadSyncState().sessions[`codex/${source}`]?.by_agent).toBe(true);
+
+    // Made after `off`: a fork (Codex /fork) and a subagent of the session, and a fork of that.
+    const fork = "rollout-2026-10-02T18-56-30-01a0ff7a-277c-74f1-b64b-59ffa01a7d14";
+    codexRollout(fork, alpha, 20, { forked_from_id: sourceId, thread_source: "user" });
+    const subagentId = "01a0ff74-c903-73c2-b6b1-7546b84710ff";
+    const subagent = `rollout-2026-10-02T18-50-38-${subagentId}`;
+    codexRollout(subagent, alpha, 20, { parent_thread_id: sourceId, thread_source: "subagent" });
+    const forkOfSubagent = "rollout-2026-10-02T19-00-00-01a0ff7d-0000-7000-8000-000000000001";
+    codexRollout(forkOfSubagent, alpha, 20, { forked_from_id: subagentId });
+    const other = "rollout-2026-10-02T19-10-00-01a0ff86-0000-7000-8000-000000000002";
+    codexRollout(other, alpha, 20);
+
+    await dosu("sync");
+
+    expect(posted().map((p) => p.metadata.session_id)).toEqual([other]);
+    const sessions = loadSyncState().sessions;
+    for (const key of [fork, subagent, forkOfSubagent]) {
+      expect(sessions[`codex/${key}`]).toMatchObject({ outcome: "incognito", by_agent: true });
+    }
+  });
+
+  it("keeps a Claude Code branch of it out, which copies its history under a new id", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    const original = claudeSession("orig", exchange(1, alpha), 30);
+    await dosu("incognito", "on", "claude");
+    await dosu("sync");
+    await dosu("incognito", "off", "claude");
+    expect(loadSyncState().sessions["claude/orig"]?.by_agent).toBe(true);
+
+    // `/branch` (or `claude -r orig --fork-session`): every record of the session, re-stamped with
+    // the branch's id and tagged with the one it came from, then the branch's own turns.
+    const copied = readFileSync(original, "utf-8")
+      .trim()
+      .split("\n")
+      .map((line) => {
+        const record = JSON.parse(line);
+        const forkedFrom = { sessionId: "orig", messageUuid: record.uuid };
+        return JSON.stringify({ ...record, sessionId: "branch", forkedFrom });
+      });
+    claudeSession("branch", `${copied.join("\n")}\n${exchange(2, alpha)}`, 20);
+    claudeSession("other", exchange(3, alpha), 20);
+
+    await dosu("sync");
+
+    expect(posted().map((p) => p.metadata.session_id)).toEqual(["other"]);
+    expect(loadSyncState().sessions["claude/branch"]).toMatchObject({
+      outcome: "incognito",
+      by_agent: true,
+    });
+  });
+});
+
 describe("knowledge sync of Codex subagents, ended", () => {
   it("ships a session's subagents with it: Codex ends them with the session it names", async () => {
     const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
