@@ -39,6 +39,7 @@ import {
 import { getAccessTokenEmail, getAccessTokenUserID } from "../config/identity";
 import { createLogFollower } from "../debug/follow";
 import { logger } from "../debug/logger";
+import { refreshEnabledHooks } from "../hooks/agents";
 import { allProviders, getProvider, type Provider } from "../mcp/providers";
 import { configuredProviders, refreshConfiguredProviders } from "../mcp/refresh";
 import { browserFallbackHint } from "../setup/styles";
@@ -532,7 +533,9 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
 
   mcp
     .command("refresh")
-    .description("Rewrite the Dosu MCP entry in every configured AI tool from the current setup")
+    .description(
+      "Rewrite the Dosu MCP entry in every configured AI tool and re-apply agents' enabled hooks",
+    )
     .action(() => {
       const cfg = loadConfig();
       if (!canRefreshMcp(cfg)) {
@@ -545,6 +548,9 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
       }
       console.log("Refreshing Dosu MCP config for configured AI tools...\n");
       const result = refreshConfiguredProviders(cfg);
+      // The marker tells the automatic post-upgrade check this release's refresh is done, hooks
+      // included, so the hooks have to be re-applied before it is written.
+      refreshEnabledHooks();
       writeMcpRefreshCache({ version: VERSION });
       for (const provider of result.updated) {
         console.log(`  ✓ ${provider.name()}`);

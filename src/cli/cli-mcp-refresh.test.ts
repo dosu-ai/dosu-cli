@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   configuredProviders: vi.fn(),
   refreshConfiguredProviders: vi.fn(),
+  refreshEnabledHooks: vi.fn(),
   writeMcpRefreshCache: vi.fn(),
 }));
 
@@ -24,6 +25,10 @@ vi.mock("../version/mcp-refresh-check", async (importOriginal) => ({
 vi.mock("../mcp/refresh", () => ({
   configuredProviders: mocks.configuredProviders,
   refreshConfiguredProviders: mocks.refreshConfiguredProviders,
+}));
+vi.mock("../hooks/agents", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../hooks/agents")>()),
+  refreshEnabledHooks: mocks.refreshEnabledHooks,
 }));
 
 import { saveConfig } from "../config/config";
@@ -106,6 +111,18 @@ describe("dosu mcp refresh", () => {
     expect(output()).toContain("✓ Claude Code");
     expect(output()).toContain("Restart your AI agents");
     expect(process.exitCode).toBeUndefined();
+  });
+
+  it("re-applies enabled hooks before it records the version", async () => {
+    saveConfig(signedIn());
+
+    await runMcpRefresh();
+
+    // The automatic post-upgrade check skips hooks once the marker says this version is done.
+    expect(mocks.refreshEnabledHooks).toHaveBeenCalledOnce();
+    expect(mocks.refreshEnabledHooks.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.writeMcpRefreshCache.mock.invocationCallOrder[0],
+    );
   });
 
   it("reports failures per tool and exits non-zero", async () => {
