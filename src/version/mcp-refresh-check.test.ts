@@ -137,27 +137,22 @@ describe("canRefreshMcp", () => {
 describe("needsMcpRefresh", () => {
   it("lists the releases that changed the MCP entry", () => {
     expect(MCP_FORMAT_CHANGES).toContain("0.53.0");
-    // Claude Code entries gained alwaysLoad: true. Provisional: must equal the version this
-    // change actually ships in (re-check at merge/release time).
+    // Claude Code entries gained alwaysLoad: true.
     expect(MCP_FORMAT_CHANGES).toContain("0.62.0");
   });
 
-  it("moves installs onto the v2 memory MCP entry and back across 0.63.0", () => {
-    expect(MCP_FORMAT_CHANGES).toContain("0.63.0");
-    // Onto the beta that first writes /v2/mcp, and from any later beta.
-    expect(needsMcpRefresh("0.62.1", "0.63.0-beta.1")).toBe(true);
-    expect(needsMcpRefresh(null, "0.63.0-beta.1")).toBe(true);
-    // Leaving the beta for an older stable release rewrites the entry back to /v1/mcp.
-    expect(needsMcpRefresh("0.63.0-beta.2", "0.62.1")).toBe(true);
-    // Beta to beta: the entry already has the v2 shape.
-    expect(needsMcpRefresh("0.63.0-beta.1", "0.63.0-beta.2")).toBe(false);
-  });
-
-  it("moves installs onto the local stdio proxy across 0.66.0", () => {
-    expect(MCP_FORMAT_CHANGES).toContain("0.66.0");
-    expect(needsMcpRefresh("0.65.1", "0.66.0")).toBe(true);
-    expect(needsMcpRefresh("0.63.2", "0.66.0-beta.1")).toBe(true);
-    expect(needsMcpRefresh("0.66.0-beta.1", "0.66.0-beta.2")).toBe(false);
+  it("moves every pre-memory-v2 install onto the v2 proxy entry across 0.67.0", () => {
+    expect(MCP_FORMAT_CHANGES).toContain("0.67.0");
+    // Stable 0.63.0 through 0.66.1 shipped without it; 0.66.x, the latest it replaces, included.
+    for (const previous of ["0.62.1", "0.63.0", "0.64.2", "0.65.1", "0.66.0", "0.66.1", null]) {
+      expect(needsMcpRefresh(previous, "0.67.0")).toBe(true);
+    }
+    // A prerelease compares as 0.67.0: onto the first beta crosses it...
+    expect(needsMcpRefresh("0.66.1", "0.67.0-beta.1")).toBe(true);
+    // ...beta to beta, graduating, or a later patch does not.
+    expect(needsMcpRefresh("0.67.0-beta.1", "0.67.0-beta.2")).toBe(false);
+    expect(needsMcpRefresh("0.67.0-beta.3", "0.67.0")).toBe(false);
+    expect(needsMcpRefresh("0.67.0", "0.67.1")).toBe(false);
   });
 
   it("refreshes every pre-alwaysLoad install when it upgrades onto the Claude Code change", () => {

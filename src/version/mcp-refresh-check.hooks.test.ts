@@ -7,11 +7,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-// The release that moved every entry to the local proxy, whose hooks name each memory call's
-// session; keep in step with MCP_FORMAT_CHANGES.
+// The release that moved every entry to the local proxy (0.67.0), whose hooks name each memory
+// call's session; keep in step with MCP_FORMAT_CHANGES.
 vi.mock("./version", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./version")>()),
-  VERSION: "0.66.0",
+  VERSION: "0.67.0",
 }));
 vi.mock("../debug/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), init: vi.fn() },
@@ -61,8 +61,9 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-/** Claude Code and OpenCode with the hooks a 0.65 release installed: no PreToolUse guard on the
- * memory tools, and an OpenCode plugin of that release's making. Cursor is here, its hooks off. */
+/** Claude Code and OpenCode with the hooks a pre-proxy release (0.66.1 or earlier) installed: no
+ * PreToolUse guard on the memory tools, and an OpenCode plugin of that release's making. Cursor
+ * is here, its hooks off. */
 function seedEarlierHooks(): void {
   mkdirSync(join(home, ".claude"), { recursive: true });
   mkdirSync(join(home, ".config", "opencode"), { recursive: true });
@@ -72,12 +73,12 @@ function seedEarlierHooks(): void {
   const config = settings();
   delete config.hooks.PreToolUse;
   writeFileSync(settingsPath(), JSON.stringify(config));
-  writeFileSync(opencodePlugin(), "// dosu-opencode-plugin, as 0.65.1 wrote it\n");
+  writeFileSync(opencodePlugin(), "// dosu-opencode-plugin, as a pre-proxy build wrote it\n");
   mkdirSync(getConfigDir(), { recursive: true });
-  writeFileSync(join(getConfigDir(), "mcp-refresh.json"), JSON.stringify({ version: "0.65.1" }));
+  writeFileSync(join(getConfigDir(), "mcp-refresh.json"), JSON.stringify({ version: "0.66.1" }));
 }
 
-it("re-applies the hooks of every agent that has them on, after an upgrade across 0.66.0", () => {
+it("re-applies the hooks of every agent that has them on, after an upgrade across 0.67.0", () => {
   seedEarlierHooks();
 
   checkForMcpRefresh();
@@ -87,12 +88,12 @@ it("re-applies the hooks of every agent that has them on, after an upgrade acros
   ]);
   expect(readFileSync(opencodePlugin(), "utf-8")).toContain('"shell.env"');
   expect(existsSync(join(home, ".cursor", "hooks.json"))).toBe(false);
-  expect(readMcpRefreshCache()).toEqual({ version: "0.66.0" });
+  expect(readMcpRefreshCache()).toEqual({ version: "0.67.0" });
 });
 
 it("leaves the hooks alone once this release already refreshed them", () => {
   seedEarlierHooks();
-  writeFileSync(join(getConfigDir(), "mcp-refresh.json"), JSON.stringify({ version: "0.66.0" }));
+  writeFileSync(join(getConfigDir(), "mcp-refresh.json"), JSON.stringify({ version: "0.67.0" }));
 
   checkForMcpRefresh();
 
@@ -102,7 +103,7 @@ it("leaves the hooks alone once this release already refreshed them", () => {
 it("re-applies them when `dosu upgrade` finishes without a terminal, too", async () => {
   seedEarlierHooks();
 
-  await finishUpgrade("0.65.1", { interactive: false });
+  await finishUpgrade("0.66.1", { interactive: false });
 
   expect(settings().hooks.PreToolUse).toHaveLength(1);
   expect(readFileSync(opencodePlugin(), "utf-8")).toContain('"shell.env"');

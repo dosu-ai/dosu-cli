@@ -30,15 +30,14 @@ export const MCP_FORMAT_CHANGES: readonly string[] = [
   // Claude Code entries gained `alwaysLoad: true`. This must be the first release that ships
   // it: a lower number skips upgrades from the releases in between, a higher one delays them.
   "0.62.0",
-  // Cloud entries moved from /v1/mcp to the v2 memory surface (/v2/mcp). Ships first on the
-  // beta channel as 0.63.0-beta.N, which compares as 0.63.0 here. If main cuts a stable
-  // 0.63.0 before this graduates, raise it to the first stable release that includes it.
-  "0.63.0",
-  // Every provider's entry became a stdio command running the local proxy, `dosu mcp serve`, in
-  // place of a remote-HTTP or `npx mcp-remote` entry, and the hooks began naming each memory
-  // call's session to it (Claude Code's PreToolUse guard, the OpenCode plugin). The first stable
-  // release after 0.65.1 that includes it; raise it if a release ships before this does.
-  "0.66.0",
+  // Cloud entries moved from /v1/mcp to the v2 memory surface (/v2/mcp), and every provider's
+  // entry became a stdio command running the local proxy, `dosu mcp serve`, in place of a
+  // remote-HTTP or `npx mcp-remote` entry; the hooks began naming each memory call's session to
+  // it (Claude Code's PreToolUse guard, the OpenCode plugin). Stable 0.63.0 through 0.66.1
+  // shipped without any of it, so, as with 0.62.0, this must be the first stable release that
+  // does. A prerelease of it (0.67.0-beta.N) compares as 0.67.0 here: moving onto one crosses
+  // this, and graduating from one to 0.67.0 does not. Raise it if main cuts 0.67.0 first.
+  "0.67.0",
 ];
 
 /** Whether moving from `previous` (the version that last wrote the entries; `null` when
