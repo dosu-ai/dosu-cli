@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sessionLineage } from "../sessions/lineage";
 import type { AgentSession } from "../sessions/scan";
 import {
@@ -406,6 +406,25 @@ describe("pruneLedger", () => {
     pruneLedger(state, new Date("2026-08-01T00:00:00.000Z"), new Set(["claude/resumed"]));
     expect(Object.keys(state.sessions)).toEqual(["claude/resumed"]);
   });
+
+  it("keeps what the agents' switch settled while its transcript is on disk, however old", () => {
+    // Nothing in the transcript records the switch: a resume months later must not ship it.
+    const off = (path?: string) =>
+      entry({ updated: "2026-07-01T00:00:00.000Z", outcome: "incognito", by_agent: true, path });
+    const state: SyncState = {
+      ...emptySyncState(),
+      sessions: {
+        "codex/kept": off("/sessions/kept.jsonl"),
+        "claude/gone": off("/sessions/gone.jsonl"),
+        "cursor/unknown": off(),
+        "claude/marker": entry({ updated: "2026-07-01T00:00:00.000Z", outcome: "incognito" }),
+      },
+    };
+    pruneLedger(state, new Date("2026-08-01T00:00:00.000Z"), new Set(), (path) =>
+      path.endsWith("kept.jsonl"),
+    );
+    expect(Object.keys(state.sessions).sort()).toEqual(["codex/kept", "cursor/unknown"]);
+  });
 });
 
 describe("ledger views", () => {
@@ -634,6 +653,7 @@ describe("resetSyncState", () => {
         paused: true,
         ship_transcripts: false,
         incognito_agents: ["cursor"],
+        incognito_since: { cursor: "2026-09-01T00:00:00.000Z" },
       },
       configDir,
     );
@@ -652,10 +672,17 @@ describe("resetSyncState", () => {
     expect(state.paused).toBe(true);
     expect(state.ship_transcripts).toBe(false);
     expect(state.incognito_agents).toEqual(["cursor"]);
+    expect(state.incognito_since).toEqual({ cursor: "2026-09-01T00:00:00.000Z" });
   });
 
   it("keeps the sessions an agent's incognito switch settled, trimmed to the answer", () => {
-    const off = entry({ outcome: "incognito", by_agent: true, parent: "p", message: "m" });
+    const off = entry({
+      outcome: "incognito",
+      by_agent: true,
+      parent: "p",
+      message: "m",
+      path: "/x/off.jsonl",
+    });
     saveSyncState(
       {
         ...emptySyncState(),
@@ -795,6 +822,27 @@ describe("setAgentsIncognito", () => {
     expect(loadSyncState(configDir).incognito_agents).toEqual(["cursor"]);
   });
 
+  it("records when each agent went in, keeping the first time while it stays in", () => {
+    writeRaw({
+      ...emptySyncState(),
+      incognito_agents: ["cursor"],
+      incognito_since: { cursor: "2026-09-01T00:00:00.000Z", codex: "2026-09-02T00:00:00.000Z" },
+    });
+    // Only the listed agents' times are read, and only times.
+    expect(loadSyncState(configDir).incognito_since).toEqual({
+      cursor: "2026-09-01T00:00:00.000Z",
+    });
+
+    const before = Date.now();
+    setAgentsIncognito(["cursor", "claude"], true, configDir);
+    const since = loadSyncState(configDir).incognito_since ?? {};
+    expect(since.cursor).toBe("2026-09-01T00:00:00.000Z");
+    expect(Date.parse(since.claude)).toBeGreaterThanOrEqual(before);
+
+    setAgentsIncognito(["cursor", "claude"], false, configDir);
+    expect(loadSyncState(configDir).incognito_since).toBeUndefined();
+  });
+
   it("drops the key once no agent is incognito, and keeps the rest of the state", () => {
     saveSyncState(
       { ...emptySyncState(), sessions: { "claude/abc": entry() }, total_shipped: 3 },
@@ -879,11 +927,14 @@ describe("leaveIncognito", () => {
     const grown = cursor("grown", { updated: "2026-08-25T11:30:00.000Z" });
     const unsettled = cursor("unsettled");
     const subagent = cursor("sub", { parentId: "unsettled" });
+    // Quiet since before the agent went in: it never ran while incognito.
+    const before = cursor("before", { updated: "2026-08-25T09:00:00.000Z" });
     const other = session({ id: "claude-1" });
     saveSyncState(
       {
         ...emptySyncState(),
         incognito_agents: ["claude", "cursor"],
+        incognito_since: { cursor: "2026-08-25T10:00:00.000Z" },
         sessions: {
           "cursor/shipped": entry({ task_id: "t1" }),
           "cursor/grown": entry({ task_id: "t2", records: 3, prefix_sha256: "h" }),
@@ -891,17 +942,22 @@ describe("leaveIncognito", () => {
       },
       configDir,
     );
+    const listSessions = vi.fn((_state: SyncState, _since: Date) => [
+      shipped,
+      grown,
+      unsettled,
+      subagent,
+      before,
+      other,
+    ]);
 
-    leaveIncognito(
-      ["cursor"],
-      () => [shipped, grown, unsettled, subagent, other],
-      VERSION,
-      NOW,
-      configDir,
-    );
+    leaveIncognito(["cursor"], listSessions, VERSION, NOW, configDir);
 
+    // Listed from when the agent went in.
+    expect(listSessions.mock.calls[0][1]).toEqual(new Date("2026-08-25T10:00:00.000Z"));
     const state = loadSyncState(configDir);
     expect(state.incognito_agents).toEqual(["claude"]);
+    expect(state.incognito_since).toBeUndefined();
     const at = NOW.toISOString();
     expect(state.sessions).toEqual({
       // Settled for what it holds now: it shipped before the switch went on.
@@ -911,6 +967,29 @@ describe("leaveIncognito", () => {
       "cursor/unsettled": agentIncognitoEntry(unsettled, at, VERSION),
       "cursor/sub": agentIncognitoEntry(subagent, at, VERSION),
     });
+  });
+
+  it("goes back past the scan window to when the agent went in, or to 0.66's switch", () => {
+    // In incognito for two months with nothing settling its sessions (shipping off, say).
+    const old = cursor("old", { updated: "2026-07-01T00:00:00.000Z" });
+    saveSyncState(
+      {
+        ...emptySyncState(),
+        incognito_agents: ["claude", "cursor"],
+        incognito_since: { cursor: "2026-06-25T00:00:00.000Z" },
+      },
+      configDir,
+    );
+    const listSessions = vi.fn((_state: SyncState, _since: Date) => [
+      old,
+      session({ id: "c1", updated: "2026-10-04T00:00:00Z" }),
+    ]);
+
+    leaveIncognito(["claude", "cursor"], listSessions, VERSION, NOW, configDir);
+
+    expect(listSessions.mock.calls[0][1]).toEqual(new Date("2026-06-25T00:00:00.000Z"));
+    // Claude Code went in with 0.66, which kept no time: nothing before that ran while it was.
+    expect(Object.keys(loadSyncState(configDir).sessions)).toEqual(["cursor/old"]);
   });
 
   it("seals nothing of an agent that was not incognito", () => {
@@ -951,7 +1030,7 @@ describe("leaveIncognito", () => {
 
 describe("agentIncognitoEntry", () => {
   const s1 = (overrides: Partial<AgentSession> = {}) =>
-    session({ harness: "cursor", id: "c1", ...overrides });
+    session({ harness: "cursor", id: "c1", path: "/tmp/c1.jsonl", ...overrides });
 
   it("settles the session for good, with no shipped prefix", () => {
     const at = NOW.toISOString();
@@ -961,6 +1040,8 @@ describe("agentIncognitoEntry", () => {
       at,
       cli_version: VERSION,
       by_agent: true,
+      // Where the transcript is: the entry is kept while it is (pruneLedger).
+      path: "/tmp/c1.jsonl",
     });
     expect(agentIncognitoEntry(s1({ parentId: "p" }), at, VERSION).parent).toBe("p");
   });

@@ -600,6 +600,7 @@ describe("runKnowledgeSync shipping", () => {
         at: NOW.toISOString(),
         cli_version: CLI,
         by_agent: true,
+        path: cursor(40).path,
       });
       expect(ledger["cursor/c-41"]).toMatchObject({ by_agent: true, parent: "c-40" });
       expect(ledger["cursor/c-1"]).toBeUndefined();
@@ -704,11 +705,13 @@ describe("runKnowledgeSync shipping", () => {
 
       expect(ship).not.toHaveBeenCalled();
       expect(outcome.status).toBe("nothing-new");
-      // Only the entry follows the session, so the ledger keeps it while the session is in use.
+      // Only the entry follows the session, and where its transcript is, which keeps it in the
+      // ledger (an entry from before it recorded one learns it here).
       expect(saved).toHaveLength(1);
       expect(saved[0].sessions["cursor/c-40"]).toEqual({
         ...before["cursor/c-40"],
         updated: resumed.updated,
+        path: resumed.path,
       });
       const logged = mockLoggerDebug.mock.calls.map((c) => c.join(" ")).join("\n");
       expect(logged).toContain("1 sessions they settled changed; still not shipped");
@@ -721,7 +724,7 @@ describe("runKnowledgeSync shipping", () => {
         loadState: () =>
           state({
             sessions: {
-              ...settled(quiet, { outcome: "incognito", by_agent: true }),
+              ...settled(quiet, { outcome: "incognito", by_agent: true, path: quiet.path }),
               // A /dosu-incognito session that changed is the ship step's to decide again.
               ...settled(marked, { outcome: "incognito", updated: session(400).updated }),
             },

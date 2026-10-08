@@ -32,7 +32,12 @@ function switchAction(incognito: boolean) {
     try {
       if (incognito) setAgentsIncognito(agentIds, true);
       // Sealing reads the sessions on disk; when that fails nothing is saved (fail closed).
-      else leaveIncognito(agentIds, (state) => scanWindowSessions(state), VERSION);
+      else
+        leaveIncognito(
+          agentIds,
+          (state, since) => scanWindowSessions(state, new Date(), since),
+          VERSION,
+        );
     } catch (err) {
       // Nothing was saved: say which agents that leaves in incognito.
       const listed = new Set(loadSyncState().incognito_agents ?? []);

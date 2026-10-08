@@ -36,12 +36,14 @@ export interface SessionBacklog {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Every session in the sync's own scan window, plus the transcripts outside the scanned roots
- * that the sync remembers and would ship too. */
+ * that the sync remembers and would ship too; back to `from` instead when that is longer ago. */
 export function scanWindowSessions(
   state: Pick<SyncState, "outside_sessions">,
   now: Date = new Date(),
+  from?: Date,
 ): AgentSession[] {
-  const since = new Date(now.getTime() - SCAN_WINDOW_DAYS * DAY_MS);
+  const window = now.getTime() - SCAN_WINDOW_DAYS * DAY_MS;
+  const since = new Date(Math.min(window, from?.getTime() ?? window));
   return withOutsideSessions(scanAgentSessions({ since }), [], state.outside_sessions ?? {}, since)
     .sessions;
 }

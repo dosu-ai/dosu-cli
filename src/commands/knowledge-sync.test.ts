@@ -434,6 +434,33 @@ describe("knowledge sync of what descends from a session its agent's switch sett
   });
 });
 
+describe("knowledge sync of a session its agent's switch settled, long after", () => {
+  it("still keeps it out when it is resumed months later, its entry kept all the while", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    const sealed = "rollout-2026-10-02T18-50-30-01a0ff74-a68d-7ad0-83ee-80cf02c29b14";
+    const path = codexRollout(sealed, alpha, 30, {}, "SECRET incognito work");
+    await dosu("incognito", "on", "codex");
+    await dosu("sync");
+    await dosu("incognito", "off", "codex");
+    // Then left alone for 40 days: past the scan window and the week of grace after it.
+    const longAgo = new Date(Date.now() - 40 * 24 * 60 * 60_000);
+    utimesSync(path, longAgo, longAgo);
+    const state = loadSyncState();
+    state.sessions[`codex/${sealed}`].updated = longAgo.toISOString();
+    saveSyncState(state);
+    // A sync that ships something else prunes the ledger.
+    claudeSession("other", exchange(1, alpha), 30);
+    await dosu("sync");
+    expect(loadSyncState().sessions[`codex/${sealed}`]?.by_agent).toBe(true);
+
+    appendFileSync(path, `${JSON.stringify({ type: "event_msg", payload: { type: "x" } })}\n`);
+    utimesSync(path, new Date(Date.now() - 10 * 60_000), new Date(Date.now() - 10 * 60_000));
+    await dosu("sync");
+
+    expect(posted().map((p) => p.metadata.session_id)).toEqual(["other"]);
+  });
+});
+
 describe("knowledge sync of Codex subagents, ended", () => {
   it("ships a session's subagents with it: Codex ends them with the session it names", async () => {
     const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");

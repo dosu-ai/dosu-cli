@@ -86,7 +86,8 @@ cap on the scan: listing is metadata only. Claude Code sessions are listed from 
 when the variable is set, `CLAUDE_CONFIG_DIR`. Codex sessions are listed from `sessions/` and
 `archived_sessions/` under `CODEX_HOME` (default `~/.codex`). Each run settles at most 20 sessions, oldest first;
 `--bootstrap` and `--flush` keep going until the backlog is drained. Entries are pruned a week after their session
-leaves the 30-day window.
+leaves the 30-day window, except those the per-agent incognito switch settled (see
+[Per-agent incognito](#per-agent-incognito)).
 
 | Outcome | Meaning |
 |---|---|
@@ -418,7 +419,8 @@ dosu knowledge incognito status [--json]
 ```
 
 `on` adds the agents' ids (their session harnesses) to `incognito_agents` in
-`knowledge-sync.json`, sorted; `off` removes them, and the key goes once the list is empty. While an
+`knowledge-sync.json`, sorted, and records when each went in under `incognito_since`; `off` removes
+them, and each key goes once it is empty. While an
 agent is listed, `dosu knowledge sync` sets its sessions and its subagents' transcripts aside before
 the repo scope, the gate log line ("N ready, M in flight") and the batch limit. Every one past the
 quiet period settles in the ledger as `incognito` with `by_agent: true`, whatever the scope and all
@@ -445,23 +447,28 @@ prefix (`records`, `prefix_sha256`), since nothing more of the session is ever s
   transcript leads to. It settles as `by_agent` in turn.
 - **Resumed sessions.** When a `by_agent` session's transcript changes, the sync re-stamps the
   entry's `updated` to the new mtime and ships nothing (`incognito agents: N sessions they settled
-  changed; still not shipped` in the debug log), so the entry ages out on the session's last use.
-  Pruning (entries a week past the 30-day window) also keeps every entry whose session the scan
-  still lists.
+  changed; still not shipped` in the debug log). The entry records where the transcript is
+  (`path`; OpenCode's database for an OpenCode session), and pruning keeps it for as long as that
+  is on disk, however long the session sits unused: a session resumed or forked months later stays
+  out. It goes once the transcript does (Claude Code's own cleanup, say).
 - **`off` seals first.** In the same load-modify-save that takes the agents out of the list, `off`
-  settles every session of theirs in the 30-day window that the ledger has no answer for its
-  current contents (no entry, or a pending one) as `incognito` with `by_agent`: those still inside
-  the quiet period, outside the repo scope, past a batch, or never synced (paused, backing off,
-  shipping off, signed out). A shipped session that grew while the agent was listed is sealed too,
-  so its incognito tail never ships. Only agents that were listed are sealed. If the scan fails,
-  nothing is saved: the agents stay incognito and `off` reports the error and exits 1.
+  settles every session of theirs active since the agent went in (`incognito_since`, which `on`
+  records; for a list carried over from 0.66, which kept no time, since 0.66.0's release) that the
+  ledger has no answer for its current contents (no entry, or a pending one) as `incognito` with
+  `by_agent`: those still inside the quiet period, outside the repo scope, past a batch, or never
+  synced (paused, backing off, shipping off, signed out), however long ago, past the 30-day window
+  too. A shipped session that grew while the agent was listed is sealed too, so its incognito tail
+  never ships; one that went quiet before the agent went in is left to ship. Only agents that were
+  listed are sealed. If the scan fails, nothing is saved: the agents stay incognito and `off`
+  reports the error and exits 1.
 - The Activity screen and `dosu knowledge sessions` set a listed agent's sessions aside as
   incognito: out of the queue, the still-open list and the subagent count.
 - Setup's backfill offer does not count a listed agent's sessions (the sync sets them aside before
   it reports a backlog), and `dosu knowledge skip-backlog` settles them as `by_agent` incognito
   rather than `skipped_by_user`.
-- The Activity screen's clear (`resetSyncState`) keeps the list and the `by_agent` entries, trimmed
-  to `updated`, `outcome`, `at`, `cli_version`, `by_agent` and `parent`.
+- The Activity screen's clear (`resetSyncState`) keeps the list, `incognito_since` and the
+  `by_agent` entries, trimmed to `updated`, `outcome`, `at`, `cli_version`, `by_agent`, `parent` and
+  `path`.
 - The status line shows `👻 Dosu incognito` in a listed agent, and in a session the switch settled
   once it is off (see [Status line](#status-line)).
 - `status` shows each agent's switch and whether its command is installed (`--json` rows: `agent`,

@@ -30,7 +30,7 @@ vi.mock("../sync/backlog", async (importOriginal) => {
 });
 
 import { piHookAgent } from "../hooks/pi";
-import { loadSyncState } from "../sync/state";
+import { emptySyncState, loadSyncState, saveSyncState } from "../sync/state";
 import { incognitoCommand } from "./knowledge-incognito";
 
 let home: string;
@@ -204,10 +204,17 @@ describe("knowledge incognito off", () => {
   });
 
   it("seals the sessions that ran while incognito, even ones no sync has settled", async () => {
-    await run("on", "claude");
+    // Claude Code went in two hours ago.
+    saveSyncState({
+      ...emptySyncState(),
+      incognito_agents: ["claude"],
+      incognito_since: { claude: new Date(Date.now() - 120 * 60 * 1000).toISOString() },
+    });
     // Still inside the quiet period, so no sync would have settled it yet.
     claudeSession("open-one");
     claudeSession("quiet-one", 60);
+    // Quiet since before it went in, and on the record.
+    claudeSession("before-on", 180);
 
     await run("off", "claude");
 
@@ -215,6 +222,7 @@ describe("knowledge incognito off", () => {
     const ledger = loadSyncState().sessions;
     expect(ledger["claude/open-one"]).toMatchObject({ outcome: "incognito", by_agent: true });
     expect(ledger["claude/quiet-one"]).toMatchObject({ outcome: "incognito", by_agent: true });
+    expect(ledger["claude/before-on"]).toBeUndefined();
   });
 
   it("seals nothing when the agent was not incognito", async () => {

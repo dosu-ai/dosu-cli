@@ -86,9 +86,13 @@ export interface LedgerEntry {
    * leaveIncognito), not by a marker in the transcript, which a later run could not find again.
    * So the entry is never pending: turning the switch off, resuming the session, or a newer CLI
    * never ships it, nor a subagent or fork of it (isAgentIncognito). Its `updated` follows the
-   * session's, so it stays in the ledger while the session is in use. It keeps no shipped prefix,
-   * since nothing of the session is ever sent after it. */
+   * session's, and it is kept for as long as its transcript is on disk, however long the session
+   * sits unused (pruneLedger): the session could be resumed or forked any time. It keeps no shipped
+   * prefix, since nothing of the session is ever sent after it. */
   by_agent?: true;
+  /** by_agent: where the session's transcript is (opencode: its database), which keeps the entry
+   * while it is there. */
+  path?: string;
 }
 
 /** One shipped session, for history views; derived from the ledger. */
@@ -118,7 +122,8 @@ interface SyncRun {
 
 export interface SyncState {
   schema_version: number;
-  /** The ledger, by `harness/id`. Entries age out once their session leaves the scan window. */
+  /** The ledger, by `harness/id`. Entries age out once their session leaves the scan window,
+   * except those an agent's incognito switch settled (LedgerEntry.by_agent). */
   sessions: Record<string, LedgerEntry>;
   last_attempt_at?: string;
   consecutive_failures: number;
@@ -149,6 +154,10 @@ export interface SyncState {
    * turning the switch off later does not ship it. Schema 1 (0.66) kept the same key at the top
    * level, so the list carries over, and it survives a schema this CLI cannot read. */
   incognito_agents?: string[];
+  /** When each agent in `incognito_agents` went in (ISO), as this CLI recorded it: `off` seals
+   * what ran since then, however long ago (leaveIncognito). An agent listed without one (carried
+   * over from 0.66) goes back as far as the scan window. */
+  incognito_since?: Record<string, string>;
 }
 
 /** Whether finished sessions are shipped to Dosu memory: on unless the user opted out. */
@@ -220,6 +229,7 @@ function parseEntry(value: unknown): LedgerEntry | null {
     ...optionalString("parent", value.parent),
     ...(value.seeded === true ? { seeded: true as const } : {}),
     ...(value.by_agent === true ? { by_agent: true as const } : {}),
+    ...optionalString("path", value.path),
   };
 }
 
@@ -245,14 +255,25 @@ function parseCommon(raw: Record<string, unknown>): Omit<SyncState, "schema_vers
     ...(raw.ship_transcripts === false ? { ship_transcripts: false as const } : {}),
     ...(outside ? { outside_sessions: outside } : {}),
     // Schema 1 (0.66's per-agent switch) kept it at the top level too, so it survives migration.
-    ...agentList(raw.incognito_agents),
+    ...agentList(raw.incognito_agents, raw.incognito_since),
   };
 }
 
-/** `incognito_agents` as stored: sorted and de-duplicated, and no key at all when empty. */
-function agentList(value: unknown): Pick<SyncState, "incognito_agents"> {
+/** `incognito_agents` as stored: sorted and de-duplicated, and no key at all when empty; with
+ * `incognito_since` for the agents it names. */
+function agentList(
+  value: unknown,
+  since: unknown,
+): Pick<SyncState, "incognito_agents" | "incognito_since"> {
   const ids = Array.isArray(value) ? [...new Set(stringsOf(value))].sort() : [];
-  return ids.length > 0 ? { incognito_agents: ids } : {};
+  if (ids.length === 0) return {};
+  const times = Object.entries(stringRecord(since) ?? {}).filter(
+    ([id, at]) => ids.includes(id) && !Number.isNaN(Date.parse(at)),
+  );
+  return {
+    incognito_agents: ids,
+    ...(times.length > 0 ? { incognito_since: Object.fromEntries(times) } : {}),
+  };
 }
 
 /** Schema 1 kept the local learner's progress at the top level and shipping under `ship`;
@@ -329,7 +350,7 @@ export function loadSyncState(configDir: string = getConfigDir()): SyncState {
       return {
         ...emptySyncState(),
         ...(raw.ship_transcripts === false ? { ship_transcripts: false as const } : {}),
-        ...agentList(raw.incognito_agents),
+        ...agentList(raw.incognito_agents, raw.incognito_since),
       };
     }
     const run = parseRun(raw.run);
@@ -372,16 +393,28 @@ export function setShipTranscripts(enabled: boolean, configDir: string = getConf
   saveSyncState(state, configDir);
 }
 
-/** Add agents to `incognito_agents` or take them out, keeping the list sorted and dropping the
- * key once it is empty. */
-function switchAgents(state: SyncState, agentIds: readonly string[], incognito: boolean): void {
+/** Add agents to `incognito_agents` (as of `now`, for one not in it yet) or take them out,
+ * keeping the list sorted and dropping each key once it is empty. */
+function switchAgents(
+  state: SyncState,
+  agentIds: readonly string[],
+  incognito: boolean,
+  now: Date = new Date(),
+): void {
   const current = new Set(state.incognito_agents ?? []);
+  const since = { ...state.incognito_since };
   for (const id of agentIds) {
+    if (incognito && !current.has(id)) since[id] = now.toISOString();
     if (incognito) current.add(id);
-    else current.delete(id);
+    else {
+      current.delete(id);
+      delete since[id];
+    }
   }
   if (current.size > 0) state.incognito_agents = [...current].sort();
   else delete state.incognito_agents;
+  if (Object.keys(since).length > 0) state.incognito_since = since;
+  else delete state.incognito_since;
 }
 
 /** Put agents in or out of incognito: load-modify-save like setSyncPaused. `dosu knowledge
@@ -396,27 +429,38 @@ export function setAgentsIncognito(
   saveSyncState(state, configDir);
 }
 
+/** The day 0.66.0 brought the per-agent switch: no agent was in incognito before it, so this is
+ * when one listed without `incognito_since` (a 0.66 list) went in, at the earliest. */
+export const AGENT_SWITCH_SINCE = "2026-10-05T00:00:00.000Z";
+
 /** Take agents out of incognito (`dosu knowledge incognito off`), sealing first what they ran
  * while in it, in the same load-modify-save: each session of theirs that `listSessions` returns
- * (the scan window, whatever the scope, still open or not) and that the ledger has no answer for
+ * (from `since`, when the earliest of them went in, however long ago; whatever the scope, still
+ * open or not), that was active since its agent went in, and that the ledger has no answer for
  * its current contents settles as the switch would have settled it (`by_agent`). Those are the
  * sessions no sync got to while the agent was listed: inside the quiet period, outside the repo
- * scope, or held back by a pause, backoff, the shipping opt-out or a signed-out CLI. Only agents
- * in the list are sealed. When listing throws, nothing is saved and the agents stay in it. */
+ * scope, or held back by a pause, backoff, the shipping opt-out or a signed-out CLI, or for so
+ * long that they left the scan window. Only agents in the list are sealed. When listing throws,
+ * nothing is saved and the agents stay in it. */
 export function leaveIncognito(
   agentIds: readonly string[],
-  listSessions: (state: SyncState) => readonly AgentSession[],
+  listSessions: (state: SyncState, since: Date) => readonly AgentSession[],
   cliVersion: string,
   now: Date = new Date(),
   configDir: string = getConfigDir(),
 ): void {
   const state = loadSyncState(configDir);
-  const leaving = new Set(agentIds.filter((id) => state.incognito_agents?.includes(id)));
-  if (leaving.size > 0) {
+  const sinceOf = new Map(
+    agentIds
+      .filter((id) => state.incognito_agents?.includes(id))
+      .map((id) => [id, Date.parse(state.incognito_since?.[id] ?? AGENT_SWITCH_SINCE)]),
+  );
+  if (sinceOf.size > 0) {
     const at = now.toISOString();
-    for (const session of listSessions(state)) {
+    for (const session of listSessions(state, new Date(Math.min(...sinceOf.values())))) {
+      const since = sinceOf.get(session.harness);
+      if (since === undefined || Date.parse(session.updated) < since) continue;
       const key = sessionKey(session);
-      if (!leaving.has(session.harness)) continue;
       if (!isPending(session, state.sessions[key], { cliVersion })) continue;
       state.sessions[key] = agentIncognitoEntry(session, at, cliVersion);
     }
@@ -494,7 +538,7 @@ export function isSessionAgentIncognito(
 /** The ledger entry for a session its agent's incognito switch keeps off the record: final, and
  * with nothing about what shipped of it before. */
 export function agentIncognitoEntry(
-  session: Pick<AgentSession, "updated" | "parentId">,
+  session: Pick<AgentSession, "updated" | "parentId" | "path">,
   at: string,
   cliVersion: string,
 ): LedgerEntry {
@@ -505,6 +549,7 @@ export function agentIncognitoEntry(
     cli_version: cliVersion,
     by_agent: true,
     ...(session.parentId ? { parent: session.parentId } : {}),
+    path: session.path,
   };
 }
 
@@ -519,7 +564,7 @@ export function resetSyncState(configDir: string = getConfigDir()): void {
   const offRecord: Record<string, LedgerEntry> = {};
   for (const [key, entry] of Object.entries(previous.sessions)) {
     if (!entry.by_agent) continue;
-    const { updated, outcome, at, cli_version, parent } = entry;
+    const { updated, outcome, at, cli_version, parent, path } = entry;
     offRecord[key] = {
       updated,
       outcome,
@@ -527,6 +572,7 @@ export function resetSyncState(configDir: string = getConfigDir()): void {
       cli_version,
       by_agent: true,
       ...(parent ? { parent } : {}),
+      ...(path ? { path } : {}),
     };
   }
   saveSyncState(
@@ -538,6 +584,7 @@ export function resetSyncState(configDir: string = getConfigDir()): void {
       ...(previous.paused ? { paused: true } : {}),
       ...(previous.ship_transcripts === false ? { ship_transcripts: false as const } : {}),
       ...(previous.incognito_agents ? { incognito_agents: previous.incognito_agents } : {}),
+      ...(previous.incognito_since ? { incognito_since: previous.incognito_since } : {}),
       // Where those sessions live, so a fresh drain can still find them.
       ...(previous.outside_sessions ? { outside_sessions: previous.outside_sessions } : {}),
     },
@@ -626,15 +673,21 @@ export function isPending(
 
 /** Drop ledger entries for sessions last updated before `cutoff` (past the scan window, so no
  * run would look at them again), except those of the sessions the scan still lists (`live`, by
- * key): an entry whose session changed since keeps its answer, or what of it already shipped. */
+ * key): an entry whose session changed since keeps its answer, or what of it already shipped. An
+ * entry the agents' incognito switch settled stays while its transcript is on disk (`onDisk`), or
+ * for good when it does not say where that is: nothing in the transcript records the switch, so
+ * without it a resume (or a fork) months later would ship the session whole. */
 export function pruneLedger(
   state: SyncState,
   cutoff: Date,
   live: ReadonlySet<string> = new Set(),
+  onDisk: (path: string) => boolean = existsSync,
 ): void {
   const limit = cutoff.getTime();
   for (const [key, entry] of Object.entries(state.sessions)) {
-    if (Date.parse(entry.updated) < limit && !live.has(key)) delete state.sessions[key];
+    if (Date.parse(entry.updated) >= limit || live.has(key)) continue;
+    if (entry.by_agent && (entry.path === undefined || onDisk(entry.path))) continue;
+    delete state.sessions[key];
   }
 }
 

@@ -387,10 +387,13 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     listed = new Set(scanned.map(sessionKey));
     lineage = sessionLineage(scanned);
     // A session its agent's incognito switch settled is never pending again, but its entry follows
-    // the session's activity, so the ledger keeps it as long after its last use as any other.
+    // the session's activity and where its transcript is, which keeps it in the ledger (pruneLedger).
     const restamped = scanned.filter((s) => {
       const entry = state.sessions[sessionKey(s)];
-      return entry?.by_agent === true && Date.parse(entry.updated) !== Date.parse(s.updated);
+      return (
+        entry?.by_agent === true &&
+        (Date.parse(entry.updated) !== Date.parse(s.updated) || entry.path !== s.path)
+      );
     });
     const outsideChanged = !sameRecord(outside, remembered);
     if (outsideChanged || restamped.length > 0) {
@@ -403,7 +406,9 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       }
       for (const session of restamped) {
         const entry = fresh.sessions[sessionKey(session)];
-        if (entry?.by_agent) entry.updated = session.updated;
+        if (!entry?.by_agent) continue;
+        entry.updated = session.updated;
+        entry.path = session.path;
       }
       saveState(fresh);
       if (restamped.length > 0) {
