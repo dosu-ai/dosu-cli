@@ -513,8 +513,8 @@ function readStdin(): string {
 /** `dosu knowledge context`: the prompt-submit hook (Claude Code by default; Codex with `--agent
  * codex --format codex`), and the lookup OpenCode and Pi plugins call with `--format plain`.
  * Hidden -- it is invoked by agents, not by people. Prints nothing and exits 0 unless there is a
- * digest to add, so a logged-out install, OSS mode, shipping switched off or a down server all
- * look like Dosu not being there. */
+ * digest to add, so a logged-out install, OSS mode, shipping switched off, an agent in incognito
+ * or a down server all look like Dosu not being there. */
 function contextCommand(): Command {
   return new Command("context")
     .description("Prompt-submit hook: add task memory to the agent's context")
@@ -530,7 +530,8 @@ function contextCommand(): Command {
       const backendUrl = getBackendURL();
       if (cfg.mode === "oss" || !target?.api_key || !target.deployment_id) return;
       if (!isAbsoluteHttpUrl(backendUrl)) return;
-      if (!isShippingEnabled(loadSyncState())) return;
+      const state = loadSyncState();
+      if (!isShippingEnabled(state)) return;
       const { CONTEXT_FORMATS, contextHookOutput } = await import("../memory/context-hook");
       const format = CONTEXT_FORMATS.find((f) => f === opts.format);
       if (!format) return;
@@ -540,6 +541,7 @@ function contextCommand(): Command {
         backendUrl,
         agent: opts.agent,
         format,
+        incognito: state,
       });
       if (out) process.stdout.write(out);
     });
@@ -773,6 +775,10 @@ function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
     console.log(`  Settled:         ${formatOutcomeCounts(status.state)}`);
     const subagents = formatOutcomeCounts(status.state, "subagents");
     if (subagents) console.log(`  Subagents:       ${subagents}`);
+  }
+  const incognito = status.state.incognito_agents;
+  if (incognito?.length) {
+    console.log(`  Incognito:       ${incognito.join(", ")} (not shipped)`);
   }
   const repoFilter = status.state.repo_filter;
   if (repoFilter) {

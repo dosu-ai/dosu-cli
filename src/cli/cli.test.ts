@@ -407,6 +407,86 @@ describe("CLI", () => {
     15_000,
   );
 
+  it.skipIf(process.platform === "win32")(
+    "keeps an incognito agent's prompts and memory tool calls from the prompt-submit hook",
+    async () => {
+      // `dosu knowledge incognito on claude`, read from the state file the hook loads anyway.
+      const root = mkdtempSync(join(tmpdir(), "dosu-cli-context-incognito-"));
+      mkdirSync(join(root, "dosu-cli"), { recursive: true });
+      writeFileSync(
+        join(root, "dosu-cli", "config.json"),
+        JSON.stringify({
+          schema_version: 2,
+          active_account: {
+            user_id: "u",
+            session: { access_token: "t", refresh_token: "r", expires_at: 4102444800 },
+            target: { api_key: "sk_user_test", deployment_id: "d" },
+          },
+        }),
+      );
+      writeFileSync(
+        join(root, "dosu-cli", "knowledge-sync.json"),
+        JSON.stringify({
+          schema_version: 3,
+          sessions: {},
+          consecutive_failures: 0,
+          incognito_agents: ["claude"],
+        }),
+      );
+      let requests = 0;
+      const server = createServer((_req, res) => {
+        requests++;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ digest: "## Task Memory (Dosu)" }));
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const { port } = server.address() as AddressInfo;
+      const hook = async (event: Record<string, unknown>): Promise<string> => {
+        const payload = join(root, "payload.json");
+        writeFileSync(payload, JSON.stringify({ session_id: "s", cwd: root, ...event }));
+        const child = spawn("bun", ["run", "src/index.ts", "knowledge", "context"], {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            CI: "1",
+            DOSU_DEV: "false",
+            DOSU_BACKEND_URL_OVERRIDE: `http://127.0.0.1:${port}`,
+            NODE_ENV: "test",
+            XDG_CONFIG_HOME: root,
+          },
+          stdio: [openSync(payload, "r"), "pipe", "pipe"],
+        });
+        let stdout = "";
+        child.stdout?.on("data", (chunk) => {
+          stdout += chunk;
+        });
+        await new Promise((resolve) => child.on("close", resolve));
+        return stdout;
+      };
+      try {
+        const prompt = await hook({ hook_event_name: "UserPromptSubmit", prompt: "fix the build" });
+        const tool = await hook({
+          hook_event_name: "PreToolUse",
+          tool_name: "mcp__dosu__search_memory",
+          tool_input: { query: "q" },
+          tool_use_id: "toolu_1",
+        });
+
+        expect(prompt).toBe("");
+        expect(JSON.parse(tool).hookSpecificOutput).toMatchObject({
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: expect.stringContaining("dosu knowledge incognito off claude"),
+        });
+        expect(requests).toBe(0);
+      } finally {
+        server.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    20_000,
+  );
+
   it("preserves command output when telemetry start throws", async () => {
     const telemetry: CommandTelemetry = {
       start: vi.fn(() => {

@@ -11,6 +11,7 @@ import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils
 import { type FakeMcpServer, startFakeMcpServer } from "../mcp/mcp-server.test-utils";
 import { makeOpencodeDb, opencodeDocument } from "../sessions/opencode.test-utils";
 import { INCOGNITO_MARKER, PI_INCOGNITO_ENTRY_TYPE } from "../sync/incognito";
+import { emptySyncState, saveSyncState, setAgentsIncognito } from "../sync/state";
 import { memoryCommand } from "./memory";
 
 let home: string;
@@ -294,6 +295,53 @@ describe("the session a dosu memory call belongs to", () => {
 
     expect(server.requests).toEqual([]);
     expect(err.join("\n")).toContain("Dosu is off for this session");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("sends nothing for an agent in incognito, named by --client or by its shell", async () => {
+    inNoOriginClone("main");
+    const transcript = piTranscript(false);
+    setAgentsIncognito(["pi"], true);
+
+    // A person asking as pi, with or without a session, and pi's own model from its bash tool.
+    await dosu("search", "q", "--client", "pi");
+    await dosu("evidence", "m1", "--client", "pi", "--session", "pi-s1");
+    vi.stubEnv("PI_SESSION_ID", "pi-s1");
+    vi.stubEnv("PI_SESSION_FILE", transcript);
+    await dosu("search", "q");
+
+    expect(server.requests).toEqual([]);
+    expect(err).toHaveLength(3);
+    for (const line of err) expect(line).toContain("'dosu knowledge incognito off pi'");
+    expect(process.exitCode).toBe(1);
+
+    // Another agent's switch holds no call of pi's back.
+    process.exitCode = undefined;
+    setAgentsIncognito(["pi"], false);
+    setAgentsIncognito(["codex"], true);
+    await dosu("search", "q");
+    expect(server.requests.filter((r) => r.body?.method === "tools/call")).toHaveLength(1);
+  });
+
+  it("sends nothing for a session that ran while its agent was incognito", async () => {
+    inNoOriginClone("main");
+    saveSyncState({
+      ...emptySyncState(),
+      sessions: {
+        "pi/pi-s1": {
+          updated: "2026-10-05T00:00:00.000Z",
+          outcome: "incognito",
+          at: "2026-10-05T00:10:00.000Z",
+          cli_version: "0.67.0",
+          by_agent: true,
+        },
+      },
+    });
+
+    await dosu("search", "q", "--client", "pi", "--session", "pi-s1");
+
+    expect(server.requests).toEqual([]);
+    expect(err.join("\n")).toContain("ran while its agent was incognito");
     expect(process.exitCode).toBe(1);
   });
 });

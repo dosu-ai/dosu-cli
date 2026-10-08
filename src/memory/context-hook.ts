@@ -1,8 +1,9 @@
 /** Prompt-time memory: the `UserPromptSubmit` hook behind `dosu knowledge context` (Claude Code,
  * Codex), and the same lookup for agents whose plugins ask from code (OpenCode, Pi: `--format
  * plain`). The same command is Claude Code's `PreToolUse` hook on Dosu's memory tools, which
- * stops them in a session the user took off the record and otherwise tells the MCP proxy which
- * session the call belongs to (memoryToolHookOutput).
+ * stops them in a session that is off the record (the user's /dosu-incognito, or the agent's
+ * incognito switch) and otherwise tells the MCP proxy which session the call belongs to
+ * (memoryToolHookOutput).
  *
  * Reads the hook payload from stdin, asks the server whether this prompt warrants a memory
  * digest (POST /v1/memory/context), and prints the hook's JSON when it does. The server makes
@@ -17,7 +18,13 @@
 
 import { basename } from "node:path";
 import { logger } from "../debug/logger";
-import { CLAUDE_MEMORY_TOOL_PATTERN, recordClaudeToolCall } from "../mcp/call-session";
+import {
+  agentSwitchMessage,
+  agentSwitchOf,
+  CLAUDE_MEMORY_TOOL_PATTERN,
+  type IncognitoSwitch,
+  recordClaudeToolCall,
+} from "../mcp/call-session";
 import { GIT_BUDGETS, projectOverride, resolveProjectOfDir } from "../sessions/project";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { currentBranchAnswer, GIT_TIMED_OUT } from "../sessions/repo";
@@ -74,6 +81,9 @@ const MEMORY_TOOL = new RegExp(`^${CLAUDE_MEMORY_TOOL_PATTERN}$`);
 const INCOGNITO_DENIAL =
   "Dosu is off for this session (/dosu-incognito): Dosu's memory tools are not available.";
 
+/** What the hook's denial says the agent's incognito switch kept from happening. */
+const TOOLS_UNAVAILABLE = "Dosu's memory tools are not available";
+
 interface ContextResponse {
   digest?: unknown;
   reason?: unknown;
@@ -93,6 +103,9 @@ export interface ContextHookOptions {
   /** The branch checked out in a directory now; defaults to asking git. */
   branchOf?: (cwd: string) => string | null | typeof GIT_TIMED_OUT;
   isIncognito?: (transcriptPath: string) => boolean;
+  /** The agents' incognito switch (knowledge-sync.json, which the command has loaded): a session
+   * it keeps off the record is never asked about, as if it had run /dosu-incognito. */
+  incognito?: IncognitoSwitch;
 }
 
 function str(value: unknown): string | null {
@@ -181,28 +194,35 @@ function claudeCaller(
   return { id: child, transcript: found?.path ?? null };
 }
 
+/** The PreToolUse answer that stops the call, with the reason the model is shown. */
+function denial(reason: string): string {
+  return JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: reason,
+    },
+  });
+}
+
 /** Claude Code's PreToolUse hook on a Dosu memory tool: denies the call in a session that is off
- * the record (the query would be logged with the retrieval; a subagent's call is judged by its
- * parent's transcript, which the payload names), and otherwise records the call's session under
- * its tool-use id for the MCP proxy, which a server started before a /clear or an in-app resume
- * could not know. */
+ * the record, since the query would be logged with the retrieval: Claude Code is in incognito or
+ * the session ran while it was (`incognito`), or the user ran /dosu-incognito in it (a subagent's
+ * call is judged by its parent's session and transcript, which the payload names). Otherwise it
+ * records the call's session under its tool-use id for the MCP proxy, which a server started
+ * before a /clear or an in-app resume could not know. */
 function memoryToolHookOutput(
   payload: PromptHookPayload,
   isIncognito: (transcriptPath: string) => boolean,
+  incognito: IncognitoSwitch | undefined,
 ): string {
   if (typeof payload.tool_name !== "string" || !MEMORY_TOOL.test(payload.tool_name)) return "";
   const transcript = str(payload.transcript_path);
-  if (transcript && isIncognito(transcript)) {
-    return JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: INCOGNITO_DENIAL,
-      },
-    });
-  }
-  const toolUseId = str(payload.tool_use_id);
   const id = str(payload.session_id);
+  const how = incognito ? agentSwitchOf(incognito, { harness: "claude", id }) : null;
+  if (how) return denial(agentSwitchMessage(how, "claude", TOOLS_UNAVAILABLE));
+  if (transcript && isIncognito(transcript)) return denial(INCOGNITO_DENIAL);
+  const toolUseId = str(payload.tool_use_id);
   if (toolUseId && id) {
     recordClaudeToolCall(toolUseId, claudeCaller(id, transcript, str(payload.agent_id)));
   }
@@ -224,7 +244,11 @@ export async function contextHookOutput(
   const format = options.format ?? "claude";
   if (format === "claude" && payload.hook_event_name === "PreToolUse") {
     const agent = options.agent ?? CLAUDE_CODE_AGENT;
-    return memoryToolHookOutput(payload, options.isIncognito ?? incognitoCheckOf(agent));
+    return memoryToolHookOutput(
+      payload,
+      options.isIncognito ?? incognitoCheckOf(agent),
+      options.incognito,
+    );
   }
   if (format !== "plain" && payload.hook_event_name !== "UserPromptSubmit") return "";
   const prompt = str(payload.prompt);
@@ -234,13 +258,20 @@ export async function contextHookOutput(
   // off the record must not be queried either -- same opt-out transcript shipping honors.
   if (textHasIncognitoMarker(prompt) || promptRunsIncognito(prompt)) return "";
   const agent = options.agent ?? CLAUDE_CODE_AGENT;
+  const harness = harnessOf(agent);
+  const sessionId = sessionIdOf(payload, format);
+  // So does every prompt of an agent in incognito, and of a session that ran while it was.
+  const switchedOff =
+    harness && options.incognito
+      ? agentSwitchOf(options.incognito, { harness, id: sessionId })
+      : null;
+  if (switchedOff) return "";
   const transcript = str(payload.transcript_path);
   const isIncognito = options.isIncognito ?? incognitoCheckOf(agent);
   if (transcript && isIncognito(transcript)) return "";
 
   const cwd = str(payload.cwd);
   const fetchImpl = options.fetchImpl ?? fetch;
-  const sessionId = sessionIdOf(payload, format);
   const budgetMs = options.timeoutMs ?? CONTEXT_TIMEOUT_MS;
   const startedAt = Date.now();
   // Every outcome looks the same to the user -- no digest, prompt unchanged -- so the debug log
@@ -252,7 +283,6 @@ export async function contextHookOutput(
     );
   let signal: AbortSignal | undefined;
   try {
-    const harness = harnessOf(agent);
     const { project, branch } = await scopeOf(
       cwd,
       harness && sessionId ? { harness, id: sessionId, transcript } : null,

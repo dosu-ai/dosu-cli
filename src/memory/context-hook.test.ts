@@ -13,9 +13,11 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { getConfigDir } from "../config/config";
 import { logger } from "../debug/logger";
+import type { IncognitoSwitch } from "../mcp/call-session";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { createShipStep } from "../shipper/runner";
 import { INCOGNITO_MARKER } from "../sync/incognito";
+import type { LedgerEntry } from "../sync/state";
 import { contextHookOutput } from "./context-hook";
 
 const DIGEST = "## Task Memory (Dosu)\n\n### Facts\n- a fact — memory_id: m1";
@@ -53,6 +55,19 @@ afterEach(() => {
   if (savedProject === undefined) delete process.env.DOSU_PROJECT;
   else process.env.DOSU_PROJECT = savedProject;
 });
+
+/** A ledger holding one session the agents' incognito switch settled (`by_agent`). */
+function settledByAgent(key: string): Record<string, LedgerEntry> {
+  return {
+    [key]: {
+      updated: "2026-10-01T00:00:00.000Z",
+      outcome: "incognito",
+      at: "2026-10-01T00:05:00.000Z",
+      cli_version: "0.67.0",
+      by_agent: true,
+    },
+  };
+}
 
 function sentBody(fetchImpl: ReturnType<typeof respond>): Record<string, unknown> {
   const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
@@ -328,6 +343,27 @@ describe("contextHookOutput", () => {
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
+
+  it("never sends a prompt of an agent in incognito, or of a session that ran while it was", async () => {
+    // `dosu knowledge incognito on` keeps every prompt of the agent on the machine, as
+    // /dosu-incognito does one session's; a session the switch settled stays out once it is off.
+    const fetchImpl = respond(200, { digest: DIGEST });
+    for (const incognito of [
+      { incognito_agents: ["claude"], sessions: {} },
+      { sessions: settledByAgent("claude/sess-1") },
+    ]) {
+      expect(await contextHookOutput(payload(), { ...base, fetchImpl, incognito })).toBe("");
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    // Another agent in incognito, or another session the switch settled, takes nothing off this.
+    await contextHookOutput(payload(), {
+      ...base,
+      fetchImpl,
+      incognito: { incognito_agents: ["codex", "cursor"], sessions: settledByAgent("claude/s-2") },
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("contextHookOutput for other agents", () => {
@@ -512,6 +548,35 @@ describe("contextHookOutput for other agents", () => {
     expect(await asks(transcript("typed.jsonl", "user"))).toBe(false);
   });
 
+  it.each([
+    ["codex", codexPayload(), codex],
+    [
+      "opencode",
+      JSON.stringify({ prompt: "why is the build slow", session_id: "ses_1", cwd: "/w" }),
+      { ...base, agent: "opencode", format: "plain" as const },
+    ],
+    [
+      "pi",
+      JSON.stringify({ prompt: "why is the build slow", session_id: "p1", cwd: "/w" }),
+      { ...base, agent: "pi", format: "plain" as const },
+    ],
+  ])("asks nothing for %s while it is in incognito", async (harness, stdin, options) => {
+    const fetchImpl = respond(200, { digest: DIGEST });
+    const incognito = { incognito_agents: [harness], sessions: {} };
+
+    expect(await contextHookOutput(stdin, { ...options, fetchImpl, incognito })).toBe("");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("asks nothing for a Codex session that ran while Codex was in incognito", async () => {
+    // The ledger names a Codex session by its rollout's stem, not the payload's session_id.
+    const fetchImpl = respond(200, { digest: DIGEST });
+    const incognito = { sessions: settledByAgent(`codex/${ROLLOUT}`) };
+
+    expect(await contextHookOutput(codexPayload(), { ...codex, fetchImpl, incognito })).toBe("");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("prints nothing in plain format when there is no digest", async () => {
     const stdin = JSON.stringify({ prompt: "hi", session_id: "ses_1", cwd: "/w" });
     const out = await contextHookOutput(stdin, {
@@ -687,6 +752,36 @@ describe("Claude Code's PreToolUse hook on Dosu's memory tools", () => {
         permissionDecision: "deny",
       });
     }
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("denies a memory tool while Claude Code is in incognito, naming the switch, and records nothing", async () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "dosu-pretool-")));
+    vi.stubEnv("XDG_CONFIG_HOME", home);
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+      rmSync(home, { recursive: true, force: true });
+    });
+    const fetchImpl = respond(200, {});
+    const reason = async (incognito: IncognitoSwitch) => {
+      const out = await contextHookOutput(toolPayload(), { ...base, fetchImpl, incognito });
+      return out ? JSON.parse(out).hookSpecificOutput : null;
+    };
+
+    const listed = await reason({ incognito_agents: ["claude"], sessions: {} });
+    expect(listed).toMatchObject({ hookEventName: "PreToolUse", permissionDecision: "deny" });
+    expect(listed.permissionDecisionReason).toContain("'dosu knowledge incognito off claude'");
+    expect(listed.permissionDecisionReason).not.toContain("/dosu-incognito");
+    // A session the switch settled stays denied once it is off: nothing turns it back on.
+    const sealed = await reason({ sessions: settledByAgent("claude/sess-1") });
+    expect(sealed.permissionDecisionReason).toContain("ran while its agent was incognito");
+    expect(sealed.permissionDecisionReason).not.toContain("incognito off");
+    // The call never reaches the proxy, so there is no session to record for it.
+    expect(existsSync(join(getConfigDir(), "mcp-calls", "toolu_1.json"))).toBe(false);
+
+    // Another agent's switch leaves Claude Code's calls to go on as usual.
+    expect(await reason({ incognito_agents: ["codex"], sessions: {} })).toBeNull();
+    expect(existsSync(join(getConfigDir(), "mcp-calls", "toolu_1.json"))).toBe(true);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 

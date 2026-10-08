@@ -15,7 +15,10 @@
  *   the memory tools' arguments. Only those two agents' servers take it, and every server removes
  *   it before relaying, since the server's tool schemas are strict.
  * - Cursor names no session in its calls and runs no Dosu hook that could, so its /dosu-incognito
- *   keeps the memory tools off by instruction only. */
+ *   keeps the memory tools off by instruction only.
+ *
+ * An agent the user put in incognito (`dosu knowledge incognito on`) needs no session named: no
+ * call its server gets leaves the machine (callRefusal). */
 
 import { mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -32,6 +35,7 @@ import {
 } from "../sessions/scan";
 import { trajectorySourceOf } from "../shipper/normalize";
 import { isIncognitoSession } from "../sync/incognito";
+import { isAgentIncognito, loadSyncState, type SyncState } from "../sync/state";
 
 /** Dosu's memory tools as Claude Code names them on the `dosu` entry `dosu mcp add` writes (other
  * servers may have tools of the same names): the matcher of the PreToolUse hook that records
@@ -44,6 +48,9 @@ export const SESSION_ARGUMENT = "_dosu_session";
 /** What the proxy answers, instead of relaying, for a call from a session off the record. */
 export const OFF_THE_RECORD_MESSAGE =
   "Dosu is off for this session (/dosu-incognito): the call was not sent to Dosu.";
+
+/** What a refused call did not do, for the agent switch's messages (agentSwitchMessage). */
+const CALL_NOT_SENT = "the call was not sent to Dosu";
 
 /** How long a recorded Claude Code call waits for the proxy before it is pruned. */
 const CALL_RECORD_TTL_MS = 60 * 60 * 1000;
@@ -224,13 +231,64 @@ function storedSession(session: CallSession): AgentSession | null {
   return null;
 }
 
-/** Whether the session is off the record, judged as its transcript's upload would be: a session
- * whose transcript cannot be found reads as on the record. Never throws. */
-export function callSessionIsIncognito(session: CallSession): boolean {
+/** What of the sync state the agents' incognito switch is read from: the list, and the ledger
+ * entries it settled (`by_agent`). */
+export type IncognitoSwitch = Pick<SyncState, "incognito_agents" | "sessions">;
+
+/** How the agents' incognito switch (`dosu knowledge incognito on`) keeps a session off the
+ * record: its agent is in the list now (`agent`), or the session ran while it was, or one it
+ * descends from by the `parent` links the ledger records did (`sealed`: settled `by_agent`); null
+ * when the switch does not. With no session id, only the list can answer. */
+export function agentSwitchOf(
+  state: IncognitoSwitch,
+  session: { harness: SessionHarness; id: string | null },
+): "agent" | "sealed" | null {
+  const { harness, id } = session;
+  if (state.incognito_agents?.includes(harness)) return "agent";
+  return id !== null && isAgentIncognito(state, { harness, id }) ? "sealed" : null;
+}
+
+/** Why the agents' switch keeps a call on the machine (`effect`: what did not happen), for the
+ * model and the user to read. Nobody ran /dosu-incognito, so an agent in incognito names the
+ * command that turns the switch off; a session that ran while it was on stays off the record
+ * whatever the switch says now. */
+export function agentSwitchMessage(
+  how: "agent" | "sealed",
+  harness: SessionHarness,
+  effect: string = CALL_NOT_SENT,
+): string {
+  return how === "agent"
+    ? `Dosu is off for this agent ('dosu knowledge incognito on ${harness}'): ${effect}. Run 'dosu knowledge incognito off ${harness}' to turn it back on.`
+    : `Dosu is off for this session, which ran while its agent was incognito: ${effect}.`;
+}
+
+/** Whether the session is off the record: the agents' switch keeps it so (agentSwitchOf), or the
+ * user ran /dosu-incognito in it, judged as its transcript's upload would be (a session whose
+ * transcript cannot be found has only the switch to go by). Never throws. */
+function callSessionIsIncognito(session: CallSession, state: IncognitoSwitch): boolean {
   try {
+    if (agentSwitchOf(state, session) !== null) return true;
     const stored = storedSession(session);
     return stored !== null && isIncognitoSession(stored);
   } catch {
     return false;
   }
+}
+
+/** What answers a tool call in place of Dosu, or null when it may be sent: a refusal when the
+ * agent `client` (the server's, or `dosu memory --client`) is in incognito, whatever session the
+ * call names or whether it names one, and when a session it is made from is off the record. The
+ * switch is read from knowledge-sync.json on every call, so `dosu knowledge incognito on` holds
+ * from an agent's next call, without a restart. Never throws. */
+export function callRefusal(
+  client: string | undefined,
+  sessions: readonly CallSession[],
+): string | null {
+  const state = loadSyncState();
+  const agent = harnessOfClient(client);
+  if (agent && state.incognito_agents?.includes(agent)) return agentSwitchMessage("agent", agent);
+  const off = sessions.find((session) => callSessionIsIncognito(session, state));
+  if (!off) return null;
+  const how = agentSwitchOf(state, off);
+  return how ? agentSwitchMessage(how, off.harness) : OFF_THE_RECORD_MESSAGE;
 }

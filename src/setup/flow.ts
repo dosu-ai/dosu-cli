@@ -26,7 +26,9 @@ import { refreshConfiguredProviders } from "../mcp/refresh";
 import { getStatuslineAgent, StatuslineConflictError } from "../statusline/agents";
 import { spawnDetachedSelf } from "../sync/detach";
 import {
+  isAgentIncognito,
   isShippingEnabled,
+  lineageIn,
   loadSyncState,
   skipBacklog,
   unsettledSessions,
@@ -389,8 +391,13 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
   s.start("Checking for agent sessions from the last 30 days...");
   const outcome = await runKnowledgeSync();
   const backlog = outcome.status === "backlog" ? unsettledSessions(outcome.sessions, state) : [];
-  // Subagents' transcripts go (or are skipped) with their sessions; the offer counts sessions.
-  const n = withoutSubagents(backlog).length;
+  // Subagents' transcripts go (or are skipped) with their sessions; the offer counts sessions,
+  // and none of an agent in incognito, which never ship (declining settles them as its switch
+  // would, too).
+  const lineage = lineageIn(outcome.sessions);
+  const n = withoutSubagents(backlog).filter(
+    (session) => !isAgentIncognito(state, session, lineage),
+  ).length;
   if (n === 0) {
     s.stop("No recent agent sessions. Dosu memory learns from new ones as you work.");
     recordCommandFacets({ backfill_offer: "not-offered" });

@@ -218,7 +218,12 @@ import { CodexProvider } from "../mcp/providers/codex";
 import { CursorProvider } from "../mcp/providers/cursor";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
 import { restoreRunningInstall, stubRunningFromNpx } from "../mcp/running-install.test-utils";
-import { loadSyncState, saveSyncState, setShipTranscripts } from "../sync/state";
+import {
+  loadSyncState,
+  saveSyncState,
+  setAgentsIncognito,
+  setShipTranscripts,
+} from "../sync/state";
 import { consumeCommandFacets } from "../telemetry/telemetry";
 import { runActivityView } from "../tui/activity-view";
 import * as p from "../tui/prompts";
@@ -3550,6 +3555,37 @@ describe("stepOfferInitialSync", () => {
       outcome: "skipped_by_user",
       parent: "offered-0",
     });
+  });
+
+  it("counts no session of an agent in incognito, and declining settles them as its switch would", async () => {
+    setAgentsIncognito(["cursor"], true);
+    const outcome = backlogOutcome(2);
+    const cursor = { ...outcome.sessions[0], id: "c-1", harness: "cursor", path: "/tmp/c-1.json" };
+    mockRunKnowledgeSync.mockResolvedValue({
+      ...outcome,
+      readySessions: 3,
+      sessions: [...outcome.sessions, cursor],
+    });
+    vi.mocked(p.confirm).mockResolvedValue(false);
+
+    await stepOfferInitialSync(makeCfg());
+
+    const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
+    expect(spinner?.stop).toHaveBeenCalledWith(expect.stringContaining("Found 2 agent sessions"));
+    const ledger = loadSyncState().sessions;
+    expect(ledger["cursor/c-1"]).toMatchObject({ outcome: "incognito", by_agent: true });
+    expect(ledger["claude/offered-1"]?.outcome).toBe("skipped_by_user");
+  });
+
+  it("offers nothing when the only sessions are an incognito agent's", async () => {
+    setAgentsIncognito(["claude"], true);
+    mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(2));
+
+    await stepOfferInitialSync(makeCfg());
+
+    expect(vi.mocked(p.confirm)).not.toHaveBeenCalled();
+    const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
+    expect(spinner?.stop).toHaveBeenCalledWith(expect.stringContaining("No recent agent sessions"));
   });
 
   it("offers nothing when every pending session was settled before", async () => {

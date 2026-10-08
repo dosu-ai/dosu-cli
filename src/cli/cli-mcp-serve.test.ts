@@ -14,6 +14,7 @@ import { type FakeMcpServer, startFakeMcpServer } from "../mcp/mcp-server.test-u
 import { contextHookOutput } from "../memory/context-hook";
 import { makeOpencodeDb, opencodeDocument } from "../sessions/opencode.test-utils";
 import { INCOGNITO_MARKER } from "../sync/incognito";
+import { emptySyncState, saveSyncState, setAgentsIncognito } from "../sync/state";
 import { createProgram } from "./cli";
 
 let home: string;
@@ -81,11 +82,14 @@ function noOriginClone(branch: string): { dir: string; root: string } {
   return { dir, root: git("rev-list", "--max-parents=0", "HEAD").trim() };
 }
 
-async function serve(lines: unknown[], ...flags: string[]): Promise<void> {
+async function serve(lines: Iterable<unknown> | AsyncIterable<unknown>, ...flags: string[]) {
+  async function* asLines() {
+    for await (const line of lines) {
+      yield typeof line === "string" ? line : `${JSON.stringify(line)}\n`;
+    }
+  }
   vi.spyOn(process, "stdin", "get").mockReturnValue(
-    Readable.from(
-      lines.map((line) => (typeof line === "string" ? line : `${JSON.stringify(line)}\n`)),
-    ) as unknown as typeof process.stdin,
+    Readable.from(asLines()) as unknown as typeof process.stdin,
   );
   const program = createProgram();
   program.exitOverride();
@@ -569,6 +573,80 @@ describe("the session a tool call belongs to", () => {
     const [call] = relayedCalls();
     expect(call?.headers["x-dosu-session"]).toBe("01a10e7d-b836");
     expect(call?.body.params.arguments).toEqual({ query: "q" });
+  });
+
+  it("answers every call to an agent in incognito itself, naming a session or not", async () => {
+    saveSyncState({ ...emptySyncState(), incognito_agents: ["codex", "cursor"] });
+    codexRollout('{"type":"session_meta"}\n');
+    const knowledge = {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: { name: "read_knowledge", arguments: { query: "q" } },
+    };
+    const list = { jsonrpc: "2.0", id: 4, method: "tools/list" };
+
+    await serve([...HANDSHAKE, search(), knowledge, list], "--client", "cursor");
+
+    // Not only the memory tools: no call reaches Dosu. The handshake and the tool list still do,
+    // as for /dosu-incognito.
+    expect(relayedCalls()).toEqual([]);
+    expect(server.requests.map((r) => r.body?.method)).toEqual(
+      expect.arrayContaining(["initialize", "tools/list"]),
+    );
+    for (const id of [2, 3]) {
+      const reply = replies().find((r) => r.id === id);
+      expect(reply?.result.isError).toBe(true);
+      expect(reply?.result.content[0].text).toContain("'dosu knowledge incognito off cursor'");
+    }
+    expect(replies().find((r) => r.id === 4)?.result.tools).toBeDefined();
+
+    // A Codex call names its session, on the record: still not sent.
+    await serve([...HANDSHAKE, search(codexMeta(codexThread), 5)], "--client", "codex");
+    expect(replies().find((r) => r.id === 5)?.result.content[0].text).toContain(
+      "'dosu knowledge incognito off codex'",
+    );
+    // Another agent's server is not held to it.
+    await serve([...HANDSHAKE, search({}, 6)], "--client", "claude-code");
+    expect(relayedCalls().map((r) => r.body.id)).toEqual([6]);
+  });
+
+  it("reads the switch for each call, so one turned on holds from the agent's next call", async () => {
+    async function* session() {
+      yield* HANDSHAKE;
+      yield search({}, 2);
+      // A tick for the proxy to take the line it was handed before the user runs the command.
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      setAgentsIncognito(["codex"], true);
+      yield search({}, 3);
+    }
+
+    await serve(session(), "--client", "codex");
+
+    expect(relayedCalls().map((r) => r.body.id)).toEqual([2]);
+    expect(replies().find((r) => r.id === 3)?.result.isError).toBe(true);
+  });
+
+  it("answers a call from a session that ran while its agent was incognito, after it is off", async () => {
+    codexRollout('{"type":"session_meta"}\n');
+    saveSyncState({
+      ...emptySyncState(),
+      sessions: {
+        [`codex/${rolloutStem}`]: {
+          updated: "2026-10-05T16:30:00.000Z",
+          outcome: "incognito",
+          at: "2026-10-05T16:40:00.000Z",
+          cli_version: "0.67.0",
+          by_agent: true,
+        },
+      },
+    });
+
+    await serve([...HANDSHAKE, search(codexMeta(codexThread))], "--client", "codex");
+
+    expect(relayedCalls()).toEqual([]);
+    const text = replies().find((r) => r.id === 2)?.result.content[0].text;
+    expect(text).toContain("ran while its agent was incognito");
   });
 
   it("never names the Claude Code session another agent was started from", async () => {

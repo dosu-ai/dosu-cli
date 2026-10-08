@@ -3,20 +3,15 @@
  * request carries the same project (from the cwd), branch, and client headers an MCP session in
  * this directory would, and prints what the agent would read.
  * The call is logged under the agent session it is made from -- which, when the user took it off
- * the record, stops the call before it leaves the machine, as the proxy does. An extension names
+ * the record or its agent is in incognito, stops the call before it leaves the machine, as the
+ * proxy does (so does `--client` naming an agent in incognito). An extension names
  * that session (`--session`, and `--transcript` where the CLI cannot find it by id); a model that
  * runs the command from its shell is in the session its agent's environment names. */
 
 import { Command, Option } from "commander";
 import pc from "picocolors";
 import { loadConfig, MODE_OSS } from "../config/config";
-import {
-  type CallSession,
-  callSessionIsIncognito,
-  harnessOfClient,
-  OFF_THE_RECORD_MESSAGE,
-  shellSessions,
-} from "../mcp/call-session";
+import { type CallSession, callRefusal, harnessOfClient, shellSessions } from "../mcp/call-session";
 import { callMcpTool, proxyRelay, type ToolResult, toolText } from "../mcp/proxy";
 import { trajectorySourceOf } from "../shipper/normalize";
 import { printResult } from "./output";
@@ -60,9 +55,11 @@ async function runTool(tool: string, args: Record<string, unknown>, opts: Memory
   if (loadConfig().mode === MODE_OSS) {
     return fail("Dosu memory needs a Dosu Cloud deployment; OSS mode serves public libraries.");
   }
-  // An agent started from another's shell is in both sessions, and held to both.
+  // An agent started from another's shell is in both sessions, and held to both; an agent in
+  // incognito, named by --client or by its session, has no call sent at all.
   const sessions = callSessions(opts);
-  if (sessions.some(callSessionIsIncognito)) return fail(OFF_THE_RECORD_MESSAGE);
+  const refusal = callRefusal(opts.client, sessions);
+  if (refusal) return fail(refusal);
   // Logged under the shell's session, and as its agent, only when that is unambiguous.
   const shell = !opts.session && sessions.length === 1 ? sessions[0] : null;
   const client = opts.client ?? (shell ? trajectorySourceOf(shell.harness) : undefined);

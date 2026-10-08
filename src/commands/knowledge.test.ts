@@ -1213,6 +1213,25 @@ describe("knowledge sync --status", () => {
     expect(out).toContain("'dosu knowledge sync'");
   });
 
+  it("lists the agents in incognito, and says nothing of incognito when there are none", async () => {
+    mockGetSyncStatus.mockReturnValue(
+      statusOf({
+        running: false,
+        state: { ...baseState, incognito_agents: ["codex", "cursor"] },
+        recentActivity: [],
+      }),
+    );
+    await run("sync", "--status");
+    expect(allOutput()).toContain("Incognito:       codex, cursor (not shipped)");
+
+    logSpy.mockClear();
+    mockGetSyncStatus.mockReturnValue(
+      statusOf({ running: false, state: baseState, recentActivity: [] }),
+    );
+    await run("sync", "--status");
+    expect(allOutput()).not.toContain("Incognito");
+  });
+
   it("points a disabled install at the switch", async () => {
     mockGetSyncStatus.mockReturnValue(
       statusOf({

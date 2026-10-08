@@ -17,7 +17,7 @@ import { logger } from "../debug/logger";
 import { type GitBudget, resolveProjectOfDir } from "../sessions/project";
 import { currentBranchOfDir } from "../sessions/repo";
 import { VERSION } from "../version/version";
-import { callSessionIsIncognito, OFF_THE_RECORD_MESSAGE, takeCallSession } from "./call-session";
+import { callRefusal, takeCallSession } from "./call-session";
 import { mcpEndpoint } from "./config-helpers";
 import { createMcpRelay, type McpRelay } from "./relay";
 
@@ -186,20 +186,21 @@ async function serveStdio(
       agentOffersRoots = isObject(params.capabilities) && isObject(params.capabilities.roots);
     }
     // A tool call names the agent session it belongs to; one from a session the user took off
-    // the record is answered here and never reaches Dosu, so not even its query is logged.
+    // the record, or any call at all to the server of an agent in incognito, is answered here and
+    // never reaches Dosu, so not even its query is logged.
+    const call = method === "tools/call" && isObject(message) ? message : null;
     const callSession =
-      method === "tools/call" && isObject(message) && isObject(message.params)
-        ? takeCallSession(message.params, session.client)
-        : null;
-    if (callSession && callSessionIsIncognito(callSession) && isObject(message)) {
-      logger.info(
-        "mcp-proxy",
-        `${callSession.harness}/${callSession.id} is incognito: call not sent`,
-      );
+      call && isObject(call.params) ? takeCallSession(call.params, session.client) : null;
+    const refusal = call ? callRefusal(session.client, callSession ? [callSession] : []) : null;
+    if (call && refusal) {
+      const caller = callSession
+        ? `${callSession.harness}/${callSession.id}`
+        : `client=${session.client ?? "-"}`;
+      logger.info("mcp-proxy", `${caller} is incognito: call not sent`);
       emit({
         jsonrpc: "2.0",
-        id: message.id,
-        result: { content: [{ type: "text", text: OFF_THE_RECORD_MESSAGE }], isError: true },
+        id: call.id,
+        result: { content: [{ type: "text", text: refusal }], isError: true },
       });
       return;
     }

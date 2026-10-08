@@ -473,8 +473,40 @@ prefix (`records`, `prefix_sha256`), since nothing more of the session is ever s
   already wrote, never a user's own `dosu.ts`. `status` reports pi's `command_installed` as the
   extension being installed, and says `'dosu knowledge hooks enable pi' adds it` when it is not.
 
-The setting only keeps sessions from shipping. Prompt-time memory and Dosu MCP tools still work in
-that agent's sessions; only the per-session command turns those off.
+Shipping is not all a listed agent keeps on the machine: it gets what `/dosu-incognito` gives one
+session, so neither its prompts nor its Dosu tool calls reach Dosu. Each check reads the switch
+from `knowledge-sync.json` when it runs, so `on` holds from the agent's next prompt or call, with
+no restart.
+
+- **Prompt-time memory.** `dosu knowledge context` maps its `--agent` to the agent's id
+  (`claude-code` → `claude`, `codex`, `opencode`, `pi`; Claude Code's and Codex's prompt hooks,
+  OpenCode's plugin and pi's extension all run it) and, when that agent is listed, sends no request
+  (the prompt is the retrieval query the server logs) and prints no digest.
+- **Claude Code's tool guard.** Its `PreToolUse` hook on `search_memory` and `get_memory_evidence`
+  denies them with a reason that names `dosu knowledge incognito off claude` rather than
+  `/dosu-incognito`, and records no session for the proxy.
+- **The MCP proxy.** `dosu mcp serve --client <agent>` answers every `tools/call` itself, for any
+  tool and whether or not the call names a session, with an `isError` result saying how to turn the
+  switch off; nothing is relayed. `initialize` and `tools/list` still relay, as they do for
+  `/dosu-incognito`, so the tools stay listed (also in OpenCode and pi, whose plugin and extension
+  do not read the switch) and refuse when called. A call that names a session of a listed agent is
+  refused too, whichever server it reaches.
+- **`dosu memory search|evidence`** refuse, with the same message, when `--client` names a listed
+  agent or a session they run in (from `--session` or the shell's environment) is one of its.
+- **Sessions that ran while it was listed** stay out of all of these once it is off: a session
+  whose ledger entry has `by_agent`, or one up the `parent` links the ledger records (for a Claude
+  Code subagent's tool call, the session the hook payload names), gets no prompt-time request, and
+  its tool calls are refused with "ran while its agent was incognito". These checks run without a
+  scan, so a subagent or fork the ledger holds nothing for yet is linked only once a sync settles
+  it (as `by_agent`); until then only its shipping is held back.
+- `dosu knowledge sync --status` prints `Incognito: <agents> (not shipped)` while the list is not
+  empty.
+
+Clients with no session of their own on this machine (Claude Desktop, VS Code, Windsurf, ...) are no
+agent's to switch: `incognito on claude` leaves Claude Desktop's Dosu tools working. A remote-HTTP
+Dosu entry (a one-off `npx @dosu/cli setup` writes one, having no install for the proxy to run)
+bypasses the proxy for `/dosu-incognito` and the switch alike; there the switch has only Claude
+Code's guard.
 
 The old `enable`/`disable` subcommands (which installed and removed the command) are gone rather
 than aliased: reusing `enable` for "stop shipping" would silently change what existing scripts do.
@@ -523,8 +555,10 @@ Properties worth knowing:
   0.160 references its source instead of copying it): a rollout whose `session_meta` names a
   `parent_thread_id` or `forked_from_id` is off the record when any rollout up that chain carries
   the marker, for shipping and for the prompt-time memory hook alike.
-- The command **instructs** the model to avoid Dosu tools; it does not block them. A `PreToolUse`
-  hook that rejects Dosu tool calls when the marker is present is a possible follow-up.
+- The command **instructs** the model to avoid Dosu tools, and the CLI stops the calls it can tie
+  to the session: Claude Code's `PreToolUse` hook denies the memory tools, the MCP proxy answers
+  any tool call that names the session itself (Codex, Claude Code, OpenCode and pi name it; Cursor
+  does not, so there the instruction is all there is), and `dosu memory` refuses.
 - An OpenCode subagent's session is incognito when the session that spawned it is.
 - Pi's `/dosu-incognito` comes with the Dosu pi extension rather than this command (see [Pi](#pi)).
 - The marker itself works anywhere: a prompt containing `dosu:incognito:v1` takes its session off
@@ -683,7 +717,8 @@ DOSU_DEV=true bun run dev knowledge statusline enable claude
 DOSU_DEV=true bun run dev knowledge hooks enable claude   # installs /dosu-incognito too
 # Open Claude Code in a synced repo → 📚 Dosu on (📚 Dosu shipping… while a sync runs)
 # Run /dosu-incognito, or `dosu knowledge incognito on claude` → 👻 Dosu incognito
-# (with the switch, the log line ends "its agent is incognito")
+# (with the switch, the log line ends "its agent is incognito"; prompts get no Task Memory
+# digest, and asking the model to search Dosu memory gets "Dosu is off for this agent")
 # End the session; `dosu logs --tail` shows "not shipping incognito session claude/<id>" right away
 # `dosu knowledge incognito off claude`, then resume that session: its entry in
 # knowledge-sync.json keeps `by_agent: true`, and it never ships

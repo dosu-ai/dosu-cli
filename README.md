@@ -221,9 +221,10 @@ sessions waiting to ship, see [docs/syncing.md](docs/syncing.md#repo-scope)). Ne
 `enable` replaces a status line you already have; they print the one-liner to add to your own
 script instead.
 
-`incognito on` is a saved per-agent setting: none of that agent's sessions ship, and turning it off
-later does not ship the ones that ran while it was on, even if you resume them, nor their subagents
-or forks (`off` seals any no sync has settled yet; see
+`incognito on` is a saved per-agent setting: none of that agent's sessions ship, its prompts get no
+memory lookup, and its Dosu tool calls (and `dosu memory` run as it) are refused without leaving the
+machine. Turning it off later does not ship the sessions that ran while it was on, even if you
+resume them, nor their subagents or forks (`off` seals any no sync has settled yet; see
 [docs/syncing.md](docs/syncing.md#per-agent-incognito)). To keep a single session out instead, run
 `/dosu-incognito` in it (in Codex, which has no user slash commands, mention the skill
 `$dosu-incognito`); setup installs it with the hook. It marks that session's transcript so it is
