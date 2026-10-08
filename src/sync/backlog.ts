@@ -4,10 +4,11 @@
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { type AgentSession, scanAgentSessions } from "../sessions/scan";
 import { VERSION } from "../version/version";
-import { partitionIncognitoSessions } from "./incognito";
+import { isIncognitoSession, partitionIncognitoSessions } from "./incognito";
 import {
   filterSessionsByRepo,
   gateSessions,
+  isAgentIncognito,
   loadSyncState,
   sessionKey,
   skipBacklog,
@@ -22,8 +23,8 @@ export interface SessionBacklog {
   queued: AgentSession[];
   /** Sessions still inside the quiet period — queued once they go silent. */
   open: AgentSession[];
-  /** Gated sessions the user opted out of with `/dosu-incognito`; never shipped. Optional so
-   * callers that only fake `queued`/`open` keep compiling. */
+  /** Gated sessions the user opted out of, with `/dosu-incognito` or by putting their agent in
+   * incognito; never shipped. Optional so callers that only fake `queued`/`open` keep compiling. */
   incognito?: AgentSession[];
   /** Pending subagents' transcripts. Each ships with the session it worked for, so the lists
    * above name only sessions. */
@@ -49,16 +50,26 @@ export function listSessionBacklog(now: Date = new Date()): SessionBacklog {
     const filter = studyRepoFilter(state, () => scanned, resolver);
     // The same ledger rules the sync applies, so the queue lists exactly what it would ship.
     const gate = gateSessions(scanned, state.sessions, { cliVersion: VERSION, now });
+    // An incognito agent's sessions, and their subagents, are set aside as the sync sets them
+    // aside: never queued, never waited for, never counted.
+    const agentOff = (session: AgentSession) => isAgentIncognito(state, session);
     const ready = filterSessionsByRepo(gate.ready, filter, resolver.resolveRepo);
-    const open = filterSessionsByRepo(gate.open, filter, resolver.resolveRepo);
+    const open = filterSessionsByRepo(
+      gate.open.filter((session) => !agentOff(session)),
+      filter,
+      resolver.resolveRepo,
+    );
     resolver.flush();
     // Only pending sessions are read for the marker: settled ones already have their answer.
-    const { kept, skipped } = partitionIncognitoSessions(withoutSubagents(ready));
+    const { kept, skipped } = partitionIncognitoSessions(
+      withoutSubagents(ready),
+      (session) => agentOff(session) || isIncognitoSession(session),
+    );
     return {
       queued: kept.reverse(),
       open: withoutSubagents(open).reverse(),
       incognito: skipped.reverse(),
-      subagents: [...ready, ...open].filter((s) => s.parentId).length,
+      subagents: [...ready, ...open].filter((s) => s.parentId && !agentOff(s)).length,
     };
   } catch {
     return { queued: [], open: [], incognito: [] };

@@ -203,26 +203,32 @@ agent's environment, or run `dosu project link [dir] <key>`, to name it yourself
 (`dosu project show` prints the key in use). A session keeps the key it was first resolved under. See
 [docs/syncing.md](docs/syncing.md#project-key).
 
-Two switches make shipping visible and controllable per session. `dosu setup` installs both
-alongside the hook (`dosu knowledge hooks enable` installs the incognito command with each agent's
-hooks); they can also be managed directly:
+Two switches make shipping visible and controllable. `dosu setup` installs the status line and each
+agent's incognito command alongside the hook (`dosu knowledge hooks enable` installs the incognito
+command with each agent's hooks); they can also be managed directly:
 
 ```bash
 dosu knowledge statusline enable|disable [claude|cursor]   # status-bar line in Claude Code / Cursor CLI
-dosu knowledge incognito enable|disable [claude|cursor|codex|opencode]  # /dosu-incognito ($dosu-incognito in Codex)
+dosu knowledge incognito on|off [claude|cursor|codex|opencode]  # stop/resume shipping an agent's sessions
+dosu knowledge incognito status                                  # which agents are incognito
 ```
 
-The status line shows one of `📚 Dosu learning…`, `👻 Dosu incognito`, `⚪ Dosu paused`,
-`⚪ Dosu not learning from this repo`, or `⚪ Dosu off`. Every session is shipped unless you limit
-syncing to picked repos under `dosu` → settings → study scope (or `dosu knowledge scope set
-<checkout>...`; `dosu knowledge skip-backlog` passes over the sessions waiting to ship, see
-[docs/syncing.md](docs/syncing.md#repo-scope)). Neither setup nor `enable` replaces a
-status line you already have; they print the one-liner to add to your own script instead.
+The status line shows one of `📚 Dosu shipping…` (a sync run is live), `📚 Dosu on`,
+`👻 Dosu incognito`, `⚪ Dosu paused`, `⚪ Dosu not learning from this repo`, or `⚪ Dosu off`.
+Every session is shipped unless you limit syncing to picked repos under `dosu` → settings → study
+scope (or `dosu knowledge scope set <checkout>...`; `dosu knowledge skip-backlog` passes over the
+sessions waiting to ship, see [docs/syncing.md](docs/syncing.md#repo-scope)). Neither setup nor
+`enable` replaces a status line you already have; they print the one-liner to add to your own
+script instead.
 
-Running `/dosu-incognito` inside a session (in Codex, which has no user slash commands, mention the
-skill `$dosu-incognito`) marks that session's transcript so it is never shipped (the whole session,
-and for the rest of it — start a new session to turn Dosu back on) and tells the model not to use
-Dosu tools. See [docs/syncing.md](docs/syncing.md#per-session-incognito).
+`incognito on` is a saved per-agent setting: none of that agent's sessions ship, and turning it off
+later does not ship the ones it kept out (see
+[docs/syncing.md](docs/syncing.md#per-agent-incognito)). To keep a single session out instead, run
+`/dosu-incognito` in it (in Codex, which has no user slash commands, mention the skill
+`$dosu-incognito`); setup installs it with the hook. It marks that session's transcript so it is
+never shipped (the whole session, and for the rest of it — start a new session to turn Dosu back
+on) and tells the model not to use Dosu tools. See
+[docs/syncing.md](docs/syncing.md#per-session-incognito).
 
 ### Telemetry and privacy
 

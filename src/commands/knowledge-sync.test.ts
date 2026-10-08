@@ -324,7 +324,8 @@ describe("knowledge sync of Codex subagents", () => {
 describe("knowledge sync of a Codex session that ran $dosu-incognito", () => {
   it("settles it as incognito: Codex hands the model the installed skill, marker and all", async () => {
     const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
-    await dosu("incognito", "enable", "codex");
+    // `off` installs the skill without putting Codex in incognito, which would settle both.
+    await dosu("incognito", "off", "codex");
     const skill = join(home, ".codex", "skills", "dosu-incognito", "SKILL.md");
     // The user turn Codex 0.140 and 0.160 record when the user mentions the skill.
     const injected = `<skill>\n<name>dosu-incognito</name>\n<path>${skill}</path>\n${readFileSync(skill, "utf-8")}\n</skill>`;

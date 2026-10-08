@@ -4,11 +4,13 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentSession } from "../sessions/scan";
 import {
+  agentIncognitoEntry,
   backoffUntil,
   DEFAULT_QUIET_PERIOD_MS,
   emptySyncState,
   filterSessionsByRepo,
   gateSessions,
+  isAgentIncognito,
   isPending,
   isShippingEnabled,
   isUnderDir,
@@ -20,6 +22,7 @@ import {
   resetSyncState,
   type SyncState,
   saveSyncState,
+  setAgentsIncognito,
   setShipTranscripts,
   setSyncPaused,
   settledSessions,
@@ -177,6 +180,7 @@ describe("migration from the watermark state (schema 2)", () => {
     repo_filter: ["github.com/me/proj"],
     paused: true,
     ship_transcripts: false,
+    incognito_agents: ["codex"],
   };
 
   it("seeds the ledger with what shipped, drops the watermark, and keeps settings", () => {
@@ -211,6 +215,7 @@ describe("migration from the watermark state (schema 2)", () => {
       repo_filter: ["github.com/me/proj"],
       paused: true,
       ship_transcripts: false,
+      incognito_agents: ["codex"],
     });
   });
 
@@ -278,6 +283,24 @@ describe("migration from the studying-era state (schema 1)", () => {
     });
   });
 
+  it("carries 0.66's per-agent incognito switch over, and the next save keeps it", () => {
+    // As 0.66 wrote it: the list at the top level, and no `ship` block.
+    writeRaw({ ...v1, incognito_agents: ["cursor", "claude", "cursor", 7] });
+    expect(loadSyncState(configDir).incognito_agents).toEqual(["claude", "cursor"]);
+
+    setSyncPaused(false, configDir);
+
+    expect(loadSyncState(configDir).incognito_agents).toEqual(["claude", "cursor"]);
+    const raw = JSON.parse(readFileSync(syncStatePath(configDir), "utf-8"));
+    expect(raw.schema_version).toBe(3);
+    expect(raw.incognito_agents).toEqual(["claude", "cursor"]);
+  });
+
+  it("drops an empty incognito list rather than storing it", () => {
+    writeRaw({ ...v1, incognito_agents: [] });
+    expect("incognito_agents" in loadSyncState(configDir)).toBe(false);
+  });
+
   it("starts shipping from scratch when the install never shipped", () => {
     writeRaw(v1);
     const state = loadSyncState(configDir);
@@ -318,6 +341,16 @@ describe("isPending", () => {
       expect(isPending(s, entry({ outcome }), options)).toBe(false);
       expect(isPending(s, entry({ outcome }), { cliVersion: "9.9.9" })).toBe(true);
     }
+  });
+
+  it("a session an agent's incognito switch settled is never pending again", () => {
+    const off = entry({ outcome: "incognito", by_agent: true });
+    expect(isPending(s, off, options)).toBe(false);
+    // Not on a newer CLI, not once it was resumed, not on --retry-rejected.
+    expect(isPending(s, off, { cliVersion: "9.9.9" })).toBe(false);
+    expect(isPending({ ...s, updated: "2026-08-26T00:00:00.000Z" }, off, options)).toBe(false);
+    const retry = { cliVersion: VERSION, retryRejectedBefore: new Date("2026-08-27T00:00:00Z") };
+    expect(isPending(s, off, retry)).toBe(false);
   });
 
   it("--retry-rejected makes sessions refused before it started pending, and only those", () => {
@@ -556,7 +589,7 @@ describe("gateSessions", () => {
 });
 
 describe("resetSyncState", () => {
-  it("forgets the ledger but keeps the filter, pause switch and opt-out", () => {
+  it("forgets the ledger but keeps the filter, pause switch, opt-out and incognito agents", () => {
     saveSyncState(
       {
         schema_version: 3,
@@ -569,6 +602,7 @@ describe("resetSyncState", () => {
         project_filter: ["/Users/me/proj"],
         paused: true,
         ship_transcripts: false,
+        incognito_agents: ["cursor"],
       },
       configDir,
     );
@@ -586,6 +620,27 @@ describe("resetSyncState", () => {
     expect(state.project_filter).toEqual(["/Users/me/proj"]);
     expect(state.paused).toBe(true);
     expect(state.ship_transcripts).toBe(false);
+    expect(state.incognito_agents).toEqual(["cursor"]);
+  });
+
+  it("keeps the sessions an agent's incognito switch settled, trimmed to the answer", () => {
+    const off = entry({ outcome: "incognito", by_agent: true, parent: "p", message: "m" });
+    saveSyncState(
+      {
+        ...emptySyncState(),
+        sessions: {
+          "cursor/off": off,
+          "claude/marker": entry({ outcome: "incognito" }),
+          "claude/shipped": entry({ task_id: "t" }),
+        },
+      },
+      configDir,
+    );
+
+    resetSyncState(configDir);
+
+    const { message: _, ...trimmed } = off;
+    expect(loadSyncState(configDir).sessions).toEqual({ "cursor/off": trimmed });
   });
 
   it("writes a clean file when nothing was ever shipped", () => {
@@ -655,6 +710,24 @@ describe("skipBacklog", () => {
     expect(loadSyncState(configDir).sessions).toEqual({ "claude/grown": shipped });
   });
 
+  it("settles a declined session of an incognito agent as its switch would", () => {
+    saveSyncState({ ...emptySyncState(), incognito_agents: ["cursor"] }, configDir);
+    const declined = session({ harness: "cursor", id: "c1", updated: "2026-08-24T00:00:00.000Z" });
+    const subagent = session({ harness: "cursor", id: "c1-sub", parentId: "c1" });
+
+    skipBacklog([declined, subagent], VERSION, NOW, configDir);
+
+    expect(loadSyncState(configDir).sessions).toEqual({
+      "cursor/c1": agentIncognitoEntry(declined, NOW.toISOString(), VERSION),
+      "cursor/c1-sub": agentIncognitoEntry(subagent, NOW.toISOString(), VERSION),
+    });
+    expect(loadSyncState(configDir).sessions["cursor/c1-sub"]).toMatchObject({
+      outcome: "incognito",
+      by_agent: true,
+      parent: "c1",
+    });
+  });
+
   it("a declined session ships once it changes, and never on a CLI upgrade alone", () => {
     const declined = session({ id: "declined", updated: "2026-08-24T00:00:00.000Z" });
     skipBacklog([declined], VERSION, NOW, configDir);
@@ -666,6 +739,77 @@ describe("skipBacklog", () => {
         cliVersion: VERSION,
       }),
     ).toBe(true);
+  });
+});
+
+describe("setAgentsIncognito", () => {
+  it("adds and removes agents, keeping the list sorted and deduplicated", () => {
+    setAgentsIncognito(["cursor", "claude"], true, configDir);
+    setAgentsIncognito(["cursor"], true, configDir);
+    expect(loadSyncState(configDir).incognito_agents).toEqual(["claude", "cursor"]);
+
+    setAgentsIncognito(["claude"], false, configDir);
+    expect(loadSyncState(configDir).incognito_agents).toEqual(["cursor"]);
+  });
+
+  it("drops the key once no agent is incognito, and keeps the rest of the state", () => {
+    saveSyncState(
+      { ...emptySyncState(), sessions: { "claude/abc": entry() }, total_shipped: 3 },
+      configDir,
+    );
+    setAgentsIncognito(["codex"], true, configDir);
+    setAgentsIncognito(["codex"], false, configDir);
+    const state = loadSyncState(configDir);
+    expect(state.sessions["claude/abc"]).toEqual(entry());
+    expect(state.total_shipped).toBe(3);
+    expect(readFileSync(syncStatePath(configDir), "utf-8")).not.toContain("incognito_agents");
+  });
+
+  it("ignores non-string entries in a hand-edited file", () => {
+    writeRaw({ ...emptySyncState(), incognito_agents: ["cursor", 7] });
+    expect(loadSyncState(configDir).incognito_agents).toEqual(["cursor"]);
+  });
+});
+
+describe("isAgentIncognito", () => {
+  const s = session({ harness: "cursor", id: "c1" });
+
+  it("holds for every session of a listed agent", () => {
+    expect(isAgentIncognito({ sessions: {}, incognito_agents: ["cursor"] }, s)).toBe(true);
+    expect(isAgentIncognito({ sessions: {}, incognito_agents: ["claude"] }, s)).toBe(false);
+    expect(isAgentIncognito({ sessions: {} }, s)).toBe(false);
+  });
+
+  it("keeps holding for a session the switch settled, once the switch is off", () => {
+    const sessions = { "cursor/c1": entry({ outcome: "incognito", by_agent: true }) };
+    expect(isAgentIncognito({ sessions }, s)).toBe(true);
+    // A /dosu-incognito session is the transcript marker's to decide.
+    expect(
+      isAgentIncognito({ sessions: { "cursor/c1": entry({ outcome: "incognito" }) } }, s),
+    ).toBe(false);
+  });
+});
+
+describe("agentIncognitoEntry", () => {
+  const s1 = (overrides: Partial<AgentSession> = {}) =>
+    session({ harness: "cursor", id: "c1", ...overrides });
+
+  it("settles the session for good, with no shipped prefix", () => {
+    const at = NOW.toISOString();
+    expect(agentIncognitoEntry(s1(), at, VERSION)).toEqual({
+      updated: "2026-08-25T11:00:00Z",
+      outcome: "incognito",
+      at,
+      cli_version: VERSION,
+      by_agent: true,
+    });
+    expect(agentIncognitoEntry(s1({ parentId: "p" }), at, VERSION).parent).toBe("p");
+  });
+
+  it("round-trips through disk", () => {
+    const sessions = { "cursor/c1": agentIncognitoEntry(s1(), NOW.toISOString(), VERSION) };
+    saveSyncState({ ...emptySyncState(), sessions }, configDir);
+    expect(loadSyncState(configDir).sessions).toEqual(sessions);
   });
 });
 

@@ -25,7 +25,8 @@ export type SessionOutcome =
   | "shipped"
   /** Too small to hold anything worth learning. */
   | "trivial"
-  /** The user took it off the record with /dosu-incognito. */
+  /** The user took it off the record with /dosu-incognito, or put its agent in incognito
+   * (`by_agent`). */
   | "incognito"
   /** The backend refused the payload (400/413/422); retried by --retry-rejected. */
   | "rejected"
@@ -52,7 +53,8 @@ export interface LedgerEntry {
   /** When it was settled (ISO). */
   at: string;
   /** The CLI version that settled it. Passed-over sessions are re-evaluated by a newer CLI,
-   * which may support the harness, judge triviality differently, or fix what was rejected. */
+   * which may support the harness, judge triviality differently, or fix what was rejected (all
+   * but `by_agent` ones). */
   cli_version: string;
   /** How many normalized records of the session have shipped so far, from the start, and the
    * sha256 of their canonical JSON (shipper/continuation.ts): a session that grows ships only
@@ -79,6 +81,11 @@ export interface LedgerEntry {
    * mtime: `updated` holds the ship time instead, and the session is pending only once it
    * changes after that. */
   seeded?: true;
+  /** incognito: settled because its agent was in `incognito_agents`, not by a marker in the
+   * transcript, which a later run could not find again. So the entry is never pending: turning
+   * the switch off, resuming the session, or a newer CLI never ships it. It keeps no shipped
+   * prefix, since nothing of the session is ever sent after it. */
+  by_agent?: true;
 }
 
 /** One shipped session, for history views; derived from the ledger. */
@@ -133,6 +140,12 @@ export interface SyncState {
    * so a failed or skipped upload is retried and a resumed session ships its tail; each is
    * forgotten once its file is gone, leaves the scan window, or the scan lists it itself. */
   outside_sessions?: Record<string, string>;
+  /** Agent ids (session harnesses: claude, cursor, codex, ...) the user put in incognito (`dosu
+   * knowledge incognito on`), sorted; absent when there are none. None of their sessions ship,
+   * as if every one had run `/dosu-incognito`: each settles `incognito` with `by_agent`, so
+   * turning the switch off later does not ship it. Schema 1 (0.66) kept the same key at the top
+   * level, so the list carries over. */
+  incognito_agents?: string[];
 }
 
 /** Whether finished sessions are shipped to Dosu memory: on unless the user opted out. */
@@ -203,6 +216,7 @@ function parseEntry(value: unknown): LedgerEntry | null {
     ...optionalString("message", value.message),
     ...optionalString("parent", value.parent),
     ...(value.seeded === true ? { seeded: true as const } : {}),
+    ...(value.by_agent === true ? { by_agent: true as const } : {}),
   };
 }
 
@@ -227,7 +241,15 @@ function parseCommon(raw: Record<string, unknown>): Omit<SyncState, "schema_vers
     ...(raw.paused === true ? { paused: true } : {}),
     ...(raw.ship_transcripts === false ? { ship_transcripts: false as const } : {}),
     ...(outside ? { outside_sessions: outside } : {}),
+    // Schema 1 (0.66's per-agent switch) kept it at the top level too, so it survives migration.
+    ...agentList(raw.incognito_agents),
   };
+}
+
+/** `incognito_agents` as stored: sorted and de-duplicated, and no key at all when empty. */
+function agentList(value: unknown): Pick<SyncState, "incognito_agents"> {
+  const ids = Array.isArray(value) ? [...new Set(stringsOf(value))].sort() : [];
+  return ids.length > 0 ? { incognito_agents: ids } : {};
 }
 
 /** Schema 1 kept the local learner's progress at the top level and shipping under `ship`;
@@ -339,20 +361,84 @@ export function setShipTranscripts(enabled: boolean, configDir: string = getConf
   saveSyncState(state, configDir);
 }
 
+/** Put agents in or out of incognito (`dosu knowledge incognito on|off`): load-modify-save like
+ * setSyncPaused, keeping the list sorted and dropping the key once it is empty. */
+export function setAgentsIncognito(
+  agentIds: readonly string[],
+  incognito: boolean,
+  configDir: string = getConfigDir(),
+): void {
+  const state = loadSyncState(configDir);
+  const current = new Set(state.incognito_agents ?? []);
+  for (const id of agentIds) {
+    if (incognito) current.add(id);
+    else current.delete(id);
+  }
+  if (current.size > 0) state.incognito_agents = [...current].sort();
+  else delete state.incognito_agents;
+  saveSyncState(state, configDir);
+}
+
+/** Whether the agent's saved incognito switch keeps a session off the record: its agent is in
+ * `incognito_agents` now, or the switch already settled it (see LedgerEntry.by_agent). Subagents'
+ * transcripts share their session's harness, so the switch covers them too. */
+export function isAgentIncognito(
+  state: Pick<SyncState, "incognito_agents" | "sessions">,
+  session: Pick<AgentSession, "harness" | "id">,
+): boolean {
+  return (
+    (state.incognito_agents?.includes(session.harness) ?? false) ||
+    state.sessions[sessionKey(session)]?.by_agent === true
+  );
+}
+
+/** The ledger entry for a session its agent's incognito switch keeps off the record: final, and
+ * with nothing about what shipped of it before. */
+export function agentIncognitoEntry(
+  session: Pick<AgentSession, "updated" | "parentId">,
+  at: string,
+  cliVersion: string,
+): LedgerEntry {
+  return {
+    updated: session.updated,
+    outcome: "incognito",
+    at,
+    cli_version: cliVersion,
+    by_agent: true,
+    ...(session.parentId ? { parent: session.parentId } : {}),
+  };
+}
+
 /** Forget everything settled so the next run starts from scratch: the ledger, the lifetime
  * counter, and failure backoff (the backend dedupes re-shipped traces on content hash). User
- * settings survive — the study scope, the pause switch, and the shipping opt-out are
- * choices, not progress — and so do the transcripts outside the scan. Memory already built in
- * Dosu is untouched. */
+ * settings survive — the study scope, the pause switch, the shipping opt-out, and the incognito
+ * agents are choices, not progress — and so do the transcripts outside the scan and the sessions
+ * an agent's incognito switch settled, which no later run could tell apart again. Memory already
+ * built in Dosu is untouched. */
 export function resetSyncState(configDir: string = getConfigDir()): void {
   const previous = loadSyncState(configDir);
+  const offRecord: Record<string, LedgerEntry> = {};
+  for (const [key, entry] of Object.entries(previous.sessions)) {
+    if (!entry.by_agent) continue;
+    const { updated, outcome, at, cli_version, parent } = entry;
+    offRecord[key] = {
+      updated,
+      outcome,
+      at,
+      cli_version,
+      by_agent: true,
+      ...(parent ? { parent } : {}),
+    };
+  }
   saveSyncState(
     {
       ...emptySyncState(),
+      sessions: offRecord,
       ...(previous.repo_filter ? { repo_filter: previous.repo_filter } : {}),
       ...(previous.project_filter ? { project_filter: previous.project_filter } : {}),
       ...(previous.paused ? { paused: true } : {}),
       ...(previous.ship_transcripts === false ? { ship_transcripts: false as const } : {}),
+      ...(previous.incognito_agents ? { incognito_agents: previous.incognito_agents } : {}),
       // Where those sessions live, so a fresh drain can still find them.
       ...(previous.outside_sessions ? { outside_sessions: previous.outside_sessions } : {}),
     },
@@ -364,7 +450,8 @@ export function resetSyncState(configDir: string = getConfigDir()): void {
  * sessions that finish (or change) from here on ship. Explicit per session, and never
  * re-evaluated by a newer CLI: it was the user's call, not a rule's. Only sessions the ledger
  * has never settled count as backlog; any other entry is kept, so a shipped session that grew
- * since still ships just its tail. */
+ * since still ships just its tail. A session of an agent in incognito settles as its switch
+ * would have it (`by_agent`), so it stays out once the switch is off too. */
 export function skipBacklog(
   sessions: readonly AgentSession[],
   cliVersion: string,
@@ -374,13 +461,15 @@ export function skipBacklog(
   const state = loadSyncState(configDir);
   const at = now.toISOString();
   for (const session of unsettledSessions(sessions, state)) {
-    state.sessions[sessionKey(session)] = {
-      updated: session.updated,
-      outcome: "skipped_by_user",
-      at,
-      cli_version: cliVersion,
-      ...(session.parentId ? { parent: session.parentId } : {}),
-    };
+    state.sessions[sessionKey(session)] = isAgentIncognito(state, session)
+      ? agentIncognitoEntry(session, at, cliVersion)
+      : {
+          updated: session.updated,
+          outcome: "skipped_by_user",
+          at,
+          cli_version: cliVersion,
+          ...(session.parentId ? { parent: session.parentId } : {}),
+        };
   }
   saveSyncState(state, configDir);
 }
@@ -413,13 +502,15 @@ export interface PendingOptions {
 }
 
 /** Whether a session still needs the ship step: no ledger answer yet, an answer for different
- * contents, or a passed-over answer this CLI should reconsider. */
+ * contents, or a passed-over answer this CLI should reconsider. A session an agent's incognito
+ * switch settled never is (see LedgerEntry.by_agent). */
 export function isPending(
   session: AgentSession,
   entry: LedgerEntry | undefined,
   options: PendingOptions,
 ): boolean {
   if (!entry) return true;
+  if (entry.by_agent) return false;
   if (entry.seeded) return Date.parse(session.updated) > Date.parse(entry.updated);
   if (Date.parse(session.updated) !== Date.parse(entry.updated)) return true;
   if (entry.outcome === "shipped" || entry.outcome === "skipped_by_user") return false;

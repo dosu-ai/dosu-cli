@@ -216,8 +216,7 @@ export function getIncognitoAgent(id: string): IncognitoAgent | undefined {
 /** `dosu knowledge hooks disable <agent>`'s part for the agent's command. While transcript
  * shipping is on, any `dosu knowledge sync` (another agent's hook, a `--flush`) ships every
  * agent's sessions, its own hooks or not, so the command, the user's one way to keep a session
- * out, stays; once nothing ships, it goes with the hooks. `incognito disable` removes it either
- * way. */
+ * out, stays; once nothing ships, it goes with the hooks. */
 export function disableIncognitoWithHooks(id: string): void {
   if (!isShippingEnabled(loadSyncState())) getIncognitoAgent(id)?.disable();
 }
@@ -226,7 +225,7 @@ export function disableIncognitoWithHooks(id: string): void {
 export function keptIncognitoNote(id: string): string {
   const command = getIncognitoAgent(id);
   if (!command?.isEnabled() || !isShippingEnabled(loadSyncState())) return "";
-  return `Kept ${command.invocation()}: ${command.name()} sessions still ship with any 'dosu knowledge sync' while transcript shipping is on. 'dosu knowledge incognito disable ${id}' removes it.`;
+  return `Kept ${command.invocation()}: ${command.name()} sessions still ship with any 'dosu knowledge sync' while transcript shipping is on. 'dosu knowledge incognito on ${id}' keeps them all out.`;
 }
 
 /** The incognito commands installed on this machine, for the messages that tell the user how to

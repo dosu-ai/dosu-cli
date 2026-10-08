@@ -95,7 +95,7 @@ describe("Codex installed but never run (no ~/.codex)", () => {
     expect(existsSync(join(home, ".codex", "hooks.json"))).toBe(false);
     expect(readFileSync(skill(), "utf-8")).toContain("dosu:incognito:v1");
     expect(said).toContain(
-      "Kept $dosu-incognito: Codex sessions still ship with any 'dosu knowledge sync' while transcript shipping is on. 'dosu knowledge incognito disable codex' removes it.",
+      "Kept $dosu-incognito: Codex sessions still ship with any 'dosu knowledge sync' while transcript shipping is on. 'dosu knowledge incognito on codex' keeps them all out.",
     );
   });
 

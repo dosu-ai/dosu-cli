@@ -161,6 +161,38 @@ describe("listSessionBacklog", () => {
     expect(mockResolveRepo).toHaveBeenCalledTimes(3);
   });
 
+  it("sets an incognito agent's sessions aside, and lists none its switch settled", () => {
+    const fresh = new Date(Date.now() - 60 * 1000).toISOString(); // inside the quiet period
+    mockLoadSyncState.mockReturnValue({
+      ...emptySyncState(),
+      incognito_agents: ["claude"],
+      sessions: {
+        // Settled by the switch, by another CLI version, and changed since: still off the record.
+        "cursor/c0": {
+          updated: "2026-01-01T00:00:00.000Z",
+          outcome: "incognito",
+          at: "2026-01-01T00:00:00.000Z",
+          cli_version: "0.0.1",
+          by_agent: true,
+        },
+      },
+    });
+    mockScan.mockReturnValue([
+      session({ id: "c1" }),
+      session({ id: "c0" }),
+      session({ id: "k1", harness: "claude" }),
+      session({ id: "k1-sub", harness: "claude", parentId: "k1" }),
+      session({ id: "k2", harness: "claude", updated: fresh }),
+    ]);
+
+    const backlog = listSessionBacklog();
+
+    expect(backlog.queued.map((s) => s.id)).toEqual(["c1"]);
+    expect(backlog.incognito?.map((s) => s.id)).toEqual(["k1"]);
+    expect(backlog.open).toEqual([]);
+    expect(backlog.subagents).toBe(0);
+  });
+
   it("sets incognito sessions aside from the queue", () => {
     const dir = mkdtempSync(join(tmpdir(), "dosu-backlog-"));
     try {

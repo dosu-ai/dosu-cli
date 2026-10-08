@@ -137,8 +137,8 @@ describe("Claude Code installed but never run (no ~/.claude)", () => {
     });
   });
 
-  it("incognito enable and statusline enable set Claude Code up too", async () => {
-    await dosu("incognito", "enable");
+  it("incognito on and statusline enable set Claude Code up too", async () => {
+    await dosu("incognito", "on");
     await dosu("statusline", "enable");
 
     expect(existsSync(incognitoCommand())).toBe(true);
@@ -216,7 +216,7 @@ describe("Claude Code installed but never run (no ~/.claude)", () => {
     expect(claudeHooks()).toEqual({});
     expect(readFileSync(incognitoCommand(), "utf-8")).toContain("dosu:incognito:v1");
     expect(said).toContain(
-      "Kept /dosu-incognito: Claude Code sessions still ship with any 'dosu knowledge sync' while transcript shipping is on. 'dosu knowledge incognito disable claude' removes it.",
+      "Kept /dosu-incognito: Claude Code sessions still ship with any 'dosu knowledge sync' while transcript shipping is on. 'dosu knowledge incognito on claude' keeps them all out.",
     );
   });
 

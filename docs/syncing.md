@@ -9,8 +9,9 @@ each running `dosu knowledge sync --quiet --detach`; for Claude Code it also ins
 the first session ships, and `disable` removes everything `enable` installed, except that the
 incognito command stays while transcript shipping is on: any sync (another agent's hook, a
 `--flush`) still ships every agent's sessions, hooks or not, so `disable` says it kept the command
-and `dosu knowledge incognito disable <agent>` removes it. Pi's command is part of its extension
-and goes with it; `hooks disable pi` says that pi's sessions still ship. `hooks status` says
+and that `dosu knowledge incognito on <agent>` keeps all of that agent's sessions out (see
+[Per-agent incognito](#per-agent-incognito)). Pi's command is part of its extension and goes with
+it; `hooks disable pi` says that pi's sessions still ship. `hooks status` says
 when the command is missing (as an older CLI left it). With no agent named it installs for every
 agent it detects and names the ones it skipped. Claude Code counts as detected when `~/.claude` (or `CLAUDE_CONFIG_DIR`) exists or
 `claude` is on PATH, so a freshly provisioned machine can set Dosu up before Claude Code's first
@@ -20,9 +21,10 @@ ones its ledger has no answer for, applies the repo scope and pause switch from
 `~/.config/dosu-cli/knowledge-sync.json`, and ships them to Dosu memory (secrets redacted locally
 first), which learns from each session server-side. Shipping is on by default;
 `dosu knowledge transcripts disable` turns it off. This document covers how a sync decides what to
-ship, the project key sessions are scoped by, the repo scope, and the two switches layered on top:
-a per-session opt-out and a status-bar indicator. On a machine torn down after its last task, run
-`dosu knowledge sync --flush` as the last step (see [Throwaway machines](#throwaway-machines)).
+ship, the project key sessions are scoped by, the repo scope, and the switches layered on top: a
+per-agent incognito setting, a per-session opt-out, and a status-bar indicator. On a machine torn
+down after its last task, run `dosu knowledge sync --flush` as the last step (see
+[Throwaway machines](#throwaway-machines)).
 
 ## Codex hooks
 
@@ -405,19 +407,65 @@ access once (it honors `npm_config_registry`, so a mirror works). With no regist
 start waits for the install to fail (about 70 seconds against a refused connection), then loads the
 plugin anyway.
 
-## Per-session incognito
-
-`dosu knowledge hooks enable` and `dosu setup` install each agent's command with its hooks. The
-command can also be managed on its own:
+## Per-agent incognito
 
 ```bash
-dosu knowledge incognito enable            # all detected agents
-dosu knowledge incognito enable claude     # or one of: claude, cursor, codex, opencode
+dosu knowledge incognito on                 # all detected agents
+dosu knowledge incognito on cursor          # or any of: claude, cursor, codex, opencode
+dosu knowledge incognito off [agents...]
 dosu knowledge incognito status [--json]
-dosu knowledge incognito disable [agents...]
 ```
 
-`enable` writes a command file per agent:
+`on` adds the agents' ids (their session harnesses) to `incognito_agents` in
+`knowledge-sync.json`, sorted; `off` removes them, and the key goes once the list is empty. While an
+agent is listed, `dosu knowledge sync` sets its sessions and its subagents' transcripts aside before
+the repo scope, the gate log line ("N ready, M in flight") and the batch limit. Every one past the
+quiet period settles in the ledger as `incognito` with `by_agent: true`, whatever the scope and all
+in the same run, without reaching the ship step; the debug log records
+`not shipping incognito session <harness>/<id>: its agent is incognito` and the run summary counts
+it as passed over. Settling them alone is no attempt to ship, so failure backoff stays as it was.
+The sync reads the switch again once it holds the lock, so an agent put in incognito after the scan
+keeps its sessions out of that run too.
+
+A `by_agent` entry is final. A `/dosu-incognito` entry stays out because the marker is still in
+the transcript, and a newer CLI re-checks it so detector fixes reach it. Nothing in a transcript
+records the switch, so a `by_agent` entry is never pending again: not once the switch is off, the
+session is resumed, another CLI version runs, or `--retry-rejected` is passed. It keeps no shipped
+prefix (`records`, `prefix_sha256`), since nothing more of the session is ever sent.
+
+- The Activity screen and `dosu knowledge sessions` set a listed agent's sessions aside as
+  incognito: out of the queue, the still-open list and the subagent count.
+- Setup's backfill offer does not count a listed agent's sessions (the sync sets them aside before
+  it reports a backlog), and `dosu knowledge skip-backlog` settles them as `by_agent` incognito
+  rather than `skipped_by_user`.
+- The Activity screen's clear (`resetSyncState`) keeps the list and the `by_agent` entries, trimmed
+  to `updated`, `outcome`, `at`, `cli_version`, `by_agent` and `parent`.
+- The status line shows `👻 Dosu incognito` in a listed agent (see [Status line](#status-line)).
+- `status` shows each agent's switch and whether its command is installed (`--json` rows: `agent`,
+  `name`, `installed`, `incognito`, `command_installed`, `invocation`, `command_path`). `on` and
+  `off` reinstall the agent's incognito command when it is missing; a failure there leaves the
+  switch as set.
+- The list carries over from a 0.66 state file (schema 1, which kept `incognito_agents` at the top
+  level) and from schema 2.
+- Pi has no entry: its `/dosu-incognito` comes with its extension.
+- Sessions that ran while the agent was listed but that no sync settled before `off` (still in the
+  quiet period, or never synced) are pending like any other once the agent is off.
+
+The setting only keeps sessions from shipping. Prompt-time memory and Dosu MCP tools still work in
+that agent's sessions; only the per-session command turns those off.
+
+The old `enable`/`disable` subcommands (which installed and removed the command) are gone rather
+than aliased: reusing `enable` for "stop shipping" would silently change what existing scripts do.
+
+## Per-session incognito
+
+`dosu knowledge hooks enable` and `dosu setup` install each agent's command with its hooks, and
+`dosu knowledge incognito on|off` reinstall it when it is missing. Users who enabled the hooks
+before the command existed get it on upgrade: the first command on a newer CLI installs it for
+every agent whose hooks are on, once (`src/version/incognito-backfill-check.ts`, marker
+`incognito-backfill.json` in the config dir).
+
+The command is a file per agent:
 
 | Agent | Run it as | File |
 |---|---|---|
@@ -463,10 +511,10 @@ Properties worth knowing:
 ### Codex: `$dosu-incognito`
 
 Codex has no user slash commands: 0.140 and 0.160 run only their built-in `/` commands and no longer
-load custom prompts (`~/.codex/prompts`, where CLIs before this one installed the command; `enable`
-removes that file). What a user can invoke is a skill, so the command is the skill
-`$CODEX_HOME/skills/dosu-incognito`, run by mentioning it: type `$dosu-incognito` in the TUI (the
-`$` menu lists it) or anywhere in a `codex exec` prompt. Codex adds the skill's text to the
+load custom prompts (`~/.codex/prompts`, where CLIs before this one installed the command;
+installing the skill removes that file). What a user can invoke is a skill, so the command is the
+skill `$CODEX_HOME/skills/dosu-incognito`, run by mentioning it: type `$dosu-incognito` in the TUI
+(the `$` menu lists it) or anywhere in a `codex exec` prompt. Codex adds the skill's text to the
 conversation as a user turn, so the rollout carries the marker. The skill sets
 `allow_implicit_invocation: false` in `agents/openai.yaml`: Codex leaves it out of the skills it
 lists to the model, which therefore never opens it on its own and carries the marker into a session
@@ -494,14 +542,17 @@ command to `dosu knowledge statusline render --agent <id>`, which prints one lin
 
 | Line | Meaning |
 |---|---|
-| `📚 Dosu learning…` | The hook is installed and this session ships to Dosu memory when it ends |
-| `👻 Dosu incognito` | `/dosu-incognito` was run in this session |
+| `📚 Dosu shipping…` | As `on`, and a knowledge-sync run is live right now (the lock check behind the TUI's "shipping sessions...") |
+| `📚 Dosu on` | The hook is installed and this session ships to Dosu memory when it ends |
+| `👻 Dosu incognito` | The agent is incognito (`dosu knowledge incognito on`), or `/dosu-incognito` was run in this session |
 | `⚪ Dosu paused` | Syncing is paused (Activity screen stop, or `paused` in the state file) |
 | `⚪ Dosu not learning from this repo` | A repo scope is set and `cwd` is not in one of its repos |
 | `⚪ Dosu off` | No Dosu hook is installed for this agent, or shipping is disabled |
 
-States are checked in that order after `off`: incognito outranks paused and not-studied because it
-is the user's own action in this session and the line is how they confirm it took.
+States are checked from the bottom of the table up: `off` (no hook, or shipping disabled), then
+incognito (the agent's switch, then the transcript's marker), paused, and the repo scope; a line
+that passes them all is `on`, or `shipping…` while a sync holds the lock. Incognito outranks paused
+and not-studied because it is the user's own action and the line is how they confirm it took.
 
 Neither setup nor `enable` replaces an existing status line. If one is configured, it is left
 alone and the line to add to your own script is printed instead:
@@ -512,9 +563,9 @@ printf '%s' "$input" | dosu knowledge statusline render --agent claude
 
 Rendering is on the hot path (harnesses re-run the command at most every 300 ms, Cursor kills it
 after 2 s), so `src/index.ts` dispatches `knowledge statusline render` before loading the rest of
-the CLI, and the renderer reads only the hook config, the sync state file, and the transcript, plus
-one `git remote get-url origin` in `cwd` (1 s timeout) once the earlier states have not matched. It
-never throws; anything unreadable renders as `⚪ Dosu off`.
+the CLI, and the renderer reads only the hook config, the sync state and lock files, and the
+transcript, plus one `git remote get-url origin` in `cwd` (1 s timeout) once the earlier states have
+not matched. It never throws; anything unreadable renders as `⚪ Dosu off`.
 
 Dev installs (`DOSU_DEV=true`) pin the working copy and prefix with `env` rather than bare
 `NAME=value` assignments, because Cursor spawns the command without a shell.
@@ -608,7 +659,8 @@ ends and is remembered for later syncs. The header's `cwd` gives the project key
 ```bash
 DOSU_DEV=true bun run dev knowledge statusline enable claude
 DOSU_DEV=true bun run dev knowledge hooks enable claude   # installs /dosu-incognito too
-# Open Claude Code in a synced repo → 📚 Dosu learning…
-# Run /dosu-incognito → 👻 Dosu incognito
+# Open Claude Code in a synced repo → 📚 Dosu on (📚 Dosu shipping… while a sync runs)
+# Run /dosu-incognito, or `dosu knowledge incognito on claude` → 👻 Dosu incognito
+# (with the switch, the log line ends "its agent is incognito")
 # End the session; `dosu logs --tail` shows "not shipping incognito session claude/<id>" right away
 ```

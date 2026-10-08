@@ -566,6 +566,147 @@ describe("runKnowledgeSync shipping", () => {
     expect(ledger["claude/s-60"].task_id).toBeUndefined();
   });
 
+  describe("an agent saved as incognito", () => {
+    const cursor = (minutes: number, parentId?: string): AgentSession => ({
+      ...session(minutes),
+      id: `c-${minutes}`,
+      harness: "cursor",
+      ...(parentId ? { parentId } : {}),
+    });
+
+    it("has its ready sessions and their subagents settled without the ship step", async () => {
+      const ship = shipAll();
+      const { deps, saved } = makeDeps({
+        // c-1 is still inside the quiet period: neither in flight nor settled yet.
+        listSessions: vi
+          .fn()
+          .mockResolvedValue([session(30), cursor(40), cursor(41, "c-40"), cursor(1)]),
+        loadState: () => state({ incognito_agents: ["cursor"] }),
+        ship,
+      });
+      mockLoggerDebug.mockClear();
+
+      const outcome = await runKnowledgeSync({ deps });
+
+      expect(vi.mocked(ship).mock.calls[0][0].map((s) => s.id)).toEqual(["s-30"]);
+      expect(outcome).toMatchObject({ status: "shipped", readySessions: 1, inFlightSessions: 0 });
+      expect(outcome.settledSessions).toBe(1);
+      expect(outcome.counts).toMatchObject({ shipped: 1, incognito: 1 });
+      expect(outcome.counts?.subagents.incognito).toBe(1);
+      const ledger = (saved.at(-1) as SyncState).sessions;
+      expect(ledger["cursor/c-40"]).toEqual({
+        updated: cursor(40).updated,
+        outcome: "incognito",
+        at: NOW.toISOString(),
+        cli_version: CLI,
+        by_agent: true,
+      });
+      expect(ledger["cursor/c-41"]).toMatchObject({ by_agent: true, parent: "c-40" });
+      expect(ledger["cursor/c-1"]).toBeUndefined();
+      expect(ledger["claude/s-30"].by_agent).toBeUndefined();
+      const logged = mockLoggerDebug.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(logged).toContain("gate: 1 ready, 0 in flight");
+      expect(logged).toContain("not shipping incognito session cursor/c-40");
+    });
+
+    it("has all of them settled past the batch limit, which they take no part of", async () => {
+      const claude = Array.from({ length: SHIP_BATCH_LIMIT + 5 }, (_, i) => session(100 + i));
+      const cursors = Array.from({ length: SHIP_BATCH_LIMIT + 5 }, (_, i) => cursor(200 + i));
+      const ship = shipAll();
+      const { deps, saved } = makeDeps({
+        listSessions: vi.fn().mockResolvedValue([...claude, ...cursors]),
+        loadState: () => state({ incognito_agents: ["cursor"] }),
+        ship,
+      });
+
+      const outcome = await runKnowledgeSync({ deps });
+
+      expect(vi.mocked(ship).mock.calls[0][0]).toHaveLength(SHIP_BATCH_LIMIT);
+      expect(outcome.readySessions).toBe(SHIP_BATCH_LIMIT + 5);
+      expect(outcome.counts?.incognito).toBe(SHIP_BATCH_LIMIT + 5);
+      const ledger = (saved.at(-1) as SyncState).sessions;
+      expect(cursors.every((c) => ledger[`cursor/${c.id}`]?.by_agent)).toBe(true);
+    });
+
+    it("has them settled with nothing else to ship, leaving backoff as it was", async () => {
+      const ship = shipAll();
+      const { deps, saved } = makeDeps({
+        listSessions: vi.fn().mockResolvedValue([cursor(40)]),
+        loadState: () =>
+          state({
+            incognito_agents: ["cursor"],
+            consecutive_failures: 2,
+            last_attempt_at: "2026-08-25T11:00:00.000Z",
+          }),
+        ship,
+      });
+
+      const outcome = await runKnowledgeSync({ deps });
+
+      expect(ship).not.toHaveBeenCalled();
+      expect(outcome).toMatchObject({ status: "shipped", readySessions: 0, settledSessions: 0 });
+      expect(outcome.counts?.incognito).toBe(1);
+      const last = saved.at(-1) as SyncState;
+      expect(last.sessions["cursor/c-40"]).toMatchObject({ outcome: "incognito", by_agent: true });
+      expect(last.consecutive_failures).toBe(2);
+      expect(last.last_attempt_at).toBe("2026-08-25T11:00:00.000Z");
+      expect(last.run).toBeUndefined();
+    });
+
+    it("has no backlog to report without a ship step, and nothing saved", async () => {
+      const { deps, saved } = makeDeps({
+        listSessions: vi.fn().mockResolvedValue([session(30), cursor(40), cursor(1)]),
+        loadState: () => state({ incognito_agents: ["cursor"] }),
+      });
+
+      const outcome = await runKnowledgeSync({ deps });
+
+      expect(outcome).toMatchObject({ status: "backlog", readySessions: 1, inFlightSessions: 0 });
+      expect(outcome.sessions.map((s) => s.id)).toEqual(["s-30"]);
+      expect(saved).toEqual([]);
+    });
+
+    it("keeps its sessions out when it was put in incognito after the scan", async () => {
+      const ship = shipAll();
+      let loads = 0;
+      const { deps, saved } = makeDeps({
+        listSessions: vi.fn().mockResolvedValue([session(30)]),
+        // The scan reads no switch; the read under the lock finds Claude Code incognito.
+        loadState: () => state(loads++ === 0 ? {} : { incognito_agents: ["claude"] }),
+        ship,
+      });
+
+      const outcome = await runKnowledgeSync({ deps });
+
+      expect(ship).not.toHaveBeenCalled();
+      expect(outcome.counts?.incognito).toBe(1);
+      expect(saved.at(-1)?.sessions["claude/s-30"]).toMatchObject({ by_agent: true });
+    });
+
+    it("keeps a session it settled off the record once the switch is off, resumed or not", async () => {
+      const resumed = cursor(40);
+      const ship = shipAll();
+      // Settled while the agent was incognito, by another CLI version, and changed since.
+      const before = settled(resumed, {
+        outcome: "incognito",
+        by_agent: true,
+        updated: session(400).updated,
+        cli_version: "0.0.1",
+      });
+      const { deps, saved } = makeDeps({
+        loadState: () => state({ sessions: before }),
+        listSessions: vi.fn().mockResolvedValue([resumed]),
+        ship,
+      });
+
+      const outcome = await runKnowledgeSync({ deps, retryRejectedBefore: NOW });
+
+      expect(ship).not.toHaveBeenCalled();
+      expect(outcome.status).toBe("nothing-new");
+      expect(saved).toEqual([]);
+    });
+  });
+
   it("remembers how much of each session shipped, and hands it to the ship step next time", async () => {
     const grown = session(60);
     const ship = vi.fn(async (sessions: AgentSession[], _shipped?: (s: AgentSession) => unknown) =>

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { brandBadge } from "../setup/styles";
-import { type BannerContext, LOGO_MARK, renderBanner } from "./banner";
-import { visibleWidth } from "./layout";
+import { type BannerContext, bannerWidth, LOGO_MARK, renderBanner, wrapValue } from "./banner";
+import { layoutMargin, visibleWidth } from "./layout";
 
 const ESC = String.fromCharCode(27);
 
@@ -187,5 +187,103 @@ describe("renderBanner", () => {
     expect(withUpdate).toContain("update");
     expect(withUpdate).toContain("\u2191 0.53.0 available");
     expect(withUpdate).toContain('Run "dosu upgrade"');
+  });
+
+  describe("agents row wrapping", () => {
+    const agents = [
+      "Claude Code",
+      "Claude Desktop",
+      "Cursor",
+      "VS Code",
+      "Codex (CLI + Desktop)",
+      "GitHub Copilot CLI",
+    ];
+
+    it("keeps every line within the given width, wrapping the agent list at separators", () => {
+      const width = 90;
+      const banner = stripAnsi(renderBanner(makeContext({ agents }), width));
+      const lines = banner.split("\n");
+      for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+      // Every agent is still named, and none was split mid-name.
+      for (const agent of agents) expect(banner).toContain(agent);
+      const agentLines = lines.filter((line) => agents.some((a) => line.includes(a)));
+      expect(agentLines.length).toBeGreaterThan(1);
+      // Continuation lines carry no label and start at the value column, under the check mark
+      // (the logomark may still occupy the left of the row).
+      const valueColumn = agentLines[0].indexOf("\u2714");
+      const firstNameColumn = (line: string) =>
+        Math.min(...agents.map((a) => line.indexOf(a)).filter((i) => i >= 0));
+      for (const line of agentLines.slice(1)) {
+        expect(line).not.toContain("agents");
+        expect(firstNameColumn(line)).toBe(valueColumn);
+        expect(line.slice(0, valueColumn).trimEnd().endsWith("\u00B7")).toBe(false);
+      }
+    });
+
+    it("wraps any long row, not just agents", () => {
+      const banner = stripAnsi(
+        renderBanner(makeContext({ deploymentName: "A deployment with a very long name" }), 50),
+      );
+      const lines = banner.split("\n");
+      for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(50);
+      // The name spans two rows; strip the logomark column before joining them back up.
+      const checklist = lines.map((line) => line.slice(LOGO_MARK[0].length + 2).trim());
+      expect(checklist.join(" ")).toContain("A deployment with a very long name");
+    });
+
+    it("leaves a list that fits on one line alone", () => {
+      const banner = stripAnsi(renderBanner(makeContext({ agents }), 200));
+      const agentLines = banner.split("\n").filter((line) => line.includes("Claude Code"));
+      expect(agentLines).toHaveLength(1);
+      expect(agentLines[0]).toContain(agents.join(" \u00B7 "));
+    });
+
+    it("still names every agent in a terminal too narrow to lay them out", () => {
+      const banner = stripAnsi(renderBanner(makeContext({ agents }), 10));
+      const flat = banner.replace(/\s+/g, " ");
+      for (const agent of agents) expect(flat).toContain(agent);
+    });
+  });
+});
+
+describe("wrapValue", () => {
+  it("packs list items greedily at the separator", () => {
+    expect(wrapValue("aa \u00B7 bb \u00B7 cc \u00B7 dd", 7)).toEqual([
+      "aa \u00B7 bb",
+      "cc \u00B7 dd",
+    ]);
+  });
+
+  it("keeps a multi-word item whole when it fits on its own line", () => {
+    expect(wrapValue("short \u00B7 a long agent name \u00B7 x", 17)).toEqual([
+      "short",
+      "a long agent name",
+      "x",
+    ]);
+  });
+
+  it("falls back to breaking an item at spaces only when it alone overflows", () => {
+    expect(wrapValue("one two three", 7)).toEqual(["one two", "three"]);
+  });
+
+  it("measures visible width, carrying ANSI codes along with their word", () => {
+    const green = (s: string) => `${ESC}[32m${s}${ESC}[39m`;
+    expect(wrapValue(`${green("\u2714")} aa \u00B7 bb`, 4)).toEqual([
+      `${green("\u2714")} aa`,
+      "bb",
+    ]);
+  });
+
+  it("returns the input as one line when there is nothing to wrap", () => {
+    expect(wrapValue("", 10)).toEqual([""]);
+    expect(wrapValue("fits", 10)).toEqual(["fits"]);
+  });
+});
+
+describe("bannerWidth", () => {
+  it("spans from the centered layout's left margin to one short of the right edge", () => {
+    expect(bannerWidth(128)).toBe(128 - layoutMargin(128) - 1);
+    // At 64 columns or fewer there is no margin, so the whole row minus one is usable.
+    expect(bannerWidth(64)).toBe(63);
   });
 });

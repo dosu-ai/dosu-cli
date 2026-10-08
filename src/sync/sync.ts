@@ -19,9 +19,11 @@ import type { ShippedPrefix } from "../shipper/continuation";
 import { VERSION } from "../version/version";
 import { fileLock, type SyncLock } from "./lock";
 import {
+  agentIncognitoEntry,
   backoffUntil,
   filterSessionsByRepo,
   gateSessions,
+  isAgentIncognito,
   isPending,
   isShippingEnabled,
   type LedgerEntry,
@@ -97,7 +99,7 @@ type SubagentCounts = Record<Exclude<ShipSessionResult["outcome"], "failed">, nu
 interface ShipCounts {
   shipped: number;
   subagents: SubagentCounts;
-  /** Opted out with `/dosu-incognito`; never uploaded. */
+  /** Opted out with `/dosu-incognito` or the agent's incognito switch; never uploaded. */
   incognito: number;
   /** Too small to plausibly hold anything worth learning; never uploaded. */
   trivial: number;
@@ -116,7 +118,8 @@ export interface SyncOutcome {
   inFlightSessions: number;
   /** The gated backlog itself, newest first. */
   sessions: AgentSession[];
-  /** Sessions this run settled in the ledger. */
+  /** Ready sessions this run settled in the ledger. An incognito agent's sessions settle apart
+   * (they are never ready); `counts` includes them. */
   settledSessions?: number;
   counts?: ShipCounts;
   error?: string;
@@ -362,6 +365,8 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
 
   let ready: AgentSession[];
   let open: AgentSession[];
+  /** Ready sessions of an agent the user put in incognito, whatever the scope. */
+  let offRecord: AgentSession[];
   try {
     // The whole window every time: listing is metadata only, and the ledger, not a count cap,
     // decides what is left to do.
@@ -408,17 +413,30 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       now: now(),
       isEnded: options.flush ? () => true : isEnded,
     });
+    // An agent the user put in incognito (`dosu knowledge incognito on`) has its sessions, and
+    // their subagents, set aside before the scope, the gate line and the batch: the ready ones
+    // settle off the record below without reaching the ship step, and none counts as backlog.
+    const agentOff = (s: AgentSession) => isAgentIncognito(state, s);
+    offRecord = gate.ready.filter(agentOff);
+    const gatedReady = gate.ready.filter((s) => !agentOff(s));
+    const gatedOpen = gate.open.filter((s) => !agentOff(s));
     const inScope = (sessions: AgentSession[]) =>
       filterSessionsByRepo(sessions, repoFilter, (s) => locator.resolveRepo(s));
-    ready = inScope(holdBack === "backoff" ? gate.ready.filter(isEnded) : gate.ready);
-    open = inScope(gate.open);
+    ready = inScope(holdBack === "backoff" ? gatedReady.filter(isEnded) : gatedReady);
+    open = inScope(gatedOpen);
     if (holdBack === "backoff") logger.debug("sync", "backing off: trying only the ended session");
     flush?.();
+    if (offRecord.length > 0) {
+      logger.debug(
+        "sync",
+        `incognito agents: ${withoutSubagents(offRecord).length} sessions settle off the record`,
+      );
+    }
     logger.debug(
       "sync",
       `shipping scope ${repoFilter ? repoFilter.join(", ") || "none" : "all repos"}: ${
         ready.length + open.length
-      } of ${gate.ready.length + gate.open.length} pending sessions in scope`,
+      } of ${gatedReady.length + gatedOpen.length} pending sessions in scope`,
     );
     logGateResult(ready, open, Object.keys(state.sessions).length);
     const endedReady = ready.filter(isEnded).map(sessionKey);
@@ -445,8 +463,8 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     inFlightSessions: withoutSubagents(open).length,
     sessions: ready,
   };
-  if (ready.length === 0) return { status: "nothing-new", ...base };
-  if (!deps.ship) return { status: "backlog", ...base };
+  if (ready.length === 0 && offRecord.length === 0) return { status: "nothing-new", ...base };
+  if (!deps.ship) return { status: ready.length === 0 ? "nothing-new" : "backlog", ...base };
 
   // Single-flight. The lock loser leaves state untouched — the winner owns this run. A run
   // carrying a just-ended session waits its turn instead: the session is why it exists. So does
@@ -469,8 +487,13 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
   try {
     // A run that held the lock while this one scanned may have settled some of the backlog.
     const locked = loadState();
-    const todo = ready.filter((s) => isPending(s, locked.sessions[sessionKey(s)], pending));
-    if (todo.length === 0) {
+    const pendingNow = (s: AgentSession) => isPending(s, locked.sessions[sessionKey(s)], pending);
+    // The switch as of now, too: an agent put in incognito since the scan keeps its sessions out.
+    const offTheRecord = [...offRecord, ...ready].filter(
+      (s) => pendingNow(s) && isAgentIncognito(locked, s),
+    );
+    const todo = ready.filter((s) => pendingNow(s) && !isAgentIncognito(locked, s));
+    if (todo.length === 0 && offTheRecord.length === 0) {
       return { status: "nothing-new", ...base, readySessions: 0, sessions: [] };
     }
 
@@ -495,7 +518,8 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       failed: 0,
     };
     // The ship step decides each session's fate (incognito, unsupported, trivial, rejected, or
-    // shipped); this side only picks the batch and records the answers.
+    // shipped); this side only picks the batch, records the answers, and settles what an
+    // agent's incognito switch keeps out, which the ship step never sees.
     // The sessions a hook named lead, so a failure further on never keeps one from being tried;
     // then their subagents, then the backlog oldest first. The batch limit never cuts the ended
     // work: on a throwaway machine, nothing may run after this.
@@ -507,14 +531,16 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     const batch = ordered.slice(0, Math.max(SHIP_BATCH_LIMIT, ordered.filter(isEnded).length));
     logger.debug("sync", `shipping ${batch.length} of ${todo.length} ready sessions`);
 
-    let results: ShipSessionResult[];
-    try {
-      results = await deps.ship(batch, (s) => shippedPrefix(locked.sessions[sessionKey(s)]));
-    } catch (err) {
-      // The ship step reports failures per session; a throw is a step bug — treat it as one
-      // failed attempt so backoff still engages instead of crashing the sync run.
-      const message = err instanceof Error ? err.message : String(err);
-      results = [{ session: batch[0], outcome: "failed", message }];
+    let results: ShipSessionResult[] = [];
+    if (batch.length > 0) {
+      try {
+        results = await deps.ship(batch, (s) => shippedPrefix(locked.sessions[sessionKey(s)]));
+      } catch (err) {
+        // The ship step reports failures per session; a throw is a step bug — treat it as one
+        // failed attempt so backoff still engages instead of crashing the sync run.
+        const message = err instanceof Error ? err.message : String(err);
+        results = [{ session: batch[0], outcome: "failed", message }];
+      }
     }
     // By key, not identity: scoping hands the batch out as repo-tagged copies.
     const resultOf = new Map(results.map((r) => [sessionKey(r.session), r]));
@@ -545,6 +571,14 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
           : `not shipping ${entry.outcome} session ${key}${entry.message ? `: ${entry.message}` : ""}`,
       );
     }
+    const settledReady = settled.size;
+    for (const session of offTheRecord) {
+      const key = sessionKey(session);
+      if (!session.parentId) counts.incognito += 1;
+      else counts.subagents.incognito += 1;
+      settled.set(key, agentIncognitoEntry(session, at, cliVersion));
+      logger.debug("sync", `not shipping incognito session ${key}: its agent is incognito`);
+    }
 
     // Applied to a fresh read, so a pause or opt-out flipped mid-run survives this save.
     try {
@@ -554,10 +588,13 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
         next,
         new Date(now().getTime() - (SCAN_WINDOW_DAYS + LEDGER_GRACE_DAYS) * DAY_MS),
       );
-      next.last_attempt_at = at;
-      next.consecutive_failures = counts.failed > 0 ? next.consecutive_failures + 1 : 0;
-      next.total_shipped = (next.total_shipped ?? 0) + counts.shipped;
-      next.run = run;
+      // Settling an incognito agent's sessions alone is no attempt to ship: backoff stands.
+      if (batch.length > 0) {
+        next.last_attempt_at = at;
+        next.consecutive_failures = counts.failed > 0 ? next.consecutive_failures + 1 : 0;
+        next.total_shipped = (next.total_shipped ?? 0) + counts.shipped;
+        next.run = run;
+      }
       if (resumes) delete next.paused;
       saveState(next);
     } catch {
@@ -575,7 +612,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     return {
       status: counts.failed > 0 ? "ship-failed" : "shipped",
       ...base,
-      settledSessions: settled.size,
+      settledSessions: settledReady,
       counts,
       ...(error ? { error } : {}),
     };

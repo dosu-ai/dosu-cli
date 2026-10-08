@@ -121,7 +121,7 @@ describe("the opencode hook agent", () => {
     expect(existsSync(pluginPath())).toBe(false);
     expect(readFileSync(commandPath(), "utf8")).toContain("dosu:incognito:v1");
     expect(opencode().disableNote?.()).toBe(
-      "Kept /dosu-incognito: OpenCode sessions still ship with any 'dosu knowledge sync' while transcript shipping is on. 'dosu knowledge incognito disable opencode' removes it.",
+      "Kept /dosu-incognito: OpenCode sessions still ship with any 'dosu knowledge sync' while transcript shipping is on. 'dosu knowledge incognito on opencode' keeps them all out.",
     );
   });
 

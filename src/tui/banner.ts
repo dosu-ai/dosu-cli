@@ -2,6 +2,7 @@
 
 import pc from "picocolors";
 import { brand, brandBadge, hasTruecolor } from "../setup/styles";
+import { layoutMargin, visibleWidth } from "./layout";
 
 export interface BannerContext {
   /** e.g. "v0.52.0" */
@@ -67,8 +68,41 @@ function paintLogoRow(row: ReadonlyArray<readonly [LogoTone, string]>): string {
     .join("");
 }
 
-/** Aligned lowercase "label   value" rows for the machine state. */
-function checklistRows(ctx: BannerContext): string[] {
+/** Gap between the logomark and the checklist, and between a label and its value. */
+const COLUMN_GAP = "   ";
+const LABEL_GAP = "  ";
+const LIST_SEP = ` ${DOT} `;
+
+/** Wrap a row value to `room` visible columns. Breaks at ` · ` list separators first, and inside
+ * an item at spaces only when that item alone is wider than the room, so a multi-word name like
+ * "Codex (CLI + Desktop)" stays whole whenever it can. ANSI codes ride along with their word and
+ * count for nothing. */
+export function wrapValue(text: string, room: number): string[] {
+  const lines: string[] = [];
+  let current = "";
+  const append = (piece: string, sep: string) => {
+    if (current === "") current = piece;
+    else if (visibleWidth(current) + sep.length + visibleWidth(piece) <= room) {
+      current += sep + piece;
+    } else {
+      lines.push(current);
+      current = piece;
+    }
+  };
+  for (const item of text.split(LIST_SEP)) {
+    const pieces = visibleWidth(item) <= room ? [item] : item.split(" ");
+    pieces.forEach((piece, i) => {
+      append(piece, i === 0 ? LIST_SEP : " ");
+    });
+  }
+  if (current !== "") lines.push(current);
+  return lines.length > 0 ? lines : [text];
+}
+
+/** Aligned lowercase "label   value" rows for the machine state. A value that would run past
+ * `width` columns wraps onto continuation lines under the value column; left to the terminal, it
+ * would wrap to column 0, outside the centered layout's margin. */
+function checklistRows(ctx: BannerContext, width: number): string[] {
   const on = brand(CHECK);
   const off = pc.dim(CIRCLE);
   const rows: Array<[string, string]> = [["workspace", ctx.directory]];
@@ -100,7 +134,7 @@ function checklistRows(ctx: BannerContext): string[] {
     ]);
   }
   if (missing.has("agents")) rows.push(["agents", warnRow]);
-  else if (ctx.agents.length > 0) rows.push(["agents", `${on} ${ctx.agents.join(` ${DOT} `)}`]);
+  else if (ctx.agents.length > 0) rows.push(["agents", `${on} ${ctx.agents.join(LIST_SEP)}`]);
   if (missing.has("hooks")) rows.push(["hooks", warnRow]);
   if (ctx.studying) {
     rows.push([
@@ -116,16 +150,27 @@ function checklistRows(ctx: BannerContext): string[] {
   }
 
   const labelWidth = Math.max(...rows.map(([label]) => label.length));
-  return rows.map(([label, value]) => `${pc.dim(label.padEnd(labelWidth))}  ${value}`);
+  const valueColumn = LOGO_WIDTH + COLUMN_GAP.length + labelWidth + LABEL_GAP.length;
+  const room = Math.max(1, width - valueColumn);
+  const indent = " ".repeat(labelWidth + LABEL_GAP.length);
+  return rows.flatMap(([label, value]) =>
+    wrapValue(value, room).map((line, i) =>
+      i === 0 ? `${pc.dim(label.padEnd(labelWidth))}${LABEL_GAP}${line}` : `${indent}${line}`,
+    ),
+  );
 }
 
-const COLUMN_GAP = "   ";
+/** Columns a banner line may use: everything right of the centered layout's left margin, less
+ * one so a line that exactly fills the terminal doesn't trigger auto-wrap. */
+export function bannerWidth(columns: number = process.stdout.columns ?? 80): number {
+  return columns - layoutMargin(columns) - 1;
+}
 
 /** Banner lines: logomark left, checklist right, top-aligned, badge and metadata footer. */
-export function renderBanner(ctx: BannerContext): string {
+export function renderBanner(ctx: BannerContext, width: number = bannerWidth()): string {
   const logo = LOGO_ROWS.map(paintLogoRow);
   const text = [
-    ...checklistRows(ctx),
+    ...checklistRows(ctx, width),
     "",
     `${brandBadge("dosu-cli")} ${pc.dim(`${ctx.version} ${DOT} ${ctx.webAppHost}`)}`,
   ];
