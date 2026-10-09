@@ -14,6 +14,7 @@ import {
   isAgentIncognito,
   isPending,
   isShippingEnabled,
+  isUnanswered,
   isUnderDir,
   type LedgerEntry,
   leaveIncognito,
@@ -450,6 +451,28 @@ describe("isPending", () => {
     // Refused again during this run: not retried a second time.
     const refusedAgain = entry({ outcome: "rejected", at: "2026-08-25T12:01:00.000Z" });
     expect(isPending(s, refusedAgain, retry)).toBe(false);
+  });
+});
+
+describe("isUnanswered", () => {
+  const s = session({ updated: "2026-08-25T11:00:00.000Z" });
+
+  it("holds for contents the ledger has no answer for, whatever CLI version answered before", () => {
+    expect(isUnanswered(s, undefined)).toBe(true);
+    expect(isUnanswered(s, entry({ updated: "2026-08-25T10:00:00.000Z" }))).toBe(true);
+    // Passed over by another version, for these very contents: an answer all the same.
+    for (const outcome of ["trivial", "rejected", "unsupported", "incognito"] as const) {
+      expect(isUnanswered(s, entry({ outcome, cli_version: "0.0.1" }))).toBe(false);
+    }
+    expect(isUnanswered(s, entry({ outcome: "incognito", by_agent: true, updated: "x" }))).toBe(
+      false,
+    );
+    expect(isUnanswered(s, entry({ seeded: true, updated: "2026-08-25T10:00:00.000Z" }))).toBe(
+      true,
+    );
+    expect(isUnanswered(s, entry({ seeded: true, updated: "2026-08-25T12:00:00.000Z" }))).toBe(
+      false,
+    );
   });
 });
 
@@ -1038,6 +1061,25 @@ describe("leaveIncognito", () => {
       "cursor/unsettled": agentIncognitoEntry(unsettled, at, VERSION),
       "cursor/sub": agentIncognitoEntry(subagent, at, VERSION),
     });
+  });
+
+  it("keeps an answer another CLI version gave before the agent went in", () => {
+    const passed = cursor("passed");
+    const answer = entry({ outcome: "rejected", http_status: 413, cli_version: "0.0.1" });
+    saveSyncState(
+      {
+        ...emptySyncState(),
+        incognito_agents: ["cursor"],
+        incognito_since: { cursor: "2026-08-25T10:00:00.000Z" },
+        sessions: { "cursor/passed": answer },
+      },
+      configDir,
+    );
+
+    leaveIncognito(["cursor"], () => [passed], VERSION, NOW, configDir);
+
+    // A newer CLI, or --retry-rejected, may still ship it.
+    expect(loadSyncState(configDir).sessions["cursor/passed"]).toEqual(answer);
   });
 
   it("keeps what another command saved while it listed the sessions", () => {

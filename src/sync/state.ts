@@ -509,14 +509,13 @@ export const AGENT_SWITCH_SINCE = "2026-10-05T00:00:00.000Z";
 
 /** Take agents out of incognito (`dosu knowledge incognito off`), sealing first what they ran
  * while in it, in the same load-modify-save (after the listing): each session of theirs that
- * `listSessions` returns
- * (from `since`, when the earliest of them went in, however long ago; whatever the scope, still
- * open or not), that was active since its agent went in, and that the ledger has no answer for
- * its current contents settles as the switch would have settled it (`by_agent`). Those are the
- * sessions no sync got to while the agent was listed: inside the quiet period, outside the repo
- * scope, or held back by a pause, backoff, the shipping opt-out or a signed-out CLI, or for so
- * long that they left the scan window. Only agents in the list are sealed. When listing throws,
- * nothing is saved and the agents stay in it. */
+ * `listSessions` returns (from `since`, when the earliest of them went in, however long ago;
+ * whatever the scope, still open or not), that was active since its agent went in, and that the
+ * ledger has no answer for its current contents (isUnanswered) settles as the switch would have
+ * settled it (`by_agent`). Those are the sessions no sync got to while the agent was listed:
+ * inside the quiet period, outside the repo scope, or held back by a pause, backoff, the shipping
+ * opt-out or a signed-out CLI, or for so long that they left the scan window. Only agents in the
+ * list are sealed. When listing throws, nothing is saved and the agents stay in it. */
 export function leaveIncognito(
   agentIds: readonly string[],
   listSessions: (state: SyncState, since: Date) => readonly AgentSession[],
@@ -543,7 +542,7 @@ export function leaveIncognito(
     const since = sinceOf.get(session.harness);
     if (since === undefined || Date.parse(session.updated) < since) continue;
     const key = sessionKey(session);
-    if (!isPending(session, state.sessions[key], { cliVersion })) continue;
+    if (!isUnanswered(session, state.sessions[key])) continue;
     state.sessions[key] = agentIncognitoEntry(session, at, cliVersion);
   }
   switchAgents(state, agentIds, false);
@@ -758,6 +757,17 @@ export function isPending(
     return true;
   }
   return entry.cli_version !== options.cliVersion;
+}
+
+/** Whether the ledger holds no answer for a session's current contents, whichever CLI gave the
+ * answer it holds: what the agents' incognito switch seals. A passed-over answer a newer CLI would
+ * reconsider was given for these very contents, before the switch was on, so sealing it would keep
+ * the session out for good for nothing that ran while its agent was listed. */
+export function isUnanswered(session: AgentSession, entry: LedgerEntry | undefined): boolean {
+  if (!entry) return true;
+  if (entry.by_agent) return false;
+  if (entry.seeded) return Date.parse(session.updated) > Date.parse(entry.updated);
+  return Date.parse(session.updated) !== Date.parse(entry.updated);
 }
 
 /** Drop ledger entries for sessions last updated before `cutoff` (past the scan window, so no

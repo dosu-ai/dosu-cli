@@ -767,6 +767,27 @@ describe("runKnowledgeSync shipping", () => {
       expect(logged).toContain("1 sessions they settled changed; still not shipped");
     });
 
+    it("leaves an answer another CLI version gave alone, rather than sealing it for good", async () => {
+      const rejected = cursor(40);
+      const before = settled(rejected, {
+        outcome: "rejected",
+        http_status: 413,
+        cli_version: "0.0.1",
+      });
+      const ship = shipAll();
+      const { deps, saved } = makeDeps({
+        loadState: () => state({ incognito_agents: ["cursor"], sessions: before }),
+        listSessions: vi.fn().mockResolvedValue([rejected]),
+        ship,
+      });
+
+      const outcome = await runKnowledgeSync({ deps, retryRejectedBefore: NOW });
+
+      expect(outcome.status).toBe("nothing-new");
+      expect(ship).not.toHaveBeenCalled();
+      expect(saved).toEqual([]);
+    });
+
     it("holds the rest of a batch to a switch flipped while it ships", async () => {
       const [a, b, c] = [session(60), session(50), session(40)];
       const store = stateStore();

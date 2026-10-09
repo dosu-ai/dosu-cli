@@ -424,7 +424,8 @@ them, and each key goes once it is empty. While an
 agent is listed, `dosu knowledge sync` sets its sessions and its subagents' transcripts aside before
 the repo scope, the gate log line ("N ready, M in flight") and the batch limit. Every one past the
 quiet period settles in the ledger as `incognito` with `by_agent: true`, whatever the scope and all
-in the same run, without reaching the ship step; the debug log records
+in the same run, without reaching the ship step (one pending only because another CLI version
+passed it over keeps that answer: its contents are from before the switch went on); the debug log records
 `not shipping incognito session <harness>/<id>: its agent is incognito` and the run summary counts
 it as passed over. Settling them alone is no attempt to ship, so failure backoff stays as it was.
 The sync reads the switch again once it holds the lock, and once more just before each upload, so
@@ -456,7 +457,8 @@ prefix (`records`, `prefix_sha256`), since nothing more of the session is ever s
 - **`off` seals first.** In the same load-modify-save that takes the agents out of the list, `off`
   settles every session of theirs active since the agent went in (`incognito_since`, which `on`
   records; for a list carried over from 0.66, which kept no time, since 0.66.0's release) that the
-  ledger has no answer for its current contents (no entry, or a pending one) as `incognito` with
+  ledger has no answer for its current contents (no entry, or one for other contents; an answer
+  another CLI version gave, which a newer CLI would reconsider, stands) as `incognito` with
   `by_agent`: those still inside the quiet period, outside the repo scope, past a batch, or never
   synced (paused, backing off, shipping off, signed out), however long ago, past the 30-day window
   too. A shipped session that grew while the agent was listed is sealed too, so its incognito tail

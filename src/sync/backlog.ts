@@ -10,6 +10,7 @@ import {
   filterSessionsByRepo,
   gateSessions,
   isAgentIncognito,
+  isUnanswered,
   loadSyncState,
   type SyncState,
   sessionKey,
@@ -62,7 +63,15 @@ export function listSessionBacklog(now: Date = new Date()): SessionBacklog {
     // aside: never queued, never waited for, never counted.
     const lineage = sessionLineage(scanned);
     const agentOff = (session: AgentSession) => isAgentIncognito(state, session, lineage);
-    const ready = filterSessionsByRepo(gate.ready, filter, resolver.resolveRepo);
+    // One pending only for another CLI version's answer the sync leaves be (isUnanswered).
+    const ready = filterSessionsByRepo(
+      gate.ready.filter(
+        (session) =>
+          !agentOff(session) || isUnanswered(session, state.sessions[sessionKey(session)]),
+      ),
+      filter,
+      resolver.resolveRepo,
+    );
     const open = filterSessionsByRepo(
       gate.open.filter((session) => !agentOff(session)),
       filter,

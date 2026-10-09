@@ -27,6 +27,7 @@ import {
   isAgentIncognito,
   isPending,
   isShippingEnabled,
+  isUnanswered,
   type LedgerEntry,
   legacyPassedSessions,
   loadSyncState,
@@ -486,8 +487,12 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     // An agent the user put in incognito (`dosu knowledge incognito on`) has its sessions, and
     // their subagents, set aside before the scope, the gate line and the batch: the ready ones
     // settle off the record below without reaching the ship step, and none counts as backlog.
+    // One pending only because another CLI version answered it keeps that answer: its contents
+    // ran before the switch went on.
     const agentOff = (s: AgentSession) => isAgentIncognito(state, s, lineage);
-    offRecord = gate.ready.filter(agentOff);
+    offRecord = gate.ready.filter(
+      (s) => agentOff(s) && isUnanswered(s, state.sessions[sessionKey(s)]),
+    );
     const gatedReady = gate.ready.filter((s) => !agentOff(s));
     const gatedOpen = gate.open.filter((s) => !agentOff(s));
     const inScope = (sessions: AgentSession[]) =>
@@ -561,7 +566,10 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     const pendingNow = (s: AgentSession) => isPending(s, locked.sessions[sessionKey(s)], pending);
     // The switch as of now, too: an agent put in incognito since the scan keeps its sessions out.
     const offTheRecord = [...offRecord, ...ready].filter(
-      (s) => pendingNow(s) && isAgentIncognito(locked, s, lineage),
+      (s) =>
+        pendingNow(s) &&
+        isAgentIncognito(locked, s, lineage) &&
+        isUnanswered(s, locked.sessions[sessionKey(s)]),
     );
     const todo = ready.filter((s) => pendingNow(s) && !isAgentIncognito(locked, s, lineage));
     if (todo.length === 0 && offTheRecord.length === 0) {
