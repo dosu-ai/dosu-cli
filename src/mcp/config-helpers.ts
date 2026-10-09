@@ -68,7 +68,19 @@ export function mcpHeaders(apiKey: string | undefined): Record<string, string> {
  */
 export const MCP_REMOTE_VERSION = "0.1.38";
 
-export interface McpRemoteServer {
+/** The stdio entry that runs `npx mcp-remote` against `url`: `npx` by absolute path and an
+ * explicit PATH, because GUI hosts spawn servers with the minimal launchd PATH. */
+export function npxRemoteEntry(
+  url: string,
+  apiKey: string | undefined,
+  npx: string,
+  path: string,
+): { command: string; args: string[]; env: Record<string, string> } {
+  const remote = mcpRemoteServer(url, apiKey);
+  return { command: npx, args: remote.args, env: { PATH: path, ...remote.env } };
+}
+
+interface McpRemoteServer {
   args: string[];
   env: Record<string, string>;
 }
@@ -84,7 +96,7 @@ export interface McpRemoteServer {
  * from its environment, so the API key lives in the config entry's `env`
  * block instead of argv (argv is visible to every local process via `ps`).
  */
-export function mcpRemoteServer(url: string, apiKey: string | undefined): McpRemoteServer {
+function mcpRemoteServer(url: string, apiKey: string | undefined): McpRemoteServer {
   const env: Record<string, string> = {};
   const headerArgs = Object.entries(mcpHeaders(apiKey)).flatMap(([key, value]) => {
     const envKey = key.toUpperCase().replace(/[^A-Z0-9]/g, "_");
@@ -236,6 +248,13 @@ export function isJSONKeyConfigured(configPath: string, topLevelKey: string): bo
   const section = cfg[topLevelKey];
   if (typeof section !== "object" || section === null) return false;
   return "dosu" in section;
+}
+
+/** The dosu entry under `topLevelKey` in a JSON config file; undefined when absent or unreadable. */
+export function readJSONServer(configPath: string, topLevelKey: string): unknown {
+  const section = loadJSONConfig(configPath)[topLevelKey];
+  if (typeof section !== "object" || section === null) return undefined;
+  return section.dosu;
 }
 
 /**

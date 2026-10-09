@@ -4,15 +4,16 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  refreshConfiguredProviders: vi.fn(),
+  refreshProviders: vi.fn(),
+  staleProviders: vi.fn(),
 }));
 
 vi.mock("../mcp/refresh", () => ({
-  refreshConfiguredProviders: mocks.refreshConfiguredProviders,
+  refreshProviders: mocks.refreshProviders,
+  staleProviders: mocks.staleProviders,
 }));
 
-// Pin the running version: the real one comes from package.json, which each release bumps, so a
-// seeded "previous" version would start crossing format changes that ship after it was written.
+// Pin the running version so a seeded marker compares against a known value.
 vi.mock("./version", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./version")>()),
   VERSION: "0.62.1",
@@ -24,8 +25,6 @@ import type { SetupProvider } from "../mcp/providers";
 import {
   canRefreshMcp,
   checkForMcpRefresh,
-  MCP_FORMAT_CHANGES,
-  needsMcpRefresh,
   readMcpRefreshCache,
   writeMcpRefreshCache,
 } from "./mcp-refresh-check";
@@ -66,8 +65,10 @@ beforeEach(() => {
   origXDG = process.env.XDG_CONFIG_HOME;
   tempDir = mkdtempSync(join(tmpdir(), "dosu-mcp-refresh-test-"));
   process.env.XDG_CONFIG_HOME = tempDir;
-  mocks.refreshConfiguredProviders.mockReset();
-  mocks.refreshConfiguredProviders.mockReturnValue({ updated: [], failed: [] });
+  mocks.refreshProviders.mockReset();
+  mocks.refreshProviders.mockReturnValue({ updated: [], failed: [] });
+  mocks.staleProviders.mockReset();
+  mocks.staleProviders.mockReturnValue([]);
   stderr = spyStderr();
 });
 
@@ -134,94 +135,46 @@ describe("canRefreshMcp", () => {
   }
 });
 
-describe("needsMcpRefresh", () => {
-  it("lists the releases that changed the MCP entry", () => {
-    expect(MCP_FORMAT_CHANGES).toContain("0.53.0");
-    // Claude Code entries gained alwaysLoad: true. Provisional: must equal the version this
-    // change actually ships in (re-check at merge/release time).
-    expect(MCP_FORMAT_CHANGES).toContain("0.62.0");
-  });
-
-  it("refreshes every pre-alwaysLoad install when it upgrades onto the Claude Code change", () => {
-    for (const previous of [
-      "0.58.0",
-      "0.58.3",
-      "0.59.0",
-      "0.59.2",
-      "0.60.1",
-      "0.60.2",
-      "0.61.0",
-      "0.61.3",
-      null,
-    ]) {
-      expect(needsMcpRefresh(previous, "0.62.0")).toBe(true);
-      expect(needsMcpRefresh(previous, "0.62.4")).toBe(true);
-    }
-  });
-
-  it("does not refresh again once an install already wrote the alwaysLoad entry", () => {
-    expect(needsMcpRefresh("0.62.0", "0.62.1")).toBe(false);
-    expect(needsMcpRefresh("0.62.0-alpha.3", "0.62.0")).toBe(false);
-  });
-
-  it("refreshes when the install predates the marker", () => {
-    expect(needsMcpRefresh(null, "0.60.0")).toBe(true);
-  });
-
-  it("refreshes only when the upgrade crosses a format change", () => {
-    expect(needsMcpRefresh("0.52.3", "0.53.0")).toBe(true);
-    expect(needsMcpRefresh("0.52.3", "0.56.0")).toBe(true);
-    expect(needsMcpRefresh("0.53.0-beta.16", "0.53.0")).toBe(false);
-    expect(needsMcpRefresh("0.53.0", "0.53.1")).toBe(false);
-    expect(needsMcpRefresh("0.54.0", "0.56.0")).toBe(false);
-    expect(needsMcpRefresh("0.50.0", "0.52.9")).toBe(false);
-  });
-
-  it("treats a downgrade across a format change the same way", () => {
-    expect(needsMcpRefresh("0.54.0", "0.52.0")).toBe(true);
-    expect(needsMcpRefresh("0.54.0", "0.53.0")).toBe(false);
-  });
-
-  it("never refreshes for the same version", () => {
-    expect(needsMcpRefresh("0.53.0", "0.53.0")).toBe(false);
-  });
-});
-
 describe("checkForMcpRefresh", () => {
-  it("only moves the marker along for a bump that did not change the entry", () => {
-    saveConfig(signedInCfg);
-    seedCache("0.62.0");
-
-    checkForMcpRefresh();
-
-    expect(mocks.refreshConfiguredProviders).not.toHaveBeenCalled();
-    expect(stderr).not.toHaveBeenCalled();
-    expect(readMcpRefreshCache()).toEqual({ version: VERSION });
-  });
-
-  it("does nothing when this version already refreshed", () => {
+  it("does nothing when this version already checked", () => {
     saveConfig(signedInCfg);
     seedCache(VERSION);
 
     checkForMcpRefresh();
 
-    expect(mocks.refreshConfiguredProviders).not.toHaveBeenCalled();
+    expect(mocks.staleProviders).not.toHaveBeenCalled();
+    expect(mocks.refreshProviders).not.toHaveBeenCalled();
     expect(stderr).not.toHaveBeenCalled();
   });
 
-  it("refreshes configured agents and records the version after crossing a format change", () => {
+  it.each([
+    ["0.52.3"],
+    ["0.62.0"],
+    ["9.0.0"],
+    [null],
+  ])("checks the entries on the first run after %s and records this version", (previous) => {
     saveConfig(signedInCfg);
-    seedCache("0.52.3");
-    mocks.refreshConfiguredProviders.mockReturnValue({
-      updated: [named("Cursor"), named("Claude Code")],
-      failed: [],
-    });
+    if (previous) seedCache(previous);
 
     checkForMcpRefresh();
 
-    expect(mocks.refreshConfiguredProviders).toHaveBeenCalledOnce();
-    const passed = mocks.refreshConfiguredProviders.mock.calls[0][0];
+    expect(mocks.staleProviders).toHaveBeenCalledOnce();
+    expect(mocks.staleProviders.mock.calls[0][0].active_account?.target?.api_key).toBe("key-1");
+    expect(readMcpRefreshCache()).toEqual({ version: VERSION });
+  });
+
+  it("rewrites only the out-of-date entries and says so", () => {
+    saveConfig(signedInCfg);
+    const stale = [named("Cursor"), named("Claude Code")];
+    mocks.staleProviders.mockReturnValue(stale);
+    mocks.refreshProviders.mockReturnValue({ updated: stale, failed: [] });
+
+    checkForMcpRefresh();
+
+    expect(mocks.refreshProviders).toHaveBeenCalledOnce();
+    const [passed, providers] = mocks.refreshProviders.mock.calls[0];
     expect(passed.active_account?.target?.api_key).toBe("key-1");
+    expect(providers).toBe(stale);
     expect(JSON.parse(readFileSync(cachePath(), "utf-8"))).toEqual({ version: VERSION });
     const output = stderr.mock.calls.map((call) => String(call[0])).join("\n");
     expect(output).toContain("refreshed MCP config for Cursor, Claude Code");
@@ -229,16 +182,7 @@ describe("checkForMcpRefresh", () => {
     expect(output).toContain("restart your AI agents");
   });
 
-  it("also runs when no marker exists yet (first run after adopting this check)", () => {
-    saveConfig(signedInCfg);
-
-    checkForMcpRefresh();
-
-    expect(mocks.refreshConfiguredProviders).toHaveBeenCalledOnce();
-    expect(readMcpRefreshCache()).toEqual({ version: VERSION });
-  });
-
-  it("stays silent when nothing was configured, but still records the version", () => {
+  it("stays silent when every entry is already current, but still records the version", () => {
     saveConfig(signedInCfg);
 
     checkForMcpRefresh();
@@ -249,11 +193,12 @@ describe("checkForMcpRefresh", () => {
 
   it("stays silent with notify: false while still refreshing", () => {
     saveConfig(signedInCfg);
-    mocks.refreshConfiguredProviders.mockReturnValue({ updated: [named("Cursor")], failed: [] });
+    mocks.staleProviders.mockReturnValue([named("Cursor")]);
+    mocks.refreshProviders.mockReturnValue({ updated: [named("Cursor")], failed: [] });
 
     checkForMcpRefresh({ notify: false });
 
-    expect(mocks.refreshConfiguredProviders).toHaveBeenCalledOnce();
+    expect(mocks.refreshProviders).toHaveBeenCalledOnce();
     expect(stderr).not.toHaveBeenCalled();
   });
 
@@ -262,7 +207,7 @@ describe("checkForMcpRefresh", () => {
 
     checkForMcpRefresh();
 
-    expect(mocks.refreshConfiguredProviders).not.toHaveBeenCalled();
+    expect(mocks.staleProviders).not.toHaveBeenCalled();
     // No marker: the next invocation after the user signs in reconciles.
     expect(existsSync(cachePath())).toBe(false);
   });
@@ -270,13 +215,13 @@ describe("checkForMcpRefresh", () => {
   it("skips when there is no config file at all", () => {
     checkForMcpRefresh();
 
-    expect(mocks.refreshConfiguredProviders).not.toHaveBeenCalled();
+    expect(mocks.staleProviders).not.toHaveBeenCalled();
     expect(existsSync(cachePath())).toBe(false);
   });
 
   it("fails open when the refresh itself throws", () => {
     saveConfig(signedInCfg);
-    mocks.refreshConfiguredProviders.mockImplementation(() => {
+    mocks.refreshProviders.mockImplementation(() => {
       throw new Error("boom");
     });
 

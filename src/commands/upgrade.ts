@@ -7,14 +7,14 @@ import { posix, win32 } from "node:path";
 import { Command, Option } from "commander";
 import pc from "picocolors";
 import { loadConfigNonBlocking } from "../config/config";
-import { refreshConfiguredProviders } from "../mcp/refresh";
+import { refreshProviders, staleProviders } from "../mcp/refresh";
 import {
   AUTO_UPDATE_ENV,
   autoUpdateDisabledReason,
   runBackgroundUpgrade,
   setAutoUpdateEnabled,
 } from "../version/auto-update";
-import { canRefreshMcp, needsMcpRefresh, writeMcpRefreshCache } from "../version/mcp-refresh-check";
+import { canRefreshMcp, writeMcpRefreshCache } from "../version/mcp-refresh-check";
 import { checkForSkillUpdates } from "../version/skill-update-check";
 import { INSTALL_CHANNEL, isNpxInvocation, VERSION } from "../version/version";
 
@@ -287,10 +287,9 @@ export function runUpgrade(channel = INSTALL_CHANNEL, options: UpgradeOptions = 
 }
 
 const SETUP_FALLBACK = 'Run "dosu setup" to finish updating your AI agents.';
-const SEMVER = /^\d+\.\d+\.\d+/;
 
 /** What the upgraded binary should run. It, not this old process, decides whether the agents
- * need touching: only the new code knows which releases changed the agent config format. */
+ * need touching: only the new code knows the entry shapes it writes. */
 export function postUpgradeArgs(fromVersion: string = VERSION): string[] {
   return ["upgrade", "--finish", fromVersion];
 }
@@ -352,14 +351,16 @@ export async function completeUpgrade(
 }
 
 /** `dosu upgrade --finish <from>`, run by the freshly installed binary. Re-runs setup (or, with
- * no TTY, the MCP refresh) only when the jump from `from` crossed a release that changed the
- * agent config format; otherwise it just re-applies the bundled skills. */
+ * no TTY, the MCP refresh) only when a configured agent's entry is not the shape this version
+ * writes; otherwise it just re-applies the bundled skills. `from` is the version the upgrade
+ * started from; the entries themselves decide whether anything changes. */
 export async function finishUpgrade(
-  from: string,
+  _from: string,
   options: { interactive?: boolean } = {},
 ): Promise<number> {
-  const previous = SEMVER.test(from) ? from : null;
-  if (!needsMcpRefresh(previous, VERSION)) {
+  const cfg = loadConfigNonBlocking();
+  const stale = staleProviders(cfg);
+  if (stale.length === 0) {
     checkForSkillUpdates();
     writeMcpRefreshCache({ version: VERSION });
     console.log(pc.green(`✓ Dosu ${VERSION} is ready. Your AI agents need no changes.`));
@@ -374,13 +375,12 @@ export async function finishUpgrade(
   }
 
   checkForSkillUpdates();
-  const cfg = loadConfigNonBlocking();
   if (!cfg || !canRefreshMcp(cfg)) {
     console.error(SETUP_FALLBACK);
     return 0;
   }
   console.log("\nRefreshing agent MCP configs with the new version...");
-  const result = refreshConfiguredProviders(cfg);
+  const result = refreshProviders(cfg, stale);
   writeMcpRefreshCache({ version: VERSION });
   for (const provider of result.updated) console.log(`  ✓ ${provider.name()}`);
   for (const { provider, error } of result.failed) {

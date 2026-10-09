@@ -1,14 +1,13 @@
-/** Post-upgrade refresh against the real provider code: an install written by a release before
- * the Claude Code alwaysLoad change gets the new entry on the first command of the shipping
- * release, and nothing else in the user's Claude Code config moves. */
+/** Post-upgrade refresh against the real provider code: an entry written before the Claude Code
+ * alwaysLoad change gets the new shape on the first command of any later version, an entry that
+ * already has it is never touched, and nothing else in the user's Claude Code config moves. */
 
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Provisional shipping version of the alwaysLoad change; keep in step with MCP_FORMAT_CHANGES.
-vi.mock("./version", () => ({ VERSION: "0.62.0" }));
+vi.mock("./version", () => ({ VERSION: "1.0.0" }));
 vi.mock("../debug/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), init: vi.fn() },
 }));
@@ -82,13 +81,11 @@ afterEach(() => {
 describe("post-upgrade refresh onto the Claude Code alwaysLoad entry", () => {
   it.each([
     ["0.58.3"],
-    ["0.59.0"],
-    ["0.59.2"],
-    ["0.60.1"],
-    ["0.60.2"],
     ["0.61.0"],
+    ["0.65.1"],
+    ["2.0.0"],
     [null],
-  ])("rewrites the entry written by %s and keeps everything else", (previous) => {
+  ])("rewrites the old entry on the first run after %s and keeps everything else", (previous) => {
     seed(previous);
 
     checkForMcpRefresh();
@@ -104,7 +101,7 @@ describe("post-upgrade refresh onto the Claude Code alwaysLoad entry", () => {
     expect(cfg.mcpServers.local).toEqual(UNRELATED.local);
     expect(cfg.numStartups).toBe(3);
     expect(cfg.projects).toEqual({ "/repo": { allowedTools: [] } });
-    expect(readMcpRefreshCache()).toEqual({ version: "0.62.0" });
+    expect(readMcpRefreshCache()).toEqual({ version: "1.0.0" });
   });
 
   it.each([
@@ -117,15 +114,30 @@ describe("post-upgrade refresh onto the Claude Code alwaysLoad entry", () => {
     checkForMcpRefresh();
 
     expect(claudeJson().mcpServers.dosu).toMatchObject({ alwaysLoad: true });
-    expect(readMcpRefreshCache()).toEqual({ version: "0.62.0" });
+    expect(readMcpRefreshCache()).toEqual({ version: "1.0.0" });
   });
 
-  it("leaves the config alone once the shipping release already refreshed it", () => {
-    seed("0.62.0");
+  it("leaves the config alone once this version already checked it", () => {
+    seed("1.0.0");
 
     checkForMcpRefresh();
 
     expect(claudeJson().mcpServers.dosu).toEqual(PRE_ALWAYS_LOAD_ENTRY);
+  });
+
+  it("never rewrites an entry that is already current, or moves it to another deployment", () => {
+    seed("0.65.1");
+    const path = join(home, ".claude.json");
+    const current = JSON.parse(readFileSync(path, "utf-8"));
+    current.mcpServers.dosu = { ...PRE_ALWAYS_LOAD_ENTRY, alwaysLoad: true };
+    const before = JSON.stringify(current);
+    writeFileSync(path, before);
+
+    checkForMcpRefresh();
+
+    expect(readFileSync(path, "utf-8")).toBe(before);
+    expect(console.error).not.toHaveBeenCalled();
+    expect(readMcpRefreshCache()).toEqual({ version: "1.0.0" });
   });
 
   it("does not add a Dosu entry to a Claude Code config that never had one", () => {
