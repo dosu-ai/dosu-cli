@@ -289,6 +289,40 @@ describe("runKnowledgeSync gate", () => {
     expect(saved[0].consecutive_failures).toBe(2);
   });
 
+  it("keeps what was saved while it scanned, on the error path and the folder scope's conversion", async () => {
+    // `dosu knowledge incognito on claude` from another terminal while this run scans.
+    const turnedOn = (store: ReturnType<typeof stateStore>) => async () => {
+      store.saveState({ ...store.get(), incognito_agents: ["claude"] });
+      return [{ ...session(60), project: "dosu-cli" }];
+    };
+    const failing = stateStore(state({ consecutive_failures: 1 }));
+    await runKnowledgeSync({
+      deps: makeDeps({
+        ...failing,
+        listSessions: turnedOn(failing),
+        locator: {
+          resolve: () => null,
+          resolveRepo: () => {
+            throw new Error("git exploded");
+          },
+        },
+      }).deps,
+    });
+    expect(failing.get()).toMatchObject({ incognito_agents: ["claude"], consecutive_failures: 2 });
+
+    mockScanSessions.mockReset().mockReturnValue([{ ...session(90), project: "dosu-cli" }]);
+    const scoped = stateStore(state({ project_filter: ["/repo/dosu-cli"] }));
+    const ship = shipAll();
+    await runKnowledgeSync({
+      deps: makeDeps({ ...scoped, listSessions: turnedOn(scoped), locator: projectLocator, ship })
+        .deps,
+    });
+    expect(scoped.get()).toMatchObject({ incognito_agents: ["claude"], repo_filter: [DOSU_CLI] });
+    // And the run itself sees the switch under the lock: nothing of Claude Code's ships.
+    expect(ship).not.toHaveBeenCalled();
+    expect(scoped.get().sessions["claude/s-60"]).toMatchObject({ by_agent: true });
+  });
+
   it("survives a failing saveState on the error path", async () => {
     const { deps } = makeDeps({
       listSessions: vi.fn().mockRejectedValue(new Error("boom")),
@@ -715,6 +749,49 @@ describe("runKnowledgeSync shipping", () => {
       });
       const logged = mockLoggerDebug.mock.calls.map((c) => c.join(" ")).join("\n");
       expect(logged).toContain("1 sessions they settled changed; still not shipped");
+    });
+
+    it("holds the rest of a batch to a switch flipped while it ships", async () => {
+      const [a, b, c] = [session(60), session(50), session(40)];
+      const store = stateStore();
+      // The ship step reads the switch before each upload; after the first, the user runs
+      // `incognito on claude`, then `transcripts disable`.
+      const ship = vi.fn<NonNullable<SyncDeps["ship"]>>(async (sessions, _shipped, hold) => {
+        const results: ShipSessionResult[] = [];
+        for (const s of sessions) {
+          const held = hold?.(s);
+          if (held === "stop") break;
+          results.push(
+            held === "agent"
+              ? { session: s, outcome: "incognito", byAgent: true }
+              : { session: s, outcome: "shipped", taskId: `task-${s.id}` },
+          );
+          if (s.id === a.id) store.saveState({ ...store.get(), incognito_agents: ["claude"] });
+          if (s.id === b.id) store.saveState({ ...store.get(), ship_transcripts: false });
+        }
+        return results;
+      });
+      const { deps } = makeDeps({
+        ...store,
+        listSessions: vi.fn().mockResolvedValue([a, b, c]),
+        ship,
+      });
+
+      const outcome = await runKnowledgeSync({ deps });
+
+      expect(outcome.counts).toMatchObject({ shipped: 1, incognito: 1 });
+      const ledger = store.get().sessions;
+      expect(ledger["claude/s-60"]?.outcome).toBe("shipped");
+      expect(ledger["claude/s-50"]).toEqual({
+        updated: b.updated,
+        outcome: "incognito",
+        at: NOW.toISOString(),
+        cli_version: CLI,
+        by_agent: true,
+        path: b.path,
+      });
+      // Left pending for when shipping is on again.
+      expect(ledger["claude/s-40"]).toBeUndefined();
     });
 
     it("re-stamps nothing that is unchanged, or that it did not settle", async () => {

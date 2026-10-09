@@ -427,8 +427,10 @@ quiet period settles in the ledger as `incognito` with `by_agent: true`, whateve
 in the same run, without reaching the ship step; the debug log records
 `not shipping incognito session <harness>/<id>: its agent is incognito` and the run summary counts
 it as passed over. Settling them alone is no attempt to ship, so failure backoff stays as it was.
-The sync reads the switch again once it holds the lock, so an agent put in incognito after the scan
-keeps its sessions out of that run too.
+The sync reads the switch again once it holds the lock, and once more just before each upload, so
+an agent put in incognito after the scan, or while a batch ships, keeps the rest of its sessions out
+of that run too: each settles as `by_agent`. `dosu knowledge transcripts disable` run while a batch
+ships stops it at the next session, which stays pending.
 
 A `by_agent` entry is final. A `/dosu-incognito` entry stays out because the marker is still in
 the transcript, and a newer CLI re-checks it so detector fixes reach it. Nothing in a transcript

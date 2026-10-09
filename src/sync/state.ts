@@ -464,7 +464,8 @@ export function setAgentsIncognito(
 export const AGENT_SWITCH_SINCE = "2026-10-05T00:00:00.000Z";
 
 /** Take agents out of incognito (`dosu knowledge incognito off`), sealing first what they ran
- * while in it, in the same load-modify-save: each session of theirs that `listSessions` returns
+ * while in it, in the same load-modify-save (after the listing): each session of theirs that
+ * `listSessions` returns
  * (from `since`, when the earliest of them went in, however long ago; whatever the scope, still
  * open or not), that was active since its agent went in, and that the ledger has no answer for
  * its current contents settles as the switch would have settled it (`by_agent`). Those are the
@@ -479,21 +480,27 @@ export function leaveIncognito(
   now: Date = new Date(),
   configDir: string = getConfigDir(),
 ): void {
+  const leavingIn = (state: SyncState) =>
+    new Map(
+      agentIds
+        .filter((id) => state.incognito_agents?.includes(id))
+        .map((id) => [id, Date.parse(state.incognito_since?.[id] ?? AGENT_SWITCH_SINCE)]),
+    );
+  // Listed first, from a read for that alone: the scan takes a while, and whatever another
+  // command or a sync saves meanwhile must survive the save below, a quick load-modify-save.
+  const listed = loadSyncState(configDir);
+  const before = leavingIn(listed);
+  const sessions =
+    before.size > 0 ? listSessions(listed, new Date(Math.min(...before.values()))) : [];
   const state = loadSyncState(configDir);
-  const sinceOf = new Map(
-    agentIds
-      .filter((id) => state.incognito_agents?.includes(id))
-      .map((id) => [id, Date.parse(state.incognito_since?.[id] ?? AGENT_SWITCH_SINCE)]),
-  );
-  if (sinceOf.size > 0) {
-    const at = now.toISOString();
-    for (const session of listSessions(state, new Date(Math.min(...sinceOf.values())))) {
-      const since = sinceOf.get(session.harness);
-      if (since === undefined || Date.parse(session.updated) < since) continue;
-      const key = sessionKey(session);
-      if (!isPending(session, state.sessions[key], { cliVersion })) continue;
-      state.sessions[key] = agentIncognitoEntry(session, at, cliVersion);
-    }
+  const sinceOf = leavingIn(state);
+  const at = now.toISOString();
+  for (const session of sessions) {
+    const since = sinceOf.get(session.harness);
+    if (since === undefined || Date.parse(session.updated) < since) continue;
+    const key = sessionKey(session);
+    if (!isPending(session, state.sessions[key], { cliVersion })) continue;
+    state.sessions[key] = agentIncognitoEntry(session, at, cliVersion);
   }
   switchAgents(state, agentIds, false);
   saveSyncState(state, configDir);

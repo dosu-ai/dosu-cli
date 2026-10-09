@@ -9,7 +9,7 @@ import type { ProjectKey } from "../sessions/project";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import type { AgentSession } from "../sessions/scan";
 import { isIncognitoSession } from "../sync/incognito";
-import type { ShipSessionResult, SyncDeps } from "../sync/sync";
+import type { ShipHold, ShipSessionResult, SyncDeps } from "../sync/sync";
 import { planShipment, prefixSha256, type ShippedPrefix } from "./continuation";
 import { normalizeSessionRecords, trajectorySourceOf } from "./normalize";
 import { forkCopy, sessionStartOf } from "./session-start";
@@ -46,18 +46,24 @@ export interface ShipStepOptions {
 
 /** Build the sync pipeline's ship step. Processes oldest-first and stops after the first
  * failure, per the SyncDeps contract; the pipeline owns all ledger bookkeeping and says, per
- * session, what earlier runs already shipped of it. */
+ * session, what earlier runs already shipped of it, and whether the user's switches still let it
+ * go (ShipHold). */
 export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["ship"]> {
   const backendUrl = (options.backendUrl ?? getBackendURL()).replace(/\/$/, "");
   const fetchImpl = options.fetchImpl ?? fetch;
   const isIncognito = options.isIncognito ?? isIncognitoSession;
   const normalize = options.normalize ?? normalizeSessionRecords;
 
+  /** One session's result, or null when shipping was turned off before it was sent. */
   async function shipOne(
     session: AgentSession,
     shipped: ShippedPrefix | undefined,
     resolve: Required<Pick<ShipStepOptions, "resolveProject" | "resolveBranch">>,
-  ): Promise<ShipSessionResult> {
+    hold: ShipHold,
+  ): Promise<ShipSessionResult | null> {
+    const held = hold(session);
+    if (held === "stop") return null;
+    if (held === "agent") return { session, outcome: "incognito", byAgent: true };
     if (isIncognito(session)) return { session, outcome: "incognito" };
     if (!trajectorySourceOf(session.harness)) {
       return {
@@ -100,6 +106,10 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
         ...(plan.continuation ? { continuation: plan.continuation } : {}),
       },
     });
+    // Normalizing a long session takes a while: the switch is read once more right before sending.
+    const late = hold(session);
+    if (late === "stop") return null;
+    if (late === "agent") return { session, outcome: "incognito", byAgent: true };
     try {
       const response = await fetchImpl(`${backendUrl}/v1/memory/ingest/async`, {
         method: "POST",
@@ -138,7 +148,7 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
     }
   }
 
-  return async (sessions, shippedOf = () => undefined) => {
+  return async (sessions, shippedOf = () => undefined, hold = () => null) => {
     const resolver =
       options.resolveProject && options.resolveBranch ? undefined : createProjectDirResolver();
     const resolve = {
@@ -149,7 +159,9 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
     };
     const results: ShipSessionResult[] = [];
     for (const session of sessions) {
-      const result = await shipOne(session, shippedOf(session), resolve);
+      const result = await shipOne(session, shippedOf(session), resolve, hold);
+      // Shipping was turned off: the rest of the batch waits, pending, for it to be on again.
+      if (!result) break;
       results.push(result);
       if (result.outcome === "failed") break;
     }

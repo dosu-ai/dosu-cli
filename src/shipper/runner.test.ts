@@ -208,6 +208,33 @@ describe("createShipStep", () => {
     expect(JSON.parse(fetchImpl.mock.calls[0][1].body).metadata.session_id).toBe("s2");
   });
 
+  it("reads the user's switches before each upload, and holds the rest of the batch to them", async () => {
+    // Put in incognito once s1 has gone out, and shipping turned off as s3 is being normalized.
+    let reads = 0;
+    const hold = vi.fn((s: AgentSession) => {
+      reads += 1;
+      if (s.id === "s1") return null;
+      if (s.id === "s3" && reads > 4) return "stop" as const;
+      return s.id === "s2" ? ("agent" as const) : null;
+    });
+    const normalize = vi.fn(async (_session: AgentSession) => RECORDS);
+    const { step, fetchImpl } = makeStep({ normalize });
+
+    const results = await step(
+      [session("s1"), session("s2"), session("s3"), session("s4")],
+      undefined,
+      hold,
+    );
+
+    expect(results.map((r) => [r.session.id, r.outcome, r.byAgent])).toEqual([
+      ["s1", "shipped", undefined],
+      ["s2", "incognito", true],
+    ]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    // s2 was never read, and nothing after s3's check was.
+    expect(normalize.mock.calls.map(([s]) => s.id)).toEqual(["s1", "s3"]);
+  });
+
   it("a transcript the normalizer cannot read is unsupported, not a failure", async () => {
     const { step, fetchImpl } = makeStep({ normalize: async () => null });
 

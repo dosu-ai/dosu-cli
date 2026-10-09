@@ -1015,6 +1015,35 @@ describe("leaveIncognito", () => {
     });
   });
 
+  it("keeps what another command saved while it listed the sessions", () => {
+    saveSyncState(
+      {
+        ...emptySyncState(),
+        incognito_agents: ["cursor"],
+        incognito_since: { cursor: "2026-08-25T10:00:00.000Z" },
+      },
+      configDir,
+    );
+
+    leaveIncognito(
+      ["cursor"],
+      () => {
+        // `incognito on codex` and `transcripts disable` in another terminal, mid-scan.
+        setAgentsIncognito(["codex"], true, configDir);
+        setShipTranscripts(false, configDir);
+        return [cursor("c1")];
+      },
+      VERSION,
+      NOW,
+      configDir,
+    );
+
+    const state = loadSyncState(configDir);
+    expect(state.incognito_agents).toEqual(["codex"]);
+    expect(state.ship_transcripts).toBe(false);
+    expect(state.sessions["cursor/c1"]).toMatchObject({ by_agent: true });
+  });
+
   it("goes back past the scan window to when the agent went in, or to 0.66's switch", () => {
     // In incognito for two months with nothing settling its sessions (shipping off, say).
     const old = cursor("old", { updated: "2026-07-01T00:00:00.000Z" });

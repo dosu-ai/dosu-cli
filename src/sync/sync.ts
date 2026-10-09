@@ -91,7 +91,15 @@ export interface ShipSessionResult {
   httpStatus?: number;
   /** One renderable line for results that did not ship. */
   message?: string;
+  /** On `incognito`: the agents' switch kept it out, put on while the batch shipped (ShipHold),
+   * not /dosu-incognito. */
+  byAgent?: true;
 }
+
+/** Read again just before a session is uploaded, so a switch flipped while a batch ships holds
+ * for the rest of it: `stop` when shipping was turned off (the rest of the batch stays pending),
+ * `agent` when its agent was put in incognito (it settles as the switch settles it). */
+export type ShipHold = (session: AgentSession) => "stop" | "agent" | null;
 
 /** How a run settled the subagents' transcripts it examined, apart from the sessions. */
 type SubagentCounts = Record<Exclude<ShipSessionResult["outcome"], "failed">, number>;
@@ -137,6 +145,7 @@ export interface SyncDeps {
   ship?: (
     sessions: AgentSession[],
     shipped?: (session: AgentSession) => ShippedPrefix | undefined,
+    hold?: ShipHold,
   ) => Promise<ShipSessionResult[]>;
   /** Session → working directory and repo, for the shipping scope; defaults to the cached
    * resolver. */
@@ -281,6 +290,7 @@ function ledgerEntry(
   cliVersion: string,
 ): LedgerEntry | null {
   if (result.outcome === "failed") return null;
+  if (result.byAgent) return agentIncognitoEntry(result.session, at, cliVersion);
   // A shipped session whose new content is too small to learn from stays shipped, as of now.
   if (result.outcome === "trivial" && previous?.outcome === "shipped") {
     return { ...previous, updated: result.session.updated };
@@ -449,10 +459,15 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     }
     const repoFilter = studyRepoFilter(state, () => scanAgentSessions({}), locator);
     if (state.project_filter) {
-      // One-time upgrade of a folder scope, saved now: a run that ships nothing saves no state.
+      // One-time upgrade of a folder scope, saved now (a run that ships nothing saves no state),
+      // onto a fresh read: the scans above take a while, and a switch flipped meanwhile stands.
       delete state.project_filter;
       if (repoFilter) state.repo_filter = repoFilter;
-      saveState(state);
+      const fresh = loadState();
+      delete fresh.project_filter;
+      if (repoFilter) fresh.repo_filter = repoFilter;
+      if (resumes) delete fresh.paused;
+      saveState(fresh);
       logger.debug("sync", `folder scope converted to repos: ${repoFilter?.join(", ") || "none"}`);
     }
     // The ledger first, so settled sessions never cost a repo lookup.
@@ -496,11 +511,12 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     const message = err instanceof Error ? err.message : String(err);
     logger.debug("sync", `sync failed: ${message}`);
     try {
-      saveState({
-        ...state,
-        last_attempt_at: now().toISOString(),
-        consecutive_failures: state.consecutive_failures + 1,
-      });
+      // Onto a fresh read, not the state this run started from: what was saved since stands.
+      const fresh = loadState();
+      fresh.last_attempt_at = now().toISOString();
+      fresh.consecutive_failures += 1;
+      if (resumes) delete fresh.paused;
+      saveState(fresh);
     } catch {
       // Persisting backoff state is best-effort; the failure itself is what matters.
     }
@@ -580,10 +596,21 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     const batch = ordered.slice(0, Math.max(SHIP_BATCH_LIMIT, ordered.filter(isEnded).length));
     logger.debug("sync", `shipping ${batch.length} of ${todo.length} ready sessions`);
 
+    // And once more before each upload: the batch can take minutes, and `incognito on` or
+    // `transcripts disable` run meanwhile must hold for the rest of it.
+    const hold: ShipHold = (s) => {
+      const current = loadState();
+      if (!isShippingEnabled(current)) return "stop";
+      return isAgentIncognito(current, s, lineage) ? "agent" : null;
+    };
     let results: ShipSessionResult[] = [];
     if (batch.length > 0) {
       try {
-        results = await deps.ship(batch, (s) => shippedPrefix(locked.sessions[sessionKey(s)]));
+        results = await deps.ship(
+          batch,
+          (s) => shippedPrefix(locked.sessions[sessionKey(s)]),
+          hold,
+        );
       } catch (err) {
         // The ship step reports failures per session; a throw is a step bug — treat it as one
         // failed attempt so backoff still engages instead of crashing the sync run.
