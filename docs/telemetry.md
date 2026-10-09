@@ -100,7 +100,7 @@ The `properties` allowlist is:
 | `$groups` | Optional `{ "organization": "<org UUID>" }` PostHog group association, present only with a validated signed-in user and organization UUID. |
 | `is_authenticated` | Boolean only; it does not duplicate the top-level identity. |
 | `exit_code` | Integer clamped to `0..255`. |
-| `error_code` | Optional validated, stable, low-cardinality code; never a message. |
+| `error_code` | Optional validated, stable, low-cardinality code; never a message. See [Error codes](#error-codes). |
 | `sync_trigger` | Optional, `knowledge sync` only: `hook`, `manual`, or `bootstrap`. |
 | `sync_status` | Optional, `knowledge sync` only: the pipeline status (`backlog`, `nothing-new`, `skipped-backoff`, `skipped-lock`, `skipped-gateway`, `skipped-paused`, `studied`, `mine-failed`, `error`) or a command-level outcome (`detached` for the hook parent that only re-spawns, `detach-failed`, `status-only` for `--status`). |
 | `sessions_studied` | Optional, `knowledge sync` only: sessions handed to the learner this invocation, bucketed to `0`, `1-4`, `5-9`, `10-19`, `20-49`, or `50+`. Summed across bootstrap rounds. |
@@ -121,6 +121,39 @@ new status string cannot reach PostHog until it is added to the allowlist; the t
 session identifiers, project names, note titles, note content, executable paths, or learner or
 gateway message text.
 
+#### Error codes
+
+`error_code` comes from a closed allowlist in `src/telemetry/telemetry.ts`: tRPC codes (for
+example `NOT_FOUND` or `INTERNAL_SERVER_ERROR`), Node system codes (for example `ECONNREFUSED`),
+Commander codes, session codes (`SESSION_EXPIRED`, `SESSION_PERSISTENCE_ERROR`,
+`SESSION_REFRESH_ERROR`), and the handled command states below. A code outside the allowlist is
+dropped; the error's message is never sent.
+
+Command handlers report expected account, context, and selection failures by throwing a
+`CommandError` (`src/cli/command-error.ts`) instead of calling `process.exit`. The error unwinds to
+`execute()`, which prints it, sends the invocation's single `cli_command_completed` event with
+`result: failure` (or `validation_error` for `INVALID_ARGUMENT`), and exits 1. Current codes:
+
+| `error_code` | Meaning |
+| --- | --- |
+| `NOT_LOGGED_IN` | No saved session. |
+| `NO_ORG_SELECTED` | Logged in, but no organization is saved. |
+| `NO_API_KEY` | The saved target has no MCP API key. |
+| `NO_LIBRARY_SELECTED` | No Library is saved (`review list`). |
+| `NO_DEPLOYMENT_SELECTED` | No MCP deployment is saved (`deployments info`). |
+| `ORG_UNAVAILABLE` | The saved organization was removed or the account cannot access it (`deployments list`, `deployments switch`). |
+| `LIBRARY_UNAVAILABLE` | The saved Library was deleted or the account cannot access it. |
+| `DEPLOYMENT_UNAVAILABLE` | The saved MCP deployment was deleted or the account cannot access it. |
+| `SCOPE_MISMATCH` | The saved Library is not the saved MCP deployment's Library. |
+| `DEPLOYMENT_NOT_FOUND` | A deployment ID or prefix passed to `deployments switch` matches nothing the account can see. |
+| `DEPLOYMENT_AMBIGUOUS` | A deployment prefix matches more than one MCP deployment. |
+| `NOT_MCP_DEPLOYMENT` | The requested deployment is not a Dosu MCP deployment. |
+| `REVIEW_ITEM_NOT_FOUND` | A review item ID does not resolve to a pending doc change or draft reply. |
+| `INVALID_ARGUMENT` | Conflicting, missing, or unreadable flags or arguments (for example `--body` with `--body-file`). |
+
+The code names the state only. The IDs, prefixes, and messages printed to the terminal are never
+part of the event. Adding a code is a schema change under the maintainer contract below.
+
 Signed-in command events join the existing PostHog person identified by the web app with the same
 Dosu user UUID. When the current authenticated config has a selected organization UUID, the event
 also carries `org_id` for property-based queries and `$groups.organization` so PostHog organization
@@ -132,7 +165,9 @@ until the user rotates it.
 ### Error diagnostics: Sentry
 
 An error event is sent only when telemetry is enabled and an instrumented command throws or finishes
-with a non-validation, nonzero exit code. A nonzero completion becomes a message-free
+with a non-validation, nonzero exit code. Expected states the user fixes by logging in or selecting
+again are analytics only and send no Sentry event: `SESSION_EXPIRED`, `SESSION_PERSISTENCE_ERROR`,
+and every [command error code](#error-codes). A nonzero completion becomes a message-free
 `CommandExitError`. One more case is reported without changing the command's outcome: a
 `knowledge sync` that exits 0 but recorded `sync_status: mine-failed` (background hook and
 setup-bootstrap runs are quiet and always exit 0) sends a message-free `LearnerRunFailed` event
@@ -243,8 +278,13 @@ The payloads constructed by the CLI never include:
   breadcrumbs, attachments, arbitrary `extra` data, or exception causes;
 - person name, username, hostname, MAC address, hardware serial, or a hash derived from any of them;
   signed-in command analytics uses only the validated user ID, and signed-in error diagnostics use
-  only that ID and optional email; or
-- the contents of `debug.log` or another local log file.
+  only that ID and optional email;
+- the contents of `debug.log` or another local log file; or
+- the server's tRPC `requestId`. When a failed request carries one, the CLI prints it on stderr as
+  `request_id=…` after `code=`, `path=`, and `status=`, and writes it to `debug.log`, so a user can
+  quote it to support to find the matching server log line and Sentry event. Only a plain token
+  (letters, digits, `:`, `.`, `_`, `-`, at most 128 characters) is printed; anything else is
+  omitted. Sending it to PostHog or Sentry would need its own reviewed schema change.
 
 Authenticated setup still uses a session-token transport header, and the Dosu server enriches
 successful setup analytics with the documented account identity. The exclusions above describe
@@ -279,9 +319,11 @@ is no offline telemetry spool.
 
 ### `debug.log`
 
-`debug.log` is the existing local diagnostic log, not a telemetry source. It is created with
-owner-only permissions and is truncated on logger initialization after it grows beyond 1 MiB,
-keeping roughly the newest 512 KiB. `dosu logs` lets the user locate, inspect, or delete it.
+`debug.log` is the existing local diagnostic log, not a telemetry source. When a command fails, the
+CLI appends the error and its tRPC `code`, `path`, `status`, and server `request_id` (when present)
+to this log. It is created with owner-only permissions and is truncated on logger initialization
+after it grows beyond 1 MiB, keeping roughly the newest 512 KiB. `dosu logs` lets the user locate,
+inspect, or delete it.
 
 The logger redacts common credential shapes, but local log text can still contain detailed errors,
 URLs, IDs, and paths. Treat it as potentially sensitive. It is never attached to PostHog or Sentry
@@ -328,11 +370,20 @@ remain in controlled Dosu/vendor infrastructure or CI and are never placed in th
   not a download counter. Exact downloads remain in npm, Homebrew, and GitHub Release analytics.
 - `dosu telemetry ...` controls are themselves excluded, so changing or inspecting the switch does
   not emit an analytics event or create an installation ID.
-- Commander lifecycle telemetry can observe commands that return normally or set
-  `process.exitCode`. Several legacy command modules still call `process.exit(...)` directly; those
-  paths terminate before the completion/error flush and can be missing from analytics and Sentry.
-  Do not interpret event absence as command success. Migrate those paths deliberately rather than
-  monkey-patching `process.exit`.
+- Commander lifecycle telemetry can observe commands that return normally, set
+  `process.exitCode`, or throw. The shared login/org/API-key checks (`src/commands/auth.ts`), and
+  every failure path in `review` (except `review notifications`) and `deployments`, throw a
+  `CommandError` and are recorded. `review notifications` and several other command modules (for
+  example `ask`, `audit`, `docs`, `integrations`, and `sources`) still call `process.exit(...)`
+  directly for their own checks; those paths terminate before the
+  completion/error flush and can be missing from analytics and Sentry. Do not interpret event
+  absence as command success. Migrate those paths deliberately rather than monkey-patching
+  `process.exit`.
+- Even on an instrumented path, a failure is not guaranteed to arrive: a user who opted out
+  (`dosu telemetry disable`, `DO_NOT_TRACK`, `DOSU_TELEMETRY_DISABLED`) sends nothing; network
+  loss, a slow collector, or a delivery past the 500ms request deadline (750ms flush cap) loses the
+  event with no retry; and hard termination (`SIGKILL`, Ctrl+C, which exits immediately, or a crash
+  of the runtime itself) ends the process before the flush.
 - Commander can reject a malformed option or missing required argument before the command
   `preAction` hook. Those parser-level failures are currently not emitted; their raw token is never
   captured as a fallback.
