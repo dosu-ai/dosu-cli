@@ -7,7 +7,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../../config/config";
@@ -316,6 +316,155 @@ describe("CodexProvider", () => {
     // must not write the remote-HTTP form.
     expect(content).not.toContain('type = "http"');
     expect(content).not.toContain("http_headers");
+  });
+
+  /** Key lines of the root `[mcp_servers.dosu]` table, stopping at the next table header. */
+  function dosuRootKeys(content: string): string[] {
+    const lines = content.split("\n");
+    const start = lines.indexOf("[mcp_servers.dosu]");
+    if (start === -1) return [];
+    const end = lines.findIndex((line, i) => i > start && line.startsWith("["));
+    return lines.slice(start + 1, end === -1 ? undefined : end).filter((line) => line.trim());
+  }
+
+  // Codex defers every MCP tool behind tool_search unless the server opts out with
+  // omit_tools_from = ["deferred"] (Codex 0.147.0+). It must sit on the root table, not in [.env].
+  it.each([
+    ["global", true, "codex-home/config.toml"],
+    ["local", false, ".codex/config.toml"],
+  ])("%s install keeps Dosu tools out of Codex's deferred set", async (_scope, global, rel) => {
+    const { CodexProvider } = await import("./codex");
+
+    CodexProvider().install(makeCfg(), global);
+
+    const content = readFileSync(join(tempDir, rel), "utf-8");
+    expect(dosuRootKeys(content)).toContain('omit_tools_from = ["deferred"]');
+    expect(content.match(/omit_tools_from/g)?.length).toBe(1);
+  });
+
+  it("reinstall adds omit_tools_from to an existing entry and keeps other settings", async () => {
+    const { CodexProvider } = await import("./codex");
+    const configPath = join(tempDir, "codex-home", "config.toml");
+    mkdirSync(join(tempDir, "codex-home"), { recursive: true });
+    const before = `model = "gpt-5.5"
+
+[mcp_servers.other]
+command = "other-cmd"
+omit_tools_from = []
+`;
+    const after = `
+[profiles.fast]
+model_reasoning_effort = "low"
+`;
+    const preChangeEntry = `
+[mcp_servers.dosu]
+command = "/usr/local/bin/npx"
+args = ["-y", "mcp-remote@0.1.0", "https://api.dosu.dev/v1/mcp/deployments/old-dep"]
+
+[mcp_servers.dosu.env]
+X_DOSU_API_KEY = "old-key"
+`;
+    writeFileSync(configPath, before + preChangeEntry + after);
+
+    CodexProvider().install(makeCfg(), true);
+
+    const content = readFileSync(configPath, "utf-8");
+    expect(content.startsWith(before)).toBe(true);
+    expect(content).toContain(after);
+    expect(content).not.toContain("old-key");
+    expect(dosuRootKeys(content)).toContain('omit_tools_from = ["deferred"]');
+    expect(content.match(/omit_tools_from = \["deferred"\]/g)?.length).toBe(1);
+  });
+
+  it("remove drops omit_tools_from with the Dosu entry and leaves other servers' keys", async () => {
+    const { CodexProvider } = await import("./codex");
+    const configPath = join(tempDir, "codex-home", "config.toml");
+    mkdirSync(join(tempDir, "codex-home"), { recursive: true });
+    const other = '[mcp_servers.other]\ncommand = "other-cmd"\nomit_tools_from = ["deferred"]\n';
+    writeFileSync(configPath, other);
+
+    CodexProvider().install(makeCfg(), true);
+    CodexProvider().remove(true);
+
+    const content = readFileSync(configPath, "utf-8");
+    expect(content).not.toContain("[mcp_servers.dosu");
+    expect(content).toContain(other);
+    expect(content.match(/omit_tools_from/g)?.length).toBe(1);
+  });
+
+  // The post-upgrade refresh rewrites every pre-omit_tools_from entry. That rewrite must not switch
+  // Dosu back on or drop the filters, timeouts, and "always allow" approvals the user set in Codex.
+  it("reinstall keeps the user's own settings on the Dosu entry", async () => {
+    const { CodexProvider } = await import("./codex");
+    const configPath = join(tempDir, "codex-home", "config.toml");
+    mkdirSync(join(tempDir, "codex-home"), { recursive: true });
+    const userRoot = [
+      "enabled = false",
+      'disabled_tools = [\n  "read", # noisy\n  "list",\n]',
+      "tool_timeout_sec = 120",
+      'default_tools_approval_mode = "prompt"',
+      "required = true",
+    ];
+    const toolsTable = '[mcp_servers.dosu.tools.search]\napproval_mode = "approve"';
+    writeFileSync(
+      configPath,
+      `[mcp_servers.dosu]
+command = "/usr/local/bin/npx"
+${userRoot.join("\n")}
+args = ["-y", "mcp-remote@0.1.0", "https://api.dosu.dev/v1/mcp/deployments/old-dep"]
+
+${toolsTable}
+
+[mcp_servers.dosu.env]
+X_DOSU_API_KEY = "old-key"
+
+[mcp_servers.other]
+command = "other-cmd"
+`,
+    );
+    const provider = CodexProvider();
+    expect(provider.isCurrent(makeCfg())).toBe(false);
+
+    provider.install(makeCfg(), true);
+
+    const content = readFileSync(configPath, "utf-8");
+    expect(dosuRootKeys(content)).toEqual([
+      `command = ${JSON.stringify(npxPath)}`,
+      expect.stringMatching(/^args = /),
+      'omit_tools_from = ["deferred"]',
+      ...userRoot.join("\n").split("\n"),
+    ]);
+    expect(content).toContain(`\n${toolsTable}\n`);
+    expect(content).toContain('[mcp_servers.other]\ncommand = "other-cmd"\n');
+    expect(content).not.toContain("old-key");
+    expect(provider.isCurrent(makeCfg())).toBe(true);
+
+    provider.install(makeCfg(), true);
+    expect(readFileSync(configPath, "utf-8")).toBe(content);
+
+    provider.remove(true);
+    expect(readFileSync(configPath, "utf-8")).not.toContain("mcp_servers.dosu");
+  });
+
+  it("an unclosed array in the Dosu entry never swallows the next table", async () => {
+    const { CodexProvider } = await import("./codex");
+    const configPath = join(tempDir, "codex-home", "config.toml");
+    mkdirSync(join(tempDir, "codex-home"), { recursive: true });
+    const other = '[mcp_servers.other]\ncommand = "other-cmd"\n';
+    writeFileSync(configPath, `[mcp_servers.dosu]\ndisabled_tools = ["read"\n\n${other}`);
+
+    CodexProvider().install(makeCfg(), true);
+
+    const content = readFileSync(configPath, "utf-8");
+    expect(content.match(/\[mcp_servers\.other]/g)?.length).toBe(1);
+    expect(dosuRootKeys(content)).toContain('disabled_tools = ["read"');
+  });
+
+  it("an empty CODEX_HOME falls back to ~/.codex, as in Codex", async () => {
+    const { CodexProvider } = await import("./codex");
+    process.env.CODEX_HOME = "";
+
+    expect(CodexProvider().globalConfigPath()).toBe(join(homedir(), ".codex", "config.toml"));
   });
 
   it("local install writes TOML config to .codex/config.toml in cwd", async () => {

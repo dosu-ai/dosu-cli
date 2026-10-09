@@ -78,9 +78,14 @@ const USER_CHOICE_KEYS: ReadonlySet<string> = new Set([
   "tool_timeout_sec",
 ]);
 
+/** Whether `key` is one of the `USER_CHOICE_KEYS` an agent writes into its own server entry. */
+export function isUserChoiceKey(key: string): boolean {
+  return USER_CHOICE_KEYS.has(key);
+}
+
 function withoutUserChoices(entry: unknown): unknown {
   if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return entry;
-  return Object.fromEntries(Object.entries(entry).filter(([key]) => !USER_CHOICE_KEYS.has(key)));
+  return Object.fromEntries(Object.entries(entry).filter(([key]) => !isUserChoiceKey(key)));
 }
 
 /** `hasShape` for a whole server entry: the keys an agent sets from its own UI (see
