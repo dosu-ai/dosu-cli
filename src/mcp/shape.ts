@@ -57,9 +57,10 @@ export function hasShape(expected: unknown, actual: unknown): boolean {
  * approves or hides tools, or sets a timeout (Cline: `disabled`, `autoApprove`, `timeout`;
  * Windsurf and Antigravity: `disabled`, `disabledTools`; Factory: `disabled`; OpenCode and Zed:
  * `enabled`; Gemini: `trust`, `includeTools`, `excludeTools`, `timeout`; Codex: `enabled`,
- * `enabled_tools`, `disabled_tools`, `startup_timeout_sec`, `tool_timeout_sec`). They hold the
- * user's choice, not the entry's format. Counting them would rewrite the entry on every release
- * and switch Dosu back on for a user who turned it off. */
+ * `required`, `enabled_tools`, `disabled_tools`, `default_tools_approval_mode`,
+ * `startup_timeout_sec`, `tool_timeout_sec`). They hold the user's choice, not the entry's
+ * format. Counting them would rewrite the entry on every release and switch Dosu back on for a
+ * user who turned it off. */
 const USER_CHOICE_KEYS: ReadonlySet<string> = new Set([
   "disabled",
   "enabled",
@@ -71,6 +72,8 @@ const USER_CHOICE_KEYS: ReadonlySet<string> = new Set([
   "excludeTools",
   "enabled_tools",
   "disabled_tools",
+  "default_tools_approval_mode",
+  "required",
   "startup_timeout_sec",
   "tool_timeout_sec",
 ]);

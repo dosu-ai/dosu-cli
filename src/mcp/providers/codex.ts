@@ -62,6 +62,11 @@ function renderDosuEntry(entry: DosuEntry): string {
     .join("");
 }
 
+/** `[mcp_servers.dosu.tools.<tool>]` holds the user's per-tool approval, not the entry's format. */
+function isToolApproval(name: string): boolean {
+  return name.startsWith("mcp_servers.dosu.tools.");
+}
+
 /** The Dosu entry in `content` in `DosuEntry` form, or undefined when there is none. Values are
  * read as JSON, which covers the strings and string arrays this provider writes; anything else
  * (a hand-written literal string, a trailing comment) stays raw text and compares as different. */
@@ -72,7 +77,7 @@ function readDosuEntry(content: string): Record<string, unknown> | undefined {
     const name = sectionName(line);
     if (name !== null) {
       table = undefined;
-      if (!isDosuSection(name)) continue;
+      if (!isDosuSection(name) || isToolApproval(name)) continue;
       entry ??= {};
       if (name === "mcp_servers.dosu") {
         table = entry;

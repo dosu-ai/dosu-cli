@@ -177,6 +177,20 @@ describe("out-of-date entries", () => {
       expect(provider("codex").isCurrent(makeCfg())).toBe(true);
     });
 
+    it("stays current with tool approvals set", () => {
+      provider("codex").install(makeCfg(), true);
+      const written = readFileSync(path(), "utf-8");
+      writeFileSync(
+        path(),
+        written.replace(
+          "[mcp_servers.dosu]\n",
+          '[mcp_servers.dosu]\ndefault_tools_approval_mode = "writes"\nrequired = true\n',
+        ) + '\n[mcp_servers.dosu.tools.search]\napproval_mode = "approve"\n',
+      );
+
+      expect(provider("codex").isCurrent(makeCfg())).toBe(true);
+    });
+
     it("skips blank lines and comments inside the entry", () => {
       provider("codex").install(makeCfg(), true);
       const written = readFileSync(path(), "utf-8");
