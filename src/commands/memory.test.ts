@@ -323,6 +323,36 @@ describe("the session a dosu memory call belongs to", () => {
     expect(server.requests.filter((r) => r.body?.method === "tools/call")).toHaveLength(1);
   });
 
+  it("sends nothing from Cursor's agent shell while Cursor is in incognito", async () => {
+    // Cursor names no session in its shell, but marks the commands its agent runs.
+    inNoOriginClone("main");
+    vi.stubEnv("CURSOR_AGENT", "1");
+    setAgentsIncognito(["cursor"], true);
+
+    await dosu("search", "secret cursor task text");
+    expect(server.requests).toEqual([]);
+    expect(err.join("\n")).toContain("'dosu knowledge incognito off cursor'");
+    expect(process.exitCode).toBe(1);
+
+    process.exitCode = undefined;
+    setAgentsIncognito(["cursor"], false);
+    await dosu("search", "q");
+    expect(server.requests.filter((r) => r.body?.method === "tools/call")).toHaveLength(1);
+  });
+
+  it("holds a call that names a session but no agent to the shell's session too", async () => {
+    inNoOriginClone("main");
+    vi.stubEnv("CLAUDE_CODE_SESSION_ID", "c-live");
+    setAgentsIncognito(["claude"], true);
+
+    // Another id, or the shell's own, with no --client to say whose: neither goes out.
+    await dosu("search", "secret query", "--session", "abc");
+    await dosu("search", "secret query", "--session", "c-live");
+
+    expect(server.requests.filter((r) => r.body?.method === "tools/call")).toEqual([]);
+    expect(err).toHaveLength(2);
+  });
+
   it("sends nothing for a session that ran while its agent was incognito", async () => {
     inNoOriginClone("main");
     saveSyncState({

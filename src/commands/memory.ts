@@ -4,15 +4,23 @@
  * this directory would, and prints what the agent would read.
  * The call is logged under the agent session it is made from -- which, when the user took it off
  * the record or its agent is in incognito, stops the call before it leaves the machine, as the
- * proxy does (so does `--client` naming an agent in incognito). An extension names
- * that session (`--session`, and `--transcript` where the CLI cannot find it by id); a model that
- * runs the command from its shell is in the session its agent's environment names. */
+ * proxy does (so does `--client` naming an agent in incognito, or Cursor's agent shell while
+ * Cursor is). An extension names that session (`--session`, and `--transcript` where the CLI
+ * cannot find it by id); a model that runs the command from its shell is in the session its
+ * agent's environment names, whatever `--session` it passes. */
 
 import { Command, Option } from "commander";
 import pc from "picocolors";
 import { loadConfig, MODE_OSS } from "../config/config";
-import { type CallSession, callRefusal, harnessOfClient, shellSessions } from "../mcp/call-session";
+import {
+  type CallSession,
+  callRefusal,
+  harnessOfClient,
+  shellAgents,
+  shellSessions,
+} from "../mcp/call-session";
 import { callMcpTool, proxyRelay, type ToolResult, toolText } from "../mcp/proxy";
+import { SESSION_HARNESSES } from "../sessions/scan";
 import { trajectorySourceOf } from "../shipper/normalize";
 import { printResult } from "./output";
 
@@ -36,12 +44,20 @@ function sessionOptions(command: Command): Command {
     .option("--transcript <path>", "That session's transcript, where it cannot be found by id");
 }
 
-/** The sessions the call is made from: the one the caller names (the client says whose), else
- * the ones the shell's environment names (shellSessions). */
+/** The sessions the call is made from: the ones the shell's environment names (shellSessions),
+ * and the one the caller names, as the client's (with no client, as any agent's: an id alone does
+ * not say whose). */
 function callSessions(opts: MemoryOptions): CallSession[] {
-  if (!opts.session) return shellSessions(opts.client);
+  const shell = shellSessions(opts.client);
+  const { session } = opts;
+  if (!session) return shell;
   const harness = harnessOfClient(opts.client);
-  return harness ? [{ harness, id: opts.session, transcript: opts.transcript ?? null }] : [];
+  const named = (harness ? [harness] : SESSION_HARNESSES).map((h) => ({
+    harness: h,
+    id: session,
+    transcript: opts.transcript ?? null,
+  }));
+  return [...named, ...shell];
 }
 
 function fail(message: string): void {
@@ -56,9 +72,13 @@ async function runTool(tool: string, args: Record<string, unknown>, opts: Memory
     return fail("Dosu memory needs a Dosu Cloud deployment; OSS mode serves public libraries.");
   }
   // An agent started from another's shell is in both sessions, and held to both; an agent in
-  // incognito, named by --client or by its session, has no call sent at all.
+  // incognito, named by --client, by its session or by its shell (Cursor's), has no call sent.
   const sessions = callSessions(opts);
-  const refusal = callRefusal(opts.client, sessions);
+  const refusal =
+    callRefusal(opts.client, sessions) ??
+    shellAgents()
+      .map((agent) => callRefusal(agent, []))
+      .find((answer) => answer !== null);
   if (refusal) return fail(refusal);
   // Logged under the shell's session, and as its agent, only when that is unambiguous.
   const shell = !opts.session && sessions.length === 1 ? sessions[0] : null;

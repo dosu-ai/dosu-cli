@@ -519,12 +519,16 @@ no restart.
   `/dosu-incognito`, and records no session for the proxy.
 - **The MCP proxy.** `dosu mcp serve --client <agent>` answers every `tools/call` itself, for any
   tool and whether or not the call names a session, with an `isError` result saying how to turn the
-  switch off; nothing is relayed. `initialize` and `tools/list` still relay, as they do for
-  `/dosu-incognito`, so the tools stay listed (also in OpenCode and pi, whose plugin and extension
+  switch off; nothing is relayed (a JSON-RPC batch is screened call by call: the refused calls are
+  answered in a batch of their own, and the rest relay). `initialize` and `tools/list` still relay,
+  as they do for `/dosu-incognito`, so the tools stay listed (also in OpenCode and pi, whose plugin and extension
   do not read the switch) and refuse when called. A call that names a session of a listed agent is
   refused too, whichever server it reaches.
 - **`dosu memory search|evidence`** refuse, with the same message, when `--client` names a listed
-  agent or a session they run in (from `--session` or the shell's environment) is one of its.
+  agent, when they run in Cursor's agent shell (`CURSOR_AGENT=1`, as Cursor marks the commands its
+  agent runs; it names no session) while Cursor is listed, or when a session they run in is one of
+  its: the one `--session` names (as the `--client` agent's, or with no `--client` as any agent's)
+  and the ones the shell's environment names, which a `--session` does not stand in for.
 - **Sessions that ran while it was listed** stay out of all of these once it is off: a session
   whose ledger entry has `by_agent`, or one that descends from or was branched from such a session
   (for a Claude Code subagent's tool call, the session the hook payload names), gets no prompt-time

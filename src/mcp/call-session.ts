@@ -175,6 +175,13 @@ export function shellSessions(
   return sessions;
 }
 
+/** The agents a shell command's environment says run it, beyond the sessions it names
+ * (shellSessions): Cursor names no session, but marks every command its agent runs
+ * (CURSOR_AGENT=1). */
+export function shellAgents(env: NodeJS.ProcessEnv = process.env): SessionHarness[] {
+  return env.CURSOR_AGENT === "1" ? ["cursor"] : [];
+}
+
 /** The session a `tools/call` request's params name, read as described above for the agent
  * `client`; null when the call carries none and the agent started this server in none. Removes
  * SESSION_ARGUMENT from the arguments. */

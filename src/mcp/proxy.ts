@@ -17,7 +17,7 @@ import { logger } from "../debug/logger";
 import { type GitBudget, resolveProjectOfDir } from "../sessions/project";
 import { currentBranchOfDir } from "../sessions/repo";
 import { VERSION } from "../version/version";
-import { callRefusal, takeCallSession } from "./call-session";
+import { type CallSession, callRefusal, takeCallSession } from "./call-session";
 import { mcpEndpoint } from "./config-helpers";
 import { createMcpRelay, type McpRelay } from "./relay";
 
@@ -167,6 +167,29 @@ async function serveStdio(
     emit({ jsonrpc: "2.0", id: ROOTS_REQUEST_ID, method: "roots/list" });
   };
 
+  // A tool call names the agent session it belongs to; one from a session the user took off the
+  // record, or any call at all to the server of an agent in incognito, is answered here and never
+  // reaches Dosu, so not even its query is logged. Takes SESSION_ARGUMENT out of the call.
+  const screen = (message: unknown): { callSession: CallSession | null; refusal: unknown } => {
+    const call = isObject(message) && message.method === "tools/call" ? message : null;
+    if (!call) return { callSession: null, refusal: null };
+    const callSession = isObject(call.params) ? takeCallSession(call.params, session.client) : null;
+    const text = callRefusal(session.client, callSession ? [callSession] : []);
+    if (!text) return { callSession, refusal: null };
+    const caller = callSession
+      ? `${callSession.harness}/${callSession.id}`
+      : `client=${session.client ?? "-"}`;
+    logger.info("mcp-proxy", `${caller} is incognito: call not sent`);
+    return {
+      callSession,
+      refusal: {
+        jsonrpc: "2.0",
+        id: call.id,
+        result: { content: [{ type: "text", text }], isError: true },
+      },
+    };
+  };
+
   const handle = (line: string) => {
     if (!line.trim()) return;
     let message: unknown;
@@ -185,27 +208,29 @@ async function serveStdio(
       const params = isObject(message.params) ? message.params : {};
       agentOffersRoots = isObject(params.capabilities) && isObject(params.capabilities.roots);
     }
-    // A tool call names the agent session it belongs to; one from a session the user took off
-    // the record, or any call at all to the server of an agent in incognito, is answered here and
-    // never reaches Dosu, so not even its query is logged.
-    const call = method === "tools/call" && isObject(message) ? message : null;
-    const callSession =
-      call && isObject(call.params) ? takeCallSession(call.params, session.client) : null;
-    const refusal = call ? callRefusal(session.client, callSession ? [callSession] : []) : null;
-    if (call && refusal) {
-      const caller = callSession
-        ? `${callSession.harness}/${callSession.id}`
-        : `client=${session.client ?? "-"}`;
-      logger.info("mcp-proxy", `${caller} is incognito: call not sent`);
-      emit({
-        jsonrpc: "2.0",
-        id: call.id,
-        result: { content: [{ type: "text", text: refusal }], isError: true },
-      });
-      return;
+    // A batch (MCP before 2025-06-18) is held to the same refusals, call by call: the refused are
+    // answered here, in a batch of their own, and the rest go on as one.
+    let outgoing: unknown = message;
+    let named: CallSession | null = null;
+    if (Array.isArray(message)) {
+      const screened = message.map((item) => ({ item, ...screen(item) }));
+      const refused = screened.flatMap(({ refusal }) => (refusal ? [refusal] : []));
+      const kept = screened.filter(({ refusal }) => !refusal);
+      if (refused.length > 0) emit(refused);
+      if (kept.length === 0) return;
+      outgoing = kept.map(({ item }) => item);
+      const sessions = kept.flatMap(({ callSession }) => (callSession ? [callSession] : []));
+      named = sessions.length === 1 ? sessions[0] : null;
+    } else {
+      const { callSession, refusal } = screen(message);
+      if (refusal) {
+        emit(refusal);
+        return;
+      }
+      named = callSession;
     }
     const exchange: Promise<void> = scoped
-      .then(() => relay.send(message, emit, callSession?.id))
+      .then(() => relay.send(outgoing, emit, named?.id))
       .finally(() => {
         inflight.delete(exchange);
       });

@@ -611,6 +611,29 @@ describe("the session a tool call belongs to", () => {
     expect(relayedCalls().map((r) => r.body.id)).toEqual([6]);
   });
 
+  it("holds each call of a batch to the switch, relaying only the rest", async () => {
+    saveSyncState({ ...emptySyncState(), incognito_agents: ["cursor"] });
+    const batch = [
+      {
+        jsonrpc: "2.0",
+        id: 7,
+        method: "tools/call",
+        params: { name: "search_memory", arguments: { query: "SECRET QUERY" } },
+      },
+      { jsonrpc: "2.0", id: 8, method: "tools/list" },
+    ];
+
+    await serve([...HANDSHAKE, batch], "--client", "cursor");
+
+    expect(relayedCalls()).toEqual([]);
+    expect(JSON.stringify(server.requests.map((r) => r.body))).not.toContain("SECRET QUERY");
+    const refused = replies().find((r) => Array.isArray(r));
+    expect(refused).toEqual([
+      expect.objectContaining({ id: 7, result: expect.objectContaining({ isError: true }) }),
+    ]);
+    expect(replies().find((r) => r.id === 8)?.result.tools).toBeDefined();
+  });
+
   it("reads the switch for each call, so one turned on holds from the agent's next call", async () => {
     async function* session() {
       yield* HANDSHAKE;
