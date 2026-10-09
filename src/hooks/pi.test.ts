@@ -105,6 +105,13 @@ function calls(): DosuCall[] {
     .map((line) => JSON.parse(line));
 }
 
+/** The calls once `count` have come in: quitting pi stops waiting for its hand-off after
+ * HANDOFF_TIMEOUT_MS, which a CLI started on a loaded machine can take longer than to log. */
+async function handedOff(count: number): Promise<DosuCall[]> {
+  await vi.waitFor(() => expect(calls()).toHaveLength(count), { timeout: 20_000 });
+  return calls();
+}
+
 // biome-ignore lint/suspicious/noExplicitAny: pi's extension API, faked loosely
 type Any = any;
 
@@ -441,7 +448,7 @@ describe("the Dosu pi extension", () => {
 
     await pi.handlers.get("session_shutdown")?.({ reason: "quit" }, piContext([], transcript));
 
-    const [call] = calls();
+    const [call] = await handedOff(1);
     expect(call.argv).toEqual(["knowledge", "sync", "--quiet", "--detach"]);
     expect(call.cwd).toBe(cwd);
     expect(endedSessionOf(JSON.parse(call.input))).toEqual({
@@ -460,7 +467,7 @@ describe("the Dosu pi extension", () => {
 
     // `pi --no-session`: still a trigger for the backlog, with nothing of its own to ship.
     await shutdown?.({ reason: "quit" }, piContext([], undefined));
-    expect(calls().map((c) => [c.argv.join(" "), c.input])).toEqual([
+    expect((await handedOff(1)).map((c) => [c.argv.join(" "), c.input])).toEqual([
       ["knowledge sync --quiet --detach", ""],
     ]);
   });
