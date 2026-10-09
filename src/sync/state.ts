@@ -681,7 +681,7 @@ export function legacyPassedSessions(
 
 /** Forget everything settled so the next run starts from scratch: the ledger, the lifetime
  * counter, and failure backoff (the backend dedupes re-shipped traces on content hash). User
- * settings survive — the study scope, the pause switch, the shipping opt-out, and the incognito
+ * settings survive — the sync scope, the pause switch, the shipping opt-out, and the incognito
  * agents are choices, not progress — and so do the transcripts outside the scan and the sessions
  * an agent's incognito switch settled, which no later run could tell apart again. Memory already
  * built in Dosu is untouched. */

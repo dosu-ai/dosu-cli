@@ -239,6 +239,9 @@ describe("checkForMcpRefresh", () => {
     const output = stderr.mock.calls.map((call) => String(call[0])).join("\n");
     expect(output).toContain("refreshed MCP config for Cursor, Claude Code");
     expect(output).toContain('"dosu setup"');
+    // The hooks went with the entries: setup is not needed for them.
+    expect(output).toContain("Hooks were re-applied");
+    expect(output).not.toContain("to also update hooks");
     expect(output).toContain("restart your AI agents");
   });
 

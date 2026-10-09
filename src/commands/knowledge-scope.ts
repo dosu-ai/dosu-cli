@@ -1,5 +1,5 @@
 /** `dosu knowledge scope` and `dosu knowledge skip-backlog`: which repos' sessions ship, and from
- * when, set from the command line. The TUI's study-scope picker and setup's backfill offer make
+ * when, set from the command line. The TUI's sync-scope picker and setup's backfill offer make
  * the same two choices interactively; these let a provisioning script make them. */
 
 import { statSync } from "node:fs";
@@ -33,7 +33,7 @@ function saveScope(repos: string[] | null): void {
 
 export function scopeCommand(): Command {
   const cmd = new Command("scope").description(
-    "Show or set which repos' sessions ship to Dosu memory (the TUI's study scope)",
+    "Show or set which repos' sessions ship to Dosu memory (the TUI's sync scope)",
   );
 
   cmd

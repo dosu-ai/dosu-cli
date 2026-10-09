@@ -10,9 +10,10 @@ the first session ships, and `disable` removes everything `enable` installed, ex
 incognito command stays while transcript shipping is on: any sync (another agent's hook, a
 `--flush`) still ships every agent's sessions, hooks or not, so `disable` says it kept the command
 and that `dosu knowledge incognito on <agent>` keeps all of that agent's sessions out (see
-[Per-agent incognito](#per-agent-incognito)). Pi's command is part of its extension and goes with
-it; `hooks disable pi` says that pi's sessions still ship and that `dosu knowledge incognito on pi`
-keeps them out. `hooks status` says
+[Per-agent incognito](#per-agent-incognito)); for an agent already in incognito, which ships nothing,
+it says neither. Pi's command is part of its extension and goes with it; `hooks disable pi` says
+that pi's sessions still ship and that `dosu knowledge incognito on pi` keeps them out, unless pi is
+in incognito. `hooks status` says
 when the command is missing (as an older CLI left it). With no agent named it installs for every
 agent it detects and names the ones it skipped. Claude Code counts as detected when `~/.claude` (or `CLAUDE_CONFIG_DIR`) exists or
 `claude` is on PATH, so a freshly provisioned machine can set Dosu up before Claude Code's first
@@ -80,7 +81,8 @@ The state file keeps a ledger (`sessions`, schema 3) with one entry per session,
 `<harness>/<session id>`, recording how it was settled and the session's mtime at the time. A
 scanned session is **pending** when it has no entry, when its mtime differs from the entry's (it was
 resumed or kept writing), or when it was passed over by a different CLI version (so newer harness
-support or rules get a second look). `--retry-rejected` makes sessions the backend refused pending
+support or rules get a second look), except a session the per-agent incognito switch settled
+(`by_agent: true`), which is never pending again (see [Per-agent incognito](#per-agent-incognito)). `--retry-rejected` makes sessions the backend refused pending
 for that run. Nothing is skipped for good by being older than something else, and there is no count
 cap on the scan: listing is metadata only. Claude Code sessions are listed from `~/.claude` and,
 when the variable is set, `CLAUDE_CONFIG_DIR`. Codex sessions are listed from `sessions/` and
@@ -93,7 +95,7 @@ leaves the 30-day window, except those the per-agent incognito switch settled (s
 |---|---|
 | `shipped` | Accepted by the ingest API (202) |
 | `trivial` | No user record, nothing answering it, or under 2,000 characters of content |
-| `incognito` | `/dosu-incognito` (`$dosu-incognito` in Codex) was run in the session |
+| `incognito` | `/dosu-incognito` (`$dosu-incognito` in Codex) was run in the session, or its agent (or the session it descends from or was branched from) was in incognito (`by_agent: true`, see [Per-agent incognito](#per-agent-incognito)) |
 | `rejected` | The backend refused the payload (HTTP 400, 413, or 422) |
 | `unsupported` | No normalizer for the harness, or the transcript could not be normalized |
 | `skipped_by_user` | You declined setup's offer to ship the last 30 days (it offers only sessions the ledger has never settled), or ran `dosu knowledge skip-backlog` |
@@ -330,7 +332,7 @@ repo, or in a repo without an `origin`, has no repo. The lookup is cached per se
 working directory, so its `stop` hook records it to `session-captures/cursor/<id>.json` before the
 detached sync starts, with the time and branch of the session's first turn.
 
-`dosu` → settings → study scope picks which repos to ship (`repo_filter` in the state file). With a
+`dosu` → settings → sync scope picks which repos to ship (`repo_filter` in the state file). With a
 repo scope, only sessions in the picked repos are shipped. Picking every repo clears the filter, so
 new repos and sessions outside any repo are shipped too. Clones and worktrees of the same repo share
 one entry. A script sets the same scope from checkouts on disk:

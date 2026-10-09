@@ -250,10 +250,13 @@ export function disableIncognitoWithHooks(id: string): void {
   if (!isShippingEnabled(loadSyncState())) getIncognitoAgent(id)?.disable();
 }
 
-/** What `hooks disable` says when it left the agent's command in place; empty otherwise. */
+/** What `hooks disable` says when it left the agent's command in place; empty otherwise, and for
+ * an agent in incognito, which nothing of ships anyway. */
 export function keptIncognitoNote(id: string): string {
   const command = getIncognitoAgent(id);
-  if (!command?.isEnabled() || !isShippingEnabled(loadSyncState())) return "";
+  const state = loadSyncState();
+  if (!command?.isEnabled() || !isShippingEnabled(state)) return "";
+  if (state.incognito_agents?.includes(id)) return "";
   return `Kept ${command.invocation()}: ${command.name()} sessions still ship with any 'dosu knowledge sync' while transcript shipping is on. 'dosu knowledge incognito on ${id}' keeps them all out.`;
 }
 

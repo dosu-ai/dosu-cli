@@ -190,6 +190,18 @@ function claudeSession(id: string, minutesAgo = 1): string {
   return path;
 }
 
+describe("knowledge incognito status with transcript shipping off", () => {
+  it("does not call an agent shipped while nothing ships", async () => {
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    saveSyncState({ ...emptySyncState(), ship_transcripts: false });
+
+    const said = await run("status");
+
+    expect(said).toMatch(/claude +Claude Code +○ not shipped \(transcript shipping is off\)/);
+    expect(said).not.toContain("📚 shipped");
+  });
+});
+
 describe("knowledge incognito off", () => {
   it("ships named agents again, keeps their command, and says past sessions stay out", async () => {
     await run("on", "claude", "codex");

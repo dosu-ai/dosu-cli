@@ -444,9 +444,12 @@ export function piHookAgent(): HookAgent {
       "Pi loads it from its next start (or /reload). Sessions run with `pi --no-extensions` skip it and ship only on a later sync.",
     // Unlike the other agents' commands, /dosu-incognito is part of the extension: nothing of it
     // can stay behind for the sessions any sync still ships.
-    disableNote: () =>
-      isShippingEnabled(loadSyncState())
+    disableNote: () => {
+      const state = loadSyncState();
+      // Pi in incognito ships nothing either way.
+      return isShippingEnabled(state) && !state.incognito_agents?.includes("pi")
         ? "Pi sessions still ship with any 'dosu knowledge sync' while transcript shipping is on, and /dosu-incognito went with the extension. 'dosu knowledge incognito on pi' keeps them all out."
-        : "",
+        : "";
+    },
   };
 }

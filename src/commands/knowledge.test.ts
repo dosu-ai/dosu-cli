@@ -153,6 +153,7 @@ beforeEach(() => {
   mockGetSyncStatus.mockReset();
   mockListBacklog.mockReset();
   mockLoadSyncState.mockReset();
+  mockLoadSyncState.mockReturnValue({ schema_version: 3, sessions: {}, consecutive_failures: 0 });
   mockEmitReport.mockReset();
   mockEmitReport.mockResolvedValue("/tmp/dosu-knowledge-report.html");
   mockSetShipTranscripts.mockReset();
@@ -1927,8 +1928,8 @@ describe("knowledge context (prompt-submit hook)", () => {
     ["logged out", { mode: "cloud" }],
   ])("is silent with %s", async (_label, config) => {
     mockLoadConfig.mockReturnValue(config);
-    // No agent in incognito: nothing of its to settle from the payload, so stdin stays unread.
-    mockLoadSyncState.mockReturnValue({ schema_version: 3, sessions: {}, consecutive_failures: 0 });
+    // No agent in incognito (the default state): nothing of its to settle from the payload, so
+    // stdin stays unread.
     const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     await run("context");

@@ -1,5 +1,5 @@
 /** `dosu knowledge statusline`: install a status-bar line in Claude Code / Cursor CLI that says
- * whether the current session is being studied, plus the `render` command those harnesses run. */
+ * whether Dosu ships the current session, plus the `render` command those harnesses run. */
 
 import { Command } from "commander";
 import pc from "picocolors";
@@ -16,7 +16,7 @@ import { printResult } from "./output";
 
 export function statuslineCommand(renderDeps: RenderRunDeps = {}): Command {
   const cmd = new Command("statusline").description(
-    "Show in your agent's status bar whether Dosu is studying the current session",
+    "Show in your agent's status bar whether Dosu ships the current session",
   );
 
   cmd

@@ -96,10 +96,12 @@ export function canRefreshMcp(cfg: Config): boolean {
   return cfg.mode === MODE_OSS || Boolean(target.deployment_id);
 }
 
+/** The notice after a refresh, which re-applied the hooks of the agents that had them on: what is
+ * left for setup is rules, the status line, and agents whose hooks were never on. */
 function displayNotice(names: string[]): void {
   console.error(
     `\n${pc.green(`✓ Dosu ${VERSION}: refreshed MCP config for ${names.join(", ")}`)}\n` +
-      `${pc.dim(`  Run ${pc.cyan('"dosu setup"')} to also update hooks and rules, then restart your AI agents.`)}\n`,
+      `${pc.dim(`  Hooks were re-applied for the agents that have them on. Run ${pc.cyan('"dosu setup"')} to update rules and the status line (and add hooks to other agents), then restart your AI agents.`)}\n`,
   );
 }
 

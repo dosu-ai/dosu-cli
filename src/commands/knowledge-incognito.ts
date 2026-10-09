@@ -10,7 +10,12 @@ import pc from "picocolors";
 import { allIncognitoAgents, getIncognitoAgent, type IncognitoAgent } from "../incognito/agents";
 import { sessionsToSeal } from "../sync/backlog";
 import { INCOGNITO_COMMAND_NAME } from "../sync/incognito";
-import { leaveIncognito, loadSyncState, setAgentsIncognito } from "../sync/state";
+import {
+  isShippingEnabled,
+  leaveIncognito,
+  loadSyncState,
+  setAgentsIncognito,
+} from "../sync/state";
 import { VERSION } from "../version/version";
 import { resolveAgents } from "./agent-select";
 import { printResult } from "./output";
@@ -51,8 +56,8 @@ function switchAction(incognito: boolean) {
       ensureCommand(agent);
       console.log(
         incognito
-          ? `👻 ${agent.name()} is incognito: its sessions will not be shipped to Dosu memory`
-          : `📚 ${agent.name()} sessions ship to Dosu memory again`,
+          ? `👻 ${agent.name()} is incognito: its sessions are not shipped, and its prompts and Dosu tool calls stay on this machine`
+          : `📚 ${agent.name()} sessions ship to Dosu memory again, and its prompts and Dosu tool calls reach Dosu`,
       );
     }
     if (!incognito) {
@@ -63,7 +68,7 @@ function switchAction(incognito: boolean) {
 
 export function incognitoCommand(): Command {
   const cmd = new Command("incognito").description(
-    "Keep a coding agent's sessions out of Dosu memory",
+    "Turn Dosu off for a coding agent: its sessions, prompts and Dosu tool calls stay on this machine",
   );
 
   cmd
@@ -71,7 +76,9 @@ export function incognitoCommand(): Command {
     .description("Show which agents are incognito, and how each runs its incognito command")
     .option("--json", "Output as JSON")
     .action((opts: { json?: boolean }) => {
-      const incognitoAgents = new Set(loadSyncState().incognito_agents ?? []);
+      const syncState = loadSyncState();
+      const incognitoAgents = new Set(syncState.incognito_agents ?? []);
+      const shipping = isShippingEnabled(syncState);
       const agents = allIncognitoAgents();
       const rows = agents.map((agent) => ({
         agent: agent.id(),
@@ -93,7 +100,9 @@ export function incognitoCommand(): Command {
           ? pc.dim("agent not found")
           : row.incognito
             ? "👻 incognito (not shipped)"
-            : pc.green("📚 shipped");
+            : shipping
+              ? pc.green("📚 shipped")
+              : pc.dim("○ not shipped (transcript shipping is off)");
         const hint = agents[i].missingHint?.();
         const missing =
           row.installed && !row.command_installed
@@ -111,12 +120,14 @@ export function incognitoCommand(): Command {
 
   cmd
     .command("on [agents...]")
-    .description("Stop shipping these agents' sessions (default: all detected)")
+    .description(
+      "Turn Dosu off for these agents: no sessions shipped, no prompt-time memory, Dosu tool calls refused (default: all detected)",
+    )
     .action(switchAction(true));
 
   cmd
     .command("off [agents...]")
-    .description("Ship these agents' sessions again (default: all detected)")
+    .description("Turn Dosu back on for these agents (default: all detected)")
     .action(switchAction(false));
 
   return cmd;

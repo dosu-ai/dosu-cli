@@ -220,6 +220,16 @@ describe("Claude Code installed but never run (no ~/.claude)", () => {
     );
   });
 
+  it("hooks disable says nothing of shipping for Claude Code in incognito, which ships nothing", async () => {
+    await dosu("hooks", "enable", "claude");
+    await dosu("incognito", "on", "claude");
+
+    const said = await dosu("hooks", "disable", "claude");
+
+    expect(said).not.toContain("still ship");
+    expect(said).not.toContain("'dosu knowledge incognito on claude' keeps them all out");
+  });
+
   it("hooks disable removes /dosu-incognito with the hooks once transcript shipping is off", async () => {
     await dosu("hooks", "enable", "claude");
     await dosu("transcripts", "disable");

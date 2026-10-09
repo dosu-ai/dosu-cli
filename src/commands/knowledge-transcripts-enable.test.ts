@@ -138,3 +138,22 @@ describe("no agent with prompt-time memory on the machine", () => {
     );
   });
 });
+
+describe("an agent in incognito", () => {
+  beforeEach(() => installBinary("pi"));
+
+  it("is said to get no prompt-time memory and to ship nothing, with how to turn it back on", async () => {
+    await dosu("hooks", "enable", "pi");
+    await dosu("incognito", "on", "pi");
+
+    const said = await dosu("transcripts", "enable");
+
+    expect(said).toContain(
+      "👻 Pi is incognito: no prompt-time memory, and none of its sessions ship ('dosu knowledge incognito off pi' turns it back on).",
+    );
+    expect(said).not.toContain("✓ Pi will receive task memory");
+    expect(said).toContain(
+      "shipped to Dosu memory on the next sync (not Pi's, which is incognito).",
+    );
+  });
+});

@@ -594,6 +594,7 @@ function reportPromptMemory(): void {
     claudeFailure = err instanceof Error ? err.message : String(err);
   }
   const agents = allHookAgents().filter((agent) => agent.promptMemory && agentInstalled(agent));
+  const incognito = new Set(loadSyncState().incognito_agents ?? []);
   if (agents.length === 0) {
     const names = allHookAgents()
       .filter((agent) => agent.promptMemory)
@@ -607,6 +608,12 @@ function reportPromptMemory(): void {
     return;
   }
   for (const agent of agents) {
+    if (incognito.has(agent.id())) {
+      console.log(
+        `👻 ${agent.name()} is incognito: no prompt-time memory, and none of its sessions ship ('dosu knowledge incognito off ${agent.id()}' turns it back on).`,
+      );
+      continue;
+    }
     if (agent.id() === "claude" && claudeFailure) {
       console.log(`! Prompt-time memory not installed for ${agent.name()}: ${claudeFailure}`);
       continue;
@@ -686,9 +693,16 @@ function transcriptsCommand(): Command {
       console.log("✓ Transcript shipping enabled.");
       reportPromptMemory();
       const incognito = installedIncognitoCommands();
+      const listed = (loadSyncState().incognito_agents ?? []).map(
+        (id) => getHookAgent(id)?.name() ?? id,
+      );
       console.log(
         pc.dim(
-          "Finished agent sessions are redacted locally, then shipped to Dosu memory on the next sync. " +
+          `Finished agent sessions are redacted locally, then shipped to Dosu memory on the next sync${
+            listed.length > 0
+              ? ` (not ${listed.join(", ")}'s, which ${listed.length === 1 ? "is" : "are"} incognito)`
+              : ""
+          }. ` +
             (incognito
               ? `Use ${incognito} in a session to keep it out.`
               : "To keep a single session out, install the agent's incognito command with 'dosu knowledge hooks enable <agent>'."),
