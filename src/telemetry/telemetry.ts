@@ -5,6 +5,7 @@ import { request as httpsRequest } from "node:https";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { COMMAND_ERROR_CODES } from "../cli/command-error";
 import { getWebAppURL } from "../config/constants";
 import { UNREADABLE_SETTINGS_KEY } from "../learner/conflicts";
 import { INSTALL_CHANNEL, VERSION } from "../version/version";
@@ -95,6 +96,14 @@ const SAFE_ERROR_CODES = new Set([
   "commander.optionMissingArgument",
   "commander.unknownCommand",
   "commander.unknownOption",
+  // Handled command states (src/cli/command-error.ts)
+  ...COMMAND_ERROR_CODES,
+]);
+/** Expected states the user fixes by logging in or selecting again: analytics, not Sentry. */
+const EXPECTED_STATE_ERROR_CODES = new Set<string>([
+  "SESSION_EXPIRED",
+  "SESSION_PERSISTENCE_ERROR",
+  ...COMMAND_ERROR_CODES,
 ]);
 
 type CommandResult = "success" | "validation_error" | "failure";
@@ -1406,5 +1415,5 @@ export function createCommandTelemetry(
 }
 
 function shouldSendToSentry(error: SafeError): boolean {
-  return !["SESSION_EXPIRED", "SESSION_PERSISTENCE_ERROR"].includes(error.code ?? "");
+  return !EXPECTED_STATE_ERROR_CODES.has(error.code ?? "");
 }

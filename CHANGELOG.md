@@ -1,3 +1,10 @@
+## [0.67.1](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0...v0.67.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* **telemetry:** record review and deployment failures and print server request IDs ([#254](https://github.com/dosu-ai/dosu-cli/issues/254)) ([ccf23ee](https://github.com/dosu-ai/dosu-cli/commit/ccf23ee004e3511d61a10f995f9b34ff7b8edc9a)), closes [#234](https://github.com/dosu-ai/dosu-cli/issues/234)
+
 # [0.67.0](https://github.com/dosu-ai/dosu-cli/compare/v0.66.1...v0.67.0) (2026-10-09)
 
 

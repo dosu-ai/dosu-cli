@@ -403,6 +403,7 @@ X_DOSU_API_KEY = "old-key"
       'disabled_tools = [\n  "read", # noisy\n  "list",\n]',
       "tool_timeout_sec = 120",
       'default_tools_approval_mode = "prompt"',
+      "required = true",
     ];
     const toolsTable = '[mcp_servers.dosu.tools.search]\napproval_mode = "approve"';
     writeFileSync(

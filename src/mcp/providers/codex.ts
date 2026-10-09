@@ -53,17 +53,12 @@ function dosuEntry(url: string, apiKey: string | undefined, npx: string, path: s
 
 const DOSU_TABLE = "mcp_servers.dosu";
 
-/** Settings Codex or the user writes into the Dosu table: the on/off, tool filter, and timeout
- * keys every agent has (see `isUserChoiceKey`), the server-wide approval mode, and the per-tool
- * `tools.<name>` approvals Codex saves when the user picks "always allow". They are the user's,
- * not the entry's format, so `isCurrent` skips them and a rewrite carries them over. */
+/** Settings Codex or the user writes into the Dosu table: the on/off, approval, tool filter, and
+ * timeout keys (see `isUserChoiceKey`), and the per-tool `tools.<name>` approvals Codex saves when
+ * the user picks "always allow". They are the user's, not the entry's format, so `isCurrent` skips
+ * them and a rewrite carries them over. */
 function isUserKey(key: string): boolean {
-  return (
-    isUserChoiceKey(key) ||
-    key === "default_tools_approval_mode" ||
-    key === "tools" ||
-    key.startsWith("tools.")
-  );
+  return isUserChoiceKey(key) || key === "tools" || key.startsWith("tools.");
 }
 
 function isUserTable(name: string): boolean {
