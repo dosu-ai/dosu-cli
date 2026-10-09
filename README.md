@@ -105,7 +105,7 @@ Or right-click the binary, select "Open", and click "Open" in the dialog.
 
 `dosu mcp add` takes `-g, --global` to install for all projects instead of project-local, and `--show-secret` to print the full manual config.
 
-`dosu upgrade` delegates to npm, pnpm, Yarn Classic, or Homebrew only after confirming which manager owns the current installation. Temporary package-runner invocations stay ephemeral, ambiguous or local installs are left unchanged, and standalone binaries receive the latest safe manual download path. After a successful update it hands off to the new version, which re-applies the bundled skills and, only if the update crossed a release that changed the agent config format, runs `dosu setup` (or the non-interactive `dosu mcp refresh` without a TTY). Upgrades done outside `dosu upgrade` (npm, brew, `npx @dosu/cli@latest`) get a safety net: when the new version changed the shape of the MCP entry, the first command on it silently rewrites configured tools' MCP entries and prompts you to run `dosu setup` for the rest; the bundled agent skills are always re-applied on the first command after any version change.
+`dosu upgrade` delegates to npm, pnpm, Yarn Classic, or Homebrew only after confirming which manager owns the current installation. Temporary package-runner invocations stay ephemeral, ambiguous or local installs are left unchanged, and standalone binaries receive the latest safe manual download path. After a successful update it hands off to the new version, which re-applies the bundled skills and, only when a configured agent's MCP entry is out of date, runs `dosu setup` (or the non-interactive `dosu mcp refresh` without a TTY). An entry is out of date when it doesn't match the shape the current provider code writes. Upgrades done outside `dosu upgrade` (npm, brew, `npx @dosu/cli@latest`) get a safety net: on the first command of a new version, the CLI checks each configured provider, silently rewrites only the out-of-date entries, and prompts you to run `dosu setup` for the rest; the bundled agent skills are always re-applied on the first command after any version change.
 
 Dosu also updates itself automatically. When the update check (every six hours) finds a newer release, npm, pnpm, Yarn Classic, and Homebrew installs start the same package-manager update in a detached background process. The current command runs unchanged, and your next command uses the new version, whose first run applies the skill and MCP refreshes above. Hooks, rules, and the status line still need `dosu setup` when a release changes them. Background updates never run for `npx` invocations, standalone binaries, CI, or `DOSU_DEV=true`. A failed install (for example, a global npm prefix that needs `sudo`) falls back to the "Run `dosu upgrade`" notice and is retried after six hours. Turn background updates off with `dosu upgrade --auto off` (and back on with `--auto on`), or with `DOSU_DISABLE_AUTOUPDATE=1` for a single environment.
 
@@ -178,19 +178,22 @@ session. `dosu setup` installs both alongside the hook; they can also be managed
 
 ```bash
 dosu knowledge statusline enable|disable [claude|cursor]   # status-bar line in Claude Code / Cursor CLI
-dosu knowledge incognito enable|disable [claude|cursor|codex]  # the /dosu-incognito slash command
+dosu knowledge incognito on|off [claude|cursor|codex]      # stop/resume studying an agent's sessions
+dosu knowledge incognito status                            # which agents are incognito
 ```
 
-The status line shows one of `📚 Dosu studying…`, `👻 Dosu incognito`, `⚪ Dosu paused`,
-`⚪ Dosu not studying this repo`, or `⚪ Dosu off`. Every session is studied unless you limit
-studying to picked repos under `dosu` → settings → study scope. Notes from a session with a known
-repo and branch are anchored to that branch; the rest are unanchored and reach topics immediately.
-Neither setup nor `enable` replaces a status line you already have; they print the one-liner to add
-to your own script instead.
+The status line shows one of `📚 Dosu studying…` (a sync run is live), `📚 Dosu on`,
+`👻 Dosu incognito`, `⚪ Dosu paused`, `⚪ Dosu not studying this repo`, or `⚪ Dosu off`. Every
+session is studied unless you limit studying to picked repos under `dosu` → settings → study
+scope. Notes from a session with a known repo and branch are anchored to that branch; the rest are
+unanchored and reach topics immediately. Neither setup nor `enable` replaces a status line you
+already have; they print the one-liner to add to your own script instead.
 
-Running `/dosu-incognito` inside a session marks that session's transcript so studying skips it
-(the whole session, and for the rest of it — start a new session to turn Dosu back on) and tells the
-model not to use Dosu tools. See [docs/studying.md](docs/studying.md).
+`incognito on` is a saved per-agent setting: none of that agent's sessions are studied until you
+turn it off. To keep a single chat out instead, type `/dosu-incognito` in it; setup installs that
+command with the hook. It marks the session's transcript so studying skips it (the whole session,
+and for the rest of it — start a new session to turn Dosu back on) and tells the model not to use
+Dosu tools. See [docs/studying.md](docs/studying.md).
 
 ### Telemetry and privacy
 

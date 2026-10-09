@@ -12,7 +12,7 @@ import {
 } from "../config-helpers";
 import { expandHome, isInstalled } from "../detect";
 import type { SetupProvider } from "../providers";
-import { ANY, hasShape, shapeEndpoint } from "../shape";
+import { ANY, entryHasShape, shapeEndpoint } from "../shape";
 
 /** The resolved Dosu MCP endpoint a provider writes into its config file. */
 interface McpEndpoint {
@@ -59,7 +59,7 @@ export function createJSONProvider(opts: BaseProviderConfig): SetupProvider {
     globalConfigPath: () => expandHome(opts.globalPath),
     isConfigured: () => isJSONKeyConfigured(expandHome(opts.globalPath), opts.topKey),
     isCurrent: (cfg) =>
-      hasShape(
+      entryHasShape(
         buildServer({ url: shapeEndpoint(cfg), headers: mcpHeaders(ANY) }),
         readJSONServer(expandHome(opts.globalPath), opts.topKey),
       ),

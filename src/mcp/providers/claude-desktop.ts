@@ -10,7 +10,7 @@ import {
 } from "../config-helpers";
 import { appSupportDir, findNpx, isInstalled, npxPathEnv } from "../detect";
 import type { SetupProvider } from "../providers";
-import { ANY, hasShape, shapeEndpoint } from "../shape";
+import { ANY, entryHasShape, shapeEndpoint } from "../shape";
 
 function configPath(): string {
   return join(appSupportDir(), "Claude", "claude_desktop_config.json");
@@ -26,7 +26,7 @@ export const ClaudeDesktopProvider = (): SetupProvider => ({
   globalConfigPath: () => configPath(),
   isConfigured: () => isJSONKeyConfigured(configPath(), "mcpServers"),
   isCurrent: (cfg) =>
-    hasShape(
+    entryHasShape(
       npxRemoteEntry(shapeEndpoint(cfg), ANY, ANY, npxPathEnv(join(ANY, "npx"))),
       readJSONServer(configPath(), "mcpServers"),
     ),

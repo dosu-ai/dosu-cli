@@ -1,19 +1,22 @@
 /** Status-line rendering: the harness payload (stdin JSON) plus persisted sync state → one line
  * saying whether this session is being studied. Runs on every status refresh, so it reads only
- * two small files plus the transcript, and it never throws: any failure renders as off. */
+ * a few small files plus the transcript, and it never throws: any failure renders as off. */
 
 import { getHookAgent } from "../hooks/agents";
 import { originRepoOfDir } from "../sessions/repo";
 import { transcriptHasIncognitoMarker } from "../sync/incognito";
+import { getSyncStatus } from "../sync/status";
 import { isUnderDir, loadSyncState, type SyncState } from "../sync/watermark";
 
 /** In priority order: the first matching state wins. */
-export type StatuslineState = "off" | "incognito" | "paused" | "not-studied" | "on";
+export type StatuslineState = "off" | "incognito" | "paused" | "not-studied" | "studying" | "on";
 
-/** Three glyphs, not five: studying, incognito (the user's own switch for this session), and one
- * shared "inactive" glyph whose text says why. */
+/** Three glyphs: studying/on (the session will be studied; "studying…" only while a run is live,
+ * matching the TUI), incognito (the user's own switch for this session), and one shared
+ * "inactive" glyph whose text says why. */
 export const STATUSLINE_LABELS: Readonly<Record<StatuslineState, string>> = {
-  on: "📚 Dosu studying…",
+  studying: "📚 Dosu studying…",
+  on: "📚 Dosu on",
   incognito: "👻 Dosu incognito",
   paused: "⚪ Dosu paused",
   "not-studied": "⚪ Dosu not studying this repo",
@@ -31,6 +34,8 @@ export interface RenderDeps {
   hookEnabled?: (agentId: string) => boolean;
   loadState?: () => SyncState;
   transcriptIsIncognito?: (path: string) => boolean;
+  /** Whether a knowledge-sync run is alive right now; defaults to the sync lock file. */
+  syncRunning?: () => boolean;
   repoOfDir?: (dir: string) => string | null;
 }
 
@@ -69,6 +74,10 @@ function defaultHookEnabled(agentId: string): boolean {
   }
 }
 
+function defaultSyncRunning(): boolean {
+  return getSyncStatus({ readLog: () => "" }).running;
+}
+
 /** Whether sessions in `cwd` get studied: everywhere without a scope, only inside a picked repo
  * with one. A legacy folder scope, not yet converted by a sync, requires a cwd under its folders. */
 function cwdIsStudied(
@@ -86,8 +95,8 @@ function cwdIsStudied(
   return true;
 }
 
-/** Incognito outranks paused and not-studied: it is the user's own action in this session, and
- * the line is how they confirm it took. */
+/** Incognito (the agent's saved switch, or `/dosu-incognito` in this session) outranks paused
+ * and not-studied: it is the user's own action, and the line is how they confirm it took. */
 export function resolveStatuslineState(
   payload: StatuslinePayload,
   agentId: string,
@@ -96,15 +105,17 @@ export function resolveStatuslineState(
   const hookEnabled = deps.hookEnabled ?? defaultHookEnabled;
   if (!hookEnabled(agentId)) return "off";
 
+  const state = (deps.loadState ?? loadSyncState)();
+  if (state.incognito_agents?.includes(agentId)) return "incognito";
+
   const transcriptIsIncognito = deps.transcriptIsIncognito ?? transcriptHasIncognitoMarker;
   if (payload.transcript_path && transcriptIsIncognito(payload.transcript_path)) {
     return "incognito";
   }
 
-  const state = (deps.loadState ?? loadSyncState)();
   if (state.paused) return "paused";
   if (!cwdIsStudied(payload.cwd, state, deps.repoOfDir ?? originRepoOfDir)) return "not-studied";
-  return "on";
+  return (deps.syncRunning ?? defaultSyncRunning)() ? "studying" : "on";
 }
 
 /** The installed command's whole job: stdin payload + agent id → one line. Never throws. */

@@ -52,3 +52,37 @@ export function hasShape(expected: unknown, actual: unknown): boolean {
   }
   return expected === actual;
 }
+
+/** Keys an agent writes into its own server entry when the user switches the server off,
+ * approves or hides tools, or sets a timeout (Cline: `disabled`, `autoApprove`, `timeout`;
+ * Windsurf and Antigravity: `disabled`, `disabledTools`; Factory: `disabled`; OpenCode and Zed:
+ * `enabled`; Gemini: `trust`, `includeTools`, `excludeTools`, `timeout`; Codex: `enabled`,
+ * `enabled_tools`, `disabled_tools`, `startup_timeout_sec`, `tool_timeout_sec`). They hold the
+ * user's choice, not the entry's format. Counting them would rewrite the entry on every release
+ * and switch Dosu back on for a user who turned it off. */
+const USER_CHOICE_KEYS: ReadonlySet<string> = new Set([
+  "disabled",
+  "enabled",
+  "autoApprove",
+  "disabledTools",
+  "timeout",
+  "trust",
+  "includeTools",
+  "excludeTools",
+  "enabled_tools",
+  "disabled_tools",
+  "startup_timeout_sec",
+  "tool_timeout_sec",
+]);
+
+function withoutUserChoices(entry: unknown): unknown {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return entry;
+  return Object.fromEntries(Object.entries(entry).filter(([key]) => !USER_CHOICE_KEYS.has(key)));
+}
+
+/** `hasShape` for a whole server entry: the keys an agent sets from its own UI (see
+ * `USER_CHOICE_KEYS`) are ignored on both sides, so toggling Dosu off in an agent never makes
+ * the entry out of date. */
+export function entryHasShape(expected: unknown, actual: unknown): boolean {
+  return hasShape(withoutUserChoices(expected), withoutUserChoices(actual));
+}

@@ -107,10 +107,21 @@ describe("out-of-date entries", () => {
     cursor.install(makeCfg(), true);
     const path = join(home, ".cursor", "mcp.json");
     const cfg = loadJSONConfig(path);
-    cfg.mcpServers.dosu.disabled = true;
+    cfg.mcpServers.dosu.type = "sse";
     saveJSONConfig(path, cfg);
 
     expect(cursor.isCurrent(makeCfg())).toBe(false);
+  });
+
+  it("stays current when the agent's UI turns Dosu off or approves its tools", () => {
+    const cline = provider("cline-cli");
+    cline.install(makeCfg(), true);
+    const path = join(home, ".cline", "data", "settings", "cline_mcp_settings.json");
+    const cfg = loadJSONConfig(path);
+    Object.assign(cfg.mcpServers.dosu, { disabled: true, autoApprove: ["search"], timeout: 120 });
+    saveJSONConfig(path, cfg);
+
+    expect(cline.isCurrent(makeCfg())).toBe(true);
   });
 
   describe("Codex", () => {
@@ -157,6 +168,20 @@ describe("out-of-date entries", () => {
 
       writeFileSync(path(), written.replace(/^(args = .*)$/m, "$1 # pinned"));
       expect(provider("codex").isCurrent(makeCfg())).toBe(false);
+    });
+
+    it("stays current with Dosu switched off or its tools filtered", () => {
+      provider("codex").install(makeCfg(), true);
+      const written = readFileSync(path(), "utf-8");
+      writeFileSync(
+        path(),
+        written.replace(
+          "[mcp_servers.dosu]\n",
+          '[mcp_servers.dosu]\nenabled = false\ndisabled_tools = ["x"]\ntool_timeout_sec = 60\n',
+        ),
+      );
+
+      expect(provider("codex").isCurrent(makeCfg())).toBe(true);
     });
 
     it("skips blank lines and comments inside the entry", () => {
