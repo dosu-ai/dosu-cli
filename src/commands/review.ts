@@ -445,13 +445,11 @@ export function reviewCommand(): Command {
 
         // Route by prefix: a draft saves a new revision (body only), a doc edits in place.
         if (isDraftId(id)) {
-          // saveDraft takes body only; --title is doc-only. (Past the generic
-          // "nothing to edit" check above, body is guaranteed set when title isn't.)
-          if (opts.title !== undefined) {
+          // saveDraft takes body only; --title is doc-only. Past the generic "nothing to edit"
+          // check above, body is only undefined when --title was passed, so this one check
+          // covers both and narrows body to a string.
+          if (opts.title !== undefined || body === undefined) {
             throw invalidArgument("Draft replies support --body only (no --title).");
-          }
-          if (body === undefined) {
-            throw invalidArgument("Draft replies require --body or --body-file.");
           }
           await requireDraft(client, id);
           await client.messages.saveDraft.mutate({
