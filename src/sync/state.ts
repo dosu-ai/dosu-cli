@@ -505,7 +505,7 @@ export function setAgentsIncognito(
 
 /** The day 0.66.0 brought the per-agent switch: no agent was in incognito before it, so this is
  * when one listed without `incognito_since` (a 0.66 list) went in, at the earliest. */
-export const AGENT_SWITCH_SINCE = "2026-10-05T00:00:00.000Z";
+const AGENT_SWITCH_SINCE = "2026-10-05T00:00:00.000Z";
 
 /** Take agents out of incognito (`dosu knowledge incognito off`), sealing first what they ran
  * while in it, in the same load-modify-save (after the listing): each session of theirs that

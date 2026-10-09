@@ -38,7 +38,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Every session in the sync's own scan window, plus the transcripts outside the scanned roots
  * that the sync remembers and would ship too; back to `from` instead when that is longer ago. */
-export function scanWindowSessions(
+function scanWindowSessions(
   state: Pick<SyncState, "outside_sessions">,
   now: Date = new Date(),
   from?: Date,
