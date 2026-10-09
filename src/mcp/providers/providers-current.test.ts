@@ -211,6 +211,20 @@ describe("out-of-date entries", () => {
       expect(provider("codex").isCurrent(makeCfg())).toBe(true);
     });
 
+    // A backslash escapes only in a "basic" string: 'dir\' closes, "a\"[" holds a quote and a
+    // bracket. Misreading either leaves the array open and folds the command line into it.
+    it("reads string escapes the way TOML does when tracking an open array", () => {
+      provider("codex").install(makeCfg(), true);
+      const filter = String.raw`disabled_tools = ['dir\', "a\"["]`;
+      const written = readFileSync(path(), "utf-8");
+      writeFileSync(
+        path(),
+        written.replace("[mcp_servers.dosu]\n", `[mcp_servers.dosu]\n${filter}\n`),
+      );
+
+      expect(provider("codex").isCurrent(makeCfg())).toBe(true);
+    });
+
     it("stays current with tool approvals set", () => {
       provider("codex").install(makeCfg(), true);
       const written = readFileSync(path(), "utf-8");
