@@ -372,9 +372,10 @@ remain in controlled Dosu/vendor infrastructure or CI and are never placed in th
   not emit an analytics event or create an installation ID.
 - Commander lifecycle telemetry can observe commands that return normally, set
   `process.exitCode`, or throw. The shared login/org/API-key checks (`src/commands/auth.ts`), and
-  every failure path in `review` and `deployments`, throw a `CommandError` and are recorded. Several
-  other command modules (for example `ask`, `audit`, `docs`, and `sources`) still call
-  `process.exit(...)` directly for their own checks; those paths terminate before the
+  every failure path in `review` (except `review notifications`) and `deployments`, throw a
+  `CommandError` and are recorded. `review notifications` and several other command modules (for
+  example `ask`, `audit`, `docs`, `integrations`, and `sources`) still call `process.exit(...)`
+  directly for their own checks; those paths terminate before the
   completion/error flush and can be missing from analytics and Sentry. Do not interpret event
   absence as command success. Migrate those paths deliberately rather than monkey-patching
   `process.exit`.
