@@ -1,3 +1,10 @@
+## [0.67.2](https://github.com/dosu-ai/dosu-cli/compare/v0.67.1...v0.67.2) (2026-10-09)
+
+
+### Bug Fixes
+
+* **mcp:** refresh agent entries that are out of date, not by release list ([#270](https://github.com/dosu-ai/dosu-cli/issues/270)) ([48244b2](https://github.com/dosu-ai/dosu-cli/commit/48244b28d4ae2485965581f3a9f274a9637c821c))
+
 ## [0.67.1](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0...v0.67.1) (2026-10-09)
 
 
