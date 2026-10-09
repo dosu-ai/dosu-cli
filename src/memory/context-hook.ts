@@ -34,6 +34,7 @@ import {
   opencodeSessionById,
   SESSION_HARNESSES,
   type SessionHarness,
+  scannedEverywhere,
   sessionAtPath,
 } from "../sessions/scan";
 import { trajectorySourceOf } from "../shipper/normalize";
@@ -192,6 +193,30 @@ function claudeCaller(
   const parent = transcript ? sessionAtPath("claude", id, transcript) : null;
   const found = parent ? childSessionsOf(parent).find((session) => session.id === child) : null;
   return { id: child, transcript: found?.path ?? null };
+}
+
+/** For an agent in incognito: the payload's session, when only the agent's own processes can see
+ * its transcript (a root CLAUDE_CONFIG_DIR, CODEX_HOME, PI_CODING_AGENT_DIR or XDG_DATA_HOME
+ * relocated, which a scan from another shell misses) and the switch has not settled it yet. The
+ * command settles it then (sealAgentSession), so `incognito off` run from such a shell, which
+ * could not find it, does not leave it to ship once it ends. Null for any other payload. Never
+ * throws. */
+export function outsideIncognitoSession(
+  stdin: string,
+  options: { agent?: string; format?: ContextFormat; incognito: IncognitoSwitch },
+): AgentSession | null {
+  try {
+    const payload = JSON.parse(stdin) as PromptHookPayload;
+    const harness = harnessOf(options.agent ?? CLAUDE_CODE_AGENT);
+    if (!harness || !options.incognito.incognito_agents?.includes(harness)) return null;
+    const id = sessionIdOf(payload, options.format ?? "claude");
+    if (!id) return null;
+    const stored = storedSession({ harness, id, transcript: str(payload.transcript_path) });
+    if (!stored || scannedEverywhere(harness, stored.path)) return null;
+    return options.incognito.sessions[`${harness}/${id}`]?.by_agent ? null : stored;
+  } catch {
+    return null;
+  }
 }
 
 /** The PreToolUse answer that stops the call, with the reason the model is shown. */

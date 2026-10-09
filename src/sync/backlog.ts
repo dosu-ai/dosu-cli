@@ -3,7 +3,7 @@
 
 import { sessionLineage } from "../sessions/lineage";
 import { createProjectDirResolver } from "../sessions/project-dir";
-import { type AgentSession, scanAgentSessions } from "../sessions/scan";
+import { type AgentSession, type SessionHarness, scanAgentSessions } from "../sessions/scan";
 import { VERSION } from "../version/version";
 import { isIncognitoSession, partitionIncognitoSessions } from "./incognito";
 import {
@@ -42,11 +42,33 @@ export function scanWindowSessions(
   state: Pick<SyncState, "outside_sessions">,
   now: Date = new Date(),
   from?: Date,
+  onUnreadable?: (harness: SessionHarness, path: string) => void,
 ): AgentSession[] {
   const window = now.getTime() - SCAN_WINDOW_DAYS * DAY_MS;
   const since = new Date(Math.min(window, from?.getTime() ?? window));
-  return withOutsideSessions(scanAgentSessions({ since }), [], state.outside_sessions ?? {}, since)
-    .sessions;
+  return withOutsideSessions(
+    scanAgentSessions({ since, onUnreadable }),
+    [],
+    state.outside_sessions ?? {},
+    since,
+  ).sessions;
+}
+
+/** The sessions `dosu knowledge incognito off` seals from (scanWindowSessions back to `from`),
+ * which must not take a place it could not read for one with no sessions in it: throws, naming
+ * it, when it is one of `harnesses`' (the agents leaving incognito), so nothing is saved. */
+export function sessionsToSeal(
+  state: Pick<SyncState, "outside_sessions">,
+  from: Date,
+  harnesses: ReadonlySet<string>,
+  now: Date = new Date(),
+): AgentSession[] {
+  const unreadable: string[] = [];
+  const sessions = scanWindowSessions(state, now, from, (harness, path) => {
+    if (harnesses.has(harness)) unreadable.push(path);
+  });
+  if (unreadable.length > 0) throw new Error(`could not read ${unreadable[0]}`);
+  return sessions;
 }
 
 /** The pending backlog within the sync's own scan window, oldest first; a failed scan reads as

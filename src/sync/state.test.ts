@@ -26,6 +26,7 @@ import {
   resetSyncState,
   type SyncState,
   saveSyncState,
+  sealAgentSession,
   setAgentsIncognito,
   setShipTranscripts,
   setSyncPaused,
@@ -1167,6 +1168,22 @@ describe("leaveIncognito", () => {
     saveSyncState({ ...emptySyncState(), incognito_agents: ["cursor"] }, configDir);
     leaveIncognito(["cursor"], () => [], VERSION, NOW, configDir);
     expect(readFileSync(syncStatePath(configDir), "utf-8")).not.toContain("incognito_agents");
+  });
+});
+
+describe("sealAgentSession", () => {
+  it("settles a listed agent's session as its switch does, once", () => {
+    const s = session({ harness: "cursor", id: "c1", path: "/tmp/c1.jsonl" });
+    saveSyncState({ ...emptySyncState(), incognito_agents: ["cursor"] }, configDir);
+
+    sealAgentSession(s, VERSION, NOW, configDir);
+    const sealed = loadSyncState(configDir).sessions["cursor/c1"];
+    expect(sealed).toEqual(agentIncognitoEntry(s, NOW.toISOString(), VERSION));
+
+    // Its later prompts, and another agent's sessions, change nothing.
+    sealAgentSession({ ...s, updated: "2026-08-25T11:30:00Z" }, VERSION, NOW, configDir);
+    sealAgentSession(session({ id: "claude-1" }), VERSION, NOW, configDir);
+    expect(loadSyncState(configDir).sessions).toEqual({ "cursor/c1": sealed });
   });
 });
 

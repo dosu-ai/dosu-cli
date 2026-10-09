@@ -1,9 +1,17 @@
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, openSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -485,6 +493,65 @@ describe("CLI", () => {
       }
     },
     20_000,
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "settles a session of an incognito agent only its own processes can see, signed in or not",
+    async () => {
+      // Claude Code run with CLAUDE_CONFIG_DIR: `incognito off` from a plain shell cannot list
+      // this session, so its prompt hook settles it while Claude Code is still listed.
+      const root = mkdtempSync(join(tmpdir(), "dosu-cli-context-outside-"));
+      const transcript = join(root, "claude-work", "projects", "-w", "s-outside.jsonl");
+      mkdirSync(dirname(transcript), { recursive: true });
+      writeFileSync(transcript, `${JSON.stringify({ type: "user" })}\n`);
+      const statePath = join(root, "dosu-cli", "knowledge-sync.json");
+      mkdirSync(dirname(statePath), { recursive: true });
+      writeFileSync(
+        statePath,
+        JSON.stringify({
+          schema_version: 3,
+          sessions: {},
+          consecutive_failures: 0,
+          incognito_agents: ["claude"],
+        }),
+      );
+      const payload = join(root, "payload.json");
+      writeFileSync(
+        payload,
+        JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          session_id: "s-outside",
+          transcript_path: transcript,
+          prompt: "fix the build",
+          cwd: root,
+        }),
+      );
+      try {
+        const child = spawn("bun", ["run", "src/index.ts", "knowledge", "context"], {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            CI: "1",
+            DOSU_DEV: "false",
+            HOME: root,
+            NODE_ENV: "test",
+            XDG_CONFIG_HOME: root,
+            CLAUDE_CONFIG_DIR: join(root, "claude-work"),
+          },
+          stdio: [openSync(payload, "r"), "pipe", "pipe"],
+        });
+        await new Promise((resolve) => child.on("close", resolve));
+        const state = JSON.parse(readFileSync(statePath, "utf-8"));
+        expect(state.sessions["claude/s-outside"]).toMatchObject({
+          outcome: "incognito",
+          by_agent: true,
+          path: transcript,
+        });
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    15_000,
   );
 
   it("preserves command output when telemetry start throws", async () => {

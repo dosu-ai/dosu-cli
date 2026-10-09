@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,7 +39,7 @@ afterEach(() => {
 });
 
 /** Hermetic scan: never let the host's CODEX_HOME/XDG_DATA_HOME leak in. */
-function scan(overrides: { env?: NodeJS.ProcessEnv; since?: Date; limit?: number } = {}) {
+function scan(overrides: Partial<Parameters<typeof scanAgentSessions>[0]> = {}) {
   return scanAgentSessions({ homeDir: home, env: {}, ...overrides });
 }
 
@@ -440,6 +448,44 @@ describe("scanAgentSessions", () => {
 
       expect(scan().every((s) => s.parentId === undefined)).toBe(true);
     });
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    "tells a caller that asks of every place it could not read, rather than none",
+    () => {
+      claudeLog("-p", "s1", T1);
+      cursorLog("-c", "c1", T1);
+      const projects = join(home, ".claude", "projects");
+      chmodSync(projects, 0o000);
+      const unreadable: string[][] = [];
+      try {
+        const sessions = scan({
+          onUnreadable: (harness, path) => unreadable.push([harness, path]),
+        });
+        // Passed over as empty, as before: the caller decides what that means.
+        expect(sessions.map((s) => s.id)).toEqual(["c1"]);
+      } finally {
+        chmodSync(projects, 0o755);
+      }
+      expect(unreadable).toEqual([["claude", projects]]);
+    },
+  );
+
+  it("tells of an opencode database it cannot read, but not of a runtime without sqlite", () => {
+    const db = join(home, ".local", "share", "opencode", "opencode.db");
+    mkdirSync(join(db, ".."), { recursive: true });
+    writeFileSync(db, "not a database");
+    const unreadable: string[] = [];
+
+    scan({ env: {}, onUnreadable: (_harness, path) => unreadable.push(path) });
+
+    let sqlite = true;
+    try {
+      createRequire(import.meta.url)(process.versions.bun ? "bun:sqlite" : "node:sqlite");
+    } catch {
+      sqlite = false;
+    }
+    expect(unreadable).toEqual(sqlite ? [db] : []);
   });
 
   it("honors CODEX_HOME", () => {

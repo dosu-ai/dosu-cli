@@ -463,8 +463,14 @@ prefix (`records`, `prefix_sha256`), since nothing more of the session is ever s
   synced (paused, backing off, shipping off, signed out), however long ago, past the 30-day window
   too. A shipped session that grew while the agent was listed is sealed too, so its incognito tail
   never ships; one that went quiet before the agent went in is left to ship. Only agents that were
-  listed are sealed. If the scan fails, nothing is saved: the agents stay incognito and `off`
-  reports the error and exits 1.
+  listed are sealed. If the scan fails, or cannot read a folder (or OpenCode's database) where one
+  of those agents keeps sessions, nothing is saved: the agents stay incognito and `off` reports the
+  error (`could not read <path>`) and exits 1. `off` lists from its own shell, so a session kept
+  under a root only the agent's processes know of (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`,
+  `PI_CODING_AGENT_DIR` or `XDG_DATA_HOME` set for the agent alone) is settled by the agent's prompt
+  hook instead: while the agent is listed, `dosu knowledge context` settles the session its payload
+  names as `by_agent` when no scan from elsewhere would list it, signed in or not and whether
+  shipping is on.
 - The Activity screen and `dosu knowledge sessions` set a listed agent's sessions aside as
   incognito: out of the queue, the still-open list and the subagent count.
 - Setup's backfill offer does not count a listed agent's sessions (the sync sets them aside before

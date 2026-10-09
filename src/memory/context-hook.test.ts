@@ -8,7 +8,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { getConfigDir } from "../config/config";
@@ -18,7 +18,7 @@ import { createProjectDirResolver } from "../sessions/project-dir";
 import { createShipStep } from "../shipper/runner";
 import { INCOGNITO_MARKER } from "../sync/incognito";
 import type { LedgerEntry } from "../sync/state";
-import { contextHookOutput } from "./context-hook";
+import { contextHookOutput, outsideIncognitoSession } from "./context-hook";
 
 const DIGEST = "## Task Memory (Dosu)\n\n### Facts\n- a fact — memory_id: m1";
 
@@ -664,6 +664,44 @@ describe("contextHookOutput for other agents", () => {
     const fetchImpl = respond(200, { digest: DIGEST });
     expect(await contextHookOutput(stdin, { ...options, fetchImpl })).toBe("");
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe("outsideIncognitoSession", () => {
+  it("names a session of an incognito agent that only its own processes can see", () => {
+    const dir = mkdtempSync(join(tmpdir(), "dosu-context-outside-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    const transcript = join(dir, "claude-work", "projects", "-w", "s1.jsonl");
+    mkdirSync(join(dir, "claude-work", "projects", "-w"), { recursive: true });
+    writeFileSync(transcript, "{}\n");
+    const listed = { incognito_agents: ["claude"], sessions: {} };
+    const stdin = JSON.stringify({ session_id: "s1", transcript_path: transcript });
+
+    expect(outsideIncognitoSession(stdin, { incognito: listed })).toMatchObject({
+      harness: "claude",
+      id: "s1",
+      path: transcript,
+    });
+    // Not listed, already settled, unknown, or a transcript every scan lists: nothing to do.
+    expect(outsideIncognitoSession(stdin, { incognito: { sessions: {} } })).toBeNull();
+    expect(
+      outsideIncognitoSession(stdin, {
+        incognito: { ...listed, sessions: settledByAgent("claude/s1") },
+      }),
+    ).toBeNull();
+    expect(outsideIncognitoSession("not json", { incognito: listed })).toBeNull();
+    expect(outsideIncognitoSession("{}", { incognito: listed })).toBeNull();
+    expect(
+      outsideIncognitoSession(JSON.stringify({ session_id: "gone", transcript_path: "/x.jsonl" }), {
+        incognito: listed,
+      }),
+    ).toBeNull();
+    const home = join(homedir(), ".claude", "projects", "-w", "s2.jsonl");
+    expect(
+      outsideIncognitoSession(JSON.stringify({ session_id: "s2", transcript_path: home }), {
+        incognito: listed,
+      }),
+    ).toBeNull();
   });
 });
 

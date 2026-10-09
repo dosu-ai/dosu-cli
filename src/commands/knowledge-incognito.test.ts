@@ -22,9 +22,9 @@ vi.mock("../sync/backlog", async (importOriginal) => {
   const original = await importOriginal<typeof import("../sync/backlog")>();
   return {
     ...original,
-    scanWindowSessions: (...args: Parameters<typeof original.scanWindowSessions>) => {
+    sessionsToSeal: (...args: Parameters<typeof original.sessionsToSeal>) => {
       if (scan.fails) throw new Error("EACCES: permission denied");
-      return original.scanWindowSessions(...args);
+      return original.sessionsToSeal(...args);
     },
   };
 });
@@ -232,6 +232,43 @@ describe("knowledge incognito off", () => {
 
     expect(loadSyncState().sessions).toEqual({});
   });
+
+  it.skipIf(process.getuid?.() === 0)(
+    "keeps the agent incognito when its transcripts' folder cannot be read",
+    async () => {
+      // A listing that reads an unreadable folder as empty would seal nothing, take the agent
+      // out, and leave what ran while it was in to ship once the folder reads again.
+      saveSyncState({
+        ...emptySyncState(),
+        incognito_agents: ["claude"],
+        incognito_since: { claude: new Date(Date.now() - 120 * 60 * 1000).toISOString() },
+      });
+      claudeSession("ran-while-in");
+      const projects = join(home, ".claude", "projects");
+      chmodSync(projects, 0o000);
+      try {
+        await run("off", "claude");
+      } finally {
+        chmodSync(projects, 0o755);
+      }
+
+      expect(saved()).toEqual(["claude"]);
+      expect(errors()).toContain(`could not read ${projects}`);
+      expect(process.exitCode).toBe(1);
+      // Another agent's unreadable folder does not stand in the way.
+      process.exitCode = undefined;
+      const cursor = join(home, ".cursor", "projects");
+      mkdirSync(cursor, { recursive: true });
+      chmodSync(cursor, 0o000);
+      try {
+        await run("off", "claude");
+      } finally {
+        chmodSync(cursor, 0o755);
+      }
+      expect(saved()).toBeUndefined();
+      expect(loadSyncState().sessions["claude/ran-while-in"]).toMatchObject({ by_agent: true });
+    },
+  );
 
   it("keeps the agent incognito when its sessions cannot be read, and says so", async () => {
     await run("on", "claude", "codex");

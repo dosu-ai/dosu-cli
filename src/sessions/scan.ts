@@ -52,17 +52,32 @@ export interface ScanSessionsOptions {
   since?: Date;
   /** Keep only the N most recently updated sessions. */
   limit?: number;
+  /** Told of every place sessions may be that is there but could not be read (a directory, or
+   * opencode's database), which the scan passes over as empty: for a caller that must not mistake
+   * that for no sessions. */
+  onUnreadable?: (harness: SessionHarness, path: string) => void;
 }
 
-/** readdir that treats a missing or unreadable directory as empty. */
-function listDir(dir: string): { name: string; path: string; isDir: boolean }[] {
+/** Where a scan reports a place it could not read (ScanSessionsOptions.onUnreadable). */
+type Unreadable = (path: string) => void;
+
+const ignoreUnreadable: Unreadable = () => {};
+
+/** readdir that treats a missing or unreadable directory as empty, telling `unreadable` of one
+ * that is there. */
+function listDir(
+  dir: string,
+  unreadable: Unreadable = ignoreUnreadable,
+): { name: string; path: string; isDir: boolean }[] {
   try {
     return readdirSync(dir, { withFileTypes: true }).map((entry) => ({
       name: entry.name,
       path: join(dir, entry.name),
       isDir: entry.isDirectory(),
     }));
-  } catch {
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") unreadable(dir);
     return [];
   }
 }
@@ -110,16 +125,21 @@ function readHead(path: string, bytes: number): string {
 const CLAUDE_SUBAGENTS_DIR = "subagents";
 const CLAUDE_WORKFLOWS_DIR = "workflows";
 
-function claudeSubagents(sessionDir: string, parentId: string, project: string): AgentSession[] {
+function claudeSubagents(
+  sessionDir: string,
+  parentId: string,
+  project: string,
+  unreadable: Unreadable = ignoreUnreadable,
+): AgentSession[] {
   const subagentsDir = join(sessionDir, CLAUDE_SUBAGENTS_DIR);
   const dirs = [
     subagentsDir,
-    ...listDir(join(subagentsDir, CLAUDE_WORKFLOWS_DIR))
+    ...listDir(join(subagentsDir, CLAUDE_WORKFLOWS_DIR), unreadable)
       .filter((workflow) => workflow.isDir)
       .map((workflow) => workflow.path),
   ];
   const sessions: AgentSession[] = [];
-  for (const entry of dirs.flatMap(listDir)) {
+  for (const entry of dirs.flatMap((dir) => listDir(dir, unreadable))) {
     if (entry.isDir || !entry.name.startsWith("agent-")) continue;
     const session = sessionFromFile(entry.path, "claude", project);
     if (session) sessions.push({ ...session, parentId });
@@ -145,16 +165,16 @@ function claudeSessionDirOf(path: string): string | null {
 /** Claude Code: one level of project dirs, session logs directly inside, under `~/.claude` and
  * under CLAUDE_CONFIG_DIR when the agent was relocated there (the hooks install there too). Both,
  * because a sync triggered by another agent's hook does not have the variable. */
-function scanClaude(home: string, env: NodeJS.ProcessEnv): AgentSession[] {
+function scanClaude(home: string, env: NodeJS.ProcessEnv, unreadable: Unreadable): AgentSession[] {
   const relocated = env.CLAUDE_CONFIG_DIR ? resolve(env.CLAUDE_CONFIG_DIR) : null;
   const roots = new Set([join(home, ".claude"), relocated ?? join(home, ".claude")]);
   const sessions: AgentSession[] = [];
   for (const root of roots) {
-    for (const project of listDir(join(root, "projects"))) {
+    for (const project of listDir(join(root, "projects"), unreadable)) {
       if (!project.isDir) continue;
-      for (const entry of listDir(project.path)) {
+      for (const entry of listDir(project.path, unreadable)) {
         if (entry.isDir) {
-          sessions.push(...claudeSubagents(entry.path, entry.name, project.name));
+          sessions.push(...claudeSubagents(entry.path, entry.name, project.name, unreadable));
           continue;
         }
         const session = sessionFromFile(entry.path, "claude", project.name);
@@ -192,14 +212,14 @@ export function claudeForkOf(path: string): AgentSession["forkOf"] {
 }
 
 /** Cursor: per-project `agent-transcripts/<uuid>/<uuid>.jsonl`. */
-function scanCursor(home: string): AgentSession[] {
+function scanCursor(home: string, unreadable: Unreadable): AgentSession[] {
   const sessions: AgentSession[] = [];
-  for (const project of listDir(join(home, ".cursor", "projects"))) {
+  for (const project of listDir(join(home, ".cursor", "projects"), unreadable)) {
     if (!project.isDir) continue;
-    for (const entry of listDir(join(project.path, "agent-transcripts"))) {
+    for (const entry of listDir(join(project.path, "agent-transcripts"), unreadable)) {
       // Each transcript is a directory holding a single <uuid>.jsonl, but
       // tolerate bare .jsonl files in case the layout flattens again.
-      const files = entry.isDir ? listDir(entry.path).filter((f) => !f.isDir) : [entry];
+      const files = entry.isDir ? listDir(entry.path, unreadable).filter((f) => !f.isDir) : [entry];
       for (const file of files) {
         const session = sessionFromFile(file.path, "cursor", project.name);
         if (session) sessions.push(session);
@@ -216,16 +236,21 @@ const ROLLOUT_THREAD_ID = /-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-
  * archived, flat in `archived_sessions/`. A subagent's rollout names its parent's rollout, the
  * scanner's id for that session, or the bare thread id when that rollout is gone. Only sessions
  * at or after `since` are opened for that. */
-function scanCodex(home: string, env: NodeJS.ProcessEnv, since?: Date): AgentSession[] {
+function scanCodex(
+  home: string,
+  env: NodeJS.ProcessEnv,
+  since: Date | undefined,
+  unreadable: Unreadable,
+): AgentSession[] {
   const codexHome = env.CODEX_HOME ?? join(home, ".codex");
   const sessions: AgentSession[] = [];
-  for (const year of listDir(join(codexHome, "sessions"))) {
+  for (const year of listDir(join(codexHome, "sessions"), unreadable)) {
     if (!year.isDir) continue;
-    for (const month of listDir(year.path)) {
+    for (const month of listDir(year.path, unreadable)) {
       if (!month.isDir) continue;
-      for (const day of listDir(month.path)) {
+      for (const day of listDir(month.path, unreadable)) {
         if (!day.isDir) continue;
-        for (const entry of listDir(day.path)) {
+        for (const entry of listDir(day.path, unreadable)) {
           if (entry.isDir) continue;
           const session = sessionFromFile(entry.path, "codex");
           if (session) sessions.push(session);
@@ -233,7 +258,7 @@ function scanCodex(home: string, env: NodeJS.ProcessEnv, since?: Date): AgentSes
       }
     }
   }
-  for (const entry of listDir(join(codexHome, "archived_sessions"))) {
+  for (const entry of listDir(join(codexHome, "archived_sessions"), unreadable)) {
     if (entry.isDir) continue;
     const session = sessionFromFile(entry.path, "codex");
     if (session) sessions.push(session);
@@ -272,13 +297,23 @@ interface NodeSqliteModule {
 }
 
 /** Read-only sqlite query via the runtime's builtin; `createRequire` keeps both module ids out
- * of the bundler's static graph. Null when no builtin exists or the file is not a database. */
-export function querySqlite(dbPath: string, sql: string): SqliteRows | null {
+ * of the bundler's static graph. Null when no builtin exists or the file is not a database, which
+ * `onError` is told of (a runtime with no builtin is no error). */
+export function querySqlite(
+  dbPath: string,
+  sql: string,
+  onError: () => void = () => {},
+): SqliteRows | null {
   const requireRuntime = createRequire(import.meta.url);
   /* v8 ignore start -- exercised only when the test runner is Bun */
   if (process.versions.bun) {
+    let Database: BunSqliteModule["Database"];
     try {
-      const { Database } = requireRuntime("bun:sqlite") as BunSqliteModule;
+      ({ Database } = requireRuntime("bun:sqlite") as BunSqliteModule);
+    } catch {
+      return null;
+    }
+    try {
       const db = new Database(dbPath, { readonly: true });
       try {
         return db.query(sql).all();
@@ -286,21 +321,24 @@ export function querySqlite(dbPath: string, sql: string): SqliteRows | null {
         db.close();
       }
     } catch {
+      onError();
       return null;
     }
   }
   /* v8 ignore stop */
+  let sqlite: NodeSqliteModule;
+  // node:sqlite emits an ExperimentalWarning on first load; silence it so
+  // hook-quiet runs and --json output stay clean on stderr.
+  const emitWarning = process.emitWarning;
+  process.emitWarning = () => {};
   try {
-    // node:sqlite emits an ExperimentalWarning on first load; silence it so
-    // hook-quiet runs and --json output stay clean on stderr.
-    const emitWarning = process.emitWarning;
-    process.emitWarning = () => {};
-    let sqlite: NodeSqliteModule;
-    try {
-      sqlite = requireRuntime("node:sqlite") as NodeSqliteModule;
-    } finally {
-      process.emitWarning = emitWarning;
-    }
+    sqlite = requireRuntime("node:sqlite") as NodeSqliteModule;
+  } catch {
+    return null;
+  } finally {
+    process.emitWarning = emitWarning;
+  }
+  try {
     const db = new sqlite.DatabaseSync(dbPath, { readOnly: true });
     try {
       return db.prepare(sql).all();
@@ -308,6 +346,7 @@ export function querySqlite(dbPath: string, sql: string): SqliteRows | null {
       db.close();
     }
   } catch {
+    onError();
     return null;
   }
 }
@@ -315,7 +354,12 @@ export function querySqlite(dbPath: string, sql: string): SqliteRows | null {
 /** opencode: sqlite rows. A subagent's work is a child session (parent_id set), listed as its own
  * session that names its parent, like Claude Code's subagent transcripts. `id` reads that one
  * session's row alone. */
-function scanOpencode(home: string, env: NodeJS.ProcessEnv, id?: string): AgentSession[] {
+function scanOpencode(
+  home: string,
+  env: NodeJS.ProcessEnv,
+  id?: string,
+  unreadable: Unreadable = ignoreUnreadable,
+): AgentSession[] {
   const dataDir = env.XDG_DATA_HOME ?? join(home, ".local", "share");
   const dbPath = join(dataDir, "opencode", "opencode.db");
   if (!existsSync(dbPath)) return [];
@@ -324,6 +368,7 @@ function scanOpencode(home: string, env: NodeJS.ProcessEnv, id?: string): AgentS
   const rows = querySqlite(
     dbPath,
     `SELECT id, parent_id, directory, time_updated FROM session${where}`,
+    () => unreadable(dbPath),
   );
   if (!rows) return [];
 
@@ -400,7 +445,11 @@ function piSessionDirSetting(agentDir: string, home: string): string | null {
  * have the variable), plus the flat folder a session-dir override writes straight into:
  * PI_CODING_AGENT_SESSION_DIR, or the `sessionDir` setting. Each transcript once, by path: an
  * override may point into a folder the default layout lists too. */
-function piTranscripts(home: string, env: NodeJS.ProcessEnv): Map<string, string | undefined> {
+function piTranscripts(
+  home: string,
+  env: NodeJS.ProcessEnv,
+  unreadable: Unreadable = ignoreUnreadable,
+): Map<string, string | undefined> {
   const agentDirs = new Set([join(home, ".pi", "agent")]);
   const relocated = piPath(env.PI_CODING_AGENT_DIR, home);
   if (relocated) agentDirs.add(relocated);
@@ -418,22 +467,22 @@ function piTranscripts(home: string, env: NodeJS.ProcessEnv): Map<string, string
     if (name.endsWith(".jsonl") && !transcripts.has(path)) transcripts.set(path, project);
   };
   for (const agentDir of agentDirs) {
-    for (const project of listDir(join(agentDir, "sessions"))) {
+    for (const project of listDir(join(agentDir, "sessions"), unreadable)) {
       if (!project.isDir) continue;
-      for (const entry of listDir(project.path)) {
+      for (const entry of listDir(project.path, unreadable)) {
         if (!entry.isDir) add(entry.path, entry.name, project.name);
       }
     }
   }
   for (const dir of flatDirs) {
-    for (const entry of listDir(dir)) if (!entry.isDir) add(entry.path, entry.name);
+    for (const entry of listDir(dir, unreadable)) if (!entry.isDir) add(entry.path, entry.name);
   }
   return transcripts;
 }
 
-function scanPi(home: string, env: NodeJS.ProcessEnv): AgentSession[] {
+function scanPi(home: string, env: NodeJS.ProcessEnv, unreadable: Unreadable): AgentSession[] {
   const sessions: AgentSession[] = [];
-  for (const [path, project] of piTranscripts(home, env)) {
+  for (const [path, project] of piTranscripts(home, env, unreadable)) {
     const session = piSession(path, project);
     if (session) sessions.push(session);
   }
@@ -553,12 +602,14 @@ export function scanAgentSessions(options: ScanSessionsOptions = {}): AgentSessi
   const home = options.homeDir ?? homedir();
   const env = options.env ?? process.env;
 
+  const unreadable = (harness: SessionHarness): Unreadable =>
+    options.onUnreadable ? (path) => options.onUnreadable?.(harness, path) : ignoreUnreadable;
   let sessions = [
-    ...scanClaude(home, env),
-    ...scanCursor(home),
-    ...scanCodex(home, env, options.since),
-    ...scanOpencode(home, env),
-    ...scanPi(home, env),
+    ...scanClaude(home, env, unreadable("claude")),
+    ...scanCursor(home, unreadable("cursor")),
+    ...scanCodex(home, env, options.since, unreadable("codex")),
+    ...scanOpencode(home, env, undefined, unreadable("opencode")),
+    ...scanPi(home, env, unreadable("pi")),
   ];
   if (options.since !== undefined) {
     // ISO-8601 strings with identical precision compare correctly as strings.

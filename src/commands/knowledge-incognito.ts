@@ -8,7 +8,7 @@
 import { Command } from "commander";
 import pc from "picocolors";
 import { allIncognitoAgents, getIncognitoAgent, type IncognitoAgent } from "../incognito/agents";
-import { scanWindowSessions } from "../sync/backlog";
+import { sessionsToSeal } from "../sync/backlog";
 import { INCOGNITO_COMMAND_NAME } from "../sync/incognito";
 import { leaveIncognito, loadSyncState, setAgentsIncognito } from "../sync/state";
 import { VERSION } from "../version/version";
@@ -32,12 +32,7 @@ function switchAction(incognito: boolean) {
     try {
       if (incognito) setAgentsIncognito(agentIds, true);
       // Sealing reads the sessions on disk; when that fails nothing is saved (fail closed).
-      else
-        leaveIncognito(
-          agentIds,
-          (state, since) => scanWindowSessions(state, new Date(), since),
-          VERSION,
-        );
+      else leaveIncognito(agentIds, sessionsToSeal, VERSION);
     } catch (err) {
       // Nothing was saved: say which agents that leaves in incognito.
       const listed = new Set(loadSyncState().incognito_agents ?? []);

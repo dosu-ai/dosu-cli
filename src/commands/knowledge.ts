@@ -25,6 +25,7 @@ import {
   outcomeCounts,
   SESSION_OUTCOMES,
   type SyncState,
+  sealAgentSession,
   setShipTranscripts,
   settledSessions,
   shippedSessions,
@@ -32,6 +33,7 @@ import {
 import { getSyncStatus, type SyncStatus } from "../sync/status";
 import { runKnowledgeSync, SHIP_BATCH_LIMIT, type SyncDeps, type SyncOutcome } from "../sync/sync";
 import { recordCommandFacets } from "../telemetry/telemetry";
+import { VERSION } from "../version/version";
 import { resolveAgents } from "./agent-select";
 import { positiveInteger } from "./arguments";
 import { requireLoginConfig } from "./auth";
@@ -529,17 +531,36 @@ function contextCommand(): Command {
       "claude",
     )
     .action(async (opts: { agent: string; format: string }) => {
+      const state = loadSyncState();
+      // With an agent in incognito, the payload is read first: a session of its that only its own
+      // processes can see is settled now, whatever holds below, so `incognito off` run from
+      // another shell does not leave it to ship.
+      let stdin: string | undefined;
+      if (state.incognito_agents) {
+        const { CONTEXT_FORMATS, outsideIncognitoSession } = await import("../memory/context-hook");
+        stdin = readStdin();
+        const format = CONTEXT_FORMATS.find((f) => f === opts.format);
+        const outside = outsideIncognitoSession(stdin, {
+          agent: opts.agent,
+          format,
+          incognito: state,
+        });
+        try {
+          if (outside) sealAgentSession(outside, VERSION);
+        } catch {
+          // The hook stays harmless; the sync settles the session once a run lists it.
+        }
+      }
       const cfg = loadConfig();
       const target = cfg.active_account?.target;
       const backendUrl = getBackendURL();
       if (cfg.mode === "oss" || !target?.api_key || !target.deployment_id) return;
       if (!isAbsoluteHttpUrl(backendUrl)) return;
-      const state = loadSyncState();
       if (!isShippingEnabled(state)) return;
       const { CONTEXT_FORMATS, contextHookOutput } = await import("../memory/context-hook");
       const format = CONTEXT_FORMATS.find((f) => f === opts.format);
       if (!format) return;
-      const out = await contextHookOutput(readStdin(), {
+      const out = await contextHookOutput(stdin ?? readStdin(), {
         apiKey: target.api_key,
         deploymentId: target.deployment_id,
         backendUrl,

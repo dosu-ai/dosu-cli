@@ -518,7 +518,11 @@ export const AGENT_SWITCH_SINCE = "2026-10-05T00:00:00.000Z";
  * list are sealed. When listing throws, nothing is saved and the agents stay in it. */
 export function leaveIncognito(
   agentIds: readonly string[],
-  listSessions: (state: SyncState, since: Date) => readonly AgentSession[],
+  listSessions: (
+    state: SyncState,
+    since: Date,
+    agents: ReadonlySet<string>,
+  ) => readonly AgentSession[],
   cliVersion: string,
   now: Date = new Date(),
   configDir: string = getConfigDir(),
@@ -534,7 +538,9 @@ export function leaveIncognito(
   const listed = loadSyncState(configDir);
   const before = leavingIn(listed);
   const sessions =
-    before.size > 0 ? listSessions(listed, new Date(Math.min(...before.values()))) : [];
+    before.size > 0
+      ? listSessions(listed, new Date(Math.min(...before.values())), new Set(before.keys()))
+      : [];
   const state = loadSyncState(configDir);
   const sinceOf = leavingIn(state);
   const at = now.toISOString();
@@ -546,6 +552,26 @@ export function leaveIncognito(
     state.sessions[key] = agentIncognitoEntry(session, at, cliVersion);
   }
   switchAgents(state, agentIds, false);
+  saveSyncState(state, configDir);
+}
+
+/** Settle one session of an agent in incognito as its switch settles it, now rather than at a
+ * sync: the prompt hook does so for a session only the agent's own processes can see (its
+ * transcript under a root that a scan from another shell misses), so `incognito off`, which scans
+ * from such a shell, finds it settled. Nothing when the agent is not listed or the switch already
+ * settled the session. */
+export function sealAgentSession(
+  session: AgentSession,
+  cliVersion: string,
+  now: Date = new Date(),
+  configDir: string = getConfigDir(),
+): void {
+  const state = loadSyncState(configDir);
+  if (!state.incognito_agents?.includes(session.harness)) return;
+  const key = sessionKey(session);
+  const entry = state.sessions[key];
+  if (entry?.by_agent || !isUnanswered(session, entry)) return;
+  state.sessions[key] = agentIncognitoEntry(session, now.toISOString(), cliVersion);
   saveSyncState(state, configDir);
 }
 
