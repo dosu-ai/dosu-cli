@@ -714,6 +714,30 @@ describe("runKnowledgeSync studying", () => {
     expect(logged).toContain("(0 trivial, 1 incognito skipped)");
   });
 
+  it("skips every session from an agent saved as incognito", async () => {
+    const mine = vi.fn().mockResolvedValue(learnerResult());
+    const cursorSession = { ...session(40), id: "c-40", harness: "cursor" as const };
+    const { deps } = makeDeps({
+      listSessions: vi.fn().mockResolvedValue([session(30), cursorSession, session(50)]),
+      loadState: () => ({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        incognito_agents: ["cursor"],
+      }),
+      worthStudying: () => true,
+      isIncognito: () => false,
+      mine,
+      lock: openLock(),
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.incognitoSessions).toBe(1);
+    const batch = mine.mock.calls[0][0] as AgentSession[];
+    expect(batch.map((s) => s.id)).toEqual(["s-50", "s-30"]);
+  });
+
   it("studies sessions with or without a known branch, tagging the branch only in a repo", async () => {
     const mine = vi.fn().mockResolvedValue(learnerResult());
     // Newest-first: s-30 (repo, no branch), s-40 (repo, feat/b), s-45 (no repo), s-50 (trivial).
