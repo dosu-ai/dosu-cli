@@ -327,6 +327,17 @@ describe("review list", () => {
     expect(JSON.stringify(output)).not.toContain("Stale");
   });
 
+  it("reports a Library the server returns with an empty name as unnamed, not unavailable", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    serve({ "libraries.info": { ...library, name: "" } });
+
+    await run("list", "--json");
+
+    const output = JSON.parse(allOutput());
+    expect(output.scope.library).toEqual({ id: "sp1", name: null });
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
   it("renders a scope without names in human output", async () => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ library_name: "Stale Cached Name" }));
     serve({ "libraries.info": internalError(), "workspaces.get": { ...deployment, name: "" } });
