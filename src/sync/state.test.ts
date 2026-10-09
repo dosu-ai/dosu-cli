@@ -129,28 +129,53 @@ describe("loadSyncState / saveSyncState", () => {
     expect(JSON.parse(content).schema_version).toBe(3);
   });
 
-  it("treats a corrupt file and an unknown schema_version as an empty ledger", () => {
-    writeFileSync(syncStatePath(configDir), "{nope");
-    expect(loadSyncState(configDir)).toEqual(emptySyncState());
+  it("starts the ledger over for a schema_version it does not know", () => {
     writeRaw({ schema_version: 99, sessions: { "claude/x": entry() } });
     expect(loadSyncState(configDir)).toEqual(emptySyncState());
   });
 
-  it("never widens what ships when it cannot read the schema: the opt-out and incognito stay", () => {
+  it("never widens what ships when it cannot read the schema: settings and seals stay", () => {
+    // A newer CLI's file, read after a downgrade.
+    const sealed = entry({ outcome: "incognito", by_agent: true, path: "/x.jsonl", message: "m" });
     writeRaw({
       schema_version: 99,
-      sessions: { "claude/x": entry() },
+      sessions: { "claude/x": entry(), "codex/sealed": sealed },
+      last_attempt_at: "2026-08-25T11:00:00Z",
+      consecutive_failures: 4,
+      repo_filter: ["github.com/o/private-only"],
       paused: true,
       ship_transcripts: false,
       incognito_agents: ["cursor", "claude", 7],
     });
+    const { message: _, ...trimmed } = sealed;
     expect(loadSyncState(configDir)).toEqual({
       ...emptySyncState(),
+      sessions: { "codex/sealed": trimmed },
+      repo_filter: ["github.com/o/private-only"],
+      paused: true,
       ship_transcripts: false,
       incognito_agents: ["claude", "cursor"],
     });
     writeRaw({ incognito_agents: ["codex"] });
     expect(loadSyncState(configDir)).toEqual({ ...emptySyncState(), incognito_agents: ["codex"] });
+  });
+
+  it("fails closed on a file it cannot parse, and never saves over it", () => {
+    for (const text of ["{nope", '{"incognito_agents": ["claude",]}', "[]", "null"]) {
+      writeFileSync(syncStatePath(configDir), text);
+      const state = loadSyncState(configDir);
+      // Shipping off, as whatever it said may have kept something out.
+      expect(state).toEqual({
+        ...emptySyncState(),
+        ship_transcripts: false,
+        unreadable: true,
+      });
+      expect(isShippingEnabled(state)).toBe(false);
+      expect(() => setSyncPaused(true, configDir)).toThrow("could not be read");
+      expect(() => setAgentsIncognito(["codex"], true, configDir)).toThrow("could not be read");
+      expect(() => resetSyncState(configDir)).toThrow("fix or remove it");
+      expect(readFileSync(syncStatePath(configDir), "utf-8")).toBe(text);
+    }
   });
 
   it("normalizes malformed fields and drops malformed ledger entries", () => {

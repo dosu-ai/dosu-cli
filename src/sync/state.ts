@@ -164,6 +164,10 @@ export interface SyncState {
    * apart now. The first sync settles each session it passed since the switch existed as the switch
    * would have (`by_agent`), then drops this. */
   legacy_passed?: { before: string; studied: string[] };
+  /** Set, never saved, when knowledge-sync.json is there but cannot be read or parsed (a hand edit
+   * gone wrong, a permission change): what it said is unknown, so nothing ships, no prompt or Dosu
+   * tool call is sent (callRefusal), and nothing saves over it until it is fixed or removed. */
+  unreadable?: true;
 }
 
 /** Whether finished sessions are shipped to Dosu memory: on unless the user opted out. */
@@ -366,38 +370,78 @@ function parseRun(value: unknown): SyncRun | undefined {
   return undefined;
 }
 
+/** What a state file that cannot be read stands for (SyncState.unreadable). */
+function unreadableSyncState(): SyncState {
+  return { ...emptySyncState(), ship_transcripts: false, unreadable: true };
+}
+
+/** Why a state file that cannot be read stops what would write or send, for the user to read. */
+export function unreadableStateMessage(configDir: string = getConfigDir()): string {
+  return `${syncStatePath(configDir)} could not be read: fix or remove it`;
+}
+
+/** The entries an agent's incognito switch settled, cut down to their answer: what nothing later
+ * could tell apart again, and so what every fresh start keeps. */
+function switchSettled(ledger: Readonly<Record<string, LedgerEntry>>): Record<string, LedgerEntry> {
+  const kept: Record<string, LedgerEntry> = {};
+  for (const [key, entry] of Object.entries(ledger)) {
+    if (!entry.by_agent) continue;
+    const { updated, outcome, at, cli_version, parent, path } = entry;
+    kept[key] = {
+      updated,
+      outcome,
+      at,
+      cli_version,
+      by_agent: true,
+      ...(parent ? { parent } : {}),
+      ...(path ? { path } : {}),
+    };
+  }
+  return kept;
+}
+
 export function loadSyncState(configDir: string = getConfigDir()): SyncState {
   const path = syncStatePath(configDir);
   if (!existsSync(path)) return emptySyncState();
+  let raw: unknown;
   try {
-    const raw = JSON.parse(readFileSync(path, "utf-8")) as unknown;
-    if (!isRecord(raw)) return emptySyncState();
-    if (raw.schema_version === 1) return migrate(raw, isRecord(raw.ship) ? raw.ship : {});
-    if (raw.schema_version === 2) return migrate(raw, raw);
-    if (raw.schema_version !== STATE_SCHEMA_VERSION) {
-      // A schema this CLI cannot read (a newer one, after a downgrade) starts the ledger over, but
-      // never widens what ships: the shipping opt-out and the incognito agents carry over.
-      return {
-        ...emptySyncState(),
-        ...(raw.ship_transcripts === false ? { ship_transcripts: false as const } : {}),
-        ...agentList(raw.incognito_agents, raw.incognito_since),
-      };
-    }
-    const run = parseRun(raw.run);
-    const totalShipped = nonNegative(raw.total_shipped);
-    return {
-      schema_version: STATE_SCHEMA_VERSION,
-      sessions: parseLedger(raw.sessions),
-      ...parseCommon(raw),
-      ...(totalShipped !== undefined ? { total_shipped: totalShipped } : {}),
-      ...(run ? { run } : {}),
-    };
+    raw = JSON.parse(readFileSync(path, "utf-8"));
   } catch {
-    return emptySyncState();
+    return unreadableSyncState();
   }
+  if (!isRecord(raw) || Array.isArray(raw)) return unreadableSyncState();
+  if (raw.schema_version === 1) return migrate(raw, isRecord(raw.ship) ? raw.ship : {});
+  if (raw.schema_version === 2) return migrate(raw, raw);
+  if (raw.schema_version !== STATE_SCHEMA_VERSION) {
+    // A schema this CLI cannot read (a newer one, after a downgrade) starts the ledger over, but
+    // never widens what ships: every setting carries over (the scope, the pause, the shipping
+    // opt-out, the incognito agents), and so do the sessions their switch settled.
+    const {
+      last_attempt_at: _attempt,
+      consecutive_failures: _failures,
+      ...settings
+    } = parseCommon(raw);
+    return {
+      ...emptySyncState(),
+      ...settings,
+      sessions: switchSettled(parseLedger(raw.sessions)),
+    };
+  }
+  const run = parseRun(raw.run);
+  const totalShipped = nonNegative(raw.total_shipped);
+  return {
+    schema_version: STATE_SCHEMA_VERSION,
+    sessions: parseLedger(raw.sessions),
+    ...parseCommon(raw),
+    ...(totalShipped !== undefined ? { total_shipped: totalShipped } : {}),
+    ...(run ? { run } : {}),
+  };
 }
 
+/** Throws for a state that stands for a file that could not be read (SyncState.unreadable): saving
+ * it would put an empty ledger and no switches in place of whatever the file said. */
 export function saveSyncState(state: SyncState, configDir: string = getConfigDir()): void {
+  if (state.unreadable) throw new Error(unreadableStateMessage(configDir));
   if (!existsSync(configDir)) mkdirSync(configDir, { recursive: true, mode: 0o700 });
   const path = syncStatePath(configDir);
   // Write-then-rename, same discipline as config.json: hook-triggered syncs
@@ -618,24 +662,11 @@ export function legacyPassedSessions(
  * built in Dosu is untouched. */
 export function resetSyncState(configDir: string = getConfigDir()): void {
   const previous = loadSyncState(configDir);
-  const offRecord: Record<string, LedgerEntry> = {};
-  for (const [key, entry] of Object.entries(previous.sessions)) {
-    if (!entry.by_agent) continue;
-    const { updated, outcome, at, cli_version, parent, path } = entry;
-    offRecord[key] = {
-      updated,
-      outcome,
-      at,
-      cli_version,
-      by_agent: true,
-      ...(parent ? { parent } : {}),
-      ...(path ? { path } : {}),
-    };
-  }
+  if (previous.unreadable) throw new Error(unreadableStateMessage(configDir));
   saveSyncState(
     {
       ...emptySyncState(),
-      sessions: offRecord,
+      sessions: switchSettled(previous.sessions),
       ...(previous.repo_filter ? { repo_filter: previous.repo_filter } : {}),
       ...(previous.project_filter ? { project_filter: previous.project_filter } : {}),
       ...(previous.paused ? { paused: true } : {}),

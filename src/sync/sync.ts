@@ -38,6 +38,7 @@ import {
   saveSyncState,
   sessionKey,
   studyRepoFilter,
+  unreadableStateMessage,
   withoutSubagents,
 } from "./state";
 
@@ -345,6 +346,11 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
 
   const state = loadState();
 
+  if (state.unreadable) {
+    // What the file said is unknown, the switches in it included: nothing ships, nothing saves.
+    logger.debug("sync", "skipping: the state file could not be read");
+    return { ...empty("error"), error: unreadableStateMessage() };
+  }
   if (!isShippingEnabled(state)) {
     logger.debug("sync", "skipping: transcript shipping is disabled");
     return empty("disabled");

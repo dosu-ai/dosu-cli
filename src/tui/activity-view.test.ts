@@ -1789,6 +1789,37 @@ describe("runActivityView", () => {
     await view;
   });
 
+  it("says so, and stays up, when the state file refuses the clear", async () => {
+    const { input, output, written } = fakeIO();
+    const clearHistory = vi.fn(() => {
+      throw new Error("knowledge-sync.json could not be read: fix or remove it");
+    });
+
+    const getStatus = () => {
+      const status = makeStatus();
+      status.state.sessions = SETTLED;
+      return status;
+    };
+
+    const view = runActivityView({
+      input,
+      output,
+      getStatus,
+      readLog: () => "",
+      createFollower: () => ({ poll() {} }),
+      clearHistory,
+      listBacklog: () => ({ queued: [], open: [] }),
+      pollMs: 100,
+    });
+    input.emit("data", "c");
+    input.emit("data", "\r");
+
+    // Clipped to the row, like any feed line.
+    expect(stripAnsi(written.join(""))).toContain("[sync] could not save the setting \u00B7 know");
+    input.emit("data", "q");
+    await view;
+  });
+
   it("esc cancels the clear confirmation without touching the state", async () => {
     const { input, output, written } = fakeIO();
     const clearHistory = vi.fn();

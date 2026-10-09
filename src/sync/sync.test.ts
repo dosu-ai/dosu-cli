@@ -323,6 +323,22 @@ describe("runKnowledgeSync gate", () => {
     expect(scoped.get().sessions["claude/s-60"]).toMatchObject({ by_agent: true });
   });
 
+  it("ships and saves nothing when the state file could not be read", async () => {
+    const ship = shipAll();
+    const { deps, saved } = makeDeps({
+      loadState: () => ({ ...state(), ship_transcripts: false, unreadable: true }),
+      listSessions: vi.fn().mockResolvedValue([session(60)]),
+      ship,
+    });
+
+    const outcome = await runKnowledgeSync({ deps, flush: true });
+
+    expect(outcome.status).toBe("error");
+    expect(outcome.error).toContain("could not be read: fix or remove it");
+    expect(ship).not.toHaveBeenCalled();
+    expect(saved).toEqual([]);
+  });
+
   it("survives a failing saveState on the error path", async () => {
     const { deps } = makeDeps({
       listSessions: vi.fn().mockRejectedValue(new Error("boom")),

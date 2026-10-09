@@ -36,7 +36,12 @@ import {
 } from "../sessions/scan";
 import { trajectorySourceOf } from "../shipper/normalize";
 import { isIncognitoSession } from "../sync/incognito";
-import { isSessionAgentIncognito, loadSyncState, type SyncState } from "../sync/state";
+import {
+  isSessionAgentIncognito,
+  loadSyncState,
+  type SyncState,
+  unreadableStateMessage,
+} from "../sync/state";
 
 /** Dosu's memory tools as Claude Code names them on the `dosu` entry `dosu mcp add` writes (other
  * servers may have tools of the same names): the matcher of the PreToolUse hook that records
@@ -298,6 +303,10 @@ export function callRefusal(
   sessions: readonly CallSession[],
 ): string | null {
   const state = loadSyncState();
+  // Nothing says whether this agent, or this session, is in incognito: it may be.
+  if (state.unreadable) {
+    return `Dosu cannot tell whether this agent is incognito (${unreadableStateMessage()}): ${CALL_NOT_SENT}.`;
+  }
   const agent = harnessOfClient(client);
   if (agent && state.incognito_agents?.includes(agent)) return agentSwitchMessage("agent", agent);
   for (const session of sessions) {

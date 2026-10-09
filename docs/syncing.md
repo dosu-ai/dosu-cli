@@ -482,9 +482,15 @@ prefix (`records`, `prefix_sha256`), since nothing more of the session is ever s
   learner's watermark passed that agent's sessions by unstudied, so the first sync after the upgrade
   settles every session the watermark passed since 0.66.0's release that its learner did not study
   (`mined_sessions`) and the ledger has no answer for as `by_agent` incognito, once (the state
-  keeps them as `legacy_passed` until then). Trivial sessions it passed that day go with them. A state file with a schema this CLI does not know (a newer one, after a
-  downgrade) starts the ledger over but keeps `incognito_agents` and `ship_transcripts: false`, so
-  it never widens what ships.
+  keeps them as `legacy_passed` until then). Trivial sessions it passed that day go with them.
+- A state file with a schema this CLI does not know (a newer one, after a downgrade) starts the
+  ledger over but never widens what ships: it keeps every setting (`incognito_agents`,
+  `ship_transcripts: false`, the repo scope, the pause) and the `by_agent` entries, trimmed as a
+  clear trims them. A state file that is there but cannot be read or parsed (a hand edit gone wrong,
+  a permission change) fails closed: nothing ships (`dosu knowledge sync` reports
+  `<path> could not be read: fix or remove it`), no prompt-time request goes out, the proxy and
+  `dosu memory` refuse every call, and every command that would save the state refuses rather than
+  write over it, until the file is fixed or removed.
 - Pi switches like the others, but its `/dosu-incognito` is part of the Dosu pi extension, which
   only `hooks enable pi` (or setup) installs: `on` and `off` never install it (it would also turn on
   pi's session-end trigger, prompt-time memory and MCP server), only rewrite an extension Dosu

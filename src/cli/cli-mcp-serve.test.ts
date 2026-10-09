@@ -695,6 +695,19 @@ describe("the session a tool call belongs to", () => {
     }
   });
 
+  it("answers every call itself while the state file cannot be read", async () => {
+    // A hand edit gone wrong: whatever agents it kept in incognito, it no longer says.
+    const path = join(home, ".config", "dosu-cli", "knowledge-sync.json");
+    writeFile(path, '{"incognito_agents": ["claude",]}');
+
+    await serve([...HANDSHAKE, search()], "--client", "claude-code");
+
+    expect(relayedCalls()).toEqual([]);
+    const text = replies().find((r) => r.id === 2)?.result.content[0].text;
+    expect(text).toContain("cannot tell whether this agent is incognito");
+    expect(text).toContain("fix or remove it");
+  });
+
   it("never names the Claude Code session another agent was started from", async () => {
     // pi (or any agent) run from a Claude Code shell inherits CLAUDE_CODE_SESSION_ID; a call from
     // an entry of its own that names no session is not that Claude Code session's.

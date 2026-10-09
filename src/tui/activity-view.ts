@@ -786,27 +786,32 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
             const mode = confirmSync;
             confirmSync = null;
             let note: string;
-            if (mode === "clear") {
-              // An empty ledger makes every local session pending; draw() rescans on the
-              // change so the Queued tab fills immediately.
-              clearHistory();
-              shippedBeforeRun = null;
-              note =
-                "[sync] shipping history cleared \u00B7 the next run ships the last 30 days again";
-            } else if (mode === "stop") {
-              // Kill first, then flip the pause switch: a dying run's last state save
-              // could otherwise overwrite the flag with its pre-pause snapshot.
-              const ok = status.pid !== undefined && stopSync(status.pid);
-              if (ok) setPaused(true);
-              note = ok
-                ? "[sync] shipping stopped \u00B7 paused until you resume"
-                : "[sync] could not stop the run \u00B7 it may have just finished";
-            } else {
-              if (mode === "resume") setPaused(false);
-              const ok = startSync();
-              note = ok
-                ? "[sync] sync requested \u00B7 starting a background run"
-                : "[sync] could not start a background run \u00B7 try `dosu knowledge sync`";
+            try {
+              if (mode === "clear") {
+                // An empty ledger makes every local session pending; draw() rescans on the
+                // change so the Queued tab fills immediately.
+                clearHistory();
+                shippedBeforeRun = null;
+                note =
+                  "[sync] shipping history cleared \u00B7 the next run ships the last 30 days again";
+              } else if (mode === "stop") {
+                // Kill first, then flip the pause switch: a dying run's last state save
+                // could otherwise overwrite the flag with its pre-pause snapshot.
+                const ok = status.pid !== undefined && stopSync(status.pid);
+                if (ok) setPaused(true);
+                note = ok
+                  ? "[sync] shipping stopped \u00B7 paused until you resume"
+                  : "[sync] could not stop the run \u00B7 it may have just finished";
+              } else {
+                if (mode === "resume") setPaused(false);
+                const ok = startSync();
+                note = ok
+                  ? "[sync] sync requested \u00B7 starting a background run"
+                  : "[sync] could not start a background run \u00B7 try `dosu knowledge sync`";
+              }
+            } catch (err) {
+              // The state file could not be saved (one it cannot read is never saved over).
+              note = `[sync] could not save the setting \u00B7 ${err instanceof Error ? err.message : String(err)}`;
             }
             // Immediate feed feedback; the real run's log lines follow.
             activity = appendSyncActivity(
