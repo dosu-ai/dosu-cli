@@ -13,20 +13,31 @@ import { join } from "node:path";
 import pc from "picocolors";
 import { type Config, getConfigDir, loadConfigNonBlocking, MODE_OSS } from "../config/config";
 import { logger } from "../debug/logger";
+import { refreshEnabledHooks } from "../hooks/agents";
 import { refreshConfiguredProviders } from "../mcp/refresh";
 import { isNewerVersion } from "./update-check";
 import { VERSION } from "./version";
 
 const CACHE_FILENAME = "mcp-refresh.json";
 
-/** Releases whose provider code changed what the Dosu MCP entry looks like. Add a version here
- * whenever a provider's `install` output changes shape; an upgrade or downgrade that crosses
- * one of these rewrites configured agents on the first run, nothing else does. */
+/** Releases whose provider code changed what the Dosu MCP entry looks like, or what an agent's
+ * hooks install. Add a version here whenever a provider's `install` output changes shape, or a
+ * hook agent's `enable` installs something new; an upgrade or downgrade that crosses one of
+ * these rewrites configured agents (and re-applies enabled hooks) on the first run, nothing else
+ * does. */
 export const MCP_FORMAT_CHANGES: readonly string[] = [
   "0.53.0",
   // Claude Code entries gained `alwaysLoad: true`. This must be the first release that ships
   // it: a lower number skips upgrades from the releases in between, a higher one delays them.
   "0.62.0",
+  // Cloud entries moved from /v1/mcp to the v2 memory surface (/v2/mcp), and every provider's
+  // entry became a stdio command running the local proxy, `dosu mcp serve`, in place of a
+  // remote-HTTP or `npx mcp-remote` entry; the hooks began naming each memory call's session to
+  // it (Claude Code's PreToolUse guard, the OpenCode plugin). Stable 0.63.0 through 0.66.1
+  // shipped without any of it, so, as with 0.62.0, this must be the first stable release that
+  // does. A prerelease of it (0.67.0-beta.N) compares as 0.67.0 here: moving onto one crosses
+  // this, and graduating from one to 0.67.0 does not. Raise it if main cuts 0.67.0 first.
+  "0.67.0",
 ];
 
 /** Whether moving from `previous` (the version that last wrote the entries; `null` when
@@ -85,10 +96,12 @@ export function canRefreshMcp(cfg: Config): boolean {
   return cfg.mode === MODE_OSS || Boolean(target.deployment_id);
 }
 
+/** The notice after a refresh, which re-applied the hooks of the agents that had them on: what is
+ * left for setup is rules, the status line, and agents whose hooks were never on. */
 function displayNotice(names: string[]): void {
   console.error(
     `\n${pc.green(`✓ Dosu ${VERSION}: refreshed MCP config for ${names.join(", ")}`)}\n` +
-      `${pc.dim(`  Run ${pc.cyan('"dosu setup"')} to also update hooks and rules, then restart your AI agents.`)}\n`,
+      `${pc.dim(`  Hooks were re-applied for the agents that have them on. Run ${pc.cyan('"dosu setup"')} to update rules and the status line (and add hooks to other agents), then restart your AI agents.`)}\n`,
   );
 }
 
@@ -116,10 +129,11 @@ export function checkForMcpRefresh(options: { notify?: boolean } = {}): void {
     }
 
     const result = refreshConfiguredProviders(cfg);
+    const hooks = refreshEnabledHooks();
     writeMcpRefreshCache({ version: VERSION });
     logger.info(
       "mcp-refresh",
-      `Version ${VERSION}: refreshed ${result.updated.length}, failed ${result.failed.length}`,
+      `Version ${VERSION}: refreshed ${result.updated.length}, failed ${result.failed.length}; hooks of ${hooks.length}`,
     );
     if (notify && result.updated.length > 0) {
       displayNotice(result.updated.map((provider) => provider.name()));

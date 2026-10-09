@@ -13,6 +13,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../../config/config";
 import { type FlatTestConfig, makeTestConfig } from "../../config/config.test-utils";
 import { loadJSONConfig, MCP_REMOTE_VERSION } from "../config-helpers";
+import { restoreRunningInstall, stubRunningFromNpx } from "../running-install.test-utils";
+
+// A one-off `npx @dosu/cli` doing the writing (and no dev mode): these tests pin the remote and
+// mcp-remote forms written when there is no lasting Dosu install to run the local proxy with.
+// providers-stdio.test.ts covers the proxy entries written when there is.
+beforeEach(() => {
+  vi.stubEnv("PATH", join(tmpdir(), "dosu-test-no-bin"));
+  vi.stubEnv("DOSU_DEV", undefined);
+  stubRunningFromNpx(tmpdir());
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  restoreRunningInstall();
+});
 
 // --- Helpers ---
 
@@ -112,7 +127,7 @@ describe("createJSONProvider (base)", () => {
 
     provider.install(makeCfg(), true);
     const cloud = loadJSONConfig(globalPath).mcpServers.dosu;
-    expect(cloud.endpoint).toContain("/v1/mcp/deployments/dep-123");
+    expect(cloud.endpoint).toContain("/v2/mcp/deployments/dep-123");
     expect(cloud.auth).toBe("key-abc");
   });
 
@@ -906,6 +921,18 @@ describe("ManualProvider", () => {
     logSpy.mockRestore();
   });
 
+  it("install offers the local proxy command before the HTTP details", async () => {
+    const { ManualProvider } = await import("./manual");
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    ManualProvider().install(makeCfg(), false);
+
+    const allOutput = logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(allOutput).toContain("dosu mcp serve --client <agent>");
+    expect(allOutput.indexOf("dosu mcp serve")).toBeLessThan(allOutput.indexOf("Endpoint:"));
+    logSpy.mockRestore();
+  });
+
   it("install logs the full API key when requested", async () => {
     const { ManualProvider } = await import("./manual");
     const provider = ManualProvider();
@@ -1227,6 +1254,19 @@ describe("ClaudeProvider", () => {
 
     const cfg = loadJSONConfig(configPath);
     expect(cfg.mcpServers).toEqual({ other: { command: "x" } });
+  });
+
+  it("is detected on a fresh machine from `claude` on PATH, before ~/.claude exists", async () => {
+    const { ClaudeProvider } = await import("./claude");
+    mkdirSync(join(tempDir, "bin"));
+    vi.stubEnv("PATH", join(tempDir, "bin"));
+    try {
+      expect(ClaudeProvider().isInstalled()).toBe(false);
+      writeFileSync(join(tempDir, "bin", "claude"), "#!/bin/sh\n");
+      expect(ClaudeProvider().isInstalled()).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

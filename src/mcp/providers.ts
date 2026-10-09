@@ -38,6 +38,7 @@ import { GeminiProvider } from "./providers/gemini";
 import { ManualProvider } from "./providers/manual";
 import { MCPorterProvider } from "./providers/mcporter";
 import { OpenCodeProvider } from "./providers/opencode";
+import { PiProvider } from "./providers/pi";
 import { VSCodeProvider } from "./providers/vscode";
 import { WindsurfProvider } from "./providers/windsurf";
 import { ZedProvider } from "./providers/zed";
@@ -60,6 +61,7 @@ export function allProviders(): Provider[] {
     AntigravityProvider(),
     MCPorterProvider(),
     FactoryProvider(),
+    PiProvider(),
     ManualProvider(),
   ];
 }

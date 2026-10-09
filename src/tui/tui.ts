@@ -22,8 +22,8 @@ import { scanAgentSessions } from "../sessions/scan";
 import { dosuAgentsSectionState, inGitWorkTree } from "../setup/agents-md-step";
 import { runSetup, runSwitchTarget } from "../setup/flow";
 import { brand, browserFallbackHint, dim } from "../setup/styles";
+import { loadSyncState, saveSyncState, studyRepoFilter } from "../sync/state";
 import { getSyncStatus } from "../sync/status";
-import { loadSyncState, saveSyncState, studyRepoFilter } from "../sync/watermark";
 import { buildUpdateHint, getAvailableUpdate } from "../version/update-check";
 import { getVersionString, INSTALL_CHANNEL, isNpxInvocation } from "../version/version";
 import { runActivityView } from "./activity-view";
@@ -233,7 +233,7 @@ async function runMainMenu(): Promise<void> {
     const studying = isStudying();
     return [
       {
-        label: studying ? `activity \uD83D\uDCDA ${brand("studying sessions...")}` : "activity",
+        label: studying ? `activity \uD83D\uDCDA ${brand("shipping sessions...")}` : "activity",
         value: "sync",
       },
       { label: "knowledge report", hint: "(opens in browser)", value: "report" },
@@ -341,7 +341,7 @@ async function runSettings(cfg: Config): Promise<void> {
     const action = await menuSelect("settings", [
       { label: "switch organization", hint: target?.org_name, value: "switch-org" },
       { label: "switch library", hint: library, value: "switch-library" },
-      { label: "study scope", hint: scope, value: "projects" },
+      { label: "sync scope", hint: scope, value: "projects" },
       { label: "run setup", hint: "rerun the setup wizard", value: "setup" },
       { label: "log out", hint: "clear stored credentials", value: "logout" },
       { label: "back", value: "back" },
@@ -392,8 +392,8 @@ function discoverSessionRepos(current: readonly string[] | null): string[] {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([repo]) => repo);
 }
 
-/** Scope studying to selected repos; picking everything clears the filter so new repos are
- * studied too. */
+/** Scope shipping to selected repos; picking everything clears the filter so new repos are
+ * shipped too. */
 async function runStudyingProjectsSetting(): Promise<void> {
   const state = loadSyncState();
   const current = studyRepoFilter(state, () => scanAgentSessions({}), createProjectDirResolver());
@@ -403,7 +403,7 @@ async function runStudyingProjectsSetting(): Promise<void> {
     return;
   }
   const selected = await p.multiselect({
-    message: "Study sessions from which repos?",
+    message: "Ship sessions to Dosu memory from which repos?",
     options: repos.map((repo) => ({ label: displayRepo(repo), hint: repo, value: repo })),
     initialValues: current ?? repos,
     summary: (picked) =>
@@ -419,7 +419,7 @@ async function runStudyingProjectsSetting(): Promise<void> {
   const all = selected.length === repos.length;
   saveSyncState(all ? fresh : { ...fresh, repo_filter: [...selected] });
   const scope = all ? "all repos" : (selected as string[]).map(displayRepo).join(", ");
-  p.log.success(`Study scope ${dim(`\u00B7 ${scope}`)}`);
+  p.log.success(`Sync scope ${dim(`\u00B7 ${scope}`)}`);
 }
 
 async function handleAuthenticate(cfg: ReturnType<typeof loadConfig>): Promise<void> {

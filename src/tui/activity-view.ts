@@ -1,4 +1,4 @@
-/** Live Activity screen: studying status plus tabbed lists and a manual sync trigger. Pure
+/** Live Activity screen: shipping status plus tabbed lists and a manual sync trigger. Pure
  * render/reduce functions wired to injectable IO, like menu.ts. */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -6,6 +6,7 @@ import { basename } from "node:path";
 import pc from "picocolors";
 import { createLogFollower } from "../debug/follow";
 import { logger, stripAnsiCodes } from "../debug/logger";
+import { displayProjectKey } from "../sessions/project";
 import { createProjectDirResolver, unmungeSlug } from "../sessions/project-dir";
 import type { AgentSession } from "../sessions/scan";
 import { createSessionTitleResolver, reconstructSession } from "../sessions/session-title";
@@ -13,8 +14,14 @@ import { brand } from "../setup/styles";
 import { listSessionBacklog, type SessionBacklog } from "../sync/backlog";
 import { spawnDetachedSelf } from "../sync/detach";
 import { stopSyncRun } from "../sync/lock";
+import {
+  ledgerStamp,
+  resetSyncState,
+  type ShippedSessionRecord,
+  setSyncPaused,
+  shippedSessions,
+} from "../sync/state";
 import { getSyncStatus, type SyncStatus } from "../sync/status";
-import { resetSyncState, type StudiedSessionRecord, setSyncPaused } from "../sync/watermark";
 import { enterAltScreen } from "./alt-screen";
 import {
   breadcrumb,
@@ -53,10 +60,10 @@ export const ACTIVITY_VIEW_FULL_LIST_ROWS = 5;
 /** How much history each tab keeps in memory for scrolling back. */
 export const ACTIVITY_VIEW_BUFFER_LINES = 200;
 
-export type ActivityViewTab = "activity" | "queued" | "open" | "studied";
+export type ActivityViewTab = "activity" | "queued" | "open" | "shipped";
 
 /** Tab order for cycling; ← walks it backwards. */
-const ACTIVITY_VIEW_TABS: readonly ActivityViewTab[] = ["activity", "studied", "queued", "open"];
+const ACTIVITY_VIEW_TABS: readonly ActivityViewTab[] = ["activity", "shipped", "queued", "open"];
 
 export type ActivityViewAction =
   | "back"
@@ -70,7 +77,7 @@ export type ActivityViewAction =
   | "none";
 
 /** q/esc/ctrl-c back, tab/→ and ← cycle tabs, ↑↓ (or k/j) scroll, s syncs, f toggles full
- * rows, c clears study history. */
+ * rows, c clears shipping history. */
 export function reduceActivityViewKey(key: string): ActivityViewAction {
   if (key === "q" || key === ESC || key === CTRL_C) return "back";
   if (key === "\t" || key === KEY_RIGHT) return "tab";
@@ -100,7 +107,7 @@ export function reduceSyncConfirmKey(key: string): SyncConfirmAction {
 }
 
 /** Which confirmation is up: `s` means stop a live run, resume a paused pipeline, or start;
- * `c` means clear the study history so the next run starts from scratch. */
+ * `c` means clear the shipping history so the next run starts from scratch. */
 export type SyncConfirmMode = "start" | "stop" | "resume" | "clear";
 
 function syncConfirmMode(status: SyncStatus): SyncConfirmMode {
@@ -120,7 +127,7 @@ export function formatActivityLine(line: string, width: number, full = false): s
   return `${compact.slice(0, Math.max(0, width - 1))}\u2026`;
 }
 
-/** Keep only [sync]/[learner] log lines (level tag stripped), newest `max`. */
+/** Keep only [sync] log lines (level tag stripped), newest `max`. */
 export function appendSyncActivity(
   buffer: readonly string[],
   chunk: string,
@@ -128,7 +135,7 @@ export function appendSyncActivity(
 ): string[] {
   const fresh = chunk
     .split("\n")
-    .filter((line) => line.includes("[sync]") || line.includes("[learner]"))
+    .filter((line) => line.includes("[sync]"))
     .map((line) => line.replace(/ \[(DEBUG|INFO|WARN|ERROR)\]/, ""));
   return [...buffer, ...fresh].slice(-max);
 }
@@ -137,10 +144,10 @@ function clip(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}\u2026`;
 }
 
-/** Studied-history record as a row ("cursor    09-02 23:00  dosu  abc"), same columns as Queued.
+/** Shipped-history record as a row ("cursor    09-02 23:00  dosu  abc"), same columns as Queued.
  * `full` skips the per-column clipping (the f toggle's full-rows mode). */
-export function formatStudiedRow(
-  record: StudiedSessionRecord,
+export function formatShippedRow(
+  record: ShippedSessionRecord,
   full = false,
   name?: string,
 ): string {
@@ -149,8 +156,11 @@ export function formatStudiedRow(
   const slash = record.session.indexOf("/");
   const harness = slash > 0 ? record.session.slice(0, slash) : "-";
   const id = slash > 0 ? record.session.slice(slash + 1) : record.session;
-  const rawProject = record.project ?? "-";
-  const project = full ? rawProject : clip(rawProject, 28);
+  // History carried over from the watermark state has only the scanner's workspace.
+  const rawProject = record.project ?? record.workspace ?? "-";
+  const project = full
+    ? rawProject
+    : clip(record.project ? displayProjectKey(record.project) : rawProject, 28);
   const label = full ? (name ? `${name} \u00B7 ${id}` : id) : clip(name ?? id, 44);
   return `${harness.padEnd(8)}  ${stamp}  ${project}  ${label}`;
 }
@@ -217,50 +227,6 @@ export function latestBacklog(text: string): SyncBacklog | null {
   return latest;
 }
 
-/** Within-batch studying progress, folded live from the learner's log traces. */
-export interface RunProgress {
-  /** Batch size from the latest "[sync] studying N of M" marker. */
-  batch: number;
-  /** Distinct session ids the learner has opened so far this batch. */
-  read: Set<string>;
-  /** write_knowledge calls traced so far this batch. */
-  notes: number;
-}
-
-/** Fold a log chunk into within-batch progress: the bar steps off the learner's tool traces, and
- * a settle line clears the fold so stale steps never double-count. */
-export function foldRunProgress(progress: RunProgress | null, chunk: string): RunProgress | null {
-  let current = progress;
-  for (const line of chunk.split("\n")) {
-    const start = line.match(/\[sync\] (?:studying|mining) (\d+) of \d+ ready sessions/);
-    if (start) {
-      current = { batch: Number.parseInt(start[1], 10), read: new Set(), notes: 0 };
-      continue;
-    }
-    if (
-      /\[sync\] (?:studied|mined) \d+ sessions|\[sync\] (?:studying|mining) (?:failed|skipped)/.test(
-        line,
-      )
-    ) {
-      current = null;
-      continue;
-    }
-    if (!current) continue;
-    // Pagination and re-reads repeat an id; the set collapses them.
-    const read = line.match(
-      /\[learner\] \[agent\] → mcp__sessions__read_session .*?"id":"([^"]+)"/,
-    );
-    if (read) {
-      current.read.add(read[1]);
-      continue;
-    }
-    if (line.includes("[learner] [agent] → mcp__dosu__write_knowledge")) {
-      current.notes += 1;
-    }
-  }
-  return current;
-}
-
 function localTime(iso: string): string {
   const parsed = new Date(iso);
   return Number.isNaN(parsed.getTime()) ? iso : parsed.toLocaleTimeString();
@@ -270,11 +236,11 @@ function statusLine(status: SyncStatus): string {
   if (status.running) {
     const since = status.startedAt ? ` \u00B7 since ${localTime(status.startedAt)}` : "";
     const pid = status.pid !== undefined ? ` (pid ${status.pid})` : "";
-    return `\uD83D\uDCDA ${pc.bold(brand("Studying sessions..."))}${pc.dim(`${pid}${since}`)}`;
+    return `\uD83D\uDCDA ${pc.bold(brand("Shipping sessions..."))}${pc.dim(`${pid}${since}`)}`;
   }
   if (status.state.paused) {
     return `${pc.yellow("\u25CB")} ${pc.bold("Paused")} ${pc.dim(
-      "\u00B7 studying stays off until you resume",
+      "\u00B7 syncing stays off until you resume",
     )}`;
   }
   if (status.staleLock) {
@@ -283,22 +249,21 @@ function statusLine(status: SyncStatus): string {
     )}`;
   }
   return `${pc.dim("\u25CB")} ${pc.bold("Idle")} ${pc.dim(
-    "\u00B7 hooks study new sessions automatically",
+    "\u00B7 hooks ship new sessions automatically",
   )}`;
 }
 
 /** Drain-progress bar; `done` must be run-scoped, so the caller subtracts the run baseline. */
-export function progressLine(done: number, ready: number, width: number, notes = 0): string | null {
+export function progressLine(done: number, ready: number, width: number): string | null {
   const total = done + ready;
   if (total <= 0) return null;
-  // Leave room for the " done/total studied · NN% · NN suggested pages" suffix.
-  const cells = Math.max(10, Math.min(30, width - 44));
+  // Leave room for the " done/total shipped · NN%" suffix.
+  const cells = Math.max(10, Math.min(30, width - 24));
   const ratio = Math.max(0, Math.min(1, done / total));
   const filled = Math.min(cells, Math.round(ratio * cells));
   const bar = brand("\u2588".repeat(filled)) + pc.dim("\u2591".repeat(cells - filled));
   const pct = Math.floor(ratio * 100);
-  const suffix = notes > 0 ? ` \u00B7 ${notes} suggested page${notes === 1 ? "" : "s"}` : "";
-  return `${bar} ${done}/${total} studied \u00B7 ${pct}%${suffix}`;
+  return `${bar} ${done}/${total} shipped \u00B7 ${pct}%`;
 }
 
 /** The Activity tab strip: labels with live counts over the shared rule. */
@@ -306,13 +271,13 @@ export function tabBar(
   tab: ActivityViewTab,
   queuedCount: number,
   openCount: number,
-  studiedCount: number,
+  shippedCount: number,
   width: number,
 ): string[] {
   return tabStrip(
     [
       ["activity", "activity"],
-      ["studied", `studied (${studiedCount})`],
+      ["shipped", `shipped (${shippedCount})`],
       ["queued", `queued (${queuedCount})`],
       ["open", `open (${openCount})`],
     ],
@@ -370,22 +335,22 @@ export function confirmBox(
   // Each dialog says what happens, why, and what to expect when it's done.
   const scope =
     mode === "clear"
-      ? "Forgets which local sessions Dosu has already studied, so the next run reads them all again. Use this to rebuild knowledge from scratch. Notes already saved in Dosu are kept."
+      ? "Forgets which local sessions were already shipped, so the next run ships the last 30 days again. Memory already built in Dosu is kept, and transcripts it already has are not ingested twice."
       : mode === "stop"
-        ? "Kills the run mid-batch and pauses studying, so new sessions pile up in the queue instead of being read. Nothing is lost; press s again to resume from where it left off."
+        ? "Kills the run mid-batch and pauses shipping, so new sessions pile up in the queue instead of being uploaded. Nothing is lost; press s again to resume from where it left off."
         : mode === "resume"
-          ? `Studying picks up where it stopped: ${sessions} queued${inFlight}. Runs in the background; new notes appear in Dosu as each batch finishes.`
+          ? `Shipping picks up where it stopped: ${sessions} queued${inFlight}. Runs in the background; Dosu memory learns from each session after it arrives.`
           : queuedCount > 0
-            ? `Dosu reads ${sessions}${inFlight} and distills the durable decisions and gotchas into team knowledge. Runs in the background; new notes appear in Dosu as each batch finishes.`
+            ? `Uploads ${sessions}${inFlight} to Dosu memory, secrets redacted locally first. Runs in the background; memory learns from each session after it arrives.`
             : `Queue is empty${inFlight}. A run now would only pick up sessions that finish from here; hooks already do that automatically.`;
   const title =
     mode === "clear"
-      ? "Clear study history?"
+      ? "Clear shipping history?"
       : mode === "stop"
-        ? "Stop studying?"
+        ? "Stop shipping?"
         : mode === "resume"
-          ? "Resume studying?"
-          : "Start studying now?";
+          ? "Resume shipping?"
+          : "Ship sessions now?";
   const verb =
     mode === "clear" ? "clear" : mode === "stop" ? "stop" : mode === "resume" ? "resume" : "start";
   const maxInner = Math.max(20, Math.min(width, contentWidth()) - 4);
@@ -406,6 +371,11 @@ export function confirmBox(
   ];
 }
 
+/** Whether the ledger holds anything for `c` to clear. */
+function hasSettled(status: SyncStatus): boolean {
+  return Object.keys(status.state.sessions).length > 0;
+}
+
 /** Render the full sync-status block, left-anchored within `width` columns. Returns the frame's
  * lines plus the list height it settled on, so the key handler's scroll bound matches what is
  * on screen. */
@@ -416,12 +386,10 @@ export function buildActivityFrame(
   backlog: SyncBacklog | null = null,
   pane: ActivityViewPane = DEFAULT_PANE,
   queued: readonly AgentSession[] = [],
-  /** Lifetime total_mined when the current run started; see progressLine. */
-  studiedBeforeRun = 0,
+  /** Lifetime total_shipped when the current run started; see progressLine. */
+  shippedBeforeRun = 0,
   /** Live (still-active) sessions for the Open tab. */
   open: readonly AgentSession[] = [],
-  /** Within-batch step progress folded from the learner's log traces. */
-  runProgress: RunProgress | null = null,
   /** Friendly project names by `harness/id` key; rows fall back to the stored slug. */
   projectNames: Readonly<Record<string, string>> = {},
   /** Session display names by `harness/id` key; rows fall back to the session id. */
@@ -430,9 +398,12 @@ export function buildActivityFrame(
    * the list shrinks to whatever is left. Omitted: the fixed default window heights. */
   frameLines?: number,
 ): { lines: string[]; listHeight: number } {
-  const studied = status.state.watermark
-    ? `Studied sessions up to ${localTime(status.state.watermark)}`
-    : "Nothing studied yet";
+  // Shipped history is the ledger's, one row per session (its latest pass).
+  const shipped = shippedSessions(status.state);
+  const lastShipped = shipped.at(-1);
+  const shippedSummary = lastShipped
+    ? `Last shipped a session at ${localTime(lastShipped.at)}`
+    : "Nothing shipped yet";
   // Queue and open-session counts live in the tab bar, not a header line.
   const queueDetail: string[] = [];
   if (status.backoffUntil) {
@@ -440,32 +411,15 @@ export function buildActivityFrame(
     queueDetail.push(`retrying after ${localTime(status.backoffUntil)} \u00B7 s syncs now`);
   }
 
-  // Run-scoped drain progress: batch commits advance it, and within a batch
-  // the learner's per-session steps do, so a one-batch queue still shows motion.
-  let progress: string | null = null;
-  if (status.running && backlog) {
-    const studiedDelta = Math.max(0, (status.state.total_mined ?? 0) - studiedBeforeRun);
-    // Distinct-opened minus the in-flight one, shifting ready → done rather
-    // than growing the total (the gate only re-logs when a batch commits).
-    const stepDone = runProgress
-      ? Math.min(Math.max(0, runProgress.read.size - 1), runProgress.batch - 1, backlog.ready)
-      : 0;
-    progress = progressLine(
-      studiedDelta + stepDone,
-      Math.max(0, backlog.ready - stepDone),
-      width,
-      runProgress?.notes ?? 0,
-    );
-  }
-
-  // A gateway refusal (consent off, credit limit) explains an Idle-with-
-  // backlog view; the message is prose and easily outruns the frame, so wrap.
-  const refusal = !status.running && status.state.last_refusal;
-  const refusalLines = refusal
-    ? wrapLine(`! Studying paused: ${refusal.message} (${localTime(refusal.at)})`, width).map(
-        (line) => pc.yellow(line),
-      )
-    : [];
+  // Run-scoped drain progress, advanced as each batch commits (a batch ships in seconds).
+  const progress =
+    status.running && backlog
+      ? progressLine(
+          Math.max(0, (status.state.total_shipped ?? 0) - shippedBeforeRun),
+          backlog.ready,
+          width,
+        )
+      : null;
 
   // Rows clip to the frame width so nothing runs past the tab rule — unless the f toggle
   // asked for full rows, which render unclipped and wrap below instead. One toggle, every tab:
@@ -473,16 +427,12 @@ export function buildActivityFrame(
   const fullRows = Boolean(pane.fullRows);
   const withName = <T extends { project?: string }>(item: T, key: string): T =>
     projectNames[key] ? { ...item, project: projectNames[key] } : item;
-  // A session studied again after new activity appends another history record;
-  // the list shows only its latest pass (analytics still count every pass).
-  const latestPass = new Map<string, StudiedSessionRecord>();
-  for (const r of status.state.mined_sessions ?? []) latestPass.set(r.session, r);
-  const studiedRows = [...latestPass.values()].map((r) => {
+  const shippedRows = shipped.map((r) => {
     const record = withName(r, r.session);
     const name = sessionNames[r.session];
     return fullRows
-      ? formatStudiedRow(record, true, name)
-      : formatActivityLine(formatStudiedRow(record, false, name), width);
+      ? formatShippedRow(record, true, name)
+      : formatActivityLine(formatShippedRow(record, false, name), width);
   });
   const sessionRow = (session: AgentSession) => {
     const key = `${session.harness}/${session.id}`;
@@ -501,12 +451,7 @@ export function buildActivityFrame(
         ? queuedRows
         : pane.tab === "open"
           ? openRows
-          : studiedRows;
-  // Pre-history runs only advanced the watermark, so studying may have
-  // happened without leaving records — say so instead of denying it.
-  const emptyStudied = status.state.watermark
-    ? "No sessions recorded yet. History starts with the next study run."
-    : "No studied sessions yet.";
+          : shippedRows;
   const empty =
     pane.tab === "activity"
       ? "No sync activity in the log yet."
@@ -514,21 +459,20 @@ export function buildActivityFrame(
         ? "Queue empty. Finished agent sessions appear here."
         : pane.tab === "open"
           ? "No open sessions. Live agent sessions sit here until they go quiet."
-          : emptyStudied;
+          : "No sessions shipped yet.";
   // Header and footer are built first: on a short terminal they must always fit, so the list
   // gets whatever room is left rather than pushing the breadcrumb and tabs off the top.
   const header = [
     breadcrumb(["home", "activity"], width),
     "",
     statusLine(status),
-    pc.dim(studied),
+    pc.dim(shippedSummary),
     ...(queueDetail.length > 0
       ? wrapLine(queueDetail.join(" \u00B7 "), width).map((line) => pc.dim(line))
       : []),
     ...(progress ? [progress] : []),
-    ...refusalLines,
     "",
-    ...tabBar(pane.tab, queued.length, open.length, latestPass.size, width),
+    ...tabBar(pane.tab, queued.length, open.length, shipped.length, width),
   ];
   const footer = [
     "",
@@ -537,7 +481,7 @@ export function buildActivityFrame(
       ? centerBlock(confirmBox(queued.length, backlog, width, pane.confirm), width)
       : [
           // s stops a live run, resumes a paused pipeline, or starts a sync while idle;
-          // f flips between clipped and full (wrapped) rows; c (idle, something studied)
+          // f flips between clipped and full (wrapped) rows; c (idle, something shipped)
           // clears the history so the next run starts from scratch. Wrapped: on a narrow
           // frame the full legend can outrun the width.
           ...wrapLine(
@@ -546,7 +490,7 @@ export function buildActivityFrame(
               "\u2191\u2193 scroll",
               fullRows ? "f clip" : "f full rows",
               status.running ? "s stop" : status.state.paused ? "s resume" : "s sync now",
-              ...(!status.running && status.state.watermark ? ["c clear"] : []),
+              ...(!status.running && hasSettled(status) ? ["c clear"] : []),
               "esc back",
             ].join(" \u00B7 "),
             width,
@@ -592,7 +536,7 @@ export function buildActivityFrame(
 export interface ActivityViewIO {
   input?: NodeJS.ReadStream;
   output?: NodeJS.WriteStream;
-  /** Lock/watermark state without the log read; called every poll. */
+  /** Lock and ledger state without the log read; called every poll. */
   getStatus?: () => SyncStatus;
   /** Full debug-log contents; read once to seed activity and backlog. */
   readLog?: () => string;
@@ -604,9 +548,9 @@ export interface ActivityViewIO {
   stopSync?: (pid: number) => boolean;
   /** Persists the pause switch hooks honor; stop sets it, resume clears it. */
   setPaused?: (paused: boolean) => void;
-  /** Forgets the watermark and study history; pressing `c` while idle calls this. */
+  /** Forgets the ledger (shipping history included); pressing `c` while idle calls this. */
   clearHistory?: () => void;
-  /** The scanned backlog for the Queued and Open tabs; re-run when the watermark moves. */
+  /** The scanned backlog for the Queued and Open tabs; re-run when the ledger changes. */
   listBacklog?: () => SessionBacklog;
   /** Friendly project and session names by `harness/id` key for the session rows. */
   rowNames?: (status: SyncStatus, backlog: SessionBacklog) => RowNames;
@@ -623,7 +567,7 @@ interface RowNames {
 const TITLE_READS_PER_DRAW = 25;
 
 /** Default projectNames source: resolve real working directories (cached on disk) for live
- * sessions, cache-only + slug un-munging for studied history, shown as the directory basename. */
+ * sessions, cache-only + slug un-munging for shipped history, shown as the directory basename. */
 function createRowNamer(): (status: SyncStatus, backlog: SessionBacklog) => RowNames {
   const dirs = createProjectDirResolver();
   const titles = createSessionTitleResolver();
@@ -658,10 +602,10 @@ function createRowNamer(): (status: SyncStatus, backlog: SessionBacklog) => RowN
     }
     // Newest first: the view shows the end of the history, so the visible
     // rows must win the per-draw budget over the offscreen backlog.
-    for (const r of [...(status.state.mined_sessions ?? [])].reverse()) {
+    for (const r of shippedSessions(status.state).reverse()) {
       const key = r.session;
       if (!names.projects[key]) {
-        const dir = dirs.cached(key) ?? (r.project ? fromSlug(r.project) : null);
+        const dir = dirs.cached(key) ?? (r.workspace ? fromSlug(r.workspace) : null);
         if (dir) names.projects[key] = basename(dir);
       }
       if (!names.titles[key]) {
@@ -673,7 +617,7 @@ function createRowNamer(): (status: SyncStatus, backlog: SessionBacklog) => RowN
           const session = reconstructSession(
             key.slice(0, slash) as AgentSession["harness"],
             key.slice(slash + 1),
-            r.project,
+            r.workspace,
           );
           if (session) title(key, session);
         }
@@ -719,29 +663,26 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
   const seed = readLog();
   let activity = appendSyncActivity([], seed);
   let backlog = latestBacklog(seed);
-  // Seeded from the full log so a view opened mid-run starts at the true step.
-  let runProgress = foldRunProgress(null, seed);
   let tab: ActivityViewTab = "activity";
   let scroll = 0;
   let fullRows = false;
   let confirmSync: SyncConfirmMode | null = null;
   let status = getStatus();
-  // Rescan on watermark moves and tab switches, not every poll (a scan
+  // Rescan when a run settles something and on tab switches, not every poll (a scan
   // stats every local session file).
   let sessions = listBacklog();
-  let queuedWatermark = status.state.watermark;
+  let queuedStamp = ledgerStamp(status.state);
 
   const follower = createFollower((chunk) => {
     activity = appendSyncActivity(activity, chunk);
     backlog = latestBacklog(chunk) ?? backlog;
-    runProgress = foldRunProgress(runProgress, chunk);
   });
 
   const activeListLength = () => {
     if (tab === "activity") return activity.length;
     if (tab === "queued") return sessions.queued.length;
     if (tab === "open") return sessions.open.length;
-    return (status.state.mined_sessions ?? []).length;
+    return shippedSessions(status.state).length;
   };
   // What the last paint actually showed: the renderer sizes the list to the terminal (and, in
   // full-rows mode, to how far the visible rows wrapped), so the scroll bound reads it back.
@@ -750,23 +691,23 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
 
   // Identical frames skip the terminal write entirely (most ticks change nothing).
   let lastFrame: string | null = null;
-  // The run's total_mined baseline so the bar is run-scoped; persisted in sync state, with the
-  // first-observation snapshot as fallback.
-  let studiedBeforeRun: number | null = null;
+  // The run's total_shipped baseline so the bar is run-scoped; persisted in sync state, with
+  // the first-observation snapshot as fallback.
+  let shippedBeforeRun: number | null = null;
   const draw = () => {
     status = getStatus();
     if (status.running) {
       const run = status.state.run;
       if (run && run.pid === status.pid) {
-        studiedBeforeRun = run.baseline_mined;
+        shippedBeforeRun = run.baseline_shipped;
       } else {
-        studiedBeforeRun ??= status.state.total_mined ?? 0;
+        shippedBeforeRun ??= status.state.total_shipped ?? 0;
       }
     } else {
-      studiedBeforeRun = null;
+      shippedBeforeRun = null;
     }
-    if (status.state.watermark !== queuedWatermark) {
-      queuedWatermark = status.state.watermark;
+    if (ledgerStamp(status.state) !== queuedStamp) {
+      queuedStamp = ledgerStamp(status.state);
       sessions = listBacklog();
     }
     // A run starting or ending elsewhere makes the pending confirmation moot.
@@ -783,9 +724,8 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
       backlog,
       { tab, scroll, confirm: confirmSync ?? undefined, fullRows },
       sessions.queued,
-      studiedBeforeRun ?? 0,
+      shippedBeforeRun ?? 0,
       sessions.open,
-      runProgress,
       rowNames.projects,
       rowNames.titles,
       frameMaxLines(output.rows ?? 24),
@@ -846,27 +786,32 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
             const mode = confirmSync;
             confirmSync = null;
             let note: string;
-            if (mode === "clear") {
-              // The watermark going null re-gates every local session; draw() rescans on the
-              // change so the Queued tab fills immediately.
-              clearHistory();
-              studiedBeforeRun = null;
-              note =
-                "[sync] study history cleared \u00B7 the next run reads every local session again";
-            } else if (mode === "stop") {
-              // Kill first, then flip the pause switch: a dying run's last state save
-              // could otherwise overwrite the flag with its pre-pause snapshot.
-              const ok = status.pid !== undefined && stopSync(status.pid);
-              if (ok) setPaused(true);
-              note = ok
-                ? "[sync] studying stopped \u00B7 paused until you resume"
-                : "[sync] could not stop the run \u00B7 it may have just finished";
-            } else {
-              if (mode === "resume") setPaused(false);
-              const ok = startSync();
-              note = ok
-                ? "[sync] sync requested \u00B7 starting a background run"
-                : "[sync] could not start a background run \u00B7 try `dosu knowledge sync`";
+            try {
+              if (mode === "clear") {
+                // An empty ledger makes every local session pending; draw() rescans on the
+                // change so the Queued tab fills immediately.
+                clearHistory();
+                shippedBeforeRun = null;
+                note =
+                  "[sync] shipping history cleared \u00B7 the next run ships the last 30 days again";
+              } else if (mode === "stop") {
+                // Kill first, then flip the pause switch: a dying run's last state save
+                // could otherwise overwrite the flag with its pre-pause snapshot.
+                const ok = status.pid !== undefined && stopSync(status.pid);
+                if (ok) setPaused(true);
+                note = ok
+                  ? "[sync] shipping stopped \u00B7 paused until you resume"
+                  : "[sync] could not stop the run \u00B7 it may have just finished";
+              } else {
+                if (mode === "resume") setPaused(false);
+                const ok = startSync();
+                note = ok
+                  ? "[sync] sync requested \u00B7 starting a background run"
+                  : "[sync] could not start a background run \u00B7 try `dosu knowledge sync`";
+              }
+            } catch (err) {
+              // The state file could not be saved (one it cannot read is never saved over).
+              note = `[sync] could not save the setting \u00B7 ${err instanceof Error ? err.message : String(err)}`;
             }
             // Immediate feed feedback; the real run's log lines follow.
             activity = appendSyncActivity(
@@ -889,9 +834,9 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
           confirmSync = syncConfirmMode(status);
           draw();
         } else if (action === "clear") {
-          // Only offered when idle with something studied; otherwise the key is inert, matching
+          // Only offered when idle with something shipped; otherwise the key is inert, matching
           // the legend.
-          if (!status.running && status.state.watermark) {
+          if (!status.running && hasSettled(status)) {
             confirmSync = "clear";
             draw();
           }
@@ -899,7 +844,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
           tab = cycleTab(tab, action === "tab" ? 1 : -1);
           scroll = 0;
           // Rescan on entry: open sessions drain into the queue without the
-          // watermark ever moving.
+          // ledger ever changing.
           if (tab === "queued" || tab === "open") sessions = listBacklog();
           draw();
         } else if (action === "full") {

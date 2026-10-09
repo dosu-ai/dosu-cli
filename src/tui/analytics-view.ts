@@ -1,11 +1,12 @@
-/** Standalone Analytics screen: all-time studying numbers plus backend page analytics. Pure
+/** Standalone Analytics screen: all-time shipping numbers plus backend page analytics. Pure
  * render/reduce functions wired to injectable IO. */
 
 import pc from "picocolors";
 import { createTypedClient, type TypedClient } from "../client/trpc";
 import { loadConfig } from "../config/config";
-import { formatTokenCount, getSyncStatus, type SyncStatus } from "../sync/status";
-import type { SyncState } from "../sync/watermark";
+import { displayProjectKey } from "../sessions/project";
+import { type SyncState, shippedSessions } from "../sync/state";
+import { getSyncStatus, type SyncStatus } from "../sync/status";
 import { enterAltScreen } from "./alt-screen";
 import { breadcrumb, contentWidth, frameMaxLines, frameTopMargin, tabStrip } from "./layout";
 import { parseKeys } from "./menu";
@@ -22,7 +23,7 @@ const CURSOR_HOME = `${ESC}[H`;
 const CLEAR_BELOW = `${ESC}[0J`;
 const CLEAR_EOL = `${ESC}[K`;
 
-/** Relaxed poll: analytics only move when a study batch completes. */
+/** Relaxed poll: analytics only move when a ship batch completes. */
 const ANALYTICS_VIEW_POLL_MS = 1000;
 
 /** The most report lines shown at once (the scroll window). Sized so the pages tab's two
@@ -127,33 +128,26 @@ function loadPageStatsFromConfig(): Promise<PageStats | null> {
 
 const label = (text: string) => text.padEnd(26);
 
-/** Overview tab: all-time totals. "Investigation distilled" is what the studied investigations
- * originally cost to learn; future reads reuse that. */
+/** Overview tab: all-time totals. */
 export function overviewRows(state: SyncState): string[] {
-  const studiedTotal = state.total_mined ?? 0;
-  const notes = state.total_notes ?? 0;
-  const tokens = state.total_learning_tokens ?? 0;
-  if (studiedTotal === 0 && notes === 0) return [];
-  const rows = [
-    `${label("Sessions studied")}${studiedTotal}`,
-    `${label("Suggested pages")}${notes}`,
-  ];
-  if (tokens > 0) {
-    rows.push(`${label("Investigation distilled")}${formatTokenCount(tokens)} tokens`);
-  }
-  return rows;
+  const shipped = state.total_shipped ?? 0;
+  return shipped === 0 ? [] : [`${label("Sessions shipped")}${shipped}`];
 }
 
-/** Projects tab: recent studied-session history bucketed by project, under column labels. */
+/** Projects tab: recent shipped sessions bucketed by project key, under column labels. History
+ * carried over from the watermark state has no key, only the scanner's workspace. */
 export function projectRows(state: SyncState): string[] {
-  const byProject = new Map<string, number>();
-  for (const record of state.mined_sessions ?? []) {
-    const key = record.project ?? "(unknown)";
-    byProject.set(key, (byProject.get(key) ?? 0) + 1);
+  const byProject = new Map<string, { name: string; count: number }>();
+  for (const record of shippedSessions(state)) {
+    const key = record.project ?? record.workspace ?? "";
+    const name = record.project ? displayProjectKey(record.project) : record.workspace;
+    const bucket = byProject.get(key) ?? { name: name ?? "(unknown)", count: 0 };
+    bucket.count += 1;
+    byProject.set(key, bucket);
   }
-  const data = [...byProject.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([project, count]) => `${label(clip(project, 24))}${count}`);
+  const data = [...byProject.values()]
+    .sort((a, b) => b.count - a.count)
+    .map(({ name, count }) => `${label(clip(name, 24))}${count}`);
   return data.length > 0 ? [`${label("Project")}Sessions`, ...data] : [];
 }
 
@@ -217,9 +211,9 @@ export function renderAnalyticsFrame(
   const { visible, above, below } = windowReport(rows, scroll, height);
   const empty =
     tab === "overview"
-      ? "No analytics yet. They appear after the first study run."
+      ? "No analytics yet. They appear after the first sessions ship."
       : tab === "projects"
-        ? "No per-project history yet. It fills in as sessions are studied."
+        ? "No per-project history yet. It fills in as sessions ship."
         : pagesPending
           ? "Loading page analytics..."
           : "No page analytics yet.";
@@ -256,7 +250,7 @@ export function renderAnalyticsFrame(
 export interface AnalyticsViewIO {
   input?: NodeJS.ReadStream;
   output?: NodeJS.WriteStream;
-  /** Lock/watermark state without the log read; called every poll. */
+  /** Lock and ledger state without the log read; called every poll. */
   getStatus?: () => SyncStatus;
   /** Injectable page analytics fetch for tests; defaults to the backend. */
   loadPageStats?: () => Promise<PageStats | null>;

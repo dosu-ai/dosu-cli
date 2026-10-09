@@ -26,14 +26,16 @@ const writeFileAtomic = writeFileAtomicRaw as {
 type JsonConfig = Record<string, any>;
 
 /**
- * Returns the MCP endpoint URL with deployment ID encoded in the path.
+ * Returns the MCP endpoint URL with deployment ID encoded in the path: the v2, memory-era tool
+ * surface (search_memory, get_memory_evidence).
  */
 export function mcpURL(deploymentID: string): string {
-  return `${getBackendURL()}/v1/mcp/deployments/${deploymentID}`;
+  return `${getBackendURL()}/v2/mcp/deployments/${deploymentID}`;
 }
 
 /**
- * Returns the base MCP endpoint URL without a deployment ID (for OSS mode).
+ * Returns the base MCP endpoint URL without a deployment ID (for OSS mode). Stays on v1: a
+ * self-hosted backend may predate the v2 surface, and there is no way to ask it from here.
  */
 function mcpBaseURL(): string {
   return `${getBackendURL()}/v1/mcp`;

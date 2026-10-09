@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { stdioServer } from "../proxy-entry";
 import { createJSONProvider } from "./base";
 
 export const FactoryProvider = () =>
@@ -10,5 +11,6 @@ export const FactoryProvider = () =>
     paths: ["~/.factory"],
     globalPath: "~/.factory/mcp.json",
     topKey: "mcpServers",
+    buildStdioServer: (proxy) => ({ type: "stdio", ...stdioServer(proxy) }),
     localConfigPath: (cwd) => join(cwd, ".factory", "mcp.json"),
   });

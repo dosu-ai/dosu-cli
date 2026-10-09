@@ -9,3 +9,22 @@ import { join } from "node:path";
 // own empty config home; tests that need specific config contents (e.g.
 // config.test.ts) still override this per-test.
 process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "dosu-vitest-"));
+
+// Likewise the agents' own config: a test that reaches a hook or command installer without
+// faking the home must write into a scratch ~/.claude (or ~/.codex, ~/.cursor), never the
+// developer's. Tests that need a particular home still set their own.
+process.env.HOME = mkdtempSync(join(tmpdir(), "dosu-vitest-home-"));
+delete process.env.CLAUDE_CONFIG_DIR;
+delete process.env.CODEX_HOME;
+
+// And from the agent running the tests: its shell names its own session, which `dosu memory` and
+// the MCP proxy would otherwise read as the session of the code under test.
+for (const name of [
+  "CLAUDE_CODE_SESSION_ID",
+  "CODEX_THREAD_ID",
+  "DOSU_OPENCODE_SESSION",
+  "PI_SESSION_ID",
+  "PI_SESSION_FILE",
+]) {
+  delete process.env[name];
+}

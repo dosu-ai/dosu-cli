@@ -1,7 +1,17 @@
-import { spawnSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import {
+  appendFileSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -69,6 +79,11 @@ describe("CLI", () => {
   it("skips background notices for upgrade", () => {
     expect(shouldRunBackgroundChecks("upgrade")).toBe(false);
     expect(shouldRunBackgroundChecks("status")).toBe(true);
+  });
+
+  it("skips background notices for the prompt-submit hook", () => {
+    // Runs on every prompt while the user waits: no update check, no stderr notice.
+    expect(shouldRunBackgroundChecks("knowledge context")).toBe(false);
   });
 
   it("has login command", () => {
@@ -331,6 +346,212 @@ describe("CLI", () => {
         rmSync(configRoot, { recursive: true, force: true });
       }
     },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "reads the prompt-submit hook payload from a redirected file",
+    async () => {
+      // `dosu knowledge context < payload.json` is how the hook is tested by hand. Under Bun a
+      // file on stdin read as a stream after the CLI's startup awaits comes back empty, and
+      // the hook then silently injects nothing.
+      const root = mkdtempSync(join(tmpdir(), "dosu-cli-context-hook-"));
+      mkdirSync(join(root, "dosu-cli"), { recursive: true });
+      writeFileSync(
+        join(root, "dosu-cli", "config.json"),
+        JSON.stringify({
+          schema_version: 2,
+          active_account: {
+            user_id: "u",
+            session: { access_token: "t", refresh_token: "r", expires_at: 4102444800 },
+            target: { api_key: "sk_user_test", deployment_id: "d" },
+          },
+        }),
+      );
+      const payload = join(root, "payload.json");
+      writeFileSync(
+        payload,
+        JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          session_id: "s",
+          prompt: "reduce the cost of the staleness agent",
+          cwd: root,
+        }),
+      );
+      const server = createServer((_req, res) => {
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ digest: "## Task Memory (Dosu)" }));
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const { port } = server.address() as AddressInfo;
+      try {
+        const child = spawn("bun", ["run", "src/index.ts", "knowledge", "context"], {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            CI: "1",
+            DOSU_DEV: "false",
+            DOSU_BACKEND_URL_OVERRIDE: `http://127.0.0.1:${port}`,
+            NODE_ENV: "test",
+            XDG_CONFIG_HOME: root,
+          },
+          stdio: [openSync(payload, "r"), "pipe", "pipe"],
+        });
+        let stdout = "";
+        child.stdout?.on("data", (chunk) => {
+          stdout += chunk;
+        });
+        await new Promise((resolve) => child.on("close", resolve));
+        expect(JSON.parse(stdout)).toEqual({
+          hookSpecificOutput: {
+            hookEventName: "UserPromptSubmit",
+            additionalContext: "## Task Memory (Dosu)",
+          },
+        });
+      } finally {
+        server.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    15_000,
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "keeps an incognito agent's prompts and memory tool calls from the prompt-submit hook",
+    async () => {
+      // `dosu knowledge incognito on claude`, read from the state file the hook loads anyway.
+      const root = mkdtempSync(join(tmpdir(), "dosu-cli-context-incognito-"));
+      mkdirSync(join(root, "dosu-cli"), { recursive: true });
+      writeFileSync(
+        join(root, "dosu-cli", "config.json"),
+        JSON.stringify({
+          schema_version: 2,
+          active_account: {
+            user_id: "u",
+            session: { access_token: "t", refresh_token: "r", expires_at: 4102444800 },
+            target: { api_key: "sk_user_test", deployment_id: "d" },
+          },
+        }),
+      );
+      writeFileSync(
+        join(root, "dosu-cli", "knowledge-sync.json"),
+        JSON.stringify({
+          schema_version: 3,
+          sessions: {},
+          consecutive_failures: 0,
+          incognito_agents: ["claude"],
+        }),
+      );
+      let requests = 0;
+      const server = createServer((_req, res) => {
+        requests++;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ digest: "## Task Memory (Dosu)" }));
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const { port } = server.address() as AddressInfo;
+      const hook = async (event: Record<string, unknown>): Promise<string> => {
+        const payload = join(root, "payload.json");
+        writeFileSync(payload, JSON.stringify({ session_id: "s", cwd: root, ...event }));
+        const child = spawn("bun", ["run", "src/index.ts", "knowledge", "context"], {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            CI: "1",
+            DOSU_DEV: "false",
+            DOSU_BACKEND_URL_OVERRIDE: `http://127.0.0.1:${port}`,
+            NODE_ENV: "test",
+            XDG_CONFIG_HOME: root,
+          },
+          stdio: [openSync(payload, "r"), "pipe", "pipe"],
+        });
+        let stdout = "";
+        child.stdout?.on("data", (chunk) => {
+          stdout += chunk;
+        });
+        await new Promise((resolve) => child.on("close", resolve));
+        return stdout;
+      };
+      try {
+        const prompt = await hook({ hook_event_name: "UserPromptSubmit", prompt: "fix the build" });
+        const tool = await hook({
+          hook_event_name: "PreToolUse",
+          tool_name: "mcp__dosu__search_memory",
+          tool_input: { query: "q" },
+          tool_use_id: "toolu_1",
+        });
+
+        expect(prompt).toBe("");
+        expect(JSON.parse(tool).hookSpecificOutput).toMatchObject({
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: expect.stringContaining("dosu knowledge incognito off claude"),
+        });
+        expect(requests).toBe(0);
+      } finally {
+        server.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    20_000,
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "settles a session of an incognito agent only its own processes can see, signed in or not",
+    async () => {
+      // Claude Code run with CLAUDE_CONFIG_DIR: `incognito off` from a plain shell cannot list
+      // this session, so its prompt hook settles it while Claude Code is still listed.
+      const root = mkdtempSync(join(tmpdir(), "dosu-cli-context-outside-"));
+      const transcript = join(root, "claude-work", "projects", "-w", "s-outside.jsonl");
+      mkdirSync(dirname(transcript), { recursive: true });
+      writeFileSync(transcript, `${JSON.stringify({ type: "user" })}\n`);
+      const statePath = join(root, "dosu-cli", "knowledge-sync.json");
+      mkdirSync(dirname(statePath), { recursive: true });
+      writeFileSync(
+        statePath,
+        JSON.stringify({
+          schema_version: 3,
+          sessions: {},
+          consecutive_failures: 0,
+          incognito_agents: ["claude"],
+        }),
+      );
+      const payload = join(root, "payload.json");
+      writeFileSync(
+        payload,
+        JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          session_id: "s-outside",
+          transcript_path: transcript,
+          prompt: "fix the build",
+          cwd: root,
+        }),
+      );
+      try {
+        const child = spawn("bun", ["run", "src/index.ts", "knowledge", "context"], {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            CI: "1",
+            DOSU_DEV: "false",
+            HOME: root,
+            NODE_ENV: "test",
+            XDG_CONFIG_HOME: root,
+            CLAUDE_CONFIG_DIR: join(root, "claude-work"),
+          },
+          stdio: [openSync(payload, "r"), "pipe", "pipe"],
+        });
+        await new Promise((resolve) => child.on("close", resolve));
+        const state = JSON.parse(readFileSync(statePath, "utf-8"));
+        expect(state.sessions["claude/s-outside"]).toMatchObject({
+          outcome: "incognito",
+          by_agent: true,
+          path: transcript,
+        });
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    15_000,
   );
 
   it("preserves command output when telemetry start throws", async () => {

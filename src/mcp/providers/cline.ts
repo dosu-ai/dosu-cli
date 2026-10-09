@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { appSupportDir } from "../detect";
+import { stdioServer } from "../proxy-entry";
 import { createJSONProvider } from "./base";
 
 const extensionDir = () =>
@@ -14,6 +15,7 @@ export const ClineProvider = () =>
     paths: [extensionDir()],
     globalPath: join(extensionDir(), "settings", "cline_mcp_settings.json"),
     topKey: "mcpServers",
+    buildStdioServer: (proxy) => ({ type: "stdio", ...stdioServer(proxy), disabled: false }),
     buildServer: ({ url, headers }) => ({
       url,
       type: "streamableHttp",

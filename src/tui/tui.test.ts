@@ -137,7 +137,7 @@ import { scanAgentSessions } from "../sessions/scan";
 import { dosuAgentsSectionState, inGitWorkTree } from "../setup/agents-md-step";
 import { runSetup, runSwitchTarget } from "../setup/flow";
 import { lockPath } from "../sync/lock";
-import { loadSyncState, saveSyncState } from "../sync/watermark";
+import { emptySyncState, loadSyncState, saveSyncState } from "../sync/state";
 import { runActivityView } from "./activity-view";
 import { runAnalyticsView } from "./analytics-view";
 import { frameTopMargin } from "./layout";
@@ -214,6 +214,9 @@ beforeEach(() => {
         resolve: (s: AgentSession) => (s.project ? `/repo/${s.project}` : null),
         resolveRepo: (s: AgentSession) => (s.project ? `github.com/acme/${s.project}` : null),
         resolveBranch: () => "main",
+        resolveBranchAt: async () => "main",
+        resolveProject: () => null,
+        resolveProjectAt: () => ({ project: "path:/repo", rule: "path" }),
         cached: () => null,
         flush: vi.fn(),
       }) as ReturnType<typeof createProjectDirResolver>,
@@ -796,9 +799,9 @@ describe("runTUI", () => {
     await runTUI();
 
     const opts = mockMenuSelect.mock.calls[0]?.[1] ?? [];
-    expect(opts.find((o) => o.value === "sync")?.label).toContain("\uD83D\uDCDA studying sessions");
+    expect(opts.find((o) => o.value === "sync")?.label).toContain("\uD83D\uDCDA shipping sessions");
     // The welcome banner shows the sync row too.
-    expect(stdoutWrites.join("")).toContain("studying sessions...");
+    expect(stdoutWrites.join("")).toContain("shipping sessions...");
   });
 
   it("runs in the alternate screen on a TTY and restores the shell on exit", async () => {
@@ -975,8 +978,7 @@ describe("runTUI", () => {
       makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
     );
     saveSyncState({
-      schema_version: 1,
-      watermark: null,
+      ...emptySyncState(),
       consecutive_failures: 0,
       project_filter: ["/repo/dosu-cli"],
     });
@@ -1011,8 +1013,7 @@ describe("runTUI", () => {
       makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
     );
     saveSyncState({
-      schema_version: 1,
-      watermark: null,
+      ...emptySyncState(),
       consecutive_failures: 0,
       repo_filter: ["github.com/acme/gone"],
     });
@@ -1087,8 +1088,7 @@ describe("runTUI", () => {
   ])("settings hints a %j repo scope as %s", async (repoFilter, hint) => {
     writeRealConfig(makeCfg({}));
     saveSyncState({
-      schema_version: 1,
-      watermark: null,
+      ...emptySyncState(),
       consecutive_failures: 0,
       repo_filter: repoFilter,
     });

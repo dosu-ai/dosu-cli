@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   captureCursorStop,
   captureHookSession,
+  endedSessionOf,
   readCapturedSession,
   readHookStdin,
   recordCapturedSession,
@@ -28,29 +29,35 @@ afterEach(() => {
 const NOW = new Date("2026-09-29T12:00:00.000Z");
 
 describe("recordCapturedSession", () => {
-  it("persists per session and keeps an earlier branch through a detached turn", () => {
+  it("persists per session the branch and time of its first turn, through later turns", () => {
+    const LATER = new Date("2026-09-29T12:30:00.000Z");
     expect(readCapturedSession("cursor/abc", configDir)).toBeNull();
     expect(
       recordCapturedSession("cursor/abc", { dir: "/w", branch: "feat/x" }, configDir, NOW),
     ).toBe(true);
-    recordCapturedSession("cursor/abc", { dir: "/w", branch: null }, configDir, NOW);
+    recordCapturedSession("cursor/abc", { dir: "/w", branch: null }, configDir, LATER);
     expect(readCapturedSession("cursor/abc", configDir)).toEqual({
       dir: "/w",
       branch: "feat/x",
-      at: NOW.toISOString(),
+      since: NOW.toISOString(),
+      at: LATER.toISOString(),
     });
 
-    recordCapturedSession("cursor/abc", { branch: "main" }, configDir, NOW);
-    expect(readCapturedSession("cursor/abc", configDir)?.branch).toBe("main");
+    // A later turn on another branch: the session began on the first one.
+    recordCapturedSession("cursor/abc", { branch: "main" }, configDir, LATER);
+    expect(readCapturedSession("cursor/abc", configDir)?.branch).toBe("feat/x");
     expect(readCapturedSession("cursor/other", configDir)).toBeNull();
   });
 
-  it("records a detached first turn with its directory only", () => {
+  it("records a detached first turn with its directory only, and a later turn's branch", () => {
     recordCapturedSession("cursor/d", { dir: "/w", branch: null }, configDir, NOW);
     expect(readCapturedSession("cursor/d", configDir)).toEqual({
       dir: "/w",
+      since: NOW.toISOString(),
       at: NOW.toISOString(),
     });
+    recordCapturedSession("cursor/d", { branch: "main" }, configDir, NOW);
+    expect(readCapturedSession("cursor/d", configDir)?.branch).toBe("main");
   });
 
   it("rejects keys that could escape the capture directory", () => {
@@ -89,6 +96,7 @@ describe("captureCursorStop", () => {
     expect(readCapturedSession("cursor/uuid-1", configDir)).toEqual({
       dir: "/work/app",
       branch: "feat/cursor",
+      since: NOW.toISOString(),
       at: NOW.toISOString(),
     });
   });
@@ -117,6 +125,7 @@ describe("captureCursorStop", () => {
       expect(captureCursorStop(stop, { configDir, now: NOW })).toBe(true);
       expect(readCapturedSession("cursor/uuid-1", configDir)).toEqual({
         dir: outsideRepo,
+        since: NOW.toISOString(),
         at: NOW.toISOString(),
       });
     } finally {
@@ -181,26 +190,152 @@ describe("captureHookSession", () => {
         throw new Error("boom");
       },
     } as unknown as NodeJS.ReadableStream;
-    await expect(captureHookSession(broken)).resolves.toBeUndefined();
+    await expect(captureHookSession(broken)).resolves.toBeNull();
     const throwsString = {
       on: () => {
         throw "boom";
       },
     } as unknown as NodeJS.ReadableStream;
-    await expect(captureHookSession(throwsString)).resolves.toBeUndefined();
+    await expect(captureHookSession(throwsString)).resolves.toBeNull();
   });
 
   it("ignores an unreadable payload", async () => {
     const stream = new PassThrough();
     const done = captureHookSession(stream);
     stream.end("not json");
-    await expect(done).resolves.toBeUndefined();
+    await expect(done).resolves.toBeNull();
   });
 
-  it("reads and ignores a non-Cursor payload", async () => {
+  it("reads and ignores a payload that is not an end event", async () => {
     const stream = new PassThrough();
     const done = captureHookSession(stream);
     stream.end('{"session_id":"claude"}');
-    await expect(done).resolves.toBeUndefined();
+    await expect(done).resolves.toBeNull();
+  });
+
+  it("names the session a Claude Code SessionEnd hook reports", async () => {
+    const stream = new PassThrough();
+    const done = captureHookSession(stream);
+    stream.end(
+      JSON.stringify({
+        session_id: "0a1b2c3d-4e5f-6789-abcd-ef0123456789",
+        transcript_path:
+          "/home/u/.claude/projects/-work-app/0a1b2c3d-4e5f-6789-abcd-ef0123456789.jsonl",
+        cwd: "/work/app",
+        hook_event_name: "SessionEnd",
+        reason: "exit",
+      }),
+    );
+    await expect(done).resolves.toEqual({
+      harness: "claude",
+      id: "0a1b2c3d-4e5f-6789-abcd-ef0123456789",
+      path: "/home/u/.claude/projects/-work-app/0a1b2c3d-4e5f-6789-abcd-ef0123456789.jsonl",
+    });
+  });
+});
+
+describe("endedSessionOf", () => {
+  const claudeEnd = {
+    session_id: "abc-123",
+    transcript_path: "/home/u/.claude/projects/-work-app/abc-123.jsonl",
+    hook_event_name: "SessionEnd",
+  };
+
+  it("reads a Claude Code SessionEnd", () => {
+    expect(endedSessionOf(claudeEnd)).toEqual({
+      harness: "claude",
+      id: "abc-123",
+      path: claudeEnd.transcript_path,
+    });
+  });
+
+  // Codex 0.160+: the payload names the session by uuid, the transcript is a rollout file.
+  const rollout = "rollout-2026-10-02T17-28-17-01a0ff29-62b1-7310-94a2-45a5c2140458";
+  const codexEnd = {
+    session_id: "01a0ff29-62b1-7310-94a2-45a5c2140458",
+    transcript_path: `/home/u/.codex/sessions/2026/10/02/${rollout}.jsonl`,
+    cwd: "/work/app",
+    hook_event_name: "SessionEnd",
+    reason: "other",
+  };
+
+  it("reads a Codex SessionEnd, naming the session by its rollout as the scanner does", () => {
+    expect(endedSessionOf(codexEnd)).toEqual({
+      harness: "codex",
+      id: rollout,
+      path: codexEnd.transcript_path,
+    });
+  });
+
+  it.each([
+    ["a per-turn Stop event", { ...claudeEnd, hook_event_name: "Stop" }],
+    ["Codex's per-turn Stop", { ...codexEnd, hook_event_name: "Stop", turn_id: "t1" }],
+    [
+      "a Codex SessionEnd whose rollout belongs to another session",
+      { ...codexEnd, session_id: "01a0ff29-0000-7000-8000-000000000000" },
+    ],
+    ["a Codex SessionEnd with no transcript", { ...codexEnd, transcript_path: null }],
+    [
+      "Cursor's per-turn stop",
+      { conversation_id: "c1", cursor_version: "1.2", status: "completed" },
+    ],
+    // Codex's own end event names a rollout file, not the session id: its reader is separate.
+    [
+      "a SessionEnd whose transcript is not named for the session",
+      { ...claudeEnd, transcript_path: "/home/u/.codex/sessions/2026/10/02/rollout-x.jsonl" },
+    ],
+    [
+      "an unsafe session id",
+      { ...claudeEnd, session_id: "../../etc", transcript_path: "/x/../../etc.jsonl" },
+    ],
+    ["no transcript path", { ...claudeEnd, transcript_path: undefined }],
+    [
+      "OpenCode's per-turn idle",
+      { agent: "opencode", hook_event_name: "opencode.session.idle", session_id: "ses_a" },
+    ],
+    ["not an object", "SessionEnd"],
+    ["null", null],
+  ])("ignores %s", (_label, payload) => {
+    expect(endedSessionOf(payload)).toBeNull();
+  });
+});
+
+describe("endedSessionOf for the Dosu pi extension", () => {
+  const piEnd = {
+    hook_event_name: "session_shutdown",
+    agent: "pi",
+    reason: "quit",
+    session_id: "01a0fdc5-a112",
+    transcript_path:
+      "/home/u/.pi/agent/sessions/--work--/2026-10-02T17-59-42-611Z_01a0fdc5-a112.jsonl",
+    cwd: "/work",
+  };
+
+  it.each(["quit", "new", "resume", "fork"])("reads a session_shutdown for %s", (reason) => {
+    expect(endedSessionOf({ ...piEnd, reason })).toEqual({
+      harness: "pi",
+      id: "01a0fdc5-a112",
+      path: piEnd.transcript_path,
+    });
+  });
+
+  it("reads any id pi accepts, and a transcript under any name (`pi --session <path>`)", () => {
+    const payload = { ...piEnd, session_id: "rv.task.2", transcript_path: "/runs/task-9.jsonl" };
+    expect(endedSessionOf(payload)).toEqual({
+      harness: "pi",
+      id: "rv.task.2",
+      path: "/runs/task-9.jsonl",
+    });
+  });
+
+  it.each([
+    // A reload tears the extension down and brings it back on the same session.
+    ["a reload", { ...piEnd, reason: "reload" }],
+    ["another agent's event of the same name", { ...piEnd, agent: "opencode" }],
+    ["an id pi would refuse", { ...piEnd, session_id: "../x" }],
+    ["a relative transcript path", { ...piEnd, transcript_path: "x_01a0fdc5-a112.jsonl" }],
+    ["no transcript (an ephemeral --no-session run)", { ...piEnd, transcript_path: undefined }],
+  ])("ignores %s", (_label, payload) => {
+    expect(endedSessionOf(payload)).toBeNull();
   });
 });

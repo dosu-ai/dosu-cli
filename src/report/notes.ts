@@ -17,12 +17,6 @@ import type { DigestTurn, ReportCandidate, ReportInventory, ReportNote } from ".
 
 export { digestsForSessions } from "./digest";
 
-export function sessionIdFromReadInput(input: unknown): string | undefined {
-  if (typeof input !== "object" || input === null || Array.isArray(input)) return undefined;
-  const id = (input as Record<string, unknown>).id;
-  return typeof id === "string" && id.trim() ? id : undefined;
-}
-
 const STOP_WORDS = new Set([
   "about",
   "after",

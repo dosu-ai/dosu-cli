@@ -1,11 +1,19 @@
-/** Point-in-time pipeline status for `dosu knowledge sync --status`: lock holder liveness,
- * watermark/backoff state, and the latest sync activity from the debug log. */
+/** Point-in-time pipeline status for `dosu knowledge sync --status`: lock holder liveness, the
+ * ledger's counts per outcome, backoff state, and the latest sync activity from the debug log. */
 
 import { readFileSync, statSync } from "node:fs";
 import { getConfigDir } from "../config/config";
 import { logger } from "../debug/logger";
 import { lockPath } from "./lock";
-import { backoffUntil, loadSyncState, type SyncState } from "./watermark";
+import {
+  backoffUntil,
+  type LedgerEntry,
+  loadSyncState,
+  outcomeCounts,
+  type SessionOutcome,
+  type SyncState,
+  settledSessions,
+} from "./state";
 
 export interface SyncStatus {
   /** True when a live process holds the sync lock. */
@@ -17,21 +25,16 @@ export interface SyncStatus {
   /** Lock file exists but its process is gone — a crashed run. */
   staleLock?: boolean;
   state: SyncState;
+  /** Ledger entries per outcome: sessions, and apart from them the subagents' transcripts. */
+  outcomes: Record<SessionOutcome, number>;
+  subagentOutcomes: Record<SessionOutcome, number>;
+  /** Sessions settled without shipping for a reason worth a look (rejected, then unsupported),
+   * oldest first. */
+  attention: Array<LedgerEntry & { session: string }>;
   /** Set when failed runs have quiet syncs waiting out a backoff. */
   backoffUntil?: string;
   /** Latest `[sync]` lines from the debug log, oldest first. */
   recentActivity: string[];
-}
-
-/** "950" / "~12k" / "~1.2M" — compact token counts for analytics lines. */
-export function formatTokenCount(tokens: number): string {
-  if (tokens < 1_000) return String(tokens);
-  if (tokens < 1_000_000) {
-    const k = tokens / 1_000;
-    return `~${k >= 100 ? Math.round(k) : k.toFixed(1).replace(/\.0$/, "")}k`;
-  }
-  const m = tokens / 1_000_000;
-  return `~${m >= 100 ? Math.round(m) : m.toFixed(1).replace(/\.0$/, "")}M`;
 }
 
 export interface SyncStatusDeps {
@@ -76,7 +79,7 @@ const ACTIVITY_LINES = 10;
 function recentSyncActivity(log: string): string[] {
   return log
     .split("\n")
-    .filter((line) => line.includes("[sync]") || line.includes("[learner]"))
+    .filter((line) => line.includes("[sync]"))
     .slice(-ACTIVITY_LINES)
     .map((line) => line.replace(/ \[(DEBUG|INFO|WARN|ERROR)\]/, ""));
 }
@@ -97,6 +100,9 @@ export function getSyncStatus(deps: SyncStatusDeps = {}): SyncStatus {
     ...(lock ? { pid: lock.pid, startedAt: lock.mtime.toISOString() } : {}),
     ...(lock && !running ? { staleLock: true } : {}),
     state,
+    outcomes: outcomeCounts(state),
+    subagentOutcomes: outcomeCounts(state, "subagents"),
+    attention: [...settledSessions(state, "rejected"), ...settledSessions(state, "unsupported")],
     ...(retryAt ? { backoffUntil: retryAt.toISOString() } : {}),
     recentActivity: recentSyncActivity(readLog()),
   };

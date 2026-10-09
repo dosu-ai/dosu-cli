@@ -99,15 +99,18 @@ Or right-click the binary, select "Open", and click "Open" in the dialog.
 | `dosu upgrade` | Update Dosu through the package manager that installed it, re-running `dosu setup` when the update changes agent config |
 | `dosu mcp list` | List supported AI tools |
 | `dosu mcp add <tool>` | Add the Dosu MCP server to a specific tool |
-| `dosu mcp refresh` | Rewrite the Dosu MCP entry in every already-configured tool from the current setup |
+| `dosu mcp refresh` | Rewrite the Dosu MCP entry in every already-configured tool from the current setup, and re-apply the hooks of every agent that has them on |
+| `dosu mcp serve --client <agent>` | The local (stdio) Dosu MCP server that tools' MCP entries run; not run by hand |
+| `dosu project show\|link\|unlink [dir]` | Show the project key Dosu memory scopes a directory by, or link a directory to a key |
+| `dosu memory search <query>` / `dosu memory evidence <id>` | Search Dosu memory, or read the evidence behind one memory, as an agent's MCP tools do |
 | `dosu logs` | View or manage debug logs (`--tail`, `--clear`) |
 | `dosu telemetry` | Manage usage analytics and error diagnostics (`status`, `enable`, `disable`, `reset`) |
 
-`dosu mcp add` takes `-g, --global` to install for all projects instead of project-local, and `--show-secret` to print the full manual config.
+`dosu mcp add` takes `-g, --global` to install for all projects instead of project-local, and `--show-secret` to print the full manual config. The entry it writes runs `dosu mcp serve`, a local proxy to Dosu's MCP endpoint that adds the API key from the CLI config and the project, branch, and agent of the session, so memory lookups are scoped to the codebase you are in. The entry runs the Dosu install that wrote it, by absolute path (the npm package through the `node` that ran it), so an older `dosu` elsewhere on PATH or a PATH without `node` does not matter. A one-off `npx @dosu/cli setup` (or `bunx`, `pnpm dlx`) writes a remote entry instead, since the runner's copy does not last.
 
-`dosu upgrade` delegates to npm, pnpm, Yarn Classic, or Homebrew only after confirming which manager owns the current installation. Temporary package-runner invocations stay ephemeral, ambiguous or local installs are left unchanged, and standalone binaries receive the latest safe manual download path. After a successful update it hands off to the new version, which re-applies the bundled skills and, only if the update crossed a release that changed the agent config format, runs `dosu setup` (or the non-interactive `dosu mcp refresh` without a TTY). Upgrades done outside `dosu upgrade` (npm, brew, `npx @dosu/cli@latest`) get a safety net: when the new version changed the shape of the MCP entry, the first command on it silently rewrites configured tools' MCP entries and prompts you to run `dosu setup` for the rest; the bundled agent skills are always re-applied on the first command after any version change.
+`dosu upgrade` delegates to npm, pnpm, Yarn Classic, or Homebrew only after confirming which manager owns the current installation. Temporary package-runner invocations stay ephemeral, ambiguous or local installs are left unchanged, and standalone binaries receive the latest safe manual download path. After a successful update it hands off to the new version, which re-applies the bundled skills and, only if the update crossed a release that changed the agent config format, runs `dosu setup`, or without a TTY does what `dosu mcp refresh` does: rewrites configured tools' MCP entries and re-applies the hooks of every agent that has them on. Upgrades done outside `dosu upgrade` (npm, brew, `npx @dosu/cli@latest`) get a safety net: when the new version changed the agent config format, the first command on it silently rewrites configured tools' MCP entries, re-applies those hooks, and prompts you to run `dosu setup` for the rest; the bundled agent skills are always re-applied on the first command after any version change.
 
-Dosu also updates itself automatically. When the update check (every six hours) finds a newer release, npm, pnpm, Yarn Classic, and Homebrew installs start the same package-manager update in a detached background process. The current command runs unchanged, and your next command uses the new version, whose first run applies the skill and MCP refreshes above. Hooks, rules, and the status line still need `dosu setup` when a release changes them. Background updates never run for `npx` invocations, standalone binaries, CI, or `DOSU_DEV=true`. A failed install (for example, a global npm prefix that needs `sudo`) falls back to the "Run `dosu upgrade`" notice and is retried after six hours. Turn background updates off with `dosu upgrade --auto off` (and back on with `--auto on`), or with `DOSU_DISABLE_AUTOUPDATE=1` for a single environment.
+Dosu also updates itself automatically. When the update check (every six hours) finds a newer release, npm, pnpm, Yarn Classic, and Homebrew installs start the same package-manager update in a detached background process. The current command runs unchanged, and your next command uses the new version, whose first run applies the skill, MCP, and hooks refreshes above. Rules and the status line still need `dosu setup` when a release changes them. Background updates never run for `npx` invocations, standalone binaries, CI, or `DOSU_DEV=true`. A failed install (for example, a global npm prefix that needs `sudo`) falls back to the "Run `dosu upgrade`" notice and is retried after six hours. Turn background updates off with `dosu upgrade --auto off` (and back on with `--auto on`), or with `DOSU_DISABLE_AUTOUPDATE=1` for a single environment.
 
 ### Platform commands
 
@@ -155,6 +158,7 @@ To change a skill, edit `skills/<name>/…` and run `bun run embed:skills` to re
 | `cline-cli` | Cline CLI |
 | `copilot` | GitHub Copilot CLI |
 | `opencode` | OpenCode |
+| `pi` | Pi (installs the Dosu pi extension; global only) |
 | `antigravity` | Antigravity |
 | `mcporter` | MCPorter |
 | `factory` | Factory |
@@ -170,30 +174,63 @@ dosu setup --agent --tool claude
 
 Combine with `dosu login --request` / `--check <ticket>` for human-in-the-loop authentication, and `--mode oss|cloud` to skip the mode prompt.
 
-### Studying sessions: status line and incognito
+### Syncing sessions to Dosu memory: status line and incognito
 
-With `dosu knowledge hooks enable`, Dosu studies finished coding-agent sessions in the background
-and turns what it learns into shared knowledge. Two switches make that visible and controllable per
-session. `dosu setup` installs both alongside the hook; they can also be managed directly:
+With `dosu knowledge hooks enable`, finished coding-agent sessions ship to Dosu memory in the
+background (secrets redacted locally first), and Dosu learns from them server-side. A Claude Code
+or Codex (0.160+) session ships as soon as it ends, an OpenCode session as soon as the opencode
+process that ran it exits, however it exits, and a pi session as soon as pi shuts it down. OpenCode
+gets a plugin and pi an extension rather than a hook; both also add memory digests to prompts, and
+pi's registers Dosu's MCP server (the `dosu mcp serve` proxy) with pi's built-in MCP and adds
+`/dosu-incognito` (pi run with `--no-extensions` skips it, see
+[docs/syncing.md](docs/syncing.md#pi)). Cursor sessions ship with a
+later sync once they have been quiet for five minutes (its end event fires every turn). A resumed
+session later ships only what is new. Shipping is on by default; `dosu knowledge transcripts
+disable` turns it off.
+`dosu knowledge sync --status` and `dosu knowledge sessions` show what shipped and why anything did
+not (too short, rejected by the server, or from an agent not supported yet);
+`dosu knowledge sync --retry-rejected` tries refused sessions again. On a throwaway machine (a VM
+destroyed after its last task), run `dosu knowledge sync --flush` as the last step before teardown:
+it ships every session not shipped yet right away, including the ones no end event named (Cursor's,
+a Codex session killed with SIGTERM, pi run with `--no-extensions`); see
+[docs/syncing.md](docs/syncing.md#throwaway-machines). Running `claude -p` from an eval
+harness? Some flags (`--bare`, `--safe-mode`, `--no-session-persistence`, ...) keep sessions from
+reaching Dosu; see [docs/syncing.md](docs/syncing.md#claude-code-in-an-eval-harness).
+
+When the deployment has no linked repository, memory is scoped by the codebase a session worked in:
+its `origin` remote, else the repository's root commit, else its path. Set `DOSU_PROJECT` in the
+agent's environment, or run `dosu project link [dir] <key>`, to name it yourself
+(`dosu project show` prints the key in use). A session keeps the key it was first resolved under. See
+[docs/syncing.md](docs/syncing.md#project-key).
+
+Two switches make shipping visible and controllable. `dosu setup` installs the status line and each
+agent's incognito command alongside the hook (`dosu knowledge hooks enable` installs the incognito
+command with each agent's hooks); they can also be managed directly:
 
 ```bash
-dosu knowledge statusline enable|disable [claude|cursor]   # status-bar line in Claude Code / Cursor CLI
-dosu knowledge incognito on|off [claude|cursor|codex]      # stop/resume studying an agent's sessions
-dosu knowledge incognito status                            # which agents are incognito
+dosu knowledge statusline enable|disable [claude|cursor]          # status-bar line in Claude Code / Cursor CLI
+dosu knowledge incognito on|off [claude|cursor|codex|opencode|pi]  # turn Dosu off/on for an agent
+dosu knowledge incognito status                                     # which agents are incognito
 ```
 
-The status line shows one of `📚 Dosu studying…` (a sync run is live), `📚 Dosu on`,
-`👻 Dosu incognito`, `⚪ Dosu paused`, `⚪ Dosu not studying this repo`, or `⚪ Dosu off`. Every
-session is studied unless you limit studying to picked repos under `dosu` → settings → study
-scope. Notes from a session with a known repo and branch are anchored to that branch; the rest are
-unanchored and reach topics immediately. Neither setup nor `enable` replaces a status line you
-already have; they print the one-liner to add to your own script instead.
+The status line shows one of `📚 Dosu shipping…` (a sync run is live), `📚 Dosu on`,
+`👻 Dosu incognito`, `⚪ Dosu paused`, `⚪ Dosu not learning from this repo`, or `⚪ Dosu off`.
+Every session is shipped unless you limit syncing to picked repos under `dosu` → settings → sync
+scope (or `dosu knowledge scope set <checkout>...`; `dosu knowledge skip-backlog` passes over the
+sessions waiting to ship, see [docs/syncing.md](docs/syncing.md#repo-scope)). Neither setup nor
+`enable` replaces a status line you already have; they print the one-liner to add to your own
+script instead.
 
-`incognito on` is a saved per-agent setting: none of that agent's sessions are studied until you
-turn it off. To keep a single chat out instead, type `/dosu-incognito` in it; setup installs that
-command with the hook. It marks the session's transcript so studying skips it (the whole session,
-and for the rest of it — start a new session to turn Dosu back on) and tells the model not to use
-Dosu tools. See [docs/studying.md](docs/studying.md).
+`incognito on` is a saved per-agent setting: none of that agent's sessions ship, its prompts get no
+memory lookup, and its Dosu tool calls (and `dosu memory` run as it) are refused without leaving the
+machine. Turning it off later does not ship the sessions that ran while it was on, even if you
+resume them, nor their subagents or forks (`off` seals any no sync has settled yet; see
+[docs/syncing.md](docs/syncing.md#per-agent-incognito)). To keep a single session out instead, run
+`/dosu-incognito` in it (in Codex, which has no user slash commands, mention the skill
+`$dosu-incognito`); setup installs it with the hook. It marks that session's transcript so it is
+never shipped (the whole session, and for the rest of it — start a new session to turn Dosu back
+on) and tells the model not to use Dosu tools. See
+[docs/syncing.md](docs/syncing.md#per-session-incognito).
 
 ### Telemetry and privacy
 
@@ -215,11 +252,8 @@ and may include documented coarse setup choices. `DO_NOT_TRACK=1` and
 `DOSU_TELEMETRY_DISABLED=1` disable all telemetry for the process. Dosu never collects
 prompts, raw command lines, free-form argument or option values, user source code, file contents,
 local paths, credentials, raw error messages, or `debug.log`. Environment-variable names and values
-are not collected, with one exception: when a managed Claude Code settings conflict prevents a
-study run, Dosu reports the allowlisted public Claude Code setting/variable names that caused the
-conflict (never their values) to help diagnose why knowledge sync fails due to settings conflicts.
-See [Telemetry and privacy](docs/telemetry.md) for the exact event fields, destinations, retention,
-and controls.
+are not collected. See [Telemetry and privacy](docs/telemetry.md) for the exact event fields,
+destinations, retention, and controls.
 
 ## Configuration
 

@@ -9,6 +9,12 @@ export function isInstalled(paths: string[]): boolean {
   return paths.some((p) => existsSync(expandHome(p)));
 }
 
+/** Whether an executable named `bin` is in a PATH directory: an agent installed on a machine
+ * where it has never run has no config dir yet. */
+export function isOnPath(bin: string, path: string = process.env.PATH ?? ""): boolean {
+  return path.split(delimiter).some((dir) => dir !== "" && existsSync(join(dir, bin)));
+}
+
 /** Expands ~ to the user's home directory. */
 export function expandHome(path: string): string {
   if (!path.startsWith("~")) return path;
@@ -36,22 +42,35 @@ export function appSupportDir(): string {
 }
 /* v8 ignore stop */
 
+/** Every absolute path `name` has on the shell PATH, in PATH order. */
+export function allOnPath(name: string): string[] {
+  return (process.env.PATH ?? "")
+    .split(delimiter)
+    .filter(Boolean)
+    .map((dir) => join(dir, name))
+    .filter((candidate) => existsSync(candidate));
+}
+
+/** The absolute path of `name` on the shell PATH, or null. */
+export function findOnPath(name: string): string | null {
+  return allOnPath(name)[0] ?? null;
+}
+
 /** Locates `npx` by absolute path on the shell PATH. GUI hosts spawn stdio servers with the
  * minimal launchd PATH (no Homebrew/nvm), so config entries must reference npx absolutely. */
 export function findNpx(): string {
   /* v8 ignore next -- platform dispatch, win32 arm not exercised on POSIX CI */
-  const bin = platform() === "win32" ? "npx.cmd" : "npx";
-  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
-    if (!dir) continue;
-    const candidate = join(dir, bin);
-    if (existsSync(candidate)) return candidate;
-  }
+  const npx = findOnPath(platform() === "win32" ? "npx.cmd" : "npx");
+  if (npx) return npx;
   throw new Error(
     "npx not found on PATH. Node.js is required (the MCP entry runs `npx mcp-remote`).",
   );
 }
 
-/** PATH for a spawned stdio entry: npx's own dir first (node lives beside npx) plus system dirs. */
-export function npxPathEnv(npx: string): string {
-  return [dirname(npx), "/usr/bin", "/bin"].join(delimiter);
+/** PATH for a spawned stdio entry: the launcher's own dir first (a Node launcher's `node` lives
+ * beside it), the dir of a program it runs when given (`git`, wherever the installing shell found
+ * it), plus the system dirs. */
+export function launcherPathEnv(launcher: string, program?: string | null): string {
+  const dirs = [dirname(launcher), ...(program ? [dirname(program)] : []), "/usr/bin", "/bin"];
+  return [...new Set(dirs)].join(delimiter);
 }

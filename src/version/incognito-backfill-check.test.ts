@@ -31,6 +31,7 @@ vi.mock("../incognito/agents", () => ({
     return {
       id: () => agent.id,
       name: () => `Agent ${agent.id}`,
+      invocation: () => (agent.id === "codex" ? "$dosu-incognito" : "/dosu-incognito"),
       isEnabled: () => agent.commandInstalled,
       enable: () => {
         if (agent.enableError) throw agent.enableError;
@@ -63,7 +64,7 @@ afterEach(() => {
 });
 
 describe("checkForIncognitoBackfill", () => {
-  it("installs the command only for agents whose studying hook is enabled", () => {
+  it("installs the command only for agents whose hooks are enabled", () => {
     state.agents = [
       { id: "claude", hookEnabled: true, commandInstalled: false },
       { id: "cursor", hookEnabled: false, commandInstalled: false },
@@ -75,7 +76,20 @@ describe("checkForIncognitoBackfill", () => {
     expect(state.enableCalls).toEqual(["claude"]);
     expect(existsSync(marker())).toBe(true);
     const output = errorSpy.mock.calls[0][0] as string;
-    expect(output).toContain("added the /dosu-incognito command to Agent claude");
+    expect(output).toContain("added the incognito command to Agent claude (/dosu-incognito)");
+  });
+
+  it("names the way each agent runs it: Codex mentions a skill", () => {
+    state.agents = [
+      { id: "claude", hookEnabled: true, commandInstalled: false },
+      { id: "codex", hookEnabled: true, commandInstalled: false },
+    ];
+
+    checkForIncognitoBackfill();
+
+    const output = errorSpy.mock.calls[0][0] as string;
+    expect(output).toContain("Agent claude (/dosu-incognito), Agent codex ($dosu-incognito)");
+    expect(output).toContain("Run it in a session to keep that session out of Dosu memory.");
   });
 
   it("runs once per install", () => {
@@ -97,8 +111,22 @@ describe("checkForIncognitoBackfill", () => {
     expect(errorSpy).not.toHaveBeenCalled();
   });
 
-  it("skips hook agents that have no slash command", () => {
-    state.hookOnlyIds = ["opencode"];
+  it("skips hook agents that have no incognito command of their own", () => {
+    state.hookOnlyIds = ["future-agent"];
+
+    checkForIncognitoBackfill();
+
+    expect(state.enableCalls).toEqual([]);
+    expect(existsSync(marker())).toBe(true);
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it("never installs pi's: its /dosu-incognito is the extension its hook already is", () => {
+    // Pi's command reads as installed exactly when its hook does.
+    state.agents = [
+      { id: "pi", hookEnabled: true, commandInstalled: true },
+      { id: "cursor", hookEnabled: false, commandInstalled: false },
+    ];
 
     checkForIncognitoBackfill();
 

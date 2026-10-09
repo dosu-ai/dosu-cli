@@ -107,6 +107,8 @@ dosu agents config set <agent-id> <existing.leaf.path>
 dosu ask <question> [--session <id>] [--timeout <seconds>] [--json]
 dosu knowledge search <query> [--limit <positive-int>] [--json]   # default 10
 dosu knowledge list [--json]
+dosu knowledge sync [--flush] [--json]
+dosu knowledge sync --status [--json]
 
 dosu docs list [--search <query>] [--topic <id>] [--limit <positive-int>] [--json]
 dosu docs get <id> [--revision <positive-int>] [--json]
@@ -123,6 +125,7 @@ dosu docs publish <id> --to <platform> [target flags] [--json]
 dosu docs sync-back <id> [--json]
 ```
 
+- `knowledge sync` ships finished local agent sessions to Dosu memory; session-end hooks run it, so it rarely needs running by hand. `--flush` ships every pending session now instead of waiting for it to be quiet for five minutes: on a throwaway machine, run it as the last step before teardown. `--status` shows what shipped and why anything did not.
 - Document list defaults to 20. `create` and `update` reject combining `--body` with `--body-file`; `update` requires at least one field.
 - Import platforms: `github`, `gitlab`, `azure_devops`, `confluence`, `notion`, `coda`.
 - Publish platforms: the same six. Target flags are `--repo-id`, `--project-id`, `--parent-page-id`, `--doc-id`, `--directory`, and `--data-source-id`; Azure DevOps requires `--data-source-id`. Other target validation may occur in the backend.
@@ -226,6 +229,12 @@ dosu deployments switch <id> [--json]
 
 dosu mcp list
 dosu mcp add <agent> [--global] [--show-secret]
+dosu mcp refresh
+dosu project show [dir] [--json]
+dosu project link [dir] <key>
+dosu project unlink [dir]
+dosu memory search <query> [--json] [--client <agent>]
+dosu memory evidence <memory-id> [--json] [--client <agent>]
 dosu skill install | remove | update
 dosu telemetry status [--json]
 dosu telemetry enable | disable | reset
@@ -234,7 +243,7 @@ dosu upgrade [--auto on|off]
 dosu logs [--tail [n]] [--clear]
 ```
 
-`deployments` selects the MCP deployment stored in local config; it is distinct from `agents`. `insights` opens an interactive visual report. `logs --clear` deletes the CLI log file. The CLI updates itself in the background by default; a `[dosu:update] Installing ...` notice on stderr needs no action. `upgrade --auto off` turns that off.
+`deployments` selects the MCP deployment stored in local config; it is distinct from `agents`. The MCP entry `mcp add` writes runs `dosu mcp serve --client <agent>` (a local proxy; never run it by hand). `project show` prints the project key Dosu memory scopes the directory by and which rule produced it; `project link` overrides it for a directory and everything under it. `memory search` and `memory evidence` call the same memory tools as the MCP server, scoped to the current directory; run from an agent's shell they are logged under the agent's session, and refuse to run in a session the user took off the record (`/dosu-incognito`) or for an agent the user put in incognito (`dosu knowledge incognito on <agent>`; its MCP tool calls are refused too, and `dosu knowledge incognito off <agent>` turns it back on). `insights` opens an interactive visual report. `logs --clear` deletes the CLI log file. The CLI updates itself in the background by default; a `[dosu:update] Installing ...` notice on stderr needs no action. `upgrade --auto off` turns that off.
 
 ## Codebase audit
 

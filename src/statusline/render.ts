@@ -1,25 +1,34 @@
 /** Status-line rendering: the harness payload (stdin JSON) plus persisted sync state → one line
- * saying whether this session is being studied. Runs on every status refresh, so it reads only
- * a few small files plus the transcript, and it never throws: any failure renders as off. */
+ * saying whether Dosu memory will learn from this session. Runs on every status refresh, so it
+ * reads only a few small files plus the transcript, and it never throws: any failure renders as
+ * off. */
 
+import { basename } from "node:path";
 import { getHookAgent } from "../hooks/agents";
 import { originRepoOfDir } from "../sessions/repo";
+import { SESSION_HARNESSES, sessionAtPath } from "../sessions/scan";
 import { transcriptHasIncognitoMarker } from "../sync/incognito";
+import {
+  isSessionAgentIncognito,
+  isShippingEnabled,
+  isUnderDir,
+  loadSyncState,
+  type SyncState,
+} from "../sync/state";
 import { getSyncStatus } from "../sync/status";
-import { isUnderDir, loadSyncState, type SyncState } from "../sync/watermark";
 
 /** In priority order: the first matching state wins. */
 export type StatuslineState = "off" | "incognito" | "paused" | "not-studied" | "studying" | "on";
 
-/** Three glyphs: studying/on (the session will be studied; "studying…" only while a run is live,
- * matching the TUI), incognito (the user's own switch for this session), and one shared
- * "inactive" glyph whose text says why. */
+/** Three glyphs: on (the session ships to Dosu memory; "shipping…" only while a sync run is live,
+ * matching the TUI's "shipping sessions..."), incognito (the user's own switch for this session
+ * or agent), and one shared "inactive" glyph whose text says why. */
 export const STATUSLINE_LABELS: Readonly<Record<StatuslineState, string>> = {
-  studying: "📚 Dosu studying…",
+  studying: "📚 Dosu shipping…",
   on: "📚 Dosu on",
   incognito: "👻 Dosu incognito",
   paused: "⚪ Dosu paused",
-  "not-studied": "⚪ Dosu not studying this repo",
+  "not-studied": "⚪ Dosu not learning from this repo",
   off: "⚪ Dosu off",
 };
 
@@ -95,6 +104,19 @@ function cwdIsStudied(
   return true;
 }
 
+/** Whether the agent's saved switch keeps the payload's session off the record: the agent is in
+ * incognito, or the session ran while it was (or descends from or was branched from one that did),
+ * which stays so once the switch is off. The session is named by its transcript, as the scan names
+ * it. */
+function switchKeepsOff(payload: StatuslinePayload, agentId: string, state: SyncState): boolean {
+  if (state.incognito_agents?.includes(agentId)) return true;
+  const harness = SESSION_HARNESSES.find((h) => h === agentId);
+  const path = payload.transcript_path;
+  if (!harness || !path?.endsWith(".jsonl")) return false;
+  const id = basename(path, ".jsonl");
+  return isSessionAgentIncognito(state, { harness, id }, () => sessionAtPath(harness, id, path));
+}
+
 /** Incognito (the agent's saved switch, or `/dosu-incognito` in this session) outranks paused
  * and not-studied: it is the user's own action, and the line is how they confirm it took. */
 export function resolveStatuslineState(
@@ -104,9 +126,9 @@ export function resolveStatuslineState(
 ): StatuslineState {
   const hookEnabled = deps.hookEnabled ?? defaultHookEnabled;
   if (!hookEnabled(agentId)) return "off";
-
   const state = (deps.loadState ?? loadSyncState)();
-  if (state.incognito_agents?.includes(agentId)) return "incognito";
+  if (!isShippingEnabled(state)) return "off";
+  if (switchKeepsOff(payload, agentId, state)) return "incognito";
 
   const transcriptIsIncognito = deps.transcriptIsIncognito ?? transcriptHasIncognitoMarker;
   if (payload.transcript_path && transcriptIsIncognito(payload.transcript_path)) {

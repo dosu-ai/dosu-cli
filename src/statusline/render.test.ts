@@ -1,5 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
-import type { SyncState } from "../sync/watermark";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { emptySyncState, type SyncState } from "../sync/state";
 
 const mockGetHookAgent = vi.hoisted(() => vi.fn());
 vi.mock("../hooks/agents", () => ({
@@ -7,8 +10,8 @@ vi.mock("../hooks/agents", () => ({
 }));
 
 const mockLoadSyncState = vi.hoisted(() => vi.fn());
-vi.mock("../sync/watermark", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../sync/watermark")>()),
+vi.mock("../sync/state", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sync/state")>()),
   loadSyncState: (...args: unknown[]) => mockLoadSyncState(...args),
 }));
 
@@ -35,7 +38,7 @@ import {
   STATUSLINE_LABELS,
 } from "./render";
 
-const baseState: SyncState = { schema_version: 1, watermark: null, consecutive_failures: 0 };
+const baseState: SyncState = emptySyncState();
 
 function deps(overrides: Partial<RenderDeps> = {}): RenderDeps {
   return {
@@ -100,6 +103,31 @@ describe("resolveStatuslineState", () => {
     expect(transcriptIsIncognito).toHaveBeenCalledTimes(1);
   });
 
+  it("is incognito in a session that ran while its agent was, and in a branch of one, once it is off", () => {
+    const sealed = {
+      updated: "2026-10-05T16:30:00.000Z",
+      outcome: "incognito" as const,
+      at: "2026-10-05T16:40:00.000Z",
+      cli_version: "0.67.0",
+      by_agent: true as const,
+    };
+    const dir = mkdtempSync(join(tmpdir(), "dosu-statusline-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    const branch = join(dir, "s2.jsonl");
+    writeFileSync(branch, `${JSON.stringify({ type: "user", forkedFrom: { sessionId: "s1" } })}\n`);
+    const d = deps({ loadState: () => ({ ...baseState, sessions: { "claude/s1": sealed } }) });
+
+    expect(resolveStatuslineState(payload, "claude", d)).toBe("incognito");
+    expect(resolveStatuslineState({ ...payload, transcript_path: branch }, "claude", d)).toBe(
+      "incognito",
+    );
+    // Another agent's session of the same id, or another session, ships.
+    expect(resolveStatuslineState(payload, "cursor", d)).toBe("on");
+    expect(
+      resolveStatuslineState({ ...payload, transcript_path: join(dir, "s3.jsonl") }, "claude", d),
+    ).toBe("on");
+  });
+
   it("does not look for the marker without a transcript path", () => {
     const spy = vi.fn(() => true);
     expect(
@@ -112,7 +140,15 @@ describe("resolveStatuslineState", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it("is paused when studying is paused", () => {
+  it("is off once the user has switched shipping off, ahead of incognito", () => {
+    const d = deps({
+      loadState: () => ({ ...baseState, ship_transcripts: false }),
+      transcriptIsIncognito: () => true,
+    });
+    expect(resolveStatuslineState(payload, "claude", d)).toBe("off");
+  });
+
+  it("is paused when syncing is paused", () => {
     const d = deps({ loadState: () => ({ ...baseState, paused: true }) });
     expect(resolveStatuslineState(payload, "claude", d)).toBe("paused");
   });

@@ -13,7 +13,9 @@ import { integrationsCommand } from "../commands/integrations";
 import { knowledgeCommand } from "../commands/knowledge";
 import { librariesCommand } from "../commands/libraries";
 import { membersCommand } from "../commands/members";
+import { memoryCommand } from "../commands/memory";
 import { orgCommand } from "../commands/org";
+import { projectCommand } from "../commands/project";
 import { reviewCommand } from "../commands/review";
 import { skillCommand } from "../commands/skill";
 import { sourcesCommand } from "../commands/sources";
@@ -37,6 +39,7 @@ import {
 import { getAccessTokenEmail, getAccessTokenUserID } from "../config/identity";
 import { createLogFollower } from "../debug/follow";
 import { logger } from "../debug/logger";
+import { refreshEnabledHooks } from "../hooks/agents";
 import { allProviders, getProvider, type Provider } from "../mcp/providers";
 import { configuredProviders, refreshConfiguredProviders } from "../mcp/refresh";
 import { browserFallbackHint } from "../setup/styles";
@@ -62,8 +65,21 @@ import { checkForUpdates } from "../version/update-check";
 import { getVersionString, VERSION } from "../version/version";
 import { CliUsageError } from "./errors";
 
-export function shouldRunBackgroundChecks(actionName: string): boolean {
-  return actionName !== "upgrade";
+/** Commands that skip the update / skill / ready-task / MCP-refresh checks: `upgrade` does its
+ * own, and the prompt-submit hook runs on every prompt while the user waits. */
+const NO_BACKGROUND_CHECKS = new Set([
+  "upgrade",
+  "knowledge context",
+  // Started by agents: the MCP server owns stdout for the protocol, and agents run the memory
+  // commands from their shell while they wait.
+  "mcp serve",
+  "memory search",
+  "memory evidence",
+]);
+
+/** `command` is the full subcommand path, e.g. `knowledge context`. */
+export function shouldRunBackgroundChecks(command: string): boolean {
+  return !NO_BACKGROUND_CHECKS.has(command);
 }
 
 /** `dosu setup` and `dosu mcp refresh` rewrite the agents' MCP entries themselves (and record
@@ -195,7 +211,7 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
     .hook("preAction", async (thisCommand, actionCommand) => {
       const opts = thisCommand.optsWithGlobals();
       logger.init({ debug: opts.debug });
-      if (shouldRunBackgroundChecks(actionCommand.name())) {
+      if (shouldRunBackgroundChecks(commandTelemetryName(actionCommand))) {
         // Bare `dosu` launches the TUI, whose welcome banner shows the update
         // itself; the boxed stderr notice would tear across the TUI's redraws.
         const launchesTUI = actionCommand.parent === null;
@@ -517,7 +533,9 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
 
   mcp
     .command("refresh")
-    .description("Rewrite the Dosu MCP entry in every configured AI tool from the current setup")
+    .description(
+      "Rewrite the Dosu MCP entry in every configured AI tool and re-apply agents' enabled hooks",
+    )
     .action(() => {
       const cfg = loadConfig();
       if (!canRefreshMcp(cfg)) {
@@ -530,6 +548,9 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
       }
       console.log("Refreshing Dosu MCP config for configured AI tools...\n");
       const result = refreshConfiguredProviders(cfg);
+      // The marker tells the automatic post-upgrade check this release's refresh is done, hooks
+      // included, so the hooks have to be re-applied before it is written.
+      refreshEnabledHooks();
       writeMcpRefreshCache({ version: VERSION });
       for (const provider of result.updated) {
         console.log(`  ✓ ${provider.name()}`);
@@ -539,6 +560,15 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
       }
       console.log("\nRestart your AI agents so they pick up the change.");
       if (result.failed.length > 0) process.exitCode = 1;
+    });
+
+  mcp
+    .command("serve")
+    .description("Run the local Dosu MCP server (stdio) that AI tools start from their MCP config")
+    .option("--client <id>", "The AI tool this server runs for (claude-code, codex, opencode, ...)")
+    .action(async (opts: { client?: string }) => {
+      const { runMcpServe } = await import("../mcp/proxy");
+      process.exitCode = await runMcpServe({ client: opts.client });
     });
 
   mcp
@@ -566,7 +596,9 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
   program.addCommand(knowledgeCommand());
   program.addCommand(librariesCommand());
   program.addCommand(membersCommand());
+  program.addCommand(memoryCommand());
   program.addCommand(orgCommand());
+  program.addCommand(projectCommand());
   program.addCommand(reviewCommand());
   program.addCommand(sourcesCommand());
   program.addCommand(telemetryCommand());

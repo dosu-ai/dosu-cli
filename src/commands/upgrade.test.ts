@@ -56,6 +56,7 @@ import {
   buildPackageManagerInvocation,
   completeUpgrade,
   finishUpgrade,
+  installSpec,
   newBinaryInvocation,
   postUpgradeArgs,
   runUpgrade,
@@ -454,6 +455,14 @@ describe("runUpgrade", () => {
     expect(errors()).toContain("brew upgrade dosu-ai/dosu/dosu");
   });
 
+  it("refuses to replace a self-hosted build with a public release", () => {
+    expect(runUpgrade("selfhost")).toBe(1);
+
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+    expect(output()).toContain("self-hosted Dosu");
+    expect(output()).not.toContain("github.com/dosu-ai/dosu-cli/releases");
+  });
+
   it("fails closed for standalone and unknown channels", () => {
     expect(runUpgrade("binary")).toBe(1);
     expect(runUpgrade("unexpected")).toBe(1);
@@ -815,5 +824,13 @@ describe("buildPackageManagerInvocation", () => {
         SystemRoot: "Windows",
       }).command,
     ).toBe("C:\\Windows\\System32\\cmd.exe");
+  });
+});
+
+describe("installSpec", () => {
+  it("installs from the dist-tag the running version was released on", () => {
+    expect(installSpec("0.63.0-beta.2")).toBe("@dosu/cli@beta");
+    expect(installSpec("0.11.0-alpha.1")).toBe("@dosu/cli@alpha");
+    expect(installSpec("0.62.1")).toBe("@dosu/cli@latest");
   });
 });

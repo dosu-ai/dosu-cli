@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { delimiter, join } from "node:path";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // CRITICAL: mock `open` so tests never pop a real browser tab; mock git so detectGitRepo()
 // doesn't hit the real filesystem.
@@ -190,11 +190,10 @@ vi.mock("../tui/activity-view", () => ({
   runActivityView: vi.fn(),
 }));
 
-// Status line and slash command installers run for real against the temp home; these overrides
-// stay inert (undefined → real registry) unless a test needs an installer that misbehaves.
-const { mockGetStatuslineAgent, mockGetIncognitoAgent } = vi.hoisted(() => ({
+// The status line installer runs for real against the temp home; this override stays inert
+// (undefined → real registry) unless a test needs an installer that misbehaves.
+const { mockGetStatuslineAgent } = vi.hoisted(() => ({
   mockGetStatuslineAgent: vi.fn(),
-  mockGetIncognitoAgent: vi.fn(),
 }));
 vi.mock("../statusline/agents", async (importOriginal) => {
   const original = await importOriginal<typeof import("../statusline/agents")>();
@@ -202,13 +201,6 @@ vi.mock("../statusline/agents", async (importOriginal) => {
     ...original,
     getStatuslineAgent: (id: string) =>
       mockGetStatuslineAgent(id) ?? original.getStatuslineAgent(id),
-  };
-});
-vi.mock("../incognito/agents", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../incognito/agents")>();
-  return {
-    ...original,
-    getIncognitoAgent: (id: string) => mockGetIncognitoAgent(id) ?? original.getIncognitoAgent(id),
   };
 });
 
@@ -225,6 +217,13 @@ import { ClaudeDesktopProvider } from "../mcp/providers/claude-desktop";
 import { CodexProvider } from "../mcp/providers/codex";
 import { CursorProvider } from "../mcp/providers/cursor";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
+import { restoreRunningInstall, stubRunningFromNpx } from "../mcp/running-install.test-utils";
+import {
+  loadSyncState,
+  saveSyncState,
+  setAgentsIncognito,
+  setShipTranscripts,
+} from "../sync/state";
 import { consumeCommandFacets } from "../telemetry/telemetry";
 import { runActivityView } from "../tui/activity-view";
 import * as p from "../tui/prompts";
@@ -242,6 +241,28 @@ import {
   stepShowSummary,
   type ToolSelection,
 } from "./flow";
+
+// A one-off `npx @dosu/cli setup` (npx on PATH, the CLI running from npx's cache): the
+// real-filesystem installs below write the remote (or Codex's mcp-remote) entry, which carries the
+// deployment and API key these tests follow through setup. An installed CLI writes the
+// local-proxy entry, which reads both from the CLI config instead; providers-stdio.test.ts covers it.
+const npxOnlyBin = mkdtempSync(join(tmpdir(), "dosu-flow-npx-only-"));
+writeFileSync(join(npxOnlyBin, "npx"), "#!/bin/sh\n", { mode: 0o755 });
+
+beforeEach(() => {
+  vi.stubEnv("PATH", npxOnlyBin);
+  vi.stubEnv("DOSU_DEV", undefined);
+  stubRunningFromNpx(npxOnlyBin);
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  restoreRunningInstall();
+});
+
+afterAll(() => {
+  rmSync(npxOnlyBin, { recursive: true, force: true });
+});
 
 /** Default p.multiselect behaviour: accept the agent selection's initial values. */
 function installMultiselectDefault() {
@@ -394,8 +415,14 @@ describe("stepDetectTools", () => {
     setupTempEnv();
     vi.resetAllMocks();
     installSetupStepDefaults();
+    // Agents found by their binary see only what a test puts here, not this machine's installs.
+    mkdirSync(join(tempDir, "bin"));
+    vi.stubEnv("PATH", join(tempDir, "bin"));
   });
-  afterEach(teardownTempEnv);
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    teardownTempEnv();
+  });
 
   it("returns providers whose detect paths exist", () => {
     // Create Cursor detect path so it's "installed"; Claude Desktop's app
@@ -424,6 +451,35 @@ describe("stepDetectTools", () => {
 
     const detected = stepDetectTools();
     expect(detected.map((p2) => p2.id())).toEqual(["claude-desktop"]);
+  });
+
+  it("includes Codex before its first run: the codex binary on PATH, or a relocated CODEX_HOME", () => {
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CodexProvider()]);
+    const bin = join(tempDir, "bin");
+    mkdirSync(bin, { recursive: true });
+    vi.stubEnv("PATH", bin);
+    try {
+      expect(stepDetectTools()).toEqual([]);
+
+      writeFileSync(join(bin, "codex"), '#!/bin/sh\necho "codex-cli 0.160.0"\n', { mode: 0o755 });
+      expect(stepDetectTools().map((p2) => p2.id())).toEqual(["codex"]);
+
+      rmSync(join(bin, "codex"));
+      mkdirSync(join(tempDir, "codex-home"));
+      vi.stubEnv("CODEX_HOME", join(tempDir, "codex-home"));
+      expect(stepDetectTools().map((p2) => p2.id())).toEqual(["codex"]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("includes OpenCode installed but never run, from its binary on PATH", () => {
+    writeFileSync(join(tempDir, "bin", "opencode"), "#!/bin/sh\n", { mode: 0o755 });
+    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => {
+      return [CursorProvider(), OpenCodeProvider()];
+    });
+
+    expect(stepDetectTools().map((p2) => p2.id())).toEqual(["opencode"]);
   });
 
   it("returns empty array when no providers are installed", () => {
@@ -654,7 +710,7 @@ describe("stepConfigureTools", () => {
     const cfg = makeCfg();
 
     const results = stepConfigureTools(cfg, {
-      toInstall: [OpenCodeProvider()],
+      toInstall: [ClaudeDesktopProvider()],
       toRemove: [],
       skipped: [],
     });
@@ -713,21 +769,76 @@ describe("stepConfigureTools", () => {
       expect.stringContaining("Status line enabled for 1 agent(s):"),
     );
     expect(p.log.success).toHaveBeenCalledWith(
-      expect.stringContaining("/dosu-incognito installed for 1 agent(s):"),
+      expect.stringContaining("Incognito command installed for 1 agent(s):"),
     );
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Cursor (/dosu-incognito)"));
   });
 
-  it("removes the status line and slash command when the agent is unticked", () => {
+  it("removes the status line when the agent is unticked, and keeps /dosu-incognito while transcripts ship", () => {
     const cfg = makeCfg();
     stepConfigureTools(cfg, { toInstall: [CursorProvider()], toRemove: [], skipped: [] });
 
-    stepConfigureTools(cfg, { toInstall: [], toRemove: [CursorProvider()], skipped: [] });
+    const results = stepConfigureTools(cfg, {
+      toInstall: [],
+      toRemove: [CursorProvider()],
+      skipped: [],
+    });
 
     const cliConfig = JSON.parse(
       readFileSync(join(tempDir, ".cursor", "cli-config.json"), "utf-8"),
     );
     expect(cliConfig.statusLine).toBeUndefined();
+    // Any sync still ships Cursor's sessions, and the summary says why the command stayed.
+    expect(existsSync(join(tempDir, ".cursor", "commands", "dosu-incognito.md"))).toBe(true);
+    stepShowSummary(results);
+    expect(p.log.info).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Kept /dosu-incognito: Cursor sessions still ship with any 'dosu knowledge sync'",
+      ),
+    );
+  });
+
+  it("removes /dosu-incognito too when the agent is unticked once transcript shipping is off", () => {
+    const cfg = makeCfg();
+    stepConfigureTools(cfg, { toInstall: [CursorProvider()], toRemove: [], skipped: [] });
+    setShipTranscripts(false);
+
+    stepConfigureTools(cfg, { toInstall: [], toRemove: [CursorProvider()], skipped: [] });
+
     expect(existsSync(join(tempDir, ".cursor", "commands", "dosu-incognito.md"))).toBe(false);
+  });
+
+  // --- Prompt-time memory rides along with Claude Code's hook ---
+
+  it("installs Claude Code's prompt-time memory hook with the session hook", () => {
+    mkdirSync(join(tempDir, ".claude"), { recursive: true });
+
+    stepConfigureTools(makeCfg(), { toInstall: [ClaudeProvider()], toRemove: [], skipped: [] });
+
+    const settings = readFileSync(join(tempDir, ".claude", "settings.json"), "utf-8");
+    expect(settings).toContain("UserPromptSubmit");
+    expect(settings).toContain("knowledge context");
+  });
+
+  it("leaves the prompt-time memory hook out once the user opted out of shipping", () => {
+    mkdirSync(join(tempDir, ".claude"), { recursive: true });
+    setShipTranscripts(false);
+
+    stepConfigureTools(makeCfg(), { toInstall: [ClaudeProvider()], toRemove: [], skipped: [] });
+
+    const settings = readFileSync(join(tempDir, ".claude", "settings.json"), "utf-8");
+    expect(settings).not.toContain("knowledge context");
+  });
+
+  it("removes the prompt-time memory hook when Claude Code is unticked", () => {
+    mkdirSync(join(tempDir, ".claude"), { recursive: true });
+    const cfg = makeCfg();
+    stepConfigureTools(cfg, { toInstall: [ClaudeProvider()], toRemove: [], skipped: [] });
+
+    stepConfigureTools(cfg, { toInstall: [], toRemove: [ClaudeProvider()], skipped: [] });
+
+    const settings = readFileSync(join(tempDir, ".claude", "settings.json"), "utf-8");
+    expect(settings).not.toContain("knowledge context");
   });
 
   it("leaves a foreign status line alone and prints the one-liner instead", () => {
@@ -755,7 +866,7 @@ describe("stepConfigureTools", () => {
     expect(p.log.success).not.toHaveBeenCalledWith(expect.stringContaining("Status line enabled"));
   });
 
-  it("skips the status line for agents without one but still installs the slash command", () => {
+  it("skips the status line for agents without one but still installs the incognito command", () => {
     const cfg = makeCfg();
 
     const results = stepConfigureTools(cfg, {
@@ -767,8 +878,32 @@ describe("stepConfigureTools", () => {
     expect(results[0].hook).toBeDefined();
     expect(results[0].statusline).toBeUndefined();
     expect(results[0].incognito).toMatchObject({
-      path: join(tempDir, ".codex", "prompts", "dosu-incognito.md"),
+      path: join(tempDir, ".codex", "skills", "dosu-incognito", "SKILL.md"),
     });
+  });
+
+  it("installs OpenCode's Dosu plugin and /dosu-incognito with its MCP entry, and removes both", () => {
+    const cfg = makeCfg();
+
+    const results = stepConfigureTools(cfg, {
+      toInstall: [OpenCodeProvider()],
+      toRemove: [],
+      skipped: [],
+    });
+
+    // opencode's config dir follows XDG_CONFIG_HOME, which this suite points at the temp dir.
+    const pluginPath = join(tempDir, "opencode", "plugin", "dosu.js");
+    const commandPath = join(tempDir, "opencode", "command", "dosu-incognito.md");
+    expect(readFileSync(pluginPath, "utf-8")).toContain("dosu knowledge sync --quiet --detach");
+    expect(results[0].hook).toMatchObject({ name: "OpenCode", path: pluginPath });
+    expect(results[0].incognito).toMatchObject({ path: commandPath });
+
+    // The command stays while transcripts ship (src/hooks/opencode.test.ts).
+    setShipTranscripts(false);
+    stepConfigureTools(cfg, { toInstall: [], toRemove: [OpenCodeProvider()], skipped: [] });
+
+    expect(existsSync(pluginPath)).toBe(false);
+    expect(existsSync(commandPath)).toBe(false);
   });
 
   it("skips the whole bundle when the hook could not be enabled", () => {
@@ -807,7 +942,7 @@ describe("stepConfigureTools", () => {
     );
   });
 
-  it("keeps the install successful when the slash command cannot be written", () => {
+  it("keeps the MCP install when the incognito command cannot be written, and says why", () => {
     const cfg = makeCfg();
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
     // A file where the commands directory should be: mkdir fails, the command cannot be written.
@@ -820,22 +955,21 @@ describe("stepConfigureTools", () => {
     });
 
     expect(results[0].error).toBeUndefined();
-    expect(results[0].hook).toBeDefined();
-    expect(results[0].statusline).toBeDefined();
+    // The command is part of what the hook installs: the hook did not finish.
+    expect(results[0].hook).toBeUndefined();
     expect(results[0].incognito).toBeUndefined();
     expect(p.log.warn).toHaveBeenCalledWith(
-      expect.stringContaining("Could not enable the /dosu-incognito command for Cursor"),
+      expect.stringMatching(/Could not enable the knowledge sync hook for Cursor: .*commands/),
     );
   });
 
-  it("reports a non-Error thrown by either bundle installer without failing the install", () => {
+  it("reports a non-Error thrown by the status line installer without failing the install", () => {
     const cfg = makeCfg();
     const throwing = {
       id: () => "cursor",
       name: () => "Cursor",
       isInstalled: () => true,
       configPath: () => "/dev/null",
-      commandPath: () => "/dev/null",
       isEnabled: () => false,
       enable: () => {
         throw "disk full";
@@ -843,7 +977,6 @@ describe("stepConfigureTools", () => {
       disable: () => false,
     };
     mockGetStatuslineAgent.mockReturnValue(throwing);
-    mockGetIncognitoAgent.mockReturnValue(throwing);
 
     const results = stepConfigureTools(cfg, {
       toInstall: [CursorProvider()],
@@ -854,30 +987,37 @@ describe("stepConfigureTools", () => {
     expect(results[0].error).toBeUndefined();
     expect(results[0].hook).toBeDefined();
     expect(results[0].statusline).toBeUndefined();
-    expect(results[0].incognito).toBeUndefined();
+    expect(results[0].incognito).toBeDefined();
     expect(p.log.warn).toHaveBeenCalledWith(
       "Could not enable the Dosu status line for Cursor: disk full",
     );
-    expect(p.log.warn).toHaveBeenCalledWith(
-      "Could not enable the /dosu-incognito command for Cursor: disk full",
-    );
   });
 
-  it("prints the Codex trust note after enabling its hook", () => {
+  it("tells the user Codex's hooks are trusted after enabling them", () => {
     const cfg = makeCfg();
+    // A Codex from before SessionEnd, ahead of anything else on PATH: the per-turn Stop trigger.
+    const bin = join(tempDir, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "codex"), '#!/bin/sh\necho "codex-cli 0.140.0"\n', { mode: 0o755 });
+    vi.stubEnv("PATH", `${bin}${delimiter}${process.env.PATH ?? ""}`);
 
-    const results = stepConfigureTools(cfg, {
-      toInstall: [CodexProvider()],
-      toRemove: [],
-      skipped: [],
-    });
+    try {
+      const results = stepConfigureTools(cfg, {
+        toInstall: [CodexProvider()],
+        toRemove: [],
+        skipped: [],
+      });
 
-    const hooks = JSON.parse(readFileSync(join(tempDir, ".codex", "hooks.json"), "utf-8"));
-    expect(hooks.hooks.Stop).toBeDefined();
-    stepShowSummary(results);
-    expect(p.log.info).toHaveBeenCalledWith(
-      expect.stringContaining("approve the Dosu hook when prompted"),
-    );
+      const hooks = JSON.parse(readFileSync(join(tempDir, ".codex", "hooks.json"), "utf-8"));
+      expect(hooks.hooks.Stop).toBeDefined();
+      expect(readFileSync(join(tempDir, ".codex", "config.toml"), "utf-8")).toContain(
+        "trusted_hash",
+      );
+      stepShowSummary(results);
+      expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("marked trusted"));
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 
@@ -1338,7 +1478,7 @@ describe("runSetup integration", () => {
     expect(savedCfg.active_account?.target?.api_key).toBe("key-abc");
 
     const cursorConfig = loadJSONConfig(join(tempDir, ".cursor", "mcp.json"));
-    expect(cursorConfig.mcpServers.dosu.url).toContain("/v1/mcp/deployments/d2");
+    expect(cursorConfig.mcpServers.dosu.url).toContain("/v2/mcp/deployments/d2");
     expect(cursorConfig.mcpServers.dosu.url).not.toBe(ossConfig.mcpServers.dosu.url);
   });
 
@@ -1413,7 +1553,7 @@ describe("runSetup integration", () => {
     await runSetup();
 
     const cursorConfig = loadJSONConfig(cursorConfigPath);
-    expect(cursorConfig.mcpServers.dosu.url).toContain("/v1/mcp/deployments/d1");
+    expect(cursorConfig.mcpServers.dosu.url).toContain("/v2/mcp/deployments/d1");
     expect(cursorConfig.mcpServers.dosu.headers["X-Dosu-API-Key"]).toBe("key-abc");
   });
 
@@ -3238,7 +3378,13 @@ describe("stepOfferInitialSync", () => {
   afterEach(teardownTempEnv);
 
   function backlogOutcome(readySessions: number) {
-    return { status: "backlog", readySessions, inFlightSessions: 0, sessions: [] };
+    const sessions = Array.from({ length: readySessions }, (_, i) => ({
+      id: `offered-${i}`,
+      harness: "claude",
+      path: `/tmp/offered-${i}.jsonl`,
+      updated: `2026-09-0${i + 1}T00:00:00.000Z`,
+    }));
+    return { status: "backlog", readySessions, inFlightSessions: 0, sessions };
   }
 
   it("does nothing without an API key or deployment", async () => {
@@ -3249,13 +3395,50 @@ describe("stepOfferInitialSync", () => {
     expect(vi.mocked(p.confirm)).not.toHaveBeenCalled();
   });
 
-  it("scans with the bootstrap scope (old sessions included)", async () => {
+  it("does nothing once the user opted out of shipping", async () => {
+    setShipTranscripts(false);
+
+    await stepOfferInitialSync(makeCfg());
+
+    expect(mockRunKnowledgeSync).not.toHaveBeenCalled();
+    expect(vi.mocked(p.confirm)).not.toHaveBeenCalled();
+  });
+
+  it("says plainly that sessions are uploaded, and how to keep them out", async () => {
+    mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(3));
+    vi.mocked(p.confirm).mockResolvedValue(false);
+    // What the tools step left: Cursor's hooks, its incognito command with them.
+    stepConfigureTools(makeCfg(), { toInstall: [CursorProvider()], toRemove: [], skipped: [] });
+
+    await stepOfferInitialSync(makeCfg());
+
+    // wrapLog breaks lines to the terminal width; compare on flattened whitespace.
+    const said = vi.mocked(p.log.message).mock.calls.join(" ").replace(/\s+/g, " ");
+    expect(said).toContain("uploaded");
+    expect(said).toContain("redacted on this machine");
+    expect(said).toContain("Run /dosu-incognito (Cursor) in a session to keep it out");
+    expect(said).toContain("dosu knowledge transcripts disable");
+    expect(said).not.toContain("stay on this machine");
+  });
+
+  it("offers no incognito command that is not installed", async () => {
     mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(3));
     vi.mocked(p.confirm).mockResolvedValue(false);
 
     await stepOfferInitialSync(makeCfg());
 
-    expect(mockRunKnowledgeSync).toHaveBeenCalledWith({ bootstrap: true });
+    const said = vi.mocked(p.log.message).mock.calls.join(" ").replace(/\s+/g, " ");
+    expect(said).not.toContain("incognito");
+    expect(said).toContain("Run dosu knowledge transcripts disable to stop shipping altogether.");
+  });
+
+  it("only counts the backlog: the offer itself never ships anything", async () => {
+    mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(3));
+    vi.mocked(p.confirm).mockResolvedValue(false);
+
+    await stepOfferInitialSync(makeCfg());
+
+    expect(mockRunKnowledgeSync.mock.calls[0][0]?.deps?.ship).toBeUndefined();
   });
 
   it("stays quiet when there is nothing to mine", async () => {
@@ -3285,7 +3468,7 @@ describe("stepOfferInitialSync", () => {
       "--quiet",
       "--bootstrap",
     ]);
-    expect(vi.mocked(p.log.success).mock.calls.join(" ")).toContain("Studying ");
+    expect(vi.mocked(p.log.success).mock.calls.join(" ")).toContain("Shipping 12 sessions");
     // Both prompts answered "yes": the live Activity view opens.
     expect(vi.mocked(runActivityView)).toHaveBeenCalledOnce();
   });
@@ -3308,17 +3491,119 @@ describe("stepOfferInitialSync", () => {
 
     await stepOfferInitialSync(makeCfg());
 
-    expect(vi.mocked(p.log.success).mock.calls.join(" ")).toContain("Studying 1 session in");
+    expect(vi.mocked(p.log.success).mock.calls.join(" ")).toContain("Shipping 1 session in");
   });
 
-  it("skips without spawning when the user declines", async () => {
+  it("declining ships only new sessions: the offered backlog is settled as the user's call", async () => {
     mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(2));
     vi.mocked(p.confirm).mockResolvedValue(false);
 
     await stepOfferInitialSync(makeCfg());
 
     expect(mockSpawnDetachedSelf).not.toHaveBeenCalled();
-    expect(vi.mocked(p.log.info).mock.calls.join(" ")).toContain("Skipped");
+    // Otherwise the next session-end hook would ship the same 30 days anyway.
+    const ledger = loadSyncState().sessions;
+    expect(Object.keys(ledger).sort()).toEqual(["claude/offered-0", "claude/offered-1"]);
+    expect(ledger["claude/offered-1"]).toMatchObject({
+      outcome: "skipped_by_user",
+      updated: "2026-09-02T00:00:00.000Z",
+    });
+    expect(vi.mocked(p.log.info).mock.calls.join(" ")).toContain("Only sessions from now on");
+  });
+
+  it("a re-run offers only sessions never settled; a shipped one that grew keeps its entry", async () => {
+    // Shipped before, then resumed: the next hook ships just its tail, so it is no backlog.
+    const shipped = {
+      updated: "2026-08-01T00:00:00.000Z",
+      outcome: "shipped" as const,
+      at: "2026-08-01T00:05:00.000Z",
+      cli_version: "0.1.0",
+      task_id: "t",
+      records: 12,
+      prefix_sha256: "abc",
+    };
+    saveSyncState({ ...loadSyncState(), sessions: { "claude/offered-0": shipped } });
+    mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(3));
+    vi.mocked(p.confirm).mockResolvedValue(false);
+
+    await stepOfferInitialSync(makeCfg());
+
+    const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
+    expect(spinner?.stop).toHaveBeenCalledWith(expect.stringContaining("Found 2 agent sessions"));
+    const ledger = loadSyncState().sessions;
+    expect(ledger["claude/offered-0"]).toEqual(shipped);
+    expect(ledger["claude/offered-1"]?.outcome).toBe("skipped_by_user");
+    expect(ledger["claude/offered-2"]?.outcome).toBe("skipped_by_user");
+  });
+
+  it("counts a session's subagents with it, and declining settles them with it", async () => {
+    const outcome = backlogOutcome(1);
+    const child = { ...outcome.sessions[0], id: "agent-a1", parentId: "offered-0" };
+    mockRunKnowledgeSync.mockResolvedValue({
+      ...outcome,
+      readySessions: 2,
+      sessions: [...outcome.sessions, child],
+    });
+    vi.mocked(p.confirm).mockResolvedValue(false);
+
+    await stepOfferInitialSync(makeCfg());
+
+    const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
+    expect(spinner?.stop).toHaveBeenCalledWith(expect.stringContaining("Found 1 agent session "));
+    const ledger = loadSyncState().sessions;
+    expect(ledger["claude/agent-a1"]).toMatchObject({
+      outcome: "skipped_by_user",
+      parent: "offered-0",
+    });
+  });
+
+  it("counts no session of an agent in incognito, and declining settles them as its switch would", async () => {
+    setAgentsIncognito(["cursor"], true);
+    const outcome = backlogOutcome(2);
+    const cursor = { ...outcome.sessions[0], id: "c-1", harness: "cursor", path: "/tmp/c-1.json" };
+    mockRunKnowledgeSync.mockResolvedValue({
+      ...outcome,
+      readySessions: 3,
+      sessions: [...outcome.sessions, cursor],
+    });
+    vi.mocked(p.confirm).mockResolvedValue(false);
+
+    await stepOfferInitialSync(makeCfg());
+
+    const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
+    expect(spinner?.stop).toHaveBeenCalledWith(expect.stringContaining("Found 2 agent sessions"));
+    const ledger = loadSyncState().sessions;
+    expect(ledger["cursor/c-1"]).toMatchObject({ outcome: "incognito", by_agent: true });
+    expect(ledger["claude/offered-1"]?.outcome).toBe("skipped_by_user");
+  });
+
+  it("offers nothing when the only sessions are an incognito agent's", async () => {
+    setAgentsIncognito(["claude"], true);
+    mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(2));
+
+    await stepOfferInitialSync(makeCfg());
+
+    expect(vi.mocked(p.confirm)).not.toHaveBeenCalled();
+    const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
+    expect(spinner?.stop).toHaveBeenCalledWith(expect.stringContaining("No recent agent sessions"));
+  });
+
+  it("offers nothing when every pending session was settled before", async () => {
+    const trivial = {
+      updated: "2026-08-01T00:00:00.000Z",
+      outcome: "trivial" as const,
+      at: "2026-08-01T00:05:00.000Z",
+      cli_version: "0.1.0",
+    };
+    saveSyncState({ ...loadSyncState(), sessions: { "claude/offered-0": trivial } });
+    mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(1));
+    consumeCommandFacets();
+
+    await stepOfferInitialSync(makeCfg());
+
+    expect(vi.mocked(p.confirm)).not.toHaveBeenCalled();
+    expect(loadSyncState().sessions).toEqual({ "claude/offered-0": trivial });
+    expect(consumeCommandFacets()).toEqual({ backfill_offer: "not-offered" });
   });
 
   it("treats a cancelled prompt as a decline", async () => {
@@ -3329,6 +3614,10 @@ describe("stepOfferInitialSync", () => {
     await stepOfferInitialSync(makeCfg());
 
     expect(mockSpawnDetachedSelf).not.toHaveBeenCalled();
+    expect(Object.values(loadSyncState().sessions).map((e) => e.outcome)).toEqual([
+      "skipped_by_user",
+      "skipped_by_user",
+    ]);
   });
 
   it("warns when the detached spawn fails", async () => {
@@ -3381,6 +3670,8 @@ describe("stepOfferInitialSync", () => {
       await stepOfferInitialSync(makeCfg());
       expect(consumeCommandFacets()).toEqual({ backfill_offer: "declined" });
 
+      // A fresh machine: the decline above settled the first backlog, which is never re-offered.
+      saveSyncState({ ...loadSyncState(), sessions: {} });
       vi.mocked(p.confirm).mockResolvedValue(Symbol("cancel"));
       vi.mocked(p.isCancel).mockReturnValue(true);
       await stepOfferInitialSync(makeCfg());

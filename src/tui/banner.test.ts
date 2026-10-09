@@ -171,11 +171,11 @@ describe("renderBanner", () => {
   });
 
   it("includes the sync row only when a study run is active", () => {
-    expect(stripAnsi(renderBanner(makeContext()))).not.toContain("studying sessions");
+    expect(stripAnsi(renderBanner(makeContext()))).not.toContain("shipping sessions");
 
     const active = stripAnsi(renderBanner(makeContext({ studying: true })));
     expect(active).toContain("sync");
-    expect(active).toContain("\uD83D\uDCDA studying sessions... \u00B7 see activity");
+    expect(active).toContain("\uD83D\uDCDA shipping sessions... \u00B7 see activity");
   });
 
   it("includes the update row only when a newer version is known", () => {

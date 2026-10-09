@@ -21,6 +21,7 @@ import {
   checkForUpdates,
   fetchLatestVersion,
   getAvailableUpdate,
+  isNewerRelease,
   isNewerVersion,
 } from "./update-check";
 
@@ -166,6 +167,27 @@ describe("isNewerVersion", () => {
   });
 });
 
+describe("isNewerRelease", () => {
+  it("orders prereleases of one version by their number", () => {
+    expect(isNewerRelease("0.63.0-beta.2", "0.63.0-beta.1")).toBe(true);
+    expect(isNewerRelease("0.63.0-beta.10", "0.63.0-beta.9")).toBe(true);
+    expect(isNewerRelease("0.63.0-beta.1", "0.63.0-beta.1")).toBe(false);
+    expect(isNewerRelease("0.63.0-beta.1", "0.63.0-beta.2")).toBe(false);
+  });
+
+  it("ranks a release above its own prereleases", () => {
+    expect(isNewerRelease("0.63.0", "0.63.0-beta.4")).toBe(true);
+    expect(isNewerRelease("0.63.0-beta.4", "0.63.0")).toBe(false);
+  });
+
+  it("compares release versions like isNewerVersion", () => {
+    expect(isNewerRelease("0.64.0-beta.1", "0.63.0-beta.9")).toBe(true);
+    expect(isNewerRelease("0.62.2", "0.62.1")).toBe(true);
+    expect(isNewerRelease("0.62.1", "0.63.0-beta.1")).toBe(false);
+    expect(isNewerRelease("1.0.0+build.2", "1.0.0")).toBe(false);
+  });
+});
+
 describe("fetchLatestVersion", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -181,6 +203,18 @@ describe("fetchLatestVersion", () => {
     );
     const result = await fetchLatestVersion();
     expect(result).toBe("9.9.9");
+  });
+
+  it("reads the dist-tag of the channel it is asked for", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ latest: "0.62.1", beta: "0.63.0-beta.2" }),
+      }),
+    );
+    expect(await fetchLatestVersion("beta")).toBe("0.63.0-beta.2");
+    expect(await fetchLatestVersion("latest")).toBe("0.62.1");
   });
 
   it("returns null on non-ok response", async () => {
@@ -403,6 +437,23 @@ describe("checkForUpdates", () => {
     );
 
     expect(getAvailableUpdate()).toBe("99.0.0");
+  });
+
+  it("never checks for or offers public releases in a self-hosted build", async () => {
+    const { mkdirSync } = require("node:fs");
+    mkdirSync(join(tempDir, "dosu-cli"), { recursive: true });
+    writeFileSync(
+      join(tempDir, "dosu-cli", "update-check.json"),
+      JSON.stringify({ lastCheck: 0, latestVersion: "99.0.0" }),
+    );
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await checkForUpdates({ channel: "selfhost" });
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(spy).not.toHaveBeenCalled();
+    expect(mocks.startAutoUpdate).not.toHaveBeenCalled();
+    expect(getAvailableUpdate("selfhost")).toBeNull();
   });
 
   it("getAvailableUpdate is null with no cache or no newer version", () => {
