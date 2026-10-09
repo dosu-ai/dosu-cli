@@ -213,6 +213,15 @@ export function deploymentsCommand(): Command {
       }
 
       console.log(pc.green(`Switched to deployment: ${deployment.name}`));
+      // Switching rewrites only the CLI's config; agents' MCP entries embed the deployment URL
+      // and key, so a live connection keeps answering from the old one until refreshed.
+      console.log(
+        pc.dim(
+          "This changes the CLI's saved selection. An AI tool with a running Dosu MCP connection " +
+            "keeps its previous deployment until you run 'dosu mcp refresh' and restart or " +
+            "reconnect it.",
+        ),
+      );
     });
 
   return cmd;

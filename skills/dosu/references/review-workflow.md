@@ -10,7 +10,8 @@ replies come only from threads of the selected MCP deployment.
 
 ## Read the list result
 
-`dosu review list --json` returns `{ "items": [...], "truncated": <bool>, "total": <n> }`.
+`dosu review list --json` returns
+`{ "items": [...], "truncated": <bool>, "total": <n>, "scope": {...} }`.
 
 - `items` holds at most 50 entries, newest first, doc changes and draft
   replies merged.
@@ -26,8 +27,35 @@ replies come only from threads of the selected MCP deployment.
   (`2026-09-01`; an `--until` date includes that whole day), or an ISO-8601
   datetime. When `truncated` is true, `--until` reaches older items.
 
-An empty `items` array means no pending items in the current scope. It is not
-a reason to switch deployments.
+`scope` says what was searched. It was added alongside the older fields,
+which keep their meaning:
+
+- `library`: `{ "id", "name" }` of the Library whose pending doc changes are
+  listed.
+- `deployment`: `{ "id", "name" }` of the MCP deployment whose draft replies
+  are listed, or `null` when none is saved. Then drafts are not listed.
+- `kinds`: the item kinds searched, `["doc_change", "draft_message"]` or
+  `["doc_change"]`.
+- `since` / `until`: the resolved ISO-8601 bounds, or `null` when unbounded.
+
+A `name` is `null` when the server could not provide one; report the ID then
+and do not guess a name. Tell the user which Library the list covers.
+
+An empty `items` array means no pending items in this scope. It is not a
+reason to switch deployments.
+
+`review list` checks the saved context before listing and fails (exit 1,
+nothing on stdout) instead of returning an empty list when:
+
+- `Not logged in`: run `dosu login`.
+- `No Library selected`: no Library is saved. Follow the context check below.
+- `... is unavailable`: the saved MCP deployment or Library was deleted, or
+  the signed-in account cannot access it. Follow the context check below; if
+  `dosu deployments list --json` returns nothing, the saved organization may
+  be the inaccessible one, and `dosu setup` chooses it again.
+- `... does not match ...`: the saved Library is not the MCP deployment's
+  Library. The message names the `dosu deployments switch` command that saves
+  them together again; run it only after the user confirms.
 
 ## Check the context when the scope looks wrong
 
@@ -38,7 +66,9 @@ different Library, or a command reports missing context:
 2. `dosu deployments info --json`: the selected MCP deployment. The list reads
    the Library saved in the CLI's config, which `dosu setup` and
    `dosu deployments switch` set to this deployment's `space_id`
-   (`dosu libraries info <space_id> --json` gives its name).
+   (`dosu libraries info <space_id> --json` gives its name). A successful list
+   already reports both in `scope`, and a saved Library that does not match
+   the deployment's is an error.
 3. If that is not the Library the user means, run
    `dosu deployments list --json` and find the MCP deployment whose `space_id`
    matches it (`dosu libraries list --json` maps names to IDs).
@@ -47,6 +77,11 @@ different Library, or a command reports missing context:
    selection for later commands and mints a new API key, so say that it did.
    Never pick the first deployment, and ask when several match or none does.
 5. Run `dosu review list --json` again.
+
+`deployments switch` changes only the CLI's saved selection. An AI tool with a
+running Dosu MCP connection still points at its previous deployment until
+`dosu mcp refresh` rewrites its MCP entry and the tool restarts or reconnects.
+Say so after a switch; do not run `dosu mcp refresh` unless the user asks.
 
 ## Draft reply limits
 
