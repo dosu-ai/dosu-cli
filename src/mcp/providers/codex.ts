@@ -9,7 +9,7 @@ import { type Config, MODE_OSS } from "../../config/config";
 import { mcpEndpoint, npxRemoteEntry, writeSecureFile } from "../config-helpers";
 import { expandHome, findNpx, isInstalled, npxPathEnv } from "../detect";
 import type { SetupProvider } from "../providers";
-import { ANY, hasShape, shapeEndpoint } from "../shape";
+import { ANY, entryHasShape, shapeEndpoint } from "../shape";
 
 function codexHome(): string {
   return process.env.CODEX_HOME ?? expandHome("~/.codex");
@@ -203,7 +203,7 @@ export const CodexProvider = (): SetupProvider => ({
     return content.includes("[mcp_servers.dosu]");
   },
   isCurrent: (cfg) =>
-    hasShape(
+    entryHasShape(
       dosuEntry(shapeEndpoint(cfg), ANY, ANY, npxPathEnv(join(ANY, "npx"))),
       readDosuEntry(readTOML(join(codexHome(), "config.toml"))),
     ),

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { makeTestConfig } from "../config/config.test-utils";
 import { getBackendURL } from "../config/constants";
-import { ANY, hasShape, shapeEndpoint } from "./shape";
+import { ANY, entryHasShape, hasShape, shapeEndpoint } from "./shape";
 
 const session = { access_token: "at", refresh_token: "rt", expires_at: 0 };
 
@@ -49,6 +49,21 @@ describe("hasShape", () => {
   it("treats regex characters in the fixed text literally", () => {
     expect(hasShape(`${ANY}/a.b(c)`, "x/a.b(c)")).toBe(true);
     expect(hasShape(`${ANY}/a.b(c)`, "x/aXb(c)")).toBe(false);
+  });
+});
+
+describe("entryHasShape", () => {
+  it("ignores the on/off, tool, and timeout keys an agent sets from its own UI", () => {
+    const expected = { url: "u", disabled: false };
+    expect(entryHasShape(expected, { url: "u", disabled: true, autoApprove: ["t"] })).toBe(true);
+    expect(entryHasShape(expected, { url: "u" })).toBe(true);
+    expect(entryHasShape({ url: "u" }, { url: "u", enabled: false, timeout: 30 })).toBe(true);
+  });
+
+  it("still compares every other key", () => {
+    expect(entryHasShape({ url: "u" }, { url: "u", alwaysLoad: true })).toBe(false);
+    expect(entryHasShape({ url: "u", alwaysLoad: true }, { url: "u", disabled: true })).toBe(false);
+    expect(entryHasShape({ url: "u" }, undefined)).toBe(false);
   });
 });
 

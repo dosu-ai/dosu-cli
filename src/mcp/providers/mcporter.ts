@@ -11,7 +11,7 @@ import {
 } from "../config-helpers";
 import { expandHome, isInstalled } from "../detect";
 import type { SetupProvider } from "../providers";
-import { ANY, hasShape, shapeEndpoint } from "../shape";
+import { ANY, entryHasShape, shapeEndpoint } from "../shape";
 
 function server(url: string, apiKey: string | undefined) {
   return { type: "http", url, headers: mcpHeaders(apiKey) };
@@ -35,7 +35,7 @@ export const MCPorterProvider = (): SetupProvider => ({
   globalConfigPath: () => resolveGlobalConfigPath(),
   isConfigured: () => isJSONKeyConfigured(resolveGlobalConfigPath(), "mcpServers"),
   isCurrent: (cfg) =>
-    hasShape(
+    entryHasShape(
       server(shapeEndpoint(cfg), ANY),
       readJSONServer(resolveGlobalConfigPath(), "mcpServers"),
     ),

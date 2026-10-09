@@ -10,7 +10,7 @@ import {
 } from "../config-helpers";
 import { expandHome, isInstalled } from "../detect";
 import type { SetupProvider } from "../providers";
-import { ANY, hasShape, shapeEndpoint } from "../shape";
+import { ANY, entryHasShape, shapeEndpoint } from "../shape";
 
 function globalServer(url: string, apiKey: string | undefined) {
   return { type: "http", url, tools: ["*"], headers: mcpHeaders(apiKey) };
@@ -33,7 +33,10 @@ export const CopilotProvider = (): SetupProvider => ({
   globalConfigPath: () => globalPath(),
   isConfigured: () => isJSONKeyConfigured(globalPath(), "mcpServers"),
   isCurrent: (cfg) =>
-    hasShape(globalServer(shapeEndpoint(cfg), ANY), readJSONServer(globalPath(), "mcpServers")),
+    entryHasShape(
+      globalServer(shapeEndpoint(cfg), ANY),
+      readJSONServer(globalPath(), "mcpServers"),
+    ),
 
   install(cfg: Config, global: boolean): void {
     const url = mcpEndpoint(cfg);
