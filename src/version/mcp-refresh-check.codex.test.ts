@@ -107,6 +107,31 @@ describe("post-upgrade refresh onto the Codex omit_tools_from entry", () => {
     expect(codexConfig()).toBe(content);
   });
 
+  it("keeps Dosu switched off, and the user's tool settings, through the rewrite", () => {
+    seed("0.65.1");
+    const userKeys = 'enabled = false\ndisabled_tools = ["read"]\n';
+    const approval = '[mcp_servers.dosu.tools.search]\napproval_mode = "approve"\n';
+    writeFileSync(
+      join(home, ".codex", "config.toml"),
+      USER_SETTINGS +
+        PRE_CHANGE_ENTRY.replace("[mcp_servers.dosu]\n", `[mcp_servers.dosu]\n${userKeys}`) +
+        `\n${approval}`,
+    );
+
+    checkForMcpRefresh();
+
+    const content = codexConfig();
+    expect(content.startsWith(USER_SETTINGS)).toBe(true);
+    expect(content).toContain(`omit_tools_from = ["deferred"]\n${userKeys}`);
+    expect(content).toContain(approval);
+    expect(content).toContain("/deployments/dep-new");
+
+    writeFileSync(join(getConfigDir(), "mcp-refresh.json"), JSON.stringify({ version: "0.9.0" }));
+    checkForMcpRefresh();
+
+    expect(codexConfig()).toBe(content);
+  });
+
   it("leaves the config alone once this version already checked it", () => {
     seed("1.0.0");
 

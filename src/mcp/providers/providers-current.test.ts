@@ -184,6 +184,33 @@ describe("out-of-date entries", () => {
       expect(provider("codex").isCurrent(makeCfg())).toBe(true);
     });
 
+    it("is still not current without omit_tools_from when Dosu is switched off", () => {
+      provider("codex").install(makeCfg(), true);
+      const written = readFileSync(path(), "utf-8").replace(/^omit_tools_from = .*\n/m, "");
+      writeFileSync(
+        path(),
+        written.replace("[mcp_servers.dosu]\n", "[mcp_servers.dosu]\nenabled = false\n"),
+      );
+
+      expect(provider("codex").isCurrent(makeCfg())).toBe(false);
+    });
+
+    it("stays current with saved tool approvals and a multi-line tool filter", () => {
+      provider("codex").install(makeCfg(), true);
+      const rootKeys =
+        'default_tools_approval_mode = "prompt"\ntools.list.approval_mode = "approve"\n' +
+        'enabled_tools = [\n  "search",\n  "read",\n]\n';
+      const approval = '[mcp_servers.dosu.tools.search]\napproval_mode = "approve"\n';
+      const written = readFileSync(path(), "utf-8");
+      const withSettings = written.replace(
+        "[mcp_servers.dosu]\n",
+        `[mcp_servers.dosu]\n${rootKeys}`,
+      );
+      writeFileSync(path(), `${withSettings}\n${approval}`);
+
+      expect(provider("codex").isCurrent(makeCfg())).toBe(true);
+    });
+
     it("skips blank lines and comments inside the entry", () => {
       provider("codex").install(makeCfg(), true);
       const written = readFileSync(path(), "utf-8");

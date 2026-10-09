@@ -65,6 +65,14 @@ describe("entryHasShape", () => {
     expect(entryHasShape({ url: "u", alwaysLoad: true }, { url: "u", disabled: true })).toBe(false);
     expect(entryHasShape({ url: "u" }, undefined)).toBe(false);
   });
+
+  // Codex's omit_tools_from is part of the entry's format: an entry without it must stay stale so
+  // the post-upgrade refresh adds it.
+  it("compares Codex's omit_tools_from as format, not a user choice", () => {
+    const expected = { command: "c", omit_tools_from: ["deferred"] };
+    expect(entryHasShape(expected, { command: "c", enabled: false })).toBe(false);
+    expect(entryHasShape(expected, { ...expected, enabled: false })).toBe(true);
+  });
 });
 
 describe("shapeEndpoint", () => {
