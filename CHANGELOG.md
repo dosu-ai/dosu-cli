@@ -1,3 +1,10 @@
+# [0.68.0](https://github.com/dosu-ai/dosu-cli/compare/v0.67.2...v0.68.0) (2026-10-09)
+
+
+### Features
+
+* **mcp:** load Dosu tools up front in Codex ([#257](https://github.com/dosu-ai/dosu-cli/issues/257)) ([c6cc437](https://github.com/dosu-ai/dosu-cli/commit/c6cc43743307d51a4d62b70ee0388a53c7c8c554)), closes [#270](https://github.com/dosu-ai/dosu-cli/issues/270)
+
 ## [0.67.2](https://github.com/dosu-ai/dosu-cli/compare/v0.67.1...v0.67.2) (2026-10-09)
 
 
