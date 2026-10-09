@@ -91,4 +91,15 @@ describe("bundled dosu skill: review routing", () => {
       expect(workflow, anchor).toContain(anchor);
     }
   });
+
+  it("documents the list's scope object and the saved-selection vs live-MCP split", () => {
+    const workflow = skillFile("references/review-workflow.md");
+    const commands = skillFile("references/commands.md");
+    // Each field `review list --json` puts in `scope` is named in the workflow reference.
+    for (const anchor of ["`scope`", "`library`", "`deployment`", "`kinds`", "dosu mcp refresh"]) {
+      expect(workflow, anchor).toContain(anchor);
+    }
+    expect(commands).toContain("`scope`");
+    expect(commands).toMatch(/^dosu mcp refresh$/m);
+  });
 });

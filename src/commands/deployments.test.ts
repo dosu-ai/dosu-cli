@@ -384,6 +384,29 @@ describe("deployments switch", () => {
     expect(allOutput()).toContain("New Deploy");
   });
 
+  it("explains that running MCP connections keep their previous deployment", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce(deployment);
+    await run("switch", NEW_DEP);
+
+    const out = allOutput();
+    expect(out).toContain("saved selection");
+    expect(out).toContain("previous deployment");
+    expect(out).toContain("dosu mcp refresh");
+  });
+
+  it("keeps the --json receipt unchanged (no explanation mixed into stdout)", async () => {
+    mockLoadConfig.mockReturnValue(validConfig);
+    mockQuery.mockResolvedValueOnce(deployment);
+    await run("switch", "--json", NEW_DEP);
+
+    expect(JSON.parse(allOutput())).toEqual({
+      success: true,
+      deployment_id: NEW_DEP,
+      name: "New Deploy",
+    });
+  });
+
   it("exits when deployment is not found", async () => {
     mockLoadConfig.mockReturnValue(validConfig);
     mockQuery.mockResolvedValueOnce(null);

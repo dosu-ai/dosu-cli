@@ -1,3 +1,10 @@
+# [0.67.0](https://github.com/dosu-ai/dosu-cli/compare/v0.66.1...v0.67.0) (2026-10-09)
+
+
+### Features
+
+* **review:** show the searched scope and fail on missing or unavailable context ([#253](https://github.com/dosu-ai/dosu-cli/issues/253)) ([92c1cd0](https://github.com/dosu-ai/dosu-cli/commit/92c1cd02748371390145ea94cdc14efcd2b69985))
+
 ## [0.66.1](https://github.com/dosu-ai/dosu-cli/compare/v0.66.0...v0.66.1) (2026-10-06)
 
 
