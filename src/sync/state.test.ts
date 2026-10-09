@@ -18,6 +18,7 @@ import {
   type LedgerEntry,
   leaveIncognito,
   ledgerStamp,
+  legacyPassedSessions,
   loadSyncState,
   outcomeCounts,
   pruneLedger,
@@ -315,6 +316,31 @@ describe("migration from the studying-era state (schema 1)", () => {
     expect(raw.incognito_agents).toEqual(["claude", "cursor"]);
   });
 
+  it("keeps what 0.66's watermark passed over unstudied, for the first sync to settle", () => {
+    // 0.66 passed an incognito agent's sessions by the watermark, and dropped the agent from the
+    // list once the switch was off: nothing else says which those were.
+    const v066 = {
+      ...v1,
+      watermark: "2026-10-06T12:00:00Z",
+      mined_sessions: [{ at: "2026-10-06T12:00:00Z", session: "claude/studied" }, { at: "x" }],
+    };
+    writeRaw(v066);
+    expect(loadSyncState(configDir).legacy_passed).toEqual({
+      before: "2026-10-06T12:00:00Z",
+      studied: ["claude/studied"],
+    });
+    // Kept until a sync settles it, through other saves and a clear.
+    setSyncPaused(false, configDir);
+    resetSyncState(configDir);
+    expect(loadSyncState(configDir).legacy_passed?.before).toBe("2026-10-06T12:00:00Z");
+
+    // Not from before 0.66 brought the switch, nor from beta's schema 1, which had none.
+    writeRaw(v1);
+    expect(loadSyncState(configDir).legacy_passed).toBeUndefined();
+    writeRaw({ ...v066, ship: {} });
+    expect(loadSyncState(configDir).legacy_passed).toBeUndefined();
+  });
+
   it("drops an empty incognito list rather than storing it", () => {
     writeRaw({ ...v1, incognito_agents: [] });
     expect("incognito_agents" in loadSyncState(configDir)).toBe(false);
@@ -331,6 +357,26 @@ describe("migration from the studying-era state (schema 1)", () => {
     expect(isShippingEnabled(state)).toBe(true);
     expect(state.repo_filter).toEqual(["github.com/me/proj"]);
     expect(state.project_filter).toEqual(["/Users/me/proj"]);
+  });
+});
+
+describe("legacyPassedSessions", () => {
+  it("names the unsettled, unstudied sessions the watermark passed since the switch existed", () => {
+    const at = (id: string, updated: string) => session({ id, updated });
+    const sessions = [
+      at("passed", "2026-10-06T10:00:00Z"),
+      at("studied", "2026-10-06T10:00:00Z"),
+      at("settled", "2026-10-06T10:00:00Z"),
+      at("before-the-switch", "2026-10-04T10:00:00Z"),
+      at("since", "2026-10-07T10:00:00Z"),
+    ];
+    const state = {
+      sessions: { "claude/settled": entry() },
+      legacy_passed: { before: "2026-10-06T12:00:00Z", studied: ["claude/studied"] },
+    };
+
+    expect(legacyPassedSessions(sessions, state).map((s) => s.id)).toEqual(["passed"]);
+    expect(legacyPassedSessions(sessions, { sessions: {} })).toEqual([]);
   });
 });
 

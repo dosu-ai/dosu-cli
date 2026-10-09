@@ -476,7 +476,11 @@ prefix (`records`, `prefix_sha256`), since nothing more of the session is ever s
   `off` reinstall the agent's incognito command when it is missing; a failure there leaves the
   switch as set.
 - The list carries over from a 0.66 state file (schema 1, which kept `incognito_agents` at the top
-  level) and from schema 2. A state file with a schema this CLI does not know (a newer one, after a
+  level) and from schema 2. So does what 0.66 promised for an agent already taken out of it: its
+  learner's watermark passed that agent's sessions by unstudied, so the first sync after the upgrade
+  settles every session the watermark passed since 0.66.0's release that its learner did not study
+  (`mined_sessions`) and the ledger has no answer for as `by_agent` incognito, once (the state
+  keeps them as `legacy_passed` until then). Trivial sessions it passed that day go with them. A state file with a schema this CLI does not know (a newer one, after a
   downgrade) starts the ledger over but keeps `incognito_agents` and `ship_transcripts: false`, so
   it never widens what ships.
 - Pi switches like the others, but its `/dosu-incognito` is part of the Dosu pi extension, which

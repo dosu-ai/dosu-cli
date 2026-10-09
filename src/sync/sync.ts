@@ -28,6 +28,7 @@ import {
   isPending,
   isShippingEnabled,
   type LedgerEntry,
+  legacyPassedSessions,
   loadSyncState,
   type PendingOptions,
   pruneLedger,
@@ -395,8 +396,11 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
         (Date.parse(entry.updated) !== Date.parse(s.updated) || entry.path !== s.path)
       );
     });
+    // Once, after an upgrade from 0.66: what its learner's watermark passed over unstudied may have
+    // been an incognito agent's, so it settles as the switch would have it.
+    const passed = legacyPassedSessions(scanned, state);
     const outsideChanged = !sameRecord(outside, remembered);
-    if (outsideChanged || restamped.length > 0) {
+    if (outsideChanged || restamped.length > 0 || state.legacy_passed) {
       // Saved now, whatever this run goes on to do (the next run must find these transcripts),
       // onto a fresh read so nothing a concurrent run settled meanwhile is lost.
       const fresh = loadState();
@@ -410,6 +414,20 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
         entry.updated = session.updated;
         entry.path = session.path;
       }
+      if (fresh.legacy_passed) {
+        const at = now().toISOString();
+        for (const session of legacyPassedSessions(passed, fresh)) {
+          const entry = agentIncognitoEntry(session, at, cliVersion);
+          fresh.sessions[sessionKey(session)] = entry;
+          state.sessions[sessionKey(session)] = entry;
+        }
+        delete fresh.legacy_passed;
+        logger.debug(
+          "sync",
+          `0.66 watermark: ${passed.length} sessions it passed settle off the record`,
+        );
+      }
+      delete state.legacy_passed;
       saveState(fresh);
       if (restamped.length > 0) {
         logger.debug(

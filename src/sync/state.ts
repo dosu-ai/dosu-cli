@@ -158,6 +158,12 @@ export interface SyncState {
    * what ran since then, however long ago (leaveIncognito). An agent listed without one (carried
    * over from 0.66) goes back as far as the scan window. */
   incognito_since?: Record<string, string>;
+  /** From a 0.66 state file: its learner's watermark (`before`) and the sessions it studied (by
+   * `harness/id`). The watermark also passed, unstudied, every session of an agent in incognito,
+   * which 0.66 promised to keep unstudied once the switch was off, and which nothing else tells
+   * apart now. The first sync settles each session it passed since the switch existed as the switch
+   * would have (`by_agent`), then drops this. */
+  legacy_passed?: { before: string; studied: string[] };
 }
 
 /** Whether finished sessions are shipped to Dosu memory: on unless the user opted out. */
@@ -256,7 +262,28 @@ function parseCommon(raw: Record<string, unknown>): Omit<SyncState, "schema_vers
     ...(outside ? { outside_sessions: outside } : {}),
     // Schema 1 (0.66's per-agent switch) kept it at the top level too, so it survives migration.
     ...agentList(raw.incognito_agents, raw.incognito_since),
+    ...legacyPassed(raw.legacy_passed),
   };
+}
+
+function legacyPassed(value: unknown): Pick<SyncState, "legacy_passed"> {
+  if (!isRecord(value) || typeof value.before !== "string" || !Array.isArray(value.studied)) {
+    return {};
+  }
+  return { legacy_passed: { before: value.before, studied: stringsOf(value.studied) } };
+}
+
+/** What a 0.66 learner's watermark passed over since the per-agent switch existed (see
+ * SyncState.legacy_passed); none for an older or another channel's file, whose CLI had no switch
+ * (beta's schema 1 kept shipping under `ship`). */
+function legacyWatermark(raw: Record<string, unknown>): Pick<SyncState, "legacy_passed"> {
+  const before = raw.watermark;
+  if (raw.schema_version !== 1 || isRecord(raw.ship) || typeof before !== "string") return {};
+  if (!(Date.parse(before) >= Date.parse(AGENT_SWITCH_SINCE))) return {};
+  const studied = (Array.isArray(raw.mined_sessions) ? raw.mined_sessions : []).flatMap((record) =>
+    isRecord(record) && typeof record.session === "string" ? [record.session] : [],
+  );
+  return { legacy_passed: { before, studied } };
 }
 
 /** `incognito_agents` as stored: sorted and de-duplicated, and no key at all when empty; with
@@ -280,7 +307,9 @@ function agentList(
  * schema 2 kept shipping progress at the top level behind one watermark. What carries over is
  * which sessions shipped, so they are not uploaded again unchanged. The watermark is dropped:
  * everything it passed over without shipping (trivial, rejected, unsupported, past the old
- * 200-session cap) becomes pending again, and the server dedupes anything it already has. */
+ * 200-session cap) becomes pending again, and the server dedupes anything it already has; all but
+ * what 0.66's learner passed over unstudied since its per-agent switch existed, which an incognito
+ * agent's sessions may be among (SyncState.legacy_passed). */
 function migrate(raw: Record<string, unknown>, progress: Record<string, unknown>): SyncState {
   const sessions: Record<string, LedgerEntry> = {};
   let shipped = 0;
@@ -314,6 +343,7 @@ function migrate(raw: Record<string, unknown>, progress: Record<string, unknown>
     schema_version: STATE_SCHEMA_VERSION,
     sessions,
     ...settings,
+    ...legacyWatermark(raw),
     ...optionalString("last_attempt_at", progress.last_attempt_at),
     consecutive_failures: nonNegative(progress.consecutive_failures) ?? 0,
     total_shipped: nonNegative(progress.total_shipped) ?? shipped,
@@ -553,6 +583,26 @@ export function agentIncognitoEntry(
   };
 }
 
+/** The scanned sessions a 0.66 learner's watermark passed over unstudied since the per-agent
+ * switch existed, which the ledger has no answer for (SyncState.legacy_passed). */
+export function legacyPassedSessions(
+  sessions: readonly AgentSession[],
+  state: Pick<SyncState, "sessions" | "legacy_passed">,
+): AgentSession[] {
+  const legacy = state.legacy_passed;
+  if (!legacy) return [];
+  const from = Date.parse(AGENT_SWITCH_SINCE);
+  const before = Date.parse(legacy.before);
+  const studied = new Set(legacy.studied);
+  return sessions.filter((session) => {
+    const key = sessionKey(session);
+    const updated = Date.parse(session.updated);
+    return (
+      state.sessions[key] === undefined && updated >= from && updated <= before && !studied.has(key)
+    );
+  });
+}
+
 /** Forget everything settled so the next run starts from scratch: the ledger, the lifetime
  * counter, and failure backoff (the backend dedupes re-shipped traces on content hash). User
  * settings survive — the study scope, the pause switch, the shipping opt-out, and the incognito
@@ -585,6 +635,7 @@ export function resetSyncState(configDir: string = getConfigDir()): void {
       ...(previous.ship_transcripts === false ? { ship_transcripts: false as const } : {}),
       ...(previous.incognito_agents ? { incognito_agents: previous.incognito_agents } : {}),
       ...(previous.incognito_since ? { incognito_since: previous.incognito_since } : {}),
+      ...(previous.legacy_passed ? { legacy_passed: previous.legacy_passed } : {}),
       // Where those sessions live, so a fresh drain can still find them.
       ...(previous.outside_sessions ? { outside_sessions: previous.outside_sessions } : {}),
     },

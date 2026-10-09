@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, delimiter, join } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveConfig } from "../config/config";
@@ -23,7 +23,7 @@ import { contextHookOutput } from "../memory/context-hook";
 import { makeOpencodeDb, opencodeDocument } from "../sessions/opencode.test-utils";
 import { INCOGNITO_MARKER } from "../sync/incognito";
 import { lockPath } from "../sync/lock";
-import { emptySyncState, loadSyncState, saveSyncState } from "../sync/state";
+import { emptySyncState, loadSyncState, saveSyncState, syncStatePath } from "../sync/state";
 import { SHIP_BATCH_LIMIT } from "../sync/sync";
 import { knowledgeCommand } from "./knowledge";
 
@@ -458,6 +458,41 @@ describe("knowledge sync of a session its agent's switch settled, long after", (
     await dosu("sync");
 
     expect(posted().map((p) => p.metadata.session_id)).toEqual(["other"]);
+  });
+});
+
+describe("knowledge sync, first after an upgrade from 0.66", () => {
+  it("keeps out what 0.66's watermark passed over unstudied, an incognito agent's included", async () => {
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    const day = 24 * 60;
+    // Ran while Claude Code was incognito on 0.66, which then had the switch turned off.
+    claudeSession("incognito-then", exchange(1, alpha), 2 * day);
+    claudeSession("studied", exchange(2, alpha), 2 * day);
+    // Ran after 0.66's last sync: its watermark never passed it.
+    claudeSession("since", exchange(3, alpha), 60);
+    const watermark = new Date(Date.now() - day * 60_000).toISOString();
+    mkdirSync(dirname(syncStatePath()), { recursive: true });
+    writeFileSync(
+      syncStatePath(),
+      JSON.stringify({
+        schema_version: 1,
+        watermark,
+        consecutive_failures: 0,
+        mined_sessions: [{ at: watermark, session: "claude/studied" }],
+        total_mined: 1,
+      }),
+    );
+
+    await dosu("sync");
+
+    expect(
+      posted()
+        .map((p) => p.metadata.session_id)
+        .sort(),
+    ).toEqual(["since", "studied"]);
+    const state = loadSyncState();
+    expect(state.sessions["claude/incognito-then"]).toMatchObject({ by_agent: true });
+    expect(state.legacy_passed).toBeUndefined();
   });
 });
 
