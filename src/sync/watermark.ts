@@ -48,6 +48,14 @@ interface SyncRun {
   baseline_mined: number;
 }
 
+/** One spell of an agent in incognito. Open (no `to`) while the agent is still incognito; no
+ * `from` when the spell began before spells were recorded. */
+interface IncognitoPeriod {
+  agent: string;
+  from?: string;
+  to?: string;
+}
+
 export interface SyncState {
   schema_version: number;
   /** ISO timestamp of the newest session already studied; null = never studied. */
@@ -77,8 +85,11 @@ export interface SyncState {
   paused?: boolean;
   /** Agent ids (session harnesses) the user put in incognito: none of their sessions are
    * studied, as if every one had run `/dosu-incognito`. Sessions that finish while an agent is
-   * incognito are passed by the watermark, so turning incognito off does not study them later. */
+   * incognito stay unstudied after `off` (see incognito_periods). */
   incognito_agents?: string[];
+  /** Every incognito spell per agent, so a session that finished during one stays unstudied
+   * after `off` even when no sync passed it in between (the quiet period holds it back). */
+  incognito_periods?: IncognitoPeriod[];
 }
 
 export function syncStatePath(configDir: string = getConfigDir()): string {
@@ -87,6 +98,20 @@ export function syncStatePath(configDir: string = getConfigDir()): string {
 
 function stringsOf(values: unknown[]): string[] {
   return values.filter((v): v is string => typeof v === "string");
+}
+
+function incognitoPeriodsOf(values: unknown[]): IncognitoPeriod[] {
+  const optionalString = (v: unknown) => v === undefined || typeof v === "string";
+  return values
+    .filter(
+      (v): v is IncognitoPeriod =>
+        typeof v === "object" &&
+        v !== null &&
+        typeof (v as IncognitoPeriod).agent === "string" &&
+        optionalString((v as IncognitoPeriod).from) &&
+        optionalString((v as IncognitoPeriod).to),
+    )
+    .map(({ agent, from, to }) => ({ agent, ...(from ? { from } : {}), ...(to ? { to } : {}) }));
 }
 
 export function loadSyncState(configDir: string = getConfigDir()): SyncState {
@@ -158,6 +183,9 @@ export function loadSyncState(configDir: string = getConfigDir()): SyncState {
       ...(Array.isArray(raw.incognito_agents)
         ? { incognito_agents: stringsOf(raw.incognito_agents) }
         : {}),
+      ...(Array.isArray(raw.incognito_periods)
+        ? { incognito_periods: incognitoPeriodsOf(raw.incognito_periods) }
+        : {}),
       ...(Array.isArray(raw.repo_filter) ? { repo_filter: stringsOf(raw.repo_filter) } : {}),
       ...(Array.isArray(raw.project_filter)
         ? { project_filter: stringsOf(raw.project_filter) }
@@ -176,7 +204,8 @@ export function setSyncPaused(paused: boolean, configDir: string = getConfigDir(
   saveSyncState(state, configDir);
 }
 
-/** Put agents in or out of incognito; load-modify-save like setSyncPaused. */
+/** Put agents in or out of incognito, opening or closing their spell in incognito_periods;
+ * load-modify-save like setSyncPaused. */
 export function setAgentsIncognito(
   agentIds: readonly string[],
   incognito: boolean,
@@ -184,13 +213,38 @@ export function setAgentsIncognito(
 ): void {
   const state = loadSyncState(configDir);
   const current = new Set(state.incognito_agents ?? []);
+  const periods = state.incognito_periods ?? [];
+  const at = new Date().toISOString();
   for (const id of agentIds) {
+    if (incognito && !current.has(id)) periods.push({ agent: id, from: at });
+    if (!incognito && current.has(id)) {
+      const open = periods.find((p) => p.agent === id && !p.to);
+      if (open) open.to = at;
+      else periods.push({ agent: id, to: at });
+    }
     if (incognito) current.add(id);
     else current.delete(id);
   }
   if (current.size > 0) state.incognito_agents = [...current].sort();
   else delete state.incognito_agents;
+  if (periods.length > 0) state.incognito_periods = periods;
   saveSyncState(state, configDir);
+}
+
+/** Whether the session's agent is incognito now, or was when the session last updated. */
+export function isAgentIncognito(
+  state: Pick<SyncState, "incognito_agents" | "incognito_periods">,
+  session: AgentSession,
+): boolean {
+  if (state.incognito_agents?.includes(session.harness)) return true;
+  const updated = Date.parse(session.updated);
+  return (state.incognito_periods ?? []).some(
+    (p) =>
+      p.agent === session.harness &&
+      p.to !== undefined &&
+      (p.from === undefined || Date.parse(p.from) <= updated) &&
+      updated <= Date.parse(p.to),
+  );
 }
 
 /** Forget everything studied so the next run starts from scratch: watermark, history, lifetime
@@ -207,6 +261,7 @@ export function resetSyncState(configDir: string = getConfigDir()): void {
     ...(previous.project_filter ? { project_filter: previous.project_filter } : {}),
     ...(previous.paused ? { paused: true } : {}),
     ...(previous.incognito_agents ? { incognito_agents: previous.incognito_agents } : {}),
+    ...(previous.incognito_periods ? { incognito_periods: previous.incognito_periods } : {}),
   };
   saveSyncState(fresh, configDir);
 }

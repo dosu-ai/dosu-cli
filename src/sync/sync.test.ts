@@ -1,9 +1,12 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { LearnerRunResult } from "../learner/runner";
 import type { AgentSession } from "../sessions/scan";
 import type { SyncLock } from "./lock";
 import { MINE_BATCH_LIMIT, runKnowledgeSync, type SyncDeps } from "./sync";
-import { backoffUntil, type SyncState } from "./watermark";
+import { backoffUntil, loadSyncState, type SyncState, setAgentsIncognito } from "./watermark";
 
 const mockLoggerDebug = vi.hoisted(() => vi.fn());
 vi.mock("../debug/logger", () => ({
@@ -736,6 +739,43 @@ describe("runKnowledgeSync studying", () => {
     expect(outcome.incognitoSessions).toBe(1);
     const batch = mine.mock.calls[0][0] as AgentSession[];
     expect(batch.map((s) => s.id)).toEqual(["s-50", "s-30"]);
+  });
+
+  it("keeps a session that finished while its agent was incognito unstudied after `off`", async () => {
+    const configDir = mkdtempSync(join(tmpdir(), "dosu-sync-incognito-"));
+    const at = (minutesAgo: number) => new Date(NOW.getTime() - minutesAgo * 60 * 1000);
+    try {
+      vi.useFakeTimers();
+      vi.setSystemTime(at(60));
+      setAgentsIncognito(["claude"], true, configDir);
+      // s-30 ends while incognito; `off` follows inside the quiet period, before any sync passes it.
+      vi.setSystemTime(at(29));
+      setAgentsIncognito(["claude"], false, configDir);
+      vi.useRealTimers();
+
+      const mine = vi.fn().mockResolvedValue(learnerResult());
+      const { deps, saved } = makeDeps({
+        listSessions: vi.fn().mockResolvedValue([session(10), session(30), session(90)]),
+        loadState: () => loadSyncState(configDir),
+        worthStudying: () => true,
+        isIncognito: () => false,
+        mine,
+        lock: openLock(),
+      });
+
+      const outcome = await runKnowledgeSync({ deps });
+
+      expect(outcome.incognitoSessions).toBe(1);
+      const batch = mine.mock.calls[0][0] as AgentSession[];
+      expect(batch.map((s) => s.id)).toEqual(["s-90", "s-10"]);
+      expect(saved.at(-1)?.mined_sessions?.map((r) => r.session)).toEqual([
+        "claude/s-90",
+        "claude/s-10",
+      ]);
+    } finally {
+      vi.useRealTimers();
+      rmSync(configDir, { recursive: true, force: true });
+    }
   });
 
   it("studies sessions with or without a known branch, tagging the branch only in a repo", async () => {

@@ -190,10 +190,12 @@ unanchored and reach topics immediately. Neither setup nor `enable` replaces a s
 already have; they print the one-liner to add to your own script instead.
 
 `incognito on` is a saved per-agent setting: none of that agent's sessions are studied until you
-turn it off. To keep a single chat out instead, type `/dosu-incognito` in it; setup installs that
-command with the hook. It marks the session's transcript so studying skips it (the whole session,
-and for the rest of it — start a new session to turn Dosu back on) and tells the model not to use
-Dosu tools. See [docs/studying.md](docs/studying.md).
+turn it off. Turning it off resumes studying only new sessions going forward; sessions that
+finished while incognito was on stay unstudied permanently, even if a later sync picks them up.
+To keep a single chat out instead, type `/dosu-incognito` in it; setup installs that command with
+the hook. It marks the session's transcript so studying skips it (the whole session, and for the
+rest of it — start a new session to turn Dosu back on) and tells the model not to use Dosu
+tools. See [docs/studying.md](docs/studying.md).
 
 ### Telemetry and privacy
 

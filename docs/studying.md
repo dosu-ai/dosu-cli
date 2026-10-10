@@ -61,10 +61,12 @@ dosu knowledge incognito status [--json]
 
 `on` adds the agent ids to `incognito_agents` in `knowledge-sync.json`; `off` removes them. While an
 agent is listed, sync skips every one of its sessions exactly like a `/dosu-incognito` session
-(counted as incognito, passed by the watermark, so turning incognito off later does not study
-them), the Activity backlog sets them aside, and its status line shows `👻 Dosu incognito`.
-`resetSyncState` keeps the list. Both `on` and `off` also reinstall `/dosu-incognito` if it is
-missing.
+(counted as incognito and passed by the watermark), the Activity backlog sets them aside, and its
+status line shows `👻 Dosu incognito`. Each `on`/`off` also records the spell in
+`incognito_periods`, so a session that finished while its agent was incognito stays skipped after
+`off` even when no sync passed it in between (the quiet period holds back the sync its own end
+hook starts). `resetSyncState` keeps both. Both `on` and `off` also reinstall `/dosu-incognito` if
+it is missing.
 
 The setting only affects studying. The agent never reads it, so it can still call Dosu MCP tools;
 only the slash command tells the model to leave Dosu alone.

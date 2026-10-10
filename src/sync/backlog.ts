@@ -4,7 +4,13 @@
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { type AgentSession, scanAgentSessions } from "../sessions/scan";
 import { isIncognitoSession, partitionIncognitoSessions } from "./incognito";
-import { filterSessionsByRepo, gateSessions, loadSyncState, studyRepoFilter } from "./watermark";
+import {
+  filterSessionsByRepo,
+  gateSessions,
+  isAgentIncognito,
+  loadSyncState,
+  studyRepoFilter,
+} from "./watermark";
 
 export interface SessionBacklog {
   /** Gated (quiet, not yet studied) sessions, oldest first. */
@@ -28,10 +34,9 @@ export function listSessionBacklog(): SessionBacklog {
     resolver.flush();
     const gate = gateSessions(sessions, state.watermark);
     // Only the gated backlog is read for the marker: everything behind the watermark is settled.
-    const incognitoAgents = new Set(state.incognito_agents ?? []);
     const { kept, skipped } = partitionIncognitoSessions(
       gate.ready,
-      (session) => incognitoAgents.has(session.harness) || isIncognitoSession(session),
+      (session) => isAgentIncognito(state, session) || isIncognitoSession(session),
     );
     return { queued: kept.reverse(), open: gate.open.reverse(), incognito: skipped.reverse() };
   } catch {

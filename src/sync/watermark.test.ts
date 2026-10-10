@@ -1,13 +1,14 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../sessions/scan";
 import {
   backoffUntil,
   DEFAULT_QUIET_PERIOD_MS,
   filterSessionsByRepo,
   gateSessions,
+  isAgentIncognito,
   isUnderDir,
   loadSyncState,
   resetSyncState,
@@ -342,6 +343,9 @@ describe("resetSyncState", () => {
         project_filter: ["/Users/me/proj"],
         paused: true,
         incognito_agents: ["cursor"],
+        incognito_periods: [
+          { agent: "claude", from: "2026-09-01T00:00:00.000Z", to: "2026-09-02T00:00:00.000Z" },
+        ],
       },
       configDir,
     );
@@ -363,6 +367,7 @@ describe("resetSyncState", () => {
     expect(state.project_filter).toEqual(["/Users/me/proj"]);
     expect(state.paused).toBe(true);
     expect(state.incognito_agents).toEqual(["cursor"]);
+    expect(state.incognito_periods).toHaveLength(1);
   });
 
   it("writes a clean file when nothing was ever studied", () => {
@@ -407,6 +412,82 @@ describe("setAgentsIncognito", () => {
       configDir,
     );
     expect(loadSyncState(configDir).incognito_agents).toEqual(["cursor"]);
+  });
+
+  it("records each spell: opened by `on`, closed by `off`, open-ended for a legacy `on`", () => {
+    saveSyncState(
+      {
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        incognito_agents: ["codex"], // turned on before spells were recorded
+      },
+      configDir,
+    );
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-09-01T10:00:00.000Z"));
+      setAgentsIncognito(["claude"], true, configDir);
+      vi.setSystemTime(new Date("2026-09-01T11:00:00.000Z"));
+      setAgentsIncognito(["claude"], true, configDir); // already on: no second spell
+      setAgentsIncognito(["cursor"], false, configDir); // never on: nothing to close
+      vi.setSystemTime(new Date("2026-09-01T12:00:00.000Z"));
+      setAgentsIncognito(["claude", "codex"], false, configDir);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(loadSyncState(configDir).incognito_periods).toEqual([
+      { agent: "claude", from: "2026-09-01T10:00:00.000Z", to: "2026-09-01T12:00:00.000Z" },
+      { agent: "codex", to: "2026-09-01T12:00:00.000Z" },
+    ]);
+  });
+
+  it("drops malformed spells from a hand-edited file", () => {
+    writeFileSync(
+      syncStatePath(configDir),
+      JSON.stringify({
+        schema_version: 1,
+        watermark: null,
+        consecutive_failures: 0,
+        incognito_periods: [
+          { agent: "claude", to: "2026-09-01T12:00:00.000Z" },
+          { agent: 7, to: "2026-09-01T12:00:00.000Z" },
+          { agent: "cursor", from: 1 },
+          null,
+        ],
+      }),
+    );
+    expect(loadSyncState(configDir).incognito_periods).toEqual([
+      { agent: "claude", to: "2026-09-01T12:00:00.000Z" },
+    ]);
+  });
+});
+
+describe("isAgentIncognito", () => {
+  const at = (updated: string, harness = "claude"): AgentSession =>
+    ({ id: "s", harness, path: "/tmp/s.jsonl", updated }) as AgentSession;
+  const state: Pick<SyncState, "incognito_agents" | "incognito_periods"> = {
+    incognito_agents: ["cursor"],
+    incognito_periods: [
+      { agent: "claude", from: "2026-09-01T10:00:00.000Z", to: "2026-09-01T12:00:00.000Z" },
+      { agent: "claude", from: "2026-09-02T10:00:00.000Z" }, // open: covered by incognito_agents
+      { agent: "codex", to: "2026-09-01T12:00:00.000Z" },
+    ],
+  };
+
+  it("covers an agent incognito now, and sessions that finished inside a closed spell", () => {
+    expect(isAgentIncognito(state, at("2026-08-01T00:00:00.000Z", "cursor"))).toBe(true);
+    expect(isAgentIncognito(state, at("2026-09-01T11:00:00.000Z"))).toBe(true);
+    expect(isAgentIncognito(state, at("2026-09-01T12:00:00.000Z"))).toBe(true);
+    expect(isAgentIncognito(state, at("2026-08-01T00:00:00.000Z", "codex"))).toBe(true);
+  });
+
+  it("leaves sessions that finished outside every spell, or for another agent, studied", () => {
+    expect(isAgentIncognito(state, at("2026-09-01T09:59:59.000Z"))).toBe(false);
+    expect(isAgentIncognito(state, at("2026-09-01T12:00:01.000Z"))).toBe(false);
+    expect(isAgentIncognito(state, at("2026-09-02T11:00:00.000Z"))).toBe(false);
+    expect(isAgentIncognito(state, at("2026-09-01T11:00:00.000Z", "opencode"))).toBe(false);
+    expect(isAgentIncognito({}, at("2026-09-01T11:00:00.000Z"))).toBe(false);
   });
 });
 
