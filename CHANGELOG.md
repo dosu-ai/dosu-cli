@@ -1,3 +1,10 @@
+## [0.68.1](https://github.com/dosu-ai/dosu-cli/compare/v0.68.0...v0.68.1) (2026-10-10)
+
+
+### Bug Fixes
+
+* **sync:** keep sessions that finished while incognito unstudied after `off` ([#275](https://github.com/dosu-ai/dosu-cli/issues/275)) ([5299488](https://github.com/dosu-ai/dosu-cli/commit/5299488482db9b991b5663fbe2977c7c0afb76f9))
+
 # [0.68.0](https://github.com/dosu-ai/dosu-cli/compare/v0.67.2...v0.68.0) (2026-10-09)
 
 
