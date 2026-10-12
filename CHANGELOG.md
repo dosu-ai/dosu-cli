@@ -1,3 +1,10 @@
+## [0.68.2](https://github.com/dosu-ai/dosu-cli/compare/v0.68.1...v0.68.2) (2026-10-12)
+
+
+### Bug Fixes
+
+* **libraries:** say Monitor comments instead of reacting on Azure DevOps ([#276](https://github.com/dosu-ai/dosu-cli/issues/276)) ([1c52f51](https://github.com/dosu-ai/dosu-cli/commit/1c52f51f65df69f84964ef88f5269641998443ed)), closes [dosu-ai/dosu#13141](https://github.com/dosu-ai/dosu/issues/13141)
+
 ## [0.68.1](https://github.com/dosu-ai/dosu-cli/compare/v0.68.0...v0.68.1) (2026-10-10)
 
 
