@@ -76,7 +76,7 @@ dosu libraries monitors update <library-id> <source-id>
     [--up-to-date-behavior emoji|comment|silent] [--confirm] [--json]
 ```
 
-`update` requires at least one option. Monitor supports GitHub, GitLab, and Azure DevOps. It performs first-time setup for an attached supported source, reusing existing deployment infrastructure when available. When no Monitor row exists, omitted `--enabled`, paths, and behavior default to `true`, `[]`, and `emoji`.
+`update` requires at least one option. Monitor supports GitHub, GitLab, and Azure DevOps. It performs first-time setup for an attached supported source, reusing existing deployment infrastructure when available. When no Monitor row exists, omitted `--enabled`, paths, and behavior default to `true`, `[]`, and `emoji` (`comment` on Azure DevOps). Azure DevOps pull requests take no reactions, so a saved `emoji` posts a comment there and is reported as `comment`.
 
 ## Agents
 
