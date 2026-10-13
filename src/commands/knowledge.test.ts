@@ -24,8 +24,6 @@ vi.mock("../config/config", async (importOriginal) => ({
 }));
 
 const mockRunSync = vi.fn();
-// Spread the real module so the batch-size constant the command reads
-// (SHIP_BATCH_LIMIT) keeps its production value.
 vi.mock("../sync/sync", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../sync/sync")>()),
   runKnowledgeSync: (...args: unknown[]) => mockRunSync(...args),
@@ -113,7 +111,6 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { HookConfigError } from "../hooks/formats";
-import { SHIP_BATCH_LIMIT } from "../sync/sync";
 import { consumeCommandFacets } from "../telemetry/telemetry";
 import { knowledgeCommand } from "./knowledge";
 
@@ -571,10 +568,10 @@ describe("knowledge sync", () => {
     expect(output).toContain("1 more still in progress");
   });
 
-  it("reports a shipped run with what was passed over and the remaining backlog", async () => {
+  it("reports a shipped run with what was passed over", async () => {
     mockRunSync.mockResolvedValue({
       status: "shipped",
-      readySessions: 8,
+      readySessions: 5,
       inFlightSessions: 0,
       sessions: [],
       settledSessions: 5,
@@ -586,8 +583,26 @@ describe("knowledge sync", () => {
     const output = allOutput();
     expect(output).toContain("Shipped 3 sessions to Dosu memory");
     expect(output).toContain("2 passed over");
-    expect(output).toContain("3 more in the backlog");
+    expect(output).not.toContain("run sync again");
     expect(process.exitCode).toBeUndefined();
+  });
+
+  it.each([
+    [1, "1 session still in progress will ship once it ends."],
+    [2, "2 sessions still in progress will ship once they end."],
+  ])("says when %i session(s) still in progress wait for the next run", async (open, line) => {
+    mockRunSync.mockResolvedValue({
+      status: "shipped",
+      readySessions: 1,
+      inFlightSessions: open,
+      sessions: [],
+      settledSessions: 1,
+      counts: { shipped: 1, incognito: 0, trivial: 0, unsupported: 0, rejected: 0, failed: 0 },
+    });
+
+    await run("sync");
+
+    expect(allOutput()).toContain(line);
   });
 
   it("uses singulars and omits the passed-over note when nothing was skipped", async () => {
@@ -605,7 +620,7 @@ describe("knowledge sync", () => {
     const output = allOutput();
     expect(output).toContain("Shipped 1 session to Dosu memory.");
     expect(output).not.toContain("passed over");
-    expect(output).not.toContain("more in the backlog");
+    expect(output).not.toContain("still in progress");
   });
 
   it("ship-failed says it will retry and sets the exit code", async () => {
@@ -989,7 +1004,7 @@ describe("knowledge sync", () => {
     expect(mockEmitReport).not.toHaveBeenCalled();
   });
 
-  /** A round that shipped `settled` of `ready` sessions (5 per round by default). */
+  /** A run that shipped `settled` of `ready` sessions (5 by default). */
   function shippedOutcome(ready: number, settled = Math.min(ready, 5)) {
     return {
       status: "shipped",
@@ -1038,11 +1053,8 @@ describe("knowledge sync", () => {
       });
     });
 
-    it("sums shipped sessions across bootstrap rounds and keeps the final status", async () => {
-      mockRunSync
-        .mockResolvedValueOnce(shippedOutcome(8))
-        .mockResolvedValueOnce(shippedOutcome(3))
-        .mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
+    it("tags a bootstrap run with what it shipped", async () => {
+      mockRunSync.mockResolvedValue(shippedOutcome(8, 8));
 
       await run("sync", "--bootstrap");
 
@@ -1054,7 +1066,7 @@ describe("knowledge sync", () => {
     });
 
     it("tags a flush as its own trigger, even when run with --quiet", async () => {
-      mockRunSync.mockResolvedValueOnce(shippedOutcome(8)).mockResolvedValue(shippedOutcome(3));
+      mockRunSync.mockResolvedValue(shippedOutcome(8, 8));
 
       await run("sync", "--flush", "--quiet");
 
@@ -1103,16 +1115,14 @@ describe("knowledge sync", () => {
   });
 
   it("--retry-rejected retries only what was refused before the command started", async () => {
-    mockRunSync.mockResolvedValueOnce(shippedOutcome(8)).mockResolvedValue(shippedOutcome(3));
+    mockRunSync.mockResolvedValue(shippedOutcome(8, 8));
     const before = Date.now();
 
     await run("sync", "--bootstrap", "--retry-rejected");
 
-    expect(mockRunSync).toHaveBeenCalledTimes(2);
-    const bounds = mockRunSync.mock.calls.map((call) => call[0].retryRejectedBefore as Date);
-    // One bound for the whole drain, so a round never retries a refusal from an earlier one.
-    expect(bounds[0].getTime()).toBeGreaterThanOrEqual(before);
-    expect(bounds[1]).toBe(bounds[0]);
+    expect(mockRunSync).toHaveBeenCalledTimes(1);
+    const bound = mockRunSync.mock.calls[0][0].retryRejectedBefore as Date;
+    expect(bound.getTime()).toBeGreaterThanOrEqual(before);
   });
 
   it("without --retry-rejected, refused sessions stay settled", async () => {
@@ -1123,79 +1133,36 @@ describe("knowledge sync", () => {
     expect(mockRunSync.mock.calls[0][0].retryRejectedBefore).toBeUndefined();
   });
 
-  it("--bootstrap drains the backlog round by round and reports each round", async () => {
-    mockRunSync.mockResolvedValueOnce(shippedOutcome(8)).mockResolvedValue(shippedOutcome(3));
+  it.each(["--bootstrap", "--flush"])("%s ships the whole backlog in one run", async (flag) => {
+    mockRunSync.mockResolvedValue(shippedOutcome(25, 25));
 
-    await run("sync", "--bootstrap");
-
-    const output = allOutput();
-    expect(output).toContain("Shipped 5 sessions");
-    expect(output).toContain("Shipped 3 sessions");
-  });
-
-  it("--bootstrap stops once a round settles the whole remaining backlog", async () => {
-    mockRunSync.mockResolvedValue(shippedOutcome(3));
-
-    await run("sync", "--bootstrap");
+    await run("sync", flag);
 
     expect(mockRunSync).toHaveBeenCalledTimes(1);
+    expect(mockRunSync.mock.calls[0][0].flush).toBe(flag === "--flush" ? true : undefined);
+    expect(allOutput()).toContain("Shipped 25 sessions");
   });
 
-  it("--bootstrap stops the drain on a failed round", async () => {
-    mockRunSync.mockResolvedValueOnce(shippedOutcome(8)).mockResolvedValue({
-      ...shippedOutcome(3, 0),
-      status: "ship-failed",
-      error: "backend down",
-    });
-
-    await run("sync", "--bootstrap");
-
-    expect(mockRunSync).toHaveBeenCalledTimes(2);
-    expect(allOutput()).toContain("Shipping stopped: backend down");
-    expect(process.exitCode).toBe(1);
-  });
-
-  it("--bootstrap stops when a round settles nothing", async () => {
-    mockRunSync.mockResolvedValue(shippedOutcome(8, 0));
-
-    await run("sync", "--bootstrap");
-
-    expect(mockRunSync).toHaveBeenCalledTimes(1);
-  });
-
-  it("--bootstrap --quiet drains silently", async () => {
-    mockRunSync.mockResolvedValueOnce(shippedOutcome(8)).mockResolvedValue(shippedOutcome(3));
+  it("--bootstrap --quiet ships silently", async () => {
+    mockRunSync.mockResolvedValue(shippedOutcome(8, 8));
 
     await run("sync", "--quiet", "--bootstrap");
 
-    expect(mockRunSync).toHaveBeenCalledTimes(2);
+    expect(mockRunSync).toHaveBeenCalledTimes(1);
     expect(logSpy).not.toHaveBeenCalled();
   });
 
-  it("--bootstrap is capped even if every round reports more", async () => {
-    // Every round claims two batches' worth of sessions are still ready; the
-    // cap comes from the first round's backlog: ceil(ready/batch)+2 rounds.
-    const ready = SHIP_BATCH_LIMIT * 2;
-    mockRunSync.mockResolvedValue(shippedOutcome(ready));
-
-    await run("sync", "--bootstrap");
-
-    expect(mockRunSync).toHaveBeenCalledTimes(Math.ceil(ready / SHIP_BATCH_LIMIT) + 2);
-  });
-
-  it("--flush --age 0 drains every round with no lookback limit", async () => {
-    mockRunSync.mockResolvedValueOnce(shippedOutcome(8)).mockResolvedValue(shippedOutcome(3));
+  it("--flush --age 0 ships with no lookback limit", async () => {
+    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
 
     await run("sync", "--flush", "--age", "0");
 
-    expect(mockRunSync).toHaveBeenCalledTimes(2);
-    for (const [options] of mockRunSync.mock.calls) {
-      expect(options).toMatchObject({ flush: true, ageDays: 0 });
-    }
+    expect(mockRunSync).toHaveBeenCalledTimes(1);
+    expect(mockRunSync.mock.calls[0][0]).toMatchObject({ flush: true, ageDays: 0 });
   });
 
   it("leaves the lookback to the sync's default without --age", async () => {
-    mockRunSync.mockResolvedValue(shippedOutcome(3));
+    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
 
     await run("sync", "--bootstrap");
 

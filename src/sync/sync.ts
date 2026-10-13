@@ -58,11 +58,6 @@ export function lookbackStart(now: Date, ageDays: number = SCAN_WINDOW_DAYS): Da
   return new Date(ageDays === 0 ? 0 : now.getTime() - ageDays * DAY_MS);
 }
 
-/** Sessions settled per run, oldest first; a bootstrap drains the backlog run after run, and a
- * hook run leaves the rest for the next trigger. Sessions a hook named as ended, and their
- * subagents, all ship in its run even past the limit. */
-export const SHIP_BATCH_LIMIT = 20;
-
 /** How long a run carrying a just-ended session waits for another run to release the lock,
  * rather than leaving the session until some later trigger. */
 export const ENDED_LOCK_WAIT_MS = 10 * 60 * 1000;
@@ -149,11 +144,13 @@ export interface SyncDeps {
   saveState?: (state: SyncState) => void;
   /** When present, gated sessions are shipped; absent = gate-and-report only. Must process
    * oldest-first and stop after the first failed result. `shipped` says what earlier runs
-   * already shipped of a session, so a resumed one can send only its new tail. */
+   * already shipped of a session, so a resumed one can send only its new tail; `settled` is
+   * called with each result as it comes, so the run can record it before the next upload. */
   ship?: (
     sessions: AgentSession[],
     shipped?: (session: AgentSession) => ShippedPrefix | undefined,
     hold?: ShipHold,
+    settled?: (result: ShipSessionResult) => void,
   ) => Promise<ShipSessionResult[]>;
   /** Session → working directory and repo, for the shipping scope; defaults to the cached
    * resolver. */
@@ -631,18 +628,16 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       failed: 0,
     };
     // The ship step decides each session's fate (incognito, unsupported, trivial, rejected, or
-    // shipped); this side only picks the batch, records the answers, and settles what an
+    // shipped); this side only orders the batch, records the answers, and settles what an
     // agent's incognito switch keeps out, which the ship step never sees.
-    // The sessions a hook named lead, so a failure further on never keeps one from being tried;
-    // then their subagents, then the backlog oldest first. The batch limit never cuts the ended
-    // work: on a throwaway machine, nothing may run after this.
+    // Every ready session ships this run. The sessions a hook named lead, so a failure further on
+    // never keeps one from being tried; then their subagents, then the backlog oldest first.
     const rank = (s: AgentSession) =>
       ended.some((e) => namesSession(e, s)) ? 0 : isEnded(s) ? 1 : 2;
-    const ordered = [...todo].sort(
+    const batch = [...todo].sort(
       (a, b) => rank(a) - rank(b) || Date.parse(a.updated) - Date.parse(b.updated),
     );
-    const batch = ordered.slice(0, Math.max(SHIP_BATCH_LIMIT, ordered.filter(isEnded).length));
-    logger.debug("sync", `shipping ${batch.length} of ${todo.length} ready sessions`);
+    logger.debug("sync", `shipping ${batch.length} ready sessions`);
 
     // And once more before each upload: the batch can take minutes, and `incognito on` or
     // `transcripts disable` run meanwhile must hold for the rest of it.
@@ -651,6 +646,42 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       if (!isShippingEnabled(current)) return "stop";
       return isAgentIncognito(current, s, lineage) ? "agent" : null;
     };
+    // Each answer is saved as it comes, onto a fresh read, and keeps the lock fresh: a long run is
+    // never broken as stale, and one cut short (a crash, a closed laptop) uploads again at most
+    // the session it was on.
+    const saved = new Map<string, LedgerEntry>();
+    const reported: ShipSessionResult[] = [];
+    let savedShipped = 0;
+    // The widest `--age` any run used is remembered, and the ledger is kept back to it: pruned, an
+    // entry that run settled would be pending, and shipped again, on the next run that wide. Every
+    // save that settles a session records it, so a run cut short still counts. Returns where the
+    // ledger is kept from.
+    const recordLookback = (next: SyncState): number => {
+      const recorded = next.lookback_since ? Date.parse(next.lookback_since) : Infinity;
+      const keepFrom = Math.min(recorded, since.getTime(), defaultSince.getTime());
+      if (keepFrom < defaultSince.getTime()) next.lookback_since = new Date(keepFrom).toISOString();
+      return keepFrom;
+    };
+    const settle = (result: ShipSessionResult) => {
+      reported.push(result);
+      lock.refresh?.();
+      const key = sessionKey(result.session);
+      const entry = ledgerEntry(result, locked.sessions[key], now().toISOString(), cliVersion);
+      if (!entry) return;
+      saved.set(key, entry);
+      try {
+        const counted = result.outcome === "shipped" && !result.session.parentId ? 1 : 0;
+        const next = loadState();
+        next.sessions[key] = entry;
+        next.total_shipped = (next.total_shipped ?? 0) + counted;
+        next.run = run;
+        recordLookback(next);
+        saveState(next);
+        savedShipped += counted;
+      } catch {
+        // Best-effort, like the save at the end of the run, which records this answer too.
+      }
+    };
     let results: ShipSessionResult[] = [];
     if (batch.length > 0) {
       try {
@@ -658,12 +689,19 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
           batch,
           (s) => shippedPrefix(locked.sessions[sessionKey(s)]),
           hold,
+          settle,
         );
       } catch (err) {
         // The ship step reports failures per session; a throw is a step bug — treat it as one
-        // failed attempt so backoff still engages instead of crashing the sync run.
+        // failed attempt at the next unanswered session, so backoff still engages instead of
+        // crashing the sync run, and what was answered before it stays answered.
         const message = err instanceof Error ? err.message : String(err);
-        results = [{ session: batch[0], outcome: "failed", message }];
+        const answered = new Set(reported.map((r) => sessionKey(r.session)));
+        const next = batch.find((s) => !answered.has(sessionKey(s)));
+        results = [
+          ...reported,
+          ...(next ? [{ session: next, outcome: "failed" as const, message }] : []),
+        ];
       }
     }
     // By key, not identity: scoping hands the batch out as repo-tagged copies.
@@ -679,7 +717,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       if (!result) continue;
       if (!session.parentId || result.outcome === "failed") counts[result.outcome] += 1;
       else counts.subagents[result.outcome] += 1;
-      const entry = ledgerEntry(result, locked.sessions[key], at, cliVersion);
+      const entry = saved.get(key) ?? ledgerEntry(result, locked.sessions[key], at, cliVersion);
       if (!entry) {
         error = result.message ?? "unknown error";
         logger.debug("sync", `shipping failed at ${key}: ${error}`);
@@ -708,17 +746,12 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     try {
       const next = loadState();
       for (const [key, entry] of settled) next.sessions[key] = entry;
-      // The widest `--age` any run used is remembered, and the ledger is kept back to it: pruned,
-      // an entry that run settled would be pending, and shipped again, on the next run that wide.
-      const recorded = next.lookback_since ? Date.parse(next.lookback_since) : Infinity;
-      const keepFrom = Math.min(recorded, since.getTime(), defaultSince.getTime());
-      if (keepFrom < defaultSince.getTime()) next.lookback_since = new Date(keepFrom).toISOString();
-      pruneLedger(next, new Date(keepFrom - LEDGER_GRACE_DAYS * DAY_MS), listed);
+      pruneLedger(next, new Date(recordLookback(next) - LEDGER_GRACE_DAYS * DAY_MS), listed);
       // Settling an incognito agent's sessions alone is no attempt to ship: backoff stands.
       if (batch.length > 0) {
         next.last_attempt_at = at;
         next.consecutive_failures = counts.failed > 0 ? next.consecutive_failures + 1 : 0;
-        next.total_shipped = (next.total_shipped ?? 0) + counts.shipped;
+        next.total_shipped = (next.total_shipped ?? 0) + counts.shipped - savedShipped;
         next.run = run;
       }
       if (resumes) delete next.paused;

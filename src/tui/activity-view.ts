@@ -411,7 +411,7 @@ export function buildActivityFrame(
     queueDetail.push(`retrying after ${localTime(status.backoffUntil)} \u00B7 s syncs now`);
   }
 
-  // Run-scoped drain progress, advanced as each batch commits (a batch ships in seconds).
+  // Run-scoped drain progress, advanced as each session's answer is saved.
   const progress =
     status.running && backlog
       ? progressLine(
@@ -649,7 +649,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
   const readLog = io.readLog ?? defaultReadLog;
   const createFollower =
     io.createFollower ?? ((emit) => createLogFollower(logger.getLogPath(), emit));
-  // Bootstrap mode drains the whole displayed queue, not just one batch. Deliberately not
+  // Bootstrap mode ships the whole displayed queue. Deliberately not
   // --quiet: quiet runs honor the failure backoff and would silently skip, but pressing s is
   // an explicit request — manual runs retry immediately (stdio is detached, so no output leaks).
   const startSync = io.startSync ?? (() => spawnDetachedSelf(["knowledge", "sync", "--bootstrap"]));

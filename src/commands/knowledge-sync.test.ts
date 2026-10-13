@@ -24,7 +24,6 @@ import { makeOpencodeDb, opencodeDocument } from "../sessions/opencode.test-util
 import { INCOGNITO_MARKER } from "../sync/incognito";
 import { lockPath } from "../sync/lock";
 import { emptySyncState, loadSyncState, saveSyncState, syncStatePath } from "../sync/state";
-import { SHIP_BATCH_LIMIT } from "../sync/sync";
 import { knowledgeCommand } from "./knowledge";
 
 /** The detached re-spawn is a process boundary: record its argv instead of starting a process. */
@@ -867,9 +866,9 @@ describe("knowledge sync --flush (the last step before a machine is torn down)",
     expect(shippedIds()).toEqual(["older", "killed"]);
   });
 
-  it("drains the whole backlog, past the per-run batch limit", async () => {
+  it("ships the whole backlog in one run", async () => {
     const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
-    const total = SHIP_BATCH_LIMIT + 3;
+    const total = 25;
     for (let i = 0; i < total; i++) claudeSession(`s${i}`, exchange(1, alpha), i % 2 ? 0 : 30);
 
     await dosu("sync", "--flush");

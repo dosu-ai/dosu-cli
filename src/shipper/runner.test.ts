@@ -235,6 +235,22 @@ describe("createShipStep", () => {
     expect(normalize.mock.calls.map(([s]) => s.id)).toEqual(["s1", "s3"]);
   });
 
+  it("reports each result as it settles, before the next session is read", async () => {
+    const order: string[] = [];
+    const normalize = vi.fn(async (s: AgentSession) => {
+      order.push(`read ${s.id}`);
+      return RECORDS;
+    });
+    const { step } = makeStep({ normalize });
+
+    const results = await step([session("s1"), session("s2")], undefined, undefined, (r) =>
+      order.push(`${r.outcome} ${r.session.id}`),
+    );
+
+    expect(results).toHaveLength(2);
+    expect(order).toEqual(["read s1", "shipped s1", "read s2", "shipped s2"]);
+  });
+
   it("a transcript the normalizer cannot read is unsupported, not a failure", async () => {
     const { step, fetchImpl } = makeStep({ normalize: async () => null });
 
