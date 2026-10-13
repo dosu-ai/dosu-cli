@@ -1117,9 +1117,34 @@ describe("runKnowledgeSync shipping", () => {
     const last = saved.at(-1) as SyncState;
     expect(Object.keys(last.sessions)).toEqual(["claude/s-90"]);
     expect(last.consecutive_failures).toBe(1);
+    // The reason is kept for the status and the Activity screen, and leads the log line, which
+    // the screen clips at the right.
+    expect(last.last_failure).toBe("502 Bad Gateway");
+    expect(mockLoggerDebug.mock.calls.map((c) => c.join(" ")).join("\n")).toContain(
+      "shipping failed: 502 Bad Gateway (at claude/s-60)",
+    );
     expect(backoffUntil(last)?.toISOString()).toBe(
       new Date(NOW.getTime() + 15 * 60 * 1000).toISOString(),
     );
+  });
+
+  it("forgets the last failure once a run fails nothing", async () => {
+    const shipped = session(90);
+    const { deps, saved } = makeDeps({
+      loadState: () => state({ consecutive_failures: 1, last_failure: "ingest failed: HTTP 401" }),
+      listSessions: vi.fn().mockResolvedValue([shipped]),
+      ship: vi.fn(
+        async (): Promise<ShipSessionResult[]> => [
+          { session: shipped, outcome: "shipped", taskId: "t1" },
+        ],
+      ),
+    });
+
+    await runKnowledgeSync({ deps });
+
+    const last = saved.at(-1) as SyncState;
+    expect(last.consecutive_failures).toBe(0);
+    expect(last.last_failure).toBeUndefined();
   });
 
   it("rejected and unsupported sessions are settled and visible, never failures", async () => {

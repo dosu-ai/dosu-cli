@@ -33,6 +33,9 @@ export interface SyncStatus {
   attention: Array<LedgerEntry & { session: string }>;
   /** Set when failed runs have quiet syncs waiting out a backoff. */
   backoffUntil?: string;
+  /** What stopped the last run, while the failure still counts: the error, and what to do
+   * about it when the error says. */
+  lastFailure?: { message: string; hint?: string };
   /** Latest `[sync]` lines from the debug log, oldest first. */
   recentActivity: string[];
 }
@@ -84,6 +87,19 @@ function recentSyncActivity(log: string): string[] {
     .map((line) => line.replace(/ \[(DEBUG|INFO|WARN|ERROR)\]/, ""));
 }
 
+/** What a failed upload's error means for the user, when it says: Dosu refusing the API key
+ * (401/403) needs a new login; a server error or an unreachable backend only needs time. */
+export function failureHint(message: string): string | undefined {
+  if (/HTTP 40[13]\b/.test(message)) {
+    return "Dosu rejected this install's API key. Run 'dosu login' (or 'dosu setup') to get a new one.";
+  }
+  if (/HTTP 5\d\d\b/.test(message)) return "Dosu had a server error; the next run retries.";
+  if (/fetch failed|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|timed out|aborted/i.test(message)) {
+    return "Could not reach Dosu. Check the connection; the next run retries.";
+  }
+  return undefined;
+}
+
 export function getSyncStatus(deps: SyncStatusDeps = {}): SyncStatus {
   const configDir = deps.configDir ?? getConfigDir();
   const isProcessAlive = deps.isProcessAlive ?? defaultIsProcessAlive;
@@ -94,6 +110,13 @@ export function getSyncStatus(deps: SyncStatusDeps = {}): SyncStatus {
 
   const state = loadSyncState(configDir);
   const retryAt = backoffUntil(state);
+  const failure =
+    state.consecutive_failures > 0 && state.last_failure
+      ? {
+          message: state.last_failure,
+          ...(failureHint(state.last_failure) ? { hint: failureHint(state.last_failure) } : {}),
+        }
+      : undefined;
 
   return {
     running,
@@ -104,6 +127,7 @@ export function getSyncStatus(deps: SyncStatusDeps = {}): SyncStatus {
     subagentOutcomes: outcomeCounts(state, "subagents"),
     attention: [...settledSessions(state, "rejected"), ...settledSessions(state, "unsupported")],
     ...(retryAt ? { backoffUntil: retryAt.toISOString() } : {}),
+    ...(failure ? { lastFailure: failure } : {}),
     recentActivity: recentSyncActivity(readLog()),
   };
 }
