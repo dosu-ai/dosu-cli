@@ -841,12 +841,12 @@ describe("CLI actions", () => {
     it("auto-sets global when provider does not support local", async () => {
       saveConfig(authenticatedConfig());
 
-      // Windsurf only supports global installation
-      await run("mcp", "add", "windsurf");
+      // Pi only supports global installation
+      await run("mcp", "add", "pi");
 
       const output = allLogOutput();
       expect(output).toContain("only supports global installation");
-      expect(output).toContain("Successfully added Dosu MCP to Windsurf");
+      expect(output).toContain("Successfully added Dosu MCP to Pi");
     });
 
     it("installs globally when --global flag is passed", async () => {

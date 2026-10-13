@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { appSupportDir, expandHome, isInstalled } from "./detect";
+import { expandHome, isInstalled } from "./detect";
 
 describe("detect", () => {
   describe("expandHome", () => {
@@ -38,12 +38,6 @@ describe("detect", () => {
 
     it("returns false for empty array", () => {
       expect(isInstalled([])).toBe(false);
-    });
-  });
-
-  describe("appSupportDir", () => {
-    it("returns a non-empty string", () => {
-      expect(appSupportDir().length).toBeGreaterThan(0);
     });
   });
 });

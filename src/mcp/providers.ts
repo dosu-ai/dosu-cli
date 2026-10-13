@@ -28,42 +28,29 @@ export interface SetupProvider extends Provider {
   priority(): number;
 }
 
-import { AntigravityProvider } from "./providers/antigravity";
 // Import all providers (factory functions)
 import { ClaudeProvider } from "./providers/claude";
-import { ClaudeDesktopProvider } from "./providers/claude-desktop";
-import { ClineProvider } from "./providers/cline";
-import { ClineCliProvider } from "./providers/cline-cli";
 import { CodexProvider } from "./providers/codex";
 import { CopilotProvider } from "./providers/copilot";
 import { CursorProvider } from "./providers/cursor";
 import { FactoryProvider } from "./providers/factory";
 import { GeminiProvider } from "./providers/gemini";
 import { ManualProvider } from "./providers/manual";
-import { MCPorterProvider } from "./providers/mcporter";
 import { OpenCodeProvider } from "./providers/opencode";
 import { PiProvider } from "./providers/pi";
-import { VSCodeProvider } from "./providers/vscode";
-import { WindsurfProvider } from "./providers/windsurf";
-import { ZedProvider } from "./providers/zed";
 
-/** Returns all available providers. */
+/** Every agent the CLI configures. Each one's sessions can be learned from: it has a session
+ * log on disk that @letta-ai/trajectory normalizes (claude-code, codex, cursor, gemini-cli,
+ * copilot-cli, opencode, droid, pi). An agent with no adapter gets no entry here, since all the
+ * CLI could do for it is write an MCP entry that never learns from its sessions. */
 export function allProviders(): Provider[] {
   return [
     ClaudeProvider(),
-    ClaudeDesktopProvider(),
     CursorProvider(),
-    VSCodeProvider(),
     GeminiProvider(),
     CodexProvider(),
-    WindsurfProvider(),
-    ZedProvider(),
-    ClineProvider(),
-    ClineCliProvider(),
     CopilotProvider(),
     OpenCodeProvider(),
-    AntigravityProvider(),
-    MCPorterProvider(),
     FactoryProvider(),
     PiProvider(),
     ManualProvider(),

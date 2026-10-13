@@ -213,9 +213,9 @@ import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils
 import { loadJSONConfig, saveJSONConfig } from "../mcp/config-helpers";
 import * as providersModule from "../mcp/providers";
 import { ClaudeProvider } from "../mcp/providers/claude";
-import { ClaudeDesktopProvider } from "../mcp/providers/claude-desktop";
 import { CodexProvider } from "../mcp/providers/codex";
 import { CursorProvider } from "../mcp/providers/cursor";
+import { GeminiProvider } from "../mcp/providers/gemini";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
 import { restoreRunningInstall, stubRunningFromNpx } from "../mcp/running-install.test-utils";
 import {
@@ -426,13 +426,13 @@ describe("stepDetectTools", () => {
   });
 
   it("returns providers whose detect paths exist", () => {
-    // Create Cursor detect path so it's "installed"; Claude Desktop's app
+    // Create Cursor detect path so it's "installed"; Gemini CLI's
     // dir does not exist in the temp env, so it stays undetected.
     mkdirSync(join(tempDir, ".cursor"), { recursive: true });
 
     // Mock allSetupProviders to return real providers built in our temp env
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => {
-      return [CursorProvider(), ClaudeDesktopProvider()];
+      return [CursorProvider(), GeminiProvider()];
     });
 
     const detected = stepDetectTools();
@@ -440,18 +440,15 @@ describe("stepDetectTools", () => {
     expect(detected[0].id()).toBe("cursor");
   });
 
-  it("includes Claude Desktop when its app dir exists", () => {
-    const desktop = ClaudeDesktopProvider();
-    for (const detectPath of desktop.detectPaths()) {
-      mkdirSync(detectPath, { recursive: true });
-    }
+  it("includes Gemini CLI when its config dir exists", () => {
+    mkdirSync(join(tempDir, ".gemini"), { recursive: true });
 
     vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => {
-      return [CursorProvider(), ClaudeDesktopProvider()];
+      return [CursorProvider(), GeminiProvider()];
     });
 
     const detected = stepDetectTools();
-    expect(detected.map((p2) => p2.id())).toEqual(["claude-desktop"]);
+    expect(detected.map((p2) => p2.id())).toEqual(["gemini"]);
   });
 
   it("includes Codex before its first run: the codex binary on PATH, or a relocated CODEX_HOME", () => {
@@ -711,7 +708,7 @@ describe("stepConfigureTools", () => {
     const cfg = makeCfg();
 
     const results = stepConfigureTools(cfg, {
-      toInstall: [ClaudeDesktopProvider()],
+      toInstall: [GeminiProvider()],
       toRemove: [],
       skipped: [],
     });

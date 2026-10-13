@@ -75,10 +75,11 @@ describe("rule template", () => {
 });
 
 describe("agent registry", () => {
-  it("supports the same six mainstream agents as Context7 setup", () => {
-    for (const agent of ["claude", "cursor", "codex", "opencode", "gemini", "antigravity"]) {
+  it("supports the agents with a rules file the CLI configures", () => {
+    for (const agent of ["claude", "cursor", "codex", "opencode", "gemini"]) {
       expect(isRuleAgent(agent)).toBe(true);
     }
+    expect(isRuleAgent("antigravity")).toBe(false);
     expect(isRuleAgent("toString")).toBe(false);
   });
 
@@ -91,7 +92,6 @@ describe("agent registry", () => {
     expect(rulePathForAgent("codex")).toBe(join(tempDir, "custom-codex", "AGENTS.md"));
     expect(rulePathForAgent("opencode")).toBe(join(tempDir, ".config", "opencode", "AGENTS.md"));
     expect(rulePathForAgent("gemini")).toBe(join(tempDir, ".gemini", "GEMINI.md"));
-    expect(rulePathForAgent("antigravity")).toBe(join(tempDir, ".gemini", "GEMINI.md"));
     expect(rulePathForAgent("windsurf")).toBeNull();
   });
 });
@@ -153,12 +153,12 @@ describe("marker-delimited instruction sections", () => {
     expect(installRuleForAgent("codex", "second rule")?.action).toBe("unchanged");
   });
 
-  it("shares one idempotent GEMINI.md section between Gemini and Antigravity", () => {
+  it("installs one idempotent GEMINI.md section", () => {
     const gemini = installRuleForAgent("gemini", "shared rule");
-    const antigravity = installRuleForAgent("antigravity", "shared rule");
+    const again = installRuleForAgent("gemini", "shared rule");
 
-    expect(gemini?.path).toBe(antigravity?.path);
-    expect(antigravity?.action).toBe("unchanged");
+    expect(again?.path).toBe(gemini?.path);
+    expect(again?.action).toBe("unchanged");
     const content = readFileSync(gemini?.path ?? "", "utf-8");
     expect(content.match(/<!-- dosu:rules:start v1 -->/g)).toHaveLength(1);
   });
