@@ -1,7 +1,7 @@
 /** Setup flow UI helpers and styled output. */
 
-import { stripVTControlCharacters } from "node:util";
 import pc from "picocolors";
+import { contentWidth, visibleWidth } from "../tui/layout";
 
 export const IconAdd = "\u2714";
 export const IconRemove = "-";
@@ -65,19 +65,17 @@ export function info(msg: string): string {
   return pc.cyan(msg);
 }
 
-/** Width of clack's `│  ` log gutter plus one column of slack so a full line never trips the
- * terminal's own wrap. */
+/** Width of the prompt kit's 2-column marker gutter (`✔ `, or `  ` on continuation lines) plus
+ * two columns of slack: a full line never trips the terminal's own wrap, and a wide symbol that
+ * counts as one column (⚪) still fits. */
 const LOG_GUTTER = 4;
 
-function visibleWidth(text: string): number {
-  return stripVTControlCharacters(text).length;
-}
-
-/** Word-wrap prose for `p.log.*`. Clack prefixes each newline-delimited line with its gutter but
- * does not wrap, so a long line spills past the terminal edge and the continuation lands at
- * column 0 without the gutter. Existing newlines are kept; ANSI codes are not counted. */
+/** Word-wrap prose for `p.log.*` to the centered content column. The prompt kit indents each
+ * newline-delimited line under its marker and the centered layout adds a left margin, but neither
+ * wraps, so a long line spills past the terminal edge and the terminal's wrap lands its tail at
+ * column 0, outside the column. Existing newlines are kept; ANSI codes are not counted. */
 export function wrapLog(text: string, columns: number = process.stdout.columns || 80): string {
-  const width = Math.max(20, columns - LOG_GUTTER);
+  const width = Math.max(20, contentWidth(columns) - LOG_GUTTER);
   const out: string[] = [];
   for (const paragraph of text.split("\n")) {
     if (visibleWidth(paragraph) <= width) {

@@ -14,7 +14,7 @@ import {
   REFRESH_LIST_VALUE,
 } from "./github-repo-prompt";
 import { startInstallationCallbackServer } from "./installation-server";
-import { browserFallbackHint, dim } from "./styles";
+import { browserFallbackHint, dim, wrapLog } from "./styles";
 
 const INSTALLATION_TIMEOUT_MS = 10 * 60 * 1000;
 const REPO_REFRESH_POLL_INTERVAL_MS = 500;
@@ -646,7 +646,9 @@ export async function stepConnectGitHubRepo(
       repos = refresh.repos;
       if (!refresh.foundNew) {
         p.log.warn(
-          "GitHub may still be syncing. Pick 'Refresh list' in a moment to re-check; sync usually completes within a minute.",
+          wrapLog(
+            "GitHub may still be syncing. Pick 'Refresh list' in a moment to re-check; sync usually completes within a minute.",
+          ),
         );
       }
       continue;
