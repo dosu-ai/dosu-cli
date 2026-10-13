@@ -4,11 +4,15 @@ import {
   installJSONServer,
   isJSONKeyConfigured,
   mcpEndpoint,
-  mcpRemoteServer,
+  mcpHeaders,
+  npxRemoteEntry,
+  readJSONServer,
   removeJSONServer,
 } from "../config-helpers";
-import { appSupportDir, findNpx, isInstalled, npxPathEnv } from "../detect";
+import { appSupportDir, findNpx, isInstalled, launcherPathEnv } from "../detect";
 import type { SetupProvider } from "../providers";
+import { proxyCommand, stdioServer } from "../proxy-entry";
+import { ANY, entryHasShape, proxyCommandShape, shapeEndpoint } from "../shape";
 
 function configPath(): string {
   return join(appSupportDir(), "Claude", "claude_desktop_config.json");
@@ -23,24 +27,35 @@ export const ClaudeDesktopProvider = (): SetupProvider => ({
   isInstalled: () => isInstalled([join(appSupportDir(), "Claude")]),
   globalConfigPath: () => configPath(),
   isConfigured: () => isJSONKeyConfigured(configPath(), "mcpServers"),
+  isCurrent: (cfg) => {
+    const proxy = proxyCommandShape("claude-desktop");
+    return entryHasShape(
+      proxy ? stdioServer(proxy) : npxRemoteEntry(shapeEndpoint(cfg), ANY, ANY, ANY),
+      readJSONServer(configPath(), "mcpServers"),
+    );
+  },
 
   install(cfg: Config, global: boolean): void {
     if (!global) throw new Error("Claude Desktop does not support local installation");
     const url = mcpEndpoint(cfg);
     // Claude Desktop's chat surface launches only stdio servers from this
     // config file (and only renders MCP Apps from them); remote HTTP goes
-    // through the Connectors UI, which cannot be automated. Proxy the remote
-    // endpoint through `npx mcp-remote`, with an absolute npx path and an
-    // explicit PATH because Claude Desktop spawns servers with the minimal
-    // launchd PATH. Revert to a plain remote-HTTP entry if
-    // claude_desktop_config.json ever accepts one.
+    // through the Connectors UI, which cannot be automated. Run Dosu's own
+    // proxy, or from a one-off npx copy proxy the remote endpoint through
+    // `npx mcp-remote`, with an absolute npx path and an explicit PATH
+    // because Claude Desktop spawns servers with the minimal launchd PATH.
+    const proxy = proxyCommand("claude-desktop");
+    if (proxy) {
+      mcpHeaders(cfg.active_account?.target?.api_key);
+      installJSONServer(configPath(), "mcpServers", stdioServer(proxy));
+      return;
+    }
     const npx = findNpx();
-    const remote = mcpRemoteServer(url, cfg.active_account?.target?.api_key);
-    installJSONServer(configPath(), "mcpServers", {
-      command: npx,
-      args: remote.args,
-      env: { PATH: npxPathEnv(npx), ...remote.env },
-    });
+    installJSONServer(
+      configPath(),
+      "mcpServers",
+      npxRemoteEntry(url, cfg.active_account?.target?.api_key, npx, launcherPathEnv(npx)),
+    );
   },
 
   remove(global: boolean): void {

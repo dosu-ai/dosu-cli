@@ -10,7 +10,14 @@ import { logger } from "../debug/logger";
 import { brand } from "../setup/styles";
 import { centerBlock, visibleWidth } from "../tui/layout";
 import { startAutoUpdate } from "./auto-update";
-import { INSTALL_CHANNEL, isNpxInvocation, VERSION } from "./version";
+import {
+  INSTALL_CHANNEL,
+  isNpxInvocation,
+  isSelfHostedBuild,
+  type ReleaseTag,
+  releaseTag,
+  VERSION,
+} from "./version";
 
 const CACHE_FILENAME = "update-check.json";
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -47,6 +54,32 @@ export function isNewerVersion(latest: string, current: string): boolean {
   return false;
 }
 
+/** Semver precedence, prerelease identifiers included: `0.63.0-beta.2` is newer than
+ * `-beta.1`, and `0.63.0` is newer than any of its prereleases. `isNewerVersion` ignores
+ * prereleases, which is right for its format-change callers but would leave a beta install
+ * blind to the next beta. */
+export function isNewerRelease(candidate: string, current: string): boolean {
+  if (isNewerVersion(candidate, current)) return true;
+  if (isNewerVersion(current, candidate)) return false;
+  const pre = (v: string) => /^[^-+]+-([^+]+)/.exec(v)?.[1]?.split(".");
+  const a = pre(candidate);
+  const b = pre(current);
+  if (!a) return b !== undefined;
+  if (!b) return false;
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    if (a[i] === undefined) return false;
+    if (b[i] === undefined) return true;
+    if (a[i] === b[i]) continue;
+    const an = /^\d+$/.test(a[i]) ? Number(a[i]) : Number.NaN;
+    const bn = /^\d+$/.test(b[i]) ? Number(b[i]) : Number.NaN;
+    if (!Number.isNaN(an) && !Number.isNaN(bn)) return an > bn;
+    if (!Number.isNaN(an)) return false;
+    if (!Number.isNaN(bn)) return true;
+    return a[i] > b[i];
+  }
+  return false;
+}
+
 function getCachePath(): string {
   return join(getConfigDir(), CACHE_FILENAME);
 }
@@ -77,15 +110,15 @@ function writeCache(cache: UpdateCache): void {
   }
 }
 
-/** Fetch the latest published version from the npm registry. */
-export async function fetchLatestVersion(): Promise<string | null> {
+/** Fetch the newest version published under `tag` (this build's channel by default). */
+export async function fetchLatestVersion(tag: ReleaseTag = releaseTag()): Promise<string | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
     const resp = await fetch(REGISTRY_URL, { signal: controller.signal });
     if (!resp.ok) return null;
     const data = (await resp.json()) as Record<string, string>;
-    const latest = data.latest;
+    const latest = data[tag];
     return isValidVersion(latest) ? latest : null;
   } catch {
     return null;
@@ -96,7 +129,7 @@ export async function fetchLatestVersion(): Promise<string | null> {
 
 export function buildUpdateHint(channel: string, npx = false): string {
   if (channel === "npm" && npx) {
-    return 'Use "npx -y @dosu/cli@latest" for the next Dosu command';
+    return `Use "npx -y @dosu/cli@${releaseTag()}" for the next Dosu command`;
   }
   return 'Run "dosu upgrade"';
 }
@@ -178,7 +211,7 @@ export function buildUpdateNotice(
   }
 
   const agentAction = hint[0].toLowerCase() + hint.slice(1);
-  const verifyCommand = npx ? "npx -y @dosu/cli@latest --version" : "dosu --version";
+  const verifyCommand = npx ? `npx -y @dosu/cli@${releaseTag()} --version` : "dosu --version";
   return (
     `\n[dosu:update] Update available: ${current} → ${latest}\n` +
     `Tell the user Dosu CLI is outdated. After they approve, ${agentAction}, ` +
@@ -188,12 +221,13 @@ export function buildUpdateNotice(
 
 /** The update the cache already knows about, if any, for surfaces (the TUI welcome banner)
  * that render the notice themselves instead of printing the boxed stderr notice. */
-export function getAvailableUpdate(): string | null {
+export function getAvailableUpdate(channel: string = INSTALL_CHANNEL): string | null {
+  if (isSelfHostedBuild(channel)) return null;
   const cache = readCache();
-  return cache && isNewerVersion(cache.latestVersion, VERSION) ? cache.latestVersion : null;
+  return cache && isNewerRelease(cache.latestVersion, VERSION) ? cache.latestVersion : null;
 }
 
-/** Start (or join) a background install of `latest`, then tell the person what is happening:
+/** Start (or join) a background install of this channel's newest version, then tell the person what is happening:
  * that it is installing, or, when this copy cannot update itself, how to do it by hand. */
 function handleNewerVersion(latest: string, notify: boolean): void {
   const autoUpdate = startAutoUpdate(latest);
@@ -208,13 +242,16 @@ function handleNewerVersion(latest: string, notify: boolean): void {
 
 /** Check for updates, awaited from the preAction hook. A newer version starts a background
  * install. With `notify: false` nothing is printed; the TUI welcome banner shows the update. */
-export async function checkForUpdates(options: { notify?: boolean } = {}): Promise<void> {
+export async function checkForUpdates(
+  options: { notify?: boolean; channel?: string } = {},
+): Promise<void> {
+  if (isSelfHostedBuild(options.channel)) return;
   const notify = options.notify ?? true;
   try {
     const cache = readCache();
     const isStale = !cache || Date.now() - cache.lastCheck > CHECK_INTERVAL_MS;
     if (!isStale) {
-      if (isNewerVersion(cache.latestVersion, VERSION)) {
+      if (isNewerRelease(cache.latestVersion, VERSION)) {
         handleNewerVersion(cache.latestVersion, notify);
       }
       return;
@@ -231,7 +268,7 @@ export async function checkForUpdates(options: { notify?: boolean } = {}): Promi
     if (latest) {
       logger.debug("update-check", `Cached latest version: ${latest}`);
     }
-    if (isNewerVersion(latestKnownVersion, VERSION)) {
+    if (isNewerRelease(latestKnownVersion, VERSION)) {
       handleNewerVersion(latestKnownVersion, notify);
     }
   } catch (err) {

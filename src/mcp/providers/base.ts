@@ -7,10 +7,13 @@ import {
   isJSONKeyConfigured,
   mcpEndpoint,
   mcpHeaders,
+  readJSONServer,
   removeJSONServer,
 } from "../config-helpers";
 import { expandHome, isInstalled } from "../detect";
 import type { SetupProvider } from "../providers";
+import { type ProxyCommand, proxyCommand, stdioServer } from "../proxy-entry";
+import { ANY, entryHasShape, proxyCommandShape, shapeEndpoint } from "../shape";
 
 /** The resolved Dosu MCP endpoint a provider writes into its config file. */
 interface McpEndpoint {
@@ -27,12 +30,18 @@ export interface BaseProviderConfig {
   globalPath: string;
   topKey: string;
   /**
-   * Shapes the server entry for this tool's schema. Receives the endpoint
-   * already resolved for the active mode (OSS vs cloud), so overrides never
-   * need to know which mode they are in. Defaults to `{ type: "http", url, headers }`.
+   * Shapes the stdio entry that runs the local proxy (`dosu mcp serve`) for this tool's schema.
+   * Defaults to `{ command, args, env }`.
    */
   // biome-ignore lint/suspicious/noExplicitAny: server entries are arbitrary JSON
-  buildServer?: (endpoint: McpEndpoint, cfg: Config) => Record<string, any>;
+  buildStdioServer?: (proxy: ProxyCommand) => Record<string, any>;
+  /**
+   * Shapes the remote entry written when there is no `dosu` to run the proxy with. Receives the
+   * endpoint already resolved for the active mode (OSS vs cloud), so overrides never need to know
+   * which mode they are in. Defaults to `{ type: "http", url, headers }`.
+   */
+  // biome-ignore lint/suspicious/noExplicitAny: server entries are arbitrary JSON
+  buildServer?: (endpoint: McpEndpoint) => Record<string, any>;
   /** For providers that use a different local config path pattern */
   localConfigPath?: (cwd: string) => string;
 }
@@ -46,6 +55,10 @@ const defaultBuildServer = ({ url, headers }: McpEndpoint): Record<string, any> 
 
 export function createJSONProvider(opts: BaseProviderConfig): SetupProvider {
   const buildServer = opts.buildServer ?? defaultBuildServer;
+  const buildStdioServer = opts.buildStdioServer ?? stdioServer;
+
+  const server = (endpoint: McpEndpoint, proxy: ProxyCommand | null) =>
+    proxy ? buildStdioServer(proxy) : buildServer(endpoint);
 
   return {
     name: () => opts.providerName,
@@ -56,6 +69,14 @@ export function createJSONProvider(opts: BaseProviderConfig): SetupProvider {
     isInstalled: () => isInstalled(opts.paths),
     globalConfigPath: () => expandHome(opts.globalPath),
     isConfigured: () => isJSONKeyConfigured(expandHome(opts.globalPath), opts.topKey),
+    isCurrent: (cfg) =>
+      entryHasShape(
+        server(
+          { url: shapeEndpoint(cfg), headers: mcpHeaders(ANY) },
+          proxyCommandShape(opts.providerID),
+        ),
+        readJSONServer(expandHome(opts.globalPath), opts.topKey),
+      ),
 
     install(cfg: Config, global: boolean): void {
       const endpoint: McpEndpoint = {
@@ -70,7 +91,8 @@ export function createJSONProvider(opts: BaseProviderConfig): SetupProvider {
       } else {
         throw new Error(`${opts.providerName} does not support local installation`);
       }
-      installJSONServer(configPath, opts.topKey, buildServer(endpoint, cfg));
+      const proxy = proxyCommand(opts.providerID);
+      installJSONServer(configPath, opts.topKey, server(endpoint, proxy));
     },
 
     remove(global: boolean): void {

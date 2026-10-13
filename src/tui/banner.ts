@@ -24,7 +24,7 @@ export interface BannerContext {
   setupMissing?: string[];
   /** Dosu section state in this repo's AGENTS.md; only set inside a git work tree. */
   repoAgentsMd?: "current" | "outdated" | "missing";
-  /** True when a knowledge-sync run is studying right now. */
+  /** True when a knowledge-sync run is shipping right now. */
   studying?: boolean;
   /** A newer published version, when the update check found one. */
   update?: { version: string; hint: string };
@@ -139,7 +139,7 @@ function checklistRows(ctx: BannerContext, width: number): string[] {
   if (ctx.studying) {
     rows.push([
       "sync",
-      `\uD83D\uDCDA ${brand("studying sessions...")} ${pc.dim(`${DOT} see activity`)}`,
+      `\uD83D\uDCDA ${brand("shipping sessions...")} ${pc.dim(`${DOT} see activity`)}`,
     ]);
   }
   if (ctx.update) {

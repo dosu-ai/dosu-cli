@@ -3,12 +3,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  countRediscoveryToolCalls,
-  estimateSessionTokens,
-  isWorthStudying,
-  readSessionTurns,
-} from "./read";
+import { countRediscoveryToolCalls, estimateSessionTokens, readSessionTurns } from "./read";
 import type { AgentSession } from "./scan";
 
 let dir: string;
@@ -224,6 +219,23 @@ describe("readSessionTurns", () => {
       ]);
     });
 
+    it("does not count a subagent's report, which Codex injects as a user turn, as a prompt", () => {
+      const message = (role: string, text: string) => ({
+        type: "response_item",
+        payload: { type: "message", role, content: [{ type: "input_text", text }] },
+      });
+      const path = writeLog("c.jsonl", [
+        message("user", "delegate the listing to a subagent"),
+        message("user", '<subagent_notification>\n{"agent_path":"a1","status":{}}'),
+        message("assistant", "The subagent reported two files."),
+      ]);
+
+      expect(readSessionTurns(session("codex", path)).map((t) => t.text)).toEqual([
+        "delegate the listing to a subagent",
+        "The subagent reported two files.",
+      ]);
+    });
+
     it("skips response_items with a missing or non-object payload", () => {
       const path = writeLog("c.jsonl", [
         { type: "response_item" },
@@ -390,45 +402,64 @@ describe("readSessionTurns", () => {
   });
 });
 
-describe("isWorthStudying", () => {
-  function claudeTurn(role: "user" | "assistant", text: string) {
-    return { type: role, message: { role, content: text } };
-  }
-
-  it("accepts a session with enough turns and enough text", () => {
-    const text = "a substantial paragraph of investigation detail ".repeat(20); // ~960 chars
-    const path = writeLog("worthy.jsonl", [
-      claudeTurn("user", text),
-      claudeTurn("assistant", text),
-      claudeTurn("user", text),
-      claudeTurn("assistant", text),
+describe("readSessionTurns for pi", () => {
+  /** pi's transcript: a session header, then entries whose `message` is the conversation. */
+  const piLog = (entries: unknown[]) =>
+    writeLog("2026-08-25T10-00-00-000Z_p1.jsonl", [
+      { type: "session", version: 3, id: "p1", cwd: "/w" },
+      ...entries,
     ]);
 
-    expect(isWorthStudying(session("claude", path))).toBe(true);
-  });
-
-  it("rejects a session with too few turns, however long", () => {
-    const path = writeLog("short.jsonl", [
-      claudeTurn("user", "x".repeat(5000)),
-      claudeTurn("assistant", "y".repeat(5000)),
+  it("extracts user and assistant text, skipping prompts, tools, thinking, and extension entries", () => {
+    const path = piLog([
+      { type: "model_change", provider: "anthropic", modelId: "m" },
+      { type: "message", message: { role: "system", content: "", sections: { preamble: "p" } } },
+      { type: "message", message: { role: "user", content: [{ type: "text", text: "fix it" }] } },
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "hmm" },
+            { type: "text", text: "On it." },
+            { type: "toolCall", id: "c1", name: "read", arguments: { path: "a.py" } },
+          ],
+        },
+      },
+      {
+        type: "message",
+        message: { role: "toolResult", toolCallId: "c1", content: [{ type: "text", text: "x" }] },
+      },
+      { type: "custom_message", customType: "dosu-memory", content: "digest", display: false },
+      { type: "message", message: { role: "user", content: "and test it" } },
+      "{truncated",
     ]);
 
-    expect(isWorthStudying(session("claude", path))).toBe(false);
+    expect(readSessionTurns(session("pi", path))).toEqual([
+      { role: "user", text: "fix it" },
+      { role: "assistant", text: "On it." },
+      { role: "user", text: "and test it" },
+    ]);
   });
 
-  it("rejects a chatty but tiny session", () => {
-    const path = writeLog("tiny.jsonl", [
-      claudeTurn("user", "hi"),
-      claudeTurn("assistant", "hello!"),
-      claudeTurn("user", "thanks"),
-      claudeTurn("assistant", "any time"),
+  it("counts pi's built-in investigation tools", () => {
+    const path = piLog([
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "toolCall", name: "read" },
+            { type: "toolCall", name: "bash" },
+            { type: "toolCall", name: "search_memory" },
+            { type: "text", text: "done" },
+          ],
+        },
+      },
+      { type: "message", message: { role: "assistant", content: "plain" } },
     ]);
 
-    expect(isWorthStudying(session("claude", path))).toBe(false);
-  });
-
-  it("rejects an unreadable session", () => {
-    expect(isWorthStudying(session("claude", join(dir, "missing.jsonl")))).toBe(false);
+    expect(countRediscoveryToolCalls(session("pi", path))).toBe(2);
   });
 });
 

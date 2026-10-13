@@ -7,21 +7,35 @@ import { posix, win32 } from "node:path";
 import { Command, Option } from "commander";
 import pc from "picocolors";
 import { loadConfigNonBlocking } from "../config/config";
-import { refreshConfiguredProviders } from "../mcp/refresh";
+import { refreshEnabledHooks } from "../hooks/agents";
+import { refreshProviders, staleProviders } from "../mcp/refresh";
 import {
   AUTO_UPDATE_ENV,
   autoUpdateDisabledReason,
   runBackgroundUpgrade,
   setAutoUpdateEnabled,
 } from "../version/auto-update";
-import { canRefreshMcp, needsMcpRefresh, writeMcpRefreshCache } from "../version/mcp-refresh-check";
+import { canRefreshMcp, writeMcpRefreshCache } from "../version/mcp-refresh-check";
 import { checkForSkillUpdates } from "../version/skill-update-check";
-import { INSTALL_CHANNEL, isNpxInvocation, VERSION } from "../version/version";
+import {
+  INSTALL_CHANNEL,
+  isNpxInvocation,
+  isSelfHostedBuild,
+  releaseTag,
+  VERSION,
+} from "../version/version";
 
 const PACKAGE_NAME = "@dosu/cli";
-const LATEST_PACKAGE = `${PACKAGE_NAME}@latest`;
+
+/** What to install: the running version's own channel, so a beta install upgrades along
+ * `beta` instead of dropping back to `latest`. */
+export function installSpec(version: string = VERSION): string {
+  return `${PACKAGE_NAME}@${releaseTag(version)}`;
+}
+
+const INSTALL_PACKAGE = installSpec();
 const BREW_MANUAL_COMMAND = "brew upgrade dosu-ai/dosu/dosu";
-const NPX_COMMAND = "npx -y @dosu/cli@latest";
+const NPX_COMMAND = `npx -y ${INSTALL_PACKAGE}`;
 const PROBE_TIMEOUT_MS = 5_000;
 const RELEASES_URL = "https://github.com/dosu-ai/dosu-cli/releases/latest";
 
@@ -35,17 +49,17 @@ const PACKAGE_MANAGERS: Record<
   npm: {
     label: "npm",
     locateArgs: ["root", "-g"],
-    installArgs: ["install", "-g", LATEST_PACKAGE],
+    installArgs: ["install", "-g", INSTALL_PACKAGE],
   },
   pnpm: {
     label: "pnpm",
     locateArgs: ["list", "-g", "--depth=0", "--parseable", PACKAGE_NAME],
-    installArgs: ["add", "-g", LATEST_PACKAGE],
+    installArgs: ["add", "-g", INSTALL_PACKAGE],
   },
   yarn: {
     label: "Yarn Classic",
     locateArgs: ["--silent", "global", "dir"],
-    installArgs: ["global", "add", LATEST_PACKAGE],
+    installArgs: ["global", "add", INSTALL_PACKAGE],
   },
 };
 
@@ -228,6 +242,11 @@ function printNonGlobalPackageGuidance(): void {
 }
 
 export function runUpgrade(channel = INSTALL_CHANNEL, options: UpgradeOptions = {}): number {
+  if (isSelfHostedBuild(channel)) {
+    console.log("This Dosu CLI was built for a self-hosted Dosu and updates with it.");
+    console.log("Ask whoever runs your Dosu deployment for a newer build.");
+    return 1;
+  }
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
   // Global operations do not need the caller's project, whose config may execute arbitrary code.
@@ -287,10 +306,9 @@ export function runUpgrade(channel = INSTALL_CHANNEL, options: UpgradeOptions = 
 }
 
 const SETUP_FALLBACK = 'Run "dosu setup" to finish updating your AI agents.';
-const SEMVER = /^\d+\.\d+\.\d+/;
 
 /** What the upgraded binary should run. It, not this old process, decides whether the agents
- * need touching: only the new code knows which releases changed the agent config format. */
+ * need touching: only the new code knows the entry shapes it writes. */
 export function postUpgradeArgs(fromVersion: string = VERSION): string[] {
   return ["upgrade", "--finish", fromVersion];
 }
@@ -352,17 +370,24 @@ export async function completeUpgrade(
 }
 
 /** `dosu upgrade --finish <from>`, run by the freshly installed binary. Re-runs setup (or, with
- * no TTY, the MCP refresh) only when the jump from `from` crossed a release that changed the
- * agent config format; otherwise it just re-applies the bundled skills. */
+ * no TTY, the MCP refresh) only when a configured agent's entry is not the shape this version
+ * writes. Enabled hooks and bundled skills are re-applied either way. `from` is the version the upgrade
+ * started from; the entries themselves decide whether anything changes. */
 export async function finishUpgrade(
-  from: string,
+  _from: string,
   options: { interactive?: boolean } = {},
 ): Promise<number> {
-  const previous = SEMVER.test(from) ? from : null;
-  if (!needsMcpRefresh(previous, VERSION)) {
+  const cfg = loadConfigNonBlocking();
+  const stale = staleProviders(cfg);
+  // The finish command skips automatic upgrade checks; refresh enabled hooks even if the MCP
+  // entries are current. Disabled hooks remain disabled.
+  refreshEnabledHooks();
+  if (stale.length === 0) {
     checkForSkillUpdates();
     writeMcpRefreshCache({ version: VERSION });
-    console.log(pc.green(`✓ Dosu ${VERSION} is ready. Your AI agents need no changes.`));
+    console.log(
+      pc.green(`✓ Dosu ${VERSION} is ready. Enabled hooks and bundled skills are up to date.`),
+    );
     return 0;
   }
 
@@ -374,13 +399,12 @@ export async function finishUpgrade(
   }
 
   checkForSkillUpdates();
-  const cfg = loadConfigNonBlocking();
   if (!cfg || !canRefreshMcp(cfg)) {
     console.error(SETUP_FALLBACK);
     return 0;
   }
   console.log("\nRefreshing agent MCP configs with the new version...");
-  const result = refreshConfiguredProviders(cfg);
+  const result = refreshProviders(cfg, stale);
   writeMcpRefreshCache({ version: VERSION });
   for (const provider of result.updated) console.log(`  ✓ ${provider.name()}`);
   for (const { provider, error } of result.failed) {

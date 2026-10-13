@@ -1,3 +1,45 @@
+## [0.68.2](https://github.com/dosu-ai/dosu-cli/compare/v0.68.1...v0.68.2) (2026-10-12)
+
+
+### Bug Fixes
+
+* **libraries:** say Monitor comments instead of reacting on Azure DevOps ([#276](https://github.com/dosu-ai/dosu-cli/issues/276)) ([1c52f51](https://github.com/dosu-ai/dosu-cli/commit/1c52f51f65df69f84964ef88f5269641998443ed)), closes [dosu-ai/dosu#13141](https://github.com/dosu-ai/dosu/issues/13141)
+
+## [0.68.1](https://github.com/dosu-ai/dosu-cli/compare/v0.68.0...v0.68.1) (2026-10-10)
+
+
+### Bug Fixes
+
+* **sync:** keep sessions that finished while incognito unstudied after `off` ([#275](https://github.com/dosu-ai/dosu-cli/issues/275)) ([5299488](https://github.com/dosu-ai/dosu-cli/commit/5299488482db9b991b5663fbe2977c7c0afb76f9))
+
+# [0.68.0](https://github.com/dosu-ai/dosu-cli/compare/v0.67.2...v0.68.0) (2026-10-09)
+
+
+### Features
+
+* **mcp:** load Dosu tools up front in Codex ([#257](https://github.com/dosu-ai/dosu-cli/issues/257)) ([c6cc437](https://github.com/dosu-ai/dosu-cli/commit/c6cc43743307d51a4d62b70ee0388a53c7c8c554)), closes [#270](https://github.com/dosu-ai/dosu-cli/issues/270)
+
+## [0.67.2](https://github.com/dosu-ai/dosu-cli/compare/v0.67.1...v0.67.2) (2026-10-09)
+
+
+### Bug Fixes
+
+* **mcp:** refresh agent entries that are out of date, not by release list ([#270](https://github.com/dosu-ai/dosu-cli/issues/270)) ([48244b2](https://github.com/dosu-ai/dosu-cli/commit/48244b28d4ae2485965581f3a9f274a9637c821c))
+
+## [0.67.1](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0...v0.67.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* **telemetry:** record review and deployment failures and print server request IDs ([#254](https://github.com/dosu-ai/dosu-cli/issues/254)) ([ccf23ee](https://github.com/dosu-ai/dosu-cli/commit/ccf23ee004e3511d61a10f995f9b34ff7b8edc9a)), closes [#234](https://github.com/dosu-ai/dosu-cli/issues/234)
+
+# [0.67.0](https://github.com/dosu-ai/dosu-cli/compare/v0.66.1...v0.67.0) (2026-10-09)
+
+
+### Features
+
+* **review:** show the searched scope and fail on missing or unavailable context ([#253](https://github.com/dosu-ai/dosu-cli/issues/253)) ([92c1cd0](https://github.com/dosu-ai/dosu-cli/commit/92c1cd02748371390145ea94cdc14efcd2b69985))
+
 ## [0.66.1](https://github.com/dosu-ai/dosu-cli/compare/v0.66.0...v0.66.1) (2026-10-06)
 
 

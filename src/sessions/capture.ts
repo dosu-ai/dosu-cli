@@ -1,13 +1,16 @@
-/** Session facts an agent hook captured while the session ran, for agents whose transcripts do not
- * record them (Cursor records neither its branch nor its working directory). One small file per
- * session, never dropped like the project-dir cache: a lost branch means the session is never
- * studied. */
+/** What an agent hook's payload tells the sync. Session facts captured while the session ran, for
+ * agents whose transcripts do not record them (Cursor records neither its branch nor its working
+ * directory): one small file per session, never dropped like the project-dir cache, since a lost
+ * branch means the session is never studied. And which session just ended, when the hook is a
+ * definitive end event, so the sync ships it now instead of waiting out the quiet period. */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { getConfigDir } from "../config/config";
 import { logger } from "../debug/logger";
+import { PI_SESSION_ID_PATTERN } from "./pi";
 import { currentBranchOfDir } from "./repo";
+import { SESSION_HARNESSES, type SessionHarness } from "./scan";
 
 const CAPTURE_DIRNAME = "session-captures";
 
@@ -20,8 +23,11 @@ const SAFE_SEGMENT = /^[A-Za-z0-9_-]+$/;
 export interface CapturedSession {
   /** Working directory the hook reported. */
   dir?: string;
-  /** Branch checked out in `dir` at the latest captured turn. */
+  /** Branch checked out in `dir` at the first captured turn that had one: the nearest the hook
+   * comes to the branch the session began on. */
   branch?: string;
+  /** When the first turn was captured; absent from captures older CLIs wrote. */
+  since?: string;
   /** When the capture was last updated. */
   at: string;
 }
@@ -46,6 +52,7 @@ export function readCapturedSession(
     return {
       ...(typeof raw.dir === "string" ? { dir: raw.dir } : {}),
       ...(typeof raw.branch === "string" ? { branch: raw.branch } : {}),
+      ...(typeof raw.since === "string" ? { since: raw.since } : {}),
       at: typeof raw.at === "string" ? raw.at : "",
     };
   } catch {
@@ -53,8 +60,8 @@ export function readCapturedSession(
   }
 }
 
-/** Merge a turn's capture into the session's record. A turn on a detached HEAD (mid-rebase)
- * keeps the branch an earlier turn captured. */
+/** Merge a turn's capture into the session's record. The first turn's branch stays, as does a
+ * branch an earlier turn captured through a turn on a detached HEAD (mid-rebase). */
 export function recordCapturedSession(
   key: string,
   update: { dir?: string; branch?: string | null },
@@ -65,10 +72,13 @@ export function recordCapturedSession(
   if (!path) return false;
   const previous = readCapturedSession(key, configDir);
   const dir = update.dir ?? previous?.dir;
-  const branch = update.branch ?? previous?.branch;
+  const branch = previous?.branch ?? update.branch;
+  // A capture an older CLI started has no first turn on record: better none than a later one.
+  const since = previous ? previous.since : now.toISOString();
   const record: CapturedSession = {
     ...(dir ? { dir } : {}),
     ...(branch ? { branch } : {}),
+    ...(since ? { since } : {}),
     at: now.toISOString(),
   };
   try {
@@ -91,7 +101,7 @@ export interface CaptureDeps {
 }
 
 /** Record the branch from a Cursor `stop` hook payload; other agents' payloads are ignored.
- * `stop` fires every turn, so the latest turn's branch wins. */
+ * `stop` fires every turn, and the first turn's branch is the one kept. */
 export function captureCursorStop(payload: unknown, deps: CaptureDeps = {}): boolean {
   if (typeof payload !== "object" || payload === null) return false;
   const hook = payload as Record<string, unknown>;
@@ -152,13 +162,117 @@ export function readHookStdin(
   });
 }
 
-/** Hook-side capture before a detached sync: reads the hook payload and records what it can.
- * Never throws; a failed capture only means the reflog has to answer later. */
-export async function captureHookSession(stream?: HookStdin): Promise<void> {
+/** A session a hook reported as ended, for `knowledge sync --ended`/`--ended-path`. */
+export interface EndedSession {
+  /** With `id`, the scanner's key for the session. */
+  harness?: SessionHarness;
+  id?: string;
+  /** Its transcript: matches the scanned session at that path, and finds one outside the
+   * scanned roots when harness and id are known too. */
+  path?: string;
+}
+
+type HookPayload = Record<string, unknown>;
+
+/** Claude Code `SessionEnd`: `{session_id, transcript_path, hook_event_name, reason, cwd}`. */
+function claudeSessionEnd(hook: HookPayload): EndedSession | null {
+  if (hook.hook_event_name !== "SessionEnd") return null;
+  const id = hook.session_id;
+  const path = hook.transcript_path;
+  if (typeof id !== "string" || !SAFE_SEGMENT.test(id) || typeof path !== "string") return null;
+  // Claude Code names the transcript after the session; another agent's SessionEnd (Codex names
+  // a rollout file) is not this one.
+  if (basename(path) !== `${id}.jsonl`) return null;
+  return { harness: "claude", id, path };
+}
+
+/** Codex `SessionEnd` (0.160+): `{session_id, transcript_path, cwd, hook_event_name, reason}`.
+ * The scanner names a Codex session by its rollout file, `rollout-<time>-<session id>.jsonl`. */
+function codexSessionEnd(hook: HookPayload): EndedSession | null {
+  if (hook.hook_event_name !== "SessionEnd") return null;
+  const uuid = hook.session_id;
+  const path = hook.transcript_path;
+  if (typeof uuid !== "string" || !SAFE_SEGMENT.test(uuid) || typeof path !== "string") return null;
+  const id = basename(path, ".jsonl");
+  if (!id.startsWith("rollout-") || !id.endsWith(`-${uuid}`) || !SAFE_SEGMENT.test(id)) return null;
+  return { harness: "codex", id, path };
+}
+
+/** pi `session_shutdown`, as the Dosu pi extension hands it over: `{hook_event_name, agent: "pi",
+ * reason, session_id, transcript_path, cwd}`, the id being the one in the transcript's header. A
+ * reload tears the extension down and brings it straight back on the same session, so it ends
+ * nothing; quit, /new, /resume and /fork leave the session behind. Any transcript name counts:
+ * `pi --session <path>` keeps the caller's. */
+function piSessionShutdown(hook: HookPayload): EndedSession | null {
+  if (hook.hook_event_name !== "session_shutdown" || hook.agent !== "pi") return null;
+  if (hook.reason === "reload") return null;
+  const id = hook.session_id;
+  const path = hook.transcript_path;
+  if (typeof id !== "string" || !PI_SESSION_ID_PATTERN.test(id)) return null;
+  if (typeof path !== "string" || !path.startsWith("/")) return null;
+  return { harness: "pi", id, path };
+}
+
+/** One reader per agent for its definitive end-of-session event; OpenCode has none, since its
+ * plugin passes `--ended` itself. Per-turn events (Cursor `stop`, Codex `Stop` before 0.160,
+ * OpenCode's `session.idle`) never count: they fire while the session goes on. */
+const END_EVENT_READERS: ReadonlyArray<(hook: HookPayload) => EndedSession | null> = [
+  claudeSessionEnd,
+  codexSessionEnd,
+  piSessionShutdown,
+];
+
+/** The session a hook payload says just ended; null when the payload is not an end event. */
+export function endedSessionOf(payload: unknown): EndedSession | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  for (const read of END_EVENT_READERS) {
+    const ended = read(payload as HookPayload);
+    if (ended) return ended;
+  }
+  return null;
+}
+
+/** The `knowledge sync` flags that hand an ended session to the detached run: one value per
+ * session, `--ended <harness>:<id>[=<transcript>]`, so a session's transcript can never be
+ * paired with another's; a session known only by its transcript is `--ended-path <transcript>`. */
+export function endedSessionArgs(ended: EndedSession): string[] {
+  if (ended.harness && ended.id) {
+    return ["--ended", `${ended.harness}:${ended.id}${ended.path ? `=${ended.path}` : ""}`];
+  }
+  return ended.path ? ["--ended-path", ended.path] : [];
+}
+
+/** `--ended <harness>:<id>[=<transcript>]`: ids are SAFE_SEGMENT, or pi's, which allow dots too;
+ * neither has `=`, so the first one ends the id. */
+const ENDED_VALUE = /^([a-z]+):([A-Za-z0-9._-]+)(?:=(\/.*))?$/s;
+
+/** `--ended` and `--ended-path` values back into sessions, each value its own session. Malformed
+ * values are dropped: a hook-triggered run never fails loudly. */
+export function parseEndedSessionArgs(
+  ids: readonly string[],
+  paths: readonly string[],
+): EndedSession[] {
+  const ended: EndedSession[] = [];
+  for (const value of ids) {
+    const [, harness, id, path] = ENDED_VALUE.exec(value) ?? [];
+    if (!SESSION_HARNESSES.includes(harness as SessionHarness)) continue;
+    ended.push({ harness: harness as SessionHarness, id, ...(path ? { path } : {}) });
+  }
+  for (const path of paths) if (path.startsWith("/")) ended.push({ path });
+  return ended;
+}
+
+/** Hook-side capture before a detached sync: reads the hook payload, records what it can, and
+ * returns the session that just ended, if the hook says one did. Never throws; a failed capture
+ * only means the reflog has to answer later and the session waits out the quiet period. */
+export async function captureHookSession(stream?: HookStdin): Promise<EndedSession | null> {
   try {
     const payload = await readHookStdin(stream);
-    if (payload !== null) captureCursorStop(payload);
+    if (payload === null) return null;
+    captureCursorStop(payload);
+    return endedSessionOf(payload);
   } catch (err) {
     logger.debug("sync", `hook capture failed: ${err instanceof Error ? err.message : err}`);
+    return null;
   }
 }

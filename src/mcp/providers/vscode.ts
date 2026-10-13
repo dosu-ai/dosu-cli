@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { appSupportDir } from "../detect";
+import { stdioServer } from "../proxy-entry";
 import { createJSONProvider } from "./base";
 
 export const VSCodeProvider = () =>
@@ -11,5 +12,6 @@ export const VSCodeProvider = () =>
     paths: [join(appSupportDir(), "Code")],
     globalPath: join(appSupportDir(), "Code", "User", "mcp.json"),
     topKey: "servers",
+    buildStdioServer: (proxy) => ({ type: "stdio", ...stdioServer(proxy) }),
     localConfigPath: (cwd) => join(cwd, ".vscode", "mcp.json"),
   });

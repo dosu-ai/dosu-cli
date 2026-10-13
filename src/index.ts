@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 /** Dosu CLI: manage MCP servers for AI tools. */
 
+import { printFatalError } from "./cli/fatal-error";
 import { isStatuslineRenderArgv } from "./statusline/argv";
 
 // Ensure Ctrl+C always exits immediately, even when @clack/prompts
@@ -20,17 +21,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error(err.message ?? err);
-  // Surface the tRPC code/path/status when present so masked server messages
-  // (e.g. "[object Object]") stay diagnosable.
-  const data = err?.data;
-  if (data && (data.code || data.path || data.httpStatus)) {
-    const parts = [
-      data.code && `code=${data.code}`,
-      data.path && `path=${data.path}`,
-      data.httpStatus && `status=${data.httpStatus}`,
-    ].filter(Boolean);
-    console.error(parts.join(" "));
-  }
+  printFatalError(err);
   process.exit(1);
 });

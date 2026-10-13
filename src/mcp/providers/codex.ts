@@ -6,12 +6,16 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { type Config, MODE_OSS } from "../../config/config";
-import { mcpEndpoint, mcpRemoteServer, writeSecureFile } from "../config-helpers";
-import { expandHome, findNpx, isInstalled, npxPathEnv } from "../detect";
+import { codexInstalled } from "../../hooks/codex";
+import { mcpEndpoint, mcpHeaders, npxRemoteEntry, writeSecureFile } from "../config-helpers";
+import { expandHome, findNpx, launcherPathEnv } from "../detect";
 import type { SetupProvider } from "../providers";
+import { proxyCommand } from "../proxy-entry";
+import { ANY, entryHasShape, isUserChoiceKey, proxyCommandShape, shapeEndpoint } from "../shape";
 
+/** Codex treats an empty CODEX_HOME as unset, so this does too. */
 function codexHome(): string {
-  return process.env.CODEX_HOME ?? expandHome("~/.codex");
+  return process.env.CODEX_HOME || expandHome("~/.codex");
 }
 
 function getConfigPath(global: boolean): string {
@@ -33,25 +37,192 @@ function tomlString(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
+/** Variables Codex forwards from its own environment to the proxy. Codex starts stdio servers
+ * with a short allowlist (HOME, PATH, ...); these decide which Dosu config the proxy reads, the
+ * project a session's DOSU_PROJECT names, and where the proxy finds the rollout of the thread a
+ * call names (its session; mcp/call-session.ts). */
+const FORWARDED_ENV = ["DOSU_PROJECT", "XDG_CONFIG_HOME", "CODEX_HOME"];
+
+/** The stdio server Codex runs: Dosu's proxy, or from a one-off npx copy, `npx mcp-remote`.
+ * Codex desktop only renders MCP Apps for stdio servers, and launches them with the minimal
+ * launchd PATH, so the command is absolute with an explicit PATH either way. */
+function codexServer(cfg: Config | undefined, shape = false): DosuEntry {
+  // The only installer caller supplies cfg; shape checks may run while signed out.
+  const url = shape ? shapeEndpoint(cfg) : mcpEndpoint(cfg ?? { schema_version: 2 });
+  const apiKey = shape ? ANY : cfg?.active_account?.target?.api_key;
+  const proxy = shape ? proxyCommandShape("codex") : proxyCommand("codex");
+  if (proxy) {
+    mcpHeaders(apiKey);
+    return { ...proxy, env_vars: FORWARDED_ENV, omit_tools_from: ["deferred"] };
+  }
+  const npx = shape ? ANY : findNpx();
+  const remote = npxRemoteEntry(url, apiKey, npx, shape ? ANY : launcherPathEnv(npx));
+  return {
+    ...remote,
+    omit_tools_from: ["deferred"],
+  };
+}
+
+type TOMLValue = string | string[];
+/** The Dosu entry as data: root-table keys, plus one record per subtable (`env`). */
+type DosuEntry = Record<string, TOMLValue | Record<string, TOMLValue>>;
+
+function tomlValue(value: TOMLValue): string {
+  return Array.isArray(value) ? `[${value.map(tomlString).join(", ")}]` : tomlString(value);
+}
+
+const DOSU_TABLE = "mcp_servers.dosu";
+
+/** Settings Codex or the user writes into the Dosu table: the on/off, approval, tool filter, and
+ * timeout keys (see `isUserChoiceKey`), and the per-tool `tools.<name>` approvals Codex saves when
+ * the user picks "always allow". They are the user's, not the entry's format, so `isCurrent` skips
+ * them and a rewrite carries them over. */
+function isUserKey(key: string): boolean {
+  return isUserChoiceKey(key) || key === "tools" || key.startsWith("tools.");
+}
+
+function isUserTable(name: string): boolean {
+  return name === `${DOSU_TABLE}.tools` || name.startsWith(`${DOSU_TABLE}.tools.`);
+}
+
+/** The user's settings in an existing Dosu entry, as the TOML text to carry into its rewrite. */
+interface UserSettings {
+  /** Key lines of the root `[mcp_servers.dosu]` table. */
+  root: string[];
+  /** Whole `[mcp_servers.dosu.tools.*]` tables, header included. */
+  tables: string[];
+}
+
+function renderDosuEntry(entry: DosuEntry, kept: UserSettings): string {
+  const tables: Array<[string, string[]]> = [[DOSU_TABLE, []]];
+  for (const [key, value] of Object.entries(entry)) {
+    if (typeof value === "string" || Array.isArray(value)) {
+      tables[0][1].push(`${key} = ${tomlValue(value)}`);
+    } else {
+      const lines = Object.entries(value).map(([k, v]) => `${k} = ${tomlValue(v)}`);
+      tables.push([`${DOSU_TABLE}.${key}`, lines]);
+    }
+  }
+  tables[0][1].push(...kept.root);
+  return (
+    tables.map(([name, lines]) => `\n[${name}]\n${lines.join("\n")}\n`).join("") +
+    kept.tables.map((table) => `\n${table}\n`).join("")
+  );
+}
+
+/** Net open brackets on a line of TOML, outside strings and comments: nonzero while a
+ * multi-line array (`disabled_tools = [` ...) is still open. */
+function openBrackets(text: string): number {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quote) {
+      if (c === "\\" && quote === '"') i++;
+      else if (c === quote) quote = null;
+    } else if (c === '"' || c === "'") quote = c;
+    else if (c === "#") break;
+    else if (c === "[" || c === "{") depth++;
+    else if (c === "]" || c === "}") depth--;
+  }
+  return depth;
+}
+
+interface TOMLStatement {
+  key: string;
+  /** The value text, every line of it for a multi-line array. */
+  value: string;
+  /** The statement's lines as written. */
+  text: string;
+}
+
+interface DosuTable {
+  name: string;
+  header: string;
+  statements: TOMLStatement[];
+}
+
+/** Every `[mcp_servers.dosu]` and `[mcp_servers.dosu.*]` table in `content`, with its key/value
+ * statements (comments and blank lines dropped). A multi-line array stays one statement; a table
+ * header always starts a new table, so an unclosed bracket never swallows another table. */
+function dosuTables(content: string): DosuTable[] {
+  const tables: DosuTable[] = [];
+  let table: DosuTable | undefined;
+  let open: TOMLStatement | undefined;
+  let depth = 0;
+  for (const line of content.split("\n")) {
+    const name = sectionName(line);
+    if (name !== null) {
+      open = undefined;
+      table = isDosuSection(name) ? { name, header: line.trim(), statements: [] } : undefined;
+      if (table) tables.push(table);
+      continue;
+    }
+    if (open && depth > 0) {
+      open.value += `\n${line}`;
+      open.text += `\n${line}`;
+      depth += openBrackets(line);
+      continue;
+    }
+    open = undefined;
+    const text = line.trim();
+    if (!table || !text || text.startsWith("#")) continue;
+    const eq = text.indexOf("=");
+    const key = eq === -1 ? text : text.slice(0, eq).trim();
+    const value = eq === -1 ? "" : text.slice(eq + 1).trim();
+    open = { key, value, text: line };
+    table.statements.push(open);
+    depth = openBrackets(value);
+  }
+  return tables;
+}
+
+/** The Dosu entry in `content` in `DosuEntry` form, without the user's settings (`isUserKey`),
+ * or undefined when there is none. Values are read as JSON, which covers the strings and string
+ * arrays this provider writes; anything else (a hand-written literal string, a trailing comment)
+ * stays raw text and compares as different. */
+function readDosuEntry(content: string): Record<string, unknown> | undefined {
+  let entry: Record<string, unknown> | undefined;
+  for (const { name, statements } of dosuTables(content)) {
+    entry ??= {};
+    if (isUserTable(name)) continue;
+    const isRoot = name === DOSU_TABLE;
+    const table: Record<string, unknown> = isRoot ? entry : {};
+    if (!isRoot) entry[name.slice(DOSU_TABLE.length + 1)] = table;
+    for (const { key, value } of statements) {
+      if (isRoot && isUserKey(key)) continue;
+      try {
+        table[key] = JSON.parse(value);
+      } catch {
+        table[key] = value;
+      }
+    }
+  }
+  return entry;
+}
+
+function userSettings(content: string): UserSettings {
+  const kept: UserSettings = { root: [], tables: [] };
+  for (const { name, header, statements } of dosuTables(content)) {
+    if (name === DOSU_TABLE) {
+      kept.root.push(...statements.filter(({ key }) => isUserKey(key)).map(({ text }) => text));
+    } else if (isUserTable(name)) {
+      kept.tables.push([header, ...statements.map(({ text }) => text)].join("\n"));
+    }
+  }
+  return kept;
+}
+
+/** Write the Dosu entry for `cfg` to `path`, replacing any Dosu tables there but keeping the
+ * user's own settings on the entry (`isUserKey`), so a format update never switches Dosu back on
+ * or drops the tool approvals and filters the user set in Codex. */
 function installDosuToTOML(path: string, cfg: Config): void {
-  let content = readTOML(path);
+  const existing = readTOML(path);
   // Remove existing [mcp_servers.dosu] section if present (including the
   // legacy [mcp_servers.dosu.http_headers] subtable from the remote-HTTP form)
-  content = removeDosuFromTOML(content);
-  // Codex desktop only renders MCP Apps for stdio servers, so proxy through `npx mcp-remote`;
-  // npx is absolute with explicit PATH because desktop launches with the minimal launchd PATH.
-  const npx = findNpx();
-  const remote = mcpRemoteServer(mcpEndpoint(cfg), cfg.active_account?.target?.api_key);
-  const env: Record<string, string> = { PATH: npxPathEnv(npx), ...remote.env };
-  const envEntries = Object.entries(env)
-    .map(([key, value]) => `${key} = ${tomlString(value)}`)
-    .join("\n");
-  const args = remote.args.map(tomlString).join(", ");
-  const section =
-    `\n[mcp_servers.dosu]\ncommand = ${tomlString(npx)}\nargs = [${args}]\n` +
-    `\n[mcp_servers.dosu.env]\n${envEntries}\n`;
-  content += section;
-  writeTOML(path, content);
+  const content = removeDosuFromTOML(existing);
+  const entry = codexServer(cfg);
+  writeTOML(path, content + renderDosuEntry(entry, userSettings(existing)));
 }
 
 /** The table name from a TOML table or array-of-tables header, tolerating a trailing comment and
@@ -64,7 +235,7 @@ function sectionName(line: string): string | null {
 }
 
 function isDosuSection(name: string): boolean {
-  return name === "mcp_servers.dosu" || name.startsWith("mcp_servers.dosu.");
+  return name === DOSU_TABLE || name.startsWith(`${DOSU_TABLE}.`);
 }
 
 function removeDosuFromTOML(content: string): string {
@@ -140,12 +311,18 @@ export const CodexProvider = (): SetupProvider => ({
   supportsLocal: () => true,
   priority: () => 8,
   detectPaths: () => ["~/.codex"],
-  isInstalled: () => isInstalled(["~/.codex"]),
+  // CODEX_HOME, or `codex` on PATH: a fresh machine sets Dosu up before Codex's first run.
+  isInstalled: codexInstalled,
   globalConfigPath: () => join(codexHome(), "config.toml"),
   isConfigured: () => {
     const content = readTOML(join(codexHome(), "config.toml"));
     return content.includes("[mcp_servers.dosu]");
   },
+  isCurrent: (cfg) =>
+    entryHasShape(
+      codexServer(cfg, true),
+      readDosuEntry(readTOML(join(codexHome(), "config.toml"))),
+    ),
   install(cfg: Config, global: boolean): void {
     if (cfg.mode !== MODE_OSS && !cfg.active_account?.target?.deployment_id)
       throw new Error("deployment ID is required");

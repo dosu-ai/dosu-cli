@@ -1,15 +1,28 @@
 /** Native agent-session scanner replacing the pinned deja-vu binary: enumerates each harness's
  * session logs directly and uses file mtime as `updated`. No index, no download, no subprocess. */
 
-import { existsSync, readdirSync, statSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  statSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { codexOrigin } from "./codex-lineage";
+import { readPiHeader } from "./pi";
 
-type SessionHarness = "claude" | "cursor" | "codex" | "opencode";
+/** The agents whose sessions the scanner finds, by the id the ledger keys them with. */
+export const SESSION_HARNESSES = ["claude", "cursor", "codex", "opencode", "pi"] as const;
+export type SessionHarness = (typeof SESSION_HARNESSES)[number];
 
 export interface AgentSession {
-  /** Session id: the log filename stem, or the DB row id for opencode. */
+  /** Session id: the log filename stem, the DB row id for opencode, or for pi the id in the
+   * transcript's header. */
   id: string;
   harness: SessionHarness;
   /** Where the session content lives: the .jsonl log, or the sqlite DB for opencode. */
@@ -18,6 +31,13 @@ export interface AgentSession {
   project?: string;
   /** ISO timestamp of the session's last activity. */
   updated: string;
+  /** The parent session's id, for a subagent or other child session (shipped as
+   * parent_session_id). */
+  parentId?: string;
+  /** The session this one was forked or cloned from (pi's /fork, /clone, --fork): its transcript
+   * opens with a copy of that one's history. Not a subagent: it lives on after that session ends.
+   * Shipped as its child, without the copied history. */
+  forkOf?: { id: string; path: string };
   /** Normalized origin repo (`host/owner/repo`), attached once the study scope resolves it. */
   repo?: string;
   /** Git branch the session ran on, attached once sync resolves it for a study batch. */
@@ -32,17 +52,32 @@ export interface ScanSessionsOptions {
   since?: Date;
   /** Keep only the N most recently updated sessions. */
   limit?: number;
+  /** Told of every place sessions may be that is there but could not be read (a directory, or
+   * opencode's database), which the scan passes over as empty: for a caller that must not mistake
+   * that for no sessions. */
+  onUnreadable?: (harness: SessionHarness, path: string) => void;
 }
 
-/** readdir that treats a missing or unreadable directory as empty. */
-function listDir(dir: string): { name: string; path: string; isDir: boolean }[] {
+/** Where a scan reports a place it could not read (ScanSessionsOptions.onUnreadable). */
+type Unreadable = (path: string) => void;
+
+const ignoreUnreadable: Unreadable = () => {};
+
+/** readdir that treats a missing or unreadable directory as empty, telling `unreadable` of one
+ * that is there. */
+function listDir(
+  dir: string,
+  unreadable: Unreadable = ignoreUnreadable,
+): { name: string; path: string; isDir: boolean }[] {
   try {
     return readdirSync(dir, { withFileTypes: true }).map((entry) => ({
       name: entry.name,
       path: join(dir, entry.name),
       isDir: entry.isDirectory(),
     }));
-  } catch {
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") unreadable(dir);
     return [];
   }
 }
@@ -69,29 +104,122 @@ function sessionFromFile(
   };
 }
 
-/** Claude Code: one level of project dirs, session logs directly inside. */
-function scanClaude(home: string): AgentSession[] {
+/** The first `bytes` of a file as text; "" when it cannot be read. */
+function readHead(path: string, bytes: number): string {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, "r");
+    const buffer = Buffer.alloc(bytes);
+    return buffer.toString("utf8", 0, readSync(fd, buffer, 0, bytes, 0));
+  } catch {
+    return "";
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+/** Claude Code keeps each subagent's transcript in a directory named for its session:
+ * `<project>/<session id>/subagents/agent-<agent id>.jsonl`, and a workflow's agents one level
+ * down, in `subagents/workflows/<workflow id>/`. Every one is a session of its own, shipped with
+ * its parent's id (a nested subagent's parent is the top-level session too). */
+const CLAUDE_SUBAGENTS_DIR = "subagents";
+const CLAUDE_WORKFLOWS_DIR = "workflows";
+
+function claudeSubagents(
+  sessionDir: string,
+  parentId: string,
+  project: string,
+  unreadable: Unreadable = ignoreUnreadable,
+): AgentSession[] {
+  const subagentsDir = join(sessionDir, CLAUDE_SUBAGENTS_DIR);
+  const dirs = [
+    subagentsDir,
+    ...listDir(join(subagentsDir, CLAUDE_WORKFLOWS_DIR), unreadable)
+      .filter((workflow) => workflow.isDir)
+      .map((workflow) => workflow.path),
+  ];
   const sessions: AgentSession[] = [];
-  for (const project of listDir(join(home, ".claude", "projects"))) {
-    if (!project.isDir) continue;
-    for (const entry of listDir(project.path)) {
-      if (entry.isDir) continue;
-      const session = sessionFromFile(entry.path, "claude", project.name);
-      if (session) sessions.push(session);
+  for (const entry of dirs.flatMap((dir) => listDir(dir, unreadable))) {
+    if (entry.isDir || !entry.name.startsWith("agent-")) continue;
+    const session = sessionFromFile(entry.path, "claude", project);
+    if (session) sessions.push({ ...session, parentId });
+  }
+  return sessions;
+}
+
+/** The directory of the session a subagent's transcript belongs to, or null for a top-level
+ * transcript. */
+function claudeSessionDirOf(path: string): string | null {
+  const dir = dirname(path);
+  if (basename(dir) === CLAUDE_SUBAGENTS_DIR) return dirname(dir);
+  const workflows = dirname(dir);
+  if (
+    basename(workflows) === CLAUDE_WORKFLOWS_DIR &&
+    basename(dirname(workflows)) === CLAUDE_SUBAGENTS_DIR
+  ) {
+    return dirname(dirname(workflows));
+  }
+  return null;
+}
+
+/** Claude Code: one level of project dirs, session logs directly inside, under `~/.claude` and
+ * under CLAUDE_CONFIG_DIR when the agent was relocated there (the hooks install there too). Both,
+ * because a sync triggered by another agent's hook does not have the variable. */
+function scanClaude(home: string, env: NodeJS.ProcessEnv, unreadable: Unreadable): AgentSession[] {
+  const relocated = env.CLAUDE_CONFIG_DIR ? resolve(env.CLAUDE_CONFIG_DIR) : null;
+  const roots = new Set([join(home, ".claude"), relocated ?? join(home, ".claude")]);
+  const sessions: AgentSession[] = [];
+  for (const root of roots) {
+    for (const project of listDir(join(root, "projects"), unreadable)) {
+      if (!project.isDir) continue;
+      for (const entry of listDir(project.path, unreadable)) {
+        if (entry.isDir) {
+          sessions.push(...claudeSubagents(entry.path, entry.name, project.name, unreadable));
+          continue;
+        }
+        const session = sessionFromFile(entry.path, "claude", project.name);
+        if (session) sessions.push(session);
+      }
     }
   }
   return sessions;
 }
 
+/** The Claude Code session a transcript path belongs to, read off the layout: the project slug,
+ * and for a subagent's transcript the parent session's id. */
+function claudeLayoutOf(path: string): Pick<AgentSession, "project" | "parentId"> {
+  const sessionDir = claudeSessionDirOf(path);
+  if (sessionDir) {
+    return { project: basename(dirname(sessionDir)), parentId: basename(sessionDir) };
+  }
+  return { project: basename(dirname(path)) };
+}
+
+/** How much of a Claude Code transcript is read for the session it was branched from. */
+const CLAUDE_FORK_PREFIX_BYTES = 64 * 1024;
+
+/** Claude Code tags every record it copies into a branch (`/branch`, `--resume <id>
+ * --fork-session`) with the session it was copied from; the copies open the new transcript. */
+const CLAUDE_FORKED_FROM = /"forkedFrom":\{"sessionId":"([A-Za-z0-9._-]{1,200})"/;
+
+/** The session a top-level Claude Code transcript was branched from, whose transcript is its
+ * sibling: the branch opens with a copy of that one's history under its own id. Undefined for any
+ * other transcript. Read on demand (sessions/lineage.ts), not by the scan. */
+export function claudeForkOf(path: string): AgentSession["forkOf"] {
+  const source = CLAUDE_FORKED_FROM.exec(readHead(path, CLAUDE_FORK_PREFIX_BYTES))?.[1];
+  if (!source || source === basename(path, ".jsonl")) return undefined;
+  return { id: source, path: join(dirname(path), `${source}.jsonl`) };
+}
+
 /** Cursor: per-project `agent-transcripts/<uuid>/<uuid>.jsonl`. */
-function scanCursor(home: string): AgentSession[] {
+function scanCursor(home: string, unreadable: Unreadable): AgentSession[] {
   const sessions: AgentSession[] = [];
-  for (const project of listDir(join(home, ".cursor", "projects"))) {
+  for (const project of listDir(join(home, ".cursor", "projects"), unreadable)) {
     if (!project.isDir) continue;
-    for (const entry of listDir(join(project.path, "agent-transcripts"))) {
+    for (const entry of listDir(join(project.path, "agent-transcripts"), unreadable)) {
       // Each transcript is a directory holding a single <uuid>.jsonl, but
       // tolerate bare .jsonl files in case the layout flattens again.
-      const files = entry.isDir ? listDir(entry.path).filter((f) => !f.isDir) : [entry];
+      const files = entry.isDir ? listDir(entry.path, unreadable).filter((f) => !f.isDir) : [entry];
       for (const file of files) {
         const session = sessionFromFile(file.path, "cursor", project.name);
         if (session) sessions.push(session);
@@ -101,23 +229,53 @@ function scanCursor(home: string): AgentSession[] {
   return sessions;
 }
 
-/** Codex: `sessions/<yyyy>/<mm>/<dd>/rollout-*.jsonl`, three fixed levels. */
-function scanCodex(home: string, env: NodeJS.ProcessEnv): AgentSession[] {
+/** A rollout's name ends in its thread id: `rollout-<time>-<uuid>`. */
+const ROLLOUT_THREAD_ID = /-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
+/** Codex: `sessions/<yyyy>/<mm>/<dd>/rollout-*.jsonl`, three fixed levels, plus the rollouts it
+ * archived, flat in `archived_sessions/`. A subagent's rollout names its parent's rollout, the
+ * scanner's id for that session, or the bare thread id when that rollout is gone. Only sessions
+ * at or after `since` are opened for that. */
+function scanCodex(
+  home: string,
+  env: NodeJS.ProcessEnv,
+  since: Date | undefined,
+  unreadable: Unreadable,
+): AgentSession[] {
   const codexHome = env.CODEX_HOME ?? join(home, ".codex");
   const sessions: AgentSession[] = [];
-  for (const year of listDir(join(codexHome, "sessions"))) {
+  for (const year of listDir(join(codexHome, "sessions"), unreadable)) {
     if (!year.isDir) continue;
-    for (const month of listDir(year.path)) {
+    for (const month of listDir(year.path, unreadable)) {
       if (!month.isDir) continue;
-      for (const day of listDir(month.path)) {
+      for (const day of listDir(month.path, unreadable)) {
         if (!day.isDir) continue;
-        for (const entry of listDir(day.path)) {
+        for (const entry of listDir(day.path, unreadable)) {
           if (entry.isDir) continue;
           const session = sessionFromFile(entry.path, "codex");
           if (session) sessions.push(session);
         }
       }
     }
+  }
+  for (const entry of listDir(join(codexHome, "archived_sessions"), unreadable)) {
+    if (entry.isDir) continue;
+    const session = sessionFromFile(entry.path, "codex");
+    if (session) sessions.push(session);
+  }
+
+  const rolloutOfThread = new Map<string, string>();
+  for (const session of sessions) {
+    const thread = ROLLOUT_THREAD_ID.exec(session.id)?.[1];
+    if (thread) rolloutOfThread.set(thread.toLowerCase(), session.id);
+  }
+  const cutoff = since?.toISOString();
+  for (const session of sessions) {
+    if (cutoff !== undefined && session.updated < cutoff) continue;
+    // Forks are not children: they live on after the session they came from (sessions/lineage.ts
+    // follows them where it matters).
+    const origin = codexOrigin(session.path);
+    if (origin?.subagent) session.parentId = rolloutOfThread.get(origin.thread) ?? origin.thread;
   }
   return sessions;
 }
@@ -139,13 +297,23 @@ interface NodeSqliteModule {
 }
 
 /** Read-only sqlite query via the runtime's builtin; `createRequire` keeps both module ids out
- * of the bundler's static graph. Null when no builtin exists or the file is not a database. */
-export function querySqlite(dbPath: string, sql: string): SqliteRows | null {
+ * of the bundler's static graph. Null when no builtin exists or the file is not a database, which
+ * `onError` is told of (a runtime with no builtin is no error). */
+export function querySqlite(
+  dbPath: string,
+  sql: string,
+  onError: () => void = () => {},
+): SqliteRows | null {
   const requireRuntime = createRequire(import.meta.url);
   /* v8 ignore start -- exercised only when the test runner is Bun */
   if (process.versions.bun) {
+    let Database: BunSqliteModule["Database"];
     try {
-      const { Database } = requireRuntime("bun:sqlite") as BunSqliteModule;
+      ({ Database } = requireRuntime("bun:sqlite") as BunSqliteModule);
+    } catch {
+      return null;
+    }
+    try {
       const db = new Database(dbPath, { readonly: true });
       try {
         return db.query(sql).all();
@@ -153,21 +321,24 @@ export function querySqlite(dbPath: string, sql: string): SqliteRows | null {
         db.close();
       }
     } catch {
+      onError();
       return null;
     }
   }
   /* v8 ignore stop */
+  let sqlite: NodeSqliteModule;
+  // node:sqlite emits an ExperimentalWarning on first load; silence it so
+  // hook-quiet runs and --json output stay clean on stderr.
+  const emitWarning = process.emitWarning;
+  process.emitWarning = () => {};
   try {
-    // node:sqlite emits an ExperimentalWarning on first load; silence it so
-    // hook-quiet runs and --json output stay clean on stderr.
-    const emitWarning = process.emitWarning;
-    process.emitWarning = () => {};
-    let sqlite: NodeSqliteModule;
-    try {
-      sqlite = requireRuntime("node:sqlite") as NodeSqliteModule;
-    } finally {
-      process.emitWarning = emitWarning;
-    }
+    sqlite = requireRuntime("node:sqlite") as NodeSqliteModule;
+  } catch {
+    return null;
+  } finally {
+    process.emitWarning = emitWarning;
+  }
+  try {
     const db = new sqlite.DatabaseSync(dbPath, { readOnly: true });
     try {
       return db.prepare(sql).all();
@@ -175,20 +346,29 @@ export function querySqlite(dbPath: string, sql: string): SqliteRows | null {
       db.close();
     }
   } catch {
+    onError();
     return null;
   }
 }
 
-/** opencode: sqlite rows, top-level sessions only (parent_id rows are subagent children that
- * would inflate the backlog). */
-function scanOpencode(home: string, env: NodeJS.ProcessEnv): AgentSession[] {
+/** opencode: sqlite rows. A subagent's work is a child session (parent_id set), listed as its own
+ * session that names its parent, like Claude Code's subagent transcripts. `id` reads that one
+ * session's row alone. */
+function scanOpencode(
+  home: string,
+  env: NodeJS.ProcessEnv,
+  id?: string,
+  unreadable: Unreadable = ignoreUnreadable,
+): AgentSession[] {
   const dataDir = env.XDG_DATA_HOME ?? join(home, ".local", "share");
   const dbPath = join(dataDir, "opencode", "opencode.db");
   if (!existsSync(dbPath)) return [];
 
+  const where = id === undefined ? "" : ` WHERE id = '${id}'`;
   const rows = querySqlite(
     dbPath,
-    "SELECT id, directory, time_updated FROM session WHERE parent_id IS NULL",
+    `SELECT id, parent_id, directory, time_updated FROM session${where}`,
+    () => unreadable(dbPath),
   );
   if (!rows) return [];
 
@@ -203,9 +383,217 @@ function scanOpencode(home: string, env: NodeJS.ProcessEnv): AgentSession[] {
         ? { project: row.directory }
         : {}),
       updated: new Date(row.time_updated).toISOString(),
+      ...(typeof row.parent_id === "string" && row.parent_id !== ""
+        ? { parentId: row.parent_id }
+        : {}),
     });
   }
   return sessions;
+}
+
+/** pi names a transcript `<timestamp>_<session id>.jsonl` (the timestamp has no underscore): the
+ * id of a transcript whose header cannot say. */
+function piSessionIdOfName(path: string): string {
+  const stem = basename(path, ".jsonl");
+  const cut = stem.indexOf("_");
+  return cut === -1 ? stem : stem.slice(cut + 1);
+}
+
+/** A pi session, keyed by its header's id; a fork or clone (`/fork`, `/clone`, `--fork`) names
+ * the transcript it copied in the header. `id` is what a hook already called it, when one did. */
+function piSession(path: string, project?: string, id?: string): AgentSession | null {
+  let mtime: Date;
+  try {
+    mtime = statSync(path).mtime;
+  } catch {
+    return null;
+  }
+  const header = readPiHeader(path);
+  const parent = header?.parentSession;
+  return {
+    id: id ?? header?.id ?? piSessionIdOfName(path),
+    harness: "pi",
+    path,
+    ...(project ? { project } : {}),
+    updated: mtime.toISOString(),
+    ...(parent
+      ? { forkOf: { id: readPiHeader(parent)?.id ?? piSessionIdOfName(parent), path: parent } }
+      : {}),
+  };
+}
+
+/** `~` and `~/x` as pi expands them; null for a relative path, which pi resolves against a
+ * working directory the scan does not have. */
+function piPath(value: unknown, home: string): string | null {
+  if (typeof value !== "string" || value.trim() === "") return null;
+  const path = value === "~" ? home : value.startsWith("~/") ? join(home, value.slice(2)) : value;
+  return isAbsolute(path) ? resolve(path) : null;
+}
+
+/** The `sessionDir` setting of a pi agent directory's settings.json, when it names a place. */
+function piSessionDirSetting(agentDir: string, home: string): string | null {
+  try {
+    const settings = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+    return piPath(settings?.sessionDir, home);
+  } catch {
+    return null;
+  }
+}
+
+/** pi: `<agent dir>/sessions/--<cwd>--/<timestamp>_<id>.jsonl`, under `~/.pi/agent` and under
+ * PI_CODING_AGENT_DIR (both, as for Claude Code: a sync another agent's hook started does not
+ * have the variable), plus the flat folder a session-dir override writes straight into:
+ * PI_CODING_AGENT_SESSION_DIR, or the `sessionDir` setting. Each transcript once, by path: an
+ * override may point into a folder the default layout lists too. */
+function piTranscripts(
+  home: string,
+  env: NodeJS.ProcessEnv,
+  unreadable: Unreadable = ignoreUnreadable,
+): Map<string, string | undefined> {
+  const agentDirs = new Set([join(home, ".pi", "agent")]);
+  const relocated = piPath(env.PI_CODING_AGENT_DIR, home);
+  if (relocated) agentDirs.add(relocated);
+  const flatDirs = new Set<string>();
+  const envSessionDir = piPath(env.PI_CODING_AGENT_SESSION_DIR, home);
+  if (envSessionDir) flatDirs.add(envSessionDir);
+  for (const agentDir of agentDirs) {
+    const setting = piSessionDirSetting(agentDir, home);
+    if (setting) flatDirs.add(setting);
+  }
+
+  /** Transcript path -> its per-directory folder (the project), when it has one. */
+  const transcripts = new Map<string, string | undefined>();
+  const add = (path: string, name: string, project?: string) => {
+    if (name.endsWith(".jsonl") && !transcripts.has(path)) transcripts.set(path, project);
+  };
+  for (const agentDir of agentDirs) {
+    for (const project of listDir(join(agentDir, "sessions"), unreadable)) {
+      if (!project.isDir) continue;
+      for (const entry of listDir(project.path, unreadable)) {
+        if (!entry.isDir) add(entry.path, entry.name, project.name);
+      }
+    }
+  }
+  for (const dir of flatDirs) {
+    for (const entry of listDir(dir, unreadable)) if (!entry.isDir) add(entry.path, entry.name);
+  }
+  return transcripts;
+}
+
+function scanPi(home: string, env: NodeJS.ProcessEnv, unreadable: Unreadable): AgentSession[] {
+  const sessions: AgentSession[] = [];
+  for (const [path, project] of piTranscripts(home, env, unreadable)) {
+    const session = piSession(path, project);
+    if (session) sessions.push(session);
+  }
+  return sessions;
+}
+
+/** One pi session, as the scan would report it, found by its id (which pi's extension names) in
+ * its transcript's file name: null when no transcript there is named for it. */
+export function piSessionById(
+  id: string,
+  options: Pick<ScanSessionsOptions, "homeDir" | "env"> = {},
+): AgentSession | null {
+  for (const [path, project] of piTranscripts(
+    options.homeDir ?? homedir(),
+    options.env ?? process.env,
+  )) {
+    if (piSessionIdOfName(path) === id) return piSession(path, project, id);
+  }
+  return null;
+}
+
+/** One opencode session, as the scan would report it, read by its id (which opencode's plugin
+ * names): null when the DB has no such session. */
+export function opencodeSessionById(
+  id: string,
+  options: Pick<ScanSessionsOptions, "homeDir" | "env"> = {},
+): AgentSession | null {
+  if (!/^[A-Za-z0-9_-]+$/.test(id)) return null;
+  const [session] = scanOpencode(options.homeDir ?? homedir(), options.env ?? process.env, id);
+  return session ?? null;
+}
+
+/** One session whose transcript the caller already knows (a session-end hook named it), as the
+ * scan would report it; it may live outside the roots the scan walks (e.g. a relocated Claude
+ * config dir). Null when the file is gone. */
+export function sessionAtPath(
+  harness: SessionHarness,
+  id: string,
+  path: string,
+): AgentSession | null {
+  let mtime: Date;
+  try {
+    mtime = statSync(path).mtime;
+  } catch {
+    return null;
+  }
+  if (harness === "pi") {
+    // pi's per-directory folder, as scanPi reports it; a flat override folder is no project.
+    const folder = basename(dirname(path));
+    return piSession(path, /^--.*--$/.test(folder) ? folder : undefined, id);
+  }
+  // Claude Code keeps transcripts in their project dir, like scanClaude reads them.
+  const layout = harness === "claude" ? claudeLayoutOf(path) : {};
+  return {
+    id,
+    harness,
+    path,
+    ...(layout.project ? { project: layout.project } : {}),
+    ...(layout.parentId ? { parentId: layout.parentId } : {}),
+    updated: mtime.toISOString(),
+  };
+}
+
+/** The child sessions (subagents' transcripts) of a session the scan may not list, read beside
+ * its transcript; none for a harness without them. */
+export function childSessionsOf(session: AgentSession): AgentSession[] {
+  if (session.harness !== "claude" || session.parentId || !session.path.endsWith(".jsonl")) {
+    return [];
+  }
+  const stem = session.path.slice(0, -".jsonl".length);
+  return claudeSubagents(stem, session.id, basename(dirname(session.path)));
+}
+
+/** The session a child session (a subagent's transcript) belongs to, as the scan would report
+ * it; null for a top-level session, or when the parent's transcript is gone. Children inherit
+ * what their parent decided: whether it ended, its incognito opt-out, and its project key. */
+export function parentSessionOf(session: AgentSession): AgentSession | null {
+  if (!session.parentId || session.harness !== "claude") return null;
+  // <project>/<parent id>/subagents/[workflows/<wf>/]agent-<id>.jsonl → <project>/<parent id>.jsonl
+  const sessionDir = claudeSessionDirOf(session.path);
+  if (!sessionDir) return null;
+  return sessionAtPath("claude", session.parentId, `${sessionDir}.jsonl`);
+}
+
+/** Where each harness keeps its sessions when no variable relocates it (CLAUDE_CONFIG_DIR,
+ * CODEX_HOME, XDG_DATA_HOME, PI_CODING_AGENT_DIR). */
+function defaultRoot(harness: SessionHarness, home: string): string {
+  switch (harness) {
+    case "claude":
+      return join(home, ".claude", "projects");
+    case "cursor":
+      return join(home, ".cursor", "projects");
+    case "codex":
+      return join(home, ".codex", "sessions");
+    case "opencode":
+      return join(home, ".local", "share", "opencode");
+    case "pi":
+      return join(home, ".pi", "agent", "sessions");
+  }
+}
+
+/** Whether every scan lists the transcript at `path`, whatever its environment: one found only
+ * under a relocated root is missed by a sync started from another agent's hook or a shell. */
+export function scannedEverywhere(
+  harness: SessionHarness,
+  path: string,
+  home: string = homedir(),
+): boolean {
+  const roots = [defaultRoot(harness, home)];
+  if (harness === "codex") roots.push(join(home, ".codex", "archived_sessions"));
+  return roots.some((root) => path.startsWith(`${root}/`));
 }
 
 /** All local agent sessions across supported harnesses, newest first; missing harnesses
@@ -214,11 +602,14 @@ export function scanAgentSessions(options: ScanSessionsOptions = {}): AgentSessi
   const home = options.homeDir ?? homedir();
   const env = options.env ?? process.env;
 
+  const unreadable = (harness: SessionHarness): Unreadable =>
+    options.onUnreadable ? (path) => options.onUnreadable?.(harness, path) : ignoreUnreadable;
   let sessions = [
-    ...scanClaude(home),
-    ...scanCursor(home),
-    ...scanCodex(home, env),
-    ...scanOpencode(home, env),
+    ...scanClaude(home, env, unreadable("claude")),
+    ...scanCursor(home, unreadable("cursor")),
+    ...scanCodex(home, env, options.since, unreadable("codex")),
+    ...scanOpencode(home, env, undefined, unreadable("opencode")),
+    ...scanPi(home, env, unreadable("pi")),
   ];
   if (options.since !== undefined) {
     // ISO-8601 strings with identical precision compare correctly as strings.

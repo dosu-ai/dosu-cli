@@ -26,13 +26,3 @@ export function isAbsoluteHttpUrl(value: string): boolean {
     return false;
   }
 }
-
-/** Base URL of the Dosu LLM gateway (the learner's ANTHROPIC_BASE_URL); the SDK binary appends
- * `/v1/messages`. Empty when the backend URL is unset (uncompiled source without an env file),
- * which would otherwise become the relative `/v1/llm-gateway`. */
-export function getLlmGatewayURL(): string {
-  const override = process.env.DOSU_LLM_GATEWAY_URL_OVERRIDE;
-  if (override) return override;
-  const backend = getBackendURL().replace(/\/$/, "");
-  return backend ? `${backend}/v1/llm-gateway` : "";
-}

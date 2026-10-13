@@ -83,13 +83,15 @@ function readCursor(raw: string): SessionTurn[] {
   return turns;
 }
 
-/** Injected scaffolding Codex records as user text but nobody typed. */
+/** Injected scaffolding Codex records as user text but nobody typed, including the report a
+ * finished subagent hands its parent. */
 function isCodexInjectedBlock(text: string): boolean {
   const head = text.trimStart().toLowerCase();
   return (
     head.startsWith("<user_instructions>") ||
     head.startsWith("<environment_context>") ||
-    head.startsWith("<recommended_plugins>")
+    head.startsWith("<recommended_plugins>") ||
+    head.startsWith("<subagent_notification>")
   );
 }
 
@@ -104,6 +106,20 @@ function readCodex(raw: string): SessionTurn[] {
     const text = textFromContent(payload.content, CODEX_TEXT);
     if (role === "user" && isCodexInjectedBlock(text)) continue;
     pushTurn(turns, role, text);
+  }
+  return turns;
+}
+
+/** pi: `type: "message"` entries carry the conversation; the system prompt, tool results, and
+ * extension entries (an injected memory digest among them) are not turns. */
+function readPi(raw: string): SessionTurn[] {
+  const turns: SessionTurn[] = [];
+  for (const record of jsonlRecords(raw)) {
+    if (record.type !== "message") continue;
+    const message = asRecord(record.message);
+    const role = message?.role;
+    if (role !== "user" && role !== "assistant") continue;
+    pushTurn(turns, role, textFromContent(message?.content, PLAIN_TEXT));
   }
   return turns;
 }
@@ -149,13 +165,15 @@ export function readSessionTurns(session: AgentSession): SessionTurn[] {
         return readCodex(readFileSync(session.path, "utf8"));
       case "opencode":
         return readOpencode(session.path, session.id);
+      case "pi":
+        return readPi(readFileSync(session.path, "utf8"));
     }
   } catch {
     return [];
   }
 }
 
-/** Cursor + Claude Code + Codex names the skill report counts as rediscovery. */
+/** Cursor + Claude Code + Codex + pi names the skill report counts as rediscovery. */
 const REDISCOVERY_TOOLS = new Set([
   "Read",
   "Grep",
@@ -180,6 +198,14 @@ const REDISCOVERY_TOOLS = new Set([
   "list_dir",
   "grep_files",
   "read_file",
+  // pi's built-ins.
+  "read",
+  "bash",
+  "edit",
+  "write",
+  "grep",
+  "find",
+  "ls",
 ]);
 
 function isRediscoveryTool(name: string): boolean {
@@ -221,6 +247,19 @@ export function countRediscoveryToolCalls(session: AgentSession): number {
         }
         return n;
       }
+      case "pi": {
+        let n = 0;
+        for (const record of jsonlRecords(readFileSync(session.path, "utf8"))) {
+          const content = asRecord(record.message)?.content;
+          for (const item of Array.isArray(content) ? content : []) {
+            const call = asRecord(item);
+            if (call?.type === "toolCall" && typeof call.name === "string") {
+              if (isRediscoveryTool(call.name)) n += 1;
+            }
+          }
+        }
+        return n;
+      }
       case "opencode":
         return 0;
     }
@@ -238,22 +277,4 @@ export function estimateSessionTokens(session: AgentSession): number {
   let chars = 0;
   for (const turn of readSessionTurns(session)) chars += turn.text.length;
   return Math.round(chars / CHARS_PER_TOKEN);
-}
-
-/** Fewer conversational turns than this and a session can't hold a real finding. */
-const MIN_WORTH_TURNS = 4;
-/** Total conversation text below this is a greeting, not an investigation. */
-const MIN_WORTH_CHARS = 2000;
-
-/** Cheap pre-filter that keeps trivial sessions from costing a gateway run; deliberately
- * permissive, rejecting only sessions that are structurally too small, never judging content. */
-export function isWorthStudying(session: AgentSession): boolean {
-  const turns = readSessionTurns(session);
-  if (turns.length < MIN_WORTH_TURNS) return false;
-  let chars = 0;
-  for (const turn of turns) {
-    chars += turn.text.length;
-    if (chars >= MIN_WORTH_CHARS) return true;
-  }
-  return false;
 }

@@ -128,8 +128,8 @@ describe("requireConfig", () => {
     await expect(run("invite", "new@user.com")).rejects.toThrow("exit");
   });
 
-  it("exits when access_token is missing", async () => {
+  it("fails with NOT_LOGGED_IN when access_token is missing", async () => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ access_token: "" }));
-    await expect(run("invite", "new@user.com")).rejects.toThrow("exit");
+    await expect(run("invite", "new@user.com")).rejects.toMatchObject({ code: "NOT_LOGGED_IN" });
   });
 });

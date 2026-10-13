@@ -5,6 +5,7 @@
 
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { claudeCodeInstalled } from "../hooks/claude-code";
 import {
   devEnvAssignments,
   devSelfCommand,
@@ -110,12 +111,16 @@ function configAgent(options: {
 
 export function allStatuslineAgents(): StatuslineAgent[] {
   return [
-    configAgent({
-      id: "claude",
-      name: "Claude Code",
-      detectPath: claudeConfigDir,
-      configPath: () => join(claudeConfigDir(), "settings.json"),
-    }),
+    {
+      ...configAgent({
+        id: "claude",
+        name: "Claude Code",
+        detectPath: claudeConfigDir,
+        configPath: () => join(claudeConfigDir(), "settings.json"),
+      }),
+      // `claude` on PATH counts too: a fresh machine sets Dosu up before Claude Code's first run.
+      isInstalled: claudeCodeInstalled,
+    },
     configAgent({
       id: "cursor",
       name: "Cursor CLI",

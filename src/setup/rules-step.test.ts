@@ -50,6 +50,7 @@ function makeProvider(id: string): SetupProvider {
     detectPaths: () => [],
     isInstalled: () => true,
     isConfigured: () => false,
+    isCurrent: () => false,
     globalConfigPath: () => `/config/${id}`,
     priority: () => 0,
   };

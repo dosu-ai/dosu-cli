@@ -20,6 +20,10 @@ export interface SetupProvider extends Provider {
   detectPaths(): string[];
   isInstalled(): boolean;
   isConfigured(): boolean;
+  /** Whether the global Dosu entry already has the shape `install(cfg, true)` writes, ignoring
+   * the deployment, API key, and machine-specific paths it points at (see `../mcp/shape.ts`).
+   * Only `cfg`'s mode is read, so this works before sign-in. False when there is no entry. */
+  isCurrent(cfg: Config | undefined): boolean;
   globalConfigPath(): string;
   priority(): number;
 }
@@ -38,6 +42,7 @@ import { GeminiProvider } from "./providers/gemini";
 import { ManualProvider } from "./providers/manual";
 import { MCPorterProvider } from "./providers/mcporter";
 import { OpenCodeProvider } from "./providers/opencode";
+import { PiProvider } from "./providers/pi";
 import { VSCodeProvider } from "./providers/vscode";
 import { WindsurfProvider } from "./providers/windsurf";
 import { ZedProvider } from "./providers/zed";
@@ -60,6 +65,7 @@ export function allProviders(): Provider[] {
     AntigravityProvider(),
     MCPorterProvider(),
     FactoryProvider(),
+    PiProvider(),
     ManualProvider(),
   ];
 }

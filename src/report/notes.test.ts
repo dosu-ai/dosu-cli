@@ -8,7 +8,6 @@ import {
   cycleMatchScore,
   noteWords,
   sessionCycles,
-  sessionIdFromReadInput,
   sessionsToInventory,
 } from "./notes";
 import { extractUserQueries, sessionTitleFromUserText } from "./queries";
@@ -36,15 +35,6 @@ function jsonlSession(
 function claudeSession(id: string, lines: unknown[]): AgentSession {
   return jsonlSession(id, "claude", lines);
 }
-
-describe("sessionIdFromReadInput", () => {
-  it("reads the session id from read_session input", () => {
-    expect(sessionIdFromReadInput({ id: "abc", offset: 2 })).toBe("abc");
-    expect(sessionIdFromReadInput({ offset: 0 })).toBeUndefined();
-    expect(sessionIdFromReadInput(["id"])).toBeUndefined();
-    expect(sessionIdFromReadInput({ id: "  " })).toBeUndefined();
-  });
-});
 
 describe("attributeRediscovery", () => {
   it("gives each note its matching user-query cycle, not the whole session", () => {

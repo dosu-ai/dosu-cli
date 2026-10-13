@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { isTRPCClientError } from "@trpc/client";
 import { Command, Option } from "commander";
 import pc from "picocolors";
+import { CommandError, type CommandErrorCode } from "../cli/command-error";
 import { createTypedClient, type TypedClient } from "../client/trpc";
 import type {
   CliPendingReviewItem,
@@ -60,31 +61,32 @@ function truncateId(id: string): string {
   return (isDraftId(id) ? bareMessageId(id) : id).slice(0, 8);
 }
 
-// Fetch the doc-change view, or exit cleanly on an unknown (404) or malformed (422) id.
+function reviewItemNotFound(id: string): CommandError {
+  return new CommandError(
+    "REVIEW_ITEM_NOT_FOUND",
+    `No review item found for '${id}'. Run 'dosu review list' to see pending items.`,
+  );
+}
+
+// Fetch the doc-change view, or fail cleanly on an unknown (404) or malformed (422) id.
 async function requireChange(client: TypedClient, id: string): Promise<ChangeView> {
   try {
     return await client.review.getChange.query({ id });
   } catch (err) {
-    if (isNotFound(err) || isInvalidId(err)) {
-      console.error(
-        pc.red(`No review item found for '${id}'. Run 'dosu review list' to see pending items.`),
-      );
-      process.exit(1);
-    }
+    if (isNotFound(err) || isInvalidId(err)) throw reviewItemNotFound(id);
     throw err;
   }
 }
 
-// Fetch the message row behind a draft id (bare-UUID lookup), or exit if missing.
+// Fetch the message row behind a draft id (bare-UUID lookup), or fail if missing.
 async function requireDraft(client: TypedClient, id: string): Promise<DraftMessageRow> {
   const draft = await client.messages.getMessage.query(bareMessageId(id));
-  if (!draft) {
-    console.error(
-      pc.red(`No review item found for '${id}'. Run 'dosu review list' to see pending items.`),
-    );
-    process.exit(1);
-  }
+  if (!draft) throw reviewItemNotFound(id);
   return draft;
+}
+
+function invalidArgument(message: string): CommandError {
+  return new CommandError("INVALID_ARGUMENT", message);
 }
 
 // ponytail: mirrors _humanize_origin in dosu's backend/public_api/mcp/tools/review.py —
@@ -147,13 +149,103 @@ function printDraftPreview(draft: DraftMessageRow): void {
   console.log(draft.body ?? "");
 }
 
-async function getKnowledgeStoreId(client: TypedClient, spaceId: string): Promise<string> {
-  const store = await client.knowledgeStore.getBySpaceId.query({ space_id: spaceId });
-  if (!store) {
-    console.error(pc.red("No knowledge store found for this deployment."));
-    process.exit(1);
+// Recovery shared by every "wrong or missing scope" error: the exact existing selection commands.
+const SELECT_LIBRARY_HINT =
+  "Run 'dosu deployments list' to see the MCP deployments you can select, then " +
+  "'dosu deployments switch <deployment-id>' for the Library to review, or run 'dosu setup' " +
+  "to choose the organization and Library again.";
+
+function failScope(
+  code: CommandErrorCode,
+  message: string,
+  hint: string = SELECT_LIBRARY_HINT,
+): never {
+  throw new CommandError(code, message, [hint]);
+}
+
+/** What `review list` searched: doc changes come from the Library's knowledge store, draft
+ * replies from the MCP deployment's threads. Names are read from the server for this account,
+ * never from cached config, and stay null when a lookup cannot provide them. */
+interface ReviewScope {
+  knowledgeStoreId: string;
+  library: { id: string; name: string | null };
+  deployment: { id: string; name: string | null } | null;
+}
+
+// libraries.info is authoritative for "deleted or not visible" (NOT_FOUND); any other failure
+// only costs the display name, so it must not turn a readable queue into an error.
+async function lookupLibrary(
+  client: TypedClient,
+  spaceId: string,
+): Promise<{ found: false } | { found: true; name: string | null }> {
+  try {
+    const library = await client.libraries.info.query(spaceId);
+    return { found: true, name: library.name || null };
+  } catch (err) {
+    if (isNotFound(err)) return { found: false };
+    return { found: true, name: null };
   }
-  return store.id;
+}
+
+/** Validate the saved Library / MCP deployment before listing, so a stale or unauthorized
+ * target is an error rather than an empty queue. Read-only: never changes the selection. */
+async function resolveReviewScope(
+  client: TypedClient,
+  spaceId: string,
+  deploymentId: string | undefined,
+): Promise<ReviewScope> {
+  const [store, library, deployment] = await Promise.all([
+    client.knowledgeStore.getBySpaceId.query({ space_id: spaceId }),
+    lookupLibrary(client, spaceId),
+    deploymentId ? client.workspaces.get.query(deploymentId) : Promise.resolve(undefined),
+  ]);
+
+  if (deploymentId && !deployment) {
+    failScope(
+      "DEPLOYMENT_UNAVAILABLE",
+      `The selected MCP deployment (${deploymentId}) is unavailable: it was deleted, or the ` +
+        "signed-in account cannot access it.",
+    );
+  }
+  if (deployment && deployment.space_id !== spaceId) {
+    failScope(
+      "SCOPE_MISMATCH",
+      `The saved Library (${spaceId}) does not match the Library of the selected MCP ` +
+        `deployment (${deployment.space_id}).`,
+      `Run 'dosu deployments switch ${deployment.deployment_id}' to save that deployment's ` +
+        "Library again, or choose another MCP deployment with 'dosu deployments list'.",
+    );
+  }
+  if (!library.found || !store) {
+    failScope(
+      "LIBRARY_UNAVAILABLE",
+      `The selected Library (${spaceId}) is unavailable: it was deleted, or the signed-in ` +
+        "account cannot access it.",
+    );
+  }
+
+  return {
+    knowledgeStoreId: store.id,
+    library: { id: spaceId, name: library.name },
+    deployment: deployment ? { id: deployment.deployment_id, name: deployment.name || null } : null,
+  };
+}
+
+function describeScopeEntry(entry: { id: string; name: string | null }): string {
+  return entry.name ? `${entry.name} (${entry.id})` : entry.id;
+}
+
+function printScope(scope: ReviewScope): void {
+  printInfo([
+    ["Library", describeScopeEntry(scope.library)],
+    [
+      "MCP deployment",
+      scope.deployment
+        ? describeScopeEntry(scope.deployment)
+        : "none selected (draft replies not listed)",
+    ],
+  ]);
+  console.log();
 }
 
 export function reviewCommand(): Command {
@@ -161,7 +253,9 @@ export function reviewCommand(): Command {
 
   cmd
     .command("list")
-    .description("List pending review items (doc changes and draft replies)")
+    .description(
+      "List pending review items in the selected Library (doc changes and draft replies)",
+    )
     .addOption(
       new Option(
         "--since <when>",
@@ -181,37 +275,61 @@ export function reviewCommand(): Command {
       try {
         range = resolveTimeRange(opts.since, opts.until);
       } catch (err) {
-        console.error(pc.red(`${(err as Error).message}.`));
-        process.exit(1);
+        throw invalidArgument(`${(err as Error).message}.`);
       }
       const rangeLabel = describeTimeRange(range);
       const inRange = rangeLabel ? ` ${rangeLabel}` : "";
 
       const cfg = requireConfig();
-      if (!cfg.active_account?.target?.space_id) {
-        console.error(pc.red("Missing space config. Run 'dosu setup' to reconfigure."));
-        process.exit(1);
+      const target = cfg.active_account?.target;
+      if (!target?.space_id) {
+        failScope(
+          "NO_LIBRARY_SELECTED",
+          "No Library selected. The review list reads the Library of the selected MCP deployment.",
+        );
       }
       const client = createTypedClient(cfg);
-      const ksId = await getKnowledgeStoreId(client, cfg.active_account?.target?.space_id);
+      const scope = await resolveReviewScope(client, target.space_id, target.deployment_id);
 
       // Docs are knowledge-store-scoped, drafts are deployment-scoped; passing deploymentId
       // merges draft replies into the list, omitting it returns doc changes only.
       const result = await client.review.listPending.query({
-        knowledgeStoreId: ksId,
-        deploymentId: cfg.active_account?.target?.deployment_id,
+        knowledgeStoreId: scope.knowledgeStoreId,
+        ...(scope.deployment && { deploymentId: scope.deployment.id }),
         ...(range.since && { since: range.since.toISOString() }),
         ...(range.until && { until: range.until.toISOString() }),
       });
       const { items, truncated, total } = result;
 
       if (opts.json) {
-        printResult(result, opts);
+        // `scope` is additive: `items`, `truncated`, and `total` keep their shape and meaning.
+        printResult(
+          {
+            ...result,
+            scope: {
+              library: scope.library,
+              deployment: scope.deployment,
+              kinds: scope.deployment ? ["doc_change", "draft_message"] : ["doc_change"],
+              since: range.since?.toISOString() ?? null,
+              until: range.until?.toISOString() ?? null,
+            },
+          },
+          opts,
+        );
         return;
       }
 
+      printScope(scope);
+
       if (!items || items.length === 0) {
-        console.log(pc.dim(`No pending review items${inRange}.`));
+        console.log(pc.dim(`No pending review items in this scope${inRange}.`));
+        console.log(
+          pc.dim(
+            "Only the selected Library is listed. To review another Library, find its MCP " +
+              "deployment with 'dosu deployments list' and select it with " +
+              "'dosu deployments switch <deployment-id>'.",
+          ),
+        );
         return;
       }
 
@@ -309,8 +427,7 @@ export function reviewCommand(): Command {
         const client = createTypedClient(cfg);
 
         if (opts.body !== undefined && opts.bodyFile !== undefined) {
-          console.error(pc.red("Pass only one of --body or --body-file."));
-          process.exit(1);
+          throw invalidArgument("Pass only one of --body or --body-file.");
         }
 
         let body: string | undefined = opts.body;
@@ -318,27 +435,21 @@ export function reviewCommand(): Command {
           try {
             body = readFileSync(opts.bodyFile, "utf-8");
           } catch (err) {
-            console.error(pc.red(`Failed to read --body-file: ${(err as Error).message}`));
-            process.exit(1);
+            throw invalidArgument(`Failed to read --body-file: ${(err as Error).message}`);
           }
         }
 
         if (body === undefined && opts.title === undefined) {
-          console.error(pc.red("Nothing to edit. Pass --title and/or --body/--body-file."));
-          process.exit(1);
+          throw invalidArgument("Nothing to edit. Pass --title and/or --body/--body-file.");
         }
 
         // Route by prefix: a draft saves a new revision (body only), a doc edits in place.
         if (isDraftId(id)) {
-          // saveDraft takes body only; --title is doc-only. (Past the generic
-          // "nothing to edit" check above, body is guaranteed set when title isn't.)
-          if (opts.title !== undefined) {
-            console.error(pc.red("Draft replies support --body only (no --title)."));
-            process.exit(1);
-          }
-          if (body === undefined) {
-            console.error(pc.red("Draft replies require --body or --body-file."));
-            process.exit(1);
+          // saveDraft takes body only; --title is doc-only. Past the generic "nothing to edit"
+          // check above, body is only undefined when --title was passed, so this one check
+          // covers both and narrows body to a string.
+          if (opts.title !== undefined || body === undefined) {
+            throw invalidArgument("Draft replies support --body only (no --title).");
           }
           await requireDraft(client, id);
           await client.messages.saveDraft.mutate({
@@ -354,12 +465,10 @@ export function reviewCommand(): Command {
             });
           } catch (err) {
             if (isNotFound(err)) {
-              console.error(
-                pc.red(
-                  `No pending review item found for '${id}'. Run 'dosu review list' to see editable items.`,
-                ),
+              throw new CommandError(
+                "REVIEW_ITEM_NOT_FOUND",
+                `No pending review item found for '${id}'. Run 'dosu review list' to see editable items.`,
               );
-              process.exit(1);
             }
             throw err;
           }
@@ -485,12 +594,9 @@ export function reviewCommand(): Command {
       // into a clean "no review item" error instead of a misleading "not supported" one.
       if (isDraftId(id)) {
         await requireDraft(client, id);
-        console.error(
-          pc.red(
-            "Revert is not supported for draft replies. A rejected draft is regenerated on the next agent run.",
-          ),
+        throw invalidArgument(
+          "Revert is not supported for draft replies. A rejected draft is regenerated on the next agent run.",
         );
-        process.exit(1);
       }
       await requireChange(client, id);
 

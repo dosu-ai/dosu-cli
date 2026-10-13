@@ -15,8 +15,8 @@ vi.mock("../client/trpc", async (importOriginal) => ({
 }));
 
 import { makeTestConfig } from "../config/config.test-utils";
+import { emptySyncState, outcomeCounts, type SyncState } from "../sync/state";
 import type { SyncStatus } from "../sync/status";
-import type { SyncState } from "../sync/watermark";
 import { ALT_SCREEN_ENTER, ALT_SCREEN_EXIT } from "./alt-screen";
 import {
   ANALYTICS_VIEW_LINES,
@@ -43,23 +43,38 @@ function stripAnsi(text: string): string {
 }
 
 function emptyState(): SyncState {
-  return { schema_version: 1, watermark: null, consecutive_failures: 0 };
+  return emptySyncState();
 }
 
-/** A state carrying the full savings model plus per-project history. */
+/** A ledger holding these sessions as shipped. */
+function ledger(
+  records: Array<{
+    at: string;
+    session: string;
+    task_id: string;
+    project?: string;
+    workspace?: string;
+  }>,
+): SyncState["sessions"] {
+  return Object.fromEntries(
+    records.map(({ session, ...record }) => [
+      session,
+      { updated: record.at, outcome: "shipped" as const, cli_version: "1.0.0", ...record },
+    ]),
+  );
+}
+
+/** A state carrying the all-time total plus per-project history. */
 function reportState(): SyncState {
   return {
-    schema_version: 1,
-    watermark: "2026-09-02T23:00:00.000Z",
+    ...emptySyncState(),
     consecutive_failures: 0,
-    mined_sessions: [
-      { at: "2026-09-02T23:00:00.000Z", session: "cursor/abc", project: "dosu-cli" },
-      { at: "2026-09-02T23:10:00.000Z", session: "cursor/def", project: "dosu-cli" },
-      { at: "2026-09-02T23:20:00.000Z", session: "claude/ghi" },
-    ],
-    total_mined: 558,
-    total_notes: 42,
-    total_learning_tokens: 1_200_000,
+    sessions: ledger([
+      { at: "2026-09-02T23:00:00.000Z", session: "cursor/abc", task_id: "t1", project: "dosu-cli" },
+      { at: "2026-09-02T23:10:00.000Z", session: "cursor/def", task_id: "t2", project: "dosu-cli" },
+      { at: "2026-09-02T23:20:00.000Z", session: "claude/ghi", task_id: "t3" },
+    ]),
+    total_shipped: 558,
   };
 }
 
@@ -67,16 +82,26 @@ function reportState(): SyncState {
 function overflowState(): SyncState {
   return {
     ...reportState(),
-    mined_sessions: Array.from({ length: ANALYTICS_VIEW_LINES + 3 }, (_, i) => ({
-      at: "2026-09-02T23:00:00.000Z",
-      session: `cursor/s${i}`,
-      project: `project-${i}`,
-    })),
+    sessions: ledger(
+      Array.from({ length: ANALYTICS_VIEW_LINES + 3 }, (_, i) => ({
+        at: "2026-09-02T23:00:00.000Z",
+        session: `cursor/s${i}`,
+        task_id: `t${i}`,
+        project: `project-${i}`,
+      })),
+    ),
   };
 }
 
 function makeStatus(state: SyncState = emptyState()): SyncStatus {
-  return { running: false, state, recentActivity: [] };
+  return {
+    running: false,
+    state,
+    outcomes: outcomeCounts(state),
+    subagentOutcomes: outcomeCounts(state, "subagents"),
+    attention: [],
+    recentActivity: [],
+  };
 }
 
 /** Page analytics as the backend loader returns them. */
@@ -129,23 +154,14 @@ describe("cycleAnalyticsTab", () => {
 });
 
 describe("overviewRows", () => {
-  it("renders the studying totals", () => {
+  it("renders the all-time shipped total", () => {
     const rows = overviewRows(reportState()).join("\n");
-    expect(rows).toContain("Sessions studied");
+    expect(rows).toContain("Sessions shipped");
     expect(rows).toContain("558");
-    expect(rows).toContain("Suggested pages");
-    expect(rows).toContain("42");
-    expect(rows).toContain("Investigation distilled");
   });
 
   it("returns nothing before the first run has anything to report", () => {
     expect(overviewRows(emptyState())).toEqual([]);
-  });
-
-  it("omits the token row when no learning tokens are known", () => {
-    const rows = overviewRows({ ...emptyState(), total_mined: 3, total_notes: 2 }).join("\n");
-    expect(rows).toContain("Sessions studied");
-    expect(rows).not.toContain("Investigation distilled");
   });
 });
 
@@ -159,8 +175,33 @@ describe("projectRows", () => {
     expect(rows[2]).toContain("(unknown)");
   });
 
-  it("is empty without studied-session history", () => {
+  it("is empty without shipped-session history", () => {
     expect(projectRows(emptyState())).toEqual([]);
+  });
+
+  it("shows project keys readably, and history migrated from the watermark by workspace", () => {
+    const at = "2026-09-02T23:00:00.000Z";
+    const rows = projectRows({
+      ...emptySyncState(),
+      sessions: ledger([
+        { at, session: "claude/a", task_id: "t", project: "github.com/acme/widget" },
+        { at, session: "claude/b", task_id: "t", project: `git:${"c0ac08c7".repeat(5)}` },
+        { at, session: "claude/c", task_id: "t", project: "path:/work/scratch" },
+        { at, session: "claude/d", task_id: "t", project: "poc-alpha" },
+        // Schema 2 recorded only the scanner's workspace.
+        { at, session: "claude/e", task_id: "t", workspace: "-work-app" },
+        { at, session: "claude/f", task_id: "t", workspace: "-work-app" },
+      ]),
+    });
+
+    expect(rows.slice(1).map((row) => row.replace(/\s+\d+$/, ""))).toEqual([
+      "-work-app",
+      "acme/widget",
+      "git:c0ac08c7c0ac",
+      "scratch",
+      "poc-alpha",
+    ]);
+    expect(rows.join("\n")).not.toContain("(unknown)");
   });
 });
 
@@ -189,7 +230,7 @@ describe("pageRows", () => {
 describe("analyticsTabRows", () => {
   it("routes each tab to its rows", () => {
     expect(analyticsTabRows("overview", reportState(), null).join("\n")).toContain(
-      "Sessions studied",
+      "Sessions shipped",
     );
     expect(analyticsTabRows("projects", reportState(), null).join("\n")).toContain("dosu-cli");
     expect(analyticsTabRows("pages", emptyState(), pageStats()).join("\n")).toContain(
@@ -346,7 +387,7 @@ describe("renderAnalyticsFrame", () => {
     expect(frame).toContain("overview");
     expect(frame).toContain("projects");
     expect(frame).toContain("pages");
-    expect(frame).toContain("Sessions studied");
+    expect(frame).toContain("Sessions shipped");
     expect(frame).toContain("tab switch \u00B7 \u2191\u2193 scroll \u00B7 esc back");
   });
 
@@ -457,7 +498,7 @@ describe("runAnalyticsView", () => {
 
     expect(written.join("")).toContain(ALT_SCREEN_ENTER);
     const rendered = stripAnsi(written.join(""));
-    expect(rendered).toContain("Sessions studied");
+    expect(rendered).toContain("Sessions shipped");
     expect(rendered).toContain("558");
 
     input.emit("data", "q");
@@ -522,12 +563,12 @@ describe("runAnalyticsView", () => {
 
   it("skips the terminal write when a poll produces an identical frame", async () => {
     const { input, output, written } = fakeIO();
-    let notes = 1;
+    let shipped = 1;
 
     const view = runAnalyticsView({
       input,
       output,
-      getStatus: () => makeStatus({ ...emptyState(), total_mined: 1, total_notes: notes }),
+      getStatus: () => makeStatus({ ...emptyState(), total_shipped: shipped }),
       loadPageStats: async () => null,
       pollMs: 100,
     });
@@ -538,7 +579,7 @@ describe("runAnalyticsView", () => {
     expect(written.length).toBe(afterFirstDraw);
 
     // A completed batch changes the state: the next poll repaints.
-    notes = 2;
+    shipped = 2;
     vi.advanceTimersByTime(100);
     expect(written.length).toBeGreaterThan(afterFirstDraw);
     expect(stripAnsi(written.join(""))).toContain("2");

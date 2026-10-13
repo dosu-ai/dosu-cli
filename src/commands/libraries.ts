@@ -432,11 +432,10 @@ export function librariesCommand(): Command {
     .addOption(new Option("--enabled <on|off>", "Turn Monitor on or off").argParser(onOrOff))
     .addOption(new Option("--paths <json>", "Replace monitored paths").argParser(jsonStringArray))
     .addOption(
-      new Option("--up-to-date-behavior <behavior>", "Behavior when docs are current").choices([
-        "emoji",
-        "comment",
-        "silent",
-      ]),
+      new Option(
+        "--up-to-date-behavior <behavior>",
+        "Behavior when docs are current (emoji posts a comment on Azure DevOps)",
+      ).choices(["emoji", "comment", "silent"]),
     )
     .option("--confirm", "Apply without the interactive prompt")
     .option("--json", "Output as JSON")

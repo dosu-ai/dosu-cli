@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { allProviders, allSetupProviders, getProvider } from "./providers";
 
 describe("provider registry", () => {
-  it("allProviders returns 16 providers", () => {
+  it("allProviders returns 17 providers", () => {
     const providers = allProviders();
-    expect(providers).toHaveLength(16);
+    expect(providers).toHaveLength(17);
   });
 
   it("all providers have unique IDs", () => {
@@ -56,6 +56,7 @@ describe("provider registry", () => {
       { id: "cline-cli", name: "Cline CLI", local: false },
       { id: "copilot", name: "GitHub Copilot CLI", local: true },
       { id: "opencode", name: "OpenCode", local: true },
+      { id: "pi", name: "Pi", local: false },
       { id: "antigravity", name: "Antigravity", local: false },
       { id: "mcporter", name: "MCPorter", local: true },
       { id: "manual", name: "Manual Configuration", local: false },
