@@ -1,3 +1,10 @@
+# [0.67.0-beta.1](https://github.com/dosu-ai/dosu-cli/compare/v0.66.1...v0.67.0-beta.1) (2026-10-13)
+
+
+### Features
+
+* **memory:** v2 memory + more agent support ([#272](https://github.com/dosu-ai/dosu-cli/issues/272)) ([cd53fcf](https://github.com/dosu-ai/dosu-cli/commit/cd53fcf8dfcda3e6e9c7b83d6f9147b25442548c)), closes [#224](https://github.com/dosu-ai/dosu-cli/issues/224) [#224](https://github.com/dosu-ai/dosu-cli/issues/224) [#253](https://github.com/dosu-ai/dosu-cli/issues/253)
+
 ## [0.68.2](https://github.com/dosu-ai/dosu-cli/compare/v0.68.1...v0.68.2) (2026-10-12)
 
 
