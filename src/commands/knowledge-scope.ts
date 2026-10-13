@@ -8,7 +8,7 @@ import { Command } from "commander";
 import pc from "picocolors";
 import { originRepoOfDir } from "../sessions/repo";
 import { skipSessionBacklog } from "../sync/backlog";
-import { loadSyncState, type SyncState, saveSyncState } from "../sync/state";
+import { loadSyncState, saveRepoFilter } from "../sync/state";
 import { printResult } from "./output";
 
 function fail(message: string): void {
@@ -22,13 +22,6 @@ function isDirectory(path: string): boolean {
   } catch {
     return false;
   }
-}
-
-/** Save `repos` as the scope (null: every repo), onto a fresh read so a concurrent sync's
- * progress survives. A legacy folder scope is replaced either way. */
-function saveScope(repos: string[] | null): void {
-  const { repo_filter: _repos, project_filter: _folders, ...rest }: SyncState = loadSyncState();
-  saveSyncState(repos ? { ...rest, repo_filter: repos } : rest);
 }
 
 export function scopeCommand(): Command {
@@ -72,7 +65,7 @@ export function scopeCommand(): Command {
         repos.add(repo);
       }
       const sorted = [...repos].sort();
-      saveScope(sorted);
+      saveRepoFilter(sorted);
       console.log(`✓ Sessions ship only from ${sorted.join(", ")}.`);
     });
 
@@ -80,7 +73,7 @@ export function scopeCommand(): Command {
     .command("clear")
     .description("Ship sessions from every repo, and sessions outside any repo")
     .action(() => {
-      saveScope(null);
+      saveRepoFilter(null);
       console.log("✓ Sessions from every repo ship, and sessions outside any repo.");
     });
 

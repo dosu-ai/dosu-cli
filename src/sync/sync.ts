@@ -169,6 +169,10 @@ export interface SyncOptions {
    * if a hook had named it ended, and the run waits for the lock as an ended session's run does.
    * Always an explicit command, even with `quiet`: it resumes paused syncing and ignores backoff. */
   flush?: boolean;
+  /** Report the pending sessions of every repo, and those outside any, whatever the stored scope:
+   * for setup's scope picker, which narrows them itself. Only without `deps.ship`; a run that
+   * ships always keeps to the scope. */
+  everyRepo?: boolean;
   deps?: SyncDeps;
 }
 
@@ -511,8 +515,9 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     );
     const gatedReady = gate.ready.filter((s) => !agentOff(s));
     const gatedOpen = gate.open.filter((s) => !agentOff(s));
+    const scope = options.everyRepo && !deps.ship ? null : repoFilter;
     const inScope = (sessions: AgentSession[]) =>
-      filterSessionsByRepo(sessions, repoFilter, (s) => locator.resolveRepo(s));
+      filterSessionsByRepo(sessions, scope, (s) => locator.resolveRepo(s));
     ready = inScope(holdBack === "backoff" ? gatedReady.filter(isEnded) : gatedReady);
     open = inScope(gatedOpen);
     if (holdBack === "backoff") logger.debug("sync", "backing off: trying only the ended session");
