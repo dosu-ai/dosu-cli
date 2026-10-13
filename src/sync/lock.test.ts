@@ -1,4 +1,12 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -59,6 +67,44 @@ describe("fileLock", () => {
 
     expect(lock.acquire()).toBe(true);
     expect(readFileSync(lockPath(dir), "utf8")).toBe(String(process.pid));
+  });
+
+  it("refresh keeps a long-held lock from being broken as stale", () => {
+    const lock = fileLock(dir);
+    lock.acquire();
+    const old = new Date(Date.now() - STALE_LOCK_MS - 60 * 1000);
+    utimesSync(lockPath(dir), old, old);
+
+    lock.refresh?.();
+
+    expect(fileLock(dir).acquire()).toBe(false);
+    expect(readFileSync(lockPath(dir), "utf8")).toBe(String(process.pid));
+  });
+
+  it("refresh leaves a lock it does not hold alone", () => {
+    const old = new Date(Date.now() - STALE_LOCK_MS - 60 * 1000);
+    writeFileSync(lockPath(dir), "1");
+    utimesSync(lockPath(dir), old, old);
+    const idle = fileLock(dir);
+    idle.refresh?.();
+    // Held once, then taken over by another run.
+    const ousted = fileLock(dir);
+    rmSync(lockPath(dir));
+    ousted.acquire();
+    writeFileSync(lockPath(dir), "1");
+    utimesSync(lockPath(dir), old, old);
+
+    ousted.refresh?.();
+
+    expect(statSync(lockPath(dir)).mtimeMs).toBeLessThan(Date.now() - STALE_LOCK_MS);
+  });
+
+  it("refresh survives a lock file that is gone", () => {
+    const lock = fileLock(dir);
+    lock.acquire();
+    rmSync(lockPath(dir));
+
+    expect(() => lock.refresh?.()).not.toThrow();
   });
 
   it("a fresh lock held by a live process is respected", () => {

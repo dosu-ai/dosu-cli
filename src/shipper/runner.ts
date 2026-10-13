@@ -148,7 +148,7 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
     }
   }
 
-  return async (sessions, shippedOf = () => undefined, hold = () => null) => {
+  return async (sessions, shippedOf = () => undefined, hold = () => null, settled = () => {}) => {
     const resolver =
       options.resolveProject && options.resolveBranch ? undefined : createProjectDirResolver();
     const resolve = {
@@ -163,6 +163,7 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
       // Shipping was turned off: the rest of the batch waits, pending, for it to be on again.
       if (!result) break;
       results.push(result);
+      settled(result);
       if (result.outcome === "failed") break;
     }
     resolver?.flush();

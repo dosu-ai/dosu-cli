@@ -49,6 +49,17 @@ const {
   };
 });
 
+// Pin a stable running version. From source, VERSION is package.json's, which a beta release
+// commit makes a prerelease; releaseTag() would then follow `beta` instead of `latest`.
+vi.mock("../version/version", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../version/version")>();
+  return {
+    ...actual,
+    VERSION: "0.60.0",
+    releaseTag: (version = "0.60.0") => actual.releaseTag(version),
+  };
+});
+
 vi.mock("../auth/ticket", () => ({
   mintTicket: mockMintTicket,
   exchangeTicket: mockExchangeTicket,

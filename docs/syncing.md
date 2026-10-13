@@ -89,8 +89,9 @@ support or rules get a second look), except a session the per-agent incognito sw
 for that run. Nothing is skipped for good by being older than something else, and there is no count
 cap on the scan: listing is metadata only. Claude Code sessions are listed from `~/.claude` and,
 when the variable is set, `CLAUDE_CONFIG_DIR`. Codex sessions are listed from `sessions/` and
-`archived_sessions/` under `CODEX_HOME` (default `~/.codex`). Each run settles at most 20 sessions, oldest first;
-`--bootstrap` and `--flush` keep going until the backlog is drained. Entries are pruned a week after their session
+`archived_sessions/` under `CODEX_HOME` (default `~/.codex`). Each run ships every ready session,
+oldest first, and saves each answer as it comes, so a run cut short uploads again at most the
+session it was on; while it runs it keeps the sync lock fresh. Entries are pruned a week after their session
 leaves the 30-day window, except those the per-agent incognito switch settled (see
 [Per-agent incognito](#per-agent-incognito)).
 
@@ -116,8 +117,8 @@ grouped by reason; `dosu knowledge sessions --rejected` (or `--unsupported`) lis
 `metadata.parent_session_id` set to the session it worked for (the top-level session, for a nested
 subagent too). It is settled in the ledger on its own, so it can be trivial while its session ships,
 but it inherits what its session decided: a session-end hook for the session ships its subagents in
-the same run, right after the session and however many there are (the per-run batch limit of 20
-applies only to the rest of the backlog), `/dosu-incognito` in the session keeps them out, and they
+the same run, right after the session and before the rest of the backlog, `/dosu-incognito` in the
+session keeps them out, and they
 ship under the session's project key. A subagent's transcript waits as long as its session does
 (until the session ends or has been quiet for five minutes), however long ago the subagent itself
 finished, so it never ships ahead of the session or before an opt-out later in it. Views count
@@ -237,7 +238,7 @@ End events ship most sessions at once, but not all: Codex killed with SIGTERM fi
 Codex before 0.160 and Cursor have only per-turn events, pi run with `--no-extensions` loads no
 extension to report its end, and the sync a hook starts runs detached, where a teardown can cut it
 short. A flush ships every pending session now, with its subagents, past the five-minute quiet
-period. It drains the backlog batch by batch in the foreground (`--detach` is refused), and when
+period. It ships the whole backlog in the foreground (`--detach` is refused), and when
 another sync holds the lock, such as one a session-end hook just started, it waits for it (up to ten
 minutes) instead of skipping. It is an explicit command even with `--quiet`, which then only
 silences it: it resumes a paused sync and does not wait out a failure backoff. It still leaves out
@@ -427,7 +428,7 @@ dosu knowledge incognito status [--json]
 `knowledge-sync.json`, sorted, and records when each went in under `incognito_since`; `off` removes
 them, and each key goes once it is empty. While an
 agent is listed, `dosu knowledge sync` sets its sessions and its subagents' transcripts aside before
-the repo scope, the gate log line ("N ready, M in flight") and the batch limit. Every one past the
+the repo scope, the gate log line ("N ready, M in flight") and the ship step. Every one past the
 quiet period settles in the ledger as `incognito` with `by_agent: true`, whatever the scope and all
 in the same run, without reaching the ship step (one pending only because another CLI version
 passed it over keeps that answer: its contents are from before the switch went on); the debug log records
