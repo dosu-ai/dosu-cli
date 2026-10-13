@@ -688,4 +688,149 @@ describe("scanAgentSessions", () => {
       expect(scan()).toEqual([]);
     });
   });
+
+  describe("Gemini CLI", () => {
+    const SESSION_ID = "2f1e4c9a-5b6d-4e7f-8a9b-0c1d2e3f4a5b";
+    const STEM = "session-2026-10-13T12-00-2f1e4c9a";
+
+    function chatsDir(slug = "proj", geminiHome = home): string {
+      return join(geminiHome, ".gemini", "tmp", slug, "chats");
+    }
+
+    /** A log opening with its metadata line, as Gemini CLI 0.63 writes it. */
+    function geminiLog(path: string, mtime: Date, sessionId = SESSION_ID): string {
+      mkdirSync(join(path, ".."), { recursive: true });
+      writeFileSync(path, `${JSON.stringify({ sessionId, projectHash: "h" })}\n`);
+      utimesSync(path, mtime, mtime);
+      return path;
+    }
+
+    it("lists sessions by their file stem, with the project slug, newest first", () => {
+      const path = geminiLog(join(chatsDir(), `${STEM}.jsonl`), T2);
+      geminiLog(join(chatsDir(), "session-2026-10-12T09-30-aaaaaaaa.json"), T1, "legacy-id");
+      writeFileSync(join(chatsDir(), `${STEM}.jsonl.tmp-123`), "x");
+      writeFileSync(join(chatsDir(), `${STEM}.jsonl.unreadable-1`), "x");
+      mkdirSync(join(home, ".gemini", "tmp", "proj", "memory"), { recursive: true });
+      writeFileSync(join(home, ".gemini", "tmp", "proj", ".project_root"), "/Users/me/proj");
+
+      const sessions = scan();
+
+      expect(sessions.map((s) => [s.harness, s.id])).toEqual([
+        ["gemini", STEM],
+        ["gemini", "session-2026-10-12T09-30-aaaaaaaa"],
+      ]);
+      expect(sessions[0]).toEqual({
+        id: STEM,
+        harness: "gemini",
+        path,
+        project: "proj",
+        updated: T2.toISOString(),
+      });
+    });
+
+    it("lists a subagent's transcript with its parent's key, read off the parent's metadata", () => {
+      const parent = geminiLog(join(chatsDir(), `${STEM}.jsonl`), T1);
+      const child = geminiLog(join(chatsDir(), SESSION_ID, "child-id.jsonl"), T2, "child-id");
+      // A subagent whose parent's transcript is gone keeps the bare session id.
+      geminiLog(join(chatsDir(), "orphan-parent", "orphan.jsonl"), T3, "orphan");
+
+      const sessions = scan();
+
+      expect(sessions.map((s) => [s.id, s.parentId])).toEqual([
+        ["orphan", "orphan-parent"],
+        ["child-id", STEM],
+        [STEM, undefined],
+      ]);
+      expect(childSessionsOf(sessions[2])).toEqual([
+        {
+          id: "child-id",
+          harness: "gemini",
+          path: child,
+          project: "proj",
+          updated: T2.toISOString(),
+          parentId: STEM,
+        },
+      ]);
+      expect(childSessionsOf(sessions[1])).toEqual([]);
+      expect(parentSessionOf(sessions[1])).toEqual({
+        id: STEM,
+        harness: "gemini",
+        path: parent,
+        project: "proj",
+        updated: T1.toISOString(),
+      });
+      expect(parentSessionOf(sessions[0])).toBeNull();
+    });
+
+    it("has no subagents for a session with no metadata, or none recorded", () => {
+      const path = geminiLog(join(chatsDir(), `${STEM}.jsonl`), T1);
+      expect(childSessionsOf(scan()[0])).toEqual([]);
+      writeFileSync(path, "{not json\n");
+      expect(childSessionsOf(scan()[0])).toEqual([]);
+    });
+
+    it("honors GEMINI_CLI_HOME, alongside the default home", () => {
+      const relocated = join(home, "gemini-home");
+      geminiLog(join(chatsDir("proj", relocated), `${STEM}.jsonl`), T1);
+      geminiLog(join(chatsDir(), "session-2026-10-13T13-00-bbbbbbbb.jsonl"), T2, "other");
+
+      const sessions = scan({ env: { GEMINI_CLI_HOME: relocated } });
+
+      expect(sessions.map((s) => s.id)).toEqual(["session-2026-10-13T13-00-bbbbbbbb", STEM]);
+      expect(scan()).toHaveLength(1);
+      expect(scannedEverywhere("gemini", sessions[1].path, home)).toBe(false);
+      expect(scannedEverywhere("gemini", sessions[0].path, home)).toBe(true);
+    });
+
+    it("reports a chats dir it cannot read", () => {
+      geminiLog(join(chatsDir(), `${STEM}.jsonl`), T1);
+      chmodSync(chatsDir(), 0o000);
+      const unreadable: string[] = [];
+      try {
+        expect(scan({ onUnreadable: (h, p) => unreadable.push(`${h}:${p}`) })).toEqual([]);
+      } finally {
+        chmodSync(chatsDir(), 0o755);
+      }
+      expect(unreadable).toEqual([`gemini:${chatsDir()}`]);
+    });
+
+    it("sessionAtPath reads the layout, as the scan does, under the caller's id", () => {
+      const parent = geminiLog(join(chatsDir(), `${STEM}.jsonl`), T1);
+      const child = geminiLog(join(chatsDir(), SESSION_ID, "child-id.jsonl"), T2, "child-id");
+
+      expect(sessionAtPath("gemini", STEM, parent)).toEqual({
+        id: STEM,
+        harness: "gemini",
+        path: parent,
+        project: "proj",
+        updated: T1.toISOString(),
+      });
+      expect(sessionAtPath("gemini", "child-id", child)).toMatchObject({
+        id: "child-id",
+        project: "proj",
+        parentId: STEM,
+      });
+      expect(sessionAtPath("gemini", "x", join(home, "nowhere.jsonl"))).toBeNull();
+      // Outside Gemini CLI's layout: no project and no parent.
+      const stray = geminiLog(join(home, "stray.jsonl"), T1);
+      expect(sessionAtPath("gemini", "stray", stray)).toEqual({
+        id: "stray",
+        harness: "gemini",
+        path: stray,
+        updated: T1.toISOString(),
+      });
+    });
+
+    it("finds a subagent's parent by the transcript named for the scanner's key too", () => {
+      // The parent's metadata names another id (a resumed session's), but its stem is the key.
+      const parent = geminiLog(join(chatsDir(), `${STEM}.jsonl`), T1, "resumed-id");
+      const child = geminiLog(join(chatsDir(), SESSION_ID, "child-id.jsonl"), T2, "child-id");
+      const session = { ...(sessionAtPath("gemini", "child-id", child) as object), parentId: STEM };
+
+      expect(parentSessionOf(session as never)?.path).toBe(parent);
+      expect(
+        parentSessionOf({ ...(session as object), path: join(home, "x", "y.jsonl") } as never),
+      ).toBeNull();
+    });
+  });
 });

@@ -68,6 +68,12 @@ function originsOf(session: AgentSession): { links: SessionLinks; next: AgentSes
       });
       break;
     }
+    case "gemini": {
+      // A subagent's transcript sits in a directory named for its parent's session id.
+      const parent = session.parentId ? parentSessionOf(session) : null;
+      if (parent) next.push(parent);
+      break;
+    }
     case "cursor":
       break;
   }

@@ -3,10 +3,11 @@
 The memory beta is intended for organizations with `enable-agent-memory` enabled. Installing
 `@beta` does not enable that server-side flag; memory requests from other organizations are refused.
 
-`dosu knowledge hooks enable` installs a session-end hook (Claude Code, Cursor, Codex), for
+`dosu knowledge hooks enable` installs a session-end hook (Claude Code, Cursor, Codex, Gemini CLI;
+see [Gemini CLI](#gemini-cli)), for
 OpenCode a plugin (see [OpenCode](#opencode)) and for pi the Dosu pi extension (see [Pi](#pi)),
-each running `dosu knowledge sync --quiet --detach`; for Claude Code it also installs the prompt-time memory hook
-(`UserPromptSubmit` → `dosu knowledge context`) unless transcript shipping is off. Every agent's
+each running `dosu knowledge sync --quiet --detach`; for Claude Code, Codex and Gemini CLI it also installs the prompt-time memory hook
+(`UserPromptSubmit` → `dosu knowledge context`; Gemini CLI's `BeforeAgent`) unless transcript shipping is off. Every agent's
 `enable` also installs its incognito command (`/dosu-incognito`, `$dosu-incognito` in Codex; see
 [Per-session incognito](#per-session-incognito)), so the way to keep a session out is there before
 the first session ships, and `disable` removes everything `enable` installed, except that the
@@ -574,6 +575,7 @@ The command is a file per agent:
 | Cursor | `/dosu-incognito` | `~/.cursor/commands/dosu-incognito.md` |
 | Codex | `$dosu-incognito` | `~/.codex/skills/dosu-incognito/SKILL.md` (honors `CODEX_HOME`) |
 | OpenCode | `/dosu-incognito` | `~/.config/opencode/command/dosu-incognito.md` (honors `XDG_CONFIG_HOME`) |
+| Gemini CLI | `/dosu-incognito` | `~/.gemini/commands/dosu-incognito.toml` (honors `GEMINI_CLI_HOME`) |
 
 Only the user runs it: the Claude Code command sets `disable-model-invocation: true` and the
 Codex skill `allow_implicit_invocation: false` (in `agents/openai.yaml`), since both agents
@@ -606,7 +608,8 @@ Properties worth knowing:
   to the session: Claude Code's `PreToolUse` hook denies the memory tools, the MCP proxy answers
   any tool call that names the session itself (Codex, Claude Code, OpenCode and pi name it; Cursor
   does not, so there the instruction is all there is), and `dosu memory` refuses.
-- An OpenCode subagent's session is incognito when the session that spawned it is.
+- An OpenCode subagent's session is incognito when the session that spawned it is, and so is a
+  Gemini CLI subagent's (see [Gemini CLI](#gemini-cli)).
 - Pi's `/dosu-incognito` comes with the Dosu pi extension rather than this command (see [Pi](#pi)).
 - The marker itself works anywhere: a prompt containing `dosu:incognito:v1` takes its session off
   the record in any agent, with or without the command installed.
@@ -673,6 +676,42 @@ not matched. It never throws; anything unreadable renders as `⚪ Dosu off`.
 
 Dev installs (`DOSU_DEV=true`) pin the working copy and prefix with `env` rather than bare
 `NAME=value` assignments, because Cursor spawns the command without a shell.
+
+## Gemini CLI
+
+Gemini CLI keeps each session as an append-only JSONL log,
+`~/.gemini/tmp/<project slug>/chats/session-<yyyy-mm-ddThh-mm>-<id prefix>.jsonl` (older releases
+wrote one JSON document, `session-*.json`, which is read too; `GEMINI_CLI_HOME` relocates the
+home). The scan keys a session by its file stem (`gemini/session-2026-10-13T12-00-2f1e4c9a`), which
+the prompt hook names from `transcript_path` too. The log opens with a metadata line
+(`sessionId`, `projectHash`, `startTime`) and then carries one record per message, `$patch`
+updates to earlier messages (a tool call's result lands that way), `$rewindTo` rollbacks and `$set`
+metadata updates; the shipper folds it into the whole-session document the trajectory adapter
+reads, so a rewound turn never ships. A subagent's log sits at
+`chats/<parent session id>/<child session id>.jsonl` and ships as its own session with
+`parent_session_id` naming the parent's stem; it is incognito when the parent is. The log records
+only a hash of the working directory, so the project key comes from the `.project_root` marker
+Gemini CLI writes beside the project's `chats` dir, else from the directory its `SessionEnd` hook
+reported.
+
+`dosu knowledge hooks enable gemini` (and `dosu setup`) writes three hooks to
+`~/.gemini/settings.json`, in the grouped shape Claude Code's settings use (hooks are on by default
+in Gemini CLI 0.63):
+
+- `SessionEnd` runs `dosu knowledge sync --quiet --detach`, with the ended session named from the
+  payload's `transcript_path` so it ships at once. Gemini CLI does not wait for `SessionEnd` hooks,
+  so the detaching parent only reads the payload and hands off.
+- `AfterAgent` runs the same plain sync after every turn: the backstop for a session whose
+  `SessionEnd` never ran (the CLI killed, or exited without waiting), which ships once it has been
+  quiet for five minutes.
+- `BeforeAgent` runs `dosu knowledge context --agent gemini-cli --format gemini`, whose
+  `additionalContext` Gemini CLI appends to the prompt for the turn; installed only while
+  transcript shipping is on, like Claude Code's prompt hook. The first prompt of a session may run
+  before the log exists, in which case the lookup names no session.
+
+`disable` removes the three. The incognito command is a Gemini CLI custom command,
+`~/.gemini/commands/dosu-incognito.toml`, whose `prompt` is sent as the user's message, marker and
+all. Gemini CLI counts as installed when `~/.gemini` exists or `gemini` is on PATH.
 
 ## Pi
 

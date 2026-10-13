@@ -1,6 +1,7 @@
 /** What an agent hook's payload tells the sync. Session facts captured while the session ran, for
  * agents whose transcripts do not record them (Cursor records neither its branch nor its working
- * directory): one small file per session, never dropped like the project-dir cache, since a lost
+ * directory; Gemini CLI only a hash of the directory): one small file per session, never dropped
+ * like the project-dir cache, since a lost
  * branch means the session is never studied. And which session just ended, when the hook is a
  * definitive end event, so the sync ships it now instead of waiting out the quiet period. */
 
@@ -8,6 +9,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { basename, join } from "node:path";
 import { getConfigDir } from "../config/config";
 import { logger } from "../debug/logger";
+import { geminiChatsDirOf, geminiSessionIdOfPath, isGeminiTranscriptName } from "./gemini";
 import { PI_SESSION_ID_PATTERN } from "./pi";
 import { currentBranchOfDir } from "./repo";
 import { SESSION_HARNESSES, type SessionHarness } from "./scan";
@@ -127,6 +129,47 @@ export function captureCursorStop(payload: unknown, deps: CaptureDeps = {}): boo
   return recordCapturedSession(`cursor/${id}`, { dir, branch }, deps.configDir, deps.now);
 }
 
+/** Gemini CLI's hook events that carry the session's working directory: every one does, and
+ * these two are the ones Dosu installs (BeforeAgent runs `knowledge context`, SessionEnd the
+ * sync). */
+const GEMINI_CAPTURE_EVENTS = new Set(["BeforeAgent", "SessionEnd"]);
+
+/** The Gemini CLI session a hook payload names, by the scanner's key (the transcript's stem):
+ * only Gemini CLI keeps a transcript in a `chats` dir, which tells its payloads (`{session_id,
+ * transcript_path, cwd, hook_event_name, ...}`) from Claude Code's and Codex's of the same shape.
+ * Null for any other payload, and before the transcript exists (its first prompt may run the hook
+ * first). */
+function geminiSessionOf(hook: HookPayload): { id: string; path: string } | null {
+  const path = hook.transcript_path;
+  if (typeof path !== "string" || !path.startsWith("/") || !isGeminiTranscriptName(path)) {
+    return null;
+  }
+  if (!geminiChatsDirOf(path)) return null;
+  const id = geminiSessionIdOfPath(path);
+  return SAFE_SEGMENT.test(id) ? { id, path } : null;
+}
+
+/** Record the working directory and branch from a Gemini CLI hook payload (BeforeAgent on each
+ * prompt, SessionEnd when it exits): the transcript records only a hash of the directory, and the
+ * marker Gemini CLI keeps beside the project's logs is not there for a project dir from before
+ * 0.63. The first turn's branch is the one kept. Other agents' payloads are ignored. */
+export function captureGeminiHook(payload: unknown, deps: CaptureDeps = {}): boolean {
+  if (typeof payload !== "object" || payload === null) return false;
+  const hook = payload as HookPayload;
+  if (
+    typeof hook.hook_event_name !== "string" ||
+    !GEMINI_CAPTURE_EVENTS.has(hook.hook_event_name)
+  ) {
+    return false;
+  }
+  const session = geminiSessionOf(hook);
+  if (!session) return false;
+  const dir = hook.cwd;
+  if (typeof dir !== "string" || !dir.startsWith("/")) return false;
+  const branch = (deps.currentBranch ?? currentBranchOfDir)(dir);
+  return recordCapturedSession(`gemini/${session.id}`, { dir, branch }, deps.configDir, deps.now);
+}
+
 type HookStdin = NodeJS.ReadableStream & { isTTY?: boolean; destroy?: () => void };
 
 /** A hook's JSON stdin payload; null on a TTY, bad JSON, or past the size or time bound. */
@@ -233,10 +276,24 @@ function cursorSessionEnd(hook: HookPayload): EndedSession | null {
   return { harness: "cursor", id, path };
 }
 
+/** Gemini CLI `SessionEnd`: `{session_id, transcript_path, cwd, hook_event_name, reason}`, fired
+ * when the CLI exits or the session is cleared (`/clear`, which starts a new transcript). The
+ * scanner names the session by its transcript's stem, `session-<time>-<id prefix>`, and the
+ * payload's `session_id` is the id the transcript's metadata carries; a payload from before the
+ * first message was recorded has no transcript and so names no session. */
+function geminiSessionEnd(hook: HookPayload): EndedSession | null {
+  if (hook.hook_event_name !== "SessionEnd") return null;
+  const session = geminiSessionOf(hook);
+  return session ? { harness: "gemini", ...session } : null;
+}
+
 /** One reader per agent for its definitive end-of-session event; OpenCode has none, since its
  * plugin passes `--ended` itself. Per-turn events (Cursor `stop`, Codex `Stop` before 0.160,
- * OpenCode's `session.idle`) never count: they fire while the session goes on. */
+ * OpenCode's `session.idle`, Gemini CLI's `AfterAgent`) never count: they fire while the session
+ * goes on. */
 const END_EVENT_READERS: ReadonlyArray<(hook: HookPayload) => EndedSession | null> = [
+  // Before Claude Code's: a Gemini CLI subagent's transcript is named for its session id too.
+  geminiSessionEnd,
   claudeSessionEnd,
   codexSessionEnd,
   cursorSessionEnd,
@@ -291,6 +348,7 @@ export async function captureHookSession(stream?: HookStdin): Promise<EndedSessi
     const payload = await readHookStdin(stream);
     if (payload === null) return null;
     captureCursorStop(payload);
+    captureGeminiHook(payload);
     return endedSessionOf(payload);
   } catch (err) {
     logger.debug("sync", `hook capture failed: ${err instanceof Error ? err.message : err}`);

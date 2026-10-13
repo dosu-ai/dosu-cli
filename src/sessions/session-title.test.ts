@@ -229,6 +229,19 @@ describe("reconstructSession", () => {
     expect(cursor?.path).toContain(".cursor/projects/Users-u-dosu/agent-transcripts");
   });
 
+  it("rebuilds a Gemini CLI path under the project slug's chats dir, trying the legacy .json too", () => {
+    const stem = "session-2026-10-13T12-00-2f1e4c9a";
+    const jsonl = `/home/u/.gemini/tmp/widget/chats/${stem}.jsonl`;
+    expect(reconstructSession("gemini", stem, "widget", "/home/u", (p) => p === jsonl)?.path).toBe(
+      jsonl,
+    );
+    const legacy = `/home/u/.gemini/tmp/widget/chats/${stem}.json`;
+    expect(reconstructSession("gemini", stem, "widget", "/home/u", (p) => p === legacy)?.path).toBe(
+      legacy,
+    );
+    expect(reconstructSession("gemini", stem, "widget", "/home/u", () => false)).toBeNull();
+  });
+
   it("returns null for harnesses whose layout does not encode the slug", () => {
     expect(reconstructSession("codex", "abc", "slug", "/home/u", () => true)).toBeNull();
     expect(reconstructSession("opencode", "abc", "slug")).toBeNull();

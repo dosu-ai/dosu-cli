@@ -5,6 +5,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   captureCursorStop,
+  captureGeminiHook,
   captureHookSession,
   endedSessionOf,
   readCapturedSession,
@@ -144,6 +145,81 @@ describe("captureCursorStop", () => {
   });
 });
 
+describe("captureGeminiHook", () => {
+  const stem = "session-2026-10-13T12-00-2f1e4c9a";
+  const payload = {
+    session_id: "2f1e4c9a-5b6d-4e7f-8a9b-0c1d2e3f4a5b",
+    transcript_path: `/home/u/.gemini/tmp/app/chats/${stem}.jsonl`,
+    cwd: "/work/app",
+    hook_event_name: "BeforeAgent",
+    timestamp: "2026-10-13T12:00:00.000Z",
+    prompt: "hi",
+  };
+
+  it("records the prompt's directory and branch under the transcript stem", () => {
+    const currentBranch = vi.fn(() => "feat/gemini");
+    expect(captureGeminiHook(payload, { currentBranch, configDir, now: NOW })).toBe(true);
+    expect(currentBranch).toHaveBeenCalledWith("/work/app");
+    expect(readCapturedSession(`gemini/${stem}`, configDir)).toEqual({
+      dir: "/work/app",
+      branch: "feat/gemini",
+      since: NOW.toISOString(),
+      at: NOW.toISOString(),
+    });
+  });
+
+  it("records from a SessionEnd payload too, and a subagent's transcript under its stem", () => {
+    const deps = { currentBranch: () => "main", configDir, now: NOW };
+    const end = { ...payload, hook_event_name: "SessionEnd", reason: "exit" };
+    expect(captureGeminiHook(end, deps)).toBe(true);
+    expect(readCapturedSession(`gemini/${stem}`, configDir)).toMatchObject({ dir: "/work/app" });
+    const child = `/home/u/.gemini/tmp/app/chats/${payload.session_id}/child-id.json`;
+    expect(captureGeminiHook({ ...end, transcript_path: child }, deps)).toBe(true);
+    expect(readCapturedSession("gemini/child-id", configDir)?.dir).toBe("/work/app");
+  });
+
+  it("ignores other events, other agents' payloads, and payloads without a transcript or cwd", () => {
+    const deps = { currentBranch: () => "main", configDir, now: NOW };
+    expect(captureGeminiHook(null, deps)).toBe(false);
+    expect(captureGeminiHook({ ...payload, hook_event_name: "AfterAgent" }, deps)).toBe(false);
+    expect(captureGeminiHook({ ...payload, hook_event_name: 7 }, deps)).toBe(false);
+    // Claude Code's UserPromptSubmit/SessionEnd carry the same fields, in another layout.
+    expect(
+      captureGeminiHook(
+        { ...payload, transcript_path: "/home/u/.claude/projects/-work-app/abc.jsonl" },
+        deps,
+      ),
+    ).toBe(false);
+    // Before the first message is recorded, the payload names no transcript.
+    expect(captureGeminiHook({ ...payload, transcript_path: "" }, deps)).toBe(false);
+    expect(captureGeminiHook({ ...payload, transcript_path: "chats/x.jsonl" }, deps)).toBe(false);
+    expect(captureGeminiHook({ ...payload, transcript_path: "/t/chats/x.jsonl.tmp-1" }, deps)).toBe(
+      false,
+    );
+    expect(captureGeminiHook({ ...payload, transcript_path: "/t/chats/a b.jsonl" }, deps)).toBe(
+      false,
+    );
+    expect(captureGeminiHook({ ...payload, cwd: undefined }, deps)).toBe(false);
+    expect(captureGeminiHook({ ...payload, cwd: "relative" }, deps)).toBe(false);
+  });
+
+  it("asks real git by default and records only the directory outside a repo", () => {
+    const outsideRepo = mkdtempSync(join(tmpdir(), "dosu-capture-norepo-"));
+    try {
+      expect(captureGeminiHook({ ...payload, cwd: outsideRepo }, { configDir, now: NOW })).toBe(
+        true,
+      );
+      expect(readCapturedSession(`gemini/${stem}`, configDir)).toEqual({
+        dir: outsideRepo,
+        since: NOW.toISOString(),
+        at: NOW.toISOString(),
+      });
+    } finally {
+      rmSync(outsideRepo, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("readHookStdin", () => {
   it("parses a JSON payload once stdin closes", async () => {
     const stream = new PassThrough();
@@ -263,6 +339,27 @@ describe("captureHookSession", () => {
     expect(readCapturedSession("cursor/uuid-9")?.dir).toBe(configDir);
     vi.unstubAllEnvs();
   });
+
+  it("names the session a Gemini CLI SessionEnd hook reports, and records its capture", async () => {
+    vi.stubEnv("XDG_CONFIG_HOME", configDir);
+    const stem = "session-2026-10-13T12-00-2f1e4c9a";
+    const transcript = `/home/u/.gemini/tmp/work-app/chats/${stem}.jsonl`;
+    const stream = new PassThrough();
+    const done = captureHookSession(stream);
+    stream.end(
+      JSON.stringify({
+        session_id: "2f1e4c9a-5b6d-4e7f-8a9b-0c1d2e3f4a5b",
+        transcript_path: transcript,
+        cwd: configDir,
+        hook_event_name: "SessionEnd",
+        timestamp: "2026-10-13T12:30:00.000Z",
+        reason: "exit",
+      }),
+    );
+    await expect(done).resolves.toEqual({ harness: "gemini", id: stem, path: transcript });
+    expect(readCapturedSession(`gemini/${stem}`)?.dir).toBe(configDir);
+    vi.unstubAllEnvs();
+  });
 });
 
 describe("endedSessionOf", () => {
@@ -296,6 +393,34 @@ describe("endedSessionOf", () => {
       id: rollout,
       path: codexEnd.transcript_path,
     });
+  });
+
+  const geminiStem = "session-2026-10-13T12-00-2f1e4c9a";
+  const geminiEnd = {
+    session_id: "2f1e4c9a-5b6d-4e7f-8a9b-0c1d2e3f4a5b",
+    transcript_path: `/home/u/.gemini/tmp/app/chats/${geminiStem}.jsonl`,
+    cwd: "/work/app",
+    hook_event_name: "SessionEnd",
+    timestamp: "2026-10-13T12:30:00.000Z",
+    reason: "exit",
+  };
+
+  it("reads a Gemini CLI SessionEnd, naming the session by its transcript as the scanner does", () => {
+    expect(endedSessionOf(geminiEnd)).toEqual({
+      harness: "gemini",
+      id: geminiStem,
+      path: geminiEnd.transcript_path,
+    });
+    // A subagent's transcript is named for its session id, like Claude Code's: still Gemini's.
+    const child = `/home/u/.gemini/tmp/app/chats/parent-id/${geminiEnd.session_id}.jsonl`;
+    expect(endedSessionOf({ ...geminiEnd, transcript_path: child })).toEqual({
+      harness: "gemini",
+      id: geminiEnd.session_id,
+      path: child,
+    });
+    // Before the first message is recorded there is no transcript, so no session ended.
+    expect(endedSessionOf({ ...geminiEnd, transcript_path: "" })).toBeNull();
+    expect(endedSessionOf({ ...geminiEnd, hook_event_name: "AfterAgent" })).toBeNull();
   });
 
   // Cursor: camel-cased event name, the transcript at `<id>/<id>.jsonl`, only its payloads carry

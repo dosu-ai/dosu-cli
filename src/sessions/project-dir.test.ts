@@ -553,6 +553,28 @@ describe("createProjectDirResolver", () => {
     expect(resolver.resolve(session({ harness: "cursor" }))).toBeNull();
   });
 
+  it("reads a Gemini CLI session's directory from its project's root marker, else its hook capture", () => {
+    const chats = join(tempDir, "gemini", "tmp", "widget", "chats");
+    mkdirSync(chats, { recursive: true });
+    const log = join(chats, "session-2026-10-13T12-00-2f1e4c9a.jsonl");
+    writeFileSync(log, `${JSON.stringify({ sessionId: "s", projectHash: "h" })}\n`);
+    const captured = vi.fn((key: string) =>
+      key === "gemini/session-2026-10-13T12-00-2f1e4c9a"
+        ? { dir: "/work/hooked", branch: "feat/g", at: "" }
+        : null,
+    );
+    const s = session({ harness: "gemini", id: "session-2026-10-13T12-00-2f1e4c9a", path: log });
+
+    // No marker yet (a dir from before 0.63): the SessionEnd hook's capture answers.
+    expect(createProjectDirResolver(tempDir, { captured }).resolve(s)).toBe("/work/hooked");
+
+    writeFileSync(join(tempDir, "gemini", "tmp", "widget", ".project_root"), "/work/widget\n");
+    expect(createProjectDirResolver(tempDir, { captured }).resolve(s)).toBe("/work/widget");
+    // A marker with no absolute path in it answers nothing.
+    writeFileSync(join(tempDir, "gemini", "tmp", "widget", ".project_root"), "relative\n");
+    expect(createProjectDirResolver(tempDir, { captured: () => null }).resolve(s)).toBeNull();
+  });
+
   it("retries a failed resolution once the session file changes", () => {
     const log = join(tempDir, "young.jsonl");
     writeFileSync(log, `${JSON.stringify({ type: "queued" })}\n`);

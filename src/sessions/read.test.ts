@@ -538,6 +538,46 @@ describe("countRediscoveryToolCalls", () => {
   it("returns 0 for opencode sessions", () => {
     expect(countRediscoveryToolCalls(session("opencode", join(dir, "missing.db")))).toBe(0);
   });
+
+  it("counts Gemini CLI tool calls by name, after the log's patches", () => {
+    const path = writeLog("gemini.jsonl", [
+      { sessionId: "s", projectHash: "h", startTime: "2026-10-13T12:00:00.000Z" },
+      {
+        id: "g1",
+        type: "gemini",
+        content: [{ text: "looking" }],
+        toolCalls: [
+          { id: "t1", name: "read_file", status: "success" },
+          { id: "t2", name: "run_shell_command", status: "success" },
+          { id: "t3", name: "write_file", status: "success" },
+          { id: "t4", name: "glob", status: "success" },
+        ],
+      },
+      { $patch: { id: "g1", toolCalls: [{ id: "t4", name: "codebase_investigator" }] } },
+      { id: "g2", type: "gemini", content: [{ text: "done" }], toolCalls: [{ name: 7 }] },
+    ]);
+    expect(countRediscoveryToolCalls(session("gemini", path))).toBe(3);
+  });
+});
+
+describe("readSessionTurns for gemini", () => {
+  it("extracts user and gemini text from the folded log, skipping the CLI's own messages", () => {
+    const path = writeLog("gemini.jsonl", [
+      { sessionId: "s", projectHash: "h", startTime: "2026-10-13T12:00:00.000Z" },
+      { id: "u1", type: "user", content: [{ text: "what does this do" }] },
+      { id: "i1", type: "info", content: "Loaded 2 GEMINI.md files" },
+      { id: "g1", type: "gemini", content: "It parses ", thoughts: [{ subject: "x" }] },
+      { $patch: { id: "g1", content: "It parses the config." } },
+      { id: "e1", type: "error", content: "rate limited" },
+      { id: "u2", type: "user", content: "thanks" },
+      { $rewindTo: "u2" },
+    ]);
+
+    expect(readSessionTurns(session("gemini", path))).toEqual([
+      { role: "user", text: "what does this do" },
+      { role: "assistant", text: "It parses the config." },
+    ]);
+  });
 });
 
 describe("estimateSessionTokens", () => {

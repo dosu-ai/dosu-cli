@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSyn
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { getConfigDir } from "../config/config";
+import { GEMINI_CHATS_DIR, geminiTempDir } from "./gemini";
 import { readSessionTurns } from "./read";
 import type { AgentSession } from "./scan";
 
@@ -93,7 +94,8 @@ function claudeSummaryFromHead(text: string): string | null {
 }
 
 /** Rebuild a session's file location from its store slug + id; only the layouts that encode
- * both (claude, cursor) reconstruct — other harnesses resolve only while still scannable. */
+ * both (claude, cursor, gemini) reconstruct — other harnesses resolve only while still
+ * scannable. */
 export function reconstructSession(
   harness: SessionHarness,
   id: string,
@@ -111,6 +113,9 @@ export function reconstructSession(
       join(project, "agent-transcripts", id, `${id}.jsonl`),
       join(project, "agent-transcripts", `${id}.jsonl`),
     );
+  } else if (harness === "gemini") {
+    const chats = join(geminiTempDir(home, {}), slug, GEMINI_CHATS_DIR);
+    candidates.push(join(chats, `${id}.jsonl`), join(chats, `${id}.json`));
   } else {
     return null;
   }

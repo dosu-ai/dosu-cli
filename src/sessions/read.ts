@@ -2,6 +2,7 @@
  * scaffolding are deliberately dropped. Callers must still redactSecrets before anything leaves. */
 
 import { readFileSync } from "node:fs";
+import { geminiContentText, geminiDocumentOf } from "./gemini";
 import { type AgentSession, querySqlite } from "./scan";
 
 export interface SessionTurn {
@@ -124,6 +125,30 @@ function readPi(raw: string): SessionTurn[] {
   return turns;
 }
 
+/** Gemini CLI: the log folded into its document, whose `user` and `gemini` messages are the
+ * turns; `info`, `warning` and `error` messages are the CLI talking. */
+function readGemini(raw: string): SessionTurn[] {
+  const turns: SessionTurn[] = [];
+  for (const message of geminiDocumentOf(raw)?.messages ?? []) {
+    const role = message.type === "user" ? "user" : message.type === "gemini" ? "assistant" : null;
+    if (!role) continue;
+    pushTurn(turns, role, geminiContentText(message.content));
+  }
+  return turns;
+}
+
+/** The tool calls a Gemini CLI log's document records, by name. */
+function geminiToolNames(raw: string): string[] {
+  const names: string[] = [];
+  for (const message of geminiDocumentOf(raw)?.messages ?? []) {
+    for (const call of Array.isArray(message.toolCalls) ? message.toolCalls : []) {
+      const name = asRecord(call)?.name;
+      if (typeof name === "string") names.push(name);
+    }
+  }
+  return names;
+}
+
 function readOpencode(dbPath: string, sessionId: string): SessionTurn[] {
   // The id is interpolated into SQL; scanner-produced ids are opaque tokens,
   // so anything outside this charset is unexpected input, not a session.
@@ -167,13 +192,15 @@ export function readSessionTurns(session: AgentSession): SessionTurn[] {
         return readOpencode(session.path, session.id);
       case "pi":
         return readPi(readFileSync(session.path, "utf8"));
+      case "gemini":
+        return readGemini(readFileSync(session.path, "utf8"));
     }
   } catch {
     return [];
   }
 }
 
-/** Cursor + Claude Code + Codex + pi names the skill report counts as rediscovery. */
+/** Cursor + Claude Code + Codex + pi + Gemini CLI names the skill report counts as rediscovery. */
 const REDISCOVERY_TOOLS = new Set([
   "Read",
   "Grep",
@@ -206,6 +233,17 @@ const REDISCOVERY_TOOLS = new Set([
   "grep",
   "find",
   "ls",
+  // Gemini CLI's built-ins.
+  "run_shell_command",
+  "read_many_files",
+  "list_directory",
+  "search_file_content",
+  "grep_search",
+  "glob",
+  "google_web_search",
+  "web_fetch",
+  "replace",
+  "write_file",
 ]);
 
 function isRediscoveryTool(name: string): boolean {
@@ -260,6 +298,8 @@ export function countRediscoveryToolCalls(session: AgentSession): number {
         }
         return n;
       }
+      case "gemini":
+        return geminiToolNames(readFileSync(session.path, "utf8")).filter(isRediscoveryTool).length;
       case "opencode":
         return 0;
     }

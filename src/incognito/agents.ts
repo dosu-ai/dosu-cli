@@ -9,6 +9,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { claudeCodeInstalled } from "../hooks/claude-code";
 import { codexInstalled } from "../hooks/codex";
+import { geminiConfigDir, geminiInstalled } from "../hooks/gemini";
 import { piHookAgent } from "../hooks/pi";
 import { isInstalled } from "../mcp/detect";
 import { INCOGNITO_COMMAND_NAME, INCOGNITO_MARKER } from "../sync/incognito";
@@ -132,6 +133,11 @@ function fileAgent(options: {
   };
 }
 
+/** Gemini CLI's custom commands are TOML files, `~/.gemini/commands/<name>.toml`, whose `prompt`
+ * is sent as the user's message, marker and all. JSON string escapes are valid TOML basic-string
+ * escapes, so JSON.stringify quotes the strings. */
+const GEMINI_COMMAND = `description = ${JSON.stringify(DESCRIPTION)}\nprompt = ${JSON.stringify(INCOGNITO_COMMAND_BODY)}\n`;
+
 /** Codex's frontmatter is parsed as strict YAML, where an unquoted value cannot hold ": ". */
 const CODEX_SKILL = `---\nname: ${INCOGNITO_COMMAND_NAME}\ndescription: ${JSON.stringify(DESCRIPTION)}\n---\n\n${INCOGNITO_COMMAND_BODY}`;
 
@@ -235,6 +241,17 @@ export function allIncognitoAgents(): IncognitoAgent[] {
       content: withFrontmatter(INCOGNITO_COMMAND_BODY),
     }),
     piAgent(),
+    {
+      ...fileAgent({
+        id: "gemini",
+        name: "Gemini CLI",
+        detectPath: geminiConfigDir,
+        commandPath: () => join(geminiConfigDir(), "commands", `${INCOGNITO_COMMAND_NAME}.toml`),
+        content: GEMINI_COMMAND,
+      }),
+      // `gemini` on PATH counts too, as for Claude Code.
+      isInstalled: geminiInstalled,
+    },
   ];
 }
 

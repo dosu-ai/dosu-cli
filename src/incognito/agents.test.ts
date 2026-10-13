@@ -35,13 +35,14 @@ afterEach(() => {
 });
 
 describe("registry", () => {
-  it("exposes claude, cursor, codex, opencode, and pi", () => {
+  it("exposes claude, cursor, codex, opencode, pi, and gemini", () => {
     expect(allIncognitoAgents().map((a) => a.id())).toEqual([
       "claude",
       "cursor",
       "codex",
       "opencode",
       "pi",
+      "gemini",
     ]);
     expect(getIncognitoAgent("cursor")?.name()).toBe("Cursor");
     expect(getIncognitoAgent("zed")).toBeUndefined();
@@ -70,6 +71,7 @@ describe("registry", () => {
       codex: "$dosu-incognito",
       opencode: "/dosu-incognito",
       pi: "/dosu-incognito",
+      gemini: "/dosu-incognito",
     });
   });
 

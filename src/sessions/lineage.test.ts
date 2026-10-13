@@ -125,6 +125,33 @@ describe("sessionLineage", () => {
     });
   });
 
+  it("leads from a Gemini CLI subagent to the session it worked for", () => {
+    const chats = join(home, ".gemini", "tmp", "widget", "chats");
+    const STEM = "session-2026-10-13T12-00-2f1e4c9a";
+    const SESSION_ID = "2f1e4c9a-5b6d-4e7f-8a9b-0c1d2e3f4a5b";
+    write(join(chats, `${STEM}.jsonl`), [{ sessionId: SESSION_ID, projectHash: "h" }]);
+    const child = write(join(chats, SESSION_ID, "child-id.jsonl"), [
+      { sessionId: "child-id", projectHash: "h" },
+    ]);
+    const orphan = write(join(chats, "gone-parent", "orphan.jsonl"), [
+      { sessionId: "orphan", projectHash: "h" },
+    ]);
+
+    const lineage = sessionLineage([
+      at("gemini", "child-id", child),
+      at("gemini", "orphan", orphan),
+    ]);
+
+    expect(lineage("gemini/child-id")).toEqual({ updated: expect.any(String), parentId: STEM });
+    expect(lineage(`gemini/${STEM}`)).toEqual({ updated: expect.any(String) });
+    // A parent whose transcript is gone is named but never reached.
+    expect(lineage("gemini/orphan")).toEqual({
+      updated: expect.any(String),
+      parentId: "gone-parent",
+    });
+    expect(lineage("gemini/gone-parent")).toBeUndefined();
+  });
+
   it("follows pi's forks through their headers, the scan's or a lookup by id's", () => {
     const dir = join(home, ".pi", "agent", "sessions", "--work--");
     const source = write(join(dir, "2026-10-02T10-00-00_src.jsonl"), [

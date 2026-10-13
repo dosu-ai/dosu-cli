@@ -55,6 +55,7 @@ describe("registry", () => {
       "codex",
       "opencode",
       "pi",
+      "gemini",
     ]);
   });
 
