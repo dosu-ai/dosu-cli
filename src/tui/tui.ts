@@ -18,11 +18,12 @@ import { allSetupProviders } from "../mcp/providers";
 import { emitKnowledgeReport } from "../report/generate";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { displayRepo } from "../sessions/repo";
-import { scanAgentSessions } from "../sessions/scan";
+import { type AgentSession, scanAgentSessions } from "../sessions/scan";
 import { dosuAgentsSectionState, inGitWorkTree } from "../setup/agents-md-step";
 import { runSetup, runSwitchTarget } from "../setup/flow";
+import { type ScopeCandidate, scopeCandidates, stepPickSyncScope } from "../setup/scope-step";
 import { brand, browserFallbackHint, dim } from "../setup/styles";
-import { loadSyncState, saveSyncState, studyRepoFilter } from "../sync/state";
+import { loadSyncState, studyRepoFilter } from "../sync/state";
 import { getSyncStatus } from "../sync/status";
 import { buildUpdateHint, getAvailableUpdate } from "../version/update-check";
 import { getVersionString, INSTALL_CHANNEL, isNpxInvocation } from "../version/version";
@@ -375,21 +376,19 @@ async function runSettings(cfg: Config): Promise<void> {
 
 /** Repos the local sessions ran in plus the current scope, most sessions first; sessions
  * outside a git repo have no repo to pick, and are studied only when every repo is. */
-function discoverSessionRepos(current: readonly string[] | null): string[] {
-  const counts = new Map<string, number>();
+function discoverSessionRepos(current: readonly string[] | null): ScopeCandidate[] {
+  const inRepos: AgentSession[] = [];
   try {
     const resolver = createProjectDirResolver();
     for (const session of scanAgentSessions({})) {
       const repo = resolver.resolveRepo(session);
-      if (repo) counts.set(repo, (counts.get(repo) ?? 0) + 1);
+      if (repo) inRepos.push({ ...session, repo });
     }
     resolver.flush();
   } catch {
     // An unreadable session store just yields an empty picker.
   }
-  // A picked repo whose sessions have all aged out must stay removable.
-  for (const repo of current ?? []) if (!counts.has(repo)) counts.set(repo, 0);
-  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([repo]) => repo);
+  return scopeCandidates(inRepos, current);
 }
 
 /** Scope shipping to selected repos; picking everything clears the filter so new repos are
@@ -397,29 +396,12 @@ function discoverSessionRepos(current: readonly string[] | null): string[] {
 async function runStudyingProjectsSetting(): Promise<void> {
   const state = loadSyncState();
   const current = studyRepoFilter(state, () => scanAgentSessions({}), createProjectDirResolver());
-  const repos = discoverSessionRepos(current);
-  if (repos.length === 0) {
+  const candidates = discoverSessionRepos(current);
+  if (candidates.length === 0) {
     p.log.info("No agent sessions inside a git repo found yet; nothing to scope.");
     return;
   }
-  const selected = await p.multiselect({
-    message: "Ship sessions to Dosu memory from which repos?",
-    options: repos.map((repo) => ({ label: displayRepo(repo), hint: repo, value: repo })),
-    initialValues: current ?? repos,
-    summary: (picked) =>
-      picked.length === repos.length
-        ? "all repos \u00B7 new ones included automatically"
-        : `${picked.length} of ${repos.length} repos`,
-    validate: (picked) => (picked.length === 0 ? "Select at least one repo." : undefined),
-  });
-  if (p.isCancel(selected)) return;
-
-  // Reload right before writing: a background sync may have advanced the state.
-  const { repo_filter: _repos, project_filter: _folders, ...fresh } = loadSyncState();
-  const all = selected.length === repos.length;
-  saveSyncState(all ? fresh : { ...fresh, repo_filter: [...selected] });
-  const scope = all ? "all repos" : (selected as string[]).map(displayRepo).join(", ");
-  p.log.success(`Sync scope ${dim(`\u00B7 ${scope}`)}`);
+  await stepPickSyncScope(candidates, current);
 }
 
 async function handleAuthenticate(cfg: ReturnType<typeof loadConfig>): Promise<void> {

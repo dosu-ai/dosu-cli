@@ -24,9 +24,11 @@ import { MCP_PROVIDER_SLUG } from "../mcp/constants";
 import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { refreshConfiguredProviders } from "../mcp/refresh";
 import { sessionLineage } from "../sessions/lineage";
+import type { AgentSession } from "../sessions/scan";
 import { getStatuslineAgent, StatuslineConflictError } from "../statusline/agents";
 import { spawnDetachedSelf } from "../sync/detach";
 import {
+  filterSessionsByRepo,
   isAgentIncognito,
   isShippingEnabled,
   loadSyncState,
@@ -44,6 +46,7 @@ import { VERSION } from "../version/version";
 import { inGitWorkTree, stepUpdateAgentsMd } from "./agents-md-step";
 import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
 import { stepConfigureAgentRules } from "./rules-step";
+import { canPickScope, scopeCandidates, stepPickSyncScope } from "./scope-step";
 import {
   brand,
   brandBadge,
@@ -389,22 +392,43 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
   logger.info("setup", "Step: offer initial knowledge sync");
   const s = p.spinner();
   s.start("Checking for agent sessions from the last 30 days...");
-  const outcome = await runKnowledgeSync();
-  const backlog = outcome.status === "backlog" ? unsettledSessions(outcome.sessions, state) : [];
+  // Every repo's backlog, so the scope picker can offer repos the stored scope leaves out.
+  const outcome = await runKnowledgeSync({ everyRepo: true });
+  // Read after the run, which converts a legacy folder scope to repos.
+  const storedScope = loadSyncState().repo_filter ?? null;
+  const everyBacklog =
+    outcome.status === "backlog" ? unsettledSessions(outcome.sessions, state) : [];
   // Subagents' transcripts go (or are skipped) with their sessions; the offer counts sessions,
   // and none of an agent in incognito, which never ship (declining settles them as its switch
   // would, too).
   const lineage = sessionLineage(outcome.sessions);
-  const n = withoutSubagents(backlog).filter(
-    (session) => !isAgentIncognito(state, session, lineage),
-  ).length;
+  const offered = (sessions: readonly AgentSession[]) =>
+    withoutSubagents(sessions).filter((session) => !isAgentIncognito(state, session, lineage));
+  // Sync tagged each session with its repo; narrowing re-applies a scope as sync would.
+  const inScope = (scope: readonly string[] | null) =>
+    filterSessionsByRepo(everyBacklog, scope, (session) => session.repo ?? null);
+  const candidates = scopeCandidates(offered(everyBacklog), storedScope);
+  const pickScope = canPickScope(candidates);
+  let backlog = pickScope ? everyBacklog : inScope(storedScope);
+  let n = offered(backlog).length;
   if (n === 0) {
     s.stop("No recent agent sessions. Dosu memory learns from new ones as you work.");
     recordCommandFacets({ backfill_offer: "not-offered" });
     return;
   }
-  const them = n === 1 ? "it" : "them";
   s.stop(`Found ${n} agent session${n === 1 ? "" : "s"} from the last 30 days on this machine.`);
+  if (pickScope) {
+    // Before the backfill: only the picked repos' sessions are offered, and later syncs keep to
+    // them too.
+    backlog = inScope(await stepPickSyncScope(candidates, storedScope));
+    n = offered(backlog).length;
+    if (n === 0) {
+      p.log.info("No sessions from those repos are waiting. Dosu memory learns from new ones.");
+      recordCommandFacets({ backfill_offer: "not-offered" });
+      return;
+    }
+  }
+  const them = n === 1 ? "it" : "them";
   // What happens to the sessions, why it's worth it, and how to keep something out.
   const incognito = installedIncognitoCommands();
   p.log.message(

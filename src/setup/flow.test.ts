@@ -3631,6 +3631,164 @@ describe("stepOfferInitialSync", () => {
     expect(vi.mocked(p.log.warn).mock.calls.join(" ")).toContain("Could not start");
   });
 
+  describe("sync scope picker", () => {
+    const CLI = "github.com/dosu-ai/dosu-cli";
+    const WEB = "github.com/dosu-ai/dosu";
+    let tty: PropertyDescriptor | undefined;
+
+    beforeEach(() => {
+      tty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+      Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    });
+    afterEach(() => {
+      if (tty) Object.defineProperty(process.stdin, "isTTY", tty);
+      else delete (process.stdin as { isTTY?: boolean }).isTTY;
+    });
+
+    /** Every repo's backlog, as the offer's everyRepo run reports it: each session tagged with
+     * its repo, two in CLI, one in WEB, one outside any repo. */
+    function reposOutcome() {
+      const outcome = backlogOutcome(4);
+      const repos = [CLI, CLI, WEB, undefined];
+      const sessions = outcome.sessions.map((session, i) => ({
+        ...session,
+        ...(repos[i] ? { repo: repos[i] } : {}),
+      }));
+      return { ...outcome, sessions };
+    }
+
+    function spinnerStops(): string {
+      return vi
+        .mocked(p.spinner)
+        .mock.results.flatMap((r) => r.value.stop.mock.calls)
+        .join(" ");
+    }
+
+    it("asks for the backlog of every repo, whatever the stored scope", async () => {
+      mockRunKnowledgeSync.mockResolvedValue(reposOutcome());
+      vi.mocked(p.multiselect).mockResolvedValue([CLI, WEB] as unknown as never);
+      vi.mocked(p.confirm).mockResolvedValue(false);
+
+      await stepOfferInitialSync(makeCfg());
+
+      expect(mockRunKnowledgeSync).toHaveBeenCalledWith({ everyRepo: true });
+    });
+
+    it("picks repos before the offer: the pick is saved and only its sessions are offered", async () => {
+      mockRunKnowledgeSync.mockResolvedValue(reposOutcome());
+      vi.mocked(p.multiselect).mockResolvedValue([CLI] as unknown as never);
+      vi.mocked(p.confirm).mockResolvedValue(false);
+
+      await stepOfferInitialSync(makeCfg());
+
+      expect(spinnerStops()).toContain("Found 4 agent sessions");
+      const [picker] = vi.mocked(p.multiselect).mock.calls[0] ?? [];
+      expect(picker?.options.map((o) => [o.value, o.hint])).toEqual([
+        [CLI, "2 sessions"],
+        [WEB, "1 session"],
+      ]);
+      // No scope yet: every repo starts picked, as before the picker existed.
+      expect(picker?.initialValues).toEqual([CLI, WEB]);
+      expect(vi.mocked(p.multiselect).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(p.confirm).mock.invocationCallOrder[0],
+      );
+      const saved = loadSyncState();
+      expect(saved.repo_filter).toEqual([CLI]);
+      // Declining passes over only the picked repo's sessions; the rest wait for a wider scope.
+      expect(Object.keys(saved.sessions).sort()).toEqual(["claude/offered-0", "claude/offered-1"]);
+    });
+
+    it("the backfill drains under the saved scope", async () => {
+      mockRunKnowledgeSync.mockResolvedValue(reposOutcome());
+      vi.mocked(p.multiselect).mockResolvedValue([WEB] as unknown as never);
+      vi.mocked(p.confirm).mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+      let scopeAtSpawn: string[] | undefined;
+      mockSpawnDetachedSelf.mockImplementation(() => {
+        scopeAtSpawn = loadSyncState().repo_filter;
+        return true;
+      });
+
+      await stepOfferInitialSync(makeCfg());
+
+      expect(scopeAtSpawn).toEqual([WEB]);
+      expect(vi.mocked(p.log.success).mock.calls.join(" ")).toContain("Shipping 1 session in");
+    });
+
+    it("picking every repo keeps every session, those outside a repo too", async () => {
+      saveSyncState({ ...loadSyncState(), repo_filter: [CLI] });
+      mockRunKnowledgeSync.mockResolvedValue(reposOutcome());
+      vi.mocked(p.multiselect).mockResolvedValue([CLI, WEB] as unknown as never);
+      vi.mocked(p.confirm).mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+      mockSpawnDetachedSelf.mockReturnValue(true);
+
+      await stepOfferInitialSync(makeCfg());
+
+      const [picker] = vi.mocked(p.multiselect).mock.calls[0] ?? [];
+      // The stored scope is what starts picked.
+      expect(picker?.initialValues).toEqual([CLI]);
+      expect(loadSyncState().repo_filter).toBeUndefined();
+      expect(vi.mocked(p.log.success).mock.calls.join(" ")).toContain("Shipping 4 sessions");
+    });
+
+    it("offers nothing when the pick has no sessions waiting", async () => {
+      saveSyncState({ ...loadSyncState(), repo_filter: ["github.com/dosu-ai/idle"] });
+      mockRunKnowledgeSync.mockResolvedValue(reposOutcome());
+      vi.mocked(p.multiselect).mockResolvedValue(["github.com/dosu-ai/idle"] as unknown as never);
+      consumeCommandFacets();
+
+      await stepOfferInitialSync(makeCfg());
+
+      expect(vi.mocked(p.confirm)).not.toHaveBeenCalled();
+      expect(vi.mocked(p.log.info).mock.calls.join(" ")).toContain("No sessions from those repos");
+      expect(consumeCommandFacets()).toEqual({ backfill_offer: "not-offered" });
+    });
+
+    it("skips the picker with a single repo and applies the stored scope", async () => {
+      saveSyncState({ ...loadSyncState(), repo_filter: [CLI] });
+      const outcome = reposOutcome();
+      mockRunKnowledgeSync.mockResolvedValue({
+        ...outcome,
+        sessions: outcome.sessions.filter((s) => s.repo !== WEB),
+      });
+      vi.mocked(p.confirm).mockResolvedValue(false);
+
+      await stepOfferInitialSync(makeCfg());
+
+      expect(p.multiselect).not.toHaveBeenCalled();
+      expect(spinnerStops()).toContain("Found 2 agent sessions");
+      expect(Object.keys(loadSyncState().sessions).sort()).toEqual([
+        "claude/offered-0",
+        "claude/offered-1",
+      ]);
+    });
+
+    it("never asks without a terminal: the stored scope stands, as before", async () => {
+      Object.defineProperty(process.stdin, "isTTY", { value: undefined, configurable: true });
+      saveSyncState({ ...loadSyncState(), repo_filter: [WEB] });
+      mockRunKnowledgeSync.mockResolvedValue(reposOutcome());
+      vi.mocked(p.confirm).mockResolvedValue(false);
+
+      await stepOfferInitialSync(makeCfg());
+
+      expect(p.multiselect).not.toHaveBeenCalled();
+      expect(spinnerStops()).toContain("Found 1 agent session ");
+      const saved = loadSyncState();
+      expect(saved.repo_filter).toEqual([WEB]);
+      expect(Object.keys(saved.sessions)).toEqual(["claude/offered-2"]);
+    });
+
+    it("says there is nothing to ship when the stored scope holds none of the backlog", async () => {
+      Object.defineProperty(process.stdin, "isTTY", { value: undefined, configurable: true });
+      saveSyncState({ ...loadSyncState(), repo_filter: ["github.com/dosu-ai/idle"] });
+      mockRunKnowledgeSync.mockResolvedValue(reposOutcome());
+
+      await stepOfferInitialSync(makeCfg());
+
+      expect(vi.mocked(p.confirm)).not.toHaveBeenCalled();
+      expect(spinnerStops()).toContain("No recent agent sessions");
+    });
+  });
+
   describe("analytics facet on the setup completion event", () => {
     beforeEach(() => {
       consumeCommandFacets();

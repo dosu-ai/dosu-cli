@@ -502,6 +502,16 @@ export function saveSyncState(state: SyncState, configDir: string = getConfigDir
   renameSync(tmp, path);
 }
 
+/** Save `repos` as the sync scope (null: every repo, and sessions outside any), onto a fresh read
+ * so a concurrent sync's progress survives. A legacy folder scope is replaced either way. */
+export function saveRepoFilter(
+  repos: readonly string[] | null,
+  configDir: string = getConfigDir(),
+): void {
+  const { repo_filter: _repos, project_filter: _folders, ...rest } = loadSyncState(configDir);
+  saveSyncState(repos ? { ...rest, repo_filter: [...repos] } : rest, configDir);
+}
+
 /** Persist the pause switch: load-modify-save so concurrent counters are not clobbered. */
 export function setSyncPaused(paused: boolean, configDir: string = getConfigDir()): void {
   const state = loadSyncState(configDir);
