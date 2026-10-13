@@ -1,3 +1,10 @@
+# [0.67.0-beta.4](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.3...v0.67.0-beta.4) (2026-10-13)
+
+
+### Features
+
+* drop unlearnable-agent providers; ship Cursor sessions on sessionEnd ([#282](https://github.com/dosu-ai/dosu-cli/issues/282)) ([23468d4](https://github.com/dosu-ai/dosu-cli/commit/23468d4d62a58eca0949ba3216f4bbd33ccae95a))
+
 # [0.67.0-beta.3](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.2...v0.67.0-beta.3) (2026-10-13)
 
 
