@@ -1,3 +1,15 @@
+# [0.67.0-beta.2](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.1...v0.67.0-beta.2) (2026-10-13)
+
+
+### Bug Fixes
+
+* **sync:** ship every ready session in one run ([#277](https://github.com/dosu-ai/dosu-cli/issues/277)) ([c9e1741](https://github.com/dosu-ai/dosu-cli/commit/c9e1741feb1fbcbc003f32c8cec42e4025f5677a))
+
+
+### Features
+
+* **setup:** pick the sync scope before the backfill offer ([#279](https://github.com/dosu-ai/dosu-cli/issues/279)) ([b464244](https://github.com/dosu-ai/dosu-cli/commit/b464244aefc20b4dede654eeed963cad9b355bb0))
+
 # [0.67.0-beta.1](https://github.com/dosu-ai/dosu-cli/compare/v0.66.1...v0.67.0-beta.1) (2026-10-13)
 
 
