@@ -167,6 +167,45 @@ describe("runKnowledgeSync gate", () => {
     expect(outcome.sessions.map((s) => s.id)).toEqual([inScope.id]);
   });
 
+  it("everyRepo reports every repo's backlog, tagged, whatever the scope", async () => {
+    const inScope = { ...session(60), project: "dosu-cli" };
+    const outScope = { ...session(30), project: "other" };
+    const noRepo = session(20);
+    const { deps, saved } = makeDeps({
+      loadState: () => state({ repo_filter: [DOSU_CLI] }),
+      listSessions: vi.fn().mockResolvedValue([inScope, outScope, noRepo]),
+      locator: projectLocator,
+    });
+
+    const outcome = await runKnowledgeSync({ everyRepo: true, deps });
+
+    expect(outcome.sessions.map((s) => [s.id, s.repo])).toEqual([
+      [inScope.id, DOSU_CLI],
+      [outScope.id, "github.com/x/other"],
+      [noRepo.id, undefined],
+    ]);
+    // Reporting a wider backlog never touches the stored scope.
+    expect(saved).toEqual([]);
+  });
+
+  it("everyRepo never widens what a shipping run ships", async () => {
+    const inScope = { ...session(60), project: "dosu-cli" };
+    const outScope = { ...session(30), project: "other" };
+    const ship = shipAll();
+    const { deps } = makeDeps({
+      loadState: () => state({ repo_filter: [DOSU_CLI] }),
+      listSessions: vi.fn().mockResolvedValue([inScope, outScope]),
+      locator: projectLocator,
+      ship,
+    });
+
+    await runKnowledgeSync({ everyRepo: true, deps });
+
+    expect(vi.mocked(ship).mock.calls.flatMap(([batch]) => batch.map((s) => s.id))).toEqual([
+      inScope.id,
+    ]);
+  });
+
   it("studies sessions outside a git repo when no repo filter is set", async () => {
     const inRepo = { ...session(60), project: "other" };
     const noRepo = session(40);
