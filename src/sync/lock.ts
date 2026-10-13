@@ -1,7 +1,7 @@
 /** Single-flight lock for knowledge sync: concurrent study runs would double-spend gateway
  * tokens on the same backlog. The loser of the lock race exits quietly. */
 
-import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config/config";
 
@@ -23,6 +23,8 @@ function processAlive(pid: number): boolean {
 export interface SyncLock {
   /** True when this process now holds the lock. */
   acquire(): boolean;
+  /** Marks the held lock as live again, so a long run is not broken as stale. */
+  refresh?(): void;
   release(): void;
 }
 
@@ -100,6 +102,18 @@ export function fileLock(
         // Raced with the holder's release; treat as busy.
       }
       return false;
+    },
+    refresh() {
+      if (!held) return;
+      try {
+        // Only our own lock; a newer holder's is its own business.
+        if (readFileSync(path, "utf8") === String(process.pid)) {
+          const at = now();
+          utimesSync(path, at, at);
+        }
+      } catch {
+        // Gone or unreadable: the run carries on, as it did before refreshes.
+      }
     },
     release() {
       if (!held) return;

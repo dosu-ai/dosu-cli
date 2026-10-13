@@ -31,7 +31,7 @@ import {
   shippedSessions,
 } from "../sync/state";
 import { getSyncStatus, type SyncStatus } from "../sync/status";
-import { runKnowledgeSync, SHIP_BATCH_LIMIT, type SyncDeps, type SyncOutcome } from "../sync/sync";
+import { runKnowledgeSync, type SyncDeps, type SyncOutcome } from "../sync/sync";
 import { recordCommandFacets } from "../telemetry/telemetry";
 import { VERSION } from "../version/version";
 import { resolveAgents } from "./agent-select";
@@ -397,35 +397,17 @@ export function knowledgeCommand(): Command {
           quiet: opts.quiet,
           ended,
           flush: opts.flush,
-          // Bounded by when this command started, so a drain never retries a fresh refusal.
+          // Bounded by when this command started, so the run never retries a fresh refusal.
           ...(opts.retryRejected ? { retryRejectedBefore: new Date() } : {}),
           deps,
         };
-        let outcome = await runKnowledgeSync(syncOptions);
-        let sessionsShipped = outcome.counts?.shipped ?? 0;
-
-        // Bootstrap and flush drain the whole backlog in this process, batch by batch, while each
-        // batch makes progress; the round cap guards against a batch that never settles anything.
-        if ((opts.bootstrap || opts.flush) && deps.ship) {
-          const maxRounds = Math.ceil(outcome.readySessions / SHIP_BATCH_LIMIT) + 2;
-          for (
-            let round = 1;
-            outcome.status === "shipped" &&
-            (outcome.settledSessions ?? 0) > 0 &&
-            (outcome.settledSessions ?? 0) < outcome.readySessions &&
-            round < maxRounds;
-            round++
-          ) {
-            if (!opts.quiet && !opts.json) printSyncOutcome(outcome, { draining: true });
-            outcome = await runKnowledgeSync(syncOptions);
-            sessionsShipped += outcome.counts?.shipped ?? 0;
-          }
-        }
+        // One run ships every ready session, the whole backlog included.
+        const outcome = await runKnowledgeSync(syncOptions);
 
         recordCommandFacets({
           sync_trigger: trigger,
           sync_status: outcome.status,
-          sessions_shipped: sessionsShipped,
+          sessions_shipped: outcome.counts?.shipped ?? 0,
         });
 
         if (opts.quiet) return; // Invisible by contract; details are in the debug log.
@@ -860,20 +842,7 @@ function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
   console.log(pc.dim("\nFollow live with 'dosu logs --follow'."));
 }
 
-/** Whether some agent's session-end hook is on: each hook run ships another batch of the backlog,
- * whichever agent's sessions it holds. A config that cannot be read counts as off. */
-function anyHooksEnabled(): boolean {
-  return allHookAgents().some((agent) => {
-    try {
-      return agent.isEnabled();
-    } catch {
-      return false;
-    }
-  });
-}
-
-/** `draining`: a `--bootstrap` or `--flush` round with more to come in this same command. */
-function printSyncOutcome(outcome: SyncOutcome, { draining = false } = {}): void {
+function printSyncOutcome(outcome: SyncOutcome): void {
   const plural = (n: number) => (n === 1 ? "" : "s");
   const inFlight =
     outcome.inFlightSessions > 0
@@ -926,18 +895,11 @@ function printSyncOutcome(outcome: SyncOutcome, { draining = false } = {}): void
         process.exitCode = 1;
         break;
       }
-      const remaining = outcome.readySessions - (outcome.settledSessions ?? 0);
-      if (remaining > 0) {
-        // Each run settles SHIP_BATCH_LIMIT; nothing is lost by leaving the rest, so only say
-        // what ships them and how to ship them now.
-        const now = "run 'dosu knowledge sync --bootstrap' to ship them now";
+      if (outcome.inFlightSessions > 0) {
+        const n = outcome.inFlightSessions;
         console.log(
           pc.dim(
-            draining
-              ? `${remaining} more queued; shipping the next batch.`
-              : anyHooksEnabled()
-                ? `${remaining} more queued; they'll ship as your agent sessions end, or ${now}.`
-                : `${remaining} more queued; ${now}.`,
+            `${n} session${plural(n)} still in progress will ship once ${n === 1 ? "it ends" : "they end"}.`,
           ),
         );
       }
