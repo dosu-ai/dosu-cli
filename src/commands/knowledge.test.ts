@@ -578,8 +578,57 @@ describe("knowledge sync", () => {
     const output = allOutput();
     expect(output).toContain("Shipped 3 sessions to Dosu memory");
     expect(output).toContain("2 passed over");
-    expect(output).toContain("3 more in the backlog");
+    expect(output).toContain(
+      "3 more queued; run 'dosu knowledge sync --bootstrap' to ship them now.",
+    );
+    expect(output).not.toContain("run sync again");
     expect(process.exitCode).toBeUndefined();
+  });
+
+  it("says the rest of the backlog ships as sessions end when a session-end hook is on", async () => {
+    fakeAgents = [
+      { id: "cursor", name: "Cursor", installed: true, enabled: false, configPath: "/c" },
+      { id: "claude", name: "Claude Code", installed: true, enabled: true, configPath: "/s" },
+    ];
+    mockRunSync.mockResolvedValue({
+      status: "shipped",
+      readySessions: 28,
+      inFlightSessions: 0,
+      sessions: [],
+      settledSessions: 20,
+      counts: { shipped: 20, incognito: 0, trivial: 0, unsupported: 0, rejected: 0, failed: 0 },
+    });
+
+    await run("sync");
+
+    expect(allOutput()).toContain(
+      "8 more queued; they'll ship as your agent sessions end, or run 'dosu knowledge sync --bootstrap' to ship them now.",
+    );
+  });
+
+  it("treats a hook config it cannot read as no hook", async () => {
+    fakeAgents = [
+      {
+        id: "claude",
+        name: "Claude Code",
+        installed: true,
+        enabled: true,
+        configPath: "/s",
+        enabledError: new Error("bad JSON"),
+      },
+    ];
+    mockRunSync.mockResolvedValue({
+      status: "shipped",
+      readySessions: 2,
+      inFlightSessions: 0,
+      sessions: [],
+      settledSessions: 1,
+      counts: { shipped: 1, incognito: 0, trivial: 0, unsupported: 0, rejected: 0, failed: 0 },
+    });
+
+    await run("sync");
+
+    expect(allOutput()).toContain("1 more queued; run 'dosu knowledge sync --bootstrap'");
   });
 
   it("uses singulars and omits the passed-over note when nothing was skipped", async () => {
@@ -597,7 +646,7 @@ describe("knowledge sync", () => {
     const output = allOutput();
     expect(output).toContain("Shipped 1 session to Dosu memory.");
     expect(output).not.toContain("passed over");
-    expect(output).not.toContain("more in the backlog");
+    expect(output).not.toContain("more queued");
   });
 
   it("ship-failed says it will retry and sets the exit code", async () => {
@@ -1110,6 +1159,9 @@ describe("knowledge sync", () => {
     const output = allOutput();
     expect(output).toContain("Shipped 5 sessions");
     expect(output).toContain("Shipped 3 sessions");
+    // Between rounds the drain is still going: no advice to run anything.
+    expect(output).toContain("3 more queued; shipping the next batch.");
+    expect(output).not.toContain("to ship them now");
   });
 
   it("--bootstrap stops once a round settles the whole remaining backlog", async () => {

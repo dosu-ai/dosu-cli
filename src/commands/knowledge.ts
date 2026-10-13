@@ -416,7 +416,7 @@ export function knowledgeCommand(): Command {
             round < maxRounds;
             round++
           ) {
-            if (!opts.quiet && !opts.json) printSyncOutcome(outcome);
+            if (!opts.quiet && !opts.json) printSyncOutcome(outcome, { draining: true });
             outcome = await runKnowledgeSync(syncOptions);
             sessionsShipped += outcome.counts?.shipped ?? 0;
           }
@@ -860,7 +860,20 @@ function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
   console.log(pc.dim("\nFollow live with 'dosu logs --follow'."));
 }
 
-function printSyncOutcome(outcome: SyncOutcome): void {
+/** Whether some agent's session-end hook is on: each hook run ships another batch of the backlog,
+ * whichever agent's sessions it holds. A config that cannot be read counts as off. */
+function anyHooksEnabled(): boolean {
+  return allHookAgents().some((agent) => {
+    try {
+      return agent.isEnabled();
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** `draining`: a `--bootstrap` or `--flush` round with more to come in this same command. */
+function printSyncOutcome(outcome: SyncOutcome, { draining = false } = {}): void {
   const plural = (n: number) => (n === 1 ? "" : "s");
   const inFlight =
     outcome.inFlightSessions > 0
@@ -915,7 +928,18 @@ function printSyncOutcome(outcome: SyncOutcome): void {
       }
       const remaining = outcome.readySessions - (outcome.settledSessions ?? 0);
       if (remaining > 0) {
-        console.log(pc.dim(`${remaining} more in the backlog; run sync again to continue.`));
+        // Each run settles SHIP_BATCH_LIMIT; nothing is lost by leaving the rest, so only say
+        // what ships them and how to ship them now.
+        const now = "run 'dosu knowledge sync --bootstrap' to ship them now";
+        console.log(
+          pc.dim(
+            draining
+              ? `${remaining} more queued; shipping the next batch.`
+              : anyHooksEnabled()
+                ? `${remaining} more queued; they'll ship as your agent sessions end, or ${now}.`
+                : `${remaining} more queued; ${now}.`,
+          ),
+        );
       }
       break;
     }
