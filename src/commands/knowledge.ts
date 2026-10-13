@@ -31,7 +31,7 @@ import {
   shippedSessions,
 } from "../sync/state";
 import { getSyncStatus, type SyncStatus } from "../sync/status";
-import { runKnowledgeSync, SHIP_BATCH_LIMIT, type SyncDeps, type SyncOutcome } from "../sync/sync";
+import { runKnowledgeSync, type SyncDeps, type SyncOutcome } from "../sync/sync";
 import { recordCommandFacets } from "../telemetry/telemetry";
 import { VERSION } from "../version/version";
 import { resolveAgents } from "./agent-select";
@@ -397,35 +397,17 @@ export function knowledgeCommand(): Command {
           quiet: opts.quiet,
           ended,
           flush: opts.flush,
-          // Bounded by when this command started, so a drain never retries a fresh refusal.
+          // Bounded by when this command started, so the run never retries a fresh refusal.
           ...(opts.retryRejected ? { retryRejectedBefore: new Date() } : {}),
           deps,
         };
-        let outcome = await runKnowledgeSync(syncOptions);
-        let sessionsShipped = outcome.counts?.shipped ?? 0;
-
-        // Bootstrap and flush drain the whole backlog in this process, batch by batch, while each
-        // batch makes progress; the round cap guards against a batch that never settles anything.
-        if ((opts.bootstrap || opts.flush) && deps.ship) {
-          const maxRounds = Math.ceil(outcome.readySessions / SHIP_BATCH_LIMIT) + 2;
-          for (
-            let round = 1;
-            outcome.status === "shipped" &&
-            (outcome.settledSessions ?? 0) > 0 &&
-            (outcome.settledSessions ?? 0) < outcome.readySessions &&
-            round < maxRounds;
-            round++
-          ) {
-            if (!opts.quiet && !opts.json) printSyncOutcome(outcome);
-            outcome = await runKnowledgeSync(syncOptions);
-            sessionsShipped += outcome.counts?.shipped ?? 0;
-          }
-        }
+        // One run ships every ready session, the whole backlog included.
+        const outcome = await runKnowledgeSync(syncOptions);
 
         recordCommandFacets({
           sync_trigger: trigger,
           sync_status: outcome.status,
-          sessions_shipped: sessionsShipped,
+          sessions_shipped: outcome.counts?.shipped ?? 0,
         });
 
         if (opts.quiet) return; // Invisible by contract; details are in the debug log.
@@ -913,9 +895,13 @@ function printSyncOutcome(outcome: SyncOutcome): void {
         process.exitCode = 1;
         break;
       }
-      const remaining = outcome.readySessions - (outcome.settledSessions ?? 0);
-      if (remaining > 0) {
-        console.log(pc.dim(`${remaining} more in the backlog; run sync again to continue.`));
+      if (outcome.inFlightSessions > 0) {
+        const n = outcome.inFlightSessions;
+        console.log(
+          pc.dim(
+            `${n} session${plural(n)} still in progress will ship once ${n === 1 ? "it ends" : "they end"}.`,
+          ),
+        );
       }
       break;
     }

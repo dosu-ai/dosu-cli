@@ -8,7 +8,6 @@ import { backoffUntil, emptySyncState, type LedgerEntry, type SyncState } from "
 import {
   ENDED_LOCK_WAIT_MS,
   runKnowledgeSync,
-  SHIP_BATCH_LIMIT,
   type ShipSessionResult,
   type SyncDeps,
 } from "./sync";
@@ -699,9 +698,9 @@ describe("runKnowledgeSync shipping", () => {
       expect(logged).toContain("not shipping incognito session cursor/c-40");
     });
 
-    it("has all of them settled past the batch limit, which they take no part of", async () => {
-      const claude = Array.from({ length: SHIP_BATCH_LIMIT + 5 }, (_, i) => session(100 + i));
-      const cursors = Array.from({ length: SHIP_BATCH_LIMIT + 5 }, (_, i) => cursor(200 + i));
+    it("has all of them settled, apart from the sessions that ship", async () => {
+      const claude = Array.from({ length: 25 }, (_, i) => session(100 + i));
+      const cursors = Array.from({ length: 25 }, (_, i) => cursor(200 + i));
       const ship = shipAll();
       const { deps, saved } = makeDeps({
         listSessions: vi.fn().mockResolvedValue([...claude, ...cursors]),
@@ -711,9 +710,9 @@ describe("runKnowledgeSync shipping", () => {
 
       const outcome = await runKnowledgeSync({ deps });
 
-      expect(vi.mocked(ship).mock.calls[0][0]).toHaveLength(SHIP_BATCH_LIMIT);
-      expect(outcome.readySessions).toBe(SHIP_BATCH_LIMIT + 5);
-      expect(outcome.counts?.incognito).toBe(SHIP_BATCH_LIMIT + 5);
+      expect(vi.mocked(ship).mock.calls[0][0]).toHaveLength(25);
+      expect(outcome.readySessions).toBe(25);
+      expect(outcome.counts?.incognito).toBe(25);
       const ledger = (saved.at(-1) as SyncState).sessions;
       expect(cursors.every((c) => ledger[`cursor/${c.id}`]?.by_agent)).toBe(true);
     });
@@ -1177,6 +1176,27 @@ describe("runKnowledgeSync shipping", () => {
     expect(ship).toHaveBeenCalledOnce();
   });
 
+  it("a ship step that throws midway keeps the answers it gave before the throw", async () => {
+    const store = stateStore();
+    const ship: SyncDeps["ship"] = vi.fn(async (sessions, _shipped, _hold, report) => {
+      report?.({ session: sessions[0], outcome: "shipped", taskId: "task-1" });
+      throw new Error("bug");
+    });
+    const { deps } = makeDeps({
+      listSessions: vi.fn().mockResolvedValue([session(90), session(60), session(30)]),
+      ...store,
+      ship,
+    });
+
+    const outcome = await runKnowledgeSync({ deps });
+
+    expect(outcome.status).toBe("ship-failed");
+    expect(outcome.counts).toMatchObject({ shipped: 1, failed: 1 });
+    expect(Object.keys(store.get().sessions)).toEqual(["claude/s-90"]);
+    expect(store.get().total_shipped).toBe(1);
+    expect(store.get().consecutive_failures).toBe(1);
+  });
+
   it("a throwing ship step counts as one failed attempt instead of crashing the sync", async () => {
     const { deps, saved } = makeDeps({
       listSessions: vi.fn().mockResolvedValue([session(60)]),
@@ -1289,18 +1309,87 @@ describe("runKnowledgeSync shipping", () => {
     expect(saved.at(-1)?.sessions["claude/s-90"]).toMatchObject({ records: 4, updated: old });
   });
 
-  it("ships at most SHIP_BATCH_LIMIT sessions per run, oldest first", async () => {
-    const sessions = Array.from({ length: SHIP_BATCH_LIMIT + 5 }, (_, i) => session(30 + i));
+  it("ships every ready session in one run, oldest first", async () => {
+    const sessions = Array.from({ length: 25 }, (_, i) => session(30 + i));
     const ship = shipAll();
     const { deps } = makeDeps({ listSessions: vi.fn().mockResolvedValue(sessions), ship });
 
     const outcome = await runKnowledgeSync({ deps });
 
     const batch = vi.mocked(ship).mock.calls[0][0];
-    expect(batch).toHaveLength(SHIP_BATCH_LIMIT);
-    expect(batch[0].id).toBe(`s-${30 + SHIP_BATCH_LIMIT + 4}`);
-    expect(outcome.readySessions).toBe(SHIP_BATCH_LIMIT + 5);
-    expect(outcome.settledSessions).toBe(SHIP_BATCH_LIMIT);
+    expect(batch).toHaveLength(25);
+    expect(batch[0].id).toBe("s-54");
+    expect(batch.at(-1)?.id).toBe("s-30");
+    expect(outcome.readySessions).toBe(25);
+    expect(outcome.settledSessions).toBe(25);
+  });
+
+  it("saves each answer before the next upload and keeps the lock fresh", async () => {
+    const store = stateStore(state({ total_shipped: 5 }));
+    const lock = { ...openLock(), refresh: vi.fn() };
+    const before: string[][] = [];
+    const ship: SyncDeps["ship"] = vi.fn(async (sessions, _shipped, _hold, report) => {
+      const results: ShipSessionResult[] = [];
+      for (const s of sessions) {
+        // What the run has on disk as this session uploads.
+        before.push(Object.keys(store.get().sessions));
+        const result: ShipSessionResult =
+          s.id === "s-60"
+            ? { session: s, outcome: "trivial" }
+            : { session: s, outcome: "shipped", taskId: `task-${s.id}` };
+        results.push(result);
+        report?.(result);
+      }
+      return results;
+    });
+    const { deps } = makeDeps({
+      listSessions: vi.fn().mockResolvedValue([session(90), session(60), session(30)]),
+      ...store,
+      lock,
+      ship,
+    });
+
+    await runKnowledgeSync({ deps });
+
+    expect(before).toEqual([[], ["claude/s-90"], ["claude/s-90", "claude/s-60"]]);
+    expect(lock.refresh).toHaveBeenCalledTimes(3);
+    const final = store.get();
+    expect(final.sessions["claude/s-90"]).toMatchObject({
+      outcome: "shipped",
+      task_id: "task-s-90",
+    });
+    expect(final.sessions["claude/s-60"]).toMatchObject({ outcome: "trivial" });
+    // Counted once, as each session saved, not again by the save at the end.
+    expect(final.total_shipped).toBe(7);
+    expect(final.run?.baseline_shipped).toBe(5);
+  });
+
+  it("a failed per-session save leaves the answer to the save at the end", async () => {
+    const store = stateStore();
+    let failSave = false;
+    const ship: SyncDeps["ship"] = vi.fn(async (sessions, _shipped, _hold, report) => {
+      const result: ShipSessionResult = { session: sessions[0], outcome: "shipped", taskId: "t" };
+      failSave = true;
+      report?.(result);
+      return [result];
+    });
+    const { deps } = makeDeps({
+      listSessions: vi.fn().mockResolvedValue([session(60)]),
+      loadState: store.loadState,
+      saveState: (next) => {
+        if (failSave) {
+          failSave = false;
+          throw new Error("disk full");
+        }
+        store.saveState(next);
+      },
+      ship,
+    });
+
+    await runKnowledgeSync({ deps });
+
+    expect(store.get().sessions["claude/s-60"]).toMatchObject({ outcome: "shipped" });
+    expect(store.get().total_shipped).toBe(1);
   });
 
   it("skips without touching state when another run holds the lock", async () => {
